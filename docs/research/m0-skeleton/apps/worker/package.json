@@ -1,0 +1,19 @@
+{
+  "name": "@draftroom/worker",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "prototype": "node prototype.mjs"
+  },
+  "dependencies": {
+    "@napi-rs/canvas": "catalog:",
+    "pdfjs-dist": "catalog:",
+    "sharp": "catalog:"
+  },
+  "devDependencies": {
+    "@cantoo/pdf-lib": "catalog:",
+    "file-type": "catalog:",
+    "pdf-lib": "catalog:"
+  }
+}

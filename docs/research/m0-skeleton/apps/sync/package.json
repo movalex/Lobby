@@ -1,0 +1,20 @@
+{
+  "name": "@draftroom/sync",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node --watch --watch-preserve-output --watch-path=./src --watch-path=../../packages/canvas-schema/src src/server.ts",
+    "start": "node src/server.ts",
+    "typecheck": "tsc -p ."
+  },
+  "dependencies": {
+    "@draftroom/canvas-schema": "workspace:*",
+    "@tldraw/sync-core": "catalog:",
+    "@tldraw/tlschema": "catalog:",
+    "ws": "catalog:"
+  },
+  "devDependencies": {
+    "@types/ws": "catalog:"
+  }
+}

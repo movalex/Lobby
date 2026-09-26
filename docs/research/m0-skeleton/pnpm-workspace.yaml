@@ -1,0 +1,60 @@
+packages:
+  - apps/*
+  - packages/*
+  - e2e
+
+# Single source of truth for shared versions. Reference with "catalog:" in package.json.
+catalog:
+  # tldraw: keep every @tldraw/* package in lockstep (they pin each other exactly)
+  tldraw: 5.4.2
+  '@tldraw/sync': 5.4.2
+  '@tldraw/sync-core': 5.4.2
+  '@tldraw/tlschema': 5.4.2
+  '@tldraw/validate': 5.4.2
+  '@tldraw/assets': 5.4.2
+  # react
+  react: 19.3.0
+  react-dom: 19.3.0
+  '@types/react': 19.3.0
+  '@types/react-dom': 19.3.0
+  # build / runtime tooling
+  typescript: 7.0.2
+  '@types/node': 24.19.0
+  vite: 8.3.1
+  '@vitejs/plugin-react': 6.1.1
+  vitest: 5.0.2
+  '@playwright/test': 1.63.0
+  ws: 8.21.3
+  '@types/ws': 8.18.1
+  '@biomejs/biome': 2.5.14
+  # file previews (apps/worker)
+  sharp: 0.35.4
+  pdfjs-dist: 6.3.289
+  '@napi-rs/canvas': 1.0.9
+  pdf-lib: 1.17.1
+  '@cantoo/pdf-lib': 2.11.1
+  file-type: 22.1.1
+
+# `pnpm add` must use a catalog version when one exists.
+catalogMode: strict
+
+# Supply-chain guard: ignore versions published less than 24h ago (value is minutes).
+minimumReleaseAge: 1440
+# Exact-version exclusions for pins that are newer than the window (remove once they age out).
+minimumReleaseAgeExclude:
+  - '@types/node@24.19.0'
+
+# pnpm 10 blocks dependency lifecycle scripts by default. allowBuilds (map form) is accepted by
+# pnpm 10.34.5 and is the only form in pnpm 11+. true = may run install scripts, false = skip silently.
+# Nothing in this dependency set needs a build script today.
+allowBuilds: {}
+
+# Fail the install if a dependency with an unapproved build script shows up.
+strictDepBuilds: true
+
+overrides:
+  # @types/ws depends on "@types/node": "*", which would pull the newest @types/node (26.x)
+  # next to our Node-24 typings. Force one copy everywhere.
+  '@types/node': 'catalog:'
+  # @tldraw/sync-core depends on ws ^8.18.0; keep a single ws copy (tldraw's own repo pins ws too).
+  ws: 'catalog:'

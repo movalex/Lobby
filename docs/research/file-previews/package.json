@@ -1,0 +1,40 @@
+{
+  "name": "draftroom-file-previews-prototype",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Milestone-0 scratch prototype: fixtures + image/PDF/MP4 preview derivatives outside the sync loop. Not production code.",
+  "type": "module",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "start": "node prototype.mjs",
+    "fixtures": "node prototype.mjs --fixtures",
+    "probe:sharp": "node sharp-probes.mjs",
+    "probe:pdf": "node pdf-probes.mjs no-fonts && node pdf-probes.mjs pages100-all && node pdf-probes.mjs huge-page && node pdf-probes.mjs huge-page-noclamp && node pdf-probes.mjs owner-only-encrypted && node pdf-probes.mjs wrong-password && node pdf-probes.mjs buffer-input",
+    "probe:playback": "node playback-probe.mjs",
+    "probe:client-pdf": "node client-pdf-probe.mjs",
+    "typecheck:file-card": "tsc -p file-card",
+    "typecheck:worker": "tsc -p worker-snippets",
+    "test:file-card": "node file-card/schema-runtime.test.ts"
+  },
+  "dependencies": {
+    "@napi-rs/canvas": "1.0.9",
+    "pdf-lib": "1.17.1",
+    "pdfjs-dist": "6.3.289",
+    "sharp": "0.35.4"
+  },
+  "devDependencies": {
+    "@cantoo/pdf-lib": "2.11.1",
+    "@tldraw/tlschema": "5.4.2",
+    "@tldraw/validate": "5.4.2",
+    "@types/node": "24.19.0",
+    "@types/react": "19.3.0",
+    "file-type": "22.1.1",
+    "playwright-core": "1.63.0",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "tldraw": "5.4.2",
+    "typescript": "7.0.2"
+  }
+}

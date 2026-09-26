@@ -1,0 +1,8 @@
+node_modules
+dist
+.data
+.vitest
+test-results
+playwright-report
+*.tsbuildinfo
+*.log
