@@ -1,0 +1,13 @@
+{
+  "name": "@draftroom/dev-assets",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./shared": "./src/shared.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p ."
+  }
+}

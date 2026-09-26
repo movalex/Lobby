@@ -8,7 +8,7 @@ coverage/
 
 # local board data, generated fixtures/derivatives, test output
 .data/
-data/
+
 tests/fixtures/generated/
 tests/output/
 test-results/
@@ -25,3 +25,4 @@ Thumbs.db
 .idea/
 .vscode/*
 !.vscode/extensions.json
+.vitest/
