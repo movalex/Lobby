@@ -1,0 +1,27 @@
+node_modules/
+dist/
+build/
+coverage/
+*.tsbuildinfo
+.vite/
+.turbo/
+
+# local board data, generated fixtures/derivatives, test output
+.data/
+data/
+tests/fixtures/generated/
+tests/output/
+test-results/
+playwright-report/
+blob-report/
+
+.env
+.env.*
+!.env.example
+
+*.log
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
