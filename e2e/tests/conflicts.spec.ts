@@ -9,6 +9,7 @@ import {
   getShape,
   shapeText,
   startTextEditing,
+  startTextEditingWithKeyboard,
   stopTextEditing,
   toScreen,
   typeText,
@@ -56,7 +57,7 @@ test('text lease: bob cannot type into the note alice is typing in, until her le
   expect(await shapeText(probe.page, N)).toBe('alice typing')
   await probe.context.close()
 
-  // Alice keeps typing: still hers.
+  // Alice was never blocked.
   await typeText(a.page, '!')
   await expect.poll(() => shapeText(b.page, N)).toBe('alice typing!')
   await stopTextEditing(a.page)
@@ -66,12 +67,12 @@ test('text lease: bob cannot type into the note alice is typing in, until her le
 
   // The expiry itself is under test here, so this is a real wait (plus a margin for clock skew).
   await b.page.waitForTimeout(Math.max(0, lastRenewalSeen + LEASE_MS + 750 - Date.now()))
-  await startTextEditing(b.page, N)
-  await b.page.keyboard.press('End')
-  await typeText(b.page, ' + bob')
+  // Enter opens the note with all of its text selected, so bob's typing replaces it.
+  await startTextEditingWithKeyboard(b.page, N)
+  await typeText(b.page, 'bob took over')
   await stopTextEditing(b.page)
-  await expect.poll(() => shapeText(a.page, N)).toBe('alice typing! + bob')
-  await expect(noteText(a.page, N)).toHaveText('alice typing! + bob')
+  await expect.poll(() => shapeText(a.page, N)).toBe('bob took over')
+  await expect(noteText(a.page, N)).toHaveText('bob took over')
   await expectConverged(a.page, [b.page])
 })
 

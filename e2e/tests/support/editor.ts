@@ -62,6 +62,8 @@ export interface EditorLike {
   setCurrentTool(id: string): EditorLike
   getCurrentToolId(): string
   getEditingShapeId(): string | null
+  /** The TipTap editor of the shape being text-edited. */
+  getRichTextEditor(): { isDestroyed: boolean; view: { dom: Element } } | null
   markHistoryStoppingPoint(name?: string): string
   getIsReadonly(): boolean
   zoomToFit(): EditorLike

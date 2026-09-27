@@ -184,6 +184,16 @@ export async function startTextEditing(page: Page, id: string) {
   await waitForTextEditor(page, id)
 }
 
+/**
+ * Enters text editing from the keyboard (select, then Enter), which opens with all text selected.
+ * Unlike a double-click there is no pointer-driven caret placement to race with later keys.
+ */
+export async function startTextEditingWithKeyboard(page: Page, id: string) {
+  await edit(page, (ed, shapeId) => ed.select(shapeId), id)
+  await page.keyboard.press('Enter')
+  await waitForTextEditor(page, id)
+}
+
 /** Resolves once `id` (or any shape) is being text-edited and its editor has keyboard focus. */
 export async function waitForTextEditor(page: Page, id?: string): Promise<string> {
   const editingId = () => page.evaluate(() => window.editor?.getEditingShapeId() ?? null)
@@ -191,6 +201,20 @@ export async function waitForTextEditor(page: Page, id?: string): Promise<string
   const editing = id ?? (await waitForValue(editingId))
   // Keys pressed before the text editor has focus go to the canvas (where "a" picks the arrow tool).
   await expect(page.locator(`[data-shape-id="${editing}"] [contenteditable="true"]`)).toBeFocused()
+  // tldraw registers the TipTap instance in its onCreate (a setTimeout after mount), which is also
+  // where it moves the caret to the double-click point; keys sent before that can land anywhere.
+  await expect
+    .poll(() =>
+      read(
+        page,
+        (ed, shapeId) => {
+          const tiptap = ed.getRichTextEditor()
+          return !!tiptap && !tiptap.isDestroyed && !!tiptap.view.dom.closest(`[data-shape-id="${shapeId}"]`)
+        },
+        editing,
+      ),
+    )
+    .toBe(true)
   return editing
 }
 
