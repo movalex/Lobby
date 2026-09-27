@@ -337,17 +337,18 @@ function CurrentVote({
             participants={vote.participants}
             testId="vote-results"
           />
-          {facilitator && (
-            <button
-              type="button"
-              className="dr-btn dr-btn--sm"
-              data-testid="vote-start-panel"
-              onClick={() => store.setSetupOpen(true)}
-            >
-              Start a new vote…
-            </button>
-          )}
         </>
+      )}
+      {/* Once a vote has ended (with or without results), the facilitator can start the next one here. */}
+      {facilitator && s.status !== 'open' && (
+        <button
+          type="button"
+          className="dr-btn dr-btn--sm"
+          data-testid="vote-start-panel"
+          onClick={() => store.setSetupOpen(true)}
+        >
+          Start a new vote…
+        </button>
       )}
     </section>
   )

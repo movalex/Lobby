@@ -88,7 +88,9 @@ export function restoreSummary(r: RestoreDeletedResponse): string {
     return 'Nothing could be restored. It may have been restored by someone else.'
   }
   const parts = [`Restored ${pluralize(r.restored.length, 'object')}`]
-  if (r.bindings > 0) parts.push(`reconnected ${pluralize(r.bindings, 'connector')}`)
+  // `bindings` counts connector ENDS attached again: one connector bound at both ends is 2. Saying
+  // "2 connectors" for a single restored connector would be wrong, so this counts connections.
+  if (r.bindings > 0) parts.push(`reconnected ${pluralize(r.bindings, 'connection')}`)
   if (r.reparented > 0)
     parts.push(`${pluralize(r.reparented, 'object')} placed on the board (the frame is gone)`)
   return `${parts.join(', ')}.`

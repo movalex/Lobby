@@ -29,7 +29,19 @@ describe('countdown from server timestamps', () => {
     expect(timerRemainingMs(t, localAtServerT0, offset)).toBe(300_000)
     expect(timerRemainingMs(t, localAtServerT0 + 90_000, offset)).toBe(210_000)
     // Without the offset the display would be 7 s off.
-    expect(timerRemainingMs(t, localAtServerT0, 0)).toBe(307_000)
+    expect(timerRemainingMs(t, localAtServerT0 + 90_000, 0)).toBe(217_000)
+  })
+
+  it('never shows more than the server said was left (an offset error cannot turn 5:00 into 5:01)', () => {
+    const t = running(300_000)
+    // A browser whose offset estimate is 800 ms too high, right at the start.
+    expect(timerRemainingMs(t, SERVER_T0, 800)).toBe(300_000 - 800)
+    // ...and one 800 ms too low: clamped to the 300 000 ms the server reported, not 300 800.
+    expect(timerRemainingMs(t, SERVER_T0, -800)).toBe(300_000)
+    expect(formatClock(timerRemainingMs(t, SERVER_T0 + 10, -800))).toBe('5:00')
+    // After "+1 min" the server reports the new time left, and that is the new upper bound.
+    const added = { ...running(360_000), remainingMs: 360_000 }
+    expect(timerRemainingMs(added, SERVER_T0, 0)).toBe(360_000)
   })
 
   it('late joiners and clients with different clocks agree to the millisecond', () => {

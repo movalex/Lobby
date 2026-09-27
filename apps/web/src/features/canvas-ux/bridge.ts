@@ -39,6 +39,13 @@ function perEditor<T>(name: string, initial: () => T) {
   }
 }
 
+/**
+ * What the start view did when this editor's board opened (applyStartView's result: 'template:<id>',
+ * 'deep-link', 'restore', 'restore+fit', 'fit', 'none'), null until it has run. Rendered on the
+ * overlay as data-start-view, so tests (and people debugging) know the first view has been decided.
+ */
+export const startViewResult = perEditor<string | null>('dr-start-view', () => null)
+
 /** The open dock panel, mirrored from FeatureContext.activePanel for module-level components. */
 export const activePanel = perEditor<string | null>('dr-active-panel', () => null)
 

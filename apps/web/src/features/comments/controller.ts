@@ -68,6 +68,16 @@ export function selectCommentTool(editor: Editor) {
   editor.setCurrentTool(COMMENT_TOOL_ID)
 }
 
+/**
+ * Keyboard focus back on the board: tldraw handles Esc (leave the tool) and its other keys on its
+ * container. `editor.focus()` alone does not move DOM focus while the editor already counts as
+ * focused (the usual case when a comment popover closes), so the container is focused explicitly.
+ */
+export function focusBoard(editor: Editor) {
+  editor.focus()
+  editor.getContainer().focus({ preventScroll: true })
+}
+
 /** Opens a thread's popover and brings it into view (orphans open without moving the camera). */
 export function focusThread(editor: Editor, threadId: string): boolean {
   const c = controllerOf(editor)

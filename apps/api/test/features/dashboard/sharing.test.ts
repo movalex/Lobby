@@ -51,6 +51,35 @@ describe('sharing state (board header badge)', () => {
   })
 })
 
+describe('sharing events for changes made through M1 routes', () => {
+  const sharingEvents = () => w.published.filter((e) => e.type === 'sharing.changed').map((e) => e.data)
+
+  it('publishes a hint after a visibility change or a grant change succeeds, and nothing otherwise', async () => {
+    const { bob, carol, board } = w
+    expect((await bob.req('PATCH', `/api/boards/${board}`, { title: 'Renamed only' })).statusCode).toBe(200)
+    expect(sharingEvents()).toEqual([])
+    // A refused change (carol cannot see this private board) publishes nothing.
+    expect(
+      (await carol.req('PATCH', `/api/boards/${board}`, { visibility: 'workspace_edit' })).statusCode,
+    ).toBe(404)
+    expect(sharingEvents()).toEqual([])
+
+    expect(
+      (await bob.req('PATCH', `/api/boards/${board}`, { visibility: 'workspace_edit' })).statusCode,
+    ).toBe(200)
+    expect(sharingEvents()).toEqual([{ reason: 'visibility' }])
+    expect(
+      (await bob.req('PUT', `/api/boards/${board}/members/${carol.userId}`, { role: 'viewer' })).statusCode,
+    ).toBe(200)
+    expect((await bob.req('DELETE', `/api/boards/${board}/members/${carol.userId}`)).statusCode).toBeLessThan(
+      300,
+    )
+    expect(sharingEvents()).toEqual([{ reason: 'visibility' }, { reason: 'grant' }, { reason: 'grant' }])
+    // The hint carries no identities.
+    expect(JSON.stringify(sharingEvents())).not.toContain(carol.userId)
+  })
+})
+
 describe('who has access and why (Share dialog)', () => {
   it('shows each person’s grant, workspace role, what they keep without the grant, and review-link joins', async () => {
     const { bob, carol, erin, alice, board } = w

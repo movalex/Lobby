@@ -6,6 +6,7 @@ import { Mark } from '../brand/Wordmark.tsx'
 import { initialsFor } from '../lib/identity.ts'
 import { type BoardRole, can } from '../lib/permissions.ts'
 import { linkClick, workspacePath } from '../lib/routing.ts'
+import { SaveStatus, type SaveStatusView } from '../sync-quality/SaveStatus.tsx'
 import { RenameInput } from '../ui/RenameInput.tsx'
 import { readonlyPill } from './access.ts'
 import { type PresenceUser, presenceUsers } from './presence.ts'
@@ -33,6 +34,7 @@ export function TopBar({
   workspace,
   selfUserId,
   conn,
+  save,
   editor,
   onRename,
   onShare,
@@ -41,7 +43,10 @@ export function TopBar({
   role: BoardRole
   workspace: { id: string; name: string }
   selfUserId: string
+  /** The socket only ("Live"): never evidence that anything was saved. */
   conn: ConnState
+  /** What the server has acknowledged (sync-quality/saveTracker.ts). */
+  save: SaveStatusView
   editor: Editor | null
   onRename(title: string): void
   onShare(): void
@@ -88,6 +93,7 @@ export function TopBar({
       )}
       <div className="dr-topbar__spacer" />
       <PresenceList editor={editor} selfUserId={selfUserId} />
+      <SaveStatus view={save} />
       <span
         className={`dr-pill dr-pill--${conn}`}
         data-testid="conn-status"

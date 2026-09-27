@@ -149,5 +149,20 @@ describe('getDraftroomPresence', () => {
     expect(getDraftroomPresence(store, user)?.userName).toBe('alice')
     setEditing(cardId) // not a text shape: the lease does not apply, so no hint either
     expect(getDraftroomPresence(store, user)?.meta).toEqual({ editingShapeId: null })
+
+    // A read-only session has no currentUser, so useSync passes a user made from local tldraw
+    // preferences: the signed-in identity replaces it in what others see.
+    const localPrefs = UserRecordType.create({ id: createUserId('prefs-123'), name: '', color: '#ff0000' })
+    const stamped = getDraftroomPresence(store, localPrefs, {
+      id: 'usr_bob',
+      name: 'Bob Chen',
+      color: '#224466',
+    })
+    expect(stamped).toMatchObject({
+      userId: createUserId('usr_bob'),
+      userName: 'Bob Chen',
+      color: '#224466',
+      meta: { editingShapeId: null },
+    })
   })
 })

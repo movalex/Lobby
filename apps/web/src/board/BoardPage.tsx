@@ -3,16 +3,20 @@ import { getAssetUrlsByImport } from '@tldraw/assets/imports.vite'
 import { TLRemoteSyncError, useSync } from '@tldraw/sync'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
+  atom,
   computed,
   createUserId,
   defaultShapeUtils,
   type Editor,
   type TLComponents,
   type TLOnMountHandler,
+  type TLStore,
   type TLUiOverrides,
+  type TLUser,
   type TLUserStore,
   Tldraw,
   UserRecordType,
+  useValue,
 } from 'tldraw'
 import 'tldraw/tldraw.css'
 import { api, isApiError, isNoAccess } from '../api/client.ts'
@@ -32,7 +36,14 @@ import type { FeatureContext } from '../features/types.ts'
 import { FileCardShapeUtil } from '../file-card/FileCardShapeUtil.tsx'
 import { DEV_AUTH_ENABLED, safeColor } from '../lib/identity.ts'
 import type { BoardRole } from '../lib/permissions.ts'
+import { boardPath, setLeaveGuard } from '../lib/routing.ts'
 import { useResource } from '../lib/useResource.ts'
+import { rejectionNotice, undoNotice } from '../sync-quality/copy.ts'
+import { installPerPropUndo } from '../sync-quality/perPropUndo.ts'
+import { installRebaseSelectionGuard } from '../sync-quality/rebaseGuard.ts'
+import { createTrackedConnect } from '../sync-quality/saveTracker.ts'
+import { trackUploads } from '../sync-quality/uploads.ts'
+import { useSaveStatus } from '../sync-quality/useSaveStatus.ts'
 import { LoadingScreen, MessageScreen, NoAccessScreen } from '../ui/screens.tsx'
 import { isReadonlyRole } from './access.ts'
 import { BoardContext, type BoardContextValue } from './board-context.ts'
@@ -50,6 +61,8 @@ import { createTicketUri } from './ticket.ts'
 const customShapeUtils = [FileCardShapeUtil]
 const syncShapeUtils = [...defaultShapeUtils, ...customShapeUtils] // useSync does NOT add the defaults
 const assetUrls = getAssetUrlsByImport() // self-hosted fonts/icons/translations (no CDN)
+/** Longest an in-app navigation waits for this board's last changes to be acknowledged. */
+const LEAVE_WAIT_MS = 5_000
 
 const components: TLComponents = {
   // Presence and sharing live in our top bar; the default people menu edits local tldraw
@@ -218,33 +231,63 @@ function BoardSession({
     }
   }, [boardId])
 
-  const assets = useMemo(
+  // Uploads are counted so the save indicator does not say "Saved" while an image's bytes are
+  // still on their way (tldraw puts its shape on the board first).
+  const uploads = useMemo(
     () =>
-      createAssetStore({
-        boardId,
-        metaStore,
-        onUploaded: (assetRecordId, meta) => {
-          const ed = editorRef.current
-          if (ed && lifetime.current)
-            watchImagePreview(ed, metaStore, boardId, assetRecordId, meta, lifetime.current)
-        },
-      }),
+      trackUploads(
+        createAssetStore({
+          boardId,
+          metaStore,
+          onUploaded: (assetRecordId, meta) => {
+            const ed = editorRef.current
+            if (ed && lifetime.current)
+              watchImagePreview(ed, metaStore, boardId, assetRecordId, meta, lifetime.current)
+          },
+        }),
+      ),
     [boardId, metaStore],
   )
+  const assets = uploads.store
+  const uploading = useValue('dr-uploads-in-flight', () => uploads.inFlight.get(), [uploads])
+
+  // Viewers/commenters get a read-only editor (UI only: the sync server marks their session read-only
+  // and skips any write).
+  const readonly = isReadonlyRole(role, board.status)
+  // Read by the currentUser derivation below. An atom, not a dependency of `users`: that object is a
+  // useSync effect dependency, and a new one would reconnect.
+  const [readonlyAtom] = useState(() => atom('dr-canvas-readonly', readonly))
+  useEffect(() => {
+    readonlyAtom.set(readonly)
+  }, [readonlyAtom, readonly])
 
   const { id: userId, name: userName, color: userColor } = me.user
+  const identity = useMemo(
+    () => ({ id: userId, name: userName, color: safeColor(userColor, userId) }),
+    [userId, userName, userColor],
+  )
   const users = useMemo<TLUserStore>(
     () => ({
       // Only id, display name and color: tldraw persists user records into the board document.
+      // Read-only roles get none: the editor would write it, the server would discard it, and tldraw
+      // 5.4.2 re-writes it forever (~14 pushes/s; docs/research/saved-indicator.md §7). Their name and
+      // color reach others through presence (getUserPresence below) instead.
       currentUser: computed('currentUser', () =>
-        UserRecordType.create({
-          id: createUserId(userId),
-          name: userName,
-          color: safeColor(userColor, userId),
-        }),
+        readonlyAtom.get()
+          ? null
+          : UserRecordType.create({
+              id: createUserId(identity.id),
+              name: identity.name,
+              color: identity.color,
+            }),
       ),
     }),
-    [userId, userName, userColor],
+    [identity, readonlyAtom],
+  )
+  // useSync keeps this in an atom (useReactiveEvent), so a new function does not reconnect.
+  const getUserPresence = useCallback(
+    (s: TLStore, user: TLUser) => getDraftroomPresence(s, user, identity),
+    [identity],
   )
 
   // The ticket callbacks change identity every render; the uri function must not (it is a useSync
@@ -268,7 +311,10 @@ function BoardSession({
     [boardId],
   )
   useEffect(() => () => ticketUri.cancel(), [ticketUri])
-  const uri = ticketUri.uri
+  // The save tracker wraps tldraw's own socket adapter (docs/research/saved-indicator.md). Its uri
+  // function is still createTicketUri's: every (re)connect fetches a fresh ticket. Memoized on the
+  // (stable) ticketUri: `connect` is a useSync effect dependency.
+  const tracked = useMemo(() => createTrackedConnect(ticketUri.uri), [ticketUri])
 
   const onCustomMessageReceived = useCallback(
     (data: unknown) => {
@@ -286,13 +332,50 @@ function BoardSession({
   )
 
   const store = useSync({
-    uri,
+    connect: tracked.connect,
     assets,
     users,
     shapeUtils: syncShapeUtils,
-    getUserPresence: getDraftroomPresence,
+    getUserPresence,
     onCustomMessageReceived,
   })
+  const save = useSaveStatus(store, tracked.current, { uploading })
+
+  // In-app navigation away from the board (Back to the workspace, a notification for another board,
+  // the browser's Back) unmounts the sync client, which drops the changes it has not sent yet: alone
+  // on a board, tldraw sends at most once a second. Hold the navigation until everything is
+  // acknowledged, bounded so a stuck push cannot trap anyone here. (Offline changes cannot be saved
+  // by waiting; the offline banner says so.)
+  useEffect(() => {
+    const settling = () =>
+      uploads.inFlight.get() > 0 || tracked.current.get()?.getSnapshot().state === 'saving'
+    return setLeaveGuard((to) => {
+      if (new URL(to, location.origin).pathname === boardPath(boardId)) return
+      // Store listeners (the sync client's, the tracker's) otherwise hear of a change made in this
+      // very task only on the next frame, after the unmount.
+      editorRef.current?.store._flushHistory()
+      if (!settling()) return
+      return new Promise<void>((resolve) => {
+        const started = performance.now()
+        const poll = setInterval(() => {
+          if (settling() && performance.now() - started < LEAVE_WAIT_MS) return
+          clearInterval(poll)
+          resolve()
+        }, 50)
+      })
+    })
+  }, [boardId, tracked, uploads])
+
+  // A change the server did not apply (veto, read-only, deleted by someone else): say so once.
+  // (The tracker keeps one Rejection object per event, so this runs when one starts or gains detail.)
+  const rejection = save.raw.rejection
+  const sessionReadonly = save.raw.readonly
+  useEffect(() => {
+    if (!rejection) return
+    const text = rejectionNotice(rejection, sessionReadonly)
+    if (text) notify({ key: 'save-rejected', text, tone: 'error', testId: 'save-rejected-toast' })
+    else dismiss('save-rejected') // the lease toast already explains it
+  }, [rejection, sessionReadonly, notify, dismiss])
 
   const syncError =
     store.status === 'error'
@@ -304,20 +387,36 @@ function BoardSession({
     if (lostAccess) onAccessLost()
   }, [lostAccess, onAccessLost])
 
-  const onMount = useCallback<TLOnMountHandler>((ed) => {
-    editorRef.current = ed
-    setEditor(ed)
-    if (DEV_AUTH_ENABLED) window.editor = ed // e2e + debugging only, behind the local-dev guard
-    return () => {
-      editorRef.current = null
-      setEditor(null)
-      if (window.editor === ed) window.editor = undefined
-    }
-  }, [])
+  const onMount = useCallback<TLOnMountHandler>(
+    (ed) => {
+      editorRef.current = ed
+      setEditor(ed)
+      if (DEV_AUTH_ENABLED) window.editor = ed // e2e + debugging only, behind the local-dev guard
+      // Undo/redo reverse only this user's own changes (WRK-05, docs/research/undo-per-prop.md).
+      const uninstallUndo = installPerPropUndo(ed, {
+        onReplay: (report) => {
+          const text = undoNotice(report)
+          if (text) notify({ key: 'undo-skip', text, testId: 'undo-notice' })
+        },
+        // The server lease vetoes the WHOLE record op (lease.ts), so an undo that reverts text a
+        // collaborator is editing would also lose its move/resize. Leave that text alone instead.
+        isFieldLocked: (rec, path) =>
+          path === 'props.richText' && ed.getCollaborators().some((c) => c.meta?.editingShapeId === rec.id),
+      })
+      // A sync rebase that removes and re-adds a shape of ours must not wipe the redo stack.
+      const uninstallRebaseGuard = installRebaseSelectionGuard(ed)
+      return () => {
+        uninstallRebaseGuard()
+        uninstallUndo()
+        editorRef.current = null
+        setEditor(null)
+        if (window.editor === ed) window.editor = undefined
+      }
+    },
+    [notify],
+  )
 
-  // Viewers/commenters get a read-only editor. UI only: the sync server already marks their session
-  // read-only and skips any write, this keeps tools and menus from offering edits.
-  const readonly = isReadonlyRole(role, board.status)
+  // Keeps tools and menus from offering edits to read-only roles (the server enforces).
   useEffect(() => {
     if (editor && readonly && !editor.getInstanceState().isReadonly) {
       editor.updateInstanceState({ isReadonly: true })
@@ -380,6 +479,7 @@ function BoardSession({
           workspace={workspace}
           selfUserId={userId}
           conn={conn}
+          save={{ state: save.state, rejection, readonly: save.raw.readonly, uploading }}
           editor={editor}
           onRename={(t) => void rename(t)}
           onShare={() => setSharing(true)}

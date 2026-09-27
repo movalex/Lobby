@@ -111,13 +111,50 @@ const listeners = new Set<() => void>()
 const notify = () => {
   for (const l of listeners) l()
 }
-if (typeof window !== 'undefined') window.addEventListener('popstate', notify)
+
+/**
+ * Lets the page that is open hold an in-app navigation for a moment, e.g. the board while its last
+ * changes are still on their way to the sync server (they go out at most once a second while one
+ * person is alone on it, and unmounting the sync client drops what it has not sent). `to` is the
+ * destination (`pathname + search + hash`); return a promise to wait for (it should settle on its
+ * own within a few seconds), or nothing to go at once. Reloads and closing the tab are
+ * `beforeunload`'s job, not this.
+ */
+export type LeaveGuard = (to: string) => Promise<void> | undefined
+let leaveGuard: LeaveGuard | null = null
+let leaveSeq = 0
+
+/** One guard at a time (the open page's). Returns the function that removes it. */
+export function setLeaveGuard(guard: LeaveGuard): () => void {
+  leaveGuard = guard
+  return () => {
+    if (leaveGuard === guard) leaveGuard = null
+  }
+}
+
+/** Runs `go` once the guard allows it; a later navigation supersedes one that is still waiting. */
+function afterLeaveGuard(to: string, go: () => void) {
+  const seq = ++leaveSeq
+  const wait = leaveGuard?.(to)
+  if (!wait) return go()
+  const proceed = () => {
+    if (seq === leaveSeq) go()
+  }
+  wait.then(proceed, proceed)
+}
+
+const currentPath = () => `${location.pathname}${location.search}${location.hash}`
+// Back/forward: the address bar has already changed; the page switches once the guard allows it.
+if (typeof window !== 'undefined')
+  window.addEventListener('popstate', () => afterLeaveGuard(currentPath(), notify))
 
 export function navigate(to: string, opts: { replace?: boolean } = {}) {
-  if (`${location.pathname}${location.search}${location.hash}` === to && !opts.replace) return
-  if (opts.replace) history.replaceState(null, '', to)
-  else history.pushState(null, '', to)
-  notify()
+  if (currentPath() === to && !opts.replace) return
+  afterLeaveGuard(to, () => {
+    if (opts.replace) history.replaceState(null, '', to)
+    else history.pushState(null, '', to)
+    notify()
+  })
 }
 
 /** onClick for internal <a href> links: client-side navigation, but modified clicks open new tabs. */

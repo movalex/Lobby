@@ -15,7 +15,7 @@ import type {
 } from '@draftroom/contracts'
 import { useCallback, useEffect, useId, useMemo, useState } from 'react'
 import { api, isApiError } from '../api/client.ts'
-import { announceShareChanged, sharingApi } from '../features/sharing/api.ts'
+import { announceShareChanged, SHARE_REMOTE_EVENT, sharingApi } from '../features/sharing/api.ts'
 import {
   daysLabel,
   REVIEW_LINK_DAY_OPTIONS,
@@ -105,6 +105,24 @@ export function ShareDialog({
     [board.id, canManage],
   )
   const invitations = useResource(invitesLoad)
+
+  // Someone else changed sharing while this dialog is open (a new access request, another owner's
+  // grant or link): refetch, so the owner does not have to close and reopen it to see the request.
+  // Reloads keep the current rows until the new ones arrive (useResource).
+  const { reload: reloadMembers } = members
+  const { reload: reloadRequests } = requests
+  const { reload: reloadInvitations } = invitations
+  useEffect(() => {
+    const onRemote = (e: Event) => {
+      const id = (e as CustomEvent<{ boardId?: string }>).detail?.boardId
+      if (id && id !== board.id) return
+      reloadMembers()
+      reloadRequests()
+      reloadInvitations()
+    }
+    window.addEventListener(SHARE_REMOTE_EVENT, onRemote)
+    return () => window.removeEventListener(SHARE_REMOTE_EVENT, onRemote)
+  }, [board.id, reloadMembers, reloadRequests, reloadInvitations])
 
   const run = async (userId: string | null, fn: () => Promise<BoardMember[]>): Promise<boolean> => {
     setError(null)

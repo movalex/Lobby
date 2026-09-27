@@ -7,9 +7,17 @@ import { defineConfig, type ProxyOptions } from 'vite'
 // Windows `localhost` may resolve to ::1 while the servers bind IPv4.
 const apiOrigin = process.env.DRAFTROOM_API_ORIGIN ?? 'http://127.0.0.1:5859'
 const syncOrigin = process.env.DRAFTROOM_SYNC_ORIGIN ?? 'http://127.0.0.1:5858'
+// Vite ends a proxied response with a 502 only if its headers were not sent yet. When the api dies
+// mid-response (a SIGKILL, a crash) that left the browser's side of an already-streaming response open
+// forever: the board event stream (SSE) then never reconnected. Abort it instead, as the upstream did.
+const abortStartedResponses: ProxyOptions['configure'] = (proxy) => {
+  proxy.on('error', (_err, _req, res) => {
+    if ('headersSent' in res && res.headersSent && !res.writableEnded) res.destroy()
+  })
+}
 const proxy: Record<string, ProxyOptions> = {
-  '/api': { target: apiOrigin },
-  '/files': { target: apiOrigin },
+  '/api': { target: apiOrigin, configure: abortStartedResponses },
+  '/files': { target: apiOrigin, configure: abortStartedResponses },
   '/connect': { target: syncOrigin, ws: true },
 }
 

@@ -24,8 +24,27 @@ const RANK = Object.fromEntries(BOARD_ROLES.map((r, i) => [r, BOARD_ROLES.length
   number
 >
 
+/** M1 routes that change who can open a board, and what makes each one a sharing change. */
+const M1_SHARING_ROUTES: Record<string, (method: string, body: unknown) => boolean> = {
+  '/api/boards/:bid': (method, body) =>
+    method === 'PATCH' && typeof body === 'object' && body !== null && 'visibility' in body,
+  '/api/boards/:bid/members/:uid': (method) => method === 'PUT' || method === 'DELETE',
+}
+
 export function registerSharingRoutes(app: FastifyInstance, ctx: FeatureContext): void {
   const { db, now, notifier } = ctx
+
+  // M1's visibility and member routes publish nothing, so everyone else's header badge would wait
+  // for its slow refresh. A root hook (bound to every route at ready time, like the starred flag in
+  // stars.ts) sends the same identity-free hint once such a change succeeded. onResponse runs after
+  // the reply, i.e. after the route's transaction committed.
+  app.addHook('onResponse', async (req, reply) => {
+    const route = req.routeOptions.url
+    const isChange = route ? M1_SHARING_ROUTES[route] : undefined
+    if (!isChange || reply.statusCode >= 300 || !isChange(req.method, req.body)) return
+    const { bid } = req.params as Params
+    if (bid) publishSharingChanged(ctx, bid, req.method === 'PATCH' ? 'visibility' : 'grant')
+  })
 
   app.get('/api/boards/:bid/sharing', async (req) => {
     const user = await ctx.requireUser(req)

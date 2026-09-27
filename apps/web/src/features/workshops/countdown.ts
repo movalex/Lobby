@@ -6,14 +6,18 @@ import type { WorkshopTimer } from '@draftroom/contracts'
 
 export type TimerPhase = 'idle' | 'running' | 'paused' | 'stopped' | 'finished'
 
-/** Milliseconds left right now, on the server's clock. */
+/**
+ * Milliseconds left right now, on the server's clock. A running timer never shows more than the
+ * `remainingMs` the server sent (what was left when it answered; time has only passed since), so a
+ * clock-offset error can never make a 5:00 timer read 5:01.
+ */
 export function timerRemainingMs(timer: WorkshopTimer | null, localNowMs: number, offsetMs: number): number {
   if (!timer) return 0
   switch (timer.status) {
     case 'running': {
       const ends = Date.parse(timer.endsAt ?? '')
       if (Number.isNaN(ends)) return timer.remainingMs
-      return Math.max(0, ends - (localNowMs + offsetMs))
+      return Math.min(timer.remainingMs, Math.max(0, ends - (localNowMs + offsetMs)))
     }
     case 'paused':
       return timer.remainingMs

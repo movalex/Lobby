@@ -9,6 +9,7 @@ import {
   emptyState,
   filterBoards,
   filterByOwner,
+  importTitle,
   landingWorkspace,
   recentBoards,
   sectionTitle,
@@ -167,6 +168,17 @@ describe('owner filter, stars and duplicate names', () => {
       undefined,
       true,
     ])
+  })
+
+  it('titles an import from its file name: export names round-trip, slugs read as words', () => {
+    // What "Export .json" downloads (history feature: "<title>.draftroom.json").
+    expect(importTitle('Pitch v2.draftroom.json')).toBe('Pitch v2')
+    expect(importTitle('Q4 - roadmap.DRAFTROOM.JSON')).toBe('Q4 - roadmap')
+    expect(importTitle('brand-refresh_v2.json')).toBe('brand refresh v2')
+    expect(importTitle('  Launch   plan .json')).toBe('Launch plan')
+    expect(importTitle('.json')).toBeUndefined()
+    expect(importTitle('.draftroom.json')).toBeUndefined()
+    expect(importTitle(`${'x'.repeat(130)}.json`)).toHaveLength(120)
   })
 
   it('names a duplicate "(copy)" within the 120-character title limit', () => {

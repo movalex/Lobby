@@ -69,7 +69,11 @@ describe('permissions (UI hints)', () => {
 describe('messages', () => {
   it('summarizes a restore of deleted objects', () => {
     expect(restoreSummary({ restored: ['a', 'b'], skipped: [], bindings: 1, reparented: 0 })).toBe(
-      'Restored 2 objects, reconnected 1 connector.',
+      'Restored 2 objects, reconnected 1 connection.',
+    )
+    // One connector restored with both of its ends bound is two connections, not "2 connectors".
+    expect(restoreSummary({ restored: ['a', 'arrow'], skipped: [], bindings: 2, reparented: 0 })).toBe(
+      'Restored 2 objects, reconnected 2 connections.',
     )
     expect(restoreSummary({ restored: ['a'], skipped: [], bindings: 0, reparented: 1 })).toBe(
       'Restored 1 object, 1 object placed on the board (the frame is gone).',

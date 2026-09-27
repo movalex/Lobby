@@ -2,6 +2,9 @@
 // Wire format: default "message" events whose data is JSON { type, data, seq, at }. The first event
 // is { type: 'hello', data: { serverNow, role } } so clients can compute a clock offset (timers) and
 // know to resynchronize. The stream re-checks access periodically and ends with 'access-lost'.
+// Every HEARTBEAT_MS it sends { type: 'ping' } as a data event, not an SSE comment: a comment never
+// reaches the page's JS, and the client (apps/web/src/features/events.ts) replaces a stream that has
+// been silent for a while (a proxy can keep the browser's side open after this process died).
 
 import type { FastifyInstance } from 'fastify'
 import { connectionRole, loadBoardAccess, requireBoardAction } from '../access.ts'
@@ -9,7 +12,7 @@ import type { Params } from '../context.ts'
 import type { FeatureContext } from '../features/context.ts'
 import type { DeliveredEvent } from './hub.ts'
 
-const HEARTBEAT_MS = 15_000
+export const HEARTBEAT_MS = 15_000
 const ACCESS_RECHECK_MS = 30_000
 
 export function registerEventRoutes(app: FastifyInstance, ctx: FeatureContext) {
@@ -51,7 +54,7 @@ export function registerEventRoutes(app: FastifyInstance, ctx: FeatureContext) {
     }
     send({ type: 'hello', data: { serverNow: ctx.now().toISOString(), role: connectionRole(access) } })
 
-    const heartbeat = setInterval(() => write(': keep-alive\n\n'), HEARTBEAT_MS)
+    const heartbeat = setInterval(() => send({ type: 'ping', data: null }), HEARTBEAT_MS)
     const recheck = setInterval(() => {
       void loadBoardAccess(ctx.db, boardId, user.id)
         .then((a) => {

@@ -8,7 +8,7 @@ import { EditorPortal, usePassThroughWheelEvents, useValue } from 'tldraw'
 import { initialsFor, safeColor } from '../../lib/identity.ts'
 import type { FeatureContext } from '../types.ts'
 import { Composer } from './Composer.tsx'
-import { canCommentIn, controllerFor } from './controller.ts'
+import { canCommentIn, controllerFor, focusBoard } from './controller.ts'
 import { anchorPointOnCurrentPage, placeOnBoard } from './geometry.ts'
 import { CheckIcon, CloseIcon } from './icons.tsx'
 import { anchorLabel, type PinState, pinState, snippet } from './model.ts'
@@ -47,13 +47,27 @@ export function CommentsOverlay({ ctx }: { ctx: FeatureContext }) {
   useEffect(() => store.setCanComment(canComment), [store, canComment])
 
   // tldraw handles keys on its container (nudging selected shapes, Esc, …) before React sees them:
-  // keystrokes inside our UI are ours alone.
+  // keystrokes inside our UI are ours alone, except Esc on a marker, which is the board's (tldraw
+  // cancels: closes what is open, then leaves the comment tool, and refocuses its container).
   const layer = useRef<HTMLDivElement>(null)
   useEffect(() => {
     const el = layer.current
     if (!el) return
-    const mark = (e: Event) => {
-      if (e.target !== el) editor.markEventAsHandled(e)
+    const mark = (e: KeyboardEvent) => {
+      if (e.target === el) return
+      if (e.key === 'Escape' && e.target instanceof Element && e.target.closest('.dr-cpins')) {
+        // The marker that just opened its thread keeps the focus until the popover takes it on the
+        // next frame: an Esc in between closes that thread, as it would inside the popover. (tldraw's
+        // cancel only closes threads in the comment tool, so it would leave it open in select.)
+        if (e.type === 'keydown' && store.openThreadId.get()) {
+          e.preventDefault()
+          editor.markEventAsHandled(e)
+          store.openThread(null)
+          focusBoard(editor)
+        }
+        return
+      }
+      editor.markEventAsHandled(e)
     }
     el.addEventListener('keydown', mark)
     el.addEventListener('keyup', mark)
@@ -61,7 +75,7 @@ export function CommentsOverlay({ ctx }: { ctx: FeatureContext }) {
       el.removeEventListener('keydown', mark)
       el.removeEventListener('keyup', mark)
     }
-  }, [editor])
+  }, [editor, store])
 
   // Click-away (outside our UI) closes the open thread, except with the comment tool, which treats
   // that first click itself ("close, then the next click places a new comment").
@@ -74,6 +88,26 @@ export function CommentsOverlay({ ctx }: { ctx: FeatureContext }) {
     document.addEventListener('pointerdown', onDown, true)
     return () => document.removeEventListener('pointerdown', onDown, true)
   }, [editor, store])
+
+  // A popover that closes on its own (resolve, the last comment deleted, the tool's Esc) takes the
+  // keyboard focus with it, which falls back to <body> where tldraw hears neither Esc nor its keys:
+  // hand it back to the board. Focus that went somewhere real (the panel, the top bar) stays there.
+  const anyOpen = useValue(
+    'dr-comments.any-open',
+    () => store.openThreadId.get() !== null || store.pending.get() !== null,
+    [store],
+  )
+  const wasOpen = useRef(false)
+  useEffect(() => {
+    const closed = wasOpen.current && !anyOpen
+    wasOpen.current = anyOpen
+    if (!closed) return
+    const id = requestAnimationFrame(() => {
+      const active = document.activeElement
+      if (!active || active === document.body) focusBoard(editor)
+    })
+    return () => cancelAnimationFrame(id)
+  }, [anyOpen, editor])
 
   const pinsKey = useValue('dr-comment-pins', () => {
     if (store.pinsHidden.get()) return '[]'
@@ -232,7 +266,7 @@ function NewThreadComposer({ ctx }: { ctx: FeatureContext }) {
   // Keyboard focus goes back to the board, so Esc/C/V keep working after the composer closes.
   const cancel = () => {
     store.cancelNewThread()
-    editor.focus()
+    focusBoard(editor)
   }
   const s = point ? editor.pageToViewport(point) : null
   return (
@@ -316,7 +350,7 @@ function OpenThread({ ctx }: { ctx: FeatureContext }) {
   const pos = usePopoverPosition(ctx, point)
   const opened = useRef<string | null>(null)
   const section = useRef<HTMLElement>(null)
-  // Keyboard users land in the popover; Esc (handled in the composer or here) returns to the marker.
+  // Keyboard users land in the popover; Esc (handled in the composer or here) returns to the board.
   useEffect(() => {
     if (!openId || opened.current === openId) return
     opened.current = openId
@@ -330,13 +364,11 @@ function OpenThread({ ctx }: { ctx: FeatureContext }) {
   }, [openId])
 
   if (!thread || hidden) return null
+  // Back to the board (not the marker): tldraw's shortcuts work again at once, and the next Esc
+  // leaves the comment tool.
   const close = () => {
     store.openThread(null)
-    const pin = document.querySelector<HTMLElement>(
-      `[data-testid="comment-pin"][data-thread-id="${thread.id}"]`,
-    )
-    if (pin) pin.focus()
-    else editor.focus()
+    focusBoard(editor)
   }
   return (
     <section

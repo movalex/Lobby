@@ -248,6 +248,20 @@ export function withStarredEntry<B extends { id: string; starred?: boolean }>(
   return on ? [{ ...board, starred: true }, ...rest] : rest
 }
 
+/**
+ * Title for a board imported from `fileName`. Exports download as "<title>.draftroom.json" (history
+ * feature), so both extensions go; a slug-like name ("brand-refresh_v2.json") reads as words. Titles
+ * with spaces keep their dashes ("Q4 - roadmap"). Undefined when nothing is left (server default).
+ */
+export function importTitle(fileName: string): string | undefined {
+  const base = fileName
+    .replace(/(\.draftroom)?\.json$/i, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+  const words = /\s/.test(base) ? base : base.replace(/[-_]+/g, ' ').trim()
+  return words.slice(0, 120).trim() || undefined
+}
+
 /** Default title for a duplicate. */
 export const duplicateTitle = (title: string) => {
   const t = `${title} (copy)`

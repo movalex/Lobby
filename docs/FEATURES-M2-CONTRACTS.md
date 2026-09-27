@@ -14,7 +14,7 @@ Integration owner: main session. Requirements source: `docs/research/miro-ux-che
 - `context.ts`: `FeatureContext` = M1 `AppContext` + `events: EventHub` + `sync: SyncInternalClient` (snapshot/seed) + `layout` (file store).
 - `index.ts` registers each feature's `register<Name>(app, ctx)` from `features/<name>/index.ts`; each feature owns `apps/api/src/features/<name>/**` and `apps/api/test/features/<name>/**`.
 - Events: `ctx.events.publish(boardId, { type, data })` **after the transaction commits**. Payloads must be safe for every viewer of the board; per-user secrets (e.g. unrevealed ballots) are never published — publish a hint and let each client refetch its own view.
-- `GET /api/boards/:bid/events` (SSE) and `GET /healthz` exist. Reuse `requireBoardAction` / `requireWorkspaceRole` / `connectionRole` from `apps/api/src/access.ts` for every decision (packages/permissions semantics, 404 = no existence leak).
+- `GET /api/boards/:bid/events` (SSE) and `GET /healthz` exist. (Validation phase: the stream's heartbeat is a data event `{type:'ping'}` every 15 s instead of an SSE comment, and the web client replaces a stream that delivered nothing for 40 s; features never see `ping` unless they subscribe to it.) Reuse `requireBoardAction` / `requireWorkspaceRole` / `connectionRole` from `apps/api/src/access.ts` for every decision (packages/permissions semantics, 404 = no existence leak).
 
 **Contracts** — each feature owns `packages/contracts/src/<feature>.ts` (comments, history, workshops, dashboard; already created and re-exported from `index.ts` — never edit `index.ts`).
 
@@ -26,7 +26,7 @@ Integration owner: main session. Requirements source: `docs/research/miro-ux-che
 - DEVIATION: `apps/web/src/board/BoardPage.tsx` creates the shared event stream in an effect (`useState` + `useEffect`), not `useMemo`. Under React StrictMode (`pnpm dev`) the simulated unmount closed the memoized stream for good (`close()` is permanent) and leaked a second, unlistened EventSource, so no feature received board events in dev. A `FeatureContext` now exists only once the editor AND the stream exist; `useFeatureMounts` runs per editor + stream. Verified in dev: one open stream per board page, live comment pins, timer, votes and summon.
 - DEVIATION: `apps/api/src/events/routes.ts` ends every open stream in a Fastify `preClose` hook. Before, one connected client made `app.close()` (SIGTERM on deploy) take the 5 s force-exit path (exit 1). Test: `apps/api/test/events.test.ts` "ends open streams when the app closes".
 - DEVIATION: files outside the owner lists that changed, accepted by integration: history — `apps/api/src/files/deps.ts` (optional `FileAuthorizer.linkedAsset`), `apps/api/src/files/serve.ts` (asks `linkedAsset` only when `meta.boardId` differs), `apps/sync/src/http/router.ts` (two `INTERNAL_ROUTES` entries); dashboard-share — the `draftroom:open-share` listener in `BoardPage.tsx` (allowed above); platform — `apps/sync/test/http/origin.test.ts` and one `trustProxy` line in `apps/api/src/app.ts`; integration — `apps/sync/package.json` script `backup:restore-drill` (the command this contract names).
-- DEVIATION (OPEN, needs `pnpm install` by the main session): `apps/web` does not declare `@draftroom/board-ops` / `@draftroom/templates`, and `apps/api` does not declare `@draftroom/board-ops`. Each is imported by relative path from one file: web `features/canvas-ux/deps.ts`, `features/present-export/board-ops.ts` (+3 of its tests import `packages/board-ops/src/test-fixtures.ts`), `dashboard/template-catalog.ts`; api `features/history/board-ops.ts`. That works with a full workspace install (dev, CI, e2e), but filtered installs do not create `packages/board-ops/node_modules` or `packages/templates/node_modules`: the api Docker images (`pnpm install --filter "@draftroom/api..."`) and the Render static-site build (`--filter "@draftroom/web..."`) would fail to resolve those packages' own imports (`@tldraw/tlschema`, `@draftroom/canvas-schema`). This is an analysis of the install filters; neither build was run here (no Docker on this PC). Fix: add `"@draftroom/board-ops": "workspace:*"` (web, api) and `"@draftroom/templates": "workspace:*"` (web), run `pnpm install`, switch the four imports to the package names.
+- RESOLVED (declarations added and installed; the four imports now use the package names — re-checked in the validation phase): `apps/web` did not declare `@draftroom/board-ops` / `@draftroom/templates`, and `apps/api` does not declare `@draftroom/board-ops`. Each is imported by relative path from one file: web `features/canvas-ux/deps.ts`, `features/present-export/board-ops.ts` (+3 of its tests import `packages/board-ops/src/test-fixtures.ts`), `dashboard/template-catalog.ts`; api `features/history/board-ops.ts`. That works with a full workspace install (dev, CI, e2e), but filtered installs do not create `packages/board-ops/node_modules` or `packages/templates/node_modules`: the api Docker images (`pnpm install --filter "@draftroom/api..."`) and the Render static-site build (`--filter "@draftroom/web..."`) would fail to resolve those packages' own imports (`@tldraw/tlschema`, `@draftroom/canvas-schema`). This is an analysis of the install filters; neither build was run here (no Docker on this PC). Fix: add `"@draftroom/board-ops": "workspace:*"` (web, api) and `"@draftroom/templates": "workspace:*"` (web), run `pnpm install`, switch the four imports to the package names.
 - Migrations 0002..0005 apply in order on an empty database and on a milestone-1 database that already holds data, and the checksum guard covers them (`packages/db/test/migrate.test.ts`).
 - Keyboard: every binding features add or change is checked together against tldraw 5.4.2's default table (parsed from `node_modules/tldraw/src` on each run) in `apps/web/src/features/keyboard-map.test.ts`: no chord is bound twice, on editable or read-only boards, and no two features replace the same tldraw component slot or option. The bindings:
 
@@ -51,7 +51,7 @@ Integration owner: main session. Requirements source: `docs/research/miro-ux-che
 | Ctrl/Cmd+E (dashboard) | focus board search | dashboard-share |
 
 - Presentation: present-export sets `html[data-dr-presenting]`. Comments hides its whole layer then (integration fix: pins showed on slides); workshops hides its prompts, bars and toasts but keeps the user's own dots, revealed result badges and a floating timer (FAC-03); canvas-ux hides its selection bar.
-- tldraw component slots: canvas-ux owns `Toolbar`, `NavigationPanel`, `StylePanel`, `KeyboardShortcutsDialog`; present-export owns `CollaboratorCursor`; BoardPage keeps `SharePanel: null` and `InFrontOfTheCanvas`. Dock panels: `search`, `frames`, `templates` (canvas-ux), `comments`, `voting` (workshops), `history`.
+- tldraw component slots: canvas-ux owns `Toolbar`, `NavigationPanel`, `StylePanel`, `KeyboardShortcutsDialog`, `ContextMenu` (validation phase: tldraw's menu plus "Unlock all" while the page has locked shapes); present-export owns `CollaboratorCursor`; BoardPage keeps `SharePanel: null` and `InFrontOfTheCanvas`. Dock panels: `search`, `frames`, `templates` (canvas-ux), `comments`, `voting` (workshops), `history`.
 
 ## 2. Features and owners
 
@@ -141,18 +141,132 @@ Resolve the deploy-config blockers from milestone 1 (docs/DEPLOY.md):
 - `render.yaml` + DEPLOY.md updated to the chosen topology; re-validate against Render's schema; Docker images rebuilt and smoke-run on the NAS again (same isolation and cleanup rules as milestone 1).
 - Tests for every config rule.
 
-## 3. As built (features-integration, 2026-09-27)
+## 3. As built (features-integration, 2026-09-27; verified in browsers in the validation phase, 2026-09-27)
 
-From the builder reports, corrected by the integration smoke run (`pnpm dev`-style stack: vite dev = React StrictMode, api, sync, worker; alice owner, bob editor, carol via review link, dave requesting access; 53/53 checks). "Smoke" = seen working end to end in that run. FREE items are tldraw 5.4.2 defaults this phase did not change; they were not re-verified unless listed.
+Status per checklist ID (`docs/research/miro-ux-checklist.md`), proven by the browser suite in `e2e/tests/` (spec › test title, abbreviated to its leading clause). The whole suite (113 tests, 13 files, real api + sync + worker per stack, one Playwright worker) passed three consecutive full runs with the final code (113/113 each, 7.7 min) and once more inside `pnpm verify`; the series before the last two fixes was 113/113, 112/113 (saving › "an image stays…", fixed below), 113/113. Every scenario of docs/E2E-PLAN.md is mapped to its test there. This replaces the integration smoke-run table (53/53 manual checks in `pnpm dev`), whose findings are all covered below.
 
-| Feature | Done | Partial | Not built / skipped |
+Legend: **Verified** = asserted end to end in the browser (two browsers, a fresh context or the API where it matters) · **Partial** = verified except the stated part · **Built, no e2e** = unit/API tests only · **Not built** · **FREE** = tldraw 5.4.2 default this phase did not change, not re-verified.
+
+### canvas-ux
+
+| ID | Status | Evidence | Gaps / deviations |
 |---|---|---|---|
-| canvas-ux | COL-04 (append), COL-05 (smoke: 6 cells → 6 selected notes, one undo), COL-06, COL-07, MAK-02, MAK-03, MAK-06, MAK-07 (L key), MAK-10, MAK-11, PRE-02, PRE-03 (smoke: insert selected + one undo), PRE-06, PRF-02, PRS-04 copy-link part | MAK-05 (client-side lock only; "Unlock all" not re-verified), MAK-12 (smoke: Ctrl+F, result, Enter selects; no tag filter, current page only), MAK-13 (smoke: order + click selects; B-sees-order not checked with two browsers), PRF-09 (no toolbar visual snapshot yet), COL-05 "grid/table" option | WRK-02 searchable people list. FREE, not re-verified: COL-01..03, COL-08, MAK-01, MAK-04, MAK-08, MAK-09, PRE-04, PRE-05 |
-| comments | REV-01 (smoke: C, click note, Enter posts), REV-02 (smoke: resolve removes the pin live for others), REV-03 (smoke: "mentioned" pin state), REV-04, REV-06 | REV-05 (smoke: @ autocomplete, bell count, in-app only — no email) | REV-09 (P1), FIL-11 UI (P1), re-anchor by drag, Alt+C navigation, reactions |
-| history | REV-07 (smoke: deleted note listed, restored into its frame, seen by bob), REV-08 (smoke: checkpoint → restore as new → private, bob 404), DSH-02 route, DSH-03 content+files (API test), PRF-08 (smoke) | PRS-11 (P1: files by reference only) | REV-10 (P1), checkpoint deletion/retention |
-| present-export | PRS-01 (smoke: 1/2 → 2/2, chrome hidden, Esc exits; comment pins hidden since this pass), PRS-05 (smoke: PNG download) | PRS-06 (smoke: PDF download; raster pages + hidden text layer, not vector text), PRS-13 CSV part (smoke), PRS-07 (slide list only), PRS-10 (bookmarks only) | PRS-12 (P1), presenter follow/hand-off |
-| workshops | FAC-02 (smoke: bob follows after "Gather everyone"), FAC-03 (smoke: live start, same remaining time), FAC-05 (smoke: join prompt, click-to-vote dot), FAC-06 (smoke: reveal reaches bob), PRF-07 ballots (smoke: alice sees no dot of bob's before reveal) | FAC-04 (no "selection" scope, no "Save for later"), FAC-01 (no "who follows me" indicator) | FAC-07..FAC-10, per-person "Bring to me" UI |
-| dashboard-share | PRE-01 (smoke: retrospective → 4 frames, param removed, not undoable), DSH-01 (smoke: star → Starred), DSH-02 (smoke: Duplicate via card menu, after the menu z-index fix), DSH-03 (smoke: import of an exported .json), PRS-03 (smoke: Private, then "Link: comment · until …"), PRS-04 (smoke: dave requests → owner notified + request row → approve → dave's page opens the board), DSH-04, DSH-06 | PRS-02 (no workspace-wide "comment"), PRS-08 (review links need sign-in; no password or named visitors) | DSH-05 thumbnails (P1), email |
-| platform | deploy blockers 1, 2, 5, 6 (docs/DEPLOY.md) | Render itself unverified (not provisioned) | Clerk keys, tldraw license key (need the user) |
+| COL-04 | Verified | canvas-ux › "type-to-edit" | Appends (caret at the end), documented |
+| COL-05 | Verified | canvas-ux › "bulk paste: a 3×3 spreadsheet selection…", "bulk paste: "Text"…", "bulk paste cap" | Offers notes or text, no "grid/table" |
+| COL-06 | Verified | canvas-ux › "note palette" (13 colours, rendered fill, one undo); contrast in `palette.test.ts` | |
+| COL-07 | Verified | canvas-ux › "toolbar layout pin" (ids in order + snapshot) | Snapshot baseline made on Windows |
+| PRF-09 | Partial | canvas-ux › "toolbar layout pin" | "No tours or pop-ups" is not asserted by a test |
+| MAK-02 | Verified | canvas-ux › "alignment" (on by default, snaps, Ctrl disables, explicit off survives reload) | |
+| MAK-03 | Verified | canvas-ux › "alignment" (align-* with 2, distribute-* with 3, one undo) | |
+| MAK-05 | Verified | canvas-ux › "two-browser lock" (B sees it within 2 s; B's drag and Delete do nothing, fresh context too; Menu → Unlock all; right-click → Unlock all) | Lock is enforced by the clients (tldraw), not the server |
+| MAK-06 | Verified | canvas-ux › "Miro keys" | |
+| MAK-07 | Partial | canvas-ux › "Miro keys" (L = connector), "templates in a board" (bound arrows follow) | Binding to images/text and Ctrl-to-not-bind not tested |
+| MAK-10 | Verified | canvas-ux › "Miro keys" (Alt+1, Alt+2, Ctrl+0 with devicePixelRatio 1) | |
+| MAK-11 | Partial | canvas-ux › "Miro keys" (M shows/hides the minimap) | Clicking/dragging inside the minimap not tested |
+| MAK-12 | Verified (deviation) | canvas-ux › "board search" | Current page only, no tag filter (no tags), no comment text; Esc keeps the camera on the last result |
+| MAK-13 | Verified | canvas-ux › "frame outline" (bob sees the reorder within 2 s) | |
+| PRE-02 | Verified | canvas-ux › "templates in a board"; `packages/templates` tests (plain editable shapes) | |
+| PRE-03 | Verified | canvas-ux › "templates in a board" | |
+| PRE-06 | Verified | canvas-ux › "start view", "?template= on first open" | |
+| PRF-02 | Partial | canvas-ux › "heavy board" (4,500 + 500 pasted notes = 5,000, on the server too) | Frame rate while panning and the 200 images not measured |
+| PRS-04 (copy link) | Verified | canvas-ux › "copy link" | |
+| WRK-02 | Not built | | Searchable people list |
+| COL-01..03, COL-08, MAK-01, MAK-04, MAK-08, MAK-09, PRE-04, PRE-05 | FREE | | |
 
-Found in the smoke run and left as is (minor): after posting a comment and pressing Esc twice, focus returns to the pin and the comment tool stays active (a click on a note then opens a composer instead of voting); press V or click the toolbar. The top bar overflows at phone width (present-export report); the style panel is tldraw's default desktop behaviour.
+### comments
+
+| ID | Status | Evidence | Gaps / deviations |
+|---|---|---|---|
+| REV-01 | Verified | comments › "commenter on a read-only canvas", "pin follows its shape", "a point pin on page 2" | |
+| REV-02 | Verified | comments › "resolve and reopen", "edit and delete" | |
+| REV-03 | Verified | comments › "pin states are per person", "mention" | |
+| REV-04 | Verified | comments › "resolve and reopen" (Resolved filter), "pin states are per person" (Mine, Mentioning me), "mention" (click → zoom + open) | |
+| REV-05 | Partial | comments › "mention", "mention without access", "notifications across boards" | In-app only; no email (the UI says so) |
+| REV-06 | Verified | comments › "orphaned thread" (undo and Recently deleted re-attach it) | |
+| (contract) drafts, Shift+C, viewer, hover preview, deep link | Verified | comments › "drafts", "Shift+C hides comment pins", "viewer", "hover preview and deep link", "after posting, Esc leaves the thread…" | |
+| REV-09, FIL-11 UI | Not built | | Also not built: re-anchor by drag, Alt+C, reactions |
+
+### history
+
+| ID | Status | Evidence | Gaps / deviations |
+|---|---|---|---|
+| REV-07 | Verified | history › "recently deleted frame", "…note and connector" (multi-select), "…note whose frame is gone", "…files", "live list", "sync SIGKILL and restart" | |
+| REV-08 | Verified | history › "checkpoint round trip" | |
+| PRF-08 | Verified | history › "checkpoint round trip" (private, bob 404), "duplicate from the history panel" (no links copied) | |
+| DSH-02 (duplicate) | Verified | history › "duplicate from the history panel", "duplicate from the dashboard card menu"; dashboard-share › "card menu" | Default names differ: panel "Copy of X", dashboard "X (copy)" |
+| DSH-03 | Verified | history › "trash restore keeps content and files"; dashboard-share › "trash explains…"; dashboard › "dashboard: create, search, rename, archive, trash and restore" | No purge after 30 days (not built) |
+| PRS-11 | Verified (deviation) | history › "export .json and import it"; dashboard-share › "import" | Files travel by reference only |
+| Backups (build plan §7) | Verified | history › "backup restore drill"; automatic backups: `apps/sync/test/backup/backup.test.ts` only | |
+| REV-10 | Not built | | Also: checkpoint deletion/retention |
+
+### present-export
+
+| ID | Status | Evidence | Gaps / deviations |
+|---|---|---|---|
+| PRS-01 | Verified | present-export › the seven "present: …" tests | Swipe and transition animation not asserted |
+| PRS-05 | Verified | present-export › "PNG and SVG export", "context menu: tldraw's own Export as…", "copy as PNG" | |
+| PRS-06 | Partial | present-export › "PDF export: one frame-sized page per slide…", "Ctrl+P opens the PDF export…" | Raster pages (3×, originals) + searchable text layer, not vector text (the dialog says so) |
+| PRS-07 | Partial | present-export › "present: Ctrl+Alt+Enter starts at the selected note's frame, the slide list jumps…" | "Invite everyone to join" not built |
+| PRS-10 | Partial | present-export › "PDF export…" (bookmarks = frame names) | Embedded PDF pages are not re-rendered |
+| PRS-13 | Partial | present-export › "CSV export" | No tags column (no tags) |
+| PRS-12 | Not built | | Also: presenter follow/hand-off |
+| (integration) presenting is clean | Verified | present-export › "presentation is clean" | |
+| (integration) event stream after an api restart | Verified | present-export › "event stream survives an API restart" | Fixed in this phase (below) |
+
+### workshops
+
+| ID | Status | Evidence | Gaps / deviations |
+|---|---|---|---|
+| PRF-07 (ballots) | Verified | workshops › "ballot privacy" (DOM, every /api body, every SSE event and the canvas socket's presence, 3 browsers) | Private drafts and hidden frames are not built, so only the ballot part applies |
+| FAC-02 | Verified | workshops › "gather everyone" | |
+| FAC-03 | Verified | workshops › "timer sync", "time's up" | The ± stepper and +5 min buttons not tested; editors are facilitators by design |
+| FAC-04 | Partial | workshops › "vote setup" (frame scope, one per object, notes only; the server refuses the rest) | No "selection" scope, no "Save for later"; timed votes not tested in the browser |
+| FAC-05 | Verified | workshops › "ballot privacy", "vote setup" (join prompt, click to vote, budget, "I'm done") | Skip-then-join-later not tested |
+| FAC-06 | Verified | workshops › "ballot privacy" (reveal, ranked results, CSV), "end without results" | Top-3 cut / "See all" not exercised |
+| FAC-01 | Partial | workshops › "gather everyone" (following) | No "who follows me" indicator |
+| FAC-07..FAC-10 | Not built | | Also: per-person "Bring to me" UI |
+
+### dashboard-share
+
+| ID | Status | Evidence | Gaps / deviations |
+|---|---|---|---|
+| PRE-01 | Verified | dashboard-share › "new board from the template gallery", "Don't show templates on new boards", "a viewer opening ?template=…", "leaving a board right away keeps its last changes" | |
+| DSH-01 | Verified | dashboard-share › "stars"; dashboard › "dashboard: create, search, rename…" | |
+| DSH-02 | Verified | dashboard-share › "card menu" (order, stacking, duplicate/move/details/share/copy link) | |
+| DSH-03 | Verified | see history | |
+| DSH-04 | Built, no e2e | | Sort/filter (`dashboard-sort`) |
+| DSH-06 | Verified | dashboard-share › "grid/list toggle" (Ctrl+E) | |
+| PRS-02 | Partial | dashboard-share › "invite" | No workspace-wide "comment"; no email is sent (the UI says so) |
+| PRS-03 | Verified | dashboard-share › "share badge" (live for another viewer) | |
+| PRS-04 | Verified | dashboard-share › "request access", "request access variants", "a viewer asks for edit"; canvas-ux › "copy link" | |
+| PRS-08 | Partial | dashboard-share › "review link: two outsiders join…", "review link revoked without removing access" | Sign-in required; no password or named visitors; expiry sweeper API-tested only |
+| (contract) transfer ownership, removal note | Verified | dashboard-share › "transfer ownership", "removal note" | Transfer to a guest is allowed (product question) |
+| DSH-05 | Not built | | Thumbnails; email |
+
+### platform, collaboration quality, and the M0/M1 suites
+
+| ID | Status | Evidence | Gaps / deviations |
+|---|---|---|---|
+| Separate sync origin, Origin allowlist | Verified | dashboard-share › "separate sync origin › board sockets go straight to the sync origin…", "…a sync origin with a path…" (the whole file runs with ALLOWED_ORIGINS) | Render itself unverified; Clerk and tldraw license keys need the user |
+| WRK-03 | Verified | saving › the eight tests ("each edit shows Saving… then Saved", "with the sync server killed…", forged write, lease veto, presence-only, viewer/commenter, upgrade, image upload) | Terminal 4099 state not forced in a browser |
+| WRK-05 | Verified | conflicts › the seven "WRK-05: …" tests | Undo under concurrency not exercised per tool (paste, rotate, crop…) |
+| WRK-04 | Verified | conflicts › "text lease" | |
+| WRK-06 | Partial | canvas-ux › "toolbar layout pin" (a viewer has no Templates or note tool); saving › "a viewer and a commenter see "View only"…"; permissions › "shared as viewer…"; comments › "viewer" (read-only notice) | Why-disabled explanations on each tool not checked |
+| PRF-05 | Verified | collab-lifecycle › "3) SIGKILLed sync server…"; network-interruption; saving › "with the sync server killed…"; history › "sync SIGKILL and restart" | |
+| PRF-06 | Verified | permissions › "shared as viewer…", "a user from another workspace…"; every feature's forged-POST checks | |
+| FIL-01..05 | Partial (M0) | files › "6) custom dr-file-card…", "7) uploads…", "7) video card plays the original MP4…" (branded Chrome) | M0 scope; size/count limits and 10 % zoom loads not re-measured |
+| WRK-01 | Partial | collab-lifecycle › "1) two sessions see one another and their edits" | The 250 ms p95 is not measured |
+
+### Validation-phase changes (2026-09-27)
+
+Bugs the browser suites found, fixed at the root. Each integration fix below was checked by removing it and watching its test fail; the feature engineers' fixes (last bullet) are evidenced in their reports.
+- **Event stream never recovered after the api died** ([integration] P0). The vite proxy (dev and preview) ended a proxied response only if its headers were not sent yet, so a streaming SSE response stayed open forever after a SIGKILL, and the api's heartbeat was an SSE comment the page cannot see. Fixes: `apps/web/vite.config.ts` aborts a half-sent response when the upstream fails; `apps/api/src/events/routes.ts` pings with a data event; `apps/web/src/features/events.ts` replaces a stream silent for 40 s (covers proxies we do not control, e.g. the Render rewrite). The test's `test.fail` marker is gone.
+- **Leaving a board within a second of an edit lost it.** Alone on a board, tldraw sends at most once a second and unmounting the sync client drops what is unsent; in-app navigation (the "Back to <workspace>" link, a notification for another board, the browser Back) unmounted it at once. Seen as a template inserted on a new board that was gone when the board was reopened. Fix: `apps/web/src/lib/routing.ts` gained a leave guard (`setLeaveGuard`; it holds `navigate()` and back/forward), and `BoardPage.tsx` holds the navigation until the save tracker says nothing is unsent or in flight (bounded to 5 s; offline changes are not waited for). Test: dashboard-share › "leaving a board right away keeps its last changes" (was `test.fixme`).
+- **MAK-05 "right-click > Unlock all" was missing** (tldraw 5.4.2's canvas menu has none). `apps/web/src/features/canvas-ux/ContextMenu.tsx` (slot `ContextMenu`, added to the slot map in `keyboard-map.test.ts`).
+- **Esc right after clicking a comment pin left the thread open** (seen once as a flake in comments › "drafts": `thread-popover` still 1). The popover takes the focus on the next frame; until then the pin has it, and an Esc on a pin went to tldraw, whose cancel closes threads only in the comment tool. `features/comments/CommentsOverlay.tsx` now closes the open thread on that Esc (and hands the focus to the board). Deterministic test: comments › "after posting, Esc…" step "Esc right after a pin opens its thread…".
+- Test-side: `e2e/tests/support/comments.ts` `waitForSaved` now waits two frames before reading the indicator (it could read the "Saved" from before the edit it was meant to cover), like canvas-ux's helper. saving › "an image stays "Saving…" until its bytes are uploaded" failed once in a full run: after the upload the app also writes the worker's preview status into the asset record (`watchImagePreview`), a second save that sometimes lands just after the first; the test now waits for it and accepts that one extra Saving… → Saved (still never "Saved" while the upload is held).
+- From the feature validation engineers (their reports): viewer/commenter user-record loop (no `currentUser` for read-only roles), per-property undo adopted (WRK-05) plus a guard for a tldraw rebase that wiped the redo stack (`sync-quality/rebaseGuard.ts`), "Saving…" while an image uploads, the start view's result on `canvas-ux-overlay[data-start-view]`, comment Esc/focus (the smoke run's "left as is" item is fixed: `focusBoard` in `features/comments/controller.ts`), restore summary counting connections not binding ends, PNG exports with exactly one pHYs chunk (`present-export/png-density.ts`; tldraw's `setPhysChunk` added a second), workshops click-to-vote no longer selecting (ballots leaked through selection presence), a new vote startable after "End without results", the workshop timer offset from round trips (the event stream's offset is one-way), live `sharing.changed` events for M1 visibility/member changes, the open Share dialog refreshing on them, and `importTitle` for `<title>.draftroom.json`.
+
+New test ids, attributes and events since the table in §2: `save-status[data-state=connecting|saved|saving|offline|offline-pending|rejected|error|unsupported|readonly]` (labels "Saved", "Saving…", "Offline", "Offline — changes will sync", "Change not saved", "Not saved — connection ended", "View only"; the title is the tooltip), `save-rejected-toast`, `undo-notice`, `canvas-ux-overlay[data-start-view=template:<id>|deep-link|restore|restore+fit|fit|none|failed]`, `context-menu.unlock-all`; api event `sharing.changed {reason: 'visibility'|'grant'}`; window event `draftroom:share-remote-changed`; SSE `{type:'ping'}`. Workshops behaviour: while a participant is voting, a plain click on an eligible object only votes (Shift+click/drag selects and moves); the countdown never shows more than the server's last `remainingMs`.
+
+Still open (decisions, not defects): the viewer sees "View only" twice (role pill and save status); duplicate default names differ ("Copy of X" in the History panel, "X (copy)" on the dashboard); a review-link guest can be made owner; other people's cursors stay visible during a vote; plain drags on eligible objects do not move them while voting. Not covered anywhere yet: Firefox/Safari, touch, phone width (the top bar overflows), hidden tabs, real network latency.

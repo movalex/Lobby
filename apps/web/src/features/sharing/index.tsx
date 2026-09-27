@@ -6,7 +6,7 @@
 import type { ShareState } from '@draftroom/contracts'
 import { useEffect, useState } from 'react'
 import type { BoardFeature, FeatureContext } from '../types.ts'
-import { openShareDialog, SHARE_CHANGED_EVENT, sharingApi } from './api.ts'
+import { announceRemoteShareChange, openShareDialog, SHARE_CHANGED_EVENT, sharingApi } from './api.ts'
 import { shareBadge } from './model.ts'
 import './sharing.css'
 
@@ -33,7 +33,10 @@ function ShareBadge({ ctx }: { ctx: FeatureContext }) {
 
   useEffect(() => {
     const bump = () => setTick((n) => n + 1)
-    const offEvent = events.on('sharing.changed', bump)
+    const offEvent = events.on('sharing.changed', () => {
+      bump()
+      announceRemoteShareChange(board.id) // an open Share dialog refetches too
+    })
     const offResync = events.onResync(bump)
     const onWindow = (e: Event) => {
       const detail = (e as CustomEvent<{ boardId?: string }>).detail

@@ -225,15 +225,53 @@ describe('WorkshopStore', () => {
     expect(h.calls.filter((c) => c.path.endsWith('/cast')).length).toBe(castsBefore)
   })
 
-  it('refreshes on every (re)connect and prefers the event stream’s clock offset', async () => {
+  it('refreshes on every (re)connect; the clock offset comes from its own round trips', async () => {
     const h = harness({ timer: null, vote: null, serverNow: new Date(Date.now() + 5_000).toISOString() })
+    h.events.offset = 1_234 // the stream's one-way estimate: only used until a response is in
+    expect(h.store.serverOffsetMs()).toBe(1_234)
     for (const r of h.events.resync) r()
     await flush()
     expect(h.calls.filter((c) => c.path.endsWith('/workshop'))).toHaveLength(1)
-    // from the response: about +5 s
+    // from the response: about +5 s, whatever the stream said
     expect(Math.abs(h.store.serverOffsetMs() - 5_000)).toBeLessThan(1_000)
-    h.events.offset = 1_234
-    expect(h.store.serverOffsetMs()).toBe(1_234)
+  })
+
+  it('clock offset: server time minus the round trip midpoint, keeping the tightest sample', async () => {
+    let local = 1_000_000
+    const TRUE_OFFSET = 7_000 // the server clock is 7 s ahead
+    const replies: { rtt: number; stampAfter: number }[] = []
+    const request = (async () => {
+      const r = replies.shift() ?? { rtt: 40, stampAfter: 20 }
+      // The server stamps serverNow somewhere inside the round trip.
+      const serverNow = new Date(local + r.stampAfter + TRUE_OFFSET).toISOString()
+      local += r.rtt
+      return { timer: null, vote: null, serverNow }
+    }) as unknown as RequestFn
+    const events = new FakeEvents()
+    // A hello handled 1.5 s late (page still loading) gives a one-way estimate 1.5 s too low.
+    events.offset = TRUE_OFFSET - 1_500
+    const store = new WorkshopStore({
+      boardId: 'b-abc1234567',
+      userId: 'usr_me0000000001',
+      request,
+      events,
+      storage: null,
+      nowMs: () => local,
+    })
+    replies.push({ rtt: 600, stampAfter: 100 }) // slow and lopsided: error 200 ms (<= rtt/2)
+    await store.refresh()
+    expect(store.serverOffsetMs()).toBe(TRUE_OFFSET - 200)
+    replies.push({ rtt: 20, stampAfter: 10 }) // tight: exact
+    await store.refresh()
+    expect(store.serverOffsetMs()).toBe(TRUE_OFFSET)
+    replies.push({ rtt: 900, stampAfter: 900 }) // a worse sample does not replace a better one
+    await store.refresh()
+    expect(store.serverOffsetMs()).toBe(TRUE_OFFSET)
+    // ...unless the best one is over a minute old
+    local += 61_000
+    replies.push({ rtt: 100, stampAfter: 60 })
+    await store.refresh()
+    expect(store.serverOffsetMs()).toBe(TRUE_OFFSET + 10)
   })
 
   it('join/skip is remembered per vote; people who already voted count as joined', async () => {

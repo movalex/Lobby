@@ -304,7 +304,7 @@ The full detail is in [file-previews.md](file-previews.md). The prototype (`file
 | String `append` race (page/frame names, `index`) | Can be silently discarded, or produce a value neither user typed (`"Plans!2"`) |
 | Edit vs delete, either order | **Delete wins.** The editing client gets `discard` and reverts. |
 | Resurrection | A `patch` never resurrects. Any `put` of the id does (undo/redo, same-id create, server write) and clears the tombstone. |
-| Undo after a remote edit | Remote changes aren't on your stack, but undo **writes back your whole earlier record**. That reverts other users' props on that object, even ones you never touched, and can resurrect objects others deleted. |
+| Undo after a remote edit | Remote changes aren't on your stack, but undo **writes back your whole earlier record**. That reverts other users' props on that object, even ones you never touched, and can resurrect objects others deleted. (Native behaviour. Draftroom replaces it with per-property undo since 2026-09-27: `apps/web/src/sync-quality/perPropUndo.ts`, undo-per-prop.md.) |
 | Reconnect after offline edits | The client sends `lastServerClock` and gets the diff since then (or `wipe_all`), then re-pushes **only fields it changed**. It never uploads a snapshot, but its changed fields overwrite newer values (last writer wins). Verified in a browser [critic-run]. |
 | Concurrent reparent into a deleted frame | Committed; the orphan's `parentId` points to a missing record. How the editor renders it is UNVERIFIED. |
 | Read-only session writes | Skipped per op on the server, and the client gets `discard`. The socket stays open. Presence is still accepted. |
@@ -350,7 +350,7 @@ For the UI, show the lease holder through `presence.meta.editingShapeId`. It's a
 
 1. **License blanking and unknown price.** Any HTTPS production or staging deploy without a domain-matching key goes blank after 5 s. The commercial price is unquoted.
 2. **Same-note typing loses characters** (whole-`richText` put). A server lease (§8.1) is needed for v1.
-3. **Undo reverts others' edits on the same object and can resurrect deleted objects.** This is native HistoryManager behavior. Document it, or build a per-prop undo filter or a server veto.
+3. **Undo reverts others' edits on the same object and can resurrect deleted objects.** This is native HistoryManager behavior. Document it, or build a per-prop undo filter or a server veto. **Mitigated (2026-09-27):** per-prop undo adopted, verified in two browsers (e2e conflicts.spec.ts "WRK-05"); it and the rebase guard rest on `@internal` engine details, so re-run those tests on every tldraw bump.
 4. **Process crash from the tombstone-prune timer after `db.close()`.** The workaround relies on the `@internal` `pruneTombstones.flush()`. Re-check on every tldraw upgrade and consider filing upstream.
 5. **Split rooms.**
    - Mixed-case board ids on a case-insensitive filesystem open two rooms on one file.

@@ -23,6 +23,7 @@ import {
   emptyState,
   filterBoards,
   filterByOwner,
+  importTitle,
   type OwnerFilter,
   RECENT_LIMIT,
   recentBoards,
@@ -323,12 +324,7 @@ function Dashboard({ workspaceId, section }: { workspaceId: string; section: Das
       } catch {
         throw new Error('not-json')
       }
-      const title =
-        file.name
-          .replace(/\.json$/i, '')
-          .replace(/[-_]+/g, ' ')
-          .trim()
-          .slice(0, 120) || undefined
+      const title = importTitle(file.name)
       const created = await dash.importBoard(workspace.id, archive, {
         title,
         projectId: defaultProjectId ?? undefined,

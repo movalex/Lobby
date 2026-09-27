@@ -1,4 +1,5 @@
 import {
+  createUserId,
   getDefaultUserPresence,
   InstancePageStateRecordType,
   TLINSTANCE_ID,
@@ -23,15 +24,35 @@ export function textEditingShapeId(store: TLStore): TLShapeId | null {
   return shape && 'richText' in shape.props ? id : null
 }
 
+/** Who this tab is, as everyone else should see it (the signed-in account, never local prefs). */
+export interface PresenceIdentity {
+  /** Draftroom user id (bare, `usr_…`). */
+  id: string
+  name: string
+  color: string
+}
+
 /**
  * useSync's getUserPresence. Runs inside a reactive derivation, so reading the page state here makes
  * presence update when this tab starts/stops editing. `editingShapeId` is a UI hint only; the
  * server-side text lease is the enforcement (contract §4).
+ *
+ * `identity` stamps the account into presence. It is required for read-only roles: they get
+ * `currentUser: null` (so the editor never writes a `user:` record the server would discard, which
+ * tldraw 5.4.2 retries forever — docs/research/saved-indicator.md §7), and useSync then hands this
+ * function a user built from local tldraw preferences instead.
  */
-export function getDraftroomPresence(store: TLStore, user: TLUser): TLPresenceStateInfo | null {
+export function getDraftroomPresence(
+  store: TLStore,
+  user: TLUser,
+  identity?: PresenceIdentity,
+): TLPresenceStateInfo | null {
   const presence = getDefaultUserPresence(store, user)
   if (!presence) return null
-  return { ...presence, meta: { editingShapeId: textEditingShapeId(store) } }
+  const who = identity
+    ? { userId: createUserId(identity.id), userName: identity.name, color: identity.color }
+    : null
+  return { ...presence, ...who, meta: { editingShapeId: textEditingShapeId(store) } }
 }
 
 export interface PresenceUser {

@@ -9,6 +9,8 @@
     "typecheck": "tsc -p ."
   },
   "devDependencies": {
-    "@playwright/test": "catalog:"
+    "@playwright/test": "catalog:",
+    "pdf-lib": "catalog:",
+    "pdfjs-dist": "catalog:"
   }
 }

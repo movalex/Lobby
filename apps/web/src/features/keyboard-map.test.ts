@@ -161,6 +161,7 @@ describe('tldraw component slots and options', () => {
     expect([...claims].filter(([, owners]) => owners.length > 1)).toEqual([])
     expect(Object.fromEntries(claims)).toEqual({
       CollaboratorCursor: ['present-export'],
+      ContextMenu: ['canvas-ux'],
       InFrontOfTheCanvas: ['board-page'],
       KeyboardShortcutsDialog: ['canvas-ux'],
       NavigationPanel: ['canvas-ux'],

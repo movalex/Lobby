@@ -8,7 +8,14 @@ import { type ReactNode, useEffect, useId, useLayoutEffect, useRef } from 'react
 import { type Editor, useActions, useEditor, useValue } from 'tldraw'
 import { isReadonlyRole } from '../../board/access.ts'
 import type { FeatureContext } from '../types.ts'
-import { activePanel, pendingPaste, searchMatches, searchState, setFeatureCtx } from './bridge.ts'
+import {
+  activePanel,
+  pendingPaste,
+  searchMatches,
+  searchState,
+  setFeatureCtx,
+  startViewResult,
+} from './bridge.ts'
 import { pasteAsNotes } from './bulk-paste-handler.ts'
 import { copySelectionLink } from './copy-link.ts'
 import { DEFAULT_MAX_NOTES } from './deps.ts'
@@ -356,8 +363,9 @@ export function CanvasUxOverlay({ ctx }: { ctx: FeatureContext }) {
     if (activePanel(editor).get() !== ctx.activePanel) activePanel(editor).set(ctx.activePanel)
   })
   useLayoutEffect(() => applyNotePalette(editor), [editor])
+  const startView = useValue('dr-start-view', () => startViewResult(editor).get(), [editor])
   return (
-    <div className="dr-cux-overlay" data-testid="canvas-ux-overlay">
+    <div className="dr-cux-overlay" data-testid="canvas-ux-overlay" data-start-view={startView ?? undefined}>
       {ctx.activePanel === PANEL.search && <SearchHighlights />}
       <SelectionBar ctx={ctx} />
       <BulkPastePrompt />

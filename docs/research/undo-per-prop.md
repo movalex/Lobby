@@ -17,7 +17,7 @@ Tags:
 
 ## TL;DR
 
-- **Recommendation: adopt it.** Add one client-only module, `installPerPropUndo(editor)`, and call it from `<Tldraw onMount>`. There are no server, schema or protocol changes.
+- **Recommendation: adopt it.** Add one client-only module, `installPerPropUndo(editor)`, and call it from `<Tldraw onMount>`. There are no server, schema or protocol changes. **Adopted (2026-09-27):** `apps/web/src/sync-quality/perPropUndo.ts`, wired in `BoardPage.tsx`; browser proof in e2e/tests/conflicts.spec.ts (the seven "WRK-05" tests; the old "documented limitation" test is inverted). One engine issue found afterwards is in §8.
 - **How it works.** It wraps `editor.store.applyDiff` and acts only while the `HistoryManager` is replaying (undo, redo, bail, bailToMark). During a replay it rewrites the record-level diff into a **per-field 3-way patch** against the current store:
   - A field is reverted only if this entry changed it, **and** its current value is still what the entry left, **and** its last write was not a remote one.
   - A record that someone else deleted is never re-created.
@@ -684,6 +684,8 @@ Page errors: none in any scenario. The offline run logs the expected `ERR_INTERN
 | The arrow replay skip | `ArrowBindingUtil.ts:116` | If tldraw fixes it upstream, step 6 becomes a redundant but harmless second write of the same value. |
 
 Pin the tldraw version and re-run the e2e canaries on every bump.
+
+**Found after adoption (validation phase, 2026-09-27) [run]: a sync rebase can wipe the redo stack.** Undo a creation, redo it quickly, and let the server's commit of the delete arrive after the redo: `TLSyncClient.rebase` removes and re-adds the shape inside one `mergeRemoteChanges`. The Editor's before-delete handler has noted the removal, so its operation-complete `cleanupInstancePageState` drops the (still existing) shape from the selection. That cleanup runs after the remote merge, is recorded as a `user` change, and recording a new change clears the redo stack: the next Ctrl+Shift+Z does nothing. The mechanism is in the engine (sync client + Editor), not in this module; a control run with native undo was not done. Workaround in `apps/web/src/sync-quality/rebaseGuard.ts` (installed in `onMount`): keep page-state references to shapes that were deleted during the current remote merge and exist again when the cleanup runs. It relies on `store.mergeRemoteChanges` being overridable per instance and on 5.4.2's cleanup order; the canary is e2e/tests/conflicts.spec.ts "WRK-05: redo keeps working when the server confirms an undone creation only after the redo" (deterministic: incoming frames are held with `page.routeWebSocket`). Worth reporting upstream.
 
 **Semantic choices to confirm with product:**
 - **Spatial unit.** If your undo moves a shape back to its old parent, it also restores x/y/rotation/index, even if someone moved the shape since (S8a: undoing a group overwrote B's move inside it). The alternative is to preserve the current page transform. That is possible via `editor.getShapePageTransform`, but it would not undo *your own* drag into a frame. **UNVERIFIED.**

@@ -73,6 +73,9 @@ export interface KeyValueStorage {
   setItem(key: string, value: string): void
 }
 
+/** A clock sample older than this is replaced by the next one, even with a longer round trip. */
+const CLOCK_SAMPLE_MAX_AGE_MS = 60_000
+
 function safeStorage(): KeyValueStorage | null {
   try {
     return typeof localStorage === 'undefined' ? null : localStorage
@@ -101,7 +104,8 @@ export class WorkshopStore {
   private state: WorkshopState | null = null
   private loaded = false
   private stale = false
-  private responseOffset = 0
+  /** Best clock sample from this store's own round trips (see noteServerTime). */
+  private clock: { offsetMs: number; rttMs: number; at: number } | null = null
   private pending: PendingCast[] = []
   private queue: Promise<unknown> = Promise.resolve()
   private seq = 0
@@ -174,10 +178,26 @@ export class WorkshopStore {
     }
   }
 
-  /** Server time minus local time: the event stream's measurement, else the last response's. */
+  /**
+   * Server time minus local time, for countdowns. Measured on this store's own requests: the server
+   * stamps `serverNow` while the request is in flight, so `serverNow - midpoint(sent, received)` is
+   * off by at most half the round trip. The event stream's value (`hello.serverNow - arrival`) is
+   * one-way and absorbs every delay before the message is handled (a page still loading can take a
+   * second or more), which made a 5:00 timer read 5:01 and late joiners disagree; it is only used
+   * until the first response is in.
+   */
   serverOffsetMs(): number {
-    const e = this.events.serverOffsetMs()
-    return e !== 0 ? e : this.responseOffset
+    return this.clock ? this.clock.offsetMs : this.events.serverOffsetMs()
+  }
+
+  /** Keeps the tightest sample (smallest round trip); a sample older than a minute is replaced. */
+  private noteServerTime(serverNow: string, sentAt: number, receivedAt: number) {
+    const server = Date.parse(serverNow)
+    if (Number.isNaN(server)) return
+    const rttMs = Math.max(0, receivedAt - sentAt)
+    const best = this.clock
+    if (best && rttMs > best.rttMs && receivedAt - best.at < CLOCK_SAMPLE_MAX_AGE_MS) return
+    this.clock = { offsetMs: Math.round(server - (sentAt + receivedAt) / 2), rttMs, at: receivedAt }
   }
 
   // ---- loading and events --------------------------------------------------------------------------
@@ -185,13 +205,13 @@ export class WorkshopStore {
   async refresh(): Promise<void> {
     const seq = ++this.seq
     try {
+      const sentAt = this.nowMs()
       const s = await this.request('GET', `/api/boards/${encodeURIComponent(this.boardId)}/workshop`, {
         schema: WorkshopState,
       })
+      this.noteServerTime(s.serverNow, sentAt, this.nowMs()) // a valid clock sample even if superseded
       if (seq < this.appliedSeq) return
       this.appliedSeq = seq
-      const serverNow = Date.parse(s.serverNow)
-      if (!Number.isNaN(serverNow)) this.responseOffset = serverNow - this.nowMs()
       const timer = this.newerTimer(s.timer) ? s.timer : (this.state?.timer ?? null)
       this.state = { ...s, timer }
       this.loaded = true
@@ -271,10 +291,12 @@ export class WorkshopStore {
 
   async timerAction(action: TimerActionInput): Promise<ActionResult> {
     try {
+      const sentAt = this.nowMs()
       const r = await this.request('POST', `/api/boards/${encodeURIComponent(this.boardId)}/timer`, {
         body: action,
         schema: TimerResponse,
       })
+      this.noteServerTime(r.serverNow, sentAt, this.nowMs())
       if (this.state && this.newerTimer(r.timer)) this.state = { ...this.state, timer: r.timer }
       else if (!this.state) this.state = { timer: r.timer, vote: null, serverNow: r.serverNow }
       this.emit()

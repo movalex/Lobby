@@ -6,11 +6,12 @@
 // our asset store then returns the uploaded original instead of the canvas-sized derivative. Every export
 // here therefore passes `pixelRatio: undefined` explicitly (toImage would otherwise default it to 2). The
 // bitmap is then drawn at tldraw's default 2× pixel ratio, so `scale` is halved to get N× output.
-import { Box, copyAs, type Editor, PngHelpers, type TLShape, type TLShapeId } from 'tldraw'
+import { Box, copyAs, type Editor, type TLShape, type TLShapeId } from 'tldraw'
 import type { FrameEntry } from './board-ops.ts'
 import type { PdfTextItem } from './pdf-build.ts'
 import { createPdfBuilderOffThread } from './pdf-client.ts'
 import { pdfRasterScale } from './pdf-layout.ts'
+import { setPngDensity } from './png-density.ts'
 import { placedTextFor } from './text-layer.ts'
 
 export type ImageScale = 1 | 2 | 4
@@ -40,7 +41,10 @@ export async function renderPng(
     darkMode: false,
   })
   // Mark the PNG as N× (pHYs = 72 dpi × N), so apps that honour it show it at board size, N× sharper.
-  return PngHelpers.setPhysChunk(new DataView(await blob.arrayBuffer()), opts.scale, { type: 'image/png' })
+  // Replaces the pHYs tldraw wrote at its own pixel ratio (PngHelpers.setPhysChunk would add a second
+  // one, and decoders keep the first: see png-density.ts).
+  const bytes = setPngDensity(new Uint8Array(await blob.arrayBuffer()), opts.scale)
+  return new Blob([bytes as BlobPart], { type: 'image/png' })
 }
 
 export async function renderSvg(

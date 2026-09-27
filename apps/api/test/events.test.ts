@@ -1,6 +1,7 @@
 import type { AddressInfo } from 'node:net'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { EventHub } from '../src/events/hub.ts'
+import { HEARTBEAT_MS } from '../src/events/routes.ts'
 import { createBoard, createTestApi, ORIGIN, type TestApi } from './helpers.ts'
 
 let api: TestApi | undefined
@@ -80,6 +81,26 @@ describe('board event stream', () => {
     for (let i = 0; i < 50 && events.subscriberCount(boardId) > 0; i++)
       await new Promise((r) => setTimeout(r, 20))
     expect(events.subscriberCount(boardId)).toBe(0)
+  })
+
+  it('sends a data ping every heartbeat, which a page can see (an SSE comment never reaches its JS)', async () => {
+    api = await createTestApi()
+    const alice = await api.login('alice')
+    const boardId = await createBoard(alice, alice.personalWorkspaceId)
+    await api.app.listen({ host: '127.0.0.1', port: 0 })
+    const base = `http://127.0.0.1:${(api.app.server.address() as AddressInfo).port}`
+    // Only the intervals are fake: the heartbeat's is set when the stream opens below.
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    try {
+      const s = await openStream(base, boardId, alice.cookie)
+      await s.waitFor('hello')
+      expect(s.events.some((e) => e.type === 'ping')).toBe(false)
+      vi.advanceTimersByTime(HEARTBEAT_MS)
+      expect(await s.waitFor('ping')).toMatchObject({ type: 'ping', data: null })
+      await s.close()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('ends open streams when the app closes, so a deploy does not wait on connected clients', async () => {

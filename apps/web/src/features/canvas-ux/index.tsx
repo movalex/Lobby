@@ -6,8 +6,9 @@
 import { getUserPreferences } from 'tldraw'
 import { isReadonlyRole } from '../../board/access.ts'
 import type { BoardFeature, FeatureContext } from '../types.ts'
-import { setFeatureCtx } from './bridge.ts'
+import { setFeatureCtx, startViewResult } from './bridge.ts'
 import { registerBulkPaste } from './bulk-paste-handler.ts'
+import { DraftroomContextMenu } from './ContextMenu.tsx'
 import { MAX_SHAPES_PER_PAGE, snapDefaultPatch } from './defaults.ts'
 import { FramesPanel } from './FramesPanel.tsx'
 import { FramesIcon, SearchIcon, TemplatesIcon } from './icons.tsx'
@@ -40,8 +41,9 @@ function mount(ctx: FeatureContext): () => void {
   cleanups.push(installCanvasKeyboard(editor, { onBoardSearch: () => openBoardSearch(editor), isModalOpen }))
   cleanups.push(registerBulkPaste(editor))
 
+  let startView = 'failed'
   try {
-    applyStartView(editor, {
+    startView = applyStartView(editor, {
       boardId: ctx.board.id,
       userId: ctx.me.user.id,
       canEdit: !isReadonlyRole(ctx.role, ctx.board.status),
@@ -56,9 +58,12 @@ function mount(ctx: FeatureContext): () => void {
     console.error('canvas-ux: start view failed', e)
   }
   cleanups.push(persistCamera(editor, ctx.board.id, ctx.me.user.id))
+  // Last: everything above (keys, paste, snap default, first view) is in place once this is set.
+  startViewResult(editor).set(startView)
 
   return () => {
     for (const c of cleanups.reverse()) c()
+    startViewResult(editor).set(null)
   }
 }
 
@@ -90,6 +95,7 @@ export const canvasUxFeature: BoardFeature = {
   overrides: canvasUxOverrides,
   components: {
     Toolbar: DraftroomToolbar,
+    ContextMenu: DraftroomContextMenu,
     NavigationPanel: DraftroomNavigationPanel,
     StylePanel: DraftroomStylePanel,
     KeyboardShortcutsDialog: DraftroomShortcutsDialog,

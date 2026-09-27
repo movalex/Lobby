@@ -176,7 +176,22 @@ function MyDots({
   )
 }
 
-/** A primary click (no drag) on an eligible object adds a vote. Tools other than select/hand are left alone. */
+/** Elements inside the canvas that have their own click behaviour (file-card links, embeds, ...). */
+const INTERACTIVE = 'a, button, input, textarea, select, iframe, [contenteditable="true"]'
+
+/**
+ * A primary click (no drag) on an eligible object adds a vote. Tools other than select/hand are left
+ * alone.
+ *
+ * With the select tool, the click never reaches tldraw (Miro's voting mode works the same way): a
+ * vote click must not SELECT the object, because everyone's selection is shared as presence, so the
+ * outline (and the canvas socket) would show others which objects this person voted on (PRF-07). The
+ * press is claimed in the capture phase with tldraw's own `markEventAsHandled`, which leaves every
+ * non-tldraw listener alone. Presses with modifiers (Shift+drag still moves a note), on empty canvas
+ * or on non-eligible objects go to tldraw as usual; plain clicks select, move and edit again after
+ * "I'm done", "Skip" or once voting ends.
+ * The hand tool never selects, so its clicks are read from the editor's own events.
+ */
 function ClickToVote({ ctx, store }: { ctx: FeatureContext; store: WorkshopStore }) {
   const rule = useRule(store)
   const cast = useCast(ctx, store)
@@ -185,37 +200,77 @@ function ClickToVote({ ctx, store }: { ctx: FeatureContext; store: WorkshopStore
   useEffect(() => {
     if (!rule) return
     const editor = ctx.editor
+    const container = editor.getContainer()
+    const win = container.ownerDocument.defaultView ?? window
     const lookup = editorLookup(editor)
-    let down: { x: number; y: number } | null = null
     const last = { id: '', at: 0 }
-    const onEvent = (info: TLEventInfo) => {
-      if (info.type !== 'pointer' || info.button !== 0) return
-      if (info.name === 'pointer_down') {
-        down = { x: info.point.x, y: info.point.y }
-        return
-      }
-      if (info.name !== 'pointer_up' || !down) return
-      const moved = Math.hypot(info.point.x - down.x, info.point.y - down.y)
-      down = null
-      if (moved > CLICK_SLOP_PX || info.shiftKey || info.ctrlKey || info.metaKey || info.altKey) return
-      const tool = editor.getCurrentToolId()
-      if (tool !== 'select' && tool !== 'hand') return
-      if (editor.getEditingShapeId()) return
-      const shape = editor.getShapeAtPoint(editor.screenToPage(info.point), {
+    const eligibleAt = (screen: { x: number; y: number }) =>
+      editor.getShapeAtPoint(editor.screenToPage(screen), {
         hitInside: true,
         hitLabels: true,
         hitLocked: true,
         filter: (s) => isVoteEligible(s.id, lookup, rule),
       })
-      if (!shape) return
+    const vote = (shapeId: string) => {
       const t = performance.now()
-      if (last.id === shape.id && t - last.at < SAME_SHAPE_DEBOUNCE_MS) return // a double-click is one vote
-      last.id = shape.id
+      if (last.id === shapeId && t - last.at < SAME_SHAPE_DEBOUNCE_MS) return // a double-click is one vote
+      last.id = shapeId
       last.at = t
-      void castRef.current(shape.id, 1)
+      void castRef.current(shapeId, 1)
+    }
+    const plain = (e: { shiftKey: boolean; ctrlKey: boolean; metaKey: boolean; altKey: boolean }) =>
+      !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey
+
+    // select tool: claim the press before tldraw sees it
+    let pressed: { pointerId: number; x: number; y: number; shapeId: string } | null = null
+    const onDown = (e: PointerEvent) => {
+      pressed = null
+      if (e.button !== 0 || !e.isPrimary || !plain(e)) return
+      if (editor.getCurrentToolId() !== 'select' || editor.getEditingShapeId()) return
+      const target = e.target instanceof Element ? e.target : null
+      if (!target?.closest('.tl-canvas') || target.closest(INTERACTIVE)) return
+      const shape = eligibleAt({ x: e.clientX, y: e.clientY })
+      if (!shape) return
+      editor.markEventAsHandled(e)
+      pressed = { pointerId: e.pointerId, x: e.clientX, y: e.clientY, shapeId: shape.id }
+      // Voting is "moving" too: it ends following someone (FAC-02), as any canvas click does.
+      if (editor.getInstanceState().followingUserId) editor.stopFollowingUser()
+    }
+    const onUp = (e: PointerEvent) => {
+      const p = pressed
+      if (!p || e.pointerId !== p.pointerId) return
+      pressed = null
+      editor.markEventAsHandled(e)
+      if (Math.hypot(e.clientX - p.x, e.clientY - p.y) > CLICK_SLOP_PX) return
+      vote(p.shapeId)
+    }
+    const onCancel = (e: PointerEvent) => {
+      if (pressed?.pointerId === e.pointerId) pressed = null
+    }
+    container.addEventListener('pointerdown', onDown, true)
+    win.addEventListener('pointerup', onUp, true)
+    win.addEventListener('pointercancel', onCancel, true)
+
+    // hand tool: a click without a drag votes
+    let handDown: { x: number; y: number } | null = null
+    const onEvent = (info: TLEventInfo) => {
+      if (info.type !== 'pointer' || info.button !== 0) return
+      if (info.name === 'pointer_down') {
+        handDown = editor.getCurrentToolId() === 'hand' ? { x: info.point.x, y: info.point.y } : null
+        return
+      }
+      if (info.name !== 'pointer_up' || !handDown) return
+      const moved = Math.hypot(info.point.x - handDown.x, info.point.y - handDown.y)
+      handDown = null
+      if (moved > CLICK_SLOP_PX || !plain(info) || editor.getCurrentToolId() !== 'hand') return
+      const shape = eligibleAt(info.point)
+      if (shape) vote(shape.id)
     }
     editor.on('event', onEvent)
     return () => {
+      container.removeEventListener('pointerdown', onDown, true)
+      win.removeEventListener('pointerup', onUp, true)
+      win.removeEventListener('pointercancel', onCancel, true)
       editor.off('event', onEvent)
     }
   }, [ctx.editor, rule])

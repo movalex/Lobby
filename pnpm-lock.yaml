@@ -282,6 +282,12 @@ importers:
       '@playwright/test':
         specifier: 'catalog:'
         version: 1.63.0
+      pdf-lib:
+        specifier: 'catalog:'
+        version: 1.17.1
+      pdfjs-dist:
+        specifier: 'catalog:'
+        version: 6.3.289
 
   packages/auth-tickets: {}
 

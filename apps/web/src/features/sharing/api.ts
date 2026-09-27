@@ -98,3 +98,13 @@ export function openShareDialog() {
 export function announceShareChanged(boardId: string) {
   window.dispatchEvent(new CustomEvent(SHARE_CHANGED_EVENT, { detail: { boardId } }))
 }
+
+/**
+ * The server reported a sharing change on the board stream (someone asked for access, another owner
+ * changed a grant or a link). The badge relays it so an open Share dialog refetches its lists.
+ */
+export const SHARE_REMOTE_EVENT = 'draftroom:share-remote-changed'
+
+export function announceRemoteShareChange(boardId: string) {
+  window.dispatchEvent(new CustomEvent(SHARE_REMOTE_EVENT, { detail: { boardId } }))
+}
