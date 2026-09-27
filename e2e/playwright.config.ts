@@ -6,14 +6,23 @@ const WEB_URL = `http://127.0.0.1:${WEB_PORT}`
 
 export default defineConfig({
   testDir: './tests',
+  // Every test drives one shared sync server on a fixed port (the preview proxy targets it) and some
+  // tests SIGKILL it, so tests run one at a time.
   fullyParallel: false,
   workers: 1,
   forbidOnly: !!process.env.CI,
   reporter: 'list',
   timeout: 120_000,
-  use: { baseURL: WEB_URL, trace: 'retain-on-failure' },
-  projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
-  // The sync server is started/killed by the test itself (it must SIGKILL and restart it).
+  expect: { timeout: 15_000 },
+  use: { baseURL: WEB_URL, trace: 'retain-on-failure', screenshot: 'only-on-failure' },
+  projects: [
+    // The Playwright headless shell: everything except MP4 playback.
+    { name: 'chromium', use: { ...devices['Desktop Chrome'] }, grepInvert: /@chrome/ },
+    // Branded Chrome ships the proprietary H.264/AAC decoders the headless shell lacks.
+    { name: 'chrome', use: { ...devices['Desktop Chrome'], channel: 'chrome' }, grep: /@chrome/ },
+  ],
+  // The sync server and the preview worker are started (and killed) by the tests' own fixture
+  // (tests/support/stack.ts); only the static web build is served here.
   webServer: [
     {
       command: `pnpm --filter @draftroom/web build && pnpm --filter @draftroom/web exec vite preview --port ${WEB_PORT} --strictPort`,
