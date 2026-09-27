@@ -1,12 +1,14 @@
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, readdirSync } from 'node:fs'
+import { existsSync, mkdtempSync, readdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { draftroomSchema, FILE_CARD_TYPE } from '@draftroom/canvas-schema'
 import { createShapeId, type TLRecord } from '@tldraw/tlschema'
 import { describe, expect, it } from 'vitest'
+import { fileCardFutureSchema } from '../test/harness/records.ts'
 import { BOARD_ID_RE, boardDbPath, RoomRegistry } from './rooms.ts'
+import { emptyBoardSnapshot } from './snapshot.ts'
 
 const card = (n: string) =>
   ({
@@ -97,7 +99,7 @@ describe('RoomRegistry on node:sqlite', () => {
     const clock = room.getCurrentDocumentClock()
     room.handleSocketConnect({
       sessionId: 'u1:tab',
-      meta: { userId: 'u1' },
+      meta: { userId: 'u1', role: 'editor', name: 'u1' },
       socket: { send() {}, close() {}, readyState: 1 },
     })
     room.closeSession('u1:tab') // removal is synchronous -> onSessionRemoved(0) -> evict timer
@@ -131,7 +133,7 @@ describe('RoomRegistry on node:sqlite', () => {
       r.closeAll()
       const b = r.getOrCreate('prune-evict')
       b.storage.transaction((t) => { t.set(rec.id, rec) })
-      b.handleSocketConnect({ sessionId: 's', meta: { userId: 'u' }, socket: { send() {}, close() {}, readyState: 1 } })
+      b.handleSocketConnect({ sessionId: 's', meta: { userId: 'u', role: 'editor', name: 'u' }, socket: { send() {}, close() {}, readyState: 1 } })
       b.storage.transaction((t) => { t.delete(rec.id) })
       b.closeSession('s')
       setTimeout(() => { if (r.has('prune-evict')) { console.error('not evicted'); process.exit(3) } }, 300)
@@ -157,5 +159,82 @@ describe('RoomRegistry on node:sqlite', () => {
       },
     }
     expect(() => draftroomSchema.types.shape.validate(bad)).toThrow()
+  })
+})
+
+/** A current-schema RoomSnapshot for a new board holding `records` (what prepareSeedSnapshot produces). */
+function seedOf(...records: TLRecord[]) {
+  const base = emptyBoardSnapshot(draftroomSchema)
+  return {
+    ...base,
+    documents: [...base.documents, ...records.map((state) => ({ state, lastChangedClock: 0 }))],
+  }
+}
+
+const until = async (check: () => boolean, ms = 5_000) => {
+  const end = Date.now() + ms
+  while (!check()) {
+    if (Date.now() > end) throw new Error('timed out')
+    await new Promise((r) => setTimeout(r, 10))
+  }
+}
+
+describe('RoomRegistry.seed / snapshot', () => {
+  it('seeds a new board once; a second seed is refused and changes nothing', () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'dr-seed-'))
+    const r = new RoomRegistry({ dataDir, schema: draftroomSchema })
+    expect(r.seed('board-new', seedOf(card('a')))).toBe('created')
+    expect(r.getOrCreate('board-new').getRecord(card('a').id)).toMatchObject({ x: 1 })
+    expect(r.seed('board-new', seedOf(card('b')))).toBe('exists') // room open
+    const room = r.getOrCreate('board-new')
+    expect(room.getRecord(card('a').id)).toBeDefined()
+    expect(room.getRecord(card('b').id)).toBeUndefined()
+    r.closeAll()
+  })
+
+  it('refuses to seed a board that a connect already initialized, open or not, and never wipes it', () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'dr-seed-'))
+    const r1 = new RoomRegistry({ dataDir, schema: draftroomSchema })
+    const room = r1.getOrCreate('board-used') // what a first connect does: default document + page
+    const a = card('kept')
+    room.storage.transaction((txn) => void txn.set(a.id, a))
+    expect(r1.seed('board-used', seedOf(card('seeded')))).toBe('exists') // while open
+    r1.closeAll()
+
+    // closed, in a fresh registry (a restarted process): the initialized DB file alone refuses it
+    const r2 = new RoomRegistry({ dataDir, schema: draftroomSchema })
+    expect(r2.seed('board-used', seedOf(card('seeded')))).toBe('exists')
+    expect(r2.has('board-used')).toBe(false) // the refusal did not leave a room open
+    const reopened = r2.getOrCreate('board-used')
+    expect(reopened.getRecord(a.id)).toMatchObject({ x: 1, y: 2 })
+    expect(reopened.getRecord(card('seeded').id)).toBeUndefined()
+    r2.closeAll()
+  })
+
+  it('a seed that the room cannot open is rolled back completely (the board can be seeded again)', () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'dr-seed-'))
+    const r = new RoomRegistry({ dataDir, schema: draftroomSchema })
+    // bypassing prepareSeedSnapshot on purpose: a schema newer than the server makes the room throw
+    const future = { ...seedOf(card('a')), schema: fileCardFutureSchema.serialize() }
+    expect(() => r.seed('board-bad', future)).toThrow()
+    expect(existsSync(boardDbPath(dataDir, 'board-bad'))).toBe(false)
+    expect(r.has('board-bad')).toBe(false)
+    expect(r.seed('board-bad', seedOf(card('a')))).toBe('created')
+    r.closeAll()
+  })
+
+  it('snapshot() creates nothing for an unknown board, and a room it (or a seed) opens is evicted again', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'dr-seed-'))
+    const r = new RoomRegistry({ dataDir, schema: draftroomSchema, idleEvictMs: 50 })
+    expect(r.snapshot('board-none')).toBeNull()
+    expect(readdirSync(dataDir)).toEqual([])
+
+    expect(r.seed('board-s', seedOf(card('a')))).toBe('created')
+    await until(() => !r.has('board-s')) // nobody joined: evicted
+    const snap = r.snapshot('board-s') // opens it again to read
+    expect(snap?.documents.map((d) => d.state.id)).toContain(card('a').id)
+    expect(r.has('board-s')).toBe(true)
+    await until(() => !r.has('board-s'))
+    r.closeAll()
   })
 })

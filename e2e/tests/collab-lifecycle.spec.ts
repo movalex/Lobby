@@ -5,6 +5,9 @@
 //      connection indicator goes offline -> online.
 // (Folds in the original baseline m0.spec.ts: custom shape + geo edits, getCollaborators, reload,
 // SIGKILL/restart, an edit made while the server is down reaching the peer, a fresh session.)
+// Milestone 1: alice creates the board through the API and shares it with bob and carol. alice signs
+// in through the real sign-in form (following the board link while signed out), bob and carol
+// through the same dev login endpoint. Presence and cursors show the signed-in identities.
 import { join } from 'node:path'
 import type { Browser } from '@playwright/test'
 import {
@@ -36,6 +39,7 @@ import { plainText, richText } from './support/editor.ts'
 import { expect, test } from './support/fixtures.ts'
 import { captureSideBySide } from './support/screenshots.ts'
 import { FIXTURES_DIR } from './support/stack.ts'
+import type { TestUser } from './support/users.ts'
 
 const ID = {
   noteA: 'shape:note-alice',
@@ -103,13 +107,15 @@ test.describe
     let a: Session
     let b: Session
     let before: BoardDocument | undefined
+    let carol: TestUser
 
-    test.beforeAll(async ({ browser: br, stack }) => {
+    test.beforeAll(async ({ browser: br, stack, users }) => {
       await stack.ensureRunning()
       browser = br
-      board = `e2e-lifecycle-${Date.now().toString(36)}`
-      a = await openSession(browser, board, 'alice')
-      b = await openSession(browser, board, 'bob')
+      board = await users.createBoard('Lifecycle board')
+      carol = await users.grant(board, 'carol', 'editor')
+      a = await openSession(browser, board, await users.get('alice'), { via: 'ui' })
+      b = await openSession(browser, board, await users.grant(board, 'bob', 'editor'))
     })
 
     test.afterAll(async () => {
@@ -118,9 +124,13 @@ test.describe
 
     test('1) two sessions see one another and their edits', async () => {
       await test.step('presence: each sees the other in the presence list', async () => {
-        await expect(a.page.locator('[data-testid="presence-user"][data-user-id="bob"]')).toBeVisible()
-        await expect(b.page.locator('[data-testid="presence-user"][data-user-id="alice"]')).toBeVisible()
-        await expect(a.page.locator('[data-testid="presence-user"][data-user-id="alice"]')).toHaveCount(0)
+        const avatar = (s: Session, of: Session) =>
+          s.page.locator(`[data-testid="presence-user"][data-user-id="${of.id}"]`)
+        await expect(avatar(a, b)).toBeVisible()
+        await expect(avatar(b, a)).toBeVisible()
+        await expect(avatar(a, a)).toHaveCount(0)
+        // The identity is the signed-in account's, from the API-signed ticket.
+        await expect(avatar(b, a).getByRole('button')).toHaveAttribute('title', a.name)
       })
 
       await test.step('presence: collaborator cursors (editor state and DOM)', async () => {
@@ -136,12 +146,12 @@ test.describe
               read(
                 watcher.page,
                 (ed, n) => ed.getCollaborators().find((c) => c.userName === n)?.cursor ?? null,
-                mover.user,
+                mover.name,
               ),
             )
             .toMatchObject({ x: expect.any(Number), y: expect.any(Number) })
           await expect(
-            watcher.page.locator('.tl-collaborator__cursor').filter({ hasText: mover.user }),
+            watcher.page.locator('.tl-collaborator__cursor').filter({ hasText: mover.name }),
           ).toBeVisible()
         }
       })
@@ -394,7 +404,7 @@ test.describe
       const expected = structuredClone(acknowledged)
       const card = expected.shapes[ID.card]
       if (card) card.props = { ...card.props, name: 'deck-renamed-offline.pdf' }
-      const c = await openSession(browser, board, 'carol')
+      const c = await openSession(browser, board, carol)
       try {
         await expectFullBoard(c, expected, board)
         await expectConverged(c.page, [a.page, b.page])

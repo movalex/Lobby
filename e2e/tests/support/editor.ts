@@ -66,6 +66,8 @@ export interface EditorLike {
   getRichTextEditor(): { isDestroyed: boolean; view: { dom: Element } } | null
   markHistoryStoppingPoint(name?: string): string
   getIsReadonly(): boolean
+  /** Used to FORGE writes: a client that switches its own read-only flag off (the UI-only guard). */
+  updateInstanceState(partial: { isReadonly?: boolean }): EditorLike
   zoomToFit(): EditorLike
 }
 

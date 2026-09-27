@@ -1,0 +1,165 @@
+import { describe, expect, it } from 'vitest'
+import { makeBoard, PRJ_ID, WS_ID, WS2_ID } from '../api/test-fixtures.ts'
+import { BOARD_ROLES, type BoardStatus, can } from '../lib/permissions.ts'
+import {
+  type BoardMenuAction,
+  boardMenuItems,
+  boardsQueryForSection,
+  emptyState,
+  filterBoards,
+  landingWorkspace,
+  recentBoards,
+  sectionTitle,
+  sortBoards,
+  thumbStyle,
+} from './model.ts'
+
+const actions = (role: (typeof BOARD_ROLES)[number], status: BoardStatus) =>
+  boardMenuItems({ role, status }).map((i) => i.action)
+
+describe('board card menu (gated by the shared permission rules)', () => {
+  it('active boards: viewers/commenters open + copy; editors also rename; owners manage', () => {
+    expect(actions('viewer', 'active')).toEqual(['open', 'copy-link'])
+    expect(actions('commenter', 'active')).toEqual(['open', 'copy-link'])
+    expect(actions('editor', 'active')).toEqual(['open', 'copy-link', 'rename'])
+    expect(actions('owner', 'active')).toEqual(['open', 'copy-link', 'rename', 'archive', 'trash'])
+  })
+
+  it('archived boards are read-only: nobody renames; only owners restore or trash', () => {
+    expect(actions('editor', 'archived')).toEqual(['open', 'copy-link'])
+    expect(actions('viewer', 'archived')).toEqual(['open', 'copy-link'])
+    expect(actions('owner', 'archived')).toEqual(['open', 'copy-link', 'restore', 'trash'])
+  })
+
+  it('trashed boards cannot be opened; owners can only restore', () => {
+    expect(actions('owner', 'trashed')).toEqual(['restore'])
+    for (const r of ['editor', 'commenter', 'viewer'] as const) expect(actions(r, 'trashed')).toEqual([])
+  })
+
+  it('never offers an action can() denies, for every role and status', () => {
+    const needs: Record<BoardMenuAction, Parameters<typeof can>[1]> = {
+      open: 'view',
+      'copy-link': 'view',
+      rename: 'rename',
+      archive: 'archive',
+      trash: 'trash',
+      restore: 'restore',
+    }
+    for (const role of BOARD_ROLES) {
+      for (const status of ['active', 'archived', 'trashed'] as const) {
+        for (const item of boardMenuItems({ role, status })) {
+          expect(can(role, needs[item.action], status), `${role}/${status}/${item.action}`).toBe(true)
+        }
+      }
+    }
+  })
+
+  it('marks the destructive item', () => {
+    expect(boardMenuItems({ role: 'owner', status: 'active' }).find((i) => i.action === 'trash')?.tone).toBe(
+      'danger',
+    )
+  })
+})
+
+describe('board lists', () => {
+  it('maps each dashboard section to its API query', () => {
+    expect(boardsQueryForSection({ kind: 'recent' })).toEqual({ status: 'active' })
+    expect(boardsQueryForSection({ kind: 'all' })).toEqual({ status: 'active' })
+    expect(boardsQueryForSection({ kind: 'archived' })).toEqual({ status: 'archived' })
+    expect(boardsQueryForSection({ kind: 'trash' })).toEqual({ status: 'trashed' })
+    expect(boardsQueryForSection({ kind: 'project', projectId: PRJ_ID })).toEqual({
+      status: 'active',
+      projectId: PRJ_ID,
+    })
+  })
+
+  it('searches titles by every word, ignoring case and accents', () => {
+    const boards = [
+      makeBoard({ id: 'b-aaaaaaaaa1', title: 'Café retro — Sprint 12' }),
+      makeBoard({ id: 'b-aaaaaaaaa2', title: 'Roadmap Q3' }),
+      makeBoard({ id: 'b-aaaaaaaaa3', title: 'Sprint planning' }),
+    ]
+    expect(filterBoards(boards, 'cafe').map((b) => b.id)).toEqual(['b-aaaaaaaaa1'])
+    expect(filterBoards(boards, 'SPRINT').map((b) => b.id)).toEqual(['b-aaaaaaaaa1', 'b-aaaaaaaaa3'])
+    expect(filterBoards(boards, 'sprint retro').map((b) => b.id)).toEqual(['b-aaaaaaaaa1'])
+    expect(filterBoards(boards, '   ')).toHaveLength(3)
+    expect(filterBoards(boards, 'nothing')).toEqual([])
+  })
+
+  it('sorts by last opened (falling back to last edit), by last edit, or by name', () => {
+    const a = makeBoard({
+      id: 'b-aaaaaaaaa1',
+      title: 'beta',
+      updatedAt: '2026-09-01T00:00:00Z',
+      lastOpenedAt: '2026-09-25T00:00:00Z',
+    })
+    const b = makeBoard({
+      id: 'b-aaaaaaaaa2',
+      title: 'Alpha',
+      updatedAt: '2026-09-20T00:00:00Z',
+      lastOpenedAt: null,
+    })
+    const c = makeBoard({
+      id: 'b-aaaaaaaaa3',
+      title: 'gamma',
+      updatedAt: '2026-09-10T00:00:00Z',
+      lastOpenedAt: '2026-09-11T00:00:00Z',
+    })
+    expect(sortBoards([a, b, c], 'opened').map((x) => x.title)).toEqual(['beta', 'Alpha', 'gamma'])
+    expect(sortBoards([a, b, c], 'edited').map((x) => x.title)).toEqual(['Alpha', 'gamma', 'beta'])
+    expect(sortBoards([a, b, c], 'name').map((x) => x.title)).toEqual(['Alpha', 'beta', 'gamma'])
+    expect(recentBoards([a, b, c], 2).map((x) => x.title)).toEqual(['beta', 'Alpha'])
+  })
+
+  it('titles sections, including a project that is not loaded yet', () => {
+    expect(sectionTitle({ kind: 'recent' }, [])).toBe('Recent boards')
+    expect(sectionTitle({ kind: 'trash' }, [])).toBe('Trash')
+    const project = { id: PRJ_ID, workspaceId: WS_ID, name: 'Launch', createdAt: '', archivedAt: null }
+    expect(sectionTitle({ kind: 'project', projectId: PRJ_ID }, [project])).toBe('Launch')
+    expect(sectionTitle({ kind: 'project', projectId: PRJ_ID }, [])).toBe('Project')
+  })
+
+  it('empty states say what to do, and only offer "create" to people who can create', () => {
+    expect(emptyState({ kind: 'all' }, { searching: false, canCreate: true })).toMatchObject({
+      offerCreate: true,
+    })
+    const guest = emptyState({ kind: 'all' }, { searching: false, canCreate: false })
+    expect(guest.offerCreate).toBe(false)
+    expect(guest.body).toMatch(/Guests/)
+    expect(emptyState({ kind: 'trash' }, { searching: false, canCreate: true })).toMatchObject({
+      title: 'Trash is empty',
+      offerCreate: false,
+    })
+    expect(emptyState({ kind: 'archived' }, { searching: true, canCreate: true }).title).toMatch(/search/)
+  })
+})
+
+describe('thumbnails and landing', () => {
+  it('gives a board the same placeholder look everywhere', () => {
+    expect(thumbStyle('b-3k9x0q2m7a')).toEqual(thumbStyle('b-3k9x0q2m7a'))
+    const looks = new Set(Array.from({ length: 40 }, (_, i) => JSON.stringify(thumbStyle(`b-${i}aaaaaaaaa`))))
+    expect(looks.size).toBeGreaterThan(4)
+    for (let i = 0; i < 40; i++) expect(thumbStyle(`b-${i}x`).layout).toBeLessThan(4)
+  })
+
+  it('"/" lands on the last-used workspace only while the user still belongs to it', () => {
+    const ws = [
+      { id: WS_ID, name: 'Dev Studio', role: 'member' as const },
+      { id: WS2_ID, name: 'Personal', role: 'owner' as const },
+    ]
+    expect(landingWorkspace(ws, WS2_ID)?.id).toBe(WS2_ID)
+    expect(landingWorkspace(ws, 'wsp_removedremovedremoved')?.id).toBe(WS_ID)
+    expect(landingWorkspace(ws, null)?.id).toBe(WS_ID)
+    expect(landingWorkspace([], WS_ID)).toBeNull()
+  })
+
+  it('does not default to a workspace where the user is only a guest', () => {
+    const ws = [
+      { id: WS_ID, name: "Alice's workspace", role: 'guest' as const },
+      { id: WS2_ID, name: 'Dev Studio', role: 'member' as const },
+    ]
+    expect(landingWorkspace(ws, null)?.id).toBe(WS2_ID)
+    expect(landingWorkspace(ws, WS_ID)?.id).toBe(WS_ID) // explicitly last used: respected
+    expect(landingWorkspace([ws[0] as (typeof ws)[number]], null)?.id).toBe(WS_ID) // guest-only users still land
+  })
+})

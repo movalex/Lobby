@@ -1,13 +1,10 @@
 import { defineConfig, devices } from '@playwright/test'
-
-export const SYNC_PORT = process.env.E2E_SYNC_PORT ?? '5881'
-const WEB_PORT = process.env.E2E_WEB_PORT ?? '4191'
-const WEB_URL = `http://127.0.0.1:${WEB_PORT}`
+import { API_URL, SYNC_URL, WEB_PORT, WEB_URL } from './tests/support/ports.ts'
 
 export default defineConfig({
   testDir: './tests',
-  // Every test drives one shared sync server on a fixed port (the preview proxy targets it) and some
-  // tests SIGKILL it, so tests run one at a time.
+  // Every test drives one shared api + sync server on fixed ports (the preview proxy targets them) and
+  // some tests SIGKILL the sync server, so tests run one at a time.
   fullyParallel: false,
   workers: 1,
   forbidOnly: !!process.env.CI,
@@ -21,15 +18,17 @@ export default defineConfig({
     // Branded Chrome ships the proprietary H.264/AAC decoders the headless shell lacks.
     { name: 'chrome', use: { ...devices['Desktop Chrome'], channel: 'chrome' }, grep: /@chrome/ },
   ],
-  // The sync server and the preview worker are started (and killed) by the tests' own fixture
+  // The api, sync server and preview worker are started (and killed) by the tests' own fixture
   // (tests/support/stack.ts); only the static web build is served here.
   webServer: [
     {
       command: `pnpm --filter @draftroom/web build && pnpm --filter @draftroom/web exec vite preview --port ${WEB_PORT} --strictPort`,
       url: WEB_URL,
       env: {
-        // same-origin: vite preview proxies /connect, /files, /dev-api to the test sync server
-        DRAFTROOM_SYNC_ORIGIN: `http://127.0.0.1:${SYNC_PORT}`,
+        // same-origin: vite preview proxies /api and /files to the test api, /connect to the test sync
+        DRAFTROOM_API_ORIGIN: API_URL,
+        DRAFTROOM_SYNC_ORIGIN: SYNC_URL,
+        // exposes window.editor in the build (the suites drive tldraw through it)
         VITE_DRAFTROOM_DEV_AUTH: '1',
       },
       reuseExistingServer: false,

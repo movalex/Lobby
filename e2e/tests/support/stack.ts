@@ -1,22 +1,22 @@
-// Runs the REAL sync server and the REAL preview worker as child processes against one temporary
-// DRAFTROOM_DATA_DIR, so the browser suites exercise the same entry points as `pnpm dev`. Tests can
-// kill (SIGKILL / TerminateProcess) and restart either process on demand.
+// Runs the REAL api, the REAL sync server and the REAL preview worker as child processes against one
+// temporary DRAFTROOM_DATA_DIR (the api keeps its PGlite database under it), so the browser suites
+// exercise the same entry points as `pnpm dev`. Tests can kill (SIGKILL / TerminateProcess) and
+// restart any of them on demand.
 import { type ChildProcess, spawn, spawnSync } from 'node:child_process'
+import { randomBytes } from 'node:crypto'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { request } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { API_PORT, API_URL, HOST, SYNC_PORT, SYNC_URL, WEB_URL } from './ports.ts'
 
 export const REPO_ROOT = resolve(import.meta.dirname, '../../..')
 export const FIXTURES_DIR = join(REPO_ROOT, 'tests/fixtures/generated')
+const API_ENTRY = join(REPO_ROOT, 'apps/api/src/server.ts')
 const SYNC_ENTRY = join(REPO_ROOT, 'apps/sync/src/server.ts')
 const WORKER_ENTRY = join(REPO_ROOT, 'apps/worker/src/worker.ts')
 const ORPHAN_GUARD = pathToFileURL(join(import.meta.dirname, 'orphan-guard.ts')).href
-
-/** Fixed: the web preview server (playwright.config.ts) proxies /connect, /files and /dev-api here. */
-export const SYNC_PORT = Number(process.env.E2E_SYNC_PORT ?? '5881')
-const SYNC_HOST = '127.0.0.1'
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
@@ -147,9 +147,10 @@ class StartError extends Error {
   }
 }
 
-async function syncHealthy(): Promise<boolean> {
+/** Resolves true when `path` on HOST:port answers 200. */
+function answers200(port: number, path: string): Promise<boolean> {
   return new Promise((resolveHealth) => {
-    const req = request({ host: SYNC_HOST, port: SYNC_PORT, path: '/healthz', timeout: 1000 }, (res) => {
+    const req = request({ host: HOST, port, path, timeout: 1000 }, (res) => {
       res.resume()
       resolveHealth(res.statusCode === 200)
     })
@@ -158,12 +159,35 @@ async function syncHealthy(): Promise<boolean> {
     req.end()
   })
 }
+const syncHealthy = () => answers200(SYNC_PORT, '/healthz')
+// Public, database-free and not rate limited (docs/M1-CONTRACTS.md §5).
+const apiHealthy = () => answers200(API_PORT, '/api/auth/config')
 
-/** The child should behave like `pnpm dev`, not inherit the test runner's own Node settings. */
+/**
+ * The children should behave like `pnpm dev`, not inherit the test runner's own Node settings or a
+ * developer's shell configuration (a DATABASE_URL, a real Clerk key, another data dir...).
+ */
 function baseEnv(): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env }
-  for (const key of ['NODE_ENV', 'NODE_OPTIONS', 'IDLE_EVICT_MS', 'TEXT_LEASE_MS', 'PORT', 'HOST'])
-    delete env[key]
+  for (const key of Object.keys(env)) {
+    if (
+      /^(DRAFTROOM_|CLERK_)/.test(key) ||
+      [
+        'NODE_ENV',
+        'NODE_OPTIONS',
+        'IDLE_EVICT_MS',
+        'TEXT_LEASE_MS',
+        'ACCESS_RECHECK_MS',
+        'PORT',
+        'HOST',
+        'DATABASE_URL',
+        'PUBLIC_ORIGIN',
+        'AUTH_PROVIDER',
+        'LOG_LEVEL',
+      ].includes(key)
+    )
+      delete env[key]
+  }
   return env
 }
 
@@ -175,6 +199,7 @@ export interface StackOptions {
 export interface Stack {
   readonly dataDir: string
   readonly syncEnv: Readonly<Record<string, string>>
+  readonly api: ManagedProcess
   readonly sync: ManagedProcess
   readonly worker: ManagedProcess
   /** Starts whichever process a previous test left stopped. */
@@ -185,6 +210,37 @@ export interface Stack {
 export async function startStack(opts: StackOptions = {}): Promise<Stack> {
   const dataDir = mkdtempSync(join(tmpdir(), 'dr-e2e-'))
   const syncEnv = { ...opts.syncEnv }
+  // Fresh secrets per stack, shared by exactly these two processes: a ticket minted by any other api
+  // (a developer's `pnpm dev`, an earlier run) cannot open a board here.
+  const secrets = {
+    DRAFTROOM_TICKET_SECRET: randomBytes(32).toString('base64url'),
+    DRAFTROOM_INTERNAL_SECRET: randomBytes(32).toString('base64url'),
+  }
+
+  const api = managed({
+    name: 'api',
+    entry: API_ENTRY,
+    killTree: false,
+    env: () => ({
+      ...baseEnv(),
+      ...secrets,
+      PORT: String(API_PORT),
+      HOST,
+      DRAFTROOM_DATA_DIR: dataDir, // PGlite lives in <dataDir>/pg
+      DRAFTROOM_DEV_AUTH: '1',
+      AUTH_PROVIDER: 'dev',
+      // The browser's origin, not the api's: Origin checks and invite links use it.
+      PUBLIC_ORIGIN: WEB_URL,
+      DRAFTROOM_SYNC_INTERNAL_URL: SYNC_URL,
+    }),
+    ready: (out) => out.includes(`api listening on ${HOST}:${API_PORT} `),
+    healthy: apiHealthy,
+    preflight: async () => {
+      if (await apiHealthy()) {
+        throw new Error(`port ${API_PORT} already serves an api that this test run did not start`)
+      }
+    },
+  })
 
   const sync = managed({
     name: 'sync',
@@ -193,13 +249,14 @@ export async function startStack(opts: StackOptions = {}): Promise<Stack> {
     env: () => ({
       ...baseEnv(),
       ...syncEnv,
+      ...secrets,
       PORT: String(SYNC_PORT),
-      HOST: SYNC_HOST,
+      HOST,
       DRAFTROOM_DATA_DIR: dataDir,
-      DRAFTROOM_DEV_AUTH: '1',
+      DRAFTROOM_API_INTERNAL_URL: API_URL,
     }),
     // The listening line proves THIS child owns the port; /healthz proves it serves requests.
-    ready: (out) => out.includes(`sync listening on ${SYNC_HOST}:${SYNC_PORT} `),
+    ready: (out) => out.includes(`sync listening on ${HOST}:${SYNC_PORT} `),
     healthy: syncHealthy,
     preflight: async () => {
       if (await syncHealthy()) {
@@ -222,25 +279,30 @@ export async function startStack(opts: StackOptions = {}): Promise<Stack> {
     },
   })
 
-  await sync.start()
+  const all = [api, sync, worker]
+  const started: ManagedProcess[] = []
   try {
-    await worker.start()
+    for (const p of all) {
+      await p.start()
+      started.push(p)
+    }
   } catch (e) {
-    await sync.kill()
+    await Promise.all(started.map((p) => p.kill()))
+    rmSync(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 })
     throw e
   }
 
   return {
     dataDir,
     syncEnv,
+    api,
     sync,
     worker,
     ensureRunning: async () => {
-      if (!sync.running()) await sync.start()
-      if (!worker.running()) await worker.start()
+      for (const p of all) if (!p.running()) await p.start()
     },
     stop: async () => {
-      await Promise.all([sync.kill(), worker.kill()])
+      await Promise.all(all.map((p) => p.kill()))
       if (process.env.E2E_KEEP_DATA !== '1') {
         rmSync(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 })
       }

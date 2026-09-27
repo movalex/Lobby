@@ -31,8 +31,8 @@ export const IMAGE_HANDLER_LIMITS = {
 
 /**
  * Replaces tldraw's 'files' handler: images keep the native image-shape path (through our
- * TLAssetStore), everything else is uploaded to the dev route and becomes a dr-file-card. Text, URL,
- * tldraw and excalidraw pastes keep their default handlers because only 'files' is replaced.
+ * TLAssetStore), everything else is uploaded to the board's upload route and becomes a dr-file-card.
+ * Text, URL, tldraw and excalidraw pastes keep their default handlers because only 'files' is replaced.
  *
  * Rendered as a child of <Tldraw> so it can reach the UI toasts/translations the default handler
  * needs. Its effect runs after <Tldraw> registers the defaults (those run in a layout effect).
@@ -52,6 +52,12 @@ export function ExternalContentHandlers() {
     const controller = new AbortController()
     const defaults = (): TLDefaultExternalContentHandlerOpts => ({ ...IMAGE_HANDLER_LIMITS, ...ui.current })
     editor.registerExternalContentHandler('files', async ({ files, point }) => {
+      // Checked before any bytes are sent: a read-only session could not place the card anyway
+      // (and the upload route refuses anyone without `edit`).
+      if (editor.getIsReadonly()) {
+        board.notify({ key: 'readonly-upload', text: 'You can view this board but not add files to it.' })
+        return
+      }
       const { images, cards, rejected } = partitionFiles(files)
       for (const r of rejected) {
         board.notify({ key: `reject:${r.file.name}`, text: `${r.file.name} ${r.reason}.`, tone: 'error' })
@@ -110,7 +116,7 @@ async function uploadFileCards(
       const key = `upload:${i}:${file.name}:${file.size}:${file.lastModified}`
       board.notify({ key, text: `Uploading ${file.name}…`, timeoutMs: null, testId: 'upload-toast' })
       try {
-        const meta = await uploadFile({ boardId: board.boardId, devUser: board.userId, file, signal })
+        const meta = await uploadFile({ boardId: board.boardId, file, signal })
         const slot = (await slots)[i]
         if (signal.aborted || !slot) return
         if (editor.getIsReadonly()) throw new UploadError('READONLY', 'This board is read-only.', 403)

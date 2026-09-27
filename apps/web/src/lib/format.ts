@@ -31,3 +31,36 @@ export function extensionLabel(name: string, fallback: string): string {
   const ext = /\.([a-z0-9]{1,5})$/i.exec(name)?.[1]
   return (ext ?? fallback).toUpperCase().slice(0, 4)
 }
+
+const MINUTE = 60_000
+const HOUR = 60 * MINUTE
+const DAY = 24 * HOUR
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+
+/**
+ * "just now", "5 min ago", "3 h ago", "yesterday", "4 days ago", "Sep 12", "Sep 12, 2025".
+ * Local calendar days decide "yesterday"; clock skew (a time slightly in the future) reads "just now".
+ */
+export function formatRelativeTime(iso: string | null | undefined, now: Date = new Date()): string {
+  if (!iso) return ''
+  const then = new Date(iso)
+  const t = then.getTime()
+  if (!Number.isFinite(t)) return ''
+  const diff = now.getTime() - t
+  if (diff < MINUTE) return 'just now'
+  if (diff < HOUR) return `${Math.floor(diff / MINUTE)} min ago`
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()
+  if (t >= startOfToday) return `${Math.floor(diff / HOUR)} h ago`
+  const days = Math.ceil((startOfToday - t) / DAY)
+  if (days <= 1) return 'yesterday'
+  if (days < 7) return `${days} days ago`
+  const md = `${MONTHS[then.getMonth()]} ${then.getDate()}`
+  return then.getFullYear() === now.getFullYear() ? md : `${md}, ${then.getFullYear()}`
+}
+
+/** "Oct 3, 2026, 14:05" in the viewer's locale; used for expiry dates. */
+export function formatDateTime(iso: string): string {
+  const d = new Date(iso)
+  if (!Number.isFinite(d.getTime())) return ''
+  return d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
+}

@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest'
 import { newBoardId, roomFiles, useProtocolHarness } from '../harness/fixture.ts'
 import { geoShape } from '../harness/records.ts'
 import { upgradeStatus } from '../harness/server-process.ts'
+import { mintTicket } from '../harness/tickets.ts'
 import { sleep, waitFor } from '../harness/wait.ts'
 
 const h = useProtocolHarness()
@@ -55,7 +56,8 @@ describe('upgrade URL validation', () => {
   it('rejects bad board ids and a missing sessionId with HTTP 400 before upgrading, creating no files', async () => {
     const server = await h.server()
     const before = tree(server.dataDir)
-    const q = '?sessionId=s1&devUser=alice'
+    // 400s are decided before the ticket is looked at: a ticket for a good board changes nothing
+    const q = `?sessionId=s1&ticket=${mintTicket('good-board', 'alice')}`
     const bad = [
       `/connect/Board-upper${q}`, // uppercase (case-insensitive FS would split the room)
       `/connect/..%2F..%2Fescape${q}`, // encoded traversal
@@ -65,8 +67,8 @@ describe('upgrade URL validation', () => {
       `/connect/ab${q}`, // too short
       `/connect/${q}`, // empty
       `/connect/good-board/extra${q}`, // extra path segment
-      '/connect/good-board?devUser=alice', // no sessionId
-      `/connect/good-board?sessionId=${'s'.repeat(129)}&devUser=alice`, // sessionId too long
+      `/connect/good-board?ticket=${mintTicket('good-board', 'alice')}`, // no sessionId
+      `/connect/good-board?sessionId=${'s'.repeat(129)}&ticket=${mintTicket('good-board', 'alice')}`, // sessionId too long
     ]
     for (const path of bad) expect(await upgradeStatus(server.port, path), path).toBe(400)
     expect(tree(server.dataDir)).toEqual(before)
@@ -74,15 +76,17 @@ describe('upgrade URL validation', () => {
 
     // control: the same request shape with a valid id upgrades and opens exactly that board's file
     const boardId = newBoardId()
-    expect(await upgradeStatus(server.port, `/connect/${boardId}${q}`)).toBe(101)
+    const ok = `?sessionId=s1&ticket=${mintTicket(boardId, 'alice')}`
+    expect(await upgradeStatus(server.port, `/connect/${boardId}${ok}`)).toBe(101)
     await waitFor(() => roomFiles(server.dataDir).includes(`board-${boardId}.sqlite`))
     expect(roomFiles(server.dataDir).filter((f) => !f.startsWith(`board-${boardId}.sqlite`))).toEqual([])
   })
 
+  // Every ticket failure mode is in auth.test.ts; this pins the URL-level cases.
   it('an unauthenticated session is upgraded then closed with 4099 NOT_AUTHENTICATED (terminal), opening no room', async () => {
     const server = await h.server()
-    for (const user of [undefined, 'Not-Valid!']) {
-      const c = h.client(server, { boardId: newBoardId(), user })
+    for (const ticket of [undefined, 'not-a-ticket', `v1.${'x'.repeat(5000)}.y`]) {
+      const c = h.client(server, { boardId: newBoardId(), ticket })
       expect(await c.waitForClose()).toMatchObject({ code: 4099, reason: 'NOT_AUTHENTICATED' })
       expect(c.syncErrors).toEqual(['NOT_AUTHENTICATED'])
     }

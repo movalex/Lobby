@@ -5,11 +5,15 @@ import { randomBytes } from 'node:crypto'
 import { request } from 'node:http'
 import { createServer } from 'node:net'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+import { TEST_INTERNAL_SECRET, TEST_TICKET_SECRET } from './tickets.ts'
 import { sleep } from './wait.ts'
 
 export const REPO_ROOT = fileURLToPath(new URL('../../../../', import.meta.url))
 const SERVER_ENTRY = fileURLToPath(new URL('../../src/server.ts', import.meta.url))
 const PRELOAD = pathToFileURL(fileURLToPath(new URL('./signal-preload.ts', import.meta.url))).href
+
+/** A closed local port (discard service): connections are refused. */
+export const UNREACHABLE_API = 'http://127.0.0.1:9'
 
 export type StopSignal = 'SIGKILL' | 'SIGINT' | 'SIGTERM'
 
@@ -70,12 +74,26 @@ function childEnv(port: number, opts: SyncServerOptions): NodeJS.ProcessEnv {
   for (const key of Object.keys(env)) {
     if (key === 'NODE_ENV' || key === 'NODE_OPTIONS' || key.startsWith('VITEST')) delete env[key]
   }
-  for (const key of ['IDLE_EVICT_MS', 'TEXT_LEASE_MS', 'DRAFTROOM_SYNC_ORIGIN']) delete env[key]
+  for (const key of [
+    'IDLE_EVICT_MS',
+    'TEXT_LEASE_MS',
+    'DRAFTROOM_SYNC_ORIGIN',
+    'ACCESS_RECHECK_MS',
+    'DRAFTROOM_API_INTERNAL_URL',
+    'DRAFTROOM_TICKET_SECRET',
+    'DRAFTROOM_INTERNAL_SECRET',
+    'DRAFTROOM_DEV_AUTH',
+  ])
+    delete env[key]
   Object.assign(env, {
     PORT: String(port),
     HOST: '127.0.0.1',
     DRAFTROOM_DATA_DIR: opts.dataDir,
-    DRAFTROOM_DEV_AUTH: '1',
+    DRAFTROOM_TICKET_SECRET: TEST_TICKET_SECRET,
+    DRAFTROOM_INTERNAL_SECRET: TEST_INTERNAL_SECRET,
+    // Nothing listens here: access re-checks fail open (sessions stay), which is what suites that
+    // are not about access want. Access suites point this at a fake API.
+    DRAFTROOM_API_INTERNAL_URL: UNREACHABLE_API,
   })
   for (const [key, value] of Object.entries(opts.env ?? {})) {
     if (value === undefined) delete env[key]

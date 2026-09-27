@@ -1,5 +1,6 @@
 // Milestone-0 demonstrations 6 and 7: the shared dr-file-card shape, and real uploads going through
-// the dev file routes and the preview worker (child process) to cards on both clients.
+// the api file routes (signed-in session, board permission) and the preview worker (child process) to
+// cards on both clients.
 //
 // The migration of dr-file-card and server-side rejection of invalid records are covered below the
 // browser: packages/canvas-schema/src/file-card.test.ts, apps/web/src/schema.test.ts (client schema
@@ -8,7 +9,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Locator, Page } from '@playwright/test'
-import { edit, fileCard, getShape, insertFiles, type Session } from './support/board.ts'
+import { edit, fileCard, getShape, insertFiles, pageShapes, type Session } from './support/board.ts'
 import { expect, test } from './support/fixtures.ts'
 import { capture } from './support/screenshots.ts'
 import { FIXTURES_DIR } from './support/stack.ts'
@@ -165,6 +166,19 @@ test('7) uploads: PDF, MP4, encrypted PDF and an attachment become cards on both
       await expectDownload(s, card, 'notes.zip', board)
     })
   }
+
+  await test.step('authorship comes from the session: every upload is recorded as alice’s', async () => {
+    const cards = (await pageShapes(b.page)).filter((s) => s.type === 'dr-file-card')
+    expect(cards).toHaveLength(files.length)
+    for (const card of cards) {
+      // bob reads the meta route with his own session (view on this board is enough).
+      const res = await b.page.request.get(
+        `/api/boards/${board}/assets/${card.props.assetId}/${card.props.versionId}`,
+      )
+      expect(res.status()).toBe(200)
+      expect(((await res.json()) as { uploadedBy?: unknown }).uploadedBy).toBe(a.id)
+    }
+  })
 
   // Every card moved forward only: queued first, then (possibly a brief processing), then terminal.
   const terminal: Record<string, string> = {

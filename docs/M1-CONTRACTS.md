@@ -42,10 +42,16 @@ Env (all processes refuse to start on invalid config; `dev.env` files hold dev-o
 
 `can(role, action)`: `view` (all), `comment` (owner, editor, commenter), `edit` (owner, editor), `rename` (owner, editor), `manage_access` / `archive` / `trash` / `restore` / `change_visibility` (owner). No existence leaks: callers without `view` get 404.
 
+DEVIATION (as implemented in `packages/permissions`): status is not an input of the role. `resolveBoardRole({ workspaceRole, boardGrant, visibility })` returns the role ignoring status, and status is applied by `can(role, action, status = 'active')` / `canEditCanvas(role, status)`. Why: the role is a property of (user, board) while the status changes on its own, and the dashboard needs the uncapped role to offer owners Restore on archived/trashed boards. The rule 5 effect is the same, made exact:
+- `archived`: `view` for every role; owners may also `restore`, `trash` and `manage_access`; nothing else (no canvas edits, rename or visibility changes).
+- `trashed`: nobody can open it, owners included (`GET /api/boards/:bid`, tickets and file routes answer 404); owners see it in their Trash list and may only `restore` it.
+- The connection role (ticket route and `GET /internal/access`, one function `connectionRole()` in `apps/api/src/access.ts`) is `null` for trashed boards, `viewer` for archived boards, and the resolved role otherwise. `GET /api/boards/:bid` returns the resolved (uncapped) role together with `board.status`, so the UI computes `can(role, action, status)` itself.
+
 ## 4. Sessions and CSRF
 
 - Cookie `dr_session` (random 32 bytes; DB stores sha256), `HttpOnly; SameSite=Lax; Path=/` (+ `Secure` when `PUBLIC_ORIGIN` is https), 30-day expiry.
 - Mutating requests (`POST/PUT/PATCH/DELETE`) must carry `Origin` equal to `PUBLIC_ORIGIN` (403 otherwise) and a JSON body or no body.
+  DEVIATION: the file upload `POST /api/boards/:bid/assets` takes the raw file bytes (any `Content-Type`), so it is exempt from "JSON body or no body"; it still needs the `Origin` check and `edit`. Every other mutation with a non-JSON body gets `415 UNSUPPORTED_MEDIA_TYPE`. Why: M0-CONTRACTS §5 (kept unchanged here) streams uploads as the request body.
 - Authorship always comes from the session, never from the request body.
 
 ## 5. HTTP API (JSON; errors `{ error: { code, message } }`)
@@ -70,6 +76,10 @@ Env (all processes refuse to start on invalid config; `dev.env` files hold dev-o
 | `DELETE /api/invitations/:id` | creator or manager | revoke |
 | `POST /api/boards/:bid/ticket` | view | `{ ticket, expiresAt, role, user: {id, name, color} }` — 404 without access |
 
+DEVIATION: `GET /api/boards/:bid/members` answers `{ members: [{ user, role, source }] }` (`ListMembersResponse` in `packages/contracts`), not a bare array; `PUT`/`DELETE …/members/:uid` answer the same `{ members }` list after the change. Why: the shared zod schema was written that way and both apps use it.
+
+DEVIATION (added route): `POST /api/auth/clerk/session` with `Authorization: Bearer <Clerk session JWT>` exchanges a verified Clerk token for a `dr_session` cookie and answers `Me` (only with `AUTH_PROVIDER=clerk`; **UNVERIFIED** until Clerk keys exist). Why: Clerk's own session lives in the browser; the API still needs its own first-party session cookie.
+
 File routes move from sync to api with the **same paths and behavior** as `docs/M0-CONTRACTS.md` §5, except identity comes from the session: upload `POST /api/boards/:bid/assets` needs `edit`; meta `GET /api/boards/:bid/assets/:ast/:ver` and `GET /files/:ast/:ver/{original,d/:drv}?board=:bid` need `view` on that board (and the asset must belong to it). `devUser` query params are gone.
 
 ## 6. Board connection tickets
@@ -87,6 +97,7 @@ The web `useSync` `uri` function fetches a fresh ticket on every (re)connect. A 
 ## 8. Internal canvas endpoints (sync, internal secret required)
 
 - `GET /internal/boards/:bid/snapshot` → the room's current snapshot (opens the room if needed; for checkpoints/exports/templates).
+  DEVIATION: for a board that has no storage yet, sync answers the empty default snapshot (document + page, current schema) WITHOUT opening a room or creating a database. Why: creating storage there would make a later `seed` of that new board fail with 409.
 - `POST /internal/boards/:bid/seed {snapshot}` → initializes a **new** board's storage from a snapshot/record set; `409` if the board database already exists and is initialized (never overwrites a board).
 
 ## 9. Web

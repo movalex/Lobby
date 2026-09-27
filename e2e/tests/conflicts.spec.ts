@@ -39,13 +39,13 @@ test('text lease: bob cannot type into the note alice is typing in, until her le
   await typeText(a.page, 'alice typing')
   await expect.poll(() => shapeText(b.page, N)).toBe('alice typing')
   // B is told (by alice's presence hint) that she is editing this note.
-  await expect(editingBadge(b.page, 'alice')).toHaveText('alice is editing')
-  await expect(editingBadge(b.page, 'alice')).toHaveAttribute('data-shape-id', N)
+  await expect(editingBadge(b.page, a.id)).toHaveText(`${a.name} is editing`)
+  await expect(editingBadge(b.page, a.id)).toHaveAttribute('data-shape-id', N)
 
   // Bob tries to type into the same note while alice holds the lease.
   await startTextEditing(b.page, N)
   await typeText(b.page, ' and bob')
-  await expect(b.page.getByTestId('lease-toast')).toHaveText('alice is editing this text')
+  await expect(b.page.getByTestId('lease-toast')).toHaveText(`${a.name} is editing this text`)
   // The server vetoed bob's change, so his copy is reverted to alice's text.
   await expect.poll(() => shapeText(b.page, N)).toBe('alice typing')
   await capture('lease-toast.png', b.page, test.info())
@@ -61,7 +61,7 @@ test('text lease: bob cannot type into the note alice is typing in, until her le
   await typeText(a.page, '!')
   await expect.poll(() => shapeText(b.page, N)).toBe('alice typing!')
   await stopTextEditing(a.page)
-  await expect(editingBadge(b.page, 'alice')).toHaveCount(0)
+  await expect(editingBadge(b.page, a.id)).toHaveCount(0)
   // Every renewal of alice's lease happened before bob saw her last character.
   const lastRenewalSeen = Date.now()
 

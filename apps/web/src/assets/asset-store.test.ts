@@ -85,7 +85,7 @@ describe('TLAssetStore', () => {
   it('resolves a ready image to a board-scoped derivative URL sized for the screen', async () => {
     const { meta, thumb, display } = readyImage()
     const { metaStore } = serving(meta)
-    const store = createAssetStore({ boardId: TEST_BOARD, devUser: 'alice', metaStore })
+    const store = createAssetStore({ boardId: TEST_BOARD, metaStore })
     const asset = imageAsset(stableFileRef(meta.assetId, meta.versionId))
     const small = await store.resolve?.(asset, ctx({ steppedScreenScale: 0.125 }))
     const big = await store.resolve?.(asset, ctx({ steppedScreenScale: 2 }))
@@ -98,7 +98,6 @@ describe('TLAssetStore', () => {
     const original = `/files/${meta.assetId}/${meta.versionId}/original?board=${TEST_BOARD}`
     const store = createAssetStore({
       boardId: TEST_BOARD,
-      devUser: 'alice',
       metaStore: serving(meta).metaStore,
     })
     const asset = imageAsset(stableFileRef(meta.assetId, meta.versionId))
@@ -108,7 +107,6 @@ describe('TLAssetStore', () => {
     const queued = makeMeta({ kind: 'image', status: 'processing' })
     const pendingStore = createAssetStore({
       boardId: TEST_BOARD,
-      devUser: 'alice',
       metaStore: serving(queued).metaStore,
     })
     const pending = imageAsset(stableFileRef(queued.assetId, queued.versionId))
@@ -125,7 +123,6 @@ describe('TLAssetStore', () => {
     })
     const store = createAssetStore({
       boardId: TEST_BOARD,
-      devUser: 'a',
       metaStore: serving(failed).metaStore,
     })
     expect(
@@ -133,12 +130,11 @@ describe('TLAssetStore', () => {
     ).toBeNull()
     const missing = createAssetStore({
       boardId: TEST_BOARD,
-      devUser: 'a',
       metaStore: serving(null).metaStore,
     })
     expect(await missing.resolve?.(imageAsset(stableFileRef(newId('ast'), newId('ver'))), ctx())).toBeNull()
     const { fetchImpl, metaStore } = serving(failed)
-    const foreign = createAssetStore({ boardId: TEST_BOARD, devUser: 'a', metaStore })
+    const foreign = createAssetStore({ boardId: TEST_BOARD, metaStore })
     expect(await foreign.resolve?.(imageAsset('https://tracker.example/pixel.png'), ctx())).toBeNull()
     expect(fetchImpl).not.toHaveBeenCalled()
   })
@@ -150,7 +146,6 @@ describe('TLAssetStore', () => {
     const onUploaded = vi.fn()
     const store = createAssetStore({
       boardId: TEST_BOARD,
-      devUser: 'alice',
       metaStore: new AssetMetaStore(),
       onUploaded,
     })

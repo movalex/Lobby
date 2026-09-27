@@ -1,6 +1,8 @@
 // Milestone-0 demonstration 4: A loses its network (context.setOffline) while B keeps editing. A edits
 // a different shape offline. Back online, both converge, and A's stale copy of B's shape does not
 // overwrite B's newer edits (the client re-sends only the fields it changed, never a snapshot).
+// Since milestone 1 every reconnect first fetches a fresh board ticket from the api, so going offline
+// also cuts A off from the api; the reconnect below proves that path recovers too.
 import type { Page } from '@playwright/test'
 import { edit, expectConn, expectConverged, getShape } from './support/board.ts'
 import { expect, test } from './support/fixtures.ts'

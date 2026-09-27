@@ -2,6 +2,7 @@
 // server over a real WebSocket. The socket adapter below replaces ClientWebSocketAdapter so a test
 // can see and steer the wire: count push vs push_result, hold outgoing frames to force concurrency,
 // go offline on purpose, and record close codes and custom messages.
+import type { TicketRole } from '@draftroom/auth-tickets'
 import { draftroomSchema } from '@draftroom/canvas-schema'
 import {
   type TLPersistentClientSocket,
@@ -20,6 +21,7 @@ import {
 } from '@tldraw/tlschema'
 import { WebSocket } from 'ws'
 import type { ShapeRecord } from './records.ts'
+import { mintTicket } from './tickets.ts'
 import { clientSignals, createAtom, createStore, type MutableSignal } from './tldraw-runtime.ts'
 import { waitFor } from './wait.ts'
 
@@ -74,9 +76,20 @@ export interface SyncClientOptions {
   /** ws://127.0.0.1:<port> */
   wsUrl: string
   boardId: string
-  /** dev identity; omit to connect unauthenticated */
+  /**
+   * User id (the ticket's uid). With it, a fresh ticket for (boardId, user, role) is minted with the
+   * test secret on EVERY (re)connect, like the web client's uri function asking the API.
+   */
   user?: string
-  role?: 'viewer'
+  /** Role claimed in minted tickets (default editor); change later with setRole(). */
+  role?: TicketRole
+  /**
+   * Overrides minting: a fixed ticket, or a function called on every (re)connect. Without `user`
+   * and `ticket` the client connects with no ticket at all.
+   */
+  ticket?: string | (() => string | undefined)
+  /** Extra query parameters on the connect URL (e.g. the retired devUser/devRole, to prove they are ignored). */
+  extraQuery?: Record<string, string>
   /** the useSync TAB_ID stand-in; defaults to a random id */
   sessionId?: string
   /** store/client schema; defaults to the shared draftroomSchema */
@@ -95,8 +108,9 @@ let seq = 0
 
 export class NodeSyncClient {
   readonly name: string
-  readonly url: string
   readonly sessionId: string
+  /** Every URL this client connected with, in order (tickets included: test-only secrets). */
+  readonly connectUrls: string[] = []
   readonly store: TLStore
   readonly presence: MutableSignal<TLRecord | null>
   readonly sent: ClientMessage[] = []
@@ -124,16 +138,14 @@ export class NodeSyncClient {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
   private rawClock = RAW_CLOCK_BASE
   private readonly rawClocks = new Set<number>()
+  private role: TicketRole
 
   constructor(opts: SyncClientOptions) {
     this.opts = opts
     this.name = opts.name ?? opts.user ?? 'anon'
     this.sessionId =
       opts.sessionId ?? `node-${process.pid}-${++seq}-${Math.random().toString(36).slice(2, 8)}`
-    const q = new URLSearchParams({ sessionId: this.sessionId })
-    if (opts.user !== undefined) q.set('devUser', opts.user)
-    if (opts.role) q.set('devRole', opts.role)
-    this.url = `${opts.wsUrl}/connect/${opts.boardId}?${q}`
+    this.role = opts.role ?? 'editor'
     this.store = createStore(opts.schema ?? draftroomSchema)
     this.presence = createAtom<TLRecord | null>(`presence:${this.name}`, null)
 
@@ -175,6 +187,30 @@ export class NodeSyncClient {
   }
 
   // ---------------------------------------------------------------- connection control
+
+  /** The URL of the most recent connection attempt. */
+  get url(): string {
+    return this.connectUrls.at(-1) ?? ''
+  }
+
+  /** Role for tickets minted from now on (the API would issue the new role after a change). */
+  setRole(role: TicketRole): void {
+    this.role = role
+  }
+
+  private connectUrl(): string {
+    const q = new URLSearchParams({ sessionId: this.sessionId })
+    const { ticket, user, boardId } = this.opts
+    const t =
+      typeof ticket === 'function'
+        ? ticket()
+        : (ticket ?? (user !== undefined ? mintTicket(boardId, user, this.role) : undefined))
+    if (t !== undefined) q.set('ticket', t)
+    for (const [k, v] of Object.entries(this.opts.extraQuery ?? {})) q.set(k, v)
+    const url = `${this.opts.wsUrl}/connect/${boardId}?${q}`
+    this.connectUrls.push(url)
+    return url
+  }
 
   /** Simulates a network drop that stays down: the socket is closed and reconnects are blocked. */
   goOffline(): void {
@@ -332,7 +368,7 @@ export class NodeSyncClient {
   private connect(): void {
     if (this.disposed || this.blocked || this.terminal) return
     const gen = ++this.gen
-    const ws = new WebSocket(this.url)
+    const ws = new WebSocket(this.connectUrl())
     this.ws = ws
     ws.on('open', () => {
       if (this.ws !== ws) return

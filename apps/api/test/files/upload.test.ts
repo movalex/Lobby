@@ -1,0 +1,280 @@
+import { readdirSync, readFileSync } from 'node:fs'
+import { createServer } from 'node:net'
+import { join } from 'node:path'
+import { Readable } from 'node:stream'
+import {
+  type AssetVersionMeta,
+  isId,
+  LIMITS,
+  metaPath,
+  originalPath,
+  PREVIEW_PROFILE,
+  type PreviewJob,
+} from '@draftroom/dev-assets'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import {
+  ALICE,
+  listFiles,
+  nothingStored,
+  parseRaw,
+  rawExchange,
+  req,
+  sha256,
+  startApp,
+  type TestApp,
+  upload,
+  uploadHead,
+  waitFor,
+} from './helpers.ts'
+
+let t: TestApp
+beforeEach(async () => {
+  t = await startApp()
+})
+afterEach(async () => {
+  await t.stop()
+})
+
+describe('POST /api/boards/:bid/assets', () => {
+  it('stores the original, writes queued meta, enqueues one job and returns the meta', async () => {
+    const body = Buffer.from(Array.from({ length: 70_000 }, (_, i) => i % 251))
+    const res = await upload(t.port, {
+      body,
+      type: 'image/png',
+      name: 'C:\\Users\\me\\Résumé 2026 "final".png', // a browser never sends paths, but a client might
+      query: '?devUser=mallory', // M0's dev identity is gone: never an input
+    })
+    expect(res.status).toBe(201)
+    expect(res.headers['cache-control']).toBe('no-store')
+    expect(res.headers['content-type']).toBe('application/json; charset=utf-8')
+    const meta = res.json<AssetVersionMeta>()
+    expect(isId('ast', meta.assetId)).toBe(true)
+    expect(isId('ver', meta.versionId)).toBe(true)
+    expect(meta).toMatchObject({
+      schemaVersion: 1,
+      boardId: 'board-a',
+      name: 'Résumé 2026 "final".png',
+      declaredMimeType: 'image/png',
+      mimeType: 'image/png',
+      kind: 'image',
+      sizeBytes: body.length,
+      sha256: sha256(body),
+      uploadedBy: ALICE, // the authorized user, from authorize()
+      status: 'queued',
+      attempts: 0,
+      error: null,
+      derivatives: [],
+    })
+    expect(t.auth.calls.map((c) => [c.boardId, c.action])).toEqual([['board-a', 'edit']])
+
+    const { assetId, versionId } = meta
+    expect(readFileSync(originalPath(t.layout, assetId, versionId)).equals(body)).toBe(true)
+    expect(JSON.parse(readFileSync(metaPath(t.layout, assetId, versionId), 'utf8'))).toEqual(meta)
+    // exactly original + meta.json: the temp file was renamed, not copied
+    expect(listFiles(t.layout.assets).sort()).toEqual(
+      [`${assetId}/${versionId}/meta.json`, `${assetId}/${versionId}/original`].sort(),
+    )
+    const job = JSON.parse(
+      readFileSync(join(t.layout.jobs.queued, `${versionId}.json`), 'utf8'),
+    ) as PreviewJob
+    expect(job).toMatchObject({
+      assetId,
+      versionId,
+      boardId: 'board-a',
+      profile: PREVIEW_PROFILE,
+      attempt: 1,
+    })
+    expect(readdirSync(t.layout.jobs.queued)).toEqual([`${versionId}.json`])
+  })
+
+  it('classifies by type/extension and never trusts a declared type for the served mime', async () => {
+    const svg = await upload(t.port, { type: 'image/svg+xml', name: 'logo.svg' })
+    expect(svg.json()).toMatchObject({ kind: 'other', mimeType: 'application/octet-stream' })
+    const byExt = await upload(t.port, { type: 'application/octet-stream', name: 'deck.PDF' })
+    expect(byExt.json()).toMatchObject({ kind: 'pdf', mimeType: 'application/pdf' })
+    const junkType = await upload(t.port, { type: 'text/html; <script>', name: 'clip.mp4' })
+    expect(junkType.json()).toMatchObject({ kind: 'video', mimeType: 'video/mp4' })
+    const empty = await upload(t.port, { body: Buffer.alloc(0), type: 'text/plain', name: 'empty.txt' })
+    expect(empty.status).toBe(201)
+    expect(empty.json()).toMatchObject({ sizeBytes: 0, sha256: sha256(Buffer.alloc(0)) })
+    const untyped = await req(t.port, {
+      method: 'POST',
+      path: '/api/boards/board-a/assets',
+      headers: { 'Content-Length': '3', 'X-File-Name': 'notes' },
+      body: Buffer.from('abc'),
+    })
+    expect(untyped.status).toBe(201)
+    expect(untyped.json()).toMatchObject({ declaredMimeType: 'application/octet-stream', kind: 'other' })
+  })
+
+  it('stores bodies Fastify or the host app would parse byte-for-byte, beyond the 1 MiB bodyLimit', async () => {
+    // Fastify's built-in JSON/text parsers and the host's buffering octet-stream parser must never
+    // see an upload: the stream reaches the handler unread and is stored as sent.
+    const cases: Array<[string, string, Buffer]> = [
+      ['application/json', 'broken.json', Buffer.from('{"not": json at all')],
+      ['text/plain; charset=utf-8', 'big.txt', Buffer.alloc(3 * 1024 * 1024 + 7, 0x61)],
+      ['application/octet-stream', 'blob.bin', Buffer.alloc(2 * 1024 * 1024, 0xfe)],
+      ['multipart/form-data; boundary=x', 'form.dat', Buffer.from('--x\r\n\r\n--x--')],
+    ]
+    for (const [type, name, body] of cases) {
+      const res = await upload(t.port, { type, name, body })
+      expect(res.status, type).toBe(201)
+      const m = res.json<AssetVersionMeta>()
+      expect(m.sizeBytes, type).toBe(body.length)
+      expect(readFileSync(originalPath(t.layout, m.assetId, m.versionId)).equals(body), type).toBe(true)
+    }
+  })
+
+  it('411 without Content-Length (chunked body), nothing stored', async () => {
+    const res = await req(t.port, {
+      method: 'POST',
+      path: '/api/boards/board-a/assets',
+      headers: { 'Transfer-Encoding': 'chunked', 'Content-Type': 'image/png', 'X-File-Name': 'a.png' },
+      body: [Buffer.from('abc'), Buffer.from('def')],
+    })
+    expect(res.status).toBe(411)
+    expect(res.json()).toEqual({ error: { code: 'LENGTH_REQUIRED', message: expect.any(String) } })
+    nothingStored(t.layout)
+  })
+
+  it('413 on the declared size, before reading any body, for each kind limit', async () => {
+    for (const [type, name, limit] of [
+      ['image/png', 'a.png', LIMITS.maxBytes.image],
+      ['application/zip', 'a.zip', LIMITS.maxBytes.other],
+    ] as const) {
+      // A keep-alive client that never sends the body: the server must answer from the headers
+      // alone and hang up (rawExchange resolves on close), not wait to drain the declared bytes.
+      const started = Date.now()
+      const raw = await rawExchange(t.port, (s) => s.write(uploadHead({ type, name, length: limit + 1 })))
+      expect(Date.now() - started).toBeLessThan(2_000)
+      const r = parseRaw(raw)
+      expect(r.status).toBe(413)
+      expect(r.headers.connection).toBe('close')
+      expect(r.json.error.code).toBe('TOO_LARGE')
+      expect(r.json.error.message).not.toMatch(/[\\/]/) // no paths in user-facing messages
+    }
+    nothingStored(t.layout)
+    // exactly at the limit is not rejected up front (it is accepted once the bytes arrive), and the
+    // 25 MiB body is far beyond Fastify's default 1 MiB bodyLimit
+    const atLimit = await upload(t.port, { body: Buffer.alloc(LIMITS.maxBytes.image, 1), name: 'a.png' })
+    expect(atLimit.status).toBe(201)
+    expect(atLimit.json().sizeBytes).toBe(LIMITS.maxBytes.image)
+  })
+
+  it('the streaming cap stops a body that outgrows its Content-Length and removes the partial file', async () => {
+    // Node's HTTP parser never delivers more than Content-Length over a socket, so this cap is the
+    // second line of defense; inject() can exceed it. The cap destroys the request stream (over a
+    // socket that drops the connection, as in M0), which light-my-request reports as the error.
+    const injected = t.app.inject({
+      method: 'POST',
+      url: '/api/boards/board-a/assets',
+      headers: { 'content-type': 'text/plain', 'content-length': '10', 'x-file-name': 'a.txt' },
+      payload: Readable.from([Buffer.alloc(8), Buffer.alloc(64 * 1024, 0x41)]),
+    })
+    await expect(injected).rejects.toMatchObject({ reason: 'TOO_LARGE' })
+    await t.close() // waits for the upload handler's cleanup
+    nothingStored(t.layout)
+  })
+
+  it('a body that ends before its Content-Length is a 400 and leaves nothing', async () => {
+    const res = await t.app.inject({
+      method: 'POST',
+      url: '/api/boards/board-a/assets',
+      headers: { 'content-type': 'text/plain', 'content-length': '100', 'x-file-name': 'a.txt' },
+      payload: Readable.from([Buffer.alloc(10, 0x41)]),
+    })
+    expect(res.statusCode).toBe(400)
+    expect(res.headers.connection).toBe('close')
+    expect(res.json()).toEqual({ error: { code: 'UPLOAD_INCOMPLETE', message: expect.any(String) } })
+    nothingStored(t.layout)
+  })
+
+  it('a client that sends more bytes than it declared can never store more than declared', async () => {
+    // Content-Length lies: the extra bytes are not part of this request's body (Node's parser stops
+    // at Content-Length and treats the rest as a malformed next request).
+    const declared = Buffer.from('0123456789')
+    const extra = Buffer.alloc(4096, 0x41)
+    await rawExchange(t.port, (s) => {
+      s.write(uploadHead({ type: 'text/plain', name: 'a.txt', length: declared.length }))
+      s.end(Buffer.concat([declared, extra]))
+    })
+    await t.close() // waits for the in-flight upload handler to finish or clean up
+    const originals = listFiles(t.layout.assets).filter((f) => f.endsWith('/original'))
+    expect(originals.length).toBeLessThanOrEqual(1)
+    for (const f of originals) expect(readFileSync(join(t.layout.assets, f)).equals(declared)).toBe(true)
+    for (const f of listFiles(t.layout.assets).filter((f) => f.endsWith('/meta.json'))) {
+      expect(JSON.parse(readFileSync(join(t.layout.assets, f), 'utf8')).sizeBytes).toBe(declared.length)
+    }
+    expect(listFiles(t.layout.assets).some((f) => f.includes('.tmp'))).toBe(false)
+  })
+
+  it('an upload aborted mid-body leaves no original, no meta, no temp file and no job', async () => {
+    const closed = rawExchange(t.port, (s) => {
+      s.write(uploadHead({ name: 'big.png', length: 1_000_000 }))
+      s.write(Buffer.alloc(64 * 1024, 7))
+      // abort only once the server has demonstrably started streaming into the partial file: the
+      // body is written to disk as it arrives, not buffered in memory first
+      waitFor(() => listFiles(t.layout.assets).some((f) => f.includes('.upload-')), 5_000, 'partial file')
+        .then(() => s.destroy())
+        .catch(() => s.destroy())
+    })
+    await closed
+    await waitFor(() => readdirSync(t.layout.assets).length === 0, 5_000, 'cleanup')
+    nothingStored(t.layout)
+  })
+
+  it('rejects bad board ids and file names with JSON 4xx and stores nothing', async () => {
+    for (const board of ['Board-A', 'ab', 'a%2Fb', '..', 'board_a%00']) {
+      const res = await upload(t.port, { board })
+      expect([400, 404], board).toContain(res.status)
+      if (res.status === 400) expect(res.json().error.code).toBe('INVALID_BOARD_ID')
+    }
+    expect((await upload(t.port, { board: 'Board-A' })).status).toBe(400)
+    // a malformed board id is refused before authorization is even asked
+    expect(t.auth.calls).toEqual([])
+
+    for (const bad of ['%E0%A4%A', '%', '%FF%FE', 'r\u00e9sum\u00e9.png' /* raw, not URI-encoded */]) {
+      const res = await upload(t.port, { headers: { 'X-File-Name': bad } })
+      expect(res.status).toBe(400)
+      expect(res.json()).toEqual({ error: { code: 'INVALID_FILE_NAME', message: expect.any(String) } })
+    }
+    const noName = await req(t.port, {
+      method: 'POST',
+      path: '/api/boards/board-a/assets',
+      headers: { 'Content-Type': 'image/png', 'Content-Length': '3' },
+      body: Buffer.from('abc'),
+    })
+    expect(noName.status).toBe(400)
+    expect(noName.json().error.code).toBe('INVALID_FILE_NAME')
+    nothingStored(t.layout)
+  })
+
+  it('a syntactically invalid Content-Type is a JSON 415 from Fastify (M0 read it as octet-stream)', async () => {
+    // Fastify 5 validates the header before any parser runs. Browsers always send a valid type.
+    for (const type of ['garbage', 'image/png extra']) {
+      const res = await upload(t.port, { type, name: 'clip.mp4' })
+      expect(res.status, type).toBe(415)
+      expect(res.json()).toEqual({ error: { code: 'UNSUPPORTED_MEDIA_TYPE', message: expect.any(String) } })
+    }
+    nothingStored(t.layout)
+  })
+
+  it('close() aborts an in-flight upload, removes its partial file and frees the port', async () => {
+    const pending = rawExchange(t.port, (s) => {
+      s.write(uploadHead({ name: 'a.png', length: 100_000 }))
+      s.write(Buffer.alloc(1000))
+    })
+    await waitFor(() => listFiles(t.layout.assets).some((f) => f.includes('.upload-')), 5_000, 'partial file')
+    const started = Date.now()
+    await t.close()
+    expect(Date.now() - started).toBeLessThan(3_000) // did not wait for the client to finish
+    await pending // the server hung up on the half-sent upload
+    expect(readdirSync(t.layout.assets)).toEqual([]) // close() waited for the cleanup
+    const free = await new Promise<boolean>((resolve) => {
+      const s = createServer()
+      s.once('error', () => resolve(false))
+      s.listen(t.port, '127.0.0.1', () => s.close(() => resolve(true)))
+    })
+    expect(free).toBe(true)
+  })
+})

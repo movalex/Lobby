@@ -3,29 +3,55 @@ import { request as httpRequest, type IncomingHttpHeaders } from 'node:http'
 import { connect } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { type DataLayout, dataLayout } from '@draftroom/dev-assets'
+import type { AccessClient } from '../../src/access.ts'
 import { createSyncServer, type SyncServer } from '../../src/app.ts'
+import type { SyncConfig } from '../../src/config.ts'
+import { UNREACHABLE_API } from '../harness/server-process.ts'
+import { TEST_INTERNAL_SECRET, TEST_TICKET_SECRET } from '../harness/tickets.ts'
 
 export interface TestServer {
   port: number
+  url: string
+  wsUrl: string
   server: SyncServer
-  layout: DataLayout
+  dataDir: string
+  roomsDir: string
   logs: string[]
   stop(): Promise<void>
 }
 
-export async function startServer(): Promise<TestServer> {
+export function testConfig(dataDir: string, over: Partial<SyncConfig> = {}): SyncConfig {
+  return {
+    host: '127.0.0.1',
+    port: 0,
+    dataDir,
+    idleEvictMs: 50,
+    textLeaseMs: 5_000,
+    ticketSecret: TEST_TICKET_SECRET,
+    internalSecret: TEST_INTERNAL_SECRET,
+    apiInternalUrl: UNREACHABLE_API,
+    accessRecheckMs: 60_000, // tests that exercise the periodic round lower it
+    ...over,
+  }
+}
+
+export async function startServer(
+  opts: { config?: Partial<SyncConfig>; accessClient?: AccessClient } = {},
+): Promise<TestServer> {
   const dataDir = mkdtempSync(join(tmpdir(), 'dr-sync-http-'))
   const logs: string[] = []
-  const server = createSyncServer(
-    { devAuth: true, host: '127.0.0.1', port: 0, dataDir, idleEvictMs: 50, textLeaseMs: 5_000 },
-    { log: (...a) => logs.push(a.map(String).join(' ')) },
-  )
+  const server = createSyncServer(testConfig(dataDir, opts.config), {
+    log: (...a) => logs.push(a.map(String).join(' ')),
+    accessClient: opts.accessClient,
+  })
   const { port } = await server.listen()
   return {
     port,
+    url: `http://127.0.0.1:${port}`,
+    wsUrl: `ws://127.0.0.1:${port}`,
     server,
-    layout: dataLayout(dataDir),
+    dataDir,
+    roomsDir: join(dataDir, 'rooms'),
     logs,
     async stop() {
       await server.close()
@@ -82,7 +108,7 @@ export function req(
         res.on('error', reject)
       },
     )
-    // An early server response + close legitimately resets our unfinished upload.
+    // An early server response + close legitimately resets our unfinished body.
     r.on('error', (e: NodeJS.ErrnoException) => {
       if (opts.body !== 'none') reject(e)
     })
@@ -91,32 +117,6 @@ export function req(
       for (const b of opts.body) r.write(b)
       r.end()
     } else r.end(opts.body)
-  })
-}
-
-export interface UploadOpts {
-  board?: string
-  user?: string
-  name?: string
-  type?: string
-  body?: Buffer
-  headers?: Record<string, string>
-}
-
-export function upload(port: number, o: UploadOpts = {}): Promise<Res> {
-  const body = o.body ?? Buffer.from('hello world')
-  const headers: Record<string, string> = {
-    'Content-Type': o.type ?? 'image/png',
-    'Content-Length': String(body.length),
-    'X-File-Name': encodeURIComponent(o.name ?? 'pic.png'),
-    ...o.headers,
-  }
-  const user = o.user === undefined ? '?devUser=alice' : o.user ? `?devUser=${o.user}` : ''
-  return req(port, {
-    method: 'POST',
-    path: `/dev-api/boards/${o.board ?? 'board-a'}/assets${user}`,
-    headers,
-    body,
   })
 }
 
@@ -143,7 +143,7 @@ export function rawExchange(
   })
 }
 
-/** Every file (relative path) under a directory, recursively. */
+/** Every file (relative path) under a directory, recursively; [] if it does not exist. */
 export function listFiles(dir: string): string[] {
   const out: string[] = []
   const walk = (d: string, rel: string) => {
@@ -153,7 +153,11 @@ export function listFiles(dir: string): string[] {
       else out.push(rel ? `${rel}/${n}` : n)
     }
   }
-  walk(dir, '')
+  try {
+    walk(dir, '')
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e
+  }
   return out
 }
 
@@ -163,4 +167,31 @@ export async function waitFor(check: () => boolean, timeoutMs = 5_000, what = 'c
     if (Date.now() > until) throw new Error(`timed out waiting for ${what}`)
     await new Promise((r) => setTimeout(r, 10))
   }
+}
+
+/** An AccessClient whose answers a test controls; unknown pairs throw (= API cannot answer). */
+export function fakeAccess(): AccessClient & {
+  roles: Map<string, 'owner' | 'editor' | 'commenter' | 'viewer' | null>
+  calls: string[]
+  set(boardId: string, userId: string, role: 'owner' | 'editor' | 'commenter' | 'viewer' | null): void
+  gate: Promise<void> | null
+} {
+  const f = {
+    roles: new Map<string, 'owner' | 'editor' | 'commenter' | 'viewer' | null>(),
+    calls: [] as string[],
+    gate: null as Promise<void> | null,
+    set(boardId: string, userId: string, role: 'owner' | 'editor' | 'commenter' | 'viewer' | null) {
+      f.roles.set(`${boardId}/${userId}`, role)
+    },
+    async getRole(boardId: string, userId: string) {
+      const k = `${boardId}/${userId}`
+      f.calls.push(k)
+      const answer = f.roles.get(k) // read BEFORE waiting: a gated call answers from the old state
+      const known = f.roles.has(k)
+      if (f.gate) await f.gate
+      if (!known) throw new Error('unknown pair')
+      return answer ?? null
+    },
+  }
+  return f
 }

@@ -33,7 +33,7 @@ describe('AssetMetaStore', () => {
     await vi.advanceTimersByTimeAsync(1000)
     expect(seen).toEqual(['queued', 'processing', 'ready'])
     expect(server.calls).toHaveLength(3)
-    expect(server.calls[0]).toBe(`/dev-api/boards/${BOARD}/assets/${meta.assetId}/${meta.versionId}`)
+    expect(server.calls[0]).toBe(`/api/boards/${BOARD}/assets/${meta.assetId}/${meta.versionId}`)
     await vi.advanceTimersByTimeAsync(5000)
     expect(server.calls).toHaveLength(3) // terminal: no more requests
   })

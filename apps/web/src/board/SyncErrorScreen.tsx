@@ -1,5 +1,5 @@
 const MESSAGES: Record<string, string> = {
-  NOT_AUTHENTICATED: 'The board server did not accept this identity.',
+  NOT_AUTHENTICATED: 'The board server did not accept this connection ticket. Retry to get a new one.',
   FORBIDDEN: 'You do not have access to this board.',
   NOT_FOUND: 'This board does not exist.',
   CLIENT_TOO_OLD: 'Draftroom has been updated. Reload the page to continue.',

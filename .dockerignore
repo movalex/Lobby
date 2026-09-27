@@ -1,0 +1,45 @@
+# Build context for docker/*.Dockerfile (context = repository root). Keep it small and secret-free:
+# the images install their own dependencies and run the TypeScript sources directly.
+
+# dependencies, build output, local data (board SQLite files, uploads, PGlite)
+**/node_modules
+**/dist
+**/.data
+**/*.tsbuildinfo
+**/coverage
+
+# secrets and dev-only settings (dev.env holds dev-only secrets and the dev-auth guard)
+**/.env
+**/.env.*
+**/dev.env
+
+# VCS, CI, editor
+.git
+.github
+.vscode
+.idea
+
+# docs (incl. docs/research), deployment definitions
+docs
+*.md
+render.yaml
+
+# tests, fixtures and their output
+tests
+**/*.test.ts
+apps/*/test
+packages/*/test
+apps/worker/scripts
+e2e/tests
+e2e/test-results
+e2e/playwright-report
+e2e/blob-report
+**/test-results
+**/playwright-report
+**/*.log
+
+# the web app is a Render static site, never part of an image (its package.json stays: the lockfile
+# check needs every workspace manifest)
+apps/web/src
+apps/web/public
+apps/web/index.html

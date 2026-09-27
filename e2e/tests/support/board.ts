@@ -1,28 +1,18 @@
-import { type Browser, type BrowserContext, expect, type Page, type TestInfo } from '@playwright/test'
+import { type Browser, type BrowserContext, expect, type Page } from '@playwright/test'
+import { signInContext } from './api.ts'
 import type { BindingLike, BoxLike, EditorLike, RecordLike, ShapeLike, VecLike } from './editor.ts'
 import { plainText } from './editor.ts'
+import type { TestUser } from './users.ts'
 
 export interface Session {
+  /** The dev sign-in handle ("alice"). */
   readonly user: string
+  /** Display name: what presence, cursors and editing badges show. */
+  readonly name: string
+  /** The API's user id (usr_…): presence and badge `data-user-id` values. */
+  readonly id: string
   readonly context: BrowserContext
   readonly page: Page
-}
-
-/** Board ids must match BOARD_ID_RE (lowercase); one fresh board per test keeps tests independent. */
-export function boardIdFor(testInfo: TestInfo): string {
-  const slug = testInfo.title
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 30)
-  return `e2e-${slug || 'board'}-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`
-}
-
-export async function gotoBoard(page: Page, board: string, user: string, role?: 'viewer') {
-  const q = new URLSearchParams({ user })
-  if (role) q.set('role', role)
-  await page.goto(`/b/${board}?${q}`)
-  await waitForBoard(page)
 }
 
 /** The editor is mounted and the sync socket is live. */
@@ -31,16 +21,44 @@ export async function waitForBoard(page: Page) {
   await expect(page.getByTestId('conn-status')).toHaveAttribute('data-state', 'online', { timeout: 30_000 })
 }
 
+/**
+ * The real dev sign-in form. The page must be on /signin (or be redirected there, as any protected
+ * page is when signed out); afterwards the app returns to where it was sent from.
+ */
+export async function signInThroughUi(page: Page, user: { handle: string; name: string }) {
+  await expect(page.getByTestId('signin-form')).toBeVisible({ timeout: 30_000 })
+  await expect(page.getByTestId('dev-signin-notice')).toBeVisible()
+  await page.getByTestId('signin-handle').fill(user.handle)
+  await page.getByTestId('signin-name').fill(user.name)
+  await page.getByTestId('signin-submit').click()
+  await expect(page.getByTestId('signin-form')).toHaveCount(0, { timeout: 30_000 })
+}
+
+/**
+ * Opens `board` as `user` in a new browser context. `via: 'ui'` follows the board link while signed
+ * out, signs in through the form and lands back on the board; `via: 'cookie'` (default) signs the
+ * context in through the same dev login endpoint first.
+ */
 export async function openSession(
   browser: Browser,
   board: string,
-  user: string,
-  opts: { role?: 'viewer' } = {},
+  user: TestUser,
+  opts: { via?: 'ui' | 'cookie' } = {},
 ): Promise<Session> {
   const context = await browser.newContext()
   const page = await context.newPage()
-  await gotoBoard(page, board, user, opts.role)
-  return { user, context, page }
+  if (opts.via === 'ui') {
+    await page.goto(`/b/${board}`)
+    await expect(page).toHaveURL(/\/signin\?returnTo=/)
+    await signInThroughUi(page, user)
+    await expect(page).toHaveURL(new RegExp(`/b/${board}$`))
+  } else {
+    await signInContext(context, user.handle, user.name)
+    await page.goto(`/b/${board}`)
+  }
+  await waitForBoard(page)
+  await expect(page.getByTestId('dev-identity-badge')).toHaveAttribute('data-user-id', user.id)
+  return { user: user.handle, name: user.name, id: user.id, context, page }
 }
 
 export const connStatus = (page: Page) => page.getByTestId('conn-status')

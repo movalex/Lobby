@@ -20,9 +20,27 @@ Recommendation: engine suitable — proceed, conditional on the tldraw license q
 
 Checks at completion: pnpm verify — lint 0 errors, typecheck 11 projects, vitest 183 passed / 1 skipped, Playwright 10/10 (3 consecutive runs).
 
-## Current milestone: 1 — accounts, permissions, deployment foundation
+## Milestone 1 — accounts, permissions, deployment foundation: COMPLETE locally (2026-09-26)
 
-Status: starting (contracts: docs/M1-CONTRACTS.md). Local-first: PGlite (real Postgres in-process) for dev/tests, dev sign-in provider, Clerk adapter unverified until keys exist.
+| Gate | Status | Evidence |
+|---|---|---|
+| Postgres schema + migrations | done (PGlite locally; pg driver smoke-tested against Postgres 18.6 on the NAS) | packages/db (0001_core, checksum-guarded runner) |
+| Sign-in | dev provider done; Clerk adapter written, UNVERIFIED (no keys) | apps/api/src/auth |
+| Workspaces, projects, boards, members, invitations | done | apps/api/test/* (tenancy, members, invitations) |
+| Server-enforced roles (owner/editor/commenter/viewer) | done | packages/permissions; e2e permissions.spec.ts (forged writes never land) |
+| Board tickets (60 s, board-specific) | done | packages/auth-tickets; apps/sync/test/protocol/auth.test.ts |
+| Revocation / downgrade within 15 s | done — 65 ms via push; 9.5 s via periodic re-check alone | e2e permissions.spec.ts; protocol/access.test.ts |
+| Dashboard (create/rename/archive/trash/restore/search) | done | e2e dashboard.spec.ts |
+| Wrong-workspace access, forged read-only mutation | done | e2e permissions.spec.ts; apps/api/test/tenancy.test.ts |
+| CI + Render/Docker config | written; Docker images built and smoke-run on the NAS; Render Blueprint schema-valid; not deployed | render.yaml, docker/, .github/workflows/ci.yml, docs/DEPLOY.md |
+
+Checks at completion: pnpm verify — lint 0 errors, typecheck 13 projects, vitest 812 passed / 1 skipped, Playwright 14/14 (6 consecutive runs).
+
+Before any staging deploy (needs your decisions/accounts): Clerk keys; a tldraw key listing the staging host; publishing the repo; WebSocket routing on Render (static sites cannot proxy WebSockets); internal-URL wiring and refusing loopback defaults in production; trustProxy; an api /healthz. See docs/DEPLOY.md.
+
+## Current phase: Miro-style features (milestones 2, 4, 5 scope)
+
+Guided by docs/research/miro-ux-checklist.md (P0 items first).
 
 ## Log
 
@@ -44,3 +62,6 @@ Status: starting (contracts: docs/M1-CONTRACTS.md). Local-first: PGlite (real Po
 - Integration fixes: worker file-type moved to runtime deps; web declares @draftroom/dev-assets; asset id validation aligned with the canvas-schema (10–40 chars); apps/sync typecheck now covers test/.
 - M1 dependencies pinned and installed (Fastify 5.12.5, PGlite 0.5.8 = PostgreSQL 18.3 in-process, pg 8.23.0, zod 4.6.5, @clerk/backend 3.20.1, @clerk/react 6.17.2); PGlite smoke-tested (memory + file persistence).
 - docs/FEASIBILITY.md, docs/DEMO.md written. Milestone 0 complete.
+- Board logic packages: board-ops (bulk notes, search, frame outline/presentation order, CSV, archive import/export, id remap) and six templates; 372 tests; adversarial review fixed 7 defects.
+- Miro UX research: official behaviors, user voices, and a 96-item P0 checklist (docs/research/miro-*.md).
+- Milestone 1 built and integrated (api, db, auth, permissions, tickets, revocation, dashboard, share dialog, invitations, deploy config). Integration fixes: apps/sync and apps/web now declare @draftroom/permissions.

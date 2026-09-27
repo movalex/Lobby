@@ -1,25 +1,33 @@
 import { test as base, expect } from '@playwright/test'
-import { boardIdFor, openSession, type Session } from './board.ts'
+import type { BoardRole } from './api.ts'
+import { openSession, type Session } from './board.ts'
 import { type Stack, startStack } from './stack.ts'
+import { createUsers, type Users } from './users.ts'
 
 interface WorkerFixtures {
   /** Extra sync server env for this worker's stack. Override per file with test.use({ syncEnv }). */
   syncEnv: Record<string, string>
   stack: Stack
+  /** The stack's people (alice owns Dev Studio; see users.ts). */
+  users: Users
 }
 
 interface TestFixtures {
-  /** A fresh board id for this test. */
+  /** A fresh private board in Dev Studio for this test, owned by alice. */
   board: string
-  /** Opens `board` as `user` in a new browser context (closed after the test). */
-  session(user: string, opts?: { role?: 'viewer' }): Promise<Session>
+  /**
+   * Opens `board` as `user` in a new browser context (closed after the test). Anyone but alice is
+   * first given an explicit grant by alice (default: editor; `role: null` = no grant, for tests that
+   * share through the UI).
+   */
+  session(user: string, opts?: { role?: BoardRole | null; via?: 'ui' | 'cookie' }): Promise<Session>
   stackReady: undefined
 }
 
 export const test = base.extend<TestFixtures, WorkerFixtures>({
   syncEnv: [{}, { option: true, scope: 'worker' }],
 
-  // One sync server + one worker per Playwright worker (workers: 1, so one per project/env).
+  // One api + sync server + worker per Playwright worker (workers: 1, so one per project/env).
   stack: [
     async ({ syncEnv }, use) => {
       const stack = await startStack({ syncEnv })
@@ -29,28 +37,42 @@ export const test = base.extend<TestFixtures, WorkerFixtures>({
     { scope: 'worker', timeout: 90_000 },
   ],
 
+  users: [
+    async ({ stack: _, playwright }, use) => {
+      const users = await createUsers(playwright)
+      await use(users)
+      await users.dispose()
+    },
+    { scope: 'worker', timeout: 60_000 },
+  ],
+
   // A test that killed a process restarts it itself, but if it failed half-way the next test must
-  // still start from a healthy stack.
+  // still start from a healthy stack. It also creates `users` for every test, so alice is always the
+  // first user to sign in (the Dev Studio owner) even in tests that sign other people in themselves.
   stackReady: [
-    async ({ stack }, use, testInfo) => {
+    async ({ stack, users: _ }, use, testInfo) => {
       await stack.ensureRunning()
       await use(undefined)
       if (testInfo.status !== testInfo.expectedStatus) {
-        await testInfo.attach('sync.log', { body: stack.sync.logs(), contentType: 'text/plain' })
-        await testInfo.attach('worker.log', { body: stack.worker.logs(), contentType: 'text/plain' })
+        for (const p of [stack.api, stack.sync, stack.worker]) {
+          await testInfo.attach(`${p.name}.log`, { body: p.logs(), contentType: 'text/plain' })
+        }
       }
     },
     { auto: true },
   ],
 
-  board: async ({ stackReady: _ }, use, testInfo) => {
-    await use(boardIdFor(testInfo))
+  board: async ({ stackReady: _, users }, use, testInfo) => {
+    // A readable board title (it shows in the top bar and in screenshots): the test title up to ':'.
+    const short = testInfo.title.split(':')[0]?.trim().slice(0, 60) || 'Board'
+    await use(await users.createBoard(short.charAt(0).toUpperCase() + short.slice(1)))
   },
 
-  session: async ({ browser, board }, use) => {
+  session: async ({ browser, board, users }, use) => {
     const opened: Session[] = []
-    await use(async (user, opts) => {
-      const s = await openSession(browser, board, user, opts)
+    await use(async (user, opts = {}) => {
+      const who = opts.role === null ? await users.get(user) : await users.grant(board, user, opts.role)
+      const s = await openSession(browser, board, who, { via: opts.via })
       opened.push(s)
       return s
     })

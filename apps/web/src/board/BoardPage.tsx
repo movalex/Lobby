@@ -1,3 +1,4 @@
+import type { Board, BoardDetail, Me, TicketResponse } from '@draftroom/contracts'
 import { getAssetUrlsByImport } from '@tldraw/assets/imports.vite'
 import { TLRemoteSyncError, useSync } from '@tldraw/sync'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -14,18 +15,25 @@ import {
   UserRecordType,
 } from 'tldraw'
 import 'tldraw/tldraw.css'
+import { api, isApiError, isNoAccess } from '../api/client.ts'
 import { createAssetStore } from '../assets/asset-store.ts'
 import { AssetMetaStore } from '../assets/meta-store.ts'
+import { useMe, useSession } from '../auth/session.tsx'
 import { FileCardShapeUtil } from '../file-card/FileCardShapeUtil.tsx'
-import { colorForUser, DEV_AUTH_ENABLED, type DevIdentity } from '../lib/identity.ts'
-import { boardPath } from '../lib/routing.ts'
+import { DEV_AUTH_ENABLED, safeColor } from '../lib/identity.ts'
+import type { BoardRole } from '../lib/permissions.ts'
+import { useResource } from '../lib/useResource.ts'
+import { LoadingScreen, MessageScreen, NoAccessScreen } from '../ui/screens.tsx'
+import { isReadonlyRole } from './access.ts'
 import { BoardContext, type BoardContextValue } from './board-context.ts'
 import { EditingBadges } from './EditingBadges.tsx'
 import { ExternalContentHandlers, IMAGE_HANDLER_LIMITS, watchImagePreview } from './ExternalContent.tsx'
 import { NoticeRegion, useNotices } from './Notices.tsx'
 import { getDraftroomPresence, holderName, parseLeaseDenied } from './presence.ts'
+import { ShareDialog } from './ShareDialog.tsx'
 import { SyncErrorScreen } from './SyncErrorScreen.tsx'
 import { type ConnState, TopBar } from './TopBar.tsx'
+import { createTicketUri } from './ticket.ts'
 
 // Module level = referentially stable. useSync treats utils/assets/users/uri as effect dependencies
 // (an unstable one reconnects in a loop), and <Tldraw> re-creates the editor when utils change.
@@ -34,8 +42,8 @@ const syncShapeUtils = [...defaultShapeUtils, ...customShapeUtils] // useSync do
 const assetUrls = getAssetUrlsByImport() // self-hosted fonts/icons/translations (no CDN)
 
 const components: TLComponents = {
-  // Presence lives in our top bar; the default people menu edits local tldraw preferences, which are
-  // not the identity we sync.
+  // Presence and sharing live in our top bar; the default people menu edits local tldraw
+  // preferences, which are not the identity we sync.
   SharePanel: null,
   InFrontOfTheCanvas: EditingBadges,
 }
@@ -78,35 +86,91 @@ declare global {
   }
 }
 
-export function BoardPage({ boardId, identity }: { boardId: string; identity: DevIdentity }) {
+/** /b/:bid — loads the board (and the caller's role) from the API, then opens the canvas. */
+export function BoardPage({ boardId }: { boardId: string }) {
+  const load = useCallback((signal: AbortSignal) => api.getBoard(boardId, signal), [boardId])
+  const detail = useResource(load)
+
+  if (detail.status === 'loading') return <LoadingScreen label="Opening board…" testId="board-loading" />
+  if (detail.status === 'error') {
+    if (isNoAccess(detail.error)) return <NoAccessScreen />
+    // 401: the session guard is already switching to the sign-in page.
+    if (detail.error.kind === 'unauthorized') return <LoadingScreen testId="board-loading" />
+    return (
+      <MessageScreen
+        testId="board-load-error"
+        title="This board could not be opened"
+        body={detail.error.message}
+        actions={
+          <button type="button" className="dr-btn dr-btn--primary" onClick={detail.reload}>
+            Try again
+          </button>
+        }
+      />
+    )
+  }
+  return <BoardShell key={boardId} initial={detail.data} />
+}
+
+function BoardShell({ initial }: { initial: BoardDetail }) {
+  const me = useMe()
+  const [board, setBoard] = useState<Board>(initial.board)
+  const [role, setRole] = useState<BoardRole>(initial.role)
+  const [accessLost, setAccessLost] = useState(false)
   const [attempt, setAttempt] = useState(0)
   const retry = useCallback(() => setAttempt((n) => n + 1), [])
+
+  useEffect(() => {
+    document.title = `${board.title} · Draftroom`
+    return () => {
+      document.title = 'Draftroom'
+    }
+  }, [board.title])
+
+  if (accessLost) return <NoAccessScreen revoked />
   // A fresh key = a fresh useSync (new socket + store): the only way out of a terminal sync error.
   return (
     <BoardSession
-      key={`${boardId}/${identity.userId}/${identity.role}/${attempt}`}
-      boardId={boardId}
-      identity={identity}
+      key={`${board.id}/${me.user.id}/${attempt}`}
+      me={me}
+      board={board}
+      role={role}
+      workspace={initial.workspace}
+      onBoardChange={setBoard}
+      onRole={setRole}
+      onAccessLost={() => setAccessLost(true)}
       onRetry={retry}
     />
   )
 }
 
 function BoardSession({
-  boardId,
-  identity,
+  me,
+  board,
+  role,
+  workspace,
+  onBoardChange,
+  onRole,
+  onAccessLost,
   onRetry,
 }: {
-  boardId: string
-  identity: DevIdentity
+  me: Me
+  board: Board
+  role: BoardRole
+  workspace: { id: string; name: string }
+  onBoardChange(board: Board): void
+  onRole(role: BoardRole): void
+  onAccessLost(): void
   onRetry(): void
 }) {
-  const { userId, role } = identity
+  const boardId = board.id
+  const { refresh } = useSession()
   const [editor, setEditor] = useState<Editor | null>(null)
+  const [sharing, setSharing] = useState(false)
   const editorRef = useRef<Editor | null>(null)
   const { notices, notify, dismiss } = useNotices()
 
-  // Created once per mounted session (the parent key covers board/identity). The abort signal is
+  // Created once per mounted session (the parent key covers board/user). The abort signal is
   // (re)created in an effect so StrictMode's simulated unmount/remount does not leave it aborted.
   const metaStore = useMemo(() => new AssetMetaStore(), [])
   const lifetime = useRef<AbortSignal | null>(null)
@@ -123,7 +187,6 @@ function BoardSession({
     () =>
       createAssetStore({
         boardId,
-        devUser: userId,
         metaStore,
         onUploaded: (assetRecordId, meta) => {
           const ed = editorRef.current
@@ -131,26 +194,46 @@ function BoardSession({
             watchImagePreview(ed, metaStore, boardId, assetRecordId, meta, lifetime.current)
         },
       }),
-    [boardId, userId, metaStore],
+    [boardId, metaStore],
   )
 
+  const { id: userId, name: userName, color: userColor } = me.user
   const users = useMemo<TLUserStore>(
     () => ({
       // Only id, display name and color: tldraw persists user records into the board document.
       currentUser: computed('currentUser', () =>
-        UserRecordType.create({ id: createUserId(userId), name: userId, color: colorForUser(userId) }),
+        UserRecordType.create({
+          id: createUserId(userId),
+          name: userName,
+          color: safeColor(userColor, userId),
+        }),
       ),
     }),
-    [userId],
+    [userId, userName, userColor],
   )
 
-  // Called on every (re)connect attempt; in milestone 1 this fetches a short-lived signed ticket.
-  const uri = useCallback(() => {
-    const ws = location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const q = new URLSearchParams({ devUser: userId })
-    if (role === 'viewer') q.set('devRole', 'viewer')
-    return `${ws}//${location.host}/connect/${encodeURIComponent(boardId)}?${q}`
-  }, [boardId, userId, role])
+  // The ticket callbacks change identity every render; the uri function must not (it is a useSync
+  // effect dependency: a new one would reconnect). Route them through a ref.
+  const handlers = useRef({ onTicket: (_t: TicketResponse) => {}, onAccessLost, onSignedOut: () => {} })
+  handlers.current = {
+    onTicket: (t) => onRole(t.role),
+    onAccessLost,
+    onSignedOut: () => void refresh(),
+  }
+  const ticketUri = useMemo(
+    () =>
+      createTicketUri({
+        boardId,
+        fetchTicket: (bid) => api.boardTicket(bid),
+        onTicket: (t) => handlers.current.onTicket(t),
+        onAccessLost: () => handlers.current.onAccessLost(),
+        onSignedOut: () => handlers.current.onSignedOut(),
+        origin: location,
+      }),
+    [boardId],
+  )
+  useEffect(() => () => ticketUri.cancel(), [ticketUri])
+  const uri = ticketUri.uri
 
   const onCustomMessageReceived = useCallback(
     (data: unknown) => {
@@ -176,10 +259,20 @@ function BoardSession({
     onCustomMessageReceived,
   })
 
+  const syncError =
+    store.status === 'error'
+      ? String(store.error instanceof TLRemoteSyncError ? store.error.reason : store.error.message)
+      : null
+  // Access revoked while open: the sync server closes the session with FORBIDDEN (terminal).
+  const lostAccess = syncError === 'FORBIDDEN' || syncError === 'NOT_FOUND'
+  useEffect(() => {
+    if (lostAccess) onAccessLost()
+  }, [lostAccess, onAccessLost])
+
   const onMount = useCallback<TLOnMountHandler>((ed) => {
     editorRef.current = ed
     setEditor(ed)
-    if (DEV_AUTH_ENABLED) window.editor = ed // e2e + debugging only, same guard as dev identities
+    if (DEV_AUTH_ENABLED) window.editor = ed // e2e + debugging only, behind the local-dev guard
     return () => {
       editorRef.current = null
       setEditor(null)
@@ -187,17 +280,34 @@ function BoardSession({
     }
   }, [])
 
-  const copyLink = useCallback(async () => {
-    const url = `${location.origin}${boardPath(boardId)}`
-    try {
-      await navigator.clipboard.writeText(url)
-      notify({ key: 'copy-link', text: 'Board link copied', timeoutMs: 2500 })
-    } catch {
-      notify({ key: 'copy-link', text: `Copy this link: ${url}`, timeoutMs: 10000 })
+  // Viewers/commenters get a read-only editor. UI only: the sync server already marks their session
+  // read-only and skips any write, this keeps tools and menus from offering edits.
+  const readonly = isReadonlyRole(role, board.status)
+  useEffect(() => {
+    if (editor && readonly && !editor.getInstanceState().isReadonly) {
+      editor.updateInstanceState({ isReadonly: true })
     }
-  }, [boardId, notify])
+  }, [editor, readonly])
 
-  const board = useMemo<BoardContextValue>(
+  const rename = useCallback(
+    async (title: string) => {
+      const previous = board
+      onBoardChange({ ...board, title })
+      try {
+        onBoardChange(await api.patchBoard(boardId, { title }))
+      } catch (e) {
+        onBoardChange(previous)
+        notify({
+          key: 'rename',
+          text: isApiError(e) ? e.message : 'The board could not be renamed.',
+          tone: 'error',
+        })
+      }
+    },
+    [board, boardId, notify, onBoardChange],
+  )
+
+  const context = useMemo<BoardContextValue>(
     () => ({ boardId, userId, role, metaStore, notify, dismiss }),
     [boardId, userId, role, metaStore, notify, dismiss],
   )
@@ -206,14 +316,17 @@ function BoardSession({
     store.status === 'loading' ? 'connecting' : store.status === 'error' ? 'error' : store.connectionStatus
 
   return (
-    <BoardContext.Provider value={board}>
-      <div className="dr-board">
+    <BoardContext.Provider value={context}>
+      <div className="dr-board" data-board-id={boardId} data-role={role}>
         <TopBar
-          boardId={boardId}
-          identity={identity}
+          board={board}
+          role={role}
+          workspace={workspace}
+          selfUserId={userId}
           conn={conn}
           editor={editor}
-          onCopyLink={() => void copyLink()}
+          onRename={(t) => void rename(t)}
+          onShare={() => setSharing(true)}
         />
         {conn === 'offline' && (
           <div className="dr-banner" data-testid="offline-banner" role="status">
@@ -228,14 +341,7 @@ function BoardSession({
               <p>Connecting to board…</p>
             </div>
           )}
-          {store.status === 'error' && (
-            <SyncErrorScreen
-              reason={String(
-                store.error instanceof TLRemoteSyncError ? store.error.reason : store.error.message,
-              )}
-              onRetry={onRetry}
-            />
-          )}
+          {syncError !== null && !lostAccess && <SyncErrorScreen reason={syncError} onRetry={onRetry} />}
           {store.status === 'synced-remote' && (
             <div className="dr-board__editor">
               <Tldraw
@@ -253,6 +359,16 @@ function BoardSession({
           )}
         </main>
         <NoticeRegion notices={notices} onDismiss={dismiss} />
+        {sharing && (
+          <ShareDialog
+            board={board}
+            role={role}
+            workspace={workspace}
+            selfUserId={userId}
+            onClose={() => setSharing(false)}
+            onBoardChange={onBoardChange}
+          />
+        )}
       </div>
     </BoardContext.Provider>
   )

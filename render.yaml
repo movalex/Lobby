@@ -1,0 +1,169 @@
+# Draftroom STAGING Blueprint (milestone 1). NOT provisioned. Read docs/DEPLOY.md before syncing it:
+# the known blockers there (WebSocket routing, internal URLs, sign-in keys, license key) must be
+# resolved first, and every UNVERIFIED item needs a check on the first deploy.
+#
+# Checked on 2026-09-26/27 against https://render.com/docs/blueprint-spec and Render's published JSON
+# schema https://render.com/schema/render.yaml.json (validated; see docs/DEPLOY.md "Validation").
+# Plan IDs use the compute-plan names Render introduced in August 2026
+# (https://render.com/docs/compute-plans). Prices are in docs/DEPLOY.md.
+#
+# Deploy order matters (docs/DEPLOY.md "Deploying"): api (migrations) -> sync -> web. Automatic deploys
+# start each service independently on a commit (no ordering we could find documented), so they are OFF
+# and deploys are manual. AGENTS.md also forbids publishing an unreviewed deployment.
+
+envVarGroups:
+  # Shared by api and sync. Two independent 256-bit random values (base64, 44 chars; the services
+  # require >= 32 chars and that the two differ). Rotating either one restarts both services.
+  - name: draftroom-staging-secrets
+    envVars:
+      - key: DRAFTROOM_TICKET_SECRET
+        generateValue: true
+      - key: DRAFTROOM_INTERNAL_SECRET
+        generateValue: true
+
+databases:
+  - name: draftroom-staging-db
+    plan: 0.1c-256mb # smallest paid plan; the free plan expires after 30 days
+    diskSizeGB: 1
+    postgresMajorVersion: "18" # dev and tests run PGlite = PostgreSQL 18.3
+    databaseName: draftroom
+    user: draftroom
+    region: oregon
+    ipAllowList: [] # no external connections; the api connects over Render's private network
+
+services:
+  # ---------------------------------------------------------------------------------------------
+  # web: the SPA as a static site. VITE_* values are inlined at BUILD time.
+  - type: web
+    runtime: static
+    name: draftroom-staging-web
+    # pnpm on Render's native build image is UNVERIFIED; this installs the exact pinned version.
+    # Node comes from .node-version (24.19.0).
+    buildCommand: >-
+      npm install -g pnpm@10.34.5 &&
+      pnpm install --frozen-lockfile --filter "@draftroom/web..." &&
+      pnpm --filter @draftroom/web build
+    staticPublishPath: ./apps/web/dist
+    autoDeployTrigger: "off"
+    routes:
+      # The browser must reach the api on the SAME origin (session cookie is SameSite=Lax, host-only;
+      # onrender.com is a public suffix, so the api's own hostname would be cross-site). Rewrites to a
+      # full URL are documented; cookie, Origin, query-string and large-upload pass-through are
+      # UNVERIFIED (docs/DEPLOY.md "First-deploy checks"). Replace the hostname if Render assigned a
+      # different one to the api service.
+      - type: rewrite
+        source: /api/*
+        destination: https://draftroom-staging-api.onrender.com/api/*
+      - type: rewrite
+        source: /files/*
+        destination: https://draftroom-staging-api.onrender.com/files/*
+      # SPA fallback. Render skips rules for paths where a file exists, so hashed assets are served as-is.
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    headers:
+      - path: /*
+        name: X-Content-Type-Options
+        value: nosniff
+      - path: /*
+        name: X-Frame-Options
+        value: DENY
+      - path: /*
+        name: Referrer-Policy
+        value: strict-origin-when-cross-origin
+      - path: /assets/*
+        name: Cache-Control
+        value: public, max-age=31536000, immutable
+    envVars:
+      # Without a key whose hosts include this site's hostname, the editor goes BLANK 5 s after load on
+      # any HTTPS host (docs/research/license.md). Keys are public by design; kept out of git anyway.
+      - key: VITE_TLDRAW_LICENSE_KEY
+        sync: false
+      # BLOCKER (docs/DEPLOY.md "Known blockers" 1): static-site rewrites do not proxy WebSockets, so
+      # the board socket must go straight to the sync service, and apps/web does not read a sync
+      # origin yet (it connects to its own origin's /connect). Once it does, add e.g.:
+      #   - key: VITE_DRAFTROOM_SYNC_ORIGIN
+      #     value: https://draftroom-staging-sync.onrender.com
+      # Never set VITE_DRAFTROOM_DEV_AUTH here: it enables development identities in the bundle.
+
+  # ---------------------------------------------------------------------------------------------
+  # api: Fastify API + (milestones 1-2 only) the preview worker in the SAME container.
+  # Why co-located: the M0/M1 file store is local disk under DRAFTROOM_DATA_DIR, shared by the api
+  # (uploads, job queue) and the worker (derivatives), and a Render disk attaches to ONE service.
+  # A separate background worker would never see an upload. Consequences, accepted for staging:
+  # one instance, no zero-downtime deploys for the api, and a larger plan for the worker's memory.
+  # Milestone 3 (object storage) splits this into docker/api.Dockerfile + a `type: worker` service
+  # built from docker/worker.Dockerfile, and removes the disk.
+  - type: web
+    runtime: docker
+    name: draftroom-staging-api
+    plan: 1c-2g # api + worker; the PDF child alone may use a 512 MB heap
+    region: oregon
+    dockerfilePath: ./docker/api-worker.Dockerfile
+    dockerContext: .
+    numInstances: 1 # required: a service with a disk cannot scale
+    # Public, unauthenticated, contract-defined GET that needs no database row. Replace with a
+    # dedicated /healthz once the api has one (reported as a contract issue).
+    healthCheckPath: /api/auth/config
+    maxShutdownDelaySeconds: 30 # the supervisor SIGKILLs stragglers after 25 s
+    autoDeployTrigger: "off"
+    disk:
+      name: draftroom-staging-files
+      mountPath: /var/data
+      sizeGB: 5 # uploads (<= 500 MB per video) + derivatives; can grow, never shrink
+    envVars:
+      - key: NODE_ENV
+        value: production # also the image default; refuses dev sign-in and dev secrets
+      - key: DRAFTROOM_DATA_DIR
+        value: /var/data # the disk mount; files outside it are lost on every deploy
+      - key: DATABASE_URL
+        fromDatabase:
+          name: draftroom-staging-db
+          property: connectionString # internal (private network) URL
+      - key: PUBLIC_ORIGIN
+        # The static site's URL (Origin checks, Secure cookie, invite links). Confirm the hostname
+        # Render assigns on first creation and update it here if it differs.
+        value: https://draftroom-staging-web.onrender.com
+      - key: DRAFTROOM_SYNC_INTERNAL_URL
+        # http://<sync internal address> from the sync service's Connect menu (e.g.
+        # http://draftroom-staging-sync-xxxx:10000). A Blueprint can only inject host:port, not a URL
+        # (contract issue); set it after the first provisioning (docs/DEPLOY.md "First provisioning").
+        sync: false
+      - key: AUTH_PROVIDER
+        value: clerk # dev sign-in is refused under NODE_ENV=production; the Clerk adapter is UNVERIFIED
+      - key: CLERK_SECRET_KEY
+        sync: false
+      - key: CLERK_PUBLISHABLE_KEY
+        sync: false
+      - fromGroup: draftroom-staging-secrets
+
+  # ---------------------------------------------------------------------------------------------
+  # sync: tldraw rooms. EXACTLY ONE instance (one authoritative room per board) with its own disk
+  # for the per-board SQLite files. No autoscaling, ever: a second instance would open a second
+  # room on a different disk and split the board.
+  - type: web
+    runtime: docker
+    name: draftroom-staging-sync
+    plan: 0.5c-512mb
+    region: oregon
+    dockerfilePath: ./docker/sync.Dockerfile
+    dockerContext: .
+    numInstances: 1
+    healthCheckPath: /healthz
+    maxShutdownDelaySeconds: 30 # sync force-exits after 5 s; acks are only sent after COMMIT
+    autoDeployTrigger: "off"
+    disk:
+      name: draftroom-staging-rooms
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DRAFTROOM_DATA_DIR
+        value: /var/data # rooms/board-<id>.sqlite live under it
+      - key: DRAFTROOM_API_INTERNAL_URL
+        # http://<api internal address> from the api service's Connect menu; same caveat as above.
+        sync: false
+      - key: ACCESS_RECHECK_MS
+        value: "10000"
+      - fromGroup: draftroom-staging-secrets

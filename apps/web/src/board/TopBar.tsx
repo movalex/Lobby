@@ -1,8 +1,13 @@
+import type { Board } from '@draftroom/contracts'
 import { useMemo, useState } from 'react'
 import { type Editor, useValue } from 'tldraw'
-import { Wordmark } from '../brand/Wordmark.tsx'
-import { type DevIdentity, initialsFor } from '../lib/identity.ts'
-import { boardPath, navigate } from '../lib/routing.ts'
+import { UserMenu } from '../auth/UserMenu.tsx'
+import { Mark } from '../brand/Wordmark.tsx'
+import { initialsFor } from '../lib/identity.ts'
+import { type BoardRole, can } from '../lib/permissions.ts'
+import { linkClick, workspacePath } from '../lib/routing.ts'
+import { RenameInput } from '../ui/RenameInput.tsx'
+import { readonlyPill } from './access.ts'
 import { type PresenceUser, presenceUsers } from './presence.ts'
 
 export type ConnState = 'connecting' | 'online' | 'offline' | 'error'
@@ -22,54 +27,64 @@ const CONN_TITLE: Record<ConnState, string> = {
 }
 
 export function TopBar({
-  boardId,
-  identity,
+  board,
+  role,
+  workspace,
+  selfUserId,
   conn,
   editor,
-  onCopyLink,
+  onRename,
+  onShare,
 }: {
-  boardId: string
-  identity: DevIdentity
+  board: Board
+  role: BoardRole
+  workspace: { id: string; name: string }
+  selfUserId: string
   conn: ConnState
   editor: Editor | null
-  onCopyLink(): void
+  onRename(title: string): void
+  onShare(): void
 }) {
+  const home = workspacePath(workspace.id)
+  const pill = readonlyPill(role, board.status)
   return (
     <header className="dr-topbar">
       <a
         className="dr-topbar__home"
-        href="/"
-        onClick={(e) => {
-          if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return
-          e.preventDefault()
-          navigate(`/${homeQuery(identity)}`)
-        }}
-        aria-label="Draftroom home"
+        href={home}
+        onClick={linkClick(home)}
+        aria-label={`Back to ${workspace.name}`}
       >
-        <Wordmark />
+        <Mark size={24} />
       </a>
       <span className="dr-topbar__sep" aria-hidden="true" />
       <div className="dr-topbar__board">
-        <span className="dr-topbar__label">Board</span>
-        <code className="dr-topbar__board-id" data-testid="board-id" title={boardId}>
-          {boardId}
-        </code>
-        <button type="button" className="dr-btn dr-btn--ghost" data-testid="copy-link" onClick={onCopyLink}>
-          <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+        <a className="dr-topbar__ws" href={home} onClick={linkClick(home)} title={workspace.name}>
+          {workspace.name}
+        </a>
+        <span className="dr-topbar__slash" aria-hidden="true">
+          /
+        </span>
+        <BoardTitle title={board.title} canRename={can(role, 'rename', board.status)} onRename={onRename} />
+      </div>
+      {pill && (
+        <span
+          className="dr-pill dr-pill--role"
+          data-testid="readonly-pill"
+          data-role={role}
+          title={pill.title}
+        >
+          <svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true">
             <path
-              d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
+              d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12zm10 3a3 3 0 1 0 0-6 3 3 0 0 0 0 6z"
+              fill="currentColor"
             />
           </svg>
-          Copy link
-        </button>
-      </div>
+          {pill.label}
+        </span>
+      )}
       <div className="dr-topbar__spacer" />
-      <PresenceList editor={editor} selfUserId={identity.userId} />
-      <ReadonlyPill editor={editor} />
+      <PresenceList editor={editor} selfUserId={selfUserId} />
       <span
         className={`dr-pill dr-pill--${conn}`}
         data-testid="conn-status"
@@ -80,26 +95,73 @@ export function TopBar({
         <span className="dr-pill__dot" aria-hidden="true" />
         {CONN_LABEL[conn]}
       </span>
-      <DevIdentityBadge identity={identity} boardId={boardId} />
+      <button
+        type="button"
+        className="dr-btn dr-btn--primary dr-btn--sm"
+        data-testid="share-button"
+        onClick={onShare}
+      >
+        <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true">
+          <path
+            d="M16 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM8 13a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM2 20c0-3 2.7-5 6-5s6 2 6 5M14 15.5c.6-.3 1.3-.5 2-.5 3.3 0 6 2 6 5"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.9"
+            strokeLinecap="round"
+          />
+        </svg>
+        Share
+      </button>
+      <UserMenu compact />
     </header>
   )
 }
 
-const homeQuery = (identity: DevIdentity) =>
-  `?user=${encodeURIComponent(identity.userId)}${identity.role === 'viewer' ? '&role=viewer' : ''}`
-
-/** Reflects what the server granted (the editor turns read-only when the session is), not the URL. */
-function ReadonlyPill({ editor }: { editor: Editor | null }) {
-  const readonly = useValue('dr-readonly', () => editor?.getIsReadonly() ?? false, [editor])
-  if (!readonly) return null
+function BoardTitle({
+  title,
+  canRename,
+  onRename,
+}: {
+  title: string
+  canRename: boolean
+  onRename(title: string): void
+}) {
+  const [editing, setEditing] = useState(false)
+  if (!canRename) {
+    return (
+      <h1 className="dr-topbar__title" data-testid="board-title" title={title}>
+        {title}
+      </h1>
+    )
+  }
+  if (editing) {
+    return (
+      <RenameInput
+        initial={title}
+        label="Board title"
+        testId="board-title-input"
+        className="dr-input dr-topbar__title-input"
+        onSubmit={(next) => {
+          setEditing(false)
+          onRename(next)
+        }}
+        onCancel={() => setEditing(false)}
+      />
+    )
+  }
   return (
-    <span
-      className="dr-pill"
-      data-testid="readonly-pill"
-      title="You can look around but not change this board"
-    >
-      View only
-    </span>
+    <h1 className="dr-topbar__h1">
+      <button
+        type="button"
+        className="dr-topbar__title dr-topbar__title--editable"
+        data-testid="board-title"
+        title="Rename board"
+        aria-label={`${title}, rename board`}
+        onClick={() => setEditing(true)}
+      >
+        {title}
+      </button>
+    </h1>
   )
 }
 
@@ -155,36 +217,5 @@ function PresenceList({ editor, selfUserId }: { editor: Editor | null; selfUserI
         </li>
       )}
     </ul>
-  )
-}
-
-function DevIdentityBadge({ identity, boardId }: { identity: DevIdentity; boardId: string }) {
-  const [open, setOpen] = useState(false)
-  return (
-    <div className="dr-devbadge-wrap">
-      <button
-        type="button"
-        className="dr-devbadge"
-        data-testid="dev-identity-badge"
-        aria-expanded={open}
-        title="Development identity (no sign-in yet). Click to switch."
-        onClick={() => setOpen((o) => !o)}
-      >
-        <span className="dr-devbadge__tag">DEV</span>
-        <span>{identity.userId}</span>
-        {identity.role === 'viewer' && <span className="dr-devbadge__role">viewer</span>}
-      </button>
-      {open && (
-        <div className="dr-devbadge__menu" role="dialog" aria-label="Dev identity">
-          <p>
-            You are using a development identity. Anyone can pick any name; real sign-in arrives in milestone
-            1.
-          </p>
-          <button type="button" className="dr-btn" onClick={() => navigate(boardPath(boardId))}>
-            Switch identity
-          </button>
-        </div>
-      )}
-    </div>
   )
 }

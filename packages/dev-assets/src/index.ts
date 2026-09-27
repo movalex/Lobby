@@ -1,5 +1,5 @@
 // Milestone-0 local-disk stand-in for private object storage (R2) + asset tables (Postgres).
-// Shared by apps/sync (accepts uploads, serves files) and apps/worker (derivatives). Node only.
+// Shared by apps/api (accepts uploads, serves files with board authorization) and apps/worker (derivatives). Node only.
 //
 // Layout under DRAFTROOM_DATA_DIR:
 //   rooms/board-<id>.sqlite                        canvas (owned by apps/sync; never touched here)
@@ -136,7 +136,7 @@ export function readMeta(l: DataLayout, assetId: string, versionId: string): Ass
 }
 
 /**
- * Writers: apps/sync creates meta.json once at upload (status 'queued'); after that only the worker
+ * Writers: apps/api creates meta.json once at upload (status 'queued'); after that only the worker
  * that holds the job's processing claim updates it. That single-writer rule is what makes plain
  * read-modify-write safe here without locks.
  */

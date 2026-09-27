@@ -1,6 +1,6 @@
 import { createContext, useContext } from 'react'
 import type { AssetMetaStore } from '../assets/meta-store.ts'
-import type { Role } from '../lib/identity.ts'
+import type { BoardRole } from '../lib/permissions.ts'
 
 export type NoticeTone = 'info' | 'error'
 export interface NoticeInput {
@@ -16,7 +16,8 @@ export interface NoticeInput {
 export interface BoardContextValue {
   boardId: string
   userId: string
-  role: Role
+  /** The caller's role from the latest sync ticket (UI hints only; the servers enforce). */
+  role: BoardRole
   metaStore: AssetMetaStore
   notify(n: NoticeInput): void
   dismiss(key: string): void

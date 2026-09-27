@@ -64,21 +64,15 @@ export async function resolveImageOrVideoUrl(
 
 export interface AssetStoreOptions {
   boardId: string
-  devUser: string
   metaStore: AssetMetaStore
   /** Called in the uploading tab only, once the server has accepted the bytes. */
   onUploaded?: (assetId: TLAssetId, meta: AssetVersionMeta) => void
 }
 
-export function createAssetStore({
-  boardId,
-  devUser,
-  metaStore,
-  onUploaded,
-}: AssetStoreOptions): TLAssetStore {
+export function createAssetStore({ boardId, metaStore, onUploaded }: AssetStoreOptions): TLAssetStore {
   return {
     async upload(asset, file, abortSignal) {
-      const meta = await uploadFile({ boardId, devUser, file, signal: abortSignal })
+      const meta = await uploadFile({ boardId, file, signal: abortSignal })
       onUploaded?.(asset.id, meta)
       // Only stable ids go into the synced record; URLs are derived per render in resolve().
       return {

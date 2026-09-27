@@ -1,14 +1,16 @@
 import react from '@vitejs/plugin-react'
 import { defineConfig, type ProxyOptions } from 'vite'
 
-// The browser talks to ONE origin; Vite proxies sync + file routes to apps/sync. Same-origin keeps
-// cookies/CSRF simple once real sign-in lands (milestone 1). 127.0.0.1, not localhost: on Windows
-// `localhost` may resolve to ::1 while the sync server binds IPv4.
+// The browser talks to ONE origin; Vite proxies the API (sessions, boards, file routes) to apps/api
+// and the canvas WebSocket to apps/sync. Same-origin keeps the session cookie first-party and lets the
+// API's Origin check (CSRF) compare against a single PUBLIC_ORIGIN. 127.0.0.1, not localhost: on
+// Windows `localhost` may resolve to ::1 while the servers bind IPv4.
+const apiOrigin = process.env.DRAFTROOM_API_ORIGIN ?? 'http://127.0.0.1:5859'
 const syncOrigin = process.env.DRAFTROOM_SYNC_ORIGIN ?? 'http://127.0.0.1:5858'
 const proxy: Record<string, ProxyOptions> = {
+  '/api': { target: apiOrigin },
+  '/files': { target: apiOrigin },
   '/connect': { target: syncOrigin, ws: true },
-  '/files': { target: syncOrigin },
-  '/dev-api': { target: syncOrigin },
 }
 
 export default defineConfig({

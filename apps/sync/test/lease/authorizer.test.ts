@@ -12,7 +12,7 @@ type Args = Parameters<ShapeAuthorizer>[0]
 const session = (userId: string, n = 1, isReadonly = false): Args['session'] => ({
   sessionId: `${userId}:tab${n}`,
   isReadonly,
-  meta: { userId },
+  meta: { userId, role: isReadonly ? 'viewer' : 'editor', name: userId },
 })
 const update = (s: Args['session'], prev: TLShape, next: TLShape): Args => ({
   session: s,

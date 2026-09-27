@@ -1,18 +1,24 @@
-import { mkdirSync } from 'node:fs'
+import { existsSync, mkdirSync, rmSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
-import { NodeSqliteWrapper, SQLiteSyncStorage, TLSocketRoom } from '@tldraw/sync-core'
+import { NodeSqliteWrapper, type RoomSnapshot, SQLiteSyncStorage, TLSocketRoom } from '@tldraw/sync-core'
 
 import type { TLRecord, TLSchema } from '@tldraw/tlschema'
 import { createTextLease, type TextLease } from './lease.ts'
+import type { BoardRole } from './permissions.ts'
 
+/** Per-session data taken from the verified ticket (docs/M1-CONTRACTS.md §6). */
 export interface SessionMeta {
   userId: string
+  role: BoardRole
+  name: string
 }
+
+export type Room = TLSocketRoom<TLRecord, SessionMeta>
 
 interface RoomEntry {
   roomId: string
-  room: TLSocketRoom<TLRecord, SessionMeta>
+  room: Room
   db: DatabaseSync
   storage: SQLiteSyncStorage<TLRecord>
   lease: TextLease
@@ -39,6 +45,13 @@ export interface RegistryOpts {
   textLeaseMs?: number
   synchronous?: 'FULL' | 'NORMAL'
   log?: (...a: unknown[]) => void
+  /** After a session has left a room (any reason). */
+  onSessionRemoved?: (boardId: string, sessionId: string, meta: SessionMeta) => void
+}
+
+export interface LiveSession {
+  sessionId: string
+  meta: SessionMeta
 }
 
 export class RoomRegistry {
@@ -49,31 +62,109 @@ export class RoomRegistry {
     mkdirSync(opts.dataDir, { recursive: true })
   }
 
-  /** Synchronous on purpose: no await between lookup and insert, so creation is race-free. */
-  getOrCreate(boardId: string): TLSocketRoom<TLRecord, SessionMeta> {
-    const existing = this.rooms.get(boardId)
-    if (existing && !existing.room.isClosed()) {
+  /**
+   * The room a socket is about to join. Synchronous on purpose: no await between lookup and insert,
+   * so creation is race-free. Cancels a pending idle eviction, so the caller must attach a session
+   * right away (in the same tick).
+   */
+  getOrCreate(boardId: string): Room {
+    const existing = this.live(boardId)
+    if (existing) {
       if (existing.evictTimer) {
         clearTimeout(existing.evictTimer)
         existing.evictTimer = null
       }
       return existing.room
     }
-    const db = new DatabaseSync(boardDbPath(this.opts.dataDir, boardId))
+    const opened = this.open(boardId)
+    if (opened === 'exists') throw new Error('unreachable: open() without a seed never refuses')
+    return opened.room
+  }
+
+  /**
+   * Initializes a board that has never been opened from `snapshot` (already validated and migrated
+   * by the caller). Refuses ('exists') when the room is open or the database is initialized:
+   * SQLiteSyncStorage({ snapshot }) on an initialized database would WIPE it. The check and the
+   * write are one synchronous step inside BEGIN IMMEDIATE, and every other opener of board
+   * databases in this process goes through this registry, so a concurrent connect either
+   * initialized the board first (-> 'exists') or opens the seeded room afterwards.
+   */
+  seed(boardId: string, snapshot: RoomSnapshot): 'created' | 'exists' {
+    if (this.live(boardId)) return 'exists'
+    return this.open(boardId, snapshot) === 'exists' ? 'exists' : 'created'
+  }
+
+  /**
+   * The board's current stored snapshot, opening its room if the board has storage but is not open.
+   * null when the board has no database yet (nothing is created just to answer a read).
+   */
+  snapshot(boardId: string): RoomSnapshot | null {
+    let entry = this.live(boardId)
+    if (!entry) {
+      if (!existsSync(boardDbPath(this.opts.dataDir, boardId))) return null
+      const opened = this.open(boardId)
+      if (opened === 'exists') throw new Error('unreachable: open() without a seed never refuses')
+      entry = opened
+    }
+    return entry.storage.getSnapshot()
+  }
+
+  /** The open room of a board, if any (never opens one). */
+  roomIfOpen(boardId: string): Room | null {
+    return this.live(boardId)?.room ?? null
+  }
+
+  /** Board ids with an open room. */
+  openBoards(): string[] {
+    return [...this.rooms.keys()].filter((id) => this.live(id))
+  }
+
+  /** Sessions currently in a board's room (none when the room is not open). */
+  sessionsOf(boardId: string): LiveSession[] {
+    const room = this.live(boardId)?.room
+    if (!room) return []
+    return room.getSessions().map((s) => ({ sessionId: s.sessionId, meta: s.meta }))
+  }
+
+  has(boardId: string): boolean {
+    return this.rooms.has(boardId)
+  }
+
+  private live(boardId: string): RoomEntry | null {
+    const e = this.rooms.get(boardId)
+    return e && !e.room.isClosed() ? e : null
+  }
+
+  private open(boardId: string, seed?: RoomSnapshot): RoomEntry | 'exists' {
+    const path = boardDbPath(this.opts.dataDir, boardId)
+    // A seed that fails leaves the board as it found it: no data, and no file it created itself.
+    let removeOnFailure = seed !== undefined && !existsSync(path)
+    const db = new DatabaseSync(path)
     const entry = { roomId: boardId, db, evictTimer: null } as RoomEntry
     try {
       db.exec('PRAGMA journal_mode = WAL') // outside any transaction; persistent in the file
       db.exec(`PRAGMA synchronous = ${this.opts.synchronous ?? 'FULL'}`)
       db.exec('PRAGMA busy_timeout = 5000')
       const sql = new NodeSqliteWrapper(db)
-      db.exec('BEGIN IMMEDIATE') // first-time DDL + seed atomic; the ctor never calls sql.transaction()
+      // First-time DDL + initial records atomic (the storage ctor never calls sql.transaction()).
+      // IMMEDIATE takes the write lock before the initialized check, so the check stays true.
+      db.exec('BEGIN IMMEDIATE')
+      let refuse = false
       try {
-        entry.storage = new SQLiteSyncStorage<TLRecord>({ sql }) // NEVER pass `snapshot` here: it wipes the DB
-        db.exec('COMMIT')
+        refuse = seed !== undefined && SQLiteSyncStorage.hasBeenInitialized(sql)
+        // NEVER pass `snapshot` to an initialized database: the constructor deletes every record first.
+        if (!refuse) entry.storage = new SQLiteSyncStorage<TLRecord>({ sql, snapshot: seed })
+        db.exec(refuse ? 'ROLLBACK' : 'COMMIT')
       } catch (e) {
-        db.exec('ROLLBACK')
+        if (db.isTransaction) db.exec('ROLLBACK')
         throw e
       }
+      if (refuse) {
+        db.close()
+        return 'exists'
+      }
+      // Committed: from here a failure must also remove the seeded data (the board had none before).
+      removeOnFailure ||= seed !== undefined
       // One lease map per room; it lives and dies with this entry.
       entry.lease = createTextLease({
         leaseMs: this.opts.textLeaseMs ?? 5_000,
@@ -90,30 +181,34 @@ export class RoomRegistry {
           warn: (...a: unknown[]) => this.opts.log?.('[room warn]', boardId, ...a),
           error: (...a: unknown[]) => this.opts.log?.('[room error]', boardId, ...a),
         },
-        onSessionRemoved: (room, { meta, numSessionsRemaining }) => {
+        onSessionRemoved: (room, { meta, numSessionsRemaining, sessionId }) => {
           // The removed session is already gone from getSessions(); the user's other tabs keep the lease.
           if (!room.getSessions().some((s) => s.meta.userId === meta.userId))
             entry.lease.releaseUser(meta.userId)
           // fires again ~5 s after room.close() for leftover sessions: ignore those
           if (room.isClosed() || this.rooms.get(boardId) !== entry) return
-          if (numSessionsRemaining > 0) return
-          if (entry.evictTimer) clearTimeout(entry.evictTimer)
-          entry.evictTimer = setTimeout(() => this.evict(boardId, entry), this.opts.idleEvictMs ?? 30_000)
+          this.opts.onSessionRemoved?.(boardId, sessionId, meta)
+          if (numSessionsRemaining === 0) this.scheduleEvict(entry)
         },
       })
     } catch (e) {
       db.close() // e.g. 'Incompatible schema?' after a server rollback
+      if (removeOnFailure) for (const f of [path, `${path}-wal`, `${path}-shm`]) rmSync(f, { force: true })
       throw e
     }
     this.rooms.set(boardId, entry)
-    return entry.room
+    // Nobody may ever join (an internal read, a seed): close it again unless a session arrives.
+    this.scheduleEvict(entry)
+    return entry
   }
 
-  has(boardId: string): boolean {
-    return this.rooms.has(boardId)
+  private scheduleEvict(entry: RoomEntry) {
+    if (entry.evictTimer) clearTimeout(entry.evictTimer)
+    entry.evictTimer = setTimeout(() => this.evict(entry.roomId, entry), this.opts.idleEvictMs ?? 30_000)
   }
 
   private evict(boardId: string, entry: RoomEntry) {
+    entry.evictTimer = null
     if (this.rooms.get(boardId) !== entry || entry.room.getNumActiveSessions() > 0) return
     this.closeEntry(entry)
   }

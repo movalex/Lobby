@@ -13,30 +13,31 @@ export class UploadError extends Error {
 
 export interface UploadOptions {
   boardId: string
-  devUser: string
   file: File
   signal?: AbortSignal
   fetchImpl?: typeof fetch
 }
 
 /**
- * POSTs the raw bytes to the milestone-0 dev route (contract §5). The browser sets Content-Length
- * for a File body; the server rejects uploads without it (411) and enforces the size limits itself.
+ * POSTs the raw bytes to the board's upload route (docs/M1-CONTRACTS.md §5: needs `edit` on the board;
+ * identity comes from the session cookie, which a same-origin fetch sends). The browser sets
+ * Content-Length for a File body; the server rejects uploads without it (411) and enforces the size
+ * limits itself.
  */
 export async function uploadFile({
   boardId,
-  devUser,
   file,
   signal,
   fetchImpl = fetch,
 }: UploadOptions): Promise<AssetVersionMeta> {
-  const url = `${uploadUrl(boardId)}?devUser=${encodeURIComponent(devUser)}`
+  const url = uploadUrl(boardId)
   let res: Response
   try {
     res = await fetchImpl(url, {
       method: 'POST',
       body: file,
       signal,
+      credentials: 'same-origin',
       headers: {
         'Content-Type': file.type || 'application/octet-stream',
         'X-File-Name': encodeURIComponent(sanitizeDisplayName(file.name)),
@@ -56,6 +57,7 @@ export async function uploadFile({
 
 const FALLBACK_MESSAGES: Record<number, string> = {
   400: 'Upload rejected.',
+  401: 'Your session has ended. Sign in again to upload.',
   403: 'You cannot upload to this board.',
   411: 'Upload rejected: missing file size.',
   413: 'This file is too large.',

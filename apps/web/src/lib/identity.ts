@@ -1,60 +1,15 @@
-import { BOARD_ID_RE } from '../assets/contract.ts'
-
 /**
- * Development identities (?user=, ?role=viewer) exist only behind this explicit guard: the Vite dev
- * server, or a build made with VITE_DRAFTROOM_DEV_AUTH=1 (used by e2e). Milestone 1 replaces them
- * with real sign-in and signed sync tickets.
+ * The local-development guard: the Vite dev server, or a build made with VITE_DRAFTROOM_DEV_AUTH=1
+ * (e2e). Since milestone 1 identity always comes from the API session; this guard only decides
+ * whether debugging hooks such as `window.editor` are exposed.
  */
 export const DEV_AUTH_ENABLED: boolean =
   import.meta.env.DEV || import.meta.env.VITE_DRAFTROOM_DEV_AUTH === '1'
 
-export const DEV_USER_RE = /^[a-z0-9-]{1,32}$/
-export const DEV_USER_PRESETS = ['alice', 'bob', 'carol'] as const
+export const DEV_QUICK_PICKS = ['alice', 'bob', 'carol'] as const
+export const DEV_HANDLE_RE = /^[a-z0-9-]{1,32}$/
 
-export type Role = 'editor' | 'viewer'
-export interface DevIdentity {
-  userId: string
-  role: Role
-}
-
-export function isBoardId(value: unknown): value is string {
-  return typeof value === 'string' && BOARD_ID_RE.test(value)
-}
-
-/** `b-` + 10 lowercase base36 characters (contract §3). Lowercase keeps rooms from splitting on NTFS/APFS. */
-export function newBoardId(
-  randomBytes: (n: number) => Uint8Array = (n) => crypto.getRandomValues(new Uint8Array(n)),
-) {
-  const alphabet = '0123456789abcdefghijklmnopqrstuvwxyz'
-  let body = ''
-  while (body.length < 10) {
-    for (const byte of randomBytes(16)) {
-      if (byte >= 252) continue // 252 = 7 * 36: rejection sampling keeps the distribution uniform
-      body += alphabet[byte % 36]
-      if (body.length === 10) break
-    }
-  }
-  return `b-${body}`
-}
-
-/** Reads the dev identity from a query string. Invalid ids are treated as absent (never echoed back). */
-export function parseDevIdentity(search: string): DevIdentity | null {
-  const params = new URLSearchParams(search)
-  const userId = params.get('user')
-  if (!userId || !DEV_USER_RE.test(userId)) return null
-  return { userId, role: params.get('role') === 'viewer' ? 'viewer' : 'editor' }
-}
-
-/** Normalizes a user-typed board reference: a bare id or a pasted board link. */
-export function boardIdFromInput(input: string): string | null {
-  const trimmed = input.trim()
-  const fromPath = /(?:^|\/)b\/([^/?#]+)/.exec(trimmed)?.[1]
-  const candidate = (fromPath ?? trimmed).toLowerCase()
-  return isBoardId(candidate) ? candidate : null
-}
-
-// Readable on white and distinct from each other; presence colors come from here so every tab
-// derives the same color for the same user id without any shared state.
+// Readable on white and distinct from each other. Only a fallback: the API assigns each user a color.
 const USER_COLORS = ['#c2410c', '#1d4ed8', '#047857', '#7c3aed', '#be123c', '#0e7490', '#a16207', '#4d7c0f']
 
 export function colorForUser(userId: string): string {
@@ -64,6 +19,11 @@ export function colorForUser(userId: string): string {
     h = Math.imul(h, 16777619)
   }
   return USER_COLORS[(h >>> 0) % USER_COLORS.length] ?? '#1d4ed8'
+}
+
+/** A CSS color from the API, or the fallback when it is not a plain hex color (never injected raw). */
+export function safeColor(color: string | null | undefined, userId: string): string {
+  return typeof color === 'string' && /^#[0-9a-fA-F]{3,8}$/.test(color) ? color : colorForUser(userId)
 }
 
 export function initialsFor(name: string): string {

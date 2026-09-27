@@ -5,7 +5,7 @@ let config: SyncConfig
 try {
   config = loadConfig()
 } catch (e) {
-  // Operator error (missing dev guard, bad PORT, ...): a one-line message, no stack, non-zero exit.
+  // Operator error (missing secret, bad PORT, ...): a one-line message, no stack, non-zero exit.
   console.error(`sync: ${(e as Error).message}`)
   process.exit(1)
 }

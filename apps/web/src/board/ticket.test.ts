@@ -1,0 +1,157 @@
+import type { TicketResponse } from '@draftroom/contracts'
+import { describe, expect, it, vi } from 'vitest'
+import { ApiError } from '../api/client.ts'
+import { BOARD_ID, makeUser } from '../api/test-fixtures.ts'
+import { createTicketUri, type TicketUriOptions } from './ticket.ts'
+
+const ticket = (n: number, role: TicketResponse['role'] = 'editor'): TicketResponse => ({
+  ticket: `v1.payload${n}.sig+/=${n}`,
+  expiresAt: 1_000 + n,
+  role,
+  user: { id: makeUser('alice').id, name: 'Alice', color: '#1d4ed8' },
+})
+
+function setup(fetchTicket: TicketUriOptions['fetchTicket'], over: Partial<TicketUriOptions> = {}) {
+  const onTicket = vi.fn()
+  const onAccessLost = vi.fn()
+  const onSignedOut = vi.fn()
+  const sleeps: number[] = []
+  const t = createTicketUri({
+    boardId: BOARD_ID,
+    fetchTicket,
+    onTicket,
+    onAccessLost,
+    onSignedOut,
+    origin: { protocol: 'http:', host: '127.0.0.1:5173' },
+    sleep: async (ms) => {
+      sleeps.push(ms)
+      // A retry loop that never gives up would spin forever against this instant sleep; fail instead.
+      if (sleeps.length > 50) throw new Error('retry loop did not stop')
+    },
+    ...over,
+  })
+  return { t, onTicket, onAccessLost, onSignedOut, sleeps }
+}
+
+/** Resolves true if `p` settles within a few macrotasks (a never-settling promise stays false). */
+async function settles(p: Promise<unknown>) {
+  let done = false
+  void p.then(
+    () => {
+      done = true
+    },
+    () => {
+      done = true
+    },
+  )
+  for (let i = 0; i < 5; i++) await new Promise((r) => setTimeout(r, 0))
+  return done
+}
+
+describe('sync uri: a fresh ticket on every (re)connect', () => {
+  it('fetches a new ticket for each connection attempt and puts it (encoded) in the socket URL', async () => {
+    let n = 0
+    const fetchTicket = vi.fn(async () => ticket(++n))
+    const { t, onTicket } = setup(fetchTicket)
+    const first = await t.uri()
+    const second = await t.uri() // a reconnect
+    expect(fetchTicket).toHaveBeenCalledTimes(2)
+    expect(fetchTicket).toHaveBeenCalledWith(BOARD_ID)
+    const u1 = new URL(first)
+    expect(`${u1.protocol}//${u1.host}${u1.pathname}`).toBe(`ws://127.0.0.1:5173/connect/${BOARD_ID}`)
+    expect(u1.searchParams.get('ticket')).toBe('v1.payload1.sig+/=1')
+    expect(new URL(second).searchParams.get('ticket')).toBe('v1.payload2.sig+/=2')
+    // useSync appends these itself and throws if they are already present.
+    expect(u1.searchParams.has('sessionId')).toBe(false)
+    expect(u1.searchParams.has('storeId')).toBe(false)
+    expect(onTicket).toHaveBeenCalledTimes(2)
+  })
+
+  it('uses wss: on https pages', async () => {
+    const { t } = setup(async () => ticket(1), { origin: { protocol: 'https:', host: 'draftroom.example' } })
+    expect(await t.uri()).toMatch(/^wss:\/\/draftroom\.example\/connect\/b-3k9x0q2m7a\?ticket=/)
+  })
+
+  it('reports each ticket so the UI follows role changes between reconnects', async () => {
+    const roles: TicketResponse['role'][] = ['editor', 'viewer']
+    const { t, onTicket } = setup(async () => ticket(1, roles.shift() ?? 'viewer'))
+    await t.uri()
+    await t.uri()
+    expect(onTicket.mock.calls.map(([x]) => (x as TicketResponse).role)).toEqual(['editor', 'viewer'])
+  })
+
+  it('403/404 means access is gone: tell the page once and never settle (no reconnect loop)', async () => {
+    for (const [status, kind] of [
+      [403, 'forbidden'],
+      [404, 'not-found'],
+    ] as const) {
+      const fetchTicket = vi.fn(async () => {
+        throw new ApiError(kind, status, 'X', 'no')
+      })
+      const { t, onAccessLost, onSignedOut, sleeps } = setup(fetchTicket)
+      expect(await settles(t.uri())).toBe(false)
+      expect(onAccessLost).toHaveBeenCalledTimes(1)
+      expect(onSignedOut).not.toHaveBeenCalled()
+      expect(fetchTicket).toHaveBeenCalledTimes(1)
+      expect(sleeps).toEqual([])
+    }
+  })
+
+  it('401 means the session ended: sign out, do not retry', async () => {
+    const fetchTicket = vi.fn(async () => {
+      throw new ApiError('unauthorized', 401, 'X', 'no')
+    })
+    const { t, onSignedOut, onAccessLost } = setup(fetchTicket)
+    expect(await settles(t.uri())).toBe(false)
+    expect(onSignedOut).toHaveBeenCalledTimes(1)
+    expect(onAccessLost).not.toHaveBeenCalled()
+    expect(fetchTicket).toHaveBeenCalledTimes(1)
+  })
+
+  it('transient failures retry with capped backoff and never reject (useSync has no catch)', async () => {
+    const failures = [
+      new ApiError('network', 0, 'NETWORK', 'down'),
+      new ApiError('server', 503, 'HTTP_503', 'busy'),
+      new ApiError('rate-limited', 429, 'X', 'slow down'),
+      new TypeError('boom'),
+      new ApiError('network', 0, 'NETWORK', 'down'),
+      new ApiError('network', 0, 'NETWORK', 'down'),
+    ]
+    const fetchTicket = vi.fn(async () => {
+      const f = failures.shift()
+      if (f) throw f
+      return ticket(7)
+    })
+    const { t, sleeps, onAccessLost } = setup(fetchTicket, { backoffMs: [10, 20, 40] })
+    const url = await t.uri()
+    expect(new URL(url).searchParams.get('ticket')).toBe('v1.payload7.sig+/=7')
+    expect(fetchTicket).toHaveBeenCalledTimes(7)
+    expect(sleeps).toEqual([10, 20, 40, 40, 40, 40])
+    expect(onAccessLost).not.toHaveBeenCalled()
+  })
+
+  it('shares one attempt between overlapping uri() calls', async () => {
+    let release: (t: TicketResponse) => void = () => {}
+    const fetchTicket = vi.fn(() => new Promise<TicketResponse>((r) => (release = r)))
+    const { t } = setup(fetchTicket)
+    const a = t.uri()
+    const b = t.uri()
+    release(ticket(1))
+    expect(await a).toBe(await b)
+    expect(fetchTicket).toHaveBeenCalledTimes(1)
+  })
+
+  it('cancel() abandons the attempt in flight; the next uri() fetches a fresh ticket', async () => {
+    const pending: ((t: TicketResponse) => void)[] = []
+    const fetchTicket = vi.fn(() => new Promise<TicketResponse>((r) => pending.push(r)))
+    const { t, onTicket } = setup(fetchTicket)
+    const stale = t.uri()
+    t.cancel()
+    const fresh = t.uri()
+    pending[0]?.(ticket(1))
+    pending[1]?.(ticket(2))
+    expect(await settles(stale)).toBe(false)
+    expect(new URL(await fresh).searchParams.get('ticket')).toBe('v1.payload2.sig+/=2')
+    expect(onTicket).toHaveBeenCalledTimes(1)
+  })
+})

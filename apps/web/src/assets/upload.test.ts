@@ -13,13 +13,14 @@ describe('uploadFile', () => {
     const f = file('C:\\Users\\me\\Q3 plan (final) é.pdf', 'application/pdf')
     const out = await uploadFile({
       boardId: TEST_BOARD,
-      devUser: 'alice',
       file: f,
       fetchImpl: fetchImpl as unknown as typeof fetch,
     })
     expect(out).toEqual(meta)
     const [url, init] = fetchImpl.mock.calls[0] ?? []
-    expect(url).toBe(`/dev-api/boards/${TEST_BOARD}/assets?devUser=alice`)
+    // Identity comes from the session cookie; no user id travels in the URL any more.
+    expect(url).toBe(`/api/boards/${TEST_BOARD}/assets`)
+    expect(init?.credentials).toBe('same-origin')
     expect(init?.method).toBe('POST')
     expect(init?.body).toBe(f)
     const headers = init?.headers as Record<string, string>
@@ -34,7 +35,6 @@ describe('uploadFile', () => {
     )
     await uploadFile({
       boardId: TEST_BOARD,
-      devUser: 'bob',
       file: file('notes', ''),
       fetchImpl: fetchImpl as never,
     })
@@ -50,7 +50,6 @@ describe('uploadFile', () => {
       )
     const err = await uploadFile({
       boardId: TEST_BOARD,
-      devUser: 'a',
       file: file('x.mp4', 'video/mp4'),
       fetchImpl,
     })
@@ -61,7 +60,7 @@ describe('uploadFile', () => {
   })
 
   it('uses a generic message for unexpected bodies, network failures and malformed responses', async () => {
-    const opts = { boardId: TEST_BOARD, devUser: 'a', file: file('x.pdf', 'application/pdf') }
+    const opts = { boardId: TEST_BOARD, file: file('x.pdf', 'application/pdf') }
     const html = async () => new Response('<html>proxy error at /srv/data/secret</html>', { status: 502 })
     await expect(uploadFile({ ...opts, fetchImpl: html })).rejects.toMatchObject({
       message: 'Upload failed.',
@@ -82,7 +81,6 @@ describe('uploadFile', () => {
     }
     const err = await uploadFile({
       boardId: TEST_BOARD,
-      devUser: 'a',
       file: file('x.pdf', 'application/pdf'),
       signal: ctrl.signal,
       fetchImpl,

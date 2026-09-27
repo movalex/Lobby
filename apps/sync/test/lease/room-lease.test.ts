@@ -24,7 +24,7 @@ class Client {
     room.handleSocketConnect({
       sessionId: this.sessionId,
       isReadonly,
-      meta: { userId },
+      meta: { userId, role: isReadonly ? 'viewer' : 'editor', name: userId },
       socket: {
         send: (d: string) => {
           this.msgs.push(JSON.parse(d))

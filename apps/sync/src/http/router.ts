@@ -1,51 +1,31 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import type { DataLayout } from '@draftroom/dev-assets'
-import { handleDerivative, handleMeta, handleOriginal } from './files.ts'
+import { checkInternalSecret, INTERNAL_SECRET_HEADER } from '@draftroom/auth-tickets'
+import { handleAccessChanged, handleSeed, handleSnapshot, type InternalDeps } from './internal.ts'
 import { HttpError, notFound, sendError } from './respond.ts'
-import { handleUpload } from './upload.ts'
 
-export interface RouterDeps {
-  layout: DataLayout
-  /** /dev-api and /files exist only behind DRAFTROOM_DEV_AUTH=1 (the M1 API replaces them). */
-  devRoutes: boolean
-  log: (...a: unknown[]) => void
+export interface RouterDeps extends InternalDeps {
+  internalSecret: string
 }
 
-type Handler = (
-  req: IncomingMessage,
-  res: ServerResponse,
-  url: URL,
-  deps: RouterDeps,
-  seg: string[],
-) => unknown
+type Handler = (req: IncomingMessage, res: ServerResponse, deps: RouterDeps, seg: string[]) => unknown
 
-const READ = ['GET', 'HEAD']
-
-// Captures are raw (still percent-encoded) path segments; every one is checked against a strict id
+// Captures are raw (still percent-encoded) path segments; board ids are checked against a strict
 // pattern before use, so an encoded '/' or '..' can only ever fail that check.
-const ROUTES: Array<{ re: RegExp; methods: string[]; handle: Handler }> = [
+const INTERNAL_ROUTES: Array<{ re: RegExp; methods: string[]; handle: Handler }> = [
   {
-    re: /^\/dev-api\/boards\/([^/]+)\/assets$/,
+    re: /^\/internal\/access-changed$/,
     methods: ['POST'],
-    handle: (req, res, url, deps, [board = '']) => handleUpload(req, res, board, url, deps.layout),
+    handle: (req, res, deps) => handleAccessChanged(req, res, deps),
   },
   {
-    re: /^\/dev-api\/boards\/([^/]+)\/assets\/([^/]+)\/([^/]+)$/,
-    methods: READ,
-    handle: (_req, res, _url, deps, [board = '', ast = '', ver = '']) =>
-      handleMeta(res, deps.layout, board, ast, ver),
+    re: /^\/internal\/boards\/([^/]+)\/snapshot$/,
+    methods: ['GET'],
+    handle: (_req, res, deps, [board = '']) => handleSnapshot(res, deps, board),
   },
   {
-    re: /^\/files\/([^/]+)\/([^/]+)\/original$/,
-    methods: READ,
-    handle: (req, res, url, deps, [ast = '', ver = '']) =>
-      handleOriginal(req, res, url, deps.layout, ast, ver),
-  },
-  {
-    re: /^\/files\/([^/]+)\/([^/]+)\/d\/([^/]+)$/,
-    methods: READ,
-    handle: (req, res, url, deps, [ast = '', ver = '', drv = '']) =>
-      handleDerivative(req, res, url, deps.layout, ast, ver, drv),
+    re: /^\/internal\/boards\/([^/]+)\/seed$/,
+    methods: ['POST'],
+    handle: (req, res, deps, [board = '']) => handleSeed(req, res, deps, board),
   },
 ]
 
@@ -55,15 +35,19 @@ async function route(req: IncomingMessage, res: ServerResponse, url: URL, deps: 
     res.writeHead(200, { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' }).end('ok')
     return
   }
-  if (!deps.devRoutes) throw notFound()
-  for (const r of ROUTES) {
-    const m = r.re.exec(p)
-    if (!m) continue
-    if (!r.methods.includes(req.method ?? '')) {
-      throw new HttpError(405, 'METHOD_NOT_ALLOWED', 'Method not allowed.', { Allow: r.methods.join(', ') })
+  if (p === '/internal' || p.startsWith('/internal/')) {
+    // Before routing: without the secret, the internal surface is indistinguishable from a wall.
+    if (!checkInternalSecret(req.headers[INTERNAL_SECRET_HEADER], deps.internalSecret))
+      throw new HttpError(401, 'UNAUTHORIZED', 'Missing or invalid internal credentials.')
+    for (const r of INTERNAL_ROUTES) {
+      const m = r.re.exec(p)
+      if (!m) continue
+      if (!r.methods.includes(req.method ?? '')) {
+        throw new HttpError(405, 'METHOD_NOT_ALLOWED', 'Method not allowed.', { Allow: r.methods.join(', ') })
+      }
+      await r.handle(req, res, deps, m.slice(1))
+      return
     }
-    await r.handle(req, res, url, deps, m.slice(1))
-    return
   }
   throw notFound()
 }
@@ -76,7 +60,7 @@ export function createRequestHandler(deps: RouterDeps) {
     try {
       url = new URL(req.url ?? '/', 'http://localhost')
     } catch {}
-    // Path only: query strings carry identities (?devUser=) and, from M1, tickets.
+    // Path only: query strings can carry tickets and identities.
     const path = (url?.pathname ?? '(unparseable)').slice(0, 256)
     res.once('close', () => {
       const status = res.headersSent ? String(res.statusCode) : '-'

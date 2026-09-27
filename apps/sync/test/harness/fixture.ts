@@ -4,6 +4,7 @@ import { mkdtempSync, readdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach } from 'vitest'
+import { type FakeApi, startFakeApi } from './fake-api.ts'
 import type { ShapeRecord } from './records.ts'
 import { type SyncServer, type SyncServerOptions, spawnSyncServer } from './server-process.ts'
 import { NodeSyncClient, type SyncClientOptions } from './sync-client.ts'
@@ -28,16 +29,21 @@ export interface ProtocolHarness {
   connected(server: SyncServer, opts: Omit<SyncClientOptions, 'wsUrl'>): Promise<NodeSyncClient>
   /** What a brand-new session (empty store, lastServerClock -1) is served for the board right now. */
   freshView(server: SyncServer, boardId: string): Promise<Map<string, ShapeRecord>>
+  /** A fake API answering GET /internal/access (point DRAFTROOM_API_INTERNAL_URL at its url). */
+  fakeApi(): Promise<FakeApi>
 }
 
 export function useProtocolHarness(): ProtocolHarness {
   let servers: SyncServer[] = []
   let clients: NodeSyncClient[] = []
   let dirs: string[] = []
+  let apis: FakeApi[] = []
 
   afterEach(async () => {
     for (const c of clients) c.dispose()
     await Promise.all(servers.map((s) => s.kill('SIGKILL')))
+    await Promise.all(apis.map((a) => a.close()))
+    apis = []
     for (const d of dirs) rmSync(d, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
     servers = []
     clients = []
@@ -70,6 +76,11 @@ export function useProtocolHarness(): ProtocolHarness {
       const shapes = new Map(c.shapes().map((s) => [s.id as string, s as ShapeRecord]))
       c.dispose()
       return shapes
+    },
+    async fakeApi() {
+      const api = await startFakeApi()
+      apis.push(api)
+      return api
     },
   }
   return h
