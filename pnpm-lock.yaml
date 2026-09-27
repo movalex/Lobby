@@ -66,6 +66,9 @@ catalogs:
     '@vitejs/plugin-react':
       specifier: 6.1.1
       version: 6.1.1
+    aws4fetch:
+      specifier: 1.0.20
+      version: 1.0.20
     fastify:
       specifier: 5.12.5
       version: 5.12.5
@@ -135,6 +138,9 @@ importers:
       '@draftroom/auth-tickets':
         specifier: workspace:*
         version: link:../../packages/auth-tickets
+      '@draftroom/blob-store':
+        specifier: workspace:*
+        version: link:../../packages/blob-store
       '@draftroom/board-ops':
         specifier: workspace:*
         version: link:../../packages/board-ops
@@ -290,6 +296,12 @@ importers:
         version: 6.3.289
 
   packages/auth-tickets: {}
+
+  packages/blob-store:
+    dependencies:
+      aws4fetch:
+        specifier: 'catalog:'
+        version: 1.0.20
 
   packages/board-ops:
     dependencies:
@@ -1981,6 +1993,9 @@ packages:
 
   avvio@9.3.0:
     resolution: {integrity: sha512-g2tQ7LE7oOSqDfwEm3M+ZCMTJc7KiZCdJ4UwyZJb5ckTKyYu50OYmvv0mCFXPuYXoM4zkSt8zM9XQ9KCvxA74A==}
+
+  aws4fetch@1.0.20:
+    resolution: {integrity: sha512-/djoAN709iY65ETD6LKCtyyEI04XIBP5xVvfmNxsEP0uJB5tyaGBztSryRr4HqMStr9R06PisQE7m9zDTXKu6g==}
 
   chai@6.2.2:
     resolution: {integrity: sha512-NUPRluOfOiTKBKvWPtSD4PhFvWCqOi0BGStNWs57X9js7XGTprSmFoz5F0tWhR4WPjNeR9jXqdC7/UpSJTnlRg==}
@@ -4260,6 +4275,8 @@ snapshots:
     dependencies:
       '@fastify/error': 4.2.0
       fastq: 1.20.3
+
+  aws4fetch@1.0.20: {}
 
   chai@6.2.2: {}
 

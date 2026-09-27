@@ -11,6 +11,7 @@
   "dependencies": {
     "@clerk/backend": "catalog:",
     "@draftroom/auth-tickets": "workspace:*",
+    "@draftroom/blob-store": "workspace:*",
     "@draftroom/board-ops": "workspace:*",
     "@draftroom/canvas-schema": "workspace:*",
     "@draftroom/contracts": "workspace:*",

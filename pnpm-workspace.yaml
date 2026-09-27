@@ -43,6 +43,8 @@ catalog:
   pg: 8.23.0
   "@types/pg": 8.23.1
   zod: 4.6.5
+  # object storage (milestone 3): SigV4 signing + presigned URLs for Cloudflare R2 (S3 API); zero deps
+  aws4fetch: 1.0.20
   # sign-in provider (adapter; UNVERIFIED until keys exist)
   "@clerk/backend": 3.20.1
   "@clerk/react": 6.17.2

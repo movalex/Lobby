@@ -44,6 +44,8 @@ export default defineConfig({
             'packages/auth-tickets/src/**/*.test.ts',
             'packages/board-ops/src/**/*.test.ts',
             'packages/templates/src/**/*.test.ts',
+            'packages/blob-store/src/**/*.test.ts',
+            'packages/blob-store/test/**/*.test.ts',
           ],
           testTimeout: 60_000,
         },
