@@ -1,0 +1,342 @@
+/* present-export feature: top-bar controls, export dialog, presentation mode. Tokens from styles.css. */
+
+/* ---- top bar ----------------------------------------------------------------------------------- */
+
+.dr-pe-topbar {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.dr-pe-present {
+  gap: 5px;
+}
+/* Narrow screens: icon-only (the button keeps its aria-label). */
+@media (max-width: 760px) {
+  .dr-pe-present {
+    width: 32px;
+    padding: 0;
+  }
+  .dr-pe-present__label {
+    display: none;
+  }
+}
+
+/* ---- export dialog ------------------------------------------------------------------------------ */
+
+.dr-pe-export {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-top: 12px;
+}
+.dr-pe-section {
+  padding-top: 12px;
+  border-top: 1px solid var(--dr-line);
+}
+.dr-pe-section:first-of-type {
+  padding-top: 0;
+  border-top: 0;
+}
+.dr-pe-section__title {
+  margin: 0 0 8px;
+  font-size: 14px;
+  font-weight: 650;
+}
+.dr-pe-choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+  min-width: 0;
+  margin: 0 0 10px;
+  padding: 0;
+  border: 0;
+}
+.dr-pe-legend {
+  width: 100%;
+  margin-bottom: 6px;
+  padding: 0;
+  color: var(--dr-ink-2);
+  font-size: 12.5px;
+}
+.dr-pe-choice,
+.dr-pe-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13.5px;
+  line-height: 1.3;
+}
+.dr-pe-inline + .dr-pe-inline {
+  margin-left: 0;
+}
+.dr-pe-section > .dr-pe-inline {
+  display: flex;
+  margin: 4px 0;
+}
+.dr-pe-frame-select {
+  max-width: 210px;
+  height: 30px;
+  font-size: 13px;
+}
+.dr-pe-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 18px;
+}
+.dr-pe-row .dr-select {
+  height: 30px;
+  font-size: 13px;
+}
+.dr-pe-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+.dr-pe-hint {
+  margin: 8px 0 0;
+  color: var(--dr-ink-2);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+.dr-pe-row .dr-pe-hint {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+.dr-pe-text {
+  margin: 0 0 6px;
+  font-size: 13.5px;
+  line-height: 1.45;
+}
+.dr-pe-note {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: #f1efe8;
+  font-size: 13px;
+  line-height: 1.45;
+}
+.dr-pe-note--warn {
+  margin-top: 8px;
+  background: var(--dr-warn-bg);
+  color: var(--dr-warn);
+}
+.dr-pe-progress {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+.dr-pe-progress progress {
+  flex: 1;
+  height: 8px;
+  accent-color: var(--dr-navy);
+}
+.dr-pe-status {
+  min-height: 1.4em;
+  margin: 0;
+  color: var(--dr-live);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.dr-pe-status--error {
+  color: var(--dr-danger);
+}
+
+/* ---- presenting: hide the board's chrome ----------------------------------------------------------
+   html[data-dr-presenting] is set by present-session.ts for the whole presentation. Other features may
+   use it to hide their own canvas overlays. */
+
+html[data-dr-presenting] .dr-topbar,
+html[data-dr-presenting] .dr-dock,
+html[data-dr-presenting] .dr-banner,
+html[data-dr-presenting] .dr-notices {
+  display: none;
+}
+/* In-window fallback (no Fullscreen API, or it was refused): the editor covers the window. */
+html[data-dr-presenting] .dr-board__editor {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+}
+/* tldraw chrome: the UI layer (toolbar, menus, style panel, minimap), the overlay canvas (selection,
+   collaborators' brushes, selections and off-screen hints), in-front widgets and frame titles. */
+html[data-dr-presenting] .tl-container .tlui-layout,
+html[data-dr-presenting] .tl-container .tl-canvas-overlays,
+html[data-dr-presenting] .tl-container .tl-canvas__in-front,
+html[data-dr-presenting] .tl-container .tl-collaborators,
+html[data-dr-presenting] .tl-container .tl-frame-heading {
+  display: none;
+}
+html[data-dr-presenting] .tl-container {
+  outline: none;
+}
+/* tldraw's license watermark (dev / watermarked licences) must stay visible, unobscured and clickable
+   (docs/research/license.md): its z-index is this variable, lifted above the presentation surround. */
+html[data-dr-presenting] .tl-container {
+  --tl-layer-watermark: 10001;
+}
+
+/* ---- presentation overlay ------------------------------------------------------------------------ */
+
+.dr-present {
+  --dr-present-surround: #0e1116;
+  --dr-present-chrome: rgb(20 24 31 / 90%);
+  --dr-present-ink: #f5f6f8;
+  position: absolute;
+  inset: 0;
+  z-index: 10000;
+  overflow: hidden;
+  outline: none;
+  font-family: var(--dr-font);
+}
+.dr-present__mask {
+  position: absolute;
+  top: 0;
+  left: 0;
+  box-shadow: 0 0 0 200vmax var(--dr-present-surround);
+  pointer-events: none;
+}
+.dr-present__shield {
+  position: absolute;
+  inset: 0;
+  touch-action: none;
+}
+.dr-present[data-idle="true"] .dr-present__shield {
+  cursor: none;
+}
+.dr-present__bar {
+  position: absolute;
+  bottom: 20px;
+  left: 50%;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  max-width: calc(100% - 32px);
+  padding: 6px 8px;
+  border-radius: 12px;
+  background: var(--dr-present-chrome);
+  color: var(--dr-present-ink);
+  box-shadow: 0 8px 30px rgb(0 0 0 / 35%);
+  font-size: 13px;
+  font-weight: 500;
+  transform: translateX(-50%);
+  transition: opacity 200ms ease;
+}
+.dr-present[data-idle="true"] .dr-present__bar:not(:focus-within) {
+  opacity: 0;
+  pointer-events: none;
+}
+.dr-present__btn {
+  display: inline-grid;
+  place-items: center;
+  min-width: 34px;
+  height: 34px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.dr-present__btn:hover {
+  background: rgb(255 255 255 / 12%);
+}
+.dr-present__btn[aria-disabled="true"] {
+  opacity: 0.4;
+  cursor: default;
+}
+.dr-present__btn:focus-visible,
+.dr-present__grid button:focus-visible {
+  outline: 2px solid #8ab4ff;
+  outline-offset: 1px;
+}
+.dr-present__counter {
+  min-width: 56px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.dr-present__title {
+  max-width: 32ch;
+  padding: 0 8px;
+  overflow: hidden;
+  color: rgb(245 246 248 / 78%);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dr-present__grid {
+  position: absolute;
+  bottom: 76px;
+  left: 50%;
+  width: min(420px, calc(100% - 32px));
+  max-height: min(60vh, 520px);
+  padding: 6px;
+  overflow: auto;
+  border-radius: 12px;
+  background: rgb(20 24 31 / 95%);
+  color: var(--dr-present-ink);
+  box-shadow: 0 8px 30px rgb(0 0 0 / 35%);
+  transform: translateX(-50%);
+}
+.dr-present__grid ol {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.dr-present__grid button {
+  display: flex;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  font: 500 13.5px var(--dr-font);
+  text-align: left;
+  cursor: pointer;
+}
+.dr-present__grid button:hover {
+  background: rgb(255 255 255 / 12%);
+}
+.dr-present__grid button[aria-current="true"] {
+  background: rgb(138 180 255 / 24%);
+}
+.dr-present__grid-num {
+  min-width: 2ch;
+  color: rgb(245 246 248 / 65%);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.dr-present__grid-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dr-present__empty {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 14px;
+  padding: 16px;
+  color: var(--dr-present-ink);
+  font-size: 16px;
+  text-align: center;
+}
+
+@media (max-width: 560px) {
+  .dr-present__title {
+    display: none;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .dr-present__bar {
+    transition: none;
+  }
+}

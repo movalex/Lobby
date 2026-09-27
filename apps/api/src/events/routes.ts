@@ -13,6 +13,13 @@ const HEARTBEAT_MS = 15_000
 const ACCESS_RECHECK_MS = 30_000
 
 export function registerEventRoutes(app: FastifyInstance, ctx: FeatureContext) {
+  // Open streams never finish on their own, so app.close() (SIGTERM on deploy) would wait for its
+  // force-exit timeout while any client is connected. End them first; clients reconnect on their own.
+  const open = new Set<() => void>()
+  app.addHook('preClose', async () => {
+    for (const end of [...open]) end()
+  })
+
   app.get('/api/boards/:bid/events', async (req, reply) => {
     const { bid } = req.params as Params
     const user = await ctx.requireUser(req)
@@ -59,10 +66,16 @@ export function registerEventRoutes(app: FastifyInstance, ctx: FeatureContext) {
     const cleanup = () => {
       if (closed) return
       closed = true
+      open.delete(end)
       clearInterval(heartbeat)
       clearInterval(recheck)
       unsubscribe()
     }
+    const end = () => {
+      cleanup()
+      res.end()
+    }
+    open.add(end)
     req.raw.on('close', cleanup)
     res.on('close', cleanup)
     res.on('error', cleanup)

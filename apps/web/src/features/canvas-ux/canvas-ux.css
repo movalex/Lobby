@@ -1,0 +1,443 @@
+/* canvas-ux feature styles (docs/FEATURES-M2-CONTRACTS.md). Tokens from styles.css (--dr-*), tldraw's
+   theme variables (--tl-*) for things drawn over the canvas so they follow tldraw's light/dark mode. */
+
+/* ---- toolbar: our JSX icon inside tldraw's tool button ------------------------------------------ */
+.dr-tool-icon {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  color: currentColor;
+}
+
+/* ---- note palette in the style panel (COL-06) --------------------------------------------------- */
+.dr-note-palette {
+  margin: 0;
+  padding: 4px 6px 6px;
+  border: 0;
+  min-width: 0;
+}
+.dr-note-palette__legend {
+  padding: 2px 2px 6px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--tl-color-text-1, #1b2330);
+}
+.dr-note-palette__grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 5px;
+}
+.dr-note-palette__swatch {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 30px;
+  padding: 0;
+  border: 1px solid rgb(0 0 0 / 14%);
+  border-radius: 6px;
+  font: 600 11px / 1 var(--dr-font);
+  cursor: pointer;
+  box-shadow: 0 1px 1px rgb(0 0 0 / 8%);
+}
+.dr-note-palette__swatch:hover {
+  transform: translateY(-1px);
+}
+.dr-note-palette__swatch[aria-pressed="true"] {
+  outline: 2px solid var(--tl-color-selected, var(--dr-focus));
+  outline-offset: 2px;
+}
+.dr-note-palette__swatch:focus-visible {
+  outline: 2px solid var(--dr-focus);
+  outline-offset: 2px;
+}
+
+/* ---- dock panels -------------------------------------------------------------------------------- */
+.dr-cux-muted {
+  margin: 0;
+  color: var(--dr-ink-2);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+.dr-cux-hint {
+  margin-top: 10px;
+}
+.dr-cux-empty {
+  display: grid;
+  gap: 8px;
+  font-size: 13.5px;
+}
+.dr-cux-empty p {
+  margin: 0;
+}
+.dr-cux-empty kbd,
+.dr-cux-muted kbd {
+  padding: 0 4px;
+  border: 1px solid var(--dr-line-strong);
+  border-radius: 4px;
+  background: var(--dr-paper);
+  font: 11px var(--dr-mono);
+}
+.dr-cux-field {
+  display: block;
+  margin-bottom: 10px;
+}
+.dr-cux-chips {
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+.dr-cux-chip {
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--dr-line-strong);
+  border-radius: 999px;
+  background: var(--dr-surface);
+  color: var(--dr-ink-2);
+  font: 500 12.5px / 1 var(--dr-font);
+  cursor: pointer;
+}
+.dr-cux-chip:hover {
+  color: var(--dr-ink);
+  background: var(--dr-paper);
+}
+.dr-cux-chip[aria-pressed="true"] {
+  border-color: var(--dr-navy);
+  background: var(--dr-navy);
+  color: #fff;
+}
+.dr-cux-chip:focus-visible,
+.dr-cux-result:focus-visible,
+.dr-cux-tpl:focus-visible,
+.dr-cux-frame__name:focus-visible,
+.dr-cux-frame__child:focus-visible,
+.dr-cux-selbar__btn:focus-visible {
+  outline: 2px solid var(--dr-focus);
+  outline-offset: 1px;
+}
+
+/* search results */
+.dr-cux-search [role="status"] {
+  margin-bottom: 8px;
+}
+.dr-cux-results {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.dr-cux-result {
+  display: grid;
+  gap: 3px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--dr-ink);
+  font: 13px / 1.4 var(--dr-font);
+  text-align: left;
+  cursor: pointer;
+}
+.dr-cux-result:hover {
+  background: var(--dr-paper);
+}
+.dr-cux-result[aria-current="true"] {
+  border-color: var(--dr-amber);
+  background: #fdf3e2;
+}
+.dr-cux-result__type {
+  color: var(--dr-ink-2);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+.dr-cux-result__snippet {
+  overflow-wrap: anywhere;
+}
+.dr-cux-result mark {
+  padding: 0 1px;
+  border-radius: 3px;
+  background: #fbe3a6;
+  color: inherit;
+}
+
+/* frame outline */
+.dr-cux-frames__bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.dr-cux-frames__list {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.dr-cux-frame {
+  position: relative;
+  border-radius: 8px;
+}
+.dr-cux-frame[data-drop="before"]::before,
+.dr-cux-frame[data-drop="after"]::after {
+  content: "";
+  position: absolute;
+  left: 6px;
+  right: 6px;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--dr-focus);
+}
+.dr-cux-frame[data-drop="before"]::before {
+  top: -2px;
+}
+.dr-cux-frame[data-drop="after"]::after {
+  bottom: -2px;
+}
+.dr-cux-frame__main {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 34px;
+  padding: 0 2px 0 4px;
+  border-radius: 8px;
+}
+.dr-cux-frame__main:hover {
+  background: var(--dr-paper);
+}
+.dr-cux-frame[data-selected="true"] > .dr-cux-frame__main {
+  background: #eef2f8;
+}
+.dr-cux-frame__handle {
+  display: grid;
+  place-items: center;
+  width: 16px;
+  color: var(--dr-line-strong);
+  cursor: grab;
+}
+.dr-cux-frame__num {
+  min-width: 18px;
+  color: var(--dr-ink-2);
+  font: 600 11.5px var(--dr-mono);
+  text-align: right;
+}
+.dr-cux-frame__name,
+.dr-cux-frame__child {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  padding: 6px 4px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--dr-ink);
+  font: 500 13px / 1.2 var(--dr-font);
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.dr-cux-frame[data-skipped="true"] .dr-cux-frame__name {
+  color: var(--dr-ink-2);
+  text-decoration: line-through;
+  text-decoration-color: var(--dr-line-strong);
+}
+.dr-cux-frame__actions {
+  display: flex;
+  gap: 0;
+  opacity: 0.35;
+}
+.dr-cux-frame__main:hover .dr-cux-frame__actions,
+.dr-cux-frame__main:focus-within .dr-cux-frame__actions {
+  opacity: 1;
+}
+.dr-cux-frame__actions [aria-pressed="true"] {
+  color: var(--dr-danger);
+  opacity: 1;
+}
+.dr-cux-frame__children {
+  margin: 0 0 4px 40px;
+  padding: 0;
+  list-style: none;
+}
+.dr-cux-frame__child {
+  width: 100%;
+  font-weight: 400;
+  font-size: 12.5px;
+  color: var(--dr-ink-2);
+}
+
+/* template picker */
+.dr-cux-tpl__list {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.dr-cux-tpl {
+  display: grid;
+  gap: 4px;
+  width: 100%;
+  padding: 8px;
+  border: 1px solid var(--dr-line);
+  border-radius: var(--dr-radius);
+  background: var(--dr-surface);
+  color: var(--dr-ink);
+  font: 13px / 1.4 var(--dr-font);
+  text-align: left;
+  cursor: pointer;
+}
+.dr-cux-tpl:hover:not(:disabled) {
+  border-color: var(--dr-navy);
+  box-shadow: var(--dr-shadow);
+}
+.dr-cux-tpl:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.dr-cux-tpl__preview {
+  width: 100%;
+  height: 96px;
+  border-radius: 6px;
+  background: var(--dr-paper);
+}
+.dr-cux-tpl__frame {
+  fill: #fff;
+  stroke: var(--dr-line-strong);
+  stroke-width: 10;
+}
+.dr-cux-tpl__box {
+  fill: #eceae4;
+  stroke: var(--dr-line-strong);
+  stroke-width: 6;
+  stroke-dasharray: 24 16;
+}
+.dr-cux-tpl__text {
+  fill: var(--dr-ink-2);
+  opacity: 0.55;
+}
+.dr-cux-tpl__name {
+  font-weight: 650;
+  font-size: 14px;
+}
+.dr-cux-tpl__desc {
+  color: var(--dr-ink-2);
+}
+.dr-cux-tpl__sections {
+  color: var(--dr-ink-2);
+  font-size: 11.5px;
+}
+
+/* ---- canvas overlays ---------------------------------------------------------------------------- */
+.dr-cux-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 240; /* above tldraw's canvas layers, below its UI panels (300) */
+  overflow: hidden;
+  pointer-events: none;
+}
+.dr-cux-overlay > * {
+  pointer-events: auto;
+}
+.dr-cux-overlay > .dr-cux-search-dim {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.dr-cux-search-dim__veil {
+  fill: var(--tl-color-background, #f9fafb);
+  opacity: 0.72;
+}
+.dr-cux-search-dim__ring {
+  fill: none;
+  stroke: var(--dr-amber);
+  stroke-width: 2;
+}
+.dr-cux-search-dim__ring--active {
+  stroke: var(--dr-focus);
+  stroke-width: 3;
+}
+
+.dr-cux-paste {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  display: grid;
+  gap: 8px;
+  width: max-content;
+  max-width: 320px;
+  padding: 12px 12px 10px;
+  border: 1px solid var(--dr-line);
+  border-radius: var(--dr-radius);
+  background: var(--dr-surface);
+  color: var(--dr-ink);
+  box-shadow: 0 8px 28px rgb(27 35 48 / 18%);
+  font: 13.5px / 1.4 var(--dr-font);
+}
+.dr-cux-paste__title {
+  margin: 0;
+  font-weight: 600;
+}
+.dr-cux-paste__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.dr-cux-paste__actions .dr-iconbtn {
+  margin-left: auto;
+  font-size: 18px;
+}
+
+.dr-cux-selbar {
+  position: absolute;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--dr-line);
+  border-radius: 10px;
+  background: var(--dr-surface);
+  box-shadow: var(--dr-shadow);
+}
+.dr-cux-selbar__btn {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--dr-ink-2);
+  cursor: pointer;
+}
+.dr-cux-selbar__btn:hover {
+  background: var(--dr-paper);
+  color: var(--dr-ink);
+}
+.dr-cux-selbar__btn[aria-pressed="true"] {
+  color: var(--dr-navy);
+  background: #e6ecf5;
+}
+.dr-cux-selbar__sep {
+  width: 1px;
+  height: 18px;
+  margin: 0 3px;
+  background: var(--dr-line);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dr-note-palette__swatch:hover {
+    transform: none;
+  }
+}

@@ -70,3 +70,48 @@ export async function handleSeed(
     )
   sendJson(res, 201, { boardId, records: prepared.snapshot.documents.length })
 }
+
+// ---- "Recently deleted" (docs/FEATURES-M2-CONTRACTS.md "history"; the API proxies these) ----------
+
+const RESTORE_LIMIT_BYTES = 256 * 1024
+/** Most ids per restore call (the API allows the same). */
+export const RESTORE_MAX_IDS = 500
+const SHAPE_ID_RE = /^shape:[\x21-\x7e]{1,200}$/
+const MAX_LIST_LIMIT = 2_000
+
+/** GET /internal/boards/:bid/deleted?limit= -> { entries, total, limit } (newest first). */
+export function handleListDeleted(
+  req: IncomingMessage,
+  res: ServerResponse,
+  deps: InternalDeps,
+  rawBoardId: string,
+) {
+  const boardId = boardIdParam(rawBoardId)
+  if (deps.isClosing()) throw unavailable()
+  const raw = new URL(req.url ?? '/', 'http://localhost').searchParams.get('limit')
+  let limit = MAX_LIST_LIMIT
+  if (raw !== null) {
+    if (!/^\d{1,5}$/.test(raw) || Number(raw) < 1) throw badRequest('limit must be a positive integer.')
+    limit = Math.min(Number(raw), MAX_LIST_LIMIT)
+  }
+  const { entries, total } = deps.registry.listDeleted(boardId, limit)
+  sendJson(res, 200, { entries, total, limit })
+}
+
+/** POST /internal/boards/:bid/deleted/restore { ids } -> { restored, skipped, bindings, reparented }. */
+export async function handleRestoreDeleted(
+  req: IncomingMessage,
+  res: ServerResponse,
+  deps: InternalDeps,
+  rawBoardId: string,
+) {
+  const boardId = boardIdParam(rawBoardId)
+  const body = (await readJson(req, RESTORE_LIMIT_BYTES)) as { ids?: unknown } | null
+  const ids = body?.ids
+  if (!Array.isArray(ids) || ids.length === 0 || ids.length > RESTORE_MAX_IDS)
+    throw badRequest(`ids must be an array of 1 to ${RESTORE_MAX_IDS} shape ids.`)
+  for (const id of ids)
+    if (typeof id !== 'string' || !SHAPE_ID_RE.test(id)) throw badRequest('ids must be shape ids.')
+  if (deps.isClosing()) throw unavailable()
+  sendJson(res, 200, deps.registry.restoreDeleted(boardId, ids as string[]))
+}

@@ -132,22 +132,82 @@ describe('shipped migrations', () => {
     expect(shipped[0]?.name).toBe('0001_core')
   })
 
-  it('apply to an empty database and are then up to date', async () => {
+  it('are the milestone-1 core plus the four pre-allocated feature migrations, in order', () => {
+    expect(loadMigrations(MIGRATIONS_DIR).map((m) => m.name)).toEqual([
+      '0001_core',
+      '0002_comments',
+      '0003_history',
+      '0004_workshops',
+      '0005_dashboard',
+    ])
+  })
+
+  it('apply to an empty database in order and are then up to date', async () => {
     const first = await migrate(db)
-    expect(first.applied[0]).toBe('0001_core')
+    expect(first.applied).toEqual([
+      '0001_core',
+      '0002_comments',
+      '0003_history',
+      '0004_workshops',
+      '0005_dashboard',
+    ])
     expect(await migrate(db)).toEqual({ applied: [] })
     expect(await tableNames()).toEqual([
+      'access_requests',
       'audit_events',
+      'board_asset_links',
       'board_members',
+      'board_snapshots',
+      'board_stars',
       'boards',
+      'comment_mentions',
+      'comment_reads',
+      'comment_threads',
+      'comments',
       'identities',
+      'invitation_redemptions',
       'invitations',
+      'notifications',
       'projects',
       'schema_migrations',
       'sessions',
       'users',
+      'vote_done',
+      'vote_sessions',
+      'votes',
+      'workshop_timers',
       'workspace_members',
       'workspaces',
     ])
+  })
+
+  it('upgrade a milestone-1 database that already holds data', async () => {
+    const shipped = loadMigrations(MIGRATIONS_DIR)
+    // What the milestone-1 build left behind: only 0001_core applied, plus a board and a pending,
+    // single-use board invitation (0005 adds CHECKs to invitations that existing rows must satisfy).
+    expect((await migrate(db, { migrations: shipped.slice(0, 1) })).applied).toEqual(['0001_core'])
+    await db.exec(`
+      INSERT INTO users (id, name, handle, color) VALUES ('usr_aaaaaaaaaaaa', 'Alice', 'alice', '#3355ff');
+      INSERT INTO workspaces (id, name, created_by) VALUES ('wsp_aaaaaaaaaaaa', 'Studio', 'usr_aaaaaaaaaaaa');
+      INSERT INTO boards (id, workspace_id, title, created_by)
+        VALUES ('b-aaaaaaaaaa', 'wsp_aaaaaaaaaaaa', 'Plan', 'usr_aaaaaaaaaaaa');
+      INSERT INTO invitations (id, token_hash, workspace_id, board_id, role, created_by, expires_at)
+        VALUES ('inv_aaaaaaaaaaaa', repeat('a', 64), 'wsp_aaaaaaaaaaaa', 'b-aaaaaaaaaa', 'editor',
+                'usr_aaaaaaaaaaaa', now() + interval '60 days');
+    `)
+    const next = await migrate(db, { migrations: shipped })
+    expect(next.applied).toEqual(['0002_comments', '0003_history', '0004_workshops', '0005_dashboard'])
+    expect(await recorded()).toEqual(shipped.map((m) => m.name))
+    const inv = await db.one<{ multi_use: boolean; use_count: number }>(
+      "SELECT multi_use, use_count FROM invitations WHERE id = 'inv_aaaaaaaaaaaa'",
+    )
+    expect(inv).toEqual({ multi_use: false, use_count: 0 })
+    // The checksum guard covers the feature migrations as well.
+    const edited = shipped.map((m) =>
+      m.version === 3 ? { ...m, checksum: checksumOf(`${m.sql}\n-- edit`) } : m,
+    )
+    await expect(migrate(db, { migrations: edited })).rejects.toThrow(
+      /0003_history changed after it was applied/,
+    )
   })
 })

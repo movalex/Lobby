@@ -1,0 +1,65 @@
+import { describe, expect, it } from 'vitest'
+import { exportFilename, FALLBACK_FILENAME, MAX_NAME_BYTES, sanitizeFilename } from './filename.ts'
+
+const bytes = (s: string) => new TextEncoder().encode(s).length
+
+describe('sanitizeFilename', () => {
+  it('keeps ordinary titles', () => {
+    expect(sanitizeFilename('Spring campaign')).toBe('Spring campaign')
+    expect(sanitizeFilename('Café crème – moodboard 😀')).toBe('Café crème – moodboard 😀')
+  })
+
+  it('turns path separators into dashes and drops characters Windows forbids', () => {
+    expect(sanitizeFilename('Q3/Q4: launch*')).toBe('Q3-Q4 launch')
+    expect(sanitizeFilename('..\\..\\etc/passwd')).toBe('etc-passwd')
+    expect(sanitizeFilename('a<b>c"d?e|f')).toBe('abcde-f')
+  })
+
+  it('strips control, zero-width and bidi-override characters', () => {
+    expect(sanitizeFilename('evil‮gnp.exe')).toBe('evilgnp.exe')
+    expect(sanitizeFilename('tab\there\nnew\u0000line​')).toBe('tab here newline')
+  })
+
+  it('removes leading dots and trailing dots/spaces, collapses whitespace', () => {
+    expect(sanitizeFilename('.hidden')).toBe('hidden')
+    expect(sanitizeFilename('  name. . ')).toBe('name')
+    expect(sanitizeFilename('a    b')).toBe('a b')
+  })
+
+  it('prefixes Windows device names', () => {
+    expect(sanitizeFilename('CON')).toBe('_CON')
+    expect(sanitizeFilename('nul.txt')).toBe('_nul.txt')
+    expect(sanitizeFilename('com1')).toBe('_com1')
+    expect(sanitizeFilename('console')).toBe('console')
+  })
+
+  it('falls back when nothing usable is left', () => {
+    expect(sanitizeFilename('')).toBe(FALLBACK_FILENAME)
+    expect(sanitizeFilename(' ... ')).toBe(FALLBACK_FILENAME)
+    expect(sanitizeFilename('***')).toBe(FALLBACK_FILENAME)
+    expect(sanitizeFilename(undefined as unknown as string)).toBe(FALLBACK_FILENAME)
+  })
+
+  it('caps the length by code points without splitting surrogate pairs', () => {
+    const long = '😀'.repeat(200)
+    const out = sanitizeFilename(long)
+    expect(Array.from(out)).toHaveLength(80)
+    expect(out.endsWith('😀')).toBe(true)
+    expect(/[\ud800-\udbff]$/.test(out)).toBe(false)
+  })
+})
+
+describe('exportFilename', () => {
+  it('joins the board title, an optional qualifier and the extension', () => {
+    expect(exportFilename('Spring campaign', 'pdf')).toBe('Spring campaign.pdf')
+    expect(exportFilename('Spring campaign', 'png', 'Mood / tone')).toBe('Spring campaign - Mood - tone.png')
+    expect(exportFilename('', 'csv')).toBe(`${FALLBACK_FILENAME}.csv`)
+    expect(exportFilename('Board', 'svg', '')).toBe('Board.svg')
+  })
+
+  it('stays under the byte limit for long multi-byte titles', () => {
+    const name = exportFilename('日本語のボード'.repeat(40), 'png', 'フレーム'.repeat(30))
+    expect(bytes(name)).toBeLessThanOrEqual(MAX_NAME_BYTES)
+    expect(name.endsWith('.png')).toBe(true)
+  })
+})

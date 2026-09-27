@@ -58,10 +58,11 @@ describe('dr-file-card schema (server-side, React-free)', () => {
     const up = draftroomSchema.migratePersistedRecord(v0, v0Schema, 'up')
     expect(up.type).toBe('success')
     if (up.type !== 'success') return
-    expect((up.value as any).props.posterDerivativeId).toBeNull()
+    expect((up.value as { props: Record<string, unknown> }).props.posterDerivativeId).toBeNull()
     expect(() => validate(up.value)).not.toThrow()
     const down = draftroomSchema.migratePersistedRecord(up.value, v0Schema, 'down')
     expect(down.type).toBe('success')
-    if (down.type === 'success') expect('posterDerivativeId' in (down.value as any).props).toBe(false)
+    if (down.type === 'success')
+      expect('posterDerivativeId' in (down.value as { props: Record<string, unknown> }).props).toBe(false)
   })
 })

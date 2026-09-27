@@ -1,8 +1,15 @@
 import type { TicketResponse } from '@draftroom/contracts'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '../api/client.ts'
 import { BOARD_ID, makeUser } from '../api/test-fixtures.ts'
-import { createTicketUri, type TicketUriOptions } from './ticket.ts'
+import { buildTimeSyncOrigin, createTicketUri, syncSocketOrigin, type TicketUriOptions } from './ticket.ts'
+
+// Every test starts from a build without a sync origin, whatever the shell running vitest has set.
+beforeEach(() => vi.stubEnv('VITE_DRAFTROOM_SYNC_ORIGIN', ''))
+afterEach(() => {
+  vi.unstubAllEnvs()
+  vi.restoreAllMocks()
+})
 
 const ticket = (n: number, role: TicketResponse['role'] = 'editor'): TicketResponse => ({
   ticket: `v1.payload${n}.sig+/=${n}`,
@@ -153,5 +160,89 @@ describe('sync uri: a fresh ticket on every (re)connect', () => {
     expect(await settles(stale)).toBe(false)
     expect(new URL(await fresh).searchParams.get('ticket')).toBe('v1.payload2.sig+/=2')
     expect(onTicket).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('sync origin: VITE_DRAFTROOM_SYNC_ORIGIN (Render static sites cannot proxy WebSockets)', () => {
+  const socketBase = (url: string) => {
+    const u = new URL(url)
+    return `${u.protocol}//${u.host}${u.pathname}`
+  }
+  it('defaults to the page origin when the build sets no sync origin', async () => {
+    const { t } = setup(async () => ticket(1))
+    expect(socketBase(await t.uri())).toBe(`ws://127.0.0.1:5173/connect/${BOARD_ID}`)
+    const https = setup(async () => ticket(1), { origin: { protocol: 'https:', host: 'app.example' } })
+    expect(socketBase(await https.t.uri())).toBe(`wss://app.example/connect/${BOARD_ID}`)
+  })
+
+  it('honors the build-time value: the socket goes to the sync origin, the ticket rides along', async () => {
+    vi.stubEnv('VITE_DRAFTROOM_SYNC_ORIGIN', 'https://draftroom-staging-sync.onrender.com')
+    const { t } = setup(async () => ticket(3), {
+      origin: { protocol: 'https:', host: 'draftroom-staging-web.onrender.com' },
+    })
+    const url = await t.uri()
+    expect(socketBase(url)).toBe(`wss://draftroom-staging-sync.onrender.com/connect/${BOARD_ID}`)
+    expect(new URL(url).searchParams.get('ticket')).toBe('v1.payload3.sig+/=3')
+    expect(new URL(url).searchParams.has('sessionId')).toBe(false)
+  })
+
+  it('maps http -> ws and https -> wss, accepts ws(s) as-is, a trailing slash and a port', () => {
+    const http = { protocol: 'http:', host: '127.0.0.1:5173' }
+    const https = { protocol: 'https:', host: 'app.example' }
+    expect(syncSocketOrigin(http, 'http://127.0.0.1:5858')).toEqual({ ok: true, base: 'ws://127.0.0.1:5858' })
+    expect(syncSocketOrigin(https, 'https://sync.example/')).toEqual({ ok: true, base: 'wss://sync.example' })
+    expect(syncSocketOrigin(https, ' wss://Sync.Example:8443 ')).toEqual({
+      ok: true,
+      base: 'wss://sync.example:8443',
+    })
+    expect(syncSocketOrigin(https, 'https://sync.example:443')).toEqual({
+      ok: true,
+      base: 'wss://sync.example',
+    })
+    expect(syncSocketOrigin(http, 'ws://sync.test:5858')).toEqual({ ok: true, base: 'ws://sync.test:5858' })
+    expect(syncSocketOrigin(http, undefined)).toEqual({ ok: true, base: 'ws://127.0.0.1:5173' })
+    expect(syncSocketOrigin(http, '  ')).toEqual({ ok: true, base: 'ws://127.0.0.1:5173' })
+  })
+
+  it('an explicit option wins over the build value; null forces the page origin', async () => {
+    vi.stubEnv('VITE_DRAFTROOM_SYNC_ORIGIN', 'https://from-build.example')
+    const explicit = setup(async () => ticket(1), { syncOrigin: 'http://127.0.0.1:5858' })
+    expect(socketBase(await explicit.t.uri())).toBe(`ws://127.0.0.1:5858/connect/${BOARD_ID}`)
+    const pinned = setup(async () => ticket(1), { syncOrigin: null })
+    expect(socketBase(await pinned.t.uri())).toBe(`ws://127.0.0.1:5173/connect/${BOARD_ID}`)
+    expect(buildTimeSyncOrigin()).toBe('https://from-build.example')
+  })
+
+  it('refuses a value that is not an origin: reports it once and falls back to the page origin', async () => {
+    for (const bad of [
+      'sync.example',
+      'ftp://sync.example',
+      'https://sync.example/connect',
+      'https://sync.example?x=1',
+      'https://sync.example#x',
+      'https://user:pw@sync.example',
+      'not a url',
+    ]) {
+      const r = syncSocketOrigin({ protocol: 'http:', host: '127.0.0.1:5173' }, bad)
+      expect(r, bad).toMatchObject({ ok: false, base: 'ws://127.0.0.1:5173' })
+    }
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    vi.stubEnv('VITE_DRAFTROOM_SYNC_ORIGIN', 'https://sync.example/base/')
+    const { t } = setup(async () => ticket(1))
+    await t.uri()
+    await t.uri()
+    expect(error).toHaveBeenCalledTimes(1)
+    expect(String(error.mock.calls[0]?.[0])).toMatch(/VITE_DRAFTROOM_SYNC_ORIGIN must be an origin only/)
+    expect(socketBase(await t.uri())).toBe(`ws://127.0.0.1:5173/connect/${BOARD_ID}`)
+  })
+
+  it('refuses an insecure socket from an https page (the browser would block it as mixed content)', () => {
+    const https = { protocol: 'https:', host: 'app.example' }
+    for (const insecure of ['http://sync.example', 'ws://sync.example'])
+      expect(syncSocketOrigin(https, insecure), insecure).toEqual({
+        ok: false,
+        base: 'wss://app.example',
+        error: 'VITE_DRAFTROOM_SYNC_ORIGIN must be https/wss when the page is served over https',
+      })
   })
 })

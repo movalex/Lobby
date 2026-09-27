@@ -135,6 +135,9 @@ importers:
       '@draftroom/auth-tickets':
         specifier: workspace:*
         version: link:../../packages/auth-tickets
+      '@draftroom/board-ops':
+        specifier: workspace:*
+        version: link:../../packages/board-ops
       '@draftroom/canvas-schema':
         specifier: workspace:*
         version: link:../../packages/canvas-schema
@@ -196,6 +199,9 @@ importers:
       '@clerk/react':
         specifier: 'catalog:'
         version: 6.17.2(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
+      '@draftroom/board-ops':
+        specifier: workspace:*
+        version: link:../../packages/board-ops
       '@draftroom/canvas-schema':
         specifier: workspace:*
         version: link:../../packages/canvas-schema
@@ -208,6 +214,9 @@ importers:
       '@draftroom/permissions':
         specifier: workspace:*
         version: link:../../packages/permissions
+      '@draftroom/templates':
+        specifier: workspace:*
+        version: link:../../packages/templates
       '@tldraw/assets':
         specifier: 'catalog:'
         version: 5.4.2

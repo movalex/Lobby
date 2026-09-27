@@ -31,10 +31,11 @@ export function visiblePanels(features: readonly BoardFeature[], ctx: FeatureCon
   return features.flatMap((f) => f.panels ?? []).filter((p) => (p.visible ? p.visible(ctx) : true))
 }
 
-/** Runs every feature's onMount once per editor/context identity. */
+/** Runs every feature's onMount once per editor + event stream (not on role/panel changes). */
 export function useFeatureMounts(features: readonly BoardFeature[], ctx: FeatureContext | null) {
   const editor = ctx?.editor
-  // biome-ignore lint/correctness/useExhaustiveDependencies: mount once per editor; ctx changes (role, panel) must not remount features
+  const events = ctx?.events
+  // Deliberately keyed on editor + stream only: ctx changes (role, panel) must not remount features.
   useEffect(() => {
     if (!ctx) return
     const cleanups: (() => void)[] = []
@@ -49,7 +50,7 @@ export function useFeatureMounts(features: readonly BoardFeature[], ctx: Feature
     return () => {
       for (const c of cleanups.reverse()) c()
     }
-  }, [features, editor])
+  }, [features, editor, events])
 }
 
 export function FeatureTopBarItems({

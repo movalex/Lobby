@@ -5,30 +5,101 @@ import {
   type BoardMenuAction,
   boardMenuItems,
   boardsQueryForSection,
+  duplicateTitle,
   emptyState,
   filterBoards,
+  filterByOwner,
   landingWorkspace,
   recentBoards,
   sectionTitle,
   sortBoards,
+  TRASH_NOTE,
   thumbStyle,
+  withStar,
+  withStarredEntry,
 } from './model.ts'
 
-const actions = (role: (typeof BOARD_ROLES)[number], status: BoardStatus) =>
-  boardMenuItems({ role, status }).map((i) => i.action)
+const actions = (
+  role: (typeof BOARD_ROLES)[number],
+  status: BoardStatus,
+  ctx = { canCreate: true, canMove: true },
+  starred = false,
+) => boardMenuItems({ role, status, starred }, ctx).map((i) => i.action)
 
-describe('board card menu (gated by the shared permission rules)', () => {
-  it('active boards: viewers/commenters open + copy; editors also rename; owners manage', () => {
-    expect(actions('viewer', 'active')).toEqual(['open', 'copy-link'])
-    expect(actions('commenter', 'active')).toEqual(['open', 'copy-link'])
-    expect(actions('editor', 'active')).toEqual(['open', 'copy-link', 'rename'])
-    expect(actions('owner', 'active')).toEqual(['open', 'copy-link', 'rename', 'archive', 'trash'])
+describe('board card menu (DSH-02, gated by the shared permission rules)', () => {
+  it('active boards: everyone opens, copies, shares, duplicates, stars; editors rename/move; owners manage', () => {
+    const viewing = ['open', 'copy-link', 'share', 'duplicate', 'star', 'details']
+    expect(actions('viewer', 'active')).toEqual(viewing)
+    expect(actions('commenter', 'active')).toEqual(viewing)
+    expect(actions('editor', 'active')).toEqual([
+      'open',
+      'copy-link',
+      'share',
+      'rename',
+      'move',
+      'duplicate',
+      'star',
+      'details',
+    ])
+    expect(actions('owner', 'active')).toEqual([
+      'open',
+      'copy-link',
+      'share',
+      'rename',
+      'move',
+      'duplicate',
+      'star',
+      'details',
+      'archive',
+      'trash',
+    ])
   })
 
-  it('archived boards are read-only: nobody renames; only owners restore or trash', () => {
-    expect(actions('editor', 'archived')).toEqual(['open', 'copy-link'])
-    expect(actions('viewer', 'archived')).toEqual(['open', 'copy-link'])
-    expect(actions('owner', 'archived')).toEqual(['open', 'copy-link', 'restore', 'trash'])
+  it('a starred board offers "Remove star" instead of "Star"', () => {
+    const items = actions('viewer', 'active', undefined, true)
+    expect(items).toContain('unstar')
+    expect(items).not.toContain('star')
+  })
+
+  it('guests (who cannot create boards or list projects) get neither duplicate nor move', () => {
+    const guest = { canCreate: false, canMove: false }
+    expect(actions('editor', 'active', guest)).toEqual([
+      'open',
+      'copy-link',
+      'share',
+      'rename',
+      'star',
+      'details',
+    ])
+  })
+
+  it('archived boards are read-only: nobody renames or moves; only owners restore or trash', () => {
+    expect(actions('editor', 'archived')).toEqual([
+      'open',
+      'copy-link',
+      'share',
+      'duplicate',
+      'star',
+      'details',
+    ])
+    expect(actions('viewer', 'archived')).toEqual([
+      'open',
+      'copy-link',
+      'share',
+      'duplicate',
+      'star',
+      'details',
+    ])
+    expect(actions('owner', 'archived')).toEqual([
+      'open',
+      'copy-link',
+      'share',
+      'duplicate',
+      'star',
+      'details',
+      'restore',
+      'trash',
+    ])
   })
 
   it('trashed boards cannot be opened; owners can only restore', () => {
@@ -40,15 +111,23 @@ describe('board card menu (gated by the shared permission rules)', () => {
     const needs: Record<BoardMenuAction, Parameters<typeof can>[1]> = {
       open: 'view',
       'copy-link': 'view',
+      share: 'view',
       rename: 'rename',
+      move: 'rename',
+      duplicate: 'view',
+      star: 'view',
+      unstar: 'view',
+      details: 'view',
       archive: 'archive',
       trash: 'trash',
       restore: 'restore',
     }
     for (const role of BOARD_ROLES) {
       for (const status of ['active', 'archived', 'trashed'] as const) {
-        for (const item of boardMenuItems({ role, status })) {
-          expect(can(role, needs[item.action], status), `${role}/${status}/${item.action}`).toBe(true)
+        for (const starred of [false, true]) {
+          for (const item of boardMenuItems({ role, status, starred })) {
+            expect(can(role, needs[item.action], status), `${role}/${status}/${item.action}`).toBe(true)
+          }
         }
       }
     }
@@ -58,6 +137,53 @@ describe('board card menu (gated by the shared permission rules)', () => {
     expect(boardMenuItems({ role: 'owner', status: 'active' }).find((i) => i.action === 'trash')?.tone).toBe(
       'danger',
     )
+  })
+})
+
+describe('owner filter, stars and duplicate names', () => {
+  const me = 'usr_meeeeeeeeeeeeeeeeeee'
+  const boards = [
+    makeBoard({ id: 'b-aaaaaaaaa1', createdBy: me }),
+    makeBoard({ id: 'b-aaaaaaaaa2', createdBy: 'usr_otherotherotherothe' }),
+  ]
+
+  it('filters by who created the board', () => {
+    expect(filterByOwner(boards, 'anyone', me)).toHaveLength(2)
+    expect(filterByOwner(boards, 'me', me).map((b) => b.id)).toEqual(['b-aaaaaaaaa1'])
+    expect(filterByOwner(boards, 'not-me', me).map((b) => b.id)).toEqual(['b-aaaaaaaaa2'])
+  })
+
+  it('applies a star change to the list and to the starred section (newest first)', () => {
+    const starredList = withStarredEntry(
+      [{ ...boards[1], starred: true }] as { id: string; starred?: boolean }[],
+      boards[0] as { id: string },
+      true,
+    )
+    expect(starredList.map((b) => b.id)).toEqual(['b-aaaaaaaaa1', 'b-aaaaaaaaa2'])
+    expect(withStarredEntry(starredList, { id: 'b-aaaaaaaaa2' }, false).map((b) => b.id)).toEqual([
+      'b-aaaaaaaaa1',
+    ])
+    expect(withStar(boards, 'b-aaaaaaaaa2', true).map((b) => (b as { starred?: boolean }).starred)).toEqual([
+      undefined,
+      true,
+    ])
+  })
+
+  it('names a duplicate "(copy)" within the 120-character title limit', () => {
+    expect(duplicateTitle('Retro')).toBe('Retro (copy)')
+    const long = duplicateTitle('x'.repeat(120))
+    expect(long.length).toBeLessThanOrEqual(120)
+    expect(long.endsWith('… (copy)')).toBe(true)
+  })
+
+  it('sorts by date created', () => {
+    const a = makeBoard({ id: 'b-aaaaaaaaa1', createdAt: '2026-09-01T00:00:00Z' })
+    const b = makeBoard({ id: 'b-aaaaaaaaa2', createdAt: '2026-09-20T00:00:00Z' })
+    expect(sortBoards([a, b], 'created').map((x) => x.id)).toEqual(['b-aaaaaaaaa2', 'b-aaaaaaaaa1'])
+  })
+
+  it('the trash says boards stay until restored (no purge yet)', () => {
+    expect(TRASH_NOTE).toMatch(/until an owner restores them/)
   })
 })
 

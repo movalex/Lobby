@@ -2,7 +2,6 @@ import { open } from 'node:fs/promises'
 import {
   type AssetVersionMeta,
   BOARD_ID_RE,
-  type DataLayout,
   derivativePath,
   isId,
   originalPath,
@@ -34,19 +33,25 @@ const FILE_SECURITY = {
 const invalidBoard = () => new HttpError(400, 'INVALID_BOARD_ID', 'Invalid board id.')
 
 /**
- * The meta of a version, only if it belongs to `boardId`. A missing asset and another board's asset
- * are the same 404, so access to one board can never be used to probe for assets elsewhere.
+ * The meta of a version, only if it belongs to `boardId` (or `boardId` holds a history link to it, see
+ * FilesDeps.authorize.linkedAsset). A missing asset and another board's asset are the same 404, so
+ * access to one board can never be used to probe for assets elsewhere.
  */
-function loadBoardMeta(
-  layout: DataLayout,
+async function loadBoardMeta(
+  deps: FilesDeps,
+  request: FastifyRequest,
   boardId: string,
   assetId: string,
   versionId: string,
-): AssetVersionMeta {
+): Promise<AssetVersionMeta> {
   if (!isId('ast', assetId) || !isId('ver', versionId)) throw notFound()
-  const meta = readMeta(layout, assetId, versionId)
-  if (!meta || meta.boardId !== boardId || meta.assetId !== assetId || meta.versionId !== versionId) {
-    throw notFound()
+  const meta = readMeta(deps.layout, assetId, versionId)
+  if (!meta || meta.assetId !== assetId || meta.versionId !== versionId) throw notFound()
+  if (meta.boardId !== boardId) {
+    const linked = deps.authorize.linkedAsset
+      ? await deps.authorize.linkedAsset(request, boardId, { assetId, versionId, ownerBoardId: meta.boardId })
+      : false
+    if (!linked) throw notFound()
   }
   return meta
 }
@@ -70,7 +75,7 @@ export async function handleMeta(
   const { bid, ast, ver } = request.params
   if (!BOARD_ID_RE.test(bid)) throw invalidBoard()
   await requireAccess(deps, request, bid, 'view')
-  return sendJson(reply, 200, loadBoardMeta(deps.layout, bid, ast, ver)) // no-store
+  return sendJson(reply, 200, await loadBoardMeta(deps, request, bid, ast, ver)) // no-store
 }
 
 export async function handleOriginal(
@@ -81,7 +86,7 @@ export async function handleOriginal(
   const board = boardParam(request)
   await requireAccess(deps, request, board, 'view')
   const { ast, ver } = request.params
-  const meta = loadBoardMeta(deps.layout, board, ast, ver)
+  const meta = await loadBoardMeta(deps, request, board, ast, ver)
   // Inline only for previewable kinds that did not fail AND whose type is on the allowlist, so a
   // worker bug or a lying upload can never make the browser render e.g. text/html from this origin.
   const inline = meta.status !== 'failed' && INLINE_MIMES[meta.kind]?.includes(meta.mimeType) === true
@@ -102,7 +107,7 @@ export async function handleDerivative(
   await requireAccess(deps, request, board, 'view')
   const { ast, ver, drv } = request.params
   if (!isId('drv', drv)) throw notFound()
-  const meta = loadBoardMeta(deps.layout, board, ast, ver)
+  const meta = await loadBoardMeta(deps, request, board, ast, ver)
   // Only derivatives the worker has published in meta: a file on disk that meta does not list
   // (a half-written retry, a stale profile) is not served.
   const d = Array.isArray(meta.derivatives) ? meta.derivatives.find((x) => x.id === drv) : undefined

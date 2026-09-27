@@ -106,7 +106,19 @@ test('dashboard: create, search, rename, archive, trash and restore boards', asy
 
     await test.step('rename from the card menu; the new title is the server’s', async () => {
       const id = ids['Launch retro'] ?? ''
-      expect(await menuActions(page, id)).toEqual(['open', 'copy-link', 'rename', 'archive', 'trash'])
+      // Milestone-2 card menu (DSH-02): share, move, duplicate, star and details join the M1 actions.
+      expect(await menuActions(page, id)).toEqual([
+        'open',
+        'copy-link',
+        'share',
+        'rename',
+        'move',
+        'duplicate',
+        'star',
+        'details',
+        'archive',
+        'trash',
+      ])
       await chooseFromMenu(page, id, 'rename')
       const input = card(page, id).getByTestId('board-card-rename')
       await input.fill('Launch retro — September')
@@ -127,7 +139,16 @@ test('dashboard: create, search, rename, archive, trash and restore boards', asy
       await expect.poll(() => serverBoard(page, wid, id)).toEqual({ title: 'Q4 roadmap', status: 'archived' })
       await page.getByTestId('nav-archived').click()
       await expect(card(page, id)).toHaveAttribute('data-status', 'archived')
-      expect(await menuActions(page, id)).toEqual(['open', 'copy-link', 'restore', 'trash'])
+      expect(await menuActions(page, id)).toEqual([
+        'open',
+        'copy-link',
+        'share',
+        'duplicate',
+        'star',
+        'details',
+        'restore',
+        'trash',
+      ])
       // Archived boards open read-only, even for their owner.
       await card(page, id).getByRole('link').click()
       await waitForBoard(page)

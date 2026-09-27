@@ -1,6 +1,13 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { checkInternalSecret, INTERNAL_SECRET_HEADER } from '@draftroom/auth-tickets'
-import { handleAccessChanged, handleSeed, handleSnapshot, type InternalDeps } from './internal.ts'
+import {
+  handleAccessChanged,
+  handleListDeleted,
+  handleRestoreDeleted,
+  handleSeed,
+  handleSnapshot,
+  type InternalDeps,
+} from './internal.ts'
 import { HttpError, notFound, sendError } from './respond.ts'
 
 export interface RouterDeps extends InternalDeps {
@@ -26,6 +33,17 @@ const INTERNAL_ROUTES: Array<{ re: RegExp; methods: string[]; handle: Handler }>
     re: /^\/internal\/boards\/([^/]+)\/seed$/,
     methods: ['POST'],
     handle: (req, res, deps, [board = '']) => handleSeed(req, res, deps, board),
+  },
+  // "Recently deleted" (history feature; handlers in internal.ts)
+  {
+    re: /^\/internal\/boards\/([^/]+)\/deleted$/,
+    methods: ['GET'],
+    handle: (req, res, deps, [board = '']) => handleListDeleted(req, res, deps, board),
+  },
+  {
+    re: /^\/internal\/boards\/([^/]+)\/deleted\/restore$/,
+    methods: ['POST'],
+    handle: (req, res, deps, [board = '']) => handleRestoreDeleted(req, res, deps, board),
   },
 ]
 

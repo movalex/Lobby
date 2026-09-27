@@ -1,8 +1,11 @@
-# Draftroom STAGING Blueprint (milestone 1). NOT provisioned. Read docs/DEPLOY.md before syncing it:
-# the known blockers there (WebSocket routing, internal URLs, sign-in keys, license key) must be
-# resolved first, and every UNVERIFIED item needs a check on the first deploy.
+# Draftroom STAGING Blueprint. NOT provisioned. Read docs/DEPLOY.md before syncing it: sign-in (Clerk
+# keys) and the tldraw license key are still open ("Known blockers"), and every UNVERIFIED item needs a
+# check on the first deploy. The milestone-1 wiring blockers are resolved here: the board WebSocket goes
+# straight to the sync service (VITE_DRAFTROOM_SYNC_ORIGIN + sync ALLOWED_ORIGINS), the internal URLs
+# come from fromService hostport, the api trusts a fixed number of proxy hops (TRUST_PROXY) and the api
+# health check is /healthz.
 #
-# Checked on 2026-09-26/27 against https://render.com/docs/blueprint-spec and Render's published JSON
+# Checked on 2026-09-27 against https://render.com/docs/blueprint-spec and Render's published JSON
 # schema https://render.com/schema/render.yaml.json (validated; see docs/DEPLOY.md "Validation").
 # Plan IDs use the compute-plan names Render introduced in August 2026
 # (https://render.com/docs/compute-plans). Prices are in docs/DEPLOY.md.
@@ -79,11 +82,12 @@ services:
       # any HTTPS host (docs/research/license.md). Keys are public by design; kept out of git anyway.
       - key: VITE_TLDRAW_LICENSE_KEY
         sync: false
-      # BLOCKER (docs/DEPLOY.md "Known blockers" 1): static-site rewrites do not proxy WebSockets, so
-      # the board socket must go straight to the sync service, and apps/web does not read a sync
-      # origin yet (it connects to its own origin's /connect). Once it does, add e.g.:
-      #   - key: VITE_DRAFTROOM_SYNC_ORIGIN
-      #     value: https://draftroom-staging-sync.onrender.com
+      # Static-site rewrites do not proxy WebSockets, so the board socket goes straight to the sync
+      # service's public URL (apps/web/src/board/ticket.ts; the ticket authenticates, no cookie needed).
+      # Inlined at build time: a hostname change needs a static-site REBUILD. Must match the sync
+      # service's onrender.com URL; the sync service's ALLOWED_ORIGINS must list this site's origin.
+      - key: VITE_DRAFTROOM_SYNC_ORIGIN
+        value: https://draftroom-staging-sync.onrender.com
       # Never set VITE_DRAFTROOM_DEV_AUTH here: it enables development identities in the bundle.
 
   # ---------------------------------------------------------------------------------------------
@@ -102,9 +106,8 @@ services:
     dockerfilePath: ./docker/api-worker.Dockerfile
     dockerContext: .
     numInstances: 1 # required: a service with a disk cannot scale
-    # Public, unauthenticated, contract-defined GET that needs no database row. Replace with a
-    # dedicated /healthz once the api has one (reported as a contract issue).
-    healthCheckPath: /api/auth/config
+    # Liveness only: no database, no auth, not rate limited (apps/api/src/app.ts).
+    healthCheckPath: /healthz
     maxShutdownDelaySeconds: 30 # the supervisor SIGKILLs stragglers after 25 s
     autoDeployTrigger: "off"
     disk:
@@ -125,10 +128,20 @@ services:
         # Render assigns on first creation and update it here if it differs.
         value: https://draftroom-staging-web.onrender.com
       - key: DRAFTROOM_SYNC_INTERNAL_URL
-        # http://<sync internal address> from the sync service's Connect menu (e.g.
-        # http://draftroom-staging-sync-xxxx:10000). A Blueprint can only inject host:port, not a URL
-        # (contract issue); set it after the first provisioning (docs/DEPLOY.md "First provisioning").
-        sync: false
+        # host:port on the private network (e.g. draftroom-staging-sync-xxxx:10000); the api builds
+        # http://host:port. Under NODE_ENV=production the api refuses to start without it, or with a
+        # loopback address (access-change pushes would silently fail).
+        fromService:
+          type: web
+          name: draftroom-staging-sync
+          property: hostport
+      - key: TRUST_PROXY
+        # A third-party measurement (2026-09-26, docs/DEPLOY.md "Client IPs") shows Render KEEPING
+        # client-written X-Forwarded-For entries and appending its own (Cloudflare edge, load balancer,
+        # router): trusting 3 hops keys the per-IP sign-in limit on the real client for direct requests
+        # without being spoofable; "true" WOULD be spoofable. Requests through the static-site rewrite
+        # may carry more hops. UNVERIFIED by us: run the two-network check on the first deploy.
+        value: "3"
       - key: AUTH_PROVIDER
         value: clerk # dev sign-in is refused under NODE_ENV=production; the Clerk adapter is UNVERIFIED
       - key: CLERK_SECRET_KEY
@@ -162,8 +175,16 @@ services:
       - key: DRAFTROOM_DATA_DIR
         value: /var/data # rooms/board-<id>.sqlite live under it
       - key: DRAFTROOM_API_INTERNAL_URL
-        # http://<api internal address> from the api service's Connect menu; same caveat as above.
-        sync: false
+        # host:port of the api on the private network. Required and non-loopback in production: sync
+        # re-checks access against it and fails OPEN when it cannot answer.
+        fromService:
+          type: web
+          name: draftroom-staging-api
+          property: hostport
+      - key: ALLOWED_ORIGINS
+        # Pages allowed to open a board WebSocket (checked before the upgrade; tickets still
+        # authenticate). Required in production, https only. Must be the static site's exact origin.
+        value: https://draftroom-staging-web.onrender.com
       - key: ACCESS_RECHECK_MS
         value: "10000"
       - fromGroup: draftroom-staging-secrets

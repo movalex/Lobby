@@ -46,7 +46,12 @@ async function openStream(base: string, boardId: string, cookie: string) {
     }
     throw new Error(`no ${type} event; got ${JSON.stringify(events)}`)
   }
-  return { res, events, waitFor, close: () => (controller.abort(), pump) }
+  const close = () => {
+    controller.abort()
+    return pump
+  }
+  /** Resolves when the server ended the stream (the reader finished without our abort). */
+  return { res, events, waitFor, close, ended: pump }
 }
 
 describe('board event stream', () => {
@@ -75,6 +80,24 @@ describe('board event stream', () => {
     for (let i = 0; i < 50 && events.subscriberCount(boardId) > 0; i++)
       await new Promise((r) => setTimeout(r, 20))
     expect(events.subscriberCount(boardId)).toBe(0)
+  })
+
+  it('ends open streams when the app closes, so a deploy does not wait on connected clients', async () => {
+    api = await createTestApi()
+    const alice = await api.login('alice')
+    const boardId = await createBoard(alice, alice.personalWorkspaceId)
+    await api.app.listen({ host: '127.0.0.1', port: 0 })
+    const base = `http://127.0.0.1:${(api.app.server.address() as AddressInfo).port}`
+    const s = await openStream(base, boardId, alice.cookie)
+    await s.waitFor('hello')
+
+    // Without the preClose hook, close() waits for the stream forever (Fastify only drops idle sockets).
+    const closed = api.app.close().then(() => 'closed')
+    const timeout = new Promise((r) => setTimeout(() => r('timeout'), 3_000))
+    expect(await Promise.race([closed, timeout])).toBe('closed')
+    // The server ended the stream: the reader finished without the client aborting it.
+    expect(await Promise.race([s.ended.then(() => 'ended'), timeout])).toBe('ended')
+    await s.close()
   })
 
   it('refuses people who cannot view the board, without revealing that it exists', async () => {

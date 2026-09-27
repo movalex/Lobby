@@ -1,0 +1,342 @@
+/* Dashboard additions (dashboard-share): stars, list view, starred section, template picker,
+   card-menu dialogs. Reuses apps/web/src/styles.css tokens and classes (never edited here). */
+
+/* ---- grid / list toggle ----------------------------------------------------------------------- */
+
+.dr-seg {
+  display: inline-flex;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--dr-line-strong);
+  border-radius: 8px;
+  background: var(--dr-surface);
+  overflow: hidden;
+}
+.dr-seg__btn {
+  display: inline-grid;
+  place-items: center;
+  width: 34px;
+  height: 32px;
+  border: 0;
+  background: transparent;
+  color: var(--dr-ink-2);
+  cursor: pointer;
+}
+.dr-seg__btn + .dr-seg__btn {
+  border-left: 1px solid var(--dr-line);
+}
+.dr-seg__btn[aria-pressed="true"] {
+  background: #e9eef6;
+  color: var(--dr-navy);
+}
+.dr-seg__btn:focus-visible {
+  outline-offset: -2px;
+}
+.dr-dash__actions {
+  flex-wrap: wrap;
+}
+
+/* ---- sections ----------------------------------------------------------------------------------- */
+
+.dr-dash__group {
+  margin-bottom: 26px;
+}
+.dr-dash__group-title {
+  margin: 0 0 12px;
+  color: var(--dr-ink-2);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.dr-dash__note {
+  max-width: 720px;
+  margin: -6px 0 18px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--dr-warn-bg);
+  color: var(--dr-warn);
+  font-size: 13.5px;
+  line-height: 1.45;
+}
+
+/* ---- star ------------------------------------------------------------------------------------- */
+
+.dr-star {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  margin-top: -1px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--dr-ink-2);
+  cursor: pointer;
+}
+.dr-star:hover {
+  background: #f1efe8;
+  color: var(--dr-ink);
+}
+.dr-star[aria-pressed="true"] {
+  color: #c07a12;
+}
+
+/* A card whose menu is open paints above the cards after it. The hover lift (transform) makes the card
+   a stacking context, so without this the ten-item card menu slid under the next row of cards and a
+   click on "Duplicate…" opened the board underneath instead. */
+.dr-bcard:has(.dr-menu),
+.dr-bcard:focus-within {
+  z-index: 2;
+}
+
+/* ---- list view ---------------------------------------------------------------------------------- */
+
+.dr-grid.dr-list {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px;
+}
+.dr-bcard.dr-bcard--row {
+  flex-direction: row;
+  align-items: center;
+}
+.dr-bcard.dr-bcard--row:hover {
+  transform: none;
+}
+.dr-bcard--row .dr-bcard__link {
+  flex: none;
+  width: 96px;
+  border-radius: 11px 0 0 11px;
+}
+.dr-bcard--row .dr-bcard__thumb {
+  border-bottom: 0;
+  border-right: 1px solid var(--dr-line);
+  border-radius: 11px 0 0 11px;
+}
+.dr-bcard--row .dr-bcard__status {
+  top: 4px;
+  left: 4px;
+  padding: 2px 6px;
+  font-size: 10.5px;
+}
+.dr-bcard--row .dr-bcard__foot {
+  flex: 1;
+  align-items: center;
+  min-width: 0;
+  padding: 8px 8px 8px 14px;
+}
+.dr-bcard--row .dr-bcard__text {
+  flex-direction: row;
+  align-items: center;
+  gap: 16px;
+}
+.dr-bcard--row .dr-bcard__title {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.dr-bcard--row .dr-bcard__meta {
+  flex: none;
+  flex-wrap: nowrap;
+}
+.dr-bcard__project {
+  padding: 1px 7px;
+  border-radius: 6px;
+  background: #f1efe8;
+}
+@media (max-width: 760px) {
+  .dr-bcard--row .dr-bcard__text {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+  }
+}
+
+/* ---- new board: template picker ------------------------------------------------------------------ */
+
+.dr-dialog--lg:has(.dr-newboard) {
+  width: min(900px, calc(100vw - 32px));
+  overflow-y: auto;
+}
+.dr-gallery__bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin: 6px 0 12px;
+}
+.dr-gallery__search {
+  flex: 1 1 220px;
+  min-width: 0;
+}
+.dr-gallery__cats {
+  display: flex;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.dr-chip {
+  height: 30px;
+  padding: 0 12px;
+  border: 1px solid var(--dr-line-strong);
+  border-radius: 999px;
+  background: var(--dr-surface);
+  color: var(--dr-ink);
+  font: 500 13px / 1 var(--dr-font);
+  cursor: pointer;
+}
+.dr-chip[aria-pressed="true"] {
+  border-color: var(--dr-navy);
+  background: var(--dr-navy);
+  color: #fff;
+}
+.dr-gallery__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.dr-gallery__status {
+  margin: 10px 0 0;
+  font-size: 13.5px;
+}
+.dr-tcard {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+  height: 100%;
+  padding: 8px 8px 10px;
+  border: 1.5px solid var(--dr-line);
+  border-radius: 12px;
+  background: var(--dr-surface);
+  color: var(--dr-ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.dr-tcard:hover {
+  border-color: var(--dr-line-strong);
+  box-shadow: 0 4px 14px rgb(27 35 48 / 8%);
+}
+.dr-tcard[aria-pressed="true"] {
+  border-color: var(--dr-navy);
+  box-shadow: 0 0 0 2px rgb(31 58 95 / 22%);
+}
+.dr-tcard__thumb {
+  display: block;
+  overflow: hidden;
+  aspect-ratio: 16 / 10;
+  margin-bottom: 4px;
+  border-radius: 8px;
+  background: #f3f1ea;
+}
+.dr-tcard__thumb--blank {
+  display: grid;
+  place-items: center;
+  border: 1.5px dashed var(--dr-line-strong);
+  background: #fbfaf6;
+  color: var(--dr-navy);
+}
+.dr-tthumb {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.dr-tcard__name {
+  font-size: 14px;
+  font-weight: 650;
+}
+.dr-tcard--blank .dr-tcard__name {
+  color: var(--dr-navy);
+}
+.dr-tcard__desc {
+  color: var(--dr-ink-2);
+  font-size: 12.5px;
+  line-height: 1.35;
+}
+.dr-tcard__meta {
+  margin-top: auto;
+  padding-top: 2px;
+  color: var(--dr-ink-2);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+.dr-newboard__form {
+  margin-top: 14px;
+  padding-top: 4px;
+  border-top: 1px solid var(--dr-line);
+}
+.dr-newboard__sections {
+  margin: 12px 0 0;
+  color: var(--dr-ink-2);
+  font-size: 13px;
+}
+.dr-newboard__fields {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+  gap: 0 14px;
+}
+@media (max-width: 640px) {
+  .dr-newboard__fields {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.dr-newboard__actions {
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+/* ---- shared bits -------------------------------------------------------------------------------- */
+
+.dr-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 12px 0 0;
+  font-size: 13.5px;
+  font-weight: 500;
+}
+.dr-form .dr-check {
+  display: inline-flex;
+  margin: 12px 0 0;
+  font-size: 13.5px;
+  font-weight: 500;
+}
+.dr-details {
+  display: grid;
+  gap: 8px;
+  margin: 8px 0 0;
+}
+.dr-details > div {
+  display: grid;
+  grid-template-columns: 120px minmax(0, 1fr);
+  gap: 10px;
+  font-size: 14px;
+}
+.dr-details dt {
+  color: var(--dr-ink-2);
+  font-weight: 600;
+}
+.dr-details dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.dr-newboard__actions .dr-check.dr-newboard__dontshow {
+  margin: 0 auto 0 0;
+}
+@media (max-width: 560px) {
+  .dr-gallery__grid {
+    grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+    gap: 8px;
+  }
+  .dr-tcard__desc {
+    display: none;
+  }
+}

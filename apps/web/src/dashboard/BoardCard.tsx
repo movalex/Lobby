@@ -1,10 +1,19 @@
 import type { BoardWithRole } from '@draftroom/contracts'
 import { useId } from 'react'
 import { formatRelativeTime } from '../lib/format.ts'
+import { can } from '../lib/permissions.ts'
 import { boardPath, linkClick } from '../lib/routing.ts'
 import { MenuButton } from '../ui/Menu.tsx'
 import { RenameInput } from '../ui/RenameInput.tsx'
-import { type BoardMenuAction, boardMenuItems, ROLE_LABEL, thumbStyle } from './model.ts'
+import {
+  type BoardMenuAction,
+  type BoardMenuContext,
+  boardMenuItems,
+  ROLE_LABEL,
+  thumbStyle,
+} from './model.ts'
+import type { ViewMode } from './prefs.ts'
+import './dashboard.css'
 
 /** A deterministic, colored placeholder until real board thumbnails exist. */
 export function BoardThumb({ boardId }: { boardId: string }) {
@@ -81,24 +90,35 @@ export function BoardThumb({ boardId }: { boardId: string }) {
   )
 }
 
-export function BoardCard({
+export function BoardCard<B extends BoardWithRole & { starred?: boolean }>({
   board,
   renaming,
   busy,
   now,
+  layout = 'grid',
+  menu = { canCreate: true, canMove: true },
+  projectName,
   onAction,
   onRename,
   onRenameCancel,
+  onStar,
 }: {
-  board: BoardWithRole
+  board: B
   renaming: boolean
   busy: boolean
   now: Date
-  onAction(action: BoardMenuAction, board: BoardWithRole): void
-  onRename(board: BoardWithRole, title: string): void
+  layout?: ViewMode
+  menu?: BoardMenuContext
+  /** Shown in the list view. */
+  projectName?: string | null
+  onAction(action: BoardMenuAction, board: B): void
+  onRename(board: B, title: string): void
   onRenameCancel(): void
+  onStar?(board: B, starred: boolean): void
 }) {
-  const items = boardMenuItems(board)
+  const items = boardMenuItems(board, menu)
+  const starred = board.starred === true
+  const canStar = !!onStar && can(board.role, 'view', board.status)
   const canOpen = items.some((i) => i.action === 'open')
   const href = boardPath(board.id)
   const when =
@@ -115,13 +135,37 @@ export function BoardCard({
     </div>
   )
 
+  const star = canStar && (
+    <button
+      type="button"
+      className="dr-star"
+      data-testid="board-star"
+      data-board-id={board.id}
+      aria-pressed={starred}
+      aria-label={starred ? `Remove star from ${board.title}` : `Star ${board.title}`}
+      title={starred ? 'Starred' : 'Star'}
+      onClick={() => onStar?.(board, !starred)}
+    >
+      <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+        <path
+          d="M12 3.5l2.6 5.3 5.9.9-4.3 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8-4.3-4.1 5.9-.9z"
+          fill={starred ? 'currentColor' : 'none'}
+          stroke="currentColor"
+          strokeWidth="1.7"
+          strokeLinejoin="round"
+        />
+      </svg>
+    </button>
+  )
+
   return (
     <li
-      className={`dr-bcard${busy ? ' dr-bcard--busy' : ''}`}
+      className={`dr-bcard${busy ? ' dr-bcard--busy' : ''}${layout === 'list' ? ' dr-bcard--row' : ''}`}
       data-testid="board-card"
       data-board-id={board.id}
       data-status={board.status}
       data-role={board.role}
+      data-starred={starred ? 'true' : 'false'}
       aria-busy={busy || undefined}
     >
       {canOpen ? (
@@ -154,11 +198,13 @@ export function BoardCard({
           )}
           <span className="dr-bcard__meta">
             <span>{when}</span>
+            {layout === 'list' && projectName && <span className="dr-bcard__project">{projectName}</span>}
             <span className="dr-role" data-role={board.role}>
               {ROLE_LABEL[board.role]}
             </span>
           </span>
         </div>
+        {star}
         <MenuButton
           label={`Board options for ${board.title}`}
           items={items}

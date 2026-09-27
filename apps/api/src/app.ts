@@ -106,6 +106,7 @@ async function buildServer(
     logger: deps.logger ?? false,
     logController: new Fastify.LogController({ disableRequestLogging: true }),
     return503OnClosing: true,
+    trustProxy: config.trustProxy, // req.ip (per-IP rate limits) behind proxies: TRUST_PROXY, docs/DEPLOY.md
   })
   const notifier =
     deps.notifier ??

@@ -12,7 +12,7 @@ import {
   createAccessMonitor,
   createApiAccessClient,
 } from './access.ts'
-import type { SyncConfig } from './config.ts'
+import { isAllowedOrigin, type SyncConfig } from './config.ts'
 import { createRequestHandler } from './http/router.ts'
 import { canEditCanvas } from './permissions.ts'
 import { BOARD_ID_RE, RoomRegistry } from './rooms.ts'
@@ -76,6 +76,16 @@ export function createSyncServer(config: SyncConfig, opts: SyncServerOptions = {
   const liveSockets = new Map<string, WebSocket>() // `${boardId}/${sid}` -> current ws
 
   const onUpgrade = (req: IncomingMessage, socket: Duplex, head: Buffer) => {
+    // ALLOWED_ORIGINS (platform): refused before the upgrade, before the ticket is read and before any
+    // room is touched. Defense in depth against pages on other sites; the ticket stays the authentication.
+    const origin = req.headers.origin
+    if (!isAllowedOrigin(config.allowedOrigins, origin)) {
+      const shown = typeof origin === 'string' ? JSON.stringify(origin.slice(0, 100)) : 'none'
+      log(`[connect] refused: Origin ${shown} is not in ALLOWED_ORIGINS`) // never the URL (it holds the ticket)
+      socket.on('error', () => socket.destroy()) // a reset mid-write must not become an uncaught error
+      socket.once('finish', () => socket.destroy())
+      return void socket.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n')
+    }
     let url: URL | null = null
     try {
       url = new URL(req.url ?? '/', 'http://localhost')

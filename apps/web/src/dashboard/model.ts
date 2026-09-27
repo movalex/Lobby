@@ -4,24 +4,61 @@ import type { DashboardSection } from '../lib/routing.ts'
 
 // ---- card menu -----------------------------------------------------------------------------------
 
-export type BoardMenuAction = 'open' | 'copy-link' | 'rename' | 'archive' | 'trash' | 'restore'
+export type BoardMenuAction =
+  | 'open'
+  | 'copy-link'
+  | 'share'
+  | 'rename'
+  | 'move'
+  | 'duplicate'
+  | 'star'
+  | 'unstar'
+  | 'details'
+  | 'archive'
+  | 'trash'
+  | 'restore'
 export interface BoardMenuItem {
   action: BoardMenuAction
   label: string
   tone?: 'danger'
 }
 
+export interface BoardMenuContext {
+  /** Workspace members (not guests) may create boards, so they may duplicate one. */
+  canCreate: boolean
+  /** Moving needs the project list, which guests cannot read. */
+  canMove: boolean
+}
+
 /**
- * The card menu for one board, derived only from the shared permission rules. The server enforces
- * the same rules; hiding an item is a courtesy, not a control.
+ * The card menu for one board (DSH-02), derived only from the shared permission rules. The server
+ * enforces the same rules; hiding an item is a courtesy, not a control.
  */
-export function boardMenuItems(board: { role: BoardRole; status: BoardStatus }): BoardMenuItem[] {
+export function boardMenuItems(
+  board: { role: BoardRole; status: BoardStatus; starred?: boolean },
+  ctx: BoardMenuContext = { canCreate: true, canMove: true },
+): BoardMenuItem[] {
   const { role, status } = board
   const items: BoardMenuItem[] = []
-  if (can(role, 'view', status)) {
-    items.push({ action: 'open', label: 'Open' }, { action: 'copy-link', label: 'Copy link' })
+  const viewable = can(role, 'view', status)
+  if (viewable) {
+    items.push(
+      { action: 'open', label: 'Open' },
+      { action: 'copy-link', label: 'Copy link' },
+      { action: 'share', label: 'Share…' },
+    )
   }
-  if (can(role, 'rename', status)) items.push({ action: 'rename', label: 'Rename' })
+  if (can(role, 'rename', status)) {
+    items.push({ action: 'rename', label: 'Rename' })
+    if (ctx.canMove) items.push({ action: 'move', label: 'Move to project…' })
+  }
+  if (viewable) {
+    if (ctx.canCreate) items.push({ action: 'duplicate', label: 'Duplicate…' })
+    items.push(
+      board.starred ? { action: 'unstar', label: 'Remove star' } : { action: 'star', label: 'Star' },
+      { action: 'details', label: 'Details' },
+    )
+  }
   if (can(role, 'restore', status)) items.push({ action: 'restore', label: 'Restore' })
   if (can(role, 'archive', status)) items.push({ action: 'archive', label: 'Archive' })
   if (can(role, 'trash', status)) items.push({ action: 'trash', label: 'Move to trash', tone: 'danger' })
@@ -58,14 +95,13 @@ export function filterBoards<B extends { title: string }>(boards: readonly B[], 
   })
 }
 
-export type BoardSort = 'opened' | 'edited' | 'name'
+export type BoardSort = 'opened' | 'edited' | 'created' | 'name'
 
 const time = (iso: string | null) => (iso ? Date.parse(iso) || 0 : 0)
 
-export function sortBoards<B extends Pick<BoardWithRole, 'title' | 'updatedAt' | 'lastOpenedAt' | 'id'>>(
-  boards: readonly B[],
-  sort: BoardSort,
-): B[] {
+export function sortBoards<
+  B extends Pick<BoardWithRole, 'title' | 'updatedAt' | 'lastOpenedAt' | 'id'> & { createdAt?: string },
+>(boards: readonly B[], sort: BoardSort): B[] {
   const out = [...boards]
   if (sort === 'name') {
     out.sort(
@@ -74,6 +110,8 @@ export function sortBoards<B extends Pick<BoardWithRole, 'title' | 'updatedAt' |
     )
   } else if (sort === 'edited') {
     out.sort((a, b) => time(b.updatedAt) - time(a.updatedAt) || a.id.localeCompare(b.id))
+  } else if (sort === 'created') {
+    out.sort((a, b) => time(b.createdAt ?? null) - time(a.createdAt ?? null) || a.id.localeCompare(b.id))
   } else {
     out.sort(
       (a, b) =>
@@ -166,10 +204,54 @@ export function emptyState(
     case 'trash':
       return {
         title: 'Trash is empty',
-        body: 'Boards moved to trash cannot be opened. Their owners can restore them from here.',
+        body: 'Boards moved to trash cannot be opened. Their owners can restore them from here, with all their content and files.',
         offerCreate: false,
       }
   }
+}
+
+/** DSH-03: what the Trash promises (no automatic purge exists yet, so nothing expires). */
+export const TRASH_NOTE =
+  'Deleted boards stay here, with all their content and files, until an owner restores them. Draftroom does not empty the trash automatically yet.'
+
+// ---- owner filter (DSH-04) -----------------------------------------------------------------------
+
+export type OwnerFilter = 'anyone' | 'me' | 'not-me'
+
+/** "Owner" is approximated by who created the board (boards can have several owners). */
+export function filterByOwner<B extends { createdBy: string }>(
+  boards: readonly B[],
+  filter: OwnerFilter,
+  selfUserId: string,
+): B[] {
+  if (filter === 'anyone') return [...boards]
+  return boards.filter((b) => (filter === 'me' ? b.createdBy === selfUserId : b.createdBy !== selfUserId))
+}
+
+// ---- stars ---------------------------------------------------------------------------------------
+
+/** Applies a star change to a list (optimistic update); the starred list keeps its newest-first order. */
+export function withStar<B extends { id: string; starred?: boolean }>(
+  boards: readonly B[],
+  boardId: string,
+  starred: boolean,
+): B[] {
+  return boards.map((b) => (b.id === boardId ? { ...b, starred } : b))
+}
+
+export function withStarredEntry<B extends { id: string; starred?: boolean }>(
+  starred: readonly B[],
+  board: B,
+  on: boolean,
+): B[] {
+  const rest = starred.filter((b) => b.id !== board.id)
+  return on ? [{ ...board, starred: true }, ...rest] : rest
+}
+
+/** Default title for a duplicate. */
+export const duplicateTitle = (title: string) => {
+  const t = `${title} (copy)`
+  return t.length <= 120 ? t : `${title.slice(0, 112).trimEnd()}… (copy)`
 }
 
 // ---- thumbnails ----------------------------------------------------------------------------------

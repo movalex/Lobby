@@ -1,9 +1,14 @@
 import { existsSync, mkdirSync, rmSync } from 'node:fs'
-import { join, resolve } from 'node:path'
+import { basename, dirname, join, resolve } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { NodeSqliteWrapper, type RoomSnapshot, SQLiteSyncStorage, TLSocketRoom } from '@tldraw/sync-core'
 
 import type { TLRecord, TLSchema } from '@tldraw/tlschema'
+import { BACKUP_DEFAULTS, type BackupEntry, backupBoard, readManifest } from './backup/backup.ts'
+import { withDeleteCapture } from './deleted/capture.ts'
+import { type RestoreSummary, restoreDeleted } from './deleted/restore.ts'
+import { hookedSqlWrapper } from './deleted/sql.ts'
+import { type DeletedEntry, type DeletedLimits, DeletedStore, ensureDeletedTables } from './deleted/store.ts'
 import { createTextLease, type TextLease } from './lease.ts'
 import type { BoardRole } from './permissions.ts'
 
@@ -22,7 +27,12 @@ interface RoomEntry {
   db: DatabaseSync
   storage: SQLiteSyncStorage<TLRecord>
   lease: TextLease
+  /** "Recently deleted" side table of this board's database (REV-07). */
+  deleted: DeletedStore
   evictTimer: ReturnType<typeof setTimeout> | null
+  openedAt: number
+  /** The backup in progress for this board, if any (one at a time). */
+  backingUp: Promise<BackupEntry | null> | null
 }
 
 /**
@@ -37,6 +47,14 @@ export function boardDbPath(dataDir: string, boardId: string): string {
   return join(resolve(dataDir), `board-${boardId}.sqlite`)
 }
 
+export interface BackupOptions {
+  /** Where backups go. Default: ${DATA}/backups when dataDir is the data layout's rooms/ folder. */
+  dir?: string
+  intervalMs?: number
+  keep?: number
+  evictBackupMinOpenMs?: number
+}
+
 export interface RegistryOpts {
   dataDir: string
   schema: TLSchema
@@ -47,6 +65,14 @@ export interface RegistryOpts {
   log?: (...a: unknown[]) => void
   /** After a session has left a room (any reason). */
   onSessionRemoved?: (boardId: string, sessionId: string, meta: SessionMeta) => void
+  /** Bounds of the "Recently deleted" capture (defaults: deleted/store.ts DELETED_LIMITS). */
+  deleted?: Partial<DeletedLimits>
+  /**
+   * Periodic consistent backups (backup/backup.ts). On by default when dataDir is `<DATA>/rooms`
+   * (the data layout the server uses), off otherwise; `false` turns them off.
+   */
+  backup?: BackupOptions | false
+  now?: () => number
 }
 
 export interface LiveSession {
@@ -54,12 +80,44 @@ export interface LiveSession {
   meta: SessionMeta
 }
 
+interface ResolvedBackup {
+  dir: string
+  intervalMs: number
+  keep: number
+  evictBackupMinOpenMs: number
+}
+
+function resolveBackup(dataDir: string, opt: RegistryOpts['backup']): ResolvedBackup | null {
+  if (opt === false) return null
+  const rooms = resolve(dataDir)
+  const dir = opt?.dir ?? (basename(rooms) === 'rooms' ? join(dirname(rooms), 'backups') : null)
+  if (!dir) return null
+  return {
+    dir: resolve(dir),
+    intervalMs: opt?.intervalMs ?? BACKUP_DEFAULTS.intervalMs,
+    keep: opt?.keep ?? BACKUP_DEFAULTS.keep,
+    evictBackupMinOpenMs: opt?.evictBackupMinOpenMs ?? BACKUP_DEFAULTS.evictBackupMinOpenMs,
+  }
+}
+
 export class RoomRegistry {
   private readonly rooms = new Map<string, RoomEntry>()
   private readonly opts: RegistryOpts // no TS parameter properties: Node type stripping rejects them
+  private readonly backup: ResolvedBackup | null
+  private readonly backupTimer: ReturnType<typeof setInterval> | null
+  /** Document clock of each board's newest backup (undefined: not looked up yet; null: none). */
+  private readonly lastBackupClock = new Map<string, number | null>()
+  private backupPass: Promise<void> | null = null
+  private readonly now: () => number
   constructor(opts: RegistryOpts) {
     this.opts = opts
+    this.now = opts.now ?? Date.now
     mkdirSync(opts.dataDir, { recursive: true })
+    this.backup = resolveBackup(opts.dataDir, opts.backup)
+    this.backupTimer = this.backup
+      ? setInterval(() => void this.runBackupPass(), this.backup.intervalMs)
+      : null
+    this.backupTimer?.unref?.()
   }
 
   /**
@@ -99,14 +157,59 @@ export class RoomRegistry {
    * null when the board has no database yet (nothing is created just to answer a read).
    */
   snapshot(boardId: string): RoomSnapshot | null {
-    let entry = this.live(boardId)
-    if (!entry) {
-      if (!existsSync(boardDbPath(this.opts.dataDir, boardId))) return null
-      const opened = this.open(boardId)
-      if (opened === 'exists') throw new Error('unreachable: open() without a seed never refuses')
-      entry = opened
-    }
-    return entry.storage.getSnapshot()
+    return this.existing(boardId)?.storage.getSnapshot() ?? null
+  }
+
+  /**
+   * "Recently deleted" of a board, newest first (shapes back on the board are left out). Opens the
+   * room like snapshot(); a board without storage has none.
+   */
+  listDeleted(boardId: string, limit?: number): { entries: DeletedEntry[]; total: number } {
+    const entry = this.existing(boardId)
+    if (!entry) return { entries: [], total: 0 }
+    // Ids only (no record parsing): what is on the board right now.
+    const { result: onBoard } = entry.storage.transaction((txn) => new Set(txn.keys()))
+    return entry.deleted.list((id) => onBoard.has(id), limit)
+  }
+
+  /** Puts captured shapes back (validated; see deleted/restore.ts). */
+  restoreDeleted(boardId: string, ids: readonly string[]): RestoreSummary {
+    const entry = this.existing(boardId)
+    if (!entry)
+      return {
+        restored: [],
+        skipped: ids.map((id) => ({ id, reason: 'not-found' })),
+        bindings: 0,
+        reparented: 0,
+      }
+    return restoreDeleted({ storage: entry.storage, store: entry.deleted, schema: this.opts.schema, ids })
+  }
+
+  /** Where this registry writes backups (null when backups are off). */
+  backupsDir(): string | null {
+    return this.backup?.dir ?? null
+  }
+
+  /** Backs up an OPEN board now, whether or not it changed (null when backups are off or it failed). */
+  backupNow(boardId: string): Promise<BackupEntry | null> {
+    const entry = this.live(boardId)
+    return entry ? this.backupEntry(entry) : Promise.resolve(null)
+  }
+
+  /** One pass of the periodic backup: every open board that changed since its last backup, one at a time. */
+  runBackupPass(): Promise<void> {
+    if (!this.backup) return Promise.resolve()
+    if (this.backupPass) return this.backupPass
+    const pass = (async () => {
+      for (const boardId of this.openBoards()) {
+        const entry = this.live(boardId)
+        if (entry && this.backupDue(entry)) await this.backupEntry(entry)
+      }
+    })().finally(() => {
+      if (this.backupPass === pass) this.backupPass = null
+    })
+    this.backupPass = pass
+    return pass
   }
 
   /** The open room of a board, if any (never opens one). */
@@ -135,25 +238,51 @@ export class RoomRegistry {
     return e && !e.room.isClosed() ? e : null
   }
 
+  /** The open entry, or the board's room opened from its existing database; null without storage. */
+  private existing(boardId: string): RoomEntry | null {
+    const entry = this.live(boardId)
+    if (entry) return entry
+    if (!existsSync(boardDbPath(this.opts.dataDir, boardId))) return null
+    const opened = this.open(boardId)
+    if (opened === 'exists') throw new Error('unreachable: open() without a seed never refuses')
+    return opened
+  }
+
   private open(boardId: string, seed?: RoomSnapshot): RoomEntry | 'exists' {
     const path = boardDbPath(this.opts.dataDir, boardId)
     // A seed that fails leaves the board as it found it: no data, and no file it created itself.
     let removeOnFailure = seed !== undefined && !existsSync(path)
     const db = new DatabaseSync(path)
-    const entry = { roomId: boardId, db, evictTimer: null } as RoomEntry
+    const entry = {
+      roomId: boardId,
+      db,
+      evictTimer: null,
+      openedAt: this.now(),
+      backingUp: null,
+    } as RoomEntry
     try {
       db.exec('PRAGMA journal_mode = WAL') // outside any transaction; persistent in the file
       db.exec(`PRAGMA synchronous = ${this.opts.synchronous ?? 'FULL'}`)
       db.exec('PRAGMA busy_timeout = 5000')
-      const sql = new NodeSqliteWrapper(db)
+      // Every storage transaction (a client push is one) ends with the "Recently deleted" flush, on
+      // this same connection and before COMMIT: the captured rows share the push's fate.
+      const sql = hookedSqlWrapper(new NodeSqliteWrapper(db), {
+        beforeCommit: () => entry.deleted?.flush(),
+        afterTransaction: () => entry.deleted?.discardPending(),
+      })
       // First-time DDL + initial records atomic (the storage ctor never calls sql.transaction()).
       // IMMEDIATE takes the write lock before the initialized check, so the check stays true.
       db.exec('BEGIN IMMEDIATE')
       let refuse = false
+      let schemaId = 0
       try {
         refuse = seed !== undefined && SQLiteSyncStorage.hasBeenInitialized(sql)
         // NEVER pass `snapshot` to an initialized database: the constructor deletes every record first.
-        if (!refuse) entry.storage = new SQLiteSyncStorage<TLRecord>({ sql, snapshot: seed })
+        if (!refuse) {
+          entry.storage = new SQLiteSyncStorage<TLRecord>({ sql, snapshot: seed })
+          // Our own side tables (never tldraw's), created with the board.
+          schemaId = ensureDeletedTables(db, JSON.stringify(this.opts.schema.serialize()))
+        }
         db.exec(refuse ? 'ROLLBACK' : 'COMMIT')
       } catch (e) {
         if (db.isTransaction) db.exec('ROLLBACK')
@@ -165,6 +294,13 @@ export class RoomRegistry {
       }
       // Committed: from here a failure must also remove the seeded data (the board had none before).
       removeOnFailure ||= seed !== undefined
+      entry.deleted = new DeletedStore({
+        db,
+        schemaId,
+        limits: this.opts.deleted,
+        now: this.now,
+        log: (...a: unknown[]) => this.opts.log?.(...a, boardId),
+      })
       // One lease map per room; it lives and dies with this entry.
       entry.lease = createTextLease({
         leaseMs: this.opts.textLeaseMs ?? 5_000,
@@ -176,7 +312,8 @@ export class RoomRegistry {
       entry.room = new TLSocketRoom<TLRecord, SessionMeta>({
         schema: this.opts.schema,
         storage: entry.storage,
-        authorizeRecord: entry.lease.authorizeRecord,
+        // Lease veto first; a delete it allowed is captured for "Recently deleted".
+        authorizeRecord: withDeleteCapture(entry.lease.authorizeRecord, entry.deleted),
         log: {
           warn: (...a: unknown[]) => this.opts.log?.('[room warn]', boardId, ...a),
           error: (...a: unknown[]) => this.opts.log?.('[room error]', boardId, ...a),
@@ -210,7 +347,53 @@ export class RoomRegistry {
   private evict(boardId: string, entry: RoomEntry) {
     entry.evictTimer = null
     if (this.rooms.get(boardId) !== entry || entry.room.getNumActiveSessions() > 0) return
+    // A board that was worked on gets its backup before it goes idle (the periodic pass only sees
+    // open rooms). The room stays open meanwhile; a session arriving during the copy keeps it open.
+    const b = this.backup
+    if (b && this.now() - entry.openedAt >= b.evictBackupMinOpenMs && this.backupDue(entry)) {
+      void this.backupEntry(entry).then(() => {
+        if (this.rooms.get(boardId) !== entry || entry.room.isClosed() || entry.evictTimer) return
+        if (entry.room.getNumActiveSessions() > 0) return
+        this.closeEntry(entry)
+      })
+      return
+    }
     this.closeEntry(entry)
+  }
+
+  private backupDue(entry: RoomEntry): boolean {
+    if (!this.backup) return false
+    if (!this.lastBackupClock.has(entry.roomId)) {
+      let last: number | null = null
+      try {
+        last = readManifest(this.backup.dir, entry.roomId)?.backups.at(-1)?.documentClock ?? null
+      } catch (e) {
+        this.opts.log?.('[backup] unreadable manifest', entry.roomId, (e as Error)?.message)
+      }
+      this.lastBackupClock.set(entry.roomId, last)
+    }
+    const last = this.lastBackupClock.get(entry.roomId)
+    return last === null || last === undefined || last !== entry.storage.getClock()
+  }
+
+  private backupEntry(entry: RoomEntry): Promise<BackupEntry | null> {
+    const b = this.backup
+    if (!b) return Promise.resolve(null)
+    if (entry.backingUp) return entry.backingUp
+    const run = (async () => {
+      try {
+        const made = await backupBoard({ db: entry.db, boardId: entry.roomId, root: b.dir, keep: b.keep })
+        this.lastBackupClock.set(entry.roomId, made.documentClock)
+        return made
+      } catch (e) {
+        this.opts.log?.('[backup] failed', entry.roomId, (e as Error)?.message ?? e)
+        return null
+      } finally {
+        entry.backingUp = null
+      }
+    })()
+    entry.backingUp = run
+    return run
   }
 
   private closeEntry(entry: RoomEntry) {
@@ -218,6 +401,7 @@ export class RoomRegistry {
     entry.evictTimer = null
     if (this.rooms.get(entry.roomId) === entry) this.rooms.delete(entry.roomId)
     entry.room.close()
+    entry.deleted.close()
     // 5.4.2 bug: pruneTombstones is a trailing 1 s throttle; if it fires after db.close() it throws
     // uncaught and kills the process. flush() runs it now (it is @internal: re-check on upgrades).
     ;(entry.storage as unknown as { pruneTombstones?: { flush?: () => void } }).pruneTombstones?.flush?.()
@@ -225,6 +409,7 @@ export class RoomRegistry {
   }
 
   closeAll() {
+    if (this.backupTimer) clearInterval(this.backupTimer)
     for (const e of [...this.rooms.values()]) this.closeEntry(e)
   }
 }

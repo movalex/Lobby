@@ -1,0 +1,175 @@
+// Sharing state for the board header badge (PRS-03), the detailed "who has access and why" list for
+// the Share dialog (PRS-02), and transfer of ownership.
+
+import { type ShareMember, TransferOwnershipInput } from '@draftroom/contracts'
+import {
+  BOARD_ROLES,
+  type BoardRole,
+  can,
+  resolveBoardRole,
+  type WorkspaceRole,
+} from '@draftroom/permissions'
+import type { FastifyInstance } from 'fastify'
+import { isUserId, requireBoardAction } from '../../access.ts'
+import { audit } from '../../audit.ts'
+import type { Params } from '../../context.ts'
+import { badRequest, notFound, parse } from '../../errors.ts'
+import { listBoardMembers } from '../../routes/members.ts'
+import { toUser, type UserRow } from '../../serialize.ts'
+import type { FeatureContext } from '../context.ts'
+import { publishSharingChanged } from './shared.ts'
+
+const RANK = Object.fromEntries(BOARD_ROLES.map((r, i) => [r, BOARD_ROLES.length - i])) as Record<
+  BoardRole,
+  number
+>
+
+export function registerSharingRoutes(app: FastifyInstance, ctx: FeatureContext): void {
+  const { db, now, notifier } = ctx
+
+  app.get('/api/boards/:bid/sharing', async (req) => {
+    const user = await ctx.requireUser(req)
+    const { bid = '' } = req.params as Params
+    const access = await requireBoardAction(db, bid, user.id, 'view')
+    const { board } = access
+    const links = await db.query<{ role: 'viewer' | 'commenter'; expires_at: Date }>(
+      `SELECT role, expires_at FROM invitations
+        WHERE board_id = $1 AND multi_use AND revoked_at IS NULL AND expires_at > $2
+        ORDER BY expires_at, id LIMIT 20`,
+      [board.id, now()],
+    )
+    const direct = await db.one<{ n: number }>(
+      `SELECT count(*)::int AS n FROM board_members bm
+         JOIN workspace_members wm ON wm.workspace_id = $2 AND wm.user_id = bm.user_id
+        WHERE bm.board_id = $1`,
+      [board.id, board.workspace_id],
+    )
+    let pendingRequests: number | null = null
+    if (can(access.role, 'manage_access', board.status)) {
+      const row = await db.one<{ n: number }>(
+        "SELECT count(*)::int AS n FROM access_requests WHERE board_id = $1 AND status = 'pending'",
+        [board.id],
+      )
+      pendingRequests = row.n
+    }
+    return {
+      visibility: board.visibility,
+      links: links.rows.map((l) => ({ role: l.role, expiresAt: l.expires_at.toISOString() })),
+      directCount: direct.n,
+      pendingRequests,
+    }
+  })
+
+  app.get('/api/boards/:bid/sharing/members', async (req) => {
+    const user = await ctx.requireUser(req)
+    const { bid = '' } = req.params as Params
+    const access = await requireBoardAction(db, bid, user.id, 'manage_access')
+    const { board } = access
+    const rows = await db.query<
+      UserRow & {
+        workspace_role: WorkspaceRole
+        board_grant: BoardRole | null
+        via_link: boolean
+        link_ends_at: Date | null
+      }
+    >(
+      `SELECT u.id, u.name, u.handle, u.color, u.avatar_url, wm.role AS workspace_role, bm.role AS board_grant,
+              EXISTS (
+                SELECT 1 FROM invitation_redemptions r JOIN invitations i ON i.id = r.invitation_id
+                 WHERE r.board_id = $1 AND r.user_id = u.id AND i.multi_use
+                   AND r.redeemed_at = bm.created_at AND i.role = bm.role
+              ) AS via_link,
+              (SELECT max(i.expires_at) FROM invitation_redemptions r JOIN invitations i ON i.id = r.invitation_id
+                WHERE r.board_id = $1 AND r.user_id = u.id AND i.multi_use AND i.swept_at IS NULL
+              ) AS link_ends_at
+         FROM workspace_members wm
+         JOIN users u ON u.id = wm.user_id
+         LEFT JOIN board_members bm ON bm.board_id = $1 AND bm.user_id = wm.user_id
+        WHERE wm.workspace_id = $2
+          AND (wm.role IN ('owner', 'admin') OR bm.role IS NOT NULL
+               OR (wm.role = 'member' AND $3::text <> 'private'))`,
+      [board.id, board.workspace_id, board.visibility],
+    )
+    const members: ShareMember[] = []
+    for (const { workspace_role, board_grant, via_link, link_ends_at, ...u } of rows.rows) {
+      const role = resolveBoardRole({
+        workspaceRole: workspace_role,
+        boardGrant: board_grant,
+        visibility: board.visibility,
+      })
+      if (!role) continue
+      const viaReviewLink = board_grant !== null && via_link
+      members.push({
+        user: toUser(u),
+        role,
+        source: board_grant && board_grant === role ? 'grant' : 'workspace',
+        grant: board_grant,
+        workspaceRole: workspace_role,
+        withoutGrant: resolveBoardRole({
+          workspaceRole: workspace_role,
+          boardGrant: null,
+          visibility: board.visibility,
+        }),
+        viaReviewLink,
+        linkEndsAt: viaReviewLink && link_ends_at ? link_ends_at.toISOString() : null,
+      })
+    }
+    members.sort((a, b) => RANK[b.role] - RANK[a.role] || a.user.name.localeCompare(b.user.name))
+    return { members }
+  })
+
+  // Makes someone in the workspace an owner and steps the caller's own owner grant down to editor, in
+  // one transaction (so the board never has zero owners in between). A workspace owner/admin keeps
+  // owning every board through the workspace; only their direct grant changes.
+  app.post('/api/boards/:bid/transfer-ownership', async (req) => {
+    const user = await ctx.requireUser(req)
+    const { bid = '' } = req.params as Params
+    const { userId } = parse(TransferOwnershipInput, req.body)
+    const result = await db.transaction(async (tx) => {
+      const access = await requireBoardAction(tx, bid, user.id, 'manage_access', { forUpdate: true })
+      if (userId === user.id) throw badRequest('Pick someone else to transfer ownership to.')
+      if (!isUserId(userId)) throw notFound()
+      const target = await tx.maybeOne<{ board_grant: BoardRole | null }>(
+        `SELECT bm.role AS board_grant FROM workspace_members wm
+           LEFT JOIN board_members bm ON bm.board_id = $1 AND bm.user_id = wm.user_id
+          WHERE wm.workspace_id = $2 AND wm.user_id = $3`,
+        [bid, access.board.workspace_id, userId],
+      )
+      if (!target) throw notFound() // outsiders are added through invitations first
+      const at = now()
+      await tx.query(
+        `INSERT INTO board_members (board_id, user_id, role, added_by, created_at) VALUES ($1, $2, 'owner', $3, $4)
+         ON CONFLICT (board_id, user_id) DO UPDATE SET role = 'owner', added_by = EXCLUDED.added_by`,
+        [bid, userId, user.id, at],
+      )
+      await audit(tx, {
+        workspaceId: access.board.workspace_id,
+        actorId: user.id,
+        action: 'board.member.put',
+        target: bid,
+        detail: { userId, role: 'owner', previousRole: target.board_grant, via: 'transfer_ownership' },
+        at,
+      })
+      const stepDown = access.grant === 'owner'
+      if (stepDown) {
+        await tx.query("UPDATE board_members SET role = 'editor' WHERE board_id = $1 AND user_id = $2", [
+          bid,
+          user.id,
+        ])
+        await audit(tx, {
+          workspaceId: access.board.workspace_id,
+          actorId: user.id,
+          action: 'board.member.put',
+          target: bid,
+          detail: { userId: user.id, role: 'editor', previousRole: 'owner', via: 'transfer_ownership' },
+          at,
+        })
+      }
+      return { members: await listBoardMembers(tx, access.board), stepDown }
+    })
+    notifier.accessChanged({ boardId: bid, userId })
+    if (result.stepDown) notifier.accessChanged({ boardId: bid, userId: user.id })
+    publishSharingChanged(ctx, bid, 'ownership-transferred')
+    return { members: result.members }
+  })
+}

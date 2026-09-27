@@ -1,7 +1,9 @@
-import type { ReactNode } from 'react'
+import { type ReactNode, useCallback } from 'react'
+import { api } from '../api/client.ts'
 import { useSession } from '../auth/session.tsx'
 import { Wordmark } from '../brand/Wordmark.tsx'
-import { linkClick } from '../lib/routing.ts'
+import { RequestAccess } from '../features/sharing/RequestAccess.tsx'
+import { linkClick, matchRoute } from '../lib/routing.ts'
 
 export function LoadingScreen({ label = 'Loading…', testId }: { label?: string; testId?: string }) {
   return (
@@ -45,7 +47,8 @@ export function MessageScreen({
 
 /**
  * One screen for "not found" and "forbidden": the API answers 404 for both so a board's existence
- * never leaks, and the UI does not try to tell them apart either.
+ * never leaks, and the UI does not try to tell them apart either. On a board link, a signed-in user
+ * can request access (PRS-04); the server answers the same whether or not the board exists.
  */
 export function NoAccessScreen({
   thing = 'board',
@@ -54,8 +57,19 @@ export function NoAccessScreen({
   thing?: 'board' | 'workspace'
   revoked?: boolean
 }) {
-  const { signOut } = useSession()
+  const { signOut, state } = useSession()
   const here = `${location.pathname}${location.search}`
+  const route = matchRoute(location.pathname)
+  const boardId = thing === 'board' && route.name === 'board' ? route.boardId : null
+  const userId = state.status === 'signed-in' ? state.me.user.id : null
+  // Once the owner approves, the board opens: reload when the API starts answering for it.
+  const checkApproved = useCallback(() => {
+    if (!boardId) return
+    api.getBoard(boardId).then(
+      () => location.reload(),
+      () => {},
+    )
+  }, [boardId])
   return (
     <MessageScreen
       testId="no-access"
@@ -70,6 +84,17 @@ export function NoAccessScreen({
               : `It may not exist, it may have been moved to trash, or it hasn't been shared with you.`}
           </p>
           <p>Ask its owner to share it with you, or open the invite link they sent you.</p>
+          {boardId && userId && (
+            <div className="dr-noaccess__request">
+              <RequestAccess
+                key={`${userId}:${boardId}`}
+                boardId={boardId}
+                userId={userId}
+                currentRole={null}
+                onApprovedCheck={checkApproved}
+              />
+            </div>
+          )}
         </>
       }
       actions={

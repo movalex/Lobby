@@ -62,8 +62,23 @@ export function InvitePage({ token }: { token: string }) {
         replace: true,
       })
     } catch (e) {
+      if (isApiError(e) && e.kind === 'unauthorized') {
+        setAccepting(false)
+        return // the session guard shows sign-in
+      }
+      // A used-up, revoked or expired link: if this account already joined the board (e.g. through
+      // a review link earlier), just open it instead of showing a dead end.
+      if (isApiError(e) && e.kind === 'gone' && inv.board) {
+        const opened = await api.getBoard(inv.board.id).then(
+          () => true,
+          () => false,
+        )
+        if (opened) {
+          navigate(boardPath(inv.board.id), { replace: true })
+          return
+        }
+      }
       setAccepting(false)
-      if (isApiError(e) && e.kind === 'unauthorized') return // the session guard shows sign-in
       setAcceptError({
         gone: isApiError(e) && e.kind === 'gone',
         message: isApiError(e) ? e.message : 'The invitation could not be accepted. Try again.',

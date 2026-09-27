@@ -10,13 +10,80 @@ export interface TicketUriOptions {
   onAccessLost(): void
   /** 401: the session ended. */
   onSignedOut(): void
-  /** Where the page is served from; the socket goes to the same origin (Vite/edge proxies /connect). */
+  /**
+   * Where the page is served from. By default the socket goes to the same origin (the Vite proxy in dev,
+   * or a single-origin edge that proxies /connect).
+   */
   origin: { protocol: string; host: string }
+  /**
+   * A separate sync origin for the socket. Omitted: the build-time `VITE_DRAFTROOM_SYNC_ORIGIN` (unset =
+   * the page origin). `null`: always the page origin.
+   */
+  syncOrigin?: string | null
   sleep?: (ms: number) => Promise<void>
   backoffMs?: readonly number[]
 }
 
 const DEFAULT_BACKOFF = [500, 1000, 2000, 4000, 5000] as const
+
+/**
+ * The build-time sync origin, e.g. `https://draftroom-staging-sync.onrender.com` (Render static sites
+ * cannot proxy WebSockets, docs/DEPLOY.md). Vite inlines it into the bundle; read per call so tests can stub it.
+ */
+export function buildTimeSyncOrigin(): string | undefined {
+  const v: unknown = import.meta.env.VITE_DRAFTROOM_SYNC_ORIGIN
+  return typeof v === 'string' && v.trim() ? v.trim() : undefined
+}
+
+export type SocketOrigin = { ok: true; base: string } | { ok: false; base: string; error: string }
+
+const SOCKET_SCHEME: Record<string, 'ws:' | 'wss:'> = {
+  'http:': 'ws:',
+  'https:': 'wss:',
+  'ws:': 'ws:',
+  'wss:': 'wss:',
+}
+
+/**
+ * `ws(s)://host[:port]` for board sockets: the page's own origin, or `configured` (an http(s) or ws(s)
+ * origin; http -> ws, https -> wss). A configured value that is not an origin, or an insecure socket
+ * from an https page (browsers block it as mixed content), is refused with `ok: false` and the page
+ * origin as the fallback base, so a bad build setting is reported instead of silently misrouting.
+ */
+export function syncSocketOrigin(
+  page: { protocol: string; host: string },
+  configured?: string,
+): SocketOrigin {
+  const pageBase = `${page.protocol === 'https:' ? 'wss:' : 'ws:'}//${page.host}`
+  if (configured === undefined || configured.trim() === '') return { ok: true, base: pageBase }
+  let url: URL | null = null
+  try {
+    url = new URL(configured.trim())
+  } catch {}
+  const scheme = url ? SOCKET_SCHEME[url.protocol] : undefined
+  if (
+    !url ||
+    !scheme ||
+    !url.host ||
+    (url.pathname !== '/' && url.pathname !== '') ||
+    url.search ||
+    url.hash ||
+    url.username ||
+    url.password
+  )
+    return {
+      ok: false,
+      base: pageBase,
+      error: 'VITE_DRAFTROOM_SYNC_ORIGIN must be an origin only (https://host[:port] or wss://host[:port])',
+    }
+  if (page.protocol === 'https:' && scheme === 'ws:')
+    return {
+      ok: false,
+      base: pageBase,
+      error: 'VITE_DRAFTROOM_SYNC_ORIGIN must be https/wss when the page is served over https',
+    }
+  return { ok: true, base: `${scheme}//${url.host}` }
+}
 
 /** Settles never: used once the board is being torn down, so useSync makes no further attempt. */
 const never = () => new Promise<string>(() => {})
@@ -36,10 +103,13 @@ export function createTicketUri(opts: TicketUriOptions) {
   let generation = 0
   let inflight: Promise<string> | null = null
 
-  const wsBase = () => {
-    const scheme = opts.origin.protocol === 'https:' ? 'wss:' : 'ws:'
-    return `${scheme}//${opts.origin.host}/connect/${encodeURIComponent(opts.boardId)}`
-  }
+  const target = syncSocketOrigin(
+    opts.origin,
+    opts.syncOrigin === undefined ? buildTimeSyncOrigin() : (opts.syncOrigin ?? undefined),
+  )
+  // A build misconfiguration: say so once (the socket then tries the page origin, as before).
+  if (!target.ok) console.error(`Draftroom: ${target.error}; connecting to this page's origin instead.`)
+  const wsBase = () => `${target.base}/connect/${encodeURIComponent(opts.boardId)}`
 
   async function attempt(): Promise<string> {
     const gen = generation

@@ -1,0 +1,220 @@
+/* Sharing feature (dashboard-share): Share dialog additions, header badge, request-access form.
+   Reuses the tokens and classes of apps/web/src/styles.css (never edited here). */
+
+/* The Share dialog holds more sections now: a little wider, and it scrolls within the viewport. */
+.dr-dialog--lg:has(.dr-sharing) {
+  width: min(640px, calc(100vw - 32px));
+  overflow-y: auto;
+}
+.dr-sharing .dr-share__section + .dr-share__section {
+  margin-top: 18px;
+}
+.dr-sharing__invite {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+.dr-sharing__invite-input {
+  flex: 1 1 220px;
+  min-width: 0;
+}
+.dr-sharing .dr-share__add {
+  margin-top: 10px;
+}
+.dr-sharing__count {
+  display: inline-grid;
+  place-items: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  margin-left: 4px;
+  border-radius: 999px;
+  background: var(--dr-amber);
+  color: var(--dr-ink);
+  font-size: 12px;
+  font-weight: 700;
+}
+.dr-sharing__request .dr-member__text {
+  gap: 2px;
+}
+.dr-sharing__request-msg {
+  display: block;
+  margin-top: 2px;
+  color: var(--dr-ink-2);
+  font-size: 13px;
+  font-style: italic;
+  overflow-wrap: anywhere;
+}
+.dr-sharing__fallback {
+  display: block;
+  margin-top: 2px;
+  color: var(--dr-warn);
+  font-size: 12.5px;
+}
+.dr-sharing__confirm {
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  font-size: 13px;
+}
+.dr-sharing__check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+}
+.dr-sharing__danger {
+  border-color: var(--dr-danger);
+  color: var(--dr-danger);
+}
+.dr-sharing__danger:hover {
+  background: var(--dr-danger-bg);
+}
+.dr-sharing__links {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+.dr-sharing__link {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--dr-line);
+  border-radius: 8px;
+  font-size: 13px;
+}
+.dr-sharing__link--review {
+  display: block;
+}
+.dr-sharing__link-main {
+  display: grid;
+  gap: 6px;
+}
+.dr-sharing__link-text {
+  color: var(--dr-ink);
+  overflow-wrap: anywhere;
+}
+.dr-sharing__footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-top: 20px;
+  padding-top: 14px;
+  border-top: 1px solid var(--dr-line);
+}
+.dr-sharing__footer .dr-share__hint {
+  margin: 0;
+  flex: 1 1 200px;
+}
+
+/* ---- header badge (PRS-03) -------------------------------------------------------------------- */
+
+.dr-sharebadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 240px;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--dr-line-strong);
+  border-radius: 999px;
+  background: var(--dr-surface);
+  color: var(--dr-ink);
+  font: 500 12.5px / 1 var(--dr-font);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.dr-sharebadge:hover {
+  background: #f1efe8;
+}
+.dr-sharebadge__text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dr-sharebadge[data-kind="link"] {
+  border-color: #d9a45a;
+  background: var(--dr-warn-bg);
+  color: var(--dr-warn);
+}
+.dr-sharebadge[data-kind="workspace"] {
+  border-color: #9fb4d1;
+  background: #eef3fa;
+  color: var(--dr-navy);
+}
+.dr-sharebadge__dot {
+  display: inline-grid;
+  place-items: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--dr-amber);
+  color: var(--dr-ink);
+  font-size: 11px;
+  font-weight: 700;
+}
+@media (max-width: 900px) {
+  .dr-sharebadge__text {
+    display: none;
+  }
+}
+
+/* ---- request access -------------------------------------------------------------------------- */
+
+.dr-reqaccess {
+  display: grid;
+  gap: 8px;
+  margin: 4px 0 8px;
+  text-align: left;
+}
+.dr-reqaccess__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 600;
+}
+.dr-reqaccess__label {
+  font-size: 13px;
+  font-weight: 600;
+}
+.dr-reqaccess__msg {
+  width: 100%;
+  height: auto;
+  min-height: 56px;
+  padding: 8px 10px;
+  resize: vertical;
+  font: 14px / 1.4 var(--dr-font);
+}
+.dr-reqaccess__hint {
+  margin: 0;
+  color: var(--dr-ink-2);
+  font-size: 12.5px;
+}
+.dr-reqaccess--sent {
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--dr-live-bg);
+  color: var(--dr-live);
+  font-size: 14px;
+}
+.dr-reqaccess--sent p {
+  margin: 0 0 4px;
+}
+.dr-noaccess__request {
+  width: 100%;
+  margin: 8px 0 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--dr-line);
+}

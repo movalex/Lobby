@@ -1,0 +1,349 @@
+// Present mode state and lifecycle (imperative; the overlay renders from these atoms). One presenter per
+// editor. Everything the session changes is restored on exit: camera, page, selection, fullscreen, the
+// <html> presenting flag and every listener.
+//
+// What it hides and how (verified against tldraw 5.4.2): there is no instance flag for "hide other people";
+// collaborator cursors are the `CollaboratorCursor` editor component (index.tsx wraps it to render
+// nothing while presenting), and their hints/brushes/selection outlines are drawn on the overlay canvas
+// `.tl-canvas-overlays`, hidden with the tldraw UI layer (`.tlui-layout`), frame headings and our own
+// board chrome by present-export.css under `html[data-dr-presenting]`. Other features can use the same
+// attribute to hide their canvas overlays (comment pins, vote dots) during a presentation.
+import {
+  type Atom,
+  atom,
+  computed,
+  type Editor,
+  type TLPageId,
+  type TLShape,
+  type TLShapeId,
+  unsafe__withoutCapture,
+} from 'tldraw'
+import { type FrameEntry, presentationOrder } from './board-ops.ts'
+import { buildSlides, findStartIndex, reconcileIndex, type Slide, stepIndex } from './slides.ts'
+
+export const PRESENTING_ATTR = 'data-dr-presenting'
+
+export type FullscreenMode = 'native' | 'window'
+
+interface SavedView {
+  pageId: TLPageId
+  camera: { x: number; y: number; z: number }
+  selectedIds: TLShapeId[]
+  focus: HTMLElement | null
+}
+
+export interface PresentState {
+  slideId: TLShapeId | null
+  index: number
+  mode: FullscreenMode
+  gridOpen: boolean
+  saved: SavedView
+}
+
+export interface CurrentSlide {
+  index: number
+  slide: Slide | null
+  count: number
+}
+
+export type StartResult = { ok: true } | { ok: false; reason: 'no-frames' | 'all-skipped' | 'already' }
+
+export interface Presenter {
+  readonly state: Atom<PresentState | null>
+  /** The current page's slides (top-level frames in presentation order, skips removed). */
+  slides(): Slide[]
+  /** The page's top-level frames in presentation order (including skipped ones). */
+  order(): FrameEntry[]
+  current(): CurrentSlide
+  isPresenting(): boolean
+  /** Call from a user gesture (click / keydown): fullscreen needs transient activation. */
+  start(): StartResult
+  stop(): void
+  go(delta: number): void
+  goTo(index: number): void
+  setGridOpen(open: boolean): void
+  /**
+   * Adopts the slide now on screen after the list changed under the presentation (the current frame was
+   * deleted or skipped), so the frame coming back later does not pull the presentation away.
+   */
+  settle(): void
+  /** The overlay's root element: key handling keeps focus inside it. */
+  setOverlayElement(el: HTMLElement | null): void
+}
+
+const NEXT_KEYS = new Set(['ArrowRight', 'ArrowDown', 'PageDown', ' ', 'Spacebar'])
+const PREV_KEYS = new Set(['ArrowLeft', 'ArrowUp', 'PageUp'])
+
+/** The current page plus its frame and group shapes: all board-ops needs for frame order and bounds. */
+export function frameRecords(editor: Editor) {
+  // Frames can only be parented to the page, frames or groups: those records carry every transform.
+  const shapes = editor.getCurrentPageShapes().filter((s) => s.type === 'frame' || s.type === 'group')
+  return [editor.getCurrentPage(), ...shapes]
+}
+
+function focusables(root: HTMLElement): HTMLElement[] {
+  return Array.from(
+    root.querySelectorAll<HTMLElement>('button:not([disabled]), [href], [tabindex]:not([tabindex="-1"])'),
+  ).filter((el) => el.offsetParent !== null || el === document.activeElement)
+}
+
+export function createPresenter(editor: Editor): Presenter {
+  const state = atom<PresentState | null>('dr-present-state', null)
+  const order$ = computed('dr-present-order', () =>
+    presentationOrder(frameRecords(editor), editor.getCurrentPageId()),
+  )
+  const slides$ = computed('dr-present-slides', () =>
+    buildSlides(order$.get(), (id) => editor.getShape(id) as TLShape | undefined),
+  )
+  const current$ = computed<CurrentSlide>('dr-present-current', () => {
+    const s = state.get()
+    const slides = slides$.get()
+    if (!s) return { index: -1, slide: null, count: slides.length }
+    const index = reconcileIndex(s.index, s.slideId, slides)
+    return { index, slide: slides[index] ?? null, count: slides.length }
+  })
+
+  let overlay: HTMLElement | null = null
+  let cleanups: (() => void)[] = []
+
+  const container = () => editor.getContainer()
+
+  const goTo = (index: number) => {
+    const s = state.get()
+    const slides = slides$.get()
+    const slide = slides[index]
+    if (!s || !slide) return
+    state.set({ ...s, slideId: slide.id, index, gridOpen: false })
+  }
+
+  const go = (delta: number) => {
+    const { index, count } = current$.get()
+    if (count === 0) return
+    goTo(stepIndex(index, delta, count))
+  }
+
+  const setGridOpen = (open: boolean) => {
+    const s = state.get()
+    if (s && s.gridOpen !== open) state.set({ ...s, gridOpen: open })
+  }
+
+  const settle = () => {
+    const s = state.get()
+    if (!s) return
+    const { index, slide } = current$.get()
+    if (slide && (slide.id !== s.slideId || index !== s.index)) state.set({ ...s, slideId: slide.id, index })
+  }
+
+  const trapTab = (e: KeyboardEvent) => {
+    if (!overlay) return
+    const items = focusables(overlay)
+    if (items.length === 0) {
+      e.preventDefault()
+      overlay.focus()
+      return
+    }
+    const active = document.activeElement as HTMLElement | null
+    const at = active ? items.indexOf(active) : -1
+    const next = e.shiftKey
+      ? at <= 0
+        ? items.length - 1
+        : at - 1
+      : at < 0 || at >= items.length - 1
+        ? 0
+        : at + 1
+    e.preventDefault()
+    items[next]?.focus()
+  }
+
+  const moveGridFocus = (delta: number) => {
+    const items = overlay ? Array.from(overlay.querySelectorAll<HTMLElement>('[data-slide-option]')) : []
+    if (items.length === 0) return
+    const at = items.indexOf(document.activeElement as HTMLElement)
+    const next = at < 0 ? 0 : Math.max(0, Math.min(items.length - 1, at + delta))
+    items[next]?.focus()
+  }
+
+  // Keys whose keydown the presentation swallowed get their keyup swallowed too (also just after the
+  // presentation ended), so tldraw never sees a release without its press: the Enter that activates
+  // "Exit" would otherwise reach tldraw's select tool on keyup and start editing the note whose
+  // selection was just restored.
+  const swallowed = new Set<string>()
+  let keyupTimer: ReturnType<typeof setTimeout> | undefined
+  const onKeyUp = (e: KeyboardEvent) => {
+    if (swallowed.delete(e.code || e.key)) e.stopPropagation()
+    if (!state.get() && swallowed.size === 0) unlistenKeyup()
+  }
+  const listenKeyup = () => {
+    if (keyupTimer) clearTimeout(keyupTimer)
+    keyupTimer = undefined
+    window.addEventListener('keyup', onKeyUp, true)
+  }
+  function unlistenKeyup() {
+    window.removeEventListener('keyup', onKeyUp, true)
+    swallowed.clear()
+    if (keyupTimer) clearTimeout(keyupTimer)
+    keyupTimer = undefined
+  }
+
+  // Window capture phase: runs before tldraw's container/body listeners and every other feature's, so
+  // board shortcuts (tools, undo, delete, nudge, PgUp/PgDn z-order) never fire under a presentation.
+  const onKeyDown = (e: KeyboardEvent) => {
+    const s = state.get()
+    if (!s) return
+    e.stopPropagation()
+    swallowed.add(e.code || e.key)
+    if (e.isComposing) return
+    const target = e.target instanceof HTMLElement ? e.target : null
+    const onControl = !!(target && overlay?.contains(target) && target.closest('button, a, [role="button"]'))
+    const modified = e.ctrlKey || e.metaKey || e.altKey
+    if (e.key === 'Escape') {
+      e.preventDefault()
+      if (s.gridOpen) setGridOpen(false)
+      else stop()
+      return
+    }
+    if (e.key === 'Tab') {
+      trapTab(e)
+      return
+    }
+    if (modified) return // browser shortcuts (reload, zoom, close tab) keep working
+    if (s.gridOpen) {
+      if (e.key === 'ArrowDown' || e.key === 'ArrowRight') {
+        e.preventDefault()
+        moveGridFocus(1)
+      } else if (e.key === 'ArrowUp' || e.key === 'ArrowLeft') {
+        e.preventDefault()
+        moveGridFocus(-1)
+      } else if (e.key === 'g' || e.key === 'G') {
+        e.preventDefault()
+        setGridOpen(false)
+      }
+      return // Enter/Space activate the focused slide button by default
+    }
+    if ((e.key === ' ' || e.key === 'Enter') && onControl) return // activate the focused button
+    if (NEXT_KEYS.has(e.key)) {
+      e.preventDefault()
+      go(1)
+    } else if (PREV_KEYS.has(e.key)) {
+      e.preventDefault()
+      go(-1)
+    } else if (e.key === 'Home') {
+      e.preventDefault()
+      goTo(0)
+    } else if (e.key === 'End') {
+      e.preventDefault()
+      goTo(current$.get().count - 1)
+    } else if (e.key === 'g' || e.key === 'G') {
+      e.preventDefault()
+      setGridOpen(true)
+    }
+  }
+
+  const onFullscreenChange = () => {
+    const s = state.get()
+    if (s?.mode !== 'native') return
+    // Esc in real fullscreen is taken by the browser: leaving fullscreen ends the presentation.
+    if (!document.fullscreenElement) stop()
+  }
+
+  const start = (): StartResult => {
+    if (state.get()) return { ok: false, reason: 'already' }
+    const slides = slides$.get()
+    if (slides.length === 0) {
+      return { ok: false, reason: order$.get().length > 0 ? 'all-skipped' : 'no-frames' }
+    }
+    const selectedIds = editor.getSelectedShapeIds()
+    const startIndex = findStartIndex(slides, order$.get(), selectedIds, (id) =>
+      editor
+        .getShapeAncestors(id)
+        .map((a) => a.id)
+        .reverse(),
+    )
+    const active = document.activeElement
+    const saved: SavedView = {
+      pageId: editor.getCurrentPageId(),
+      camera: { ...editor.getCamera() },
+      selectedIds: [...selectedIds],
+      focus: active instanceof HTMLElement ? active : null,
+    }
+    if (editor.getEditingShapeId()) editor.setEditingShape(null)
+    if (editor.getInstanceState().followingUserId) editor.stopFollowingUser()
+    editor.selectNone()
+
+    const el = container()
+    let mode: FullscreenMode = 'window'
+    if (typeof el.requestFullscreen === 'function' && document.fullscreenEnabled !== false) {
+      mode = 'native'
+      el.requestFullscreen({ navigationUI: 'hide' }).catch(() => {
+        // Denied (permissions policy, no user activation): stay in the in-window presentation.
+        const s = state.get()
+        if (s && s.mode === 'native') state.set({ ...s, mode: 'window' })
+      })
+    }
+    document.documentElement.setAttribute(PRESENTING_ATTR, 'true')
+    listenKeyup()
+    window.addEventListener('keydown', onKeyDown, true)
+    document.addEventListener('fullscreenchange', onFullscreenChange)
+    cleanups = [
+      () => window.removeEventListener('keydown', onKeyDown, true),
+      () => document.removeEventListener('fullscreenchange', onFullscreenChange),
+    ]
+    const first = slides[startIndex] ?? slides[0]
+    state.set({ slideId: first?.id ?? null, index: Math.max(0, startIndex), mode, gridOpen: false, saved })
+    return { ok: true }
+  }
+
+  const restoreCamera = (saved: SavedView) => {
+    if (editor.getCurrentPageId() !== saved.pageId && editor.getPage(saved.pageId)) {
+      editor.setCurrentPage(saved.pageId)
+    }
+    editor.setCamera(saved.camera, { immediate: true, force: true })
+  }
+
+  function stop() {
+    const s = state.get()
+    if (!s) return
+    for (const c of cleanups) c()
+    cleanups = []
+    state.set(null)
+    // Keys still held (the Esc or Enter that ended it) keep their keyup filtered, briefly.
+    if (swallowed.size === 0) unlistenKeyup()
+    else keyupTimer = setTimeout(unlistenKeyup, 2000)
+    document.documentElement.removeAttribute(PRESENTING_ATTR)
+    if (document.fullscreenElement && document.fullscreenElement === container()) {
+      document.exitFullscreen().catch(() => {})
+    }
+    const { saved } = s
+    unsafe__withoutCapture(() => {
+      restoreCamera(saved)
+      const stillThere = saved.selectedIds.filter((id) => editor.getShape(id))
+      if (stillThere.length) editor.setSelectedShapes(stillThere)
+    })
+    // The container returns to its board size over the next frames (fullscreen exit is async): set the
+    // camera again once it has, so the board view is exactly where it was.
+    requestAnimationFrame(() =>
+      requestAnimationFrame(() => {
+        if (!state.get()) restoreCamera(saved)
+      }),
+    )
+    const focus = saved.focus
+    if (focus?.isConnected) focus.focus({ preventScroll: true })
+  }
+
+  return {
+    state,
+    slides: () => slides$.get(),
+    order: () => order$.get(),
+    current: () => current$.get(),
+    isPresenting: () => state.get() !== null,
+    start,
+    stop,
+    go,
+    goTo,
+    setGridOpen,
+    settle,
+    setOverlayElement(el) {
+      overlay = el
+    },
+  }
+}

@@ -19,7 +19,7 @@ import { api, isApiError, isNoAccess } from '../api/client.ts'
 import { createAssetStore } from '../assets/asset-store.ts'
 import { AssetMetaStore } from '../assets/meta-store.ts'
 import { useMe, useSession } from '../auth/session.tsx'
-import { createBoardEvents } from '../features/events.ts'
+import { type BoardEvents, createBoardEvents } from '../features/events.ts'
 import {
   FeatureDock,
   FeatureOverlays,
@@ -180,6 +180,12 @@ function BoardSession({
   const { refresh } = useSession()
   const [editor, setEditor] = useState<Editor | null>(null)
   const [sharing, setSharing] = useState(false)
+  // The sharing badge (features/sharing) opens the Share dialog through this window event.
+  useEffect(() => {
+    const open = () => setSharing(true)
+    window.addEventListener('draftroom:open-share', open)
+    return () => window.removeEventListener('draftroom:open-share', open)
+  }, [])
   const [activePanel, setActivePanel] = useState<string | null>(null)
   const editorRef = useRef<Editor | null>(null)
   const { notices, notify, dismiss } = useNotices()
@@ -197,10 +203,20 @@ function BoardSession({
     }
   }, [metaStore])
 
-  // One server-sent event stream per mounted board session, shared by all features.
-  const events = useMemo(() => createBoardEvents(boardId), [boardId])
-  useEffect(() => () => events.close(), [events])
-  useEffect(() => events.onAccessLost(() => handlers.current.onAccessLost()), [events])
+  // One server-sent event stream per mounted board session, shared by all features. Created in an
+  // effect (not useMemo): StrictMode's simulated unmount would otherwise close the memoized stream for
+  // good (close() is permanent) and leak a second, unlistened EventSource from the double render.
+  const [events, setEvents] = useState<BoardEvents | null>(null)
+  useEffect(() => {
+    const stream = createBoardEvents(boardId)
+    const offLost = stream.onAccessLost(() => handlers.current.onAccessLost())
+    setEvents(stream)
+    return () => {
+      offLost()
+      stream.close()
+      setEvents((current) => (current === stream ? null : current))
+    }
+  }, [boardId])
 
   const assets = useMemo(
     () =>
@@ -310,7 +326,7 @@ function BoardSession({
 
   const featureCtx = useMemo<FeatureContext | null>(
     () =>
-      editor
+      editor && events
         ? {
             editor,
             board,

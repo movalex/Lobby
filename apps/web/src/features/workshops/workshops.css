@@ -1,0 +1,538 @@
+/* Workshops feature (timer, voting, gather everyone). Uses the app tokens from styles.css (--dr-*). */
+
+/* ---- top bar ------------------------------------------------------------------------------------ */
+
+.dr-wk-bar {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.dr-wk-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--dr-line-strong);
+  border-radius: 999px;
+  background: var(--dr-surface);
+  color: var(--dr-ink);
+  font: 600 12.5px / 1 var(--dr-font);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.dr-wk-pill:hover,
+.dr-wk-pill[aria-expanded="true"] {
+  background: #efece4;
+}
+.dr-wk-pill__time {
+  font-family: var(--dr-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 13px;
+  min-width: 4ch;
+  text-align: right;
+}
+.dr-wk-pill[data-state="running"] {
+  border-color: var(--dr-navy);
+  background: var(--dr-navy);
+  color: #fff;
+}
+.dr-wk-pill[data-state="running"]:hover {
+  background: var(--dr-navy-hover);
+}
+.dr-wk-pill[data-state="paused"] {
+  border-color: var(--dr-amber);
+  background: var(--dr-warn-bg);
+  color: var(--dr-warn);
+}
+.dr-wk-pill[data-state="finished"] {
+  border-color: var(--dr-danger);
+  background: var(--dr-danger);
+  color: #fff;
+  animation: dr-wk-pulse 1s ease-in-out 4;
+}
+@keyframes dr-wk-pulse {
+  50% {
+    box-shadow: 0 0 0 5px rgb(163 33 26 / 25%);
+  }
+}
+
+.dr-wk-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--dr-amber);
+  border-radius: 999px;
+  background: var(--dr-warn-bg);
+  color: var(--dr-warn);
+  font: 600 12.5px / 1 var(--dr-font);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.dr-wk-chip__dot {
+  flex: none;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--dr-navy);
+}
+
+.dr-wk-pop {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 40;
+  width: 300px;
+  max-height: min(560px, calc(100vh - 80px));
+  overflow: auto;
+  padding: 6px 14px 12px;
+  color: var(--dr-ink);
+  background: var(--dr-surface);
+  border: 1px solid var(--dr-line);
+  border-radius: 12px;
+  box-shadow: 0 8px 28px rgb(27 35 48 / 18%);
+}
+.dr-wk-pop h3,
+.dr-wk-section h3 {
+  margin: 0;
+  font-size: 13.5px;
+  font-weight: 650;
+}
+.dr-wk-pop__section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 0;
+}
+.dr-wk-pop__section + .dr-wk-pop__section {
+  border-top: 1px solid var(--dr-line);
+}
+.dr-wk-pop__head,
+.dr-wk-section__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.dr-wk-pop__clock {
+  font: 600 15px var(--dr-mono);
+  font-variant-numeric: tabular-nums;
+}
+.dr-wk-pop__clock[data-state="finished"] {
+  color: var(--dr-danger);
+}
+.dr-wk-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+.dr-wk-preset {
+  height: 28px;
+  padding: 0 9px;
+  border: 1px solid var(--dr-line-strong);
+  border-radius: 7px;
+  background: var(--dr-surface);
+  color: var(--dr-ink);
+  font: 500 12.5px var(--dr-font);
+  cursor: pointer;
+}
+.dr-wk-preset[aria-pressed="true"] {
+  border-color: var(--dr-navy);
+  background: var(--dr-navy);
+  color: #fff;
+}
+.dr-wk-duration {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.dr-wk-duration label {
+  margin-right: auto;
+  font-size: 13px;
+  font-weight: 500;
+}
+.dr-wk-duration__input {
+  flex: none; /* .dr-input is flex: 1 */
+  width: 84px;
+  text-align: center;
+  font-family: var(--dr-mono);
+}
+.dr-wk-step {
+  width: 30px;
+  height: 30px;
+  border: 1px solid var(--dr-line-strong);
+  font-size: 16px;
+}
+.dr-wk-hint {
+  margin: 0;
+  color: var(--dr-ink-2);
+  font-size: 12.5px;
+  line-height: 1.4;
+}
+.dr-wk-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.dr-wk-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+/* Control groups are <fieldset>s (with a visually hidden legend): no default fieldset chrome. */
+fieldset.dr-wk-presets,
+fieldset.dr-wk-row {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+fieldset.dr-wk-stepper {
+  min-width: 0;
+  margin: 0;
+}
+.dr-wk-wide {
+  width: 100%;
+  justify-content: center;
+}
+/* Block layout: .dr-form spaces the labels; a flex column would collapse .dr-input (flex: 1). */
+.dr-wk-form .dr-wk-check {
+  display: flex;
+  margin: 14px 0 0;
+  font-weight: 500;
+}
+.dr-wk-form .dr-field-error {
+  margin: 6px 0 0;
+}
+
+/* ---- canvas overlay ------------------------------------------------------------------------------ */
+
+/* Above the shapes and cursors, below tldraw's UI panels (.tlui-layout is 300). */
+.dr-wk-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 249;
+  overflow: hidden;
+  pointer-events: none;
+}
+/* Timer-only layer above everything, including the presentation overlay (z-index 10000). */
+.dr-wk-top {
+  position: absolute;
+  inset: 0;
+  z-index: 10001;
+  overflow: hidden;
+  pointer-events: none;
+}
+.dr-wk-layer button,
+.dr-wk-prompt,
+.dr-wk-votebar,
+.dr-wk-follow,
+.dr-wk-stepper {
+  pointer-events: auto;
+}
+.dr-wk-dot {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  background: var(--dr-navy);
+  color: #fff;
+  font: 700 12px / 1 var(--dr-font);
+  box-shadow: 0 1px 4px rgb(0 0 0 / 30%);
+  cursor: pointer;
+}
+.dr-wk-dot:hover:not(:disabled) {
+  background: var(--dr-danger);
+}
+.dr-wk-dot:disabled {
+  cursor: default;
+}
+.dr-wk-stepper {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--dr-line-strong);
+  border-radius: 999px;
+  background: var(--dr-surface);
+  box-shadow: var(--dr-shadow);
+}
+.dr-wk-stepper__btn {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: var(--dr-paper);
+  color: var(--dr-ink);
+  font: 700 16px / 1 var(--dr-font);
+  cursor: pointer;
+}
+.dr-wk-stepper__btn:disabled {
+  color: var(--dr-line-strong);
+  cursor: default;
+}
+.dr-wk-stepper__n {
+  min-width: 22px;
+  text-align: center;
+  font: 700 13px var(--dr-font);
+}
+.dr-wk-badge {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 28px;
+  height: 28px;
+  padding: 0 9px;
+  border: 2px solid #fff;
+  border-radius: 999px;
+  background: var(--dr-ink);
+  color: #fff;
+  font: 700 13px / 1 var(--dr-font);
+  box-shadow: 0 1px 4px rgb(0 0 0 / 30%);
+  pointer-events: none;
+}
+.dr-wk-badge--top {
+  background: var(--dr-amber);
+  color: var(--dr-ink);
+}
+.dr-wk-badge__rank {
+  font-size: 11px;
+  opacity: 0.8;
+}
+
+.dr-wk-prompt,
+.dr-wk-votebar,
+.dr-wk-follow {
+  position: absolute;
+  left: 50%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: min(560px, calc(100% - 32px));
+  padding: 8px 10px 8px 14px;
+  border: 1px solid var(--dr-line);
+  border-radius: 12px;
+  background: var(--dr-surface);
+  color: var(--dr-ink);
+  font-size: 13.5px;
+  box-shadow: 0 6px 24px rgb(27 35 48 / 16%);
+  transform: translateX(-50%);
+}
+/* Above tldraw's bottom toolbar; notices use the top centre. */
+.dr-wk-prompt,
+.dr-wk-votebar {
+  bottom: 76px;
+}
+.dr-wk-prompt {
+  flex-direction: column;
+  align-items: stretch;
+}
+.dr-wk-prompt p {
+  margin: 0;
+}
+.dr-wk-follow {
+  bottom: 132px;
+  border-color: var(--dr-navy);
+}
+.dr-wk-votebar__left {
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.dr-wk-flash {
+  position: absolute;
+  inset: 0;
+  box-shadow: inset 0 0 0 6px var(--dr-danger);
+  animation: dr-wk-flash 0.65s ease-in-out 4;
+}
+/* Below the notices (top centre) so it never covers the "Time's up" toast. */
+.dr-wk-flash__text {
+  position: absolute;
+  top: 72px;
+  left: 50%;
+  padding: 10px 22px;
+  border-radius: 999px;
+  background: var(--dr-danger);
+  color: #fff;
+  font: 700 20px var(--dr-font);
+  box-shadow: var(--dr-shadow);
+  transform: translateX(-50%);
+}
+@keyframes dr-wk-flash {
+  50% {
+    box-shadow: inset 0 0 0 2px rgb(163 33 26 / 30%);
+  }
+}
+
+.dr-wk-floating {
+  position: absolute;
+  top: 16px;
+  left: 16px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border-radius: 999px;
+  background: var(--dr-navy);
+  color: #fff;
+  font: 700 18px var(--dr-mono);
+  font-variant-numeric: tabular-nums;
+  box-shadow: var(--dr-shadow);
+}
+.dr-wk-floating[data-state="paused"] {
+  background: var(--dr-warn-bg);
+  color: var(--dr-warn);
+}
+.dr-wk-floating[data-state="finished"] {
+  background: var(--dr-danger);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dr-wk-pill[data-state="finished"],
+  .dr-wk-flash {
+    animation: none;
+  }
+}
+
+/* ---- dock panel ---------------------------------------------------------------------------------- */
+
+.dr-wk-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  font-size: 13.5px;
+  color: var(--dr-ink);
+}
+.dr-wk-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+.dr-wk-empty p {
+  margin: 0;
+}
+.dr-wk-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.dr-wk-status {
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 700;
+}
+.dr-wk-status--open {
+  background: var(--dr-live-bg);
+  color: var(--dr-live);
+}
+.dr-wk-status--closed {
+  background: #eeece6;
+  color: var(--dr-ink-2);
+}
+.dr-wk-status--revealed {
+  background: var(--dr-warn-bg);
+  color: var(--dr-warn);
+}
+.dr-wk-meta,
+.dr-wk-lead {
+  margin: 0;
+  line-height: 1.45;
+}
+.dr-wk-mine,
+.dr-wk-rank,
+.dr-wk-history ul {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.dr-wk-mine li,
+.dr-wk-rank li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 6px;
+  border-radius: 8px;
+  background: var(--dr-paper);
+}
+.dr-wk-mine__label,
+.dr-wk-rank__label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dr-wk-mine__count,
+.dr-wk-rank__count {
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.dr-wk-rank__place {
+  min-width: 3ch;
+  color: var(--dr-ink-2);
+  font-size: 12px;
+  font-weight: 700;
+}
+.dr-wk-rank__place--top {
+  color: var(--dr-warn);
+}
+.dr-wk-facil {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--dr-line);
+  border-radius: 10px;
+}
+.dr-wk-facil p {
+  margin: 0;
+}
+.dr-wk-results {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.dr-wk-results > p {
+  margin: 0;
+}
+.dr-wk-history summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+.dr-wk-history li {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--dr-line);
+}
+.dr-wk-history__title {
+  font-weight: 600;
+}

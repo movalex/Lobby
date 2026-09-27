@@ -58,5 +58,5 @@ export interface BoardFeature {
   /** Shallow-merged into <Tldraw options> (e.g. maxShapesPerPage). */
   options?: Partial<TldrawOptions>
   /** After the editor mounts; return a cleanup. */
-  onMount?(ctx: FeatureContext): void | (() => void)
+  onMount?(ctx: FeatureContext): (() => void) | undefined
 }
