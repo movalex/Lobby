@@ -45,6 +45,9 @@ catalogs:
     '@tldraw/tlschema':
       specifier: 5.4.2
       version: 5.4.2
+    '@tldraw/utils':
+      specifier: 5.4.2
+      version: 5.4.2
     '@tldraw/validate':
       specifier: 5.4.2
       version: 5.4.2
@@ -267,6 +270,18 @@ importers:
 
   packages/auth-tickets: {}
 
+  packages/board-ops:
+    dependencies:
+      '@draftroom/canvas-schema':
+        specifier: workspace:*
+        version: link:../canvas-schema
+      '@tldraw/tlschema':
+        specifier: 'catalog:'
+        version: 5.4.2(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
+      '@tldraw/utils':
+        specifier: 'catalog:'
+        version: 5.4.2
+
   packages/canvas-schema:
     dependencies:
       '@tldraw/tlschema':
@@ -301,6 +316,21 @@ importers:
   packages/dev-assets: {}
 
   packages/permissions: {}
+
+  packages/templates:
+    dependencies:
+      '@draftroom/board-ops':
+        specifier: workspace:*
+        version: link:../board-ops
+      '@draftroom/canvas-schema':
+        specifier: workspace:*
+        version: link:../canvas-schema
+      '@tldraw/tlschema':
+        specifier: 'catalog:'
+        version: 5.4.2(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
+      '@tldraw/utils':
+        specifier: 'catalog:'
+        version: 5.4.2
 
 packages:
 

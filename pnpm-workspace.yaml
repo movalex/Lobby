@@ -12,6 +12,7 @@ catalog:
   '@tldraw/tlschema': 5.4.2
   '@tldraw/validate': 5.4.2
   '@tldraw/assets': 5.4.2
+  '@tldraw/utils': 5.4.2
   # react
   react: 19.3.0
   react-dom: 19.3.0

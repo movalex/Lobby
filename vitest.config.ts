@@ -42,6 +42,8 @@ export default defineConfig({
             'packages/db/test/**/*.test.ts',
             'packages/permissions/src/**/*.test.ts',
             'packages/auth-tickets/src/**/*.test.ts',
+            'packages/board-ops/src/**/*.test.ts',
+            'packages/templates/src/**/*.test.ts',
           ],
           testTimeout: 60_000,
         },
