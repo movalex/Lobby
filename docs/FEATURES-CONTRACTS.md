@@ -71,3 +71,11 @@ export function instantiateTemplate(id: TemplateDefinition['id'], ctx): { record
 Content guidance (original content — do not copy Miro or community templates): named frames as sections, a heading text in each, a few starter sticky notes with prompts in different colors, arrows bound between steps where flow matters (storyboard panels in sequence, production plan phases), placeholder geo boxes for image slots (mood board, storyboard). All objects are ordinary editable shapes. Frames must not overlap; the whole template should fit roughly within 3000×2000 at the origin.
 
 Tests: every template's records validate; unique ids across two instantiations; every binding's endpoints exist; every `parentId` resolves; frame children lie inside their frame; `frameOutline` over the template returns the frames in the intended order.
+
+## As built (review, 2026-09-26)
+
+- board-ops: 161 tests, templates: 211 tests; adversarial review fixed 7 defects (id-prefix impostors in remapIds, CSV formula triggers after leading whitespace/fullwidth forms, unusable arrow bindings and `javascript:`/`data:`/`file:`/`blob:` embed URLs on import, limit overrides that disabled caps, an unbounded rich-text scan, lone surrogates at length caps). 25 targeted mutations were each caught by a test.
+- `importBoardArchive` drops unusable arrow bindings and clears non-http(s) embed URLs (each with a warning), ignores non-finite/negative limit overrides, drops page/document/user records with a warning, and merges multi-page content onto `targetPageId`.
+- `remapIds` (the generic duplicate/paste path) does **not** enforce arrow-binding or embed-URL policy — only import does. Any path that feeds untrusted JSON must go through `importBoardArchive` or `store.put` validation.
+- Open product/security decision: imported bookmark/embed shapes with arbitrary http(s) hosts are kept (tldraw renders embeds sandboxed). Restricting to known embed providers is a candidate hardening.
+- Two template instances on one page need `indexAbove` to avoid index collisions; the rotated-frame outline uses the axis-aligned box.
