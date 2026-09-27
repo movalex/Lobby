@@ -4,6 +4,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { NodeSqliteWrapper, SQLiteSyncStorage, TLSocketRoom } from '@tldraw/sync-core'
 
 import type { TLRecord, TLSchema } from '@tldraw/tlschema'
+import { createTextLease, type TextLease } from './lease.ts'
 
 export interface SessionMeta {
   userId: string
@@ -14,6 +15,7 @@ interface RoomEntry {
   room: TLSocketRoom<TLRecord, SessionMeta>
   db: DatabaseSync
   storage: SQLiteSyncStorage<TLRecord>
+  lease: TextLease
   evictTimer: ReturnType<typeof setTimeout> | null
 }
 
@@ -33,6 +35,8 @@ export interface RegistryOpts {
   dataDir: string
   schema: TLSchema
   idleEvictMs?: number
+  /** Text-edit lease duration (docs/M0-CONTRACTS.md §4). Default 5000. */
+  textLeaseMs?: number
   synchronous?: 'FULL' | 'NORMAL'
   log?: (...a: unknown[]) => void
 }
@@ -70,14 +74,26 @@ export class RoomRegistry {
         db.exec('ROLLBACK')
         throw e
       }
+      // One lease map per room; it lives and dies with this entry.
+      entry.lease = createTextLease({
+        leaseMs: this.opts.textLeaseMs ?? 5_000,
+        onDenied: (sessionId, message) => {
+          if (entry.room.isClosed()) return
+          entry.room.sendCustomMessage(sessionId, message)
+        },
+      })
       entry.room = new TLSocketRoom<TLRecord, SessionMeta>({
         schema: this.opts.schema,
         storage: entry.storage,
+        authorizeRecord: entry.lease.authorizeRecord,
         log: {
           warn: (...a: unknown[]) => this.opts.log?.('[room warn]', boardId, ...a),
           error: (...a: unknown[]) => this.opts.log?.('[room error]', boardId, ...a),
         },
-        onSessionRemoved: (room, { numSessionsRemaining }) => {
+        onSessionRemoved: (room, { meta, numSessionsRemaining }) => {
+          // The removed session is already gone from getSessions(); the user's other tabs keep the lease.
+          if (!room.getSessions().some((s) => s.meta.userId === meta.userId))
+            entry.lease.releaseUser(meta.userId)
           // fires again ~5 s after room.close() for leftover sessions: ignore those
           if (room.isClosed() || this.rooms.get(boardId) !== entry) return
           if (numSessionsRemaining > 0) return
