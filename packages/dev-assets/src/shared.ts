@@ -84,10 +84,12 @@ export function newId(prefix: IdPrefix): string {
   return `${prefix}_${body}`
 }
 
+// Accept exactly what the canvas-schema appId validator accepts (10-40), so a card that is valid on
+// the canvas is never treated as "missing" here. newId() always generates 20.
 const ID_RES: Record<IdPrefix, RegExp> = {
-  ast: /^ast_[0-9A-Za-z]{20}$/,
-  ver: /^ver_[0-9A-Za-z]{20}$/,
-  drv: /^drv_[0-9A-Za-z]{20}$/,
+  ast: /^ast_[0-9A-Za-z]{10,40}$/,
+  ver: /^ver_[0-9A-Za-z]{10,40}$/,
+  drv: /^drv_[0-9A-Za-z]{10,40}$/,
 }
 
 export function isId(prefix: IdPrefix, value: unknown): value is string {

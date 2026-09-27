@@ -88,11 +88,12 @@ describe('AssetMetaStore', () => {
   it('never requests malformed ids (they cannot exist server-side)', async () => {
     const server = fakeServer(makeMeta(), ['ready'])
     const store = new AssetMetaStore({ fetchImpl: server.fetchImpl })
-    store.subscribe(BOARD, 'ast_0123456789', 'ver_0123456789', () => {})
+    // 9 base62 chars: one short of the canvas-schema/dev-assets minimum, so no server can hold it
+    store.subscribe(BOARD, 'ast_012345678', 'ver_012345678', () => {})
     const snap = await store.load(BOARD, '../../etc', 'ver_x')
     await vi.advanceTimersByTimeAsync(1000)
     expect(snap.missing).toBe(true)
-    expect(store.get(BOARD, 'ast_0123456789', 'ver_0123456789').missing).toBe(true)
+    expect(store.get(BOARD, 'ast_012345678', 'ver_012345678').missing).toBe(true)
     expect(server.calls).toHaveLength(0)
   })
 

@@ -32,6 +32,29 @@ export default defineConfig({
         },
       },
       { test: { name: 'web', environment: 'node', include: ['apps/web/src/**/*.test.ts'] } },
+      {
+        test: {
+          name: 'packages',
+          environment: 'node',
+          include: [
+            'packages/contracts/src/**/*.test.ts',
+            'packages/db/src/**/*.test.ts',
+            'packages/db/test/**/*.test.ts',
+            'packages/permissions/src/**/*.test.ts',
+            'packages/auth-tickets/src/**/*.test.ts',
+          ],
+          testTimeout: 60_000,
+        },
+      },
+      {
+        test: {
+          name: 'api',
+          environment: 'node',
+          include: ['apps/api/src/**/*.test.ts', 'apps/api/test/**/*.test.ts'],
+          testTimeout: 60_000,
+          hookTimeout: 60_000,
+        },
+      },
     ],
   },
 })

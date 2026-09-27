@@ -12,12 +12,12 @@
   "dependencies": {
     "@draftroom/dev-assets": "workspace:*",
     "@napi-rs/canvas": "catalog:",
+    "file-type": "catalog:",
     "pdfjs-dist": "catalog:",
     "sharp": "catalog:"
   },
   "devDependencies": {
     "@cantoo/pdf-lib": "catalog:",
-    "file-type": "catalog:",
     "pdf-lib": "catalog:"
   }
 }

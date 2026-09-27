@@ -9,6 +9,7 @@
     "typecheck": "tsc -p ."
   },
   "dependencies": {
+    "@draftroom/auth-tickets": "workspace:*",
     "@draftroom/canvas-schema": "workspace:*",
     "@draftroom/dev-assets": "workspace:*",
     "@tldraw/sync-core": "catalog:",

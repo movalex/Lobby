@@ -10,12 +10,17 @@
     "typecheck": "tsc -p ."
   },
   "dependencies": {
+    "@clerk/react": "catalog:",
     "@draftroom/canvas-schema": "workspace:*",
+    "@draftroom/contracts": "workspace:*",
+    "@draftroom/dev-assets": "workspace:*",
     "@tldraw/assets": "catalog:",
     "@tldraw/sync": "catalog:",
+    "pdf-lib": "catalog:",
     "react": "catalog:",
     "react-dom": "catalog:",
-    "tldraw": "catalog:"
+    "tldraw": "catalog:",
+    "zod": "catalog:"
   },
   "devDependencies": {
     "@types/react": "catalog:",
