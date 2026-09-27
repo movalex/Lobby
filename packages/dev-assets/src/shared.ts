@@ -143,7 +143,7 @@ export function sanitizeDisplayName(raw: string): string {
   return (cleaned || 'file').slice(0, LIMITS.maxNameLength)
 }
 
-// ---- URL contract (served by apps/sync in M0; by the API with authorization from M1/M3) ----------
+// ---- URL contract (served by apps/api with board authorization since M1; see docs/M1-CONTRACTS.md §5)
 
 /** Stable, host-less reference stored in tldraw asset `src`. Never a signed or expiring URL. */
 export function stableFileRef(assetId: string, versionId: string): string {
@@ -159,9 +159,9 @@ export function originalUrl(boardId: string, assetId: string, versionId: string)
 }
 
 export function metaUrl(boardId: string, assetId: string, versionId: string) {
-  return `/dev-api/boards/${encodeURIComponent(boardId)}/assets/${assetId}/${versionId}`
+  return `/api/boards/${encodeURIComponent(boardId)}/assets/${assetId}/${versionId}`
 }
 
 export function uploadUrl(boardId: string) {
-  return `/dev-api/boards/${encodeURIComponent(boardId)}/assets`
+  return `/api/boards/${encodeURIComponent(boardId)}/assets`
 }
