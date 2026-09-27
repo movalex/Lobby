@@ -1,7 +1,7 @@
 import { draftroomSchema } from '@draftroom/canvas-schema'
 import { createTLSchemaFromUtils, defaultBindingUtils, defaultShapeUtils } from 'tldraw'
 import { describe, expect, it } from 'vitest'
-import { FileCardShapeUtil } from './FileCardShapeUtil.tsx'
+import { FileCardShapeUtil } from './file-card/FileCardShapeUtil.tsx'
 
 const sortKeys = (v: unknown): unknown =>
   Array.isArray(v)

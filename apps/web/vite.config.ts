@@ -15,6 +15,8 @@ export default defineConfig({
   plugins: [react()],
   // Required for `vite` dev when importing '@tldraw/assets/imports.vite' (?url imports); build works without it.
   optimizeDeps: { exclude: ['@tldraw/assets'] },
+  // tldraw alone is ~1.8 MB minified. It is already split into the lazily loaded board chunk.
+  build: { chunkSizeWarningLimit: 2000 },
   server: { host: '127.0.0.1', port: Number(process.env.WEB_PORT ?? 5173), strictPort: true, proxy },
   preview: { host: '127.0.0.1', port: Number(process.env.WEB_PORT ?? 4173), strictPort: true, proxy },
 })

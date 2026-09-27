@@ -46,7 +46,7 @@ async function startServer(): Promise<ChildProcess> {
 }
 
 async function open(page: Page, room: string, user: string) {
-  await page.goto(`/?room=${room}&user=${user}`)
+  await page.goto(`/b/${room}?user=${user}`)
   await page.waitForFunction(() => window.editor !== undefined, undefined, { timeout: 30_000 })
 }
 const shapes = (p: Page) =>
@@ -100,7 +100,7 @@ test('M0: two sessions, reload, SIGKILL+restart, offline edit reconnect', async 
   // 3. SIGKILL the server (B already rendered both edits => both were committed before broadcast)
   server.kill('SIGKILL')
   await new Promise((r) => server.once('exit', r))
-  await expect(a.getByTestId('conn')).toHaveText('offline', { timeout: 15_000 })
+  await expect(a.getByTestId('conn-status')).toHaveAttribute('data-state', 'offline', { timeout: 15_000 })
   // offline edit on A (kept as a speculative change, pushed on reconnect)
   await a.evaluate(() =>
     window.editor?.updateShape({
@@ -110,8 +110,8 @@ test('M0: two sessions, reload, SIGKILL+restart, offline edit reconnect', async 
     }),
   )
   server = await startServer()
-  await expect(a.getByTestId('conn')).toHaveText('online', { timeout: 20_000 })
-  await expect(b.getByTestId('conn')).toHaveText('online', { timeout: 20_000 })
+  await expect(a.getByTestId('conn-status')).toHaveAttribute('data-state', 'online', { timeout: 20_000 })
+  await expect(b.getByTestId('conn-status')).toHaveAttribute('data-state', 'online', { timeout: 20_000 })
   // 4. reconnect: A's offline edit reaches B, nobody is rolled back to an older board
   await expect.poll(() => shapes(b), { timeout: 15_000 }).toEqual(['dr-file-card:renamed-offline', 'geo:'])
   await expect.poll(() => shapes(a)).toEqual(['dr-file-card:renamed-offline', 'geo:'])

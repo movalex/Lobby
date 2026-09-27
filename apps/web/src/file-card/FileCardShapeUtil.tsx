@@ -4,7 +4,15 @@ import {
   fileCardShapeMigrations,
   fileCardShapeProps,
 } from '@draftroom/canvas-schema'
-import { BaseBoxShapeUtil, HTMLContainer, type TLIndicatorPath } from 'tldraw'
+import { BaseBoxShapeUtil, type TLIndicatorPath } from 'tldraw'
+import { FileCardView } from './FileCardView.tsx'
+
+const KIND_LABEL: Record<FileCardShape['props']['kind'], string> = {
+  pdf: 'PDF',
+  video: 'Video',
+  image: 'Image',
+  other: 'File',
+}
 
 export class FileCardShapeUtil extends BaseBoxShapeUtil<FileCardShape> {
   static override type = FILE_CARD_TYPE
@@ -13,8 +21,8 @@ export class FileCardShapeUtil extends BaseBoxShapeUtil<FileCardShape> {
 
   getDefaultProps(): FileCardShape['props'] {
     return {
-      w: 240,
-      h: 160,
+      w: 280,
+      h: 92,
       assetId: 'ast_0000000000',
       versionId: 'ver_0000000000',
       kind: 'other',
@@ -28,28 +36,21 @@ export class FileCardShapeUtil extends BaseBoxShapeUtil<FileCardShape> {
     }
   }
 
+  override getText(shape: FileCardShape) {
+    return shape.props.name
+  }
+
+  override getAriaDescriptor(shape: FileCardShape) {
+    return `${KIND_LABEL[shape.props.kind]} file: ${shape.props.name}`
+  }
+
   component(shape: FileCardShape) {
-    const p = shape.props
-    return (
-      <HTMLContainer
-        data-testid="file-card"
-        style={{
-          background: '#fff',
-          border: '1px solid #333',
-          borderRadius: 8,
-          padding: 8,
-          pointerEvents: 'all',
-        }}
-      >
-        <strong>{p.name}</strong> <span>{p.kind}</span> <span>{p.status}</span>
-        {p.pageCount != null && <span> {p.pageCount} pages</span>}
-      </HTMLContainer>
-    )
+    return <FileCardView shape={shape} />
   }
 
   getIndicatorPath(shape: FileCardShape): TLIndicatorPath {
     const path = new Path2D()
-    path.roundRect(0, 0, shape.props.w, shape.props.h, 8)
+    path.roundRect(0, 0, shape.props.w, shape.props.h, 10)
     return path
   }
 }
