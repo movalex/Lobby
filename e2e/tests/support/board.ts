@@ -181,7 +181,17 @@ export async function shapeCenterOnScreen(page: Page, id: string): Promise<VecLi
 export async function startTextEditing(page: Page, id: string) {
   const c = await shapeCenterOnScreen(page, id)
   await page.mouse.dblclick(c.x, c.y)
-  await expect.poll(() => page.evaluate(() => window.editor?.getEditingShapeId())).toBe(id)
+  await waitForTextEditor(page, id)
+}
+
+/** Resolves once `id` (or any shape) is being text-edited and its editor has keyboard focus. */
+export async function waitForTextEditor(page: Page, id?: string): Promise<string> {
+  const editingId = () => page.evaluate(() => window.editor?.getEditingShapeId() ?? null)
+  if (id) await expect.poll(editingId).toBe(id)
+  const editing = id ?? (await waitForValue(editingId))
+  // Keys pressed before the text editor has focus go to the canvas (where "a" picks the arrow tool).
+  await expect(page.locator(`[data-shape-id="${editing}"] [contenteditable="true"]`)).toBeFocused()
+  return editing
 }
 
 export async function stopTextEditing(page: Page) {

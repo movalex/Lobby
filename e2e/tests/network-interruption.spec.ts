@@ -51,7 +51,11 @@ test('offline A + online B: both converge and B’s edits survive A’s reconnec
   await expectConn(a.page, 'offline')
 
   // A edits a different shape while offline; the change stays in A's tab for now.
-  await edit(a.page, (ed, id) => ed.updateShape({ id, type: 'geo', x: 460, y: 320, props: { color: 'blue' } }), Y)
+  await edit(
+    a.page,
+    (ed, id) => ed.updateShape({ id, type: 'geo', x: 460, y: 320, props: { color: 'blue' } }),
+    Y,
+  )
   await capture('offline-state.png', a.page, test.info())
   expect(await facts(b.page, Y)).toEqual({ x: 420, y: 120, color: 'black' })
 

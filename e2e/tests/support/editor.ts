@@ -57,6 +57,7 @@ export interface EditorLike {
   getShapePageBounds(id: string): BoxLike | undefined
   pageToScreen(point: VecLike): VecLike
   select(...ids: string[]): EditorLike
+  getSelectedShapeIds(): string[]
   selectNone(): EditorLike
   setCurrentTool(id: string): EditorLike
   getCurrentToolId(): string

@@ -93,7 +93,11 @@ test('edit vs delete: the delete wins in either order', async ({ session }) => {
   const exists = (page: Page, id: string) => getShape(page, id).then((s) => s !== null)
 
   // 1. Alice's edit lands first, then bob deletes: gone everywhere.
-  await edit(a.page, (ed, id) => ed.updateShape({ id, type: 'geo', x: 180, props: { color: 'green' } }), EDIT_FIRST)
+  await edit(
+    a.page,
+    (ed, id) => ed.updateShape({ id, type: 'geo', x: 180, props: { color: 'green' } }),
+    EDIT_FIRST,
+  )
   await expect.poll(() => getShape(b.page, EDIT_FIRST).then((s) => s?.x)).toBe(180)
   await edit(b.page, (ed, id) => ed.deleteShapes([id]), EDIT_FIRST)
   await expect.poll(() => exists(a.page, EDIT_FIRST)).toBe(false)
@@ -102,7 +106,11 @@ test('edit vs delete: the delete wins in either order', async ({ session }) => {
   //    bring the shape back.
   await a.context.setOffline(true)
   await expectConn(a.page, 'offline')
-  await edit(a.page, (ed, id) => ed.updateShape({ id, type: 'geo', x: 500, props: { color: 'violet' } }), DELETE_FIRST)
+  await edit(
+    a.page,
+    (ed, id) => ed.updateShape({ id, type: 'geo', x: 500, props: { color: 'violet' } }),
+    DELETE_FIRST,
+  )
   await edit(b.page, (ed, id) => ed.deleteShapes([id]), DELETE_FIRST)
   expect(await exists(a.page, DELETE_FIRST)).toBe(true)
   await a.context.setOffline(false)
@@ -126,7 +134,11 @@ test('DOCUMENTED LIMITATION (SYNTHESIS §8): undo after a remote edit also rever
     const s = await getShape(page, X)
     return s ? { x: s.x, color: s.props.color } : null
   }
-  await edit(a.page, (ed, id) => ed.createShape({ id, type: 'geo', x: 100, y: 160, props: { w: 160, h: 110 } }), X)
+  await edit(
+    a.page,
+    (ed, id) => ed.createShape({ id, type: 'geo', x: 100, y: 160, props: { w: 160, h: 110 } }),
+    X,
+  )
   await expect.poll(() => facts(b.page)).toEqual({ x: 100, color: 'black' })
 
   // Alice moves the shape (her undo stack: this move). Bob then recolors it, a prop alice never touched.

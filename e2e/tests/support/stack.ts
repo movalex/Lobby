@@ -6,11 +6,13 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { request } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
+import { pathToFileURL } from 'node:url'
 
 export const REPO_ROOT = resolve(import.meta.dirname, '../../..')
 export const FIXTURES_DIR = join(REPO_ROOT, 'tests/fixtures/generated')
 const SYNC_ENTRY = join(REPO_ROOT, 'apps/sync/src/server.ts')
 const WORKER_ENTRY = join(REPO_ROOT, 'apps/worker/src/worker.ts')
+const ORPHAN_GUARD = pathToFileURL(join(import.meta.dirname, 'orphan-guard.ts')).href
 
 /** Fixed: the web preview server (playwright.config.ts) proxies /connect, /files and /dev-api here. */
 export const SYNC_PORT = Number(process.env.E2E_SYNC_PORT ?? '5881')
@@ -66,10 +68,11 @@ function managed(spec: ProcessSpec): ManagedProcess {
     await spec.preflight?.()
     output += `\n--- ${spec.name} start ---\n`
     const from = output.length
-    const c = spawn(process.execPath, [spec.entry], {
+    const c = spawn(process.execPath, ['--import', ORPHAN_GUARD, spec.entry], {
       cwd: REPO_ROOT,
       env: spec.env(),
-      stdio: ['ignore', 'pipe', 'pipe'],
+      // The IPC channel exists only so the child notices when this process dies (orphan-guard.ts).
+      stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
       windowsHide: true,
     })
     child = c

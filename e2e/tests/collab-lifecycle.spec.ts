@@ -29,6 +29,7 @@ import {
   toScreen,
   typeText,
   waitForBoard,
+  waitForTextEditor,
   waitForValue,
 } from './support/board.ts'
 import { plainText, richText } from './support/editor.ts'
@@ -168,7 +169,7 @@ test.describe
         await edit(b.page, (ed) => ed.setCurrentTool('text'))
         const at = await toScreen(b.page, { x: 340, y: 330 })
         await b.page.mouse.click(at.x, at.y)
-        await expect.poll(() => read(b.page, (ed) => ed.getEditingShapeId())).toMatch(/^shape:/)
+        await waitForTextEditor(b.page)
         await typeText(b.page, 'Label by bob')
         await stopTextEditing(b.page)
         await expect
