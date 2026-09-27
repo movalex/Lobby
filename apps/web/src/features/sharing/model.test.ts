@@ -1,5 +1,15 @@
 import { describe, expect, it } from 'vitest'
-import { readSentRequest, requestableRoles, shareBadge, shortDate, writeSentRequest } from './model.ts'
+import {
+  canExtend,
+  hoursLabel,
+  pickDefaultRole,
+  readSentRequest,
+  requestableRoles,
+  shareBadge,
+  shortDate,
+  shortTime,
+  writeSentRequest,
+} from './model.ts'
 
 const now = new Date('2026-09-27T12:00:00')
 
@@ -78,5 +88,57 @@ describe('request access', () => {
     m.set('draftroom:access-request:usr_a:b-3', 'not json')
     expect(readSentRequest(store, 'usr_a', 'b-3', t)).toBeNull()
     expect(readSentRequest(null, 'usr_a', 'b-1', t)).toBeNull()
+  })
+})
+
+describe('workshop links in the badge (RETRO-04a)', () => {
+  const base = { directCount: 1, pendingRequests: null, visibility: 'private' as const }
+  it('an open edit link leads, with the time it ends', () => {
+    const b = shareBadge(
+      {
+        ...base,
+        links: [
+          { role: 'commenter', expiresAt: '2026-10-05T10:00:00' },
+          { role: 'editor', expiresAt: '2026-09-27T15:40:00' },
+        ],
+      },
+      'Dev Studio',
+      now,
+    )
+    expect(b.kind).toBe('link')
+    expect(b.label).toMatch(/^Link: edit · until 3:40\sPM$/)
+    expect(b.description).toMatch(
+      /^Anyone with the workshop link can edit after signing in, until 3:40\sPM \(2 links\)\./,
+    )
+  })
+
+  it('a review link still says who can comment after signing in', () => {
+    const b = shareBadge(
+      { ...base, links: [{ role: 'commenter', expiresAt: '2026-10-04T10:00:00' }] },
+      'W',
+      now,
+    )
+    expect(b.description).toMatch(/^Anyone with a review link can comment after signing in, until Oct 4\./)
+  })
+
+  it('+1 h is offered only while the link can still grow', () => {
+    expect(canExtend({ expiresAt: '2026-09-27T15:00:00Z', maxExpiresAt: '2026-09-28T09:00:00Z' })).toBe(true)
+    expect(canExtend({ expiresAt: '2026-09-28T09:00:00Z', maxExpiresAt: '2026-09-28T09:00:00Z' })).toBe(false)
+    expect(canExtend({ expiresAt: '2026-09-28T09:00:00Z', maxExpiresAt: null })).toBe(false)
+    expect(hoursLabel(1)).toBe('1 hour')
+    expect(hoursLabel(3)).toBe('3 hours')
+    expect(shortTime('2026-09-28T09:05:00', now)).toMatch(/^Sep 28, 9:05\sAM$/)
+  })
+})
+
+describe('request form default (PRI-16)', () => {
+  it('starts from the previous role, else Comment for outsiders and Edit for viewers/commenters', () => {
+    const all = requestableRoles(null)
+    expect(pickDefaultRole(all, null, 'viewer')).toBe('viewer')
+    expect(pickDefaultRole(all, null, 'editor')).toBe('editor')
+    expect(pickDefaultRole(all, null, 'owner')).toBe('editor')
+    expect(pickDefaultRole(all, null, null)).toBe('commenter')
+    expect(pickDefaultRole(requestableRoles('viewer'), 'viewer')).toBe('editor')
+    expect(pickDefaultRole(requestableRoles('commenter'), 'commenter')).toBe('editor')
   })
 })

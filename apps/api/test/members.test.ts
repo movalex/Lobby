@@ -125,3 +125,29 @@ describe('board members', () => {
     expect((await del(bob, bob.userId)).statusCode).toBe(409)
   })
 })
+
+describe('what a guest sees (RETRO-17)', () => {
+  it('a guest who joined through a link sees who has access, but not the members’ @handles (their own stays)', async () => {
+    const inv = await bob.req('POST', `/api/boards/${boardId}/invitations`, { role: 'commenter' })
+    const token = (inv.json() as { url: string }).url.split('/').pop()
+    const erin = await api.login('erin')
+    await api.db.query('DELETE FROM workspace_members WHERE user_id = $1 AND workspace_id = $2', [
+      erin.userId,
+      DEV_STUDIO,
+    ])
+    expect((await erin.req('POST', `/api/invitations/${token}/accept`)).statusCode).toBe(200)
+    await put(bob, carol.userId, 'editor')
+
+    const seenByGuest = await members(erin)
+    expect(seenByGuest.map((m) => m.user.id).sort()).toEqual(
+      [alice.userId, bob.userId, carol.userId, erin.userId].sort(),
+    )
+    for (const m of seenByGuest) {
+      if (m.user.id === erin.userId) expect(m.user.handle).toBe('erin')
+      else expect(m.user.handle, m.user.name).toBeNull()
+    }
+    // Workspace members still see handles (that is how they invite each other).
+    const seenByMember = await members(carol)
+    expect(seenByMember.find((m) => m.user.id === bob.userId)?.user.handle).toBe('bob')
+  })
+})

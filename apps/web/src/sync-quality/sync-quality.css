@@ -50,3 +50,8 @@
     white-space: nowrap;
   }
 }
+
+/* Hidden while the role pill says the same thing (RETRO-17); `hidden` loses to display above. */
+.dr-save[hidden] {
+  display: none;
+}

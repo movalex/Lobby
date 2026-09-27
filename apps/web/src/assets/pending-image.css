@@ -1,0 +1,9 @@
+/* An image shape whose URL is still being resolved (the worker is making its previews, or the meta
+   route is being retried) renders an empty container in tldraw 5.4.2, so it would be invisible until
+   resolve() returns. Give it the same quiet tile tldraw shows while an upload is in flight. Loaded
+   images, the uploading tab's local preview and our placeholder tiles all put an <img> in the
+   container, so they are unaffected. */
+.tl-image-container:empty {
+  background-color: var(--tl-color-low);
+  box-shadow: inset 0 0 0 1px var(--tl-color-low-border);
+}

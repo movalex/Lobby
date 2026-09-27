@@ -190,8 +190,13 @@ test('shared as viewer: read-only and forged writes never land; upgraded to edit
   })
 
   await test.step('alice removes bob: his open board shows "no access" within 15 s', async () => {
-    const started = Date.now()
+    // PRI-21: removing asks first ("Remove Bob? Bob loses access now.").
     await memberRow(a.page, bob.id).getByTestId('member-remove').click()
+    await expect(memberRow(a.page, bob.id).getByTestId('member-remove-question')).toHaveText(
+      `Remove ${bob.name}? ${bob.name} loses access now.`,
+    )
+    const started = Date.now()
+    await memberRow(a.page, bob.id).getByTestId('member-remove-confirm').click()
     await expect(b.page.getByTestId('no-access')).toBeVisible({ timeout: 15_000 })
     const ms = Date.now() - started
     testInfo.annotations.push({ type: 'revocation latency', description: `${ms} ms (target < 15000 ms)` })
@@ -295,10 +300,13 @@ test('invitation link: alice invites as commenter; carol signs in, accepts, and 
     await expect(page.getByTestId('invite-inviter')).toHaveText(aliceUser.name)
     await expect(page.getByTestId('invite-role-label')).toHaveText('Can comment')
     await page.getByTestId('invite-signin').click()
+    // PRI-16: back from signing in, the invitation is accepted without a second click.
+    await expect(page.getByTestId('signin-heading')).toHaveText(
+      `Sign in to join “Design review” (invited by ${aliceUser.name})`,
+    )
     await signInThroughUi(page, { handle: 'carol', name: displayName('carol') })
-    await expect(page).toHaveURL(new RegExp(`/invite/${token}$`))
-    await page.getByTestId('invite-accept').click()
     await expect(page).toHaveURL(new RegExp(`/b/${board}$`))
+    expect(token).toMatch(/^[A-Za-z0-9_-]{43}$/)
     await waitForBoard(page)
     const carol = await users.get('carol')
     const c: Session = { user: 'carol', name: carol.name, id: carol.id, context, page }

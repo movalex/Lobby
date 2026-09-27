@@ -50,7 +50,15 @@ export interface TextSpec {
   size?: TLDefaultSizeStyle
   color?: TLDefaultColorStyle
   align?: TLDefaultTextAlignStyle
+  /** Headings and instructions arrive locked (PRE-07); starter values people fill in do not. */
+  locked?: boolean
 }
+
+/**
+ * Meta marker on template image slots. The web app's file drop fits an image dropped onto a marked
+ * slot into it (apps/web/src/board/ExternalContent.tsx); older boards have no marker.
+ */
+export const IMAGE_SLOT_META = { draftroomSlot: 'image' } as const
 
 export interface NoteSpec {
   x: number
@@ -73,6 +81,8 @@ export interface GeoSpec {
   fill?: TLDefaultFillStyle
   dash?: TLDefaultDashStyle
   size?: TLDefaultSizeStyle
+  locked?: boolean
+  meta?: Readonly<Record<string, string>>
 }
 
 export interface ArrowSpec {
@@ -99,12 +109,12 @@ export interface SectionSpec {
 
 export interface BoardBuilder {
   frame(spec: { x: number; y: number; w: number; h: number; name: string }): TLFrameShape
-  /** A frame with a heading text and an optional grey instruction line. */
+  /** A frame with a heading text and an optional grey instruction line (both locked, PRE-07). */
   section(spec: SectionSpec): TLFrameShape
   text(parent: TLFrameShape | null, spec: TextSpec): TLTextShape
   note(parent: TLFrameShape | null, spec: NoteSpec): TLNoteShape
   geo(parent: TLFrameShape | null, spec: GeoSpec): TLGeoShape
-  /** Dashed grey box that marks where an image goes. */
+  /** Dashed grey box that marks where an image goes (locked, with the IMAGE_SLOT_META marker). */
   imageSlot(
     parent: TLFrameShape | null,
     spec: { x: number; y: number; w: number; h: number; label: string },
@@ -151,7 +161,12 @@ export function createBoardBuilder(ctx: TemplateContext): BoardBuilder {
     return { parentId: parent.id, offset: { x: p.page.x, y: p.page.y } }
   }
 
-  function common(parent: TLFrameShape | null, x: number, y: number) {
+  function common(
+    parent: TLFrameShape | null,
+    x: number,
+    y: number,
+    opts: { locked?: boolean; meta?: Readonly<Record<string, string>> } = {},
+  ) {
     const { parentId } = parentInfo(parent)
     return {
       id: createShapeId(),
@@ -161,9 +176,9 @@ export function createBoardBuilder(ctx: TemplateContext): BoardBuilder {
       rotation: 0,
       index: nextIndex(parentId),
       parentId,
-      isLocked: false,
+      isLocked: opts.locked ?? false,
       opacity: 1,
-      meta: {},
+      meta: { ...opts.meta },
     }
   }
 
@@ -201,6 +216,7 @@ export function createBoardBuilder(ctx: TemplateContext): BoardBuilder {
         text: spec.heading,
         size: headingSize,
         color: 'black',
+        locked: true,
       })
       if (spec.intro) {
         builder.text(frame, {
@@ -210,6 +226,7 @@ export function createBoardBuilder(ctx: TemplateContext): BoardBuilder {
           text: spec.intro,
           size: 's',
           color: 'grey',
+          locked: true,
         })
       }
       return frame
@@ -217,7 +234,7 @@ export function createBoardBuilder(ctx: TemplateContext): BoardBuilder {
 
     text(parent, spec) {
       const shape: TLTextShape = {
-        ...common(parent, spec.x, spec.y),
+        ...common(parent, spec.x, spec.y, { locked: spec.locked }),
         type: 'text',
         props: {
           color: spec.color ?? 'black',
@@ -262,7 +279,7 @@ export function createBoardBuilder(ctx: TemplateContext): BoardBuilder {
     geo(parent, spec) {
       const geo = spec.geo ?? 'rectangle'
       const shape: TLGeoShape = {
-        ...common(parent, spec.x, spec.y),
+        ...common(parent, spec.x, spec.y, { locked: spec.locked, meta: spec.meta }),
         type: 'geo',
         props: {
           w: spec.w,
@@ -305,6 +322,10 @@ export function createBoardBuilder(ctx: TemplateContext): BoardBuilder {
         fill: 'semi',
         dash: 'dashed',
         size: 's',
+        // Locked so a drag across the template moves nothing, but still a drop target: the web app
+        // hit-tests marked slots itself, locked or not.
+        locked: true,
+        meta: IMAGE_SLOT_META,
       })
     },
 

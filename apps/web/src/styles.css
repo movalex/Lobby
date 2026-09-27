@@ -1816,3 +1816,192 @@ code {
   background: var(--dr-paper);
   color: var(--dr-ink);
 }
+
+/* ---- top bar: role pill button, narrow screens, "⋯" menu (PRI-02, PRI-09b, RETRO-22a) ------------ */
+
+/* The role pill opens "ask for more access" (a disabled button on archived boards). */
+button.dr-pill--role {
+  border: 0;
+  font-family: inherit;
+  cursor: pointer;
+}
+button.dr-pill--role:hover:not(:disabled) {
+  filter: brightness(0.97);
+  box-shadow: inset 0 0 0 1px #e8c98a;
+}
+button.dr-pill--role:disabled {
+  cursor: default;
+}
+.dr-topbar > * {
+  flex: none;
+}
+.dr-topbar > .dr-topbar__board {
+  flex: 0 1 auto;
+}
+.dr-topbar > .dr-topbar__spacer {
+  flex: 1 1 0;
+}
+/* 768 px and below: the board title keeps priority (96 px at least, then an ellipsis); feature
+   controls live in the "⋯" menu; status pills keep their dot or icon (their words stay readable to
+   screen readers and in the tooltip). */
+.dr-topbar[data-width="tablet"],
+.dr-topbar[data-width="phone"] {
+  gap: 6px;
+  padding: 0 8px 0 10px;
+}
+.dr-topbar[data-width="tablet"] .dr-topbar__sep,
+.dr-topbar[data-width="phone"] .dr-topbar__sep,
+.dr-topbar[data-width="tablet"] .dr-topbar__ws,
+.dr-topbar[data-width="phone"] .dr-topbar__ws,
+.dr-topbar[data-width="tablet"] .dr-topbar__slash,
+.dr-topbar[data-width="phone"] .dr-topbar__slash {
+  display: none;
+}
+.dr-topbar[data-width="tablet"] > .dr-topbar__board,
+.dr-topbar[data-width="phone"] > .dr-topbar__board {
+  flex: 1 1 96px;
+  min-width: 96px;
+}
+.dr-topbar[data-width="tablet"] > .dr-topbar__spacer,
+.dr-topbar[data-width="phone"] > .dr-topbar__spacer {
+  display: none;
+}
+.dr-topbar[data-width="tablet"] .dr-topbar__h1,
+.dr-topbar[data-width="phone"] .dr-topbar__h1,
+.dr-topbar[data-width="tablet"] .dr-topbar__title,
+.dr-topbar[data-width="phone"] .dr-topbar__title {
+  min-width: 0;
+  max-width: 100%;
+}
+.dr-topbar[data-width="tablet"] .dr-topbar__title-input,
+.dr-topbar[data-width="phone"] .dr-topbar__title-input {
+  width: 100%;
+  min-width: 96px;
+}
+.dr-topbar[data-width="tablet"] .dr-pill__label,
+.dr-topbar[data-width="phone"] .dr-pill__label,
+.dr-topbar[data-width="tablet"] .dr-save__label,
+.dr-topbar[data-width="phone"] .dr-save__label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.dr-topbar[data-width="tablet"] .dr-pill,
+.dr-topbar[data-width="phone"] .dr-pill,
+.dr-topbar[data-width="tablet"] .dr-save,
+.dr-topbar[data-width="phone"] .dr-save {
+  padding: 0 8px;
+}
+.dr-topbar[data-width="phone"] .dr-topbar__share {
+  width: 34px;
+  padding: 0;
+}
+.dr-topbar[data-width="phone"] .dr-topbar__share-label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.dr-topbar[data-width="phone"] .dr-topbar__home {
+  padding: 2px;
+}
+
+/* The "⋯" panel (ui/OverflowMenu.tsx), portaled to <body>. Closed, it stays mounted but invisible
+   (never display:none), so a feature's own dialog opened from a shortcut still shows. */
+.dr-overflow {
+  position: fixed;
+  z-index: 950;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: max-content;
+  min-width: 220px;
+  max-width: calc(100vw - 16px);
+  padding: 6px;
+  border: 1px solid var(--dr-line);
+  border-radius: 12px;
+  background: var(--dr-surface);
+  box-shadow:
+    0 2px 6px rgb(27 35 48 / 10%),
+    0 12px 32px rgb(27 35 48 / 16%);
+  font-family: var(--dr-font);
+  color: var(--dr-ink);
+}
+.dr-overflow[data-open="false"] {
+  top: 0;
+  right: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+/* A modal opened from a control inside the closed panel (e.g. Ctrl+P's export dialog). */
+.dr-overflow[data-open="false"] dialog[open] {
+  visibility: visible;
+  pointer-events: auto;
+}
+.dr-overflow__item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 8px;
+  border-radius: 8px;
+}
+.dr-overflow__item + .dr-overflow__item {
+  border-top: 1px solid var(--dr-line);
+  border-radius: 0;
+}
+.dr-overflow__caption {
+  color: var(--dr-ink-2);
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+.dr-overflow__controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.dr-overflow .dr-presence {
+  flex-wrap: wrap;
+}
+
+/* The board page's account badge: drawn in the top bar's right end, last in tab order (RETRO-22a). */
+.dr-board__account {
+  position: absolute;
+  top: 0;
+  right: 10px;
+  z-index: 21;
+  display: flex;
+  align-items: center;
+  height: var(--dr-topbar-h);
+}
+.dr-topbar:not([data-width="phone"]) {
+  padding-right: calc(var(--dr-account-w, 0px) + 20px);
+}
+.dr-topbar[data-width="tablet"] {
+  padding-right: calc(var(--dr-account-w, 0px) + 16px);
+}
+html[data-dr-presenting] .dr-board__account {
+  display: none;
+}
+/* In the "⋯" menu there is room for the words a narrow bar hides (the feature CSS drops them). */
+.dr-overflow .dr-pe-present {
+  width: auto;
+  padding: 0 11px;
+}
+.dr-overflow .dr-pe-present__label {
+  display: inline;
+}
+.dr-overflow .dr-presence:empty::after {
+  content: "Only you right now";
+  color: var(--dr-ink-2);
+  font-size: 13px;
+}

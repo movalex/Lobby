@@ -5,6 +5,8 @@ import {
   describeClock,
   formatClock,
   parseDurationInput,
+  TIMES_UP_ALERT_MS,
+  timerDisplayPhase,
   timerPhase,
   timerRemainingMs,
 } from './countdown.ts'
@@ -105,5 +107,36 @@ describe('formatting and input', () => {
     expect(parseDurationInput('1h30m')).toBe(5_400_000)
     expect(parseDurationInput('2m')).toBe(120_000)
     for (const bad of ['', 'abc', '0', '5:75', '25h', '-1', '0s']) expect(parseDurationInput(bad)).toBeNull()
+  })
+})
+
+describe("time's up, then quiet (RETRO-12)", () => {
+  const finished = (endedMsAfterT0: number | null): WorkshopTimer => ({
+    ...running(0),
+    status: 'finished',
+    remainingMs: 0,
+    endsAt: endedMsAfterT0 === null ? null : new Date(SERVER_T0 + endedMsAfterT0).toISOString(),
+  })
+
+  it('shows "finished" for the alert, then goes back to the plain pill ("ended")', () => {
+    const t = running(60_000)
+    expect(timerDisplayPhase(t, SERVER_T0 + 59_000, 0)).toBe('running')
+    // Reached zero here, before the server says so.
+    expect(timerDisplayPhase(t, SERVER_T0 + 60_000, 0)).toBe('finished')
+    expect(timerDisplayPhase(t, SERVER_T0 + 60_000 + TIMES_UP_ALERT_MS - 1, 0)).toBe('finished')
+    expect(timerDisplayPhase(t, SERVER_T0 + 60_000 + TIMES_UP_ALERT_MS, 0)).toBe('ended')
+    // The server's finished state reads the same; the raw phase stays "finished" (Reset is offered).
+    expect(timerDisplayPhase(finished(60_000), SERVER_T0 + 65_000, 0)).toBe('finished')
+    expect(timerDisplayPhase(finished(60_000), SERVER_T0 + 75_000, 0)).toBe('ended')
+    expect(timerPhase(finished(60_000), SERVER_T0 + 75_000, 0)).toBe('finished')
+  })
+
+  it('a late joiner (on the server clock) never sees the alert, and paused/stopped are untouched', () => {
+    // This browser is 20 s behind the server: the timer ended 11 s ago on the server's clock.
+    expect(timerDisplayPhase(finished(0), SERVER_T0 + 11_000 - 20_000, 20_000)).toBe('ended')
+    expect(timerDisplayPhase(finished(null), SERVER_T0, 0)).toBe('ended')
+    expect(timerDisplayPhase({ ...running(0), status: 'paused' }, SERVER_T0 + 999_999, 0)).toBe('paused')
+    expect(timerDisplayPhase({ ...running(0), status: 'stopped' }, SERVER_T0, 0)).toBe('stopped')
+    expect(timerDisplayPhase(null, SERVER_T0, 0)).toBe('idle')
   })
 })

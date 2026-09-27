@@ -1,6 +1,13 @@
 import { BoardDetail, BoardWithRole, ListBoardsResponse, Project } from '@draftroom/contracts'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { type Client, createBoard, createTestApi, DEV_STUDIO, type TestApi } from './helpers.ts'
+import {
+  type Client,
+  createBoard,
+  createTestApi,
+  DEV_STUDIO,
+  INTERNAL_SECRET,
+  type TestApi,
+} from './helpers.ts'
 
 let api: TestApi
 let alice: Client // Dev Studio owner (first login)
@@ -331,5 +338,69 @@ describe('archive / trash / restore', () => {
     for (const action of ['archive', 'trash', 'restore'])
       expect((await carol.req('POST', `/api/boards/${id}/${action}`)).statusCode, action).toBe(403)
     expect((await api.db.one('SELECT status FROM boards WHERE id = $1', [id])).status).toBe('active')
+  })
+})
+
+describe('GET /internal/boards/:bid/touched (canvas edits, RETRO-19)', () => {
+  const touched = (bid: string, at?: number, secret: string | null = INTERNAL_SECRET) =>
+    api.app.inject({
+      method: 'GET',
+      url: `/internal/boards/${bid}/touched${at === undefined ? '' : `?at=${at}`}`,
+      headers: secret === null ? {} : { 'x-draftroom-internal': secret },
+    })
+  const updatedAt = async (id: string) =>
+    (await api.db.one<{ updated_at: Date }>('SELECT updated_at FROM boards WHERE id = $1', [id])).updated_at
+
+  it('moves updated_at forward to the edit time, so the list says "edited" and sorts by it; never backwards or into the future', async () => {
+    const older = await createBoard(bob, DEV_STUDIO, 'Older board')
+    api.clock.advance(60 * 60_000)
+    const newer = await createBoard(bob, DEV_STUDIO, 'Newer board')
+    const created = await updatedAt(older)
+    api.clock.advance(10 * 60_000)
+    const editAt = api.clock.now().getTime() - 1_000
+    const res = await touched(older, editAt)
+    expect(res.statusCode, res.body).toBe(204)
+    expect((await updatedAt(older)).getTime()).toBe(editAt)
+    // M1's list (and the dashboard's "Edited …" / "Last edited" sort) now puts it first.
+    const boards = await list(bob, DEV_STUDIO)
+    expect(boards.map((b) => b.title).slice(0, 2)).toEqual(['Older board', 'Newer board'])
+    expect(boards.find((b) => b.id === older)?.updatedAt).toBe(new Date(editAt).toISOString())
+    // an older report (a late trailing call) changes nothing
+    expect((await touched(older, created.getTime())).statusCode).toBe(204)
+    expect((await updatedAt(older)).getTime()).toBe(editAt)
+    // a clock ahead of ours is clamped to now; no `at` means now
+    const future = api.clock.now().getTime() + 86_400_000
+    expect((await touched(newer, future)).statusCode).toBe(204)
+    expect((await updatedAt(newer)).getTime()).toBeLessThanOrEqual(api.clock.now().getTime())
+    expect((await touched(newer)).statusCode).toBe(204)
+    // opening a board is still not an edit
+    api.clock.advance(5 * 60_000)
+    const before = await updatedAt(older)
+    expect((await bob.req('GET', `/api/boards/${older}`)).statusCode).toBe(200)
+    expect(await updatedAt(older)).toEqual(before)
+  })
+
+  it('requires the internal secret (a browser session is not one); unknown or trashed boards change nothing', async () => {
+    const id = await createBoard(bob, DEV_STUDIO, 'Secret board')
+    const before = await updatedAt(id)
+    api.clock.advance(60_000)
+    expect((await touched(id, undefined, null)).statusCode).toBe(401)
+    expect((await touched(id, undefined, 'x'.repeat(INTERNAL_SECRET.length))).statusCode).toBe(401)
+    const withCookie = await api.app.inject({
+      method: 'GET',
+      url: `/internal/boards/${id}/touched`,
+      headers: { cookie: bob.cookie },
+    })
+    expect(withCookie.statusCode).toBe(401)
+    expect(await updatedAt(id)).toEqual(before)
+    expect((await touched('b-doesnotexist')).statusCode).toBe(204)
+    expect((await touched('not a board id')).statusCode).toBe(404)
+    expect((await touched(id, -5)).statusCode).toBe(400)
+
+    expect((await bob.req('POST', `/api/boards/${id}/trash`)).statusCode).toBe(200)
+    const trashedAt = await updatedAt(id)
+    api.clock.advance(60_000)
+    expect((await touched(id)).statusCode).toBe(204)
+    expect(await updatedAt(id)).toEqual(trashedAt)
   })
 })

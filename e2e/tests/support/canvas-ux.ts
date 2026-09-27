@@ -33,9 +33,18 @@ export interface CanvasEditor extends EditorLike {
     getIsSnapMode(): boolean
     updateUserPreferences(prefs: { isSnapMode?: boolean }): void
   }
-  inputs: { getPointerVelocity(): { len(): number } }
+  inputs: { getPointerVelocity(): { len(): number }; getIsPanning(): boolean }
   /** SnapManager: the alignment guides shown while a drag snaps. */
   snaps: { getIndicators(): unknown[] }
+  zoomToBounds(
+    bounds: BoxLike,
+    opts?: { inset?: number; immediate?: boolean; targetZoom?: number },
+  ): CanvasEditor
+  getOnlySelectedShape(): ShapeLike | null
+  getInstanceState(): { isToolLocked: boolean; isFocused: boolean; isReadonly: boolean }
+  /** 'moving' while the camera changes, 'idle' once it has stopped. */
+  getCameraState(): 'idle' | 'moving'
+  toggleLock(ids: string[]): CanvasEditor
 }
 
 /** `read` from board.ts, typed for CanvasEditor (the callback is still serialized into the page). */

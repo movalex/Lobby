@@ -7,7 +7,8 @@ import { type Editor, useValue } from 'tldraw'
 import type { Presenter } from './present-session.ts'
 import { fittedSlideRect, slideTitle } from './slides.ts'
 
-const IDLE_MS = 2500
+/** The controls hide after this long without pointer movement or a key press (F21). */
+const IDLE_MS = 2000
 const SLIDE_ANIMATION_MS = 480
 const SWIPE_PX = 50
 

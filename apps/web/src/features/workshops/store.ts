@@ -59,6 +59,13 @@ export interface WorkshopSnapshot {
   setupOpen: boolean
   /** Increments each time the timer reaches zero in this tab (drives the visual alert). */
   alertSeq: number
+  /**
+   * Set when this tab SAW a vote's results come in (revealed while the board was open, not a vote
+   * revealed before it was opened): drives the "Results are in" card until dismissed.
+   */
+  resultsNews: { sessionId: string; seq: number } | null
+  /** The latest message for screen readers about the caller's own votes ("Voted. 2 of 3 left"). */
+  announcement: { text: string; seq: number } | null
 }
 
 export interface ActionResult {
@@ -115,6 +122,9 @@ export class WorkshopStore {
   private readonly memo = new Map<string, Participation>()
   private setupOpen = false
   private alertSeq = 0
+  private resultsNews: WorkshopSnapshot['resultsNews'] = null
+  private newsSeq = 0
+  private announcement: WorkshopSnapshot['announcement'] = null
   private readonly listeners = new Set<() => void>()
   private snap: WorkshopSnapshot
   private readonly unsubscribers: (() => void)[] = []
@@ -175,7 +185,41 @@ export class WorkshopStore {
       summonedBy: this.summoned,
       setupOpen: this.setupOpen,
       alertSeq: this.alertSeq,
+      resultsNews: this.resultsNews && this.resultsNews.sessionId === sid ? this.resultsNews : null,
+      announcement: this.announcement,
     }
+  }
+
+  /**
+   * Every change of the vote state goes through here: results that arrive for the vote this tab
+   * already knew (an open or ended vote that is now revealed with its ranking) are news. The first
+   * load (a board opened after the reveal) and other sessions are not.
+   */
+  private setVote(next: WorkshopVoteState | null) {
+    const prev = this.state?.vote ?? null
+    if (
+      this.loaded &&
+      prev &&
+      next &&
+      prev.session.id === next.session.id &&
+      !prev.results &&
+      next.results &&
+      next.session.status === 'revealed'
+    )
+      this.resultsNews = { sessionId: next.session.id, seq: ++this.newsSeq }
+    if (next?.session.id !== this.resultsNews?.sessionId) this.resultsNews = null
+  }
+
+  dismissResultsNews() {
+    if (!this.resultsNews) return
+    this.resultsNews = null
+    this.emit()
+  }
+
+  /** A message for the screen-reader live region (the same text twice is announced twice). */
+  announce(text: string) {
+    this.announcement = { text, seq: (this.announcement?.seq ?? 0) + 1 }
+    this.emit()
   }
 
   /**
@@ -213,6 +257,7 @@ export class WorkshopStore {
       if (seq < this.appliedSeq) return
       this.appliedSeq = seq
       const timer = this.newerTimer(s.timer) ? s.timer : (this.state?.timer ?? null)
+      this.setVote(s.vote)
       this.state = { ...s, timer }
       this.loaded = true
       this.stale = false
@@ -245,6 +290,7 @@ export class WorkshopStore {
     const vote = this.state?.vote
     if (!this.state || !vote || vote.session.id !== p.data.sessionId) return void this.refresh()
     const statusChanged = vote.session.status !== p.data.status
+    this.setVote({ ...vote, session: { ...vote.session, status: p.data.status } })
     this.state = {
       ...this.state,
       vote: {
@@ -265,6 +311,7 @@ export class WorkshopStore {
     if (!p.success) return
     const vote = this.state?.vote
     if (!this.state || !vote || vote.session.id !== p.data.sessionId) return void this.refresh()
+    this.setVote({ ...vote, results: p.data.results, session: { ...vote.session, status: 'revealed' } })
     this.state = {
       ...this.state,
       vote: {
@@ -283,6 +330,7 @@ export class WorkshopStore {
     if (seq < this.appliedSeq) return
     this.appliedSeq = seq
     const base = this.state ?? { timer: null, vote: null, serverNow: new Date().toISOString() }
+    this.setVote(vote)
     this.state = { ...base, vote }
     this.loaded = true
   }

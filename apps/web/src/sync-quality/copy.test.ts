@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { rejectionNotice, SAVE_LABEL, saveTitle, undoNotice } from './copy.ts'
+import { rejectionNotice, SAVE_LABEL, saveLabel, saveTitle, undoNotice } from './copy.ts'
 import type { Rejection } from './saveTracker.ts'
 
 const rejection = (over: Partial<Rejection> = {}): Rejection => ({
@@ -71,5 +71,18 @@ describe('undo notice', () => {
       'Someone changed this since, so there was nothing left to undo.',
     )
     expect(undoNotice({ applied: 1, skipped: [skip('changed')], noop: false })).toBeNull()
+  })
+})
+
+describe('read-only indicator (RETRO-17)', () => {
+  it('a commenter reads that her comments are saved; nobody reads that their work is not saved', () => {
+    expect(saveLabel('readonly', 'commenter')).toBe('Can comment · comments are saved')
+    expect(saveLabel('readonly', 'viewer')).toBe('View only')
+    expect(saveLabel('saved', 'commenter')).toBe('Saved')
+    for (const role of ['viewer', 'commenter']) {
+      const title = saveTitle('readonly', null, true, 0, role)
+      expect(title, role).not.toMatch(/not saved/i)
+    }
+    expect(saveTitle('readonly', null, true, 0, 'commenter')).toMatch(/your comments are saved/)
   })
 })

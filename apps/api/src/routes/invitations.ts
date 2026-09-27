@@ -5,17 +5,20 @@
 import {
   CreateBoardInvitationInput,
   CreateWorkspaceInvitationInput,
+  type InvitationGoneBody,
   InvitationId,
   type InvitationPreview,
 } from '@draftroom/contracts'
 import { newId, type Queryable } from '@draftroom/db'
 import { type BoardRole, can, canManageWorkspace, type WorkspaceRole } from '@draftroom/permissions'
-import type { FastifyInstance } from 'fastify'
-import { loadBoardAccess, requireBoardAction, requireWorkspaceRole } from '../access.ts'
+import type { FastifyInstance, FastifyReply } from 'fastify'
+import { connectionRole, loadBoardAccess, requireBoardAction, requireWorkspaceRole } from '../access.ts'
 import { audit } from '../audit.ts'
 import { isSecretToken, newSecretToken, sha256hex } from '../auth/session.ts'
 import type { AppContext, Params } from '../context.ts'
 import { forbidden, gone, notFound, parse } from '../errors.ts'
+
+const GONE_MESSAGE = gone().message
 
 export const INVITATION_TTL_MS = 7 * 24 * 60 * 60 * 1000
 
@@ -28,9 +31,10 @@ interface InvitationRow {
   expires_at: Date
   redeemed_by: string | null
   revoked_at: Date | null
+  multi_use: boolean
 }
 const INVITATION_COLUMNS =
-  'i.id, i.workspace_id, i.board_id, i.role, i.created_by, i.expires_at, i.redeemed_by, i.revoked_at'
+  'i.id, i.workspace_id, i.board_id, i.role, i.created_by, i.expires_at, i.redeemed_by, i.revoked_at, i.multi_use'
 
 type InvitationState = 'usable' | 'redeemed_by_caller' | 'gone'
 
@@ -72,6 +76,29 @@ async function createInvitation(
   return { id, url: `${ctx.config.publicOrigin}/invite/${token}`, expiresAt: expiresAt.toISOString() }
 }
 
+/**
+ * 410 for a link that expired, was revoked or was used by someone else (PRI-04). It names who sent it
+ * (the token holder saw that while it was valid) so the page can say whom to ask, and gives the board
+ * id only to a signed-in caller who can open that board right now: they are sent to the board instead
+ * of a dead end, and nobody else learns anything about it.
+ */
+async function sendGone(
+  q: Queryable,
+  reply: FastifyReply,
+  inv: Pick<InvitationRow, 'board_id' | 'created_by'>,
+  callerId: string | null,
+) {
+  const inviter = await q.maybeOne<{ name: string }>('SELECT name FROM users WHERE id = $1', [inv.created_by])
+  let boardId: string | null = null
+  if (callerId && inv.board_id && connectionRole(await loadBoardAccess(q, inv.board_id, callerId)))
+    boardId = inv.board_id
+  const body: InvitationGoneBody = {
+    error: { code: 'GONE', message: GONE_MESSAGE },
+    gone: { invitedBy: inviter ? { name: inviter.name } : null, boardId },
+  }
+  return reply.code(410).send(body)
+}
+
 export function registerInvitationRoutes(app: FastifyInstance, ctx: AppContext): void {
   const { db, notifier, now, sessions } = ctx
   const limited = { config: { rateLimit: ctx.authRateLimit } }
@@ -107,7 +134,7 @@ export function registerInvitationRoutes(app: FastifyInstance, ctx: AppContext):
   })
 
   // Public: the invitee may not have an account yet. Rate limited because the path holds a secret.
-  app.get('/api/invitations/:token', limited, async (req): Promise<InvitationPreview> => {
+  app.get('/api/invitations/:token', limited, async (req, reply): Promise<InvitationPreview | undefined> => {
     const { token } = req.params as Params
     if (!isSecretToken(token)) throw notFound()
     const row = await db.maybeOne<
@@ -123,7 +150,10 @@ export function registerInvitationRoutes(app: FastifyInstance, ctx: AppContext):
     )
     if (!row) throw notFound()
     const caller = await sessions.user(req)
-    if (stateFor(row, caller?.id ?? null, now()) === 'gone') throw gone()
+    if (stateFor(row, caller?.id ?? null, now()) === 'gone') {
+      await sendGone(db, reply, row, caller?.id ?? null)
+      return
+    }
     return {
       workspace: { id: row.workspace_id, name: row.workspace_name },
       board: row.board_id && row.board_title !== null ? { id: row.board_id, title: row.board_title } : null,
@@ -133,7 +163,7 @@ export function registerInvitationRoutes(app: FastifyInstance, ctx: AppContext):
     }
   })
 
-  app.post('/api/invitations/:token/accept', limited, async (req) => {
+  app.post('/api/invitations/:token/accept', limited, async (req, reply) => {
     const user = await ctx.requireUser(req)
     const { token } = req.params as Params
     if (!isSecretToken(token)) throw notFound()
@@ -146,9 +176,20 @@ export function registerInvitationRoutes(app: FastifyInstance, ctx: AppContext):
       if (!inv) throw notFound()
       const at = now()
       const state = stateFor(inv, user.id, at)
-      if (state === 'gone') throw gone()
+      if (state === 'gone') return { gone: true as const, inv }
       const accepted = { workspaceId: inv.workspace_id, boardId: inv.board_id }
-      if (state === 'redeemed_by_caller') return { accepted, changed: false }
+      if (state === 'redeemed_by_caller') return { gone: false as const, accepted, changed: false }
+      // What a multi-use link replaces (0006): its sweep puts a raised grant back, and removes one
+      // it created (again: someone removed earlier who rejoins must not keep access past its end).
+      const prior =
+        inv.board_id !== null && inv.multi_use
+          ? ((
+              await tx.maybeOne<{ role: BoardRole }>(
+                'SELECT role FROM board_members WHERE board_id = $1 AND user_id = $2 FOR UPDATE',
+                [inv.board_id, user.id],
+              )
+            )?.role ?? null)
+          : null
 
       if (inv.board_id === null) {
         await tx.query(
@@ -178,6 +219,22 @@ export function registerInvitationRoutes(app: FastifyInstance, ctx: AppContext):
         user.id,
         at,
       ])
+      if (inv.board_id !== null && inv.multi_use) {
+        const rank = ['viewer', 'commenter', 'editor', 'owner']
+        if (prior === null) {
+          // Created now: stamp the redemption with the grant's creation time (the sweep's test).
+          await tx.query(
+            `UPDATE invitation_redemptions SET redeemed_at = $3, previous_role = NULL
+              WHERE invitation_id = $1 AND user_id = $2`,
+            [inv.id, user.id, at],
+          )
+        } else if (rank.indexOf(prior) < rank.indexOf(inv.role)) {
+          await tx.query(
+            'UPDATE invitation_redemptions SET previous_role = $3 WHERE invitation_id = $1 AND user_id = $2',
+            [inv.id, user.id, prior],
+          )
+        }
+      }
       await audit(tx, {
         workspaceId: inv.workspace_id,
         actorId: user.id,
@@ -186,8 +243,9 @@ export function registerInvitationRoutes(app: FastifyInstance, ctx: AppContext):
         detail: { boardId: inv.board_id, role: inv.role },
         at,
       })
-      return { accepted, changed: true }
+      return { gone: false as const, accepted, changed: true }
     })
+    if (result.gone) return sendGone(db, reply, result.inv, user.id)
     // Workspace links change no board grant; live sessions pick up role increases on the next periodic check.
     if (result.changed && result.accepted.boardId)
       notifier.accessChanged({ boardId: result.accepted.boardId, userId: user.id })

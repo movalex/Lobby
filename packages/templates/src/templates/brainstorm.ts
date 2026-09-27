@@ -149,6 +149,7 @@ export const brainstorm: TemplateDefinition = {
       text: 'Good ideas for another day. Revisit them before you wrap up.',
       size: 's',
       color: 'grey',
+      locked: true, // an instruction (PRE-07)
     })
     b.note(parking, { x: SIDE_W - PAD - 200, y: 100, text: 'Idea for later', color: 'orange' })
 

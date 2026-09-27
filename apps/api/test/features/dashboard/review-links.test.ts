@@ -73,10 +73,11 @@ describe('review links', () => {
     expect(listed).toMatchObject({ id: link.id, kind: 'review', role: 'commenter', uses: 3, url: link.url })
   })
 
-  it('role is capped at viewer/commenter and expiry at 30 days (API and database)', async () => {
+  it('review links: viewer/commenter up to 30 days; an edit link only as a workshop link of 24 h at most (API and database)', async () => {
     const { bob, board, api } = w
     for (const body of [
-      { role: 'editor' },
+      { role: 'editor', expiresInDays: 2 },
+      { role: 'editor', expiresInHours: 25 },
       { role: 'owner' },
       { expiresInDays: 31 },
       { expiresInDays: 0 },
@@ -85,7 +86,7 @@ describe('review links', () => {
       expect((await bob.req('POST', `/api/boards/${board}/review-links`, body)).statusCode).toBe(400)
     const viewer = await reviewLink(bob, board, { role: 'viewer', expiresInDays: 30 })
     expect(new Date(viewer.expiresAt).getTime() - Date.now()).toBeGreaterThan(30 * DAY - 60_000)
-    // The database refuses a multi-use editor link or a longer expiry even if a route forgot to check.
+    // The database refuses a longer-lived multi-use editor link or review link even if a route forgot to check.
     const row = await api.db.one<{ workspace_id: string; created_by: string }>(
       'SELECT workspace_id, created_by FROM invitations WHERE id = $1',
       [viewer.id],

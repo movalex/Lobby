@@ -183,7 +183,36 @@ describe('the notification list', () => {
       actor: { id: f.stranger.userId },
     })
     expect(owner.notifications[0]?.id).toMatch(/^ntf_[0-9a-f]{32}$/)
+    // No request row behind it: nothing to show beyond "asked for access".
+    expect(owner.notifications[0]?.accessRequest).toBeNull()
     expect((await notificationsOf(f.editor)).notifications).toHaveLength(0)
+  })
+
+  it('an access-request notification carries the requested role and message, and the board hears about it live', async () => {
+    const res = await f.stranger.req('POST', `/api/boards/${f.boardId}/access-requests`, {
+      role: 'editor',
+      message: 'I need to add the storyboard notes',
+    })
+    expect(res.statusCode).toBe(202)
+    const owner = await notificationsOf(f.owner)
+    const item = owner.notifications.find((n) => n.kind === 'access_request')
+    expect(item).toMatchObject({
+      actor: { id: f.stranger.userId },
+      accessRequest: { role: 'editor', message: 'I need to add the storyboard notes', status: 'pending' },
+    })
+    // The board's clients get a hint to refresh the bell (the comments web store listens for it).
+    expect(
+      f.events.some(
+        (e) =>
+          e.boardId === f.boardId &&
+          e.type === 'sharing.changed' &&
+          String((e.data as { reason?: unknown }).reason).startsWith('access-request'),
+      ),
+    ).toBe(true)
+    // Comment notifications never carry request details.
+    await createThread(f.commenter, f.boardId, `${mention(f.owner)} hi`)
+    const mentionItem = (await notificationsOf(f.owner)).notifications.find((n) => n.kind === 'mention')
+    expect(mentionItem?.accessRequest).toBeNull()
   })
 })
 

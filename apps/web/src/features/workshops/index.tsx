@@ -5,11 +5,12 @@
 // - "Gather everyone": others follow the facilitator's view (tldraw follow API) until they move.
 
 import { WORKSHOP_EVENTS, WorkshopSummonEvent } from '@draftroom/contracts'
-import type { TLEventInfo } from 'tldraw'
+import { react, type TLEventInfo } from 'tldraw'
 import type { BoardFeature, FeatureContext } from '../types.ts'
 import { installAudioUnlock } from './chime.ts'
 import { followIdFor, isCanvasPress, summonApplies } from './follow.ts'
 import { storeFor } from './hooks.ts'
+import { HIDE_AUTHORS_ATTR, readSessionSettings } from './session-settings.ts'
 import { VotingPanel } from './VotingPanel.tsx'
 import { WorkshopBar } from './WorkshopBar.tsx'
 import { WorkshopOverlay } from './WorkshopOverlay.tsx'
@@ -77,7 +78,17 @@ function mountWorkshops(ctx: FeatureContext) {
   editor.on('event', onEvent)
   editor.on('stop-following', onStopFollowing)
 
+  // "Hide note authors" (a synced session setting): canvas and Present hide tldraw's note attribution
+  // through this <html> attribute (workshops.css); exports strip it in present-export.
+  const root = editor.getContainer().ownerDocument.documentElement
+  const stopAuthors = react('dr-wk-hide-authors', () => {
+    if (readSessionSettings(editor).hideNoteAuthors) root.setAttribute(HIDE_AUTHORS_ATTR, 'true')
+    else root.removeAttribute(HIDE_AUTHORS_ATTR)
+  })
+
   return () => {
+    stopAuthors()
+    root.removeAttribute(HIDE_AUTHORS_ATTR)
     offSummon()
     for (const t of timers) clearTimeout(t)
     editor.off('event', onEvent)

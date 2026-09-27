@@ -94,7 +94,16 @@ export function registerMemberRoutes(app: FastifyInstance, ctx: AppContext): voi
     const user = await ctx.requireUser(req)
     const { bid = '' } = req.params as Params
     const access = await requireBoardAction(db, bid, user.id, 'view')
-    return { members: await listBoardMembers(db, access.board) }
+    const members = await listBoardMembers(db, access.board)
+    // A guest (an outside reviewer who joined through a link) sees who else is on the board, but not
+    // the workspace's @handles: those are how people are found and invited inside the workspace.
+    if (access.workspaceRole === 'guest' || access.workspaceRole === null)
+      return {
+        members: members.map((m) =>
+          m.user.id === user.id ? m : { ...m, user: { ...m.user, handle: null } },
+        ),
+      }
+    return { members }
   })
 
   app.put('/api/boards/:bid/members/:uid', async (req) => {

@@ -14,6 +14,7 @@ import { NoAccessScreen } from '../ui/screens.tsx'
 import { BoardCard } from './BoardCard.tsx'
 import { BoardDetailsDialog, DuplicateBoardDialog, MoveBoardDialog } from './BoardDialogs.tsx'
 import { CreateBoardDialog } from './CreateBoardDialog.tsx'
+import { DashboardBell, useDashboardInbox } from './DashboardBell.tsx'
 import { dashboardApi, IMPORT_BODY_LIMIT_BYTES } from './dashboard-api.ts'
 import {
   type BoardMenuAction,
@@ -33,6 +34,7 @@ import {
   withStar,
   withStarredEntry,
 } from './model.ts'
+import { newsByBoard } from './notifications.ts'
 import { readPickerHidden, readViewMode, type ViewMode, writeViewMode } from './prefs.ts'
 import { Sidebar } from './Sidebar.tsx'
 import { newBoardPath } from './template-paths.ts'
@@ -89,6 +91,9 @@ function Dashboard({ workspaceId, section }: { workspaceId: string; section: Das
   const [importing, setImporting] = useState(false)
   const [quickCreating, setQuickCreating] = useState(false)
   const [now, setNow] = useState(() => new Date())
+  // PRI-05a: what is new, without opening each board (the board bell's inbox).
+  const inbox = useDashboardInbox()
+  const news = useMemo(() => newsByBoard(inbox.inbox?.notifications ?? []), [inbox.inbox])
 
   // Relative times ("5 min ago") stay honest while the dashboard is left open.
   useEffect(() => {
@@ -369,6 +374,7 @@ function Dashboard({ workspaceId, section }: { workspaceId: string; section: Das
           layout={view}
           menu={menu}
           projectName={projectName(b.projectId)}
+          news={news.get(b.id) ?? null}
           busy={busyId === b.id}
           renaming={renamingId === b.id}
           onAction={(a, board) => void onAction(a, board)}
@@ -423,6 +429,7 @@ function Dashboard({ workspaceId, section }: { workspaceId: string; section: Das
             />
           </div>
           <div className="dr-dash__spacer" />
+          <DashboardBell {...inbox} />
           <UserMenu />
         </header>
 

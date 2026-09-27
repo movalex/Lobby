@@ -3,20 +3,28 @@
 // tldraw's EditorPortal (above the canvas, inside the editor container).
 
 import type { CommentThread } from '@draftroom/contracts'
-import { useEffect, useMemo, useRef } from 'react'
-import { EditorPortal, usePassThroughWheelEvents, useValue } from 'tldraw'
+import {
+  type CSSProperties,
+  type KeyboardEvent as ReactKeyboardEvent,
+  useEffect,
+  useMemo,
+  useRef,
+} from 'react'
+import { EditorPortal, usePassThroughWheelEvents, useToasts, useValue } from 'tldraw'
 import { initialsFor, safeColor } from '../../lib/identity.ts'
 import type { FeatureContext } from '../types.ts'
 import { Composer } from './Composer.tsx'
-import { canCommentIn, controllerFor, focusBoard } from './controller.ts'
-import { anchorPointOnCurrentPage, placeOnBoard } from './geometry.ts'
+import { type CommentToast, canCommentIn, controllerFor, focusBoard } from './controller.ts'
+import { anchorPointOnCurrentPage, describeAnchor, keepAnchorAboveSheet } from './geometry.ts'
 import { CheckIcon, CloseIcon } from './icons.tsx'
-import { anchorLabel, type PinState, pinState, snippet } from './model.ts'
+import { PIN_SIZE as PIN, type PopoverLayout, popoverLayout } from './layout.ts'
+import { type PinState, pinState, snippet, unreadComments } from './model.ts'
 import { NEW_THREAD_DRAFT } from './store.ts'
 import { ThreadView } from './ThreadView.tsx'
 import { COMMENT_TOOL_ID } from './tool.ts'
 
-const PIN = 30
+/** Below this zoom level markers are small dots. */
+const DOT_ZOOM = 0.25
 /** Markers this far outside the viewport are not rendered. */
 const CULL = 60
 
@@ -31,6 +39,20 @@ interface PlacedPin {
   count: number
   preview: string
   open: boolean
+}
+
+/** The open thread's reply box (not an edit box of one of its comments). */
+const REPLY_BOX = '.dr-cthread__reply textarea'
+
+/**
+ * Keys pressed inside a comment popover are the popover's: tldraw's shortcuts listen on <body>
+ * (bubble phase), so a key typed on a popover button (or anywhere but a text field, which tldraw
+ * skips itself) would otherwise switch tools, zoom or delete the selection. React's stopPropagation
+ * runs at the React root, which sits below <body>, so it is early enough. Esc is left alone: the
+ * popover handles it itself and the board may still need to hear it.
+ */
+function keepKeysInPopover(e: ReactKeyboardEvent) {
+  if (e.key !== 'Escape') e.stopPropagation()
 }
 
 const STATE_LABEL: Record<PinState, string> = {
@@ -144,11 +166,30 @@ export function CommentsOverlay({ ctx }: { ctx: FeatureContext }) {
   const pins = useMemo(() => JSON.parse(pinsKey) as PlacedPin[], [pinsKey])
   const pinLayer = useRef<HTMLDivElement>(null)
   usePassThroughWheelEvents(pinLayer)
+  // Zoomed far out, full markers would cover the content: they shrink to dots (hover/focus expands).
+  const zoomedOut = useValue('dr-comments.zoomed-out', () => editor.getZoomLevel() < DOT_ZOOM, [editor])
+
+  // Toasts with an action (mention → View, resolve → Undo) use tldraw's toasts (inside <Tldraw>).
+  const toasts = useToasts()
+  useEffect(() => {
+    const c = controllerFor(ctx)
+    const show = (t: CommentToast) =>
+      void toasts.addToast({
+        id: t.id,
+        title: t.title,
+        severity: 'info',
+        actions: t.action ? [{ type: 'primary', label: t.action.label, onClick: t.action.run }] : undefined,
+      })
+    c.toast = show
+    return () => {
+      if (c.toast === show) c.toast = undefined
+    }
+  }, [ctx, toasts])
 
   return (
     <EditorPortal>
       <div className="dr-comments-layer" ref={layer} data-testid="comments-layer">
-        <div className="dr-cpins" ref={pinLayer}>
+        <div className="dr-cpins" ref={pinLayer} data-zoomed-out={zoomedOut ? 'true' : 'false'}>
           {pins.map((p) => (
             <button
               key={p.id}
@@ -159,10 +200,13 @@ export function CommentsOverlay({ ctx }: { ctx: FeatureContext }) {
               data-state={p.state}
               aria-expanded={p.open}
               aria-label={`Comment by ${p.name} (${STATE_LABEL[p.state]}${p.count > 1 ? `, ${p.count} comments` : ''}): ${p.preview}`}
-              style={{ transform: `translate(${p.x}px, ${p.y - PIN}px)` }}
+              // Bottom-left corner on the anchor at any size (markers shrink to dots when zoomed out).
+              style={{ transform: `translate(${p.x}px, ${p.y}px) translateY(-100%)` }}
               onClick={(e) => {
                 e.stopPropagation()
                 store.openThread(p.open ? null : p.id)
+                const anchor = p.open ? null : store.thread(p.id)?.anchor
+                if (anchor) keepAnchorAboveSheet(editor, anchor)
               }}
               onPointerDown={(e) => e.stopPropagation()}
               onPointerEnter={() => store.hoverThreadId.set(p.id)}
@@ -208,9 +252,18 @@ function HoverPreview({ ctx, pins }: { ctx: FeatureContext; pins: PlacedPin[] })
     () => (hover ? store.threads.get()[hover] : undefined),
     [store, hover],
   )
+  const readAt = useValue('dr-comments.hover-read', () => (hover ? store.reads.get()[hover] : undefined), [
+    store,
+    hover,
+  ])
   const pin = pins.find((p) => p.id === hover)
   if (!thread || !pin || pin.open) return null
-  const first = thread.comments[0]
+  // Unread: the newest comment I have not seen (never one of mine) is what's "New"; otherwise the
+  // thread's opening comment.
+  const unread =
+    pin.state === 'unread' || pin.state === 'mentioned' ? unreadComments(thread, store.meId, readAt) : []
+  const latestUnread = unread[unread.length - 1]
+  const shown = latestUnread ?? thread.comments[0]
   const replies = thread.comments.length - 1
   return (
     <div
@@ -220,14 +273,18 @@ function HoverPreview({ ctx, pins }: { ctx: FeatureContext; pins: PlacedPin[] })
       style={{ transform: `translate(${pin.x + PIN + 6}px, ${pin.y - PIN}px)` }}
     >
       <div className="dr-cpreview__head">
-        <strong>{thread.createdBy.name}</strong>
+        <strong>{shown?.author.name ?? thread.createdBy.name}</strong>
         {thread.status === 'resolved' && <span className="dr-cpreview__tag">Resolved</span>}
         {pin.state === 'mentioned' && (
           <span className="dr-cpreview__tag dr-cpreview__tag--at">Mentions you</span>
         )}
         {pin.state === 'unread' && <span className="dr-cpreview__tag dr-cpreview__tag--new">New</span>}
       </div>
-      {first && <p className="dr-cpreview__body">{snippet(first.body, 160)}</p>}
+      {shown && (
+        <p className="dr-cpreview__body" data-comment-id={shown.id}>
+          {snippet(shown.body, 160)}
+        </p>
+      )}
       {replies > 0 && (
         <p className="dr-cpreview__meta">
           {replies} {replies === 1 ? 'reply' : 'replies'}
@@ -237,20 +294,25 @@ function HoverPreview({ ctx, pins }: { ctx: FeatureContext; pins: PlacedPin[] })
   )
 }
 
-/** Where a popover goes for a page point: right of the marker, kept inside the editor viewport. */
+/**
+ * Where a popover goes for a page point (layout.ts): next to the marker on wide boards, a bottom
+ * sheet on phones. Follows the camera and the viewport size.
+ */
 function usePopoverPosition(ctx: FeatureContext, pagePoint: { x: number; y: number } | null) {
   const { editor } = ctx
   return useValue('dr-comments.popover-pos', () => {
     const vp = editor.getViewportScreenBounds()
-    const width = Math.min(340, vp.w - 24)
-    if (!pagePoint) return { left: 12, top: 12, width, docked: true }
-    const s = editor.pageToViewport(pagePoint)
-    let left = s.x + PIN + 10
-    if (left + width > vp.w - 12) left = Math.max(12, s.x - width - 10)
-    const top = Math.min(Math.max(12, s.y - PIN - 8), Math.max(12, vp.h - 320))
-    return { left: Math.round(left), top: Math.round(top), width, docked: false }
+    return popoverLayout(vp, pagePoint ? editor.pageToViewport(pagePoint) : null)
   }, [editor, pagePoint?.x, pagePoint?.y])
 }
+
+const popoverStyle = (pos: PopoverLayout): CSSProperties => ({
+  left: pos.left,
+  width: pos.width,
+  ...(pos.top !== null ? { top: pos.top } : {}),
+  ...(pos.bottom !== null ? { bottom: pos.bottom } : {}),
+  ...(pos.maxHeight !== null ? { maxHeight: pos.maxHeight } : {}),
+})
 
 function NewThreadComposer({ ctx }: { ctx: FeatureContext }) {
   const { editor } = ctx
@@ -259,6 +321,11 @@ function NewThreadComposer({ ctx }: { ctx: FeatureContext }) {
   const point = useValue(
     'dr-comments.pending-point',
     () => (pending ? anchorPointOnCurrentPage(editor, pending.anchor) : null),
+    [editor, pending],
+  )
+  const where = useValue(
+    'dr-comments.pending-where',
+    () => (pending ? describeAnchor(editor, pending.anchor) : ''),
     [editor, pending],
   )
   const pos = usePopoverPosition(ctx, point)
@@ -286,16 +353,19 @@ function NewThreadComposer({ ctx }: { ctx: FeatureContext }) {
         </span>
       )}
       <section
-        className="dr-cpopover"
+        className={`dr-cpopover${pos.docked ? ' dr-cpopover--docked' : ''}`}
         data-testid="new-comment-popover"
+        data-docked={pos.docked ? 'true' : 'false'}
         aria-label="New comment"
-        style={{ left: pos.left, top: pos.top, width: pos.width }}
+        style={popoverStyle(pos)}
+        onKeyDown={keepKeysInPopover}
+        onKeyUp={keepKeysInPopover}
       >
         <header className="dr-cthread__head">
           <div className="dr-cthread__title">
             <strong>New comment</strong>
-            <span className="dr-cthread__where">
-              {pending.anchor.kind === 'point' ? 'On the board' : 'Attached to the object you clicked'}
+            <span className="dr-cthread__where" data-testid="new-comment-where">
+              {where}
             </span>
           </div>
           <button
@@ -341,27 +411,34 @@ function OpenThread({ ctx }: { ctx: FeatureContext }) {
   )
   const where = useValue(
     'dr-comments.open-where',
-    () =>
-      thread
-        ? anchorLabel(thread.anchor, placeOnBoard(editor, thread.anchor), editor.getCurrentPageId())
-        : '',
+    () => (thread ? describeAnchor(editor, thread.anchor) : ''),
     [editor, thread],
   )
   const pos = usePopoverPosition(ctx, point)
   const opened = useRef<string | null>(null)
   const section = useRef<HTMLElement>(null)
-  // Keyboard users land in the popover; Esc (handled in the composer or here) returns to the board.
+  const shown = !!thread && !hidden
+  // Opening a thread (from its marker, a notification, the panel or a deep link) puts the keyboard in
+  // its reply box, so what people type is a reply and never a board shortcut. People who cannot
+  // reply land on the popover itself. Esc (handled in the composer or here) returns to the board.
   useEffect(() => {
-    if (!openId || opened.current === openId) return
+    if (!openId) {
+      opened.current = null
+      return
+    }
+    if (!shown || opened.current === openId) return
     opened.current = openId
-    requestAnimationFrame(() => {
+    const id = requestAnimationFrame(() => {
       const el = section.current
-      if (el && !el.contains(document.activeElement)) el.focus({ preventScroll: true })
+      if (!el || el.contains(document.activeElement)) return
+      const reply = el.querySelector<HTMLTextAreaElement>(REPLY_BOX)
+      if (reply) {
+        reply.focus({ preventScroll: true })
+        reply.setSelectionRange(reply.value.length, reply.value.length)
+      } else el.focus({ preventScroll: true })
     })
-  }, [openId])
-  useEffect(() => {
-    if (!openId) opened.current = null
-  }, [openId])
+    return () => cancelAnimationFrame(id)
+  }, [openId, shown])
 
   if (!thread || hidden) return null
   // Back to the board (not the marker): tldraw's shortcuts work again at once, and the next Esc
@@ -376,17 +453,21 @@ function OpenThread({ ctx }: { ctx: FeatureContext }) {
       tabIndex={-1}
       className={`dr-cpopover${pos.docked ? ' dr-cpopover--docked' : ''}`}
       data-testid="thread-popover"
+      data-docked={pos.docked ? 'true' : 'false'}
       data-thread-id={thread.id}
       data-status={thread.status}
       role="dialog"
       aria-label={`Comment thread by ${thread.createdBy.name}`}
-      style={{ left: pos.left, top: pos.top, width: pos.width }}
+      style={popoverStyle(pos)}
       onKeyDown={(e) => {
         if (e.key === 'Escape') {
           e.preventDefault()
           close()
+          return
         }
+        keepKeysInPopover(e)
       }}
+      onKeyUp={keepKeysInPopover}
     >
       <ThreadView
         store={store}

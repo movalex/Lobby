@@ -11,6 +11,7 @@ export type AuditAction =
   | 'invitation.create'
   | 'invitation.accept'
   | 'invitation.revoke'
+  | 'invitation.extend'
 
 /** Written in the same transaction as the change it describes, so the log never disagrees with it. */
 export async function audit(

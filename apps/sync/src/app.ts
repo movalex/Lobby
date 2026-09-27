@@ -14,20 +14,26 @@ import {
 } from './access.ts'
 import { isAllowedOrigin, type SyncConfig } from './config.ts'
 import { createRequestHandler } from './http/router.ts'
+import { JoinQueue } from './join-queue.ts'
 import { canEditCanvas } from './permissions.ts'
 import { BOARD_ID_RE, RoomRegistry } from './rooms.ts'
+import { createApiTouchClient, createTouchReporter, type TouchClient, type TouchReporter } from './touch.ts'
 
 export interface SyncServerOptions {
   /** Request log lines and room warnings. Default: console.log. */
   log?: (...a: unknown[]) => void
   /** Replaces the HTTP client for GET <api>/internal/access (tests). */
   accessClient?: AccessClient
+  /** Replaces the HTTP client for GET <api>/internal/boards/:bid/touched (tests). */
+  touchClient?: TouchClient
 }
 
 export interface SyncServer {
   http: Server
   registry: RoomRegistry
   monitor: AccessMonitor
+  /** Reports canvas edits to the API (dashboard "Edited …"; touch.ts). */
+  touches: TouchReporter
   /** Resolves with the bound port (useful with `port: 0`). */
   listen(): Promise<{ port: number }>
   /** Stops accepting, drops every socket, waits for in-flight requests, closes every room + DB. */
@@ -38,6 +44,13 @@ export function createSyncServer(config: SyncConfig, opts: SyncServerOptions = {
   const log = opts.log ?? ((...a: unknown[]) => console.log(...a))
   // The registry reports removals to the monitor, which is created from the registry.
   let monitor: AccessMonitor | null = null
+  const touches = createTouchReporter({
+    client:
+      opts.touchClient ??
+      createApiTouchClient({ baseUrl: config.apiInternalUrl, internalSecret: config.internalSecret }),
+    intervalMs: config.touchIntervalMs,
+    log,
+  })
   const registry = new RoomRegistry({
     dataDir: dataLayout(config.dataDir).rooms,
     schema: draftroomSchema,
@@ -45,6 +58,7 @@ export function createSyncServer(config: SyncConfig, opts: SyncServerOptions = {
     textLeaseMs: config.textLeaseMs,
     log,
     onSessionRemoved: (boardId, sessionId) => monitor?.removed(boardId, sessionId),
+    onDocumentChange: (boardId) => touches.touched(boardId),
   })
   const access: AccessMonitor = createAccessMonitor({
     registry,
@@ -74,6 +88,10 @@ export function createSyncServer(config: SyncConfig, opts: SyncServerOptions = {
 
   const wss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 })
   const liveSockets = new Map<string, WebSocket>() // `${boardId}/${sid}` -> current ws
+  // One expensive TLSync connect per macrotask (PERF-05, join-queue.ts): a crowd joining at once no
+  // longer blocks everyone else's edits. Keyed per socket, not per session id (a replaced socket).
+  const joins = new JoinQueue()
+  let socketSeq = 0
 
   const onUpgrade = (req: IncomingMessage, socket: Duplex, head: Buffer) => {
     // ALLOWED_ORIGINS (platform): refused before the upgrade, before the ticket is read and before any
@@ -142,6 +160,11 @@ export function createSyncServer(config: SyncConfig, opts: SyncServerOptions = {
       })
       access.admitted(boardId, sid, uid, iat)
       const isCurrent = () => liveSockets.get(liveKey) === ws
+      const socketKey = ++socketSeq
+      // Checked again at delivery: the socket may have been replaced while its frames were queued.
+      const deliver = (text: string) => {
+        if (isCurrent()) room.handleSocketMessage(sid, text)
+      }
       let tokens = 400
       let last = Date.now()
       ws.on('message', (data, isBinary) => {
@@ -154,14 +177,16 @@ export function createSyncServer(config: SyncConfig, opts: SyncServerOptions = {
         const chunkHead = /^(\d+)_/.exec(text) // chunk frames: "<remaining>_<payload>"
         if (chunkHead && Number(chunkHead[1]) > 40)
           return room.closeSession(sid, TLSyncErrorCloseEventReason.INVALID_RECORD)
-        room.handleSocketMessage(sid, text)
+        joins.push(socketKey, text, deliver)
       })
       ws.on('close', () => {
+        joins.drop(socketKey)
         if (!isCurrent()) return
         liveSockets.delete(liveKey)
         room.handleSocketClose(sid)
       })
       ws.on('error', () => {
+        joins.drop(socketKey)
         if (!isCurrent()) return
         liveSockets.delete(liveKey)
         room.handleSocketError(sid)
@@ -181,6 +206,7 @@ export function createSyncServer(config: SyncConfig, opts: SyncServerOptions = {
     http,
     registry,
     monitor: access,
+    touches,
     listen() {
       return new Promise((resolve, reject) => {
         const onError = (e: Error) => reject(e)
@@ -198,12 +224,16 @@ export function createSyncServer(config: SyncConfig, opts: SyncServerOptions = {
         const stopped = http.listening
           ? new Promise<void>((resolve) => http.close(() => resolve()))
           : Promise.resolve()
+        joins.clear()
         registry.closeAll() // closes rooms (and their sessions' sockets), flushes the prune, closes DBs
         // Upgraded sockets are no longer HTTP connections, so closeAllConnections() does not see them.
         for (const ws of wss.clients) ws.terminate()
         liveSockets.clear()
         http.closeAllConnections() // aborts in-flight requests (e.g. a half-sent seed body)
         await Promise.allSettled([...inflight])
+        // The last edits' "Edited" times: best effort, never more than a second of shutdown.
+        await Promise.race([touches.flush(), new Promise((r) => setTimeout(r, 1_000).unref())])
+        touches.stop()
         await stopped
         await new Promise<void>((resolve) => wss.close(() => resolve()))
       })()

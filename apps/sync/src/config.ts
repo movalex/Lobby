@@ -23,6 +23,11 @@ export interface SyncConfig {
    * absent = no Origin check, which loadConfig only allows outside production (the Vite proxy in dev).
    */
   allowedOrigins?: readonly string[] | null
+  /**
+   * TOUCH_INTERVAL_MS: at most one "this board was edited" report per board to the API per this many
+   * ms (touch.ts; dashboard "Edited …"). Default 60 000.
+   */
+  touchIntervalMs?: number
 }
 
 type Env = Record<string, string | undefined>
@@ -178,5 +183,6 @@ export function loadConfig(env: Env = process.env): SyncConfig {
     apiInternalUrl: internalBaseUrl(env, 'DRAFTROOM_API_INTERNAL_URL', 'http://127.0.0.1:5859', production),
     accessRecheckMs: int(env, 'ACCESS_RECHECK_MS', 10_000, 50, 60 * 60_000),
     allowedOrigins: allowedOrigins(env, production),
+    touchIntervalMs: int(env, 'TOUCH_INTERVAL_MS', 60_000, 0, 60 * 60_000),
   }
 }

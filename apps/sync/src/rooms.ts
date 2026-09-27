@@ -65,6 +65,11 @@ export interface RegistryOpts {
   log?: (...a: unknown[]) => void
   /** After a session has left a room (any reason). */
   onSessionRemoved?: (boardId: string, sessionId: string, meta: SessionMeta) => void
+  /**
+   * After an accepted document write: a client push that committed a document change, or a restore
+   * from "Recently deleted". Presence never counts. Must be cheap and must not throw (touch.ts).
+   */
+  onDocumentChange?: (boardId: string) => void
   /** Bounds of the "Recently deleted" capture (defaults: deleted/store.ts DELETED_LIMITS). */
   deleted?: Partial<DeletedLimits>
   /**
@@ -182,7 +187,22 @@ export class RoomRegistry {
         bindings: 0,
         reparented: 0,
       }
-    return restoreDeleted({ storage: entry.storage, store: entry.deleted, schema: this.opts.schema, ids })
+    const summary = restoreDeleted({
+      storage: entry.storage,
+      store: entry.deleted,
+      schema: this.opts.schema,
+      ids,
+    })
+    if (summary.restored.length) this.documentChanged(boardId)
+    return summary
+  }
+
+  private documentChanged(boardId: string) {
+    try {
+      this.opts.onDocumentChange?.(boardId)
+    } catch (e) {
+      this.opts.log?.('[room] onDocumentChange failed', boardId, (e as Error)?.message)
+    }
   }
 
   /** Where this registry writes backups (null when backups are off). */
@@ -314,6 +334,8 @@ export class RoomRegistry {
         storage: entry.storage,
         // Lease veto first; a delete it allowed is captured for "Recently deleted".
         authorizeRecord: withDeleteCapture(entry.lease.authorizeRecord, entry.deleted),
+        // A client push committed a document change (read-only discards and presence never do).
+        onCommittedChanges: () => this.documentChanged(boardId),
         log: {
           warn: (...a: unknown[]) => this.opts.log?.('[room warn]', boardId, ...a),
           error: (...a: unknown[]) => this.opts.log?.('[room error]', boardId, ...a),

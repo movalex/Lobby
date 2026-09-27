@@ -206,6 +206,14 @@ export const CommentsDeletedEvent = z.object({ threadId: CommentThreadId, commen
 export const NotificationKind = z.enum(['mention', 'reply', 'resolved', 'access_request'])
 export type NotificationKind = z.infer<typeof NotificationKind>
 
+/** What an access-request notification asks for (the request itself, as it stands now). */
+export const NotificationAccessRequest = z.object({
+  role: z.enum(['editor', 'commenter', 'viewer']),
+  message: z.string().nullable(),
+  status: z.enum(['pending', 'approved', 'denied']),
+})
+export type NotificationAccessRequest = z.infer<typeof NotificationAccessRequest>
+
 export const NotificationItem = z.object({
   id: NotificationId,
   kind: NotificationKind,
@@ -216,6 +224,8 @@ export const NotificationItem = z.object({
   actor: CommentUserRef.nullable(),
   /** Start of the comment (plain text, mention tokens as @Name), when there is one. */
   snippet: z.string().nullable(),
+  /** access_request only: the requested role and message of that person's latest request. */
+  accessRequest: NotificationAccessRequest.nullable().optional(),
   createdAt: isoDate,
   readAt: isoDate.nullable(),
 })

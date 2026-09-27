@@ -226,7 +226,10 @@ html[data-dr-presenting] .tl-container {
   transform: translateX(-50%);
   transition: opacity 200ms ease;
 }
-.dr-present[data-idle="true"] .dr-present__bar:not(:focus-within) {
+/* Idle (no pointer movement or key press for a moment): the bar fades so it never covers the bottom
+   of a slide. A button clicked with the mouse keeps the focus but not the bar; a control reached with
+   the keyboard (focus ring shown) keeps it visible. */
+.dr-present[data-idle="true"] .dr-present__bar:not(:has(:focus-visible)) {
   opacity: 0;
   pointer-events: none;
 }

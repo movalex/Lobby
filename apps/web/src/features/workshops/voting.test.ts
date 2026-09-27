@@ -6,6 +6,7 @@ import {
   localCastCheck,
   optimisticBallot,
   plainTextFromRichText,
+  readingOrder,
   resultsCsv,
   shapeLabel,
   topResults,
@@ -159,5 +160,28 @@ describe('gather everyone', () => {
     expect(isCanvasPress({ type: 'pointer', name: 'pointer_move', button: 0 })).toBe(false)
     expect(isCanvasPress({ type: 'pointer', name: 'pointer_down', button: 2 })).toBe(false)
     expect(isCanvasPress({ type: 'keyboard', name: 'key_down' })).toBe(false)
+  })
+})
+
+describe('readingOrder', () => {
+  const box = (id: string, x: number, y: number, w = 200, h = 200) => ({ id, x, y, w, h })
+  it('reads rows top to bottom and each row left to right', () => {
+    const items = [
+      box('c', 520, 10),
+      box('a', 0, 0),
+      box('d', 0, 400),
+      box('b', 260, -30),
+      box('e', 300, 420),
+    ]
+    expect(readingOrder(items).map((i) => i.id)).toEqual(['a', 'b', 'c', 'd', 'e'])
+  })
+  it('keeps objects of very different heights in separate rows unless their middles line up', () => {
+    const items = [
+      box('tall', 0, 0, 100, 600),
+      box('low', 200, 450, 100, 100),
+      box('mid', 400, 250, 100, 100),
+    ]
+    expect(readingOrder(items).map((i) => i.id)).toEqual(['tall', 'mid', 'low'])
+    expect(readingOrder([])).toEqual([])
   })
 })

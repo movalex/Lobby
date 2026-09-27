@@ -9,6 +9,7 @@ import {
   defaultShapeUtils,
   type Editor,
   type TLComponents,
+  type TLEventInfo,
   type TLOnMountHandler,
   type TLStore,
   type TLUiOverrides,
@@ -27,7 +28,6 @@ import { type BoardEvents, createBoardEvents } from '../features/events.ts'
 import {
   FeatureDock,
   FeatureOverlays,
-  FeatureTopBarItems,
   mergeFeatureProps,
   useFeatureMounts,
 } from '../features/FeatureHost.tsx'
@@ -45,7 +45,7 @@ import { createTrackedConnect } from '../sync-quality/saveTracker.ts'
 import { trackUploads } from '../sync-quality/uploads.ts'
 import { useSaveStatus } from '../sync-quality/useSaveStatus.ts'
 import { LoadingScreen, MessageScreen, NoAccessScreen } from '../ui/screens.tsx'
-import { isReadonlyRole } from './access.ts'
+import { blockedEditHint, isReadonlyRole, roleChangeNotice } from './access.ts'
 import { BoardContext, type BoardContextValue } from './board-context.ts'
 import { EditingBadges } from './EditingBadges.tsx'
 import { ExternalContentHandlers, IMAGE_HANDLER_LIMITS, watchImagePreview } from './ExternalContent.tsx'
@@ -53,7 +53,7 @@ import { NoticeRegion, useNotices } from './Notices.tsx'
 import { getDraftroomPresence, holderName, parseLeaseDenied } from './presence.ts'
 import { ShareDialog } from './ShareDialog.tsx'
 import { SyncErrorScreen } from './SyncErrorScreen.tsx'
-import { type ConnState, TopBar } from './TopBar.tsx'
+import { BoardAccount, type ConnState, TopBar } from './TopBar.tsx'
 import { createTicketUri } from './ticket.ts'
 
 // Module level = referentially stable. useSync treats utils/assets/users/uri as effect dependencies
@@ -153,7 +153,8 @@ function BoardShell({ initial }: { initial: BoardDetail }) {
     }
   }, [board.title])
 
-  if (accessLost) return <NoAccessScreen revoked />
+  // The request form starts from the role they had (PRI-16): most people want it back.
+  if (accessLost) return <NoAccessScreen revoked previousRole={role} />
   // A fresh key = a fresh useSync (new socket + store): the only way out of a terminal sync error.
   return (
     <BoardSession
@@ -192,10 +193,11 @@ function BoardSession({
   const boardId = board.id
   const { refresh } = useSession()
   const [editor, setEditor] = useState<Editor | null>(null)
-  const [sharing, setSharing] = useState(false)
+  // Open Share dialog; 'request' scrolls to (and focuses) its "Need more access?" form.
+  const [sharing, setSharing] = useState<false | 'default' | 'request'>(false)
   // The sharing badge (features/sharing) opens the Share dialog through this window event.
   useEffect(() => {
-    const open = () => setSharing(true)
+    const open = () => setSharing('default')
     window.addEventListener('draftroom:open-share', open)
     return () => window.removeEventListener('draftroom:open-share', open)
   }, [])
@@ -462,6 +464,93 @@ function BoardSession({
     [board, boardId, notify, onBoardChange],
   )
 
+  // PRI-09b: when my role changes while the board is open (a grant, an approved request, a removed
+  // link), say so. Roles arrive with each sync ticket; a sharing event also re-reads the role now, and
+  // applies a LOWER one at once (a higher one waits for the socket to reconnect with it, so the
+  // editor never writes as an editor on a session the server still treats as read-only).
+  const announcedRole = useRef(role)
+  useEffect(() => {
+    const text = roleChangeNotice(announcedRole.current, role)
+    announcedRole.current = role
+    if (text) notify({ key: 'role-changed', text, testId: 'role-change-toast', timeoutMs: 8000 })
+  }, [role, notify])
+  const roleNow = useRef(role)
+  roleNow.current = role
+  useEffect(() => {
+    if (!events) return
+    let seq = 0
+    return events.on('sharing.changed', () => {
+      const mine = ++seq
+      api.boardTicket(boardId).then(
+        (t) => {
+          if (mine !== seq || t.role === roleNow.current) return
+          const rank = { viewer: 1, commenter: 2, editor: 3, owner: 4 }
+          if (rank[t.role] < rank[roleNow.current]) handlers.current.onTicket(t)
+        },
+        () => {}, // no access any more: the sync server closes the session and says so
+      )
+    })
+  }, [events, boardId])
+
+  // PRI-08: on a read-only board, the first edit someone tries (dragging, double-clicking or
+  // deleting a shape) explains why nothing happened, once, with a way to ask for more.
+  const hinted = useRef(false)
+  useEffect(() => {
+    if (!editor || !readonly || board.status !== 'active') return
+    const key = `draftroom:blocked-edit-hint:${boardId}`
+    try {
+      if (sessionStorage.getItem(key)) hinted.current = true
+    } catch {}
+    let pressedShape = false
+    // Only with the select tool: a drag with the hand tool, the comment tool or a vote is not an edit.
+    const overShape = () =>
+      editor.getCurrentToolId() === 'select' &&
+      !!editor.getShapeAtPoint(editor.inputs.getCurrentPagePoint(), { hitInside: true, margin: 0 })
+    const typing = () => {
+      const el = document.activeElement as HTMLElement | null
+      return !!el && (el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName))
+    }
+    const blocked = () => {
+      if (hinted.current) return
+      hinted.current = true
+      try {
+        sessionStorage.setItem(key, '1')
+      } catch {}
+      void ownerName(boardId, userId).then((owner) =>
+        notify({
+          key: 'blocked-edit',
+          text: blockedEditHint(role, owner),
+          testId: 'blocked-edit-hint',
+          timeoutMs: 12_000,
+          action: { label: 'Request', testId: 'blocked-edit-request', onClick: () => setSharing('request') },
+        }),
+      )
+    }
+    const onEvent = (info: TLEventInfo) => {
+      if (hinted.current) return
+      if (info.type === 'pointer') {
+        // Canvas pointer events say target "canvas" even over a shape: hit-test ourselves.
+        if (info.name === 'pointer_down') pressedShape = info.button === 0 && overShape()
+        else if (info.name === 'pointer_up') pressedShape = false
+        else if (info.name === 'pointer_move' && pressedShape && editor.inputs.getIsDragging()) blocked()
+      } else if (info.type === 'click' && info.name === 'double_click' && overShape()) {
+        blocked()
+      } else if (
+        info.type === 'keyboard' &&
+        info.name === 'key_down' &&
+        (info.key === 'Delete' || info.key === 'Backspace') &&
+        editor.getSelectedShapeIds().length > 0 &&
+        !typing()
+      ) {
+        blocked()
+      }
+    }
+    editor.on('event', onEvent)
+    return () => {
+      editor.off('event', onEvent)
+    }
+  }, [editor, readonly, board.status, boardId, userId, role, notify])
+
   const context = useMemo<BoardContextValue>(
     () => ({ boardId, userId, role, metaStore, notify, dismiss }),
     [boardId, userId, role, metaStore, notify, dismiss],
@@ -479,11 +568,13 @@ function BoardSession({
           workspace={workspace}
           selfUserId={userId}
           conn={conn}
-          save={{ state: save.state, rejection, readonly: save.raw.readonly, uploading }}
+          save={{ state: save.state, rejection, readonly: save.raw.readonly, uploading, role }}
           editor={editor}
           onRename={(t) => void rename(t)}
-          onShare={() => setSharing(true)}
-          extra={<FeatureTopBarItems features={BOARD_FEATURES} ctx={featureCtx} />}
+          onShare={() => setSharing('default')}
+          onRequestAccess={() => setSharing('request')}
+          features={BOARD_FEATURES}
+          featureCtx={featureCtx}
         />
         {conn === 'offline' && (
           <div className="dr-banner" data-testid="offline-banner" role="status">
@@ -521,12 +612,14 @@ function BoardSession({
           </main>
         </div>
         <NoticeRegion notices={notices} onDismiss={dismiss} />
+        <BoardAccount />
         {sharing && (
           <ShareDialog
             board={board}
             role={role}
             workspace={workspace}
             selfUserId={userId}
+            focus={sharing === 'request' ? 'request' : undefined}
             onClose={() => setSharing(false)}
             onBoardChange={onBoardChange}
           />
@@ -534,4 +627,18 @@ function BoardSession({
       </div>
     </BoardContext.Provider>
   )
+}
+
+/** Someone who can grant access, for the blocked-edit hint: an owner other than me (null if unknown). */
+async function ownerName(boardId: string, selfUserId: string): Promise<string | null> {
+  try {
+    const members = await Promise.race([
+      api.listMembers(boardId),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('slow')), 1_500)),
+    ])
+    const owners = members.filter((m) => m.role === 'owner' && m.user.id !== selfUserId)
+    return (owners.find((m) => m.source === 'grant') ?? owners[0])?.user.name ?? null
+  } catch {
+    return null
+  }
 }

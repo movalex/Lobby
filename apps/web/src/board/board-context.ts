@@ -11,6 +11,8 @@ export interface NoticeInput {
   testId?: string
   /** null = stays until dismissed or replaced. */
   timeoutMs?: number | null
+  /** One button in the notice (it also dismisses the notice), e.g. "Request" (PRI-08). */
+  action?: { label: string; onClick(): void; testId?: string }
 }
 
 export interface BoardContextValue {

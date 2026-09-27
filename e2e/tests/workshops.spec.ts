@@ -511,7 +511,7 @@ test('timer sync: start, pause, +1 min, resume and stop look the same to everyon
 
 // ---- [P1] time's up ---------------------------------------------------------------------------------
 
-test("time's up: everyone gets the flash and a toast at zero; the chime plays unless muted, and muting survives a reload", async ({
+test("time's up: everyone gets the flash and one message at zero; the chime plays unless muted, muting survives a reload, and about 10 s later the pill is back to Timer", async ({
   join,
   board,
 }) => {
@@ -540,13 +540,19 @@ test("time's up: everyone gets the flash and a toast at zero; the chime plays un
       await expect(s.page.getByTestId('timer-pill')).toHaveAttribute('data-state', 'running')
   })
 
-  await test.step('at zero: flash, toast and "finished" everywhere; the chime only where it is not muted', async () => {
-    // The flash lasts 2.6 s: watch all three pages at once.
+  let zeroAt = 0
+  await test.step('at zero: the flash with one "Time\'s up" message and "finished" everywhere; the chime only where it is not muted', async () => {
+    // The flash lasts 4 s: watch all three pages at once.
     await Promise.all(
       everyone.map((s) => expect(s.page.getByTestId('timer-flash')).toBeVisible({ timeout: 10_000 })),
     )
+    zeroAt = Date.now()
     for (const s of everyone) {
       await expect(s.page.getByTestId('timer-finished')).toContainText("Time's up")
+      // One message only (RETRO-23a): the flash's, no toast on top of it. (The board itself is called
+      // "Time's up" here, so only the canvas and the notices are counted.)
+      await expect(s.page.getByRole('main').getByText("Time's up", { exact: true })).toHaveCount(1)
+      await expect(s.page.locator('.dr-notices')).not.toContainText("Time's up")
       await expect(s.page.getByTestId('timer-pill')).toHaveAttribute('data-state', 'finished')
       await expect(s.page.getByTestId('timer-remaining')).toHaveText('0:00')
     }
@@ -556,14 +562,53 @@ test("time's up: everyone gets the flash and a toast at zero; the chime plays un
     expect((await workshopState(c.api, board)).timer).toMatchObject({ status: 'finished', remainingMs: 0 })
   })
 
-  await test.step('carol reloads: still muted, still finished, and no second alert', async () => {
+  await test.step('carol reloads: still muted, and no second alert', async () => {
     await reloadBoard(c)
-    await expect(c.page.getByTestId('timer-pill')).toHaveAttribute('data-state', 'finished')
     const pop = await openWorkshopPopover(c.page)
     await expect(pop.getByTestId('timer-sound')).not.toBeChecked()
     await closeWorkshopPopover(c.page)
     await expect(c.page.getByTestId('timer-flash')).toHaveCount(0)
     await expect(c.page.getByTestId('timer-finished')).toHaveCount(0)
+  })
+
+  await test.step('about 10 s after zero the pills go back to "Timer" (the server stays finished; Reset stays)', async () => {
+    for (const s of everyone) {
+      await expect(s.page.getByTestId('timer-pill')).toHaveAttribute('data-state', 'ended', {
+        timeout: 15_000,
+      })
+      await expect(s.page.getByTestId('timer-pill')).toHaveText('Timer')
+      await expect(s.page.getByTestId('timer-remaining')).toHaveCount(0)
+    }
+    expect(Date.now() - zeroAt).toBeGreaterThan(5_000) // it stayed red for a while, not just the flash
+    expect((await workshopState(a.api, board)).timer?.status).toBe('finished')
+    const pop = await openWorkshopPopover(a.page)
+    await expect(pop.getByTestId('timer-stop')).toHaveText('Reset')
+    await closeWorkshopPopover(a.page)
+  })
+
+  await test.step('a late joiner (more than 10 s after zero) sees no red 0:00', async () => {
+    await reloadBoard(b)
+    await expect(b.page.getByTestId('timer-pill')).toHaveAttribute('data-state', 'ended')
+    await expect(b.page.getByTestId('timer-remaining')).toHaveCount(0)
+    await expect(b.page.getByTestId('timer-flash')).toHaveCount(0)
+  })
+
+  await test.step('presenting a board whose timer has finished shows no floating timer', async () => {
+    await edit(a.page, (ed) =>
+      ed.createShape({
+        id: 'shape:wk-tu-frame',
+        type: 'frame',
+        x: 0,
+        y: 0,
+        props: { w: 400, h: 300, name: 'Slide' },
+      }),
+    )
+    await expect.poll(() => getShape(c.page, 'shape:wk-tu-frame')).not.toBeNull()
+    await c.page.getByTestId('present-button').click()
+    await expect(c.page.getByTestId('present-overlay')).toBeVisible()
+    await expect(c.page.getByTestId('timer-floating')).toHaveCount(0)
+    await c.page.keyboard.press('Escape')
+    await expect(c.page.getByTestId('present-overlay')).toHaveCount(0)
   })
 })
 
@@ -870,7 +915,10 @@ test('gather everyone: bob and carol follow alice’s view until they stop, clic
   })
 
   await test.step('bob clicks "Stop following"; carol keeps following', async () => {
-    await b.page.getByTestId('follow-stop').click()
+    // One stop-following control on screen (RETRO-11): tldraw's own, top left; the notice explains it.
+    await expect(b.page.getByTestId('follow-stop')).toHaveCount(0)
+    await expect(b.page.getByTestId('follow-toast')).toContainText('Stop following at the top left')
+    await b.page.getByTestId('helper-buttons.stop-following').click()
     await expect(b.page.getByTestId('follow-toast')).toHaveCount(0)
     expect((await viewState(b.page)).following).toBeNull()
     const bobView = await viewState(b.page)

@@ -143,3 +143,39 @@ export function removalNote(m: AccessDetail): string | null {
  */
 export const grantEditable = (m: Pick<AccessDetail, 'grant' | 'workspaceRole'>) =>
   m.grant !== null && m.workspaceRole !== 'owner' && m.workspaceRole !== 'admin'
+
+// ---- shell-sharing-platform fixes ------------------------------------------------------------------
+
+/** "Oct 4" for a review link, "3:40 PM" for a workshop link (they last hours). */
+export type LinkDateFormat = (iso: string, kind: 'date' | 'time') => string
+
+/**
+ * The access line a non-manager sees under "Workspace access" while a link is open (PRI-07): the
+ * select says "Private", but anyone with the link can get in. The widest open link wins.
+ */
+export function linkAccessLine(
+  links: readonly { role: 'viewer' | 'commenter' | 'editor'; expiresAt: string }[],
+  format: LinkDateFormat,
+): string | null {
+  if (!links.length) return null
+  const top = links.some((l) => l.role === 'editor')
+    ? 'editor'
+    : links.some((l) => l.role === 'commenter')
+      ? 'commenter'
+      : 'viewer'
+  const last = links
+    .filter((l) => l.role === top)
+    .reduce((a, b) => (Date.parse(b.expiresAt) > Date.parse(a.expiresAt) ? b : a))
+  if (top === 'editor')
+    return `Anyone with the workshop link can edit until ${format(last.expiresAt, 'time')}.`
+  return `Anyone with the review link can ${top === 'commenter' ? 'comment' : 'view'} until ${format(last.expiresAt, 'date')}.`
+}
+
+/**
+ * The confirmation before removing someone (PRI-21). When the workspace still gives them access,
+ * say what they keep instead.
+ */
+export function removeConfirmText(name: string, fallback: string | null): string {
+  if (fallback) return `Remove ${name}’s invite? ${fallback}`
+  return `Remove ${name}? ${name} loses access now.`
+}

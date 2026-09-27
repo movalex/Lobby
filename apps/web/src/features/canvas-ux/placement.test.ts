@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 import {
   containingFrame,
   findEmptySpot,
+  findEmptySpotWithin,
+  frameCamera,
   offsetToCenter,
   type Rect,
   rectsOverlap,
@@ -79,5 +81,66 @@ describe('helpers', () => {
     expect(containingFrame({ x: 200, y: 200, w: 300, h: 300 }, frames)?.id).toBe('small')
     expect(containingFrame({ x: 50, y: 50, w: 1000, h: 300 }, frames)?.id).toBe('big')
     expect(containingFrame({ x: -10, y: 0, w: 10, h: 10 }, frames)).toBeNull()
+  })
+})
+
+describe('findEmptySpotWithin (pasting into a frame)', () => {
+  const within: Rect = { x: 0, y: 0, w: 800, h: 900 }
+  const top: Rect = { x: 20, y: 20, w: 760, h: 380 }
+  it('keeps the box inside and clear of the obstacles, as close to the target as possible', () => {
+    const p = findEmptySpotWithin({ w: 600, h: 400 }, { x: 400, y: 300 }, [top], within, { gap: 40 })
+    expect(p).not.toBeNull()
+    const box = { x: p?.x ?? 0, y: p?.y ?? 0, w: 600, h: 400 }
+    expect(box.x >= 0 && box.y >= 0 && box.x + box.w <= 800 && box.y + box.h <= 900).toBe(true)
+    expect(rectsOverlap(box, top, 39)).toBe(false)
+    // nearest: just under the obstacle (within one search step, 400 / 8 = 50)
+    expect(box.y).toBeGreaterThanOrEqual(top.y + top.h + 40)
+    expect(box.y).toBeLessThanOrEqual(top.y + top.h + 40 + 50)
+  })
+  it('clamps a target near the edge into the area, and says null when nothing fits', () => {
+    expect(findEmptySpotWithin({ w: 200, h: 200 }, { x: 790, y: 890 }, [], within)).toEqual({
+      x: 600,
+      y: 700,
+    })
+    expect(findEmptySpotWithin({ w: 900, h: 200 }, { x: 0, y: 0 }, [], within)).toBeNull()
+    expect(findEmptySpotWithin({ w: 700, h: 600 }, { x: 400, y: 450 }, [top], within, { gap: 40 })).toBeNull()
+  })
+})
+
+describe('frameCamera (PRI-10: frames panel "go to frame")', () => {
+  const vp = { w: 1396, h: 852 }
+  const ui = { top: 56, right: 0, bottom: 72, left: 0 }
+  const onScreen = (c: { x: number; y: number; z: number }, p: { x: number; y: number }) => ({
+    x: (p.x + c.x) * c.z,
+    y: (p.y + c.y) * c.z,
+  })
+  it('shows the whole frame and its heading clear of the page bar and the toolbar, at most 100%', () => {
+    const frame = { x: 880, y: 540, w: 800, h: 960 }
+    const c = frameCamera(frame, vp, ui, { heading: 32, pad: 24 })
+    if (!c) throw new Error('no camera')
+    expect(c.z).toBeLessThan(1)
+    const tl = onScreen(c, { x: frame.x, y: frame.y })
+    const br = onScreen(c, { x: frame.x + frame.w, y: frame.y + frame.h })
+    expect(tl.y - 32).toBeGreaterThanOrEqual(ui.top + 24 - 0.01) // heading below the page bar
+    expect(br.y).toBeLessThanOrEqual(vp.h - ui.bottom - 24 + 0.01) // bottom above the toolbar
+    expect(tl.x).toBeGreaterThanOrEqual(0)
+    expect(br.x).toBeLessThanOrEqual(vp.w)
+  })
+  it('never zooms a small frame in past 100%, and leaves room for an open dock', () => {
+    const c = frameCamera({ x: 0, y: 0, w: 200, h: 100 }, vp, ui)
+    expect(c?.z).toBe(1)
+    const docked = frameCamera({ x: 0, y: 0, w: 1200, h: 400 }, vp, { ...ui, left: 364 })
+    if (!docked) throw new Error('no camera')
+    expect(onScreen(docked, { x: 0, y: 0 }).x).toBeGreaterThanOrEqual(364 + 24 - 0.01)
+  })
+  it('gives up (null) on a degenerate frame or a viewport the UI fills', () => {
+    expect(frameCamera({ x: 0, y: 0, w: 0, h: 10 }, vp, ui)).toBeNull()
+    expect(
+      frameCamera(
+        { x: 0, y: 0, w: 10, h: 10 },
+        { w: 100, h: 100 },
+        { top: 50, right: 0, bottom: 50, left: 0 },
+      ),
+    ).toBeNull()
   })
 })

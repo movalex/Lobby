@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest'
 import {
   anchorForClick,
   anchorLabel,
+  frameDisplayName,
   matchesFilter,
   pinState,
   placeAnchor,
@@ -192,5 +193,66 @@ describe('anchor geometry', () => {
     // A file card with unusable ids falls back to a plain shape anchor.
     const odd = { ...card, props: { assetId: 'javascript:alert(1)', versionId: 'x' } }
     expect(anchorForClick({ x: 1100, y: 525 }, odd, 'page:one').kind).toBe('shape')
+  })
+})
+
+describe('anchorLabel (where a thread is)', () => {
+  const placedOn = (pageId = 'page:one') => ({ kind: 'placed', pageId, point: { x: 0, y: 0 } }) as const
+  const shape = { kind: 'shape' as const, shapeId: 'shape:n', u: 0.5, v: 0.5 }
+  const point = { kind: 'point' as const, x: 10, y: 20, pageId: 'page:one' }
+
+  it('names the frame and the kind of object a comment is attached to', () => {
+    expect(
+      anchorLabel(shape, placedOn(), 'page:one', { shapeType: 'note', frameName: 'Concept B – Fresh Start' }),
+    ).toBe('Concept B – Fresh Start · note')
+    expect(anchorLabel(shape, placedOn(), 'page:one', { shapeType: 'geo', frameName: 'Moodboard' })).toBe(
+      'Moodboard · shape',
+    )
+    // A comment on a frame itself names that frame.
+    expect(anchorLabel(shape, placedOn(), 'page:one', { shapeType: 'frame', frameName: 'Concept B' })).toBe(
+      'Concept B · frame',
+    )
+  })
+
+  it('outside any frame says what the object is, with the right article', () => {
+    expect(anchorLabel(shape, placedOn(), 'page:one', { shapeType: 'note', frameName: null })).toBe(
+      'On a note',
+    )
+    expect(anchorLabel(shape, placedOn(), 'page:one', { shapeType: 'image' })).toBe('On an image')
+    expect(anchorLabel(shape, placedOn(), 'page:one', { shapeType: 'arrow' })).toBe('On a connector')
+    expect(anchorLabel(shape, placedOn(), 'page:one', { shapeType: 'my-custom-shape' })).toBe('On an object')
+    expect(anchorLabel(shape, placedOn(), 'page:one')).toBe('On an object')
+  })
+
+  it('point pins say which frame they are in', () => {
+    expect(anchorLabel(point, placedOn(), 'page:one', { frameName: 'Concept B' })).toBe('In Concept B')
+    expect(anchorLabel(point, placedOn(), 'page:one', { frameName: null })).toBe('On the board')
+    // An unnamed frame reads as tldraw shows it; names are kept on one line.
+    expect(anchorLabel(point, placedOn(), 'page:one', { frameName: '   ' })).toBe('In Frame')
+    expect(anchorLabel(point, placedOn(), 'page:one', { frameName: 'Act\n  two' })).toBe('In Act two')
+    expect(frameDisplayName('')).toBe('Frame')
+    expect(frameDisplayName(undefined)).toBe('Frame')
+  })
+
+  it('files keep their page or time, and other pages and deleted objects are called out', () => {
+    const asset = {
+      kind: 'asset' as const,
+      shapeId: 'shape:c',
+      assetId: 'ast_0123456789abcdefghij',
+      versionId: 'ver_0123456789abcdefghij',
+      page: 3,
+    }
+    expect(anchorLabel(asset, placedOn(), 'page:one', { shapeType: 'dr-file-card', frameName: 'Deck' })).toBe(
+      'Deck · file, page 3',
+    )
+    expect(anchorLabel({ ...asset, page: undefined, timeMs: 65_000 }, placedOn(), 'page:one')).toBe(
+      'On a file, at 1:05',
+    )
+    expect(anchorLabel(shape, placedOn('page:two'), 'page:one', { shapeType: 'note', frameName: 'X' })).toBe(
+      'X · note (another page)',
+    )
+    expect(anchorLabel(shape, { kind: 'orphan' }, 'page:one', { shapeType: 'note', frameName: 'X' })).toBe(
+      'On a deleted object',
+    )
   })
 })

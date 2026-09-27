@@ -42,6 +42,18 @@ export function DraftroomShortcutsDialog(props: TLUiKeyboardShortcutsDialogProps
           onSelect={noop}
         />
         <TldrawUiMenuItem
+          id="dr-dblclick-note"
+          label="shortcuts-dialog.dr-dblclick-note"
+          kbd="[[Double-click]]"
+          onSelect={noop}
+        />
+        <TldrawUiMenuItem
+          id="dr-rename-frame"
+          label="shortcuts-dialog.dr-rename-frame"
+          kbd="[[Enter]]"
+          onSelect={noop}
+        />
+        <TldrawUiMenuItem
           id="dr-paste-notes"
           label="shortcuts-dialog.dr-paste-notes"
           kbd="cmd+v"

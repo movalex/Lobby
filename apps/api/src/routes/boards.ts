@@ -1,5 +1,6 @@
 // Boards: list/create/get/patch and archive/trash/restore (docs/M1-CONTRACTS.md §5).
 
+import { checkInternalSecret, INTERNAL_SECRET_HEADER } from '@draftroom/auth-tickets'
 import { CreateBoardInput, ListBoardsQuery, PatchBoardInput } from '@draftroom/contracts'
 import { newBoardId } from '@draftroom/db'
 import {
@@ -10,10 +11,12 @@ import {
   resolveBoardRole,
 } from '@draftroom/permissions'
 import type { FastifyInstance } from 'fastify'
+import { z } from 'zod'
 import {
   BOARD_COLUMNS,
   BOARD_RETURNING,
   type BoardRow,
+  isBoardId,
   requireBoardAction,
   requireProjectInWorkspace,
   requireVisibleBoard,
@@ -22,10 +25,12 @@ import {
 } from '../access.ts'
 import { audit } from '../audit.ts'
 import type { AppContext, Params } from '../context.ts'
-import { conflict, forbidden, parse } from '../errors.ts'
+import { ApiError, conflict, forbidden, notFound, parse } from '../errors.ts'
 import { toBoard, toBoardWithRole } from '../serialize.ts'
 
 const MAX_LISTED = 500
+/** `at`: epoch ms of the board's latest accepted canvas write (sync's clock; clamped to ours). */
+const TouchedQuery = z.object({ at: z.coerce.number().int().min(0).max(8.64e15).optional() })
 const escapeLike = (s: string) => s.replace(/[\\%_]/g, (c) => `\\${c}`)
 
 const TRANSITIONS = { archive: 'archived', trash: 'trashed', restore: 'active' } as const satisfies Record<
@@ -168,6 +173,27 @@ export function registerBoardRoutes(app: FastifyInstance, ctx: AppContext): void
     })
     if (result.visibilityChanged) notifier.accessChanged({ boardId: bid })
     return toBoardWithRole(result.row, result.role)
+  })
+
+  // Server-to-server only (the web proxy never forwards /internal): the sync server reports the time
+  // of a board's latest accepted canvas write, at most once a minute per board (apps/sync/src/touch.ts),
+  // so the dashboard's "Edited …" and "Last edited" sort include canvas edits (RETRO-19). A GET: the
+  // root CSRF hook refuses POSTs without the web Origin, and the update is idempotent (updated_at only
+  // moves forward, and never past this server's clock).
+  app.get('/internal/boards/:bid/touched', async (req, reply) => {
+    if (!checkInternalSecret(req.headers[INTERNAL_SECRET_HEADER], ctx.config.internalSecret))
+      throw new ApiError(401, 'NOT_AUTHENTICATED', 'Internal credentials required.')
+    const { bid = '' } = req.params as Params
+    const { at } = parse(TouchedQuery, req.query)
+    if (!isBoardId(bid)) throw notFound()
+    const current = now()
+    const when = new Date(Math.min(at ?? current.getTime(), current.getTime()))
+    // Trashed boards keep the time they were trashed (the trash list shows it).
+    await db.query(
+      `UPDATE boards SET updated_at = $2 WHERE id = $1 AND updated_at < $2 AND status <> 'trashed'`,
+      [bid, when],
+    )
+    return reply.code(204).send()
   })
 
   for (const action of ['archive', 'trash', 'restore'] as const) {

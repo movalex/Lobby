@@ -1,5 +1,7 @@
 // canvas-ux's TLUiOverrides: the Miro key map (shortcuts.ts), the actions this feature adds, the
-// Templates toolbar entry and the labels they show (menus + the keyboard-shortcuts dialog).
+// Templates toolbar entry and the labels they show (menus + the keyboard-shortcuts dialog). F20: plain
+// labels in the Arrange menu (tldraw's context menu shows "Align H", "Distribute V"…) and no "Debug
+// mode" in Preferences outside dev builds.
 
 import type { Editor, TLUiActionItem, TLUiOverrides, TLUiToolItem } from 'tldraw'
 import { minimapOpen, openPanel, searchState, setMinimapOpen, togglePanel } from './bridge.ts'
@@ -8,6 +10,23 @@ import { TemplatesIcon } from './icons.tsx'
 import { ACTION_KBD_OVERRIDES, applyKbdOverrides, NEW_ACTION_KBDS, TOOL_KBD_OVERRIDES } from './shortcuts.ts'
 
 export const TEMPLATES_TOOL_ID = 'dr-templates'
+
+/**
+ * F20: the Arrange menu's plain labels. tldraw's context menu uses the ".short" strings ("Align H",
+ * "Distribute V", "Stretch H"…); these give it the same words as its main menu.
+ */
+export const ARRANGE_LABELS: Readonly<Record<string, string>> = {
+  'action.align-center-horizontal.short': 'Align horizontally',
+  'action.align-center-vertical.short': 'Align vertically',
+  'action.distribute-horizontal.short': 'Distribute horizontally',
+  'action.distribute-vertical.short': 'Distribute vertically',
+  'action.stretch-horizontal.short': 'Stretch horizontally',
+  'action.stretch-vertical.short': 'Stretch vertically',
+  'action.flip-horizontal.short': 'Flip horizontally',
+  'action.flip-vertical.short': 'Flip vertically',
+  'action.stack-horizontal.short': 'Stack horizontally',
+  'action.stack-vertical.short': 'Stack vertically',
+}
 export const PANEL = { templates: 'templates', frames: 'frames', search: 'search' } as const
 
 /** Ctrl/Cmd+F: open the search panel, or re-focus its input when it is already open. */
@@ -27,6 +46,9 @@ export const canvasUxOverrides: TLUiOverrides = {
   actions(editor, actions) {
     const { items, missing } = applyKbdOverrides(actions, ACTION_KBD_OVERRIDES)
     warnMissing('actions', missing)
+    // F20/RETRO-23b: tldraw's debug mode (Preferences → Debug mode) is a developer tool; the menu item
+    // renders only while its action exists.
+    if (!import.meta.env?.DEV) delete items['toggle-debug-mode']
     // MAK-05: tldraw deselects shapes when it locks them, so the same shortcut could never unlock them.
     // Keep the (now locked) selection, as Miro does: locked shapes still refuse moves, resizes, edits and
     // deletes (Editor.updateShapes / deleteShapes skip them), and Ctrl/Cmd+Shift+L again unlocks.
@@ -93,6 +115,7 @@ export const canvasUxOverrides: TLUiOverrides = {
       'action.dr-toggle-minimap': 'Show / hide minimap',
       'action.dr-copy-link': 'Copy link to selection',
       'tool.dr-templates': 'Templates',
+      ...ARRANGE_LABELS,
       'tool.arrow': 'Connector',
       'tool.draw': 'Pen',
       'shortcuts-dialog.dr-board': 'Board',
@@ -100,6 +123,8 @@ export const canvasUxOverrides: TLUiOverrides = {
       'shortcuts-dialog.dr-next-note': 'New note beside (while editing a note)',
       'shortcuts-dialog.dr-note-below': 'New note below (while editing a note)',
       'shortcuts-dialog.dr-paste-notes': 'Paste lines or cells as sticky notes',
+      'shortcuts-dialog.dr-dblclick-note': 'New sticky note (double-click empty canvas)',
+      'shortcuts-dialog.dr-rename-frame': 'Rename the selected frame',
     },
   },
 }

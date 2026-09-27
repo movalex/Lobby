@@ -101,18 +101,67 @@ export const MyAccessRequestResponse = z.object({
 export const REVIEW_LINK_MAX_DAYS = 30
 export const REVIEW_LINK_DEFAULT_DAYS = 14
 export const REVIEW_LINK_MAX_USES = 10_000
+/** Workshop links (role editor, RETRO-04a) live a few hours: default 3, never more than 24 in all. */
+export const WORKSHOP_LINK_DEFAULT_HOURS = 3
+export const WORKSHOP_LINK_MAX_HOURS = 24
 
-/** Review links hand out viewer or commenter access only (default: comment). */
-export const ReviewLinkRole = z.enum(['viewer', 'commenter'])
+/**
+ * Multi-use links: review links hand out viewer or commenter access (default: comment) for up to 30
+ * days; a workshop link hands out editor access for up to 24 hours. Never ownership.
+ */
+export const ReviewLinkRole = z.enum(['viewer', 'commenter', 'editor'])
 export type ReviewLinkRole = z.infer<typeof ReviewLinkRole>
 
-export const CreateReviewLinkInput = z.object({
-  role: ReviewLinkRole.default('commenter'),
-  expiresInDays: z.number().int().min(1).max(REVIEW_LINK_MAX_DAYS).default(REVIEW_LINK_DEFAULT_DAYS),
-  /** null = unlimited (until expiry or revocation). */
-  maxUses: z.number().int().min(1).max(REVIEW_LINK_MAX_USES).nullable().default(null),
-})
+export const CreateReviewLinkInput = z
+  .object({
+    role: ReviewLinkRole.default('commenter'),
+    /** Review links (default 14). A workshop link may use 1 (= 24 h) at most. */
+    expiresInDays: z.number().int().min(1).max(REVIEW_LINK_MAX_DAYS).optional(),
+    /** Workshop links (default 3); also accepted for review links. Takes precedence over days. */
+    expiresInHours: z
+      .number()
+      .int()
+      .min(1)
+      .max(REVIEW_LINK_MAX_DAYS * 24)
+      .optional(),
+    /** null = unlimited (until expiry or revocation). */
+    maxUses: z.number().int().min(1).max(REVIEW_LINK_MAX_USES).nullable().default(null),
+  })
+  .superRefine((v, ctx) => {
+    if (v.role !== 'editor') return
+    const hours = v.expiresInHours ?? (v.expiresInDays === undefined ? undefined : v.expiresInDays * 24)
+    if (hours !== undefined && hours > WORKSHOP_LINK_MAX_HOURS)
+      ctx.addIssue({
+        code: 'custom',
+        path: [v.expiresInHours === undefined ? 'expiresInDays' : 'expiresInHours'],
+        message: `Workshop (edit) links expire within ${WORKSHOP_LINK_MAX_HOURS} hours.`,
+      })
+  })
 export type CreateReviewLinkInput = z.input<typeof CreateReviewLinkInput>
+
+/** How long a link with `role` lasts when created from `input` (ms). */
+export function reviewLinkLifetimeMs(input: {
+  role: ReviewLinkRole
+  expiresInDays?: number
+  expiresInHours?: number
+}): number {
+  const HOUR = 60 * 60 * 1000
+  if (input.expiresInHours !== undefined) return input.expiresInHours * HOUR
+  if (input.expiresInDays !== undefined) return input.expiresInDays * 24 * HOUR
+  return input.role === 'editor' ? WORKSHOP_LINK_DEFAULT_HOURS * HOUR : REVIEW_LINK_DEFAULT_DAYS * 24 * HOUR
+}
+
+/** The longest a link with `role` may stay open, counted from its creation (ms). */
+export const reviewLinkMaxLifetimeMs = (role: ReviewLinkRole) =>
+  (role === 'editor' ? WORKSHOP_LINK_MAX_HOURS : REVIEW_LINK_MAX_DAYS * 24) * 60 * 60 * 1000
+
+/** "+1 h" on an open link (workshop links mostly); capped at the role's maximum lifetime. */
+export const ExtendReviewLinkInput = z.object({
+  hours: z.number().int().min(1).max(WORKSHOP_LINK_MAX_HOURS).default(1),
+})
+export type ExtendReviewLinkInput = z.input<typeof ExtendReviewLinkInput>
+export const ReviewLinkExtended = z.object({ expiresAt: IsoDate, maxExpiresAt: IsoDate })
+export type ReviewLinkExtended = z.infer<typeof ReviewLinkExtended>
 
 export const ReviewLinkCreated = z.object({
   get id() {
@@ -140,6 +189,8 @@ export const PendingInvitation = z.object({
   maxUses: z.number().int().nullable(),
   /** Review links only, for people who may manage access; null when it cannot be shown again. */
   url: z.string().nullable(),
+  /** Multi-use links: the latest `expiresAt` an extension can reach (created + the role's cap). */
+  maxExpiresAt: IsoDate.nullable().default(null),
 })
 export type PendingInvitation = z.infer<typeof PendingInvitation>
 
@@ -150,6 +201,21 @@ export const RevokeReviewLinkInput = z.object({
   removeAccess: z.boolean().default(true),
 })
 export const ReviewLinkRevoked = z.object({ removed: z.number().int() })
+
+/**
+ * The body of a 410 from GET /api/invitations/:token and its accept route (PRI-04): the usual error,
+ * plus who sent the link (the token holder saw that while it was valid) and, only for a signed-in
+ * caller who can open the board right now, its id, so the page can open the board instead of a dead
+ * end. Nobody else learns anything about the board.
+ */
+export const InvitationGoneBody = z.object({
+  error: z.object({ code: z.string(), message: z.string() }),
+  gone: z.object({
+    invitedBy: z.object({ name: z.string() }).nullable(),
+    boardId: z.string().nullable(),
+  }),
+})
+export type InvitationGoneBody = z.infer<typeof InvitationGoneBody>
 
 // ---- sharing state + people ----------------------------------------------------------------------
 

@@ -7,8 +7,8 @@ import { useEffect, useId, useMemo } from 'react'
 import { useValue } from 'tldraw'
 import { formatRelativeTime } from '../../lib/format.ts'
 import type { FeatureContext } from '../types.ts'
-import { controllerFor, focusThread } from './controller.ts'
-import { placeOnBoard } from './geometry.ts'
+import { controllerFor, openThreadFromPanel } from './controller.ts'
+import { anchorContext, placeOnBoard } from './geometry.ts'
 import {
   anchorLabel,
   isThreadFilter,
@@ -38,7 +38,10 @@ export function CommentsPanel({ ctx }: { ctx: FeatureContext; close(): void }) {
     const out: Record<string, { label: string; orphan: boolean }> = {}
     for (const t of Object.values(store.threads.get())) {
       const placement = placeOnBoard(editor, t.anchor)
-      out[t.id] = { label: anchorLabel(t.anchor, placement, page), orphan: placement.kind === 'orphan' }
+      out[t.id] = {
+        label: anchorLabel(t.anchor, placement, page, anchorContext(editor, t.anchor, placement)),
+        orphan: placement.kind === 'orphan',
+      }
     }
     return out
   }, [editor, store])
@@ -136,7 +139,7 @@ export function CommentsPanel({ ctx }: { ctx: FeatureContext; close(): void }) {
             orphan={labels[t.id]?.orphan ?? false}
             open={openId === t.id}
             onOpen={() => {
-              focusThread(editor, t.id)
+              openThreadFromPanel(ctx, t.id)
             }}
           />
         ))}

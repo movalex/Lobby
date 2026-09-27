@@ -340,3 +340,164 @@
     display: none;
   }
 }
+
+/* ---- PRI-11: the whole card opens the board ------------------------------------------------------ */
+/* The card keeps ONE link (the thumbnail's); stretched over the card, it takes clicks on the title and
+   the body too. The star and the ⋯ menu sit above it and keep their own actions; renaming turns it off. */
+.dr-bcard__link:not(.dr-bcard__link--disabled)::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  border-radius: 12px;
+}
+.dr-bcard[data-renaming="true"] .dr-bcard__link::after {
+  display: none;
+}
+.dr-bcard__foot .dr-star,
+.dr-bcard__foot .dr-menu-wrap,
+.dr-bcard__foot input {
+  position: relative;
+  z-index: 2;
+}
+.dr-bcard:has(.dr-bcard__link:not(.dr-bcard__link--disabled)) .dr-bcard__title {
+  cursor: pointer;
+}
+.dr-bcard:has(.dr-bcard__link:focus-visible) {
+  outline: 2px solid var(--dr-navy);
+  outline-offset: 2px;
+}
+
+/* ---- PRI-05a: what is new on a board, and the dashboard bell ------------------------------------- */
+.dr-bcard__news {
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: #e8eefb;
+  color: var(--dr-navy);
+  font-weight: 650;
+}
+.dr-dbell {
+  position: relative;
+}
+.dr-dbell__button {
+  position: relative;
+  width: 34px;
+  height: 34px;
+}
+.dr-dbell__count {
+  position: absolute;
+  top: 1px;
+  right: 0;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border: 2px solid var(--dr-surface);
+  border-radius: 999px;
+  background: var(--dr-danger);
+  color: #fff;
+  font: 700 9.5px / 12px var(--dr-font);
+  text-align: center;
+  box-sizing: border-box;
+}
+.dr-dbell__panel {
+  /* Portaled to <body>; top/right come from the bell's position. */
+  position: fixed;
+  z-index: 1000;
+  width: min(360px, calc(100vw - 24px));
+  max-height: min(480px, calc(100vh - 80px));
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--dr-line);
+  border-radius: 12px;
+  background: var(--dr-surface);
+  box-shadow:
+    0 2px 6px rgb(27 35 48 / 10%),
+    0 12px 32px rgb(27 35 48 / 16%);
+  font-family: var(--dr-font);
+  color: var(--dr-ink);
+  font-size: 13px;
+}
+.dr-dbell__panel:focus {
+  outline: none;
+}
+.dr-dbell__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--dr-line);
+}
+.dr-dbell__head .dr-linkbtn:disabled {
+  color: var(--dr-ink-2);
+  cursor: default;
+  text-decoration: none;
+}
+.dr-dbell__list {
+  flex: 1;
+  min-height: 0;
+  margin: 0;
+  padding: 4px;
+  overflow-y: auto;
+  list-style: none;
+}
+.dr-dbell__item {
+  display: flex;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--dr-ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.dr-dbell__item:hover,
+.dr-dbell__item:focus-visible {
+  background: var(--dr-paper);
+}
+.dr-dbell__item[data-unread="true"] {
+  background: #f1f4f9;
+}
+.dr-dbell__dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  margin-top: 5px;
+  border-radius: 50%;
+  background: var(--dr-navy);
+}
+.dr-dbell__text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.dr-dbell__snippet {
+  overflow: hidden;
+  color: var(--dr-ink-2);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dr-dbell__request {
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.dr-dbell__time {
+  color: var(--dr-ink-2);
+  font-size: 11.5px;
+}
+.dr-dbell__empty,
+.dr-dbell__note {
+  margin: 0;
+  padding: 12px 14px;
+  color: var(--dr-ink-2);
+  font-size: 12.5px;
+  line-height: 1.4;
+}
+.dr-dbell__note {
+  padding: 8px 14px;
+  border-top: 1px solid var(--dr-line);
+  font-size: 11.5px;
+}

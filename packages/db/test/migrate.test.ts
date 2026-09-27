@@ -132,13 +132,14 @@ describe('shipped migrations', () => {
     expect(shipped[0]?.name).toBe('0001_core')
   })
 
-  it('are the milestone-1 core plus the four pre-allocated feature migrations, in order', () => {
+  it('are the milestone-1 core, the four pre-allocated feature migrations and 0006_workshop_links, in order', () => {
     expect(loadMigrations(MIGRATIONS_DIR).map((m) => m.name)).toEqual([
       '0001_core',
       '0002_comments',
       '0003_history',
       '0004_workshops',
       '0005_dashboard',
+      '0006_workshop_links',
     ])
   })
 
@@ -150,6 +151,7 @@ describe('shipped migrations', () => {
       '0003_history',
       '0004_workshops',
       '0005_dashboard',
+      '0006_workshop_links',
     ])
     expect(await migrate(db)).toEqual({ applied: [] })
     expect(await tableNames()).toEqual([
@@ -196,7 +198,13 @@ describe('shipped migrations', () => {
                 'usr_aaaaaaaaaaaa', now() + interval '60 days');
     `)
     const next = await migrate(db, { migrations: shipped })
-    expect(next.applied).toEqual(['0002_comments', '0003_history', '0004_workshops', '0005_dashboard'])
+    expect(next.applied).toEqual([
+      '0002_comments',
+      '0003_history',
+      '0004_workshops',
+      '0005_dashboard',
+      '0006_workshop_links',
+    ])
     expect(await recorded()).toEqual(shipped.map((m) => m.name))
     const inv = await db.one<{ multi_use: boolean; use_count: number }>(
       "SELECT multi_use, use_count FROM invitations WHERE id = 'inv_aaaaaaaaaaaa'",

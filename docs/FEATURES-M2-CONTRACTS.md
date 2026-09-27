@@ -270,3 +270,55 @@ Bugs the browser suites found, fixed at the root. Each integration fix below was
 New test ids, attributes and events since the table in §2: `save-status[data-state=connecting|saved|saving|offline|offline-pending|rejected|error|unsupported|readonly]` (labels "Saved", "Saving…", "Offline", "Offline — changes will sync", "Change not saved", "Not saved — connection ended", "View only"; the title is the tooltip), `save-rejected-toast`, `undo-notice`, `canvas-ux-overlay[data-start-view=template:<id>|deep-link|restore|restore+fit|fit|none|failed]`, `context-menu.unlock-all`; api event `sharing.changed {reason: 'visibility'|'grant'}`; window event `draftroom:share-remote-changed`; SSE `{type:'ping'}`. Workshops behaviour: while a participant is voting, a plain click on an eligible object only votes (Shift+click/drag selects and moves); the countdown never shows more than the server's last `remainingMs`.
 
 Still open (decisions, not defects): the viewer sees "View only" twice (role pill and save status); duplicate default names differ ("Copy of X" in the History panel, "X (copy)" on the dashboard); a review-link guest can be made owner; other people's cursors stay visible during a vote; plain drags on eligible objects do not move them while voting. Not covered anywhere yet: Firefox/Safari, touch, phone width (the top bar overflows), hidden tabs, real network latency.
+
+### Persona-review fixes (2026-09-27)
+
+Four Miro-user persona reviews (facilitator, creative director, client reviewer, performance) produced 78 findings, and four fix batches followed. The findings, their final status and the measured performance gates are in [`docs/REVIEW-2026-09-27.md`](REVIEW-2026-09-27.md). New browser tests live in `e2e/tests/canvas-ux.fix.spec.ts`, `facilitation-review.fix.spec.ts`, `shell-sharing-platform.fix.spec.ts` and `files.spec.ts` (F1–F7a), each titled with its finding ID. The suite grew from 113 to 152 tests. Checklist rows whose status changed:
+
+| ID | Status now | Evidence | Gaps / deviations |
+|---|---|---|---|
+| FIL-06 | Verified | files › "F1/F2 uploads with the view on "3 · Imagery"…" (grid, on-screen size, inside a frame or on the page, one undo, Alt+1, a second user's first view) | Upscaling is capped at 2× native; Ctrl+U never fills a template slot, only a real drop/paste point does |
+| FIL-01..05 (errors, previews) | Verified | files › "F4 previews in progress…" (0 `/original` while processing), "F5 bad files together…", "F6 a frame grab dropped on a Storyboard slot…", "F7a double-clicking a PDF or video card…" | Placeholders `/img/image-unavailable.svg`, `/img/image-processing.svg` (never written into records). Any empty `.tl-image-container` now shows a loading tile, foreign URLs included |
+| PRE-07 | Verified | canvas-ux › "templates in a board"; `packages/templates` tests | Headings, instructions and image slots arrive locked (slots carry `meta.draftroomSlot = 'image'`); frames, notes and starter values stay unlocked |
+| COL-04 | Verified (changed) | canvas-ux.fix › "RETRO-02…", "RETRO-09…" | After Esc the note that was just edited takes tool keys, not typing; typing after Tab is buffered. "Tab to a note, then C" still types "c" into a lone selected note |
+| COL-05 | Verified | canvas-ux.fix › "RETRO-01…" | Placed at the pointer; a single row or column of more than 3 cells reflows to a ceil(√n) grid; parented into the frame under the pointer |
+| COL-09 | Verified | canvas-ux.fix › "RETRO-21b…" | `createTextOnCanvasDoubleClick: false`; new notes default to the sans font (per session) |
+| MAK-09 | Verified (fix) | canvas-ux.fix › "F3…" | Space on a mouse-focused button pans; a button reached by keyboard keeps Space as a press |
+| MAK-11 | Verified (changed) | canvas-ux › "Miro keys"; canvas-ux.fix › "PERF-03…" | Minimap **closed by default** and unmounted when closed (PERF-03); an explicit choice survives reloads |
+| MAK-13 | Verified | canvas-ux › "frame outline"; canvas-ux.fix › "Frames panel: no doubled numbers…" | Shift/Ctrl-click multi-select (no range select); zoom-to-frame fits within the free area, at most 100% |
+| MAK-12 | Verified | canvas-ux.fix › "F15…" | Images and videos are also found by file name |
+| MAK-05 | Verified | canvas-ux.fix › "F8…" | Locked-hint bar with Unlock; lock badge on locked frames' titles |
+| PRF-02 / PRF-03 | Partial | Measured: `docs/REVIEW-2026-09-27.md` §2 | Heavy board below 30 fps at fit; mood-board images load with 0 broken and 0 originals; iPad unmeasured |
+| REV-04 / REV-05 | Verified (extended) | facilitation-review.fix › "PRI-01…", "PRI-03…", "PRI-06…", "PRI-12…", "PRI-17 + F24b…", "PRI-09a…"; shell-sharing-platform.fix › "PRI-05a…" | Dashboard bell and card badges; still no email |
+| FAC-03 | Verified (changed) | workshops › "time's up" | The pill returns to "Timer" 10 s after time's up; one time's-up message; the floating timer is hidden in Present unless running or paused |
+| FAC-05 / FAC-06 | Verified (extended) | facilitation-review.fix › "RETRO-06…", "RETRO-08 + RETRO-23a…", "RETRO-11…" | Keyboard voting; "Results are in" card with the top 3 for everyone |
+| FAC-07 | Partial (mitigation) | facilitation-review.fix › "RETRO-03a + RETRO-07a…" | "Hide note authors" and "Hide cursors" session settings (document record `meta.drWorkshop`); private drafting is not built |
+| PRS-06 / PRS-10 | Verified (extended) | facilitation-review.fix › "RETRO-05a + F13…"; present-export › "PDF export…" | A title band on every page (+28 pt); page size Fit each frame / 16:9 / A4 landscape; text under images is left out of the text layer |
+| PRS-08 | Partial (extended) | shell-sharing-platform.fix › "RETRO-04a…"; `apps/api/test/features/dashboard/workshop-links.test.ts` | Workshop (edit) links: 3 h default, 24 h cap, +1 h; migration `0006_workshop_links`; sign-in still required |
+| PRS-04 | Verified (extended) | dashboard-share › "review link revoked without removing access"; shell-sharing-platform.fix › "PRI-08/PRI-09b…" | A gone link opens the board for members; blocked-edit hint with Request; role-change toasts |
+| WRK-06 | Verified (extended) | saving › "a viewer sees View only, a commenter Can comment…"; shell-sharing-platform.fix › "RETRO-17/PRI-07…"; canvas-ux.fix › "PRI-13…" | Save status hidden when the role pill states it; read-only roles on touch start on the Hand tool |
+| (phone/tablet) | Verified | shell-sharing-platform.fix › "PRI-02 at 390×844 (touch)", "…at 768×1024" | Feature items move to a "⋯" menu at 768 px and below |
+| DSH (edited time, card) | Verified | shell-sharing-platform.fix › "RETRO-19…", "PRI-11…" | The sync server reports canvas writes through `GET /internal/boards/:bid/touched?at=` (a GET because the api's CSRF hook refuses Origin-less POSTs; internal secret required); at most once a minute per board |
+
+New or changed ids and interfaces:
+- **canvas-ux:**
+  - options `cameraMovingTimeoutMs` (280) and `createTextOnCanvasDoubleClick` (false);
+  - `locked-hint`, `locked-hint-unlock`, `locked-hint-dismiss`, `locked-frame-badges`, `navigation.zoom-to-fit`;
+  - nested frame rows carry `data-selected`.
+- **comments / workshops / present-export:**
+  - `new-comment-where`, `notification-request`, `session-settings`, `session-hide-authors`, `session-hide-cursors`, `vote-announce`, `vote-keys-hint`, `vote-results-card`, `vote-results-card-row`, `vote-results-card-all`, `workshop-stack`, `export-pdf-page-size`;
+  - `timer-pill[data-state=ended]`;
+  - removed: `follow-stop`; `timer-finished` is now the flash text;
+  - mention and resolve toasts are tldraw toasts;
+  - `NotificationItem.accessRequest` added.
+- **shell / sharing:**
+  - `topbar-overflow`, `dashboard-bell`, `dashboard-bell-count`, `dashboard-notifications`, `dashboard-notification-item`, `board-card-news`, `share-link-note`, `workshop-links`, `workshop-link-create`, `workshop-link-extend`, `workshop-link-expiry`, `member-remove-confirm`, `member-remove-question`;
+  - `POST /api/boards/:bid/review-links/:id/extend`;
+  - contracts `ReviewLinkRole` includes `editor`, plus `InvitationGoneBody`.
+- **sync:** a join queue that processes one TLSync connect per macrotask (`apps/sync/src/join-queue.ts`).
+- **assets:** metadata GETs are capped at 6 in flight, with retries after 0.5, 1 and 2 s.
+
+Earlier "still open" items this closes:
+- a viewer seeing "View only" twice;
+- other people's cursors during a vote (a facilitator can now hide them);
+- phone-width top-bar overflow.

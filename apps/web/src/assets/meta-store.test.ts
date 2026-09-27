@@ -107,6 +107,94 @@ describe('AssetMetaStore', () => {
   })
 })
 
+describe('AssetMetaStore under a fetch storm (PERF-01)', () => {
+  beforeEach(() => vi.useFakeTimers())
+  afterEach(() => vi.useRealTimers())
+
+  /** A meta route with latency that fails ~`failRate` of requests (seeded) and records concurrency. */
+  function flakyServer(failRate: number, latencyMs = 40) {
+    let seed = 12345
+    const rand = () => {
+      seed = (seed * 1103515245 + 12345) % 2 ** 31
+      return seed / 2 ** 31
+    }
+    const stats = { inFlight: 0, maxInFlight: 0, requests: 0, failures: 0, order: [] as string[] }
+    const fetchImpl = vi.fn(async (url: string | URL | Request) => {
+      stats.requests++
+      stats.inFlight++
+      stats.maxInFlight = Math.max(stats.maxInFlight, stats.inFlight)
+      stats.order.push(String(url))
+      try {
+        await new Promise((r) => setTimeout(r, latencyMs))
+        const [, , , , , assetId, versionId] = String(url).split('/')
+        const roll = rand()
+        if (roll < failRate) {
+          stats.failures++
+          if (roll < failRate / 3) throw new TypeError('net::ERR_INSUFFICIENT_RESOURCES')
+          return new Response('{}', { status: roll < (failRate * 2) / 3 ? 503 : 429 })
+        }
+        return Response.json(makeMeta({ assetId, versionId, status: 'ready' }))
+      } finally {
+        stats.inFlight--
+      }
+    }) as unknown as typeof fetch
+    return { fetchImpl, stats }
+  }
+
+  it('never has more than the cap in flight, serves requests FIFO, and retries 20 % failures to success', async () => {
+    const { fetchImpl, stats } = flakyServer(0.2)
+    const store = new AssetMetaStore({ fetchImpl, maxConcurrent: 6 })
+    const versions = Array.from({ length: 300 }, () => makeMeta())
+    const results = versions.map((m) => store.load(BOARD, m.assetId, m.versionId))
+    await vi.advanceTimersByTimeAsync(60_000)
+    const snaps = await Promise.all(results)
+    expect(stats.maxInFlight).toBe(6)
+    expect(stats.failures).toBeGreaterThan(30)
+    // Every one ends ready: no transient failure is left as a broken image.
+    expect(snaps.filter((s) => s.meta?.status === 'ready')).toHaveLength(300)
+    expect(snaps.some((s) => s.error)).toBe(false)
+    // FIFO: the first wave of requests goes out in the order the loads were made.
+    const first = stats.order.slice(0, 50).map((u) => u.split('/')[5])
+    expect(first).toEqual(versions.slice(0, 50).map((m) => m.assetId))
+    expect(store.queueStats).toEqual({ active: 0, waiting: 0 })
+  })
+
+  it('also caps the pollers, and gives up after 3 retries without caching an error as terminal', async () => {
+    const meta = makeMeta()
+    const down = fakeServer(meta, ['throw', 'throw', 500, 500, 'ready'])
+    const store = new AssetMetaStore({ fetchImpl: down.fetchImpl, random: () => 0.5 })
+    const first = store.load(BOARD, meta.assetId, meta.versionId)
+    await vi.advanceTimersByTimeAsync(4000) // 0.5 + 1 + 2 s of backoff (the ±25 % jitter pinned to 0)
+    const snap = await first
+    expect(down.calls).toHaveLength(4)
+    expect(snap.error).toBe(true)
+    expect(snap.meta).toBeNull()
+    // Not terminal: the next resolve asks again and gets it.
+    const again = await store.load(BOARD, meta.assetId, meta.versionId)
+    expect(again.meta?.status).toBe('ready')
+    expect(down.calls).toHaveLength(5)
+
+    const { fetchImpl, stats } = flakyServer(0)
+    const polled = new AssetMetaStore({ fetchImpl, maxConcurrent: 3, minDelayMs: 10, maxDelayMs: 10 })
+    for (let i = 0; i < 40; i++) {
+      const m = makeMeta()
+      polled.subscribe(BOARD, m.assetId, m.versionId, () => {})
+    }
+    await vi.advanceTimersByTimeAsync(5000)
+    expect(stats.requests).toBe(40)
+    expect(stats.maxInFlight).toBe(3)
+  })
+
+  it('does not retry a 404 (terminal: missing)', async () => {
+    const gone = makeMeta()
+    const s404 = fakeServer(gone, [404])
+    const store = new AssetMetaStore({ fetchImpl: s404.fetchImpl })
+    const snap = await store.load(BOARD, gone.assetId, gone.versionId)
+    expect(snap.missing).toBe(true)
+    expect(s404.calls).toHaveLength(1)
+  })
+})
+
 describe('watchMeta', () => {
   beforeEach(() => vi.useFakeTimers())
   afterEach(() => vi.useRealTimers())

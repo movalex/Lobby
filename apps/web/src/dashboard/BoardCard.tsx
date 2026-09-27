@@ -12,6 +12,7 @@ import {
   ROLE_LABEL,
   thumbStyle,
 } from './model.ts'
+import { type BoardNews, newsLabel } from './notifications.ts'
 import type { ViewMode } from './prefs.ts'
 import './dashboard.css'
 
@@ -98,6 +99,7 @@ export function BoardCard<B extends BoardWithRole & { starred?: boolean }>({
   layout = 'grid',
   menu = { canCreate: true, canMove: true },
   projectName,
+  news,
   onAction,
   onRename,
   onRenameCancel,
@@ -111,6 +113,8 @@ export function BoardCard<B extends BoardWithRole & { starred?: boolean }>({
   menu?: BoardMenuContext
   /** Shown in the list view. */
   projectName?: string | null
+  /** Unread notifications on this board (PRI-05a), e.g. "2 new · mentioned you". */
+  news?: BoardNews | null
   onAction(action: BoardMenuAction, board: B): void
   onRename(board: B, title: string): void
   onRenameCancel(): void
@@ -166,6 +170,8 @@ export function BoardCard<B extends BoardWithRole & { starred?: boolean }>({
       data-status={board.status}
       data-role={board.role}
       data-starred={starred ? 'true' : 'false'}
+      // PRI-11: the card's one link covers the whole card (title and body); star and ⋯ sit above it.
+      data-renaming={renaming ? 'true' : undefined}
       aria-busy={busy || undefined}
     >
       {canOpen ? (
@@ -173,7 +179,7 @@ export function BoardCard<B extends BoardWithRole & { starred?: boolean }>({
           className="dr-bcard__link"
           href={href}
           onClick={linkClick(href)}
-          aria-label={`Open ${board.title}`}
+          aria-label={news ? `Open ${board.title}, ${newsLabel(news)}` : `Open ${board.title}`}
           tabIndex={renaming ? -1 : 0}
         >
           {body}
@@ -197,6 +203,11 @@ export function BoardCard<B extends BoardWithRole & { starred?: boolean }>({
             </span>
           )}
           <span className="dr-bcard__meta">
+            {news && (
+              <span className="dr-bcard__news" data-testid="board-card-news">
+                {newsLabel(news)}
+              </span>
+            )}
             <span>{when}</span>
             {layout === 'list' && projectName && <span className="dr-bcard__project">{projectName}</span>}
             <span className="dr-role" data-role={board.role}>

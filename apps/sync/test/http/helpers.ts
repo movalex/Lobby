@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import type { AccessClient } from '../../src/access.ts'
 import { createSyncServer, type SyncServer } from '../../src/app.ts'
 import type { SyncConfig } from '../../src/config.ts'
+import type { TouchClient } from '../../src/touch.ts'
 import { UNREACHABLE_API } from '../harness/server-process.ts'
 import { TEST_INTERNAL_SECRET, TEST_TICKET_SECRET } from '../harness/tickets.ts'
 
@@ -36,13 +37,14 @@ export function testConfig(dataDir: string, over: Partial<SyncConfig> = {}): Syn
 }
 
 export async function startServer(
-  opts: { config?: Partial<SyncConfig>; accessClient?: AccessClient } = {},
+  opts: { config?: Partial<SyncConfig>; accessClient?: AccessClient; touchClient?: TouchClient } = {},
 ): Promise<TestServer> {
   const dataDir = mkdtempSync(join(tmpdir(), 'dr-sync-http-'))
   const logs: string[] = []
   const server = createSyncServer(testConfig(dataDir, opts.config), {
     log: (...a) => logs.push(a.map(String).join(' ')),
     accessClient: opts.accessClient,
+    touchClient: opts.touchClient,
   })
   const { port } = await server.listen()
   return {

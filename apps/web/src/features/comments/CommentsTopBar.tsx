@@ -1,7 +1,7 @@
 // Top-bar cluster: the comment tool toggle (C) and the notifications bell with its unread count.
 // Notifications are in-app only; the inbox says so.
 
-import type { NotificationItem } from '@draftroom/contracts'
+import type { NotificationAccessRequest, NotificationItem } from '@draftroom/contracts'
 import { type CSSProperties, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useValue } from 'tldraw'
@@ -31,8 +31,8 @@ export function CommentsTopBar({ ctx }: { ctx: FeatureContext }) {
         title={
           canComment
             ? active
-              ? 'Comment tool is on: click an object or the board (C). Esc to stop.'
-              : 'Comment (C)'
+              ? 'Comment tool is on: click an object or the board, or press Enter to comment on the selected object (the middle of the view when nothing is selected). Esc to stop.'
+              : 'Comment (C): click an object or the board, or press Enter to comment on the selection'
             : 'You can read comments here but not add them'
         }
         aria-label="Comment tool"
@@ -53,6 +53,12 @@ const KIND_TEXT: Record<NotificationItem['kind'], string> = {
   reply: 'replied',
   resolved: 'resolved a thread',
   access_request: 'asked for access',
+}
+
+const REQUEST_TEXT: Record<NotificationAccessRequest['role'], string> = {
+  editor: 'Wants to edit',
+  commenter: 'Wants to comment',
+  viewer: 'Wants to view',
 }
 
 function NotificationsBell({ ctx }: { ctx: FeatureContext }) {
@@ -192,6 +198,15 @@ function NotificationsBell({ ctx }: { ctx: FeatureContext }) {
                           <strong>{n.actor?.name ?? 'Someone'}</strong> {KIND_TEXT[n.kind]}
                           {n.boardId !== ctx.board.id ? ` on ${n.boardTitle}` : ''}
                         </span>
+                        {n.kind === 'access_request' && n.accessRequest && (
+                          <span className="dr-cbell__request" data-testid="notification-request">
+                            {REQUEST_TEXT[n.accessRequest.role]}
+                            {n.accessRequest.status !== 'pending' ? ` · ${n.accessRequest.status}` : ''}
+                            {n.accessRequest.message && (
+                              <span className="dr-cbell__snippet">“{n.accessRequest.message}”</span>
+                            )}
+                          </span>
+                        )}
                         {n.snippet && <span className="dr-cbell__snippet">“{n.snippet}”</span>}
                         <time className="dr-cbell__time" dateTime={n.createdAt}>
                           {formatRelativeTime(n.createdAt)}

@@ -143,9 +143,29 @@ describe('searchBoard', () => {
     expect(searchBoard(records, 'plan', { limit: Number.NaN })).toHaveLength(5)
   })
 
+  it('finds an image or video by the file name of its asset (F15), with or without alt text', () => {
+    const extra: TLRecord[] = [
+      { ...imageAsset('ref'), props: { ...imageAsset('ref').props, name: 'ref-01.jpg' } } as TLRecord,
+      image('moodref', 'asset:ref', { x: 0, y: 2800 }),
+    ]
+    const all = [...records, ...extra]
+    const hit = searchBoard(all, 'ref-01')
+    expect(ids(hit)).toEqual([sid('moodref')])
+    expect(hit[0]).toMatchObject({ type: 'image', text: 'ref-01.jpg', snippet: 'ref-01.jpg' })
+    // alt text and file name together
+    expect(searchBoard(all, 'team photo.png')[0]?.text).toBe('Team photo at the café · photo.png')
+    // Without the asset records (or with no name), only the alt text is indexed.
+    expect(searchBoard([...records, extra[1] as TLRecord], 'ref-01')).toEqual([])
+    const shape = extra[1] as never
+    expect(extractSearchableText(shape)).toBe('')
+    expect(extractSearchableText(shape, (id) => (id === 'asset:ref' ? 'ref-01.jpg' : undefined))).toBe(
+      'ref-01.jpg',
+    )
+  })
+
   it('ignores non-shape records, orphans, and empty queries', () => {
-    // Page "Café planning", asset "photo.png", the document and the binding are not searchable;
-    // the orphan note has no page.
+    // Page "Café planning", the asset record itself, the document and the binding are not results
+    // (the image using asset "photo.png" is); the orphan note has no page.
     expect(ids(searchBoard(records, 'photo'))).toEqual([sid('team')])
     expect(ids(searchBoard(records, 'orphan'))).toEqual([])
     expect(searchBoard(records, 'board')).toEqual([])

@@ -111,3 +111,29 @@ export function localCastCheck(
   if (onePerObject && cur >= 1) return { ok: false, reason: 'One vote per object in this vote.' }
   return { ok: true }
 }
+
+export interface ReadingItem {
+  id: string
+  x: number
+  y: number
+  w: number
+  h: number
+}
+
+/**
+ * Objects in reading order (rows top to bottom, each row left to right), for stepping through the
+ * objects of a vote with the keyboard. Objects whose vertical middles are within half the shorter
+ * one's height of each other share a row.
+ */
+export function readingOrder<T extends ReadingItem>(items: readonly T[]): T[] {
+  const byTop = [...items].sort((a, b) => a.y + a.h / 2 - (b.y + b.h / 2) || a.x - b.x)
+  const rows: T[][] = []
+  for (const item of byTop) {
+    const mid = item.y + item.h / 2
+    const row = rows[rows.length - 1]
+    const ref = row?.[0]
+    if (row && ref && Math.abs(ref.y + ref.h / 2 - mid) <= Math.min(ref.h, item.h) / 2) row.push(item)
+    else rows.push([item])
+  }
+  return rows.flatMap((row) => row.sort((a, b) => a.x - b.x || a.id.localeCompare(b.id)))
+}

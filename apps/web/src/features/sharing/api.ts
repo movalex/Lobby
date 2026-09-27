@@ -13,6 +13,7 @@ import {
   MyAccessRequestResponse,
   type RequestableRole,
   ReviewLinkCreated,
+  ReviewLinkExtended,
   ReviewLinkRevoked,
   ShareState,
 } from '@draftroom/contracts'
@@ -79,6 +80,12 @@ export function sharingApi(api: ApiClient) {
       r('POST', `/api/boards/${enc(boardId)}/review-links/${enc(invitationId)}/revoke`, {
         body: { removeAccess },
         schema: ReviewLinkRevoked,
+      }),
+    /** "+1 h" on an open (workshop) link, capped by the server at its role's maximum. */
+    extendReviewLink: (boardId: string, invitationId: string, hours = 1) =>
+      r('POST', `/api/boards/${enc(boardId)}/review-links/${enc(invitationId)}/extend`, {
+        body: { hours },
+        schema: ReviewLinkExtended,
       }),
   }
 }

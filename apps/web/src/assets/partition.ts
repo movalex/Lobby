@@ -24,9 +24,14 @@ export function partitionFiles(files: readonly File[]): Partitioned {
   for (const file of files) {
     const kind = classifyUpload(file.type, file.name)
     const limit = LIMITS.maxBytes[kind]
-    // Images are size-checked by tldraw's own handler (maxAssetSize) so they get its toast.
+    // Checked here, before anything reaches tldraw: its own maxAssetSize toast does not say which
+    // file was too large, and a drop of several files needs that.
     if (kind === 'image' && NATIVE_IMAGES.has(file.type.toLowerCase())) {
-      out.images.push(file)
+      if (file.size > limit) {
+        out.rejected.push({ file, reason: `is larger than ${formatBytes(limit)}, the limit for images` })
+      } else {
+        out.images.push(file)
+      }
     } else if (file.size > limit) {
       out.rejected.push({ file, reason: `is larger than the ${formatBytes(limit)} limit for this file type` })
     } else {

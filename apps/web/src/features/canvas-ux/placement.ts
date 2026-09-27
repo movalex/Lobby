@@ -95,6 +95,53 @@ export function findEmptySpot(
   return { x: all.x + all.w + gap, y: Math.max(all.y, Math.min(base.y, all.y + all.h - h)) }
 }
 
+/**
+ * Like findEmptySpot, but the box must also lie inside `within` (a frame's inner area): the free spot
+ * inside it nearest `center` (clamped into it first), or null when there is none. Candidates are a
+ * finer grid than findEmptySpot's, covering the whole of `within`.
+ */
+export function findEmptySpotWithin(
+  size: { w: number; h: number },
+  center: Point,
+  obstacles: readonly Rect[],
+  within: Rect,
+  opts: EmptySpotOptions = {},
+): Point | null {
+  const gap = opts.gap ?? 40
+  const w = Math.max(1, size.w)
+  const h = Math.max(1, size.h)
+  if (w > within.w || h > within.h) return null
+  const clampX = (x: number) => Math.min(Math.max(x, within.x), within.x + within.w - w)
+  const clampY = (y: number) => Math.min(Math.max(y, within.y), within.y + within.h - h)
+  const base = { x: clampX(center.x - w / 2), y: clampY(center.y - h / 2) }
+  const valid = obstacles.filter((r) => [r.x, r.y, r.w, r.h].every(Number.isFinite))
+  const free = (p: Point) => {
+    const box = { x: p.x, y: p.y, w, h }
+    for (const r of valid) if (rectsOverlap(box, r, gap)) return false
+    return true
+  }
+  if (free(base)) return base
+  const step = opts.step ?? Math.max(20, Math.min(w, h) / 8)
+  const rings = opts.maxRings ?? Math.min(120, Math.ceil(Math.max(within.w, within.h) / step))
+  const seen = new Set<string>()
+  const candidates: { p: Point; d: number; tie: number }[] = []
+  for (let i = -rings; i <= rings; i++) {
+    for (let j = -rings; j <= rings; j++) {
+      const p = { x: clampX(base.x + i * step), y: clampY(base.y + j * step) }
+      const key = `${p.x},${p.y}`
+      if (seen.has(key)) continue
+      seen.add(key)
+      const dx = p.x - base.x
+      const dy = p.y - base.y
+      // Same tie-break as findEmptySpot: prefer to the right, then below.
+      candidates.push({ p, d: dx * dx + dy * dy, tie: -Math.sign(dx) * 2 - Math.sign(dy) })
+    }
+  }
+  candidates.sort((a, b) => a.d - b.d || a.tie - b.tie)
+  for (const c of candidates) if (free(c.p)) return c.p
+  return null
+}
+
 /** Offset that moves `bounds` so its centre sits on `center`. */
 export function offsetToCenter(bounds: Rect, center: Point): Point {
   return { x: center.x - (bounds.x + bounds.w / 2), y: center.y - (bounds.y + bounds.h / 2) }
@@ -113,4 +160,39 @@ export function containingFrame(rect: Rect, frames: readonly FrameBox[]): FrameB
     if (!best || f.bounds.w * f.bounds.h < best.bounds.w * best.bounds.h) best = f
   }
   return best
+}
+
+export interface Insets {
+  top: number
+  right: number
+  bottom: number
+  left: number
+}
+
+/**
+ * PRI-10: the camera (tldraw: screen = (page + camera) * z, relative to the editor) that shows a whole
+ * frame AND its heading, which tldraw draws above the frame at a constant screen height, inside the
+ * part of the viewport the UI does not cover (`insets`: the menu and page bar, the bottom toolbar, an
+ * open dock panel), `pad` clear of it, never zoomed in past `maxZoom` (100%).
+ */
+export function frameCamera(
+  bounds: Rect,
+  viewport: { w: number; h: number },
+  insets: Insets,
+  opts: { heading?: number; pad?: number; minZoom?: number; maxZoom?: number } = {},
+): { x: number; y: number; z: number } | null {
+  const heading = opts.heading ?? 32
+  const pad = opts.pad ?? 24
+  const minZoom = opts.minZoom ?? 0.05
+  const maxZoom = opts.maxZoom ?? 1
+  if (![bounds.x, bounds.y, bounds.w, bounds.h].every(Number.isFinite) || bounds.w <= 0 || bounds.h <= 0)
+    return null
+  const freeW = viewport.w - insets.left - insets.right - pad * 2
+  const freeH = viewport.h - insets.top - insets.bottom - pad * 2 - heading
+  if (freeW < 40 || freeH < 40) return null
+  const z = Math.max(minZoom, Math.min(maxZoom, freeW / bounds.w, freeH / bounds.h))
+  // Centre of the free area; the heading sits above the frame, so the frame's centre is half a heading lower.
+  const sx = insets.left + pad + freeW / 2
+  const sy = insets.top + pad + heading + freeH / 2
+  return { x: sx / z - (bounds.x + bounds.w / 2), y: sy / z - (bounds.y + bounds.h / 2), z }
 }

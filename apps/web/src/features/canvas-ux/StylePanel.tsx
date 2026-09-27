@@ -3,6 +3,8 @@
 // solid-colour swatches, and includes "Paper" (white), which tldraw's picker hides. One pick recolours
 // every selected note in one undo step (StylePanelContext marks history, then sets the style in one run).
 // Everything else is tldraw 5.4.2's default style panel content.
+// RETRO-20/F24a: the panel only shows while something is selected or a creation tool (note, text, shape,
+// pen, connector…) is active, instead of always covering the board's top-right corner.
 
 import {
   DefaultColorStyle,
@@ -27,6 +29,22 @@ import {
 } from 'tldraw'
 import { NOTE_PALETTE } from './palette.ts'
 
+/** Tools whose next shape the style panel sets (tldraw 5.4.2 tool ids; every geo shape is 'geo'). */
+export const STYLED_TOOLS: ReadonlySet<string> = new Set([
+  'note',
+  'text',
+  'geo',
+  'draw',
+  'arrow',
+  'line',
+  'highlight',
+])
+
+/** RETRO-20: show the style panel only for a selection or a creation tool. */
+export function showStylePanel(selectedCount: number, toolId: string): boolean {
+  return selectedCount > 0 || STYLED_TOOLS.has(toolId)
+}
+
 function isNoteContext(editor: ReturnType<typeof useEditor>): boolean {
   if (editor.isIn('select')) {
     const selected = editor.getSelectedShapes()
@@ -44,7 +62,7 @@ export function NoteColorPicker() {
   const current = color.type === 'shared' ? color.value : null
   return (
     <fieldset className="dr-note-palette" data-testid="note-palette">
-      <legend className="dr-note-palette__legend">Note colour{current === null ? ' (mixed)' : ''}</legend>
+      <legend className="dr-note-palette__legend">Note color{current === null ? ' (mixed)' : ''}</legend>
       <div className="dr-note-palette__grid">
         {NOTE_PALETTE.map((s) => (
           <button
@@ -59,7 +77,7 @@ export function NoteColorPicker() {
             style={{ background: s[mode].fill, color: s[mode].text }}
             onClick={() => {
               if (current === s.name) return
-              onHistoryMark('note colour')
+              onHistoryMark('note color')
               onValueChange(DefaultColorStyle, s.name)
             }}
           >
@@ -78,6 +96,14 @@ function ColorPicker() {
 }
 
 export function DraftroomStylePanel(props: TLUiStylePanelProps) {
+  const editor = useEditor()
+  const visible = useValue(
+    'dr-style-panel-visible',
+    () => showStylePanel(editor.getSelectedShapeIds().length, editor.getCurrentToolId()),
+    [editor],
+  )
+  // The mobile style menu is opened on purpose from the toolbar: never hide it.
+  if (!visible && !props.isMobile) return null
   return (
     <DefaultStylePanel {...props}>
       <StylePanelSection>

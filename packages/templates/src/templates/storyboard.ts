@@ -86,6 +86,7 @@ export const storyboard: TemplateDefinition = {
         color: 'light-blue',
         scale: NOTE_SCALE,
       })
+      // A starter value people change, so it stays unlocked (headings and instructions are locked).
       b.text(panel, {
         x: INSET,
         y: notesY + noteW + 24,

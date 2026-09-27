@@ -3,6 +3,7 @@
 // Controls are hidden for people who cannot edit; the API refuses them anyway.
 
 import { useEffect, useId, useRef, useState } from 'react'
+import { useValue } from 'tldraw'
 import type { FeatureContext } from '../types.ts'
 import { installAudioUnlock, playChime, readMuted, writeMuted } from './chime.ts'
 import {
@@ -11,10 +12,12 @@ import {
   formatClock,
   parseDurationInput,
   type TimerPhase,
+  timerDisplayPhase,
   timerPhase,
   timerRemainingMs,
 } from './countdown.ts'
 import { isFacilitator, useNow, useWorkshop } from './hooks.ts'
+import { readSessionSettings, writeSessionSettings } from './session-settings.ts'
 import type { WorkshopStore } from './store.ts'
 import { VoteSetupDialog } from './VoteSetupDialog.tsx'
 
@@ -44,11 +47,14 @@ export function WorkshopBar({ ctx }: { ctx: FeatureContext }) {
   const pill = useRef<HTMLButtonElement>(null)
   const popId = useId()
 
-  const running = snap.timer?.status === 'running'
-  const now = useNow(running)
   const offset = store.serverOffsetMs()
+  // Ticks while running, and through a finished timer's alert (so the pill calms down on time).
+  const ticking =
+    snap.timer?.status === 'running' || timerDisplayPhase(snap.timer, Date.now(), offset) === 'finished'
+  const now = useNow(ticking)
   const remaining = timerRemainingMs(snap.timer, now, offset)
   const phase = timerPhase(snap.timer, now, offset)
+  const display = timerDisplayPhase(snap.timer, now, offset)
 
   useEffect(() => installAudioUnlock(), [])
 
@@ -58,13 +64,13 @@ export function WorkshopBar({ ctx }: { ctx: FeatureContext }) {
   mutedRef.current = muted
   useEffect(() => {
     const endsAt = snap.timer?.endsAt ?? null
+    // One message: the canvas flash says "Time's up" (and announces it); no toast on top of it.
     if (crossedZero(prev.current, phase) && prev.current?.endsAt === endsAt) {
       store.raiseTimerAlert()
       playChime({ muted: mutedRef.current })
-      ctx.notify({ key: 'timer-finished', text: "Time's up", testId: 'timer-finished', timeoutMs: 8000 })
     }
     prev.current = { phase, endsAt }
-  }, [phase, snap.timer?.endsAt, store, ctx])
+  }, [phase, snap.timer?.endsAt, store])
 
   // Close on outside press / Escape. Escape is handled on the document because the focused control
   // can disappear under the user (Resume turns into Pause), which drops focus to <body>.
@@ -91,10 +97,12 @@ export function WorkshopBar({ ctx }: { ctx: FeatureContext }) {
 
   const vote = snap.vote
   const voteOpen = vote?.session.status === 'open'
-  const shown = phase === 'running' || phase === 'paused' || phase === 'finished'
+  const shown = display === 'running' || display === 'paused' || display === 'finished'
   const label = shown
-    ? `Timer: ${phase === 'finished' ? "time's up" : `${describeClock(remaining)} left${phase === 'paused' ? ', paused' : ''}`}. Workshop tools`
-    : 'Timer and workshop tools'
+    ? `Timer: ${display === 'finished' ? "time's up" : `${describeClock(remaining)} left${display === 'paused' ? ', paused' : ''}`}. Workshop tools`
+    : display === 'ended'
+      ? 'Timer (finished). Workshop tools'
+      : 'Timer and workshop tools'
 
   return (
     <div className="dr-wk-bar" ref={wrap}>
@@ -103,7 +111,7 @@ export function WorkshopBar({ ctx }: { ctx: FeatureContext }) {
         type="button"
         className="dr-wk-pill"
         data-testid="timer-pill"
-        data-state={phase}
+        data-state={display}
         aria-haspopup="dialog"
         aria-expanded={open}
         aria-controls={open ? popId : undefined}
@@ -425,11 +433,65 @@ function WorkshopPopover({
           </button>
         </section>
       )}
+      <SessionSection ctx={ctx} facilitator={facilitator} />
       {error && (
         <p className="dr-field-error" role="alert" data-testid="workshop-error">
           {error}
         </p>
       )}
     </div>
+  )
+}
+
+/**
+ * Session settings for everyone on the board (session-settings.ts): facilitators switch them, the
+ * others are told what is in effect. The wording is honest about what "hidden" means.
+ */
+function SessionSection({ ctx, facilitator }: { ctx: FeatureContext; facilitator: boolean }) {
+  const { editor } = ctx
+  const settings = useValue('dr-wk-session-settings', () => readSessionSettings(editor), [editor])
+  if (!facilitator) {
+    if (!settings.hideNoteAuthors && !settings.hideCursors) return null
+    return (
+      <section className="dr-wk-pop__section" aria-label="Session" data-testid="session-settings">
+        <h3>Session</h3>
+        {settings.hideNoteAuthors && (
+          <p className="dr-wk-hint">A facilitator has hidden the names on sticky notes.</p>
+        )}
+        {settings.hideCursors && <p className="dr-wk-hint">A facilitator has hidden everyone’s cursors.</p>}
+      </section>
+    )
+  }
+  return (
+    <section className="dr-wk-pop__section" aria-label="Session" data-testid="session-settings">
+      <h3>Session</h3>
+      <label className="dr-wk-check">
+        <input
+          type="checkbox"
+          data-testid="session-hide-authors"
+          checked={settings.hideNoteAuthors}
+          aria-describedby="dr-wk-hide-authors-hint"
+          onChange={(e) => writeSessionSettings(editor, { hideNoteAuthors: e.target.checked })}
+        />
+        Hide note authors
+      </label>
+      <p id="dr-wk-hide-authors-hint" className="dr-wk-hint">
+        Nobody sees whose sticky note is whose: not on the board, in Present or in exports. The board still
+        records who last edited each note.
+      </p>
+      <label className="dr-wk-check">
+        <input
+          type="checkbox"
+          data-testid="session-hide-cursors"
+          checked={settings.hideCursors}
+          aria-describedby="dr-wk-hide-cursors-hint"
+          onChange={(e) => writeSessionSettings(editor, { hideCursors: e.target.checked })}
+        />
+        Hide everyone’s cursors
+      </label>
+      <p id="dr-wk-hide-cursors-hint" className="dr-wk-hint">
+        People stop seeing each other’s pointers (yours too). Everyone still sees their own.
+      </p>
+    </section>
   )
 }

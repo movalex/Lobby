@@ -354,7 +354,7 @@ test('WRK-03: presence-only activity (cursors, selection) never moves either ind
   }
 })
 
-test('a viewer and a commenter see "View only" and send no document pushes (no user-record loop)', async ({
+test('a viewer sees "View only", a commenter "Can comment" (once, no "not saved"), and neither sends document pushes (no user-record loop)', async ({
   session,
   browser,
   board,
@@ -380,10 +380,20 @@ test('a viewer and a commenter see "View only" and send no document pushes (no u
         }),
       )
     }
+    // RETRO-17: the role pill says it; the save indicator (same meaning) is hidden, and nothing tells
+    // a commenter that her work is not saved.
+    const [viewer, commenter] = readers as [Session, Session]
+    await expect(viewer.page.getByTestId('readonly-pill')).toHaveText('View only')
+    await expect(commenter.page.getByTestId('readonly-pill')).toHaveText('Can comment')
     for (const r of readers) {
       await expectSaveState(r.page, 'readonly')
-      await expect(saveStatus(r.page)).toHaveText('View only')
+      await expect(saveStatus(r.page)).toBeHidden()
+      await expect(r.page.getByTestId('readonly-pill')).not.toHaveAttribute('title', /not saved/i)
+      await expect(saveStatus(r.page)).not.toHaveAttribute('title', /not saved/i)
     }
+    await expect(saveStatus(commenter.page)).toHaveText('Can comment · comments are saved')
+    await expect(saveStatus(commenter.page)).toHaveAttribute('title', /your comments are saved/)
+    await expect(commenter.page.getByTestId('readonly-pill')).toHaveAttribute('title', /comments are saved/)
 
     // Five seconds of an ordinary visit with the owner present (so the clients sync at full rate):
     // moving around and selecting. Before the fix, each reader re-sent its user record ~14×/s.

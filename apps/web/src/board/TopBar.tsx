@@ -1,13 +1,17 @@
 import type { Board } from '@draftroom/contracts'
-import { type ReactNode, useMemo, useState } from 'react'
+import { useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { type Editor, useValue } from 'tldraw'
 import { UserMenu } from '../auth/UserMenu.tsx'
 import { Mark } from '../brand/Wordmark.tsx'
+import { FeatureTopBarItems, PINNED_TOP_BAR_FEATURES } from '../features/FeatureHost.tsx'
+import type { BoardFeature, FeatureContext } from '../features/types.ts'
 import { initialsFor } from '../lib/identity.ts'
 import { type BoardRole, can } from '../lib/permissions.ts'
 import { linkClick, workspacePath } from '../lib/routing.ts'
 import { SaveStatus, type SaveStatusView } from '../sync-quality/SaveStatus.tsx'
+import { OverflowMenu } from '../ui/OverflowMenu.tsx'
 import { RenameInput } from '../ui/RenameInput.tsx'
+import { useTopBarWidth } from '../ui/useMedia.ts'
 import { readonlyPill } from './access.ts'
 import { type PresenceUser, presenceUsers } from './presence.ts'
 
@@ -28,7 +32,8 @@ const CONN_TITLE: Record<ConnState, string> = {
 }
 
 export function TopBar({
-  extra,
+  features,
+  featureCtx,
   board,
   role,
   workspace,
@@ -38,6 +43,7 @@ export function TopBar({
   editor,
   onRename,
   onShare,
+  onRequestAccess,
 }: {
   board: Board
   role: BoardRole
@@ -50,13 +56,27 @@ export function TopBar({
   editor: Editor | null
   onRename(title: string): void
   onShare(): void
+  /** The role pill opens the request-more-access flow (PRI-09b). */
+  onRequestAccess(): void
   /** Feature slot (features/FeatureHost.tsx): compact controls placed before Share. */
-  extra?: ReactNode
+  features: readonly BoardFeature[]
+  featureCtx: FeatureContext | null
 }) {
   const home = workspacePath(workspace.id)
   const pill = readonlyPill(role, board.status)
+  // PRI-02: at 768 px and below the feature controls (present, export, timer, sharing badge) move
+  // into a "⋯" menu; at 480 px and below the people list and the account button do too. The title,
+  // the bell and Share always stay in the bar.
+  const width = useTopBarWidth()
+  const narrow = width !== 'wide'
+  const phone = width === 'phone'
+  // The role pill already says what a viewer/commenter can do: a second "View only" is noise (RETRO-17).
+  const saveHidden = !!pill && save.state === 'readonly'
+  // Tab order = DOM order (RETRO-22a): breadcrumb, title, role, people, status, feature controls,
+  // Share. The account (DEV identity) badge is drawn at the bar's right end but comes LAST in the
+  // page (BoardAccount below, rendered by BoardPage after the canvas); on phones it is in the menu.
   return (
-    <header className="dr-topbar">
+    <header className="dr-topbar" data-width={width} data-testid="topbar">
       <a
         className="dr-topbar__home"
         href={home}
@@ -76,11 +96,16 @@ export function TopBar({
         <BoardTitle title={board.title} canRename={can(role, 'rename', board.status)} onRename={onRename} />
       </div>
       {pill && (
-        <span
+        <button
+          type="button"
           className="dr-pill dr-pill--role"
           data-testid="readonly-pill"
           data-role={role}
-          title={pill.title}
+          title={pill.request ? `${pill.title}. Ask for more access.` : pill.title}
+          aria-label={pill.request ? `${pill.label}: ask for more access` : pill.label}
+          aria-haspopup={pill.request ? 'dialog' : undefined}
+          disabled={!pill.request}
+          onClick={onRequestAccess}
         >
           <svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true">
             <path
@@ -88,12 +113,12 @@ export function TopBar({
               fill="currentColor"
             />
           </svg>
-          {pill.label}
-        </span>
+          <span className="dr-pill__label">{pill.label}</span>
+        </button>
       )}
       <div className="dr-topbar__spacer" />
-      <PresenceList editor={editor} selfUserId={selfUserId} />
-      <SaveStatus view={save} />
+      {!phone && <PresenceList editor={editor} selfUserId={selfUserId} max={narrow ? 2 : MAX_AVATARS} />}
+      <SaveStatus view={save} hidden={saveHidden} />
       <span
         className={`dr-pill dr-pill--${conn}`}
         data-testid="conn-status"
@@ -102,13 +127,39 @@ export function TopBar({
         title={CONN_TITLE[conn]}
       >
         <span className="dr-pill__dot" aria-hidden="true" />
-        {CONN_LABEL[conn]}
+        <span className="dr-pill__label">{CONN_LABEL[conn]}</span>
       </span>
-      {extra}
+      <FeatureTopBarItems
+        features={features}
+        ctx={featureCtx}
+        only={narrow ? PINNED_TOP_BAR_FEATURES : undefined}
+      />
+      {narrow && (
+        <OverflowMenu label="More board controls" testId="topbar-overflow">
+          <FeatureTopBarItems features={features} ctx={featureCtx} except={PINNED_TOP_BAR_FEATURES} stacked />
+          {phone && (
+            <div className="dr-overflow__item" data-feature="people">
+              <span className="dr-overflow__caption" aria-hidden="true">
+                On this board
+              </span>
+              <PresenceList editor={editor} selfUserId={selfUserId} max={MAX_AVATARS} />
+            </div>
+          )}
+          {phone && (
+            <div className="dr-overflow__item" data-feature="account">
+              <span className="dr-overflow__caption" aria-hidden="true">
+                Your account
+              </span>
+              <UserMenu />
+            </div>
+          )}
+        </OverflowMenu>
+      )}
       <button
         type="button"
-        className="dr-btn dr-btn--primary dr-btn--sm"
+        className="dr-btn dr-btn--primary dr-btn--sm dr-topbar__share"
         data-testid="share-button"
+        aria-label="Share"
         onClick={onShare}
       >
         <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true">
@@ -120,10 +171,40 @@ export function TopBar({
             strokeLinecap="round"
           />
         </svg>
-        Share
+        <span className="dr-topbar__share-label">Share</span>
       </button>
-      <UserMenu compact />
     </header>
+  )
+}
+
+/**
+ * The account button of the board page, drawn at the right end of the top bar but placed last in the
+ * DOM (after the canvas and its toolbar), so keyboard users reach the board's own controls first
+ * (RETRO-22a). The bar keeps room for it through --dr-account-w. On phones it lives in the "⋯" menu.
+ */
+export function BoardAccount() {
+  const width = useTopBarWidth()
+  const wrap = useRef<HTMLDivElement>(null)
+  const phone = width === 'phone'
+  useLayoutEffect(() => {
+    const el = wrap.current
+    const board = el?.closest<HTMLElement>('.dr-board')
+    if (!el || !board) return
+    const set = () =>
+      board.style.setProperty('--dr-account-w', `${Math.ceil(el.getBoundingClientRect().width)}px`)
+    set()
+    const ro = new ResizeObserver(set)
+    ro.observe(el)
+    return () => {
+      ro.disconnect()
+      board.style.removeProperty('--dr-account-w')
+    }
+  }, [phone])
+  if (phone) return null
+  return (
+    <div className="dr-board__account" ref={wrap}>
+      <UserMenu compact />
+    </div>
   )
 }
 
@@ -177,7 +258,15 @@ function BoardTitle({
 
 const MAX_AVATARS = 5
 
-function PresenceList({ editor, selfUserId }: { editor: Editor | null; selfUserId: string }) {
+function PresenceList({
+  editor,
+  selfUserId,
+  max,
+}: {
+  editor: Editor | null
+  selfUserId: string
+  max: number
+}) {
   // Serialized so cursor movement (which changes presence every frame) does not re-render the bar.
   const key = useValue(
     'dr-presence-users',
@@ -188,7 +277,7 @@ function PresenceList({ editor, selfUserId }: { editor: Editor | null; selfUserI
     editor,
   ])
   const users = useMemo(() => JSON.parse(key) as PresenceUser[], [key])
-  const shown = users.slice(0, MAX_AVATARS)
+  const shown = users.slice(0, max)
   const extra = users.length - shown.length
   return (
     <ul className="dr-presence" data-testid="presence-list" aria-label="People on this board">
@@ -219,7 +308,7 @@ function PresenceList({ editor, selfUserId }: { editor: Editor | null; selfUserI
         <li
           className="dr-avatar dr-avatar--more"
           title={users
-            .slice(MAX_AVATARS)
+            .slice(max)
             .map((u) => u.name)
             .join(', ')}
         >

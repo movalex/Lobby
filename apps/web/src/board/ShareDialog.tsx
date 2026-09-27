@@ -11,16 +11,22 @@ import type {
   InvitationCreated,
   PendingInvitation,
   RequestableRole,
+  ShareState,
   WorkspaceMember,
 } from '@draftroom/contracts'
-import { useCallback, useEffect, useId, useMemo, useState } from 'react'
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { api, isApiError } from '../api/client.ts'
 import { announceShareChanged, SHARE_REMOTE_EVENT, sharingApi } from '../features/sharing/api.ts'
 import {
+  canExtend,
   daysLabel,
+  hoursLabel,
   REVIEW_LINK_DAY_OPTIONS,
   REVIEW_LINK_DEFAULT_DAY,
   shortDate,
+  shortTime,
+  WORKSHOP_LINK_DEFAULT_HOURS,
+  WORKSHOP_LINK_HOUR_OPTIONS,
 } from '../features/sharing/model.ts'
 import { RequestAccess } from '../features/sharing/RequestAccess.tsx'
 import '../features/sharing/sharing.css'
@@ -36,9 +42,11 @@ import {
   accessSource,
   grantEditable,
   inviteRoleOptions,
+  linkAccessLine,
   parseInviteTarget,
   ROLE_OPTION_LABEL,
   removalNote,
+  removeConfirmText,
   shareableWorkspaceMembers,
   sortMembers,
   VISIBILITY_OPTIONS,
@@ -59,6 +67,7 @@ export function ShareDialog({
   role,
   workspace,
   selfUserId,
+  focus,
   onClose,
   onBoardChange,
 }: {
@@ -66,6 +75,8 @@ export function ShareDialog({
   role: BoardRole
   workspace: { id: string; name: string }
   selfUserId: string
+  /** 'request': opened to ask for more access (role pill, blocked-edit hint): start at that form. */
+  focus?: 'request'
   onClose(): void
   onBoardChange(board: Board): void
 }) {
@@ -105,6 +116,23 @@ export function ShareDialog({
     [board.id, canManage],
   )
   const invitations = useResource(invitesLoad)
+  // Everyone sees whether a link is open (PRI-07): a reviewer must not read "Private" while one is.
+  const stateLoad = useCallback(
+    (signal: AbortSignal): Promise<ShareState | null> =>
+      canManage ? Promise.resolve(null) : sharing.shareState(board.id, signal).catch(() => null),
+    [board.id, canManage],
+  )
+  const shareStateRes = useResource(stateLoad)
+  const linkLine = linkAccessLine(shareStateRes.data?.links ?? [], (iso, kind) =>
+    kind === 'time' ? shortTime(iso) : shortDate(iso),
+  )
+  const askRef = useRef<HTMLElement>(null)
+  // Runs after the <dialog> opened (child effects first) and placed its own initial focus.
+  useEffect(() => {
+    if (focus !== 'request') return
+    askRef.current?.scrollIntoView({ block: 'center' })
+    askRef.current?.querySelector<HTMLElement>('select, button')?.focus()
+  }, [focus])
 
   // Someone else changed sharing while this dialog is open (a new access request, another owner's
   // grant or link): refetch, so the owner does not have to close and reopen it to see the request.
@@ -112,6 +140,7 @@ export function ShareDialog({
   const { reload: reloadMembers } = members
   const { reload: reloadRequests } = requests
   const { reload: reloadInvitations } = invitations
+  const { reload: reloadShareState } = shareStateRes
   useEffect(() => {
     const onRemote = (e: Event) => {
       const id = (e as CustomEvent<{ boardId?: string }>).detail?.boardId
@@ -119,10 +148,11 @@ export function ShareDialog({
       reloadMembers()
       reloadRequests()
       reloadInvitations()
+      reloadShareState()
     }
     window.addEventListener(SHARE_REMOTE_EVENT, onRemote)
     return () => window.removeEventListener(SHARE_REMOTE_EVENT, onRemote)
-  }, [board.id, reloadMembers, reloadRequests, reloadInvitations])
+  }, [board.id, reloadMembers, reloadRequests, reloadInvitations, reloadShareState])
 
   const run = async (userId: string | null, fn: () => Promise<BoardMember[]>): Promise<boolean> => {
     setError(null)
@@ -192,6 +222,7 @@ export function ShareDialog({
           board={board}
           workspaceName={workspace.name}
           editable={canChangeVisibility}
+          linkNote={canManage ? null : linkLine}
           onChange={async (visibility) => {
             setError(null)
             try {
@@ -247,11 +278,21 @@ export function ShareDialog({
         </section>
 
         {!canManage && (selfRole === 'viewer' || selfRole === 'commenter') && board.status === 'active' && (
-          <section className="dr-share__section" aria-labelledby="dr-share-ask">
+          <section
+            ref={askRef}
+            className="dr-share__section"
+            aria-labelledby="dr-share-ask"
+            data-testid="share-ask-section"
+          >
             <h3 id="dr-share-ask" className="dr-share__heading">
               Need more access?
             </h3>
-            <RequestAccess boardId={board.id} userId={selfUserId} currentRole={selfRole} />
+            <RequestAccess
+              boardId={board.id}
+              userId={selfUserId}
+              currentRole={selfRole}
+              autoFocus={focus === 'request'}
+            />
           </section>
         )}
 
@@ -263,9 +304,20 @@ export function ShareDialog({
           />
         )}
         {canManage && (
+          <WorkshopLinksSection
+            boardId={board.id}
+            links={(invitations.data ?? []).filter((i) => i.kind === 'review' && i.role === 'editor')}
+            onChange={() => {
+              invitations.reload()
+              members.reload()
+              changed()
+            }}
+          />
+        )}
+        {canManage && (
           <ReviewLinksSection
             boardId={board.id}
-            links={(invitations.data ?? []).filter((i) => i.kind === 'review')}
+            links={(invitations.data ?? []).filter((i) => i.kind === 'review' && i.role !== 'editor')}
             onChange={() => {
               invitations.reload()
               members.reload()
@@ -654,11 +706,14 @@ function VisibilitySection({
   board,
   workspaceName,
   editable,
+  linkNote = null,
   onChange,
 }: {
   board: Board
   workspaceName: string
   editable: boolean
+  /** For people who cannot manage access: an open link also lets people in (PRI-07). */
+  linkNote?: string | null
   onChange(v: BoardVisibility): Promise<void>
 }) {
   const id = useId()
@@ -691,6 +746,11 @@ function VisibilitySection({
             ))}
           </select>
           <p className="dr-share__hint">{current?.describe(workspaceName)}</p>
+          {linkNote && (
+            <p className="dr-share__hint dr-sharing__linknote" data-testid="share-link-note">
+              {linkNote}
+            </p>
+          )}
         </div>
       </div>
     </section>
@@ -734,6 +794,7 @@ function MemberRow({
 }) {
   const selectId = useId()
   const [confirming, setConfirming] = useState(false)
+  const [confirmingRemove, setConfirmingRemove] = useState(false)
   const { user } = member
   const detailed = member.grant !== undefined && member.workspaceRole !== undefined
   const detail = detailed ? (member as unknown as AccessDetail) : null
@@ -789,6 +850,33 @@ function MemberRow({
             </button>
           </fieldset>
         )}
+        {confirmingRemove && (
+          <fieldset className="dr-sharing__confirm" data-testid="member-remove-confirm-box">
+            <legend className="dr-sr-only">Remove {user.name}</legend>
+            <span data-testid="member-remove-question">{removeConfirmText(user.name, fallback)}</span>{' '}
+            <button
+              type="button"
+              className="dr-btn dr-btn--sm dr-sharing__danger"
+              data-testid="member-remove-confirm"
+              // biome-ignore lint/a11y/noAutofocus: the confirmation the remove button just asked for
+              autoFocus
+              onClick={() => {
+                setConfirmingRemove(false)
+                onRemove()
+              }}
+            >
+              Remove
+            </button>{' '}
+            <button
+              type="button"
+              className="dr-btn dr-btn--sm"
+              data-testid="member-remove-cancel"
+              onClick={() => setConfirmingRemove(false)}
+            >
+              Cancel
+            </button>
+          </fieldset>
+        )}
       </div>
       {editable ? (
         <div className="dr-member__actions">
@@ -836,8 +924,8 @@ function MemberRow({
             data-testid="member-remove"
             aria-label={`Remove ${user.name}'s invite to this board`}
             title={fallback ?? 'Remove from board'}
-            disabled={pending}
-            onClick={onRemove}
+            disabled={pending || confirmingRemove}
+            onClick={() => setConfirmingRemove(true)}
           >
             <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
               <path d="M6 6l12 12M18 6L6 18" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
@@ -1011,6 +1099,99 @@ function InviteLinkSection({
   )
 }
 
+/**
+ * Workshop link (RETRO-04a): one EDIT link for a live session. Anyone with it can edit after signing
+ * in, for a few hours (3 by default, 24 at most, "+1 h" while it runs); the edit access it gave ends
+ * with it. Same machinery as review links (multi-use invitations).
+ */
+function WorkshopLinksSection({
+  boardId,
+  links,
+  onChange,
+}: {
+  boardId: string
+  links: readonly PendingInvitation[]
+  onChange(): void
+}) {
+  const hoursId = useId()
+  const [hours, setHours] = useState<number>(WORKSHOP_LINK_DEFAULT_HOURS)
+  const [pending, setPending] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [justCreated, setJustCreated] = useState<{ id: string; copied: boolean } | null>(null)
+
+  const create = async () => {
+    setPending(true)
+    setError(null)
+    try {
+      const link = await sharing.createReviewLink(boardId, { role: 'editor', expiresInHours: hours })
+      setJustCreated({ id: link.id, copied: await copyText(link.url) })
+      onChange()
+    } catch (e) {
+      setError(isApiError(e) ? e.message : 'The workshop link could not be created.')
+    } finally {
+      setPending(false)
+    }
+  }
+
+  return (
+    <section className="dr-share__section" aria-labelledby={`${hoursId}-h`} data-testid="workshop-links">
+      <h3 id={`${hoursId}-h`} className="dr-share__heading">
+        Workshop link
+      </h3>
+      <p className="dr-share__hint">
+        For a live session: anyone with the link can edit, after signing in. It works for a few hours, and the
+        edit access it gave ends with it.
+      </p>
+      <div className="dr-row dr-row--wrap">
+        <label htmlFor={hoursId} className="dr-sr-only">
+          Workshop link works for
+        </label>
+        <select
+          id={hoursId}
+          className="dr-input dr-select dr-select--compact"
+          data-testid="workshop-link-expiry"
+          value={hours}
+          onChange={(e) => setHours(Number(e.target.value))}
+        >
+          {WORKSHOP_LINK_HOUR_OPTIONS.map((h) => (
+            <option key={h} value={h}>
+              For {hoursLabel(h)}
+            </option>
+          ))}
+        </select>
+        <button
+          type="button"
+          className="dr-btn"
+          data-testid="workshop-link-create"
+          disabled={pending}
+          onClick={() => void create()}
+        >
+          Create workshop link
+        </button>
+      </div>
+      {error && (
+        <p className="dr-share__error" role="alert">
+          {error}
+        </p>
+      )}
+      {links.length > 0 && (
+        <ul className="dr-sharing__links" aria-label="Open workshop links">
+          {links.map((l) => (
+            <ReviewLinkRow
+              key={l.id}
+              boardId={boardId}
+              link={l}
+              workshop
+              copiedOnCreate={justCreated?.id === l.id && justCreated.copied}
+              onChange={onChange}
+            />
+          ))}
+        </ul>
+      )}
+    </section>
+  )
+}
+
 function ReviewLinksSection({
   boardId,
   links,
@@ -1117,11 +1298,14 @@ function ReviewLinkRow({
   boardId,
   link,
   copiedOnCreate,
+  workshop = false,
   onChange,
 }: {
   boardId: string
   link: PendingInvitation
   copiedOnCreate: boolean
+  /** A workshop (edit) link: ends at a time of day, and offers "+1 h". */
+  workshop?: boolean
   onChange(): void
 }) {
   const [copied, setCopied] = useState(copiedOnCreate)
@@ -1140,18 +1324,48 @@ function ReviewLinkRow({
       setBusy(false)
     }
   }
+  const extend = async () => {
+    setBusy(true)
+    setError(null)
+    try {
+      await sharing.extendReviewLink(boardId, link.id, 1)
+      onChange()
+    } catch (e) {
+      setError(isApiError(e) ? e.message : 'The link could not be extended.')
+    } finally {
+      setBusy(false)
+    }
+  }
   const joined = link.uses === 1 ? '1 person joined' : `${link.uses} people joined`
   return (
     <li
       className="dr-sharing__link dr-sharing__link--review"
-      data-testid="review-link-row"
+      data-testid={workshop ? 'workshop-link-row' : 'review-link-row'}
       data-invitation-id={link.id}
+      data-expires-at={link.expiresAt}
     >
       <div className="dr-sharing__link-main">
         <span className="dr-sharing__link-text">
-          <strong>{ROLE_OPTION_LABEL[link.role]}</strong> · until {shortDate(link.expiresAt)} · {joined}
+          <strong>{ROLE_OPTION_LABEL[link.role]}</strong> · until{' '}
+          {workshop ? shortTime(link.expiresAt) : shortDate(link.expiresAt)} · {joined}
           {link.maxUses ? ` (max ${link.maxUses})` : ''}
         </span>
+        {workshop && (
+          <button
+            type="button"
+            className="dr-btn dr-btn--sm dr-sharing__extend"
+            data-testid="workshop-link-extend"
+            disabled={busy || !canExtend(link)}
+            title={
+              canExtend(link)
+                ? 'One more hour'
+                : `Workshop links last at most 24 hours (until ${shortTime(link.maxExpiresAt ?? link.expiresAt)})`
+            }
+            onClick={() => void extend()}
+          >
+            +1 h
+          </button>
+        )}
         {link.url ? (
           <div className="dr-row">
             <input

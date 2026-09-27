@@ -19,7 +19,13 @@ import {
   renderSvg,
 } from './export-render.ts'
 import { exportFilename } from './filename.ts'
-import { exceedsCanvasLimits, imagePixelSize } from './pdf-layout.ts'
+import {
+  exceedsCanvasLimits,
+  imagePixelSize,
+  isPdfPageFormat,
+  PDF_PAGE_FORMATS,
+  type PdfPageFormat,
+} from './pdf-layout.ts'
 import { frameRecords } from './present-session.ts'
 import { pickPdfFrames, slideTitle } from './slides.ts'
 
@@ -30,10 +36,11 @@ interface Prefs {
   scale: ImageScale
   transparent: boolean
   lossless: boolean
+  pdfFormat: PdfPageFormat
 }
 
 const PREFS_KEY = 'draftroom.export.v1'
-const DEFAULT_PREFS: Prefs = { scale: 2, transparent: false, lossless: false }
+const DEFAULT_PREFS: Prefs = { scale: 2, transparent: false, lossless: false, pdfFormat: 'fit' }
 
 function readPrefs(): Prefs {
   try {
@@ -44,6 +51,7 @@ function readPrefs(): Prefs {
         : DEFAULT_PREFS.scale,
       transparent: raw?.transparent === true,
       lossless: raw?.lossless === true,
+      pdfFormat: isPdfPageFormat(raw?.pdfFormat) ? raw.pdfFormat : DEFAULT_PREFS.pdfFormat,
     }
   } catch {
     return DEFAULT_PREFS
@@ -244,6 +252,7 @@ export function ExportDialog({
       const blob = await renderPdf(editor, pdfPages, {
         title: boardTitle,
         lossless: prefs.lossless,
+        pageFormat: prefs.pdfFormat,
         signal: controllerAbort.signal,
         onProgress: ({ done, total }) => setBusy({ kind: 'pdf', done, total }),
       })
@@ -451,6 +460,24 @@ export function ExportDialog({
             </label>
           )}
           <label className="dr-pe-inline">
+            Page size
+            <select
+              className="dr-input dr-select dr-select--compact"
+              data-testid="export-pdf-page-size"
+              value={prefs.pdfFormat}
+              disabled={disabled}
+              onChange={(e) => {
+                if (isPdfPageFormat(e.target.value)) updatePrefs({ pdfFormat: e.target.value })
+              }}
+            >
+              {PDF_PAGE_FORMATS.map((f) => (
+                <option key={f.id} value={f.id}>
+                  {f.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="dr-pe-inline">
             <input
               type="checkbox"
               data-testid="export-pdf-lossless"
@@ -461,8 +488,10 @@ export function ExportDialog({
             Lossless images (larger file, slower)
           </label>
           <p className="dr-pe-hint">
-            Pages are sharp images of your frames (drawn at 3× from the original uploads). Text is searchable
-            and can be copied, but it is not editable vector text. Frame names become PDF bookmarks.
+            Every page has a header with its frame’s name (also a PDF bookmark). “Fit each frame” sizes each
+            page to its frame; 16:9 and A4 give every page the same landscape size with the frame fitted in.
+            Pages are sharp images of your frames (drawn from the original uploads). Text is searchable and
+            can be copied, but it is not editable vector text.
           </p>
           <div className="dr-pe-actions">
             <button

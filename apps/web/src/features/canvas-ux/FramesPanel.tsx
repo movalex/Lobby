@@ -1,10 +1,13 @@
 // MAK-13 frame outline (dock panel `frames`): every frame by name in presentation order (nested frames
-// indented under their parent). Click → camera fits the frame and selects it. Drag (or the ↑/↓ buttons,
-// or Alt+↑/↓ on a focused row) reorders; the order is written as meta.presentationIndex on the frames in
-// one undo step, so every collaborator sees it through sync. "Auto-order" returns to layout order
-// (rows, then left to right), also one undo step. "Skip" writes meta.presentationSkip.
+// indented under their parent). Click → camera fits the frame, heading included, clear of the page bar,
+// the bottom toolbar and the dock, never past 100% (PRI-10), and selects it; Shift/Ctrl/Cmd-click adds
+// the frame to the selection or takes it out (F12), e.g. to export several frames. Drag (or the ↑/↓
+// buttons, or Alt+↑/↓ on a focused row) reorders; the order is written as meta.presentationIndex on the
+// frames in one undo step, so every collaborator sees it through sync. "Auto-order" returns to layout
+// order (rows, then left to right), also one undo step. "Skip" writes meta.presentationSkip. A frame
+// whose name starts with a number shows no row number of its own (F20).
 
-import { type DragEvent, type KeyboardEvent, useMemo, useState } from 'react'
+import { type DragEvent, type KeyboardEvent, type MouseEvent, useMemo, useState } from 'react'
 import { type Editor, type TLShape, type TLShapeId, useValue } from 'tldraw'
 import { isReadonlyRole } from '../../board/access.ts'
 import type { FeatureContext } from '../types.ts'
@@ -17,9 +20,12 @@ import {
   type MetaPatch,
   moveItem,
   presentationIndexPatches,
+  rowNumberLabel,
   skipPatch,
+  toggleInSelection,
 } from './frame-order.ts'
 import { ArrowDownIcon, ArrowUpIcon, DragHandleIcon, EyeOffIcon, LinkIcon } from './icons.tsx'
+import { frameCamera, type Insets } from './placement.ts'
 
 interface Row {
   id: string
@@ -88,11 +94,58 @@ function applyPatches(editor: Editor, patches: MetaPatch[], label: string) {
   )
 }
 
+/**
+ * How much of the editor the UI covers on each side (screen px): the menu and page bar at the top, the
+ * bottom row (navigation, toolbar), and the dock panel when it overlaps the canvas (narrow layouts).
+ */
+function uiInsets(editor: Editor): Insets {
+  const container = editor.getContainer()
+  const c = container.getBoundingClientRect()
+  const rect = (el: Element | null) => {
+    const r = el?.getBoundingClientRect()
+    return r && r.width > 0 && r.height > 0 ? r : null
+  }
+  const insets: Insets = { top: 0, right: 0, bottom: 0, left: 0 }
+  // The top-left column is as tall as the editor; its children (menu + page bar, helper buttons) are not.
+  for (const el of container.querySelectorAll('.tlui-layout__top__left > *')) {
+    const r = rect(el)
+    if (r) insets.top = Math.max(insets.top, r.bottom - c.top)
+  }
+  let bottomEdge = c.bottom
+  for (const el of container.querySelectorAll('.tlui-layout__bottom__main > *')) {
+    const r = rect(el)
+    if (r) bottomEdge = Math.min(bottomEdge, r.top)
+  }
+  insets.bottom = Math.max(0, c.bottom - bottomEdge)
+  const dock = rect(container.ownerDocument.querySelector('.dr-dock'))
+  if (dock && dock.right > c.left && dock.left < c.left + c.width / 2) {
+    insets.left = Math.max(0, dock.right - c.left)
+  }
+  return insets
+}
+
 function goToFrame(editor: Editor, id: string) {
   const bounds = editor.getShapePageBounds(id as TLShapeId)
   if (!bounds) return
   editor.select(id as TLShapeId)
-  editor.zoomToBounds(bounds, { animation: { duration: 280 }, inset: 48 })
+  const vp = editor.getViewportScreenBounds()
+  const steps = editor.getCameraOptions().zoomSteps
+  const camera = frameCamera(bounds, { w: vp.w, h: vp.h }, uiInsets(editor), {
+    minZoom: steps[0],
+    maxZoom: Math.min(1, steps[steps.length - 1] ?? 1),
+  })
+  if (camera) editor.setCamera(camera, { animation: { duration: 280 } })
+  else editor.zoomToBounds(bounds, { targetZoom: 1, animation: { duration: 280 }, inset: 48 })
+}
+
+/** Row click: go to the frame; with Shift/Ctrl/Cmd, add it to (or take it out of) the selection. */
+function onFrameClick(editor: Editor, id: string, e: MouseEvent) {
+  if (e.shiftKey || e.ctrlKey || e.metaKey) {
+    e.preventDefault()
+    editor.setSelectedShapes(toggleInSelection(editor.getSelectedShapeIds(), id as TLShapeId))
+    return
+  }
+  goToFrame(editor, id)
 }
 
 export function FramesPanel({ ctx }: { ctx: FeatureContext; close(): void }) {
@@ -209,15 +262,17 @@ export function FramesPanel({ ctx }: { ctx: FeatureContext; close(): void }) {
                   <DragHandleIcon />
                 </span>
               )}
-              <span className="dr-cux-frame__num" aria-hidden="true">
-                {index + 1}
-              </span>
+              {rowNumberLabel(row.name, index) !== null && (
+                <span className="dr-cux-frame__num" aria-hidden="true">
+                  {rowNumberLabel(row.name, index)}
+                </span>
+              )}
               <button
                 type="button"
                 className="dr-cux-frame__name"
-                onClick={() => goToFrame(editor, row.id)}
+                onClick={(e) => onFrameClick(editor, row.id, e)}
                 onKeyDown={(e) => onRowKeyDown(e, index)}
-                aria-label={`${index + 1}. ${row.name || 'Untitled frame'}${row.skip ? ' (skipped in presentation)' : ''}. Go to frame${canEdit ? '; Alt+Up or Alt+Down to reorder' : ''}`}
+                aria-label={`${rowNumberLabel(row.name, index) === null ? '' : `${index + 1}. `}${row.name || 'Untitled frame'}${row.skip ? ' (skipped in presentation)' : ''}. Go to frame; Shift+click adds it to the selection${canEdit ? '; Alt+Up or Alt+Down to reorder' : ''}`}
               >
                 {row.name || <span className="dr-cux-muted">Untitled frame</span>}
               </button>
@@ -283,7 +338,8 @@ export function FramesPanel({ ctx }: { ctx: FeatureContext; close(): void }) {
                       data-testid="frame-row"
                       data-frame-id={c.id}
                       data-nested="true"
-                      onClick={() => goToFrame(editor, c.id)}
+                      data-selected={selected.split(',').includes(c.id) ? 'true' : 'false'}
+                      onClick={(e) => onFrameClick(editor, c.id, e)}
                     >
                       {c.name || 'Untitled frame'}
                     </button>
@@ -296,7 +352,7 @@ export function FramesPanel({ ctx }: { ctx: FeatureContext; close(): void }) {
       </ol>
       {canEdit && (
         <p className="dr-cux-muted dr-cux-hint">
-          Drag frames (or use Alt+↑/↓) to set the presentation order.
+          Drag frames (or use Alt+↑/↓) to set the presentation order. Shift+click a frame to select several.
         </p>
       )}
     </div>

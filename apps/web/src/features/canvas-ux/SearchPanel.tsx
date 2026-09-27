@@ -1,5 +1,6 @@
 // MAK-12 board search (dock panel `search`, Ctrl/Cmd+F): board-ops `searchBoard` over the current page
-// (notes, text, shapes, connector labels, frame names, file names, image alt text; case- and
+// (notes, text, shapes, connector labels, frame names, file names, image alt text and the file names
+// images and videos were uploaded with (F15: the page's asset records go in too); case- and
 // accent-insensitive; every word must match). Results show snippets with the matches marked; a type
 // filter narrows them. Enter / click zooms to a result and selects it (Enter again = next, Shift+Enter
 // = previous, ↑/↓ move through the list). While the panel is open the canvas dims everything except
@@ -75,7 +76,7 @@ export function SearchPanel({ ctx, close }: { ctx: FeatureContext; close(): void
   const hits: SearchHit[] = useMemo(() => {
     void version
     if (!query.trim()) return []
-    const records = [editor.getCurrentPage(), ...editor.getCurrentPageShapes()]
+    const records = [editor.getCurrentPage(), ...editor.getCurrentPageShapes(), ...editor.getAssets()]
     return searchBoard(records, query, { limit: RESULT_LIMIT }).filter((h) => matchesFilter(h.type, filter))
   }, [editor, query, filter, version])
 

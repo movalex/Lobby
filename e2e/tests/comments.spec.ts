@@ -27,6 +27,7 @@ import {
   commentOnShape,
   commentRow,
   commentsApi,
+  commentToast,
   createNote,
   currentPageId,
   currentTool,
@@ -217,7 +218,8 @@ test('mention: @ suggests only people with access; the owner gets a mentioned pi
 
   await test.step('alice: a "mentioned" pin, a toast and an unread bell', async () => {
     await expect(pin(a.page, threadId)).toHaveAttribute('data-state', 'mentioned')
-    await expect(a.page.getByTestId('comment-mention-toast')).toContainText('Bob Chen mentioned you')
+    // tldraw's toast (bottom right), with a View action (PRI-12; facilitation-review.fix.spec.ts).
+    await expect(commentToast(a.page, 'Bob Chen mentioned you')).toBeVisible()
     await expect.poll(() => unreadCount(a.page)).toBe(1)
     await expect(a.page.getByTestId('notifications-count')).toBeVisible()
     await capture('comments-mention-bell.png', a.page, testInfo)
@@ -669,7 +671,9 @@ test('hover preview and deep link: hovering a pin previews its thread; ?thread= 
     await pin(b.page, thread.id).hover()
     const preview = b.page.getByTestId('comment-preview')
     await expect(preview).toContainText('Alice Park')
-    await expect(preview).toContainText('Swap the hero image')
+    // Both comments are unread for bob: the preview shows the newest one, marked New (PRI-12).
+    await expect(preview).toContainText('Or crop it tighter')
+    await expect(preview).toContainText('New')
     await expect(preview).toContainText('1 reply')
     await b.page.mouse.move(5, 400)
     await expect(preview).toHaveCount(0)

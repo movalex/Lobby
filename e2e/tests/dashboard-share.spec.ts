@@ -923,11 +923,12 @@ test('request access: dave asks for edit from the no-access screen, alice sees i
       await expect(d.getByTestId('access-request-form')).toBeVisible()
       const roles = await d.getByTestId('access-request-role').locator('option').allTextContents()
       expect(roles).toEqual(['Edit', 'Comment', 'View'])
+      // Someone who never had access starts from Comment (PRI-16).
+      await expect(d.getByTestId('access-request-role')).toHaveValue('commenter')
       await d.getByTestId('access-request-role').selectOption('editor')
       await d.getByTestId('access-request-message').fill('I need to add the storyboard notes')
       await d.getByTestId('access-request-button').click()
-      await expect(d.getByTestId('access-request-status')).toContainText('Request sent')
-      await expect(d.getByTestId('access-request-status')).toContainText('to edit')
+      await expect(d.getByTestId('access-request-status')).toContainText('Edit access requested just now')
     })
 
     await test.step('alice is told: an access_request notification, a badge count and a request row', async () => {
@@ -995,7 +996,7 @@ test('request access variants: a request shows up live in the open Share dialog;
     await p.goto(`/b/${board}`)
     await p.getByTestId('access-request-role').selectOption('commenter')
     await p.getByTestId('access-request-button').click()
-    await expect(p.getByTestId('access-request-status')).toContainText('to comment')
+    await expect(p.getByTestId('access-request-status')).toContainText('Comment access requested')
 
     await test.step('alice denies: the request disappears and nobody gets access', async () => {
       const row = requestRow(a.page, requester.me.user.id)
@@ -1039,7 +1040,7 @@ test('request access variants: a request shows up live in the open Share dialog;
         await fresh.context.close()
       }
       await p.getByTestId('access-request-button').click()
-      await expect(p.getByTestId('access-request-status')).toContainText('Request sent')
+      await expect(p.getByTestId('access-request-status')).toContainText('access requested')
       expect(realScreen).toContain("You don't have access to this board")
     })
   } finally {
@@ -1065,11 +1066,13 @@ test('a viewer asks for edit from the Share dialog; after alice approves, the re
     expect(options).toEqual(['Edit', 'Comment'])
     await expect(dialog.getByTestId('access-request-button')).toHaveText('Request edit access')
     await dialog.getByTestId('access-request-button').click()
-    await expect(dialog.getByTestId('access-request-status')).toContainText('Request sent')
+    await expect(dialog.getByTestId('access-request-status')).toContainText('Edit access requested just now')
     // The server remembers it for bob too (he can view the board, so he may ask about his own request).
     await closeShare(b.page)
     await openShareFromButton(b.page)
-    await expect(shareDialog(b.page).getByTestId('access-request-status')).toContainText('to edit')
+    await expect(shareDialog(b.page).getByTestId('access-request-status')).toContainText(
+      'Edit access requested',
+    )
   })
 
   await test.step('alice approves; bob becomes an editor without reloading', async () => {
@@ -1174,6 +1177,11 @@ test('removal note: removing an explicit editor grant on a workspace_view board 
     'Removing their invite leaves “Can view” through the workspace.',
   )
   await row.getByTestId('member-remove').click()
+  // PRI-21: asked first, and told what bob keeps.
+  await expect(row.getByTestId('member-remove-question')).toHaveText(
+    `Remove ${b.name}’s invite? Removing their invite leaves “Can view” through the workspace.`,
+  )
+  await row.getByTestId('member-remove-confirm').click()
   await expect(row).toHaveAttribute('data-role', 'viewer')
   await expect(row).toHaveAttribute('data-source', 'workspace')
   await expect(row.getByTestId('member-source')).toContainText('Everyone in Dev Studio can view')
@@ -1200,9 +1208,10 @@ async function joinThroughReviewLink(
   await expect(page.getByTestId('invite-page')).toBeVisible()
   await expect(page.getByTestId('invite-role-label')).toHaveText('Can comment')
   await page.getByTestId('invite-signin').click()
+  // PRI-16: the sign-in page says what it is for, and signing in accepts (no second click).
+  await expect(page.getByTestId('signin-heading')).toContainText('Sign in to join “')
+  await expect(page.getByTestId('signin-handle')).toBeFocused()
   await signInThroughUi(page, who)
-  await expect(page).toHaveURL(new RegExp(`/invite/${inviteToken(link)}$`))
-  await page.getByTestId('invite-accept').click()
   await expect(page).toHaveURL(new RegExp(`/b/${board}$`))
   await waitForBoard(page)
   await expect(page.getByTestId('readonly-pill')).toHaveAttribute('data-role', 'commenter')
@@ -1239,8 +1248,11 @@ test('review link: two outsiders join as commenters; revoking with "remove acces
     const days = (Date.parse(stored?.expiresAt ?? '') - Date.now()) / 86_400_000
     expect(days).toBeGreaterThan(13.9)
     expect(days).toBeLessThanOrEqual(14)
-    // Review links never hand out edit rights.
-    const refused = await aliceApi.fetch('POST', `/api/boards/${boardId}/review-links`, { role: 'editor' })
+    // Review links never hand out edit rights; an edit link is a workshop link of 24 h at most.
+    const refused = await aliceApi.fetch('POST', `/api/boards/${boardId}/review-links`, {
+      role: 'editor',
+      expiresInDays: 7,
+    })
     expect(refused.status()).toBe(400)
 
     const pages: Page[] = []
@@ -1281,8 +1293,10 @@ test('review link: two outsiders join as commenters; revoking with "remove acces
     await expect(carolPage.getByTestId('no-access')).toContainText('You no longer have access to this board')
     await carolPage.getByTestId('access-request-role').selectOption('commenter')
     await carolPage.getByTestId('access-request-message').fill('The link stopped working')
+    // Her previous role is preselected (PRI-16), and the screen no longer points at the dead link.
+    await expect(carolPage.getByTestId('no-access')).not.toContainText('open the invite link')
     await carolPage.getByTestId('access-request-button').click()
-    await expect(carolPage.getByTestId('access-request-status')).toContainText('Request sent')
+    await expect(carolPage.getByTestId('access-request-status')).toContainText('Comment access requested')
     await closeShare(a)
     await expect(a.getByTestId('share-badge')).toHaveAttribute('data-requests', '1', { timeout: 10_000 })
     await openShareFromButton(a)
@@ -1299,7 +1313,7 @@ test('review link: two outsiders join as commenters; revoking with "remove acces
   }
 })
 
-test('review link revoked without removing access: carol keeps her access and a new visitor gets "no longer valid"', async ({
+test('review link revoked without removing access: carol keeps her access (reopening the link opens the board) and a new visitor gets "no longer valid" naming alice', async ({
   users,
   browser,
 }) => {
@@ -1343,7 +1357,13 @@ test('review link revoked without removing access: carol keeps her access and a 
     const n = await newcomer.newPage()
     await n.goto(link)
     await expect(n.getByTestId('invite-invalid')).toContainText('This invitation is no longer valid')
+    // PRI-04: it says whom to ask, and reveals nothing about the board.
+    await expect(n.getByTestId('invite-invalid')).toContainText(`Ask ${displayName('alice')} for a new link.`)
+    await expect(n.getByTestId('invite-invalid')).not.toContainText('Rough cut')
     await signInContext(newcomer, freshHandle('vic'), 'Vic Stone')
+    await n.reload()
+    await expect(n.getByTestId('invite-invalid')).toContainText(`Ask ${displayName('alice')} for a new link.`)
+    expect(n.url()).toContain('/invite/')
     expect(
       (
         await newcomer.request.post(`${WEB_URL}/api/invitations/${inviteToken(link)}/accept`, {
@@ -1357,6 +1377,12 @@ test('review link revoked without removing access: carol keeps her access and a 
     await expect(memberRow(a, carol.id)).toHaveAttribute('data-role', 'commenter')
     expect((await carolPage.request.get(`/api/boards/${boardId}`)).status()).toBe(200)
     await carolPage.reload()
+    await waitForBoard(carolPage)
+    await expect(carolPage.getByTestId('readonly-pill')).toHaveAttribute('data-role', 'commenter')
+
+    // PRI-04: reopening the old link is no dead end for carol, who still has access: it opens the board.
+    await carolPage.goto(link)
+    await expect(carolPage).toHaveURL(new RegExp(`/b/${boardId}$`), { timeout: 15_000 })
     await waitForBoard(carolPage)
     await expect(carolPage.getByTestId('readonly-pill')).toHaveAttribute('data-role', 'commenter')
   } finally {

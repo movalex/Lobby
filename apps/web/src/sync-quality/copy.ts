@@ -29,7 +29,19 @@ const SAVE_TITLE: Record<DisplayState, string> = {
   rejected: 'The board server did not accept your last change, so it was undone',
   error: 'The connection to this board ended. Changes that were not saved yet are lost.',
   unsupported: 'Connected. This version cannot confirm that your changes are saved.',
-  readonly: 'You can look around, but changes to this board are not saved from your account',
+  // Never "not saved": a commenter's comments ARE saved, and a viewer has nothing unsaved (RETRO-17).
+  readonly: 'You can look around; only people who can edit change this board',
+}
+
+/** A commenter's read-only indicator says what she can do, and that it is kept (RETRO-17). */
+export const COMMENTER_READONLY_LABEL = 'Can comment · comments are saved'
+const COMMENTER_READONLY_TITLE =
+  'You can comment: your comments are saved. Only people who can edit change the board itself.'
+
+/** The indicator's words for `state`; commenters get their own read-only line. */
+export function saveLabel(state: DisplayState, role?: string): string {
+  if (state === 'readonly' && role === 'commenter') return COMMENTER_READONLY_LABEL
+  return SAVE_LABEL[state]
 }
 
 type RejectionCause = 'text-lease' | 'readonly' | 'deleted-remotely' | 'refused'
@@ -62,7 +74,9 @@ export function saveTitle(
   rejection: Rejection | null,
   readonly: boolean,
   uploading = 0,
+  role?: string,
 ): string {
+  if (state === 'readonly' && role === 'commenter') return COMMENTER_READONLY_TITLE
   if (state === 'rejected' && rejection) {
     const why = rejectionReason(rejection, readonly)
     if (why) return `Your last change was not saved: ${why}`

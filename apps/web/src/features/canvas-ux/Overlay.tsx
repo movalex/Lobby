@@ -2,14 +2,17 @@
 //  - BulkPastePrompt: "Paste as sticky notes or as text?" (COL-05)
 //  - SearchHighlights: dims everything but the board-search matches while the search panel is open (MAK-12)
 //  - SelectionBar: copy link (PRS-04), align / distribute (MAK-03) and lock for the selection
+//  - LockedHintBar: "Locked. Inside locked frame …" where a click on a locked shape did nothing (F8)
+//  - LockedFrameBadges: a lock glyph before the heading of every locked frame (F8)
 // All positions are viewport coordinates (Editor.pageToViewport), relative to the editor container.
 
 import { type ReactNode, useEffect, useId, useLayoutEffect, useRef } from 'react'
-import { type Editor, useActions, useEditor, useValue } from 'tldraw'
+import { type Editor, type TLShapeId, useActions, useEditor, useValue } from 'tldraw'
 import { isReadonlyRole } from '../../board/access.ts'
 import type { FeatureContext } from '../types.ts'
 import {
   activePanel,
+  lockedHint,
   pendingPaste,
   searchMatches,
   searchState,
@@ -309,7 +312,7 @@ function SelectionBar({ ctx }: { ctx: FeatureContext }) {
             <AlignIcons.left />
           </BarButton>
           <BarButton
-            label="Align centre"
+            label="Align center"
             testId="align-center-horizontal"
             onClick={() => run('align-center-horizontal')}
           >
@@ -355,6 +358,119 @@ function SelectionBar({ ctx }: { ctx: FeatureContext }) {
   )
 }
 
+/** How long the locked hint stays up without another click. */
+const LOCKED_HINT_MS = 6000
+
+function LockedHintBar({ ctx }: { ctx: FeatureContext }) {
+  const editor = useEditor()
+  const hint = useValue('dr-locked-hint', () => lockedHint(editor).get(), [editor])
+  const dismiss = () => lockedHint(editor).set(null)
+  const ref = useIsland<HTMLDivElement>({ onEscape: dismiss, keepCanvasFocus: true })
+  const canEdit = !isReadonlyRole(ctx.role, ctx.board.status)
+  const pos = useValue('dr-locked-hint-pos', () => {
+    const h = lockedHint(editor).get()
+    if (!h) return null
+    const v = editor.pageToViewport(h.point)
+    const vp = editor.getViewportScreenBounds()
+    // Above the pointer, clear of the top bar; below it when there is no room above.
+    const y = v.y - 52 < 60 ? v.y + 28 : v.y - 52
+    return { x: clamp(v.x, 180, Math.max(180, vp.w - 180)), y: clamp(y, 60, Math.max(60, vp.h - 100)) }
+  }, [editor])
+  const id = hint?.id
+  useEffect(() => {
+    if (id === undefined) return
+    const t = setTimeout(() => {
+      if (lockedHint(editor).get()?.id === id) lockedHint(editor).set(null)
+    }, LOCKED_HINT_MS)
+    return () => clearTimeout(t)
+  }, [editor, id])
+  if (!hint || !pos) return null
+  return (
+    <div
+      ref={ref}
+      className="dr-cux-selbar dr-cux-lockhint"
+      role="status"
+      data-testid="locked-hint"
+      data-source-id={hint.sourceId}
+      style={{ left: pos.x, top: pos.y }}
+    >
+      <span className="dr-cux-lockhint__icon" aria-hidden="true">
+        <LockIcon />
+      </span>
+      <span className="dr-cux-lockhint__text">{hint.message}</span>
+      {canEdit && (
+        <button
+          type="button"
+          className="dr-btn dr-btn--sm"
+          data-testid="locked-hint-unlock"
+          onClick={() => {
+            const source = editor.getShape(hint.sourceId as TLShapeId)
+            dismiss()
+            if (!source?.isLocked) return
+            editor.markHistoryStoppingPoint('unlock')
+            editor.toggleLock([source.id])
+          }}
+        >
+          {hint.unlockLabel}
+        </button>
+      )}
+      <button
+        type="button"
+        className="dr-iconbtn dr-iconbtn--sm"
+        aria-label="Dismiss"
+        data-testid="locked-hint-dismiss"
+        onClick={dismiss}
+      >
+        ×
+      </button>
+    </div>
+  )
+}
+
+/**
+ * F8: a lock glyph before the heading of each locked frame on the page. tldraw draws frame headings
+ * itself, so this is one stylesheet with a rule per locked frame; the glyph moves and scales with the
+ * heading for free.
+ */
+function LockedFrameBadges() {
+  const editor = useEditor()
+  const ids = useValue(
+    'dr-locked-frames',
+    () =>
+      editor
+        .getCurrentPageShapes()
+        .filter((s) => s.type === 'frame' && s.isLocked)
+        .map((s) => s.id)
+        .sort()
+        .join(' '),
+    [editor],
+  )
+  if (!ids) return null
+  const list = ids.split(' ')
+  const selector = list
+    .map((id) => `.tl-shape[data-shape-id="${CSS.escape(id)}"] .tl-frame-heading-hit-area::before`)
+    .join(',\n')
+  return (
+    <style data-testid="locked-frame-badges" data-count={list.length}>
+      {`${selector} {${LOCK_BADGE_CSS}}`}
+    </style>
+  )
+}
+
+const LOCK_GLYPH = `url("data:image/svg+xml,${encodeURIComponent(
+  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><rect x="4.5" y="10.5" width="15" height="10" rx="2"/><path d="M8 10.5V8a4 4 0 0 1 8 0v2.5" fill="none" stroke="black" stroke-width="2.4"/></svg>',
+)}")`
+const LOCK_BADGE_CSS = `
+  content: '';
+  flex: none;
+  width: 11px;
+  height: 11px;
+  margin: 0 2px 0 6px;
+  background-color: currentColor;
+  -webkit-mask: ${LOCK_GLYPH} center / contain no-repeat;
+  mask: ${LOCK_GLYPH} center / contain no-repeat;
+`
+
 export function CanvasUxOverlay({ ctx }: { ctx: FeatureContext }) {
   const editor = useEditor()
   // Overrides and components are module-level; they read the latest context through the bridge.
@@ -368,6 +484,8 @@ export function CanvasUxOverlay({ ctx }: { ctx: FeatureContext }) {
     <div className="dr-cux-overlay" data-testid="canvas-ux-overlay" data-start-view={startView ?? undefined}>
       {ctx.activePanel === PANEL.search && <SearchHighlights />}
       <SelectionBar ctx={ctx} />
+      <LockedHintBar ctx={ctx} />
+      <LockedFrameBadges />
       <BulkPastePrompt />
     </div>
   )

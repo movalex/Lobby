@@ -209,6 +209,15 @@ fieldset.dr-wk-stepper {
 .dr-wk-form .dr-field-error {
   margin: 6px 0 0;
 }
+/* The setup dialog's selects are not .dr-input (no padding, border or font of their own). */
+.dr-wk-form select.dr-select {
+  padding: 0 32px 0 12px;
+  border: 1px solid var(--dr-line-strong);
+  border-radius: 8px;
+  background-color: var(--dr-surface);
+  color: var(--dr-ink);
+  font: 14px var(--dr-font);
+}
 
 /* ---- canvas overlay ------------------------------------------------------------------------------ */
 
@@ -232,6 +241,7 @@ fieldset.dr-wk-stepper {
 .dr-wk-prompt,
 .dr-wk-votebar,
 .dr-wk-follow,
+.dr-wk-results-card,
 .dr-wk-stepper {
   pointer-events: auto;
 }
@@ -284,9 +294,14 @@ fieldset.dr-wk-stepper {
   font: 700 16px / 1 var(--dr-font);
   cursor: pointer;
 }
-.dr-wk-stepper__btn:disabled {
+.dr-wk-stepper__btn:disabled,
+.dr-wk-stepper__btn[aria-disabled="true"] {
   color: var(--dr-line-strong);
   cursor: default;
+}
+.dr-wk-stepper__btn:focus-visible {
+  outline: 2px solid var(--dr-focus);
+  outline-offset: 2px;
 }
 .dr-wk-stepper__n {
   min-width: 22px;
@@ -320,15 +335,31 @@ fieldset.dr-wk-stepper {
   opacity: 0.8;
 }
 
+/* One stacked message region above tldraw's bottom toolbar (notices use the top centre): from top
+   to bottom the "Following …" notice, the "Results are in" card, then the join prompt or voting bar.
+   Each keeps its place in the column, so nothing covers anything else (RETRO-11). */
+.dr-wk-stack {
+  position: absolute;
+  bottom: 76px;
+  left: 50%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  width: max-content;
+  max-width: min(560px, calc(100% - 32px));
+  transform: translateX(-50%);
+  pointer-events: none;
+}
 .dr-wk-prompt,
 .dr-wk-votebar,
-.dr-wk-follow {
-  position: absolute;
-  left: 50%;
+.dr-wk-follow,
+.dr-wk-results-card {
   display: flex;
   align-items: center;
   gap: 10px;
-  max-width: min(560px, calc(100% - 32px));
+  box-sizing: border-box;
+  max-width: 100%;
   padding: 8px 10px 8px 14px;
   border: 1px solid var(--dr-line);
   border-radius: 12px;
@@ -336,12 +367,6 @@ fieldset.dr-wk-stepper {
   color: var(--dr-ink);
   font-size: 13.5px;
   box-shadow: 0 6px 24px rgb(27 35 48 / 16%);
-  transform: translateX(-50%);
-}
-/* Above tldraw's bottom toolbar; notices use the top centre. */
-.dr-wk-prompt,
-.dr-wk-votebar {
-  bottom: 76px;
 }
 .dr-wk-prompt {
   flex-direction: column;
@@ -351,8 +376,56 @@ fieldset.dr-wk-stepper {
   margin: 0;
 }
 .dr-wk-follow {
-  bottom: 132px;
   border-color: var(--dr-navy);
+}
+.dr-wk-results-card {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  width: min(360px, 100%);
+  padding: 10px 12px;
+  border-color: var(--dr-amber);
+}
+.dr-wk-results-card__head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.dr-wk-results-card__head .dr-muted {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dr-wk-results-card__close {
+  align-self: center;
+}
+.dr-wk-results-card__list {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.dr-wk-results-card__list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px;
+  border-radius: 8px;
+  background: var(--dr-paper);
+}
+.dr-wk-results-card__label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dr-wk-results-card > .dr-btn {
+  align-self: flex-start;
 }
 .dr-wk-votebar__left {
   font-weight: 700;
@@ -413,6 +486,13 @@ fieldset.dr-wk-stepper {
   .dr-wk-flash {
     animation: none;
   }
+}
+
+/* ---- session settings ----------------------------------------------------------------------------
+   "Hide note authors" (session-settings.ts): tldraw's note attribution disappears on the canvas and
+   therefore in Present (the same canvas); exports strip it in present-export. */
+html[data-dr-hide-authors] .tl-note__attribution {
+  display: none;
 }
 
 /* ---- dock panel ---------------------------------------------------------------------------------- */

@@ -1,6 +1,7 @@
 // The one place canvas-ux reaches the shared board logic packages.
 export {
   DEFAULT_MAX_NOTES,
+  DEFAULT_NOTE_GAP,
   type FrameEntry,
   frameOutline,
   NOTE_SIZE,

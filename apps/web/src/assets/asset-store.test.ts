@@ -1,6 +1,12 @@
 import type { TLAsset, TLAssetContext } from 'tldraw'
-import { afterEach, describe, expect, it, vi } from 'vitest'
-import { createAssetStore, parseFileRef, pickImageDerivative } from './asset-store.ts'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import {
+  createAssetStore,
+  IMAGE_PROCESSING_URL,
+  IMAGE_UNAVAILABLE_URL,
+  parseFileRef,
+  pickImageDerivative,
+} from './asset-store.ts'
 import { type AssetVersionMeta, newId, stableFileRef } from './contract.ts'
 import { AssetMetaStore } from './meta-store.ts'
 import { partitionFiles } from './partition.ts'
@@ -93,7 +99,7 @@ describe('TLAssetStore', () => {
     expect(big).toBe(`/files/${meta.assetId}/${meta.versionId}/d/${display.id}?board=${TEST_BOARD}`)
   })
 
-  it('uses the original for copy/export, while previews are pending, and for video', async () => {
+  it('uses the original for copy/export (even while previews are pending) and for video', async () => {
     const { meta } = readyImage()
     const original = `/files/${meta.assetId}/${meta.versionId}/original?board=${TEST_BOARD}`
     const store = createAssetStore({
@@ -105,17 +111,16 @@ describe('TLAssetStore', () => {
     expect(await store.resolve?.({ ...asset, type: 'video' } as TLAsset, ctx())).toBe(original)
 
     const queued = makeMeta({ kind: 'image', status: 'processing' })
-    const pendingStore = createAssetStore({
-      boardId: TEST_BOARD,
-      metaStore: serving(queued).metaStore,
-    })
+    const { fetchImpl, metaStore } = serving(queued)
+    const pendingStore = createAssetStore({ boardId: TEST_BOARD, metaStore })
     const pending = imageAsset(stableFileRef(queued.assetId, queued.versionId))
-    expect(await pendingStore.resolve?.(pending, ctx())).toBe(
+    expect(await pendingStore.resolve?.(pending, ctx({ shouldResolveToOriginal: true }))).toBe(
       `/files/${queued.assetId}/${queued.versionId}/original?board=${TEST_BOARD}`,
     )
+    expect(fetchImpl).not.toHaveBeenCalled() // export never waits for previews
   })
 
-  it('resolves nothing for failed/missing versions or foreign URLs (no third-party fetches)', async () => {
+  it('shows a readable tile for failed/missing versions, nothing for foreign URLs (no third-party fetches)', async () => {
     const failed = makeMeta({
       kind: 'image',
       status: 'failed',
@@ -125,18 +130,97 @@ describe('TLAssetStore', () => {
       boardId: TEST_BOARD,
       metaStore: serving(failed).metaStore,
     })
-    expect(
-      await store.resolve?.(imageAsset(stableFileRef(failed.assetId, failed.versionId)), ctx()),
-    ).toBeNull()
+    expect(await store.resolve?.(imageAsset(stableFileRef(failed.assetId, failed.versionId)), ctx())).toBe(
+      IMAGE_UNAVAILABLE_URL,
+    )
     const missing = createAssetStore({
       boardId: TEST_BOARD,
       metaStore: serving(null).metaStore,
     })
-    expect(await missing.resolve?.(imageAsset(stableFileRef(newId('ast'), newId('ver'))), ctx())).toBeNull()
+    expect(await missing.resolve?.(imageAsset(stableFileRef(newId('ast'), newId('ver'))), ctx())).toBe(
+      IMAGE_UNAVAILABLE_URL,
+    )
+    // Download original / export still get the real bytes of a failed image.
+    expect(
+      await store.resolve?.(
+        imageAsset(stableFileRef(failed.assetId, failed.versionId)),
+        ctx({ shouldResolveToOriginal: true }),
+      ),
+    ).toBe(`/files/${failed.assetId}/${failed.versionId}/original?board=${TEST_BOARD}`)
     const { fetchImpl, metaStore } = serving(failed)
     const foreign = createAssetStore({ boardId: TEST_BOARD, metaStore })
     expect(await foreign.resolve?.(imageAsset('https://tracker.example/pixel.png'), ctx())).toBeNull()
     expect(fetchImpl).not.toHaveBeenCalled()
+  })
+
+  describe('while the worker is still making previews (F4)', () => {
+    beforeEach(() => vi.useFakeTimers())
+    afterEach(() => vi.useRealTimers())
+
+    /** A meta route that answers `processing` until `readyAfter` requests, then `ready`. */
+    function processingThenReady(readyAfter: number) {
+      const { meta: ready, thumb } = readyImage()
+      const calls: string[] = []
+      const fetchImpl = vi.fn(async (url: string | URL | Request) => {
+        calls.push(String(url))
+        return Response.json(
+          calls.length > readyAfter ? ready : { ...ready, status: 'processing', derivatives: [] },
+        )
+      }) as unknown as typeof fetch
+      const metaStore = new AssetMetaStore({ fetchImpl, minDelayMs: 100, maxDelayMs: 100 })
+      return { ready, thumb, calls, metaStore }
+    }
+
+    it('waits for the previews instead of returning the original', async () => {
+      const { ready, thumb, calls, metaStore } = processingThenReady(3)
+      const store = createAssetStore({ boardId: TEST_BOARD, metaStore })
+      const asset = imageAsset(stableFileRef(ready.assetId, ready.versionId))
+      let result: string | null | undefined
+      void Promise.resolve(store.resolve?.(asset, ctx({ steppedScreenScale: 0.125 }))).then((r) => {
+        result = r
+      })
+      await vi.advanceTimersByTimeAsync(150)
+      expect(result).toBeUndefined() // still pending: tldraw keeps its preview / loading tile
+      await vi.advanceTimersByTimeAsync(1000)
+      expect(result).toBe(`/files/${ready.assetId}/${ready.versionId}/d/${thumb.id}?board=${TEST_BOARD}`)
+      expect(calls.length).toBeGreaterThanOrEqual(4)
+    })
+
+    it('after the wait, shows a small original but keeps the tile for a big one', async () => {
+      const small = makeMeta({ kind: 'image', status: 'processing', sizeBytes: 800_000 })
+      const big = makeMeta({ kind: 'image', status: 'processing', sizeBytes: 9_000_000 })
+      const fetchImpl = vi.fn(async (url: string | URL | Request) =>
+        Response.json(String(url).includes(small.assetId) ? small : big),
+      ) as unknown as typeof fetch
+      const metaStore = new AssetMetaStore({ fetchImpl, minDelayMs: 100, maxDelayMs: 500 })
+      const store = createAssetStore({ boardId: TEST_BOARD, metaStore, previewWaitMs: 2000 })
+      const results: (string | null | undefined)[] = []
+      for (const m of [small, big]) {
+        void Promise.resolve(store.resolve?.(imageAsset(stableFileRef(m.assetId, m.versionId)), ctx())).then(
+          (r) => results.push(r),
+        )
+      }
+      await vi.advanceTimersByTimeAsync(2500)
+      expect(results).toContain(`/files/${small.assetId}/${small.versionId}/original?board=${TEST_BOARD}`)
+      expect(results).toContain(IMAGE_PROCESSING_URL)
+    })
+
+    it('never falls back to the original when the meta route keeps failing (PERF-01)', async () => {
+      const meta = makeMeta({ kind: 'image', status: 'ready' })
+      const fetchImpl = vi.fn(async () => {
+        throw new TypeError('net::ERR_INSUFFICIENT_RESOURCES')
+      }) as unknown as typeof fetch
+      const metaStore = new AssetMetaStore({ fetchImpl, random: () => 0.5 })
+      const store = createAssetStore({ boardId: TEST_BOARD, metaStore })
+      const asset = imageAsset(stableFileRef(meta.assetId, meta.versionId))
+      let result: string | null | undefined = 'unset'
+      void Promise.resolve(store.resolve?.(asset, ctx())).then((r) => {
+        result = r
+      })
+      await vi.advanceTimersByTimeAsync(10_000)
+      expect(result).toBeNull()
+      expect(fetchImpl).toHaveBeenCalledTimes(4) // 1 + 3 retries at 0.5 / 1 / 2 s
+    })
   })
 
   it('upload() stores only stable ids in the record and reports the version to the uploading tab', async () => {
@@ -193,5 +277,14 @@ describe('partitionFiles', () => {
     expect(out.rejected.map((r) => r.file.name)).toEqual(['huge.pdf'])
     expect(out.rejected[0]?.reason).toContain('100 MB')
     expect(out.cards.map((c) => c.file.name)).toEqual(['fine.mp4'])
+  })
+  it('rejects an oversize image by name before tldraw sees it (its own toast names no file)', () => {
+    const big = f('oversize-31mb-dunes.jpg', 'image/jpeg', 31 * 1024 * 1024)
+    const ok = f('photo.jpg', 'image/jpeg', 25 * 1024 * 1024)
+    const out = partitionFiles([big, ok])
+    expect(out.images).toEqual([ok])
+    expect(out.rejected.map((r) => `${r.file.name} ${r.reason}.`)).toEqual([
+      'oversize-31mb-dunes.jpg is larger than 25 MB, the limit for images.',
+    ])
   })
 })

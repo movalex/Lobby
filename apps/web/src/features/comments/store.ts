@@ -27,6 +27,15 @@ import {
 
 export const NEW_THREAD_DRAFT = 'new'
 
+/** The dashboard-share feature's board event for sharing changes (its reason says what changed). */
+export const SHARING_CHANGED_EVENT = 'sharing.changed'
+
+/** `sharing.changed` about access requests: reason "access-request" or "access-request-<decision>". */
+export function isAccessRequestChange(data: unknown): boolean {
+  const reason = (data as { reason?: unknown } | null)?.reason
+  return typeof reason === 'string' && reason.startsWith('access-request')
+}
+
 export interface CommentsStoreOptions {
   boardId: string
   meId: string
@@ -37,6 +46,8 @@ export interface CommentsStoreOptions {
   onError?(message: string): void
   /** Someone else mentioned me in a comment that just arrived through a board event. */
   onMentioned?(thread: CommentThread, authorName: string): void
+  /** I resolved a thread (it just left the board): the UI offers an undo. */
+  onResolved?(thread: CommentThread): void
 }
 
 const messageOf = (e: unknown, fallback: string) => (e instanceof Error && e.message ? e.message : fallback)
@@ -200,6 +211,9 @@ export class CommentsStore {
     } else if (type === 'comments.deleted') {
       const r = CommentsDeletedEvent.safeParse(data)
       if (r.success) this.applyDeleted(r.data.threadId, r.data.commentId)
+    } else if (type === SHARING_CHANGED_EVENT) {
+      // Someone asked for access (or a request was decided): the owners' bell has news right away.
+      if (isAccessRequestChange(data)) this.scheduleNotificationsRefresh(0)
     }
   }
 
@@ -329,8 +343,11 @@ export class CommentsStore {
 
   async setStatus(threadId: string, action: 'resolve' | 'reopen'): Promise<boolean> {
     try {
+      // Read before the request: its board event can arrive before the response does.
+      const wasOpen = this.threads.get()[threadId]?.status === 'open'
       const thread = await this.api.setStatus(threadId, action)
       this.applyThread(thread)
+      if (action === 'resolve' && wasOpen && thread.status === 'resolved') this.opts.onResolved?.(thread)
       // Resolving takes the marker off the board: close its popover unless resolved ones are shown.
       if (action === 'resolve' && !this.showResolved.get() && this.openThreadId.get() === threadId)
         this.openThreadId.set(null)

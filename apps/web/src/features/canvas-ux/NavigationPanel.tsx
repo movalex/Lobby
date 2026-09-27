@@ -1,6 +1,9 @@
 // MAK-10/11: tldraw's navigation panel (zoom menu with %, 100%, fit, selection; zoom in/out; minimap)
 // with the minimap's open state in a shared atom, so M (dr-toggle-minimap) and the button agree.
-// Same structure and classes as tldraw 5.4.2's DefaultNavigationPanel; the minimap starts open.
+// Same structure and classes as tldraw 5.4.2's DefaultNavigationPanel. The minimap starts closed
+// (PERF-03, see bridge.ts) and is not mounted while closed. At phone width, where tldraw shows no
+// navigation at all, a single Zoom to fit button stays (PRI-13: a reviewer on a phone can always get
+// the whole board back).
 
 import { memo } from 'react'
 import {
@@ -26,7 +29,25 @@ export const DraftroomNavigationPanel = memo(function DraftroomNavigationPanel()
   const { ZoomMenu, Minimap } = useTldrawUiComponents()
   const open = useValue('dr-minimap-open', () => minimapOpen.get(), [])
 
-  if (breakpoint < PORTRAIT_BREAKPOINT.MOBILE) return null
+  if (breakpoint < PORTRAIT_BREAKPOINT.MOBILE) {
+    const fit = actions['zoom-to-fit']
+    if (!fit) return null
+    return (
+      <div className="tlui-navigation-panel dr-cux-nav--compact" data-testid="navigation-panel">
+        <TldrawUiToolbar orientation="horizontal" label={msg('navigation-zone.title')}>
+          <TldrawUiToolbarButton
+            type="icon"
+            data-testid="navigation.zoom-to-fit"
+            title={msg('action.zoom-to-fit')}
+            aria-label={msg('action.zoom-to-fit')}
+            onClick={() => fit.onSelect('navigation-zone')}
+          >
+            <TldrawUiButtonIcon small icon="corners" />
+          </TldrawUiToolbarButton>
+        </TldrawUiToolbar>
+      </div>
+    )
+  }
   const zoomOut = actions['zoom-out']
   const zoomIn = actions['zoom-in']
   const title = (label: string, kbd?: string) => (kbd ? `${label} (${kbdLabel(kbd, IS_MAC)})` : label)

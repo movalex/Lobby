@@ -126,6 +126,12 @@ export const commentRow = (page: Page, threadId: string) =>
 export const commentItem = (scope: Page | Locator, commentId: string) =>
   scope.locator(`[data-testid="comment-item"][data-comment-id="${commentId}"]`)
 export const bell = (page: Page) => page.getByTestId('notifications-bell')
+/**
+ * A comments toast with an action (mention → View, resolve → Undo): tldraw's own toasts (bottom
+ * right), which carry no test id, found by their text.
+ */
+export const commentToast = (page: Page, text: string) =>
+  page.locator('.tlui-toast__container', { hasText: text })
 
 // ---- editor-driven steps ---------------------------------------------------------------------------
 

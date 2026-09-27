@@ -1,8 +1,10 @@
 // Review links (multi-use board invitations) and the board's pending-invitation list.
 //
-// A review link is an `invitations` row with multi_use = true (0005_dashboard): viewer or commenter
-// only, expiry at most 30 days, optional max uses. People accept it through M1's
-// POST /api/invitations/:token/accept; the 0005 trigger records each use instead of consuming the link.
+// A review link is an `invitations` row with multi_use = true (0005_dashboard): viewer or commenter,
+// expiry at most 30 days, optional max uses. A workshop link (RETRO-04a, 0006) is the same row with
+// role editor, 3 h by default and never more than 24 h after creation ("+1 h" extends it up to that).
+// People accept either through M1's POST /api/invitations/:token/accept (sign-in required); the 0005
+// trigger records each use instead of consuming the link.
 //
 // The token is derived from the invitation id with a server-side key (HMAC), so managers can copy the
 // link again later while the database still stores only its sha256. Access that a review link created
@@ -11,10 +13,13 @@
 import { createHmac } from 'node:crypto'
 import {
   CreateReviewLinkInput,
+  ExtendReviewLinkInput,
   InvitationId,
   type PendingInvitation,
-  REVIEW_LINK_MAX_DAYS,
+  type ReviewLinkRole,
   RevokeReviewLinkInput,
+  reviewLinkLifetimeMs,
+  reviewLinkMaxLifetimeMs,
 } from '@draftroom/contracts'
 import { newId, type Queryable } from '@draftroom/db'
 import type { FastifyInstance } from 'fastify'
@@ -24,12 +29,15 @@ import { sha256hex } from '../../auth/session.ts'
 import type { Params } from '../../context.ts'
 import { conflict, notFound, parse } from '../../errors.ts'
 import type { FeatureContext } from '../context.ts'
-import { DAY_MS, publishSharingChanged } from './shared.ts'
+import { publishSharingChanged } from './shared.ts'
 
 /** Open review links per board (a runaway client cannot fill the table). */
 export const MAX_ACTIVE_REVIEW_LINKS = 20
-const SWEEP_INTERVAL_MS = 60_000
+// Short: an expired workshop link must end its edit grants (and, through sync, the open sockets)
+// within seconds. One indexed query per tick (invitations_review_links_idx).
+const SWEEP_INTERVAL_MS = 5_000
 const SWEEP_BATCH = 50
+const HOUR_MS = 60 * 60 * 1000
 
 /** Review-link token for an invitation id: HMAC under a key derived from the ticket secret. */
 export function reviewLinkToken(secret: string, invitationId: string): string {
@@ -41,39 +49,90 @@ interface LinkRow {
   id: string
   workspace_id: string
   board_id: string
-  role: 'viewer' | 'commenter'
+  role: ReviewLinkRole
   created_by: string
+  created_at: Date
   expires_at: Date
   revoked_at: Date | null
   swept_at: Date | null
 }
+const LINK_COLUMNS =
+  'id, workspace_id, board_id, role, created_by, created_at, expires_at, revoked_at, swept_at'
+
+const RANK: Record<string, number> = { viewer: 1, commenter: 2, editor: 3, owner: 4 }
+const higher = (a: string | null, b: string | null) => ((RANK[b ?? ''] ?? 0) > (RANK[a ?? ''] ?? 0) ? b : a)
+
+interface JoinedRow {
+  user_id: string
+  grant: ReviewLinkRole | 'owner'
+  previous_role: ReviewLinkRole | null
+  /** The grant was created by a multi-use link of this board (any) and still has that link's role. */
+  created_by_link: boolean
+  /** Other open multi-use links of this board the person joined through. */
+  others: { id: string; role: ReviewLinkRole }[] | null
+}
 
 /**
- * Removes the direct grants that review links created for the people who joined through `link`,
- * unless they changed since (another role) or the person still holds another open review link for
- * this board. Returns the affected user ids. Call inside the transaction that marks the link swept.
+ * Ends the access that multi-use links gave the people who joined through `link`:
+ * - a grant a link CREATED (still at that link's role) is removed;
+ * - a grant a workshop (edit) link RAISED goes back to the role it had before (0006 previous_role),
+ *   so a viewer who joined a workshop is a viewer again afterwards. (A review link's raise stays, as
+ *   before: those links never go above comment.)
+ * Another open link the person joined through keeps them at that link's role instead. Grants that
+ * changed since (the owner gave another role) are left alone. Returns the affected user ids. Call
+ * inside the transaction that marks the link swept, with the board row locked.
  */
 export async function removeReviewLinkGrants(tx: Queryable, link: LinkRow, at: Date): Promise<string[]> {
-  const res = await tx.query<{ user_id: string }>(
-    `DELETE FROM board_members bm
-      USING invitation_redemptions r
-      WHERE r.invitation_id = $1 AND bm.board_id = r.board_id AND bm.user_id = r.user_id
-        AND bm.board_id = $2
-        AND bm.role IN ('viewer', 'commenter')
-        -- the grant was created by a review link of this board and still has that link's role
-        AND EXISTS (
-          SELECT 1 FROM invitation_redemptions r3 JOIN invitations i3 ON i3.id = r3.invitation_id
-           WHERE r3.board_id = bm.board_id AND r3.user_id = bm.user_id AND i3.multi_use
-             AND r3.redeemed_at = bm.created_at AND i3.role = bm.role)
-        -- and no other open review link of this board keeps it
-        AND NOT EXISTS (
-          SELECT 1 FROM invitation_redemptions r2 JOIN invitations i2 ON i2.id = r2.invitation_id
-           WHERE r2.board_id = bm.board_id AND r2.user_id = bm.user_id AND i2.id <> $1 AND i2.multi_use
-             AND i2.swept_at IS NULL AND i2.revoked_at IS NULL AND i2.expires_at > $3)
-      RETURNING bm.user_id`,
+  const rows = await tx.query<JoinedRow>(
+    `SELECT r.user_id, bm.role AS grant, r.previous_role,
+            EXISTS (
+              SELECT 1 FROM invitation_redemptions r3 JOIN invitations i3 ON i3.id = r3.invitation_id
+               WHERE r3.board_id = r.board_id AND r3.user_id = r.user_id AND i3.multi_use
+                 AND r3.redeemed_at = bm.created_at AND i3.role = bm.role) AS created_by_link,
+            (SELECT json_agg(json_build_object('id', i2.id, 'role', i2.role))
+               FROM invitation_redemptions r2 JOIN invitations i2 ON i2.id = r2.invitation_id
+              WHERE r2.board_id = r.board_id AND r2.user_id = r.user_id AND i2.id <> r.invitation_id
+                AND i2.multi_use AND i2.swept_at IS NULL AND i2.revoked_at IS NULL AND i2.expires_at > $3
+            ) AS others
+       FROM invitation_redemptions r
+       JOIN board_members bm ON bm.board_id = r.board_id AND bm.user_id = r.user_id
+      WHERE r.invitation_id = $1 AND r.board_id = $2`,
     [link.id, link.board_id, at],
   )
-  return res.rows.map((r) => r.user_id)
+  const affected: string[] = []
+  for (const row of rows.rows) {
+    if (row.grant !== link.role) continue // changed since: an explicit decision the link must not undo
+    const raised = !row.created_by_link && link.role === 'editor' && row.previous_role !== null
+    if (!row.created_by_link && !raised) continue // the grant predates the link
+    const fallback = row.created_by_link ? null : row.previous_role
+    let keeper: { id: string; role: ReviewLinkRole } | null = null
+    for (const o of row.others ?? [])
+      if (!keeper || (RANK[o.role] ?? 0) > (RANK[keeper.role] ?? 0)) keeper = o
+    const target = higher(fallback, keeper?.role ?? null)
+    if (target === row.grant) continue // another open link keeps this role
+    if (target === null) {
+      await tx.query('DELETE FROM board_members WHERE board_id = $1 AND user_id = $2', [
+        link.board_id,
+        row.user_id,
+      ])
+    } else {
+      await tx.query('UPDATE board_members SET role = $3 WHERE board_id = $1 AND user_id = $2', [
+        link.board_id,
+        row.user_id,
+        target,
+      ])
+      // The grant now lives on through `keeper`: mark it as that link's, so it ends with it.
+      if (keeper && target === keeper.role && fallback === null)
+        await tx.query(
+          `UPDATE invitation_redemptions r SET redeemed_at = bm.created_at
+             FROM board_members bm
+            WHERE r.invitation_id = $1 AND r.user_id = $2 AND bm.board_id = $3 AND bm.user_id = $2`,
+          [keeper.id, row.user_id, link.board_id],
+        )
+    }
+    affected.push(row.user_id)
+  }
+  return affected
 }
 
 /** Ends the access of people who joined through review links that have expired. Returns how many. */
@@ -88,8 +147,7 @@ export async function sweepExpiredReviewLinks(ctx: FeatureContext): Promise<numb
   for (const { id } of due.rows) {
     const out = await ctx.db.transaction(async (tx) => {
       const link = await tx.maybeOne<LinkRow>(
-        `SELECT id, workspace_id, board_id, role, created_by, expires_at, revoked_at, swept_at
-           FROM invitations WHERE id = $1 AND multi_use FOR UPDATE`,
+        `SELECT ${LINK_COLUMNS} FROM invitations WHERE id = $1 AND multi_use FOR UPDATE`,
         [id],
       )
       if (!link || link.swept_at) return null
@@ -118,7 +176,7 @@ export async function sweepExpiredReviewLinks(ctx: FeatureContext): Promise<numb
 
 interface InvitationListRow {
   id: string
-  role: 'editor' | 'commenter' | 'viewer'
+  role: ReviewLinkRole
   multi_use: boolean
   max_uses: number | null
   use_count: number
@@ -165,6 +223,9 @@ export function registerReviewLinkRoutes(app: FastifyInstance, ctx: FeatureConte
         uses: r.use_count,
         maxUses: r.max_uses,
         url,
+        maxExpiresAt: r.multi_use
+          ? new Date(r.created_at.getTime() + reviewLinkMaxLifetimeMs(r.role)).toISOString()
+          : null,
       }
     })
     return { invitations }
@@ -189,8 +250,9 @@ export function registerReviewLinkRoutes(app: FastifyInstance, ctx: FeatureConte
         )
       const id = newId('inv')
       const token = reviewLinkToken(config.ticketSecret, id)
-      const days = Math.min(input.expiresInDays, REVIEW_LINK_MAX_DAYS)
-      const expiresAt = new Date(at.getTime() + days * DAY_MS)
+      // Review links up to 30 days; workshop (edit) links default to 3 h and never pass 24 h.
+      const lifetime = Math.min(reviewLinkLifetimeMs(input), reviewLinkMaxLifetimeMs(input.role))
+      const expiresAt = new Date(at.getTime() + lifetime)
       await tx.query(
         `INSERT INTO invitations (id, token_hash, workspace_id, board_id, role, created_by, created_at,
                                   expires_at, multi_use, max_uses)
@@ -236,8 +298,7 @@ export function registerReviewLinkRoutes(app: FastifyInstance, ctx: FeatureConte
       const access = await requireBoardAction(tx, bid, user.id, 'manage_access', { forUpdate: true })
       if (!InvitationId.safeParse(id).success) throw notFound()
       const link = await tx.maybeOne<LinkRow>(
-        `SELECT id, workspace_id, board_id, role, created_by, expires_at, revoked_at, swept_at
-           FROM invitations WHERE id = $1 AND board_id = $2 AND multi_use FOR UPDATE`,
+        `SELECT ${LINK_COLUMNS} FROM invitations WHERE id = $1 AND board_id = $2 AND multi_use FOR UPDATE`,
         [id, access.board.id],
       )
       if (!link) throw notFound()
@@ -272,6 +333,48 @@ export function registerReviewLinkRoutes(app: FastifyInstance, ctx: FeatureConte
     for (const userId of result.users) notifier.accessChanged({ boardId: bid, userId })
     publishSharingChanged(ctx, bid, 'review-link-revoked')
     return { removed: result.users.length }
+  })
+
+  // "+1 h" (RETRO-04a): an open link lasts longer, never past its role's cap counted from creation
+  // (24 h for a workshop link, 30 days for a review link). Expired or revoked links stay closed.
+  app.post('/api/boards/:bid/review-links/:id/extend', async (req) => {
+    const user = await ctx.requireUser(req)
+    const { bid = '', id = '' } = req.params as Params
+    const { hours } = parse(ExtendReviewLinkInput, req.body ?? {})
+    const result = await db.transaction(async (tx) => {
+      const access = await requireBoardAction(tx, bid, user.id, 'manage_access', { forUpdate: true })
+      if (!InvitationId.safeParse(id).success) throw notFound()
+      const link = await tx.maybeOne<LinkRow>(
+        `SELECT ${LINK_COLUMNS} FROM invitations WHERE id = $1 AND board_id = $2 AND multi_use FOR UPDATE`,
+        [id, access.board.id],
+      )
+      if (!link) throw notFound()
+      const at = now()
+      if (link.revoked_at !== null || link.swept_at !== null || link.expires_at.getTime() <= at.getTime())
+        throw conflict('LINK_CLOSED', 'This link has expired or was revoked. Create a new one.')
+      const cap = link.created_at.getTime() + reviewLinkMaxLifetimeMs(link.role)
+      const next = Math.min(link.expires_at.getTime() + hours * HOUR_MS, cap)
+      if (next <= link.expires_at.getTime())
+        throw conflict(
+          'LINK_MAX_EXPIRY',
+          link.role === 'editor'
+            ? 'Workshop links last at most 24 hours. Create a new one to keep going.'
+            : 'Review links last at most 30 days. Create a new one to keep going.',
+        )
+      const expiresAt = new Date(next)
+      await tx.query('UPDATE invitations SET expires_at = $2 WHERE id = $1', [id, expiresAt])
+      await audit(tx, {
+        workspaceId: link.workspace_id,
+        actorId: user.id,
+        action: 'invitation.extend',
+        target: id,
+        detail: { boardId: bid, from: link.expires_at.toISOString(), to: expiresAt.toISOString() },
+        at,
+      })
+      return { expiresAt: expiresAt.toISOString(), maxExpiresAt: new Date(cap).toISOString() }
+    })
+    publishSharingChanged(ctx, bid, 'review-link-extended')
+    return result
   })
 
   // Expiry sweeper: one API instance (docs/DEPLOY.md); with several, the row locks keep sweeps single.

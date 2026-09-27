@@ -2,8 +2,10 @@ import {
   BoardDetail,
   InvitationAccepted,
   InvitationCreated,
+  InvitationGoneBody,
   InvitationPreview,
   Me,
+  ReviewLinkCreated,
 } from '@draftroom/contracts'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { sha256hex } from '../src/auth/session.ts'
@@ -196,5 +198,62 @@ describe('workspace invitations', () => {
     await alice.req('POST', `/api/invitations/${tokenOf(inv.url)}/accept`)
     const me = Me.parse((await alice.req('GET', '/api/me')).json())
     expect(me.workspaces.find((w) => w.id === DEV_STUDIO)?.role).toBe('owner')
+  })
+})
+
+describe('a link that is no longer valid (PRI-04)', () => {
+  const gone = (res: { statusCode: number; json(): unknown }) => {
+    expect(res.statusCode).toBe(410)
+    return InvitationGoneBody.parse(res.json())
+  }
+  const preview = (c: Client | null, token: string) =>
+    c ? c.req('GET', `/api/invitations/${token}`) : api.anon('GET', `/api/invitations/${token}`)
+
+  it('answers 410 naming the inviter; the board id only to a signed-in caller who can open the board now', async () => {
+    const boardId = await createBoard(bob, DEV_STUDIO, 'Rough cut')
+    const inv = await boardInvite(bob, boardId, 'commenter')
+    const token = tokenOf(inv.url)
+    expect((await erin.req('POST', `/api/invitations/${token}/accept`)).statusCode).toBe(200)
+    // Used up (single-use) — and then revoked, too.
+    expect((await bob.req('DELETE', `/api/invitations/${inv.id}`)).statusCode).toBe(204)
+
+    const carol = await api.login('carol') // Dev Studio member, no access to this private board
+    for (const [who, c] of [
+      ['anonymous', null],
+      ['a member without access', carol],
+    ] as const) {
+      const body = gone(await preview(c, token))
+      expect(body.gone, who).toEqual({ invitedBy: { name: 'bob' }, boardId: null })
+      expect(body.error.code).toBe('GONE')
+    }
+    // bob (the owner) can open the board: he is sent there, from the preview and the accept route.
+    // (erin, who redeemed it, still gets her own preview: accepting again is a no-op for her.)
+    expect(gone(await preview(bob, token)).gone).toEqual({ invitedBy: { name: 'bob' }, boardId })
+    expect(gone(await bob.req('POST', `/api/invitations/${token}/accept`)).gone.boardId).toBe(boardId)
+    expect((await preview(erin, token)).statusCode).toBe(200)
+    expect(gone(await carol.req('POST', `/api/invitations/${token}/accept`)).gone.boardId).toBeNull()
+    expect(
+      await api.db.one('SELECT count(*)::int AS n FROM board_members WHERE user_id = $1', [carol.userId]),
+    ).toEqual({ n: 0 })
+
+    // A trashed board is not "can open now" either.
+    const second = await boardInvite(bob, boardId, 'viewer')
+    await bob.req('DELETE', `/api/invitations/${second.id}`)
+    expect(gone(await preview(bob, tokenOf(second.url))).gone.boardId).toBe(boardId)
+    await bob.req('POST', `/api/boards/${boardId}/trash`)
+    expect(gone(await preview(bob, tokenOf(second.url))).gone.boardId).toBeNull()
+  })
+
+  it('an expired review link sends someone who kept access to the board (revoked without removal)', async () => {
+    const boardId = await createBoard(bob, DEV_STUDIO, 'Client review')
+    const res = await bob.req('POST', `/api/boards/${boardId}/review-links`, { role: 'commenter' })
+    const link = ReviewLinkCreated.parse(res.json())
+    const token = tokenOf(link.url)
+    expect((await erin.req('POST', `/api/invitations/${token}/accept`)).statusCode).toBe(200)
+    await bob.req('POST', `/api/boards/${boardId}/review-links/${link.id}/revoke`, { removeAccess: false })
+    expect(gone(await preview(erin, token)).gone).toEqual({ invitedBy: { name: 'bob' }, boardId })
+    expect(gone(await erin.req('POST', `/api/invitations/${token}/accept`)).gone.boardId).toBe(boardId)
+    const vic = await api.login('vic')
+    expect(gone(await preview(vic, token)).gone.boardId).toBeNull()
   })
 })

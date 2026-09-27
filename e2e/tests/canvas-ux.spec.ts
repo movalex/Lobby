@@ -235,13 +235,13 @@ test('Miro keys: L/P tools, PgUp/PgDn z-order, Ctrl+Shift+L lock keeps the selec
     expect(await inView(a.page, [FAR])).toBe(true)
   })
 
-  await test.step('M shows and hides the minimap', async () => {
+  await test.step('M shows and hides the minimap (closed on a fresh profile: PERF-03)', async () => {
     const minimap = a.page.getByTestId('minimap.canvas')
-    await expect(minimap).toBeVisible()
-    await a.page.keyboard.press('m')
     await expect(minimap).toHaveCount(0)
     await a.page.keyboard.press('m')
     await expect(minimap).toBeVisible()
+    await a.page.keyboard.press('m')
+    await expect(minimap).toHaveCount(0)
   })
 
   await test.step('Ctrl+Alt+/ opens the shortcuts dialog with the board keys of every feature', async () => {

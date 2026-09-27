@@ -8,7 +8,8 @@ import {
   stableFileRef,
   usableDerivatives,
 } from './contract.ts'
-import type { AssetMetaStore } from './meta-store.ts'
+import { type AssetMetaStore, isTerminal, waitForTerminalMeta } from './meta-store.ts'
+import './pending-image.css'
 import { uploadFile } from './upload.ts'
 
 const FILE_REF_RE = /^\/files\/([^/]+)\/([^/]+)\/original$/
@@ -42,11 +43,29 @@ export function pickImageDerivative(
   return display ?? thumb
 }
 
+/**
+ * Static tiles (apps/web/public/img) shown instead of an image that has no usable preview. They are
+ * only ever returned by resolve(), never written into a record, so the synced asset keeps its stable
+ * reference and "Download original" / export still get the original bytes.
+ */
+export const IMAGE_UNAVAILABLE_URL = '/img/image-unavailable.svg'
+export const IMAGE_PROCESSING_URL = '/img/image-processing.svg'
+
+/** How long resolve() waits for the worker's previews before giving up on this resolve. */
+export const PREVIEW_WAIT_MS = 60_000
+/** After that wait, originals up to this size are shown as they are; bigger ones keep the tile. */
+export const SMALL_ORIGINAL_BYTES = 1.5 * 1024 * 1024
+
+export interface ResolveOptions {
+  previewWaitMs?: number
+}
+
 export async function resolveImageOrVideoUrl(
   boardId: string,
   metaStore: AssetMetaStore,
   asset: TLAsset,
   ctx: TLAssetContext,
+  opts: ResolveOptions = {},
 ): Promise<string | null> {
   const ref = parseFileRef(asset.props.src)
   // Only our own stable refs resolve. Anything else (foreign URLs pasted from other apps, data:
@@ -54,22 +73,48 @@ export async function resolveImageOrVideoUrl(
   if (!ref) return null
   const original = originalUrl(boardId, ref.assetId, ref.versionId)
   if (asset.type === 'video' || ctx.shouldResolveToOriginal) return original
-  const { meta, missing } = await metaStore.load(boardId, ref.assetId, ref.versionId)
-  if (missing || meta?.status === 'failed') return null
-  if (meta?.status !== 'ready') return original // previews not generated yet: the original is a valid image
+  let snap = await metaStore.load(boardId, ref.assetId, ref.versionId)
+  // The meta route stayed unreachable through load()'s retries. Never fall back to the original
+  // for that (a fetch storm would turn into an original storm): show nothing yet; the next resolve
+  // (zoom, pan, the asset record changing) asks again.
+  if (snap.error && !snap.meta && !isTerminal(snap)) return null
+  if (!isTerminal(snap)) {
+    // Queued or processing: wait for the previews instead of downloading the full original. tldraw
+    // keeps what it showed before while this is pending: the uploading tab's local preview (blob),
+    // or the loading tile everywhere else.
+    snap = await waitForTerminalMeta(
+      metaStore,
+      boardId,
+      ref.assetId,
+      ref.versionId,
+      opts.previewWaitMs ?? PREVIEW_WAIT_MS,
+    )
+  }
+  const { meta, missing } = snap
+  if (missing || meta?.status === 'failed') return IMAGE_UNAVAILABLE_URL
+  if (meta?.status !== 'ready') {
+    // Still not ready after the wait: a small original is cheap enough to show as it is.
+    const size = meta?.sizeBytes ?? (asset.type === 'image' ? asset.props.fileSize : undefined)
+    return typeof size === 'number' && size <= SMALL_ORIGINAL_BYTES ? original : IMAGE_PROCESSING_URL
+  }
   const nativeWidth = asset.type === 'image' ? asset.props.w : 0
   const d = pickImageDerivative(meta, nativeWidth, ctx)
   return d ? derivativeUrl(boardId, ref.assetId, ref.versionId, d.id) : original
 }
 
-export interface AssetStoreOptions {
+export interface AssetStoreOptions extends ResolveOptions {
   boardId: string
   metaStore: AssetMetaStore
   /** Called in the uploading tab only, once the server has accepted the bytes. */
   onUploaded?: (assetId: TLAssetId, meta: AssetVersionMeta) => void
 }
 
-export function createAssetStore({ boardId, metaStore, onUploaded }: AssetStoreOptions): TLAssetStore {
+export function createAssetStore({
+  boardId,
+  metaStore,
+  onUploaded,
+  previewWaitMs,
+}: AssetStoreOptions): TLAssetStore {
   return {
     async upload(asset, file, abortSignal) {
       const meta = await uploadFile({ boardId, file, signal: abortSignal })
@@ -81,7 +126,7 @@ export function createAssetStore({ boardId, metaStore, onUploaded }: AssetStoreO
       }
     },
     resolve(asset, ctx) {
-      return resolveImageOrVideoUrl(boardId, metaStore, asset, ctx)
+      return resolveImageOrVideoUrl(boardId, metaStore, asset, ctx, { previewWaitMs })
     },
     // No remove(): undo or another collaborator can bring the shape back; bytes are GC'd server-side.
   }

@@ -125,7 +125,17 @@ export const moodBoard: TemplateDefinition = {
       intro: "Sharpen the direction by naming what it isn't.",
     })
     const colX = [60, contrastW - 60 - 200] as const
-    b.text(contrast, { x: colX[0], y: 160, w: 200, text: 'This', size: 'm', color: 'green', align: 'middle' })
+    // Column headings: locked like every other heading (PRE-07).
+    b.text(contrast, {
+      x: colX[0],
+      y: 160,
+      w: 200,
+      text: 'This',
+      size: 'm',
+      color: 'green',
+      align: 'middle',
+      locked: true,
+    })
     b.text(contrast, {
       x: colX[1],
       y: 160,
@@ -134,6 +144,7 @@ export const moodBoard: TemplateDefinition = {
       size: 'm',
       color: 'red',
       align: 'middle',
+      locked: true,
     })
     const pairs: ReadonlyArray<[string, string]> = [
       ['e.g. warm and hand-made', 'e.g. rustic or twee'],

@@ -1,8 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import {
+  type FocusedControlLike,
   isBoardSearchKey,
+  isPrintableKey,
   isTypeToEditKey,
   type KeyEventLike,
+  shouldRedirectSpaceToBoard,
+  shouldRenameFrame,
   shouldTypeToEdit,
   type TypeToEditState,
 } from './keys.ts'
@@ -95,5 +99,80 @@ describe('isBoardSearchKey', () => {
     expect(isBoardSearchKey(key('f', { ctrlKey: true, shiftKey: true }))).toBe(false)
     expect(isBoardSearchKey(key('f', { ctrlKey: true, altKey: true }))).toBe(false)
     expect(isBoardSearchKey(key('g', { ctrlKey: true, code: 'KeyF' }))).toBe(false) // Dvorak: typed g
+  })
+})
+
+describe('RETRO-02: the note just left with Esc', () => {
+  const left: TypeToEditState = { ...oneNote, justLeftEditing: true }
+  it('is not typed into: N, T, F, L… reach the tool shortcuts instead', () => {
+    for (const k of ['n', 't', 'f', 'l', 'N', 'h']) expect(shouldTypeToEdit(key(k), left)).toBe(false)
+  })
+  it('type-to-edit applies again once the flag clears (clicked or selected again)', () => {
+    expect(shouldTypeToEdit(key('n'), { ...left, justLeftEditing: false })).toBe(true)
+    expect(shouldTypeToEdit(key('n'), oneNote)).toBe(true)
+  })
+})
+
+describe('RETRO-14: Enter renames the one selected frame', () => {
+  const oneFrame: TypeToEditState = { ...oneNote, selected: [{ type: 'frame', locked: false }] }
+  it('Enter with exactly one unlocked frame selected', () => {
+    expect(shouldRenameFrame(key('Enter'), oneFrame)).toBe(true)
+  })
+  it('not for chords, other keys, other selections, locked frames, read-only boards or while editing', () => {
+    expect(shouldRenameFrame(key('Enter', { shiftKey: true }), oneFrame)).toBe(false)
+    expect(shouldRenameFrame(key('Enter', { ctrlKey: true }), oneFrame)).toBe(false)
+    expect(shouldRenameFrame(key('Enter', { isComposing: true }), oneFrame)).toBe(false)
+    expect(shouldRenameFrame(key('a'), oneFrame)).toBe(false)
+    expect(shouldRenameFrame(key('Enter'), oneNote)).toBe(false)
+    expect(
+      shouldRenameFrame(key('Enter'), {
+        ...oneFrame,
+        selected: [
+          { type: 'frame', locked: false },
+          { type: 'frame', locked: false },
+        ],
+      }),
+    ).toBe(false)
+    expect(
+      shouldRenameFrame(key('Enter'), { ...oneFrame, selected: [{ type: 'frame', locked: true }] }),
+    ).toBe(false)
+    expect(shouldRenameFrame(key('Enter'), { ...oneFrame, isReadonly: true })).toBe(false)
+    expect(shouldRenameFrame(key('Enter'), { ...oneFrame, isEditing: true })).toBe(false)
+    expect(shouldRenameFrame(key('Enter'), { ...oneFrame, targetIsTextField: true })).toBe(false)
+    expect(shouldRenameFrame(key('Enter'), { ...oneFrame, menusOpen: true })).toBe(false)
+  })
+})
+
+describe('isPrintableKey (the pending buffers)', () => {
+  it('holds characters and Space, not named keys or chords', () => {
+    for (const k of ['a', 'Z', ' ', ':', '&', '[', 'é']) expect(isPrintableKey(key(k))).toBe(true)
+    for (const k of ['Enter', 'Tab', 'Backspace', 'Escape', 'ArrowLeft'])
+      expect(isPrintableKey(key(k))).toBe(false)
+    expect(isPrintableKey(key('z', { ctrlKey: true }))).toBe(false)
+    expect(isPrintableKey(key('@', { ctrlKey: true, altKey: true, altGraph: true }))).toBe(true)
+  })
+})
+
+describe('F3: Space from a clicked button pans', () => {
+  const clicked: FocusedControlLike = {
+    isButton: true,
+    isTextField: false,
+    focusedByKeyboard: false,
+    menusOpen: false,
+    modalOpen: false,
+  }
+  it('redirects a plain Space while a clicked button has the focus', () => {
+    expect(shouldRedirectSpaceToBoard(key(' ', { code: 'Space' }), clicked)).toBe(true)
+  })
+  it('leaves Space to buttons reached by Tab/arrows, text fields, menus, dialogs, chords and other keys', () => {
+    expect(shouldRedirectSpaceToBoard(key(' '), { ...clicked, focusedByKeyboard: true })).toBe(false)
+    expect(shouldRedirectSpaceToBoard(key(' '), { ...clicked, isButton: false })).toBe(false)
+    expect(shouldRedirectSpaceToBoard(key(' '), { ...clicked, isTextField: true })).toBe(false)
+    expect(shouldRedirectSpaceToBoard(key(' '), { ...clicked, menusOpen: true })).toBe(false)
+    expect(shouldRedirectSpaceToBoard(key(' '), { ...clicked, modalOpen: true })).toBe(false)
+    expect(shouldRedirectSpaceToBoard(key(' ', { shiftKey: true }), clicked)).toBe(false)
+    expect(shouldRedirectSpaceToBoard(key(' ', { ctrlKey: true }), clicked)).toBe(false)
+    expect(shouldRedirectSpaceToBoard(key('Enter'), clicked)).toBe(false)
+    expect(shouldRedirectSpaceToBoard(key('Tab'), clicked)).toBe(false)
   })
 })

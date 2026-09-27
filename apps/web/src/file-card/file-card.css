@@ -1,0 +1,7 @@
+/* PRI-14: the card's Download link is a real link; keyboard users must see where the focus is. */
+.dr-fc__download:focus-visible,
+.dr-fc__play:focus-visible {
+  outline: 2px solid var(--dr-focus, #2563eb);
+  outline-offset: 2px;
+  box-shadow: 0 0 0 4px var(--tl-color-background, #fff);
+}

@@ -687,7 +687,10 @@ test.describe('PDF export', () => {
       await a.page.unroute(ORIGINAL_ROUTE)
     })
 
-    await test.step('the deck: 2 pages in presentation order, frame × 0.75 pt, bookmarks, text layer', async () => {
+    // Each page: the frame at 0.75 pt/px under a header band with its title (RETRO-05a): 28 pt tall on
+    // pages this narrow (pdf-layout headerBandHeight).
+    const BAND = 28
+    await test.step('the deck: 2 pages in presentation order, frame × 0.75 pt + title band, bookmarks, text layer', async () => {
       const progress = await watchTestId(a.page, 'export-progress')
       const pdf = await downloadFrom(a.page, () => dialog.getByTestId('export-pdf').click())
       expect(pdf.name).toBe(`${title}.pdf`)
@@ -696,8 +699,8 @@ test.describe('PDF export', () => {
       const info = await readPdf(pdf.bytes)
       expect(info.title).toBe(title)
       expect(info.pages.map((p) => [p.width, p.height])).toEqual([
-        [480, 360], // Plan 640×480
-        [600, 450], // Intro 800×600
+        [480, 360 + BAND], // Plan 640×480
+        [600, 450 + BAND], // Intro 800×600
       ])
       expect(info.outline).toEqual([
         { title: 'Plan', page: 0 },
@@ -713,6 +716,9 @@ test.describe('PDF export', () => {
       expect(texts[0]).toContain('Launch checklist')
       expect(texts[0]).not.toContain('Kickoff agenda')
       expect(texts[1]).toContain('Kickoff agenda')
+      // Each page starts with its frame's title (the header band).
+      expect(texts[0]?.startsWith('Plan')).toBe(true)
+      expect(texts[1]?.startsWith('Intro')).toBe(true)
       // The image on page 2 came from the original upload, never from a canvas preview.
       expect(files.paths()).toContainEqual(expect.stringMatching(ORIGINAL_PATH))
       expect(files.paths().filter((p) => DERIVATIVE_PATH.test(p))).toEqual([])
@@ -725,9 +731,9 @@ test.describe('PDF export', () => {
       expect(pdf.name).toBe(`${title}.pdf`)
       const info = await readPdf(pdf.bytes)
       expect(info.pages.map((p) => [p.width, p.height])).toEqual([
-        [480, 360],
-        [600, 450],
-        [540, 405], // Backstage 720×540
+        [480, 360 + BAND],
+        [600, 450 + BAND],
+        [540, 405 + BAND], // Backstage 720×540
       ])
       expect(info.outline.map((o) => o.title)).toEqual(['Plan', 'Intro', 'Backstage'])
     })
@@ -742,7 +748,7 @@ test.describe('PDF export', () => {
       const pdf = await downloadFrom(a.page, () => dialog.getByTestId('export-pdf').click())
       expect(pdf.name).toBe(`${title} - selected frames.pdf`)
       const info = await readPdf(pdf.bytes)
-      expect(info.pages.map((p) => [p.width, p.height])).toEqual([[540, 405]])
+      expect(info.pages.map((p) => [p.width, p.height])).toEqual([[540, 405 + BAND]])
       expect(info.outline).toEqual([{ title: 'Backstage', page: 0 }])
     })
     expect(downloads).toEqual([`${title}.pdf`, `${title}.pdf`, `${title} - selected frames.pdf`])

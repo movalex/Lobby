@@ -429,6 +429,33 @@
   color: var(--dr-navy);
   background: #e6ecf5;
 }
+/* F8: the locked hint, in the selection bar's style */
+.dr-cux-lockhint {
+  gap: 8px;
+  max-width: min(440px, calc(100% - 32px));
+  padding: 5px 5px 5px 10px;
+  color: var(--dr-ink);
+  font: 13px / 1.35 var(--dr-font);
+}
+.dr-cux-lockhint__icon {
+  display: grid;
+  flex: none;
+  color: var(--dr-ink-2);
+}
+.dr-cux-lockhint__text {
+  min-width: 0;
+}
+.dr-cux-lockhint .dr-btn {
+  flex: none;
+}
+.dr-cux-lockhint .dr-iconbtn {
+  flex: none;
+  font-size: 18px;
+}
+/* PRI-13: the phone-width navigation panel (Zoom to fit only) */
+.dr-cux-nav--compact {
+  flex: none;
+}
 .dr-cux-selbar__sep {
   width: 1px;
   height: 18px;

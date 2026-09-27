@@ -72,19 +72,29 @@ interface NotificationRow {
   actor_color: string | null
   comment_body: string | null
   comment_deleted_at: Date | null
+  request_role: 'editor' | 'commenter' | 'viewer' | null
+  request_message: string | null
+  request_status: 'pending' | 'approved' | 'denied' | null
 }
 
 const SELECT = `SELECT n.id, n.kind, n.board_id, n.thread_id, n.comment_id, n.created_at, n.read_at,
        b.title AS board_title, b.visibility, b.status,
        wm.role AS workspace_role, bm.role AS board_grant,
        a.id AS actor_id, a.name AS actor_name, a.color AS actor_color,
-       c.body AS comment_body, c.deleted_at AS comment_deleted_at
+       c.body AS comment_body, c.deleted_at AS comment_deleted_at,
+       ar.role_requested AS request_role, ar.message AS request_message, ar.status AS request_status
   FROM notifications n
   JOIN boards b ON b.id = n.board_id AND b.workspace_id = n.workspace_id
   LEFT JOIN workspace_members wm ON wm.workspace_id = n.workspace_id AND wm.user_id = n.user_id
   LEFT JOIN board_members bm ON bm.board_id = n.board_id AND bm.user_id = n.user_id
   LEFT JOIN users a ON a.id = n.actor_id
-  LEFT JOIN comments c ON c.id = n.comment_id`
+  LEFT JOIN comments c ON c.id = n.comment_id
+  LEFT JOIN LATERAL (
+    SELECT r.role_requested, r.message, r.status FROM access_requests r
+     WHERE n.kind = 'access_request' AND r.workspace_id = n.workspace_id AND r.board_id = n.board_id
+       AND r.user_id = n.actor_id AND r.created_at <= n.created_at + interval '1 second'
+     ORDER BY r.created_at DESC LIMIT 1
+  ) ar ON true`
 
 /** Whether the recipient may still see this notification: board access now, comment not deleted. */
 function visible(r: NotificationRow): boolean {
@@ -118,6 +128,10 @@ function toItem(r: NotificationRow): NotificationItem {
         ? { id: r.actor_id, name: r.actor_name, color: r.actor_color ?? '#888888' }
         : null,
     snippet: snippetOf(r.comment_body),
+    accessRequest:
+      r.kind === 'access_request' && r.request_role && r.request_status
+        ? { role: r.request_role, message: r.request_message, status: r.request_status }
+        : null,
     createdAt: r.created_at.toISOString(),
     readAt: r.read_at ? r.read_at.toISOString() : null,
   }

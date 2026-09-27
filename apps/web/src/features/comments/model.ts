@@ -191,16 +191,66 @@ export function anchorForClick(pagePoint: Point, target: ClickTarget | null, pag
   return { kind: 'point', x: bound(pagePoint.x), y: bound(pagePoint.y), pageId }
 }
 
-/** Short description of where a thread is, for the panel and screen readers. */
+/** What the board knows around an anchor right now (see geometry.ts `anchorContext`). */
+export interface AnchorContext {
+  /** The anchored shape's tldraw type (shape and file anchors). */
+  shapeType?: string | null
+  /**
+   * The name of the frame the anchor is in: the anchored shape's nearest frame ancestor (a frame
+   * itself for a comment on a frame), or the frame a point pin sits in. Null outside any frame.
+   */
+  frameName?: string | null
+}
+
+const FRIENDLY_TYPES: Record<string, string> = {
+  note: 'note',
+  text: 'text',
+  geo: 'shape',
+  arrow: 'connector',
+  line: 'line',
+  draw: 'drawing',
+  highlight: 'highlight',
+  frame: 'frame',
+  group: 'group',
+  image: 'image',
+  video: 'video',
+  embed: 'embed',
+  bookmark: 'link',
+  'dr-file-card': 'file',
+}
+
+/** "note", "shape", "file"… for a tldraw shape type ("object" when unknown). */
+export const friendlyShapeType = (type: string | null | undefined): string =>
+  (type && FRIENDLY_TYPES[type]) || 'object'
+
+const withArticle = (noun: string) => `${/^[aeiou]/.test(noun) ? 'an' : 'a'} ${noun}`
+
+/** Frame names as the board shows them (an unnamed frame is "Frame"), on one line. */
+export function frameDisplayName(name: unknown): string {
+  const clean = typeof name === 'string' ? name.replace(/\s+/g, ' ').trim() : ''
+  return clean || 'Frame'
+}
+
+/**
+ * Short description of where a thread is, for the panel rows, the popover and composer headers and
+ * screen readers: "Concept B – Fresh Start · note" for a comment on a note in that frame, "In Concept
+ * B" for a pin on the board inside a frame, "On a note" / "On the board" outside frames.
+ */
 export function anchorLabel(
   anchor: CommentAnchor,
   placement: AnchorPlacement,
   currentPageId: string,
+  context: AnchorContext = {},
 ): string {
   if (placement.kind === 'orphan') return 'On a deleted object'
   const elsewhere = placement.pageId !== null && placement.pageId !== currentPageId
-  const base =
-    anchor.kind === 'point' ? 'On the board' : anchor.kind === 'asset' ? 'On a file' : 'On an object'
+  const frame = context.frameName ? frameDisplayName(context.frameName) : null
+  let base: string
+  if (anchor.kind === 'point') base = frame ? `In ${frame}` : 'On the board'
+  else {
+    const type = anchor.kind === 'asset' ? 'file' : friendlyShapeType(context.shapeType)
+    base = frame ? `${frame} · ${type}` : `On ${withArticle(type)}`
+  }
   const detail =
     anchor.kind === 'asset' && anchor.page
       ? `, page ${anchor.page}`

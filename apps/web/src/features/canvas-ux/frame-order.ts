@@ -76,3 +76,16 @@ export function hasManualOrder(frames: readonly FrameMetaLike[]): boolean {
 export function mergeMeta(meta: Meta, patch: MetaPatch | undefined): Record<string, unknown> {
   return patch ? { ...meta, ...patch.meta } : { ...meta }
 }
+
+/**
+ * F20: the outline's row number, or null when the frame's name already starts with one ("2 · What
+ * went well" would otherwise read "1  2 · What went well").
+ */
+export function rowNumberLabel(name: string, index: number): string | null {
+  return /^\s*\d/.test(name) ? null : String(index + 1)
+}
+
+/** F12: Shift/Ctrl/Cmd-click on a frame row adds it to the selection, or takes it out. */
+export function toggleInSelection<T extends string>(selected: readonly T[], id: T): T[] {
+  return selected.includes(id) ? selected.filter((s) => s !== id) : [...selected, id]
+}

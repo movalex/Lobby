@@ -8,6 +8,7 @@ import { api, isApiError } from '../../api/client.ts'
 import { formatRelativeTime } from '../../lib/format.ts'
 import { sharingApi } from './api.ts'
 import {
+  pickDefaultRole,
   ROLE_WORD,
   readSentRequest,
   requestableRoles,
@@ -24,24 +25,38 @@ const ROLE_CHOICE: Record<RequestableRole, string> = {
   commenter: 'Comment',
   viewer: 'View',
 }
+const ACCESS_NAME: Record<RequestableRole, string> = {
+  editor: 'Edit',
+  commenter: 'Comment',
+  viewer: 'View',
+}
 
 export function RequestAccess({
   boardId,
   userId,
   currentRole,
+  defaultRole,
   onApprovedCheck,
+  autoFocus = false,
 }: {
   boardId: string
   userId: string
   /** The caller's role when they can already view the board (viewer/commenter asking for more). */
   currentRole: 'owner' | RequestableRole | null
+  /**
+   * The role to preselect (PRI-16): the one they had before losing access, when known. Otherwise
+   * the next step up for a viewer/commenter, or Comment for someone without access.
+   */
+  defaultRole?: RequestableRole | null
+  /** Focus the role choice on mount (opened from the role pill or a blocked-edit hint). */
+  autoFocus?: boolean
   /** Called periodically after a request was sent by someone without access (e.g. to reload). */
   onApprovedCheck?: () => void
 }) {
   const roles = requestableRoles(currentRole)
   const roleId = useId()
   const msgId = useId()
-  const [role, setRole] = useState<RequestableRole>(roles[0] ?? 'editor')
+  const [role, setRole] = useState<RequestableRole>(() => pickDefaultRole(roles, currentRole, defaultRole))
   const [message, setMessage] = useState('')
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -97,9 +112,9 @@ export function RequestAccess({
     return (
       <div className="dr-reqaccess dr-reqaccess--sent" data-testid="access-request-status" role="status">
         <p>
-          <strong>Request sent</strong> {formatRelativeTime(new Date(sent.at).toISOString())} to{' '}
-          {ROLE_WORD[sent.role]}. The board’s owners see it in their Share dialog
-          {currentRole ? '.' : ', and this page opens the board once they approve.'}
+          <strong>{ACCESS_NAME[sent.role]} access requested</strong>{' '}
+          {formatRelativeTime(new Date(sent.at).toISOString())}. The board’s owners see it in their Share
+          dialog{currentRole ? '.' : ', and this page opens the board once they approve.'}
         </p>
         <button
           type="button"
@@ -126,6 +141,8 @@ export function RequestAccess({
         <label htmlFor={roleId}>{currentRole ? 'Ask for' : 'Request access to'}</label>
         <select
           id={roleId}
+          // biome-ignore lint/a11y/noAutofocus: opened on purpose to ask for access
+          autoFocus={autoFocus}
           className="dr-input dr-select dr-select--compact"
           data-testid="access-request-role"
           value={role}

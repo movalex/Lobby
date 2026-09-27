@@ -53,15 +53,58 @@ export function useFeatureMounts(features: readonly BoardFeature[], ctx: Feature
   }, [features, editor, events])
 }
 
+/**
+ * Features whose top-bar item stays in the bar on narrow screens (PRI-02): the comments item holds
+ * the notifications bell. Every other item moves into the "⋯" menu there.
+ */
+export const PINNED_TOP_BAR_FEATURES: readonly string[] = ['comments']
+
+/** A heading for a feature's controls inside the "⋯" menu (the controls themselves are unchanged). */
+const OVERFLOW_CAPTION: Record<string, string> = {
+  workshops: 'Timer and voting',
+  'present-export': 'Present and export',
+  sharing: 'Sharing',
+}
+
 export function FeatureTopBarItems({
   features,
   ctx,
+  only,
+  except,
+  stacked = false,
 }: {
   features: readonly BoardFeature[]
   ctx: FeatureContext | null
+  /** Render just these features' items (by id). */
+  only?: readonly string[]
+  /** Render every item but these. */
+  except?: readonly string[]
+  /** Inside the "⋯" menu: one captioned row per feature, the feature component wrapped as is. */
+  stacked?: boolean
 }) {
   if (!ctx) return null
-  return <>{features.map((f) => (f.TopBarItem ? <f.TopBarItem key={f.id} ctx={ctx} /> : null))}</>
+  const shown = features.filter(
+    (f) => f.TopBarItem && (!only || only.includes(f.id)) && !except?.includes(f.id),
+  )
+  if (!stacked) return <>{shown.map((f) => (f.TopBarItem ? <f.TopBarItem key={f.id} ctx={ctx} /> : null))}</>
+  return (
+    <>
+      {shown.map((f) =>
+        f.TopBarItem ? (
+          <div key={f.id} className="dr-overflow__item" data-feature={f.id}>
+            {OVERFLOW_CAPTION[f.id] && (
+              <span className="dr-overflow__caption" aria-hidden="true">
+                {OVERFLOW_CAPTION[f.id]}
+              </span>
+            )}
+            <div className="dr-overflow__controls">
+              <f.TopBarItem ctx={ctx} />
+            </div>
+          </div>
+        ) : null,
+      )}
+    </>
+  )
 }
 
 export function FeatureOverlays({

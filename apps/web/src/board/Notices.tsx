@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { NoticeInput } from './board-context.ts'
 
-interface Notice extends Required<Omit<NoticeInput, 'testId'>> {
+interface Notice extends Required<Omit<NoticeInput, 'testId' | 'action'>> {
   testId: string
   seq: number
+  action: NoticeInput['action'] | null
 }
 
 const DEFAULT_TIMEOUT_MS = 5000
@@ -28,6 +29,7 @@ export function useNotices() {
         tone: input.tone ?? 'info',
         testId: input.testId ?? 'app-toast',
         timeoutMs: input.timeoutMs === undefined ? DEFAULT_TIMEOUT_MS : input.timeoutMs,
+        action: input.action ?? null,
         seq: ++seq.current,
       }
       // Same key replaces in place (a burst of lease denials is one toast whose timer restarts).
@@ -61,6 +63,19 @@ export function NoticeRegion({ notices, onDismiss }: { notices: Notice[]; onDism
       {notices.map((n) => (
         <div key={n.key} className={`dr-notice dr-notice--${n.tone}`} data-testid={n.testId} role="status">
           <span>{n.text}</span>
+          {n.action && (
+            <button
+              type="button"
+              className="dr-btn dr-btn--sm dr-notice__action"
+              data-testid={n.action.testId}
+              onClick={() => {
+                onDismiss(n.key)
+                n.action?.onClick()
+              }}
+            >
+              {n.action.label}
+            </button>
+          )}
           <button
             type="button"
             className="dr-notice__close"

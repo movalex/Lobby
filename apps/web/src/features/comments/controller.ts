@@ -6,14 +6,31 @@ import { can } from '../../lib/permissions.ts'
 import type { FeatureContext } from '../types.ts'
 import { createCommentsApi } from './api.ts'
 import { revealAnchor } from './geometry.ts'
+import { panelBlocksPopover } from './layout.ts'
 import { browserStorage } from './prefs.ts'
 import { CommentsStore } from './store.ts'
 import { COMMENT_TOOL_ID, registerCommentTool } from './tool.ts'
+
+/** A short message with one action (tldraw's toasts, bottom right; registered by the overlay). */
+export interface CommentToast {
+  /** Same id replaces the previous toast. */
+  id: string
+  title: string
+  action?: { label: string; run(): void }
+}
 
 export interface CommentsController {
   store: CommentsStore
   /** The latest context (role, notify, openPanel…); refreshed on every render of a comments slot. */
   ctx: FeatureContext
+  /** Set while the overlay is mounted (tldraw's toasts need its UI context). */
+  toast?: (t: CommentToast) => void
+}
+
+/** A toast with an action when the overlay is mounted, else a plain board notice. */
+function toastOrNotice(c: CommentsController, t: CommentToast & { testId: string }) {
+  if (c.toast) c.toast(t)
+  else c.ctx.notify({ key: t.id, text: t.title, testId: t.testId })
 }
 
 const controllers = new WeakMap<Editor, CommentsController>()
@@ -35,10 +52,19 @@ export function controllerFor(ctx: FeatureContext): CommentsController {
         onError: (text) =>
           created.ctx.notify({ key: 'comments:error', text, tone: 'error', testId: 'comments-error' }),
         onMentioned: (thread, author) =>
-          created.ctx.notify({
-            key: `comments:mention:${thread.id}`,
-            text: `${author} mentioned you in a comment`,
+          toastOrNotice(created, {
+            id: `comments:mention:${thread.id}`,
+            title: `${author} mentioned you in a comment`,
             testId: 'comment-mention-toast',
+            action: { label: 'View', run: () => void focusThread(created.ctx.editor, thread.id) },
+          }),
+        // Resolving takes the marker off the board: say so, with a way back.
+        onResolved: (thread) =>
+          toastOrNotice(created, {
+            id: `comments:resolved:${thread.id}`,
+            title: 'Thread resolved',
+            testId: 'comment-resolved-toast',
+            action: { label: 'Undo', run: () => void created.store.setStatus(thread.id, 'reopen') },
           }),
       }),
     }
@@ -87,6 +113,46 @@ export function focusThread(editor: Editor, threadId: string): boolean {
   revealAnchor(editor, thread.anchor)
   c.store.openThread(threadId)
   return true
+}
+
+/** Frames to wait at most for the canvas to take the room a closed dock panel leaves. */
+const RELAYOUT_MAX_FRAMES = 30
+
+/**
+ * Resolves once the editor's viewport has changed width and then held it for a frame (tldraw
+ * measures its container with a ResizeObserver), or after RELAYOUT_MAX_FRAMES.
+ */
+function afterViewportResize(editor: Editor, fromWidth: number): Promise<void> {
+  return new Promise((resolve) => {
+    let frames = 0
+    let last = fromWidth
+    const tick = () => {
+      const w = editor.getViewportScreenBounds().w
+      if ((w !== fromWidth && w === last) || ++frames >= RELAYOUT_MAX_FRAMES) return resolve()
+      last = w
+      requestAnimationFrame(tick)
+    }
+    requestAnimationFrame(tick)
+  })
+}
+
+/**
+ * A thread chosen in the Comments panel. On phones (and whenever the open panel leaves the canvas
+ * too narrow for a popover) the panel closes first, and the camera moves only once the canvas has
+ * its full width again, so the marker lands in view above the popover's bottom sheet.
+ */
+export function openThreadFromPanel(ctx: FeatureContext, threadId: string): boolean {
+  const { editor } = ctx
+  const c = controllerOf(editor)
+  if (!c?.store.thread(threadId)) return false
+  const before = editor.getViewportScreenBounds().w
+  const windowWidth = editor.getContainer().ownerDocument.documentElement.clientWidth
+  if (ctx.activePanel && panelBlocksPopover(windowWidth, before)) {
+    ctx.openPanel(null)
+    void afterViewportResize(editor, before).then(() => focusThread(editor, threadId))
+    return true
+  }
+  return focusThread(editor, threadId)
 }
 
 export const TOGGLE_PINS_ACTION = 'dr-comments-toggle-pins'

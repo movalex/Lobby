@@ -10,7 +10,9 @@ import {
   mergeMeta,
   moveItem,
   presentationIndexPatches,
+  rowNumberLabel,
   skipPatch,
+  toggleInSelection,
 } from './frame-order.ts'
 
 const frame = (id: string, x: number, y: number, meta: Record<string, unknown> = {}) =>
@@ -114,5 +116,20 @@ describe('skip in presentation', () => {
     const off = skipPatch({ id: f.id, meta: merged }, false)
     expect(isSkipped(mergeMeta(merged, off ?? undefined))).toBe(false)
     expect(skipPatch(f, false)).toBeNull()
+  })
+})
+
+describe('row numbers (F20) and multi-select (F12)', () => {
+  it('shows a row number unless the name already starts with one', () => {
+    expect(rowNumberLabel('Brief', 0)).toBe('1')
+    expect(rowNumberLabel('', 4)).toBe('5')
+    expect(rowNumberLabel('2 · What went well', 1)).toBeNull()
+    expect(rowNumberLabel('  10. Close', 9)).toBeNull()
+    expect(rowNumberLabel('Panel 3', 2)).toBe('3')
+  })
+  it('Shift/Ctrl-click adds a frame to the selection, or takes it out', () => {
+    expect(toggleInSelection(['shape:a'], 'shape:b')).toEqual(['shape:a', 'shape:b'])
+    expect(toggleInSelection(['shape:a', 'shape:b', 'shape:c'], 'shape:b')).toEqual(['shape:a', 'shape:c'])
+    expect(toggleInSelection([], 'shape:a')).toEqual(['shape:a'])
   })
 })

@@ -39,7 +39,10 @@ html[data-dr-presenting] .dr-comments-layer {
     0 3px 10px rgb(27 35 48 / 18%);
   cursor: pointer;
   pointer-events: auto;
-  transition: box-shadow 120ms ease;
+  transition:
+    box-shadow 120ms ease,
+    width 120ms ease,
+    height 120ms ease;
 }
 .dr-cpin:hover,
 .dr-cpin:focus-visible,
@@ -100,14 +103,50 @@ html[data-dr-presenting] .dr-comments-layer {
   border-radius: 999px;
   font: 700 9.5px / 1 var(--dr-font);
 }
+/* Unread: a bright dot with a white ring and a dark outline, readable on light and dark boards. */
 .dr-cpin__badge--dot {
-  min-width: 12px;
-  width: 12px;
-  height: 12px;
-  top: -4px;
-  right: -4px;
+  min-width: 15px;
+  width: 15px;
+  height: 15px;
+  top: -6px;
+  right: -6px;
   padding: 0;
-  background: var(--dr-navy);
+  background: var(--dr-focus);
+  box-shadow: 0 0 0 1.5px var(--dr-ink);
+}
+/* Zoomed out below 25%: markers shrink to small dots so they do not cover the content; hovering or
+   focusing one (or opening it) brings the full marker back. The bottom-left corner stays on the
+   anchor (the marker is positioned by that corner). */
+.dr-cpins[data-zoomed-out="true"] .dr-cpin:not(:hover, :focus-visible, [aria-expanded="true"]) {
+  width: 14px;
+  height: 14px;
+  border-width: 2px;
+  border-radius: 7px 7px 7px 2px;
+}
+.dr-cpins[data-zoomed-out="true"]
+  .dr-cpin:not(:hover, :focus-visible, [aria-expanded="true"])
+  .dr-cpin__face {
+  border-radius: 5px 5px 5px 1px;
+  font-size: 0;
+}
+.dr-cpins[data-zoomed-out="true"]
+  .dr-cpin:not(:hover, :focus-visible, [aria-expanded="true"])
+  .dr-cpin__face
+  svg,
+.dr-cpins[data-zoomed-out="true"]
+  .dr-cpin:not(:hover, :focus-visible, [aria-expanded="true"])
+  .dr-cpin__badge:not(.dr-cpin__badge--dot) {
+  display: none;
+}
+.dr-cpins[data-zoomed-out="true"]
+  .dr-cpin:not(:hover, :focus-visible, [aria-expanded="true"])
+  .dr-cpin__badge--dot {
+  top: -5px;
+  right: -5px;
+  min-width: 9px;
+  width: 9px;
+  height: 9px;
+  border-width: 1.5px;
 }
 .dr-cpin__badge--at {
   background: var(--dr-amber);
@@ -188,6 +227,14 @@ html[data-dr-presenting] .dr-comments-layer {
 }
 .dr-cpopover:focus {
   outline: none;
+}
+/* Phones: a bottom sheet across the canvas (layout.ts sets its left, width, bottom and max-height),
+   so the marker stays visible above it. */
+.dr-cpopover--docked {
+  border-radius: 14px;
+  box-shadow:
+    0 -2px 8px rgb(27 35 48 / 10%),
+    0 -12px 32px rgb(27 35 48 / 18%);
 }
 .dr-cpopover:focus-visible {
   outline: 2px solid var(--dr-focus);
@@ -514,6 +561,19 @@ html[data-dr-presenting] .dr-comments-layer {
   color: var(--dr-ink-2);
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+/* Access requests: the role asked for (and the person's message, clipped like snippets). */
+.dr-cbell__request {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  color: var(--dr-ink);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.dr-cbell__request .dr-cbell__snippet {
+  font-weight: 400;
 }
 .dr-cbell__time {
   color: var(--dr-ink-2);

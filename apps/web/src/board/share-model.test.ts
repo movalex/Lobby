@@ -5,9 +5,11 @@ import {
   accessSource,
   grantEditable,
   inviteRoleOptions,
+  linkAccessLine,
   memberRoleEditable,
   parseInviteTarget,
   removalNote,
+  removeConfirmText,
   shareableWorkspaceMembers,
   sortMembers,
   VISIBILITY_OPTIONS,
@@ -136,5 +138,40 @@ describe('share dialog: through which grant, and what removal leaves', () => {
     expect(grantEditable({ grant: null, workspaceRole: 'member' })).toBe(false)
     // Workspace owners/admins own every board: a grant changes nothing for them.
     expect(grantEditable({ grant: 'editor', workspaceRole: 'admin' })).toBe(false)
+  })
+})
+
+describe('shell-sharing-platform fixes', () => {
+  const fmt = (iso: string, kind: 'date' | 'time') => `${kind}:${iso.slice(5, 10)}`
+  it('a non-manager learns that a link lets people in although the select says Private (PRI-07)', () => {
+    expect(linkAccessLine([], fmt)).toBeNull()
+    expect(
+      linkAccessLine(
+        [
+          { role: 'viewer', expiresAt: '2026-12-01T10:00:00Z' },
+          { role: 'commenter', expiresAt: '2026-10-04T10:00:00Z' },
+        ],
+        fmt,
+      ),
+    ).toBe('Anyone with the review link can comment until date:10-04.')
+    expect(linkAccessLine([{ role: 'viewer', expiresAt: '2026-10-09T10:00:00Z' }], fmt)).toBe(
+      'Anyone with the review link can view until date:10-09.',
+    )
+    expect(
+      linkAccessLine(
+        [
+          { role: 'commenter', expiresAt: '2026-10-04T10:00:00Z' },
+          { role: 'editor', expiresAt: '2026-09-27T15:40:00Z' },
+        ],
+        fmt,
+      ),
+    ).toBe('Anyone with the workshop link can edit until time:09-27.')
+  })
+
+  it('removing someone asks first and says what happens (PRI-21)', () => {
+    expect(removeConfirmText('Priya', null)).toBe('Remove Priya? Priya loses access now.')
+    expect(removeConfirmText('Bob', 'Removing their invite leaves “Can view” through the workspace.')).toBe(
+      'Remove Bob’s invite? Removing their invite leaves “Can view” through the workspace.',
+    )
   })
 })

@@ -1,8 +1,10 @@
-import { type FormEvent, lazy, type ReactNode, Suspense, useId, useState } from 'react'
+import type { InvitationPreview } from '@draftroom/contracts'
+import { type FormEvent, lazy, type ReactNode, Suspense, useEffect, useId, useState } from 'react'
 import { api, isApiError } from '../api/client.ts'
 import { Wordmark } from '../brand/Wordmark.tsx'
+import { signInHeading } from '../invite/model.ts'
 import { colorForUser, DEV_HANDLE_RE, DEV_QUICK_PICKS, initialsFor } from '../lib/identity.ts'
-import { navigate, safeReturnTo } from '../lib/routing.ts'
+import { matchRoute, navigate, safeReturnTo } from '../lib/routing.ts'
 import { useSession } from './session.tsx'
 
 // Clerk's SDK is only downloaded when the server actually uses Clerk.
@@ -12,6 +14,9 @@ export function SignInPage() {
   const { config, configStatus, retryConfig, state } = useSession()
   const returnTo = safeReturnTo(new URLSearchParams(location.search).get('returnTo'))
   const done = () => navigate(returnTo ?? '/', { replace: true })
+  // PRI-16: coming from an invitation, say what signing in is for (the preview is public).
+  const invite = useInvitePreview(returnTo)
+  const heading = signInHeading(invite)
 
   let body: ReactNode
   if (configStatus === 'loading') {
@@ -32,7 +37,7 @@ export function SignInPage() {
       </div>
     )
   } else if (config.providers.includes('dev')) {
-    body = <DevSignIn onDone={done} />
+    body = <DevSignIn onDone={done} heading={heading} />
   } else if (config.providers.includes('clerk') && config.clerkPublishableKey) {
     body = (
       <Suspense
@@ -42,6 +47,11 @@ export function SignInPage() {
           </div>
         }
       >
+        {invite && (
+          <h1 className="dr-card__title" data-testid="signin-heading">
+            {heading}
+          </h1>
+        )}
         <ClerkSignIn publishableKey={config.clerkPublishableKey} onDone={done} />
       </Suspense>
     )
@@ -79,7 +89,24 @@ export function SignInPage() {
   )
 }
 
-function DevSignIn({ onDone }: { onDone(): void }) {
+/** The invitation behind `returnTo` (/invite/:token), for the sign-in heading; null otherwise. */
+function useInvitePreview(returnTo: string | null): InvitationPreview | null {
+  const [inv, setInv] = useState<InvitationPreview | null>(null)
+  const token = (() => {
+    if (!returnTo) return null
+    const route = matchRoute(new URL(returnTo, location.origin).pathname)
+    return route.name === 'invite' ? route.token : null
+  })()
+  useEffect(() => {
+    if (!token) return
+    const controller = new AbortController()
+    api.getInvitation(token, controller.signal).then(setInv, () => setInv(null))
+    return () => controller.abort()
+  }, [token])
+  return token ? inv : null
+}
+
+function DevSignIn({ onDone, heading }: { onDone(): void; heading: string }) {
   const { refresh } = useSession()
   const handleId = useId()
   const nameId = useId()
@@ -131,7 +158,9 @@ function DevSignIn({ onDone }: { onDone(): void }) {
           </p>
         </div>
       </div>
-      <h1 className="dr-card__title">Sign in</h1>
+      <h1 className="dr-card__title" data-testid="signin-heading">
+        {heading}
+      </h1>
       <fieldset className="dr-presets-fieldset" disabled={pending !== null}>
         <legend className="dr-signin__legend">Quick pick</legend>
         <div className="dr-presets">
@@ -171,6 +200,8 @@ function DevSignIn({ onDone }: { onDone(): void }) {
             setError(null)
           }}
           placeholder="e.g. dana"
+          // biome-ignore lint/a11y/noAutofocus: the page exists to type a handle (PRI-16)
+          autoFocus
           autoComplete="username"
           autoCapitalize="none"
           spellCheck={false}

@@ -164,8 +164,9 @@
   font-size: 11px;
   font-weight: 700;
 }
+/* Short of room in the bar only; in the "⋯" menu (narrow screens) the words are shown. */
 @media (max-width: 900px) {
-  .dr-sharebadge__text {
+  .dr-topbar .dr-sharebadge__text {
     display: none;
   }
 }

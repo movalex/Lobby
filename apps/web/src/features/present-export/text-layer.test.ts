@@ -1,7 +1,7 @@
 import { frame, geo, image, note, text } from '@draftroom/board-ops/test-fixtures'
 import type { TLShape } from 'tldraw'
 import { describe, expect, it } from 'vitest'
-import { placedTextFor } from './text-layer.ts'
+import { hiddenUnderImage, placedTextFor } from './text-layer.ts'
 
 const box = { x: 110, y: 220, w: 200, h: 200 }
 const origin = { x: 100, y: 200 }
@@ -49,5 +49,21 @@ describe('placedTextFor', () => {
     expect(placedTextFor(frame('f', 'Title'), box, origin)).toBeNull()
     expect(placedTextFor(image('i', 'asset:x', { altText: 'a photo' }), box, origin)).toBeNull()
     expect(placedTextFor(note('empty', '   '), box, origin)).toBeNull()
+  })
+})
+
+describe('hiddenUnderImage', () => {
+  const at = (x: number, y: number, w: number, h: number, order: number) => ({
+    bounds: { x, y, w, h },
+    order,
+  })
+  it('is true only for an image drawn later that covers the whole text box', () => {
+    const note = at(100, 100, 200, 200, 5)
+    expect(hiddenUnderImage(note, [at(50, 50, 400, 400, 9)])).toBe(true)
+    // Under the note (drawn earlier): the note is visible.
+    expect(hiddenUnderImage(note, [at(50, 50, 400, 400, 1)])).toBe(false)
+    // Covers only part of it: still readable, kept.
+    expect(hiddenUnderImage(note, [at(150, 50, 400, 400, 9)])).toBe(false)
+    expect(hiddenUnderImage(note, [])).toBe(false)
   })
 })

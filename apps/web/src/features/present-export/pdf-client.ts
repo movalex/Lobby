@@ -90,7 +90,9 @@ export async function createPdfBuilderOffThread(meta: { title: string }): Promis
       return pageCount
     },
     async addPage(page: PdfPageInput) {
-      const r = expectOk(await call({ type: 'page', page }, [page.image.bytes.buffer as ArrayBuffer]))
+      const transfer = [page.image.bytes.buffer as ArrayBuffer]
+      if (page.headerImage) transfer.push(page.headerImage.bytes.buffer as ArrayBuffer)
+      const r = expectOk(await call({ type: 'page', page }, transfer))
       if (r.type === 'ok') pageCount = r.pageCount
     },
     async finish() {

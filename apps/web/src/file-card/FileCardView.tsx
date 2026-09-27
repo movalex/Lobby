@@ -1,11 +1,13 @@
 import type { FileCardShape } from '@draftroom/canvas-schema'
-import { type PointerEvent, useCallback, useState } from 'react'
+import { type PointerEvent, useCallback, useEffect, useState } from 'react'
 import { HTMLContainer, useEditor } from 'tldraw'
 import { derivativeUrl, originalUrl } from '../assets/contract.ts'
 import { useAssetMeta } from '../assets/meta-store.ts'
 import { useBoard } from '../board/board-context.ts'
 import { extensionLabel, formatBytes, formatDuration, pluralize } from '../lib/format.ts'
 import { type CardView, cardView, coverDerivative, stripPages } from './card-model.ts'
+import './file-card.css'
+import { registerCardBoard } from './open-original.ts'
 
 const STRIP_MAX = 4
 
@@ -27,6 +29,11 @@ function useInteractive() {
 
 export function FileCardView({ shape }: { shape: FileCardShape }) {
   const board = useBoard()
+  const editor = useEditor()
+  // Lets FileCardShapeUtil.onDoubleClick build the same original URL as the Download link.
+  useEffect(() => {
+    if (board) registerCardBoard(editor, { boardId: board.boardId, metaStore: board.metaStore })
+  }, [editor, board])
   const p = shape.props
   const snap = useAssetMeta(board?.metaStore ?? null, board?.boardId ?? '', p.assetId, p.versionId)
   const view = cardView(p, snap.meta)

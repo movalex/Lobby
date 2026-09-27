@@ -16,9 +16,10 @@ import { CommentsOverlay } from './CommentsOverlay.tsx'
 import { CommentsPanel } from './CommentsPanel.tsx'
 import { CommentsTopBar } from './CommentsTopBar.tsx'
 import { commentOverrides, controllerFor, focusThread } from './controller.ts'
-import { anchorAt } from './geometry.ts'
+import { anchorAt, anchorForKeyboard, anchorPointOnCurrentPage, revealAnchor } from './geometry.ts'
 import { CommentIcon } from './icons.tsx'
-import { registerCommentTool, setCommentToolHandler } from './tool.ts'
+import { SHARING_CHANGED_EVENT } from './store.ts'
+import { COMMENT_TOOL_ID, registerCommentTool, setCommentToolHandler } from './tool.ts'
 
 const NOTIFICATIONS_POLL_MS = 60_000
 /** A resync right after a load (the stream's first hello) does not refetch again. */
@@ -51,6 +52,14 @@ function mount(ctx: FeatureContext): () => void {
       if (!store.canComment.get()) return
       store.startNewThread(anchorAt(editor, point))
     },
+    placeFromKeyboard() {
+      if (!store.canComment.get()) return
+      const anchor = anchorForKeyboard(editor)
+      store.startNewThread(anchor)
+      // The selected object may be out of view (keyboard users tab through the board).
+      const point = anchorPointOnCurrentPage(editor, anchor)
+      if (point && !editor.getViewportPageBounds().containsPoint(point)) revealAnchor(editor, anchor)
+    },
     cancel: () => store.closeAll(),
     exit: () => store.cancelNewThread(),
   })
@@ -63,6 +72,8 @@ function mount(ctx: FeatureContext): () => void {
   const offs = [
     events.on(COMMENTS_THREAD_EVENT, (data) => store.handleEvent(COMMENTS_THREAD_EVENT, data)),
     events.on(COMMENTS_DELETED_EVENT, (data) => store.handleEvent(COMMENTS_DELETED_EVENT, data)),
+    // Someone asked for access (or a request was decided): the owners' bell has news right away.
+    events.on(SHARING_CHANGED_EVENT, (data) => store.handleEvent(SHARING_CHANGED_EVENT, data)),
     events.onResync(() => {
       if (Date.now() - lastLoad > RESYNC_DEBOUNCE_MS) void load()
       store.scheduleNotificationsRefresh(0)
@@ -78,6 +89,20 @@ function mount(ctx: FeatureContext): () => void {
         testId: 'comments-gone',
       })
   })
+  // Keyboard commenting (PRI-14): with the comment tool on, Tab / Shift+Tab step through the board's
+  // objects as they do in tldraw's select tool (which only does so once something is selected; here
+  // the first Tab selects the first object), so "C, Tab…, Enter" comments on an object without a
+  // mouse. (C while a lone sticky note is selected types into it: canvas-ux's type-to-edit.)
+  const container = editor.getContainer()
+  const onTab = (e: KeyboardEvent) => {
+    if (e.key !== 'Tab' || e.altKey || e.ctrlKey || e.metaKey || e.isComposing) return
+    if (editor.getCurrentToolId() !== COMMENT_TOOL_ID || e.target !== container) return
+    if (editor.getCurrentPageShapeIds().size === 0) return
+    e.preventDefault()
+    editor.markEventAsHandled(e)
+    editor.selectAdjacentShape(e.shiftKey ? 'prev' : 'next')
+  }
+  container.addEventListener('keydown', onTab)
   store.scheduleNotificationsRefresh(0)
   const poll = setInterval(() => void store.refreshNotifications(), NOTIFICATIONS_POLL_MS)
   const onFocus = () => store.scheduleNotificationsRefresh(0)
@@ -85,6 +110,7 @@ function mount(ctx: FeatureContext): () => void {
 
   return () => {
     for (const off of offs) off()
+    container.removeEventListener('keydown', onTab)
     clearInterval(poll)
     window.removeEventListener('focus', onFocus)
     setCommentToolHandler(editor, null)

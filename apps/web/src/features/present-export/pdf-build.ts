@@ -1,6 +1,7 @@
-// Assembles the PDF export with pdf-lib: one page per rendered frame image, frame names as bookmarks,
-// and an invisible text layer so the pages' text can be searched, selected and copied. No DOM here, so
-// it runs (and is tested) in Node.
+// Assembles the PDF export with pdf-lib: one page per rendered frame image, each under a header band
+// with the frame's title (planPdfPage: frame-sized pages, or uniform 16:9 / A4 landscape pages with
+// the frame fitted in), frame names as bookmarks, and an invisible text layer so the pages' text can
+// be searched, selected and copied. No DOM here, so it runs (and is tested) in Node.
 //
 // Honesty note: pages are raster images of the frames (tldraw renders text through HTML, and there is
 // no SVG-to-PDF vector path or font subsetting with the installed dependencies). The hidden text layer
@@ -11,6 +12,7 @@ import {
   type PDFDocument as PDFDocumentType,
   type PDFFont,
   PDFHexString,
+  type PDFImage,
   PDFName,
   type PDFPage,
   type PDFRef,
@@ -21,7 +23,7 @@ import {
   setTextRenderingMode,
   TextRenderingMode,
 } from 'pdf-lib'
-import { pdfPageSize } from './pdf-layout.ts'
+import { type PdfPageFormat, type PdfPagePlan, planPdfPage } from './pdf-layout.ts'
 
 export interface PdfTextItem {
   text: string
@@ -83,8 +85,15 @@ export function wrapLines(text: string, maxWidth: number, width: (s: string) => 
 }
 
 export interface PdfPageInput {
-  /** Bookmark title (the frame name). */
+  /** Bookmark title and the page's header (the frame name). */
   title: string
+  /** Page size: the frame's own ('fit', the default) or the same 16:9 / A4 landscape page for all. */
+  format?: PdfPageFormat
+  /**
+   * The header title drawn by the browser (any script), for titles the PDF's standard font cannot
+   * show (see isWinAnsi). `widthPt`/`heightPt`: its size on the page.
+   */
+  headerImage?: { bytes: Uint8Array; widthPt: number; heightPt: number }
   /** The area the image shows, in board px (sets the page size and maps text positions). */
   widthPx: number
   heightPx: number
@@ -117,6 +126,23 @@ export function sanitizeForStandardFont(text: string, charset: ReadonlySet<numbe
     .trim()
 }
 
+// Windows-1252 (what the standard PDF fonts encode): ASCII, Latin-1 and these 27 code points.
+const WIN_ANSI_EXTRA = new Set(
+  [0x20ac, 0x201a, 0x192, 0x201e, 0x2026, 0x2020, 0x2021, 0x2c6, 0x2030, 0x160, 0x2039, 0x152, 0x17d]
+    .concat([0x2018, 0x2019, 0x201c, 0x201d, 0x2022, 0x2013, 0x2014, 0x2dc, 0x2122, 0x161, 0x203a, 0x153])
+    .concat([0x17e, 0x178]),
+)
+
+/** Whether the standard PDF font can show all of `text` (else the browser draws it as an image). */
+export function isWinAnsi(text: string): boolean {
+  for (const ch of text.normalize('NFC')) {
+    const cp = ch.codePointAt(0) ?? 0
+    if ((cp >= 0x20 && cp <= 0x7e) || (cp >= 0xa0 && cp <= 0xff) || WIN_ANSI_EXTRA.has(cp)) continue
+    return false
+  }
+  return true
+}
+
 /** Single-line, bounded title text ('' when nothing is left). */
 function cleanTitle(title: string): string {
   const clean = String(title ?? '')
@@ -142,14 +168,16 @@ function drawHiddenText(
   item: PdfTextItem,
   k: number,
   pageHeight: number,
+  /** Where the frame's image starts on the page (pt from the left / top edge). */
+  origin: { x: number; y: number } = { x: 0, y: 0 },
 ) {
   const text = sanitizeForStandardFont(item.text, charset)
   if (!text) return
   const size = Math.max(1, item.fontSizePx * k)
   const inset = Math.max(0, (item.inset ?? 0) * k)
-  const boxX = item.x * k + inset
+  const boxX = origin.x + item.x * k + inset
   const boxW = Math.max(size * 2, item.w * k - inset * 2)
-  const boxTop = item.y * k + inset
+  const boxTop = origin.y + item.y * k + inset
   const boxH = Math.max(size, item.h * k - inset * 2)
   const width = (s: string) => font.widthOfTextAtSize(s, size)
   const lines = wrapLines(text, boxW, width)
@@ -172,6 +200,67 @@ function drawHiddenText(
   } finally {
     page.pushOperators(popGraphicsState())
   }
+}
+
+const BAND_FILL = rgb(0.953, 0.949, 0.933)
+const BAND_RULE = rgb(0.863, 0.847, 0.8)
+const TITLE_INK = rgb(0.106, 0.137, 0.188)
+
+/** `text` shortened with an ellipsis until it fits `maxWidth`. */
+function fitText(text: string, maxWidth: number, width: (s: string) => number): string {
+  if (width(text) <= maxWidth) return text
+  const chars = Array.from(text)
+  while (chars.length > 1 && width(`${chars.join('').trimEnd()}…`) > maxWidth) chars.pop()
+  return `${chars.join('').trimEnd()}…`
+}
+
+/**
+ * The header band with the page's title: vector text in the standard font when it can show the
+ * title, else the browser-drawn title image plus the title (as far as it encodes) in the hidden text
+ * layer, so every page's title stays searchable.
+ */
+function drawHeader(
+  page: PDFPage,
+  plan: PdfPagePlan,
+  title: string,
+  font: PDFFont,
+  charset: ReadonlySet<number>,
+  image: { embedded: PDFImage; widthPt: number; heightPt: number } | null,
+) {
+  const band = plan.header
+  const bandBottom = plan.height - band.height
+  page.drawRectangle({ x: 0, y: bandBottom, width: band.width, height: band.height, color: BAND_FILL })
+  page.drawLine({
+    start: { x: 0, y: bandBottom },
+    end: { x: band.width, y: bandBottom },
+    thickness: 0.75,
+    color: BAND_RULE,
+  })
+  const maxWidth = band.width - band.padX * 2
+  const size = band.fontSize
+  const baseline = bandBottom + (band.height - size) / 2 + size * 0.22
+  const text = sanitizeForStandardFont(title, charset)
+  const line = text ? fitText(text, maxWidth, (s) => font.widthOfTextAtSize(s, size)) : ''
+  if (image) {
+    const k = Math.min(1, maxWidth / image.widthPt)
+    const w = image.widthPt * k
+    const h = image.heightPt * k
+    page.drawImage(image.embedded, {
+      x: band.padX,
+      y: bandBottom + (band.height - h) / 2,
+      width: w,
+      height: h,
+    })
+    if (!line) return
+    page.pushOperators(pushGraphicsState(), setTextRenderingMode(TextRenderingMode.Invisible))
+    try {
+      page.drawText(line, { x: band.padX, y: baseline, size, font, color: TITLE_INK })
+    } finally {
+      page.pushOperators(popGraphicsState())
+    }
+    return
+  }
+  if (line) page.drawText(line, { x: band.padX, y: baseline, size, font, color: TITLE_INK })
 }
 
 function addOutline(doc: PDFDocumentType, entries: { title: string; ref: PDFRef }[]) {
@@ -217,37 +306,50 @@ export async function createPdfBuilder(meta: { title: string; now?: Date }): Pro
   let font: PDFFont | null = null
   let charset: Set<number> | null = null
   const outline: { title: string; ref: PDFRef }[] = []
+  const ensureFont = async () => {
+    if (!font || !charset) {
+      font = await doc.embedFont(StandardFonts.Helvetica)
+      charset = new Set(font.getCharacterSet())
+    }
+    return { font, charset }
+  }
 
   return {
     get pageCount() {
       return doc.getPageCount()
     },
     async addPage(input) {
-      const size = pdfPageSize(input.widthPx, input.heightPx)
-      const page = doc.addPage([size.width, size.height])
+      const plan = planPdfPage(input.widthPx, input.heightPx, input.format ?? 'fit')
+      const page = doc.addPage([plan.width, plan.height])
       // White under the image: transparent PNG pages then read like paper, not like the viewer's background.
-      page.drawRectangle({ x: 0, y: 0, width: size.width, height: size.height, color: rgb(1, 1, 1) })
+      page.drawRectangle({ x: 0, y: 0, width: plan.width, height: plan.height, color: rgb(1, 1, 1) })
       const image =
         input.image.type === 'png'
           ? await doc.embedPng(input.image.bytes)
           : await doc.embedJpg(input.image.bytes)
-      page.drawImage(image, { x: 0, y: 0, width: size.width, height: size.height })
+      page.drawImage(image, {
+        x: plan.image.x,
+        y: plan.height - plan.image.y - plan.image.height,
+        width: plan.image.width,
+        height: plan.image.height,
+      })
       // Encode now rather than all at once in save(): spreads the work (and frees decoded pixels) per page.
       await image.embed()
-      if (input.texts?.length) {
-        if (!font) {
-          font = await doc.embedFont(StandardFonts.Helvetica)
-          charset = new Set(font.getCharacterSet())
-        }
-        for (const item of input.texts) {
-          try {
-            drawHiddenText(page, font, charset as Set<number>, item, size.ptPerPx, size.height)
-          } catch {
-            // The text layer is a convenience: a string pdf-lib cannot lay out never fails the export.
-          }
+      const { font: f, charset: cs } = await ensureFont()
+      const title = bookmarkTitle(input.title, outline.length)
+      const header =
+        input.headerImage && !isWinAnsi(title)
+          ? { ...input.headerImage, embedded: await doc.embedPng(input.headerImage.bytes) }
+          : null
+      drawHeader(page, plan, title, f, cs, header)
+      for (const item of input.texts ?? []) {
+        try {
+          drawHiddenText(page, f, cs, item, plan.ptPerPx, plan.height, plan.image)
+        } catch {
+          // The text layer is a convenience: a string pdf-lib cannot lay out never fails the export.
         }
       }
-      outline.push({ title: bookmarkTitle(input.title, outline.length), ref: page.ref })
+      outline.push({ title, ref: page.ref })
     },
     async finish() {
       addOutline(doc, outline)

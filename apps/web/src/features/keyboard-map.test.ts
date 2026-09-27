@@ -180,6 +180,26 @@ describe('tldraw component slots and options', () => {
     expect(merged.options.maxShapesPerPage).toBeGreaterThanOrEqual(10_000)
   })
 
+  it('lists exactly the tldraw options features set, with their owners', () => {
+    const owners = Object.fromEntries(
+      BOARD_FEATURES.flatMap((f) => Object.keys(f.options ?? {}).map((key) => [key, f.id])).sort(([a], [b]) =>
+        String(a).localeCompare(String(b)),
+      ),
+    )
+    expect(owners).toEqual({
+      cameraMovingTimeoutMs: 'canvas-ux',
+      createTextOnCanvasDoubleClick: 'canvas-ux',
+      maxShapesPerPage: 'canvas-ux',
+    })
+    const { options } = mergeFeatureProps(BOARD_FEATURES, { overrides: {}, components: {} })
+    // PERF-04: one slow frame (tldraw's default window is 64 ms) no longer flips the camera to idle
+    // mid-gesture.
+    expect(options.cameraMovingTimeoutMs).toBeGreaterThanOrEqual(250)
+    expect(options.cameraMovingTimeoutMs).toBeLessThanOrEqual(300)
+    // RETRO-21b (COL-09): double-click on empty canvas makes a note (canvas-ux), not a text box.
+    expect(options.createTextOnCanvasDoubleClick).toBe(false)
+  })
+
   it('dock panel ids are unique across features', () => {
     const ids = BOARD_FEATURES.flatMap((f) => (f.panels ?? []).map((p) => p.id))
     expect(new Set(ids).size).toBe(ids.length)

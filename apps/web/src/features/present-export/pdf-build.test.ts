@@ -4,11 +4,12 @@ import {
   bookmarkTitle,
   createPdfBuilder,
   FALLBACK_DOCUMENT_TITLE,
+  isWinAnsi,
   LINE_HEIGHT,
   sanitizeForStandardFont,
   wrapLines,
 } from './pdf-build.ts'
-import { pdfPageSize } from './pdf-layout.ts'
+import { FIXED_PAGE_PT, headerBandHeight, planPdfPage } from './pdf-layout.ts'
 
 const b64 = (s: string) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0))
 // 1×1 images (a red PNG and a baseline JPEG): enough for pdf-lib to embed.
@@ -79,6 +80,16 @@ describe('wrapLines', () => {
   })
 })
 
+describe('isWinAnsi', () => {
+  it('accepts what the standard PDF fonts encode', () => {
+    expect(isWinAnsi('Concept B – Fresh Start “€5”')).toBe(true)
+    expect(isWinAnsi('Café crème')).toBe(true)
+    expect(isWinAnsi('Idea 💡')).toBe(false)
+    expect(isWinAnsi('企画')).toBe(false)
+    expect(isWinAnsi('Ω')).toBe(false)
+  })
+})
+
 describe('bookmarkTitle', () => {
   it('cleans titles and never returns an empty one', () => {
     expect(bookmarkTitle('  Intro\n slide ', 0)).toBe('Intro slide')
@@ -88,7 +99,7 @@ describe('bookmarkTitle', () => {
 })
 
 describe('createPdfBuilder', () => {
-  it('writes one page per frame, sized from the frame, with bookmarks and metadata', async () => {
+  it('writes one page per frame, sized from the frame plus a title band, with bookmarks and metadata', async () => {
     const builder = await createPdfBuilder({
       title: 'Spring campaign',
       now: new Date('2026-09-27T10:00:00Z'),
@@ -106,10 +117,10 @@ describe('createPdfBuilder', () => {
     const doc = await PDFDocument.load(bytes)
     expect(doc.getPageCount()).toBe(2)
     const [p1, p2] = doc.getPages()
-    expect(p1?.getSize()).toEqual({ width: 1440, height: 810 })
+    expect(p1?.getSize()).toEqual({ width: 1440, height: 810 + headerBandHeight(1440) })
     expect(p2?.getSize()).toEqual({
-      width: pdfPageSize(800, 1200).width,
-      height: pdfPageSize(800, 1200).height,
+      width: planPdfPage(800, 1200).width,
+      height: planPdfPage(800, 1200).height,
     })
     expect(doc.getTitle()).toBe('Spring campaign')
     expect(doc.getCreator()).toBe('Draftroom')
@@ -166,10 +177,10 @@ describe('createPdfBuilder', () => {
     })
     const doc = await PDFDocument.load(await builder.finish())
     const content = await decodedStreams(doc)
-    const lines = [...content.matchAll(/1 0 0 1 ([\d.]+) ([\d.]+) Tm/g)].map((m) => [
-      Number(m[1]),
-      Number(m[2]),
-    ])
+    // The page's own title sits in the band above the frame (y >= 750); the note's lines are below.
+    const lines = [...content.matchAll(/1 0 0 1 ([\d.]+) ([\d.]+) Tm/g)]
+      .map((m) => [Number(m[1]), Number(m[2])])
+      .filter(([, y]) => (y ?? 0) < 750)
     expect(lines.length).toBeGreaterThan(1)
     for (const [x, y] of lines) {
       // Inside the note's box (0..150 pt on both axes, PDF y grows upwards from 750).
@@ -180,6 +191,61 @@ describe('createPdfBuilder', () => {
     }
     // Baselines step down by one line height.
     expect((lines[0]?.[1] ?? 0) - (lines[1]?.[1] ?? 0)).toBeCloseTo(16.5 * LINE_HEIGHT, 3)
+  })
+
+  it('titles every page in a header band as real text, and 16:9 pages all have one size', async () => {
+    const builder = await createPdfBuilder({ title: 'Deck' })
+    const frames = [
+      ['Concept A – Bold', 1920, 1080],
+      ['Concept B', 800, 1200],
+      ['Wide strip', 5000, 400],
+    ] as const
+    for (const [title, w, h] of frames)
+      await builder.addPage({
+        title,
+        widthPx: w,
+        heightPx: h,
+        format: '16:9',
+        image: { bytes: PNG, type: 'png' },
+      })
+    const doc = await PDFDocument.load(await builder.finish())
+    for (const page of doc.getPages()) expect(page.getSize()).toEqual(FIXED_PAGE_PT['16:9'])
+    const content = await decodedStreams(doc)
+    // Visible (not render mode 3) WinAnsi text: "Concept A " … the en dash is 0x96 in WinAnsi.
+    expect(content).toContain('<436F6E6365707420412096') // "Concept A –"
+    expect(content).toContain('<436F6E636570742042>') // "Concept B"
+    expect(content).toContain('<57696465207374726970>') // "Wide strip"
+    expect(outlineTitles(doc)).toEqual(['Concept A – Bold', 'Concept B', 'Wide strip'])
+  })
+
+  it('draws titles the standard font cannot show as the browser-drawn image, keeping what encodes searchable', async () => {
+    const builder = await createPdfBuilder({ title: 'Deck' })
+    await builder.addPage({
+      title: 'Idee 💡 企画',
+      widthPx: 1000,
+      heightPx: 600,
+      format: 'a4',
+      image: { bytes: JPEG, type: 'jpeg' },
+      headerImage: { bytes: PNG, widthPt: 120, heightPt: 18 },
+    })
+    // A WinAnsi title ignores the image and is drawn as text.
+    await builder.addPage({
+      title: 'Plain',
+      widthPx: 1000,
+      heightPx: 600,
+      format: 'a4',
+      image: { bytes: JPEG, type: 'jpeg' },
+      headerImage: { bytes: PNG, widthPt: 120, heightPt: 18 },
+    })
+    const doc = await PDFDocument.load(await builder.finish())
+    const [first, second] = doc.getPages()
+    const images = (page: typeof first) =>
+      page?.node.Resources()?.lookup(PDFName.of('XObject'), PDFDict)?.keys().length ?? 0
+    expect(images(first)).toBe(2) // the frame and the title
+    expect(images(second)).toBe(1)
+    const content = await decodedStreams(doc)
+    expect(content).toContain('<49646565>') // "Idee" in the hidden layer
+    expect(content).toContain('<506C61696E>') // "Plain"
   })
 
   it('finishes an empty document without an outline', async () => {

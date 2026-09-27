@@ -1,6 +1,13 @@
 import type { TLTheme } from 'tldraw'
 import { describe, expect, it } from 'vitest'
-import { contrastRatio, hasNotePalette, NOTE_PALETTE, relativeLuminance, withNotePalette } from './palette.ts'
+import {
+  contrastRatio,
+  GREY_INK,
+  hasNotePalette,
+  NOTE_PALETTE,
+  relativeLuminance,
+  withNotePalette,
+} from './palette.ts'
 
 // The 13 colour-style values of @tldraw/tlschema 5.4.2 (DefaultColorStyle.values).
 const TLDRAW_COLOR_NAMES = [
@@ -52,6 +59,35 @@ describe('Draftroom note palette', () => {
   })
 })
 
+// tldraw 5.4.2's surfaces grey text sits on (defaultThemes.ts): the canvas background, a frame's fill,
+// white, and the "semi" fill of a grey shape (the templates' image slots carry grey labels on it).
+const SURFACES = {
+  light: { white: '#ffffff', canvas: '#f9fafb', frame: '#fcfcfd', greySemi: '#eceef0' },
+  dark: {
+    canvas: '#101011' /* hsl(240, 5%, 6.5%) */,
+    frame: '#151719',
+    greySemi: '#33373c',
+    heading: '#23262a',
+  },
+} as const
+
+describe('grey ink (RETRO-15, F17)', () => {
+  it('meets WCAG AA (4.5:1) on every surface grey text sits on, light and dark', () => {
+    for (const mode of ['light', 'dark'] as const) {
+      for (const [surface, bg] of Object.entries(SURFACES[mode])) {
+        const ratio = contrastRatio(GREY_INK[mode], bg)
+        expect({ mode, surface, ok: ratio >= 4.5, ratio: Number(ratio.toFixed(2)) }).toMatchObject({
+          ok: true,
+        })
+      }
+    }
+  })
+  it("tldraw's own grey did not (the bug): 2.3–2.4:1 on the light canvas and white", () => {
+    expect(contrastRatio('#9fa8b2', SURFACES.light.canvas)).toBeLessThan(2.5)
+    expect(contrastRatio('#9fa8b2', SURFACES.light.white)).toBeLessThan(2.5)
+  })
+})
+
 describe('contrast math', () => {
   it('matches the WCAG reference values', () => {
     expect(relativeLuminance('#ffffff')).toBeCloseTo(1, 5)
@@ -86,7 +122,7 @@ describe('withNotePalette', () => {
     } as unknown as TLTheme
   }
 
-  it('replaces only note fill/text and keeps every other value', () => {
+  it('replaces only note fill/text and the grey ink, and keeps every other value', () => {
     const before = fakeTheme()
     const snapshot = JSON.stringify(before)
     const after = withNotePalette(before)
@@ -97,8 +133,16 @@ describe('withNotePalette', () => {
     expect(light.black?.solid).toBe('#123456')
     expect(dark.blue?.noteFill).toBe('#2f4180')
     expect(dark.blue?.noteText).toBe('#f4f1ea')
+    expect(light.grey?.solid).toBe(GREY_INK.light)
+    expect(dark.grey?.solid).toBe(GREY_INK.dark)
+    expect(light.grey?.fill).toBe('#123456')
+    expect(light.blue?.solid).toBe('#123456')
     expect((after.colors.light as unknown as Record<string, string>).background).toBe('#ffffff')
     expect(hasNotePalette(before)).toBe(false)
     expect(hasNotePalette(after)).toBe(true)
+    // a theme with the note palette but tldraw's grey is re-patched
+    const staleGrey = JSON.parse(JSON.stringify(after))
+    staleGrey.colors.light.grey.solid = '#9fa8b2'
+    expect(hasNotePalette(staleGrey)).toBe(false)
   })
 })

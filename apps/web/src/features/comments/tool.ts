@@ -1,13 +1,14 @@
 // The comment tool: a tldraw StateNode registered at runtime with `editor.root.addChild` (public in
 // 5.4.2; features cannot pass <Tldraw tools>). Click a shape to attach a comment to it, click empty
-// canvas to pin one there; dragging pans like the hand tool; Esc closes the composer, then returns to
-// the select tool. Works on read-only canvases (commenters): it never writes to the document.
+// canvas to pin one there; dragging pans like the hand tool; Enter comments from the keyboard (on
+// the selected object, or at the middle of the view when nothing is selected); Esc closes the
+// composer, then returns to the select tool. Works on read-only canvases (commenters): it never writes to the document.
 //
 // The tool id is 'comment', the id tldraw's own toolbar/quick-action slots look for. Its kbd is gated
 // by tldraw's commenting licence, so the C shortcut is also bound through an action (overrides.ts).
 
 import type { Editor } from 'tldraw'
-import { StateNode, type TLPointerEventInfo, Vec } from 'tldraw'
+import { StateNode, type TLKeyboardEventInfo, type TLPointerEventInfo, Vec } from 'tldraw'
 import type { Point } from './model.ts'
 
 export const COMMENT_TOOL_ID = 'comment'
@@ -15,6 +16,8 @@ export const COMMENT_TOOL_ID = 'comment'
 export interface CommentToolHandler {
   /** A click (not a drag) at a page point. */
   place(pagePoint: Point): void
+  /** Enter with the board focused: comment on the selection, or at the middle of the view. */
+  placeFromKeyboard?(): void
   /** Esc: close the composer/popover; return false when nothing was open (the tool then exits). */
   cancel(): boolean
   enter?(): void
@@ -77,6 +80,12 @@ export class CommentTool extends StateNode {
     if (dragged) this.editor.setCursor({ type: 'comment', rotation: 0 })
     if (!wasDown || dragged) return
     handlers.get(this.editor)?.place(Vec.From(this.editor.inputs.getCurrentPagePoint()))
+  }
+
+  override onKeyDown(info: TLKeyboardEventInfo) {
+    if (info.key !== 'Enter' || info.shiftKey || info.altKey || info.ctrlKey || info.metaKey) return
+    if (this.down) return
+    handlers.get(this.editor)?.placeFromKeyboard?.()
   }
 
   override onCancel() {

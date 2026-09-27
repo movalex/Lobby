@@ -240,3 +240,56 @@ describe('CommentsStore', () => {
     expect(api.markNotificationsRead).toHaveBeenCalledWith({ ids: [item.id] })
   })
 })
+
+describe('live bell and resolve feedback', () => {
+  it('refreshes the bell right away when someone asks for access (and not for other sharing changes)', async () => {
+    vi.useFakeTimers()
+    try {
+      const api = fakeApi()
+      const s = make(api)
+      s.handleEvent('sharing.changed', { reason: 'visibility' })
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(api.notifications).not.toHaveBeenCalled()
+      s.handleEvent('sharing.changed', { reason: 'access-request' })
+      await vi.advanceTimersByTimeAsync(0)
+      expect(api.notifications).toHaveBeenCalledTimes(1)
+      s.handleEvent('sharing.changed', { reason: 'access-request-approved' })
+      await vi.advanceTimersByTimeAsync(0)
+      expect(api.notifications).toHaveBeenCalledTimes(2)
+      s.handleEvent('sharing.changed', 'garbage')
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(api.notifications).toHaveBeenCalledTimes(2)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('tells the UI when I resolve an open thread (for its Undo), not when I reopen one', async () => {
+    const open = makeThread(ANN)
+    const resolved = { ...open, status: 'resolved' as const, updatedAt: '2030-01-01T00:00:00.000Z' }
+    const api = fakeApi({ threads: [open], reads: {} })
+    api.setStatus = vi.fn(async (_id: string, action: 'resolve' | 'reopen') => {
+      if (action === 'reopen') return { ...open, updatedAt: '2030-01-02T00:00:00.000Z' }
+      // The server's board event can arrive before the response does.
+      store?.handleEvent('comments.thread', { thread: resolved })
+      return resolved
+    })
+    const onResolved = vi.fn()
+    store = new CommentsStore({
+      boardId: BOARD,
+      meId: ME,
+      canComment: true,
+      api,
+      storage: memoryStorage(),
+      onResolved,
+    })
+    await store.load()
+    expect(await store.setStatus(open.id, 'resolve')).toBe(true)
+    expect(onResolved).toHaveBeenCalledTimes(1)
+    expect(onResolved.mock.calls[0]?.[0]).toMatchObject({ id: open.id, status: 'resolved' })
+    // Undo = reopen: no second "resolved" message.
+    expect(await store.setStatus(open.id, 'reopen')).toBe(true)
+    expect(store.thread(open.id)?.status).toBe('open')
+    expect(onResolved).toHaveBeenCalledTimes(1)
+  })
+})

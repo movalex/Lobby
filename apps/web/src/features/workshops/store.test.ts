@@ -289,3 +289,82 @@ describe('WorkshopStore', () => {
     expect(h.store.getSnapshot().participation).toBe('joined')
   })
 })
+
+describe('results news (RETRO-08)', () => {
+  const results = [
+    { shapeId: 'shape:a', count: 4, rank: 1 },
+    { shapeId: 'shape:b', count: 2, rank: 2 },
+  ]
+  const revealed = () =>
+    voteState({
+      session: { ...voteState().session, status: 'revealed', revealedAt: ISO(5_000) },
+      results,
+      totalVotesCast: 6,
+    })
+
+  it('announces results this tab saw arrive (event, then the refetch), once, until dismissed', async () => {
+    const h = harness({ timer: null, vote: voteState(), serverNow: ISO(0) })
+    await h.store.refresh()
+    expect(h.store.getSnapshot().resultsNews).toBeNull()
+    // The facilitator reveals: aggregates first (status), then the results event.
+    h.setServer({ timer: null, vote: revealed(), serverNow: ISO(5_000) })
+    h.events.emit('workshop.vote', {
+      sessionId: SID,
+      status: 'revealed',
+      totalVotesCast: 6,
+      participantsDone: 2,
+      participants: 2,
+      endsAt: null,
+    })
+    await flush()
+    const news = h.store.getSnapshot().resultsNews
+    expect(news).toMatchObject({ sessionId: SID })
+    h.events.emit('workshop.vote.results', { sessionId: SID, results, totalVotesCast: 6, participants: 2 })
+    await h.store.refresh()
+    // Still the same piece of news, not a second one.
+    expect(h.store.getSnapshot().resultsNews?.seq).toBe(news?.seq)
+    h.store.dismissResultsNews()
+    expect(h.store.getSnapshot().resultsNews).toBeNull()
+    await h.store.refresh()
+    expect(h.store.getSnapshot().resultsNews).toBeNull()
+  })
+
+  it('the results event alone is news too', async () => {
+    const h = harness({
+      timer: null,
+      vote: voteState({ session: { ...voteState().session, status: 'closed' } }),
+      serverNow: ISO(0),
+    })
+    await h.store.refresh()
+    h.events.emit('workshop.vote.results', { sessionId: SID, results, totalVotesCast: 6, participants: 2 })
+    expect(h.store.getSnapshot().resultsNews).toMatchObject({ sessionId: SID })
+  })
+
+  it('a board opened after the reveal (a late joiner) gets no news', async () => {
+    const h = harness({ timer: null, vote: revealed(), serverNow: ISO(0) })
+    await h.store.refresh()
+    await h.store.refresh()
+    expect(h.store.getSnapshot().vote?.results).toHaveLength(2)
+    expect(h.store.getSnapshot().resultsNews).toBeNull()
+  })
+
+  it('a new vote clears the news of the last one', async () => {
+    const h = harness({ timer: null, vote: voteState(), serverNow: ISO(0) })
+    await h.store.refresh()
+    h.events.emit('workshop.vote.results', { sessionId: SID, results, totalVotesCast: 6, participants: 2 })
+    expect(h.store.getSnapshot().resultsNews).not.toBeNull()
+    const other = voteState({ session: { ...voteState().session, id: 'vot_zzzzzzzzzzzzzzzzzzzz' } })
+    h.setServer({ timer: null, vote: other, serverNow: ISO(9_000) })
+    await h.store.refresh()
+    expect(h.store.getSnapshot().resultsNews).toBeNull()
+  })
+
+  it('announcements repeat when the same text comes twice', () => {
+    const h = harness({ timer: null, vote: null, serverNow: ISO(0) })
+    h.store.announce('Voted. 2 of 3 left')
+    const first = h.store.getSnapshot().announcement
+    h.store.announce('Voted. 2 of 3 left')
+    expect(h.store.getSnapshot().announcement?.text).toBe('Voted. 2 of 3 left')
+    expect(h.store.getSnapshot().announcement?.seq).toBe((first?.seq ?? 0) + 1)
+  })
+})

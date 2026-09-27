@@ -3,6 +3,7 @@ import { api } from '../api/client.ts'
 import { useSession } from '../auth/session.tsx'
 import { Wordmark } from '../brand/Wordmark.tsx'
 import { RequestAccess } from '../features/sharing/RequestAccess.tsx'
+import type { BoardRole } from '../lib/permissions.ts'
 import { linkClick, matchRoute } from '../lib/routing.ts'
 
 export function LoadingScreen({ label = 'Loading…', testId }: { label?: string; testId?: string }) {
@@ -53,9 +54,12 @@ export function MessageScreen({
 export function NoAccessScreen({
   thing = 'board',
   revoked = false,
+  previousRole = null,
 }: {
   thing?: 'board' | 'workspace'
   revoked?: boolean
+  /** The role they had before it ended (revoked while open): the request form starts from it. */
+  previousRole?: BoardRole | null
 }) {
   const { signOut, state } = useSession()
   const here = `${location.pathname}${location.search}`
@@ -83,7 +87,12 @@ export function NoAccessScreen({
               ? `Your access was removed or changed while you had it open, or the ${thing} was moved to trash.`
               : `It may not exist, it may have been moved to trash, or it hasn't been shared with you.`}
           </p>
-          <p>Ask its owner to share it with you, or open the invite link they sent you.</p>
+          {/* An old invite link cannot bring back access that was removed (PRI-04). */}
+          <p>
+            {revoked
+              ? 'Ask its owner for access again: they see your request in their Share dialog.'
+              : 'Ask its owner to share it with you, or open the invite link they sent you.'}
+          </p>
           {boardId && userId && (
             <div className="dr-noaccess__request">
               <RequestAccess
@@ -91,6 +100,7 @@ export function NoAccessScreen({
                 boardId={boardId}
                 userId={userId}
                 currentRole={null}
+                defaultRole={previousRole === 'owner' ? 'editor' : previousRole}
                 onApprovedCheck={checkApproved}
               />
             </div>

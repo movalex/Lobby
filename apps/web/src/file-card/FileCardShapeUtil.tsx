@@ -4,8 +4,9 @@ import {
   fileCardShapeMigrations,
   fileCardShapeProps,
 } from '@draftroom/canvas-schema'
-import { BaseBoxShapeUtil, type TLIndicatorPath } from 'tldraw'
+import { BaseBoxShapeUtil, type TLIndicatorPath, type TLShapePartial } from 'tldraw'
 import { FileCardView } from './FileCardView.tsx'
+import { openCardOriginal } from './open-original.ts'
 
 const KIND_LABEL: Record<FileCardShape['props']['kind'], string> = {
   pdf: 'PDF',
@@ -38,6 +39,21 @@ export class FileCardShapeUtil extends BaseBoxShapeUtil<FileCardShape> {
 
   override getText(shape: FileCardShape) {
     return shape.props.name
+  }
+
+  /** A card has nothing to type into (its name comes from the upload). */
+  override canEdit() {
+    return false
+  }
+
+  /**
+   * Double-click opens the original in a new tab (the Download link's URL). Returning a (no-op)
+   * change matters: with none, tldraw treats the double-click as one on empty canvas and starts
+   * editing a new, empty text shape over the card.
+   */
+  override onDoubleClick(shape: FileCardShape): TLShapePartial<FileCardShape> {
+    openCardOriginal(this.editor, shape)
+    return { id: shape.id, type: shape.type }
   }
 
   override getAriaDescriptor(shape: FileCardShape) {

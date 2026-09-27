@@ -3,6 +3,7 @@
 import { useEffect } from 'react'
 import { DefaultCursor, type TLCursorProps, type TLUiOverrides, useEditor, useValue } from 'tldraw'
 import type { BoardFeature, FeatureContext } from '../types.ts'
+import { readSessionSettings } from '../workshops/session-settings.ts'
 import { getController } from './controller.ts'
 import { ExportDialog } from './ExportDialog.tsx'
 import { PresentOverlay } from './PresentOverlay.tsx'
@@ -78,11 +79,19 @@ function PresentExportOverlay({ ctx }: { ctx: FeatureContext }) {
   return <PresentOverlay editor={ctx.editor} presenter={controller.presenter} />
 }
 
-/** Other people's cursors render through this editor component: nothing while presenting. */
+/**
+ * Other people's cursors render through this editor component: nothing while presenting, and nothing
+ * on anyone's screen while a facilitator hides cursors for the session (workshops' "Hide everyone's
+ * cursors", RETRO-07a). Each person's own pointer and laser are not drawn by this slot and stay.
+ */
 function PresentAwareCursor(props: TLCursorProps) {
   const editor = useEditor()
-  const presenting = useValue('dr-presenting', () => getController(editor).presenter.isPresenting(), [editor])
-  return presenting ? null : <DefaultCursor {...props} />
+  const hidden = useValue(
+    'dr-cursor-hidden',
+    () => getController(editor).presenter.isPresenting() || readSessionSettings(editor).hideCursors,
+    [editor],
+  )
+  return hidden ? null : <DefaultCursor {...props} />
 }
 
 const overrides: TLUiOverrides = {

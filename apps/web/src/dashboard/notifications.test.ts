@@ -1,0 +1,46 @@
+import type { NotificationItem } from '@draftroom/contracts'
+import { describe, expect, it } from 'vitest'
+import { markLocallyRead, newsByBoard, newsLabel, notificationHref } from './notifications.ts'
+
+const n = (id: string, boardId: string, kind: NotificationItem['kind'], read = false): NotificationItem => ({
+  id: `ntf_${id.padEnd(12, '0')}`,
+  kind,
+  boardId,
+  boardTitle: 'Board',
+  threadId: kind === 'access_request' ? null : `cth_${id.padEnd(12, '0')}`,
+  commentId: null,
+  actor: null,
+  snippet: null,
+  createdAt: '2026-09-27T10:00:00.000Z',
+  readAt: read ? '2026-09-27T11:00:00.000Z' : null,
+})
+
+describe('dashboard notifications (PRI-05a)', () => {
+  it('groups unread notifications by board, noting a mention', () => {
+    const news = newsByBoard([
+      n('a', 'b-one', 'mention'),
+      n('b', 'b-one', 'reply'),
+      n('c', 'b-one', 'reply', true),
+      n('d', 'b-two', 'reply'),
+    ])
+    expect(news.get('b-one')).toEqual({ unread: 2, mentioned: true })
+    expect(news.get('b-two')).toEqual({ unread: 1, mentioned: false })
+    expect(news.has('b-three')).toBe(false)
+    expect(newsLabel({ unread: 2, mentioned: true })).toBe('2 new · mentioned you')
+    expect(newsLabel({ unread: 1, mentioned: false })).toBe('1 new')
+  })
+
+  it('links like the board bell: to the thread when there is one', () => {
+    expect(notificationHref({ boardId: 'b-one', threadId: 'cth_x' })).toBe('/b/b-one?thread=cth_x')
+    expect(notificationHref({ boardId: 'b-one', threadId: null })).toBe('/b/b-one')
+  })
+
+  it('marks read locally at once (one, or all), keeping the server count honest', () => {
+    const inbox = { notifications: [n('a', 'b-one', 'mention'), n('b', 'b-one', 'reply')], unreadCount: 5 }
+    const one = markLocallyRead(inbox, { ids: [inbox.notifications[0]?.id ?? ''] }, 'now')
+    expect(one.unreadCount).toBe(4)
+    expect(one.notifications[0]?.readAt).toBe('now')
+    expect(one.notifications[1]?.readAt).toBeNull()
+    expect(markLocallyRead(inbox, { all: true }, 'now').unreadCount).toBe(0)
+  })
+})

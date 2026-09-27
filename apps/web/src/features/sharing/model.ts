@@ -42,13 +42,36 @@ const VIS_DESCRIPTION: Record<ShareState['visibility'], (ws: string) => string> 
   workspace_edit: (ws) => `Everyone in ${ws} can edit this board`,
 }
 
+/** "3:40 PM" today, "Sep 28, 3:40 PM" otherwise (local time; workshop links last hours, not days). */
+export function shortTime(iso: string, now: Date = new Date()): string {
+  const d = new Date(iso)
+  if (!Number.isFinite(d.getTime())) return ''
+  const time = d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
+  const sameDay =
+    d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate()
+  return sameDay ? time : `${shortDate(iso, now)}, ${time}`
+}
+
 /**
- * The header badge (PRS-03). A review link is the widest audience, so it leads the label when one is
- * open: the most permissive open link and the date it (last) expires.
+ * The header badge (PRS-03). A link is the widest audience, so it leads the label when one is open:
+ * the most permissive open link and when it (last) expires. A workshop (edit) link beats a review
+ * link and shows its time of day (RETRO-04a).
  */
 export function shareBadge(state: ShareState, workspaceName: string, now: Date = new Date()): ShareBadge {
   const requests = state.pendingRequests ?? 0
   const vis = VIS_DESCRIPTION[state.visibility](workspaceName)
+  const workshop = state.links.filter((l) => l.role === 'editor')
+  if (workshop.length) {
+    const last = workshop.reduce((a, b) => (Date.parse(b.expiresAt) > Date.parse(a.expiresAt) ? b : a))
+    const until = shortTime(last.expiresAt, now)
+    const count = state.links.length > 1 ? ` (${state.links.length} links)` : ''
+    return {
+      kind: 'link',
+      label: `Link: edit · until ${until}`,
+      description: `Anyone with the workshop link can edit after signing in, until ${until}${count}. ${vis}.`,
+      requests,
+    }
+  }
   if (state.links.length) {
     const top = state.links.some((l) => l.role === 'commenter') ? 'commenter' : 'viewer'
     const ofTop = state.links.filter((l) => l.role === top)
@@ -125,6 +148,19 @@ export function safeLocalStorage(): Storage | null {
 
 export const REVIEW_LINK_DAY_OPTIONS = [1, 3, 7, 14, 30] as const
 export const REVIEW_LINK_DEFAULT_DAY = 14
+/** Workshop (edit) links: hours, 3 by default, 24 at most (the server caps the same). */
+export const WORKSHOP_LINK_HOUR_OPTIONS = [1, 2, 3, 4, 8, 24] as const
+export const WORKSHOP_LINK_DEFAULT_HOURS = 3
+
+export function hoursLabel(hours: number): string {
+  return hours === 1 ? '1 hour' : `${hours} hours`
+}
+
+/** Whether "+1 h" can still move `expiresAt` (it cannot pass the link's cap). */
+export function canExtend(link: { expiresAt: string; maxExpiresAt: string | null }): boolean {
+  if (!link.maxExpiresAt) return false
+  return Date.parse(link.maxExpiresAt) - Date.parse(link.expiresAt) >= 60_000
+}
 
 export function daysLabel(days: number): string {
   return days === 1 ? '1 day' : `${days} days`
@@ -136,4 +172,19 @@ export function requestableRoles(current: 'owner' | RequestableRole | null): Req
   if (!current) return all
   const rank = { viewer: 1, commenter: 2, editor: 3, owner: 4 }
   return all.filter((r) => rank[r] > rank[current])
+}
+
+/**
+ * The preselected role on a request form (PRI-16): the role someone had before losing access, when
+ * it can be asked for; Edit for a viewer/commenter asking for more; otherwise Comment.
+ */
+export function pickDefaultRole(
+  roles: readonly RequestableRole[],
+  currentRole: 'owner' | RequestableRole | null,
+  previous?: RequestableRole | 'owner' | null,
+): RequestableRole {
+  const wanted = previous === 'owner' ? 'editor' : previous
+  if (wanted && roles.includes(wanted)) return wanted
+  if (currentRole) return roles[0] ?? 'editor'
+  return roles.includes('commenter') ? 'commenter' : (roles[0] ?? 'editor')
 }

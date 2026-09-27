@@ -50,20 +50,20 @@ export const startViewResult = perEditor<string | null>('dr-start-view', () => n
 export const activePanel = perEditor<string | null>('dr-active-panel', () => null)
 
 // ---- minimap (MAK-11): one per-browser preference, like tldraw's own (which lives in React state and
-// so cannot be toggled from a shortcut).
-const MINIMAP_KEY = 'draftroom:minimap-open'
-function readMinimapPref(): boolean {
+// so cannot be toggled from a shortcut). PERF-03: closed unless this browser chose to open it. An open
+// minimap redraws on every camera change, which heavy boards pay for on every frame while panning
+// zoomed out; closed, it is not mounted at all. M (or the button) opens it, and the choice is kept.
+export const MINIMAP_KEY = 'draftroom:minimap-open'
+/** The stored choice wins; nothing stored (or no storage) means closed. */
+export function readMinimapPref(storage?: Pick<Storage, 'getItem'> | null): boolean {
   try {
-    const v = localStorage.getItem(MINIMAP_KEY)
-    return v === null ? true : v === 'true'
+    const store = storage === undefined ? globalThis.localStorage : storage
+    return store?.getItem(MINIMAP_KEY) === 'true'
   } catch {
-    return true
+    return false
   }
 }
-export const minimapOpen = atom(
-  'dr-minimap-open',
-  typeof localStorage === 'undefined' ? true : readMinimapPref(),
-)
+export const minimapOpen = atom('dr-minimap-open', readMinimapPref())
 export function setMinimapOpen(open: boolean) {
   minimapOpen.set(open)
   try {
@@ -103,3 +103,15 @@ export interface PendingPaste {
   asText(): void | Promise<void>
 }
 export const pendingPaste = perEditor<PendingPaste | null>('dr-pending-paste', () => null)
+
+// ---- locked hint (F8)
+export interface LockedHint {
+  id: number
+  /** The locked shape (the hit shape itself, or its locked frame / group). */
+  sourceId: string
+  message: string
+  unlockLabel: string
+  /** Page point of the click. */
+  point: { x: number; y: number }
+}
+export const lockedHint = perEditor<LockedHint | null>('dr-locked-hint', () => null)

@@ -81,6 +81,12 @@ export function frameRecords(editor: Editor) {
   return [editor.getCurrentPage(), ...shapes]
 }
 
+/** What gets the focus after a presentation: what had it before, else the Present button. */
+export function focusTarget(before: HTMLElement | null): HTMLElement | null {
+  if (before?.isConnected && before !== document.body) return before
+  return document.querySelector<HTMLElement>('[data-testid="present-button"]')
+}
+
 function focusables(root: HTMLElement): HTMLElement[] {
   return Array.from(
     root.querySelectorAll<HTMLElement>('button:not([disabled]), [href], [tabindex]:not([tabindex="-1"])'),
@@ -274,11 +280,18 @@ export function createPresenter(editor: Editor): Presenter {
     let mode: FullscreenMode = 'window'
     if (typeof el.requestFullscreen === 'function' && document.fullscreenEnabled !== false) {
       mode = 'native'
-      el.requestFullscreen({ navigationUI: 'hide' }).catch(() => {
-        // Denied (permissions policy, no user activation): stay in the in-window presentation.
-        const s = state.get()
-        if (s && s.mode === 'native') state.set({ ...s, mode: 'window' })
-      })
+      el.requestFullscreen({ navigationUI: 'hide' }).then(
+        () => {
+          // Esc (or Exit) came before the browser had entered fullscreen: stop() found nothing to
+          // leave, so leave it now instead of stranding the board full screen without a presentation.
+          if (!state.get() && document.fullscreenElement === el) document.exitFullscreen().catch(() => {})
+        },
+        () => {
+          // Denied (permissions policy, no user activation): stay in the in-window presentation.
+          const s = state.get()
+          if (s && s.mode === 'native') state.set({ ...s, mode: 'window' })
+        },
+      )
     }
     document.documentElement.setAttribute(PRESENTING_ATTR, 'true')
     listenKeyup()
@@ -310,8 +323,18 @@ export function createPresenter(editor: Editor): Presenter {
     if (swallowed.size === 0) unlistenKeyup()
     else keyupTimer = setTimeout(unlistenKeyup, 2000)
     document.documentElement.removeAttribute(PRESENTING_ATTR)
+    // Focus goes back where it was when the presentation started (the Present button after a click,
+    // the board after Ctrl/Cmd+Alt+Enter), or to the Present button when that is gone (RETRO-22b).
+    // Leaving fullscreen and removing the overlay settle over the next frames and can drop the focus
+    // to <body>: it is put back then too.
+    const restoreFocus = () => {
+      if (state.get()) return
+      const active = document.activeElement
+      if (active && active !== document.body && !overlay?.contains(active)) return
+      focusTarget(s.saved.focus)?.focus({ preventScroll: true })
+    }
     if (document.fullscreenElement && document.fullscreenElement === container()) {
-      document.exitFullscreen().catch(() => {})
+      document.exitFullscreen().then(restoreFocus, () => {})
     }
     const { saved } = s
     unsafe__withoutCapture(() => {
@@ -326,8 +349,8 @@ export function createPresenter(editor: Editor): Presenter {
         if (!state.get()) restoreCamera(saved)
       }),
     )
-    const focus = saved.focus
-    if (focus?.isConnected) focus.focus({ preventScroll: true })
+    focusTarget(saved.focus)?.focus({ preventScroll: true })
+    requestAnimationFrame(() => requestAnimationFrame(restoreFocus))
   }
 
   return {

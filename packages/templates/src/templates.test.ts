@@ -274,12 +274,33 @@ describe.each(TEMPLATES.map((t) => [t.id, t] as const))('%s template', (id, def)
     }
   })
 
-  it('leaves everything editable: unlocked, unrotated, opaque', () => {
+  it('locks headings, instructions and image slots; frames, notes and arrows stay editable (PRE-07)', () => {
     for (const s of shapesOf(records)) {
-      expect(s.isLocked).toBe(false)
       expect(s.rotation).toBe(0)
       expect(s.opacity).toBe(1)
+      // A locked frame would freeze its children (F8); starter notes must stay editable (PRE-02).
+      if (s.type === 'frame' || s.type === 'note' || s.type === 'arrow') expect(s.isLocked).toBe(false)
     }
+    for (const frame of framesOf(records)) {
+      const kids = childrenOf(records, frame.id)
+      // The heading (first child) and the grey instruction line under it.
+      expect(kids[0]?.isLocked, `heading of ${frame.props.name}`).toBe(true)
+      for (const t of kids.filter((k) => k.type === 'text' && k.props.color === 'grey' && k.y < 150)) {
+        expect(t.isLocked, `instruction "${textOf(t)}"`).toBe(true)
+      }
+    }
+    const slots = shapesOf(records).filter((s) => s.meta.draftroomSlot === 'image')
+    for (const slot of slots) {
+      expect(slot.type).toBe('geo')
+      expect(slot.isLocked).toBe(true)
+      expect((slot as TLGeoShape).props.dash).toBe('dashed')
+    }
+    // Every dashed grey placeholder box is a marked slot, and only those carry the marker.
+    const dashed = shapesOf(records).filter(
+      (s) => s.type === 'geo' && (s as TLGeoShape).props.dash === 'dashed',
+    )
+    expect(slots.map((s) => s.id).sort()).toEqual(dashed.map((s) => s.id).sort())
+    if (['storyboard', 'mood-board', 'pitch-outline'].includes(id)) expect(slots.length).toBeGreaterThan(0)
   })
 
   it('uses unique index keys per parent, with arrows above the shapes they connect', () => {

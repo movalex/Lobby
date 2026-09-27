@@ -35,6 +35,32 @@ export function timerPhase(timer: WorkshopTimer | null, localNowMs: number, offs
   return timer.status
 }
 
+/**
+ * How long a finished timer stays in its "Time's up" state (red pill, 0:00) before the pill goes back
+ * to plain "Timer". The server keeps it finished; a facilitator can still Reset it.
+ */
+export const TIMES_UP_ALERT_MS = 10_000
+
+/** What the timer pill shows: the phase, or 'ended' once a finished timer's alert is over. */
+export type TimerDisplay = TimerPhase | 'ended'
+
+/**
+ * The phase as the pill and the presentation show it: a timer that finished more than
+ * TIMES_UP_ALERT_MS ago (on the server's clock) is 'ended', so it no longer shouts "Time's up" at
+ * people, including those who open the board later. A finished timer without an end time is 'ended'.
+ */
+export function timerDisplayPhase(
+  timer: WorkshopTimer | null,
+  localNowMs: number,
+  offsetMs: number,
+): TimerDisplay {
+  const phase = timerPhase(timer, localNowMs, offsetMs)
+  if (phase !== 'finished') return phase
+  const ends = Date.parse(timer?.endsAt ?? '')
+  if (Number.isNaN(ends)) return 'ended'
+  return localNowMs + offsetMs - ends >= TIMES_UP_ALERT_MS ? 'ended' : 'finished'
+}
+
 /** "4:05", "0:09", "1:02:03". Rounds up, so the display reaches 0:00 exactly when time is up. */
 export function formatClock(ms: number): string {
   const total = Math.max(0, Math.ceil(ms / 1000))

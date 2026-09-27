@@ -104,3 +104,25 @@ export function placedTextFor(
       return { ...base, fontSizePx: 14, align: 'start', verticalAlign: 'start', inset: 12 }
   }
 }
+
+/** Shapes that hide what is under them on a page (photos, video posters). */
+export const OCCLUDING_TYPES = new Set(['image', 'video'])
+
+export interface PaintedBox {
+  bounds: TextBox
+  /** Paint order on the page: higher is drawn later (on top). */
+  order: number
+}
+
+/**
+ * Whether a shape's text is hidden under an image drawn on top of it: an image later in the paint
+ * order covers its whole box. Such text is left out of the PDF's text layer (a search would otherwise
+ * find words nobody can see on the page).
+ */
+export function hiddenUnderImage(target: PaintedBox, images: readonly PaintedBox[]): boolean {
+  const t = target.bounds
+  return images.some(
+    ({ bounds: b, order }) =>
+      order > target.order && b.x <= t.x && b.y <= t.y && b.x + b.w >= t.x + t.w && b.y + b.h >= t.y + t.h,
+  )
+}
