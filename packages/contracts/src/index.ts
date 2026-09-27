@@ -1,2 +1,155 @@
-// Placeholder: implemented in milestone 1 (see docs/M1-CONTRACTS.md).
-export {}
+// HTTP API request/response shapes (docs/M1-CONTRACTS.md §5). Browser-safe; shared by apps/api
+// (validates inputs, shapes outputs) and apps/web (parses responses). Extend, never silently change.
+
+import { BOARD_ROLES, BOARD_STATUSES, BOARD_VISIBILITIES, WORKSPACE_ROLES } from '@draftroom/permissions'
+import { z } from 'zod'
+
+export const BoardRole = z.enum(BOARD_ROLES)
+export const WorkspaceRole = z.enum(WORKSPACE_ROLES)
+export const BoardVisibility = z.enum(BOARD_VISIBILITIES)
+export const BoardStatus = z.enum(BOARD_STATUSES)
+
+export const BOARD_ID_PATTERN = /^[a-z0-9][a-z0-9_-]{2,63}$/
+export const BoardId = z.string().regex(BOARD_ID_PATTERN)
+const prefixed = (p: string) => z.string().regex(new RegExp(`^${p}_[0-9A-Za-z]{10,40}$`))
+export const UserId = prefixed('usr')
+export const WorkspaceId = prefixed('wsp')
+export const ProjectId = prefixed('prj')
+export const InvitationId = prefixed('inv')
+
+export const DevHandle = z.string().regex(/^[a-z0-9-]{1,32}$/)
+const Title = z.string().trim().min(1).max(120)
+const Name = z.string().trim().min(1).max(80)
+const IsoDate = z.string()
+
+// ---- entities ------------------------------------------------------------------------------------
+
+export const User = z.object({
+  id: UserId,
+  name: z.string(),
+  handle: z.string().nullable(),
+  color: z.string(),
+  avatarUrl: z.string().nullable(),
+})
+export type User = z.infer<typeof User>
+
+export const WorkspaceSummary = z.object({ id: WorkspaceId, name: z.string(), role: WorkspaceRole })
+export type WorkspaceSummary = z.infer<typeof WorkspaceSummary>
+
+export const Project = z.object({
+  id: ProjectId,
+  workspaceId: WorkspaceId,
+  name: z.string(),
+  createdAt: IsoDate,
+  archivedAt: IsoDate.nullable(),
+})
+export type Project = z.infer<typeof Project>
+
+export const Board = z.object({
+  id: BoardId,
+  workspaceId: WorkspaceId,
+  projectId: ProjectId.nullable(),
+  title: z.string(),
+  visibility: BoardVisibility,
+  status: BoardStatus,
+  trashedAt: IsoDate.nullable(),
+  createdBy: UserId,
+  createdAt: IsoDate,
+  updatedAt: IsoDate,
+  lastOpenedAt: IsoDate.nullable(),
+})
+export type Board = z.infer<typeof Board>
+
+/** A board as the caller sees it: always carries the caller's effective role. */
+export const BoardWithRole = Board.extend({ role: BoardRole })
+export type BoardWithRole = z.infer<typeof BoardWithRole>
+
+export const BoardMember = z.object({
+  user: User,
+  role: BoardRole,
+  source: z.enum(['grant', 'workspace']),
+})
+export type BoardMember = z.infer<typeof BoardMember>
+
+export const WorkspaceMember = z.object({ user: User, role: WorkspaceRole })
+export type WorkspaceMember = z.infer<typeof WorkspaceMember>
+
+// ---- auth ----------------------------------------------------------------------------------------
+
+export const AuthConfig = z.object({
+  providers: z.array(z.enum(['dev', 'clerk'])),
+  clerkPublishableKey: z.string().optional(),
+})
+export type AuthConfig = z.infer<typeof AuthConfig>
+
+export const DevLoginInput = z.object({ handle: DevHandle, name: Name.optional() })
+export type DevLoginInput = z.infer<typeof DevLoginInput>
+
+export const Me = z.object({ user: User, workspaces: z.array(WorkspaceSummary) })
+export type Me = z.infer<typeof Me>
+
+// ---- boards --------------------------------------------------------------------------------------
+
+export const ListBoardsQuery = z.object({
+  status: BoardStatus.optional(),
+  q: z.string().max(120).optional(),
+  projectId: ProjectId.optional(),
+})
+export const ListBoardsResponse = z.object({ boards: z.array(BoardWithRole) })
+
+export const CreateBoardInput = z.object({ title: Title, projectId: ProjectId.nullable().optional() })
+export const PatchBoardInput = z
+  .object({ title: Title, projectId: ProjectId.nullable(), visibility: BoardVisibility })
+  .partial()
+  .refine((v) => Object.keys(v).length > 0, 'nothing to update')
+
+export const BoardDetail = z.object({
+  board: Board,
+  role: BoardRole,
+  workspace: z.object({ id: WorkspaceId, name: z.string() }),
+})
+export type BoardDetail = z.infer<typeof BoardDetail>
+
+export const PutMemberInput = z.object({ role: BoardRole })
+export const ListMembersResponse = z.object({ members: z.array(BoardMember) })
+
+export const CreateProjectInput = z.object({ name: Name })
+export const PatchProjectInput = z.object({ name: Name.optional(), archived: z.boolean().optional() })
+
+// ---- invitations ---------------------------------------------------------------------------------
+
+export const CreateWorkspaceInvitationInput = z.object({ role: z.enum(['admin', 'member', 'guest']) })
+export const CreateBoardInvitationInput = z.object({ role: BoardRole.exclude(['owner']) })
+export const InvitationCreated = z.object({ id: InvitationId, url: z.string(), expiresAt: IsoDate })
+export type InvitationCreated = z.infer<typeof InvitationCreated>
+
+export const InvitationPreview = z.object({
+  workspace: z.object({ id: WorkspaceId, name: z.string() }),
+  board: z.object({ id: BoardId, title: z.string() }).nullable(),
+  role: z.string(),
+  invitedBy: z.object({ name: z.string() }),
+  expiresAt: IsoDate,
+})
+export type InvitationPreview = z.infer<typeof InvitationPreview>
+
+export const InvitationAccepted = z.object({ workspaceId: WorkspaceId, boardId: BoardId.nullable() })
+
+// ---- sync tickets ----------------------------------------------------------------------------------
+
+export const TicketResponse = z.object({
+  ticket: z.string(),
+  expiresAt: z.number(),
+  role: BoardRole,
+  user: z.object({ id: UserId, name: z.string(), color: z.string() }),
+})
+export type TicketResponse = z.infer<typeof TicketResponse>
+
+// ---- internal (api <-> sync) -----------------------------------------------------------------------
+
+export const InternalAccessResponse = z.object({ role: BoardRole.nullable() })
+export const InternalAccessChanged = z.object({ boardId: BoardId, userId: UserId.optional() })
+
+// ---- errors ----------------------------------------------------------------------------------------
+
+export const ErrorBody = z.object({ error: z.object({ code: z.string(), message: z.string() }) })
+export type ErrorBody = z.infer<typeof ErrorBody>

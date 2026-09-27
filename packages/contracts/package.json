@@ -10,6 +10,7 @@
     "typecheck": "tsc -p ."
   },
   "dependencies": {
+    "@draftroom/permissions": "workspace:*",
     "zod": "catalog:"
   }
 }

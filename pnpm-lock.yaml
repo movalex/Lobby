@@ -278,6 +278,9 @@ importers:
 
   packages/contracts:
     dependencies:
+      '@draftroom/permissions':
+        specifier: workspace:*
+        version: link:../permissions
       zod:
         specifier: 'catalog:'
         version: 4.6.5
