@@ -1,0 +1,65 @@
+// api -> sync internal canvas calls (docs/M1-CONTRACTS.md §8): read a board's snapshot, seed a NEW
+// board. Other services never open the sync server's disk; they ask it over this authenticated API.
+
+import { INTERNAL_SECRET_HEADER } from '@draftroom/auth-tickets'
+
+/** A tldraw RoomSnapshot as JSON (documents + schema + clocks). Treated as opaque data here. */
+export type RoomSnapshotJson = {
+  documents: { state: Record<string, unknown>; lastChangedClock?: number }[]
+  schema?: unknown
+  [k: string]: unknown
+}
+
+export interface SyncInternalClient {
+  snapshot(boardId: string): Promise<RoomSnapshotJson>
+  /** Initializes a board that has no canvas data yet. Throws SyncSeedConflict if it already has some. */
+  seed(boardId: string, snapshot: RoomSnapshotJson): Promise<{ records: number }>
+}
+
+export class SyncSeedConflict extends Error {
+  constructor() {
+    super('board already has canvas data')
+  }
+}
+
+export class SyncUnavailable extends Error {}
+
+export function createHttpSyncInternalClient(opts: {
+  baseUrl: string
+  secret: string
+  timeoutMs?: number
+}): SyncInternalClient {
+  const base = opts.baseUrl.replace(/\/+$/, '')
+  const timeout = opts.timeoutMs ?? 15_000
+  async function call(path: string, init: RequestInit = {}) {
+    let res: Response
+    try {
+      res = await fetch(`${base}${path}`, {
+        ...init,
+        headers: { ...(init.headers ?? {}), [INTERNAL_SECRET_HEADER]: opts.secret },
+        signal: AbortSignal.timeout(timeout),
+      })
+    } catch (e) {
+      throw new SyncUnavailable(`sync unreachable: ${(e as Error).name}`)
+    }
+    return res
+  }
+  return {
+    async snapshot(boardId) {
+      const res = await call(`/internal/boards/${encodeURIComponent(boardId)}/snapshot`)
+      if (!res.ok) throw new SyncUnavailable(`snapshot failed with ${res.status}`)
+      return (await res.json()) as RoomSnapshotJson
+    },
+    async seed(boardId, snapshot) {
+      const res = await call(`/internal/boards/${encodeURIComponent(boardId)}/seed`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ snapshot }),
+      })
+      if (res.status === 409) throw new SyncSeedConflict()
+      if (!res.ok) throw new SyncUnavailable(`seed failed with ${res.status}`)
+      const body = (await res.json()) as { records?: number }
+      return { records: body.records ?? 0 }
+    },
+  }
+}

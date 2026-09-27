@@ -1726,3 +1726,93 @@ code {
   font-size: 13px;
   text-align: center;
 }
+
+/* ---- board body + feature dock (features/FeatureHost.tsx) ---------------------------------- */
+.dr-board__body {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+.dr-board__body > .dr-board__canvas {
+  flex: 1;
+  min-width: 0;
+}
+.dr-dock {
+  display: flex;
+  flex: none;
+  z-index: 2;
+  background: var(--dr-surface);
+  border-right: 1px solid var(--dr-line);
+}
+.dr-dock__rail {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 44px;
+  padding: 8px 4px;
+  border-right: 1px solid var(--dr-line);
+}
+.dr-dock[data-open="false"] .dr-dock__rail {
+  border-right: 0;
+}
+.dr-dock__tab {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--dr-ink-2);
+  cursor: pointer;
+}
+.dr-dock__tab:hover {
+  background: var(--dr-paper);
+  color: var(--dr-ink);
+}
+.dr-dock__tab[aria-pressed="true"] {
+  background: var(--dr-navy);
+  color: #fff;
+}
+.dr-dock__panel {
+  display: flex;
+  flex-direction: column;
+  width: 320px;
+  min-height: 0;
+}
+.dr-dock__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--dr-line);
+}
+.dr-dock__head h2 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 650;
+}
+.dr-dock__body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 12px;
+}
+.dr-iconbtn {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--dr-ink-2);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+}
+.dr-iconbtn:hover {
+  background: var(--dr-paper);
+  color: var(--dr-ink);
+}

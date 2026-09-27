@@ -1,5 +1,5 @@
 import type { Board } from '@draftroom/contracts'
-import { useMemo, useState } from 'react'
+import { type ReactNode, useMemo, useState } from 'react'
 import { type Editor, useValue } from 'tldraw'
 import { UserMenu } from '../auth/UserMenu.tsx'
 import { Mark } from '../brand/Wordmark.tsx'
@@ -27,6 +27,7 @@ const CONN_TITLE: Record<ConnState, string> = {
 }
 
 export function TopBar({
+  extra,
   board,
   role,
   workspace,
@@ -44,6 +45,8 @@ export function TopBar({
   editor: Editor | null
   onRename(title: string): void
   onShare(): void
+  /** Feature slot (features/FeatureHost.tsx): compact controls placed before Share. */
+  extra?: ReactNode
 }) {
   const home = workspacePath(workspace.id)
   const pill = readonlyPill(role, board.status)
@@ -95,6 +98,7 @@ export function TopBar({
         <span className="dr-pill__dot" aria-hidden="true" />
         {CONN_LABEL[conn]}
       </span>
+      {extra}
       <button
         type="button"
         className="dr-btn dr-btn--primary dr-btn--sm"

@@ -153,3 +153,9 @@ export const InternalAccessChanged = z.object({ boardId: BoardId, userId: UserId
 
 export const ErrorBody = z.object({ error: z.object({ code: z.string(), message: z.string() }) })
 export type ErrorBody = z.infer<typeof ErrorBody>
+
+// Feature schemas (docs/FEATURES-M2-CONTRACTS.md): one file per feature, owned by that feature.
+export * from './comments.ts'
+export * from './dashboard.ts'
+export * from './history.ts'
+export * from './workshops.ts'

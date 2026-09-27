@@ -19,6 +19,16 @@ import { api, isApiError, isNoAccess } from '../api/client.ts'
 import { createAssetStore } from '../assets/asset-store.ts'
 import { AssetMetaStore } from '../assets/meta-store.ts'
 import { useMe, useSession } from '../auth/session.tsx'
+import { createBoardEvents } from '../features/events.ts'
+import {
+  FeatureDock,
+  FeatureOverlays,
+  FeatureTopBarItems,
+  mergeFeatureProps,
+  useFeatureMounts,
+} from '../features/FeatureHost.tsx'
+import { BOARD_FEATURES } from '../features/registry.ts'
+import type { FeatureContext } from '../features/types.ts'
 import { FileCardShapeUtil } from '../file-card/FileCardShapeUtil.tsx'
 import { DEV_AUTH_ENABLED, safeColor } from '../lib/identity.ts'
 import type { BoardRole } from '../lib/permissions.ts'
@@ -79,6 +89,9 @@ const overrides: TLUiOverrides = {
   },
   translations: { en: { 'tool.media': 'Insert file', 'action.insert-media': 'Insert file' } },
 }
+
+// Feature slots merged once at module level: <Tldraw> must get referentially stable props.
+const featureProps = mergeFeatureProps(BOARD_FEATURES, { overrides, components })
 
 declare global {
   interface Window {
@@ -167,6 +180,7 @@ function BoardSession({
   const { refresh } = useSession()
   const [editor, setEditor] = useState<Editor | null>(null)
   const [sharing, setSharing] = useState(false)
+  const [activePanel, setActivePanel] = useState<string | null>(null)
   const editorRef = useRef<Editor | null>(null)
   const { notices, notify, dismiss } = useNotices()
 
@@ -182,6 +196,11 @@ function BoardSession({
       metaStore.stopAll()
     }
   }, [metaStore])
+
+  // One server-sent event stream per mounted board session, shared by all features.
+  const events = useMemo(() => createBoardEvents(boardId), [boardId])
+  useEffect(() => () => events.close(), [events])
+  useEffect(() => events.onAccessLost(() => handlers.current.onAccessLost()), [events])
 
   const assets = useMemo(
     () =>
@@ -289,6 +308,27 @@ function BoardSession({
     }
   }, [editor, readonly])
 
+  const featureCtx = useMemo<FeatureContext | null>(
+    () =>
+      editor
+        ? {
+            editor,
+            board,
+            role,
+            me,
+            workspace,
+            api,
+            events,
+            notify,
+            dismiss,
+            openPanel: setActivePanel,
+            activePanel,
+          }
+        : null,
+    [editor, board, role, me, workspace, events, notify, dismiss, activePanel],
+  )
+  useFeatureMounts(BOARD_FEATURES, featureCtx)
+
   const rename = useCallback(
     async (title: string) => {
       const previous = board
@@ -327,6 +367,7 @@ function BoardSession({
           editor={editor}
           onRename={(t) => void rename(t)}
           onShare={() => setSharing(true)}
+          extra={<FeatureTopBarItems features={BOARD_FEATURES} ctx={featureCtx} />}
         />
         {conn === 'offline' && (
           <div className="dr-banner" data-testid="offline-banner" role="status">
@@ -334,30 +375,35 @@ function BoardSession({
             now would lose them.
           </div>
         )}
-        <main className="dr-board__canvas" aria-label="Board canvas">
-          {store.status === 'loading' && (
-            <div className="dr-screen" data-testid="sync-loading">
-              <span className="dr-spinner" aria-hidden="true" />
-              <p>Connecting to board…</p>
-            </div>
-          )}
-          {syncError !== null && !lostAccess && <SyncErrorScreen reason={syncError} onRetry={onRetry} />}
-          {store.status === 'synced-remote' && (
-            <div className="dr-board__editor">
-              <Tldraw
-                store={store.store}
-                shapeUtils={customShapeUtils}
-                assetUrls={assetUrls}
-                components={components}
-                overrides={overrides}
-                onMount={onMount}
-                {...IMAGE_HANDLER_LIMITS}
-              >
-                <ExternalContentHandlers />
-              </Tldraw>
-            </div>
-          )}
-        </main>
+        <div className="dr-board__body">
+          <FeatureDock features={BOARD_FEATURES} ctx={featureCtx} />
+          <main className="dr-board__canvas" aria-label="Board canvas">
+            {store.status === 'loading' && (
+              <div className="dr-screen" data-testid="sync-loading">
+                <span className="dr-spinner" aria-hidden="true" />
+                <p>Connecting to board…</p>
+              </div>
+            )}
+            {syncError !== null && !lostAccess && <SyncErrorScreen reason={syncError} onRetry={onRetry} />}
+            {store.status === 'synced-remote' && (
+              <div className="dr-board__editor">
+                <Tldraw
+                  store={store.store}
+                  shapeUtils={customShapeUtils}
+                  assetUrls={assetUrls}
+                  components={featureProps.components}
+                  overrides={featureProps.overrides}
+                  options={featureProps.options}
+                  onMount={onMount}
+                  {...IMAGE_HANDLER_LIMITS}
+                >
+                  <ExternalContentHandlers />
+                  <FeatureOverlays features={BOARD_FEATURES} ctx={featureCtx} />
+                </Tldraw>
+              </div>
+            )}
+          </main>
+        </div>
         <NoticeRegion notices={notices} onDismiss={dismiss} />
         {sharing && (
           <ShareDialog

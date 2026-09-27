@@ -155,6 +155,8 @@ export function createApiClient(opts: ApiClientOptions = {}) {
   }
 
   return {
+    /** Generic typed request for feature modules (same-origin, JSON, contracts-validated). */
+    request,
     // ---- auth ----------------------------------------------------------------------------------
     authConfig: (signal?: AbortSignal) => request('GET', '/api/auth/config', { schema: AuthConfig, signal }),
     /** Sets the session cookie; callers re-read the session with me(). */

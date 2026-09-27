@@ -16,6 +16,10 @@ import { listUserWorkspaces } from './auth/users.ts'
 import type { ApiConfig } from './config.ts'
 import type { AppContext } from './context.ts'
 import { badRequest, toErrorResponse, unauthenticated } from './errors.ts'
+import { EventHub } from './events/hub.ts'
+import { registerEventRoutes } from './events/routes.ts'
+import type { FeatureContext } from './features/context.ts'
+import { registerFeatures } from './features/index.ts'
 import { filesPlugin } from './files/plugin.ts'
 import { createFileAuthorizer } from './files-auth.ts'
 import { createHttpSyncNotifier, type SyncNotifier } from './notifier.ts'
@@ -26,6 +30,7 @@ import { registerMemberRoutes } from './routes/members.ts'
 import { registerTicketRoutes } from './routes/tickets.ts'
 import { registerWorkspaceRoutes } from './routes/workspaces.ts'
 import { sessionUserToUser } from './serialize.ts'
+import { createHttpSyncInternalClient, type SyncInternalClient } from './sync-internal.ts'
 
 export interface ApiDeps {
   /** A migrated-or-empty database the caller owns (it is migrated here, never closed here). */
@@ -40,6 +45,10 @@ export interface ApiDeps {
    * where every browser (and every e2e user) arrives through the same local Vite proxy address.
    */
   authRateLimit?: RouteRateLimit
+  /** Board event hub (tests subscribe to it directly). */
+  events?: EventHub
+  /** api -> sync snapshot/seed client (tests inject a fake). */
+  syncInternal?: SyncInternalClient
 }
 
 export interface ApiServer {
@@ -219,10 +228,22 @@ async function buildServer(
   registerMemberRoutes(app, ctx)
   registerInvitationRoutes(app, ctx)
   registerTicketRoutes(app, ctx)
-  await app.register(filesPlugin, {
-    layout: dataLayout(config.dataDir),
-    authorize: createFileAuthorizer(db, sessions),
-  })
+  const layout = dataLayout(config.dataDir)
+  await app.register(filesPlugin, { layout, authorize: createFileAuthorizer(db, sessions) })
+
+  // Liveness only (no database, no auth): for Render health checks and local tooling.
+  app.get('/healthz', async (_req, reply) => reply.type('text/plain').send('ok'))
+
+  const features: FeatureContext = {
+    ...ctx,
+    events: deps.events ?? new EventHub(),
+    sync:
+      deps.syncInternal ??
+      createHttpSyncInternalClient({ baseUrl: config.syncInternalUrl, secret: config.internalSecret }),
+    layout,
+  }
+  registerEventRoutes(app, features)
+  await registerFeatures(app, features)
 
   return {
     app,
