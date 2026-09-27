@@ -108,7 +108,6 @@ services:
     numInstances: 1 # required: a service with a disk cannot scale
     # Liveness only: no database, no auth, not rate limited (apps/api/src/app.ts).
     healthCheckPath: /healthz
-    maxShutdownDelaySeconds: 30 # the supervisor SIGKILLs stragglers after 25 s
     autoDeployTrigger: "off"
     disk:
       name: draftroom-staging-files
@@ -163,7 +162,6 @@ services:
     dockerContext: .
     numInstances: 1
     healthCheckPath: /healthz
-    maxShutdownDelaySeconds: 30 # sync force-exits after 5 s; acks are only sent after COMMIT
     autoDeployTrigger: "off"
     disk:
       name: draftroom-staging-rooms
