@@ -31,7 +31,7 @@
   margin-left: 4px;
   border-radius: 999px;
   background: var(--dr-amber);
-  color: var(--dr-ink);
+  color: var(--dr-on-amber);
   font-size: 12px;
   font-weight: 700;
 }
@@ -136,21 +136,21 @@
   white-space: nowrap;
 }
 .dr-sharebadge:hover {
-  background: #f1efe8;
+  background: var(--dr-hover);
 }
 .dr-sharebadge__text {
   overflow: hidden;
   text-overflow: ellipsis;
 }
 .dr-sharebadge[data-kind="link"] {
-  border-color: #d9a45a;
+  border-color: var(--dr-warn-line);
   background: var(--dr-warn-bg);
   color: var(--dr-warn);
 }
 .dr-sharebadge[data-kind="workspace"] {
-  border-color: #9fb4d1;
-  background: #eef3fa;
-  color: var(--dr-navy);
+  border-color: var(--dr-accent-line);
+  background: var(--dr-accent-bg);
+  color: var(--dr-accent-ink);
 }
 .dr-sharebadge__dot {
   display: inline-grid;
@@ -160,7 +160,7 @@
   padding: 0 5px;
   border-radius: 999px;
   background: var(--dr-amber);
-  color: var(--dr-ink);
+  color: var(--dr-on-amber);
   font-size: 11px;
   font-weight: 700;
 }

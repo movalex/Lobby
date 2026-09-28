@@ -113,7 +113,7 @@
   margin: 0;
   padding: 8px 10px;
   border-radius: 8px;
-  background: #f1efe8;
+  background: var(--dr-hover);
   font-size: 13px;
   line-height: 1.45;
 }
