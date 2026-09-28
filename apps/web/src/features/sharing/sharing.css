@@ -266,9 +266,21 @@
   flex: none;
   min-width: 48px;
 }
-.dr-sharing__revoke {
+/* A11Y-08: at least 24 px tall and wide (WCAG 2.5.8); doubled class, as .dr-linkbtn (styles.css, loaded
+   later) zeroes the padding. */
+.dr-linkbtn.dr-sharing__revoke {
+  display: inline-flex;
+  align-items: center;
+  min-width: 24px;
+  min-height: 24px;
+  padding: 2px 4px;
   font-size: 13px;
   white-space: nowrap;
+}
+/* A11Y-01: "Create…" keeps the keyboard while it works (aria-disabled, not disabled). */
+.dr-sharing__create .dr-btn[aria-disabled="true"] {
+  opacity: 0.6;
+  cursor: progress;
 }
 .dr-sharing__footer {
   display: flex;

@@ -62,6 +62,8 @@ export function CheckpointPreview({
     const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null
     liveEditor.blur({ blurContainer: false })
     if (!dialog.open) dialog.showModal()
+    // A11Y-08: start inside the preview (Zoom to fit), not on the ×, so a reflex Enter does not close it.
+    dialog.querySelector<HTMLElement>('[data-testid="checkpoint-preview-fit"]')?.focus()
     return () => {
       if (dialog.open) dialog.close()
       // The board gets the keyboard back (DANA-01). tldraw ignores every shortcut (Delete, N, Ctrl+Z)
@@ -232,7 +234,7 @@ export function CheckpointPreview({
               type="button"
               className="dr-btn"
               data-testid="checkpoint-preview-fit"
-              disabled={!preview}
+              aria-disabled={!preview || undefined}
               onClick={() => fit()}
             >
               Zoom to fit

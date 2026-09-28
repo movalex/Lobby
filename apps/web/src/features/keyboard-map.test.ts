@@ -127,8 +127,10 @@ describe('keyboard map after every feature override (registry order)', () => {
       'dr-toggle-minimap': 'canvas-ux: m',
       draw: 'canvas-ux: p,d,b,x',
       line: 'canvas-ux: (none)',
+      'open-kbd-shortcuts': 'canvas-ux: [[?]],shift+/,cmd+/,ctrl+/,cmd+alt+/,ctrl+alt+/',
       'send-backward': 'canvas-ux: shift+[[PgDn]],shift+pagedown,alt+[',
       'send-to-back': 'canvas-ux: [[PgDn]],pagedown,[',
+      'toggle-dark-mode': 'canvas-ux: (none)',
       'toggle-lock': 'canvas-ux: cmd+shift+l,ctrl+shift+l',
       'zoom-to-100': 'canvas-ux: cmd+0,ctrl+0,shift+0',
       'zoom-to-fit': 'canvas-ux: alt+1,shift+1',
@@ -155,6 +157,12 @@ describe('keyboard map after every feature override (registry order)', () => {
     // MAK-18: arrange as grid, editable boards only (a viewer's Alt+Shift+G does nothing).
     expect(idsFor('alt+shift+g')).toEqual(['dr-arrange-grid'])
     expect(idsFor('alt+shift+g', true)).toEqual([])
+    // A11Y2-07: "?" and Ctrl/Cmd+/ open the shortcuts (viewers too); nothing flips the theme.
+    for (const chord of ['shift+/', 'ctrl+/', 'meta+/', 'ctrl+alt+/']) {
+      expect(idsFor(chord), chord).toEqual(['open-kbd-shortcuts'])
+      expect(idsFor(chord, true), chord).toEqual(['open-kbd-shortcuts'])
+    }
+    expect(idsFor('/')).toEqual(['open-cursor-chat'])
   })
 
   it('the second-wave canvas-ux actions exist; only arrange-as-grid has a key; edits are editor-only', () => {

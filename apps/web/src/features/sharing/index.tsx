@@ -11,7 +11,7 @@ import { useUserKind } from '../../invite/guest.tsx'
 import type { BoardFeature, FeatureContext } from '../types.ts'
 import { announceRemoteShareChange, openShareDialog, SHARE_CHANGED_EVENT, sharingApi } from './api.ts'
 import { boardExportState, exportAllowedOnBoard, syncExportPolicy } from './export-policy.ts'
-import { shareBadge } from './model.ts'
+import { shareBadge, shareBadgeName } from './model.ts'
 import './sharing.css'
 
 const REFRESH_MS = 30_000
@@ -67,7 +67,7 @@ function ShareBadge({ ctx }: { ctx: FeatureContext }) {
         workspace.name,
       )
   const requests = badge.requests
-  const label = `${badge.description}${requests ? ` ${requests} pending access ${requests === 1 ? 'request' : 'requests'}.` : ''} Open sharing settings.`
+  const label = shareBadgeName(badge)
 
   return (
     <button

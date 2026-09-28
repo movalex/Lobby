@@ -8,7 +8,7 @@
 import { AI_IDEAS_DEFAULT, AI_IDEAS_MAX, AI_PROMPT_MAX_CHARS, AI_SETTINGS_EVENT } from '@draftroom/contracts'
 import { type ReactNode, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import { type Editor, useEditor, useValue } from 'tldraw'
-import { onFocusLeave, trapTab, tryFocus } from '../../ui/focus.ts'
+import { isTextEntry, onFocusLeave, trapTab, tryFocus } from '../../ui/focus.ts'
 import type { FeatureContext } from '../types.ts'
 import { addSummaryToBoard, cancelAiJob, closeAiMenu, refreshAiStatus, runAi } from './actions.ts'
 import { budgetLine, groupNames, themesHint } from './copy.ts'
@@ -16,6 +16,7 @@ import { ActionIcon, SparkIcon, Spinner } from './icons.tsx'
 import {
   ACTION_LABELS,
   type AiMenuState,
+  type AiPanelState,
   type AiRequest,
   aiJob,
   aiMenu,
@@ -499,27 +500,122 @@ function Busy() {
   )
 }
 
-function SummaryPanel() {
+/**
+ * A11Y2-03: whether the last thing the person did was a key press (not a pointer press). The summary
+ * arrives a moment after Summarize or Continue; when that was pressed from the keyboard, the panel
+ * takes the focus, else the pointer user keeps theirs (the live region still says it is ready).
+ */
+let lastInputKeyboard = false
+
+function useInputModality(doc: Document) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Shift' && e.key !== 'Control' && e.key !== 'Alt' && e.key !== 'Meta')
+        lastInputKeyboard = true
+    }
+    const onPointer = () => {
+      lastInputKeyboard = false
+    }
+    doc.addEventListener('keydown', onKey, true)
+    doc.addEventListener('pointerdown', onPointer, true)
+    return () => {
+      doc.removeEventListener('keydown', onKey, true)
+      doc.removeEventListener('pointerdown', onPointer, true)
+    }
+  }, [doc])
+}
+
+/** Escape closes the summary from anywhere, unless something above it (a menu, a dialog) owns Escape. */
+function escapeIsOurs(editor: Editor, e: KeyboardEvent, panel: HTMLElement | null): boolean {
+  if (e.key !== 'Escape' || e.defaultPrevented || e.isComposing) return false
+  const t = e.target as Element | null
+  if (panel && t && panel.contains(t)) return true
+  if (editor.menus.hasAnyOpenMenus() || editor.getEditingShapeId() !== null || aiMenu(editor).get())
+    return false
+  const doc = editor.getContainer().ownerDocument
+  if (doc.querySelector('dialog[open]')) return false
+  // A field elsewhere (search, a comment, a dock panel) keeps its own Escape.
+  return !(t instanceof HTMLElement && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName)))
+}
+
+function SummaryPanel({ onAnnounce }: { onAnnounce(text: string): void }) {
   const editor = useEditor()
   const panel = useValue('dr-ai-panel', () => aiPanel(editor).get(), [editor])
+  const open = panel !== null
+  const announce = useRef(onAnnounce)
+  announce.current = onAnnounce
+  useEffect(() => {
+    if (!open) announce.current('')
+  }, [open])
+  // Mounted only while there is a summary, so its key isolation attaches to the panel.
+  if (!panel) return null
+  return <SummaryView panel={panel} onAnnounce={onAnnounce} />
+}
+
+function SummaryView({ panel, onAnnounce }: { panel: AiPanelState; onAnnounce(text: string): void }) {
+  const editor = useEditor()
   const canAdd = useValue(
     'dr-ai-panel-can-add',
     () => !editor.getIsReadonly() && aiStatus(editor).get()?.canInsert === true,
     [editor],
   )
-  const close = () => aiPanel(editor).set(null)
-  const ref = useIsolated<HTMLElement>((e) => {
-    if (e.key === 'Escape') close()
-  })
+  const ref = useIsolated<HTMLElement>()
+  /** Closes it; when the keyboard was in it, the keyboard goes back to the AI button (or the board). */
+  const close = () => {
+    const doc = editor.getContainer().ownerDocument
+    const hadFocus = !!ref.current?.contains(doc.activeElement)
+    aiPanel(editor).set(null)
+    if (hadFocus) returnFocus(editor)
+  }
+  const closeRef = useRef(close)
+  closeRef.current = close
+  const titleId = useId()
+  const textId = useId()
   const [copied, setCopied] = useState(false)
-  if (!panel) return null
+  // A11Y2-03: Escape closes it even while the keyboard is on the board (the selection stays).
+  useEffect(() => {
+    const doc = editor.getContainer().ownerDocument
+    const onKey = (e: KeyboardEvent) => {
+      if (!escapeIsOurs(editor, e, ref.current)) return
+      e.preventDefault()
+      e.stopPropagation()
+      closeRef.current()
+    }
+    doc.addEventListener('keydown', onKey, true)
+    return () => doc.removeEventListener('keydown', onKey, true)
+  }, [editor, ref])
+  // A11Y2-03: opened from the keyboard, it takes the focus: on its main action, with the summary as
+  // the dialog's description, so a screen reader reads both. Nothing is taken from a text field.
+  // The live region says it is ready; with the focus moved, the dialog's description reads the text,
+  // so the region does not repeat it.
+  const summary = panel.summary
+  const announce = useRef(onAnnounce)
+  announce.current = onAnnounce
+  useEffect(() => {
+    const root = ref.current
+    const doc = editor.getContainer().ownerDocument
+    const active = doc.activeElement
+    const typing = !!active && active !== doc.body && isTextEntry(active) && !root?.contains(active)
+    const target =
+      root?.querySelector<HTMLElement>('[data-testid="ai-summary-add"]') ??
+      root?.querySelector<HTMLElement>('[data-testid="ai-summary-copy"]')
+    const moved = lastInputKeyboard && !typing && tryFocus(target)
+    announce.current(moved ? 'Summary ready.' : `Summary ready: ${summary}`)
+  }, [editor, ref, summary])
   return (
-    <section ref={ref} className="dr-ai-panel" aria-label="AI summary" data-testid="ai-summary-panel">
+    <section
+      ref={ref}
+      className="dr-ai-panel"
+      role="dialog"
+      aria-labelledby={titleId}
+      aria-describedby={textId}
+      data-testid="ai-summary-panel"
+    >
       <div className="dr-ai-pop__head">
         <span className="dr-ai-pop__badge" aria-hidden="true">
           <SparkIcon size={14} />
         </span>
-        <h2 className="dr-ai-pop__title">
+        <h2 id={titleId} className="dr-ai-pop__title">
           Summary <span className="dr-ai-pop__about">· {panel.about}</span>
         </h2>
         <button
@@ -531,7 +627,7 @@ function SummaryPanel() {
           ×
         </button>
       </div>
-      <p className="dr-ai-panel__text" data-testid="ai-summary-text">
+      <p id={textId} className="dr-ai-panel__text" data-testid="ai-summary-text">
         {panel.summary}
       </p>
       {panel.truncated && (
@@ -546,6 +642,7 @@ function SummaryPanel() {
         <button
           type="button"
           className="dr-btn dr-btn--sm"
+          data-testid="ai-summary-copy"
           onClick={() => {
             void navigator.clipboard?.writeText(panel.summary).then(
               () => setCopied(true),
@@ -593,6 +690,9 @@ export function AiOverlay({ ctx }: { ctx: FeatureContext }) {
   }, [editor, events])
   const menu = useValue('dr-ai-menu', () => aiMenu(editor).get(), [editor])
   const enabled = useValue('dr-ai-on', () => aiStatus(editor).get()?.enabled === true, [editor])
+  useInputModality(editor.getContainer().ownerDocument)
+  // A11Y2-03: the summary is announced as it arrives (the region exists beforehand, so the change is heard).
+  const [said, setSaid] = useState('')
   // A11Y-15: remember what had the keyboard as the popover opens (it takes the focus a frame later).
   const open = menu !== null
   useLayoutEffect(() => {
@@ -607,7 +707,10 @@ export function AiOverlay({ ctx }: { ctx: FeatureContext }) {
     <div className="dr-ai-overlay" data-testid="ai-overlay">
       {menu && <AiPopover key={`${menu.view}`} menu={menu} />}
       <Busy />
-      <SummaryPanel />
+      <SummaryPanel onAnnounce={setSaid} />
+      <p className="dr-sr-only" role="status" data-testid="ai-summary-status">
+        {said}
+      </p>
     </div>
   )
 }

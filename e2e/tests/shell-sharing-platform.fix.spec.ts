@@ -134,13 +134,19 @@ for (const [label, vp, touch] of [
 
 // ---- RETRO-22a -------------------------------------------------------------------------------------
 
-test('RETRO-22a: Tab from the top of the page reaches the breadcrumb, title, feature controls and Share first; the DEV badge comes after the canvas controls', async ({
+test('RETRO-22a: Tab from the top of the page reaches the breadcrumb, title, feature controls and Share first; the DEV badge comes right after Share (A11Y-09)', async ({
   session,
 }) => {
   const a = await session('alice')
   await a.page.reload()
   await waitForBoard(a.page)
-  await a.page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur())
+  // From the top of the page (A11Y2-09: arriving focuses the canvas, and a blur() would leave Tab's
+  // starting point there).
+  await a.page.evaluate(() => {
+    document.body.tabIndex = -1
+    document.body.focus()
+    document.body.removeAttribute('tabindex')
+  })
   const stops: { id: string; inTopBar: boolean }[] = []
   for (let i = 0; i < 40; i++) {
     await a.page.keyboard.press('Tab')
@@ -163,10 +169,10 @@ test('RETRO-22a: Tab from the top of the page reaches the breadcrumb, title, fea
   expect(share).toBeGreaterThan(1)
   expect(share).toBeLessThan(16)
   expect(stops.slice(1, share + 1).every((s) => s.inTopBar)).toBe(true)
-  // The account badge is drawn in the bar but tabbed to last, after the dock and tldraw's toolbar.
+  // A11Y-09: the account badge is drawn at the bar's right end and tabbed to right after Share.
   const badge = ids.indexOf('dev-identity-badge')
-  expect(badge).toBeGreaterThan(ids.indexOf('tools.select'))
-  expect(ids.indexOf('tools.select')).toBeGreaterThan(share)
+  expect(badge).toBe(share + 1)
+  expect(ids.indexOf('tools.select')).toBeGreaterThan(badge)
   const bar = await a.page.getByTestId('topbar').boundingBox()
   const b = await a.page.getByTestId('dev-identity-badge').boundingBox()
   expect((b?.y ?? 99) + (b?.height ?? 0)).toBeLessThanOrEqual((bar?.y ?? 0) + (bar?.height ?? 0))
