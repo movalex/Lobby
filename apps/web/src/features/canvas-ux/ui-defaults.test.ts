@@ -37,6 +37,12 @@ describe('style panel visibility (RETRO-20)', () => {
       expect(showStylePanel(0, tool)).toBe(true)
     }
   })
+
+  it('R16: hides for a selection of frames only (a lone opacity slider was all it showed)', () => {
+    expect(showStylePanel(1, 'select', true)).toBe(false)
+    expect(showStylePanel(3, 'select', true)).toBe(false)
+    expect(showStylePanel(2, 'select', false)).toBe(true)
+  })
 })
 
 describe('menu copy (F20, RETRO-23b)', () => {

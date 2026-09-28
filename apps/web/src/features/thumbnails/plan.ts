@@ -60,9 +60,14 @@ export function cardBox(r: Rect): Rect {
  *   tall area is cropped from its start (left, or top) so that it fills at least half of the card
  *   instead of becoming a thin strip;
  * - `cover`: the card is filled with it, the overflow cropped evenly (a start view);
- * - `cover-top`: the same, but a much taller area keeps its top, where a frame's heading is.
+ * - `cover-top`: the same, but a much taller area keeps its top, where a frame's heading is;
+ * - `frame` (R11): a frame. Taller than the card: `cover-top`. Wider: never centre-cropped (an
+ *   even side crop cut the Retrospective's 2560 × 420 Check-in frame to a middle slice with half
+ *   notes and a sentence starting mid-word): the whole frame, at the card's top, when it fills at
+ *   least half of the card's height; a very wide one from its left end (where its heading and
+ *   sentences start) at half the card's height.
  */
-export type Fit = 'contain' | 'cover' | 'cover-top'
+export type Fit = 'contain' | 'cover' | 'cover-top' | 'frame'
 
 /** Content at least this share of the card's height (or width) in `contain`. */
 const MIN_FILL = 0.5
@@ -82,6 +87,12 @@ function atLeastCard(b: Rect): Rect {
 
 export function fitBox(r: Rect, fit: Fit): Rect {
   const a = r.w / r.h
+  if (fit === 'frame') {
+    if (a <= THUMBNAIL_ASPECT) return fitBox(r, 'cover-top')
+    // Wide: as tall as the frame (very wide: twice as tall), from the frame's top-left corner.
+    const h = a > THUMBNAIL_ASPECT / MIN_FILL ? r.h / MIN_FILL : r.w / THUMBNAIL_ASPECT
+    return atLeastCard({ x: r.x, y: r.y, w: h * THUMBNAIL_ASPECT, h })
+  }
   if (fit === 'contain') {
     // Wider than the card by more than 1 / MIN_FILL: as tall as twice the content, from its left end.
     if (a > THUMBNAIL_ASPECT / MIN_FILL) {
@@ -153,7 +164,8 @@ export interface PageContent {
  * first-time visitor lands on the first page, and a board whose first page is empty is better shown
  * by the content it has than by nothing. On that page, a board with frames shows its first frame
  * (the first slide, what the board is "about"); only a board without frames shows all its content.
- * Views and frames fill the card (cropped to 16:10), so a wide row of frames never becomes a strip.
+ * Views fill the card (cropped to 16:10), so a wide row of frames never becomes a strip; a wide frame
+ * is never centre-cropped (R11: `frame` fit shows it whole, or a very wide one from its left end).
  */
 export function chooseArea(opts: {
   startView: { pageId: string; area: Rect } | null
@@ -167,7 +179,7 @@ export function chooseArea(opts: {
         kind: 'start-view',
         pageId: startView.pageId,
         area: expand(startFrame, contentMargin(startFrame)),
-        fit: 'cover-top',
+        fit: 'frame',
       }
     return { kind: 'start-view', pageId: startView.pageId, area: startView.area, fit: 'cover' }
   }
@@ -178,7 +190,7 @@ export function chooseArea(opts: {
         kind: 'frame',
         pageId: p.pageId,
         area: expand(p.firstFrame, contentMargin(p.firstFrame)),
-        fit: 'cover-top',
+        fit: 'frame',
       }
     return {
       kind: 'content',

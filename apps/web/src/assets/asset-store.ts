@@ -11,6 +11,7 @@ import {
 } from './contract.ts'
 import { type AssetMetaStore, isTerminal, waitForTerminalMeta } from './meta-store.ts'
 import './pending-image.css'
+import { whilePending } from './pending-images.ts'
 import { uploadFile } from './upload.ts'
 
 const FILE_REF_RE = /^\/files\/([^/]+)\/([^/]+)\/original$/
@@ -185,13 +186,16 @@ export async function resolveImageOrVideoUrl(
   if (!isTerminal(snap)) {
     // Queued or processing: wait for the previews instead of downloading the full original. tldraw
     // keeps what it showed before while this is pending: the uploading tab's local preview (blob),
-    // or the loading tile everywhere else.
-    snap = await waitForTerminalMeta(
-      metaStore,
-      boardId,
-      ref.assetId,
-      ref.versionId,
-      opts.previewWaitMs ?? PREVIEW_WAIT_MS,
+    // or the loading tile everywhere else (F8: animated, with the file name; pending-images.ts).
+    snap = await whilePending(
+      asset.id,
+      waitForTerminalMeta(
+        metaStore,
+        boardId,
+        ref.assetId,
+        ref.versionId,
+        opts.previewWaitMs ?? PREVIEW_WAIT_MS,
+      ),
     )
   }
   const { meta, missing } = snap

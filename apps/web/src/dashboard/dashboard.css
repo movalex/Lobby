@@ -569,8 +569,16 @@
   object-fit: cover;
   background: var(--dr-inset);
 }
+/* F13: the capture is always the board's light paper, whoever made it and whatever their theme. On
+   the dark theme it sits as a page inside the card's dark well, instead of a bright slab running to
+   the card's edges. */
 :root[data-theme="dark"] .dr-bcard__img {
-  filter: brightness(0.92);
+  box-sizing: border-box;
+  padding: 8px;
+  filter: brightness(0.9);
+}
+:root[data-theme="dark"] .dr-bcard--row .dr-bcard__img {
+  padding: 4px;
 }
 /* The placeholder (BoardCard.tsx BoardThumb) on the dark theme: the board's own palette (--th-*),
    mixed into the dark surfaces, instead of a bright pastel block (F11). */

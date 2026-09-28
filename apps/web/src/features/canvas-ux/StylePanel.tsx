@@ -21,6 +21,7 @@ import {
   StylePanelSection,
   StylePanelSizePicker,
   StylePanelSplinePicker,
+  StylePanelSubheading,
   StylePanelTextAlignPicker,
   type TLUiStylePanelProps,
   useEditor,
@@ -40,9 +41,40 @@ export const STYLED_TOOLS: ReadonlySet<string> = new Set([
   'highlight',
 ])
 
-/** RETRO-20: show the style panel only for a selection or a creation tool. */
-export function showStylePanel(selectedCount: number, toolId: string): boolean {
+/**
+ * RETRO-20: show the style panel only for a selection or a creation tool. R16: never for a selection
+ * of frames only: a frame has no style but opacity, so the panel was a lone, unlabeled slider in the
+ * corner for the whole facilitation flow (select a frame to start a brainstorm, a vote, an AI action).
+ */
+export function showStylePanel(selectedCount: number, toolId: string, framesOnly = false): boolean {
+  if (framesOnly) return false
   return selectedCount > 0 || STYLED_TOOLS.has(toolId)
+}
+
+/** The selection is one or more frames and nothing else. */
+function selectionIsFramesOnly(editor: ReturnType<typeof useEditor>): boolean {
+  const ids = editor.getSelectedShapeIds()
+  if (!ids.length) return false
+  return ids.every((id) => editor.getShape(id)?.type === 'frame')
+}
+
+/**
+ * R16: the opacity slider with a visible "Opacity" label when it is the panel's only control (an
+ * image, a file card…); tldraw only shows that label in its enhanced accessibility mode.
+ */
+function OpacityPicker() {
+  const { styles, enhancedA11yMode } = useStylePanelContext()
+  const alone = styles.size === 0
+  return (
+    <>
+      {alone && !enhancedA11yMode && (
+        <div className="dr-style-opacity-label" data-testid="style-opacity-label">
+          <StylePanelSubheading>Opacity</StylePanelSubheading>
+        </div>
+      )}
+      <StylePanelOpacityPicker />
+    </>
+  )
 }
 
 function isNoteContext(editor: ReturnType<typeof useEditor>): boolean {
@@ -99,7 +131,12 @@ export function DraftroomStylePanel(props: TLUiStylePanelProps) {
   const editor = useEditor()
   const visible = useValue(
     'dr-style-panel-visible',
-    () => showStylePanel(editor.getSelectedShapeIds().length, editor.getCurrentToolId()),
+    () =>
+      showStylePanel(
+        editor.getSelectedShapeIds().length,
+        editor.getCurrentToolId(),
+        selectionIsFramesOnly(editor),
+      ),
     [editor],
   )
   // The mobile style menu is opened on purpose from the toolbar: never hide it.
@@ -108,7 +145,7 @@ export function DraftroomStylePanel(props: TLUiStylePanelProps) {
     <DefaultStylePanel {...props}>
       <StylePanelSection>
         <ColorPicker />
-        <StylePanelOpacityPicker />
+        <OpacityPicker />
       </StylePanelSection>
       <StylePanelSection>
         <StylePanelFillPicker />

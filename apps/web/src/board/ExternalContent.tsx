@@ -135,6 +135,13 @@ interface CardSlot {
    * finishes, and stacked just above it, like an image dropped there.
    */
   imageSlot?: TLShapeId
+  /** F12: the card's scale in a drop of images and cards (it shares the images' grid cells). */
+  scale?: number
+  /**
+   * F12: this drop's shapes. While the selection is still only these (the images tldraw selected,
+   * the cards that arrived so far), the card joins it, so the selection bar sits under the whole block.
+   */
+  dropGroup?: Set<TLShapeId>
 }
 
 /** Cards that show a picture and so may fill a template image slot: videos (poster) and images. */
@@ -269,7 +276,7 @@ function layoutDrop(
     ...plan.images,
     ...plan.cards,
   ])
-  const target = cameraTargetAfterDrop(view.viewport, content)
+  const target = cameraTargetAfterDrop(view.viewport, content, view.zoom)
   if (target) {
     editor.zoomToBounds(target, {
       targetZoom: view.zoom,
@@ -278,6 +285,7 @@ function layoutDrop(
   }
 
   let next = 0
+  const dropGroup = createdIds.length ? new Set<TLShapeId>(createdIds) : undefined
   return cards.map((card): CardSlot => {
     const slotted = slottedCards.find((s) => s.card === card)
     if (slotted) {
@@ -286,13 +294,17 @@ function layoutDrop(
         parentId: null,
         local: null,
         imageSlot: slotted.slot.id,
+        dropGroup,
       }
     }
-    const r = plan.cards[next++] ?? { x: at.x, y: at.y }
+    const r = plan.cards[next++]
+    const at0 = r ?? { x: at.x, y: at.y }
     return {
-      page: { x: r.x, y: r.y },
+      page: { x: at0.x, y: at0.y },
       parentId: container ? container.id : null,
-      local: container ? editor.getPointInShapeSpace(container, { x: r.x, y: r.y }) : null,
+      local: container ? editor.getPointInShapeSpace(container, { x: at0.x, y: at0.y }) : null,
+      scale: r ? r.w / CARD_SIZE[card.kind].w : 1,
+      dropGroup,
     }
   })
 }
@@ -486,7 +498,8 @@ function createFileCard(editor: Editor, meta: AssetVersionMeta, slot: CardSlot):
   const slotShape = slot.imageSlot ? editor.getShape(slot.imageSlot) : undefined
   const slotBounds = slotShape ? editor.getShapePageBounds(slotShape) : undefined
   const fill = slotShape && slotBounds ? fitInSlot(CARD_SIZE[meta.kind], toRect(slotBounds)) : null
-  const size = fill ?? CARD_SIZE[meta.kind]
+  const k = slot.scale && Number.isFinite(slot.scale) && slot.scale > 0 ? slot.scale : 1
+  const size = fill ?? { w: CARD_SIZE[meta.kind].w * k, h: CARD_SIZE[meta.kind].h * k }
   // An explicit parent: createShape would otherwise pick the frame under the card's top-left corner.
   const parent = slot.parentId && slot.local && editor.getShape(slot.parentId) ? slot.parentId : null
   const at = fill ?? (parent && slot.local ? slot.local : slot.page)
@@ -513,6 +526,16 @@ function createFileCard(editor: Editor, meta: AssetVersionMeta, slot: CardSlot):
     // image dropped on it.
     if (fill && slotShape && editor.getShape(id))
       editor.reparentShapes([id], slotShape.parentId, slotShape.index)
+    // F12: joins the drop's selection while nobody has changed it, so the selection bar moves under
+    // the whole block instead of covering the card.
+    const group = slot.dropGroup
+    const selected = editor.getSelectedShapeIds()
+    if (group && editor.getShape(id)) {
+      group.add(id)
+      if (selected.length && editor.isIn('select.idle') && selected.every((s) => group.has(s))) {
+        editor.select(...selected, id)
+      }
+    }
   })
   return editor.getShape(id) ? id : null
 }
