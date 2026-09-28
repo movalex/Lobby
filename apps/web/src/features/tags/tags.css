@@ -1,0 +1,477 @@
+/* tags feature styles (docs/WAVE4-CONTRACTS.md §2 tags). UI uses the --dr-* tokens from styles.css; tag
+   colours come from the note palette as --dr-tag-fill / --dr-tag-ink (Overlay.tsx writes them for both
+   themes on anything with data-dr-tag-color). */
+
+/* ---- chips on notes and file cards (page units: they scale with the camera) ------------------------ */
+.dr-tag-chips {
+  --dr-tag-s: var(--dr-tag-scale, 1);
+  position: absolute;
+  z-index: 2; /* above the note's own container (tldraw --tl-layer-text-container: 1) */
+  top: calc(3px * var(--dr-tag-s));
+  left: calc(6px * var(--dr-tag-s));
+  right: calc(6px * var(--dr-tag-s));
+  display: flex;
+  gap: calc(3px * var(--dr-tag-s));
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  overflow: hidden;
+  pointer-events: none;
+  font-family: var(--tl-font-sans, var(--dr-font));
+}
+.dr-tag-chips[data-kind="card"] {
+  top: 8px;
+  left: 8px;
+  right: 8px;
+}
+.dr-tag-chip {
+  flex: 0 1 auto;
+  min-width: calc(26px * var(--dr-tag-s));
+  height: calc(16px * var(--dr-tag-s));
+  padding: 0 calc(6px * var(--dr-tag-s));
+  border-radius: calc(8px * var(--dr-tag-s));
+  background: var(--dr-tag-fill, #d6d9de);
+  box-shadow: inset 0 0 0 calc(1px * var(--dr-tag-s))
+    color-mix(in srgb, var(--dr-tag-ink, #1b2330) 30%, transparent);
+  color: var(--dr-tag-ink, #1b2330);
+  font-size: calc(11px * var(--dr-tag-s));
+  font-weight: 600;
+  line-height: calc(16px * var(--dr-tag-s));
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dr-tag-chip[data-whole],
+.dr-tag-chip--more {
+  flex-shrink: 0;
+}
+.dr-tag-chip--more {
+  min-width: 0;
+}
+/* Behind "+N" at full size (ShapeWrapper.tsx chipLayout); a dot like the others when zoomed out. */
+.dr-tag-chip[data-overflow] {
+  display: none;
+}
+/* Zoomed out: a colour dot per tag, then nothing (index.tsx sets the level on the editor container). */
+.tl-container[data-dr-tags-lod="dots"] .dr-tag-chips {
+  flex-wrap: wrap;
+  gap: calc(4px * var(--dr-tag-s));
+}
+.tl-container[data-dr-tags-lod="dots"] .dr-tag-chip[data-overflow] {
+  display: block;
+}
+.tl-container[data-dr-tags-lod="dots"] .dr-tag-chip {
+  flex: none;
+  width: calc(22px * var(--dr-tag-s));
+  min-width: 0;
+  height: calc(22px * var(--dr-tag-s));
+  padding: 0;
+  border-radius: 50%;
+  font-size: 0;
+}
+.tl-container[data-dr-tags-lod="dots"] .dr-tag-chip--more,
+.tl-container[data-dr-tags-lod="off"] .dr-tag-chips {
+  display: none;
+}
+
+/* ---- dots and pills in the UI ---------------------------------------------------------------------- */
+.dr-tag-dot {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--dr-tag-fill, var(--dr-chip));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--dr-tag-ink, var(--dr-ink)) 28%, transparent);
+}
+.dr-tag-pill {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  height: 22px;
+  padding: 0 9px;
+  border-radius: 11px;
+  background: var(--dr-tag-fill, var(--dr-chip));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--dr-tag-ink, var(--dr-ink)) 22%, transparent);
+  color: var(--dr-tag-ink, var(--dr-ink));
+  font: 600 12px / 1 var(--dr-font);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ---- the picker (inside canvas-ux's selection bar) ------------------------------------------------- */
+.dr-tags-barslot {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.dr-tag-picker {
+  position: absolute;
+  top: calc(100% + 10px);
+  left: 50%;
+  z-index: 1;
+  width: 272px;
+  max-width: calc(100vw - 32px);
+  padding: 8px;
+  border: 1px solid var(--dr-line);
+  border-radius: 12px;
+  background: var(--dr-surface);
+  box-shadow: var(--dr-shadow-pop);
+  color: var(--dr-ink);
+  font: 13px / 1.35 var(--dr-font);
+  text-align: left;
+  transform: translateX(calc(-50% + var(--dr-tag-picker-dx, 0px)));
+}
+.dr-tag-picker[data-side="above"] {
+  top: auto;
+  bottom: calc(100% + 10px);
+}
+.dr-tag-picker:focus-visible {
+  outline: 2px solid var(--dr-focus);
+  outline-offset: 2px;
+}
+.dr-tag-picker__input.dr-input--block {
+  height: 34px;
+}
+.dr-tag-picker__list {
+  display: grid;
+  gap: 1px;
+  max-height: var(--dr-tag-picker-list, 240px); /* placement.ts PICKER_LIST_MAX */
+  margin: 6px 0 0;
+  padding: 0;
+  overflow: auto;
+  list-style: none;
+}
+.dr-tag-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  padding: 4px 6px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.dr-tag-option:hover,
+.dr-tag-option[data-exact] {
+  background: var(--dr-hover);
+}
+.dr-tag-option:has(input:disabled) {
+  opacity: 0.55;
+  cursor: default;
+}
+.dr-tag-option__box {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--dr-navy);
+}
+.dr-tag-option__box:focus-visible {
+  outline: 2px solid var(--dr-focus);
+  outline-offset: 2px;
+}
+.dr-tag-option__name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dr-tag-picker__create {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 32px;
+  margin-top: 4px;
+  padding: 4px 8px;
+  border: 1px dashed var(--dr-line-strong);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--dr-accent-ink);
+  font: 600 13px / 1.3 var(--dr-font);
+  text-align: left;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+.dr-tag-picker__create:hover {
+  background: var(--dr-accent-tint);
+}
+.dr-tag-picker__create:focus-visible,
+.dr-tag-picker__manage:focus-visible,
+.dr-tags-swatch:focus-visible {
+  outline: 2px solid var(--dr-focus);
+  outline-offset: 2px;
+}
+.dr-tag-picker__title {
+  margin: 0 0 6px;
+  font-weight: 600;
+}
+.dr-tag-picker__tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.dr-tag-picker__hint {
+  margin: 8px 2px 0;
+  color: var(--dr-ink-2);
+  font-size: 12.5px;
+}
+.dr-tag-picker__status {
+  margin: 0 2px;
+  color: var(--dr-ink-2);
+  font-size: 12.5px;
+}
+.dr-tag-picker__status:not(:empty) {
+  margin-top: 6px;
+}
+.dr-tag-picker__foot {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--dr-line);
+}
+.dr-tag-picker__manage {
+  padding: 4px 6px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--dr-accent-ink);
+  font: 600 12.5px / 1.2 var(--dr-font);
+  cursor: pointer;
+}
+.dr-tag-picker__manage:hover {
+  background: var(--dr-hover);
+}
+
+/* ---- the Tags dock panel --------------------------------------------------------------------------- */
+.dr-tags-panel {
+  display: grid;
+  gap: 12px;
+}
+.dr-tags-muted {
+  margin: 0;
+  color: var(--dr-ink-2);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+.dr-tags-label {
+  display: block;
+  margin: 0 0 4px;
+  padding: 0;
+  color: var(--dr-ink-2);
+  font: 600 12px / 1.3 var(--dr-font);
+}
+.dr-tags-new__row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.dr-tags-new__row .dr-input--block {
+  height: 32px;
+}
+.dr-tags-error {
+  margin: 6px 0 0;
+  color: var(--dr-danger);
+  font-size: 12.5px;
+}
+.dr-tags-empty {
+  display: grid;
+  gap: 6px;
+  font-size: 13.5px;
+}
+.dr-tags-empty p {
+  margin: 0;
+}
+.dr-tags-list {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.dr-tags-row {
+  border-radius: 8px;
+}
+.dr-tags-row[data-filtered] {
+  background: var(--dr-accent-tint);
+}
+.dr-tags-row__main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  padding: 4px 4px 4px 8px;
+}
+.dr-tags-row__text {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+}
+.dr-tags-row__name {
+  overflow: hidden;
+  font-weight: 600;
+  font-size: 13.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dr-tags-row__count {
+  color: var(--dr-ink-2);
+  font-size: 12px;
+}
+.dr-tags-row__btn[aria-pressed="true"] {
+  background: var(--dr-accent-bg);
+  color: var(--dr-accent-ink);
+}
+.dr-tags-row__btn:focus-visible {
+  outline: 2px solid var(--dr-focus);
+  outline-offset: 1px;
+}
+.dr-tags-editor {
+  display: grid;
+  gap: 10px;
+  margin: 0 4px 6px;
+  padding: 10px;
+  border: 1px solid var(--dr-line);
+  border-radius: 8px;
+  background: var(--dr-inset);
+}
+.dr-tags-colors {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.dr-tags-colors__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(28px, 1fr));
+  gap: 6px;
+}
+.dr-tags-swatch {
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 7px;
+  background: var(--dr-tag-fill);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--dr-tag-ink) 25%, transparent);
+  cursor: pointer;
+}
+.dr-tags-swatch[aria-pressed="true"] {
+  outline: 2px solid var(--dr-navy);
+  outline-offset: 2px;
+}
+.dr-tags-editor__danger {
+  padding-top: 8px;
+  border-top: 1px solid var(--dr-line);
+}
+.dr-tags-delete.dr-btn--ghost {
+  color: var(--dr-danger);
+}
+.dr-tags-confirm p {
+  margin: 0 0 8px;
+  font-size: 13px;
+}
+.dr-tags-confirm__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.dr-btn.dr-tags-danger-btn {
+  border-color: var(--dr-danger-fill);
+  background: var(--dr-danger-fill);
+  color: var(--dr-on-danger);
+}
+.dr-btn.dr-tags-danger-btn:hover {
+  filter: brightness(1.08);
+}
+
+/* ---- search panel: the tag filter ------------------------------------------------------------------- */
+.dr-tags-searchfilter {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0;
+}
+.dr-tags-searchfilter__label {
+  color: var(--dr-ink-2);
+  font: 600 12.5px / 1 var(--dr-font);
+}
+.dr-tags-searchfilter__select.dr-input {
+  height: 30px;
+  padding: 0 6px;
+  font-size: 13px;
+}
+
+/* ---- canvas overlay: "Show only" ------------------------------------------------------------------ */
+.dr-tags-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 240; /* like canvas-ux's overlay: above the canvas, below tldraw's panels (300) */
+  overflow: hidden;
+  pointer-events: none;
+}
+.dr-tags-filterbar {
+  position: absolute;
+  top: 58px;
+  left: 50%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: calc(100% - 32px);
+  padding: 4px 4px 4px 10px;
+  border: 1px solid var(--dr-line);
+  border-radius: 10px;
+  background: var(--dr-surface);
+  box-shadow: var(--dr-shadow);
+  color: var(--dr-ink);
+  font: 13px / 1.3 var(--dr-font);
+  pointer-events: auto;
+  transform: translateX(-50%);
+}
+.dr-tags-filterbar__icon {
+  display: grid;
+  flex: none;
+  color: var(--dr-accent-ink);
+}
+.dr-tags-filterbar__text {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  white-space: nowrap;
+}
+.dr-tags-filterbar__text .dr-tag-pill {
+  min-width: 0;
+  max-width: 140px;
+}
+.dr-tags-filterbar__count {
+  color: var(--dr-ink-2);
+}
+.dr-tags-filterbar__clear {
+  flex: none;
+  white-space: nowrap;
+}
+/* Presenting suspends "Show only" (Overlay.tsx tagFilterCss): no bar over the slides. */
+html[data-dr-presenting] .dr-tags-filterbar {
+  display: none;
+}
+@media (max-width: 480px) {
+  .dr-tags-filterbar__count {
+    display: none;
+  }
+  /* visually hidden, still read (like .dr-sr-only) */
+  .dr-tags-filterbar__label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+  .dr-tags-filterbar__text .dr-tag-pill {
+    max-width: 170px;
+  }
+}

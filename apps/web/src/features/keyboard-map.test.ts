@@ -200,6 +200,8 @@ describe('tldraw component slots and options', () => {
       KeyboardShortcutsDialog: ['canvas-ux'],
       MainMenu: ['canvas-ux'],
       NavigationPanel: ['canvas-ux'],
+      // Wave 4 tags: chips inside each note / file card, and the "Show only" filter's attribute.
+      ShapeWrapper: ['tags'],
       SharePanel: ['board-page'],
       StylePanel: ['canvas-ux'],
       Toolbar: ['canvas-ux'],
@@ -244,6 +246,7 @@ describe('tldraw component slots and options', () => {
       'history',
       'private-notes', // workshops: private brainstorming (wave 3)
       'search',
+      'tags', // tags: the board's tags, "Show only", create / rename / colour / delete (wave 4)
       'templates',
       'voting',
     ])

@@ -8,9 +8,10 @@
 
 import { type KeyboardEvent, useEffect, useMemo, useRef, useState } from 'react'
 import { type Editor, type TLShapeId, useValue } from 'tldraw'
+import { SearchTagFilter, searchWithTags, textOfQuery, useSearchTag } from '../tags/SearchTagFilter.tsx'
 import type { FeatureContext } from '../types.ts'
 import { searchMatches, searchState } from './bridge.ts'
-import { type SearchHit, searchBoard } from './deps.ts'
+import type { SearchHit } from './deps.ts'
 import {
   highlightParts,
   matchesFilter,
@@ -73,12 +74,17 @@ export function SearchPanel({ ctx, close }: { ctx: FeatureContext; close(): void
     inputRef.current?.select()
   }, [focusTick])
 
+  // Wave 4 tags: words also match tag names, `#word` matches tags only, and the tag filter below the
+  // type chips narrows to one tag (tags/search.ts).
+  const tag = useSearchTag(editor)
   const hits: SearchHit[] = useMemo(() => {
     void version
-    if (!query.trim()) return []
+    if (!query.trim() && !tag) return []
     const records = [editor.getCurrentPage(), ...editor.getCurrentPageShapes(), ...editor.getAssets()]
-    return searchBoard(records, query, { limit: RESULT_LIMIT }).filter((h) => matchesFilter(h.type, filter))
-  }, [editor, query, filter, version])
+    return searchWithTags(editor, records, query, { limit: RESULT_LIMIT, tag }).filter((h) =>
+      matchesFilter(h.type, filter),
+    )
+  }, [editor, query, filter, version, tag])
 
   useEffect(() => {
     searchMatches(editor).set(hits.map((h) => h.shapeId))
@@ -122,6 +128,7 @@ export function SearchPanel({ ctx, close }: { ctx: FeatureContext; close(): void
   }
 
   const trimmed = query.trim()
+  const marked = textOfQuery(trimmed)
   return (
     // biome-ignore lint/a11y/noStaticElementInteractions: keyboard handling for the whole panel (Esc, Enter, arrows)
     <div className="dr-cux-search" data-testid="board-search" onKeyDown={onKeyDown}>
@@ -132,7 +139,7 @@ export function SearchPanel({ ctx, close }: { ctx: FeatureContext; close(): void
           type="search"
           className="dr-input dr-input--block"
           data-testid="search-input"
-          placeholder="Search notes, text, frames, files…"
+          placeholder="Search notes, text, frames, files, #tags…"
           value={query}
           aria-controls="dr-search-results"
           aria-describedby="dr-search-status"
@@ -155,8 +162,9 @@ export function SearchPanel({ ctx, close }: { ctx: FeatureContext; close(): void
           </button>
         ))}
       </fieldset>
+      <SearchTagFilter editor={editor} onChange={() => set({ activeId: null })} />
       <p id="dr-search-status" className="dr-cux-muted" role="status" data-testid="search-status">
-        {!trimmed
+        {!trimmed && !tag
           ? 'Type to search. Enter goes to the next match.'
           : hits.length === 0
             ? 'No matches.'
@@ -177,7 +185,7 @@ export function SearchPanel({ ctx, close }: { ctx: FeatureContext; close(): void
             >
               <span className="dr-cux-result__type">{typeLabel(hit.type)}</span>
               <span className="dr-cux-result__snippet">
-                {highlightParts(hit.snippet, trimmed).map((p, i) =>
+                {highlightParts(hit.snippet, marked).map((p, i) =>
                   p.match ? <mark key={i}>{p.text}</mark> : <span key={i}>{p.text}</span>,
                 )}
               </span>

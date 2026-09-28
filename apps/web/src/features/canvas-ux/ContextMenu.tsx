@@ -22,6 +22,7 @@ import {
   useEditor,
   useValue,
 } from 'tldraw'
+import { TagsContextMenuGroup } from '../tags/ContextMenu.tsx'
 import { canArrangeAsGrid } from './arrange-grid-runtime.ts'
 import { ExportOffContextMenuContent, useExportAllowed } from './export-gate.tsx'
 import {
@@ -110,6 +111,7 @@ export const DraftroomContextMenu = memo(function DraftroomContextMenu(props: TL
   return (
     <DefaultContextMenu {...props}>
       <ArrangeGroup />
+      <TagsContextMenuGroup />
       {exportAllowed ? <DefaultContextMenuContent /> : <ExportOffContextMenuContent />}
       <SelectByTypeGroup />
       <UnlockAllGroup />

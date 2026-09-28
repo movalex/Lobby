@@ -538,8 +538,8 @@ export function ExportDialog({
           </h3>
           <p className="dr-pe-text">
             {hasSelection
-              ? `The text of the selection (${plural(selectedIds.length, 'object')} and what they contain): one row per object with its type, frame, colour and position.`
-              : 'The text of every object on the board: one row per object with its type, frame, colour and position.'}
+              ? `The text of the selection (${plural(selectedIds.length, 'object')} and what they contain): one row per object with its type, frame, colour, position and tags.`
+              : 'The text of every object on the board: one row per object with its type, frame, colour, position and tags.'}
           </p>
           <div className="dr-pe-actions">
             <button
