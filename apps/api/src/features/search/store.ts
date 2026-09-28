@@ -106,6 +106,11 @@ export async function rankedHits(
     query: TsQueries
     boards: number
     perBoard: number
+    /**
+     * F10: the searcher is on the team. Otherwise the text of team-only comment threads is left out
+     * (read from comment_threads now, so a thread made team-only a moment ago is already excluded).
+     */
+    team: boolean
   },
 ): Promise<RankedRow[]> {
   if (!opts.boardIds.length || !opts.query.simple) return []
@@ -115,6 +120,9 @@ export async function rankedHits(
               ts_rank_cd(e.tsv, ${QUERY_SQL}, 32)::float8 AS rank
          FROM board_search_entries e
         WHERE e.workspace_id = $3 AND e.board_id = ANY($4::text[]) AND e.tsv @@ ${QUERY_SQL}
+          AND ($7::boolean OR e.source <> 'comment' OR EXISTS (
+                SELECT 1 FROM comment_threads t
+                 WHERE t.id = e.object_id AND t.board_id = e.board_id AND t.visibility = 'everyone'))
      ), r AS (
        SELECT m.*,
               row_number() OVER (PARTITION BY m.board_id ORDER BY m.rank DESC, m.source, m.object_id) AS n,
@@ -134,7 +142,15 @@ export async function rankedHits(
        FROM top
        JOIN r ON r.board_id = top.board_id AND r.n <= $6
       ORDER BY top.best DESC, top.board_id, r.n`,
-    [opts.query.simple, opts.query.english, opts.workspaceId, opts.boardIds, opts.boards, opts.perBoard],
+    [
+      opts.query.simple,
+      opts.query.english,
+      opts.workspaceId,
+      opts.boardIds,
+      opts.boards,
+      opts.perBoard,
+      opts.team,
+    ],
   )
   return r.rows
 }

@@ -170,6 +170,8 @@ export const CommentThread = z.object({
   updatedAt: isoDate,
   resolvedBy: CommentUserRef.nullable(),
   resolvedAt: isoDate.nullable(),
+  /** F10 (0020): who sees the thread; absent from an older api, which only had 'everyone' threads. */
+  visibility: z.enum(['everyone', 'team']).default('everyone'),
   comments: z.array(ThreadComment),
 })
 export type CommentThread = z.infer<typeof CommentThread>
@@ -182,10 +184,17 @@ export const ListThreadsResponse = z.object({
   threads: z.array(CommentThread),
   /** The caller's own read marks: threadId -> ISO time they last read it. */
   reads: z.record(z.string(), isoDate),
+  /** F10: what the caller may do with team-only threads here (absent from an older api). */
+  privacy: z.object({ teamOnly: z.boolean(), teamOnlyDefault: z.boolean() }).optional(),
 })
 export type ListThreadsResponse = z.infer<typeof ListThreadsResponse>
 
-export const CreateThreadInput = z.strictObject({ anchor: CommentAnchor, body: CommentBody })
+export const CreateThreadInput = z.strictObject({
+  anchor: CommentAnchor,
+  body: CommentBody,
+  /** F10: 'everyone' when omitted; 'team' only from a team member (403 otherwise). */
+  visibility: z.enum(['everyone', 'team']).optional(),
+})
 export const CreateCommentInput = z.strictObject({ body: CommentBody })
 export const EditCommentInput = z.strictObject({ body: CommentBody })
 
@@ -252,3 +261,32 @@ export const MarkNotificationsReadInput = z
 export function commentPlainText(body: string): string {
   return body.replace(new RegExp(MENTION_TOKEN_RE.source, 'g'), (_all, name: string) => `@${name}`)
 }
+
+// ---- F10: team-only threads (0020_comment_visibility) ----------------------------------------------
+
+/**
+ * Who sees a thread: 'everyone' who can view the board, or only the 'team' (workspace owners, admins
+ * and members with an account). Name-only guests and workspace guests (review-link visitors) never
+ * receive a team thread nor anything about it: comments, mentions, notifications, pins, counts, board
+ * events or search hits. Threads created before 0020 are 'everyone'.
+ */
+export const CommentThreadVisibility = z.enum(['everyone', 'team'])
+export type CommentThreadVisibility = z.infer<typeof CommentThreadVisibility>
+
+/**
+ * ListThreadsResponse.privacy. `teamOnly`: the caller is on the team (may start team-only threads and
+ * change a thread's visibility). `teamOnlyDefault`: the composer starts with "Team only" on, because
+ * people outside the team can open the board (a guest, or a live review or guest link).
+ */
+export const CommentPrivacy = z.object({ teamOnly: z.boolean(), teamOnlyDefault: z.boolean() })
+export type CommentPrivacy = z.infer<typeof CommentPrivacy>
+
+/** POST /api/threads/:tid/visibility (team members only; 404 for anyone who cannot see the thread). */
+export const SetThreadVisibilityInput = z.strictObject({ visibility: CommentThreadVisibility })
+
+/**
+ * Board event, sent only to people outside the team: a thread they could see became team-only, so
+ * drop it. (A team-only thread's own events go to the team only.)
+ */
+export const COMMENTS_HIDDEN_EVENT = 'comments.hidden'
+export const CommentsHiddenEvent = z.object({ threadId: CommentThreadId })

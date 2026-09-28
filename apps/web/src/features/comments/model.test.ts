@@ -45,6 +45,7 @@ function thread(comments: ThreadComment[], extra: Partial<CommentThread> = {}): 
     updatedAt: comments[comments.length - 1]?.createdAt ?? '2026-09-26T10:00:00.000Z',
     resolvedBy: null,
     resolvedAt: null,
+    visibility: 'everyone',
     comments,
     ...extra,
   }

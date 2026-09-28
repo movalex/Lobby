@@ -5,6 +5,7 @@ import {
   CommentAnchor,
   type CommentThread,
   type CommentThreadStatus,
+  type CommentThreadVisibility,
   type CommentUserRef,
   type ThreadComment,
 } from '@draftroom/contracts'
@@ -27,6 +28,7 @@ export interface ThreadRow {
   updated_at: Date
   resolved_by: string | null
   resolved_at: Date | null
+  visibility: CommentThreadVisibility
 }
 
 export interface CommentRow {
@@ -47,9 +49,12 @@ const json = (v: unknown): unknown => (typeof v === 'string' ? JSON.parse(v) : v
 /** A list of ids as one jsonb parameter (portable across PGlite and pg, unlike array parameters). */
 export const idList = (ids: readonly string[]) => JSON.stringify(ids)
 
+const THREAD_COLUMNS =
+  'id, workspace_id, board_id, anchor, status, created_by, created_at, updated_at, resolved_by, resolved_at, visibility'
+
 export async function loadThreadRow(q: Queryable, threadId: string): Promise<ThreadRow | null> {
   return q.maybeOne<ThreadRow>(
-    `SELECT id, workspace_id, board_id, anchor, status, created_by, created_at, updated_at, resolved_by, resolved_at
+    `SELECT ${THREAD_COLUMNS}
        FROM comment_threads WHERE id = $1`,
     [threadId],
   )
@@ -85,22 +90,24 @@ const unknownUser = (id: string): CommentUserRef => ({ id, name: 'Unknown', colo
 
 /**
  * Threads of one board (optionally one status, or specific ids) with their live comments. Threads
- * whose every comment was deleted are dropped: they no longer exist for anyone.
+ * whose every comment was deleted are dropped: they no longer exist for anyone. F10: team-only
+ * threads only with `team: true` (the caller is on the team).
  */
 export async function loadThreads(
   q: Queryable,
   board: { id: string; workspace_id: string },
-  opts: { status?: CommentThreadStatus; ids?: readonly string[] } = {},
+  opts: { status?: CommentThreadStatus; ids?: readonly string[]; team: boolean },
 ): Promise<CommentThread[]> {
   const threads = await q.query<ThreadRow>(
-    `SELECT id, workspace_id, board_id, anchor, status, created_by, created_at, updated_at, resolved_by, resolved_at
+    `SELECT ${THREAD_COLUMNS}
        FROM comment_threads
       WHERE board_id = $1 AND workspace_id = $2
         AND ($3::text IS NULL OR status = $3::text)
         AND ($4::jsonb IS NULL OR id IN (SELECT jsonb_array_elements_text($4::jsonb)))
+        AND ($5::boolean OR visibility = 'everyone')
       ORDER BY created_at, seq
       LIMIT ${MAX_THREADS_LISTED}`,
-    [board.id, board.workspace_id, opts.status ?? null, opts.ids ? idList(opts.ids) : null],
+    [board.id, board.workspace_id, opts.status ?? null, opts.ids ? idList(opts.ids) : null, opts.team],
   )
   if (threads.rows.length === 0) return []
   const threadIds = threads.rows.map((t) => t.id)
@@ -162,18 +169,20 @@ export async function loadThreads(
       updatedAt: iso(t.updated_at),
       resolvedBy: t.resolved_by ? ref(t.resolved_by) : null,
       resolvedAt: t.resolved_at ? iso(t.resolved_at) : null,
+      visibility: t.visibility,
       comments: list,
     })
   }
   return out
 }
 
+/** One thread, whatever its visibility (the caller already decided who may see it). */
 export async function loadThread(
   q: Queryable,
   board: { id: string; workspace_id: string },
   threadId: string,
 ): Promise<CommentThread | null> {
-  return (await loadThreads(q, board, { ids: [threadId] }))[0] ?? null
+  return (await loadThreads(q, board, { ids: [threadId], team: true }))[0] ?? null
 }
 
 /** The caller's read marks for the given threads. */
@@ -206,14 +215,73 @@ export async function markRead(
   )
 }
 
+// ---- F10: the team -------------------------------------------------------------------------------
+
+/**
+ * On the team: a workspace owner, admin or member with an account. Workspace guests (people who came
+ * in through a board link, review-link visitors) and name-only guests (users.kind = 'guest') are not.
+ */
+export const isTeamRole = (role: WorkspaceRole | null | undefined, kind: string | null | undefined) =>
+  (role === 'owner' || role === 'admin' || role === 'member') && kind !== 'guest'
+
+/** Of `userIds`, the ones on the team of the workspace (see isTeamRole). */
+export async function teamAmong(
+  q: Queryable,
+  workspaceId: string,
+  userIds: readonly string[],
+): Promise<Set<string>> {
+  const ids = [...new Set(userIds)]
+  if (ids.length === 0) return new Set()
+  const rows = await q.query<{ id: string; role: WorkspaceRole; kind: string }>(
+    `SELECT u.id, wm.role, u.kind FROM users u
+       JOIN workspace_members wm ON wm.workspace_id = $1 AND wm.user_id = u.id
+      WHERE u.id IN (SELECT jsonb_array_elements_text($2::jsonb))`,
+    [workspaceId, idList(ids)],
+  )
+  return new Set(rows.rows.filter((r) => isTeamRole(r.role, r.kind)).map((r) => r.id))
+}
+
+/** Whether this person is on the team of the workspace. */
+export async function isTeamMember(q: Queryable, workspaceId: string, userId: string): Promise<boolean> {
+  return (await teamAmong(q, workspaceId, [userId])).has(userId)
+}
+
+/**
+ * Whether people outside the team can open this board now: a guest holds a grant on it (a workspace
+ * guest or a name-only guest), or a board link that has not ended could let one in. The composer then
+ * starts with "Team only" on.
+ */
+export async function hasOutsideAccess(
+  q: Queryable,
+  board: { id: string; workspace_id: string },
+  at: Date,
+): Promise<boolean> {
+  const r = await q.one<{ outside: boolean }>(
+    `SELECT (EXISTS (
+       SELECT 1 FROM board_members bm
+         JOIN users u ON u.id = bm.user_id
+         LEFT JOIN workspace_members wm ON wm.workspace_id = $2 AND wm.user_id = bm.user_id
+        WHERE bm.board_id = $1 AND (u.kind = 'guest' OR wm.role IS NULL OR wm.role = 'guest')
+     ) OR EXISTS (
+       SELECT 1 FROM invitations i
+        WHERE i.board_id = $1 AND i.workspace_id = $2 AND i.revoked_at IS NULL AND i.expires_at > $3
+          AND (i.multi_use OR i.redeemed_by IS NULL)
+     )) AS outside`,
+    [board.id, board.workspace_id, at],
+  )
+  return r.outside === true
+}
+
 /**
  * Of `userIds`, the ones who can view the board right now (same rules as every other access
  * decision: @draftroom/permissions over membership, grant, visibility and status), with their names.
+ * F10: with `team: true` (a team-only thread), only the ones on the team.
  */
 export async function viewersAmong(
   q: Queryable,
   board: Pick<BoardRow, 'id' | 'workspace_id' | 'visibility' | 'status'>,
   userIds: readonly string[],
+  opts: { team?: boolean } = {},
 ): Promise<Map<string, string>> {
   const out = new Map<string, string>()
   const ids = [...new Set(userIds)]
@@ -221,10 +289,11 @@ export async function viewersAmong(
   const rows = await q.query<{
     id: string
     name: string
+    kind: string
     workspace_role: WorkspaceRole
     board_grant: BoardRole | null
   }>(
-    `SELECT u.id, u.name, wm.role AS workspace_role, bm.role AS board_grant
+    `SELECT u.id, u.name, u.kind, wm.role AS workspace_role, bm.role AS board_grant
        FROM users u
        JOIN workspace_members wm ON wm.workspace_id = $2 AND wm.user_id = u.id
        LEFT JOIN board_members bm ON bm.board_id = $1 AND bm.user_id = u.id
@@ -237,6 +306,7 @@ export async function viewersAmong(
       boardGrant: r.board_grant,
       visibility: board.visibility,
     })
+    if (opts.team && !isTeamRole(r.workspace_role, r.kind)) continue
     if (can(role, 'view', board.status)) out.set(r.id, r.name)
   }
   return out

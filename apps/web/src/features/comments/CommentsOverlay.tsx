@@ -329,6 +329,9 @@ function NewThreadComposer({ ctx }: { ctx: FeatureContext }) {
     [editor, pending],
   )
   const pos = usePopoverPosition(ctx, point)
+  // F10: "Team only" for people on the team (on by default while guests or a client link can open the board).
+  const canTeamOnly = useValue('dr-comments.privacy-team', () => store.privacy.get().teamOnly, [store])
+  const teamOnly = useValue('dr-comments.new-team-only', () => store.newThreadTeamOnly(), [store])
   if (!pending) return null
   // Keyboard focus goes back to the board, so Esc/C/V keep working after the composer closes.
   const cancel = () => {
@@ -377,6 +380,25 @@ function NewThreadComposer({ ctx }: { ctx: FeatureContext }) {
             <CloseIcon />
           </button>
         </header>
+        {canTeamOnly && (
+          <label className="dr-cteamtoggle" data-testid="new-comment-team-only-row">
+            <input
+              type="checkbox"
+              role="switch"
+              aria-checked={teamOnly}
+              data-testid="new-comment-team-only"
+              checked={teamOnly}
+              onChange={(e) => store.teamOnlyChoice.set(e.target.checked)}
+            />
+            <span className="dr-cteamtoggle__track" aria-hidden="true" />
+            <span className="dr-cteamtoggle__text">
+              <strong>Team only</strong>
+              <span>
+                {teamOnly ? 'Guests and client links won’t see it' : 'Everyone on the board sees it'}
+              </span>
+            </span>
+          </label>
+        )}
         <div className="dr-cthread__reply">
           <Composer
             store={store}

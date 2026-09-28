@@ -40,6 +40,7 @@ function makeThread(author = ANN, extra: Partial<CommentThread> = {}): CommentTh
     updatedAt: at,
     resolvedBy: null,
     resolvedAt: null,
+    visibility: 'everyone',
     comments: [
       {
         id: `cmt_${String(seq).padStart(20, '0')}`,
@@ -66,6 +67,12 @@ function fakeApi(list: ListThreadsResponse = { threads: [], reads: {} }) {
     edit: vi.fn(),
     remove: vi.fn(async () => {}),
     setStatus: vi.fn(),
+    setVisibility: vi.fn(async (threadId: string, visibility: 'everyone' | 'team') => ({
+      ...makeThread(ANN),
+      id: threadId,
+      visibility,
+      updatedAt: '2030-01-01T00:00:00.000Z',
+    })),
     markRead: vi.fn(async (threadId: string) => ({ threadId, readAt: '2030-01-01T00:00:00.000Z' })),
     notifications: vi.fn(async () => ({ notifications: [], unreadCount: 0 })),
     markNotificationsRead: vi.fn(async () => {}),
@@ -409,6 +416,123 @@ describe('who can be @mentioned follows sharing changes (F4)', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  describe('F10: team-only threads', () => {
+    it('"Team only" follows the board for the team, can be switched, and is sent with a new thread', async () => {
+      const api = fakeApi({ threads: [], reads: {}, privacy: { teamOnly: true, teamOnlyDefault: true } })
+      const s = make(api)
+      expect(s.newThreadTeamOnly()).toBe(false) // nothing known before the list
+      await s.load()
+      expect(s.newThreadTeamOnly()).toBe(true)
+      s.setDraft(NEW_THREAD_DRAFT, { text: 'Internal', mentions: [] })
+      await s.createThread({ kind: 'point', x: 0, y: 0 }, s.draft(NEW_THREAD_DRAFT))
+      expect(api.createThread).toHaveBeenLastCalledWith(
+        BOARD,
+        { kind: 'point', x: 0, y: 0 },
+        'Internal',
+        'team',
+      )
+      s.teamOnlyChoice.set(false)
+      expect(s.newThreadTeamOnly()).toBe(false)
+      s.setDraft(NEW_THREAD_DRAFT, { text: 'For all', mentions: [] })
+      await s.createThread({ kind: 'point', x: 0, y: 0 }, s.draft(NEW_THREAD_DRAFT))
+      expect(api.createThread).toHaveBeenLastCalledWith(
+        BOARD,
+        { kind: 'point', x: 0, y: 0 },
+        'For all',
+        'everyone',
+      )
+    })
+
+    it('outside the team there is no "Team only", and a hidden thread is dropped (open popover closed)', async () => {
+      const t = makeThread()
+      const s = make(
+        fakeApi({ threads: [t], reads: {}, privacy: { teamOnly: false, teamOnlyDefault: false } }),
+      )
+      await s.load()
+      s.teamOnlyChoice.set(true)
+      expect(s.newThreadTeamOnly()).toBe(false)
+      s.openThread(t.id)
+      s.handleEvent('comments.hidden', { threadId: 'not-an-id' }) // untrusted: ignored
+      expect(s.thread(t.id)).toBeDefined()
+      s.handleEvent('comments.hidden', { threadId: t.id })
+      expect(s.thread(t.id)).toBeUndefined()
+      expect(s.openThreadId.get()).toBeNull()
+    })
+
+    it('a list from an older api (no privacy, no visibility) means everyone, and team threads never show outside the team', async () => {
+      const old = makeThread()
+      const team = makeThread(ANN, { visibility: 'team' })
+      const s = make(fakeApi({ threads: [old, team], reads: {} }))
+      await s.load()
+      expect(s.privacy.get()).toEqual({ teamOnly: false, teamOnlyDefault: false })
+      expect(Object.keys(s.threads.get())).toEqual([old.id])
+    })
+
+    it('a sharing change refetches the list for the team (a new client link turns the default on)', async () => {
+      vi.useFakeTimers()
+      try {
+        const api = fakeApi({ threads: [], reads: {}, privacy: { teamOnly: true, teamOnlyDefault: false } })
+        const s = make(api)
+        await s.load()
+        expect(s.newThreadTeamOnly()).toBe(false)
+        api.listThreads = vi.fn(async () => ({
+          threads: [],
+          reads: {},
+          privacy: { teamOnly: true, teamOnlyDefault: true },
+        }))
+        s.handleEvent('sharing.changed', { reason: 'review-link-created' })
+        s.handleEvent('sharing.changed', { reason: 'review-link-created' })
+        await vi.advanceTimersByTimeAsync(1_000)
+        expect(api.listThreads).toHaveBeenCalledTimes(1)
+        expect(s.newThreadTeamOnly()).toBe(true)
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('"Team only" is chosen per comment: after a post the next new comment starts from the board’s default', async () => {
+      const api = fakeApi({ threads: [], reads: {}, privacy: { teamOnly: true, teamOnlyDefault: true } })
+      const s = make(api)
+      await s.load()
+      // One comment meant for the client…
+      s.teamOnlyChoice.set(false)
+      s.setDraft(NEW_THREAD_DRAFT, { text: 'For the client', mentions: [] })
+      expect(await s.createThread({ kind: 'point', x: 0, y: 0 }, s.draft(NEW_THREAD_DRAFT))).not.toBeNull()
+      expect(api.createThread).toHaveBeenLastCalledWith(
+        BOARD,
+        { kind: 'point', x: 0, y: 0 },
+        'For the client',
+        'everyone',
+      )
+      // …never turns the switch off for the internal remark that follows.
+      expect(s.newThreadTeamOnly()).toBe(true)
+      s.setDraft(NEW_THREAD_DRAFT, { text: 'Internal', mentions: [] })
+      await s.createThread({ kind: 'point', x: 0, y: 0 }, s.draft(NEW_THREAD_DRAFT))
+      expect(api.createThread).toHaveBeenLastCalledWith(
+        BOARD,
+        { kind: 'point', x: 0, y: 0 },
+        'Internal',
+        'team',
+      )
+      // A failed post keeps the draft and the choice made for it.
+      s.teamOnlyChoice.set(false)
+      api.createThread = vi.fn(async () => {
+        throw new Error('offline')
+      })
+      s.setDraft(NEW_THREAD_DRAFT, { text: 'Retry me', mentions: [] })
+      expect(await s.createThread({ kind: 'point', x: 0, y: 0 }, s.draft(NEW_THREAD_DRAFT))).toBeNull()
+      expect(s.newThreadTeamOnly()).toBe(false)
+    })
+
+    it('setVisibility applies the thread the server returns', async () => {
+      const t = makeThread()
+      const s = make(fakeApi({ threads: [t], reads: {}, privacy: { teamOnly: true, teamOnlyDefault: true } }))
+      await s.load()
+      expect(await s.setVisibility(t.id, 'team')).toBe(true)
+      expect(s.thread(t.id)?.visibility).toBe('team')
+    })
   })
 
   it('only a new or denied request is known not to change who has access', () => {

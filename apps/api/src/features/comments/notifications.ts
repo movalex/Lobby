@@ -12,7 +12,7 @@ import {
   resolveBoardRole,
   type WorkspaceRole,
 } from '@draftroom/permissions'
-import { idList } from './store.ts'
+import { idList, isTeamRole } from './store.ts'
 
 export const MAX_NOTIFICATIONS_LISTED = 100
 const MAX_UNREAD_COUNTED = 1_000
@@ -204,6 +204,9 @@ interface NotificationRow {
   request_role: 'editor' | 'commenter' | 'viewer' | null
   request_message: string | null
   request_status: 'pending' | 'approved' | 'denied' | null
+  /** F10: the thread's visibility (null: no thread), and the recipient's kind of user. */
+  thread_visibility: 'everyone' | 'team' | null
+  recipient_kind: string | null
 }
 
 const SELECT = `SELECT n.id, n.kind, n.board_id, n.thread_id, n.comment_id, n.created_at, n.read_at,
@@ -211,9 +214,12 @@ const SELECT = `SELECT n.id, n.kind, n.board_id, n.thread_id, n.comment_id, n.cr
        wm.role AS workspace_role, bm.role AS board_grant,
        a.id AS actor_id, a.name AS actor_name, a.color AS actor_color,
        c.body AS comment_body, c.deleted_at AS comment_deleted_at,
-       ar.role_requested AS request_role, ar.message AS request_message, ar.status AS request_status
+       ar.role_requested AS request_role, ar.message AS request_message, ar.status AS request_status,
+       t.visibility AS thread_visibility, ru.kind AS recipient_kind
   FROM notifications n
   JOIN boards b ON b.id = n.board_id AND b.workspace_id = n.workspace_id
+  LEFT JOIN users ru ON ru.id = n.user_id
+  LEFT JOIN comment_threads t ON t.id = n.thread_id AND t.board_id = n.board_id
   LEFT JOIN workspace_members wm ON wm.workspace_id = n.workspace_id AND wm.user_id = n.user_id
   LEFT JOIN board_members bm ON bm.board_id = n.board_id AND bm.user_id = n.user_id
   LEFT JOIN users a ON a.id = n.actor_id
@@ -233,6 +239,10 @@ function visible(r: NotificationRow): boolean {
     visibility: r.visibility,
   })
   if (r.comment_id && (r.comment_body === null || r.comment_deleted_at)) return false
+  // F10: a team-only thread (made team-only after this was sent, or its thread is gone) is never
+  // shown to someone outside the team: not in the bell, not in the count.
+  if (r.thread_id && r.thread_visibility !== 'everyone' && !isTeamRole(r.workspace_role, r.recipient_kind))
+    return false
   // Access requests are for people who can act on them.
   if (r.kind === 'access_request') return can(role, 'manage_access', r.status)
   return can(role, 'view', r.status)

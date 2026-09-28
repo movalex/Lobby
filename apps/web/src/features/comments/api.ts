@@ -4,6 +4,7 @@
 import {
   type CommentAnchor,
   type CommentThread,
+  type CommentThreadVisibility,
   ListNotificationsResponse,
   ListThreadsResponse,
   ThreadReadResponse,
@@ -14,7 +15,14 @@ import type { Mentionable } from './mentions.ts'
 
 export interface CommentsApi {
   listThreads(boardId: string, signal?: AbortSignal): Promise<ListThreadsResponse>
-  createThread(boardId: string, anchor: CommentAnchor, body: string): Promise<CommentThread>
+  createThread(
+    boardId: string,
+    anchor: CommentAnchor,
+    body: string,
+    visibility?: CommentThreadVisibility,
+  ): Promise<CommentThread>
+  /** F10: a team member makes a thread team-only or visible to everyone. */
+  setVisibility(threadId: string, visibility: CommentThreadVisibility): Promise<CommentThread>
   reply(threadId: string, body: string): Promise<CommentThread>
   edit(commentId: string, body: string): Promise<CommentThread>
   remove(commentId: string): Promise<void>
@@ -35,10 +43,10 @@ export function createCommentsApi(client: ApiClient): CommentsApi {
         schema: ListThreadsResponse,
         signal,
       }),
-    createThread: async (boardId, anchor, body) =>
+    createThread: async (boardId, anchor, body, visibility) =>
       (
         await request('POST', `/api/boards/${enc(boardId)}/threads`, {
-          body: { anchor, body },
+          body: visibility === 'team' ? { anchor, body, visibility } : { anchor, body },
           schema: ThreadResponse,
         })
       ).thread,
@@ -53,6 +61,13 @@ export function createCommentsApi(client: ApiClient): CommentsApi {
       (await request('PATCH', `/api/comments/${enc(commentId)}`, { body: { body }, schema: ThreadResponse }))
         .thread,
     remove: (commentId) => request('DELETE', `/api/comments/${enc(commentId)}`, { schema: null }),
+    setVisibility: async (threadId, visibility) =>
+      (
+        await request('POST', `/api/threads/${enc(threadId)}/visibility`, {
+          body: { visibility },
+          schema: ThreadResponse,
+        })
+      ).thread,
     setStatus: async (threadId, action) =>
       (await request('POST', `/api/threads/${enc(threadId)}/${action}`, { schema: ThreadResponse })).thread,
     markRead: (threadId) =>
