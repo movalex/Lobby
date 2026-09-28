@@ -499,7 +499,7 @@ test('recently deleted files: an image and a PDF card deleted by alice come back
   expect((await listDeleted(bobApi, board)).entries).toEqual([])
 })
 
-test('viewer and commenter: history rows are listed without restore, save or select controls, and forged restore or checkpoint POSTs get 403', async ({
+test('viewer and commenter: checkpoints are listed without save controls, "Recently deleted" is not shown (authz-001), and forged restore or checkpoint POSTs get 403', async ({
   session,
   board,
   users,
@@ -531,10 +531,12 @@ test('viewer and commenter: history rows are listed without restore, save or sel
   const viewer = await session('bob', { role: 'viewer' })
   const commenter = await session('carol', { role: 'commenter' })
   for (const s of [viewer, commenter]) {
-    await test.step(`${s.user}: sees the rows, gets no editing controls`, async () => {
+    await test.step(`${s.user}: sees the checkpoints, not what was deleted, and no editing controls`, async () => {
       await openHistory(s.page)
-      await expect(deletedRow(s.page, NOTE)).toContainText('Pitch deck outline')
-      await expect(deletedRow(s.page, NOTE)).toContainText(`deleted by ${a.name}`)
+      // authz-001: deleted objects' text is for editors only (security-web.fix.spec.ts covers each role).
+      await expect(historyPanel(s.page).getByRole('heading', { name: 'Recently deleted' })).toHaveCount(0)
+      await expect(deletedRow(s.page, NOTE)).toHaveCount(0)
+      await expect(historyPanel(s.page)).not.toContainText('Pitch deck outline')
       await expect(checkpointRow(s.page, snapshotId)).toContainText('Review baseline')
       for (const id of [
         'deleted-restore',

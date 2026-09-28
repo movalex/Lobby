@@ -45,19 +45,39 @@ describe('permissions (UI hints)', () => {
   it('editors of active boards save and restore; viewers and archived boards do not', () => {
     expect(historyPermissions('editor', 'active', 'member')).toEqual({
       canEdit: true,
+      canSeeDeleted: true,
       canCreateBoards: true,
       canKeepSharing: false,
     })
     expect(historyPermissions('viewer', 'active', 'member')).toEqual({
       canEdit: false,
+      canSeeDeleted: false,
       canCreateBoards: true, // may restore/duplicate into a board of their own
       canKeepSharing: false,
     })
     expect(historyPermissions('owner', 'archived', 'owner')).toMatchObject({
       canEdit: false,
+      canSeeDeleted: false,
       canKeepSharing: true,
     })
     expect(historyPermissions('owner', 'active', 'owner').canKeepSharing).toBe(true)
+  })
+
+  // authz-001: "Recently deleted" holds the text of deleted objects (notes deleted before the board was
+  // shared). Only people who could restore them may read the list; the API requires `edit` as well.
+  it('"Recently deleted" is for canvas editors only: never commenters, viewers or review-link guests', () => {
+    expect(historyPermissions('owner', 'active', 'owner').canSeeDeleted).toBe(true)
+    expect(historyPermissions('editor', 'active', 'guest').canSeeDeleted).toBe(true)
+    for (const role of ['commenter', 'viewer'] as const) {
+      for (const ws of ['owner', 'admin', 'member', 'guest', null] as const) {
+        expect(historyPermissions(role, 'active', ws).canSeeDeleted, `${role}/${ws}`).toBe(false)
+      }
+    }
+    // A review-link guest is a workspace guest with a viewer or commenter grant.
+    expect(historyPermissions('viewer', 'active', 'guest')).toMatchObject({
+      canSeeDeleted: false,
+      canCreateBoards: false,
+    })
   })
 
   it('guests and callers without a workspace role cannot create boards', () => {

@@ -11,6 +11,9 @@ import {
 } from 'react'
 import { api, isApiError, setUnauthorizedHandler } from '../api/client.ts'
 import { navigate, signInPath } from '../lib/routing.ts'
+import './auth.css'
+import { runSignOut, type SignOutOutcome, type SignOutProblem } from './signOut.ts'
+import { signedOutMarks } from './signOutMark.ts'
 
 export type SessionState =
   | { status: 'loading' }
@@ -21,6 +24,13 @@ export type SessionState =
 
 export type ConfigStatus = 'loading' | 'ready' | 'error'
 
+export interface SignOutOptions {
+  /** Where to come back to after the next sign-in ("Switch user"). */
+  returnTo?: string | null
+  /** SCA-4: end every session of this user on every device (POST /api/auth/sessions/revoke-all). */
+  everywhere?: boolean
+}
+
 export interface SessionValue {
   state: SessionState
   /** null until loaded, or when /api/auth/config failed (see configStatus). */
@@ -29,8 +39,14 @@ export interface SessionValue {
   retryConfig(): void
   /** Re-reads /api/me (after sign-in, invitation acceptance, workspace changes). */
   refresh(): Promise<Me | null>
-  /** Ends the API session and goes to /signin (optionally coming back to `returnTo` afterwards). */
-  signOut(opts?: { returnTo?: string | null }): Promise<void>
+  /**
+   * Ends the API session AND the browser's Clerk session (SCA-1), then goes to /signin (optionally
+   * coming back to `returnTo` afterwards). When it could not finish, the person stays signed in and
+   * the provider shows why (data-testid="signout-error") instead of a signed-out screen.
+   */
+  signOut(opts?: SignOutOptions): Promise<SignOutOutcome>
+  /** A sign-out is running (the account menu disables its buttons). */
+  signingOut: boolean
 }
 
 const SessionContext = createContext<SessionValue | null>(null)
@@ -48,13 +64,23 @@ export function useMe(): Me {
   return state.me
 }
 
+/** The Clerk publishable key when this server signs people in with Clerk; null otherwise. */
+function clerkKey(config: AuthConfig | null): string | null {
+  return config?.providers.includes('clerk') ? (config.clerkPublishableKey ?? null) : null
+}
+
 export function SessionProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<SessionState>({ status: 'loading' })
   const [config, setConfig] = useState<AuthConfig | null>(null)
   const [configStatus, setConfigStatus] = useState<ConfigStatus>('loading')
   const [configAttempt, setConfigAttempt] = useState(0)
+  const [signingOut, setSigningOut] = useState(false)
+  const [problem, setProblem] = useState<{ outcome: SignOutProblem; opts: SignOutOptions } | null>(null)
   // Responses can arrive out of order (a slow boot /api/me after a fast sign-in); only the latest counts.
   const generation = useRef(0)
+  const configRef = useRef<AuthConfig | null>(null)
+  configRef.current = config
+  const running = useRef<Promise<SignOutOutcome> | null>(null)
 
   const refresh = useCallback(async () => {
     const gen = ++generation.current
@@ -103,21 +129,99 @@ export function SessionProvider({ children }: { children: ReactNode }) {
 
   const retryConfig = useCallback(() => setConfigAttempt((n) => n + 1), [])
 
-  const signOut = useCallback(async (opts: { returnTo?: string | null } = {}) => {
-    generation.current++
-    try {
-      await api.logout()
-    } catch {
-      // The cookie may already be gone; either way the UI is signed out below.
-    }
-    // Navigate before the state change so the signed-out guard never sees the old page.
-    navigate(signInPath(opts.returnTo), { replace: true })
-    setState({ status: 'signed-out' })
+  const signOut = useCallback((opts: SignOutOptions = {}): Promise<SignOutOutcome> => {
+    // One at a time: a second click while Clerk is still loading joins the first sign-out.
+    if (running.current) return running.current
+    // A visible problem stays up (its "Try again" says "Signing out…") until this attempt's outcome.
+    setSigningOut(true)
+    const key = clerkKey(configRef.current)
+    const run = runSignOut({
+      mode: opts.everywhere ? 'everywhere' : 'here',
+      revokeAll: api.revokeAllSessions,
+      logout: api.logout,
+      // Only with Clerk: the dev provider never downloads the Clerk SDK. When the config is not known,
+      // there is nothing to end here; the mark still stops the sign-in page from exchanging on its own.
+      endClerkSession: key ? () => import('./clerkSession.tsx').then((m) => m.endClerkSession(key)) : null,
+      marks: signedOutMarks,
+    })
+      .then((outcome) => {
+        if (outcome.status === 'signed-out') {
+          generation.current++
+          setProblem(null)
+          // Navigate before the state change so the signed-out guard never sees the old page.
+          navigate(signInPath(opts.returnTo), { replace: true })
+          setState({ status: 'signed-out' })
+        } else {
+          setProblem({ outcome, opts })
+        }
+        return outcome
+      })
+      .finally(() => {
+        running.current = null
+        setSigningOut(false)
+      })
+    running.current = run
+    return run
   }, [])
 
   const value = useMemo<SessionValue>(
-    () => ({ state, config, configStatus, retryConfig, refresh, signOut }),
-    [state, config, configStatus, retryConfig, refresh, signOut],
+    () => ({ state, config, configStatus, retryConfig, refresh, signOut, signingOut }),
+    [state, config, configStatus, retryConfig, refresh, signOut, signingOut],
   )
-  return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>
+  return (
+    <SessionContext.Provider value={value}>
+      {children}
+      {problem && (
+        <SignOutProblemAlert
+          problem={problem.outcome}
+          busy={signingOut}
+          onRetry={() => void signOut(problem.opts)}
+          onDismiss={() => setProblem(null)}
+        />
+      )}
+    </SessionContext.Provider>
+  )
+}
+
+/** Why a sign-out did not happen, over whatever page the person is on (they are still signed in). */
+function SignOutProblemAlert({
+  problem,
+  busy,
+  onRetry,
+  onDismiss,
+}: {
+  problem: SignOutProblem
+  busy: boolean
+  onRetry(): void
+  onDismiss(): void
+}) {
+  return (
+    <div
+      className="dr-signout-alert"
+      role="alert"
+      data-testid="signout-error"
+      data-reason={problem.status === 'unsupported' ? 'unsupported' : problem.step}
+    >
+      <p>
+        <strong>{problem.title}</strong> {problem.detail}
+      </p>
+      <div className="dr-row">
+        {problem.retryable && (
+          <button
+            type="button"
+            className="dr-btn dr-btn--primary"
+            data-testid="signout-retry"
+            disabled={busy}
+            aria-busy={busy || undefined}
+            onClick={onRetry}
+          >
+            {busy ? 'Signing out…' : 'Try again'}
+          </button>
+        )}
+        <button type="button" className="dr-btn" data-testid="signout-dismiss" onClick={onDismiss}>
+          Dismiss
+        </button>
+      </div>
+    </div>
+  )
 }

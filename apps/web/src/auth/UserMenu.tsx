@@ -1,9 +1,11 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import { useBoard } from '../board/board-context.ts'
 import { initialsFor, safeColor } from '../lib/identity.ts'
 import { ThemePicker } from '../theme/ThemePicker.tsx'
 import { useTldrawThemeSync } from '../theme/useTheme.ts'
-import { useMe, useSession } from './session.tsx'
+import { type SignOutOptions, useMe, useSession } from './session.tsx'
+
+type SignOutButton = 'switch' | 'out' | 'everywhere'
 
 /** True when this server signs people in with the development provider (anyone can be anyone). */
 export function useIsDevAuth(): boolean {
@@ -17,12 +19,16 @@ export function useIsDevAuth(): boolean {
  * The signed-in user's button. With development sign-in it is the "dev identity" badge the e2e
  * suite looks for, and it says plainly that the identity is not verified. Its menu holds the theme
  * choice (System / Light / Dark); on a board it also keeps tldraw's canvas theme in step with it.
+ * Switch user, Sign out and Sign out everywhere (SCA-4) all end the Clerk session too (SCA-1).
  */
 export function UserMenu({ compact = false }: { compact?: boolean }) {
   const me = useMe()
-  const { signOut } = useSession()
+  const { signOut, signingOut } = useSession()
   const dev = useIsDevAuth()
   const [open, setOpen] = useState(false)
+  // Which button started the running sign-out (its label says so).
+  const [clicked, setClicked] = useState<SignOutButton | null>(null)
+  const everywhereHint = useId()
   const wrap = useRef<HTMLDivElement>(null)
   const button = useRef<HTMLButtonElement>(null)
   const user = me.user
@@ -52,6 +58,12 @@ export function UserMenu({ compact = false }: { compact?: boolean }) {
   }, [open])
 
   const here = `${location.pathname}${location.search}`
+  const start = (which: SignOutButton, opts?: SignOutOptions) => {
+    setClicked(which)
+    void signOut(opts)
+  }
+  const label = (which: SignOutButton, text: string) =>
+    signingOut && clicked === which ? 'Signing out…' : text
   return (
     <div className="dr-devbadge-wrap" ref={wrap}>
       <button
@@ -98,13 +110,35 @@ export function UserMenu({ compact = false }: { compact?: boolean }) {
               type="button"
               className="dr-btn"
               data-testid="switch-user"
-              onClick={() => void signOut({ returnTo: here })}
+              disabled={signingOut}
+              onClick={() => start('switch', { returnTo: here })}
             >
-              Switch user
+              {label('switch', 'Switch user')}
             </button>
-            <button type="button" className="dr-btn" data-testid="sign-out" onClick={() => void signOut()}>
-              Sign out
+            <button
+              type="button"
+              className="dr-btn"
+              data-testid="sign-out"
+              disabled={signingOut}
+              onClick={() => start('out')}
+            >
+              {label('out', 'Sign out')}
             </button>
+          </div>
+          <div className="dr-account__everywhere">
+            <button
+              type="button"
+              className="dr-btn"
+              data-testid="sign-out-everywhere"
+              disabled={signingOut}
+              aria-describedby={everywhereHint}
+              onClick={() => start('everywhere', { everywhere: true })}
+            >
+              {label('everywhere', 'Sign out everywhere')}
+            </button>
+            <p id={everywhereHint} className="dr-muted">
+              Ends your Lobby sessions on every device and browser, this one included.
+            </p>
           </div>
         </div>
       )}

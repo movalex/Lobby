@@ -1,0 +1,57 @@
+/* Sign-out and sign-in additions (auth/session.tsx, UserMenu.tsx, ClerkSignIn.tsx). Tokens from
+   styles.css, so both themes work. */
+
+/* A sign-out that did not finish: over every page (the board canvas and its panels included). */
+.dr-signout-alert {
+  position: fixed;
+  top: calc(var(--dr-topbar-h) + 12px);
+  left: 50%;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: min(480px, calc(100vw - 32px));
+  padding: 12px 14px;
+  border: 1px solid var(--dr-danger);
+  border-radius: var(--dr-radius);
+  background: var(--dr-danger-bg);
+  color: var(--dr-ink);
+  box-shadow: var(--dr-shadow-pop);
+  font-size: 13.5px;
+  line-height: 1.45;
+  transform: translateX(-50%);
+}
+.dr-signout-alert p {
+  margin: 0;
+}
+.dr-signout-alert strong {
+  color: var(--dr-danger);
+}
+
+/* "Sign out everywhere": its own row under Switch user / Sign out, with what it does. */
+.dr-account__everywhere {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--dr-line);
+}
+.dr-account__everywhere .dr-btn {
+  width: 100%;
+  justify-content: center;
+}
+.dr-account__everywhere p {
+  margin: 6px 0 0;
+  font-size: 12.5px;
+}
+
+/* The sign-in page after an explicit sign-out, while Clerk still has a session (SCA-1). */
+.dr-clerk-continue p {
+  margin: 0 0 12px;
+}
+.dr-clerk-warning {
+  padding: 8px 10px;
+  border: 1px solid var(--dr-warn-line);
+  border-radius: 8px;
+  background: var(--dr-warn-bg);
+  color: var(--dr-warn);
+  font-size: 13px;
+}
