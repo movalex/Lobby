@@ -21,6 +21,7 @@ import {
   PHONE_CANVAS_MAX_W,
   PHONE_FRAME_INSET,
   parseStoredCamera,
+  phoneFrameCamera,
   planStartView,
   prefersFirstFrame,
   readStartParams,
@@ -73,6 +74,15 @@ function showFrame(
 ) {
   const b = editor.getShapePageBounds(frameId)
   if (!b) return false
+  if (onPhone(editor)) {
+    // R13: a frame far wider than the phone opens at its left end, readable, not as a thin strip.
+    const screen = editor.getViewportScreenBounds()
+    const camera = phoneFrameCamera(b, { w: screen.w, h: screen.h }, PHONE_FRAME_INSET)
+    if (camera) {
+      editor.setCamera(camera, move)
+      return true
+    }
+  }
   editor.zoomToBounds(b, { targetZoom: 1, inset: onPhone(editor) ? PHONE_FRAME_INSET : 48, ...move })
   return true
 }
@@ -80,7 +90,7 @@ function showFrame(
 /**
  * What a first visit without a start view shows: all content on the current page (never zoomed in
  * past 100% on a board with one small note), or its first frame where the whole page would not be
- * readable (a phone; content too large for the smallest zoom): F15.
+ * readable (a phone; a page that only fits below a readable zoom): F15, DANA-06.
  */
 function fitContent(editor: Editor, animate = false): 'fit' | 'first-frame' | 'none' {
   const bounds = editor.getCurrentPageBounds()

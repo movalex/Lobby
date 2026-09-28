@@ -1,4 +1,4 @@
-// Tag chips on notes and file cards, drawn inside the shape itself through tldraw 5.4.2's `ShapeWrapper`
+// Tag chips on notes, cards, images and shapes, drawn in the shape itself through tldraw 5.4.2's `ShapeWrapper`
 // component slot (the div each shape renders into; editor Shape.tsx). Being inside the shape, the chips:
 //  - move, scale and rotate with it through the camera's CSS transform: no work per frame or per camera
 //    move, and they stack with their note (a note on top covers the chips of the note below);
@@ -12,7 +12,15 @@
 import type { TagDef } from '@draftroom/contracts'
 import { forwardRef, memo } from 'react'
 import { DefaultShapeWrapper, type TLShape, type TLShapeWrapperProps, useEditor, useValue } from 'tldraw'
-import { chipLayout, displayTags, isShortTagName, isTaggable, type Meta, tagTokens } from './model.ts'
+import {
+  chipLayout,
+  chipPlacement,
+  displayTags,
+  isShortTagName,
+  isTaggable,
+  type Meta,
+  tagTokens,
+} from './model.ts'
 import { boardTags } from './runtime.ts'
 
 export const TagShapeWrapper = forwardRef<HTMLDivElement, TLShapeWrapperProps>(function TagShapeWrapper(
@@ -51,7 +59,7 @@ const TagChips = memo(function TagChips({ meta, kind, scale }: { meta: Meta; kin
   return (
     <ul
       className="dr-tag-chips"
-      data-kind={kind === 'note' ? 'note' : 'card'}
+      data-kind={chipPlacement(kind)}
       data-testid="tag-chips"
       data-tags={tags.map((t) => t.key).join(' ')}
       aria-label={`Tags: ${tags.map((t) => t.name).join(', ')}`}

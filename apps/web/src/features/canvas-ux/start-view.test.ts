@@ -3,9 +3,13 @@ import {
   boardLinkBase,
   cameraStorageKey,
   fitIfViewportEmpty,
+  PHONE_MIN_FRAME_ZOOM,
+  PHONE_WIDE_FRAME_ZOOM,
   parseStoredCamera,
+  phoneFrameCamera,
   planStartView,
   prefersFirstFrame,
+  READABLE_FIT_ZOOM,
   readStartParams,
   type StartParams,
   serializeCamera,
@@ -133,10 +137,23 @@ describe('prefersFirstFrame (F15: what "fit all content" shows where the whole p
     )
   })
 
-  it('a desktop keeps the overview while it fits at the smallest zoom (the tour at about 9 %)', () => {
+  it('DANA-06: a desktop opens on the first frame when the whole page only fits unreadably small (the tour at about 9-12 %)', () => {
     expect(prefersFirstFrame({ screen: { w: 1395, h: 852 }, content: tour, minZoom, hasFrame: true })).toBe(
-      false,
+      true,
     )
+    // The Retrospective (a 2,560 px row over three frames) fits at about 40 %: still too small.
+    const retro = { w: 2_560, h: 1_600 }
+    expect(prefersFirstFrame({ screen: { w: 1235, h: 700 }, content: retro, minZoom, hasFrame: true })).toBe(
+      true,
+    )
+  })
+
+  it('a desktop keeps "fit all" while the whole page is readable (at least READABLE_FIT_ZOOM)', () => {
+    const twoFrames = { w: 1_500, h: 700 }
+    expect(READABLE_FIT_ZOOM).toBe(0.5)
+    expect(
+      prefersFirstFrame({ screen: { w: 1395, h: 852 }, content: twoFrames, minZoom, hasFrame: true }),
+    ).toBe(false)
   })
 
   it('a desktop gets the first frame when even the smallest zoom would clip the content', () => {
@@ -151,5 +168,35 @@ describe('prefersFirstFrame (F15: what "fit all content" shows where the whole p
       false,
     )
     expect(prefersFirstFrame({ screen: { w: 0, h: 0 }, content: tour, minZoom, hasFrame: true })).toBe(false)
+  })
+})
+
+describe('phoneFrameCamera (R13: a frame far wider than a phone)', () => {
+  const screen = { w: 345, h: 700 }
+  const inset = 16
+  const toScreen = (c: { x: number; y: number; z: number }, p: { x: number; y: number }) => ({
+    x: (p.x + c.x) * c.z,
+    y: (p.y + c.y) * c.z,
+  })
+
+  it('the tour’s 1,600 px frames still fit whole (about 20 %)', () => {
+    expect(phoneFrameCamera({ x: 0, y: 0, w: 1600, h: 1000 }, screen, inset)).toBeNull()
+  })
+
+  it('the Retrospective’s 2,560 x 420 Check-in opens at its left end at a readable zoom, centred vertically', () => {
+    const frame = { x: 100, y: -200, w: 2560, h: 420 }
+    const c = phoneFrameCamera(frame, screen, inset)
+    if (!c) throw new Error('expected a camera')
+    expect(c.z).toBe(PHONE_WIDE_FRAME_ZOOM)
+    expect(c.z).toBeGreaterThan(PHONE_MIN_FRAME_ZOOM)
+    const topLeft = toScreen(c, { x: frame.x, y: frame.y })
+    expect(topLeft.x).toBeCloseTo(inset)
+    const mid = toScreen(c, { x: frame.x, y: frame.y + frame.h / 2 })
+    expect(mid.y).toBeCloseTo(screen.h / 2)
+  })
+
+  it('a very tall and wide frame opens at a zoom that still fits its height, never below the minimum', () => {
+    const c = phoneFrameCamera({ x: 0, y: 0, w: 20_000, h: 6_000 }, screen, inset)
+    expect(c?.z).toBe(PHONE_MIN_FRAME_ZOOM)
   })
 })

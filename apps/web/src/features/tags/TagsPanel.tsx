@@ -34,7 +34,8 @@ export function TagsPanel({ ctx }: { ctx: FeatureContext; close(): void }) {
           <p>No tags on this board yet.</p>
           {!readonly && (
             <p className="dr-tags-muted">
-              Select sticky notes or file cards, then choose <strong>Tags</strong> in the bar under them.
+              Select notes, images, files or mind-map topics, then choose <strong>Tags</strong> in the bar
+              under them.
             </p>
           )}
         </div>

@@ -1,10 +1,11 @@
 import type { FileCardShape } from '@draftroom/canvas-schema'
 import type { Editor } from 'tldraw'
-import { originalUrl } from '../assets/contract.ts'
+import { derivativeUrl, originalUrl } from '../assets/contract.ts'
 import type { AssetMetaStore } from '../assets/meta-store.ts'
 import { guardExport } from '../features/sharing/export-policy.ts'
+import { coverDerivative } from './card-model.ts'
 
-interface CardBoard {
+export interface CardBoard {
   boardId: string
   metaStore: AssetMetaStore | null
 }
@@ -14,6 +15,27 @@ const boards = new WeakMap<Editor, CardBoard>()
 
 export function registerCardBoard(editor: Editor, board: CardBoard) {
   boards.set(editor, board)
+}
+
+/**
+ * The board a mounted card registered for this editor, or null. tldraw renders an export (PNG, PDF,
+ * SVG, the dashboard thumbnail) in a separate React root without our board context: the card there
+ * resolves its previews through this, over the same board-authorized routes as on the board (F1).
+ */
+export function cardBoardFor(editor: Editor): CardBoard | null {
+  return boards.get(editor) ?? null
+}
+
+/**
+ * The URL of the card's cover preview (PDF first page, video poster), or null while its meta is not
+ * loaded and ready. Synchronous: it reads the meta the mounted card already fetched.
+ */
+export function cardCoverUrl(editor: Editor, props: FileCardShape['props']): string | null {
+  const board = boards.get(editor)
+  if (!board?.metaStore) return null
+  const snap = board.metaStore.get(board.boardId, props.assetId, props.versionId)
+  const cover = coverDerivative(snap.meta)
+  return cover ? derivativeUrl(board.boardId, props.assetId, props.versionId, cover.id) : null
 }
 
 /**

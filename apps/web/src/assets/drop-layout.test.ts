@@ -6,11 +6,79 @@ import {
   type DropContainer,
   fitInSlot,
   layoutCardRows,
+  layoutCellGrid,
   layoutImageGrid,
+  placeUnder,
   planDrop,
   type Rect,
   type Size,
+  slotFillOrder,
+  slotRows,
 } from './drop-layout.ts'
+
+describe('F6: several images onto a frame of template image slots', () => {
+  // The Mood board's '3 · Imagery': two rows of three 240 x 160 slots, 24 apart.
+  const slot = (id: string, col: number, row: number) => ({
+    id,
+    bounds: { x: 40 + col * 264, y: 120 + row * 184, w: 240, h: 160 },
+  })
+  const slots = [
+    slot('c', 2, 0),
+    slot('d', 0, 1),
+    slot('a', 0, 0),
+    slot('f', 2, 1),
+    slot('b', 1, 0),
+    slot('e', 1, 1),
+  ]
+
+  it('orders slots in reading order, row by row', () => {
+    expect(slotRows(slots).map((r) => r.map((s) => s.id))).toEqual([
+      ['a', 'b', 'c'],
+      ['d', 'e', 'f'],
+    ])
+    // A slot a few units lower than its neighbours still shares their row.
+    const nudged = slots.map((s) => (s.id === 'b' ? { id: 'b', bounds: { ...s.bounds, y: 131 } } : s))
+    expect(slotRows(nudged)[0]?.map((s) => s.id)).toEqual(['a', 'b', 'c'])
+  })
+
+  it('fills from the slot under the pointer, then wraps to the first ones', () => {
+    expect(slotFillOrder(slots).map((s) => s.id)).toEqual(['a', 'b', 'c', 'd', 'e', 'f'])
+    expect(slotFillOrder(slots, 'e').map((s) => s.id)).toEqual(['e', 'f', 'a', 'b', 'c', 'd'])
+    expect(slotFillOrder(slots, 'missing').map((s) => s.id)).toEqual(['a', 'b', 'c', 'd', 'e', 'f'])
+  })
+
+  it('lays the images left over at the slots’ size, in cells of that size', () => {
+    const cell = { w: 240, h: 160 }
+    const sizes = [
+      { w: 1600, h: 1200 },
+      { w: 800, h: 1200 },
+      { w: 4000, h: 1000 },
+      { w: 1000, h: 1000 },
+    ]
+    const block = layoutCellGrid(sizes, cell, 3, 24)
+    expect(block.items).toHaveLength(4)
+    for (const r of block.items) {
+      expect(r.w).toBeLessThanOrEqual(cell.w + 1e-9)
+      expect(r.h).toBeLessThanOrEqual(cell.h + 1e-9)
+      // Each fills its cell on one side (contain-fit): the same scale as the slotted images.
+      expect(Math.max(r.w / cell.w, r.h / cell.h)).toBeCloseTo(1)
+    }
+    // Three per row; the fourth starts a second row.
+    expect(block.items[3]?.y).toBeGreaterThan((block.items[0]?.y ?? 0) + cell.h)
+  })
+
+  it('puts that grid right under the frame, clear of other content', () => {
+    const frame: Rect = { x: 0, y: 0, w: 900, h: 560 }
+    const size = { w: 780, h: 160 }
+    const free = placeUnder(size, frame, [frame], 32)
+    expect(free.y).toBeGreaterThanOrEqual(frame.y + frame.h + 32 - 1e-6)
+    expect(free.x + size.w / 2).toBeCloseTo(frame.x + frame.w / 2)
+    const blocker: Rect = { x: 0, y: 600, w: 900, h: 300 }
+    const moved = placeUnder(size, frame, [frame, blocker], 32)
+    expect(rectsOverlap({ ...moved, ...size }, blocker)).toBe(false)
+    expect(rectsOverlap({ ...moved, ...size }, frame)).toBe(false)
+  })
+})
 
 // A 1280x720 viewport at 100 %, centred on the origin.
 const VIEW = { viewport: { x: -640, y: -360, w: 1280, h: 720 }, zoom: 1 }

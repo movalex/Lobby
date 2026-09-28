@@ -432,12 +432,16 @@ test('F1/F2 uploads with the view on "3 · Imagery": 3 then 12 images land in gr
     expect(Math.max(content.w / vp.w, content.h / vp.h)).toBeGreaterThan(0.6)
   })
 
-  await test.step('bob’s first open fits the content (not an empty 5 % view)', async () => {
+  await test.step('bob’s first open shows content (not an empty 5 % view): the first frame, readable', async () => {
     const b = await session('bob')
     await waitForCanvasUx(b.page)
-    expect(await startView(b.page)).toBe('fit')
-    expect(await zoom(b.page)).toBeGreaterThan(0.1)
-    expect(await inView(b.page, [...first.ids, ...second.ids])).toBe(true)
+    // DANA-06: the template plus 15 images only fit at an unreadable zoom, so a first visit opens
+    // on the first frame in presentation order instead of the whole page.
+    expect(await startView(b.page)).toBe('first-frame')
+    expect(await zoom(b.page)).toBeGreaterThan(0.5)
+    const direction = await frameByName(b.page, '1 · Direction')
+    if (!direction) throw new Error('no "1 · Direction" frame')
+    expect(await inView(b.page, [direction.id])).toBe(true)
   })
 })
 

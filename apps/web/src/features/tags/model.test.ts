@@ -7,14 +7,16 @@ import {
   type TagDef,
 } from '@draftroom/contracts'
 import { describe, expect, it } from 'vitest'
-import { fullNotice, thingName, usageLabel } from './copy.ts'
+import { fullNotice, kindCounts, thingName, usageLabel } from './copy.ts'
 import {
   applyBoardChange,
   boardTagMap,
   boardTagRows,
   chipLayout,
+  chipPlacement,
   displayTags,
   isShortTagName,
+  isTaggable,
   nextTagColor,
   planDeleteEverywhere,
   planRecolor,
@@ -74,7 +76,7 @@ describe('display', () => {
       note('a', [RESEARCH, IDEA]),
       note('b', [RESEARCH]),
       { id: 'c', type: FILE_CARD_TYPE, meta: metaWith(IDEA) },
-      { id: 'd', type: 'geo', meta: metaWith(RESEARCH) }, // not taggable: ignored
+      { id: 'd', type: 'arrow', meta: metaWith(RESEARCH) }, // not taggable: ignored
     ]
     expect(boardTagRows(board, shapes)).toEqual([
       { ...BLOCKED, count: 0, listed: true },
@@ -97,6 +99,16 @@ describe('chips on a shape', () => {
     expect(chipLayout(tags.slice(0, 4))).toEqual({ shown: tags.slice(0, 2), more: 2 })
     expect(chipLayout(tags)).toEqual({ shown: tags.slice(0, 2), more: 3 })
   })
+  it('F2 / R8: notes, file cards, images, videos, shapes (mind-map topics) and text are taggable', () => {
+    for (const type of ['note', FILE_CARD_TYPE, 'image', 'video', 'geo', 'text'])
+      expect(isTaggable({ type })).toBe(true)
+    for (const type of ['frame', 'arrow', 'draw', 'group', 'line']) expect(isTaggable({ type })).toBe(false)
+    expect(chipPlacement('note')).toBe('note')
+    expect(chipPlacement('image')).toBe('card')
+    expect(chipPlacement(FILE_CARD_TYPE)).toBe('card')
+    expect(chipPlacement('geo')).toBe('above')
+    expect(chipPlacement('text')).toBe('above')
+  })
   it('short names (8 characters) never shrink', () => {
     expect(isShortTagName('Research')).toBe(true)
     expect(isShortTagName('Customer voice')).toBe(false)
@@ -111,7 +123,7 @@ describe('adding and removing on a selection', () => {
       note('b', [RESEARCH]),
       { ...note('c'), isLocked: true },
       note('d', ten),
-      { id: 'e', type: 'geo', meta: {} },
+      { id: 'e', type: 'frame', meta: {} },
       { id: 'f', type: FILE_CARD_TYPE, meta: {} },
     ]
     const plan = planSetTag(shapes, RESEARCH, true, false)
@@ -137,7 +149,7 @@ describe('adding and removing on a selection', () => {
   })
 
   it('selection state: all / some / none over taggable shapes', () => {
-    const shapes = [note('a', [RESEARCH]), note('b', [RESEARCH]), { id: 'g', type: 'geo', meta: {} }]
+    const shapes = [note('a', [RESEARCH]), note('b', [RESEARCH]), { id: 'g', type: 'arrow', meta: {} }]
     expect(selectionTagState(shapes, 'research')).toBe('all')
     expect(selectionTagState([...shapes, note('c')], 'research')).toBe('some')
     expect(selectionTagState(shapes, 'idea')).toBe('none')
@@ -258,6 +270,15 @@ describe('copy', () => {
     expect(thingName({ notes: 2, cards: 0 })).toEqual({ one: 'note', many: 'notes' })
     expect(thingName({ notes: 0, cards: 1 })).toEqual({ one: 'card', many: 'cards' })
     expect(thingName({ notes: 1, cards: 1 })).toEqual({ one: 'item', many: 'items' })
+    expect(thingName(kindCounts(['image', 'video'], FILE_CARD_TYPE))).toEqual({
+      one: 'image',
+      many: 'images',
+    })
+    expect(thingName(kindCounts(['geo', 'text'], FILE_CARD_TYPE))).toEqual({ one: 'shape', many: 'shapes' })
+    expect(thingName(kindCounts(['image', FILE_CARD_TYPE], FILE_CARD_TYPE))).toEqual({
+      one: 'item',
+      many: 'items',
+    })
     expect(fullNotice(0, { one: 'note', many: 'notes' })).toBeNull()
     expect(fullNotice(1, { one: 'note', many: 'notes' })).toBe(
       '1 note already has 10 tags, so it was left out.',

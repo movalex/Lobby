@@ -11,10 +11,11 @@
 // handled natively here too, the way canvas-ux's useIsland does it.
 
 import { foldForSearch } from '@draftroom/board-ops'
+import { FILE_CARD_TYPE } from '@draftroom/canvas-schema'
 import { MAX_TAGS_PER_SHAPE, normalizeTagName, type TagDef, tagKey } from '@draftroom/contracts'
 import { memo, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import { type Editor, type TLShape, useEditor, useValue } from 'tldraw'
-import { fullNotice, READONLY_HINT, thingName } from './copy.ts'
+import { fullNotice, kindCounts, READONLY_HINT, thingName } from './copy.ts'
 import { TagIcon } from './icons.tsx'
 import { useIsolated } from './isolate.ts'
 import {
@@ -120,12 +121,16 @@ function usePickerModel(editor: Editor, readonly: boolean): PickerModel {
     const board = boardTags(editor).get()
     const seen = new Map<string, TagDef>()
     for (const s of all) for (const t of displayTags(s.meta, board)) if (!seen.has(t.key)) seen.set(t.key, t)
-    const notes = selection.filter((s) => s.type === 'note').length
     return {
       rows: readonly ? [] : boardTagRowsOf(editor).get(),
       selection,
       onSelection: [...seen.values()],
-      thing: thingName({ notes, cards: selection.length - notes }),
+      thing: thingName(
+        kindCounts(
+          selection.map((s) => s.type),
+          FILE_CARD_TYPE,
+        ),
+      ),
     }
   }, [editor, readonly])
 }
