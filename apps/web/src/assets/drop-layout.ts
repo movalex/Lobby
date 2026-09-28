@@ -155,7 +155,10 @@ export function layoutMixedGrid(
   // Page-space sizes (F2-01) cap the upscale in page units, the same at every zoom.
   const zoom = isSide(side) ? 1 : saneZoom(view.zoom)
   const largestCard = Math.max(0, ...cards.map((c) => Math.max(saneSize(c).w, saneSize(c).h)))
-  const cell = Math.max(imageCellSide(images.length, view, side), largestCard * DROP_LAYOUT.cardMinScale)
+  let cell = Math.max(imageCellSide(images.length, view, side), largestCard * DROP_LAYOUT.cardMinScale)
+  // Cards are never scaled up (cardInCell), so a cell larger than the largest card would leave the cards
+  // smaller than the images: in a mixed drop the images take the cards' size instead (F12: one scale).
+  if (largestCard > 0) cell = Math.min(cell, largestCard)
   const gap = isSide(side) ? pageGap(cell) : DROP_LAYOUT.gapPx / zoom
   const cols = Math.max(1, Math.ceil(Math.sqrt(images.length)), Math.ceil(Math.sqrt(cards.length)))
   const at = (index: number, size: Size): Rect => {

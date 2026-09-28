@@ -27,6 +27,9 @@ export const CHROME_SAFE_ACTIONS: ReadonlySet<string> = new Set([
   'zoom-to-selection',
   'keyboard-shortcuts',
   'dr-board-search',
+  // Ctrl/Cmd+U only opens the file picker (files land where the board is looking), so it works from Lobby's
+  // chrome too, e.g. right after an upload leaves the focus on the selection bar or its toast.
+  'insert-media',
 ])
 
 /**
