@@ -475,11 +475,27 @@ export function createPresenter(editor: Editor): Presenter {
    * for a moment, until the person moves the camera or presses a key themselves.
    */
   let stopHolding: (() => void) | null = null
+  /** Puts the held view back (while the hold lasts); null when nothing is held. */
+  let holdPlace: (() => void) | null = null
   const holdCentre = (place: () => void) => {
     stopHolding?.()
-    const onResize = () => {
-      if (state.get()) return release()
+    // The camera as the hold last set it. A resize keeps camera x/y (tldraw), so a camera that differs
+    // was moved by something else meanwhile (a zoom to a frame, a deep link, a script): that wins, and
+    // the hold ends instead of pulling the view back.
+    let placed = { ...editor.getCamera() }
+    const put = () => {
       place()
+      placed = { ...editor.getCamera() }
+    }
+    const moved = () => {
+      const c = editor.getCamera()
+      return (
+        Math.abs(c.x - placed.x) > 0.01 || Math.abs(c.y - placed.y) > 0.01 || Math.abs(c.z - placed.z) > 1e-6
+      )
+    }
+    const onResize = () => {
+      if (state.get() || moved()) return release()
+      put()
     }
     const onEvent = (info: TLEventInfo) => {
       if (
@@ -496,11 +512,18 @@ export function createPresenter(editor: Editor): Presenter {
       clearTimeout(timer)
       editor.off('resize', onResize)
       editor.off('event', onEvent)
-      if (stopHolding === release) stopHolding = null
+      if (stopHolding === release) {
+        stopHolding = null
+        holdPlace = null
+      }
     }
     editor.on('resize', onResize)
     editor.on('event', onEvent)
     stopHolding = release
+    holdPlace = () => {
+      if (moved()) return release()
+      put()
+    }
   }
 
   function stop(opts: StopOptions = {}) {
@@ -527,8 +550,22 @@ export function createPresenter(editor: Editor): Presenter {
       if (active && active !== document.body && !overlay?.contains(active)) return
       focusTarget(s.saved.focus)?.focus({ preventScroll: true })
     }
+    // tldraw measures its container at most every 200 ms (useScreenBounds' throttle): until it does,
+    // points on screen map to the page through the full-screen bounds, so a click right after the
+    // presentation would land 50 px off. Measure now, once the layout is back.
+    const measure = () => {
+      if (state.get()) return
+      editor.updateViewportScreenBounds(container())
+      holdPlace?.()
+    }
     if (document.fullscreenElement && document.fullscreenElement === container()) {
-      document.exitFullscreen().then(restoreFocus, () => {})
+      document.exitFullscreen().then(
+        () => {
+          measure()
+          restoreFocus()
+        },
+        () => {},
+      )
     }
     const { saved } = s
     const place = here
@@ -542,11 +579,7 @@ export function createPresenter(editor: Editor): Presenter {
     })
     // The container returns to its board size over the next frames (fullscreen exit is async): set the
     // camera again once it has, so the board view is exactly where it was.
-    requestAnimationFrame(() =>
-      requestAnimationFrame(() => {
-        if (!state.get() && stopHolding) place()
-      }),
-    )
+    requestAnimationFrame(() => requestAnimationFrame(measure))
     focusTarget(saved.focus)?.focus({ preventScroll: true })
     requestAnimationFrame(() => requestAnimationFrame(restoreFocus))
     const info: StopInfo = { role: s.role, reason: opts.reason ?? 'local' }
