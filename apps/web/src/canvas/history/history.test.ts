@@ -227,9 +227,39 @@ describe('A15: §2.8 cases (U1–U10 on element maps)', () => {
     install(scene, res)
     expect(scene.get('F')).toMatchObject({ x: 0, y: 0 })
     for (const i of [0, 1, 3, 4, 5]) expect(scene.get(`k${i}`)).toMatchObject({ x: i * 10, y: 0 })
-    expect(scene.get('k2')?.x).toBe(999)
-    expect(scene.get('k2')?.y).toBe(0) // y was still mine: it went back
+    // C moved child 2 (only x changed): its position is one unit, so it stays exactly where C put it
+    expect(scene.get('k2')).toMatchObject({ x: 999, y: 500 })
     expect(scene.get('k1')?.backgroundColor).toBe('#00ff00')
+    expect(res?.kept).toBe(1)
+  })
+
+  it('geometry is compared per group over the recorded fields: my resize undoes although Bob rotated', () => {
+    const { scene, h } = start(rect('N', { width: 100, height: 100, angle: 0 }))
+    local(scene, 'N', { width: 300, height: 200 })
+    h.record(scene)
+    remote(scene, h, 'N', { angle: 0.5 }) // same `shape` group, a field my entry did not record
+    const res = h.undo(scene)
+    install(scene, res)
+    expect(scene.get('N')).toMatchObject({ width: 100, height: 100, angle: 0.5 })
+    expect(res?.kept).toBe(0)
+    // but when Bob changed one of my recorded fields, the whole unit stays his
+    local(scene, 'N', { width: 300, height: 200 })
+    h.record(scene)
+    remote(scene, h, 'N', { width: 250 })
+    const res2 = h.undo(scene)
+    install(scene, res2)
+    expect(scene.get('N')).toMatchObject({ width: 250, height: 200 })
+    expect(res2?.kept).toBe(1)
+  })
+
+  it('independent style fields are compared one by one', () => {
+    const { scene, h } = start(rect('N', { backgroundColor: '#fff', strokeColor: '#000' }))
+    local(scene, 'N', { backgroundColor: 'red', strokeColor: 'blue' })
+    h.record(scene)
+    remote(scene, h, 'N', { strokeColor: 'green' })
+    const res = h.undo(scene)
+    install(scene, res)
+    expect(scene.get('N')).toMatchObject({ backgroundColor: '#fff', strokeColor: 'green' })
     expect(res?.kept).toBe(1)
   })
 

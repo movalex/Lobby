@@ -29,6 +29,32 @@ export const otherJsFiles = (name: string, build: Build) =>
 export const count = (src: string, re: RegExp) =>
   (src.match(new RegExp(re.source, re.flags.includes('g') ? re.flags : `${re.flags}g`)) ?? []).length
 
+/** The editor-open table of plan §2.9.2: call sites of each function that opens the text editor. */
+export const EDITOR_OPEN_CALLS = { startTextEditing: 7, handleTextWysiwyg: 2 } as const
+type EditorOpenName = keyof typeof EDITOR_OPEN_CALLS
+
+/** call sites (`.name(`) and every mention of each name; a matching bundle has mentions = calls + 1 */
+export const editorOpenCounts = (src: string) => {
+  const out = {} as Record<EditorOpenName, { calls: number; mentions: number }>
+  for (const name of Object.keys(EDITOR_OPEN_CALLS) as EditorOpenName[]) {
+    out[name] = {
+      calls: count(src, new RegExp(`\\.${name}\\(`)),
+      mentions: count(src, new RegExp(`\\b${name}\\b`)),
+    }
+  }
+  return out
+}
+
+/** The probe's verdict: null when the bundle matches the table, else the counts that differ. */
+export const editorOpenMismatch = (src: string) => {
+  const got = editorOpenCounts(src)
+  const bad = (Object.keys(EDITOR_OPEN_CALLS) as EditorOpenName[]).filter(
+    (name) =>
+      got[name].calls !== EDITOR_OPEN_CALLS[name] || got[name].mentions !== EDITOR_OPEN_CALLS[name] + 1,
+  )
+  return bad.length ? Object.fromEntries(bad.map((name) => [name, got[name]])) : null
+}
+
 export interface CallSite {
   line: number
   /** innermost named function, then its parents: `name@line` */

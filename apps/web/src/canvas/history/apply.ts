@@ -2,7 +2,7 @@
  * Applying an undo or a redo: a 3-way compare-and-set against the current scene (plan §2.8).
  *
  * | Case | Rule | Skip reason |
- * | field or `customData.lobby` key | set back only if the current value still equals the side being left | `changed` |
+ * | field or `customData.lobby` key | set back only if the current value still equals the side being left; the recorded fields of `pos`, `shape` and `layout` go back together or not at all | `changed` |
  * | `groupIds` | remove the ids this entry added if present; re-add the ids it removed if that group still exists | `group-gone` |
  * | `boundElements` | the same, id by id (bookkeeping: the server keeps them symmetric, so skips are silent) | — |
  * | element deleted by someone else since | not touched, never revived | `deleted` |
@@ -14,7 +14,7 @@
  * from anyone), and it is not carried to the opposite stack.
  */
 import type { BoundRef, ElementChange, FieldChange, HistEl, Scene, Side } from './diff.ts'
-import { clone, deepEqual, fieldGroup } from './fields.ts'
+import { clone, deepEqual, fieldGroup, type GroupName } from './fields.ts'
 
 export type Direction = 'undo' | 'redo'
 
@@ -74,6 +74,9 @@ const leaseIdOf = (el: HistEl) => (el.type === 'text' && el.containerId ? el.con
 
 const isBookkeepingOnly = (c: ElementChange) =>
   Object.keys(c.fields).length === 0 && Object.keys(c.lobby).length === 0 && !c.groupIds && !!c.bound
+
+/** groups whose recorded fields are compared and restored as one unit */
+const COUPLED = new Set<GroupName>(['pos', 'shape', 'layout'])
 
 const REF_FIELDS = ['containerId', 'frameId'] as const
 
@@ -236,19 +239,31 @@ export const applyChanges = (
       patch.isDeleted = target
       done.fields.isDeleted = c.fields.isDeleted as FieldChange
     }
-    for (const [f, fc] of Object.entries(c.fields)) {
+    // Coupled geometry (x with y, width with height and points, a label's layout) is one unit: the
+    // fields of such a group that this entry recorded go back together or not at all. Other groups are
+    // compared field by field (a fill and a stroke colour are independent).
+    const units = new Map<string, string[]>()
+    for (const f of Object.keys(c.fields)) {
       if (f === 'isDeleted') continue
       const group = fieldGroup(cur, f)
+      const key = group && COUPLED.has(group) ? `group:${group}` : `field:${f}`
+      units.set(key, [...(units.get(key) ?? []), f])
+    }
+    for (const fields of units.values()) {
+      const group = fieldGroup(cur, fields[0] as string)
       if (labelLocked && (group === 'text' || group === 'layout')) {
-        skip(c.id, f, 'locked')
+        for (const f of fields) skip(c.id, f, 'locked')
         continue
       }
-      const now = cur[f]
-      if (deepEqual(now, fc[have])) {
-        patch[f] = clone(fc[want])
-        done.fields[f] = fc
-      } else if (!deepEqual(now, fc[want])) {
-        skip(c.id, f, 'changed')
+      const atHave = fields.every((f) => deepEqual(cur[f], (c.fields[f] as FieldChange)[have]))
+      const atWant = fields.every((f) => deepEqual(cur[f], (c.fields[f] as FieldChange)[want]))
+      if (atHave) {
+        for (const f of fields) {
+          patch[f] = clone((c.fields[f] as FieldChange)[want])
+          done.fields[f] = c.fields[f] as FieldChange
+        }
+      } else if (!atWant) {
+        for (const f of fields) skip(c.id, f, 'changed')
       }
     }
     const lobbyNow = lobbyOf(cur)

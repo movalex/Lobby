@@ -136,7 +136,14 @@ describe('server-made notes in Node (getStickyNoteLayout, newTextElement)', () =
 
   it('is deterministic for the same spec', () => {
     const a = buildStickyNote({ id: 'n6', x: 1, y: 2, text: 'Same text every time', seed: 7 })
+    // cross a millisecond boundary so any wall-clock field (e.g. `created`) always shows up
+    const t = Date.now()
+    while (Date.now() === t) {
+      // spin
+    }
     const b = buildStickyNote({ id: 'n6', x: 1, y: 2, text: 'Same text every time', seed: 7 })
+    expect(a.label?.created).toBeNull()
+    // `updated` is stamped by the server on commit; `versionNonce` is random by design
     const strip = (e: object) => ({ ...e, updated: 0, versionNonce: 0 })
     expect(strip(a.note)).toEqual(strip(b.note))
     expect(a.label && strip(a.label)).toEqual(b.label && strip(b.label))

@@ -7,9 +7,17 @@
  * accesses, which minifiers do not rename), so the count is meaningful there too.
  */
 import { describe, expect, it } from 'vitest'
-import { type Build, callSites, count, otherJsFiles, PINNED, packageVersion, readDist } from './bundle.ts'
-
-const EXPECTED = { startTextEditing: 7, handleTextWysiwyg: 2 } as const
+import {
+  type Build,
+  callSites,
+  count,
+  editorOpenCounts,
+  editorOpenMismatch,
+  otherJsFiles,
+  PINNED,
+  packageVersion,
+  readDist,
+} from './bundle.ts'
 
 describe('A16 static: editor-open call sites in @excalidraw/excalidraw', () => {
   it(`is the pinned ${PINNED}`, () => {
@@ -17,20 +25,28 @@ describe('A16 static: editor-open call sites in @excalidraw/excalidraw', () => {
       expect(packageVersion(p)).toBe(PINNED)
   })
 
+  it('fails on any other count: an extra call site, a removed one, or a reference passed around', () => {
+    const src = readDist('excalidraw', 'dev')
+    expect(editorOpenMismatch(src)).toBeNull()
+    expect(editorOpenMismatch(`${src}\nthis.startTextEditing({})`)).toEqual({
+      startTextEditing: { calls: 8, mentions: 9 },
+    })
+    expect(editorOpenMismatch(src.replace('app.startTextEditing({', 'app.other({'))).toEqual({
+      startTextEditing: { calls: 6, mentions: 7 },
+    })
+    expect(editorOpenMismatch(`${src}\nconst open = this.handleTextWysiwyg`)).toEqual({
+      handleTextWysiwyg: { calls: 2, mentions: 4 },
+    })
+  })
+
   for (const build of ['dev', 'prod'] as Build[]) {
     it(`${build}: exactly 7 startTextEditing and 2 handleTextWysiwyg call sites, 1 definition each`, () => {
       const src = readDist('excalidraw', build)
-      for (const [name, calls] of Object.entries(EXPECTED)) {
-        const callCount = count(src, new RegExp(`\\.${name}\\(`))
-        const all = count(src, new RegExp(`\\b${name}\\b`))
-        // every other mention is the definition: a reference passed around (not called) would change `all`
-        expect({ name, build, calls: callCount, mentions: all }).toEqual({
-          name,
-          build,
-          calls,
-          mentions: calls + 1,
-        })
-      }
+      expect({ build, mismatch: editorOpenMismatch(src) }).toEqual({ build, mismatch: null })
+      expect(editorOpenCounts(src)).toEqual({
+        startTextEditing: { calls: 7, mentions: 8 },
+        handleTextWysiwyg: { calls: 2, mentions: 3 },
+      })
       for (const f of otherJsFiles('excalidraw', build)) {
         const chunk = readDist('excalidraw', build, f)
         expect({ f, n: count(chunk, /\b(startTextEditing|handleTextWysiwyg)\b/) }).toEqual({ f, n: 0 })

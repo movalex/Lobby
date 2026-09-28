@@ -106,6 +106,9 @@ export const buildStickyNote = (spec: NoteSpec): BuiltNote => {
     roughness: NOTE_DEFAULTS.roughness,
     angle: spec.angle ?? 0,
     seed: spec.seed ?? 1,
+    // `created` is server-owned (§3.2) and the constructor would stamp the wall clock
+    // (element index.js:16371): a server-made label must be deterministic, like its note
+    created: null,
     autoResize: true,
   })
   const lay = layoutStickyNote(note0, label0)
