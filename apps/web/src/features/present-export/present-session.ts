@@ -559,7 +559,11 @@ export function createPresenter(editor: Editor): Presenter {
     const restoreFocus = () => {
       if (state.get()) return
       const active = document.activeElement
-      if (active && active !== document.body && !overlay?.contains(active)) return
+      // The board container counts as "not placed yet": the app's focus guard (ui/focus.ts) parks the
+      // focus there one frame after the overlay goes, before this runs, and the presenter's Present
+      // button (or whatever had the focus) should get it back.
+      const parked = active === container()
+      if (active && active !== document.body && !parked && !overlay?.contains(active)) return
       focusTarget(s.saved.focus)?.focus({ preventScroll: true })
     }
     // tldraw measures its container at most every 200 ms (useScreenBounds' throttle): until it does,
