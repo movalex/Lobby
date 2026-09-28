@@ -200,6 +200,11 @@ function ThreadRow({
               </span>
             )}
             {state === 'resolved' && <span className="dr-cpanel__badge">Resolved</span>}
+            {thread.visibility === 'team' && (
+              <span className="dr-cteam" data-testid="comment-row-team-only">
+                Team only
+              </span>
+            )}
           </span>
           <span className="dr-cpanel__snippet">{first ? snippet(first.body, 140) : ''}</span>
           <span className={`dr-cpanel__where${orphan ? ' dr-cpanel__where--orphan' : ''}`}>

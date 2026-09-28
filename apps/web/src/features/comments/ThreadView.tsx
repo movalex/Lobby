@@ -173,19 +173,34 @@ export function ThreadView({
   autoFocusReply: boolean
 }) {
   const canComment = useValue('dr-comments.can-comment', () => store.canComment.get(), [store])
+  const privacy = useValue('dr-comments.privacy', () => store.privacy.get(), [store])
   const resolved = thread.status === 'resolved'
   const replies = thread.comments.length - 1
+  const teamOnly = thread.visibility === 'team'
+  // F10: outside the team, only the person who started a thread resolves or reopens it.
+  const canResolve = canComment && (privacy.teamOnly || thread.createdBy.id === store.meId)
   return (
     <>
       <header className="dr-cthread__head">
         <div className="dr-cthread__title">
-          <strong>{resolved ? 'Resolved comment' : 'Comment'}</strong>
+          <strong>
+            {resolved ? 'Resolved comment' : 'Comment'}
+            {teamOnly && (
+              <span
+                className="dr-cteam"
+                data-testid="thread-team-only"
+                title="Only your team sees this thread"
+              >
+                Team only
+              </span>
+            )}
+          </strong>
           <span className="dr-cthread__where">
             {locationLabel}
             {replies > 0 ? ` · ${replies} ${replies === 1 ? 'reply' : 'replies'}` : ''}
           </span>
         </div>
-        {canComment &&
+        {canResolve &&
           (resolved ? (
             <button
               type="button"
@@ -215,6 +230,21 @@ export function ThreadView({
           <CloseIcon />
         </button>
       </header>
+      {canComment && privacy.teamOnly && (teamOnly || privacy.teamOnlyDefault) && (
+        <p className="dr-cthread__privacy" data-testid="thread-privacy">
+          {teamOnly
+            ? 'Guests and client links can’t see this thread.'
+            : 'Guests and client links can see this.'}{' '}
+          <button
+            type="button"
+            className="dr-linkbtn"
+            data-testid="thread-visibility"
+            onClick={() => void store.setVisibility(thread.id, teamOnly ? 'everyone' : 'team')}
+          >
+            {teamOnly ? 'Show to everyone' : 'Make team only'}
+          </button>
+        </p>
+      )}
       {resolved && thread.resolvedBy && (
         <p className="dr-cthread__resolved" role="status">
           <CheckIcon /> Resolved by {thread.resolvedBy.id === store.meId ? 'you' : thread.resolvedBy.name}{' '}

@@ -5,9 +5,12 @@
 
 import {
   type CommentAnchor,
+  type CommentPrivacy,
   CommentsDeletedEvent,
+  CommentsHiddenEvent,
   CommentsThreadEvent,
   type CommentThread,
+  type CommentThreadVisibility,
   type ListNotificationsResponse,
 } from '@draftroom/contracts'
 import { type Atom, atom } from 'tldraw'
@@ -93,6 +96,13 @@ export class CommentsStore {
     unreadCount: 0,
   })
   readonly mentionables = atom<Mentionable[] | null>('dr-comments.mentionables', null)
+  /**
+   * F10: from the server's list. `teamOnly`: I am on the team (the composer offers "Team only");
+   * `teamOnlyDefault`: people outside the team can open this board, so it starts on.
+   */
+  readonly privacy = atom<CommentPrivacy>('dr-comments.privacy', { teamOnly: false, teamOnlyDefault: false })
+  /** F10: the new-comment composer's "Team only" choice; null follows privacy.teamOnlyDefault. */
+  readonly teamOnlyChoice = atom<boolean | null>('dr-comments.team-only-choice', null)
   /** Bumped when drafts change, so composers re-read them. */
   readonly draftsVersion = atom('dr-comments.drafts-version', 0)
 
@@ -105,6 +115,7 @@ export class CommentsStore {
   private mentionablesSeq = 0
   private mentionablesAskedAt = 0
   private mentionablesTimer: ReturnType<typeof setTimeout> | null = null
+  private privacyTimer: ReturnType<typeof setTimeout> | null = null
   private readonly pendingReads = new Set<string>()
   private disposed = false
 
@@ -130,6 +141,8 @@ export class CommentsStore {
     if (this.notificationsTimer) clearTimeout(this.notificationsTimer)
     if (this.mentionablesTimer) clearTimeout(this.mentionablesTimer)
     this.mentionablesTimer = null
+    if (this.privacyTimer) clearTimeout(this.privacyTimer)
+    this.privacyTimer = null
   }
 
   private fail(e: unknown, fallback: string) {
@@ -161,8 +174,12 @@ export class CommentsStore {
       for (const [id, t] of Object.entries(current)) {
         if (!next[id] && Date.parse(t.createdAt) >= startedAt - 1_000) next[id] = t
       }
+      // F10: a thread I could see that became team-only is simply not in the list any more.
+      const team = res.privacy?.teamOnly ?? false
+      if (!team) for (const [id, t] of Object.entries(next)) if (t.visibility === 'team') delete next[id]
       this.threads.set(next)
       this.reads.set({ ...res.reads, ...this.localReadsNewerThan(res.reads) })
+      this.privacy.set(res.privacy ?? { teamOnly: false, teamOnlyDefault: false })
       this.status.set('ready')
       const open = this.openThreadId.get()
       if (open && !next[open]) this.openThreadId.set(null)
@@ -222,6 +239,33 @@ export class CommentsStore {
     if (!comments.length && this.openThreadId.get() === threadId) this.openThreadId.set(null)
   }
 
+  private dropThread(threadId: string) {
+    if (!this.threads.get()[threadId]) return
+    this.threads.update((all) => {
+      const next = { ...all }
+      delete next[threadId]
+      return next
+    })
+    if (this.openThreadId.get() === threadId) this.openThreadId.set(null)
+    this.scheduleNotificationsRefresh()
+  }
+
+  /** A burst of sharing changes (several guests joining) costs one refetch. */
+  private schedulePrivacyRefresh() {
+    if (this.privacyTimer) clearTimeout(this.privacyTimer)
+    this.privacyTimer = setTimeout(() => {
+      this.privacyTimer = null
+      if (!this.disposed) void this.load()
+    }, MENTIONABLES_REFRESH_DELAY_MS)
+  }
+
+  /** F10: whether the new-comment composer's "Team only" is on (my choice, else the board's default). */
+  newThreadTeamOnly(): boolean {
+    const p = this.privacy.get()
+    if (!p.teamOnly) return false
+    return this.teamOnlyChoice.get() ?? p.teamOnlyDefault
+  }
+
   /** Board event payloads are untrusted input: parse them against the contract first. */
   handleEvent(type: string, data: unknown) {
     if (type === 'comments.thread') {
@@ -230,11 +274,19 @@ export class CommentsStore {
     } else if (type === 'comments.deleted') {
       const r = CommentsDeletedEvent.safeParse(data)
       if (r.success) this.applyDeleted(r.data.threadId, r.data.commentId)
+    } else if (type === 'comments.hidden') {
+      // F10: a thread became team-only (only people outside the team get this): drop it.
+      const r = CommentsHiddenEvent.safeParse(data)
+      if (r.success && !this.privacy.get().teamOnly) this.dropThread(r.data.threadId)
     } else if (type === SHARING_CHANGED_EVENT) {
       // Someone asked for access (or a request was decided): the owners' bell has news right away.
       if (isAccessRequestChange(data)) this.scheduleNotificationsRefresh(0)
       // F4: who can be mentioned may have changed with it (a grant, a guest joining, a link revoked).
-      if (mayChangeWhoHasAccess(data)) this.invalidateMentionables()
+      if (mayChangeWhoHasAccess(data)) {
+        this.invalidateMentionables()
+        // F10: a client link or a guest may have appeared (or gone): "Team only" follows the board.
+        if (this.privacy.get().teamOnly) this.schedulePrivacyRefresh()
+      }
     }
   }
 
@@ -311,7 +363,8 @@ export class CommentsStore {
     const body = bodyFromDraft(draft).trim()
     if (!body) return null
     try {
-      const thread = await this.api.createThread(this.boardId, anchor, body)
+      const visibility: CommentThreadVisibility = this.newThreadTeamOnly() ? 'team' : 'everyone'
+      const thread = await this.api.createThread(this.boardId, anchor, body, visibility)
       this.clearDraft(NEW_THREAD_DRAFT)
       this.applyThread(thread)
       this.reads.update((r) => ({ ...r, [thread.id]: thread.updatedAt }))
@@ -358,6 +411,17 @@ export class CommentsStore {
       return true
     } catch (e) {
       this.fail(e, 'The comment could not be deleted.')
+      return false
+    }
+  }
+
+  /** F10: a team member makes a thread team-only, or visible to everyone again. */
+  async setVisibility(threadId: string, visibility: CommentThreadVisibility): Promise<boolean> {
+    try {
+      this.applyThread(await this.api.setVisibility(threadId, visibility))
+      return true
+    } catch (e) {
+      this.fail(e, 'Who sees this comment could not be changed.')
       return false
     }
   }

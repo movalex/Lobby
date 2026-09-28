@@ -7,12 +7,21 @@
 // (NC-V4); the caps hold under concurrency through a per-board advisory lock (NC-V3). Every route decides access with
 // requireBoardAction ('comment' to write, 'view' to read); authorship always comes from the session.
 // Board events are published after the transaction commits.
+//
+// F10 (team-only threads, 0020): a thread's visibility is 'everyone' or 'team'. People outside the
+// team (workspace guests, i.e. review-link visitors, and name-only guests) never get a team thread:
+// every route answers 404 for it as if it did not exist, the list leaves it out, mentions and
+// notifications only reach the team, its board events are delivered to the team's streams only, and
+// search leaves its text out for them (search/store.ts). Outside the team, a person can only start
+// 'everyone' threads, and resolve or reopen only the threads they started.
 
 import {
   COMMENT_BODY_MAX,
   COMMENTS_DELETED_EVENT,
+  COMMENTS_HIDDEN_EVENT,
   COMMENTS_THREAD_EVENT,
   type CommentThread,
+  type CommentThreadVisibility,
   CreateCommentInput,
   CreateThreadInput,
   EditCommentInput,
@@ -21,12 +30,14 @@ import {
   MarkNotificationsReadInput,
   mentionedUserIds,
   rewriteMentionTokens,
+  SetThreadVisibilityInput,
 } from '@draftroom/contracts'
 import { isId, newId, type Queryable } from '@draftroom/db'
 import type { FastifyInstance } from 'fastify'
 import { type BoardAccess, type BoardRow, requireBoardAction } from '../../access.ts'
 import type { Params } from '../../context.ts'
 import { ApiError, badRequest, conflict, forbidden, notFound, parse } from '../../errors.ts'
+import type { BoardEvent } from '../../events/hub.ts'
 import type { FeatureContext } from '../context.ts'
 import {
   boardOwners,
@@ -42,6 +53,8 @@ import {
 import { createWriteLimiter } from './rate.ts'
 import {
   type CommentRow,
+  hasOutsideAccess,
+  isTeamMember,
   loadCommentRow,
   loadReads,
   loadThread,
@@ -51,6 +64,7 @@ import {
   MAX_THREADS_PER_BOARD,
   markRead,
   type ThreadRow,
+  teamAmong,
   viewersAmong,
 } from './store.ts'
 
@@ -63,12 +77,13 @@ type BoardRef = Pick<BoardRow, 'id' | 'workspace_id' | 'visibility' | 'status'>
 /**
  * Keeps mention tokens only for people who can view the board (with their real name) and turns the
  * rest into plain "@Name" text, so an unauthorized or fake mention neither notifies nor renders as one.
+ * F10: in a team-only thread, only people on the team can be mentioned.
  */
-async function resolveMentions(tx: Queryable, board: BoardRef, body: string) {
+async function resolveMentions(tx: Queryable, board: BoardRef, body: string, team: boolean) {
   const requested = mentionedUserIds(body)
   if (requested.length > MAX_MENTIONS_PER_COMMENT)
     throw badRequest(`A comment can mention at most ${MAX_MENTIONS_PER_COMMENT} people.`)
-  const viewers = await viewersAmong(tx, board, requested)
+  const viewers = await viewersAmong(tx, board, requested, { team })
   const rewritten = rewriteMentionTokens(body, (userId) => viewers.get(userId) ?? null)
   if (rewritten.length > COMMENT_BODY_MAX) throw badRequest('body: too long')
   return { body: rewritten, mentioned: requested.filter((id) => viewers.has(id)) }
@@ -94,6 +109,7 @@ async function insertMentions(
  * and, for a new thread, the board's owners ('new_comment', DANA-02); never the author, only people who
  * can view the board now, one notification each (the most specific kind wins; a mention remembers the
  * kind it replaced, for the mention cap). Callers pass the result through withinNotificationCaps.
+ * F10: for a team-only thread (`team`), only people on the team.
  */
 async function recipientsFor(
   tx: Queryable,
@@ -101,10 +117,11 @@ async function recipientsFor(
   actorId: string,
   mentioned: readonly string[],
   followers: readonly string[],
-  owners: readonly string[] = [],
+  opts: { owners?: readonly string[]; team: boolean },
 ): Promise<NewNotification[]> {
+  const owners = opts.owners ?? []
   const candidates = [...new Set([...mentioned, ...followers, ...owners])].filter((id) => id !== actorId)
-  const viewers = await viewersAmong(tx, board, candidates)
+  const viewers = await viewersAmong(tx, board, candidates, { team: opts.team })
   const out: NewNotification[] = []
   for (const userId of candidates) {
     if (!viewers.has(userId)) continue
@@ -136,38 +153,79 @@ export async function registerComments(app: FastifyInstance, ctx: FeatureContext
       throw new ApiError(429, 'RATE_LIMITED', 'You are commenting too fast. Wait a moment and try again.')
   }
 
-  /** The thread (404 when missing or on a board the caller cannot see) plus the caller's access for `action`. */
+  /**
+   * The thread (404 when missing, on a board the caller cannot see, or team-only while the caller is
+   * outside the team) plus the caller's access for `action` and whether they are on the team.
+   */
   async function threadAccess(
     tx: Queryable,
     threadId: string,
     userId: string,
     action: 'view' | 'comment',
-  ): Promise<{ row: ThreadRow; access: BoardAccess }> {
+  ): Promise<{ row: ThreadRow; access: BoardAccess; team: boolean }> {
     if (!isId('thr', threadId)) throw notFound()
     const row = await loadThreadRow(tx, threadId)
     if (!row) throw notFound()
+    // Team-only threads do not exist for people outside the team: 404 before any 403.
+    const team = await isTeamMember(tx, row.workspace_id, userId)
+    if (row.visibility === 'team' && !team) throw notFound()
     const access = await requireBoardAction(tx, row.board_id, userId, action)
     if (access.board.workspace_id !== row.workspace_id) throw notFound()
-    return { row, access }
+    return { row, access, team }
   }
 
-  /** A live (not deleted) comment and the caller's access for `action`. */
+  /** A live (not deleted) comment, its thread, and the caller's access to comment. */
   async function commentAccess(
     tx: Queryable,
     commentId: string,
     userId: string,
-  ): Promise<{ comment: CommentRow; access: BoardAccess }> {
+  ): Promise<{ comment: CommentRow; thread: ThreadRow; access: BoardAccess; team: boolean }> {
     if (!isId('cmt', commentId)) throw notFound()
     const comment = await loadCommentRow(tx, commentId)
     if (!comment || comment.deleted_at) throw notFound()
+    const thread = await loadThreadRow(tx, comment.thread_id)
+    if (!thread) throw notFound()
+    const team = await isTeamMember(tx, comment.workspace_id, userId)
+    if (thread.visibility === 'team' && !team) throw notFound()
     // 404 first for people who cannot see the board at all; 403 for viewers.
     const access = await requireBoardAction(tx, comment.board_id, userId, 'comment')
     if (access.board.workspace_id !== comment.workspace_id) throw notFound()
-    return { comment, access }
+    return { comment, thread, access, team }
   }
 
-  const publishThread = (thread: CommentThread) =>
-    events.publish(thread.boardId, { type: COMMENTS_THREAD_EVENT, data: { thread } })
+  /**
+   * F10: publishes to the team's streams only ('team') or to everyone else's only ('outside'). Who is
+   * on the team is read for the people with a stream open now; anyone who opens one later refetches
+   * when it opens. Events are hints: a failed lookup publishes nothing rather than too much.
+   */
+  async function publishTo(
+    board: Pick<BoardRef, 'id' | 'workspace_id'>,
+    event: BoardEvent,
+    audience: 'team' | 'outside',
+  ) {
+    const open = events
+      .streams()
+      .filter((s) => s.boardId === board.id)
+      .map((s) => s.userId)
+    let team: Set<string>
+    try {
+      team = await teamAmong(db, board.workspace_id, open)
+    } catch {
+      return
+    }
+    events.publish(board.id, event, {
+      to: audience === 'team' ? (userId) => team.has(userId) : (userId) => !team.has(userId),
+    })
+  }
+
+  const publishFor = (
+    board: Pick<BoardRef, 'id' | 'workspace_id'>,
+    visibility: CommentThreadVisibility,
+    event: BoardEvent,
+  ) => (visibility === 'team' ? publishTo(board, event, 'team') : events.publish(board.id, event))
+
+  const publishThread = (board: Pick<BoardRef, 'id' | 'workspace_id'>, thread: CommentThread) =>
+    publishFor(board, thread.visibility, { type: COMMENTS_THREAD_EVENT, data: { thread } })
 
   // ---- threads -----------------------------------------------------------------------------------
 
@@ -177,21 +235,27 @@ export async function registerComments(app: FastifyInstance, ctx: FeatureContext
     const query = parse(ListThreadsQuery, req.query)
     const access = await requireBoardAction(db, bid, user.id, 'view')
     const status = query.status === 'all' || !query.status ? undefined : query.status
-    const threads = await loadThreads(db, access.board, { status })
+    const team = await isTeamMember(db, access.board.workspace_id, user.id)
+    const threads = await loadThreads(db, access.board, { status, team })
     const reads = await loadReads(
       db,
       user.id,
       threads.map((t) => t.id),
     )
-    return { threads, reads }
+    const teamOnlyDefault = team && (await hasOutsideAccess(db, access.board, now()))
+    return { threads, reads, privacy: { teamOnly: team, teamOnlyDefault } }
   })
 
   app.post('/api/boards/:bid/threads', async (req, reply) => {
     const user = await ctx.requireUser(req)
     const { bid = '' } = req.params as Params
     const input = parse(CreateThreadInput, req.body)
-    const thread = await db.transaction(async (tx) => {
+    const visibility = input.visibility ?? 'everyone'
+    const teamOnly = visibility === 'team'
+    const { thread, board: ref } = await db.transaction(async (tx) => {
       const access = await requireBoardAction(tx, bid, user.id, 'comment')
+      if (teamOnly && !(await isTeamMember(tx, access.board.workspace_id, user.id)))
+        throw forbidden('Only people on the team can start a team-only comment.')
       spend(user.id)
       const board = access.board
       // NC-V3: before any row lock (the thread insert below locks the board row's key).
@@ -202,14 +266,14 @@ export async function registerComments(app: FastifyInstance, ctx: FeatureContext
       )
       if (count.n >= MAX_THREADS_PER_BOARD)
         throw conflict('TOO_MANY_THREADS', 'This board has reached its limit of comment threads.')
-      const { body, mentioned } = await resolveMentions(tx, board, input.body)
+      const { body, mentioned } = await resolveMentions(tx, board, input.body, teamOnly)
       const at = now()
       const threadId = newId('thr')
       const commentId = newId('cmt')
       await tx.query(
-        `INSERT INTO comment_threads (id, workspace_id, board_id, anchor, status, created_by, created_at, updated_at)
-         VALUES ($1, $2, $3, $4::jsonb, 'open', $5, $6, $6)`,
-        [threadId, board.workspace_id, board.id, JSON.stringify(input.anchor), user.id, at],
+        `INSERT INTO comment_threads (id, workspace_id, board_id, anchor, status, created_by, created_at, updated_at, visibility)
+         VALUES ($1, $2, $3, $4::jsonb, 'open', $5, $6, $6, $7)`,
+        [threadId, board.workspace_id, board.id, JSON.stringify(input.anchor), user.id, at, visibility],
       )
       await tx.query(
         `INSERT INTO comments (id, thread_id, workspace_id, board_id, author_id, body, created_at)
@@ -220,22 +284,18 @@ export async function registerComments(app: FastifyInstance, ctx: FeatureContext
       await markRead(tx, { id: threadId, workspace_id: board.workspace_id }, user.id, at)
       // DANA-02: the board's owners hear about every new thread (a client's first comment included),
       // capped per author and per board so neither a guest nor a crowd of guests can flood their bell.
-      const recipients = await recipientsFor(
-        tx,
-        board,
-        user.id,
-        mentioned,
-        [],
-        await boardOwners(tx, board.id),
-      )
+      const recipients = await recipientsFor(tx, board, user.id, mentioned, [], {
+        owners: await boardOwners(tx, board.id),
+        team: teamOnly,
+      })
       await insertNotifications(
         tx,
         { workspaceId: board.workspace_id, boardId: board.id, threadId, commentId, actorId: user.id, at },
         await withinNotificationCaps(tx, { boardId: board.id, actorId: user.id, at }, recipients),
       )
-      return mustLoadThread(tx, board, threadId)
+      return { thread: await mustLoadThread(tx, board, threadId), board }
     })
-    publishThread(thread)
+    await publishThread(ref, thread)
     return reply.code(201).send({ thread })
   })
 
@@ -243,14 +303,20 @@ export async function registerComments(app: FastifyInstance, ctx: FeatureContext
     const user = await ctx.requireUser(req)
     const { tid = '' } = req.params as Params
     const input = parse(CreateCommentInput, req.body)
-    const thread = await db.transaction(async (tx) => {
-      const { row, access } = await threadAccess(tx, tid, user.id, 'comment')
+    const { thread, board: ref } = await db.transaction(async (tx) => {
+      const { row, access, team } = await threadAccess(tx, tid, user.id, 'comment')
       spend(user.id)
       const board = access.board
       // NC-V3/NC-V4: mentions are capped, so before the thread's row lock (lockBoardNotifications).
       if (mayMention(input.body)) await lockBoardNotifications(tx, board.id)
-      // Serialize replies to one thread (the per-thread cap and follower set are read below).
-      await tx.query('SELECT id FROM comment_threads WHERE id = $1 FOR UPDATE', [row.id])
+      // Serialize replies to one thread (the per-thread cap and follower set are read below). F10:
+      // its visibility is read again under the lock (it may have become team-only meanwhile).
+      const locked = await tx.one<{ visibility: 'everyone' | 'team' }>(
+        'SELECT visibility FROM comment_threads WHERE id = $1 FOR UPDATE',
+        [row.id],
+      )
+      const teamOnly = locked.visibility === 'team'
+      if (teamOnly && !team) throw notFound()
       const count = await tx.one<{ n: number }>(
         'SELECT count(*)::int AS n FROM comments WHERE thread_id = $1 AND deleted_at IS NULL',
         [row.id],
@@ -259,7 +325,7 @@ export async function registerComments(app: FastifyInstance, ctx: FeatureContext
       if (count.n >= MAX_COMMENTS_PER_THREAD)
         throw conflict('THREAD_FULL', 'This thread has too many replies. Start a new comment instead.')
       const followers = await threadFollowers(tx, row.id)
-      const { body, mentioned } = await resolveMentions(tx, board, input.body)
+      const { body, mentioned } = await resolveMentions(tx, board, input.body, teamOnly)
       const at = now()
       const commentId = newId('cmt')
       await tx.query(
@@ -288,12 +354,12 @@ export async function registerComments(app: FastifyInstance, ctx: FeatureContext
         await withinNotificationCaps(
           tx,
           { boardId: board.id, actorId: user.id, at },
-          await recipientsFor(tx, board, user.id, mentioned, followers),
+          await recipientsFor(tx, board, user.id, mentioned, followers, { team: teamOnly }),
         ),
       )
-      return mustLoadThread(tx, board, row.id)
+      return { thread: await mustLoadThread(tx, board, row.id), board }
     })
-    publishThread(thread)
+    await publishThread(ref, thread)
     return reply.code(201).send({ thread })
   })
 
@@ -301,14 +367,15 @@ export async function registerComments(app: FastifyInstance, ctx: FeatureContext
     const user = await ctx.requireUser(req)
     const { cid = '' } = req.params as Params
     const input = parse(EditCommentInput, req.body)
-    const thread = await db.transaction(async (tx) => {
-      const { comment, access } = await commentAccess(tx, cid, user.id)
+    const { thread, board: ref } = await db.transaction(async (tx) => {
+      const { comment, thread: row, access } = await commentAccess(tx, cid, user.id)
       if (comment.author_id !== user.id) throw forbidden('Only the author can edit a comment.')
       spend(user.id)
       const board = access.board
+      const teamOnly = row.visibility === 'team'
       // NC-V3/NC-V4: before the comment's row lock (the UPDATE below).
       if (mayMention(input.body)) await lockBoardNotifications(tx, board.id)
-      const { body, mentioned } = await resolveMentions(tx, board, input.body)
+      const { body, mentioned } = await resolveMentions(tx, board, input.body, teamOnly)
       const at = now()
       const before = await tx.query<{ user_id: string }>(
         'SELECT user_id FROM comment_mentions WHERE comment_id = $1',
@@ -338,12 +405,12 @@ export async function registerComments(app: FastifyInstance, ctx: FeatureContext
         await withinNotificationCaps(
           tx,
           { boardId: board.id, actorId: user.id, at },
-          await recipientsFor(tx, board, user.id, added, []),
+          await recipientsFor(tx, board, user.id, added, [], { team: teamOnly }),
         ),
       )
-      return mustLoadThread(tx, board, comment.thread_id)
+      return { thread: await mustLoadThread(tx, board, comment.thread_id), board }
     })
-    publishThread(thread)
+    await publishThread(ref, thread)
     return { thread }
   })
 
@@ -351,7 +418,7 @@ export async function registerComments(app: FastifyInstance, ctx: FeatureContext
     const user = await ctx.requireUser(req)
     const { cid = '' } = req.params as Params
     const result = await db.transaction(async (tx) => {
-      const { comment, access } = await commentAccess(tx, cid, user.id)
+      const { comment, thread, access } = await commentAccess(tx, cid, user.id)
       const moderating = comment.author_id !== user.id
       if (moderating && access.role !== 'owner')
         throw forbidden('Only the author or a board owner can delete a comment.')
@@ -380,9 +447,14 @@ export async function registerComments(app: FastifyInstance, ctx: FeatureContext
           ],
         )
       }
-      return { boardId: comment.board_id, threadId: comment.thread_id, commentId: comment.id }
+      return {
+        board: { id: comment.board_id, workspace_id: comment.workspace_id },
+        visibility: thread.visibility,
+        threadId: comment.thread_id,
+        commentId: comment.id,
+      }
     })
-    events.publish(result.boardId, {
+    await publishFor(result.board, result.visibility, {
       type: COMMENTS_DELETED_EVENT,
       data: { threadId: result.threadId, commentId: result.commentId },
     })
@@ -393,8 +465,15 @@ export async function registerComments(app: FastifyInstance, ctx: FeatureContext
     app.post(`/api/threads/:tid/${action}`, async (req) => {
       const user = await ctx.requireUser(req)
       const { tid = '' } = req.params as Params
-      const { thread, changed } = await db.transaction(async (tx) => {
-        const { row, access } = await threadAccess(tx, tid, user.id, 'comment')
+      const {
+        thread,
+        changed,
+        board: ref,
+      } = await db.transaction(async (tx) => {
+        const { row, access, team } = await threadAccess(tx, tid, user.id, 'comment')
+        // F10: outside the team, only the person who started a thread resolves or reopens it.
+        if (!team && row.created_by !== user.id)
+          throw forbidden('Only the person who started this thread or the team can resolve it.')
         spend(user.id)
         const board = access.board
         const target = action === 'resolve' ? 'resolved' : 'open'
@@ -420,6 +499,7 @@ export async function registerComments(app: FastifyInstance, ctx: FeatureContext
             tx,
             board,
             followers.filter((id) => id !== user.id),
+            { team: row.visibility === 'team' },
           )
           await insertNotifications(
             tx,
@@ -434,12 +514,41 @@ export async function registerComments(app: FastifyInstance, ctx: FeatureContext
             [...viewers.keys()].map((userId) => ({ userId, kind: 'resolved' as const })),
           )
         }
-        return { thread, changed }
+        return { thread, changed, board }
       })
-      if (changed) publishThread(thread)
+      if (changed) await publishThread(ref, thread)
       return { thread }
     })
   }
+
+  // F10: a team member makes a thread team-only, or visible to everyone again.
+  app.post('/api/threads/:tid/visibility', async (req) => {
+    const user = await ctx.requireUser(req)
+    const { tid = '' } = req.params as Params
+    const input = parse(SetThreadVisibilityInput, req.body)
+    const {
+      thread,
+      changed,
+      board: ref,
+    } = await db.transaction(async (tx) => {
+      const { row, access, team } = await threadAccess(tx, tid, user.id, 'comment')
+      if (!team) throw forbidden('Only people on the team can change who sees a comment.')
+      spend(user.id)
+      const board = access.board
+      const updated = await tx.query(
+        'UPDATE comment_threads SET visibility = $2, updated_at = $3 WHERE id = $1 AND visibility <> $2',
+        [row.id, input.visibility, now()],
+      )
+      return { thread: await mustLoadThread(tx, board, row.id), changed: updated.rowCount > 0, board }
+    })
+    if (changed) {
+      await publishThread(ref, thread)
+      // People outside the team had this thread: tell them to drop it (they learn nothing new).
+      if (thread.visibility === 'team')
+        await publishTo(ref, { type: COMMENTS_HIDDEN_EVENT, data: { threadId: thread.id } }, 'outside')
+    }
+    return { thread }
+  })
 
   app.post('/api/threads/:tid/read', async (req) => {
     const user = await ctx.requireUser(req)

@@ -8,7 +8,8 @@
 // - anyone who is a member of the workspace may search it, guests included (a name-only guest finds
 //   text only on the boards of their own guest links, which they can already read in full);
 // - viewers and commenters find text on boards they can view, comment threads included (they can
-//   read those threads on the board); nothing that only editors see exists in the index ("Recently
+//   read those threads on the board), except team-only threads (F10): people outside the team
+//   (workspace guests and name-only guests) never find their text; nothing that only editors see exists in the index ("Recently
 //   deleted", private brainstorm drafts, note authors and comment authors are never indexed);
 // - non-members get 404 (the workspace stays invisible); trashed boards are never searched, and are
 //   dropped from the index when they are trashed.
@@ -31,6 +32,7 @@ import { isBoardId, requireWorkspaceRole } from '../../access.ts'
 import type { Params } from '../../context.ts'
 import { ApiError, parse } from '../../errors.ts'
 import { keyedLimit } from '../../rate-limit.ts'
+import { isTeamMember } from '../comments/store.ts'
 import type { FeatureContext } from '../context.ts'
 import { SearchIndexer, searchSettings } from './indexer.ts'
 import { parseQuery, snippetFromHeadline } from './query.ts'
@@ -125,6 +127,7 @@ async function search(
     query: parsed,
     boards: opts.limit,
     perBoard: SEARCH_HITS_PER_BOARD,
+    team: await isTeamMember(ctx.db, opts.workspaceId, opts.userId),
   })
   // Rows come board by board, best board first, each board's hits best first.
   const grouped = new Map<string, RankedRow[]>()

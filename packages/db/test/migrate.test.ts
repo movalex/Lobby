@@ -230,6 +230,7 @@ describe('shipped migrations', () => {
       '0017_comment_notifications',
       '0018_ai_settings',
       '0019_checkpoint_reasons',
+      '0020_comment_visibility',
     ])
   })
 
@@ -255,6 +256,7 @@ describe('shipped migrations', () => {
       '0017_comment_notifications',
       '0018_ai_settings',
       '0019_checkpoint_reasons',
+      '0020_comment_visibility',
     ])
     expect(await migrate(db)).toEqual({ applied: [], newer: [] })
     expect(await tableNames()).toEqual([
@@ -342,6 +344,7 @@ describe('shipped migrations', () => {
       '0017_comment_notifications',
       '0018_ai_settings',
       '0019_checkpoint_reasons',
+      '0020_comment_visibility',
     ])
     expect(await recorded()).toEqual(shipped.map((m) => m.name))
     const inv = await db.one<{ multi_use: boolean; use_count: number }>(

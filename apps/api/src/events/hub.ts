@@ -192,8 +192,12 @@ export class EventHub {
     return { ok: true, stream: entry, close: () => void this.remove(entry) }
   }
 
-  /** Call only after the change is committed. A throwing listener never affects the others. */
-  publish(boardId: string, event: BoardEvent): void {
+  /**
+   * Call only after the change is committed. A throwing listener never affects the others.
+   * `opts.to` (F10, team-only comments): deliver to people's streams only when it returns true for
+   * the stream's person (decided at publish time; in-process listeners get every event).
+   */
+  publish(boardId: string, event: BoardEvent, opts: { to?: (userId: string) => boolean } = {}): void {
     const delivered: DeliveredEvent = { ...event, seq: ++this.seq, boardId, at: new Date().toISOString() }
     for (const listener of [...(this.listeners.get(boardId) ?? [])]) {
       try {
@@ -203,6 +207,7 @@ export class EventHub {
       }
     }
     for (const e of [...(this.byBoard.get(boardId) ?? [])]) {
+      if (opts.to && !opts.to(e.userId)) continue
       if (e.held) {
         if (e.held.length < MAX_HELD) e.held.push(delivered)
       } else deliverTo(e, delivered)
