@@ -34,6 +34,10 @@ function harness() {
     sendResult: { ok: true, version: 'v' } as SendResult,
     renders: [] as { at: number; force: boolean }[],
     sends: [] as { at: number; kind: string; keepalive: boolean }[],
+    /** The image of each upload (null for a removal), in order. */
+    sentBlobs: [] as (Blob | null)[],
+    /** While set, uploads stay in flight until it resolves. */
+    gate: null as Promise<void> | null,
     states: [] as string[],
     now: () => t,
     async advance(ms: number) {
@@ -70,6 +74,8 @@ function harness() {
     },
     send: async (r, { keepalive }) => {
       h.sends.push({ at: t, kind: r.kind, keepalive })
+      h.sentBlobs.push(r.kind === 'image' ? r.blob : null)
+      if (h.gate) await h.gate
       return h.sendResult
     },
     onStatus: (s) => h.states.push(s.state),
@@ -235,6 +241,66 @@ describe('thumbnail capture scheduler', () => {
     d.s.noteChange()
     await d.h.advance(UPLOAD_QUIET_MS)
     expect(d.s.dispose()).toBeNull() // already sent
+  })
+
+  it('says when the latest changes have no picture yet (the caller then draws one on the spot)', async () => {
+    const { h, s } = harness()
+    expect(s.needsRender()).toBe(false)
+    s.noteChange()
+    expect(s.needsRender()).toBe(true)
+    await h.advance(RENDER_QUIET_MS)
+    expect(s.needsRender()).toBe(false)
+    s.noteChange()
+    expect(s.needsRender()).toBe(true)
+    s.dispose()
+    expect(s.needsRender()).toBe(false)
+  })
+
+  it('F11: back to the dashboard 1.5 s after a change: the picture drawn on leaving is handed over', async () => {
+    const { h, s } = harness()
+    s.noteChange()
+    await h.advance(1_500) // before the 3 s render
+    expect(h.renders).toEqual([])
+    const drawn = image('drawn on leaving')
+    s.adopt(drawn)
+    expect(s.needsRender()).toBe(false)
+    const left = s.dispose()
+    expect(left?.rendered).toBe(drawn)
+    expect(left?.notBefore).toBeLessThanOrEqual(h.now())
+    await h.advance(10 * 60_000)
+    expect(h.renders).toEqual([]) // no async render was started for it
+  })
+
+  it('F11: a newer picture drawn on leaving while an upload is still in flight goes after the api window', async () => {
+    const { h, s } = harness()
+    let open = () => {}
+    h.gate = new Promise((r) => {
+      open = r
+    })
+    s.noteChange()
+    await h.advance(UPLOAD_QUIET_MS)
+    expect(h.sends).toHaveLength(1) // in flight
+    s.noteChange()
+    const newer = image('newer')
+    s.adopt(newer)
+    const left = s.dispose()
+    expect(left?.rendered).toBe(newer)
+    expect(left?.notBefore).toBe(h.now() + THUMBNAIL_MIN_INTERVAL_MS)
+    open()
+    await h.advance(0)
+  })
+
+  it('pagehide right after a change sends the picture drawn on the spot, with keepalive', async () => {
+    const { h, s } = harness()
+    s.noteChange()
+    await h.advance(500)
+    const drawn = image('pagehide')
+    s.adopt(drawn)
+    s.leave('pagehide')
+    await h.advance(0)
+    expect(h.renders).toEqual([])
+    expect(h.sends).toEqual([expect.objectContaining({ kind: 'image', keepalive: true })])
+    expect(h.sentBlobs).toEqual([(drawn as { blob: Blob }).blob])
   })
 
   it('a 429 waits for Retry-After; other failures back off; refusals of the image drop it', async () => {

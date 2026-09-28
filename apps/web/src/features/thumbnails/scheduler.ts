@@ -7,8 +7,9 @@
 //   have settled for UPLOAD_QUIET_MS, at most every UPLOAD_MIN_GAP_MS.
 // - Leaving: when the tab is hidden, the latest changes are rendered at once if needed and sent; when
 //   the page is being unloaded (pagehide) or the board closes (navigating to the dashboard unmounts
-//   it), the last rendered image is sent. That is why rendering happens a few seconds after changes
-//   settle rather than only right before sending: once the board is gone, nothing can be rendered.
+//   it), the last rendered image is sent. Nothing asynchronous can finish then, so when the latest
+//   changes have no picture yet (`needsRender`), the caller draws one synchronously and hands it over
+//   with `adopt` first (F11: leaving 1.5 s after an edit used to keep the placeholder).
 // - The api accepts one upload per board every THUMBNAIL_MIN_INTERVAL_MS; a 429 says when to retry.
 
 import { THUMBNAIL_MIN_INTERVAL_MS, type ThumbnailMimeType } from '@draftroom/contracts'
@@ -101,6 +102,8 @@ export class CaptureScheduler {
   private attemptedSeq = 0
   private rendered: { seq: number; result: Rendered } | null = null
   private sentSeq = 0
+  /** The change the upload in flight covers (meaningful while `sending`). */
+  private sendingSeq = 0
   private lastSentAt = Number.NEGATIVE_INFINITY
   private retryAt = 0
   /** Whether the api holds a thumbnail for this board (null: not known yet). */
@@ -127,6 +130,23 @@ export class CaptureScheduler {
     this.remote = has
   }
 
+  /** The latest changes have no picture yet (none rendered, or a render still in progress). */
+  needsRender(): boolean {
+    return !this.stopped && this.attemptedSeq < this.changeSeq
+  }
+
+  /**
+   * A picture of the latest changes made outside the schedule: drawn synchronously by the caller when
+   * the board is closing or the page is going away (F11), where an asynchronous render could not
+   * finish. It is sent like any other: by `leave`, or handed over by `dispose`.
+   */
+  adopt(result: RenderResult): void {
+    if (this.stopped || result.kind === 'busy') return
+    const seq = this.changeSeq
+    this.attemptedSeq = seq
+    this.rendered = result.kind === 'skipped' ? null : { seq, result }
+  }
+
   /** The tab was hidden (`hidden`) or the page is being unloaded (`pagehide`). */
   leave(reason: 'hidden' | 'pagehide'): void {
     if (this.stopped || this.sentSeq >= this.changeSeq) return
@@ -147,10 +167,22 @@ export class CaptureScheduler {
     if (this.stopped) return null
     this.stopped = true
     this.clear()
-    if (this.sending || !this.hasPending()) return null
-    const rendered = this.rendered?.result
-    if (!rendered) return null
-    return { rendered, notBefore: Math.max(this.lastSentAt + THUMBNAIL_MIN_INTERVAL_MS, this.retryAt) }
+    if (!this.hasPending()) return null
+    const pending = this.rendered
+    if (!pending) return null
+    if (this.sending) {
+      // An upload is in flight. If it carries this very picture there is nothing left; if the picture
+      // is newer (drawn on leaving), it goes once the api's window after that upload opens.
+      if (pending.seq <= this.sendingSeq) return null
+      return {
+        rendered: pending.result,
+        notBefore: Math.max(this.d.now() + THUMBNAIL_MIN_INTERVAL_MS, this.retryAt),
+      }
+    }
+    return {
+      rendered: pending.result,
+      notBefore: Math.max(this.lastSentAt + THUMBNAIL_MIN_INTERVAL_MS, this.retryAt),
+    }
   }
 
   // ---- internals ---------------------------------------------------------------------------------
@@ -224,6 +256,8 @@ export class CaptureScheduler {
       this.rendering = false
     }
     const renderMs = Math.round(this.d.now() - started)
+    // A newer picture was adopted meanwhile (drawn on leaving): this older one must not replace it.
+    if (seq < this.attemptedSeq) return true
     if (result.kind === 'busy') {
       this.status({ state: 'idle' })
       this.schedule(BUSY_RETRY_MS)
@@ -251,6 +285,7 @@ export class CaptureScheduler {
     const pending = this.rendered
     if (!pending) return
     this.sending = true
+    this.sendingSeq = pending.seq
     this.status({ state: 'uploading' })
     let res: SendResult
     try {

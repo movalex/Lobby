@@ -5,7 +5,7 @@
 // through the API, not only in the tab that inserted the tour.
 import type { Page } from '@playwright/test'
 import { Api } from './support/api.ts'
-import { read, waitForBoard } from './support/board.ts'
+import { edit, read, waitForBoard } from './support/board.ts'
 import {
   frameNames,
   freshHandle,
@@ -13,9 +13,17 @@ import {
   personalWorkspace,
   signedInContext,
 } from './support/dashboard-share.ts'
+import type { BindingLike, BoxLike } from './support/editor.ts'
 import { expect, test } from './support/fixtures.ts'
 import { expectSlideOnScreen, nextFrames, presentUi } from './support/present-export.ts'
 import { expectCanvas } from './support/theme.ts'
+
+/** tldraw 5.4.2 Editor methods this spec needs beyond support/editor.ts. */
+interface TourEditor {
+  zoomToBounds(b: BoxLike, opts?: { inset?: number; animation?: { duration: number } }): unknown
+  getBindingsToShape(id: string, type: string): BindingLike[]
+  getZoomLevel(): number
+}
 
 const SECTIONS = [
   '1 · Welcome',
@@ -90,6 +98,32 @@ const layoutProblems = (page: Page) =>
     }
     return problems
   })
+
+/**
+ * F1: with the gallery scrolled to the top (as it opens), "Create from …" is on screen and nothing
+ * covers it: the dialog keeps it pinned to its bottom edge.
+ */
+async function expectCreateOnScreen(page: Page) {
+  const hit = await page.evaluate(() => {
+    const b = document.querySelector('[data-testid="create-board-submit"]')
+    if (!b) return null
+    const r = b.getBoundingClientRect()
+    const el = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2)
+    return {
+      top: r.top,
+      bottom: r.bottom,
+      right: r.right,
+      vw: innerWidth,
+      vh: innerHeight,
+      hit: !!el && b.contains(el),
+    }
+  })
+  expect(hit, 'the create button exists').not.toBeNull()
+  expect(hit?.top).toBeGreaterThanOrEqual(0)
+  expect(hit?.bottom).toBeLessThanOrEqual(hit?.vh ?? 0)
+  expect(hit?.right).toBeLessThanOrEqual(hit?.vw ?? 0)
+  expect(hit?.hit, 'the create button is not covered').toBe(true)
+}
 
 /** The tour is on the board: six frames, in order, in one row, nothing broken. */
 async function expectTour(page: Page) {
@@ -167,6 +201,84 @@ test('sample board: "Start with the sample board" on an empty dashboard opens th
       await expect(ui.overlay).toHaveCount(0)
     })
 
+    await test.step('the Mood board is a direction (palette, type), with two reference slots (F10)', async () => {
+      const mood = await read(
+        page,
+        (ed, id) =>
+          ed
+            .getSortedChildIdsForParent(id)
+            .map((c) => ed.getShape(c))
+            .filter((s) => s?.type === 'geo')
+            .map((s) => ({
+              slot: s?.meta.draftroomSlot === 'image',
+              fill: s?.props.fill,
+              color: s?.props.color,
+            })),
+        frames[3]?.id ?? '',
+      )
+      expect(mood.filter((g) => g.slot)).toHaveLength(2)
+      const swatches = mood.filter((g) => g.fill === 'fill')
+      expect(swatches.length).toBeGreaterThanOrEqual(4)
+      expect(swatches[0]?.color).toBe('orange')
+    })
+
+    await test.step('drag the Story theme down (DEMO.md 1:00): it lands on empty canvas, its connector follows (F12)', async () => {
+      const brainstorm = frames[1]?.id ?? ''
+      await edit(
+        page,
+        (ed, id) => {
+          ed.selectNone()
+          const b = ed.getShapePageBounds(id)
+          if (b) (ed as unknown as TourEditor).zoomToBounds(b, { inset: 24, animation: { duration: 0 } })
+        },
+        brainstorm,
+      )
+      const story = await read(
+        page,
+        (ed, id) => {
+          const s = ed
+            .getSortedChildIdsForParent(id)
+            .map((c) => ed.getShape(c))
+            .find((x) => {
+              const rt = x?.props.richText as
+                | { content?: Array<{ content?: Array<{ text?: string }> }> }
+                | undefined
+              const text = (rt?.content ?? [])
+                .map((p) => (p.content ?? []).map((n) => n.text ?? '').join(''))
+                .join('')
+              return x?.type === 'geo' && text === 'Story'
+            })
+          if (!s) return null
+          const b = ed.getShapePageBounds(s.id)
+          if (!b) return null
+          const c = ed.pageToScreen({ x: b.x + b.w / 2, y: b.y + b.h / 2 })
+          const more = ed as unknown as TourEditor
+          const arrow = more.getBindingsToShape(s.id, 'arrow')[0]?.fromId ?? null
+          return { id: s.id, y: b.y, cx: c.x, cy: c.y, zoom: more.getZoomLevel(), arrow }
+        },
+        brainstorm,
+      )
+      expect(story, 'the Story theme').not.toBeNull()
+      if (!story) return
+      expect(story.arrow, 'a connector ends on the Story theme').not.toBeNull()
+      await page.mouse.move(story.cx, story.cy)
+      await page.mouse.down()
+      await page.mouse.move(story.cx, story.cy + 120 * story.zoom, { steps: 8 })
+      await page.mouse.up()
+      const after = await read(
+        page,
+        (ed, a) => ({
+          y: ed.getShapePageBounds(a.id)?.y ?? null,
+          bound: ed.getBindingsFromShape(a.arrow, 'arrow').some((b) => b.toId === a.id),
+        }),
+        { id: story.id, arrow: story.arrow ?? '' },
+      )
+      expect(after.y ?? 0).toBeGreaterThan(story.y + 100)
+      expect(after.bound, 'the connector is still attached').toBe(true)
+      // Nothing overlaps: the theme moved into the empty space under it.
+      expect(await layoutProblems(page)).toEqual([])
+    })
+
     await test.step('the dashboard lists it like any other board', async () => {
       await openDashboard(page, workspaceId)
       await expect(page.locator(`[data-testid="board-card"][data-board-id="${boardId}"]`)).toBeVisible()
@@ -219,6 +331,19 @@ test('sample board: the gallery shows the Lobby tour first, outside the category
       await page.getByTestId('template-search').fill('')
     })
 
+    await test.step('at 1440 × 900, "Create from Lobby tour" is on screen as soon as the card is picked (F1)', async () => {
+      await page.setViewportSize({ width: 1440, height: 900 })
+      await sample.click()
+      await expect(page.getByTestId('create-board-submit')).toHaveText('Create from Lobby tour')
+      await expect(page.getByTestId('create-board-picked')).toHaveText('Lobby tour')
+      await expectCreateOnScreen(page)
+      // The gallery still scrolls under it, and the button stays put.
+      await page.getByTestId('create-board-dialog').evaluate((d) => d.scrollTo({ top: 400 }))
+      await expectCreateOnScreen(page)
+      await page.getByTestId('create-board-dialog').evaluate((d) => d.scrollTo({ top: 0 }))
+      await page.getByTestId('template-blank').click()
+    })
+
     await test.step('selecting it names the six frames and creates the tour', async () => {
       await sample.click()
       await expect(sample).toHaveAttribute('aria-pressed', 'true')
@@ -262,6 +387,10 @@ test('sample board: at 390 px in dark mode the empty dashboard and the gallery f
     const s = await sample.boundingBox()
     expect(s && s.x >= 0 && s.x + s.width <= 390).toBe(true)
     await expect(sample.locator('.dr-tcard__desc')).toBeVisible()
+    expect(await noSideScroll()).toBe(true)
+    // F1: picking it puts "Create from Lobby tour" on screen, pinned to the dialog's bottom edge.
+    await sample.click()
+    await expectCreateOnScreen(page)
     expect(await noSideScroll()).toBe(true)
     await page.keyboard.press('Escape')
     await expect(page.getByTestId('create-board-dialog')).toHaveCount(0)

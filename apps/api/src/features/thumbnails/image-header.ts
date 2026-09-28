@@ -32,12 +32,32 @@ const ascii = (b: Uint8Array, o: number, s: string) => {
 const startsWith = (b: Uint8Array, bytes: readonly number[], at = 0) =>
   b.length >= at + bytes.length && bytes.every((x, i) => b[at + i] === x)
 
+/** APNG's animation chunks (acTL announces the animation; fcTL/fdAT carry the frames). */
+const APNG_CHUNKS = ['acTL', 'fcTL', 'fdAT']
+
 function png(b: Uint8Array): ImageHeader {
   // Signature (8), then the IHDR chunk: length 13, "IHDR", width, height, 5 more bytes, CRC.
   if (b.length < 8 + 25 + PNG_IEND.length) throw new ImageHeaderError('The PNG is truncated.')
   if (u32be(b, 8) !== 13 || !ascii(b, 12, 'IHDR')) throw new ImageHeaderError('The PNG has no header.')
   if (!startsWith(b, PNG_IEND, b.length - PNG_IEND.length))
     throw new ImageHeaderError('The PNG does not end where it should.')
+  // Walk every chunk (length, type, data, CRC) from IHDR to IEND: they must line up exactly with the
+  // end of the body, and none may be an APNG animation chunk (SEAM-12: an animated PNG would play on
+  // every dashboard card, which animated WebP is already refused for). At most 256 KB: a cheap walk.
+  let o = 8
+  for (;;) {
+    if (o + 12 > b.length) throw new ImageHeaderError('The PNG is truncated.')
+    const length = u32be(b, o)
+    const end = o + 12 + length
+    if (end > b.length) throw new ImageHeaderError('The PNG is truncated.')
+    if (APNG_CHUNKS.some((type) => ascii(b, o + 4, type)))
+      throw new ImageHeaderError('Animated images are not accepted.')
+    if (ascii(b, o + 4, 'IEND')) {
+      if (end !== b.length) throw new ImageHeaderError('The PNG does not end where it should.')
+      break
+    }
+    o = end
+  }
   return { mimeType: 'image/png', width: u32be(b, 16), height: u32be(b, 20) }
 }
 

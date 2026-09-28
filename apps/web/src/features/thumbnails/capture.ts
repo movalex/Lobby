@@ -5,7 +5,7 @@
 
 import type { Editor } from 'tldraw'
 import { changesContent, type RecordsDiff } from './changes.ts'
-import { boardHasContent, isBusy, renderThumbnail } from './render.ts'
+import { boardHasContent, isBusy, renderNowSync, renderThumbnail } from './render.ts'
 import { CaptureScheduler, type CaptureStatus, RENDER_QUIET_MS } from './scheduler.ts'
 import { hasStoredThumbnail, sendLeftover, sendThumbnail } from './upload.ts'
 
@@ -54,10 +54,22 @@ export function startCapture(
     flush()
     scheduler.leave('hidden')
   }
-  const onPageHide = () => {
+  // F11: leaving right after a change (before the schedule's render, a few seconds after changes
+  // settle) used to keep the old thumbnail or the placeholder. Nothing asynchronous can finish then, so
+  // the latest changes are drawn on the spot (the simplified drawing, a few milliseconds).
+  const drawNowIfNeeded = () => {
+    if (editor.isDisposed) return
     flush()
+    if (scheduler.needsRender()) scheduler.adopt(renderNowSync(editor))
+  }
+  const onPageHide = () => {
+    drawNowIfNeeded()
     scheduler.leave('pagehide')
   }
+  // In-app navigation (back to the dashboard) unmounts the board: tldraw emits `unmount` while the
+  // editor still works (before it disposes the store), which our own cleanup below comes too late for.
+  const onUnmount = () => drawNowIfNeeded()
+  editor.on('unmount', onUnmount)
   document.addEventListener('visibilitychange', onVisibility)
   window.addEventListener('pagehide', onPageHide)
 
@@ -70,6 +82,13 @@ export function startCapture(
 
   return () => {
     controller.abort()
+    // Still mounted (e.g. the person's role changed and capture stops): draw the latest changes now.
+    try {
+      drawNowIfNeeded()
+    } catch {
+      // never let a thumbnail break closing the board
+    }
+    editor.off('unmount', onUnmount)
     offStore()
     for (const type of INPUT_EVENTS) document.removeEventListener(type, onInput, { capture: true })
     document.removeEventListener('visibilitychange', onVisibility)

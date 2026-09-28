@@ -59,6 +59,44 @@ async function decoded(img: Locator) {
   })
 }
 
+/**
+ * How much of the decoded image the drawing covers: the bounding box of the pixels that differ from the
+ * top-left pixel (the canvas around the content), as fractions of the image's width and height.
+ */
+async function coverage(img: Locator) {
+  await decoded(img)
+  return img.evaluate(async (el: HTMLImageElement) => {
+    await el.decode()
+    const c = document.createElement('canvas')
+    c.width = el.naturalWidth
+    c.height = el.naturalHeight
+    const g = c.getContext('2d')
+    if (!g) throw new Error('no 2d context')
+    g.drawImage(el, 0, 0)
+    const d = g.getImageData(0, 0, c.width, c.height).data
+    const bg = [d[0] ?? 0, d[1] ?? 0, d[2] ?? 0]
+    let minX = c.width
+    let minY = c.height
+    let maxX = -1
+    let maxY = -1
+    for (let y = 0; y < c.height; y++)
+      for (let x = 0; x < c.width; x++) {
+        const i = (y * c.width + x) * 4
+        const diff = Math.max(
+          Math.abs((d[i] ?? 0) - (bg[0] ?? 0)),
+          Math.abs((d[i + 1] ?? 0) - (bg[1] ?? 0)),
+          Math.abs((d[i + 2] ?? 0) - (bg[2] ?? 0)),
+        )
+        if (diff <= 16) continue
+        minX = Math.min(minX, x)
+        maxX = Math.max(maxX, x)
+        minY = Math.min(minY, y)
+        maxY = Math.max(maxY, y)
+      }
+    return maxX < 0 ? { w: 0, h: 0 } : { w: (maxX - minX + 1) / c.width, h: (maxY - minY + 1) / c.height }
+  })
+}
+
 async function listedVersion(request: APIRequestContext, workspaceId: string, boardId: string) {
   const res = await request.get(`/api/workspaces/${workspaceId}/boards`)
   expect(res.status()).toBe(200)
@@ -345,4 +383,108 @@ test("thumbnails: viewers never upload, and the api refuses a viewer's upload", 
   // The owner's upload is what everyone sees.
   const meta = await alice.fetch('GET', `/api/boards/${board}/thumbnail/meta`)
   expect(((await meta.json()) as { thumbnail: { width: number } }).thumbnail.width).toBe(48)
+})
+
+test('thumbnails (F11): a wide board of frames shows its first frame filling the card, not a thin strip', async ({
+  session,
+  board,
+}, testInfo) => {
+  const alice = await session('alice')
+  const { page } = alice
+  // Four slide-sized frames in a row (like the Lobby tour), each with a heading and a few notes: 6,880
+  // page units wide and 1,000 tall. The whole row on a 16:10 card would be a band 23% of its height.
+  await edit(
+    page,
+    (ed, a) => {
+      const shapes: Record<string, unknown>[] = []
+      const colors = ['yellow', 'orange', 'light-blue', 'violet']
+      for (let i = 0; i < 4; i++) {
+        const x = i * 1760
+        shapes.push({ type: 'frame', x, y: 0, props: { w: 1600, h: 1000, name: `Slide ${i + 1}` } })
+        shapes.push({
+          type: 'geo',
+          x: x + 80,
+          y: 80,
+          props: { geo: 'rectangle', w: 1440, h: 160, color: 'orange', fill: 'solid', richText: a.title },
+        })
+        for (let n = 0; n < 3; n++)
+          shapes.push({
+            type: 'note',
+            x: x + 120 + n * 480,
+            y: 420,
+            props: { color: colors[(i + n) % 4], richText: a.note, scale: 1.6 },
+          })
+      }
+      ed.createShapes(shapes)
+    },
+    { title: richText('A slide'), note: richText('An idea') },
+  )
+  await expect(captureState(page)).toHaveAttribute('data-state', 'rendered', { timeout: 20_000 })
+  await backToDashboard(alice)
+  const img = card(page, board).getByTestId('board-thumbnail')
+  await expect(img).toBeVisible({ timeout: 15_000 })
+  const shown = await decoded(img)
+  expect([shown.width, shown.height]).toEqual([480, 300])
+  const covered = await coverage(img)
+  testInfo.annotations.push({ type: 'coverage', description: JSON.stringify(covered) })
+  // The first frame fills the card (its outline and notes span most of it in both directions).
+  expect(covered.h).toBeGreaterThan(0.8)
+  expect(covered.w).toBeGreaterThan(0.8)
+  await capture('thumbnails-wide-board-first-frame.png', card(page, board), testInfo)
+})
+
+test('thumbnails (F11): back to the dashboard 1.5 s after an edit, the card still gets the new picture', async ({
+  session,
+  board,
+}) => {
+  const alice = await session('alice')
+  const { page } = alice
+  const uploads = recordUploads(page)
+  await drawSomething(page, 'Quick')
+  // Well before the render that waits for 3 quiet seconds.
+  await page.waitForTimeout(1_500)
+  await expect(captureState(page)).not.toHaveAttribute('data-state', 'rendered')
+  const sent = page.waitForResponse(
+    (r) => r.request().method() === 'PUT' && r.url().endsWith(`/api/boards/${board}/thumbnail`),
+    { timeout: 10_000 },
+  )
+  await backToDashboard(alice)
+  expect((await sent).status()).toBe(200)
+  const img = card(page, board).getByTestId('board-thumbnail')
+  await expect(img).toBeVisible({ timeout: 10_000 })
+  const shown = await decoded(img)
+  expect(shown.colours, 'the thumbnail has content, not a blank rectangle').toBeGreaterThan(8)
+  expect(uploads).toHaveLength(1)
+  const meta = await page.request.get(`/api/boards/${board}/thumbnail/meta`)
+  expect(((await meta.json()) as { thumbnail: { width: number } | null }).thumbnail?.width).toBe(480)
+})
+
+test('thumbnails (F11): the placeholder of a board without a thumbnail is dark on the dark theme', async ({
+  session,
+  board,
+}, testInfo) => {
+  const alice = await session('alice')
+  const { page } = alice
+  await backToDashboard(alice) // nothing on the board: no thumbnail, the card keeps its placeholder
+  const placeholder = card(page, board).getByTestId('board-thumb-placeholder')
+  await expect(placeholder).toBeVisible()
+  /** Relative luminance (0 black .. 1 white) of the placeholder's background fill. */
+  const luminance = () =>
+    placeholder.locator('.dr-thumb__bg').evaluate((el) => {
+      const fill = getComputedStyle(el).fill
+      const nums = (fill.match(/[\d.]+/g) ?? []).map(Number)
+      const [r = 0, g = 0, b = 0] = fill.startsWith('color(') ? nums.map((n) => n * 255) : nums
+      const lin = (v: number) => {
+        const s = v / 255
+        return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4
+      }
+      return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b)
+    })
+  expect(await luminance()).toBeGreaterThan(0.7) // the light pastel, unchanged
+  await page.evaluate(([key]) => localStorage.setItem(key as string, 'dark'), [THEME_KEY])
+  await page.reload()
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark')
+  await expect(placeholder).toBeVisible()
+  expect(await luminance()).toBeLessThan(0.05)
+  await capture('thumbnails-placeholder-dark.png', card(page, board), testInfo)
 })

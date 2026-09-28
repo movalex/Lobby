@@ -31,6 +31,7 @@ export function CreateBoardDialog({
   const titleId = useId()
   const projectId = useId()
   const errorId = useId()
+  const formId = useId()
   const [title, setTitle] = useState('')
   const [project, setProject] = useState(defaultProjectId ?? '')
   const [choice, setChoice] = useState<TemplateChoice>('blank')
@@ -88,7 +89,7 @@ export function CreateBoardDialog({
             if (!pending) void create(c, e)
           }}
         />
-        <form className="dr-form dr-newboard__form" onSubmit={submit} noValidate>
+        <form id={formId} className="dr-form dr-newboard__form" onSubmit={submit} noValidate>
           {entry && (
             <p className="dr-newboard__sections" data-testid="template-sections">
               <strong>{entry.name}:</strong> {entry.sections.join(' · ')}
@@ -139,36 +140,42 @@ export function CreateBoardDialog({
               {error}
             </p>
           )}
-          <div className="dr-dialog__actions dr-newboard__actions">
-            <label className="dr-check dr-newboard__dontshow">
-              <input
-                type="checkbox"
-                data-testid="template-dont-show"
-                checked={hidePicker}
-                onChange={(e) => {
-                  setHidePicker(e.target.checked)
-                  writePickerHidden(userId, e.target.checked)
-                }}
-              />
-              Don’t show templates on new boards
-            </label>
-            <button type="button" className="dr-btn" onClick={onClose}>
-              Cancel
-            </button>
-            <button
-              type="submit"
-              className="dr-btn dr-btn--primary"
-              data-testid="create-board-submit"
-              disabled={pending}
-            >
-              {pending
-                ? 'Creating…'
-                : entry && choice !== 'blank'
-                  ? `Create from ${entry.name}`
-                  : 'Create board'}
-            </button>
-          </div>
+          <label className="dr-check dr-newboard__dontshow">
+            <input
+              type="checkbox"
+              data-testid="template-dont-show"
+              checked={hidePicker}
+              onChange={(e) => {
+                setHidePicker(e.target.checked)
+                writePickerHidden(userId, e.target.checked)
+              }}
+            />
+            Don’t show templates on new boards
+          </label>
         </form>
+        {/* F1: the gallery is taller than a laptop screen (and a phone's), so Cancel / Create stay pinned
+            to the bottom of the dialog while it scrolls; the button submits the form above. */}
+        <div className="dr-newboard__footer" data-testid="create-board-footer">
+          <span className="dr-newboard__picked" data-testid="create-board-picked">
+            {entry && choice !== 'blank' ? entry.name : 'Blank board'}
+          </span>
+          <button type="button" className="dr-btn" onClick={onClose}>
+            Cancel
+          </button>
+          <button
+            type="submit"
+            form={formId}
+            className="dr-btn dr-btn--primary"
+            data-testid="create-board-submit"
+            disabled={pending}
+          >
+            {pending
+              ? 'Creating…'
+              : entry && choice !== 'blank'
+                ? `Create from ${entry.name}`
+                : 'Create board'}
+          </button>
+        </div>
       </div>
     </Dialog>
   )

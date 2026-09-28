@@ -133,10 +133,22 @@ export async function renderSchematic(
   ids: TLShapeId[],
   frame: ThumbnailFrame,
 ): Promise<HTMLCanvasElement | null> {
-  const { box, scale, width, height } = frame
   const all = [...editor.getShapeAndDescendantIds(ids)]
-  const images = await loadImages(editor, all, scale)
+  const images = await loadImages(editor, all, frame.scale)
+  return drawSchematic(editor, ids, frame, images)
+}
 
+/**
+ * The drawing itself, synchronous: usable while the board is closing (F11), when nothing can be
+ * awaited any more. Image shapes without a loaded preview in `images` are grey tiles.
+ */
+export function drawSchematic(
+  editor: Editor,
+  ids: TLShapeId[],
+  frame: ThumbnailFrame,
+  images: ReadonlyMap<TLShapeId, HTMLImageElement> = new Map(),
+): HTMLCanvasElement | null {
+  const { box, scale, width, height } = frame
   const canvas = document.createElement('canvas')
   canvas.width = width
   canvas.height = height

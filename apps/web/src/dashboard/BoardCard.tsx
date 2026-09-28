@@ -1,5 +1,5 @@
 import { type BoardWithRole, thumbnailPath } from '@draftroom/contracts'
-import { useEffect, useId, useState } from 'react'
+import { type CSSProperties, useEffect, useId, useState } from 'react'
 import { onThumbnailUpdated } from '../features/thumbnails/card-events.ts'
 import { formatRelativeTime } from '../lib/format.ts'
 import { can } from '../lib/permissions.ts'
@@ -55,37 +55,86 @@ export function BoardCardThumb({
   )
 }
 
-/** A deterministic, colored placeholder for boards without a thumbnail. */
+/**
+ * A deterministic, colored placeholder for boards without a thumbnail. Its colours are presentation
+ * attributes (the light look); dashboard.css recolours the classed parts on the dark theme from the
+ * same palette (the --th-* properties), so a card there is not a bright pastel block (F11).
+ */
 export function BoardThumb({ boardId }: { boardId: string }) {
   const t = thumbStyle(boardId)
   const dots = useId()
+  const palette = { '--th-bg': t.bg, '--th-ink': t.ink, '--th-note': t.note } as CSSProperties
   return (
-    <svg className="dr-thumb" viewBox="0 0 160 100" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
+    <svg
+      className="dr-thumb"
+      data-testid="board-thumb-placeholder"
+      viewBox="0 0 160 100"
+      preserveAspectRatio="xMidYMid slice"
+      aria-hidden="true"
+      style={palette}
+    >
       <defs>
         <pattern id={dots} width="10" height="10" patternUnits="userSpaceOnUse">
-          <circle cx="1" cy="1" r="0.8" fill={t.ink} opacity="0.14" />
+          <circle className="dr-thumb__dot" cx="1" cy="1" r="0.8" fill={t.ink} opacity="0.14" />
         </pattern>
       </defs>
-      <rect width="160" height="100" fill={t.bg} />
+      <rect className="dr-thumb__bg" width="160" height="100" fill={t.bg} />
       <rect width="160" height="100" fill={`url(#${dots})`} />
       {t.layout === 0 && (
         <g>
           <path
+            className="dr-thumb__ink"
             d="M52 44 C 70 30, 86 64, 104 50"
             stroke={t.ink}
             strokeWidth="1.6"
             fill="none"
             opacity="0.55"
           />
-          <rect x="26" y="30" width="30" height="30" rx="2" fill={t.note} transform="rotate(-4 41 45)" />
-          <rect x="100" y="34" width="30" height="30" rx="2" fill={t.note} transform="rotate(3 115 49)" />
-          <rect x="64" y="58" width="30" height="30" rx="2" fill="#fff" stroke={t.ink} strokeOpacity="0.2" />
-          <path d="M70 68h18M70 74h12" stroke={t.ink} strokeWidth="1.6" strokeLinecap="round" opacity="0.5" />
+          <rect
+            className="dr-thumb__note"
+            x="26"
+            y="30"
+            width="30"
+            height="30"
+            rx="2"
+            fill={t.note}
+            transform="rotate(-4 41 45)"
+          />
+          <rect
+            className="dr-thumb__note"
+            x="100"
+            y="34"
+            width="30"
+            height="30"
+            rx="2"
+            fill={t.note}
+            transform="rotate(3 115 49)"
+          />
+          <rect
+            className="dr-thumb__card dr-thumb__ink"
+            x="64"
+            y="58"
+            width="30"
+            height="30"
+            rx="2"
+            fill="#fff"
+            stroke={t.ink}
+            strokeOpacity="0.2"
+          />
+          <path
+            className="dr-thumb__ink"
+            d="M70 68h18M70 74h12"
+            stroke={t.ink}
+            strokeWidth="1.6"
+            strokeLinecap="round"
+            opacity="0.5"
+          />
         </g>
       )}
       {t.layout === 1 && (
         <g>
           <rect
+            className="dr-thumb__card dr-thumb__ink"
             x="22"
             y="18"
             width="116"
@@ -95,10 +144,20 @@ export function BoardThumb({ boardId }: { boardId: string }) {
             stroke={t.ink}
             strokeOpacity="0.35"
           />
-          <path d="M22 30h116" stroke={t.ink} strokeOpacity="0.2" />
-          <rect x="32" y="40" width="26" height="26" rx="2" fill={t.note} />
-          <rect x="66" y="40" width="26" height="26" rx="2" fill={t.note} opacity="0.75" />
+          <path className="dr-thumb__ink" d="M22 30h116" stroke={t.ink} strokeOpacity="0.2" />
+          <rect className="dr-thumb__note" x="32" y="40" width="26" height="26" rx="2" fill={t.note} />
+          <rect
+            className="dr-thumb__note"
+            x="66"
+            y="40"
+            width="26"
+            height="26"
+            rx="2"
+            fill={t.note}
+            opacity="0.75"
+          />
           <path
+            className="dr-thumb__ink"
             d="M102 44h26M102 52h20M102 60h24"
             stroke={t.ink}
             strokeWidth="1.8"
@@ -108,22 +167,96 @@ export function BoardThumb({ boardId }: { boardId: string }) {
         </g>
       )}
       {t.layout === 2 && (
-        <g stroke={t.ink} strokeWidth="1.6" fill="none">
-          <rect x="18" y="38" width="34" height="22" rx="5" fill="#fff" strokeOpacity="0.5" />
-          <rect x="64" y="20" width="34" height="22" rx="5" fill={t.note} stroke="none" />
-          <rect x="64" y="58" width="34" height="22" rx="5" fill="#fff" strokeOpacity="0.5" />
-          <rect x="110" y="38" width="34" height="22" rx="11" fill={t.note} stroke="none" opacity="0.8" />
+        <g className="dr-thumb__ink" stroke={t.ink} strokeWidth="1.6" fill="none">
+          <rect
+            className="dr-thumb__card"
+            x="18"
+            y="38"
+            width="34"
+            height="22"
+            rx="5"
+            fill="#fff"
+            strokeOpacity="0.5"
+          />
+          <rect
+            className="dr-thumb__note"
+            x="64"
+            y="20"
+            width="34"
+            height="22"
+            rx="5"
+            fill={t.note}
+            stroke="none"
+          />
+          <rect
+            className="dr-thumb__card"
+            x="64"
+            y="58"
+            width="34"
+            height="22"
+            rx="5"
+            fill="#fff"
+            strokeOpacity="0.5"
+          />
+          <rect
+            className="dr-thumb__note"
+            x="110"
+            y="38"
+            width="34"
+            height="22"
+            rx="11"
+            fill={t.note}
+            stroke="none"
+            opacity="0.8"
+          />
           <path d="M52 46l12-12M52 52l12 14M98 31l12 12M98 69l12-12" opacity="0.5" strokeLinecap="round" />
         </g>
       )}
       {t.layout === 3 && (
-        <g stroke={t.ink} strokeWidth="1.6" strokeLinecap="round">
+        <g className="dr-thumb__ink" stroke={t.ink} strokeWidth="1.6" strokeLinecap="round">
           <path d="M80 50L40 28M80 50L40 74M80 50L122 26M80 50L124 72" opacity="0.4" />
-          <circle cx="80" cy="50" r="14" fill={t.note} stroke="none" />
-          <rect x="22" y="20" width="30" height="16" rx="8" fill="#fff" strokeOpacity="0.35" />
-          <rect x="22" y="66" width="30" height="16" rx="8" fill="#fff" strokeOpacity="0.35" />
-          <rect x="108" y="18" width="30" height="16" rx="8" fill="#fff" strokeOpacity="0.35" />
-          <rect x="110" y="64" width="30" height="16" rx="8" fill={t.note} stroke="none" opacity="0.7" />
+          <circle className="dr-thumb__note" cx="80" cy="50" r="14" fill={t.note} stroke="none" />
+          <rect
+            className="dr-thumb__card"
+            x="22"
+            y="20"
+            width="30"
+            height="16"
+            rx="8"
+            fill="#fff"
+            strokeOpacity="0.35"
+          />
+          <rect
+            className="dr-thumb__card"
+            x="22"
+            y="66"
+            width="30"
+            height="16"
+            rx="8"
+            fill="#fff"
+            strokeOpacity="0.35"
+          />
+          <rect
+            className="dr-thumb__card"
+            x="108"
+            y="18"
+            width="30"
+            height="16"
+            rx="8"
+            fill="#fff"
+            strokeOpacity="0.35"
+          />
+          <rect
+            className="dr-thumb__note"
+            x="110"
+            y="64"
+            width="30"
+            height="16"
+            rx="8"
+            fill={t.note}
+            stroke="none"
+            opacity="0.7"
+          />
         </g>
       )}
     </svg>

@@ -309,9 +309,40 @@
     grid-template-columns: minmax(0, 1fr);
   }
 }
-.dr-newboard__actions {
+/* F1: Cancel / Create stick to the bottom of the dialog while the gallery scrolls (the dialog is the
+   scroller; .dr-newboard spans all of its content, so the footer can stick anywhere in it). The
+   negative margins cover the panel's side and bottom padding, so the bar is flush with the edges. */
+.dr-newboard__footer {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  display: flex;
   align-items: center;
-  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  margin: 14px -22px -22px;
+  padding: 12px 22px 14px;
+  border-top: 1px solid var(--dr-line);
+  background: var(--dr-surface);
+  box-shadow: 0 -6px 16px -12px rgb(27 35 48 / 40%);
+}
+.dr-newboard__picked {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--dr-ink-2);
+  font-size: 13px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+@media (max-width: 560px) {
+  .dr-newboard__footer {
+    padding: 10px 22px 12px;
+  }
+  .dr-newboard__picked {
+    display: none;
+  }
 }
 
 /* ---- shared bits -------------------------------------------------------------------------------- */
@@ -349,8 +380,8 @@
   margin: 0;
   overflow-wrap: anywhere;
 }
-.dr-newboard__actions .dr-check.dr-newboard__dontshow {
-  margin: 0 auto 0 0;
+.dr-form .dr-check.dr-newboard__dontshow {
+  margin: 14px 0 0;
 }
 @media (max-width: 560px) {
   .dr-gallery__grid {
@@ -533,4 +564,21 @@
 }
 :root[data-theme="dark"] .dr-bcard__img {
   filter: brightness(0.92);
+}
+/* The placeholder (BoardCard.tsx BoardThumb) on the dark theme: the board's own palette (--th-*),
+   mixed into the dark surfaces, instead of a bright pastel block (F11). */
+:root[data-theme="dark"] .dr-thumb__bg {
+  fill: color-mix(in srgb, var(--th-bg) 10%, var(--dr-inset));
+}
+:root[data-theme="dark"] .dr-thumb__dot {
+  fill: #ffffff;
+}
+:root[data-theme="dark"] .dr-thumb__card {
+  fill: var(--dr-surface);
+}
+:root[data-theme="dark"] .dr-thumb__ink {
+  stroke: color-mix(in srgb, var(--th-ink) 30%, #d9d6cc);
+}
+:root[data-theme="dark"] .dr-thumb__note {
+  fill: color-mix(in srgb, var(--th-note) 62%, var(--dr-inset));
 }

@@ -14,7 +14,7 @@ export interface PreviewRect {
   h: number
 }
 export interface PreviewItem extends PreviewRect {
-  kind: 'note' | 'box' | 'text'
+  kind: 'note' | 'box' | 'swatch' | 'text'
   color: string
 }
 export interface TemplatePreview {
@@ -102,7 +102,9 @@ export function previewFromRecords(
     } else if (s.type === 'note') {
       items.push({ kind: 'note', x, y, w: 200 * scale, h: 200 * scale, color: fill(props.color) })
     } else if (s.type === 'geo') {
-      items.push({ kind: 'box', x, y, w: num(props.w, 100), h: num(props.h, 100), color: fill(props.color) })
+      // A full-colour fill (a palette swatch) shows its colour; other shapes read as neutral boxes.
+      const kind = props.fill === 'fill' ? 'swatch' : 'box'
+      items.push({ kind, x, y, w: num(props.w, 100), h: num(props.h, 100), color: fill(props.color) })
     } else if (s.type === 'text') {
       items.push({
         kind: 'text',
