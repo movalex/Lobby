@@ -286,7 +286,12 @@ export async function waitForSaved(page: Page) {
 /** Opens the Comments dock panel (idempotent). */
 export async function openCommentsPanel(page: Page) {
   const panel = page.getByTestId('comments-panel')
-  if (!(await panel.isVisible())) await page.getByTestId('dock-tab-comments').click()
+  if (!(await panel.isVisible())) {
+    // On a phone the rail is folded behind one button (R13).
+    const toggle = page.getByTestId('dock-rail-toggle')
+    if (await toggle.isVisible()) await toggle.click()
+    await page.getByTestId('dock-tab-comments').click()
+  }
   await expect(panel).toBeVisible()
   return panel
 }

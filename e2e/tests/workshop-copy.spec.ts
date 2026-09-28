@@ -176,6 +176,9 @@ test('F14, R2-11, DANA2-07: a commenting phone guest: no link badge, "(guest, yo
       { kind: 'point', x: 200, y: 200 },
       'This ember one is the mood for the cups.',
     )
+    // On a phone the rail is folded behind one button (R13).
+    const railToggle = page.getByTestId('dock-rail-toggle')
+    if (await railToggle.isVisible()) await railToggle.click()
     await page.getByTestId('dock-tab-comments').click()
     const panel = page.getByTestId('comments-panel')
     await expect(panel).toBeVisible()

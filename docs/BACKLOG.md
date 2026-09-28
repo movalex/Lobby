@@ -2,6 +2,16 @@
 
 Open findings from the second review on the final build (four reviewers: producer, designer, facilitator, accessibility), after fix round 3. Each has evidence in the review (screenshots and steps) and a suggested fix; none blocks a pilot. Product decisions still open: the tldraw production license, the email sending domain, DBC Ops integration, Kanban, and a separate least-privilege R2 bucket for backups.
 
+## On the `next` branch (not deployed)
+
+A backlog round on 2026-09-28 fixed these on the `next` branch, which was deliberately NOT deployed before the Monday demo. Its full browser run passed 324 of 327; the 3 failures were tests that had not caught up with the new phone rail and per-row grid heights, and those specs (27 tests) pass after the test fixes. Lint, typecheck and 3,126 unit tests pass. Run the full gate once more, merge `next` into `main` and deploy api → sync → web after the demo.
+
+- **Fixed:** A11Y2-03, A11Y-01, A11Y-08, A11Y-09, A11Y2-09, A11Y2-07, A11Y2-10, R2-11, R2-09, R2-08, A11Y2-06, R2-04, A11Y-06, R2-07, A11Y2-05, F2-03, F2-05, DANA2-05, DANA2-06.
+- **Partly fixed:** A11Y2-08, F14, DANA-11, DANA2-07, R13, F15, F2-06, F2-09, F13.
+- **Not started:** R2-10, F2-07, F2-08.
+
+## Open findings (as of the demo build)
+
 | Severity | Id | Area | Finding | Suggested fix |
 | --- | --- | --- | --- | --- |
 | minor | A11Y-01 | Accessibility | (still open, reduced) After Share → Create link or Export → Download PDF, focus jumps to the dialog's × and nothing is announced | While pending, use aria-disabled plus a busy label instead of the disabled attribute, so focus stays put. Once a link exists, focus its Copy button. Add a polite status: "Workshop link created and copied", "Client link created and copied", "Downloaded Lobby to |
