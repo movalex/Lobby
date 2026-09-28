@@ -1,4 +1,5 @@
-// The Share dialog (PRS-02..04 + review links): invite by @handle/email or from the workspace, pending
+// The Share dialog (PRS-02..04 + review links): invite by @handle/email or from the workspace, invite
+// by email (sent through Clerk when this server signs in with it; a link to copy otherwise), pending
 // access requests, workspace-wide access, who has access and through which grant (with transfer of
 // ownership), single-use invite links and multi-use review links. Board owners manage; everyone else
 // sees who has access and can ask for more. The API enforces every rule; this only offers what the
@@ -8,6 +9,7 @@ import type {
   AccessRequest,
   Board,
   BoardMember,
+  EmailInviteResult,
   InvitationCreated,
   PendingInvitation,
   RequestableRole,
@@ -16,6 +18,7 @@ import type {
 } from '@draftroom/contracts'
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { api, isApiError } from '../api/client.ts'
+import { useSession } from '../auth/session.tsx'
 import { announceShareChanged, SHARE_REMOTE_EVENT, sharingApi } from '../features/sharing/api.ts'
 import {
   canExtend,
@@ -40,9 +43,14 @@ import { Dialog } from '../ui/Dialog.tsx'
 import {
   type AccessDetail,
   accessSource,
+  checkInviteEmail,
+  type EmailInviteOutcome,
+  emailInviteHint,
+  emailInviteOutcome,
   grantEditable,
   inviteRoleOptions,
   linkAccessLine,
+  linkForEmailHint,
   parseInviteTarget,
   ROLE_OPTION_LABEL,
   removalNote,
@@ -89,6 +97,8 @@ export function ShareDialog({
   const [error, setError] = useState<string | null>(null)
   const [pendingUser, setPendingUser] = useState<string | null>(null)
   const changed = useCallback(() => announceShareChanged(board.id), [board.id])
+  // Invitation emails go out only through Clerk (the server has the final word per address).
+  const canEmail = useSession().config?.providers.includes('clerk') ?? false
 
   // Managers get the detailed list (grant, workspace role, fallback, review-link joins); everyone else
   // the M1 list.
@@ -202,8 +212,23 @@ export function ShareDialog({
             boardMembers={rows}
             addable={addable}
             pendingAdd={pendingUser === 'add'}
+            canEmail={canEmail}
             onGrant={(userId, r) => run('add', () => api.putMember(board.id, userId, r))}
             onLinkCreated={() => invitations.reload()}
+          />
+        )}
+
+        {canManage && (
+          <EmailInvite
+            boardId={board.id}
+            canEmail={canEmail}
+            onResult={(result) => {
+              if (result.mode === 'granted') {
+                if (result.alreadyHadAccess) return
+                members.reload()
+                changed()
+              } else invitations.reload()
+            }}
           />
         )}
 
@@ -341,6 +366,7 @@ function InvitePeople({
   boardMembers,
   addable,
   pendingAdd,
+  canEmail,
   onGrant,
   onLinkCreated,
 }: {
@@ -350,6 +376,8 @@ function InvitePeople({
   boardMembers: readonly BoardMember[]
   addable: readonly WorkspaceMember[]
   pendingAdd: boolean
+  /** This server can email invitations (the "Invite by email" form below does). */
+  canEmail: boolean
   /** Resolves false when the grant failed (the dialog shows the server's reason). */
   onGrant(userId: string, role: BoardRole): Promise<boolean>
   onLinkCreated(): void
@@ -479,8 +507,7 @@ function InvitePeople({
       <p className="dr-share__hint" data-testid="share-invite-hint">
         {target.kind === 'member' &&
           `${target.member.user.name} is in ${workspaceName}: they get access right away.`}
-        {target.kind === 'email' &&
-          'Draftroom does not send email: you get a one-time invite link to copy and send them yourself.'}
+        {target.kind === 'email' && linkForEmailHint(canEmail)}
         {target.kind === 'unknown' &&
           `No one in ${workspaceName} matches. You get a one-time invite link to copy and send them.`}
         {(target.kind === 'empty' || target.kind === 'already') &&
@@ -593,6 +620,192 @@ function AddMember({
         Add
       </button>
     </form>
+  )
+}
+
+// ---- invite by email -----------------------------------------------------------------------------
+
+/**
+ * One address and a role. The server grants someone who already uses Draftroom at once, emails a
+ * single-use link to anyone else (Clerk sign-in only), or answers the link for the inviter to send
+ * when no email went out. The form's errors are announced (role=alert) and tied to the field.
+ */
+function EmailInvite({
+  boardId,
+  canEmail,
+  onResult,
+}: {
+  boardId: string
+  canEmail: boolean
+  onResult(result: EmailInviteResult): void
+}) {
+  const inputId = useId()
+  const roleId = useId()
+  const hintId = useId()
+  const errorId = useId()
+  const linkId = useId()
+  const inputRef = useRef<HTMLInputElement>(null)
+  const [text, setText] = useState('')
+  const [role, setRole] = useState<Exclude<BoardRole, 'owner'>>('commenter')
+  const [busy, setBusy] = useState(false)
+  const [fieldError, setFieldError] = useState<string | null>(null)
+  const [failure, setFailure] = useState<string | null>(null)
+  const [outcome, setOutcome] = useState<(EmailInviteOutcome & { mode: EmailInviteResult['mode'] }) | null>(
+    null,
+  )
+  // null: not tried yet; false: the browser refused (the person copies from the field).
+  const [copied, setCopied] = useState<boolean | null>(null)
+
+  const submit = async () => {
+    setFailure(null)
+    setOutcome(null)
+    setCopied(null)
+    const checked = checkInviteEmail(text)
+    if (!checked.ok) {
+      setFieldError(checked.message)
+      inputRef.current?.focus()
+      return
+    }
+    setFieldError(null)
+    setBusy(true)
+    try {
+      const result = await sharing.inviteByEmail(boardId, { email: checked.email, role })
+      setOutcome({ mode: result.mode, ...emailInviteOutcome(result, role, formatDateTime) })
+      setText('')
+      onResult(result)
+    } catch (e) {
+      // A 400 is about the address (the server's words); anything else is about sending at all.
+      if (isApiError(e) && e.kind === 'invalid') {
+        setFieldError(e.message.replace(/^email: /, ''))
+        inputRef.current?.focus()
+      } else setFailure(isApiError(e) ? e.message : 'The invitation was not sent. Try again.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const link = outcome?.link
+    ? outcome.link.startsWith('/')
+      ? absoluteUrl(outcome.link)
+      : outcome.link
+    : null
+
+  return (
+    <section className="dr-share__section" aria-labelledby={`${inputId}-h`} data-testid="share-email-section">
+      <h3 id={`${inputId}-h`} className="dr-share__heading">
+        Invite by email
+      </h3>
+      <form
+        className="dr-sharing__invite"
+        noValidate
+        onSubmit={(e) => {
+          e.preventDefault()
+          void submit()
+        }}
+      >
+        <label htmlFor={inputId} className="dr-sr-only">
+          Email address to invite
+        </label>
+        <input
+          ref={inputRef}
+          id={inputId}
+          type="email"
+          inputMode="email"
+          className="dr-input dr-sharing__invite-input"
+          data-testid="share-email-input"
+          placeholder="name@example.com"
+          autoComplete="off"
+          autoCapitalize="none"
+          spellCheck={false}
+          value={text}
+          aria-invalid={fieldError ? true : undefined}
+          aria-describedby={fieldError ? `${errorId} ${hintId}` : hintId}
+          onChange={(e) => {
+            setText(e.target.value)
+            setFieldError(null)
+          }}
+        />
+        <label htmlFor={roleId} className="dr-sr-only">
+          Role for the person you email
+        </label>
+        <select
+          id={roleId}
+          className="dr-input dr-select dr-select--compact"
+          data-testid="share-email-role"
+          value={role}
+          onChange={(e) => setRole(e.target.value as Exclude<BoardRole, 'owner'>)}
+        >
+          {inviteRoleOptions().map((r) => (
+            <option key={r} value={r}>
+              {ROLE_OPTION_LABEL[r]}
+            </option>
+          ))}
+        </select>
+        <button
+          type="submit"
+          className="dr-btn dr-btn--primary"
+          data-testid="share-email-submit"
+          disabled={busy}
+          aria-busy={busy || undefined}
+        >
+          {busy ? 'Sending…' : 'Send invite'}
+        </button>
+      </form>
+      {fieldError && (
+        <p id={errorId} className="dr-field-error" role="alert" data-testid="share-email-error">
+          {fieldError}
+        </p>
+      )}
+      <p id={hintId} className="dr-share__hint" data-testid="share-email-hint">
+        {emailInviteHint(canEmail)}
+      </p>
+      {failure && (
+        <p className="dr-share__error" role="alert" data-testid="share-email-failure">
+          {failure}
+        </p>
+      )}
+      {/* Always rendered, so screen readers announce each new outcome. */}
+      <div role="status" className="dr-sharing__email-status">
+        {outcome && (
+          <p
+            className="dr-sharing__email-result"
+            data-testid="share-email-result"
+            data-mode={outcome.mode}
+            data-tone={outcome.tone}
+          >
+            <strong>{outcome.text}</strong> {outcome.detail}
+          </p>
+        )}
+        {link && copied === false && (
+          <span className="dr-share__hint">
+            Your browser didn’t allow copying: select the link and copy it.
+          </span>
+        )}
+      </div>
+      {link && (
+        <div className="dr-invite dr-row" data-testid="share-email-link-row">
+          <label htmlFor={linkId} className="dr-sr-only">
+            Invite link to send
+          </label>
+          <input
+            id={linkId}
+            className="dr-input dr-invite__link"
+            data-testid="share-email-link"
+            value={link}
+            readOnly
+            onFocus={(e) => e.currentTarget.select()}
+          />
+          <button
+            type="button"
+            className="dr-btn"
+            data-testid="share-email-copy"
+            onClick={async () => setCopied(await copyText(link))}
+          >
+            {copied ? 'Copied' : 'Copy link'}
+          </button>
+        </div>
+      )}
+    </section>
   )
 }
 

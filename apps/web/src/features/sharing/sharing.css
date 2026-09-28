@@ -219,3 +219,32 @@
   padding-top: 12px;
   border-top: 1px solid var(--dr-line);
 }
+
+/* Invite by email: the answer under the form (sent / added / a link to copy instead). */
+.dr-sharing__email-status:empty {
+  display: none;
+}
+.dr-sharing__email-result {
+  margin: 10px 0 0;
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-size: 13.5px;
+  overflow-wrap: anywhere;
+}
+.dr-sharing__email-result[data-tone="success"] {
+  background: var(--dr-live-bg);
+  color: var(--dr-live);
+}
+.dr-sharing__email-result[data-tone="info"] {
+  background: #faf9f5;
+  color: var(--dr-ink-2);
+  border: 1px solid var(--dr-line);
+}
+.dr-sharing__email-result[data-tone="fallback"] {
+  background: var(--dr-warn-bg);
+  color: var(--dr-warn);
+}
+.dr-sharing__email-status .dr-share__hint {
+  display: block;
+  margin-top: 6px;
+}
