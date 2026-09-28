@@ -73,6 +73,76 @@ export interface PerPropUndoOptions {
   gate?: 'auto' | 'public-methods'
   /** Spike-only: false disables the remote-write tracker (to demonstrate why it is needed). */
   trackRemoteWrites?: boolean
+  /** false: keep tldraw's one step per stopping point, selection-only steps included (F11). */
+  skipSessionOnlySteps?: boolean
+}
+
+/** What one undo / redo press walks through; the editor is enough (skipSessionOnlySteps). */
+export interface UndoTarget {
+  undo(): unknown
+  redo(): unknown
+  getCanUndo(): boolean
+  getCanRedo(): boolean
+}
+
+/** At most this many session-only steps are walked through in one press (each click makes one). */
+export const MAX_SESSION_ONLY_STEPS = 500
+
+/**
+ * F11: one Ctrl/Cmd+Z undoes the last real change. tldraw 5.4.2's select tool marks a history stopping
+ * point on every selecting click (PointingCanvas 'selecting none', PointingShape 'selecting shape',
+ * select all…) and its HistoryManager records the page state's selection, so each click left a step
+ * that changed only the selection, and each used up an undo press (arrange 23 photos, click about,
+ * and the layout came back on the fifth press). Wraps `target.undo` / `target.redo` so that a press
+ * keeps replaying while the step it just replayed touched no document record: the session-only steps
+ * are folded into the next real change, whose own selection is restored with it. `replay` reports
+ * whether the last replay's diff held a document record (installPerPropUndo sees every replay diff).
+ * Returns the disposer.
+ */
+export function skipSessionOnlySteps(
+  target: UndoTarget,
+  replay: { reset(): void; touchedDocument(): boolean },
+): () => void {
+  const undo = target.undo
+  const redo = target.redo
+  const walk = (step: () => unknown, more: () => boolean) => {
+    for (let i = 0; i < MAX_SESSION_ONLY_STEPS; i++) {
+      replay.reset()
+      step()
+      if (replay.touchedDocument() || !more()) return
+    }
+  }
+  const undoPress = function (this: unknown) {
+    walk(
+      () => undo.call(target),
+      () => target.getCanUndo(),
+    )
+    return target
+  }
+  const redoPress = function (this: unknown) {
+    walk(
+      () => redo.call(target),
+      () => target.getCanRedo(),
+    )
+    return target
+  }
+  target.undo = undoPress
+  target.redo = redoPress
+  return () => {
+    if (target.undo === undoPress) target.undo = undo
+    if (target.redo === redoPress) target.redo = redo
+  }
+}
+
+/** True when `diff` adds, updates or removes a record of a document type. */
+export function diffTouchesDocument(
+  diff: RecordsDiff<TLRecord>,
+  isDocumentType: (t: string) => boolean,
+): boolean {
+  for (const rec of Object.values(diff.added)) if (isDocumentType(rec.typeName)) return true
+  for (const rec of Object.values(diff.removed)) if (isDocumentType(rec.typeName)) return true
+  for (const [, to] of Object.values(diff.updated)) if (isDocumentType(to.typeName)) return true
+  return false
 }
 
 type AnyRecord = Record<string, unknown> & { id: string; typeName: string }
@@ -354,9 +424,12 @@ export function installPerPropUndo(editor: Editor, opts: PerPropUndoOptions = {}
     isFieldLocked: opts.isFieldLocked as MergeContext['isFieldLocked'],
   }
 
+  // F11: whether the replay in progress holds a document record (skipSessionOnlySteps).
+  let replayTouchedDocument = false
   const original = store.applyDiff
   const patched: typeof store.applyDiff = function (this: unknown, diff, applyOpts) {
     if (!gate.isReplaying()) return original.call(store, diff, applyOpts)
+    if (diffTouchesDocument(diff, ctx.isDocumentType)) replayTouchedDocument = true
     let merged: ReturnType<typeof mergeReplayDiff>
     try {
       merged = mergeReplayDiff(diff, ctx)
@@ -387,8 +460,18 @@ export function installPerPropUndo(editor: Editor, opts: PerPropUndoOptions = {}
     }
   }
   store.applyDiff = patched
+  const unskip =
+    opts.skipSessionOnlySteps === false
+      ? () => {}
+      : skipSessionOnlySteps(editor, {
+          reset: () => {
+            replayTouchedDocument = false
+          },
+          touchedDocument: () => replayTouchedDocument,
+        })
 
   return () => {
+    unskip()
     if (store.applyDiff === patched) store.applyDiff = original
     gate.dispose()
     for (const d of disposers) d()

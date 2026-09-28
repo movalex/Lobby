@@ -79,6 +79,19 @@ export function DraftroomShortcutsDialog(props: TLUiKeyboardShortcutsDialogProps
           kbd="shift+[[F10]]"
           onSelect={noop}
         />
+        {/* A11Y2-04: the keyboard path to comment on any object, a note inside a frame too. */}
+        <TldrawUiMenuItem
+          id="dr-comment-selection"
+          label="shortcuts-dialog.dr-comment-selection"
+          kbd="shift+[[F10]]"
+          onSelect={noop}
+        />
+        <TldrawUiMenuItem
+          id="dr-into-frame"
+          label="shortcuts-dialog.dr-into-frame"
+          kbd="cmd+shift+[[↓]]"
+          onSelect={noop}
+        />
         <TldrawUiMenuItem
           id="dr-paste-notes"
           label="shortcuts-dialog.dr-paste-notes"

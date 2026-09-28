@@ -31,6 +31,11 @@ export function setCommentToolHandler(editor: Editor, handler: CommentToolHandle
   else handlers.delete(editor)
 }
 
+/** A11Y2-04: what Enter does in the comment tool (a new thread on the selection), for menus. */
+export function placeCommentFromKeyboard(editor: Editor) {
+  handlers.get(editor)?.placeFromKeyboard?.()
+}
+
 /** Screen pixels a press may move and still count as a click. */
 const CLICK_SLOP = 5
 

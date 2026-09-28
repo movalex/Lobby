@@ -235,6 +235,9 @@ export const canvasUxOverrides: TLUiOverrides = {
       'shortcuts-dialog.dr-edit-note': 'Edit the selected note (caret at the end)',
       'shortcuts-dialog.dr-selection-toolbar': 'Go to the selection toolbar (Esc returns)',
       'shortcuts-dialog.dr-context-menu': 'Open the context menu for the selection',
+      'shortcuts-dialog.dr-comment-selection':
+        'Comment on the selection: open the context menu, then Comment',
+      'shortcuts-dialog.dr-into-frame': 'Go inside the selected frame (Ctrl/Cmd+Shift+↑ goes back out)',
     },
   },
 }

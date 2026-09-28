@@ -14,6 +14,7 @@
 // (body, bubble) and before the editor's state machine (container, bubble).
 
 import { type Editor, react, type TLEventInfo, type TLShape, type TLShapeId } from 'tldraw'
+import { boardHasKeyboard } from './keyboard-scope.ts'
 import {
   isBoardSearchKey,
   isContextMenuKey,
@@ -48,6 +49,9 @@ function isButtonLike(el: Element | null): boolean {
   if (!el || typeof el.tagName !== 'string') return false
   return el.tagName === 'BUTTON' || el.getAttribute('role') === 'button'
 }
+
+/** Keys tldraw's container handler passes to its state machine that change the selection (nudge, edit). */
+const CONTAINER_STATE_KEYS = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Enter'])
 
 /** Keys that move the focus between controls (Tab; arrows and Home/End in toolbars, menus, lists). */
 const NAV_KEYS = new Set(['Tab', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End'])
@@ -271,6 +275,14 @@ export function installCanvasKeyboard(
 
   // ---- keys -------------------------------------------------------------------------------------
 
+  /** A11Y2-02: arrows and Enter typed on Lobby chrome inside the container never reach tldraw's state machine. */
+  const markChromeKey = (e: KeyboardEvent) => {
+    if (!CONTAINER_STATE_KEYS.has(e.key) || e.defaultPrevented) return
+    const target = e.target
+    if (!(target instanceof win.Node) || !editor.getContainer().contains(target)) return
+    if (!boardHasKeyboard(editor)) editor.markEventAsHandled(e)
+  }
+
   const dispatchSpace = (name: 'key_down' | 'key_up') =>
     editor.dispatch({
       type: 'keyboard',
@@ -305,6 +317,11 @@ export function installCanvasKeyboard(
     }
 
     const container = editor.getContainer()
+    // A11Y2-02: the keyboard is on Lobby chrome that lives inside the editor container (a popover's
+    // heading, a link in a card): tldraw's container handler must not nudge the selection on arrows or
+    // edit it on Enter from there (it only ignores buttons and text fields). Its keys go through
+    // keyboard-scope.ts.
+    markChromeKey(e)
 
     // F3: Space from a clicked button pans instead of pressing it.
     const active = doc.activeElement
@@ -443,6 +460,7 @@ export function installCanvasKeyboard(
   }
 
   const onKeyUp = (e: KeyboardEvent) => {
+    markChromeKey(e)
     if (!spaceInjected || (e.code !== 'Space' && e.key !== ' ')) return
     spaceInjected = false
     editor.markEventAsHandled(e)
