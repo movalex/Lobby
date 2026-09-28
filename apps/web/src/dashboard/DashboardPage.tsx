@@ -37,6 +37,7 @@ import {
 import { newsByBoard } from './notifications.ts'
 import { readPickerHidden, readViewMode, type ViewMode, writeViewMode } from './prefs.ts'
 import { Sidebar } from './Sidebar.tsx'
+import { SampleBoardButton } from './TemplateGallery.tsx'
 import { newBoardPath } from './template-paths.ts'
 import './dashboard.css'
 
@@ -611,9 +612,16 @@ function Dashboard({ workspaceId, section }: { workspaceId: string; section: Das
               {owner !== 'anyone' && !query ? 'No boards match the owner filter.' : empty.body}
             </p>
             {empty.offerCreate && (
-              <button type="button" className="dr-btn dr-btn--primary" onClick={() => void newBoard()}>
-                Create a board
-              </button>
+              <div className="dr-empty__actions">
+                <button type="button" className="dr-btn dr-btn--primary" onClick={() => void newBoard()}>
+                  Create a board
+                </button>
+                <SampleBoardButton
+                  workspaceId={workspace.id}
+                  projectId={defaultProjectId}
+                  onError={(text) => notify({ key: 'sample-board', text, tone: 'error' })}
+                />
+              </div>
             )}
           </div>
         )}

@@ -1,0 +1,43 @@
+/* The "Lobby tour" sample board in the template gallery (TemplateGallery.tsx) and on the empty
+   dashboard. Base card styles live in dashboard.css; only --dr-* tokens here, so both themes work. */
+
+.dr-gallery__sample {
+  margin: 0 0 12px;
+  padding: 0;
+  list-style: none;
+}
+.dr-tcard--sample {
+  border-color: var(--dr-line-strong);
+}
+/* The six frames read as one strip: full card width, a fixed height instead of the 16:10 thumbnail. */
+.dr-tcard__thumb--strip {
+  aspect-ratio: auto;
+  height: clamp(44px, 10vw, 96px);
+}
+.dr-tcard__badge {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  margin-left: 8px;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: var(--dr-amber);
+  color: var(--dr-on-amber);
+  font-size: 11.5px;
+  font-weight: 650;
+  vertical-align: 1px;
+}
+@media (max-width: 560px) {
+  /* dashboard.css hides card descriptions on phones; the sample keeps its one line. */
+  .dr-tcard--sample .dr-tcard__desc {
+    display: block;
+  }
+}
+
+/* The empty dashboard's two buttons: "Create a board" and "Start with the sample board". */
+.dr-empty__actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+}

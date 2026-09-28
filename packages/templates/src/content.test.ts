@@ -63,7 +63,7 @@ function expectChain(records: TLRecord[], frames: TLFrameShape[]) {
 }
 
 describe('template catalogue', () => {
-  it('exposes the six contract templates with picker metadata', () => {
+  it('exposes the six contract templates and the Lobby tour sample with picker metadata', () => {
     expect(TEMPLATES.map((t) => t.id)).toEqual([
       'brainstorm',
       'mood-board',
@@ -71,9 +71,10 @@ describe('template catalogue', () => {
       'pitch-outline',
       'retrospective',
       'production-plan',
+      'lobby-tour',
     ])
     for (const t of TEMPLATES) {
-      expect(['ideate', 'visual', 'plan', 'review']).toContain(t.category)
+      expect(['ideate', 'visual', 'plan', 'review', 'sample']).toContain(t.category)
       expect(t.name.trim()).not.toBe('')
       // One sentence for the picker.
       expect(t.description).toMatch(/^[A-Z][^.!?]*[.]$/)
@@ -82,7 +83,11 @@ describe('template catalogue', () => {
       expect(getTemplate(t.id)).toBe(t)
       expect(isTemplateId(t.id)).toBe(true)
     }
-    expect(new Set(TEMPLATES.map((t) => t.category))).toEqual(new Set(['ideate', 'visual', 'plan', 'review']))
+    expect(new Set(TEMPLATES.map((t) => t.category))).toEqual(
+      new Set(['ideate', 'visual', 'plan', 'review', 'sample']),
+    )
+    // Only the tour is the sample board.
+    expect(TEMPLATES.filter((t) => t.category === 'sample').map((t) => t.id)).toEqual(['lobby-tour'])
   })
 
   it('is frozen so consumers cannot rewrite shared definitions', () => {

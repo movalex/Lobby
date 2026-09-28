@@ -3,6 +3,7 @@ import type { TLPageId, TLRecord } from '@tldraw/tlschema'
 import { getIndexAbove, type IndexKey } from '@tldraw/utils'
 import { estimateShapeRect, unionRects } from './layout.ts'
 import { brainstorm } from './templates/brainstorm.ts'
+import { lobbyTour } from './templates/lobby-tour.ts'
 import { moodBoard } from './templates/mood-board.ts'
 import { pitchOutline } from './templates/pitch-outline.ts'
 import { productionPlan } from './templates/production-plan.ts'
@@ -97,7 +98,7 @@ function define(def: TemplateDefinition): TemplateDefinition {
 }
 
 export const TEMPLATES: readonly TemplateDefinition[] = Object.freeze(
-  [brainstorm, moodBoard, storyboard, pitchOutline, retrospective, productionPlan].map(define),
+  [brainstorm, moodBoard, storyboard, pitchOutline, retrospective, productionPlan, lobbyTour].map(define),
 )
 
 const BY_ID = new Map<string, TemplateDefinition>(TEMPLATES.map((t) => [t.id, t]))

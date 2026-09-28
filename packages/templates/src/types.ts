@@ -8,8 +8,10 @@ export type TemplateId =
   | 'pitch-outline'
   | 'retrospective'
   | 'production-plan'
+  | 'lobby-tour'
 
-export type TemplateCategory = 'ideate' | 'visual' | 'plan' | 'review'
+/** 'sample': the Lobby tour demo board (shown first on the dashboard, under no category chip). */
+export type TemplateCategory = 'ideate' | 'visual' | 'plan' | 'review' | 'sample'
 
 export interface TemplatePoint {
   x: number
