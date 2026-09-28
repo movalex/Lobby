@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { exportFilename, FALLBACK_FILENAME, MAX_NAME_BYTES, sanitizeFilename } from './filename.ts'
+import {
+  exportFilename,
+  FALLBACK_FILENAME,
+  MAX_BASE_CHARS,
+  MAX_NAME_BYTES,
+  sanitizeFilename,
+} from './filename.ts'
 
 const bytes = (s: string) => new TextEncoder().encode(s).length
 
@@ -41,9 +47,9 @@ describe('sanitizeFilename', () => {
   })
 
   it('caps the length by code points without splitting surrogate pairs', () => {
-    const long = '😀'.repeat(200)
+    const long = '😀'.repeat(300)
     const out = sanitizeFilename(long)
-    expect(Array.from(out)).toHaveLength(80)
+    expect(Array.from(out)).toHaveLength(MAX_BASE_CHARS)
     expect(out.endsWith('😀')).toBe(true)
     expect(/[\ud800-\udbff]$/.test(out)).toBe(false)
   })
@@ -55,6 +61,20 @@ describe('exportFilename', () => {
     expect(exportFilename('Spring campaign', 'png', 'Mood / tone')).toBe('Spring campaign - Mood - tone.png')
     expect(exportFilename('', 'csv')).toBe(`${FALLBACK_FILENAME}.csv`)
     expect(exportFilename('Board', 'svg', '')).toBe('Board.svg')
+  })
+
+  it('F15: keeps a long board title whole', () => {
+    const title =
+      'Halden Coffee — Autumn campaign mood board for the Q4 launch, round 2 with client notes (final)'
+    expect(exportFilename(title, 'svg')).toBe(`${title}.svg`)
+    expect(exportFilename(title, 'png', '3 · Imagery')).toBe(`${title} - 3 · Imagery.png`)
+  })
+
+  it('F15: a title too long for the file system is cut on a whole word', () => {
+    const title = `${'Autumn campaign '.repeat(20)}end`
+    const name = exportFilename(title, 'pdf')
+    expect(bytes(name)).toBeLessThanOrEqual(MAX_NAME_BYTES)
+    expect(name).toMatch(/ (Autumn|campaign)\.pdf$/)
   })
 
   it('stays under the byte limit for long multi-byte titles', () => {

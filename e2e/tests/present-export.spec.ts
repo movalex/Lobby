@@ -475,17 +475,27 @@ test.describe('image exports', () => {
       expect(files.paths().filter((p) => !ORIGINAL_PATH.test(p))).toEqual([])
     })
 
-    await test.step('frame SVG: an <svg> document with the original 1920×1080 PNG embedded', async () => {
+    await test.step('F15: frame SVG embeds the board preview by default (after a PNG from the original)', async () => {
+      await expect(dialog.getByTestId('export-svg-originals')).not.toBeChecked()
       const svg = await downloadFrom(a.page, () => dialog.getByTestId('export-svg').click())
       expect(svg.name).toBe(`${title} - Intro.svg`)
       const text = svg.bytes.toString('utf8')
       expect(svgRootName(text)).toBe('svg')
       const embedded = svgEmbeddedImages(text)
+      expect(embedded.map((e) => e.mime)).toEqual(['image/webp']) // the preview derivative, not the PNG
+      expect(files.paths()).toContainEqual(expect.stringMatching(DERIVATIVE_PATH))
+      files.clear()
+    })
+
+    await test.step('frame SVG with "embed the original uploads": the original 1920×1080 PNG', async () => {
+      await dialog.getByTestId('export-svg-originals').check()
+      const svg = await downloadFrom(a.page, () => dialog.getByTestId('export-svg').click())
+      const embedded = svgEmbeddedImages(svg.bytes.toString('utf8'))
       const png = embedded.find((e) => e.mime === 'image/png')
       expect(png, `embedded images: ${embedded.map((e) => e.mime).join(', ')}`).toBeDefined()
       const info = readPng(png?.bytes ?? Buffer.alloc(0))
       expect({ w: info.width, h: info.height }).toEqual({ w: 1920, h: 1080 })
-      expect(embedded.some((e) => e.mime === 'image/webp')).toBe(false) // not the preview derivative
+      expect(embedded.some((e) => e.mime === 'image/webp')).toBe(false)
       expect(files.paths().filter((p) => DERIVATIVE_PATH.test(p))).toEqual([])
     })
 
@@ -505,13 +515,12 @@ test.describe('image exports', () => {
       const info = readPng(clear.bytes)
       expect(info.colorType).toBe(6) // RGBA
       expect(info.topLeft?.[3]).toBe(0)
-      // 2× the selection: tldraw renders it with 32 px of padding and trims that back to what is drawn
-      // (the notes' shadows reach a few px beyond their bounds).
+      // F15: 2× the selection plus a 32 px margin on every side (no longer trimmed back to the content).
       const selW = sel?.w ?? 0
       const selH = sel?.h ?? 0
-      expect(info.width).toBeGreaterThanOrEqual(Math.floor(selW * 2))
+      expect(info.width).toBeGreaterThanOrEqual(Math.floor((selW + 64) * 2) - 1)
       expect(info.width).toBeLessThanOrEqual(Math.ceil((selW + 64) * 2))
-      expect(info.height).toBeGreaterThanOrEqual(Math.floor(selH * 2))
+      expect(info.height).toBeGreaterThanOrEqual(Math.floor((selH + 64) * 2) - 1)
       expect(info.height).toBeLessThanOrEqual(Math.ceil((selH + 64) * 2))
 
       await dialog.getByTestId('export-transparent').uncheck()
@@ -526,10 +535,10 @@ test.describe('image exports', () => {
       const png = await downloadFrom(a.page, () => dialog.getByTestId('export-png').click())
       expect(png.name).toBe(`${title}.png`)
       const info = readPng(png.bytes)
-      // The page's content plus at most tldraw's 32 px export padding on each side (frame titles sit in it).
-      expect(info.width).toBeGreaterThanOrEqual(Math.floor(pageBounds?.w ?? 0))
+      // F15: the page's content plus a 32 px margin on each side (frame titles sit in it).
+      expect(info.width).toBeGreaterThanOrEqual(Math.floor((pageBounds?.w ?? 0) + 64) - 1)
       expect(info.width).toBeLessThanOrEqual(Math.ceil((pageBounds?.w ?? 0) + 64))
-      expect(info.height).toBeGreaterThanOrEqual(Math.floor(pageBounds?.h ?? 0))
+      expect(info.height).toBeGreaterThanOrEqual(Math.floor((pageBounds?.h ?? 0) + 64) - 1)
       expect(info.height).toBeLessThanOrEqual(Math.ceil((pageBounds?.h ?? 0) + 64))
       expect(info.pixelsPerMetre).toEqual([ppm(1)])
 
@@ -577,10 +586,8 @@ test.describe('image exports', () => {
     expect(svg.name).toBe(`${title} - selection.svg`)
     const text = svg.bytes.toString('utf8')
     expect(svgRootName(text)).toBe('svg')
-    const embedded = svgEmbeddedImages(text).find((e) => e.mime === 'image/png')
-    const original = readPng(embedded?.bytes ?? Buffer.alloc(0))
-    expect({ w: original.width, h: original.height }).toEqual({ w: 1920, h: 1080 })
-    expect(files.paths().filter((p) => DERIVATIVE_PATH.test(p))).toEqual([])
+    // F15: tldraw's own Export as SVG embeds the board preview too (the dialog offers the originals).
+    expect(svgEmbeddedImages(text).map((e) => e.mime)).toEqual(['image/webp'])
   })
 
   test('copy as PNG: Ctrl+Shift+C and the dialog button put an image/png of the selection on the clipboard', async ({

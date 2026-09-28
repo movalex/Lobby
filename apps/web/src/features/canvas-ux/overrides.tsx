@@ -8,6 +8,7 @@ import { readSessionSettings, writeSessionSettings } from '../workshops/session-
 import { runArrangeAsGrid } from './arrange-grid-runtime.ts'
 import { getFeatureCtx, minimapOpen, openPanel, searchState, setMinimapOpen, togglePanel } from './bridge.ts'
 import { copySelectionLink } from './copy-link.ts'
+import { sequentialDownloadOriginal } from './download-originals.ts'
 import { EXPORT_OFF_MENU_LABEL, gateExportActions } from './export-gate.tsx'
 import { TemplatesIcon } from './icons.tsx'
 import { ACTION_KBD_OVERRIDES, applyKbdOverrides, NEW_ACTION_KBDS, TOOL_KBD_OVERRIDES } from './shortcuts.ts'
@@ -185,7 +186,8 @@ export const canvasUxOverrides: TLUiOverrides = {
     ]
     for (const a of added) items[a.id] = a
     // export-control: copy, Copy as SVG/JSON and Download original explain instead while exporting is off.
-    return gateExportActions(editor, items)
+    // F2-05: several originals download one after another, after a question (download-originals.ts).
+    return gateExportActions(editor, sequentialDownloadOriginal(editor, items))
   },
   tools(editor, tools) {
     const { items, missing } = applyKbdOverrides(tools, TOOL_KBD_OVERRIDES)

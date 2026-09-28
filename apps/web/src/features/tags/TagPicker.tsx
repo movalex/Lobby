@@ -228,7 +228,7 @@ function TagPicker({
     }
     setQuery('')
     const { tag, created, full } = res.value
-    setStatus(fullNotice(full, model.thing) ?? (created ? `Created “${tag.name}”.` : null))
+    setStatus(fullNotice(full, model.thing) ?? (created ? `Created “#${tag.name}”.` : null))
   }
   const manage = () => {
     onClose(false)
@@ -372,23 +372,29 @@ function TagPicker({
           <label className="dr-sr-only" htmlFor={inputId}>
             Find or create a tag
           </label>
-          <input
-            id={inputId}
-            ref={inputRef}
-            type="text"
-            className="dr-input dr-input--block dr-tag-picker__input"
-            placeholder="Find or create a tag"
-            autoComplete="off"
-            spellCheck={false}
-            maxLength={64}
-            value={query}
-            aria-describedby={statusId}
-            data-testid="tag-picker-input"
-            onChange={(e) => {
-              setQuery(e.target.value)
-              setStatus(null)
-            }}
-          />
+          {/* F15: tags read as #name. A typed leading "#" becomes this prefix instead of vanishing. */}
+          <div className="dr-tag-picker__field">
+            <span className="dr-tag-picker__hash" aria-hidden="true">
+              #
+            </span>
+            <input
+              id={inputId}
+              ref={inputRef}
+              type="text"
+              className="dr-input dr-input--block dr-tag-picker__input"
+              placeholder="Find or create a tag"
+              autoComplete="off"
+              spellCheck={false}
+              maxLength={64}
+              value={query}
+              aria-describedby={statusId}
+              data-testid="tag-picker-input"
+              onChange={(e) => {
+                setQuery(e.target.value.replace(/^\s*#+/, ''))
+                setStatus(null)
+              }}
+            />
+          </div>
           {visible.length > 0 && (
             <ul className="dr-tag-picker__list" aria-label="Tags on this board">
               {visible.map((row, i) => {
@@ -418,7 +424,12 @@ function TagPicker({
                         label={row.name}
                       />
                       <span className="dr-tag-dot" data-dr-tag-color={row.color} aria-hidden="true" />
-                      <span className="dr-tag-option__name">{row.name}</span>
+                      <span className="dr-tag-option__name">
+                        <span className="dr-tag-option__hash" aria-hidden="true">
+                          #
+                        </span>
+                        {row.name}
+                      </span>
                     </label>
                   </li>
                 )
@@ -427,7 +438,7 @@ function TagPicker({
           )}
           {canCreate && (
             <button type="button" className="dr-tag-picker__create" data-testid="tag-create" onClick={submit}>
-              <span aria-hidden="true">+</span> Create “{name}”
+              <span aria-hidden="true">+</span> Create “#{name}”
             </button>
           )}
           {!canCreate && visible.length === 0 && (

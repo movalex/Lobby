@@ -16,6 +16,7 @@ import {
   ExportCancelled,
   IMAGE_SCALES,
   type ImageScale,
+  originalBytes,
   type PdfPageSpec,
   renderPdf,
   renderPng,
@@ -72,6 +73,10 @@ function writePrefs(p: Prefs) {
 
 const fmt = new Intl.NumberFormat()
 const plural = (n: number, one: string, many = `${one}s`) => `${fmt.format(n)} ${n === 1 ? one : many}`
+const formatBytes = (n: number) =>
+  n >= 1024 * 1024
+    ? `${fmt.format(Math.round(n / (1024 * 1024)))} MB`
+    : `${fmt.format(Math.max(1, Math.round(n / 1024)))} KB`
 
 function frameName(editor: Editor, id: TLShapeId | ''): string {
   if (!id) return ''
@@ -144,6 +149,8 @@ export function ExportDialog({
   // (the stored preference stays what the person chose).
   const [scale, setScale] = useState<ImageScale>(() => openingScale(prefs.scale, IMAGE_SCALES, opening.size))
   const [includeSkipped, setIncludeSkipped] = useState(false)
+  // F15: SVG embeds the board previews unless asked; not remembered, so a huge file is never the default.
+  const [svgOriginals, setSvgOriginals] = useState(false)
   const [busy, setBusy] = useState<{ kind: BusyKind; done?: number; total?: number } | null>(null)
   const [status, setStatus] = useState<{ tone: 'ok' | 'error'; text: string } | null>(null)
 
@@ -205,6 +212,17 @@ export function ExportDialog({
     return { want, reduced: exceedsCanvasLimits(want.width, want.height) }
   }, [areaBounds, scale])
 
+  // The originals' total size, for the SVG option (images and videos in the chosen area).
+  const originalsSize = useValue('dr-export-originals-bytes', () => {
+    const ids =
+      effectiveArea === 'selection'
+        ? editor.getSelectedShapeIds()
+        : effectiveArea === 'frame' && frameId
+          ? [frameId]
+          : [...editor.getCurrentPageShapeIds()]
+    return originalBytes(editor, ids)
+  }, [editor, effectiveArea, frameId])
+
   const imageQualifier =
     effectiveArea === 'selection'
       ? 'selection'
@@ -251,7 +269,7 @@ export function ExportDialog({
       const blob =
         format === 'png'
           ? await renderPng(editor, imageIds(), { scale, transparent: prefs.transparent })
-          : await renderSvg(editor, imageIds(), { transparent: prefs.transparent })
+          : await renderSvg(editor, imageIds(), { transparent: prefs.transparent, originals: svgOriginals })
       const name = exportFilename(boardTitle, format, imageQualifier)
       downloadBlob(blob, name)
       return `Downloaded “${name}”.`
@@ -462,8 +480,21 @@ export function ExportDialog({
               {busy?.kind === 'copy' ? 'Copying…' : 'Copy as PNG'}
             </button>
           </div>
-          <p className="dr-pe-hint">
-            Images use the original uploads, not the smaller previews shown on the board.
+          <label className="dr-pe-inline">
+            <input
+              type="checkbox"
+              data-testid="export-svg-originals"
+              checked={svgOriginals}
+              disabled={disabled}
+              onChange={(e) => setSvgOriginals(e.target.checked)}
+            />
+            SVG: embed the original uploads
+            {originalsSize > 0 ? ` (large: about ${formatBytes(originalsSize)})` : ' (large file)'}
+          </label>
+          <p className="dr-pe-hint" data-testid="export-image-source">
+            {svgOriginals
+              ? 'PNG, Copy and SVG use the original uploads.'
+              : 'PNG and Copy use the original uploads. SVG embeds sharp previews, so the file stays small enough to share.'}
           </p>
         </section>
 

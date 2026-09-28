@@ -140,8 +140,52 @@ export function boardTagRows(board: BoardTagMap, shapes: Iterable<ShapeLike>): B
   return [...rows.values()].sort(compareTags)
 }
 
-/** The colour a new tag gets: the first of the rotation no tag uses yet, else round-robin. */
-export function nextTagColor(existing: readonly { color: TagColor }[]): TagColor {
+/**
+ * F15: names that say a colour get it ("warm" is not lavender). Whole words of the name, lower case.
+ */
+const NAMED_COLORS: Readonly<Record<string, TagColor>> = {
+  warm: 'orange',
+  hot: 'orange',
+  sunny: 'orange',
+  autumn: 'orange',
+  orange: 'orange',
+  red: 'red',
+  urgent: 'red',
+  blocker: 'red',
+  risk: 'red',
+  cool: 'blue',
+  cold: 'blue',
+  calm: 'blue',
+  winter: 'blue',
+  blue: 'blue',
+  green: 'green',
+  done: 'green',
+  fresh: 'green',
+  approved: 'green',
+  yellow: 'yellow',
+  violet: 'violet',
+  purple: 'violet',
+  grey: 'grey',
+  gray: 'grey',
+  neutral: 'grey',
+}
+
+/** The colour a tag's name asks for (its first word that names one), if any. */
+export function colorForName(name: string): TagColor | null {
+  for (const word of name.toLowerCase().split(/[^\p{L}\p{N}]+/u)) {
+    const color = NAMED_COLORS[word]
+    if (color) return color
+  }
+  return null
+}
+
+/**
+ * The colour a new tag gets: the one its name asks for (colorForName), else the first of the rotation
+ * no tag uses yet, else round-robin.
+ */
+export function nextTagColor(existing: readonly { color: TagColor }[], name = ''): TagColor {
+  const named = colorForName(name)
+  if (named) return named
   const used = new Set(existing.map((t) => t.color))
   const free = TAG_COLOR_ROTATION.find((c) => !used.has(c))
   return free ?? (TAG_COLOR_ROTATION[existing.length % TAG_COLOR_ROTATION.length] as TagColor)
@@ -258,7 +302,7 @@ export function resolveTypedTag(
   if (existing) return { ok: true, value: { tag: toDef(existing), created: false } }
   if (rows.length >= MAX_TAGS_PER_BOARD)
     return { ok: false, error: `A board holds up to ${MAX_TAGS_PER_BOARD} tags. Delete one first.` }
-  return { ok: true, value: { tag: { key, name, color: nextTagColor(rows) }, created: true } }
+  return { ok: true, value: { tag: { key, name, color: nextTagColor(rows, name) }, created: true } }
 }
 
 const toDef = (r: TagDef): TagDef => ({ key: r.key, name: r.name, color: r.color })

@@ -14,6 +14,7 @@ import {
   boardTagRows,
   chipLayout,
   chipPlacement,
+  colorForName,
   displayTags,
   isShortTagName,
   isTaggable,
@@ -191,6 +192,18 @@ describe('typed names', () => {
   it('colours rotate through the palette, distinct first', () => {
     expect(nextTagColor([])).toBe('blue')
     expect(nextTagColor([{ color: 'blue' }, { color: 'green' }])).toBe('orange')
+  })
+
+  it('F15: a name that says a colour gets it ("#warm" is not lavender)', () => {
+    expect(colorForName('warm')).toBe('orange')
+    expect(colorForName('Too cold')).toBe('blue')
+    expect(colorForName('option-b')).toBeNull()
+    expect(nextTagColor([{ color: 'orange' }], 'Warm tones')).toBe('orange')
+    expect(nextTagColor([], 'option-b')).toBe('blue')
+    expect(resolveTypedTag(boardTagRows(boardTagMap([]), []), '#warm')).toEqual({
+      ok: true,
+      value: { tag: { key: 'warm', name: 'warm', color: 'orange' }, created: true },
+    })
   })
 })
 

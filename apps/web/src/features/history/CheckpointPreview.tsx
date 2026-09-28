@@ -5,21 +5,45 @@
 // shortcut stays dead until a reload). Images and file cards resolve through this board's own
 // file access, like on the canvas. "Restore as new board" is the panel's own action.
 
+import { presentationOrder } from '@draftroom/board-ops'
 import type { BoardCheckpoint, CheckpointContent } from '@draftroom/contracts'
 import { getAssetUrlsByImport } from '@tldraw/assets/imports.vite'
 import { useEffect, useId, useMemo, useRef, useState } from 'react'
-import { type Editor, type TLPageId, type TLStoreSnapshot, Tldraw } from 'tldraw'
+import {
+  type Box,
+  type Editor,
+  type TLPageId,
+  type TLRecord,
+  type TLShapeId,
+  type TLStoreSnapshot,
+  Tldraw,
+} from 'tldraw'
 import { isApiError } from '../../api/client.ts'
 import { createAssetStore } from '../../assets/asset-store.ts'
 import { useBoard } from '../../board/board-context.ts'
 import { FileCardShapeUtil } from '../../file-card/FileCardShapeUtil.tsx'
 import { hasNotePalette, withNotePalette } from '../canvas-ux/palette.ts'
+import { prefersFirstFrame } from '../canvas-ux/start-view.ts'
+import { isSkipped } from '../present-export/slides.ts'
 import type { HistoryApi } from './api.ts'
 import { checkpointMeta, checkpointTitle, previewCounts, previewStoreSnapshot } from './checkpoints-model.ts'
 
 // Module level = referentially stable (<Tldraw> re-creates its editor when these change).
 const shapeUtils = [FileCardShapeUtil]
 const assetUrls = getAssetUrlsByImport()
+
+/** The current page's first frame in presentation order (skipped frames only when all are), in page space. */
+function firstFrameBounds(ed: Editor): Box | null {
+  const records: TLRecord[] = []
+  const page = ed.getPage(ed.getCurrentPageId())
+  if (!page) return null
+  records.push(page)
+  for (const s of ed.getCurrentPageShapes()) if (s.type === 'frame' || s.type === 'group') records.push(s)
+  const order = presentationOrder(records, page.id)
+  const entry = order.find((e) => !isSkipped(ed.getShape(e.id as TLShapeId))) ?? order[0]
+  const b = entry ? ed.getShapePageBounds(entry.id as TLShapeId) : undefined
+  return b && b.w > 0 && b.h > 0 ? b : null
+}
 
 type Loaded =
   | { status: 'loading' }
@@ -106,6 +130,29 @@ export function CheckpointPreview({
     ed.zoomToFit({ immediate: true })
     if (ed.getZoomLevel() > 1) ed.resetZoom(ed.getViewportScreenCenter(), { immediate: true })
   }
+  /**
+   * DANA2-05: how a page opens, by the board's first-view rule: the whole page when it is readable
+   * that way, else its first frame in presentation order ("Zoom to fit" still shows everything).
+   */
+  const open = (ed: Editor | null = preview) => {
+    if (!ed) return
+    const bounds = ed.getCurrentPageBounds()
+    const frame = bounds ? firstFrameBounds(ed) : null
+    if (
+      bounds &&
+      frame &&
+      prefersFirstFrame({
+        screen: ed.getViewportScreenBounds(),
+        content: bounds,
+        minZoom: ed.getCameraOptions().zoomSteps[0] ?? 0.05,
+        hasFrame: true,
+      })
+    ) {
+      ed.zoomToBounds(frame, { targetZoom: 1, inset: 48, immediate: true })
+      return
+    }
+    fit(ed)
+  }
   const onMount = (ed: Editor) => {
     // The same note colours as the board (canvas-ux applies Lobby's palette to the live editor).
     const theme = ed.getCurrentTheme()
@@ -116,14 +163,14 @@ export function CheckpointPreview({
     setPages(all)
     setPageId(ed.getCurrentPageId())
     setPreview(ed)
-    // Once the canvas has its size: fit what the checkpoint holds.
-    requestAnimationFrame(() => fit(ed))
+    // Once the canvas has its size: show what the checkpoint holds, readably.
+    requestAnimationFrame(() => open(ed))
   }
   const showPage = (id: TLPageId) => {
     if (!preview) return
     preview.setCurrentPage(id)
     setPageId(id)
-    fit()
+    open()
   }
 
   const title = checkpointTitle(checkpoint)

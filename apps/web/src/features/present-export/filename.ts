@@ -4,8 +4,12 @@
 export type ExportExtension = 'png' | 'svg' | 'pdf' | 'csv'
 
 export const FALLBACK_FILENAME = 'Lobby board'
-/** Code points kept from the base name (before " - qualifier.ext"). */
-export const MAX_BASE_CHARS = 80
+/**
+ * Code points kept from the base name (before " - qualifier.ext"). F15: generous, so a long board title
+ * stays whole; MAX_NAME_BYTES (the filesystem limit) is what really bounds the name, and a title cut for
+ * it ends on a whole word.
+ */
+export const MAX_BASE_CHARS = 200
 /** UTF-8 bytes for the whole name: common filesystems cap a name at 255 bytes. */
 export const MAX_NAME_BYTES = 240
 
@@ -22,6 +26,19 @@ const utf8Bytes = (s: string) => new TextEncoder().encode(s).length
 function truncateChars(s: string, maxChars: number): string {
   const chars = Array.from(s)
   return chars.length <= maxChars ? s : chars.slice(0, maxChars).join('')
+}
+
+/**
+ * Cuts to `maxChars` code points, ending on a whole word when that keeps more than half the cut
+ * (F15: no "Autumn campaign mood b").
+ */
+function truncateAtWord(s: string, maxChars: number): string {
+  const chars = Array.from(s)
+  if (chars.length <= maxChars) return s
+  const cut = chars.slice(0, maxChars).join('')
+  if (!/\S/.test(chars[maxChars] ?? ' ')) return cut
+  const space = cut.lastIndexOf(' ')
+  return space > cut.length / 2 ? cut.slice(0, space) : cut
 }
 
 function tidy(s: string): string {
@@ -49,7 +66,7 @@ export function sanitizeFilename(
       .replace(SEPARATORS, '-')
       .replace(RESERVED, ''),
   )
-  let name = tidy(truncateChars(cleaned, maxChars))
+  let name = tidy(truncateAtWord(cleaned, maxChars))
   if (!name) return fallback
   if (WINDOWS_DEVICE.test(name)) name = `_${name}`
   return name
@@ -63,8 +80,14 @@ export function exportFilename(boardTitle: string, ext: ExportExtension, qualifi
   let base = sanitizeFilename(boardTitle)
   let extra = qualifier === undefined ? '' : sanitizeFilename(qualifier, '', 60)
   const build = () => `${base}${extra ? ` - ${extra}` : ''}.${ext}`
-  while (utf8Bytes(build()) > MAX_NAME_BYTES && Array.from(base).length > 1) {
-    base = tidy(truncateChars(base, Array.from(base).length - 1)) || 'Board'
+  if (utf8Bytes(build()) > MAX_NAME_BYTES) {
+    const whole = base
+    let keep = Array.from(base).length
+    while (utf8Bytes(build()) > MAX_NAME_BYTES && keep > 1) {
+      keep--
+      base = tidy(truncateChars(whole, keep)) || 'Board'
+    }
+    base = tidy(truncateAtWord(whole, keep)) || base
   }
   while (utf8Bytes(build()) > MAX_NAME_BYTES && extra) {
     extra = tidy(truncateChars(extra, Array.from(extra).length - 1))

@@ -55,27 +55,49 @@ function pageContent(editor: Editor, pageId: TLPageId) {
   return { ids, bounds }
 }
 
+const MEDIA_TYPES: ReadonlySet<string> = new Set(['image', 'video'])
+
 /**
- * The page's first visible top-level frame in presentation order: what Present opens on (board-ops
- * `presentationOrder`, frames marked "skip in presentation" left out), in page coordinates.
+ * The frame the card shows: the page's first visible frame in presentation order (what Present opens
+ * on: board-ops `presentationOrder`, frames marked "skip in presentation" left out), unless frames hold
+ * images or videos: then the one with the most of them by area (F13: a mood board's card shows its
+ * imagery, not its prompts). In page coordinates.
  */
 function firstFrame(editor: Editor, pageId: TLPageId): Rect | null {
   const page = editor.getPage(pageId)
   if (!page) return null
   const records: TLRecord[] = [page]
+  const media: TLShapeId[] = []
   for (const id of editor.getPageShapeIds(pageId)) {
     const s = editor.getShape(id)
     // Frames can only be parented to the page, frames or groups: those records carry every transform.
     if (s && (s.type === 'frame' || s.type === 'group')) records.push(s)
+    else if (s && MEDIA_TYPES.has(s.type)) media.push(id)
   }
   if (records.length === 1) return null
+  const shown: { id: TLShapeId; bounds: Rect }[] = []
   for (const entry of presentationOrder(records, pageId)) {
     const shape = editor.getShape(entry.id)
     if (!shape || isSkipped(shape) || editor.isShapeHidden(entry.id)) continue
     const b = editor.getShapePageBounds(entry.id)
-    if (b && b.w > 0 && b.h > 0) return toRect(b)
+    if (b && b.w > 0 && b.h > 0) shown.push({ id: entry.id as TLShapeId, bounds: toRect(b) })
   }
-  return null
+  if (!shown.length) return null
+  // Media area per shown frame (each image counts for the innermost shown frame around it).
+  const index = new Map(shown.map((f, i) => [f.id as string, i]))
+  const area = shown.map(() => 0)
+  for (const id of media) {
+    if (editor.isShapeHidden(id)) continue
+    const frame = editor.findShapeAncestor(id, (a) => index.has(a.id))
+    const b = frame ? editor.getShapeMaskedPageBounds(id) : undefined
+    const i = frame ? index.get(frame.id) : undefined
+    if (b && i !== undefined) area[i] = (area[i] ?? 0) + b.w * b.h
+  }
+  let best = 0
+  area.forEach((a, i) => {
+    if (a > (area[best] ?? 0)) best = i
+  })
+  return (shown[best] ?? shown[0])?.bounds ?? null
 }
 
 /** Whether the board has anything a thumbnail could show (any page). */
@@ -247,7 +269,7 @@ function dataUrlToBlob(url: string): Blob | null {
  * yet. Always the simplified drawing (tldraw's own export is asynchronous) with images as grey tiles,
  * encoded with toDataURL; a few milliseconds even for large boards. Never throws.
  */
-export function renderNowSync(editor: Editor): RenderResult {
+export function renderNowSync(editor: Editor): RenderResult & { standIn?: boolean } {
   try {
     const plan = planThumbnail(editor)
     if (plan.kind === 'empty') return { kind: 'empty' }
@@ -255,11 +277,14 @@ export function renderNowSync(editor: Editor): RenderResult {
     const canvas = drawSchematic(editor, plan.ids, plan.frame)
     if (!canvas) return { kind: 'skipped' }
     const { width, height } = plan.frame
+    // DANA2-06: a stand-in when the schedule would have drawn the detailed picture (capture.ts
+    // renders that one on the next open).
+    const standIn = plan.renderer === 'detailed'
     for (const enc of ENCODINGS) {
       const blob = dataUrlToBlob(canvas.toDataURL(`image/${enc.type}`, enc.quality))
       if (!blob || !isAccepted(blob.type)) continue
       if (blob.size <= THUMBNAIL_TARGET_BYTES)
-        return { kind: 'image', blob, type: blob.type, width, height, renderer: 'schematic' }
+        return { kind: 'image', blob, type: blob.type, width, height, renderer: 'schematic', standIn }
     }
     return { kind: 'skipped' }
   } catch {

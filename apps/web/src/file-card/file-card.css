@@ -60,3 +60,14 @@
 .dr-fc[data-office="ods"] .dr-fc__icon {
   background: #217346;
 }
+
+/* F2-09: a card's name wraps onto a second line before it is cut ("document.pdf", not "document…"). */
+.dr-fc__footer .dr-fc__name {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.15;
+}

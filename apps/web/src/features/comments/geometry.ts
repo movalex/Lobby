@@ -1,8 +1,9 @@
 // Editor adapters for the pure anchor math in model.ts: shape frames, click targets, placing an
 // anchor on the current page and moving the camera to a thread.
 
+import { FILE_CARD_TYPE } from '@draftroom/canvas-schema'
 import type { CommentAnchor } from '@draftroom/contracts'
-import type { Editor, TLPageId, TLShape, TLShapeId } from 'tldraw'
+import type { Editor, TLAssetId, TLPageId, TLShape, TLShapeId } from 'tldraw'
 import { isPhoneViewport, markerCovered, revealTarget } from './layout.ts'
 import {
   type AnchorContext,
@@ -63,7 +64,25 @@ export function anchorContext(
   const shape = editor.getShape(anchor.shapeId as TLShapeId)
   if (!shape) return {}
   const frame = isFrame(shape) ? shape : editor.findShapeAncestor(shape, isFrame)
-  return { shapeType: shape.type, frameName: frame ? frameDisplayName(nameOf(frame)) : null }
+  return {
+    shapeType: shape.type,
+    frameName: frame ? frameDisplayName(nameOf(frame)) : null,
+    fileName: fileNameOf(editor, shape),
+  }
+}
+
+/** F2-09: the file an image or video shows (its asset's name), or a file card's name. */
+function fileNameOf(editor: Editor, shape: TLShape): string | null {
+  if (shape.type === 'image' || shape.type === 'video') {
+    const assetId = (shape.props as { assetId?: TLAssetId | null }).assetId
+    const name = assetId ? (editor.getAsset(assetId)?.props as { name?: unknown } | undefined)?.name : null
+    return typeof name === 'string' && name.trim() ? name : null
+  }
+  if (shape.type === FILE_CARD_TYPE) {
+    const name = nameOf(shape)
+    return typeof name === 'string' && name.trim() ? name : null
+  }
+  return null
 }
 
 /** "Concept B · note", "In Concept B", "On the board"… (model.ts anchorLabel) for the board as it is now. */

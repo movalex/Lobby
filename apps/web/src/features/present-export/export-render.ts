@@ -6,8 +6,22 @@
 // our asset store then returns the uploaded original instead of the canvas-sized derivative. Every export
 // here therefore passes `pixelRatio: undefined` explicitly (toImage would otherwise default it to 2). The
 // bitmap is then drawn at tldraw's default 2× pixel ratio, so `scale` is halved to get N× output.
+//
+// SVG is the exception (F15): it embeds every image as a data URL, so originals made a 37-photo board a
+// 252 MB file. It embeds the board's display previews (sharp at 2× their size on the board) unless the
+// person asks for the originals.
+//
+// tldraw caches each image's embedded data URL per asset record (ImageShapeUtil's imageSvgExportCache,
+// a WeakCache keyed by the record object), whatever the export asked for. Left alone, the first export
+// decides for every later one: a thumbnail capture (1× previews) leaks into the next PNG, a PNG
+// (originals) into the next SVG. withAssetSource hands each kind of export its own stand-in records (same
+// content, own identity) while it runs, so each kind caches its own images.
+//
+// Margin (F15): without a numeric `padding`, tldraw trims its default padding back to what is drawn, so
+// images touched the PNG's edges. Exports pass EXPORT_PADDING; a single frame, or an image, is its own
+// export bounds and stays unpadded (tldraw's getExportDefaultBounds).
 import type { VoteResult } from '@draftroom/contracts'
-import { Box, copyAs, type Editor, type TLShape, type TLShapeId } from 'tldraw'
+import { Box, copyAs, type Editor, type TLAsset, type TLShape, type TLShapeId } from 'tldraw'
 import { readSessionSettings } from '../workshops/session-settings.ts'
 import { type ExportBadge, voteResultsForExport, withVoteBadges } from '../workshops/vote-export.ts'
 import type { FrameEntry } from './board-ops.ts'
@@ -30,6 +44,71 @@ export const IMAGE_SCALES: readonly ImageScale[] = [1, 2, 4]
 /** tldraw rasterizes exports at this pixel ratio when none is given (getSvgAsImageWithOptions). */
 const TLDRAW_DEFAULT_PIXEL_RATIO = 2
 const BOARD_PAGE_PADDING = 32
+/** Board units of margin around a PNG/SVG/copied selection or whole board (F15). */
+export const EXPORT_PADDING = 32
+
+export type AssetSource = 'original' | 'display'
+const standIns: Record<AssetSource, WeakMap<TLAsset, TLAsset>> = {
+  original: new WeakMap(),
+  display: new WeakMap(),
+}
+const activeSource = new WeakMap<Editor, { source: AssetSource; count: number }>()
+
+/**
+ * Runs an export with its own stand-in asset records (see the header): `editor.getAsset` answers with a
+ * copy of each record, one per record and kind, for as long as `run` lasts. Overlapping exports share the
+ * first one's kind.
+ */
+export async function withAssetSource<T>(
+  editor: Editor,
+  source: AssetSource,
+  run: () => Promise<T>,
+): Promise<T> {
+  const active = activeSource.get(editor)
+  if (active) {
+    active.count++
+  } else {
+    const base = Object.getPrototypeOf(editor).getAsset as Editor['getAsset']
+    const map = standIns[source]
+    const getAsset = ((asset: Parameters<Editor['getAsset']>[0]) => {
+      const record = base.call(editor, asset)
+      if (!record) return record
+      let copy = map.get(record)
+      if (!copy) {
+        copy = { ...record }
+        map.set(record, copy)
+      }
+      return copy
+    }) as Editor['getAsset']
+    Object.defineProperty(editor, 'getAsset', { value: getAsset, configurable: true, writable: true })
+    activeSource.set(editor, { source, count: 1 })
+  }
+  try {
+    return await run()
+  } finally {
+    const now = activeSource.get(editor)
+    if (now && --now.count === 0) {
+      activeSource.delete(editor)
+      delete (editor as { getAsset?: unknown }).getAsset
+    }
+  }
+}
+
+/** The bytes of the original uploads of the images and videos in `ids` (for the SVG option's label). */
+export function originalBytes(editor: Editor, ids: TLShapeId[]): number {
+  const seen = new Set<string>()
+  let total = 0
+  for (const id of editor.getShapeAndDescendantIds(ids)) {
+    const shape = editor.getShape(id)
+    const assetId = (shape?.props as { assetId?: unknown } | undefined)?.assetId
+    if (typeof assetId !== 'string' || seen.has(assetId)) continue
+    seen.add(assetId)
+    const asset = editor.getAsset(assetId as TLAsset['id'])
+    const size = (asset?.props as { fileSize?: unknown } | undefined)?.fileSize
+    if (typeof size === 'number' && size > 0) total += size
+  }
+  return total
+}
 
 /** Badges for the revealed results on the exported shapes (or inside them: a frame's notes). */
 function voteBadgesFor(
@@ -85,13 +164,16 @@ export async function renderPng(
   ids: TLShapeId[],
   opts: { scale: ImageScale; transparent: boolean },
 ): Promise<Blob> {
-  const { blob } = await exportEditor(editor).toImage(ids, {
-    format: 'png',
-    scale: opts.scale / TLDRAW_DEFAULT_PIXEL_RATIO,
-    pixelRatio: undefined, // originals, see the header comment
-    background: !opts.transparent,
-    darkMode: false,
-  })
+  const { blob } = await withAssetSource(editor, 'original', () =>
+    exportEditor(editor).toImage(ids, {
+      format: 'png',
+      scale: opts.scale / TLDRAW_DEFAULT_PIXEL_RATIO,
+      pixelRatio: undefined, // originals, see the header comment
+      padding: EXPORT_PADDING,
+      background: !opts.transparent,
+      darkMode: false,
+    }),
+  )
   // Mark the PNG as N× (pHYs = 72 dpi × N), so apps that honour it show it at board size, N× sharper.
   // Replaces the pHYs tldraw wrote at its own pixel ratio (PngHelpers.setPhysChunk would add a second
   // one, and decoders keep the first: see png-density.ts).
@@ -102,17 +184,26 @@ export async function renderPng(
 export async function renderSvg(
   editor: Editor,
   ids: TLShapeId[],
-  opts: { transparent: boolean },
+  opts: { transparent: boolean; originals?: boolean },
 ): Promise<Blob> {
-  // SVG exports default to pixelRatio undefined: originals, embedded as data URLs (self-contained file).
-  const { blob } = await exportEditor(editor).toImage(ids, {
-    format: 'svg',
-    scale: 1,
-    background: !opts.transparent,
-    darkMode: false,
-  })
+  // Images are embedded as data URLs (a self-contained file): the display previews at 2× their board
+  // size (pixelRatio 2), or the originals when asked (pixelRatio undefined, see the header).
+  const originals = opts.originals === true
+  const { blob } = await withAssetSource(editor, originals ? 'original' : 'display', () =>
+    exportEditor(editor).toImage(ids, {
+      format: 'svg',
+      scale: 1,
+      pixelRatio: originals ? undefined : SVG_PREVIEW_PIXEL_RATIO,
+      padding: EXPORT_PADDING,
+      background: !opts.transparent,
+      darkMode: false,
+    }),
+  )
   return blob
 }
+
+/** SVG images: previews sharp at this multiple of their size on the board. */
+const SVG_PREVIEW_PIXEL_RATIO = 2
 
 /**
  * Copies the shapes as a PNG (2×, originals). Synchronous up to the clipboard write, as Safari requires
@@ -123,13 +214,17 @@ export function copyPng(
   ids: TLShapeId[],
   opts: { transparent?: boolean } = {},
 ): Promise<void> {
-  return copyAs(exportEditor(editor), ids, {
-    format: 'png',
-    pixelRatio: undefined,
-    background:
-      opts.transparent === undefined ? editor.getInstanceState().exportBackground : !opts.transparent,
-    darkMode: false,
-  })
+  // withAssetSource calls this at once, so the clipboard write still starts inside the click.
+  return withAssetSource(editor, 'original', () =>
+    copyAs(exportEditor(editor), ids, {
+      format: 'png',
+      pixelRatio: undefined,
+      padding: EXPORT_PADDING,
+      background:
+        opts.transparent === undefined ? editor.getInstanceState().exportBackground : !opts.transparent,
+      darkMode: false,
+    }),
+  )
 }
 
 export type PdfPageSpec =
@@ -255,15 +350,17 @@ export async function renderPdf(
       const plan = planPdfPage(bounds.w, bounds.h, pageFormat)
       const raster = pdfRasterScale(bounds.w, bounds.h, PDF_RASTER, plan.ptPerPx)
       const format = opts.lossless ? 'png' : 'jpeg'
-      const { blob } = await exportEditor(editor).toImage(ids, {
-        format,
-        quality: 0.92,
-        scale: raster / TLDRAW_DEFAULT_PIXEL_RATIO,
-        pixelRatio: undefined, // originals
-        background: true,
-        darkMode: false,
-        bounds: new Box(bounds.x, bounds.y, bounds.w, bounds.h),
-      })
+      const { blob } = await withAssetSource(editor, 'original', () =>
+        exportEditor(editor).toImage(ids, {
+          format,
+          quality: 0.92,
+          scale: raster / TLDRAW_DEFAULT_PIXEL_RATIO,
+          pixelRatio: undefined, // originals
+          background: true,
+          darkMode: false,
+          bounds: new Box(bounds.x, bounds.y, bounds.w, bounds.h),
+        }),
+      )
       if (opts.signal?.aborted) throw new ExportCancelled()
       const title = bookmarkTitle(spec.title, builder.pageCount)
       const headerImage = isWinAnsi(title) ? null : await titleImage(title, plan)
