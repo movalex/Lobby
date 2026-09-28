@@ -123,10 +123,66 @@ test('two Excalidraw instances on one page: what works and what leaks (for the r
       ((window.__lobbySpike as { extra: unknown }).extra as TwoExtra).b.pixel(72, 312),
     ),
   }
-  record.scenes = scenes
+  record.scenes = { ...scenes, aPainted: near(scenes.aPixelNa, YELLOW) }
   expect(scenes.aCount).toBe(2)
   expect(scenes.bCount).toBe(2)
-  expect(near(scenes.aPixelNa, YELLOW)).toBe(true)
+
+  // 2b. the static-canvas render throttle is ONE module-level throttleRAF shared by every instance
+  //     (renderStaticSceneThrottled, @excalidraw/excalidraw dist/dev/chunk-FN755BR4.js:3786-3790; it keeps
+  //     only the last caller's arguments, @excalidraw/common dist/dev/index.js:2662-2680). With
+  //     EXCALIDRAW_THROTTLE_RENDER on (Lobby sets it, plan §2.3.2), two instances that update in the same
+  //     frame should lose one repaint. 20 trials: both recolour their note in one task, then 3 frames later
+  //     each canvas is read. Then the same with the throttle off.
+  const throttleProbe = await page.evaluate(async () => {
+    const t = (window.__lobbySpike as { extra: unknown }).extra as TwoExtra
+    const w = window as unknown as { EXCALIDRAW_THROTTLE_RENDER?: boolean }
+    const colours = ['#9fd4ff', '#b8e994']
+    const rgb = (hex: string) => [1, 3, 5].map((i) => Number.parseInt(hex.slice(i, i + 2), 16))
+    const frames = (n: number) =>
+      new Promise<void>((resolve) => {
+        let left = n
+        const tick = () => (--left <= 0 ? resolve() : requestAnimationFrame(tick))
+        requestAnimationFrame(tick)
+      })
+    const recolour = (s: Side, id: string, colour: string) => {
+      const els = s.api.getSceneElementsIncludingDeleted().map((e) =>
+        e.id === id
+          ? {
+              ...e,
+              backgroundColor: colour,
+              version: e.version + 1,
+              versionNonce: (e.versionNonce as number) + 1,
+            }
+          : e,
+      )
+      s.api.updateScene({ elements: els })
+    }
+    const close = (p: number[] | null, want: number[] | undefined) =>
+      !!p && !!want && want.every((c, i) => Math.abs((p[i] ?? -999) - c) <= 16)
+    // B is dark (colours are transformed): its expected pixels are what the unthrottled trial painted
+    const refB: Record<string, number[] | null> = {}
+    const trial = async (throttle: boolean) => {
+      w.EXCALIDRAW_THROTTLE_RENDER = throttle
+      let missedA = 0
+      let missedB = 0
+      for (let i = 0; i < 20; i++) {
+        const c = colours[i % 2] as string
+        recolour(t.a, 'na', c)
+        recolour(t.b, 'nb', c)
+        await frames(3)
+        if (!close(t.a.pixel(72, 72), rgb(c))) missedA++
+        const pb = t.b.pixel(72, 312)
+        if (!throttle) refB[c] ??= pb
+        else if (!close(pb, refB[c] ?? undefined)) missedB++
+      }
+      return { missedA, missedB, trials: 20 }
+    }
+    const off = await trial(false)
+    const on = await trial(true)
+    w.EXCALIDRAW_THROTTLE_RENDER = true
+    return { throttleOff: off, throttleOn: on }
+  })
+  record.sharedRenderThrottle = throttleProbe
 
   // 3. selection by click, and a key (Delete) go to the instance that has focus
   const pa = await clientOf(page, 'a', 160, 100)

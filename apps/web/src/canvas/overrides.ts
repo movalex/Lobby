@@ -276,7 +276,7 @@ export class RenderOverrides {
 // ---- hit-test guard ------------------------------------------------------------------------------
 
 /**
- * Excalidraw's hit threshold (App.getElementHitThreshold, dist/dev/index.js:50043-50051):
+ * Excalidraw's hit threshold (App.getElementHitThreshold, dist/dev/index.js:50038-50046):
  * max(strokeWidth / 2 + 0.1, 0.85 * DEFAULT_COLLISION_THRESHOLD / zoom). DEFAULT_COLLISION_THRESHOLD is
  * 2 * SIDE_RESIZING_THRESHOLD - EPSILON = 8 - 1e-5 (@excalidraw/common dist/dev/index.js:1831-1834).
  */
@@ -285,7 +285,7 @@ const hitThreshold = (el: ExcalidrawElement, zoom: number) =>
 
 /**
  * The element Excalidraw would pick at a scene point, by document geometry: the same filters and order
- * as App.getElementsAtPosition / getElementAtPosition (dist/dev/index.js:49977-50042): live, unlocked,
+ * as App.getElementsAtPosition / getElementAtPosition (dist/dev/index.js:49977-50037): live, unlocked,
  * not a bound label (its container counts through hitElementBoundText), inside its frame when frames
  * clip; the topmost, re-checked with half the threshold, else the one below it.
  */

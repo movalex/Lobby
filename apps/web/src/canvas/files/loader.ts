@@ -14,6 +14,10 @@
 //     visible images first, with retries at 1, 2, 4… s for up to 5 minutes;
 //   - the bytes become a `blob:` URL, the image is decoded, and only then is it handed to Excalidraw with
 //     api.addFiles. Excalidraw never sees a URL that fails, so it never writes `status: "error"`;
+//   - decoded files are handed over in batches, one addFiles call per animation frame: every addFiles
+//     call repaints the whole scene (App.addFiles → scene.triggerUpdate, dist/dev/index.js:43789-43796),
+//     which costs a full static-canvas render on a big board (A14: 200 images one by one kept the heavy
+//     board busy for about 5 s after it opened);
 //   - `status` stays local-only: this module never writes an element.
 //
 // No @excalidraw runtime import: the module runs (and is tested) in Node.
@@ -88,6 +92,8 @@ export interface ImageLoaderOptions {
   clearTimer?: (handle: unknown) => void
   /** Load state changes (Lobby's overlay shows its own placeholder until `loaded`, and on `failed`). */
   onState?: (key: string, state: LoadState) => void
+  /** Schedules the batched addFiles (default: the next animation frame; a microtask outside a browser). */
+  scheduleFlush?: (flush: () => void) => void
 }
 
 interface Entry {
@@ -109,6 +115,8 @@ export interface LoaderStats {
   gaveUp: number
   inFlight: number
   maxInFlight: number
+  /** api.addFiles calls (each repaints the scene) */
+  addFilesCalls: number
 }
 
 const defaultDecode = async (url: string) => {
@@ -132,8 +140,12 @@ export class ImageLoader {
     gaveUp: 0,
     inFlight: 0,
     maxInFlight: 0,
+    addFilesCalls: 0,
   }
   private readonly o: Required<Omit<ImageLoaderOptions, 'onState'>> & Pick<ImageLoaderOptions, 'onState'>
+  /** Decoded files waiting for the next batched addFiles. */
+  private batch: { entry: Entry; data: BinaryFileData }[] = []
+  private flushScheduled = false
 
   constructor(opts: ImageLoaderOptions) {
     this.o = {
@@ -147,6 +159,8 @@ export class ImageLoader {
       now: () => Date.now(),
       setTimer: (fn, ms) => setTimeout(fn, ms),
       clearTimer: (h) => clearTimeout(h as ReturnType<typeof setTimeout>),
+      scheduleFlush: (fn) =>
+        typeof requestAnimationFrame === 'function' ? requestAnimationFrame(() => fn()) : queueMicrotask(fn),
       ...opts,
     }
   }
@@ -200,9 +214,24 @@ export class ImageLoader {
     return out
   }
 
+  /** Hands every decoded file waiting in the batch to the engine now (one addFiles call). */
+  flush(): void {
+    this.flushScheduled = false
+    if (this.disposed || !this.batch.length) return
+    const batch = this.batch
+    this.batch = []
+    this.stats.addFilesCalls++
+    this.o.addFiles(batch.map((b) => b.data))
+    for (const { entry } of batch) {
+      this.stats.loaded++
+      this.setState(entry, 'loaded')
+    }
+  }
+
   /** Revokes every blob: URL. Call only when the canvas that uses them is gone. */
   dispose(): void {
     this.disposed = true
+    this.batch = []
     for (const e of this.entries.values()) {
       if (e.timer !== null) this.o.clearTimer(e.timer)
       if (e.blobUrl) this.o.revokeObjectURL(e.blobUrl)
@@ -266,16 +295,19 @@ export class ImageLoader {
           return
         }
         e.blobUrl = url
-        this.o.addFiles([
-          {
+        this.batch.push({
+          entry: e,
+          data: {
             id: e.file.key as BinaryFileData['id'],
             mimeType,
             dataURL: url as BinaryFileData['dataURL'],
             created: this.o.now(),
           },
-        ])
-        this.stats.loaded++
-        this.setState(e, 'loaded')
+        })
+        if (!this.flushScheduled) {
+          this.flushScheduled = true
+          this.o.scheduleFlush(() => this.flush())
+        }
         this.pump()
         return
       } catch {

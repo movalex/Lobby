@@ -29,6 +29,7 @@ function harness(opts: Partial<ImageLoaderOptions> & { fail?: Set<string>; conte
     decode: async () => {},
     createObjectURL: () => `blob:test/${++urls}`,
     revokeObjectURL: (u) => revoked.push(u),
+    scheduleFlush: (fn) => queueMicrotask(fn),
     now: () => now,
     setTimer: (fn, ms) => {
       const t = { at: now + ms, fn }
@@ -177,6 +178,22 @@ describe('ImageLoader', () => {
     ])
     await h.tick()
     expect(h.pending.map((p) => p.url)).toEqual([`/files/ast_x/${VER(7)}/d/thumb`])
+  })
+
+  it('hands decoded files over in one addFiles call per flush (each call repaints the whole scene)', async () => {
+    const calls: number[] = []
+    const h = harness({
+      addFiles: (files) => calls.push(files.length),
+      scheduleFlush: () => {}, // flushed by hand below
+    })
+    h.loader.request([VER(11), VER(12), VER(13)])
+    await h.respond(true)
+    expect(calls).toEqual([])
+    expect(h.loader.states().loaded).toBe(0)
+    h.loader.flush()
+    expect(calls).toEqual([3])
+    expect(h.loader.states().loaded).toBe(3)
+    expect(h.loader.stats.addFilesCalls).toBe(1)
   })
 
   it('dispose revokes the blob URLs and stops retries', async () => {
