@@ -16,7 +16,8 @@ import {
 } from './notifications.ts'
 
 const inboxApi = notificationsApi(api)
-const REFRESH_MS = 30_000
+/** DANA-02: a client's comment should reach an owner sitting on the dashboard within seconds. */
+const REFRESH_MS = 15_000
 
 export interface DashboardInbox {
   inbox: ListNotificationsResponse | null
@@ -24,7 +25,7 @@ export interface DashboardInbox {
   markRead(sel: { ids: string[] } | { all: true }): void
 }
 
-/** The caller's notifications: on load, when the tab comes back, and every 30 s while visible. */
+/** The caller's notifications: on load, when the tab comes back, and every 15 s while visible. */
 export function useDashboardInbox(): DashboardInbox {
   const [inbox, setInbox] = useState<ListNotificationsResponse | null>(null)
   const seq = useRef(0)
@@ -174,7 +175,7 @@ export function DashboardBell({ inbox, refresh, markRead }: DashboardInbox) {
             </header>
             {items.length === 0 ? (
               <p className="dr-dbell__empty">
-                You’re all caught up. Mentions and replies to your comments show up here.
+                You’re all caught up. Mentions, replies and new comments on boards you own show up here.
               </p>
             ) : (
               <ul className="dr-dbell__list">

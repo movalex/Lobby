@@ -338,7 +338,7 @@ test('PRI-05a: alice mentions Priya; Priya’s dashboard shows the bell count an
     await expect(bell).toHaveAttribute('data-unread', '1')
     await expect(p.page.getByTestId('dashboard-bell-count')).toHaveText('1')
     const card = mainCard(p.page, board)
-    await expect(card.getByTestId('board-card-news')).toHaveText('1 new · mentioned you')
+    await expect(card.getByTestId('board-card-news')).toHaveText('1 new comment · mentioned you')
     await bell.click()
     const item = p.page.getByTestId('dashboard-notification-item')
     await expect(item).toHaveCount(1)

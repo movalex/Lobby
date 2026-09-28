@@ -53,6 +53,7 @@ const KIND_TEXT: Record<NotificationItem['kind'], string> = {
   reply: 'replied',
   resolved: 'resolved a thread',
   access_request: 'asked for access',
+  new_comment: 'commented', // DANA-02: a new thread on a board you own
 }
 
 const REQUEST_TEXT: Record<NotificationAccessRequest['role'], string> = {
@@ -176,7 +177,7 @@ function NotificationsBell({ ctx }: { ctx: FeatureContext }) {
             </header>
             {inbox.notifications.length === 0 ? (
               <p className="dr-cbell__empty">
-                You’re all caught up. Mentions and replies to your comments show up here.
+                You’re all caught up. Mentions, replies and new comments on boards you own show up here.
               </p>
             ) : (
               <ul className="dr-cbell__list">

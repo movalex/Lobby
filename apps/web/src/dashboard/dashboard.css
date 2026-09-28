@@ -422,11 +422,18 @@
 
 /* ---- PRI-05a: what is new on a board, and the dashboard bell ------------------------------------- */
 .dr-bcard__news {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   padding: 1px 7px;
   border-radius: 999px;
   background: var(--dr-accent-bg);
   color: var(--dr-accent-ink);
   font-weight: 650;
+  white-space: nowrap;
+}
+.dr-bcard__news svg {
+  flex: none;
 }
 .dr-dbell {
   position: relative;

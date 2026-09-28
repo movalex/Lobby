@@ -1,5 +1,5 @@
-// In-app notifications (mentions, replies, resolutions; other features insert access requests into the
-// same table). No email is sent. Listing re-checks board access for every row, so a person who lost
+// In-app notifications (mentions, replies, resolutions, new threads for a board's owners; other features
+// insert access requests into the same table). No email is sent. Listing re-checks board access for every row, so a person who lost
 // access to a board stops seeing that board's notifications (and their comment snippets) immediately.
 
 import { commentPlainText, type NotificationItem, type NotificationKind } from '@draftroom/contracts'
@@ -17,10 +17,58 @@ import { idList } from './store.ts'
 export const MAX_NOTIFICATIONS_LISTED = 100
 const MAX_UNREAD_COUNTED = 1_000
 const SNIPPET_MAX = 140
+/**
+ * DANA-02 flood cap: at most this many unread 'new_comment' notifications from one author on one board,
+ * per recipient, within NEW_COMMENT_CAP_WINDOW_MS. Past it the author's further threads still show on
+ * the board and in the Comments panel; they just stop adding bell items until the owner reads some.
+ */
+export const NEW_COMMENT_UNREAD_CAP = 5
+export const NEW_COMMENT_CAP_WINDOW_MS = 60 * 60_000
 
 export interface NewNotification {
   userId: string
   kind: Exclude<NotificationKind, 'access_request'>
+}
+
+/**
+ * The board's owners: its direct owner grants (the creator, and anyone made owner in Share). Workspace
+ * owners and admins inherit owner rights on every board but are not told about every thread.
+ */
+export async function boardOwners(q: Queryable, boardId: string): Promise<string[]> {
+  const rows = await q.query<{ user_id: string }>(
+    "SELECT user_id FROM board_members WHERE board_id = $1 AND role = 'owner'",
+    [boardId],
+  )
+  return rows.rows.map((r) => r.user_id)
+}
+
+/**
+ * Drops the 'new_comment' recipients who already hold NEW_COMMENT_UNREAD_CAP unread ones from this
+ * author on this board (within the window), so a guest opening thread after thread cannot flood an
+ * owner's bell. Mentions and replies are not capped here (the per-person write budget bounds them).
+ */
+export async function withinNewCommentCap(
+  q: Queryable,
+  base: { boardId: string; actorId: string; at: Date },
+  recipients: readonly NewNotification[],
+): Promise<NewNotification[]> {
+  const asked = recipients.filter((r) => r.kind === 'new_comment').map((r) => r.userId)
+  if (asked.length === 0) return [...recipients]
+  const rows = await q.query<{ user_id: string }>(
+    `SELECT user_id FROM notifications
+      WHERE board_id = $1 AND actor_id = $2 AND kind = 'new_comment' AND read_at IS NULL
+        AND created_at > $3 AND user_id IN (SELECT jsonb_array_elements_text($4::jsonb))
+      GROUP BY user_id HAVING count(*) >= $5`,
+    [
+      base.boardId,
+      base.actorId,
+      new Date(base.at.getTime() - NEW_COMMENT_CAP_WINDOW_MS),
+      idList(asked),
+      NEW_COMMENT_UNREAD_CAP,
+    ],
+  )
+  const full = new Set(rows.rows.map((r) => r.user_id))
+  return recipients.filter((r) => r.kind !== 'new_comment' || !full.has(r.userId))
 }
 
 /** Inserts one notification per recipient (the caller already excluded the actor and non-viewers). */
