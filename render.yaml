@@ -174,6 +174,16 @@ services:
         sync: false
       - key: CLERK_PUBLISHABLE_KEY
         sync: false
+      # AI on the board (apps/api/src/features/ai). The key has NO spending cap at OpenAI: the api's own
+      # limits (per call, per person, per workspace, global per day; DRAFTROOM_AI_* in .env.example,
+      # contract defaults when unset) are the only brake. Without a key the feature is hidden.
+      # DRAFTROOM_AI=off (a Dashboard edit, then a restart) switches it off for everyone.
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_MODEL
+        sync: false # gpt-5.4-mini
+      - key: OPENAI_BASE_URL
+        sync: false # unset = https://api.openai.com/v1
       - fromGroup: draftroom-staging-secrets
       - fromGroup: draftroom-staging-worker-token
 

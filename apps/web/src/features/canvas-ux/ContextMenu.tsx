@@ -22,6 +22,7 @@ import {
   useEditor,
   useValue,
 } from 'tldraw'
+import { AiContextMenuGroup } from '../ai/menus.tsx'
 import { MindmapContextMenuGroup } from '../mindmap/ContextMenuGroup.tsx'
 import { TagsContextMenuGroup } from '../tags/ContextMenu.tsx'
 import { canArrangeAsGrid } from './arrange-grid-runtime.ts'
@@ -111,6 +112,7 @@ export const DraftroomContextMenu = memo(function DraftroomContextMenu(props: TL
   const exportAllowed = useExportAllowed()
   return (
     <DefaultContextMenu {...props}>
+      <AiContextMenuGroup />
       <MindmapContextMenuGroup />
       <ArrangeGroup />
       <TagsContextMenuGroup />

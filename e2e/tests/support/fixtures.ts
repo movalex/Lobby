@@ -9,6 +9,8 @@ interface WorkerFixtures {
   syncEnv: Record<string, string>
   /** Extra preview worker env for this worker's stack (test.use({ workerEnv })). */
   workerEnv: Record<string, string>
+  /** Extra api env for this worker's stack (test.use({ apiEnv })). */
+  apiEnv: Record<string, string>
   stack: Stack
   /** The stack's people (alice owns Dev Studio; see users.ts). */
   users: Users
@@ -29,11 +31,12 @@ interface TestFixtures {
 export const test = base.extend<TestFixtures, WorkerFixtures>({
   syncEnv: [{}, { option: true, scope: 'worker' }],
   workerEnv: [{}, { option: true, scope: 'worker' }],
+  apiEnv: [{}, { option: true, scope: 'worker' }],
 
   // One api + sync server + worker per Playwright worker (workers: 1, so one per project/env).
   stack: [
-    async ({ syncEnv, workerEnv }, use) => {
-      const stack = await startStack({ syncEnv, workerEnv })
+    async ({ syncEnv, workerEnv, apiEnv }, use) => {
+      const stack = await startStack({ syncEnv, workerEnv, apiEnv })
       await use(stack)
       await stack.stop()
     },

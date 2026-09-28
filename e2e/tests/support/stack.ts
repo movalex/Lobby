@@ -178,8 +178,10 @@ function baseEnv(): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env }
   for (const key of Object.keys(env)) {
     if (
-      // Credentials and worker knobs too: storage keys reach the api only through blobStoreEnv().
-      /^(DRAFTROOM_|CLERK_|R2_|CLOUDFLARE_|RENDER_|WORKER_|E2E_BLOB_STORE$)/.test(key) ||
+      // Credentials and worker knobs too: storage keys reach the api only through blobStoreEnv(), and
+      // an OPENAI_* key in the developer's shell must never reach a test api (the ai-assist suite
+      // passes a fake OpenAI's address through StackOptions.apiEnv instead).
+      /^(DRAFTROOM_|CLERK_|R2_|CLOUDFLARE_|RENDER_|WORKER_|OPENAI_|E2E_BLOB_STORE$)/.test(key) ||
       [
         'NODE_ENV',
         'NODE_OPTIONS',
@@ -224,6 +226,8 @@ export interface StackOptions {
   syncEnv?: Record<string, string>
   /** Extra preview worker env, e.g. the office-previews suite's SOFFICE_PATH stand-in. */
   workerEnv?: Record<string, string>
+  /** Extra api env, e.g. the ai-assist suite's OPENAI_BASE_URL pointing at a local fake. */
+  apiEnv?: Record<string, string>
 }
 
 export interface Stack {
@@ -274,6 +278,7 @@ export async function startStack(opts: StackOptions = {}): Promise<Stack> {
       DRAFTROOM_SYNC_INTERNAL_URL: SYNC_URL,
       DRAFTROOM_WORKER_TOKEN: workerToken,
       ...blobs,
+      ...opts.apiEnv,
     }),
     ready: (out) => out.includes(`api listening on ${HOST}:${API_PORT} `),
     healthy: apiHealthy,
