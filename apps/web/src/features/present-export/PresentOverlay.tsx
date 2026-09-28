@@ -4,6 +4,7 @@
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { type Editor, useValue } from 'tldraw'
+import { LiveBarControls, LiveTop, useLive } from './live/LiveUi.tsx'
 import type { Presenter } from './present-session.ts'
 import { fittedSlideRect, slideTitle } from './slides.ts'
 
@@ -23,7 +24,9 @@ export function prefersReducedMotion(): boolean {
 export function PresentOverlay({ editor, presenter }: { editor: Editor; presenter: Presenter }) {
   const presenting = useValue('dr-presenting', () => presenter.isPresenting(), [presenter])
   // Leaving the board (unmount, access lost, sync error) ends the presentation and restores everything.
-  useEffect(() => () => presenter.stop(), [presenter])
+  // A live presentation to everyone is not ended from here: the api ends it after its grace unless
+  // this tab comes back (present-live).
+  useEffect(() => () => presenter.stop({ reason: 'unmount' }), [presenter])
   if (!presenting) return null
   return <PresentChrome editor={editor} presenter={presenter} />
 }
@@ -43,6 +46,12 @@ function PresentChrome({ editor, presenter }: { editor: Editor; presenter: Prese
   const slides = useValue('dr-present-slides', () => presenter.slides(), [presenter])
   const gridOpen = useValue('dr-present-grid', () => presenter.state.get()?.gridOpen ?? false, [presenter])
   const mode = useValue('dr-present-mode', () => presenter.state.get()?.mode ?? 'window', [presenter])
+  // present-live: following someone's presentation (no slide controls), or presenting it to everyone.
+  const following = useValue('dr-present-following', () => presenter.state.get()?.role === 'follower', [
+    presenter,
+  ])
+  const live = useLive(editor)
+  const liveHere = useValue('dr-present-live-here', () => live?.presentingLive.get() ?? false, [live])
   const viewport = useValue('dr-present-viewport', () => {
     const b = editor.getViewportScreenBounds()
     return `${Math.round(b.w)}x${Math.round(b.h)}`
@@ -175,6 +184,8 @@ function PresentChrome({ editor, presenter }: { editor: Editor; presenter: Prese
         onContextMenu={(e) => e.preventDefault()}
       />
 
+      <LiveTop editor={editor} />
+
       {count === 0 ? (
         <div className="dr-present__empty" role="alert" data-testid="present-empty">
           <p>No slides left: the frames were removed or set to skip.</p>
@@ -182,10 +193,21 @@ function PresentChrome({ editor, presenter }: { editor: Editor; presenter: Prese
             type="button"
             className="dr-btn dr-btn--primary"
             data-testid="present-empty-exit"
-            onClick={() => presenter.stop()}
+            onClick={() => presenter.stop({ reason: 'local', view: following ? 'here' : 'restore' })}
           >
             Back to the board
           </button>
+        </div>
+      ) : following ? (
+        // Following a live presentation: where we are; the presenter changes the slides, and the
+        // banner at the top has "Stop following".
+        <div className="dr-present__bar" data-testid="present-controls" data-role="follower">
+          <span className="dr-present__counter" data-testid="present-counter" data-index={index}>
+            {index + 1} / {count}
+          </span>
+          <span className="dr-present__title" title={title}>
+            {title}
+          </span>
         </div>
       ) : (
         <div className="dr-present__bar" data-testid="present-controls">
@@ -243,14 +265,17 @@ function PresentChrome({ editor, presenter }: { editor: Editor; presenter: Prese
           >
             Slides
           </button>
+          <LiveBarControls editor={editor} />
           <button
             type="button"
             className="dr-present__btn dr-present__btn--text"
             data-testid="present-exit"
             aria-keyshortcuts="Escape"
+            aria-label={liveHere ? 'End the presentation for everyone' : undefined}
+            title={liveHere ? 'End the presentation for everyone (Esc)' : undefined}
             onClick={() => presenter.stop()}
           >
-            Exit
+            {liveHere ? 'End' : 'Exit'}
           </button>
         </div>
       )}

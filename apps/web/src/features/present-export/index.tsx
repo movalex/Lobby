@@ -1,5 +1,6 @@
 // Feature module: present-export (docs/FEATURES-M2-CONTRACTS.md, checklist PRS-01, PRS-05, PRS-06, CSV).
 // Present mode (frames as full-screen slides) and exports (PNG/SVG/copy, PDF per frame, CSV).
+// Wave 4 (present-live, PRS-07): presenting to everyone on the board, following, hand-off (live/).
 import { useEffect } from 'react'
 import { DefaultCursor, type TLCursorProps, type TLUiOverrides, useEditor, useValue } from 'tldraw'
 import { EXPORT_OFF_TEXT, exportAllowed } from '../sharing/export-policy.ts'
@@ -7,6 +8,8 @@ import type { BoardFeature, FeatureContext } from '../types.ts'
 import { readSessionSettings } from '../workshops/session-settings.ts'
 import { getController } from './controller.ts'
 import { ExportDialog } from './ExportDialog.tsx'
+import { mountLive } from './live/controller.ts'
+import { LiveInvite, LiveSync } from './live/LiveUi.tsx'
 import { PresentOverlay } from './PresentOverlay.tsx'
 import './present-export.css'
 
@@ -84,7 +87,13 @@ function PresentExportTopBarItem({ ctx }: { ctx: FeatureContext }) {
 
 function PresentExportOverlay({ ctx }: { ctx: FeatureContext }) {
   const controller = getController(ctx.editor)
-  return <PresentOverlay editor={ctx.editor} presenter={controller.presenter} />
+  return (
+    <>
+      <PresentOverlay editor={ctx.editor} presenter={controller.presenter} />
+      <LiveSync ctx={ctx} />
+      <LiveInvite ctx={ctx} />
+    </>
+  )
 }
 
 /**
@@ -144,7 +153,12 @@ export const presentExportFeature: BoardFeature = {
   components: { CollaboratorCursor: PresentAwareCursor },
   overrides,
   onMount(ctx) {
-    getController(ctx.editor).attach({ title: ctx.board.title, notify: ctx.notify })
-    return () => getController(ctx.editor).presenter.stop()
+    const controller = getController(ctx.editor)
+    controller.attach({ title: ctx.board.title, notify: ctx.notify })
+    const unmountLive = mountLive(ctx, controller.presenter)
+    return () => {
+      controller.presenter.stop({ reason: 'unmount' })
+      unmountLive()
+    }
   },
 }

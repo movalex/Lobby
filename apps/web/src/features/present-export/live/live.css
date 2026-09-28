@@ -1,0 +1,399 @@
+/* present-live: the invitation on the board, the top-bar chip, and the live parts of the presentation
+   chrome. Board parts use the --dr-* tokens (light and dark); the chrome parts use present-export's
+   dark presentation palette (--dr-present-*), like its control bar. */
+
+/* ---- the invitation (board) ---------------------------------------------------------------------- */
+
+.dr-live-invite {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  z-index: 250;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  box-sizing: border-box;
+  width: max-content;
+  max-width: calc(100% - 32px);
+  padding: 10px 10px 10px 12px;
+  border: 1px solid var(--dr-accent-line);
+  border-radius: 14px;
+  background: var(--dr-surface);
+  color: var(--dr-ink);
+  box-shadow: var(--dr-shadow-pop);
+  font: 13.5px / 1.35 var(--dr-font);
+  transform: translateX(-50%);
+  animation: dr-live-in 220ms ease-out;
+}
+/* Shown over a presentation of one's own too (someone else started presenting to everyone). */
+html[data-dr-presenting] .dr-live-invite {
+  z-index: 10002;
+}
+.dr-live-invite[data-online="false"] {
+  border-color: var(--dr-warn-line);
+}
+.dr-live-invite__avatar {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  color: #fff;
+  font: 650 11.5px / 1 var(--dr-font);
+  box-shadow: 0 0 0 3px var(--dr-live-bg);
+}
+.dr-live-invite[data-online="false"] .dr-live-invite__avatar {
+  box-shadow: 0 0 0 3px var(--dr-warn-bg);
+  opacity: 0.7;
+}
+.dr-live-invite__text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  margin: 0;
+  font-weight: 600;
+}
+.dr-live-invite__title {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 0.3em;
+  min-width: 0;
+}
+.dr-live-invite__text .dr-live-invite__name {
+  display: inline-flex;
+  max-width: 22ch;
+  vertical-align: bottom;
+}
+.dr-live-invite__sub {
+  color: var(--dr-ink-2);
+  font-size: 12.5px;
+  font-weight: 400;
+}
+.dr-live-invite__actions {
+  display: flex;
+  flex: none;
+  gap: 6px;
+}
+.dr-live-invite__actions .dr-btn {
+  gap: 6px;
+}
+@media (max-width: 560px) {
+  /* Under tldraw's page menu (top left), across the board. */
+  .dr-live-invite {
+    top: 60px;
+    flex-wrap: wrap;
+    width: calc(100% - 24px);
+    max-width: none;
+  }
+  .dr-live-invite__text {
+    flex: 1 1 0;
+  }
+  .dr-live-invite__actions {
+    width: 100%;
+    justify-content: flex-end;
+  }
+}
+
+@keyframes dr-live-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -8px);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+}
+
+/* ---- the top-bar chip ------------------------------------------------------------------------------ */
+
+.dr-live-chip {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--dr-live);
+  border-radius: 999px;
+  background: var(--dr-live-bg);
+  color: var(--dr-live);
+  font: 600 12.5px / 1 var(--dr-font);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.dr-live-chip:hover {
+  filter: brightness(0.97);
+}
+.dr-live-chip:focus-visible {
+  outline: 2px solid var(--dr-focus);
+  outline-offset: 2px;
+}
+.dr-live-chip__label {
+  display: inline-flex;
+  gap: 0.3em;
+  line-height: 1.35;
+  max-width: 24ch;
+  overflow: hidden;
+  color: var(--dr-ink);
+  font-weight: 500;
+}
+.dr-live-chip__dot,
+.dr-live-pill__dot {
+  position: relative;
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #e5484d;
+}
+/* The "live" pulse: a ring that grows and fades (transform and opacity only: no repaint per frame). */
+.dr-live-chip__dot::after,
+.dr-live-pill__dot::after {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: #e5484d;
+  content: "";
+  animation: dr-live-pulse 1.8s ease-out infinite;
+}
+@keyframes dr-live-pulse {
+  from {
+    opacity: 0.55;
+    transform: scale(1);
+  }
+  70%,
+  to {
+    opacity: 0;
+    transform: scale(2.6);
+  }
+}
+/* A narrow bar: the dot and the action say it (the accessible name says the rest). */
+@media (max-width: 1100px) {
+  .dr-topbar .dr-live-chip__label {
+    display: none;
+  }
+}
+/* Phones: no room in the top bar (the title keeps its room, Share stays in view): Rejoin floats on the
+   board instead (.dr-live-rejoin, rendered next to the invitation). */
+.dr-topbar[data-width="phone"] .dr-live-chip[data-state="rejoin"] {
+  display: none;
+}
+.dr-live-rejoin {
+  display: none;
+}
+@media (max-width: 480px) {
+  .dr-live-rejoin {
+    position: absolute;
+    top: 60px;
+    left: 50%;
+    z-index: 250;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    max-width: calc(100% - 24px);
+    height: 36px;
+    padding: 0 14px;
+    border: 1px solid var(--dr-live);
+    border-radius: 999px;
+    background: var(--dr-surface);
+    color: var(--dr-live);
+    box-shadow: var(--dr-shadow-pop);
+    font: 600 13px / 1 var(--dr-font);
+    transform: translateX(-50%);
+    white-space: nowrap;
+    cursor: pointer;
+  }
+  .dr-live-rejoin__label {
+    display: inline-flex;
+    gap: 0.3em;
+    line-height: 1.35;
+    min-width: 0;
+    overflow: hidden;
+    color: var(--dr-ink);
+    font-weight: 500;
+  }
+}
+
+/* ---- in the presentation ---------------------------------------------------------------------------- */
+
+.dr-live-top {
+  position: absolute;
+  top: 14px;
+  left: 50%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  width: max-content;
+  max-width: calc(100% - 24px);
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+.dr-live-pill,
+.dr-live-flash {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+  padding: 6px 6px 6px 12px;
+  border-radius: 999px;
+  background: var(--dr-present-chrome);
+  color: var(--dr-present-ink);
+  box-shadow: 0 8px 30px rgb(0 0 0 / 35%);
+  font-size: 13px;
+  font-weight: 500;
+  pointer-events: auto;
+}
+.dr-live-pill[data-testid="live-presenting"] {
+  padding-right: 14px;
+}
+.dr-live-pill__dot[data-state="waiting"],
+.dr-live-pill__dot[data-state="reconnecting"] {
+  background: #f0a53a;
+}
+.dr-live-pill__dot[data-state="waiting"]::after,
+.dr-live-pill__dot[data-state="reconnecting"]::after {
+  display: none;
+}
+.dr-live-pill__text {
+  display: inline-flex;
+  gap: 0.3em;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.dr-live-pill__name {
+  display: inline-flex;
+  max-width: 20ch;
+  font-weight: 650;
+}
+.dr-live-pill__sep {
+  opacity: 0.6;
+}
+.dr-live-pill__btn {
+  flex: none;
+  height: 28px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 999px;
+  background: rgb(255 255 255 / 14%);
+  color: inherit;
+  font: 600 12.5px var(--dr-font);
+  cursor: pointer;
+}
+.dr-live-pill__btn:hover {
+  background: rgb(255 255 255 / 24%);
+}
+.dr-live-pill__btn:focus-visible,
+.dr-live-handoff__list button:focus-visible,
+.dr-present__btn--invite:focus-visible {
+  outline: 2px solid #8ab4ff;
+  outline-offset: 1px;
+}
+.dr-live-flash {
+  padding: 8px 14px;
+  border-radius: 12px;
+  background: rgb(31 58 95 / 92%);
+  animation: dr-live-flash-in 180ms ease-out;
+}
+@keyframes dr-live-flash-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+}
+
+/* The presenter's bar: "Invite everyone" stands out; "Hand over" opens a list above the bar. */
+.dr-present__btn--invite {
+  background: #2f6fde;
+  color: #fff;
+}
+.dr-present__btn--invite:hover {
+  background: #3b7af0;
+}
+.dr-live-handoff {
+  position: relative;
+  display: inline-flex;
+}
+.dr-live-handoff__list {
+  position: absolute;
+  right: -8px;
+  bottom: calc(100% + 16px);
+  width: min(300px, calc(100vw - 32px));
+  max-height: min(50vh, 420px);
+  padding: 6px;
+  overflow: auto;
+  border-radius: 12px;
+  background: rgb(20 24 31 / 96%);
+  color: var(--dr-present-ink);
+  box-shadow: 0 8px 30px rgb(0 0 0 / 35%);
+}
+.dr-live-handoff__title,
+.dr-live-handoff__empty {
+  margin: 4px 8px 6px;
+  color: rgb(245 246 248 / 70%);
+  font-size: 12.5px;
+}
+.dr-live-handoff__list ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.dr-live-handoff__list button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 7px 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  font: 500 13.5px var(--dr-font);
+  text-align: left;
+  cursor: pointer;
+}
+.dr-live-handoff__list button:hover {
+  background: rgb(255 255 255 / 12%);
+}
+.dr-live-handoff__avatar {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  color: #fff;
+  font: 650 10.5px / 1 var(--dr-font);
+}
+.dr-live-handoff__name {
+  flex: 1;
+  min-width: 0;
+}
+.dr-live-handoff__tag {
+  flex: none;
+  color: rgb(245 246 248 / 60%);
+  font-size: 12px;
+}
+
+@media (max-width: 560px) {
+  .dr-live-top {
+    top: 10px;
+  }
+  .dr-live-pill,
+  .dr-live-flash {
+    font-size: 12.5px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .dr-live-invite,
+  .dr-live-flash {
+    animation: none;
+  }
+  .dr-live-chip__dot::after,
+  .dr-live-pill__dot::after {
+    display: none;
+  }
+}
