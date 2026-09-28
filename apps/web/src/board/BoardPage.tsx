@@ -52,6 +52,7 @@ import { installRebaseSelectionGuard } from '../sync-quality/rebaseGuard.ts'
 import { createTrackedConnect } from '../sync-quality/saveTracker.ts'
 import { trackUploads } from '../sync-quality/uploads.ts'
 import { useSaveStatus } from '../sync-quality/useSaveStatus.ts'
+import { BoardSkipLink } from '../ui/SkipLink.tsx'
 import { LoadingScreen, MessageScreen, NoAccessScreen } from '../ui/screens.tsx'
 import { blockedEditHint, isReadonlyRole, roleChangeNotice } from './access.ts'
 import { BoardContext, type BoardContextValue } from './board-context.ts'
@@ -617,6 +618,7 @@ function BoardSession({
   return (
     <BoardContext.Provider value={context}>
       <div className="dr-board" data-board-id={boardId} data-role={role}>
+        <BoardSkipLink editor={editor} />
         <TopBar
           board={board}
           role={role}

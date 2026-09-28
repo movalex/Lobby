@@ -156,7 +156,8 @@ export function safeSessionStorage(): Storage | null {
 
 /** The sign-in heading when someone arrives from an invitation (PRI-16). */
 export function signInHeading(inv: InvitationPreview | null): string {
-  if (!inv) return 'Sign in to your DBC lobby'
+  // DANA-08: a lobby is a project's space; signing in opens Lobby, the app (and every lobby in it).
+  if (!inv) return 'Sign in to Lobby'
   const who = inv.invitedBy.name ? ` (invited by ${inv.invitedBy.name})` : ''
   return inv.board
     ? `Sign in to join “${inv.board.title}”${who}`

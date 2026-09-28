@@ -274,6 +274,13 @@ describe('board lists', () => {
     })
     expect(emptyState({ kind: 'archived' }, { searching: true, canCreate: true }).title).toMatch(/search/)
   })
+
+  it('DANA-08: an empty project reads as that project’s lobby, like the sidebar’s "Project lobbies"', () => {
+    const empty = emptyState({ kind: 'project', projectId: PRJ_ID }, { searching: false, canCreate: true })
+    expect(empty.title).toBe("This project's lobby has no boards yet")
+    expect(empty.body).toMatch(/lobby/)
+    expect(empty.offerCreate).toBe(true)
+  })
 })
 
 describe('thumbnails and landing', () => {

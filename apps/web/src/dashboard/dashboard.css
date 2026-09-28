@@ -589,3 +589,149 @@
 :root[data-theme="dark"] .dr-thumb__note {
   fill: color-mix(in srgb, var(--th-note) 62%, var(--dr-inset));
 }
+
+/* ---- A11Y-06 / DANA-11: the sidebar folds into a "Menu" button at 760 px and below ------------- */
+/* Phones and a laptop at 200% zoom: the brand and one button, then the boards; the navigation opens
+   under the button (Sidebar.tsx). Wider screens keep the full sidebar and never show the button. */
+.dr-side__bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.dr-side .dr-side__toggle {
+  display: none;
+}
+.dr-side__body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 14px;
+  min-height: 0;
+}
+@media (max-width: 760px) {
+  /* The folded bar keeps its own height; a short list must not stretch it (grid rows share leftovers). */
+  .dr-dash {
+    grid-template-rows: auto 1fr;
+  }
+  .dr-side {
+    gap: 0;
+    padding: 8px 12px 8px 10px;
+  }
+  .dr-side .dr-side__toggle {
+    display: inline-flex;
+    height: 36px;
+    padding: 0 12px;
+  }
+  .dr-side__body {
+    padding: 12px 0 6px;
+  }
+  .dr-side[data-open="false"] .dr-side__body {
+    display: none;
+  }
+}
+
+/* ---- DANA-14: storage meter with its breakdown under a button ---------------------------------- */
+.dr-storage {
+  position: relative;
+  margin-top: auto;
+  padding-top: 8px;
+  border-top: 1px solid var(--dr-line);
+}
+.dr-storage__btn {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  width: 100%;
+  padding: 7px 10px 9px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--dr-ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.dr-storage__btn:hover,
+.dr-storage__btn[aria-expanded="true"] {
+  background: var(--dr-hover);
+}
+.dr-storage__label {
+  font-size: 13px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.dr-storage__bar {
+  display: block;
+  height: 6px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--dr-line);
+}
+.dr-storage__fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--dr-navy);
+}
+.dr-storage[data-level="near"] .dr-storage__label {
+  color: var(--dr-warn);
+}
+.dr-storage[data-level="near"] .dr-storage__fill {
+  background: var(--dr-amber);
+}
+.dr-storage[data-level="full"] .dr-storage__label {
+  color: var(--dr-danger);
+}
+.dr-storage[data-level="full"] .dr-storage__fill {
+  background: var(--dr-danger-fill);
+}
+.dr-storage__pop {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 4px);
+  left: 0;
+  z-index: 10;
+  padding: 12px 14px;
+  border: 1px solid var(--dr-line);
+  border-radius: 10px;
+  background: var(--dr-surface);
+  box-shadow: var(--dr-shadow-pop);
+  color: var(--dr-ink);
+  font-size: 13px;
+}
+.dr-storage__share {
+  margin: 0 0 8px;
+  font-weight: 600;
+}
+.dr-storage__rows {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+}
+.dr-storage__rows > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+.dr-storage__rows dt {
+  color: var(--dr-ink-2);
+}
+.dr-storage__rows dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+.dr-storage__note {
+  margin: 8px 0 0;
+  padding-top: 8px;
+  border-top: 1px solid var(--dr-line);
+  color: var(--dr-ink-2);
+  font-size: 12.5px;
+  line-height: 1.4;
+}
+
+/* A11Y-17 / A11Y-09: the page heading takes the focus after sign-in and from "Skip to boards"; a
+   heading is not a control, so it shows no focus ring. */
+.dr-dash__title:focus {
+  outline: none;
+}
