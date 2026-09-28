@@ -32,7 +32,10 @@ async function editor(reg: RoomRegistry, boardId = BOARD) {
   await c.connect()
   return c
 }
-const text = (s: string) => ({ props: ['patch', { richText: ['put', toRichText(s)] }] })
+// usr_a retypes a note, stamping itself as tldraw does (the sync server requires it, attribution.ts)
+const text = (s: string) => ({
+  props: ['patch', { richText: ['put', toRichText(s)], textLastEditedBy: ['put', 'usr_a'] }],
+})
 
 beforeEach(() => {
   data = mkdtempSync(join(tmpdir(), 'dr-backup-'))

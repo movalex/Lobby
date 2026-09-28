@@ -199,6 +199,11 @@ export class NodeSyncClient {
 
   // ---------------------------------------------------------------- connection control
 
+  /** The ticket's user id this client connects as (undefined without `user`). */
+  get userId(): string | undefined {
+    return this.opts.user
+  }
+
   /** The URL of the most recent connection attempt. */
   get url(): string {
     return this.connectUrls.at(-1) ?? ''

@@ -122,7 +122,15 @@ describe('capture on delete', () => {
     await alice.put(n)
     // alice takes the lease by editing the text
     await alice.push({
-      [n.id]: ['patch', { props: ['patch', { richText: ['put', toRichText('alice typing')] }] }],
+      [n.id]: [
+        'patch',
+        {
+          props: [
+            'patch',
+            { richText: ['put', toRichText('alice typing')], textLastEditedBy: ['put', 'usr_alice'] },
+          ],
+        },
+      ],
     })
     expect(await bob.remove(n.id)).toBe('discard')
     expect(rec(room, n.id)).toBeDefined()

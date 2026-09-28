@@ -1,10 +1,17 @@
-import type { Board, BoardDetail, Me, TicketResponse } from '@draftroom/contracts'
+import {
+  type Board,
+  type BoardDetail,
+  GUEST_NAME_SUFFIX,
+  type Me,
+  type TicketResponse,
+} from '@draftroom/contracts'
 import { getAssetUrlsByImport } from '@tldraw/assets/imports.vite'
 import { TLRemoteSyncError, useSync } from '@tldraw/sync'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   atom,
   computed,
+  createCachedUserResolve,
   createUserId,
   defaultShapeUtils,
   type Editor,
@@ -69,6 +76,18 @@ const components: TLComponents = {
   // preferences, which are not the identity we sync.
   SharePanel: null,
   InFrontOfTheCanvas: EditingBadges,
+}
+
+/**
+ * The name a note's attribution label shows (SEAM-01). tldraw draws only the first word of it
+ * (NoteShapeUtil: `name.split(' ')[0]`), so a guest who calls himself "Alice" would read exactly like
+ * Alice the member. A guest's name (the ticket's "Alice (guest)", pinned by the sync server) keeps its
+ * marker there: its spaces become no-break spaces, which that split leaves alone. Members keep
+ * tldraw's first-name label; the tooltip shows the same name.
+ */
+function noteAttributionUser(user: TLUser): TLUser {
+  if (!user.name.endsWith(GUEST_NAME_SUFFIX)) return user
+  return { ...user, name: user.name.replace(/ /g, '\u00a0') }
 }
 
 function pickFiles(): Promise<File[]> {
@@ -278,6 +297,8 @@ function BoardSession({
       isEqual: (a, b) => a === b || (!!a && !!b && a.id === b.id && a.name === b.name && a.color === b.color),
     }),
   )
+  // The board's store once the editor has mounted: resolve() below reads user records from it.
+  const [storeAtom] = useState(() => atom<TLStore | null>('dr-attribution-store', null))
   const users = useMemo<TLUserStore>(
     () => ({
       // Only id, display name and color: tldraw persists user records into the board document.
@@ -295,8 +316,15 @@ function BoardSession({
           color: safeColor(ticketUser.color, ticketUser.id),
         })
       }),
+      // Note attribution names (Editor.getAttributionDisplayName asks this first, then the store):
+      // the synced user records, which the sync server binds to each person's ticket (G-R8), with a
+      // guest's "(guest)" marker kept in the label.
+      resolve: createCachedUserResolve((uid) => {
+        const user = storeAtom.get()?.get(createUserId(uid))
+        return user ? noteAttributionUser(user) : null
+      }),
     }),
-    [readonlyAtom, ticketUserAtom],
+    [readonlyAtom, ticketUserAtom, storeAtom],
   )
   // useSync keeps this in an atom (useReactiveEvent), so a new function does not reconnect.
   const getUserPresence = useCallback(
@@ -417,13 +445,19 @@ function BoardSession({
           if (text) notify({ key: 'undo-skip', text, testId: 'undo-notice' })
         },
         // The server lease vetoes the WHOLE record op (lease.ts), so an undo that reverts text a
-        // collaborator is editing would also lose its move/resize. Leave that text alone instead.
+        // collaborator is editing would also lose its move/resize. Leave that text alone instead, and
+        // its "last edited by" with it: the server refuses a name without the text it goes with
+        // (apps/sync attribution.ts, SEAM-01).
         isFieldLocked: (rec, path) =>
-          path === 'props.richText' && ed.getCollaborators().some((c) => c.meta?.editingShapeId === rec.id),
+          (path === 'props.richText' || path === 'props.textLastEditedBy') &&
+          ed.getCollaborators().some((c) => c.meta?.editingShapeId === rec.id),
       })
       // A sync rebase that removes and re-adds a shape of ours must not wipe the redo stack.
       const uninstallRebaseGuard = installRebaseSelectionGuard(ed)
+      // Note attribution names are read from this store (users.resolve above).
+      storeAtom.set(ed.store)
       return () => {
+        if (storeAtom.get() === ed.store) storeAtom.set(null)
         uninstallRebaseGuard()
         uninstallUndo()
         editorRef.current = null
@@ -431,7 +465,7 @@ function BoardSession({
         if (window.editor === ed) window.editor = undefined
       }
     },
-    [notify],
+    [notify, storeAtom],
   )
 
   // Keeps tools and menus from offering edits to read-only roles (the server enforces).

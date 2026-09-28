@@ -15,11 +15,13 @@ type Msg = { type: string; data?: unknown; clientClock?: number; action?: unknow
 class Client {
   readonly msgs: Msg[] = []
   readonly sessionId: string
+  readonly userId: string
   private clock = 0
   private readonly room: Room
   private open = true
   constructor(room: Room, userId: string, tab: string, isReadonly = false) {
     this.room = room
+    this.userId = userId
     this.sessionId = `${userId}:${tab}` // the server namespaces the tab id by user the same way
     room.handleSocketConnect({
       sessionId: this.sessionId,
@@ -68,7 +70,9 @@ class Client {
     return this.events.find((e) => e.type === 'push_result' && e.clientClock === clientClock)?.action
   }
   setText(shape: TLShape, text: string) {
-    return this.push({ [shape.id]: ['patch', { props: ['patch', { richText: ['put', toRichText(text)] }] }] })
+    // stamped with the writer, as tldraw does on a text change (attribution.ts requires it)
+    const props = { richText: ['put', toRichText(text)], textLastEditedBy: ['put', this.userId] }
+    return this.push({ [shape.id]: ['patch', { props: ['patch', props] }] })
   }
   move(shape: TLShape, x: number) {
     return this.push({ [shape.id]: ['patch', { x: ['put', x] }] })
