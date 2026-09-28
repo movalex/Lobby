@@ -176,7 +176,10 @@ test('A11Y-04 / A11Y-03: Alt+F10 reaches the selection toolbar (arrows move, Esc
   await shot(a.page, testInfo, 'a11y-03-tag-picker-ring')
   await a.page.keyboard.press('Escape')
   await expect(a.page.getByTestId('tag-picker')).toHaveCount(0)
-  // Closing the picker gives the keyboard back to the board (A11Y-01), with the note still selected.
+  // Closing the picker gives the keyboard back to its opener, the Tags button (A11Y-15, a11y-2); Escape
+  // there returns to the board (A11Y-01/04), with the note still selected.
+  await expect(tags).toBeFocused()
+  await a.page.keyboard.press('Escape')
   await expect.poll(() => boardHasFocus(a.page)).toBe(true)
   expect(await readEd(a.page, (ed) => [...ed.getSelectedShapeIds()])).toEqual(['shape:a11y-bar'])
 

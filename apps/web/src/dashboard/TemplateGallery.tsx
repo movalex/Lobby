@@ -56,7 +56,7 @@ export function TemplateGallery({
   const templates = visible.filter((e) => e.category !== 'sample')
 
   const card = (choice: TemplateChoice, entry: CatalogEntry | null, content: ReactNode, testId: string) => (
-    <li key={choice}>
+    <li key={choice} style={{ position: 'relative' }}>
       <button
         type="button"
         className={`dr-tcard${choice === 'blank' ? ' dr-tcard--blank' : ''}${entry?.category === 'sample' ? ' dr-tcard--sample' : ''}`}
@@ -74,6 +74,7 @@ export function TemplateGallery({
       >
         {content}
       </button>
+      {selected === choice && <CreateHere choice={choice} entry={entry} onChoose={onChoose} />}
     </li>
   )
 
@@ -176,6 +177,36 @@ export function TemplateGallery({
         </p>
       )}
     </div>
+  )
+}
+
+/**
+ * A11Y-16: the next Tab stop after the chosen card creates the board from it. The footer's Create button
+ * was 12 Tabs away (every other card, Title, Project, the checkbox, Cancel). Like a skip link, it shows
+ * on the card only while it has the keyboard; the mouse keeps the footer button and double click.
+ */
+function CreateHere({
+  choice,
+  entry,
+  onChoose,
+}: {
+  choice: TemplateChoice
+  entry: CatalogEntry | null
+  onChoose(choice: TemplateChoice, entry: CatalogEntry | null): void
+}) {
+  const [shown, setShown] = useState(false)
+  return (
+    <button
+      type="button"
+      className={shown ? 'dr-btn dr-btn--primary dr-btn--sm' : 'dr-sr-only'}
+      style={shown ? { position: 'absolute', top: 8, right: 8, maxWidth: 'calc(100% - 16px)' } : undefined}
+      data-testid="template-create-here"
+      onFocus={() => setShown(true)}
+      onBlur={() => setShown(false)}
+      onClick={() => onChoose(choice, entry)}
+    >
+      {entry && choice !== 'blank' ? `Create from ${entry.name}` : 'Create board'}
+    </button>
   )
 }
 

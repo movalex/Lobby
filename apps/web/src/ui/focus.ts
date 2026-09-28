@@ -42,6 +42,48 @@ export function firstTabbable(root: ParentNode | null | undefined): HTMLElement 
   return null
 }
 
+/** Every control in `root` that Tab would reach, in document order. */
+export function tabbables(root: ParentNode | null | undefined): HTMLElement[] {
+  if (!root) return []
+  return [...root.querySelectorAll<HTMLElement>(TABBABLE)].filter((el) => el.tabIndex >= 0 && isVisible(el))
+}
+
+/**
+ * A11Y-15: keeps Tab inside a popover. Tab on its last control goes to the first, Shift+Tab on the first
+ * to the last; in between the browser moves as usual. True when it placed the focus itself.
+ */
+export function trapTab(e: KeyboardEvent, root: HTMLElement): boolean {
+  if (e.key !== 'Tab' || e.ctrlKey || e.metaKey || e.altKey || e.isComposing) return false
+  const items = tabbables(root)
+  const active = root.ownerDocument.activeElement as HTMLElement | null
+  const at = active ? items.indexOf(active) : -1
+  const wrap = items.length === 0 || (e.shiftKey ? at <= 0 : at < 0 || at === items.length - 1)
+  if (!wrap) return false
+  e.preventDefault()
+  const next = e.shiftKey ? items[items.length - 1] : items[0]
+  if (next) next.focus({ preventScroll: true })
+  return true
+}
+
+/**
+ * A11Y-15: calls `onLeave` when the keyboard focus moves from inside `root` to somewhere outside it (not
+ * when it merely drops to <body>, as it does while the popover re-renders its content). `keep` names
+ * outside places that do not count, such as the button that toggles the popover.
+ */
+export function onFocusLeave(
+  root: HTMLElement,
+  onLeave: () => void,
+  keep?: (el: Element) => boolean,
+): () => void {
+  const onOut = (e: FocusEvent) => {
+    const to = e.relatedTarget
+    if (!(to instanceof Element) || root.contains(to) || keep?.(to)) return
+    onLeave()
+  }
+  root.addEventListener('focusout', onOut)
+  return () => root.removeEventListener('focusout', onOut)
+}
+
 /** Focuses `el` if it can take the focus; true when it now has it. */
 export function tryFocus(el: Element | null | undefined): boolean {
   if (!el || !(el as HTMLElement).focus || !el.isConnected) return false

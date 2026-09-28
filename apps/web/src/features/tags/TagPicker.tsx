@@ -15,6 +15,7 @@ import { FILE_CARD_TYPE } from '@draftroom/canvas-schema'
 import { MAX_TAGS_PER_SHAPE, normalizeTagName, type TagDef, tagKey } from '@draftroom/contracts'
 import { memo, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import { type Editor, type TLShape, useEditor, useValue } from 'tldraw'
+import { onFocusLeave, trapTab, tryFocus } from '../../ui/focus.ts'
 import { fullNotice, kindCounts, READONLY_HINT, thingName } from './copy.ts'
 import { TagIcon } from './icons.tsx'
 import { useIsolated } from './isolate.ts'
@@ -184,6 +185,21 @@ function TagPicker({
   const inputId = useId()
   const statusId = useId()
   const [place, setPlace] = useState<PickerPlacement>({ dx: 0, above: false, listMax: null })
+  // A11Y-15: what had the keyboard as it opened (the Tags button from the keyboard; the board after a
+  // click, since the bar keeps the canvas focused): closing from the keyboard gives the focus back there.
+  const [opener] = useState(() => {
+    const a = editor.getContainer().ownerDocument.activeElement
+    return a instanceof HTMLElement && a !== a.ownerDocument.body ? a : null
+  })
+  const closeWithFocus = () => {
+    onClose(false)
+    if (tryFocus(opener)) return
+    // tldraw 5.4.2's editor.focus() is a no-op while the editor counts as focused: move the DOM focus too.
+    editor.focus()
+    editor.getContainer().focus({ preventScroll: true })
+  }
+  /** The picker has placed its first focus (focus moving out before that is the context menu's). */
+  const settled = useRef(false)
 
   const name = normalizeTagName(query)
   const key = name ? tagKey(name) : ''
@@ -235,6 +251,7 @@ function TagPicker({
       focus()
       frame = requestAnimationFrame(() => {
         if (!inside()) focus()
+        settled.current = true
       })
     }
     focus()
@@ -247,7 +264,12 @@ function TagPicker({
     const target = e.target as HTMLElement | null
     if (e.key === 'Escape') {
       e.preventDefault()
-      onClose(true)
+      closeWithFocus()
+      return
+    }
+    // A11Y-15: Tab stays inside while it is open (Escape is the way out).
+    if (e.key === 'Tab') {
+      if (rootRef.current) trapTab(e, rootRef.current)
       return
     }
     const boxes = [...(rootRef.current?.querySelectorAll<HTMLInputElement>('input[type="checkbox"]') ?? [])]
@@ -288,6 +310,18 @@ function TagPicker({
     doc.addEventListener('pointerdown', onDown, true)
     return () => doc.removeEventListener('pointerdown', onDown, true)
   }, [editor, toggle])
+  // A11Y-15: so does the focus moving elsewhere; the Tags button that toggles it does not count.
+  useEffect(() => {
+    const root = rootRef.current
+    if (!root) return
+    return onFocusLeave(
+      root,
+      () => {
+        if (settled.current) closeRef.current(false)
+      },
+      (el) => toggle.current?.contains(el) === true,
+    )
+  }, [toggle])
 
   // Keep it inside the editor, clear of tldraw's top row and bottom toolbar (placement.ts). Measured
   // after each render: the natural size (the list uncapped) decides, so a cap never feeds back into it.

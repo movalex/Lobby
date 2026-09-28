@@ -3,15 +3,34 @@ import { type ReactNode, useEffect, useId, useRef } from 'react'
 const FIELDS =
   'input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"]):not([disabled]), textarea:not([disabled]), select:not([disabled])'
 
-/** The first enabled, rendered text field or select below the dialog's header. */
-function firstField(panel: HTMLElement | null): HTMLElement | null {
+/** Checkboxes and radio buttons: what a dialog without a text field opens on. */
+const CHOICES = 'input[type="checkbox"]:not([disabled]), input[type="radio"]:not([disabled])'
+
+function firstMatch(panel: HTMLElement | null, selector: string): HTMLElement | null {
   if (!panel) return null
-  for (const el of panel.querySelectorAll<HTMLElement>(FIELDS)) {
+  for (const el of panel.querySelectorAll<HTMLElement>(selector)) {
     if (el.closest('.dr-dialog__head')) continue
     if (el.getClientRects().length === 0 || el.tabIndex < 0) continue
+    // A radio group is entered on its picked option, as Tab would.
+    const radio = el as HTMLInputElement
+    if (radio.type === 'radio' && !radio.checked && radio.name) {
+      const picked = [...panel.querySelectorAll<HTMLInputElement>('input[type="radio"]:checked')].find(
+        (r) => r.name === radio.name,
+      )
+      if (picked && !picked.disabled) return picked
+    }
     return el
   }
   return null
+}
+
+/**
+ * The first enabled, rendered text field or select below the dialog's header; without one, its first
+ * choice (Export's format, for instance: the picked radio). A dialog of buttons only keeps the ×, so a
+ * reflex Enter never confirms something.
+ */
+function firstField(panel: HTMLElement | null): HTMLElement | null {
+  return firstMatch(panel, FIELDS) ?? firstMatch(panel, CHOICES)
 }
 
 /**
