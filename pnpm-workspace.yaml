@@ -13,6 +13,13 @@ catalog:
   '@tldraw/validate': 5.4.2
   '@tldraw/assets': 5.4.2
   '@tldraw/utils': 5.4.2
+  # excalidraw (MIT; fractional-indexing CC0): keep all five @excalidraw/* packages at the same exact nightly.
+  # Bump only in a dedicated PR that runs the engine probe suite (docs/EXCALIDRAW-MIGRATION.md §6.5).
+  '@excalidraw/excalidraw': 0.18.0-1118751
+  '@excalidraw/element': 0.18.0-1118751
+  '@excalidraw/common': 0.18.0-1118751
+  '@excalidraw/math': 0.18.0-1118751
+  '@excalidraw/fractional-indexing': 0.18.0-1118751
   # react
   react: 19.3.0
   react-dom: 19.3.0
