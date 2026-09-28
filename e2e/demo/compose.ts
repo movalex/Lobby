@@ -1,7 +1,8 @@
 // The composer: turns the recordings and timeline.json into out/lobby-demo.mp4 with ffmpeg.
 //   1. one intermediate segment per scene (1920x1080, 30 fps): the title/outro cards, or Alex (left) and
-//      Sam (right) cut to the scene's window, with the divider, name labels, the scene's lower-third
-//      caption and, in the guest scene, the phone inset;
+//      Sam (right) cut to the scene's window, over the bottom band that holds their names and the
+//      scene's caption, with the guest scene's phone inset; waits cut out of a scene are joined with a
+//      short dissolve;
 //   2. the segments cross-faded into one picture, each narration clip placed at its scene's start, the
 //      mix loudness-normalised (two-pass loudnorm, -16 LUFS), H.264 + AAC with faststart;
 //   3. a contact sheet (one frame per scene) for review.
@@ -10,13 +11,14 @@ import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { type Browser, chromium } from '@playwright/test'
 import {
+  bandHtml,
   BT709_FLAGS,
   BT709_TAGS,
   captionHtml,
   FPS,
   H,
-  labelsHtml,
   outroCardHtml,
+  PANE,
   PHONE_SCREEN,
   phoneFrameHtml,
   renderCard,
@@ -26,6 +28,8 @@ import {
   W,
 } from './cards.ts'
 import {
+  CUT_FADE_SEC,
+  effectiveCuts,
   FADE_SEC,
   LEAD_SEC,
   type NarrationScene,
@@ -34,12 +38,18 @@ import {
   type Track,
 } from './timeline.ts'
 
+export interface Person {
+  name: string
+  role: string
+  color: string
+}
+
 export interface ComposeOptions {
   timeline: Timeline
   narration: NarrationScene[]
   outDir: string
   repoRoot: string
-  people: { left: { name: string; color: string }; right: { name: string; color: string } }
+  people: { left: Person; right: Person }
   phoneLabel: string
   log: (msg: string) => void
 }
@@ -117,16 +127,46 @@ export function probe(file: string): { duration: number; creation?: number; stre
   }
 }
 
-/**
- * Scenes whose caption goes lower than usual: while presenting, Alex's slide fills the middle of the
- * window, and the band under it (the slide's letterbox) is free; the Export dialog reaches further
- * down than other panels.
- */
-const CAPTION_BOTTOM: Record<string, number> = { '09-present': 150, '10-history': 100 }
-
 /** Seconds into `track`'s video for the wall-clock time `at` (epoch ms). */
 function offsetIn(track: Track, at: number): number {
   return Math.max(0, (at - track.createdAt) / 1000)
+}
+
+/**
+ * The filters that cut `cuts` (seconds into the scene) out of `[input]` and join the pieces with a
+ * short dissolve; returns the output label and the resulting duration.
+ */
+function cutFilters(
+  input: string,
+  seconds: number,
+  cuts: Array<{ start: number; end: number }>,
+  f: string[],
+): { label: string; duration: number } {
+  if (cuts.length === 0) return { label: input, duration: seconds }
+  const keep: Array<[number, number]> = []
+  let from = 0
+  for (const c of cuts) {
+    keep.push([from, c.start])
+    from = c.end
+  }
+  keep.push([from, seconds])
+  const parts = keep.map((_, i) => `[k${i}]`)
+  f.push(`${input}split=${keep.length}${parts.join('')}`)
+  keep.forEach(([a, b], i) => {
+    f.push(`[k${i}]trim=start=${a.toFixed(3)}:end=${b.toFixed(3)},setpts=PTS-STARTPTS,settb=AVTB[q${i}]`)
+  })
+  let last = '[q0]'
+  let length = (keep[0]?.[1] ?? 0) - (keep[0]?.[0] ?? 0)
+  for (let i = 1; i < keep.length; i++) {
+    const [a, b] = keep[i] ?? [0, 0]
+    const out = `[j${i}]`
+    f.push(
+      `${last}[q${i}]xfade=transition=fade:duration=${CUT_FADE_SEC}:offset=${(length - CUT_FADE_SEC).toFixed(3)}${out}`,
+    )
+    length += b - a - CUT_FADE_SEC
+    last = out
+  }
+  return { label: last, duration: length }
 }
 
 export async function compose(opts: ComposeOptions): Promise<ComposeResult> {
@@ -138,10 +178,8 @@ export async function compose(opts: ComposeOptions): Promise<ComposeResult> {
   mkdirSync(gfxDir, { recursive: true })
   const narration = new Map(opts.narration.map((n) => [n.id, n]))
   const tracks = new Map(timeline.tracks.map((t) => [t.id, { ...t }]))
-  // The recorder stamps each video with the time its first frame stands for; prefer it to our estimate.
   for (const t of tracks.values()) {
     const p = probe(t.file)
-    if (p.creation && Math.abs(p.creation - t.createdAt) < 5000) t.createdAt = p.creation
     log(`track ${t.id}: ${p.duration.toFixed(1)} s, ${p.streams.join('; ')}`)
   }
 
@@ -149,8 +187,8 @@ export async function compose(opts: ComposeOptions): Promise<ComposeResult> {
   const browser: Browser = await chromium.launch()
   const segments: Array<{ scene: SceneWindow; file: string; duration: number }> = []
   try {
-    const labels = join(gfxDir, 'labels.png')
-    await renderPng(browser, labelsHtml(opts.people), labels)
+    const band = join(gfxDir, 'band.png')
+    await renderPng(browser, bandHtml(opts.people), band)
     const phoneFrame = join(gfxDir, 'phone-frame.png')
     await renderPng(browser, phoneFrameHtml(opts.phoneLabel), phoneFrame)
 
@@ -167,7 +205,7 @@ export async function compose(opts: ComposeOptions): Promise<ComposeResult> {
       if (scene.start === undefined || scene.end === undefined) continue
       const n = narration.get(scene.id)
       const caption = join(gfxDir, `caption-${scene.id}.png`)
-      await renderPng(browser, captionHtml(n?.caption ?? scene.id, CAPTION_BOTTOM[scene.id]), caption)
+      await renderPng(browser, captionHtml(n?.caption ?? scene.id), caption)
       const seconds = (scene.end - scene.start) / 1000
       const alex = tracks.get('alex')
       const sam = tracks.get('sam')
@@ -175,18 +213,15 @@ export async function compose(opts: ComposeOptions): Promise<ComposeResult> {
       const args = [
         ...['-ss', offsetIn(alex, scene.start).toFixed(3), '-t', seconds.toFixed(3), '-i', alex.file],
         ...['-ss', offsetIn(sam, scene.start).toFixed(3), '-t', seconds.toFixed(3), '-i', sam.file],
-        ...['-loop', '1', '-framerate', String(FPS), '-t', seconds.toFixed(3), '-i', labels],
+        ...['-loop', '1', '-framerate', String(FPS), '-t', seconds.toFixed(3), '-i', band],
         ...['-loop', '1', '-framerate', String(FPS), '-t', seconds.toFixed(3), '-i', caption],
       ]
-      // The caption comes in with the scene and leaves soon after its narration, out of the way.
-      const capIn = 0.55
-      const capOut = Math.max(capIn + 1, Math.min(seconds - 0.95, LEAD_SEC + (n?.durationSec ?? 5) + 0.8))
-      const f: string[] = [
-        `[0:v]fps=${FPS},scale=${W / 2}:${H}:flags=lanczos,format=rgb24,setsar=1,setpts=PTS-STARTPTS[l]`,
-        `[1:v]fps=${FPS},scale=${W / 2}:${H}:flags=lanczos,format=rgb24,setsar=1,setpts=PTS-STARTPTS[r]`,
-      ]
+      // The panes, side by side over the band (the pad colour only shows if a recording ran short).
+      const pane = `fps=${FPS},scale=${PANE.w}:${PANE.h}:flags=lanczos,format=rgb24,setsar=1,setpts=PTS-STARTPTS`
+      const f: string[] = [`[0:v]${pane}[l]`, `[1:v]${pane}[r]`]
       let right = '[r]'
       const phone = tracks.get('phone')
+      const tail: string[] = []
       if (scene.phone && phone) {
         // The client's phone, as an inset over Sam's half, which dims behind it.
         const pStart = Math.max(0, (scene.phone.start - scene.start) / 1000)
@@ -196,35 +231,45 @@ export async function compose(opts: ComposeOptions): Promise<ComposeResult> {
           ...['-ss', offsetIn(phone, scene.phone.start).toFixed(3), '-t', pLen.toFixed(3), '-i', phone.file],
           ...['-loop', '1', '-framerate', String(FPS), '-t', seconds.toFixed(3), '-i', phoneFrame],
         )
+        const on = `enable='between(t,${pStart.toFixed(2)},${pEnd.toFixed(2)})'`
         f.push(
-          `[r]drawbox=x=0:y=0:w=iw:h=ih:color=0x0b1020@0.45:t=fill:enable='between(t,${pStart.toFixed(2)},${pEnd.toFixed(2)})'[rd]`,
+          `[r]drawbox=x=0:y=0:w=iw:h=ih:color=0x0b1020@0.5:t=fill:${on}[rd]`,
           `[4:v]fps=${FPS},scale=${PHONE_SCREEN.w}:${PHONE_SCREEN.h}:flags=lanczos,format=rgb24,setsar=1,setpts=PTS-STARTPTS+${pStart.toFixed(3)}/TB[ph]`,
         )
         right = '[rd]'
-        f.push(`[l]${right}hstack=inputs=2[base0]`)
-        f.push(
-          `[base0][ph]overlay=x=${PHONE_SCREEN.x}:y=${PHONE_SCREEN.y}:format=rgb:eof_action=pass:enable='between(t,${pStart.toFixed(2)},${pEnd.toFixed(2)})'[base1]`,
+        tail.push(
+          `[top0][ph]overlay=x=${PHONE_SCREEN.x}:y=${PHONE_SCREEN.y}:format=rgb:eof_action=pass:${on}[top1]`,
           `[5:v]format=rgba,fade=t=in:st=${pStart.toFixed(2)}:d=0.35:alpha=1,fade=t=out:st=${Math.max(pStart, pEnd - 0.35).toFixed(2)}:d=0.35:alpha=1[pf]`,
-          `[base1][pf]overlay=0:0:format=rgb[base]`,
+          `[top1][pf]overlay=0:0:format=rgb[top]`,
         )
-      } else {
-        f.push(`[l]${right}hstack=inputs=2[base]`)
       }
       f.push(
-        `[2:v]format=rgba[lab]`,
-        `[base][lab]overlay=0:0:format=rgb[b2]`,
-        `[3:v]format=rgba,fade=t=in:st=${capIn}:d=0.4:alpha=1,fade=t=out:st=${capOut.toFixed(2)}:d=0.4:alpha=1[cap]`,
-        `[b2][cap]overlay=0:0:format=rgb,${TO_BT709}[v]`,
+        `[l]${right}hstack=inputs=2,pad=${W}:${H}:0:0:color=0x16223a[${tail.length ? 'top0' : 'top'}]`,
+        ...tail,
+        `[2:v]format=rgba[band]`,
+        `[top][band]overlay=0:0:format=rgb[b2]`,
+        // The caption settles in as the scene fades in, then stays: it has the band to itself.
+        `[3:v]format=rgba,fade=t=in:st=0.25:d=0.45:alpha=1[cap]`,
+        `[b2][cap]overlay=0:0:format=rgb[full]`,
       )
+      const cuts = effectiveCuts(scene).map((c) => ({
+        start: (c.start - scene.start!) / 1000,
+        end: (c.end - scene.start!) / 1000,
+      }))
+      const cut = cutFilters('[full]', seconds, cuts, f)
+      f.push(`${cut.label}${TO_BT709}[v]`)
       args.push(
-        ...['-filter_complex', f.join(';'), '-map', '[v]', '-t', seconds.toFixed(3), '-r', String(FPS)],
+        ...['-filter_complex', f.join(';'), '-map', '[v]', '-t', cut.duration.toFixed(3), '-r', String(FPS)],
         ...['-c:v', 'libx264', '-preset', 'medium', '-crf', '12', '-pix_fmt', 'yuv420p', ...BT709_FLAGS],
         ...['-video_track_timescale', '15360'],
         file,
       )
-      log(`segment ${scene.id}: ${seconds.toFixed(2)} s from the recordings${scene.phone ? ' + phone' : ''}`)
+      log(
+        `segment ${scene.id}: ${seconds.toFixed(2)} s filmed → ${cut.duration.toFixed(2)} s` +
+          `${cuts.length ? ` (${cuts.length} cut${cuts.length > 1 ? 's' : ''})` : ''}${scene.phone ? ' + phone' : ''}`,
+      )
       await runAsync(args, `segment ${scene.id}`)
-      segments.push({ scene, file, duration: probe(file).duration || seconds })
+      segments.push({ scene, file, duration: probe(file).duration || cut.duration })
     }
   } finally {
     await browser.close()

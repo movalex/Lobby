@@ -27,8 +27,10 @@ import {
   view,
   viewport,
 } from './board.ts'
+import { DSF, PANE, PANE_CSS } from './cards.ts'
 import { Director, errText, SkipScene } from './director.ts'
 import { Actor, type Point, prepareContext, sleep } from './human.ts'
+import { type PageRecording, recordPage } from './recorder.ts'
 import type { NarrationScene, SceneWindow, Timeline, Track } from './timeline.ts'
 
 export interface RecordOptions {
@@ -41,8 +43,10 @@ export interface RecordOptions {
   log: (msg: string) => void
 }
 
-const DESK = { width: 960, height: 1080 }
+/** Each desktop window: PANE device pixels in the video, the UI drawn at DSF (cards.ts). */
+const DESK = PANE_CSS
 const PHONE = { width: 390, height: 844 }
+const PHONE_DSF = 2
 const PEOPLE = {
   alex: { handle: 'alex', name: 'Alex Rivera' },
   sam: { handle: 'sam', name: 'Sam Lee' },
@@ -59,9 +63,8 @@ const LOBBY_BOARDS: ReadonlyArray<{ template: string; title: string }> = [
 interface Recorded {
   context: BrowserContext
   page: Page
-  createdAt: number
+  rec: PageRecording
   id: Track['id']
-  size: { width: number; height: number }
 }
 
 export async function recordDemo(opts: RecordOptions): Promise<Timeline> {
@@ -78,25 +81,33 @@ export async function recordDemo(opts: RecordOptions): Promise<Timeline> {
   const open = async (
     id: Track['id'],
     size: { width: number; height: number },
+    scale: number,
     extra: BrowserContextOptions = {},
   ) => {
-    // The screencast behind recordVideo delivers CSS-pixel frames (a phone's too), so the video is the
-    // viewport's size.
-    const video = { ...size }
     const context = await browser.newContext({
       viewport: size,
-      recordVideo: { dir: videoDir, size: video },
+      deviceScaleFactor: scale,
       colorScheme: 'light',
       acceptDownloads: true,
       baseURL: webUrl,
       ...extra,
     })
     await prepareContext(context, { touch: id === 'phone' })
-    const createdAt = Date.now()
     const page = await context.newPage()
-    const r: Recorded = { context, page, createdAt, id, size: video }
+    await page.setContent('<body style="margin:0;background:#f5f6f8"></body>')
+    // Recorded at device pixels: the desktops at exactly PANE, the phone at its full resolution.
+    const rec = await recordPage(page, join(videoDir, `${id}.mp4`), {
+      width: Math.round(size.width * scale),
+      height: Math.round(size.height * scale),
+    })
+    const r: Recorded = { context, page, rec, id }
     recorded.push(r)
     return r
+  }
+  /** Ends a recording and closes its window. */
+  const close = async (r: Recorded) => {
+    await r.rec.stop().catch((e) => log(`recording ${r.id}: ${errText(e)}`))
+    await r.context.close().catch(() => {})
   }
 
   const snap = async (tag: string) => {
@@ -113,8 +124,9 @@ export async function recordDemo(opts: RecordOptions): Promise<Timeline> {
   }
 
   try {
-    const A = await open('alex', DESK)
-    const S = await open('sam', DESK)
+    const A = await open('alex', DESK, DSF)
+    const S = await open('sam', DESK, DSF)
+    if (A.rec.width !== PANE.w || A.rec.height !== PANE.h) throw new Error('desktop recording size mismatch')
     const alex = new Actor('Alex', A.page, { seed: 11, start: { x: 600, y: 520 } })
     const sam = new Actor('Sam', S.page, { seed: 23, start: { x: 420, y: 600 } })
 
@@ -608,10 +620,9 @@ export async function recordDemo(opts: RecordOptions): Promise<Timeline> {
           // The client lands on the brainstorm: Alex makes this the board's start view (main menu).
           await setStartView(A.page).catch((e) => log(`[08-guest] start view: ${errText(e)}`))
           link = await createGuestReviewLink(A.page)
-          const P = await open('phone', PHONE, {
+          const P = await open('phone', PHONE, PHONE_DSF, {
             isMobile: true,
             hasTouch: true,
-            deviceScaleFactor: 2,
             userAgent:
               'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Mobile Safari/537.36',
           })
@@ -623,7 +634,7 @@ export async function recordDemo(opts: RecordOptions): Promise<Timeline> {
         },
       },
     )
-    await phoneRef.rec?.context.close().catch(() => {})
+    if (phoneRef.rec) await close(phoneRef.rec)
     if (done('08-guest')) return await finish()
 
     // ---- 09 present mode, bringing everyone along ----
@@ -750,18 +761,20 @@ export async function recordDemo(opts: RecordOptions): Promise<Timeline> {
     throw e
   } finally {
     await snap('last')
-    for (const r of recorded) await r.context.close().catch(() => {})
+    for (const r of recorded) await close(r)
     await browser.close().catch(() => {})
   }
 
   async function finish(): Promise<Timeline> {
     await snap('end')
-    const tracks: Track[] = []
-    for (const r of recorded) await r.context.close().catch(() => {})
-    for (const r of recorded) {
-      const file = await r.page.video()?.path()
-      if (file) tracks.push({ id: r.id, file, createdAt: r.createdAt, ...r.size })
-    }
+    for (const r of recorded) await close(r)
+    const tracks: Track[] = recorded.map((r) => ({
+      id: r.id,
+      file: r.rec.file,
+      createdAt: r.rec.createdAt,
+      width: r.rec.width,
+      height: r.rec.height,
+    }))
     return { tracks, scenes: director.scenes as SceneWindow[], colors }
   }
 }

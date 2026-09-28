@@ -1,6 +1,7 @@
 // Scene bookkeeping for the recording: when each scene starts and ends (wall clock), how long it has to
-// run to fit its narration, and what happened (recorded / partial / skipped, with a note).
-import { minSceneSec, type NarrationScene, type SceneWindow } from './timeline.ts'
+// run to fit its narration, what inside it is cut (waits), and what happened (recorded / partial /
+// skipped, with a note).
+import { composedSec, minSceneSec, type NarrationScene, type SceneWindow } from './timeline.ts'
 
 /** Thrown inside a scene when the feature it shows is not in this build: the scene is left out. */
 export class SkipScene extends Error {}
@@ -35,8 +36,9 @@ export class Director {
 
   /**
    * Runs one recorded scene: `prepare` happens off camera (it is cut), then `act` is filmed. The scene
-   * runs at least as long as its narration needs; `act` may take longer. A SkipScene from either leaves
-   * the scene out; any other error keeps what was filmed and marks the scene partial.
+   * runs at least as long as its narration needs, counted in video time (cut waits do not count);
+   * `act` may take longer. A SkipScene from either leaves the scene out; any other error keeps what
+   * was filmed and marks the scene partial.
    */
   async scene(
     id: string,
@@ -57,7 +59,7 @@ export class Director {
     }
     const start = Date.now()
     win.start = start
-    const clock = new SceneClock(start)
+    const clock = new SceneClock(win)
     this.log(`[${id}] rolling`)
     try {
       await act(clock, win)
@@ -73,30 +75,48 @@ export class Director {
       win.note = `failed mid-scene: ${errText(e)}`
       this.log(`[${id}] PARTIAL: ${win.note}`)
     }
-    const left = start + minMs - Date.now()
+    const left = minMs - clock.elapsed
     if (left > 0) await new Promise((r) => setTimeout(r, left))
     win.end = Date.now()
-    if (!win.note) win.note = `${((win.end - start) / 1000).toFixed(1)} s filmed`
+    const shown = composedSec(win)
+    if (!win.note) win.note = `${shown.toFixed(1)} s in the video`
     this.log(
-      `[${id}] cut after ${((win.end - start) / 1000).toFixed(1)} s (min ${(minMs / 1000).toFixed(1)} s)`,
+      `[${id}] cut after ${((win.end - start) / 1000).toFixed(1)} s filmed, ${shown.toFixed(1)} s shown (min ${(minMs / 1000).toFixed(1)} s)`,
     )
     return win
   }
 }
 
-/** Time since the scene started, for pacing actions against the narration. */
+/** Time since the scene started as the video will show it, for pacing actions against the narration. */
 export class SceneClock {
-  readonly start: number
-  constructor(start: number) {
-    this.start = start
+  private readonly win: SceneWindow
+  constructor(win: SceneWindow) {
+    this.win = win
   }
+  get start(): number {
+    return this.win.start ?? Date.now()
+  }
+  /** Video time since the scene started (ms): wall time minus the cut waits. */
   get elapsed() {
-    return Date.now() - this.start
+    return composedSec(this.win) * 1000
   }
-  /** Waits until `ms` after the scene started (no-op if that is already past). */
+  /** Waits until `ms` of video time after the scene started (no-op if that is already past). */
   async at(ms: number) {
-    const left = this.start + ms - Date.now()
+    const left = ms - this.elapsed
     if (left > 0) await new Promise((r) => setTimeout(r, left))
+  }
+  /**
+   * Runs `fn` (a wait: a board loading, a file rendering) and cuts that stretch out of the video; the
+   * pieces either side are joined with a short dissolve.
+   */
+  async cut<T>(fn: () => Promise<T>): Promise<T> {
+    const start = Date.now()
+    try {
+      return await fn()
+    } finally {
+      const end = Date.now()
+      this.win.cuts = [...(this.win.cuts ?? []), { start, end }]
+    }
   }
 }
 

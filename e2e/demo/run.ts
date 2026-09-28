@@ -255,10 +255,10 @@ const result = await compose({
   outDir: OUT,
   repoRoot: REPO_ROOT,
   people: {
-    left: { name: 'Alex', color: timeline.colors?.alex ?? '#0e7c86' },
-    right: { name: 'Sam', color: timeline.colors?.sam ?? '#c8102e' },
+    left: { name: 'Alex Rivera', role: 'board owner', color: timeline.colors?.alex ?? '#0e7c86' },
+    right: { name: 'Sam Lee', role: 'teammate', color: timeline.colors?.sam ?? '#c8102e' },
   },
-  phoneLabel: 'Jordan, a client, on a phone',
+  phoneLabel: 'Jordan, a client, on their phone',
   log,
 })
 

@@ -42,6 +42,11 @@ export interface SceneWindow {
   end?: number
   /** When the phone is shown as an inset (epoch ms, inside the scene's window). */
   phone?: { start: number; end: number }
+  /**
+   * Waits inside the scene that are cut out of the video (epoch ms, inside the window, in order): a
+   * board loading, a PDF rendering. The composer joins the pieces around each with a short dissolve.
+   */
+  cuts?: Array<{ start: number; end: number }>
   /** Card scenes: how long the card runs, in seconds. */
   durationSec?: number
 }
@@ -54,11 +59,39 @@ export interface Timeline {
 }
 
 /** Seconds of picture every scene gets beyond its narration (the brief asks for about 1.5 s). */
-export const TAIL_SEC = 1.6
+export const TAIL_SEC = 1.5
 /** Cross-fade between scenes, in seconds. */
 export const FADE_SEC = 0.6
+/** The dissolve that hides a jump cut inside a scene, in seconds. */
+export const CUT_FADE_SEC = 0.24
+/** A cut shorter than this is not worth a jump: it stays in the video. */
+export const MIN_CUT_SEC = 0.6
 /** The narration starts this long after the scene's cut. */
 export const LEAD_SEC = 0.45
+
+/** The cuts of a scene the composer will make (long enough, inside the window, not overlapping). */
+export function effectiveCuts(w: SceneWindow): Array<{ start: number; end: number }> {
+  if (w.start === undefined || w.end === undefined) return []
+  const out: Array<{ start: number; end: number }> = []
+  let floor = w.start + 300
+  for (const c of [...(w.cuts ?? [])].sort((a, b) => a.start - b.start)) {
+    const start = Math.max(c.start, floor)
+    const end = Math.min(c.end, w.end - 300)
+    if ((end - start) / 1000 < MIN_CUT_SEC) continue
+    out.push({ start, end })
+    floor = end + 400
+  }
+  return out
+}
+
+/** How long a scene runs in the video (seconds): its window without its cuts and their dissolves. */
+export function composedSec(w: SceneWindow, now = Date.now()): number {
+  if (w.start === undefined) return 0
+  const end = w.end ?? now
+  let sec = (end - w.start) / 1000
+  for (const c of effectiveCuts({ ...w, end })) sec -= (c.end - c.start) / 1000 + CUT_FADE_SEC
+  return sec
+}
 
 /** The shortest a scene may run so its narration, the fade in and the tail all fit. */
 export const minSceneSec = (n: NarrationScene) => n.durationSec + LEAD_SEC + TAIL_SEC + FADE_SEC
