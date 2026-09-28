@@ -1,6 +1,8 @@
 // CSV export: board-ops `boardToCsv` (header id,type,text,frame,color,x,y; RFC 4180 quoting; formula
-// neutralization) for the whole board, or only the rows of a selection.
+// neutralization) plus a trailing `tags` column (wave 4 tags, PRS-13: tags/csv.ts), for the whole
+// board, or only the rows of a selection.
 import type { TLRecord } from 'tldraw'
+import { TAGS_CSV_COLUMN, tagsCsvCells } from '../tags/csv.ts'
 import { boardToCsv } from './board-ops.ts'
 
 export const CSV_MIME = 'text/csv;charset=utf-8'
@@ -35,11 +37,17 @@ function firstField(line: string): string {
  * filtered to those shapes. Records are CRLF-separated and the text ends with CRLF.
  */
 export function boardCsv(records: Iterable<TLRecord>, onlyIds?: ReadonlySet<string>): string {
-  const csv = boardToCsv(records)
-  if (!onlyIds) return csv
-  const lines = csv.split('\r\n')
-  const header = lines[0] ?? ''
-  const rows = lines.slice(1).filter((line) => line !== '' && onlyIds.has(firstField(line)))
+  const list = [...records]
+  const tagsOf = tagsCsvCells(list)
+  const lines = boardToCsv(list).split('\r\n')
+  const header = `${lines[0] ?? ''},${TAGS_CSV_COLUMN}`
+  const rows: string[] = []
+  for (const line of lines.slice(1)) {
+    if (line === '') continue
+    const id = firstField(line)
+    if (onlyIds && !onlyIds.has(id)) continue
+    rows.push(`${line},${tagsOf(id)}`)
+  }
   return `${[header, ...rows].join('\r\n')}\r\n`
 }
 

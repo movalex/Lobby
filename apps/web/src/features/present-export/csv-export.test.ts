@@ -16,7 +16,7 @@ const lines = (csv: string) => csv.split('\r\n')
 describe('boardCsv', () => {
   it('exports every shape with the contract header, quoting and formula neutralization', () => {
     const csv = boardCsv(records)
-    expect(lines(csv)[0]).toBe('id,type,text,frame,color,x,y')
+    expect(lines(csv)[0]).toBe('id,type,text,frame,color,x,y,tags')
     expect(csv.endsWith('\r\n')).toBe(true)
     expect(csv).toContain('shape:n1,note,"First line\nsecond line","Ideas, round 1",yellow,20,20')
     // A formula-looking note is prefixed with ' so spreadsheets show it as text.
@@ -28,7 +28,7 @@ describe('boardCsv', () => {
   it('keeps only the selected shapes (multi-line cells stay intact, frame names still resolve)', () => {
     const csv = boardCsv(records, new Set([sid('n1'), sid('t')]))
     const rows = lines(csv)
-    expect(rows[0]).toBe('id,type,text,frame,color,x,y')
+    expect(rows[0]).toBe('id,type,text,frame,color,x,y,tags')
     expect(csvRowCount(csv)).toBe(2)
     expect(csv).toContain('shape:n1,note,"First line\nsecond line","Ideas, round 1",yellow,20,20')
     expect(csv).toContain('shape:t,text,')
@@ -44,7 +44,7 @@ describe('boardCsv', () => {
   })
 
   it('returns just the header for an empty selection', () => {
-    expect(boardCsv(records, new Set())).toBe('id,type,text,frame,color,x,y\r\n')
+    expect(boardCsv(records, new Set())).toBe('id,type,text,frame,color,x,y,tags\r\n')
   })
 })
 

@@ -808,7 +808,7 @@ test.describe('PDF export', () => {
     expect(csv.name).toBe(`${title}.csv`)
     expect([...csv.bytes.subarray(0, 3)]).toEqual([0xef, 0xbb, 0xbf])
     const rows = parseCsv(csv.bytes.subarray(3).toString('utf8'))
-    expect(rows[0]).toEqual(['id', 'type', 'text', 'frame', 'color', 'x', 'y'])
+    expect(rows[0]).toEqual(['id', 'type', 'text', 'frame', 'color', 'x', 'y', 'tags'])
     expect(rows.find((r) => r[0] === N.plan)?.slice(1, 4)).toEqual(['note', 'Launch checklist', 'Plan'])
     const pdf = await downloadFrom(v.page, () => vDialog.getByTestId('export-pdf').click())
     expect(pdf.name).toBe(`${title}.pdf`)
@@ -856,7 +856,7 @@ test.describe('CSV export', () => {
       await expect(dialog).toHaveCount(0)
       expect([...file.bytes.subarray(0, 3)]).toEqual([0xef, 0xbb, 0xbf])
       const text = file.bytes.subarray(3).toString('utf8')
-      expect(text.startsWith('id,type,text,frame,color,x,y\r\n')).toBe(true)
+      expect(text.startsWith('id,type,text,frame,color,x,y,tags\r\n')).toBe(true)
       return { name: file.name, status, rows: parseCsv(text) }
     }
 
