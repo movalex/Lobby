@@ -58,7 +58,7 @@ export class JoinQueue {
     if (held) {
       held.messages.push(text)
       // A chunked connect is ready once its last chunk ("0_…") is in. Anything else in its place is a
-      // malformed stream: hand it to the room (its assembler rejects the session) instead of holding.
+      // malformed stream: hand it on (the socket's assembler, presence.ts, resets it) instead of holding.
       if (!held.ready && (text.startsWith('0_') || !CHUNK_RE.test(text))) this.markReady(key, held)
       return
     }

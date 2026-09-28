@@ -16,6 +16,7 @@ import { isAllowedOrigin, type SyncConfig } from './config.ts'
 import { createRequestHandler } from './http/router.ts'
 import { JoinQueue } from './join-queue.ts'
 import { canEditCanvas } from './permissions.ts'
+import { InboundFrames, presenceIdentity } from './presence.ts'
 import { BOARD_ID_RE, RoomRegistry } from './rooms.ts'
 import { createApiTouchClient, createTouchReporter, type TouchClient, type TouchReporter } from './touch.ts'
 
@@ -130,7 +131,7 @@ export function createSyncServer(config: SyncConfig, opts: SyncServerOptions = {
         // 4099 = terminal on the client (an HTTP 401 before the upgrade would retry forever)
         return ws.close(TLSyncErrorCloseEventCode, reason)
       }
-      const { uid, role, name, iat } = verdict.claims
+      const { uid, role, name, color, iat } = verdict.claims
       let room: ReturnType<RoomRegistry['getOrCreate']>
       try {
         room = registry.getOrCreate(boardId) // synchronous from here on
@@ -161,9 +162,20 @@ export function createSyncServer(config: SyncConfig, opts: SyncServerOptions = {
       access.admitted(boardId, sid, uid, iat)
       const isCurrent = () => liveSockets.get(liveKey) === ws
       const socketKey = ++socketSeq
+      // Presence says who the TICKET is, never who the client claims to be (presence.ts). This also
+      // reassembles chunked frames, so the room only ever receives whole, bound messages.
+      const inbound = new InboundFrames(presenceIdentity({ uid, name, color }))
+      let refused = false // nothing more from a socket caught forging, while its close goes out
       // Checked again at delivery: the socket may have been replaced while its frames were queued.
-      const deliver = (text: string) => {
-        if (isCurrent()) room.handleSocketMessage(sid, text)
+      const deliver = (frame: string) => {
+        if (!isCurrent() || refused) return
+        const r = inbound.accept(frame)
+        if (r.kind === 'deliver') room.handleSocketMessage(sid, r.text)
+        else if (r.kind === 'forged') {
+          refused = true
+          log(`[presence] refused a presence claiming another user on board ${boardId}`)
+          room.closeSession(sid, TLSyncErrorCloseEventReason.INVALID_RECORD)
+        } else if (r.kind === 'malformed') room.handleSocketError(sid) // what the room's assembler does
       }
       let tokens = 400
       let last = Date.now()

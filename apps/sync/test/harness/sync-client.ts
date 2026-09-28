@@ -100,6 +100,15 @@ export interface SyncClientOptions {
   name?: string
 }
 
+/**
+ * ClientWebSocketAdapter's framing for large messages (sync-core chunk.ts, @internal there): each
+ * frame is "<frames still to come>_<slice>", so the last one starts with "0_".
+ */
+export function chunkFrames(text: string, size: number): string[] {
+  const n = Math.ceil(text.length / size)
+  return Array.from({ length: n }, (_, i) => `${n - 1 - i}_${text.slice(i * size, (i + 1) * size)}`)
+}
+
 // Raw pushes use a clock range TLSyncClient never reaches, so their results can be filtered out
 // before TLSyncClient sees a push_result it did not send (it would reset the connection).
 const RAW_CLOCK_BASE = 1_000_000_000
@@ -280,6 +289,21 @@ export class NodeSyncClient {
     const clientClock = ++this.rawClock
     this.rawClocks.add(clientClock)
     this.transmit(JSON.stringify({ type: 'push', clientClock, diff }), true)
+    return clientClock
+  }
+
+  /**
+   * Sends a presence op (and optionally a document diff) in a push that bypasses TLSyncClient: what a
+   * forged client can put on the wire. `chunkSize` splits the frame the way ClientWebSocketAdapter
+   * chunks large messages ("<remaining>_<payload>").
+   */
+  sendRawPresence(presence: unknown, opts: { diff?: NetworkDiff; chunkSize?: number } = {}): number {
+    const clientClock = ++this.rawClock
+    this.rawClocks.add(clientClock)
+    const text = JSON.stringify({ type: 'push', clientClock, diff: opts.diff, presence })
+    const frames = opts.chunkSize ? chunkFrames(text, opts.chunkSize) : [text]
+    // one push, however many frames: only the last one waits for a push_result
+    for (const [i, f] of frames.entries()) this.transmit(f, i === frames.length - 1)
     return clientClock
   }
 
