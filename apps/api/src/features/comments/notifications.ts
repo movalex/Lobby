@@ -24,6 +24,12 @@ const SNIPPET_MAX = 140
  */
 export const NEW_COMMENT_UNREAD_CAP = 5
 export const NEW_COMMENT_CAP_WINDOW_MS = 60 * 60_000
+/**
+ * The board as a whole: at most this many unread 'new_comment' items per recipient, whoever wrote them
+ * and however old. A name-only guest costs nothing but a name (a link lets in up to GUESTS_PER_LINK),
+ * so a per-author cap alone multiplies by the guests one person can create (link-caps.ts).
+ */
+export const NEW_COMMENT_BOARD_CAP = 20
 
 export interface NewNotification {
   userId: string
@@ -44,8 +50,11 @@ export async function boardOwners(q: Queryable, boardId: string): Promise<string
 
 /**
  * Drops the 'new_comment' recipients who already hold NEW_COMMENT_UNREAD_CAP unread ones from this
- * author on this board (within the window), so a guest opening thread after thread cannot flood an
- * owner's bell. Mentions and replies are not capped here (the per-person write budget bounds them).
+ * author on this board (within the window), or NEW_COMMENT_BOARD_CAP from anyone on this board, so
+ * neither a guest opening thread after thread nor a crowd of guests from one link can flood an owner's
+ * bell. Only items the owner can still see count: one whose comment was deleted is hidden from the
+ * bell (and so can never be read), so it must not hold a slot. Mentions and replies are not capped
+ * here (the per-person write budget bounds them).
  */
 export async function withinNewCommentCap(
   q: Queryable,
@@ -54,20 +63,21 @@ export async function withinNewCommentCap(
 ): Promise<NewNotification[]> {
   const asked = recipients.filter((r) => r.kind === 'new_comment').map((r) => r.userId)
   if (asked.length === 0) return [...recipients]
-  const rows = await q.query<{ user_id: string }>(
-    `SELECT user_id FROM notifications
-      WHERE board_id = $1 AND actor_id = $2 AND kind = 'new_comment' AND read_at IS NULL
-        AND created_at > $3 AND user_id IN (SELECT jsonb_array_elements_text($4::jsonb))
-      GROUP BY user_id HAVING count(*) >= $5`,
-    [
-      base.boardId,
-      base.actorId,
-      new Date(base.at.getTime() - NEW_COMMENT_CAP_WINDOW_MS),
-      idList(asked),
-      NEW_COMMENT_UNREAD_CAP,
-    ],
+  const rows = await q.query<{ user_id: string; mine: number; board: number }>(
+    `SELECT n.user_id,
+            count(*) FILTER (WHERE n.actor_id = $2 AND n.created_at > $3)::int AS mine,
+            count(*)::int AS board
+       FROM notifications n JOIN comments c ON c.id = n.comment_id AND c.deleted_at IS NULL
+      WHERE n.board_id = $1 AND n.kind = 'new_comment' AND n.read_at IS NULL
+        AND n.user_id IN (SELECT jsonb_array_elements_text($4::jsonb))
+      GROUP BY n.user_id`,
+    [base.boardId, base.actorId, new Date(base.at.getTime() - NEW_COMMENT_CAP_WINDOW_MS), idList(asked)],
   )
-  const full = new Set(rows.rows.map((r) => r.user_id))
+  const full = new Set(
+    rows.rows
+      .filter((r) => r.mine >= NEW_COMMENT_UNREAD_CAP || r.board >= NEW_COMMENT_BOARD_CAP)
+      .map((r) => r.user_id),
+  )
   return recipients.filter((r) => r.kind !== 'new_comment' || !full.has(r.userId))
 }
 

@@ -3,7 +3,7 @@
 // Threads anchored to a board point, a shape or a file card; replies; edit/delete own comments (board
 // owners may delete any, softly); resolve/reopen; per-person read marks; @mentions that notify only
 // people who can view the board; in-app notifications (no email), including a new thread for the
-// board's owners (DANA-02, capped per author). Every route decides access with
+// board's owners (DANA-02, capped per author and per board). Every route decides access with
 // requireBoardAction ('comment' to write, 'view' to read); authorship always comes from the session.
 // Board events are published after the transaction commits.
 
@@ -210,7 +210,7 @@ export async function registerComments(app: FastifyInstance, ctx: FeatureContext
       await insertMentions(tx, board.workspace_id, commentId, mentioned)
       await markRead(tx, { id: threadId, workspace_id: board.workspace_id }, user.id, at)
       // DANA-02: the board's owners hear about every new thread (a client's first comment included),
-      // capped per author so a guest cannot flood their bell.
+      // capped per author and per board so neither a guest nor a crowd of guests can flood their bell.
       const recipients = await recipientsFor(
         tx,
         board,
