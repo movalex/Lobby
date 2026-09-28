@@ -27,6 +27,12 @@ export interface SyncInternalClient {
    * (the collector validates it, and treats anything else as an unreadable board).
    */
   assetRefs?(boardId: string): Promise<unknown>
+  /**
+   * Search (GET /internal/boards/:bid/text): the board's searchable text, or `{ unchanged: true }`
+   * when its document clock is still `since`. Optional like placeNotes; the answer is unchecked JSON
+   * (features/search validates it).
+   */
+  boardText?(boardId: string, opts?: { since?: number; maxBytes?: number }): Promise<unknown>
 }
 
 export class SyncSeedConflict extends Error {
@@ -86,6 +92,15 @@ export function createHttpSyncInternalClient(opts: {
     async assetRefs(boardId) {
       const res = await call(`/internal/boards/${encodeURIComponent(boardId)}/asset-refs`)
       if (!res.ok) throw new SyncUnavailable(`asset-refs failed with ${res.status}`)
+      return (await res.json()) as unknown
+    },
+    async boardText(boardId, opts = {}) {
+      const params = new URLSearchParams()
+      if (opts.since !== undefined) params.set('since', String(opts.since))
+      if (opts.maxBytes !== undefined) params.set('maxBytes', String(opts.maxBytes))
+      const qs = params.size ? `?${params}` : ''
+      const res = await call(`/internal/boards/${encodeURIComponent(boardId)}/text${qs}`)
+      if (!res.ok) throw new SyncUnavailable(`board text failed with ${res.status}`)
       return (await res.json()) as unknown
     },
   }

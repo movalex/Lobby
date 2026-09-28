@@ -2,6 +2,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { checkInternalSecret, INTERNAL_SECRET_HEADER } from '@draftroom/auth-tickets'
 import { type BackupService, handleBackupStatus } from '../backup/service.ts'
 import { handleAssetRefs } from './asset-refs.ts'
+import { handleBoardText } from './board-text.ts'
 import {
   handleAccessChanged,
   handleListDeleted,
@@ -67,6 +68,12 @@ const INTERNAL_ROUTES: Array<{ re: RegExp; methods: string[]; handle: Handler }>
     re: /^\/internal\/boards\/([^/]+)\/place-notes$/,
     methods: ['POST'],
     handle: (req, res, deps, [board = '']) => handlePlaceNotes(req, res, deps, board),
+  },
+  // Search across boards: a board's searchable text for the API's index (search; board-text.ts)
+  {
+    re: /^\/internal\/boards\/([^/]+)\/text$/,
+    methods: ['GET'],
+    handle: (req, res, deps, [board = '']) => handleBoardText(req, res, deps, board),
   },
 ]
 
