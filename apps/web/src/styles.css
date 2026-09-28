@@ -67,6 +67,7 @@
 :root[data-theme="dark"] {
   /* the brand mark's L turns paper on dark surfaces; its node stays DBC orange */
   --dr-mark-ink: #f6f4ee;
+  --dr-mark-ink-on-dark: #f6f4ee;
   --dr-navy: #3d6cb1;
   --dr-navy-hover: #4575bb;
   --dr-on-navy: #ffffff;
