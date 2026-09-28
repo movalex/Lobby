@@ -134,6 +134,10 @@ services:
           property: connectionString # internal (private network) URL
       - key: DRAFTROOM_BLOB_STORE
         value: r2
+      # Per-workspace file storage (sum of stored originals; docs/SECURITY-REVIEW-2026-09-27.md FC-1).
+      # 100 GB in R2 is about $1.50/month when full (the code default is 2 GB).
+      - key: DRAFTROOM_WORKSPACE_QUOTA_MB
+        value: "102400"
       # Cloudflare R2 (docs/DEPLOY.md "Cloudflare R2"). Prompted once, at Blueprint creation; later
       # Blueprint syncs ignore sync:false values (change them in the Dashboard). Only the api holds
       # these: workers get short-lived presigned URLs, the browser never talks to R2.
