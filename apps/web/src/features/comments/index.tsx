@@ -102,10 +102,20 @@ function mount(ctx: FeatureContext): () => void {
   // objects as they do in tldraw's select tool (which only does so once something is selected; here
   // the first Tab selects the first object), so "C, Tab…, Enter" comments on an object without a
   // mouse. (C while a lone sticky note is selected types into it: canvas-ux's type-to-edit.)
+  // A11Y2-04: Ctrl/Cmd+Shift+↓ goes inside the selected frame and Ctrl/Cmd+Shift+↑ back out, as in the
+  // select tool, so a note inside a frame can be reached (Tab then walks that frame's objects).
   const container = editor.getContainer()
   const onTab = (e: KeyboardEvent) => {
-    if (e.key !== 'Tab' || e.altKey || e.ctrlKey || e.metaKey || e.isComposing) return
-    if (editor.getCurrentToolId() !== COMMENT_TOOL_ID || e.target !== container) return
+    if (editor.getCurrentToolId() !== COMMENT_TOOL_ID || e.target !== container || e.isComposing) return
+    const level = (e.ctrlKey || e.metaKey) && e.shiftKey && !e.altKey
+    if (level && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
+      e.preventDefault()
+      editor.markEventAsHandled(e)
+      if (e.key === 'ArrowDown') editor.selectFirstChildShape()
+      else editor.selectParentShape()
+      return
+    }
+    if (e.key !== 'Tab' || e.altKey || e.ctrlKey || e.metaKey) return
     if (editor.getCurrentPageShapeIds().size === 0) return
     e.preventDefault()
     editor.markEventAsHandled(e)

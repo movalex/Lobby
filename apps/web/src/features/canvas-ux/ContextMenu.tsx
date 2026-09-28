@@ -2,6 +2,8 @@
 //  - MAK-18 "Arrange as grid" while two or more movable shapes are selected (editable boards);
 //  - MAK-17 "Select all on this page › Notes (n) / Images (n) / Text (n) / Connectors (n) / …" and, for a
 //    selection that holds more than one type (inside its frames and groups too), "Keep only › …";
+//  - A11Y2-04 "Comment" on the selection (comments/ContextMenuItem.tsx), the keyboard path to comment on
+//    a note inside a frame: select it, Shift+F10, Comment;
 //  - PRE-08 "Set this frame as start view" with exactly one frame selected (editable boards);
 //  - MAK-05 "Unlock all" while the page has locked shapes on an editable board. tldraw's canvas context
 //    menu has no Unlock all (only the main menu's Edit submenu does), and a locked shape cannot be
@@ -23,6 +25,7 @@ import {
   useValue,
 } from 'tldraw'
 import { AiContextMenuGroup } from '../ai/menus.tsx'
+import { CommentContextMenuGroup } from '../comments/ContextMenuItem.tsx'
 import { MindmapContextMenuGroup } from '../mindmap/ContextMenuGroup.tsx'
 import { TagsContextMenuGroup } from '../tags/ContextMenu.tsx'
 import { canArrangeAsGrid } from './arrange-grid-runtime.ts'
@@ -116,6 +119,7 @@ export const DraftroomContextMenu = memo(function DraftroomContextMenu(props: TL
       <MindmapContextMenuGroup />
       <ArrangeGroup />
       <TagsContextMenuGroup />
+      <CommentContextMenuGroup />
       {exportAllowed ? <DefaultContextMenuContent /> : <ExportOffContextMenuContent />}
       <SelectByTypeGroup />
       <UnlockAllGroup />

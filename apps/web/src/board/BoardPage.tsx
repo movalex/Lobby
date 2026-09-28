@@ -31,6 +31,7 @@ import { api, isApiError, isNoAccess } from '../api/client.ts'
 import { createAssetStore } from '../assets/asset-store.ts'
 import { AssetMetaStore } from '../assets/meta-store.ts'
 import { useMe, useSession } from '../auth/session.tsx'
+import { keyboardScopeOverrides } from '../features/canvas-ux/keyboard-scope.ts'
 import { type BoardEvents, createBoardEvents } from '../features/events.ts'
 import {
   FeatureDock,
@@ -135,6 +136,9 @@ const overrides: TLUiOverrides = {
 
 // Feature slots merged once at module level: <Tldraw> must get referentially stable props.
 const featureProps = mergeFeatureProps(BOARD_FEATURES, { overrides, components })
+// A11Y2-02: last, so it gates the keys every feature (and tldraw) binds: board shortcuts act only while
+// the board has the keyboard, never from the top bar, the dock or a dialog.
+const boardOverrides = [...featureProps.overrides, keyboardScopeOverrides]
 
 declare global {
   interface Window {
@@ -709,7 +713,7 @@ const BoardCanvas = memo(function BoardCanvas({
       shapeUtils={customShapeUtils}
       assetUrls={assetUrls}
       components={featureProps.components}
-      overrides={featureProps.overrides}
+      overrides={boardOverrides}
       options={featureProps.options}
       // Collapsed mind-map branches (an editor constructor option, not in TldrawOptions).
       getShapeVisibility={mindmapShapeVisibility}
