@@ -239,8 +239,9 @@ test('a workshop guest under "editors": limited like a viewer, no Recently delet
     await expect(main).not.toContainText('Ask its owner')
     await expect(main).not.toContainText('request access')
     await expect(g.getByTestId('access-request-form')).toHaveCount(0)
+    // DANA2-07: the same message as the guest-ended screen that follows.
     if (await g.getByTestId('guest-no-access').isVisible())
-      await expect(main).toContainText('Your guest access to this board has ended')
+      await expect(main).toContainText('Your guest access has ended')
     await testInfo.attach('guest-revoked-dark.png', { body: await g.screenshot(), contentType: 'image/png' })
     await expect(g.getByTestId('guest-ended')).toBeVisible({ timeout: 15_000 })
     await expect(g.getByTestId('guest-ended')).toContainText('Your guest access has ended')

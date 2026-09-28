@@ -6,15 +6,20 @@
 // than the sync server's snapshot read. It is skipped when the board equals its newest checkpoint.
 
 import type { FastifyInstance } from 'fastify'
+import type { CheckpointAbout } from './checkpoints.ts'
 import { checkpointServices } from './index.ts'
 
 export type BeforeChangeReason = 'before_reveal' | 'before_ai_themes'
 
-/** Saves an automatic checkpoint of `boardId` now (history must be registered on `app`; else a no-op). */
+/**
+ * Saves an automatic checkpoint of `boardId` now (history must be registered on `app`; else a no-op).
+ * `about` goes into its name (R2-09): the brainstorm's prompt, or how many notes AI grouped and where.
+ */
 export async function checkpointBeforeChange(
   app: FastifyInstance,
   boardId: string,
   reason: BeforeChangeReason,
+  about: Pick<CheckpointAbout, 'prompt' | 'notes' | 'frame'> = {},
 ): Promise<void> {
-  await checkpointServices.get(app)?.captureQuietly(boardId, reason)
+  await checkpointServices.get(app)?.captureQuietly(boardId, reason, about)
 }

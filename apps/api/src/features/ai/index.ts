@@ -332,7 +332,12 @@ export async function registerAi(app: FastifyInstance, ctx: FeatureContext): Pro
       'ai call',
     )
     if (!plan) throw failure
-    if (plan.action === 'themes') await checkpointBeforeChange(app, access.board.id, 'before_ai_themes') // R10
+    // R10; R2-09: the checkpoint's name says how many notes, and in which frame when there is one.
+    if (plan.action === 'themes')
+      await checkpointBeforeChange(app, access.board.id, 'before_ai_themes', {
+        notes: sources.items.filter((i) => i.kind === 'note').length,
+        frame: sources.frames.length === 1 ? sources.frames[0] : undefined,
+      })
     return { ...plan, truncated: sources.truncated, budget: await budgetFor(access) } as AiResult
   }
 }

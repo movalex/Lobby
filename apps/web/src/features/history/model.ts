@@ -10,6 +10,7 @@ import {
   canCreateInWorkspace,
   type WorkspaceRole,
 } from '../../lib/permissions.ts'
+import { timeOfDay } from '../sharing/model.ts'
 
 const TYPE_LABELS: Record<string, string> = {
   note: 'Sticky note',
@@ -47,11 +48,12 @@ export function deletedDetail(entry: Pick<DeletedShapeEntry, 'type' | 'childCoun
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 
-/** A useful default checkpoint name, e.g. "Checkpoint Sep 27, 14:05". */
-export function defaultCheckpointName(now: Date = new Date()): string {
-  const hh = String(now.getHours()).padStart(2, '0')
-  const mm = String(now.getMinutes()).padStart(2, '0')
-  return `Checkpoint ${MONTHS[now.getMonth()]} ${now.getDate()}, ${hh}:${mm}`
+/**
+ * A useful default checkpoint name, e.g. "Checkpoint Sep 27, 2:05 PM" (R2-08: the time in the
+ * browser's locale and hour cycle, like every other time on the board).
+ */
+export function defaultCheckpointName(now: Date = new Date(), locale?: string): string {
+  return `Checkpoint ${MONTHS[now.getMonth()]} ${now.getDate()}, ${timeOfDay(now, locale)}`
 }
 
 /** What the name field submits: the typed name trimmed and capped, or the default. */

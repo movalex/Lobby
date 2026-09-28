@@ -16,6 +16,7 @@ import {
   canCreateInWorkspace,
   type WorkspaceRole,
 } from '../../lib/permissions.ts'
+import { timeOfDay } from '../sharing/model.ts'
 
 /** Manual checkpoints first in the panel; automatic ones (and legacy pre_restore) under their own disclosure. */
 export function splitCheckpoints(list: readonly BoardCheckpoint[]) {
@@ -34,21 +35,32 @@ const REASON_LABELS: Record<CheckpointReason, string> = {
   before_ai_themes: 'Before AI grouped notes into themes',
 }
 
+/** Automatic checkpoints whose server-given name says more than the reason's label. */
+const NAMED_BY_SERVER: ReadonlySet<CheckpointReason> = new Set([
+  'before_restore',
+  'before_reveal',
+  'before_ai_themes',
+])
+
 /** The row title: a manual checkpoint's own name; an automatic one's name says why it was made. */
 export function checkpointTitle(c: Pick<BoardCheckpoint, 'kind' | 'name' | 'reason'>): string {
   if (c.kind === 'manual') return c.name
-  // The server names before_restore ones after the checkpoint that was restored.
-  if (c.reason === 'before_restore' && c.name.trim()) return c.name
+  // The server names these after what they were made before (R2-09): the checkpoint that was restored,
+  // the brainstorm's prompt, or the notes AI grouped. Its name starts with the reason's own words.
+  if (c.reason && NAMED_BY_SERVER.has(c.reason) && c.name.trim()) return c.name
   return c.reason ? REASON_LABELS[c.reason] : c.name || 'Automatic checkpoint'
 }
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 
-/** "14:05" today, "Sep 27, 14:05" this year, "Sep 27, 2025, 14:05" before (local time). */
-export function checkpointTime(iso: string, now: Date = new Date()): string {
+/**
+ * "Today 2:05 PM", "Sep 27, 2:05 PM" this year, "Sep 27, 2025, 2:05 PM" before (local time). R2-08: the
+ * time of day in the browser's locale and hour cycle ("14:05" in en-GB), as the link badge shows it.
+ */
+export function checkpointTime(iso: string, now: Date = new Date(), locale?: string): string {
   const d = new Date(iso)
   if (!Number.isFinite(d.getTime())) return ''
-  const hm = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+  const hm = timeOfDay(d, locale)
   const sameDay =
     d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate()
   if (sameDay) return `Today ${hm}`

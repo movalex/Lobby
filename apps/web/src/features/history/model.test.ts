@@ -35,8 +35,10 @@ describe('labels', () => {
 
 describe('checkpoint names', () => {
   it('defaults to a dated name and caps typed names at 120 characters', () => {
-    expect(defaultCheckpointName(at)).toBe('Checkpoint Sep 27, 09:05')
-    expect(checkpointNameToSave('   ', at)).toBe('Checkpoint Sep 27, 09:05')
+    // R2-08: the time in the browser's locale and hour cycle.
+    expect(defaultCheckpointName(at, 'en-GB')).toBe('Checkpoint Sep 27, 09:05')
+    expect(defaultCheckpointName(at, 'en-US')).toBe('Checkpoint Sep 27, 9:05 AM')
+    expect(checkpointNameToSave('   ', at)).toBe(defaultCheckpointName(at))
     expect(checkpointNameToSave('  Before   review ', at)).toBe('Before review')
     expect(checkpointNameToSave('x'.repeat(200), at)).toHaveLength(120)
   })

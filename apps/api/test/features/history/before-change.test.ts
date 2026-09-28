@@ -6,6 +6,7 @@
 import { note as boardNote } from '@draftroom/board-ops/test-fixtures'
 import type { PrivateBrainstormState } from '@draftroom/contracts'
 import { afterEach, describe, expect, it } from 'vitest'
+import { autoCheckpointName } from '../../../src/features/history/checkpoints.ts'
 import { planRetention } from '../../../src/features/history/retention.ts'
 import type { Client } from '../../helpers.ts'
 import { brainstormShapes, FRAME } from '../ai/fixtures.ts'
@@ -89,7 +90,8 @@ describe('before a private brainstorm reveal', () => {
     expect(before).toMatchObject({
       kind: 'auto',
       reason: 'before_reveal',
-      name: 'Before revealing private notes',
+      // R2-09: named after the prompt, so two reveals can be told apart.
+      name: 'Before revealing private notes: “What slowed us down?”',
     })
     const held = await contentOf(w.owner, before?.id ?? '')
     expect(held).toContain('shape:already-there')
@@ -138,7 +140,8 @@ describe('before AI "Group into themes"', () => {
     expect(listed[0]).toMatchObject({
       kind: 'auto',
       reason: 'before_ai_themes',
-      name: 'Before AI grouped notes into themes',
+      // R2-09: how many notes, and the frame they are in.
+      name: 'Before AI grouped 6 notes in Brainstorm',
     })
     expect(await contentOf(w.alice, listed[0]?.id ?? '')).toContain(FRAME)
 
@@ -178,5 +181,27 @@ describe('retention', () => {
       now,
     )
     expect(plan.remove).toEqual([])
+  })
+})
+
+describe('automatic checkpoint names (R2-09)', () => {
+  it('say which prompt or which notes, on one line, within the 120 characters a name may have', () => {
+    expect(autoCheckpointName('before_reveal', { prompt: 'What went well?' })).toBe(
+      'Before revealing private notes: “What went well?”',
+    )
+    expect(autoCheckpointName('before_reveal')).toBe('Before revealing private notes')
+    const long = autoCheckpointName('before_reveal', { prompt: `What ${'really '.repeat(40)}\nhappened?` })
+    expect([...long].length).toBeLessThanOrEqual(120)
+    expect(long).toMatch(/…”$/)
+    expect(long).not.toContain('\n')
+    expect(autoCheckpointName('before_ai_themes', { notes: 16, frame: '3 · What to improve' })).toBe(
+      'Before AI grouped 16 notes in 3 · What to improve',
+    )
+    expect(autoCheckpointName('before_ai_themes', { notes: 1 })).toBe('Before AI grouped 1 note into themes')
+    expect(autoCheckpointName('before_ai_themes')).toBe('Before AI grouped notes into themes')
+    expect(
+      [...autoCheckpointName('before_ai_themes', { notes: 999, frame: 'F'.repeat(300) })].length,
+    ).toBeLessThanOrEqual(120)
+    expect(autoCheckpointName('before_restore', { restoredName: 'Draft' })).toBe('Before restoring “Draft”')
   })
 })

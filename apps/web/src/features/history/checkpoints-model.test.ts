@@ -1,5 +1,6 @@
 import type { BoardCheckpoint } from '@draftroom/contracts'
 import { describe, expect, it } from 'vitest'
+import { shortTime, timeOfDay } from '../sharing/model.ts'
 import {
   AUTOMATIC_EXPLAINED,
   AUTOMATIC_NONE_YET,
@@ -57,18 +58,34 @@ describe('the checkpoint list', () => {
       'Before restoring “Draft”',
     )
     expect(checkpointTitle(auto('before_restore', ' '))).toBe('Before a restore')
-    // R10: saved by Lobby right before a reveal and before AI regroups notes.
-    expect(checkpointTitle(auto('before_reveal'))).toBe('Before revealing private notes')
-    expect(checkpointTitle(auto('before_ai_themes'))).toBe('Before AI grouped notes into themes')
+    // R10: saved by Lobby right before a reveal and before AI regroups notes. R2-09: the server's name
+    // says which prompt or which notes, so two of them can be told apart.
+    expect(checkpointTitle(auto('before_reveal', 'Before revealing private notes: “What went well?”'))).toBe(
+      'Before revealing private notes: “What went well?”',
+    )
+    expect(
+      checkpointTitle(auto('before_ai_themes', 'Before AI grouped 16 notes in 3 · What to improve')),
+    ).toBe('Before AI grouped 16 notes in 3 · What to improve')
+    expect(checkpointTitle(auto('before_reveal', ' '))).toBe('Before revealing private notes')
+    expect(checkpointTitle(auto('before_ai_themes', ''))).toBe('Before AI grouped notes into themes')
     expect(deletedCheckpointSummary(auto('hourly'))).toBe('Deleted “Hourly checkpoint”.')
   })
 
   it('says who saved it (Lobby for automatic ones), how long ago and the exact time', () => {
-    expect(checkpointMeta(base, now)).toBe('saved by Ada · 55 min ago · Today 14:05')
-    expect(checkpointMeta(auto('hourly'), now)).toBe('saved by Lobby · 55 min ago · Today 14:05')
-    expect(checkpointMeta({ ...base, createdBy: null }, now)).toBe('55 min ago · Today 14:05')
-    expect(checkpointTime(new Date(2026, 8, 20, 9, 7).toISOString(), now)).toBe('Sep 20, 09:07')
-    expect(checkpointTime(new Date(2025, 11, 31, 23, 59).toISOString(), now)).toBe('Dec 31, 2025, 23:59')
+    // R2-08: the time of day in the browser's locale and hour cycle, as the link badge shows it.
+    const t = timeOfDay(new Date(2026, 8, 27, 14, 5))
+    expect(checkpointMeta(base, now)).toBe(`saved by Ada · 55 min ago · Today ${t}`)
+    expect(checkpointMeta(auto('hourly'), now)).toBe(`saved by Lobby · 55 min ago · Today ${t}`)
+    expect(checkpointMeta({ ...base, createdBy: null }, now)).toBe(`55 min ago · Today ${t}`)
+    expect(checkpointTime(base.createdAt, now, 'en-US')).toBe('Today 2:05 PM')
+    expect(checkpointTime(base.createdAt, now, 'en-GB')).toBe('Today 14:05')
+    expect(checkpointTime(new Date(2026, 8, 20, 9, 7).toISOString(), now, 'en-GB')).toBe('Sep 20, 09:07')
+    expect(checkpointTime(new Date(2026, 8, 20, 9, 7).toISOString(), now, 'en-US')).toBe('Sep 20, 9:07 AM')
+    expect(checkpointTime(new Date(2025, 11, 31, 23, 59).toISOString(), now, 'en-GB')).toBe(
+      'Dec 31, 2025, 23:59',
+    )
+    // The same formatter as the sharing badge's "until 3:40 PM": one screen, one format.
+    expect(checkpointTime(base.createdAt, now)).toBe(`Today ${shortTime(base.createdAt, now)}`)
     expect(checkpointTime('nonsense', now)).toBe('')
   })
 

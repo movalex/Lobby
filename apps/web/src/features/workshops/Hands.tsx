@@ -6,7 +6,7 @@
 
 import { HAND_AUTO_LOWER_MS, type RaisedHand } from '@draftroom/contracts'
 import { type Ref, useEffect, useRef, useState } from 'react'
-import { splitGuestMarker } from '../../invite/model.ts'
+import { ownName, ownNameParts, splitGuestMarker } from '../../invite/model.ts'
 import type { FeatureContext } from '../types.ts'
 import { handNotice, waitedFor } from './hand-notices.ts'
 import { useIsFacilitator, useNow } from './hooks.ts'
@@ -66,15 +66,17 @@ export function PersonName({
   className?: string
 }) {
   const [base, marker] = splitGuestMarker(name)
+  // F14: a guest's own name reads "Kai (guest, you)", not "Kai (guest) (you)".
+  const own = marker !== null && suffix === ' (you)'
   return (
     <span className={`dr-wk-person${className ? ` ${className}` : ''}`}>
       <span className="dr-wk-person__name">{base}</span>
       {marker && (
         <span className="dr-wk-person__keep" data-testid="guest-marker">
-          {marker}
+          {own ? ownNameParts(name)[1] : marker}
         </span>
       )}
-      {suffix && <span className="dr-wk-person__keep">{suffix}</span>}
+      {suffix && !own && <span className="dr-wk-person__keep">{suffix}</span>}
     </span>
   )
 }
@@ -172,7 +174,7 @@ export function HandsSection({
                 <span className="dr-wk-hands__pos" aria-hidden="true">
                   {i + 1}
                 </span>
-                <span className="dr-wk-hands__name" title={mine ? `${h.name} (you)` : h.name}>
+                <span className="dr-wk-hands__name" title={mine ? ownName(h.name) : h.name}>
                   <PersonName name={h.name} suffix={mine ? ' (you)' : undefined} />
                   <span className="dr-wk-hands__when">{waitedFor(h.raisedAt, now, offset)}</span>
                 </span>

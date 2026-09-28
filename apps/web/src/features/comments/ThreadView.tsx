@@ -4,6 +4,7 @@
 import type { CommentThread, ThreadComment } from '@draftroom/contracts'
 import { useState } from 'react'
 import { useValue } from 'tldraw'
+import { ownName } from '../../invite/model.ts'
 import { formatDateTime, formatRelativeTime } from '../../lib/format.ts'
 import { initialsFor, safeColor } from '../../lib/identity.ts'
 import { Composer } from './Composer.tsx'
@@ -71,7 +72,7 @@ function CommentItem({
       <div className="dr-ccomment__main">
         <div className="dr-ccomment__head">
           <span className="dr-ccomment__author">
-            {mine ? `${comment.author.name} (you)` : comment.author.name}
+            {mine ? ownName(comment.author.name) : comment.author.name}
           </span>
           <time
             className="dr-ccomment__time"

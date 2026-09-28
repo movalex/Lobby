@@ -42,14 +42,33 @@ const VIS_DESCRIPTION: Record<ShareState['visibility'], (ws: string) => string> 
   workspace_edit: (ws) => `Everyone in ${ws} can edit this board`,
 }
 
+/**
+ * R2-08: a time of day in the browser's locale and hour cycle ("3:40 PM" in en-US, "15:40" in en-GB).
+ * Every clock time Lobby shows next to another one (the link badge, History, votes) comes from here,
+ * so one screen never mixes 12- and 24-hour times.
+ */
+export function timeOfDay(d: Date, locale?: string): string {
+  // The locale's own short time, as formatDateTime (lib/format.ts) shows it next to a date.
+  return d.toLocaleTimeString(locale, { timeStyle: 'short' })
+}
+
 /** "3:40 PM" today, "Sep 28, 3:40 PM" otherwise (local time; workshop links last hours, not days). */
 export function shortTime(iso: string, now: Date = new Date()): string {
   const d = new Date(iso)
   if (!Number.isFinite(d.getTime())) return ''
-  const time = d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
+  const time = timeOfDay(d)
   const sameDay =
     d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate()
   return sameDay ? time : `${shortDate(iso, now)}, ${time}`
+}
+
+/**
+ * Whether this person gets the header sharing badge (R2-11 / F14). It describes the board's links, so
+ * only people who can edit (and may pass the board on) see it; viewers, commenters and name-only guests
+ * would read "Link: edit" as their own access.
+ */
+export function showsShareBadge(role: RequestableRole | 'owner', guest: boolean): boolean {
+  return !guest && (role === 'owner' || role === 'editor')
 }
 
 /**

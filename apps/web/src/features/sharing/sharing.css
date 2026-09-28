@@ -106,6 +106,16 @@
   margin-left: 2px;
 }
 
+/* R2-11: the retro path to an editable link, right under the client card. */
+.dr-share .dr-share__hint.dr-sharing__workshop-shortcut {
+  margin: 10px 2px 14px;
+  color: var(--dr-ink);
+  font-size: 13px;
+}
+.dr-sharing__workshop-shortcut .dr-linkbtn {
+  font-weight: 650;
+}
+
 /* F2-04: while exporting is off for this person, tldraw's image and video toolbars offer no
    "Download original" (the api refuses it anyway), and a toolbar left with nothing to offer is gone. */
 .tl-container[data-dr-export-off="true"]
@@ -297,6 +307,11 @@
 }
 
 /* ---- header badge (PRS-03) -------------------------------------------------------------------- */
+
+/* R2-11 / F14: viewers, commenters and guests get no badge; the "⋯" menu drops its empty "Sharing" row. */
+.dr-overflow__item[data-feature="sharing"]:not(:has(.dr-sharebadge)) {
+  display: none;
+}
 
 .dr-sharebadge {
   display: inline-flex;

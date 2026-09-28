@@ -3,10 +3,13 @@ import { describe, expect, it } from 'vitest'
 import { BOARD_ID, WS_ID } from '../api/test-fixtures.ts'
 import {
   fetchGoneDetails,
+  GUEST_ENDED_COPY,
   goneCopy,
   guestJoinError,
   guestJoinHint,
   invitationSummary,
+  ownName,
+  ownNameParts,
   rememberAcceptIntent,
   signInHeading,
   splitGuestMarker,
@@ -155,5 +158,23 @@ describe('joining as a guest (wave 3)', () => {
       'This link needs an account. Sign in to accept it.',
     )
     expect(guestJoinError('RATE_LIMITED', 'Wait a few minutes')).toBe('Wait a few minutes')
+  })
+})
+
+describe("someone's own name (F14)", () => {
+  it('a guest reads "(guest, you)", never "(guest) (you)"; an account "(you)"', () => {
+    expect(ownName('Dana Whitfield (guest)')).toBe('Dana Whitfield (guest, you)')
+    expect(ownName('Alice Park')).toBe('Alice Park (you)')
+    expect(ownNameParts('Kai (guest)')).toEqual(['Kai', ' (guest, you)'])
+    expect(ownNameParts('Alice')).toEqual(['Alice', ' (you)'])
+  })
+})
+
+describe('when guest access ends (DANA2-07)', () => {
+  it('one message: what happened and what to do, with no way on that needs an account', () => {
+    expect(GUEST_ENDED_COPY.title).toBe('Your guest access has ended')
+    expect(GUEST_ENDED_COPY.what).toMatch(/revoked or has expired/)
+    expect(GUEST_ENDED_COPY.next).toMatch(/ask whoever shared the link/)
+    expect(Object.values(GUEST_ENDED_COPY).join(' ')).not.toMatch(/your boards|request access/i)
   })
 })
