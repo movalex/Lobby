@@ -19,7 +19,6 @@ import { type ChildProcess, spawn, spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { request } from 'node:http'
 import { join, resolve } from 'node:path'
-import { pathToFileURL } from 'node:url'
 import { parseArgs } from 'node:util'
 import { loadNarration, type Timeline } from './timeline.ts'
 
@@ -122,6 +121,7 @@ async function startPreview(): Promise<ChildProcess> {
 }
 
 interface AiSetup {
+  /** Extra env for the api process only (StackOptions.apiEnv: the stack strips OPENAI_* otherwise). */
   env: Record<string, string>
   stop?: () => Promise<void>
   note: string
@@ -129,12 +129,12 @@ interface AiSetup {
 
 /**
  * The AI scene's provider. A real OPENAI_API_KEY in this process's environment goes to the api (only
- * the api), with OPENAI_MODEL. Otherwise the repo's fake OpenAI server is used when the ai-assist
- * feature ships one (e2e/tests/support/fake-openai.ts); without either the AI feature stays hidden
- * and scene 05 is skipped.
+ * the api), with OPENAI_MODEL and OPENAI_BASE_URL when they are set. Otherwise the repo's fake OpenAI
+ * server (e2e/tests/support/ai.ts) answers: it groups the Lobby tour's Brainstorm notes into three
+ * themes the way a person would, and nothing leaves the machine.
  */
 const OPENAI_VARS = ['OPENAI_API_KEY', 'OPENAI_MODEL', 'OPENAI_BASE_URL'] as const
-/** OpenAI settings from this process's environment, taken out of it so the stack never inherits them. */
+/** OpenAI settings from this process's environment, taken out of it so no other process inherits them. */
 const openaiFromEnv: Record<string, string> = {}
 for (const k of OPENAI_VARS) {
   const v = process.env[k]?.trim()
@@ -144,44 +144,18 @@ for (const k of OPENAI_VARS) {
 
 async function aiSetup(): Promise<AiSetup> {
   if (openaiFromEnv.OPENAI_API_KEY) {
-    return { env: { ...openaiFromEnv }, note: 'AI: OPENAI_API_KEY from the environment (api only)' }
-  }
-  const candidates = [
-    'tests/support/fake-openai.ts',
-    'tests/support/ai-fake.ts',
-    'tests/support/openai-fake.ts',
-  ]
-  for (const rel of candidates) {
-    const file = join(DEMO_DIR, '..', rel)
-    if (!existsSync(file)) continue
-    const mod = (await import(pathToFileURL(file).href)) as Record<string, unknown>
-    const startFn = Object.entries(mod).find(([k, v]) => typeof v === 'function' && /^start/i.test(k))?.[1] as
-      | (() => Promise<{
-          url?: string
-          baseUrl?: string
-          close?: () => Promise<void>
-          stop?: () => Promise<void>
-        }>)
-      | undefined
-    if (!startFn) continue
-    const server = await startFn()
-    const url = server.baseUrl ?? server.url
-    if (!url) continue
+    const model = openaiFromEnv.OPENAI_MODEL ?? 'the api default'
     return {
-      env: {
-        OPENAI_API_KEY: 'sk-demo-fake',
-        OPENAI_BASE_URL: url,
-        OPENAI_MODEL: openaiFromEnv.OPENAI_MODEL || 'gpt-4o-mini',
-      },
-      stop: async () => {
-        await (server.close ?? server.stop)?.call(server)
-      },
-      note: `AI: the repo's fake OpenAI server (${rel})`,
+      env: { ...openaiFromEnv, DRAFTROOM_AI: 'on' },
+      note: `AI: OPENAI_API_KEY from the environment, for the api only (model: ${model})`,
     }
   }
+  const { AI_API_ENV, startFakeOpenAi } = await import('../tests/support/ai.ts')
+  const fake = await startFakeOpenAi()
   return {
-    env: {},
-    note: 'AI: no key and no fake OpenAI server in this checkout; the AI feature stays hidden',
+    env: { ...AI_API_ENV },
+    stop: () => fake.close(),
+    note: `AI: the repo's fake OpenAI server (tests/support/ai.ts) at ${AI_API_ENV.OPENAI_BASE_URL}`,
   }
 }
 
@@ -189,26 +163,16 @@ async function recordAll(): Promise<Timeline> {
   buildWeb()
   rmSync(join(OUT, 'recordings'), { recursive: true, force: true })
   rmSync(join(OUT, 'debug'), { recursive: true, force: true })
+  const ai = await aiSetup()
+  log(ai.note)
   log('starting the local stack (fresh data dir, dev sign-in)')
-  const stack = await startStack()
+  // The AI settings reach the api alone: the sync server, the worker and vite preview never see them.
+  const stack = await startStack({ apiEnv: ai.env }).catch(async (e: unknown) => {
+    await ai.stop?.().catch(() => {})
+    throw e
+  })
   let preview: ChildProcess | null = null
-  let ai: AiSetup | null = null
   try {
-    ai = await aiSetup()
-    log(ai.note)
-    if (Object.keys(ai.env).length) {
-      // Restart the api alone with the AI settings, so no other process ever sees the key.
-      const saved = Object.keys(ai.env).map((k) => [k, process.env[k]] as const)
-      Object.assign(process.env, ai.env)
-      try {
-        await stack.api.restart()
-      } finally {
-        for (const [k, v] of saved) {
-          if (v === undefined) delete process.env[k]
-          else process.env[k] = v
-        }
-      }
-    }
     preview = await startPreview()
     log(`recording on ${WEB_URL}`)
     const timeline = await recordDemo({
@@ -234,7 +198,7 @@ async function recordAll(): Promise<Timeline> {
       await exited
     }
     await stack.stop()
-    await ai?.stop?.().catch(() => {})
+    await ai.stop?.().catch(() => {})
     // The build has the licence key inlined: it is not kept once the recording is done.
     rmSync(join(WEB_DIR, BUILD_DIR), { recursive: true, force: true })
     log('stack and preview stopped; demo build removed')

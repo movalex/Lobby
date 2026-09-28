@@ -124,7 +124,8 @@ export async function recordDemo(opts: RecordOptions): Promise<Timeline> {
   }
 
   try {
-    const A = await open('alex', DESK, DSF)
+    // Alex's "Create and copy link" copies to the clipboard, as it would in his browser.
+    const A = await open('alex', DESK, DSF, { permissions: ['clipboard-read', 'clipboard-write'] })
     const S = await open('sam', DESK, DSF)
     if (A.rec.width !== PANE.w || A.rec.height !== PANE.h) throw new Error('desktop recording size mismatch')
     const alex = new Actor('Alex', A.page, { seed: 11, start: { x: 600, y: 520 } })
@@ -288,7 +289,9 @@ export async function recordDemo(opts: RecordOptions): Promise<Timeline> {
             const themes = kids.filter((s) => ['Gameplay', 'Story', 'Community'].includes(s.text))
             const area = union([...themes, ...kids.filter((s) => s.type === 'note')].map((s) => s.box))
             const vp = await viewport(p)
-            const w = area.w + 130
+            // Wide enough that the empty slot beside the Story ideas stays left of the style panel, which
+            // opens on the right while the Note tool is active (a click there would land on the panel).
+            const w = area.w + 320
             await view(p, { x: area.x - 45, y: area.y - 75, w, h: (w * vp.h) / vp.w }, { inset: 0 })
             await who.nudge()
           }
@@ -303,8 +306,8 @@ export async function recordDemo(opts: RecordOptions): Promise<Timeline> {
       async (clock) => {
         await alex.clickOn(A.page.getByTestId('tools.dr-mindmap'))
         await waitFor(() => editingId(A.page), 'the central topic to be ready for typing')
-        await alex.pause(350)
-        await alex.type('Trailer launch')
+        await alex.pause(250)
+        await alex.type('Trailer launch', 14)
         // Scroll so the map has room to grow to the right (both people look at the same spot).
         const root = await shapeByText(A.page, 'Trailer launch')
         const focus = { x: center(root.box).x + 290, y: center(root.box).y + 40 }
@@ -313,24 +316,23 @@ export async function recordDemo(opts: RecordOptions): Promise<Timeline> {
           ['Tab', 'Teaser drop'],
           ['Enter', 'Launch day'],
           ['Enter', 'Creator premiere'],
-          ['Tab', 'Twitch watch party'],
         ]
         const samWatch = (async () => {
           const vp = await viewport(S.page)
           await sam.pause(900)
           await sam.move({ x: vp.x + vp.w * 0.62, y: vp.y + vp.h * 0.8 }, 1400)
-          await sam.pause(2600)
-          await sam.move({ x: vp.x + vp.w * 0.8, y: vp.y + vp.h * 0.74 }, 1400)
+          await sam.pause(1200)
+          await sam.move({ x: vp.x + vp.w * 0.8, y: vp.y + vp.h * 0.74 }, 1100)
         })()
         for (const [key, text] of steps) {
-          await alex.pause(300)
-          await alex.press(key, 350)
-          await alex.type(text, 12)
+          await alex.pause(200)
+          await alex.press(key, 300)
+          await alex.type(text, 15)
         }
-        await alex.pause(400)
-        await alex.press('Escape', 300)
-        await alex.press('Escape', 300)
-        await alex.move({ x: 700, y: 880 }, 700)
+        await alex.pause(300)
+        await alex.press('Escape', 200)
+        await alex.press('Escape', 200)
+        await alex.move({ x: 700, y: 880 }, 600)
         await samWatch
         // The whole map, tidy, on both screens.
         const map = (await shapes(A.page)).filter((s) => s.meta.drMindmap)
@@ -341,7 +343,7 @@ export async function recordDemo(opts: RecordOptions): Promise<Timeline> {
             view(S.page, b, { inset: 110, ms: 800 }),
           ])
         }
-        await clock.at(clock.elapsed + 1400)
+        await clock.at(clock.elapsed + 1100)
       },
       {
         prepare: async () => {
@@ -359,28 +361,96 @@ export async function recordDemo(opts: RecordOptions): Promise<Timeline> {
     )
     if (done('04-mindmap')) return await finish()
 
-    // ---- 05 AI: group the brainstorm into themes (only when the ai feature is in the build) ----
+    // ---- 05 AI: Alex selects the brainstorm's idea notes, AI → "Group into themes"; both see the result ----
     await director.scene(
       '05-ai',
       async (clock) => {
-        const action = await findAiGroupAction(A.page, alex)
-        if (!action) throw new Error('the AI action went away')
-        await alex.clickOn(action)
-        await acceptAiNotice(A.page, alex)
-        await waitForAiResult(A.page)
-        await alex.pause(800)
-        await clock.at(clock.elapsed + 1200)
+        const notes = await brainstormNotes(A.page)
+        const area = union(notes.map((n) => n.box))
+        // A brush from the empty frame just below the last row up over the first note: every idea note,
+        // not the Gameplay / Story / Community cards to their left.
+        const from = await toScreen(A.page, { x: area.x + area.w + 26, y: area.y + area.h + 26 })
+        const to = await toScreen(A.page, { x: area.x - 14, y: area.y - 14 })
+        await alex.pause(400)
+        await alex.move(from, 700)
+        await alex.drag(from, to, 1100)
+        const button = A.page.getByTestId('selection-ai')
+        await button.waitFor({ timeout: 8000 })
+        await alex.pause(450)
+        await alex.clickOn(button)
+        const menu = A.page.getByTestId('ai-menu')
+        await menu.waitFor({ timeout: 8000 })
+        await alex.hover(menu.getByTestId('ai-themes'), { ms: 700 })
+        await alex.pause(500)
+        await alex.clickOn(menu.getByTestId('ai-themes'))
+        const regroup = menu.getByTestId('ai-regroup-go')
+        const notice = menu.getByTestId('ai-notice-continue')
+        const started = A.page
+          .getByTestId('ai-busy')
+          .or(A.page.getByTestId('ai-done'))
+          .or(A.page.getByTestId('ai-error'))
+        await regroup.or(notice).or(started).first().waitFor({ timeout: 8000 })
+        // The tour's notes already sit under its theme cards: Lobby asks before regrouping them.
+        if (await regroup.isVisible().catch(() => false)) {
+          await alex.pause(900)
+          await alex.clickOn(regroup)
+          await notice.or(started).first().waitFor({ timeout: 8000 })
+        }
+        // First use in this workspace: "Sends the selected text to OpenAI" (what the narration says).
+        if (await notice.isVisible().catch(() => false)) {
+          await alex.pause(1500)
+          await alex.clickOn(notice)
+        }
+        const done = A.page.getByTestId('ai-done')
+        const failed = A.page.getByTestId('ai-error')
+        // The busy pill shows for a moment; a real model's longer wait is cut.
+        await done
+          .or(failed)
+          .first()
+          .waitFor({ timeout: 1200 })
+          .catch(() => {})
+        if (
+          !(await done
+            .or(failed)
+            .first()
+            .isVisible()
+            .catch(() => false))
+        ) {
+          await clock.cut(() => done.or(failed).first().waitFor({ timeout: 90_000 }))
+        }
+        if (await failed.isVisible().catch(() => false)) {
+          throw new Error(`AI said: ${(await failed.textContent()) ?? 'an error'}`)
+        }
+        await alex.move({ x: 640, y: 780 }, 600)
+        await alex.pause(500)
+        // Closer on the tidy clusters, on both screens, so the theme names read.
+        const grouped = await aiClusters(A.page)
+        // The "Grouped … Undo" notice has been read by now: it would sit over the first theme name.
+        await tidy(A.page)
+        if (grouped) {
+          await Promise.all([
+            view(A.page, grouped, { inset: 120, ms: 800 }),
+            view(S.page, grouped, { inset: 120, ms: 800 }),
+          ])
+        }
+        await sam.move({ x: 470, y: 700 }, 900)
+        await clock.at(clock.elapsed + 1600)
       },
       {
         prepare: async () => {
+          await Promise.all([A.page.keyboard.press('Escape'), S.page.keyboard.press('Escape')])
+          await A.page.evaluate(() => {
+            ;(window.editor as unknown as { selectNone(): void }).selectNone()
+          })
+          if (!(await aiAvailable(A.page))) {
+            throw new SkipScene('AI is not set up on this api (no OpenAI key and no fake server)')
+          }
+          // The Brainstorm frame's content (themes, notes and the room to their right) on both screens.
           const frame = await frameByName(A.page, '2 · Brainstorm')
-          await Promise.all([view(A.page, frame.box, { inset: 30 }), view(S.page, frame.box, { inset: 30 })])
-          // Off camera: is there a "Group into themes" action at all? (select the notes, look, let go)
-          const found = await findAiGroupAction(A.page, alex)
-          await A.page.keyboard.press('Escape')
-          await A.page.keyboard.press('Escape')
-          if (!found)
-            throw new SkipScene('AI "Group into themes" is not in this build (features/ai is a stub)')
+          const kids = (await shapes(A.page)).filter((s) => s.parentId === frame.id)
+          const box = union(kids.map((s) => s.box))
+          await Promise.all([view(A.page, box, { inset: 24 }), view(S.page, box, { inset: 24 })])
+          await Promise.all([tidy(A.page), tidy(S.page)])
           await Promise.all([alex.nudge(), sam.nudge()])
         },
       },
@@ -397,7 +467,7 @@ export async function recordDemo(opts: RecordOptions): Promise<Timeline> {
         await dialog.waitFor()
         await alex.pause(250)
         await alex.clickOn(dialog.getByTestId('pn-prompt-input'), { u: 0.3 })
-        await alex.type('What should the teaser show?', 15)
+        await alex.type('What should the teaser show?', 22)
         await alex.pause(200)
         const target = dialog.getByTestId('pn-target-new')
         if (!(await target.isChecked())) await alex.clickOn(target)
@@ -405,31 +475,41 @@ export async function recordDemo(opts: RecordOptions): Promise<Timeline> {
         await A.page.getByTestId('pn-panel').waitFor()
         const write = async (who: Actor, page: Page, notes: string[]) => {
           const panel = page.getByTestId('pn-panel')
-          if (!(await panel.isVisible())) await who.clickOn(page.getByTestId('pn-chip'))
+          if (!(await panel.isVisible())) {
+            // Everyone else gets the prompt card ("Add your notes"); the top-bar chip works too.
+            const card = page.getByTestId('pn-start-prompt-write')
+            await who.clickOn(
+              (await card.isVisible().catch(() => false)) ? card : page.getByTestId('pn-chip'),
+            )
+          }
           await panel.waitFor()
           await who.clickOn(panel.getByTestId('pn-compose-text'), { u: 0.3 })
           for (const text of notes) {
-            await who.type(text, 18)
-            await who.pause(150)
-            await who.clickOn(panel.getByTestId('pn-add'), { ms: 450 })
-            await who.pause(250)
+            await who.type(text, 24)
+            await who.pause(120)
+            await who.clickOn(panel.getByTestId('pn-add'), { ms: 400 })
+            await who.pause(200)
             await who.clickOn(panel.getByTestId('pn-compose-text'), { u: 0.3, ms: 400 })
           }
         }
         await Promise.all([
           write(alex, A.page, ['The villain wins round one', 'Save the co-op move for the end']),
           (async () => {
-            await S.page.getByTestId('pn-chip').waitFor({ timeout: 15_000 })
+            await S.page
+              .getByTestId('pn-start-prompt-write')
+              .or(S.page.getByTestId('pn-chip'))
+              .first()
+              .waitFor({ timeout: 15_000 })
             await sam.pause(300)
             await write(sam, S.page, ['A countdown in a player’s voice'])
           })(),
         ])
         await waitText(A.page.getByTestId('pn-counts'), /3 notes from 2 people/)
-        await alex.hover(A.page.getByTestId('pn-counts'), { ms: 500 })
-        await alex.pause(700)
+        await alex.hover(A.page.getByTestId('pn-counts'), { ms: 450 })
+        await alex.pause(450)
         await alex.clickOn(A.page.getByTestId('pn-reveal'))
         await waitFor(async () => (await privateNotes(S.page)).length >= 3 || null, 'the revealed notes')
-        await alex.pause(700)
+        await alex.pause(500)
         // Both close their panels, then "Show me" on the reveal notice brings each view to the notes.
         await Promise.all([closeDock(A.page, alex), closeDock(S.page, sam)])
         const showMe = async (who: Actor, page: Page) => {
@@ -449,7 +529,7 @@ export async function recordDemo(opts: RecordOptions): Promise<Timeline> {
             await showMe(sam, S.page)
           })(),
         ])
-        await clock.at(clock.elapsed + 1500)
+        await clock.at(clock.elapsed + 1100)
       },
       {
         prepare: async () => {
@@ -575,10 +655,37 @@ export async function recordDemo(opts: RecordOptions): Promise<Timeline> {
     await director.scene(
       '08-guest',
       async (clock, win) => {
-        const P = phoneRef.rec
-        if (!P) throw new Error('no phone')
+        // Alex: Share → "Share with a client", where one button makes the guest link and copies it.
+        await alex.clickOn(A.page.getByTestId('share-button'))
+        const dialog = A.page.getByTestId('share-dialog')
+        const client = dialog.getByTestId('share-client')
+        await client.waitFor({ timeout: 10_000 })
+        await alex.pause(800)
+        await alex.clickOn(client.getByTestId('review-link-create'))
+        const row = client.getByTestId('review-link-row').first()
+        await row.waitFor({ timeout: 10_000 })
+        link = await row.getByTestId('review-link-url').inputValue()
+        await alex.hover(row.getByTestId('review-link-copy'), { ms: 450 }).catch(() => {})
+        await alex.pause(900)
+        await A.page.keyboard.press('Escape')
+        await dialog.waitFor({ state: 'detached', timeout: 5000 }).catch(() => {})
+        await tidy(A.page)
+        // The client opens the link on their phone (the page load is cut).
+        const P = await clock.cut(async () => {
+          const rec = await open('phone', PHONE, PHONE_DSF, {
+            isMobile: true,
+            hasTouch: true,
+            userAgent:
+              'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Mobile Safari/537.36',
+          })
+          phoneRef.rec = rec
+          await rec.page.goto(link)
+          await rec.page.getByTestId('invite-guest-name').waitFor({ timeout: 30_000 })
+          await sleep(400)
+          return rec
+        })
         const phone = new Actor('Jordan', P.page, { touch: true })
-        win.phone = { start: clock.start, end: 0 }
+        win.phone = { start: Date.now(), end: 0 }
         const nameField = P.page.getByTestId('invite-guest-name')
         await phone.pause(900)
         await phone.clickOn(nameField)
@@ -590,23 +697,48 @@ export async function recordDemo(opts: RecordOptions): Promise<Timeline> {
         // Alex sees the guest arrive: their avatar joins the people on the board.
         const avatar = A.page.locator(`[data-testid="presence-user"][data-user-id="${guestId}"] button`)
         await avatar.waitFor({ timeout: 20_000 })
-        await alex.hover(avatar, { ms: 700 })
-        await phone.pause(1200)
+        await alex.hover(avatar, { ms: 600 })
+        await phone.pause(600)
         // The guest (a commenter) leaves a comment on the winning note.
         const commented = await guestComment(P.page, phone, 'Love this one!').catch((e) => {
           log(`[08-guest] guest comment: ${errText(e)}`)
           return false
         })
         if (commented) {
-          const pin = A.page.getByTestId('comment-pin').last()
-          await pin.waitFor({ timeout: 15_000 })
-          await alex.clickOn(pin)
-          await A.page
-            .getByTestId('thread-popover')
-            .waitFor({ timeout: 10_000 })
-            .catch(() => {})
+          // Alex's bell lights up with the client's comment; the item opens the thread.
+          const bell = A.page.getByTestId('notifications-bell')
+          const lit = await waitFor(
+            async () => ((await bell.getAttribute('data-unread').catch(() => '0')) ?? '0') !== '0',
+            'the new comment in Alex’s bell',
+            8000,
+          ).catch(() => false)
+          const item = A.page.getByTestId('notification-item').filter({ hasText: 'Love this one' }).first()
+          let opened = false
+          if (lit) {
+            await alex.pause(400)
+            await alex.clickOn(bell, { ms: 700 })
+            if (await item.isVisible({ timeout: 4000 }).catch(() => false)) {
+              await alex.pause(1000)
+              await alex.clickOn(item, { u: 0.4 })
+              opened = await A.page
+                .getByTestId('thread-popover')
+                .waitFor({ timeout: 6000 })
+                .then(() => true)
+                .catch(() => false)
+            }
+          }
+          if (!opened) {
+            await A.page.keyboard.press('Escape')
+            const pin = A.page.getByTestId('comment-pin').last()
+            await pin.waitFor({ timeout: 15_000 })
+            await alex.clickOn(pin)
+            await A.page
+              .getByTestId('thread-popover')
+              .waitFor({ timeout: 10_000 })
+              .catch(() => {})
+          }
         }
-        await alex.pause(1800)
+        await alex.pause(1300)
         win.phone.end = Date.now()
         await clock.at(clock.elapsed + 300)
       },
@@ -619,16 +751,6 @@ export async function recordDemo(opts: RecordOptions): Promise<Timeline> {
           await view(S.page, notes, { inset: 110 })
           // The client lands on the brainstorm: Alex makes this the board's start view (main menu).
           await setStartView(A.page).catch((e) => log(`[08-guest] start view: ${errText(e)}`))
-          link = await createGuestReviewLink(A.page)
-          const P = await open('phone', PHONE, PHONE_DSF, {
-            isMobile: true,
-            hasTouch: true,
-            userAgent:
-              'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Mobile Safari/537.36',
-          })
-          phoneRef.rec = P
-          await P.page.goto(link)
-          await P.page.getByTestId('invite-guest-name').waitFor({ timeout: 30_000 })
           await Promise.all([tidy(A.page), tidy(S.page)])
           await Promise.all([alex.move({ x: 560, y: 760 }, 200), sam.move({ x: 640, y: 780 }, 200)])
         },
@@ -637,31 +759,56 @@ export async function recordDemo(opts: RecordOptions): Promise<Timeline> {
     if (phoneRef.rec) await close(phoneRef.rec)
     if (done('08-guest')) return await finish()
 
-    // ---- 09 present mode, bringing everyone along ----
+    // ---- 09 present to everyone: Sam is invited, joins, and follows Alex's slides ----
     await director.scene(
       '09-present',
       async (clock) => {
-        const everyone = await presentToEveryone(A.page, alex)
-        if (!everyone) {
-          // No "present to everyone" in this build: gather everyone first, so Sam follows the slides.
-          await alex.clickOn(A.page.getByTestId('timer-pill'))
-          await alex.clickOn(A.page.getByTestId('summon-button'))
-          await alex.pause(700)
-          await alex.clickOn(A.page.getByTestId('present-button'))
+        // With the workshop items in it, the 800 px top bar folds Present into its "⋯" menu.
+        const present = A.page.getByTestId('present-button')
+        if (!(await present.isVisible().catch(() => false))) {
+          await alex.clickOn(A.page.getByTestId('topbar-overflow'), { ms: 700 })
+          await A.page.getByTestId('topbar-overflow-panel').waitFor({ timeout: 5000 })
+          await alex.pause(350)
         }
+        await alex.clickOn(present.first())
         await A.page.getByTestId('present-overlay').waitFor({ timeout: 15_000 })
-        await alex.move({ x: 700, y: 900 }, 600)
-        for (let i = 0; i < 4; i++) {
-          await alex.pause(1500)
-          await alex.press('ArrowRight', 100)
+        await alex.pause(600)
+        // The presentation bar (it shows while the pointer moves): "Invite everyone".
+        const invite = A.page.getByTestId('present-invite')
+        await alex.move({ x: 560, y: 760 }, 500)
+        await invite.waitFor({ timeout: 8000 })
+        await alex.clickOn(invite, { ms: 700 })
+        // Sam is asked, not pulled in: the banner, then Join.
+        const banner = S.page.getByTestId('live-invite')
+        await banner.waitFor({ timeout: 15_000 })
+        await sam.pause(900)
+        await sam.clickOn(banner.getByTestId('live-join'), { ms: 800 })
+        await S.page.getByTestId('present-overlay').waitFor({ timeout: 15_000 })
+        await waitText(A.page.getByTestId('live-follower-count'), /1 following/, 10_000).catch(() => {})
+        await alex.hover(A.page.getByTestId('live-follower-count'), { ms: 700 }).catch(() => {})
+        await sam.move({ x: 700, y: 600 }, 900)
+        await alex.pause(900)
+        // Two slides on, in step on both screens.
+        for (let i = 0; i < 2; i++) {
+          await alex.move({ x: 520 + i * 60, y: 700 - i * 30 }, 400)
+          await alex.press('ArrowRight', 1700)
         }
-        await alex.pause(1600)
-        await clock.at(clock.elapsed + 300)
+        // The end, for everyone.
+        await alex.move({ x: 600, y: 760 }, 300)
+        const end = A.page.getByTestId('present-exit')
+        await end.waitFor({ timeout: 5000 })
+        await alex.clickOn(end, { ms: 600 })
+        await S.page
+          .getByTestId('live-ended-toast')
+          .waitFor({ timeout: 8000 })
+          .catch(() => {})
+        await clock.at(clock.elapsed + 1400)
       },
       {
         prepare: async () => {
           await A.page.keyboard.press('Escape')
           await closeDock(A.page, alex)
+          await closeDock(S.page, sam)
           await A.page.evaluate(() => {
             ;(window.editor as unknown as { selectNone(): void }).selectNone()
           })
@@ -695,17 +842,25 @@ export async function recordDemo(opts: RecordOptions): Promise<Timeline> {
         await Promise.all([
           (async () => {
             // Export: one frame as an image, or the whole tour as a PDF (a page per frame).
-            await alex.clickOn(A.page.getByTestId('export-button'))
+            const exportButton = A.page.getByTestId('export-button')
+            if (!(await exportButton.isVisible().catch(() => false))) {
+              // Folded into the top bar's "⋯" menu, like Present.
+              await alex.clickOn(A.page.getByTestId('topbar-overflow'), { ms: 700 })
+              await A.page.getByTestId('topbar-overflow-panel').waitFor({ timeout: 5000 })
+              await alex.pause(300)
+            }
+            await alex.clickOn(exportButton.first())
             const pdf = A.page.getByTestId('export-pdf')
             await pdf.waitFor()
-            await alex.pause(500)
-            await alex.clickOn(A.page.getByTestId('export-area-frame'))
-            await alex.hover(A.page.getByTestId('export-png'), { ms: 600 })
             await alex.pause(400)
-            const download = A.page.waitForEvent('download', { timeout: 30_000 }).catch(() => null)
+            await alex.clickOn(A.page.getByTestId('export-area-frame'))
+            await alex.hover(A.page.getByTestId('export-png'), { ms: 550 })
+            await alex.pause(300)
+            // The PDF is made in the browser; the scene does not wait long for the file.
+            const download = A.page.waitForEvent('download', { timeout: 4000 }).catch(() => null)
             await alex.clickOn(pdf)
             await download
-            await alex.pause(700)
+            await alex.pause(400)
             await A.page.keyboard.press('Escape')
             await alex.pause(200)
           })(),
@@ -886,19 +1041,6 @@ async function shareWithTeammate(page: Page, handle: string) {
   await dialog.waitFor({ state: 'detached' })
 }
 
-async function createGuestReviewLink(page: Page): Promise<string> {
-  await page.getByTestId('share-button').click()
-  const dialog = page.getByTestId('share-dialog')
-  await dialog.getByTestId('review-link-guests').check()
-  await dialog.getByTestId('review-link-create').click()
-  const row = dialog.getByTestId('review-link-row').first()
-  await row.waitFor()
-  const url = await row.getByTestId('review-link-url').inputValue()
-  await page.keyboard.press('Escape')
-  await dialog.waitFor({ state: 'detached' })
-  return url
-}
-
 /** Main menu → Board → "Set current view as start view". */
 async function setStartView(page: Page) {
   await page.getByRole('button', { name: 'Menu', exact: true }).first().click()
@@ -967,7 +1109,12 @@ async function tidy(page: Page) {
 /** Closes the open side panel with its rail button (toasts can sit over the panel's own ×). */
 async function closeDock(page: Page, who: Actor) {
   const active = page.locator('[data-testid^="dock-tab-"][aria-pressed="true"]').first()
-  if (!(await active.isVisible().catch(() => false))) return
+  if (!(await active.isVisible().catch(() => false))) {
+    // A panel whose rail button does not show as pressed: its own × closes it.
+    const panelClose = page.locator('[data-testid^="dock-panel-"] button[aria-label^="Close"]').first()
+    if (await panelClose.isVisible().catch(() => false)) await who.clickOn(panelClose, { ms: 500 })
+    return
+  }
   await who.clickOn(active, { ms: 600 })
   await page
     .locator('[data-testid^="dock-panel-"]')
@@ -976,67 +1123,30 @@ async function closeDock(page: Page, who: Actor) {
     .catch(() => {})
 }
 
-/** Selects the Brainstorm frame's notes and looks for the AI "Group into themes" action. */
-async function findAiGroupAction(page: Page, who: Actor): Promise<Locator | null> {
+/** The idea notes of the tour's Brainstorm frame (the sticky notes; not the theme cards). */
+async function brainstormNotes(page: Page): Promise<ShapeInfo[]> {
   const frame = await frameByName(page, '2 · Brainstorm')
   const notes = (await shapes(page)).filter((s) => s.parentId === frame.id && s.type === 'note')
-  if (notes.length === 0) return null
-  const area = union(notes.map((n) => n.box))
-  const from = await toScreen(page, { x: area.x - 40, y: area.y - 40 })
-  const to = await toScreen(page, { x: area.x + area.w + 40, y: area.y + area.h + 40 })
-  await who.drag(from, to, 900)
-  const named = /group into themes/i
-  const direct = page.getByRole('button', { name: named }).or(page.getByRole('menuitem', { name: named }))
-  if (
-    await direct
-      .first()
-      .isVisible()
-      .catch(() => false)
-  )
-    return direct.first()
-  const ai = page.getByRole('button', { name: /^(AI|Ask AI|AI actions)\b/i }).first()
-  if (await ai.isVisible().catch(() => false)) {
-    await who.clickOn(ai)
-    if (
-      await direct
-        .first()
-        .isVisible({ timeout: 2000 })
-        .catch(() => false)
-    )
-      return direct.first()
-    await page.keyboard.press('Escape')
-  }
-  // The canvas context menu.
-  await page.mouse.click(to.x - 60, to.y - 60, { button: 'right' })
-  const item = page.getByRole('menuitem', { name: named }).first()
-  if (await item.isVisible({ timeout: 2000 }).catch(() => false)) return item
-  await page.keyboard.press('Escape')
-  return null
+  if (notes.length < 2) throw new Error('the Brainstorm frame has no idea notes')
+  return notes
 }
 
-/** The first-use notice ("Sends the selected text to OpenAI"): go ahead. */
-async function acceptAiNotice(page: Page, who: Actor) {
-  const notice = page.getByText(/Sends the selected text to OpenAI/i).first()
-  if (!(await notice.isVisible({ timeout: 2500 }).catch(() => false))) return
-  const go = page.getByRole('button', { name: /^(Continue|OK|Send|Allow|Group|Go ahead|Got it)/i }).last()
-  if (await go.isVisible().catch(() => false)) await who.clickOn(go)
+/** The AI's theme labels and the notes under them (page bounds), or null before a grouping. */
+async function aiClusters(page: Page): Promise<Box | null> {
+  const all = await shapes(page)
+  const labels = all.filter((s) => (s.meta.drAi as { kind?: string } | undefined)?.kind === 'theme-label')
+  if (!labels.length) return null
+  const ids = new Set(labels.flatMap((l) => (l.meta.drAi as { notes?: string[] }).notes ?? []))
+  return union([...labels, ...all.filter((s) => ids.has(s.id))].map((s) => s.box))
 }
 
-async function waitForAiResult(page: Page) {
-  // Done when no progress indicator mentions AI any more (or after a minute at most).
-  const busy = page.getByText(/(Grouping|Thinking|Asking AI|Working)…?/i).first()
-  await busy.waitFor({ state: 'visible', timeout: 5000 }).catch(() => {})
-  await busy.waitFor({ state: 'hidden', timeout: 60_000 }).catch(() => {})
-}
-
-/** "Present to everyone", when this build has it. Returns false when it does not. */
-async function presentToEveryone(page: Page, who: Actor): Promise<boolean> {
-  const direct = page.getByRole('button', { name: /present to everyone/i }).first()
-  if (await direct.isVisible().catch(() => false)) {
-    await who.clickOn(direct)
-    return true
-  }
-  return false
+/** The api offers AI on this board (a key or the fake is configured, and AI is on). */
+async function aiAvailable(page: Page): Promise<boolean> {
+  const board = new URL(page.url()).pathname.split('/b/')[1]?.split('/')[0]
+  if (!board) return false
+  const res = await page.request.get(`/api/boards/${board}/ai`)
+  if (!res.ok()) return false
+  return ((await res.json()) as { enabled?: boolean }).enabled === true
 }
 
 /** The guest (a commenter) comments on the top-voted note from the phone. */
@@ -1065,7 +1175,7 @@ async function guestComment(page: Page, who: Actor, text: string): Promise<boole
     undefined,
     { timeout: 5000 },
   )
-  await who.type(text, 9)
+  await who.type(text, 12)
   await who.pause(300)
   await page.keyboard.press('Enter')
   await page.getByTestId('thread-popover').waitFor({ timeout: 10_000 })

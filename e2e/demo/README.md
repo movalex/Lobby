@@ -31,11 +31,19 @@ A full run takes about 4-5 minutes on the dev PC (3 min recording, 1-2 min encod
   production" button, as on any unlicensed localhost build. The key is inlined into the demo build
   only (`apps/web/dist/demo-web-11002/`, gitignored, deleted when the recording ends) and never
   printed.
-- **AI** (scene 05): with `OPENAI_API_KEY` (and optionally `OPENAI_MODEL`, `OPENAI_BASE_URL`) in the
-  environment, those variables go to the api process only (the stack's other processes never see
-  them). Without a key, the repo's fake OpenAI server is used when the ai-assist feature ships one at
-  `e2e/tests/support/fake-openai.ts` (an exported `start…()` returning `{ url | baseUrl, close | stop }`).
-  Without either, or while `apps/web/src/features/ai` is still the stub, scene 05 is skipped.
+- **AI** (scene 05): by default the repo's fake OpenAI server (`e2e/tests/support/ai.ts`, port base + 3)
+  answers, with the three themes a person would give the tour's Brainstorm notes; nothing leaves the
+  machine. With `OPENAI_API_KEY` in the environment (and optionally `OPENAI_MODEL`, `OPENAI_BASE_URL`)
+  the real API is used instead: `run.ts` takes those variables out of its own environment and hands
+  them, with `DRAFTROOM_AI=on`, to the api process alone (`StackOptions.apiEnv`); the sync server, the
+  preview worker and `vite preview` never see them. A real model's wait is cut from the video (the busy
+  pill shows for a moment). If the api reports AI as not set up, scene 05 is skipped.
+
+```bash
+# the final cut with the real API (the key comes from your shell or secret store; never commit it)
+OPENAI_API_KEY=... OPENAI_MODEL=gpt-5.4-mini pnpm --filter @draftroom/e2e demo:video -- \
+  --narration=<path>/narration.json --license-key-file=<path>/tldraw-license-key.txt
+```
 
 ## Options
 
@@ -77,11 +85,11 @@ e2e suites and `pnpm dev`.
 | 02-dashboard | both | dashboards with thumbnails; Alex creates "Lobby tour" from the gallery |
 | 03-collab | both | Sam adds a note on the Brainstorm frame, Alex connects it; live cursors; Saved |
 | 04-mindmap | Alex | a mind map built with Tab / Enter; Sam watches it grow |
-| 05-ai | Alex | select the brainstorm notes → AI "Group into themes" (skipped until ai-assist ships) |
+| 05-ai | both | Alex brushes over the Brainstorm idea notes → AI → "Group into themes" (Lobby asks before regrouping notes that sit under theme cards, then the first-use OpenAI notice) → labelled clusters on both screens, zoomed in |
 | 06-private | both | a private brainstorm: both write, counts show, Alex reveals |
 | 07-vote | both | a dot vote on the revealed notes, then the ranked results |
-| 08-guest | phone | Jordan joins from the review link with just a name, shows as "(guest)", comments |
-| 09-present | both | Alex gathers everyone and presents the tour; Sam follows (no "present to everyone" yet) |
+| 08-guest | both + phone | Alex's Share → "Share with a client" makes and copies the guest link in one click; Jordan joins on a phone with just a name, shows as "(guest)", comments; Alex's bell shows it and opens the thread |
+| 09-present | both | Present → "Invite everyone"; Sam gets the invite banner and joins; "1 following"; two slides in step; End (for everyone) |
 | 10-history | both | Export (frame PNG / PDF) and the History panel's automatic checkpoint, previewed |
 | 11-outro | card | "Lobby — live today" and three facts |
 
@@ -89,6 +97,12 @@ e2e suites and `pnpm dev`.
 
 - Present uses the app's in-window mode: the demo reports fullscreen as unavailable, because a
   fullscreen element in headless Chromium takes the virtual screen's size and tears the recording.
+- At 800 CSS px the board top bar folds Present and Export into its "⋯" menu once the workshop items
+  join it (after the vote); scenes 09 and 10 open them from there, on camera.
+- While the Note tool is active its style panel opens on the right: scene 03 frames the Brainstorm
+  frame wide enough that Sam's click on the empty Story slot never lands on the panel.
+- Participants other than the starter get the private brainstorm's "Add your notes" card (the top-bar
+  chip may be folded away); scene 06 uses whichever shows.
 - After a reveal, a participant who did not start the private brainstorm can keep a stale
   "Revealing…" chip until a reload (the server state is final). The script reloads Sam's tab off
   camera when it happens and logs it.

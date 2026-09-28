@@ -11,9 +11,9 @@ import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { type Browser, chromium } from '@playwright/test'
 import {
-  bandHtml,
   BT709_FLAGS,
   BT709_TAGS,
+  bandHtml,
   captionHtml,
   FPS,
   H,

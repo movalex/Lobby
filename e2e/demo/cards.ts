@@ -164,7 +164,10 @@ ${cursor('Sam Lee', '#c8102e', 'sam')}<div class="alex-in">${cursor('Alex Rivera
 /** The outro card: "Lobby — live today" and three cards that sum the tour up. */
 export function outroCardHtml(repoRoot: string): string {
   const facts: Array<[string, string]> = [
-    ['Real-time collaboration', 'Live cursors, sticky notes, connectors and mind maps, saved as they happen.'],
+    [
+      'Real-time collaboration',
+      'Live cursors, sticky notes, connectors and mind maps, saved as they happen.',
+    ],
     [
       'Workshops built in',
       'Private brainstorms, secret dot votes, present mode, and guests who join with just a name.',
