@@ -2,9 +2,10 @@
 // a board, workspace owners and admins decide the default, and the api refuses every AI call where it is
 // off, before anything is read from the board or sent to OpenAI.
 
-import { AiSettings, AiStatus } from '@draftroom/contracts'
+import { AI_SETTINGS_EVENT, AiSettings, AiStatus } from '@draftroom/contracts'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { createBoard, DEV_STUDIO } from '../../helpers.ts'
+import { EventHub } from '../../../src/events/hub.ts'
+import { createBoard, createTestApi, DEV_STUDIO } from '../../helpers.ts'
 import { guestLink, joinAsGuest } from '../guests/support.ts'
 import { brainstormShapes, FRAME } from './fixtures.ts'
 import { type AiWorld, aiWorld, expectError, run, statusUrl, usageRows } from './support.ts'
@@ -131,5 +132,41 @@ describe('AI on/off per board and per workspace', () => {
     const res = await guest.req('PUT', boardSettings(), { enabled: false })
     expectError(res, 403, 'FORBIDDEN')
     expect((await status(w.bob)).enabled).toBe(true)
+  })
+})
+
+// PGlite has one connection, so this checks the behaviour; the real race is in settings.pg.test.ts.
+describe('the workspace default under simultaneous changes (AIPV-05)', () => {
+  it('two admins turning it off at once: one transaction each, so only the change that flips it publishes', async () => {
+    const hub = new EventHub()
+    const api = await createTestApi({ deps: { events: hub } })
+    try {
+      const alice = await api.login('alice')
+      const board = await createBoard(alice, DEV_STUDIO, 'Follows the default')
+      const hints: string[] = []
+      hub.subscribe(board, (e) => {
+        if (e.type === AI_SETTINGS_EVENT) hints.push(e.type)
+      })
+      const results = await Promise.all([
+        alice.req('PUT', workspaceSettings(), { enabled: false }),
+        alice.req('PUT', workspaceSettings(), { enabled: false }),
+      ])
+      for (const r of results) expect(r.statusCode, r.body).toBe(200)
+      // The second PUT read the value the first committed, so it changed nothing and said nothing.
+      expect(hints).toEqual([AI_SETTINGS_EVENT])
+      const stored = () =>
+        api.db.query<{ enabled: boolean }>(
+          'SELECT enabled FROM workspace_ai_settings WHERE workspace_id = $1',
+          [DEV_STUDIO],
+        )
+      expect((await stored()).rows).toEqual([{ enabled: false }])
+      // A refused change (not an owner or admin) writes nothing and says nothing.
+      const bob = await api.login('bob')
+      expectError(await bob.req('PUT', workspaceSettings(), { enabled: true }), 403, 'FORBIDDEN')
+      expect((await stored()).rows).toEqual([{ enabled: false }])
+      expect(hints).toHaveLength(1)
+    } finally {
+      await api.close()
+    }
   })
 })

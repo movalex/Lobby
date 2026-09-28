@@ -18,7 +18,7 @@ describe('boardCsv', () => {
     const csv = boardCsv(records)
     expect(lines(csv)[0]).toBe('id,type,text,frame,color,x,y,tags')
     expect(csv.endsWith('\r\n')).toBe(true)
-    expect(csv).toContain('shape:n1,note,"First line\nsecond line","Ideas, round 1",yellow,20,20')
+    expect(csv).toContain('shape:n1,note,"First line\nsecond line","Ideas, round 1",Marigold,20,20')
     // A formula-looking note is prefixed with ' so spreadsheets show it as text.
     expect(csv).toContain(`"'=HYPERLINK(""http://evil"")"`)
     expect(csv).toContain('"Outside ""quoted"""')
@@ -30,7 +30,7 @@ describe('boardCsv', () => {
     const rows = lines(csv)
     expect(rows[0]).toBe('id,type,text,frame,color,x,y,tags')
     expect(csvRowCount(csv)).toBe(2)
-    expect(csv).toContain('shape:n1,note,"First line\nsecond line","Ideas, round 1",yellow,20,20')
+    expect(csv).toContain('shape:n1,note,"First line\nsecond line","Ideas, round 1",Marigold,20,20')
     expect(csv).toContain('shape:t,text,')
     expect(csv).not.toContain('shape:n2')
     expect(csv).not.toContain('shape:f,')
@@ -45,6 +45,42 @@ describe('boardCsv', () => {
 
   it('returns just the header for an empty selection', () => {
     expect(boardCsv(records, new Set())).toBe('id,type,text,frame,color,x,y,tags\r\n')
+  })
+})
+
+describe('note colours and vote results (final review R14)', () => {
+  it('names a note by the colour the palette shows: tldraw’s default "black" note is Butter (yellow), never "black"', () => {
+    const board: TLRecord[] = [
+      page(PAGE, 'P'),
+      note('butter', 'Default note', { x: 0, y: 0, color: 'black' }),
+      note('iris', 'Blue note', { x: 300, y: 0, color: 'blue' }),
+      text('t', 'Plain text', { x: 0, y: 400 }),
+    ]
+    const rows = lines(boardCsv(board))
+    expect(rows).toContain('shape:butter,note,Default note,,Butter,0,0,')
+    expect(rows).toContain('shape:iris,note,Blue note,,Iris,300,0,')
+    // Other shapes keep tldraw's colour names (a black text is black).
+    expect(rows).toContain('shape:t,text,Plain text,,black,0,400,')
+    // The board's own records are not changed.
+    expect((board[1] as { props: { color: string } }).props.color).toBe('black')
+  })
+
+  it('adds a votes column once results are revealed, and only then', () => {
+    const votes = [
+      { shapeId: sid('n2'), count: 5, rank: 1 },
+      { shapeId: sid('n1'), count: 2, rank: 2 },
+    ]
+    const csv = boardCsv(records, undefined, { votes })
+    const rows = lines(csv)
+    expect(rows[0]).toBe('id,type,text,frame,color,x,y,tags,votes')
+    expect(rows.find((r) => r.startsWith('shape:n1,'))?.endsWith(',2')).toBe(true)
+    expect(rows.find((r) => r.startsWith('"shape:n2"') || r.startsWith('shape:n2,'))?.endsWith(',5')).toBe(
+      true,
+    )
+    expect(rows.find((r) => r.startsWith('shape:t,'))?.endsWith(',,')).toBe(true)
+    expect(csvRowCount(csv)).toBe(4)
+    expect(lines(boardCsv(records, undefined, { votes: null }))[0]).toBe('id,type,text,frame,color,x,y,tags')
+    expect(lines(boardCsv(records, undefined, { votes: [] }))[0]).toBe('id,type,text,frame,color,x,y,tags')
   })
 })
 

@@ -346,7 +346,10 @@ test('MAK-18 arrange as grid in frames: children stay inside their frame; a lock
     }
     const bx = await boxes(a.page, [G, LOOSE])
     expect(anyOverlap(Object.values(bx))).toBe(false)
-    expect(Math.round(bx[G]?.y ?? 0)).toBe(Math.round(bx[LOOSE]?.y ?? 1))
+    // F7: cells are uniform and items centred in them, so the taller group and the note share a
+    // centre line (not a top edge).
+    const midY = (b: { y: number; h: number } | undefined) => Math.round((b?.y ?? 0) + (b?.h ?? 0) / 2)
+    expect(midY(bx[G])).toBe(midY(bx[LOOSE]))
   })
 
   await test.step('a viewer can select but gets no grid button, menu entry or key', async () => {

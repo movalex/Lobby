@@ -21,49 +21,42 @@ everything on screen says Lobby).
   type samples.
 - **Warm it up.** Open staging in both browsers two minutes before you start. The first load after a
   deploy can take a few seconds.
-- **Check what is merged.** The steps marked *(if merged)* are wave-3 features. Skip any that is not on
-  staging yet (they are listed in `docs/PROGRESS.md`).
+- **AI once.** In browser A, run one AI action on the dry-run board and accept the notice ("Sends the
+  selected text to OpenAI"), so the demo does not stop on it.
 
 ### The script
 
 | Time | What you do | What they see |
 |---|---|---|
 | 0:00 | **Dashboard.** "Every DBC project gets a lobby: its boards, files and feedback." Click **New board**, pick **Lobby tour**, then **Create from Lobby tour** at the bottom of the dialog. | A private board with six frames in a row: Welcome, Brainstorm, Plan, Mood board, Retro, Tips and shortcuts. |
-| 0:30 | **Share and invite.** **Share** → scroll down to **Workshop link** → **Create workshop link** → **Copy** next to the new link. In browser B, paste the link and click **Accept and open board**. | B is on the same board as an editor. Both see each other's cursor and avatar. |
+| 0:30 | **Share and invite.** **Share** → **More ways to share** → **Workshop link** → **Create workshop link** → **Copy** next to the new link. In browser B, paste the link and click **Accept and open board**. | B is on the same board as an editor. Both see each other's cursor and avatar. |
 | 1:00 | **Edit together** (Brainstorm frame). In B, press **N**, click the empty space at the end of the *Story* row (after its two ideas) and type an idea. In A, drag the *Story* theme down a little (about half-way to *Community*), into the empty space under it. | B's note appears on A's screen as it is typed. The connector from the question follows the *Story* theme while A drags it. |
-| 1:30 | **Comment.** In A, press **C** and click one of B's notes, type a comment and press Enter. | A comment pin appears on both screens; B can reply in the thread. |
-| 1:45 | **Mood board** (optional, if you brought an image). Drag the image from the desktop onto **Drop a reference here**. | It fits the slot, next to the palette and the type samples, and shows on B's screen within a second. |
+| 1:20 | **AI.** Drag a selection box over the Brainstorm idea notes (not the theme boxes) → **AI** in the selection bar → **Group into themes**. | The notes move into labelled theme clusters on both screens, in one undo step. Only the selected notes were sent to OpenAI. |
+| 1:40 | **Comment.** In A, press **C** and click one of B's notes, type a comment and press Enter. | A comment pin appears on both screens; B can reply in the thread. |
+| 1:50 | **Mood board** (optional, if you brought an image). Drag the image from the desktop onto **Drop a reference here**. | It fits the slot, next to the palette and the type samples, and shows on B's screen within a second. |
 | 2:00 | **Vote** (Retro frame). Open **Voting** in the left rail → **Start a vote…** → *What can be voted on*: **Only inside frame “5 · Retro”** → *Objects*: **Sticky notes only** → **Start vote**. In both browsers, click **Join vote** on the card that appears, then click a few notes (a click before **Join vote** only selects the note). B clicks **I'm done**. In A's Voting panel: **End and show results**. | Each person sees only their own dots until the reveal, then the ranked results show on both screens. |
-| 2:45 | **Present.** Click empty canvas (so it starts at slide 1), then **Present**. Walk the slides with → and ←, press **Esc** to leave. | Each frame fills the screen, 1 / 6 to 6 / 6, with the board chrome and cursors hidden. Esc puts the camera back. |
+| 2:45 | **Present to everyone.** Click empty canvas (so it starts at slide 1), then **Present** → **Invite everyone** in the presentation bar. In B, click **Join** on the banner. Walk the slides with → and ←, then **End**. | Each frame fills the screen; B's screen follows every slide in step and A sees "1 following". B can step out with **Stop following** and rejoin. |
 | 3:30 | **Export.** The download icon next to Present (**Export: PNG, SVG, PDF, CSV**) → in the PDF section, **Download PDF**. The yellow size note in the image section is about the PNG of the whole board, not the PDF. | A PDF with one page per frame, in presentation order, named after the board. The pages are images of the frames with a searchable text layer, as the dialog says. |
 | 4:00 | **History.** Open **History** in the left rail, type "Before clean-up" as the *Checkpoint name* and click **Save checkpoint**. Delete a note on the Retro frame, then restore it from **Recently deleted** in the same panel. | The note comes back where it was, on both screens. The checkpoint can also be opened with **Restore as new board**. |
 | 4:45 | **Wrap.** Back to the dashboard. | The board is in the list with the rest of the lobby's boards. |
 
-### Wave-3 add-ons (if merged)
+### More to show (swap in, or for Q&A)
 
-Use these instead of a step above, or in Q&A. Each one needs its feature on staging.
-
-- **Guests** *(if merged)*: when you create the workshop or review link, tick **Anyone with the link can
-  join with just a name (no account)**. In browser B (signed out, or a fresh private window), open the
-  link and choose **Join as a guest** with a name. Their name shows as "Sam (guest)" on cursors and in
-  the people list. **Revoke…** the link (keep **Also remove the … who joined through it** ticked) →
-  **Revoke link**, and the guest's view ends within seconds.
-- **Private brainstorm** *(if merged)*: open **Private notes** in the left rail → **Start a private
-  brainstorm…**, type a prompt and choose **A new frame, “Private ideas”, in view** (the tour's
-  Brainstorm frame keeps a column free on its right for about three revealed notes; a bigger reveal
-  lands below its ideas and stretches the frame). Both write in **My
-  private notes**; everyone sees only the counts ("7 notes from 4 people"). **Reveal**: the notes land
-  in the new frame as real sticky notes, grouped by author unless *Anonymous* was on.
-- **Dashboard thumbnails** *(if merged)*: after editing, go back to the dashboard. The board's card shows
-  its first frame (the Lobby tour's Welcome slide), or the owner's start view if one is set, instead of
-  the placeholder. Leaving right after an edit still updates it: that picture is a simplified drawing
-  (shapes and colors, text as bars) until the board is edited again and left open for about 20
-  seconds.
-- **Export control** *(if merged)*: in **Share**, turn off **Viewers and commenters can export, copy and
-  download files**. A viewer's export and copy entries disappear without a reload, and file downloads
-  are refused by the server. Say it plainly: like Miro's setting, it does not stop screenshots.
-- **Offsite backups** *(if merged)*: nothing to click. For Q&A: every board's backup is also copied to
-  Cloudflare R2 and a restore drill checks it (see `docs/DEPLOY.md`).
+- **A client on their phone.** **Share** → **Share with a client** → **Create and copy link** (guests can
+  join with just a name). Open the link on a phone, type a name, **Join**. They show as "Sam (guest)" on
+  cursors, see only this board, and can comment; the owner's bell shows their comment. Revoke the link and
+  their view ends within seconds.
+- **Private brainstorm.** **Private notes** in the left rail → **Start a private brainstorm…** → a prompt
+  and **A new frame, "Private ideas", in view**. Everyone gets an "Add your notes" prompt and sees only the
+  counts until **Reveal**, when the notes land as real sticky notes (anonymous if chosen). An automatic
+  checkpoint is saved just before.
+- **Mind map.** The **Mind map** tool, type a topic, then **Tab** for a child and **Enter** for the next
+  one; the layout tidies itself.
+- **Tags and search.** Tag notes or images from the selection bar, filter by tag; the dashboard's search
+  finds text inside every board you can open.
+- **Safety answers.** **Share** → the export setting stops viewers and commenters exporting or downloading
+  (not screenshots, like Miro); owners can switch **AI** off per board or workspace; **History** keeps
+  automatic checkpoints; every board is backed up to Cloudflare R2 with a tested restore drill.
 
 ### If something goes wrong
 

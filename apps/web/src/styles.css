@@ -41,6 +41,9 @@
   --dr-line-strong: #c4bfb0;
   /* A11Y-10: text field and select borders, 3.8:1 on surface and 3.4:1 on paper (line-strong is 1.8:1) */
   --dr-field-line: #8a8474;
+  /* A11Y-11: placeholder text, 4.6:1 or more on every field and chip background (Chrome's #757575
+     default was 3.5:1 in dark); lighter than --dr-ink-2 so it still reads as a hint, not a value */
+  --dr-placeholder: #646975;
   --dr-focus: #2563eb;
   --dr-live: #17663f;
   --dr-live-bg: #e3f3e9;
@@ -91,6 +94,8 @@
   --dr-line-strong: #4a5160;
   /* 3.4:1 on surface, 3.8:1 on paper */
   --dr-field-line: #6b7386;
+  /* 4.7:1 or more on surface, inset, paper, hover and chip */
+  --dr-placeholder: #949cab;
   --dr-focus: #7fb0ff;
   --dr-live: #74d39d;
   --dr-live-bg: #16311f;
@@ -122,6 +127,11 @@ body,
 #root {
   height: 100%;
   margin: 0;
+}
+/* A11Y-11: every Lobby field's placeholder uses the token (tldraw's own inputs keep their styles). */
+::placeholder {
+  color: var(--dr-placeholder);
+  opacity: 1;
 }
 body {
   font-family: var(--dr-font);
@@ -721,6 +731,15 @@ code {
   align-items: center;
   transform: translateX(-50%);
   pointer-events: none;
+}
+/* Phones (PL-V8): the same top offset keeps notices below tldraw's page menu; spanning the width
+   (instead of shrinking into the right half from left: 50%) keeps a short notice on one or two lines. */
+@media (max-width: 600px) {
+  .dr-notices {
+    right: 16px;
+    left: 16px;
+    transform: none;
+  }
 }
 .dr-notice {
   display: flex;
@@ -1959,6 +1978,10 @@ code {
   place-items: center;
   width: 28px;
   height: 28px;
+  /* A11Y-08: no icon button (every × included) is squeezed below a 24 px target in a crowded row. */
+  flex-shrink: 0;
+  min-width: 24px;
+  min-height: 24px;
   border: 0;
   border-radius: 6px;
   background: transparent;

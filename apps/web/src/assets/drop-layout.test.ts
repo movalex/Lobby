@@ -320,15 +320,140 @@ describe('cameraTargetAfterDrop', () => {
     expect(cameraTargetAfterDrop(vp, { x: 10, y: 10, w: 100, h: 100 })).toBeNull()
   })
   it('zooms out to show the old view and the new content when they are close', () => {
-    expect(cameraTargetAfterDrop(vp, { x: 800, y: 400, w: 400, h: 400 })).toEqual({
-      x: 0,
-      y: 0,
-      w: 1200,
-      h: 800,
-    })
+    const target = cameraTargetAfterDrop(vp, { x: 800, y: 400, w: 400, h: 400 }) as Rect
+    // The union of both (plus the band for the selection bar under the content, F12).
+    expect({ x: target.x, y: target.y, w: target.w }).toEqual({ x: 0, y: 0, w: 1200 })
+    expect(target.h).toBeGreaterThanOrEqual(800)
   })
   it('goes to the content alone when it landed far away (never a 5 % view)', () => {
     const far = { x: 50_000, y: 0, w: 400, h: 400 }
-    expect(cameraTargetAfterDrop(vp, far)).toEqual(far)
+    const target = cameraTargetAfterDrop(vp, far) as Rect
+    // The content, plus a band under it for the selection bar (F12).
+    expect({ x: target.x, y: target.y, w: target.w }).toEqual({ x: far.x, y: far.y, w: far.w })
+    expect(target.h).toBeGreaterThan(far.h)
+    expect(target.h).toBeLessThan(far.h * 1.5)
+  })
+})
+
+describe('F12: a drop of images and file cards', () => {
+  const PDF = { w: 260, h: 356 }
+  const VIDEO = { w: 360, h: 276 }
+  const plan25 = () =>
+    planDrop({
+      images: many(25),
+      cards: [PDF, VIDEO],
+      center: { x: 0, y: 0 },
+      view: VIEW,
+      containers: [PAGE],
+      cardGap: CARD_GAP,
+    })
+
+  it('lands images and cards at one scale: every longest side is the shared cell', () => {
+    const plan = plan25()
+    const sides = [...plan.images, ...plan.cards].map(longest)
+    const cell = Math.max(...sides)
+    // No card dwarfs the photos (the review: 170-unit photos next to 356-unit cards).
+    for (const s of sides) expect(s).toBeCloseTo(cell, 6)
+    // Cards keep their proportions and never shrink below cardMinScale.
+    const [pdf, video] = plan.cards as [Rect, Rect]
+    expect(pdf.w / pdf.h).toBeCloseTo(PDF.w / PDF.h, 6)
+    expect(video.w / video.h).toBeCloseTo(VIDEO.w / VIDEO.h, 6)
+    expect(pdf.h / PDF.h).toBeGreaterThanOrEqual(DROP_LAYOUT.cardMinScale - 1e-9)
+    expect(video.w / VIDEO.w).toBeGreaterThanOrEqual(DROP_LAYOUT.cardMinScale - 1e-9)
+    expectNoOverlaps([...plan.images, ...plan.cards])
+  })
+
+  it('puts the cards on the row after the images, in the same columns (cell centres line up)', () => {
+    const plan = plan25()
+    const imageBottom = Math.max(...plan.images.map((r) => r.y + r.h))
+    for (const c of plan.cards) expect(c.y).toBeGreaterThan(imageBottom)
+    const columnCentres = new Set(plan.images.slice(0, 5).map((r) => Math.round(center(r).x * 1000)))
+    expect(columnCentres.size).toBe(5)
+    for (const c of plan.cards) expect(columnCentres.has(Math.round(center(c).x * 1000))).toBe(true)
+    const [a, b] = plan.cards as [Rect, Rect]
+    expect(center(a).y).toBeCloseTo(center(b).y, 6)
+  })
+
+  it('keeps the image part centred on the drop point', () => {
+    const g = bounds(plan25().images)
+    expect(center(g).x).toBeCloseTo(0, 6)
+    expect(center(g).y).toBeCloseTo(0, 6)
+  })
+
+  it('cards alone keep their own size', () => {
+    const cardsOnly = planDrop({
+      images: [],
+      cards: [PDF, VIDEO],
+      center: { x: 0, y: 0 },
+      view: VIEW,
+      containers: [PAGE],
+      cardGap: CARD_GAP,
+    })
+    expect(cardsOnly.cards.map((r) => [r.w, r.h])).toEqual([
+      [PDF.w, PDF.h],
+      [VIDEO.w, VIDEO.h],
+    ])
+  })
+})
+
+describe('F12: the camera after a drop leaves room for the selection bar under the block', () => {
+  /** What tldraw's zoomToBounds (5.4.2) does with `target`: the content's bottom in screen px. */
+  function contentBottomOnScreen(
+    target: Rect,
+    content: Rect,
+    screen: { w: number; h: number },
+    zoom0: number,
+  ) {
+    const inset = Math.min(128, screen.w * 0.28)
+    const z = Math.min((screen.w - inset) / target.w, (screen.h - inset) / target.h, zoom0)
+    return (screen.h - target.h * z) / 2 + (content.y + content.h - target.y) * z
+  }
+
+  const cases: { name: string; viewport: Rect; zoom: number; content: Rect }[] = [
+    // The review: a 1440 × 900 window at 54 %, a tall block from the middle down.
+    {
+      name: 'tall block below',
+      viewport: { x: 0, y: 0, w: 2470, h: 1570 },
+      zoom: 0.54,
+      content: { x: 400, y: 200, w: 1600, h: 2100 },
+    },
+    {
+      name: 'far away',
+      viewport: { x: 0, y: 0, w: 1000, h: 600 },
+      zoom: 1,
+      content: { x: 50_000, y: 0, w: 400, h: 400 },
+    },
+    {
+      name: 'wide block',
+      viewport: { x: 0, y: 0, w: 1400, h: 800 },
+      zoom: 1,
+      content: { x: 0, y: 500, w: 3000, h: 600 },
+    },
+    {
+      name: 'phone',
+      viewport: { x: 0, y: 0, w: 390, h: 700 },
+      zoom: 1,
+      content: { x: 0, y: 300, w: 380, h: 900 },
+    },
+  ]
+  for (const c of cases) {
+    it(`keeps ${DROP_LAYOUT.barClearancePx} px free under the content: ${c.name}`, () => {
+      const target = cameraTargetAfterDrop(c.viewport, c.content, c.zoom) as Rect
+      expect(target).not.toBeNull()
+      expect(rectContains(target, c.content)).toBe(true)
+      const screen = { w: c.viewport.w * c.zoom, h: c.viewport.h * c.zoom }
+      expect(screen.h - contentBottomOnScreen(target, c.content, screen, c.zoom)).toBeGreaterThanOrEqual(
+        DROP_LAYOUT.barClearancePx - 1e-6,
+      )
+    })
+  }
+
+  it('moves the camera when the block is in view but the bar fits neither under nor over it', () => {
+    const vp = { x: 0, y: 0, w: 1440, h: 850 }
+    // 20 px from the top edge, 30 px above the bottom edge.
+    const content = { x: 400, y: 20, w: 600, h: 800 }
+    expect(cameraTargetAfterDrop(vp, content, 1)).not.toBeNull()
+    // With room under it, it stays put.
+    expect(cameraTargetAfterDrop(vp, { ...content, h: 500 }, 1)).toBeNull()
   })
 })

@@ -5,11 +5,13 @@
 // Rules:
 //  - Reading order is kept: items are grouped into visual rows (top to bottom), each row read left to
 //    right; the grid is filled row by row in that order.
-//  - Column count: near-square overall (ceil(sqrt(n × cellH / cellW)) from the median item size), then
+//  - Column count: near-square overall (ceil(sqrt(n × cellH / cellW)) from the cell size), then
 //    balanced so the last row is as full as it can be. An explicit count (the stepper) wins.
-//  - Cells: every column is as wide as its widest item, every row as tall as its tallest; items sit at
-//    their cell's top-left, so row tops and column left edges line up. One even gap everywhere:
-//    max(20, 10% of the median item's shorter side), at most 200 (notes: 20, like bulk paste).
+//  - Cells: uniform. Every cell is as wide as the widest item and as tall as the tallest, and each item
+//    is centred in its cell, so columns and rows share one centre line and no column is wider than
+//    another (mixed portrait / landscape images and cards no longer leave ragged gutters). One even
+//    gap between cells: max(20, 10% of the median item's shorter side), at most 200 (notes: 20, like
+//    bulk paste).
 //  - The grid starts at the selection's top-left, so the arranged block stays where it was.
 //  - Inside a frame the grid must stay inside it: it is shifted to fit, an automatic column count that
 //    fits is preferred, and only when nothing fits does the frame grow (never shrink).
@@ -89,12 +91,24 @@ export function gridGap(items: readonly GridItem[]): number {
   return Math.round(Math.min(MAX_GAP, Math.max(DEFAULT_NOTE_GAP, side * 0.1)))
 }
 
+/** The uniform cell: as wide as the widest item, as tall as the tallest. */
+export function gridCell(items: readonly GridItem[]): { w: number; h: number } {
+  let w = 0
+  let h = 0
+  for (const item of items) {
+    w = Math.max(w, item.w)
+    h = Math.max(h, item.h)
+  }
+  return { w, h }
+}
+
 /** The automatic column count: a near-square grid, balanced so no row is much emptier than needed. */
 export function autoColumns(items: readonly GridItem[], gap = gridGap(items)): number {
   const n = items.length
   if (n <= 1) return 1
-  const cw = median(items.map((i) => i.w)) + gap
-  const ch = median(items.map((i) => i.h)) + gap
+  const cell = gridCell(items)
+  const cw = cell.w + gap
+  const ch = cell.h + gap
   const raw = Math.ceil(Math.sqrt((n * ch) / Math.max(cw, 1e-6)) - 1e-9)
   const cols = Math.min(n, Math.max(1, raw))
   const rows = Math.ceil(n / cols)
@@ -106,28 +120,12 @@ export function clampColumns(columns: number, n: number): number {
   return Math.min(Math.max(1, Math.round(columns)), Math.max(1, n))
 }
 
-/** Column widths and row heights of `ordered` in `cols` columns (widest / tallest item of each). */
-function tracks(ordered: readonly GridItem[], cols: number): { colW: number[]; rowH: number[] } {
-  const rows = Math.max(1, Math.ceil(ordered.length / cols))
-  const colW = new Array<number>(cols).fill(0)
-  const rowH = new Array<number>(rows).fill(0)
-  ordered.forEach((item, i) => {
-    const c = i % cols
-    const r = Math.floor(i / cols)
-    colW[c] = Math.max(colW[c] as number, item.w)
-    rowH[r] = Math.max(rowH[r] as number, item.h)
-  })
-  return { colW, rowH }
-}
-
 /** The grid's size only (no positions): cheap enough to try every column count. */
 function gridSize(ordered: readonly GridItem[], columns: number, gap: number): { w: number; h: number } {
   const cols = clampColumns(columns, ordered.length)
-  const { colW, rowH } = tracks(ordered, cols)
-  return {
-    w: colW.reduce((s, w) => s + w, 0) + gap * (colW.length - 1),
-    h: rowH.reduce((s, h) => s + h, 0) + gap * (rowH.length - 1),
-  }
+  const rows = Math.max(1, Math.ceil(ordered.length / cols))
+  const cell = gridCell(ordered)
+  return { w: cols * cell.w + gap * (cols - 1), h: rows * cell.h + gap * (rows - 1) }
 }
 
 /** Lays `ordered` (already in fill order) out in `columns` columns, starting at `origin`. */
@@ -140,25 +138,15 @@ export function layoutGrid(
   const n = ordered.length
   const cols = clampColumns(columns, n)
   const rows = Math.max(1, Math.ceil(n / cols))
-  const { colW, rowH } = tracks(ordered, cols)
-  const colX: number[] = []
-  let x = origin.x
-  for (const w of colW) {
-    colX.push(x)
-    x += w + gap
-  }
-  const rowY: number[] = []
-  let y = origin.y
-  for (const h of rowH) {
-    rowY.push(y)
-    y += h + gap
-  }
+  const cell = gridCell(ordered)
   const positions: GridLayout['positions'] = {}
   ordered.forEach((item, i) => {
-    positions[item.id] = { x: colX[i % cols] as number, y: rowY[Math.floor(i / cols)] as number }
+    const cellX = origin.x + (i % cols) * (cell.w + gap)
+    const cellY = origin.y + Math.floor(i / cols) * (cell.h + gap)
+    positions[item.id] = { x: cellX + (cell.w - item.w) / 2, y: cellY + (cell.h - item.h) / 2 }
   })
-  const width = colW.reduce((s, w) => s + w, 0) + gap * (cols - 1)
-  const height = rowH.reduce((s, h) => s + h, 0) + gap * (rows - 1)
+  const width = cols * cell.w + gap * (cols - 1)
+  const height = rows * cell.h + gap * (rows - 1)
   return {
     order: ordered.map((i) => i.id),
     columns: cols,

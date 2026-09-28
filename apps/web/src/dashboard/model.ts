@@ -189,9 +189,10 @@ export function emptyState(
       }
     case 'project':
       return {
-        title: 'This project has no boards',
+        // DANA-08: a project is the project's lobby (the sidebar's "Project lobbies").
+        title: "This project's lobby has no boards yet",
         body: opts.canCreate
-          ? 'Create a board here, or pick this project when you create a board, to keep related work together.'
+          ? "Create a board here, or pick this project when you create a board, to keep the project's work in its lobby."
           : `Boards in this project that are shared with you show up here.${createHint}`,
         offerCreate: opts.canCreate,
       }

@@ -1,5 +1,5 @@
 import { type Project, WorkspaceStorage, type WorkspaceSummary } from '@draftroom/contracts'
-import { type FormEvent, type ReactNode, useEffect, useState } from 'react'
+import { type FormEvent, type MouseEvent, type ReactNode, useEffect, useId, useRef, useState } from 'react'
 import { api, isApiError } from '../api/client.ts'
 import { Wordmark } from '../brand/Wordmark.tsx'
 import { type DashboardSection, linkClick, navigate, workspacePath } from '../lib/routing.ts'
@@ -37,6 +37,33 @@ export function Sidebar({
 }) {
   const [creating, setCreating] = useState(false)
   const [renaming, setRenaming] = useState<string | null>(null)
+  // A11Y-06 / DANA-11: at 760 px and below (phones, and a laptop at 200% zoom) the sidebar folds into
+  // a "Menu" button, so the first screen shows the boards instead of the navigation.
+  const [open, setOpen] = useState(false)
+  const bodyId = useId()
+  const toggleRef = useRef<HTMLButtonElement>(null)
+  // Guests reach only the boards shared with them: Archived and Trash hold nothing of theirs to act on.
+  const guest = workspace.role === 'guest'
+
+  useEffect(() => {
+    if (!open) return
+    // Escape closes the folded menu (after any menu or field inside it had its own Escape).
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || e.defaultPrevented) return
+      setOpen(false)
+      toggleRef.current?.focus()
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [open])
+
+  const navClick = (href: string) => {
+    const go = linkClick(href)
+    return (e: MouseEvent<HTMLAnchorElement>) => {
+      setOpen(false)
+      go(e)
+    }
+  }
 
   const link = (s: DashboardSection, label: string, icon: ReactNode, testId: string) => {
     const href = workspacePath(workspace.id, s)
@@ -46,7 +73,7 @@ export function Sidebar({
         <a
           className="dr-nav__item"
           href={href}
-          onClick={linkClick(href)}
+          onClick={navClick(href)}
           aria-current={current ? 'page' : undefined}
           data-testid={testId}
         >
@@ -58,103 +85,175 @@ export function Sidebar({
   }
 
   return (
-    <aside className="dr-side" aria-label="Workspace navigation">
-      <a className="dr-side__brand" href="/" onClick={linkClick('/')} aria-label="Lobby home">
-        <Wordmark />
-      </a>
-      <WorkspaceSwitcher workspace={workspace} workspaces={workspaces} />
-      <nav aria-label="Boards">
-        <ul className="dr-nav">
-          {link(
-            { kind: 'recent' },
-            'Recent',
-            <Icon d="M12 7v5l3 2M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0z" />,
-            'nav-recent',
-          )}
-          {link(
-            { kind: 'all' },
-            'All boards',
-            <Icon d="M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z" />,
-            'nav-all',
-          )}
-          {link(
-            { kind: 'archived' },
-            'Archived',
-            <Icon d="M3 5h18v4H3zM5 9v10h14V9M10 13h4" />,
-            'nav-archived',
-          )}
-          {link({ kind: 'trash' }, 'Trash', <Icon d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13" />, 'nav-trash')}
-        </ul>
-        {/* Guests cannot list projects; they only reach the boards shared with them. */}
-        {canManageProjects && (
-          <>
-            <div className="dr-nav__group">
-              <span className="dr-nav__heading" id="dr-projects-heading">
-                Projects
-              </span>
-              <button
-                type="button"
-                className="dr-iconbtn dr-iconbtn--sm"
-                aria-label="New project"
-                title="New project"
-                data-testid="create-project"
-                onClick={() => setCreating(true)}
-              >
-                <Icon d="M12 5v14M5 12h14" />
-              </button>
-            </div>
-            <ul className="dr-nav" aria-labelledby="dr-projects-heading" data-testid="project-list">
-              {projects.map((p) =>
-                renaming === p.id ? (
-                  <li key={p.id} className="dr-nav__edit">
-                    <RenameInput
-                      initial={p.name}
-                      label={`Rename project ${p.name}`}
-                      testId="project-rename"
-                      maxLength={80}
-                      onSubmit={(name) => {
-                        setRenaming(null)
-                        void onRenameProject(p, name)
-                      }}
-                      onCancel={() => setRenaming(null)}
-                    />
-                  </li>
-                ) : (
-                  <ProjectLink
-                    key={p.id}
-                    project={p}
-                    href={workspacePath(workspace.id, { kind: 'project', projectId: p.id })}
-                    current={section.kind === 'project' && section.projectId === p.id}
-                    canRename={canManageProjects}
-                    onRename={() => setRenaming(p.id)}
-                  />
-                ),
-              )}
-              {creating && (
-                <li className="dr-nav__edit">
-                  <NewProjectForm
-                    onCancel={() => setCreating(false)}
-                    onCreate={async (name) => {
-                      await onCreateProject(name)
-                      setCreating(false)
-                    }}
-                  />
-                </li>
-              )}
-            </ul>
-            {!projects.length && !creating && (
-              <p className="dr-nav__hint">
-                {projectsError ?? 'Group related boards into projects. Use + to create one.'}
-              </p>
+    <aside
+      className="dr-side"
+      aria-label="Workspace navigation"
+      data-open={open ? 'true' : 'false'}
+      data-testid="dashboard-sidebar"
+    >
+      <div className="dr-side__bar">
+        <a className="dr-side__brand" href="/" onClick={linkClick('/')} aria-label="Lobby home">
+          <Wordmark />
+        </a>
+        <button
+          ref={toggleRef}
+          type="button"
+          className="dr-btn dr-side__toggle"
+          aria-expanded={open}
+          aria-controls={bodyId}
+          data-testid="side-toggle"
+          onClick={() => setOpen((o) => !o)}
+        >
+          <Icon d={open ? 'M6 6l12 12M18 6L6 18' : 'M4 7h16M4 12h16M4 17h16'} />
+          Menu
+        </button>
+      </div>
+      <div className="dr-side__body" id={bodyId}>
+        <WorkspaceSwitcher workspace={workspace} workspaces={workspaces} />
+        <nav aria-label="Boards">
+          <ul className="dr-nav">
+            {link(
+              { kind: 'recent' },
+              'Recent',
+              <Icon d="M12 7v5l3 2M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0z" />,
+              'nav-recent',
             )}
-          </>
-        )}
-      </nav>
-      {/* Guests do not see the workspace's storage (the api answers them 403). */}
-      {canManageProjects && <StorageLine workspaceId={workspace.id} />}
+            {link(
+              { kind: 'all' },
+              'All boards',
+              <Icon d="M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z" />,
+              'nav-all',
+            )}
+            {!guest &&
+              link(
+                { kind: 'archived' },
+                'Archived',
+                <Icon d="M3 5h18v4H3zM5 9v10h14V9M10 13h4" />,
+                'nav-archived',
+              )}
+            {!guest &&
+              link({ kind: 'trash' }, 'Trash', <Icon d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13" />, 'nav-trash')}
+          </ul>
+          <SidebarProjects
+            workspaceId={workspace.id}
+            section={section}
+            projects={projects}
+            projectsError={projectsError}
+            canManageProjects={canManageProjects}
+            creating={creating}
+            renaming={renaming}
+            setCreating={setCreating}
+            setRenaming={setRenaming}
+            navClick={navClick}
+            onCreateProject={onCreateProject}
+            onRenameProject={onRenameProject}
+          />
+        </nav>
+        {/* Guests do not see the workspace's storage (the api answers them 403). */}
+        {canManageProjects && <StorageLine workspaceId={workspace.id} />}
+      </div>
     </aside>
   )
 }
+
+/**
+ * DANA-08: projects are the lobbies the product copy promises ("a lobby for each DBC project"), so the
+ * list says so; the code keeps calling them projects.
+ */
+function SidebarProjects({
+  workspaceId,
+  section,
+  projects,
+  projectsError,
+  canManageProjects,
+  creating,
+  renaming,
+  setCreating,
+  setRenaming,
+  navClick,
+  onCreateProject,
+  onRenameProject,
+}: {
+  workspaceId: string
+  section: DashboardSection
+  projects: readonly Project[]
+  projectsError: string | null
+  canManageProjects: boolean
+  creating: boolean
+  renaming: string | null
+  setCreating(on: boolean): void
+  setRenaming(id: string | null): void
+  navClick(href: string): (e: MouseEvent<HTMLAnchorElement>) => void
+  onCreateProject(name: string): Promise<void>
+  onRenameProject(project: Project, name: string): Promise<void>
+}) {
+  // Guests cannot list projects; they only reach the boards shared with them.
+  if (!canManageProjects) return null
+  return (
+    <>
+      <div className="dr-nav__group">
+        <span className="dr-nav__heading" id="dr-projects-heading">
+          {PROJECTS_HEADING}
+        </span>
+        <button
+          type="button"
+          className="dr-iconbtn dr-iconbtn--sm"
+          aria-label="New project lobby"
+          title="New project lobby"
+          data-testid="create-project"
+          onClick={() => setCreating(true)}
+        >
+          <Icon d="M12 5v14M5 12h14" />
+        </button>
+      </div>
+      <ul className="dr-nav" aria-labelledby="dr-projects-heading" data-testid="project-list">
+        {projects.map((p) =>
+          renaming === p.id ? (
+            <li key={p.id} className="dr-nav__edit">
+              <RenameInput
+                initial={p.name}
+                label={`Rename project ${p.name}`}
+                testId="project-rename"
+                maxLength={80}
+                onSubmit={(name) => {
+                  setRenaming(null)
+                  void onRenameProject(p, name)
+                }}
+                onCancel={() => setRenaming(null)}
+              />
+            </li>
+          ) : (
+            <ProjectLink
+              key={p.id}
+              project={p}
+              href={workspacePath(workspaceId, { kind: 'project', projectId: p.id })}
+              current={section.kind === 'project' && section.projectId === p.id}
+              canRename={canManageProjects}
+              onNavigate={navClick}
+              onRename={() => setRenaming(p.id)}
+            />
+          ),
+        )}
+        {creating && (
+          <li className="dr-nav__edit">
+            <NewProjectForm
+              onCancel={() => setCreating(false)}
+              onCreate={async (name) => {
+                await onCreateProject(name)
+                setCreating(false)
+              }}
+            />
+          </li>
+        )}
+      </ul>
+      {!projects.length && !creating && <p className="dr-nav__hint">{projectsError ?? PROJECTS_HINT}</p>}
+    </>
+  )
+}
+
+/** DANA-08: the sidebar's words for projects (exported for the copy test). */
+export const PROJECTS_HEADING = 'Project lobbies'
+export const PROJECTS_HINT = 'Give each DBC project a lobby that keeps its boards together. Use + to add one.'
 
 const KB = 1024
 const MB = 1024 * KB
@@ -201,32 +300,117 @@ function StorageLine({ workspaceId }: { workspaceId: string }) {
     }
   }, [workspaceId])
   if (!storage) return null
-  const share = storage.quotaBytes > 0 ? storage.usedBytes / storage.quotaBytes : 0
-  const detail = [
-    `Files ${formatStorage(storage.breakdown.originals)}`,
-    `previews ${formatStorage(storage.breakdown.previews)}`,
-    `board thumbnails ${formatStorage(storage.breakdown.thumbnails)}`,
-  ]
-  if (storage.gc?.unreferenced.versions)
-    detail.push(
-      `${storage.gc.unreferenced.versions} unused file${storage.gc.unreferenced.versions === 1 ? '' : 's'} (${formatStorage(storage.gc.unreferenced.bytes)}) no board uses any more`,
-    )
+  return <StorageMeter storage={storage} />
+}
+
+export interface StorageSummary {
+  /** "Storage: 1.2 GB of 100 GB" */
+  label: string
+  level: 'ok' | 'near' | 'full'
+  /** Width of the bar's fill, 0–100; a sliver (2) as soon as anything is stored. */
+  fill: number
+  /** "12% of this workspace's storage is in use" */
+  share: string
+  rows: readonly { label: string; value: string }[]
+  /** Files the collector found unused (owners and admins), or null. */
+  note: string | null
+}
+
+/** DANA-14: what the storage meter and its breakdown say. */
+export function storageSummary(s: WorkspaceStorage): StorageSummary {
+  const ratio = s.quotaBytes > 0 ? s.usedBytes / s.quotaBytes : 0
+  const pct =
+    s.usedBytes <= 0 ? '0%' : ratio < 0.01 ? 'Less than 1%' : `${Math.min(100, Math.floor(ratio * 100))}%`
+  const unused = s.gc?.unreferenced.versions ?? 0
+  return {
+    label: `Storage: ${formatStorage(s.usedBytes)} of ${formatStorage(s.quotaBytes)}`,
+    level: ratio >= 1 ? 'full' : ratio >= 0.9 ? 'near' : 'ok',
+    fill: s.usedBytes <= 0 ? 0 : Math.min(100, Math.max(2, ratio * 100)),
+    share: `${pct} of this workspace's storage is in use`,
+    rows: [
+      { label: 'Uploaded files', value: formatStorage(s.breakdown.originals) },
+      { label: 'File previews', value: formatStorage(s.breakdown.previews) },
+      { label: 'Board thumbnails', value: formatStorage(s.breakdown.thumbnails) },
+      {
+        label: 'Files',
+        value: `${s.files.toLocaleString('en-US')} of ${s.maxFiles.toLocaleString('en-US')}`,
+      },
+    ],
+    note: unused
+      ? `${unused} unused file${unused === 1 ? '' : 's'} (${formatStorage(s.gc?.unreferenced.bytes ?? 0)}) that no board uses any more.`
+      : null,
+  }
+}
+
+/**
+ * DANA-14: the storage line as a labelled meter; its breakdown opens under a button (click, tap, Enter
+ * or Space) instead of a native tooltip that touch screens and screenshots never show. Escape or a
+ * click elsewhere closes it.
+ */
+function StorageMeter({ storage }: { storage: WorkspaceStorage }) {
+  const [open, setOpen] = useState(false)
+  const panelId = useId()
+  const wrapRef = useRef<HTMLDivElement>(null)
+  const buttonRef = useRef<HTMLButtonElement>(null)
+  useEffect(() => {
+    if (!open) return
+    const onDown = (e: PointerEvent) => {
+      if (!wrapRef.current?.contains(e.target as Node)) setOpen(false)
+    }
+    // Capture: this closes before the folded sidebar's own Escape (which then sees defaultPrevented).
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      e.preventDefault()
+      setOpen(false)
+      buttonRef.current?.focus()
+    }
+    document.addEventListener('pointerdown', onDown)
+    document.addEventListener('keydown', onKey, true)
+    return () => {
+      document.removeEventListener('pointerdown', onDown)
+      document.removeEventListener('keydown', onKey, true)
+    }
+  }, [open])
+  const s = storageSummary(storage)
   return (
-    <p
-      className="dr-nav__hint"
-      data-testid="storage-usage"
-      data-level={share >= 1 ? 'full' : share >= 0.9 ? 'near' : 'ok'}
-      title={detail.join(' · ')}
-      style={{
-        marginTop: 'auto',
-        paddingTop: 8,
-        borderTop: '1px solid var(--dr-line)',
-        color: share >= 1 ? 'var(--dr-danger)' : share >= 0.9 ? 'var(--dr-warn)' : undefined,
-        fontVariantNumeric: 'tabular-nums',
-      }}
-    >
-      Storage: {formatStorage(storage.usedBytes)} of {formatStorage(storage.quotaBytes)}
-    </p>
+    <div className="dr-storage" ref={wrapRef} data-level={s.level} data-testid="storage">
+      <button
+        ref={buttonRef}
+        type="button"
+        className="dr-storage__btn"
+        aria-expanded={open}
+        aria-controls={panelId}
+        data-testid="storage-toggle"
+        onClick={() => setOpen((o) => !o)}
+      >
+        <span className="dr-storage__label" data-testid="storage-usage" data-level={s.level}>
+          {s.label}
+        </span>
+        <span className="dr-storage__bar" aria-hidden="true">
+          <span className="dr-storage__fill" style={{ width: `${s.fill}%` }} />
+        </span>
+      </button>
+      {/* After the button in reading order; drawn above it (the line sits at the sidebar's foot). */}
+      {open && (
+        <section
+          id={panelId}
+          className="dr-storage__pop"
+          aria-label="Storage breakdown"
+          data-testid="storage-breakdown"
+        >
+          <p className="dr-storage__share">{s.share}</p>
+          <dl className="dr-storage__rows">
+            {s.rows.map((r) => (
+              <div key={r.label}>
+                <dt>{r.label}</dt>
+                <dd>{r.value}</dd>
+              </div>
+            ))}
+          </dl>
+          {s.note && <p className="dr-storage__note">{s.note}</p>}
+        </section>
+      )}
+    </div>
   )
 }
 
@@ -235,12 +419,14 @@ function ProjectLink({
   href,
   current,
   canRename,
+  onNavigate,
   onRename,
 }: {
   project: Project
   href: string
   current: boolean
   canRename: boolean
+  onNavigate(href: string): (e: MouseEvent<HTMLAnchorElement>) => void
   onRename(): void
 }) {
   return (
@@ -248,7 +434,7 @@ function ProjectLink({
       <a
         className="dr-nav__item"
         href={href}
-        onClick={linkClick(href)}
+        onClick={onNavigate(href)}
         aria-current={current ? 'page' : undefined}
       >
         <span className="dr-nav__swatch" aria-hidden="true" />
@@ -341,7 +527,8 @@ function WorkspaceSwitcher({
         <span className="dr-ws__name" title={workspace.name}>
           {workspace.name}
         </span>
-        <span className="dr-ws__role">{WS_ROLE_LABEL[workspace.role]}</span>
+        {/* DANA-08: say what this box is (the workspace holds the project lobbies and their boards). */}
+        <span className="dr-ws__role">Workspace · {WS_ROLE_LABEL[workspace.role]}</span>
       </span>
     </>
   )

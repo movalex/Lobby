@@ -154,6 +154,16 @@ export async function createBoardFrom(
         )
       }
       await insertLinks(tx, plan.workspaceId, newId, plan.files, at)
+      // AIPV-04: a copy of a board with AI off (an NDA client's board) keeps AI off; a copy never falls
+      // back to the workspace default (usually on). Restore-as-new and duplicate only, from a board of
+      // the same workspace; a board without its own choice gives a copy without one.
+      if (plan.from?.boardId && (plan.via === 'restore' || plan.via === 'duplicate'))
+        await tx.query(
+          `INSERT INTO board_ai_settings (board_id, workspace_id, enabled, updated_by, updated_at)
+           SELECT $1, $2, s.enabled, $3, $4 FROM board_ai_settings s
+            WHERE s.board_id = $5 AND s.workspace_id = $2`,
+          [newId, plan.workspaceId, plan.userId, at, plan.from.boardId],
+        )
       await audit(tx, {
         workspaceId: plan.workspaceId,
         actorId: plan.userId,

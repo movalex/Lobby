@@ -155,12 +155,14 @@ test('RETRO-22a: Tab from the top of the page reaches the breadcrumb, title, fea
     )
   }
   const ids = stops.map((s) => s.id)
-  expect(stops[0]).toEqual({ id: 'Back to Dev Studio', inTopBar: true })
-  expect(ids.indexOf('board-title')).toBeLessThan(4)
+  // A11Y-09 (shell-2): the page's own "Skip to canvas" comes first, then the top bar.
+  expect(stops[0]).toEqual({ id: 'skip-to-canvas', inTopBar: false })
+  expect(stops[1]).toEqual({ id: 'Back to Dev Studio', inTopBar: true })
+  expect(ids.indexOf('board-title')).toBeLessThan(5)
   const share = ids.indexOf('share-button')
-  expect(share).toBeGreaterThan(0)
-  expect(share).toBeLessThan(15)
-  expect(stops.slice(0, share + 1).every((s) => s.inTopBar)).toBe(true)
+  expect(share).toBeGreaterThan(1)
+  expect(share).toBeLessThan(16)
+  expect(stops.slice(1, share + 1).every((s) => s.inTopBar)).toBe(true)
   // The account badge is drawn in the bar but tabbed to last, after the dock and tldraw's toolbar.
   const badge = ids.indexOf('dev-identity-badge')
   expect(badge).toBeGreaterThan(ids.indexOf('tools.select'))

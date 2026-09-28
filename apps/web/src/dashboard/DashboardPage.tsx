@@ -11,6 +11,8 @@ import { canCreateInWorkspace } from '../lib/permissions.ts'
 import { boardPath, type DashboardSection, navigate, workspacePath } from '../lib/routing.ts'
 import { writeLastWorkspace } from '../lib/storage.ts'
 import { useResource } from '../lib/useResource.ts'
+import { isFocusLost } from '../ui/focus.ts'
+import { SkipLink } from '../ui/SkipLink.tsx'
 import { NoAccessScreen } from '../ui/screens.tsx'
 import { BoardCard } from './BoardCard.tsx'
 import { BoardDetailsDialog, DuplicateBoardDialog, MoveBoardDialog } from './BoardDialogs.tsx'
@@ -45,6 +47,25 @@ import { newBoardPath } from './template-paths.ts'
 import './dashboard.css'
 
 const dash = dashboardApi(api)
+
+// A11Y-17: whether the person has clicked, tapped or pressed a key in this tab yet. After they have
+// (signing in, a link in the folded phone menu), a dashboard that leaves the focus nowhere moves it to
+// its heading, so a screen reader announces the new page; a fresh page load stays where browsers start.
+let interacted = false
+if (typeof window !== 'undefined') {
+  const mark = () => {
+    interacted = true
+  }
+  window.addEventListener('pointerdown', mark, { capture: true, once: true })
+  window.addEventListener('keydown', mark, { capture: true, once: true })
+}
+
+/** The focus is on <body>, gone, or on something no longer shown (a link of the menu that just folded). */
+function focusGone(): boolean {
+  if (isFocusLost()) return true
+  const a = document.activeElement
+  return a instanceof HTMLElement && typeof a.checkVisibility === 'function' && !a.checkVisibility()
+}
 
 type DashBoard = Awaited<ReturnType<typeof dash.listBoards>>[number]
 
@@ -85,6 +106,7 @@ function Dashboard({ workspaceId, section }: { workspaceId: string; section: Das
   const ownerId = useId()
   const searchRef = useRef<HTMLInputElement>(null)
   const importRef = useRef<HTMLInputElement>(null)
+  const titleRef = useRef<HTMLHeadingElement>(null)
 
   const [query, setQuery] = useState('')
   const [sort, setSort] = useState<BoardSort>('opened')
@@ -148,6 +170,12 @@ function Dashboard({ workspaceId, section }: { workspaceId: string; section: Das
   useEffect(() => {
     setQuery('')
     setRenamingId(null)
+  }, [sectionKey])
+
+  // A11Y-17: arriving here from sign-in (or from a link in the folded phone menu, which closes) left
+  // the focus on <body>; the page heading takes it, so the new page is announced and Tab goes on from it.
+  useEffect(() => {
+    if (interacted && focusGone()) titleRef.current?.focus({ preventScroll: true })
   }, [sectionKey])
 
   const projectList: Project[] = projects.data ?? []
@@ -396,6 +424,12 @@ function Dashboard({ workspaceId, section }: { workspaceId: string; section: Das
 
   return (
     <div className="dr-dash" data-testid="dashboard" data-workspace-id={workspace.id}>
+      {/* A11Y-09: the first Tab stop jumps past the sidebar and the search bar to the board list. */}
+      <SkipLink
+        label="Skip to boards"
+        testId="skip-to-boards"
+        onSkip={() => titleRef.current?.focus({ preventScroll: false })}
+      />
       <Sidebar
         workspace={workspace}
         workspaces={me.workspaces}
@@ -444,7 +478,7 @@ function Dashboard({ workspaceId, section }: { workspaceId: string; section: Das
 
         <div className="dr-dash__head">
           <div>
-            <h1 className="dr-dash__title" data-testid="dashboard-title">
+            <h1 className="dr-dash__title" data-testid="dashboard-title" ref={titleRef} tabIndex={-1}>
               {title}
             </h1>
             <p className="dr-dash__sub">

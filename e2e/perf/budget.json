@@ -1,0 +1,8 @@
+{
+  "about": "Opt-in perf budget (pnpm --filter @draftroom/e2e perf). Values sit near what the committed code measured on this PC (Threadripper 9970X, RTX 5090, Windows 11, headless branded Chrome with the GPU, heavy board: 20 frames, 4,500 notes, 200 images) on 2026-09-28; a result fails only beyond the margin. latencyVisibleP95Ms: edit in one tab painted in another (p95 of 240 edits; at fit it varied 249-399 ms over five quiet runs of the same code, so that budget only guards against gross regressions). editingTabMinFps: frames the editing tab renders while it edits (catches per-edit work on the editor's side). panMedianFps: median of 3 pans; 'fit@60' is the gentle 60 px pan at fit (the 600 px sweep at fit measured 16-21 fps on a quiet machine and drops with any other load, so it only guards against gross regressions). A miss while the whole machine is busier than maxMachineBusyPct is reported as inconclusive (exit 2). The product gates (WRK-01 p95 <= 250 ms, PRF-02 >= 30 fps at fit) are printed separately by run.ts.",
+  "margin": 0.15,
+  "maxMachineBusyPct": 25,
+  "latencyVisibleP95Ms": { "fit": 380, "100": 200 },
+  "editingTabMinFps": { "fit": 26, "100": 45 },
+  "panMedianFps": { "fit": 16, "fit@60": 26, "100": 57 }
+}

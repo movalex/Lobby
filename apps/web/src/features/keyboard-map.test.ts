@@ -197,6 +197,13 @@ describe('canvas-ux keys read by its own listener (a11y-polish)', () => {
   })
 })
 
+describe('Enter places the picked tool (A11Y-07, ui/place-at-center.ts listener)', () => {
+  it('plain Enter is no action or tool chord, so taking it in note/geo/text idle shadows nothing', () => {
+    expect(idsFor('enter')).toEqual([])
+    expect(idsFor('enter', true)).toEqual([])
+  })
+})
+
 describe('mindmap keys (wave 4)', () => {
   it('Alt+Shift+M starts a mind map, on editable boards only', () => {
     expect(idsFor('alt+shift+m')).toEqual(['dr-mindmap-start'])
