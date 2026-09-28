@@ -23,6 +23,7 @@ import type { FeatureContext } from './features/context.ts'
 import { registerFeatures } from './features/index.ts'
 import type { BlobStore } from './files/blobs.ts'
 import { filesPlugin } from './files/plugin.ts'
+import { registerStorage } from './files/storage-routes.ts'
 import { openBlobStore } from './files/store.ts'
 import { boardsShowingAsset, createFileAuthorizer } from './files-auth.ts'
 import { createHttpSyncNotifier, fanOutAccessChanges, type SyncNotifier } from './notifier.ts'
@@ -279,6 +280,7 @@ async function buildServer(
         maxFiles: config.uploads.workspaceMaxFiles,
       },
       perUser: { max: config.uploads.perUserPerMinute, timeWindow: 60_000 },
+      guestQuota: config.storage.guestQuota, // SEAM-02: per name-only guest (DRAFTROOM_GUEST_QUOTA_MB, …)
     },
   })
 
@@ -324,6 +326,8 @@ async function buildServer(
   }
   registerEventRoutes(app, features)
   await registerFeatures(app, features)
+  // Workspace storage and the unreferenced-file collector (UPL-1; DRAFTROOM_ASSET_GC, report-only by default).
+  registerStorage(app, ctx, { blobs, sync: features.sync, dataRoot: layout.root })
 
   return {
     app,

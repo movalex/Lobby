@@ -437,6 +437,12 @@ export class DeletedStore {
     return { entries, total: roots.length }
   }
 
+  /** The stored JSON of every captured shape row, one at a time (the asset collector's scan). */
+  *shapeStates(): IterableIterator<string> {
+    for (const row of this.db.prepare("SELECT state FROM dr_deleted_records WHERE kind = 'shape'").iterate())
+      yield String((row as { state: string }).state)
+  }
+
   /** The newest captured row of a shape, if any. */
   latestShapeRow(id: string): DeletedRow | null {
     const r = this.stmts.latestShape.get(id) as RawRow | undefined

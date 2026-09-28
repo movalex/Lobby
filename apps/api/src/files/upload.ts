@@ -15,6 +15,8 @@ import { EMPTY_PROBE, toMeta, VERSION_COLUMNS, type VersionRow } from './meta.ts
 import { initialServedMime, normalizeDeclaredMime } from './mime.ts'
 import { ReceiveError, receiveToBlob } from './receive.ts'
 import { HttpError, requireAccess, sendJson } from './respond.ts'
+import { DEFAULT_STORAGE_CONFIG } from './storage-config.ts'
+import { isNameOnlyGuest, uploaderUsage, workspaceUsage } from './usage.ts'
 
 export interface UploadRoute {
   Params: { bid: string }
@@ -45,17 +47,36 @@ const formatBytes = (n: number) =>
   n >= GiB ? `${Math.round((n / GiB) * 10) / 10} GB` : `${Math.max(1, Math.round(n / MiB))} MB`
 
 /**
- * FC-1: 413 when `incomingBytes` more (one more file) would take the workspace past its quota. Run
- * once before reading the body (from Content-Length) and again inside the insert transaction, after
- * the workspace row is locked, with the real size: two uploads that both passed the first check
- * cannot both be stored.
+ * FC-1: 413 when `incomingBytes` more (one more file) would take the workspace past its quota (every
+ * byte it stores: usage.ts). SEAM-02: for a name-only guest (`guest`: their user id), also when it
+ * would take them past their own allowance in this workspace. Run once before reading the body (from
+ * Content-Length) and again inside the insert transaction, after the workspace row is locked, with
+ * the real size: two uploads that both passed the first check cannot both be stored.
  */
-async function checkQuota(q: Queryable, workspaceId: string, incomingBytes: number, policy: UploadPolicy) {
-  const usage = await q.one<{ bytes: number; files: number }>(
-    `SELECT COALESCE(SUM(size_bytes), 0)::float8 AS bytes, count(*)::int AS files
-       FROM asset_versions WHERE workspace_id = $1`,
-    [workspaceId],
-  )
+async function checkQuota(
+  q: Queryable,
+  workspaceId: string,
+  incomingBytes: number,
+  policy: UploadPolicy,
+  guest: string | null,
+) {
+  if (guest) {
+    const mine = await uploaderUsage(q, workspaceId, guest)
+    const { maxBytes, maxFiles } = policy.guestQuota ?? DEFAULT_STORAGE_CONFIG.guestQuota
+    if (mine.files + 1 > maxFiles)
+      throw reject(
+        413,
+        'GUEST_FILE_LIMIT',
+        `As a guest you can add up to ${maxFiles.toLocaleString('en-US')} files to this workspace, and you've reached that. Ask the person who shared the link to add more, or sign in with an account.`,
+      )
+    if (mine.bytes + incomingBytes > maxBytes)
+      throw reject(
+        413,
+        'GUEST_STORAGE_LIMIT',
+        `As a guest you can add up to ${formatBytes(maxBytes)} of files to this workspace, and this file would go over that. Ask the person who shared the link to add it, or sign in with an account.`,
+      )
+  }
+  const usage = await workspaceUsage(q, workspaceId)
   const { maxBytes, maxFiles } = policy.workspaceQuota
   if (usage.files + 1 > maxFiles)
     throw reject(
@@ -63,7 +84,7 @@ async function checkQuota(q: Queryable, workspaceId: string, incomingBytes: numb
       'FILE_LIMIT_REACHED',
       `This workspace has reached its limit of ${maxFiles.toLocaleString('en-US')} files, so this file can't be added. Ask the workspace owner for more space.`,
     )
-  if (usage.bytes + incomingBytes > maxBytes)
+  if (usage.used + incomingBytes > maxBytes)
     throw reject(
       413,
       'STORAGE_QUOTA_EXCEEDED',
@@ -122,8 +143,9 @@ export async function handleUpload(
       `The file is larger than the ${maxBytes / MiB} MB limit for ${KIND_LABEL[kind]}.`,
     )
   if (declaredBytes > maxBytes) throw tooLarge()
-  // The workspace quota, from the declared size, before any body byte is read.
-  await checkQuota(deps.db, workspaceId, declaredBytes, guard.policy)
+  // The workspace quota (and a guest's own allowance), from the declared size, before any body byte is read.
+  const guest = (await isNameOnlyGuest(deps.db, userId)) ? userId : null
+  await checkQuota(deps.db, workspaceId, declaredBytes, guard.policy, guest)
 
   const assetId = newId('ast')
   const versionId = newId('ver')
@@ -142,7 +164,7 @@ export async function handleUpload(
       // Serializes this workspace's uploads for the re-check (NO KEY: boards and members referencing
       // the workspace row are not blocked).
       await tx.query('SELECT id FROM workspaces WHERE id = $1 FOR NO KEY UPDATE', [workspaceId])
-      await checkQuota(tx, workspaceId, bytes, guard.policy)
+      await checkQuota(tx, workspaceId, bytes, guard.policy, guest)
       const inserted = await tx.one<VersionRow>(
         `INSERT INTO asset_versions AS v (id, asset_id, workspace_id, board_id, name, declared_mime_type,
            mime_type, kind, size_bytes, sha256, uploaded_by, status, attempts, probe, created_at, updated_at)

@@ -6,6 +6,7 @@ import type { Db } from '@draftroom/db'
 import type { FastifyRequest } from 'fastify'
 import { DEFAULT_UPLOAD_LIMITS } from '../config.ts'
 import type { BlobStore } from './blobs.ts'
+import { DEFAULT_STORAGE_CONFIG } from './storage-config.ts'
 
 export type FileAction = 'view' | 'edit'
 
@@ -34,13 +35,17 @@ export interface FileAuthorizer {
 }
 
 /**
- * Upload limits (docs/SECURITY-REVIEW-2026-09-27.md FC-1). The quota covers every stored original of
- * the board's workspace (SUM(size_bytes) and count of asset_versions, whoever uploaded them); the
- * rate limit counts upload attempts per signed-in user, never per IP.
+ * Upload limits (docs/SECURITY-REVIEW-2026-09-27.md FC-1). The byte quota covers everything the board's
+ * workspace stores (originals, their previews and board thumbnails: usage.ts), the file cap its
+ * uploaded versions, whoever uploaded them; the rate limit counts upload attempts per signed-in user,
+ * never per IP. SEAM-02: a name-only guest (no account) is also held to `guestQuota`, over the
+ * originals they uploaded to that workspace, so one anonymous workshop guest cannot fill it for everyone.
  */
 export interface UploadPolicy {
   workspaceQuota: { maxBytes: number; maxFiles: number }
   perUser: { max: number; timeWindow: number }
+  /** Per name-only guest per workspace; default DEFAULT_STORAGE_CONFIG.guestQuota (1 GB, 200 files). */
+  guestQuota?: { maxBytes: number; maxFiles: number }
 }
 
 /** Used when the host passes no policy: the same staging defaults as the API's config. */
@@ -50,6 +55,7 @@ export const DEFAULT_UPLOAD_POLICY: Readonly<UploadPolicy> = {
     maxFiles: DEFAULT_UPLOAD_LIMITS.workspaceMaxFiles,
   },
   perUser: { max: DEFAULT_UPLOAD_LIMITS.perUserPerMinute, timeWindow: 60_000 },
+  guestQuota: DEFAULT_STORAGE_CONFIG.guestQuota,
 }
 
 export interface FilesDeps {

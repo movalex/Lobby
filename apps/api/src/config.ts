@@ -8,6 +8,7 @@ import { isIP } from 'node:net'
 import { join } from 'node:path'
 import { checkSecret } from '@draftroom/auth-tickets'
 import { resolveDataDir } from '@draftroom/dev-assets'
+import { parseStorageConfig, type StorageConfig } from './files/storage-config.ts'
 
 export type AuthProviderId = 'dev' | 'clerk'
 
@@ -69,6 +70,8 @@ export interface ApiConfig {
    * signed-in user per minute (DRAFTROOM_UPLOADS_PER_MINUTE).
    */
   uploads: UploadLimitsConfig
+  /** Per-guest uploads, boards per workspace, the unreferenced-file collector (files/storage-config.ts). */
+  storage: StorageConfig
 }
 
 export interface UploadLimitsConfig {
@@ -381,5 +384,6 @@ export function loadConfig(env: Env = process.env): ApiConfig {
         100_000,
       ),
     },
+    storage: parseStorageConfig(env),
   }
 }

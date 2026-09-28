@@ -14,6 +14,7 @@ import { type BoardVisibility, canCreateInWorkspace } from '@draftroom/permissio
 import { BOARD_RETURNING, type BoardRow, requireWorkspaceRole } from '../../access.ts'
 import { audit } from '../../audit.ts'
 import { ApiError, forbidden } from '../../errors.ts'
+import { assertBoardRoom } from '../../files/usage.ts'
 import { SyncSeedConflict, SyncUnavailable } from '../../sync-internal.ts'
 import type { FeatureContext } from '../context.ts'
 import type { FileRef } from './files.ts'
@@ -85,6 +86,8 @@ export async function createBoardFrom(
       lastChangedClock: 0,
     })),
   }
+  // SEAM-11: before the seed, so a full workspace never leaves an orphan canvas behind (and again below).
+  await assertBoardRoom(ctx.db, plan.workspaceId, ctx.config.storage.maxBoardsPerWorkspace)
   let boardId: string | null = null
   for (let attempt = 0; attempt < SEED_ATTEMPTS && !boardId; attempt++) {
     const id = newBoardId()
@@ -105,6 +108,7 @@ export async function createBoardFrom(
       // Membership can change while the seed ran: decide again, inside the transaction.
       const role = await requireWorkspaceRole(tx, plan.workspaceId, plan.userId)
       if (!canCreateInWorkspace(role)) throw forbidden()
+      await assertBoardRoom(tx, plan.workspaceId, ctx.config.storage.maxBoardsPerWorkspace)
       let projectId = plan.projectId
       if (projectId) {
         const p = await tx.maybeOne('SELECT 1 AS ok FROM projects WHERE id = $1 AND workspace_id = $2', [

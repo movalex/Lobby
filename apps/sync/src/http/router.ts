@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { checkInternalSecret, INTERNAL_SECRET_HEADER } from '@draftroom/auth-tickets'
 import { type BackupService, handleBackupStatus } from '../backup/service.ts'
+import { handleAssetRefs } from './asset-refs.ts'
 import {
   handleAccessChanged,
   handleListDeleted,
@@ -54,6 +55,12 @@ const INTERNAL_ROUTES: Array<{ re: RegExp; methods: string[]; handle: Handler }>
     re: /^\/internal\/boards\/([^/]+)\/deleted\/restore$/,
     methods: ['POST'],
     handle: (req, res, deps, [board = '']) => handleRestoreDeleted(req, res, deps, board),
+  },
+  // The api's asset collector: files the canvas and "Recently deleted" still reference (asset-refs.ts)
+  {
+    re: /^\/internal\/boards\/([^/]+)\/asset-refs$/,
+    methods: ['GET'],
+    handle: (_req, res, deps, [board = '']) => handleAssetRefs(res, deps, board),
   },
   // Private brainstorming: revealed drafts become notes (workshops private-notes; place-notes.ts)
   {
