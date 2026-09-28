@@ -80,9 +80,11 @@ test('COL-11 picker: alice creates and applies tags to two notes from the select
     await expect(picker.getByTestId('tag-picker-input')).toBeFocused()
     await expect(picker).toContainText('No tags on this board yet. Type a name to create one.')
     await a.page.keyboard.type('#Research')
-    await expect(picker.getByTestId('tag-create')).toHaveText('+ Create “Research”')
+    // F15: the typed "#" becomes the field's prefix (the field holds the name), and the offer keeps it.
+    await expect(picker.getByTestId('tag-picker-input')).toHaveValue('Research')
+    await expect(picker.getByTestId('tag-create')).toHaveText('+ Create “#Research”')
     await a.page.keyboard.press('Enter')
-    await expect(picker.getByTestId('tag-picker-status')).toHaveText('Created “Research”.')
+    await expect(picker.getByTestId('tag-picker-status')).toHaveText('Created “#Research”.')
     await expect(picker.getByTestId('tag-picker-input')).toHaveValue('')
     await expect(option(a.page, 'research')).toHaveAttribute('data-state', 'all')
     for (const id of [N1, N2]) expect(await storedTagKeys(a.page, id)).toEqual(['research'])

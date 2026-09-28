@@ -88,22 +88,32 @@ describe('columns and gap', () => {
 })
 
 describe('layoutGrid', () => {
-  it('uses one uniform cell (widest × tallest item) and centres every item in its cell', () => {
+  it('uses one column width (the widest item), rows as tall as their tallest item, items centred', () => {
     const items = [
       note('a', 0, 0, 100, 50),
       note('b', 0, 0, 300, 80),
       note('c', 0, 0, 200, 200),
       note('d', 0, 0, 50, 50),
     ]
-    // Cell 300 × 200, gap 10: cells at x 10 / 320, y 20 / 230.
+    // Columns 300 wide, gap 10: x 10 / 320. Row 1 is 80 tall (y 20), row 2 is 200 tall (y 110).
     const plan = layoutGrid(items, 2, { x: 10, y: 20 }, 10)
     expect(plan.positions).toEqual({
-      a: { x: 10 + 100, y: 20 + 75 },
-      b: { x: 320, y: 20 + 60 },
-      c: { x: 10 + 50, y: 230 },
-      d: { x: 320 + 125, y: 230 + 75 },
+      a: { x: 10 + 100, y: 20 + 15 },
+      b: { x: 320, y: 20 },
+      c: { x: 10 + 50, y: 110 },
+      d: { x: 320 + 125, y: 110 + 75 },
     })
-    expect(plan.bounds).toEqual({ x: 10, y: 20, w: 300 + 10 + 300, h: 200 + 10 + 200 })
+    expect(plan.bounds).toEqual({ x: 10, y: 20, w: 300 + 10 + 300, h: 80 + 10 + 200 })
+  })
+
+  it('F2-06: a grid of landscape photos has even gutters (rows as tall as the photos)', () => {
+    const items = Array.from({ length: 6 }, (_, i) => note(`p${i}`, i * 700, 0, 631, 473))
+    const plan = layoutGrid(items, 3, { x: 0, y: 0 }, 37)
+    const p = (id: string) => plan.positions[id] as { x: number; y: number }
+    const horizontalGap = p('p1').x - (p('p0').x + 631)
+    const verticalGap = p('p3').y - (p('p0').y + 473)
+    expect(horizontalGap).toBe(37)
+    expect(verticalGap).toBe(37)
   })
 
   it('F7: mixed portrait, landscape and card sizes line up on shared centre lines (no ragged columns)', () => {
@@ -188,6 +198,44 @@ describe('arrangeAsGrid', () => {
     expect(plan?.columns).toBe(4)
     expect(plan?.rows).toBe(1)
     expect(['a', 'b', 'c', 'd'].map((id) => plan?.positions[id]?.x)).toEqual([0, 220, 440, 660])
+  })
+
+  describe('F2-03: a subset next to other shapes', () => {
+    // 23 photos in a 6 × 4 block, three file cards just below it (the review's Halden board).
+    const photos = Array.from({ length: 23 }, (_, i) =>
+      note(`h${i}`, (i % 6) * 150, Math.floor(i / 6) * 150, 136, 136),
+    )
+    const cards = [
+      note('pdf', 0, 620, 100, 120),
+      note('img', 150, 620, 136, 80),
+      note('mp4', 300, 620, 136, 80),
+    ]
+
+    it('picks a column count that stays clear of the neighbours', () => {
+      const plan = arrangeAsGrid({ items: photos, obstacles: cards })
+      expect(plan?.pushed).toBeUndefined()
+      for (const p of photos)
+        for (const c of cards)
+          expect(overlaps(placedBox(photos, plan, p.id), c), `${p.id} over ${c.id}`).toBe(false)
+    })
+
+    it('moves the neighbours below down when no count stays clear (an explicit count)', () => {
+      const plan = arrangeAsGrid({ items: photos, columns: 3, obstacles: cards })
+      expect(plan?.columns).toBe(3)
+      const pushed = plan?.pushed ?? {}
+      expect(Object.keys(pushed).sort()).toEqual(['img', 'mp4', 'pdf'])
+      const bottom = (plan?.bounds.y ?? 0) + (plan?.bounds.h ?? 0)
+      for (const c of cards) expect(pushed[c.id]?.y).toBeGreaterThanOrEqual(bottom)
+      // They keep their row: the same distance moved for each.
+      expect(new Set(cards.map((c) => (pushed[c.id]?.y ?? 0) - c.y)).size).toBe(1)
+    })
+
+    it('ignores shapes the selection already overlapped (a zone drawn behind the notes)', () => {
+      const zone = note('zone', -20, -20, 1000, 700)
+      const plan = arrangeAsGrid({ items: photos, obstacles: [zone] })
+      expect(plan?.pushed).toBeUndefined()
+      expect(plan?.columns).toBe(autoColumns(photos))
+    })
   })
 
   describe('inside a frame', () => {

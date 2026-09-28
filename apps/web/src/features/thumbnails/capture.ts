@@ -9,6 +9,27 @@ import { boardHasContent, isBusy, renderNowSync, renderThumbnail } from './rende
 import { CaptureScheduler, type CaptureStatus, RENDER_QUIET_MS } from './scheduler.ts'
 import { hasStoredThumbnail, sendLeftover, sendThumbnail } from './upload.ts'
 
+/**
+ * DANA2-06: boards whose stored thumbnail is the quick stand-in drawn while leaving (renderNowSync), per
+ * browser. The api cannot tell the two kinds apart; this browser drew it, so this browser redraws it.
+ */
+const standInKey = (boardId: string) => `draftroom.thumbnail.stand-in.${boardId}`
+export function markStandIn(boardId: string, on: boolean) {
+  try {
+    if (on) localStorage.setItem(standInKey(boardId), '1')
+    else localStorage.removeItem(standInKey(boardId))
+  } catch {
+    // blocked storage: the next edit redraws it anyway
+  }
+}
+export function hasStandIn(boardId: string): boolean {
+  try {
+    return localStorage.getItem(standInKey(boardId)) === '1'
+  } catch {
+    return false
+  }
+}
+
 /** Pointer presses, keys and wheel turns anywhere on the page count as "the person is active". */
 const INPUT_EVENTS = ['pointerdown', 'keydown', 'wheel'] as const
 
@@ -30,7 +51,12 @@ export function startCapture(
     clearTimeout: (h) => window.clearTimeout(h as number),
     isBusy: busy,
     render: (o) => renderThumbnail(editor, { ...o, busy }),
-    send: (r, o) => sendThumbnail(boardId, r, o),
+    send: async (r, o) => {
+      const sent = await sendThumbnail(boardId, r, o)
+      // A real picture replaced the stand-in (or the board is empty now): nothing left to redo.
+      if (sent.ok && (r.kind === 'empty' || r.renderer === 'detailed')) markStandIn(boardId, false)
+      return sent
+    },
     onStatus: opts.onStatus,
   })
 
@@ -60,7 +86,12 @@ export function startCapture(
   const drawNowIfNeeded = () => {
     if (editor.isDisposed) return
     flush()
-    if (scheduler.needsRender()) scheduler.adopt(renderNowSync(editor))
+    if (!scheduler.needsRender()) return
+    const now = renderNowSync(editor)
+    scheduler.adopt(now)
+    // DANA2-06: that quick drawing shows images and text as grey bars. Remember it, so the next open in
+    // this browser renders the real picture even without edits.
+    if (now.kind === 'image' && now.standIn) markStandIn(boardId, true)
   }
   const onPageHide = () => {
     drawNowIfNeeded()
@@ -77,7 +108,7 @@ export function startCapture(
   void hasStoredThumbnail(boardId, controller.signal).then((has) => {
     if (has === undefined || controller.signal.aborted) return
     scheduler.setRemote(has)
-    if (!has && boardHasContent(editor)) scheduler.noteChange()
+    if ((!has || hasStandIn(boardId)) && boardHasContent(editor)) scheduler.noteChange()
   })
 
   return () => {

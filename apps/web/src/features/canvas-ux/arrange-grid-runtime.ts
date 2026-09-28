@@ -115,6 +115,8 @@ export interface ArrangeOutcome {
   rows: number
   frameGrew: boolean
   locked: number
+  /** F2-03: neighbours moved down to make room for the grid. */
+  pushed: number
 }
 
 /**
@@ -149,9 +151,28 @@ export function arrangeSelectionAsGrid(
     const parent = isShapeId(parentId) ? editor.getShape(parentId) : undefined
     const frameShape = parent && editor.isShapeOfType(parent, 'frame') ? parent : undefined
     const frame = frameShape ? { w: frameShape.props.w, h: frameShape.props.h } : undefined
-    const plan = arrangeAsGrid({ items, columns: opts.columns, order: session?.order, frame })
+    // F2-03: the other shapes in the grid's parent, which the grid should not grow over.
+    const moving = new Set<string>(fresh.map((s) => s.id))
+    const neighbours = frame
+      ? []
+      : editor
+          .getSortedChildIdsForParent(parentId)
+          .filter((id) => !moving.has(id) && !editor.isShapeHidden(id))
+          .map((id) => editor.getShape(id))
+          .filter((s): s is TLShape => !!s && !followsBindings(editor, s))
+    const obstacles: GridItem[] = neighbours.map((s) => {
+      const b = boundsInParent(editor, s)
+      return { id: s.id, x: b.x, y: b.y, w: b.w, h: b.h }
+    })
+    const plan = arrangeAsGrid({ items, columns: opts.columns, order: session?.order, frame, obstacles })
     if (!plan) return
     const byId = new Map(items.map((i) => [i.id, i]))
+    const pushedUpdates = neighbours.flatMap((s) => {
+      const to = plan.pushed?.[s.id]
+      const from = obstacles.find((o) => o.id === s.id)
+      if (!to || !from || editor.isShapeOrAncestorLocked(s)) return []
+      return [{ id: s.id, type: s.type, x: s.x + (to.x - from.x), y: s.y + (to.y - from.y) }]
+    })
     const updates = fresh.map((s) => {
       const from = byId.get(s.id) as GridItem
       const to = plan.positions[s.id] ?? { x: from.x, y: from.y }
@@ -161,6 +182,7 @@ export function arrangeSelectionAsGrid(
       editor.updateShape({ id: frameShape.id, type: 'frame', props: { ...plan.frameSize } })
     }
     editor.updateShapes(updates)
+    if (pushedUpdates.length) editor.updateShapes(pushedUpdates)
     const placed: GridSession['placed'] = {}
     for (const u of updates) placed[u.id] = { x: u.x, y: u.y }
     gridSession(editor).set({ selection, order: plan.order, columns: plan.columns, placed })
@@ -170,6 +192,7 @@ export function arrangeSelectionAsGrid(
       rows: plan.rows,
       frameGrew: !!plan.frameSize,
       locked,
+      pushed: pushedUpdates.length,
     }
   })
   return outcome as ArrangeOutcome | null
@@ -193,6 +216,13 @@ export function runArrangeAsGrid(editor: Editor, opts: { columns?: number } = {}
   }
   const notes: string[] = []
   if (outcome.frameGrew) notes.push('The frame grew to fit the grid.')
+  if (outcome.pushed) {
+    notes.push(
+      outcome.pushed === 1
+        ? 'One object below moved down to make room.'
+        : `${outcome.pushed} objects below moved down to make room.`,
+    )
+  }
   if (outcome.locked) {
     notes.push(
       outcome.locked === 1

@@ -220,6 +220,26 @@ describe('anchorLabel (where a thread is)', () => {
       'On a note',
     )
     expect(anchorLabel(shape, placedOn(), 'page:one', { shapeType: 'image' })).toBe('On an image')
+    // F2-09: the file's name says which one.
+    expect(
+      anchorLabel(shape, placedOn(), 'page:one', {
+        shapeType: 'image',
+        fileName: 'halden-05-option-b-sage.jpg',
+      }),
+    ).toBe('On halden-05-option-b-sage.jpg')
+    expect(
+      anchorLabel(shape, placedOn(), 'page:one', {
+        shapeType: 'dr-file-card',
+        frameName: '3 · Imagery',
+        fileName: 'document.pdf',
+      }),
+    ).toBe('3 · Imagery · document.pdf')
+    expect(
+      anchorLabel(shape, placedOn(), 'page:one', {
+        shapeType: 'image',
+        fileName: `${'long-'.repeat(20)}name.jpg`,
+      }),
+    ).toMatch(/^On long-long.*….*name\.jpg$/)
     expect(anchorLabel(shape, placedOn(), 'page:one', { shapeType: 'arrow' })).toBe('On a connector')
     expect(anchorLabel(shape, placedOn(), 'page:one', { shapeType: 'my-custom-shape' })).toBe('On an object')
     expect(anchorLabel(shape, placedOn(), 'page:one')).toBe('On an object')
