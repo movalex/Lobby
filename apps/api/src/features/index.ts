@@ -6,6 +6,7 @@ import { registerDashboard } from './dashboard/index.ts'
 import { registerExportControl } from './export-control/index.ts'
 import { registerGuests } from './guests/index.ts'
 import { registerHistory } from './history/index.ts'
+import { registerSearch } from './search/index.ts'
 import { registerThumbnails } from './thumbnails/index.ts'
 import { registerWorkshops } from './workshops/index.ts'
 
@@ -17,4 +18,5 @@ export async function registerFeatures(app: FastifyInstance, ctx: FeatureContext
   await registerGuests(app, ctx)
   await registerThumbnails(app, ctx)
   await registerExportControl(app, ctx)
+  await registerSearch(app, ctx)
 }
