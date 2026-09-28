@@ -639,6 +639,24 @@ test('Results stay in the frame; the Undo toast only ever undoes the AI result; 
     await capture('ai-toast-gone-after-ctrlz.png', b.page, testInfo)
   })
 
+  await test.step('DANA-09: the toast’s Undo takes back exactly the AI result, never the edit before it', async () => {
+    const third = notes[2]
+    if (!third) throw new Error('no note')
+    const y0 = (await noteY(third.id)) ?? 0
+    await nudge(b.page, third.id, 60)
+    await actionItemsOnFrame()
+    await b.page.getByTestId('ai-undo').click()
+    await expect
+      .poll(async () => (await frameContents(b.page, BRAINSTORM))?.kids.filter((k) => aiKind(k)).length)
+      .toBe(0)
+    await expect.poll(async () => (await frameContents(b.page, BRAINSTORM))?.h).toBe(before.h)
+    await expect(b.page.getByTestId('ai-done')).toHaveCount(0)
+    expect(await noteY(third.id)).toBe(y0 + 60)
+    // The AI step is off the stack: the next Ctrl+Z takes back the move.
+    await undo(b.page)
+    await expect.poll(() => noteY(third.id)).toBe(y0)
+  })
+
   await test.step('DANA-09: any other edit of this tab takes the toast away too; a collaborator’s does not', async () => {
     await actionItemsOnFrame()
     const second = notes[1]

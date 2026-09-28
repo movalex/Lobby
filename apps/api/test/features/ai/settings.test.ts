@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createBoard, DEV_STUDIO } from '../../helpers.ts'
 import { guestLink, joinAsGuest } from '../guests/support.ts'
 import { brainstormShapes, FRAME } from './fixtures.ts'
-import { type AiWorld, aiWorld, expectError, run, statusUrl } from './support.ts'
+import { type AiWorld, aiWorld, expectError, run, statusUrl, usageRows } from './support.ts'
 
 let w: AiWorld
 
@@ -72,6 +72,32 @@ describe('AI on/off per board and per workspace', () => {
     expect((await w.alice.req('PUT', boardSettings(), { enabled: true })).statusCode).toBe(200)
     const ok = await run(w.bob, w.board, { action: 'summarize', shapeIds: [FRAME], mode: 'panel' })
     expect(ok.statusCode, ok.body).toBe(200)
+  })
+
+  it('a call already under way when the owner turns AI off sends nothing (the switch is read again)', async () => {
+    // The call has passed the gate and is reading the board when alice switches AI off.
+    const original = w.sync.snapshot
+    let release = () => {}
+    const gate = new Promise<void>((r) => {
+      release = r
+    })
+    let reached = () => {}
+    const reading = new Promise<void>((r) => {
+      reached = r
+    })
+    w.sync.snapshot = async (boardId) => {
+      reached()
+      await gate
+      return original(boardId)
+    }
+    const pending = run(w.bob, w.board, { action: 'summarize', shapeIds: [FRAME], mode: 'panel' })
+    await reading
+    expect((await w.alice.req('PUT', boardSettings(), { enabled: false })).statusCode).toBe(200)
+    release()
+    expectError(await pending, 403, 'AI_BOARD_OFF')
+    expect(w.openai.requests).toHaveLength(0)
+    expect(await usageRows(w.api)).toHaveLength(0)
+    w.sync.snapshot = original
   })
 
   it('the workspace default applies to boards without their own choice; a board choice wins', async () => {

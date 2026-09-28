@@ -12,7 +12,8 @@
 //   board needs edit on an active board (403 otherwise). On a board whose export policy is 'editors',
 //   the people it limits get no AI (it reads the content out): 403 AI_EXPORT_DISABLED.
 // - On a board where AI is off (its owner's choice, else the workspace default: settings.ts) nobody gets
-//   AI: 403 AI_BOARD_OFF, before anything is read or sent.
+//   AI: 403 AI_BOARD_OFF, before anything is read or sent, and again right before sending (a call
+//   under way when the owner switches AI off sends nothing).
 // - The first call per person per workspace needs the "Sends the selected text to OpenAI" notice
 //   acknowledged (409 AI_NOTICE_REQUIRED until the client sends `acknowledged: true`, which is stored).
 // - The prompt is built from the board's sync snapshot for the requested shape ids (sources.ts), never
@@ -261,6 +262,11 @@ export async function registerAi(app: FastifyInstance, ctx: FeatureContext): Pro
       )
     if (input.action !== 'ideas' && sources.items.length === 0)
       throw new ApiError(400, AI_ERROR_CODES.nothingToSend, 'There’s no text in the selection to send.')
+
+    // The owner may have switched AI off while the board was being read (the gate ran before that):
+    // read the switch again, so nothing is sent once it is off.
+    if (!aiOn(await loadAiSwitches(db, access.board)))
+      throw new ApiError(403, AI_ERROR_CODES.boardOff, BOARD_OFF_MESSAGE)
 
     // The input cap is checked against the estimate; the budgets reserve the worst case, which a board
     // full of token-dense text really reaches (prompt.ts), so a call never costs more than it reserved

@@ -18,19 +18,29 @@ const enc = encodeURIComponent
 const NOTICE_KEY = 'dr-ai'
 let jobSeq = 0
 
-/** Asks the api what this person may do with AI on this board (hidden until it answers yes). */
+/** The latest status question per editor: only its answer may set what the web shows. */
+const statusAsks = new WeakMap<Editor, number>()
+
+/**
+ * Asks the api what this person may do with AI on this board (hidden until it answers yes). Answers
+ * can arrive out of order (a menu open's re-read, then the `ai.settings` hint's): an older one that
+ * arrives last is dropped, so an "on" asked before the owner switched AI off never brings it back.
+ */
 export async function refreshAiStatus(editor: Editor, signal?: AbortSignal): Promise<void> {
   const ctx = getAiCtx(editor)
   if (!ctx) return
+  const ask = (statusAsks.get(editor) ?? 0) + 1
+  statusAsks.set(editor, ask)
+  const latest = () => statusAsks.get(editor) === ask
   try {
     const status = await ctx.api.request('GET', `/api/boards/${enc(ctx.board.id)}/ai`, {
       schema: AiStatus,
       signal,
     })
-    aiStatus(editor).set(status)
+    if (latest()) aiStatus(editor).set(status)
   } catch {
     // No answer, no AI (an older api without the route answers 404).
-    if (!signal?.aborted) aiStatus(editor).set(null)
+    if (!signal?.aborted && latest()) aiStatus(editor).set(null)
   }
 }
 
