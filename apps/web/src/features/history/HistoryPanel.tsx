@@ -1,18 +1,22 @@
 // The `history` dock panel: named checkpoints (save, restore as a new private board), duplicate,
 // "Recently deleted" (restore puts objects back where they were; editors only, and never even fetched
-// for anyone else: authz-001) and the portable .json export.
+// for anyone else: authz-001) and the portable .json export. Duplicate, restore as new and the export
+// are turned off, with the reason, when the board owner turned exporting off for this person (the
+// sharing feature's export-policy store, read only; the api refuses them too: EXPORT_DISABLED).
 
 import type { BoardSnapshot, DeletedShapeEntry, ListDeletedResponse } from '@draftroom/contracts'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { TLShapeId } from 'tldraw'
+import { type TLShapeId, useValue } from 'tldraw'
 import { isApiError } from '../../api/client.ts'
 import { formatRelativeTime, pluralize } from '../../lib/format.ts'
 import { linkClick } from '../../lib/routing.ts'
+import { EXPORT_OFF_TEXT, exportAllowedOnBoard } from '../sharing/export-policy.ts'
 import type { FeatureContext } from '../types.ts'
 import { fetchBoardArchive, historyApi, saveBlob } from './api.ts'
 import {
   archiveFileName,
   checkpointNameToSave,
+  copyActions,
   createdSummary,
   defaultCheckpointName,
   deletedDetail,
@@ -36,6 +40,9 @@ export function HistoryPanel({ ctx }: { ctx: FeatureContext; close(): void }) {
   const workspaceRole = me.workspaces.find((w) => w.id === board.workspaceId)?.role ?? null
   const perms = historyPermissions(role, board.status, workspaceRole)
   const { canSeeDeleted } = perms
+  // Live: the owner can turn exporting off (or back on) while this panel is open.
+  const canExport = useValue('dr-history-export', () => exportAllowedOnBoard(board.id), [board.id])
+  const copy = copyActions(perms, canExport)
 
   const [snapshots, setSnapshots] = useState<BoardSnapshot[] | null>(null)
   const [deleted, setDeleted] = useState<ListDeletedResponse | null>(null)
@@ -148,6 +155,7 @@ export function HistoryPanel({ ctx }: { ctx: FeatureContext; close(): void }) {
 
   const restoreAsNew = (snap: BoardSnapshot) =>
     run(`restore:${snap.id}`, async () => {
+      if (!exportAllowedOnBoard(board.id)) return
       try {
         const created = await api.restoreAsNew(snap.id)
         setStatus({
@@ -164,6 +172,7 @@ export function HistoryPanel({ ctx }: { ctx: FeatureContext; close(): void }) {
 
   const duplicate = () =>
     run('duplicate', async () => {
+      if (!exportAllowedOnBoard(board.id)) return
       try {
         const created = await api.duplicate(board.id, keepSharing ? { keepSharing: true } : {})
         setStatus({
@@ -179,6 +188,7 @@ export function HistoryPanel({ ctx }: { ctx: FeatureContext; close(): void }) {
 
   const exportJson = () =>
     run('export', async () => {
+      if (!exportAllowedOnBoard(board.id)) return
       try {
         saveBlob(await fetchBoardArchive(board.id), archiveFileName(board.title))
         setStatus({
@@ -315,6 +325,11 @@ export function HistoryPanel({ ctx }: { ctx: FeatureContext; close(): void }) {
             </div>
           </form>
         )}
+        {copy.restoreAsNew === 'off' && !!snapshots?.length && (
+          <p className="dr-history__off" id="dr-history-restore-off" data-testid="history-restore-off">
+            {EXPORT_OFF_TEXT}
+          </p>
+        )}
         {snapshots === null ? (
           <p className="dr-history__empty">Loading…</p>
         ) : snapshots.length === 0 ? (
@@ -334,12 +349,13 @@ export function HistoryPanel({ ctx }: { ctx: FeatureContext; close(): void }) {
                       .join(' · ')}
                   </span>
                 </div>
-                {perms.canCreateBoards && (
+                {copy.restoreAsNew !== 'hidden' && (
                   <button
                     type="button"
                     className="dr-btn"
                     data-testid="checkpoint-restore"
-                    disabled={busy !== null}
+                    disabled={busy !== null || copy.restoreAsNew === 'off'}
+                    aria-describedby={copy.restoreAsNew === 'off' ? 'dr-history-restore-off' : undefined}
                     aria-busy={busy === `restore:${s.id}`}
                     aria-label={`Restore “${s.name}” as a new board`}
                     onClick={() => void restoreAsNew(s)}
@@ -403,19 +419,25 @@ export function HistoryPanel({ ctx }: { ctx: FeatureContext; close(): void }) {
 
       <section className="dr-history__section" aria-labelledby="dr-history-copy">
         <h3 id="dr-history-copy">Copy and export</h3>
-        {perms.canCreateBoards && (
+        {copy.exportOff && (
+          <p className="dr-history__off" id="dr-history-copy-off" data-testid="history-export-off">
+            {EXPORT_OFF_TEXT}
+          </p>
+        )}
+        {copy.duplicate !== 'hidden' && (
           <div className="dr-history__actions">
             <button
               type="button"
               className="dr-btn"
               data-testid="history-duplicate"
-              disabled={busy !== null}
+              disabled={busy !== null || copy.duplicate === 'off'}
+              aria-describedby={copy.duplicate === 'off' ? 'dr-history-copy-off' : undefined}
               aria-busy={busy === 'duplicate'}
               onClick={() => void duplicate()}
             >
               {busy === 'duplicate' ? 'Duplicating…' : 'Duplicate board'}
             </button>
-            {perms.canKeepSharing && (
+            {perms.canKeepSharing && copy.duplicate === 'on' && (
               <label className="dr-history__check">
                 <input
                   type="checkbox"
@@ -433,7 +455,8 @@ export function HistoryPanel({ ctx }: { ctx: FeatureContext; close(): void }) {
             type="button"
             className="dr-btn"
             data-testid="export-json"
-            disabled={busy !== null}
+            disabled={busy !== null || copy.exportJson === 'off'}
+            aria-describedby={copy.exportJson === 'off' ? 'dr-history-copy-off' : undefined}
             aria-busy={busy === 'export'}
             onClick={() => void exportJson()}
           >

@@ -173,7 +173,7 @@ test('private notes: nobody sees another person’s drafts, and the reveal puts 
   // Everyone sees the live counts (from events), nobody sees anyone else's text.
   for (const s of [alice, bob])
     await expect(s.page.getByTestId('pn-counts')).toHaveText('4 notes from 2 people')
-  await expect(bob.page.getByTestId('pn-chip-counts')).toHaveText('4 from 2')
+  await expect(bob.page.getByTestId('pn-chip-counts')).toHaveText('4 notes from 2 people')
   await capture('private-notes-drafting.png', bob.page, testInfo)
 
   const bobSaw = await everythingSeen(bob)

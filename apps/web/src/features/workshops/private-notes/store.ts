@@ -50,6 +50,8 @@ export interface PrivateNotesSnapshot {
   /** The caller's own drafts (nobody else's ever reach this store). */
   myNotes: PrivateNote[]
   canReveal: boolean
+  /** The starter can no longer edit the board, so this person may end it (SEAM-07; editors only). */
+  starterLeft: boolean
   /** The start dialog is open (from the top bar or the panel). */
   setupOpen: boolean
   /** A reveal or cancel sent from this tab is in flight. */
@@ -64,6 +66,8 @@ export interface SessionEnded {
 }
 
 const ZERO: PrivateCounts = { notes: 0, people: 0 }
+/** The board event the sharing feature publishes when grants, links or guests change. */
+const SHARING_CHANGED = 'sharing.changed'
 
 const errorOf = (e: unknown): ActionResult => {
   const err = e as { message?: unknown; code?: unknown } | null
@@ -101,6 +105,11 @@ export class PrivateNotesStore {
     this.unsubscribers.push(
       deps.events.on(PRIVATE_NOTES_EVENTS.changed, (d) => this.onEvent(d)),
       deps.events.onResync(() => void this.refresh()),
+      // Who may reveal depends on the people on the board: the starter can lose edit access or leave
+      // (a guest who signed out), and then any editor with an account may end the session (SEAM-07).
+      deps.events.on(SHARING_CHANGED, () => {
+        if (this.state?.session) void this.refresh()
+      }),
     )
   }
 
@@ -138,6 +147,7 @@ export class PrivateNotesStore {
       counts: s?.counts ?? ZERO,
       myNotes: s?.myNotes ?? [],
       canReveal: s?.canReveal ?? false,
+      starterLeft: s?.starterLeft ?? false,
       setupOpen: this.setupOpen,
       busy: this.busy,
     }
@@ -190,7 +200,14 @@ export class PrivateNotesStore {
     const current = this.state?.session ?? null
     if (ended(session)) {
       if (current?.id === session.id && this.state) {
-        this.state = { ...this.state, session: null, counts: ZERO, myNotes: [], canReveal: false }
+        this.state = {
+          ...this.state,
+          session: null,
+          counts: ZERO,
+          myNotes: [],
+          canReveal: false,
+          starterLeft: false,
+        }
         this.emit()
       }
       this.announceEnd(session)

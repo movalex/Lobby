@@ -2,13 +2,14 @@
 // ranking (top 3, then everything; CSV export; badges on the board), and past votes.
 
 import type { VoteResult, VoteSessionSummary, WorkshopVoteState } from '@draftroom/contracts'
-import { useCallback, useEffect, useMemo, useState } from 'react'
-import type { Editor, TLShapeId } from 'tldraw'
+import { useCallback, useEffect, useId, useMemo, useState } from 'react'
+import { type Editor, type TLShapeId, useValue } from 'tldraw'
+import { EXPORT_OFF_TEXT, exportAllowedOnBoard } from '../sharing/export-policy.ts'
 import type { FeatureContext } from '../types.ts'
 import { describeClock, formatClock } from './countdown.ts'
 import { isFacilitator, useNow, useWorkshop } from './hooks.ts'
 import type { WorkshopStore } from './store.ts'
-import { resultsCsv, shapeLabel, topResults, typeName } from './voting.ts'
+import { describeProgress, resultsCsv, shapeLabel, topResults, typeName } from './voting.ts'
 
 function describeShape(editor: Editor, shapeId: string) {
   const s = editor.getShape(shapeId as TLShapeId)
@@ -267,12 +268,7 @@ function CurrentVote({
 
       {facilitator && s.status !== 'revealed' && (
         <div className="dr-wk-facil" data-testid="vote-facilitator">
-          <p data-testid="vote-progress">
-            <strong>
-              {vote.participantsDone} of {vote.participants}
-            </strong>{' '}
-            done · {vote.totalVotesCast} vote{vote.totalVotesCast === 1 ? '' : 's'} cast
-          </p>
+          <p data-testid="vote-progress">{describeProgress(vote)}</p>
           {timed && (
             <div className="dr-wk-row">
               <button
@@ -374,6 +370,11 @@ function Results({
   const [all, setAll] = useState(false)
   const top = useMemo(() => topResults(results, 3), [results])
   const shown = all ? results : top
+  // export-control: a UI gate only. The CSV is built in this browser from results this person can
+  // already see, so there is no server refusal behind it (unlike the board archive or originals).
+  const boardId = ctx.board.id
+  const canExport = useValue('dr-wk-csv-export', () => exportAllowedOnBoard(boardId), [boardId])
+  const csvOffId = useId()
   if (results.length === 0)
     return (
       <p className="dr-muted" data-testid={testId}>
@@ -424,16 +425,24 @@ function Results({
           type="button"
           className="dr-btn dr-btn--sm dr-btn--ghost"
           data-testid="vote-results-csv"
-          onClick={() =>
+          disabled={!canExport}
+          aria-describedby={canExport ? undefined : csvOffId}
+          onClick={() => {
+            if (!exportAllowedOnBoard(boardId)) return
             download(
               `${safeFileName(`${ctx.board.title} - ${title}`)}.csv`,
               resultsCsv(results, (id) => describeShape(ctx.editor, id)),
             )
-          }
+          }}
         >
           Export CSV
         </button>
       </div>
+      {!canExport && (
+        <p className="dr-wk-export-off" id={csvOffId} data-testid="vote-results-csv-off">
+          {EXPORT_OFF_TEXT}
+        </p>
+      )}
     </div>
   )
 }

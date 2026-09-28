@@ -4,7 +4,7 @@
 
 import type { FeatureContext } from '../../types.ts'
 import { isFacilitator } from '../hooks.ts'
-import { describeCounts, PRIVATE_PANEL_ID, usePrivateNotes } from './hooks.ts'
+import { chipCounts, describeCounts, PRIVATE_PANEL_ID, usePrivateNotes } from './hooks.ts'
 import { LockIcon } from './PrivateNotesPanel.tsx'
 import { SetupDialog } from './SetupDialog.tsx'
 import './private-notes.css'
@@ -28,7 +28,7 @@ export function PrivateNotesChip({ ctx }: { ctx: FeatureContext }) {
           <LockIcon />
           <span className="dr-pn-chip__label">Private brainstorm</span>
           <span className="dr-pn-chip__counts" data-testid="pn-chip-counts">
-            {s.status === 'revealed' ? 'revealing' : `${snap.counts.notes} from ${snap.counts.people}`}
+            {chipCounts(s.status, snap.counts)}
           </span>
         </button>
       )}

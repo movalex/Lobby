@@ -124,7 +124,7 @@ export function SetupDialog({
         </label>
         <p id={`${id}-anon-hint`} className="dr-pn-hint">
           {anonymous
-            ? 'Revealed notes name nobody, and who wrote which is deleted once they are on the board. Colours stay as people chose them.'
+            ? 'Revealed notes name nobody, and who wrote which is deleted once they are on the board. Colors stay as people chose them.'
             : 'Revealed notes are grouped by author and show their names.'}
         </p>
 

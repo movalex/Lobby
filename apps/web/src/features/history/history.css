@@ -26,6 +26,18 @@
   font-size: 12px;
   line-height: 1.4;
 }
+/* Why duplicate, restore as new and the export are turned off (export-control): the warning ink the
+   other export gates use, not the grey hint colour. */
+.dr-history__off {
+  margin: 0;
+  padding: 6px 10px;
+  border: 1px solid var(--dr-warn-line);
+  border-radius: 8px;
+  background: var(--dr-warn-bg);
+  color: var(--dr-warn);
+  font-size: 12.5px;
+  line-height: 1.4;
+}
 
 .dr-history__label {
   font-size: 12px;

@@ -410,8 +410,10 @@ export function rankVoteResults(totals: Iterable<{ shapeId: string; count: numbe
 // ---- private brainstorming (wave 3, "private-notes"; build plan §9) --------------------------------
 //
 // Drafts live in a private server namespace (Postgres rows readable only by their author) and reach
-// the board only when the starter or a board owner reveals them: the sync server then writes them as
-// real note shapes into the target frame in one storage transaction. Nothing here ever carries
+// the board only when the starter or a board owner reveals them (or any editor with an account, once
+// the starter can no longer edit the board): the sync server then writes them as real note shapes
+// into the target frame in one storage transaction. Drafts of people who can no longer edit the board
+// are discarded at reveal, never placed. Nothing here ever carries
 // another person's draft text: events and every response carry counts, and `myNotes` is only ever
 // the CALLER's own drafts. Anonymous sessions never tell anyone who wrote what, before or after.
 
@@ -522,7 +524,10 @@ export const PrivateBrainstorm = z.object({
   anonymous: z.boolean(),
   frameId: VoteShapeId,
   status: PrivateBrainstormStatus,
-  /** The person who started it (they, and board owners, may reveal or cancel it). */
+  /**
+   * The person who started it (they, and board owners, may reveal or cancel it; so may any editor
+   * with an account once the starter can no longer edit the board: `starterLeft`).
+   */
   createdBy: WsUserId,
   createdAt: IsoDate,
   revealedAt: IsoDate.nullable(),
@@ -558,6 +563,12 @@ export const PrivateBrainstormState = z.object({
   myNotes: z.array(PrivateNote),
   /** Whether the caller may reveal, place or cancel the active session (the API decides). */
   canReveal: z.boolean(),
+  /**
+   * The person who started the active session can no longer edit the board (their access was
+   * removed or lowered, or they were a name-only guest who left), so any editor with an account may
+   * reveal or cancel it. Only ever true for people who can edit the board.
+   */
+  starterLeft: z.boolean().default(false),
   /** Only in a reveal response: the session that just ended with its notes placed on the board. */
   placed: PrivateBrainstorm.nullable().default(null),
 })

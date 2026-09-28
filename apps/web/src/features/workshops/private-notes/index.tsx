@@ -1,9 +1,10 @@
 // Private brainstorming (docs/WAVE3-CONTRACTS.md "private-notes"), part of the workshops feature:
 // the dock panel, the top-bar pieces (PrivateNotesBar.tsx) and what happens on every open board when
-// a session ends (a notice for everyone; the revealing tab fits the notes to their text).
+// a session ends (a notice for everyone; the revealing tab fits the notes to their text and shows them).
 
 import type { FeatureContext, FeaturePanel } from '../../types.ts'
-import { fitPlacedNotes, zoomToSession } from './canvas.ts'
+import { isPresentingNow } from '../presenting.ts'
+import { fitPlacedNotes, showPlacedNotes, zoomToSession } from './canvas.ts'
 import { PRIVATE_PANEL_ID, privateStoreFor } from './hooks.ts'
 import { PrivateNotesIcon, PrivateNotesPanel } from './PrivateNotesPanel.tsx'
 import './private-notes.css'
@@ -30,7 +31,14 @@ export function mountPrivateNotes(ctx: FeatureContext): () => void {
       return
     }
     const n = session.placedCount ?? 0
-    if (revealedHere && n > 0) stops.add(fitPlacedNotes(ctx.editor, session.id, n))
+    // The tab that revealed fits the notes to their text, then shows them where they landed (they may
+    // be off screen, or tiny at the zoom the facilitator was at: round-2 F5).
+    if (revealedHere && n > 0)
+      stops.add(
+        fitPlacedNotes(ctx.editor, session.id, n, undefined, (ids) =>
+          showPlacedNotes(ctx.editor, ids, isPresentingNow()),
+        ),
+      )
     ctx.notify({
       key: 'private-notes',
       text:

@@ -1,7 +1,9 @@
 // POST /internal/boards/:bid/place-notes (docs/WAVE3-CONTRACTS.md "private-notes"): puts the drafts
 // of a revealed private brainstorm into the board as real note shapes, laid out in a grid inside the
-// target frame. The API has already marked the session revealed; this is the controlled operation the
-// build plan (§9) asks for: the text reaches the board (and every client) only here.
+// target frame: in the frame's empty space when it has room for them (a frame that already holds
+// content keeps its size, round-2 F5), else below its content, growing the frame. The API has already
+// marked the session revealed; this is the controlled operation the build plan (§9) asks for: the
+// text reaches the board (and every client) only here.
 //
 // Like the "Recently deleted" restore (deleted/restore.ts): server-side storage writes are not
 // validated by the library and a bad record makes the room unopenable, so every record is validated
@@ -18,7 +20,7 @@
 
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { TLSyncStorage } from '@tldraw/sync-core'
-import { type TLRecord, type TLSchema, type TLShape, toRichText } from '@tldraw/tlschema'
+import { b64Vecs, type TLRecord, type TLSchema, type TLShape, toRichText } from '@tldraw/tlschema'
 import { BOARD_ID_RE, type RoomRegistry } from '../rooms.ts'
 import { readJson } from './body.ts'
 import { HttpError, sendJson } from './respond.ts'
@@ -259,27 +261,28 @@ export interface LayoutResult {
   frameH: number
 }
 
+const CELL = NOTE_SIZE + GRID_GAP
+
+/** Columns of notes that fit a frame `frameW` wide, inside its padding. */
+const columnsIn = (frameW: number, left = FRAME_PAD) =>
+  Math.max(1, Math.floor((frameW - left - FRAME_PAD + GRID_GAP) / CELL))
+
+interface Block {
+  /** Positions relative to the block's top-left corner. */
+  positions: Map<string, { x: number; y: number }>
+  w: number
+  h: number
+}
+
 /**
- * A grid inside the frame, below whatever the frame already holds (`contentBottom`, relative to the
- * frame; null when empty). Columns: as many as fit the frame's width, or more (up to 8, about square)
- * when many notes would make a tall narrow column; the frame grows to hold every note. A group starts
- * on a new row unless all of it fits in what is left of the current one.
+ * The notes as a grid of `cols` columns from (0, 0). A group starts on a new row unless all of it fits
+ * in what is left of the current one.
  */
-export function layoutGrid(opts: {
-  frameW: number
-  frameH: number
-  contentBottom: number | null
-  items: readonly LayoutItem[]
-}): LayoutResult {
-  const { items } = opts
-  const cell = NOTE_SIZE + GRID_GAP
-  const fit = Math.max(1, Math.floor((opts.frameW - 2 * FRAME_PAD + GRID_GAP) / cell))
-  const cols = Math.max(fit, Math.min(MAX_AUTO_COLUMNS, Math.ceil(Math.sqrt(items.length))))
+function gridBlock(items: readonly LayoutItem[], cols: number): Block {
   const groupSize = new Map<string, number>()
   for (const it of items) if (it.group !== null) groupSize.set(it.group, (groupSize.get(it.group) ?? 0) + 1)
-
   const positions = new Map<string, { x: number; y: number }>()
-  let y = opts.contentBottom === null ? FRAME_PAD : opts.contentBottom + 2 * GRID_GAP
+  let y = 0
   let col = 0
   let rowHeight = 0
   let prevGroup: string | null | undefined
@@ -292,18 +295,436 @@ export function layoutGrid(opts: {
     const groupStarts = it.group !== null && it.group !== prevGroup
     if (col > 0 && groupStarts && (groupSize.get(it.group as string) ?? 1) > cols - col) newRow()
     if (col >= cols) newRow()
-    positions.set(it.id, { x: FRAME_PAD + col * cell, y })
+    positions.set(it.id, { x: col * CELL, y })
     rowHeight = Math.max(rowHeight, it.height)
     col++
     prevGroup = it.group
   }
-  const bottom = y + rowHeight
   const usedCols = Math.min(cols, Math.max(1, items.length))
+  return { positions, w: usedCols * CELL - GRID_GAP, h: y + rowHeight }
+}
+
+/**
+ * A grid inside the frame, below whatever the frame already holds (`contentBottom`, relative to the
+ * frame; null when empty), starting at `left` (default: the frame's padding). Columns: as many as fit
+ * the frame's width, or more (up to 8, about square) when many notes would make a tall narrow column;
+ * the frame grows to hold every note. A group starts on a new row unless all of it fits in what is
+ * left of the current one.
+ */
+export function layoutGrid(opts: {
+  frameW: number
+  frameH: number
+  contentBottom: number | null
+  items: readonly LayoutItem[]
+  left?: number
+}): LayoutResult {
+  const { items } = opts
+  const left = opts.left ?? FRAME_PAD
+  const cols = Math.max(
+    columnsIn(opts.frameW, left),
+    Math.min(MAX_AUTO_COLUMNS, Math.ceil(Math.sqrt(items.length))),
+  )
+  const block = gridBlock(items, cols)
+  const top = opts.contentBottom === null ? FRAME_PAD : opts.contentBottom + 2 * GRID_GAP
+  const positions = new Map<string, { x: number; y: number }>()
+  for (const [id, p] of block.positions) positions.set(id, { x: left + p.x, y: top + p.y })
   return {
     positions,
-    frameW: Math.max(opts.frameW, 2 * FRAME_PAD + usedCols * cell - GRID_GAP),
-    frameH: Math.max(opts.frameH, bottom + FRAME_PAD),
+    frameW: Math.max(opts.frameW, left + block.w + FRAME_PAD),
+    frameH: Math.max(opts.frameH, top + block.h + FRAME_PAD),
   }
+}
+
+// ---- free space inside the frame (round-2 F5) -----------------------------------------------------------
+//
+// A reveal into a frame that already holds content (the tour's Brainstorm frame, a retro board) must
+// not push the notes below everything and grow the frame out of view. The notes go into the frame's
+// empty space when it holds them: as one block (a grid, as in an empty frame) where one fits, else
+// note by note into the free spots, in reading order. Only when the frame has no room for all of them
+// do they go below its content, growing the frame (as before).
+
+export interface Rect {
+  x: number
+  y: number
+  w: number
+  h: number
+}
+export interface Point {
+  x: number
+  y: number
+}
+export type Segment = readonly [Point, Point]
+
+/** Something the frame already holds, in the frame's coordinates. */
+export interface Obstacle {
+  /** Its bounding box. */
+  rect: Rect
+  /** Clear space a note keeps from it. */
+  clear: number
+  /** A connector: only these segments block (with `clear` around them), not the whole box. */
+  segments?: readonly Segment[]
+}
+
+/** Space a note keeps from shapes the frame holds, and from connector lines. */
+export const SHAPE_CLEARANCE = FRAME_PAD
+export const LINE_CLEARANCE = GRID_GAP
+/** A frame holding more than this is not searched: the notes go below its content. */
+const MAX_OBSTACLES = 150
+/** Upper bound on overlap checks per placement (the search runs inside the storage transaction). */
+const MAX_CHECKS = 400_000
+
+const rectsOverlap = (a: Rect, b: Rect, gap: number) =>
+  a.x < b.x + b.w + gap && b.x < a.x + a.w + gap && a.y < b.y + b.h + gap && b.y < a.y + a.h + gap
+
+/** Whether segment p-q passes through rectangle r (Liang-Barsky clipping). */
+export function segmentHitsRect(p: Point, q: Point, r: Rect): boolean {
+  const dx = q.x - p.x
+  const dy = q.y - p.y
+  let t0 = 0
+  let t1 = 1
+  const clip = (den: number, num: number) => {
+    if (den === 0) return num >= 0
+    const t = num / den
+    if (den < 0) {
+      if (t > t1) return false
+      if (t > t0) t0 = t
+    } else {
+      if (t < t0) return false
+      if (t < t1) t1 = t
+    }
+    return true
+  }
+  return (
+    clip(-dx, p.x - r.x) &&
+    clip(dx, r.x + r.w - p.x) &&
+    clip(-dy, p.y - r.y) &&
+    clip(dy, r.y + r.h - p.y) &&
+    t0 <= t1
+  )
+}
+
+function blocks(o: Obstacle, r: Rect): boolean {
+  if (!rectsOverlap(o.rect, r, o.clear)) return false
+  if (!o.segments) return true
+  const grown = { x: r.x - o.clear, y: r.y - o.clear, w: r.w + 2 * o.clear, h: r.h + 2 * o.clear }
+  return o.segments.some(([p, q]) => segmentHitsRect(p, q, grown))
+}
+
+/** A reveal of up to this many notes may be split over several empty areas of the frame. */
+const MAX_SPLIT_NOTES = 24
+/**
+ * How far right a spot may be and still count as "earlier" than a lower one: 0.1 px of height per px
+ * of width, so the left side of a row wins over a spot slightly higher up on the far right.
+ */
+const ROW_SLACK = 0.1
+
+/**
+ * Where a `w` x `h` box can go in the frame without coming near any obstacle, among the spots that
+ * touch the frame's padding or an obstacle's clear space: the first in reading order (`alignX` counts
+ * as the left edge), or, with `near`, the one whose centre is closest to it. null when there is none
+ * (or the search ran out of `budget`).
+ */
+function freeSpot(
+  frame: { w: number; h: number },
+  obstacles: readonly Obstacle[],
+  box: { w: number; h: number },
+  budget: { checks: number },
+  opts: { alignX?: number; near: Point | null },
+): Point | null {
+  const { w, h } = box
+  const maxX = frame.w - FRAME_PAD - w
+  const maxY = frame.h - FRAME_PAD - h
+  if (maxX < FRAME_PAD || maxY < FRAME_PAD) return null
+  // The frame's padding on every side, and the edges of each obstacle's clear space.
+  const xs = new Set<number>([FRAME_PAD, maxX])
+  const ys = new Set<number>([FRAME_PAD, maxY])
+  if (opts.alignX !== undefined) xs.add(opts.alignX)
+  for (const o of obstacles) {
+    xs.add(o.rect.x + o.rect.w + o.clear)
+    xs.add(o.rect.x - o.clear - w)
+    ys.add(o.rect.y + o.rect.h + o.clear)
+    ys.add(o.rect.y - o.clear - h)
+  }
+  const spots: { x: number; y: number; key: number }[] = []
+  const near = opts.near
+  for (const x of xs) {
+    if (!(x >= FRAME_PAD && x <= maxX)) continue
+    for (const y of ys) {
+      if (!(y >= FRAME_PAD && y <= maxY)) continue
+      const key = near
+        ? Math.hypot(x + w / 2 - near.x, y + h / 2 - near.y)
+        : y + ROW_SLACK * (x === opts.alignX ? FRAME_PAD - 1 : x)
+      spots.push({ x: Math.round(x), y: Math.round(y), key })
+    }
+  }
+  spots.sort((a, b) => a.key - b.key || a.y - b.y || a.x - b.x)
+  for (const s of spots) {
+    budget.checks += obstacles.length + 1
+    if (budget.checks > MAX_CHECKS) return null
+    const r = { x: s.x, y: s.y, w, h }
+    if (!obstacles.some((o) => blocks(o, r))) return { x: s.x, y: s.y }
+  }
+  return null
+}
+
+/**
+ * The notes placed in the frame's free space without growing it (positions relative to the frame),
+ * or null when it has no room for all of them. First as one grid block (the widest that fits, author
+ * groups kept together as in `layoutGrid`), in the first free spot in reading order. A small reveal
+ * that fits no single empty area is split: the largest block of the next notes that fits somewhere
+ * goes there, the following blocks as close to the one before as the space allows. Every note keeps
+ * clear of the frame's content and a grid gap from the other notes.
+ */
+export function layoutInFreeSpace(opts: {
+  frameW: number
+  frameH: number
+  obstacles: readonly Obstacle[]
+  items: readonly LayoutItem[]
+  /** Where the frame's content starts on the left: rows line up with it when there is room. */
+  alignX?: number
+}): Map<string, Point> | null {
+  const { items, alignX } = opts
+  const frame = { w: opts.frameW, h: opts.frameH }
+  if (items.length === 0) return new Map()
+  if (opts.obstacles.length > MAX_OBSTACLES) return null
+  const budget = { checks: 0 }
+  const out = new Map<string, Point>()
+  const taken: Obstacle[] = [...opts.obstacles]
+  const heights = new Map(items.map((it) => [it.id, it.height]))
+  let rest = [...items]
+  let near: Point | null = null
+  const smallest = items.length <= MAX_SPLIT_NOTES ? 1 : items.length
+  while (rest.length > 0) {
+    let placed = 0
+    for (let k = rest.length; k >= smallest && placed === 0; k--) {
+      const part = rest.slice(0, k)
+      for (let cols = Math.min(columnsIn(frame.w), k); cols >= 1; cols--) {
+        const block = gridBlock(part, cols)
+        const at = freeSpot(frame, taken, block, budget, { alignX, near })
+        if (budget.checks > MAX_CHECKS) return null
+        if (!at) continue
+        for (const [id, p] of block.positions) {
+          const q = { x: at.x + p.x, y: at.y + p.y }
+          out.set(id, q)
+          taken.push({ rect: { ...q, w: NOTE_SIZE, h: heights.get(id) ?? NOTE_SIZE }, clear: GRID_GAP })
+        }
+        near = { x: at.x + block.w / 2, y: at.y + block.h / 2 }
+        placed = k
+        break
+      }
+    }
+    if (placed === 0) return null
+    rest = rest.slice(placed)
+  }
+  return out
+}
+
+// ---- what a frame holds (for the free-space search) -------------------------------------------------
+
+interface ArrowEnd {
+  terminal: string
+  toId: string
+  anchor: Point
+  precise: boolean
+}
+
+const num = (v: unknown, fallback = 0) => (typeof v === 'number' && Number.isFinite(v) ? v : fallback)
+
+/** The box `local` (in a shape's own space) takes in its parent's space, rotation included. */
+function toParent(shape: { x: number; y: number; rotation: number }, local: Rect): Rect {
+  const cos = Math.cos(shape.rotation)
+  const sin = Math.sin(shape.rotation)
+  const xs: number[] = []
+  const ys: number[] = []
+  for (const [px, py] of [
+    [local.x, local.y],
+    [local.x + local.w, local.y],
+    [local.x, local.y + local.h],
+    [local.x + local.w, local.y + local.h],
+  ] as const) {
+    xs.push(shape.x + px * cos - py * sin)
+    ys.push(shape.y + px * sin + py * cos)
+  }
+  const x = Math.min(...xs)
+  const y = Math.min(...ys)
+  return { x, y, w: Math.max(...xs) - x, h: Math.max(...ys) - y }
+}
+
+const pointToParent = (shape: { x: number; y: number; rotation: number }, p: Point): Point => ({
+  x: shape.x + p.x * Math.cos(shape.rotation) - p.y * Math.sin(shape.rotation),
+  y: shape.y + p.x * Math.sin(shape.rotation) + p.y * Math.cos(shape.rotation),
+})
+
+function boxOf(points: readonly Point[], pad: number): Rect | null {
+  if (points.length === 0) return null
+  const xs = points.map((p) => p.x)
+  const ys = points.map((p) => p.y)
+  const x = Math.min(...xs) - pad
+  const y = Math.min(...ys) - pad
+  return { x, y, w: Math.max(...xs) + pad - x, h: Math.max(...ys) + pad - y }
+}
+
+/** Text shape font sizes in px (tldraw 5.4.2 FONT_SIZES × 16). */
+const TEXT_FONT_PX: Record<string, number> = { s: 18, m: 24, l: 36, xl: 44 }
+
+/** Paragraphs of a rich-text doc as plain text (bounded; never throws). */
+function paragraphsOf(richText: unknown): string[] {
+  const out: string[] = []
+  let seen = 0
+  const text = (node: unknown, depth: number): string => {
+    if (!node || typeof node !== 'object' || depth > 20 || seen++ > 2000) return ''
+    const n = node as { text?: unknown; content?: unknown }
+    if (typeof n.text === 'string') return n.text
+    return Array.isArray(n.content) ? n.content.map((c) => text(c, depth + 1)).join('') : ''
+  }
+  const content = (richText as { content?: unknown } | null)?.content
+  if (Array.isArray(content)) for (const block of content) out.push(text(block, 1))
+  return out
+}
+
+/** A generous estimate of a text shape's height at `w` wide (wide glyphs, tldraw's 1.35 lines). */
+function textHeight(richText: unknown, size: unknown, w: number): number {
+  const font = TEXT_FONT_PX[String(size)] ?? 24
+  const perLine = Math.max(1, Math.floor(w / (font * 0.55)))
+  let lines = 0
+  for (const para of paragraphsOf(richText)) lines += Math.max(1, Math.ceil([...para].length / perLine))
+  return Math.max(1, lines) * font * 1.35 + 8
+}
+
+/**
+ * A shape's box in its parent's space, or null when it cannot be measured here (an unknown kind of
+ * shape): then the frame is not searched at all. Arrows are handled by the caller.
+ */
+function shapeBox(s: AnyShape, children: ReadonlyMap<string, AnyShape[]>, depth: number): Rect | null {
+  const p = s.props
+  const scale = num(p.scale, 1) || 1
+  const local = (w: number, h: number) => toParent(s, { x: 0, y: 0, w, h })
+  switch (s.type) {
+    case 'note':
+      return local(NOTE_SIZE * scale, (NOTE_SIZE + num(p.growY)) * scale)
+    case 'text':
+      return local(num(p.w) * scale, textHeight(p.richText, p.size, num(p.w)) * scale)
+    case 'geo':
+      return local(num(p.w), num(p.h) + num(p.growY))
+    case 'draw':
+    case 'highlight': {
+      const segments = Array.isArray(p.segments) ? p.segments : []
+      const pts: Point[] = []
+      for (const seg of segments as { path?: unknown; dim?: unknown }[]) {
+        if (typeof seg?.path !== 'string') return null
+        try {
+          pts.push(...b64Vecs.decodePoints(seg.path, seg.dim === 2 ? 2 : undefined))
+        } catch {
+          return null
+        }
+      }
+      const sx = scale * num(p.scaleX, 1)
+      const sy = scale * num(p.scaleY, 1)
+      const box = boxOf(
+        pts.map((pt) => ({ x: pt.x * sx, y: pt.y * sy })),
+        s.type === 'highlight' ? 24 : 12,
+      )
+      return box ? toParent(s, box) : null
+    }
+    case 'line': {
+      const pts = Object.values((p.points ?? {}) as Record<string, { x?: unknown; y?: unknown }>).map(
+        (pt) => ({ x: num(pt?.x) * scale, y: num(pt?.y) * scale }),
+      )
+      const box = boxOf(pts, 12)
+      return box ? toParent(s, box) : null
+    }
+    case 'group': {
+      if (depth > 8) return null
+      const boxes: Rect[] = []
+      for (const c of children.get(s.id) ?? []) {
+        if (c.type === 'arrow') continue // a connector inside a group ends on the grouped shapes
+        const b = shapeBox(c, children, depth + 1)
+        if (!b) return null
+        boxes.push(b)
+      }
+      const box = boxOf(
+        boxes.flatMap((b) => [
+          { x: b.x, y: b.y },
+          { x: b.x + b.w, y: b.y + b.h },
+        ]),
+        0,
+      )
+      return box ? toParent(s, box) : null
+    }
+    default:
+      // frames, images, videos, embeds, bookmarks, file cards...: a box of props.w x props.h
+      if (typeof p.w === 'number' && typeof p.h === 'number') return local(num(p.w), num(p.h) + num(p.growY))
+      return null
+  }
+}
+
+/**
+ * What the frame holds, as obstacles in its coordinates, or null when something in it cannot be
+ * measured here (then the notes go below its content, as before). A connector blocks along its line:
+ * from what each end is attached to (its anchor, or its centre), else its own end point.
+ */
+function frameObstacles(
+  frameId: string,
+  children: ReadonlyMap<string, AnyShape[]>,
+  arrowEnds: ReadonlyMap<string, ArrowEnd[]>,
+): Obstacle[] | null {
+  const kids = children.get(frameId) ?? []
+  if (kids.length > MAX_OBSTACLES) return null
+  const boxes = new Map<string, Rect>()
+  const out: Obstacle[] = []
+  for (const k of kids) {
+    if (k.type === 'arrow') continue
+    const box = shapeBox(k, children, 0)
+    if (!box) return null
+    boxes.set(k.id, box)
+    out.push({ rect: box, clear: SHAPE_CLEARANCE })
+  }
+  for (const a of kids) {
+    if (a.type !== 'arrow') continue
+    const p = a.props
+    const ends: Point[] = []
+    for (const terminal of ['start', 'end'] as const) {
+      const bound = arrowEnds.get(a.id)?.find((e) => e.terminal === terminal)
+      if (bound) {
+        const target = boxes.get(bound.toId)
+        if (!target) return null // attached to something outside the frame: not measured here
+        const anchor = bound.precise ? bound.anchor : { x: 0.5, y: 0.5 }
+        ends.push({ x: target.x + anchor.x * target.w, y: target.y + anchor.y * target.h })
+      } else {
+        const own = (p[terminal] ?? {}) as { x?: unknown; y?: unknown }
+        ends.push(pointToParent(a, { x: num(own.x), y: num(own.y) }))
+      }
+    }
+    const [start, end] = ends as [Point, Point]
+    const bend = num(p.bend)
+    let path: Point[] = [start, end]
+    if (p.kind === 'elbow') {
+      // An elbow connector runs inside the box of its ends.
+      const box = boxOf(path, 0) as Rect
+      out.push({ rect: box, clear: LINE_CLEARANCE })
+      continue
+    }
+    if (bend !== 0) {
+      // tldraw's arc passes through the midpoint pushed sideways by `bend`.
+      const len = Math.hypot(end.x - start.x, end.y - start.y) || 1
+      const ux = (end.x - start.x) / len
+      const uy = (end.y - start.y) / len
+      const mid = { x: (start.x + end.x) / 2 + uy * -bend, y: (start.y + end.y) / 2 - ux * -bend }
+      path = [start, mid, end]
+    }
+    const clear = LINE_CLEARANCE + Math.abs(bend) * 0.25
+    const segments: Segment[] = []
+    for (let i = 1; i < path.length; i++) segments.push([path[i - 1] as Point, path[i] as Point])
+    out.push({ rect: boxOf(path, 0) as Rect, clear, segments })
+    // A label sits on the middle of the line.
+    if (paragraphsOf(p.richText).some((t) => t.trim())) {
+      const at = path[Math.floor(path.length / 2)] as Point
+      const m = { x: (start.x + end.x) / 2, y: (start.y + end.y) / 2 }
+      const c = path.length === 3 ? at : m
+      out.push({ rect: { x: c.x - 130, y: c.y - 45, w: 260, h: 90 }, clear: GRID_GAP })
+    }
+  }
+  return out
 }
 
 // ---- fractional index keys ---------------------------------------------------------------------------
@@ -367,12 +788,23 @@ export function placeNotes(opts: {
     // Pages (in page order) and each parent's children, in one pass.
     const pageRecords: { id: string; index: string }[] = []
     const children = new Map<string, AnyShape[]>()
+    const arrowEnds = new Map<string, ArrowEnd[]>()
     for (const rec of txn.values()) {
       if (rec.typeName === 'page') pageRecords.push({ id: rec.id, index: rec.index })
       else if (rec.typeName === 'shape') {
         const list = children.get(rec.parentId) ?? []
         list.push(rec as AnyShape)
         children.set(rec.parentId, list)
+      } else if (rec.typeName === 'binding' && rec.type === 'arrow') {
+        const bp = rec.props as { terminal?: unknown; normalizedAnchor?: Point; isPrecise?: unknown }
+        const list = arrowEnds.get(rec.fromId) ?? []
+        list.push({
+          terminal: String(bp.terminal),
+          toId: rec.toId,
+          anchor: { x: num(bp.normalizedAnchor?.x, 0.5), y: num(bp.normalizedAnchor?.y, 0.5) },
+          precise: bp.isPrecise === true,
+        })
+        arrowEnds.set(rec.fromId, list)
       }
     }
     const pages = pageRecords
@@ -414,16 +846,28 @@ export function placeNotes(opts: {
     }
     const frameId = frame.id
     const inFrame = frameCreated ? [] : (children.get(frameId) ?? [])
-    const contentBottom =
-      inFrame.length === 0 ? null : inFrame.reduce((m, c) => Math.max(m, c.y + childHeight(c)), -Infinity)
 
     const heights = new Map(todo.map((n) => [n.id, NOTE_SIZE + estimateGrowY(n.text)]))
-    const layout = layoutGrid({
-      frameW: Number(frame.props.w) || input.frame.w,
-      frameH: Number(frame.props.h) || input.frame.h,
-      contentBottom,
-      items: todo.map((n) => ({ id: n.id, height: heights.get(n.id) ?? NOTE_SIZE, group: n.authorId })),
-    })
+    const items = todo.map((n) => ({ id: n.id, height: heights.get(n.id) ?? NOTE_SIZE, group: n.authorId }))
+    const frameW = Number(frame.props.w) || input.frame.w
+    const frameH = Number(frame.props.h) || input.frame.h
+    // The frame's empty space first; below its content (the frame grows) only when that has no room.
+    const obstacles = frameCreated ? [] : frameObstacles(frameId, children, arrowEnds)
+    const boxes = obstacles?.filter((o) => !o.segments).map((o) => o.rect)
+    const lefts = boxes ? boxes.map((r) => r.x) : inFrame.map((c) => c.x)
+    const minLeft = lefts.length > 0 ? Math.min(...lefts) : null
+    // Rows line up with the frame's content when it starts near the left edge (a template's margin).
+    const alignX = minLeft !== null && minLeft >= FRAME_PAD && minLeft <= 4 * FRAME_PAD ? minLeft : undefined
+    const free = obstacles ? layoutInFreeSpace({ frameW, frameH, obstacles, items, alignX }) : null
+    const contentBottom =
+      inFrame.length === 0
+        ? null
+        : obstacles
+          ? obstacles.reduce((m, o) => Math.max(m, o.rect.y + o.rect.h), -Infinity)
+          : inFrame.reduce((m, c) => Math.max(m, c.y + childHeight(c)), -Infinity)
+    const layout: LayoutResult = free
+      ? { positions: free, frameW, frameH }
+      : layoutGrid({ frameW, frameH, contentBottom, items, left: alignX })
     const keys = indicesAbove(maxIndex(inFrame.map((c) => c.index)), todo.length)
 
     const grown =

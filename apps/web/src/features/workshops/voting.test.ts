@@ -2,7 +2,10 @@ import { isVoteEligible, rankVoteResults, type VoteShapeInfo } from '@draftroom/
 import { describe, expect, it } from 'vitest'
 import { followIdFor, isCanvasPress, summonApplies } from './follow.ts'
 import {
+  badgeScale,
+  clusterBadges,
   csvCell,
+  describeProgress,
   localCastCheck,
   optimisticBallot,
   plainTextFromRichText,
@@ -91,7 +94,38 @@ describe('results', () => {
   })
 
   it('labels come from the object text, frame name or type', () => {
-    expect(shapeLabel({ type: 'note', props: { richText: rt('Ship it', 'friday') } })).toBe('Ship it friday')
+    // Lines of a note stay apart in labels and the CSV (round-2 F17): "Book review slots · Owner: producer".
+    expect(shapeLabel({ type: 'note', props: { richText: rt('Ship it', 'friday') } })).toBe(
+      'Ship it · friday',
+    )
+    expect(shapeLabel({ type: 'note', props: { richText: rt('One', '', '  ', 'Two') } })).toBe('One · Two')
+    const broken = {
+      type: 'doc',
+      content: [
+        {
+          type: 'paragraph',
+          content: [
+            { type: 'text', text: 'Book review slots' },
+            { type: 'hardBreak' },
+            { type: 'text', text: 'Owner: producer' },
+          ],
+        },
+      ],
+    }
+    expect(plainTextFromRichText(broken)).toBe('Book review slots · Owner: producer')
+    const list = {
+      type: 'doc',
+      content: [
+        {
+          type: 'bulletList',
+          content: ['a', 'b'].map((t) => ({
+            type: 'listItem',
+            content: [{ type: 'paragraph', content: [{ type: 'text', text: t }] }],
+          })),
+        },
+      ],
+    }
+    expect(plainTextFromRichText(list)).toBe('a · b')
     expect(shapeLabel({ type: 'frame', props: { name: 'Ideas' } })).toBe('Ideas')
     expect(shapeLabel({ type: 'dr-file-card', props: { name: 'deck.pdf' } })).toBe('deck.pdf')
     expect(shapeLabel({ type: 'image', props: {} })).toBe('Untitled image')
@@ -183,5 +217,53 @@ describe('readingOrder', () => {
     ]
     expect(readingOrder(items).map((i) => i.id)).toEqual(['tall', 'mid', 'low'])
     expect(readingOrder([])).toEqual([])
+  })
+})
+
+describe('result badges when zoomed out (round-2 F3)', () => {
+  const at = (shapeId: string, x: number, y: number, rank: number, n: number) => ({ shapeId, x, y, rank, n })
+
+  it('shrink with the zoom down to 60% of their size, and never grow past it', () => {
+    expect(badgeScale(2)).toBe(1)
+    expect(badgeScale(1)).toBe(1)
+    expect(badgeScale(0.75)).toBe(0.75)
+    expect(badgeScale(0.1)).toBe(0.6)
+  })
+
+  it('badges that would overlap become one group, best rank first; apart they stay single', () => {
+    const apart = [at('a', 0, 0, 1, 3), at('b', 300, 0, 2, 1), at('c', 0, 300, 2, 1)]
+    expect(clusterBadges(apart, 1).map((g) => g.members.map((m) => m.shapeId))).toEqual([['a'], ['b'], ['c']])
+    // Zoomed out: the notes' corners are 20 px apart, closer than a badge is wide.
+    const close = [
+      at('c', 40, 10, 2, 1),
+      at('a', 0, 0, 1, 3),
+      at('b', 20, 0, 2, 1),
+      at('far', 400, 400, 3, 1),
+    ]
+    const groups = clusterBadges(close, 0.6)
+    expect(groups.map((g) => g.members.map((m) => m.shapeId))).toEqual([['a', 'b', 'c'], ['far']])
+    // A group sits where its best-ranked badge would
+    expect(groups[0]).toMatchObject({ x: 0, y: 0, votes: 5, best: 1 })
+  })
+
+  it('chains neighbours, so no two groups overlap', () => {
+    const row = Array.from({ length: 6 }, (_, i) => at(`s${i}`, i * 30, 0, i + 1, 6 - i))
+    const groups = clusterBadges(row, 0.6)
+    expect(groups).toHaveLength(1)
+    expect(groups[0]?.members).toHaveLength(6)
+  })
+})
+
+describe('facilitator progress wording (round-2 F17)', () => {
+  it('says what is happening instead of "0 of 0 done · 0 votes cast"', () => {
+    expect(describeProgress({ participants: 0, participantsDone: 0, totalVotesCast: 0 })).toBe(
+      'Waiting for votes',
+    )
+    expect(describeProgress({ participants: 3, participantsDone: 1, totalVotesCast: 6 })).toBe(
+      '1 of 3 done · 6 votes cast',
+    )
+    expect(describeProgress({ participants: 1, participantsDone: 0, totalVotesCast: 1 })).toBe(
+      '0 of 1 done · 1 vote cast',
+    )
   })
 })

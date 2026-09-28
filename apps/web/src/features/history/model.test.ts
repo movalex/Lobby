@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import {
   archiveFileName,
   checkpointNameToSave,
+  copyActions,
   createdSummary,
   defaultCheckpointName,
   deletedDetail,
@@ -169,5 +170,35 @@ describe('files and changes', () => {
     expect(touchesDeleted({ added: {}, removed: { 'binding:x': { typeName: 'binding' } } }, listed)).toBe(
       false,
     )
+  })
+})
+
+// export-control (docs/WAVE3-CONTRACTS.md; round-3 follow-up): the server refuses duplicate, restore as
+// a new board and the .json archive for limited viewers when the owner turned exporting off. The panel
+// says so instead of offering buttons that fail.
+describe('copy and export under the board export policy', () => {
+  it('offers duplicate, restore as new and the .json export only when exporting is allowed', () => {
+    const viewer = historyPermissions('viewer', 'active', 'member')
+    expect(copyActions(viewer, true)).toEqual({
+      duplicate: 'on',
+      restoreAsNew: 'on',
+      exportJson: 'on',
+      exportOff: false,
+    })
+    expect(copyActions(viewer, false)).toEqual({
+      duplicate: 'off',
+      restoreAsNew: 'off',
+      exportJson: 'off',
+      exportOff: true,
+    })
+    // Guests cannot create boards at all: those two are not shown, whatever the policy.
+    const guest = historyPermissions('viewer', 'active', 'guest')
+    expect(copyActions(guest, false)).toEqual({
+      duplicate: 'hidden',
+      restoreAsNew: 'hidden',
+      exportJson: 'off',
+      exportOff: true,
+    })
+    expect(copyActions(historyPermissions('owner', 'active', 'owner'), true).exportOff).toBe(false)
   })
 })

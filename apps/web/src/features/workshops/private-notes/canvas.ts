@@ -1,6 +1,6 @@
 // Canvas helpers for private brainstorming: where the notes will go (the selected frame, or a new
-// "Private ideas" frame in view), finding the notes a session placed, and fitting their height to
-// their text once they arrive.
+// "Private ideas" frame in view), finding the notes a session placed, fitting their height to their
+// text once they arrive, and showing them to the person who revealed them.
 //
 // Why the fit: the sync server places the notes but cannot measure text, so it gives each note a
 // conservative (tall) growY. The client that asked for the reveal measures them with tldraw's own
@@ -12,7 +12,7 @@ import {
   PRIVATE_NOTE_META_KEY,
   type PrivateTarget,
 } from '@draftroom/contracts'
-import { createShapeId, type Editor, type TLNoteShape, type TLShape, type TLShapeId } from 'tldraw'
+import { Box, createShapeId, type Editor, type TLNoteShape, type TLShape, type TLShapeId } from 'tldraw'
 
 /** A new frame holds 4 × 3 notes before it grows (200 px notes, 24 px gaps, 40 px padding). */
 export const NEW_FRAME_W = 2 * 40 + 4 * 200 + 3 * 24
@@ -107,28 +107,71 @@ export function fitNotes(editor: Editor, ids: readonly TLShapeId[]) {
 
 /**
  * Fits the session's notes as they arrive (the canvas broadcast and the API's answer race), each
- * once, for up to `timeoutMs`. Returns a stop function.
+ * once, for up to `timeoutMs`. `onArrived` runs once with the notes on the board: when all
+ * `expected` are there, or at the timeout with those that came. Returns a stop function (which skips
+ * `onArrived`).
  */
-export function fitPlacedNotes(editor: Editor, sessionId: string, expected: number, timeoutMs = 15_000) {
-  const done = new Set<string>()
+export function fitPlacedNotes(
+  editor: Editor,
+  sessionId: string,
+  expected: number,
+  timeoutMs = 15_000,
+  onArrived?: (ids: TLShapeId[]) => void,
+) {
+  const done = new Set<TLShapeId>()
   const run = () => {
     const fresh = placedNoteIds(editor, sessionId).filter((id) => !done.has(id))
     if (fresh.length === 0) return
     for (const id of fresh) done.add(id)
     fitNotes(editor, fresh)
-    if (done.size >= expected) stop()
+    if (done.size >= expected) finish()
   }
   const unlisten = editor.store.listen(() => run(), { source: 'remote', scope: 'document' })
-  const timer = setTimeout(() => stop(), timeoutMs)
+  const timer = setTimeout(() => finish(), timeoutMs)
   let stopped = false
   function stop() {
-    if (stopped) return
+    if (stopped) return false
     stopped = true
     unlisten()
     clearTimeout(timer)
+    return true
+  }
+  function finish() {
+    if (stop() && done.size > 0) onArrived?.([...done])
   }
   run()
-  return stop
+  return () => void stop()
+}
+
+/** Below this zoom a revealed note's text is too small to read: the camera moves in. */
+const READABLE_ZOOM = 0.4
+
+/**
+ * Brings the notes a reveal just placed into view for the person who revealed them (round-2 F5):
+ * unless they are all on screen at a readable zoom already, the camera moves to show them all, at
+ * 100% at most. Not while presenting or following someone (their camera is not theirs to move).
+ * Returns whether the camera moved.
+ */
+export function showPlacedNotes(editor: Editor, ids: readonly TLShapeId[], presenting: boolean): boolean {
+  if (presenting || editor.getInstanceState().followingUserId) return false
+  const shapes = ids.map((id) => editor.getShape(id)).filter((s): s is TLShape => !!s)
+  const first = shapes[0]
+  if (!first) return false
+  const pageId = editor.getAncestorPageId(first)
+  if (pageId && pageId !== editor.getCurrentPageId()) editor.setCurrentPage(pageId)
+  const boxes = shapes
+    .filter((s) => editor.getAncestorPageId(s) === editor.getCurrentPageId())
+    .map((s) => editor.getShapePageBounds(s))
+    .filter((b): b is Box => !!b)
+  if (boxes.length === 0) return false
+  const all = Box.Common(boxes)
+  if (editor.getViewportPageBounds().contains(all) && editor.getZoomLevel() >= READABLE_ZOOM) return false
+  editor.zoomToBounds(all, {
+    targetZoom: 1,
+    inset: 96,
+    animation: { duration: editor.options.animationMediumMs },
+  })
+  return true
 }
 
 /**

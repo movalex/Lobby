@@ -1,7 +1,7 @@
 import { type PrivateBrainstorm, type PrivateBrainstormState, PrivateTarget } from '@draftroom/contracts'
 import { describe, expect, it } from 'vitest'
 import { NEW_FRAME_H, NEW_FRAME_W, newFrameBounds, targetForFrame } from './canvas.ts'
-import { describeCounts } from './hooks.ts'
+import { chipCounts, describeCounts } from './hooks.ts'
 import { type EventSource, PrivateNotesStore, type RequestFn, type SessionEnded } from './store.ts'
 
 const SID = 'pbs_0123456789abcdefghij'
@@ -30,6 +30,7 @@ function state(over: Partial<PrivateBrainstormState> = {}): PrivateBrainstormSta
     counts: { notes: 0, people: 0 },
     myNotes: [],
     canReveal: false,
+    starterLeft: false,
     placed: null,
     ...over,
   }
@@ -155,6 +156,24 @@ describe('PrivateNotesStore', () => {
     expect(calls[1]?.path).toBe(`/api/private-brainstorms/${SID}/notes`)
   })
 
+  it('refetches its own view when the board’s people change (the starter may have left: SEAM-07)', async () => {
+    let server = state()
+    const { store, events, calls } = setup(() => server)
+    await store.refresh()
+    expect(store.getSnapshot()).toMatchObject({ canReveal: false, starterLeft: false })
+    server = state({ canReveal: true, starterLeft: true })
+    events.emit('sharing.changed', { reason: 'grant' })
+    await flush()
+    expect(calls.filter((c) => c.method === 'GET')).toHaveLength(2)
+    expect(store.getSnapshot()).toMatchObject({ canReveal: true, starterLeft: true })
+    // No session: nothing to refetch for.
+    server = state({ session: null })
+    await store.refresh()
+    events.emit('sharing.changed', { reason: 'grant' })
+    await flush()
+    expect(calls.filter((c) => c.method === 'GET')).toHaveLength(3)
+  })
+
   it('never sends a draft action without a session', async () => {
     const { store, calls } = setup(() => state({ session: null }))
     await store.refresh()
@@ -169,6 +188,12 @@ describe('helpers', () => {
     expect(describeCounts({ notes: 0, people: 0 })).toBe('No notes yet')
     expect(describeCounts({ notes: 1, people: 1 })).toBe('1 note from 1 person')
     expect(describeCounts({ notes: 7, people: 4 })).toBe('7 notes from 4 people')
+  })
+
+  it('words the top-bar chip in full (round-2 F17: not "0 from 0" or "3 from 2")', () => {
+    expect(chipCounts('open', { notes: 0, people: 0 })).toBe('Waiting for notes')
+    expect(chipCounts('open', { notes: 3, people: 2 })).toBe('3 notes from 2 people')
+    expect(chipCounts('revealed', { notes: 3, people: 2 })).toBe('Revealing…')
   })
 
   it('centres a new frame in the viewport, sized for twelve notes', () => {
