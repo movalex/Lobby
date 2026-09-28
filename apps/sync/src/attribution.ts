@@ -18,9 +18,11 @@
 //   1. neither the text nor the attribution changes (moves, colour, size: nearly every write), or
 //   2. the text changes and the attribution becomes the session's own id (typing), or
 //   3. the attribution becomes null on an empty note (clearing it), or
-//   4. the new (text, attribution) pair is one this note had until THIS user's own write replaced it
-//      (their undo; Lobby's per-property undo, apps/web/src/sync-quality/perPropUndo.ts, patches back
-//      exactly the text and attribution their edit changed). The ledger below remembers those pairs.
+//   4. the new (text, attribution) pair is one this note had until THIS user's own write replaced it,
+//      and nobody else has written the note's text or attribution since (their undo; Lobby's
+//      per-property undo, apps/web/src/sync-quality/perPropUndo.ts, patches back exactly the text and
+//      attribution their edit changed, and never a field whose last write was someone else's). The
+//      ledger below remembers those pairs.
 //   Anything else is skipped (null), like any vetoed write: sync-core's rebase puts the writer's tab
 //   back in step and it stays connected. sync-core uses only allow/veto on updates, so the whole op
 //   goes, a move or colour change in it included.
@@ -42,6 +44,9 @@
 //     or a very long edit history, undo of an edit to someone else's note is skipped (the tab snaps
 //     back with "The board did not accept your last change"). Undo of one's own delete still works
 //     through "Recently deleted" while it keeps the row; past that, the note comes back anonymous.
+//     Once someone else has written the note's text or attribution, an earlier writer's undo of their
+//     edit is skipped too (Lobby's per-property undo does not send it: that field's last write was
+//     remote; the server holds any other client to the same).
 //   - Text retyped offline against a note someone else retyped meanwhile carries their attribution
 //     unchanged on the wire, so it is skipped rather than shown under their name.
 //   - A forged client can still create a note under no name at all (legitimate clients create
@@ -161,7 +166,8 @@ export function anonymized<T extends TLShape>(shape: T): T {
 
 /**
  * Per room: the (text, attribution) pairs each note had until a user's own write replaced or deleted
- * them, keyed by that user. Memory only (the authorizer runs inside the push transaction), bounded.
+ * them, keyed by that user, for as long as nobody else writes the note's text or attribution. Memory
+ * only (the authorizer runs inside the push transaction), bounded.
  */
 export class AttributionLedger {
   private readonly limits: AttributionLimits
@@ -177,14 +183,40 @@ export class AttributionLedger {
     return this.total
   }
 
+  /** Entries of `user` start with this (a JSON string literal ends at its unescaped closing quote). */
+  private static prefix(user: string): string {
+    return `[${JSON.stringify(user)},`
+  }
+
   private static entry(user: string, shape: TLShape): string | null {
     const by = attributionOf(shape)
     if (by === undefined) return null
     return JSON.stringify([user, by, textKey(shape)])
   }
 
+  /**
+   * `user` wrote this note's text or attribution (an allowed edit, delete or create): what anyone
+   * else replaced on it before can no longer be put back by them. Lobby's per-property undo never
+   * reverts a field whose last write was someone else's, so only a forged client would send it.
+   */
+  wrote(shapeId: string, user: string): void {
+    const list = this.byShape.get(shapeId)
+    if (!list) return
+    const own = AttributionLedger.prefix(user)
+    const kept = list.filter((e) => e.startsWith(own))
+    if (kept.length === list.length) return
+    this.total -= list.length - kept.length
+    if (kept.length) this.byShape.set(shapeId, kept)
+    else this.byShape.delete(shapeId)
+  }
+
   /** `user`'s write replaced (or deleted) `stored`, the note as it was in storage. */
   replaced(stored: TLShape, user: string): void {
+    this.wrote(stored.id, user)
+    // A pair under the writer's own name vouches only for putting that name back on unchanged text,
+    // which an honest client does on an empty note at most (a text change under its own name needs no
+    // vouch). Typing records one per push and would push out the one pair its undo needs (perShape).
+    if (attributionOf(stored) === user && !isEmptyText(stored)) return
     const entry = AttributionLedger.entry(user, stored)
     if (!entry) return
     const id = stored.id
@@ -283,7 +315,9 @@ export function withNoteAttribution(base: Authorizers, opts: NoteAttributionOpti
           next = anonymized(args.next)
           opts.onForged?.('create', args.next.id, args.session.sessionId)
         }
-        return inner({ ...args, next })
+        const created = inner({ ...args, next })
+        if (created) ledger.wrote(created.id, userId)
+        return created
       }
       const verdict = updateVerdict(args.prev, args.next, userId, () => ledger.vouches(args.next, userId))
       if (verdict === 'forged') {

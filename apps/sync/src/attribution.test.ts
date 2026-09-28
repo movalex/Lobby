@@ -113,6 +113,35 @@ describe('AttributionLedger', () => {
     expect(ledger.size).toBe(1)
   })
 
+  it("keeps no pair under the writer's own name on text (typing), so typing cannot push out what an undo needs", () => {
+    const ledger = new AttributionLedger({ perShape: 3 })
+    ledger.replaced(note('Keep', ALICE), VIC) // the first keystroke replaces alice's words
+    for (const t of ['Keep,', 'Keep, b', 'Keep, bu', 'Keep, but']) ledger.replaced(note(t, VIC), VIC)
+    expect(ledger.size).toBe(1)
+    expect(ledger.vouches(note('Keep', ALICE), VIC)).toBe(true)
+    // an empty note under the writer's own name is the one case such a pair can vouch for
+    ledger.replaced(note('', VIC), VIC)
+    expect(ledger.vouches(note('', VIC), VIC)).toBe(true)
+  })
+
+  it("forgets what one user replaced on a note once another writes it; that user's own pairs stay", () => {
+    const ledger = new AttributionLedger()
+    ledger.replaced(note('Keep', ALICE), VIC)
+    ledger.replaced(note('Other', ALICE, 'n2'), VIC)
+    ledger.replaced(note('Cancel', VIC), ALICE) // alice writes over vic's edit
+    expect(ledger.vouches(note('Keep', ALICE), VIC)).toBe(false)
+    expect(ledger.vouches(note('Cancel', VIC), ALICE)).toBe(true)
+    expect(ledger.vouches(note('Other', ALICE, 'n2'), VIC)).toBe(true) // another note: untouched
+    ledger.wrote('shape:n2', 'usr_carol') // carol re-creates or rewrites n2
+    expect(ledger.vouches(note('Other', ALICE, 'n2'), VIC)).toBe(false)
+    expect(ledger.size).toBe(1)
+    // a user id that is a prefix of another's is not taken for it
+    const l2 = new AttributionLedger()
+    l2.replaced(note('Keep', ALICE), 'usr_v')
+    l2.wrote('shape:n1', 'usr_vic')
+    expect(l2.vouches(note('Keep', ALICE), 'usr_v')).toBe(false)
+  })
+
   it('compares text by value, whatever order a patch left its keys in', () => {
     const ledger = new AttributionLedger()
     const a = note('Same words', ALICE)
@@ -200,6 +229,38 @@ describe('withNoteAttribution (composed with the room authorizer)', () => {
     const other = note('Other', ALICE, 'n2')
     expect(run({ type: 'delete', prev: other, next: null })).not.toBeNull()
     expect(run({ type: 'create', prev: null, next: other })).toEqual(other) // undo of the delete, as it was
+  })
+
+  it("another user's allowed text write, delete or create ends an earlier writer's vouch; a move or a veto does not", () => {
+    let veto = false
+    const base = vi.fn((args: Args) => (veto ? null : args.type === 'delete' ? args.prev : args.next))
+    const { run, ledger } = setup({ shape: base as Authorizers['shape'] })
+    const carol = session('usr_carol')
+    const hers = note('Keep', ALICE)
+    const vics = note('Cancel', VIC)
+    const fresh = () => {
+      ledger.replaced(hers, VIC) // vic edited alice's note
+      expect(ledger.vouches(hers, VIC)).toBe(true)
+    }
+    fresh()
+    run({ session: carol, type: 'update', prev: vics, next: { ...vics, x: 90 } as TLShape }) // a move
+    expect(ledger.vouches(hers, VIC)).toBe(true)
+    veto = true // the lease refuses carol's edit: nothing was written
+    run({ session: carol, type: 'update', prev: vics, next: note('Carol was here', 'usr_carol') })
+    expect(ledger.vouches(hers, VIC)).toBe(true)
+    veto = false
+    run({ session: carol, type: 'update', prev: vics, next: note('Carol was here', 'usr_carol') })
+    expect(ledger.vouches(hers, VIC)).toBe(false)
+    fresh()
+    run({ session: carol, type: 'delete', prev: vics, next: null })
+    expect(ledger.vouches(hers, VIC)).toBe(false)
+    fresh()
+    run({ session: carol, type: 'create', prev: null, next: note('New', null) })
+    expect(ledger.vouches(hers, VIC)).toBe(false)
+    // vic's own writes keep his vouch
+    fresh()
+    run({ type: 'update', prev: vics, next: note('Cancel it', VIC) })
+    expect(run({ type: 'update', prev: note('Cancel it', VIC), next: hers })).not.toBeNull()
   })
 
   it('fails closed for read-only sessions', () => {

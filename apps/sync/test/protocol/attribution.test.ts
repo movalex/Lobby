@@ -205,6 +205,30 @@ describe("a note's attribution is bound to the session that wrote its text", () 
       await expectAlicesNote(server, boardId, alice, bob, vic)
       await expectSettled(vic)
     })
+
+    it("once alice has written over the guest's edit, he cannot put her earlier words back under her name", async () => {
+      const { server, boardId, alice, vic, bob } = await board()
+      vic.update('shape:a1', (s) => edited(s, 'Cancel the Q3 launch', VIC))
+      expect(await lastResult(vic)).toBe('commit')
+      await waitFor(() => by(alice.get('shape:a1')) === VIC)
+      alice.update('shape:a1', (s) => edited(s, 'Move the Q3 launch to Q4', ALICE))
+      expect(await lastResult(alice)).toBe('commit')
+      await waitFor(() => textOf(vic.get('shape:a1')) === 'Move the Q3 launch to Q4')
+      // what the guest's own undo would have sent before alice wrote; Lobby's per-property undo never
+      // sends it now (the text's last write was hers), so only a forged client can
+      vic.update('shape:a1', (s) => edited(s, 'Keep the Q3 launch', ALICE))
+      expect(await lastResult(vic)).toBe('discard')
+      await sleep(200)
+      for (const c of [alice, vic, bob])
+        expect([textOf(c.get('shape:a1')), by(c.get('shape:a1'))], c.name).toEqual([
+          'Move the Q3 launch to Q4',
+          ALICE,
+        ])
+      const s = await storedShape(server, boardId, 'shape:a1')
+      expect([textOf(s), by(s)]).toEqual(['Move the Q3 launch to Q4', ALICE])
+      await expectSettled(vic)
+      expectUndisturbed(alice, bob)
+    })
   })
 
   describe('forged creates are stored anonymous (rewritten, never dropped)', () => {
@@ -344,6 +368,24 @@ describe("a note's attribution is bound to the session that wrote its text", () 
       vic.update('shape:a1', (s) => edited(s, 'Keep the Q3 launch', ALICE))
       expect(await lastResult(vic)).toBe('commit')
       await expectAlicesNote(server, boardId, alice, bob, vic)
+      expectUndisturbed(alice, vic, bob)
+    })
+
+    it('undo of a long edit to alice’s note (one push per keystroke, as TLSyncClient sends typing) brings her words and name back', async () => {
+      const { server, boardId, alice, vic, bob } = await board()
+      const typed = ', but only after the teaser ships'
+      for (let i = 1; i <= typed.length; i++) {
+        vic.update('shape:a1', (s) => edited(s, `Keep the Q3 launch${typed.slice(0, i)}`, VIC))
+        expect(await lastResult(vic)).toBe('commit')
+      }
+      await waitFor(() => textOf(bob.get('shape:a1')) === `Keep the Q3 launch${typed}`)
+      // undo of the whole editing session (one history entry): her words and her name
+      vic.update('shape:a1', (s) => edited(s, 'Keep the Q3 launch', ALICE))
+      expect(await lastResult(vic)).toBe('commit')
+      await expectAlicesNote(server, boardId, alice, bob, vic)
+      // and redo
+      vic.update('shape:a1', (s) => edited(s, `Keep the Q3 launch${typed}`, VIC))
+      expect(await lastResult(vic)).toBe('commit')
       expectUndisturbed(alice, vic, bob)
     })
 
