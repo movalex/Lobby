@@ -4,7 +4,7 @@ Open findings from the second review on the final build (four reviewers: produce
 
 ## On the `next` branch (not deployed)
 
-A backlog round on 2026-09-28 fixed these on the `next` branch, which was deliberately NOT deployed before the Monday demo. Its full browser run passed 324 of 327; the 3 failures were tests that had not caught up with the new phone rail and per-row grid heights, and those specs (27 tests) pass after the test fixes. Lint, typecheck and 3,126 unit tests pass. Run the full gate once more, merge `next` into `main` and deploy api → sync → web after the demo.
+A backlog round on 2026-09-28 fixed these on the `next` branch, which was deliberately NOT deployed before the Monday demo. It passes the full gate: lint, typecheck, 3,126 unit tests and 327/327 browser tests (2026-09-28 16:33Z). To ship it after the demo: merge `next` into `main` and deploy api → sync → web after the demo.
 
 - **Fixed:** A11Y2-03, A11Y-01, A11Y-08, A11Y-09, A11Y2-09, A11Y2-07, A11Y2-10, R2-11, R2-09, R2-08, A11Y2-06, R2-04, A11Y-06, R2-07, A11Y2-05, F2-03, F2-05, DANA2-05, DANA2-06.
 - **Partly fixed:** A11Y2-08, F14, DANA-11, DANA2-07, R13, F15, F2-06, F2-09, F13.
