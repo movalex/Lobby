@@ -10,7 +10,7 @@ import {
   type MetaRoute,
   type OriginalRoute,
 } from './serve.ts'
-import { handleUpload, type UploadRoute } from './upload.ts'
+import { createUploadGuard, handleUpload, type UploadRoute } from './upload.ts'
 
 /**
  * Route patterns (docs/M1-CONTRACTS.md §5). The upload takes a raw, non-JSON body: host-wide body
@@ -47,12 +47,14 @@ export async function filesPlugin(app: FastifyInstance, deps: FilesDeps): Promis
       await Promise.allSettled(uploads.values())
     })
 
+    // One quota policy and per-user upload window for this plugin instance (FC-1).
+    const guard = createUploadGuard(deps)
     scope.route<UploadRoute>({
       method: 'POST',
       url: FILE_ROUTES.upload,
       handler: (request, reply) => {
         const raw = request.raw
-        const work = handleUpload(request, reply, deps)
+        const work = handleUpload(request, reply, deps, guard)
         uploads.set(raw, work)
         return work.finally(() => uploads.delete(raw))
       },

@@ -8,12 +8,15 @@ export class ApiError extends Error {
   /** Same value as `status`, under the name Fastify and plugin error handlers look for. */
   readonly statusCode: number
   readonly code: string
-  constructor(status: number, code: string, message: string) {
+  /** Response headers that belong to this error (e.g. Retry-After on a 429). */
+  readonly headers: Readonly<Record<string, string>>
+  constructor(status: number, code: string, message: string, headers: Record<string, string> = {}) {
     super(message)
     this.name = 'ApiError'
     this.status = status
     this.statusCode = status
     this.code = code
+    this.headers = headers
   }
 }
 
@@ -52,9 +55,14 @@ const STATUS_CODES: Record<number, [string, string]> = {
 export function toErrorResponse(err: unknown): {
   status: number
   body: { error: { code: string; message: string } }
+  headers?: Readonly<Record<string, string>>
 } {
   if (err instanceof ApiError)
-    return { status: err.status, body: { error: { code: err.code, message: err.message } } }
+    return {
+      status: err.status,
+      body: { error: { code: err.code, message: err.message } },
+      headers: err.headers,
+    }
   const status = (err as { statusCode?: unknown } | null)?.statusCode
   if (typeof status === 'number' && status >= 400 && status < 500) {
     // Framework/plugin errors (bad JSON, unsupported media type, rate limit, …): generic wording, since

@@ -17,6 +17,7 @@ import { audit } from '../audit.ts'
 import { isSecretToken, newSecretToken, sha256hex } from '../auth/session.ts'
 import type { AppContext, Params } from '../context.ts'
 import { forbidden, gone, notFound, parse } from '../errors.ts'
+import { keyedLimit } from '../rate-limit.ts'
 
 const GONE_MESSAGE = gone().message
 
@@ -105,7 +106,13 @@ async function sendGone(
 
 export function registerInvitationRoutes(app: FastifyInstance, ctx: AppContext): void {
   const { db, notifier, now, sessions } = ctx
-  const limited = { config: { rateLimit: ctx.authRateLimit } }
+  // SCA-2 (docs/SECURITY-REVIEW-2026-09-27.md): the tokens are 256-bit, so guessing is not the threat;
+  // one shared per-IP bucket was (a whole office behind one NAT locked out of its workshop link).
+  // Previews are limited per link, with a generous per-IP backstop against floods of made-up tokens;
+  // accepting is limited per signed-in user.
+  const { previewPerToken, previewPerIp, acceptPerUser } = ctx.limits.invitations
+  const perToken = keyedLimit(previewPerToken, now)
+  const perUser = keyedLimit(acceptPerUser, now)
 
   app.post('/api/workspaces/:wid/invitations', async (req, reply) => {
     const user = await ctx.requireUser(req)
@@ -137,38 +144,46 @@ export function registerInvitationRoutes(app: FastifyInstance, ctx: AppContext):
     return created
   })
 
-  // Public: the invitee may not have an account yet. Rate limited because the path holds a secret.
-  app.get('/api/invitations/:token', limited, async (req, reply): Promise<InvitationPreview | undefined> => {
-    const { token } = req.params as Params
-    if (!isSecretToken(token)) throw notFound()
-    const row = await db.maybeOne<
-      InvitationRow & { workspace_name: string; board_title: string | null; inviter_name: string }
-    >(
-      `SELECT ${INVITATION_COLUMNS}, w.name AS workspace_name, b.title AS board_title, u.name AS inviter_name
+  // Public: the invitee may not have an account yet.
+  const previewRoute = { config: { rateLimit: previewPerIp } }
+  app.get(
+    '/api/invitations/:token',
+    previewRoute,
+    async (req, reply): Promise<InvitationPreview | undefined> => {
+      const { token } = req.params as Params
+      if (!isSecretToken(token)) throw notFound()
+      const tokenHash = sha256hex(token)
+      perToken.take(tokenHash)
+      const row = await db.maybeOne<
+        InvitationRow & { workspace_name: string; board_title: string | null; inviter_name: string }
+      >(
+        `SELECT ${INVITATION_COLUMNS}, w.name AS workspace_name, b.title AS board_title, u.name AS inviter_name
          FROM invitations i
          JOIN workspaces w ON w.id = i.workspace_id
          LEFT JOIN boards b ON b.id = i.board_id
          JOIN users u ON u.id = i.created_by
         WHERE i.token_hash = $1`,
-      [sha256hex(token)],
-    )
-    if (!row) throw notFound()
-    const caller = await sessions.user(req)
-    if (stateFor(row, caller?.id ?? null, now()) === 'gone') {
-      await sendGone(db, reply, row, caller?.id ?? null)
-      return
-    }
-    return {
-      workspace: { id: row.workspace_id, name: row.workspace_name },
-      board: row.board_id && row.board_title !== null ? { id: row.board_id, title: row.board_title } : null,
-      role: row.role,
-      invitedBy: { name: row.inviter_name },
-      expiresAt: row.expires_at.toISOString(),
-    }
-  })
+        [tokenHash],
+      )
+      if (!row) throw notFound()
+      const caller = await sessions.user(req)
+      if (stateFor(row, caller?.id ?? null, now()) === 'gone') {
+        await sendGone(db, reply, row, caller?.id ?? null)
+        return
+      }
+      return {
+        workspace: { id: row.workspace_id, name: row.workspace_name },
+        board: row.board_id && row.board_title !== null ? { id: row.board_id, title: row.board_title } : null,
+        role: row.role,
+        invitedBy: { name: row.inviter_name },
+        expiresAt: row.expires_at.toISOString(),
+      }
+    },
+  )
 
-  app.post('/api/invitations/:token/accept', limited, async (req, reply) => {
+  app.post('/api/invitations/:token/accept', async (req, reply) => {
     const user = await ctx.requireUser(req)
+    perUser.take(user.id)
     const { token } = req.params as Params
     if (!isSecretToken(token)) throw notFound()
     const result = await db.transaction(async (tx) => {

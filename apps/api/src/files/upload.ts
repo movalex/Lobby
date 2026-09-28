@@ -1,3 +1,4 @@
+import type { Queryable } from '@draftroom/db'
 import {
   BOARD_ID_RE,
   classifyUpload,
@@ -7,8 +8,9 @@ import {
   sanitizeDisplayName,
 } from '@draftroom/dev-assets'
 import type { FastifyReply, FastifyRequest } from 'fastify'
+import { SlidingWindowLimiter } from '../rate-limit.ts'
 import { deleteQuietly, originalKey } from './blobs.ts'
-import type { FilesDeps } from './deps.ts'
+import { DEFAULT_UPLOAD_POLICY, type FilesDeps, type UploadPolicy } from './deps.ts'
 import { EMPTY_PROBE, toMeta, VERSION_COLUMNS, type VersionRow } from './meta.ts'
 import { initialServedMime, normalizeDeclaredMime } from './mime.ts'
 import { ReceiveError, receiveToBlob } from './receive.ts'
@@ -20,11 +22,54 @@ export interface UploadRoute {
 
 const KIND_LABEL = { image: 'images', pdf: 'PDFs', video: 'videos', other: 'files' } as const
 const MiB = 1024 * 1024
+const GiB = 1024 * MiB
 
 // The body has not been read when these are thrown: close the connection instead of letting Node
 // drain (possibly hundreds of MB of) the rejected body to keep it alive.
 const CLOSE = { Connection: 'close' }
-const reject = (status: number, code: string, message: string) => new HttpError(status, code, message, CLOSE)
+const reject = (status: number, code: string, message: string, headers: Record<string, string> = {}) =>
+  new HttpError(status, code, message, { ...CLOSE, ...headers })
+
+/** The upload limits of one files plugin instance: its policy and the per-user window. */
+export interface UploadGuard {
+  policy: UploadPolicy
+  perUser: SlidingWindowLimiter
+}
+
+export function createUploadGuard(deps: Pick<FilesDeps, 'uploads'>): UploadGuard {
+  const policy = deps.uploads ?? DEFAULT_UPLOAD_POLICY
+  return { policy, perUser: new SlidingWindowLimiter(policy.perUser.max, policy.perUser.timeWindow) }
+}
+
+const formatBytes = (n: number) =>
+  n >= GiB ? `${Math.round((n / GiB) * 10) / 10} GB` : `${Math.max(1, Math.round(n / MiB))} MB`
+
+/**
+ * FC-1: 413 when `incomingBytes` more (one more file) would take the workspace past its quota. Run
+ * once before reading the body (from Content-Length) and again inside the insert transaction, after
+ * the workspace row is locked, with the real size: two uploads that both passed the first check
+ * cannot both be stored.
+ */
+async function checkQuota(q: Queryable, workspaceId: string, incomingBytes: number, policy: UploadPolicy) {
+  const usage = await q.one<{ bytes: number; files: number }>(
+    `SELECT COALESCE(SUM(size_bytes), 0)::float8 AS bytes, count(*)::int AS files
+       FROM asset_versions WHERE workspace_id = $1`,
+    [workspaceId],
+  )
+  const { maxBytes, maxFiles } = policy.workspaceQuota
+  if (usage.files + 1 > maxFiles)
+    throw reject(
+      413,
+      'FILE_LIMIT_REACHED',
+      `This workspace has reached its limit of ${maxFiles.toLocaleString('en-US')} files, so this file can't be added. Ask the workspace owner for more space.`,
+    )
+  if (usage.bytes + incomingBytes > maxBytes)
+    throw reject(
+      413,
+      'STORAGE_QUOTA_EXCEEDED',
+      `This file doesn't fit in the workspace's ${formatBytes(maxBytes)} of file storage. Ask the workspace owner for more space.`,
+    )
+}
 
 function parseFileName(raw: string | string[] | undefined): string {
   const bad = reject(400, 'INVALID_FILE_NAME', 'X-File-Name must be the URI-encoded file name.')
@@ -46,12 +91,21 @@ export async function handleUpload(
   request: FastifyRequest<UploadRoute>,
   reply: FastifyReply<UploadRoute>,
   deps: FilesDeps,
+  guard: UploadGuard = createUploadGuard(deps),
 ) {
   const boardId = request.params.bid
   if (!BOARD_ID_RE.test(boardId)) throw reject(400, 'INVALID_BOARD_ID', 'Invalid board id.')
   // First, before any header is interpreted, any byte is read or anything is stored: a caller who
   // may not edit this board learns nothing else from this route.
   const { userId, workspaceId } = await requireAccess(deps, request, boardId, 'edit', CLOSE)
+  // FC-1: then the per-user rate limit, keyed on the signed-in user (never the IP).
+  const at = (deps.now?.() ?? new Date()).getTime()
+  if (!guard.perUser.take(userId, at)) {
+    const wait = Math.max(1, Math.ceil(guard.perUser.retryAfterMs(userId, at) / 1000))
+    throw reject(429, 'RATE_LIMITED', "You're uploading files too quickly. Wait a minute and try again.", {
+      'Retry-After': String(wait),
+    })
+  }
 
   const lengthHeader = request.headers['content-length']
   if (lengthHeader === undefined) throw reject(411, 'LENGTH_REQUIRED', 'Content-Length is required.')
@@ -68,6 +122,8 @@ export async function handleUpload(
       `The file is larger than the ${maxBytes / MiB} MB limit for ${KIND_LABEL[kind]}.`,
     )
   if (declaredBytes > maxBytes) throw tooLarge()
+  // The workspace quota, from the declared size, before any body byte is read.
+  await checkQuota(deps.db, workspaceId, declaredBytes, guard.policy)
 
   const assetId = newId('ast')
   const versionId = newId('ver')
@@ -83,6 +139,10 @@ export async function handleUpload(
     })
     const now = deps.now?.() ?? new Date()
     row = await deps.db.transaction(async (tx) => {
+      // Serializes this workspace's uploads for the re-check (NO KEY: boards and members referencing
+      // the workspace row are not blocked).
+      await tx.query('SELECT id FROM workspaces WHERE id = $1 FOR NO KEY UPDATE', [workspaceId])
+      await checkQuota(tx, workspaceId, bytes, guard.policy)
       const inserted = await tx.one<VersionRow>(
         `INSERT INTO asset_versions AS v (id, asset_id, workspace_id, board_id, name, declared_mime_type,
            mime_type, kind, size_bytes, sha256, uploaded_by, status, attempts, probe, created_at, updated_at)

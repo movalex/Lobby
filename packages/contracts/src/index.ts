@@ -88,6 +88,29 @@ export type DevLoginInput = z.infer<typeof DevLoginInput>
 export const Me = z.object({ user: User, workspaces: z.array(WorkspaceSummary) })
 export type Me = z.infer<typeof Me>
 
+/**
+ * What "sign out everywhere" did with the identity provider's own sessions: 'revoked' (ended, e.g.
+ * Clerk sessions on other devices), 'failed' (could not reach the provider: those sessions may still
+ * sign the person back in on other devices), 'none' (the provider keeps no sessions: dev sign-in).
+ */
+export const ProviderSessionsRevoked = z.object({
+  status: z.enum(['revoked', 'failed', 'none']),
+  revoked: z.number().int().nonnegative(),
+})
+export type ProviderSessionsRevoked = z.infer<typeof ProviderSessionsRevoked>
+
+/**
+ * POST /api/auth/sessions/revoke-all ("sign out everywhere", docs/SECURITY-REVIEW-2026-09-27.md
+ * SCA-4): ends every Draftroom session of the signed-in person, this one included (the cookie is
+ * cleared), and their open board event streams.
+ */
+export const RevokeAllSessionsResponse = z.object({
+  /** Draftroom sessions ended (every device, this one included). */
+  revoked: z.number().int().nonnegative(),
+  provider: ProviderSessionsRevoked,
+})
+export type RevokeAllSessionsResponse = z.infer<typeof RevokeAllSessionsResponse>
+
 // ---- boards --------------------------------------------------------------------------------------
 
 export const ListBoardsQuery = z.object({

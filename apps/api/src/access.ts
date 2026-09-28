@@ -59,26 +59,15 @@ export const isBoardId = (v: unknown): v is string => typeof v === 'string' && B
 export const isUserId = (v: unknown): v is string => UserId.safeParse(v).success
 export const isWorkspaceId = (v: unknown): v is string => WorkspaceId.safeParse(v).success
 
-export async function loadBoardAccess(
-  q: Queryable,
-  boardId: string,
-  userId: string,
-  opts: { forUpdate?: boolean } = {},
-): Promise<BoardAccess | null> {
-  if (!isBoardId(boardId)) return null
-  // FOR UPDATE OF b serializes concurrent membership/status changes on one board (last-owner check).
-  const row = await q.maybeOne<
-    BoardRow & { workspace_name: string; workspace_role: WorkspaceRole | null; board_grant: BoardRole | null }
-  >(
-    `SELECT ${BOARD_COLUMNS}, w.name AS workspace_name, wm.role AS workspace_role, bm.role AS board_grant
-       FROM boards b
-       JOIN workspaces w ON w.id = b.workspace_id
-       LEFT JOIN workspace_members wm ON wm.workspace_id = b.workspace_id AND wm.user_id = $2
-       LEFT JOIN board_members bm ON bm.board_id = b.id AND bm.user_id = $2
-      WHERE b.id = $1${opts.forUpdate ? ' FOR UPDATE OF b' : ''}`,
-    [boardId, userId],
-  )
-  if (!row) return null
+type AccessRow = BoardRow & {
+  workspace_name: string
+  workspace_role: WorkspaceRole | null
+  board_grant: BoardRole | null
+}
+
+const ACCESS_COLUMNS = `${BOARD_COLUMNS}, w.name AS workspace_name, wm.role AS workspace_role, bm.role AS board_grant`
+
+function toAccess(row: AccessRow): BoardAccess {
   const { workspace_name, workspace_role, board_grant, ...board } = row
   return {
     board,
@@ -91,6 +80,67 @@ export async function loadBoardAccess(
       visibility: board.visibility,
     }),
   }
+}
+
+export async function loadBoardAccess(
+  q: Queryable,
+  boardId: string,
+  userId: string,
+  opts: { forUpdate?: boolean } = {},
+): Promise<BoardAccess | null> {
+  if (!isBoardId(boardId)) return null
+  // FOR UPDATE OF b serializes concurrent membership/status changes on one board (last-owner check).
+  const row = await q.maybeOne<AccessRow>(
+    `SELECT ${ACCESS_COLUMNS}
+       FROM boards b
+       JOIN workspaces w ON w.id = b.workspace_id
+       LEFT JOIN workspace_members wm ON wm.workspace_id = b.workspace_id AND wm.user_id = $2
+       LEFT JOIN board_members bm ON bm.board_id = b.id AND bm.user_id = $2
+      WHERE b.id = $1${opts.forUpdate ? ' FOR UPDATE OF b' : ''}`,
+    [boardId, userId],
+  )
+  return row ? toAccess(row) : null
+}
+
+export interface BoardUserPair {
+  boardId: string
+  userId: string
+}
+
+export const pairKey = (p: BoardUserPair) => `${p.boardId}\u0000${p.userId}`
+
+const PAIRS_PER_QUERY = 500
+
+/**
+ * loadBoardAccess for many (board, user) pairs in a few queries (the event streams' re-checks).
+ * Keyed by pairKey(); a pair whose board does not exist (or is malformed) maps to null.
+ */
+export async function loadBoardAccessMany(
+  q: Queryable,
+  pairs: readonly BoardUserPair[],
+): Promise<Map<string, BoardAccess | null>> {
+  const out = new Map<string, BoardAccess | null>()
+  const unique = new Map<string, BoardUserPair>()
+  for (const p of pairs) {
+    out.set(pairKey(p), null)
+    if (isBoardId(p.boardId)) unique.set(pairKey(p), p)
+  }
+  const list = [...unique.values()]
+  for (let i = 0; i < list.length; i += PAIRS_PER_QUERY) {
+    const chunk = list.slice(i, i + PAIRS_PER_QUERY)
+    const rows = await q.query<AccessRow & { pair_user: string }>(
+      `SELECT p.user_id AS pair_user, ${ACCESS_COLUMNS}
+         FROM unnest($1::text[], $2::text[]) AS p(board_id, user_id)
+         JOIN boards b ON b.id = p.board_id
+         JOIN workspaces w ON w.id = b.workspace_id
+         LEFT JOIN workspace_members wm ON wm.workspace_id = b.workspace_id AND wm.user_id = p.user_id
+         LEFT JOIN board_members bm ON bm.board_id = b.id AND bm.user_id = p.user_id`,
+      [chunk.map((p) => p.boardId), chunk.map((p) => p.userId)],
+    )
+    for (const { pair_user, ...row } of rows.rows)
+      out.set(pairKey({ boardId: row.id, userId: pair_user }), toAccess(row))
+  }
+  return out
 }
 
 /**

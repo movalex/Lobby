@@ -15,7 +15,7 @@ import type { AuthProvider, RouteRateLimit, SignInContext } from './auth/provide
 import { createSessionStore } from './auth/session.ts'
 import { listUserWorkspaces } from './auth/users.ts'
 import type { ApiConfig } from './config.ts'
-import type { AppContext } from './context.ts'
+import { type ApiLimits, type AppContext, DEFAULT_LIMITS, type InvitationRateLimits } from './context.ts'
 import { badRequest, toErrorResponse, unauthenticated } from './errors.ts'
 import { EventHub } from './events/hub.ts'
 import { registerEventRoutes } from './events/routes.ts'
@@ -25,7 +25,7 @@ import type { BlobStore } from './files/blobs.ts'
 import { filesPlugin } from './files/plugin.ts'
 import { openBlobStore } from './files/store.ts'
 import { boardsShowingAsset, createFileAuthorizer } from './files-auth.ts'
-import { createHttpSyncNotifier, type SyncNotifier } from './notifier.ts'
+import { createHttpSyncNotifier, fanOutAccessChanges, type SyncNotifier } from './notifier.ts'
 import { registerAuthRoutes } from './routes/auth.ts'
 import { registerBoardRoutes } from './routes/boards.ts'
 import { registerInvitationRoutes } from './routes/invitations.ts'
@@ -46,11 +46,19 @@ export interface ApiDeps {
   /** Replaces the provider chosen by config (tests inject a Clerk provider with fake verification). */
   authProvider?: AuthProvider
   /**
-   * Sign-in / invitation route limit per client IP. Default 30 per minute; 600 with the dev provider,
-   * where every browser (and every e2e user) arrives through the same local Vite proxy address.
+   * Sign-in attempts per client IP: every dev login, but only FAILED Clerk verifications (SCA-2).
+   * Default 60 per minute; 600 with the dev provider, where every browser (and every e2e user)
+   * arrives through the same local Vite proxy address. Invitations have their own limits (`limits`).
    */
   authRateLimit?: RouteRateLimit
-  /** Board event hub (tests subscribe to it directly). */
+  /** Keyed limits routes apply themselves (defaults: DEFAULT_LIMITS in context.ts; tests lower them). */
+  limits?: {
+    invitations?: Partial<InvitationRateLimits>
+    streamOpens?: RouteRateLimit
+    streamRecheckMs?: number
+    revokeAll?: RouteRateLimit
+  }
+  /** Board event hub (tests subscribe to it directly, or pass one with lower stream caps). */
   events?: EventHub
   /** api -> sync snapshot/seed client (tests inject a fake). */
   syncInternal?: SyncInternalClient
@@ -120,11 +128,19 @@ async function buildServer(
     return503OnClosing: true,
     trustProxy: config.trustProxy, // req.ip (per-IP rate limits) behind proxies: TRUST_PROXY, docs/DEPLOY.md
   })
-  const notifier =
+  const syncNotifier =
     deps.notifier ??
     createHttpSyncNotifier({ baseUrl: config.syncInternalUrl, secret: config.internalSecret, log: app.log })
+  const events = deps.events ?? new EventHub()
+  // Every "access changed" reaches the canvas sockets (sync) and the board event streams (authz-005).
+  const notifier = fanOutAccessChanges(syncNotifier, events)
   const sessions = createSessionStore({ db, secureCookies: config.publicOrigin.startsWith('https:'), now })
-  const authRateLimit = deps.authRateLimit ?? { max: provider.id === 'dev' ? 600 : 30, timeWindow: 60_000 }
+  const authRateLimit = deps.authRateLimit ?? { max: provider.id === 'dev' ? 600 : 60, timeWindow: 60_000 }
+  const limits: ApiLimits = {
+    ...DEFAULT_LIMITS,
+    ...deps.limits,
+    invitations: { ...DEFAULT_LIMITS.invitations, ...deps.limits?.invitations },
+  }
   const ctx: AppContext = {
     config,
     db,
@@ -132,6 +148,7 @@ async function buildServer(
     notifier,
     now,
     authRateLimit,
+    limits,
     async requireUser(req) {
       const user = await sessions.user(req)
       if (!user) throw unauthenticated()
@@ -140,7 +157,8 @@ async function buildServer(
   }
 
   app.setErrorHandler((err, req, reply) => {
-    const { status, body } = toErrorResponse(err)
+    const { status, body, headers } = toErrorResponse(err)
+    if (headers) reply.headers(headers)
     if (status >= 500) {
       // Name/message/code/stack only: driver errors also carry the statement's parameters.
       const e = err as { name?: unknown; message?: unknown; code?: unknown; stack?: unknown }
@@ -218,11 +236,12 @@ async function buildServer(
   const signIn: SignInContext = {
     rateLimit: authRateLimit,
     log: app.log,
-    async signIn(req, reply, provision) {
+    now,
+    async signIn(req, reply, provision, opts = {}) {
       const run = () =>
         db.transaction(async (tx) => {
           const user = await provision(tx, now())
-          const session = await sessions.create(tx, user.id)
+          const session = await sessions.create(tx, user.id, { clerkSessionId: opts.clerkSessionId ?? null })
           return { user, session, workspaces: await listUserWorkspaces(tx, user.id) }
         })
       let result: Awaited<ReturnType<typeof run>>
@@ -248,9 +267,21 @@ async function buildServer(
   registerMemberRoutes(app, ctx)
   registerInvitationRoutes(app, ctx)
   registerTicketRoutes(app, ctx)
-  await app.register(filesPlugin, { db, blobs, authorize: createFileAuthorizer(db, sessions), now })
+  await app.register(filesPlugin, {
+    db,
+    blobs,
+    authorize: createFileAuthorizer(db, sessions),
+    now,
+    // FC-1: per-workspace storage quota and per-user upload rate (DRAFTROOM_WORKSPACE_QUOTA_MB, …).
+    uploads: {
+      workspaceQuota: {
+        maxBytes: config.uploads.workspaceQuotaBytes,
+        maxFiles: config.uploads.workspaceMaxFiles,
+      },
+      perUser: { max: config.uploads.perUserPerMinute, timeWindow: 60_000 },
+    },
+  })
 
-  const events = deps.events ?? new EventHub()
   /** Board event 'assets.version' (M3 §4) on every board that can show the version, after commit. */
   const onVersionChange = async (c: VersionChange) => {
     try {

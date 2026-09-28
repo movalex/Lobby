@@ -62,6 +62,29 @@ export function createHttpSyncNotifier(opts: {
   }
 }
 
+/**
+ * One notifier for every "access changed" (docs/SECURITY-REVIEW-2026-09-27.md authz-005): the sync
+ * server (canvas sockets) AND this process's board event streams (EventHub) hear about it from the
+ * same call, so no route can tell one and forget the other. The local hook runs first and never
+ * throws into the caller.
+ */
+export function fanOutAccessChanges(
+  sync: SyncNotifier,
+  local: { accessChanged(change: AccessChange): void },
+): SyncNotifier {
+  return {
+    accessChanged(change) {
+      try {
+        local.accessChanged(change)
+      } catch {
+        // the periodic stream re-check is the backstop
+      }
+      sync.accessChanged(change)
+    },
+    drain: () => sync.drain(),
+  }
+}
+
 /** Records calls instead of sending them (tests, and tools that run the API without a sync server). */
 export function createRecordingNotifier(): SyncNotifier & { calls: AccessChange[] } {
   const calls: AccessChange[] = []
