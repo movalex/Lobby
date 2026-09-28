@@ -299,7 +299,7 @@
   color: var(--dr-ink);
   cursor: pointer;
 }
-.dr-sharing__policy input {
+.dr-sharing__policy input[type="checkbox"] {
   flex: none;
   width: 18px;
   height: 18px;
