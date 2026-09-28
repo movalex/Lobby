@@ -1,4 +1,5 @@
 // The one list of board features (integration owner). Order = dock order and override order.
+import { aiFeature } from './ai/index.tsx'
 import { canvasUxFeature } from './canvas-ux/index.tsx'
 import { commentsFeature } from './comments/index.tsx'
 import { historyFeature } from './history/index.tsx'
@@ -22,4 +23,5 @@ export const BOARD_FEATURES: readonly BoardFeature[] = [
   peopleFeature,
   mindmapFeature,
   tagsFeature,
+  aiFeature,
 ]

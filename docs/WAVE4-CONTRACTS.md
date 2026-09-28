@@ -100,3 +100,31 @@ Merge in this order: checkpoints-2, tags, mindmap, office-previews, search, pres
 - rebuild and deploy the NAS worker image (office previews);
 - deploy api → sync → web;
 - run live checks.
+
+## 4. Second half (4b): owners added after wave 3 round 3 merged
+
+### ai-assist: AI on the board (OpenAI), with hard cost limits
+Owns a new `apps/api/src/features/ai/**` (plus tests), a new `apps/web/src/features/ai/**` (a pre-registered stub), `packages/contracts/src/ai.ts` (a pre-registered stub), the api config for `OPENAI_API_KEY` / `OPENAI_MODEL` / `OPENAI_BASE_URL` / `DRAFTROOM_AI_*`, `.env.example` AI lines, `render.yaml` (api `OPENAI_*` as `sync: false`), and `e2e/tests/ai-assist.spec.ts`.
+- **Actions**, all on the selection (or the current frame when nothing is selected):
+  1. **Summarize**: a short summary inserted as a text block next to the selection. Viewers see it in a panel instead.
+  2. **Group into themes**: clusters sticky notes into named themes and rearranges them into labelled groups inside the frame, in one undo step.
+  3. **Action items**: a checklist of owners and next steps as new notes.
+  4. **Generate ideas**: N sticky notes from a short prompt.
+- **Who can use them**:
+  - Account users only. Name-only guests never trigger AI, because it costs money.
+  - Inserting needs edit; summarize-to-panel needs view.
+  - On an export-policy "editors" board, limited viewers get no AI, since AI reads the content out.
+- **Server authority**:
+  - The api builds the prompt from records it reads itself through the sync snapshot for the requested shape ids. It never trusts client-sent text.
+  - It calls OpenAI with a JSON-schema response format and a timeout.
+  - It validates the output: lengths, counts, and ids that exist.
+  - It returns a plan; the client applies it as normal canvas edits, so undo and sync behave as usual.
+- **Cost limits** (the key has NO provider-side cap):
+  - input capped at about 12k tokens and output at about 1.5k per call;
+  - 20 calls per user per hour;
+  - a per-workspace daily token budget (`DRAFTROOM_AI_DAILY_TOKENS`, default 400k), tracked in memory plus Postgres usage rows in a new table in `0016_ai_usage`;
+  - a global kill switch `DRAFTROOM_AI=off`.
+  
+  The UI shows "AI budget used today: N%" to workspace owners.
+- **Privacy**: before the first use per user, the UI says "Sends the selected text to OpenAI". Logs hold counts only, never content or prompts. Comments and private-brainstorm drafts are never sent.
+- **Tests**: a local fake OpenAI server (`OPENAI_BASE_URL`), for the api and e2e. **Never call the real OpenAI API**; integration verifies it live with a handful of calls. Feature hidden when no key is configured.

@@ -1,5 +1,6 @@
 // The one place feature modules are registered (integration owner). Each feature owns its folder.
 import type { FastifyInstance } from 'fastify'
+import { registerAi } from './ai/index.ts'
 import { registerComments } from './comments/index.ts'
 import type { FeatureContext } from './context.ts'
 import { registerDashboard } from './dashboard/index.ts'
@@ -19,4 +20,5 @@ export async function registerFeatures(app: FastifyInstance, ctx: FeatureContext
   await registerThumbnails(app, ctx)
   await registerExportControl(app, ctx)
   await registerSearch(app, ctx)
+  await registerAi(app, ctx)
 }
