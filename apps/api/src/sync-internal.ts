@@ -14,6 +14,13 @@ export interface SyncInternalClient {
   snapshot(boardId: string): Promise<RoomSnapshotJson>
   /** Initializes a board that has no canvas data yet. Throws SyncSeedConflict if it already has some. */
   seed(boardId: string, snapshot: RoomSnapshotJson): Promise<{ records: number }>
+  /**
+   * Private brainstorming (workshops private-notes): writes revealed drafts into the board as note
+   * shapes, in one storage transaction (POST /internal/boards/:bid/place-notes). Idempotent per draft
+   * id. Optional so that test fakes without it keep compiling; the HTTP client always has it. The
+   * answer is unchecked JSON: the caller validates it.
+   */
+  placeNotes?(boardId: string, body: unknown): Promise<unknown>
 }
 
 export class SyncSeedConflict extends Error {
@@ -60,6 +67,15 @@ export function createHttpSyncInternalClient(opts: {
       if (!res.ok) throw new SyncUnavailable(`seed failed with ${res.status}`)
       const body = (await res.json()) as { records?: number }
       return { records: body.records ?? 0 }
+    },
+    async placeNotes(boardId, body) {
+      const res = await call(`/internal/boards/${encodeURIComponent(boardId)}/place-notes`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+      if (!res.ok) throw new SyncUnavailable(`place-notes failed with ${res.status}`)
+      return (await res.json()) as unknown
     },
   }
 }

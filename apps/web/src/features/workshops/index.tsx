@@ -12,6 +12,7 @@ import { installAudioUnlock } from './chime.ts'
 import { followIdFor, isCanvasPress, summonApplies } from './follow.ts'
 import { storeFor } from './hooks.ts'
 import { plusOneIntentsFor, watchPlusOneIntents } from './plus-ones.ts'
+import { mountPrivateNotes, privateNotesPanel } from './private-notes/index.tsx'
 import { HIDE_AUTHORS_ATTR, readSessionSettings } from './session-settings.ts'
 import { VotingPanel } from './VotingPanel.tsx'
 import { WorkshopBar } from './WorkshopBar.tsx'
@@ -91,7 +92,11 @@ function mountWorkshops(ctx: FeatureContext) {
   // +1s: re-apply this person's recent +1 when a concurrent write dropped it (plus-ones.ts).
   const stopPlusOnes = watchPlusOneIntents(editor, ctx.me.user.id, plusOneIntentsFor(editor))
 
+  // Private brainstorming: a notice when a session ends; the revealing tab fits the placed notes.
+  const stopPrivateNotes = mountPrivateNotes(ctx)
+
   return () => {
+    stopPrivateNotes()
     stopPlusOnes()
     stopAuthors()
     root.removeAttribute(HIDE_AUTHORS_ATTR)
@@ -113,6 +118,7 @@ export const workshopsFeature: BoardFeature = {
       icon: <BallotIcon />,
       Component: VotingPanel,
     },
+    privateNotesPanel,
   ],
   onMount: mountWorkshops,
 }

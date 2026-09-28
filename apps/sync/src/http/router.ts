@@ -8,6 +8,7 @@ import {
   handleSnapshot,
   type InternalDeps,
 } from './internal.ts'
+import { handlePlaceNotes } from './place-notes.ts'
 import { HttpError, notFound, sendError } from './respond.ts'
 
 export interface RouterDeps extends InternalDeps {
@@ -44,6 +45,12 @@ const INTERNAL_ROUTES: Array<{ re: RegExp; methods: string[]; handle: Handler }>
     re: /^\/internal\/boards\/([^/]+)\/deleted\/restore$/,
     methods: ['POST'],
     handle: (req, res, deps, [board = '']) => handleRestoreDeleted(req, res, deps, board),
+  },
+  // Private brainstorming: revealed drafts become notes (workshops private-notes; place-notes.ts)
+  {
+    re: /^\/internal\/boards\/([^/]+)\/place-notes$/,
+    methods: ['POST'],
+    handle: (req, res, deps, [board = '']) => handlePlaceNotes(req, res, deps, board),
   },
 ]
 

@@ -142,6 +142,7 @@ describe('shipped migrations', () => {
       '0006_workshop_links',
       '0007_assets',
       '0008_session_revocation',
+      '0010_private_notes',
     ])
   })
 
@@ -156,6 +157,7 @@ describe('shipped migrations', () => {
       '0006_workshop_links',
       '0007_assets',
       '0008_session_revocation',
+      '0010_private_notes',
     ])
     expect(await migrate(db)).toEqual({ applied: [] })
     expect(await tableNames()).toEqual([
@@ -178,6 +180,8 @@ describe('shipped migrations', () => {
       'invitations',
       'notifications',
       'preview_jobs',
+      'private_brainstorms',
+      'private_notes',
       'projects',
       'schema_migrations',
       'sessions',
@@ -216,6 +220,7 @@ describe('shipped migrations', () => {
       '0006_workshop_links',
       '0007_assets',
       '0008_session_revocation',
+      '0010_private_notes',
     ])
     expect(await recorded()).toEqual(shipped.map((m) => m.name))
     const inv = await db.one<{ multi_use: boolean; use_count: number }>(
