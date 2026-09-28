@@ -20,6 +20,7 @@ import { newId } from '@draftroom/db'
 import { can, canCreateInWorkspace } from '@draftroom/permissions'
 import type { FastifyInstance } from 'fastify'
 import { requireBoardAction, requireProjectInWorkspace, requireWorkspaceRole } from '../../access.ts'
+import { userKind } from '../../auth/users.ts'
 import type { Params } from '../../context.ts'
 import { ApiError, conflict, forbidden, gone, notFound, parse } from '../../errors.ts'
 import { contentDisposition } from '../../files/disposition.ts'
@@ -27,6 +28,7 @@ import { toBoardWithRole } from '../../serialize.ts'
 import type { FeatureContext } from '../context.ts'
 import { keepDownloadableFiles } from '../export-control/import-files.ts'
 import { copyExportPolicy, requireExportAllowed } from '../export-control/policy.ts'
+import { DELETED_GUESTS, guestRefused } from '../guests/guard.ts'
 import { ArchiveError, exportBoardArchive, importBoardArchive, type SerializedSchema } from './board-ops.ts'
 import { archiveRef, filesShownOn, filesViewableBy, referencedFiles } from './files.ts'
 import { createBoardFrom, viaSync } from './new-board.ts'
@@ -188,7 +190,7 @@ export async function registerHistory(app: FastifyInstance, ctx: FeatureContext)
     if (snapshot.workspace_id !== workspaceId) throw notFound()
     await requireCreator(workspaceId, user.id)
     // A new board of your own is a full copy (export-control, docs/WAVE3-CONTRACTS.md).
-    await requireExportAllowed(db, access)
+    await requireExportAllowed(db, access, user.id)
     const raw = await bodies.read(snapshot.storage_key)
     if (raw === null) throw gone("This checkpoint's saved content is no longer available.")
     const body = JSON.parse(raw) as CheckpointBody
@@ -225,7 +227,7 @@ export async function registerHistory(app: FastifyInstance, ctx: FeatureContext)
     const access = await requireBoardAction(db, bid, user.id, 'view')
     const workspaceId = access.board.workspace_id
     await requireCreator(workspaceId, user.id)
-    await requireExportAllowed(db, access) // a duplicate is a full copy (export-control)
+    await requireExportAllowed(db, access, user.id) // a duplicate is a full copy (export-control)
     if (input.keepSharing && !can(access.role, 'manage_access', access.board.status))
       throw forbidden('Only the board owner can copy its sharing settings.')
     const snap = await viaSync(() => ctx.sync.snapshot(bid))
@@ -259,7 +261,7 @@ export async function registerHistory(app: FastifyInstance, ctx: FeatureContext)
     const user = await ctx.requireUser(req)
     const { bid = '' } = req.params as Params
     const access = await requireBoardAction(db, bid, user.id, 'view')
-    await requireExportAllowed(db, access) // export-control: 403 EXPORT_DISABLED for limited viewers
+    await requireExportAllowed(db, access, user.id) // export-control: 403 EXPORT_DISABLED for limited viewers
     const snap = await viaSync(() => ctx.sync.snapshot(bid))
     const records = (Array.isArray(snap.documents) ? snap.documents : []).map((d) => d.state)
     const { shown, versions } = await filesShownOn(
@@ -345,18 +347,25 @@ export async function registerHistory(app: FastifyInstance, ctx: FeatureContext)
   // `edit`, like restore (docs/SECURITY-REVIEW-2026-09-27.md authz-001): each entry's label is the
   // deleted note's text, so viewers, commenters and review-link guests must not read what was deleted
   // before the board was shared with them. Archived boards (read-only) answer 403 as for restore.
+  // Editors with an account only (wave 3, SEAM-06): a name-only guest on a workshop (editor) link is
+  // an anonymous outsider too, so 403 GUEST_ACCOUNT_REQUIRED, after the board checks (404 first).
   app.get('/api/boards/:bid/deleted', async (req) => {
     const user = await ctx.requireUser(req)
     const { bid = '' } = req.params as Params
     await requireBoardAction(db, bid, user.id, 'edit')
+    if ((await userKind(db, user.id)) === 'guest') throw guestRefused(DELETED_GUESTS)
     return viaSync(() => deleted.list(bid))
   })
 
+  // Restoring puts deleted content back on the board for everyone, so it follows the list: editors with
+  // an account only. A name-only guest could otherwise restore what was deleted before they joined by
+  // an id learned elsewhere (a comment's anchor keeps the shape id of a deleted note).
   app.post('/api/boards/:bid/deleted/restore', HEAVY, async (req) => {
     const user = await ctx.requireUser(req)
     const { bid = '' } = req.params as Params
     const input = parse(RestoreDeletedInput, req.body)
     await requireBoardAction(db, bid, user.id, 'edit')
+    if ((await userKind(db, user.id)) === 'guest') throw guestRefused(DELETED_GUESTS)
     const result = await viaSync(() => deleted.restore(bid, input.ids))
     if (result.restored.length)
       ctx.events.publish(bid, {

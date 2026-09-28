@@ -21,9 +21,11 @@ export function registerWorkspaceRoutes(app: FastifyInstance, ctx: AppContext): 
     const { wid = '' } = req.params as Params
     const role = await requireWorkspaceRole(db, wid, user.id)
     if (!canCreateInWorkspace(role)) throw forbidden()
+    // Wave 3: name-only guests (users.kind 'guest') are left out. They reach boards only through guest
+    // links, so this list (the Share dialog's picker) could only offer an add the server refuses.
     const rows = await db.query<UserRow & { role: WorkspaceRole }>(
       `SELECT u.id, u.name, u.handle, u.color, u.avatar_url, m.role
-         FROM workspace_members m JOIN users u ON u.id = m.user_id
+         FROM workspace_members m JOIN users u ON u.id = m.user_id AND u.kind <> 'guest'
         WHERE m.workspace_id = $1`,
       [wid],
     )

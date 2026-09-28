@@ -2,6 +2,8 @@
 // redemption it shares with accepting, the session's end, and the abuse limits.
 import {
   BoardGuests,
+  GUEST_JOINS_PER_ADDRESS,
+  GUEST_JOINS_PER_LINK,
   GUEST_SESSION_MAX_MS,
   GUESTS_PER_LINK,
   GuestJoined,
@@ -14,7 +16,7 @@ import {
   TicketResponse,
 } from '@draftroom/contracts'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { DEV_STUDIO } from '../../helpers.ts'
+import { createBoard, DEV_STUDIO } from '../../helpers.ts'
 import {
   boardRole,
   clientFor,
@@ -352,17 +354,64 @@ describe('joining a guest link', () => {
     expect(await boardRole(erin, board)).toBe('commenter')
   })
 
-  it('limits new guests per client IP (10 per 10 minutes); other addresses are not affected', async () => {
+  it(`limits new guests per client IP (${GUEST_JOINS_PER_ADDRESS.max} per 10 minutes: a workshop room behind one office NAT gets in); other addresses are not affected`, async () => {
     const { api, bob, board } = w
-    const token = tokenOf((await guestLink(bob, board)).url)
-    for (let i = 0; i < 10; i++)
-      expect((await joinRequest(api, token, { name: `Guest ${i}` }, { ip: '10.1.1.1' })).statusCode).toBe(201)
-    const refused = await joinRequest(api, token, { name: 'One too many' }, { ip: '10.1.1.1' })
+    expect(GUEST_JOINS_PER_ADDRESS).toEqual({ max: 60, windowMs: 10 * 60_000 })
+    // Two links, so the per-link rate (60 per 10 minutes) is not what refuses the 61st.
+    const first = tokenOf((await guestLink(bob, board)).url)
+    const second = tokenOf((await guestLink(bob, board, { role: 'editor' })).url)
+    // A 12-person workshop in one office: everyone gets in (the old limit refused the 11th).
+    for (let i = 0; i < GUEST_JOINS_PER_ADDRESS.max; i++) {
+      const res = await joinRequest(api, i % 2 ? second : first, { name: `Guest ${i}` }, { ip: '10.1.1.1' })
+      expect(res.statusCode, `join ${i + 1}: ${res.body}`).toBe(201)
+    }
+    const refused = await joinRequest(api, first, { name: 'One too many' }, { ip: '10.1.1.1' })
     expect(refused.statusCode).toBe(429)
     expect(refused.headers['retry-after']).toBeTruthy()
-    expect((await joinRequest(api, token, { name: 'Elsewhere' }, { ip: '10.1.1.2' })).statusCode).toBe(201)
+    expect((refused.json() as { error: { message: string } }).error.message).toMatch(/from this network/)
+    expect((await joinRequest(api, first, { name: 'Elsewhere' }, { ip: '10.1.1.2' })).statusCode).toBe(201)
     api.clock.advance(10 * 60_000 + 1_000)
-    expect((await joinRequest(api, token, { name: 'Later' }, { ip: '10.1.1.1' })).statusCode).toBe(201)
+    expect((await joinRequest(api, first, { name: 'Later' }, { ip: '10.1.1.1' })).statusCode).toBe(201)
+  })
+
+  it(`limits new guests per link (${GUEST_JOINS_PER_LINK.max} per 10 minutes, on top of the ${GUESTS_PER_LINK} cap); guests already on it come back, other links are not affected`, async () => {
+    const { api, bob, board } = w
+    expect(GUEST_JOINS_PER_LINK).toEqual({ max: 60, windowMs: 10 * 60_000 })
+    const link = await guestLink(bob, board)
+    const token = tokenOf(link.url)
+    const first = await joinAsGuest(api, link.url, 'First')
+    for (let i = 1; i < GUEST_JOINS_PER_LINK.max; i++) {
+      // A fresh address each: the per-address limit is not what counts here.
+      const res = await joinRequest(api, token, { name: `Guest ${i}` }, { ip: freshIp() })
+      expect(res.statusCode, `join ${i + 1}: ${res.body}`).toBe(201)
+    }
+    const refused = await joinRequest(api, token, { name: 'One too many' }, { ip: freshIp() })
+    expect(refused.statusCode, refused.body).toBe(429)
+    expect(errorCode(refused)).toBe('RATE_LIMITED')
+    expect(Number(refused.headers['retry-after'])).toBeGreaterThan(0)
+    expect((refused.json() as { error: { message: string } }).error.message).toMatch(/through this link/)
+    // Nothing was created for the refused join.
+    const guests = await api.db.one<{ n: number }>(
+      "SELECT count(*)::int AS n FROM users WHERE kind = 'guest'",
+    )
+    expect(guests.n).toBe(GUEST_JOINS_PER_LINK.max)
+    // A guest already on the link is not a new guest: they come back.
+    expect((await joinRequest(api, token, {}, { cookie: first.cookie })).statusCode).toBe(200)
+    // A signed-in guest from another link is a new guest on this one: refused through /accept too.
+    const other = await createBoard(bob, DEV_STUDIO, 'Other workshop')
+    const sam = await joinAsGuest(api, (await guestLink(bob, other)).url, 'Sam')
+    const accept = await sam.req('POST', `/api/invitations/${token}/accept`)
+    expect(accept.statusCode, accept.body).toBe(429)
+    expect(await boardRole(sam, board)).toBeNull()
+    // People with an account are not guests: never counted, never refused by it.
+    expect((await w.erin.req('POST', `/api/invitations/${token}/accept`)).statusCode).toBe(200)
+    // Another link on the same board has its own rate.
+    const next = await guestLink(bob, board, { role: 'editor' })
+    const nextJoin = await joinRequest(api, tokenOf(next.url), { name: 'Next link' }, { ip: freshIp() })
+    expect(nextJoin.statusCode).toBe(201)
+    // Ten minutes after the first joins, the link lets people in again.
+    api.clock.advance(10 * 60_000 + 1_000)
+    expect((await joinRequest(api, token, { name: 'Later' }, { ip: freshIp() })).statusCode).toBe(201)
   })
 
   it(`lets at most ${GUESTS_PER_LINK} guests in through one link; guests already on it can come back`, async () => {

@@ -301,8 +301,8 @@ export function registerInvitationRoutes(app: FastifyInstance, ctx: AppContext):
       if (state === 'gone') return { gone: true as const, inv }
       const accepted = { workspaceId: inv.workspace_id, boardId: inv.board_id }
       if (state === 'redeemed_by_caller') return { gone: false as const, accepted, changed: false }
-      // The same per-link guest cap as joining through POST /api/invitations/:token/guest.
-      if (guest) await assertGuestRoomOnLink(tx, inv.id, user.id)
+      // The same per-link guest cap and rate as joining through POST /api/invitations/:token/guest.
+      if (guest) await assertGuestRoomOnLink(tx, inv.id, user.id, at)
       await redeemInvitation(tx, inv, user.id, at)
       return { gone: false as const, accepted, changed: true }
     })

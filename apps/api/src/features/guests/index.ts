@@ -3,6 +3,7 @@
 // - join.ts: POST /api/invitations/:token/guest (join a guest link with just a name);
 // - board-guests.ts: GET /api/boards/:bid/guests (who on the board is a guest, for the Share dialog);
 // - guard.ts: what a signed-in guest may not do, and who may not be given to a guest;
+// - link-caps.ts: what the guests of one link share (event streams, reactions, summons: SEAM-05);
 // - sweep.ts: a guest's session ends with their last board grant, and their grants with their session.
 //
 // Elsewhere (the files this feature may change): the 0009_guests migration (users.kind/guest_name,
@@ -14,6 +15,7 @@ import type { FeatureContext } from '../context.ts'
 import { registerBoardGuests } from './board-guests.ts'
 import { registerGuestGuard } from './guard.ts'
 import { registerGuestJoin } from './join.ts'
+import { registerGuestLinkCaps } from './link-caps.ts'
 import { startGuestSweeper } from './sweep.ts'
 
 /**
@@ -25,6 +27,7 @@ export const guestSweepSettings = { intervalMs: 5_000 }
 
 export async function registerGuests(app: FastifyInstance, ctx: FeatureContext): Promise<void> {
   registerGuestGuard(app, ctx)
+  registerGuestLinkCaps(app, ctx)
   registerGuestJoin(app, ctx)
   registerBoardGuests(app, ctx)
   startGuestSweeper(app, ctx, guestSweepSettings.intervalMs)

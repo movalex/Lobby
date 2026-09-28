@@ -2,32 +2,51 @@
 // redeems a guest link: POST /api/invitations/:token/guest (join.ts) and, for a guest who is already
 // signed in, POST /api/invitations/:token/accept (routes/invitations.ts).
 
-import { GUESTS_PER_LINK } from '@draftroom/contracts'
+import { GUEST_JOINS_PER_LINK, GUESTS_PER_LINK } from '@draftroom/contracts'
 import type { Queryable } from '@draftroom/db'
 import { conflict } from '../../errors.ts'
+import { rateLimited } from '../../rate-limit.ts'
+
+export const LINK_RATE_MESSAGE =
+  'Lots of guests joined through this link just now. Wait a few minutes and try again.'
 
 /**
- * Throws 409 GUEST_LIMIT when the link already let in GUESTS_PER_LINK guests other than `guestId`
- * (null: a guest who does not exist yet). A guest already on the link can always come back. Call in
- * the transaction that locked the invitation row FOR UPDATE, so simultaneous joins cannot all pass.
+ * Whether `guestId` (null: a guest who does not exist yet) may come in as a NEW guest of the link:
+ * - 409 GUEST_LIMIT when the link already let in GUESTS_PER_LINK guests other than them;
+ * - 429 RATE_LIMITED (with Retry-After) when GUEST_JOINS_PER_LINK.max guests joined through it in the
+ *   last GUEST_JOINS_PER_LINK.windowMs, whatever addresses they came from (the per-address limit in
+ *   join.ts cannot see a crowd of addresses).
+ * A guest already on the link can always come back, and people with an account are never counted.
+ * Both come from the link's recorded redemptions (the first time each person used it), counted in
+ * the transaction that locked the invitation row FOR UPDATE: simultaneous joins cannot all pass, and
+ * a refused join counts for nothing.
  */
 export async function assertGuestRoomOnLink(
   tx: Queryable,
   invitationId: string,
   guestId: string | null,
+  at: Date,
 ): Promise<void> {
-  const row = await tx.one<{ n: number; mine: boolean }>(
+  const since = new Date(at.getTime() - GUEST_JOINS_PER_LINK.windowMs)
+  const row = await tx.one<{ n: number; mine: boolean; recent: number; oldest: Date | null }>(
     `SELECT count(*) FILTER (WHERE r.user_id IS DISTINCT FROM $2::text)::int AS n,
-            coalesce(bool_or(r.user_id = $2::text), false) AS mine
+            coalesce(bool_or(r.user_id = $2::text), false) AS mine,
+            count(*) FILTER (WHERE r.redeemed_at > $3)::int AS recent,
+            min(r.redeemed_at) FILTER (WHERE r.redeemed_at > $3) AS oldest
        FROM invitation_redemptions r JOIN users u ON u.id = r.user_id AND u.kind = 'guest'
       WHERE r.invitation_id = $1`,
-    [invitationId, guestId],
+    [invitationId, guestId, since],
   )
-  if (!row.mine && row.n >= GUESTS_PER_LINK)
+  if (row.mine) return
+  if (row.n >= GUESTS_PER_LINK)
     throw conflict(
       'GUEST_LIMIT',
       `This link has let in ${GUESTS_PER_LINK} guests, its limit. Ask whoever shared it for a new link.`,
     )
+  if (row.recent >= GUEST_JOINS_PER_LINK.max) {
+    const freesAt = (row.oldest?.getTime() ?? at.getTime()) + GUEST_JOINS_PER_LINK.windowMs
+    throw rateLimited(freesAt - at.getTime(), LINK_RATE_MESSAGE)
+  }
 }
 
 /**

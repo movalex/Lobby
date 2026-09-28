@@ -11,7 +11,6 @@ import {
   type ExportPolicy,
   type ExportPolicyEvent,
   type ExportPolicyState,
-  exportAllowedFor,
   PutExportPolicyInput,
 } from '@draftroom/contracts'
 import type { FastifyInstance } from 'fastify'
@@ -19,7 +18,7 @@ import { requireBoardAction } from '../../access.ts'
 import type { Params } from '../../context.ts'
 import { parse } from '../../errors.ts'
 import type { FeatureContext } from '../context.ts'
-import { loadExportPolicy } from './policy.ts'
+import { exportAllowedForCaller, loadExportPolicy } from './policy.ts'
 
 /** Owners flipping the checkbox back and forth: generous, but not a firehose of board events. */
 const PUT_RATE = { config: { rateLimit: { max: 60, timeWindow: 60_000 } } }
@@ -32,7 +31,7 @@ export async function registerExportControl(app: FastifyInstance, ctx: FeatureCo
     const { bid = '' } = req.params as Params
     const access = await requireBoardAction(db, bid, user.id, 'view')
     const exportPolicy = await loadExportPolicy(db, access.board.id)
-    return { exportPolicy, canExport: exportAllowedFor(access.role, exportPolicy) }
+    return { exportPolicy, canExport: await exportAllowedForCaller(db, access, user.id, exportPolicy) }
   })
 
   app.put('/api/boards/:bid/export-policy', PUT_RATE, async (req): Promise<ExportPolicyState> => {
@@ -55,7 +54,10 @@ export async function registerExportControl(app: FastifyInstance, ctx: FeatureCo
     })
     // After the commit; nothing to tell anyone when nothing changed.
     if (previous !== input.exportPolicy) publishPolicy(ctx, access.board.id, input.exportPolicy)
-    return { exportPolicy: input.exportPolicy, canExport: exportAllowedFor(access.role, input.exportPolicy) }
+    return {
+      exportPolicy: input.exportPolicy,
+      canExport: await exportAllowedForCaller(db, access, user.id, input.exportPolicy),
+    }
   })
 }
 

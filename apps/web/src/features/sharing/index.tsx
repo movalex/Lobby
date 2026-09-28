@@ -6,6 +6,7 @@
 
 import type { ShareState } from '@draftroom/contracts'
 import { useEffect, useState } from 'react'
+import { useUserKind } from '../../invite/guest.tsx'
 import type { BoardFeature, FeatureContext } from '../types.ts'
 import { announceRemoteShareChange, openShareDialog, SHARE_CHANGED_EVENT, sharingApi } from './api.ts'
 import { boardExportState, syncExportPolicy } from './export-policy.ts'
@@ -111,11 +112,13 @@ function BadgeIcon({ kind }: { kind: 'private' | 'workspace' | 'link' }) {
 }
 
 /**
- * Rendered inside <Tldraw> for the whole board session: feeds the export policy store with the policy
- * and with the role (which changes live, without remounting features).
+ * Rendered inside <Tldraw> for the whole board session: feeds the export policy store with the policy,
+ * the role (which changes live, without remounting features) and whether this person is a name-only
+ * guest (limited under 'editors' whatever their role).
  */
 function ExportPolicySync({ ctx }: { ctx: FeatureContext }) {
   const { editor, board, api, events, notify, role } = ctx
+  const kind = useUserKind()
   useEffect(
     () => syncExportPolicy({ editor, boardId: board.id, api, events, notify }),
     [editor, board.id, api, events, notify],
@@ -123,6 +126,9 @@ function ExportPolicySync({ ctx }: { ctx: FeatureContext }) {
   useEffect(() => {
     boardExportState(board.id).role.set(role)
   }, [board.id, role])
+  useEffect(() => {
+    boardExportState(board.id).guest.set(kind === null ? null : kind === 'guest')
+  }, [board.id, kind])
   return null
 }
 

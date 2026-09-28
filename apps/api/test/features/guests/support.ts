@@ -11,6 +11,7 @@ import type { FeatureContext } from '../../../src/features/context.ts'
 import { sweepExpiredReviewLinks } from '../../../src/features/dashboard/review-links.ts'
 import { sweepGuests } from '../../../src/features/guests/sweep.ts'
 import type { AccessChange } from '../../../src/notifier.ts'
+import type { SyncInternalClient } from '../../../src/sync-internal.ts'
 import { type Client, createBoard, createTestApi, DEV_STUDIO, ORIGIN, type TestApi } from '../../helpers.ts'
 
 export interface World {
@@ -28,9 +29,13 @@ export interface World {
  * A fresh app and its people. The app's own guest sweeper runs at `guestSweepSettings.intervalMs`:
  * tests that run the sweep themselves (guestSweeper below) raise it first.
  */
-export async function setupWorld(): Promise<World> {
-  const events = new EventHub()
-  const api = await createTestApi({ deps: { events } })
+export async function setupWorld(
+  opts: { events?: EventHub; sync?: SyncInternalClient } = {},
+): Promise<World> {
+  const events = opts.events ?? new EventHub()
+  const api = await createTestApi({
+    deps: { events, ...(opts.sync ? { syncInternal: opts.sync } : {}) },
+  })
   const alice = await api.login('alice')
   const bob = await api.login('bob')
   const carol = await api.login('carol')

@@ -6,6 +6,7 @@ import type { BoardSnapshot, DeletedShapeEntry, ListDeletedResponse } from '@dra
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { TLShapeId } from 'tldraw'
 import { isApiError } from '../../api/client.ts'
+import { useUserKind } from '../../invite/guest.tsx'
 import { formatRelativeTime, pluralize } from '../../lib/format.ts'
 import { linkClick } from '../../lib/routing.ts'
 import type { FeatureContext } from '../types.ts'
@@ -35,7 +36,10 @@ export function HistoryPanel({ ctx }: { ctx: FeatureContext; close(): void }) {
   const api = useMemo(() => historyApi(ctx.api), [ctx.api])
   const workspaceRole = me.workspaces.find((w) => w.id === board.workspaceId)?.role ?? null
   const perms = historyPermissions(role, board.status, workspaceRole)
-  const { canSeeDeleted } = perms
+  // "Recently deleted" is for editors with an account (wave 3, SEAM-06): the api refuses a name-only
+  // guest (403), so it is neither shown nor fetched for one, nor before the kind is known.
+  const kind = useUserKind()
+  const canSeeDeleted = perms.canSeeDeleted && kind === 'account'
 
   const [snapshots, setSnapshots] = useState<BoardSnapshot[] | null>(null)
   const [deleted, setDeleted] = useState<ListDeletedResponse | null>(null)

@@ -2,10 +2,14 @@
 // (first answer, board events, resyncs) and the gates that read it (tldraw actions, copy, the export
 // controller). The api enforces on its own; these are what keep the UI honest about it.
 
-import type { ExportPolicyState } from '@draftroom/contracts'
-import type { Editor, TLUiActionItem, TLUiActionsContextType } from 'tldraw'
+import { CANVAS_ORIGINAL_LIMITS, type ExportPolicyState } from '@draftroom/contracts'
+import type { Editor, TLAsset, TLAssetContext, TLUiActionItem, TLUiActionsContextType } from 'tldraw'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ApiClient } from '../../api/client.ts'
+import { ANIMATED_ORIGINAL_LIMITS, createAssetStore, SMALL_ORIGINAL_BYTES } from '../../assets/asset-store.ts'
+import { stableFileRef } from '../../assets/contract.ts'
+import { AssetMetaStore } from '../../assets/meta-store.ts'
+import { derivative, makeMeta, TEST_BOARD } from '../../assets/test-fixtures.ts'
 import type { NoticeInput } from '../../board/board-context.ts'
 import { blocksNativeCopy, GATED_ACTIONS, gateExportActions } from '../canvas-ux/export-gate.tsx'
 import type { BoardEvents } from '../events.ts'
@@ -16,6 +20,7 @@ import {
   exportAllowed,
   exportAllowedOnBoard,
   exportAllowedWith,
+  exportCertainOnBoard,
   guardExport,
   refreshExportPolicy,
   saveExportPolicy,
@@ -104,6 +109,128 @@ describe('exportAllowedWith', () => {
       expect(exportAllowedWith(role, 'everyone')).toBe(true)
     expect(exportAllowedWith(null, 'editors')).toBe(true)
     expect(exportAllowedWith('viewer', null)).toBe(true)
+  })
+
+  it("limits name-only guests under 'editors' whatever their role (SEAM-04); unknown kind = not a guest", () => {
+    expect(exportAllowedWith('editor', 'editors', true)).toBe(false)
+    expect(exportAllowedWith('owner', 'editors', true)).toBe(false)
+    expect(exportAllowedWith('editor', 'editors', false)).toBe(true)
+    expect(exportAllowedWith('editor', 'editors', null)).toBe(true)
+    expect(exportAllowedWith('editor', 'everyone', true)).toBe(true)
+    // The board store follows the kind too.
+    const boardId = newBoardId()
+    const s = boardExportState(boardId)
+    s.role.set('editor')
+    s.policy.set('editors')
+    expect(exportAllowedOnBoard(boardId)).toBe(true)
+    s.guest.set(true)
+    expect(exportAllowedOnBoard(boardId)).toBe(false)
+  })
+})
+
+describe('what the canvas may load from originals (SEAM-10)', () => {
+  it('only when exporting is certainly allowed: the policy is known, and it is open or the person is an editor with an account', () => {
+    const boardId = newBoardId()
+    const s = boardExportState(boardId)
+    expect(exportCertainOnBoard(boardId)).toBe(false) // nothing known yet
+    s.policy.set('everyone')
+    expect(exportCertainOnBoard(boardId)).toBe(true)
+    s.policy.set('editors')
+    expect(exportCertainOnBoard(boardId)).toBe(false) // role unknown
+    s.role.set('editor')
+    expect(exportCertainOnBoard(boardId)).toBe(false) // kind unknown
+    s.guest.set(false)
+    expect(exportCertainOnBoard(boardId)).toBe(true)
+    s.guest.set(true)
+    expect(exportCertainOnBoard(boardId)).toBe(false)
+    s.guest.set(false)
+    s.role.set('viewer')
+    expect(exportCertainOnBoard(boardId)).toBe(false)
+  })
+
+  it('an animated WebP plays from its original only then; a limited viewer’s canvas shows its preview (the api refuses that original)', async () => {
+    const thumb = derivative({ role: 'thumb', width: 480, height: 320 })
+    const meta = makeMeta({
+      kind: 'image',
+      status: 'ready',
+      mimeType: 'image/webp',
+      name: 'loop.webp',
+      sizeBytes: 200_000,
+      derivatives: [thumb],
+      probe: {
+        width: 480,
+        height: 320,
+        pageCount: null,
+        durationMs: null,
+        videoCodec: null,
+        audioCodec: null,
+      },
+    })
+    const metaStore = new AssetMetaStore({
+      fetchImpl: (async () => Response.json(meta)) as unknown as typeof fetch,
+    })
+    const store = createAssetStore({ boardId: TEST_BOARD, metaStore, reducedMotion: () => false })
+    const asset = {
+      id: 'asset:webp',
+      typeName: 'asset',
+      type: 'image',
+      props: {
+        w: 480,
+        h: 320,
+        name: 'loop.webp',
+        isAnimated: true,
+        mimeType: 'image/webp',
+        src: stableFileRef(meta.assetId, meta.versionId),
+        fileSize: 200_000,
+      },
+      meta: {},
+    } as TLAsset
+    const ctx = {
+      screenScale: 1,
+      steppedScreenScale: 1,
+      dpr: 1,
+      networkEffectiveType: null,
+      shouldResolveToOriginal: false,
+    } as TLAssetContext
+    const original = `/files/${meta.assetId}/${meta.versionId}/original?board=${TEST_BOARD}`
+    const preview = `/files/${meta.assetId}/${meta.versionId}/d/${thumb.id}?board=${TEST_BOARD}`
+    const s = boardExportState(TEST_BOARD)
+    s.role.set('viewer')
+    s.guest.set(false)
+    s.policy.set('editors')
+    expect(await store.resolve?.(asset, ctx)).toBe(preview)
+    s.policy.set('everyone')
+    expect(await store.resolve?.(asset, ctx)).toBe(original)
+    s.policy.set('editors')
+    s.role.set('editor')
+    expect(await store.resolve?.(asset, ctx)).toBe(original)
+    s.guest.set(true) // a name-only guest on a workshop link
+    expect(await store.resolve?.(asset, ctx)).toBe(preview)
+    // A GIF still plays for limited viewers: the api serves what the canvas renders from its original.
+    const gif = { ...meta, mimeType: 'image/gif' }
+    const gifStore = createAssetStore({
+      boardId: TEST_BOARD,
+      metaStore: new AssetMetaStore({
+        fetchImpl: (async () => Response.json(gif)) as unknown as typeof fetch,
+      }),
+      reducedMotion: () => false,
+    })
+    s.role.set('viewer')
+    expect(
+      await gifStore.resolve?.(
+        { ...asset, props: { ...asset.props, mimeType: 'image/gif' } } as TLAsset,
+        ctx,
+      ),
+    ).toBe(original)
+    s.policy.set(null)
+    s.role.set(null)
+    s.guest.set(null)
+  })
+
+  it('the canvas and the api share the same original limits', () => {
+    expect(SMALL_ORIGINAL_BYTES).toBe(CANVAS_ORIGINAL_LIMITS.smallOriginalBytes)
+    expect(ANIMATED_ORIGINAL_LIMITS.maxBytes).toBe(CANVAS_ORIGINAL_LIMITS.animatedMaxBytes)
+    expect(ANIMATED_ORIGINAL_LIMITS.maxPixels).toBe(CANVAS_ORIGINAL_LIMITS.animatedMaxPixels)
   })
 })
 

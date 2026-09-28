@@ -1,4 +1,5 @@
 import type { TLAsset, TLAssetContext, TLAssetId, TLAssetStore } from 'tldraw'
+import { exportCertainOnBoard } from '../features/sharing/export-policy.ts'
 import {
   type AssetVersionMeta,
   type DerivativeRecord,
@@ -202,7 +203,10 @@ export async function resolveImageOrVideoUrl(
   }
   if (
     asset.type === 'image' &&
-    playsAnimatedOriginal(meta, asset.props, ctx, (opts.reducedMotion ?? prefersReducedMotion)())
+    playsAnimatedOriginal(meta, asset.props, ctx, (opts.reducedMotion ?? prefersReducedMotion)()) &&
+    // export-control (SEAM-10): the api cannot tell an animated WebP from a still one with a preview,
+    // so it keeps that original from viewers the board limits; their canvas shows the preview.
+    (meta.mimeType !== 'image/webp' || exportCertainOnBoard(boardId))
   ) {
     return original
   }
