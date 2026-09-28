@@ -249,13 +249,14 @@ export function withStarredEntry<B extends { id: string; starred?: boolean }>(
 }
 
 /**
- * Title for a board imported from `fileName`. Exports download as "<title>.draftroom.json" (history
- * feature), so both extensions go; a slug-like name ("brand-refresh_v2.json") reads as words. Titles
- * with spaces keep their dashes ("Q4 - roadmap"). Undefined when nothing is left (server default).
+ * Title for a board imported from `fileName`. Exports download as "<title>.lobby.json" (history
+ * feature; exports from before the rename end in ".draftroom.json"), so both extensions go; a
+ * slug-like name ("brand-refresh_v2.json") reads as words. Titles with spaces keep their dashes
+ * ("Q4 - roadmap"). Undefined when nothing is left (server default).
  */
 export function importTitle(fileName: string): string | undefined {
   const base = fileName
-    .replace(/(\.draftroom)?\.json$/i, '')
+    .replace(/(\.lobby|\.draftroom)?\.json$/i, '')
     .replace(/\s+/g, ' ')
     .trim()
   const words = /\s/.test(base) ? base : base.replace(/[-_]+/g, ' ').trim()

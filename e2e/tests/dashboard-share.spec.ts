@@ -716,7 +716,7 @@ test('import: an exported .json becomes a new board with its content; a non-JSON
     expect(exported.status()).toBe(200)
     const disposition = exported.headers()['content-disposition'] ?? ''
     const fileName = /filename="([^"]+)"/.exec(disposition)?.[1] ?? ''
-    expect(fileName).toBe('Pitch v2.draftroom.json')
+    expect(fileName).toBe('Pitch v2.lobby.json')
     const file = testInfo.outputPath(fileName)
     writeFileSync(file, await exported.body())
 

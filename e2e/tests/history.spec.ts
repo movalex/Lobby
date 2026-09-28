@@ -563,7 +563,7 @@ test('viewer and commenter: history rows are listed without restore, save or sel
   await test.step('the viewer can download the .json export', async () => {
     const download = viewer.page.waitForEvent('download')
     await viewer.page.getByTestId('export-json').click()
-    expect((await download).suggestedFilename()).toBe(`${title}.draftroom.json`)
+    expect((await download).suggestedFilename()).toBe(`${title}.lobby.json`)
   })
 
   await test.step('the commenter can restore the checkpoint as a private board of her own', async () => {
@@ -855,12 +855,12 @@ test('export .json and import it on the dashboard: same shapes, frame, connector
   if (!pdf) throw new Error('no file card on the source board')
 
   let file = ''
-  await test.step('export-json downloads “<title>.draftroom.json” in the draftroom-board format', async () => {
+  await test.step('export-json downloads “<title>.lobby.json” in the draftroom-board format', async () => {
     await openHistory(a.page)
     const download = a.page.waitForEvent('download')
     await a.page.getByTestId('export-json').click()
     const d = await download
-    expect(d.suggestedFilename()).toBe(`${title}.draftroom.json`)
+    expect(d.suggestedFilename()).toBe(`${title}.lobby.json`)
     file = testInfo.outputPath(d.suggestedFilename())
     await d.saveAs(file)
     await expect(a.page.getByTestId('history-status')).toContainText('Board exported as a .json file')
@@ -895,7 +895,7 @@ test('export .json and import it on the dashboard: same shapes, frame, connector
     const body = (await res.json()) as { board: { id: string; title: string }; droppedFiles: number }
     imported = body.board.id
     expect(body.droppedFiles).toBe(0)
-    // "<title>.draftroom.json" imports as "<title>" (the export suffix is not part of the name).
+    // "<title>.lobby.json" imports as "<title>" (the export suffix is not part of the name).
     expect(body.board.title).toBe(title)
     await expect(a.page.getByTestId('dashboard-toast')).toHaveText(`Imported “${body.board.title}”.`)
     await expect(boardCard(a.page, imported)).toHaveAttribute('data-role', 'owner')
@@ -949,7 +949,7 @@ test('export .json and import it on the dashboard: same shapes, frame, connector
     const count = async () => (await aliceApi.listBoards(wid)).length
     const boardsBefore = await count()
     await a.page.getByTestId('import-board-file').setInputFiles({
-      name: 'broken.draftroom.json',
+      name: 'broken.lobby.json',
       mimeType: 'application/json',
       buffer: Buffer.from('{"format":"draftroom-board","records":['),
     })

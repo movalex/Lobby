@@ -126,10 +126,10 @@ describe('messages', () => {
 
 describe('files and changes', () => {
   it('builds a safe archive file name from the board title', () => {
-    expect(archiveFileName('Pitch / v2: "final"')).toBe('Pitch - v2- -final-.draftroom.json')
-    expect(archiveFileName('...hidden')).toBe('hidden.draftroom.json')
-    expect(archiveFileName('   ')).toBe('board.draftroom.json')
-    expect(archiveFileName('x'.repeat(300))).toHaveLength(100 + '.draftroom.json'.length)
+    expect(archiveFileName('Pitch / v2: "final"')).toBe('Pitch - v2- -final-.lobby.json')
+    expect(archiveFileName('...hidden')).toBe('hidden.lobby.json')
+    expect(archiveFileName('   ')).toBe('board.lobby.json')
+    expect(archiveFileName('x'.repeat(300))).toHaveLength(100 + '.lobby.json'.length)
   })
 
   it('selects only restored shapes that arrived', () => {
