@@ -272,6 +272,9 @@ export function createAssetStore({
     resolve(asset, ctx) {
       return resolveImageOrVideoUrl(boardId, metaStore, asset, ctx, { previewWaitMs, reducedMotion })
     },
-    // No remove(): undo or another collaborator can bring the shape back; bytes are GC'd server-side.
+    // No remove(): undo, "Recently deleted" or another collaborator can bring the shape back. Deleting
+    // a shape never deletes its file. The api's collector (apps/api/src/files/gc.ts) marks files nothing
+    // references and, by default, only reports them; it deletes a file only with DRAFTROOM_ASSET_GC=delete,
+    // 30 days after the last reference is gone.
   }
 }

@@ -21,6 +21,12 @@ export interface SyncInternalClient {
    * answer is unchecked JSON: the caller validates it.
    */
   placeNotes?(boardId: string, body: unknown): Promise<unknown>
+  /**
+   * The asset collector (files/gc.ts): the file versions a board's canvas and its "Recently deleted"
+   * still reference (GET /internal/boards/:bid/asset-refs). Optional like placeNotes; unchecked JSON
+   * (the collector validates it, and treats anything else as an unreadable board).
+   */
+  assetRefs?(boardId: string): Promise<unknown>
 }
 
 export class SyncSeedConflict extends Error {
@@ -75,6 +81,11 @@ export function createHttpSyncInternalClient(opts: {
         body: JSON.stringify(body),
       })
       if (!res.ok) throw new SyncUnavailable(`place-notes failed with ${res.status}`)
+      return (await res.json()) as unknown
+    },
+    async assetRefs(boardId) {
+      const res = await call(`/internal/boards/${encodeURIComponent(boardId)}/asset-refs`)
+      if (!res.ok) throw new SyncUnavailable(`asset-refs failed with ${res.status}`)
       return (await res.json()) as unknown
     },
   }

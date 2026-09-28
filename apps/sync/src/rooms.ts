@@ -181,6 +181,25 @@ export class RoomRegistry {
     return entry.deleted.list((id) => onBoard.has(id), limit)
   }
 
+  /**
+   * The asset collector's reference scan (http/asset-refs.ts): calls `onRecord` with every record on
+   * the board, then `onDeletedShape` with the stored JSON of every shape "Recently deleted" holds.
+   * Read-only. Opens the room like snapshot(); false when the board has no storage.
+   */
+  scanRecords(
+    boardId: string,
+    onRecord: (record: TLRecord) => void,
+    onDeletedShape: (state: string) => void,
+  ): boolean {
+    const entry = this.existing(boardId)
+    if (!entry) return false
+    entry.storage.transaction((txn) => {
+      for (const record of txn.values()) onRecord(record)
+    })
+    for (const state of entry.deleted.shapeStates()) onDeletedShape(state)
+    return true
+  }
+
   /** Puts captured shapes back (validated; see deleted/restore.ts). */
   restoreDeleted(boardId: string, ids: readonly string[]): RestoreSummary {
     const entry = this.existing(boardId)

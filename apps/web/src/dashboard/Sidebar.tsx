@@ -1,6 +1,6 @@
-import type { Project, WorkspaceSummary } from '@draftroom/contracts'
-import { type FormEvent, type ReactNode, useState } from 'react'
-import { isApiError } from '../api/client.ts'
+import { type Project, WorkspaceStorage, type WorkspaceSummary } from '@draftroom/contracts'
+import { type FormEvent, type ReactNode, useEffect, useState } from 'react'
+import { api, isApiError } from '../api/client.ts'
 import { Wordmark } from '../brand/Wordmark.tsx'
 import { type DashboardSection, linkClick, navigate, workspacePath } from '../lib/routing.ts'
 import { MenuButton } from '../ui/Menu.tsx'
@@ -150,7 +150,83 @@ export function Sidebar({
           </>
         )}
       </nav>
+      {/* Guests do not see the workspace's storage (the api answers them 403). */}
+      {canManageProjects && <StorageLine workspaceId={workspace.id} />}
     </aside>
+  )
+}
+
+const KB = 1024
+const MB = 1024 * KB
+const GB = 1024 * MB
+
+/** "1.2 GB", "100 GB", "250 MB", "12 KB", "0 MB" (binary units, like the upload quota's messages). */
+export function formatStorage(bytes: number): string {
+  if (bytes >= GB) return `${Number((bytes / GB).toFixed(1))} GB`
+  if (bytes >= MB) return `${Math.round(bytes / MB)} MB`
+  if (bytes > 0) return `${Math.max(1, Math.round(bytes / KB))} KB`
+  return '0 MB'
+}
+
+/** "Storage: 1.2 GB of 100 GB" (workspace members; refreshed when the window regains focus). */
+function StorageLine({ workspaceId }: { workspaceId: string }) {
+  const [storage, setStorage] = useState<WorkspaceStorage | null>(null)
+  useEffect(() => {
+    let ac: AbortController | null = null
+    const load = () => {
+      ac?.abort()
+      const mine = new AbortController()
+      ac = mine
+      api
+        .request('GET', `/api/workspaces/${encodeURIComponent(workspaceId)}/storage`, {
+          schema: WorkspaceStorage,
+          signal: mine.signal,
+        })
+        .then(
+          (s) => {
+            if (!mine.signal.aborted) setStorage(s)
+          },
+          () => {}, // the line is a nicety: on any error it just stays hidden
+        )
+    }
+    setStorage(null)
+    load()
+    const onFocus = () => {
+      if (document.visibilityState === 'visible') load()
+    }
+    window.addEventListener('focus', onFocus)
+    return () => {
+      window.removeEventListener('focus', onFocus)
+      ac?.abort()
+    }
+  }, [workspaceId])
+  if (!storage) return null
+  const share = storage.quotaBytes > 0 ? storage.usedBytes / storage.quotaBytes : 0
+  const detail = [
+    `Files ${formatStorage(storage.breakdown.originals)}`,
+    `previews ${formatStorage(storage.breakdown.previews)}`,
+    `board thumbnails ${formatStorage(storage.breakdown.thumbnails)}`,
+  ]
+  if (storage.gc?.unreferenced.versions)
+    detail.push(
+      `${storage.gc.unreferenced.versions} unused file${storage.gc.unreferenced.versions === 1 ? '' : 's'} (${formatStorage(storage.gc.unreferenced.bytes)}) no board uses any more`,
+    )
+  return (
+    <p
+      className="dr-nav__hint"
+      data-testid="storage-usage"
+      data-level={share >= 1 ? 'full' : share >= 0.9 ? 'near' : 'ok'}
+      title={detail.join(' · ')}
+      style={{
+        marginTop: 'auto',
+        paddingTop: 8,
+        borderTop: '1px solid var(--dr-line)',
+        color: share >= 1 ? 'var(--dr-danger)' : share >= 0.9 ? 'var(--dr-warn)' : undefined,
+        fontVariantNumeric: 'tabular-nums',
+      }}
+    >
+      Storage: {formatStorage(storage.usedBytes)} of {formatStorage(storage.quotaBytes)}
+    </p>
   )
 }
 

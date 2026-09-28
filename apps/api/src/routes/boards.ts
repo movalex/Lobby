@@ -26,6 +26,7 @@ import {
 import { audit } from '../audit.ts'
 import type { AppContext, Params } from '../context.ts'
 import { ApiError, conflict, forbidden, notFound, parse } from '../errors.ts'
+import { assertBoardRoom } from '../files/usage.ts'
 import { toBoard, toBoardWithRole } from '../serialize.ts'
 
 const MAX_LISTED = 500
@@ -88,6 +89,7 @@ export function registerBoardRoutes(app: FastifyInstance, ctx: AppContext): void
       if (!canCreateInWorkspace(workspaceRole)) throw forbidden()
       const projectId = input.projectId ?? null
       if (projectId) await requireProjectInWorkspace(tx, projectId, wid)
+      await assertBoardRoom(tx, wid, ctx.config.storage.maxBoardsPerWorkspace) // SEAM-11
       const at = now()
       for (let attempt = 0; attempt < 5; attempt++) {
         const created = await tx.maybeOne<BoardRow>(
