@@ -5,9 +5,12 @@
 //   where the canvas really renders from it: a video, an animated GIF within the canvas's limits, a
 //   small image still processing, or an image with no still preview. A still image that has a preview
 //   is refused, since the canvas shows the preview.
+// - DANA2-01: the first client link (view or comment) on a board whose owner never chose a policy
+//   stores 'editors', so a client cannot download originals or export; an owner's choice stays.
 
 import {
   CANVAS_ORIGINAL_LIMITS,
+  EXPORT_CONTROL_EVENTS,
   EXPORT_DISABLED_CODE,
   type ExportPolicy,
   ExportPolicyState,
@@ -47,6 +50,7 @@ let viewer: Client
 let accountGuest: Client
 let board: string
 let ipSeq = 0
+let hub: EventHub
 
 interface Guest {
   userId: string
@@ -74,7 +78,7 @@ async function upload(name: string, contentType: string, bytes: Buffer = PNG) {
   return res.json() as AssetVersionMeta
 }
 
-async function link(role: 'viewer' | 'editor', allowGuests = true) {
+async function link(role: 'viewer' | 'commenter' | 'editor', allowGuests = true) {
   const res = await alice.req('POST', `/api/boards/${board}/review-links`, { role, allowGuests })
   expect(res.statusCode, res.body).toBe(201)
   const { url } = ReviewLinkCreated.parse(res.json())
@@ -114,7 +118,8 @@ const code = (res: LightMyRequestResponse) => (res.json() as { error?: { code?: 
 
 beforeEach(async () => {
   sync = createFakeSync()
-  api = await createTestApi({ deps: { events: new EventHub(), syncInternal: sync } })
+  hub = new EventHub()
+  api = await createTestApi({ deps: { events: hub, syncInternal: sync } })
   alice = await api.login('alice')
   editor = await api.login('bob')
   viewer = await api.login('dave')
@@ -155,9 +160,11 @@ describe('SEAM-04: name-only guests are limited like viewers under "editors", wh
     const state = async (c: { req(method: 'GET', url: string): Promise<LightMyRequestResponse> }) =>
       ExportPolicyState.parse((await c.req('GET', `/api/boards/${board}/export-policy`)).json())
 
-    // 'everyone' (the default): nobody is limited.
+    // The viewer link turned exporting off (DANA2-01); the owner turns it back on: nobody is limited.
+    expect(await state(val)).toMatchObject({ exportPolicy: 'editors', canExport: false })
+    expect((await setPolicy('everyone')).statusCode).toBe(200)
     for (const c of [eddie, val]) {
-      expect(await state(c)).toEqual({ exportPolicy: 'everyone', canExport: true })
+      expect(await state(c)).toEqual({ exportPolicy: 'everyone', canExport: true, policySet: true })
       expect((await c.req('GET', originalUrl(zip))).statusCode).toBe(200)
       expect((await c.req('GET', `/api/boards/${board}/export`)).statusCode).toBe(200)
     }
@@ -167,7 +174,7 @@ describe('SEAM-04: name-only guests are limited like viewers under "editors", wh
       ['guest editor', eddie],
       ['guest viewer', val],
     ] as const) {
-      expect(await state(c), who).toEqual({ exportPolicy: 'editors', canExport: false })
+      expect(await state(c), who).toEqual({ exportPolicy: 'editors', canExport: false, policySet: true })
       for (const method of ['GET', 'HEAD'] as const) {
         const res = await c.req(method, originalUrl(zip))
         expect(res.statusCode, `${who} ${method} original`).toBe(403)
@@ -182,7 +189,7 @@ describe('SEAM-04: name-only guests are limited like viewers under "editors", wh
     }
     // People with an account keep their role's rights: an outside editor, a member editor.
     for (const c of [accountGuest, editor]) {
-      expect(await state(c)).toEqual({ exportPolicy: 'editors', canExport: true })
+      expect(await state(c)).toEqual({ exportPolicy: 'editors', canExport: true, policySet: true })
       expect((await c.req('GET', originalUrl(zip))).statusCode).toBe(200)
       expect((await c.req('GET', `/api/boards/${board}/export`)).statusCode).toBe(200)
     }
@@ -312,5 +319,69 @@ describe('SEAM-10: the media-element exception serves only what the canvas rende
       `/files/${photo.assetId}/${photo.versionId}/d/${preview.id}?board=${board}`,
     )
     expect(res.statusCode, res.body).toBe(200)
+  })
+})
+
+describe('DANA2-01: a client link turns exporting off unless the board owner chose', () => {
+  const state = async (c: { req(method: 'GET', url: string): Promise<LightMyRequestResponse> }) =>
+    ExportPolicyState.parse((await c.req('GET', `/api/boards/${board}/export-policy`)).json())
+  const policyEvents = () => {
+    const seen: unknown[] = []
+    hub.subscribe(board, (e) => {
+      if (e.type === EXPORT_CONTROL_EVENTS.policy) seen.push(e.data)
+    })
+    return seen
+  }
+
+  it('a fresh client link: its name-only guest gets 403 on originals and the archive; the policy is stored and announced once', async () => {
+    const zip = await upload('key-art.zip', 'application/zip', Buffer.from('PK\x03\x04art'))
+    const photo = await upload('key-art.png', 'image/png')
+    expect(await state(alice)).toEqual({ exportPolicy: 'everyone', canExport: true, policySet: false })
+    const seen = policyEvents()
+
+    const mara = await joinAsGuest(await link('commenter'), 'Mara (Halden)')
+    expect(await state(alice)).toEqual({ exportPolicy: 'editors', canExport: true, policySet: true })
+    expect(await state(mara)).toEqual({ exportPolicy: 'editors', canExport: false, policySet: true })
+    for (const m of [zip, photo]) {
+      for (const dest of [undefined, 'document', 'empty']) {
+        const res = await mara.req('GET', originalUrl(m), undefined, dest ? { 'sec-fetch-dest': dest } : {})
+        expect(res.statusCode, `original dest=${dest ?? '-'}`).toBe(403)
+        expect(code(res)).toBe(EXPORT_DISABLED_CODE)
+      }
+    }
+    const archive = await mara.req('GET', `/api/boards/${board}/export`)
+    expect(archive.statusCode).toBe(403)
+    expect(code(archive)).toBe(EXPORT_DISABLED_CODE)
+    // Editors and the owner are not limited.
+    expect((await editor.req('GET', originalUrl(zip))).statusCode).toBe(200)
+    expect((await alice.req('GET', `/api/boards/${board}/export`)).statusCode).toBe(200)
+
+    // Stored as the link creator's change; a second client link changes nothing and says nothing.
+    const row = await api.db.one<{ policy: string; updated_by: string }>(
+      'SELECT policy, updated_by FROM board_export_policies WHERE board_id = $1',
+      [board],
+    )
+    expect(row).toEqual({ policy: 'editors', updated_by: alice.userId })
+    await link('viewer', false)
+    expect(seen).toEqual([{ exportPolicy: 'editors' }])
+  })
+
+  it("an owner who chose 'everyone' keeps it: the client downloads and exports", async () => {
+    const zip = await upload('key-art.zip', 'application/zip', Buffer.from('PK\x03\x04art'))
+    expect((await setPolicy('everyone')).statusCode).toBe(200)
+    const seen = policyEvents()
+    const mara = await joinAsGuest(await link('commenter'), 'Mara (Halden)')
+    expect(await state(mara)).toEqual({ exportPolicy: 'everyone', canExport: true, policySet: true })
+    expect((await mara.req('GET', originalUrl(zip))).statusCode).toBe(200)
+    expect((await mara.req('GET', `/api/boards/${board}/export`)).statusCode).toBe(200)
+    expect(seen).toEqual([])
+  })
+
+  it("an owner who chose 'editors' keeps it, and a workshop (edit) link leaves the default alone", async () => {
+    await link('editor')
+    expect(await state(alice)).toEqual({ exportPolicy: 'everyone', canExport: true, policySet: false })
+    expect((await setPolicy('editors')).statusCode).toBe(200)
+    await link('viewer')
+    expect(await state(alice)).toMatchObject({ exportPolicy: 'editors', policySet: true })
   })
 })

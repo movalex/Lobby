@@ -33,7 +33,21 @@ describe('user display', () => {
     // A guest's display marker is not an initial (wave 3 guests).
     expect(initialsFor('Sam (guest)')).toBe('SA')
     expect(initialsFor('Sam Rivera (guest)')).toBe('SR')
-    expect(initialsFor('(guest)')).toBe('(G')
+    expect(initialsFor('(guest)')).toBe('GU')
+    // DANA2-04: clients add their company in brackets; never a bracket as an initial.
+    expect(initialsFor('Mara (Halden)')).toBe('MA')
+    expect(initialsFor('Mara (Halden) (guest)')).toBe('MA')
+    expect(initialsFor('Sam (Acme) (guest)')).toBe('SA')
+    expect(initialsFor('Mara Stone (Halden)')).toBe('MS')
+    expect(initialsFor('Mara (Halden')).toBe('MA')
+    // A shortened display name (presence) cuts the company: the same initials as the full name.
+    expect(initialsFor('Mara (Ha… (guest)')).toBe('MA')
+    expect(initialsFor("O'Brien Pat")).toBe('OP')
+    expect(initialsFor('[Acme] Lee')).toBe('AL')
+    expect(initialsFor('Émile Zola')).toBe('ÉZ')
+    expect(initialsFor('!!!')).toBe('?')
+    for (const name of ['Mara (Halden)', '(guest)', 'Sam (Acme) (guest)', '((x))', '— Dana —'])
+      expect(initialsFor(name), name).toMatch(/^[\p{L}\p{N}]{1,2}$|^\?$/u)
   })
 
   it('accepts the same dev handles as the API contract', () => {

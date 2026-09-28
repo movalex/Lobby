@@ -32,6 +32,8 @@ import type { Params } from '../../context.ts'
 import { conflict, notFound, parse } from '../../errors.ts'
 import { guestAccountRequired } from '../../routes/invitations.ts'
 import type { FeatureContext } from '../context.ts'
+import { publishExportPolicy } from '../export-control/index.ts'
+import { limitExportForClientLink } from '../export-control/policy.ts'
 import { extendGuestSessions } from '../guests/sessions.ts'
 import { publishSharingChanged } from './shared.ts'
 
@@ -302,6 +304,11 @@ export function registerReviewLinkRoutes(app: FastifyInstance, ctx: FeatureConte
         },
         at,
       })
+      // DANA2-01: a client link (view or comment) on a board whose owner never chose an export policy
+      // turns exporting and original downloads off for the people it lets in. Workshop (edit) links
+      // leave the policy alone; an owner's own choice always stays.
+      const limitedExport =
+        input.role !== 'editor' && (await limitExportForClientLink(tx, access.board, user.id, at))
       return {
         id,
         url: linkUrl(token),
@@ -309,11 +316,14 @@ export function registerReviewLinkRoutes(app: FastifyInstance, ctx: FeatureConte
         expiresAt: expiresAt.toISOString(),
         maxUses: input.maxUses,
         allowGuests: input.allowGuests,
+        limitedExport,
       }
     })
+    const { limitedExport, ...link } = created
+    if (limitedExport) publishExportPolicy(ctx, bid, 'editors')
     publishSharingChanged(ctx, bid, 'review-link-created')
     reply.code(201)
-    return created
+    return link
   })
 
   app.post('/api/boards/:bid/review-links/:id/revoke', async (req) => {

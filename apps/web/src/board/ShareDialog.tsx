@@ -26,7 +26,8 @@ import { type ReactNode, useCallback, useEffect, useId, useMemo, useRef, useStat
 import { api, isApiError } from '../api/client.ts'
 import { useSession } from '../auth/session.tsx'
 import { announceShareChanged, SHARE_REMOTE_EVENT, sharingApi } from '../features/sharing/api.ts'
-import { ExportPolicySection } from '../features/sharing/ExportPolicySection.tsx'
+import { ClientExportLine, ExportPolicySection } from '../features/sharing/ExportPolicySection.tsx'
+import { refreshExportPolicy } from '../features/sharing/export-policy.ts'
 import {
   canExtend,
   daysLabel,
@@ -1512,6 +1513,9 @@ function ClientLinkSection({
       const link = await sharing.createReviewLink(boardId, { role, expiresInDays: days, allowGuests })
       setJustCreated({ id: link.id, copied: await copyText(link.url) })
       onChange()
+      // DANA2-01: the first client link may have turned exporting off. The board event says so too,
+      // but this dialog also opens from the dashboard, where no board events arrive.
+      refreshExportPolicy(api, boardId).catch(() => {})
     } catch (e) {
       setError(isApiError(e) ? e.message : 'The review link could not be created.')
     } finally {
@@ -1532,6 +1536,7 @@ function ClientLinkSection({
         {clientLinkHint(role, allowGuests)}
       </p>
       <GuestsOption testId="review-link-guests" checked={allowGuests} onChange={setAllowGuests} />
+      <ClientExportLine boardId={boardId} />
       <div className="dr-row dr-row--wrap dr-sharing__create">
         <label htmlFor={roleId} className="dr-sr-only">
           What people with the review link can do

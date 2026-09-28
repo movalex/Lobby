@@ -40,6 +40,11 @@ export interface BoardExportState {
    * they are limited whatever their role (a workshop link makes them editors).
    */
   guest: Atom<boolean | null>
+  /**
+   * Whether the policy is stored (an owner chose it, or a client link set it: DANA2-01). False while
+   * the board uses the default, which the first client link turns off. null until known.
+   */
+  stored: Atom<boolean | null>
 }
 
 const boards = new Map<string, BoardExportState>()
@@ -66,6 +71,7 @@ export function boardExportState(boardId: string): BoardExportState {
       policy: atom<ExportPolicy | null>(`dr-export-policy:${boardId}`, null),
       role: atom<BoardRole | null>(`dr-export-role:${boardId}`, null),
       guest: atom<boolean | null>(`dr-export-guest:${boardId}`, null),
+      stored: atom<boolean | null>(`dr-export-stored:${boardId}`, null),
     }
     boards.set(boardId, state)
   }
@@ -75,23 +81,38 @@ export function boardExportState(boardId: string): BoardExportState {
 /** A board event: always the newest word on the policy. */
 function applyPolicyEvent(boardId: string, policy: ExportPolicy) {
   orderOf(boardId).events++
-  boardExportState(boardId).policy.set(policy)
+  const s = boardExportState(boardId)
+  s.policy.set(policy)
+  s.stored.set(true) // every change stores it
 }
 
 /**
  * Call when sending a request that answers with the policy. The returned function applies that answer
  * unless something newer landed meanwhile (see `order`); true when it applied.
  */
-function beginPolicyRequest(boardId: string): (policy: ExportPolicy) => boolean {
+function beginPolicyRequest(boardId: string): (policy: ExportPolicy, stored?: boolean) => boolean {
   const o = orderOf(boardId)
   const mine = ++o.sent
   const eventsThen = o.events
-  return (policy) => {
+  return (policy, stored) => {
     if (o.events !== eventsThen || o.applied > mine) return false
     o.applied = mine
-    boardExportState(boardId).policy.set(policy)
+    const s = boardExportState(boardId)
+    s.policy.set(policy)
+    if (stored !== undefined) s.stored.set(stored) // an older server leaves it out
     return true
   }
+}
+
+/**
+ * DANA2-01, the Share dialog's client card: whether people who join through a client link (viewers,
+ * commenters, name-only guests) may download files and export. A board that still uses the default
+ * counts as off, since the first client link turns it off. null while that is unknown.
+ */
+export function clientExportAllowed(policy: ExportPolicy | null, stored: boolean | null): boolean | null {
+  if (policy === null) return null
+  if (policy === 'editors') return false
+  return stored
 }
 
 /**
@@ -206,7 +227,7 @@ export function exportPolicyApi(api: ApiClient) {
 export async function refreshExportPolicy(api: ApiClient, boardId: string, signal?: AbortSignal) {
   const apply = beginPolicyRequest(boardId)
   const s = await exportPolicyApi(api).get(boardId, signal)
-  if (!signal?.aborted) apply(s.exportPolicy)
+  if (!signal?.aborted) apply(s.exportPolicy, s.policySet)
 }
 
 /** An owner's change (the server checks manage_access); its answer lands like a refresh's. */
@@ -217,7 +238,7 @@ export async function saveExportPolicy(
 ): Promise<ExportPolicyState> {
   const apply = beginPolicyRequest(boardId)
   const saved = await exportPolicyApi(api).put(boardId, exportPolicy)
-  apply(saved.exportPolicy) // this tab at once when the event stream is down; otherwise the event did
+  apply(saved.exportPolicy, saved.policySet ?? true) // this tab at once when the event stream is down; otherwise the event did
   return saved
 }
 
@@ -242,7 +263,7 @@ export function syncExportPolicy(opts: {
     const apply = beginPolicyRequest(boardId)
     client.get(boardId, controller.signal).then(
       (s) => {
-        if (!stopped) apply(s.exportPolicy)
+        if (!stopped) apply(s.exportPolicy, s.policySet)
       },
       () => {}, // keep what we had: the server enforces, and the next resync asks again
     )

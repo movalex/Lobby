@@ -57,9 +57,13 @@ export function GuestNoAccessScreen({ revoked }: { revoked: boolean }) {
       }
       actions={
         <>
-          <a className="dr-btn dr-btn--primary" href="/" onClick={linkClick('/')}>
-            Go to your boards
-          </a>
+          {/* DANA2-07: a revoked guest usually has no boards left (their session is ending), so
+              "Go to your boards" would lead nowhere: only the way back with an account. */}
+          {!revoked && (
+            <a className="dr-btn dr-btn--primary" href="/" onClick={linkClick('/')}>
+              Go to your boards
+            </a>
+          )}
           <button
             type="button"
             className="dr-btn"

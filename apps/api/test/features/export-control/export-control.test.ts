@@ -119,6 +119,9 @@ beforeEach(async () => {
   }
   await joinByReviewLink(guestViewer, 'viewer')
   await joinByReviewLink(guestCommenter, 'commenter')
+  // The first client link stored 'editors' (DANA2-01, tested below). These tests start from a board
+  // whose owner never chose a policy.
+  await api.db.query('DELETE FROM board_export_policies WHERE board_id = $1', [board])
 
   files = {
     image: await uploadFile(editor, board, 'hero.png', 'image/png'),
@@ -152,13 +155,21 @@ describe('GET/PUT /api/boards/:bid/export-policy', () => {
     for (const c of [alice, editor, commenter, viewer, guestViewer, guestCommenter]) {
       const res = await c.req('GET', `/api/boards/${board}/export-policy`)
       expect(res.statusCode, res.body).toBe(200)
-      expect(ExportPolicyState.parse(res.json())).toEqual({ exportPolicy: 'everyone', canExport: true })
+      expect(ExportPolicyState.parse(res.json())).toEqual({
+        exportPolicy: 'everyone',
+        canExport: true,
+        policySet: false,
+      })
     }
     expect((await outsider.req('GET', `/api/boards/${board}/export-policy`)).statusCode).toBe(404)
     expect((await api.anon('GET', `/api/boards/${board}/export-policy`)).statusCode).toBe(401)
     expect((await alice.req('GET', '/api/boards/b-nope000000/export-policy')).statusCode).toBe(404)
 
-    expect((await setPolicy(alice, 'editors')).json()).toEqual({ exportPolicy: 'editors', canExport: true })
+    expect((await setPolicy(alice, 'editors')).json()).toEqual({
+      exportPolicy: 'editors',
+      canExport: true,
+      policySet: true,
+    })
     const expected: [Client, boolean][] = [
       [alice, true],
       [editor, true],
@@ -169,7 +180,7 @@ describe('GET/PUT /api/boards/:bid/export-policy', () => {
     ]
     for (const [c, canExport] of expected) {
       const res = await c.req('GET', `/api/boards/${board}/export-policy`)
-      expect(res.json(), c.me.user.name).toEqual({ exportPolicy: 'editors', canExport })
+      expect(res.json(), c.me.user.name).toEqual({ exportPolicy: 'editors', canExport, policySet: true })
     }
   })
 
@@ -449,6 +460,7 @@ describe('boards of your own made from this one (review)', () => {
     expect((await viewer.req('GET', `/api/boards/${copy}/export-policy`)).json()).toEqual({
       exportPolicy: 'editors',
       canExport: false,
+      policySet: true,
     })
     expectExportDisabled(await original(viewer, files.pdf, {}, copy), 'keepSharing copy, viewer')
     expectExportDisabled(await viewer.req('GET', `/api/boards/${copy}/export`), 'keepSharing copy archive')

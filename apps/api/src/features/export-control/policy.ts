@@ -26,11 +26,45 @@ import { INLINE_MIMES } from '../../files/mime.ts'
 
 /** The board's policy ('everyone' when its owner never changed it). */
 export async function loadExportPolicy(q: Queryable, boardId: string): Promise<ExportPolicy> {
+  return (await loadExportPolicyRow(q, boardId)).policy
+}
+
+/**
+ * The board's policy and whether it is stored (`set`): false while the board still uses the default
+ * because nobody chose one, which is when a client link may still change it (limitExportForClientLink).
+ */
+export async function loadExportPolicyRow(
+  q: Queryable,
+  boardId: string,
+): Promise<{ policy: ExportPolicy; set: boolean }> {
   const row = await q.maybeOne<{ policy: ExportPolicy }>(
     'SELECT policy FROM board_export_policies WHERE board_id = $1',
     [boardId],
   )
-  return row?.policy ?? DEFAULT_EXPORT_POLICY
+  return { policy: row?.policy ?? DEFAULT_EXPORT_POLICY, set: row !== null }
+}
+
+/**
+ * DANA2-01: the first client link (a viewer or commenter review link, the Share dialog's "Share with
+ * a client") on a board whose owner never chose an export policy turns exporting off for the people
+ * it lets in: the policy becomes 'editors', so a client cannot export the board or download its
+ * original files unless the owner turns it back on. An owner's own choice (a stored row, 'everyone'
+ * included) is never changed. Runs inside the link's transaction; true when it stored the policy, and
+ * the caller then publishes it (publishExportPolicy) after the commit.
+ */
+export async function limitExportForClientLink(
+  q: Queryable,
+  board: { id: string; workspace_id: string },
+  userId: string,
+  at: Date,
+): Promise<boolean> {
+  const r = await q.query(
+    `INSERT INTO board_export_policies (board_id, workspace_id, policy, updated_by, updated_at)
+     VALUES ($1, $2, 'editors', $3, $4)
+     ON CONFLICT (board_id) DO NOTHING`,
+    [board.id, board.workspace_id, userId, at],
+  )
+  return r.rowCount > 0
 }
 
 /**

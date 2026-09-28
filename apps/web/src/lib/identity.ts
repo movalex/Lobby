@@ -26,10 +26,20 @@ export function safeColor(color: string | null | undefined, userId: string): str
   return typeof color === 'string' && /^#[0-9a-fA-F]{3,8}$/.test(color) ? color : colorForUser(userId)
 }
 
+/** The words of a name, without punctuation: "O'Brien" is one word, "mary-jane" two. */
+const nameWords = (s: string) =>
+  s
+    .split(/[\s._-]+/)
+    .map((w) => w.replace(/[^\p{L}\p{N}]/gu, ''))
+    .filter(Boolean)
+
 export function initialsFor(name: string): string {
-  // A trailing marker in parentheses ("Sam (guest)", wave 3 guests) is not part of the name.
-  const base = name.replace(/\s*\([^()]*\)\s*$/, '') || name
-  const parts = base.split(/[\s._-]+/).filter(Boolean)
-  const letters = parts.length >= 2 ? `${parts[0]?.[0] ?? ''}${parts[1]?.[0] ?? ''}` : base.slice(0, 2)
+  // Parenthesised parts are not the name: the guest marker ("Sam (guest)", wave 3) or a company
+  // clients add ("Mara (Halden)", DANA2-04), also when a shortened name cut it ("Mara (Ha… (guest)").
+  // Only when nothing else is left do they count.
+  const parts = nameWords(name.replace(/\([^()]*\)/g, ' ').replace(/\([^()]*$/, ' '))
+  const words = parts.length ? parts : nameWords(name)
+  const [first = '', second = ''] = words
+  const letters = second ? `${[...first][0]}${[...second][0]}` : [...first].slice(0, 2).join('')
   return letters.toUpperCase() || '?'
 }
