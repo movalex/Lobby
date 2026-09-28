@@ -85,12 +85,12 @@ e2e suites and `pnpm dev`.
 | 02-dashboard | both | dashboards with thumbnails; Alex creates "Lobby tour" from the gallery |
 | 03-collab | both | Sam adds a note on the Brainstorm frame, Alex connects it; live cursors; Saved |
 | 04-mindmap | Alex | a mind map built with Tab / Enter; Sam watches it grow |
-| 05-ai | both | Alex brushes over the Brainstorm idea notes → AI → "Group into themes" (Lobby asks before regrouping notes that sit under theme cards, then the first-use OpenAI notice) → labelled clusters on both screens, zoomed in |
+| 05-ai | both | Alex brushes over the Brainstorm idea notes and shift-clicks his connector out of the selection (only notes are sent) → AI → "Group into themes" (Lobby asks before regrouping notes that sit under theme cards, then the first-use OpenAI notice) → "Grouped … Undo" toast (dismissed before the close-up) → labelled clusters on both screens, zoomed in |
 | 06-private | both | a private brainstorm: both write, counts show, Alex reveals |
 | 07-vote | both | a dot vote on the revealed notes, then the ranked results |
-| 08-guest | both + phone | Alex's Share → "Share with a client" makes and copies the guest link in one click; Jordan joins on a phone with just a name, shows as "(guest)", comments; Alex's bell shows it and opens the thread |
+| 08-guest | both + phone | Alex's Share → "Share with a client" makes and copies the guest link in one click; Jordan joins on a phone with just a name (the page load and "Connecting to board…" are cut), shows as "(guest)", comments; Alex's bell shows it and opens the thread |
 | 09-present | both | Present → "Invite everyone"; Sam gets the invite banner and joins; "1 following"; two slides in step; End (for everyone) |
-| 10-history | both | Export (frame PNG / PDF) and the History panel's automatic checkpoint, previewed |
+| 10-history | both | Export (frame PNG / PDF) and the "⋯" menu closed, then the History panel: the automatic "Before AI grouped notes into themes" checkpoint, previewed read-only and zoomed in on the Brainstorm frame as it was |
 | 11-outro | card | "Lobby — live today" and three facts |
 
 ## Known quirks worked around (off camera)

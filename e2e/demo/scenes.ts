@@ -149,7 +149,7 @@ export async function recordDemo(opts: RecordOptions): Promise<Timeline> {
         const cards = A.page.getByTestId('board-card')
         await Promise.all([
           (async () => {
-            await alex.pause(700)
+            await alex.pause(450)
             await alex.hover(cards.nth(0), { v: 0.4 })
             await alex.pause(500)
             await alex.hover(cards.nth(1), { v: 0.45 })
@@ -157,7 +157,7 @@ export async function recordDemo(opts: RecordOptions): Promise<Timeline> {
             await alex.clickOn(A.page.getByRole('button', { name: 'New board' }).first())
             const dialog = A.page.getByTestId('create-board-dialog')
             await dialog.waitFor()
-            await alex.pause(700)
+            await alex.pause(450)
             await alex.clickOn(A.page.getByTestId('template-sample'), { v: 0.35 })
             await alex.pause(500)
             await alex.clickOn(A.page.getByTestId('create-board-title'), { u: 0.2 })
@@ -179,7 +179,7 @@ export async function recordDemo(opts: RecordOptions): Promise<Timeline> {
             await sam.move({ x: 700, y: 820 }, 900)
           })(),
         ])
-        await clock.at(clock.elapsed + 1200)
+        await clock.at(clock.elapsed + 800)
       },
       {
         prepare: async () => {
@@ -236,7 +236,7 @@ export async function recordDemo(opts: RecordOptions): Promise<Timeline> {
             await alex.pause(600)
             const storyTheme = await shapeByText(A.page, 'Story').catch(() => null)
             if (storyTheme) await alex.move(await toScreen(A.page, center(storyTheme.box)), 800)
-            await alex.pause(900)
+            await alex.pause(700)
             await alex.move(await toScreen(A.page, { x: slot.x - 40, y: slot.y + 140 }), 1000)
           })(),
           (async () => {
@@ -246,7 +246,7 @@ export async function recordDemo(opts: RecordOptions): Promise<Timeline> {
             await sam.click(await toScreen(S.page, slot), { ms: 900 })
             await waitFor(() => editingId(S.page), 'Sam editing the new note')
             await sam.pause(250)
-            await sam.type("Show the villain's first win")
+            await sam.type("Show the villain's first win", 14)
             await sam.pause(400)
             await sam.press('Escape', 400)
             await sam.press('Escape', 200)
@@ -275,7 +275,7 @@ export async function recordDemo(opts: RecordOptions): Promise<Timeline> {
         await alex.press('Escape', 300)
         // The save indicator: every change is stored as it happens.
         await alex.hover(A.page.getByTestId('save-status'), { ms: 900 })
-        await clock.at(clock.elapsed + 1500)
+        await clock.at(clock.elapsed + 1000)
       },
       {
         prepare: async () => {
@@ -343,7 +343,7 @@ export async function recordDemo(opts: RecordOptions): Promise<Timeline> {
             view(S.page, b, { inset: 110, ms: 800 }),
           ])
         }
-        await clock.at(clock.elapsed + 1100)
+        await clock.at(clock.elapsed + 900)
       },
       {
         prepare: async () => {
@@ -374,6 +374,22 @@ export async function recordDemo(opts: RecordOptions): Promise<Timeline> {
         await alex.pause(400)
         await alex.move(from, 700)
         await alex.drag(from, to, 1100)
+        // The brush also takes Alex's connector from 03 (it lies between the notes): a shift-click on
+        // its line takes it out again, so only the notes are sent ("only the notes you select").
+        const noteIds = new Set(notes.map((n) => n.id))
+        for (const arrow of (await shapes(A.page)).filter((s) => s.type === 'arrow' && inside(s.box, area))) {
+          const on = await pointOnShape(A.page, arrow.id)
+          if (!on) continue
+          await alex.pause(250)
+          await A.page.keyboard.down('Shift')
+          await alex.click(await toScreen(A.page, on), { ms: 600 })
+          await A.page.keyboard.up('Shift')
+        }
+        const picked = await A.page.evaluate(() =>
+          (window.editor as unknown as { getSelectedShapeIds(): string[] }).getSelectedShapeIds(),
+        )
+        const extra = picked.filter((id) => !noteIds.has(id))
+        if (extra.length) log(`[05-ai] the selection still holds ${extra.length} shape(s) that are not notes`)
         const button = A.page.getByTestId('selection-ai')
         await button.waitFor({ timeout: 8000 })
         await alex.pause(450)
@@ -392,13 +408,13 @@ export async function recordDemo(opts: RecordOptions): Promise<Timeline> {
         await regroup.or(notice).or(started).first().waitFor({ timeout: 8000 })
         // The tour's notes already sit under its theme cards: Lobby asks before regrouping them.
         if (await regroup.isVisible().catch(() => false)) {
-          await alex.pause(900)
+          await alex.pause(600)
           await alex.clickOn(regroup)
           await notice.or(started).first().waitFor({ timeout: 8000 })
         }
         // First use in this workspace: "Sends the selected text to OpenAI" (what the narration says).
         if (await notice.isVisible().catch(() => false)) {
-          await alex.pause(1500)
+          await alex.pause(1300)
           await alex.clickOn(notice)
         }
         const done = A.page.getByTestId('ai-done')
@@ -422,7 +438,7 @@ export async function recordDemo(opts: RecordOptions): Promise<Timeline> {
           throw new Error(`AI said: ${(await failed.textContent()) ?? 'an error'}`)
         }
         await alex.move({ x: 640, y: 780 }, 600)
-        await alex.pause(500)
+        await alex.pause(700)
         // Closer on the tidy clusters, on both screens, so the theme names read.
         const grouped = await aiClusters(A.page)
         // The "Grouped … Undo" notice has been read by now: it would sit over the first theme name.
@@ -434,7 +450,7 @@ export async function recordDemo(opts: RecordOptions): Promise<Timeline> {
           ])
         }
         await sam.move({ x: 470, y: 700 }, 900)
-        await clock.at(clock.elapsed + 1600)
+        await clock.at(clock.elapsed + 1300)
       },
       {
         prepare: async () => {
@@ -467,7 +483,7 @@ export async function recordDemo(opts: RecordOptions): Promise<Timeline> {
         await dialog.waitFor()
         await alex.pause(250)
         await alex.clickOn(dialog.getByTestId('pn-prompt-input'), { u: 0.3 })
-        await alex.type('What should the teaser show?', 22)
+        await alex.type('What should the teaser show?', 30)
         await alex.pause(200)
         const target = dialog.getByTestId('pn-target-new')
         if (!(await target.isChecked())) await alex.clickOn(target)
@@ -485,11 +501,11 @@ export async function recordDemo(opts: RecordOptions): Promise<Timeline> {
           await panel.waitFor()
           await who.clickOn(panel.getByTestId('pn-compose-text'), { u: 0.3 })
           for (const text of notes) {
-            await who.type(text, 24)
+            await who.type(text, 32)
+            await who.pause(100)
+            await who.clickOn(panel.getByTestId('pn-add'), { ms: 350 })
             await who.pause(120)
-            await who.clickOn(panel.getByTestId('pn-add'), { ms: 400 })
-            await who.pause(200)
-            await who.clickOn(panel.getByTestId('pn-compose-text'), { u: 0.3, ms: 400 })
+            await who.clickOn(panel.getByTestId('pn-compose-text'), { u: 0.3, ms: 350 })
           }
         }
         await Promise.all([
@@ -506,17 +522,17 @@ export async function recordDemo(opts: RecordOptions): Promise<Timeline> {
         ])
         await waitText(A.page.getByTestId('pn-counts'), /3 notes from 2 people/)
         await alex.hover(A.page.getByTestId('pn-counts'), { ms: 450 })
-        await alex.pause(450)
-        await alex.clickOn(A.page.getByTestId('pn-reveal'))
+        await alex.pause(350)
+        await alex.clickOn(A.page.getByTestId('pn-reveal'), { ms: 500 })
         await waitFor(async () => (await privateNotes(S.page)).length >= 3 || null, 'the revealed notes')
-        await alex.pause(500)
+        await alex.pause(300)
         // Both close their panels, then "Show me" on the reveal notice brings each view to the notes.
         await Promise.all([closeDock(A.page, alex), closeDock(S.page, sam)])
         const showMe = async (who: Actor, page: Page) => {
           const button = page.getByTestId('pn-toast-show')
           if (await button.isVisible().catch(() => false)) {
-            await who.clickOn(button, { ms: 600 })
-            await sleep(700)
+            await who.clickOn(button, { ms: 500 })
+            await sleep(600)
           } else {
             const notes = union((await privateNotes(page)).map((n) => n.box))
             await view(page, notes, { inset: 110, ms: 700 })
@@ -525,11 +541,11 @@ export async function recordDemo(opts: RecordOptions): Promise<Timeline> {
         await Promise.all([
           showMe(alex, A.page),
           (async () => {
-            await sam.pause(350)
+            await sam.pause(200)
             await showMe(sam, S.page)
           })(),
         ])
-        await clock.at(clock.elapsed + 1100)
+        await clock.at(clock.elapsed + 1000)
       },
       {
         prepare: async () => {
@@ -542,6 +558,7 @@ export async function recordDemo(opts: RecordOptions): Promise<Timeline> {
           const plan = await frameByName(A.page, '3 · Plan')
           const spot = { x: plan.box.x + plan.box.w + 80, y: plan.box.y + plan.box.h + 530 }
           await Promise.all([centerView(A.page, spot, 0.9), centerView(S.page, spot, 0.9)])
+          await Promise.all([tidy(A.page), tidy(S.page)])
           await Promise.all([alex.nudge(), sam.nudge()])
         },
       },
@@ -561,22 +578,19 @@ export async function recordDemo(opts: RecordOptions): Promise<Timeline> {
         await alex.clickOn(perPerson)
         await perPerson.fill('')
         await alex.type('2')
+        // Only the "Private ideas" frame's notes can be voted on (the frame holds nothing else).
         const scope = dialog.getByTestId('vote-scope')
-        await alex.hover(scope, { ms: 450 })
+        await alex.hover(scope, { ms: 400 })
         const option = await scope
           .locator('option', { hasText: 'Private ideas' })
           .first()
           .getAttribute('value')
         if (option) await scope.selectOption(option)
-        await alex.pause(250)
-        const types = dialog.getByTestId('vote-types')
-        await alex.hover(types, { ms: 350 })
-        await types.selectOption('note')
-        await alex.pause(250)
-        await alex.clickOn(dialog.getByTestId('vote-setup-submit'))
+        await alex.pause(350)
+        await alex.clickOn(dialog.getByTestId('vote-setup-submit'), { ms: 500 })
         // Starting the vote brings the facilitator's view to its frame; then Alex zooms in on the notes.
         await A.page.getByTestId('vote-bar').waitFor({ timeout: 15_000 })
-        await sleep(700)
+        await sleep(450)
         const noteBox = union((await privateNotes(A.page)).map((n) => n.box))
         await view(A.page, noteBox, { inset: 60, ms: 500 })
         const notes = await privateNotes(A.page)
@@ -600,7 +614,7 @@ export async function recordDemo(opts: RecordOptions): Promise<Timeline> {
             const n = byText(t)
             if (!n) continue
             await who.click(await toScreen(page, { x: n.box.x + n.box.w * 0.5, y: n.box.y + n.box.h * 0.6 }))
-            await who.pause(600)
+            await who.pause(400)
           }
         }
         await Promise.all([
@@ -614,15 +628,15 @@ export async function recordDemo(opts: RecordOptions): Promise<Timeline> {
             await sam.clickOn(S.page.getByTestId('vote-done'))
           })(),
         ])
-        await alex.pause(400)
+        await alex.pause(250)
         const panel = A.page.getByTestId('dock-panel-voting')
-        await alex.clickOn(panel.getByTestId('vote-reveal'))
+        await alex.clickOn(panel.getByTestId('vote-reveal'), { ms: 600 })
         await S.page
           .getByTestId('vote-results-card')
           .waitFor({ timeout: 8000 })
           .catch(() => {})
-        await alex.hover(panel.getByTestId('vote-results'), { v: 0.3, ms: 700 }).catch(() => {})
-        await clock.at(clock.elapsed + 2000)
+        await alex.hover(panel.getByTestId('vote-results'), { v: 0.3, ms: 600 }).catch(() => {})
+        await clock.at(clock.elapsed + 1500)
       },
       {
         prepare: async () => {
@@ -660,13 +674,13 @@ export async function recordDemo(opts: RecordOptions): Promise<Timeline> {
         const dialog = A.page.getByTestId('share-dialog')
         const client = dialog.getByTestId('share-client')
         await client.waitFor({ timeout: 10_000 })
-        await alex.pause(800)
-        await alex.clickOn(client.getByTestId('review-link-create'))
+        await alex.pause(500)
+        await alex.clickOn(client.getByTestId('review-link-create'), { ms: 600 })
         const row = client.getByTestId('review-link-row').first()
         await row.waitFor({ timeout: 10_000 })
         link = await row.getByTestId('review-link-url').inputValue()
         await alex.hover(row.getByTestId('review-link-copy'), { ms: 450 }).catch(() => {})
-        await alex.pause(900)
+        await alex.pause(600)
         await A.page.keyboard.press('Escape')
         await dialog.waitFor({ state: 'detached', timeout: 5000 }).catch(() => {})
         await tidy(A.page)
@@ -687,18 +701,32 @@ export async function recordDemo(opts: RecordOptions): Promise<Timeline> {
         const phone = new Actor('Jordan', P.page, { touch: true })
         win.phone = { start: Date.now(), end: 0 }
         const nameField = P.page.getByTestId('invite-guest-name')
-        await phone.pause(900)
+        await phone.pause(700)
         await phone.clickOn(nameField)
-        await phone.type(PEOPLE.guest, 8)
-        await phone.pause(500)
+        await phone.type(PEOPLE.guest, 10)
+        await phone.pause(400)
         await phone.clickOn(P.page.getByTestId('invite-guest-join'))
-        await boardReady(P.page)
+        // The phone's "Connecting to board…" is cut: the next picture is the board, notes drawn.
+        await clock.cut(async () => {
+          await boardReady(P.page)
+          await waitFor(
+            async () => (await privateNotes(P.page)).length >= 3 || null,
+            'the board on the phone',
+            20_000,
+          ).catch(() => {})
+          await P.page
+            .locator('.tl-shape[data-shape-type="note"]')
+            .first()
+            .waitFor({ timeout: 10_000 })
+            .catch(() => {})
+          await sleep(500)
+        })
         const guestId = await P.page.getByTestId('user-menu').getAttribute('data-user-id')
         // Alex sees the guest arrive: their avatar joins the people on the board.
         const avatar = A.page.locator(`[data-testid="presence-user"][data-user-id="${guestId}"] button`)
         await avatar.waitFor({ timeout: 20_000 })
-        await alex.hover(avatar, { ms: 600 })
-        await phone.pause(600)
+        await alex.hover(avatar, { ms: 500 })
+        await phone.pause(300)
         // The guest (a commenter) leaves a comment on the winning note.
         const commented = await guestComment(P.page, phone, 'Love this one!').catch((e) => {
           log(`[08-guest] guest comment: ${errText(e)}`)
@@ -715,10 +743,10 @@ export async function recordDemo(opts: RecordOptions): Promise<Timeline> {
           const item = A.page.getByTestId('notification-item').filter({ hasText: 'Love this one' }).first()
           let opened = false
           if (lit) {
-            await alex.pause(400)
-            await alex.clickOn(bell, { ms: 700 })
+            await alex.pause(250)
+            await alex.clickOn(bell, { ms: 600 })
             if (await item.isVisible({ timeout: 4000 }).catch(() => false)) {
-              await alex.pause(1000)
+              await alex.pause(700)
               await alex.clickOn(item, { u: 0.4 })
               opened = await A.page
                 .getByTestId('thread-popover')
@@ -738,7 +766,7 @@ export async function recordDemo(opts: RecordOptions): Promise<Timeline> {
               .catch(() => {})
           }
         }
-        await alex.pause(1300)
+        await alex.pause(1500)
         win.phone.end = Date.now()
         await clock.at(clock.elapsed + 300)
       },
@@ -770,39 +798,39 @@ export async function recordDemo(opts: RecordOptions): Promise<Timeline> {
           await A.page.getByTestId('topbar-overflow-panel').waitFor({ timeout: 5000 })
           await alex.pause(350)
         }
-        await alex.clickOn(present.first())
+        await alex.clickOn(present.first(), { ms: 500 })
         await A.page.getByTestId('present-overlay').waitFor({ timeout: 15_000 })
-        await alex.pause(600)
+        await alex.pause(350)
         // The presentation bar (it shows while the pointer moves): "Invite everyone".
         const invite = A.page.getByTestId('present-invite')
-        await alex.move({ x: 560, y: 760 }, 500)
+        await alex.move({ x: 560, y: 760 }, 450)
         await invite.waitFor({ timeout: 8000 })
-        await alex.clickOn(invite, { ms: 700 })
+        await alex.clickOn(invite, { ms: 600 })
         // Sam is asked, not pulled in: the banner, then Join.
         const banner = S.page.getByTestId('live-invite')
         await banner.waitFor({ timeout: 15_000 })
-        await sam.pause(900)
-        await sam.clickOn(banner.getByTestId('live-join'), { ms: 800 })
+        await sam.pause(600)
+        await sam.clickOn(banner.getByTestId('live-join'), { ms: 700 })
         await S.page.getByTestId('present-overlay').waitFor({ timeout: 15_000 })
         await waitText(A.page.getByTestId('live-follower-count'), /1 following/, 10_000).catch(() => {})
-        await alex.hover(A.page.getByTestId('live-follower-count'), { ms: 700 }).catch(() => {})
-        await sam.move({ x: 700, y: 600 }, 900)
-        await alex.pause(900)
+        await alex.hover(A.page.getByTestId('live-follower-count'), { ms: 600 }).catch(() => {})
+        await sam.move({ x: 700, y: 600 }, 700)
+        await alex.pause(500)
         // Two slides on, in step on both screens.
         for (let i = 0; i < 2; i++) {
-          await alex.move({ x: 520 + i * 60, y: 700 - i * 30 }, 400)
-          await alex.press('ArrowRight', 1700)
+          await alex.move({ x: 520 + i * 60, y: 700 - i * 30 }, 350)
+          await alex.press('ArrowRight', 1250)
         }
         // The end, for everyone.
         await alex.move({ x: 600, y: 760 }, 300)
         const end = A.page.getByTestId('present-exit')
         await end.waitFor({ timeout: 5000 })
-        await alex.clickOn(end, { ms: 600 })
+        await alex.clickOn(end, { ms: 500 })
         await S.page
           .getByTestId('live-ended-toast')
           .waitFor({ timeout: 8000 })
           .catch(() => {})
-        await clock.at(clock.elapsed + 1400)
+        await clock.at(clock.elapsed + 1200)
       },
       {
         prepare: async () => {
@@ -829,11 +857,11 @@ export async function recordDemo(opts: RecordOptions): Promise<Timeline> {
           const auto = page.getByTestId('checkpoint-auto')
           await auto.waitFor({ timeout: 10_000 })
           // The panel restores the section's last open state as it loads: let it settle first.
-          await who.pause(700)
+          await who.pause(500)
           const isOpen = () => auto.evaluate((d) => (d as HTMLDetailsElement).open)
           for (let i = 0; i < 2 && !(await isOpen()); i++) {
             await who.clickOn(page.getByTestId('checkpoint-auto-toggle'), { u: 0.2 })
-            await who.pause(400)
+            await who.pause(350)
           }
           const row = page.getByTestId('checkpoint-auto-row').first()
           await row.waitFor({ timeout: 5000 }).catch(() => {})
@@ -843,39 +871,53 @@ export async function recordDemo(opts: RecordOptions): Promise<Timeline> {
           (async () => {
             // Export: one frame as an image, or the whole tour as a PDF (a page per frame).
             const exportButton = A.page.getByTestId('export-button')
+            const overflow = A.page.getByTestId('topbar-overflow-panel')
             if (!(await exportButton.isVisible().catch(() => false))) {
               // Folded into the top bar's "⋯" menu, like Present.
-              await alex.clickOn(A.page.getByTestId('topbar-overflow'), { ms: 700 })
-              await A.page.getByTestId('topbar-overflow-panel').waitFor({ timeout: 5000 })
-              await alex.pause(300)
+              await alex.clickOn(A.page.getByTestId('topbar-overflow'), { ms: 600 })
+              await overflow.waitFor({ timeout: 5000 })
+              await alex.pause(250)
             }
-            await alex.clickOn(exportButton.first())
+            await alex.clickOn(exportButton.first(), { ms: 500 })
             const pdf = A.page.getByTestId('export-pdf')
             await pdf.waitFor()
-            await alex.pause(400)
-            await alex.clickOn(A.page.getByTestId('export-area-frame'))
-            await alex.hover(A.page.getByTestId('export-png'), { ms: 550 })
             await alex.pause(300)
+            await alex.clickOn(A.page.getByTestId('export-area-frame'), { ms: 600 })
+            await alex.hover(A.page.getByTestId('export-png'), { ms: 500 })
+            await alex.pause(250)
             // The PDF is made in the browser; the scene does not wait long for the file.
-            const download = A.page.waitForEvent('download', { timeout: 4000 }).catch(() => null)
-            await alex.clickOn(pdf)
+            const download = A.page.waitForEvent('download', { timeout: 2000 }).catch(() => null)
+            await alex.clickOn(pdf, { ms: 600 })
             await download
-            await alex.pause(400)
+            await alex.pause(300)
             await A.page.keyboard.press('Escape')
             await alex.pause(200)
+            // The "⋯" menu Export came from is still open behind the dialog: it closes before History.
+            if (await overflow.isVisible().catch(() => false)) {
+              await alex.clickOn(A.page.getByTestId('topbar-overflow'), { ms: 500 })
+              await overflow.waitFor({ state: 'hidden', timeout: 3000 }).catch(() => {})
+            }
+            if (await overflow.isVisible().catch(() => false)) {
+              await A.page.keyboard.press('Escape')
+              await overflow.waitFor({ state: 'hidden', timeout: 3000 }).catch(() => {})
+            }
           })(),
           (async () => {
-            await sam.pause(700)
+            await sam.pause(600)
             const row = await openHistory(sam, S.page)
-            await sam.pause(500)
-            if (await row.count()) await sam.hover(row, { ms: 700, u: 0.35 })
+            await sam.pause(400)
+            if (await row.count()) await sam.hover(row, { ms: 600, u: 0.35 })
           })(),
         ])
-        const row = await openHistory(alex, A.page)
-        await alex.pause(400)
+        await openHistory(alex, A.page)
+        // The checkpoint taken just before the AI regrouped the brainstorm: the board as it was.
+        const rows = A.page.getByTestId('checkpoint-auto-row')
+        const beforeAi = rows.filter({ hasText: /Before AI/ }).first()
+        const row = (await beforeAi.count()) ? beforeAi : rows.first()
+        await alex.pause(300)
         const preview = row.getByTestId('checkpoint-preview')
         if (await preview.count()) {
-          await alex.clickOn(preview)
+          await alex.clickOn(preview, { ms: 600 })
           // The earlier version of the board, drawn read-only (wait for it, not its spinner).
           await A.page
             .getByTestId('checkpoint-preview-canvas')
@@ -885,9 +927,14 @@ export async function recordDemo(opts: RecordOptions): Promise<Timeline> {
             .getByText('Opening the checkpoint')
             .waitFor({ state: 'detached', timeout: 15_000 })
             .catch(() => {})
-          await alex.pause(400)
-          await alex.move({ x: 480, y: 560 }, 700)
-          await alex.pause(1800)
+          await alex.pause(500)
+          // Closer on the Brainstorm frame as it was, so it reads: drag it to the middle, then zoom.
+          const zoomed = await zoomPreviewOn(alex, A.page, 'Brainstorm').catch((e) => {
+            log(`[10-history] preview zoom: ${errText(e)}`)
+            return false
+          })
+          if (!zoomed) await alex.move({ x: 480, y: 560 }, 700)
+          await alex.pause(1600)
         }
         await clock.at(clock.elapsed + 800)
       },
@@ -1088,11 +1135,15 @@ async function privateNotes(page: Page): Promise<ShapeInfo[]> {
   return all.filter((s) => s.type === 'note' && s.parentId === frame.id)
 }
 
-/** Off camera: dismisses leftover notices (toasts, the vote's "Results are in" card) with their ×. */
+/**
+ * Dismisses leftover notices with their ×: Lobby's own toasts (`.dr-notice`: "Grouped … Undo", "Start
+ * view set", "… ended the presentation"), tldraw's, and the vote's "Results are in" card.
+ */
 async function tidy(page: Page) {
   await page.evaluate(() => {
     const close = document.querySelectorAll<HTMLButtonElement>(
       [
+        '.dr-notices .dr-notice__close',
         'button[aria-label="Dismiss the results"]',
         '.tlui-toast__close',
         '.tlui-toast__container button[aria-label^="Close"]',
@@ -1100,6 +1151,8 @@ async function tidy(page: Page) {
       ].join(', '),
     )
     for (const b of close) b.click()
+    // The keycap of an off-camera Esc (it stays up for about a second) would open the next scene.
+    for (const k of document.querySelectorAll('.__demo_key')) k.remove()
     // A dialog that just closed hands focus back to its button, which then shows a focus ring.
     if (document.activeElement instanceof HTMLButtonElement) document.activeElement.blur()
   })
@@ -1131,6 +1184,86 @@ async function brainstormNotes(page: Page): Promise<ShapeInfo[]> {
   return notes
 }
 
+/**
+ * In the checkpoint preview (a read-only canvas on the hand tool): drags the named frame to the middle
+ * and zooms in on it with the wheel (Ctrl+wheel, as a trackpad pinch sends) until it fills the view.
+ * False when the frame is not found.
+ */
+async function zoomPreviewOn(who: Actor, page: Page, frameName: string): Promise<boolean> {
+  const canvas = page.getByTestId('checkpoint-preview-canvas')
+  const frameBox = () =>
+    page.evaluate((name) => {
+      const root = document.querySelector('[data-testid="checkpoint-preview-canvas"]')
+      for (const el of root?.querySelectorAll('.tl-shape[data-shape-type="frame"]') ?? []) {
+        if (!(el.textContent ?? '').includes(name)) continue
+        const r = el.getBoundingClientRect()
+        return { x: r.x, y: r.y, w: r.width, h: r.height }
+      }
+      return null
+    }, frameName)
+  const c = await canvas.boundingBox()
+  const f = await frameBox()
+  if (!c || !f || f.w < 4) return false
+  const mid = { x: c.x + c.width / 2, y: c.y + c.height / 2 }
+  await who.drag({ x: f.x + f.w / 2, y: f.y + f.h / 2 }, mid, 700)
+  await sleep(250)
+  const g = (await frameBox()) ?? f
+  await who.move({ x: g.x + g.w / 2, y: g.y + g.h / 2 }, 250)
+  // Small Ctrl+wheel steps until the frame fills the preview (checked as it grows, not assumed).
+  const fills = (b: { w: number; h: number }) => b.w >= c.width * 0.9 || b.h >= c.height * 0.86
+  await page.keyboard.down('Control')
+  try {
+    for (let i = 0; i < 60; i++) {
+      const now = await frameBox()
+      if (!now || fills(now)) break
+      await page.mouse.wheel(0, -10)
+      await sleep(25)
+    }
+  } finally {
+    await page.keyboard.up('Control')
+  }
+  return true
+}
+
+/** `b` lies inside `outer` (page bounds). */
+const inside = (b: Box, outer: Box) =>
+  b.x >= outer.x - 1 &&
+  b.y >= outer.y - 1 &&
+  b.x + b.w <= outer.x + outer.w + 1 &&
+  b.y + b.h <= outer.y + outer.h + 1
+
+/**
+ * A page point where a click lands on this shape (a connector's line, not a note under it): points
+ * along its bounds' diagonals, nearest the middle first, asked of the editor's own hit test.
+ */
+async function pointOnShape(page: Page, id: string): Promise<{ x: number; y: number } | null> {
+  return page.evaluate((shapeId) => {
+    type P = { x: number; y: number }
+    const ed = window.editor as unknown as {
+      getShapePageBounds(id: string): { x: number; y: number; w: number; h: number } | undefined
+      getShapeAtPoint(p: P, o: object): { id: string } | undefined
+      getHitTestMargin(): number
+    }
+    const b = ed.getShapePageBounds(shapeId)
+    if (!b) return null
+    const ts = [0.5, 0.45, 0.55, 0.4, 0.6, 0.35, 0.65, 0.3, 0.7, 0.25, 0.75, 0.2, 0.8]
+    for (const t of ts) {
+      for (const p of [
+        { x: b.x + b.w * t, y: b.y + b.h * t },
+        { x: b.x + b.w * t, y: b.y + b.h * (1 - t) },
+      ]) {
+        const hit = ed.getShapeAtPoint(p, {
+          margin: ed.getHitTestMargin(),
+          hitInside: true,
+          renderingOnly: true,
+        })
+        if (hit?.id === shapeId) return p
+      }
+    }
+    return null
+  }, id)
+}
+
 /** The AI's theme labels and the notes under them (page bounds), or null before a grouping. */
 async function aiClusters(page: Page): Promise<Box | null> {
   const all = await shapes(page)
@@ -1154,7 +1287,7 @@ async function guestComment(page: Page, who: Actor, text: string): Promise<boole
   const tool = page.getByRole('button', { name: 'Comment tool', exact: true }).first()
   if (!(await tool.isVisible().catch(() => false))) throw new Error('no comment tool on the phone')
   await who.clickOn(tool)
-  await who.pause(500)
+  await who.pause(350)
   const notes = await privateNotes(page)
   const target = notes.find((n) => n.text.startsWith('The villain wins')) ?? notes[0]
   if (!target) return false
@@ -1175,11 +1308,11 @@ async function guestComment(page: Page, who: Actor, text: string): Promise<boole
     undefined,
     { timeout: 5000 },
   )
-  await who.type(text, 12)
-  await who.pause(300)
+  await who.type(text, 15)
+  await who.pause(250)
   await page.keyboard.press('Enter')
   await page.getByTestId('thread-popover').waitFor({ timeout: 10_000 })
-  await who.pause(900)
+  await who.pause(500)
   return true
 }
 
