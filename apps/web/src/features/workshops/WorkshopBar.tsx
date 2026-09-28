@@ -18,6 +18,7 @@ import {
 } from './countdown.ts'
 import { HandsChip, HandsSection } from './Hands.tsx'
 import { isFacilitator, useNow, useWorkshop } from './hooks.ts'
+import { PrivateNotesChip, PrivateNotesSection } from './private-notes/index.tsx'
 import { ReactionControl } from './Reactions.tsx'
 import { readSessionSettings, writeSessionSettings } from './session-settings.ts'
 import type { WorkshopStore } from './store.ts'
@@ -160,6 +161,7 @@ export function WorkshopBar({ ctx }: { ctx: FeatureContext }) {
           Voting · {snap.ballot.myRemaining} left
         </button>
       )}
+      <PrivateNotesChip ctx={ctx} />
       <HandsChip
         snap={snap}
         onOpen={() => {
@@ -447,6 +449,8 @@ function WorkshopPopover({
           )}
         </section>
       )}
+
+      <PrivateNotesSection ctx={ctx} onClose={() => onClose(false)} />
 
       {facilitator && (
         <section className="dr-wk-pop__section" aria-label="Gather everyone">

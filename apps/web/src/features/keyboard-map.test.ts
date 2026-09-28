@@ -238,6 +238,14 @@ describe('tldraw component slots and options', () => {
   it('dock panel ids are unique across features', () => {
     const ids = BOARD_FEATURES.flatMap((f) => (f.panels ?? []).map((p) => p.id))
     expect(new Set(ids).size).toBe(ids.length)
-    expect(ids.sort()).toEqual(['comments', 'frames', 'history', 'search', 'templates', 'voting'])
+    expect(ids.sort()).toEqual([
+      'comments',
+      'frames',
+      'history',
+      'private-notes', // workshops: private brainstorming (wave 3)
+      'search',
+      'templates',
+      'voting',
+    ])
   })
 })

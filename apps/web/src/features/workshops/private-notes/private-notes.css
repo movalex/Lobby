@@ -1,0 +1,293 @@
+/* Private brainstorming (workshops private-notes). App tokens only (--dr-*), so both themes work. */
+
+/* ---- top bar chip ---------------------------------------------------------------------------------- */
+
+.dr-wk-chip.dr-pn-chip {
+  border-color: var(--dr-accent-line);
+  background: var(--dr-accent-bg);
+  color: var(--dr-accent-ink);
+}
+.dr-wk-chip.dr-pn-chip:hover {
+  background: var(--dr-hover);
+}
+.dr-pn-chip svg {
+  flex: none;
+}
+.dr-pn-chip__counts {
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+}
+/* The overflow menu (phones) has room for the label; the bar itself may not. */
+@media (max-width: 1100px) {
+  .dr-topbar .dr-pn-chip__label {
+    display: none;
+  }
+}
+
+/* ---- panel ------------------------------------------------------------------------------------------ */
+
+.dr-pn {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  font-size: 13.5px;
+  color: var(--dr-ink);
+}
+.dr-pn h3 {
+  margin: 0;
+  font-size: 13.5px;
+  font-weight: 650;
+}
+.dr-pn-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+}
+.dr-pn-empty p {
+  margin: 0;
+  line-height: 1.45;
+}
+.dr-pn-head {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px;
+  border: 1px solid var(--dr-accent-line);
+  border-radius: 10px;
+  background: var(--dr-accent-bg);
+}
+.dr-pn-eyebrow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  color: var(--dr-accent-ink);
+  font-size: 12px;
+  font-weight: 700;
+}
+.dr-pn-tag {
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--dr-surface);
+  color: var(--dr-ink-2);
+  font-weight: 600;
+}
+.dr-pn .dr-pn-prompt {
+  font-size: 16px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+.dr-pn-counts {
+  margin: 0;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.dr-pn-show {
+  align-self: flex-start;
+}
+.dr-pn-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.dr-pn-hint {
+  margin: 0;
+  color: var(--dr-ink-2);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+.dr-pn-status {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--dr-warn-bg);
+  color: var(--dr-warn);
+  font-weight: 600;
+}
+
+/* ---- writing ------------------------------------------------------------------------------------------ */
+
+.dr-pn-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.dr-pn-label {
+  font-size: 13px;
+  font-weight: 600;
+}
+.dr-pn-textarea {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 76px;
+  padding: 8px 10px;
+  border: 1px solid var(--dr-line-strong);
+  border-radius: 8px;
+  background: var(--dr-surface);
+  color: var(--dr-ink);
+  font: 14px / 1.4 var(--dr-font);
+  resize: vertical;
+}
+.dr-pn-textarea[aria-invalid="true"] {
+  border-color: var(--dr-danger);
+}
+.dr-pn-editor__row {
+  display: flex;
+  justify-content: flex-end;
+}
+.dr-pn-count {
+  color: var(--dr-ink-2);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.dr-pn-count--over {
+  color: var(--dr-danger);
+  font-weight: 700;
+}
+.dr-pn-editor__actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+fieldset.dr-pn-colors {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(30px, 1fr));
+  gap: 5px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.dr-pn-color {
+  position: relative;
+  display: block;
+  cursor: pointer;
+}
+.dr-pn-color__chip {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 30px;
+  border: 1px solid var(--dr-line-strong);
+  border-radius: 7px;
+  font: 600 11px var(--dr-font);
+}
+.dr-pn-color input:checked + .dr-pn-color__chip {
+  outline: 2px solid var(--dr-accent-ink);
+  outline-offset: 1px;
+}
+.dr-pn-color input:focus-visible + .dr-pn-color__chip {
+  outline: 2px solid var(--dr-focus);
+  outline-offset: 2px;
+}
+
+/* ---- my notes ---------------------------------------------------------------------------------------- */
+
+.dr-pn-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.dr-pn-note {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.dr-pn-note__text {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 6px;
+  box-shadow: 0 1px 2px rgb(27 35 48 / 18%);
+  font-size: 14px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.dr-pn-note__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+}
+.dr-pn-danger {
+  color: var(--dr-danger);
+}
+
+/* ---- facilitator ------------------------------------------------------------------------------------- */
+
+.dr-pn-facil {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--dr-line);
+  border-radius: 10px;
+}
+.dr-pn-wide {
+  width: 100%;
+  justify-content: center;
+}
+fieldset.dr-pn-confirm {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.dr-pn-confirm legend {
+  margin: 0 0 8px;
+  padding: 0;
+  line-height: 1.4;
+}
+.dr-btn.dr-pn-danger-btn {
+  border-color: var(--dr-danger-fill);
+  background: var(--dr-danger-fill);
+  color: var(--dr-on-danger);
+}
+
+/* ---- setup dialog ---------------------------------------------------------------------------------------- */
+
+/* .dr-form styles labels as block headings; these are radio/checkbox rows. */
+fieldset.dr-pn-fieldset {
+  min-width: 0;
+  margin: 16px 0 0;
+  padding: 0;
+  border: 0;
+}
+.dr-pn-fieldset legend {
+  margin: 0 0 6px;
+  padding: 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+.dr-form .dr-pn-radio,
+.dr-form .dr-pn-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 6px 0 0;
+  font-weight: 500;
+  line-height: 1.35;
+  cursor: pointer;
+}
+.dr-form .dr-pn-check {
+  margin-top: 16px;
+}
+.dr-pn-radio input,
+.dr-pn-check input {
+  margin: 2px 0 0;
+}
+.dr-pn-radio input:disabled + span {
+  color: var(--dr-ink-2);
+}
+.dr-pn-form .dr-pn-hint {
+  margin: 4px 0 0 24px;
+}
+.dr-pn-form .dr-field-error {
+  margin: 10px 0 0;
+}

@@ -406,3 +406,185 @@ export function rankVoteResults(totals: Iterable<{ shapeId: string; count: numbe
   })
   return out
 }
+
+// ---- private brainstorming (wave 3, "private-notes"; build plan §9) --------------------------------
+//
+// Drafts live in a private server namespace (Postgres rows readable only by their author) and reach
+// the board only when the starter or a board owner reveals them: the sync server then writes them as
+// real note shapes into the target frame in one storage transaction. Nothing here ever carries
+// another person's draft text: events and every response carry counts, and `myNotes` is only ever
+// the CALLER's own drafts. Anonymous sessions never tell anyone who wrote what, before or after.
+
+export const PRIVATE_BRAINSTORM_ID_PATTERN = /^pbs_[0-9A-Za-z]{10,40}$/
+export const PRIVATE_NOTE_ID_PATTERN = /^pnt_[0-9A-Za-z]{10,40}$/
+export const PrivateBrainstormId = z.string().regex(PRIVATE_BRAINSTORM_ID_PATTERN)
+export const PrivateNoteId = z.string().regex(PRIVATE_NOTE_ID_PATTERN)
+
+/** Most characters (Unicode code points, like Postgres char_length) in one private note. */
+export const PRIVATE_NOTE_MAX_CHARS = 500
+export const PRIVATE_PROMPT_MAX_CHARS = 200
+/** Drafts one person may hold in one session, and drafts one session may hold in total. */
+export const PRIVATE_NOTES_PER_PERSON_MAX = 50
+export const PRIVATE_NOTES_PER_SESSION_MAX = 1000
+/** The frame a brainstorm creates when no frame is selected. */
+export const PRIVATE_FRAME_DEFAULT_NAME = 'Private ideas'
+
+/** The note palette's colour names (tldraw colour styles; the web palette gives them our names). */
+export const PRIVATE_NOTE_COLORS = [
+  'black',
+  'yellow',
+  'orange',
+  'light-red',
+  'red',
+  'light-violet',
+  'violet',
+  'blue',
+  'light-blue',
+  'green',
+  'light-green',
+  'grey',
+  'white',
+] as const
+export const PrivateNoteColor = z.enum(PRIVATE_NOTE_COLORS)
+export type PrivateNoteColor = z.infer<typeof PrivateNoteColor>
+
+/** Code points, as Postgres char_length counts them (an emoji is one, not two UTF-16 units). */
+export const codePointLength = (s: string) => [...s].length
+
+// C0 controls except tab and newline, DEL, and the C1 range: never part of a note or a prompt.
+// biome-ignore lint/suspicious/noControlCharactersInRegex: the point is to find control characters
+const PRIVATE_CONTROL_RE = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/
+
+/** Trimmed, CRLF normalized, 1..PRIVATE_NOTE_MAX_CHARS code points, no control characters. */
+export const PrivateNoteText = z
+  .string()
+  .transform((s) => s.replace(/\r\n?/g, '\n').trim())
+  .refine((s) => s.length > 0, { message: 'Write something first.' })
+  .refine((s) => codePointLength(s) <= PRIVATE_NOTE_MAX_CHARS, {
+    message: `A note can have at most ${PRIVATE_NOTE_MAX_CHARS} characters.`,
+  })
+  .refine((s) => !PRIVATE_CONTROL_RE.test(s), {
+    message: 'The note contains characters that cannot be shown.',
+  })
+
+/** One line: whitespace runs collapse to one space. */
+export const PrivatePrompt = z
+  .string()
+  .transform((s) => s.replace(/\s+/g, ' ').trim())
+  .refine((s) => s.length > 0, { message: 'Write a prompt for everyone.' })
+  .refine((s) => codePointLength(s) <= PRIVATE_PROMPT_MAX_CHARS, {
+    message: `The prompt can have at most ${PRIVATE_PROMPT_MAX_CHARS} characters.`,
+  })
+  .refine((s) => !PRIVATE_CONTROL_RE.test(s), {
+    message: 'The prompt contains characters that cannot be shown.',
+  })
+
+const PageRecordId = z.string().regex(/^page:[A-Za-z0-9_-]{1,100}$/)
+const Coord = z.number().finite().min(-10_000_000).max(10_000_000)
+/** A target frame's width and height at the start (clients clamp a larger frame to this). */
+export const PRIVATE_FRAME_MAX_EXTENT = 100_000
+const Extent = z.number().finite().min(1).max(PRIVATE_FRAME_MAX_EXTENT)
+
+/**
+ * Where the notes go: a frame on the board (the selected one, or the "Private ideas" frame the
+ * starter's client just created in view). `pageId`/`x`/`y`/`w`/`h` are where it was when the session
+ * started (page coordinates): if the frame is gone at reveal, the notes get a new frame there.
+ */
+export const PrivateTarget = z.object({
+  frameId: VoteShapeId,
+  pageId: PageRecordId,
+  x: Coord,
+  y: Coord,
+  w: Extent,
+  h: Extent,
+})
+export type PrivateTarget = z.infer<typeof PrivateTarget>
+
+export const StartPrivateBrainstormInput = z.object({
+  prompt: PrivatePrompt,
+  anonymous: z.boolean(),
+  target: PrivateTarget,
+})
+export type StartPrivateBrainstormInput = z.input<typeof StartPrivateBrainstormInput>
+
+/**
+ * - open: people are drafting;
+ * - revealed: revealed; the notes are being placed on the board, or placing them failed (retry);
+ * - placed / cancelled: over (the drafts are deleted).
+ */
+export const PrivateBrainstormStatus = z.enum(['open', 'revealed', 'placed', 'cancelled'])
+export type PrivateBrainstormStatus = z.infer<typeof PrivateBrainstormStatus>
+
+export const PrivateBrainstorm = z.object({
+  id: PrivateBrainstormId,
+  boardId: z.string(),
+  prompt: z.string(),
+  anonymous: z.boolean(),
+  frameId: VoteShapeId,
+  status: PrivateBrainstormStatus,
+  /** The person who started it (they, and board owners, may reveal or cancel it). */
+  createdBy: WsUserId,
+  createdAt: IsoDate,
+  revealedAt: IsoDate.nullable(),
+  endedAt: IsoDate.nullable(),
+  /** How many notes were placed on the board (once placed). */
+  placedCount: z.number().int().nonnegative().nullable(),
+})
+export type PrivateBrainstorm = z.infer<typeof PrivateBrainstorm>
+
+/** Live counts, safe for everyone on the board: "7 notes from 4 people". */
+export const PrivateCounts = z.object({
+  notes: z.number().int().nonnegative(),
+  people: z.number().int().nonnegative(),
+})
+export type PrivateCounts = z.infer<typeof PrivateCounts>
+
+/** One of the CALLER's own drafts (nobody else's is ever returned). */
+export const PrivateNote = z.object({
+  id: PrivateNoteId,
+  text: z.string(),
+  color: PrivateNoteColor,
+  createdAt: IsoDate,
+  updatedAt: IsoDate,
+})
+export type PrivateNote = z.infer<typeof PrivateNote>
+
+/** GET /api/boards/:bid/private-brainstorm, and the answer to every private-brainstorm mutation. */
+export const PrivateBrainstormState = z.object({
+  /** The board's active session (open or revealed), else null. */
+  session: PrivateBrainstorm.nullable(),
+  counts: PrivateCounts,
+  /** The caller's own drafts in the active session, oldest first (empty for people who cannot edit). */
+  myNotes: z.array(PrivateNote),
+  /** Whether the caller may reveal, place or cancel the active session (the API decides). */
+  canReveal: z.boolean(),
+  /** Only in a reveal response: the session that just ended with its notes placed on the board. */
+  placed: PrivateBrainstorm.nullable().default(null),
+})
+export type PrivateBrainstormState = z.infer<typeof PrivateBrainstormState>
+
+export const AddPrivateNoteInput = z.object({ text: PrivateNoteText, color: PrivateNoteColor })
+export type AddPrivateNoteInput = z.input<typeof AddPrivateNoteInput>
+export const UpdatePrivateNoteInput = z
+  .object({ text: PrivateNoteText.optional(), color: PrivateNoteColor.optional() })
+  .refine((v) => v.text !== undefined || v.color !== undefined, { message: 'Nothing to change.' })
+export type UpdatePrivateNoteInput = z.input<typeof UpdatePrivateNoteInput>
+
+export const PRIVATE_NOTES_EVENTS = { changed: 'workshop.private' } as const
+
+/**
+ * Published after every change others should see: start, a draft added or deleted, reveal, placed,
+ * cancelled. `session` is the session that changed (also when it just ended). Counts only: each
+ * client refetches its own drafts.
+ */
+export const PrivateBrainstormEvent = z.object({
+  session: PrivateBrainstorm,
+  counts: PrivateCounts,
+})
+export type PrivateBrainstormEvent = z.infer<typeof PrivateBrainstormEvent>
+
+/**
+ * Placed notes carry `meta[PRIVATE_NOTE_META_KEY] = { session }`, plus `author` (a user id) only when
+ * the session was not anonymous. Anonymous notes name nobody (and have no textLastEditedBy).
+ */
+export const PRIVATE_NOTE_META_KEY = 'drPrivateNote'

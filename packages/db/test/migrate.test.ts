@@ -142,6 +142,7 @@ describe('shipped migrations', () => {
       '0006_workshop_links',
       '0007_assets',
       '0008_session_revocation',
+      '0010_private_notes',
       '0011_board_thumbnails',
       '0012_board_export_policy',
     ])
@@ -158,6 +159,7 @@ describe('shipped migrations', () => {
       '0006_workshop_links',
       '0007_assets',
       '0008_session_revocation',
+      '0010_private_notes',
       '0011_board_thumbnails',
       '0012_board_export_policy',
     ])
@@ -184,6 +186,8 @@ describe('shipped migrations', () => {
       'invitations',
       'notifications',
       'preview_jobs',
+      'private_brainstorms',
+      'private_notes',
       'projects',
       'schema_migrations',
       'sessions',
@@ -222,6 +226,7 @@ describe('shipped migrations', () => {
       '0006_workshop_links',
       '0007_assets',
       '0008_session_revocation',
+      '0010_private_notes',
       '0011_board_thumbnails',
       '0012_board_export_policy',
     ])
