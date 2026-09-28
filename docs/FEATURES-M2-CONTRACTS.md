@@ -49,6 +49,9 @@ Integration owner: main session. Requirements source: `docs/research/miro-ux-che
 | Ctrl/Cmd+P | PDF export dialog (tldraw's `print`, relabelled) | present-export |
 | while presenting: → ↓ Space PgDn / ← ↑ PgUp / Home End / G / Esc | slides; all other board keys are blocked | present-export |
 | Ctrl/Cmd+E (dashboard) | focus board search | dashboard-share |
+| Alt/Option+Shift+M | start a mind map (the selected note/text/shape becomes its central topic; nothing selected: a new map) | mindmap (wave 4) |
+| with one mind-map topic selected or being typed in: Tab / Enter / Shift+Tab | add child / add sibling / move up a level (read in mindmap's capture listener, not tldraw kbds; they shadow no action or tool) | mindmap (wave 4) |
+| with one topic selected: ← → ↑ ↓, F2, printable keys | move through the map (replaces nudging for topics), edit, type-to-edit (appends; RETRO-02 exception) | mindmap (wave 4) |
 
 - Presentation: present-export sets `html[data-dr-presenting]`. Comments hides its whole layer then (integration fix: pins showed on slides); workshops hides its prompts, bars and toasts but keeps the user's own dots, revealed result badges and a floating timer (FAC-03); canvas-ux hides its selection bar.
 - tldraw component slots: canvas-ux owns `Toolbar`, `NavigationPanel`, `StylePanel`, `KeyboardShortcutsDialog`, `ContextMenu` (validation phase: tldraw's menu plus "Unlock all" while the page has locked shapes); present-export owns `CollaboratorCursor`; BoardPage keeps `SharePanel: null` and `InFrontOfTheCanvas`. Dock panels: `search`, `frames`, `templates` (canvas-ux), `comments`, `voting` (workshops), `history`.

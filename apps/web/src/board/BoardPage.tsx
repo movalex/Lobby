@@ -38,6 +38,7 @@ import {
   mergeFeatureProps,
   useFeatureMounts,
 } from '../features/FeatureHost.tsx'
+import { mindmapShapeVisibility } from '../features/mindmap/visibility.ts'
 import { BOARD_FEATURES } from '../features/registry.ts'
 import type { FeatureContext } from '../features/types.ts'
 import { FileCardShapeUtil } from '../file-card/FileCardShapeUtil.tsx'
@@ -651,6 +652,8 @@ function BoardSession({
                   components={featureProps.components}
                   overrides={featureProps.overrides}
                   options={featureProps.options}
+                  // Collapsed mind-map branches (an editor constructor option, not in TldrawOptions).
+                  getShapeVisibility={mindmapShapeVisibility}
                   onMount={onMount}
                   {...IMAGE_HANDLER_LIMITS}
                 >

@@ -11,6 +11,7 @@ import type { Editor, TLUiActionsContextType, TLUiOverrideHelpers, TLUiToolsCont
 import { describe, expect, it } from 'vitest'
 import { chordsOf, findKbdConflicts, type KbdItem } from './canvas-ux/shortcuts.ts'
 import { mergeFeatureProps } from './FeatureHost.tsx'
+import { MINDMAP_KEYS } from './mindmap/keys.ts'
 import { BOARD_FEATURES } from './registry.ts'
 
 const TLDRAW_UI = new URL('../../node_modules/tldraw/src/lib/ui/', import.meta.url)
@@ -120,6 +121,7 @@ describe('keyboard map after every feature override (registry order)', () => {
       'dr-board-search': 'canvas-ux: cmd+f,ctrl+f',
       'dr-comments-select-tool': 'comments: c',
       'dr-comments-toggle-pins': 'comments: shift+c',
+      'dr-mindmap-start': 'mindmap: alt+shift+m',
       'dr-present': 'present-export: cmd+alt+[[Enter]],cmd+alt+enter,ctrl+alt+enter',
       'dr-toggle-minimap': 'canvas-ux: m',
       draw: 'canvas-ux: p,d,b,x',
@@ -182,6 +184,38 @@ describe('keyboard map after every feature override (registry order)', () => {
       'dr-toggle-note-authors',
     ])
       expect(pick(id)?.readonlyOk).toBe(false)
+  })
+})
+
+describe('mindmap keys (wave 4)', () => {
+  it('Alt+Shift+M starts a mind map, on editable boards only', () => {
+    expect(idsFor('alt+shift+m')).toEqual(['dr-mindmap-start'])
+    expect(idsFor('alt+shift+m', true)).toEqual([])
+  })
+
+  it('the keys its own listener takes with a topic selected shadow no tldraw action or tool', () => {
+    // Tab / Shift+Tab / Enter / F2 / arrows are read in mindmap/keyboard.ts (capture phase), not bound
+    // through tldraw: they must never be some action's or tool's chord, or taking them would hide it.
+    for (const chord of MINDMAP_KEYS) {
+      expect(idsFor(chord), chord).toEqual([])
+      expect(idsFor(chord, true), chord).toEqual([])
+    }
+  })
+
+  it('Delete keeps its keys (the mindmap feature only widens what it removes)', () => {
+    const { actions, owner } = mergedMap()
+    expect((actions as Record<string, Item | undefined>).delete?.kbd).toBe(TLDRAW_ACTION_KBDS.delete)
+    expect(owner.has('delete')).toBe(false)
+  })
+
+  it('the Mind map toolbar entry is a flagged main-toolbar button without a key', () => {
+    const { tools } = mergedMap()
+    const tool = (
+      tools as unknown as Record<string, (Item & { meta?: Record<string, unknown> }) | undefined>
+    )['dr-mindmap']
+    expect(tool?.meta?.draftroomToolbar).toBe(true)
+    expect(tool?.kbd).toBeUndefined()
+    expect(tool?.readonlyOk).toBe(false)
   })
 })
 
