@@ -124,7 +124,7 @@ Checks: lint 0 errors / 0 warnings (581 files); typecheck 14 projects; vitest 1,
   - a Monday briefing doc for leadership.
 - **Not built / open**:
   - email sending: the from-domain is undecided, and nothing is sent;
-  - the tldraw production license (a quote is needed before a rollout);
+  - the tldraw production license. **The owner decided to move the canvas to Excalidraw (MIT) instead**, so Lobby runs with no licence fee. The plan is `docs/EXCALIDRAW-MIGRATION.md` (revision 3.1). Staging stays on tldraw, under the trial key, until a rehearsed cut-over that the owner signs off;
   - DBC Ops integration;
   - Kanban;
   - edit latency and pan frame rate on very large boards: the remainder is inside tldraw 5.4.2;
@@ -402,3 +402,8 @@ Checks: lint 0 errors / 0 warnings (581 files); typecheck 14 projects; vitest 1,
     - AI themes avoid an existing map.
   - **Keyboard safety**: board keys (Delete, letters, arrows, Ctrl+A/X/V, ",") act only while the board has the keyboard, and one Ctrl+Z undoes one real change (selection-only steps are skipped). A keyboard comment works on a note inside a frame. The verifier closed Ctrl+X reaching the board through the native cut event (high).
 - Integration after round 3: Ctrl/Cmd+U joins the chrome-safe actions (the keyboard gate blocked it after an upload), and a mixed drop caps its cell at the largest card, so images and cards share one scale with page-space sizes. Final gate: lint clean, typecheck, 3,103 unit tests, 315/315 browser tests. **Deployed 5fe35f2 (14:54–14:56Z)**, healthy, with no errors or FATALs in the logs. Live checked: the threads API serves the team-only privacy fields, and AI is enabled.
+- **Canvas engine decision.** tldraw 4.x/5.x needs a paid production licence (quote-only), and 200+ DBC staff would use Lobby, so **the owner chose to move to Excalidraw** (MIT).
+  - The migration plan went through three revisions, each checked by an independent reviewer against the installed `@excalidraw/*` 0.18.0-1118751 packages and this repo. The third revision resolved all the open musts. It is committed as `docs/EXCALIDRAW-MIGRATION.md` on branch `excalidraw`, with the recheck's remaining gaps tracked in its "Open items" section.
+  - Design: Lobby-owned server-authoritative sync (`ElementRoom`) in `apps/sync`, one SQLite file per board as today. Last writer wins per field group; a server-enforced text lease; Lobby's own field-level undo. Conversion of tldraw boards runs inside the sync process, and a reversible rollback goes through a tldraw bridge release.
+  - Estimate ≈261 pd, about 20 working days to cut-over (26 with buffer). No cut-over date is set before the spike's go/no-go.
+  - **Next: spike A (engine checks)** on branch `spike/excalidraw`.
