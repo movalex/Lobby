@@ -16,7 +16,6 @@ import {
   LockGroup,
   MiscMenuGroup,
   MoveToPageMenu,
-  PreferencesGroup,
   ReorderMenuSubmenu,
   SelectAllMenuItem,
   type TLUiActionsContextType,
@@ -160,24 +159,24 @@ export function ExportOffContextMenuContent() {
   )
 }
 
-/** tldraw 5.4.2's DefaultMainMenuContent without Copy, Copy as, Export as, Download original and Export all as. */
+/**
+ * tldraw 5.4.2's DefaultMainMenuContent without Copy, Copy as, Export as, Download original and Export all as.
+ * The preferences group follows it in MainMenu.tsx (Lobby's, without tldraw's Language submenu).
+ */
 export function ExportOffMainMenuContent() {
   return (
-    <>
-      <TldrawUiMenuGroup id="basic">
-        <TldrawUiMenuSubmenu id="edit" label="menu.edit">
-          <UndoRedoGroup />
-          <MiscMenuGroup />
-          <LockGroup />
-          <TldrawUiMenuGroup id="select-all">
-            <SelectAllMenuItem />
-          </TldrawUiMenuGroup>
-        </TldrawUiMenuSubmenu>
-        <ViewSubmenu />
-        <ExportOffItem />
-        <ExtrasGroup />
-      </TldrawUiMenuGroup>
-      <PreferencesGroup />
-    </>
+    <TldrawUiMenuGroup id="basic">
+      <TldrawUiMenuSubmenu id="edit" label="menu.edit">
+        <UndoRedoGroup />
+        <MiscMenuGroup />
+        <LockGroup />
+        <TldrawUiMenuGroup id="select-all">
+          <SelectAllMenuItem />
+        </TldrawUiMenuGroup>
+      </TldrawUiMenuSubmenu>
+      <ViewSubmenu />
+      <ExportOffItem />
+      <ExtrasGroup />
+    </TldrawUiMenuGroup>
   )
 }

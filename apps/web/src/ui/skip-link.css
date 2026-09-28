@@ -1,0 +1,21 @@
+/* Skip links (ui/SkipLink.tsx): off screen until focused, then a solid pill at the top left. */
+.dr-skip {
+  position: fixed;
+  top: 8px;
+  left: 8px;
+  z-index: 10000;
+  padding: 9px 14px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--dr-navy);
+  color: var(--dr-on-navy);
+  font: 600 14px / 1.2 var(--dr-font);
+  cursor: pointer;
+  transform: translateY(calc(-100% - 16px));
+}
+.dr-skip:focus {
+  transform: none;
+  box-shadow: var(--dr-shadow-pop);
+  outline: 2px solid var(--dr-amber);
+  outline-offset: 2px;
+}

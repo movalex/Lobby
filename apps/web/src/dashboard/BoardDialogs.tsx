@@ -39,7 +39,7 @@ export function MoveBoardDialog({
   return (
     <Dialog
       title={<>Move “{board.title}”</>}
-      description="Projects group related boards (for example by client or campaign). Moving does not change who can open the board."
+      description="Each project has a lobby in the sidebar that keeps its boards together. Moving does not change who can open the board."
       onClose={onClose}
       testId="move-dialog"
     >

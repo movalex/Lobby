@@ -1,4 +1,4 @@
-import type { AuthConfig, Me } from '@draftroom/contracts'
+import { type AuthConfig, Me } from '@draftroom/contracts'
 import {
   createContext,
   type ReactNode,
@@ -37,7 +37,7 @@ export interface SessionValue {
   config: AuthConfig | null
   configStatus: ConfigStatus
   retryConfig(): void
-  /** Re-reads /api/me (after sign-in, invitation acceptance, workspace changes). */
+  /** Re-reads the session (GET /api/auth/me; after sign-in, invitation acceptance, workspace changes). */
   refresh(): Promise<Me | null>
   /**
    * Ends the API session AND the browser's Clerk session (SCA-1), then goes to /signin (optionally
@@ -64,6 +64,23 @@ export function useMe(): Me {
   return state.me
 }
 
+// 204 (signed out) has no body: undefined.
+const MeOrSignedOut = Me.optional()
+
+/**
+ * A11Y-17: who is signed in, through GET /api/auth/me, which answers a signed-out browser with 204
+ * instead of the 401 every browser logs as a console error (the sign-in page's console stays clean).
+ * null = signed out. An api without that route (404, an older deploy) is asked /api/me as before.
+ */
+async function probeSession(): Promise<Me | null> {
+  try {
+    return (await api.request('GET', '/api/auth/me', { schema: MeOrSignedOut })) ?? null
+  } catch (e) {
+    if (isApiError(e) && e.kind === 'not-found') return api.me()
+    throw e
+  }
+}
+
 /** The Clerk publishable key when this server signs people in with Clerk; null otherwise. */
 function clerkKey(config: AuthConfig | null): string | null {
   return config?.providers.includes('clerk') ? (config.clerkPublishableKey ?? null) : null
@@ -85,7 +102,11 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const refresh = useCallback(async () => {
     const gen = ++generation.current
     try {
-      const me = await api.me()
+      const me = await probeSession()
+      if (!me) {
+        if (gen === generation.current) setState({ status: 'signed-out' })
+        return null
+      }
       if (gen === generation.current) setState({ status: 'signed-in', me })
       return me
     } catch (e) {

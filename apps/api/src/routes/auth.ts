@@ -40,6 +40,16 @@ export function registerAuthRoutes(app: FastifyInstance, ctx: AppContext, provid
     return { user: sessionUserToUser(user), workspaces, kind }
   })
 
+  // A11Y-17: the web app's session check when a page loads. Signed out is an expected answer there, so
+  // it is 204 No Content instead of a 401 that every browser logs as an error (the sign-in page's
+  // console stays clean). Same body as /api/me when signed in; /api/me itself is unchanged.
+  app.get('/api/auth/me', async (req, reply): Promise<(Me & MeKind) | undefined> => {
+    const user = await sessions.user(req)
+    if (!user) return reply.code(204).send()
+    const [workspaces, kind] = await Promise.all([listUserWorkspaces(db, user.id), userKind(db, user.id)])
+    return { user: sessionUserToUser(user), workspaces, kind }
+  })
+
   // Always 204, signed in or not: logging out twice (or from a stale tab) is not an error.
   app.post('/api/auth/logout', async (req, reply) => {
     let failed = false

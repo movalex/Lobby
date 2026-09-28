@@ -11,6 +11,14 @@ import { signedOutMarks } from './signOutMark.ts'
 // Clerk's SDK is only downloaded when the server actually uses Clerk.
 const ClerkSignIn = lazy(() => import('./ClerkSignIn.tsx'))
 
+/**
+ * DANA-08: what the dashboard shows, in the same words: a workspace holds project lobbies (the
+ * sidebar's "Project lobbies"), each keeping one project's boards. Nothing makes lobbies on its own yet,
+ * so the line does not promise that every project already has one.
+ */
+export const SIGN_IN_TAGLINE =
+  'Shared boards for sketching, planning and reviewing work together, with a lobby for each DBC project.'
+
 export function SignInPage() {
   const { config, configStatus, retryConfig, state } = useSession()
   const returnTo = safeReturnTo(new URLSearchParams(location.search).get('returnTo'))
@@ -79,9 +87,8 @@ export function SignInPage() {
             draggable={false}
           />
           <Wordmark size="lg" variant="dbc" mark={false} />
-          <p className="dr-home__tagline">
-            Every DBC project gets its own lobby: shared boards for sketching, planning and reviewing work
-            together.
+          <p className="dr-home__tagline" data-testid="signin-tagline">
+            {SIGN_IN_TAGLINE}
           </p>
         </header>
         <section className="dr-card dr-signin__card">

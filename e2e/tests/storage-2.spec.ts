@@ -93,6 +93,8 @@ test('storage line: the dashboard says how much of the workspace storage is used
 
     await page.setViewportSize({ width: 390, height: 844 })
     await page.reload()
+    // A11Y-06 (shell-2): on a phone the sidebar, storage line included, sits under "Menu".
+    await page.getByTestId('side-toggle').click()
     await expect(line).toBeVisible()
     const box = await line.boundingBox()
     expect(box && box.x >= 0 && box.x + box.width <= 390).toBe(true)
@@ -100,6 +102,7 @@ test('storage line: the dashboard says how much of the workspace storage is used
     await capture('storage-line-phone-dark.png', page, testInfo)
     await page.evaluate(([key]) => localStorage.setItem(key as string, 'light'), [THEME_KEY])
     await page.reload()
+    await page.getByTestId('side-toggle').click()
     await expect(line).toHaveText('Storage: 2 MB of 2 GB')
     await capture('storage-line-phone-light.png', page, testInfo)
 
