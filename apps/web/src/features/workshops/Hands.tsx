@@ -225,6 +225,8 @@ export function HandToasts({ ctx, store }: { ctx: FeatureContext; store: Worksho
         for (const change of changes) {
           const n = handNotice(change, { selfUserId: c.me.user.id, facilitator, raisedCount })
           if (!n) continue
+          // R2-07: with the queue already open, it shows the new hand; a toast would only cover it.
+          if (n.openQueue && document.querySelector('[data-testid="hands-queue"]')) continue
           // The queue lives in the top-bar popover; on narrow screens the bar is in the "⋯" menu.
           const canOpen = n.openQueue && !!document.querySelector('[data-testid="timer-pill"]')
           c.notify({

@@ -7,6 +7,7 @@ import { createPortal } from 'react-dom'
 import { useValue } from 'tldraw'
 import { formatRelativeTime } from '../../lib/format.ts'
 import { boardPath, navigate } from '../../lib/routing.ts'
+import { onFocusLeave } from '../../ui/focus.ts'
 import type { FeatureContext } from '../types.ts'
 import { canCommentIn, controllerFor, focusThread, selectCommentTool } from './controller.ts'
 import { BellIcon, CommentIcon } from './icons.tsx'
@@ -99,7 +100,18 @@ function NotificationsBell({ ctx }: { ctx: FeatureContext }) {
       if (!wrap.current?.contains(t) && !panel.current?.contains(t)) setOpen(false)
     }
     document.addEventListener('pointerdown', onDown, true)
-    return () => document.removeEventListener('pointerdown', onDown, true)
+    // A11Y2-05: the keyboard leaving the inbox (Tab past its end, a dialog opening) closes it.
+    const off = panel.current
+      ? onFocusLeave(
+          panel.current,
+          () => setOpen(false),
+          (to) => wrap.current?.contains(to) === true,
+        )
+      : () => {}
+    return () => {
+      document.removeEventListener('pointerdown', onDown, true)
+      off()
+    }
   }, [open, store])
 
   const openItem = (n: NotificationItem) => {

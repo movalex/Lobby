@@ -262,7 +262,8 @@ test('private notes on a phone: the panel shows the timer and "Time\'s up"; afte
     )
     .toBe(true)
   await capture('workshops3-08-phone-after-reveal.png', bob.page, testInfo)
-  // Opening the panel again says where the notes went, not the intro.
+  // Opening the panel again says where the notes went, not the intro (the phone rail is folded, R13).
+  await bob.page.getByTestId('dock-rail-toggle').click()
   await bob.page.getByTestId('dock-tab-private-notes').click()
   await expect(bob.page.getByTestId('pn-ended')).toHaveAttribute('data-state', 'placed')
   await expect(bob.page.getByTestId('pn-ended')).toContainText('1 note')
