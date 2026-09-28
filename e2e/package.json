@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "test": "playwright test",
+    "perf": "node perf/run.ts --budget",
     "install-browsers": "playwright install --only-shell chromium",
     "typecheck": "tsc -p ."
   },

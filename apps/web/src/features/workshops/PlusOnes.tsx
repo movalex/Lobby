@@ -5,7 +5,7 @@
 // the counts; on the note they select the control is shown disabled and explains why. Hidden while
 // presenting (the slides stay clean) and on notes too small on screen to carry it.
 
-import { readPlusOnes } from '@draftroom/contracts'
+import { PLUS_ONES_META_KEY, readPlusOnes } from '@draftroom/contracts'
 import { useMemo, useState } from 'react'
 import { type Editor, type TLShapeId, useValue } from 'tldraw'
 import type { FeatureContext } from '../types.ts'
@@ -37,10 +37,14 @@ export function PlusOnes({ ctx }: { ctx: FeatureContext }) {
   const [said, setSaid] = useState('')
 
   // Notes on this page that have +1s (ids only: recomputed on document changes, not camera moves).
+  // Most notes have no +1 key at all: skip parsing those (this runs over every shape on each change).
   const counted = useValue('dr-wk-plusone-notes', () => {
     const out: string[] = []
-    for (const s of editor.getCurrentPageShapes())
-      if (isPlusOneTarget(s) && readPlusOnes(s.meta).length > 0) out.push(s.id)
+    for (const s of editor.getCurrentPageShapes()) {
+      const raw = (s.meta as Record<string, unknown>)[PLUS_ONES_META_KEY]
+      if (raw !== null && typeof raw === 'object' && isPlusOneTarget(s) && readPlusOnes(s.meta).length > 0)
+        out.push(s.id)
+    }
     return out.join(' ')
   }, [editor])
 
