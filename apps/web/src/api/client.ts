@@ -163,6 +163,11 @@ export function createApiClient(opts: ApiClientOptions = {}) {
     devLogin: (input: DevLoginInput) => request('POST', '/api/auth/dev/login', { body: input, schema: null }),
     logout: () => request('POST', '/api/auth/logout', { schema: null }),
     /**
+     * SCA-4 "Sign out everywhere": revokes every Draftroom session of the signed-in user, on every
+     * device. An API that does not have the route yet answers 404 (auth/signOut.ts says so).
+     */
+    revokeAllSessions: () => request('POST', '/api/auth/sessions/revoke-all', { schema: null }),
+    /**
      * UNVERIFIED (no Clerk keys exist yet): trades a Clerk session token for a Draftroom session
      * cookie. The endpoint is not in docs/M1-CONTRACTS.md §5; see ClerkSignIn.tsx.
      */

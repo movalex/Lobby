@@ -1,5 +1,6 @@
 // The `history` dock panel: named checkpoints (save, restore as a new private board), duplicate,
-// "Recently deleted" (restore puts objects back where they were) and the portable .json export.
+// "Recently deleted" (restore puts objects back where they were; editors only, and never even fetched
+// for anyone else: authz-001) and the portable .json export.
 
 import type { BoardSnapshot, DeletedShapeEntry, ListDeletedResponse } from '@draftroom/contracts'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -34,6 +35,7 @@ export function HistoryPanel({ ctx }: { ctx: FeatureContext; close(): void }) {
   const api = useMemo(() => historyApi(ctx.api), [ctx.api])
   const workspaceRole = me.workspaces.find((w) => w.id === board.workspaceId)?.role ?? null
   const perms = historyPermissions(role, board.status, workspaceRole)
+  const { canSeeDeleted } = perms
 
   const [snapshots, setSnapshots] = useState<BoardSnapshot[] | null>(null)
   const [deleted, setDeleted] = useState<ListDeletedResponse | null>(null)
@@ -61,6 +63,12 @@ export function HistoryPanel({ ctx }: { ctx: FeatureContext; close(): void }) {
   const deletedSeq = useRef(0)
   const loadDeleted = useCallback(async () => {
     const seq = ++deletedSeq.current
+    // Not an editor (any more: roles change live): drop the list and do not ask the server for it.
+    if (!canSeeDeleted) {
+      setDeleted(null)
+      setSelected((cur) => (cur.size ? new Set() : cur))
+      return
+    }
     try {
       const list = await api.listDeleted(board.id)
       if (seq === deletedSeq.current) setDeleted(list)
@@ -68,7 +76,7 @@ export function HistoryPanel({ ctx }: { ctx: FeatureContext; close(): void }) {
       if (seq === deletedSeq.current)
         setLoadError(message(e, 'Recently deleted objects could not be loaded.'))
     }
-  }, [api, board.id])
+  }, [api, board.id, canSeeDeleted])
 
   useEffect(() => {
     const controller = new AbortController()
@@ -96,6 +104,7 @@ export function HistoryPanel({ ctx }: { ctx: FeatureContext; close(): void }) {
   const listed = useRef<ReadonlySet<string>>(new Set())
   listed.current = new Set(deleted?.entries.map((e) => e.shapeId))
   useEffect(() => {
+    if (!canSeeDeleted) return
     let timer: ReturnType<typeof setTimeout> | null = null
     const off = editor.store.listen(
       ({ changes }) => {
@@ -109,7 +118,7 @@ export function HistoryPanel({ ctx }: { ctx: FeatureContext; close(): void }) {
       off()
       if (timer) clearTimeout(timer)
     }
-  }, [editor, loadDeleted])
+  }, [editor, loadDeleted, canSeeDeleted])
 
   // ---- actions ------------------------------------------------------------------------------------
 
@@ -344,51 +353,53 @@ export function HistoryPanel({ ctx }: { ctx: FeatureContext; close(): void }) {
         )}
       </section>
 
-      <section className="dr-history__section" aria-labelledby="dr-history-deleted">
-        <h3 id="dr-history-deleted">Recently deleted</h3>
-        <p className="dr-history__hint">
-          Objects deleted on this board, newest first. Restoring puts them back where they were and reconnects
-          their connectors.
-        </p>
-        {deleted === null ? (
-          <p className="dr-history__empty">Loading…</p>
-        ) : deleted.entries.length === 0 ? (
-          <p className="dr-history__empty">Nothing deleted recently.</p>
-        ) : (
-          <>
-            {perms.canEdit && selected.size > 0 && (
-              <button
-                type="button"
-                className="dr-btn dr-btn--primary dr-history__bulk"
-                data-testid="deleted-restore-selected"
-                disabled={busy !== null}
-                onClick={() => void restoreDeleted([...selected])}
-              >
-                Restore {pluralize(selected.size, 'selected object')}
-              </button>
-            )}
-            <ul className="dr-history__list" aria-label="Recently deleted objects">
-              {deleted.entries.map((entry) => (
-                <DeletedRow
-                  key={entry.shapeId}
-                  entry={entry}
-                  now={now}
-                  canRestore={perms.canEdit}
-                  busy={busy}
-                  selected={selected.has(entry.shapeId)}
-                  onToggle={() => toggle(entry.shapeId)}
-                  onRestore={() => void restoreDeleted([entry.shapeId])}
-                />
-              ))}
-            </ul>
-            {deleted.total > deleted.entries.length && (
-              <p className="dr-history__empty">
-                Showing the newest {deleted.entries.length} of {deleted.total}.
-              </p>
-            )}
-          </>
-        )}
-      </section>
+      {canSeeDeleted && (
+        <section className="dr-history__section" aria-labelledby="dr-history-deleted">
+          <h3 id="dr-history-deleted">Recently deleted</h3>
+          <p className="dr-history__hint">
+            Objects deleted on this board, newest first. Restoring puts them back where they were and
+            reconnects their connectors.
+          </p>
+          {deleted === null ? (
+            <p className="dr-history__empty">Loading…</p>
+          ) : deleted.entries.length === 0 ? (
+            <p className="dr-history__empty">Nothing deleted recently.</p>
+          ) : (
+            <>
+              {perms.canEdit && selected.size > 0 && (
+                <button
+                  type="button"
+                  className="dr-btn dr-btn--primary dr-history__bulk"
+                  data-testid="deleted-restore-selected"
+                  disabled={busy !== null}
+                  onClick={() => void restoreDeleted([...selected])}
+                >
+                  Restore {pluralize(selected.size, 'selected object')}
+                </button>
+              )}
+              <ul className="dr-history__list" aria-label="Recently deleted objects">
+                {deleted.entries.map((entry) => (
+                  <DeletedRow
+                    key={entry.shapeId}
+                    entry={entry}
+                    now={now}
+                    canRestore={perms.canEdit}
+                    busy={busy}
+                    selected={selected.has(entry.shapeId)}
+                    onToggle={() => toggle(entry.shapeId)}
+                    onRestore={() => void restoreDeleted([entry.shapeId])}
+                  />
+                ))}
+              </ul>
+              {deleted.total > deleted.entries.length && (
+                <p className="dr-history__empty">
+                  Showing the newest {deleted.entries.length} of {deleted.total}.
+                </p>
+              )}
+            </>
+          )}
+        </section>
+      )}
 
       <section className="dr-history__section" aria-labelledby="dr-history-copy">
         <h3 id="dr-history-copy">Copy and export</h3>

@@ -6,6 +6,7 @@ import { signInHeading } from '../invite/model.ts'
 import { colorForUser, DEV_HANDLE_RE, DEV_QUICK_PICKS, initialsFor } from '../lib/identity.ts'
 import { matchRoute, navigate, safeReturnTo } from '../lib/routing.ts'
 import { useSession } from './session.tsx'
+import { signedOutMarks } from './signOutMark.ts'
 
 // Clerk's SDK is only downloaded when the server actually uses Clerk.
 const ClerkSignIn = lazy(() => import('./ClerkSignIn.tsx'))
@@ -124,6 +125,8 @@ function DevSignIn({ onDone, heading }: { onDone(): void; heading: string }) {
       await api.devLogin(displayName ? { handle: h, name: displayName } : { handle: h })
       const me = await refresh()
       if (!me) throw new Error('no session after sign-in')
+      // A completed sign-in ends the explicit sign-out of this tab (SCA-1, signOutMark.ts).
+      signedOutMarks.clear()
       onDone()
     } catch (e) {
       setError(isApiError(e) ? e.message : 'Sign-in failed. Try again.')

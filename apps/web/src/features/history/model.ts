@@ -63,6 +63,12 @@ export function checkpointNameToSave(typed: string, now: Date = new Date()): str
 export interface HistoryPermissions {
   /** Save checkpoints, restore deleted objects (canvas editors of an active board). */
   canEdit: boolean
+  /**
+   * See (and fetch) "Recently deleted" at all. Editors only (authz-001): the list shows the text of
+   * deleted objects, including notes deleted before the board was shared with a viewer, a commenter or
+   * a review-link guest. The API requires `edit` for GET /api/boards/:bid/deleted too.
+   */
+  canSeeDeleted: boolean
   /** Restore as new / duplicate (workspace members and above; guests cannot create boards). */
   canCreateBoards: boolean
   /** Duplicate with sharing settings (board owners). */
@@ -74,8 +80,10 @@ export function historyPermissions(
   status: BoardStatus,
   workspaceRole: WorkspaceRole | null | undefined,
 ): HistoryPermissions {
+  const canEdit = can(role, 'edit', status)
   return {
-    canEdit: can(role, 'edit', status),
+    canEdit,
+    canSeeDeleted: canEdit,
     canCreateBoards: !!workspaceRole && canCreateInWorkspace(workspaceRole) && can(role, 'view', status),
     canKeepSharing: can(role, 'manage_access', status),
   }
