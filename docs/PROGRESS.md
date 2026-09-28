@@ -277,3 +277,56 @@ Checks: lint 0 errors / 0 warnings (581 files); typecheck 14 projects; vitest 1,
   - **Office previews** (DOCX/PPTX/XLSX/ODF through a sandboxed LibreOffice sidecar on the NAS, then the PDF pipeline). The verifier closed a zip-bomb bypass (high), a macro-package bypass, unbounded PDF output and orphaned job files.
   - **Search across boards** (`0015_board_search`, Postgres full text): permission-filtered at query time, with an incremental indexer. The verifier fixed per-board result starvation and mention markup leaking into snippets, and found no permission leak.
 - The live R2 offsite test (opt-in, random `test/` prefix, everything deleted and checked gone) passed against the staging bucket: upload, signed manifest, and the restore drill restoring an identical board from R2.
+- Staging deploy of wave 3 plus round 3 plus wave 4a (main 87938de, 08:45–08:48Z):
+  - api → sync → web went live, and the NAS worker was redeployed with the Office sidecar;
+  - sync uploaded the existing board backups to R2 on start;
+  - live-checked: a board loads with Saved/Live, the dashboard thumbnail is captured on leave, and the sidebar shows "Storage: 8 KB of 100 GB".
+- **Graceful shutdown on Render was broken, and is now fixed.** Every deploy logged `[FATAL tini] Unexpected error when forwarding signal: 'Operation not permitted'`. Render runs containers without CAP_KILL, so the root tini could not signal the app, which runs as `node`. The entrypoint now drops to `node` first and then execs tini. Reproduced and verified on the NAS with `--cap-drop KILL`: old = tini FATAL; new = the app gets SIGTERM and exits 0.
+- **Wave 4b**:
+  - **AI on the board** (OpenAI gpt-5.4-mini; migration `0016_ai_usage`):
+    - the actions: Summarize, Group into themes, Action items, Generate ideas;
+    - the prompt is built from what the server reads through the sync snapshot, the output is validated with zod and mapped back only through aliases, and the result applies as one undo step;
+    - hard limits, because the key has no provider cap:
+      - per person: 30 requests/min and 20 calls/hour;
+      - in flight: 2 per person, 3 per workspace, 4 in total;
+      - daily token budgets per workspace (400k), per person (150k) and global (2M), reserved worst-case in Postgres under an advisory lock;
+      - fail-closed, plus a kill switch;
+    - guests are refused, and so are viewers limited by the export policy.
+    
+    Checked live with two real calls (themes 4.3 s, summarize 1.7 s, about 1.5k tokens in total).
+  - **Postgres fixes**:
+    - one lock order everywhere (board, then board rows, then the guest user, then members and sessions), fixing PG-1 and PG-2 plus an asset-GC vs worker-claim deadlock found in the audit;
+    - `DRAFTROOM_ALLOW_NEWER_SCHEMA` for rollbacks, with a DEPLOY.md runbook;
+    - opt-in real-Postgres lock-order and race tests, re-verified on a throwaway Postgres 18 on the NAS.
+  - **Present to everyone**, the searchable people list, follow, "Bring to me" and hand-off. Followers start moving 6–8 ms after the presenter's key press. The verifier fixed sticky following after an api restart, a slide-change DoS by other editors, and a resume bypass.
+- Final review by four reviewers (the boss, a designer, a facilitator, accessibility), then a seven-owner polish round with two verifiers:
+  - **History**:
+    - after a checkpoint Preview the board keeps the keyboard;
+    - name-only guests see no History (API 403);
+    - automatic checkpoints before a reveal and before AI grouping (`0019_checkpoint_reasons`);
+    - auto-removed empty text is no longer listed as deleted by a person.
+  - **Sharing**: one "Share with a client" block at the top (guests on, one click creates and copies), the other methods under "More ways to share", mentions refresh after sharing changes, and the Export dialog copy follows the policy.
+  - **Comment notifications** for board owners (`0017_comment_notifications`), with a bell and dashboard badges, flood-capped per board and author, guest identities included.
+  - **AI**:
+    - an owner switch per board and per workspace (`0018_ai_settings`), enforced on the server, including the in-flight race;
+    - Summarize opens a private panel with "Add to board";
+    - results land inside frames;
+    - the toast's Undo never undoes an unrelated edit;
+    - Group into themes skips template prompts.
+  - **Facilitation**:
+    - reveals never widen into a neighbouring frame;
+    - facilitator controls are for account editors;
+    - everyone gets a "write your notes" prompt;
+    - the timer and vote cards are usable on phones.
+  - **Canvas and media**:
+    - PDF and video posters in exports and thumbnails;
+    - tags on images and mind-map topics;
+    - boards open on the first frame;
+    - several images dropped fill the mood-board slots.
+  - **Accessibility**:
+    - Enter on a note puts the caret at the end (no more wiping the text);
+    - focus returns sensibly;
+    - dock panels take focus and close on Escape;
+    - visible focus rings;
+    - the selection bar is keyboard-reachable, and Shift+F10 opens the context menu;
+    - 3:1 input borders.
