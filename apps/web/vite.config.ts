@@ -1,5 +1,6 @@
 import react from '@vitejs/plugin-react'
 import { defineConfig, type ProxyOptions } from 'vite'
+import { excalidrawAssets } from './build/excalidraw-assets.ts'
 
 // The browser talks to ONE origin; Vite proxies the API (sessions, boards, file routes) to apps/api
 // and the canvas WebSocket to apps/sync. Same-origin keeps the session cookie first-party and lets the
@@ -22,7 +23,7 @@ const proxy: Record<string, ProxyOptions> = {
 }
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), excalidrawAssets()],
   // Required for `vite` dev when importing '@tldraw/assets/imports.vite' (?url imports); build works without it.
   optimizeDeps: { exclude: ['@tldraw/assets'] },
   // tldraw alone is ~1.8 MB minified. It is already split into the lazily loaded board chunk.

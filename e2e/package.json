@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "test": "playwright test",
+    "spike": "playwright test -c spike/playwright.config.ts",
     "demo:video": "node demo/run.ts",
     "perf": "node perf/run.ts --budget",
     "install-browsers": "playwright install --only-shell chromium",

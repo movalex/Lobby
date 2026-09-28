@@ -6,14 +6,31 @@ import { landingWorkspace } from './dashboard/model.ts'
 import { GuestEndedScreen } from './invite/GuestEndedScreen.tsx'
 import { GuestKindProvider, wasGuestTab } from './invite/guest.tsx'
 import { InvitePage } from './invite/InvitePage.tsx'
+import { DEV_AUTH_ENABLED } from './lib/identity.ts'
 import { matchRoute, navigate, signInPath, useLocationKey, workspacePath } from './lib/routing.ts'
 import { readLastWorkspace } from './lib/storage.ts'
 import { LoadingScreen, MessageScreen } from './ui/screens.tsx'
 
 // The board pulls in tldraw (~2 MB); the dashboard and sign-in should not have to download it.
 const BoardPage = lazy(() => import('./board/BoardPage.tsx').then((m) => ({ default: m.BoardPage })))
+// Spike A (docs/EXCALIDRAW-MIGRATION.md §8): dev-only /spike/:name engine pages, outside the session.
+// The dev-auth test is inlined (same as DEV_AUTH_ENABLED) so it folds at build time: the imported const
+// alone does not, and the engine chunks would ship, unreachable, in a VITE_LOBBY_ENGINE-only build.
+const SpikeRoute =
+  import.meta.env.VITE_LOBBY_ENGINE === 'excalidraw' &&
+  (import.meta.env.DEV || import.meta.env.VITE_DRAFTROOM_DEV_AUTH === '1') &&
+  DEV_AUTH_ENABLED
+    ? lazy(() => import('./canvas/spike/SpikeRoute.tsx'))
+    : null
 
 export function App() {
+  if (SpikeRoute && location.pathname.startsWith('/spike/')) {
+    return (
+      <Suspense fallback={null}>
+        <SpikeRoute pathname={location.pathname} />
+      </Suspense>
+    )
+  }
   return (
     <SessionProvider>
       {/* Wave 3: who is signed in, an account or a name-only guest (GET /api/me `kind`). */}

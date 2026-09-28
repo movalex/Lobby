@@ -14,6 +14,34 @@
   },
   "formatter": { "enabled": true, "indentStyle": "space", "indentWidth": 2, "lineWidth": 110 },
   "javascript": { "formatter": { "quoteStyle": "single", "semicolons": "asNeeded" } },
-  "linter": { "enabled": true, "rules": { "preset": "recommended" } },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "preset": "recommended",
+      "style": {
+        "noRestrictedImports": {
+          "level": "error",
+          "options": {
+            "patterns": [
+              {
+                "group": ["@excalidraw/*", "@excalidraw/**"],
+                "message": "Only apps/web/src/canvas/**, apps/web/test/engine-probe/** and packages/canvas-schema/src/engine/** may import @excalidraw/* (docs/EXCALIDRAW-MIGRATION.md §2.3.1). Go through the canvas port or the canvas-schema engine wrappers."
+              }
+            ]
+          }
+        }
+      }
+    }
+  },
+  "overrides": [
+    {
+      "includes": [
+        "apps/web/src/canvas/**",
+        "apps/web/test/engine-probe/**",
+        "packages/canvas-schema/src/engine/**"
+      ],
+      "linter": { "rules": { "style": { "noRestrictedImports": "off" } } }
+    }
+  ],
   "assist": { "enabled": true, "actions": { "source": { "organizeImports": "on" } } }
 }
