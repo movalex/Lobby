@@ -252,9 +252,10 @@ export async function compose(opts: ComposeOptions): Promise<ComposeResult> {
         `[3:v]format=rgba,fade=t=in:st=0.25:d=0.45:alpha=1[cap]`,
         `[b2][cap]overlay=0:0:format=rgb[full]`,
       )
+      const sceneStart = scene.start ?? 0
       const cuts = effectiveCuts(scene).map((c) => ({
-        start: (c.start - scene.start!) / 1000,
-        end: (c.end - scene.start!) / 1000,
+        start: (c.start - sceneStart) / 1000,
+        end: (c.end - sceneStart) / 1000,
       }))
       const cut = cutFilters('[full]', seconds, cuts, f)
       f.push(`${cut.label}${TO_BT709}[v]`)
