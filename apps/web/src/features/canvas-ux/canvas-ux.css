@@ -149,7 +149,7 @@
 }
 .dr-cux-result[aria-current="true"] {
   border-color: var(--dr-amber);
-  background: #fdf3e2;
+  background: var(--dr-warn-bg);
 }
 .dr-cux-result__type {
   color: var(--dr-ink-2);
@@ -164,7 +164,7 @@
 .dr-cux-result mark {
   padding: 0 1px;
   border-radius: 3px;
-  background: #fbe3a6;
+  background: color-mix(in srgb, var(--dr-amber) 35%, transparent);
   color: inherit;
 }
 
@@ -215,7 +215,7 @@
   background: var(--dr-paper);
 }
 .dr-cux-frame[data-selected="true"] > .dr-cux-frame__main {
-  background: #eef2f8;
+  background: var(--dr-accent-bg);
 }
 .dr-cux-frame__handle {
   display: grid;
@@ -426,8 +426,8 @@
   color: var(--dr-ink);
 }
 .dr-cux-selbar__btn[aria-pressed="true"] {
-  color: var(--dr-navy);
-  background: #e6ecf5;
+  color: var(--dr-accent-ink);
+  background: var(--dr-accent-bg);
 }
 /* F8: the locked hint, in the selection bar's style */
 .dr-cux-lockhint {

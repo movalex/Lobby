@@ -340,7 +340,8 @@ html[data-dr-presenting] .dr-comments-layer {
 .dr-ccomment__actions .dr-linkbtn:focus-visible {
   text-decoration: underline;
 }
-.dr-linkbtn--danger {
+/* doubled class: must beat .dr-linkbtn from styles.css, which loads later in the bundle */
+.dr-linkbtn.dr-linkbtn--danger {
   color: var(--dr-danger);
 }
 .dr-cavatar {

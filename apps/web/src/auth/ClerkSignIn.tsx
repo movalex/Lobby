@@ -1,5 +1,5 @@
-// UNVERIFIED: written against the @clerk/react 6.17.2 type definitions (ClerkProvider, SignIn,
-// useAuth().getToken) but never run against a live Clerk instance, because no Clerk keys exist yet.
+// Verified against the live Clerk development instance on staging (2026-09-27): sign-in, then
+// POST /api/auth/clerk/session 200 and a Draftroom session.
 // Flow: Clerk's hosted <SignIn> signs the user in to Clerk in the browser; we then trade the Clerk
 // session token for a Draftroom session cookie (api.clerkExchange) and from then on only the
 // Draftroom session is used. The API verifies the token server-side with @clerk/backend.
@@ -11,9 +11,6 @@ import { useSession } from './session.tsx'
 export default function ClerkSignIn({ publishableKey, onDone }: { publishableKey: string; onDone(): void }) {
   return (
     <ClerkProvider publishableKey={publishableKey}>
-      <p className="dr-devnotice dr-devnotice--quiet" role="note">
-        Clerk sign-in has not been verified against a live Clerk instance yet.
-      </p>
       <ClerkExchange onDone={onDone} />
     </ClerkProvider>
   )
