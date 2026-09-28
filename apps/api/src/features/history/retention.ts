@@ -43,8 +43,8 @@ export interface RetentionItem {
 }
 
 /** Checkpoints made before a risky operation: all kept while they are in the hourly tier. */
-const SAFETY: ReadonlySet<string> = new Set<CheckpointReason>(['before_restore', 'import'])
-const isSafety = (item: RetentionItem) => item.reason !== null && SAFETY.has(item.reason)
+export const SAFETY_REASONS: ReadonlySet<string> = new Set<CheckpointReason>(['before_restore', 'import'])
+const isSafety = (item: RetentionItem) => item.reason !== null && SAFETY_REASONS.has(item.reason)
 
 export const hourBucket = (t: number) => Math.floor(t / HOUR)
 export const dayBucket = (t: number) => Math.floor(t / DAY)

@@ -31,7 +31,7 @@ import { newId, type Queryable } from '@draftroom/db'
 import type { FastifyInstance } from 'fastify'
 import { audit } from '../../audit.ts'
 import type { FeatureContext } from '../context.ts'
-import { planRetention, type RetentionPolicy } from './retention.ts'
+import { planRetention, type RetentionPolicy, SAFETY_REASONS } from './retention.ts'
 import { checkpointBodyOf, SNAPSHOT_COLUMNS, type SnapshotRow, toCheckpoint } from './snapshot-rows.ts'
 import { type SnapshotBodies, snapshotStorageKey } from './snapshot-store.ts'
 
@@ -48,11 +48,21 @@ export interface CheckpointSettings {
   sessionEndGapMs: number
   /** How long a claimed board stays with the instance that claimed it. */
   claimMs: number
-  /** Failed attempts in a row before a pending checkpoint is given up (the next change starts over). */
+  /**
+   * Failed attempts in a row before a pending checkpoint is given up (the next change starts over).
+   * The backoff tops out at 30 min, so the default of 100 keeps trying for about two days: an outage
+   * of the sync server or the blob store (a NAS reboot, a deploy) must not drop the checkpoint of a
+   * board that nobody edits again afterwards.
+   */
   maxFailures: number
   /** Boards handled per scheduler pass (one after the other). */
   batch: number
-  /** Automatic checkpoints kept per board at most, whatever retention says (a guard against bugs). */
+  /**
+   * Automatic checkpoints kept per board at most, whatever retention says (a guard against bugs).
+   * Checkpoints made before a restore or at an import stop at 80% of it: restores, which any workspace
+   * member who can view the board may run, must never use up the room that hourly and session-end
+   * checkpoints need.
+   */
   maxAutoPerBoard: number
   retention?: RetentionPolicy
 }
@@ -67,7 +77,7 @@ export const checkpointSettings: CheckpointSettings = {
   hourlyMs: AUTO_CHECKPOINT_INTERVAL_MS,
   sessionEndGapMs: 10 * MINUTE,
   claimMs: 5 * MINUTE,
-  maxFailures: 8,
+  maxFailures: 100,
   batch: 10,
   maxAutoPerBoard: 1_000,
 }
@@ -247,10 +257,14 @@ export function createCheckpointService(
           [boardId],
         )
       ).n
-    if ((await count()) >= settings.maxAutoPerBoard) {
+    // Safety checkpoints stop earlier than routine ones (see maxAutoPerBoard).
+    const limit = SAFETY_REASONS.has(reason)
+      ? Math.floor(settings.maxAutoPerBoard * 0.8)
+      : settings.maxAutoPerBoard
+    if ((await count()) >= limit) {
       await prune(boardId)
-      if ((await count()) >= settings.maxAutoPerBoard) {
-        log.warn(`board ${boardId} has ${settings.maxAutoPerBoard} automatic checkpoints; not saving another`)
+      if ((await count()) >= limit) {
+        log.warn(`board ${boardId} has ${limit} automatic checkpoints; not saving a ${reason} one`)
         return { status: 'skipped', why: 'limit' }
       }
     }
@@ -337,6 +351,10 @@ export function createCheckpointService(
       try {
         const outcome = await capture(boardId, reason)
         if (outcome.status === 'skipped' && outcome.why === 'missing') await forget(boardId)
+        // At the limit: retention frees room by the hour at most, so try again then (not every tick,
+        // which would read the whole board from sync each minute). Still pending meanwhile.
+        else if (outcome.status === 'skipped' && outcome.why === 'limit')
+          await postpone(boardId, settings.hourlyMs)
         else if (outcome.status === 'skipped') await release(boardId)
       } catch (e) {
         await failed(boardId, claimed.failures + 1, e)
@@ -347,6 +365,11 @@ export function createCheckpointService(
 
   const release = (boardId: string) =>
     db.query('UPDATE board_checkpoint_state SET claimed_until = NULL WHERE board_id = $1', [boardId])
+  const postpone = (boardId: string, ms: number) =>
+    db.query('UPDATE board_checkpoint_state SET retry_at = $2, claimed_until = NULL WHERE board_id = $1', [
+      boardId,
+      new Date(now().getTime() + ms),
+    ])
 
   async function failed(boardId: string, failures: number, e: unknown) {
     if (failures >= settings.maxFailures) {

@@ -5,11 +5,12 @@
 // `data-snapshot-id`.
 
 import type { BoardCheckpoint } from '@draftroom/contracts'
-import { useState } from 'react'
+import { type KeyboardEvent, useEffect, useRef, useState } from 'react'
 import {
   AUTOMATIC_EXPLAINED,
   automaticSummary,
   type CheckpointPermissions,
+  checkpointAccessHint,
   checkpointMeta,
   checkpointTitle,
   splitCheckpoints,
@@ -58,8 +59,14 @@ export function CheckpointList({
   if (checkpoints === null) return <p className="dr-history__empty">Loading…</p>
   const { manual, automatic } = splitCheckpoints(checkpoints)
   const rowProps = { perms, canRestore, now, actions }
+  const hint = checkpoints.length > 0 ? checkpointAccessHint(perms, canRestore) : null
   return (
     <>
+      {hint && (
+        <p className="dr-history__hint" data-testid="checkpoint-guest-hint">
+          {hint}
+        </p>
+      )}
       {manual.length === 0 ? (
         <p className="dr-history__empty">No named checkpoints yet.</p>
       ) : (
@@ -113,6 +120,25 @@ function CheckpointRow({
   actions: CheckpointActions
 }) {
   const [confirming, setConfirming] = useState(false)
+  // Cancelling puts focus back on the delete button (the confirmation that had it is gone).
+  const deleteRef = useRef<HTMLButtonElement>(null)
+  const refocus = useRef(false)
+  useEffect(() => {
+    if (confirming || !refocus.current) return
+    refocus.current = false
+    deleteRef.current?.focus()
+  }, [confirming])
+  const cancel = () => {
+    refocus.current = true
+    setConfirming(false)
+  }
+  /** Escape on either button of the confirmation cancels it. */
+  const escapeCancels = (e: KeyboardEvent<HTMLButtonElement>) => {
+    if (e.key !== 'Escape') return
+    e.preventDefault()
+    e.stopPropagation()
+    cancel()
+  }
   const title = checkpointTitle(c)
   const { busy } = actions
   const hasActions = perms.canPreview || canRestore || perms.canDelete
@@ -157,6 +183,7 @@ function CheckpointRow({
           )}
           {perms.canDelete && (
             <button
+              ref={deleteRef}
               type="button"
               className="dr-iconbtn dr-history__delete"
               data-testid="checkpoint-delete"
@@ -197,6 +224,7 @@ function CheckpointRow({
               aria-label={`Delete “${title}”`}
               aria-describedby={`dr-cp-confirm-${c.id}`}
               onClick={() => actions.onDelete(c)}
+              onKeyDown={escapeCancels}
             >
               {busy === `delete:${c.id}` ? 'Deleting…' : 'Delete'}
             </button>
@@ -206,7 +234,8 @@ function CheckpointRow({
               data-testid="checkpoint-delete-cancel"
               // biome-ignore lint/a11y/noAutofocus: the confirmation replaces the button just pressed; Cancel is the safe place for focus
               autoFocus
-              onClick={() => setConfirming(false)}
+              onClick={cancel}
+              onKeyDown={escapeCancels}
             >
               Cancel
             </button>

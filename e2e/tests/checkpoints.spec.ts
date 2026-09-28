@@ -159,6 +159,7 @@ test('owners delete checkpoints (confirmed, live for everyone); editors and name
     await expect(row.getByTestId('checkpoint-preview')).toBeVisible()
     await expect(row.getByTestId('checkpoint-restore')).toBeVisible()
     await expect(carol.page.getByTestId('checkpoint-delete')).toHaveCount(0)
+    await expect(carol.page.getByTestId('checkpoint-guest-hint')).toHaveCount(0)
     const res = await carolApi.fetch('DELETE', `/api/snapshots/${sid}`)
     expect(res.status()).toBe(403)
   })
@@ -175,6 +176,10 @@ test('owners delete checkpoints (confirmed, live for everyone); editors and name
       await expect(manualRow(guest.page, 'Kickoff')).toHaveCount(1)
       for (const id of ['checkpoint-preview', 'checkpoint-restore', 'checkpoint-delete'])
         await expect(guest.page.getByTestId(id), id).toHaveCount(0)
+      // ...and is told why, instead of rows that do nothing.
+      await expect(guest.page.getByTestId('checkpoint-guest-hint')).toHaveText(
+        'Only members of this workspace can open or restore earlier versions of this board.',
+      )
       const content = await guest.page.request.get(`${WEB_URL}/api/snapshots/${sid}/content`)
       expect(content.status()).toBe(403)
       const del = await guest.page.request.delete(`${WEB_URL}/api/snapshots/${sid}`, {
@@ -190,6 +195,14 @@ test('owners delete checkpoints (confirmed, live for everyone); editors and name
       await expect(row).toContainText('Delete this checkpoint for everyone? This can’t be undone.')
       await row.getByTestId('checkpoint-delete-cancel').click()
       await expect(row.getByTestId('checkpoint-delete')).toBeVisible()
+      // Keyboard users keep their place: focus goes back to the delete button; Escape cancels too.
+      await expect(row.getByTestId('checkpoint-delete')).toBeFocused()
+      await alice.page.keyboard.press('Enter')
+      await expect(row.getByTestId('checkpoint-delete-cancel')).toBeFocused()
+      await alice.page.keyboard.press('Escape')
+      await expect(row.getByTestId('checkpoint-delete-confirm')).toHaveCount(0)
+      await expect(row.getByTestId('checkpoint-delete')).toBeFocused()
+      await expect(manualRow(alice.page, 'Kickoff')).toHaveCount(1)
       await row.getByTestId('checkpoint-delete').click()
       await row.getByTestId('checkpoint-delete-confirm').click()
       await expect(alice.page.getByTestId('history-status')).toHaveText('Deleted “Kickoff”.')

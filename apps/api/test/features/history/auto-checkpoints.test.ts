@@ -31,9 +31,16 @@ let service: CheckpointService
 let boardId: string
 const saved = { ...checkpointSettings }
 
-beforeEach(async () => {
+beforeEach(() => start())
+afterEach(async () => {
+  Object.assign(checkpointSettings, saved)
+  await api.close()
+})
+
+/** Builds the app (settings are read when it is built); tests that need other settings call it again. */
+async function start(overrides: Partial<typeof checkpointSettings> = {}) {
   // The app's own timers stay off: these tests run the scheduler and retention themselves.
-  Object.assign(checkpointSettings, { tickMs: 0, pruneEveryMs: 0, maxFailures: 3 })
+  Object.assign(checkpointSettings, saved, { tickMs: 0, pruneEveryMs: 0, maxFailures: 3 }, overrides)
   sync = createFakeSync()
   events = new EventHub()
   api = await createTestApi({ deps: { syncInternal: sync, events } })
@@ -44,11 +51,12 @@ beforeEach(async () => {
   const s = checkpointServices.get(api.app)
   if (!s) throw new Error('no checkpoint service')
   service = s
-})
-afterEach(async () => {
-  Object.assign(checkpointSettings, saved)
+}
+/** Closes the app built by beforeEach and builds another with `overrides`. */
+async function restart(overrides: Partial<typeof checkpointSettings>) {
   await api.close()
-})
+  await start(overrides)
+}
 
 /** The board's content on the (fake) sync server: a page and one note with `text`, plus `extra`. */
 function setContent(bid: string, text: string, extra: Rec[] = []) {
@@ -391,5 +399,73 @@ describe('retention', () => {
     expect(await service.drainBlobDeletions()).toBe(1)
     expect(await api.blobs.head(bodyKey(boardId, id))).toBeNull()
     expect(await api.db.one('SELECT count(*)::int AS n FROM board_snapshot_blob_deletions')).toEqual({ n: 0 })
+  })
+})
+
+describe('failures and limits never lose or starve a pending checkpoint', () => {
+  it('a sync outage of several hours keeps the pending checkpoint; it is saved once sync is back (default retries)', async () => {
+    await restart({ maxFailures: saved.maxFailures })
+    sync.unavailable = true
+    await sessionEnded()
+    await service.idle()
+    // Six hours of failures while the scheduler ticks every minute; nobody edits the board again.
+    for (let m = 0; m < 6 * 60; m++) {
+      api.clock.advance(MIN)
+      await service.runDue()
+    }
+    expect(await state()).toMatchObject({ session_ended_at: expect.any(Date), dirty_since: expect.any(Date) })
+    expect(await autos()).toEqual([])
+    sync.unavailable = false
+    for (let m = 0; m < 31; m++) {
+      api.clock.advance(MIN)
+      await service.runDue()
+    }
+    expect((await autos()).map((c) => c.reason)).toEqual(['session_end'])
+    expect(await state()).toMatchObject({ dirty_since: null, session_ended_at: null, failures: 0 })
+  })
+
+  it('checkpoints made before restores (which viewers can run) never use up the room session-end and hourly ones need', async () => {
+    await restart({ maxAutoPerBoard: 10 })
+    const v1 = (await saveManual('Version 1')).json()
+    // Someone restores over and over while the board keeps changing: each restore saves the board first.
+    for (let i = 0; i < 12; i++) {
+      setContent(boardId, `edit ${i}`)
+      const res = await bob.req('POST', `/api/snapshots/${v1.id}/restore-as-new`, {})
+      expect(res.statusCode, res.body).toBe(201)
+      api.clock.advance(MIN)
+    }
+    expect((await autos()).every((c) => c.reason === 'before_restore')).toBe(true)
+    expect((await autos()).length).toBeLessThan(10)
+    // Then the last editor leaves after more changes: that checkpoint is still saved.
+    setContent(boardId, 'the final state')
+    await sessionEnded()
+    await service.idle()
+    api.clock.advance(11 * MIN)
+    expect(await service.runDue()).toBe(1)
+    const [newest] = await autos()
+    expect(newest).toMatchObject({ reason: 'session_end' })
+    expect(await storedText(boardId, newest?.id ?? '')).toContain('the final state')
+  })
+
+  it('a board at the automatic-checkpoint limit is tried again an hour later, not re-read from sync every minute', async () => {
+    await restart({ maxAutoPerBoard: 2 })
+    alignTo(5)
+    for (const text of ['a', 'b']) {
+      setContent(boardId, text)
+      expect((await service.capture(boardId, 'hourly')).status).toBe('saved')
+      api.clock.advance(HOUR) // distinct hours: retention keeps both
+    }
+    setContent(boardId, 'c')
+    await touch()
+    api.clock.advance(61 * MIN)
+    expect(await service.runDue()).toBe(1)
+    expect(await autos()).toHaveLength(2) // at the limit: nothing saved
+    const reads = sync.snapshots.length
+    for (let m = 0; m < 30; m++) {
+      api.clock.advance(MIN)
+      await service.runDue()
+    }
+    expect(sync.snapshots).toHaveLength(reads)
+    expect(await state()).toMatchObject({ dirty_since: expect.any(Date) }) // still pending
   })
 })

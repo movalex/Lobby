@@ -88,6 +88,12 @@ export function checkpointPermissions(
   }
 }
 
+/** A line for people who see the list but can neither open nor restore a checkpoint (guests). */
+export function checkpointAccessHint(perms: CheckpointPermissions, canRestore: boolean): string | null {
+  if (perms.canPreview || canRestore) return null
+  return 'Only members of this workspace can open or restore earlier versions of this board.'
+}
+
 const weeksOrMonths = (days: number) => (days >= 180 ? `${Math.round(days / 30.5)} months` : `${days} days`)
 
 /** What the automatic section explains (from CHECKPOINT_RETENTION, so the text follows the policy). */

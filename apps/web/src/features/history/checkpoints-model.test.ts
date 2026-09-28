@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import {
   AUTOMATIC_EXPLAINED,
   automaticSummary,
+  checkpointAccessHint,
   checkpointMeta,
   checkpointPermissions,
   checkpointTime,
@@ -91,6 +92,15 @@ describe('who may preview and delete (UI hints; the API enforces)', () => {
     expect(checkpointPermissions('owner', 'active', 'guest').canDelete).toBe(false)
     for (const role of ['editor', 'commenter', 'viewer'] as const)
       expect(checkpointPermissions(role, 'active', 'owner').canDelete, role).toBe(false)
+  })
+
+  it('people who can neither preview nor restore (guests) are told why, instead of rows that do nothing', () => {
+    const guest = checkpointPermissions('editor', 'active', 'guest')
+    expect(checkpointAccessHint(guest, false)).toBe(
+      'Only members of this workspace can open or restore earlier versions of this board.',
+    )
+    expect(checkpointAccessHint(checkpointPermissions('viewer', 'active', 'member'), true)).toBeNull()
+    expect(checkpointAccessHint(checkpointPermissions('viewer', 'active', 'member'), false)).toBeNull()
   })
 })
 
