@@ -14,18 +14,27 @@
 //   `append` to any field): `userId` must be the ticket's, or the session is closed INVALID_RECORD;
 //   `userName` and `color` become the ticket's; `lastActivityTimestamp` is clamped to server time;
 //   `chatMessage` is capped.
+// - A push whose document diff writes a tldraw `user:` record is checked the same way (G-R8,
+//   user-records.ts): the session's own record must say what the ticket says, and a user record may
+//   only be sent under its own id; otherwise the whole push is refused and the session closed
+//   INVALID_RECORD. Other people's records go on to the room, whose authorizer skips them.
 // - Everything else (document pushes, pings, connects) goes through verbatim and is NOT parsed. JSON
-//   can write a letter only literally or as a \u escape, so a text that contains neither `presence`
-//   nor `\u` cannot have a "presence" key. Such a text costs one regex scan, never a parse.
+//   can write a letter only literally or as a \u escape, so a text that contains none of `presence`,
+//   `user` and `\u` can have neither a "presence" key nor a user record (typeName "user", ids
+//   "user:…"). Such a text costs one regex scan, never a parse.
 //
 // The stored presence can only drift through these ops: a session's first presence op must be a put
 // (sync-core ignores a patch with nothing to patch), and every later patch is bound the same way.
 import { createUserId } from '@tldraw/tlschema'
+import { userRecordOpsAllowed } from './user-records.ts'
 
 /** Longest cursor-chat message kept. tldraw has no limit of its own; its bubble shows one line. */
 export const MAX_CHAT_MESSAGE_LENGTH = 500
 
-/** Who a session's presence says it is: always the ticket's user, never what the client sends. */
+/**
+ * Who a session's presence and its own tldraw user record say it is: always the ticket's user, never
+ * what the client sends.
+ */
 export interface PresenceIdentity {
   /** `user:<ticket uid>`: tldraw's createUserId, which is also what the web client sends. */
   userId: string
@@ -138,15 +147,24 @@ export type Inbound =
   | { kind: 'partial' }
   /** A presence that claims another user: close the session with INVALID_RECORD. */
   | { kind: 'forged' }
+  /**
+   * A push that writes the session's own user record unlike the ticket, or sends a user record
+   * under another id (user-records.ts): close the session with INVALID_RECORD.
+   */
+  | { kind: 'forged-user' }
   /** A broken chunk stream: reset the socket (room.handleSocketError), as sync-core's own assembler does. */
   | { kind: 'malformed' }
 
 const PARTIAL: Inbound = { kind: 'partial' }
 const FORGED: Inbound = { kind: 'forged' }
+const FORGED_USER: Inbound = { kind: 'forged-user' }
 const MALFORMED: Inbound = { kind: 'malformed' }
 const CHUNK_RE = /^(\d+)_/
-/** Could this JSON text have a "presence" key? One pass (~0.25 ms per MB, a fraction of one JSON.parse). */
-const MAYBE_PRESENCE_RE = /presence|\\u/
+/**
+ * Could this JSON text have a "presence" key or a user record? One pass (~0.25 ms per MB, a fraction
+ * of one JSON.parse).
+ */
+const MAYBE_BOUND_RE = /presence|user|\\u/
 
 /** One per socket: frames in, whole bound messages out. Never throws. */
 export class InboundFrames {
@@ -199,15 +217,17 @@ export class InboundFrames {
   }
 
   private message(text: string): Inbound {
-    if (!MAYBE_PRESENCE_RE.test(text)) return { kind: 'deliver', text }
+    if (!MAYBE_BOUND_RE.test(text)) return { kind: 'deliver', text }
     let msg: unknown
     try {
       msg = JSON.parse(text)
     } catch {
       return { kind: 'deliver', text } // invalid JSON: the room rejects the session, as it always has
     }
-    // TLSyncRoom reads presence only from a push (`'presence' in message && message.presence`).
-    if (!isObj(msg) || msg.type !== 'push' || !msg.presence) return { kind: 'deliver', text }
+    // TLSyncRoom reads a document diff and presence only from a push (each only when truthy).
+    if (!isObj(msg) || msg.type !== 'push') return { kind: 'deliver', text }
+    if (msg.diff && !userRecordOpsAllowed(msg.diff, this.who)) return FORGED_USER
+    if (!msg.presence) return { kind: 'deliver', text }
     const bound = bindPresenceOp(msg.presence, this.who, this.now())
     if (!bound.ok) return FORGED
     // Unchanged: the very text we checked (it parses to the same object in the room).

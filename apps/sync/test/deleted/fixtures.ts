@@ -141,7 +141,12 @@ export class RoomClient {
     room.handleSocketConnect({
       sessionId: this.sessionId,
       isReadonly: opts.readonly ?? false,
-      meta: { userId, role: opts.readonly ? 'viewer' : 'editor', name: opts.name ?? userId },
+      meta: {
+        userId,
+        role: opts.readonly ? 'viewer' : 'editor',
+        name: opts.name ?? userId,
+        color: '#1d4ed8',
+      },
       socket: {
         send: (d: string) => {
           this.msgs.push(JSON.parse(d))

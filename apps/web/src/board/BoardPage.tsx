@@ -268,23 +268,35 @@ function BoardSession({
     () => ({ id: userId, name: userName, color: safeColor(userColor, userId) }),
     [userId, userName, userColor],
   )
+  // Who the latest connection ticket says this is. Every (re)connect fetches a ticket first, so this
+  // is the ticket of the socket being opened. The sync server accepts this session's user record only
+  // with the ticket's name and color (apps/sync user-records.ts), and a long guest name is shortened
+  // there ("Alexandr… (guest)"), so the account's own name would get the tab closed. An atom, like
+  // readonlyAtom, so a new ticket never reconnects.
+  const [ticketUserAtom] = useState(() =>
+    atom<TicketResponse['user'] | null>('dr-ticket-user', null, {
+      isEqual: (a, b) => a === b || (!!a && !!b && a.id === b.id && a.name === b.name && a.color === b.color),
+    }),
+  )
   const users = useMemo<TLUserStore>(
     () => ({
       // Only id, display name and color: tldraw persists user records into the board document.
       // Read-only roles get none: the editor would write it, the server would discard it, and tldraw
       // 5.4.2 re-writes it forever (~14 pushes/s; docs/research/saved-indicator.md §7). Their name and
-      // color reach others through presence (getUserPresence below) instead.
-      currentUser: computed('currentUser', () =>
-        readonlyAtom.get()
-          ? null
-          : UserRecordType.create({
-              id: createUserId(identity.id),
-              name: identity.name,
-              color: identity.color,
-            }),
-      ),
+      // color reach others through presence (getUserPresence below) instead. None before the first
+      // ticket either (the editor only mounts once its socket has synced).
+      currentUser: computed('currentUser', () => {
+        const ticketUser = ticketUserAtom.get()
+        if (readonlyAtom.get() || !ticketUser) return null
+        return UserRecordType.create({
+          id: createUserId(ticketUser.id),
+          name: ticketUser.name,
+          // the server's presenceIdentity makes the same choice for a color that is not plain hex
+          color: safeColor(ticketUser.color, ticketUser.id),
+        })
+      }),
     }),
-    [identity, readonlyAtom],
+    [readonlyAtom, ticketUserAtom],
   )
   // useSync keeps this in an atom (useReactiveEvent), so a new function does not reconnect.
   const getUserPresence = useCallback(
@@ -305,12 +317,16 @@ function BoardSession({
       createTicketUri({
         boardId,
         fetchTicket: (bid) => api.boardTicket(bid),
-        onTicket: (t) => handlers.current.onTicket(t),
+        onTicket: (t) => {
+          // Only a ticket a socket connects with (not the role re-read below): it is what the server pins.
+          ticketUserAtom.set(t.user)
+          handlers.current.onTicket(t)
+        },
         onAccessLost: () => handlers.current.onAccessLost(),
         onSignedOut: () => handlers.current.onSignedOut(),
         origin: location,
       }),
-    [boardId],
+    [boardId, ticketUserAtom],
   )
   useEffect(() => () => ticketUri.cancel(), [ticketUri])
   // The save tracker wraps tldraw's own socket adapter (docs/research/saved-indicator.md). Its uri

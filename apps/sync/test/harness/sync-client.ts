@@ -18,11 +18,12 @@ import {
   type TLRecord,
   type TLSchema,
   type TLStore,
+  type TLUser,
 } from '@tldraw/tlschema'
 import { WebSocket } from 'ws'
 import type { ShapeRecord } from './records.ts'
 import { mintTicket } from './tickets.ts'
-import { clientSignals, createAtom, createStore, type MutableSignal } from './tldraw-runtime.ts'
+import { clientSignals, createAtom, createStore, type MutableSignal, react } from './tldraw-runtime.ts'
 import { waitFor } from './wait.ts'
 
 // Wire types (protocol.ts in sync-core; @internal there, so restated minimally).
@@ -147,6 +148,7 @@ export class NodeSyncClient {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
   private rawClock = RAW_CLOCK_BASE
   private readonly rawClocks = new Set<number>()
+  private readonly reactions: (() => void)[] = []
   private role: TicketRole
 
   constructor(opts: SyncClientOptions) {
@@ -284,12 +286,12 @@ export class NodeSyncClient {
     return this.sentPushes().at(-1)?.clientClock
   }
 
-  /** Sends a push that bypasses TLSyncClient (and therefore client-side validation). */
-  sendRawPush(diff: NetworkDiff): number {
-    const clientClock = ++this.rawClock
-    this.rawClocks.add(clientClock)
-    this.transmit(JSON.stringify({ type: 'push', clientClock, diff }), true)
-    return clientClock
+  /**
+   * Sends a push that bypasses TLSyncClient (and therefore client-side validation). `chunkSize`
+   * splits it into frames as sendRawPresence does.
+   */
+  sendRawPush(diff: NetworkDiff, opts: { chunkSize?: number } = {}): number {
+    return this.sendRawPresence(undefined, { diff, chunkSize: opts.chunkSize })
   }
 
   /**
@@ -320,11 +322,34 @@ export class NodeSyncClient {
     )
   }
 
+  /**
+   * What tldraw's Editor does with its TLUserStore's currentUser (@tldraw/editor 5.4.2 Editor.ts,
+   * react('sync current user record') -> _ensureUserRecord): puts `user` whenever the stored record
+   * is missing or differs, so again after every rebase that changes it. Returns the stop function.
+   */
+  keepUserRecord(user: TLUser): () => void {
+    const stop = react(`sync current user record (${this.name})`, () => {
+      const existing = this.store.get(user.id)
+      if (
+        existing &&
+        existing.name === user.name &&
+        existing.color === user.color &&
+        existing.imageUrl === user.imageUrl &&
+        existing.meta === user.meta
+      )
+        return
+      this.store.put([user])
+    })
+    this.reactions.push(stop)
+    return stop
+  }
+
   /** Permanently closes the client (like unmounting useSync). */
   dispose(): void {
     if (this.disposed) return
     this.disposed = true
     this.blocked = true
+    for (const stop of this.reactions.splice(0)) stop()
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer)
     this.client.close()
     this.closeSocket(1000, 'test: dispose')

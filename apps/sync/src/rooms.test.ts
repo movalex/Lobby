@@ -99,7 +99,7 @@ describe('RoomRegistry on node:sqlite', () => {
     const clock = room.getCurrentDocumentClock()
     room.handleSocketConnect({
       sessionId: 'u1:tab',
-      meta: { userId: 'u1', role: 'editor', name: 'u1' },
+      meta: { userId: 'u1', role: 'editor', name: 'u1', color: '#1d4ed8' },
       socket: { send() {}, close() {}, readyState: 1 },
     })
     room.closeSession('u1:tab') // removal is synchronous -> onSessionRemoved(0) -> evict timer

@@ -11,12 +11,16 @@ import { hookedSqlWrapper } from './deleted/sql.ts'
 import { type DeletedEntry, type DeletedLimits, DeletedStore, ensureDeletedTables } from './deleted/store.ts'
 import { createTextLease, type TextLease } from './lease.ts'
 import type { BoardRole } from './permissions.ts'
+import { authorizeUserRecord } from './user-records.ts'
 
 /** Per-session data taken from the verified ticket (docs/M1-CONTRACTS.md §6). */
 export interface SessionMeta {
   userId: string
   role: BoardRole
+  /** The ticket's name: the only one the session's tldraw user record may carry (user-records.ts). */
   name: string
+  /** The ticket's color as everyone is shown it (presenceIdentity: a plain hex color or the fallback). */
+  color: string
 }
 
 export type Room = TLSocketRoom<TLRecord, SessionMeta>
@@ -332,8 +336,12 @@ export class RoomRegistry {
       entry.room = new TLSocketRoom<TLRecord, SessionMeta>({
         schema: this.opts.schema,
         storage: entry.storage,
-        // Lease veto first; a delete it allowed is captured for "Recently deleted".
-        authorizeRecord: withDeleteCapture(entry.lease.authorizeRecord, entry.deleted),
+        authorizeRecord: {
+          // Lease veto first; a delete it allowed is captured for "Recently deleted".
+          ...withDeleteCapture(entry.lease.authorizeRecord, entry.deleted),
+          // Only the session's own tldraw user record, as its ticket says (G-R8).
+          user: authorizeUserRecord,
+        },
         // A client push committed a document change (read-only discards and presence never do).
         onCommittedChanges: () => this.documentChanged(boardId),
         log: {
