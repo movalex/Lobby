@@ -54,6 +54,8 @@ The recheck of revision 3 (2026-09-28) found all 3 open musts and all 11 new pro
    - Appendix B 13 (signing key or `--allow-unsigned`; deleting the restored copies);
    - that real DBC board content may be restored to the workstation for B8.
 
+   B13 and the restore were answered on 2026-09-28: restore, verify signatures, and delete the copies afterwards (Appendix B 13). The NAS throwaway containers fall under the standing NAS approval for `draftroom-*` containers.
+
 **Before the migration waves (R0, 2B, runbook):**
 9. R0's backup, drill and `readBoardDb` (backup.ts:139-147) throw on a file that has only `lb_*` tables. They need a code path and a gate test.
 10. Roll-forward must mirror R0's `removeRestored` and trims (store.ts:508-521) into `lb_deleted`, so an element restored during a rollback is not still listed as deleted.
@@ -2113,6 +2115,7 @@ with:
 11. **One real iPhone or iPad Safari session** before cut-over.
 12. **Approving the AGENTS.md rewrite** (§10).
 13. **For spike B8:** whether the drill may verify backup signatures with the staging signing key (supplied by the owner, never printed), or runs `--allow-unsigned` with its sha256 checks only; and whether the restored staging copies are deleted at the end of the spike (the default) or kept.
+    **Answered 2026-09-28:** restore the staging boards to the workstation, and delete the copies when the spike ends. Verify signatures with the staging signing key, read from the Render sync service env through the Render API; it is never printed or saved to a file.
 14. **A disk resize** if the pre-cut-over free-space check fails (paid).
 15. Whether sticky notes should ever show Excalidraw's creation-date footer. The plan hides it.
 
