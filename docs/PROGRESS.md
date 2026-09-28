@@ -330,3 +330,28 @@ Checks: lint 0 errors / 0 warnings (581 files); typecheck 14 projects; vitest 1,
     - visible focus rings;
     - the selection bar is keyboard-reachable, and Shift+F10 opens the context menu;
     - 3:1 input borders.
+- Staging deploy of 2277660 (11:13–11:16Z): wave 4b plus the first polish round. OpenAI is configured on the api, and the live `/api/boards/:bid/ai` reports enabled with 0% of the budget used. A sync restart showed no tini FATAL (the graceful-shutdown fix works on Render). A confirmation e2e run passed 277/277.
+- **Performance pass** (a repeatable harness in `e2e/perf/`, `pnpm --filter @draftroom/e2e perf`, with a budget check):
+  - the canvas is memoized against save-indicator re-renders;
+  - note label measurements are cached (a note util with the same schema);
+  - the +1 scan skips notes without +1s;
+  - pans are composited while the zoom is unchanged.
+  
+  The editing tab at fit went from 11.5–14.7 fps to 22.7–37 fps. Still open, and inside tldraw 5.4.2: edit visibility p95 at fit is 249–338 ms against the 250 ms gate (it passes at 100%), and the 600 px sweep pans at 16–21 fps against 30.
+- **Polish round 2** (four owners):
+  - **Canvas**: uniform-cell arrange, a consistent scale for mixed drops, "Processing…" tiles for watchers, framed thumbnails on the dark dashboard, wide boards framed on their first frame, and no opacity slider on frames.
+  - **Shell**:
+    - "Project lobbies" copy;
+    - the Language menu removed;
+    - a readable storage line with a breakdown popover;
+    - the dashboard shows boards first at 390 px and 200%;
+    - skip links, and focus on the main heading after sign-in.
+  - **Accessibility**: a keyboard "Add a sticky note", focus-trapped AI and tag popovers, a quieter save live region, placeholder contrast, and the gallery tab order.
+  - **Server edge cases**:
+    - the notification flood cap holds under concurrency (an advisory lock, plus an opt-in real-Postgres test);
+    - mention caps;
+    - the workspace AI setting in one transaction;
+    - duplicates keep the AI switch;
+    - exports keep vote results and the CSV names colours right;
+    - phone notices sit below tldraw's menu.
+- DEMO.md: the script now uses "Share with a client", AI "Group into themes" and "Present to everyone". The "(if merged)" markers are gone, and the extras list covers the phone guest, private brainstorm, mind map, tags and search, and the safety answers.
