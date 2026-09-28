@@ -231,6 +231,21 @@ describe('presentation registry (pure)', () => {
     expect(last()?.change.kind).toBe('resumed')
   })
 
+  it('an ended presentation is never "resumed": its old followers would be pulled into a new one', () => {
+    const { r, last } = registry()
+    const p = r.start(BOARD, A, { tab: TAB, slide: slide(0) })
+    r.follow(BOARD, { ...C, guest: false }, p.id, true)
+    r.stop(BOARD, A, p.id, false)
+    // Another editor (or A again) asking to "resume" the ended id gets a new presentation.
+    const again = r.start(BOARD, B, { tab: TAB2, slide: slide(0), resumeId: p.id })
+    expect(again.id).not.toBe(p.id)
+    expect(last()?.change.kind).toBe('started')
+    // Ended by the grace too.
+    r.stop(BOARD, B, again.id, false)
+    const third = r.start(BOARD, B, { tab: TAB2, slide: slide(0), resumeId: again.id })
+    expect(third.id).not.toBe(again.id)
+  })
+
   it('ending: the presenter or an owner (asOwner); nobody else; a gone id is a no-op', () => {
     const { r, last } = registry()
     const p = r.start(BOARD, A, { tab: TAB, slide: slide(0) })
@@ -427,6 +442,23 @@ describe('presentation routes: who may do what', () => {
     expectStatus(await w.viewer.req('POST', path(w, '/follow'), { id: p.id, following: true }), 429)
     // Someone else is not held back by the viewer's limit.
     expectStatus(await w.commenter.req('POST', path(w, '/follow'), { id: p.id, following: true }), 200)
+  })
+
+  it("refused slide requests never use up the board's slide budget (only the presenter's tab counts)", async () => {
+    presentationSettings.slidesPerSecond = 3
+    w = await setupWorld()
+    const p = await start(w)
+    // Another editor (the owner) and the presenter's other tab: all refused, none counted.
+    for (let i = 1; i <= 5; i++) {
+      const res = await w.owner.req('POST', path(w, '/slide'), { id: p.id, tab: TAB, ...slide(i) })
+      expectStatus(res, 409)
+      expect(json<{ error: { code: string } }>(res).error.code).toBe('NOT_PRESENTER')
+    }
+    const otherTab = await w.editor.req('POST', path(w, '/slide'), { id: p.id, tab: TAB2, ...slide(1) })
+    expect(json<{ error: { code: string } }>(otherTab).error.code).toBe('OTHER_TAB')
+    // The presenter still has the whole budget.
+    for (let i = 1; i <= 3; i++)
+      expectStatus(await w.editor.req('POST', path(w, '/slide'), { id: p.id, tab: TAB, ...slide(i) }), 200)
   })
 })
 

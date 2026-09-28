@@ -309,6 +309,36 @@ describe('present-live controller', () => {
     t.unmount()
   })
 
+  it('stepping out while the api restarts stays stepped out when the presentation comes back', async () => {
+    const t = setup()
+    await t.event(t.annPres(), 'started', ANN)
+    t.live.join()
+    await t.settle()
+    await t.respond(
+      posts(t.calls, '/follow')[0],
+      t.annPres({ followers: [{ userId: ME, name: 'Me', guest: false }], followerCount: 1 }),
+    )
+    // The api restarts: it has no presentation until Ann's tab puts it back.
+    for (const f of t.resyncs) f()
+    await t.settle()
+    await t.respond(
+      t.calls.find((c) => c.method === 'GET'),
+      null,
+      'e2',
+    )
+    expect(t.presenter.role()).toBe('follower') // "Reconnecting to the presentation…"
+    t.live.stepOut()
+    await t.settle()
+    expect(t.presenter.isPresenting()).toBe(false)
+    const followsBefore = posts(t.calls, '/follow').length
+    // Ann's tab puts the same presentation back: this person said no, so they are not pulled back in.
+    await t.event(t.annPres({ slideId: 'shape:f1', index: 1 }), 'resumed', ANN)
+    expect(t.presenter.isPresenting()).toBe(false)
+    expect(t.live.store.intentFor(ID)).toBe('declined')
+    expect(posts(t.calls, '/follow')).toHaveLength(followsBefore)
+    t.unmount()
+  })
+
   it('an api restart: the presenting tab puts the same presentation back', async () => {
     const t = setup()
     t.presenter.start()

@@ -20,6 +20,7 @@ import type { FeatureContext } from '../types.ts'
 import { PersonName } from '../workshops/Hands.tsx'
 import { storeFor } from '../workshops/hooks.ts'
 import { usePresenting } from '../workshops/presenting.ts'
+import { frameBoxes, frameRecordsQuery } from './frames.ts'
 import {
   buildPeople,
   type FrameBox,
@@ -224,28 +225,6 @@ function useTick(ms: number): number {
   return t
 }
 
-function framesOf(editor: Editor): FrameBox[] {
-  const out: FrameBox[] = []
-  for (const page of editor.getPages()) {
-    for (const id of editor.getPageShapeIds(page.id)) {
-      const s = editor.getShape(id)
-      if (s?.type !== 'frame') continue
-      const b = editor.getShapePageBounds(s)
-      if (!b) continue
-      const name = (s.props as { name?: unknown }).name
-      out.push({
-        name: typeof name === 'string' ? name : '',
-        pageId: page.id,
-        x: b.x,
-        y: b.y,
-        w: b.w,
-        h: b.h,
-      })
-    }
-  }
-  return out
-}
-
 function PeoplePanel({
   id,
   ctx,
@@ -309,8 +288,15 @@ function PeoplePanel({
     }
   }, [anchor, onClose])
 
-  // Frames change with the board, not with presence: their own derivation (only while open).
-  const frames = useValue('dr-people-frames', () => framesOf(editor), [editor])
+  // Frames change with the board, not with presence: their own derivation (only while open), from
+  // the frame records alone and serialized, so edits elsewhere on the board re-render nothing here.
+  const frameRecords = useMemo(() => frameRecordsQuery(editor), [editor])
+  const framesKey = useValue(
+    'dr-people-frames',
+    () => JSON.stringify(frameBoxes(editor, frameRecords.get())),
+    [editor, frameRecords],
+  )
+  const frames = useMemo(() => JSON.parse(framesKey) as FrameBox[], [framesKey])
   // Serialized: presence changes on every cursor move, the list only when what it shows changes.
   const rowsKey = useValue('dr-people-rows', () => {
     const live = getLive(editor)

@@ -61,6 +61,9 @@ export function newPresentationId(): string {
   return `prs_${body}`
 }
 
+/** Ended presentation ids remembered (so none is "resumed"); ids are random, so this only bounds memory. */
+const ENDED_IDS_KEPT = 5_000
+
 /** Follower changes on one board are published at most this often (one event carries them all). */
 export const FOLLOWERS_PUBLISH_MS = 300
 
@@ -142,6 +145,8 @@ export class PresentationRegistry {
   /** Boards with follower changes not published yet, and when each board last published them. */
   private readonly pendingFollowers = new Map<string, ReturnType<typeof setTimeout> | null>()
   private readonly lastFollowersPublish = new Map<string, number>()
+  /** Presentations that ended in this process (oldest first, at most ENDED_IDS_KEPT). */
+  private readonly endedIds = new Set<string>()
   private readonly epoch = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
   private changes = 0
 
@@ -222,8 +227,9 @@ export class PresentationRegistry {
       this.emit(boardId, 'handoff', null, actor)
       return this.view(boardId) as LivePresentation
     }
+    const resumed = !!input.resumeId && !this.endedIds.has(input.resumeId)
     const session: Session = {
-      id: input.resumeId ?? newPresentationId(),
+      id: resumed && input.resumeId ? input.resumeId : newPresentationId(),
       presenter: actor,
       tab: input.tab,
       slide: { ...input.slide },
@@ -233,17 +239,20 @@ export class PresentationRegistry {
       followers: new Map(),
     }
     this.sessions.set(boardId, session)
-    this.emit(boardId, input.resumeId ? 'resumed' : 'started', null, actor)
+    this.emit(boardId, resumed ? 'resumed' : 'started', null, actor)
     return this.view(boardId) as LivePresentation
+  }
+
+  /** Throws unless `actorId` presents `id` from `tab` (the slide route asks before its rate limit). */
+  assertPresentingTab(boardId: string, actorId: string, id: string, tab: string): void {
+    this.sweep(boardId)
+    this.presentingTab(boardId, actorId, id, tab)
   }
 
   /** The presenting tab moved to another slide. Returns whether anything changed. */
   slide(boardId: string, actorId: string, input: { id: string; tab: string; slide: PresentSlide }): boolean {
     this.sweep(boardId)
-    const s = this.presenterSession(boardId, actorId, input.id)
-    if (s.tab !== input.tab) {
-      throw new PresentRuleError('OTHER_TAB', 'You are presenting from another tab.')
-    }
+    const s = this.presentingTab(boardId, actorId, input.id, input.tab)
     this.markPresenterOnline(s)
     const same =
       s.slide.slideId === input.slide.slideId &&
@@ -375,13 +384,25 @@ export class PresentationRegistry {
     return s
   }
 
+  private presentingTab(boardId: string, actorId: string, id: string, tab: string): Session {
+    const s = this.presenterSession(boardId, actorId, id)
+    if (s.tab !== tab) throw new PresentRuleError('OTHER_TAB', 'You are presenting from another tab.')
+    return s
+  }
+
   private markPresenterOnline(s: Session) {
     s.presenterGoneSince = null
     s.presenterOnline = true
   }
 
   private end(boardId: string, reason: PresentEndReason, by: Actor | null) {
-    if (!this.sessions.delete(boardId)) return
+    const s = this.sessions.get(boardId)
+    if (!s) return
+    this.sessions.delete(boardId)
+    // Never "resumed" (only a restart loses a presentation): its followers would be pulled back in.
+    this.endedIds.add(s.id)
+    if (this.endedIds.size > ENDED_IDS_KEPT)
+      this.endedIds.delete(this.endedIds.values().next().value as string)
     this.emit(boardId, 'ended', reason, by)
   }
 
@@ -515,8 +536,10 @@ export function registerPresentation(app: FastifyInstance, ctx: FeatureContext):
     const input = parse(PresentSlideInput, req.body)
     const access = await requireBoardAction(db, boardOf(req), user.id, 'edit')
     const boardId = access.board.id
-    take(slideLimit, boardId, 'The slides are changing too fast. Wait a moment.')
     const { id, tab, slideId, index, count } = input
+    // Refused requests (someone else, another tab) never use up the presenting tab's budget.
+    run(() => registry.assertPresentingTab(boardId, user.id, id, tab))
+    take(slideLimit, boardId, 'The slides are changing too fast. Wait a moment.')
     run(() => registry.slide(boardId, user.id, { id, tab, slide: { slideId, index, count } }))
     return body(boardId)
   })

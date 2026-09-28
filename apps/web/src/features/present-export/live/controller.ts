@@ -319,8 +319,11 @@ export function mountLive(ctx: FeatureContext, presenter: Presenter): () => void
       // unless this tab comes back (a reload resumes it).
       if (reason === 'local' && p && p.presenter.userId === me.id && p.tab === tab) endIt(p.id)
     }
-    if (was === 'follower' && p && reason !== 'remote') {
-      if (reason === 'local') store.setIntent(p.id, 'declined')
+    // Stepping out while the api restarts ("Reconnecting…") counts too: the presentation it puts back
+    // has the same id, and must not pull this person back in.
+    const left = p ?? store.restartLost.get()
+    if (was === 'follower' && left && reason !== 'remote') {
+      if (reason === 'local') store.setIntent(left.id, 'declined')
       void store.follow(false)
     }
   })
