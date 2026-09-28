@@ -462,6 +462,31 @@
   margin: 0 3px;
   background: var(--dr-line);
 }
+/* MAK-18: the columns stepper next to "Arrange as grid" */
+.dr-cux-gridcols {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  padding-left: 2px;
+}
+.dr-cux-gridcols__step {
+  width: 26px;
+  font: 600 16px / 1 var(--dr-font);
+}
+.dr-cux-gridcols__step:disabled {
+  color: var(--dr-line);
+  cursor: default;
+}
+.dr-cux-gridcols__step:disabled:hover {
+  background: transparent;
+}
+.dr-cux-gridcols__label {
+  min-width: 66px;
+  color: var(--dr-ink-2);
+  font: 12px / 1 var(--dr-font);
+  text-align: center;
+  white-space: nowrap;
+}
 
 @media (prefers-reduced-motion: reduce) {
   .dr-note-palette__swatch:hover {

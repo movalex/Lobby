@@ -157,6 +157,9 @@ describe('Miro shortcut map', () => {
     expect(idsFor('m')).toEqual(['dr-toggle-minimap'])
     expect(idsFor('ctrl+f')).toEqual(['dr-board-search'])
     expect(idsFor('meta+f')).toEqual(['dr-board-search'])
+    // MAK-18 (no Miro default): next to tldraw's Alt+Shift+H / Alt+Shift+V distribute keys.
+    expect(idsFor('alt+shift+g')).toEqual(['dr-arrange-grid'])
+    expect(idsFor('alt+shift+h')).toEqual(['distribute-horizontal'])
   })
 
   it("keeps tldraw's own keys where they do not collide", () => {
