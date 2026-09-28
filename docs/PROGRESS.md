@@ -210,3 +210,32 @@ Checks: lint 0 errors / 0 warnings (581 files); typecheck 14 projects; vitest 1,
 
   Every fix has a test that failed on the unfixed code.
 - Integration of the rename and the security fixes onto M3 + wave 2 (`integration/rename`): the conflicts were in index.html, ShareDialog, styles.css, ClerkSignIn and PROGRESS. The new user-facing strings from the security branches were renamed to Lobby, and the dark theme got a value for `--dr-mark-ink-on-dark`. lint 0 errors (658 files), typecheck clean, vitest 1,891 passed / 5 skipped, e2e 175/175 (11.4 min).
+
+### 2026-09-28
+- Deployed the rename and the security fixes (0e58e2e) to staging: api → sync → web all went live on the first try, and the live sign-in page reads "DBC Lobby". With the owner's go-ahead, deleted the unused 5 GB api disk and raised the per-workspace file storage to 100 GB (`DRAFTROOM_WORKSPACE_QUOTA_MB`, render.yaml). A Blueprint env change redeploys the api by itself.
+- Measured on staging: requests through the static-site rewrite and straight to the api land in the same per-IP rate-limit bucket (DEPLOY.md "Client IPs"), so per-IP limits key on the real client.
+- **Wave 3** (docs/WAVE3-CONTRACTS.md), built by six owners, with an adversarial reviewer on each of the three permission-heavy ones:
+  - **Name-only guests** (migration `0009_guests`):
+    - review and workshop links can let people join with just a name;
+    - guests get a `guest` workspace membership and only their link's board;
+    - every place a name shows adds "(guest)";
+    - there is a server-side refusal list, per-IP and per-link join limits, and a sweep that ends guest sessions with no board.
+    
+    The reviewer fixed 7 issues: parallel joins getting past the rate limit, the marker being cut off on cursors, the per-link cap bypassed through accept, IPv6 /64 keying, HEAD requests skipping the guard, guests moving boards between projects, and a cross-workspace existence leak.
+  - **Private brainstorming** (`0010_private_notes`): drafts live only in Postgres and only their author can read them; events carry counts. The reveal commits once and then puts real note shapes into the board through a new sync endpoint, in one validated storage transaction, with shape ids derived from the draft ids, so the reveal is idempotent. An anonymous reveal carries no author anywhere. The reviewer fixed a cancel-during-reveal race, added a start rate limit, fixed a double submit, and handled oversized frames.
+  - **Dashboard thumbnails** (`0011_board_thumbnails`): an editor's client captures a thumbnail after edits settle and on leave. The api validates it by magic bytes and dimensions, rate-limits it, and swaps it in the blob store. GET needs view permission and sends nosniff and a sandbox CSP.
+  - **Export policy** (`0012_board_export_policy`), where owners pick "Viewers and commenters can export, copy and download files":
+    - limited viewers get 403 `EXPORT_DISABLED` on original downloads and board export;
+    - previews and media elements keep rendering;
+    - the client hides the export and copy entries.
+    
+    The reviewer closed an import bypass and a keep-sharing duplicate bypass.
+  - **Offsite backups**: each consistent board backup is also streamed to the blob store (R2 on staging) with a manifest (sha256, clock, schema, referenced asset ids). Retention is the newest 12 plus one per day for 14 days, there is `/internal/backups/status`, and there is a restore drill from the store. The runbook is in DEPLOY.md.
+  - **The "Lobby tour" sample board**: six frames in presentation order, first in the gallery, with an empty-dashboard button. DEMO.md was rewritten for a 5-minute leadership demo.
+
+  Integration: only the migration lists conflicted. lint 0/0 (743 files), vitest 2,190 passed, e2e 192/192 (14.2 min).
+- Wave 3 round 2 on the integrated branch:
+  - G-R8 fixed: sync pins tldraw `user` records to the ticket identity. Forged names or colors close the session (terminal, so no loop), writes to other people's records are skipped, and the client builds its user from the ticket.
+  - A seam security review: 12 findings, 3 medium (attribution forgery via note props, one guest using up the workspace quota, guest grants copied by keep-sharing duplicates).
+  - A full walkthrough of DEMO.md on a local stack: 18 findings, 137 screenshots.
+  - Two agents misread their task (the real-Postgres lens and the guest polish) and were rerun in round 3.
