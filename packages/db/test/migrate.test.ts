@@ -226,6 +226,7 @@ describe('shipped migrations', () => {
       '0013_asset_gc',
       '0014_checkpoint_policy',
       '0015_board_search',
+      '0016_ai_usage',
     ])
   })
 
@@ -247,10 +248,13 @@ describe('shipped migrations', () => {
       '0013_asset_gc',
       '0014_checkpoint_policy',
       '0015_board_search',
+      '0016_ai_usage',
     ])
     expect(await migrate(db)).toEqual({ applied: [], newer: [] })
     expect(await tableNames()).toEqual([
       'access_requests',
+      'ai_notice_acceptances',
+      'ai_usage',
       'asset_derivative_reservations',
       'asset_derivatives',
       'asset_gc_pending_deletes',
@@ -326,6 +330,7 @@ describe('shipped migrations', () => {
       '0013_asset_gc',
       '0014_checkpoint_policy',
       '0015_board_search',
+      '0016_ai_usage',
     ])
     expect(await recorded()).toEqual(shipped.map((m) => m.name))
     const inv = await db.one<{ multi_use: boolean; use_count: number }>(

@@ -9,6 +9,7 @@
 import { type ReactNode, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import { type Editor, type TLShapeId, useActions, useEditor, useValue } from 'tldraw'
 import { isReadonlyRole } from '../../board/access.ts'
+import { AiBarButton } from '../ai/menus.tsx'
 import { TagsBarButton } from '../tags/TagPicker.tsx'
 import type { FeatureContext } from '../types.ts'
 import { currentGridSession, hasArrangeable, runArrangeAsGrid } from './arrange-grid-runtime.ts'
@@ -330,6 +331,7 @@ function SelectionBar({ ctx }: { ctx: FeatureContext }) {
         </BarButton>
       )}
       <TagsBarButton />
+      <AiBarButton />
       {canEdit && state.n >= 2 && (
         <>
           <span className="dr-cux-selbar__sep" aria-hidden="true" />

@@ -1,0 +1,130 @@
+// AI settings (docs/WAVE4-CONTRACTS.md §4 ai-assist), parsed by loadConfig() into ApiConfig.ai. Error
+// messages name variables, never values (OPENAI_API_KEY is a secret).
+//
+// The OpenAI key has NO spending cap at the provider, so these limits are the only protection. Every
+// limit is enforced server-side in budget.ts; the defaults are the contract's:
+//   input ≈ 12k tokens and output ≈ 1.5k tokens per call, 20 calls per person per hour, 400k tokens per
+//   workspace per UTC day. Two more, because a per-workspace budget multiplies by the workspaces one
+//   person can create (every account gets a personal workspace) and by the people in one workspace:
+//   150k tokens per person per day, and 2M tokens per day for the whole of Lobby.
+// DRAFTROOM_AI=off is the kill switch: nothing is called, the feature is hidden.
+
+type Env = Record<string, string | undefined>
+
+export const REASONING_EFFORTS = ['none', 'minimal', 'low', 'medium', 'high'] as const
+export type ReasoningEffort = (typeof REASONING_EFFORTS)[number]
+
+export interface AiConfig {
+  /** DRAFTROOM_AI=on (default) | off: the global kill switch. */
+  enabled: boolean
+  /** OPENAI_API_KEY; null = AI is not configured (the feature is hidden). */
+  apiKey: string | null
+  /** OPENAI_MODEL (default gpt-5.4-mini). */
+  model: string
+  /** OPENAI_BASE_URL without a trailing slash (default https://api.openai.com/v1; https in production). */
+  baseUrl: string
+  /** DRAFTROOM_AI_TIMEOUT_MS: the whole OpenAI request, answer included (default 30 s). */
+  timeoutMs: number
+  /** DRAFTROOM_AI_MAX_INPUT_TOKENS: the prompt, estimated conservatively (default 12,000). */
+  maxInputTokens: number
+  /** DRAFTROOM_AI_MAX_OUTPUT_TOKENS: max_completion_tokens, reasoning included (default 1,500). */
+  maxOutputTokens: number
+  /** DRAFTROOM_AI_CALLS_PER_HOUR: per person, every call counted, failed ones too (default 20). */
+  callsPerUserPerHour: number
+  /** DRAFTROOM_AI_DAILY_TOKENS: per workspace per UTC day (default 400,000). */
+  workspaceDailyTokens: number
+  /** DRAFTROOM_AI_USER_DAILY_TOKENS: per person per UTC day, across workspaces (default 150,000). */
+  userDailyTokens: number
+  /** DRAFTROOM_AI_GLOBAL_DAILY_TOKENS: all of Lobby per UTC day (default 2,000,000). */
+  globalDailyTokens: number
+  /**
+   * DRAFTROOM_AI_REASONING_EFFORT: sent as reasoning_effort (default low: reasoning tokens count toward
+   * the output cap). `off` = not sent, for models without the parameter.
+   */
+  reasoningEffort: ReasoningEffort | null
+}
+
+export const DEFAULT_AI_CONFIG: Readonly<AiConfig> = Object.freeze<AiConfig>({
+  enabled: true,
+  apiKey: null,
+  model: 'gpt-5.4-mini',
+  baseUrl: 'https://api.openai.com/v1',
+  timeoutMs: 30_000,
+  maxInputTokens: 12_000,
+  maxOutputTokens: 1_500,
+  callsPerUserPerHour: 20,
+  workspaceDailyTokens: 400_000,
+  userDailyTokens: 150_000,
+  globalDailyTokens: 2_000_000,
+  reasoningEffort: 'low',
+})
+
+const read = (env: Env, name: string): string | undefined => {
+  const v = env[name]?.trim()
+  return v ? v : undefined
+}
+
+function int(env: Env, name: string, fallback: number, min: number, max: number): number {
+  const raw = read(env, name)
+  if (raw === undefined) return fallback
+  if (!/^\d+$/.test(raw)) throw new Error(`${name} must be a whole number`)
+  const n = Number(raw)
+  if (n < min || n > max) throw new Error(`${name} must be between ${min} and ${max}`)
+  return n
+}
+
+// OpenAI keys are opaque; this only refuses obvious paste mistakes (spaces, quotes, newlines).
+const KEY_RE = /^[A-Za-z0-9_\-.]{20,512}$/
+const MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,99}$/
+
+function baseUrl(env: Env, production: boolean): string {
+  const raw = read(env, 'OPENAI_BASE_URL') ?? DEFAULT_AI_CONFIG.baseUrl
+  let url: URL
+  try {
+    url = new URL(raw)
+  } catch {
+    throw new Error('OPENAI_BASE_URL must be an absolute http(s) URL')
+  }
+  if (url.protocol !== 'https:' && url.protocol !== 'http:')
+    throw new Error('OPENAI_BASE_URL must be an absolute http(s) URL')
+  // The key rides on every request: never over plain http in production.
+  if (production && url.protocol !== 'https:') throw new Error('OPENAI_BASE_URL must be https in production')
+  if (url.username || url.password || url.search || url.hash)
+    throw new Error('OPENAI_BASE_URL must not carry credentials, a query or a fragment')
+  return url.href.replace(/\/+$/, '')
+}
+
+export function parseAiConfig(env: Env, production: boolean): AiConfig {
+  const d = DEFAULT_AI_CONFIG
+  const switchRaw = read(env, 'DRAFTROOM_AI')?.toLowerCase() ?? 'on'
+  if (switchRaw !== 'on' && switchRaw !== 'off') throw new Error('DRAFTROOM_AI must be on or off')
+  const apiKey = read(env, 'OPENAI_API_KEY') ?? null
+  if (apiKey !== null && !KEY_RE.test(apiKey)) throw new Error('OPENAI_API_KEY is malformed')
+  const model = read(env, 'OPENAI_MODEL') ?? d.model
+  if (!MODEL_RE.test(model)) throw new Error('OPENAI_MODEL must be a model name such as gpt-5.4-mini')
+  const effortRaw = read(env, 'DRAFTROOM_AI_REASONING_EFFORT')?.toLowerCase()
+  let reasoningEffort: ReasoningEffort | null = d.reasoningEffort
+  if (effortRaw === 'off') reasoningEffort = null
+  else if (effortRaw !== undefined) {
+    if (!(REASONING_EFFORTS as readonly string[]).includes(effortRaw))
+      throw new Error(`DRAFTROOM_AI_REASONING_EFFORT must be off, ${REASONING_EFFORTS.join(', ')}`)
+    reasoningEffort = effortRaw as ReasoningEffort
+  }
+  return {
+    enabled: switchRaw === 'on',
+    apiKey,
+    model,
+    baseUrl: baseUrl(env, production),
+    timeoutMs: int(env, 'DRAFTROOM_AI_TIMEOUT_MS', d.timeoutMs, 1_000, 120_000),
+    maxInputTokens: int(env, 'DRAFTROOM_AI_MAX_INPUT_TOKENS', d.maxInputTokens, 1_000, 32_000),
+    maxOutputTokens: int(env, 'DRAFTROOM_AI_MAX_OUTPUT_TOKENS', d.maxOutputTokens, 256, 4_000),
+    callsPerUserPerHour: int(env, 'DRAFTROOM_AI_CALLS_PER_HOUR', d.callsPerUserPerHour, 1, 1_000),
+    workspaceDailyTokens: int(env, 'DRAFTROOM_AI_DAILY_TOKENS', d.workspaceDailyTokens, 0, 100_000_000),
+    userDailyTokens: int(env, 'DRAFTROOM_AI_USER_DAILY_TOKENS', d.userDailyTokens, 0, 100_000_000),
+    globalDailyTokens: int(env, 'DRAFTROOM_AI_GLOBAL_DAILY_TOKENS', d.globalDailyTokens, 0, 1_000_000_000),
+    reasoningEffort,
+  }
+}
+
+/** AI can be offered at all: switched on and a key configured. */
+export const aiConfigured = (c: AiConfig) => c.enabled && c.apiKey !== null

@@ -1,0 +1,303 @@
+/* ai feature styles (docs/WAVE4-CONTRACTS.md §4 ai-assist). Only --dr-* tokens, so both themes work;
+   phone width (390 px): the popover and the panel take the width minus 12 px gutters. */
+
+.dr-ai-overlay {
+  position: absolute;
+  inset: 0;
+  /* above tldraw's panels (300): the popover is short-lived and points at the selection */
+  z-index: 310;
+  overflow: hidden;
+  pointer-events: none;
+}
+.dr-ai-overlay > * {
+  pointer-events: auto;
+}
+
+/* ---- the selection bar's button ------------------------------------------------------------------- */
+.dr-ai-barslot {
+  display: flex;
+  align-items: center;
+}
+.dr-cux-selbar__btn.dr-ai-barbtn {
+  display: inline-flex;
+  gap: 4px;
+  width: auto;
+  padding: 0 8px 0 6px;
+  color: var(--dr-accent-ink);
+  font: 600 12.5px / 1 var(--dr-font);
+}
+.dr-ai-barbtn[aria-expanded="true"] {
+  background: var(--dr-accent-bg);
+}
+.dr-ai-barbtn:disabled {
+  cursor: progress;
+  opacity: 0.8;
+}
+
+/* ---- popover ------------------------------------------------------------------------------------ */
+.dr-ai-pop,
+.dr-ai-panel {
+  position: absolute;
+  width: 312px;
+  max-width: calc(100% - 24px);
+  padding: 8px;
+  border: 1px solid var(--dr-line);
+  border-radius: 12px;
+  background: var(--dr-surface);
+  box-shadow: var(--dr-shadow-pop);
+  color: var(--dr-ink);
+  font: 14px / 1.35 var(--dr-font);
+}
+.dr-ai-pop__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 2px 6px 4px;
+}
+.dr-ai-pop__badge {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
+  background: var(--dr-accent-bg);
+  color: var(--dr-accent-ink);
+}
+.dr-ai-pop__title {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  font-size: 14px;
+  font-weight: 650;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+/* The notice's title is the message itself: it wraps rather than being cut. */
+.dr-ai-pop[data-view="notice"] .dr-ai-pop__title {
+  white-space: normal;
+}
+.dr-ai-pop__about {
+  color: var(--dr-ink-2);
+  font-weight: 500;
+}
+.dr-ai-pop__items {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.dr-ai-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  width: 100%;
+  padding: 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--dr-ink);
+  text-align: left;
+  cursor: pointer;
+}
+.dr-ai-item:hover:not(:disabled),
+.dr-ai-item:focus-visible {
+  background: var(--dr-hover);
+}
+.dr-ai-item:focus-visible {
+  outline: 2px solid var(--dr-focus);
+  outline-offset: -2px;
+}
+.dr-ai-item:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+.dr-ai-item__icon {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+  background: var(--dr-chip);
+  color: var(--dr-accent-ink);
+}
+.dr-ai-item__text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+.dr-ai-item__label {
+  font-weight: 600;
+}
+.dr-ai-item__hint {
+  color: var(--dr-ink-2);
+  font-size: 12.5px;
+}
+.dr-ai-pop__budget {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 6px 4px 0;
+  padding-top: 8px;
+  border-top: 1px solid var(--dr-line);
+  color: var(--dr-ink);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.dr-ai-meter {
+  position: relative;
+  flex: none;
+  width: 56px;
+  height: 6px;
+  overflow: hidden;
+  border-radius: 3px;
+  background: var(--dr-chip);
+}
+.dr-ai-meter > span {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: 3px;
+  background: var(--dr-live);
+}
+.dr-ai-meter > span[data-high] {
+  background: var(--dr-warn);
+}
+.dr-ai-pop__foot {
+  margin: 6px 4px 2px;
+  color: var(--dr-ink-2);
+  font-size: 12px;
+}
+
+/* the ideas prompt */
+.dr-ai-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 0 4px 2px;
+}
+.dr-ai-form__label {
+  color: var(--dr-ink-2);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.dr-ai-form__input,
+.dr-ai-form__select {
+  height: 34px;
+  padding: 0 10px;
+  border: 1px solid var(--dr-line-strong);
+  border-radius: 8px;
+  background: var(--dr-inset);
+  color: var(--dr-ink);
+  font: 14px / 1 var(--dr-font);
+}
+.dr-ai-form__select {
+  height: 30px;
+  padding: 0 6px;
+}
+.dr-ai-form__input:focus-visible,
+.dr-ai-form__select:focus-visible {
+  outline: 2px solid var(--dr-focus);
+  outline-offset: 1px;
+}
+.dr-ai-form__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 2px;
+}
+.dr-ai-form__spacer {
+  flex: 1;
+}
+
+/* the first-use notice */
+.dr-ai-notice {
+  padding: 0 4px 2px;
+}
+.dr-ai-notice p {
+  margin: 0 0 8px;
+}
+.dr-ai-notice__muted {
+  color: var(--dr-ink-2);
+  font-size: 12.5px;
+}
+.dr-ai-notice__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+/* ---- busy pill ---------------------------------------------------------------------------------- */
+.dr-ai-busy {
+  position: absolute;
+  top: 58px;
+  left: 50%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: calc(100% - 24px);
+  padding: 5px 5px 5px 12px;
+  transform: translateX(-50%);
+  border: 1px solid var(--dr-accent-line);
+  border-radius: 999px;
+  background: var(--dr-surface);
+  box-shadow: var(--dr-shadow-pop);
+  color: var(--dr-accent-ink);
+  font: 600 13.5px / 1.2 var(--dr-font);
+  white-space: nowrap;
+}
+.dr-ai-busy__text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dr-ai-spin {
+  flex: none;
+  animation: dr-ai-spin 0.9s linear infinite;
+}
+@keyframes dr-ai-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .dr-ai-spin {
+    animation-duration: 2.4s;
+  }
+}
+
+/* ---- summary panel (people who cannot edit) ------------------------------------------------------ */
+.dr-ai-panel {
+  top: 58px;
+  right: 12px;
+  width: 360px;
+}
+.dr-ai-panel__text {
+  max-height: min(50vh, 360px);
+  margin: 2px 4px 8px;
+  overflow: auto;
+  white-space: pre-wrap;
+}
+.dr-ai-panel__actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 0 0 0;
+}
+.dr-ai-panel__actions .dr-ai-pop__foot {
+  margin: 0 4px;
+}
+
+@media (max-width: 480px) {
+  .dr-ai-panel {
+    right: 12px;
+    left: 12px;
+    width: auto;
+    max-width: none;
+  }
+  .dr-ai-busy {
+    top: 104px;
+  }
+}
