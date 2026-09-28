@@ -5,7 +5,7 @@
 import {
   HistoryBoardCreated,
   IMPORT_BODY_LIMIT_BYTES,
-  ListBoardsWithStarsResponse,
+  ListBoardsWithThumbnailsResponse,
   StarResponse,
 } from '@draftroom/contracts'
 import type { ApiClient } from '../api/client.ts'
@@ -18,7 +18,7 @@ export { IMPORT_BODY_LIMIT_BYTES }
 export function dashboardApi(api: ApiClient) {
   const r = api.request
   return {
-    /** M1's board list, with the `starred` flag the dashboard feature adds. */
+    /** M1's board list, with the `starred` flag the dashboard feature adds and `thumbnailVersion`. */
     listBoards: async (
       workspaceId: string,
       query: { status?: BoardStatus; projectId?: string },
@@ -30,7 +30,7 @@ export function dashboardApi(api: ApiClient) {
       const qs = params.toString() ? `?${params}` : ''
       return (
         await r('GET', `/api/workspaces/${enc(workspaceId)}/boards${qs}`, {
-          schema: ListBoardsWithStarsResponse,
+          schema: ListBoardsWithThumbnailsResponse,
           signal,
         })
       ).boards
@@ -38,7 +38,7 @@ export function dashboardApi(api: ApiClient) {
     starredBoards: async (workspaceId: string, signal?: AbortSignal) =>
       (
         await r('GET', `/api/workspaces/${enc(workspaceId)}/boards/starred`, {
-          schema: ListBoardsWithStarsResponse,
+          schema: ListBoardsWithThumbnailsResponse,
           signal,
         })
       ).boards,

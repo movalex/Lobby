@@ -1,5 +1,6 @@
-import type { BoardWithRole } from '@draftroom/contracts'
-import { useId } from 'react'
+import { type BoardWithRole, thumbnailPath } from '@draftroom/contracts'
+import { useEffect, useId, useState } from 'react'
+import { onThumbnailUpdated } from '../features/thumbnails/card-events.ts'
 import { formatRelativeTime } from '../lib/format.ts'
 import { can } from '../lib/permissions.ts'
 import { boardPath, linkClick } from '../lib/routing.ts'
@@ -16,7 +17,45 @@ import { type BoardNews, newsLabel } from './notifications.ts'
 import type { ViewMode } from './prefs.ts'
 import './dashboard.css'
 
-/** A deterministic, colored placeholder until real board thumbnails exist. */
+/**
+ * The board's thumbnail (features/thumbnails: an editor's client captures it), lazy-loaded over a
+ * theme-aware background, cropped to the card's 16:10. The placeholder shows while there is none, for
+ * trashed boards (nobody can open one), and when the image fails to load.
+ */
+export function BoardCardThumb({
+  board,
+}: {
+  board: { id: string; status: BoardWithRole['status']; thumbnailVersion?: string | null }
+}) {
+  const listed = board.status === 'trashed' ? null : (board.thumbnailVersion ?? null)
+  // A thumbnail this tab sent after the list was fetched (e.g. the board just closed) wins until the
+  // list itself changes.
+  const [sent, setSent] = useState<{ version: string | null; over: string | null } | null>(null)
+  useEffect(() => {
+    if (board.status === 'trashed') return
+    return onThumbnailUpdated(board.id, (version) => setSent({ version, over: listed }))
+  }, [board.id, board.status, listed])
+  const version = sent && sent.over === listed ? sent.version : listed
+  const [failed, setFailed] = useState<string | null>(null)
+  if (!version || failed === version) return <BoardThumb boardId={board.id} />
+  return (
+    <img
+      className="dr-bcard__img"
+      data-testid="board-thumbnail"
+      data-version={version}
+      src={thumbnailPath(board.id, version)}
+      alt=""
+      width={480}
+      height={300}
+      loading="lazy"
+      decoding="async"
+      draggable={false}
+      onError={() => setFailed(version)}
+    />
+  )
+}
+
+/** A deterministic, colored placeholder for boards without a thumbnail. */
 export function BoardThumb({ boardId }: { boardId: string }) {
   const t = thumbStyle(boardId)
   const dots = useId()
@@ -91,7 +130,7 @@ export function BoardThumb({ boardId }: { boardId: string }) {
   )
 }
 
-export function BoardCard<B extends BoardWithRole & { starred?: boolean }>({
+export function BoardCard<B extends BoardWithRole & { starred?: boolean; thumbnailVersion?: string | null }>({
   board,
   renaming,
   busy,
@@ -132,7 +171,7 @@ export function BoardCard<B extends BoardWithRole & { starred?: boolean }>({
 
   const body = (
     <div className="dr-bcard__thumb">
-      <BoardThumb boardId={board.id} />
+      <BoardCardThumb board={board} />
       {board.status !== 'active' && (
         <span className="dr-bcard__status">{board.status === 'archived' ? 'Archived' : 'In trash'}</span>
       )}
