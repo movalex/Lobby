@@ -1,4 +1,67 @@
-# Manual demo checklist (through milestone 1)
+# Lobby demo
+
+Two parts: the **5-minute demo on staging** for DBC leadership, then the longer **local checklist** for
+`pnpm dev`. Staging: https://draftroom-staging-web.onrender.com (the hostname keeps the old code name;
+everything on screen says Lobby).
+
+## 5-minute demo on staging
+
+### Before the meeting (10 minutes, once)
+
+- **Two accounts, two browsers.** You (browser A, your normal Chrome profile) and a colleague account
+  (browser B: a private window or a second browser). Sign in to both once on staging, so neither sees
+  the sign-in page during the demo. Put the windows side by side, or have B on a second laptop.
+- **A fresh lobby to show.** In browser A, open the workspace you will demo in. If it has no boards, the
+  dashboard offers **Start with the sample board**; otherwise use **New board** and pick **Lobby tour**
+  (the first card, marked *Start here*). Do it once as a dry run, then move that board to Trash so the
+  real run starts clean.
+- **Warm it up.** Open staging in both browsers two minutes before you start. The first load after a
+  deploy can take a few seconds.
+- **Check what is merged.** The steps marked *(if merged)* are wave-3 features. Skip any that is not on
+  staging yet (they are listed in `docs/PROGRESS.md`).
+
+### The script
+
+| Time | What you do | What they see |
+|---|---|---|
+| 0:00 | **Dashboard.** "Every DBC project gets a lobby: its boards, files and feedback." Click **New board**, pick **Lobby tour**, **Create from Lobby tour**. | A private board with six frames in a row: Welcome, Brainstorm, Plan, Mood board, Retro, Tips and shortcuts. |
+| 0:30 | **Share and invite.** **Share** → **Workshop link** → **Create workshop link** → copy it. In browser B, paste the link and click **Accept and open board**. | B is on the same board as an editor. Both see each other's cursor and avatar. |
+| 1:00 | **Edit together** (Brainstorm frame). In B, press **N**, click next to a theme and type an idea. In A, drag the *Story* theme down. | B's note appears on A's screen as it is typed. The connectors stay attached while A drags. |
+| 1:30 | **Comment.** In A, press **C** and click one of B's notes, type a comment and press Enter. | A comment pin appears on both screens; B can reply in the thread. |
+| 2:00 | **Vote** (Retro frame). Click the Retro frame's name to select it, open **Voting** in the left rail → **Start a vote…** (the vote covers the selected frame) → *What can be voted on*: **Sticky notes only** → **Start vote**. Both click a few notes, then B clicks **I'm done**. In A: **End and show results**. | Each person sees only their own dots until the reveal, then the ranked results show on both screens. |
+| 2:45 | **Present.** Click empty canvas (so it starts at slide 1), then **Present**. Walk the slides with → and ←, press **Esc** to leave. | Each frame fills the screen, 1 / 6 to 6 / 6, with the board chrome and cursors hidden. Esc puts the camera back. |
+| 3:30 | **Export.** The download icon next to Present (**Export: PNG, SVG, PDF, CSV**) → in the PDF section, **Download PDF**. | A PDF with one page per frame, in presentation order, named after the board. The pages are images of the frames with a searchable text layer, as the dialog says. |
+| 4:00 | **History.** Open **History** → **Save checkpoint** (name it "Before clean-up"). Delete a note on the Retro frame, then restore it from **Recently deleted**. | The note comes back where it was, on both screens. The checkpoint can also be opened with **Restore as new board**. |
+| 4:45 | **Wrap.** Back to the dashboard. | The board is in the list with the rest of the lobby's boards. |
+
+### Wave-3 add-ons (if merged)
+
+Use these instead of a step above, or in Q&A. Each one needs its feature on staging.
+
+- **Guests** *(if merged)*: when you create the workshop or review link, tick **Anyone with the link can
+  join with just a name (no account)**. In browser B (signed out, or a fresh private window), open the
+  link and choose **Join as a guest** with a name. Their name shows as "Sam (guest)" on cursors and in
+  the people list. Revoke the link and the guest's view ends within seconds.
+- **Private brainstorm** *(if merged)*: on the Brainstorm frame, start **Private brainstorm** with a
+  prompt. Both write in **My private notes**; everyone sees only the counts ("7 notes from 4 people").
+  Reveal: the notes land in the frame as real sticky notes, grouped by author unless *Anonymous* was on.
+- **Dashboard thumbnails** *(if merged)*: after editing, go back to the dashboard. The board's card shows
+  a thumbnail of the board instead of the placeholder.
+- **Export control** *(if merged)*: in **Share**, turn off **Viewers and commenters can export, copy and
+  download files**. A viewer's export and copy entries disappear without a reload, and file downloads
+  are refused by the server. Say it plainly: like Miro's setting, it does not stop screenshots.
+- **Offsite backups** *(if merged)*: nothing to click. For Q&A: every board's backup is also copied to
+  Cloudflare R2 and a restore drill checks it (see `docs/DEPLOY.md`).
+
+### If something goes wrong
+
+- **The status pill says Offline or Reconnecting**: wait a few seconds. Edits made meanwhile stay in the
+  tab and sync when it reconnects. A reload is safe.
+- **Present starts on the wrong slide**: it starts at the selected frame. Press **Home** for slide 1.
+- **Browser B cannot open the link**: it must be signed in (or, with guests merged, use *Join as a
+  guest*). Links expire; create a new one from **Share**.
+
+## Local checklist (`pnpm dev`)
 
 Start everything with one command from the repo root:
 
@@ -10,14 +73,14 @@ That runs the API (127.0.0.1:5859, with an in-process Postgres under `./.data/pg
 
 > The **first** person to sign in on a fresh `.data` becomes the owner of the shared **Dev Studio** workspace. Sign in as **alice** first.
 
-1. **Sign in and create a board.** Open http://127.0.0.1:5173 → *Development sign-in* → pick **alice**. On the dashboard, create a board in Dev Studio. New boards are private.
+1. **Sign in and create a board.** Open http://127.0.0.1:5173 → *Development sign-in* → pick **alice**. On an empty dashboard, **Start with the sample board** creates the Lobby tour; **New board** opens the template gallery (Lobby tour first, then Blank board and the six templates). New boards are private.
 2. **Share it.** On the board, open **Share**: add **bob** as *Can view* (bob must have signed in once, e.g. in a private window), or create an invite link with a role and open it in another browser profile as **carol**.
 3. **Two people on one board.** bob opens the board: he sees alice's avatar and live cursor, a *View only* pill and a reduced toolbar. The server refuses his edits even if forced.
 4. **Change access live.** alice changes bob to *Can edit*: bob's board reconnects and becomes editable. alice removes bob: within a moment bob sees "You no longer have access to this board".
 5. **Edit together.** Add sticky notes, text, a frame and an arrow between two shapes; move a shape the arrow is attached to — the arrow follows on the other screen. Undo/redo affects your own changes (see the known undo limitation in `docs/FEASIBILITY.md`).
 6. **Reload and restart.** Reload either tab: everything is still there. Stop `pnpm dev` (Ctrl+C): the status pill turns **Offline** and a banner says changes are kept in this tab until reconnect. Make an edit, start `pnpm dev` again: both tabs go **Live** and the edit appears on the other screen.
 7. **Same-note typing.** alice types in a note; bob sees "alice is editing" on it. If bob types in it, his change is reverted and he sees who is editing. A few seconds after alice stops, bob can edit it.
-8. **Files.** Press Ctrl+U (or drop files) and add `tests/fixtures/generated/document.pdf`, `video.mp4`, `image.png`, `encrypted.pdf`, `notes.zip`: PDF cover + "4 pages", a playable video with a poster, a normal image, a readable error for the encrypted PDF (download still offered), and an attachment card for the ZIP — on both screens.
+8. **Files.** Press Ctrl+U (or drop files) and add `tests/fixtures/generated/document.pdf`, `video.mp4`, `image.png`, `encrypted.pdf`, `notes.zip`: PDF cover + "4 pages", a playable video with a poster, a normal image, a readable error for the encrypted PDF (download still offered), and an attachment card for the ZIP — on both screens. Drop an image onto one of the Lobby tour's mood-board slots: it fits the slot.
 9. **Dashboard.** Rename, archive, move to trash and restore boards; search by title; archived boards open read-only.
 
-Expected: no "Saved" indicator yet (it arrives once it can be truthful), and the tldraw "unlicensed" watermark on localhost.
+Expected: the top bar says **Saved** only once the server has acknowledged every local change (see `docs/research/saved-indicator.md`), and the tldraw "Get a license for production" notice shows on localhost.

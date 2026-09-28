@@ -1,5 +1,6 @@
-// The template picker's catalog (PRE-01): the six @draftroom/templates definitions with a section
-// preview drawn from the records each template really produces (frames, notes, boxes, text).
+// The template picker's catalog (PRE-01): the @draftroom/templates definitions with a section preview
+// drawn from the records each template really produces (frames, notes, boxes, text). The "Lobby tour"
+// sample board comes first; it has no category chip of its own, so it is listed under "All" only.
 
 import { instantiateTemplate, TEMPLATES, type TemplateCategory, type TemplateId } from '@draftroom/templates'
 import type { TLPageId } from 'tldraw'
@@ -36,8 +37,13 @@ export const CATEGORY_LABEL: Record<TemplateCategory, string> = {
   visual: 'Visual',
   plan: 'Plan',
   review: 'Review',
+  sample: 'Sample',
 }
+/** The category chips. The sample board is in none of them. */
 export const CATEGORIES: readonly TemplateCategory[] = ['ideate', 'visual', 'plan', 'review']
+
+/** The "Lobby tour" sample board (packages/templates lobby-tour.ts). */
+export const isSample = (entry: Pick<CatalogEntry, 'category'>) => entry.category === 'sample'
 
 /** tldraw colour names -> preview fills (approximate; thumbnails only). */
 const FILL: Record<string, string> = {
@@ -113,11 +119,12 @@ export function previewFromRecords(
 
 let cache: readonly CatalogEntry[] | null = null
 
-/** The catalog (built once; instantiating six templates takes a few milliseconds). */
+/** The catalog, the sample first (built once; instantiating the templates takes a few milliseconds). */
 export function templateCatalog(): readonly CatalogEntry[] {
   if (cache) return cache
   const pageId = 'page:preview'
-  cache = TEMPLATES.map((t) => {
+  const ordered = [...TEMPLATES.filter((t) => isSample(t)), ...TEMPLATES.filter((t) => !isSample(t))]
+  cache = ordered.map((t) => {
     const { records, bounds } = instantiateTemplate(t.id, {
       pageId: pageId as TLPageId,
       origin: { x: 0, y: 0 },

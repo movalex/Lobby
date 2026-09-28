@@ -174,7 +174,8 @@ describe.each(TEMPLATES.map((t) => [t.id, t] as const))('%s template', (id, def)
   it('fits within about 3000 x 2000 from the origin and reports matching bounds', () => {
     expect(bounds.x).toBe(0)
     expect(bounds.y).toBe(0)
-    expect(bounds.w).toBeLessThanOrEqual(3000)
+    // The Lobby tour is six slide-sized frames in one row (lobby-tour.test.ts pins its layout).
+    expect(bounds.w).toBeLessThanOrEqual(id === 'lobby-tour' ? 10_400 : 3000)
     expect(bounds.h).toBeLessThanOrEqual(2000)
     expect(bounds.w).toBeGreaterThan(1000)
     for (const s of shapesOf(records)) {
@@ -300,7 +301,8 @@ describe.each(TEMPLATES.map((t) => [t.id, t] as const))('%s template', (id, def)
       (s) => s.type === 'geo' && (s as TLGeoShape).props.dash === 'dashed',
     )
     expect(slots.map((s) => s.id).sort()).toEqual(dashed.map((s) => s.id).sort())
-    if (['storyboard', 'mood-board', 'pitch-outline'].includes(id)) expect(slots.length).toBeGreaterThan(0)
+    if (['storyboard', 'mood-board', 'pitch-outline', 'lobby-tour'].includes(id))
+      expect(slots.length).toBeGreaterThan(0)
   })
 
   it('uses unique index keys per parent, with arrows above the shapes they connect', () => {

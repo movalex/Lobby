@@ -1,9 +1,14 @@
-// The template picker (PRE-01): a prominent Blank board plus the six Draftroom templates with names,
-// descriptions and a section preview, search and categories. Selecting is a click (or Enter/Space);
-// a double click creates right away.
+// The template picker (PRE-01): the "Lobby tour" sample board first (a full-width card with its six
+// frames as a strip), then a prominent Blank board and the six Lobby templates with names, descriptions
+// and a section preview, search and categories. Selecting is a click (or Enter/Space); a double click
+// creates right away. Also the empty dashboard's "Start with the sample board" button.
 
 import { type ReactNode, useEffect, useId, useMemo, useState } from 'react'
+import { api, isApiError } from '../api/client.ts'
+import { navigate } from '../lib/routing.ts'
+import { createSampleBoard } from './sample-board.ts'
 import type { CatalogEntry, TemplateCategory, TemplateId, TemplatePreview } from './template-catalog.ts'
+import './template-gallery.css'
 
 export type TemplateChoice = TemplateId | 'blank'
 
@@ -46,12 +51,15 @@ export function TemplateGallery({
     [mod, entries, query, category],
   )
   const labels = mod?.CATEGORY_LABEL
+  // The sample board has no category chip: it shows under "All" when the search matches it.
+  const sample = visible.find((e) => e.category === 'sample') ?? null
+  const templates = visible.filter((e) => e.category !== 'sample')
 
   const card = (choice: TemplateChoice, entry: CatalogEntry | null, content: ReactNode, testId: string) => (
     <li key={choice}>
       <button
         type="button"
-        className={`dr-tcard${choice === 'blank' ? ' dr-tcard--blank' : ''}`}
+        className={`dr-tcard${choice === 'blank' ? ' dr-tcard--blank' : ''}${entry?.category === 'sample' ? ' dr-tcard--sample' : ''}`}
         data-testid={testId}
         data-template-id={choice}
         aria-pressed={selected === choice}
@@ -101,6 +109,28 @@ export function TemplateGallery({
           ))}
         </fieldset>
       </div>
+      {sample && (
+        <ul className="dr-gallery__sample" aria-label="Sample board">
+          {card(
+            sample.id,
+            sample,
+            <>
+              <span className="dr-tcard__thumb dr-tcard__thumb--strip" aria-hidden="true">
+                <TemplateThumb preview={sample.preview} />
+              </span>
+              <span className="dr-tcard__name">
+                {sample.name}
+                <span className="dr-tcard__badge">Start here</span>
+              </span>
+              <span className="dr-tcard__desc">{sample.description}</span>
+              <span className="dr-tcard__meta">
+                {labels?.sample} · {sample.sections.length} frames, ready to present
+              </span>
+            </>,
+            'template-sample',
+          )}
+        </ul>
+      )}
       <ul className="dr-gallery__grid" aria-label="Templates">
         {card(
           'blank',
@@ -116,7 +146,7 @@ export function TemplateGallery({
           </>,
           'template-blank',
         )}
-        {visible.map((e) =>
+        {templates.map((e) =>
           card(
             e.id,
             e,
@@ -149,12 +179,50 @@ export function TemplateGallery({
   )
 }
 
+/** The empty dashboard's "Start with the sample board": a new private board with the Lobby tour on it. */
+export function SampleBoardButton({
+  workspaceId,
+  projectId,
+  onError,
+}: {
+  workspaceId: string
+  projectId: string | null
+  onError(message: string): void
+}) {
+  const [pending, setPending] = useState(false)
+  const start = async () => {
+    setPending(true)
+    try {
+      navigate(await createSampleBoard(api.createBoard, workspaceId, projectId))
+    } catch (e) {
+      setPending(false)
+      onError(isApiError(e) ? e.message : 'The sample board could not be created.')
+    }
+  }
+  return (
+    <button
+      type="button"
+      className="dr-btn"
+      data-testid="start-sample-board"
+      disabled={pending}
+      aria-busy={pending || undefined}
+      title="A six-frame tour of Lobby, ready to present"
+      onClick={() => void start()}
+    >
+      {pending ? 'Creating…' : 'Start with the sample board'}
+    </button>
+  )
+}
+
 /** Frames as labelled sections, notes as coloured squares, boxes and text lines inside them. */
 export function TemplateThumb({ preview }: { preview: TemplatePreview }) {
   const { bounds } = preview
-  const pad = Math.max(bounds.w, bounds.h) * 0.03
+  // Stroke widths and corner radii follow the template's size. A strip wider than 3:1 (the six-frame
+  // tour) is sized by its height instead, or its outlines would be as thick as its frames are tall.
+  const size = Math.min(Math.max(bounds.w, bounds.h), bounds.h * 3)
+  const pad = size * 0.03
   const view = `${bounds.x - pad} ${bounds.y - pad} ${bounds.w + pad * 2} ${bounds.h + pad * 2}`
-  const unit = Math.max(bounds.w, bounds.h) / 160
+  const unit = size / 160
   return (
     <svg viewBox={view} preserveAspectRatio="xMidYMid meet" className="dr-tthumb" aria-hidden="true">
       {preview.frames.map((f) => (

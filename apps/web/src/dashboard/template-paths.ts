@@ -1,8 +1,9 @@
 // Board paths for new boards (kept apart from template-catalog.ts, which pulls in the template
 // builders and is loaded lazily by the picker).
 
-/** The template ids of @draftroom/templates (the catalog test checks this list stays in sync). */
+/** The template ids of @draftroom/templates, in catalog order (the catalog test checks they stay in sync). */
 export const TEMPLATE_IDS = [
+  'lobby-tour',
   'brainstorm',
   'mood-board',
   'storyboard',
