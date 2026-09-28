@@ -230,6 +230,7 @@ export const canvasUxOverrides: TLUiOverrides = {
       'shortcuts-dialog.dr-note-below': 'New note below (while editing a note)',
       'shortcuts-dialog.dr-paste-notes': 'Paste lines or cells as sticky notes',
       'shortcuts-dialog.dr-dblclick-note': 'New sticky note (double-click empty canvas)',
+      'shortcuts-dialog.dr-place-tool': 'Place the picked note, shape or text in the middle of the view',
       'shortcuts-dialog.dr-rename-frame': 'Rename the selected frame',
       'shortcuts-dialog.dr-edit-note': 'Edit the selected note (caret at the end)',
       'shortcuts-dialog.dr-selection-toolbar': 'Go to the selection toolbar (Esc returns)',

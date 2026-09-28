@@ -8,6 +8,7 @@
 import { AI_IDEAS_DEFAULT, AI_IDEAS_MAX, AI_PROMPT_MAX_CHARS, AI_SETTINGS_EVENT } from '@draftroom/contracts'
 import { type ReactNode, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import { type Editor, useEditor, useValue } from 'tldraw'
+import { onFocusLeave, trapTab, tryFocus } from '../../ui/focus.ts'
 import type { FeatureContext } from '../types.ts'
 import { addSummaryToBoard, cancelAiJob, closeAiMenu, refreshAiStatus, runAi } from './actions.ts'
 import { budgetLine, groupNames, themesHint } from './copy.ts'
@@ -74,14 +75,39 @@ function usePlacement(editor: Editor, at: AiMenuState['at'], ref: React.RefObjec
   return pos
 }
 
+/**
+ * A11Y-15: what had the keyboard when the popover opened (the selection bar's AI button, or the board),
+ * per editor: the popover remounts for each of its views, so this outlives any one of them.
+ */
+const openers = new WeakMap<Editor, HTMLElement>()
+
+/** The popover closed from the keyboard (Escape, ×, Cancel): the focus goes back where it came from. */
+function returnFocus(editor: Editor) {
+  const opener = openers.get(editor)
+  openers.delete(editor)
+  if (tryFocus(opener)) return
+  // tldraw 5.4.2's editor.focus() is a no-op while the editor counts as focused: move the DOM focus too.
+  editor.focus()
+  editor.getContainer().focus({ preventScroll: true })
+}
+
 function AiPopover({ menu }: { menu: AiMenuState }) {
   const editor = useEditor()
   const status = useValue('dr-ai-pop-status', () => aiStatus(editor).get(), [editor])
-  const close = (refocus: boolean) => closeAiMenu(editor, refocus)
+  const close = (refocus: boolean) => {
+    closeAiMenu(editor, false)
+    if (refocus) returnFocus(editor)
+    else openers.delete(editor)
+  }
   const ref = useIsolated<HTMLDivElement>((e) => {
     if (e.key === 'Escape') {
       e.preventDefault()
       close(true)
+      return
+    }
+    // A11Y-15: Tab stays inside while it is open (Escape is the way out).
+    if (e.key === 'Tab') {
+      if (ref.current) trapTab(e, ref.current)
       return
     }
     // Arrow keys move between the actions (a menu), wrapping around.
@@ -109,6 +135,22 @@ function AiPopover({ menu }: { menu: AiMenuState }) {
     doc.addEventListener('pointerdown', onDown, true)
     return () => doc.removeEventListener('pointerdown', onDown, true)
   }, [editor, ref])
+  /** The popover has placed its first focus (focus moving out before that is the context menu's). */
+  const settled = useRef(false)
+  // A11Y-15: the focus moving elsewhere (a screen reader, a script, a click the capture above missed)
+  // closes it too; the AI button that toggles it does not count.
+  const enabled = status?.enabled === true
+  useEffect(() => {
+    const root = ref.current
+    if (!root || !enabled) return
+    return onFocusLeave(
+      root,
+      () => {
+        if (settled.current) closeRef.current(false)
+      },
+      (el) => el.closest('[data-testid="selection-ai"]') !== null,
+    )
+  }, [ref, enabled])
   // Focus the first control when it opens, once the context menu (if any) has let go of the focus.
   useEffect(() => {
     let frame = 0
@@ -119,10 +161,18 @@ function AiPopover({ menu }: { menu: AiMenuState }) {
         return
       }
       const root = ref.current
+      // A11Y-08: an action or field first, never the header's × (querySelector with a selector list
+      // returns the first match in the document, and the × comes before the actions).
+      const controls = [...(root?.querySelectorAll<HTMLElement>('input, button:not([disabled])') ?? [])]
       const el =
         root?.querySelector<HTMLElement>('[data-autofocus]') ??
-        root?.querySelector<HTMLElement>('[role="menuitem"]:not([disabled]), input, button:not([disabled])')
+        root?.querySelector<HTMLElement>('[role="menuitem"]:not([disabled])') ??
+        controls.find((c) => !c.closest('.dr-ai-pop__head')) ??
+        controls[0]
       el?.focus()
+      frame = requestAnimationFrame(() => {
+        settled.current = true
+      })
     }
     frame = requestAnimationFrame(focus)
     return () => cancelAnimationFrame(frame)
@@ -543,6 +593,15 @@ export function AiOverlay({ ctx }: { ctx: FeatureContext }) {
   }, [editor, events])
   const menu = useValue('dr-ai-menu', () => aiMenu(editor).get(), [editor])
   const enabled = useValue('dr-ai-on', () => aiStatus(editor).get()?.enabled === true, [editor])
+  // A11Y-15: remember what had the keyboard as the popover opens (it takes the focus a frame later).
+  const open = menu !== null
+  useLayoutEffect(() => {
+    if (!open) return
+    const a = editor.getContainer().ownerDocument.activeElement
+    if (a instanceof HTMLElement && a !== a.ownerDocument.body && !a.closest('.dr-ai-pop'))
+      openers.set(editor, a)
+    else openers.delete(editor)
+  }, [editor, open])
   if (!enabled) return null
   return (
     <div className="dr-ai-overlay" data-testid="ai-overlay">

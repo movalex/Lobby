@@ -2,8 +2,10 @@
 // items, canvas overlays, and the merged tldraw overrides/components/options. Integration owner.
 
 import { Fragment, useEffect, useId, useLayoutEffect, useMemo, useRef } from 'react'
-import type { TLComponents, TLUiOverrides, TldrawOptions } from 'tldraw'
+import { type Editor, type TLComponents, type TLUiOverrides, type TldrawOptions, useValue } from 'tldraw'
+import { can } from '../lib/permissions.ts'
 import { isFocusLost, isTextEntry, tryFocus } from '../ui/focus.ts'
+import { installPlaceOnEnter, placeAtCenter } from '../ui/place-at-center.ts'
 import type { BoardFeature, FeatureContext, FeaturePanel } from './types.ts'
 
 export interface MergedFeatureProps {
@@ -117,7 +119,52 @@ export function FeatureOverlays({
 }) {
   if (!ctx) return null
   return (
-    <>{features.map((f) => (f.Overlay ? <f.Overlay key={f.id} ctx={ctx} /> : <Fragment key={f.id} />))}</>
+    <>
+      <PlaceOnEnter editor={ctx.editor} />
+      {features.map((f) => (f.Overlay ? <f.Overlay key={f.id} ctx={ctx} /> : <Fragment key={f.id} />))}
+    </>
+  )
+}
+
+/** A11Y-07: Enter with the note, shape or text tool picked places that shape in the middle of the view. */
+function PlaceOnEnter({ editor }: { editor: Editor }) {
+  useEffect(() => installPlaceOnEnter(editor), [editor])
+  return null
+}
+
+/**
+ * A11Y-07: "Add a sticky note" at the end of the rail, for people who can edit: a keyboard-only way to
+ * put the first note on a blank board (it lands in the middle of the view, ready to type in).
+ */
+function AddNoteButton({ ctx }: { ctx: FeatureContext }) {
+  const editor = ctx.editor
+  const readonly = useValue('dr-add-note-readonly', () => editor.getIsReadonly(), [editor])
+  if (readonly || !can(ctx.role, 'edit', ctx.board.status)) return null
+  return (
+    <button
+      type="button"
+      className="dr-dock__tab"
+      data-testid="dock-add-note"
+      aria-label="Add a sticky note"
+      title="Add a sticky note in the middle of the view (or press N, then Enter)"
+      onClick={() => {
+        // The board takes the keyboard first, so the new note's text field keeps it.
+        editor.focus()
+        editor.getContainer().focus({ preventScroll: true })
+        placeAtCenter(editor, 'note')
+      }}
+    >
+      <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+        <path
+          d="M5 4h10l4 4v12H5z M15 4v4h4"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.8"
+          strokeLinejoin="round"
+        />
+        <path d="M12 11v6M9 14h6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+      </svg>
+    </button>
   )
 }
 
@@ -214,6 +261,7 @@ export function FeatureDock({
             {p.icon}
           </button>
         ))}
+        <AddNoteButton ctx={ctx} />
       </nav>
       {active && (
         <section

@@ -48,6 +48,13 @@ export function DraftroomShortcutsDialog(props: TLUiKeyboardShortcutsDialogProps
           kbd="[[Double-click]]"
           onSelect={noop}
         />
+        {/* A11Y-07 (ui/place-at-center.ts): N, R or T, then Enter, without a mouse. */}
+        <TldrawUiMenuItem
+          id="dr-place-tool"
+          label="shortcuts-dialog.dr-place-tool"
+          kbd="[[Enter]]"
+          onSelect={noop}
+        />
         <TldrawUiMenuItem
           id="dr-rename-frame"
           label="shortcuts-dialog.dr-rename-frame"
