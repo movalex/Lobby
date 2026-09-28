@@ -14,6 +14,9 @@ function cut(text: string, max: number): string {
     : text
 }
 
+/** The workspace owner's budget line, in the contract's words (docs/WAVE4-CONTRACTS.md §4). */
+export const budgetLine = (usedPercent: number) => `AI budget used today: ${usedPercent}%`
+
 /** "Ideas: names for the launch party" (the person's own prompt, cut at 60 characters). */
 export function ideasHeading(prompt: string | undefined): string {
   const p = (prompt ?? '').replace(/\s+/g, ' ').trim()

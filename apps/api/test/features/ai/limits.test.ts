@@ -3,6 +3,7 @@
 // Lobby, under concurrent requests, across restarts, and they must fail closed.
 
 import { Writable } from 'node:stream'
+import { note } from '@draftroom/board-ops/test-fixtures'
 import { AiResult, AiStatus } from '@draftroom/contracts'
 import { afterEach, describe, expect, it } from 'vitest'
 import { createApiServer } from '../../../src/app.ts'
@@ -191,6 +192,37 @@ describe('per workspace', () => {
     )
     expectError(await run(x.alice, x.board, summarize), 429, 'AI_BUDGET_EXHAUSTED')
     expect(x.openai.requests).toHaveLength(0)
+  })
+})
+
+describe('token-dense text', () => {
+  it('the reservation is a true worst case: text billed at a token per byte never costs more than was reserved, so no budget is overrun', async () => {
+    // Symbols and rare scripts tokenize at close to a token per UTF-8 byte (a byte-level BPE never makes
+    // more): 4-byte "𝐀" letters estimate at 1.3 tokens each but can cost 4. The fake bills that.
+    const x = await world({ DRAFTROOM_AI_DAILY_TOKENS: '20000' })
+    const dense = '𝐀𝐁𝐂𝐃𝐄'.repeat(180) // 900 code points, 3,600 UTF-8 bytes
+    const notes = Array.from({ length: 12 }, (_, i) =>
+      note(`dense-${i}`, `${dense} ${i}`, { x: i * 220, y: 0 }),
+    )
+    x.sync.setBoard(x.board, notes)
+    x.openai.next(
+      { kind: 'byte-usage', content: { summary: 'ok' } },
+      { kind: 'byte-usage', content: { summary: 'ok' } },
+    )
+    // The whole selection: at worst about 36k tokens of prompt, far over the 20k budget.
+    const within = async () => {
+      const rows = await usageRows(x.api)
+      for (const r of rows) expect(r.charged_tokens).toBeLessThanOrEqual(r.reserved_tokens)
+      expect(rows.reduce((n, r) => n + r.charged_tokens, 0)).toBeLessThanOrEqual(20000)
+    }
+    const big = await run(x.bob, x.board, { ...summarize, shapeIds: notes.map((n) => n.id) })
+    expectError(big, 429, 'AI_BUDGET_EXHAUSTED')
+    await within()
+    // Two notes: at worst about 7k tokens, well inside it.
+    const small = await run(x.bob, x.board, { ...summarize, shapeIds: notes.slice(0, 2).map((n) => n.id) })
+    expect(small.statusCode, small.body).toBe(200)
+    await within()
+    expect(x.openai.requests).toHaveLength(1)
   })
 })
 

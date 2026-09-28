@@ -133,7 +133,23 @@ export function buildPrompt(input: AiRunInput, sources: Sources): Prompt {
   return { system: SYSTEM, user: userMessage(input, sources), schemaName: name, schema }
 }
 
-/** The whole prompt's estimated size (what is reserved against the budgets, plus the output cap). */
+/** The whole prompt's estimated size (what the input cap is checked against). */
 export function promptTokens(p: Prompt): number {
   return estimateTokens(p.system) + estimateTokens(p.user) + estimateTokens(JSON.stringify(p.schema)) + 64
+}
+
+/** Chat framing around the messages and the response format's wrapper, generously. */
+const FRAMING_TOKENS = 256
+
+/**
+ * The most the prompt can cost, whatever its text (what the budgets reserve, plus the output cap).
+ * OpenAI's tokenizers are byte-level BPE, so no text makes more tokens than it has UTF-8 bytes; the
+ * estimate above (bytes / 3) holds for ordinary writing, but symbols, rare scripts and punctuation
+ * soup come close to a token per byte, and a board can be filled with them on purpose.
+ */
+export function promptTokensCeiling(p: Prompt): number {
+  const bytes = (s: string) => Buffer.byteLength(s, 'utf8')
+  return (
+    bytes(p.system) + bytes(p.user) + bytes(JSON.stringify(p.schema)) + bytes(p.schemaName) + FRAMING_TOKENS
+  )
 }

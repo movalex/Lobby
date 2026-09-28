@@ -6,7 +6,8 @@
 // 2. AiLedger.reserve (Postgres, one transaction under one advisory lock, so concurrent requests are
 //    decided one at a time, across api instances too): the person's calls in the last hour, then the
 //    tokens charged today (UTC) to the workspace, to the person and to all of Lobby, each checked with
-//    this call's WORST case added (its capped input plus the output cap); if everything fits, the
+//    this call's WORST case added (its prompt at a token per UTF-8 byte, prompt.ts promptTokensCeiling,
+//    plus the output cap); if everything fits, the
 //    worst case is written as a 'reserved' row before the model is called. Limits hold across restarts
 //    because they are sums over rows, never counters in memory.
 // 3. AiLedger.settle: the row gets what OpenAI reported (usage.total_tokens). A call whose cost is

@@ -1,6 +1,6 @@
 // The AI overlay (a child of <Tldraw>, docs/WAVE4-CONTRACTS.md §4 ai-assist):
 //  - the AI popover: the four actions for the target, the "Sends the selected text to OpenAI" notice the
-//    first time, the "Generate ideas" prompt, and, for workspace owners, "AI used today: N% of budget";
+//    first time, the "Generate ideas" prompt, and, for workspace owners, "AI budget used today: N%";
 //  - the busy pill ("Grouping into themes…" with Cancel) while a request runs;
 //  - the summary panel for people who cannot edit (their summary is shown, not inserted).
 // Everything is driven by the atoms in runtime.ts (useValue, narrow selectors); nothing runs per frame.
@@ -10,6 +10,7 @@ import { type ReactNode, useEffect, useId, useLayoutEffect, useRef, useState } f
 import { type Editor, useEditor, useValue } from 'tldraw'
 import type { FeatureContext } from '../types.ts'
 import { cancelAiJob, closeAiMenu, refreshAiStatus, runAi } from './actions.ts'
+import { budgetLine } from './copy.ts'
 import { ActionIcon, SparkIcon, Spinner } from './icons.tsx'
 import {
   ACTION_LABELS,
@@ -205,7 +206,7 @@ function Budget() {
           data-high={budget.usedPercent >= 80 || undefined}
         />
       </span>
-      AI used today: {budget.usedPercent}% of budget
+      {budgetLine(budget.usedPercent)}
     </p>
   )
 }

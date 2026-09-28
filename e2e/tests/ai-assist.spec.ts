@@ -165,7 +165,7 @@ test('Group into themes on the Lobby tour Brainstorm: notice once, busy state, t
     await expect(menu).toContainText('8 sticky notes')
     for (const id of ['ai-summarize', 'ai-themes', 'ai-actions', 'ai-ideas'])
       await expect(menu.getByTestId(id)).toBeEnabled()
-    await expect(menu.getByTestId('ai-budget')).toHaveText(/AI used today: 0% of budget/)
+    await expect(menu.getByTestId('ai-budget')).toHaveText(/AI budget used today: 0%/)
     await capture('ai-menu-light.png', a.page, testInfo)
   })
 
@@ -681,13 +681,13 @@ test('Budget: when the workspace’s AI budget for the day is used up, AI says s
     usage: { prompt_tokens: 450_000, completion_tokens: 10, total_tokens: 450_010 },
   })
   await openAiMenu(page)
-  await expect(aiMenu(page).getByTestId('ai-budget')).toHaveText(/AI used today: 0% of budget/)
+  await expect(aiMenu(page).getByTestId('ai-budget')).toHaveText(/AI budget used today: 0%/)
   await aiMenu(page).getByTestId('ai-summarize').click()
   await aiMenu(page).getByTestId('ai-notice-continue').click()
   await expect(page.getByTestId('ai-done')).toContainText('Summary added.')
   await selectIds(page, ['shape:bud-1', 'shape:bud-2'])
   await openAiMenu(page)
-  await expect(aiMenu(page).getByTestId('ai-budget')).toHaveText(/AI used today: 100% of budget/)
+  await expect(aiMenu(page).getByTestId('ai-budget')).toHaveText(/AI budget used today: 100%/)
   await capture('ai-budget-used-up.png', page, testInfo)
   const calls = openai.requests.length
   await aiMenu(page).getByTestId('ai-themes').click()

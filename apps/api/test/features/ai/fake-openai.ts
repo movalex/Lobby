@@ -36,8 +36,16 @@ export type FakeAnswer =
   | { kind: 'status'; status: number; body?: string }
   | { kind: 'raw'; body: string; status?: number }
   | { kind: 'stall'; ms: number }
+  /** Headers at once, then the body a byte every `everyMs` (a slow or stuck upstream mid-answer). */
+  | { kind: 'trickle'; everyMs: number; bytes: number }
   | { kind: 'huge'; bytes: number }
   | { kind: 'no-usage'; content: unknown }
+  /**
+   * Billed like the worst case of a byte-level BPE tokenizer: a prompt token per UTF-8 byte of the
+   * messages and the response schema, plus the chat framing (symbols, rare scripts and punctuation
+   * soup get close to that; no real tokenizer makes more).
+   */
+  | { kind: 'byte-usage'; content: unknown }
 
 export interface FakeOpenAi {
   /** OPENAI_BASE_URL for the api (…/v1). */
@@ -151,6 +159,21 @@ export async function startFakeOpenAi(): Promise<FakeOpenAi> {
             JSON.stringify(envelope(seen, content, { finish: answer.finish, usage: answer.usage })),
           )
         }
+        case 'byte-usage': {
+          const content = JSON.stringify(answer.content)
+          const messages = seen.body.messages ?? []
+          const prompt =
+            messages.reduce((n, m) => n + Buffer.byteLength(m.content, 'utf8') + 3, 0) +
+            Buffer.byteLength(JSON.stringify(seen.body.response_format?.json_schema?.schema ?? {}), 'utf8') +
+            3
+          const completion = Math.ceil(content.length / 4)
+          const usage = {
+            prompt_tokens: prompt,
+            completion_tokens: completion,
+            total_tokens: prompt + completion,
+          }
+          return send(200, JSON.stringify(envelope(seen, content, { usage })))
+        }
         case 'no-usage': {
           const content = JSON.stringify(answer.content)
           const env = envelope(seen, content) as Record<string, unknown>
@@ -169,6 +192,20 @@ export async function startFakeOpenAi(): Promise<FakeOpenAi> {
             answer.ms,
           )
           res.on('close', () => clearTimeout(t))
+          return
+        }
+        case 'trickle': {
+          res.writeHead(200, { 'content-type': 'application/json' })
+          let left = answer.bytes
+          const t = setInterval(() => {
+            if (left-- <= 0) {
+              clearInterval(t)
+              return void res.end()
+            }
+            res.write(' ')
+          }, answer.everyMs)
+          res.on('close', () => clearInterval(t))
+          res.on('error', () => {})
           return
         }
         case 'huge': {

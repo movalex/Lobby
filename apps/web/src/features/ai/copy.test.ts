@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { actionItemText, ideasHeading, plural, themesDone } from './copy.ts'
+import { actionItemText, budgetLine, ideasHeading, plural, themesDone } from './copy.ts'
 
 describe('AI copy', () => {
   it('plural', () => {
@@ -20,6 +20,12 @@ describe('AI copy', () => {
   it('action items carry their owner on a second line', () => {
     expect(actionItemText({ text: 'Book the studio', owner: 'Sam' })).toBe('Book the studio\nOwner: Sam')
     expect(actionItemText({ text: 'Write the brief', owner: null })).toBe('Write the brief')
+  })
+
+  it('the owner’s budget line is the contract’s wording ("AI budget used today: N%")', () => {
+    expect(budgetLine(0)).toBe('AI budget used today: 0%')
+    expect(budgetLine(37)).toBe('AI budget used today: 37%')
+    expect(budgetLine(100)).toBe('AI budget used today: 100%')
   })
 
   it('what "Group into themes" says afterwards', () => {

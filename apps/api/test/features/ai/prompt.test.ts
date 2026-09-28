@@ -227,8 +227,11 @@ describe('what is sent', () => {
       (r.body.messages ?? []).reduce((n, m) => n + Buffer.byteLength(m.content), 0) +
       Buffer.byteLength(JSON.stringify(r.body.response_format?.json_schema?.schema))
     expect(promptBytes / 3).toBeLessThanOrEqual(1000)
+    // The reservation is the worst case of what was sent (a token per byte, framing included) plus the
+    // output cap, so it is bounded by the cap too.
     const row = await w.api.db.one<{ reserved_tokens: number }>('SELECT reserved_tokens FROM ai_usage')
-    expect(row.reserved_tokens).toBeLessThanOrEqual(1000 + 1500)
+    expect(row.reserved_tokens).toBeGreaterThanOrEqual(promptBytes + 1500)
+    expect(row.reserved_tokens).toBeLessThanOrEqual(3 * 1000 + 300 + 1500)
     expect(itemsOf(r).length).toBeGreaterThanOrEqual(2)
   })
 

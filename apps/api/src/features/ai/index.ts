@@ -46,7 +46,7 @@ import { AiLedger, InFlight, type InFlightLimits } from './budget.ts'
 import { aiConfigured } from './config.ts'
 import { type ChatOutcome, createOpenAiClient, type OpenAiClient } from './openai.ts'
 import { actionsPlan, BadOutput, ideasPlan, summaryPlan, themesPlan } from './plan.ts'
-import { buildPrompt, overheadTokens, promptTokens } from './prompt.ts'
+import { buildPrompt, overheadTokens, promptTokens, promptTokensCeiling } from './prompt.ts'
 import { collectSources } from './sources.ts'
 
 export const AI_STATUS_ROUTE = '/api/boards/:bid/ai'
@@ -243,8 +243,10 @@ export async function registerAi(app: FastifyInstance, ctx: FeatureContext): Pro
     if (input.action !== 'ideas' && sources.items.length === 0)
       throw new ApiError(400, AI_ERROR_CODES.nothingToSend, 'There’s no text in the selection to send.')
 
-    const estimate = promptTokens(prompt)
-    const reserved = estimate + cfg.maxOutputTokens
+    // The input cap is checked against the estimate; the budgets reserve the worst case, which a board
+    // full of token-dense text really reaches (prompt.ts), so a call never costs more than it reserved
+    // and concurrent calls cannot together overrun a budget.
+    const reserved = Math.max(promptTokens(prompt), promptTokensCeiling(prompt)) + cfg.maxOutputTokens
     const reservation = await ledger.reserve({
       workspaceId: access.board.workspace_id,
       boardId: access.board.id,

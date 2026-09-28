@@ -227,4 +227,21 @@ describe('timeouts', () => {
     expect(row).toMatchObject({ status: 'failed' })
     expect(row?.charged_tokens).toBe(row?.reserved_tokens)
   })
+
+  it('an answer whose body trickles in (headers at once) is cut off by the same timeout', async () => {
+    await w.close()
+    w = await aiWorld({ env: { DRAFTROOM_AI_TIMEOUT_MS: '1000' } })
+    w.sync.setBoard(w.board, brainstormShapes())
+    w.openai.next({ kind: 'trickle', everyMs: 100, bytes: 100 })
+    const started = Date.now()
+    expectError(
+      await run(w.bob, w.board, { action: 'summarize', shapeIds: [FRAME], mode: 'insert' }),
+      504,
+      'AI_UPSTREAM',
+    )
+    expect(Date.now() - started).toBeLessThan(4_000)
+    const [row] = await usageRows(w.api)
+    expect(row).toMatchObject({ status: 'failed' })
+    expect(row?.charged_tokens).toBe(row?.reserved_tokens)
+  })
 })
