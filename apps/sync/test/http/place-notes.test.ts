@@ -311,13 +311,14 @@ describe('internal place-notes endpoint', () => {
     alice.put(frameShape('other', { x: 0, y: 0 }))
     alice.put({ ...noteShape('mine', 'already here'), id: 'shape:mine' } as ShapeRecord)
     await alice.waitForAcked()
-    // Alice's own user record: placement must not replace it
+    // Alice's own user record, as her ticket says (the only way the sync server lets her write it,
+    // user-records.ts): placement must not replace it with the API's name and color for her.
     alice.store.put([
       {
         id: `user:${ALICE}`,
         typeName: 'user',
-        name: 'Alice (edited)',
-        color: '#000000',
+        name: ALICE,
+        color: '#1971c2',
         imageUrl: '',
         meta: {},
       },
@@ -330,7 +331,7 @@ describe('internal place-notes endpoint', () => {
     const frame = alice.get('shape:frame1') as ShapeRecord
     expect(frame).toMatchObject({ type: 'frame', parentId: PAGE_ID, x: 1000, y: 500 })
     expect(frame.props.name).toBe('Private ideas')
-    expect(alice.get(`user:${ALICE}`)).toMatchObject({ name: 'Alice (edited)' })
+    expect(alice.get(`user:${ALICE}`)).toMatchObject({ name: ALICE, color: '#1971c2' })
     expect(alice.get(`user:${BOB}`)).toMatchObject({ name: 'Bob Chen' })
   })
 

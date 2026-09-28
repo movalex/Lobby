@@ -150,6 +150,9 @@ export function createSyncServer(config: SyncConfig, opts: SyncServerOptions = {
       const prev = liveSockets.get(liveKey)
       liveSockets.set(liveKey, ws)
       if (prev && prev !== ws) prev.close(1000, 'replaced')
+      // Who the TICKET is, never who the client claims to be: presence and the session's own tldraw
+      // user record carry exactly this (presence.ts, user-records.ts).
+      const who = presenceIdentity({ uid, name, color })
       room.handleSocketConnect({
         sessionId: sid,
         // wrapper WITHOUT addEventListener: the room must not bind listeners to the raw ws, or a late
@@ -163,23 +166,28 @@ export function createSyncServer(config: SyncConfig, opts: SyncServerOptions = {
         },
         // The server is the enforcement: viewers and commenters get their writes discarded.
         isReadonly: !canEditCanvas(role),
-        meta: { userId: uid, role, name },
+        meta: { userId: uid, role, name, color: who.color },
       })
       access.admitted(boardId, sid, uid, iat)
       const isCurrent = () => liveSockets.get(liveKey) === ws
       const socketKey = ++socketSeq
-      // Presence says who the TICKET is, never who the client claims to be (presence.ts). This also
-      // reassembles chunked frames, so the room only ever receives whole, bound messages.
-      const inbound = new InboundFrames(presenceIdentity({ uid, name, color }))
+      // Binds presence and the session's own user record to `who`. This also reassembles chunked
+      // frames, so the room only ever receives whole, checked messages.
+      const inbound = new InboundFrames(who)
       let refused = false // nothing more from a socket caught forging, while its close goes out
       // Checked again at delivery: the socket may have been replaced while its frames were queued.
       const deliver = (frame: string) => {
         if (!isCurrent() || refused) return
         const r = inbound.accept(frame)
         if (r.kind === 'deliver') room.handleSocketMessage(sid, r.text)
-        else if (r.kind === 'forged') {
+        else if (r.kind === 'forged' || r.kind === 'forged-user') {
           refused = true
-          log(`[presence] refused a presence claiming another user on board ${boardId}`)
+          log(
+            r.kind === 'forged'
+              ? `[presence] refused a presence claiming another user on board ${boardId}`
+              : `[user-record] refused a user record unlike the ticket on board ${boardId}`,
+          )
+          // 4099: terminal on the client, so a stale tab stops here instead of retrying in a loop.
           room.closeSession(sid, TLSyncErrorCloseEventReason.INVALID_RECORD)
         } else if (r.kind === 'malformed') room.handleSocketError(sid) // what the room's assembler does
       }

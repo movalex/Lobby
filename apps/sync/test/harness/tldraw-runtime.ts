@@ -37,6 +37,7 @@ type StoreCtor = new (config: { schema: TLSchema; props: TLStoreProps; id?: stri
 const storeModule = (await import(esmEntry('@tldraw/store'))) as { Store: StoreCtor }
 const stateModule = (await import(esmEntry('@tldraw/state'))) as {
   atom: <T>(name: string, initial: T) => MutableSignal<T>
+  react: (name: string, fn: () => void) => () => void
 }
 
 export function createStore(schema: TLSchema): TLStore {
@@ -57,6 +58,11 @@ export function createStore(schema: TLSchema): TLStore {
 
 export function createAtom<T>(name: string, initial: T): MutableSignal<T> {
   return stateModule.atom(name, initial)
+}
+
+/** @tldraw/state's react() (the one sync-core uses): runs `fn` now and whenever what it read changes. */
+export function react(name: string, fn: () => void): () => void {
+  return stateModule.react(name, fn)
 }
 
 /** The atoms are real @tldraw/state atoms; only their static type comes from our narrow interface. */
