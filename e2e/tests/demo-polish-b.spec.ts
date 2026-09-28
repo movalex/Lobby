@@ -525,9 +525,7 @@ test('F17 leaving Present puts the board back where it was, even when the canvas
         const c = x.getViewportPageBounds().center
         return { x: Math.round(c.x), y: Math.round(c.y), z: x.getZoomLevel() }
       })
-    // The walk had a side panel open when Present started, and closed after it. On a phone the rail
-    // is folded behind one button (R13).
-    await a.page.getByTestId('dock-rail-toggle').click()
+    // The walk had a side panel open when Present started, and closed after it.
     await a.page.getByTestId('dock-tab-frames').click()
     await expect(a.page.getByTestId('dock-panel-frames')).toBeVisible()
     await viewportSettled(a.page)

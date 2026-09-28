@@ -158,6 +158,11 @@ test('R13 / A11Y-06: on a phone the rail folds behind one button and a panel ope
   await expect(a.page.getByTestId('dock-tab-history')).toBeVisible()
   await expect(a.page.getByTestId('dock-tab-history')).toContainText('History')
   await capture('phone-overlays-05-rail-open.png', a.page, testInfo)
+  // A press on the board beside the open list folds it away.
+  await a.page.mouse.click(330, 500)
+  await expect(a.page.getByTestId('dock-tab-history')).toBeHidden()
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false')
+  await toggle.click()
 
   await a.page.getByTestId('dock-tab-history').click()
   const panel = a.page.getByTestId('dock-panel-history')

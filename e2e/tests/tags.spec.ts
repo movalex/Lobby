@@ -651,7 +651,8 @@ test('the look at 390 px, light and dark: the picker stays on screen clear of th
         (ed) => (ed as unknown as { getViewportScreenBounds(): { w: number } }).getViewportScreenBounds().w,
       ),
     )
-    .toBeLessThan(390)
+    // The whole width on a phone: the dock rail folds over the board there (R13).
+    .toBeLessThanOrEqual(390)
   for (const scheme of ['light', 'dark'] as const) {
     await test.step(scheme, async () => {
       await a.page.emulateMedia({ colorScheme: scheme })
@@ -672,7 +673,7 @@ test('the look at 390 px, light and dark: the picker stays on screen clear of th
         true,
       )
       await capture(`tags-panel-390-${scheme}.png`, a.page, test.info())
-      await a.page.getByTestId('dock-tab-tags').click() // close the dock
+      await a.page.getByTestId('dock-panel-close').click() // close the dock (a sheet on a phone)
       await expect.poll(() => insideViewport(a.page, '[data-testid="tag-filter-bar"]', 4)).toBe(true)
       await capture(`tags-filter-390-${scheme}.png`, a.page, test.info())
       await a.page.getByTestId('tag-filter-clear').click()

@@ -211,6 +211,16 @@ export function FeatureDock({
   const toggleRef = useRef<HTMLButtonElement>(null)
   const railId = useId()
 
+  // The open phone rail lies over the board: a press anywhere else folds it away again.
+  useEffect(() => {
+    if (!railOpen) return
+    const onDown = (e: PointerEvent) => {
+      if (!railRef.current?.contains(e.target as Node)) setRailOpen(false)
+    }
+    document.addEventListener('pointerdown', onDown, true)
+    return () => document.removeEventListener('pointerdown', onDown, true)
+  }, [railOpen])
+
   useEffect(() => {
     const onFocusIn = (e: FocusEvent) => {
       focusInPanel.current = panelRef.current?.contains(e.target as Node) === true
