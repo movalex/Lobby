@@ -2,7 +2,8 @@
 // content included. Real api + sync + web: text written on a board is found from the dashboard, a
 // result opens the board zoomed to the object (selected) or with the comment thread open, edits show
 // up right away, deleted objects and trashed boards leave the results, and people find only the boards
-// they can open (a member without access, a viewer, a name-only guest). Screenshots: light, dark, 390 px.
+// they can open (a member without access, a viewer, a name-only guest), and the keyboard keeps its place
+// after "Show more boards" and "Try again". Screenshots: light, dark, 390 px.
 import { randomBytes } from 'node:crypto'
 import type { Browser, BrowserContext, Locator, Page } from '@playwright/test'
 import { edit, read, waitForBoard } from './support/board.ts'
@@ -324,5 +325,65 @@ test('search: people find only boards they can open, comment threads included', 
     })
   } finally {
     await Promise.all(contexts.map((c) => c.close()))
+  }
+})
+
+test('search: the keyboard keeps its place after "Show more boards" and "Try again"', async ({
+  users,
+  browser,
+}) => {
+  const aliceApi = await users.api('alice')
+  const topic = word('tapir')
+  // Six boards whose only match is a comment thread (no canvas needed): one more than is shown.
+  for (let i = 1; i <= 6; i++) {
+    const id = await users.createBoard(`Keyboard board ${i}`)
+    const res = await aliceApi.fetch('POST', `/api/boards/${id}/threads`, {
+      anchor: { kind: 'point', x: 0, y: 0 },
+      body: `Notes about the ${topic} number ${i}`,
+    })
+    expect(res.status()).toBe(201)
+  }
+  const alice = await signedInContext(browser, 'alice')
+  const { page } = alice
+  try {
+    await openDashboard(page, users.devStudioId)
+    await searchFor(page, topic)
+    await expect(page.getByTestId('content-search-board')).toHaveCount(5)
+
+    await test.step('"Show 1 more board" by keyboard: focus lands on the board it revealed', async () => {
+      const more = page.getByTestId('content-search-more-boards')
+      await expect(more).toHaveText('Show 1 more board')
+      await more.focus()
+      await page.keyboard.press('Enter')
+      await expect(page.getByTestId('content-search-board')).toHaveCount(6)
+      await expect(page.getByTestId('content-search-board-link').nth(5)).toBeFocused()
+      await page.keyboard.press('ArrowUp') // the arrows go on from there
+      await expect(hits(page).nth(4)).toBeFocused()
+    })
+
+    await test.step('"Try again" by keyboard after an error: focus goes back to the search box', async () => {
+      let failing = true
+      await page.route('**/search?*', (route) =>
+        failing
+          ? route.fulfill({
+              status: 503,
+              contentType: 'application/json',
+              body: JSON.stringify({ error: { code: 'UNAVAILABLE', message: 'Search is resting.' } }),
+            })
+          : route.continue(),
+      )
+      await searchBox(page).fill(`${topic} notes`)
+      await expect(section(page)).toHaveAttribute('data-state', 'error')
+      await expect(status(page)).toHaveText('Search is resting.')
+      failing = false
+      await page.getByTestId('content-search-retry').focus()
+      await page.keyboard.press('Enter')
+      await expect(section(page)).toHaveAttribute('data-state', 'ready')
+      await expect(status(page)).toHaveText('6 matches in 6 boards')
+      await expect(searchBox(page)).toBeFocused()
+      await page.unroute('**/search?*')
+    })
+  } finally {
+    await alice.context.close()
   }
 })

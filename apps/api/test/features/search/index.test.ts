@@ -1,8 +1,7 @@
 // Search across boards: keeping the index current (freshness after an edit, deletions leaving it),
 // comment threads, the background pass, sync failures, snippets, limits and caps.
-import { SEARCH_CANVAS_TEXT_BYTES, SEARCH_HITS_PER_BOARD } from '@draftroom/contracts'
+import { rewriteMentionTokens, SEARCH_CANVAS_TEXT_BYTES, SEARCH_HITS_PER_BOARD } from '@draftroom/contracts'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { HIT_CEILING } from '../../../src/features/search/index.ts'
 import { canvasEntries, searchSettings } from '../../../src/features/search/indexer.ts'
 import { type Client, createBoard, DEV_STUDIO } from '../../helpers.ts'
 import {
@@ -153,6 +152,23 @@ describe('search: comment threads', () => {
     expect(hitsOf(await search(vic, DEV_STUDIO, 'llama'))).toEqual([])
     expect(hitsOf(await search(vic, DEV_STUDIO, 'alpaca'))).toEqual([`${board} ${thread.id}`])
   })
+
+  it('indexes a mention as the name people read, never the user id behind it', async () => {
+    const created = await bob.req('POST', `/api/boards/${board}/threads`, {
+      anchor: { kind: 'point', x: 0, y: 0 },
+      body: `Ask @[Vic](${vic.userId}) about the zebra budget`,
+    })
+    expect(created.statusCode, created.body).toBe(201)
+    const stored = (created.json() as { thread: { comments: { body: string }[] } }).thread.comments[0]?.body
+    expect(stored).toContain(vic.userId) // the comment keeps its mention token
+    // What the thread shows: "@Name".
+    const shown = rewriteMentionTokens(stored ?? '', () => null)
+    const hit = (await search(vic, DEV_STUDIO, 'zebra')).groups[0]?.hits[0]
+    expect(marked(hit as never)).toBe(shown.replace('zebra', '[zebra]'))
+    for (const q of [vic.userId, 'usr']) expect(hitsOf(await search(vic, DEV_STUDIO, q)), q).toEqual([])
+    const name = /@(\p{L}+)/u.exec(shown)?.[1] ?? 'missing'
+    expect(hitsOf(await search(vic, DEV_STUDIO, `${name} zebra`))).toEqual([`${board} ${hit?.objectId}`])
+  })
 })
 
 describe('search: when the sync server cannot answer', () => {
@@ -232,6 +248,21 @@ describe('search: matching and snippets', () => {
     expect(text.length).toBeLessThan(260)
   })
 
+  it('shows the match in the snippet when only folding finds it, deep inside a long text', async () => {
+    const filler = (w: string) => `${w} `.repeat(60)
+    await edit(board, [
+      note('n1', `${filler('opening')}we met at the Café Zoë downtown ${filler('closing')}`),
+      note('n2', `${filler('intro')}attached: brief.pdf for the zebra ${filler('outro')}`),
+    ])
+    const res = await search(bob, DEV_STUDIO, 'cafe zoe')
+    const cafe = marked(res.groups[0]?.hits[0] as never)
+    expect(cafe).toContain('[Café] [Zoë]')
+    expect(cafe).toMatch(/^….*…$/)
+    expect(cafe.length).toBeLessThan(260)
+    const pdf = marked((await search(bob, DEV_STUDIO, 'pdf zebra')).groups[0]?.hits[0] as never)
+    expect(pdf).toContain('brief.[pdf] for the [zebra]')
+  })
+
   it('names the kind of each object', async () => {
     await edit(board, [
       note('n1', 'Zebra note'),
@@ -282,6 +313,22 @@ describe('search: matching and snippets', () => {
     const one = await search(bob, DEV_STUDIO, 'zebra', { limit: '1' })
     expect(one.groups).toHaveLength(1)
     expect(one.totalBoards).toBe(2)
+  })
+
+  it('a board with hundreds of matches does not crowd the other matching boards out', async () => {
+    const second = await createBoard(bob, DEV_STUDIO, 'Second board')
+    await edit(
+      board,
+      Array.from({ length: 450 }, (_, i) => note(`n${i}`, `zebra zebra ${i}`)),
+    )
+    await edit(second, [note('m1', `one zebra in a long note ${'with many other words '.repeat(20)}`)])
+    const res = await search(bob, DEV_STUDIO, 'zebra')
+    expect(res.groups.map((g) => g.board.id)).toEqual([board, second])
+    expect(res).toMatchObject({ totalBoards: 2, totalHits: 451, capped: false })
+    expect(res.groups.map((g) => [g.hits.length, g.more])).toEqual([
+      [SEARCH_HITS_PER_BOARD, 450 - SEARCH_HITS_PER_BOARD],
+      [1, 0],
+    ])
   })
 
   it('treats hostile queries as words (never a server error)', async () => {
@@ -373,9 +420,9 @@ describe('search: limits and caps', () => {
     console.info(
       `[search] 5,000 notes indexed in ${indexMs.toFixed(0)} ms (PGlite); search ${searchMs.toFixed(0)} ms`,
     )
-    // 715 notes match; the count stops at the ceiling and says so.
-    expect(res).toMatchObject({ totalHits: HIT_CEILING, capped: true, totalBoards: 1 })
-    expect(res.groups[0]?.more).toBe(HIT_CEILING - SEARCH_HITS_PER_BOARD)
+    // 715 notes match (i % 7 === 0), every one of them counted.
+    expect(res).toMatchObject({ totalHits: 715, capped: false, totalBoards: 1 })
+    expect(res.groups[0]?.more).toBe(715 - SEARCH_HITS_PER_BOARD)
     expect(indexMs).toBeLessThan(60_000)
   })
 })

@@ -111,7 +111,10 @@ export const SearchResponse = z.object({
   groups: z.array(SearchBoardGroup),
   /** Matching boards in total (groups beyond `limit` are not returned). */
   totalBoards: z.number().int().min(0),
-  /** Hits counted before grouping; `capped` when the count stopped at the server's ceiling. */
+  /**
+   * Matches in all matching boards. `capped` would say the count stopped at a server ceiling; the
+   * server currently counts every match (each board ranked on its own), so it is false.
+   */
   totalHits: z.number().int().min(0),
   capped: z.boolean(),
   /**

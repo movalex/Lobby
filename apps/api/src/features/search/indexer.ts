@@ -19,7 +19,12 @@
 // Nothing here logs board text.
 
 import { FILE_CARD_TYPE } from '@draftroom/canvas-schema'
-import { SEARCH_CANVAS_TEXT_BYTES, SEARCH_COMMENT_TEXT_BYTES, type SearchHitKind } from '@draftroom/contracts'
+import {
+  rewriteMentionTokens,
+  SEARCH_CANVAS_TEXT_BYTES,
+  SEARCH_COMMENT_TEXT_BYTES,
+  type SearchHitKind,
+} from '@draftroom/contracts'
 import type { Db, Queryable } from '@draftroom/db'
 import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
@@ -372,7 +377,9 @@ export class SearchIndexer {
     const threads = new Map<string, { status: string; bodies: string[] }>()
     for (const c of r.rows.slice(0, MAX_COMMENTS_READ)) {
       const t = threads.get(c.thread_id) ?? { status: c.status, bodies: [] }
-      t.bodies.push(c.body)
+      // A mention is indexed as the "@Name" people read, never as its token (`@[Name](usr_…)`):
+      // user ids are not searchable text, and snippets show what the thread shows.
+      t.bodies.push(rewriteMentionTokens(c.body, () => null))
       threads.set(c.thread_id, t)
     }
     const entries: IndexEntry[] = []

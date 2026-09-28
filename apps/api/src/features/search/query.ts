@@ -126,11 +126,51 @@ export function highlightWords(text: string, terms: readonly string[]): SnippetP
   return merge(parts)
 }
 
+/** Context kept around a match that only folding found (characters before and after it). */
+const AROUND_BEFORE = 60
+const AROUND_AFTER = 140
+
+const isHigh = (c: number) => c >= 0xd800 && c <= 0xdbff
+const isLow = (c: number) => c >= 0xdc00 && c <= 0xdfff
+
+/**
+ * A snippet of `body` around its first word that starts with one of the terms, cut at spaces, or
+ * null when no word does. For matches ts_headline cannot see: its english parser keeps 'Café' and
+ * 'brief.pdf' whole, so with 'cafe' or 'pdf' it picks no fragment and returns the text's beginning.
+ */
+export function snippetAround(body: string, terms: readonly string[]): Snippet | null {
+  if (!terms.length) return null
+  for (const m of body.matchAll(WORD_RE)) {
+    if (!terms.some((t) => foldText(m[0]).startsWith(t))) continue
+    const at = m.index ?? 0
+    const wordEnd = at + m[0].length
+    let start = Math.max(0, at - AROUND_BEFORE)
+    let end = Math.min(body.length, wordEnd + AROUND_AFTER)
+    if (start > 0) {
+      const space = body.indexOf(' ', start)
+      start = space === -1 || space >= at ? at : space + 1
+    }
+    if (end < body.length) {
+      const space = body.lastIndexOf(' ', end)
+      if (space > wordEnd) end = space
+    }
+    if (start > 0 && isLow(body.charCodeAt(start))) start++ // never half a surrogate pair
+    if (end < body.length && isHigh(body.charCodeAt(end - 1))) end--
+    return {
+      parts: highlightWords(body.slice(start, end), terms),
+      cutStart: start > 0,
+      cutEnd: end < body.length,
+    }
+  }
+  return null
+}
+
 /**
  * Turns a ts_headline result (with HIGHLIGHT_* markers) into snippet parts. Postgres marks what its
  * english dictionary matched (stems: 'running' marks 'runs'); words that match only through folding
- * ('cafe' → 'Café') or inside punctuation ('pdf' in 'brief.pdf') are marked here as well. `body` is
- * the indexed text, to tell whether the snippet was cut.
+ * ('cafe' → 'Café') or inside punctuation ('pdf' in 'brief.pdf') are marked here as well, and when the
+ * headline holds no match at all (Postgres could not see it), the snippet is cut around the first
+ * matching word instead (snippetAround). `body` is the indexed text, to tell whether it was cut.
  */
 export function snippetFromHeadline(headline: string, body: string, terms: readonly string[]): Snippet {
   const parts: SnippetPart[] = []
@@ -147,6 +187,10 @@ export function snippetFromHeadline(headline: string, body: string, terms: reado
   }
   parts.push({ text: buf, hit })
   const out = merge(parts.flatMap((p) => (p.hit ? [p] : highlightWords(p.text, terms))))
+  if (!out.some((p) => p.hit)) {
+    const around = snippetAround(body, terms)
+    if (around) return around
+  }
   const trimmed = parts
     .map((p) => p.text)
     .join('')

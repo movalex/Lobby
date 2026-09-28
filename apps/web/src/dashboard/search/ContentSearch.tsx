@@ -65,6 +65,8 @@ export function ContentSearch({ workspaceId, query, section, inputRef, projectNa
   const [expandedFor, setExpandedFor] = useState<string | null>(null)
   const retriedFor = useRef<string | null>(null)
   const listRef = useRef<HTMLDivElement>(null)
+  /** "Show more boards" was used: focus the first board it revealed (its button goes away). */
+  const focusBoardAt = useRef<number | null>(null)
   const headingId = useId()
 
   // No client cache: every answer is the server's current one (a board shared or trashed a moment
@@ -149,6 +151,14 @@ export function ContentSearch({ workspaceId, query, section, inputRef, projectNa
     return () => list.removeEventListener('keydown', onKey)
   }, [hasKey, inputRef])
 
+  const expanded = key !== null && expandedFor === key
+  useEffect(() => {
+    const at = focusBoardAt.current
+    if (!expanded || at === null) return
+    focusBoardAt.current = null
+    listRef.current?.querySelectorAll<HTMLElement>('.dr-csearch__board-link')[at]?.focus()
+  }, [expanded])
+
   if (!key) return null
 
   const shown = view.phase === 'idle' ? null : view.shown
@@ -157,7 +167,6 @@ export function ContentSearch({ workspaceId, query, section, inputRef, projectNa
   const phase = view.phase === 'idle' || view.key !== key ? 'loading' : view.phase
   const loading = phase === 'loading'
   const groups = shown?.groups ?? []
-  const expanded = expandedFor === key
   const visible = expanded ? groups : groups.slice(0, VISIBLE_BOARDS)
   const hidden = groups.length - visible.length
   const pending = phase === 'ready' && shown ? pendingNote(shown.pendingBoards) : null
@@ -189,7 +198,11 @@ export function ContentSearch({ workspaceId, query, section, inputRef, projectNa
             type="button"
             className="dr-btn dr-csearch__retry"
             data-testid="content-search-retry"
-            onClick={() => setAttempt((a) => a + 1)}
+            onClick={() => {
+              // The button goes away while the search runs again: the search box keeps the keyboard.
+              inputRef.current?.focus()
+              setAttempt((a) => a + 1)
+            }}
           >
             Try again
           </button>
@@ -214,7 +227,10 @@ export function ContentSearch({ workspaceId, query, section, inputRef, projectNa
           type="button"
           className="dr-btn dr-btn--ghost dr-csearch__more-boards"
           data-testid="content-search-more-boards"
-          onClick={() => setExpandedFor(key)}
+          onClick={() => {
+            focusBoardAt.current = visible.length
+            setExpandedFor(key)
+          }}
         >
           Show {hidden} more {hidden === 1 ? 'board' : 'boards'}
         </button>

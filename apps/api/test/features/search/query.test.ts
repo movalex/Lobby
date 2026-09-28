@@ -86,6 +86,27 @@ describe('snippets', () => {
     expect(highlightWords('no match here', ['zebra'])).toEqual([{ text: 'no match here', hit: false }])
   })
 
+  it('cuts around the first matching word when the headline holds no match at all', () => {
+    const body = `${'😀'.repeat(40)} lead ${'x '.repeat(40)}the Café is here${' y'.repeat(100)}`
+    const s = snippetFromHeadline('😀😀 lead x x x', body, ['cafe'])
+    const text = s.parts.map((p) => p.text).join('')
+    expect(s.parts.filter((p) => p.hit).map((p) => p.text)).toEqual(['Café'])
+    expect(s).toMatchObject({ cutStart: true, cutEnd: true })
+    expect(text.startsWith('x ')).toBe(true) // cut at a space, never inside a word
+    expect(text.endsWith('y')).toBe(true)
+    expect(text.length).toBeLessThan(220)
+    // A match near the start keeps the start; a surrogate pair is never split.
+    const short = snippetFromHeadline('nothing', `😀 Café ${'😀'.repeat(200)}`, ['cafe'])
+    const shortText = short.parts.map((p) => p.text).join('')
+    expect(short.cutStart).toBe(false)
+    expect(shortText).not.toMatch(/[\uD800-\uDBFF]$/)
+    expect(() => encodeURIComponent(shortText)).not.toThrow()
+    // Nothing matches anywhere: the headline stays as it is.
+    expect(snippetFromHeadline('plain words', 'plain words', ['zebra']).parts).toEqual([
+      { text: 'plain words', hit: false },
+    ])
+  })
+
   it('keeps what Postgres marked (stems) and adds folded and in-word matches', () => {
     const s = snippetFromHeadline(`${S}runs${E} to the Café with brief.pdf`, 'x', ['running', 'cafe', 'pdf'])
     expect(s.parts.filter((p) => p.hit).map((p) => p.text)).toEqual(['runs', 'Café', 'pdf'])

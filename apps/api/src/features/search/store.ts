@@ -78,6 +78,11 @@ export interface RankedRow {
   kind: SearchHitKind
   page_id: string | null
   rank: number
+  /** Every match in this board (the rows returned are its best `perBoard`). */
+  board_hits: number
+  /** Matching boards and matches among all of `boardIds` (the same on every row). */
+  total_boards: number
+  total_hits: number
 }
 
 export interface TsQueries {
@@ -88,22 +93,48 @@ export interface TsQueries {
 const QUERY_SQL = `(to_tsquery('simple', $1) || to_tsquery('english', $2))`
 
 /**
- * The best `limit` matching objects among `boardIds` (all of which the caller may view), best first.
- * Rank: cover density, normalized to 0..1 (ts_rank_cd flag 32).
+ * The best `boards` matching boards among `boardIds` (all of which the caller may view), best first,
+ * each with its best `perBoard` matching objects (best first), its own match count, and the totals.
+ * Ranked per board, so a board with hundreds of matches never crowds the other boards out.
+ * Rank: cover density, normalized to 0..1 (ts_rank_cd flag 32); a board ranks by its best match.
  */
 export async function rankedHits(
   q: Queryable,
-  opts: { workspaceId: string; boardIds: readonly string[]; query: TsQueries; limit: number },
+  opts: {
+    workspaceId: string
+    boardIds: readonly string[]
+    query: TsQueries
+    boards: number
+    perBoard: number
+  },
 ): Promise<RankedRow[]> {
   if (!opts.boardIds.length || !opts.query.simple) return []
   const r = await q.query<RankedRow>(
-    `SELECT e.board_id, e.source, e.object_id, e.kind, e.page_id,
-            ts_rank_cd(e.tsv, ${QUERY_SQL}, 32)::float8 AS rank
-       FROM board_search_entries e
-      WHERE e.workspace_id = $3 AND e.board_id = ANY($4::text[]) AND e.tsv @@ ${QUERY_SQL}
-      ORDER BY rank DESC, e.board_id, e.source, e.object_id
-      LIMIT $5`,
-    [opts.query.simple, opts.query.english, opts.workspaceId, opts.boardIds, opts.limit],
+    `WITH m AS (
+       SELECT e.board_id, e.source, e.object_id, e.kind, e.page_id,
+              ts_rank_cd(e.tsv, ${QUERY_SQL}, 32)::float8 AS rank
+         FROM board_search_entries e
+        WHERE e.workspace_id = $3 AND e.board_id = ANY($4::text[]) AND e.tsv @@ ${QUERY_SQL}
+     ), r AS (
+       SELECT m.*,
+              row_number() OVER (PARTITION BY m.board_id ORDER BY m.rank DESC, m.source, m.object_id) AS n,
+              count(*) OVER (PARTITION BY m.board_id) AS board_hits,
+              count(*) OVER () AS total_hits
+         FROM m
+     ), top AS (
+       SELECT r.board_id, r.rank AS best, count(*) OVER () AS total_boards
+         FROM r
+        WHERE r.n = 1
+        ORDER BY r.rank DESC, r.board_id
+        LIMIT $5
+     )
+     SELECT r.board_id, r.source, r.object_id, r.kind, r.page_id, r.rank,
+            r.board_hits::int AS board_hits, top.total_boards::int AS total_boards,
+            r.total_hits::int AS total_hits
+       FROM top
+       JOIN r ON r.board_id = top.board_id AND r.n <= $6
+      ORDER BY top.best DESC, top.board_id, r.n`,
+    [opts.query.simple, opts.query.english, opts.workspaceId, opts.boardIds, opts.boards, opts.perBoard],
   )
   return r.rows
 }

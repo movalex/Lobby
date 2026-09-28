@@ -8,8 +8,11 @@
 // erin is not a member of Dev Studio; her own workspace has board X.
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { EventHub } from '../../../src/events/hub.ts'
+import type { FeatureContext } from '../../../src/features/context.ts'
+import { sweepExpiredReviewLinks } from '../../../src/features/dashboard/review-links.ts'
 import { type Client, createBoard, DEV_STUDIO } from '../../helpers.ts'
-import { type GuestClient, guestLink, joinAsGuest } from '../guests/support.ts'
+import { type GuestClient, guestLink, joinAsGuest, tokenOf } from '../guests/support.ts'
 import { boardsOf, note, type SearchWorld, search, searchRaw, searchWorld } from './support.ts'
 
 let w: SearchWorld
@@ -139,5 +142,42 @@ describe('search: the permission filter', () => {
       boardsOf(await search(alice, DEV_STUDIO, 'zebra', { projectId: 'prj_Other00000000000000' })),
     ).toEqual([])
     expect((await searchRaw(alice, DEV_STUDIO, 'zebra', { projectId: 'nope' })).statusCode).toBe(400)
+  })
+})
+
+describe('search: access that ends', () => {
+  it('an expired review link takes its board out of search, for account holders and name-only guests', async () => {
+    const x = await searchWorld()
+    try {
+      const { api } = x
+      await api.login('alice')
+      const owner = await api.login('bob')
+      const member = await api.login('carol')
+      const board = await createBoard(owner, DEV_STUDIO, 'Review board')
+      x.sync.setText(board, [note('r1', 'okapi review notes')])
+      const link = await guestLink(owner, board, { role: 'viewer' })
+      const accepted = await member.req('POST', `/api/invitations/${tokenOf(link.url)}/accept`)
+      expect(accepted.statusCode, accepted.body).toBe(200)
+      const sam = await joinAsGuest(api, link.url, 'Sam')
+      expect(boardsOf(await search(member, DEV_STUDIO, 'okapi'))).toEqual([board])
+      expect(boardsOf(await search(sam, DEV_STUDIO, 'okapi'))).toEqual([board])
+
+      api.clock.advance(Date.parse(link.expiresAt) + 1_000 - api.clock.now().getTime())
+      await sweepExpiredReviewLinks({
+        db: api.db,
+        now: api.clock.now,
+        notifier: { accessChanged: () => {}, drain: async () => {} },
+        events: new EventHub(),
+      } as unknown as FeatureContext)
+      const after = await searchRaw(member, DEV_STUDIO, 'okapi')
+      expect(after.statusCode).toBe(200)
+      expect(boardsOf(after.json())).toEqual([])
+      expect(after.body).not.toContain(board)
+      expect(after.body).not.toContain('okapi review')
+      // The guest's session ended with the link: nothing to search with.
+      expect((await searchRaw(sam, DEV_STUDIO, 'okapi')).statusCode).toBe(401)
+    } finally {
+      await x.close()
+    }
   })
 })

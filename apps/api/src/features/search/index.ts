@@ -41,8 +41,6 @@ export { searchSettings } from './indexer.ts'
 
 export const SEARCH_ROUTE = '/api/workspaces/:wid/search'
 const TRASH_ROUTE = '/api/boards/:bid/trash'
-/** Ranked hits read per search before grouping (the response says `capped` beyond it). */
-export const HIT_CEILING = 400
 
 const indexers = new WeakMap<FastifyInstance, SearchIndexer>()
 /** The app's indexer (tests drive passes and wait for refreshes through it). */
@@ -125,20 +123,20 @@ async function search(
     workspaceId: opts.workspaceId,
     boardIds: [...byId.keys()],
     query: parsed,
-    limit: HIT_CEILING + 1,
+    boards: opts.limit,
+    perBoard: SEARCH_HITS_PER_BOARD,
   })
-  const capped = ranked.length > HIT_CEILING
-  // Rows are best-first, so each board's group appears at its best hit: groups come out best-first too.
+  // Rows come board by board, best board first, each board's hits best first.
   const grouped = new Map<string, RankedRow[]>()
-  for (const r of ranked.slice(0, HIT_CEILING)) {
+  for (const r of ranked) {
     if (!byId.has(r.board_id)) continue // by construction never; a second check costs nothing
     const list = grouped.get(r.board_id) ?? []
     list.push(r)
     grouped.set(r.board_id, list)
   }
-  const chosen = [...grouped.entries()].slice(0, opts.limit)
+  const chosen = [...grouped.entries()]
   const keys = chosen.flatMap(([boardId, hits]) =>
-    hits.slice(0, SEARCH_HITS_PER_BOARD).map((h) => ({ boardId, source: h.source, objectId: h.object_id })),
+    hits.map((h) => ({ boardId, source: h.source, objectId: h.object_id })),
   )
   const heads = await headlines(ctx.db, parsed, keys)
   let k = 0
@@ -147,7 +145,7 @@ async function search(
     const board = byId.get(boardId)
     if (!board) continue
     const shown: SearchHit[] = []
-    for (const h of hits.slice(0, SEARCH_HITS_PER_BOARD)) {
+    for (const h of hits) {
       const head = heads.get(k++)
       if (!head) continue // re-indexed between the two queries: the object is gone
       const snippet = snippetFromHeadline(head.headline, head.body, parsed.terms)
@@ -164,16 +162,17 @@ async function search(
     groups.push({
       board: { id: board.id, title: board.title, projectId: board.projectId, status: board.status },
       hits: shown,
-      more: Math.max(0, hits.length - SEARCH_HITS_PER_BOARD),
+      more: Math.max(0, (hits[0]?.board_hits ?? 0) - hits.length),
       truncated: !!(board.state?.canvasTruncated || board.state?.commentsTruncated),
     })
   }
   return {
     terms: parsed.terms,
     groups,
-    totalBoards: grouped.size,
-    totalHits: Math.min(ranked.length, HIT_CEILING),
-    capped,
+    totalBoards: ranked[0]?.total_boards ?? 0,
+    totalHits: ranked[0]?.total_hits ?? 0,
+    // Counts are exact: every match is ranked (per board), none is left uncounted.
+    capped: false,
     pendingBoards,
   }
 }
