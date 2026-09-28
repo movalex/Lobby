@@ -366,6 +366,7 @@ What holds what: **board content** (every shape, note and connector) lives in on
   - `backups/sync/<board>/<stamp>-c<clock>.sqlite`: the file, streamed from disk and hashed on the way. If the bytes sent don't match the local manifest's sha256, the object is deleted again and the file is never retried.
   - `backups/sync/<board>/manifest.json`: per backup, its time (`createdAt`, `uploadedAt`), document clock, tldraw schema, size, sha256 of the file and of its records, and the asset versions the board references (`assets: [{assetId, versionId}]`, from file cards and image records). This is the build plan's "coordinated manifest with board, schema and asset versions".
   - `backups/sync/index.json`: the boards that have offsite backups (the restore tools use it; the store has no list call).
+  - **Signed** ([below](#signed-backups-tamper-evidence)): every manifest entry, every `manifest.json` and `index.json` carry an HMAC signature, checked by the restore tools before they trust a checksum.
   - **Retention:** the newest 12, plus the newest backup of each of the last 14 days (UTC). The rest are deleted; a failed delete stays listed under `pendingDeletes` and is retried.
 - **Failures** never affect the local backup or the board. Each one is counted and logged as `[backup] offsite upload failed for board <id>: NETWORK ECONNRESET (retried on the next pass)`: an error code, HTTP status and S3 code only, never a credential, URL or response body. It's retried on the next pass (every `DRAFTROOM_BACKUP_INTERVAL_MS`) or the board's next backup, and at every server start.
 - **Memory.** Uploads stream. Measured on the dev PC (`apps/sync/test/backup/memory.test.ts`, a 52.9 MiB backup): RSS +0–4 MiB through the R2 driver (to a loopback S3 stand-in) and the fs driver; a control that buffers the file shows +53 MiB. Not measured against real R2 or on Render.
@@ -377,21 +378,58 @@ What holds what: **board content** (every shape, note and connector) lives in on
 node -e "fetch('http://127.0.0.1:'+(process.env.PORT||10000)+'/internal/backups/status',{headers:{'x-draftroom-internal':process.env.DRAFTROOM_INTERNAL_SECRET}}).then(r=>r.text()).then(console.log)"
 ```
 
-The server also logs its setting at startup: `[backup] offsite backups: r2 (bucket draftroom-staging)`, or `off`.
+The server also logs its setting at startup, never a credential: `[backup] offsite backups: r2 (bucket draftroom-staging-backups; backup-only bucket and token)`, or with the shared settings `r2 (bucket draftroom-staging; shared with the api: R2_BUCKET and the R2_* token, see docs/DEPLOY.md "Backups")`, or `off`.
+
+### Signed backups (tamper evidence)
+
+Without this, anyone who can write the bucket could replace a backup file and rewrite the checksums its manifest lists, and the drill would pass and `restore-board` would stage the changed board (review finding SEAM-08). Now:
+
+- The sync server signs each manifest entry (its file, times, clock, schema, counts, both checksums and asset list, bound to the board id), each `manifest.json` as a whole, and `index.json`, with HMAC-SHA256. The key is derived from `DRAFTROOM_INTERNAL_SECRET` (HKDF-SHA256 with a label used for nothing else), so the secret itself never signs anything and never appears in the store. Each signature records a `keyId`, a hash of the derived key (not secret).
+- The drill and `restore-board --from=store` check the index, then the manifest, then the entry, **before** they trust any checksum. A signature that is present and wrong always fails, `--allow-unsigned` or not: `FAIL the offsite manifest does not match its signature: it was changed outside the sync server`.
+- Both tools need the server's `DRAFTROOM_INTERNAL_SECRET`. The sync service's Shell has it. The `pnpm` scripts read `apps/sync/dev.env`, which matches `pnpm dev`.
+- **Backups taken before signing** have no signatures. The tools refuse them (`… is not signed (written before backups were signed, or its signature was removed); rerun with --allow-unsigned to accept it`). With `--allow-unsigned` they're accepted, but every such line prints as `WARN UNVERIFIED: …`, the drill ends with `restore drill passed, with unsigned backups accepted (--allow-unsigned)`, `restore-board` prints `staged … (UNSIGNED, accepted with --allow-unsigned)`, and the server's `[restore]` log line says so too. The first start of the signing build signs each board's manifest and the index once. Old entries stay unsigned, because sync never vouches for data it did not write in this form. Every new backup is signed, so the drill of the newest backup passes without the flag once a board has been backed up again, and old entries age out with retention (14 days).
+- **Rotating `DRAFTROOM_INTERNAL_SECRET`**: backups signed under the old secret show `… is signed with another key (key id …; this server's is …)`. They need `--allow-unsigned` until they age out. The next start re-signs the manifests and the index; entries keep their old signatures. The same message appears when a Shell's secret differs from the server's.
+- **Limits.** A valid signature proves "written by something that holds `DRAFTROOM_INTERNAL_SECRET`". The api holds that secret too (shared env group). So signing protects against anyone with only a bucket token (a leaked token, a mistake on the Cloudflare side). It protects against a compromised api only once backups have their own bucket that the api has no token for ([next section](#separate-backup-bucket-and-token-recommended)). It can't tell a pre-signing manifest from one whose signatures were stripped: use `--allow-unsigned` only for backups you know are older than the signing build. It doesn't stop deletion. It can't detect an older, genuinely signed manifest put back in place; the drill names the backup file it used, and the name holds its time.
+
+### Separate backup bucket and token (recommended)
+
+By default backups share the api's bucket and token (review finding SEAM-09). R2 tokens are scoped to buckets, not prefixes. So the api's token can read and delete every backup, sync's token can read and delete every upload and thumbnail, and deleting the bucket loses the files and their "offsite" copies together. Sync reads optional backup-only settings that replace their `R2_*` counterparts for backups only, so the switch needs no code change:
+
+| Backup-only variable | Replaces | Notes |
+|---|---|---|
+| `DRAFTROOM_BACKUP_R2_BUCKET` | `R2_BUCKET` | the backup bucket |
+| `DRAFTROOM_BACKUP_R2_ACCESS_KEY_ID`, `DRAFTROOM_BACKUP_R2_SECRET_ACCESS_KEY` | `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` | set both or neither; a backup key id is never paired with the shared secret |
+| `DRAFTROOM_BACKUP_R2_ACCOUNT_ID` | `R2_ACCOUNT_ID` | only for a bucket in another Cloudflare account |
+| `DRAFTROOM_BACKUP_R2_ENDPOINT` | `R2_ENDPOINT` | only for a jurisdiction bucket; `R2_ENDPOINT` is never used for a bucket in another account |
+
+With the bucket and both credentials set, sync needs none of the api's `R2_*` token values. The api never reads these variables. Validation is the same as for `R2_*`, and messages name the variable, never its value.
+
+**Steps for the owner** (none of this has been done yet):
+
+1. Cloudflare dashboard → R2 → **Create bucket** `draftroom-staging-backups`: private, no public access, no custom domain, no CORS. The same account is fine. A bucket in another Cloudflare account isolates it further; then note that account's ID too.
+2. R2 → **Manage API tokens** → **Create API token**: permission **Object Read & Write**, applied to **specific buckets only** → `draftroom-staging-backups` alone. Copy the Access Key ID and the Secret Access Key.
+3. Render → `draftroom-staging-sync` → **Environment**, in **one save**: add `DRAFTROOM_BACKUP_R2_BUCKET=draftroom-staging-backups`, `DRAFTROOM_BACKUP_R2_ACCESS_KEY_ID`, `DRAFTROOM_BACKUP_R2_SECRET_ACCESS_KEY` (plus `DRAFTROOM_BACKUP_R2_ACCOUNT_ID` for another account). In the same save, delete `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` and `R2_BUCKET` from sync. Keep `R2_ACCOUNT_ID` unless you set the backup one, and keep `DRAFTROOM_BACKUP_STORE=r2`. Do both in one save: deleting the `R2_*` values first would make sync refuse to start. Leave the api's variables alone.
+4. Deploy (or restart) sync. The startup log must read `[backup] offsite backups: r2 (bucket draftroom-staging-backups; backup-only bucket and token)`. Its first pass uploads every board's local backups (up to 12 each) to the new bucket.
+5. In the sync Shell: `node apps/sync/src/backup/restore-drill.ts --from=store` must print `PASS` for every board.
+6. The old copies under `backups/` in `draftroom-staging` are no longer managed. Keep them until the new bucket holds 14 days of backups, then delete that folder (the api's token could still delete them in the meantime). Restoring from them before then means putting the old settings back on sync for that restore.
+
+What this buys: a leaked api token can no longer touch backups, a leaked sync token can no longer touch uploads, and losing one bucket leaves the other. Sync's backup token can still delete backups, because retention needs to. R2 bucket lock rules would prevent that, but they are **not** compatible with the current layout without changes: the manifest is rewritten in place under the same prefix. That's UNVERIFIED (not tried); don't enable a lock rule on this bucket without testing uploads first.
 
 ### Configuration (sync)
 
 | Variable | Values |
 |---|---|
 | `DRAFTROOM_BACKUP_STORE` | `off` (default, in production too: an unset value must not take the boards down on a deploy), `fs` (`<DATA>/blobs`: development and tests only, it is the same disk), `r2` |
-| `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET` (optional `R2_ENDPOINT`) | Required for `r2`, with the api's rules. A missing or malformed value makes sync **refuse to start**, naming the variable, never the value. |
+| `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET` (optional `R2_ENDPOINT`) | Required for `r2`, with the api's rules, except those replaced by a backup-only value ([above](#separate-backup-bucket-and-token-recommended)). A missing or malformed value makes sync **refuse to start**, naming the variable, never the value. |
+| `DRAFTROOM_BACKUP_R2_*` | Optional: the backups' own bucket and token ([above](#separate-backup-bucket-and-token-recommended)). |
+| `DRAFTROOM_INTERNAL_SECRET` | Already set on sync. Also the root of the backup signing key: rotating it has [consequences for backups](#signed-backups-tamper-evidence). |
 | `DRAFTROOM_BACKUP_INTERVAL_MS` | Backup and retry interval. Default `900000` (15 min), 1 000 to 86 400 000. |
 
 **Turning it on for staging** (the integration step; nothing here has been done on Render yet):
 
-1. On `draftroom-staging-sync`, set **all five** values together, in the Dashboard (Environment) or with `PUT /v1/services/<sync>/env-vars/<key>`, **before** deploying the sync build that reads them: `DRAFTROOM_BACKUP_STORE=r2`, `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET=draftroom-staging`.
-   - `render.yaml` lists all five as `sync: false`, the store too. On an existing Blueprint, `sync: false` values are never prompted. If a Blueprint sync set only `DRAFTROOM_BACKUP_STORE=r2`, sync would refuse to start without the R2 values, and a sync deploy stops the old instance first.
-   - Credentials: the api's token works (same bucket). Better: a second bucket-scoped "Object Read & Write" token for sync, so either can be rotated or revoked alone. R2 tokens are scoped to buckets, not prefixes, so either token can still read and delete everything in the bucket, `assets/` and `backups/` alike. No object lock or versioning is configured, so whoever holds a token can delete backups.
+1. On `draftroom-staging-sync`, set the values together, in the Dashboard (Environment) or with `PUT /v1/services/<sync>/env-vars/<key>`, **before** deploying the sync build that reads them: `DRAFTROOM_BACKUP_STORE=r2` and `R2_ACCOUNT_ID`, plus either the backup-only bucket and token (recommended, [steps above](#separate-backup-bucket-and-token-recommended)) or the shared `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET=draftroom-staging`.
+   - `render.yaml` lists the store and the four `R2_*` as `sync: false`, and names the backup-only ones in a comment. On an existing Blueprint, `sync: false` values are never prompted. If a Blueprint sync set only `DRAFTROOM_BACKUP_STORE=r2`, sync would refuse to start without the R2 values, and a sync deploy stops the old instance first.
+   - With the shared bucket, the api's token works. R2 tokens are scoped to buckets, not prefixes, so whichever token sync uses can still read and delete everything in the bucket, `assets/` and `backups/` alike. No object lock or versioning is configured, so whoever holds a token can delete backups.
 2. Deploy sync. Check the startup line, edit a board, and within 15 minutes check the status endpoint (or restart the service: a start uploads what is missing).
 3. Run the drill from the store (below).
 
@@ -402,7 +440,7 @@ pnpm --filter @draftroom/sync backup:restore-drill --from=store [--board <id>]  
 node apps/sync/src/backup/restore-drill.ts --from=store [--board <id>]          # Render sync Shell (the image has no pnpm)
 ```
 
-It downloads the newest offsite backup of each board (or the given ones; without `--board`, every board in `index.json`) into a temp dir, streamed, and checks its size and sha256 against the offsite manifest. It restores the backup into a clean temp data dir, checks the record count, clock and records digest, opens it through the sync server's own room registry (SQLiteSyncStorage, schema check, tldraw migrations) and compares every record. When the live board hasn't changed since, it's compared too. It prints `PASS`/`FAIL` per board and exits 0 only if every board passed. It never writes to the store or to a live board. `--from=local` (the default) drills `/var/data/backups` instead. The drill keeps a board's records in memory to compare them; next to the server on the 512 MB instance that is fine for today's boards (UNVERIFIED on Render).
+It first verifies the signatures of the index, the board's manifest and the newest entry ([signed backups](#signed-backups-tamper-evidence); `--allow-unsigned` accepts pre-signing backups with a `WARN` line each). Then it downloads the newest offsite backup of each board (or the given ones; without `--board`, every board in `index.json`) into a temp dir, streamed, and checks its size and sha256 against the offsite manifest. It restores the backup into a clean temp data dir, checks the record count, clock and records digest, opens it through the sync server's own room registry (SQLiteSyncStorage, schema check, tldraw migrations) and compares every record. When the live board hasn't changed since, it's compared too. It prints `PASS`/`FAIL` per board and exits 0 only if every board passed. It never writes to the store or to a live board. `--from=local` (the default) drills `/var/data/backups` instead. The drill keeps a board's records in memory to compare them; next to the server on the 512 MB instance that is fine for today's boards (UNVERIFIED on Render).
 
 ### Restoring a board on Render from R2
 
@@ -415,8 +453,8 @@ Before you start:
 
 Steps:
 
-1. **Drill** (Dashboard → `draftroom-staging-sync` → Shell): `node apps/sync/src/backup/restore-drill.ts --from=store --board <id>` must print `PASS`. To take an older backup than the newest, pick its `file` from `backups/sync/<id>/manifest.json`.
-2. **Stage** (same Shell): `node apps/sync/src/backup/restore-board.ts --from=store --board <id> [--file <name>]`. It verifies the backup exactly like the drill, then writes `/var/data/restore/board-<id>.sqlite` and a request next to it. Nothing live changes yet. While it works it needs free space on the sync disk (1 GB) of about three times the backup's size. `--list` shows what's staged; `--board <id> --cancel` removes it.
+1. **Drill** (Dashboard → `draftroom-staging-sync` → Shell): `node apps/sync/src/backup/restore-drill.ts --from=store --board <id>` must print `PASS`. To take an older backup than the newest, pick its `file` from `backups/sync/<id>/manifest.json`. A `FAIL … does not match its signature` means the store was changed outside the sync server: stop and find out why before restoring anything.
+2. **Stage** (same Shell): `node apps/sync/src/backup/restore-board.ts --from=store --board <id> [--file <name>]`. Add `--allow-unsigned` only for a backup taken before backups were signed; the output then says `UNSIGNED`. It verifies the backup exactly like the drill, signatures first, then writes `/var/data/restore/board-<id>.sqlite` and a request next to it. Nothing live changes yet. While it works it needs free space on the sync disk (1 GB) of about three times the backup's size. `--list` shows what's staged; `--board <id> --cancel` removes it.
 3. **Restart** the sync service (Dashboard → Manual Deploy → Restart service, or `POST /v1/services/<sync>/restart`; both UNVERIFIED, a manual deploy of the same commit works too). Before listening, the server:
    - keeps the current database as `/var/data/rooms/board-<id>.sqlite.pre-restore-<stamp>`;
    - puts the backup in place with its document clock raised past anything a client can have seen, so open tabs reset instead of keeping "ghost" shapes;
@@ -430,7 +468,7 @@ A board restore puts back the board's content only. Comments, votes, permissions
 
 Shell sessions may run as root (UNVERIFIED). `restore-board` hands the files it stages to the owner of the data dir, as the entrypoint does, so the server (user `node`) can consume them.
 
-Tests: `apps/sync/test/backup/` (fs driver: upload, manifest, index, retention, failure and retry, restarts, the drill from the store and its failures, staging and applying through a real server start, the memory check), `e2e/tests/offsite-backups.spec.ts` (browser edits → offsite copy → drill from the store; a damaged copy fails). The live R2 test (`apps/sync/test/backup/r2-live.test.ts`, `DRAFTROOM_LIVE_R2=1`, a random `test/<run>/` prefix that it deletes) has **not been run** yet.
+Tests: `apps/sync/test/backup/` (fs driver: upload, manifest, index, retention, failure and retry, restarts, the drill from the store and its failures, staging and applying through a real server start, the memory check; `signing.test.ts`: signatures, the reviewers' tamper probe, pre-signing manifests, key rotation, both CLIs; `backup-config.test.ts`: the backup-only bucket and token, down to the bucket and key id a request is signed with, against a loopback S3 stand-in), `e2e/tests/offsite-backups.spec.ts` (browser edits → offsite copy → drill from the store; a damaged copy fails), `e2e/tests/backups-2.spec.ts` (signed copies verified with the stack's secret only; a changed backup with a rewritten entry fails the drill and `restore-board` stages nothing; a pre-signing manifest passes only with `--allow-unsigned`). The live R2 test (`apps/sync/test/backup/r2-live.test.ts`, `DRAFTROOM_LIVE_R2=1`, a random `test/<run>/` prefix that it deletes) has **not been run** yet, and no separate backup bucket exists yet, so the backup-only settings have been tested against the stand-in only.
 
 ### Postgres and platform snapshots
 

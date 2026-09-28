@@ -15,6 +15,7 @@ import { Readable } from 'node:stream'
 import { type BlobStore, createFsBlobStore, createR2BlobStore } from '@draftroom/blob-store'
 import { readManifest } from '../../src/backup/backup.ts'
 import { OffsiteBackups } from '../../src/backup/offsite.ts'
+import { backupSigningKey } from '../../src/backup/signing.ts'
 
 const [root = '', board = '', mode = 'fs'] = process.argv.slice(2)
 const gc = (globalThis as { gc?: () => void }).gc
@@ -69,7 +70,8 @@ if (mode === 'buffered') {
   sample()
   ok = bytes.byteLength === entry.sizeBytes
 } else {
-  const offsite = new OffsiteBackups({ store, localRoot: backups })
+  const signingKey = backupSigningKey('test-only-internal-secret-0123456789-abcdef')
+  const offsite = new OffsiteBackups({ store, localRoot: backups, signingKey })
   await offsite.syncBoard(board)
   const status = offsite.status().boards[0]
   ok = status?.lastSuccessFile === entry.file && status.failures === 0

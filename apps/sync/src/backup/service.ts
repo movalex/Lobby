@@ -6,6 +6,7 @@ import type { ServerResponse } from 'node:http'
 import type { SyncConfig } from '../config.ts'
 import { sendJson } from '../http/respond.ts'
 import { OffsiteBackups, type OffsiteStatus, offsiteOffStatus } from './offsite.ts'
+import { backupSigningKey } from './signing.ts'
 import { applyStagedRestores } from './staged-restore.ts'
 import { describeBackupStore, openBackupStore } from './store.ts'
 
@@ -17,7 +18,8 @@ export interface BackupService {
 }
 
 export function createBackupService(opts: {
-  config: Pick<SyncConfig, 'dataDir' | 'backupStore' | 'backupIntervalMs'>
+  /** `internalSecret` is what the offsite copies are signed with (signing.ts). */
+  config: Pick<SyncConfig, 'dataDir' | 'backupStore' | 'backupIntervalMs' | 'internalSecret'>
   /** The registry's local backups root; null when local backups are off (then nothing goes offsite). */
   backupsDir: string | null
   log: (...a: unknown[]) => void
@@ -26,7 +28,13 @@ export function createBackupService(opts: {
   const store = backupsDir ? openBackupStore(config.backupStore) : null
   const offsite =
     store && backupsDir
-      ? new OffsiteBackups({ store, localRoot: backupsDir, intervalMs: config.backupIntervalMs, log })
+      ? new OffsiteBackups({
+          store,
+          localRoot: backupsDir,
+          signingKey: backupSigningKey(config.internalSecret),
+          intervalMs: config.backupIntervalMs,
+          log,
+        })
       : null
   log(`[backup] offsite backups: ${offsite ? describeBackupStore(config.backupStore) : 'off'}`)
   return {

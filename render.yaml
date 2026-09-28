@@ -214,12 +214,21 @@ services:
       - key: ACCESS_RECHECK_MS
         value: "10000"
       # Offsite board backups (docs/DEPLOY.md "Backups"): each local backup is also copied to R2 under
-      # backups/sync/<board>/, with a manifest. All five are `sync: false` ON PURPOSE, the store too:
+      # backups/sync/<board>/, with a manifest, signed with a key derived from DRAFTROOM_INTERNAL_SECRET
+      # (the env group below). All five are `sync: false` ON PURPOSE, the store too:
       # a Blueprint sync that set DRAFTROOM_BACKUP_STORE=r2 on the existing service without the R2_*
       # values (sync: false values are only prompted at Blueprint creation) would make sync refuse to
       # start, and a sync deploy stops the old instance first. Set all five together in the Dashboard
       # or through the Render API BEFORE deploying the sync build that reads them. Unset = off (boards
       # work; the log says "offsite backups: off").
+      #
+      # Recommended (docs/DEPLOY.md "Separate backup bucket and token"): a bucket of the backups' own and
+      # a token scoped to it alone, set in the Dashboard, never in this file:
+      #   DRAFTROOM_BACKUP_R2_BUCKET, DRAFTROOM_BACKUP_R2_ACCESS_KEY_ID, DRAFTROOM_BACKUP_R2_SECRET_ACCESS_KEY
+      #   (+ DRAFTROOM_BACKUP_R2_ACCOUNT_ID / DRAFTROOM_BACKUP_R2_ENDPOINT only for another account).
+      # Each replaces its R2_* counterpart for backups only; with all three set, remove R2_ACCESS_KEY_ID,
+      # R2_SECRET_ACCESS_KEY and R2_BUCKET from this service in the same save (the api keeps its own). They
+      # are deliberately not listed as `sync: false` entries: a new Blueprint would prompt for them.
       - key: DRAFTROOM_BACKUP_STORE
         sync: false # r2
       - key: R2_ACCOUNT_ID

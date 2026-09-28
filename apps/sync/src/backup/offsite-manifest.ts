@@ -6,10 +6,21 @@
 // build plan's "coordinated manifest with board, schema and asset versions" (§7). Entries are oldest
 // first. `pendingDeletes` lists backups that retention removed from the manifest but whose object
 // delete has not been confirmed yet; they are retried (deletes are idempotent).
+//
+// Every entry, every manifest and the index carry a `signature` (signing.ts). Entries and manifests
+// written before signing existed have none: parsing reports each one's status and leaves the decision
+// (drop, carry forward, refuse, or accept with --allow-unsigned) to the uploader and the restore tools.
 
 import { BOARD_ID_RE } from '../rooms.ts'
 import { type AssetRef, cleanAssetRefs } from './asset-refs.ts'
 import { BACKUP_FILE_RE } from './backup.ts'
+import {
+  type BackupSigningKey,
+  checkDocument,
+  checkEntry,
+  type Signature,
+  type SignatureCheck,
+} from './signing.ts'
 import { OffsiteError } from './store.ts'
 
 /** Offsite retention (docs/WAVE3-CONTRACTS.md): the newest 12, plus the newest of each of the last 14 days. */
@@ -38,8 +49,11 @@ export interface OffsiteEntry {
   sizeBytes: number
   /** Asset versions the board references (asset-refs.ts). */
   assets: AssetRef[]
+  /** Over every other field and the board id (signing.ts). Absent in entries written before signing. */
+  signature?: Signature
 }
 
+/** In memory, a manifest has no signature: it is signed when it is written (signDocument). */
 export interface OffsiteManifest {
   format: 'draftroom-offsite-board-backups'
   version: 1
@@ -97,20 +111,34 @@ const SHA_RE = /^[0-9a-f]{64}$/
 const count = (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v) && v >= 0
 const isoTime = (v: unknown): v is string => typeof v === 'string' && Number.isFinite(Date.parse(v))
 
+export interface ParsedManifest {
+  manifest: OffsiteManifest
+  /** Malformed entries, or entries whose key would not be this board's own: dropped. */
+  ignored: number
+  /** The manifest's own signature. */
+  signature: SignatureCheck
+  /** Each kept entry's signature, by file name. */
+  entrySignatures: Map<string, SignatureCheck>
+}
+
 /**
  * Validates a manifest read from the store. Throws OffsiteError when it is not one; drops (and
  * counts) entries that are malformed or whose key would not be this board's own, so a tampered
- * manifest can never make a restore read, or retention delete, another object.
+ * manifest can never make a restore read, or retention delete, another object. Checks the manifest's
+ * and every kept entry's signature over the raw JSON (what was signed), and reports them.
  */
 export function parseManifest(
   raw: unknown,
   prefix: string,
   boardId: string,
-): { manifest: OffsiteManifest; ignored: number } {
+  key: BackupSigningKey,
+): ParsedManifest {
   const m = raw as Partial<OffsiteManifest> | null
   if (m?.format !== 'draftroom-offsite-board-backups' || m.version !== 1 || !Array.isArray(m.backups))
     throw new OffsiteError('the offsite manifest is not in the expected format')
   if (m.boardId !== boardId) throw new OffsiteError('the offsite manifest belongs to another board')
+  const signature = checkDocument(key, 'manifest', raw)
+  const entrySignatures = new Map<string, SignatureCheck>()
   let ignored = 0
   const backups: OffsiteEntry[] = []
   for (const e of m.backups as Array<Partial<OffsiteEntry>>) {
@@ -135,6 +163,7 @@ export function parseManifest(
       ignored++
       continue
     }
+    entrySignatures.set(e.file as string, checkEntry(key, boardId, e))
     backups.push({ ...(e as OffsiteEntry), assets })
   }
   const pendingDeletes = Array.isArray(m.pendingDeletes)
@@ -153,13 +182,20 @@ export function parseManifest(
       pendingDeletes: [...new Set(pendingDeletes)],
     },
     ignored,
+    signature,
+    entrySignatures,
   }
 }
 
-export function parseIndex(raw: unknown): OffsiteIndex {
+/** Validates the index read from the store and checks its signature. Throws OffsiteError when it is not one. */
+export function parseIndex(
+  raw: unknown,
+  key: BackupSigningKey,
+): { index: OffsiteIndex; signature: SignatureCheck } {
   const x = raw as Partial<OffsiteIndex> | null
   if (x?.format !== 'draftroom-offsite-backup-index' || x.version !== 1 || !Array.isArray(x.boards))
     throw new OffsiteError('the offsite index is not in the expected format')
+  const signature = checkDocument(key, 'index', raw)
   const boards = new Map<string, OffsiteIndexBoard>()
   for (const b of x.boards as Array<Partial<OffsiteIndexBoard>>)
     if (b && typeof b.boardId === 'string' && BOARD_ID_RE.test(b.boardId) && !boards.has(b.boardId))
@@ -171,10 +207,13 @@ export function parseIndex(raw: unknown): OffsiteIndex {
         count: count(b.count) ? b.count : 0,
       })
   return {
-    format: 'draftroom-offsite-backup-index',
-    version: 1,
-    updatedAt: isoTime(x.updatedAt) ? x.updatedAt : new Date(0).toISOString(),
-    boards: [...boards.values()].sort((a, b) => a.boardId.localeCompare(b.boardId)),
+    index: {
+      format: 'draftroom-offsite-backup-index',
+      version: 1,
+      updatedAt: isoTime(x.updatedAt) ? x.updatedAt : new Date(0).toISOString(),
+      boards: [...boards.values()].sort((a, b) => a.boardId.localeCompare(b.boardId)),
+    },
+    signature,
   }
 }
 

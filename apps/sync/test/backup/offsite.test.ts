@@ -18,8 +18,10 @@ import {
   type OffsiteManifest,
   offsiteKeys,
 } from '../../src/backup/offsite-manifest.ts'
+import { backupSigningKey } from '../../src/backup/signing.ts'
 import { boardDbPath, RoomRegistry } from '../../src/rooms.ts'
 import { indexFor, note, RoomClient } from '../deleted/fixtures.ts'
+import { TEST_INTERNAL_SECRET } from '../harness/tickets.ts'
 import { listFiles } from '../http/helpers.ts'
 import {
   AST_A,
@@ -52,6 +54,7 @@ function offsite(opts: Partial<ConstructorParameters<typeof OffsiteBackups>[0]> 
   const s = new OffsiteBackups({
     store: createFsBlobStore(data.blobs),
     localRoot: data.backups,
+    signingKey: backupSigningKey(TEST_INTERNAL_SECRET),
     log,
     ...opts,
   })

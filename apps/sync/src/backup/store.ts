@@ -25,11 +25,23 @@ export function openBackupStore(config: BackupStoreConfig | undefined): BlobStor
   })
 }
 
-/** One line for the startup log: the driver and where it writes, never a credential. */
+/**
+ * One line for the startup log: the driver, where it writes, and whether the bucket and token are the
+ * backups' own or shared with the api (docs/DEPLOY.md "Backups"). Never a credential.
+ */
 export function describeBackupStore(config: BackupStoreConfig | undefined): string {
   if (!config || config.kind === 'off') return 'off'
   if (config.kind === 'fs') return `fs (${config.root})`
-  return `r2 (bucket ${config.bucket})`
+  const { bucket, credentials } = config.dedicated
+  const how =
+    bucket && credentials
+      ? 'backup-only bucket and token'
+      : bucket
+        ? 'backup-only bucket, shared R2_* token'
+        : credentials
+          ? 'shared R2_BUCKET, backup-only token'
+          : 'shared with the api: R2_BUCKET and the R2_* token, see docs/DEPLOY.md "Backups"'
+  return `r2 (bucket ${config.bucket}; ${how})`
 }
 
 /**

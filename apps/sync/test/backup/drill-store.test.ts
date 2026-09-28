@@ -14,14 +14,18 @@ import type { BackupEntry } from '../../src/backup/backup.ts'
 import { runRestoreDrill, storeBackupSource } from '../../src/backup/drill.ts'
 import { OffsiteBackups } from '../../src/backup/offsite.ts'
 import { offsiteKeys } from '../../src/backup/offsite-manifest.ts'
+import { backupSigningKey } from '../../src/backup/signing.ts'
 import { RoomRegistry } from '../../src/rooms.ts'
 import { indexFor, note, RoomClient } from '../deleted/fixtures.ts'
+import { TEST_INTERNAL_SECRET } from '../harness/tickets.ts'
 import { AST_A, fileCard, type TempData, tempData, VER_A } from './offsite-fixtures.ts'
 
 const A = 'drill-board-a'
 const B = 'drill-board-b'
 const PREFIX = 'backups/sync'
+const signingKey = backupSigningKey(TEST_INTERNAL_SECRET)
 const script = fileURLToPath(new URL('../../src/backup/restore-drill.ts', import.meta.url))
+const storeSource = () => storeBackupSource(createFsBlobStore(data.blobs), { signingKey })
 let data: TempData
 
 beforeEach(() => {
@@ -32,7 +36,11 @@ afterEach(() => data.cleanup())
 /** Two boards backed up and copied offsite through the real path (registry backup -> listener -> upload). */
 async function boardsOffsite(): Promise<Record<string, BackupEntry>> {
   const reg = new RoomRegistry({ dataDir: data.rooms, schema: draftroomSchema, idleEvictMs: 60_000 })
-  const offsite = new OffsiteBackups({ store: createFsBlobStore(data.blobs), localRoot: data.backups })
+  const offsite = new OffsiteBackups({
+    store: createFsBlobStore(data.blobs),
+    localRoot: data.backups,
+    signingKey,
+  })
   offsite.start()
   const out: Record<string, BackupEntry> = {}
   try {
@@ -61,16 +69,21 @@ const objectPath = (board: string, file: string) => join(data.blobs, ...PREFIX.s
 describe('restore drill from the store', () => {
   it('drills every board in the offsite index and matches the live boards', async () => {
     const entries = await boardsOffsite()
-    const report = await runRestoreDrill({
-      dataDir: data.root,
-      source: storeBackupSource(createFsBlobStore(data.blobs)),
-    })
-    expect(report).toMatchObject({ ok: true, source: 'fs' })
+    const report = await runRestoreDrill({ dataDir: data.root, source: storeSource() })
+    expect(report).toMatchObject({ ok: true, source: 'fs', warnings: [] })
     expect(report.boards.map((b) => b.boardId)).toEqual([A, B])
     for (const b of report.boards) {
       const entry = entries[b.boardId]
-      expect(b).toMatchObject({ ok: true, backupFile: entry?.file, live: 'identical', problems: [] })
+      expect(b).toMatchObject({
+        ok: true,
+        backupFile: entry?.file,
+        live: 'identical',
+        problems: [],
+        warnings: [],
+      })
       expect(b.checks).toEqual([
+        'offsite manifest signature verified',
+        'manifest entry signature verified',
         `downloaded ${PREFIX}/${b.boardId}/${entry?.file} from the fs store (${entry?.sizeBytes} bytes)`,
         'file sha256 matches the manifest',
         'restored into a clean data dir',
@@ -85,11 +98,7 @@ describe('restore drill from the store', () => {
     await boardsOffsite()
     const elsewhere = mkdtempSync(join(tmpdir(), 'dr-drill-clean-'))
     try {
-      const report = await runRestoreDrill({
-        dataDir: elsewhere,
-        source: storeBackupSource(createFsBlobStore(data.blobs)),
-        boardIds: [A],
-      })
+      const report = await runRestoreDrill({ dataDir: elsewhere, source: storeSource(), boardIds: [A] })
       expect(report.ok).toBe(true)
       expect(report.boards[0]).toMatchObject({ boardId: A, live: 'absent', ok: true })
     } finally {
@@ -99,12 +108,7 @@ describe('restore drill from the store', () => {
 
   it('fails on a changed, truncated or missing object, and on a manifest that lies', async () => {
     const entries = await boardsOffsite()
-    const drill = () =>
-      runRestoreDrill({
-        dataDir: data.root,
-        source: storeBackupSource(createFsBlobStore(data.blobs)),
-        boardIds: [A],
-      })
+    const drill = () => runRestoreDrill({ dataDir: data.root, source: storeSource(), boardIds: [A] })
     const file = objectPath(A, entries[A]?.file ?? '?')
     const original = readFileSync(file)
 
@@ -121,24 +125,38 @@ describe('restore drill from the store', () => {
     writeFileSync(file, original)
     expect((await drill()).ok).toBe(true)
 
-    // bytes fine, but the manifest's record digest is not what the file holds
+    // bytes fine, but the manifest's record digest is not what the file holds: the manifest's
+    // signature catches the change first; unsigned (--allow-unsigned), the entry's own does
     const manifestFile = objectPath(A, 'manifest.json')
-    const manifest = JSON.parse(readFileSync(manifestFile, 'utf8'))
+    const signed = readFileSync(manifestFile, 'utf8')
+    const manifest = JSON.parse(signed)
     manifest.backups.at(-1).recordsSha256 = '0'.repeat(64)
     writeFileSync(manifestFile, JSON.stringify(manifest))
     const lied = await drill()
     expect(lied.ok).toBe(false)
-    expect(lied.boards[0]?.problems).toContain('restored records differ from the manifest digest')
+    expect(lied.boards[0]?.problems).toEqual([
+      'the offsite manifest does not match its signature: it was changed outside the sync server',
+    ])
+    // an entry nobody signed (as before signing existed) that lies: the restore still checks the records
+    delete manifest.signature
+    delete manifest.backups.at(-1).signature
+    writeFileSync(manifestFile, JSON.stringify(manifest))
+    const unsigned = await runRestoreDrill({
+      dataDir: data.root,
+      source: storeBackupSource(createFsBlobStore(data.blobs), { signingKey, allowUnsigned: true }),
+      boardIds: [A],
+    })
+    expect(unsigned.ok).toBe(false)
+    expect(unsigned.boards[0]?.problems).toContain('restored records differ from the manifest digest')
+    writeFileSync(manifestFile, signed)
+    expect((await drill()).ok).toBe(true)
 
     rmSync(manifestFile)
     expect((await drill()).boards[0]?.problems).toEqual(['no offsite manifest for this board'])
   })
 
   it('fails when the store has nothing to drill', async () => {
-    const report = await runRestoreDrill({
-      dataDir: data.root,
-      source: storeBackupSource(createFsBlobStore(data.blobs)),
-    })
+    const report = await runRestoreDrill({ dataDir: data.root, source: storeSource() })
     expect(report).toMatchObject({ ok: false, boards: [] })
     expect(offsiteKeys.index(PREFIX)).toBe('backups/sync/index.json')
   })
@@ -155,16 +173,19 @@ describe('the CLI: backup:restore-drill --from=store', () => {
     })
   }
 
+  // The CLI verifies with the sync server's own secret, as in a Render Shell.
+  const fsStore = { DRAFTROOM_BACKUP_STORE: 'fs', DRAFTROOM_INTERNAL_SECRET: TEST_INTERNAL_SECRET }
+
   it('drills the fs store under <DATA>/blobs when DRAFTROOM_BACKUP_STORE=fs', async () => {
     const entries = await boardsOffsite()
-    const r = run(['--from=store', '--data-dir', data.root, '--board', A], { DRAFTROOM_BACKUP_STORE: 'fs' })
+    const r = run(['--from=store', '--data-dir', data.root, '--board', A], fsStore)
     expect(r.stdout).toContain(`PASS ${A} ${entries[A]?.file}`)
     expect(r.stdout).toContain(`downloaded ${PREFIX}/${A}/${entries[A]?.file} from the fs store`)
     expect(r.stdout).toContain('restore drill passed')
     expect(r.stdout).not.toContain(B)
     expect(r.status).toBe(0)
     // `--from store` (space) works too, and without --board it takes the index
-    const all = run(['--from', 'store', `--data-dir=${data.root}`], { DRAFTROOM_BACKUP_STORE: 'fs' })
+    const all = run(['--from', 'store', `--data-dir=${data.root}`], fsStore)
     expect(all.stdout).toContain(`PASS ${A}`)
     expect(all.stdout).toContain(`PASS ${B}`)
     expect(all.status).toBe(0)
@@ -174,15 +195,13 @@ describe('the CLI: backup:restore-drill --from=store', () => {
     const off = run(['--from=store', '--data-dir', data.root])
     expect(off.status).toBe(1)
     expect(off.stderr).toContain('DRAFTROOM_BACKUP_STORE is off')
-    const both = run(['--from=store', '--backup-first', '--data-dir', data.root], {
-      DRAFTROOM_BACKUP_STORE: 'fs',
-    })
+    const both = run(['--from=store', '--backup-first', '--data-dir', data.root], fsStore)
     expect(both.status).toBe(1)
     expect(both.stderr).toContain('--backup-first only applies to --from=local')
     const bad = run(['--from=s3', '--data-dir', data.root])
     expect(bad.status).toBe(1)
     expect(bad.stderr).toContain('--from must be local or store')
-    const empty = run(['--from=store', '--data-dir', data.root], { DRAFTROOM_BACKUP_STORE: 'fs' })
+    const empty = run(['--from=store', '--data-dir', data.root], fsStore)
     expect(empty.status).toBe(1)
     expect(empty.stdout).toContain('no backups found in the offsite fs store')
   })
@@ -190,6 +209,7 @@ describe('the CLI: backup:restore-drill --from=store', () => {
   it('names R2 settings, never their values, when they are wrong', () => {
     const secret = 'not a valid secret value!'
     const r = run(['--from=store', '--data-dir', data.root], {
+      DRAFTROOM_INTERNAL_SECRET: TEST_INTERNAL_SECRET,
       DRAFTROOM_BACKUP_STORE: 'r2',
       R2_ACCOUNT_ID: '0123456789abcdef0123456789abcdef',
       R2_ACCESS_KEY_ID: 'AKIAFAKEACCESSKEY0001',

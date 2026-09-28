@@ -15,6 +15,7 @@ import {
   localBackupSource,
   storeBackupSource,
 } from '../../src/backup/drill.ts'
+import { backupSigningKey } from '../../src/backup/signing.ts'
 import {
   applyStagedRestores,
   cancelStagedRestore,
@@ -23,11 +24,15 @@ import {
 } from '../../src/backup/staged-restore.ts'
 import { boardDbPath } from '../../src/rooms.ts'
 import { indexFor, note, RoomClient } from '../deleted/fixtures.ts'
+import { TEST_INTERNAL_SECRET } from '../harness/tickets.ts'
 import { testConfig } from '../http/helpers.ts'
 import { type TempData, tempData } from './offsite-fixtures.ts'
 
 const BOARD = 'restore-board'
 const script = fileURLToPath(new URL('../../src/backup/restore-board.ts', import.meta.url))
+// The test server (testConfig) signs with TEST_INTERNAL_SECRET, as a real one with its own.
+const storeSource = () =>
+  storeBackupSource(createFsBlobStore(data.blobs), { signingKey: backupSigningKey(TEST_INTERNAL_SECRET) })
 let data: TempData
 let servers: SyncServer[] = []
 let logs: string[] = []
@@ -79,13 +84,15 @@ describe('stage, then apply at the next start', () => {
     const { entry, liveClock } = await backedUpThenChanged()
     // staging happens next to a running server (it touches nothing live)
     const running = await startSync()
-    const { request, checks } = await stageRestore({
+    const { request, checks, warnings } = await stageRestore({
       dataDir: data.root,
-      source: storeBackupSource(createFsBlobStore(data.blobs)),
+      source: storeSource(),
       boardId: BOARD,
     })
     expect(request).toMatchObject({ boardId: BOARD, file: entry.file, source: 'fs', sha256: entry.sha256 })
+    expect(checks).toContain('manifest entry signature verified')
     expect(checks).toContain('opened through the sync room registry; every record identical')
+    expect(warnings).toEqual([])
     expect(listStagedRestores(data.root).map((r) => r.id)).toEqual([request.id])
     expect(describeBoardDb(boardDbPath(data.rooms, BOARD)).records.has('shape:ghost0')).toBe(true)
     await running.close()
@@ -153,7 +160,7 @@ describe('stage, then apply at the next start', () => {
     writeFileSync(object, bytes)
     const err = await stageRestore({
       dataDir: data.root,
-      source: storeBackupSource(createFsBlobStore(data.blobs)),
+      source: storeSource(),
       boardId: BOARD,
     }).catch((e: unknown) => e)
     expect(err).toBeInstanceOf(DrillProblem)
@@ -189,8 +196,10 @@ describe('the CLI: backup:restore-board', () => {
     const { entry } = await backedUpThenChanged()
     const staged = run(['--from=store', '--board', BOARD, '--data-dir', data.root], {
       DRAFTROOM_BACKUP_STORE: 'fs',
+      DRAFTROOM_INTERNAL_SECRET: TEST_INTERNAL_SECRET,
     })
-    expect(staged.stdout).toContain(`staged ${BOARD} from fs backup ${entry.file}`)
+    expect(staged.stdout).toContain('  ok   offsite manifest signature verified')
+    expect(staged.stdout).toContain(`staged ${BOARD} from fs backup ${entry.file}\n`)
     expect(staged.stdout).toContain('restart the sync server to apply it')
     expect(staged.status).toBe(0)
     const list = run(['--list', '--data-dir', data.root])
