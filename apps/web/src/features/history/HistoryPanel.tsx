@@ -2,7 +2,12 @@
 // "Recently deleted" (restore puts objects back where they were; editors only, and never even fetched
 // for anyone else: authz-001) and the portable .json export.
 
-import type { BoardSnapshot, DeletedShapeEntry, ListDeletedResponse } from '@draftroom/contracts'
+import {
+  type BoardCheckpoint,
+  CHECKPOINT_EVENTS,
+  type DeletedShapeEntry,
+  type ListDeletedResponse,
+} from '@draftroom/contracts'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { TLShapeId } from 'tldraw'
 import { isApiError } from '../../api/client.ts'
@@ -10,6 +15,9 @@ import { formatRelativeTime, pluralize } from '../../lib/format.ts'
 import { linkClick } from '../../lib/routing.ts'
 import type { FeatureContext } from '../types.ts'
 import { fetchBoardArchive, historyApi, saveBlob } from './api.ts'
+import { CheckpointList } from './CheckpointList.tsx'
+import { CheckpointPreview } from './CheckpointPreview.tsx'
+import { checkpointPermissions, deletedCheckpointSummary } from './checkpoints-model.ts'
 import {
   archiveFileName,
   checkpointNameToSave,
@@ -35,9 +43,11 @@ export function HistoryPanel({ ctx }: { ctx: FeatureContext; close(): void }) {
   const api = useMemo(() => historyApi(ctx.api), [ctx.api])
   const workspaceRole = me.workspaces.find((w) => w.id === board.workspaceId)?.role ?? null
   const perms = historyPermissions(role, board.status, workspaceRole)
+  const checkpointPerms = checkpointPermissions(role, board.status, workspaceRole)
   const { canSeeDeleted } = perms
 
-  const [snapshots, setSnapshots] = useState<BoardSnapshot[] | null>(null)
+  const [snapshots, setSnapshots] = useState<BoardCheckpoint[] | null>(null)
+  const [previewing, setPreviewing] = useState<BoardCheckpoint | null>(null)
   const [deleted, setDeleted] = useState<ListDeletedResponse | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
@@ -52,7 +62,7 @@ export function HistoryPanel({ ctx }: { ctx: FeatureContext; close(): void }) {
   const loadSnapshots = useCallback(
     async (signal?: AbortSignal) => {
       try {
-        setSnapshots(await api.listSnapshots(board.id, signal))
+        setSnapshots(await api.listCheckpoints(board.id, signal))
         setLoadError(null)
       } catch (e) {
         if (!signal?.aborted) setLoadError(message(e, 'Checkpoints could not be loaded.'))
@@ -89,6 +99,8 @@ export function HistoryPanel({ ctx }: { ctx: FeatureContext; close(): void }) {
   useEffect(() => {
     const offs = [
       events.on('history.snapshot', () => void loadSnapshots()),
+      // Deleted by an owner, or thinned out by retention (automatic checkpoints).
+      events.on(CHECKPOINT_EVENTS.removed, () => void loadSnapshots()),
       events.on('history.deleted', () => void loadDeleted()),
       events.onResync(() => {
         void loadSnapshots()
@@ -137,7 +149,7 @@ export function HistoryPanel({ ctx }: { ctx: FeatureContext; close(): void }) {
     run('save', async () => {
       const toSave = checkpointNameToSave(name)
       try {
-        const snap = await api.saveSnapshot(board.id, toSave)
+        const snap: BoardCheckpoint = { reason: null, ...(await api.saveSnapshot(board.id, toSave)) }
         setSnapshots((all) => [snap, ...(all ?? []).filter((s) => s.id !== snap.id)])
         setName('')
         setStatus({ text: `Saved “${snap.name}”.`, tone: 'info' })
@@ -146,7 +158,19 @@ export function HistoryPanel({ ctx }: { ctx: FeatureContext; close(): void }) {
       }
     })
 
-  const restoreAsNew = (snap: BoardSnapshot) =>
+  const deleteCheckpoint = (snap: BoardCheckpoint) =>
+    run(`delete:${snap.id}`, async () => {
+      try {
+        await api.deleteCheckpoint(snap.id)
+        setSnapshots((all) => (all ?? []).filter((s) => s.id !== snap.id))
+        setStatus({ text: deletedCheckpointSummary(snap), tone: 'info' })
+      } catch (e) {
+        setStatus({ text: message(e, 'The checkpoint could not be deleted.'), tone: 'error' })
+        void loadSnapshots()
+      }
+    })
+
+  const restoreAsNew = (snap: BoardCheckpoint) =>
     run(`restore:${snap.id}`, async () => {
       try {
         const created = await api.restoreAsNew(snap.id)
@@ -315,41 +339,32 @@ export function HistoryPanel({ ctx }: { ctx: FeatureContext; close(): void }) {
             </div>
           </form>
         )}
-        {snapshots === null ? (
-          <p className="dr-history__empty">Loading…</p>
-        ) : snapshots.length === 0 ? (
-          <p className="dr-history__empty">No checkpoints yet.</p>
-        ) : (
-          <ul className="dr-history__list" aria-label="Checkpoints">
-            {snapshots.map((s) => (
-              <li key={s.id} className="dr-history__row" data-testid="checkpoint-row" data-snapshot-id={s.id}>
-                <div className="dr-history__row-text">
-                  <span className="dr-history__row-title">{s.name}</span>
-                  <span className="dr-history__row-meta">
-                    {[
-                      s.createdBy?.name ? `saved by ${s.createdBy.name}` : null,
-                      formatRelativeTime(s.createdAt, now),
-                    ]
-                      .filter(Boolean)
-                      .join(' · ')}
-                  </span>
-                </div>
-                {perms.canCreateBoards && (
-                  <button
-                    type="button"
-                    className="dr-btn"
-                    data-testid="checkpoint-restore"
-                    disabled={busy !== null}
-                    aria-busy={busy === `restore:${s.id}`}
-                    aria-label={`Restore “${s.name}” as a new board`}
-                    onClick={() => void restoreAsNew(s)}
-                  >
-                    {busy === `restore:${s.id}` ? 'Restoring…' : 'Restore as new board'}
-                  </button>
-                )}
-              </li>
-            ))}
-          </ul>
+        <CheckpointList
+          checkpoints={snapshots}
+          perms={checkpointPerms}
+          canRestore={perms.canCreateBoards}
+          now={now}
+          actions={{
+            busy,
+            onPreview: (c) => setPreviewing(c),
+            onRestore: (c) => void restoreAsNew(c),
+            onDelete: (c) => void deleteCheckpoint(c),
+          }}
+        />
+        {previewing && (
+          <CheckpointPreview
+            checkpoint={previewing}
+            api={api}
+            liveEditor={editor}
+            canRestore={perms.canCreateBoards}
+            restoring={busy === `restore:${previewing.id}`}
+            onRestore={() => {
+              const c = previewing
+              setPreviewing(null)
+              void restoreAsNew(c)
+            }}
+            onClose={() => setPreviewing(null)}
+          />
         )}
       </section>
 

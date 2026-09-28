@@ -5,16 +5,15 @@
 
 import { draftroomSchema } from '@draftroom/canvas-schema'
 import {
-  type BoardSnapshot,
   CreateSnapshotInput,
   DuplicateBoardInput,
   HISTORY_EVENTS,
   IMPORT_BODY_LIMIT_BYTES,
   ImportBoardQuery,
+  MAX_MANUAL_CHECKPOINTS,
   RestoreDeletedInput,
   RestoreSnapshotInput,
   SNAPSHOT_ID_PATTERN,
-  type SnapshotKind,
 } from '@draftroom/contracts'
 import { newId } from '@draftroom/db'
 import { can, canCreateInWorkspace } from '@draftroom/permissions'
@@ -28,56 +27,35 @@ import type { FeatureContext } from '../context.ts'
 import { keepDownloadableFiles } from '../export-control/import-files.ts'
 import { copyExportPolicy, requireExportAllowed } from '../export-control/policy.ts'
 import { ArchiveError, exportBoardArchive, importBoardArchive, type SerializedSchema } from './board-ops.ts'
+import { registerCheckpointRoutes } from './checkpoint-routes.ts'
+import {
+  type CheckpointService,
+  checkpointSettings,
+  createCheckpointService,
+  startCheckpointTimers,
+} from './checkpoints.ts'
 import { archiveRef, filesShownOn, filesViewableBy, referencedFiles } from './files.ts'
 import { createBoardFrom, viaSync } from './new-board.ts'
+import {
+  type CheckpointBody,
+  checkpointBodyOf,
+  SNAPSHOT_COLUMNS,
+  SNAPSHOT_FROM,
+  type SnapshotRow,
+  toCheckpoint,
+} from './snapshot-rows.ts'
 import { snapshotBodies, snapshotStorageKey } from './snapshot-store.ts'
 import { createDeletedApi } from './sync-deleted.ts'
 
-/** Checkpoints kept per board (a board past it must be asked to prune; none do yet). */
-export const MAX_SNAPSHOTS_PER_BOARD = 500
-const MAX_LISTED = 500
+/** Manual checkpoints kept per board (automatic ones are bounded by retention instead). */
+export const MAX_SNAPSHOTS_PER_BOARD = MAX_MANUAL_CHECKPOINTS
+/** Every manual checkpoint (≤ 500) and every automatic one retention keeps (well under 1,000). */
+const MAX_LISTED = 1_500
 /** Heavy routes (a full board copy each): per client, per minute. */
 const HEAVY = { config: { rateLimit: { max: 60, timeWindow: 60_000 } } }
 
-interface SnapshotRow {
-  id: string
-  workspace_id: string
-  board_id: string
-  name: string
-  kind: SnapshotKind
-  created_by: string | null
-  creator_name: string | null
-  created_at: Date
-  document_clock: number
-  record_count: number
-  size_bytes: number
-  storage_key: string
-}
-
-const SNAPSHOT_COLUMNS = `s.id, s.workspace_id, s.board_id, s.name, s.kind, s.created_by, u.name AS creator_name,
-  s.created_at, s.document_clock::float8 AS document_clock, s.record_count, s.size_bytes::float8 AS size_bytes, s.storage_key`
-
-const toSnapshot = (r: SnapshotRow): BoardSnapshot => ({
-  id: r.id,
-  boardId: r.board_id,
-  name: r.name,
-  kind: r.kind,
-  createdBy: r.created_by ? { id: r.created_by, name: r.creator_name ?? '' } : null,
-  createdAt: r.created_at.toISOString(),
-  documentClock: Number(r.document_clock),
-  recordCount: Number(r.record_count),
-  sizeBytes: Number(r.size_bytes),
-})
-
-/** The stored checkpoint body (object store). */
-interface CheckpointBody {
-  format: 'draftroom-checkpoint'
-  version: 1
-  boardId: string
-  documentClock: number
-  schema: unknown
-  documents: { state: Record<string, unknown>; lastChangedClock: number }[]
-}
+/** The checkpoint service of an app (tests drive its scheduler and retention through it). */
+export const checkpointServices = new WeakMap<FastifyInstance, CheckpointService>()
 
 const clip = (s: string, max = 120) => (s.length > max ? `${s.slice(0, max - 1)}…` : s)
 
@@ -86,6 +64,18 @@ export async function registerHistory(app: FastifyInstance, ctx: FeatureContext)
   const bodies = snapshotBodies(ctx.blobs, ctx.layout.root)
   const deleted = createDeletedApi(ctx)
   const warn = (message: string) => app.log.warn({ feature: 'history' }, message)
+
+  // Automatic checkpoints and retention (checkpoints.ts, checkpoint-routes.ts).
+  const settings = { ...checkpointSettings }
+  const checkpoints = createCheckpointService(
+    ctx,
+    bodies,
+    { warn, info: (message) => app.log.info({ feature: 'history' }, message) },
+    settings,
+  )
+  checkpointServices.set(app, checkpoints)
+  startCheckpointTimers(app, checkpoints, settings)
+  registerCheckpointRoutes(app, ctx, checkpoints, bodies)
 
   /** The caller may create boards in the workspace (members and above; guests may not). */
   async function requireCreator(workspaceId: string, userId: string) {
@@ -100,12 +90,12 @@ export async function registerHistory(app: FastifyInstance, ctx: FeatureContext)
     const { bid = '' } = req.params as Params
     const access = await requireBoardAction(db, bid, user.id, 'view')
     const rows = await db.query<SnapshotRow>(
-      `SELECT ${SNAPSHOT_COLUMNS} FROM board_snapshots s LEFT JOIN users u ON u.id = s.created_by
+      `SELECT ${SNAPSHOT_COLUMNS} FROM ${SNAPSHOT_FROM}
         WHERE s.board_id = $1 AND s.workspace_id = $2
         ORDER BY s.created_at DESC, s.id DESC LIMIT ${MAX_LISTED}`,
       [bid, access.board.workspace_id],
     )
-    return { snapshots: rows.rows.map(toSnapshot) }
+    return { snapshots: rows.rows.map(toCheckpoint) }
   })
 
   app.post('/api/boards/:bid/snapshots', HEAVY, async (req, reply) => {
@@ -114,36 +104,24 @@ export async function registerHistory(app: FastifyInstance, ctx: FeatureContext)
     const input = parse(CreateSnapshotInput, req.body)
     const access = await requireBoardAction(db, bid, user.id, 'edit')
     const workspaceId = access.board.workspace_id
+    // Only manual checkpoints count: automatic ones are bounded by retention (checkpoints.ts).
     const { n } = await db.one<{ n: number }>(
-      'SELECT count(*)::int AS n FROM board_snapshots WHERE board_id = $1',
+      "SELECT count(*)::int AS n FROM board_snapshots WHERE board_id = $1 AND kind = 'manual'",
       [bid],
     )
     if (n >= MAX_SNAPSHOTS_PER_BOARD)
       throw conflict('SNAPSHOT_LIMIT', `A board keeps at most ${MAX_SNAPSHOTS_PER_BOARD} checkpoints.`)
 
     const snap = await viaSync(() => ctx.sync.snapshot(bid))
-    const documents = (Array.isArray(snap.documents) ? snap.documents : []).map((d) => ({
-      state: d.state,
-      lastChangedClock: Number(d.lastChangedClock ?? 0),
-    }))
-    const documentClock = Math.max(0, Math.floor(Number(snap.documentClock ?? 0)) || 0)
+    const made = checkpointBodyOf(bid, snap)
     const id = newId('snp')
     const key = snapshotStorageKey(bid, id)
-    const body: CheckpointBody = {
-      format: 'draftroom-checkpoint',
-      version: 1,
-      boardId: bid,
-      documentClock,
-      schema: snap.schema,
-      documents,
-    }
-    const json = JSON.stringify(body)
-    await bodies.write(key, json)
+    await bodies.write(key, made.json)
     let row: SnapshotRow
     try {
       const inserted = await db.one<{ id: string }>(
-        `INSERT INTO board_snapshots (id, workspace_id, board_id, name, kind, created_by, created_at, document_clock, record_count, size_bytes, storage_key)
-         VALUES ($1, $2, $3, $4, 'manual', $5, $6, $7, $8, $9, $10) RETURNING id`,
+        `INSERT INTO board_snapshots (id, workspace_id, board_id, name, kind, created_by, created_at, document_clock, record_count, size_bytes, storage_key, content_hash)
+         VALUES ($1, $2, $3, $4, 'manual', $5, $6, $7, $8, $9, $10, $11) RETURNING id`,
         [
           id,
           workspaceId,
@@ -151,16 +129,16 @@ export async function registerHistory(app: FastifyInstance, ctx: FeatureContext)
           input.name,
           user.id,
           ctx.now(),
-          documentClock,
-          documents.length,
-          Buffer.byteLength(json),
+          made.documentClock,
+          made.recordCount,
+          made.sizeBytes,
           key,
+          made.contentHash,
         ],
       )
-      row = await db.one<SnapshotRow>(
-        `SELECT ${SNAPSHOT_COLUMNS} FROM board_snapshots s LEFT JOIN users u ON u.id = s.created_by WHERE s.id = $1`,
-        [inserted.id],
-      )
+      row = await db.one<SnapshotRow>(`SELECT ${SNAPSHOT_COLUMNS} FROM ${SNAPSHOT_FROM} WHERE s.id = $1`, [
+        inserted.id,
+      ])
     } catch (e) {
       await bodies
         .remove(key)
@@ -169,7 +147,7 @@ export async function registerHistory(app: FastifyInstance, ctx: FeatureContext)
     }
     ctx.events.publish(bid, { type: HISTORY_EVENTS.snapshot, data: { snapshotId: id } })
     reply.code(201)
-    return toSnapshot(row)
+    return toCheckpoint(row)
   })
 
   app.post('/api/snapshots/:sid/restore-as-new', HEAVY, async (req, reply) => {
@@ -178,7 +156,7 @@ export async function registerHistory(app: FastifyInstance, ctx: FeatureContext)
     const input = parse(RestoreSnapshotInput, req.body ?? {})
     if (!SNAPSHOT_ID_PATTERN.test(sid)) throw notFound()
     const snapshot = await db.maybeOne<SnapshotRow>(
-      `SELECT ${SNAPSHOT_COLUMNS} FROM board_snapshots s LEFT JOIN users u ON u.id = s.created_by WHERE s.id = $1`,
+      `SELECT ${SNAPSHOT_COLUMNS} FROM ${SNAPSHOT_FROM} WHERE s.id = $1`,
       [sid],
     )
     if (!snapshot) throw notFound()
@@ -191,6 +169,11 @@ export async function registerHistory(app: FastifyInstance, ctx: FeatureContext)
     await requireExportAllowed(db, access)
     const raw = await bodies.read(snapshot.storage_key)
     if (raw === null) throw gone("This checkpoint's saved content is no longer available.")
+    // The board as it is right now gets an automatic checkpoint first (unless an equal one exists), so
+    // going back to an older version never loses track of where the board was. Best effort: a failure
+    // is logged and the restore goes on (it never changes this board). After the read above, so
+    // retention running with it can never take the content being restored.
+    await checkpoints.captureQuietly(snapshot.board_id, 'before_restore', { restoredName: snapshot.name })
     const body = JSON.parse(raw) as CheckpointBody
     const records = (body.documents ?? []).map((d) => d.state)
     const { shown, notShown } = await filesShownOn(
@@ -335,6 +318,8 @@ export async function registerHistory(app: FastifyInstance, ctx: FeatureContext)
         },
         warn,
       )
+      // The board as imported, before anyone edits it (automatic; best effort).
+      await checkpoints.captureQuietly(board.id, 'import')
       reply.code(201)
       return { ...created(board, allowed.length, dropped.length), warnings }
     },
