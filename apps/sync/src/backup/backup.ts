@@ -3,6 +3,10 @@
 // into it, so the result is one consistent state even under WAL — never copy the .sqlite file
 // itself), written to a temp file, checked, described, and only then renamed and listed in the
 // board's manifest. ${DATA}/backups/<boardId>/{manifest.json, <stamp>-c<clock>.sqlite}
+//
+// Each new backup is announced to the listeners registered for its backups root (onBackupCreated):
+// the offsite copy (offsite.ts) subscribes there, so the room registry that drives local backups needs
+// no knowledge of object storage, and a listener can never fail or delay a local backup.
 
 import { createHash, randomBytes } from 'node:crypto'
 import {
@@ -16,8 +20,9 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { backup, DatabaseSync } from 'node:sqlite'
+import { type AssetRef, AssetRefCollector } from './asset-refs.ts'
 
 export const BACKUP_DEFAULTS = Object.freeze({
   /** Periodic pass over open boards (a board is copied only if it changed since its last backup). */
@@ -29,7 +34,8 @@ export const BACKUP_DEFAULTS = Object.freeze({
 })
 
 const BOARD_ID_RE = /^[a-z0-9][a-z0-9_-]{2,63}$/
-const BACKUP_FILE_RE = /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z-c\d+\.sqlite$/
+/** Backup file names this module writes (`<ISO stamp, ':' and '.' as '-'>-c<clock>.sqlite`). */
+export const BACKUP_FILE_RE = /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z-c\d+\.sqlite$/
 
 export interface BackupEntry {
   /** Base name inside backups/<boardId>/. */
@@ -47,6 +53,8 @@ export interface BackupEntry {
   /** sha256 of the backup file itself. */
   sha256: string
   sizeBytes: number
+  /** Uploaded files the board references (asset-refs.ts). Absent in entries written before wave 3. */
+  assets?: AssetRef[]
 }
 
 export interface BackupManifest {
@@ -106,13 +114,28 @@ export interface BoardDbFacts {
   schema: unknown
   recordCount: number
   recordsSha256: string
+  assets: AssetRef[]
 }
 
 /**
  * Reads a board database file READ-ONLY (tldraw's tables are only ever read here): integrity check,
- * clock, schema and a digest of the document records. Throws when the file is not a healthy board.
+ * clock, schema, a digest of the document records and the files they reference, plus every record
+ * as stored (the drill compares them). Throws when the file is not a healthy board.
  */
 export function describeBoardDb(path: string): BoardDbFacts & { records: Map<string, string> } {
+  return readBoardDb(path, new Map())
+}
+
+/** describeBoardDb without keeping the records, so memory stays flat however big the board is. */
+export function inspectBoardDb(path: string): BoardDbFacts {
+  const { records: _, ...facts } = readBoardDb(path, null)
+  return facts
+}
+
+function readBoardDb(
+  path: string,
+  records: Map<string, string> | null,
+): BoardDbFacts & { records: Map<string, string> } {
   const db = new DatabaseSync(path, { readOnly: true })
   try {
     const check = db.prepare('PRAGMA quick_check').all() as Array<Record<string, unknown>>
@@ -123,7 +146,8 @@ export function describeBoardDb(path: string): BoardDbFacts & { records: Map<str
       | undefined
     if (!meta?.schema) throw new Error('not an initialized board database')
     const hash = createHash('sha256')
-    const records = new Map<string, string>()
+    const assets = new AssetRefCollector()
+    let count = 0
     for (const row of db.prepare('SELECT id, state FROM documents ORDER BY id').iterate() as Iterable<{
       id: string
       state: Uint8Array
@@ -132,14 +156,17 @@ export function describeBoardDb(path: string): BoardDbFacts & { records: Map<str
       hash.update('\n')
       hash.update(row.state)
       hash.update('\n')
-      records.set(row.id, Buffer.from(row.state).toString('utf8'))
+      assets.add(row.state)
+      count++
+      records?.set(row.id, Buffer.from(row.state).toString('utf8'))
     }
     return {
       documentClock: Number(meta.documentClock),
       schema: JSON.parse(meta.schema),
-      recordCount: records.size,
+      recordCount: count,
       recordsSha256: hash.digest('hex'),
-      records,
+      assets: assets.list(),
+      records: records ?? new Map(),
     }
   } finally {
     db.close()
@@ -170,7 +197,7 @@ export async function backupBoard(opts: {
     } finally {
       copy.close()
     }
-    const facts = describeBoardDb(tmp)
+    const facts = inspectBoardDb(tmp)
     const sha256 = await sha256File(tmp)
     const sizeBytes = statSync(tmp).size
     const file = `${stamp}-c${facts.documentClock}.sqlite`
@@ -185,6 +212,7 @@ export async function backupBoard(opts: {
       recordsSha256: facts.recordsSha256,
       sha256,
       sizeBytes,
+      assets: facts.assets,
     }
     const manifest = readManifest(opts.root, opts.boardId) ?? {
       format: 'draftroom-board-backups',
@@ -198,9 +226,43 @@ export async function backupBoard(opts: {
     const dropped =
       manifest.backups.length > keep ? manifest.backups.splice(0, manifest.backups.length - keep) : []
     writeManifest(opts.root, manifest)
-    for (const old of dropped) rmSync(join(dir, old.file), { force: true })
+    // Best effort: the backup is complete and listed; a leftover old file is only wasted space.
+    for (const old of dropped)
+      try {
+        rmSync(join(dir, old.file), { force: true, maxRetries: 3, retryDelay: 50 })
+      } catch {}
+    announce(opts.root, opts.boardId, entry)
     return entry
   } finally {
     for (const f of [tmp, `${tmp}-journal`, `${tmp}-wal`, `${tmp}-shm`]) rmSync(f, { force: true })
   }
+}
+
+// ---- new-backup listeners ------------------------------------------------------------------------
+
+export type BackupListener = (boardId: string, entry: BackupEntry) => void
+
+const listeners = new Map<string, Set<BackupListener>>()
+
+/**
+ * Calls `listener` after every backup written under `root` in this process, once its manifest is
+ * written. Listeners run synchronously and must only schedule work; one that throws is ignored.
+ * Returns the unsubscribe function.
+ */
+export function onBackupCreated(root: string, listener: BackupListener): () => void {
+  const key = resolve(root)
+  const set = listeners.get(key) ?? new Set<BackupListener>()
+  listeners.set(key, set)
+  set.add(listener)
+  return () => {
+    set.delete(listener)
+    if (set.size === 0 && listeners.get(key) === set) listeners.delete(key)
+  }
+}
+
+function announce(root: string, boardId: string, entry: BackupEntry) {
+  for (const listener of [...(listeners.get(resolve(root)) ?? [])])
+    try {
+      listener(boardId, entry)
+    } catch {}
 }
