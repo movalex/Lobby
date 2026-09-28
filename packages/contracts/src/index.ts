@@ -180,5 +180,8 @@ export type ErrorBody = z.infer<typeof ErrorBody>
 // Feature schemas (docs/FEATURES-M2-CONTRACTS.md): one file per feature, owned by that feature.
 export * from './comments.ts'
 export * from './dashboard.ts'
+export * from './export-control.ts'
+export * from './guests.ts'
 export * from './history.ts'
+export * from './thumbnails.ts'
 export * from './workshops.ts'

@@ -100,21 +100,19 @@ Contract: [`docs/M3-STORAGE-CONTRACTS.md`](M3-STORAGE-CONTRACTS.md) (DEVIATION n
 
 Checks: lint 0 errors / 0 warnings (581 files); typecheck 14 projects; vitest 1,628 passed / 5 skipped (the opt-in live R2 tests, the real-Postgres test and the POSIX-only SIGINT test); opt-in live R2 tests 26/26 with `DRAFTROOM_LIVE_R2=1`; Playwright **152/152** on three full runs on the default ports (9.8–9.9 min each; the last two on the final code).
 
-## Current state (2026-09-27)
+## Current state (2026-09-28)
 
-- **Built and verified locally**: milestones 0, 1 and 3 (storage); the Miro-style feature set (canvas UX, comments, history, present/export, workshops, dashboard/sharing); and the persona-review fixes. The browser suite has 152 tests, and the unit, API and protocol suites have 1,628.
-- **Storage (milestone 3)**: files live in a blob store (a local directory in dev and e2e, Cloudflare R2 on staging), metadata and the preview queue in Postgres, and preview workers are HTTP clients that can run anywhere with only a token. The live-bucket path was proven from the dev PC; Render and the NAS worker are not deployed.
-- **Not built** (top gaps for a Miro user, in priority order; details in the review §4):
-  1. name-only guests;
-  2. private or anonymous brainstorming;
-  3. email notifications;
-  4. browser edit latency and big-board frame rate (partly inside tldraw);
-  5. arrange-as-grid and select-only-images, PDF page viewer, animated GIFs;
-  6. reactions, +1 and raise hand, and a presenter session;
-  7. phone cold open and dark mode;
-  8. guest export permission, start view, and thumbnails.
-- **Unmeasured**: a real WAN, the agreed laptop, iPad/Safari, Firefox, and phone frame rate; the api's memory on Render (Linux, real Postgres); `FOR UPDATE SKIP LOCKED` contention on real Postgres.
-- **Deploy prerequisites**: Clerk keys, a tldraw license key for the host, and a verified Render deployment (docs/DEPLOY.md). Nothing is deployed. Also still to do: build the api, sync and worker images (no Docker on the dev PC); deploy the NAS worker (`deploy/nas/README.md`; create its `.env.worker`); and on the first Blueprint sync, check for the old api disk and delete it.
+- **Live on staging** (Render, https://draftroom-staging-web.onrender.com): the milestone-3 layout, with the api on `0.5c-512mb` with no disk, files in Cloudflare R2, and previews made by the NAS worker. Clerk (dev instance) sign-in is branded Lobby. Verified live: sign-in, boards and sync, the tldraw key, uploads to R2 with NAS previews, and light and dark themes.
+- **Built and verified locally**:
+  - milestones 0, 1 and 3 (storage);
+  - the Miro-style feature set (canvas UX, comments, history, present/export, workshops, dashboard/sharing) and the persona-review fixes;
+  - wave 2: reactions, +1 and raise hand; dark mode; arrange as grid and select by type; the owner start view; the PDF page viewer and animated GIFs; invite by email through Clerk;
+  - the Lobby rename;
+  - the fixes from docs/SECURITY-REVIEW-2026-09-27.md.
+- **Wave 3** (docs/WAVE3-CONTRACTS.md): name-only guests, private brainstorming, dashboard thumbnails, a per-board export policy, offsite board backups to R2, and the "Lobby tour" demo board.
+- **Not built**: email notifications (Resend, later); browser edit latency and big-board frame rate (partly inside tldraw); a presenter session; Office previews; mind maps and Kanban; DBC Ops integration.
+- **Unmeasured**: a real WAN, the agreed laptop, iPad/Safari, Firefox and phone frame rate; `FOR UPDATE SKIP LOCKED` contention on real Postgres.
+- **Open decision**: delete the unused 5 GB api disk `draftroom-staging-files` (about $1.25/month).
 
 ## Log
 
@@ -185,3 +183,31 @@ Checks: lint 0 errors / 0 warnings (581 files); typecheck 14 projects; vitest 1,
 
   pnpm lint/typecheck/test green (1,628 passed); e2e 152/152 on each full run.
 - Product renamed **Draftroom → Lobby** (DBC's whiteboard; one lobby per DBC project, holding its boards). Every user-visible string changed: titles (`<board> · Lobby`), errors, share/invite copy, PDF title/creator and export file names, and the archive error messages. The DBC "square L" brand replaced the set-square: an inline mark (`brand/Wordmark.tsx`, the L follows `--dr-mark-ink`), a navy/orange tile favicon with 16/32/180/192/512 PNGs (`apps/web/scripts/make-icons.mjs`), a `site.webmanifest`, and a sign-in page with the glowing hero and the "DBC Lobby" lockup. Code names stay `draftroom` (README "Naming"), including the `draftroom-board` format; board exports now download as `<title>.lobby.json` and older `.draftroom.json` files still import under their own title (review follow-up). Verified on its own branch (from the pre-M3 main): lint/typecheck/test green, e2e chromium 151/151; re-verified after merging onto M3 + wave 2 (see the next entry).
+- Wave 2, built by six owners and integrated:
+  - reactions, +1 on notes and raise hand (FAC-08);
+  - dark mode (System / Light / Dark, app and canvas);
+  - arrange as grid, select by type, note authors in the board menu, and the owner start view;
+  - the PDF page viewer, placing pages on the board, and animated GIF playback;
+  - invite by email from the Share dialog (Clerk invitations, with a link fallback).
+  
+  Merged with M3 into main (89332c7): lint 0 errors (636 files), vitest 1,792 passed, e2e 171/171.
+- Staging switched to the milestone-3 layout (2026-09-28, see DEPLOY.md "What actually happened on staging"):
+  - the api moved to `0.5c-512mb` with no disk and R2 for files;
+  - the NAS worker was deployed (`nas-1`);
+  - api → sync → web were deployed and all went live;
+  - checked headless: the new build in both themes, no page errors.
+- Security fixes from docs/SECURITY-REVIEW-2026-09-27.md, built on three branches and merged:
+  - **api**:
+    - caps on event streams and revocation of open ones (authz-003/005);
+    - a per-workspace upload quota (FC-1);
+    - auth rate limits that no longer lock out logout, invite previews or good Clerk exchanges (SCA-2);
+    - "sign out everywhere" (SCA-4, migration `0008_session_revocation`);
+    - the "Recently deleted" list is editors-only (authz-001).
+  - **sync**: presence identity is bound to the verified ticket, so a forged name, color or cursor is corrected and the forger is closed (authz-004 / SYNC-01).
+  - **web**:
+    - sign-out also ends the Clerk session, so the sign-in page no longer signs the same person straight back in (SCA-1);
+    - "Recently deleted" is hidden unless the user can edit;
+    - "Sign out everywhere" in the user menu.
+
+  Every fix has a test that failed on the unfixed code.
+- Integration of the rename and the security fixes onto M3 + wave 2 (`integration/rename`): the conflicts were in index.html, ShareDialog, styles.css, ClerkSignIn and PROGRESS. The new user-facing strings from the security branches were renamed to Lobby, and the dark theme got a value for `--dr-mark-ink-on-dark`. lint 0 errors (658 files), typecheck clean, vitest 1,891 passed / 5 skipped, e2e 175/175 (11.4 min).

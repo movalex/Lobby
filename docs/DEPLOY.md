@@ -309,6 +309,13 @@ Steps:
 - **The R2 values.** They aren't prompted on an existing Blueprint. Add the four `R2_*` values to the api's Environment **before** its deploy. In r2 mode the api refuses to start without them (`apps/api/src/config.ts`).
 - **The plan.** The change from `1c-2g` to `0.5c-512mb` should apply on sync. Confirm it on the service page.
 
+**What actually happened on staging (2026-09-28, the milestone-3 switch).** The Blueprint sync after the push applied the new **environment variables only**. It did **not** change the existing api's plan, Dockerfile path or disk. The switch was finished through the Render API (`PATCH /v1/services/<api>`):
+- plan `0.5c-512mb`;
+- `dockerfilePath ./docker/api.Dockerfile`;
+- the four `R2_*` values set with `PUT /v1/services/<api>/env-vars/<key>`.
+
+It was deployed in the order api → sync → web; all three went live on the first try. The old disk `draftroom-staging-files` stayed attached. Staging had no uploads before the switch, so nothing had to be migrated. Deleting the disk needs the owner's go-ahead. The NAS worker (`WORKER_ID=nas-1`) was deployed with `deploy/nas/deploy-worker.sh` against the public api URL.
+
 ### What users see during a deploy
 
 - **api** (zero-downtime, no disk):

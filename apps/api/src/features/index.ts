@@ -3,7 +3,10 @@ import type { FastifyInstance } from 'fastify'
 import { registerComments } from './comments/index.ts'
 import type { FeatureContext } from './context.ts'
 import { registerDashboard } from './dashboard/index.ts'
+import { registerExportControl } from './export-control/index.ts'
+import { registerGuests } from './guests/index.ts'
 import { registerHistory } from './history/index.ts'
+import { registerThumbnails } from './thumbnails/index.ts'
 import { registerWorkshops } from './workshops/index.ts'
 
 export async function registerFeatures(app: FastifyInstance, ctx: FeatureContext): Promise<void> {
@@ -11,4 +14,7 @@ export async function registerFeatures(app: FastifyInstance, ctx: FeatureContext
   await registerHistory(app, ctx)
   await registerWorkshops(app, ctx)
   await registerDashboard(app, ctx)
+  await registerGuests(app, ctx)
+  await registerThumbnails(app, ctx)
+  await registerExportControl(app, ctx)
 }
