@@ -4,14 +4,17 @@
 // OPENAI_BASE_URL; nothing here calls the real API. What must hold: results land as ordinary canvas edits
 // (one undo step, seen live by others), "Group into themes" on the Lobby tour's Brainstorm notes gives
 // tidy labelled clusters inside the frame, hostile model output cannot reach beyond the selection,
-// budgets are enforced with a clear message, and guests never see or trigger AI.
+// budgets are enforced with a clear message, and guests never see or trigger AI. Reviewer fixes: owners
+// turn AI off per board and summaries open privately first (DANA-04), results stay in their frame
+// (DANA-07), the toast's Undo never undoes anything else (DANA-09), already-grouped notes ask first
+// (DANA-10) and a template's prompt notes stay put (R9).
 import type { Browser, Page } from '@playwright/test'
 import { AI_API_ENV, FAKE_KEY, type FakeOpenAi, itemsOf, startFakeOpenAi } from './support/ai.ts'
 import { signInContext } from './support/api.ts'
 import { edit, read, waitForBoard } from './support/board.ts'
 import { editEd } from './support/canvas-ux.ts'
-import { closeMenus, contextMenuAt, openContextSubmenu } from './support/canvas-ux-2.ts'
-import type { BoxLike } from './support/editor.ts'
+import { closeMenus, contextMenuAt, openBoardMenu, openContextSubmenu } from './support/canvas-ux-2.ts'
+import type { BoxLike, EditorLike } from './support/editor.ts'
 import { test as base, expect } from './support/fixtures.ts'
 import { WEB_URL } from './support/ports.ts'
 import { capture } from './support/screenshots.ts'
@@ -124,9 +127,15 @@ async function openAiMenu(page: Page) {
 
 /** Continues past the OpenAI notice when it shows (only a person's first use in a workspace has it). */
 async function continueIfAsked(page: Page) {
+  const regroup = aiMenu(page).getByTestId('ai-regroup-go')
   const cont = aiMenu(page).getByTestId('ai-notice-continue')
   const started = page.getByTestId('ai-busy').or(page.getByTestId('ai-done')).or(page.getByTestId('ai-error'))
-  await expect(cont.or(started).first()).toBeVisible()
+  await expect(regroup.or(cont).or(started).first()).toBeVisible()
+  // Notes that already sit in groups (the tour's cards) are asked about first (DANA-10).
+  if (await regroup.isVisible()) {
+    await regroup.click()
+    await expect(cont.or(started).first()).toBeVisible()
+  }
   if (await cont.isVisible()) await cont.click()
 }
 
@@ -172,6 +181,12 @@ test('Group into themes on the Lobby tour Brainstorm: notice once, busy state, t
   await test.step('first use: "Sends the selected text to OpenAI"; Continue runs it with a busy state', async () => {
     openai.next({ kind: 'stall', ms: 1500 })
     await aiMenu(a.page).getByTestId('ai-themes').click()
+    // DANA-10: the tour's notes already sit under its Gameplay, Story and Community cards: asked first.
+    await expect(aiMenu(a.page)).toHaveAttribute('data-view', 'regroup')
+    await expect(aiMenu(a.page)).toContainText('“Gameplay”, “Story” and “Community”')
+    await capture('ai-regroup-light.png', a.page, testInfo)
+    expect(openai.requests).toHaveLength(0)
+    await aiMenu(a.page).getByTestId('ai-regroup-go').click()
     await expect(aiMenu(a.page)).toHaveAttribute('data-view', 'notice')
     await expect(aiMenu(a.page)).toContainText('Sends the selected text to OpenAI')
     await expect(aiMenu(a.page)).toContainText('never sent')
@@ -265,6 +280,7 @@ test('Group into themes on the Lobby tour Brainstorm: notice once, busy state, t
     await openAiMenu(a.page)
     await expect(aiMenu(a.page)).toHaveAttribute('data-view', 'menu')
     await aiMenu(a.page).getByTestId('ai-themes').click()
+    await aiMenu(a.page).getByTestId('ai-regroup-go').click()
     await expect(aiMenu(a.page)).toHaveCount(0)
     await expect(a.page.getByTestId('ai-done')).toHaveText(/^Grouped 8 notes into 3 themes\.Undo/)
     const again = await frameContents(a.page, BRAINSTORM)
@@ -300,7 +316,7 @@ test('Group into themes on the Lobby tour Brainstorm: notice once, busy state, t
   })
 })
 
-test('Summarize: an editor gets a text block beside the notes; a viewer gets a panel and writes nothing', async ({
+test('Summarize: private first for everyone; an editor adds it as a card in the frame; a viewer writes nothing', async ({
   session,
   board,
   openai,
@@ -316,8 +332,9 @@ test('Summarize: an editor gets a text block beside the notes; a viewer gets a p
   }
   const notes = await tourNotes(b.page)
 
-  await test.step('bob (editor): Summarize adds a text block next to the selection, one undo step', async () => {
+  await test.step('bob (editor): Summarize opens privately first; "Add to board" puts a card in the frame, one undo step', async () => {
     const before = await read(b.page, (ed) => ed.getCurrentPageShapes().length)
+    const frameBefore = await frameContents(b.page, BRAINSTORM)
     await selectIds(
       b.page,
       notes.map((n) => n.id),
@@ -327,27 +344,45 @@ test('Summarize: an editor gets a text block beside the notes; a viewer gets a p
     await expect(menu.getByTestId('ai-budget')).toHaveCount(0)
     await menu.getByTestId('ai-summarize').click()
     await aiMenu(b.page).getByTestId('ai-notice-continue').click()
-    await expect(b.page.getByTestId('ai-done')).toContainText('Summary added.')
+    // DANA-04: nothing lands on the board (a client may be watching) until bob says so.
+    const panel = b.page.getByTestId('ai-summary-panel')
+    await expect(panel.getByTestId('ai-summary-text')).toContainText('launch trailer')
+    expect(await read(b.page, (ed) => ed.getCurrentPageShapes().length)).toBe(before)
+    await capture('ai-summary-panel-editor.png', b.page, testInfo)
+    await panel.getByTestId('ai-summary-add').click()
+    await expect(panel).toHaveCount(0)
+    await expect(b.page.getByTestId('ai-done')).toContainText('Summary added to the board.')
     const summary = await read(b.page, (ed) =>
       ed
         .getCurrentPageShapes()
         .find((s) => (s.meta.drAi as { kind?: string } | undefined)?.kind === 'summary'),
     )
-    expect(summary?.type).toBe('text')
+    // DANA-07: a card (a pale box with the text), inside the notes' frame.
+    expect(summary?.type).toBe('geo')
+    expect(summary?.props).toMatchObject({ fill: 'solid', align: 'start', verticalAlign: 'start' })
     expect(JSON.stringify(summary?.props.richText)).toContain('launch trailer')
     expect(await read(b.page, (ed) => ed.getCurrentPageShapes().length)).toBe(before + 1)
-    // Beside the notes, overlapping nothing.
+    const frameAfter = await frameContents(b.page, BRAINSTORM)
+    expect(summary?.parentId).toBe(frameAfter?.id)
+    expect(frameAfter?.w).toBe(frameBefore?.w)
+    // Overlapping nothing, inside the (possibly taller) frame.
     const sb = await read(b.page, (ed, id) => ed.getShapePageBounds(id), summary?.id ?? '')
+    if (!sb || !frameAfter?.b) throw new Error('no bounds')
+    expect(inside(frameAfter.b, sb)).toBe(true)
     const all = await read(b.page, (ed) =>
       ed
         .getCurrentPageShapes()
         .filter((s) => s.type !== 'frame' && s.type !== 'arrow')
         .map((s) => ({ id: s.id, b: ed.getShapePageBounds(s.id) })),
     )
-    for (const o of all) if (o.id !== summary?.id && o.b && sb) expect(overlap(sb, o.b), o.id).toBe(false)
+    for (const o of all) if (o.id !== summary?.id && o.b) expect(overlap(sb, o.b), o.id).toBe(false)
+    await edit(b.page, (ed) => ed.selectNone())
     await capture('ai-summary-inserted.png', b.page, testInfo)
     await undo(b.page)
     await expect.poll(() => read(b.page, (ed) => ed.getCurrentPageShapes().length)).toBe(before)
+    // DANA-09: the toast's Undo went with it (it could only undo something else now).
+    await expect(b.page.getByTestId('ai-done')).toHaveCount(0)
+    expect((await frameContents(b.page, BRAINSTORM))?.h).toBe(frameBefore?.h)
   })
 
   await test.step('carol (viewer): only Summarize, into a panel; nothing is written to the board', async () => {
@@ -521,6 +556,246 @@ test('Action items and Generate ideas: new sticky notes beside the target, one u
   })
 })
 
+type HistoryEditor = EditorLike & {
+  markHistoryStoppingPoint(name?: string): string
+  getShape(id: string): { x: number; y: number; type: string } | undefined
+  updateShape(partial: Record<string, unknown>): unknown
+}
+/** An ordinary edit of this tab, as its own undo step (a person's drag, say). */
+const editAsStep = <A>(page: Page, fn: (ed: HistoryEditor, arg: A) => unknown, arg?: A) =>
+  edit<A>(page, fn as unknown as (e: EditorLike, a: A) => unknown, arg)
+const nudge = (page: Page, id: string, dy: number) =>
+  editAsStep(
+    page,
+    (ed, a) => {
+      ed.markHistoryStoppingPoint('test-nudge')
+      const s = ed.getShape(a.id)
+      if (s) ed.updateShape({ id: a.id, type: s.type, y: s.y + a.dy })
+    },
+    { id, dy },
+  )
+
+test('Results stay in the frame; the Undo toast only ever undoes the AI result; owners turn AI off per board', async ({
+  session,
+  board,
+  openai,
+}, testInfo) => {
+  const a = await session('alice')
+  await openTour(a.page, board)
+  const b = await session('bob')
+  await expect.poll(async () => (await tourNotes(b.page)).length).toBe(8)
+  for (const p of [a.page, b.page]) await showFrame(p, BRAINSTORM)
+  const notes = await tourNotes(b.page)
+  const before = await frameContents(b.page, BRAINSTORM)
+  if (!before?.b) throw new Error('no frame')
+  const frameBox = before.b
+  const noteY = async (id: string) => read(b.page, (ed, i) => ed.getShape(i)?.y ?? null, id)
+
+  const actionItemsOnFrame = async () => {
+    await selectIds(b.page, [before.id])
+    await openAiMenu(b.page)
+    await aiMenu(b.page).getByTestId('ai-actions').click()
+    await continueIfAsked(b.page)
+    await expect(b.page.getByTestId('ai-done')).toContainText('Added 3 action items.')
+  }
+
+  await test.step('DANA-07: action items on a frame land inside it, under its content, never near its label', async () => {
+    await actionItemsOnFrame()
+    const after = await frameContents(b.page, BRAINSTORM)
+    if (!after?.b) throw new Error('no frame')
+    const added = after.kids.filter((k) => aiKind(k) === 'action-item' || aiKind(k) === 'heading')
+    expect(added).toHaveLength(4)
+    // The frame keeps its width and grows downwards only.
+    expect(after.w).toBe(before.w)
+    expect(after.b.y).toBe(frameBox.y)
+    expect(after.h).toBeGreaterThanOrEqual(before.h)
+    const others = after.kids.filter((k) => !aiKind(k))
+    const contentBottom = Math.max(...others.map((o) => o.b.y + o.b.h))
+    for (const s of added) {
+      expect(inside(after.b, s.b), `${s.text} inside the frame`).toBe(true)
+      expect(s.b.y, `${s.text} under the content`).toBeGreaterThan(contentBottom)
+      for (const o of others) expect(overlap(s.b, o.b), `${s.text} over "${o.text}"`).toBe(false)
+    }
+    // Aligned: the heading and the first note share the left edge.
+    const xs = added.map((s) => Math.round(s.b.x))
+    expect(Math.min(...xs)).toBe(xs[0])
+    await edit(b.page, (ed) => ed.selectNone())
+    await capture('ai-action-items-in-frame.png', b.page, testInfo)
+  })
+
+  await test.step('DANA-09: Ctrl+Z takes the toast with it, so its Undo can never undo an earlier edit', async () => {
+    await undo(b.page)
+    await expect.poll(async () => (await frameContents(b.page, BRAINSTORM))?.h).toBe(before.h)
+    await expect(b.page.getByTestId('ai-done')).toHaveCount(0)
+    // The reviewer's steps: move a note, run AI, Ctrl+Z: the moved note stays moved.
+    const first = notes[0]
+    if (!first) throw new Error('no note')
+    const y0 = await noteY(first.id)
+    await nudge(b.page, first.id, 122)
+    await actionItemsOnFrame()
+    await undo(b.page)
+    await expect(b.page.getByTestId('ai-done')).toHaveCount(0)
+    expect(await noteY(first.id)).toBe((y0 ?? 0) + 122)
+    await capture('ai-toast-gone-after-ctrlz.png', b.page, testInfo)
+  })
+
+  await test.step('DANA-09: the toast’s Undo takes back exactly the AI result, never the edit before it', async () => {
+    const third = notes[2]
+    if (!third) throw new Error('no note')
+    const y0 = (await noteY(third.id)) ?? 0
+    await nudge(b.page, third.id, 60)
+    await actionItemsOnFrame()
+    await b.page.getByTestId('ai-undo').click()
+    await expect
+      .poll(async () => (await frameContents(b.page, BRAINSTORM))?.kids.filter((k) => aiKind(k)).length)
+      .toBe(0)
+    await expect.poll(async () => (await frameContents(b.page, BRAINSTORM))?.h).toBe(before.h)
+    await expect(b.page.getByTestId('ai-done')).toHaveCount(0)
+    expect(await noteY(third.id)).toBe(y0 + 60)
+    // The AI step is off the stack: the next Ctrl+Z takes back the move.
+    await undo(b.page)
+    await expect.poll(() => noteY(third.id)).toBe(y0)
+  })
+
+  await test.step('DANA-09: any other edit of this tab takes the toast away too; a collaborator’s does not', async () => {
+    await actionItemsOnFrame()
+    const second = notes[1]
+    if (!second) throw new Error('no note')
+    // alice moves a note: bob's toast stays (her edit is not in his undo stack).
+    await nudge(a.page, second.id, 40)
+    await expect.poll(() => noteY(second.id)).toBe(second.y + 40)
+    await expect(b.page.getByTestId('ai-undo')).toBeVisible()
+    // bob moves one himself: the toast goes, and his undo takes his own move back first.
+    await nudge(b.page, second.id, 40)
+    await expect(b.page.getByTestId('ai-done')).toHaveCount(0)
+    await undo(b.page)
+    await expect.poll(() => noteY(second.id)).toBe(second.y + 40)
+    await undo(b.page)
+    await expect
+      .poll(async () => (await frameContents(b.page, BRAINSTORM))?.kids.filter((k) => aiKind(k)).length)
+      .toBe(0)
+  })
+
+  await test.step('DANA-04: alice turns AI off for this board; bob loses it at once and the api refuses it', async () => {
+    // tldraw's checkbox items carry no test id: found by role and name.
+    const boardSwitch = (menu: ReturnType<Page['getByTestId']>) =>
+      menu.getByRole('menuitemcheckbox', { name: /AI on this board/ })
+    const content = await openBoardMenu(a.page)
+    const sw = boardSwitch(content)
+    await expect(sw).toHaveAttribute('aria-checked', 'true')
+    await capture('ai-board-switch-on.png', a.page, testInfo)
+    await sw.click()
+    await expect(a.page.getByTestId('ai-settings-saved')).toContainText('AI is off on this board.')
+    const calls = openai.requests.length
+    await selectIds(
+      b.page,
+      notes.map((n) => n.id),
+    )
+    await expect(aiButton(b.page)).toHaveCount(0)
+    const res = await b.page.request.post(`/api/boards/${board}/ai/run`, {
+      headers: { origin: WEB_URL },
+      data: { action: 'summarize', mode: 'panel', shapeIds: [before.id], acknowledged: true },
+    })
+    expect(res.status()).toBe(403)
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe('AI_BOARD_OFF')
+    expect(openai.requests.length).toBe(calls)
+    // bob is no owner: no switch for him.
+    const bobMenu = await openBoardMenu(b.page)
+    await expect(bobMenu.getByRole('menuitemcheckbox', { name: /Hide note authors/ })).toBeVisible()
+    await expect(boardSwitch(bobMenu)).toHaveCount(0)
+    await closeMenus(b.page)
+    // alice's switch shows it off; on again, and bob's AI button is back.
+    const again = await openBoardMenu(a.page)
+    await expect(boardSwitch(again)).toHaveAttribute('aria-checked', 'false')
+    await capture('ai-board-switch-off.png', a.page, testInfo)
+    await boardSwitch(again).click()
+    await expect(a.page.getByTestId('ai-settings-saved')).toContainText('AI is on for this board.')
+    await selectIds(
+      b.page,
+      notes.map((n) => n.id),
+    )
+    await expect(aiButton(b.page)).toBeVisible()
+  })
+})
+
+test('Group into themes leaves a template’s prompt notes where they are (R9)', async ({
+  session,
+  board,
+  openai,
+}, testInfo) => {
+  const a = await session('alice')
+  const IMPROVE = '3 · What to improve'
+  await a.page.goto(`/b/${board}?template=retrospective`)
+  await waitForBoard(a.page)
+  await expect.poll(async () => (await frameContents(a.page, IMPROVE))?.kids.length ?? 0).toBeGreaterThan(3)
+  await showFrame(a.page, IMPROVE)
+  const f = await frameContents(a.page, IMPROVE)
+  if (!f) throw new Error('no frame')
+  // The template's three orange prompts ("What slowed us down?", …).
+  const prompts = f.kids.filter((k) => k.type === 'note')
+  expect(prompts).toHaveLength(3)
+  // The team's own notes, typed (so attributed), under the prompts.
+  await editAsStep(
+    a.page,
+    (ed, frameId) => {
+      const make = (i: number, text: string) => ({
+        id: `shape:r9-${i}`,
+        type: 'note',
+        parentId: frameId,
+        x: 60 + i * 230,
+        y: 560,
+        props: {
+          richText: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text }] }] },
+        },
+      })
+      const e = ed as unknown as { createShapes(p: unknown[]): unknown }
+      e.createShapes([make(0, 'CI queue was slow'), make(1, 'Late brief changes'), make(2, 'Slow approvals')])
+    },
+    f.id,
+  )
+  // Typing names the writer (tldraw's textLastEditedBy): the same as a person typing them.
+  await editAsStep(a.page, (ed) => {
+    const e = ed as unknown as { updateShapes(p: unknown[]): unknown }
+    const text = (t: string) => ({
+      type: 'doc',
+      content: [{ type: 'paragraph', content: [{ type: 'text', text: t }] }],
+    })
+    e.updateShapes([
+      { id: 'shape:r9-0', type: 'note', props: { richText: text('CI queue was slow!') } },
+      { id: 'shape:r9-1', type: 'note', props: { richText: text('Late brief changes!') } },
+      { id: 'shape:r9-2', type: 'note', props: { richText: text('Slow approvals!') } },
+    ])
+  })
+  await expect
+    .poll(() =>
+      read(a.page, (ed) =>
+        ['shape:r9-0', 'shape:r9-1', 'shape:r9-2'].map(
+          (id) =>
+            (ed.getShape(id)?.props as { textLastEditedBy?: string | null } | undefined)?.textLastEditedBy ??
+            null,
+        ),
+      ),
+    )
+    .not.toContain(null)
+  const promptAt = Object.fromEntries(prompts.map((p) => [p.id, [Math.round(p.x), Math.round(p.y)]]))
+  await edit(a.page, (ed) => ed.selectNone())
+  await selectIds(a.page, [f.id])
+  const menu = await openAiMenu(a.page)
+  await expect(menu.getByTestId('ai-themes')).toContainText('Sorts 3 notes; 3 prompt notes stay put')
+  await capture('ai-themes-prompts-hint.png', a.page, testInfo)
+  await menu.getByTestId('ai-themes').click()
+  await continueIfAsked(a.page)
+  await expect(a.page.getByTestId('ai-done')).toContainText('The 3 prompt notes stayed where they were.')
+  const sent = itemsOf(openai.requests.at(-1) as never).map((i) => i.text)
+  expect(sent.sort()).toEqual(['CI queue was slow!', 'Late brief changes!', 'Slow approvals!'])
+  await capture('ai-themes-prompts-kept.png', a.page, testInfo)
+  const after = await frameContents(a.page, IMPROVE)
+  const nowAt = Object.fromEntries(
+    (after?.kids ?? []).filter((k) => promptAt[k.id]).map((k) => [k.id, [Math.round(k.x), Math.round(k.y)]]),
+  )
+  expect(nowAt).toEqual(promptAt)
+})
+
 test('Hostile model output (a prompt injection on a note) cannot touch other shapes or flood the board', async ({
   session,
   board,
@@ -684,7 +959,8 @@ test('Budget: when the workspace’s AI budget for the day is used up, AI says s
   await expect(aiMenu(page).getByTestId('ai-budget')).toHaveText(/AI budget used today: 0%/)
   await aiMenu(page).getByTestId('ai-summarize').click()
   await aiMenu(page).getByTestId('ai-notice-continue').click()
-  await expect(page.getByTestId('ai-done')).toContainText('Summary added.')
+  await expect(page.getByTestId('ai-summary-text')).toContainText('Studio and composer')
+  await page.getByRole('button', { name: 'Close summary' }).click()
   await selectIds(page, ['shape:bud-1', 'shape:bud-2'])
   await openAiMenu(page)
   await expect(aiMenu(page).getByTestId('ai-budget')).toHaveText(/AI budget used today: 100%/)

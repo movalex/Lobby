@@ -9,8 +9,11 @@
 // (how many columns each cluster gets, how far apart clusters sit); the one that fits the frame without
 // growing it, and then the most compact one, wins. If nothing fits, the frame grows as little as needed.
 //
-// New results (a summary, a set of notes) go beside the selection: the first free spot to its right,
-// below, left or above, sliding along each side, inside the frame when there is room.
+// New results (a summary, a set of notes) stay in the frame the target is (or is in): beside the
+// selection when there is room there, else under the frame's content, aligned with its left edge, the
+// frame growing downwards to take them (appendInFrame). Outside frames they go beside the selection:
+// the first free spot to its right, below, left or above, sliding along each side, never over a frame's
+// name label (FRAME_LABEL_BAND).
 
 export interface Rect {
   x: number
@@ -322,6 +325,34 @@ export function placeAround(size: Size, center: { x: number; y: number }, obstac
   const r = { x: center.x - size.w / 2, y: center.y - size.h / 2, ...size }
   if (obstacles.every((o) => !collides(r, o, BESIDE_GAP / 2))) return { x: r.x, y: r.y }
   return placeBeside(size, { x: center.x, y: center.y, w: 0, h: 0 }, obstacles, null) ?? { x: r.x, y: r.y }
+}
+
+/** Room kept above a frame for its name label (tldraw draws it just over the frame's top edge). */
+export const FRAME_LABEL_BAND = 40
+
+/**
+ * Where a `size` block goes at the end of a frame (reviewer finding DANA-07): below everything in it
+ * (`content`, in the frame's space), aligned with the content's left edge, BESIDE_GAP clear of it and
+ * FRAME_MARGIN inside the frame's sides. `h` is the frame height that holds it: the frame's own when it
+ * fits, else taller (frames grow downwards only, so neighbours to the side are never crowded).
+ */
+export function appendInFrame(
+  size: Size,
+  frame: Size,
+  content: readonly Rect[],
+): { x: number; y: number; h: number } {
+  const inner = union(content)
+  const left = inner ? Math.max(FRAME_MARGIN, inner.x) : FRAME_MARGIN
+  const x = Math.max(FRAME_MARGIN, Math.min(left, frame.w - FRAME_MARGIN - size.w))
+  const y = inner ? Math.max(FRAME_MARGIN, bottom(inner) + BESIDE_GAP) : FRAME_MARGIN
+  return { x, y, h: Math.max(frame.h, Math.ceil(y + size.h + FRAME_MARGIN)) }
+}
+
+/** Columns for `n` cells `cellW` wide: `wanted`, or fewer when the grid would be wider than `maxW`. */
+export function fitCols(n: number, wanted: number, cellW: number, maxW: number | null, gap = NOTE_GAP) {
+  let c = Math.max(1, Math.min(wanted, n))
+  while (maxW !== null && c > 1 && c * cellW + (c - 1) * gap > maxW) c--
+  return c
 }
 
 /** A grid of `n` cells, `cols` wide, relative to its top-left. */

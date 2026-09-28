@@ -8,9 +8,12 @@
 //   stays (layout.ts). Labels are bold text shapes measured after creation, then the layout runs again
 //   with their real heights. A frame grows only when the clusters cannot fit. Labels a previous run made
 //   for the same notes are replaced, so grouping twice never stacks labels.
-// - Summarize (editors): a text block beside the selection, inside its frame when there is room.
-// - Action items / Generate ideas: a heading and a grid of new sticky notes beside the selection (or in
-//   the middle of the view when nothing is selected).
+// - Summarize, when an editor adds it from the summary panel: a pale card with a bold "Summary" line.
+// - Action items / Generate ideas: a heading and a grid of new sticky notes.
+// Both stay in the frame the target is, or is in (DANA-07): beside the selection when the frame has room
+// there, else at the end of the frame (under its content, aligned with it), the frame growing downwards
+// unless that would run into a neighbour. Outside frames: beside the selection, clear of frame labels,
+// or in the middle of the view when nothing is selected.
 // AI-made shapes carry `meta.drAi` ({ kind, … }) so a later run can recognise them.
 
 import type { AiTheme } from '@draftroom/contracts'
@@ -31,9 +34,13 @@ import {
   toRichText,
 } from 'tldraw'
 import {
+  appendInFrame,
   BESIDE_GAP,
   type ClusterInput,
+  collides,
+  FRAME_LABEL_BAND,
   FRAME_MARGIN,
+  fitCols,
   frameRegion,
   grid,
   layoutThemes,
@@ -110,7 +117,9 @@ function obstaclesIn(editor: Editor, parentId: TLParentId, moving: ReadonlySet<s
     // Connectors attached to moving notes follow them: their old path is no obstacle.
     if (s.type === 'arrow' && editor.getBindingsFromShape(s, 'arrow').some((b) => moving.has(b.toId)))
       continue
-    const r = boundsInParent(editor, s)
+    const b = boundsInParent(editor, s)
+    // A frame's name label sits just over its top edge: nothing goes there either (DANA-07).
+    const r = s.type === 'frame' ? { ...b, y: b.y - FRAME_LABEL_BAND, h: b.h + FRAME_LABEL_BAND } : b
     if (near && (r.x > near.x + near.w || r.y > near.y + near.h || r.x + r.w < near.x || r.y + r.h < near.y))
       continue
     out.push(r)
@@ -320,14 +329,45 @@ interface Spot {
   parentId: TLParentId
   x: number
   y: number
+  /** The frame (parentId) must first grow to this height to hold the block. */
+  growTo?: number
 }
 
 /**
- * Where a `size` block goes: beside the target inside its frame when there is room (the target's
- * shapes all sit in one frame, and the target is not that frame), else beside the target (or its
- * frame) on the page; in the middle of the view when there is no target.
+ * The frame results belong in (reviewer finding DANA-07): the target itself when it is one frame, else
+ * the frame all of the target's shapes sit in; null on the open canvas.
  */
-function spotFor(editor: Editor, target: AiTarget, size: Size): Spot {
+function homeFrame(editor: Editor, target: AiTarget): { frame: TLShape; isTarget: boolean } | null {
+  const shapes = target.ids.map((id) => editor.getShape(id)).filter((s): s is TLShape => !!s)
+  if (shapes.length === 1 && shapes[0]?.type === 'frame') return { frame: shapes[0], isTarget: true }
+  const parent = shapes[0]?.parentId
+  const frame = parent && shapes.every((s) => s.parentId === parent) ? frameOf(editor, parent) : null
+  return frame ? { frame, isTarget: false } : null
+}
+
+const frameSize = (frame: TLShape) => frame.props as { w: number; h: number }
+
+/** The inner width a block may take in its home frame (null: no limit on the open canvas). */
+function roomIn(home: ReturnType<typeof homeFrame>): number | null {
+  return home ? Math.max(NOTE_CELL, frameSize(home.frame).w - 2 * FRAME_MARGIN) : null
+}
+
+/** A frame grown to `h` would not run into anything beside or below it on its parent. */
+function mayGrow(editor: Editor, frame: TLShape, h: number): boolean {
+  const now = boundsInParent(editor, frame)
+  const grown = { x: now.x, y: now.y, w: now.w, h: now.h + (h - frameSize(frame).h) }
+  const extra = { x: grown.x, y: now.y + now.h, w: grown.w, h: grown.h - now.h }
+  return obstaclesIn(editor, frame.parentId, new Set([frame.id]), grown).every(
+    (o) => !(collides(extra, o, BESIDE_GAP / 2) && !collides(now, o)),
+  )
+}
+
+/**
+ * Where a `size` block goes (see the header): in its home frame (beside the selection when there is
+ * room, else at the end of the frame, which grows downwards), else beside the target on the page, never
+ * over a frame's name label; in the middle of the view when there is no target.
+ */
+function spotFor(editor: Editor, target: AiTarget, size: Size, home: ReturnType<typeof homeFrame>): Spot {
   const pageId = editor.getCurrentPageId()
   const shapes = target.ids.map((id) => editor.getShape(id)).filter((s): s is TLShape => !!s)
   if (!shapes.length || !target.bounds) {
@@ -344,27 +384,34 @@ function spotFor(editor: Editor, target: AiTarget, size: Size): Spot {
     )
     return { parentId: pageId, ...at }
   }
-  const parent = shapes[0]?.parentId
-  const frame = parent && shapes.every((s) => s.parentId === parent) ? frameOf(editor, parent) : null
-  if (frame) {
-    const props = frame.props as { w: number; h: number }
-    const inFrame = shapes.map((s) => boundsInParent(editor, s))
-    const anchor = union(inFrame) as Rect
-    const region = {
-      x: FRAME_MARGIN,
-      y: FRAME_MARGIN,
-      w: props.w - 2 * FRAME_MARGIN,
-      h: props.h - 2 * FRAME_MARGIN,
+  if (home) {
+    const { frame } = home
+    const props = frameSize(frame)
+    const inFrame = obstaclesIn(editor, frame.id, new Set())
+    if (!home.isTarget) {
+      const anchor = union(shapes.map((s) => boundsInParent(editor, s))) as Rect
+      const region = {
+        x: FRAME_MARGIN,
+        y: FRAME_MARGIN,
+        w: props.w - 2 * FRAME_MARGIN,
+        h: props.h - 2 * FRAME_MARGIN,
+      }
+      // Right of or below the selection (where people read on to), when the frame has room there.
+      const at = placeBeside(size, anchor, inFrame, region, ['right', 'below'])
+      if (at) return { parentId: frame.id, ...at }
     }
-    // Inside the frame only to the right of or below the selection (where people read on to);
-    // anywhere else in the frame reads as unrelated, and the page has room beside the frame.
-    const at = placeBeside(size, anchor, obstaclesIn(editor, frame.id, new Set()), region, ['right', 'below'])
-    if (at) return { parentId: frame.id, ...at }
+    const end = appendInFrame(size, props, inFrame)
+    if (end.h <= props.h) return { parentId: frame.id, x: end.x, y: end.y }
+    if (mayGrow(editor, frame, end.h)) return { parentId: frame.id, x: end.x, y: end.y, growTo: end.h }
   }
   // Outside: beside the outermost frame around the target, or the target itself, on the page.
   const outer = shapes
     .map((s) => editor.getShapeAncestors(s).find((a) => a.type === 'frame' && a.parentId === pageId) ?? s)
-    .map((s) => editor.getShapePageBounds(s))
+    .map((s) => {
+      const b = editor.getShapePageBounds(s)
+      // A frame's name label sits over its top edge: keep clear of it too.
+      return b && s.type === 'frame' ? new Box(b.x, b.y - FRAME_LABEL_BAND, b.w, b.h + FRAME_LABEL_BAND) : b
+    })
     .filter((b): b is Box => !!b)
   const anchorBox = union(outer.map((b) => ({ x: b.x, y: b.y, w: b.w, h: b.h }))) ?? {
     x: target.bounds.x,
@@ -384,7 +431,10 @@ function spotFor(editor: Editor, target: AiTarget, size: Size): Spot {
 function createBlock(
   editor: Editor,
   target: AiTarget,
-  build: (parentId: TLParentId) => {
+  build: (
+    parentId: TLParentId,
+    maxW: number | null,
+  ) => {
     ids: TLShapeId[]
     size: Size
     offsets: Map<TLShapeId, { x: number; y: number }>
@@ -396,8 +446,11 @@ function createBlock(
   editor.run(() => {
     // Built on the page first (to measure), then moved to its spot (and into a frame when it fits there).
     const pageId = editor.getCurrentPageId()
-    const { ids, size, offsets } = build(pageId)
-    const spot = spotFor(editor, target, size)
+    const home = homeFrame(editor, target)
+    const { ids, size, offsets } = build(pageId, roomIn(home))
+    const spot = spotFor(editor, target, size, home)
+    if (spot.growTo !== undefined && home)
+      editor.updateShape({ id: home.frame.id, type: 'frame', props: { h: spot.growTo } })
     if (spot.parentId !== pageId) editor.reparentShapes(ids, spot.parentId)
     editor.updateShapes(
       ids.map((id) => {
@@ -414,27 +467,37 @@ function createBlock(
   return created
 }
 
-/** Summarize (editors): a text block beside the target. */
+/**
+ * Summarize, added to the board from the summary panel: a card (a pale rounded box with a bold
+ * "Summary" line over the text, left-aligned), so it reads as a deliberate result, not stray text.
+ */
 export function applySummary(editor: Editor, target: AiTarget, summary: string): TLShapeId[] {
   return createBlock(
     editor,
     target,
-    (pageId) => {
+    (pageId, maxW) => {
       const id = createShapeId()
       editor.createShape({
         id,
-        type: 'text',
+        type: 'geo',
         parentId: pageId,
         x: 0,
         y: 0,
         props: {
+          geo: 'rectangle',
+          w: Math.min(SUMMARY_W, maxW ?? SUMMARY_W),
+          // tldraw grows the box to fit the text (growY).
+          h: 120,
           richText: headedRichText('Summary', summary),
-          size: 'm',
+          size: 's',
           font: FONT,
-          color: 'black',
-          textAlign: 'start',
-          autoSize: false,
-          w: SUMMARY_W,
+          color: 'light-violet',
+          labelColor: 'black',
+          // 'solid' is tldraw's pale tint of the colour (the tour's cards use it too).
+          fill: 'solid',
+          dash: 'solid',
+          align: 'start',
+          verticalAlign: 'start',
         },
         meta: meta({ kind: 'summary' }),
       })
@@ -499,11 +562,13 @@ export function applyNotes(
   return createBlock(
     editor,
     target,
-    (pageId) => {
+    (pageId, maxW) => {
       const headingId = createShapeId()
       const style = noteStyleOf(editor, target)
       const cell = NOTE_CELL * style.scale
-      const cols = opts.texts.length <= 4 ? opts.texts.length : opts.texts.length <= 9 ? 3 : 4
+      const wanted = opts.texts.length <= 4 ? opts.texts.length : opts.texts.length <= 9 ? 3 : 4
+      // As many columns as the frame has room for.
+      const cols = fitCols(opts.texts.length, wanted, cell, maxW)
       const g = grid(opts.texts.length, cols, { w: cell, h: cell })
       editor.createShape({
         id: headingId,

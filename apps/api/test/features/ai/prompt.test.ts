@@ -91,6 +91,58 @@ describe('what is sent', () => {
     expect(plan.themes.flatMap((t) => t.noteIds).sort()).toEqual([...NOTES].sort())
   })
 
+  it("themes: a template's prompt notes stay out once the team has written its own (R9)", async () => {
+    // A retro column: three unattributed template prompts, two marked instructions, and the team's
+    // notes (typed, revealed from a private brainstorm, added by AI).
+    const inFrame = { parentId: FRAME }
+    const prompts = ['What slowed us down?', 'What surprised us?', 'What would we do differently?']
+    const team = [
+      note('typed', 'CI queue was slow', { ...inFrame, x: 80, y: 400, textLastEditedBy: w.bob.userId }),
+      note('revealed', 'Late brief changes', {
+        ...inFrame,
+        x: 300,
+        y: 400,
+        meta: { drPrivateNote: { session: 'pbs_1' } },
+      }),
+      note('ai', 'Book review slots', { ...inFrame, x: 520, y: 400, meta: { drAi: { kind: 'idea' } } }),
+    ]
+    w.sync.setBoard(w.board, [
+      brainstormShapes()[0] as object,
+      ...prompts.map((t, i) => note(`p${i}`, t, { ...inFrame, x: 80 + i * 220, y: 180 })),
+      note('marked', 'Try it: drag a note', {
+        ...inFrame,
+        x: 740,
+        y: 180,
+        meta: { draftroomPrompt: 'true' },
+      }),
+      ...team,
+    ])
+    expect((await run(w.bob, w.board, { action: 'themes', shapeIds: [FRAME] })).statusCode).toBe(200)
+    expect(itemsOf(lastRequest()).map((i) => i.text)).toEqual([
+      'CI queue was slow',
+      'Late brief changes',
+      'Book review slots',
+    ])
+    // A frame of sample notes only (the Lobby tour) still groups as a whole; marked prompts never.
+    w.sync.setBoard(w.board, [
+      brainstormShapes()[0] as object,
+      ...prompts.map((t, i) => note(`p${i}`, t, { ...inFrame, x: 80 + i * 220, y: 180 })),
+      note('marked', 'Try it: drag a note', {
+        ...inFrame,
+        x: 740,
+        y: 180,
+        meta: { draftroomPrompt: 'true' },
+      }),
+    ])
+    expect((await run(w.bob, w.board, { action: 'themes', shapeIds: [FRAME] })).statusCode).toBe(200)
+    expect(itemsOf(lastRequest()).map((i) => i.text)).toEqual(prompts)
+    // Summaries still read everything.
+    expect(
+      (await run(w.bob, w.board, { action: 'summarize', shapeIds: [FRAME], mode: 'panel' })).statusCode,
+    ).toBe(200)
+    expect(itemsOf(lastRequest()).map((i) => i.text)).toContain('Try it: drag a note')
+  })
+
   it('summarize: notes, text, shape and connector labels of the selection; file cards never', async () => {
     expect(
       (await run(w.carol, w.board, { action: 'summarize', shapeIds: [FRAME], mode: 'panel' })).statusCode,

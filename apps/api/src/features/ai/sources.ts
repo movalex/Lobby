@@ -9,13 +9,16 @@
 // all the model ever sees of an id, so an answer can only point at items this call sent: any other id
 // it writes (a real shape id copied from a hostile note, say) matches nothing.
 //
+// "Group into themes" sends ideas only: unlocked sticky notes with text, less a template's prompt and
+// instruction notes (contracts splitThemeNotes, the same rule the web counts with; finding R9).
+//
 // Bounded work on untrusted records: at most MAX_VISITED records are looked at, rich text goes through
 // board-ops plainTextOf (node, depth and length budgets), every item is cut at MAX_ITEM_CHARS, and the
 // items stop at the caller's token budget (`truncated` then says so).
 
 import { plainTextOf } from '@draftroom/board-ops'
 import type { AiAction } from '@draftroom/contracts'
-import { AI_THEMES_MAX_NOTES } from '@draftroom/contracts'
+import { AI_THEMES_MAX_NOTES, splitThemeNotes } from '@draftroom/contracts'
 import type { RoomSnapshotJson } from '../../sync-internal.ts'
 
 export type SourceKind = 'note' | 'text' | 'shape' | 'arrow'
@@ -55,6 +58,7 @@ interface ShapeRec {
   y: number
   isLocked: boolean
   props: Record<string, unknown>
+  meta: Record<string, unknown>
 }
 
 const isObject = (v: unknown): v is Record<string, unknown> =>
@@ -78,6 +82,7 @@ export function shapesOf(snapshot: RoomSnapshotJson): Map<string, ShapeRec> {
       y: finite(s.y),
       isLocked: s.isLocked === true,
       props: isObject(s.props) ? s.props : {},
+      meta: isObject(s.meta) ? s.meta : {},
     })
   }
   return out
@@ -239,7 +244,7 @@ export function collectSources(
   }
 
   const themes = opts.action === 'themes'
-  const eligible: { s: ShapeRec; text: string; at: { x: number; y: number } }[] = []
+  let eligible: { s: ShapeRec; text: string; at: { x: number; y: number } }[] = []
   for (const s of picked) {
     if (themes && (s.type !== 'note' || lockedOrAncestor(s))) continue
     if (!KIND[s.type]) continue
@@ -247,6 +252,12 @@ export function collectSources(
     if (!text) continue
     eligible.push({ s, text, at: position(s) })
   }
+  // Themes group ideas only: a template's prompt and instruction notes stay where they are (R9).
+  if (themes)
+    eligible = splitThemeNotes(eligible, (e) => ({
+      meta: e.s.meta,
+      textLastEditedBy: e.s.props.textLastEditedBy,
+    })).ideas
   // Reading order: rows about a note tall, left to right.
   eligible.sort((a, b) => Math.floor(a.at.y / 120) - Math.floor(b.at.y / 120) || a.at.x - b.at.x)
   for (const e of eligible) addFrameName(shapes.get(e.s.parentId))

@@ -228,6 +228,7 @@ describe('shipped migrations', () => {
       '0015_board_search',
       '0016_ai_usage',
       '0017_comment_notifications',
+      '0018_ai_settings',
       '0019_checkpoint_reasons',
     ])
   })
@@ -252,6 +253,7 @@ describe('shipped migrations', () => {
       '0015_board_search',
       '0016_ai_usage',
       '0017_comment_notifications',
+      '0018_ai_settings',
       '0019_checkpoint_reasons',
     ])
     expect(await migrate(db)).toEqual({ applied: [], newer: [] })
@@ -267,6 +269,7 @@ describe('shipped migrations', () => {
       'asset_gc_snapshot_scans',
       'asset_versions',
       'audit_events',
+      'board_ai_settings',
       'board_asset_links',
       'board_checkpoint_state',
       'board_export_policies',
@@ -297,6 +300,7 @@ describe('shipped migrations', () => {
       'vote_sessions',
       'votes',
       'workshop_timers',
+      'workspace_ai_settings',
       'workspace_members',
       'workspaces',
     ])
@@ -336,6 +340,7 @@ describe('shipped migrations', () => {
       '0015_board_search',
       '0016_ai_usage',
       '0017_comment_notifications',
+      '0018_ai_settings',
       '0019_checkpoint_reasons',
     ])
     expect(await recorded()).toEqual(shipped.map((m) => m.name))

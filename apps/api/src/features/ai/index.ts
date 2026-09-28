@@ -3,6 +3,7 @@
 //
 //   GET  /api/boards/:bid/ai       → AiStatus: whether this person may use AI here, and how
 //   POST /api/boards/:bid/ai/run   AiRunInput → AiResult: a plan the client applies as canvas edits
+//   PUT  /api/boards/:bid/ai/settings, PUT /api/workspaces/:wid/ai/settings: AI on/off (settings.ts)
 //
 // Decisions (all server-side; the web only follows AiStatus):
 // - 404 for anyone who cannot view the board (nothing leaks); 401 without a session.
@@ -10,6 +11,9 @@
 //   checks. Viewers and commenters may only "Summarize" into a panel (view); everything that adds to the
 //   board needs edit on an active board (403 otherwise). On a board whose export policy is 'editors',
 //   the people it limits get no AI (it reads the content out): 403 AI_EXPORT_DISABLED.
+// - On a board where AI is off (its owner's choice, else the workspace default: settings.ts) nobody gets
+//   AI: 403 AI_BOARD_OFF, before anything is read or sent, and again right before sending (a call
+//   under way when the owner switches AI off sends nothing).
 // - The first call per person per workspace needs the "Sends the selected text to OpenAI" notice
 //   acknowledged (409 AI_NOTICE_REQUIRED until the client sends `acknowledged: true`, which is stored).
 // - The prompt is built from the board's sync snapshot for the requested shape ids (sources.ts), never
@@ -29,6 +33,7 @@ import {
   type AiOffReason,
   type AiResult,
   AiRunInput,
+  type AiSettings,
   type AiStatus,
 } from '@draftroom/contracts'
 import { can } from '@draftroom/permissions'
@@ -48,6 +53,7 @@ import { aiConfigured } from './config.ts'
 import { type ChatOutcome, createOpenAiClient, type OpenAiClient } from './openai.ts'
 import { actionsPlan, BadOutput, ideasPlan, summaryPlan, themesPlan } from './plan.ts'
 import { buildPrompt, overheadTokens, promptTokens, promptTokensCeiling } from './prompt.ts'
+import { aiOn, loadAiSwitches, registerAiSettings, settingsFor } from './settings.ts'
 import { collectSources } from './sources.ts'
 
 export const AI_STATUS_ROUTE = '/api/boards/:bid/ai'
@@ -70,6 +76,7 @@ export const AI_REQUESTS_PER_MINUTE = { max: 30, timeWindow: 60_000 }
 export const AI_STATUS_PER_MINUTE = { max: 120, timeWindow: 60_000 }
 
 const GUEST_MESSAGE = 'AI is for people with a Lobby account. Sign in with an account to use it.'
+const BOARD_OFF_MESSAGE = 'AI is turned off on this board. Its owner can turn it back on in the board menu.'
 const EXPORT_MESSAGE =
   'The board owner turned off copying and exporting for you, so AI is off on this board too.'
 
@@ -80,6 +87,8 @@ interface Gate {
   reason: AiOffReason | null
   canInsert: boolean
   canSummarize: boolean
+  /** Null when AI is not configured or off for all of Lobby, and for name-only guests. */
+  settings: AiSettings | null
 }
 
 export async function registerAi(app: FastifyInstance, ctx: FeatureContext): Promise<void> {
@@ -93,6 +102,7 @@ export async function registerAi(app: FastifyInstance, ctx: FeatureContext): Pro
     'Too many AI requests. Wait a moment and try again.',
   )
   const statusPerUser = keyedLimit(AI_STATUS_PER_MINUTE, now)
+  registerAiSettings(app, ctx)
   const client: OpenAiClient | null = cfg.apiKey
     ? createOpenAiClient({
         apiKey: cfg.apiKey,
@@ -108,12 +118,19 @@ export async function registerAi(app: FastifyInstance, ctx: FeatureContext): Pro
   /** What this person may do with AI on this board (`access` already passed `view`). */
   async function gate(access: BoardAccess, userId: string): Promise<Gate> {
     let reason: AiOffReason | null = null
+    let settings: AiSettings | null = null
     if (!cfg.enabled) reason = 'turned-off'
     else if (!aiConfigured(cfg)) reason = 'not-configured'
     else if ((await userKind(db, userId)) === 'guest') reason = 'guest'
-    else if (!(await mayExport(db, access, userId))) reason = 'export-policy'
+    else {
+      const switches = await loadAiSwitches(db, access.board)
+      settings = settingsFor(access, switches)
+      if (!aiOn(switches)) reason = 'board-off'
+      else if (!(await mayExport(db, access, userId))) reason = 'export-policy'
+    }
     return {
       reason,
+      settings,
       canSummarize: reason === null,
       canInsert: reason === null && can(access.role, 'edit', access.board.status),
     }
@@ -151,6 +168,7 @@ export async function registerAi(app: FastifyInstance, ctx: FeatureContext): Pro
         canSummarize: false,
         noticeAccepted: false,
         budget: null,
+        settings: g.settings,
       }
     return {
       enabled: true,
@@ -159,6 +177,7 @@ export async function registerAi(app: FastifyInstance, ctx: FeatureContext): Pro
       canSummarize: g.canSummarize,
       noticeAccepted: await noticeAccepted(access.board.workspace_id, user.id),
       budget: await budgetFor(access),
+      settings: g.settings,
     }
   })
 
@@ -174,6 +193,7 @@ export async function registerAi(app: FastifyInstance, ctx: FeatureContext): Pro
     if (g.reason === 'not-configured' || !client)
       throw new ApiError(503, AI_ERROR_CODES.notConfigured, 'AI isn’t set up for Lobby.')
     if (g.reason === 'guest') throw guestRefused(GUEST_MESSAGE)
+    if (g.reason === 'board-off') throw new ApiError(403, AI_ERROR_CODES.boardOff, BOARD_OFF_MESSAGE)
     if (g.reason === 'export-policy') throw new ApiError(403, AI_ERROR_CODES.exportDisabled, EXPORT_MESSAGE)
     const inserts = input.action !== 'summarize' || input.mode === 'insert'
     if (inserts && !g.canInsert) throw forbidden('Only editors can add AI results to this board.')
@@ -243,6 +263,11 @@ export async function registerAi(app: FastifyInstance, ctx: FeatureContext): Pro
       )
     if (input.action !== 'ideas' && sources.items.length === 0)
       throw new ApiError(400, AI_ERROR_CODES.nothingToSend, 'There’s no text in the selection to send.')
+
+    // The owner may have switched AI off while the board was being read (the gate ran before that):
+    // read the switch again, so nothing is sent once it is off.
+    if (!aiOn(await loadAiSwitches(db, access.board)))
+      throw new ApiError(403, AI_ERROR_CODES.boardOff, BOARD_OFF_MESSAGE)
 
     // The input cap is checked against the estimate; the budgets reserve the worst case, which a board
     // full of token-dense text really reaches (prompt.ts), so a call never costs more than it reserved

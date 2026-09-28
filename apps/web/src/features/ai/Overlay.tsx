@@ -5,12 +5,12 @@
 //  - the summary panel for people who cannot edit (their summary is shown, not inserted).
 // Everything is driven by the atoms in runtime.ts (useValue, narrow selectors); nothing runs per frame.
 
-import { AI_IDEAS_DEFAULT, AI_IDEAS_MAX, AI_PROMPT_MAX_CHARS } from '@draftroom/contracts'
+import { AI_IDEAS_DEFAULT, AI_IDEAS_MAX, AI_PROMPT_MAX_CHARS, AI_SETTINGS_EVENT } from '@draftroom/contracts'
 import { type ReactNode, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import { type Editor, useEditor, useValue } from 'tldraw'
 import type { FeatureContext } from '../types.ts'
-import { cancelAiJob, closeAiMenu, refreshAiStatus, runAi } from './actions.ts'
-import { budgetLine } from './copy.ts'
+import { addSummaryToBoard, cancelAiJob, closeAiMenu, refreshAiStatus, runAi } from './actions.ts'
+import { budgetLine, groupNames, themesHint } from './copy.ts'
 import { ActionIcon, SparkIcon, Spinner } from './icons.tsx'
 import {
   ACTION_LABELS,
@@ -141,6 +141,7 @@ function AiPopover({ menu }: { menu: AiMenuState }) {
       {menu.view === 'menu' && <MenuView menu={menu} titleId={titleId} onClose={() => close(true)} />}
       {menu.view === 'ideas' && <IdeasView menu={menu} titleId={titleId} onClose={() => close(true)} />}
       {menu.view === 'notice' && <NoticeView menu={menu} titleId={titleId} onClose={() => close(true)} />}
+      {menu.view === 'regroup' && <RegroupView menu={menu} titleId={titleId} onClose={() => close(true)} />}
     </div>
   )
 }
@@ -229,7 +230,7 @@ function MenuView({ menu, titleId, onClose }: { menu: AiMenuState; titleId: stri
             target.texts === 0
               ? 'Nothing with text selected'
               : insert
-                ? 'A short summary beside it'
+                ? 'Read it first, then add it to the board'
                 : 'A short summary, just for you'
           }
           disabled={target.texts === 0}
@@ -239,13 +240,13 @@ function MenuView({ menu, titleId, onClose }: { menu: AiMenuState; titleId: stri
           <>
             <Item
               action="themes"
-              hint={
-                target.notes < 2
-                  ? 'Needs two or more sticky notes'
-                  : `Sorts ${target.notes} notes into labelled groups`
-              }
+              hint={themesHint(target.notes, target.prompts)}
               disabled={target.notes < 2}
-              onClick={() => run({ action: 'themes' })}
+              onClick={() =>
+                target.groups.length
+                  ? aiMenu(editor).set({ ...menu, view: 'regroup' })
+                  : run({ action: 'themes' })
+              }
             />
             <Item
               action="actions"
@@ -346,6 +347,38 @@ function IdeasView({ menu, titleId, onClose }: { menu: AiMenuState; titleId: str
   )
 }
 
+/** Before regrouping notes that already sit in groups (DANA-10): say so, and let them keep the groups. */
+function RegroupView({ menu, titleId, onClose }: { menu: AiMenuState; titleId: string; onClose(): void }) {
+  const editor = useEditor()
+  return (
+    <>
+      <Head titleId={titleId} onClose={onClose}>
+        These notes are already grouped
+      </Head>
+      <div className="dr-ai-notice" data-testid="ai-regroup">
+        <p>
+          They sit under {groupNames(menu.target.groups)}. Grouping into themes adds new labelled groups
+          beside those boxes, which stay where they are.
+        </p>
+        <p className="dr-ai-notice__muted">One Ctrl+Z puts every note back.</p>
+        <div className="dr-ai-notice__actions">
+          <button type="button" className="dr-btn dr-btn--sm" data-autofocus onClick={onClose}>
+            Keep the groups
+          </button>
+          <button
+            type="button"
+            className="dr-btn dr-btn--primary dr-btn--sm"
+            data-testid="ai-regroup-go"
+            onClick={() => void runAi(editor, { action: 'themes' }, menu.target, { at: menu.at })}
+          >
+            Group anyway
+          </button>
+        </div>
+      </div>
+    </>
+  )
+}
+
 function NoticeView({ menu, titleId, onClose }: { menu: AiMenuState; titleId: string; onClose(): void }) {
   const editor = useEditor()
   const pending = menu.pending
@@ -419,6 +452,11 @@ function Busy() {
 function SummaryPanel() {
   const editor = useEditor()
   const panel = useValue('dr-ai-panel', () => aiPanel(editor).get(), [editor])
+  const canAdd = useValue(
+    'dr-ai-panel-can-add',
+    () => !editor.getIsReadonly() && aiStatus(editor).get()?.canInsert === true,
+    [editor],
+  )
   const close = () => aiPanel(editor).set(null)
   const ref = useIsolated<HTMLElement>((e) => {
     if (e.key === 'Escape') close()
@@ -449,8 +487,12 @@ function SummaryPanel() {
       {panel.truncated && (
         <p className="dr-ai-pop__foot">Only part of the selection fitted in one request.</p>
       )}
+      <p className="dr-ai-pop__foot">
+        {canAdd
+          ? 'Only you can see this. Written by AI: check it before you add it to the board.'
+          : 'Only you can see this. Written by AI: check before you rely on it.'}
+      </p>
       <div className="dr-ai-panel__actions">
-        <span className="dr-ai-pop__foot">Written by AI: check before you rely on it.</span>
         <button
           type="button"
           className="dr-btn dr-btn--sm"
@@ -463,6 +505,16 @@ function SummaryPanel() {
         >
           {copied ? 'Copied' : 'Copy'}
         </button>
+        {canAdd && (
+          <button
+            type="button"
+            className="dr-btn dr-btn--primary dr-btn--sm"
+            data-testid="ai-summary-add"
+            onClick={() => addSummaryToBoard(editor)}
+          >
+            Add to board
+          </button>
+        )}
       </div>
     </section>
   )
@@ -482,6 +534,13 @@ export function AiOverlay({ ctx }: { ctx: FeatureContext }) {
     void refreshAiStatus(editor, abort.signal)
     return () => abort.abort()
   }, [editor, boardId, role, status])
+  // The owner turned AI on or off for this board (or its workspace default): ask again at once.
+  const events = ctx.events
+  useEffect(() => {
+    const again = () => void refreshAiStatus(editor)
+    const offSettings = events.on(AI_SETTINGS_EVENT, again)
+    return () => offSettings()
+  }, [editor, events])
   const menu = useValue('dr-ai-menu', () => aiMenu(editor).get(), [editor])
   const enabled = useValue('dr-ai-on', () => aiStatus(editor).get()?.enabled === true, [editor])
   if (!enabled) return null

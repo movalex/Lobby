@@ -18,6 +18,8 @@
 // - adding results to the board needs edit on an active board; "Summarize" into a panel needs view;
 // - on a board whose export policy is 'editors', the people it limits get no AI at all (AI reads the
 //   content out): 403 AI_EXPORT_DISABLED, AiStatus 'export-policy'.
+// - the board owner can turn AI off for a board, and workspace owners and admins for their workspace
+//   (a default each board may override): 403 AI_BOARD_OFF, AiStatus 'board-off'.
 // Hard cost limits (the OpenAI key has no provider-side cap), all server-side and in the usage ledger:
 // input and output tokens per call, calls per person per hour, tokens per person, per workspace and
 // for the whole of Lobby per UTC day, and a global kill switch (DRAFTROOM_AI=off).
@@ -79,8 +81,11 @@ export const AiRunInput = z.discriminatedUnion('action', [
 ])
 export type AiRunInput = z.infer<typeof AiRunInput>
 
-/** Why AI is not offered to this person on this board (the web hides the feature for every reason). */
-export const AI_OFF_REASONS = ['not-configured', 'turned-off', 'guest', 'export-policy'] as const
+/**
+ * Why AI is not offered to this person on this board (the web hides the feature for every reason).
+ * 'board-off': the board owner turned AI off for this board, or it follows a workspace default of off.
+ */
+export const AI_OFF_REASONS = ['not-configured', 'turned-off', 'guest', 'export-policy', 'board-off'] as const
 export const AiOffReason = z.enum(AI_OFF_REASONS)
 export type AiOffReason = z.infer<typeof AiOffReason>
 
@@ -92,6 +97,34 @@ export const AiBudget = z.object({
   resetsAt: z.string(),
 })
 export type AiBudget = z.infer<typeof AiBudget>
+
+/**
+ * AI on or off for one board (reviewer finding DANA-04): the board's own choice, else the workspace
+ * default, else on. Board owners (workspace owners and admins included) set the board; workspace owners
+ * and admins set the default. The api refuses every AI call on a board where it is off.
+ */
+export const AiSettings = z.object({
+  /** The board's own choice, or null when it follows the workspace default. */
+  board: z.boolean().nullable(),
+  /** The default for the workspace's boards without their own choice. */
+  workspaceDefault: z.boolean(),
+  /** Whether AI is on for this board (board ?? workspaceDefault). */
+  on: z.boolean(),
+  /** The caller may change the board's choice. */
+  canManageBoard: z.boolean(),
+  /** The caller may change the workspace default. */
+  canManageWorkspace: z.boolean(),
+})
+export type AiSettings = z.infer<typeof AiSettings>
+
+/** PUT /api/boards/:bid/ai/settings (board owners): on, off, or null to follow the workspace default. */
+export const PutAiBoardSettingsInput = z.object({ enabled: z.boolean().nullable() }).strict()
+export type PutAiBoardSettingsInput = z.infer<typeof PutAiBoardSettingsInput>
+/** PUT /api/workspaces/:wid/ai/settings (workspace owners and admins): the default for its boards. */
+export const PutAiWorkspaceSettingsInput = z.object({ enabled: z.boolean() }).strict()
+export type PutAiWorkspaceSettingsInput = z.infer<typeof PutAiWorkspaceSettingsInput>
+/** Board event after the board's choice or its workspace default changed: a hint to re-read AiStatus. */
+export const AI_SETTINGS_EVENT = 'ai.settings'
 
 export const AiStatus = z.object({
   enabled: z.boolean(),
@@ -105,6 +138,11 @@ export const AiStatus = z.object({
   noticeAccepted: z.boolean(),
   /** Workspace owners only; null for everyone else. */
   budget: AiBudget.nullable(),
+  /**
+   * AI on/off for this board, for everyone with an account who may view it (so its owners can turn it
+   * back on). Null when AI is not configured or switched off for all of Lobby, and for name-only guests.
+   */
+  settings: AiSettings.nullable(),
 })
 export type AiStatus = z.infer<typeof AiStatus>
 
@@ -134,6 +172,7 @@ export const AI_ERROR_CODES = {
   notConfigured: 'AI_NOT_CONFIGURED',
   turnedOff: 'AI_TURNED_OFF',
   exportDisabled: 'AI_EXPORT_DISABLED',
+  boardOff: 'AI_BOARD_OFF',
   noticeRequired: 'AI_NOTICE_REQUIRED',
   nothingToSend: 'AI_NOTHING_TO_SEND',
   nothingToGroup: 'AI_NOTHING_TO_GROUP',
@@ -147,3 +186,56 @@ export const AI_ERROR_CODES = {
   badOutput: 'AI_BAD_OUTPUT',
   refused: 'AI_REFUSED',
 } as const
+
+// ---- Which sticky notes "Group into themes" moves (reviewer findings R9, DANA-10) ------------------------
+//
+// A board's own prompts are not ideas: the orange "What slowed us down?" notes a template puts at the
+// top of a retro column, or an instruction note, stay where they are. The api (which decides what is
+// sent) and the web (which counts notes for the menu) apply the same rule:
+// - a note whose meta has AI_PROMPT_META_KEY set is a prompt, always;
+// - the team's own notes are the ones someone typed (tldraw's `textLastEditedBy` names them), revealed
+//   private-brainstorm notes (`meta.drPrivateNote`) and notes AI added (`meta.drAi`);
+// - any other note (placed by a template: unattributed and unmarked) counts as a prompt only while the
+//   same selection holds at least two of the team's own notes, so a board of sample notes (the Lobby
+//   tour's Brainstorm) still groups as a whole.
+
+/** Meta key a template (or anyone) may set on a note that is a prompt or an instruction, not an idea. */
+export const AI_PROMPT_META_KEY = 'draftroomPrompt'
+
+export interface AiNoteFacts {
+  /** The note's meta (any shape; only a few keys are looked at). */
+  meta: unknown
+  /** tldraw 5.4.2 `props.textLastEditedBy`: who last typed the note's text, if anyone. */
+  textLastEditedBy: unknown
+}
+
+const metaRecord = (f: AiNoteFacts) =>
+  typeof f.meta === 'object' && f.meta !== null ? (f.meta as Record<string, unknown>) : {}
+const isObj = (v: unknown) => typeof v === 'object' && v !== null
+
+/** Marked as a prompt or an instruction. */
+export function isMarkedPrompt(f: AiNoteFacts): boolean {
+  const v = metaRecord(f)[AI_PROMPT_META_KEY]
+  return v !== undefined && v !== null && v !== false && v !== ''
+}
+
+/** Typed by someone, revealed from a private brainstorm, or added by AI (and not marked a prompt). */
+export function isTeamNote(f: AiNoteFacts): boolean {
+  if (isMarkedPrompt(f)) return false
+  if (typeof f.textLastEditedBy === 'string' && f.textLastEditedBy !== '') return true
+  const m = metaRecord(f)
+  return isObj(m.drPrivateNote) || isObj(m.drAi)
+}
+
+/** Splits candidate notes into the ideas to group and the prompts that stay where they are. */
+export function splitThemeNotes<T>(
+  notes: readonly T[],
+  facts: (n: T) => AiNoteFacts,
+): { ideas: T[]; prompts: T[] } {
+  const marked = notes.filter((n) => isMarkedPrompt(facts(n)))
+  const rest = notes.filter((n) => !isMarkedPrompt(facts(n)))
+  const team = rest.filter((n) => isTeamNote(facts(n)))
+  if (team.length >= 2 && team.length < rest.length)
+    return { ideas: team, prompts: [...marked, ...rest.filter((n) => !isTeamNote(facts(n)))] }
+  return { ideas: rest, prompts: marked }
+}
