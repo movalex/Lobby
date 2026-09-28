@@ -66,7 +66,8 @@ describe('CSV tags column', () => {
     const rows = readCsv(boardCsv(records, new Set([sid('n1')])))
     expect(rows).toEqual([
       ['id', 'type', 'text', 'frame', 'color', 'x', 'y', 'tags'],
-      [sid('n1'), 'note', 'Checkout is slow', '', 'yellow', '0', '0', 'IDEA; Research'],
+      // A note's colour is the palette's name (stored 'yellow' is "Marigold"; final review R14).
+      [sid('n1'), 'note', 'Checkout is slow', '', 'Marigold', '0', '0', 'IDEA; Research'],
     ])
   })
 })

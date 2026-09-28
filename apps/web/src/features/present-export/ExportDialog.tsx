@@ -5,6 +5,7 @@ import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import { type Editor, type TLShape, type TLShapeId, useValue } from 'tldraw'
 import { Dialog } from '../../ui/Dialog.tsx'
 import { exportPolicyOf, exportPolicySentence } from '../sharing/export-policy.ts'
+import { voteResultsForExport } from '../workshops/vote-export.ts'
 import { type FrameEntry, frameOutline } from './board-ops.ts'
 import type { Controller, ExportRequest } from './controller.ts'
 import { boardCsv, csvBlob, csvRowCount } from './csv-export.ts'
@@ -298,7 +299,8 @@ export function ExportDialog({
       const ids = hasSelection
         ? new Set<string>(editor.getShapeAndDescendantIds(editor.getSelectedShapeIds()))
         : undefined
-      const csv = boardCsv(editor.store.allRecords(), ids)
+      // A revealed vote adds its counts (R14), as this person sees them on the board.
+      const csv = boardCsv(editor.store.allRecords(), ids, { votes: voteResultsForExport(editor) })
       const name = exportFilename(boardTitle, 'csv', ids ? 'selection' : undefined)
       downloadBlob(csvBlob(csv), name)
       return `Downloaded “${name}” (${plural(csvRowCount(csv), 'row')}).`

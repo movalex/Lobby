@@ -30,10 +30,80 @@ export const NEW_COMMENT_CAP_WINDOW_MS = 60 * 60_000
  * so a per-author cap alone multiplies by the guests one person can create (link-caps.ts).
  */
 export const NEW_COMMENT_BOARD_CAP = 20
+/**
+ * NC-V4: at most this many 'mention' notifications from one author on one board (all recipients
+ * together, read or not) within MENTION_CAP_WINDOW_MS. A comment may mention up to 50 people, and the
+ * write budget allows 120 comments a minute, so without this one author could post thousands of bell
+ * items an hour. Past it the mention still shows in the comment; see withinMentionCap for what the
+ * mentioned person gets instead.
+ */
+export const MENTION_NOTIFY_CAP = 100
+export const MENTION_CAP_WINDOW_MS = 60 * 60_000
+
+/** pg_advisory_xact_lock namespace (the two-key form) of one board's capped notifications ("DRNC"). */
+export const NOTIFY_LOCK_NS = 0x44524e43
+
+type CommentNotificationKind = Exclude<NotificationKind, 'access_request'>
 
 export interface NewNotification {
   userId: string
-  kind: Exclude<NotificationKind, 'access_request'>
+  kind: CommentNotificationKind
+  /**
+   * For a 'mention': what this person would get without the mention (a thread follower's 'reply', or
+   * a board owner's 'new_comment' for a new thread), used when the author is past MENTION_NOTIFY_CAP.
+   */
+  fallback?: Exclude<CommentNotificationKind, 'mention'>
+}
+
+/**
+ * NC-V3: the caps below are "count, then insert", so two transactions that both count before either
+ * commits could both insert past a cap (real Postgres runs requests on separate connections). This lock
+ * serializes, per board, every transaction that inserts capped notifications, until it commits; READ
+ * COMMITTED gives each later statement a fresh snapshot, so the next holder counts the rows the last
+ * one committed. Take it BEFORE any row lock in the transaction (only reads may come first): then a
+ * transaction waiting for it holds no row locks, so it can never close a deadlock cycle with the row
+ * lock order in access.ts.
+ */
+export async function lockBoardNotifications(q: Queryable, boardId: string): Promise<void> {
+  await q.query('SELECT pg_advisory_xact_lock($1::int, hashtext($2::text))', [NOTIFY_LOCK_NS, boardId])
+}
+
+/**
+ * NC-V4: keeps at most MENTION_NOTIFY_CAP 'mention' items from this author on this board within the
+ * window (the first mentioned people, in order, keep theirs). A mention past the cap becomes its
+ * `fallback` (then capped like any item of that kind), or is dropped. Call under
+ * lockBoardNotifications.
+ */
+export async function withinMentionCap(
+  q: Queryable,
+  base: { boardId: string; actorId: string; at: Date },
+  recipients: readonly NewNotification[],
+): Promise<NewNotification[]> {
+  if (!recipients.some((r) => r.kind === 'mention')) return [...recipients]
+  const sent = await q.one<{ n: number }>(
+    `SELECT count(*)::int AS n FROM notifications
+      WHERE board_id = $1 AND actor_id = $2 AND kind = 'mention' AND created_at > $3`,
+    [base.boardId, base.actorId, new Date(base.at.getTime() - MENTION_CAP_WINDOW_MS)],
+  )
+  let room = Math.max(0, MENTION_NOTIFY_CAP - sent.n)
+  const out: NewNotification[] = []
+  for (const r of recipients) {
+    if (r.kind !== 'mention') out.push(r)
+    else if (room > 0) {
+      room--
+      out.push(r)
+    } else if (r.fallback) out.push({ userId: r.userId, kind: r.fallback })
+  }
+  return out
+}
+
+/** Every cap, in order (a mention past its cap may become a capped 'new_comment'). */
+export async function withinNotificationCaps(
+  q: Queryable,
+  base: { boardId: string; actorId: string; at: Date },
+  recipients: readonly NewNotification[],
+): Promise<NewNotification[]> {
+  return withinNewCommentCap(q, base, await withinMentionCap(q, base, recipients))
 }
 
 /**
@@ -53,8 +123,9 @@ export async function boardOwners(q: Queryable, boardId: string): Promise<string
  * author on this board (within the window), or NEW_COMMENT_BOARD_CAP from anyone on this board, so
  * neither a guest opening thread after thread nor a crowd of guests from one link can flood an owner's
  * bell. Only items the owner can still see count: one whose comment was deleted is hidden from the
- * bell (and so can never be read), so it must not hold a slot. Mentions and replies are not capped
- * here (the per-person write budget bounds them).
+ * bell (and so can never be read), so it must not hold a slot. Mentions have their own cap
+ * (withinMentionCap); replies are bounded by the per-person write budget and the thread's size. Call
+ * under lockBoardNotifications.
  */
 export async function withinNewCommentCap(
   q: Queryable,

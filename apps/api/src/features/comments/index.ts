@@ -3,7 +3,8 @@
 // Threads anchored to a board point, a shape or a file card; replies; edit/delete own comments (board
 // owners may delete any, softly); resolve/reopen; per-person read marks; @mentions that notify only
 // people who can view the board; in-app notifications (no email), including a new thread for the
-// board's owners (DANA-02, capped per author and per board). Every route decides access with
+// board's owners (DANA-02, capped per author and per board), and mentions capped per author and board
+// (NC-V4); the caps hold under concurrency through a per-board advisory lock (NC-V3). Every route decides access with
 // requireBoardAction ('comment' to write, 'view' to read); authorship always comes from the session.
 // Board events are published after the transaction commits.
 
@@ -31,11 +32,12 @@ import {
   boardOwners,
   insertNotifications,
   listNotifications,
+  lockBoardNotifications,
   markNotificationsRead,
   markThreadNotificationsRead,
   type NewNotification,
   threadFollowers,
-  withinNewCommentCap,
+  withinNotificationCaps,
 } from './notifications.ts'
 import { createWriteLimiter } from './rate.ts'
 import {
@@ -90,7 +92,8 @@ async function insertMentions(
 /**
  * Who gets notified about a new comment: mentioned people ('mention'), the thread's followers ('reply')
  * and, for a new thread, the board's owners ('new_comment', DANA-02); never the author, only people who
- * can view the board now, one notification each (the most specific kind wins).
+ * can view the board now, one notification each (the most specific kind wins; a mention remembers the
+ * kind it replaced, for the mention cap). Callers pass the result through withinNotificationCaps.
  */
 async function recipientsFor(
   tx: Queryable,
@@ -105,11 +108,15 @@ async function recipientsFor(
   const out: NewNotification[] = []
   for (const userId of candidates) {
     if (!viewers.has(userId)) continue
-    const kind = mentioned.includes(userId) ? 'mention' : followers.includes(userId) ? 'reply' : 'new_comment'
-    out.push({ userId, kind })
+    const plain = followers.includes(userId) ? 'reply' : owners.includes(userId) ? 'new_comment' : null
+    if (!mentioned.includes(userId)) out.push({ userId, kind: plain ?? 'new_comment' })
+    else out.push(plain ? { userId, kind: 'mention', fallback: plain } : { userId, kind: 'mention' })
   }
   return out
 }
+
+/** Whether a comment body asks to mention anyone (before any check: decides whether to take the lock). */
+const mayMention = (body: string) => mentionedUserIds(body).length > 0
 
 async function touchThread(tx: Queryable, threadId: string, at: Date) {
   await tx.query('UPDATE comment_threads SET updated_at = $2 WHERE id = $1', [threadId, at])
@@ -187,6 +194,8 @@ export async function registerComments(app: FastifyInstance, ctx: FeatureContext
       const access = await requireBoardAction(tx, bid, user.id, 'comment')
       spend(user.id)
       const board = access.board
+      // NC-V3: before any row lock (the thread insert below locks the board row's key).
+      await lockBoardNotifications(tx, board.id)
       const count = await tx.one<{ n: number }>(
         'SELECT count(*)::int AS n FROM comment_threads WHERE board_id = $1 AND workspace_id = $2',
         [board.id, board.workspace_id],
@@ -222,7 +231,7 @@ export async function registerComments(app: FastifyInstance, ctx: FeatureContext
       await insertNotifications(
         tx,
         { workspaceId: board.workspace_id, boardId: board.id, threadId, commentId, actorId: user.id, at },
-        await withinNewCommentCap(tx, { boardId: board.id, actorId: user.id, at }, recipients),
+        await withinNotificationCaps(tx, { boardId: board.id, actorId: user.id, at }, recipients),
       )
       return mustLoadThread(tx, board, threadId)
     })
@@ -238,6 +247,8 @@ export async function registerComments(app: FastifyInstance, ctx: FeatureContext
       const { row, access } = await threadAccess(tx, tid, user.id, 'comment')
       spend(user.id)
       const board = access.board
+      // NC-V3/NC-V4: mentions are capped, so before the thread's row lock (lockBoardNotifications).
+      if (mayMention(input.body)) await lockBoardNotifications(tx, board.id)
       // Serialize replies to one thread (the per-thread cap and follower set are read below).
       await tx.query('SELECT id FROM comment_threads WHERE id = $1 FOR UPDATE', [row.id])
       const count = await tx.one<{ n: number }>(
@@ -274,7 +285,11 @@ export async function registerComments(app: FastifyInstance, ctx: FeatureContext
           actorId: user.id,
           at,
         },
-        await recipientsFor(tx, board, user.id, mentioned, followers),
+        await withinNotificationCaps(
+          tx,
+          { boardId: board.id, actorId: user.id, at },
+          await recipientsFor(tx, board, user.id, mentioned, followers),
+        ),
       )
       return mustLoadThread(tx, board, row.id)
     })
@@ -291,6 +306,8 @@ export async function registerComments(app: FastifyInstance, ctx: FeatureContext
       if (comment.author_id !== user.id) throw forbidden('Only the author can edit a comment.')
       spend(user.id)
       const board = access.board
+      // NC-V3/NC-V4: before the comment's row lock (the UPDATE below).
+      if (mayMention(input.body)) await lockBoardNotifications(tx, board.id)
       const { body, mentioned } = await resolveMentions(tx, board, input.body)
       const at = now()
       const before = await tx.query<{ user_id: string }>(
@@ -318,7 +335,11 @@ export async function registerComments(app: FastifyInstance, ctx: FeatureContext
           actorId: user.id,
           at,
         },
-        await recipientsFor(tx, board, user.id, added, []),
+        await withinNotificationCaps(
+          tx,
+          { boardId: board.id, actorId: user.id, at },
+          await recipientsFor(tx, board, user.id, added, []),
+        ),
       )
       return mustLoadThread(tx, board, comment.thread_id)
     })
