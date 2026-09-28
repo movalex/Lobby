@@ -1,7 +1,8 @@
 // A read-only look at a checkpoint (docs/WAVE4-CONTRACTS.md checkpoints-2): its records are loaded into
 // a separate, in-memory tldraw store (never synced, never saved) inside a modal <dialog>. The live board
 // behind it is left alone: its editor is blurred first, so keys pressed in here can never reach it, and
-// the dialog makes the rest of the page inert. Images and file cards resolve through this board's own
+// the dialog makes the rest of the page inert; closing it focuses that editor again (else every board
+// shortcut stays dead until a reload). Images and file cards resolve through this board's own
 // file access, like on the canvas. "Restore as new board" is the panel's own action.
 
 import type { BoardCheckpoint, CheckpointContent } from '@draftroom/contracts'
@@ -63,6 +64,10 @@ export function CheckpointPreview({
     if (!dialog.open) dialog.showModal()
     return () => {
       if (dialog.open) dialog.close()
+      // The board gets the keyboard back (DANA-01). tldraw ignores every shortcut (Delete, N, Ctrl+Z)
+      // while its editor counts as blurred, and clicking the canvas does not undo that. Its shortcuts
+      // listen on the document, so DOM focus can still go back to the opener (the dialog pattern).
+      if (!liveEditor.isDisposed) liveEditor.focus({ focusContainer: false })
       if (opener?.isConnected) opener.focus()
     }
   }, [liveEditor])

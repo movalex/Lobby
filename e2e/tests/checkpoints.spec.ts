@@ -1,14 +1,22 @@
 // Automatic checkpoints, preview and deletion (docs/WAVE4-CONTRACTS.md checkpoints-2; REV-10). Driven
 // through the real UI of several browsers against the real api + sync server: the last editor leaving
 // makes an automatic checkpoint that every open History panel lists under "Automatic"; the preview
-// shows that version read-only and never touches the live board; restoring from it first saves the
-// board as it is; owners delete checkpoints, editors and name-only guests cannot (UI and server).
+// shows that version read-only and never touches the live board, which gets the keyboard back when it
+// closes (DANA-01); restoring from it first saves the board as it is, and so does a private-notes
+// reveal (R10); owners delete checkpoints, editors cannot (UI and server); name-only guests get no
+// History at all (DANA-05); an empty text box tldraw removes by itself is no "deletion" (R17).
 // The hourly rhythm and retention are covered by the api tests (a test clock), not here.
 import type { Browser, Page } from '@playwright/test'
-import { edit, read, waitForBoard } from './support/board.ts'
+import { edit, read, shapeCenterOnScreen, waitForBoard } from './support/board.ts'
 import { richText } from './support/editor.ts'
 import { expect, test } from './support/fixtures.ts'
-import { expectServerHasTab, historyPanel, openHistory, serverShapes } from './support/history.ts'
+import {
+  clickEmptyCanvas,
+  expectServerHasTab,
+  historyPanel,
+  openHistory,
+  serverShapes,
+} from './support/history.ts'
 import { WEB_URL } from './support/ports.ts'
 
 const NOTE = 'shape:cp-launch-plan'
@@ -136,6 +144,163 @@ test('the last editor leaving saves an automatic checkpoint; its read-only previ
   })
 })
 
+test('after a preview closes, the board has the keyboard again: Delete, Ctrl+Z and N work (DANA-01)', async ({
+  session,
+  board,
+  users,
+}) => {
+  const aliceApi = await users.api('alice')
+  const alice = await session('alice')
+  const page = alice.page
+  await putNote(page, 'Keep the keyboard')
+  await expectServerHasTab(aliceApi, board, page)
+  await openHistory(page)
+  await page.getByTestId('checkpoint-name').fill('Before clean-up')
+  await page.getByTestId('checkpoint-save').click()
+  const row = manualRow(page, 'Before clean-up')
+  await expect(row).toHaveCount(1)
+  const noteOnBoard = () => read(page, (editor, id) => editor.getShape(id) !== undefined, NOTE)
+  const boardFocused = () =>
+    page.evaluate(() => (window.editor as unknown as { getIsFocused(): boolean }).getIsFocused())
+
+  for (const how of ['close button', 'Escape'] as const) {
+    await test.step(`closed with the ${how}: a clicked note goes with Delete and comes back with Ctrl+Z`, async () => {
+      // (Ctrl+Z brings the selection back too, and a click on a selected note starts editing its text.)
+      await edit(page, (editor) => editor.selectNone())
+      await row.getByTestId('checkpoint-preview').click()
+      const dialog = preview(page)
+      await expect(dialog.getByTestId('checkpoint-preview-canvas')).toContainText('Keep the keyboard')
+      expect(await boardFocused()).toBe(false) // keys pressed in the preview never reach the board
+      if (how === 'Escape') await page.keyboard.press('Escape')
+      else await dialog.getByTestId('checkpoint-preview-close').click()
+      await expect(dialog).toHaveCount(0)
+      await expect(row.getByTestId('checkpoint-preview')).toBeFocused() // back where it was opened
+      expect(await boardFocused()).toBe(true)
+      const at = await shapeCenterOnScreen(page, NOTE)
+      await page.mouse.click(at.x, at.y)
+      await page.keyboard.press('Delete')
+      await expect.poll(noteOnBoard).toBe(false)
+      await page.keyboard.press('ControlOrMeta+z')
+      await expect.poll(noteOnBoard).toBe(true)
+    })
+  }
+
+  await test.step('N picks the sticky-note tool', async () => {
+    // Nothing selected (with one note selected, typing a letter writes into it: canvas-ux).
+    await clickEmptyCanvas(page)
+    await page.keyboard.press('n')
+    await expect.poll(() => read(page, (editor) => editor.getCurrentToolId())).toBe('note')
+  })
+})
+
+test('a private-notes reveal saves the board just before: History lists "Before revealing private notes" (R10)', async ({
+  session,
+  board,
+  users,
+}) => {
+  const aliceApi = await users.api('alice')
+  const alice = await session('alice')
+  const page = alice.page
+  await openHistory(page)
+  await openAutomatic(page)
+  await expect(page.getByTestId('checkpoint-auto')).toContainText(
+    'None yet. Lobby saves one when everyone leaves, or after an hour of changes.',
+  )
+  const frame = { id: 'shape:cp-ideas', x: 100, y: 100, w: 800, h: 500 }
+  await edit(
+    page,
+    (editor, f) =>
+      editor.createShape({
+        id: f.id,
+        type: 'frame',
+        x: f.x,
+        y: f.y,
+        props: { w: f.w, h: f.h, name: 'Ideas' },
+      }),
+    frame,
+  )
+  await expectServerHasTab(aliceApi, board, page)
+  const pageId = await page.evaluate(() =>
+    (window.editor as unknown as { getCurrentPageId(): string }).getCurrentPageId(),
+  )
+  const started = await aliceApi.fetch('POST', `/api/boards/${board}/private-brainstorm`, {
+    prompt: 'What slowed us down?',
+    anonymous: false,
+    target: { frameId: frame.id, pageId, x: frame.x, y: frame.y, w: frame.w, h: frame.h },
+  })
+  expect(started.status()).toBe(201)
+  const sid = ((await started.json()) as { session: { id: string } }).session.id
+  for (const text of ['CI queue was slow', 'Scope changed after planning'])
+    expect(
+      (
+        await aliceApi.fetch('POST', `/api/private-brainstorms/${sid}/notes`, { text, color: 'yellow' })
+      ).status(),
+    ).toBe(201)
+  expect((await aliceApi.fetch('POST', `/api/private-brainstorms/${sid}/reveal`)).status()).toBe(200)
+  await expect(page.getByTestId('checkpoint-auto-toggle')).toHaveText('Automatic (1)')
+  const row = autoRows(page).first()
+  await expect(row).toHaveAttribute('data-reason', 'before_reveal')
+  await expect(row).toContainText('Before revealing private notes')
+  await expect(row).toContainText('saved by Lobby')
+  // It holds the board without the revealed notes, which are on the live board now.
+  await row.getByTestId('checkpoint-preview').click()
+  const dialog = preview(page)
+  await expect(dialog).toHaveAttribute('data-shape-count', '1')
+  await expect(dialog.getByTestId('checkpoint-preview-canvas')).toContainText('Ideas')
+  await expect(dialog.getByTestId('checkpoint-preview-canvas')).not.toContainText('CI queue was slow')
+  await dialog.getByTestId('checkpoint-preview-close').click()
+  await expect(dialog).toHaveCount(0)
+  const revealedOnBoard = () =>
+    read(page, (editor) =>
+      editor.getCurrentPageShapes().some((s) => JSON.stringify(s.props).includes('CI queue was slow')),
+    )
+  await expect.poll(revealedOnBoard).toBe(true)
+})
+
+test('Recently deleted: an empty text box that tldraw removes by itself is not listed as someone’s deletion (R17)', async ({
+  session,
+  board,
+  users,
+}) => {
+  const aliceApi = await users.api('alice')
+  const alice = await session('alice')
+  const bob = await session('bob', { role: 'editor' })
+  await openHistory(alice.page)
+  await expect(historyPanel(alice.page)).toContainText('Nothing deleted recently.')
+  // Bob clicks the canvas with the Text tool, types nothing, and presses Escape.
+  await bob.page.getByTestId('tools.text').click()
+  const spot = await bob.page.evaluate(() => {
+    const vb = (
+      window.editor as unknown as {
+        getViewportScreenBounds(): { x: number; y: number; w: number; h: number }
+      }
+    ).getViewportScreenBounds()
+    return { x: Math.round(vb.x + vb.w * 0.6), y: Math.round(vb.y + vb.h * 0.5) }
+  })
+  await bob.page.mouse.click(spot.x, spot.y)
+  await expect.poll(() => read(bob.page, (editor) => editor.getEditingShapeId())).not.toBeNull()
+  const textId = (await read(bob.page, (editor) => editor.getEditingShapeId())) ?? ''
+  // It reached everyone (so the server saw it go too)...
+  await expect
+    .poll(() => read(alice.page, (editor, id) => editor.getShape(id) !== undefined, textId))
+    .toBe(true)
+  await bob.page.keyboard.press('Escape')
+  await expect
+    .poll(() => read(alice.page, (editor, id) => editor.getShape(id) !== undefined, textId))
+    .toBe(false)
+  // ...and a real deletion right after is listed, while the empty text box never is.
+  await putNote(bob.page, 'Parking lot')
+  await expectServerHasTab(aliceApi, board, bob.page)
+  await edit(bob.page, (editor, id) => editor.deleteShapes([id]), NOTE)
+  await expect(alice.page.getByTestId('deleted-row')).toHaveCount(1)
+  await expect(alice.page.getByTestId('deleted-row')).toHaveAttribute('data-shape-id', NOTE)
+  await expect(alice.page.getByTestId('deleted-row')).toContainText('deleted by Bob')
+  const listed = (await (await aliceApi.fetch('GET', `/api/boards/${board}/deleted`)).json()) as {
+    entries: { shapeId: string }[]
+  }
+  expect(listed.entries.map((e) => e.shapeId)).toEqual([NOTE])
+})
+
 test('owners delete checkpoints (confirmed, live for everyone); editors and name-only guests cannot, in the UI or on the server', async ({
   browser,
   session,
@@ -171,15 +336,19 @@ test('owners delete checkpoints (confirmed, live for everyone); editors and name
   expect(link.status()).toBe(201)
   const guest = await joinAsGuest(browser, ((await link.json()) as { url: string }).url, 'Sam')
   try {
-    await test.step('a name-only guest sees the list, but no preview, restore or delete; the server says 403', async () => {
-      await openHistory(guest.page)
-      await expect(manualRow(guest.page, 'Kickoff')).toHaveCount(1)
-      for (const id of ['checkpoint-preview', 'checkpoint-restore', 'checkpoint-delete'])
-        await expect(guest.page.getByTestId(id), id).toHaveCount(0)
-      // ...and is told why, instead of rows that do nothing.
-      await expect(guest.page.getByTestId('checkpoint-guest-hint')).toHaveText(
-        'Only members of this workspace can open or restore earlier versions of this board.',
-      )
+    await test.step('a name-only guest gets no History at all (DANA-05): no rail entry, even after a reload; the server says 403 to the list, the preview and delete', async () => {
+      await expect(guest.page.getByTestId('feature-dock')).toBeVisible()
+      await expect(guest.page.getByTestId('dock-tab-comments')).toBeVisible()
+      await expect(guest.page.getByTestId('dock-tab-history')).toHaveCount(0)
+      await expect(guest.page.getByTestId('history-panel')).toHaveCount(0)
+      await guest.page.reload()
+      await waitForBoard(guest.page)
+      await expect(guest.page.getByTestId('dock-tab-comments')).toBeVisible()
+      await expect(guest.page.getByTestId('dock-tab-history')).toHaveCount(0)
+      await expect(manualRow(guest.page)).toHaveCount(0)
+      const list = await guest.page.request.get(`${WEB_URL}/api/boards/${board}/snapshots`)
+      expect(list.status()).toBe(403)
+      expect(((await list.json()) as { error: { code: string } }).error.code).toBe('GUEST_ACCOUNT_REQUIRED')
       const content = await guest.page.request.get(`${WEB_URL}/api/snapshots/${sid}/content`)
       expect(content.status()).toBe(403)
       const del = await guest.page.request.delete(`${WEB_URL}/api/snapshots/${sid}`, {
@@ -206,7 +375,7 @@ test('owners delete checkpoints (confirmed, live for everyone); editors and name
       await row.getByTestId('checkpoint-delete').click()
       await row.getByTestId('checkpoint-delete-confirm').click()
       await expect(alice.page.getByTestId('history-status')).toHaveText('Deleted “Kickoff”.')
-      for (const page of [alice.page, carol.page, guest.page]) await expect(manualRow(page)).toHaveCount(0)
+      for (const page of [alice.page, carol.page]) await expect(manualRow(page)).toHaveCount(0)
       const list = await aliceApi.fetch('GET', `/api/boards/${board}/snapshots`)
       expect(
         ((await list.json()) as { snapshots: { id: string }[] }).snapshots.map((s) => s.id),

@@ -50,6 +50,30 @@ describe('recently deleted through the API', () => {
     expect(sync.deletedCalls).toEqual([{ op: 'list', boardId }])
   })
 
+  it('R17: an empty text box (tldraw removes one by itself when its editing ends) is not listed', async () => {
+    const at = '2026-09-27T00:01:00.000Z'
+    const text = (id: string, label: string, childCount = 0) => ({
+      ...ENTRY,
+      shapeId: `shape:${id}`,
+      type: 'text',
+      label,
+      deletedAt: at,
+      childCount,
+    })
+    const emptyNote = { ...ENTRY, shapeId: 'shape:n2', label: '' }
+    sync.deletedList = {
+      entries: [text('t1', ''), text('t2', '  \n '), text('t3', 'Agenda'), emptyNote, ENTRY],
+      total: 5,
+      limit: 2000,
+    }
+    const res = await list(bob)
+    expect(res.statusCode).toBe(200)
+    expect(res.json()).toEqual({ entries: [text('t3', 'Agenda'), emptyNote, ENTRY], total: 3, limit: 2000 })
+    // Only on the page it was sent: the total of a capped list goes down by what was left out.
+    sync.deletedList = { entries: [text('t1', ''), ENTRY], total: 40, limit: 2 }
+    expect((await list(bob)).json()).toMatchObject({ entries: [ENTRY], total: 39, limit: 2 })
+  })
+
   it('authz-001: viewers, commenters and review-link guests get 403 and never reach the sync server', async () => {
     for (const role of ['viewer', 'commenter']) {
       await grant(role)

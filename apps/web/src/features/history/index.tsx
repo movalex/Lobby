@@ -2,7 +2,10 @@
 // PRS-06 export part). One dock panel, `history`: named checkpoints (save; restore as a new private
 // board), duplicate board, "Recently deleted" with restore, and the portable .json export.
 // The dashboard's import/duplicate buttons belong to dashboard-share and call the same API routes.
+// Name-only guests (a client on a review link, a workshop guest) never see History (DANA-05): the
+// checkpoint names and who saved them are the team's; the api refuses them the list too.
 
+import { knownUserKind } from '../../invite/guest.tsx'
 import type { BoardFeature } from '../types.ts'
 import './history.css'
 import { HistoryPanel } from './HistoryPanel.tsx'
@@ -24,6 +27,7 @@ export const historyFeature: BoardFeature = {
       id: 'history',
       label: 'History',
       icon: <HistoryIcon />,
+      visible: (ctx) => knownUserKind(ctx.me.user.id) !== 'guest',
       Component: HistoryPanel,
     },
   ],

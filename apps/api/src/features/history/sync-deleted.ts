@@ -3,7 +3,7 @@
 // with these two methods through ApiDeps.syncInternal, which this module picks up.
 
 import { INTERNAL_SECRET_HEADER } from '@draftroom/auth-tickets'
-import { ListDeletedResponse, RestoreDeletedResponse } from '@draftroom/contracts'
+import { type DeletedShapeEntry, ListDeletedResponse, RestoreDeletedResponse } from '@draftroom/contracts'
 import { SyncUnavailable } from '../../sync-internal.ts'
 import type { FeatureContext } from '../context.ts'
 
@@ -54,6 +54,15 @@ export interface DeletedApi {
   restore(boardId: string, ids: string[]): Promise<RestoreDeletedResponse>
 }
 
+/**
+ * An empty text box (R17): tldraw removes one by itself when its editing ends with no text (a stray
+ * click with the Text tool, then Escape), so the list would say "Text · deleted by <person>" for a
+ * deletion nobody made, and there is nothing in it to restore. Left out of the list.
+ */
+export function isAutoRemovedText(entry: Pick<DeletedShapeEntry, 'type' | 'label' | 'childCount'>): boolean {
+  return entry.type === 'text' && entry.label.trim() === '' && entry.childCount === 0
+}
+
 /** Answers are checked against the contracts: a malformed one is a sync failure, never passed on. */
 export function createDeletedApi(ctx: FeatureContext): DeletedApi {
   const client = isDeletedSyncClient(ctx.sync)
@@ -63,7 +72,9 @@ export function createDeletedApi(ctx: FeatureContext): DeletedApi {
     async list(boardId) {
       const parsed = ListDeletedResponse.safeParse(await client.listDeleted(boardId))
       if (!parsed.success) throw new SyncUnavailable('malformed recently-deleted list')
-      return parsed.data
+      const entries = parsed.data.entries.filter((e) => !isAutoRemovedText(e))
+      const left = parsed.data.entries.length - entries.length
+      return { ...parsed.data, entries, total: Math.max(entries.length, parsed.data.total - left) }
     },
     async restore(boardId, ids) {
       const parsed = RestoreDeletedResponse.safeParse(await client.restoreDeleted(boardId, ids))

@@ -9,6 +9,9 @@
 //                   board's previous automatic checkpoint, so reloading a tab does not make a series.
 //   before_restore  a checkpoint of the board is about to be restored as a new board (index.ts).
 //   import          the board as imported, before anyone edited it (index.ts).
+//   before_reveal   a private brainstorm's notes are about to be put on the board, and
+//   before_ai_themes  AI "Group into themes" is about to rearrange notes: other features ask for these
+//                   through before-change.ts (R10).
 //
 // Every one is read from the sync server's snapshot (a read of the room's storage: editing never
 // waits for it) and is skipped when its content equals the board's newest checkpoint of any kind
@@ -96,6 +99,10 @@ export function autoCheckpointName(reason: CheckpointReason, restoredName?: stri
       return 'After an editing session'
     case 'import':
       return 'As imported'
+    case 'before_reveal':
+      return 'Before revealing private notes'
+    case 'before_ai_themes':
+      return 'Before AI grouped notes into themes'
     case 'before_restore': {
       if (!restoredName) return 'Before a restore'
       const name = restoredName.length > 90 ? `${restoredName.slice(0, 89)}…` : restoredName

@@ -105,6 +105,13 @@ export function GuestKindProvider({ children }: { children: ReactNode }) {
 export const useUserKind = (): UserKind | null => useContext(KindContext)
 export const useIsGuest = (): boolean => useUserKind() === 'guest'
 
+/**
+ * The kind of `userId` as far as this tab knows right now, for code that cannot use a hook (a dock
+ * panel's `visible`): what a join or /api/me said, else 'guest' in a tab a guest signed in to.
+ */
+export const knownUserKind = (userId: string): UserKind | null =>
+  known.get(userId) ?? (wasGuestTab() ? 'guest' : null)
+
 // ---- this tab was a guest's ----------------------------------------------------------------------
 
 const GUEST_TAB_KEY = 'draftroom:guest-tab'

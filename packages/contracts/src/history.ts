@@ -163,8 +163,19 @@ export const HISTORY_EVENTS = {
 // checkpoints are kept (up to MAX_MANUAL_CHECKPOINTS); automatic ones are thinned out over time
 // (CHECKPOINT_RETENTION) and deleted together with their stored content.
 
-/** Why an automatic checkpoint was made. */
-export const CHECKPOINT_REASONS = ['hourly', 'session_end', 'before_restore', 'import'] as const
+/**
+ * Why an automatic checkpoint was made. Appended (history-polish, R10; migration 0017): right before a
+ * private brainstorm's notes are put on the board (`before_reveal`), and before AI "Group into themes"
+ * rearranges notes (`before_ai_themes`).
+ */
+export const CHECKPOINT_REASONS = [
+  'hourly',
+  'session_end',
+  'before_restore',
+  'import',
+  'before_reveal',
+  'before_ai_themes',
+] as const
 export const CheckpointReason = z.enum(CHECKPOINT_REASONS)
 export type CheckpointReason = z.infer<typeof CheckpointReason>
 
