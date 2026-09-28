@@ -219,7 +219,7 @@ test('loading every font changes no element version (0 ops)', async ({ page }) =
   expect(result.unknown).toEqual([])
   expect(result.versions).toEqual(applied.versions)
   // Liberation Sans (9) is not self-hosted (plan §2.12): the miss goes to the engine's fallback source,
-  // which the host-rewrite plugin turned into blocked.invalid, never esm.sh (A12).
-  expect(foreign.every((u) => new URL(u).host === 'blocked.invalid')).toBe(true)
-  expect(foreign.some((u) => u.includes('esm.sh'))).toBe(false)
+  // which the host-rewrite plugin turned into the same-origin asset base (A12): two 404s, nothing leaves.
+  expect(foreign).toEqual([])
+  expect(byFamily.Liberation?.ok ?? 0).toBe(0)
 })

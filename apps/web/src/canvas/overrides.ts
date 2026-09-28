@@ -19,7 +19,11 @@
 //   - hit tests, selection, editing and exports keep using document values. Hence the guard below: a
 //     press on a hidden element (or on the document position of an element a peer is dragging) never
 //     reaches Excalidraw, and a box/lasso selection is post-filtered.
-import { DEFAULT_COLLISION_THRESHOLD } from '@excalidraw/common'
+import {
+  DEFAULT_COLLISION_THRESHOLD,
+  sceneCoordsToViewportCoords,
+  viewportCoordsToSceneCoords,
+} from '@excalidraw/common'
 import {
   getContainingFrame,
   hitElementBoundText,
@@ -32,7 +36,6 @@ import type {
   ExcalidrawFrameLikeElement,
   NonDeleted,
 } from '@excalidraw/element/types'
-import { sceneCoordsToViewportCoords, viewportCoordsToSceneCoords } from '@excalidraw/excalidraw'
 import type {
   AppState,
   ElementRenderOverride,

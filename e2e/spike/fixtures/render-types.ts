@@ -69,7 +69,7 @@ export interface RenderEngine {
 
 export interface LabExtra {
   probe: EchoProbe
-  loader(opts?: { retryWindowMs?: number; maxConcurrent?: number }): LoaderLike
+  loader(opts?: { retryWindowMs?: number; maxConcurrent?: number; urls?: Record<string, string> }): LoaderLike
   overrides: OverridesLike
   guard: { enabled: boolean; setEnabled(on: boolean): void; log: GuardEvent[] }
   engine: RenderEngine

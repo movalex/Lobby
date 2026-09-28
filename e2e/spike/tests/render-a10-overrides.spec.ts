@@ -98,10 +98,10 @@ const labelOf = async (page: Page, id: string): Promise<SpikeElement> => {
 }
 
 const pixel = (page: Page, x: number, y: number) =>
-  page.evaluate(
-    ([x, y]) => ((window.__lobbySpike as { extra: unknown }).extra as LabExtra).pixel(x, y),
-    [x, y] as const,
-  )
+  page.evaluate(([x, y]) => ((window.__lobbySpike as { extra: unknown }).extra as LabExtra).pixel(x, y), [
+    x,
+    y,
+  ] as const)
 
 const dark = (page: Page, r: Box) =>
   page.evaluate((r) => ((window.__lobbySpike as { extra: unknown }).extra as LabExtra).dark(r), r)

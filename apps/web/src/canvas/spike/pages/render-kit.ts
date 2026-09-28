@@ -38,7 +38,7 @@ export const renderEngine = Object.freeze({
 export function fixtureUrl(versionId: string, derivative: Derivative): string | null {
   const body = versionId.slice(4)
   if (!/^[0-9A-Za-z]{10,40}$/.test(body)) return null
-  return `/files/ast_${body}/${versionId}/d/drv_${body}${derivative === 'display' ? 'D' : 'T'}`
+  return `/files/ast_${body}/${versionId}/d/drv_${body}${derivative === 'display' ? 'D' : 'T'}?board=spike-board`
 }
 
 export interface EchoOp {

@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { type Plugin, parseSync, type ResolvedConfig } from 'vite'
+import { EXCALIDRAW_ASSET_BASE } from './excalidraw-assets.ts'
 
 // Third-party hosts rewritten out of the Excalidraw engine at build time (docs/EXCALIDRAW-MIGRATION.md
 // §2.12, layer 2; spike check A12, docs/research/excalidraw/spike-a/A12.md).
@@ -263,8 +264,34 @@ export interface ModuleRewrite {
 }
 
 /** Rewrites the literals of one module; CSS is handled as text without its comments. */
-export function rewriteModule(id: string, code: string): ModuleRewrite {
+/**
+ * The font fallback base (ExcalidrawFontFace.ASSETS_FALLBACK_URL = `https://esm.sh/<pkg>@<version>/dist/prod/`,
+ * @excalidraw/excalidraw dist/dev/chunk-FN755BR4.js:1277) becomes the page's own asset base. Rewriting its
+ * host to blocked.invalid is not enough: Chrome checks CSP for every source of a FontFace when the
+ * FontFace is constructed (the engine builds all ~230 at init, each `url(local), url(fallback)`), so under
+ * `font-src 'self'` every one of them logged a violation (and a blocked request) even though the local
+ * files load (A12.md). With a same-origin fallback the source list stays within 'self'.
+ */
+const FALLBACK_RE = /(["'])ASSETS_FALLBACK_URL\1(\s*,\s*)`https:\/\/esm\.sh\/[\s\S]{0,240}?\/dist\/prod\/`/g
+export const FALLBACK_BASE_EXPRESSION = `\`\${globalThis.location?.origin ?? "http://localhost"}${EXCALIDRAW_ASSET_BASE}\``
+
+export function patchFontFallback(code: string): { code: string; patched: number } {
+  let patched = 0
+  const out = code.replace(FALLBACK_RE, (_m, q: string, sep: string) => {
+    patched++
+    return `${q}ASSETS_FALLBACK_URL${q}${sep}${FALLBACK_BASE_EXPRESSION}`
+  })
+  return { code: out, patched }
+}
+
+export function rewriteModule(id: string, input: string): ModuleRewrite {
   const counts: RewriteCounts = { url: {}, listed: {} }
+  const fallback = patchFontFallback(input)
+  let code = input
+  if (fallback.patched) {
+    counts.url['esm.sh (font fallback → same-origin asset base)'] = fallback.patched
+    code = fallback.code
+  }
   if (/\.css$/.test(id)) {
     const out = code.replace(/\/\*[\s\S]*?\*\/|url\((['"]?)([^)'"]+)\1\)/g, (m) =>
       m.startsWith('/*') ? m : rewriteLiteral(m, counts),

@@ -78,10 +78,10 @@ const loaderInfo = (page: Page) =>
 
 /** RGB of the image's fill (away from the diagonal band, the border and the placeholder icon). */
 const fillPixel = (page: Page, x: number, y: number) =>
-  page.evaluate(
-    ([x, y]) => ((window.__lobbySpike as { extra: unknown }).extra as LabExtra).pixel(x, y),
-    [x + 0.8 * W, y + 0.2 * H] as const,
-  )
+  page.evaluate(([x, y]) => ((window.__lobbySpike as { extra: unknown }).extra as LabExtra).pixel(x, y), [
+    x + 0.8 * W,
+    y + 0.2 * H,
+  ] as const)
 
 /** The browser logs every failed fetch ("Failed to load resource: … 404"): the failures are on purpose. */
 const unexpectedErrors = (errors: string[]) =>
