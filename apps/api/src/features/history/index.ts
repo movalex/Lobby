@@ -25,6 +25,7 @@ import { ApiError, conflict, forbidden, gone, notFound, parse } from '../../erro
 import { contentDisposition } from '../../files/disposition.ts'
 import { toBoardWithRole } from '../../serialize.ts'
 import type { FeatureContext } from '../context.ts'
+import { requireExportAllowed } from '../export-control/policy.ts'
 import { ArchiveError, exportBoardArchive, importBoardArchive, type SerializedSchema } from './board-ops.ts'
 import { archiveRef, filesShownOn, filesViewableBy, referencedFiles } from './files.ts'
 import { createBoardFrom, viaSync } from './new-board.ts'
@@ -185,6 +186,8 @@ export async function registerHistory(app: FastifyInstance, ctx: FeatureContext)
     const workspaceId = access.board.workspace_id
     if (snapshot.workspace_id !== workspaceId) throw notFound()
     await requireCreator(workspaceId, user.id)
+    // A new board of your own is a full copy (export-control, docs/WAVE3-CONTRACTS.md).
+    await requireExportAllowed(db, access)
     const raw = await bodies.read(snapshot.storage_key)
     if (raw === null) throw gone("This checkpoint's saved content is no longer available.")
     const body = JSON.parse(raw) as CheckpointBody
@@ -221,6 +224,7 @@ export async function registerHistory(app: FastifyInstance, ctx: FeatureContext)
     const access = await requireBoardAction(db, bid, user.id, 'view')
     const workspaceId = access.board.workspace_id
     await requireCreator(workspaceId, user.id)
+    await requireExportAllowed(db, access) // a duplicate is a full copy (export-control)
     if (input.keepSharing && !can(access.role, 'manage_access', access.board.status))
       throw forbidden('Only the board owner can copy its sharing settings.')
     const snap = await viaSync(() => ctx.sync.snapshot(bid))
@@ -252,6 +256,7 @@ export async function registerHistory(app: FastifyInstance, ctx: FeatureContext)
     const user = await ctx.requireUser(req)
     const { bid = '' } = req.params as Params
     const access = await requireBoardAction(db, bid, user.id, 'view')
+    await requireExportAllowed(db, access) // export-control: 403 EXPORT_DISABLED for limited viewers
     const snap = await viaSync(() => ctx.sync.snapshot(bid))
     const records = (Array.isArray(snap.documents) ? snap.documents : []).map((d) => d.state)
     const { shown, versions } = await filesShownOn(

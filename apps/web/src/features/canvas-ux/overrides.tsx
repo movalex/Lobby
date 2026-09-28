@@ -8,6 +8,7 @@ import { readSessionSettings, writeSessionSettings } from '../workshops/session-
 import { runArrangeAsGrid } from './arrange-grid-runtime.ts'
 import { getFeatureCtx, minimapOpen, openPanel, searchState, setMinimapOpen, togglePanel } from './bridge.ts'
 import { copySelectionLink } from './copy-link.ts'
+import { EXPORT_OFF_MENU_LABEL, gateExportActions } from './export-gate.tsx'
 import { TemplatesIcon } from './icons.tsx'
 import { ACTION_KBD_OVERRIDES, applyKbdOverrides, NEW_ACTION_KBDS, TOOL_KBD_OVERRIDES } from './shortcuts.ts'
 import {
@@ -183,7 +184,8 @@ export const canvasUxOverrides: TLUiOverrides = {
       },
     ]
     for (const a of added) items[a.id] = a
-    return items
+    // export-control: copy, Copy as SVG/JSON and Download original explain instead while exporting is off.
+    return gateExportActions(editor, items)
   },
   tools(editor, tools) {
     const { items, missing } = applyKbdOverrides(tools, TOOL_KBD_OVERRIDES)
@@ -214,6 +216,7 @@ export const canvasUxOverrides: TLUiOverrides = {
       'action.dr-set-frame-start-view': 'Set this frame as start view',
       'action.dr-clear-start-view': 'Clear start view',
       'action.dr-toggle-note-authors': 'Hide note authors',
+      'action.dr-export-off': EXPORT_OFF_MENU_LABEL,
       'menu.dr-board': 'Board',
       'context-menu.dr-select-all-type': 'Select all on this page',
       'context-menu.dr-keep-only': 'Keep only',

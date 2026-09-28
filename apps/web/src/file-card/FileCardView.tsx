@@ -1,9 +1,10 @@
 import type { FileCardShape } from '@draftroom/canvas-schema'
 import { type PointerEvent, useCallback, useEffect, useState } from 'react'
-import { HTMLContainer, useEditor } from 'tldraw'
+import { HTMLContainer, useEditor, useValue } from 'tldraw'
 import { derivativeUrl, originalUrl } from '../assets/contract.ts'
 import { useAssetMeta } from '../assets/meta-store.ts'
 import { useBoard } from '../board/board-context.ts'
+import { exportAllowedOnBoard } from '../features/sharing/export-policy.ts'
 import { extensionLabel, formatBytes, formatDuration, pluralize } from '../lib/format.ts'
 import { type CardView, cardView, coverDerivative, stripPages } from './card-model.ts'
 import './file-card.css'
@@ -47,6 +48,12 @@ export function FileCardView({ shape }: { shape: FileCardShape }) {
   const coverSrc = board && cover ? derivativeUrl(board.boardId, p.assetId, p.versionId, cover.id) : null
   const original = board && !snap.missing ? originalUrl(board.boardId, p.assetId, p.versionId) : null
   const pages = stripPages(snap.meta)
+  // export-control: no Download while the board owner turned downloads off for this person (the api
+  // refuses the original anyway). Previews, pages and video playback keep working.
+  const boardId = board?.boardId ?? null
+  const canDownload = useValue('dr-fc-can-download', () => (boardId ? exportAllowedOnBoard(boardId) : true), [
+    boardId,
+  ])
 
   return (
     <HTMLContainer
@@ -63,6 +70,7 @@ export function FileCardView({ shape }: { shape: FileCardShape }) {
             view={view}
             coverSrc={coverSrc}
             original={original}
+            canDownload={canDownload}
             missing={snap.missing}
             onViewPages={
               view.kind === 'pdf' && board && hasPagePreviews(snap.meta)
@@ -86,7 +94,7 @@ export function FileCardView({ shape }: { shape: FileCardShape }) {
           {pages.length > STRIP_MAX && <span className="dr-fc__more">+{pages.length - STRIP_MAX}</span>}
         </div>
       )}
-      <Footer view={view} original={original} missing={snap.missing} />
+      <Footer view={view} original={canDownload ? original : null} missing={snap.missing} />
     </HTMLContainer>
   )
 }
@@ -95,12 +103,15 @@ function Preview({
   view,
   coverSrc,
   original,
+  canDownload,
   missing,
   onViewPages,
 }: {
   view: CardView
   coverSrc: string | null
   original: string | null
+  /** false: the board owner turned downloads off for this person (the player offers none either). */
+  canDownload: boolean
   missing: boolean
   /** Opens the PDF page viewer (null: no page previews to show). */
   onViewPages: (() => void) | null
@@ -115,7 +126,11 @@ function Preview({
           !
         </span>
         <p data-testid="file-card-error">{view.errorMessage ?? 'Preview failed.'}</p>
-        <p className="dr-fc__hint">The original file is still available below.</p>
+        <p className="dr-fc__hint">
+          {canDownload
+            ? 'The original file is still available below.'
+            : 'Downloading the original is turned off on this board.'}
+        </p>
       </div>
     )
   }
@@ -149,6 +164,7 @@ function Preview({
         src={original}
         poster={coverSrc}
         controls
+        controlsList={canDownload ? undefined : 'nodownload'}
         autoPlay
         playsInline
         preload="metadata"

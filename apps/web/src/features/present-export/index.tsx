@@ -2,6 +2,7 @@
 // Present mode (frames as full-screen slides) and exports (PNG/SVG/copy, PDF per frame, CSV).
 import { useEffect } from 'react'
 import { DefaultCursor, type TLCursorProps, type TLUiOverrides, useEditor, useValue } from 'tldraw'
+import { EXPORT_OFF_TEXT, exportAllowed } from '../sharing/export-policy.ts'
 import type { BoardFeature, FeatureContext } from '../types.ts'
 import { readSessionSettings } from '../workshops/session-settings.ts'
 import { getController } from './controller.ts'
@@ -23,6 +24,11 @@ function PresentExportTopBarItem({ ctx }: { ctx: FeatureContext }) {
   useEffect(() => controller.attach({ title, notify }), [controller, title, notify])
   const request = useValue('dr-export-request', () => controller.exportRequest.get(), [controller])
   const presenting = useValue('dr-presenting', () => controller.presenter.isPresenting(), [controller])
+  // export-control: the owner turned exporting off for this person (live, from the board's policy).
+  const canExport = useValue('dr-export-allowed', () => exportAllowed(ctx.editor), [ctx.editor])
+  useEffect(() => {
+    if (!canExport) controller.closeExport() // an open Export dialog closes the moment it is turned off
+  }, [canExport, controller])
   return (
     <div className="dr-pe-topbar">
       <button
@@ -45,8 +51,10 @@ function PresentExportTopBarItem({ ctx }: { ctx: FeatureContext }) {
         className="dr-iconbtn dr-pe-export-btn"
         data-testid="export-button"
         aria-label="Export"
-        aria-haspopup="dialog"
-        title="Export: PNG, SVG, PDF, CSV"
+        aria-haspopup={canExport ? 'dialog' : undefined}
+        aria-disabled={canExport ? undefined : true}
+        data-export-off={canExport ? undefined : ''}
+        title={canExport ? 'Export: PNG, SVG, PDF, CSV' : EXPORT_OFF_TEXT}
         onClick={() => controller.openExport()}
       >
         <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">

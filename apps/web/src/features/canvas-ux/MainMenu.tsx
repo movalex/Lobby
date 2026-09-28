@@ -6,6 +6,8 @@
 //    workshop popover's checkbox (workshops/session-settings.ts). Read-only people see its state,
 //    disabled. The sync server refuses document writes from read-only sessions, so only editors and
 //    owners can change either setting.
+//  - export-control (wave 3): while the board owner turned exporting off for this person, tldraw's Copy,
+//    Copy as, Export as and Export all as give way to one line saying so (export-gate.tsx).
 
 import { memo } from 'react'
 import {
@@ -20,6 +22,7 @@ import {
   useValue,
 } from 'tldraw'
 import { readSessionSettings } from '../workshops/session-settings.ts'
+import { ExportOffMainMenuContent, useExportAllowed } from './export-gate.tsx'
 import { toggleHideNoteAuthors } from './overrides.tsx'
 import { readBoardStartView } from './start-view-runtime.ts'
 
@@ -56,12 +59,13 @@ function BoardSubmenu() {
 }
 
 export const DraftroomMainMenu = memo(function DraftroomMainMenu(props: TLUiMainMenuProps) {
+  const exportAllowed = useExportAllowed()
   return (
     <DefaultMainMenu {...props}>
       <TldrawUiMenuGroup id="dr-board-group">
         <BoardSubmenu />
       </TldrawUiMenuGroup>
-      <DefaultMainMenuContent />
+      {exportAllowed ? <DefaultMainMenuContent /> : <ExportOffMainMenuContent />}
     </DefaultMainMenu>
   )
 })

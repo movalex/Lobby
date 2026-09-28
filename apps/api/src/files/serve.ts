@@ -93,6 +93,9 @@ export async function handleOriginal(
     'Content-Type': inline ? meta.mimeType : 'application/octet-stream',
     'Content-Disposition': contentDisposition(inline ? 'inline' : 'attachment', meta.name),
     'Cache-Control': 'private, max-age=3600',
+    // Export control (files-auth.ts) can answer a media element's load and refuse a download of the
+    // same URL, so a copy cached for an <img> or <video> must never be reused for a download.
+    Vary: 'Sec-Fetch-Dest',
   })
 }
 

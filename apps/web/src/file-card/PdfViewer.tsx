@@ -19,6 +19,7 @@ import { type Editor, useEditor, useValue } from 'tldraw'
 import { derivativeUrl, originalUrl } from '../assets/contract.ts'
 import { useAssetMeta } from '../assets/meta-store.ts'
 import { type BoardContextValue, useBoard } from '../board/board-context.ts'
+import { EXPORT_OFF_TEXT, exportAllowedOnBoard, notifyExportOff } from '../features/sharing/export-policy.ts'
 import { pluralize } from '../lib/format.ts'
 import {
   documentPageCount,
@@ -81,6 +82,10 @@ function PdfViewer({ editor, board, card, initialPage, onClose }: ViewerProps) {
   const total = documentPageCount(snap.meta, card.props, pages.length)
   const name = snap.meta?.name || card.props.name
   const readonly = useValue('dr-pdf-viewer-readonly', () => editor.getIsReadonly(), [editor])
+  // export-control: the page previews stay; the original is not offered while downloads are off.
+  const canDownload = useValue('dr-pdf-viewer-download', () => exportAllowedOnBoard(board.boardId), [
+    board.boardId,
+  ])
 
   const [wanted, setWanted] = useState(initialPage)
   const current = validPage(available, wanted)
@@ -203,7 +208,7 @@ function PdfViewer({ editor, board, card, initialPage, onClose }: ViewerProps) {
           </p>
         </div>
         <div className="dr-pv__head-actions">
-          {!snap.missing && (
+          {!snap.missing && canDownload && (
             <a
               className="dr-btn dr-btn--sm"
               data-testid="pdf-viewer-download"
@@ -212,6 +217,18 @@ function PdfViewer({ editor, board, card, initialPage, onClose }: ViewerProps) {
             >
               Download original
             </a>
+          )}
+          {!snap.missing && !canDownload && (
+            <button
+              type="button"
+              className="dr-btn dr-btn--sm dr-pv__download-off"
+              data-testid="pdf-viewer-download-off"
+              aria-disabled="true"
+              title={EXPORT_OFF_TEXT}
+              onClick={() => notifyExportOff(board.notify)}
+            >
+              Download original
+            </button>
           )}
           <button
             type="button"
@@ -351,11 +368,14 @@ function PdfViewer({ editor, board, card, initialPage, onClose }: ViewerProps) {
             zoom={zoom}
             onZoom={setZoom}
             state={snap.missing ? 'missing' : snap.meta?.status === 'ready' ? 'ready' : 'loading'}
+            canDownload={canDownload}
           />
           {partial && (
             <p className="dr-pv__note" data-testid="pdf-viewer-partial-note" role="note">
-              Previews exist for the first {pluralize(pages.length, 'page')} of {total}. Download the original
-              to read the rest.
+              Previews exist for the first {pluralize(pages.length, 'page')} of {total}.{' '}
+              {canDownload
+                ? 'Download the original to read the rest.'
+                : 'Downloading the original is turned off on this board.'}
             </p>
           )}
         </section>
@@ -419,6 +439,7 @@ function Stage({
   zoom,
   onZoom,
   state,
+  canDownload,
 }: {
   page: PreviewPage | null
   src: string | null
@@ -426,6 +447,7 @@ function Stage({
   zoom: number
   onZoom(update: (z: number) => number): void
   state: 'ready' | 'loading' | 'missing'
+  canDownload: boolean
 }) {
   const ref = useRef<HTMLElement>(null)
   const [stage, setStage] = useState({ w: 0, h: 0 })
@@ -523,7 +545,9 @@ function Stage({
             ? 'This file is not available on this board.'
             : state === 'loading'
               ? 'Loading page previews…'
-              : 'This PDF has no page previews. Download the original to read it.'}
+              : canDownload
+                ? 'This PDF has no page previews. Download the original to read it.'
+                : 'This PDF has no page previews, and downloading the original is turned off on this board.'}
         </p>
       )}
       {src && !loaded && <span className="dr-spinner dr-pv__spinner" aria-hidden="true" />}

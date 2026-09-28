@@ -2,6 +2,7 @@ import type { FileCardShape } from '@draftroom/canvas-schema'
 import type { Editor } from 'tldraw'
 import { originalUrl } from '../assets/contract.ts'
 import type { AssetMetaStore } from '../assets/meta-store.ts'
+import { guardExport } from '../features/sharing/export-policy.ts'
 
 interface CardBoard {
   boardId: string
@@ -28,9 +29,11 @@ export function cardOriginalUrl(editor: Editor, props: FileCardShape['props']): 
 
 /**
  * Opens the original in a new tab: PDFs and videos are served inline, so the browser shows them;
- * anything else is served as an attachment and simply downloads.
+ * anything else is served as an attachment and simply downloads. While the board owner turned
+ * downloads off for this person it only says so (and counts as handled).
  */
 export function openCardOriginal(editor: Editor, shape: FileCardShape): boolean {
+  if (!guardExport(editor)) return true
   const url = cardOriginalUrl(editor, shape.props)
   if (!url) return false
   window.open(url, '_blank', 'noopener,noreferrer')
