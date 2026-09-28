@@ -43,6 +43,105 @@ export function pickImageDerivative(
   return display ?? thumb
 }
 
+// ---- PDF pages placed on the board (FIL-04) --------------------------------------------------------
+
+/**
+ * Asset `meta` key that makes an image asset show one page of an uploaded PDF. Such an asset keeps
+ * the PDF version's own stable ref in `props.src` (`/files/ast_…/ver_…/original`, the only durable
+ * file reference history, duplicate and import carry over), and resolve() turns it into that page's
+ * derivative, never into the PDF itself. The page number, not a derivative id, is what is stored: a
+ * re-rendered version gets new derivative ids, its page numbers stay.
+ */
+export const PDF_PAGE_META_KEY = 'drPdfPage'
+
+/** The 1-based PDF page an image asset shows, or null for an ordinary image. */
+export function pdfPageOf(asset: Pick<TLAsset, 'meta'>): number | null {
+  const page = (asset.meta as Record<string, unknown> | undefined)?.[PDF_PAGE_META_KEY]
+  return typeof page === 'number' && Number.isInteger(page) && page >= 1 ? page : null
+}
+
+/** Every rendering the worker made of `page` (the page image, and the thumb for the cover), smallest first. */
+export function pageRenderings(meta: AssetVersionMeta, page: number): DerivativeRecord[] {
+  if (meta.kind !== 'pdf') return []
+  return usableDerivatives(meta)
+    .filter(
+      (d) => (d.role === 'page' || d.role === 'thumb') && d.page === page && d.width > 0 && d.height > 0,
+    )
+    .sort((a, b) => a.width - b.width)
+}
+
+/**
+ * The rendering of a PDF page to show: the smallest one that is still sharp at the on-screen size
+ * (the largest when none is); the largest for export/copy (`shouldResolveToOriginal`: the page image
+ * is the best there is, the PDF original is not an image); the smallest on very slow networks.
+ */
+export function pickPageDerivative(
+  meta: AssetVersionMeta,
+  page: number,
+  nativeWidth: number,
+  ctx: Pick<
+    TLAssetContext,
+    'steppedScreenScale' | 'dpr' | 'networkEffectiveType' | 'shouldResolveToOriginal'
+  >,
+): DerivativeRecord | null {
+  const all = pageRenderings(meta, page)
+  const largest = all[all.length - 1] ?? null
+  if (!largest || ctx.shouldResolveToOriginal) return largest
+  if (SLOW_NETWORKS.has(ctx.networkEffectiveType ?? '')) return all[0] ?? null
+  const width = nativeWidth > 0 ? nativeWidth : largest.width
+  const needed = width * ctx.steppedScreenScale * ctx.dpr
+  return all.find((d) => d.width >= needed) ?? largest
+}
+
+// ---- animated images (FIL-08) -------------------------------------------------------------------------
+
+/**
+ * Derivatives are single-frame WebP (the worker decodes the first frame only), so an animated GIF
+ * (or an animated WebP) plays only from its original. The original is shown only while it is cheap
+ * enough and big enough on screen to be worth it; otherwise the static preview stays (FIL-02).
+ */
+export const ANIMATED_ORIGINAL_LIMITS = {
+  maxBytes: 8 * 1024 * 1024,
+  maxPixels: 25_000_000,
+  /** The image's longer side on screen (CSS px) from which it plays; below that it is a still. */
+  minScreenPx: 160,
+} as const
+
+export function prefersReducedMotion(): boolean {
+  try {
+    return typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches
+  } catch {
+    return false
+  }
+}
+
+/**
+ * True when resolve() should hand out the animated original instead of the static preview: a ready
+ * version whose content the worker confirmed as GIF (or WebP the uploading client flagged as
+ * animated), within the byte and pixel limits, on screen at a readable size, no reduced-motion
+ * preference and no very slow network.
+ */
+export function playsAnimatedOriginal(
+  meta: AssetVersionMeta,
+  asset: { w: number; h: number; isAnimated?: boolean },
+  ctx: Pick<TLAssetContext, 'screenScale' | 'networkEffectiveType'>,
+  reducedMotion: boolean,
+): boolean {
+  if (meta.status !== 'ready' || meta.kind !== 'image' || reducedMotion) return false
+  const animatedType =
+    meta.mimeType === 'image/gif' || (meta.mimeType === 'image/webp' && asset.isAnimated === true)
+  if (!animatedType) return false
+  const L = ANIMATED_ORIGINAL_LIMITS
+  if (!(meta.sizeBytes > 0 && meta.sizeBytes <= L.maxBytes)) return false
+  const w = meta.probe.width ?? asset.w
+  const h = meta.probe.height ?? asset.h
+  if (!(w > 0 && h > 0) || w * h > L.maxPixels) return false
+  if (SLOW_NETWORKS.has(ctx.networkEffectiveType ?? '')) return false
+  // screenScale is CSS px per asset px, so this is the longer side's size on screen.
+  const onScreen = Math.max(asset.w, asset.h) * ctx.screenScale
+  return Number.isFinite(onScreen) && onScreen >= L.minScreenPx
+}
+
 /**
  * Static tiles (apps/web/public/img) shown instead of an image that has no usable preview. They are
  * only ever returned by resolve(), never written into a record, so the synced asset keeps its stable
@@ -58,6 +157,8 @@ export const SMALL_ORIGINAL_BYTES = 1.5 * 1024 * 1024
 
 export interface ResolveOptions {
   previewWaitMs?: number
+  /** Whether animated images should stay still (default: the prefers-reduced-motion media query). */
+  reducedMotion?: () => boolean
 }
 
 export async function resolveImageOrVideoUrl(
@@ -71,6 +172,8 @@ export async function resolveImageOrVideoUrl(
   // Only our own stable refs resolve. Anything else (foreign URLs pasted from other apps, data:
   // URLs) is not fetched: an arbitrary image URL would leak every viewer's IP to that host.
   if (!ref) return null
+  const page = asset.type === 'image' ? pdfPageOf(asset) : null
+  if (page !== null) return resolvePdfPageUrl(boardId, metaStore, asset, ref, page, ctx, opts)
   const original = originalUrl(boardId, ref.assetId, ref.versionId)
   if (asset.type === 'video' || ctx.shouldResolveToOriginal) return original
   let snap = await metaStore.load(boardId, ref.assetId, ref.versionId)
@@ -97,9 +200,49 @@ export async function resolveImageOrVideoUrl(
     const size = meta?.sizeBytes ?? (asset.type === 'image' ? asset.props.fileSize : undefined)
     return typeof size === 'number' && size <= SMALL_ORIGINAL_BYTES ? original : IMAGE_PROCESSING_URL
   }
+  if (
+    asset.type === 'image' &&
+    playsAnimatedOriginal(meta, asset.props, ctx, (opts.reducedMotion ?? prefersReducedMotion)())
+  ) {
+    return original
+  }
   const nativeWidth = asset.type === 'image' ? asset.props.w : 0
   const d = pickImageDerivative(meta, nativeWidth, ctx)
   return d ? derivativeUrl(boardId, ref.assetId, ref.versionId, d.id) : original
+}
+
+/**
+ * An image asset showing one page of a PDF version: that page's derivative, or the unavailable tile
+ * when the version is gone, failed, or has no rendering of that page (only the first
+ * LIMITS.eagerPdfPages pages are rendered). Never the PDF original, not even for export.
+ */
+async function resolvePdfPageUrl(
+  boardId: string,
+  metaStore: AssetMetaStore,
+  asset: TLAsset,
+  ref: { assetId: string; versionId: string },
+  page: number,
+  ctx: TLAssetContext,
+  opts: ResolveOptions,
+): Promise<string | null> {
+  let snap = await metaStore.load(boardId, ref.assetId, ref.versionId)
+  if (snap.error && !snap.meta && !isTerminal(snap)) return null
+  if (!isTerminal(snap)) {
+    // Pages are only placed from a ready version, so this is a re-rendered or restored one.
+    snap = await waitForTerminalMeta(
+      metaStore,
+      boardId,
+      ref.assetId,
+      ref.versionId,
+      opts.previewWaitMs ?? PREVIEW_WAIT_MS,
+    )
+  }
+  const { meta } = snap
+  if (snap.missing || !meta || meta.status === 'failed') return IMAGE_UNAVAILABLE_URL
+  if (meta.status !== 'ready') return IMAGE_PROCESSING_URL
+  const nativeWidth = asset.type === 'image' ? asset.props.w : 0
+  const d = pickPageDerivative(meta, page, nativeWidth, ctx)
+  return d ? derivativeUrl(boardId, ref.assetId, ref.versionId, d.id) : IMAGE_UNAVAILABLE_URL
 }
 
 export interface AssetStoreOptions extends ResolveOptions {
@@ -114,6 +257,7 @@ export function createAssetStore({
   metaStore,
   onUploaded,
   previewWaitMs,
+  reducedMotion,
 }: AssetStoreOptions): TLAssetStore {
   return {
     async upload(asset, file, abortSignal) {
@@ -126,7 +270,7 @@ export function createAssetStore({
       }
     },
     resolve(asset, ctx) {
-      return resolveImageOrVideoUrl(boardId, metaStore, asset, ctx, { previewWaitMs })
+      return resolveImageOrVideoUrl(boardId, metaStore, asset, ctx, { previewWaitMs, reducedMotion })
     },
     // No remove(): undo or another collaborator can bring the shape back; bytes are GC'd server-side.
   }

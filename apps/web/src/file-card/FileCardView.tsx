@@ -8,6 +8,10 @@ import { extensionLabel, formatBytes, formatDuration, pluralize } from '../lib/f
 import { type CardView, cardView, coverDerivative, stripPages } from './card-model.ts'
 import './file-card.css'
 import { registerCardBoard } from './open-original.ts'
+import { previewPages } from './pdf-pages.ts'
+import { openPdfViewer } from './viewer-state.ts'
+
+const hasPagePreviews = (meta: Parameters<typeof previewPages>[0]) => previewPages(meta).length > 0
 
 const STRIP_MAX = 4
 
@@ -15,13 +19,15 @@ const STRIP_MAX = 4
  * Interactive children (play, download, the playing <video>) opt back into pointer events and mark
  * the event as handled so the canvas does not also start a selection/drag. Everywhere else the card
  * stays pointer-transparent like tldraw's own shapes, so select/move/resize work normally. Holding
- * Shift lets the editor have the event (to add the card to the selection).
+ * Shift lets the editor have the event (to add the card to the selection). The event's own flag
+ * decides, not the editor's key state: that can lag behind (a Shift released while a dialog had
+ * the keyboard), and a stale Shift let the canvas take the click and select the card instead.
  */
 function useInteractive() {
   const editor = useEditor()
   return useCallback(
     (e: PointerEvent) => {
-      if (!editor.inputs.getShiftKey()) editor.markEventAsHandled(e)
+      if (!e.shiftKey) editor.markEventAsHandled(e)
     },
     [editor],
   )
@@ -53,7 +59,17 @@ export function FileCardView({ shape }: { shape: FileCardShape }) {
     >
       {(view.kind !== 'other' || view.status === 'failed') && (
         <div className="dr-fc__preview">
-          <Preview view={view} coverSrc={coverSrc} original={original} missing={snap.missing} />
+          <Preview
+            view={view}
+            coverSrc={coverSrc}
+            original={original}
+            missing={snap.missing}
+            onViewPages={
+              view.kind === 'pdf' && board && hasPagePreviews(snap.meta)
+                ? () => openPdfViewer(editor, shape.id)
+                : null
+            }
+          />
         </div>
       )}
       {view.kind === 'pdf' && pages.length > 0 && board && (
@@ -80,11 +96,14 @@ function Preview({
   coverSrc,
   original,
   missing,
+  onViewPages,
 }: {
   view: CardView
   coverSrc: string | null
   original: string | null
   missing: boolean
+  /** Opens the PDF page viewer (null: no page previews to show). */
+  onViewPages: (() => void) | null
 }) {
   const onInteract = useInteractive()
   const [playing, setPlaying] = useState(false)
@@ -149,6 +168,29 @@ function Preview({
         draggable={false}
       />
       {view.kind === 'pdf' && view.pageCount != null && <PagesBadge n={view.pageCount} />}
+      {onViewPages && (
+        <button
+          type="button"
+          className="dr-fc__view dr-interactive"
+          data-testid="file-card-view-pages"
+          aria-label={`View pages of ${view.name}`}
+          onPointerDown={onInteract}
+          onPointerUp={onInteract}
+          onClick={onViewPages}
+        >
+          <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
+            <path
+              d="M7 3.5h7l4 4V19a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 6 19V5a1.5 1.5 0 0 1 1-1.5zM14 3.5V8h4M9 12.5h6M9 16h6"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+          View pages
+        </button>
+      )}
       {view.kind === 'video' && (
         <>
           {view.durationMs != null && <DurationBadge ms={view.durationMs} />}

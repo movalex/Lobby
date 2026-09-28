@@ -1,7 +1,29 @@
 /* PRI-14: the card's Download link is a real link; keyboard users must see where the focus is. */
 .dr-fc__download:focus-visible,
-.dr-fc__play:focus-visible {
+.dr-fc__play:focus-visible,
+.dr-fc__view:focus-visible {
   outline: 2px solid var(--dr-focus, #2563eb);
   outline-offset: 2px;
   box-shadow: 0 0 0 4px var(--tl-color-background, #fff);
+}
+
+/* FIL-04: "View pages" on a ready PDF card (bottom-left of the cover; the page-count chip is bottom-right). */
+.dr-fc__view {
+  position: absolute;
+  left: 8px;
+  bottom: 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 6px;
+  background: rgb(20 24 32 / 78%);
+  color: #fff;
+  font: 600 11.5px / 1 var(--dr-font);
+  cursor: pointer;
+}
+.dr-fc__view:hover {
+  background: var(--dr-navy, #1f3a5f);
 }
