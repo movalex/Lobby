@@ -17,7 +17,9 @@ const SAMPLE = 'Lobby Ag 0123 — quick brown fox'
 test('loading every font changes no element version (0 ops)', async ({ page }) => {
   const watch = watchPage(page)
   await openSpike(page, 'render-lab')
-  const families = await page.evaluate(() => (window.__lobbySpike?.extra as unknown as LabExtra).engine.FONT_FAMILY)
+  const families = await page.evaluate(
+    () => ((window.__lobbySpike as { extra: unknown }).extra as LabExtra).engine.FONT_FAMILY,
+  )
   // No font file requested yet (cold): the page has drawn no text.
   const fontRequestsAtStart = watch.requests.filter((u) => u.endsWith('.woff2')).length
 
@@ -27,15 +29,63 @@ test('loading every font changes no element version (0 ops)', async ({ page }) =
       const skeletons: Record<string, unknown>[] = []
       let y = 40
       for (const [name, id] of Object.entries(families)) {
-        skeletons.push({ type: 'text', id: `t-${id}`, x: 40, y, text: `${name}: ${SAMPLE}`, fontFamily: id, fontSize: 28 })
+        skeletons.push({
+          type: 'text',
+          id: `t-${id}`,
+          x: 40,
+          y,
+          text: `${name}: ${SAMPLE}`,
+          fontFamily: id,
+          fontSize: 28,
+        })
         y += 60
       }
-      skeletons.push({ type: 'text', id: 't-cjk', x: 40, y, text: '白板 协作 便签 你好世界 Lobby', fontFamily: 5, fontSize: 28 })
+      skeletons.push({
+        type: 'text',
+        id: 't-cjk',
+        x: 40,
+        y,
+        text: '白板 协作 便签 你好世界 Lobby',
+        fontFamily: 5,
+        fontSize: 28,
+      })
       y += 60
-      skeletons.push({ type: 'text', id: 't-emoji', x: 40, y, text: 'Notes 🎬 ✅ 🔥 👍', fontFamily: 6, fontSize: 28 })
-      skeletons.push({ type: 'stickynote', id: 'n-1', x: 900, y: 40, width: 200, height: 200, label: { text: 'Nunito note', fontFamily: 6 } })
-      skeletons.push({ type: 'stickynote', id: 'n-2', x: 900, y: 280, width: 200, height: 200, label: { text: 'Comic Shanns note', fontFamily: 8 } })
-      skeletons.push({ type: 'stickynote', id: 'n-3', x: 900, y: 520, width: 200, height: 200, label: { text: 'Lilita note', fontFamily: 7 } })
+      skeletons.push({
+        type: 'text',
+        id: 't-emoji',
+        x: 40,
+        y,
+        text: 'Notes 🎬 ✅ 🔥 👍',
+        fontFamily: 6,
+        fontSize: 28,
+      })
+      skeletons.push({
+        type: 'stickynote',
+        id: 'n-1',
+        x: 900,
+        y: 40,
+        width: 200,
+        height: 200,
+        label: { text: 'Nunito note', fontFamily: 6 },
+      })
+      skeletons.push({
+        type: 'stickynote',
+        id: 'n-2',
+        x: 900,
+        y: 280,
+        width: 200,
+        height: 200,
+        label: { text: 'Comic Shanns note', fontFamily: 8 },
+      })
+      skeletons.push({
+        type: 'stickynote',
+        id: 'n-3',
+        x: 900,
+        y: 520,
+        width: 200,
+        height: 200,
+        label: { text: 'Lilita note', fontFamily: 7 },
+      })
       const els = extra.engine.convertToExcalidrawElements(skeletons, { regenerateIds: false })
       extra.probe.applyServer(els)
       const api = window.__lobbySpike?.api
@@ -65,7 +115,10 @@ test('loading every font changes no element version (0 ops)', async ({ page }) =
   const svgFonts = await page.evaluate(async () => {
     const spike = window.__lobbySpike
     const extra = spike?.extra as unknown as LabExtra
-    const svg = await extra.engine.exportToSvg({ elements: spike?.api?.getSceneElements() ?? [], files: null })
+    const svg = await extra.engine.exportToSvg({
+      elements: spike?.api?.getSceneElements() ?? [],
+      files: null,
+    })
     return (svg.querySelector('style')?.textContent?.match(/@font-face/g) ?? []).length
   })
   await page.waitForTimeout(1000)
@@ -75,7 +128,9 @@ test('loading every font changes no element version (0 ops)', async ({ page }) =
       const spike = window.__lobbySpike
       const extra = spike?.extra as unknown as LabExtra
       const scene = spike?.api?.getSceneElementsIncludingDeleted() ?? []
-      const loaded = [...document.fonts].filter((f) => f.status === 'loaded').map((f) => f.family.replace(/^"|"$/g, ''))
+      const loaded = [...document.fonts]
+        .filter((f) => f.status === 'loaded')
+        .map((f) => f.family.replace(/^"|"$/g, ''))
       const check = Object.fromEntries(
         Object.keys(families).map((name) => [name, document.fonts.check(`28px "${name}"`, SAMPLE)]),
       )
@@ -102,7 +157,9 @@ test('loading every font changes no element version (0 ops)', async ({ page }) =
       .find((n) => /subset-worker\.chunk-[^/]+\.js$/.test(n))
     if (!url) return { url: null, error: 'subset worker chunk never requested' }
     const src = `import(${JSON.stringify(url)}).then(() => postMessage('ok'), (e) => postMessage(String((e && e.stack) || e)))`
-    const w = new Worker(URL.createObjectURL(new Blob([src], { type: 'text/javascript' })), { type: 'module' })
+    const w = new Worker(URL.createObjectURL(new Blob([src], { type: 'text/javascript' })), {
+      type: 'module',
+    })
     const msg = await new Promise<string>((resolve) => {
       w.onmessage = (e) => resolve(String(e.data))
       w.onerror = (e) => resolve(`ErrorEvent: ${e.message}`)
@@ -145,7 +202,15 @@ test('loading every font changes no element version (0 ops)', async ({ page }) =
   for (const fam of ['Virgil', 'Cascadia', 'Excalifont', 'Nunito', 'Lilita', 'ComicShanns', 'Xiaolai']) {
     expect(byFamily[fam]?.ok ?? 0, `${fam} served`).toBeGreaterThan(0)
   }
-  for (const name of ['Virgil', 'Cascadia', 'Excalifont', 'Nunito', 'Lilita One', 'Comic Shanns', 'Xiaolai']) {
+  for (const name of [
+    'Virgil',
+    'Cascadia',
+    'Excalifont',
+    'Nunito',
+    'Lilita One',
+    'Comic Shanns',
+    'Xiaolai',
+  ]) {
     expect(result.loadedFamilies, `${name} loaded`).toContain(name)
   }
   // The pass criterion: nothing a sync adapter would push.

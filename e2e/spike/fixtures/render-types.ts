@@ -27,7 +27,14 @@ export interface LoaderLike {
   request(ids: Iterable<string>, visible?: ReadonlySet<string>): void
   state(id: string): LoadState | undefined
   states(): Record<LoadState, number>
-  stats: { fetches: number; failures: number; retries: number; loaded: number; gaveUp: number; maxInFlight: number }
+  stats: {
+    fetches: number
+    failures: number
+    retries: number
+    loaded: number
+    gaveUp: number
+    maxInFlight: number
+  }
 }
 
 export interface OverridesLike {
@@ -49,7 +56,10 @@ export interface GuardEvent {
 
 export interface RenderEngine {
   CaptureUpdateAction: { IMMEDIATELY: unknown; NEVER: unknown; EVENTUALLY: unknown }
-  convertToExcalidrawElements(skeletons: readonly Record<string, unknown>[], opts?: { regenerateIds?: boolean }): SpikeElement[]
+  convertToExcalidrawElements(
+    skeletons: readonly Record<string, unknown>[],
+    opts?: { regenerateIds?: boolean },
+  ): SpikeElement[]
   exportToCanvas(opts: Record<string, unknown>): Promise<HTMLCanvasElement>
   exportToSvg(opts: Record<string, unknown>): Promise<SVGSVGElement>
   FONT_FAMILY: Record<string, number>

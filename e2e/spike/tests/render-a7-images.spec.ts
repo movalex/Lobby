@@ -38,7 +38,15 @@ async function applyImages(page: Page, items: { ver: string; x: number; y: numbe
     ({ items, W, H }) => {
       const extra = window.__lobbySpike?.extra as unknown as LabExtra
       const els = extra.engine.convertToExcalidrawElements(
-        items.map((it, i) => ({ type: 'image', id: `img-${i}`, x: it.x, y: it.y, width: W, height: H, fileId: it.ver })),
+        items.map((it, i) => ({
+          type: 'image',
+          id: `img-${i}`,
+          x: it.x,
+          y: it.y,
+          width: W,
+          height: H,
+          fileId: it.ver,
+        })),
         { regenerateIds: false },
       )
       extra.probe.applyServer(els.map((e) => ({ ...e, status: 'saved' })))
@@ -70,7 +78,10 @@ const loaderInfo = (page: Page) =>
 
 /** RGB of the image's fill (away from the diagonal band, the border and the placeholder icon). */
 const fillPixel = (page: Page, x: number, y: number) =>
-  page.evaluate(([x, y]) => (window.__lobbySpike?.extra as unknown as LabExtra).pixel(x, y), [x + 0.8 * W, y + 0.2 * H])
+  page.evaluate(
+    ([x, y]) => ((window.__lobbySpike as { extra: unknown }).extra as LabExtra).pixel(x, y),
+    [x + 0.8 * W, y + 0.2 * H] as const,
+  )
 
 /** The browser logs every failed fetch ("Failed to load resource: … 404"): the failures are on purpose. */
 const unexpectedErrors = (errors: string[]) =>
@@ -86,7 +97,7 @@ async function addFileAsExcalidrawWould(page: Page, ver: string) {
   await page.evaluate((ver) => {
     const spike = window.__lobbySpike
     const extra = spike?.extra as unknown as LabExtra
-    ;(spike?.api as RenderApi).addFiles([
+    ;((spike as { api: unknown }).api as RenderApi).addFiles([
       { id: ver, mimeType: 'image/png', dataURL: extra.fixtureUrl(ver, 'thumb'), created: Date.now() },
     ])
   }, ver)
@@ -175,7 +186,9 @@ test("Lobby's loader: the same failure changes no element (0 ops); it retries an
   expect(loaded.drift).toEqual([])
   expect(loaded.images[0]?.status).toBe('saved')
   const dataUrls = await page.evaluate(() =>
-    Object.values((window.__lobbySpike?.api as RenderApi).getFiles()).map((f) => f.dataURL.slice(0, 5)),
+    Object.values(((window.__lobbySpike as { api: unknown }).api as RenderApi).getFiles()).map((f) =>
+      f.dataURL.slice(0, 5),
+    ),
   )
   expect(dataUrls).toEqual(['blob:'])
   console.log(
@@ -241,7 +254,9 @@ test("Lobby's loader: 30 images, 5 failing, 150 ms responses: at most 6 fetches 
   expect(visible.length).toBeLessThan(6)
   await expect.poll(async () => (await loaderInfo(page)).states.loaded, { timeout: 25_000 }).toBe(25)
   const loader = await loaderInfo(page)
-  const dispatched = await page.evaluate(() => (window as unknown as { __fetchLog: string[] }).__fetchLog.slice())
+  const dispatched = await page.evaluate(() =>
+    (window as unknown as { __fetchLog: string[] }).__fetchLog.slice(),
+  )
   const order = dispatched.map((u) => /ver_([0-9A-Za-z]+)/.exec(u)?.[1] ?? '')
   const visibleBodies = new Set(visible.map(body))
   const firstRequests = order.slice(0, visible.length)

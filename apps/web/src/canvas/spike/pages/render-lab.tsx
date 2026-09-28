@@ -65,11 +65,18 @@ export default function RenderLabPage() {
       engine: renderEngine,
       Fonts,
       fixtureUrl,
-      loader: (opts: { retryWindowMs?: number; maxConcurrent?: number } = {}) => {
+      /**
+       * The page's loader (created on first call). `urls` maps a version id to a same-origin path (a real
+       * /files/<ast>/<ver>/d/<drv> route, for the CSP run); other ids use the fixture scheme.
+       */
+      loader: (
+        opts: { retryWindowMs?: number; maxConcurrent?: number; urls?: Record<string, string> } = {},
+      ) => {
+        const { urls, ...rest } = opts
         loader ??= new ImageLoader({
           addFiles: (files) => api.addFiles(files),
-          resolveUrl: fixtureUrl,
-          ...opts,
+          resolveUrl: (ver, derivative) => urls?.[ver] ?? fixtureUrl(ver, derivative),
+          ...rest,
         })
         return loader
       },
