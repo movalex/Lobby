@@ -19,6 +19,7 @@ import { JoinQueue } from './join-queue.ts'
 import { canEditCanvas } from './permissions.ts'
 import { InboundFrames, presenceIdentity } from './presence.ts'
 import { BOARD_ID_RE, RoomRegistry } from './rooms.ts'
+import { createApiSessionEndClient, createSessionEndReporter, type SessionEndClient } from './session-end.ts'
 import { createApiTouchClient, createTouchReporter, type TouchClient, type TouchReporter } from './touch.ts'
 
 export interface SyncServerOptions {
@@ -28,6 +29,8 @@ export interface SyncServerOptions {
   accessClient?: AccessClient
   /** Replaces the HTTP client for GET <api>/internal/boards/:bid/touched (tests). */
   touchClient?: TouchClient
+  /** Replaces the HTTP client for GET <api>/internal/boards/:bid/session-ended (tests). */
+  sessionEndClient?: SessionEndClient
 }
 
 export interface SyncServer {
@@ -55,14 +58,28 @@ export function createSyncServer(config: SyncConfig, opts: SyncServerOptions = {
     intervalMs: config.touchIntervalMs,
     log,
   })
+  // The last editor leaving after changes (automatic checkpoints, session-end.ts).
+  const sessionEnds = createSessionEndReporter({
+    client:
+      opts.sessionEndClient ??
+      createApiSessionEndClient({ baseUrl: config.apiInternalUrl, internalSecret: config.internalSecret }),
+    hasEditors: (boardId) => registry.sessionsOf(boardId).some((s) => canEditCanvas(s.meta.role)),
+    log,
+  })
   const registry = new RoomRegistry({
     dataDir: dataLayout(config.dataDir).rooms,
     schema: draftroomSchema,
     idleEvictMs: config.idleEvictMs,
     textLeaseMs: config.textLeaseMs,
     log,
-    onSessionRemoved: (boardId, sessionId) => monitor?.removed(boardId, sessionId),
-    onDocumentChange: (boardId) => touches.touched(boardId),
+    onSessionRemoved: (boardId, sessionId, meta) => {
+      monitor?.removed(boardId, sessionId)
+      sessionEnds.removed(boardId, meta)
+    },
+    onDocumentChange: (boardId) => {
+      touches.touched(boardId)
+      sessionEnds.changed(boardId)
+    },
     backup: config.backupIntervalMs ? { intervalMs: config.backupIntervalMs } : undefined,
   })
   const backups = createBackupService({ config, backupsDir: registry.backupsDir(), log })
@@ -260,8 +277,12 @@ export function createSyncServer(config: SyncConfig, opts: SyncServerOptions = {
         http.closeAllConnections() // aborts in-flight requests (e.g. a half-sent seed body)
         await Promise.allSettled([...inflight])
         // The last edits' "Edited" times: best effort, never more than a second of shutdown.
-        await Promise.race([touches.flush(), new Promise((r) => setTimeout(r, 1_000).unref())])
+        await Promise.race([
+          Promise.all([touches.flush(), sessionEnds.flush()]),
+          new Promise((r) => setTimeout(r, 1_000).unref()),
+        ])
         touches.stop()
+        sessionEnds.stop()
         await backups.stop()
         await stopped
         await new Promise<void>((resolve) => wss.close(() => resolve()))

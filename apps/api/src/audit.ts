@@ -6,6 +6,7 @@ export type AuditAction =
   | 'board.archive'
   | 'board.trash'
   | 'board.restore'
+  | 'board.checkpoint.delete'
   | 'board.member.put'
   | 'board.member.remove'
   | 'invitation.create'

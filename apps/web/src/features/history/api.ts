@@ -3,7 +3,9 @@
 
 import {
   BoardSnapshot,
+  CheckpointContent,
   HistoryBoardCreated,
+  ListCheckpointsResponse,
   ListDeletedResponse,
   ListSnapshotsResponse,
   RestoreDeletedResponse,
@@ -22,6 +24,19 @@ export function historyApi(client: ApiClient) {
           signal,
         })
       ).snapshots,
+    /** Every checkpoint with its `reason` (automatic ones included; wave 4). */
+    listCheckpoints: async (boardId: string, signal?: AbortSignal) =>
+      (
+        await request('GET', `/api/boards/${enc(boardId)}/snapshots`, {
+          schema: ListCheckpointsResponse,
+          signal,
+        })
+      ).snapshots,
+    /** A checkpoint's records, for the read-only preview. */
+    checkpointContent: (snapshotId: string, signal?: AbortSignal) =>
+      request('GET', `/api/snapshots/${enc(snapshotId)}/content`, { schema: CheckpointContent, signal }),
+    deleteCheckpoint: (snapshotId: string) =>
+      request('DELETE', `/api/snapshots/${enc(snapshotId)}`, { schema: null }),
     saveSnapshot: (boardId: string, name: string) =>
       request('POST', `/api/boards/${enc(boardId)}/snapshots`, { body: { name }, schema: BoardSnapshot }),
     restoreAsNew: (snapshotId: string, title?: string) =>

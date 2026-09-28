@@ -1,0 +1,579 @@
+// Automatic checkpoints and retention (docs/WAVE4-CONTRACTS.md checkpoints-2; REV-10).
+//
+// What makes one (kind `auto`, a `reason` on the row):
+//   hourly          the board changed and its first unsaved change is an hour old, at most one an hour.
+//                   Changes arrive through the sync server's edit reports (apps/sync/src/touch.ts ->
+//                   GET /internal/boards/:bid/touched), which checkpoint-routes.ts listens to.
+//   session_end     the last editor left after changes (apps/sync/src/session-end.ts ->
+//                   GET /internal/boards/:bid/session-ended); at least `sessionEndGapMs` after the
+//                   board's previous automatic checkpoint, so reloading a tab does not make a series.
+//   before_restore  a checkpoint of the board is about to be restored as a new board (index.ts).
+//   import          the board as imported, before anyone edited it (index.ts).
+//
+// Every one is read from the sync server's snapshot (a read of the room's storage: editing never
+// waits for it) and is skipped when its content equals the board's newest checkpoint of any kind
+// (content hash, snapshot-rows.ts). Work on one board is serialized in this process; a claim column
+// keeps two api instances apart. A sync server that cannot be reached is retried with a backoff.
+//
+// Retention (retention.ts) runs after every automatic checkpoint of a board and over all boards every
+// `pruneEveryMs`. A deleted checkpoint's row goes first, together with an entry in
+// board_snapshot_blob_deletions (same transaction); the stored body is deleted afterwards and the entry
+// removed, so a failed blob delete is retried by the next pass instead of leaking.
+
+import {
+  AUTO_CHECKPOINT_INTERVAL_MS,
+  type BoardCheckpoint,
+  CHECKPOINT_EVENTS,
+  type CheckpointReason,
+  HISTORY_EVENTS,
+} from '@draftroom/contracts'
+import { newId, type Queryable } from '@draftroom/db'
+import type { FastifyInstance } from 'fastify'
+import { audit } from '../../audit.ts'
+import type { FeatureContext } from '../context.ts'
+import { planRetention, type RetentionPolicy, SAFETY_REASONS } from './retention.ts'
+import { checkpointBodyOf, SNAPSHOT_COLUMNS, type SnapshotRow, toCheckpoint } from './snapshot-rows.ts'
+import { type SnapshotBodies, snapshotStorageKey } from './snapshot-store.ts'
+
+const MINUTE = 60_000
+
+export interface CheckpointSettings {
+  /** How often the scheduler looks for due boards (0: no timer; tests call runDue themselves). */
+  tickMs: number
+  /** How often every board's automatic checkpoints are thinned out (0: never on a timer). */
+  pruneEveryMs: number
+  /** At most one hourly checkpoint per this interval, once the first unsaved change is this old. */
+  hourlyMs: number
+  /** A session_end checkpoint waits until this long after the board's previous automatic one. */
+  sessionEndGapMs: number
+  /** How long a claimed board stays with the instance that claimed it. */
+  claimMs: number
+  /**
+   * Failed attempts in a row before a pending checkpoint is given up (the next change starts over).
+   * The backoff tops out at 30 min, so the default of 100 keeps trying for about two days: an outage
+   * of the sync server or the blob store (a NAS reboot, a deploy) must not drop the checkpoint of a
+   * board that nobody edits again afterwards.
+   */
+  maxFailures: number
+  /** Boards handled per scheduler pass (one after the other). */
+  batch: number
+  /**
+   * Automatic checkpoints kept per board at most, whatever retention says (a guard against bugs).
+   * Checkpoints made before a restore or at an import stop at 80% of it: restores, which any workspace
+   * member who can view the board may run, must never use up the room that hourly and session-end
+   * checkpoints need.
+   */
+  maxAutoPerBoard: number
+  retention?: RetentionPolicy
+}
+
+/**
+ * Read when an app is built (like guestSweepSettings): tests that drive the scheduler themselves set
+ * `tickMs` / `pruneEveryMs` to 0 first.
+ */
+export const checkpointSettings: CheckpointSettings = {
+  tickMs: MINUTE,
+  pruneEveryMs: 6 * 60 * MINUTE,
+  hourlyMs: AUTO_CHECKPOINT_INTERVAL_MS,
+  sessionEndGapMs: 10 * MINUTE,
+  claimMs: 5 * MINUTE,
+  maxFailures: 100,
+  batch: 10,
+  maxAutoPerBoard: 1_000,
+}
+
+export type CaptureOutcome =
+  | { status: 'saved'; checkpoint: BoardCheckpoint }
+  | { status: 'unchanged' }
+  | { status: 'skipped'; why: 'missing' | 'trashed' | 'limit' }
+
+/** Names shown for automatic checkpoints (the UI labels them by reason too). */
+export function autoCheckpointName(reason: CheckpointReason, restoredName?: string): string {
+  switch (reason) {
+    case 'hourly':
+      return 'Hourly checkpoint'
+    case 'session_end':
+      return 'After an editing session'
+    case 'import':
+      return 'As imported'
+    case 'before_restore': {
+      if (!restoredName) return 'Before a restore'
+      const name = restoredName.length > 90 ? `${restoredName.slice(0, 89)}…` : restoredName
+      return `Before restoring “${name}”`
+    }
+  }
+}
+
+export interface CheckpointService {
+  /** Saves an automatic checkpoint of the board now, unless its content is unchanged. Throws SyncUnavailable. */
+  capture(
+    boardId: string,
+    reason: CheckpointReason,
+    opts?: { restoredName?: string },
+  ): Promise<CaptureOutcome>
+  /** capture() that logs instead of throwing (before risky operations: they must not fail because of it). */
+  captureQuietly(
+    boardId: string,
+    reason: CheckpointReason,
+    opts?: { restoredName?: string },
+  ): Promise<CaptureOutcome | null>
+  /** The sync server reported a canvas change at `at`. */
+  changed(boardId: string, at: Date): Promise<void>
+  /** The last editor left the board after changes, at `at`; wakes the scheduler. */
+  sessionEnded(boardId: string, at: Date): Promise<void>
+  /** One scheduler pass: saves the checkpoints that are due. Returns how many boards it handled. */
+  runDue(): Promise<number>
+  /** Applies retention to one board; returns the ids it deleted. */
+  prune(boardId: string): Promise<string[]>
+  /** Applies retention to every board with automatic checkpoints, then retries pending blob deletes. */
+  pruneAll(): Promise<number>
+  /** Deletes checkpoint rows (ids of `boardId`) and their bodies; `audit` records who did it. */
+  remove(
+    boardId: string,
+    ids: readonly string[],
+    opts: { onlyAuto: boolean; audit?: { actorId: string } },
+  ): Promise<SnapshotRow[]>
+  /** Retries the blob deletes still queued. Returns how many were done. */
+  drainBlobDeletions(): Promise<number>
+  /** Runs a scheduler pass soon (never concurrently with another). */
+  poke(): void
+  /** Resolves once no scheduler pass is running (tests). */
+  idle(): Promise<void>
+}
+
+interface StateRow {
+  workspace_id: string
+  session_ended_at: Date | null
+  failures: number
+}
+
+export function createCheckpointService(
+  ctx: FeatureContext,
+  bodies: SnapshotBodies,
+  log: { warn(msg: string): void; info(msg: string): void },
+  settings: CheckpointSettings = { ...checkpointSettings },
+): CheckpointService {
+  const { db, now } = ctx
+
+  // ---- one thing at a time per board (this process) --------------------------------------------
+  const locks = new Map<string, Promise<unknown>>()
+  function withBoard<T>(boardId: string, fn: () => Promise<T>): Promise<T> {
+    const prev = locks.get(boardId) ?? Promise.resolve()
+    const run = prev.then(fn, fn)
+    const tail = run.then(
+      () => undefined,
+      () => undefined,
+    )
+    locks.set(boardId, tail)
+    void tail.then(() => {
+      if (locks.get(boardId) === tail) locks.delete(boardId)
+    })
+    return run
+  }
+
+  // ---- bookkeeping -------------------------------------------------------------------------------
+
+  /** Everything up to `startedAt` is covered by a checkpoint (saved now, or an equal older one). */
+  async function covered(boardId: string, workspaceId: string, startedAt: Date, saved: boolean) {
+    await db.query(
+      `INSERT INTO board_checkpoint_state (board_id, workspace_id, last_auto_at)
+       VALUES ($1, $2, CASE WHEN $4::boolean THEN $3::timestamptz END)
+       ON CONFLICT (board_id) DO UPDATE SET
+         dirty_since = CASE WHEN board_checkpoint_state.last_change_at > $3::timestamptz
+                            THEN board_checkpoint_state.last_change_at END,
+         session_ended_at = CASE WHEN board_checkpoint_state.session_ended_at > $3::timestamptz
+                                 THEN board_checkpoint_state.session_ended_at END,
+         last_auto_at = CASE WHEN $4::boolean THEN $3::timestamptz ELSE board_checkpoint_state.last_auto_at END,
+         failures = 0, retry_at = NULL, claimed_until = NULL`,
+      [boardId, workspaceId, startedAt, saved],
+    )
+  }
+
+  const forget = (boardId: string) =>
+    db.query('DELETE FROM board_checkpoint_state WHERE board_id = $1', [boardId])
+
+  async function changed(boardId: string, at: Date) {
+    await db.query(
+      `INSERT INTO board_checkpoint_state (board_id, workspace_id, dirty_since, last_change_at)
+       SELECT id, workspace_id, $2::timestamptz, $2::timestamptz FROM boards WHERE id = $1 AND status <> 'trashed'
+       ON CONFLICT (board_id) DO UPDATE SET
+         dirty_since = COALESCE(board_checkpoint_state.dirty_since, EXCLUDED.dirty_since),
+         last_change_at = GREATEST(board_checkpoint_state.last_change_at, EXCLUDED.last_change_at)`,
+      [boardId, at],
+    )
+  }
+
+  async function sessionEnded(boardId: string, at: Date) {
+    await db.query(
+      `INSERT INTO board_checkpoint_state (board_id, workspace_id, dirty_since, last_change_at, session_ended_at)
+       SELECT id, workspace_id, $2::timestamptz, $2::timestamptz, $2::timestamptz
+         FROM boards WHERE id = $1 AND status <> 'trashed'
+       ON CONFLICT (board_id) DO UPDATE SET
+         dirty_since = COALESCE(board_checkpoint_state.dirty_since, EXCLUDED.dirty_since),
+         last_change_at = GREATEST(board_checkpoint_state.last_change_at, EXCLUDED.last_change_at),
+         session_ended_at = GREATEST(board_checkpoint_state.session_ended_at, EXCLUDED.session_ended_at)`,
+      [boardId, at],
+    )
+    poke()
+  }
+
+  // ---- saving ------------------------------------------------------------------------------------
+
+  async function captureNow(
+    boardId: string,
+    reason: CheckpointReason,
+    opts: { restoredName?: string },
+  ): Promise<CaptureOutcome> {
+    const board = await db.maybeOne<{ workspace_id: string; status: string }>(
+      'SELECT workspace_id, status FROM boards WHERE id = $1',
+      [boardId],
+    )
+    if (!board) return { status: 'skipped', why: 'missing' }
+    if (board.status === 'trashed') {
+      await forget(boardId)
+      return { status: 'skipped', why: 'trashed' }
+    }
+    const startedAt = now()
+    const snap = await ctx.sync.snapshot(boardId)
+    const made = checkpointBodyOf(boardId, snap)
+    const newest = await db.maybeOne<{ content_hash: string | null; document_clock: number }>(
+      `SELECT content_hash, document_clock::float8 AS document_clock FROM board_snapshots
+        WHERE board_id = $1 ORDER BY created_at DESC, id DESC LIMIT 1`,
+      [boardId],
+    )
+    const unchanged =
+      newest !== null &&
+      (newest.content_hash !== null
+        ? newest.content_hash === made.contentHash
+        : Number(newest.document_clock) === made.documentClock)
+    if (unchanged) {
+      await covered(boardId, board.workspace_id, startedAt, false)
+      return { status: 'unchanged' }
+    }
+    const count = async () =>
+      (
+        await db.one<{ n: number }>(
+          "SELECT count(*)::int AS n FROM board_snapshots WHERE board_id = $1 AND kind <> 'manual'",
+          [boardId],
+        )
+      ).n
+    // Safety checkpoints stop earlier than routine ones (see maxAutoPerBoard).
+    const limit = SAFETY_REASONS.has(reason)
+      ? Math.floor(settings.maxAutoPerBoard * 0.8)
+      : settings.maxAutoPerBoard
+    if ((await count()) >= limit) {
+      await prune(boardId)
+      if ((await count()) >= limit) {
+        log.warn(`board ${boardId} has ${limit} automatic checkpoints; not saving a ${reason} one`)
+        return { status: 'skipped', why: 'limit' }
+      }
+    }
+
+    const id = newId('snp')
+    const key = snapshotStorageKey(boardId, id)
+    await bodies.write(key, made.json)
+    let row: SnapshotRow
+    try {
+      row = await db.one<SnapshotRow>(
+        `WITH ins AS (
+           INSERT INTO board_snapshots (id, workspace_id, board_id, name, kind, reason, created_by, created_at,
+                                        document_clock, record_count, size_bytes, storage_key, content_hash)
+           VALUES ($1, $2, $3, $4, 'auto', $5, NULL, $6, $7, $8, $9, $10, $11) RETURNING *)
+         SELECT ${SNAPSHOT_COLUMNS} FROM ins s LEFT JOIN users u ON u.id = s.created_by`,
+        [
+          id,
+          board.workspace_id,
+          boardId,
+          autoCheckpointName(reason, opts.restoredName),
+          reason,
+          now(),
+          made.documentClock,
+          made.recordCount,
+          made.sizeBytes,
+          key,
+          made.contentHash,
+        ],
+      )
+    } catch (e) {
+      await bodies.remove(key).catch(() => warnErr('checkpoint body cleanup failed', e))
+      throw e
+    }
+    await covered(boardId, board.workspace_id, startedAt, true)
+    ctx.events.publish(boardId, { type: HISTORY_EVENTS.snapshot, data: { snapshotId: id } })
+    await prune(boardId).catch((e: unknown) => warnErr('checkpoint retention failed', e))
+    return { status: 'saved', checkpoint: toCheckpoint(row) }
+  }
+
+  const warnErr = (message: string, e: unknown) =>
+    log.warn(`${message} (${(e as Error)?.name ?? 'Error'}: ${(e as Error)?.message ?? ''})`)
+
+  const capture: CheckpointService['capture'] = (boardId, reason, opts = {}) =>
+    withBoard(boardId, () => captureNow(boardId, reason, opts))
+
+  const captureQuietly: CheckpointService['captureQuietly'] = async (boardId, reason, opts) => {
+    try {
+      return await capture(boardId, reason, opts)
+    } catch (e) {
+      warnErr(`automatic ${reason} checkpoint of board ${boardId} failed`, e)
+      return null
+    }
+  }
+
+  // ---- the scheduler -----------------------------------------------------------------------------
+
+  async function runDue(): Promise<number> {
+    const t = now()
+    const hourAgo = new Date(t.getTime() - settings.hourlyMs)
+    const gapAgo = new Date(t.getTime() - settings.sessionEndGapMs)
+    const due = await db.query<{ board_id: string }>(
+      `SELECT board_id FROM board_checkpoint_state
+        WHERE dirty_since IS NOT NULL
+          AND (retry_at IS NULL OR retry_at <= $1)
+          AND (claimed_until IS NULL OR claimed_until <= $1)
+          AND ((session_ended_at IS NOT NULL AND (last_auto_at IS NULL OR last_auto_at <= $3))
+               OR (dirty_since <= $2 AND (last_auto_at IS NULL OR last_auto_at <= $2)))
+        ORDER BY COALESCE(session_ended_at, dirty_since), board_id
+        LIMIT ${Math.max(1, Math.floor(settings.batch))}`,
+      [t, hourAgo, gapAgo],
+    )
+    let handled = 0
+    for (const { board_id: boardId } of due.rows) {
+      const at = now()
+      const claimed = await db.maybeOne<StateRow>(
+        `UPDATE board_checkpoint_state SET claimed_until = $2
+          WHERE board_id = $1 AND dirty_since IS NOT NULL AND (claimed_until IS NULL OR claimed_until <= $3)
+          RETURNING workspace_id, session_ended_at, failures`,
+        [boardId, new Date(at.getTime() + settings.claimMs), at],
+      )
+      if (!claimed) continue // another instance has it, or it is no longer due
+      handled++
+      const reason: CheckpointReason = claimed.session_ended_at ? 'session_end' : 'hourly'
+      try {
+        const outcome = await capture(boardId, reason)
+        if (outcome.status === 'skipped' && outcome.why === 'missing') await forget(boardId)
+        // At the limit: retention frees room by the hour at most, so try again then (not every tick,
+        // which would read the whole board from sync each minute). Still pending meanwhile.
+        else if (outcome.status === 'skipped' && outcome.why === 'limit')
+          await postpone(boardId, settings.hourlyMs)
+        else if (outcome.status === 'skipped') await release(boardId)
+      } catch (e) {
+        await failed(boardId, claimed.failures + 1, e)
+      }
+    }
+    return handled
+  }
+
+  const release = (boardId: string) =>
+    db.query('UPDATE board_checkpoint_state SET claimed_until = NULL WHERE board_id = $1', [boardId])
+  const postpone = (boardId: string, ms: number) =>
+    db.query('UPDATE board_checkpoint_state SET retry_at = $2, claimed_until = NULL WHERE board_id = $1', [
+      boardId,
+      new Date(now().getTime() + ms),
+    ])
+
+  async function failed(boardId: string, failures: number, e: unknown) {
+    if (failures >= settings.maxFailures) {
+      warnErr(`gave up on an automatic checkpoint of board ${boardId} after ${failures} attempts`, e)
+      await db.query(
+        `UPDATE board_checkpoint_state SET dirty_since = NULL, session_ended_at = NULL, failures = 0,
+                retry_at = NULL, claimed_until = NULL WHERE board_id = $1`,
+        [boardId],
+      )
+      return
+    }
+    warnErr(`automatic checkpoint of board ${boardId} failed (attempt ${failures})`, e)
+    const backoff = Math.min(30 * MINUTE, 30_000 * 2 ** (failures - 1))
+    await db.query(
+      'UPDATE board_checkpoint_state SET failures = $2, retry_at = $3, claimed_until = NULL WHERE board_id = $1',
+      [boardId, failures, new Date(now().getTime() + backoff)],
+    )
+  }
+
+  let running: Promise<void> | null = null
+  let again = false
+  function poke() {
+    if (running) {
+      again = true
+      return
+    }
+    running = (async () => {
+      do {
+        again = false
+        await runDue()
+      } while (again)
+    })()
+      .catch((e: unknown) => warnErr('automatic checkpoint pass failed', e))
+      .finally(() => {
+        running = null
+      })
+  }
+  async function idle() {
+    while (running) await running
+  }
+
+  // ---- retention and deletion ------------------------------------------------------------------
+
+  async function drainKeys(keys: readonly string[]): Promise<number> {
+    let done = 0
+    for (const key of keys) {
+      try {
+        await bodies.remove(key)
+        await db.query('DELETE FROM board_snapshot_blob_deletions WHERE storage_key = $1', [key])
+        done++
+      } catch (e) {
+        warnErr('a checkpoint body could not be deleted (retried later)', e)
+        await db
+          .query('UPDATE board_snapshot_blob_deletions SET attempts = attempts + 1 WHERE storage_key = $1', [
+            key,
+          ])
+          .catch(() => {})
+      }
+    }
+    return done
+  }
+
+  async function remove(
+    boardId: string,
+    ids: readonly string[],
+    opts: { onlyAuto: boolean; audit?: { actorId: string } },
+  ): Promise<SnapshotRow[]> {
+    if (!ids.length) return []
+    const at = now()
+    const rows = await db.transaction(async (tx) => {
+      const deleted = await tx.query<SnapshotRow>(
+        `WITH del AS (
+           DELETE FROM board_snapshots WHERE board_id = $1 AND id = ANY($2::text[])
+             ${opts.onlyAuto ? "AND kind <> 'manual'" : ''}
+           RETURNING *)
+         SELECT ${SNAPSHOT_COLUMNS} FROM del s LEFT JOIN users u ON u.id = s.created_by`,
+        [boardId, [...ids]],
+      )
+      for (const r of deleted.rows) {
+        await queueBlobDeletion(tx, r, at)
+        if (opts.audit)
+          await audit(tx, {
+            workspaceId: r.workspace_id,
+            actorId: opts.audit.actorId,
+            action: 'board.checkpoint.delete',
+            target: boardId,
+            detail: {
+              snapshotId: r.id,
+              name: r.name,
+              kind: r.kind,
+              reason: r.reason,
+              createdAt: r.created_at.toISOString(),
+            },
+            at,
+          })
+      }
+      return deleted.rows
+    })
+    if (rows.length) {
+      await drainKeys(rows.map((r) => r.storage_key))
+      ctx.events.publish(boardId, {
+        type: CHECKPOINT_EVENTS.removed,
+        data: { snapshotIds: rows.map((r) => r.id) },
+      })
+    }
+    return rows
+  }
+
+  async function prune(boardId: string): Promise<string[]> {
+    const rows = await db.query<{ id: string; reason: CheckpointReason | null; created_at: Date }>(
+      "SELECT id, reason, created_at FROM board_snapshots WHERE board_id = $1 AND kind <> 'manual'",
+      [boardId],
+    )
+    const plan = planRetention(
+      rows.rows.map((r) => ({ id: r.id, reason: r.reason, createdAt: r.created_at })),
+      now(),
+      settings.retention,
+    )
+    if (!plan.remove.length) return []
+    const removed = await remove(boardId, plan.remove, { onlyAuto: true })
+    if (removed.length)
+      log.info(`retention removed ${removed.length} automatic checkpoint(s) of board ${boardId}`)
+    return removed.map((r) => r.id)
+  }
+
+  async function drainBlobDeletions(): Promise<number> {
+    const queued = await db.query<{ storage_key: string }>(
+      'SELECT storage_key FROM board_snapshot_blob_deletions ORDER BY queued_at LIMIT 500',
+    )
+    return drainKeys(queued.rows.map((r) => r.storage_key))
+  }
+
+  async function pruneAll(): Promise<number> {
+    const boards = await db.query<{ board_id: string }>(
+      "SELECT DISTINCT board_id FROM board_snapshots WHERE kind <> 'manual' ORDER BY board_id",
+    )
+    let removed = 0
+    for (const { board_id } of boards.rows) {
+      try {
+        removed += (await withBoard(board_id, () => prune(board_id))).length
+      } catch (e) {
+        warnErr(`checkpoint retention failed for board ${board_id}`, e)
+      }
+    }
+    await drainBlobDeletions()
+    return removed
+  }
+
+  return {
+    capture,
+    captureQuietly,
+    changed,
+    sessionEnded,
+    runDue,
+    prune: (boardId) => withBoard(boardId, () => prune(boardId)),
+    pruneAll,
+    remove: (boardId, ids, opts) => withBoard(boardId, () => remove(boardId, ids, opts)),
+    drainBlobDeletions,
+    poke,
+    idle,
+  }
+}
+
+/** Queues a deleted row's body for deletion (inside the transaction that deletes the row). */
+async function queueBlobDeletion(tx: Queryable, r: SnapshotRow, at: Date) {
+  await tx.query(
+    `INSERT INTO board_snapshot_blob_deletions (storage_key, workspace_id, board_id, queued_at)
+     VALUES ($1, $2, $3, $4) ON CONFLICT (storage_key) DO NOTHING`,
+    [r.storage_key, r.workspace_id, r.board_id, at],
+  )
+}
+
+/** Runs the scheduler and the retention pass while the app runs (one API instance: docs/DEPLOY.md). */
+export function startCheckpointTimers(
+  app: FastifyInstance,
+  service: CheckpointService,
+  settings: Pick<CheckpointSettings, 'tickMs' | 'pruneEveryMs'>,
+): void {
+  const timers: ReturnType<typeof setInterval>[] = []
+  let pruning: Promise<unknown> | null = null
+  const pruneOnce = () => {
+    if (pruning) return
+    pruning = service
+      .pruneAll()
+      .catch((e: unknown) =>
+        app.log.warn({ err: { message: (e as Error)?.message } }, 'checkpoint retention failed'),
+      )
+      .finally(() => {
+        pruning = null
+      })
+  }
+  app.addHook('onReady', async () => {
+    if (settings.tickMs > 0) timers.push(setInterval(() => service.poke(), settings.tickMs))
+    if (settings.pruneEveryMs > 0) {
+      timers.push(setInterval(pruneOnce, settings.pruneEveryMs))
+      // A first pass soon after start (deploys restart the api more often than the interval).
+      timers.push(setTimeout(pruneOnce, Math.min(settings.pruneEveryMs, 2 * MINUTE)))
+    }
+    for (const t of timers) t.unref()
+  })
+  app.addHook('onClose', async () => {
+    for (const t of timers) clearInterval(t)
+    timers.length = 0
+    await service.idle()
+    await pruning // the database closes after this hook
+  })
+}

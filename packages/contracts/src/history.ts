@@ -154,3 +154,57 @@ export const HISTORY_EVENTS = {
   /** `{ restored }` (a count) after shapes came back from Recently deleted. */
   deletedRestored: 'history.deleted',
 } as const
+
+// ---- automatic checkpoints and retention (wave 4, checkpoints-2; docs/WAVE4-CONTRACTS.md, REV-10) ----
+//
+// Lobby saves a board by itself (kind `auto`): at most once an hour while people edit it, when the last
+// editor leaves after changes, before a checkpoint of it is restored as a new board, and right after an
+// import. A checkpoint whose content equals the board's newest one is never saved again. Manual
+// checkpoints are kept (up to MAX_MANUAL_CHECKPOINTS); automatic ones are thinned out over time
+// (CHECKPOINT_RETENTION) and deleted together with their stored content.
+
+/** Why an automatic checkpoint was made. */
+export const CHECKPOINT_REASONS = ['hourly', 'session_end', 'before_restore', 'import'] as const
+export const CheckpointReason = z.enum(CHECKPOINT_REASONS)
+export type CheckpointReason = z.infer<typeof CheckpointReason>
+
+/** A checkpoint as the list shows it: `reason` is null for manual (and legacy pre_restore) ones. */
+export const BoardCheckpoint = BoardSnapshot.extend({ reason: CheckpointReason.nullable() })
+export type BoardCheckpoint = z.infer<typeof BoardCheckpoint>
+
+/** GET /api/boards/:bid/snapshots (view) as the checkpoints UI reads it: every kind, newest first. */
+export const ListCheckpointsResponse = z.object({ snapshots: z.array(BoardCheckpoint) })
+export type ListCheckpointsResponse = z.infer<typeof ListCheckpointsResponse>
+
+/** Manual checkpoints kept per board (a save past it answers 409 SNAPSHOT_LIMIT). Automatic ones do not count. */
+export const MAX_MANUAL_CHECKPOINTS = 500
+
+/** At most one hourly checkpoint per this interval while a board keeps changing. */
+export const AUTO_CHECKPOINT_INTERVAL_MS = 60 * 60 * 1000
+
+/**
+ * What happens to automatic checkpoints as they age (UTC calendar buckets; the newest checkpoint of a
+ * bucket is the one kept): younger than `hourlyHours`, one per hour (those made before a restore and
+ * right after an import are all kept); then one per day until `dailyDays`; then one per week until
+ * `weeklyDays`; after that they are deleted. Manual checkpoints are never deleted by retention.
+ */
+export const CHECKPOINT_RETENTION = { hourlyHours: 48, dailyDays: 30, weeklyDays: 183 } as const
+
+/**
+ * GET /api/snapshots/:sid/content: the checkpoint's records, to preview it read-only. Needs view on the
+ * board AND a workspace membership above guest (the people who could restore it as a new board anyway);
+ * name-only guests and workspace guests get 403. 410 when its stored content is gone.
+ */
+export const CheckpointContent = z.object({
+  snapshot: BoardCheckpoint,
+  /** The serialized tldraw schema the records are in (the preview's store migrates them on load). */
+  schema: z.unknown(),
+  records: z.array(z.looseObject({ id: z.string(), typeName: z.string() })),
+})
+export type CheckpointContent = z.infer<typeof CheckpointContent>
+
+// DELETE /api/snapshots/:sid (board owners: manage_access, never a workspace guest) -> 204, audited as
+// `board.checkpoint.delete`. Both kinds: an owner may need to purge content from automatic ones too.
+
+/** Hints (ids only): clients refetch the list. `{ snapshotIds }` after checkpoints were deleted or pruned. */
+export const CHECKPOINT_EVENTS = { removed: 'history.snapshot.removed' } as const
