@@ -41,11 +41,23 @@ const INTRO_Y = 136
 /** Content starts below the heading and a (two-line) intro. */
 const TOP = 260
 const COL_GAP = 40
+/**
+ * Where the Brainstorm map ends: from here to the frame's margin a column one sticky note wide stays
+ * empty (NOTE_SIZE, plus the 40 px apps/sync place-notes keeps between a revealed note and the frame's
+ * content), for the notes of a private brainstorm revealed into the frame.
+ */
+export const BRAINSTORM_MAP_RIGHT = M + INNER_W - NOTE_SIZE - 40
 /** Three equal columns across the frame. */
 const COL3_W = (INNER_W - COL_GAP * 2) / 3
 const col3 = (i: number) => M + i * (COL3_W + COL_GAP)
 
-function tourFrame(b: BoardBuilder, index: number, heading: string, intro: string): TLFrameShape {
+function tourFrame(
+  b: BoardBuilder,
+  index: number,
+  heading: string,
+  intro: string,
+  introW = 1240,
+): TLFrameShape {
   const frame = b.frame({
     x: index * (TOUR_FRAME_W + FRAME_GAP),
     y: 0,
@@ -56,7 +68,7 @@ function tourFrame(b: BoardBuilder, index: number, heading: string, intro: strin
   // Headings and instructions arrive locked (PRE-07), like every template's.
   // DBC orange: #e16919 on the white frame is 3.4:1 (AA for large text; this is 44 px), and brighter in dark.
   b.text(frame, { x: M, y: HEADING_Y, w: INNER_W, text: heading, size: 'xl', color: 'orange', locked: true })
-  b.text(frame, { x: M, y: INTRO_Y, w: 1240, text: intro, size: 'm', color: 'grey', locked: true })
+  b.text(frame, { x: M, y: INTRO_Y, w: introW, text: intro, size: 'm', color: 'grey', locked: true })
   return frame
 }
 
@@ -142,18 +154,23 @@ function brainstorm(b: BoardBuilder) {
     1,
     'Brainstorm',
     'One question, ideas in clusters. The connectors are attached, so they follow when you move a theme.',
+    // Full width, like the heading: the free column below it starts right under the intro.
+    INNER_W,
   )
   // A left-to-right map (F12): the question on the left, a column of themes, each theme's ideas in a
   // row to its right. The theme column keeps empty canvas between the themes, so dragging one up or down
   // (the demo's "the connectors follow") never lands it on the ideas; the Story row keeps its third place
   // free for the idea a second person adds live.
-  // Slightly smaller notes keep the bottom row clear of Present's control bar.
-  const noteScale = 0.9
+  // The map ends at BRAINSTORM_MAP_RIGHT: the column to its right stays empty, so a private brainstorm
+  // revealed into this frame lands there (apps/sync place-notes puts the notes in a frame's free space,
+  // clear of its content) and the frame keeps its 16:10 slide size (round-2 F5).
+  // Smaller notes keep the bottom row clear of Present's control bar.
+  const noteScale = 0.85
   const noteW = NOTE_SIZE * noteScale
-  const rowGap = 40
+  const rowGap = 50
   const rowY = (i: number) => TOP + i * (noteW + rowGap)
-  const qW = 360
-  const qH = 220
+  const qW = 300
+  const qH = 200
   const question = b.geo(f, {
     x: M,
     y: rowY(1) + noteW / 2 - qH / 2,
@@ -166,11 +183,11 @@ function brainstorm(b: BoardBuilder) {
     fill: 'solid',
     size: 'l',
   })
-  const themeX = M + qW + 120
-  const themeW = 240
+  const themeX = M + qW + 100
+  const themeW = 220
   const themeH = 72
-  const ideasX = themeX + themeW + 50
-  const ideaGap = 20
+  const ideasX = themeX + themeW + 40
+  const ideaGap = 15
   const clusters: ReadonlyArray<{ label: string; color: TLDefaultColorStyle; ideas: string[] }> = [
     {
       label: 'Gameplay',

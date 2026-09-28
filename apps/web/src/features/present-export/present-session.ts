@@ -13,6 +13,7 @@ import {
   atom,
   computed,
   type Editor,
+  type TLEventInfo,
   type TLPageId,
   type TLShape,
   type TLShapeId,
@@ -22,12 +23,20 @@ import { type FrameEntry, presentationOrder } from './board-ops.ts'
 import { buildSlides, findStartIndex, reconcileIndex, type Slide, stepIndex } from './slides.ts'
 
 export const PRESENTING_ATTR = 'data-dr-presenting'
+/** How long after a presentation the board view is re-centred while the canvas settles. */
+const HOLD_CENTRE_MS = 2000
 
 export type FullscreenMode = 'native' | 'window'
 
 interface SavedView {
   pageId: TLPageId
   camera: { x: number; y: number; z: number }
+  /**
+   * The page point at the middle of the board's viewport when the presentation started. The view is
+   * restored around it, not from the raw camera: tldraw keeps camera x/y when the canvas changes size,
+   * so a side panel that was open before and is closed after would leave the board shifted sideways.
+   */
+  center: { x: number; y: number }
   selectedIds: TLShapeId[]
   focus: HTMLElement | null
 }
@@ -258,6 +267,7 @@ export function createPresenter(editor: Editor): Presenter {
     if (slides.length === 0) {
       return { ok: false, reason: order$.get().length > 0 ? 'all-skipped' : 'no-frames' }
     }
+    stopHolding?.()
     const selectedIds = editor.getSelectedShapeIds()
     const startIndex = findStartIndex(slides, order$.get(), selectedIds, (id) =>
       editor
@@ -266,9 +276,11 @@ export function createPresenter(editor: Editor): Presenter {
         .reverse(),
     )
     const active = document.activeElement
+    const middle = editor.getViewportPageBounds().center
     const saved: SavedView = {
       pageId: editor.getCurrentPageId(),
       camera: { ...editor.getCamera() },
+      center: { x: middle.x, y: middle.y },
       selectedIds: [...selectedIds],
       focus: active instanceof HTMLElement ? active : null,
     }
@@ -310,7 +322,60 @@ export function createPresenter(editor: Editor): Presenter {
     if (editor.getCurrentPageId() !== saved.pageId && editor.getPage(saved.pageId)) {
       editor.setCurrentPage(saved.pageId)
     }
-    editor.setCamera(saved.camera, { immediate: true, force: true })
+    // screen = (page + camera) * z: put the saved centre back in the middle of the canvas as it is now.
+    const { w, h } = editor.getViewportScreenBounds()
+    const { z } = saved.camera
+    const camera =
+      w > 0 && h > 0 && z > 0
+        ? { x: w / (2 * z) - saved.center.x, y: h / (2 * z) - saved.center.y, z }
+        : saved.camera
+    editor.setCamera(camera, { immediate: true, force: true })
+  }
+
+  /**
+   * After a presentation the board's canvas settles over the next frames (fullscreen exit, the dock
+   * and top bar coming back; tldraw reads the new size up to 200 ms late): re-centre on every resize
+   * for a moment, until the person moves the camera or presses a key themselves.
+   */
+  let stopHolding: (() => void) | null = null
+  const holdCentre = (saved: SavedView) => {
+    stopHolding?.()
+    const onResize = () => {
+      if (state.get()) return release()
+      restoreCamera(saved)
+    }
+    const onEvent = (info: TLEventInfo) => {
+      if (
+        info.type === 'wheel' ||
+        info.type === 'pinch' ||
+        (info.type === 'pointer' && info.name === 'pointer_down') ||
+        (info.type === 'keyboard' && info.name === 'key_down')
+      ) {
+        release()
+      }
+    }
+    const timer = setTimeout(() => release(), HOLD_CENTRE_MS)
+    function release() {
+      clearTimeout(timer)
+      editor.off('resize', onResize)
+      editor.off('event', onEvent)
+      if (stopHolding === release) stopHolding = null
+    }
+    editor.on('resize', onResize)
+    editor.on('event', onEvent)
+    stopHolding = release
+  }
+
+  // tldraw 5.4.2 measures the viewport's screen bounds from its `.tl-canvas` element (DefaultCanvas,
+  // useScreenBounds) through a 200 ms throttle, plus a once-a-second check. When the presentation ends
+  // less than 200 ms after one of those checks, the editor keeps the full-window bounds for up to
+  // another 200 ms after the board chrome is back: a click or drag in that window lands off by the
+  // dock's width and the top bar's height, so a drag started on a shape brushes the canvas instead of
+  // moving it, or jumps when the bounds catch up mid-drag. Measure it ourselves as soon as the board
+  // layout is back.
+  const measureViewport = () => {
+    const el = container()
+    editor.updateViewportScreenBounds(el.querySelector<HTMLElement>('.tl-canvas') ?? el)
   }
 
   function stop() {
@@ -333,20 +398,39 @@ export function createPresenter(editor: Editor): Presenter {
       if (active && active !== document.body && !overlay?.contains(active)) return
       focusTarget(s.saved.focus)?.focus({ preventScroll: true })
     }
-    if (document.fullscreenElement && document.fullscreenElement === container()) {
-      document.exitFullscreen().then(restoreFocus, () => {})
-    }
     const { saved } = s
+    // The board view once the container is back at its board size: its real screen bounds (see
+    // measureViewport), then exactly the camera it had.
+    const settleView = () => {
+      if (state.get()) return
+      measureViewport()
+      restoreCamera(saved)
+    }
+    if (document.fullscreenElement && document.fullscreenElement === container()) {
+      document.exitFullscreen().then(
+        () => {
+          settleView()
+          restoreFocus()
+        },
+        () => {},
+      )
+    }
     unsafe__withoutCapture(() => {
+      // In-window presentations (and a fullscreen the browser already left) have their board layout
+      // back now that the presenting flag is gone; a native fullscreen still covers the screen here.
+      measureViewport()
       restoreCamera(saved)
       const stillThere = saved.selectedIds.filter((id) => editor.getShape(id))
       if (stillThere.length) editor.setSelectedShapes(stillThere)
+      holdCentre(saved)
     })
-    // The container returns to its board size over the next frames (fullscreen exit is async): set the
-    // camera again once it has, so the board view is exactly where it was.
+    // The container returns to its board size over the next frames (fullscreen exit is async): measure
+    // it, and while the centre is still held set the camera again, so the board view is where it was.
     requestAnimationFrame(() =>
       requestAnimationFrame(() => {
-        if (!state.get()) restoreCamera(saved)
+        if (state.get()) return
+        measureViewport()
+        if (stopHolding) restoreCamera(saved)
       }),
     )
     focusTarget(saved.focus)?.focus({ preventScroll: true })

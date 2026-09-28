@@ -11,6 +11,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 // The real sample board (a test-only import: the sync server itself never depends on templates).
 import { instantiateTemplate } from '../../../../packages/templates/src/index.ts'
 import { estimateShapeRect } from '../../../../packages/templates/src/layout.ts'
+import { BRAINSTORM_MAP_RIGHT } from '../../../../packages/templates/src/templates/lobby-tour.ts'
 import { createSyncServer } from '../../src/app.ts'
 import {
   estimateGrowY,
@@ -197,6 +198,20 @@ describe('free space inside the frame (round-2 F5)', () => {
       for (const o of [title, cards]) expect(overlaps(rectAt(p), o.rect, SHAPE_CLEARANCE - 1)).toBe(false)
   })
 
+  it('takes the spot right under content whose edge is a fraction of a pixel (rounded away from it)', () => {
+    // A text box's estimated height is fractional (24 px × 1.35 + 8): its clear space ends at 196.4.
+    const intro: Obstacle = { rect: { x: 80, y: 116, w: 1440, h: 40.4 }, clear: SHAPE_CLEARANCE }
+    const out = layoutInFreeSpace({
+      frameW: 1600,
+      frameH: 1000,
+      obstacles: [intro],
+      items: notes(1),
+      alignX: 80,
+    })
+    // Not 196 (inside the clear space, refused), and not the frame's bottom.
+    expect([...(out?.values() ?? [])]).toEqual([{ x: 80, y: 197 }])
+  })
+
   it('a connector blocks only along its line, not its whole bounding box', () => {
     // A diagonal from the top-right to the bottom-left corner: the top-left half of the frame is free.
     const line: Obstacle = {
@@ -309,10 +324,9 @@ describe('revealing into the Lobby tour (round-2 F5)', () => {
     return notesPlaced.map(noteRect)
   }
 
-  // The tour's Brainstorm frame is now a full map (demo polish A), so there may be no free gap: the
-  // guarantee is that the notes never cover what the frame holds, and the frame keeps its width and
-  // only grows downwards when it has to (round-2 F5).
-  it('three notes into the Brainstorm frame never cover its content; it keeps its width and only grows down', () => {
+  // The tour's Brainstorm frame is a full map (demo polish A) that keeps one column free on its right
+  // (BRAINSTORM_MAP_RIGHT): a small reveal lands there, and the slide keeps its 16:10 size (round-2 F5).
+  it('three notes go into the Brainstorm frame’s free column: the frame keeps its 16:10 size', () => {
     const db = new DatabaseSync(':memory:')
     try {
       const { storage, frame, all } = tourStorage(db)
@@ -325,15 +339,15 @@ describe('revealing into the Lobby tour (round-2 F5)', () => {
       expect(out.placed).toHaveLength(3)
       const records = all()
       const after = records.find((r) => r.id === frame.id) as unknown as TLFrameShape
-      expect(after.props.w).toBe(1600)
-      expect(after.props.h).toBeGreaterThanOrEqual(1000)
-      expect(after.x).toBe(frame.x)
-      expect(after.y).toBe(frame.y)
-      for (const r of checkClear(records, frame.id, out.placed)) {
-        expect(r.x).toBeGreaterThanOrEqual(FRAME_PAD)
+      expect(after.props).toMatchObject({ w: 1600, h: 1000 })
+      expect([after.x, after.y]).toEqual([frame.x, frame.y])
+      const rects = checkClear(records, frame.id, out.placed)
+      for (const r of rects) {
+        // In the column right of the map, on the tour's 80 px margin.
+        expect(r.x).toBe(BRAINSTORM_MAP_RIGHT + SHAPE_CLEARANCE)
+        expect(r.x + r.w).toBe(1600 - 80)
         expect(r.y).toBeGreaterThanOrEqual(FRAME_PAD)
-        expect(r.x + r.w).toBeLessThanOrEqual(1600 - FRAME_PAD)
-        expect(r.y + r.h).toBeLessThanOrEqual(after.props.h - FRAME_PAD)
+        expect(r.y + r.h).toBeLessThanOrEqual(1000 - FRAME_PAD)
       }
     } finally {
       db.close()

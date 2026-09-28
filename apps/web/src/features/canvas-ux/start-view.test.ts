@@ -5,6 +5,7 @@ import {
   fitIfViewportEmpty,
   parseStoredCamera,
   planStartView,
+  prefersFirstFrame,
   readStartParams,
   type StartParams,
   serializeCamera,
@@ -114,5 +115,41 @@ describe('planStartView', () => {
     expect(fitIfViewportEmpty(false, true)).toBe(true)
     expect(fitIfViewportEmpty(true, true)).toBe(false)
     expect(fitIfViewportEmpty(false, false)).toBe(false)
+  })
+})
+
+describe('prefersFirstFrame (F15: what "fit all content" shows where the whole page is unreadable)', () => {
+  // The Lobby tour: six 1600 x 1000 frames in one 10,400 x 1,268 row.
+  const tour = { w: 10_400, h: 1_268 }
+  const minZoom = 0.05
+
+  it('a phone-sized canvas (a 390 px phone minus the dock rail) opens on the first frame', () => {
+    expect(prefersFirstFrame({ screen: { w: 345, h: 796 }, content: tour, minZoom, hasFrame: true })).toBe(
+      true,
+    )
+    const small = { w: 300, h: 200 }
+    expect(prefersFirstFrame({ screen: { w: 480, h: 700 }, content: small, minZoom, hasFrame: true })).toBe(
+      true,
+    )
+  })
+
+  it('a desktop keeps the overview while it fits at the smallest zoom (the tour at about 9 %)', () => {
+    expect(prefersFirstFrame({ screen: { w: 1395, h: 852 }, content: tour, minZoom, hasFrame: true })).toBe(
+      false,
+    )
+  })
+
+  it('a desktop gets the first frame when even the smallest zoom would clip the content', () => {
+    const huge = { w: 60_000, h: 2_000 }
+    expect(prefersFirstFrame({ screen: { w: 1395, h: 852 }, content: huge, minZoom, hasFrame: true })).toBe(
+      true,
+    )
+  })
+
+  it('without a frame (or with no screen size yet) it stays "fit all"', () => {
+    expect(prefersFirstFrame({ screen: { w: 345, h: 796 }, content: tour, minZoom, hasFrame: false })).toBe(
+      false,
+    )
+    expect(prefersFirstFrame({ screen: { w: 0, h: 0 }, content: tour, minZoom, hasFrame: true })).toBe(false)
   })
 })

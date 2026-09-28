@@ -494,6 +494,9 @@ code {
   min-width: 0;
 }
 .dr-topbar__ws {
+  /* The title takes any squeeze (F4: the bar compacts, then hides this crumb, before the title
+     drops below about 24 characters); "Dev Stu… / Lobby t…" cut both. */
+  flex: none;
   overflow: hidden;
   max-width: 18ch;
   color: var(--dr-ink-2);
@@ -1047,9 +1050,14 @@ code {
   padding: 0 7px;
   font-weight: 600;
 }
+/* background-color, not the `background` shorthand: the shorthand also reset a select's chevron
+   (background-repeat back to repeat), and the dark theme's chevron then tiled across the field. */
 .dr-input:disabled {
-  background: var(--dr-hover);
+  background-color: var(--dr-hover);
   color: var(--dr-ink-2);
+}
+.dr-select:disabled {
+  cursor: default;
 }
 .dr-select {
   appearance: none;
@@ -1845,6 +1853,13 @@ code {
   font-size: 13px;
   text-align: center;
 }
+/* "Not you?": the app's link style (.dr-linkbtn), not the browser's default blue (unreadable in dark). */
+.dr-invite-card__as a {
+  color: var(--dr-accent-ink);
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
 
 /* ---- board body + feature dock (features/FeatureHost.tsx) ---------------------------------- */
 .dr-board__body {
@@ -2121,6 +2136,37 @@ html[data-dr-presenting] .dr-board__account {
   content: "Only you right now";
   color: var(--dr-ink-2);
   font-size: 13px;
+}
+
+/* F4: a wide bar that would cut the board title below about 24 characters compacts step by step
+   (board/topbar-fit.ts; TopBar.tsx sets data-compact, each value listing every step so far). The
+   words that go stay in the controls' accessible names and tooltips. */
+.dr-topbar[data-compact~="link"] .dr-sharebadge__text,
+.dr-topbar[data-compact~="chips"] .dr-pn-chip__label,
+.dr-topbar[data-compact~="chips"] .dr-wk-pill__label,
+.dr-topbar[data-compact~="crumb"] .dr-topbar__sep,
+.dr-topbar[data-compact~="crumb"] .dr-topbar__ws,
+.dr-topbar[data-compact~="crumb"] .dr-topbar__slash,
+.dr-topbar[data-compact~="present"] .dr-pe-present__label {
+  display: none;
+}
+.dr-topbar[data-compact~="status"] .dr-pill__label,
+.dr-topbar[data-compact~="status"] .dr-save__label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.dr-topbar[data-compact~="status"] .dr-pill,
+.dr-topbar[data-compact~="status"] .dr-save {
+  padding: 0 8px;
+}
+.dr-topbar[data-compact~="present"] .dr-pe-present {
+  width: 32px;
+  padding: 0;
 }
 
 /* ---- dark theme: what the tokens cannot reach ------------------------------------------------------ */

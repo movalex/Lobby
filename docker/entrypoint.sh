@@ -1,6 +1,6 @@
 #!/bin/sh
-# Container entrypoint of the api and sync images (runs as tini's child). The worker image does not use
-# it: it has no data directory and starts as `node` directly (docker/worker.Dockerfile).
+# Container entrypoint of the api and sync images (PID 1 until it execs tini). The worker image does not
+# use it: it has no data directory and starts as `node` directly (docker/worker.Dockerfile).
 #
 # The image starts as root ONLY so this script can make DRAFTROOM_DATA_DIR writable, then it drops to
 # the unprivileged `node` user before the application starts. Why: Render mounts persistent disks
@@ -18,8 +18,10 @@ if [ "$(id -u)" = "0" ]; then
       chown node:node -- "$dir"
     fi
   fi
-  # exec keeps the app as tini's direct child, so SIGTERM from `docker stop` / Render reaches it.
-  exec setpriv --reuid=node --regid=node --init-groups --no-new-privs env HOME=/home/node "$@"
+  # tini becomes PID 1 as `node`, with the app as its direct child. Both run as the same user, so tini can
+  # forward SIGTERM from `docker stop` / Render without CAP_KILL, which Render does not grant (a root tini
+  # failed with "Unexpected error when forwarding signal: Operation not permitted" on every deploy).
+  exec setpriv --reuid=node --regid=node --init-groups --no-new-privs env HOME=/home/node /usr/bin/tini -- "$@"
 fi
 
-exec "$@"
+exec /usr/bin/tini -- "$@"

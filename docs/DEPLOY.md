@@ -346,7 +346,7 @@ It was deployed in the order api → sync → web; all three went live on the fi
 
 - **Signal path.** Render sends SIGTERM, then SIGKILL after the default 30 s shutdown delay.
   - `maxShutdownDelaySeconds` isn't set anywhere: Render refused it on services with a disk (first Blueprint sync, 2026-09-27), and 30 s is enough for every service.
-  - **api and sync:** tini (PID 1) → `docker/entrypoint.sh`, which `exec`s the app as the unprivileged `node` user.
+  - **api and sync:** `docker/entrypoint.sh` (PID 1, root) makes the data dir writable, drops to the unprivileged `node` user and `exec`s tini, which starts the app. tini runs as `node` on purpose: Render gives containers no CAP_KILL, so the earlier root tini could not forward SIGTERM ("Unexpected error when forwarding signal: Operation not permitted" on every deploy, and the app was killed without its graceful shutdown). Reproduced and verified on the NAS with `docker run --cap-drop KILL` (2026-09-28): old = tini FATAL, exit 1, no SIGTERM in the app; new = the app logs SIGTERM and exits 0.
   - **Worker:** starts as `node` directly under tini. The worker image has no root phase, which is what lets it run under `cap_drop: ALL`.
   - The app is always tini's direct child and receives the signal. tini also reaps the worker's ffmpeg/PDF children.
 - **sync.** Stops accepting connections, closes all rooms (flushing the tombstone prune before closing each database), terminates sockets, and exits 0. It force-exits after 5 s.

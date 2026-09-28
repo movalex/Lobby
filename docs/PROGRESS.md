@@ -239,3 +239,41 @@ Checks: lint 0 errors / 0 warnings (581 files); typecheck 14 projects; vitest 1,
   - A seam security review: 12 findings, 3 medium (attribution forgery via note props, one guest using up the workspace quota, guest grants copied by keep-sharing duplicates).
   - A full walkthrough of DEMO.md on a local stack: 18 findings, 137 screenshots.
   - Two agents misread their task (the real-Postgres lens and the guest polish) and were rerun in round 3.
+- **Wave 3 round 3.** Seven fix owners, a verifier on each of the three riskiest, and a real-Postgres lens.
+  - **Attribution** (SEAM-01): a note's "last edited by" (`props.textLastEditedBy`) is server-checked. Typing must name the writer, undo is vouched by a per-room ledger, and forged creates are stored unattributed; no loops. The client shows "(guest)" on a guest's notes and locks attribution with the text in per-property undo.
+  - **Guests**:
+    - joins: 60 per 10 min per address and 60 per 10 min per link;
+    - guests are left out of the Share picker and are not copied by keep-sharing duplicates;
+    - they are limited like viewers under the "editors" export policy;
+    - "Recently deleted" (list AND restore) is for account editors only;
+    - per-link caps on streams, reactions and summons hold under concurrency;
+    - workshop-link copy, Share dialog layout, and the guest-ended screen fixed.
+  - **Storage**:
+    - a report-first asset collector (`0013_asset_gc`). Deletion needs `DRAFTROOM_ASSET_GC=delete` and 30 days unreferenced, and every reference source is checked: canvas, "Recently deleted", checkpoints, trash, and uploads under 7 days old;
+    - a per-guest upload allowance;
+    - thumbnails count in the quota, and a per-workspace board cap;
+    - `GET /api/workspaces/:wid/storage`, shown as the "Storage: X of 100 GB" sidebar line.
+  - **Backups**: the offsite manifest and its entries are HMAC-signed with a key derived from the internal secret; tampering fails the drill and restore. An optional separate backup bucket and token (`DRAFTROOM_BACKUP_R2_*`).
+  - **Workshops**:
+    - hand names keep "(guest)";
+    - History and vote-CSV export gates;
+    - vote badges scale with zoom and stay under dialogs;
+    - reveal placement finds free space, grows the frame only downward, and moves the revealer's camera;
+    - the composer never loses typed text;
+    - reveal and cancel are open to editors when the starter is gone.
+  - **Demo polish**:
+    - the gallery button is always visible;
+    - the tour's Mood board has swatches and type samples, and its Brainstorm frame is a map;
+    - DEMO.md corrected;
+    - thumbnails framed on the start view at 16:10, with a fast leave-capture, and APNG refused;
+    - the top bar keeps the title visible;
+    - dark disabled selects, videos landing in image slots, and Export defaulting to the current frame at 1x;
+    - phones open on the first frame.
+  - **Real Postgres 18.6** (throwaway container on the NAS, removed afterwards; an opt-in harness, `DRAFTROOM_TEST_DATABASE_URL`, committed): the api suite passed (586 tests, about 33,000 transactions). Migrations 0009–0012 were checked on a database full of M1–M3 data. Found two deadlocks (PG-1 guest join vs link revoke/extend, PG-2 sweeper vs revoke) and a rollback gap (PG-3), all being fixed in wave 4b.
+- **Wave 4a** (docs/WAVE4-CONTRACTS.md), five owners and three verifiers:
+  - **Automatic checkpoints** (`0014_checkpoint_policy`): hourly while boards change, on the last editor leaving, and before restores and imports; skipped when the content is unchanged. Retention is hourly for 48 h, then daily for 30 days, then weekly for 6 months, and manual checkpoints are never pruned. Owners can delete checkpoints (audited), and there is a read-only preview. The verifier fixed a silent drop after repeated failures and viewers blocking the hourly checkpoint.
+  - **Tags** on notes: chips, a picker, a filter, search, and a CSV column.
+  - **Mind maps**: Tab/Enter/Shift+Tab, automatic layout, collapse, and an outline export.
+  - **Office previews** (DOCX/PPTX/XLSX/ODF through a sandboxed LibreOffice sidecar on the NAS, then the PDF pipeline). The verifier closed a zip-bomb bypass (high), a macro-package bypass, unbounded PDF output and orphaned job files.
+  - **Search across boards** (`0015_board_search`, Postgres full text): permission-filtered at query time, with an incremental indexer. The verifier fixed per-board result starvation and mention markup leaking into snippets, and found no permission leak.
+- The live R2 offsite test (opt-in, random `test/` prefix, everything deleted and checked gone) passed against the staging bucket: upload, signed manifest, and the restore drill restoring an identical board from R2.
