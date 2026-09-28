@@ -110,6 +110,12 @@ test('perf harness smoke: seeds a small heavy board, measures edit visibility be
     await waitForBoard(s.page)
     await expect.poll(() => read(s.page, (ed) => ed.getCurrentPageShapes().length)).toBe(seeded.shapes)
   }
+  // Boards open on their first frame (final polish, DANA-06); pins off screen are not drawn, so show the
+  // whole board before counting both pins.
+  await read(b.page, (ed) => {
+    ed.zoomToFit()
+    return true
+  })
   await expect(b.page.getByTestId('comment-pin')).toHaveCount(2)
 
   const latency = await measureLatency({
