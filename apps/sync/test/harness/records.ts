@@ -117,8 +117,15 @@ export function plainText(richText: unknown): string {
     .join('\n')
 }
 
-export function withText(shape: ShapeRecord, text: string): ShapeRecord {
-  return { ...shape, props: { ...shape.props, richText: toRichText(text) } }
+/**
+ * `shape` retyped. `by` stamps a note's attribution the way tldraw's NoteShapeUtil.onBeforeUpdate
+ * does on every text change (the writer's id; the sync server refuses new text under anyone else's,
+ * apps/sync/src/attribution.ts). Leave it out only for shapes without attribution.
+ */
+export function withText(shape: ShapeRecord, text: string, by?: string | null): ShapeRecord {
+  const props: Record<string, unknown> = { ...shape.props, richText: toRichText(text) }
+  if (by !== undefined && 'textLastEditedBy' in shape.props) props.textLastEditedBy = text === '' ? null : by
+  return { ...shape, props }
 }
 
 export const TEST_ASSET_ID = 'ast_AAAAAAAAAAAAAAAAAAAA'

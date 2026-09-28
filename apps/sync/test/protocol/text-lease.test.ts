@@ -12,7 +12,8 @@ const h = useProtocolHarness()
 const N = 'shape:n'
 
 const textOn = (c: NodeSyncClient) => plainText(c.get(N)?.props.richText)
-const type = (c: NodeSyncClient, text: string) => c.update(N, (r) => withText(r, text))
+// Each writer stamps its own id, as tldraw does on a text change (the sync server requires it).
+const type = (c: NodeSyncClient, text: string) => c.update(N, (r) => withText(r, text, c.userId))
 
 async function setup(env: Record<string, string>, bobUser = 'bob') {
   const server = await h.server({ env })
@@ -83,7 +84,7 @@ describe('text-edit lease', () => {
     await alice.waitForAcked()
     await waitFor(() => textOn(bob) === 'alice typing')
 
-    bob.update(N, (r) => ({ ...withText(r, 'bob typing'), x: 777 }))
+    bob.update(N, (r) => ({ ...withText(r, 'bob typing', bob.userId), x: 777 }))
     expect(await lastResult(bob)).toBe('discard')
     expect(bob.get(N)?.x).toBe(0)
     expect((await h.freshView(server, boardId)).get(N)?.x).toBe(0)
@@ -144,7 +145,9 @@ describe('text-edit lease', () => {
     alice.releaseOutgoing()
     expect(await lastResult(alice)).toBe('commit')
     aliceTab2.releaseOutgoing()
-    expect(await lastResult(aliceTab2)).toBe('commit') // no veto, no conflict signal
+    // applied, no veto and no conflict signal (a rebase, not a commit, only because tab 1 already
+    // stamped the same attribution that tab 2's push sets again)
+    expect(await lastResult(aliceTab2)).not.toBe('discard')
     await waitFor(() => textOn(alice) === 'NOTE world')
     expect(await serverText(server, boardId)).toBe('NOTE world') // "hello " is gone, on tab 1's screen too
   })

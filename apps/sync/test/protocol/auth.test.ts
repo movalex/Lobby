@@ -67,7 +67,7 @@ describe('connection tickets', () => {
     const boardId = newBoardId()
     const alice = await h.connected(server, { boardId, user: 'usr_alice' })
     alice.put(noteShape('n', 'NOTE'))
-    alice.update('shape:n', (r) => withText(r, 'alice typing')) // takes the text lease as usr_alice
+    alice.update('shape:n', (r) => withText(r, 'alice typing', 'usr_alice')) // takes the text lease as usr_alice
     await alice.waitForAcked()
 
     // no ticket + dev params: still unauthenticated
@@ -89,7 +89,7 @@ describe('connection tickets', () => {
     // the lease names the ticket's uid; a second user is denied by that name
     const bob = await h.connected(server, { boardId, user: 'usr_bob' })
     await waitFor(() => bob.get('shape:n'))
-    bob.update('shape:n', (r) => withText(r, 'bob typing'))
+    bob.update('shape:n', (r) => withText(r, 'bob typing', 'usr_bob'))
     await bob.waitForAcked()
     expect(bob.pushResults.at(-1)?.action).toBe('discard')
     await waitFor(() => bob.customMessages.length > 0)

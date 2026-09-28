@@ -4,6 +4,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { NodeSqliteWrapper, type RoomSnapshot, SQLiteSyncStorage, TLSocketRoom } from '@tldraw/sync-core'
 
 import type { TLRecord, TLSchema } from '@tldraw/tlschema'
+import { AttributionLedger, withNoteAttribution } from './attribution.ts'
 import { BACKUP_DEFAULTS, type BackupEntry, backupBoard, readManifest } from './backup/backup.ts'
 import { withDeleteCapture } from './deleted/capture.ts'
 import { type RestoreSummary, restoreDeleted } from './deleted/restore.ts'
@@ -31,6 +32,8 @@ interface RoomEntry {
   db: DatabaseSync
   storage: SQLiteSyncStorage<TLRecord>
   lease: TextLease
+  /** Note text and attribution pairs replaced by each user's own writes (attribution.ts, SEAM-01). */
+  attribution: AttributionLedger
   /** "Recently deleted" side table of this board's database (REV-07). */
   deleted: DeletedStore
   evictTimer: ReturnType<typeof setTimeout> | null
@@ -352,12 +355,29 @@ export class RoomRegistry {
           entry.room.sendCustomMessage(sessionId, message)
         },
       })
+      entry.attribution = new AttributionLedger()
       entry.room = new TLSocketRoom<TLRecord, SessionMeta>({
         schema: this.opts.schema,
         storage: entry.storage,
         authorizeRecord: {
-          // Lease veto first; a delete it allowed is captured for "Recently deleted".
-          ...withDeleteCapture(entry.lease.authorizeRecord, entry.deleted),
+          // Note attribution first (SEAM-01), then the lease veto; a delete both allowed is captured
+          // for "Recently deleted".
+          ...withDeleteCapture(
+            withNoteAttribution(entry.lease.authorizeRecord, {
+              ledger: entry.attribution,
+              deletedRow: (id) => entry.deleted.latestShapeRow(id),
+              onForged: (kind, shapeId, sessionId) =>
+                this.opts.log?.(
+                  '[attribution] forged note attribution',
+                  kind === 'create' ? 'stored anonymous' : 'skipped',
+                  boardId,
+                  shapeId,
+                  'session:',
+                  sessionId,
+                ),
+            }),
+            entry.deleted,
+          ),
           // Only the session's own tldraw user record, as its ticket says (G-R8).
           user: authorizeUserRecord,
         },
