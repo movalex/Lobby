@@ -146,6 +146,7 @@ describe('shipped migrations', () => {
       '0010_private_notes',
       '0011_board_thumbnails',
       '0012_board_export_policy',
+      '0015_board_search',
     ])
   })
 
@@ -164,6 +165,7 @@ describe('shipped migrations', () => {
       '0010_private_notes',
       '0011_board_thumbnails',
       '0012_board_export_policy',
+      '0015_board_search',
     ])
     expect(await migrate(db)).toEqual({ applied: [] })
     expect(await tableNames()).toEqual([
@@ -175,6 +177,8 @@ describe('shipped migrations', () => {
       'board_asset_links',
       'board_export_policies',
       'board_members',
+      'board_search_entries',
+      'board_search_state',
       'board_snapshots',
       'board_stars',
       'board_thumbnails',
@@ -232,6 +236,7 @@ describe('shipped migrations', () => {
       '0010_private_notes',
       '0011_board_thumbnails',
       '0012_board_export_policy',
+      '0015_board_search',
     ])
     expect(await recorded()).toEqual(shipped.map((m) => m.name))
     const inv = await db.one<{ multi_use: boolean; use_count: number }>(

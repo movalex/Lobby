@@ -1,0 +1,182 @@
+/* Dashboard "Inside boards" results (search across boards, wave 4). Tokens only (--dr-*), so the dark
+   theme applies; one column at phone width. */
+
+.dr-csearch {
+  max-width: 960px;
+  margin: 28px 0 8px;
+}
+.dr-csearch__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+  margin-bottom: 10px;
+}
+.dr-csearch__title {
+  margin: 0;
+}
+.dr-csearch__status {
+  margin: 0;
+  color: var(--dr-ink-2);
+  font-size: 13px;
+}
+.dr-csearch__retry {
+  height: 28px;
+}
+.dr-csearch__note {
+  margin: -2px 0 10px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--dr-accent-tint);
+  color: var(--dr-ink-2);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+.dr-csearch__results {
+  transition: opacity 120ms ease;
+}
+.dr-csearch[aria-busy="true"] .dr-csearch__results {
+  opacity: 0.55;
+}
+@media (prefers-reduced-motion: reduce) {
+  .dr-csearch__results {
+    transition: none;
+  }
+}
+.dr-csearch__groups {
+  display: grid;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.dr-csearch__group {
+  min-width: 0;
+  padding: 6px;
+  border: 1px solid var(--dr-line);
+  border-radius: 12px;
+  background: var(--dr-surface);
+  box-shadow: 0 1px 2px rgb(27 35 48 / 5%);
+}
+.dr-csearch__board {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 10px;
+  min-width: 0;
+  padding: 6px 8px 4px;
+}
+.dr-csearch__board-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  max-width: 100%;
+  border-radius: 6px;
+  color: var(--dr-ink);
+  font-size: 14.5px;
+  font-weight: 650;
+  text-decoration: none;
+}
+.dr-csearch__board-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dr-csearch__board-link:hover .dr-csearch__board-title {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.dr-csearch__glyph {
+  flex: none;
+  color: var(--dr-ink-2);
+}
+.dr-csearch__board-meta {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  color: var(--dr-ink-2);
+  font-size: 12.5px;
+}
+.dr-csearch__hits {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.dr-csearch__hit {
+  display: grid;
+  grid-template-columns: 132px minmax(0, 1fr);
+  align-items: baseline;
+  gap: 2px 12px;
+  padding: 7px 8px;
+  border-radius: 8px;
+  color: var(--dr-ink);
+  font-size: 13.5px;
+  line-height: 1.45;
+  text-decoration: none;
+}
+.dr-csearch__hit:hover {
+  background: var(--dr-hover);
+}
+.dr-csearch__hit:focus-visible,
+.dr-csearch__board-link:focus-visible {
+  outline: 2px solid var(--dr-focus);
+  outline-offset: 1px;
+}
+.dr-csearch__kind {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: var(--dr-ink-2);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.dr-csearch__kind svg {
+  flex: none;
+  align-self: center;
+}
+.dr-csearch__kind[data-kind="note"] svg {
+  color: var(--dr-amber-ink);
+}
+.dr-csearch__snippet {
+  display: -webkit-box;
+  min-width: 0;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+}
+.dr-csearch__snippet mark {
+  padding: 0 1px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--dr-amber) 35%, transparent);
+  color: inherit;
+}
+.dr-csearch__rest {
+  margin: 2px 8px 6px;
+  color: var(--dr-ink-2);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+.dr-csearch__more-boards {
+  margin-top: 10px;
+}
+/* The title list's compact "no match" line while "Inside boards" is shown below it. */
+.dr-csearch__none {
+  margin: 0 0 4px;
+  color: var(--dr-ink-2);
+  font-size: 13.5px;
+}
+
+@media (max-width: 760px) {
+  .dr-csearch__hit {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 2px;
+  }
+}

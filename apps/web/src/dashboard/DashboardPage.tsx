@@ -38,6 +38,8 @@ import {
 import { newsByBoard } from './notifications.ts'
 import { readPickerHidden, readViewMode, type ViewMode, writeViewMode } from './prefs.ts'
 import { Sidebar } from './Sidebar.tsx'
+import { ContentSearch } from './search/ContentSearch.tsx'
+import { contentSearchApplies, SEARCH_MAX_QUERY_CHARS } from './search/content-search.ts'
 import { SampleBoardButton } from './TemplateGallery.tsx'
 import { newBoardPath } from './template-paths.ts'
 import './dashboard.css'
@@ -174,6 +176,8 @@ function Dashboard({ workspaceId, section }: { workspaceId: string; section: Das
 
   const title = sectionTitle(section, projectList)
   const empty = emptyState(section, { searching: query.trim().length > 0, canCreate })
+  // Search across boards (wave 4): "Inside boards" results below the title matches.
+  const contentSearching = contentSearchApplies(section, query)
   const showSort = section.kind !== 'recent'
   // New boards are active: offering "New board" while looking at Trash or Archived would be confusing.
   const showCreate = canCreate && section.kind !== 'archived' && section.kind !== 'trash'
@@ -415,7 +419,7 @@ function Dashboard({ workspaceId, section }: { workspaceId: string; section: Das
               />
             </svg>
             <label htmlFor={searchId} className="dr-sr-only">
-              Search boards by title
+              Search boards and what is on them
             </label>
             <input
               id={searchId}
@@ -425,6 +429,7 @@ function Dashboard({ workspaceId, section }: { workspaceId: string; section: Das
               data-testid="dashboard-search"
               placeholder={searchPlaceholder(section, title)}
               title="Search boards (Ctrl+E)"
+              maxLength={SEARCH_MAX_QUERY_CHARS}
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               onKeyDown={(e) => {
@@ -597,7 +602,7 @@ function Dashboard({ workspaceId, section }: { workspaceId: string; section: Das
             {cardList(starredVisible, 'Starred boards', 'starred-grid')}
           </section>
         )}
-        {showStarred && starredVisible.length > 0 && (
+        {((showStarred && starredVisible.length > 0) || contentSearching) && (
           <h2 className="dr-dash__group-title">{query ? 'Matching boards' : 'Recent'}</h2>
         )}
 
@@ -617,7 +622,12 @@ function Dashboard({ workspaceId, section }: { workspaceId: string; section: Das
             </button>
           </div>
         )}
-        {boards.status === 'ready' && visible.length === 0 && (
+        {boards.status === 'ready' && visible.length === 0 && contentSearching && (
+          <p className="dr-csearch__none" data-testid="dashboard-empty">
+            No board titles match “{query.trim()}”.
+          </p>
+        )}
+        {boards.status === 'ready' && visible.length === 0 && !contentSearching && (
           <div className="dr-empty" data-testid="dashboard-empty">
             <EmptyArt />
             <h2 className="dr-empty__title">{empty.title}</h2>
@@ -639,6 +649,13 @@ function Dashboard({ workspaceId, section }: { workspaceId: string; section: Das
           </div>
         )}
         {boards.status === 'ready' && visible.length > 0 && cardList(visible, title, 'board-grid')}
+        <ContentSearch
+          workspaceId={workspace.id}
+          query={query}
+          section={section}
+          inputRef={searchRef}
+          projectName={section.kind === 'project' ? undefined : projectName}
+        />
         {section.kind === 'recent' && boards.status === 'ready' && totalCount > RECENT_LIMIT && !query && (
           <p className="dr-dash__more">
             <a
