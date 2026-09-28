@@ -32,7 +32,10 @@ RUN --mount=type=cache,id=draftroom-pnpm-store,target=/pnpm/store \
   pnpm install --frozen-lockfile --prod --store-dir /pnpm/store --filter "@draftroom/api..."
 
 FROM base
-# tini is PID 1: forwards SIGTERM to the app and reaps zombies (Render has no `docker run --init`).
+# tini is PID 1: forwards SIGTERM to the app and reaps zombies (Render has no `docker run --init`). It runs
+# as `node`, like the app (docker/entrypoint.sh starts it after dropping root): Render runs containers
+# without CAP_KILL, so a root tini cannot signal a `node` process (EPERM, seen on every deploy until
+# 2026-09-28), and the app was killed without its graceful shutdown.
 RUN apt-get update \
   && apt-get install -y --no-install-recommends tini \
   && rm -rf /var/lib/apt/lists/* \
@@ -48,6 +51,6 @@ COPY docker/entrypoint.sh /usr/local/bin/draftroom-entrypoint
 RUN chmod 0755 /usr/local/bin/draftroom-entrypoint
 # The entrypoint starts as root only to make DRAFTROOM_DATA_DIR writable (a root-owned volume or disk,
 # or a /tmp path that does not exist yet), then runs the api as the unprivileged `node` user.
-ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/draftroom-entrypoint"]
+ENTRYPOINT ["/usr/local/bin/draftroom-entrypoint"]
 # Native type stripping (Node 24): the TypeScript sources run as-is, no build step.
 CMD ["node", "apps/api/src/server.ts"]
