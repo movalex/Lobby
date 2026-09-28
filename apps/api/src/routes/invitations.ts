@@ -51,10 +51,14 @@ const wsRank = (column: string) =>
 const boardRank = (column: string) =>
   `array_position(ARRAY['viewer', 'commenter', 'editor', 'owner']::text[], ${column})`
 
-async function createInvitation(
+/**
+ * Creates a single-use invitation (the one code path for M1 links and the dashboard's email
+ * invitations). `via` only annotates the audit event.
+ */
+export async function createInvitation(
   tx: Queryable,
   ctx: AppContext,
-  input: { workspaceId: string; boardId: string | null; role: string; userId: string },
+  input: { workspaceId: string; boardId: string | null; role: string; userId: string; via?: 'email' },
 ) {
   const token = newSecretToken()
   const id = newId('inv')
@@ -70,7 +74,7 @@ async function createInvitation(
     actorId: input.userId,
     action: 'invitation.create',
     target: id,
-    detail: { boardId: input.boardId, role: input.role },
+    detail: { boardId: input.boardId, role: input.role, ...(input.via ? { via: input.via } : {}) },
     at: createdAt,
   })
   return { id, url: `${ctx.config.publicOrigin}/invite/${token}`, expiresAt: expiresAt.toISOString() }

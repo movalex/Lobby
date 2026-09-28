@@ -3,9 +3,13 @@ import { makeUser, member, wsMember } from '../api/test-fixtures.ts'
 import {
   type AccessDetail,
   accessSource,
+  checkInviteEmail,
+  emailInviteHint,
+  emailInviteOutcome,
   grantEditable,
   inviteRoleOptions,
   linkAccessLine,
+  linkForEmailHint,
   memberRoleEditable,
   parseInviteTarget,
   removalNote,
@@ -173,5 +177,104 @@ describe('shell-sharing-platform fixes', () => {
     expect(removeConfirmText('Bob', 'Removing their invite leaves “Can view” through the workspace.')).toBe(
       'Remove Bob’s invite? Removing their invite leaves “Can view” through the workspace.',
     )
+  })
+})
+
+describe('invite by email', () => {
+  const fmt = (iso: string) => `date:${iso.slice(5, 10)}`
+  const at = '2026-10-04T12:00:00.000Z'
+  const id = 'inv_0123456789abcdefghij'
+  const url = 'http://127.0.0.1:5173/invite/abc'
+
+  it('checks the address the way the API reads it', () => {
+    expect(checkInviteEmail('  Pat@Client.Example ')).toEqual({ ok: true, email: 'pat@client.example' })
+    expect(checkInviteEmail('')).toEqual({ ok: false, message: 'Enter an email address.' })
+    expect(checkInviteEmail('pat@')).toEqual({ ok: false, message: 'Enter a valid email address.' })
+    expect(checkInviteEmail(`${'a'.repeat(250)}@b.example`)).toEqual({
+      ok: false,
+      message: 'That email address is too long.',
+    })
+  })
+
+  it('says whether this server can email at all', () => {
+    expect(emailInviteHint(true)).toBe(
+      'We email them an invitation to this board. People who already use Draftroom get access right away.',
+    )
+    expect(emailInviteHint(false)).toContain('needs Clerk sign-in')
+    // The @handle field keeps its link-only wording on a server that cannot email.
+    expect(linkForEmailHint(false)).toBe(
+      'Draftroom does not send email: you get a one-time invite link to copy and send them yourself.',
+    )
+    expect(linkForEmailHint(true)).toContain('use “Invite by email” below')
+  })
+
+  it('someone who already uses Draftroom: added, or already there (nothing lowered)', () => {
+    const user = makeUser('bob', { name: 'Bob Chen' })
+    expect(
+      emailInviteOutcome(
+        { mode: 'granted', user, role: 'commenter', alreadyHadAccess: false },
+        'commenter',
+        fmt,
+      ),
+    ).toEqual({
+      tone: 'success',
+      text: 'Added Bob Chen to this board.',
+      detail: 'They already use Draftroom, so they can open it now, as “Can comment”.',
+      link: null,
+    })
+    const already = emailInviteOutcome(
+      { mode: 'granted', user, role: 'editor', alreadyHadAccess: true },
+      'viewer',
+      fmt,
+    )
+    expect(already).toMatchObject({
+      tone: 'info',
+      text: 'Bob Chen already has access to this board (“Can edit”).',
+      link: null,
+    })
+  })
+
+  it('emailed: names the address, the role and the expiry; no link to copy', () => {
+    expect(
+      emailInviteOutcome(
+        { mode: 'emailed', email: 'pat@client.example', invitationId: id, expiresAt: at },
+        'viewer',
+        fmt,
+      ),
+    ).toEqual({
+      tone: 'success',
+      text: 'Invitation email sent to pat@client.example.',
+      detail: 'The link in it works once, as “Can view”, until date:10-04.',
+      link: null,
+    })
+  })
+
+  it('no email went out: the link to copy, and why, for every reason', () => {
+    const reasons = {
+      email_not_configured: 'This server can’t send email: that needs Clerk sign-in.',
+      existing_account: 'pat@client.example has a sign-in account but hasn’t opened Draftroom yet',
+      invalid_email: 'The email service didn’t accept pat@client.example.',
+      rate_limited: 'The email service is limiting invitations right now.',
+      provider_error: 'The email service couldn’t send it right now.',
+    } as const
+    for (const [reason, why] of Object.entries(reasons)) {
+      const outcome = emailInviteOutcome(
+        {
+          mode: 'link',
+          reason: reason as keyof typeof reasons,
+          email: 'pat@client.example',
+          invitationId: id,
+          url,
+          expiresAt: at,
+        },
+        'editor',
+        fmt,
+      )
+      expect(outcome.tone).toBe('fallback')
+      expect(outcome.text).toBe('Couldn’t email — copy this link instead.')
+      expect(outcome.detail).toContain(why)
+      expect(outcome.detail).toContain('It works once, as “Can edit”, until date:10-04.')
+      expect(outcome.link).toBe(url)
+    }
   })
 })

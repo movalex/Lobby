@@ -32,6 +32,7 @@ import { type CardFile, NATIVE_IMAGE_MIME_TYPES, partitionFiles } from '../asset
 import { UploadError, uploadFile } from '../assets/upload.ts'
 import { unionRects } from '../features/canvas-ux/placement.ts'
 import { CARD_SIZE, changedHints, hintPropsFromMeta } from '../file-card/card-model.ts'
+import { PdfViewerHost } from '../file-card/PdfViewer.tsx'
 import { type BoardContextValue, useBoard } from './board-context.ts'
 
 const CARD_GAP = 24
@@ -59,6 +60,9 @@ export const IMAGE_HANDLER_LIMITS = {
  *
  * Rendered as a child of <Tldraw> so it can reach the UI toasts/translations the default handler
  * needs. Its effect runs after <Tldraw> registers the defaults (those run in a layout effect).
+ *
+ * It is also where the board's media UI outside the canvas mounts: the PDF page viewer (FIL-04),
+ * which "View pages" on a PDF card opens and which places the chosen pages back on the board.
  */
 export function ExternalContentHandlers() {
   const editor = useEditor()
@@ -105,7 +109,7 @@ export function ExternalContentHandlers() {
     }
   }, [editor, board])
 
-  return null
+  return <PdfViewerHost />
 }
 
 /** Where the files arrived (page space). `aimed`: a real drop/paste position, not Ctrl+U's centre. */

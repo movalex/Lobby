@@ -3,6 +3,11 @@
 //   ?d=<deep link>  tldraw deep link (Editor.createDeepLink / navigateToDeepLink) from "Copy link"
 // Both are removed from the address bar (history.replaceState) once handled, so a reload lands on the
 // user's last camera instead of replaying them. Pure functions; the editor wiring lives in index.tsx.
+//
+// PRE-08: an editor/owner may set a board start view (board-start-view.ts, document meta). It is where
+// people with no saved camera of their own land (first visit, new browser); a saved camera still wins.
+
+import type { BoardStartView } from './board-start-view.ts'
 
 export const TEMPLATE_PARAM = 'template'
 export const DEEP_LINK_PARAM = 'd'
@@ -79,14 +84,16 @@ export type StartViewPlan =
   | { kind: 'template'; templateId: string }
   | { kind: 'deep-link'; deepLink: string }
   | { kind: 'restore'; camera: StoredCamera }
+  | { kind: 'start-view'; view: BoardStartView }
   | { kind: 'fit' }
   | { kind: 'none' }
 
 /**
  * What to do when the board opens. A dashboard `?template=` wins only on an empty board the user can
  * edit (and only once: `templateAlreadyInserted` guards reloads and React StrictMode re-mounts); then a
- * deep link; then the user's last camera (on a page that still exists); else fit all content; an empty
- * board keeps tldraw's default camera. `restore` must be followed by `fitIfViewportEmpty` (PRE-06:
+ * deep link; then the user's last camera (on a page that still exists); then the board's start view set
+ * by an editor/owner (PRE-08, on a page that still exists); else fit all content; an empty board keeps
+ * tldraw's default camera. `restore` and `start-view` must be followed by `fitIfViewportEmpty` (PRE-06:
  * never an empty viewport while content exists).
  */
 export function planStartView(input: {
@@ -96,6 +103,8 @@ export function planStartView(input: {
   templateIsKnown: boolean
   templateAlreadyInserted: boolean
   stored: StoredCamera | null
+  /** The board's start view (PRE-08), if one is set. */
+  boardStart?: BoardStartView | null
   pageExists(pageId: string): boolean
 }): StartViewPlan {
   const { params } = input
@@ -110,6 +119,9 @@ export function planStartView(input: {
   }
   if (params.deepLink) return { kind: 'deep-link', deepLink: params.deepLink }
   if (input.stored && input.pageExists(input.stored.pageId)) return { kind: 'restore', camera: input.stored }
+  if (input.boardStart && input.pageExists(input.boardStart.pageId)) {
+    return { kind: 'start-view', view: input.boardStart }
+  }
   if (!input.boardIsEmpty) return { kind: 'fit' }
   return { kind: 'none' }
 }

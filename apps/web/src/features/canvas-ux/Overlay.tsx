@@ -6,10 +6,11 @@
 //  - LockedFrameBadges: a lock glyph before the heading of every locked frame (F8)
 // All positions are viewport coordinates (Editor.pageToViewport), relative to the editor container.
 
-import { type ReactNode, useEffect, useId, useLayoutEffect, useRef } from 'react'
+import { type ReactNode, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import { type Editor, type TLShapeId, useActions, useEditor, useValue } from 'tldraw'
 import { isReadonlyRole } from '../../board/access.ts'
 import type { FeatureContext } from '../types.ts'
+import { currentGridSession, hasArrangeable, runArrangeAsGrid } from './arrange-grid-runtime.ts'
 import {
   activePanel,
   lockedHint,
@@ -22,9 +23,13 @@ import {
 import { pasteAsNotes } from './bulk-paste-handler.ts'
 import { copySelectionLink } from './copy-link.ts'
 import { DEFAULT_MAX_NOTES } from './deps.ts'
-import { AlignIcons, LinkIcon, LockIcon } from './icons.tsx'
+import { AlignIcons, GridIcon, LinkIcon, LockIcon } from './icons.tsx'
 import { PANEL } from './overrides.tsx'
 import { hasNotePalette, withNotePalette } from './palette.ts'
+import { kbdLabel, NEW_ACTION_KBDS } from './shortcuts.ts'
+
+const IS_MAC = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform)
+const ARRANGE_KBD = kbdLabel(NEW_ACTION_KBDS['dr-arrange-grid'], IS_MAC)
 
 /** Applies Draftroom's note palette to the editor's current theme (idempotent). */
 export function applyNotePalette(editor: Editor) {
@@ -263,19 +268,37 @@ function SelectionBar({ ctx }: { ctx: FeatureContext }) {
     }
     if (bottom.y < 0 || top.y > vp.h || bottom.x < -200 || bottom.x > vp.w + 200) return null
     const locked = editor.getSelectedShapes().every((s) => s.isLocked)
+    // MAK-18: offered for two or more movable shapes; the stepper while this grid is untouched.
+    const grid = canEdit && ids.length >= 2 && hasArrangeable(editor)
+    const session = grid ? currentGridSession(editor) : null
     return {
       n: ids.length,
-      x: clamp(bottom.x, 150, Math.max(150, vp.w - 150)),
+      cx: bottom.x,
+      vw: vp.w,
       y,
       locked,
+      grid,
+      columns: session ? session.columns : null,
+      maxColumns: session ? session.order.length : 0,
     }
-  }, [editor])
+  }, [editor, canEdit])
+  // The bar is as wide as its buttons (the grid stepper makes it wider): keep all of it on screen.
+  const [halfWidth, setHalfWidth] = useState(150)
+  useLayoutEffect(() => {
+    const w = ref.current?.offsetWidth
+    if (!w) return
+    const half = Math.ceil(w / 2) + 8
+    if (half !== halfWidth) setHalfWidth(half)
+  })
   if (!state) return null
+  const left = clamp(state.cx, halfWidth, Math.max(halfWidth, state.vw - halfWidth))
   const run = (id: string) => {
     actions[id]?.onSelect('toolbar')
     // Keyboard users who tabbed into the bar go back to the board after acting.
     if (ref.current?.contains(document.activeElement)) editor.focus()
   }
+  // Unlike the one-shot buttons, the stepper keeps the keyboard focus (for repeated presses).
+  const setColumns = (columns: number) => void runArrangeAsGrid(editor, { columns })
   return (
     <div
       ref={ref}
@@ -283,7 +306,7 @@ function SelectionBar({ ctx }: { ctx: FeatureContext }) {
       role="toolbar"
       aria-label="Selection"
       data-testid="selection-bar"
-      style={{ left: state.x, top: state.y }}
+      style={{ left, top: state.y }}
     >
       <BarButton
         label="Copy link to selection"
@@ -354,7 +377,63 @@ function SelectionBar({ ctx }: { ctx: FeatureContext }) {
           </BarButton>
         </>
       )}
+      {canEdit && state.grid && (
+        <>
+          <span className="dr-cux-selbar__sep" aria-hidden="true" />
+          <BarButton
+            label={`Arrange as grid (${ARRANGE_KBD})`}
+            testId="arrange-grid"
+            onClick={() => run('dr-arrange-grid')}
+          >
+            <GridIcon />
+          </BarButton>
+          {state.columns !== null && (
+            <GridColumns columns={state.columns} max={state.maxColumns} onChange={setColumns} />
+          )}
+        </>
+      )}
     </div>
+  )
+}
+
+/** MAK-18: the column count of the grid just arranged (each change is its own undo step). */
+function GridColumns({
+  columns,
+  max,
+  onChange,
+}: {
+  columns: number
+  max: number
+  onChange(n: number): void
+}) {
+  return (
+    <span className="dr-cux-gridcols" data-testid="grid-columns" data-columns={columns}>
+      <button
+        type="button"
+        className="dr-cux-selbar__btn dr-cux-gridcols__step"
+        aria-label="Fewer columns"
+        title="Fewer columns"
+        data-testid="grid-columns-less"
+        disabled={columns <= 1}
+        onClick={() => onChange(columns - 1)}
+      >
+        −
+      </button>
+      <span className="dr-cux-gridcols__label" aria-live="polite">
+        {columns} {columns === 1 ? 'column' : 'columns'}
+      </span>
+      <button
+        type="button"
+        className="dr-cux-selbar__btn dr-cux-gridcols__step"
+        aria-label="More columns"
+        title="More columns"
+        data-testid="grid-columns-more"
+        disabled={columns >= max}
+        onClick={() => onChange(columns + 1)}
+      >
+        +
+      </button>
+    </span>
   )
 }
 

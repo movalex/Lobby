@@ -1,5 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
+import { useBoard } from '../board/board-context.ts'
 import { initialsFor, safeColor } from '../lib/identity.ts'
+import { ThemePicker } from '../theme/ThemePicker.tsx'
+import { useTldrawThemeSync } from '../theme/useTheme.ts'
 import { useMe, useSession } from './session.tsx'
 
 /** True when this server signs people in with the development provider (anyone can be anyone). */
@@ -12,7 +15,8 @@ export function useIsDevAuth(): boolean {
 
 /**
  * The signed-in user's button. With development sign-in it is the "dev identity" badge the e2e
- * suite looks for, and it says plainly that the identity is not verified.
+ * suite looks for, and it says plainly that the identity is not verified. Its menu holds the theme
+ * choice (System / Light / Dark); on a board it also keeps tldraw's canvas theme in step with it.
  */
 export function UserMenu({ compact = false }: { compact?: boolean }) {
   const me = useMe()
@@ -23,6 +27,10 @@ export function UserMenu({ compact = false }: { compact?: boolean }) {
   const button = useRef<HTMLButtonElement>(null)
   const user = me.user
   const color = safeColor(user.color, user.id)
+  // Every board page renders this menu (in the top bar, or in the "⋯" menu on phones): while it is
+  // mounted there, the live canvas follows a theme change and tldraw's own Ctrl/Cmd+/ moves the app.
+  // (The canvas opens in the right theme anyway: theme/boot.ts keeps tldraw's stored scheme in step.)
+  useTldrawThemeSync(useBoard() !== null)
 
   useEffect(() => {
     if (!open) return
@@ -84,6 +92,7 @@ export function UserMenu({ compact = false }: { compact?: boolean }) {
               machine only.
             </p>
           )}
+          <ThemePicker />
           <div className="dr-account__actions">
             <button
               type="button"

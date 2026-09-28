@@ -1,32 +1,42 @@
 // Feature module: workshops (docs/FEATURES-M2-CONTRACTS.md, "workshops"): the shared timer, dot
-// voting and "gather everyone". Owned by the workshops engineer.
+// voting, "gather everyone", reactions and raise hand. Owned by the workshops engineer.
 //
 // Permissions (server-side; the UI only hides controls):
 // - GET state, past votes, revealed results: `view`.
-// - Timer control, starting/extending/closing/revealing a vote, summon: `edit` (facilitators).
-// - Casting and "I'm done": `view` on an ACTIVE board — viewers and commenters take part; the voter
-//   is always the signed-in user.
-// Events are published only after the transaction commits, and carry aggregates only.
+// - Timer control, starting/extending/closing/revealing a vote, summon, lowering someone else's
+//   hand: `edit` (facilitators).
+// - Casting, "I'm done", reacting and raising a hand: `view` on an ACTIVE board — viewers and
+//   commenters take part; the person is always the signed-in user. Lowering your own hand: `view`.
+// Events are published only after the transaction commits, and carry aggregates only. Reactions and
+// hands are in-memory (hands.ts, reactions.ts): nothing about them is stored.
 
 import {
   CastVoteInput,
   CreateVoteInput,
   ExtendVoteInput,
+  HandInput,
+  type HandsResponse,
   isVoteEligible,
+  REACTION_RATE_MAX,
+  REACTION_RATE_WINDOW_MS,
+  ReactionInput,
   SummonInput,
   TimerActionInput,
   VOTE_DURATION_MAX_MS,
   VoteDoneInput,
   WORKSHOP_EVENTS,
+  type WorkshopReactionEvent,
   type WorkshopState,
   type WorkshopSummonEvent,
 } from '@draftroom/contracts'
 import { isId, isUniqueViolation, newId, type Queryable } from '@draftroom/db'
 import type { FastifyInstance } from 'fastify'
-import { requireBoardAction } from '../../access.ts'
+import { isBoardId, isUserId, requireBoardAction } from '../../access.ts'
 import type { Params } from '../../context.ts'
 import { ApiError, badRequest, conflict, forbidden, notFound, parse } from '../../errors.ts'
 import type { FeatureContext } from '../context.ts'
+import { HandLimitError, HandRegistry } from './hands.ts'
+import { REACTIONS_PER_BOARD_MAX, SlidingWindowLimiter } from './reactions.ts'
 import { createShapeIndex, type ShapeIndex } from './shapes.ts'
 import { applyTimerAction, TimerRuleError, type TimerState, timerView } from './timer.ts'
 import {
@@ -52,7 +62,14 @@ export interface WorkshopOptions {
   shapeIndex?: ShapeIndex
   /** Minimum time between two summons by one person on one board. */
   summonCooldownMs?: number
+  /** How often raised hands are checked for expiry/disconnects without a request (0 = never). */
+  handSweepMs?: number
+  /** Reactions relayed per board per window (default REACTIONS_PER_BOARD_MAX). */
+  reactionsPerBoardMax?: number
 }
+
+/** The board event stream route (apps/api/src/events/routes.ts): raised hands follow its lifetime. */
+const EVENTS_ROUTE = '/api/boards/:bid/events'
 
 interface TimerRow {
   board_id: string
@@ -103,6 +120,41 @@ export function registerWorkshopRoutes(
   const shapes = opts.shapeIndex ?? createShapeIndex(ctx.sync, { clock: () => now().getTime() })
   const summonCooldown = opts.summonCooldownMs ?? 3_000
   const lastSummon = new Map<string, number>()
+  const reactionLimit = new SlidingWindowLimiter(REACTION_RATE_MAX, REACTION_RATE_WINDOW_MS)
+  const boardReactionLimit = new SlidingWindowLimiter(
+    opts.reactionsPerBoardMax ?? REACTIONS_PER_BOARD_MAX,
+    REACTION_RATE_WINDOW_MS,
+  )
+  const hands = new HandRegistry({
+    now,
+    publish: (boardId, data) => events.publish(boardId, { type: WORKSHOP_EVENTS.hand, data }),
+  })
+
+  // A hand goes down when its owner's event streams on the board have all ended (after a grace, so a
+  // reload keeps it). The stream route is not this feature's, so its lifetime is observed here: every
+  // GET of the stream route by a signed-in person counts one open stream until its response closes
+  // (the stream's own access check still decides whether it opens; a refused one closes at once).
+  app.addHook('onRequest', async (req, reply) => {
+    if (req.method !== 'GET' || req.routeOptions.url !== EVENTS_ROUTE) return
+    const { bid = '' } = req.params as Params
+    if (!isBoardId(bid)) return
+    const user = await ctx.sessions.user(req).catch(() => null)
+    if (!user) return
+    hands.streamOpened(bid, user.id)
+    reply.raw.once('close', () => hands.streamClosed(bid, user.id))
+  })
+  const handSweepMs = opts.handSweepMs ?? 1_000
+  if (handSweepMs > 0) {
+    const stopSweeper = hands.startSweeper(handSweepMs)
+    app.addHook('onClose', async () => stopSweeper())
+  }
+
+  // The version is read right after the list (same tick), so it describes that list.
+  const handsBody = (boardId: string, list = hands.list(boardId)): HandsResponse => ({
+    hands: list,
+    version: hands.version(),
+    serverNow: now().toISOString(),
+  })
 
   /** Loads a session the caller can see (404 otherwise: a vote's existence is as private as its board). */
   async function sessionFor(req: { params: unknown }, userId: string, action: 'view' | 'edit') {
@@ -127,6 +179,8 @@ export function registerWorkshopRoutes(
     const body: WorkshopState = {
       timer: timer ? timerView(timer, at) : null,
       vote: row ? await voteState(db, row, user.id, at) : null,
+      hands: hands.list(access.board.id),
+      handsVersion: hands.version(),
       serverNow: at.toISOString(),
     }
     return body
@@ -413,5 +467,73 @@ export function registerWorkshopRoutes(
     }
     events.publish(access.board.id, { type: WORKSHOP_EVENTS.summon, data })
     return reply.code(202).send({ ok: true })
+  })
+
+  // ---- reactions ---------------------------------------------------------------------------------------
+
+  app.post('/api/boards/:bid/reactions', async (req, reply) => {
+    const user = await ctx.requireUser(req)
+    const { bid = '' } = req.params as Params
+    const { emoji } = parse(ReactionInput, req.body)
+    const access = await requireBoardAction(db, bid, user.id, 'view')
+    if (access.board.status !== 'active') throw readOnlyBoard()
+    const t = now().getTime()
+    const boardId = access.board.id
+    // Per person first (a refused person never uses up the board's share), then per board.
+    for (const [limit, key] of [
+      [reactionLimit, user.id],
+      [boardReactionLimit, boardId],
+    ] as const) {
+      if (limit.take(key, t)) continue
+      const wait = Math.ceil(limit.retryAfterMs(key, t) / 1000)
+      reply.header('retry-after', String(Math.max(1, wait)))
+      throw new ApiError(429, 'RATE_LIMITED', 'That is a lot of reactions. Wait a moment.')
+    }
+    const data: WorkshopReactionEvent = { userId: user.id, name: user.name, emoji }
+    events.publish(boardId, { type: WORKSHOP_EVENTS.reaction, data })
+    return reply.code(202).send({ ok: true })
+  })
+
+  // ---- raise hand --------------------------------------------------------------------------------------
+
+  app.get('/api/boards/:bid/hands', async (req) => {
+    const user = await ctx.requireUser(req)
+    const { bid = '' } = req.params as Params
+    const access = await requireBoardAction(db, bid, user.id, 'view')
+    return handsBody(access.board.id)
+  })
+
+  // Your own hand. Raising needs an active board; lowering always works.
+  app.post('/api/boards/:bid/hand', async (req) => {
+    const user = await ctx.requireUser(req)
+    const { bid = '' } = req.params as Params
+    const { raised } = parse(HandInput, req.body)
+    const access = await requireBoardAction(db, bid, user.id, 'view')
+    const boardId = access.board.id
+    if (!raised) return handsBody(boardId, hands.lower(boardId, user.id, null).hands)
+    if (access.board.status !== 'active') throw readOnlyBoard()
+    try {
+      return handsBody(boardId, hands.raise(boardId, { id: user.id, name: user.name }).hands)
+    } catch (e) {
+      if (e instanceof HandLimitError) throw conflict('TOO_MANY_HANDS', e.message)
+      throw e
+    }
+  })
+
+  // Someone's hand: facilitators (edit) may lower anyone's; everyone may lower their own.
+  app.post('/api/boards/:bid/hands/:uid/lower', async (req) => {
+    const user = await ctx.requireUser(req)
+    const { bid = '', uid = '' } = req.params as Params
+    if (!isUserId(uid)) throw notFound()
+    const access = await requireBoardAction(db, bid, user.id, uid === user.id ? 'view' : 'edit')
+    const by = { id: user.id, name: user.name }
+    return handsBody(access.board.id, hands.lower(access.board.id, uid, by).hands)
+  })
+
+  app.post('/api/boards/:bid/hands/clear', async (req) => {
+    const user = await ctx.requireUser(req)
+    const { bid = '' } = req.params as Params
+    const access = await requireBoardAction(db, bid, user.id, 'edit')
+    return handsBody(access.board.id, hands.clear(access.board.id, { id: user.id, name: user.name }).hands)
   })
 }

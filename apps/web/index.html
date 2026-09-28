@@ -6,9 +6,34 @@
     <meta name="theme-color" content="#1f3a5f" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <title>Draftroom</title>
+    <!-- Theme before the first paint (no light flash in dark mode): the same rules as
+         src/theme/theme.ts (THEME_STORAGE_KEY, resolveColorMode, applyToDocument); theme.test.ts runs
+         this script against them. Keep it tiny, classic (not a module) and dependency-free. -->
+    <script>
+      (() => {
+        let pref = 'system'
+        try {
+          const stored = localStorage.getItem('draftroom:theme')
+          if (stored === 'light' || stored === 'dark' || stored === 'system') pref = stored
+        } catch {
+          // storage blocked: the default (System)
+        }
+        const dark =
+          pref === 'dark' ||
+          (pref === 'system' && !!window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches)
+        const mode = dark ? 'dark' : 'light'
+        const root = document.documentElement
+        root.setAttribute('data-theme', mode)
+        root.setAttribute('data-theme-pref', pref)
+        root.style.colorScheme = mode
+        const meta = document.querySelector('meta[name="theme-color"]')
+        if (meta) meta.setAttribute('content', dark ? '#14161b' : '#1f3a5f')
+      })()
+    </script>
   </head>
   <body>
     <div id="root"></div>
+    <script type="module" src="/src/theme/boot.ts"></script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

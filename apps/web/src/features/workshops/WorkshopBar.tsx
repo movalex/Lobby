@@ -16,7 +16,9 @@ import {
   timerPhase,
   timerRemainingMs,
 } from './countdown.ts'
+import { HandsChip, HandsSection } from './Hands.tsx'
 import { isFacilitator, useNow, useWorkshop } from './hooks.ts'
+import { ReactionControl } from './Reactions.tsx'
 import { readSessionSettings, writeSessionSettings } from './session-settings.ts'
 import type { WorkshopStore } from './store.ts'
 import { VoteSetupDialog } from './VoteSetupDialog.tsx'
@@ -42,10 +44,23 @@ export function WorkshopBar({ ctx }: { ctx: FeatureContext }) {
   const { store, snap } = useWorkshop(ctx)
   const facilitator = isFacilitator(ctx)
   const [open, setOpen] = useState(false)
+  /** Which section the popover should bring into view and focus when it opens (null = the first). */
+  const [focusSection, setFocusSection] = useState<'hands' | null>(null)
   const [muted, setMuted] = useState(readMuted)
   const wrap = useRef<HTMLDivElement>(null)
   const pill = useRef<HTMLButtonElement>(null)
   const popId = useId()
+
+  // "Show queue" (a toast) and the hands chip open the popover at the raised-hands queue.
+  const requestSeq = snap.toolsRequest?.seq
+  const requestSection = snap.toolsRequest?.section ?? null
+  const handledRequest = useRef(requestSeq)
+  useEffect(() => {
+    if (requestSeq === undefined || requestSeq === handledRequest.current) return
+    handledRequest.current = requestSeq
+    setFocusSection(requestSection)
+    setOpen(true)
+  }, [requestSeq, requestSection])
 
   const offset = store.serverOffsetMs()
   // Ticks while running, and through a finished timer's alert (so the pill calms down on time).
@@ -77,7 +92,9 @@ export function WorkshopBar({ ctx }: { ctx: FeatureContext }) {
   useEffect(() => {
     if (!open) return
     const onDown = (e: PointerEvent) => {
-      if (!wrap.current?.contains(e.target as Node)) setOpen(false)
+      const t = e.target as Element | null
+      // The reactions control has its own bar: pressing it closes these tools.
+      if (!wrap.current?.contains(t) || t?.closest?.('.dr-wk-react')) setOpen(false)
     }
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return
@@ -117,7 +134,10 @@ export function WorkshopBar({ ctx }: { ctx: FeatureContext }) {
         aria-controls={open ? popId : undefined}
         aria-label={label}
         title={label}
-        onClick={() => setOpen((o) => !o)}
+        onClick={() => {
+          setFocusSection(null)
+          setOpen((o) => !o)
+        }}
       >
         <StopwatchIcon />
         {shown ? (
@@ -140,11 +160,21 @@ export function WorkshopBar({ ctx }: { ctx: FeatureContext }) {
           Voting · {snap.ballot.myRemaining} left
         </button>
       )}
+      <HandsChip
+        snap={snap}
+        onOpen={() => {
+          if (open && focusSection === 'hands') return setOpen(false)
+          setFocusSection('hands')
+          setOpen(true)
+        }}
+      />
+      <ReactionControl ctx={ctx} store={store} snap={snap} />
       {open && (
         <WorkshopPopover
           id={popId}
           ctx={ctx}
           store={store}
+          focusSection={focusSection}
           facilitator={facilitator}
           phase={phase}
           remaining={remaining}
@@ -170,6 +200,7 @@ function WorkshopPopover({
   id,
   ctx,
   store,
+  focusSection,
   facilitator,
   phase,
   remaining,
@@ -180,6 +211,7 @@ function WorkshopPopover({
   id: string
   ctx: FeatureContext
   store: WorkshopStore
+  focusSection: 'hands' | null
   facilitator: boolean
   phase: TimerPhase
   remaining: number
@@ -192,12 +224,19 @@ function WorkshopPopover({
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const ref = useRef<HTMLDivElement>(null)
+  const handsRef = useRef<HTMLElement>(null)
   const durationId = useId()
   const parsed = parseDurationInput(duration)
 
   useEffect(() => {
+    const hands = focusSection === 'hands' ? handsRef.current : null
+    if (hands) {
+      hands.scrollIntoView({ block: 'nearest' })
+      ;(hands.querySelector<HTMLElement>('button') ?? hands).focus()
+      return
+    }
     ref.current?.querySelector<HTMLElement>('button, input')?.focus()
-  }, [])
+  }, [focusSection])
 
   const act = async (fn: () => Promise<{ ok: boolean; error?: string }>) => {
     setBusy(true)
@@ -375,6 +414,8 @@ function WorkshopPopover({
           Play a sound when time is up
         </label>
       </section>
+
+      <HandsSection ctx={ctx} store={store} snap={snap} sectionRef={handsRef} />
 
       {(facilitator || vote) && (
         <section className="dr-wk-pop__section" aria-label="Voting">

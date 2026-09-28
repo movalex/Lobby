@@ -3,6 +3,7 @@
 // - a shared timer (top bar; server end timestamps; chime + flash at zero, mutable per person);
 // - anonymous dot voting (setup dialog, click-to-vote dots on the canvas, "I'm done", ranked results);
 // - "Gather everyone": others follow the facilitator's view (tldraw follow API) until they move.
+// - Reactions, raise hand and +1 on notes (FAC-08): Reactions.tsx, Hands.tsx, PlusOnes.tsx.
 
 import { WORKSHOP_EVENTS, WorkshopSummonEvent } from '@draftroom/contracts'
 import { react, type TLEventInfo } from 'tldraw'
@@ -10,6 +11,7 @@ import type { BoardFeature, FeatureContext } from '../types.ts'
 import { installAudioUnlock } from './chime.ts'
 import { followIdFor, isCanvasPress, summonApplies } from './follow.ts'
 import { storeFor } from './hooks.ts'
+import { plusOneIntentsFor, watchPlusOneIntents } from './plus-ones.ts'
 import { HIDE_AUTHORS_ATTR, readSessionSettings } from './session-settings.ts'
 import { VotingPanel } from './VotingPanel.tsx'
 import { WorkshopBar } from './WorkshopBar.tsx'
@@ -86,7 +88,11 @@ function mountWorkshops(ctx: FeatureContext) {
     else root.removeAttribute(HIDE_AUTHORS_ATTR)
   })
 
+  // +1s: re-apply this person's recent +1 when a concurrent write dropped it (plus-ones.ts).
+  const stopPlusOnes = watchPlusOneIntents(editor, ctx.me.user.id, plusOneIntentsFor(editor))
+
   return () => {
+    stopPlusOnes()
     stopAuthors()
     root.removeAttribute(HIDE_AUTHORS_ATTR)
     offSummon()

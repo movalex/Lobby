@@ -1,4 +1,10 @@
-import type { BoardMember, WorkspaceMember } from '@draftroom/contracts'
+import {
+  type BoardMember,
+  type EmailInviteFallbackReason,
+  type EmailInviteResult,
+  InviteEmail,
+  type WorkspaceMember,
+} from '@draftroom/contracts'
 import { BOARD_ROLES, type BoardRole, type BoardVisibility, roleAtLeast } from '../lib/permissions.ts'
 
 export const VISIBILITY_OPTIONS: readonly {
@@ -178,4 +184,92 @@ export function linkAccessLine(
 export function removeConfirmText(name: string, fallback: string | null): string {
   if (fallback) return `Remove ${name}’s invite? ${fallback}`
   return `Remove ${name}? ${name} loses access now.`
+}
+
+// ---- invite by email ------------------------------------------------------------------------------
+
+/**
+ * Under the "Invite by email" field. Only a server that signs people in with Clerk can email; the
+ * server decides per address in the end (see `emailInviteOutcome`).
+ */
+export function emailInviteHint(canEmail: boolean): string {
+  return canEmail
+    ? 'We email them an invitation to this board. People who already use Draftroom get access right away.'
+    : 'This server can’t send email (that needs Clerk sign-in): you get a one-time link to send them instead.'
+}
+
+/** The "@handle, name or email" field's hint for an address, pointing at the email form when it can email. */
+export function linkForEmailHint(canEmail: boolean): string {
+  return canEmail
+    ? 'This makes a one-time link for you to send. To have Draftroom email the invitation, use “Invite by email” below.'
+    : 'Draftroom does not send email: you get a one-time invite link to copy and send them yourself.'
+}
+
+/** The address as the API will read it, or the reason it is not one (shown next to the field). */
+export function checkInviteEmail(text: string): { ok: true; email: string } | { ok: false; message: string } {
+  const r = InviteEmail.safeParse(text)
+  if (r.success) return { ok: true, email: r.data }
+  return { ok: false, message: r.error.issues[0]?.message ?? 'Enter a valid email address.' }
+}
+
+export interface EmailInviteOutcome {
+  /** success: done; info: nothing changed; fallback: no email went out, the link is to be sent. */
+  tone: 'success' | 'info' | 'fallback'
+  /** The headline (announced). */
+  text: string
+  detail: string
+  /** Present when the inviter has to send the link themselves. */
+  link: string | null
+}
+
+const FALLBACK_DETAIL: Record<EmailInviteFallbackReason, (email: string) => string> = {
+  email_not_configured: (email) =>
+    `This server can’t send email: that needs Clerk sign-in. Send the link to ${email} yourself.`,
+  existing_account: (email) =>
+    `${email} has a sign-in account but hasn’t opened Draftroom yet, and invitation emails only go to new people. Send them the link yourself.`,
+  invalid_email: (email) =>
+    `The email service didn’t accept ${email}. Check the address, or send the link yourself.`,
+  rate_limited: (email) =>
+    `The email service is limiting invitations right now. Send the link to ${email} yourself.`,
+  provider_error: (email) =>
+    `The email service couldn’t send it right now. Send the link to ${email} yourself.`,
+}
+
+/** What the Share dialog says after "Send invite", for each answer of the email invitation route. */
+export function emailInviteOutcome(
+  result: EmailInviteResult,
+  role: Exclude<BoardRole, 'owner'>,
+  formatDate: (iso: string) => string,
+): EmailInviteOutcome {
+  const asRole = `as “${ROLE_OPTION_LABEL[role]}”`
+  switch (result.mode) {
+    case 'granted':
+      return result.alreadyHadAccess
+        ? {
+            tone: 'info',
+            text: `${result.user.name} already has access to this board (“${ROLE_OPTION_LABEL[result.role]}”).`,
+            detail: 'Nothing changed: an invite never lowers a role. Change it in the list below.',
+            link: null,
+          }
+        : {
+            tone: 'success',
+            text: `Added ${result.user.name} to this board.`,
+            detail: `They already use Draftroom, so they can open it now, ${asRole}.`,
+            link: null,
+          }
+    case 'emailed':
+      return {
+        tone: 'success',
+        text: `Invitation email sent to ${result.email}.`,
+        detail: `The link in it works once, ${asRole}, until ${formatDate(result.expiresAt)}.`,
+        link: null,
+      }
+    case 'link':
+      return {
+        tone: 'fallback',
+        text: 'Couldn’t email — copy this link instead.',
+        detail: `${FALLBACK_DETAIL[result.reason](result.email)} It works once, ${asRole}, until ${formatDate(result.expiresAt)}.`,
+        link: result.url,
+      }
+  }
 }

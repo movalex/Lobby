@@ -719,7 +719,7 @@ function EmptyArt() {
         width="108"
         height="64"
         rx="8"
-        fill="#fff"
+        fill="var(--dr-surface)"
         stroke="var(--dr-line-strong)"
         strokeDasharray="4 4"
       />

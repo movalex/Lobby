@@ -1,12 +1,38 @@
-/* Draftroom identity: blueprint navy + drafting-pencil amber on warm paper. System fonts only. */
+/* Draftroom identity: blueprint navy + drafting-pencil amber on warm paper. System fonts only.
+
+   Two themes. html[data-theme="dark"] is set before the first paint by the inline script in
+   index.html and kept current by theme/theme.ts (System / Light / Dark in the account menu); tldraw's
+   canvas follows the same choice (theme/tldraw-sync.ts). Every colour token has a dark value below, and
+   theme/tokens.test.ts checks the text and focus pairs in both themes against WCAG AA.
+
+   Colour roles (use the role, not a raw colour, so both themes work):
+   - text: --dr-ink, --dr-ink-2 (secondary), --dr-accent-ink (links, selected items, accent icons),
+     --dr-live / --dr-warn / --dr-danger (status text, each on its own -bg or on a surface);
+   - surfaces: --dr-paper (page), --dr-surface (bars, panels, cards, dialogs), --dr-inset (recessed
+     fields), --dr-hover (hover and quiet notes), --dr-chip (neutral chips and pills), --dr-accent-bg /
+     --dr-accent-tint (selected / unread rows), --dr-note-bg (the dev-sign-in notes);
+   - solid fills with their own text colour: --dr-navy / --dr-navy-hover under --dr-on-navy (primary
+     buttons, pressed chips), --dr-danger-fill under --dr-on-danger (counts, error toasts),
+     --dr-inverse under --dr-on-inverse (toasts, dark badges), --dr-amber under --dr-on-amber;
+   - lines: --dr-line, --dr-line-strong, --dr-accent-line, --dr-warn-line; focus rings: --dr-focus. */
 :root {
   --dr-navy: #1f3a5f;
   --dr-navy-hover: #294b78;
+  --dr-on-navy: #ffffff;
+  --dr-accent-ink: #1f3a5f;
+  --dr-accent-bg: #e9eef6;
+  --dr-accent-tint: #f1f4f9;
+  --dr-accent-line: #9fb4d1;
   --dr-amber: #f0a53a;
+  --dr-amber-ink: #c07a12;
+  --dr-on-amber: #1b2330;
   --dr-ink: #1b2330;
   --dr-ink-2: #4a5566;
   --dr-paper: #f6f4ee;
   --dr-surface: #ffffff;
+  --dr-inset: #faf9f5;
+  --dr-hover: #f1efe8;
+  --dr-chip: #eeece6;
   --dr-line: #dcd8cc;
   --dr-line-strong: #c4bfb0;
   --dr-focus: #2563eb;
@@ -14,14 +40,65 @@
   --dr-live-bg: #e3f3e9;
   --dr-warn: #7a4a00;
   --dr-warn-bg: #fdf0d8;
+  --dr-warn-line: #e8c98a;
   --dr-danger: #a3211a;
   --dr-danger-bg: #fcebe9;
+  --dr-danger-fill: #a3211a;
+  --dr-on-danger: #ffffff;
+  --dr-note-bg: #fffaf0;
+  --dr-inverse: #1b2330;
+  --dr-on-inverse: #ffffff;
+  --dr-dot: #d6d1c2;
+  --dr-backdrop: rgb(27 35 48 / 38%);
   --dr-radius: 10px;
   --dr-shadow: 0 1px 2px rgb(27 35 48 / 6%), 0 4px 16px rgb(27 35 48 / 8%);
+  --dr-shadow-pop: 0 2px 6px rgb(27 35 48 / 10%), 0 12px 32px rgb(27 35 48 / 16%);
+  --dr-shadow-dialog: 0 20px 60px rgb(27 35 48 / 28%);
   --dr-font: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --dr-mono: ui-monospace, SFMono-Regular, "Cascadia Mono", Menlo, Consolas, monospace;
   --dr-topbar-h: 48px;
   color-scheme: light;
+}
+/* "Blueprint at night": blue-grey surfaces close to tldraw's dark panels, chalk text, the same amber. */
+:root[data-theme="dark"] {
+  --dr-navy: #3d6cb1;
+  --dr-navy-hover: #4575bb;
+  --dr-on-navy: #ffffff;
+  --dr-accent-ink: #9fc3f7;
+  --dr-accent-bg: #1f3350;
+  --dr-accent-tint: #1a2331;
+  --dr-accent-line: #3f5f8c;
+  --dr-amber: #f0a53a;
+  --dr-amber-ink: #f3b75a;
+  --dr-on-amber: #1b2330;
+  --dr-ink: #ebe8e1;
+  --dr-ink-2: #a9b1be;
+  --dr-paper: #14161b;
+  --dr-surface: #1d2027;
+  --dr-inset: #171a20;
+  --dr-hover: #282c35;
+  --dr-chip: #2c313b;
+  --dr-line: #323743;
+  --dr-line-strong: #4a5160;
+  --dr-focus: #7fb0ff;
+  --dr-live: #74d39d;
+  --dr-live-bg: #16311f;
+  --dr-warn: #f2c46d;
+  --dr-warn-bg: #362a12;
+  --dr-warn-line: #6b5222;
+  --dr-danger: #ff9d92;
+  --dr-danger-bg: #3b1a18;
+  --dr-danger-fill: #b3261e;
+  --dr-on-danger: #ffffff;
+  --dr-note-bg: #2a2416;
+  --dr-inverse: #3a4252;
+  --dr-on-inverse: #f7f5f0;
+  --dr-dot: #2c313b;
+  --dr-backdrop: rgb(0 0 0 / 62%);
+  --dr-shadow: 0 1px 2px rgb(0 0 0 / 40%), 0 4px 16px rgb(0 0 0 / 32%);
+  --dr-shadow-pop: 0 2px 6px rgb(0 0 0 / 40%), 0 12px 32px rgb(0 0 0 / 45%);
+  --dr-shadow-dialog: 0 20px 60px rgb(0 0 0 / 55%);
+  color-scheme: dark;
 }
 
 *,
@@ -68,12 +145,12 @@ code {
   cursor: pointer;
 }
 .dr-btn:hover {
-  background: #f1efe8;
+  background: var(--dr-hover);
 }
 .dr-btn--primary {
   background: var(--dr-navy);
   border-color: var(--dr-navy);
-  color: #fff;
+  color: var(--dr-on-navy);
 }
 .dr-btn--primary:hover {
   background: var(--dr-navy-hover);
@@ -87,7 +164,7 @@ code {
   font-size: 13px;
 }
 .dr-btn--ghost:hover {
-  background: #efece4;
+  background: var(--dr-hover);
   color: var(--dr-ink);
 }
 .dr-btn--lg {
@@ -175,7 +252,7 @@ code {
   width: 22px;
   height: 22px;
   border: 2.5px solid var(--dr-line);
-  border-top-color: var(--dr-navy);
+  border-top-color: var(--dr-accent-ink);
   border-radius: 50%;
   animation: dr-spin 0.8s linear infinite;
 }
@@ -223,7 +300,7 @@ code {
   padding: 32px 16px;
   /* faint dot grid: the canvas you are about to open */
   background:
-    radial-gradient(circle at 1px 1px, #d6d1c2 1px, transparent 1.5px) 0 0 / 22px 22px,
+    radial-gradient(circle at 1px 1px, var(--dr-dot) 1px, transparent 1.5px) 0 0 / 22px 22px,
     var(--dr-paper);
 }
 .dr-signin__inner {
@@ -254,7 +331,7 @@ code {
   margin: -6px 0 16px;
   padding: 8px 8px 8px 12px;
   border-radius: 8px;
-  background: #f1efe8;
+  background: var(--dr-hover);
   font-size: 13.5px;
 }
 .dr-signin__legend {
@@ -280,7 +357,7 @@ code {
   padding: 10px 12px;
   border: 1px dashed var(--dr-amber);
   border-radius: 10px;
-  background: #fffaf0;
+  background: var(--dr-note-bg);
   font-size: 13px;
   line-height: 1.45;
   color: var(--dr-ink-2);
@@ -387,7 +464,7 @@ code {
 }
 .dr-topbar__ws:hover {
   color: var(--dr-ink);
-  background: #f1efe8;
+  background: var(--dr-hover);
 }
 .dr-topbar__slash {
   color: var(--dr-line-strong);
@@ -418,7 +495,7 @@ code {
 }
 .dr-topbar__title--editable:hover {
   border-color: var(--dr-line);
-  background: #faf9f5;
+  background: var(--dr-inset);
 }
 .dr-topbar__title-input {
   width: min(40ch, 40vw);
@@ -456,7 +533,7 @@ code {
   box-shadow: 0 0 0 2px var(--dr-ink);
 }
 .dr-avatar--more {
-  background: #e7e3d8;
+  background: var(--dr-chip);
   color: var(--dr-ink);
   cursor: default;
 }
@@ -475,7 +552,7 @@ code {
   font-size: 12.5px;
   font-weight: 600;
   white-space: nowrap;
-  background: #eeece6;
+  background: var(--dr-chip);
   color: var(--dr-ink-2);
 }
 .dr-pill__dot {
@@ -515,7 +592,7 @@ code {
   padding: 0 10px 0 4px;
   border: 1px dashed var(--dr-amber);
   border-radius: 8px;
-  background: #fffaf0;
+  background: var(--dr-note-bg);
   color: var(--dr-ink);
   font: 500 13px var(--dr-font);
   cursor: pointer;
@@ -558,7 +635,7 @@ code {
   flex: none;
   padding: 7px 14px;
   background: var(--dr-warn-bg);
-  border-bottom: 1px solid #f1d9a9;
+  border-bottom: 1px solid var(--dr-warn-line);
   color: var(--dr-warn);
   font-size: 13px;
 }
@@ -590,15 +667,15 @@ code {
   max-width: min(520px, calc(100vw - 32px));
   padding: 8px 8px 8px 14px;
   border-radius: 10px;
-  background: var(--dr-ink);
-  color: #fff;
+  background: var(--dr-inverse);
+  color: var(--dr-on-inverse);
   font-size: 13.5px;
   line-height: 1.4;
   box-shadow: var(--dr-shadow);
   pointer-events: all;
 }
 .dr-notice--error {
-  background: var(--dr-danger);
+  background: var(--dr-danger-fill);
 }
 .dr-notice__close {
   flex: none;
@@ -726,7 +803,7 @@ code {
   border-radius: 6px 16px 6px 6px;
   background: var(--tl-color-panel, #fff);
   border: 1px solid var(--tl-color-divider, var(--dr-line));
-  color: var(--dr-navy);
+  color: var(--dr-accent-ink);
   font-weight: 750;
   font-size: 12px;
   letter-spacing: 0.04em;
@@ -801,7 +878,7 @@ code {
   height: 38px;
   border-radius: 4px 10px 4px 4px;
   background: var(--dr-navy);
-  color: #fff;
+  color: var(--dr-on-navy);
   font-size: 9.5px;
   font-weight: 750;
   letter-spacing: 0.03em;
@@ -894,7 +971,7 @@ code {
 }
 .dr-iconbtn:hover,
 .dr-iconbtn[aria-expanded="true"] {
-  background: #efece4;
+  background: var(--dr-hover);
   color: var(--dr-ink);
 }
 .dr-iconbtn:disabled {
@@ -910,7 +987,7 @@ code {
   padding: 0;
   border: 0;
   background: none;
-  color: var(--dr-navy);
+  color: var(--dr-accent-ink);
   font: inherit;
   font-weight: 600;
   text-decoration: underline;
@@ -929,7 +1006,7 @@ code {
   font-weight: 600;
 }
 .dr-input:disabled {
-  background: #f4f2ec;
+  background: var(--dr-hover);
   color: var(--dr-ink-2);
 }
 .dr-select {
@@ -985,7 +1062,7 @@ code {
   background: var(--dr-surface);
   border: 1px solid var(--dr-line);
   border-radius: 10px;
-  box-shadow: 0 6px 24px rgb(27 35 48 / 16%);
+  box-shadow: var(--dr-shadow-pop);
 }
 .dr-menu--end {
   right: 0;
@@ -1008,7 +1085,7 @@ code {
 }
 .dr-menu__item:hover,
 .dr-menu__item:focus-visible {
-  background: #f1efe8;
+  background: var(--dr-hover);
   outline: none;
 }
 .dr-menu__item--danger {
@@ -1029,13 +1106,13 @@ code {
   border-radius: 14px;
   background: var(--dr-surface);
   color: var(--dr-ink);
-  box-shadow: 0 20px 60px rgb(27 35 48 / 28%);
+  box-shadow: var(--dr-shadow-dialog);
 }
 .dr-dialog--lg {
   width: min(560px, calc(100vw - 32px));
 }
 .dr-dialog::backdrop {
-  background: rgb(27 35 48 / 38%);
+  background: var(--dr-backdrop);
 }
 .dr-dialog__panel {
   padding: 20px 22px 22px;
@@ -1123,7 +1200,7 @@ code {
 .dr-ws--button:hover,
 .dr-ws--button[aria-expanded="true"] {
   border-color: var(--dr-line-strong);
-  background: #f1efe8;
+  background: var(--dr-hover);
 }
 .dr-ws--button > svg {
   flex: none;
@@ -1181,12 +1258,12 @@ code {
   text-decoration: none;
 }
 .dr-nav__item:hover {
-  background: #f4f2ec;
+  background: var(--dr-hover);
   color: var(--dr-ink);
 }
 .dr-nav__item[aria-current="page"] {
-  background: #e9eef6;
-  color: var(--dr-navy);
+  background: var(--dr-accent-bg);
+  color: var(--dr-accent-ink);
   font-weight: 650;
 }
 .dr-nav__icon {
@@ -1258,7 +1335,7 @@ code {
   height: 60px;
   margin: 0 -32px;
   padding: 0 24px 0 32px;
-  background: rgb(246 244 238 / 92%);
+  background: color-mix(in srgb, var(--dr-paper) 92%, transparent);
   backdrop-filter: blur(6px);
 }
 .dr-dash__spacer {
@@ -1421,14 +1498,14 @@ code {
 .dr-role {
   padding: 1px 7px;
   border-radius: 999px;
-  background: #eeece6;
+  background: var(--dr-chip);
   color: var(--dr-ink-2);
   font-size: 11.5px;
   font-weight: 600;
 }
 .dr-role[data-role="owner"] {
-  background: #e9eef6;
-  color: var(--dr-navy);
+  background: var(--dr-accent-bg);
+  color: var(--dr-accent-ink);
 }
 .dr-role[data-role="editor"] {
   background: var(--dr-live-bg);
@@ -1437,7 +1514,7 @@ code {
 .dr-bcard--skeleton {
   min-height: 214px;
   border-style: dashed;
-  background: #efece4;
+  background: var(--dr-hover);
   animation: dr-pulse 1.4s ease-in-out infinite;
 }
 @media (prefers-reduced-motion: reduce) {
@@ -1454,7 +1531,7 @@ code {
   padding: 32px 24px;
   border: 1px dashed var(--dr-line-strong);
   border-radius: 14px;
-  background: rgb(255 255 255 / 55%);
+  background: color-mix(in srgb, var(--dr-surface) 55%, transparent);
   text-align: center;
 }
 .dr-empty__art {
@@ -1538,7 +1615,7 @@ code {
 .dr-account__note {
   padding: 8px 10px;
   border-radius: 8px;
-  background: #fffaf0;
+  background: var(--dr-note-bg);
 }
 .dr-account__actions {
   display: flex;
@@ -1583,7 +1660,7 @@ code {
   height: 34px;
   border-radius: 50%;
   background:
-    #eeece6
+    var(--dr-chip)
     url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M7 11V8a5 5 0 0 1 10 0v3M6 11h12v9H6z' fill='none' stroke='%234a5566' stroke-width='1.8' stroke-linejoin='round'/%3E%3C/svg%3E")
     center / 18px no-repeat;
 }
@@ -1632,7 +1709,7 @@ code {
   margin-top: 10px;
 }
 .dr-invite__link {
-  background: #faf9f5;
+  background: var(--dr-inset);
   font-family: var(--dr-mono);
   font-size: 12.5px;
 }
@@ -1773,7 +1850,7 @@ code {
 }
 .dr-dock__tab[aria-pressed="true"] {
   background: var(--dr-navy);
-  color: #fff;
+  color: var(--dr-on-navy);
 }
 .dr-dock__panel {
   display: flex;
@@ -1827,7 +1904,7 @@ button.dr-pill--role {
 }
 button.dr-pill--role:hover:not(:disabled) {
   filter: brightness(0.97);
-  box-shadow: inset 0 0 0 1px #e8c98a;
+  box-shadow: inset 0 0 0 1px var(--dr-warn-line);
 }
 button.dr-pill--role:disabled {
   cursor: default;
@@ -1928,9 +2005,7 @@ button.dr-pill--role:disabled {
   border: 1px solid var(--dr-line);
   border-radius: 12px;
   background: var(--dr-surface);
-  box-shadow:
-    0 2px 6px rgb(27 35 48 / 10%),
-    0 12px 32px rgb(27 35 48 / 16%);
+  box-shadow: var(--dr-shadow-pop);
   font-family: var(--dr-font);
   color: var(--dr-ink);
 }
@@ -2004,4 +2079,33 @@ html[data-dr-presenting] .dr-board__account {
   content: "Only you right now";
   color: var(--dr-ink-2);
   font-size: 13px;
+}
+
+/* ---- dark theme: what the tokens cannot reach ------------------------------------------------------ */
+
+/* tldraw 5.4.2 renders its container as `tl-theme__light` and switches it in a passive effect
+   (useDarkMode, which runs after a paint) when, as on our board, it gets a ready store: one light frame
+   of canvas on a dark page, even with its preference already dark. Until tldraw has set its
+   data-color-mode attribute the container stays invisible, for 400 ms at most (an editor that never
+   gets there is shown anyway). */
+:root[data-theme="dark"] .dr-board__editor .tl-container:not([data-color-mode]) {
+  animation: dr-tl-theme-pending 400ms step-end;
+}
+@keyframes dr-tl-theme-pending {
+  from,
+  to {
+    visibility: hidden;
+  }
+}
+
+/* Data-URI icons cannot read custom properties: the same icons, stroked in the dark --dr-ink-2 and
+   --dr-live. */
+:root[data-theme="dark"] .dr-select {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M7 10l5 5 5-5' fill='none' stroke='%23a9b1be' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E");
+}
+:root[data-theme="dark"] .dr-share__visicon {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M7 11V8a5 5 0 0 1 10 0v3M6 11h12v9H6z' fill='none' stroke='%23a9b1be' stroke-width='1.8' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+:root[data-theme="dark"] .dr-share__visicon[data-visibility^="workspace"] {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M9 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM3 20c0-3 2.7-5 6-5s6 2 6 5M16 11a3 3 0 1 0 0-6M18 15c2 .6 3 2.4 3 5' fill='none' stroke='%2374d39d' stroke-width='1.8' stroke-linecap='round'/%3E%3C/svg%3E");
 }

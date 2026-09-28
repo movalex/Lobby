@@ -115,3 +115,15 @@ export interface LockedHint {
   point: { x: number; y: number }
 }
 export const lockedHint = perEditor<LockedHint | null>('dr-locked-hint', () => null)
+
+// ---- arrange as grid (MAK-18): the grid last arranged in this browser, for the columns stepper
+export interface GridSession {
+  /** The selection it was arranged from (sorted ids). */
+  selection: string[]
+  /** Fill order, kept when the column count changes. */
+  order: string[]
+  columns: number
+  /** Each arranged shape's x/y right after the layout: any later move (by anyone) ends the session. */
+  placed: Record<string, { x: number; y: number }>
+}
+export const gridSession = perEditor<GridSession | null>('dr-grid-session', () => null)

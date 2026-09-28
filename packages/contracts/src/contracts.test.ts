@@ -3,6 +3,8 @@ import {
   BoardId,
   CreateBoardInvitationInput,
   DevLoginInput,
+  EmailInviteInput,
+  EmailInviteResult,
   PatchBoardInput,
   TicketResponse,
 } from './index.ts'
@@ -39,5 +41,42 @@ describe('contracts', () => {
     }
     expect(TicketResponse.safeParse(ok).success).toBe(true)
     expect(TicketResponse.safeParse({ ...ok, role: 'root' }).success).toBe(false)
+  })
+
+  it('email invitations: one spelling per address, a real address, never ownership', () => {
+    expect(EmailInviteInput.parse({ email: '  Pat@Client.Example ', role: 'viewer' })).toEqual({
+      email: 'pat@client.example',
+      role: 'viewer',
+    })
+    for (const email of ['', '   ', 'pat', 'pat@', '@client.example', 'pat@client', 'a b@c.example'])
+      expect(EmailInviteInput.safeParse({ email, role: 'viewer' }).success, email).toBe(false)
+    expect(
+      EmailInviteInput.safeParse({ email: `${'a'.repeat(245)}@b.example`, role: 'viewer' }).success,
+    ).toBe(false)
+    expect(EmailInviteInput.safeParse({ email: 'pat@client.example', role: 'owner' }).success).toBe(false)
+  })
+
+  it('email invitation results are told apart by mode (parsed through the index re-export)', () => {
+    const user = { id: 'usr_0123456789abcdefghij', name: 'Bob', handle: null, color: '#000', avatarUrl: null }
+    const id = 'inv_0123456789abcdefghij'
+    const at = '2026-10-04T12:00:00.000Z'
+    expect(
+      EmailInviteResult.parse({ mode: 'granted', user, role: 'editor', alreadyHadAccess: false }).mode,
+    ).toBe('granted')
+    expect(
+      EmailInviteResult.parse({ mode: 'emailed', email: 'a@b.example', invitationId: id, expiresAt: at })
+        .mode,
+    ).toBe('emailed')
+    const link = {
+      mode: 'link',
+      reason: 'provider_error',
+      email: 'a@b.example',
+      invitationId: id,
+      url: 'u',
+      expiresAt: at,
+    }
+    expect(EmailInviteResult.parse(link).mode).toBe('link')
+    expect(EmailInviteResult.safeParse({ ...link, reason: 'because' }).success).toBe(false)
+    expect(EmailInviteResult.safeParse({ ...link, mode: 'sent' }).success).toBe(false)
   })
 })
