@@ -207,7 +207,6 @@ export function parsePlaceRequest(body: unknown): PlaceNotesRequest {
 export const NOTE_SIZE = 200
 export const GRID_GAP = 24
 export const FRAME_PAD = 40
-const MAX_AUTO_COLUMNS = 8
 
 // Label metrics of a size 'm' note (NoteShapeUtil: 16 px × 1.375, line height 1.35, 16 px padding).
 const LINE_PX = 16 * 1.375 * 1.35
@@ -307,9 +306,10 @@ function gridBlock(items: readonly LayoutItem[], cols: number): Block {
 /**
  * A grid inside the frame, below whatever the frame already holds (`contentBottom`, relative to the
  * frame; null when empty), starting at `left` (default: the frame's padding). Columns: as many as fit
- * the frame's width, or more (up to 8, about square) when many notes would make a tall narrow column;
- * the frame grows to hold every note. A group starts on a new row unless all of it fits in what is
- * left of the current one.
+ * the frame's width, never more, so the frame keeps its width and grows downward only to hold every
+ * note (a wider frame ran into the frame beside it: final review R1). Only a frame narrower than one
+ * note widens, to that note. A group starts on a new row unless all of it fits in what is left of the
+ * current one.
  */
 export function layoutGrid(opts: {
   frameW: number
@@ -320,10 +320,7 @@ export function layoutGrid(opts: {
 }): LayoutResult {
   const { items } = opts
   const left = opts.left ?? FRAME_PAD
-  const cols = Math.max(
-    columnsIn(opts.frameW, left),
-    Math.min(MAX_AUTO_COLUMNS, Math.ceil(Math.sqrt(items.length))),
-  )
+  const cols = columnsIn(opts.frameW, left)
   const block = gridBlock(items, cols)
   const top = opts.contentBottom === null ? FRAME_PAD : opts.contentBottom + 2 * GRID_GAP
   const positions = new Map<string, { x: number; y: number }>()
@@ -521,6 +518,54 @@ export function layoutInFreeSpace(opts: {
     rest = rest.slice(placed)
   }
   return out
+}
+
+// ---- making room below a frame that grows (final review R1) ----------------------------------------------
+//
+// A frame that grows downward must not run under (or over) what sits below it on the page: a
+// template's next row of frames, a note beside the board. Whatever the grown frame would reach moves
+// down, and so does whatever that would then reach in turn, all by the same amount: the layout below
+// keeps its shape and its gaps.
+
+/** The gap kept between the grown frame and what it pushes down (templates leave 80). */
+export const PUSH_GAP = 80
+/** Anything closer than this under the grown frame is pushed. */
+const PUSH_MIN_GAP = GRID_GAP
+/** A page holding more than this is not rearranged (the frame just grows). */
+const MAX_PUSH_SIBLINGS = 3000
+
+const xOverlap = (a: Rect, b: Rect) => a.x < b.x + b.w && b.x < a.x + a.w
+
+/**
+ * What to move down, and by how much, when `frame` (in its parent's space) grows to `grownH`:
+ * `siblings` (the other shapes of the parent, arrows left out) that start at or below its old bottom
+ * and that the grown frame, or another pushed shape, would overlap or come within PUSH_MIN_GAP of.
+ * The first one pushed ends up PUSH_GAP below the frame (or as close as it was, when closer).
+ */
+export function pushBelow(
+  frame: Rect,
+  grownH: number,
+  siblings: readonly { id: string; rect: Rect }[],
+): { dy: number; ids: string[] } {
+  const oldBottom = frame.y + frame.h
+  const newBottom = frame.y + grownH
+  if (newBottom <= oldBottom || siblings.length > MAX_PUSH_SIBLINGS) return { dy: 0, ids: [] }
+  const below = siblings.filter((s) => s.rect.y >= oldBottom - 0.5)
+  const hit = below.filter((s) => xOverlap(s.rect, frame) && s.rect.y < newBottom + PUSH_MIN_GAP)
+  if (hit.length === 0) return { dy: 0, ids: [] }
+  const top = Math.min(...hit.map((s) => s.rect.y))
+  const dy = newBottom + Math.min(Math.max(0, top - oldBottom), PUSH_GAP) - top
+  const moved = new Set(hit.map((s) => s.id))
+  const queue = [...hit]
+  for (let m = queue.pop(); m; m = queue.pop()) {
+    const reach = m.rect.y + m.rect.h + dy + PUSH_MIN_GAP
+    for (const s of below) {
+      if (moved.has(s.id) || s.rect.y < m.rect.y || s.rect.y >= reach || !xOverlap(s.rect, m.rect)) continue
+      moved.add(s.id)
+      queue.push(s)
+    }
+  }
+  return { dy, ids: below.filter((s) => moved.has(s.id)).map((s) => s.id) }
 }
 
 // ---- what a frame holds (for the free-space search) -------------------------------------------------
@@ -878,6 +923,24 @@ export function placeNotes(opts: {
       layout.frameW !== Number(frame.props.w) || layout.frameH !== Number(frame.props.h) || frameCreated
     if (grown)
       writes.push({ ...frame, props: { ...frame.props, w: layout.frameW, h: layout.frameH } } as TLRecord)
+    // Growing downward: what the frame would reach on its page moves down (final review R1). A frame
+    // inside another frame, or a rotated one, just grows.
+    if (layout.frameH > frameH && String(frame.parentId).startsWith('page:') && !num(frame.rotation)) {
+      const siblings: { id: string; rect: Rect }[] = []
+      const byId = new Map<string, AnyShape>()
+      for (const s of children.get(frame.parentId) ?? []) {
+        if (s.id === frameId || s.type === 'arrow') continue
+        const rect = shapeBox(s, children, 0)
+        if (!rect) continue
+        siblings.push({ id: s.id, rect })
+        byId.set(s.id, s)
+      }
+      const push = pushBelow({ x: frame.x, y: frame.y, w: layout.frameW, h: frameH }, layout.frameH, siblings)
+      for (const id of push.ids) {
+        const s = byId.get(id) as AnyShape
+        writes.push({ ...s, y: s.y + push.dy } as TLRecord)
+      }
+    }
 
     todo.forEach((n, i) => {
       const at = layout.positions.get(n.id) ?? { x: FRAME_PAD, y: FRAME_PAD }

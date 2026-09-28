@@ -22,8 +22,10 @@ import {
   NOTE_SIZE,
   type Obstacle,
   type PlaceNotesRequest,
+  PUSH_GAP,
   parsePlaceRequest,
   placeNotes,
+  pushBelow,
   SHAPE_CLEARANCE,
 } from '../../src/http/place-notes.ts'
 import { emptyBoardSnapshot } from '../../src/snapshot.ts'
@@ -140,14 +142,44 @@ describe('layout', () => {
     }
   })
 
-  it('widens a narrow frame for many notes and starts below what the frame already holds', () => {
+  it('keeps the frame’s width for many notes, grows downward, and starts below what it holds (R1)', () => {
     const items = Array.from({ length: 20 }, (_, i) => ({ id: `n${i}`, height: 200, group: null }))
-    const out = layoutGrid({ frameW: 300, frameH: 300, contentBottom: 250, items })
-    // ceil(sqrt(20)) = 5 columns instead of 1
+    const out = layoutGrid({ frameW: 800, frameH: 960, contentBottom: 250, items })
+    // (800 - 80 + 24) / 224 = 3 columns, never the 5 of a square block (the frame ran into its neighbour)
     const xs = new Set([...out.positions.values()].map((p) => p.x))
-    expect(xs.size).toBe(5)
-    expect(out.frameW).toBe(2 * FRAME_PAD + 5 * 224 - 24)
+    expect(xs.size).toBe(3)
+    expect(out.frameW).toBe(800)
     expect(Math.min(...[...out.positions.values()].map((p) => p.y))).toBe(250 + 48)
+    expect(out.frameH).toBe(250 + 48 + 7 * 224 - 24 + FRAME_PAD)
+    // a frame narrower than one note widens to that note only
+    const narrow = layoutGrid({ frameW: 150, frameH: 300, contentBottom: null, items })
+    expect(narrow.frameW).toBe(2 * FRAME_PAD + NOTE_SIZE)
+    expect(new Set([...narrow.positions.values()].map((p) => p.x)).size).toBe(1)
+  })
+
+  it('pushes down what the grown frame would reach, and what that reaches in turn (R1)', () => {
+    const frame = { x: 0, y: 0, w: 800, h: 960 }
+    const siblings = [
+      // the next row of frames, 80 below; the one on the left is under the frame, so it moves
+      { id: 'below', rect: { x: -400, y: 1040, w: 1000, h: 600 } },
+      // under 'below' (not under the frame): moves with it
+      { id: 'belowBelow', rect: { x: -400, y: 1720, w: 300, h: 300 } },
+      // beside the frame, as tall as the grown frame: stays
+      { id: 'beside', rect: { x: 880, y: 0, w: 800, h: 2400 } },
+      // far below and to the side of everything that moves: stays
+      { id: 'far', rect: { x: 2000, y: 5000, w: 100, h: 100 } },
+      // above: stays
+      { id: 'above', rect: { x: 0, y: -500, w: 800, h: 420 } },
+    ]
+    const out = pushBelow(frame, 1500, siblings)
+    expect(out.ids.sort()).toEqual(['below', 'belowBelow'])
+    // the 80 px gap is kept: the frame grew 540
+    expect(out.dy).toBe(540)
+    // nothing to reach: nothing moves
+    expect(pushBelow(frame, 1000, siblings)).toEqual({ dy: 0, ids: [] })
+    // something far below is only pushed as far as it must be, to PUSH_GAP from the grown frame
+    const far = pushBelow(frame, 3000, [{ id: 'x', rect: { x: 0, y: 2900, w: 10, h: 10 } }])
+    expect(far).toEqual({ dy: 3000 + PUSH_GAP - 2900, ids: ['x'] })
   })
 
   it('estimates growY on the tall side, and none for short text', () => {
@@ -380,6 +412,131 @@ describe('revealing into the Lobby tour (round-2 F5)', () => {
       const rects = checkClear(records, frame.id, out.placed)
       // lined up with the frame's content (the tour's 80 px margin), not the frame edge
       expect(Math.min(...rects.map((r) => r.x))).toBe(80)
+    } finally {
+      db.close()
+    }
+  })
+})
+
+describe('revealing into the Retrospective (final review R1)', () => {
+  type Rec = TLRecord & {
+    x: number
+    y: number
+    parentId: string
+    type: string
+    props: { w: number; h: number; growY: number; name: string }
+  }
+  function retroStorage(db: DatabaseSync, extra: ShapeRecord[] = []) {
+    const storage = new SQLiteSyncStorage<TLRecord>({
+      sql: new NodeSqliteWrapper(db),
+      snapshot: emptyBoardSnapshot(draftroomSchema),
+    })
+    const { records } = instantiateTemplate('retrospective', {
+      pageId: PAGE_ID as TLPageId,
+      origin: { x: 0, y: 0 },
+    })
+    storage.transaction((txn) => {
+      for (const r of [...records, ...extra]) txn.set(r.id, r as TLRecord)
+    })
+    const frame = records.find(
+      (r) => r.typeName === 'shape' && r.type === 'frame' && r.props.name === '3 · What to improve',
+    ) as TLFrameShape
+    const all = () => storage.transaction((txn) => [...txn.values()]).result as Rec[]
+    return { storage, frame, all }
+  }
+  const sixteen = () =>
+    Array.from({ length: 16 }, (_, i) => ({
+      id: noteId(i),
+      text: `Friction ${i}`,
+      color: 'yellow',
+      authorId: null,
+    }))
+  const frameRects = (all: Rec[]) =>
+    all
+      .filter((r) => r.typeName === 'shape' && r.type === 'frame')
+      .map((r) => ({ id: r.id, x: r.x, y: r.y, w: r.props.w, h: r.props.h }))
+
+  function expectNoFrameOverlap(all: Rec[]) {
+    const frames = frameRects(all)
+    for (let i = 0; i < frames.length; i++)
+      for (let j = i + 1; j < frames.length; j++) {
+        const [a, b] = [frames[i], frames[j]] as [(typeof frames)[0], (typeof frames)[0]]
+        expect(overlaps(a, b), `${a.id} overlaps ${b.id}`).toBe(false)
+      }
+  }
+  function expectInside(all: Rec[], frameId: string, placed: readonly string[]) {
+    const f = all.find((r) => r.id === frameId) as Rec
+    for (const id of placed) {
+      const n = all.find((r) => r.id === id) as Rec
+      expect(n.parentId).toBe(frameId)
+      expect(n.x).toBeGreaterThanOrEqual(FRAME_PAD)
+      expect(n.x + NOTE_SIZE).toBeLessThanOrEqual(f.props.w - FRAME_PAD)
+      expect(n.y + NOTE_SIZE + n.props.growY).toBeLessThanOrEqual(f.props.h - FRAME_PAD)
+    }
+  }
+
+  it('16 notes keep the 800-wide column’s width, grow it downward and never reach 4 · Actions', () => {
+    const db = new DatabaseSync(':memory:')
+    try {
+      const { storage, frame, all } = retroStorage(db)
+      const before = frameRects(all())
+      const input = parsePlaceRequest(
+        request({
+          anonymous: true,
+          authors: [],
+          frame: { id: frame.id, pageId: PAGE_ID, x: frame.x, y: frame.y, w: 800, h: 960, name: 'x' },
+          notes: sixteen(),
+        }),
+      )
+      const out = placeNotes({ storage, schema: draftroomSchema, input })
+      expect(out.placed).toHaveLength(16)
+      const records = all()
+      const after = records.find((r) => r.id === frame.id) as Rec
+      expect(after.props.w).toBe(800)
+      expect(after.props.h).toBeGreaterThan(960)
+      expect([after.x, after.y]).toEqual([frame.x, frame.y])
+      expectNoFrameOverlap(records)
+      expectInside(records, frame.id, out.placed)
+      // the other frames did not move (nothing is below the row)
+      for (const b of before.filter((r) => r.id !== frame.id))
+        expect(frameRects(records).find((r) => r.id === b.id)).toEqual(b)
+      // three columns, lined up with the template's prompts
+      expect(new Set(out.placed.map((id) => (records.find((r) => r.id === id) as Rec).x)).size).toBe(3)
+    } finally {
+      db.close()
+    }
+  })
+
+  it('a frame below the column moves down with what is under it, and keeps its gap', () => {
+    const db = new DatabaseSync(':memory:')
+    try {
+      // "Parking lot" 80 below the What-to-improve column, with a note in it, and a sticky below that
+      const parking = frameShape('parking', { x: 880, y: 1580, w: 800, h: 400 })
+      const inParking = { ...noteShape('inparking', 'Later'), parentId: parking.id, x: 40, y: 40 }
+      const loose = { ...noteShape('loose', 'Loose'), x: 900, y: 2060 }
+      const { storage, frame, all } = retroStorage(db, [
+        parking,
+        inParking as ShapeRecord,
+        loose as ShapeRecord,
+      ])
+      const input = parsePlaceRequest(
+        request({
+          anonymous: true,
+          authors: [],
+          frame: { id: frame.id, pageId: PAGE_ID, x: frame.x, y: frame.y, w: 800, h: 960, name: 'x' },
+          notes: sixteen(),
+        }),
+      )
+      const out = placeNotes({ storage, schema: draftroomSchema, input })
+      const records = all()
+      const after = records.find((r) => r.id === frame.id) as Rec
+      const moved = records.find((r) => r.id === parking.id) as Rec
+      expect(moved.y).toBe(frame.y + after.props.h + 80)
+      expect(moved.x).toBe(880)
+      expect((records.find((r) => r.id === inParking.id) as Rec).y).toBe(40)
+      expect((records.find((r) => r.id === loose.id) as Rec).y).toBe(2060 + (moved.y - 1580))
+      expectNoFrameOverlap(records)
+      expectInside(records, frame.id, out.placed)
     } finally {
       db.close()
     }

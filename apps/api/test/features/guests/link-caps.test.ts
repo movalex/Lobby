@@ -106,22 +106,20 @@ describe('reactions per link', () => {
 })
 
 describe('summons per link', () => {
-  it('guest editors of one link share one summon every few seconds; members and other links are not held to it', async () => {
+  // Since final review R3, "Gather everyone" is for editors with an account: the route refuses every
+  // guest (403), so the link's share is never used up; the cap stays as a second line of defence.
+  it('guest editors cannot summon at all (403 from the route), which uses up no share; members can', async () => {
     w = await setupWorld()
     const url = (await guestLink(w.bob, w.board, { role: 'editor' })).url
     const a = await joinAsGuest(w.api, url, 'A')
     const b = await joinAsGuest(w.api, url, 'B')
     const summon = (g: { req: GuestClient['req'] }) => g.req('POST', `/api/boards/${w.board}/summon`, {})
-    expect((await summon(a)).statusCode).toBe(202)
-    const refused = await summon(b)
-    expect(refused.statusCode, refused.body).toBe(429)
-    expect(errorCode(refused)).toBe('RATE_LIMITED')
-    expect((refused.json() as { error: { message: string } }).error.message).toMatch(/this link/)
+    for (const g of [a, b]) {
+      const refused = await summon(g)
+      expect(refused.statusCode, refused.body).toBe(403)
+      expect(errorCode(refused)).toBe('GUEST_ACCOUNT_REQUIRED')
+    }
     expect((await summon(w.bob)).statusCode).toBe(202)
-    const other = await joinAsGuest(w.api, (await guestLink(w.bob, w.board, { role: 'editor' })).url, 'D')
-    expect((await summon(other)).statusCode).toBe(202)
-    w.api.clock.advance(GUEST_LINK_SUMMONS.windowMs + 100)
-    expect((await summon(b)).statusCode).toBe(202)
   })
 
   it('a summon the route refused does not use up the link’s share', async () => {
@@ -129,10 +127,10 @@ describe('summons per link', () => {
     const url = (await guestLink(w.bob, w.board, { role: 'editor' })).url
     const a = await joinAsGuest(w.api, url, 'A')
     const b = await joinAsGuest(w.api, url, 'B')
-    // A's summon names nobody valid: the route answers 400, and B can still summon.
+    // A's summon names nobody valid: the route answers 400, and B's reaches the route (403, not 429).
     const bad = await a.req('POST', `/api/boards/${w.board}/summon`, { targetUserId: 'nobody' })
     expect(bad.statusCode, bad.body).toBe(400)
-    expect((await b.req('POST', `/api/boards/${w.board}/summon`, {})).statusCode).toBe(202)
+    expect((await b.req('POST', `/api/boards/${w.board}/summon`, {})).statusCode).toBe(403)
   })
 })
 
@@ -208,8 +206,10 @@ describe('simultaneous requests from the guests of one link (as a Postgres pool 
     withDbLatency(w.api.db)
     const res = await Promise.all(guests.map((g) => g.req('POST', `/api/boards/${w.board}/summon`, {})))
     const codes = res.map((r) => r.statusCode)
-    expect(codes.filter((c) => c === 202)).toHaveLength(1)
-    expect(codes.filter((c) => c === 429)).toHaveLength(4)
+    // At most one reaches the route at a time, which refuses guests (final review R3): none goes out.
+    expect(codes.filter((c) => c === 202)).toHaveLength(0)
+    expect(codes.filter((c) => c === 403).length).toBeGreaterThanOrEqual(1)
+    expect(codes.every((c) => c === 403 || c === 429)).toBe(true)
   })
 
   it('a request the route refuses gives its reservation back, even when it overlapped others', async () => {

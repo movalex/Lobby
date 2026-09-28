@@ -13,7 +13,8 @@
 //
 // Permissions:
 // - GET: `view` (everyone on the board sees the session, its prompt and the counts).
-// - Start, add/edit/delete your own drafts: `edit` on an active board.
+// - Add/edit/delete your own drafts: `edit` on an active board. Start: the same, with an account
+//   (name-only guests take part but never start one: final review R3, facilitators.ts).
 // - Reveal / place / cancel: `edit`, and the person who started it or a board owner. Once the starter
 //   can no longer edit the board (removed, lowered to a read-only role, or a name-only guest who
 //   signed out or whose session ended), any editor with an account may too, so a session nobody can
@@ -49,6 +50,7 @@ import type { Params } from '../../context.ts'
 import { ApiError, conflict, forbidden, notFound, parse } from '../../errors.ts'
 import { SlidingWindowLimiter } from '../../rate-limit.ts'
 import type { FeatureContext } from '../context.ts'
+import { requireFacilitatorAccount } from './facilitators.ts'
 
 export interface PrivateNotesOptions {
   /** Draft writes (add, edit, delete) per person per minute (default 120). */
@@ -423,6 +425,8 @@ export function registerPrivateNotes(
     try {
       row = await db.transaction(async (tx) => {
         const access = await requireBoardAction(tx, bid, user.id, 'edit', { forUpdate: true })
+        // Name-only guests write drafts but never start a brainstorm (final review R3).
+        await requireFacilitatorAccount(tx, user.id)
         if (await activeSession(tx, access.board.id)) throw alreadyActive()
         limit(starts, user.id, reply, 'That is a lot of brainstorms. Wait a moment and try again.')
         const t = input.target

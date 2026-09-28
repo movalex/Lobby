@@ -4,7 +4,8 @@
 // Permissions (server-side; the UI only hides controls):
 // - GET state, past votes, revealed results: `view`.
 // - Timer control, starting/extending/closing/revealing a vote, summon, lowering someone else's
-//   hand: `edit` (facilitators).
+//   hand: `edit` (facilitators), with an account: name-only guests take part but never facilitate
+//   (final review R3, facilitators.ts).
 // - Casting, "I'm done", reacting and raising a hand: `view` on an ACTIVE board — viewers and
 //   commenters take part; the person is always the signed-in user. Lowering your own hand: `view`.
 // Events are published only after the transaction commits, and carry aggregates only. Reactions and
@@ -35,6 +36,7 @@ import { isBoardId, isUserId, requireBoardAction } from '../../access.ts'
 import type { Params } from '../../context.ts'
 import { ApiError, badRequest, conflict, forbidden, notFound, parse } from '../../errors.ts'
 import type { FeatureContext } from '../context.ts'
+import { requireFacilitatorAccount } from './facilitators.ts'
 import { HandLimitError, HandRegistry } from './hands.ts'
 import { registerPrivateNotes } from './private-notes.ts'
 import { REACTIONS_PER_BOARD_MAX, SlidingWindowLimiter } from './reactions.ts'
@@ -199,6 +201,7 @@ export function registerWorkshopRoutes(
     const result = await db.transaction(async (tx) => {
       // The board row lock serializes timer changes per board (the timer row may not exist yet).
       const access = await requireBoardAction(tx, bid, user.id, 'edit', { forUpdate: true })
+      await requireFacilitatorAccount(tx, user.id)
       const prev = await loadTimer(tx, access.board.id, true)
       let t: ReturnType<typeof applyTimerAction>
       try {
@@ -243,6 +246,7 @@ export function registerWorkshopRoutes(
     const input = parse(CreateVoteInput, req.body)
     // Cheap permission check first, so people who may not start votes never trigger a snapshot.
     const pre = await requireBoardAction(db, bid, user.id, 'edit')
+    await requireFacilitatorAccount(db, user.id)
     if (input.scope === 'frame' && input.frameId) {
       const frameId = input.frameId
       const map = await shapes.get(pre.board.id, { maxAgeMs: 0 })
@@ -330,6 +334,7 @@ export function registerWorkshopRoutes(
     transition: (tx: Queryable, row: SessionRow, at: Date) => Promise<boolean>,
   ) {
     const { row: found } = await sessionFor(req, userId, 'edit')
+    await requireFacilitatorAccount(db, userId)
     const at = now()
     const out = await db.transaction(async (tx) => {
       const access = await requireBoardAction(tx, found.board_id, userId, 'edit')
@@ -456,6 +461,7 @@ export function registerWorkshopRoutes(
     const { bid = '' } = req.params as Params
     const input = parse(SummonInput, req.body)
     const access = await requireBoardAction(db, bid, user.id, 'edit')
+    await requireFacilitatorAccount(db, user.id)
     const key = `${access.board.id}/${user.id}`
     const t = now().getTime()
     const last = lastSummon.get(key)
@@ -529,6 +535,7 @@ export function registerWorkshopRoutes(
     const { bid = '', uid = '' } = req.params as Params
     if (!isUserId(uid)) throw notFound()
     const access = await requireBoardAction(db, bid, user.id, uid === user.id ? 'view' : 'edit')
+    if (uid !== user.id) await requireFacilitatorAccount(db, user.id)
     const by = { id: user.id, name: user.name }
     return handsBody(access.board.id, hands.lower(access.board.id, uid, by).hands)
   })
@@ -537,6 +544,7 @@ export function registerWorkshopRoutes(
     const user = await ctx.requireUser(req)
     const { bid = '' } = req.params as Params
     const access = await requireBoardAction(db, bid, user.id, 'edit')
+    await requireFacilitatorAccount(db, user.id)
     return handsBody(access.board.id, hands.clear(access.board.id, { id: user.id, name: user.name }).hands)
   })
 }

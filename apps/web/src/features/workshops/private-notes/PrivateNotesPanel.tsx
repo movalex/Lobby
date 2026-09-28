@@ -14,7 +14,7 @@ import { useId, useRef, useState } from 'react'
 import { useValue } from 'tldraw'
 import { NOTE_PALETTE } from '../../canvas-ux/palette.ts'
 import type { FeatureContext } from '../../types.ts'
-import { isFacilitator } from '../hooks.ts'
+import { canEditBoard, useIsFacilitator } from '../hooks.ts'
 import { zoomToSession } from './canvas.ts'
 import { composerAfterAnswer, composerOnSubmit } from './composer.ts'
 import { describeCounts, usePrivateNotes } from './hooks.ts'
@@ -277,8 +277,10 @@ function MyNote({
 
 export function PrivateNotesPanel({ ctx }: { ctx: FeatureContext; close(): void }) {
   const { store, snap } = usePrivateNotes(ctx)
-  // Editors and owners write notes (they end up on the canvas); the API enforces it.
-  const canWrite = isFacilitator(ctx)
+  // Editors and owners write notes (they end up on the canvas), guest editors too; only editors with
+  // an account start a brainstorm (final review R3). The API enforces both.
+  const canWrite = canEditBoard(ctx)
+  const facilitator = useIsFacilitator(ctx)
   const [error, setError] = useState<string | null>(null)
   const [adding, setAdding] = useState(false)
   const [confirmCancel, setConfirmCancel] = useState(false)
@@ -297,7 +299,7 @@ export function PrivateNotesPanel({ ctx }: { ctx: FeatureContext; close(): void 
             <strong>Private brainstorm</strong>: everyone writes sticky notes on their own, without seeing
             anyone else's. When you reveal them, they all go onto the board at once.
           </p>
-          {canWrite ? (
+          {facilitator ? (
             <button
               type="button"
               className="dr-btn dr-btn--primary dr-btn--sm"
@@ -307,7 +309,11 @@ export function PrivateNotesPanel({ ctx }: { ctx: FeatureContext; close(): void 
               Start a private brainstorm…
             </button>
           ) : (
-            <p className="dr-muted">An editor or owner can start one.</p>
+            <p className="dr-muted" data-testid="pn-start-hint">
+              {canWrite
+                ? "The facilitator starts one. You'll be asked to write your notes then."
+                : 'An editor or owner can start one.'}
+            </p>
           )}
         </div>
       </div>

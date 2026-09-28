@@ -16,6 +16,7 @@ import type { BoxLike } from './support/editor.ts'
 import { openHistory } from './support/history.ts'
 import { capture } from './support/screenshots.ts'
 import {
+  closeWorkshopPopover,
   expect,
   openWorkshopPopover,
   test,
@@ -489,7 +490,7 @@ test('private notes: a reveal into the Lobby tour’s Brainstorm frame lands in 
   const panel = await openPrivatePanel(a)
   await panel.getByTestId('pn-reveal').click()
   await expect(a.getByTestId('pn-toast')).toContainText(
-    '3 notes are from the private brainstorm now on the board',
+    '3 notes from the private brainstorm are now on the board',
   )
 
   await expect.poll(async () => (await placedNotes(a)).length).toBe(3)
@@ -521,7 +522,9 @@ test('private notes: a reveal into the Lobby tour’s Brainstorm frame lands in 
 
 // ---- SEAM-07 ----------------------------------------------------------------------------------------
 
-test('private notes: a brainstorm started by a guest who is then removed can be ended by an editor; the guest’s draft stays off the board (SEAM-07)', async ({
+// Since final review R3 a name-only guest never starts a brainstorm (the API refuses it; taking over a
+// session whose starter left is covered in apps/api/test/features/workshops/private-notes-access.test.ts).
+test('private notes: a guest cannot start a brainstorm; a guest removed mid-session keeps their draft off the board (SEAM-07)', async ({
   join,
   browser,
   board,
@@ -531,18 +534,20 @@ test('private notes: a brainstorm started by a guest who is then removed can be 
   const contexts: BrowserContext[] = []
   try {
     const guest = await joinAsGuest(browser, await guestLinkUrl(alice, board), 'Troll', contexts)
-    await startBrainstorm(guest.page, 'new', true)
+    const guestTools = await openWorkshopPopover(guest.page)
+    await expect(guestTools.getByTestId('pn-start')).toHaveCount(0)
+    await closeWorkshopPopover(guest.page)
+    await startBrainstorm(bob.page, 'new', true)
     await writeNote(guest.page, 'Something nobody should see')
     await writeNote(bob.page, 'A real idea from bob')
     const bobPanel = await openPrivatePanel(bob.page)
-    await expect(bobPanel.getByTestId('pn-reveal')).toHaveCount(0) // the guest's to end, for now
 
     const res = await alice.api.fetch('DELETE', `/api/boards/${board}/members/${guest.id}`)
     expect(res.status()).toBe(200)
-    // bob's panel updates by itself: he may end it now, and is told why.
-    await expect(bobPanel.getByTestId('pn-starter-left')).toBeVisible()
     await bobPanel.getByTestId('pn-reveal').click()
-    await expect(bob.page.getByTestId('pn-toast')).toContainText('1 note is from the private brainstorm')
+    await expect(bob.page.getByTestId('pn-toast')).toContainText(
+      '1 note from the private brainstorm is now on the board',
+    )
     await expect.poll(async () => (await placedNotes(bob.page)).length).toBe(1)
     const texts = (await read(bob.page, (ed) =>
       ed.store

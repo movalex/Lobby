@@ -212,7 +212,9 @@ test('private notes: nobody sees another person’s drafts, and the reveal puts 
     }
     for (const t of [...ALICE_TEXTS, ...BOB_TEXTS])
       await expect(s.page.locator('.tl-note__container').filter({ hasText: t.slice(0, 30) })).toHaveCount(1)
-    await expect(s.page.getByTestId('pn-toast')).toContainText('4 notes are from the private brainstorm')
+    await expect(s.page.getByTestId('pn-toast')).toContainText(
+      '4 notes from the private brainstorm are now on the board',
+    )
     await expect(s.page.getByTestId('pn-chip')).toHaveCount(0)
   }
   // Grouped by author: alice's two notes on one row, bob's after them.
@@ -316,7 +318,9 @@ test('private notes: an anonymous reveal names nobody, and a doubled reveal plac
     return Promise.all([once(), once()])
   }, `/api/private-brainstorms/${sid}/reveal`)
   expect(statuses).toEqual([200, 200])
-  await expect(alice.page.getByTestId('pn-toast')).toContainText('3 notes are from the private brainstorm')
+  await expect(alice.page.getByTestId('pn-toast')).toContainText(
+    '3 notes from the private brainstorm are now on the board',
+  )
   for (const s of [alice, bob, carol]) {
     await expect.poll(async () => (await placedNotes(s.page, sid)).length, { timeout: 20_000 }).toBe(3)
     const notes = await placedNotes(s.page, sid)

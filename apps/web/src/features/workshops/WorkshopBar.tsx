@@ -17,7 +17,7 @@ import {
   timerRemainingMs,
 } from './countdown.ts'
 import { HandsChip, HandsSection } from './Hands.tsx'
-import { isFacilitator, useNow, useWorkshop } from './hooks.ts'
+import { canEditBoard, useIsFacilitator, useNow, useWorkshop } from './hooks.ts'
 import { PrivateNotesChip, PrivateNotesSection } from './private-notes/index.tsx'
 import { ReactionControl } from './Reactions.tsx'
 import { readSessionSettings, writeSessionSettings } from './session-settings.ts'
@@ -43,7 +43,7 @@ export function StopwatchIcon({ size = 14 }: { size?: number }) {
 
 export function WorkshopBar({ ctx }: { ctx: FeatureContext }) {
   const { store, snap } = useWorkshop(ctx)
-  const facilitator = isFacilitator(ctx)
+  const facilitator = useIsFacilitator(ctx)
   const [open, setOpen] = useState(false)
   /** Which section the popover should bring into view and focus when it opens (null = the first). */
   const [focusSection, setFocusSection] = useState<'hands' | null>(null)
@@ -402,8 +402,10 @@ function WorkshopPopover({
             ) : null}
           </>
         ) : (
-          <p className="dr-wk-hint">
-            Only editors and owners can set the timer. Everyone sees the same countdown.
+          <p className="dr-wk-hint" data-testid="timer-participant-hint">
+            {canEditBoard(ctx)
+              ? 'The facilitator runs the timer, votes and brainstorms. Everyone sees the same countdown.'
+              : 'Only editors and owners can set the timer. Everyone sees the same countdown.'}
           </p>
         )}
         <label className="dr-wk-check">

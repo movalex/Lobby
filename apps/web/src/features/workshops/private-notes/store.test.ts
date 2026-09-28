@@ -183,6 +183,53 @@ describe('PrivateNotesStore', () => {
   })
 })
 
+describe('asking people to write when a brainstorm starts (final review R2/R4)', () => {
+  const ME = 'usr_participant0001'
+  function withMe(serve: () => PrivateBrainstormState) {
+    const request = (async (_m: string, _p: string, opts: { schema: unknown }) =>
+      (opts.schema as { parse(v: unknown): unknown }).parse(serve())) as RequestFn
+    const events = new FakeEvents()
+    const store = new PrivateNotesStore({ boardId: 'b-abc1234567', request, events, userId: ME })
+    return { store, events }
+  }
+
+  it('someone else’s new session asks once; answering it (or reloading the view) never asks again', async () => {
+    let server = state({ session: null })
+    const { store, events } = withMe(() => server)
+    await store.refresh()
+    expect(store.getSnapshot().startNews).toBeNull()
+    server = state()
+    events.emit('workshop.private', { session: session(), counts: { notes: 0, people: 0 } })
+    await flush()
+    expect(store.getSnapshot().startNews).toEqual({ sessionId: SID })
+    store.dismissStartNews()
+    expect(store.getSnapshot().startNews).toBeNull()
+    await store.refresh()
+    expect(store.getSnapshot().startNews).toBeNull()
+  })
+
+  it('never for the starter, nor for someone who already wrote in it', async () => {
+    const mine = withMe(() => state({ session: session({ createdBy: ME }) }))
+    await mine.store.refresh()
+    expect(mine.store.getSnapshot().startNews).toBeNull()
+    const wrote = withMe(() =>
+      state({
+        myNotes: [
+          { id: 'pnt_0123456789abcdefghij', text: 'x', color: 'yellow', createdAt: ISO, updatedAt: ISO },
+        ],
+      }),
+    )
+    await wrote.store.refresh()
+    expect(wrote.store.getSnapshot().startNews).toBeNull()
+  })
+
+  it('a session already running when the board opens asks too (someone who joins late)', async () => {
+    const { store } = withMe(() => state())
+    await store.refresh()
+    expect(store.getSnapshot().startNews).toEqual({ sessionId: SID })
+  })
+})
+
 describe('helpers', () => {
   it('describes counts', () => {
     expect(describeCounts({ notes: 0, people: 0 })).toBe('No notes yet')
@@ -194,6 +241,10 @@ describe('helpers', () => {
     expect(chipCounts('open', { notes: 0, people: 0 })).toBe('Waiting for notes')
     expect(chipCounts('open', { notes: 3, people: 2 })).toBe('3 notes from 2 people')
     expect(chipCounts('revealed', { notes: 3, people: 2 })).toBe('Revealing…')
+    // R4: someone who can write and has not yet is asked to, whatever the counts
+    expect(chipCounts('open', { notes: 0, people: 0 }, true)).toBe('Add your notes')
+    expect(chipCounts('open', { notes: 3, people: 2 }, true)).toBe('Add your notes')
+    expect(chipCounts('revealed', { notes: 3, people: 2 }, true)).toBe('Revealing…')
   })
 
   it('centres a new frame in the viewport, sized for twelve notes', () => {
