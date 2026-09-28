@@ -6,7 +6,7 @@ import { connect, type Socket } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { type BlobStore, createFsBlobStore } from '@draftroom/blob-store'
-import type { PgliteDb } from '@draftroom/db'
+import type { Db } from '@draftroom/db'
 import { openTestDb } from '@draftroom/db/testing'
 import { type DerivativeRecord, newId } from '@draftroom/dev-assets'
 import Fastify, { type FastifyBaseLogger, type FastifyInstance, type FastifyRequest } from 'fastify'
@@ -74,7 +74,7 @@ function fakeAuth(blobRoot: string): FakeAuth {
 }
 
 /** Users, one workspace and the boards the fake authorizer knows (asset rows reference boards). */
-export async function seedBoards(db: PgliteDb, boards: string[] = ['board-a', 'board-b']) {
+export async function seedBoards(db: Db, boards: string[] = ['board-a', 'board-b']) {
   await db.query(
     `INSERT INTO users (id, name, handle, color) VALUES ($1, 'Alice', 'alice', '#3355ff'), ($2, 'Bob', 'bob', '#33aa55')
      ON CONFLICT DO NOTHING`,
@@ -94,7 +94,7 @@ export async function seedBoards(db: PgliteDb, boards: string[] = ['board-a', 'b
 export interface TestApp {
   app: FastifyInstance
   port: number
-  db: PgliteDb
+  db: Db
   /** What the file routes use (the real fs store unless a test passes `wrap`). */
   blobs: BlobStore
   /** The fs store's root directory (every stored byte lives below it). */
@@ -348,7 +348,7 @@ export async function waitFor(check: () => boolean, timeoutMs = 5_000, what = 'c
 export const sha256 = (b: Buffer) => createHash('sha256').update(b).digest('hex')
 
 /** Row counts of the asset tables. */
-export async function assetRows(db: PgliteDb) {
+export async function assetRows(db: Db) {
   const count = async (table: string) =>
     (await db.one<{ n: number }>(`SELECT count(*)::int AS n FROM ${table}`)).n
   return {
@@ -413,7 +413,7 @@ export async function addDerivative(
 
 /** A version's row changed the way the worker's `complete` would change it. */
 export async function setVersion(
-  db: PgliteDb,
+  db: Db,
   versionId: string,
   patch: { status?: string; mimeType?: string; error?: { code: string; message: string } | null },
 ) {

@@ -1,12 +1,13 @@
-// In-process API for tests: a cloned, migrated in-memory PGlite, app.inject() (no ports), a recording
-// sync notifier and a controllable clock.
+// In-process API for tests: a cloned, migrated in-memory PGlite (or, with DRAFTROOM_TEST_DATABASE_URL
+// set, a fresh schema on that real Postgres: packages/db/src/testing.ts), app.inject() (no ports), a
+// recording sync notifier and a controllable clock.
 
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { BlobStore } from '@draftroom/blob-store'
 import type { Me } from '@draftroom/contracts'
-import type { PgliteDb } from '@draftroom/db'
+import type { Db } from '@draftroom/db'
 import { openTestDb } from '@draftroom/db/testing'
 import type { FastifyInstance, LightMyRequestResponse } from 'fastify'
 import { type ApiDeps, createApiServer } from '../src/app.ts'
@@ -50,7 +51,7 @@ export interface Client {
 
 export interface TestApi {
   app: FastifyInstance
-  db: PgliteDb
+  db: Db
   /** The api's blob store (a temp directory unless a test injects one). */
   blobs: BlobStore
   config: ApiConfig
