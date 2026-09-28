@@ -178,9 +178,9 @@ cmd_deploy() {
     have_env=1
   fi
 
-  local work bundle
+  local bundle # 'work' stays global: the EXIT trap runs after this function returns
   work=$(mktemp -d)
-  trap 'rm -rf "$work"' EXIT
+  trap 'rm -rf "${work:-}"' EXIT
   bundle=$work/bundle.tgz
   say "bundling sources"
   make_bundle "$bundle"
