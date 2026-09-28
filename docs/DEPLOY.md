@@ -153,7 +153,7 @@ Done by the user (2026-09-27):
 Rules:
 
 - **Don't change the bucket's settings** (public access, CORS, lifecycle, location) as part of a deploy.
-- Only the api gets R2 credentials. They're entered at Blueprint creation (`sync: false`): `R2_ACCOUNT_ID` (the Cloudflare account ID, 32 hex characters), `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET` = `draftroom-staging`.
+- Only the api and, for offsite board backups ([backups](#backups)), the sync service get R2 credentials. They're entered at Blueprint creation (`sync: false`): `R2_ACCOUNT_ID` (the Cloudflare account ID, 32 hex characters), `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET` = `draftroom-staging`.
 - The api checks them at startup and refuses to start, naming the variable, never the value, if one is missing or malformed. Under `NODE_ENV=production` it also refuses to start without an explicit `DRAFTROOM_BLOB_STORE`. The user's real values (`.env.deploy.local`, with `CLOUDFLARE_ACCOUNT_ID` as `R2_ACCOUNT_ID`) pass these checks (2026-09-27, checked offline, no value printed).
 - Endpoint: `https://<account>.r2.cloudflarestorage.com/<bucket>/<key>` (path style, region `auto`). Object keys are `assets/<ast>/<ver>/original` and `assets/<ast>/<ver>/d/<drv>.<webp|png>`.
 - Presigned URLs live ≤ 15 min, are scoped to one key and one method, go only to authenticated workers, and are never logged or stored.
@@ -221,7 +221,8 @@ Every variable is documented with a safe placeholder in `.env.example`. Where ea
 | `DRAFTROOM_TICKET_SECRET`, `DRAFTROOM_INTERNAL_SECRET` | api, sync | env group `draftroom-staging-secrets`, `generateValue: true`. Two independent base64 256-bit values, 44 chars each. The services require ≥ 32 chars and refuse two equal values. |
 | `DRAFTROOM_WORKER_TOKEN` | api, Render worker; NAS worker by hand | env group `draftroom-staging-worker-token`, `generateValue: true` ([worker token](#worker-token)). Dev placeholders (`dev-only-…`) are refused in production. |
 | `DRAFTROOM_BLOB_STORE` | api | `r2`. Required in production: no silent local-disk default on a host without a disk. |
-| `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET` | api only | `sync: false` (prompted once, at Blueprint creation). Bucket `draftroom-staging`. |
+| `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET` | api; sync (offsite backups) | `sync: false` (prompted once, at Blueprint creation). Bucket `draftroom-staging`. |
+| `DRAFTROOM_BACKUP_STORE`, `DRAFTROOM_BACKUP_INTERVAL_MS` | sync | `sync: false` / default ([backups](#backups)): `r2` on staging, set together with the sync's `R2_*`. |
 | `DATABASE_URL` | api | `fromDatabase … connectionString` (the internal URL). Internal connections don't require TLS. For `sslmode=require`, append it by hand; `verify-full` isn't supported internally. |
 | `CLERK_SECRET_KEY`, `CLERK_PUBLISHABLE_KEY` | api | `sync: false` |
 | `DRAFTROOM_SYNC_INTERNAL_URL` | api | `fromService: {type: web, name: draftroom-staging-sync, property: hostport}` → `draftroom-staging-sync-xxxx:10000` → `http://…`. Required, non-loopback in production. |
@@ -348,18 +349,95 @@ It was deployed in the order api → sync → web; all three went live on the fi
 - **Readiness.** `/healthz` (sync and api) answers as soon as the server listens. Sync opens rooms lazily, and the api has already migrated by then. Render stops routing to an instance after 15 s of failed checks and restarts it after 60 s. Background workers have no health checks: a wedged worker shows up only as jobs that stay queued. Watch the worker's log.
 - **Disk ownership (sync).** Render reportedly mounts disks owned by root (from another Render user's report, 2026-09-25; UNVERIFIED by us). The entrypoint starts as root only to `chown` the top of `DRAFTROOM_DATA_DIR`, then drops to `node` via `setpriv --no-new-privs`. It never chowns recursively, because everything below is created by the app. Tested with a root-owned 0755 tmpfs mount. The api's `/tmp/draftroom-api` goes through the same path: it is created, then chowned.
 
-## Backups: not yet (milestone 4)
+## Backups
 
-There are **no application-level backups and no restore drill yet.** What exists by platform default:
+What holds what: **board content** (every shape, note and connector) lives in one SQLite file per board on the sync disk; **everything else** (people, workspaces, the board list, permissions, comments, asset metadata) lives in Postgres; **file bytes** (uploads and their previews) live in R2 under `assets/`.
 
-- **Render disk snapshots (sync).** One every 24 h, kept at least 7 days. Restoring one discards everything written after it.
-  - These are infrastructure snapshots of live WAL-mode SQLite files, **not** consistent application backups. The build plan requires SQLite-backup-API copies to private storage with checksums (milestone 4).
-  - They are **not** rolled back with a service rollback.
-- **Render Postgres (paid).** Point-in-time recovery, with a 3-day window on the Hobby workspace and 7 days on Pro, plus on-demand logical exports. Postgres now also holds the asset metadata and job queue.
-- **R2.** No versioning or replication has been configured, and bucket settings are left alone. A deleted object is gone.
-- The three are **not coordinated**. Restoring Postgres to an earlier time can reference blobs deleted since, or orphan newer ones; restoring sync can reference assets the database no longer knows.
+### Board backups (sync)
 
-Treat staging data as disposable until milestone 4.
+- **Local.** Every 15 minutes (`DRAFTROOM_BACKUP_INTERVAL_MS`), each open board that changed is backed up with SQLite's online-backup API on the room's own connection (one consistent copy, never a raw copy of a live WAL file), and a changed board is backed up once more before an idle room closes. Copies go to `/var/data/backups/<board>/` with a `manifest.json`; the newest 12 are kept. They are on the **same disk** as the boards: good against a bad write, useless if the disk is lost.
+- **Offsite (wave 3).** After each local backup, the sync server copies it to the store set by `DRAFTROOM_BACKUP_STORE` (R2 on staging):
+  - `backups/sync/<board>/<stamp>-c<clock>.sqlite`: the file, streamed from disk and hashed on the way. If the bytes sent don't match the local manifest's sha256, the object is deleted again and the file is never retried.
+  - `backups/sync/<board>/manifest.json`: per backup, its time (`createdAt`, `uploadedAt`), document clock, tldraw schema, size, sha256 of the file and of its records, and the asset versions the board references (`assets: [{assetId, versionId}]`, from file cards and image records). This is the build plan's "coordinated manifest with board, schema and asset versions".
+  - `backups/sync/index.json`: the boards that have offsite backups (the restore tools use it; the store has no list call).
+  - **Retention:** the newest 12, plus the newest backup of each of the last 14 days (UTC). The rest are deleted; a failed delete stays listed under `pendingDeletes` and is retried.
+- **Failures** never affect the local backup or the board. Each one is counted and logged as `[backup] offsite upload failed for board <id>: NETWORK ECONNRESET (retried on the next pass)`: an error code, HTTP status and S3 code only, never a credential, URL or response body. It's retried on the next pass (every `DRAFTROOM_BACKUP_INTERVAL_MS`) or the board's next backup, and at every server start.
+- **Memory.** Uploads stream. Measured on the dev PC (`apps/sync/test/backup/memory.test.ts`, a 52.9 MiB backup): RSS +0–4 MiB through the R2 driver (to a loopback S3 stand-in) and the fs driver; a control that buffers the file shows +53 MiB. Not measured against real R2 or on Render.
+- **Render bandwidth.** Uploads to R2 are outbound traffic that Render bills ([cost](#cost)): each backup of a board is uploaded once, so a 5 MB board edited all day costs about 5 MB every 15 minutes. Staging boards are small; watch it if boards grow.
+
+**Status.** `GET /internal/backups/status` (internal secret, private network only) shows, per board: the last offsite success (`lastSuccessAt`, `lastSuccessFile`), how many backups the store holds, what is still pending, the failure counts and the last error. From the sync service's Shell:
+
+```sh
+node -e "fetch('http://127.0.0.1:'+(process.env.PORT||10000)+'/internal/backups/status',{headers:{'x-draftroom-internal':process.env.DRAFTROOM_INTERNAL_SECRET}}).then(r=>r.text()).then(console.log)"
+```
+
+The server also logs its setting at startup: `[backup] offsite backups: r2 (bucket draftroom-staging)`, or `off`.
+
+### Configuration (sync)
+
+| Variable | Values |
+|---|---|
+| `DRAFTROOM_BACKUP_STORE` | `off` (default, in production too: an unset value must not take the boards down on a deploy), `fs` (`<DATA>/blobs`: development and tests only, it is the same disk), `r2` |
+| `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET` (optional `R2_ENDPOINT`) | Required for `r2`, with the api's rules. A missing or malformed value makes sync **refuse to start**, naming the variable, never the value. |
+| `DRAFTROOM_BACKUP_INTERVAL_MS` | Backup and retry interval. Default `900000` (15 min), 1 000 to 86 400 000. |
+
+**Turning it on for staging** (the integration step; nothing here has been done on Render yet):
+
+1. On `draftroom-staging-sync`, set **all five** values together, in the Dashboard (Environment) or with `PUT /v1/services/<sync>/env-vars/<key>`, **before** deploying the sync build that reads them: `DRAFTROOM_BACKUP_STORE=r2`, `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET=draftroom-staging`.
+   - `render.yaml` lists all five as `sync: false`, the store too. On an existing Blueprint, `sync: false` values are never prompted. If a Blueprint sync set only `DRAFTROOM_BACKUP_STORE=r2`, sync would refuse to start without the R2 values, and a sync deploy stops the old instance first.
+   - Credentials: the api's token works (same bucket). Better: a second bucket-scoped "Object Read & Write" token for sync, so either can be rotated or revoked alone. R2 tokens are scoped to buckets, not prefixes, so either token can still read and delete everything in the bucket, `assets/` and `backups/` alike. No object lock or versioning is configured, so whoever holds a token can delete backups.
+2. Deploy sync. Check the startup line, edit a board, and within 15 minutes check the status endpoint (or restart the service: a start uploads what is missing).
+3. Run the drill from the store (below).
+
+### Restore drill (read-only)
+
+```sh
+pnpm --filter @draftroom/sync backup:restore-drill --from=store [--board <id>]   # dev (fs: DRAFTROOM_BACKUP_STORE=fs)
+node apps/sync/src/backup/restore-drill.ts --from=store [--board <id>]          # Render sync Shell (the image has no pnpm)
+```
+
+It downloads the newest offsite backup of each board (or the given ones; without `--board`, every board in `index.json`) into a temp dir, streamed, and checks its size and sha256 against the offsite manifest. It restores the backup into a clean temp data dir, checks the record count, clock and records digest, opens it through the sync server's own room registry (SQLiteSyncStorage, schema check, tldraw migrations) and compares every record. When the live board hasn't changed since, it's compared too. It prints `PASS`/`FAIL` per board and exits 0 only if every board passed. It never writes to the store or to a live board. `--from=local` (the default) drills `/var/data/backups` instead. The drill keeps a board's records in memory to compare them; next to the server on the 512 MB instance that is fine for today's boards (UNVERIFIED on Render).
+
+### Restoring a board on Render from R2
+
+The sync disk can only be reached from the running service's Shell (Render: one-off jobs can't see a service's disk). So a restore is **staged** while the server runs and **applied by the next start**, before the server accepts connections.
+
+Before you start:
+
+- You need the board id: the `b-…` part of the board's URL.
+- Tell people: the restart in step 3 disconnects every board for a few seconds. Open tabs of the restored board reset to the restored state, and edits made after that backup are lost there, including edits not yet sent.
+
+Steps:
+
+1. **Drill** (Dashboard → `draftroom-staging-sync` → Shell): `node apps/sync/src/backup/restore-drill.ts --from=store --board <id>` must print `PASS`. To take an older backup than the newest, pick its `file` from `backups/sync/<id>/manifest.json`.
+2. **Stage** (same Shell): `node apps/sync/src/backup/restore-board.ts --from=store --board <id> [--file <name>]`. It verifies the backup exactly like the drill, then writes `/var/data/restore/board-<id>.sqlite` and a request next to it. Nothing live changes yet. While it works it needs free space on the sync disk (1 GB) of about three times the backup's size. `--list` shows what's staged; `--board <id> --cancel` removes it.
+3. **Restart** the sync service (Dashboard → Manual Deploy → Restart service, or `POST /v1/services/<sync>/restart`; both UNVERIFIED, a manual deploy of the same commit works too). Before listening, the server:
+   - keeps the current database as `/var/data/rooms/board-<id>.sqlite.pre-restore-<stamp>`;
+   - puts the backup in place with its document clock raised past anything a client can have seen, so open tabs reset instead of keeping "ghost" shapes;
+   - logs `[restore] board <id>: restored from r2 backup <file> (… records); clock …; previous database kept as …`.
+
+   A request is applied once, even if its files couldn't be removed. A request that fails is logged as `restore NOT applied: …`, renamed `.failed.json`, and leaves the board untouched.
+4. **Check**: open the board in a browser. While it is open, the next backup pass (within 15 minutes) backs up the restored state, locally and offsite.
+5. **Undo** (if it was the wrong backup): `node apps/sync/src/backup/restore-board.ts --from=file --path /var/data/rooms/board-<id>.sqlite.pre-restore-<stamp> --board <id>`, then restart again. Delete the `.pre-restore-` file by hand once you're sure.
+
+A board restore puts back the board's content only. Comments, votes, permissions and the title live in Postgres, and the file bytes in R2 `assets/`. The manifest's `assets` list says which file versions the backup references. Neither the drill nor the restore checks that they still exist.
+
+Shell sessions may run as root (UNVERIFIED). `restore-board` hands the files it stages to the owner of the data dir, as the entrypoint does, so the server (user `node`) can consume them.
+
+Tests: `apps/sync/test/backup/` (fs driver: upload, manifest, index, retention, failure and retry, restarts, the drill from the store and its failures, staging and applying through a real server start, the memory check), `e2e/tests/offsite-backups.spec.ts` (browser edits → offsite copy → drill from the store; a damaged copy fails). The live R2 test (`apps/sync/test/backup/r2-live.test.ts`, `DRAFTROOM_LIVE_R2=1`, a random `test/<run>/` prefix that it deletes) has **not been run** yet.
+
+### Postgres and platform snapshots
+
+- **Render Postgres, our plan** (a paid `0.1c-256mb` instance on the Hobby workspace; <https://render.com/docs/postgresql-backups>, read 2026-09-27):
+  - Point-in-time recovery for the **past 3 days** (Pro and higher: 7 days; upgrading doesn't backfill the window).
+  - A recovery creates a **new** database instance at the chosen time, which can't be within the last 10 minutes. Validate it, then point the api's `DATABASE_URL` at it.
+  - Logical backups, generated automatically for paid instances and kept 7 days on every plan, plus on-demand exports from the Dashboard or `pg_dump`.
+- **Render disk snapshots (sync).** One every 24 h, kept at least 7 days. They're infrastructure snapshots of live WAL-mode SQLite files, not consistent application backups, and restoring one discards everything written after it on the whole disk. They are **not** rolled back with a service rollback.
+- **R2.** No versioning or replication is configured, and bucket settings are left alone. A deleted object is gone, backups included.
+
+### Coordinating a full restore
+
+The windows differ: Postgres goes back 3 days to any minute; board backups go back 14 days, one per day beyond the newest 12. To restore everything to a time T within the last 3 days: recover Postgres to T, then restore each board from its newest offsite backup at or before T (`--file`). Files deleted from R2 after T are gone. The backup manifests list what each board needs, so a missing file can be found, not recovered. This has **not been rehearsed** on staging.
 
 ## Rollback
 

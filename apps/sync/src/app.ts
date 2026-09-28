@@ -12,6 +12,7 @@ import {
   createAccessMonitor,
   createApiAccessClient,
 } from './access.ts'
+import { type BackupService, createBackupService } from './backup/service.ts'
 import { isAllowedOrigin, type SyncConfig } from './config.ts'
 import { createRequestHandler } from './http/router.ts'
 import { JoinQueue } from './join-queue.ts'
@@ -35,6 +36,8 @@ export interface SyncServer {
   monitor: AccessMonitor
   /** Reports canvas edits to the API (dashboard "Edited …"; touch.ts). */
   touches: TouchReporter
+  /** Offsite copies of the backups, staged restores, the backup status (backup/service.ts). */
+  backups: BackupService
   /** Resolves with the bound port (useful with `port: 0`). */
   listen(): Promise<{ port: number }>
   /** Stops accepting, drops every socket, waits for in-flight requests, closes every room + DB. */
@@ -60,7 +63,9 @@ export function createSyncServer(config: SyncConfig, opts: SyncServerOptions = {
     log,
     onSessionRemoved: (boardId, sessionId) => monitor?.removed(boardId, sessionId),
     onDocumentChange: (boardId) => touches.touched(boardId),
+    backup: config.backupIntervalMs ? { intervalMs: config.backupIntervalMs } : undefined,
   })
+  const backups = createBackupService({ config, backupsDir: registry.backupsDir(), log })
   const access: AccessMonitor = createAccessMonitor({
     registry,
     client:
@@ -78,6 +83,7 @@ export function createSyncServer(config: SyncConfig, opts: SyncServerOptions = {
     registry,
     schema: draftroomSchema,
     monitor: access,
+    backups,
     isClosing: () => closing !== null,
     log,
   })
@@ -219,7 +225,9 @@ export function createSyncServer(config: SyncConfig, opts: SyncServerOptions = {
     registry,
     monitor: access,
     touches,
-    listen() {
+    backups,
+    async listen() {
+      await backups.start() // staged restores first: no room can be open yet
       return new Promise((resolve, reject) => {
         const onError = (e: Error) => reject(e)
         http.once('error', onError)
@@ -246,6 +254,7 @@ export function createSyncServer(config: SyncConfig, opts: SyncServerOptions = {
         // The last edits' "Edited" times: best effort, never more than a second of shutdown.
         await Promise.race([touches.flush(), new Promise((r) => setTimeout(r, 1_000).unref())])
         touches.stop()
+        await backups.stop()
         await stopped
         await new Promise<void>((resolve) => wss.close(() => resolve()))
       })()

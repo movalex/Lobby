@@ -209,6 +209,23 @@ services:
         value: https://draftroom-staging-web.onrender.com
       - key: ACCESS_RECHECK_MS
         value: "10000"
+      # Offsite board backups (docs/DEPLOY.md "Backups"): each local backup is also copied to R2 under
+      # backups/sync/<board>/, with a manifest. All five are `sync: false` ON PURPOSE, the store too:
+      # a Blueprint sync that set DRAFTROOM_BACKUP_STORE=r2 on the existing service without the R2_*
+      # values (sync: false values are only prompted at Blueprint creation) would make sync refuse to
+      # start, and a sync deploy stops the old instance first. Set all five together in the Dashboard
+      # or through the Render API BEFORE deploying the sync build that reads them. Unset = off (boards
+      # work; the log says "offsite backups: off").
+      - key: DRAFTROOM_BACKUP_STORE
+        sync: false # r2
+      - key: R2_ACCOUNT_ID
+        sync: false # the Cloudflare account ID (32 hex characters), as on the api
+      - key: R2_ACCESS_KEY_ID
+        sync: false # an "Object Read & Write" token scoped to the bucket (docs/DEPLOY.md "Backups")
+      - key: R2_SECRET_ACCESS_KEY
+        sync: false
+      - key: R2_BUCKET
+        sync: false # draftroom-staging
       - fromGroup: draftroom-staging-secrets
 
   # ---------------------------------------------------------------------------------------------

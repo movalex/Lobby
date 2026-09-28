@@ -177,6 +177,9 @@ importers:
       '@draftroom/auth-tickets':
         specifier: workspace:*
         version: link:../../packages/auth-tickets
+      '@draftroom/blob-store':
+        specifier: workspace:*
+        version: link:../../packages/blob-store
       '@draftroom/canvas-schema':
         specifier: workspace:*
         version: link:../../packages/canvas-schema

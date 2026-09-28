@@ -1,6 +1,8 @@
 import { isIP } from 'node:net'
+import { join } from 'node:path'
 import { checkSecret } from '@draftroom/auth-tickets'
 import { resolveDataDir } from '@draftroom/dev-assets'
+import { BACKUP_DEFAULTS } from './backup/backup.ts'
 
 export interface SyncConfig {
   host: string
@@ -28,7 +30,34 @@ export interface SyncConfig {
    * ms (touch.ts; dashboard "Edited …"). Default 60 000.
    */
   touchIntervalMs?: number
+  /**
+   * DRAFTROOM_BACKUP_STORE (+ R2_*): where each local board backup is copied offsite
+   * (backup/offsite.ts). Absent = off.
+   */
+  backupStore?: BackupStoreConfig
+  /**
+   * DRAFTROOM_BACKUP_INTERVAL_MS: how often open boards that changed are backed up, and how often the
+   * offsite copy retries what is still missing. Default 15 minutes.
+   */
+  backupIntervalMs?: number
 }
+
+/**
+ * Offsite copies of the board backups. `fs` writes under `${DRAFTROOM_DATA_DIR}/blobs` (the same root
+ * as the api's fs blob store, so the key layout matches the one R2 bucket); it is for development and
+ * tests, since the same disk is not offsite. `r2` is the staging/production setting.
+ */
+export type BackupStoreConfig =
+  | { kind: 'off' }
+  | { kind: 'fs'; root: string }
+  | {
+      kind: 'r2'
+      accountId: string
+      accessKeyId: string
+      secretAccessKey: string
+      bucket: string
+      endpoint: string | null
+    }
 
 type Env = Record<string, string | undefined>
 
@@ -155,6 +184,60 @@ export function isAllowedOrigin(
   return allowed.includes(origin.trim().toLowerCase())
 }
 
+const R2_KEYS = ['R2_ACCOUNT_ID', 'R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY', 'R2_BUCKET'] as const
+const R2_ACCOUNT_RE = /^[0-9a-f]{32}$/
+// S3/R2 bucket names: 3-63 lowercase letters, digits and hyphens, starting and ending alphanumeric.
+const R2_BUCKET_RE = /^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/
+// Credentials are opaque; this only rejects obvious paste mistakes (spaces, quotes, newlines).
+const CREDENTIAL_RE = /^[A-Za-z0-9+/=_-]{16,256}$/
+
+/**
+ * DRAFTROOM_BACKUP_STORE=off|fs|r2 (default off, also in production: an unset value must not take the
+ * boards down on a deploy; the server logs that offsite backups are off). `r2` needs the same four
+ * R2_* values as the api (and accepts its optional R2_ENDPOINT). The rules match apps/api/src/config.ts
+ * parseBlobStore. Messages name variables, never their values.
+ */
+export function parseBackupStore(env: Env, dataDir: string): BackupStoreConfig {
+  const kind = read(env, 'DRAFTROOM_BACKUP_STORE') ?? 'off'
+  if (kind === 'off') return { kind: 'off' }
+  if (kind === 'fs') return { kind: 'fs', root: join(dataDir, 'blobs') }
+  if (kind !== 'r2') throw new Error('DRAFTROOM_BACKUP_STORE must be off, fs or r2')
+  const missing = R2_KEYS.filter((n) => read(env, n) === undefined)
+  if (missing.length) throw new Error(`DRAFTROOM_BACKUP_STORE=r2 requires ${missing.join(', ')}`)
+  const accountId = read(env, 'R2_ACCOUNT_ID') ?? ''
+  const accessKeyId = read(env, 'R2_ACCESS_KEY_ID') ?? ''
+  const secretAccessKey = read(env, 'R2_SECRET_ACCESS_KEY') ?? ''
+  const bucket = read(env, 'R2_BUCKET') ?? ''
+  if (!R2_ACCOUNT_RE.test(accountId)) throw new Error('R2_ACCOUNT_ID must be the 32-character hex account id')
+  if (!CREDENTIAL_RE.test(accessKeyId)) throw new Error('R2_ACCESS_KEY_ID is malformed')
+  if (!CREDENTIAL_RE.test(secretAccessKey)) throw new Error('R2_SECRET_ACCESS_KEY is malformed')
+  if (accessKeyId === secretAccessKey)
+    throw new Error('R2_ACCESS_KEY_ID and R2_SECRET_ACCESS_KEY must differ')
+  if (!R2_BUCKET_RE.test(bucket) || bucket.includes('--'))
+    throw new Error('R2_BUCKET must be a valid bucket name (3-63 lowercase letters, digits and hyphens)')
+  let endpoint: string | null = null
+  const endpointRaw = read(env, 'R2_ENDPOINT')
+  if (endpointRaw !== undefined) {
+    let url: URL | null = null
+    try {
+      url = new URL(endpointRaw)
+    } catch {}
+    if (
+      url?.protocol !== 'https:' ||
+      url.pathname !== '/' ||
+      url.search ||
+      url.hash ||
+      url.username ||
+      url.password
+    )
+      throw new Error(
+        'R2_ENDPOINT must be an https origin (scheme://host[:port]) without credentials or path',
+      )
+    endpoint = url.origin
+  }
+  return { kind: 'r2', accountId, accessKeyId, secretAccessKey, bucket, endpoint }
+}
+
 /** Parses and validates the sync server environment. Throws with an operator-facing message on bad input. */
 export function loadConfig(env: Env = process.env): SyncConfig {
   const production = env.NODE_ENV === 'production'
@@ -172,10 +255,11 @@ export function loadConfig(env: Env = process.env): SyncConfig {
   // Same rule as the API: a leaked internal secret must not also mint connection tickets.
   if (ticketSecret === internalSecret)
     throw new Error('DRAFTROOM_TICKET_SECRET and DRAFTROOM_INTERNAL_SECRET must differ')
+  const dataDir = resolveDataDir(env)
   return {
     host: read(env, 'HOST') ?? '127.0.0.1',
     port: int(env, 'PORT', 5858, 0, 65_535),
-    dataDir: resolveDataDir(env),
+    dataDir,
     idleEvictMs: int(env, 'IDLE_EVICT_MS', 30_000, 0, 24 * 60 * 60_000),
     textLeaseMs: int(env, 'TEXT_LEASE_MS', 5_000, 1, 10 * 60_000),
     ticketSecret,
@@ -184,5 +268,13 @@ export function loadConfig(env: Env = process.env): SyncConfig {
     accessRecheckMs: int(env, 'ACCESS_RECHECK_MS', 10_000, 50, 60 * 60_000),
     allowedOrigins: allowedOrigins(env, production),
     touchIntervalMs: int(env, 'TOUCH_INTERVAL_MS', 60_000, 0, 60 * 60_000),
+    backupStore: parseBackupStore(env, dataDir),
+    backupIntervalMs: int(
+      env,
+      'DRAFTROOM_BACKUP_INTERVAL_MS',
+      BACKUP_DEFAULTS.intervalMs,
+      1_000,
+      24 * 60 * 60_000,
+    ),
   }
 }

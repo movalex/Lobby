@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { checkInternalSecret, INTERNAL_SECRET_HEADER } from '@draftroom/auth-tickets'
+import { type BackupService, handleBackupStatus } from '../backup/service.ts'
 import {
   handleAccessChanged,
   handleListDeleted,
@@ -12,6 +13,8 @@ import { HttpError, notFound, sendError } from './respond.ts'
 
 export interface RouterDeps extends InternalDeps {
   internalSecret: string
+  /** Offsite backup status (absent = off). */
+  backups?: Pick<BackupService, 'status'>
 }
 
 type Handler = (req: IncomingMessage, res: ServerResponse, deps: RouterDeps, seg: string[]) => unknown
@@ -23,6 +26,12 @@ const INTERNAL_ROUTES: Array<{ re: RegExp; methods: string[]; handle: Handler }>
     re: /^\/internal\/access-changed$/,
     methods: ['POST'],
     handle: (req, res, deps) => handleAccessChanged(req, res, deps),
+  },
+  // Offsite backups (offsite-backups feature; handler in backup/service.ts)
+  {
+    re: /^\/internal\/backups\/status$/,
+    methods: ['GET'],
+    handle: (_req, res, deps) => handleBackupStatus(res, deps.backups),
   },
   {
     re: /^\/internal\/boards\/([^/]+)\/snapshot$/,
