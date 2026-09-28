@@ -142,10 +142,12 @@ test('RETRO-22a: Tab from the top of the page reaches the breadcrumb, title, fea
   await waitForBoard(a.page)
   // From the top of the page (A11Y2-09: arriving focuses the canvas, and a blur() would leave Tab's
   // starting point there).
+  await expect
+    .poll(() => a.page.evaluate(() => document.activeElement?.classList.contains('tl-container') === true))
+    .toBe(true)
   await a.page.evaluate(() => {
     document.body.tabIndex = -1
     document.body.focus()
-    document.body.removeAttribute('tabindex')
   })
   const stops: { id: string; inTopBar: boolean }[] = []
   for (let i = 0; i < 40; i++) {

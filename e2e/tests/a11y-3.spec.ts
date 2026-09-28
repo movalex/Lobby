@@ -249,11 +249,12 @@ test('A11Y2-07 + A11Y2-08: Ctrl+/ no longer flips the theme; "?" and Ctrl+/ open
  * starting point where the focus was: the canvas, since arriving on a board focuses it.)
  */
 async function fromPageTop(page: Page) {
+  await expect
+    .poll(() => page.evaluate(() => document.activeElement?.classList.contains('tl-container') === true))
+    .toBe(true)
   await page.evaluate(() => {
-    const body = document.body
-    body.tabIndex = -1
-    body.focus()
-    body.removeAttribute('tabindex')
+    document.body.tabIndex = -1
+    document.body.focus()
   })
 }
 

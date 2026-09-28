@@ -205,10 +205,12 @@ test('A11Y-09 / DANA-13: the board’s first Tab is "Skip to canvas"; the board 
   expect(noteId).not.toBe('')
   // From the top of the page (A11Y2-09: arriving focuses the canvas, and a blur() would leave Tab's
   // starting point there).
+  await expect
+    .poll(() => a.page.evaluate(() => document.activeElement?.classList.contains('tl-container') === true))
+    .toBe(true)
   await a.page.evaluate(() => {
     document.body.tabIndex = -1
     document.body.focus()
-    document.body.removeAttribute('tabindex')
   })
   await a.page.keyboard.press('Tab')
   const skip = a.page.getByTestId('skip-to-canvas')
