@@ -1,5 +1,6 @@
 import type { Board } from '@draftroom/contracts'
-import { useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { type RefObject, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { flushSync } from 'react-dom'
 import { type Editor, useValue } from 'tldraw'
 import { UserMenu } from '../auth/UserMenu.tsx'
 import { Mark } from '../brand/Wordmark.tsx'
@@ -14,6 +15,14 @@ import { RenameInput } from '../ui/RenameInput.tsx'
 import { useTopBarWidth } from '../ui/useMedia.ts'
 import { readonlyPill } from './access.ts'
 import { type PresenceUser, presenceUsers } from './presence.ts'
+import {
+  compactValue,
+  firstFittingLevel,
+  mayLeaveMenu,
+  type TitleMeasure,
+  titleFits,
+  titleNeed,
+} from './topbar-fit.ts'
 
 export type ConnState = 'connecting' | 'online' | 'offline' | 'error'
 
@@ -70,13 +79,24 @@ export function TopBar({
   const width = useTopBarWidth()
   const narrow = width !== 'wide'
   const phone = width === 'phone'
+  // F4: a wide bar compacts its controls (then, if still too full, moves them into "⋯") before the
+  // board title drops below about 24 characters.
+  const bar = useRef<HTMLElement>(null)
+  const crowded = useTopBarFit(bar, narrow)
+  const menu = narrow || crowded
   // The role pill already says what a viewer/commenter can do: a second "View only" is noise (RETRO-17).
   const saveHidden = !!pill && save.state === 'readonly'
   // Tab order = DOM order (RETRO-22a): breadcrumb, title, role, people, status, feature controls,
   // Share. The account (DEV identity) badge is drawn at the bar's right end but comes LAST in the
   // page (BoardAccount below, rendered by BoardPage after the canvas); on phones it is in the menu.
   return (
-    <header className="dr-topbar" data-width={width} data-testid="topbar">
+    <header
+      ref={bar}
+      className="dr-topbar"
+      data-width={width}
+      data-crowded={crowded || undefined}
+      data-testid="topbar"
+    >
       <a
         className="dr-topbar__home"
         href={home}
@@ -132,9 +152,9 @@ export function TopBar({
       <FeatureTopBarItems
         features={features}
         ctx={featureCtx}
-        only={narrow ? PINNED_TOP_BAR_FEATURES : undefined}
+        only={menu ? PINNED_TOP_BAR_FEATURES : undefined}
       />
-      {narrow && (
+      {menu && (
         <OverflowMenu label="More board controls" testId="topbar-overflow">
           <FeatureTopBarItems features={features} ctx={featureCtx} except={PINNED_TOP_BAR_FEATURES} stacked />
           {phone && (
@@ -257,6 +277,98 @@ function BoardTitle({
 }
 
 const MAX_AVATARS = 5
+
+let measureCtx: CanvasRenderingContext2D | null | undefined
+
+/** The board title's box and what MIN_TITLE_CHARS of it need, in its own font (null while renaming). */
+function titleMeasure(header: HTMLElement): TitleMeasure | null {
+  const el = header.querySelector<HTMLElement>('.dr-topbar__title')
+  if (!el) return null
+  const cs = getComputedStyle(el)
+  if (measureCtx === undefined) measureCtx = document.createElement('canvas').getContext('2d')
+  const ctx = measureCtx
+  if (ctx) ctx.font = `${cs.fontStyle} ${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`
+  const em = Number.parseFloat(cs.fontSize) || 15
+  const measure = (text: string) => (ctx ? ctx.measureText(text).width : Array.from(text).length * em * 0.6)
+  const padding = (Number.parseFloat(cs.paddingLeft) || 0) + (Number.parseFloat(cs.paddingRight) || 0)
+  return {
+    client: el.clientWidth,
+    scroll: el.scrollWidth,
+    need: titleNeed(el.textContent ?? '', measure, padding),
+  }
+}
+
+/**
+ * F4: keeps the board title readable in a wide top bar (topbar-fit.ts). Whenever something can move
+ * (the bar's width, a chip appearing, a label or the timer changing, fonts arriving) it applies the
+ * compact steps again from none upwards, before the browser paints, and stops at the first that lets
+ * the title show at least MIN_TITLE_CHARS characters. Returns true while even the most compact bar is
+ * too full: the feature controls then sit in the "⋯" menu until the bar grows past that width.
+ */
+function useTopBarFit(bar: RefObject<HTMLElement | null>, narrow: boolean): boolean {
+  const [crowded, setCrowded] = useState(false)
+  const state = useRef({ crowded: false, crowdedAt: 0 })
+  state.current.crowded = crowded
+  useLayoutEffect(() => {
+    const header = bar.current
+    if (!header) return
+    // Tablets and phones have their own layout (the "⋯" menu, icon-only pills: PRI-02).
+    if (narrow) {
+      delete header.dataset.compact
+      return
+    }
+    let disposed = false
+    const apply = (level: number) => {
+      const value = compactValue(level)
+      if (header.dataset.compact !== value) header.dataset.compact = value
+    }
+    const fits = (level: number) => {
+      apply(level)
+      return titleFits(titleMeasure(header))
+    }
+    // From an observer, the menu switch renders at once (flushSync), so no frame shows the overflowing
+    // bar; from this effect a plain update does the same (React re-renders before the paint), and
+    // flushSync there would be a React error.
+    const setMenu = (value: boolean, fromObserver: boolean) => {
+      if (fromObserver) flushSync(() => setCrowded(value))
+      else setCrowded(value)
+    }
+    const fit = (fromObserver: boolean) => {
+      if (disposed) return
+      const s = state.current
+      const width = header.clientWidth
+      if (s.crowded && mayLeaveMenu(width, s.crowdedAt)) {
+        // Try the controls in the bar again; the re-render's mutations call fit() once more.
+        s.crowded = false
+        setMenu(false, fromObserver)
+        return
+      }
+      if (firstFittingLevel(fits) !== null || s.crowded) return
+      s.crowded = true
+      s.crowdedAt = width
+      setMenu(true, fromObserver)
+    }
+    const resize = new ResizeObserver(() => fit(true))
+    resize.observe(header)
+    const mutations = new MutationObserver((records) => {
+      // Our own data-compact changes are not a reason to measure again.
+      if (records.every((r) => r.target === header && r.attributeName === 'data-compact')) return
+      fit(true)
+    })
+    mutations.observe(header, { subtree: true, childList: true, characterData: true, attributes: true })
+    fit(false)
+    document.fonts?.ready.then(
+      () => fit(true),
+      () => {},
+    )
+    return () => {
+      disposed = true
+      resize.disconnect()
+      mutations.disconnect()
+    }
+  }, [bar, narrow])
+  return crowded
+}
 
 function PresenceList({
   editor,

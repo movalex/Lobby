@@ -28,6 +28,12 @@ export type FullscreenMode = 'native' | 'window'
 interface SavedView {
   pageId: TLPageId
   camera: { x: number; y: number; z: number }
+  /**
+   * The page point at the middle of the board's viewport when the presentation started. The view is
+   * restored around it, not from the raw camera: tldraw keeps camera x/y when the canvas changes size,
+   * so a side panel that was open before and is closed after would leave the board shifted sideways.
+   */
+  center: { x: number; y: number }
   selectedIds: TLShapeId[]
   focus: HTMLElement | null
 }
@@ -258,6 +264,7 @@ export function createPresenter(editor: Editor): Presenter {
     if (slides.length === 0) {
       return { ok: false, reason: order$.get().length > 0 ? 'all-skipped' : 'no-frames' }
     }
+    stopHolding?.()
     const selectedIds = editor.getSelectedShapeIds()
     const startIndex = findStartIndex(slides, order$.get(), selectedIds, (id) =>
       editor
@@ -266,9 +273,11 @@ export function createPresenter(editor: Editor): Presenter {
         .reverse(),
     )
     const active = document.activeElement
+    const middle = editor.getViewportPageBounds().center
     const saved: SavedView = {
       pageId: editor.getCurrentPageId(),
       camera: { ...editor.getCamera() },
+      center: { x: middle.x, y: middle.y },
       selectedIds: [...selectedIds],
       focus: active instanceof HTMLElement ? active : null,
     }
@@ -310,7 +319,40 @@ export function createPresenter(editor: Editor): Presenter {
     if (editor.getCurrentPageId() !== saved.pageId && editor.getPage(saved.pageId)) {
       editor.setCurrentPage(saved.pageId)
     }
-    editor.setCamera(saved.camera, { immediate: true, force: true })
+    // screen = (page + camera) * z: put the saved centre back in the middle of the canvas as it is now.
+    const { w, h } = editor.getViewportScreenBounds()
+    const { z } = saved.camera
+    const camera =
+      w > 0 && h > 0 && z > 0
+        ? { x: w / (2 * z) - saved.center.x, y: h / (2 * z) - saved.center.y, z }
+        : saved.camera
+    editor.setCamera(camera, { immediate: true, force: true })
+  }
+
+  /**
+   * After a presentation the board's canvas settles over the next frames (fullscreen exit, the dock
+   * and top bar coming back): re-centre on every resize for a moment, until the person moves the
+   * camera themselves.
+   */
+  let stopHolding: (() => void) | null = null
+  const holdCentre = (saved: SavedView) => {
+    stopHolding?.()
+    let expected = editor.getCamera()
+    const onResize = () => {
+      const c = editor.getCamera()
+      if (c.x !== expected.x || c.y !== expected.y || c.z !== expected.z) return release()
+      if (state.get()) return release()
+      restoreCamera(saved)
+      expected = editor.getCamera()
+    }
+    const timer = setTimeout(() => release(), 1500)
+    function release() {
+      clearTimeout(timer)
+      editor.off('resize', onResize)
+      if (stopHolding === release) stopHolding = null
+    }
+    editor.on('resize', onResize)
+    stopHolding = release
   }
 
   function stop() {
@@ -341,12 +383,16 @@ export function createPresenter(editor: Editor): Presenter {
       restoreCamera(saved)
       const stillThere = saved.selectedIds.filter((id) => editor.getShape(id))
       if (stillThere.length) editor.setSelectedShapes(stillThere)
+      holdCentre(saved)
     })
     // The container returns to its board size over the next frames (fullscreen exit is async): set the
     // camera again once it has, so the board view is exactly where it was.
     requestAnimationFrame(() =>
       requestAnimationFrame(() => {
-        if (!state.get()) restoreCamera(saved)
+        if (state.get() || !stopHolding) return
+        restoreCamera(saved)
+        stopHolding()
+        holdCentre(saved)
       }),
     )
     focusTarget(saved.focus)?.focus({ preventScroll: true })

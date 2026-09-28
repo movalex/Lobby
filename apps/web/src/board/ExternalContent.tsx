@@ -17,7 +17,7 @@ import {
   useTranslation,
   type VecLike,
 } from 'tldraw'
-import { type AssetVersionMeta, LIMITS } from '../assets/contract.ts'
+import { type AssetKind, type AssetVersionMeta, LIMITS } from '../assets/contract.ts'
 import {
   cameraTargetAfterDrop,
   type DropContainer,
@@ -56,7 +56,8 @@ export const IMAGE_HANDLER_LIMITS = {
  * tldraw creates the images (upload, local preview, its toasts); we then replace its placement
  * (native pixel size, one long row, auto-parented by top-left corner) with drop-layout.ts's:
  * screen-relative sizes in a grid, clear of existing content, inside a frame only when all of it
- * fits there, and the first image into an empty template image slot under the drop point.
+ * fits there, and the first image (or, with no image, the first video) into an empty template image
+ * slot under the drop point.
  *
  * Rendered as a child of <Tldraw> so it can reach the UI toasts/translations the default handler
  * needs. Its effect runs after <Tldraw> registers the defaults (those run in a layout effect).
@@ -124,7 +125,15 @@ interface CardSlot {
   page: VecLike
   parentId: TLShapeId | null
   local: VecLike | null
+  /**
+   * A template image slot the card fills instead (F9): fitted into the slot as it is when the upload
+   * finishes, and stacked just above it, like an image dropped there.
+   */
+  imageSlot?: TLShapeId
 }
+
+/** Cards that show a picture and so may fill a template image slot: videos (poster) and images. */
+const SLOT_CARD_KINDS: ReadonlySet<AssetKind> = new Set<AssetKind>(['video', 'image'])
 
 const toRect = (b: { x: number; y: number; w: number; h: number }): Rect => ({
   x: b.x,
@@ -183,13 +192,19 @@ function layoutDrop(
   const pageId = editor.getCurrentPageId()
   const createdIds = created.map((s) => s.id)
   const exclude = new Set<TLShapeId>(createdIds)
-  const slot = created.length && at.aimed ? slotAt(editor, at, exclude) : null
+  // An empty template image slot under the drop point takes the first image, else the first video
+  // (or other picture card): F9, a video dropped on a Mood board slot used to land above the frame.
+  const slotCard = created.length ? -1 : cards.findIndex((c) => SLOT_CARD_KINDS.has(c.kind))
+  const slot = at.aimed && (created.length || slotCard >= 0) ? slotAt(editor, at, exclude) : null
   const slotted = slot ? created[0] : undefined
   const slotRect = slot && slotted ? fitInSlot(nativeSize(editor, slotted), slot.bounds) : null
+  const slottedCard = slot && !slotted ? cards[slotCard] : undefined
+  const cardSlotRect = slot && slottedCard ? fitInSlot(CARD_SIZE[slottedCard.kind], slot.bounds) : null
   const gridShapes = slotted ? created.slice(1) : created
+  const gridCards = slottedCard ? cards.filter((c) => c !== slottedCard) : cards
   const plan = planDrop({
     images: gridShapes.map((s) => nativeSize(editor, s)),
-    cards: cards.map((c) => CARD_SIZE[c.kind]),
+    cards: gridCards.map((c) => CARD_SIZE[c.kind]),
     center: at,
     view,
     containers: containersAt(editor, at, exclude),
@@ -232,7 +247,12 @@ function layoutDrop(
   }
 
   // Zoom out only as far as needed to show everything this drop placed, cards included.
-  const content = unionRects([...(slotRect ? [slotRect] : []), ...plan.images, ...plan.cards])
+  const content = unionRects([
+    ...(slotRect ? [slotRect] : []),
+    ...(cardSlotRect ? [cardSlotRect] : []),
+    ...plan.images,
+    ...plan.cards,
+  ])
   const target = cameraTargetAfterDrop(view.viewport, content)
   if (target) {
     editor.zoomToBounds(target, {
@@ -241,11 +261,23 @@ function layoutDrop(
     })
   }
 
-  return plan.cards.map((r) => ({
-    page: { x: r.x, y: r.y },
-    parentId: container ? container.id : null,
-    local: container ? editor.getPointInShapeSpace(container, { x: r.x, y: r.y }) : null,
-  }))
+  let next = 0
+  return cards.map((card): CardSlot => {
+    if (card === slottedCard && slot && cardSlotRect) {
+      return {
+        page: { x: cardSlotRect.x, y: cardSlotRect.y },
+        parentId: null,
+        local: null,
+        imageSlot: slot.id,
+      }
+    }
+    const r = plan.cards[next++] ?? { x: at.x, y: at.y }
+    return {
+      page: { x: r.x, y: r.y },
+      parentId: container ? container.id : null,
+      local: container ? editor.getPointInShapeSpace(container, { x: r.x, y: r.y }) : null,
+    }
+  })
 }
 
 /** The asset's native pixel size (tldraw caps it at maxImageDimension), else the shape's. */
@@ -281,10 +313,14 @@ function containersAt(editor: Editor, at: VecLike, exclude: Set<TLShapeId>): Dro
 }
 
 interface Slot {
+  id: TLShapeId
   parentId: TLParentId
   index: IndexKey
   bounds: Rect
 }
+
+/** What already fills a slot: an image, or a file card (a video's poster). */
+const fillsSlot = (s: TLShape | undefined) => isImage(s) || s?.type === FILE_CARD_TYPE
 
 /**
  * The topmost template image slot under `at` (slots arrive locked, so this is our own hit test), if
@@ -305,7 +341,7 @@ function slotAt(editor: Editor, at: VecLike, exclude: Set<TLShapeId>): Slot | nu
     const bounds = toRect(b)
     const inside = { x: bounds.x - 1, y: bounds.y - 1, w: bounds.w + 2, h: bounds.h + 2 }
     const occupied = editor.getSortedChildIdsForParent(s.parentId).some((id) => {
-      if (exclude.has(id) || !isImage(editor.getShape(id))) return false
+      if (exclude.has(id) || !fillsSlot(editor.getShape(id))) return false
       const ib = editor.getShapePageBounds(id)
       return (
         !!ib &&
@@ -315,7 +351,7 @@ function slotAt(editor: Editor, at: VecLike, exclude: Set<TLShapeId>): Slot | nu
         ib.maxY <= inside.y + inside.h
       )
     })
-    return occupied ? null : { parentId: s.parentId, index: s.index, bounds }
+    return occupied ? null : { id: s.id, parentId: s.parentId, index: s.index, bounds }
   }
   return null
 }
@@ -351,27 +387,37 @@ async function uploadFileCards(
 
 function createFileCard(editor: Editor, meta: AssetVersionMeta, slot: CardSlot): TLShapeId | null {
   const id = createShapeId()
-  const size = CARD_SIZE[meta.kind]
+  // The image slot as it is now: someone may have moved its frame while the file was uploading.
+  const slotShape = slot.imageSlot ? editor.getShape(slot.imageSlot) : undefined
+  const slotBounds = slotShape ? editor.getShapePageBounds(slotShape) : undefined
+  const fill = slotShape && slotBounds ? fitInSlot(CARD_SIZE[meta.kind], toRect(slotBounds)) : null
+  const size = fill ?? CARD_SIZE[meta.kind]
   // An explicit parent: createShape would otherwise pick the frame under the card's top-left corner.
   const parent = slot.parentId && slot.local && editor.getShape(slot.parentId) ? slot.parentId : null
-  const at = parent && slot.local ? slot.local : slot.page
-  editor.createShape({
-    id,
-    type: FILE_CARD_TYPE,
-    parentId: parent ?? editor.getCurrentPageId(),
-    x: at.x,
-    y: at.y,
-    props: {
-      w: size.w,
-      h: size.h,
-      assetId: meta.assetId,
-      versionId: meta.versionId,
-      kind: meta.kind,
-      name: meta.name,
-      mimeType: meta.mimeType || meta.declaredMimeType || 'application/octet-stream',
-      sizeBytes: Math.max(0, Math.round(meta.sizeBytes)),
-      ...hintPropsFromMeta(meta),
-    },
+  const at = fill ?? (parent && slot.local ? slot.local : slot.page)
+  editor.run(() => {
+    editor.createShape({
+      id,
+      type: FILE_CARD_TYPE,
+      parentId: fill ? editor.getCurrentPageId() : (parent ?? editor.getCurrentPageId()),
+      x: at.x,
+      y: at.y,
+      props: {
+        w: size.w,
+        h: size.h,
+        assetId: meta.assetId,
+        versionId: meta.versionId,
+        kind: meta.kind,
+        name: meta.name,
+        mimeType: meta.mimeType || meta.declaredMimeType || 'application/octet-stream',
+        sizeBytes: Math.max(0, Math.round(meta.sizeBytes)),
+        ...hintPropsFromMeta(meta),
+      },
+    })
+    // Into the slot's frame, stacked just above the slot (under the panel's notes and text), like an
+    // image dropped on it.
+    if (fill && slotShape && editor.getShape(id))
+      editor.reparentShapes([id], slotShape.parentId, slotShape.index)
   })
   return editor.getShape(id) ? id : null
 }

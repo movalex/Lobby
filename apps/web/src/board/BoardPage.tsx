@@ -55,6 +55,7 @@ import { ShareDialog } from './ShareDialog.tsx'
 import { SyncErrorScreen } from './SyncErrorScreen.tsx'
 import { BoardAccount, type ConnState, TopBar } from './TopBar.tsx'
 import { createTicketUri } from './ticket.ts'
+import { installTouchStartGuard } from './touch-guard.ts'
 
 // Module level = referentially stable. useSync treats utils/assets/users/uri as effect dependencies
 // (an unstable one reconnects in a loop), and <Tldraw> re-creates the editor when utils change.
@@ -423,7 +424,10 @@ function BoardSession({
       })
       // A sync rebase that removes and re-adds a shape of ours must not wipe the redo stack.
       const uninstallRebaseGuard = installRebaseSelectionGuard(ed)
+      // Phones: no "Unable to preventDefault inside passive event listener" error per tap (F18).
+      const uninstallTouchGuard = installTouchStartGuard(ed)
       return () => {
+        uninstallTouchGuard()
         uninstallRebaseGuard()
         uninstallUndo()
         editorRef.current = null
