@@ -1,5 +1,7 @@
 /* Dashboard additions (dashboard-share): stars, list view, starred section, template picker,
-   card-menu dialogs. Reuses apps/web/src/styles.css tokens and classes (never edited here). */
+   card-menu dialogs. Reuses apps/web/src/styles.css tokens and classes (never edited here); colours are
+   tokens so the dark theme applies (the template thumbnails keep their light paper: they are drawn
+   light, in TemplateGallery.tsx). */
 
 /* ---- grid / list toggle ----------------------------------------------------------------------- */
 
@@ -27,8 +29,8 @@
   border-left: 1px solid var(--dr-line);
 }
 .dr-seg__btn[aria-pressed="true"] {
-  background: #e9eef6;
-  color: var(--dr-navy);
+  background: var(--dr-accent-bg);
+  color: var(--dr-accent-ink);
 }
 .dr-seg__btn:focus-visible {
   outline-offset: -2px;
@@ -77,11 +79,11 @@
   cursor: pointer;
 }
 .dr-star:hover {
-  background: #f1efe8;
+  background: var(--dr-hover);
   color: var(--dr-ink);
 }
 .dr-star[aria-pressed="true"] {
-  color: #c07a12;
+  color: var(--dr-amber-ink);
 }
 
 /* A card whose menu is open paints above the cards after it. The hover lift (transform) makes the card
@@ -143,7 +145,7 @@
 .dr-bcard__project {
   padding: 1px 7px;
   border-radius: 6px;
-  background: #f1efe8;
+  background: var(--dr-hover);
 }
 @media (max-width: 760px) {
   .dr-bcard--row .dr-bcard__text {
@@ -192,7 +194,7 @@
 .dr-chip[aria-pressed="true"] {
   border-color: var(--dr-navy);
   background: var(--dr-navy);
-  color: #fff;
+  color: var(--dr-on-navy);
 }
 .dr-gallery__grid {
   display: grid;
@@ -227,7 +229,7 @@
 }
 .dr-tcard[aria-pressed="true"] {
   border-color: var(--dr-navy);
-  box-shadow: 0 0 0 2px rgb(31 58 95 / 22%);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--dr-navy) 22%, transparent);
 }
 .dr-tcard__thumb {
   display: block;
@@ -241,8 +243,8 @@
   display: grid;
   place-items: center;
   border: 1.5px dashed var(--dr-line-strong);
-  background: #fbfaf6;
-  color: var(--dr-navy);
+  background: var(--dr-inset);
+  color: var(--dr-accent-ink);
 }
 .dr-tthumb {
   display: block;
@@ -254,7 +256,7 @@
   font-weight: 650;
 }
 .dr-tcard--blank .dr-tcard__name {
-  color: var(--dr-navy);
+  color: var(--dr-accent-ink);
 }
 .dr-tcard__desc {
   color: var(--dr-ink-2);
@@ -372,8 +374,8 @@
 .dr-bcard__news {
   padding: 1px 7px;
   border-radius: 999px;
-  background: #e8eefb;
-  color: var(--dr-navy);
+  background: var(--dr-accent-bg);
+  color: var(--dr-accent-ink);
   font-weight: 650;
 }
 .dr-dbell {
@@ -393,8 +395,8 @@
   padding: 0 4px;
   border: 2px solid var(--dr-surface);
   border-radius: 999px;
-  background: var(--dr-danger);
-  color: #fff;
+  background: var(--dr-danger-fill);
+  color: var(--dr-on-danger);
   font: 700 9.5px / 12px var(--dr-font);
   text-align: center;
   box-sizing: border-box;
@@ -410,9 +412,7 @@
   border: 1px solid var(--dr-line);
   border-radius: 12px;
   background: var(--dr-surface);
-  box-shadow:
-    0 2px 6px rgb(27 35 48 / 10%),
-    0 12px 32px rgb(27 35 48 / 16%);
+  box-shadow: var(--dr-shadow-pop);
   font-family: var(--dr-font);
   color: var(--dr-ink);
   font-size: 13px;
@@ -458,7 +458,7 @@
   background: var(--dr-paper);
 }
 .dr-dbell__item[data-unread="true"] {
-  background: #f1f4f9;
+  background: var(--dr-accent-tint);
 }
 .dr-dbell__dot {
   flex: none;
@@ -466,7 +466,7 @@
   height: 8px;
   margin-top: 5px;
   border-radius: 50%;
-  background: var(--dr-navy);
+  background: var(--dr-accent-ink);
 }
 .dr-dbell__text {
   display: flex;
