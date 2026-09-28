@@ -432,18 +432,22 @@ function freeSpot(
   opts: { alignX?: number; near: Point | null },
 ): Point | null {
   const { w, h } = box
-  const maxX = frame.w - FRAME_PAD - w
-  const maxY = frame.h - FRAME_PAD - h
+  // Spots are whole pixels, rounded away from what they keep clear of: up past an edge, down before
+  // one. Rounded the other way, a spot lands a fraction of a pixel inside that clear space and is
+  // refused (text boxes, whose estimated heights are fractional, lost the spot right under them).
+  const maxX = Math.floor(frame.w - FRAME_PAD - w)
+  const maxY = Math.floor(frame.h - FRAME_PAD - h)
   if (maxX < FRAME_PAD || maxY < FRAME_PAD) return null
+  const alignX = opts.alignX === undefined ? undefined : Math.round(opts.alignX)
   // The frame's padding on every side, and the edges of each obstacle's clear space.
   const xs = new Set<number>([FRAME_PAD, maxX])
   const ys = new Set<number>([FRAME_PAD, maxY])
-  if (opts.alignX !== undefined) xs.add(opts.alignX)
+  if (alignX !== undefined) xs.add(alignX)
   for (const o of obstacles) {
-    xs.add(o.rect.x + o.rect.w + o.clear)
-    xs.add(o.rect.x - o.clear - w)
-    ys.add(o.rect.y + o.rect.h + o.clear)
-    ys.add(o.rect.y - o.clear - h)
+    xs.add(Math.ceil(o.rect.x + o.rect.w + o.clear))
+    xs.add(Math.floor(o.rect.x - o.clear - w))
+    ys.add(Math.ceil(o.rect.y + o.rect.h + o.clear))
+    ys.add(Math.floor(o.rect.y - o.clear - h))
   }
   const spots: { x: number; y: number; key: number }[] = []
   const near = opts.near
@@ -453,8 +457,8 @@ function freeSpot(
       if (!(y >= FRAME_PAD && y <= maxY)) continue
       const key = near
         ? Math.hypot(x + w / 2 - near.x, y + h / 2 - near.y)
-        : y + ROW_SLACK * (x === opts.alignX ? FRAME_PAD - 1 : x)
-      spots.push({ x: Math.round(x), y: Math.round(y), key })
+        : y + ROW_SLACK * (x === alignX ? FRAME_PAD - 1 : x)
+      spots.push({ x, y, key })
     }
   }
   spots.sort((a, b) => a.key - b.key || a.y - b.y || a.x - b.x)
