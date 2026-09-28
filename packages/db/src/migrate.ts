@@ -66,6 +66,12 @@ function checkRecorded(applied: AppliedRow[], files: Migration[], allowNewerSche
     if (!file) {
       // Only a newer migration can come from a later build; a gap below the newest known file is a
       // database that took another branch's migration, and no flag makes that safe.
+      // A build that knows no migration at all (its files were not shipped) has no "older" to check
+      // against: every recorded migration would pass as newer. Never start it on the flag.
+      if (allowNewerSchema && files.length === 0)
+        throw new Error(
+          `database has migration ${row.name}, and this build has no migration files to check it against`,
+        )
       if (allowNewerSchema && row.version > newestKnown) {
         newer.push(row)
         continue

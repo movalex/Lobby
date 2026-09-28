@@ -501,11 +501,12 @@ The windows differ: Postgres goes back 3 days to any minute; board backups go ba
 - applies nothing;
 - logs a warning on every start that names those migrations.
 
-It still refuses to start in three cases, and no flag makes them safe:
+It still refuses to start in four cases, and no flag makes them safe:
 
 - a recorded migration the build should know but doesn't (a gap below its newest file);
 - a checksum mismatch (`changed after it was applied`);
-- a migration of the build that the database never got.
+- a migration of the build that the database never got;
+- a build with no migration files at all (they weren't shipped), which has nothing to check the database against.
 
 Only builds from this change onward read the flag. Every build before it refuses a newer schema, whatever the environment says.
 

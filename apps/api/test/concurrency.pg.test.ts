@@ -455,6 +455,174 @@ describe.skipIf(!PG_URL)('wave-3 concurrency on real Postgres (DRAFTROOM_TEST_DA
     expect(t.failures).toEqual([])
   })
 
+  it('everything that locks a link board at once: joins, accepts, both revokes, "+1 h" on two boards, member changes, ownership transfer, an access request, sign-outs and both sweeps', async () => {
+    const { w, log } = await guestsWorld()
+    cleanup.push(() => w.api.close())
+    const board2 = await createBoard(w.bob, DEV_STUDIO, 'Second')
+    const people = [w.carol, await w.api.login('fay'), await w.api.login('gil')]
+    const askers = [await w.api.login('hal'), await w.api.login('ivy'), await w.api.login('jon')]
+    const sweeper = guestSweeper(w)
+    const t = newTally()
+    const d0 = await pgDeadlocks()
+    const sweep = (what: string, run: () => Promise<unknown>) => async () => {
+      try {
+        await run()
+        tally(t, what, { statusCode: 200, body: '' })
+      } catch (e) {
+        tally(t, what, { statusCode: 599, body: `${(e as { code?: string }).code} ${(e as Error).message}` })
+      }
+    }
+    // Guests signed in from earlier rounds: they join the next links with their cookie.
+    let guests: { id: string; cookie: string }[] = []
+    for (let i = 0; i < ITER; i++) {
+      const link = async (board: string) => {
+        const r = await w.bob.req('POST', `/api/boards/${board}/review-links`, {
+          role: 'editor',
+          allowGuests: true,
+        })
+        expect(r.statusCode, r.body).toBe(201)
+        return ReviewLinkCreated.parse(r.json())
+      }
+      const l1 = await link(w.board)
+      const l2 = await link(board2)
+      // Two guests on both boards (their sessions are extended by "+1 h" of either link).
+      for (let k = 0; k < 2; k++) {
+        const j = await joinRequest(w.api, tokenOf(l1.url), { name: `K${i}-${k}` }, { ip: freshIp() })
+        expect(j.statusCode, j.body).toBe(201)
+        const g = {
+          id: (j.json() as { user: { id: string } }).user.id,
+          cookie: `dr_session=${cookieOf(j)?.value}`,
+        }
+        const j2 = await joinRequest(w.api, tokenOf(l2.url), {}, { cookie: g.cookie })
+        expect(j2.statusCode, j2.body).toBe(200)
+        guests.push(g)
+      }
+      guests = guests.slice(-4)
+      const asker = askers[i % askers.length] as (typeof askers)[number]
+      await w.bob.req('DELETE', `/api/boards/${w.board}/members/${asker.userId}`)
+      const asked = await asker.req('POST', `/api/boards/${w.board}/access-requests`, { role: 'editor' })
+      const request =
+        asked.statusCode === 202
+          ? await w.api.db.maybeOne<{ id: string }>(
+              "SELECT id FROM access_requests WHERE board_id = $1 AND user_id = $2 AND status = 'pending'",
+              [w.board, asker.userId],
+            )
+          : null
+      const [g0, g1, g2, g3] = guests
+      const person = people[i % people.length] as (typeof people)[number]
+      await race(
+        [
+          ...[0, 1].map(
+            (k) => async () =>
+              tally(
+                t,
+                'join',
+                await joinRequest(w.api, tokenOf(l1.url), { name: `N${i}-${k}` }, { ip: freshIp() }),
+              ),
+          ),
+          async () =>
+            g2 &&
+            tally(
+              t,
+              'join (signed in)',
+              await joinRequest(w.api, tokenOf(l1.url), {}, { cookie: g2.cookie }),
+            ),
+          async () =>
+            g3 &&
+            tally(
+              t,
+              'accept (guest)',
+              await w.api.app.inject({
+                method: 'POST',
+                url: `/api/invitations/${tokenOf(l1.url)}/accept`,
+                headers: { origin: ORIGIN, cookie: g3.cookie },
+              }),
+            ),
+          async () =>
+            tally(t, 'accept', await person.req('POST', `/api/invitations/${tokenOf(l1.url)}/accept`)),
+          async () =>
+            tally(
+              t,
+              'extend',
+              await w.bob.req('POST', `/api/boards/${w.board}/review-links/${l1.id}/extend`, { hours: 1 }),
+            ),
+          async () =>
+            tally(
+              t,
+              'extend 2',
+              await w.bob.req('POST', `/api/boards/${board2}/review-links/${l2.id}/extend`, { hours: 1 }),
+            ),
+          async () =>
+            tally(
+              t,
+              'revoke',
+              await w.bob.req('POST', `/api/boards/${w.board}/review-links/${l1.id}/revoke`, {
+                removeAccess: true,
+              }),
+            ),
+          async () => tally(t, 'delete link', await w.bob.req('DELETE', `/api/invitations/${l2.id}`)),
+          async () =>
+            g0 &&
+            tally(
+              t,
+              'put member',
+              await w.bob.req('PUT', `/api/boards/${w.board}/members/${g0.id}`, {
+                role: i % 2 ? 'viewer' : 'commenter',
+              }),
+            ),
+          async () =>
+            g1 &&
+            tally(t, 'remove member', await w.bob.req('DELETE', `/api/boards/${board2}/members/${g1.id}`)),
+          async () =>
+            tally(
+              t,
+              'transfer',
+              await w.alice.req('POST', `/api/boards/${w.board}/transfer-ownership`, {
+                userId: person.userId,
+              }),
+            ),
+          async () =>
+            request &&
+            tally(t, 'approve', await w.bob.req('POST', `/api/access-requests/${request.id}/approve`, {})),
+          async () =>
+            g1 &&
+            tally(
+              t,
+              'sign out',
+              await w.api.app.inject({
+                method: 'POST',
+                url: '/api/auth/logout',
+                headers: { origin: ORIGIN, cookie: g1.cookie },
+              }),
+            ),
+          async () =>
+            g0 &&
+            tally(
+              t,
+              'sign out everywhere',
+              await w.api.app.inject({
+                method: 'POST',
+                url: '/api/auth/sessions/revoke-all',
+                headers: { origin: ORIGIN, cookie: g0.cookie },
+              }),
+            ),
+          sweep('guestSweep', () => sweeper.run()),
+          sweep('linkSweep', () => sweepLinks(w)),
+        ],
+        15,
+      )
+      for (const [b, l] of [
+        [w.board, l1],
+        [board2, l2],
+      ] as const)
+        await w.bob.req('POST', `/api/boards/${b}/review-links/${l.id}/revoke`, { removeAccess: true })
+    }
+    await settleStats()
+    const deadlocks = (await pgDeadlocks()) - d0
+    report('everything on a link board at once', t, log, deadlocks)
+    expect(t.failures).toEqual([])
+  })
+
   it('private brainstorm: reveal vs cancel vs reveal (never both; drafts placed once or discarded)', async () => {
     const sync = new FakeSync()
     const events = new EventHub()

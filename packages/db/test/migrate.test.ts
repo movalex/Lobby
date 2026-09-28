@@ -122,6 +122,17 @@ describe('migration runner', () => {
       )
     })
 
+    it('never tolerates anything when the build has no migration files (they were not shipped)', async () => {
+      await newerDatabase()
+      for (const f of ['0001_first.sql', '0002_second.sql']) rmSync(join(dir, f))
+      await expect(migrate(db, { dir, allowNewerSchema: true })).rejects.toThrow(
+        /this build has no migration files/,
+      )
+      await expect(migrate(db, { dir, migrations: [], allowNewerSchema: true })).rejects.toThrow(
+        /this build has no migration files/,
+      )
+    })
+
     it('never tolerates a checksum mismatch', async () => {
       await newerDatabase()
       write('0002_second.sql', 'CREATE TABLE b (x int, y int);')
