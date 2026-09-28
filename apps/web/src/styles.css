@@ -2001,6 +2001,88 @@ code {
   min-width: 28px;
   min-height: 28px;
 }
+/* The rail's fold button and its words exist for phones only (below). */
+.dr-dock__toggle,
+.dr-dock__label {
+  display: none;
+}
+/* R13 / A11Y-06: phones. The board keeps the full width: the rail folds behind one button in the
+   board's top-left corner (tldraw's page menu moves right of it), opens as a labelled list over the
+   board, and a panel opens as a full-width sheet over the board (× or Escape closes it), instead of a
+   320 px column that left the canvas 25 px and pushed tldraw's controls off-screen. */
+@media (max-width: 600px) {
+  .dr-board__body > .dr-dock {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    /* Over tldraw's panels (300) and the collaborator cursors; under the top bar's open popovers. */
+    z-index: 310;
+    background: transparent;
+    border-right: 0;
+    pointer-events: none;
+  }
+  .dr-board__body > .dr-dock > * {
+    pointer-events: auto;
+  }
+  .dr-board__body > .dr-dock[data-open="true"] {
+    right: 0;
+  }
+  .dr-board__body .tlui-layout__top__left {
+    padding-left: 48px;
+  }
+  .dr-dock__rail {
+    align-self: flex-start;
+    width: auto;
+    padding: 4px;
+    border-right: 0;
+  }
+  .dr-dock[data-rail="closed"] .dr-dock__tab:not(.dr-dock__toggle) {
+    display: none;
+  }
+  .dr-dock__toggle {
+    display: grid;
+    width: 40px;
+    height: 40px;
+    border: 1px solid var(--dr-line);
+    background: var(--dr-surface);
+    box-shadow: var(--dr-shadow);
+  }
+  .dr-dock[data-rail="open"] .dr-dock__rail {
+    align-self: stretch;
+    min-width: 232px;
+    max-width: calc(100vw - 48px);
+    overflow-y: auto;
+    border-right: 1px solid var(--dr-line);
+    background: var(--dr-surface);
+    box-shadow: var(--dr-shadow);
+  }
+  .dr-dock[data-rail="open"] .dr-dock__tab:not(.dr-dock__toggle) {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    width: auto;
+    height: 44px;
+    padding: 0 12px;
+    color: var(--dr-ink);
+    font: 14px var(--dr-font);
+    text-align: left;
+  }
+  .dr-dock[data-rail="open"] .dr-dock__label {
+    display: inline;
+  }
+  /* Behind the sheet the rail is out of the way, for the keyboard too. */
+  .dr-dock[data-open="true"] .dr-dock__rail {
+    display: none;
+  }
+  .dr-dock__panel {
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    width: auto;
+    background: var(--dr-surface);
+  }
+}
 
 /* ---- top bar: role pill button, narrow screens, "⋯" menu (PRI-02, PRI-09b, RETRO-22a) ------------ */
 

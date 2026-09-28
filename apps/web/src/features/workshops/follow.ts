@@ -34,3 +34,43 @@ export function followIdFor<T extends string>(
 export function isCanvasPress(info: { type: string; name: string; button?: number }): boolean {
   return info.type === 'pointer' && info.name === 'pointer_down' && (info.button ?? 0) === 0
 }
+
+/**
+ * R2-04: the zoom a gathered follower never drops below, unless the leader is further out themselves.
+ * tldraw fits the leader's whole viewport into the follower's screen, so a 390 px phone following a
+ * 1440 px desktop at 44% landed at 11%, with notes 28 px wide.
+ */
+export const READABLE_FOLLOW_ZOOM = 0.5
+/** Only a follower who would see the board at less than this share of the leader's zoom is changed. */
+export const NARROW_FOLLOW_RATIO = 0.6
+
+export interface FollowViewport {
+  x: number
+  y: number
+  w: number
+  h: number
+}
+
+/**
+ * R2-04: the page area a follower should see while gathered. `fitted` is tldraw's (the leader's whole
+ * viewport, fitted into `screen`); `leader` is the leader's presence (camera and screen size). When the
+ * follower's screen is much narrower than the leader's (a phone following a desktop), it is centred
+ * on the leader's view centre at the leader's zoom (at most READABLE_FOLLOW_ZOOM) instead. Null keeps
+ * tldraw's view.
+ */
+export function readableFollowViewport(
+  fitted: FollowViewport,
+  leader: { camera: { x: number; y: number; z: number }; screenBounds: { w: number; h: number } },
+  screen: { w: number; h: number },
+): FollowViewport | null {
+  const lz = leader.camera.z
+  if (!(lz > 0) || !(fitted.w > 0) || !(screen.w > 0) || !(screen.h > 0)) return null
+  const fitZ = screen.w / fitted.w
+  const target = Math.min(lz, READABLE_FOLLOW_ZOOM)
+  if (fitZ >= target * NARROW_FOLLOW_RATIO) return null
+  const cx = -leader.camera.x + leader.screenBounds.w / lz / 2
+  const cy = -leader.camera.y + leader.screenBounds.h / lz / 2
+  const w = screen.w / target
+  const h = screen.h / target
+  return { x: cx - w / 2, y: cy - h / 2, w, h }
+}

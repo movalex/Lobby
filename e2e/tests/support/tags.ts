@@ -97,7 +97,12 @@ export async function cameraAt(page: Page, center: { x: number; y: number }, z: 
 /** Opens the Tags dock panel. */
 export async function openTagsPanel(page: Page) {
   const panel = page.getByTestId('tags-panel')
-  if (!(await panel.isVisible())) await page.getByTestId('dock-tab-tags').click()
+  if (!(await panel.isVisible())) {
+    // On a phone the rail is folded behind one button (R13).
+    const toggle = page.getByTestId('dock-rail-toggle')
+    if (await toggle.isVisible()) await toggle.click()
+    await page.getByTestId('dock-tab-tags').click()
+  }
   await expect(panel).toBeVisible()
   return panel
 }

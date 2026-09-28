@@ -6,10 +6,10 @@
 // - Reactions, raise hand and +1 on notes (FAC-08): Reactions.tsx, Hands.tsx, PlusOnes.tsx.
 
 import { WORKSHOP_EVENTS, WorkshopSummonEvent } from '@draftroom/contracts'
-import { react, type TLEventInfo } from 'tldraw'
+import { type Atom, atom, Box, type Editor, react, type TLEventInfo } from 'tldraw'
 import type { BoardFeature, FeatureContext } from '../types.ts'
 import { installAudioUnlock } from './chime.ts'
-import { followIdFor, isCanvasPress, summonApplies } from './follow.ts'
+import { followIdFor, isCanvasPress, readableFollowViewport, summonApplies } from './follow.ts'
 import { storeFor } from './hooks.ts'
 import { plusOneIntentsFor, watchPlusOneIntents } from './plus-ones.ts'
 import { mountPrivateNotes, privateNotesPanel } from './private-notes/index.tsx'
@@ -33,11 +33,48 @@ function BallotIcon() {
   )
 }
 
+type FollowBoundsFn = () => Box | null
+
+/**
+ * R2-04: tldraw (5.4.2) derives a follower's camera from the private, per-instance-overridable
+ * `Editor.getViewportPageBoundsForFollowing` (it fits the leader's whole viewport). While `gathered`
+ * is set, a much narrower screen gets `readableFollowViewport` instead; Present and other following
+ * keep tldraw's fit. A tldraw without the method leaves following as it is.
+ */
+function installReadableFollow(editor: Editor, gathered: Atom<boolean>): () => void {
+  const target = editor as unknown as { getViewportPageBoundsForFollowing?: FollowBoundsFn }
+  const original = target.getViewportPageBoundsForFollowing
+  if (typeof original !== 'function') return () => {}
+  target.getViewportPageBoundsForFollowing = function readableBounds(this: unknown) {
+    const fitted = original.call(editor)
+    if (!fitted || !gathered.get()) return fitted
+    const leaderId = editor.getInstanceState().followingUserId
+    const leader = editor
+      .getCollaborators()
+      .filter((c) => c.userId === leaderId)
+      .sort((a, b) => (b.lastActivityTimestamp ?? 0) - (a.lastActivityTimestamp ?? 0))[0]
+    if (!leader?.camera || !leader.screenBounds) return fitted
+    const screen = editor.getViewportScreenBounds()
+    const v = readableFollowViewport(
+      { x: fitted.x, y: fitted.y, w: fitted.w, h: fitted.h },
+      { camera: leader.camera, screenBounds: leader.screenBounds },
+      { w: screen.w, h: screen.h },
+    )
+    return v ? new Box(v.x, v.y, v.w, v.h) : fitted
+  }
+  return () => {
+    Reflect.deleteProperty(target, 'getViewportPageBoundsForFollowing')
+  }
+}
+
 function mountWorkshops(ctx: FeatureContext) {
   const { editor } = ctx
   const store = storeFor(ctx)
   installAudioUnlock()
   const timers = new Set<ReturnType<typeof setTimeout>>()
+  // R2-04: while gathered, a phone sees the leader's view at a readable zoom (not all of it at 11%).
+  const gathered = atom('dr-wk-gathered', false)
+  const stopReadableFollow = installReadableFollow(editor, gathered)
 
   // Gather everyone: follow the summoner's presence. Their presence may arrive a moment after the
   // event (e.g. they just joined), so retry briefly.
@@ -49,7 +86,10 @@ function mountWorkshops(ctx: FeatureContext) {
       const followId = followIdFor(editor.getCollaborators(), userId)
       if (followId) {
         editor.startFollowingUser(followId)
-        if (editor.getInstanceState().followingUserId === followId) store.setSummonedBy({ userId, name })
+        if (editor.getInstanceState().followingUserId === followId) {
+          gathered.set(true)
+          store.setSummonedBy({ userId, name })
+        }
         return
       }
       if (n >= FOLLOW_RETRIES) {
@@ -78,7 +118,10 @@ function mountWorkshops(ctx: FeatureContext) {
     )
       editor.stopFollowingUser()
   }
-  const onStopFollowing = () => store.setSummonedBy(null)
+  const onStopFollowing = () => {
+    gathered.set(false)
+    store.setSummonedBy(null)
+  }
   editor.on('event', onEvent)
   editor.on('stop-following', onStopFollowing)
 
@@ -109,6 +152,7 @@ function mountWorkshops(ctx: FeatureContext) {
     for (const t of timers) clearTimeout(t)
     editor.off('event', onEvent)
     editor.off('stop-following', onStopFollowing)
+    stopReadableFollow()
   }
 }
 

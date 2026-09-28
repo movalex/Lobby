@@ -256,6 +256,12 @@ fieldset.dr-wk-stepper {
 .dr-board:has(.dr-topbar [aria-expanded="true"]) .dr-wk-layer {
   z-index: 16;
 }
+/* R2-07: an open top-bar popover (the timer and hands queue, Reactions...) comes above the canvas's
+   collaborator cursors (245), tldraw's panels (300), the phone dock sheet (310) and the notices (30),
+   which used to draw over its controls. Dialogs open later close it (A11Y2-05). */
+.dr-board:has(.dr-topbar [aria-expanded="true"]) .dr-topbar {
+  z-index: 320;
+}
 /* Timer-only layer above everything, including the presentation overlay (z-index 10000). */
 .dr-wk-top {
   position: absolute;
@@ -483,10 +489,11 @@ button.dr-wk-badge--group:focus-visible {
   box-shadow: inset 0 0 0 6px var(--dr-danger);
   animation: dr-wk-flash 0.65s ease-in-out 4;
 }
-/* Below the notices (top centre) so it never covers the "Time's up" toast. */
+/* Below the notices (top centre, two of them deep) so it never covers the "Time's up" toast or a
+   toast's action, such as the reveal's "Show me" (R2-07). */
 .dr-wk-flash__text {
   position: absolute;
-  top: 72px;
+  top: 176px;
   left: 50%;
   padding: 10px 22px;
   border-radius: 999px;

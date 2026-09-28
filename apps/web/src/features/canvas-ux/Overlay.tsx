@@ -121,6 +121,20 @@ function clamp(v: number, min: number, max: number) {
   return Math.max(min, Math.min(max, v))
 }
 
+/** A11Y2-06: below this canvas width, align, distribute and arrange fold into the bar's "More" button. */
+export const SELBAR_COMPACT_BELOW = 600
+/** The gap the selection bar keeps from the canvas edges. */
+const SELBAR_EDGE = 8
+
+/**
+ * A11Y2-06: the centre (left, with the bar's translateX(-50%)) that keeps a bar `halfWidth` px wide
+ * (edge gap included) inside a canvas `vw` px wide; a bar wider than the canvas is centred on it.
+ */
+export function selectionBarLeft(cx: number, halfWidth: number, vw: number): number {
+  if (halfWidth * 2 >= vw) return vw / 2
+  return clamp(cx, halfWidth, vw - halfWidth)
+}
+
 function BulkPastePrompt() {
   const editor = useEditor()
   const pending = useValue('dr-pending-paste', () => pendingPaste(editor).get(), [editor])
@@ -265,6 +279,8 @@ function BarButton(props: {
   onClick(): void
   children: ReactNode
   pressed?: boolean
+  expanded?: boolean
+  controls?: string
 }) {
   return (
     <button
@@ -274,6 +290,8 @@ function BarButton(props: {
       title={props.label}
       data-testid={props.testId}
       aria-pressed={props.pressed}
+      aria-expanded={props.expanded}
+      aria-controls={props.controls}
       onClick={props.onClick}
     >
       {props.children}
@@ -319,8 +337,10 @@ function SelectionBar({ ctx }: { ctx: FeatureContext }) {
     const session = grid ? currentGridSession(editor) : null
     return {
       n: ids.length,
+      sel: ids.join(' '),
       cx: bottom.x,
       vw: vp.w,
+      vh: vp.h,
       y,
       locked,
       grid,
@@ -329,15 +349,25 @@ function SelectionBar({ ctx }: { ctx: FeatureContext }) {
     }
   }, [editor, canEdit])
   // The bar is as wide as its buttons (the grid stepper makes it wider): keep all of it on screen.
-  const [halfWidth, setHalfWidth] = useState(150)
+  const [size, setSize] = useState({ half: 150, h: 38 })
   useLayoutEffect(() => {
-    const w = ref.current?.offsetWidth
-    if (!w) return
-    const half = Math.ceil(w / 2) + 8
-    if (half !== halfWidth) setHalfWidth(half)
+    const el = ref.current
+    if (!el?.offsetWidth) return
+    const half = Math.ceil(el.offsetWidth / 2) + SELBAR_EDGE
+    const h = el.offsetHeight
+    if (half !== size.half || h !== size.h) setSize({ half, h })
   })
+  // A11Y2-06: on a phone-width canvas the arrange buttons wait behind "More" (a second row when open).
+  const [moreOpen, setMoreOpen] = useState(false)
+  const moreId = useId()
+  const sel = state?.sel ?? ''
+  // A new selection closes the "More" row.
+  useEffect(() => setMoreOpen(false), [sel])
   if (!state) return null
-  const left = clamp(state.cx, halfWidth, Math.max(halfWidth, state.vw - halfWidth))
+  const left = selectionBarLeft(state.cx, size.half, state.vw)
+  // An open "More" row makes the bar taller: it stays above tldraw's bottom toolbar.
+  const top = size.h > 44 ? Math.max(60, Math.min(state.y, state.vh - 100 - size.h)) : state.y
+  const compact = state.vw < SELBAR_COMPACT_BELOW
   const run = (id: string) => {
     actions[id]?.onSelect('toolbar')
     // Keyboard users who tabbed into the bar go back to the board after acting.
@@ -345,40 +375,12 @@ function SelectionBar({ ctx }: { ctx: FeatureContext }) {
   }
   // Unlike the one-shot buttons, the stepper keeps the keyboard focus (for repeated presses).
   const setColumns = (columns: number) => void runArrangeAsGrid(editor, { columns })
-  return (
-    <div
-      ref={ref}
-      className="dr-cux-selbar"
-      role="toolbar"
-      aria-label="Selection"
-      data-testid="selection-bar"
-      style={{ left, top: state.y }}
-    >
-      <BarButton
-        label="Copy link to selection"
-        testId="copy-link-selection"
-        onClick={() => {
-          void copySelectionLink(editor)
-          if (ref.current?.contains(document.activeElement)) focusBoard(editor)
-        }}
-      >
-        <LinkIcon />
-      </BarButton>
-      {canEdit && (
-        <BarButton
-          label={state.locked ? 'Unlock (Ctrl+Shift+L)' : 'Lock (Ctrl+Shift+L)'}
-          testId="selection-lock"
-          pressed={state.locked}
-          onClick={() => run('toggle-lock')}
-        >
-          <LockIcon />
-        </BarButton>
-      )}
-      <TagsBarButton />
-      <AiBarButton />
+  const hasArrange = canEdit && state.n >= 2
+  const arrange = hasArrange ? (
+    <>
       {canEdit && state.n >= 2 && (
         <>
-          <span className="dr-cux-selbar__sep" aria-hidden="true" />
+          {!compact && <span className="dr-cux-selbar__sep" aria-hidden="true" />}
           <BarButton label="Align left" testId="align-left" onClick={() => run('align-left')}>
             <AlignIcons.left />
           </BarButton>
@@ -440,7 +442,71 @@ function SelectionBar({ ctx }: { ctx: FeatureContext }) {
           )}
         </>
       )}
+    </>
+  ) : null
+  return (
+    <div
+      ref={ref}
+      className="dr-cux-selbar"
+      role="toolbar"
+      aria-label="Selection"
+      data-testid="selection-bar"
+      data-compact={compact ? 'true' : undefined}
+      style={{ left, top }}
+    >
+      <BarButton
+        label="Copy link to selection"
+        testId="copy-link-selection"
+        onClick={() => {
+          void copySelectionLink(editor)
+          if (ref.current?.contains(document.activeElement)) focusBoard(editor)
+        }}
+      >
+        <LinkIcon />
+      </BarButton>
+      {canEdit && (
+        <BarButton
+          label={state.locked ? 'Unlock (Ctrl+Shift+L)' : 'Lock (Ctrl+Shift+L)'}
+          testId="selection-lock"
+          pressed={state.locked}
+          onClick={() => run('toggle-lock')}
+        >
+          <LockIcon />
+        </BarButton>
+      )}
+      <TagsBarButton />
+      <AiBarButton />
+      {!compact && arrange}
+      {compact && arrange && (
+        <>
+          <span className="dr-cux-selbar__sep" aria-hidden="true" />
+          <BarButton
+            label="More: align, distribute and arrange"
+            testId="selection-more"
+            expanded={moreOpen}
+            controls={moreOpen ? moreId : undefined}
+            onClick={() => setMoreOpen((o) => !o)}
+          >
+            <MoreIcon />
+          </BarButton>
+          {moreOpen && (
+            <div id={moreId} className="dr-cux-selbar__more" data-testid="selection-more-row">
+              {arrange}
+            </div>
+          )}
+        </>
+      )}
     </div>
+  )
+}
+
+function MoreIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+      <circle cx="5" cy="12" r="1.8" fill="currentColor" />
+      <circle cx="12" cy="12" r="1.8" fill="currentColor" />
+      <circle cx="19" cy="12" r="1.8" fill="currentColor" />
+    </svg>
   )
 }
 

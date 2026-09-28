@@ -5,6 +5,7 @@
 
 import { REACTION_EMOJIS, REACTION_LABELS, type ReactionEmoji } from '@draftroom/contracts'
 import { useEffect, useId, useRef, useState } from 'react'
+import { onFocusLeave } from '../../ui/focus.ts'
 import type { FeatureContext } from '../types.ts'
 import { HandIcon } from './Hands.tsx'
 import { usePresenting } from './presenting.ts'
@@ -69,9 +70,12 @@ export function ReactionControl({
     }
     document.addEventListener('pointerdown', onDown, true)
     document.addEventListener('keydown', onKey, true)
+    // A11Y2-05: Tab past the bar (to Present) or a dialog taking the keyboard closes it.
+    const off = wrap.current ? onFocusLeave(wrap.current, () => setOpen(false)) : () => {}
     return () => {
       document.removeEventListener('pointerdown', onDown, true)
       document.removeEventListener('keydown', onKey, true)
+      off()
     }
   }, [open])
 
