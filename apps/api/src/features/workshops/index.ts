@@ -36,6 +36,7 @@ import type { Params } from '../../context.ts'
 import { ApiError, badRequest, conflict, forbidden, notFound, parse } from '../../errors.ts'
 import type { FeatureContext } from '../context.ts'
 import { HandLimitError, HandRegistry } from './hands.ts'
+import { registerPresentation } from './presentation.ts'
 import { registerPrivateNotes } from './private-notes.ts'
 import { REACTIONS_PER_BOARD_MAX, SlidingWindowLimiter } from './reactions.ts'
 import { createShapeIndex, type ShapeIndex } from './shapes.ts'
@@ -111,6 +112,8 @@ export async function registerWorkshops(app: FastifyInstance, ctx: FeatureContex
   registerWorkshopRoutes(app, ctx)
   // Private brainstorming (wave 3, private-notes.ts): drafts only their author sees until revealed.
   registerPrivateNotes(app, ctx)
+  // Present to everyone (wave 4, present-live; presentation.ts): in memory, like raised hands.
+  registerPresentation(app, ctx)
 }
 
 export function registerWorkshopRoutes(

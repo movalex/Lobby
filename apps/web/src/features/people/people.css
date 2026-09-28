@@ -1,0 +1,236 @@
+/* people: the top bar's people controls, the people list and the "Following …" label. Tokens from
+   styles.css (light and dark). The avatars keep styles.css's .dr-presence / .dr-avatar. */
+
+.dr-people {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+}
+.dr-avatar--more {
+  border: 2px solid var(--dr-surface);
+}
+button.dr-avatar--more {
+  cursor: pointer;
+}
+button.dr-avatar--more:hover {
+  background: var(--dr-hover);
+}
+
+.dr-people-open {
+  width: auto;
+  min-width: 32px;
+  gap: 4px;
+  padding: 0 7px;
+  grid-auto-flow: column;
+}
+.dr-people-open__count {
+  font: 600 12.5px / 1 var(--dr-font);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Someone follows you: an eye and how many (FAC-01 "B can see that A is following"). */
+.dr-people-followers {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid var(--dr-accent-line);
+  border-radius: 999px;
+  background: var(--dr-accent-bg);
+  color: var(--dr-accent-ink);
+  font: 600 12px / 1 var(--dr-font);
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+.dr-people-followers:hover {
+  background: var(--dr-hover);
+}
+
+/* ---- the list ------------------------------------------------------------------------------------ */
+
+.dr-people-panel {
+  position: fixed;
+  z-index: 960;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  box-sizing: border-box;
+  width: 380px;
+  max-width: calc(100vw - 16px);
+  max-height: min(560px, calc(100dvh - var(--dr-topbar-h) - 24px));
+  padding: 10px 12px 12px;
+  border: 1px solid var(--dr-line);
+  border-radius: 12px;
+  background: var(--dr-surface);
+  color: var(--dr-ink);
+  box-shadow: var(--dr-shadow-pop);
+  font: 13.5px / 1.35 var(--dr-font);
+}
+.dr-people-panel__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.dr-people-panel__head h2 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 650;
+}
+.dr-people-panel__count {
+  margin-left: 4px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--dr-chip);
+  color: var(--dr-ink-2);
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.dr-people-panel__search {
+  width: 100%;
+  box-sizing: border-box;
+}
+.dr-people-list {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  margin: 0 -4px;
+  padding: 0;
+  overflow: auto;
+  list-style: none;
+}
+.dr-people-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 4px;
+  border-radius: 8px;
+}
+.dr-people-row + .dr-people-row {
+  border-top: 1px solid var(--dr-line);
+}
+.dr-people-row__avatar {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  color: #fff;
+  font: 650 11px / 1 var(--dr-font);
+}
+.dr-people-row[data-idle="true"] .dr-people-row__avatar {
+  opacity: 0.55;
+}
+.dr-people-row__main {
+  flex: 1;
+  min-width: 0;
+}
+.dr-people-row__name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-weight: 600;
+}
+.dr-people-row__name > .dr-wk-person {
+  min-width: 0;
+}
+.dr-people-role {
+  flex: none;
+  padding: 1px 6px;
+  border-radius: 6px;
+  background: var(--dr-chip);
+  color: var(--dr-ink-2);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+.dr-people-row__status {
+  overflow: hidden;
+  color: var(--dr-ink-2);
+  font-size: 12.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dr-people-row[data-status="presenting"] .dr-people-row__status,
+.dr-people-row[data-status="following-you"] .dr-people-row__status {
+  color: var(--dr-live);
+  font-weight: 600;
+}
+.dr-people-row__actions {
+  display: flex;
+  flex: none;
+  gap: 4px;
+}
+.dr-people-row__actions .dr-btn--sm {
+  height: 28px;
+  padding: 0 9px;
+  font-size: 12.5px;
+}
+.dr-people-follow[aria-pressed="true"] {
+  border-color: var(--dr-navy);
+  background: var(--dr-accent-bg);
+  color: var(--dr-accent-ink);
+}
+.dr-people-panel__empty {
+  margin: 4px 0;
+  color: var(--dr-ink-2);
+  font-size: 13px;
+}
+.dr-people-panel__foot {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 8px;
+  border-top: 1px solid var(--dr-line);
+}
+
+@media (max-width: 480px) {
+  .dr-people-panel {
+    top: calc(var(--dr-topbar-h) + 8px);
+    right: 8px;
+    left: 8px;
+    width: auto;
+    max-width: none;
+  }
+  /* Narrow rows: the actions go under the name only when they do not fit beside it. */
+  .dr-people-row {
+    flex-wrap: wrap;
+  }
+  .dr-people-row__main {
+    flex: 1 1 150px;
+  }
+  .dr-people-row__actions {
+    margin-left: auto;
+  }
+}
+
+/* ---- "Following Bob" (canvas) ---------------------------------------------------------------------- */
+
+.dr-people-following {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  z-index: 249;
+  display: inline-flex;
+  max-width: calc(100% - 32px);
+  padding: 5px 12px;
+  border-radius: 999px;
+  color: #fff;
+  box-shadow: var(--dr-shadow);
+  font: 600 12.5px / 1.3 var(--dr-font);
+  transform: translateX(-50%);
+  pointer-events: none;
+  white-space: nowrap;
+}
+.dr-people-following__name {
+  display: inline-flex;
+  max-width: 24ch;
+  margin-left: 0.3em;
+}
+/* The invitation to a presentation wins the spot. */
+.dr-board:has(.dr-live-invite) .dr-people-following {
+  display: none;
+}

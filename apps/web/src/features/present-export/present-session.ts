@@ -13,6 +13,7 @@ import {
   atom,
   computed,
   type Editor,
+  react,
   type TLEventInfo,
   type TLPageId,
   type TLShape,
@@ -23,10 +24,54 @@ import { type FrameEntry, presentationOrder } from './board-ops.ts'
 import { buildSlides, findStartIndex, reconcileIndex, type Slide, stepIndex } from './slides.ts'
 
 export const PRESENTING_ATTR = 'data-dr-presenting'
+/** Marks a small menu open inside the presentation chrome; Esc sends it PRESENT_POPUP_CLOSE. */
+export const PRESENT_POPUP_ATTR = 'data-present-popup'
+export const PRESENT_POPUP_CLOSE = 'dr-present-popup-close'
 /** How long after a presentation the board view is re-centred while the canvas settles. */
 const HOLD_CENTRE_MS = 2000
+/** Room around the slide left in view when stepping out of a live presentation (screen px). */
+const HERE_INSET_PX = 32
 
 export type FullscreenMode = 'native' | 'window'
+
+/**
+ * Who drives the slides (present-live): the person presenting, or someone following a presentation to
+ * everyone, whose slide is set by the presenter through the api (live/controller.ts). A follower has
+ * the same chrome and the same clean board, but no slide keys: Esc steps out.
+ */
+export type PresentRole = 'presenter' | 'follower'
+
+export interface PresentLeader {
+  userId: string
+  name: string
+}
+
+/** Why a presentation ended here: this person (Esc, Exit), the live presentation (remote), or leaving the board. */
+export type StopReason = 'local' | 'remote' | 'unmount'
+
+export interface StopInfo {
+  role: PresentRole
+  reason: StopReason
+}
+
+export interface StartOptions {
+  /** Default 'presenter'. */
+  role?: PresentRole
+  /** Open at this frame (a live presentation's slide) instead of where the selection says. */
+  slideId?: TLShapeId | null
+  /** The slide index to fall back to when `slideId` is not (yet) a slide here. */
+  index?: number
+  /** Ask the browser for full screen (needs a user gesture). Default: presenters yes, followers no. */
+  fullscreen?: boolean
+  leader?: PresentLeader | null
+}
+
+export interface StopOptions {
+  /** 'restore' (default): the view from before the presentation. 'here': stay on the slide on screen. */
+  view?: 'restore' | 'here'
+  /** Default 'local'. */
+  reason?: StopReason
+}
 
 interface SavedView {
   pageId: TLPageId
@@ -47,6 +92,9 @@ export interface PresentState {
   mode: FullscreenMode
   gridOpen: boolean
   saved: SavedView
+  role: PresentRole
+  /** Who presents, while following a live presentation. */
+  leader: PresentLeader | null
 }
 
 export interface CurrentSlide {
@@ -65,11 +113,19 @@ export interface Presenter {
   order(): FrameEntry[]
   current(): CurrentSlide
   isPresenting(): boolean
-  /** Call from a user gesture (click / keydown): fullscreen needs transient activation. */
-  start(): StartResult
-  stop(): void
+  /** Call from a user gesture (click / keydown) when it asks for full screen: that needs transient activation. */
+  start(opts?: StartOptions): StartResult
+  stop(opts?: StopOptions): void
   go(delta: number): void
   goTo(index: number): void
+  /** The role now (null when not presenting). */
+  role(): PresentRole | null
+  /** Switches between presenting and following without leaving the presentation (a hand-off). */
+  setRole(role: PresentRole, leader?: PresentLeader | null): void
+  /** Following: show the presenter's slide (by frame id; `index` when that frame is not a slide here). */
+  follow(slideId: TLShapeId | null, index: number): void
+  /** Called after every end of a presentation here (with the role it had and why it ended). */
+  onStop(listener: (info: StopInfo) => void): () => void
   setGridOpen(open: boolean): void
   /**
    * Adopts the slide now on screen after the list changed under the presentation (the current frame was
@@ -127,7 +183,8 @@ export function createPresenter(editor: Editor): Presenter {
     const s = state.get()
     const slides = slides$.get()
     const slide = slides[index]
-    if (!s || !slide) return
+    // A follower's slide comes from the presenter (follow()), never from their own keys or clicks.
+    if (!s || !slide || s.role !== 'presenter') return
     state.set({ ...s, slideId: slide.id, index, gridOpen: false })
   }
 
@@ -139,15 +196,55 @@ export function createPresenter(editor: Editor): Presenter {
 
   const setGridOpen = (open: boolean) => {
     const s = state.get()
-    if (s && s.gridOpen !== open) state.set({ ...s, gridOpen: open })
+    if (s && s.gridOpen !== open && (!open || s.role === 'presenter')) state.set({ ...s, gridOpen: open })
   }
 
   const settle = () => {
     const s = state.get()
-    if (!s) return
+    // Following: the presenter's frame id stays the target even while it is not a slide here yet (a
+    // frame they just made has not synced): the presentation moves there as soon as it arrives.
+    if (s?.role !== 'presenter') return
     const { index, slide } = current$.get()
     if (slide && (slide.id !== s.slideId || index !== s.index)) state.set({ ...s, slideId: slide.id, index })
   }
+
+  /** Shows the page holding `slideId` (a live presentation can be on another page than this person). */
+  const showPageOf = (slideId: TLShapeId | null | undefined) => {
+    if (!slideId) return
+    const shape = editor.getShape(slideId)
+    if (!shape) return
+    const pageId = editor.getAncestorPageId(shape)
+    if (pageId && pageId !== editor.getCurrentPageId()) editor.setCurrentPage(pageId)
+  }
+
+  /** Where a slide id sits in the current slides, else `fallback` clamped (-1 without slides). */
+  const indexFor = (slideId: TLShapeId | null | undefined, fallback: number) => {
+    const slides = slides$.get()
+    if (slides.length === 0) return -1
+    const at = slideId ? slides.findIndex((sl) => sl.id === slideId) : -1
+    return at >= 0 ? at : Math.max(0, Math.min(slides.length - 1, fallback))
+  }
+
+  const follow = (slideId: TLShapeId | null, index: number) => {
+    const s = state.get()
+    if (s?.role !== 'follower') return
+    showPageOf(slideId)
+    const at = indexFor(slideId, index)
+    const target = slideId ?? slides$.get()[at]?.id ?? null
+    const next = Math.max(0, at)
+    // Idempotent (the live controller calls it after every change): no new state, no re-render.
+    if (s.slideId === target && s.index === next && !s.gridOpen) return
+    state.set({ ...s, slideId: target, index: next, gridOpen: false })
+  }
+
+  const setRole = (role: PresentRole, leader: PresentLeader | null = null) => {
+    const s = state.get()
+    if (!s) return
+    if (s.role === role && s.leader?.userId === leader?.userId && s.leader?.name === leader?.name) return
+    state.set({ ...s, role, leader: role === 'follower' ? leader : null, gridOpen: false })
+  }
+
+  const stopListeners = new Set<(info: StopInfo) => void>()
 
   const trapTab = (e: KeyboardEvent) => {
     if (!overlay) return
@@ -211,10 +308,20 @@ export function createPresenter(editor: Editor): Presenter {
     const target = e.target instanceof HTMLElement ? e.target : null
     const onControl = !!(target && overlay?.contains(target) && target.closest('button, a, [role="button"]'))
     const modified = e.ctrlKey || e.metaKey || e.altKey
+    // A small menu open in the chrome (present-live's "Hand over"): Esc closes it, Tab moves inside
+    // the chrome, Enter/Space press its buttons, and no key changes the slide meanwhile.
+    const popup = overlay?.querySelector<HTMLElement>(`[${PRESENT_POPUP_ATTR}]`)
+    if (popup) {
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        popup.dispatchEvent(new CustomEvent(PRESENT_POPUP_CLOSE))
+      } else if (e.key === 'Tab') trapTab(e)
+      return
+    }
     if (e.key === 'Escape') {
       e.preventDefault()
       if (s.gridOpen) setGridOpen(false)
-      else stop()
+      else stop({ reason: 'local', view: s.role === 'follower' ? 'here' : 'restore' })
       return
     }
     if (e.key === 'Tab') {
@@ -222,6 +329,8 @@ export function createPresenter(editor: Editor): Presenter {
       return
     }
     if (modified) return // browser shortcuts (reload, zoom, close tab) keep working
+    // Following: the presenter drives the slides; the other keys do nothing (buttons still work).
+    if (s.role === 'follower') return
     if (s.gridOpen) {
       if (e.key === 'ArrowDown' || e.key === 'ArrowRight') {
         e.preventDefault()
@@ -258,23 +367,15 @@ export function createPresenter(editor: Editor): Presenter {
     const s = state.get()
     if (s?.mode !== 'native') return
     // Esc in real fullscreen is taken by the browser: leaving fullscreen ends the presentation.
-    if (!document.fullscreenElement) stop()
+    if (!document.fullscreenElement)
+      stop({ reason: 'local', view: s.role === 'follower' ? 'here' : 'restore' })
   }
 
-  const start = (): StartResult => {
+  const start = (opts: StartOptions = {}): StartResult => {
     if (state.get()) return { ok: false, reason: 'already' }
-    const slides = slides$.get()
-    if (slides.length === 0) {
-      return { ok: false, reason: order$.get().length > 0 ? 'all-skipped' : 'no-frames' }
-    }
-    stopHolding?.()
+    const role = opts.role ?? 'presenter'
+    // The view to come back to is the one on screen now, before a live slide switches the page.
     const selectedIds = editor.getSelectedShapeIds()
-    const startIndex = findStartIndex(slides, order$.get(), selectedIds, (id) =>
-      editor
-        .getShapeAncestors(id)
-        .map((a) => a.id)
-        .reverse(),
-    )
     const active = document.activeElement
     const middle = editor.getViewportPageBounds().center
     const saved: SavedView = {
@@ -284,13 +385,30 @@ export function createPresenter(editor: Editor): Presenter {
       selectedIds: [...selectedIds],
       focus: active instanceof HTMLElement ? active : null,
     }
+    const live = opts.slideId !== undefined
+    if (live) showPageOf(opts.slideId)
+    const slides = slides$.get()
+    if (slides.length === 0) {
+      if (live && editor.getCurrentPageId() !== saved.pageId) editor.setCurrentPage(saved.pageId)
+      return { ok: false, reason: order$.get().length > 0 ? 'all-skipped' : 'no-frames' }
+    }
+    stopHolding?.()
+    const startIndex = live
+      ? indexFor(opts.slideId, opts.index ?? 0)
+      : findStartIndex(slides, order$.get(), selectedIds, (id) =>
+          editor
+            .getShapeAncestors(id)
+            .map((a) => a.id)
+            .reverse(),
+        )
     if (editor.getEditingShapeId()) editor.setEditingShape(null)
     if (editor.getInstanceState().followingUserId) editor.stopFollowingUser()
     editor.selectNone()
 
     const el = container()
     let mode: FullscreenMode = 'window'
-    if (typeof el.requestFullscreen === 'function' && document.fullscreenEnabled !== false) {
+    const fullscreen = opts.fullscreen ?? role === 'presenter'
+    if (fullscreen && typeof el.requestFullscreen === 'function' && document.fullscreenEnabled !== false) {
       mode = 'native'
       el.requestFullscreen({ navigationUI: 'hide' }).then(
         () => {
@@ -309,12 +427,31 @@ export function createPresenter(editor: Editor): Presenter {
     listenKeyup()
     window.addEventListener('keydown', onKeyDown, true)
     document.addEventListener('fullscreenchange', onFullscreenChange)
+    // Nobody's view follows another person's cursor under a presentation ("Gather everyone", a
+    // people-list follow): the slides own the camera. tldraw ends following on the next tick.
+    const stopFollowGuard = react('dr-present-no-follow', () => {
+      if (!editor.getInstanceState().followingUserId) return
+      queueMicrotask(() => {
+        if (state.get() && editor.getInstanceState().followingUserId) editor.stopFollowingUser()
+      })
+    })
     cleanups = [
       () => window.removeEventListener('keydown', onKeyDown, true),
       () => document.removeEventListener('fullscreenchange', onFullscreenChange),
+      stopFollowGuard,
     ]
     const first = slides[startIndex] ?? slides[0]
-    state.set({ slideId: first?.id ?? null, index: Math.max(0, startIndex), mode, gridOpen: false, saved })
+    // Live: the presenter's frame stays the target even if it is not a slide here yet (not synced).
+    const slideId = live && opts.slideId ? opts.slideId : (first?.id ?? null)
+    state.set({
+      slideId,
+      index: Math.max(0, startIndex),
+      mode,
+      gridOpen: false,
+      saved,
+      role,
+      leader: role === 'follower' ? (opts.leader ?? null) : null,
+    })
     return { ok: true }
   }
 
@@ -338,11 +475,11 @@ export function createPresenter(editor: Editor): Presenter {
    * for a moment, until the person moves the camera or presses a key themselves.
    */
   let stopHolding: (() => void) | null = null
-  const holdCentre = (saved: SavedView) => {
+  const holdCentre = (place: () => void) => {
     stopHolding?.()
     const onResize = () => {
       if (state.get()) return release()
-      restoreCamera(saved)
+      place()
     }
     const onEvent = (info: TLEventInfo) => {
       if (
@@ -366,9 +503,13 @@ export function createPresenter(editor: Editor): Presenter {
     stopHolding = release
   }
 
-  function stop() {
+  function stop(opts: StopOptions = {}) {
     const s = state.get()
     if (!s) return
+    // 'here' (a follower stepping out, a live presentation ending): the slide on screen stays in view,
+    // fitted to the board as it is once the chrome is back, instead of the view from before.
+    const here = opts.view === 'here' ? (current$.get().slide?.bounds ?? null) : null
+    if (here) editor.stopCameraAnimation()
     for (const c of cleanups) c()
     cleanups = []
     state.set(null)
@@ -390,21 +531,32 @@ export function createPresenter(editor: Editor): Presenter {
       document.exitFullscreen().then(restoreFocus, () => {})
     }
     const { saved } = s
+    const place = here
+      ? () => editor.zoomToBounds(here, { inset: HERE_INSET_PX, immediate: true, force: true })
+      : () => restoreCamera(saved)
     unsafe__withoutCapture(() => {
-      restoreCamera(saved)
+      place()
       const stillThere = saved.selectedIds.filter((id) => editor.getShape(id))
       if (stillThere.length) editor.setSelectedShapes(stillThere)
-      holdCentre(saved)
+      holdCentre(place)
     })
     // The container returns to its board size over the next frames (fullscreen exit is async): set the
     // camera again once it has, so the board view is exactly where it was.
     requestAnimationFrame(() =>
       requestAnimationFrame(() => {
-        if (!state.get() && stopHolding) restoreCamera(saved)
+        if (!state.get() && stopHolding) place()
       }),
     )
     focusTarget(saved.focus)?.focus({ preventScroll: true })
     requestAnimationFrame(() => requestAnimationFrame(restoreFocus))
+    const info: StopInfo = { role: s.role, reason: opts.reason ?? 'local' }
+    for (const l of [...stopListeners]) {
+      try {
+        l(info)
+      } catch (e) {
+        console.error('presentation stop listener failed', e)
+      }
+    }
   }
 
   return {
@@ -417,6 +569,13 @@ export function createPresenter(editor: Editor): Presenter {
     stop,
     go,
     goTo,
+    role: () => state.get()?.role ?? null,
+    setRole,
+    follow,
+    onStop(listener) {
+      stopListeners.add(listener)
+      return () => void stopListeners.delete(listener)
+    },
     setGridOpen,
     settle,
     setOverlayElement(el) {

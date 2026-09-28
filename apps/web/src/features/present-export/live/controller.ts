@@ -1,0 +1,440 @@
+// Present to everyone (present-live): keeps this tab's presentation (present-session.ts) in step with
+// the board's live presentation (store.ts, the api's state).
+//
+// One rule, applied after every change (reconcile): what this tab should be doing follows from the
+// api's state, the tab's id and this person's choice.
+// - I present, from this tab: presenting (a reload of this tab resumes at the current slide; a
+//   hand-off to me turns my following into presenting). My slide changes go to the api.
+// - I present from another tab: not presenting here (a chip offers "Present from this tab").
+// - I was handed it and no tab has it yet: the visible tab takes it.
+// - Someone else presents and I chose to follow: following (their slide, their name); a hand-off
+//   away from me makes me a follower.
+// - Nobody presents: a follower steps out and is told why; after an api restart followers wait
+//   RESTART_WAIT_MS for the presenter's tab to put the same presentation back.
+// Ending here: Exit/Esc by the presenter ends it for everyone; Esc/"Stop following" by a follower
+// steps out (the top-bar chip rejoins). Leaving the board ends nothing at once: the api's grace does.
+
+import type { LivePresentation, PresentSlide } from '@draftroom/contracts'
+import { type Atom, atom, type Editor, react, type TLShapeId } from 'tldraw'
+import { type BoardRole, can } from '../../../lib/permissions.ts'
+import type { FeatureContext } from '../../types.ts'
+import type { Presenter, PresentLeader } from '../present-session.ts'
+import { type LiveResult, LiveStore } from './store.ts'
+import { presenterTabId, sessionStore } from './tab.ts'
+import { endedText, startRefusedText } from './words.ts'
+
+/** A message inside the presentation chrome (hand-offs, refusals), shown for FLASH_MS. */
+export interface LiveFlash {
+  text: string
+  seq: number
+  /** An action the message offers (e.g. take over from a presenter who dropped out). */
+  action?: 'take-over'
+}
+
+const FLASH_MS = 6_000
+
+export interface LiveController {
+  readonly editor: Editor
+  /** The board session this controller was mounted with (api, events, board, me: stable; not the role). */
+  readonly ctx: FeatureContext
+  readonly store: LiveStore
+  readonly presenter: Presenter
+  readonly tab: string
+  readonly me: { id: string; name: string }
+  /** The caller's board role and board status (UI hints; the api decides). */
+  readonly role: Atom<{ role: BoardRole; status: 'active' | 'archived' | 'trashed' }>
+  /** Whether the caller is a name-only guest (null while unknown). */
+  readonly guest: Atom<boolean | null>
+  /** This tab presents the live presentation. */
+  readonly presentingLive: Atom<boolean>
+  readonly flash: Atom<LiveFlash | null>
+  readonly busy: Atom<boolean>
+  /** May present to everyone (edit rights and an account): UI only. */
+  mayPresent(): boolean
+  /** From a local presentation: make it a presentation to everyone. */
+  inviteEveryone(opts?: { takeOver?: boolean }): Promise<void>
+  /** Follow the live presentation (the invitation's Join, the chip's Rejoin). */
+  join(): void
+  notNow(): void
+  /** A follower's "Stop following". */
+  stepOut(): void
+  /** The presenter ends it for everyone (Exit / Esc do the same through the presenter). */
+  endForEveryone(): void
+  handOff(userId: string): Promise<LiveResult>
+  /** The presenter's other tab: present from here instead (a click: full screen allowed). */
+  presentHere(): Promise<void>
+  /** Someone who may present takes over from a presenter who lost the connection. */
+  takeOver(): Promise<void>
+  dispose(): void
+}
+
+const slots = new WeakMap<Editor, Atom<LiveController | null>>()
+const slotOf = (editor: Editor) => {
+  let slot = slots.get(editor)
+  if (!slot) {
+    slot = atom<LiveController | null>('dr-live-controller', null)
+    slots.set(editor, slot)
+  }
+  return slot
+}
+
+/**
+ * The live controller of this editor once present-export mounted it (null before, and in tests).
+ * Reactive: read it inside useValue to re-render when it arrives.
+ */
+export function getLive(editor: Editor): LiveController | null {
+  return slotOf(editor).get()
+}
+
+const slideOf = (presenter: Presenter): PresentSlide => {
+  const cur = presenter.current()
+  return { slideId: cur.slide?.id ?? null, index: Math.max(0, cur.index), count: cur.count }
+}
+
+const leaderOf = (p: LivePresentation): PresentLeader => ({
+  userId: p.presenter.userId,
+  name: p.presenter.name,
+})
+
+export function mountLive(ctx: FeatureContext, presenter: Presenter): () => void {
+  const { editor } = ctx
+  slotOf(editor).get()?.dispose()
+  const me = { id: ctx.me.user.id, name: ctx.me.user.name }
+  const tab = presenterTabId()
+  const store = new LiveStore({
+    boardId: ctx.board.id,
+    userId: me.id,
+    tab,
+    request: ctx.api.request,
+    events: ctx.events,
+    storage: sessionStore(),
+  })
+  const role = atom('dr-live-role', { role: ctx.role, status: ctx.board.status })
+  const guest = atom<boolean | null>('dr-live-guest', null)
+  const presentingLive = atom('dr-live-presenting', false)
+  const flash = atom<LiveFlash | null>('dr-live-flash', null)
+  const busy = atom('dr-live-busy', false)
+  let disposed = false
+  let flashSeq = 0
+  let flashTimer: ReturnType<typeof setTimeout> | undefined
+  /** The presenter's name of the presentation last seen (for "Chase ended the presentation"). */
+  let lastPresenter: string | null = null
+  /** Claims already asked for (one per presentation id and tab). */
+  let claiming: string | null = null
+  /** Who handed this person the presentation (said once the tab has taken it). */
+  let handedBy: string | null = null
+  let resuming: string | null = null
+  /**
+   * The presentation this tab ended (Exit / Esc) while the api has not confirmed it yet: never resumed
+   * here, and asked to end again (a lost request) until the api's state no longer has it.
+   */
+  let ending: string | null = null
+  let stopping = false
+  const endIt = (id: string) => {
+    ending = id
+    if (stopping) return
+    stopping = true
+    void store.stop().finally(() => {
+      stopping = false
+    })
+  }
+
+  const say = (text: string, action?: LiveFlash['action']) => {
+    if (flashTimer) clearTimeout(flashTimer)
+    flash.set({ text, seq: ++flashSeq, ...(action ? { action } : {}) })
+    flashTimer = setTimeout(() => flash.set(null), FLASH_MS)
+  }
+
+  const notify = (text: string, testId = 'live-toast') =>
+    ctx.notify({ key: 'present-live', text, testId, timeoutMs: 7000 })
+
+  const mayPresent = () => {
+    const r = role.get()
+    return can(r.role, 'edit', r.status) && guest.get() !== true
+  }
+
+  const withBusy = async <T>(fn: () => Promise<T>): Promise<T> => {
+    busy.set(true)
+    try {
+      return await fn()
+    } finally {
+      busy.set(false)
+    }
+  }
+
+  // ---- reconcile ---------------------------------------------------------------------------------------
+
+  const reconcile = () => {
+    if (disposed) return
+    const p = store.presentation.get()
+    const local = presenter.state.get()
+    if (p) lastPresenter = p.presenter.name
+
+    if (!p) {
+      ending = null
+      const lost = store.restartLost.get()
+      if (lost) {
+        // The api restarted: the presenting tab puts the same presentation back; followers wait.
+        if (lost.presenter.userId === me.id && lost.tab === tab && local?.role === 'presenter') {
+          if (resuming !== lost.id) {
+            resuming = lost.id
+            void store.start({ slide: slideOf(presenter), resumeId: lost.id }).then(() => {
+              resuming = null
+            })
+          }
+          return
+        }
+        if (local?.role === 'follower') return
+      }
+      if (local?.role === 'follower') {
+        presenter.stop({ reason: 'remote', view: 'here' })
+        notify(endedText(store.lastChange.get(), lastPresenter), 'live-ended-toast')
+      }
+      if (presentingLive.get()) {
+        presentingLive.set(false)
+        const change = store.lastChange.get()
+        if (change?.kind === 'ended' && change.byUserId !== me.id && local?.role === 'presenter')
+          say(`${endedText(change, me.name)} You are still presenting here, to yourself.`)
+      }
+      return
+    }
+
+    if (ending && ending !== p.id) ending = null
+    if (p.presenter.userId === me.id) {
+      if (p.tab === tab) {
+        claiming = null
+        if (ending === p.id) {
+          // Ended here; the api has not said so yet (or the request was lost): ask again, never resume.
+          if (!local) endIt(p.id)
+          return
+        }
+        if (!local) {
+          // This tab presents (a reload, or it just took a hand-off): back to the current slide.
+          const r = presenter.start({
+            role: 'presenter',
+            slideId: p.slideId as TLShapeId | null,
+            index: p.index,
+            fullscreen: false,
+          })
+          if (!r.ok && r.reason !== 'already') {
+            void store.stop()
+            notify('Your presentation to everyone ended: this board has no frames to present.')
+            return
+          }
+        } else if (local.role === 'follower') {
+          presenter.setRole('presenter')
+        }
+        if (handedBy) {
+          say(`${handedBy} handed the presentation to you. Use ← and → to change slides.`)
+          handedBy = null
+        }
+        presentingLive.set(true)
+        return
+      }
+      if (p.tab === null) {
+        // Handed to me: the tab in front takes it (the others follow the one that did).
+        const by = store.lastChange.get()
+        if (by?.kind === 'handoff' && by.byUserId && by.byUserId !== me.id) handedBy = by.byName
+        if (document.visibilityState === 'visible' && claiming !== p.id) {
+          claiming = p.id
+          void store.start({ slide: { slideId: p.slideId, index: p.index, count: p.count } }).then((r) => {
+            if (!r.ok) claiming = null
+          })
+        }
+        return
+      }
+      // Another tab of mine presents.
+      if (local && (presentingLive.get() || local.role === 'follower')) {
+        presentingLive.set(false)
+        presenter.stop({ reason: 'remote', view: local.role === 'follower' ? 'here' : 'restore' })
+        notify('You are presenting from another tab now.')
+      }
+      presentingLive.set(false)
+      return
+    }
+
+    // Someone else presents.
+    if (presentingLive.get()) {
+      // Handed over (or taken over) from this tab: keep watching as a follower.
+      presentingLive.set(false)
+      store.setIntent(p.id, 'following')
+      if (local?.role === 'presenter') say(`${p.presenter.name} is presenting now. You are following.`)
+    }
+    const intent = store.intentFor(p.id)
+    if (intent === 'following') {
+      const leader = leaderOf(p)
+      if (!local) {
+        const r = presenter.start({
+          role: 'follower',
+          slideId: p.slideId as TLShapeId | null,
+          index: p.index,
+          leader,
+        })
+        if (!r.ok && r.reason !== 'already') {
+          store.setIntent(p.id, 'declined')
+          void store.follow(false)
+          notify(`You can’t follow ${p.presenter.name}’s presentation here: this page has no frames.`)
+          return
+        }
+      } else {
+        presenter.setRole('follower', leader)
+      }
+      presenter.follow(p.slideId as TLShapeId | null, p.index)
+    } else if (local?.role === 'follower') {
+      presenter.stop({ reason: 'remote', view: 'here' })
+    }
+  }
+
+  let scheduled = false
+  const schedule = () => {
+    if (scheduled || disposed) return
+    scheduled = true
+    queueMicrotask(() => {
+      scheduled = false
+      reconcile()
+    })
+  }
+
+  const stopWatch = react('dr-live-watch', () => {
+    store.presentation.get()
+    store.restartLost.get()
+    store.intent.get()
+    presenter.state.get()
+    schedule()
+  })
+
+  // The presenting tab's slide, as it changes (coalesced in the store).
+  const stopSlides = react('dr-live-slides', () => {
+    if (!presentingLive.get()) return
+    const local = presenter.state.get()
+    if (local?.role !== 'presenter') return
+    store.sendSlide(slideOf(presenter))
+  })
+
+  const offStop = presenter.onStop(({ role: was, reason }) => {
+    const p = store.presentation.get()
+    if (was === 'presenter' && presentingLive.get()) {
+      presentingLive.set(false)
+      // Exit / Esc ends it for everyone. Leaving the board does not: the api ends it after its grace
+      // unless this tab comes back (a reload resumes it).
+      if (reason === 'local' && p && p.presenter.userId === me.id && p.tab === tab) endIt(p.id)
+    }
+    if (was === 'follower' && p && reason !== 'remote') {
+      if (reason === 'local') store.setIntent(p.id, 'declined')
+      void store.follow(false)
+    }
+  })
+
+  const onVisible = () => schedule()
+  document.addEventListener('visibilitychange', onVisible)
+
+  // ---- actions -----------------------------------------------------------------------------------------
+
+  const join = () => {
+    const p = store.presentation.get()
+    if (!p || p.presenter.userId === me.id) return
+    store.setIntent(p.id, 'following')
+    void store.follow(true).then((r) => {
+      if (r.ok) return
+      store.setIntent(p.id, 'declined')
+      notify(r.message)
+    })
+  }
+
+  const controller: LiveController = {
+    editor,
+    ctx,
+    store,
+    presenter,
+    tab,
+    me,
+    role,
+    guest,
+    presentingLive,
+    flash,
+    busy,
+    mayPresent,
+    inviteEveryone: (opts = {}) =>
+      withBusy(async () => {
+        if (!presenter.isPresenting()) return
+        const r = await store.start({ slide: slideOf(presenter), takeOver: opts.takeOver })
+        if (r.ok) {
+          say('Everyone on the board can now join your presentation.')
+          return
+        }
+        say(startRefusedText(r.code, r.message), r.code === 'PRESENTER_AWAY' ? 'take-over' : undefined)
+      }),
+    join,
+    notNow() {
+      const p = store.presentation.get()
+      if (p) store.setIntent(p.id, 'declined')
+    },
+    stepOut() {
+      if (presenter.role() === 'follower') presenter.stop({ reason: 'local', view: 'here' })
+    },
+    endForEveryone() {
+      if (presenter.role() === 'presenter') presenter.stop({ reason: 'local' })
+      else void store.stop()
+    },
+    handOff: (userId) =>
+      withBusy(async () => {
+        const r = await store.handOff(userId)
+        if (!r.ok) say(r.message)
+        return r
+      }),
+    presentHere: () =>
+      withBusy(async () => {
+        const p = store.presentation.get()
+        if (!p || p.presenter.userId !== me.id) return
+        // Full screen needs this click: start here first, then take the presentation.
+        const startedHere = !presenter.isPresenting()
+        if (startedHere) {
+          const s = presenter.start({
+            role: 'presenter',
+            slideId: p.slideId as TLShapeId | null,
+            index: p.index,
+          })
+          if (!s.ok && s.reason !== 'already') return notify('There is nothing to present on this page.')
+        }
+        const r = await store.start({ slide: slideOf(presenter) })
+        if (!r.ok) {
+          if (startedHere) presenter.stop({ reason: 'remote' })
+          notify(r.message)
+        }
+      }),
+    takeOver: () =>
+      withBusy(async () => {
+        const p = store.presentation.get()
+        if (!p || p.presenter.userId === me.id) return
+        // From the board (a click: full screen allowed) this tab starts presenting first; a follower
+        // turns into the presenter once the api agrees (reconcile).
+        const startedHere = !presenter.isPresenting()
+        if (startedHere) {
+          const s = presenter.start({
+            role: 'presenter',
+            slideId: p.slideId as TLShapeId | null,
+            index: p.index,
+          })
+          if (!s.ok && s.reason !== 'already') return notify('There is nothing to present on this page.')
+        }
+        const r = await store.start({ slide: slideOf(presenter), takeOver: true })
+        if (r.ok) return
+        if (startedHere) presenter.stop({ reason: 'remote' })
+        notify(startRefusedText(r.code, r.message))
+      }),
+    dispose() {
+      if (disposed) return
+      disposed = true
+      stopWatch()
+      stopSlides()
+      offStop()
+      document.removeEventListener('visibilitychange', onVisible)
+      if (flashTimer) clearTimeout(flashTimer)
+      store.dispose()
+      if (slotOf(editor).get() === controller) slotOf(editor).set(null)
+    },
+  }
+  slotOf(editor).set(controller)
+  // The first state comes with the stream's first resync (events.onResync runs at once when connected).
+  return () => controller.dispose()
+}

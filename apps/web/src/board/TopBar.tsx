@@ -1,12 +1,12 @@
 import type { Board } from '@draftroom/contracts'
-import { type RefObject, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { type RefObject, useLayoutEffect, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
-import { type Editor, useValue } from 'tldraw'
+import type { Editor } from 'tldraw'
 import { UserMenu } from '../auth/UserMenu.tsx'
 import { Mark } from '../brand/Wordmark.tsx'
 import { FeatureTopBarItems, PINNED_TOP_BAR_FEATURES } from '../features/FeatureHost.tsx'
+import { LiveChip, PeopleTopBar } from '../features/people/index.tsx'
 import type { BoardFeature, FeatureContext } from '../features/types.ts'
-import { initialsFor } from '../lib/identity.ts'
 import { type BoardRole, can } from '../lib/permissions.ts'
 import { linkClick, workspacePath } from '../lib/routing.ts'
 import { SaveStatus, type SaveStatusView } from '../sync-quality/SaveStatus.tsx'
@@ -14,7 +14,6 @@ import { OverflowMenu } from '../ui/OverflowMenu.tsx'
 import { RenameInput } from '../ui/RenameInput.tsx'
 import { useTopBarWidth } from '../ui/useMedia.ts'
 import { readonlyPill } from './access.ts'
-import { type PresenceUser, presenceUsers } from './presence.ts'
 import {
   compactValue,
   firstFittingLevel,
@@ -137,7 +136,16 @@ export function TopBar({
         </button>
       )}
       <div className="dr-topbar__spacer" />
-      {!phone && <PresenceList editor={editor} selfUserId={selfUserId} max={narrow ? 2 : MAX_AVATARS} />}
+      {/* Wave 4 (present-live): rejoin a presentation to everyone; the people list (features/people). */}
+      <LiveChip ctx={featureCtx} />
+      {!phone && (
+        <PeopleTopBar
+          editor={editor}
+          ctx={featureCtx}
+          selfUserId={selfUserId}
+          max={narrow ? 2 : MAX_AVATARS}
+        />
+      )}
       <SaveStatus view={save} hidden={saveHidden} />
       <span
         className={`dr-pill dr-pill--${conn}`}
@@ -162,7 +170,7 @@ export function TopBar({
               <span className="dr-overflow__caption" aria-hidden="true">
                 On this board
               </span>
-              <PresenceList editor={editor} selfUserId={selfUserId} max={MAX_AVATARS} />
+              <PeopleTopBar editor={editor} ctx={featureCtx} selfUserId={selfUserId} max={MAX_AVATARS} />
             </div>
           )}
           {phone && (
@@ -368,65 +376,4 @@ function useTopBarFit(bar: RefObject<HTMLElement | null>, narrow: boolean): bool
     }
   }, [bar, narrow])
   return crowded
-}
-
-function PresenceList({
-  editor,
-  selfUserId,
-  max,
-}: {
-  editor: Editor | null
-  selfUserId: string
-  max: number
-}) {
-  // Serialized so cursor movement (which changes presence every frame) does not re-render the bar.
-  const key = useValue(
-    'dr-presence-users',
-    () => (editor ? JSON.stringify(presenceUsers(editor.getCollaborators(), selfUserId)) : '[]'),
-    [editor, selfUserId],
-  )
-  const following = useValue('dr-following', () => editor?.getInstanceState().followingUserId ?? null, [
-    editor,
-  ])
-  const users = useMemo(() => JSON.parse(key) as PresenceUser[], [key])
-  const shown = users.slice(0, max)
-  const extra = users.length - shown.length
-  return (
-    <ul className="dr-presence" data-testid="presence-list" aria-label="People on this board">
-      {shown.map((u) => {
-        const isFollowing = following === u.followId
-        return (
-          <li key={u.userId} data-testid="presence-user" data-user-id={u.userId}>
-            <button
-              type="button"
-              className="dr-avatar"
-              style={{ background: u.color }}
-              aria-pressed={isFollowing}
-              aria-label={isFollowing ? `Stop following ${u.name}` : `Follow ${u.name}`}
-              title={isFollowing ? `Following ${u.name}` : u.name}
-              disabled={!editor}
-              onClick={() => {
-                if (!editor) return
-                if (isFollowing) editor.stopFollowingUser()
-                else editor.startFollowingUser(u.followId)
-              }}
-            >
-              {initialsFor(u.name)}
-            </button>
-          </li>
-        )
-      })}
-      {extra > 0 && (
-        <li
-          className="dr-avatar dr-avatar--more"
-          title={users
-            .slice(max)
-            .map((u) => u.name)
-            .join(', ')}
-        >
-          +{extra}
-        </li>
-      )}
-    </ul>
-  )
 }

@@ -286,7 +286,7 @@ test.describe('present mode', () => {
 
     // Tab stays inside the presentation controls, in order, and wraps; Shift+Tab goes back.
     const seen: (string | null)[] = []
-    for (let i = 0; i < 5; i++) {
+    for (let i = 0; i < 6; i++) {
       await a.page.keyboard.press('Tab')
       seen.push(await focusedTestId(a.page))
     }
@@ -294,6 +294,7 @@ test.describe('present mode', () => {
       'present-prev',
       'present-next',
       'present-grid-toggle',
+      'present-invite', // wave 4 (present-live): alice may present to everyone
       'present-exit',
       'present-prev',
     ])
