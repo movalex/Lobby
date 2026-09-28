@@ -6,6 +6,7 @@ import {
   contentMargin,
   DETAILED_MAX_SHAPES,
   expand,
+  fitBox,
   intersects,
   MAX_THUMBNAIL_SHAPES,
   rendererFor,
@@ -37,6 +38,50 @@ describe('thumbnail area', () => {
     // One small note: drawn at its own size in the middle of the card, not blown up to fill it.
     const note = cardBox({ x: 100, y: 100, w: 200, h: 200 })
     expect(note).toEqual({ x: -40, y: 50, w: THUMBNAIL_WIDTH, h: THUMBNAIL_HEIGHT })
+  })
+
+  it('cover fills the card with the area, cropping what does not fit (F11): centred, or from the top', () => {
+    // A 16:10 frame plus its margin is a little taller than 16:10: the margin is cropped, top and bottom.
+    const area = expand({ x: 0, y: 0, w: 1600, h: 1000 }, 64)
+    const c = fitBox(area, 'cover')
+    expect(aspect(c)).toBeCloseTo(1.6)
+    expect(c.w).toBeCloseTo(area.w)
+    expect(c.y).toBeGreaterThan(area.y)
+    expect(c.y + c.h).toBeLessThan(area.y + area.h)
+    expect(c.y + c.h / 2).toBeCloseTo(area.y + area.h / 2)
+    // cover-top crops such a sliver evenly as well…
+    expect(fitBox(area, 'cover-top')).toEqual(c)
+    // …but a portrait frame keeps its top (its heading) and loses its bottom.
+    const tall = fitBox({ x: 0, y: 0, w: 800, h: 2000 }, 'cover-top')
+    expect(tall).toEqual({ x: 0, y: 0, w: 800, h: 500 })
+    // A wide one loses its sides, not its height.
+    const wide = fitBox({ x: 0, y: 0, w: 3000, h: 500 }, 'cover')
+    expect(wide).toMatchObject({ y: 0, h: 500, w: 800 })
+    expect(wide.x).toBeCloseTo(1100)
+    // Never smaller than the card in page units (a tiny frame is drawn at 100%, not blown up).
+    expect(fitBox({ x: 0, y: 0, w: 160, h: 100 }, 'cover')).toEqual({
+      x: 80 - THUMBNAIL_WIDTH / 2,
+      y: 50 - THUMBNAIL_HEIGHT / 2,
+      w: THUMBNAIL_WIDTH,
+      h: THUMBNAIL_HEIGHT,
+    })
+  })
+
+  it('contain shows all of the content, but a very wide or tall board is not shrunk to a thin strip (F11)', () => {
+    expect(fitBox({ x: 0, y: 0, w: 1000, h: 600 }, 'contain')).toEqual(
+      cardBox({ x: 0, y: 0, w: 1000, h: 600 }),
+    )
+    // The six-frame tour row without frames to go by (10,400 × 1,000): at most half the card is empty.
+    const strip = { x: 0, y: 0, w: 10_400, h: 1000 }
+    const box = fitBox(strip, 'contain')
+    expect(aspect(box)).toBeCloseTo(1.6)
+    expect(strip.h / box.h).toBeGreaterThanOrEqual(0.5 - 1e-9)
+    // It starts where reading starts: the left end, vertically centred.
+    expect(box.x).toBe(0)
+    expect(box.y + box.h / 2).toBeCloseTo(500)
+    const column = fitBox({ x: 0, y: 0, w: 400, h: 8000 }, 'contain')
+    expect(column.y).toBe(0)
+    expect(400 / column.w).toBeGreaterThanOrEqual(0.5 - 1e-9)
   })
 
   it('draws at 480 × 300 at most, never above 100%', () => {
@@ -74,31 +119,55 @@ describe('what the thumbnail shows', () => {
     { pageId: 'page:3', bounds: { x: 0, y: 0, w: 50, h: 50 } },
   ]
 
-  it("the owner's start view wins, exactly as saved", () => {
+  it("the owner's start view wins, cropped to the card (not widened around it)", () => {
     const startView = { pageId: 'page:3', area: { x: 10, y: 20, w: 300, h: 200 } }
     expect(chooseArea({ startView, startFrame: null, pages })).toEqual({
       kind: 'start-view',
       pageId: 'page:3',
       area: startView.area,
+      fit: 'cover',
     })
   })
 
-  it('a frame start view follows the frame, with a margin', () => {
+  it('a frame start view follows the frame, with a margin, keeping its top', () => {
     const startView = { pageId: 'page:2', area: { x: 0, y: 0, w: 1, h: 1 } }
     const frame = { x: 100, y: 100, w: 800, h: 450 }
     expect(chooseArea({ startView, startFrame: frame, pages })).toEqual({
       kind: 'start-view',
       pageId: 'page:2',
       area: expand(frame, 32),
+      fit: 'cover-top',
     })
   })
 
   it('without a start view (or when its page is gone): the first page that has content', () => {
     // page:2 is the first with content; its margin is 4% of 1000.
-    const content = { kind: 'content', pageId: 'page:2', area: { x: -40, y: -40, w: 1080, h: 680 } }
+    const content = {
+      kind: 'content',
+      pageId: 'page:2',
+      area: { x: -40, y: -40, w: 1080, h: 680 },
+      fit: 'contain',
+    }
     expect(chooseArea({ startView: null, startFrame: null, pages })).toEqual(content)
     const gone = { pageId: 'page:deleted', area: { x: 0, y: 0, w: 10, h: 10 } }
     expect(chooseArea({ startView: gone, startFrame: null, pages })).toEqual(content)
+  })
+
+  it('a board with frames and no start view shows its first frame (presentation order), cropped to 16:10 (F11)', () => {
+    // The Lobby tour: six 1600 × 1000 frames in a 10,400 wide row. The card shows slide 1, not a strip.
+    const first = { x: 0, y: 0, w: 1600, h: 1000 }
+    const tour = [{ pageId: 'page:1', bounds: { x: 0, y: 0, w: 10_400, h: 1000 }, firstFrame: first }]
+    const choice = chooseArea({ startView: null, startFrame: null, pages: tour })
+    expect(choice).toEqual({ kind: 'frame', pageId: 'page:1', area: expand(first, 64), fit: 'cover-top' })
+    if (choice.kind !== 'frame') throw new Error('unreachable')
+    const frame = thumbnailFrame(choice.area, choice.fit)
+    expect([frame?.width, frame?.height]).toEqual([THUMBNAIL_WIDTH, THUMBNAIL_HEIGHT])
+    // The whole frame's width is on the card, nothing of the next frame (160 to the right) is.
+    expect(frame?.box.x).toBeLessThanOrEqual(0)
+    expect((frame?.box.x ?? 0) + (frame?.box.w ?? 0)).toBeLessThan(1600 + 160)
+    // An owner's start view still wins over the first frame.
+    const startView = { pageId: 'page:1', area: { x: 3520, y: 0, w: 1600, h: 1000 } }
+    expect(chooseArea({ startView, startFrame: null, pages: tour })).toMatchObject({ kind: 'start-view' })
   })
 
   it('an empty board shows nothing (the card keeps its placeholder)', () => {

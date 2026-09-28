@@ -102,6 +102,33 @@ describe('template picker catalog (PRE-01)', () => {
     expect(p.items).toEqual([{ kind: 'note', x: 110, y: 70, w: 200, h: 200, color: '#ffe066' }])
   })
 
+  it('draws full-colour fills (palette swatches) in their colour; other shapes stay neutral boxes', () => {
+    const geo = (id: string, fill: string, color: string) => ({
+      typeName: 'shape',
+      id,
+      type: 'geo',
+      parentId: 'page:p',
+      x: 0,
+      y: 0,
+      props: { w: 100, h: 80, fill, color },
+    })
+    const p = previewFromRecords(
+      [geo('shape:a', 'fill', 'orange'), geo('shape:b', 'solid', 'orange')],
+      'page:p',
+      {
+        x: 0,
+        y: 0,
+        w: 100,
+        h: 80,
+      },
+    )
+    expect(p.items.map((i) => i.kind)).toEqual(['swatch', 'box'])
+    expect(p.items[0]?.color).toBe('#ffb66e')
+    // The tour's Mood board shows its palette in the gallery strip.
+    const tour = catalog.find((e) => e.id === 'lobby-tour')
+    expect(tour?.preview.items.filter((i) => i.kind === 'swatch').length).toBeGreaterThanOrEqual(4)
+  })
+
   it('searches names, descriptions, categories and section names, within a category', () => {
     expect(filterTemplates(catalog, '', 'all')).toHaveLength(7)
     expect(filterTemplates(catalog, 'panel', 'all').map((e) => e.id)).toEqual(['storyboard'])

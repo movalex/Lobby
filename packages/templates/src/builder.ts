@@ -11,6 +11,7 @@ import {
   type TLDefaultColorStyle,
   type TLDefaultDashStyle,
   type TLDefaultFillStyle,
+  type TLDefaultFontStyle,
   type TLDefaultSizeStyle,
   type TLDefaultTextAlignStyle,
   type TLFrameShape,
@@ -50,6 +51,8 @@ export interface TextSpec {
   size?: TLDefaultSizeStyle
   color?: TLDefaultColorStyle
   align?: TLDefaultTextAlignStyle
+  /** tldraw's font style (default sans); the Lobby tour's type samples use serif and mono too. */
+  font?: TLDefaultFontStyle
   /** Headings and instructions arrive locked (PRE-07); starter values people fill in do not. */
   locked?: boolean
 }
@@ -59,6 +62,13 @@ export interface TextSpec {
  * slot into it (apps/web/src/board/ExternalContent.tsx); older boards have no marker.
  */
 export const IMAGE_SLOT_META = { draftroomSlot: 'image' } as const
+
+/**
+ * Meta marker on colour swatches: a full-colour block with no label (its name is a text shape next
+ * to it, because tldraw has no label colour that reads on every full fill in both themes). The
+ * template tests allow a geo shape without text only when it carries this marker.
+ */
+export const SWATCH_META = { draftroomSwatch: 'color' } as const
 
 export interface NoteSpec {
   x: number
@@ -117,7 +127,12 @@ export interface BoardBuilder {
   /** Dashed grey box that marks where an image goes (locked, with the IMAGE_SLOT_META marker). */
   imageSlot(
     parent: TLFrameShape | null,
-    spec: { x: number; y: number; w: number; h: number; label: string },
+    spec: { x: number; y: number; w: number; h: number; label: string; size?: TLDefaultSizeStyle },
+  ): TLGeoShape
+  /** A full-colour, unlabelled block (SWATCH_META): name it with a text shape beside it. */
+  swatch(
+    parent: TLFrameShape | null,
+    spec: { x: number; y: number; w: number; h: number; color: TLDefaultColorStyle },
   ): TLGeoShape
   /** Notes in a grid, filled row by row. */
   noteGrid(
@@ -239,7 +254,7 @@ export function createBoardBuilder(ctx: TemplateContext): BoardBuilder {
         props: {
           color: spec.color ?? 'black',
           size: spec.size ?? 's',
-          font: 'sans',
+          font: spec.font ?? 'sans',
           textAlign: spec.align ?? 'start',
           w: spec.w,
           richText: toRichText(spec.text),
@@ -321,11 +336,24 @@ export function createBoardBuilder(ctx: TemplateContext): BoardBuilder {
         labelColor: 'grey',
         fill: 'semi',
         dash: 'dashed',
-        size: 's',
+        size: spec.size ?? 's',
         // Locked so a drag across the template moves nothing, but still a drop target: the web app
         // hit-tests marked slots itself, locked or not.
         locked: true,
         meta: IMAGE_SLOT_META,
+      })
+    },
+
+    swatch(parent, spec) {
+      return builder.geo(parent, {
+        x: spec.x,
+        y: spec.y,
+        w: spec.w,
+        h: spec.h,
+        color: spec.color,
+        fill: 'fill',
+        size: 's',
+        meta: SWATCH_META,
       })
     },
 

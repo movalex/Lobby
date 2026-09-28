@@ -1,8 +1,9 @@
 // The "Lobby tour" sample board (docs/WAVE3-CONTRACTS.md §2 sample-board): six 16:10 frames in one row,
 // left to right in presentation order, for showing Lobby to DBC. Plain tldraw records like every other
 // template; only tldraw palette colours (DBC orange plus the neutral "black" tones, which tldraw inverts
-// in dark mode). Labels are black on tinted ('solid') fills so they read in both themes: tldraw's dark
-// theme has no dark label colour, so no full-colour fill carries text here.
+// in dark mode; the Mood board's palette adds hues that keep their colour in both themes). Labels are
+// black on tinted ('solid') fills so they read in both themes: tldraw's dark theme has no dark label
+// colour, so no full-colour fill carries text here (the palette swatches are named by text beside them).
 //
 // Every "try this" tip names a real binding (tldraw 5.4.2 defaults plus the canvas-ux / comments /
 // present-export keys listed in docs/FEATURES-M2-CONTRACTS.md §1).
@@ -142,11 +143,20 @@ function brainstorm(b: BoardBuilder) {
     'Brainstorm',
     'One question, ideas in clusters. The connectors are attached, so they follow when you move a theme.',
   )
-  const qW = 480
-  const qH = 190
+  // A left-to-right map (F12): the question on the left, a column of themes, each theme's ideas in a
+  // row to its right. The theme column keeps empty canvas between the themes, so dragging one up or down
+  // (the demo's "the connectors follow") never lands it on the ideas; the Story row keeps its third place
+  // free for the idea a second person adds live.
+  // Slightly smaller notes keep the bottom row clear of Present's control bar.
+  const noteScale = 0.9
+  const noteW = NOTE_SIZE * noteScale
+  const rowGap = 40
+  const rowY = (i: number) => TOP + i * (noteW + rowGap)
+  const qW = 360
+  const qH = 220
   const question = b.geo(f, {
-    x: (TOUR_FRAME_W - qW) / 2,
-    y: TOP,
+    x: M,
+    y: rowY(1) + noteW / 2 - qH / 2,
     w: qW,
     h: qH,
     geo: 'ellipse',
@@ -156,11 +166,20 @@ function brainstorm(b: BoardBuilder) {
     fill: 'solid',
     size: 'l',
   })
-  const clusters: ReadonlyArray<{ label: string; color: TLDefaultColorStyle; ideas: [string, string] }> = [
+  const themeX = M + qW + 120
+  const themeW = 240
+  const themeH = 72
+  const ideasX = themeX + themeW + 50
+  const ideaGap = 20
+  const clusters: ReadonlyArray<{ label: string; color: TLDefaultColorStyle; ideas: string[] }> = [
     {
       label: 'Gameplay',
       color: 'orange',
-      ideas: ['Open on the boss fight. No logo for ten seconds.', 'One unbroken shot through the new map'],
+      ideas: [
+        'Open on the boss fight. No logo for ten seconds.',
+        'One unbroken shot through the new map',
+        'Show the new co-op move up close',
+      ],
     },
     {
       label: 'Story',
@@ -170,21 +189,32 @@ function brainstorm(b: BoardBuilder) {
     {
       label: 'Community',
       color: 'light-blue',
-      ideas: ['Cut it from real player clips', 'Hide a code in the last frame'],
+      ideas: [
+        'Cut it from real player clips',
+        'Hide a code in the last frame',
+        'Premiere it live with creators',
+      ],
     },
   ]
-  const labelY = 560
-  const labelH = 64
   clusters.forEach((c, i) => {
-    const x = col3(i)
-    const label = boldTitle(card(b, f, { x, y: labelY, w: COL3_W, h: labelH, text: c.label, color: c.color }))
-    const gap = COL3_W - NOTE_SIZE * 2
-    b.noteGrid(f, { x, y: labelY + labelH + 24, cols: 2, gap }, [
-      { text: c.ideas[0], color: c.color },
-      { text: c.ideas[1], color: c.color },
-    ])
-    // Question to theme: a precise binding on the label's top centre, so the fan stays tidy.
-    b.arrow(question, label, { endAnchor: { x: 0.5, y: 0 }, color: 'orange', arrowheadEnd: 'none' })
+    const y = rowY(i)
+    const label = boldTitle(
+      card(b, f, {
+        x: themeX,
+        y: y + noteW / 2 - themeH / 2,
+        w: themeW,
+        h: themeH,
+        text: c.label,
+        color: c.color,
+      }),
+    )
+    b.noteGrid(
+      f,
+      { x: ideasX, y, cols: 3, gap: ideaGap, scale: noteScale },
+      c.ideas.map((text) => ({ text, color: c.color })),
+    )
+    // Question to theme: a precise binding on the theme's left middle, so the fan stays tidy.
+    b.arrow(question, label, { endAnchor: { x: 0, y: 0.5 }, color: 'orange', arrowheadEnd: 'none' })
   })
 }
 
@@ -270,29 +300,94 @@ function plan(b: BoardBuilder) {
   })
 }
 
+/** The Mood board's palette: tldraw colours that keep their hue in the dark theme, DBC orange first. */
+const MOOD_SWATCHES: ReadonlyArray<{ color: TLDefaultColorStyle; name: string; role: string }> = [
+  { color: 'orange', name: 'Burn orange', role: 'Titles and calls to action' },
+  { color: 'yellow', name: 'Ember', role: 'Sparks and rim light' },
+  { color: 'red', name: 'Signal red', role: 'Danger, used sparingly' },
+  { color: 'violet', name: 'Dusk', role: 'Night and deep shadow' },
+  { color: 'grey', name: 'Ash', role: 'UI, type and smoke' },
+]
+
 function moodBoard(b: BoardBuilder) {
   const f = tourFrame(
     b,
     3,
     'Mood board',
-    'Drop an image onto a slot and it fits the slot. Caption it underneath, then vote on the direction.',
+    'One direction for the launch trailer: references, palette and type. Drop an image onto a slot and ' +
+      'it fits the slot.',
   )
+  // F10: a direction that reads as finished in Present (a palette, type samples) with two reference
+  // slots that invite a drop, instead of six empty boxes. No images ship with the tour: the colours
+  // are tldraw's own, the samples are text in tldraw's fonts.
+  const labelY = TOP
+  const bodyY = TOP + 56
   const slotH = Math.round((COL3_W * 9) / 16)
-  const captions = [
-    'Key art: the hero moment',
-    'Logo and title treatment',
-    'Characters: faces and poses',
-    'World: places and light',
-    'Color and texture',
-    'Type, UI and end card',
-  ]
-  const rowStep = slotH + 80
-  captions.forEach((caption, i) => {
-    const x = col3(i % 3)
-    const y = TOP + Math.floor(i / 3) * rowStep
-    b.imageSlot(f, { x, y, w: COL3_W, h: slotH, label: 'Drop an image here' })
+  const typeY = bodyY + slotH + 80
+  const px = col3(2)
+  // Section labels first, in reading order (search and the CSV export list shapes in creation order).
+  const section = (x: number, y: number, text: string) =>
+    b.text(f, { x, y, w: COL3_W, text, size: 'm', color: 'black', locked: true })
+  section(M, labelY, 'References')
+  section(px, labelY, 'Palette')
+  section(M, typeY, 'Type')
+
+  // References: two 16:9 slots across the first two columns, captioned underneath.
+  const refs = ['Key art: the hero moment', 'World: places and light']
+  refs.forEach((caption, i) => {
+    const x = col3(i)
+    b.imageSlot(f, { x, y: bodyY, w: COL3_W, h: slotH, label: 'Drop a reference here', size: 'm' })
     // Captions are starter values people rewrite, so they stay unlocked.
-    b.text(f, { x, y: y + slotH + 14, w: COL3_W, text: caption, size: 's', color: 'black' })
+    b.text(f, { x, y: bodyY + slotH + 14, w: COL3_W, text: caption, size: 's', color: 'black' })
+  })
+
+  // Type: three samples in tldraw's serif, sans and mono, each with its role on the left.
+  const roleW = 200
+  const sampleX = M + roleW + 24
+  const sampleW = col3(2) - COL_GAP - sampleX
+  const samples: ReadonlyArray<{
+    role: string
+    text: string
+    font: 'serif' | 'sans' | 'mono'
+    size: 's' | 'm' | 'l' | 'xl'
+    color: TLDefaultColorStyle
+    y: number
+  }> = [
+    { role: 'Display · serif', text: 'Rise from the ashes', font: 'serif', size: 'xl', color: 'black', y: 0 },
+    {
+      role: 'Body · sans',
+      text: 'Plain words in sans, easy to read on a phone.',
+      font: 'sans',
+      size: 'm',
+      color: 'black',
+      y: 84,
+    },
+    {
+      role: 'HUD · mono',
+      text: 'PRESS START · 03:14 · ARENA 7',
+      font: 'mono',
+      size: 'm',
+      color: 'orange',
+      y: 140,
+    },
+  ]
+  for (const s of samples) {
+    const y = typeY + 50 + s.y
+    b.text(f, { x: M, y: y + (s.size === 'xl' ? 18 : 3), w: roleW, text: s.role, size: 's', color: 'grey' })
+    b.text(f, { x: sampleX, y, w: sampleW, text: s.text, size: s.size, color: s.color, font: s.font })
+  }
+
+  // Palette: a column of swatches in the third column, each named, with what it is for.
+  const swatchW = 112
+  const swatchH = 84
+  const swatchGap = 22
+  const nameX = px + swatchW + 24
+  const nameW = px + COL3_W - nameX
+  MOOD_SWATCHES.forEach((s, i) => {
+    const y = bodyY + i * (swatchH + swatchGap)
+    b.swatch(f, { x: px, y, w: swatchW, h: swatchH, color: s.color })
+    b.text(f, { x: nameX, y: y + 6, w: nameW, text: s.name, size: 'm', color: 'black' })
+    b.text(f, { x: nameX, y: y + 46, w: nameW, text: s.role, size: 's', color: 'grey' })
   })
 }
 

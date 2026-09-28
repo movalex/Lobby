@@ -2,7 +2,7 @@ import { draftroomSchema } from '@draftroom/canvas-schema'
 import type { TLGeoShape, TLNoteShape, TLPageId, TLRecord } from '@tldraw/tlschema'
 import type { IndexKey } from '@tldraw/utils'
 import { describe, expect, it } from 'vitest'
-import { instantiateTemplate, TEMPLATES } from './index.ts'
+import { instantiateTemplate, SWATCH_META, TEMPLATES } from './index.ts'
 import { estimateTextHeight, LABEL_FONT_PX, LABEL_PADDING, NOTE_SIZE } from './layout.ts'
 import {
   arrowEndpoints,
@@ -244,6 +244,13 @@ describe.each(TEMPLATES.map((t) => [t.id, t] as const))('%s template', (id, def)
 
   it('has non-empty text on every note, text and geo shape; arrows stay unlabeled', () => {
     for (const s of shapesOf(records)) {
+      // A colour swatch (SWATCH_META, a full fill) is named by a text beside it, never by a label.
+      if (s.type === 'geo' && s.meta.draftroomSwatch !== undefined) {
+        expect(s.meta).toEqual(SWATCH_META)
+        expect((s as TLGeoShape).props.fill).toBe('fill')
+        expect(textOf(s)).toBe('')
+        continue
+      }
       if (s.type === 'note' || s.type === 'text' || s.type === 'geo') {
         expect(textOf(s).length, `${s.type} ${s.id}`).toBeGreaterThan(0)
       }

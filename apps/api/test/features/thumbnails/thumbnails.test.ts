@@ -11,7 +11,7 @@ import {
 } from '@draftroom/contracts'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { type Client, createBoard, createTestApi, DEV_STUDIO, ORIGIN, type TestApi } from '../../helpers.ts'
-import { jpeg, png, webpExtended, webpLossy } from './images.ts'
+import { apng, jpeg, png, webpExtended, webpLossy } from './images.ts'
 
 let api: TestApi
 let alice: Client
@@ -225,6 +225,7 @@ describe('board thumbnails: validation', () => {
       ['too tall (header only)', webpExtended(10, 4000), 'image/webp', 400],
       ['zero size', png(0, 0), 'image/png', 400],
       ['animated', webpExtended(8, 8, { animated: true }), 'image/webp', 400],
+      ['animated png (APNG)', apng(64, 40), 'image/png', 400],
     ]
     for (const [name, bytes, type, status] of cases) {
       const res = await put(bob, bytes, type)

@@ -38,6 +38,51 @@ export function png(width: number, height: number, rgb: [number, number, number]
   ])
 }
 
+/** fcTL: sequence, frame size, offset, delay 1/10 s, no dispose or blend. */
+function fcTL(seq: number, width: number, height: number): Buffer {
+  const d = Buffer.alloc(26)
+  d.writeUInt32BE(seq, 0)
+  d.writeUInt32BE(width, 4)
+  d.writeUInt32BE(height, 8)
+  d.writeUInt16BE(1, 20)
+  d.writeUInt16BE(10, 22)
+  return pngChunk('fcTL', d)
+}
+
+/**
+ * A two-frame, loop-forever animated PNG (APNG): acTL before the first IDAT, fcTL per frame, the
+ * second frame in fdAT. Browsers play it; the api must refuse it like an animated WebP.
+ */
+export function apng(width: number, height: number, opts: { acTLAfterIdat?: boolean } = {}): Buffer {
+  const still = png(width, height)
+  const ihdr = still.subarray(8, 8 + 25)
+  // The IDAT chunk sits between IHDR and IEND in png().
+  const idat = still.subarray(8 + 25, still.length - 12)
+  const idatData = idat.subarray(8, idat.length - 4)
+  const actlData = Buffer.alloc(8)
+  actlData.writeUInt32BE(2, 0) // two frames
+  actlData.writeUInt32BE(0, 4) // loop forever
+  const acTL = pngChunk('acTL', actlData)
+  const fdAT = pngChunk('fdAT', Buffer.concat([u32be(2), idatData]))
+  const frames = [fcTL(0, width, height), idat, fcTL(1, width, height), fdAT]
+  return Buffer.concat([
+    still.subarray(0, 8),
+    ihdr,
+    ...(opts.acTLAfterIdat ? [...frames, acTL] : [acTL, ...frames]),
+    pngChunk('IEND', Buffer.alloc(0)),
+  ])
+}
+
+/** A still PNG with an ancillary text chunk (tEXt) before its image data: a valid, ordinary PNG. */
+export function pngWithText(width: number, height: number, text = 'Comment\0made by Lobby'): Buffer {
+  const still = png(width, height)
+  return Buffer.concat([
+    still.subarray(0, 8 + 25),
+    pngChunk('tEXt', Buffer.from(text, 'latin1')),
+    still.subarray(8 + 25),
+  ])
+}
+
 function riff(chunks: Buffer): Buffer {
   return Buffer.concat([Buffer.from('RIFF'), u32le(chunks.length + 4), Buffer.from('WEBP'), chunks])
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { ImageHeaderError, readImageHeader } from '../../../src/features/thumbnails/image-header.ts'
-import { jpeg, png, webpExtended, webpLossless, webpLossy } from './images.ts'
+import { apng, jpeg, png, pngWithText, webpExtended, webpLossless, webpLossy } from './images.ts'
 
 const refused = (bytes: Uint8Array) => expect(() => readImageHeader(bytes)).toThrow(ImageHeaderError)
 
@@ -71,6 +71,28 @@ describe('thumbnail image headers', () => {
 
   it('refuses animated WebP', () => {
     refused(webpExtended(4, 4, { animated: true }))
+  })
+
+  it('refuses animated PNG (APNG: an acTL chunk), like animated WebP (SEAM-12)', () => {
+    expect(() => readImageHeader(apng(64, 40))).toThrow('Animated images are not accepted.')
+    // The spec puts acTL before the first IDAT; a misplaced one is refused all the same.
+    refused(apng(64, 40, { acTLAfterIdat: true }))
+    // An ordinary PNG with ancillary chunks is still a PNG.
+    expect(readImageHeader(pngWithText(64, 40))).toEqual({ mimeType: 'image/png', width: 64, height: 40 })
+  })
+
+  it('refuses a PNG whose chunks do not line up with its end', () => {
+    const p = pngWithText(4, 4)
+    const longer = Buffer.from(p)
+    longer.writeUInt32BE(p.readUInt32BE(33) + 7, 33) // the tEXt chunk claims 7 more bytes
+    refused(longer)
+    // IEND bytes glued on after arbitrary data: the chunk walk never reaches them as a chunk.
+    const glued = Buffer.concat([
+      p.subarray(0, 33),
+      Buffer.from('<script>alert(1)</script>'),
+      p.subarray(-12),
+    ])
+    refused(glued)
   })
 
   it('reports a zero or huge size as it is (the route refuses it)', () => {

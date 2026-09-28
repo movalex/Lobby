@@ -240,7 +240,7 @@ export function TemplateThumb({ preview }: { preview: TemplatePreview }) {
         </g>
       ))}
       {preview.items.map((it, i) =>
-        it.kind === 'note' ? (
+        it.kind === 'note' || it.kind === 'swatch' ? (
           <rect key={i} x={it.x} y={it.y} width={it.w} height={it.h} rx={unit} fill={it.color} />
         ) : it.kind === 'box' ? (
           <rect

@@ -8,11 +8,15 @@
 //
 // Keeping it cheap: plan.ts picks the area and only shapes inside it are drawn, and the work starts in
 // an idle period while the person is not in the middle of something (re-checked right before it starts).
+// Leaving (F11): renderNowSync draws the simplified picture synchronously, for a board that closes or
+// a page that unloads before the schedule rendered the latest changes.
 
+import { presentationOrder } from '@draftroom/board-ops'
 import { THUMBNAIL_MIME_TYPES, THUMBNAIL_TARGET_BYTES, type ThumbnailMimeType } from '@draftroom/contracts'
-import { Box, type Editor, getSvgAsImage, type TLPageId, type TLShapeId } from 'tldraw'
+import { Box, type Editor, getSvgAsImage, type TLPageId, type TLRecord, type TLShapeId } from 'tldraw'
 import { parseBoardStartView } from '../canvas-ux/board-start-view.ts'
 import { stripNoteAuthors } from '../present-export/note-authors.ts'
+import { isSkipped } from '../present-export/slides.ts'
 import {
   chooseArea,
   intersects,
@@ -22,7 +26,7 @@ import {
   thumbnailFrame,
 } from './plan.ts'
 import type { RenderResult } from './scheduler.ts'
-import { renderSchematic } from './schematic.ts'
+import { drawSchematic, renderSchematic } from './schematic.ts'
 
 const ENCODINGS: readonly { type: 'webp' | 'jpeg'; quality: number }[] = [
   { type: 'webp', quality: 0.82 },
@@ -49,6 +53,29 @@ function pageContent(editor: Editor, pageId: TLPageId) {
     bounds = bounds ? bounds.union(b) : b.clone()
   }
   return { ids, bounds }
+}
+
+/**
+ * The page's first visible top-level frame in presentation order: what Present opens on (board-ops
+ * `presentationOrder`, frames marked "skip in presentation" left out), in page coordinates.
+ */
+function firstFrame(editor: Editor, pageId: TLPageId): Rect | null {
+  const page = editor.getPage(pageId)
+  if (!page) return null
+  const records: TLRecord[] = [page]
+  for (const id of editor.getPageShapeIds(pageId)) {
+    const s = editor.getShape(id)
+    // Frames can only be parented to the page, frames or groups: those records carry every transform.
+    if (s && (s.type === 'frame' || s.type === 'group')) records.push(s)
+  }
+  if (records.length === 1) return null
+  for (const entry of presentationOrder(records, pageId)) {
+    const shape = editor.getShape(entry.id)
+    if (!shape || isSkipped(shape) || editor.isShapeHidden(entry.id)) continue
+    const b = editor.getShapePageBounds(entry.id)
+    if (b && b.w > 0 && b.h > 0) return toRect(b)
+  }
+  return null
 }
 
 /** Whether the board has anything a thumbnail could show (any page). */
@@ -98,13 +125,19 @@ export function planThumbnail(editor: Editor): Plan {
     if (b) startFrame = toRect(b)
   }
   const pages = editor.getPages().map((p) => ({ page: p.id, content: pageContent(editor, p.id) }))
+  // Only the first page with content can be shown without a start view: look for its frames only.
+  const shown = pages.find((p) => p.content.bounds)
   const choice = chooseArea({
     startView: view ? { pageId: view.pageId, area: { x: view.x, y: view.y, w: view.w, h: view.h } } : null,
     startFrame,
-    pages: pages.map((p) => ({ pageId: p.page, bounds: p.content.bounds ? toRect(p.content.bounds) : null })),
+    pages: pages.map((p) => ({
+      pageId: p.page,
+      bounds: p.content.bounds ? toRect(p.content.bounds) : null,
+      firstFrame: p === shown ? firstFrame(editor, p.page) : null,
+    })),
   })
   if (choice.kind === 'empty') return { kind: 'empty' }
-  const frame = thumbnailFrame(choice.area)
+  const frame = thumbnailFrame(choice.area, choice.fit)
   const page = pages.find((p) => p.page === choice.pageId)
   if (!frame || !page) return { kind: 'empty' }
   // Only what shows inside the area is drawn (a start view over part of a big board stays cheap).
@@ -196,4 +229,40 @@ async function schematic(editor: Editor, ids: TLShapeId[], frame: ThumbnailFrame
   if (!canvas) return null
   return (enc) =>
     new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, `image/${enc.type}`, enc.quality))
+}
+
+/** A `data:` URL from canvas.toDataURL as a Blob, synchronously. */
+function dataUrlToBlob(url: string): Blob | null {
+  const m = /^data:([^;,]+);base64,(.*)$/.exec(url)
+  if (!m?.[1] || m[2] === undefined) return null
+  const bin = atob(m[2])
+  const bytes = new Uint8Array(bin.length)
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
+  return new Blob([bytes], { type: m[1] })
+}
+
+/**
+ * The thumbnail drawn right now, without awaiting anything (F11): for a board that is closing (the
+ * editor is gone a moment later) or a page being unloaded, after changes the schedule has not rendered
+ * yet. Always the simplified drawing (tldraw's own export is asynchronous) with images as grey tiles,
+ * encoded with toDataURL; a few milliseconds even for large boards. Never throws.
+ */
+export function renderNowSync(editor: Editor): RenderResult {
+  try {
+    const plan = planThumbnail(editor)
+    if (plan.kind === 'empty') return { kind: 'empty' }
+    if (plan.kind === 'too-many') return { kind: 'skipped' }
+    const canvas = drawSchematic(editor, plan.ids, plan.frame)
+    if (!canvas) return { kind: 'skipped' }
+    const { width, height } = plan.frame
+    for (const enc of ENCODINGS) {
+      const blob = dataUrlToBlob(canvas.toDataURL(`image/${enc.type}`, enc.quality))
+      if (!blob || !isAccepted(blob.type)) continue
+      if (blob.size <= THUMBNAIL_TARGET_BYTES)
+        return { kind: 'image', blob, type: blob.type, width, height, renderer: 'schematic' }
+    }
+    return { kind: 'skipped' }
+  } catch {
+    return { kind: 'skipped' }
+  }
 }

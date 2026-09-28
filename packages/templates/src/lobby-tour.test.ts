@@ -13,7 +13,7 @@ import type {
   TLTextShape,
 } from '@tldraw/tlschema'
 import { describe, expect, it } from 'vitest'
-import { getTemplate, IMAGE_SLOT_META, instantiateTemplate } from './index.ts'
+import { getTemplate, IMAGE_SLOT_META, instantiateTemplate, SWATCH_META } from './index.ts'
 import { estimateTextHeight, LABEL_FONT_PX, LABEL_PADDING } from './layout.ts'
 import { LOBBY_TOUR_SECTIONS, TOUR_FRAME_H, TOUR_FRAME_W } from './templates/lobby-tour.ts'
 import {
@@ -144,28 +144,67 @@ describe('Lobby tour: the frames', () => {
     for (const p of pillars) expect(firstLineBold(p)).toBe(true)
   })
 
-  it('2 · Brainstorm has note clusters under themes, tied to one question by bound connectors', () => {
+  /** The question, and its three themes in connector order. */
+  function brainstormParts() {
     const f = frame('2 · Brainstorm')
     const question = must(kids(f, 'geo').find((g) => g.props.geo === 'ellipse'))
-    expect(textOf(question)).toMatch(/hook\?$/)
     const arrows = arrowsOf(records).filter((a) => a.parentId === f.id)
-    expect(arrows.length).toBeGreaterThanOrEqual(3)
     const themes = arrows.map((a) => {
       const [from, to] = ends(a.id)
       expect(from.id).toBe(question.id)
       expect(to.type).toBe('geo')
       return to as TLGeoShape
     })
+    return { f, question, arrows, themes }
+  }
+
+  it('2 · Brainstorm is a left-to-right map: one question, three themes, each theme with its ideas in a row', () => {
+    const { f, question, arrows, themes } = brainstormParts()
+    expect(textOf(question)).toMatch(/hook\?$/)
+    expect(arrows).toHaveLength(3)
     expect(themes.map(textOf)).toEqual(['Gameplay', 'Story', 'Community'])
+    const q = pageRect(question, shapes)
+    const rows = themes.map((theme) => {
+      const t = pageRect(theme, shapes)
+      expect(t.x, `${textOf(theme)} right of the question`).toBeGreaterThan(q.x + q.w)
+      // Its ideas: the notes on its row (vertically centred on it), to its right.
+      const row = kids(f, 'note').filter((n) => {
+        const r = pageRect(n, shapes)
+        return Math.abs(r.y + r.h / 2 - (t.y + t.h / 2)) < 1 && r.x > t.x + t.w
+      })
+      for (const n of row) expect(n.props.color).toBe(theme.props.color)
+      const first = Math.min(...row.map((n) => pageRect(n, shapes).x))
+      expect(first - (t.x + t.w), `ideas next to ${textOf(theme)}`).toBeLessThan(80)
+      return row.length
+    })
+    expect(rows).toEqual([3, 2, 3])
+    // Every note belongs to one of the rows.
+    expect(kids(f, 'note')).toHaveLength(8)
+  })
+
+  it('2 · Brainstorm: a theme dragged 120 down lands on empty canvas, and the Story row has room for one more idea (DEMO.md 1:00)', () => {
+    const { f, themes } = brainstormParts()
+    const solid = childrenOf(records, f.id).filter((s) => s.type !== 'arrow')
+    const frameRect = pageRect(f, shapes)
     for (const theme of themes) {
       const t = pageRect(theme, shapes)
-      const cluster = kids(f, 'note').filter((n) => {
-        const r = pageRect(n, shapes)
-        return r.x >= t.x - 1 && r.x + r.w <= t.x + t.w + 1 && r.y > t.y + t.h && r.y - (t.y + t.h) < 60
-      })
-      expect(cluster, `notes under ${textOf(theme)}`).toHaveLength(2)
-      for (const n of cluster) expect(n.props.color).toBe(theme.props.color)
+      const moved = { ...t, y: t.y + 120 }
+      expect(rectContains(frameRect, moved), `${textOf(theme)} stays in the frame`).toBe(true)
+      for (const s of solid) {
+        if (s.id === theme.id) continue
+        expect(rectsOverlap(moved, pageRect(s, shapes)), `${textOf(theme)} dragged onto "${textOf(s)}"`).toBe(
+          false,
+        )
+      }
     }
+    // The Story row's third place is empty: B's note goes there in the demo.
+    const story = pageRect(must(themes[1]), shapes)
+    const notes = kids(f, 'note').map((n) => pageRect(n, shapes))
+    const storyNotes = notes.filter((r) => Math.abs(r.y + r.h / 2 - (story.y + story.h / 2)) < 1)
+    const last = storyNotes.reduce((a, b) => (a.x > b.x ? a : b))
+    const slot = { x: last.x + last.w + 20, y: last.y, w: last.w, h: last.h }
+    expect(rectContains(frameRect, slot)).toBe(true)
+    for (const s of solid) expect(rectsOverlap(slot, pageRect(s, shapes)), textOf(s)).toBe(false)
   })
 
   it('3 · Plan is a process diagram whose arrows are bound at both ends, with a review loop', () => {
@@ -205,26 +244,59 @@ describe('Lobby tour: the frames', () => {
       expect([a.props.kind, a.props.dash]).toEqual(['arc', 'solid'])
   })
 
-  it('4 · Mood board has six 16:9 image slots, each with an editable caption right under it', () => {
+  it('4 · Mood board is a finished-looking direction, not a wall of empty boxes (F10)', () => {
     const f = frame('4 · Mood board')
-    const slots = kids(f, 'geo')
-    expect(slots).toHaveLength(6)
-    const captions = kids(f, 'text').slice(2) // after the heading and the intro
-    expect(captions).toHaveLength(6)
+    const texts = kids(f, 'text')
+    const geos = kids(f, 'geo')
+    const slots = geos.filter((g) => g.meta.draftroomSlot === 'image')
+    const swatches = geos.filter((g) => g.meta.draftroomSwatch === 'color')
+    // Nothing else: every geo shape is a slot or a swatch.
+    expect(slots.length + swatches.length).toBe(geos.length)
+    // Section labels, locked like headings.
+    const labels = texts.filter((t) => ['References', 'Palette', 'Type'].includes(textOf(t)))
+    expect(labels.map(textOf)).toEqual(['References', 'Palette', 'Type'])
+    for (const l of labels) expect(l.isLocked).toBe(true)
+
+    // A couple of reference slots with a clear call to action, each captioned right under it.
+    expect(slots).toHaveLength(2)
     for (const slot of slots) {
       expect(slot.meta).toEqual(IMAGE_SLOT_META)
       expect(slot.isLocked).toBe(true)
       expect(slot.props.dash).toBe('dashed')
+      expect(textOf(slot)).toBe('Drop a reference here')
       expect(slot.props.w / slot.props.h).toBeCloseTo(16 / 9, 1)
       const s = pageRect(slot, shapes)
-      const caption = captions.filter((c) => {
+      const caption = texts.filter((c) => {
         const r = pageRect(c, shapes)
         return Math.abs(r.x - s.x) < 1 && r.y > s.y + s.h && r.y - (s.y + s.h) < 40
       })
       expect(caption, `caption under slot at ${s.x},${s.y}`).toHaveLength(1)
       expect(must(caption[0]).isLocked).toBe(false)
     }
-    expect(new Set(captions.map(textOf)).size).toBe(6)
+
+    // A palette: full-colour swatches, each named by a text right of it. Colours that keep their hue in
+    // tldraw's dark theme (black and white swap there, so a "charcoal" swatch would turn white).
+    expect(swatches.length).toBeGreaterThanOrEqual(4)
+    const colors = swatches.map((s) => s.props.color)
+    expect(new Set(colors).size).toBe(colors.length)
+    expect(colors[0]).toBe('orange') // DBC orange leads
+    for (const s of swatches) {
+      expect(['black', 'white']).not.toContain(s.props.color)
+      expect([s.props.fill, textOf(s), s.isLocked]).toEqual(['fill', '', false])
+      const r = pageRect(s, shapes)
+      const name = texts.filter((t) => {
+        const tr = pageRect(t, shapes)
+        return tr.x > r.x + r.w && tr.x - (r.x + r.w) < 40 && tr.y >= r.y - 1 && tr.y < r.y + r.h
+      })
+      expect(name.length, `name next to the ${s.props.color} swatch`).toBeGreaterThanOrEqual(1)
+      expect(textOf(must(name[0])).length).toBeGreaterThan(2)
+    }
+
+    // Type samples in three of tldraw's fonts, each labelled with its role.
+    const fonts = new Set(texts.map((t) => t.props.font))
+    for (const font of ['serif', 'sans', 'mono'] as const) expect(fonts).toContain(font)
+    const roles = texts.map(textOf).filter((t) => /^(Display|Body|HUD) · (serif|sans|mono)$/.test(t))
+    expect(roles).toEqual(['Display · serif', 'Body · sans', 'HUD · mono'])
   })
 
   it('5 · Retro has Went well, To improve and Actions, left to right, each with its own notes', () => {
@@ -290,6 +362,12 @@ describe('Lobby tour: legible in light and dark mode', () => {
 
   it('never puts text on a full-colour fill (tldraw has no dark label colour in dark mode)', () => {
     for (const s of shapesOf(records)) {
+      // Colour swatches are the one full fill, and they carry no text (their names sit beside them).
+      if (s.type === 'geo' && s.meta.draftroomSwatch === 'color') {
+        expect(s.meta).toEqual(SWATCH_META)
+        expect(textOf(s)).toBe('')
+        continue
+      }
       if (s.type === 'geo') {
         expect(textOf(s).length).toBeGreaterThan(0)
         expect(s.props.fill, textOf(s)).not.toBe('fill')
