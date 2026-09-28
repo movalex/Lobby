@@ -1,0 +1,4 @@
+/* pan-layer.ts: while a pure pan is in progress, the compositor moves tldraw's shapes layer. */
+.tl-container[data-dr-panning] .tl-html-layer {
+  will-change: transform;
+}

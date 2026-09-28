@@ -7,7 +7,7 @@ import {
 } from '@draftroom/contracts'
 import { getAssetUrlsByImport } from '@tldraw/assets/imports.vite'
 import { TLRemoteSyncError, useSync } from '@tldraw/sync'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   atom,
   computed,
@@ -58,6 +58,8 @@ import { BoardContext, type BoardContextValue } from './board-context.ts'
 import { EditingBadges } from './EditingBadges.tsx'
 import { ExternalContentHandlers, IMAGE_HANDLER_LIMITS, watchImagePreview } from './ExternalContent.tsx'
 import { NoticeRegion, useNotices } from './Notices.tsx'
+import { LobbyNoteShapeUtil } from './note-label-cache.ts'
+import { installPanLayer } from './pan-layer.ts'
 import { getDraftroomPresence, holderName, parseLeaseDenied } from './presence.ts'
 import { ShareDialog } from './ShareDialog.tsx'
 import { SyncErrorScreen } from './SyncErrorScreen.tsx'
@@ -67,8 +69,14 @@ import { installTouchStartGuard } from './touch-guard.ts'
 
 // Module level = referentially stable. useSync treats utils/assets/users/uri as effect dependencies
 // (an unstable one reconnects in a loop), and <Tldraw> re-creates the editor when utils change.
-const customShapeUtils = [FileCardShapeUtil]
-const syncShapeUtils = [...defaultShapeUtils, ...customShapeUtils] // useSync does NOT add the defaults
+// LobbyNoteShapeUtil is tldraw's note (same type, props and migrations) with its label measurement
+// cached by content (note-label-cache.ts); it replaces the default one in both lists.
+const customShapeUtils = [FileCardShapeUtil, LobbyNoteShapeUtil]
+const syncShapeUtils = [
+  // useSync does NOT add the defaults
+  ...defaultShapeUtils.filter((u) => !customShapeUtils.some((c) => c.type === u.type)),
+  ...customShapeUtils,
+]
 const assetUrls = getAssetUrlsByImport() // self-hosted fonts/icons/translations (no CDN)
 /** Longest an in-app navigation waits for this board's last changes to be acknowledged. */
 const LEAVE_WAIT_MS = 5_000
@@ -460,7 +468,10 @@ function BoardSession({
       storeAtom.set(ed.store)
       // Phones: no "Unable to preventDefault inside passive event listener" error per tap (F18).
       const uninstallTouchGuard = installTouchStartGuard(ed)
+      // Pans move the shapes layer on the compositor instead of repainting every shape (pan-layer.ts).
+      const uninstallPanLayer = installPanLayer(ed)
       return () => {
+        uninstallPanLayer()
         uninstallTouchGuard()
         if (storeAtom.get() === ed.store) storeAtom.set(null)
         uninstallRebaseGuard()
@@ -649,21 +660,7 @@ function BoardSession({
             {syncError !== null && !lostAccess && <SyncErrorScreen reason={syncError} onRetry={onRetry} />}
             {store.status === 'synced-remote' && (
               <div className="dr-board__editor">
-                <Tldraw
-                  store={store.store}
-                  shapeUtils={customShapeUtils}
-                  assetUrls={assetUrls}
-                  components={featureProps.components}
-                  overrides={featureProps.overrides}
-                  options={featureProps.options}
-                  // Collapsed mind-map branches (an editor constructor option, not in TldrawOptions).
-                  getShapeVisibility={mindmapShapeVisibility}
-                  onMount={onMount}
-                  {...IMAGE_HANDLER_LIMITS}
-                >
-                  <ExternalContentHandlers />
-                  <FeatureOverlays features={BOARD_FEATURES} ctx={featureCtx} />
-                </Tldraw>
+                <BoardCanvas store={store.store} onMount={onMount} featureCtx={featureCtx} />
               </div>
             )}
           </main>
@@ -685,6 +682,43 @@ function BoardSession({
     </BoardContext.Provider>
   )
 }
+
+/**
+ * The canvas, memoized (perf, docs/WAVE4-CONTRACTS.md §2): BoardSession re-renders whenever the save
+ * indicator changes, two or three times per edit (Saving… → Saved). A re-rendered <Tldraw> re-renders
+ * tldraw's UI providers, whose Actions and Tools context values are rebuilt on every render
+ * (tldraw 5.4.2 useDefaultHelpers: useGetEmbedDefinition returns a new function each time), and React
+ * then walks every memoized shape's subtree looking for consumers of those contexts. On a
+ * 4,700-shape board that made each local edit cost tens of milliseconds (e2e/perf). These props
+ * change only with the connection, the mount handler and the feature context.
+ */
+const BoardCanvas = memo(function BoardCanvas({
+  store,
+  onMount,
+  featureCtx,
+}: {
+  store: TLStore
+  onMount: TLOnMountHandler
+  featureCtx: FeatureContext | null
+}) {
+  return (
+    <Tldraw
+      store={store}
+      shapeUtils={customShapeUtils}
+      assetUrls={assetUrls}
+      components={featureProps.components}
+      overrides={featureProps.overrides}
+      options={featureProps.options}
+      // Collapsed mind-map branches (an editor constructor option, not in TldrawOptions).
+      getShapeVisibility={mindmapShapeVisibility}
+      onMount={onMount}
+      {...IMAGE_HANDLER_LIMITS}
+    >
+      <ExternalContentHandlers />
+      <FeatureOverlays features={BOARD_FEATURES} ctx={featureCtx} />
+    </Tldraw>
+  )
+})
 
 /** Someone who can grant access, for the blocked-edit hint: an owner other than me (null if unknown). */
 async function ownerName(boardId: string, selfUserId: string): Promise<string | null> {
