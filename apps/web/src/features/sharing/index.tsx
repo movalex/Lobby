@@ -6,10 +6,11 @@
 
 import type { ShareState } from '@draftroom/contracts'
 import { useEffect, useState } from 'react'
+import { useValue } from 'tldraw'
 import { useUserKind } from '../../invite/guest.tsx'
 import type { BoardFeature, FeatureContext } from '../types.ts'
 import { announceRemoteShareChange, openShareDialog, SHARE_CHANGED_EVENT, sharingApi } from './api.ts'
-import { boardExportState, syncExportPolicy } from './export-policy.ts'
+import { boardExportState, exportAllowedOnBoard, syncExportPolicy } from './export-policy.ts'
 import { shareBadge } from './model.ts'
 import './sharing.css'
 
@@ -129,8 +130,20 @@ function ExportPolicySync({ ctx }: { ctx: FeatureContext }) {
   useEffect(() => {
     boardExportState(board.id).guest.set(kind === null ? null : kind === 'guest')
   }, [board.id, kind])
+  // F2-04: tldraw's image and video toolbars always offer "Download original"; sharing.css hides it
+  // (and a toolbar left empty) while this person may not export.
+  const exportOff = useValue('dr-export-off-attr', () => !exportAllowedOnBoard(board.id), [board.id])
+  useEffect(() => {
+    const container = editor.getContainer()
+    if (!exportOff) return
+    container.setAttribute(EXPORT_OFF_ATTR, 'true')
+    return () => container.removeAttribute(EXPORT_OFF_ATTR)
+  }, [editor, exportOff])
   return null
 }
+
+/** Set on tldraw's container while exporting is off for this person (F2-04, sharing.css). */
+const EXPORT_OFF_ATTR = 'data-dr-export-off'
 
 export const sharingFeature: BoardFeature = {
   id: 'sharing',

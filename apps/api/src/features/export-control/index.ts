@@ -18,7 +18,7 @@ import { requireBoardAction } from '../../access.ts'
 import type { Params } from '../../context.ts'
 import { parse } from '../../errors.ts'
 import type { FeatureContext } from '../context.ts'
-import { exportAllowedForCaller, loadExportPolicy } from './policy.ts'
+import { exportAllowedForCaller, loadExportPolicy, loadExportPolicyRow } from './policy.ts'
 
 /** Owners flipping the checkbox back and forth: generous, but not a firehose of board events. */
 const PUT_RATE = { config: { rateLimit: { max: 60, timeWindow: 60_000 } } }
@@ -30,8 +30,12 @@ export async function registerExportControl(app: FastifyInstance, ctx: FeatureCo
     const user = await ctx.requireUser(req)
     const { bid = '' } = req.params as Params
     const access = await requireBoardAction(db, bid, user.id, 'view')
-    const exportPolicy = await loadExportPolicy(db, access.board.id)
-    return { exportPolicy, canExport: await exportAllowedForCaller(db, access, user.id, exportPolicy) }
+    const { policy: exportPolicy, set } = await loadExportPolicyRow(db, access.board.id)
+    return {
+      exportPolicy,
+      canExport: await exportAllowedForCaller(db, access, user.id, exportPolicy),
+      policySet: set,
+    }
   })
 
   app.put('/api/boards/:bid/export-policy', PUT_RATE, async (req): Promise<ExportPolicyState> => {
@@ -53,16 +57,20 @@ export async function registerExportControl(app: FastifyInstance, ctx: FeatureCo
       return { previous, access }
     })
     // After the commit; nothing to tell anyone when nothing changed.
-    if (previous !== input.exportPolicy) publishPolicy(ctx, access.board.id, input.exportPolicy)
+    if (previous !== input.exportPolicy) publishExportPolicy(ctx, access.board.id, input.exportPolicy)
     return {
       exportPolicy: input.exportPolicy,
       canExport: await exportAllowedForCaller(db, access, user.id, input.exportPolicy),
+      policySet: true,
     }
   })
 }
 
-/** The board's policy only: the same, safe payload for every viewer of the board. */
-function publishPolicy(ctx: FeatureContext, boardId: string, exportPolicy: ExportPolicy) {
+/**
+ * The board's policy only: the same, safe payload for every viewer of the board. After the change
+ * committed (a PUT here, or a client link that set it: dashboard/review-links.ts).
+ */
+export function publishExportPolicy(ctx: FeatureContext, boardId: string, exportPolicy: ExportPolicy) {
   const data: ExportPolicyEvent = { exportPolicy }
   ctx.events.publish(boardId, { type: EXPORT_CONTROL_EVENTS.policy, data })
 }

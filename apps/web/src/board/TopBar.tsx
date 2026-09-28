@@ -72,6 +72,7 @@ export function TopBar({
 }) {
   const home = workspacePath(workspace.id)
   const pill = readonlyPill(role, board.status)
+  const pillIcon = board.status !== 'archived' && can(role, 'comment', board.status) ? 'comment' : 'eye'
   // PRI-02: at 768 px and below the feature controls (present, export, timer, sharing badge) move
   // into a "⋯" menu; at 480 px and below the people list and the account button do too. The title,
   // the bell and Share always stay in the bar.
@@ -126,11 +127,22 @@ export function TopBar({
           disabled={!pill.request}
           onClick={onRequestAccess}
         >
-          <svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true">
-            <path
-              d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12zm10 3a3 3 0 1 0 0-6 3 3 0 0 0 0 6z"
-              fill="currentColor"
-            />
+          {/* DANA-11: a speech bubble for "Can comment", the eye for view only. */}
+          <svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true" data-icon={pillIcon}>
+            {pillIcon === 'comment' ? (
+              <path
+                d="M4 5.5A2.5 2.5 0 0 1 6.5 3h11A2.5 2.5 0 0 1 20 5.5v8a2.5 2.5 0 0 1-2.5 2.5H10l-4.2 3.6c-.6.5-1.8.2-1.8-.8z"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.4"
+                strokeLinejoin="round"
+              />
+            ) : (
+              <path
+                d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12zm10 3a3 3 0 1 0 0-6 3 3 0 0 0 0 6z"
+                fill="currentColor"
+              />
+            )}
           </svg>
           <span className="dr-pill__label">{pill.label}</span>
         </button>

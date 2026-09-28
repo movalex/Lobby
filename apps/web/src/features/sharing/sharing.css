@@ -97,6 +97,27 @@
 .dr-sharing__client .dr-share__hint {
   margin-top: 0;
 }
+/* DANA2-01: whether clients can download files and export, and the way to change it. */
+.dr-sharing__client .dr-share__hint.dr-sharing__client-export {
+  margin: 8px 0 10px;
+  color: var(--dr-ink);
+}
+.dr-sharing__client-export .dr-linkbtn {
+  margin-left: 2px;
+}
+
+/* F2-04: while exporting is off for this person, tldraw's image and video toolbars offer no
+   "Download original" (the api refuses it anyway), and a toolbar left with nothing to offer is gone. */
+.tl-container[data-dr-export-off="true"]
+:is([data-testid="tool.image-download"], [data-testid="tool.video-download"]) {
+  display: none;
+}
+.tl-container[data-dr-export-off="true"]
+  .tlui-media__toolbar:not(
+    :has(button:not(:is([data-testid="tool.image-download"], [data-testid="tool.video-download"])))
+  ) {
+  display: none;
+}
 
 /* DANA-03: "More ways to share" (workshop link, invite by email, one-time links), collapsed. */
 .dr-sharing__more > summary {

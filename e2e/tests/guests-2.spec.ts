@@ -209,7 +209,7 @@ test('a workshop guest under "editors": limited like a viewer, no Recently delet
 
     // SEAM-04: the server says this guest may not export, and the export entry says why.
     const policy = await g.request.get(`/api/boards/${board}/export-policy`)
-    expect(await policy.json()).toEqual({ exportPolicy: 'editors', canExport: false })
+    expect(await policy.json()).toEqual({ exportPolicy: 'editors', canExport: false, policySet: true })
     expect((await g.request.get(`/api/boards/${board}/export`)).status()).toBe(403)
     await expect(g.getByTestId('export-button')).toHaveAttribute('data-export-off', '')
 

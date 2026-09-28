@@ -51,6 +51,12 @@ export const ExportPolicyState = z.object({
   exportPolicy: ExportPolicy,
   /** Whether the CALLER may export, copy and download on this board. */
   canExport: z.boolean(),
+  /**
+   * Whether the policy is stored: an owner chose it, or a client link set it (DANA2-01). False while
+   * the board uses the default, which the first viewer or commenter review link turns to 'editors'.
+   * Optional: an older server leaves it out.
+   */
+  policySet: z.boolean().optional(),
 })
 export type ExportPolicyState = z.infer<typeof ExportPolicyState>
 

@@ -16,6 +16,7 @@ import type { BoardEvents } from '../events.ts'
 import { getController } from '../present-export/controller.ts'
 import {
   boardExportState,
+  clientExportAllowed,
   EXPORT_OFF_TEXT,
   exportAllowed,
   exportAllowedOnBoard,
@@ -120,6 +121,34 @@ describe('the Export dialog sentence follows the policy (F9)', () => {
     expect(exportPolicySentence(exportPolicyOf(m.editor))).toContain('Everyone who can view')
     m.stop()
     expect(exportPolicyOf(m.editor)).toBeNull()
+  })
+})
+
+describe("the Share dialog's client card line (DANA2-01)", () => {
+  it('off under editors, and on a board nobody chose for (the first client link turns it off); on only when chosen', () => {
+    expect(clientExportAllowed(null, null)).toBeNull()
+    expect(clientExportAllowed('editors', null)).toBe(false)
+    expect(clientExportAllowed('editors', true)).toBe(false)
+    expect(clientExportAllowed('everyone', false)).toBe(false)
+    expect(clientExportAllowed('everyone', true)).toBe(true)
+    expect(clientExportAllowed('everyone', null)).toBeNull()
+  })
+
+  it('the store learns whether the policy is stored from answers, and every event means it is', async () => {
+    const m = mount()
+    const s = boardExportState(m.boardId)
+    expect(s.stored.get()).toBeNull()
+    m.pending[0]?.resolve({ exportPolicy: 'everyone', canExport: true, policySet: false })
+    await flush()
+    expect(s.stored.get()).toBe(false)
+    m.ev.emit('export-control.policy', { exportPolicy: 'editors' }) // a client link was created
+    expect(s.stored.get()).toBe(true)
+    expect(clientExportAllowed(s.policy.get(), s.stored.get())).toBe(false)
+    // An older server leaves the flag out: what was known stays.
+    const again = refreshExportPolicy(m.api, m.boardId)
+    m.pending[1]?.resolve({ exportPolicy: 'editors', canExport: false })
+    await again
+    expect(s.stored.get()).toBe(true)
   })
 })
 
