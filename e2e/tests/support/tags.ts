@@ -4,7 +4,7 @@ import { type Browser, type BrowserContext, expect, type Page } from '@playwrigh
 import { waitForBoard } from './board.ts'
 import { editEd, readEd } from './canvas-ux.ts'
 import { editBd, readBd } from './canvas-ux-2.ts'
-import { closeShare, openShareFromButton, shareDialog } from './dashboard-share.ts'
+import { closeShare, openMoreWaysToShare, openShareFromButton, shareDialog } from './dashboard-share.ts'
 import { richText } from './editor.ts'
 
 export interface Tag {
@@ -159,6 +159,7 @@ export async function forgeTagWrites(page: Page, noteId: string) {
 export async function createGuestLink(page: Page, kind: 'review' | 'workshop'): Promise<string> {
   await openShareFromButton(page)
   const dialog = shareDialog(page)
+  if (kind === 'workshop') await openMoreWaysToShare(page) // DANA-03
   await dialog.getByTestId(kind === 'review' ? 'review-link-guests' : 'workshop-link-guests').check()
   if (kind === 'review') await dialog.getByTestId('review-link-role').selectOption('commenter')
   await dialog.getByTestId(kind === 'review' ? 'review-link-create' : 'workshop-link-create').click()

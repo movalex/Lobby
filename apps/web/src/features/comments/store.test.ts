@@ -1,8 +1,14 @@
 import type { CommentAnchor, CommentThread, ListThreadsResponse } from '@draftroom/contracts'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { CommentsApi } from './api.ts'
+import type { Mentionable } from './mentions.ts'
 import { draftsKey, type KeyValueStorage, pinsHiddenKey } from './prefs.ts'
-import { CommentsStore, NEW_THREAD_DRAFT } from './store.ts'
+import {
+  CommentsStore,
+  MENTIONABLES_MISS_REFETCH_MS,
+  mayChangeWhoHasAccess,
+  NEW_THREAD_DRAFT,
+} from './store.ts'
 
 const BOARD = 'b-0123456789'
 const ME = 'usr_me0000000000000000'
@@ -291,5 +297,125 @@ describe('live bell and resolve feedback', () => {
     expect(await store.setStatus(open.id, 'reopen')).toBe(true)
     expect(store.thread(open.id)?.status).toBe('open')
     expect(onResolved).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('who can be @mentioned follows sharing changes (F4)', () => {
+  const lena: Mentionable = { userId: 'usr_lena000000000000000', name: 'Lena Ortiz', handle: 'lena' }
+
+  it('a sharing change refetches a loaded list once per burst, so someone just added is mentionable', async () => {
+    vi.useFakeTimers()
+    try {
+      const api = fakeApi()
+      api.mentionables = vi.fn().mockResolvedValueOnce([]).mockResolvedValueOnce([lena])
+      const s = make(api)
+      await s.ensureMentionables()
+      expect(s.mentionables.get()).toEqual([])
+      // A grant, then a guest joining, arrive close together: one refetch.
+      s.handleEvent('sharing.changed', { reason: 'grant' })
+      s.handleEvent('sharing.changed', { reason: 'guest-joined' })
+      expect(s.mentionables.get()).toEqual([]) // the old list stays until the new one lands
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(api.mentionables).toHaveBeenCalledTimes(2)
+      expect(s.mentionables.get()).toEqual([lena])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('a new or denied access request changes nobody’s access: no refetch; an approval does', async () => {
+    vi.useFakeTimers()
+    try {
+      const api = fakeApi()
+      const s = make(api)
+      await s.ensureMentionables()
+      s.handleEvent('sharing.changed', { reason: 'access-request' })
+      s.handleEvent('sharing.changed', { reason: 'access-request-deny' })
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(api.mentionables).toHaveBeenCalledTimes(1)
+      s.handleEvent('sharing.changed', { reason: 'access-request-approve' })
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(api.mentionables).toHaveBeenCalledTimes(2)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('a list never fetched stays unfetched (the next @ asks); a disposed store never fetches', async () => {
+    vi.useFakeTimers()
+    try {
+      const api = fakeApi()
+      const s = make(api)
+      s.invalidateMentionables()
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(api.mentionables).not.toHaveBeenCalled()
+      await s.ensureMentionables()
+      s.invalidateMentionables()
+      s.dispose()
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(api.mentionables).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('an @query that matches nobody asks again, at most once per few seconds', async () => {
+    vi.useFakeTimers()
+    try {
+      const api = fakeApi()
+      api.mentionables = vi.fn().mockResolvedValueOnce([]).mockResolvedValue([lena])
+      const s = make(api)
+      s.refetchMentionablesOnMiss() // nothing loaded yet: the composer's first @ loads it
+      expect(api.mentionables).not.toHaveBeenCalled()
+      await s.ensureMentionables()
+      s.refetchMentionablesOnMiss() // just asked
+      expect(api.mentionables).toHaveBeenCalledTimes(1)
+      await vi.advanceTimersByTimeAsync(MENTIONABLES_MISS_REFETCH_MS + 1)
+      s.refetchMentionablesOnMiss()
+      s.refetchMentionablesOnMiss()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(api.mentionables).toHaveBeenCalledTimes(2)
+      expect(s.mentionables.get()).toEqual([lena])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('only the newest answer lands (an older, slower answer never overwrites it)', async () => {
+    vi.useFakeTimers()
+    try {
+      let releaseOld: (v: Mentionable[]) => void = () => {}
+      const api = fakeApi()
+      api.mentionables = vi
+        .fn()
+        .mockResolvedValueOnce([])
+        .mockImplementationOnce(
+          () =>
+            new Promise<Mentionable[]>((r) => {
+              releaseOld = r
+            }),
+        )
+        .mockResolvedValueOnce([lena])
+      const s = make(api)
+      await s.ensureMentionables()
+      s.invalidateMentionables(0)
+      await vi.advanceTimersByTimeAsync(0) // the slow request is out
+      s.invalidateMentionables(0)
+      await vi.advanceTimersByTimeAsync(0) // the newer one answered
+      expect(s.mentionables.get()).toEqual([lena])
+      releaseOld([])
+      await vi.advanceTimersByTimeAsync(0)
+      expect(s.mentionables.get()).toEqual([lena])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('only a new or denied request is known not to change who has access', () => {
+    expect(mayChangeWhoHasAccess({ reason: 'access-request' })).toBe(false)
+    expect(mayChangeWhoHasAccess({ reason: 'access-request-deny' })).toBe(false)
+    for (const reason of ['grant', 'visibility', 'guest-joined', 'review-link-revoked', 'something-new'])
+      expect(mayChangeWhoHasAccess({ reason })).toBe(true)
+    expect(mayChangeWhoHasAccess(null)).toBe(true)
   })
 })

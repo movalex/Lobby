@@ -91,6 +91,18 @@ export async function openShareFromButton(page: Page) {
   await expect(shareDialog(page)).toBeVisible()
 }
 
+/**
+ * DANA-03: the workshop link, invite by email and one-time invite links sit under the collapsed "More
+ * ways to share" (it opens by itself when a workshop link is running). Opens it if it is closed.
+ */
+export async function openMoreWaysToShare(page: Page) {
+  const more = shareDialog(page).getByTestId('share-more')
+  // Once the links have loaded, it no longer opens by itself (a click now cannot race that).
+  await expect(more).toHaveAttribute('data-loaded', 'true')
+  if ((await more.getAttribute('open')) === null) await more.getByTestId('share-more-toggle').click()
+  await expect(more).toHaveAttribute('open', '')
+}
+
 export async function closeShare(page: Page) {
   await page.keyboard.press('Escape')
   await expect(shareDialog(page)).toHaveCount(0)

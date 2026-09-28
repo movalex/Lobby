@@ -5,9 +5,11 @@
 // sees who has access and can ask for more. The API enforces every rule; this only offers what the
 // shared permission rules allow.
 //
-// Order for board owners (F13): the invite forms, pending requests, then the workshop and review links
-// (what people open this dialog for in a session, in view without scrolling at 1440 x 900), then the
-// settings (workspace access, export), who has access, and single-use invite links.
+// Order for board owners (DANA-03 / F3, after F13): "Share with a client" first (one review link:
+// comment, 14 days, join with just a name, created and copied by one button), then "Invite people",
+// pending requests, "More ways to share" (collapsed: workshop link, invite by email, one-time invite
+// links), then the settings (workspace access, export) and who has access. Every guest option sits
+// above its Create button and applies to the link that button makes.
 
 import type {
   AccessRequest,
@@ -20,7 +22,7 @@ import type {
   ShareState,
   WorkspaceMember,
 } from '@draftroom/contracts'
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
+import { type ReactNode, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { api, isApiError } from '../api/client.ts'
 import { useSession } from '../auth/session.tsx'
 import { announceShareChanged, SHARE_REMOTE_EVENT, sharingApi } from '../features/sharing/api.ts'
@@ -50,7 +52,9 @@ import { Dialog } from '../ui/Dialog.tsx'
 import {
   type AccessDetail,
   accessSource,
+  CLIENT_LINK_DEFAULTS,
   checkInviteEmail,
+  clientLinkHint,
   type EmailInviteOutcome,
   emailInviteHint,
   emailInviteOutcome,
@@ -58,6 +62,7 @@ import {
   inviteRoleOptions,
   linkAccessLine,
   linkForEmailHint,
+  moreWaysSummary,
   parseInviteTarget,
   ROLE_OPTION_LABEL,
   removalNote,
@@ -65,6 +70,8 @@ import {
   shareableWorkspaceMembers,
   sortMembers,
   VISIBILITY_OPTIONS,
+  WORKSHOP_LINK_GUESTS_DEFAULT,
+  workshopLinkHint,
 } from './share-model.ts'
 
 const sharing = sharingApi(api)
@@ -210,6 +217,10 @@ export function ShareDialog({
   const self = rows.find((m) => m.user.id === selfUserId)
   const canTransfer = canManage && self?.grant === 'owner'
   const selfRole = self?.role ?? effectiveRole
+  const allInvites = invitations.data ?? []
+  const reviewLinks = allInvites.filter((i) => i.kind === 'review' && i.role !== 'editor')
+  const workshopLinks = allInvites.filter((i) => i.kind === 'review' && i.role === 'editor')
+  const oneTimeInvites = allInvites.filter((i) => i.kind === 'invite')
 
   return (
     <Dialog
@@ -224,6 +235,20 @@ export function ShareDialog({
       size="lg"
     >
       <div className="dr-share dr-sharing">
+        {/* DANA-03 / F3: the one obvious path for a client, first. A review link that lets people
+            comment for 14 days and join with just a name; one button creates and copies it. */}
+        {canManage && (
+          <ClientLinkSection
+            boardId={board.id}
+            links={reviewLinks}
+            onChange={() => {
+              invitations.reload()
+              members.reload()
+              changed()
+            }}
+          />
+        )}
+
         {canManage && (
           <InvitePeople
             boardId={board.id}
@@ -238,20 +263,6 @@ export function ShareDialog({
           />
         )}
 
-        {canManage && (
-          <EmailInvite
-            boardId={board.id}
-            canEmail={canEmail}
-            onResult={(result) => {
-              if (result.mode === 'granted') {
-                if (result.alreadyHadAccess) return
-                members.reload()
-                changed()
-              } else invitations.reload()
-            }}
-          />
-        )}
-
         {canManage && (requests.data?.length ?? 0) > 0 && (
           <AccessRequests
             requests={requests.data ?? []}
@@ -263,29 +274,39 @@ export function ShareDialog({
           />
         )}
 
-        {/* F13: the links people come to this dialog for (a workshop, a client review) sit right under
-            the invite forms, above the fold at 1440 x 900; settings and the people list follow. */}
+        {/* DANA-03: the other mechanisms, one click away. An open workshop link opens this on the
+            first load (a facilitator's "+1 h" stays at hand); the summary names what is open inside. */}
         {canManage && (
-          <WorkshopLinksSection
-            boardId={board.id}
-            links={(invitations.data ?? []).filter((i) => i.kind === 'review' && i.role === 'editor')}
-            onChange={() => {
-              invitations.reload()
-              members.reload()
-              changed()
-            }}
-          />
-        )}
-        {canManage && (
-          <ReviewLinksSection
-            boardId={board.id}
-            links={(invitations.data ?? []).filter((i) => i.kind === 'review' && i.role !== 'editor')}
-            onChange={() => {
-              invitations.reload()
-              members.reload()
-              changed()
-            }}
-          />
+          <MoreWaysToShare
+            workshopLinks={invitations.data ? workshopLinks.length : null}
+            unusedInvites={oneTimeInvites.length}
+          >
+            <WorkshopLinksSection
+              boardId={board.id}
+              links={workshopLinks}
+              onChange={() => {
+                invitations.reload()
+                members.reload()
+                changed()
+              }}
+            />
+            <EmailInvite
+              boardId={board.id}
+              canEmail={canEmail}
+              onResult={(result) => {
+                if (result.mode === 'granted') {
+                  if (result.alreadyHadAccess) return
+                  members.reload()
+                  changed()
+                } else invitations.reload()
+              }}
+            />
+            <InviteLinkSection
+              boardId={board.id}
+              invitations={oneTimeInvites}
+              onChange={() => invitations.reload()}
+            />
+          </MoreWaysToShare>
         )}
 
         <VisibilitySection
@@ -382,14 +403,6 @@ export function ShareDialog({
               />
             </section>
           )}
-
-        {canManage && (
-          <InviteLinkSection
-            boardId={board.id}
-            invitations={(invitations.data ?? []).filter((i) => i.kind === 'invite')}
-            onChange={() => invitations.reload()}
-          />
-        )}
 
         <CopyBoardLink boardId={board.id} />
       </div>
@@ -1386,7 +1399,7 @@ function WorkshopLinksSection({
 }) {
   const hoursId = useId()
   const [hours, setHours] = useState<number>(WORKSHOP_LINK_DEFAULT_HOURS)
-  const [allowGuests, setAllowGuests] = useState(false)
+  const [allowGuests, setAllowGuests] = useState<boolean>(WORKSHOP_LINK_GUESTS_DEFAULT)
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [justCreated, setJustCreated] = useState<{ id: string; copied: boolean } | null>(null)
@@ -1414,11 +1427,12 @@ function WorkshopLinksSection({
       <h3 id={`${hoursId}-h`} className="dr-share__heading">
         Workshop link
       </h3>
-      <p className="dr-share__hint">
-        For a live session: anyone with the link can edit, after signing in, for a few hours. Their edit
-        access ends with the link.
+      <p className="dr-share__hint" data-testid="workshop-link-hint">
+        {workshopLinkHint(allowGuests)}
       </p>
-      <div className="dr-row dr-row--wrap">
+      {/* R15: the guest choice comes before Create, and applies to the link it makes. */}
+      <GuestsOption testId="workshop-link-guests" checked={allowGuests} onChange={setAllowGuests} />
+      <div className="dr-row dr-row--wrap dr-sharing__create">
         <label htmlFor={hoursId} className="dr-sr-only">
           Workshop link works for
         </label>
@@ -1445,7 +1459,6 @@ function WorkshopLinksSection({
           Create workshop link
         </button>
       </div>
-      <GuestsOption testId="workshop-link-guests" checked={allowGuests} onChange={setAllowGuests} />
       {error && (
         <p className="dr-share__error" role="alert">
           {error}
@@ -1469,7 +1482,12 @@ function WorkshopLinksSection({
   )
 }
 
-function ReviewLinksSection({
+/**
+ * "Share with a client" (DANA-03 / F3): a review link, the path most people open this dialog for.
+ * Comment, 14 days and "join with just a name" are preselected; the guest option sits above the one
+ * button, which creates the link and copies it. Role and expiry stay one select away.
+ */
+function ClientLinkSection({
   boardId,
   links,
   onChange,
@@ -1480,9 +1498,9 @@ function ReviewLinksSection({
 }) {
   const roleId = useId()
   const daysId = useId()
-  const [role, setRole] = useState<'viewer' | 'commenter'>('commenter')
+  const [role, setRole] = useState<'viewer' | 'commenter'>(CLIENT_LINK_DEFAULTS.role)
   const [days, setDays] = useState<number>(REVIEW_LINK_DEFAULT_DAY)
-  const [allowGuests, setAllowGuests] = useState(false)
+  const [allowGuests, setAllowGuests] = useState<boolean>(CLIENT_LINK_DEFAULTS.allowGuests)
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [justCreated, setJustCreated] = useState<{ id: string; copied: boolean } | null>(null)
@@ -1502,15 +1520,19 @@ function ReviewLinksSection({
   }
 
   return (
-    <section className="dr-share__section" aria-labelledby={`${roleId}-h`}>
-      <h3 id={`${roleId}-h`} className="dr-share__heading">
-        Review links
+    <section
+      className="dr-share__section dr-sharing__client"
+      aria-labelledby={`${roleId}-h`}
+      data-testid="share-client"
+    >
+      <h3 id={`${roleId}-h`} className="dr-share__heading dr-sharing__client-heading">
+        Share with a client
       </h3>
-      <p className="dr-share__hint">
-        One link for many people (clients, reviewers) to view or comment, never edit. Their access ends with
-        the link.
+      <p className="dr-share__hint" data-testid="review-link-hint">
+        {clientLinkHint(role, allowGuests)}
       </p>
-      <div className="dr-row dr-row--wrap">
+      <GuestsOption testId="review-link-guests" checked={allowGuests} onChange={setAllowGuests} />
+      <div className="dr-row dr-row--wrap dr-sharing__create">
         <label htmlFor={roleId} className="dr-sr-only">
           What people with the review link can do
         </label>
@@ -1542,15 +1564,15 @@ function ReviewLinksSection({
         </select>
         <button
           type="button"
-          className="dr-btn"
+          className="dr-btn dr-btn--primary"
           data-testid="review-link-create"
           disabled={pending}
+          aria-busy={pending || undefined}
           onClick={() => void create()}
         >
-          Create review link
+          {pending ? 'Creating…' : 'Create and copy link'}
         </button>
       </div>
-      <GuestsOption testId="review-link-guests" checked={allowGuests} onChange={setAllowGuests} />
       {error && (
         <p className="dr-share__error" role="alert">
           {error}
@@ -1574,8 +1596,51 @@ function ReviewLinksSection({
 }
 
 /**
- * Wave 3 (guests): "Anyone with the link can join with just a name (no account)", off by default. The
- * server keeps guests to this board and marks their name everywhere.
+ * DANA-03: workshop link, invite by email and one-time invite links, behind one native disclosure
+ * (keyboard and screen readers get its expanded state for free). It opens by itself once, on the
+ * first load, when a workshop link is running; the person's own toggling wins after that.
+ */
+function MoreWaysToShare({
+  workshopLinks,
+  unusedInvites,
+  children,
+}: {
+  /** Open workshop links; null until the invitations have loaded. */
+  workshopLinks: number | null
+  unusedInvites: number
+  children: ReactNode
+}) {
+  const [open, setOpen] = useState(false)
+  // Whether the first load has decided the opening state (from then on, only the person toggles it).
+  const [settled, setSettled] = useState(false)
+  useEffect(() => {
+    if (settled || workshopLinks === null) return
+    setSettled(true)
+    if (workshopLinks > 0) setOpen(true)
+  }, [settled, workshopLinks])
+  return (
+    <details
+      className="dr-share__section dr-sharing__more"
+      data-testid="share-more"
+      data-loaded={settled}
+      open={open}
+      onToggle={(e) => setOpen(e.currentTarget.open)}
+    >
+      <summary className="dr-sharing__more-summary" data-testid="share-more-toggle">
+        <span className="dr-sharing__more-title">More ways to share</span>
+        <span className="dr-sharing__more-sub" data-testid="share-more-summary">
+          {moreWaysSummary({ workshopLinks: workshopLinks ?? 0, unusedInvites })}
+        </span>
+      </summary>
+      {children}
+    </details>
+  )
+}
+
+/**
+ * Wave 3 (guests): "Anyone with the link can join with just a name (no account)". On for a client
+ * link, off for a workshop (edit) link; always above the Create button it applies to. The server
+ * keeps guests to this board and marks their name everywhere.
  */
 function GuestsOption({
   testId,

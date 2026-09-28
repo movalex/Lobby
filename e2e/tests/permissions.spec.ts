@@ -14,6 +14,7 @@ import {
   signInThroughUi,
   waitForBoard,
 } from './support/board.ts'
+import { openMoreWaysToShare } from './support/dashboard-share.ts'
 import { richText } from './support/editor.ts'
 import { expect, test } from './support/fixtures.ts'
 import { WEB_URL } from './support/ports.ts'
@@ -283,6 +284,7 @@ test('invitation link: alice invites as commenter; carol signs in, accepts, and 
     await a.page.getByTestId('share-button').click()
     const dialog = a.page.getByTestId('share-dialog')
     await expect(dialog.getByTestId('share-workspace-name')).toHaveText(`${aliceUser.name}'s workspace`)
+    await openMoreWaysToShare(a.page) // DANA-03: one-time invite links are under "More ways to share"
     await dialog.getByTestId('invite-role').selectOption('commenter')
     await dialog.getByTestId('invite-create').click()
     await expect(dialog.getByTestId('invite-link')).toHaveValue(/\/invite\//)

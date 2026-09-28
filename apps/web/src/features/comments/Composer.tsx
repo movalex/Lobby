@@ -78,6 +78,12 @@ export function Composer({
     [query, people, store.meId],
   )
   const showList = query !== null && (suggestions.length > 0 || (people !== null && query.query.length > 0))
+  // F4: nobody matches. Ask the server once more (throttled in the store) before trusting "Nobody with
+  // access matches": someone may have just been given access. A new answer updates the list above.
+  const miss = query !== null && query.query.length > 0 && people !== null && suggestions.length === 0
+  useEffect(() => {
+    if (miss) store.refetchMentionablesOnMiss()
+  }, [miss, store])
 
   const update = (next: Draft, caret: number) => {
     setDraftState(next)

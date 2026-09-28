@@ -6,7 +6,13 @@
 // next to the writes only a forged client sends, which it must refuse or strip without a push loop.
 import type { Browser, BrowserContext, Page } from '@playwright/test'
 import { edit, read, waitForBoard } from './support/board.ts'
-import { closeShare, openShareFromButton, shareDialog, signedInContext } from './support/dashboard-share.ts'
+import {
+  closeShare,
+  openMoreWaysToShare,
+  openShareFromButton,
+  shareDialog,
+  signedInContext,
+} from './support/dashboard-share.ts'
 import { type EditorLike, plainText, richText } from './support/editor.ts'
 import { expect, test } from './support/fixtures.ts'
 
@@ -99,6 +105,7 @@ async function workshopGuestLink(page: Page, board: string): Promise<string> {
   await waitForBoard(page)
   await openShareFromButton(page)
   const dialog = shareDialog(page)
+  await openMoreWaysToShare(page) // DANA-03: the workshop link is under "More ways to share"
   await dialog.getByTestId('workshop-link-guests').check()
   await dialog.getByTestId('workshop-link-create').click()
   const row = dialog.getByTestId('workshop-link-row')

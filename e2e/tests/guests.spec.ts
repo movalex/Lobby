@@ -15,6 +15,7 @@ import {
 import {
   closeShare,
   memberRow,
+  openMoreWaysToShare,
   openShareFromButton,
   shareDialog,
   signedInContext,
@@ -30,10 +31,16 @@ async function createGuestLink(page: Page, board: string, kind: 'review' | 'work
   await waitForBoard(page)
   await openShareFromButton(page)
   const dialog = shareDialog(page)
+  // DANA-03: the workshop link sits under "More ways to share".
+  if (kind === 'workshop') await openMoreWaysToShare(page)
   const guests = dialog.getByTestId(kind === 'review' ? 'review-link-guests' : 'workshop-link-guests')
-  // Off by default; the label says what it does.
-  await expect(guests).not.toBeChecked()
+  // On by default for a client (review) link, off for a workshop (edit) link; the label says what it
+  // does, and it sits above the Create button it applies to.
+  if (kind === 'review') await expect(guests).toBeChecked()
+  else await expect(guests).not.toBeChecked()
   await expect(guests).toHaveAccessibleName('Anyone with the link can join with just a name (no account)')
+  const create = dialog.getByTestId(kind === 'review' ? 'review-link-create' : 'workshop-link-create')
+  expect((await guests.boundingBox())?.y ?? Infinity).toBeLessThan((await create.boundingBox())?.y ?? 0)
   await guests.check()
   if (kind === 'review') await dialog.getByTestId('review-link-role').selectOption('commenter')
   await dialog.getByTestId(kind === 'review' ? 'review-link-create' : 'workshop-link-create').click()

@@ -36,6 +36,20 @@ export function isAccessRequestChange(data: unknown): boolean {
   return typeof reason === 'string' && reason.startsWith('access-request')
 }
 
+/**
+ * F4: whether a `sharing.changed` can change who has access (so who can be mentioned). Only a new
+ * access request, or a denied one, certainly does not; anything else (and any unknown reason) does.
+ */
+export function mayChangeWhoHasAccess(data: unknown): boolean {
+  const reason = (data as { reason?: unknown } | null)?.reason
+  return reason !== 'access-request' && reason !== 'access-request-deny'
+}
+
+/** A burst of sharing changes (several guests joining) costs one refetch of the mention list. */
+export const MENTIONABLES_REFRESH_DELAY_MS = 300
+/** An @query that matches nobody asks the server again at most this often. */
+export const MENTIONABLES_MISS_REFETCH_MS = 5_000
+
 export interface CommentsStoreOptions {
   boardId: string
   meId: string
@@ -88,6 +102,9 @@ export class CommentsStore {
   private loadSeq = 0
   private notificationsTimer: ReturnType<typeof setTimeout> | null = null
   private mentionablesLoading: Promise<void> | null = null
+  private mentionablesSeq = 0
+  private mentionablesAskedAt = 0
+  private mentionablesTimer: ReturnType<typeof setTimeout> | null = null
   private readonly pendingReads = new Set<string>()
   private disposed = false
 
@@ -111,6 +128,8 @@ export class CommentsStore {
   dispose() {
     this.disposed = true
     if (this.notificationsTimer) clearTimeout(this.notificationsTimer)
+    if (this.mentionablesTimer) clearTimeout(this.mentionablesTimer)
+    this.mentionablesTimer = null
   }
 
   private fail(e: unknown, fallback: string) {
@@ -214,6 +233,8 @@ export class CommentsStore {
     } else if (type === SHARING_CHANGED_EVENT) {
       // Someone asked for access (or a request was decided): the owners' bell has news right away.
       if (isAccessRequestChange(data)) this.scheduleNotificationsRefresh(0)
+      // F4: who can be mentioned may have changed with it (a grant, a guest joining, a link revoked).
+      if (mayChangeWhoHasAccess(data)) this.invalidateMentionables()
     }
   }
 
@@ -384,15 +405,49 @@ export class CommentsStore {
 
   ensureMentionables(): Promise<void> {
     if (this.mentionables.get() !== null) return Promise.resolve()
-    this.mentionablesLoading ??= this.api
-      .mentionables(this.boardId)
-      .then((list) => {
-        if (!this.disposed) this.mentionables.set(list)
-      })
-      .catch(() => {
-        this.mentionablesLoading = null // retry next time
-      })
+    this.mentionablesLoading ??= this.fetchMentionables()
     return this.mentionablesLoading
+  }
+
+  /** One GET of the people who can be mentioned; only the newest answer lands. */
+  private fetchMentionables(): Promise<void> {
+    const seq = ++this.mentionablesSeq
+    this.mentionablesAskedAt = Date.now()
+    return this.api.mentionables(this.boardId).then(
+      (list) => {
+        if (!this.disposed && seq === this.mentionablesSeq) this.mentionables.set(list)
+      },
+      () => {
+        if (seq === this.mentionablesSeq) this.mentionablesLoading = null // retry next time
+      },
+    )
+  }
+
+  /**
+   * F4: who has access changed (a `sharing.changed` board event, or this tab's Share dialog). A list
+   * already fetched is fetched again, soon and once for a burst of changes, so someone just added can
+   * be mentioned without a reload; until it lands the old list stays. Never fetched: the next @ does.
+   */
+  invalidateMentionables(delayMs = MENTIONABLES_REFRESH_DELAY_MS) {
+    if (this.disposed) return
+    if (this.mentionables.get() === null && this.mentionablesLoading === null) return
+    if (this.mentionablesTimer) clearTimeout(this.mentionablesTimer)
+    this.mentionablesTimer = setTimeout(() => {
+      this.mentionablesTimer = null
+      if (this.disposed) return
+      this.mentionablesLoading = this.fetchMentionables()
+    }, delayMs)
+  }
+
+  /**
+   * F4: an @query matched nobody. Before the composer's "Nobody with access matches" stays up, ask
+   * once more (access can change without a board event, e.g. someone accepting an invite link); at
+   * most once per MENTIONABLES_MISS_REFETCH_MS, so typing does not fetch on every key.
+   */
+  refetchMentionablesOnMiss() {
+    if (this.disposed || this.mentionables.get() === null) return
+    if (Date.now() - this.mentionablesAskedAt < MENTIONABLES_MISS_REFETCH_MS) return
+    this.mentionablesLoading = this.fetchMentionables()
   }
 
   async refreshNotifications(): Promise<void> {

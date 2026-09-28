@@ -4,6 +4,7 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import { type Editor, type TLShape, type TLShapeId, useValue } from 'tldraw'
 import { Dialog } from '../../ui/Dialog.tsx'
+import { exportPolicyOf, exportPolicySentence } from '../sharing/export-policy.ts'
 import { type FrameEntry, frameOutline } from './board-ops.ts'
 import type { Controller, ExportRequest } from './controller.ts'
 import { boardCsv, csvBlob, csvRowCount } from './csv-export.ts'
@@ -106,6 +107,12 @@ export function ExportDialog({
     [editor],
   )
   const shapeCount = useValue('dr-export-count', () => editor.getCurrentPageShapeIds().size, [editor])
+  // F9: who may export follows the board's current policy (the owner may just have changed it).
+  const policySentence = useValue(
+    'dr-export-policy-sentence',
+    () => exportPolicySentence(exportPolicyOf(editor)),
+    [editor],
+  )
 
   // F14: open on what the person is looking at. A selected frame, else the selection, else the frame
   // that fills the view, else the whole board (export-defaults.ts).
@@ -304,7 +311,7 @@ export function ExportDialog({
   return (
     <Dialog
       title="Export"
-      description="Download images, a PDF or the board's text. Everyone who can view the board can export it."
+      description={`Download images, a PDF or the board's text. ${policySentence}`.trim()}
       onClose={() => {
         abortRef.current?.abort()
         onClose()
