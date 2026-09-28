@@ -132,7 +132,7 @@ describe('shipped migrations', () => {
     expect(shipped[0]?.name).toBe('0001_core')
   })
 
-  it('are the milestone-1 core, the four pre-allocated feature migrations, 0006_workshop_links, 0007_assets and 0008_session_revocation, in order', () => {
+  it('are the milestone-1 core, the four pre-allocated feature migrations, 0006_workshop_links, 0007_assets, 0008_session_revocation and 0009_guests, in order', () => {
     expect(loadMigrations(MIGRATIONS_DIR).map((m) => m.name)).toEqual([
       '0001_core',
       '0002_comments',
@@ -142,6 +142,7 @@ describe('shipped migrations', () => {
       '0006_workshop_links',
       '0007_assets',
       '0008_session_revocation',
+      '0009_guests',
     ])
   })
 
@@ -156,6 +157,7 @@ describe('shipped migrations', () => {
       '0006_workshop_links',
       '0007_assets',
       '0008_session_revocation',
+      '0009_guests',
     ])
     expect(await migrate(db)).toEqual({ applied: [] })
     expect(await tableNames()).toEqual([
@@ -216,6 +218,7 @@ describe('shipped migrations', () => {
       '0006_workshop_links',
       '0007_assets',
       '0008_session_revocation',
+      '0009_guests',
     ])
     expect(await recorded()).toEqual(shipped.map((m) => m.name))
     const inv = await db.one<{ multi_use: boolean; use_count: number }>(
@@ -227,6 +230,14 @@ describe('shipped migrations', () => {
       `SELECT clerk_session_id, revoked_at FROM sessions WHERE id_hash = repeat('b', 64)`,
     )
     expect(session).toEqual({ clerk_session_id: null, revoked_at: null })
+    // 0009: existing people are account users, and existing links do not let guests in.
+    expect(await db.one("SELECT kind, guest_name FROM users WHERE id = 'usr_aaaaaaaaaaaa'")).toEqual({
+      kind: 'account',
+      guest_name: null,
+    })
+    expect(await db.one("SELECT allow_guests FROM invitations WHERE id = 'inv_aaaaaaaaaaaa'")).toEqual({
+      allow_guests: false,
+    })
     // The checksum guard covers the feature migrations as well.
     const edited = shipped.map((m) =>
       m.version === 3 ? { ...m, checksum: checksumOf(`${m.sql}\n-- edit`) } : m,

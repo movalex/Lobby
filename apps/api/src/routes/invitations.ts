@@ -6,6 +6,7 @@ import {
   CreateBoardInvitationInput,
   CreateWorkspaceInvitationInput,
   type InvitationGoneBody,
+  type InvitationGuestAccess,
   InvitationId,
   type InvitationPreview,
 } from '@draftroom/contracts'
@@ -15,31 +16,39 @@ import type { FastifyInstance, FastifyReply } from 'fastify'
 import { connectionRole, loadBoardAccess, requireBoardAction, requireWorkspaceRole } from '../access.ts'
 import { audit } from '../audit.ts'
 import { isSecretToken, newSecretToken, sha256hex } from '../auth/session.ts'
+import { userKind } from '../auth/users.ts'
 import type { AppContext, Params } from '../context.ts'
-import { forbidden, gone, notFound, parse } from '../errors.ts'
+import { ApiError, forbidden, gone, notFound, parse } from '../errors.ts'
 import { keyedLimit } from '../rate-limit.ts'
 
 const GONE_MESSAGE = gone().message
 
 export const INVITATION_TTL_MS = 7 * 24 * 60 * 60 * 1000
 
-interface InvitationRow {
+export interface InvitationRow {
   id: string
   workspace_id: string
   board_id: string | null
   role: string
   created_by: string
+  created_at: Date
   expires_at: Date
   redeemed_by: string | null
   revoked_at: Date | null
   multi_use: boolean
+  /** 0009_guests: people can join through this (multi-use) link with just a name. */
+  allow_guests: boolean
 }
-const INVITATION_COLUMNS =
-  'i.id, i.workspace_id, i.board_id, i.role, i.created_by, i.expires_at, i.redeemed_by, i.revoked_at, i.multi_use'
+export const INVITATION_COLUMNS =
+  'i.id, i.workspace_id, i.board_id, i.role, i.created_by, i.created_at, i.expires_at, i.redeemed_by, i.revoked_at, i.multi_use, i.allow_guests'
 
 type InvitationState = 'usable' | 'redeemed_by_caller' | 'gone'
 
-function stateFor(inv: InvitationRow, callerId: string | null, now: Date): InvitationState {
+/** Name-only guests (wave 3) may only use guest links; everything else needs an account. */
+export const guestAccountRequired = (message = 'Sign in with an account to accept this invitation.') =>
+  new ApiError(403, 'GUEST_ACCOUNT_REQUIRED', message)
+
+export function stateFor(inv: InvitationRow, callerId: string | null, now: Date): InvitationState {
   if (inv.redeemed_by !== null) return inv.redeemed_by === callerId ? 'redeemed_by_caller' : 'gone'
   if (inv.revoked_at !== null || inv.expires_at.getTime() <= now.getTime()) return 'gone'
   return 'usable'
@@ -61,6 +70,9 @@ export async function createInvitation(
   ctx: AppContext,
   input: { workspaceId: string; boardId: string | null; role: string; userId: string; via?: 'email' },
 ) {
+  // Wave 3: a name-only guest never hands out access (whatever board role they were given).
+  if ((await userKind(tx, input.userId)) === 'guest')
+    throw guestAccountRequired('Sign in with an account to invite people.')
   const token = newSecretToken()
   const id = newId('inv')
   const createdAt = ctx.now()
@@ -87,7 +99,7 @@ export async function createInvitation(
  * id only to a signed-in caller who can open that board right now: they are sent to the board instead
  * of a dead end, and nobody else learns anything about it.
  */
-async function sendGone(
+export async function sendGone(
   q: Queryable,
   reply: FastifyReply,
   inv: Pick<InvitationRow, 'board_id' | 'created_by'>,
@@ -102,6 +114,86 @@ async function sendGone(
     gone: { invitedBy: inviter ? { name: inviter.name } : null, boardId },
   }
   return reply.code(410).send(body)
+}
+
+/**
+ * Redeems a usable invitation (stateFor === 'usable') for `userId`: the one redemption path of
+ * accepting and of joining as a guest (wave 3). Call inside the transaction that locked the
+ * invitation row FOR UPDATE. It adds the workspace membership (a board link makes an outsider a
+ * workspace guest), raises the board grant to the link's role (never lowers it), records the use (for
+ * a multi-use link the 0005 trigger counts it and closes the link at max_uses) and audits it.
+ */
+export async function redeemInvitation(
+  tx: Queryable,
+  inv: InvitationRow,
+  userId: string,
+  at: Date,
+  opts: { via?: 'guest' } = {},
+): Promise<void> {
+  // What a multi-use link replaces (0006): its sweep puts a raised grant back, and removes one
+  // it created (again: someone removed earlier who rejoins must not keep access past its end).
+  const prior =
+    inv.board_id !== null && inv.multi_use
+      ? ((
+          await tx.maybeOne<{ role: BoardRole }>(
+            'SELECT role FROM board_members WHERE board_id = $1 AND user_id = $2 FOR UPDATE',
+            [inv.board_id, userId],
+          )
+        )?.role ?? null)
+      : null
+
+  if (inv.board_id === null) {
+    await tx.query(
+      `INSERT INTO workspace_members AS m (workspace_id, user_id, role, created_at) VALUES ($1, $2, $3, $4)
+       ON CONFLICT (workspace_id, user_id) DO UPDATE SET role = CASE
+         WHEN ${wsRank('EXCLUDED.role')} > ${wsRank('m.role')} THEN EXCLUDED.role
+         ELSE m.role END`,
+      [inv.workspace_id, userId, inv.role as WorkspaceRole, at],
+    )
+  } else {
+    // A board link makes an outsider a workspace guest: guests see only boards granted to them.
+    await tx.query(
+      `INSERT INTO workspace_members (workspace_id, user_id, role, created_at) VALUES ($1, $2, 'guest', $3)
+       ON CONFLICT (workspace_id, user_id) DO NOTHING`,
+      [inv.workspace_id, userId, at],
+    )
+    await tx.query(
+      `INSERT INTO board_members AS bm (board_id, user_id, role, added_by, created_at) VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT (board_id, user_id) DO UPDATE SET role = CASE
+         WHEN ${boardRank('EXCLUDED.role')} > ${boardRank('bm.role')} THEN EXCLUDED.role
+         ELSE bm.role END`,
+      [inv.board_id, userId, inv.role as BoardRole, inv.created_by, at],
+    )
+  }
+  await tx.query('UPDATE invitations SET redeemed_by = $2, redeemed_at = $3 WHERE id = $1', [
+    inv.id,
+    userId,
+    at,
+  ])
+  if (inv.board_id !== null && inv.multi_use) {
+    const rank = ['viewer', 'commenter', 'editor', 'owner']
+    if (prior === null) {
+      // Created now: stamp the redemption with the grant's creation time (the sweep's test).
+      await tx.query(
+        `UPDATE invitation_redemptions SET redeemed_at = $3, previous_role = NULL
+          WHERE invitation_id = $1 AND user_id = $2`,
+        [inv.id, userId, at],
+      )
+    } else if (rank.indexOf(prior) < rank.indexOf(inv.role)) {
+      await tx.query(
+        'UPDATE invitation_redemptions SET previous_role = $3 WHERE invitation_id = $1 AND user_id = $2',
+        [inv.id, userId, prior],
+      )
+    }
+  }
+  await audit(tx, {
+    workspaceId: inv.workspace_id,
+    actorId: userId,
+    action: 'invitation.accept',
+    target: inv.id,
+    detail: { boardId: inv.board_id, role: inv.role, ...(opts.via ? { via: opts.via } : {}) },
+    at,
+  })
 }
 
 export function registerInvitationRoutes(app: FastifyInstance, ctx: AppContext): void {
@@ -149,7 +241,7 @@ export function registerInvitationRoutes(app: FastifyInstance, ctx: AppContext):
   app.get(
     '/api/invitations/:token',
     previewRoute,
-    async (req, reply): Promise<InvitationPreview | undefined> => {
+    async (req, reply): Promise<(InvitationPreview & InvitationGuestAccess) | undefined> => {
       const { token } = req.params as Params
       if (!isSecretToken(token)) throw notFound()
       const tokenHash = sha256hex(token)
@@ -177,6 +269,8 @@ export function registerInvitationRoutes(app: FastifyInstance, ctx: AppContext):
         role: row.role,
         invitedBy: { name: row.inviter_name },
         expiresAt: row.expires_at.toISOString(),
+        // Wave 3: the invite page offers "Join as a guest" (name only) for such links.
+        allowGuests: row.multi_use && row.allow_guests,
       }
     },
   )
@@ -193,75 +287,19 @@ export function registerInvitationRoutes(app: FastifyInstance, ctx: AppContext):
         [sha256hex(token)],
       )
       if (!inv) throw notFound()
+      // A name-only guest (wave 3) can only use guest links (joining one more board); a normal
+      // invitation needs an account.
+      if ((await userKind(tx, user.id)) === 'guest') {
+        if (!(inv.multi_use && inv.allow_guests)) throw guestAccountRequired()
+        // The guest sweep takes this lock before it ends a guest's sessions (features/guests).
+        await tx.query('SELECT id FROM users WHERE id = $1 FOR UPDATE', [user.id])
+      }
       const at = now()
       const state = stateFor(inv, user.id, at)
       if (state === 'gone') return { gone: true as const, inv }
       const accepted = { workspaceId: inv.workspace_id, boardId: inv.board_id }
       if (state === 'redeemed_by_caller') return { gone: false as const, accepted, changed: false }
-      // What a multi-use link replaces (0006): its sweep puts a raised grant back, and removes one
-      // it created (again: someone removed earlier who rejoins must not keep access past its end).
-      const prior =
-        inv.board_id !== null && inv.multi_use
-          ? ((
-              await tx.maybeOne<{ role: BoardRole }>(
-                'SELECT role FROM board_members WHERE board_id = $1 AND user_id = $2 FOR UPDATE',
-                [inv.board_id, user.id],
-              )
-            )?.role ?? null)
-          : null
-
-      if (inv.board_id === null) {
-        await tx.query(
-          `INSERT INTO workspace_members AS m (workspace_id, user_id, role, created_at) VALUES ($1, $2, $3, $4)
-           ON CONFLICT (workspace_id, user_id) DO UPDATE SET role = CASE
-             WHEN ${wsRank('EXCLUDED.role')} > ${wsRank('m.role')} THEN EXCLUDED.role
-             ELSE m.role END`,
-          [inv.workspace_id, user.id, inv.role as WorkspaceRole, at],
-        )
-      } else {
-        // A board link makes an outsider a workspace guest: guests see only boards granted to them.
-        await tx.query(
-          `INSERT INTO workspace_members (workspace_id, user_id, role, created_at) VALUES ($1, $2, 'guest', $3)
-           ON CONFLICT (workspace_id, user_id) DO NOTHING`,
-          [inv.workspace_id, user.id, at],
-        )
-        await tx.query(
-          `INSERT INTO board_members AS bm (board_id, user_id, role, added_by, created_at) VALUES ($1, $2, $3, $4, $5)
-           ON CONFLICT (board_id, user_id) DO UPDATE SET role = CASE
-             WHEN ${boardRank('EXCLUDED.role')} > ${boardRank('bm.role')} THEN EXCLUDED.role
-             ELSE bm.role END`,
-          [inv.board_id, user.id, inv.role as BoardRole, inv.created_by, at],
-        )
-      }
-      await tx.query('UPDATE invitations SET redeemed_by = $2, redeemed_at = $3 WHERE id = $1', [
-        inv.id,
-        user.id,
-        at,
-      ])
-      if (inv.board_id !== null && inv.multi_use) {
-        const rank = ['viewer', 'commenter', 'editor', 'owner']
-        if (prior === null) {
-          // Created now: stamp the redemption with the grant's creation time (the sweep's test).
-          await tx.query(
-            `UPDATE invitation_redemptions SET redeemed_at = $3, previous_role = NULL
-              WHERE invitation_id = $1 AND user_id = $2`,
-            [inv.id, user.id, at],
-          )
-        } else if (rank.indexOf(prior) < rank.indexOf(inv.role)) {
-          await tx.query(
-            'UPDATE invitation_redemptions SET previous_role = $3 WHERE invitation_id = $1 AND user_id = $2',
-            [inv.id, user.id, prior],
-          )
-        }
-      }
-      await audit(tx, {
-        workspaceId: inv.workspace_id,
-        actorId: user.id,
-        action: 'invitation.accept',
-        target: inv.id,
-        detail: { boardId: inv.board_id, role: inv.role },
-        at,
-      })
+      await redeemInvitation(tx, inv, user.id, at)
       return { gone: false as const, accepted, changed: true }
     })
     if (result.gone) return sendGone(db, reply, result.inv, user.id)

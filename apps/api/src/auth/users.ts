@@ -88,6 +88,15 @@ export async function findOrCreateUser(
   return { user: toSessionUser(row), created: true }
 }
 
+/**
+ * 'guest' for a name-only guest (0009_guests: no sign-in identity, only the boards of guest links),
+ * 'account' for everyone who signed in with a provider. An unknown id reads as 'account'.
+ */
+export async function userKind(db: Queryable, userId: string): Promise<'account' | 'guest'> {
+  const row = await db.maybeOne<{ kind: string }>('SELECT kind FROM users WHERE id = $1', [userId])
+  return row?.kind === 'guest' ? 'guest' : 'account'
+}
+
 export interface MeWorkspace {
   id: string
   name: string

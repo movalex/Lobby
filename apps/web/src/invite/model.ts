@@ -39,6 +39,29 @@ export function invitationSummary(inv: InvitationPreview): InvitationSummary {
   }
 }
 
+// ---- name-only guests (wave 3) -------------------------------------------------------------------
+
+/** What the guest will see and what others will see them as, on the "Join as a guest" form. */
+export function guestJoinHint(name: string): string {
+  const shown = name.trim() ? `“${name.trim()} (guest)”` : 'your name followed by “(guest)”'
+  return `No account needed. People on the board see you as ${shown}. Your access ends when the link does, or when you sign out.`
+}
+
+/**
+ * The words for a refused join or accept, by the API's error code (its message is already
+ * user-facing; these only replace the few where the page can say more).
+ */
+export function guestJoinError(code: string, message: string): string {
+  switch (code) {
+    case 'GUEST_LIMIT':
+      return 'This link has let in as many guests as it can. Ask whoever shared it for a new link, or sign in instead.'
+    case 'GUESTS_NOT_ALLOWED':
+      return 'This link needs an account. Sign in to accept it.'
+    default:
+      return message
+  }
+}
+
 // ---- a link that no longer works (PRI-04) --------------------------------------------------------
 
 /** What the API says about a link that expired, was revoked or used up (the 410 body). */

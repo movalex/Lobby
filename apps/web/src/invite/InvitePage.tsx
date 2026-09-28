@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { GUEST_NAME_MAX, guestNameProblem } from '@draftroom/contracts'
+import { type FormEvent, type ReactNode, useCallback, useEffect, useId, useRef, useState } from 'react'
 import { api, isApiError } from '../api/client.ts'
 import { useSession } from '../auth/session.tsx'
 import { Wordmark } from '../brand/Wordmark.tsx'
@@ -6,20 +7,28 @@ import { formatDateTime } from '../lib/format.ts'
 import { boardPath, invitePath, linkClick, navigate, signInPath, workspacePath } from '../lib/routing.ts'
 import { useResource } from '../lib/useResource.ts'
 import { LoadingScreen, MessageScreen } from '../ui/screens.tsx'
+import { fetchInvitation, joinAsGuest, rememberGuestTab, seedUserKind, useUserKind } from './guest.tsx'
+import './invite.css'
 import {
   fetchGoneDetails,
   type GoneDetails,
   goneCopy,
+  guestJoinError,
+  guestJoinHint,
   invitationSummary,
   rememberAcceptIntent,
   safeSessionStorage,
   takeAcceptIntent,
 } from './model.ts'
 
-/** /invite/:token — public preview; accepting needs a session (sign in first, then come back here). */
+/**
+ * /invite/:token — public preview; accepting needs a session (sign in first, then come back here).
+ * A guest link (wave 3) also offers "Join as a guest" with just a name.
+ */
 export function InvitePage({ token }: { token: string }) {
-  const { state, refresh } = useSession()
-  const load = useCallback((signal: AbortSignal) => api.getInvitation(token, signal), [token])
+  const { state, refresh, signOut, signingOut } = useSession()
+  const kind = useUserKind()
+  const load = useCallback((signal: AbortSignal) => fetchInvitation(token, signal), [token])
   const preview = useResource(load)
   const [accepting, setAccepting] = useState(false)
   const [acceptError, setAcceptError] = useState<{ gone: boolean; message: string } | null>(null)
@@ -43,6 +52,16 @@ export function InvitePage({ token }: { token: string }) {
     // The answer depends on who is signed in (the board id is only for people with access).
   }, [previewGone, acceptError?.gone, token, signedInId])
 
+  const failed = useCallback((e: unknown, fallback: string) => {
+    setAccepting(false)
+    // A used-up, revoked or expired link: the effect above opens the board for someone who still
+    // has access (e.g. who joined earlier), or explains whom to ask.
+    setAcceptError({
+      gone: isApiError(e) && e.kind === 'gone',
+      message: isApiError(e) ? guestJoinError(e.code, e.message) : fallback,
+    })
+  }, [])
+
   const accept = useCallback(async () => {
     setAccepting(true)
     setAcceptError(null)
@@ -59,19 +78,32 @@ export function InvitePage({ token }: { token: string }) {
         setAccepting(false)
         return // the session guard shows sign-in
       }
-      setAccepting(false)
-      // A used-up, revoked or expired link: the effect above opens the board for someone who still
-      // has access (e.g. who joined earlier), or explains whom to ask.
-      setAcceptError({
-        gone: isApiError(e) && e.kind === 'gone',
-        message: isApiError(e) ? e.message : 'The invitation could not be accepted. Try again.',
-      })
+      failed(e, 'The invitation could not be accepted. Try again.')
     }
-  }, [token, refresh])
+  }, [token, refresh, failed])
+
+  /** Joins as a guest: a new guest with `name`, or (signed in as a guest) one more board. */
+  const joinGuest = useCallback(
+    async (name?: string) => {
+      setAccepting(true)
+      setAcceptError(null)
+      try {
+        const joined = await joinAsGuest(token, name)
+        seedUserKind(joined.user.id, 'guest')
+        rememberGuestTab()
+        await refresh()
+        // A guest lands straight on the board.
+        navigate(boardPath(joined.boardId), { replace: true })
+      } catch (e) {
+        failed(e, 'You could not join right now. Try again.')
+      }
+    },
+    [token, refresh, failed],
+  )
 
   // PRI-16: back from "Sign in to accept": accept right away (once), no second click.
   const autoAccepted = useRef(false)
-  const ready = preview.status === 'ready' && state.status === 'signed-in'
+  const ready = preview.status === 'ready' && state.status === 'signed-in' && kind === 'account'
   useEffect(() => {
     if (!ready || autoAccepted.current) return
     if (!takeAcceptIntent(safeSessionStorage(), token)) return
@@ -79,7 +111,13 @@ export function InvitePage({ token }: { token: string }) {
     void accept()
   }, [ready, token, accept])
 
-  if (preview.status === 'loading' || state.status === 'loading' || gone === 'loading') {
+  const signedIn = state.status === 'signed-in'
+  if (
+    preview.status === 'loading' ||
+    state.status === 'loading' ||
+    gone === 'loading' ||
+    (signedIn && kind === null && preview.status === 'ready')
+  ) {
     return <LoadingScreen label="Loading invitation…" testId="invite-loading" />
   }
   if (previewGone || acceptError?.gone) {
@@ -99,11 +137,108 @@ export function InvitePage({ token }: { token: string }) {
 
   const inv = preview.data
   const summary = invitationSummary(inv)
-  const signedIn = state.status === 'signed-in'
   const here = invitePath(token)
+  const guestLink = inv.allowGuests && inv.board !== null
+
+  let actions: ReactNode
+  if (signedIn && kind === 'guest') {
+    actions = guestLink ? (
+      <>
+        <button
+          type="button"
+          className="dr-btn dr-btn--primary dr-btn--lg"
+          data-testid="invite-guest-continue"
+          disabled={accepting}
+          onClick={() => void joinGuest()}
+        >
+          {accepting ? 'Joining…' : 'Join and open board'}
+        </button>
+        <p className="dr-invite-card__as">
+          You'll join as <strong>{state.me.user.name}</strong>.
+        </p>
+      </>
+    ) : (
+      <>
+        <p className="dr-invite-guest__note" data-testid="invite-needs-account">
+          You're signed in as a guest (<strong>{state.me.user.name}</strong>). This invitation needs an
+          account. Signing in ends your guest access.
+        </p>
+        <button
+          type="button"
+          className="dr-btn dr-btn--primary dr-btn--lg"
+          data-testid="invite-guest-signin"
+          disabled={signingOut}
+          onClick={() => {
+            rememberAcceptIntent(safeSessionStorage(), token)
+            void signOut({ returnTo: here })
+          }}
+        >
+          {signingOut ? 'Signing out…' : 'Sign in with an account'}
+        </button>
+      </>
+    )
+  } else if (signedIn) {
+    actions = (
+      <>
+        <button
+          type="button"
+          className="dr-btn dr-btn--primary dr-btn--lg"
+          data-testid="invite-accept"
+          disabled={accepting}
+          onClick={() => void accept()}
+        >
+          {accepting ? 'Joining…' : summary.acceptLabel}
+        </button>
+        <p className="dr-invite-card__as">
+          You'll join as <strong>{state.me.user.name}</strong>.{' '}
+          <a href={signInPath(here)} onClick={linkClick(signInPath(here))}>
+            Not you?
+          </a>
+        </p>
+      </>
+    )
+  } else if (guestLink) {
+    actions = (
+      <>
+        <GuestJoinForm busy={accepting} onJoin={(name) => void joinGuest(name)} />
+        <p className="dr-divider" aria-hidden="true">
+          or
+        </p>
+        <a
+          className="dr-btn dr-btn--lg dr-invite-guest__signin"
+          data-testid="invite-signin"
+          href={signInPath(here)}
+          onClick={(e) => {
+            rememberAcceptIntent(safeSessionStorage(), token)
+            linkClick(signInPath(here))(e)
+          }}
+        >
+          Sign in instead
+        </a>
+        <p className="dr-invite-card__as">With an account, you join right after signing in.</p>
+      </>
+    )
+  } else {
+    actions = (
+      <>
+        <a
+          className="dr-btn dr-btn--primary dr-btn--lg"
+          data-testid="invite-signin"
+          href={signInPath(here)}
+          onClick={(e) => {
+            rememberAcceptIntent(safeSessionStorage(), token)
+            linkClick(signInPath(here))(e)
+          }}
+        >
+          Sign in to accept
+        </a>
+        <p className="dr-invite-card__as">You'll join right after signing in.</p>
+      </>
+    )
+  }
 
   return (
-    <main className="dr-screen dr-screen--page" data-testid="invite-page">
+    <main className="dr-screen dr-screen--page" data-testid="invite-page" data-allow-guests={guestLink}>
       <div className="dr-card dr-card--narrow dr-invite-card">
         <a href="/" onClick={linkClick('/')} className="dr-card__brand" aria-label="Lobby home">
           <Wordmark />
@@ -131,45 +266,65 @@ export function InvitePage({ token }: { token: string }) {
           </div>
         </dl>
         {acceptError && (
-          <p className="dr-field-error" role="alert">
+          <p className="dr-field-error" role="alert" data-testid="invite-error">
             {acceptError.message}
           </p>
         )}
-        {signedIn ? (
-          <>
-            <button
-              type="button"
-              className="dr-btn dr-btn--primary dr-btn--lg"
-              data-testid="invite-accept"
-              disabled={accepting}
-              onClick={() => void accept()}
-            >
-              {accepting ? 'Joining…' : summary.acceptLabel}
-            </button>
-            <p className="dr-invite-card__as">
-              You'll join as <strong>{state.me.user.name}</strong>.{' '}
-              <a href={signInPath(here)} onClick={linkClick(signInPath(here))}>
-                Not you?
-              </a>
-            </p>
-          </>
-        ) : (
-          <>
-            <a
-              className="dr-btn dr-btn--primary dr-btn--lg"
-              data-testid="invite-signin"
-              href={signInPath(here)}
-              onClick={(e) => {
-                rememberAcceptIntent(safeSessionStorage(), token)
-                linkClick(signInPath(here))(e)
-              }}
-            >
-              Sign in to accept
-            </a>
-            <p className="dr-invite-card__as">You'll join right after signing in.</p>
-          </>
-        )}
+        {actions}
       </div>
     </main>
+  )
+}
+
+/** "Join as a guest": a name (1-40 characters), checked here the same way the API checks it. */
+function GuestJoinForm({ busy, onJoin }: { busy: boolean; onJoin(name: string): void }) {
+  const inputId = useId()
+  const hintId = useId()
+  const errorId = useId()
+  const [name, setName] = useState('')
+  const [problem, setProblem] = useState<string | null>(null)
+  const submit = (e: FormEvent) => {
+    e.preventDefault()
+    const p = guestNameProblem(name)
+    setProblem(p)
+    if (!p) onJoin(name.trim())
+  }
+  return (
+    <form className="dr-invite-guest" data-testid="invite-guest-form" onSubmit={submit} noValidate>
+      <label htmlFor={inputId} className="dr-invite-guest__label">
+        Your name
+      </label>
+      <input
+        id={inputId}
+        className="dr-input dr-input--block"
+        data-testid="invite-guest-name"
+        autoComplete="name"
+        // A little room over the limit so a paste is not cut silently; the check below explains.
+        maxLength={GUEST_NAME_MAX + 20}
+        value={name}
+        aria-invalid={problem ? true : undefined}
+        aria-describedby={problem ? `${errorId} ${hintId}` : hintId}
+        onChange={(e) => {
+          setName(e.target.value)
+          if (problem) setProblem(null)
+        }}
+      />
+      {problem && (
+        <p id={errorId} className="dr-field-error" role="alert" data-testid="invite-guest-name-error">
+          {problem}
+        </p>
+      )}
+      <p id={hintId} className="dr-invite-guest__hint">
+        {guestJoinHint(name)}
+      </p>
+      <button
+        type="submit"
+        className="dr-btn dr-btn--primary dr-btn--lg"
+        data-testid="invite-guest-join"
+        disabled={busy}
+      >
+        {busy ? 'Joining…' : 'Join as a guest'}
+      </button>
+    </form>
   )
 }

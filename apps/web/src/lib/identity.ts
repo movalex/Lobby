@@ -27,7 +27,9 @@ export function safeColor(color: string | null | undefined, userId: string): str
 }
 
 export function initialsFor(name: string): string {
-  const parts = name.split(/[\s._-]+/).filter(Boolean)
-  const letters = parts.length >= 2 ? `${parts[0]?.[0] ?? ''}${parts[1]?.[0] ?? ''}` : name.slice(0, 2)
+  // A trailing marker in parentheses ("Sam (guest)", wave 3 guests) is not part of the name.
+  const base = name.replace(/\s*\([^()]*\)\s*$/, '') || name
+  const parts = base.split(/[\s._-]+/).filter(Boolean)
+  const letters = parts.length >= 2 ? `${parts[0]?.[0] ?? ''}${parts[1]?.[0] ?? ''}` : base.slice(0, 2)
   return letters.toUpperCase() || '?'
 }

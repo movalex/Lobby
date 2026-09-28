@@ -126,6 +126,11 @@ export const CreateReviewLinkInput = z
       .optional(),
     /** null = unlimited (until expiry or revocation). */
     maxUses: z.number().int().min(1).max(REVIEW_LINK_MAX_USES).nullable().default(null),
+    /**
+     * Wave 3 (guests): "Anyone with the link can join with just a name (no account)". Off by default.
+     * Guests get the link's role on this board only (docs/WAVE3-CONTRACTS.md §2 guests).
+     */
+    allowGuests: z.boolean().default(false),
   })
   .superRefine((v, ctx) => {
     if (v.role !== 'editor') return
@@ -171,6 +176,8 @@ export const ReviewLinkCreated = z.object({
   role: ReviewLinkRole,
   expiresAt: IsoDate,
   maxUses: z.number().int().nullable(),
+  /** Wave 3 (guests): people can join with just a name. */
+  allowGuests: z.boolean().default(false),
 })
 export type ReviewLinkCreated = z.infer<typeof ReviewLinkCreated>
 
@@ -191,6 +198,8 @@ export const PendingInvitation = z.object({
   url: z.string().nullable(),
   /** Multi-use links: the latest `expiresAt` an extension can reach (created + the role's cap). */
   maxExpiresAt: IsoDate.nullable().default(null),
+  /** Wave 3 (guests): multi-use links anyone can join with just a name (no account). */
+  allowGuests: z.boolean().default(false),
 })
 export type PendingInvitation = z.infer<typeof PendingInvitation>
 

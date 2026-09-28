@@ -5,6 +5,7 @@
 import type { RequestableRole } from '@draftroom/contracts'
 import { useCallback, useEffect, useId, useState } from 'react'
 import { api, isApiError } from '../../api/client.ts'
+import { useIsGuest } from '../../invite/guest.tsx'
 import { formatRelativeTime } from '../../lib/format.ts'
 import { sharingApi } from './api.ts'
 import {
@@ -31,7 +32,24 @@ const ACCESS_NAME: Record<RequestableRole, string> = {
   viewer: 'View',
 }
 
-export function RequestAccess({
+type RequestAccessProps = Parameters<typeof RequestAccessForm>[0]
+
+/**
+ * The request form, or for a name-only guest (wave 3: they cannot ask; the server refuses) what they
+ * can do instead.
+ */
+export function RequestAccess(props: RequestAccessProps) {
+  if (useIsGuest())
+    return (
+      <p className="dr-sharing__guest-note" data-testid="access-request-guest">
+        Guests can’t request access. Open the link you were given again if it still works, or ask whoever
+        shared it for a new one.
+      </p>
+    )
+  return <RequestAccessForm {...props} />
+}
+
+function RequestAccessForm({
   boardId,
   userId,
   currentRole,

@@ -1,5 +1,7 @@
 import { useEffect, useId, useRef, useState } from 'react'
 import { useBoard } from '../board/board-context.ts'
+import { useIsGuest } from '../invite/guest.tsx'
+import '../invite/invite.css'
 import { initialsFor, safeColor } from '../lib/identity.ts'
 import { ThemePicker } from '../theme/ThemePicker.tsx'
 import { useTldrawThemeSync } from '../theme/useTheme.ts'
@@ -20,11 +22,15 @@ export function useIsDevAuth(): boolean {
  * suite looks for, and it says plainly that the identity is not verified. Its menu holds the theme
  * choice (System / Light / Dark); on a board it also keeps tldraw's canvas theme in step with it.
  * Switch user, Sign out and Sign out everywhere (SCA-4) all end the Clerk session too (SCA-1).
+ * A name-only guest (wave 3) sees a "Guest" tag, that signing out means needing the link again,
+ * "Sign in with an account" and "Sign out" (they have no other devices or account to end).
  */
 export function UserMenu({ compact = false }: { compact?: boolean }) {
   const me = useMe()
   const { signOut, signingOut } = useSession()
-  const dev = useIsDevAuth()
+  // A name-only guest (wave 3) gets the guest menu: no account to switch or sign out everywhere.
+  const guest = useIsGuest()
+  const dev = useIsDevAuth() && !guest
   const [open, setOpen] = useState(false)
   // Which button started the running sign-out (its label says so).
   const [clicked, setClicked] = useState<SignOutButton | null>(null)
@@ -72,12 +78,19 @@ export function UserMenu({ compact = false }: { compact?: boolean }) {
         className={dev ? 'dr-devbadge' : 'dr-userbtn'}
         data-testid={dev ? 'dev-identity-badge' : 'user-menu'}
         data-user-id={user.id}
+        data-kind={guest ? 'guest' : undefined}
         aria-expanded={open}
         aria-haspopup="dialog"
+        aria-label={guest ? `${user.name}: guest menu` : undefined}
         title={dev ? `Development sign-in: ${user.name}` : user.name}
         onClick={() => setOpen((o) => !o)}
       >
         {dev && <span className="dr-devbadge__tag">DEV</span>}
+        {guest && (
+          <span className="dr-guest-tag" data-testid="guest-tag">
+            Guest
+          </span>
+        )}
         <span
           className="dr-avatar dr-avatar--static dr-avatar--sm"
           style={{ background: color }}
@@ -88,7 +101,11 @@ export function UserMenu({ compact = false }: { compact?: boolean }) {
         {!compact && <span className="dr-userbtn__name">{user.name}</span>}
       </button>
       {open && (
-        <div className="dr-devbadge__menu" role="dialog" aria-label="Your account">
+        <div
+          className="dr-devbadge__menu"
+          role="dialog"
+          aria-label={guest ? 'Your guest access' : 'Your account'}
+        >
           <div className="dr-account">
             <span className="dr-avatar dr-avatar--static" style={{ background: color }} aria-hidden="true">
               {initialsFor(user.name)}
@@ -96,6 +113,7 @@ export function UserMenu({ compact = false }: { compact?: boolean }) {
             <div className="dr-account__text">
               <strong>{user.name}</strong>
               {user.handle && <span className="dr-muted">@{user.handle}</span>}
+              {guest && <span className="dr-guest-tag">Guest</span>}
             </div>
           </div>
           {dev && (
@@ -104,44 +122,97 @@ export function UserMenu({ compact = false }: { compact?: boolean }) {
               machine only.
             </p>
           )}
-          <ThemePicker />
-          <div className="dr-account__actions">
-            <button
-              type="button"
-              className="dr-btn"
-              data-testid="switch-user"
-              disabled={signingOut}
-              onClick={() => start('switch', { returnTo: here })}
-            >
-              {label('switch', 'Switch user')}
-            </button>
-            <button
-              type="button"
-              className="dr-btn"
-              data-testid="sign-out"
-              disabled={signingOut}
-              onClick={() => start('out')}
-            >
-              {label('out', 'Sign out')}
-            </button>
-          </div>
-          <div className="dr-account__everywhere">
-            <button
-              type="button"
-              className="dr-btn"
-              data-testid="sign-out-everywhere"
-              disabled={signingOut}
-              aria-describedby={everywhereHint}
-              onClick={() => start('everywhere', { everywhere: true })}
-            >
-              {label('everywhere', 'Sign out everywhere')}
-            </button>
-            <p id={everywhereHint} className="dr-muted">
-              Ends your Lobby sessions on every device and browser, this one included.
+          {guest && (
+            <p className="dr-account__guest" data-testid="guest-menu-note">
+              You joined with a link, without an account. If you sign out, you'll need the link again to come
+              back, and it only works while it is open.
             </p>
-          </div>
+          )}
+          <ThemePicker />
+          {guest ? (
+            <div className="dr-account__actions dr-account__actions--guest">
+              <button
+                type="button"
+                className="dr-btn"
+                data-testid="guest-signin-account"
+                disabled={signingOut}
+                onClick={() => start('switch', { returnTo: here })}
+              >
+                {label('switch', 'Sign in with an account')}
+              </button>
+              <button
+                type="button"
+                className="dr-btn"
+                data-testid="sign-out"
+                disabled={signingOut}
+                onClick={() => start('out')}
+              >
+                {label('out', 'Sign out')}
+              </button>
+            </div>
+          ) : (
+            <AccountActions
+              signingOut={signingOut}
+              everywhereHint={everywhereHint}
+              label={label}
+              onSwitch={() => start('switch', { returnTo: here })}
+              onOut={() => start('out')}
+              onEverywhere={() => start('everywhere', { everywhere: true })}
+            />
+          )}
         </div>
       )}
     </div>
+  )
+}
+
+/** Switch user, Sign out and Sign out everywhere (SCA-4), for someone with an account. */
+function AccountActions({
+  signingOut,
+  everywhereHint,
+  label,
+  onSwitch,
+  onOut,
+  onEverywhere,
+}: {
+  signingOut: boolean
+  everywhereHint: string
+  label(which: SignOutButton, text: string): string
+  onSwitch(): void
+  onOut(): void
+  onEverywhere(): void
+}) {
+  return (
+    <>
+      <div className="dr-account__actions">
+        <button
+          type="button"
+          className="dr-btn"
+          data-testid="switch-user"
+          disabled={signingOut}
+          onClick={onSwitch}
+        >
+          {label('switch', 'Switch user')}
+        </button>
+        <button type="button" className="dr-btn" data-testid="sign-out" disabled={signingOut} onClick={onOut}>
+          {label('out', 'Sign out')}
+        </button>
+      </div>
+      <div className="dr-account__everywhere">
+        <button
+          type="button"
+          className="dr-btn"
+          data-testid="sign-out-everywhere"
+          disabled={signingOut}
+          aria-describedby={everywhereHint}
+          onClick={onEverywhere}
+        >
+          {label('everywhere', 'Sign out everywhere')}
+        </button>
+        <p id={everywhereHint} className="dr-muted">
+          Ends your Lobby sessions on every device and browser, this one included.
+        </p>
+      </div>
+    </>
   )
 }

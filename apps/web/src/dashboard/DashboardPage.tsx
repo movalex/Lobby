@@ -5,6 +5,7 @@ import { useMe } from '../auth/session.tsx'
 import { UserMenu } from '../auth/UserMenu.tsx'
 import { NoticeRegion, useNotices } from '../board/Notices.tsx'
 import { ShareDialog } from '../board/ShareDialog.tsx'
+import { useIsGuest } from '../invite/guest.tsx'
 import { absoluteUrl, copyText } from '../lib/clipboard.ts'
 import { canCreateInWorkspace } from '../lib/permissions.ts'
 import { boardPath, type DashboardSection, navigate, workspacePath } from '../lib/routing.ts'
@@ -71,6 +72,8 @@ export function DashboardPage({ workspaceId, section }: { workspaceId: string; s
 
 function Dashboard({ workspaceId, section }: { workspaceId: string; section: DashboardSection }) {
   const me = useMe()
+  // A name-only guest (wave 3): only the boards of their guest links, and a note saying so.
+  const guest = useIsGuest()
   const workspace = me.workspaces.find((w) => w.id === workspaceId) ?? me.workspaces[0]
   const canCreate = canCreateInWorkspace(workspace?.role ?? null)
   const { notices, notify, dismiss } = useNotices()
@@ -568,6 +571,16 @@ function Dashboard({ workspaceId, section }: { workspaceId: string; section: Das
             )}
           </div>
         </div>
+
+        {guest && (
+          <div className="dr-dash__guest" role="note" data-testid="guest-banner">
+            <strong>You're a guest. Sign in with an account to keep access.</strong>
+            <span>
+              You see only the boards you joined with a link. Guest access ends when the link does, or when
+              you sign out; with an account, ask whoever shared a board to invite you.
+            </span>
+          </div>
+        )}
 
         {section.kind === 'trash' && (
           <p className="dr-dash__note" data-testid="trash-note">
