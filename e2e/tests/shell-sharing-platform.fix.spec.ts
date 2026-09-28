@@ -383,6 +383,9 @@ test('RETRO-19: a note edit on the canvas makes its card say â€œEdited just nowâ
   await expect.poll(() => updated(board), { timeout: 15_000 }).toBeGreaterThan(await updated(later))
   await a.page.goto(`/w/${users.devStudioId}/all`)
   await a.page.getByTestId('dashboard-sort').selectOption('edited')
+  // The cards arrive after the sort control (evaluateAll below does not wait for them).
+  await expect(mainCard(a.page, board)).toBeVisible()
+  await expect(mainCard(a.page, later)).toBeVisible()
   const ids = await a.page
     .getByTestId('board-grid')
     .getByTestId('board-card')
