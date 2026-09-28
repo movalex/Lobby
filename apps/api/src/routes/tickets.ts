@@ -8,6 +8,7 @@ import { z } from 'zod'
 import { connectionRole, loadBoardAccess } from '../access.ts'
 import type { AppContext, Params } from '../context.ts'
 import { ApiError, notFound, parse } from '../errors.ts'
+import { ticketName } from '../features/guests/label.ts'
 
 const AccessQuery = z.object({ boardId: BoardId, userId: UserId })
 
@@ -20,15 +21,17 @@ export function registerTicketRoutes(app: FastifyInstance, ctx: AppContext): voi
     const role = connectionRole(await loadBoardAccess(db, bid, user.id))
     // No access, trashed, or unknown: one answer, so a ticket request cannot probe for board ids.
     if (!role) throw notFound()
+    // Wave 3: a name-only guest's long name is shortened so the cursor label keeps "(guest)".
+    const name = await ticketName(db, user)
     const { ticket, claims } = signTicket(config.ticketSecret, {
       bid,
       uid: user.id,
-      name: user.name,
+      name,
       color: user.color,
       role,
       now: now().getTime(),
     })
-    return { ticket, expiresAt: claims.exp, role, user: { id: user.id, name: user.name, color: user.color } }
+    return { ticket, expiresAt: claims.exp, role, user: { id: user.id, name, color: user.color } }
   })
 
   // Server-to-server only (the web proxy never forwards /internal). Authenticated by the shared secret.

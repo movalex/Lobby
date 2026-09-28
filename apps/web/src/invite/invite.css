@@ -1,0 +1,76 @@
+/* Name-only guests (docs/WAVE3-CONTRACTS.md §2 guests): the invite page's "Join as a guest" form, the
+   "guest access has ended" screen, and the guest parts of the account menu. Tokens only (--dr-*). */
+
+.dr-invite-guest {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.dr-invite-guest__label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--dr-ink);
+}
+.dr-invite-guest .dr-input {
+  flex: none;
+  height: 40px;
+  font-size: 15px;
+}
+.dr-invite-guest .dr-field-error {
+  margin: 0;
+}
+.dr-invite-guest__hint {
+  margin: 0 0 8px;
+  color: var(--dr-ink-2);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+.dr-invite-guest__signin {
+  justify-content: center;
+  text-decoration: none;
+}
+.dr-invite-guest__note {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--dr-warn-line);
+  border-radius: 10px;
+  background: var(--dr-warn-bg);
+  color: var(--dr-warn);
+  font-size: 13.5px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+/* The "Guest" tag on the account button and in its menu. */
+.dr-guest-tag {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--dr-accent-bg);
+  color: var(--dr-accent-ink);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.dr-account__text .dr-guest-tag {
+  align-self: flex-start;
+  margin-top: 2px;
+}
+.dr-account__guest {
+  margin: 10px 0 0;
+  color: var(--dr-ink-2);
+  font-size: 13px;
+  line-height: 1.45;
+}
+/* The guest menu's two buttons, one per line: "Sign in with an account" does not fit beside another. */
+.dr-account__actions--guest {
+  flex-direction: column;
+}
+.dr-account__actions--guest .dr-btn {
+  width: 100%;
+  justify-content: center;
+}

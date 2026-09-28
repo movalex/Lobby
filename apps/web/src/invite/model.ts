@@ -1,4 +1,4 @@
-import { InvitationGoneBody, type InvitationPreview } from '@draftroom/contracts'
+import { GUEST_NAME_SUFFIX, InvitationGoneBody, type InvitationPreview } from '@draftroom/contracts'
 
 const BOARD_ROLE: Record<string, string> = {
   owner: 'Owner',
@@ -36,6 +36,38 @@ export function invitationSummary(inv: InvitationPreview): InvitationSummary {
     title: `Join ${inv.workspace.name}`,
     roleLabel: WORKSPACE_ROLE[inv.role] ?? 'Member',
     acceptLabel: 'Accept and open workspace',
+  }
+}
+
+// ---- name-only guests (wave 3) -------------------------------------------------------------------
+
+/** What the guest will see and what others will see them as, on the "Join as a guest" form. */
+export function guestJoinHint(name: string): string {
+  const shown = name.trim() ? `“${name.trim()} (guest)”` : 'your name followed by “(guest)”'
+  return `No account needed. People on the board see you as ${shown}. Your access ends when the link does, or when you sign out.`
+}
+
+/**
+ * A name as [the name, the guest marker] ("Sam (guest)" → ["Sam", " (guest)"]; no marker → null), so a
+ * list that cuts long names with an ellipsis can cut the name and keep the marker in view.
+ */
+export function splitGuestMarker(name: string): [string, string | null] {
+  if (name.length <= GUEST_NAME_SUFFIX.length || !name.endsWith(GUEST_NAME_SUFFIX)) return [name, null]
+  return [name.slice(0, -GUEST_NAME_SUFFIX.length), GUEST_NAME_SUFFIX]
+}
+
+/**
+ * The words for a refused join or accept, by the API's error code (its message is already
+ * user-facing; these only replace the few where the page can say more).
+ */
+export function guestJoinError(code: string, message: string): string {
+  switch (code) {
+    case 'GUEST_LIMIT':
+      return 'This link has let in as many guests as it can. Ask whoever shared it for a new link, or sign in instead.'
+    case 'GUESTS_NOT_ALLOWED':
+      return 'This link needs an account. Sign in to accept it.'
+    default:
+      return message
   }
 }
 

@@ -3,6 +3,8 @@ import { SignInPage } from './auth/SignInPage.tsx'
 import { SessionProvider, useSession } from './auth/session.tsx'
 import { DashboardPage } from './dashboard/DashboardPage.tsx'
 import { landingWorkspace } from './dashboard/model.ts'
+import { GuestEndedScreen } from './invite/GuestEndedScreen.tsx'
+import { GuestKindProvider, wasGuestTab } from './invite/guest.tsx'
 import { InvitePage } from './invite/InvitePage.tsx'
 import { matchRoute, navigate, signInPath, useLocationKey, workspacePath } from './lib/routing.ts'
 import { readLastWorkspace } from './lib/storage.ts'
@@ -14,7 +16,10 @@ const BoardPage = lazy(() => import('./board/BoardPage.tsx').then((m) => ({ defa
 export function App() {
   return (
     <SessionProvider>
-      <Routes />
+      {/* Wave 3: who is signed in, an account or a name-only guest (GET /api/me `kind`). */}
+      <GuestKindProvider>
+        <Routes />
+      </GuestKindProvider>
     </SessionProvider>
   )
 }
@@ -63,10 +68,15 @@ function Routes() {
 function RequireSession({ children }: { children: ReactNode }) {
   const { state, refresh } = useSession()
   const signedOut = state.status === 'signed-out'
+  // A guest has no account to sign in with: when their session ends (the link was revoked or
+  // expired, they were removed), this tab says so instead of showing a sign-in form.
+  const guestEnded = signedOut && wasGuestTab()
   useEffect(() => {
-    if (signedOut) navigate(signInPath(`${location.pathname}${location.search}`), { replace: true })
-  }, [signedOut])
+    if (signedOut && !guestEnded)
+      navigate(signInPath(`${location.pathname}${location.search}`), { replace: true })
+  }, [signedOut, guestEnded])
 
+  if (guestEnded) return <GuestEndedScreen />
   if (state.status === 'signed-in') return <>{children}</>
   if (state.status === 'unreachable') {
     return (

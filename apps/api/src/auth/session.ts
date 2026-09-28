@@ -27,11 +27,13 @@ export interface SessionStore {
   /**
    * `clerkSessionId`: the Clerk session (`sid`) this session was exchanged from (SCA-4), kept so a
    * sign-out everywhere can end it too (and, later, so Clerk webhooks can end ours).
+   * `expiresAt`: an earlier end than the usual SESSION_TTL_MS (name-only guests: their link's expiry
+   * or 7 days); never later than that.
    */
   create(
     tx: Queryable,
     userId: string,
-    opts?: { clerkSessionId?: string | null },
+    opts?: { clerkSessionId?: string | null; expiresAt?: Date },
   ): Promise<{ token: string; expiresAt: Date }>
   /** The signed-in user for this request (cached per request), or null. */
   user(req: FastifyRequest): Promise<SessionUser | null>
@@ -48,6 +50,11 @@ export interface SessionStore {
   activeIds(ids: readonly string[]): Promise<Set<string>>
   /** Called with the ids of sessions revoked through this store (after the revocation committed). */
   onRevoked(listener: (ids: readonly string[]) => void): () => void
+  /**
+   * Tells the onRevoked listeners about sessions revoked inside a caller's own transaction (a guest's
+   * sessions end with their last board grant: apps/api/src/features/guests). Call after it committed.
+   */
+  announceRevoked(ids: readonly string[]): void
   setCookie(reply: FastifyReply, token: string, expiresAt: Date): void
   clearCookie(reply: FastifyReply): void
 }
@@ -111,7 +118,14 @@ export function createSessionStore(opts: { db: Db; secureCookies: boolean; now: 
     async create(tx, userId, createOpts = {}) {
       const token = newSecretToken()
       const createdAt = now()
-      const expiresAt = new Date(createdAt.getTime() + SESSION_TTL_MS)
+      const longest = createdAt.getTime() + SESSION_TTL_MS
+      const asked = createOpts.expiresAt?.getTime()
+      // An earlier end only (and at least a second from now, for the sessions table's CHECK).
+      const expiresAt = new Date(
+        asked === undefined || !Number.isFinite(asked)
+          ? longest
+          : Math.max(createdAt.getTime() + 1_000, Math.min(asked, longest)),
+      )
       const clerkSessionId = isClerkSessionId(createOpts.clerkSessionId) ? createOpts.clerkSessionId : null
       await tx.query(
         `INSERT INTO sessions (id_hash, user_id, created_at, expires_at, clerk_session_id)
@@ -166,11 +180,16 @@ export function createSessionStore(opts: { db: Db; secureCookies: boolean; now: 
       listeners.add(listener)
       return () => void listeners.delete(listener)
     },
+    announceRevoked(ids) {
+      announce(ids)
+    },
     setCookie(reply, token, expiresAt) {
+      // The cookie ends with the session (a guest's session can be much shorter than 30 days).
+      const seconds = Math.ceil((expiresAt.getTime() - now().getTime()) / 1000)
       reply.setCookie(SESSION_COOKIE, token, {
         ...cookieBase,
         expires: expiresAt,
-        maxAge: Math.floor(SESSION_TTL_MS / 1000),
+        maxAge: Math.max(1, Math.min(seconds, Math.floor(SESSION_TTL_MS / 1000))),
       })
     },
     clearCookie(reply) {

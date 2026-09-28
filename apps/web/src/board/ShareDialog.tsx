@@ -34,6 +34,8 @@ import {
 } from '../features/sharing/model.ts'
 import { RequestAccess } from '../features/sharing/RequestAccess.tsx'
 import '../features/sharing/sharing.css'
+import { fetchBoardGuests, useIsGuest } from '../invite/guest.tsx'
+import { splitGuestMarker } from '../invite/model.ts'
 import { absoluteUrl, copyText } from '../lib/clipboard.ts'
 import { formatDateTime, formatRelativeTime } from '../lib/format.ts'
 import { initialsFor, safeColor } from '../lib/identity.ts'
@@ -100,6 +102,8 @@ export function ShareDialog({
   const changed = useCallback(() => announceShareChanged(board.id), [board.id])
   // Invitation emails go out only through Clerk (the server has the final word per address).
   const canEmail = useSession().config?.providers.includes('clerk') ?? false
+  // A name-only guest (wave 3) cannot ask for more access; the dialog says what they can do instead.
+  const guest = useIsGuest()
 
   // Managers get the detailed list (grant, workspace role, fallback, review-link joins); everyone else
   // the M1 list.
@@ -109,6 +113,15 @@ export function ShareDialog({
     [board.id, canManage],
   )
   const members = useResource(membersLoad)
+  // Wave 3: which members are name-only guests (they cannot be made owners; the server refuses).
+  const guestsLoad = useCallback(
+    (signal: AbortSignal): Promise<ReadonlySet<string>> =>
+      canManage
+        ? fetchBoardGuests(board.id, signal).catch(() => new Set<string>())
+        : Promise.resolve(new Set()),
+    [board.id, canManage],
+  )
+  const boardGuests = useResource(guestsLoad)
   const wsLoad = useCallback(
     (signal: AbortSignal): Promise<WorkspaceMember[]> =>
       canManage ? api.listWorkspaceMembers(workspace.id, signal) : Promise.resolve([]),
@@ -152,6 +165,7 @@ export function ShareDialog({
   const { reload: reloadRequests } = requests
   const { reload: reloadInvitations } = invitations
   const { reload: reloadShareState } = shareStateRes
+  const { reload: reloadGuests } = boardGuests
   useEffect(() => {
     const onRemote = (e: Event) => {
       const id = (e as CustomEvent<{ boardId?: string }>).detail?.boardId
@@ -160,10 +174,11 @@ export function ShareDialog({
       reloadRequests()
       reloadInvitations()
       reloadShareState()
+      reloadGuests() // a guest may just have joined through a link
     }
     window.addEventListener(SHARE_REMOTE_EVENT, onRemote)
     return () => window.removeEventListener(SHARE_REMOTE_EVENT, onRemote)
-  }, [board.id, reloadMembers, reloadRequests, reloadInvitations, reloadShareState])
+  }, [board.id, reloadMembers, reloadRequests, reloadInvitations, reloadShareState, reloadGuests])
 
   const run = async (userId: string | null, fn: () => Promise<BoardMember[]>): Promise<boolean> => {
     setError(null)
@@ -293,7 +308,13 @@ export function ShareDialog({
                     canManage &&
                     (m.grant !== undefined ? grantEditable(m as AccessDetail) : m.source === 'grant')
                   }
-                  transferable={canTransfer && m.user.id !== selfUserId && m.role !== 'owner'}
+                  guest={boardGuests.data?.has(m.user.id) ?? false}
+                  transferable={
+                    canTransfer &&
+                    m.user.id !== selfUserId &&
+                    m.role !== 'owner' &&
+                    !(boardGuests.data?.has(m.user.id) ?? false)
+                  }
                   pending={pendingUser === m.user.id}
                   onRole={(r) => void run(m.user.id, () => api.putMember(board.id, m.user.id, r))}
                   onRemove={() => void run(m.user.id, () => api.removeMember(board.id, m.user.id))}
@@ -305,24 +326,33 @@ export function ShareDialog({
           {!canManage && <p className="dr-share__note">Only board owners can change who has access.</p>}
         </section>
 
-        {!canManage && (selfRole === 'viewer' || selfRole === 'commenter') && board.status === 'active' && (
-          <section
-            ref={askRef}
-            className="dr-share__section"
-            aria-labelledby="dr-share-ask"
-            data-testid="share-ask-section"
-          >
-            <h3 id="dr-share-ask" className="dr-share__heading">
-              Need more access?
-            </h3>
-            <RequestAccess
-              boardId={board.id}
-              userId={selfUserId}
-              currentRole={selfRole}
-              autoFocus={focus === 'request'}
-            />
-          </section>
+        {!canManage && guest && (
+          <p className="dr-share__note" data-testid="share-guest-note">
+            You're a guest on this board: to get more access, sign in with an account and ask whoever shared
+            it.
+          </p>
         )}
+        {!canManage &&
+          !guest &&
+          (selfRole === 'viewer' || selfRole === 'commenter') &&
+          board.status === 'active' && (
+            <section
+              ref={askRef}
+              className="dr-share__section"
+              aria-labelledby="dr-share-ask"
+              data-testid="share-ask-section"
+            >
+              <h3 id="dr-share-ask" className="dr-share__heading">
+                Need more access?
+              </h3>
+              <RequestAccess
+                boardId={board.id}
+                userId={selfUserId}
+                currentRole={selfRole}
+                autoFocus={focus === 'request'}
+              />
+            </section>
+          )}
 
         {canManage && (
           <InviteLinkSection
@@ -992,6 +1022,7 @@ function MemberRow({
   workspaceName,
   isSelf,
   editable,
+  guest = false,
   transferable,
   pending,
   onRole,
@@ -1002,6 +1033,8 @@ function MemberRow({
   workspaceName: string
   isSelf: boolean
   editable: boolean
+  /** A name-only guest (wave 3): never an owner, so ownership is not offered. */
+  guest?: boolean
   transferable: boolean
   pending: boolean
   onRole(role: BoardRole): void
@@ -1012,6 +1045,7 @@ function MemberRow({
   const [confirming, setConfirming] = useState(false)
   const [confirmingRemove, setConfirmingRemove] = useState(false)
   const { user } = member
+  const [baseName, marker] = splitGuestMarker(user.name)
   const detailed = member.grant !== undefined && member.workspaceRole !== undefined
   const detail = detailed ? (member as unknown as AccessDetail) : null
   const source = detail
@@ -1029,14 +1063,26 @@ function MemberRow({
       data-user-id={user.id}
       data-role={member.role}
       data-source={member.source}
+      data-guest={guest || undefined}
       aria-busy={pending || undefined}
     >
       <Avatar user={user} />
       <div className="dr-member__text">
-        <span className="dr-member__name">
-          {user.name}
-          {isSelf && <span className="dr-member__you"> (you)</span>}
-        </span>
+        {marker ? (
+          // Wave 3 (guests): a long name is cut, never the "(guest)" marker (phone widths).
+          <span className="dr-member__name dr-member__name--guest">
+            <span className="dr-member__name-text">{baseName}</span>
+            <span className="dr-member__marker" data-testid="member-guest-marker">
+              {marker}
+            </span>
+            {isSelf && <span className="dr-member__you"> (you)</span>}
+          </span>
+        ) : (
+          <span className="dr-member__name">
+            {user.name}
+            {isSelf && <span className="dr-member__you"> (you)</span>}
+          </span>
+        )}
         <span className="dr-member__sub" data-testid="member-source">
           {user.handle ? `@${user.handle}` : ''}
           {source ? `${user.handle ? ' · ' : ''}${source}` : ''}
@@ -1107,7 +1153,7 @@ function MemberRow({
             disabled={pending}
             onChange={(e) => onRole(e.target.value as BoardRole)}
           >
-            {BOARD_ROLES.map((r) => (
+            {BOARD_ROLES.filter((r) => !(guest && r === 'owner')).map((r) => (
               <option key={r} value={r}>
                 {ROLE_OPTION_LABEL[r]}
               </option>
@@ -1331,6 +1377,7 @@ function WorkshopLinksSection({
 }) {
   const hoursId = useId()
   const [hours, setHours] = useState<number>(WORKSHOP_LINK_DEFAULT_HOURS)
+  const [allowGuests, setAllowGuests] = useState(false)
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [justCreated, setJustCreated] = useState<{ id: string; copied: boolean } | null>(null)
@@ -1339,7 +1386,11 @@ function WorkshopLinksSection({
     setPending(true)
     setError(null)
     try {
-      const link = await sharing.createReviewLink(boardId, { role: 'editor', expiresInHours: hours })
+      const link = await sharing.createReviewLink(boardId, {
+        role: 'editor',
+        expiresInHours: hours,
+        allowGuests,
+      })
       setJustCreated({ id: link.id, copied: await copyText(link.url) })
       onChange()
     } catch (e) {
@@ -1385,6 +1436,7 @@ function WorkshopLinksSection({
           Create workshop link
         </button>
       </div>
+      <GuestsOption testId="workshop-link-guests" checked={allowGuests} onChange={setAllowGuests} />
       {error && (
         <p className="dr-share__error" role="alert">
           {error}
@@ -1421,6 +1473,7 @@ function ReviewLinksSection({
   const daysId = useId()
   const [role, setRole] = useState<'viewer' | 'commenter'>('commenter')
   const [days, setDays] = useState<number>(REVIEW_LINK_DEFAULT_DAY)
+  const [allowGuests, setAllowGuests] = useState(false)
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [justCreated, setJustCreated] = useState<{ id: string; copied: boolean } | null>(null)
@@ -1429,7 +1482,7 @@ function ReviewLinksSection({
     setPending(true)
     setError(null)
     try {
-      const link = await sharing.createReviewLink(boardId, { role, expiresInDays: days })
+      const link = await sharing.createReviewLink(boardId, { role, expiresInDays: days, allowGuests })
       setJustCreated({ id: link.id, copied: await copyText(link.url) })
       onChange()
     } catch (e) {
@@ -1488,6 +1541,7 @@ function ReviewLinksSection({
           Create review link
         </button>
       </div>
+      <GuestsOption testId="review-link-guests" checked={allowGuests} onChange={setAllowGuests} />
       {error && (
         <p className="dr-share__error" role="alert">
           {error}
@@ -1507,6 +1561,40 @@ function ReviewLinksSection({
         </ul>
       )}
     </section>
+  )
+}
+
+/**
+ * Wave 3 (guests): "Anyone with the link can join with just a name (no account)", off by default. The
+ * server keeps guests to this board and marks their name everywhere.
+ */
+function GuestsOption({
+  testId,
+  checked,
+  onChange,
+}: {
+  testId: string
+  checked: boolean
+  onChange(next: boolean): void
+}) {
+  const hintId = useId()
+  return (
+    <div className="dr-sharing__guests">
+      <label className="dr-sharing__check">
+        <input
+          type="checkbox"
+          data-testid={testId}
+          checked={checked}
+          aria-describedby={hintId}
+          onChange={(e) => onChange(e.target.checked)}
+        />
+        Anyone with the link can join with just a name (no account)
+      </label>
+      <p id={hintId} className="dr-share__hint">
+        Guests show as “Name (guest)”, reach only this board, and lose access when the link ends or is
+        revoked.
+      </p>
+    </div>
   )
 }
 
@@ -1559,12 +1647,19 @@ function ReviewLinkRow({
       data-testid={workshop ? 'workshop-link-row' : 'review-link-row'}
       data-invitation-id={link.id}
       data-expires-at={link.expiresAt}
+      data-allow-guests={link.allowGuests}
     >
       <div className="dr-sharing__link-main">
         <span className="dr-sharing__link-text">
           <strong>{ROLE_OPTION_LABEL[link.role]}</strong> · until{' '}
           {workshop ? shortTime(link.expiresAt) : shortDate(link.expiresAt)} · {joined}
           {link.maxUses ? ` (max ${link.maxUses})` : ''}
+          {link.allowGuests && (
+            <>
+              {' · '}
+              <span data-testid="link-guests-allowed">guests can join with a name</span>
+            </>
+          )}
         </span>
         {workshop && (
           <button

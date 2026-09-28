@@ -16,10 +16,10 @@
 // in the Clerk dashboard take effect here within seconds. Until then an operator offboards someone
 // with "sign out everywhere" on their behalf or SQL (docs/SECURITY-REVIEW-2026-09-27.md §6 item 6).
 
-import type { Me, RevokeAllSessionsResponse } from '@draftroom/contracts'
+import type { Me, MeKind, RevokeAllSessionsResponse } from '@draftroom/contracts'
 import type { FastifyInstance } from 'fastify'
 import type { AuthProvider } from '../auth/provider.ts'
-import { listUserWorkspaces } from '../auth/users.ts'
+import { listUserWorkspaces, userKind } from '../auth/users.ts'
 import type { AppContext } from '../context.ts'
 import { ApiError } from '../errors.ts'
 import { keyedLimit } from '../rate-limit.ts'
@@ -33,9 +33,11 @@ export function registerAuthRoutes(app: FastifyInstance, ctx: AppContext, provid
 
   app.get('/api/auth/config', async () => provider.publicConfig())
 
-  app.get('/api/me', async (req): Promise<Me> => {
+  // `kind` (wave 3, guests): 'guest' for a name-only guest, 'account' otherwise (contracts MeKind).
+  app.get('/api/me', async (req): Promise<Me & MeKind> => {
     const user = await ctx.requireUser(req)
-    return { user: sessionUserToUser(user), workspaces: await listUserWorkspaces(db, user.id) }
+    const [workspaces, kind] = await Promise.all([listUserWorkspaces(db, user.id), userKind(db, user.id)])
+    return { user: sessionUserToUser(user), workspaces, kind }
   })
 
   // Always 204, signed in or not: logging out twice (or from a stale tab) is not an error.

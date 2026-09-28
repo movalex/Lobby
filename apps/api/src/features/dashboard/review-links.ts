@@ -4,7 +4,8 @@
 // expiry at most 30 days, optional max uses. A workshop link (RETRO-04a, 0006) is the same row with
 // role editor, 3 h by default and never more than 24 h after creation ("+1 h" extends it up to that).
 // People accept either through M1's POST /api/invitations/:token/accept (sign-in required); the 0005
-// trigger records each use instead of consuming the link.
+// trigger records each use instead of consuming the link. A link created with `allowGuests` (wave 3,
+// 0009) also lets people join with just a name: POST /api/invitations/:token/guest (features/guests).
 //
 // The token is derived from the invitation id with a server-side key (HMAC), so managers can copy the
 // link again later while the database still stores only its sha256. Access that a review link created
@@ -26,9 +27,12 @@ import type { FastifyInstance } from 'fastify'
 import { requireBoardAction } from '../../access.ts'
 import { audit } from '../../audit.ts'
 import { sha256hex } from '../../auth/session.ts'
+import { userKind } from '../../auth/users.ts'
 import type { Params } from '../../context.ts'
 import { conflict, notFound, parse } from '../../errors.ts'
+import { guestAccountRequired } from '../../routes/invitations.ts'
 import type { FeatureContext } from '../context.ts'
+import { extendGuestSessions } from '../guests/sessions.ts'
 import { publishSharingChanged } from './shared.ts'
 
 /** Open review links per board (a runaway client cannot fill the table). */
@@ -55,9 +59,11 @@ interface LinkRow {
   expires_at: Date
   revoked_at: Date | null
   swept_at: Date | null
+  /** 0009_guests: people can join with just a name. */
+  allow_guests: boolean
 }
 const LINK_COLUMNS =
-  'id, workspace_id, board_id, role, created_by, created_at, expires_at, revoked_at, swept_at'
+  'id, workspace_id, board_id, role, created_by, created_at, expires_at, revoked_at, swept_at, allow_guests'
 
 const RANK: Record<string, number> = { viewer: 1, commenter: 2, editor: 3, owner: 4 }
 const higher = (a: string | null, b: string | null) => ((RANK[b ?? ''] ?? 0) > (RANK[a ?? ''] ?? 0) ? b : a)
@@ -178,6 +184,7 @@ interface InvitationListRow {
   id: string
   role: ReviewLinkRole
   multi_use: boolean
+  allow_guests: boolean
   max_uses: number | null
   use_count: number
   created_at: Date
@@ -197,7 +204,7 @@ export function registerReviewLinkRoutes(app: FastifyInstance, ctx: FeatureConte
     const { bid = '' } = req.params as Params
     const access = await requireBoardAction(db, bid, user.id, 'manage_access')
     const rows = await db.query<InvitationListRow>(
-      `SELECT i.id, i.role, i.multi_use, i.max_uses, i.use_count, i.created_at, i.expires_at, i.token_hash,
+      `SELECT i.id, i.role, i.multi_use, i.allow_guests, i.max_uses, i.use_count, i.created_at, i.expires_at, i.token_hash,
               u.id AS creator_id, u.name AS creator_name
          FROM invitations i JOIN users u ON u.id = i.created_by
         WHERE i.board_id = $1 AND i.workspace_id = $2 AND i.revoked_at IS NULL AND i.redeemed_by IS NULL
@@ -226,6 +233,7 @@ export function registerReviewLinkRoutes(app: FastifyInstance, ctx: FeatureConte
         maxExpiresAt: r.multi_use
           ? new Date(r.created_at.getTime() + reviewLinkMaxLifetimeMs(r.role)).toISOString()
           : null,
+        allowGuests: r.multi_use && r.allow_guests,
       }
     })
     return { invitations }
@@ -237,6 +245,9 @@ export function registerReviewLinkRoutes(app: FastifyInstance, ctx: FeatureConte
     const input = parse(CreateReviewLinkInput, req.body ?? {})
     const created = await db.transaction(async (tx) => {
       const access = await requireBoardAction(tx, bid, user.id, 'manage_access', { forUpdate: true })
+      // Wave 3: a name-only guest never hands out links, whatever board role they were given.
+      if ((await userKind(tx, user.id)) === 'guest')
+        throw guestAccountRequired('Sign in with an account to create links.')
       const at = now()
       const open = await tx.one<{ n: number }>(
         `SELECT count(*)::int AS n FROM invitations
@@ -255,8 +266,8 @@ export function registerReviewLinkRoutes(app: FastifyInstance, ctx: FeatureConte
       const expiresAt = new Date(at.getTime() + lifetime)
       await tx.query(
         `INSERT INTO invitations (id, token_hash, workspace_id, board_id, role, created_by, created_at,
-                                  expires_at, multi_use, max_uses)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, true, $9)`,
+                                  expires_at, multi_use, max_uses, allow_guests)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, true, $9, $10)`,
         [
           id,
           sha256hex(token),
@@ -267,6 +278,7 @@ export function registerReviewLinkRoutes(app: FastifyInstance, ctx: FeatureConte
           at,
           expiresAt,
           input.maxUses,
+          input.allowGuests,
         ],
       )
       await audit(tx, {
@@ -274,7 +286,13 @@ export function registerReviewLinkRoutes(app: FastifyInstance, ctx: FeatureConte
         actorId: user.id,
         action: 'invitation.create',
         target: id,
-        detail: { boardId: bid, role: input.role, multiUse: true, maxUses: input.maxUses },
+        detail: {
+          boardId: bid,
+          role: input.role,
+          multiUse: true,
+          maxUses: input.maxUses,
+          ...(input.allowGuests ? { allowGuests: true } : {}),
+        },
         at,
       })
       return {
@@ -283,6 +301,7 @@ export function registerReviewLinkRoutes(app: FastifyInstance, ctx: FeatureConte
         role: input.role,
         expiresAt: expiresAt.toISOString(),
         maxUses: input.maxUses,
+        allowGuests: input.allowGuests,
       }
     })
     publishSharingChanged(ctx, bid, 'review-link-created')
@@ -363,6 +382,8 @@ export function registerReviewLinkRoutes(app: FastifyInstance, ctx: FeatureConte
         )
       const expiresAt = new Date(next)
       await tx.query('UPDATE invitations SET expires_at = $2 WHERE id = $1', [id, expiresAt])
+      // Wave 3: guests who joined through the link stay signed in for its new end, too.
+      if (link.allow_guests) await extendGuestSessions(tx, id, expiresAt, at)
       await audit(tx, {
         workspaceId: link.workspace_id,
         actorId: user.id,

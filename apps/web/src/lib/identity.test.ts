@@ -30,6 +30,10 @@ describe('user display', () => {
     expect(initialsFor('Mary Jane')).toBe('MJ')
     expect(initialsFor('mary-jane')).toBe('MJ')
     expect(initialsFor('')).toBe('?')
+    // A guest's display marker is not an initial (wave 3 guests).
+    expect(initialsFor('Sam (guest)')).toBe('SA')
+    expect(initialsFor('Sam Rivera (guest)')).toBe('SR')
+    expect(initialsFor('(guest)')).toBe('(G')
   })
 
   it('accepts the same dev handles as the API contract', () => {
