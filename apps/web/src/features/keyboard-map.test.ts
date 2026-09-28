@@ -9,6 +9,7 @@
 import { readFileSync } from 'node:fs'
 import type { Editor, TLUiActionsContextType, TLUiOverrideHelpers, TLUiToolsContextType } from 'tldraw'
 import { describe, expect, it } from 'vitest'
+import { CANVAS_OWN_KEYS } from './canvas-ux/keys.ts'
 import { chordsOf, findKbdConflicts, type KbdItem } from './canvas-ux/shortcuts.ts'
 import { mergeFeatureProps } from './FeatureHost.tsx'
 import { MINDMAP_KEYS } from './mindmap/keys.ts'
@@ -184,6 +185,15 @@ describe('keyboard map after every feature override (registry order)', () => {
       'dr-toggle-note-authors',
     ])
       expect(pick(id)?.readonlyOk).toBe(false)
+  })
+})
+
+describe('canvas-ux keys read by its own listener (a11y-polish)', () => {
+  it('Alt+F10 (selection toolbar), Shift+F10 and the menu key (context menu) shadow no action or tool', () => {
+    for (const chord of CANVAS_OWN_KEYS) {
+      expect(idsFor(chord), chord).toEqual([])
+      expect(idsFor(chord, true), chord).toEqual([])
+    }
   })
 })
 

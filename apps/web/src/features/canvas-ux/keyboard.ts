@@ -3,7 +3,10 @@
 //    and exclusions are documented in keys.ts)
 //  - Ctrl/Cmd+F opens board search even while a text field or note has focus (MAK-12)
 //  - Space+drag pans even when a clicked button still has the focus (F3)
-//  - Enter renames the one selected frame (RETRO-14)
+//  - Enter renames the one selected frame (RETRO-14); Enter edits the one selected note with the caret at
+//    the end of its text, never with all of it selected (A11Y-12)
+//  - Alt+F10 moves the keyboard to the selection toolbar; Shift+F10 and the ContextMenu key open the
+//    context menu for the selection (A11Y-04)
 //  - keys typed before a text field is ready are buffered and inserted in order: a note that type-to-edit
 //    just opened, the new note Tab / Shift+Tab / Ctrl+Enter just made (RETRO-09), a frame heading being
 //    renamed (RETRO-14, PRI-20c). They never reach tldraw's single-key shortcuts meanwhile.
@@ -13,8 +16,11 @@
 import { type Editor, react, type TLEventInfo, type TLShape, type TLShapeId } from 'tldraw'
 import {
   isBoardSearchKey,
+  isContextMenuKey,
   isPrintableKey,
+  isSelectionToolbarKey,
   type KeyEventLike,
+  shouldEditNoteOnEnter,
   shouldRedirectSpaceToBoard,
   shouldRenameFrame,
   shouldTypeToEdit,
@@ -104,10 +110,37 @@ export function insertIntoInput(input: HTMLInputElement, text: string) {
   input.dispatchEvent(new Event('input', { bubbles: true }))
 }
 
-/** Gives the keyboard back to the board (same as comments' focusBoard). */
-function focusBoard(editor: Editor) {
+/**
+ * Gives the keyboard back to the board (same as comments' focusBoard). editor.focus() alone is a no-op
+ * while the editor already counts as focused (tldraw 5.4.2 Editor.focus returns early), so the DOM focus
+ * has to move as well (A11Y-01).
+ */
+export function focusBoard(editor: Editor) {
   editor.focus()
   editor.getContainer().focus({ preventScroll: true })
+}
+
+/** A11Y-04: the selection toolbar's first enabled button, when the bar is showing. */
+function selectionBarButton(editor: Editor): HTMLButtonElement | null {
+  return editor
+    .getContainer()
+    .querySelector<HTMLButtonElement>('[data-testid="selection-bar"] button:not(:disabled)')
+}
+
+/**
+ * A11Y-04: opens the context menu for the selection (else for the canvas) at the selection's centre, as
+ * tldraw's own Ctrl/Cmd+Shift+Enter (a11y-open-context-menu) does.
+ */
+export function openContextMenuAtSelection(editor: Editor): boolean {
+  const canvas = editor.getContainer().querySelector('.tl-canvas')
+  if (!canvas) return false
+  const bounds = editor.getSelectionPageBounds()
+  const point = editor.pageToScreen(bounds ? bounds.center : editor.getViewportPageBounds().center)
+  const win = editor.getContainer().ownerDocument.defaultView ?? window
+  canvas.dispatchEvent(
+    new win.PointerEvent('contextmenu', { clientX: point.x, clientY: point.y, bubbles: true }),
+  )
+  return true
 }
 
 export function installCanvasKeyboard(
@@ -151,7 +184,14 @@ export function installCanvasKeyboard(
       p.done = true
       const text = p.text
       p.text = ''
-      if (text) rte.chain().focus('end').insertContent(text).run()
+      // The caret goes to the end (A11Y-12: never over all of the text), then what was typed follows.
+      // Unless the keyboard has already moved on outside the board (Ctrl/Cmd+F right after Enter opened
+      // the search field): the note must not take it back.
+      const active = doc.activeElement
+      const movedOn = !!active && active !== doc.body && !editor.getContainer().contains(active)
+      const chain = movedOn ? rte.chain() : rte.chain().focus('end')
+      if (text) chain.insertContent(text)
+      chain.run()
       return true
     }
     // frame heading: keep it focused for the whole window (a double-click's pointer up can take the
@@ -253,6 +293,13 @@ export function installCanvasKeyboard(
       if (opts.isModalOpen()) return
       e.preventDefault()
       e.stopPropagation()
+      // A11Y-13: a note (or label) still being edited took the keyboard back from the search field
+      // (tldraw refocuses its text editor shortly after mounting), so the search words went into the
+      // note. Finish the edit first, as Miro does; the text typed so far stays.
+      if (editor.getEditingShapeId()) {
+        if (pending) flush(pending)
+        editor.complete()
+      }
       opts.onBoardSearch()
       return
     }
@@ -326,7 +373,30 @@ export function installCanvasKeyboard(
       target === doc.body ||
       target === container ||
       (typeof target.closest === 'function' && target.closest('.tl-canvas') !== null)
-    if (!onCanvas || !editor.getInstanceState().isFocused) return
+    if (!onCanvas) return
+
+    // A11Y-04: from the board, Alt+F10 reaches the selection toolbar and Shift+F10 / the menu key opens
+    // the context menu.
+    if (!opts.isModalOpen() && !editor.getEditingShapeId() && !editor.menus.hasAnyOpenMenus()) {
+      if (isSelectionToolbarKey(k)) {
+        const first = selectionBarButton(editor)
+        if (first) {
+          e.preventDefault()
+          e.stopPropagation()
+          // A keyboard move: show the ring even when the note was selected with the mouse.
+          first.focus({ focusVisible: true } as FocusOptions)
+        }
+        return
+      }
+      if (isContextMenuKey(k)) {
+        e.preventDefault()
+        e.stopPropagation()
+        openContextMenuAtSelection(editor)
+        return
+      }
+    }
+
+    if (!editor.getInstanceState().isFocused) return
 
     const selected = editor.getSelectedShapes()
     const only = selected[0]
@@ -344,6 +414,19 @@ export function installCanvasKeyboard(
       e.preventDefault()
       e.stopPropagation()
       editor.markHistoryStoppingPoint('rename frame')
+      editor.setEditingShape(only)
+      editor.setCurrentTool('select.editing_shape', { target: 'shape', shape: only })
+      return
+    }
+
+    if (only && shouldEditNoteOnEnter(k, state) && editor.canEditShape(only, { type: 'press_enter' })) {
+      // A11Y-12: tldraw's Enter (on key up) would select all of the note's text. Edit it here instead:
+      // the pending buffer puts the caret at the end once the text editor mounts, and keys typed before
+      // then are appended in order.
+      e.preventDefault()
+      e.stopPropagation()
+      editor.markHistoryStoppingPoint('editing shape')
+      start(only.id, 'rte')
       editor.setEditingShape(only)
       editor.setCurrentTool('select.editing_shape', { target: 'shape', shape: only })
       return

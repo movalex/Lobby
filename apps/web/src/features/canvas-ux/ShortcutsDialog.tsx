@@ -55,6 +55,24 @@ export function DraftroomShortcutsDialog(props: TLUiKeyboardShortcutsDialogProps
           onSelect={noop}
         />
         <TldrawUiMenuItem
+          id="dr-edit-note"
+          label="shortcuts-dialog.dr-edit-note"
+          kbd="[[Enter]]"
+          onSelect={noop}
+        />
+        <TldrawUiMenuItem
+          id="dr-selection-toolbar"
+          label="shortcuts-dialog.dr-selection-toolbar"
+          kbd="alt+[[F10]]"
+          onSelect={noop}
+        />
+        <TldrawUiMenuItem
+          id="dr-context-menu"
+          label="shortcuts-dialog.dr-context-menu"
+          kbd="shift+[[F10]]"
+          onSelect={noop}
+        />
+        <TldrawUiMenuItem
           id="dr-paste-notes"
           label="shortcuts-dialog.dr-paste-notes"
           kbd="cmd+v"

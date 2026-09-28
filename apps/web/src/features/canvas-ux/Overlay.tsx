@@ -26,6 +26,7 @@ import { pasteAsNotes } from './bulk-paste-handler.ts'
 import { copySelectionLink } from './copy-link.ts'
 import { DEFAULT_MAX_NOTES } from './deps.ts'
 import { AlignIcons, GridIcon, LinkIcon, LockIcon } from './icons.tsx'
+import { focusBoard } from './keyboard.ts'
 import { PANEL } from './overrides.tsx'
 import { hasNotePalette, withNotePalette } from './palette.ts'
 import { kbdLabel, NEW_ACTION_KBDS } from './shortcuts.ts'
@@ -44,10 +45,14 @@ export function applyNotePalette(editor: Editor) {
  * (native, bubble phase; they run before React's root listener, so React's stopPropagation would be
  * too late). Because React then never sees those keydowns either, Escape is handled here natively.
  */
-function useIsland<T extends HTMLElement>(opts: { onEscape?: () => void; keepCanvasFocus?: boolean } = {}) {
+function useIsland<T extends HTMLElement>(
+  opts: { onEscape?: () => void; keepCanvasFocus?: boolean; onKey?: (e: KeyboardEvent) => void } = {},
+) {
   const ref = useRef<T>(null)
   const escapeRef = useRef(opts.onEscape)
   escapeRef.current = opts.onEscape
+  const keyRef = useRef(opts.onKey)
+  keyRef.current = opts.onKey
   const keepFocus = opts.keepCanvasFocus === true
   useEffect(() => {
     const el = ref.current
@@ -60,6 +65,8 @@ function useIsland<T extends HTMLElement>(opts: { onEscape?: () => void; keepCan
     }
     const onKey = (e: KeyboardEvent) => {
       e.stopPropagation()
+      keyRef.current?.(e)
+      if (e.defaultPrevented) return
       if (e.key === 'Escape' && escapeRef.current) {
         e.preventDefault()
         escapeRef.current()
@@ -81,6 +88,34 @@ function useIsland<T extends HTMLElement>(opts: { onEscape?: () => void; keepCan
   return ref
 }
 
+/**
+ * A11Y-04: ArrowLeft/Right, Home and End move the focus along a horizontal toolbar's own buttons. Keys
+ * typed into a field inside the bar (a popover's input) are left alone.
+ */
+export function moveInToolbar(e: KeyboardEvent, bar: HTMLElement | null) {
+  if (!bar || e.altKey || e.ctrlKey || e.metaKey) return
+  const target = e.target
+  if (!(target instanceof HTMLButtonElement) || !bar.contains(target)) return
+  const buttons = [...bar.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')].filter(
+    (b) => b.closest('[role="toolbar"]') === bar,
+  )
+  const i = buttons.indexOf(target)
+  if (i < 0) return
+  const next =
+    e.key === 'ArrowRight'
+      ? buttons[(i + 1) % buttons.length]
+      : e.key === 'ArrowLeft'
+        ? buttons[(i - 1 + buttons.length) % buttons.length]
+        : e.key === 'Home'
+          ? buttons[0]
+          : e.key === 'End'
+            ? buttons[buttons.length - 1]
+            : undefined
+  if (!next) return
+  e.preventDefault()
+  next.focus()
+}
+
 function clamp(v: number, min: number, max: number) {
   return Math.max(min, Math.min(max, v))
 }
@@ -90,7 +125,7 @@ function BulkPastePrompt() {
   const pending = useValue('dr-pending-paste', () => pendingPaste(editor).get(), [editor])
   const finish = () => {
     pendingPaste(editor).set(null)
-    editor.focus()
+    focusBoard(editor)
   }
   const ref = useIsland<HTMLDivElement>({ onEscape: finish })
   const titleId = useId()
@@ -133,7 +168,7 @@ function BulkPastePrompt() {
             const p = pendingPaste(editor).get()
             pendingPaste(editor).set(null)
             if (p) pasteAsNotes(editor, p.text, p.center)
-            editor.focus()
+            focusBoard(editor)
           }}
         >
           {notes} sticky {notes === 1 ? 'note' : 'notes'}
@@ -149,7 +184,7 @@ function BulkPastePrompt() {
               editor.markHistoryStoppingPoint('paste as text')
               void p.asText()
             }
-            editor.focus()
+            focusBoard(editor)
           }}
         >
           Text
@@ -248,7 +283,15 @@ function BarButton(props: {
 function SelectionBar({ ctx }: { ctx: FeatureContext }) {
   const editor = useEditor()
   const actions = useActions()
-  const ref = useIsland<HTMLDivElement>({ keepCanvasFocus: true })
+  // A11Y-04: Alt+F10 on the board lands on the first button (keyboard.ts); arrows, Home and End move
+  // along the bar (ARIA toolbar), Tab leaves it, Escape gives the keyboard back to the board.
+  const ref = useIsland<HTMLDivElement>({
+    keepCanvasFocus: true,
+    onEscape: () => {
+      if (ref.current?.contains(document.activeElement)) focusBoard(editor)
+    },
+    onKey: (e) => moveInToolbar(e, ref.current),
+  })
   const canEdit = !isReadonlyRole(ctx.role, ctx.board.status)
   const state = useValue('dr-selbar', () => {
     const ids = editor.getSelectedShapeIds()
@@ -297,7 +340,7 @@ function SelectionBar({ ctx }: { ctx: FeatureContext }) {
   const run = (id: string) => {
     actions[id]?.onSelect('toolbar')
     // Keyboard users who tabbed into the bar go back to the board after acting.
-    if (ref.current?.contains(document.activeElement)) editor.focus()
+    if (ref.current?.contains(document.activeElement)) focusBoard(editor)
   }
   // Unlike the one-shot buttons, the stepper keeps the keyboard focus (for repeated presses).
   const setColumns = (columns: number) => void runArrangeAsGrid(editor, { columns })
@@ -315,7 +358,7 @@ function SelectionBar({ ctx }: { ctx: FeatureContext }) {
         testId="copy-link-selection"
         onClick={() => {
           void copySelectionLink(editor)
-          if (ref.current?.contains(document.activeElement)) editor.focus()
+          if (ref.current?.contains(document.activeElement)) focusBoard(editor)
         }}
       >
         <LinkIcon />

@@ -1,4 +1,5 @@
 import { type KeyboardEvent, useState } from 'react'
+import { isFocusLost, tryFocus } from './focus.ts'
 
 /** Inline rename: Enter or leaving the field saves, Escape cancels. An unchanged or empty title cancels. */
 export function RenameInput({
@@ -20,12 +21,19 @@ export function RenameInput({
 }) {
   const [value, setValue] = useState(initial)
   const [finished, setFinished] = useState(false)
+  // What had the focus before the field took it (the "Rename" menu's button, the title): it gets the
+  // keyboard back when Enter or Escape ends the rename (A11Y-01), not <body>.
+  const [opener] = useState(() => (typeof document === 'undefined' ? null : document.activeElement))
   const finish = (save: boolean) => {
     if (finished) return
     setFinished(true)
     const next = value.trim()
     if (save && next && next !== initial) onSubmit(next)
     else onCancel()
+    // After the field unmounts; a click elsewhere (blur) has put the focus somewhere already.
+    requestAnimationFrame(() => {
+      if (isFocusLost()) tryFocus(opener)
+    })
   }
   const onKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') {

@@ -1,10 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import {
+  CANVAS_OWN_KEYS,
   type FocusedControlLike,
   isBoardSearchKey,
+  isContextMenuKey,
   isPrintableKey,
+  isSelectionToolbarKey,
   isTypeToEditKey,
   type KeyEventLike,
+  shouldEditNoteOnEnter,
   shouldRedirectSpaceToBoard,
   shouldRenameFrame,
   shouldTypeToEdit,
@@ -174,5 +178,54 @@ describe('F3: Space from a clicked button pans', () => {
     expect(shouldRedirectSpaceToBoard(key(' ', { ctrlKey: true }), clicked)).toBe(false)
     expect(shouldRedirectSpaceToBoard(key('Enter'), clicked)).toBe(false)
     expect(shouldRedirectSpaceToBoard(key('Tab'), clicked)).toBe(false)
+  })
+})
+
+describe('A11Y-12: Enter edits the one selected note (caret at the end, set in keyboard.ts)', () => {
+  it('takes a plain Enter on one unlocked note, on an idle, editable board', () => {
+    expect(shouldEditNoteOnEnter(key('Enter'), oneNote)).toBe(true)
+    // Also right after an edit ended (RETRO-02: Enter re-edits the note just left).
+    expect(shouldEditNoteOnEnter(key('Enter'), { ...oneNote, justLeftEditing: true })).toBe(true)
+  })
+  it('leaves chords, frames, several shapes, locked notes, menus, fields and read-only boards alone', () => {
+    for (const mods of [{ shiftKey: true }, { ctrlKey: true }, { metaKey: true }, { altKey: true }])
+      expect(shouldEditNoteOnEnter(key('Enter', mods), oneNote)).toBe(false)
+    expect(shouldEditNoteOnEnter(key('Enter', { isComposing: true }), oneNote)).toBe(false)
+    expect(shouldEditNoteOnEnter(key('a'), oneNote)).toBe(false)
+    const frame = { ...oneNote, selected: [{ type: 'frame', locked: false }] }
+    expect(shouldEditNoteOnEnter(key('Enter'), frame)).toBe(false)
+    const two = { ...oneNote, selected: [...oneNote.selected, ...oneNote.selected] }
+    expect(shouldEditNoteOnEnter(key('Enter'), two)).toBe(false)
+    const locked = { ...oneNote, selected: [{ type: 'note', locked: true }] }
+    expect(shouldEditNoteOnEnter(key('Enter'), locked)).toBe(false)
+    for (const patch of [
+      { isIdle: false },
+      { isEditing: true },
+      { isReadonly: true },
+      { menusOpen: true },
+      { targetIsTextField: true },
+    ])
+      expect(shouldEditNoteOnEnter(key('Enter'), { ...oneNote, ...patch })).toBe(false)
+  })
+})
+
+describe('A11Y-04: selection toolbar and context menu keys', () => {
+  it('Alt+F10 goes to the selection toolbar; F10 alone and other chords do not', () => {
+    expect(isSelectionToolbarKey(key('F10', { altKey: true }))).toBe(true)
+    expect(isSelectionToolbarKey(key('Unidentified', { altKey: true, code: 'F10' }))).toBe(true)
+    expect(isSelectionToolbarKey(key('F10'))).toBe(false)
+    expect(isSelectionToolbarKey(key('F10', { altKey: true, shiftKey: true }))).toBe(false)
+    expect(isSelectionToolbarKey(key('F10', { altKey: true, ctrlKey: true }))).toBe(false)
+  })
+  it('Shift+F10 and the ContextMenu key open the context menu', () => {
+    expect(isContextMenuKey(key('F10', { shiftKey: true }))).toBe(true)
+    expect(isContextMenuKey(key('ContextMenu'))).toBe(true)
+    expect(isContextMenuKey(key('ContextMenu', { shiftKey: true }))).toBe(true)
+    expect(isContextMenuKey(key('F10'))).toBe(false)
+    expect(isContextMenuKey(key('F10', { shiftKey: true, altKey: true }))).toBe(false)
+    expect(isContextMenuKey(key('F10', { shiftKey: true, ctrlKey: true }))).toBe(false)
+  })
+  it('lists the chords it takes (checked against the merged key map in keyboard-map.test.ts)', () => {
+    expect(CANVAS_OWN_KEYS).toEqual(['alt+f10', 'shift+f10', 'contextmenu'])
   })
 })

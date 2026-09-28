@@ -203,7 +203,8 @@ export async function startTextEditing(page: Page, id: string) {
 }
 
 /**
- * Enters text editing from the keyboard (select, then Enter), which opens with all text selected.
+ * Enters text editing from the keyboard (select, then Enter). A note opens with the caret at the end of
+ * its text (A11Y-12); other shapes open with all of their text selected (tldraw).
  * Unlike a double-click there is no pointer-driven caret placement to race with later keys.
  */
 export async function startTextEditingWithKeyboard(page: Page, id: string) {
