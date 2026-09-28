@@ -208,6 +208,12 @@ On that evidence, `true` would let any client choose its own rate-limit bucket o
   - Raising the value is not a fix: the api's own `onrender.com` hostname is public, so any `N` above the direct-path count lets direct callers spoof. If the rewrite path needs more hops, use an address list of the rewrite proxy's ranges, or option (b).
 - whether Render keeps that chain shape.
 
+**Measured on staging (2026-09-28, `TRUST_PROXY=3`).** From one client, four `GET /api/invitations/<made-up token>` requests alternated between the api's own hostname and the static site's `/api/*` rewrite. `x-ratelimit-remaining` counted down 599 → 598 → 597 → 596 across both paths, so both paths land in the **same** per-IP bucket.
+- The direct path resolves to the real client (the chain above).
+- The rewrite path therefore does too. If it added hops, the third hop back would be a proxy address and the two buckets would differ.
+
+The browser's per-IP limits therefore apply per real client (per office NAT, for people who share one), not per rewrite proxy. Still open: the two-network half of the check below.
+
 Worker routes are rate limited per **token**, not per IP, so the NAS worker's public path and the Render worker's private path are both unaffected by this setting.
 
 First-deploy check: from two different networks, send 31 `POST /api/auth/logout` requests in a minute through the static site from one (the 31st gets `429`). Confirm the other network still gets `200`.
