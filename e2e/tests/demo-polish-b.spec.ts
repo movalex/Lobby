@@ -23,6 +23,24 @@ interface PolishEditor extends EditorLike {
   zoomToBounds(b: BoxLike, opts?: { inset?: number; immediate?: boolean; targetZoom?: number }): PolishEditor
   zoomToFit(opts?: { immediate?: boolean }): PolishEditor
   stopCameraAnimation(): PolishEditor
+  getContainer(): HTMLElement
+}
+
+/**
+ * tldraw reads its canvas size on a 200 ms throttle: after a side panel opens or closes, camera math
+ * uses the old size for a moment. Waits until the editor's viewport matches the canvas on screen.
+ */
+async function viewportSettled(page: Page) {
+  await expect
+    .poll(() =>
+      read(page, (e) => {
+        const x = e as unknown as PolishEditor
+        const s = x.getViewportScreenBounds()
+        const r = x.getContainer().getBoundingClientRect()
+        return Math.abs(s.w - r.width) < 1 && Math.abs(s.h - r.height) < 1
+      }),
+    )
+    .toBe(true)
 }
 
 interface Opened {
@@ -510,6 +528,7 @@ test('F17 leaving Present puts the board back where it was, even when the canvas
     // The walk had a side panel open when Present started, and closed after it.
     await a.page.getByTestId('dock-tab-frames').click()
     await expect(a.page.getByTestId('dock-panel-frames')).toBeVisible()
+    await viewportSettled(a.page)
     await read(
       a.page,
       (e, id) => {
@@ -530,7 +549,8 @@ test('F17 leaving Present puts the board back where it was, even when the canvas
     await a.page.keyboard.press('Escape')
     await expect(a.page.getByTestId('present-overlay')).toHaveCount(0)
     await expect(a.page.getByTestId('dock-panel-frames')).toHaveCount(0)
-    await a.page.waitForTimeout(300) // the second restore runs two frames later
+    await viewportSettled(a.page) // the board's canvas is back (without the panel)
+    await a.page.waitForTimeout(300) // and the restore that follows tldraw's resize has run
     const after = await view()
     expect(Math.abs(after.x - before.x)).toBeLessThanOrEqual(1)
     expect(Math.abs(after.y - before.y)).toBeLessThanOrEqual(1)

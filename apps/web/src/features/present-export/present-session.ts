@@ -13,6 +13,7 @@ import {
   atom,
   computed,
   type Editor,
+  type TLEventInfo,
   type TLPageId,
   type TLShape,
   type TLShapeId,
@@ -22,6 +23,8 @@ import { type FrameEntry, presentationOrder } from './board-ops.ts'
 import { buildSlides, findStartIndex, reconcileIndex, type Slide, stepIndex } from './slides.ts'
 
 export const PRESENTING_ATTR = 'data-dr-presenting'
+/** How long after a presentation the board view is re-centred while the canvas settles. */
+const HOLD_CENTRE_MS = 2000
 
 export type FullscreenMode = 'native' | 'window'
 
@@ -331,27 +334,35 @@ export function createPresenter(editor: Editor): Presenter {
 
   /**
    * After a presentation the board's canvas settles over the next frames (fullscreen exit, the dock
-   * and top bar coming back): re-centre on every resize for a moment, until the person moves the
-   * camera themselves.
+   * and top bar coming back; tldraw reads the new size up to 200 ms late): re-centre on every resize
+   * for a moment, until the person moves the camera or presses a key themselves.
    */
   let stopHolding: (() => void) | null = null
   const holdCentre = (saved: SavedView) => {
     stopHolding?.()
-    let expected = editor.getCamera()
     const onResize = () => {
-      const c = editor.getCamera()
-      if (c.x !== expected.x || c.y !== expected.y || c.z !== expected.z) return release()
       if (state.get()) return release()
       restoreCamera(saved)
-      expected = editor.getCamera()
     }
-    const timer = setTimeout(() => release(), 1500)
+    const onEvent = (info: TLEventInfo) => {
+      if (
+        info.type === 'wheel' ||
+        info.type === 'pinch' ||
+        (info.type === 'pointer' && info.name === 'pointer_down') ||
+        (info.type === 'keyboard' && info.name === 'key_down')
+      ) {
+        release()
+      }
+    }
+    const timer = setTimeout(() => release(), HOLD_CENTRE_MS)
     function release() {
       clearTimeout(timer)
       editor.off('resize', onResize)
+      editor.off('event', onEvent)
       if (stopHolding === release) stopHolding = null
     }
     editor.on('resize', onResize)
+    editor.on('event', onEvent)
     stopHolding = release
   }
 
@@ -389,10 +400,7 @@ export function createPresenter(editor: Editor): Presenter {
     // camera again once it has, so the board view is exactly where it was.
     requestAnimationFrame(() =>
       requestAnimationFrame(() => {
-        if (state.get() || !stopHolding) return
-        restoreCamera(saved)
-        stopHolding()
-        holdCentre(saved)
+        if (!state.get() && stopHolding) restoreCamera(saved)
       }),
     )
     focusTarget(saved.focus)?.focus({ preventScroll: true })
