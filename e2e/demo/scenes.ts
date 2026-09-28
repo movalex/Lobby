@@ -355,6 +355,8 @@ export async function recordDemo(opts: RecordOptions): Promise<Timeline> {
           const spot = { x: frame.box.x + 700, y: frame.box.y + frame.box.h + 700 }
           await Promise.all([centerView(A.page, spot, 1), centerView(S.page, spot, 1)])
           await A.page.keyboard.press('Escape')
+          // The off-camera Escape must not leave its keycap on screen when the scene starts.
+          await Promise.all([tidy(A.page), tidy(S.page)])
           await Promise.all([alex.nudge(), sam.nudge()])
         },
       },
