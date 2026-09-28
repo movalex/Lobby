@@ -480,7 +480,7 @@ function InvitePeople({
         {target.kind === 'member' &&
           `${target.member.user.name} is in ${workspaceName}: they get access right away.`}
         {target.kind === 'email' &&
-          'Draftroom does not send email: you get a one-time invite link to copy and send them yourself.'}
+          'Lobby does not send email: you get a one-time invite link to copy and send them yourself.'}
         {target.kind === 'unknown' &&
           `No one in ${workspaceName} matches. You get a one-time invite link to copy and send them.`}
         {(target.kind === 'empty' || target.kind === 'already') &&

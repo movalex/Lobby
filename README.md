@@ -1,6 +1,10 @@
-# Draftroom
+# Lobby
 
-A Miro-style collaborative board for creative teams: live multi-user canvas, sticky notes, frames, connectors, files with previews, and (coming) comments, templates, facilitation tools and sharing.
+Dark Burn Creative's internal collaborative whiteboard. Every DBC project gets its own **lobby**, which holds that project's **boards**: a Miro-style live multi-user canvas with sticky notes, frames, connectors, files with previews, comments, templates, facilitation tools and sharing.
+
+## Naming
+
+The product is **Lobby** (the sign-in lockup reads "DBC Lobby"); boards stay "boards". The code keeps its original code name **draftroom** wherever renaming would break something or buy nothing: the repository, package names (`@draftroom/*`), environment variables (`DRAFTROOM_*`), the `dr_session` cookie, the `dr-` CSS prefix, `draftroom:*` localStorage keys, document meta keys, the `draftroom-board` archive format and the `.draftroom.json` export suffix (kept so existing exports still import), hostnames and database ids. Brand artwork lives in `apps/web/src/brand/Wordmark.tsx` (inline mark), `apps/web/public/favicon.svg` (tile icon; PNGs via `node apps/web/scripts/make-icons.mjs`) and `apps/web/public/brand/lobby-hero.svg` (sign-in hero).
 
 Built on [tldraw](https://tldraw.dev) 5.4.2 with its native sync engine, one SQLite database per board, and a separate preview worker. Plan and decisions: [`docs/Miro_Clone_Build_Plan.md`](docs/Miro_Clone_Build_Plan.md) · progress: [`docs/PROGRESS.md`](docs/PROGRESS.md) · engine evidence: [`docs/FEASIBILITY.md`](docs/FEASIBILITY.md).
 

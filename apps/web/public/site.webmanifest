@@ -1,0 +1,15 @@
+{
+  "name": "Lobby",
+  "short_name": "Lobby",
+  "description": "Dark Burn Creative's collaborative whiteboard: every DBC project gets its own lobby of boards.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f6f4ee",
+  "theme_color": "#213150",
+  "icons": [
+    { "src": "/favicon.svg", "type": "image/svg+xml", "sizes": "any" },
+    { "src": "/icon-192.png", "type": "image/png", "sizes": "192x192" },
+    { "src": "/icon-512.png", "type": "image/png", "sizes": "512x512" }
+  ]
+}

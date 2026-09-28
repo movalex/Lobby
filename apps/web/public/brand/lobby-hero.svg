@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 240" role="img" aria-label="DBC Lobby"><title>DBC Lobby</title><defs>
+<clipPath id="sgh-tile"><rect width="240" height="240" rx="60"/></clipPath>
+<radialGradient id="sgh-room" gradientUnits="userSpaceOnUse" cx="165" cy="75" r="250"><stop offset="0" stop-color="#2a3c63"/><stop offset=".45" stop-color="#213150"/><stop offset="1" stop-color="#172139"/></radialGradient>
+<radialGradient id="sgh-wash" gradientUnits="userSpaceOnUse" cx="165" cy="75" r="150"><stop offset="0" stop-color="#FE5A05" stop-opacity=".34"/><stop offset=".45" stop-color="#FE5A05" stop-opacity=".12"/><stop offset="1" stop-color="#FE5A05" stop-opacity="0"/></radialGradient>
+<radialGradient id="sgh-ringfade" gradientUnits="userSpaceOnUse" cx="165" cy="75" r="100"><stop offset=".35" stop-color="#fff"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></radialGradient>
+<mask id="sgh-ringmask" maskUnits="userSpaceOnUse" x="0" y="0" width="240" height="240"><rect width="240" height="240" fill="url(#sgh-ringfade)"/></mask>
+<filter id="sgh-b1" x="-1" y="-1" width="3" height="3"><feGaussianBlur stdDeviation="7"/></filter>
+<filter id="sgh-b2" x="-1" y="-1" width="3" height="3"><feGaussianBlur stdDeviation="22"/></filter>
+<radialGradient id="sgh-spill" gradientUnits="userSpaceOnUse" cx="165" cy="75" r="95"><stop offset=".47" stop-color="#FE5A05" stop-opacity=".36"/><stop offset=".62" stop-color="#FE5A05" stop-opacity=".14"/><stop offset="1" stop-color="#FE5A05" stop-opacity="0"/></radialGradient>
+<radialGradient id="sgh-shade" gradientUnits="userSpaceOnUse" cx="165" cy="75" r="190"><stop offset=".55" stop-color="#213150" stop-opacity="0"/><stop offset="1" stop-color="#213150" stop-opacity=".09"/></radialGradient>
+<radialGradient id="sgh-core" gradientUnits="userSpaceOnUse" cx="165" cy="75" r="40"><stop offset="0" stop-color="#FF8544"/><stop offset=".55" stop-color="#FF6A16"/><stop offset="1" stop-color="#FE5A05"/></radialGradient>
+</defs>
+<rect width="240" height="240" rx="60" fill="url(#sgh-room)"/>
+<g clip-path="url(#sgh-tile)">
+<rect width="240" height="240" fill="url(#sgh-wash)"/>
+<g mask="url(#sgh-ringmask)"><rect x="115" y="25" width="100" height="100" rx="32.5" fill="none" stroke="#FF7A2E" stroke-width="2" opacity="0.55"/><rect x="99" y="9" width="132" height="132" rx="48.5" fill="none" stroke="#FF7A2E" stroke-width="2" opacity="0.26"/></g>
+<rect x="128" y="38" width="74" height="74" rx="19" fill="#FF7A2E" opacity=".5" filter="url(#sgh-b2)"/>
+<rect x="131" y="41" width="68" height="68" rx="16" fill="#FF7A2E" opacity=".7" filter="url(#sgh-b1)"/>
+</g>
+<path d="M57.5 45H107.5A12.5 12.5 0 0 1 120 57.5V120H182.5A12.5 12.5 0 0 1 195 132.5V182.5A12.5 12.5 0 0 1 182.5 195H57.5A12.5 12.5 0 0 1 45 182.5V57.5A12.5 12.5 0 0 1 57.5 45Z" fill="#f6f4ee"/>
+<path d="M57.5 45H107.5A12.5 12.5 0 0 1 120 57.5V120H182.5A12.5 12.5 0 0 1 195 132.5V182.5A12.5 12.5 0 0 1 182.5 195H57.5A12.5 12.5 0 0 1 45 182.5V57.5A12.5 12.5 0 0 1 57.5 45Z" fill="url(#sgh-shade)"/>
+<path d="M57.5 45H107.5A12.5 12.5 0 0 1 120 57.5V120H182.5A12.5 12.5 0 0 1 195 132.5V182.5A12.5 12.5 0 0 1 182.5 195H57.5A12.5 12.5 0 0 1 45 182.5V57.5A12.5 12.5 0 0 1 57.5 45Z" fill="url(#sgh-spill)"/>
+<rect x="135" y="45" width="60" height="60" rx="12.5" fill="url(#sgh-core)"/>
+</svg>

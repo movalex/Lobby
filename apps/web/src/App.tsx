@@ -72,7 +72,7 @@ function RequireSession({ children }: { children: ReactNode }) {
     return (
       <MessageScreen
         testId="api-unreachable"
-        title="Can't reach Draftroom"
+        title="Can't reach Lobby"
         body={state.message}
         actions={
           <button type="button" className="dr-btn dr-btn--primary" onClick={() => void refresh()}>

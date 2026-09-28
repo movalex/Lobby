@@ -159,7 +159,7 @@ export function bookmarkTitle(title: string, index: number): string {
   return cleanTitle(title) || `Page ${index + 1}`
 }
 
-export const FALLBACK_DOCUMENT_TITLE = 'Draftroom board'
+export const FALLBACK_DOCUMENT_TITLE = 'Lobby board'
 
 function drawHiddenText(
   page: PDFPage,
@@ -298,8 +298,8 @@ function addOutline(doc: PDFDocumentType, entries: { title: string; ref: PDFRef 
 export async function createPdfBuilder(meta: { title: string; now?: Date }): Promise<PdfBuilder> {
   const doc = await PDFDocument.create()
   doc.setTitle(cleanTitle(meta.title) || FALLBACK_DOCUMENT_TITLE, { showInWindowTitleBar: true })
-  doc.setCreator('Draftroom')
-  doc.setProducer('Draftroom')
+  doc.setCreator('Lobby')
+  doc.setProducer('Lobby')
   const now = meta.now ?? new Date()
   doc.setCreationDate(now)
   doc.setModificationDate(now)

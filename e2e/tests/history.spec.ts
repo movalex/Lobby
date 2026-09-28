@@ -954,7 +954,7 @@ test('export .json and import it on the dashboard: same shapes, frame, connector
       buffer: Buffer.from('{"format":"draftroom-board","records":['),
     })
     await expect(
-      a.page.locator('.dr-notice').filter({ hasText: 'That file is not a Draftroom board export (.json).' }),
+      a.page.locator('.dr-notice').filter({ hasText: 'That file is not a Lobby board export (.json).' }),
     ).toBeVisible()
     const refused = a.page.waitForResponse((r) => r.url().includes(`/api/workspaces/${wid}/boards/import`))
     await a.page.getByTestId('import-board-file').setInputFiles({

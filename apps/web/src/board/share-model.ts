@@ -79,7 +79,7 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 /**
  * What the "Invite by @handle or email" field refers to. A handle (with or without @) or an exact
  * name of someone in the workspace is granted directly; an email address or anyone else gets an
- * invite link to send them (Draftroom does not send email).
+ * invite link to send them (Lobby does not send email).
  */
 export function parseInviteTarget(
   text: string,

@@ -147,9 +147,9 @@ function BoardShell({ initial }: { initial: BoardDetail }) {
   const retry = useCallback(() => setAttempt((n) => n + 1), [])
 
   useEffect(() => {
-    document.title = `${board.title} · Draftroom`
+    document.title = `${board.title} · Lobby`
     return () => {
-      document.title = 'Draftroom'
+      document.title = 'Lobby'
     }
   }, [board.title])
 

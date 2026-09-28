@@ -56,7 +56,7 @@ export async function fetchBoardArchive(boardId: string, fetchImpl: typeof fetch
       headers: { accept: 'application/json' },
     })
   } catch {
-    throw new ApiError('network', 0, 'NETWORK', "Can't reach Draftroom. Check your connection and try again.")
+    throw new ApiError('network', 0, 'NETWORK', "Can't reach Lobby. Check your connection and try again.")
   }
   if (!res.ok) throw await errorFromResponse(res)
   return res.blob()

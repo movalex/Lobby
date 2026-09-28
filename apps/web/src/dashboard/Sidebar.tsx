@@ -59,7 +59,7 @@ export function Sidebar({
 
   return (
     <aside className="dr-side" aria-label="Workspace navigation">
-      <a className="dr-side__brand" href="/" onClick={linkClick('/')} aria-label="Draftroom home">
+      <a className="dr-side__brand" href="/" onClick={linkClick('/')} aria-label="Lobby home">
         <Wordmark />
       </a>
       <WorkspaceSwitcher workspace={workspace} workspaces={workspaces} />

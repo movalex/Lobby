@@ -212,7 +212,7 @@ export function emptyState(
 
 /** DSH-03: what the Trash promises (no automatic purge exists yet, so nothing expires). */
 export const TRASH_NOTE =
-  'Deleted boards stay here, with all their content and files, until an owner restores them. Draftroom does not empty the trash automatically yet.'
+  'Deleted boards stay here, with all their content and files, until an owner restores them. Lobby does not empty the trash automatically yet.'
 
 // ---- owner filter (DSH-04) -----------------------------------------------------------------------
 
