@@ -3,11 +3,19 @@
 // labels in the Arrange menu (tldraw's context menu shows "Align H", "Distribute V"…) and no "Debug
 // mode" in Preferences outside dev builds.
 
-import type { Editor, TLUiActionItem, TLUiOverrides, TLUiToolItem } from 'tldraw'
-import { minimapOpen, openPanel, searchState, setMinimapOpen, togglePanel } from './bridge.ts'
+import type { Editor, TLShapeId, TLUiActionItem, TLUiOverrides, TLUiToolItem } from 'tldraw'
+import { readSessionSettings, writeSessionSettings } from '../workshops/session-settings.ts'
+import { runArrangeAsGrid } from './arrange-grid-runtime.ts'
+import { getFeatureCtx, minimapOpen, openPanel, searchState, setMinimapOpen, togglePanel } from './bridge.ts'
 import { copySelectionLink } from './copy-link.ts'
 import { TemplatesIcon } from './icons.tsx'
 import { ACTION_KBD_OVERRIDES, applyKbdOverrides, NEW_ACTION_KBDS, TOOL_KBD_OVERRIDES } from './shortcuts.ts'
+import {
+  clearBoardStartView,
+  goToStartView,
+  setBoardStartViewToFrame,
+  setBoardStartViewToViewport,
+} from './start-view-runtime.ts'
 
 export const TEMPLATES_TOOL_ID = 'dr-templates'
 
@@ -34,6 +42,41 @@ export function openBoardSearch(editor: Editor) {
   openPanel(editor, PANEL.search)
   const s = searchState(editor)
   s.set({ ...s.get(), focusTick: s.get().focusTick + 1 })
+}
+
+/** Copy for the board settings (honest about what they do and do not do). */
+export const BOARD_SETTING_COPY = {
+  authorsHidden:
+    'Note authors are hidden for everyone on this board: on the board, in Present and in exports. This is not anonymity: the board still records who last edited each note.',
+  authorsShown: 'Note authors are shown again.',
+  startViewSet:
+    'Start view set. People opening this board for the first time start here; everyone else returns to their own last view.',
+  frameStartViewSet:
+    'This frame is now the start view. People opening this board for the first time start on it; everyone else returns to their own last view.',
+  startViewCleared: 'Start view cleared. First visits now show all content.',
+} as const
+
+/** Editors/owners: "Hide note authors" is the board's synced session setting (workshops' drWorkshop). */
+export function toggleHideNoteAuthors(editor: Editor): boolean | null {
+  if (editor.getIsReadonly()) return null
+  const next = !readSessionSettings(editor).hideNoteAuthors
+  writeSessionSettings(editor, { hideNoteAuthors: next })
+  getFeatureCtx(editor)?.notify({
+    key: 'board-setting',
+    text: next ? BOARD_SETTING_COPY.authorsHidden : BOARD_SETTING_COPY.authorsShown,
+    testId: 'board-setting-notice',
+    timeoutMs: next ? 9000 : 4000,
+  })
+  return next
+}
+
+function notifyBoardSetting(editor: Editor, text: string) {
+  getFeatureCtx(editor)?.notify({
+    key: 'board-setting',
+    text,
+    testId: 'board-setting-notice',
+    timeoutMs: 7000,
+  })
 }
 
 function warnMissing(kind: string, missing: string[]) {
@@ -87,6 +130,57 @@ export const canvasUxOverrides: TLUiOverrides = {
         readonlyOk: true,
         onSelect: () => void copySelectionLink(editor),
       },
+      {
+        // MAK-18
+        id: 'dr-arrange-grid',
+        label: 'action.dr-arrange-grid',
+        kbd: NEW_ACTION_KBDS['dr-arrange-grid'],
+        readonlyOk: false,
+        onSelect: () => void runArrangeAsGrid(editor),
+      },
+      {
+        // PRE-08
+        id: 'dr-go-to-start-view',
+        label: 'action.dr-go-to-start-view',
+        readonlyOk: true,
+        onSelect: () => void goToStartView(editor),
+      },
+      {
+        id: 'dr-set-start-view',
+        label: 'action.dr-set-start-view',
+        readonlyOk: false,
+        onSelect: () => {
+          if (setBoardStartViewToViewport(editor)) notifyBoardSetting(editor, BOARD_SETTING_COPY.startViewSet)
+        },
+      },
+      {
+        id: 'dr-set-frame-start-view',
+        label: 'action.dr-set-frame-start-view',
+        readonlyOk: false,
+        onSelect: () => {
+          const only = editor.getOnlySelectedShape()
+          if (only?.type !== 'frame') return
+          if (setBoardStartViewToFrame(editor, only.id as TLShapeId))
+            notifyBoardSetting(editor, BOARD_SETTING_COPY.frameStartViewSet)
+        },
+      },
+      {
+        id: 'dr-clear-start-view',
+        label: 'action.dr-clear-start-view',
+        readonlyOk: false,
+        onSelect: () => {
+          if (editor.getIsReadonly()) return
+          clearBoardStartView(editor)
+          notifyBoardSetting(editor, BOARD_SETTING_COPY.startViewCleared)
+        },
+      },
+      {
+        // FAC-07 (partial) / RETRO-03a: the same synced setting as the workshop popover's checkbox.
+        id: 'dr-toggle-note-authors',
+        label: 'action.dr-toggle-note-authors',
+        readonlyOk: false,
+        onSelect: () => void toggleHideNoteAuthors(editor),
+      },
     ]
     for (const a of added) items[a.id] = a
     return items
@@ -114,6 +208,15 @@ export const canvasUxOverrides: TLUiOverrides = {
       'action.dr-board-search': 'Search board',
       'action.dr-toggle-minimap': 'Show / hide minimap',
       'action.dr-copy-link': 'Copy link to selection',
+      'action.dr-arrange-grid': 'Arrange as grid',
+      'action.dr-go-to-start-view': 'Go to start view',
+      'action.dr-set-start-view': 'Set current view as start view',
+      'action.dr-set-frame-start-view': 'Set this frame as start view',
+      'action.dr-clear-start-view': 'Clear start view',
+      'action.dr-toggle-note-authors': 'Hide note authors',
+      'menu.dr-board': 'Board',
+      'context-menu.dr-select-all-type': 'Select all on this page',
+      'context-menu.dr-keep-only': 'Keep only',
       'tool.dr-templates': 'Templates',
       ...ARRANGE_LABELS,
       'tool.arrow': 'Connector',

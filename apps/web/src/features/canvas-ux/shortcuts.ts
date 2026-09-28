@@ -43,6 +43,12 @@ export const NEW_ACTION_KBDS = {
   'dr-board-search': 'cmd+f,ctrl+f',
   /** MAK-11: show/hide the minimap. */
   'dr-toggle-minimap': 'm',
+  /**
+   * MAK-18: arrange the selection as a grid. Miro has no default key for it; Alt/Option+Shift+G sits
+   * with tldraw's Alt+Shift+H / Alt+Shift+V (distribute) and is free in tldraw 5.4.2 and in browsers.
+   * (tldraw matches Option+letter on macOS by physical key, so ⌥⇧G works there too.)
+   */
+  'dr-arrange-grid': 'alt+shift+g',
 } as const
 
 /**

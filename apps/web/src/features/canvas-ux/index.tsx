@@ -3,7 +3,9 @@
 // note palette, the main toolbar + Templates picker, minimap on M, frame outline, board search, copy
 // link to a selection/frame, and the start view (last camera, else fit content). Also: sans as the
 // default font (RETRO-21a), double-click empty canvas = new note (RETRO-21b), a hint on locked shapes
-// (F8), and the Hand tool for read-only people on touch devices (PRI-13).
+// (F8), and the Hand tool for read-only people on touch devices (PRI-13). Second wave: arrange as grid
+// (MAK-18), select by type / keep only (MAK-17), the board menu's "Hide note authors" (FAC-07 partial)
+// and an owner-set start view (PRE-08).
 
 import { DefaultFontStyle, getUserPreferences } from 'tldraw'
 import { isReadonlyRole } from '../../board/access.ts'
@@ -23,6 +25,7 @@ import { FramesPanel } from './FramesPanel.tsx'
 import { FramesIcon, SearchIcon, TemplatesIcon } from './icons.tsx'
 import { installCanvasKeyboard } from './keyboard.ts'
 import { registerLockedHint } from './locked-hint-runtime.ts'
+import { DraftroomMainMenu } from './MainMenu.tsx'
 import { DraftroomNavigationPanel } from './NavigationPanel.tsx'
 import { applyNotePalette, CanvasUxOverlay } from './Overlay.tsx'
 import { canvasUxOverrides, openBoardSearch, PANEL } from './overrides.tsx'
@@ -70,6 +73,7 @@ function mount(ctx: FeatureContext): () => void {
       boardId: ctx.board.id,
       userId: ctx.me.user.id,
       canEdit: !readonly,
+      hold: (dispose) => cleanups.push(dispose),
       onTemplateFailed: () =>
         ctx.notify({
           key: 'template-insert',
@@ -119,6 +123,7 @@ export const canvasUxFeature: BoardFeature = {
   components: {
     Toolbar: DraftroomToolbar,
     ContextMenu: DraftroomContextMenu,
+    MainMenu: DraftroomMainMenu,
     NavigationPanel: DraftroomNavigationPanel,
     StylePanel: DraftroomStylePanel,
     KeyboardShortcutsDialog: DraftroomShortcutsDialog,

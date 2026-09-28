@@ -82,6 +82,16 @@ export const LockIcon = () => (
   </Svg>
 )
 
+/** Arrange as grid (selection bar, MAK-18). */
+export const GridIcon = () => (
+  <Svg size={16}>
+    <rect x="4" y="4" width="6" height="6" rx="1" />
+    <rect x="14" y="4" width="6" height="6" rx="1" />
+    <rect x="4" y="14" width="6" height="6" rx="1" />
+    <rect x="14" y="14" width="6" height="6" rx="1" />
+  </Svg>
+)
+
 // Align / distribute (selection bar, MAK-03)
 export const AlignIcons = {
   left: () => (

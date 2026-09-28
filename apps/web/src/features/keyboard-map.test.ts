@@ -116,6 +116,7 @@ describe('keyboard map after every feature override (registry order)', () => {
       'bring-forward': 'canvas-ux: shift+[[PgUp]],shift+pageup,alt+]',
       'bring-to-front': 'canvas-ux: [[PgUp]],pageup,]',
       comment: 'comments: c',
+      'dr-arrange-grid': 'canvas-ux: alt+shift+g',
       'dr-board-search': 'canvas-ux: cmd+f,ctrl+f',
       'dr-comments-select-tool': 'comments: c',
       'dr-comments-toggle-pins': 'comments: shift+c',
@@ -148,6 +149,39 @@ describe('keyboard map after every feature override (registry order)', () => {
     expect(idsFor('shift+l')).toEqual([])
     // Plain Enter variants stay tldraw's.
     expect(idsFor('ctrl+enter')).toEqual(['adjust-shape-styles'])
+    // MAK-18: arrange as grid, editable boards only (a viewer's Alt+Shift+G does nothing).
+    expect(idsFor('alt+shift+g')).toEqual(['dr-arrange-grid'])
+    expect(idsFor('alt+shift+g', true)).toEqual([])
+  })
+
+  it('the second-wave canvas-ux actions exist; only arrange-as-grid has a key; edits are editor-only', () => {
+    const { actions } = mergedMap()
+    const pick = (id: string) => (actions as Record<string, Item | undefined>)[id]
+    for (const id of [
+      'dr-arrange-grid',
+      'dr-go-to-start-view',
+      'dr-set-start-view',
+      'dr-set-frame-start-view',
+      'dr-clear-start-view',
+      'dr-toggle-note-authors',
+    ]) {
+      expect(pick(id)?.id).toBe(id)
+    }
+    for (const id of [
+      'dr-go-to-start-view',
+      'dr-set-start-view',
+      'dr-clear-start-view',
+      'dr-toggle-note-authors',
+    ])
+      expect(pick(id)?.kbd).toBeUndefined()
+    expect(pick('dr-go-to-start-view')?.readonlyOk).toBe(true)
+    for (const id of [
+      'dr-arrange-grid',
+      'dr-set-start-view',
+      'dr-clear-start-view',
+      'dr-toggle-note-authors',
+    ])
+      expect(pick(id)?.readonlyOk).toBe(false)
   })
 })
 
@@ -164,6 +198,7 @@ describe('tldraw component slots and options', () => {
       ContextMenu: ['canvas-ux'],
       InFrontOfTheCanvas: ['board-page'],
       KeyboardShortcutsDialog: ['canvas-ux'],
+      MainMenu: ['canvas-ux'],
       NavigationPanel: ['canvas-ux'],
       SharePanel: ['board-page'],
       StylePanel: ['canvas-ux'],

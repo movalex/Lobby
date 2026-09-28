@@ -19,6 +19,7 @@ export function DraftroomShortcutsDialog(props: TLUiKeyboardShortcutsDialogProps
       <TldrawUiMenuGroup label="shortcuts-dialog.dr-board" id="dr-board">
         <TldrawUiMenuActionItem actionId="dr-board-search" />
         <TldrawUiMenuActionItem actionId="dr-toggle-minimap" />
+        <TldrawUiMenuActionItem actionId="dr-arrange-grid" />
         {/* Keys other features add (comments, present-export); see features/keyboard-map.test.ts. */}
         <TldrawUiMenuActionItem actionId="dr-comments-select-tool" />
         <TldrawUiMenuActionItem actionId="dr-comments-toggle-pins" />
