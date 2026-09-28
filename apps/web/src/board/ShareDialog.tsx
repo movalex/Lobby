@@ -30,6 +30,7 @@ import { ClientExportLine, ExportPolicySection } from '../features/sharing/Expor
 import { refreshExportPolicy } from '../features/sharing/export-policy.ts'
 import {
   canExtend,
+  createdSaying,
   daysLabel,
   hoursLabel,
   REVIEW_LINK_DAY_OPTIONS,
@@ -1369,7 +1370,7 @@ function InviteLinkSection({
               </span>
               <button
                 type="button"
-                className="dr-linkbtn"
+                className="dr-linkbtn dr-sharing__revoke"
                 data-testid="invitation-revoke"
                 disabled={pending}
                 onClick={() => void revoke(i.id)}
@@ -1404,17 +1405,23 @@ function WorkshopLinksSection({
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [justCreated, setJustCreated] = useState<{ id: string; copied: boolean } | null>(null)
+  // A11Y-01: what a screen reader hears after Create (the button keeps the keyboard).
+  const [said, setSaid] = useState('')
 
   const create = async () => {
+    if (pending) return
     setPending(true)
     setError(null)
+    setSaid('')
     try {
       const link = await sharing.createReviewLink(boardId, {
         role: 'editor',
         expiresInHours: hours,
         allowGuests,
       })
-      setJustCreated({ id: link.id, copied: await copyText(link.url) })
+      const copied = await copyText(link.url)
+      setJustCreated({ id: link.id, copied })
+      setSaid(createdSaying('Workshop link', copied))
       onChange()
     } catch (e) {
       setError(isApiError(e) ? e.message : 'The workshop link could not be created.')
@@ -1454,12 +1461,16 @@ function WorkshopLinksSection({
           type="button"
           className="dr-btn"
           data-testid="workshop-link-create"
-          disabled={pending}
+          aria-disabled={pending || undefined}
+          aria-busy={pending || undefined}
           onClick={() => void create()}
         >
-          Create workshop link
+          {pending ? 'Creating…' : 'Create workshop link'}
         </button>
       </div>
+      <p className="dr-sr-only" role="status" data-testid="workshop-link-status">
+        {said}
+      </p>
       {error && (
         <p className="dr-share__error" role="alert">
           {error}
@@ -1505,13 +1516,19 @@ function ClientLinkSection({
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [justCreated, setJustCreated] = useState<{ id: string; copied: boolean } | null>(null)
+  // A11Y-01: what a screen reader hears after Create (the button keeps the keyboard).
+  const [said, setSaid] = useState('')
 
   const create = async () => {
+    if (pending) return
     setPending(true)
     setError(null)
+    setSaid('')
     try {
       const link = await sharing.createReviewLink(boardId, { role, expiresInDays: days, allowGuests })
-      setJustCreated({ id: link.id, copied: await copyText(link.url) })
+      const copied = await copyText(link.url)
+      setJustCreated({ id: link.id, copied })
+      setSaid(createdSaying('Client link', copied))
       onChange()
       // DANA2-01: the first client link may have turned exporting off. The board event says so too,
       // but this dialog also opens from the dashboard, where no board events arrive.
@@ -1571,13 +1588,16 @@ function ClientLinkSection({
           type="button"
           className="dr-btn dr-btn--primary"
           data-testid="review-link-create"
-          disabled={pending}
+          aria-disabled={pending || undefined}
           aria-busy={pending || undefined}
           onClick={() => void create()}
         >
           {pending ? 'Creating…' : 'Create and copy link'}
         </button>
       </div>
+      <p className="dr-sr-only" role="status" data-testid="review-link-status">
+        {said}
+      </p>
       {error && (
         <p className="dr-share__error" role="alert">
           {error}

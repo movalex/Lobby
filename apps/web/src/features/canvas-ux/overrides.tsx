@@ -94,6 +94,9 @@ export const canvasUxOverrides: TLUiOverrides = {
     // F20/RETRO-23b: tldraw's debug mode (Preferences → Debug mode) is a developer tool; the menu item
     // renders only while its action exists.
     if (!import.meta.env?.DEV) delete items['toggle-debug-mode']
+    // A11Y2-07: viewers and commenters can open the shortcuts too (tldraw skips its key on read-only boards).
+    const kbdHelp = items['open-kbd-shortcuts']
+    if (kbdHelp) items['open-kbd-shortcuts'] = { ...kbdHelp, readonlyOk: true }
     // MAK-05: tldraw deselects shapes when it locks them, so the same shortcut could never unlock them.
     // Keep the (now locked) selection, as Miro does: locked shapes still refuse moves, resizes, edits and
     // deletes (Editor.updateShapes / deleteShapes skip them), and Ctrl/Cmd+Shift+L again unlocks.

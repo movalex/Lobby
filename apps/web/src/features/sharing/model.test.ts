@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import {
   canExtend,
+  createdSaying,
   hoursLabel,
   pickDefaultRole,
   readSentRequest,
   requestableRoles,
   shareBadge,
+  shareBadgeName,
   shortDate,
   shortTime,
   writeSentRequest,
@@ -47,6 +49,40 @@ describe('board header sharing badge (PRS-03)', () => {
     expect(b.label).toBe('Link: comment · until Oct 10')
     expect(b.description).toContain('(3 links)')
     expect(b.description).toContain('Everyone in Dev Studio can view')
+  })
+
+  it('A11Y2-10: the accessible name starts with the visible text (voice control), then explains', () => {
+    for (const state of [
+      { ...base, visibility: 'private' as const, links: [] },
+      { ...base, visibility: 'workspace_edit' as const, links: [], pendingRequests: 1 },
+      {
+        ...base,
+        visibility: 'private' as const,
+        links: [{ role: 'editor' as const, expiresAt: '2026-10-01T08:42:00' }],
+      },
+      {
+        ...base,
+        visibility: 'workspace_view' as const,
+        links: [{ role: 'commenter' as const, expiresAt: '2026-10-10T10:00:00' }],
+      },
+    ]) {
+      const b = shareBadge(state, 'Dev Studio', now)
+      const name = shareBadgeName(b)
+      expect(name.startsWith(`${b.label}. `)).toBe(true)
+      expect(name).toContain(b.description)
+      expect(name.endsWith('Open sharing settings.')).toBe(true)
+    }
+    const withRequests = shareBadge(
+      { ...base, visibility: 'private', links: [], pendingRequests: 2 },
+      'W',
+      now,
+    )
+    expect(shareBadgeName(withRequests)).toContain('2 pending access requests.')
+  })
+
+  it('A11Y-01: says what Create did', () => {
+    expect(createdSaying('Client link', true)).toBe('Client link created and copied to the clipboard.')
+    expect(createdSaying('Workshop link', false)).toBe('Workshop link created. Copy it from the list below.')
   })
 
   it('carries the pending request count for owners only', () => {

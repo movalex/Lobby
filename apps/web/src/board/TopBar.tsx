@@ -87,8 +87,9 @@ export function TopBar({
   // The role pill already says what a viewer/commenter can do: a second "View only" is noise (RETRO-17).
   const saveHidden = !!pill && save.state === 'readonly'
   // Tab order = DOM order (RETRO-22a): breadcrumb, title, role, people, status, feature controls,
-  // Share. The account (DEV identity) badge is drawn at the bar's right end but comes LAST in the
-  // page (BoardAccount below, rendered by BoardPage after the canvas); on phones it is in the menu.
+  // Share. The account (DEV identity) badge is drawn at the bar's right end and comes right after
+  // Share (A11Y-09: BoardAccount below, rendered by BoardPage just after this bar); on phones it is in
+  // the menu.
   return (
     <header
       ref={bar}
@@ -218,9 +219,9 @@ export function TopBar({
 }
 
 /**
- * The account button of the board page, drawn at the right end of the top bar but placed last in the
- * DOM (after the canvas and its toolbar), so keyboard users reach the board's own controls first
- * (RETRO-22a). The bar keeps room for it through --dr-account-w. On phones it lives in the "⋯" menu.
+ * The account button of the board page, drawn at the right end of the top bar and placed right after
+ * it in the DOM, so Tab reaches it after Share, as it is drawn (A11Y-09). The bar keeps room for it
+ * through --dr-account-w. On phones it lives in the "⋯" menu.
  */
 export function BoardAccount() {
   const width = useTopBarWidth()

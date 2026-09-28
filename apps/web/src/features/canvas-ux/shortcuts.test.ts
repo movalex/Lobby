@@ -201,6 +201,17 @@ describe('Miro shortcut map', () => {
     expect(first(tools.items.arrow?.kbd)).toBe('l')
     expect(first(tools.items.draw?.kbd)).toBe('p')
   })
+
+  it('A11Y2-07: "?" and Ctrl/Cmd+/ open the shortcuts; no key flips the theme', () => {
+    const { actions } = merged()
+    expect(idsFor('shift+/')).toEqual(['open-kbd-shortcuts'])
+    expect(idsFor('ctrl+/')).toEqual(['open-kbd-shortcuts'])
+    expect(idsFor('meta+/')).toEqual(['open-kbd-shortcuts'])
+    expect(idsFor('ctrl+alt+/')).toEqual(['open-kbd-shortcuts'])
+    expect(splitKbd(actions.items['open-kbd-shortcuts']?.kbd ?? '')[0]).toBe('[[?]]')
+    expect(actions.items['toggle-dark-mode']?.kbd).toBeUndefined()
+    expect(actions.items['toggle-dark-mode']).toBeDefined() // the menu item stays
+  })
 })
 
 describe('kbdLabel', () => {

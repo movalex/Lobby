@@ -129,12 +129,22 @@ test("theme: System follows the OS live, and tldraw's own dark-mode switch moves
       await expectCanvas(page, 'dark')
     })
 
-    await test.step("tldraw's Ctrl/Cmd+/ (toggle dark mode) becomes the stored choice", async () => {
-      // Focus the canvas (an empty spot), then tldraw's own shortcut.
+    await test.step("tldraw's own theme switch becomes the stored choice; Ctrl/Cmd+/ no longer flips it (A11Y2-07)", async () => {
+      // Focus the canvas (an empty spot). Ctrl/Cmd+/ opens the keyboard shortcuts now, not a silent flip.
       const box = await page.locator('.tl-canvas').boundingBox()
       if (!box) throw new Error('no canvas')
       await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2)
       await page.keyboard.press('ControlOrMeta+/')
+      await expect(page.locator('.tlui-shortcuts-dialog__body')).toBeVisible()
+      await expectCanvas(page, 'dark')
+      await page.keyboard.press('Escape')
+      await expect(page.locator('.tlui-shortcuts-dialog__body')).toHaveCount(0)
+      // tldraw's Theme menu (Preferences) writes the same user preference its toggle did.
+      await page.evaluate(() =>
+        (
+          window.editor as unknown as { user: { updateUserPreferences(p: { colorScheme: string }): void } }
+        ).user.updateUserPreferences({ colorScheme: 'light' }),
+      )
       await expectCanvas(page, 'light')
       await expectChrome(page, 'light', 'light')
       expect(await storedChoice(page)).toBe('light')

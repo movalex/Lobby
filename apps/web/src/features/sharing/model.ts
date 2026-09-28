@@ -93,6 +93,23 @@ export function shareBadge(state: ShareState, workspaceName: string, now: Date =
   }
 }
 
+/**
+ * A11Y2-10 (WCAG 2.5.3): the badge's accessible name starts with the words it shows, so "click Link
+ * edit" works for voice control; the longer explanation follows.
+ */
+export function shareBadgeName(badge: ShareBadge): string {
+  const n = badge.requests
+  const pending = n ? ` ${n} pending access ${n === 1 ? 'request' : 'requests'}.` : ''
+  return `${badge.label}. ${badge.description}${pending} Open sharing settings.`
+}
+
+/** A11Y-01: what the Share dialog announces after "Create…" ("Client link created and copied."). */
+export function createdSaying(what: 'Client link' | 'Workshop link', copied: boolean): string {
+  return copied
+    ? `${what} created and copied to the clipboard.`
+    : `${what} created. Copy it from the list below.`
+}
+
 // ---- "request sent" memory (per browser, per user + board) ----------------------------------------
 // People without access cannot ask the server about their request (that would reveal the board), so
 // the page remembers that it sent one.

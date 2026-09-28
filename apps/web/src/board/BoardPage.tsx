@@ -53,7 +53,8 @@ import { installRebaseSelectionGuard } from '../sync-quality/rebaseGuard.ts'
 import { createTrackedConnect } from '../sync-quality/saveTracker.ts'
 import { trackUploads } from '../sync-quality/uploads.ts'
 import { useSaveStatus } from '../sync-quality/useSaveStatus.ts'
-import { BoardSkipLink } from '../ui/SkipLink.tsx'
+import { isFocusLost } from '../ui/focus.ts'
+import { BoardSkipLink, boardRegionName } from '../ui/SkipLink.tsx'
 import { LoadingScreen, MessageScreen, NoAccessScreen } from '../ui/screens.tsx'
 import { blockedEditHint, isReadonlyRole, roleChangeNotice } from './access.ts'
 import { BoardContext, type BoardContextValue } from './board-context.ts'
@@ -489,6 +490,23 @@ function BoardSession({
     [notify, storeAtom],
   )
 
+  // A11Y2-09: the canvas is named after the board ("Lobby tour board"; tldraw names it "tldraw"), and
+  // takes the keyboard when the board opens, unless something else already has it (the skip link, a
+  // dialog, a field). A screen reader then says where the person is, and canvas keys work at once.
+  const boardTitle = board.title
+  useEffect(() => {
+    editor?.getContainer().setAttribute('aria-label', boardRegionName(boardTitle))
+  }, [editor, boardTitle])
+  useEffect(() => {
+    if (!editor) return
+    const frame = requestAnimationFrame(() => {
+      if (!isFocusLost() || document.querySelector('dialog[open]')) return
+      editor.focus()
+      editor.getContainer().focus({ preventScroll: true })
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [editor])
+
   // Keeps tools and menus from offering edits to read-only roles (the server enforces).
   useEffect(() => {
     if (editor && readonly && !editor.getInstanceState().isReadonly) {
@@ -648,6 +666,8 @@ function BoardSession({
           features={BOARD_FEATURES}
           featureCtx={featureCtx}
         />
+        {/* A11Y-09: drawn at the bar's right end and tabbed to right after Share (not after the canvas). */}
+        <BoardAccount />
         {conn === 'offline' && (
           <div className="dr-banner" data-testid="offline-banner" role="status">
             You're offline. Changes you make are kept in this tab only until the connection returns; reloading
@@ -672,7 +692,6 @@ function BoardSession({
           </main>
         </div>
         <NoticeRegion notices={notices} onDismiss={dismiss} />
-        <BoardAccount />
         {sharing && (
           <ShareDialog
             board={board}
