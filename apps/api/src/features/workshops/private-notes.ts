@@ -45,6 +45,11 @@ import type { FeatureContext } from '../context.ts'
 export interface PrivateNotesOptions {
   /** Draft writes (add, edit, delete) per person per minute (default 120). */
   writesPerMinute?: number
+  /**
+   * Brainstorms one person may start per minute (default 10). A start makes every open client of
+   * the board refetch its view, so a start/cancel loop must not turn into a request flood.
+   */
+  startsPerMinute?: number
 }
 
 // ---- rows and ids --------------------------------------------------------------------------------
@@ -247,6 +252,15 @@ export function registerPrivateNotes(
 ) {
   const { db, now, events } = ctx
   const writes = new SlidingWindowLimiter(opts.writesPerMinute ?? 120, 60_000)
+  const starts = new SlidingWindowLimiter(opts.startsPerMinute ?? 10, 60_000)
+  /**
+   * Sessions whose drafts are being placed right now (a reveal between reading the drafts and
+   * recording the result), with how many reveals are doing it. Cancel refuses while one is: it would
+   * discard drafts the sync server is writing onto the board. In-process, like the event hub (one API
+   * instance, docs/DEPLOY.md). A reveal takes its hold while it has the session row locked, and
+   * cancel checks it under the same lock, so the two never both go ahead.
+   */
+  const placing = new Map<string, number>()
 
   const publish = async (row: SessionRow) => {
     const data: PrivateBrainstormEvent = { session: toSession(row), counts: await countsOf(db, row.id) }
@@ -299,11 +313,25 @@ export function registerPrivateNotes(
     return { note, row, access }
   }
 
-  const limitWrites = (userId: string, reply: { header(k: string, v: string): unknown }) => {
+  const limit = (
+    limiter: SlidingWindowLimiter,
+    userId: string,
+    reply: { header(k: string, v: string): unknown },
+    message: string,
+  ) => {
     const t = now().getTime()
-    if (writes.take(userId, t)) return
-    reply.header('retry-after', String(Math.max(1, Math.ceil(writes.retryAfterMs(userId, t) / 1000))))
-    throw new ApiError(429, 'RATE_LIMITED', 'That is a lot of changes. Wait a moment and try again.')
+    if (limiter.take(userId, t)) return
+    reply.header('retry-after', String(Math.max(1, Math.ceil(limiter.retryAfterMs(userId, t) / 1000))))
+    throw new ApiError(429, 'RATE_LIMITED', message)
+  }
+  const limitWrites = (userId: string, reply: { header(k: string, v: string): unknown }) =>
+    limit(writes, userId, reply, 'That is a lot of changes. Wait a moment and try again.')
+
+  const hold = (sessionId: string) => placing.set(sessionId, (placing.get(sessionId) ?? 0) + 1)
+  const release = (sessionId: string) => {
+    const n = (placing.get(sessionId) ?? 1) - 1
+    if (n > 0) placing.set(sessionId, n)
+    else placing.delete(sessionId)
   }
 
   // ---- state and start ---------------------------------------------------------------------------
@@ -324,6 +352,7 @@ export function registerPrivateNotes(
       row = await db.transaction(async (tx) => {
         const access = await requireBoardAction(tx, bid, user.id, 'edit', { forUpdate: true })
         if (await activeSession(tx, access.board.id)) throw alreadyActive()
+        limit(starts, user.id, reply, 'That is a lot of brainstorms. Wait a moment and try again.')
         const t = input.target
         return tx.one<SessionRow>(
           `INSERT INTO private_brainstorms (id, workspace_id, board_id, prompt, anonymous, frame_id, frame_page_id,
@@ -434,78 +463,100 @@ export function registerPrivateNotes(
     const { row: found, access } = await sessionFor(req, user.id, 'edit')
     if (!mayReveal(access, found, user.id))
       throw forbidden('Only the person who started this brainstorm or a board owner can reveal it.')
-    const marked = await db.transaction(async (tx) => {
-      const locked = await lockSession(tx, found.id)
-      if (locked.status === 'cancelled') throw conflict('PRIVATE_CANCELLED', 'This brainstorm was cancelled.')
-      if (locked.status !== 'open') return { row: locked, changed: false }
-      const row = await tx.one<SessionRow>(
-        `UPDATE private_brainstorms SET status = 'revealed', revealed_at = $2 WHERE id = $1
-         RETURNING ${SESSION_COLUMNS}`,
-        [locked.id, now()],
-      )
-      return { row, changed: true }
-    })
-    if (marked.changed) await publish(marked.row)
-    if (marked.row.status === 'placed')
-      return { ...(await stateFor(access, user.id)), placed: toSession(marked.row) }
-
-    const waiting = await db.query<NoteRow>(
-      `SELECT ${NOTE_COLUMNS} FROM private_notes WHERE session_id = $1 ORDER BY seq`,
-      [marked.row.id],
-    )
-    let confirmed: string[] = []
-    if (waiting.rows.length > 0) {
-      const place = ctx.sync.placeNotes?.bind(ctx.sync)
-      if (!place) throw placeFailed()
-      const body = await placementRequest(db, marked.row, waiting.rows)
-      let answer: unknown
-      try {
-        answer = await place(marked.row.board_id, body)
-      } catch {
-        // Unreachable, refused or timed out: the session stays revealed and says "Place notes".
-        throw placeFailed()
-      }
-      const parsed = PlaceResult.safeParse(answer)
-      if (!parsed.success) throw placeFailed()
-      const done = new Set(
-        [...parsed.data.placed, ...parsed.data.existing].map((id) => id.replace(/^shape:/, '')),
-      )
-      confirmed = waiting.rows.map((n) => n.id).filter((id) => done.has(id))
+    // From reading the drafts until the result is recorded, this reveal holds the session against a
+    // cancel (see `placing`): the hold is taken under the session lock, before the drafts go out.
+    let held = false
+    try {
+      return await revealAndPlace()
+    } finally {
+      if (held) release(found.id)
     }
 
-    const at = now()
-    const ended = await db.transaction(async (tx) => {
-      const locked = await lockSession(tx, marked.row.id)
-      if (confirmed.length > 0)
-        await tx.query('DELETE FROM private_notes WHERE session_id = $1 AND id = ANY($2::text[])', [
-          locked.id,
-          confirmed,
-        ])
-      const left = await tx.one<{ n: number }>(
-        'SELECT count(*)::int AS n FROM private_notes WHERE session_id = $1',
-        [locked.id],
-      )
-      if (locked.status !== 'revealed' || left.n > 0) return { row: locked, changed: false }
-      // The canvas changed: the dashboard's "Edited" time follows (like apps/sync/src/touch.ts reports).
-      if (waiting.rows.length > 0)
-        await tx.query(
-          `UPDATE boards SET updated_at = $2 WHERE id = $1 AND updated_at < $2 AND status <> 'trashed'`,
-          [locked.board_id, at],
+    async function revealAndPlace() {
+      const marked = await db.transaction(async (tx) => {
+        const locked = await lockSession(tx, found.id)
+        if (locked.status === 'cancelled')
+          throw conflict('PRIVATE_CANCELLED', 'This brainstorm was cancelled.')
+        let row = locked
+        let changed = false
+        if (locked.status === 'open') {
+          row = await tx.one<SessionRow>(
+            `UPDATE private_brainstorms SET status = 'revealed', revealed_at = $2 WHERE id = $1
+           RETURNING ${SESSION_COLUMNS}`,
+            [locked.id, now()],
+          )
+          changed = true
+        }
+        if (row.status !== 'revealed') return { row, changed, waiting: [] as NoteRow[] }
+        const drafts = await tx.query<NoteRow>(
+          `SELECT ${NOTE_COLUMNS} FROM private_notes WHERE session_id = $1 ORDER BY seq`,
+          [row.id],
         )
-      const row = await tx.one<SessionRow>(
-        `UPDATE private_brainstorms SET status = 'placed', ended_at = $2, placed_count = $3 WHERE id = $1
+        if (!held) {
+          hold(row.id)
+          held = true
+        }
+        return { row, changed, waiting: drafts.rows }
+      })
+      if (marked.changed) await publish(marked.row)
+      if (marked.row.status === 'placed')
+        return { ...(await stateFor(access, user.id)), placed: toSession(marked.row) }
+
+      const waiting = marked.waiting
+      let confirmed: string[] = []
+      if (waiting.length > 0) {
+        const place = ctx.sync.placeNotes?.bind(ctx.sync)
+        if (!place) throw placeFailed()
+        const body = await placementRequest(db, marked.row, waiting)
+        let answer: unknown
+        try {
+          answer = await place(marked.row.board_id, body)
+        } catch {
+          // Unreachable, refused or timed out: the session stays revealed and says "Place notes".
+          throw placeFailed()
+        }
+        const parsed = PlaceResult.safeParse(answer)
+        if (!parsed.success) throw placeFailed()
+        const done = new Set(
+          [...parsed.data.placed, ...parsed.data.existing].map((id) => id.replace(/^shape:/, '')),
+        )
+        confirmed = waiting.map((n) => n.id).filter((id) => done.has(id))
+      }
+
+      const at = now()
+      const ended = await db.transaction(async (tx) => {
+        const locked = await lockSession(tx, marked.row.id)
+        if (confirmed.length > 0)
+          await tx.query('DELETE FROM private_notes WHERE session_id = $1 AND id = ANY($2::text[])', [
+            locked.id,
+            confirmed,
+          ])
+        const left = await tx.one<{ n: number }>(
+          'SELECT count(*)::int AS n FROM private_notes WHERE session_id = $1',
+          [locked.id],
+        )
+        if (locked.status !== 'revealed' || left.n > 0) return { row: locked, changed: false }
+        // The canvas changed: the dashboard's "Edited" time follows (like apps/sync/src/touch.ts reports).
+        if (waiting.length > 0)
+          await tx.query(
+            `UPDATE boards SET updated_at = $2 WHERE id = $1 AND updated_at < $2 AND status <> 'trashed'`,
+            [locked.board_id, at],
+          )
+        const row = await tx.one<SessionRow>(
+          `UPDATE private_brainstorms SET status = 'placed', ended_at = $2, placed_count = $3 WHERE id = $1
          RETURNING ${SESSION_COLUMNS}`,
-        [locked.id, at, waiting.rows.length],
-      )
-      return { row, changed: true }
-    })
-    if (ended.changed) await publish(ended.row)
-    if (ended.row.status !== 'placed') {
-      // Some drafts were not confirmed (or someone cancelled meanwhile): the session says what is next.
-      if (ended.row.status === 'revealed') throw placeFailed()
-      throw conflict('PRIVATE_CANCELLED', 'This brainstorm was cancelled.')
+          [locked.id, at, waiting.length],
+        )
+        return { row, changed: true }
+      })
+      if (ended.changed) await publish(ended.row)
+      if (ended.row.status !== 'placed') {
+        // Some drafts were not confirmed (or someone cancelled meanwhile): the session says what is next.
+        if (ended.row.status === 'revealed') throw placeFailed()
+        throw conflict('PRIVATE_CANCELLED', 'This brainstorm was cancelled.')
+      }
+      return { ...(await stateFor(access, user.id)), placed: toSession(ended.row) }
     }
-    return { ...(await stateFor(access, user.id)), placed: toSession(ended.row) }
   })
 
   app.post('/api/private-brainstorms/:sid/cancel', async (req) => {
@@ -518,6 +569,14 @@ export function registerPrivateNotes(
       if (locked.status === 'cancelled') return { row: locked, changed: false }
       if (locked.status === 'placed')
         throw conflict('PRIVATE_PLACED', 'These notes are already on the board.')
+      // A reveal is putting the drafts on the board right now: discarding them would leave notes on
+      // the board that everyone was told were discarded. It is over in seconds (or fails, and then
+      // cancelling works).
+      if (placing.has(locked.id))
+        throw conflict(
+          'PRIVATE_PLACING',
+          'The notes are being put on the board right now. Try again in a moment.',
+        )
       await tx.query('DELETE FROM private_notes WHERE session_id = $1', [locked.id])
       const row = await tx.one<SessionRow>(
         `UPDATE private_brainstorms SET status = 'cancelled', ended_at = $2 WHERE id = $1

@@ -6,7 +6,12 @@
 // conservative (tall) growY. The client that asked for the reveal measures them with tldraw's own
 // note sizing and writes the real growY once (history: 'ignore', so nobody's undo includes it).
 
-import { PRIVATE_FRAME_DEFAULT_NAME, PRIVATE_NOTE_META_KEY, type PrivateTarget } from '@draftroom/contracts'
+import {
+  PRIVATE_FRAME_DEFAULT_NAME,
+  PRIVATE_FRAME_MAX_EXTENT,
+  PRIVATE_NOTE_META_KEY,
+  type PrivateTarget,
+} from '@draftroom/contracts'
 import { createShapeId, type Editor, type TLNoteShape, type TLShape, type TLShapeId } from 'tldraw'
 
 /** A new frame holds 4 × 3 notes before it grows (200 px notes, 24 px gaps, 40 px padding). */
@@ -28,12 +33,16 @@ export function frameName(shape: TLShape | null | undefined): string {
   return typeof name === 'string' && name.trim() ? name.trim() : 'Frame'
 }
 
-/** The target for an existing frame (its page bounds now). */
+/**
+ * The target for an existing frame (its page bounds now). The size only matters if the frame is
+ * gone at reveal (it is recreated at this size), so a huge frame is clamped rather than refused.
+ */
 export function targetForFrame(editor: Editor, frame: TLShape): PrivateTarget | null {
   const b = editor.getShapePageBounds(frame)
   const pageId = editor.getAncestorPageId(frame)
   if (!b || !pageId) return null
-  return { frameId: frame.id, pageId, x: b.x, y: b.y, w: Math.max(1, b.w), h: Math.max(1, b.h) }
+  const extent = (v: number) => Math.min(PRIVATE_FRAME_MAX_EXTENT, Math.max(1, v))
+  return { frameId: frame.id, pageId, x: b.x, y: b.y, w: extent(b.w), h: extent(b.h) }
 }
 
 /** Where a new frame goes: centred in the viewport, at a size that holds 12 notes. */

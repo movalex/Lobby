@@ -443,3 +443,123 @@ describe('cancelling', () => {
     await start(w.editor)
   })
 })
+
+describe('adversarial review', () => {
+  it('refuses a cancel while the notes are being placed, so notes on the board are never "discarded"', async () => {
+    await world()
+    const place = fakePlacement(w)
+    const sid = (await start(w.editor)).session?.id as string
+    await addOk(w.editor, sid, 'on its way')
+    await addOk(w.owner, sid, 'me too')
+    // The sync call is slow: hold it until the cancel has been tried.
+    const fast = (w.sync as unknown as { placeNotes(b: string, body: unknown): Promise<unknown> }).placeNotes
+    let release: () => void = () => {}
+    const gate = new Promise<void>((r) => {
+      release = r
+    })
+    let entered: () => void = () => {}
+    const inFlight = new Promise<void>((r) => {
+      entered = r
+    })
+    Object.assign(w.sync, {
+      async placeNotes(boardId: string, body: unknown) {
+        entered()
+        await gate
+        return fast(boardId, body)
+      },
+    })
+    const revealing = reveal(w.editor, sid)
+    await inFlight
+    const cancel = await w.owner.req('POST', `/api/private-brainstorms/${sid}/cancel`)
+    expectStatus(cancel, 409)
+    expect(errCode(cancel)).toBe('PRIVATE_PLACING')
+    expect(await draftRows()).toBe(2) // nothing discarded
+    release()
+    const res = await revealing
+    expectStatus(res, 200)
+    expect(json<PrivateBrainstormState>(res).placed).toMatchObject({ status: 'placed', placedCount: 2 })
+    expect(place.onBoard.size).toBe(2)
+    const statuses = privateEvents().map((e) => (e.data as { session: { status: string } }).session.status)
+    expect(statuses).not.toContain('cancelled')
+    // once placed, a cancel says so
+    const late = await w.owner.req('POST', `/api/private-brainstorms/${sid}/cancel`)
+    expectStatus(late, 409)
+    expect(errCode(late)).toBe('PRIVATE_PLACED')
+  })
+
+  it('a failed placement can still be cancelled (the board is never stuck with a revealed session)', async () => {
+    await world()
+    const place = fakePlacement(w)
+    const sid = (await start(w.editor)).session?.id as string
+    await addOk(w.editor, sid, 'stuck')
+    place.down = true
+    expectStatus(await reveal(w.editor, sid), 503)
+    const res = await w.editor.req('POST', `/api/private-brainstorms/${sid}/cancel`)
+    expectStatus(res, 200)
+    expect(await draftRows()).toBe(0)
+    await start(w.owner)
+  })
+
+  it('limits how often one person starts a brainstorm (each start makes every open board refetch)', async () => {
+    await world()
+    for (let i = 0; i < 10; i++) {
+      const sid = (await start(w.editor)).session?.id as string
+      expectStatus(await w.editor.req('POST', `/api/private-brainstorms/${sid}/cancel`), 200)
+    }
+    const body = { prompt: 'again?', anonymous: false, target: TARGET }
+    const limited = await w.editor.req('POST', `/api/boards/${w.boardId}/private-brainstorm`, body)
+    expectStatus(limited, 429)
+    expect(errCode(limited)).toBe('RATE_LIMITED')
+    expect(Number(limited.headers['retry-after'])).toBeGreaterThanOrEqual(1)
+    // nothing was started, and someone else is not held up
+    expect((await state(w.viewer)).session).toBeNull()
+    const other = await start(w.owner)
+    expectStatus(await w.owner.req('POST', `/api/private-brainstorms/${other.session?.id}/cancel`), 200)
+    // a minute later the editor can start again
+    w.clock.advance(60_000)
+    await start(w.editor)
+  })
+})
+
+describe('adversarial review: roles that change mid-session', () => {
+  it('an archived board freezes the session for everyone; restoring it picks up where it was', async () => {
+    await world()
+    fakePlacement(w)
+    const sid = (await start(w.editor)).session?.id as string
+    const mine = (await addOk(w.editor, sid, 'before the archive')).myNotes[0]?.id as string
+    expectStatus(await w.owner.req('POST', `/api/boards/${w.boardId}/archive`), 200)
+    expectStatus(await add(w.editor, sid, 'during'), 403)
+    expectStatus(await w.editor.req('PATCH', `/api/private-notes/${mine}`, { text: 'x' }), 403)
+    expectStatus(await reveal(w.owner, sid), 403)
+    expectStatus(await w.owner.req('POST', `/api/private-brainstorms/${sid}/cancel`), 403)
+    const seen = await state(w.editor)
+    expect(seen).toMatchObject({ canReveal: false, counts: { notes: 1, people: 1 } })
+    expect(seen.myNotes.map((n) => n.text)).toEqual(['before the archive'])
+    expectStatus(await w.owner.req('POST', `/api/boards/${w.boardId}/restore`), 200)
+    expectStatus(await reveal(w.editor, sid), 200)
+  })
+
+  it('a starter who loses edit cannot reveal or cancel (a board owner still can); a demoted author keeps read-only drafts', async () => {
+    await world()
+    const place = fakePlacement(w)
+    const eve = await secondEditor()
+    const sid = (await start(eve)).session?.id as string
+    await addOk(eve, sid, 'eve wrote this')
+    const mine = (await addOk(w.editor, sid, 'ed wrote this')).myNotes[0]?.id as string
+    for (const [c, role] of [
+      [eve, 'viewer'],
+      [w.editor, 'commenter'],
+    ] as const)
+      expectStatus(await w.owner.req('PUT', `/api/boards/${w.boardId}/members/${c.userId}`, { role }), 200)
+    expectStatus(await reveal(eve, sid), 403)
+    expectStatus(await eve.req('POST', `/api/private-brainstorms/${sid}/cancel`), 403)
+    expectStatus(await w.editor.req('PATCH', `/api/private-notes/${mine}`, { text: 'x' }), 403)
+    expectStatus(await add(w.editor, sid, 'more'), 403)
+    const asEd = await state(w.editor)
+    expect(asEd.myNotes.map((n) => n.text)).toEqual(['ed wrote this'])
+    expect(asEd.canReveal).toBe(false)
+    expect((await state(eve)).canReveal).toBe(false)
+    expectStatus(await reveal(w.owner, sid), 200)
+    expect(place.onBoard.size).toBe(2)
+  })
+})

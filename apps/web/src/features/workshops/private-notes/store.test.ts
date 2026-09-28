@@ -1,6 +1,6 @@
-import type { PrivateBrainstorm, PrivateBrainstormState } from '@draftroom/contracts'
+import { type PrivateBrainstorm, type PrivateBrainstormState, PrivateTarget } from '@draftroom/contracts'
 import { describe, expect, it } from 'vitest'
-import { NEW_FRAME_H, NEW_FRAME_W, newFrameBounds } from './canvas.ts'
+import { NEW_FRAME_H, NEW_FRAME_W, newFrameBounds, targetForFrame } from './canvas.ts'
 import { describeCounts } from './hooks.ts'
 import { type EventSource, PrivateNotesStore, type RequestFn, type SessionEnded } from './store.ts'
 
@@ -182,5 +182,23 @@ describe('helpers', () => {
     // 4 columns and 3 rows of 200 px notes fit (the sync server's grid: 40 px padding, 24 px gaps)
     expect(Math.floor((NEW_FRAME_W - 80 + 24) / 224)).toBe(4)
     expect(NEW_FRAME_H).toBe(80 + 3 * 200 + 2 * 24)
+  })
+})
+
+describe('targets (adversarial review)', () => {
+  it('a selected frame of any size gives a target the API accepts', () => {
+    const fakeEditor = (b: { x: number; y: number; w: number; h: number }) =>
+      ({
+        getShapePageBounds: () => b,
+        getAncestorPageId: () => 'page:page',
+      }) as unknown as Parameters<typeof targetForFrame>[0]
+    const frame = { id: 'shape:huge', type: 'frame' } as unknown as Parameters<typeof targetForFrame>[1]
+    for (const b of [
+      { x: -50, y: 20, w: 250_000, h: 0.2 },
+      { x: 0, y: 0, w: 640, h: 480 },
+    ]) {
+      const t = targetForFrame(fakeEditor(b), frame)
+      expect(PrivateTarget.safeParse(t).success, JSON.stringify(b)).toBe(true)
+    }
   })
 })

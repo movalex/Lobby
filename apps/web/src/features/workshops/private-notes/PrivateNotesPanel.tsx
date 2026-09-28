@@ -107,13 +107,20 @@ function NoteEditor({
   const [text, setText] = useState(initial.text)
   const [color, setColor] = useState<PrivateNoteColor>(initial.color)
   const id = useId()
+  // `busy` arrives with the next render: two presses before it (a double Ctrl+Enter) must not send twice.
+  const sending = useRef(false)
   const length = codePointLength(text.trim())
   const tooLong = length > PRIVATE_NOTE_MAX_CHARS
   const ok = length > 0 && !tooLong && !busy
   const submit = async () => {
-    if (!ok) return
-    if (await onSubmit({ text, color })) {
-      if (!onCancel) setText('')
+    if (!ok || sending.current) return
+    sending.current = true
+    try {
+      if (await onSubmit({ text, color })) {
+        if (!onCancel) setText('')
+      }
+    } finally {
+      sending.current = false
     }
   }
   return (
@@ -187,6 +194,7 @@ function MyNote({
   const mode = useColorMode(ctx)
   const [editing, setEditing] = useState(false)
   const [busy, setBusy] = useState(false)
+  const deleting = useRef(false)
   const s = swatch(note.color)
   return (
     <li className="dr-pn-note" data-testid="pn-note" data-note-id={note.id}>
@@ -234,9 +242,15 @@ function MyNote({
                 aria-label={`Delete note: ${note.text.slice(0, 40)}`}
                 disabled={busy}
                 onClick={async () => {
+                  if (deleting.current) return // a double click: the first one is on its way
+                  deleting.current = true
                   setBusy(true)
-                  onResult(await store.deleteNote(note.id))
-                  setBusy(false)
+                  try {
+                    onResult(await store.deleteNote(note.id))
+                  } finally {
+                    deleting.current = false
+                    setBusy(false)
+                  }
                 }}
               >
                 Delete

@@ -6,7 +6,7 @@ import {
   PRIVATE_PROMPT_MAX_CHARS,
   type PrivateTarget,
 } from '@draftroom/contracts'
-import { type FormEvent, useId, useMemo, useState } from 'react'
+import { type FormEvent, useId, useMemo, useRef, useState } from 'react'
 import type { TLShapeId } from 'tldraw'
 import { Dialog } from '../../../ui/Dialog.tsx'
 import type { FeatureContext } from '../../types.ts'
@@ -30,12 +30,15 @@ export function SetupDialog({
   const [anonymous, setAnonymous] = useState(true)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // `busy` arrives with the next render: a double Enter must not make a second frame and request.
+  const sending = useRef(false)
   const id = useId()
   const trimmed = prompt.replace(/\s+/g, ' ').trim()
 
   const submit = async (e: FormEvent) => {
     e.preventDefault()
-    if (!trimmed || busy) return
+    if (!trimmed || busy || sending.current) return
+    sending.current = true
     setBusy(true)
     setError(null)
     let target: PrivateTarget | null = null
@@ -46,6 +49,7 @@ export function SetupDialog({
       created = target.frameId
     }
     const r = await store.start({ prompt: trimmed, anonymous, target })
+    sending.current = false
     setBusy(false)
     if (!r.ok) {
       // Nothing started: take the frame made for it away again.

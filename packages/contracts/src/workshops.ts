@@ -481,7 +481,9 @@ export const PrivatePrompt = z
 
 const PageRecordId = z.string().regex(/^page:[A-Za-z0-9_-]{1,100}$/)
 const Coord = z.number().finite().min(-10_000_000).max(10_000_000)
-const Extent = z.number().finite().min(1).max(100_000)
+/** A target frame's width and height at the start (clients clamp a larger frame to this). */
+export const PRIVATE_FRAME_MAX_EXTENT = 100_000
+const Extent = z.number().finite().min(1).max(PRIVATE_FRAME_MAX_EXTENT)
 
 /**
  * Where the notes go: a frame on the board (the selected one, or the "Private ideas" frame the

@@ -380,12 +380,32 @@ test('private notes: when the canvas is down at reveal, "Place notes" finishes i
   await startBrainstorm(alice.page, { prompt: 'Second round', anonymous: true, target: 'new' })
   const second = (await privateState(alice, board)).session?.id as string
   await writeNote(bob.page, 'Never shown to anyone', 'violet')
+  // Two Ctrl+Enter presses before the panel re-renders (a bounce, an impatient double press) add the
+  // note once.
+  const compose = (await openPanel(bob.page)).getByTestId('pn-compose-text')
+  await bob.net.settle()
+  const addRequests = () => bob.net.responses.filter((r) => r.path.endsWith('/notes')).length
+  const before = addRequests()
+  await compose.fill('Only once')
+  await compose.evaluate((el) => {
+    for (let i = 0; i < 2; i++)
+      el.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Enter', ctrlKey: true, bubbles: true, cancelable: true }),
+      )
+  })
+  await expect(compose).toHaveValue('')
+  await bob.page.waitForTimeout(750) // a second request would have been answered by now
+  await bob.net.settle()
+  expect(addRequests()).toBe(before + 1)
+  expect((await privateState(bob, board)).myNotes.filter((n) => n.text === 'Only once')).toHaveLength(1)
   await alice.page.getByTestId('pn-cancel').click()
   await alice.page.getByTestId('pn-cancel-confirm').click()
   await expect(bob.page.getByTestId('pn-toast')).toContainText('cancelled')
   await expect(bob.page.getByTestId('pn-chip')).toHaveCount(0)
   expect(await placedNotes(bob.page, second)).toEqual([])
-  expect(await everythingSeen(alice)).not.toContain('Never shown to anyone')
+  const aliceSawSecond = await everythingSeen(alice)
+  expect(aliceSawSecond).not.toContain('Never shown to anyone')
+  expect(aliceSawSecond).not.toContain('Only once')
   expect((await privateState(bob, board)).session).toBeNull()
 })
 
