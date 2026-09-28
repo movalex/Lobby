@@ -376,3 +376,28 @@ Checks: lint 0 errors / 0 warnings (581 files); typecheck 14 projects; vitest 1,
 - DEMO.md: the script now uses "Share with a client", AI "Group into themes" and "Present to everyone". The "(if merged)" markers are gone, and the extras list covers the phone guest, private brainstorm, mind map, tags and search, and the safety answers.
 - **Demo video**: a pipeline in `e2e/demo/` records the Lobby tour in real browsers (two people side by side plus a phone guest) and composes a 1080p MP4. It has title and outro cards, captions, and an ElevenLabs narration generated once (11 clips, about 1.2k characters). The final cut ran against the final build with real OpenAI output in the AI scene: 138 s, delivered as "Lobby demo (Sep 28).mp4". A critic pass watched the frames every 2 s, twice.
 - Final deploy 9814d8d (12:26–12:28Z). It was the first deploy where both sides ran the tini fix, and neither printed a FATAL on shutdown. The gate: lint clean, typecheck, 3,051 unit tests, 298/298 browser tests.
+- **Second review on the final build** (the same four lenses). Most earlier findings were confirmed fixed with evidence. The boss verdict: "Yes for internal project teams now; hold client-facing use until F10 and DANA2-01 land."
+- **Fix round 3**, five owners with two verifiers:
+  - **Team-only comments** (F10, `0020_comment_visibility`):
+    - threads are "everyone" or "team";
+    - team threads never reach name-only or workspace guests, in routes, SSE (the hub publishes per audience), the bell, badges or search;
+    - "Team only" is on by default while a board has outside access;
+    - outside the team, only a thread's author can resolve it.
+    
+    The verifier fixed the choice sticking for later comments, and an edit/resolve race.
+  - **Client defaults**: "Share with a client" switches an unset export policy to editors-only and says so in the card (DANA2-01). Limited viewers get no enabled "Download original", and guest initials are fixed.
+  - **Workshops**:
+    - the "Private ideas" frame lands in free space, and Cancel removes it;
+    - "Add your notes" focuses the draft box;
+    - the phone timer is never hidden, and the panel closes on reveal;
+    - Enter adds a note;
+    - only the facilitator can pause the timer;
+    - no +1 during anonymous votes.
+  - **Canvas**:
+    - mind maps start inside the frame in view;
+    - uploads get a consistent page size;
+    - template slots are cover-filled;
+    - the sample board opens on Welcome;
+    - the Frames panel no longer leaves the frame selected;
+    - AI themes avoid an existing map.
+  - **Keyboard safety**: board keys (Delete, letters, arrows, Ctrl+A/X/V, ",") act only while the board has the keyboard, and one Ctrl+Z undoes one real change (selection-only steps are skipped). A keyboard comment works on a note inside a frame. The verifier closed Ctrl+X reaching the board through the native cut event (high).
