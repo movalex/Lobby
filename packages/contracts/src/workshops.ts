@@ -132,10 +132,42 @@ export const WorkshopVoteState = z.object({
 })
 export type WorkshopVoteState = z.infer<typeof WorkshopVoteState>
 
+// ---- raise hand (FAC-08; in-memory on the API, never persisted) -----------------------------------
+
+/** A raised hand is lowered by the server after this long (and when its owner's event stream ends). */
+export const HAND_AUTO_LOWER_MS = 10 * 60 * 1000
+
+/** One raised hand. Lists of hands are in the order they went up (first raised first). */
+export const RaisedHand = z.object({
+  userId: WsUserId,
+  /** The display name at the time the hand went up (from the session, never from a request body). */
+  name: z.string(),
+  raisedAt: IsoDate,
+})
+export type RaisedHand = z.infer<typeof RaisedHand>
+
+/**
+ * Orders hand lists that arrive by different paths (a response, an event, a refetch): `n` grows with
+ * every change within one API process (`epoch`); a different epoch means the API restarted (every
+ * hand went down) and replaces what a client had.
+ */
+export const HandsVersion = z.object({ epoch: z.string().min(1).max(40), n: z.number().int().nonnegative() })
+export type HandsVersion = z.infer<typeof HandsVersion>
+
+/** Whether `next` may replace `current` (never an older list of the same API process). */
+export function isNewerHands(current: HandsVersion | null, next: HandsVersion | null): boolean {
+  if (!next) return false
+  if (!current || current.epoch !== next.epoch) return true
+  return next.n >= current.n
+}
+
 export const WorkshopState = z.object({
   timer: WorkshopTimer.nullable(),
   /** The open vote, else the most recent one (so everyone can still see its results). */
   vote: WorkshopVoteState.nullable(),
+  /** Raised hands on this board, first raised first (so late joiners see the queue). */
+  hands: z.array(RaisedHand).default([]),
+  handsVersion: HandsVersion.nullable().default(null),
   serverNow: IsoDate,
 })
 export type WorkshopState = z.infer<typeof WorkshopState>
@@ -167,6 +199,107 @@ export type VoteResultsResponse = z.infer<typeof VoteResultsResponse>
 /** Body optional. `targetUserId` = bring one person; omitted = everyone. */
 export const SummonInput = z.object({ targetUserId: WsUserId.optional() }).optional()
 
+// ---- reactions (FAC-08; relayed as events only, never stored) -------------------------------------
+
+/**
+ * The only reactions there are (a strict allowlist: any other string, including the same emoji
+ * without its variation selector, is a 400). Order = the order of the reaction bar.
+ */
+export const REACTION_EMOJIS = ['👍', '❤️', '😂', '🎉', '🤔', '👏'] as const
+export const ReactionEmoji = z.enum(REACTION_EMOJIS)
+export type ReactionEmoji = z.infer<typeof ReactionEmoji>
+/** Words for screen readers and tooltips, per emoji. */
+export const REACTION_LABELS: Readonly<Record<ReactionEmoji, string>> = {
+  '👍': 'Thumbs up',
+  '❤️': 'Love',
+  '😂': 'Laugh',
+  '🎉': 'Celebrate',
+  '🤔': 'Hmm',
+  '👏': 'Applause',
+}
+/** Per person (across boards): at most REACTION_RATE_MAX reactions in any REACTION_RATE_WINDOW_MS. */
+export const REACTION_RATE_MAX = 5
+export const REACTION_RATE_WINDOW_MS = 1000
+
+/** POST /api/boards/:bid/reactions. Who reacted comes from the session (other keys are ignored). */
+export const ReactionInput = z.object({ emoji: ReactionEmoji })
+export type ReactionInput = z.infer<typeof ReactionInput>
+
+/** POST /api/boards/:bid/hand: raise or lower your own hand. */
+export const HandInput = z.object({ raised: z.boolean() })
+export type HandInput = z.infer<typeof HandInput>
+
+export const HandsResponse = z.object({
+  hands: z.array(RaisedHand),
+  version: HandsVersion,
+  serverNow: IsoDate,
+})
+export type HandsResponse = z.infer<typeof HandsResponse>
+
+/**
+ * Why a hand went up or down: `raised` / `lowered` (by its owner), `lowered_by_facilitator` (one
+ * hand) or `cleared` (all hands) by someone who may edit the board, `expired` (HAND_AUTO_LOWER_MS),
+ * `disconnected` (the owner's last event stream on the board ended and did not come back).
+ */
+export const HandChangeReason = z.enum([
+  'raised',
+  'lowered',
+  'lowered_by_facilitator',
+  'cleared',
+  'expired',
+  'disconnected',
+])
+export type HandChangeReason = z.infer<typeof HandChangeReason>
+
+export const HandChange = z.object({
+  userId: WsUserId,
+  name: z.string(),
+  raised: z.boolean(),
+  reason: HandChangeReason,
+  /** Who lowered someone else's hand (facilitator actions); null otherwise. */
+  byUserId: WsUserId.nullable(),
+  byName: z.string().nullable(),
+})
+export type HandChange = z.infer<typeof HandChange>
+
+// ---- +1 on sticky notes (FAC-08; stored in the note itself, synced by the canvas) --------------------
+
+/**
+ * A note's +1s live in its own `meta[PLUS_ONES_META_KEY]`: an array of user ids, oldest first,
+ * written through the normal canvas sync, so the sync server's read-only rule decides who can add
+ * one (viewers and commenters cannot). tldraw's sync sends an addition as an append at the length
+ * the writer saw (dropped by the server if someone else's landed first) and a removal as a rewrite
+ * of the array, so writers re-apply a dropped change (apps/web features/workshops/plus-ones.ts).
+ * The array can hold ids of people who no longer have access; count them as they are.
+ */
+export const PLUS_ONES_META_KEY = 'plusOnes'
+/** At most this many +1s on one note (enforced by the clients that write them). */
+export const PLUS_ONES_MAX = 200
+
+/**
+ * The user ids that +1'd a note, oldest first, from its `meta` (malformed and repeated entries are
+ * ignored; an `{ [userId]: epoch ms }` map is read too). Never more than PLUS_ONES_MAX.
+ */
+export function readPlusOnes(meta: unknown): string[] {
+  if (!meta || typeof meta !== 'object') return []
+  const raw = (meta as Record<string, unknown>)[PLUS_ONES_META_KEY]
+  const entries: { id: string; at: number }[] = []
+  const seen = new Set<string>()
+  const add = (id: unknown, at: number) => {
+    if (typeof id !== 'string' || !userIdRe.test(id) || seen.has(id)) return
+    seen.add(id)
+    entries.push({ id, at })
+  }
+  if (Array.isArray(raw)) for (const [i, id] of raw.entries()) add(id, i)
+  else if (raw && typeof raw === 'object')
+    for (const [id, at] of Object.entries(raw as Record<string, unknown>))
+      add(id, typeof at === 'number' && Number.isFinite(at) ? at : 0)
+  return entries
+    .sort((a, b) => a.at - b.at || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+    .slice(0, PLUS_ONES_MAX)
+    .map((e) => e.id)
+}
+
 // ---- events (GET /api/boards/:bid/events) --------------------------------------------------------
 
 export const WORKSHOP_EVENTS = {
@@ -174,7 +307,21 @@ export const WORKSHOP_EVENTS = {
   vote: 'workshop.vote',
   results: 'workshop.vote.results',
   summon: 'workshop.summon',
+  reaction: 'workshop.reaction',
+  hand: 'workshop.hand',
 } as const
+
+/** Someone on the board reacted (a hint to animate; nothing is stored). */
+export const WorkshopReactionEvent = z.object({ userId: WsUserId, name: z.string(), emoji: ReactionEmoji })
+export type WorkshopReactionEvent = z.infer<typeof WorkshopReactionEvent>
+
+/** The whole queue after a change (idempotent to apply), plus what changed. */
+export const WorkshopHandEvent = z.object({
+  hands: z.array(RaisedHand),
+  changes: z.array(HandChange),
+  version: HandsVersion,
+})
+export type WorkshopHandEvent = z.infer<typeof WorkshopHandEvent>
 
 export const WorkshopTimerEvent = z.object({ timer: WorkshopTimer.nullable() })
 /** Aggregates only: each client refetches its own ballot. */

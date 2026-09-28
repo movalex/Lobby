@@ -8,12 +8,20 @@
 
 import {
   type CreateVoteInput,
+  type HandChange,
+  HandsResponse,
+  type HandsVersion,
+  isNewerHands,
   ListVoteSessionsResponse,
+  type RaisedHand,
+  type ReactionEmoji,
   type TimerActionInput,
   TimerResponse,
   VoteResultsResponse,
   type VoteSessionSummary,
   WORKSHOP_EVENTS,
+  WorkshopHandEvent,
+  WorkshopReactionEvent,
   WorkshopState,
   type WorkshopTimer,
   WorkshopTimerEvent,
@@ -22,6 +30,7 @@ import {
   WorkshopVoteState,
 } from '@draftroom/contracts'
 import type { z } from 'zod'
+import { ReactionThrottle } from './reactions.ts'
 import { localCastCheck, optimisticBallot, type PendingCast } from './voting.ts'
 
 type Method = 'GET' | 'POST'
@@ -66,6 +75,20 @@ export interface WorkshopSnapshot {
   resultsNews: { sessionId: string; seq: number } | null
   /** The latest message for screen readers about the caller's own votes ("Voted. 2 of 3 left"). */
   announcement: { text: string; seq: number } | null
+  /** Raised hands on the board, first raised first (the API's in-memory queue). */
+  hands: RaisedHand[]
+  /** The caller's own raised hand, if it is up. */
+  myHand: RaisedHand | null
+  /** A request (from a toast or the hands chip) to open the workshop tools at a section. */
+  toolsRequest: { seq: number; section: 'hands' | null } | null
+}
+
+/** A reaction to show: from the event stream (someone else) or from this tab (`mine`). */
+export interface ReactionShown {
+  userId: string
+  name: string
+  emoji: ReactionEmoji
+  mine: boolean
 }
 
 export interface ActionResult {
@@ -125,6 +148,12 @@ export class WorkshopStore {
   private resultsNews: WorkshopSnapshot['resultsNews'] = null
   private newsSeq = 0
   private announcement: WorkshopSnapshot['announcement'] = null
+  private hands: RaisedHand[] = []
+  private handsVersion: HandsVersion | null = null
+  private toolsRequest: WorkshopSnapshot['toolsRequest'] = null
+  private readonly throttle = new ReactionThrottle()
+  private readonly reactionListeners = new Set<(r: ReactionShown) => void>()
+  private readonly handListeners = new Set<(changes: HandChange[]) => void>()
   private readonly listeners = new Set<() => void>()
   private snap: WorkshopSnapshot
   private readonly unsubscribers: (() => void)[] = []
@@ -148,6 +177,8 @@ export class WorkshopStore {
       this.events.on(WORKSHOP_EVENTS.timer, (d) => this.onTimerEvent(d)),
       this.events.on(WORKSHOP_EVENTS.vote, (d) => this.onVoteEvent(d)),
       this.events.on(WORKSHOP_EVENTS.results, (d) => this.onResultsEvent(d)),
+      this.events.on(WORKSHOP_EVENTS.reaction, (d) => this.onReactionEvent(d)),
+      this.events.on(WORKSHOP_EVENTS.hand, (d) => this.onHandEvent(d)),
       this.events.onResync(() => void this.refresh()),
     )
   }
@@ -155,6 +186,8 @@ export class WorkshopStore {
   dispose() {
     for (const u of this.unsubscribers.splice(0)) u()
     this.listeners.clear()
+    this.reactionListeners.clear()
+    this.handListeners.clear()
   }
 
   // ---- subscription (useSyncExternalStore) --------------------------------------------------------
@@ -187,6 +220,9 @@ export class WorkshopStore {
       alertSeq: this.alertSeq,
       resultsNews: this.resultsNews && this.resultsNews.sessionId === sid ? this.resultsNews : null,
       announcement: this.announcement,
+      hands: this.hands,
+      myHand: this.hands.find((h) => h.userId === this.userId) ?? null,
+      toolsRequest: this.toolsRequest,
     }
   }
 
@@ -259,6 +295,7 @@ export class WorkshopStore {
       const timer = this.newerTimer(s.timer) ? s.timer : (this.state?.timer ?? null)
       this.setVote(s.vote)
       this.state = { ...s, timer }
+      this.applyHands(s.hands, s.handsVersion)
       this.loaded = true
       this.stale = false
     } catch {
@@ -325,11 +362,63 @@ export class WorkshopStore {
     this.emit()
   }
 
+  // ---- reactions and hands: events -------------------------------------------------------------------
+
+  private onReactionEvent(data: unknown) {
+    const p = WorkshopReactionEvent.safeParse(data)
+    // This tab showed its own reaction when it was clicked; other tabs of the same person skip it too.
+    if (!p.success || p.data.userId === this.userId) return
+    this.showReaction({ ...p.data, mine: false })
+  }
+
+  private showReaction(r: ReactionShown) {
+    for (const l of [...this.reactionListeners]) {
+      try {
+        l(r)
+      } catch (e) {
+        console.error('reaction listener failed', e)
+      }
+    }
+  }
+
+  private onHandEvent(data: unknown) {
+    const p = WorkshopHandEvent.safeParse(data)
+    if (!p.success) return
+    if (!this.applyHands(p.data.hands, p.data.version)) return
+    this.emit()
+    for (const l of [...this.handListeners]) {
+      try {
+        l(p.data.changes)
+      } catch (e) {
+        console.error('hand listener failed', e)
+      }
+    }
+  }
+
+  /**
+   * Takes a hand list from any path (event, response, refetch) unless it is older than the one held
+   * (same API process, lower version). Returns whether it was taken.
+   */
+  private applyHands(list: RaisedHand[] | undefined, version: HandsVersion | null | undefined): boolean {
+    const v = version ?? null
+    const newer = v === null ? this.handsVersion === null : isNewerHands(this.handsVersion, v)
+    if (!newer) return false
+    this.hands = Array.isArray(list) ? list : []
+    this.handsVersion = v
+    return true
+  }
+
   /** Applies the caller's vote state from a mutation response (ordered by request start). */
   private applyVote(vote: WorkshopVoteState, seq: number) {
     if (seq < this.appliedSeq) return
     this.appliedSeq = seq
-    const base = this.state ?? { timer: null, vote: null, serverNow: new Date().toISOString() }
+    const base = this.state ?? {
+      timer: null,
+      vote: null,
+      hands: [],
+      handsVersion: null,
+      serverNow: new Date().toISOString(),
+    }
     this.setVote(vote)
     this.state = { ...base, vote }
     this.loaded = true
@@ -346,7 +435,8 @@ export class WorkshopStore {
       })
       this.noteServerTime(r.serverNow, sentAt, this.nowMs())
       if (this.state && this.newerTimer(r.timer)) this.state = { ...this.state, timer: r.timer }
-      else if (!this.state) this.state = { timer: r.timer, vote: null, serverNow: r.serverNow }
+      else if (!this.state)
+        this.state = { timer: r.timer, vote: null, hands: [], handsVersion: null, serverNow: r.serverNow }
       this.emit()
       return { ok: true }
     } catch (e) {
@@ -463,6 +553,76 @@ export class WorkshopStore {
     } catch (e) {
       return errorOf(e)
     }
+  }
+
+  // ---- reactions -------------------------------------------------------------------------------------
+
+  /** Called for every reaction to show (someone else's from the stream, this tab's own at once). */
+  onReaction(fn: (r: ReactionShown) => void): () => void {
+    this.reactionListeners.add(fn)
+    return () => void this.reactionListeners.delete(fn)
+  }
+
+  /**
+   * Sends a reaction. Shown here at once (if this tab's own rate limit allows it); everyone else sees
+   * it when the server relays it. The server applies the same limit and the emoji allowlist.
+   */
+  async react(emoji: ReactionEmoji, name: string): Promise<ActionResult> {
+    if (!this.throttle.tryTake(this.nowMs()))
+      return { ok: false, code: 'RATE_LIMITED', error: 'That is a lot of reactions. Wait a moment.' }
+    this.showReaction({ userId: this.userId, name, emoji, mine: true })
+    try {
+      await this.request('POST', `/api/boards/${encodeURIComponent(this.boardId)}/reactions`, {
+        body: { emoji },
+        schema: null,
+      })
+      return { ok: true }
+    } catch (e) {
+      return errorOf(e)
+    }
+  }
+
+  // ---- raise hand ------------------------------------------------------------------------------------
+
+  /** Called with what changed whenever a newer hand list arrives by event (toasts). */
+  onHandChanges(fn: (changes: HandChange[]) => void): () => void {
+    this.handListeners.add(fn)
+    return () => void this.handListeners.delete(fn)
+  }
+
+  private async handMutation(path: string, body?: unknown): Promise<ActionResult> {
+    try {
+      const r = await this.request('POST', path, { body, schema: HandsResponse })
+      if (this.applyHands(r.hands, r.version)) this.emit()
+      return { ok: true }
+    } catch (e) {
+      const r = errorOf(e)
+      void this.refresh()
+      return r
+    }
+  }
+
+  /** Raises or lowers the caller's own hand. */
+  setHand(raised: boolean): Promise<ActionResult> {
+    return this.handMutation(`/api/boards/${encodeURIComponent(this.boardId)}/hand`, { raised })
+  }
+
+  /** Lowers someone's hand (facilitators; anyone for their own). */
+  lowerHand(userId: string): Promise<ActionResult> {
+    return this.handMutation(
+      `/api/boards/${encodeURIComponent(this.boardId)}/hands/${encodeURIComponent(userId)}/lower`,
+    )
+  }
+
+  /** Lowers every hand (facilitators). */
+  clearHands(): Promise<ActionResult> {
+    return this.handMutation(`/api/boards/${encodeURIComponent(this.boardId)}/hands/clear`)
+  }
+
+  /** Asks the top bar to open the workshop tools (optionally at the raised-hands queue). */
+  requestTools(section: 'hands' | null = null) {
+    this.toolsRequest = { seq: (this.toolsRequest?.seq ?? 0) + 1, section }
+    this.emit()
   }
 
   setSetupOpen(open: boolean) {

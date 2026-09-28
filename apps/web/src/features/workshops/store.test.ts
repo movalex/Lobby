@@ -1,5 +1,6 @@
-import type { WorkshopState, WorkshopTimer, WorkshopVoteState } from '@draftroom/contracts'
+import { WorkshopState, type WorkshopTimer, type WorkshopVoteState } from '@draftroom/contracts'
 import { describe, expect, it } from 'vitest'
+import type { z } from 'zod'
 import { type EventSource, type RequestFn, WorkshopStore } from './store.ts'
 
 const ISO = (ms: number) => new Date(Date.parse('2026-09-26T10:00:00.000Z') + ms).toISOString()
@@ -75,7 +76,10 @@ interface Call {
   body?: unknown
 }
 
-function harness(initial: WorkshopState) {
+/** What the server sends (hands may be left out: the schema defaults them, as the real client parses). */
+type ServerState = z.input<typeof WorkshopState>
+
+function harness(initial: ServerState) {
   const calls: Call[] = []
   let current = initial
   const handlers: ((c: Call) => unknown | Promise<unknown>)[] = []
@@ -84,7 +88,7 @@ function harness(initial: WorkshopState) {
     calls.push(call)
     const h = handlers.shift()
     if (h) return h(call)
-    if (method === 'GET' && path.endsWith('/workshop')) return current
+    if (method === 'GET' && path.endsWith('/workshop')) return WorkshopState.parse(current)
     throw new Error(`unexpected ${method} ${path}`)
   }) as unknown as RequestFn
   const events = new FakeEvents()
@@ -99,7 +103,7 @@ function harness(initial: WorkshopState) {
     store,
     events,
     calls,
-    setServer: (s: WorkshopState) => {
+    setServer: (s: ServerState) => {
       current = s
     },
     next: (h: (c: Call) => unknown | Promise<unknown>) => handlers.push(h),
