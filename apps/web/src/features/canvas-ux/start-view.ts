@@ -126,6 +126,30 @@ export function planStartView(input: {
   return { kind: 'none' }
 }
 
+/** A canvas this narrow (CSS px) is a phone: its first view is the first frame, not the whole page. */
+export const PHONE_CANVAS_MAX_W = 480
+/** Screen px kept around a frame shown on a phone (a desktop keeps 48). */
+export const PHONE_FRAME_INSET = 16
+
+/**
+ * "Fit all content" (a first visit with no start view) shows the first frame instead when the whole
+ * page would not be readable (F15): on a phone-sized canvas, or when even the smallest zoom cannot
+ * fit the content (tldraw then shows a clipped strip, e.g. the 10,400 px Lobby tour at 5 % on a
+ * 390 px phone). Only when the page has a frame to show.
+ */
+export function prefersFirstFrame(input: {
+  screen: { w: number; h: number }
+  content: { w: number; h: number }
+  minZoom: number
+  hasFrame: boolean
+}): boolean {
+  const { screen, content } = input
+  if (!input.hasFrame || !(screen.w > 0) || !(screen.h > 0)) return false
+  if (screen.w <= PHONE_CANVAS_MAX_W) return true
+  if (!(content.w > 0) || !(content.h > 0)) return false
+  return Math.min(screen.w / content.w, screen.h / content.h) < input.minZoom
+}
+
 /** After restoring a camera: zoom to fit when it shows nothing but the page has content. */
 export function fitIfViewportEmpty(viewportHasShapes: boolean, pageHasShapes: boolean): boolean {
   return pageHasShapes && !viewportHasShapes

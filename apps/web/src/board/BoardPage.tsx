@@ -63,6 +63,7 @@ import { ShareDialog } from './ShareDialog.tsx'
 import { SyncErrorScreen } from './SyncErrorScreen.tsx'
 import { BoardAccount, type ConnState, TopBar } from './TopBar.tsx'
 import { createTicketUri } from './ticket.ts'
+import { installTouchStartGuard } from './touch-guard.ts'
 
 // Module level = referentially stable. useSync treats utils/assets/users/uri as effect dependencies
 // (an unstable one reconnects in a loop), and <Tldraw> re-creates the editor when utils change.
@@ -457,7 +458,10 @@ function BoardSession({
       const uninstallRebaseGuard = installRebaseSelectionGuard(ed)
       // Note attribution names are read from this store (users.resolve above).
       storeAtom.set(ed.store)
+      // Phones: no "Unable to preventDefault inside passive event listener" error per tap (F18).
+      const uninstallTouchGuard = installTouchStartGuard(ed)
       return () => {
+        uninstallTouchGuard()
         if (storeAtom.get() === ed.store) storeAtom.set(null)
         uninstallRebaseGuard()
         uninstallUndo()

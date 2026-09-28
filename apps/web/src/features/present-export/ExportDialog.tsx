@@ -8,6 +8,7 @@ import { type FrameEntry, frameOutline } from './board-ops.ts'
 import type { Controller, ExportRequest } from './controller.ts'
 import { boardCsv, csvBlob, csvRowCount } from './csv-export.ts'
 import { downloadBlob } from './download.ts'
+import { frameInView, openingScale } from './export-defaults.ts'
 import {
   copyPng,
   ExportCancelled,
@@ -40,7 +41,8 @@ interface Prefs {
 }
 
 const PREFS_KEY = 'draftroom.export.v1'
-const DEFAULT_PREFS: Prefs = { scale: 2, transparent: false, lossless: false, pdfFormat: 'fit' }
+// 1×: the frame or selection at the size it has on the board (F14). 2× and 4× stay a click away.
+const DEFAULT_PREFS: Prefs = { scale: 1, transparent: false, lossless: false, pdfFormat: 'fit' }
 
 function readPrefs(): Prefs {
   try {
@@ -105,16 +107,34 @@ export function ExportDialog({
   )
   const shapeCount = useValue('dr-export-count', () => editor.getCurrentPageShapeIds().size, [editor])
 
-  const [area, setArea] = useState<Area>(() => {
-    if (selectedIds.length === 1 && editor.getShape(selectedIds[0] as TLShapeId)?.type === 'frame')
-      return 'frame'
-    return selectedIds.length > 0 ? 'selection' : 'board'
-  })
-  const [frameId, setFrameId] = useState<TLShapeId | ''>(() => {
+  // F14: open on what the person is looking at. A selected frame, else the selection, else the frame
+  // that fills the view, else the whole board (export-defaults.ts).
+  const [opening] = useState(() => {
     const selectedFrame = selectedIds.find((id) => editor.getShape(id)?.type === 'frame')
-    return selectedFrame ?? outline[0]?.id ?? ''
+    const viewed = frameInView(editor.getViewportPageBounds(), outline) as TLShapeId | null
+    const area: Area =
+      selectedIds.length === 1 && selectedFrame
+        ? 'frame'
+        : selectedIds.length > 0
+          ? 'selection'
+          : viewed
+            ? 'frame'
+            : 'board'
+    const frameId: TLShapeId | '' = selectedFrame ?? viewed ?? outline[0]?.id ?? ''
+    const b =
+      area === 'selection'
+        ? editor.getSelectionPageBounds()
+        : area === 'frame' && frameId
+          ? editor.getShapePageBounds(frameId)
+          : editor.getCurrentPageBounds()
+    return { area, frameId, size: b ? { w: b.w, h: b.h } : null }
   })
+  const [area, setArea] = useState<Area>(opening.area)
+  const [frameId, setFrameId] = useState<TLShapeId | ''>(opening.frameId)
   const [prefs, setPrefs] = useState<Prefs>(readPrefs)
+  // The remembered size, stepped down for this opening only when that area would be too large to draw
+  // (the stored preference stays what the person chose).
+  const [scale, setScale] = useState<ImageScale>(() => openingScale(prefs.scale, IMAGE_SCALES, opening.size))
   const [includeSkipped, setIncludeSkipped] = useState(false)
   const [busy, setBusy] = useState<{ kind: BusyKind; done?: number; total?: number } | null>(null)
   const [status, setStatus] = useState<{ tone: 'ok' | 'error'; text: string } | null>(null)
@@ -173,9 +193,9 @@ export function ExportDialog({
 
   const sizeHint = useMemo(() => {
     if (!areaBounds) return null
-    const want = imagePixelSize(areaBounds.w, areaBounds.h, prefs.scale)
+    const want = imagePixelSize(areaBounds.w, areaBounds.h, scale)
     return { want, reduced: exceedsCanvasLimits(want.width, want.height) }
-  }, [areaBounds, prefs.scale])
+  }, [areaBounds, scale])
 
   const imageQualifier =
     effectiveArea === 'selection'
@@ -222,7 +242,7 @@ export function ExportDialog({
     run(format, async () => {
       const blob =
         format === 'png'
-          ? await renderPng(editor, imageIds(), { scale: prefs.scale, transparent: prefs.transparent })
+          ? await renderPng(editor, imageIds(), { scale, transparent: prefs.transparent })
           : await renderSvg(editor, imageIds(), { transparent: prefs.transparent })
       const name = exportFilename(boardTitle, format, imageQualifier)
       downloadBlob(blob, name)
@@ -366,9 +386,13 @@ export function ExportDialog({
               <select
                 className="dr-input dr-select dr-select--compact"
                 data-testid="export-scale"
-                value={prefs.scale}
+                value={scale}
                 disabled={disabled}
-                onChange={(e) => updatePrefs({ scale: Number(e.target.value) as ImageScale })}
+                onChange={(e) => {
+                  const next = Number(e.target.value) as ImageScale
+                  setScale(next)
+                  updatePrefs({ scale: next })
+                }}
               >
                 {IMAGE_SCALES.map((s) => (
                   <option key={s} value={s}>
@@ -538,8 +562,8 @@ export function ExportDialog({
           </h3>
           <p className="dr-pe-text">
             {hasSelection
-              ? `The text of the selection (${plural(selectedIds.length, 'object')} and what they contain): one row per object with its type, frame, colour, position and tags.`
-              : 'The text of every object on the board: one row per object with its type, frame, colour, position and tags.'}
+              ? `The text of the selection (${plural(selectedIds.length, 'object')} and what they contain): one row per object with its type, frame, color, position and tags.`
+              : 'The text of every object on the board: one row per object with its type, frame, color, position and tags.'}
           </p>
           <div className="dr-pe-actions">
             <button

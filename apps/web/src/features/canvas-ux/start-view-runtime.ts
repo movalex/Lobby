@@ -2,15 +2,27 @@
 // then keep the user's camera for this board in localStorage (per board + user; a per-browser
 // convenience, never shared). See start-view.ts for the pure rules.
 
-import { Box, type Editor, parseDeepLinkString, react, type TLPageId, type TLShapeId } from 'tldraw'
+import {
+  Box,
+  type Editor,
+  parseDeepLinkString,
+  react,
+  type TLPageId,
+  type TLShape,
+  type TLShapeId,
+} from 'tldraw'
 import { type BoardStartView, parseBoardStartView, withBoardStartView } from './board-start-view.ts'
-import { isTemplateId } from './deps.ts'
+import { isTemplateId, presentationOrder } from './deps.ts'
+import { isSkipped } from './frame-order.ts'
 import {
   cameraStorageKey,
   DEEP_LINK_PARAM,
   fitIfViewportEmpty,
+  PHONE_CANVAS_MAX_W,
+  PHONE_FRAME_INSET,
   parseStoredCamera,
   planStartView,
+  prefersFirstFrame,
   readStartParams,
   serializeCamera,
   TEMPLATE_PARAM,
@@ -34,10 +46,55 @@ function storageSet(storage: 'local' | 'session', key: string, value: string) {
   }
 }
 
-function fitContent(editor: Editor) {
+/** The page's first frame in presentation order (a frame set to skip only when all are). */
+function firstFrame(editor: Editor): TLShapeId | null {
+  const frames = editor.getCurrentPageShapes().filter((s) => s.type === 'frame')
+  if (!frames.length) return null
+  // board-ops only needs the frames and their ancestors (for page-space bounds), as in FramesPanel.
+  const needed = new Map<string, TLShape>()
+  for (const f of frames) {
+    let s: TLShape | undefined = f
+    while (s && !needed.has(s.id)) {
+      needed.set(s.id, s)
+      s = s.parentId.startsWith('shape:') ? editor.getShape(s.parentId as TLShapeId) : undefined
+    }
+  }
+  const order = presentationOrder([...needed.values()], editor.getCurrentPageId())
+  return (order.find((e) => !isSkipped(needed.get(e.id)?.meta)) ?? order[0])?.id ?? null
+}
+
+const onPhone = (editor: Editor) => editor.getViewportScreenBounds().w <= PHONE_CANVAS_MAX_W
+
+/** A frame across the screen, with a margin (a small one on a phone), never above 100%. */
+function showFrame(
+  editor: Editor,
+  frameId: TLShapeId,
+  move: { immediate: true } | { animation: { duration: number } },
+) {
+  const b = editor.getShapePageBounds(frameId)
+  if (!b) return false
+  editor.zoomToBounds(b, { targetZoom: 1, inset: onPhone(editor) ? PHONE_FRAME_INSET : 48, ...move })
+  return true
+}
+
+/**
+ * What a first visit without a start view shows: all content on the current page (never zoomed in
+ * past 100% on a board with one small note), or its first frame where the whole page would not be
+ * readable (a phone; content too large for the smallest zoom): F15.
+ */
+function fitContent(editor: Editor, animate = false): 'fit' | 'first-frame' | 'none' {
   const bounds = editor.getCurrentPageBounds()
-  // Fit everything, but never zoom in past 100% on a board with one small note.
-  if (bounds) editor.zoomToBounds(bounds, { targetZoom: 1, immediate: true })
+  if (!bounds) return 'none'
+  const move = animate ? { animation: { duration: 320 } } : ({ immediate: true } as const)
+  const screen = editor.getViewportScreenBounds()
+  const minZoom = editor.getCameraOptions().zoomSteps[0] ?? 0.05
+  // hasFrame is settled by firstFrame() below: only worth computing when the rule would use it.
+  if (prefersFirstFrame({ screen, content: bounds, minZoom, hasFrame: true })) {
+    const frame = firstFrame(editor)
+    if (frame && showFrame(editor, frame, move)) return 'first-frame'
+  }
+  editor.zoomToBounds(bounds, { targetZoom: 1, ...move })
+  return 'fit'
 }
 
 function viewportHasShapes(editor: Editor): boolean {
@@ -67,14 +124,10 @@ function startFrame(editor: Editor, view: BoardStartView) {
 /** Moves the camera to the start view (switching page if needed). `animate` respects reduced motion. */
 function showBoardStartView(editor: Editor, view: BoardStartView, animate: boolean) {
   if (view.pageId !== editor.getCurrentPageId()) editor.setCurrentPage(view.pageId as TLPageId)
-  const move = animate ? { animation: { duration: 320 } } : { immediate: true }
+  const move = animate ? { animation: { duration: 320 } } : ({ immediate: true } as const)
   const frame = startFrame(editor, view)
-  const frameBounds = frame ? editor.getShapePageBounds(frame) : undefined
-  if (frameBounds) {
-    // Like the frame outline's zoom: the whole frame with a margin, never above 100%.
-    editor.zoomToBounds(frameBounds, { targetZoom: 1, inset: 48, ...move })
-    return
-  }
+  // Like the frame outline's zoom: the whole frame with a margin, never above 100%.
+  if (frame && showFrame(editor, frame.id, move)) return
   // A saved view: exactly that area (letterboxed on a screen of another shape).
   editor.zoomToBounds(new Box(view.x, view.y, view.w, view.h), { inset: 0, ...move })
 }
@@ -110,18 +163,16 @@ export function clearBoardStartView(editor: Editor) {
 
 /**
  * "Go to start view": the board's start view when one is set (and its page exists), else what a first
- * visit shows without one: all content on the current page. Returns what it did.
+ * visit shows without one: all content on the current page (its first frame on a phone). Returns what
+ * it did.
  */
-export function goToStartView(editor: Editor): 'start-view' | 'fit' | 'none' {
+export function goToStartView(editor: Editor): 'start-view' | 'fit' | 'first-frame' | 'none' {
   const view = readBoardStartView(editor)
   if (view && editor.getPage(view.pageId as TLPageId)) {
     showBoardStartView(editor, view, true)
     return 'start-view'
   }
-  const bounds = editor.getCurrentPageBounds()
-  if (!bounds) return 'none'
-  editor.zoomToBounds(bounds, { targetZoom: 1, animation: { duration: 320 } })
-  return 'fit'
+  return fitContent(editor, true)
 }
 
 export interface StartViewOptions {
@@ -241,9 +292,13 @@ export function applyStartView(editor: Editor, opts: StartViewOptions): string {
       opts.hold?.(holdThroughLayout(editor, () => showBoardStartView(editor, plan.view, false)))
       return 'start-view'
     }
-    case 'fit':
-      fitContent(editor)
-      return 'fit'
+    case 'fit': {
+      // The dock rail appears after the editor mounts and narrows the canvas: on a phone that alone
+      // pushed the first frame half off screen. Re-apply while the layout settles, as for start views.
+      const did = fitContent(editor)
+      if (did !== 'none') opts.hold?.(holdThroughLayout(editor, () => fitContent(editor)))
+      return did
+    }
     default:
       return 'none'
   }

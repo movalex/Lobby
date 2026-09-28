@@ -481,7 +481,7 @@ test('search by tag and the CSV tags column: the panel’s tag filter lists the 
     await a.page.getByTestId('export-button').click()
     const dialog = a.page.getByTestId('export-dialog')
     await expect(dialog).toBeVisible()
-    await expect(dialog).toContainText('one row per object with its type, frame, colour, position and tags.')
+    await expect(dialog).toContainText('one row per object with its type, frame, color, position and tags.')
     const file = await downloadFrom(a.page, () => dialog.getByTestId('export-csv').click())
     const rows = parseCsv(file.bytes.subarray(3).toString('utf8'))
     expect(rows[0]).toEqual(['id', 'type', 'text', 'frame', 'color', 'x', 'y', 'tags'])
