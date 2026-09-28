@@ -11,7 +11,12 @@ import {
   ensureLayout,
   finishJob,
   isId,
+  LIMITS,
+  maxUploadBytes,
   newId,
+  OFFICE_FORMATS,
+  officeFormat,
+  officeFormatByMime,
   PREVIEW_PROFILE,
   type PreviewJob,
   requeueStale,
@@ -59,6 +64,48 @@ describe('classification and names', () => {
     expect(classifyUpload('', 'deck.PDF')).toBe('pdf')
     expect(classifyUpload('video/mp4', 'clip.mp4')).toBe('video')
     expect(classifyUpload('application/zip', 'x.zip')).toBe('other')
+  })
+  it('previews Office documents as pages (kind pdf) by declared type or extension, and nothing else', () => {
+    const docx = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+    for (const [mime, name] of [
+      [docx, 'Q3 plan.bin'],
+      ['', 'Q3 plan.DOCX'],
+      ['application/octet-stream', 'deck.pptx'],
+      ['', 'budget.xlsx'],
+      ['application/vnd.oasis.opendocument.text; charset=binary', 'notes'],
+      ['', 'slides.odp'],
+      ['', 'sheet.ods'],
+    ]) {
+      expect(classifyUpload(mime as string, name as string), `${mime} ${name}`).toBe('pdf')
+    }
+    expect(officeFormat('', 'Q3 plan.DOCX')).toMatchObject({
+      ext: 'docx',
+      mime: docx,
+      label: 'Word document',
+    })
+    expect(officeFormat('application/octet-stream', 'b.xlsx')?.label).toBe('Excel spreadsheet')
+    // Macro-enabled, legacy binary and iWork formats stay attachments.
+    for (const name of ['m.docm', 'm.xlsm', 'm.pptm', 'old.doc', 'old.xls', 'old.ppt', 'k.key', 'p.pages']) {
+      expect(classifyUpload('', name), name).toBe('other')
+      expect(officeFormat('', name), name).toBeNull()
+    }
+    expect(classifyUpload('application/vnd.ms-word.document.macroenabled.12', 'm.docm')).toBe('other')
+    // Every existing classification is unchanged (an image or video type wins over an Office name).
+    expect(classifyUpload('image/png', 'x.docx')).toBe('image')
+    expect(classifyUpload('video/mp4', 'x.pptx')).toBe('video')
+    expect(classifyUpload('application/pdf', 'x.docx')).toBe('pdf')
+    expect(officeFormatByMime('APPLICATION/VND.OASIS.OPENDOCUMENT.SPREADSHEET')?.ext).toBe('ods')
+    expect(officeFormatByMime('application/zip')).toBeNull()
+    expect(OFFICE_FORMATS.map((f) => f.ext)).toEqual(['docx', 'pptx', 'xlsx', 'odt', 'odp', 'ods'])
+  })
+  it('limits Office uploads to 100 MB, and every other kind as before', () => {
+    expect(LIMITS.maxOfficeBytes).toBe(100 * 1024 * 1024)
+    expect(maxUploadBytes('pdf', '', 'deck.pptx')).toBe(LIMITS.maxOfficeBytes)
+    expect(maxUploadBytes('pdf', 'application/vnd.oasis.opendocument.text', 'n')).toBe(LIMITS.maxOfficeBytes)
+    expect(maxUploadBytes('pdf', 'application/pdf', 'scan.pdf')).toBe(LIMITS.maxBytes.pdf)
+    expect(maxUploadBytes('pdf', 'application/pdf', 'scan.docx')).toBe(LIMITS.maxBytes.pdf)
+    expect(maxUploadBytes('video', '', 'a.mp4')).toBe(LIMITS.maxBytes.video)
+    expect(maxUploadBytes('other', '', 'a.docm')).toBe(LIMITS.maxBytes.other)
   })
   it('strips paths and control characters from display names', () => {
     expect(sanitizeDisplayName('C:\\Users\\me\\secret\\deck.pdf')).toBe('deck.pdf')

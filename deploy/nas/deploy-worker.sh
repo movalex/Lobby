@@ -3,17 +3,18 @@
 # (Git Bash) in any directory; see deploy/nas/README.md.
 #
 #   deploy/nas/deploy-worker.sh [deploy]    upload sources + compose file (+ env file), build, swap, status
-#   deploy/nas/deploy-worker.sh status      container state, restarts, memory/CPU, last log lines
-#   deploy/nas/deploy-worker.sh logs [N]    last N log lines (default 100); `logs -f` follows
+#   deploy/nas/deploy-worker.sh status      both containers: state, restarts, memory/CPU, last log lines
+#   deploy/nas/deploy-worker.sh logs [N]    worker: last N log lines (default 100); `logs -f` follows;
+#                                           `logs N office` / `logs -f office`: the office sidecar's
 #   deploy/nas/deploy-worker.sh stop        graceful stop (a job in progress is handed back to the api)
 #   deploy/nas/deploy-worker.sh start       start the already-built container again
 #   deploy/nas/deploy-worker.sh bundle OUT  local dry run: build and check the upload bundle, no ssh
 #   deploy/nas/deploy-worker.sh check-env   local: validate the worker env file (never prints values)
 #
-# Isolation: every remote docker command names the compose project `draftroom-worker` and its own compose
-# file under NAS_DIR. Nothing here lists, stops, prunes or edits anything else on the NAS (in particular
-# the `theaitre` project); image cleanup is limited to dangling images labelled
-# com.draftroom.component=worker.
+# Isolation: every remote docker command names the compose project `draftroom-worker` (containers
+# draftroom-worker and draftroom-office, one image) and its own compose file under NAS_DIR. Nothing here
+# lists, stops, prunes or edits anything else on the NAS (in particular the `theaitre` project); image
+# cleanup is limited to dangling images labelled com.draftroom.component=worker.
 #
 # Secrets: the only secret is DRAFTROOM_WORKER_TOKEN in the local env file (default
 # deploy/nas/worker/.env.worker, gitignored by `.env.*`). It is copied to NAS_DIR/worker.env with mode 600
@@ -22,6 +23,7 @@ set -euo pipefail
 
 PROJECT=draftroom-worker
 CONTAINER=draftroom-worker
+OFFICE_CONTAINER=draftroom-office
 NAS=${NAS:-chase@192.168.10.1}
 NAS_KEY=${NAS_KEY:-$HOME/.ssh/ugreen_nas}
 NAS_DIR=${NAS_DIR:-/volume3/Apps/draftroom-worker}
@@ -121,32 +123,35 @@ make_bundle() {
 # ---- commands ---------------------------------------------------------------------------------------
 
 cmd_status() {
-  remote_script <<'REMOTE'
+  remote_script "$OFFICE_CONTAINER" <<'REMOTE'
 set -u
-dir=$1 project=$2 container=$3
+dir=$1 project=$2
 if [ ! -f "$dir/docker-compose.yml" ]; then
   echo "not deployed: $dir/docker-compose.yml does not exist"
   exit 0
 fi
 docker compose -p "$project" -f "$dir/docker-compose.yml" ps
-if docker inspect "$container" >/dev/null 2>&1; then
+for container in "$3" "$4"; do
+  docker inspect "$container" >/dev/null 2>&1 || continue
+  echo "--- $container"
   docker inspect --format 'state={{.State.Status}} started={{.State.StartedAt}} restarts={{.RestartCount}} oom-killed={{.State.OOMKilled}} image={{.Image}}' "$container"
   if [ "$(docker inspect --format '{{.State.Running}}' "$container")" = true ]; then
     docker stats --no-stream --format 'cpu={{.CPUPerc}} mem={{.MemUsage}} pids={{.PIDs}}' "$container"
   fi
-  echo "--- last log lines"
+  echo "--- last log lines of $container"
   docker logs --tail 20 "$container" 2>&1
-fi
+done
 REMOTE
 }
 
 cmd_logs() {
-  local arg=${1:-100}
+  local arg=${1:-100} container=$CONTAINER
+  if [ "${2:-}" = office ]; then container=$OFFICE_CONTAINER; fi
   if [ "$arg" = -f ]; then
-    remote docker logs --tail 50 -f "$CONTAINER"
+    remote docker logs --tail 50 -f "$container"
   else
-    [[ $arg =~ ^[0-9]{1,6}$ ]] || die "logs takes a line count or -f"
-    remote docker logs --tail "$arg" "$CONTAINER"
+    [[ $arg =~ ^[0-9]{1,6}$ ]] || die "logs takes a line count or -f (then optionally: office)"
+    remote docker logs --tail "$arg" "$container"
   fi
 }
 
@@ -213,9 +218,9 @@ REMOTE
   fi
 
   say "building on the NAS (the running worker keeps working meanwhile)"
-  remote_script <<'REMOTE'
+  remote_script "$OFFICE_CONTAINER" <<'REMOTE'
 set -eu
-dir=$1 project=$2 container=$3
+dir=$1 project=$2 container=$3 office=$4
 cd "$dir"
 compose() { docker compose -p "$project" -f "$dir/docker-compose.yml" "$@"; }
 rm -rf src.new
@@ -232,21 +237,24 @@ if ! compose build worker; then
   if [ -d src.old ]; then mv src.old src; fi
   exit 1
 fi
-echo "==> swapping the container"
-compose up -d --no-build --remove-orphans worker
+echo "==> swapping the containers (worker and office sidecar, one image)"
+compose up -d --no-build --remove-orphans
 # Only this project's superseded image (dangling + our label); never a global prune.
 docker image prune -f --filter label=com.draftroom.component=worker >/dev/null
 rm -rf src.old bundle.tgz
-for _ in $(seq 1 30); do
-  if docker logs "$container" 2>&1 | grep -q '\[worker\] started (api: '; then break; fi
-  if [ "$(docker inspect --format '{{.State.Running}}' "$container" 2>/dev/null)" != true ]; then break; fi
-  sleep 1
-done
-if ! docker logs "$container" 2>&1 | grep -q '\[worker\] started (api: '; then
-  echo "the worker did not report 'started' within 30 s:" >&2
-  docker logs --tail 30 "$container" >&2 2>&1 || true
-  exit 1
-fi
+# waits until <container> logs <pattern>, or gives up after 60 s (LibreOffice's first start takes a few).
+wait_for() {
+  for _ in $(seq 1 60); do
+    if docker logs "$1" 2>&1 | grep -q "$2"; then return 0; fi
+    if [ "$(docker inspect --format '{{.State.Running}}' "$1" 2>/dev/null)" != true ]; then break; fi
+    sleep 1
+  done
+  echo "$1 did not log '$2' in time:" >&2
+  docker logs --tail 30 "$1" >&2 2>&1 || true
+  return 1
+}
+wait_for "$office" '\[office\] listening'
+wait_for "$container" '\[worker\] started (api: '
 REMOTE
   say "deployed"
   cmd_status
@@ -255,7 +263,7 @@ REMOTE
 case ${1:-deploy} in
   deploy) cmd_deploy ;;
   status) cmd_status ;;
-  logs) cmd_logs "${2:-100}" ;;
+  logs) cmd_logs "${2:-100}" "${3:-}" ;;
   stop) cmd_stop ;;
   start) cmd_start ;;
   bundle)

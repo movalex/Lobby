@@ -1,5 +1,5 @@
 import { formatBytes } from '../lib/format.ts'
-import { type AssetKind, classifyUpload, LIMITS } from './contract.ts'
+import { type AssetKind, classifyUpload, maxUploadBytes } from './contract.ts'
 
 /**
  * Image types that become native tldraw image shapes. It is the intersection of what tldraw's image
@@ -23,7 +23,7 @@ export function partitionFiles(files: readonly File[]): Partitioned {
   const out: Partitioned = { images: [], cards: [], rejected: [] }
   for (const file of files) {
     const kind = classifyUpload(file.type, file.name)
-    const limit = LIMITS.maxBytes[kind]
+    const limit = maxUploadBytes(kind, file.type, file.name)
     // Checked here, before anything reaches tldraw: its own maxAssetSize toast does not say which
     // file was too large, and a drop of several files needs that.
     if (kind === 'image' && NATIVE_IMAGES.has(file.type.toLowerCase())) {

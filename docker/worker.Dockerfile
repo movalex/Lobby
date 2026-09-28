@@ -1,6 +1,9 @@
-# Draftroom preview worker (thumbnails, PDF pages, video posters): the HTTP worker of
+# Draftroom preview worker (thumbnails, PDF pages, video posters, Office documents): the HTTP worker of
 # docs/M3-STORAGE-CONTRACTS.md §5. It claims jobs from the API, downloads the original from a presigned
-# URL into a temp file, renders derivatives, uploads them to presigned URLs and reports back.
+# URL into a temp file, renders derivatives, uploads them to presigned URLs and reports back. The same
+# image also runs the office sidecar (apps/worker/src/office-sidecar.ts), which converts Office
+# documents to PDF with LibreOffice from a container with no network and no secrets
+# (deploy/nas/worker/docker-compose.yml, service `office`).
 # Runs the same on Render (optional background worker in render.yaml), on the NAS
 # (deploy/nas/README.md) or next to a local API.
 #
@@ -45,6 +48,19 @@ RUN apt-get update \
   && apt-get install -y --no-install-recommends tini ffmpeg \
   && rm -rf /var/lib/apt/lists/* \
   && command -v ffmpeg && command -v ffprobe
+# Office previews (wave 4): LibreOffice without a GUI or Java, run ONLY by the office sidecar (compose
+# service `office`: the same image with `node apps/worker/src/office-sidecar.ts`, no network, no
+# secrets, its own memory cap). Fonts that keep Office layouts: Liberation (metric-compatible with Arial,
+# Times New Roman, Courier New), Carlito (Calibri), Caladea (Cambria), plus DejaVu for everything else.
+# /office-jobs is the mount point of the volume the worker and the sidecar share; owned by `node`, so a
+# new named volume starts out owner-only for that user. Its own layer: the one above stays cached.
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends \
+    libreoffice-writer-nogui libreoffice-calc-nogui libreoffice-impress-nogui \
+    fonts-liberation2 fonts-crosextra-carlito fonts-crosextra-caladea fonts-dejavu-core \
+  && rm -rf /var/lib/apt/lists/* \
+  && command -v soffice \
+  && install -d -o node -g node -m 700 /office-jobs
 ENV NODE_ENV=production
 WORKDIR /app
 COPY --from=deps /app /app

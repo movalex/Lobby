@@ -16,6 +16,10 @@ export type FailureCode =
   | 'FILE_MISSING'
   | 'TIMEOUT'
   | 'INTERNAL'
+  | 'OFFICE_ENCRYPTED'
+  | 'OFFICE_INVALID'
+  | 'OFFICE_TOO_MANY_PAGES'
+  | 'OFFICE_UNAVAILABLE'
 
 const MESSAGES: Record<FailureCode, string> = {
   IMAGE_TOO_LARGE: 'This image is too large to preview. You can still download it.',
@@ -31,7 +35,17 @@ const MESSAGES: Record<FailureCode, string> = {
   FILE_MISSING: 'The uploaded file is missing. Try uploading it again.',
   TIMEOUT: 'Making the preview took too long. You can still download the file.',
   INTERNAL: 'The preview could not be made. Try uploading the file again.',
+  // Office documents (office.ts). The api keeps the same catalog (apps/api/src/worker/protocol.ts).
+  OFFICE_ENCRYPTED: 'This document is password-protected. Download it to open it.',
+  OFFICE_INVALID:
+    'This document could not be converted for preview. It may be damaged, password-protected or too complex. You can still download it.',
+  OFFICE_TOO_MANY_PAGES: 'This document has too many pages to preview. You can still download it.',
+  OFFICE_UNAVAILABLE:
+    'Previews of Office documents are not available right now. You can still download the file.',
 }
+
+/** Every failure code, e.g. to check that the api knows each one. */
+export const FAILURE_CODES = Object.keys(MESSAGES) as FailureCode[]
 
 export function userMessage(code: FailureCode): string {
   return MESSAGES[code]

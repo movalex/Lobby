@@ -1,6 +1,10 @@
-import type { AssetKind } from '@draftroom/dev-assets'
+import { type AssetKind, isOfficeUpload } from '@draftroom/dev-assets'
 
-/** The only types ever served inline for each previewable kind; anything else is an attachment. */
+/**
+ * The only types ever served inline for each previewable kind; anything else is an attachment. Office
+ * documents are kind 'pdf' (previewed as the pages of their PDF conversion) but their own types are
+ * deliberately NOT here: the original is always a download, never rendered by the browser.
+ */
 export const INLINE_MIMES: Record<AssetKind, readonly string[]> = {
   image: ['image/png', 'image/jpeg', 'image/webp', 'image/gif'],
   pdf: ['application/pdf'],
@@ -29,6 +33,14 @@ const MIME_RE = /^[a-z0-9][a-z0-9!#$&^_.+-]{0,126}\/[a-z0-9][a-z0-9!#$&^_.+-]{0,
 export function normalizeDeclaredMime(raw: string | undefined): string {
   const base = (raw ?? '').split(';')[0]?.trim().toLowerCase() ?? ''
   return MIME_RE.test(base) ? base : 'application/octet-stream'
+}
+
+/**
+ * How a 413 names what the size limit is for, when that is not the kind's usual label: an Office
+ * document (LIMITS.maxOfficeBytes, see dev-assets maxUploadBytes) is kind 'pdf' but not a PDF.
+ */
+export function uploadLimitLabel(kind: AssetKind, declared: string, name: string): string | null {
+  return isOfficeUpload(kind, declared, name) ? 'Office documents' : null
 }
 
 /**

@@ -146,6 +146,12 @@ export const FAILURE_MESSAGES: Record<string, string> = {
   FILE_MISSING: 'The uploaded file is missing. Try uploading it again.',
   TIMEOUT: 'Making the preview took too long. You can still download the file.',
   INTERNAL: 'The preview could not be made. Try uploading the file again.',
+  OFFICE_ENCRYPTED: 'This document is password-protected. Download it to open it.',
+  OFFICE_INVALID:
+    'This document could not be converted for preview. It may be damaged, password-protected or too complex. You can still download it.',
+  OFFICE_TOO_MANY_PAGES: 'This document has too many pages to preview. You can still download it.',
+  OFFICE_UNAVAILABLE:
+    'Previews of Office documents are not available right now. You can still download the file.',
 }
 
 /** A worker-reported failure as the { code, message } users see: unknown codes become INTERNAL. */

@@ -2,7 +2,7 @@ import type { Queryable } from '@draftroom/db'
 import {
   BOARD_ID_RE,
   classifyUpload,
-  LIMITS,
+  maxUploadBytes,
   newId,
   PREVIEW_PROFILE,
   sanitizeDisplayName,
@@ -12,7 +12,7 @@ import { SlidingWindowLimiter } from '../rate-limit.ts'
 import { deleteQuietly, originalKey } from './blobs.ts'
 import { DEFAULT_UPLOAD_POLICY, type FilesDeps, type UploadPolicy } from './deps.ts'
 import { EMPTY_PROBE, toMeta, VERSION_COLUMNS, type VersionRow } from './meta.ts'
-import { initialServedMime, normalizeDeclaredMime } from './mime.ts'
+import { initialServedMime, normalizeDeclaredMime, uploadLimitLabel } from './mime.ts'
 import { ReceiveError, receiveToBlob } from './receive.ts'
 import { HttpError, requireAccess, sendJson } from './respond.ts'
 import { DEFAULT_STORAGE_CONFIG } from './storage-config.ts'
@@ -154,12 +154,12 @@ export async function handleUpload(
   const name = parseFileName(request.headers['x-file-name'])
   const declaredMimeType = normalizeDeclaredMime(request.headers['content-type'])
   const kind = classifyUpload(declaredMimeType, name)
-  const maxBytes = LIMITS.maxBytes[kind]
+  const maxBytes = maxUploadBytes(kind, declaredMimeType, name)
   const tooLarge = () =>
     reject(
       413,
       'TOO_LARGE',
-      `The file is larger than the ${maxBytes / MiB} MB limit for ${KIND_LABEL[kind]}.`,
+      `The file is larger than the ${maxBytes / MiB} MB limit for ${uploadLimitLabel(kind, declaredMimeType, name) ?? KIND_LABEL[kind]}.`,
     )
   if (declaredBytes > maxBytes) throw tooLarge()
   // The workspace quota (and a guest's own allowance), from the declared size, before any body byte is read.

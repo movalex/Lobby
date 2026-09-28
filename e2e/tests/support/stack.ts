@@ -222,6 +222,8 @@ export function blobStoreEnv(): Record<string, string> {
 export interface StackOptions {
   /** Extra sync server env, e.g. { TEXT_LEASE_MS: '3000' }. */
   syncEnv?: Record<string, string>
+  /** Extra preview worker env, e.g. the office-previews suite's SOFFICE_PATH stand-in. */
+  workerEnv?: Record<string, string>
 }
 
 export interface Stack {
@@ -319,6 +321,7 @@ export async function startStack(opts: StackOptions = {}): Promise<Stack> {
       // Snappy idle polling (the default backoff grows to 15 s between polls).
       WORKER_POLL_MS: '100',
       WORKER_POLL_MAX_MS: '500',
+      ...opts.workerEnv,
     }),
     ready: (out) => out.includes(`[worker] started (api: ${API_URL}, `),
     preflight: async () => {

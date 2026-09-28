@@ -27,3 +27,36 @@
 .dr-fc__view:hover {
   background: var(--dr-navy, #1f3a5f);
 }
+
+/* Office documents (wave 4): the note that the pages are a PDF conversion, and Office colours for the
+   footer's kind badge (white text on each is at least 4.9:1). */
+.dr-fc__note {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  margin: 0;
+  padding: 0 10px;
+  overflow: hidden;
+  border-top: 1px solid var(--tl-color-divider, var(--dr-line));
+  color: var(--tl-color-text-3, var(--dr-ink-2));
+  font-size: 11px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.dr-fc__note svg {
+  flex: none;
+}
+.dr-fc[data-office="docx"] .dr-fc__icon,
+.dr-fc[data-office="odt"] .dr-fc__icon {
+  background: #2b579a;
+}
+.dr-fc[data-office="pptx"] .dr-fc__icon,
+.dr-fc[data-office="odp"] .dr-fc__icon {
+  background: #c43e1c;
+}
+.dr-fc[data-office="xlsx"] .dr-fc__icon,
+.dr-fc[data-office="ods"] .dr-fc__icon {
+  background: #217346;
+}

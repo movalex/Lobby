@@ -6,6 +6,7 @@ import {
 } from '@draftroom/canvas-schema'
 import { BaseBoxShapeUtil, type TLIndicatorPath, type TLShapePartial } from 'tldraw'
 import { FileCardView } from './FileCardView.tsx'
+import { cardOfficeFormat } from './office.ts'
 import { openCardOriginal } from './open-original.ts'
 
 const KIND_LABEL: Record<FileCardShape['props']['kind'], string> = {
@@ -57,7 +58,11 @@ export class FileCardShapeUtil extends BaseBoxShapeUtil<FileCardShape> {
   }
 
   override getAriaDescriptor(shape: FileCardShape) {
-    return `${KIND_LABEL[shape.props.kind]} file: ${shape.props.name}`
+    // An Office document is previewed through a PDF conversion, but it is not a PDF file.
+    const office = cardOfficeFormat(null, shape.props)
+    return office
+      ? `${office.label}: ${shape.props.name}`
+      : `${KIND_LABEL[shape.props.kind]} file: ${shape.props.name}`
   }
 
   component(shape: FileCardShape) {

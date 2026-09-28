@@ -4,6 +4,7 @@
 import { isIP } from 'node:net'
 import { hostname, tmpdir } from 'node:os'
 import { isAbsolute, resolve } from 'node:path'
+import { LIMITS } from '@draftroom/dev-assets'
 import { PREVIEW, WORKER } from './config.ts'
 
 type Env = Record<string, string | undefined>
@@ -22,9 +23,20 @@ export interface WorkerEnv {
   tmpDir: string
   ffmpegPath: string | undefined
   ffprobePath: string | undefined
+  office: OfficeEnv
   /** Names (never values) of credentials present in the environment that the worker never uses. */
   unusedSecrets: string[]
 }
+
+/**
+ * Office previews (office.ts). `socket`: the LibreOffice sidecar at OFFICE_SOCKET, with documents staged
+ * in OFFICE_JOBS_DIR (production). `local`: soffice as the worker's own child (development only).
+ * `off`: Office documents fail with OFFICE_UNAVAILABLE and stay downloadable.
+ */
+export type OfficeEnv =
+  | { mode: 'off'; timeoutMs: number }
+  | { mode: 'local'; sofficePath: string | undefined; timeoutMs: number }
+  | { mode: 'socket'; socketPath: string; jobsDir: string; timeoutMs: number }
 
 export const MIN_TOKEN_LENGTH = 32
 const DEV_PREFIX = 'dev-only-'
@@ -107,6 +119,40 @@ export function defaultWorkerId(host = hostname()): string {
   return id || 'worker'
 }
 
+const NAMED_PIPE_RE = /^\\\\[.?]\\pipe\\/i
+
+export function loadOfficeEnv(env: Env, production: boolean): OfficeEnv {
+  const timeoutMs = int(env, 'WORKER_OFFICE_TIMEOUT_MS', LIMITS.officeConvertTimeoutMs, 1_000, 600_000)
+  const socketPath = read(env, 'OFFICE_SOCKET')
+  const raw = read(env, 'WORKER_OFFICE')
+  const mode = raw ?? (socketPath ? 'socket' : production ? 'off' : 'local')
+  switch (mode) {
+    case 'off':
+      return { mode, timeoutMs }
+    case 'local':
+      if (production) {
+        throw new Error(
+          'WORKER_OFFICE=local is for development: in production Office documents are converted by the office sidecar (OFFICE_SOCKET)',
+        )
+      }
+      return { mode, sofficePath: read(env, 'SOFFICE_PATH'), timeoutMs }
+    case 'socket': {
+      if (!socketPath || !(isAbsolute(socketPath) || NAMED_PIPE_RE.test(socketPath))) {
+        throw new Error('OFFICE_SOCKET must be an absolute path when WORKER_OFFICE=socket')
+      }
+      const jobsDir = read(env, 'OFFICE_JOBS_DIR')
+      if (!jobsDir || !isAbsolute(jobsDir)) {
+        throw new Error(
+          'OFFICE_JOBS_DIR must be an absolute path (the volume shared with the office sidecar)',
+        )
+      }
+      return { mode, socketPath, jobsDir: resolve(jobsDir), timeoutMs }
+    }
+    default:
+      throw new Error('WORKER_OFFICE must be off, local or socket')
+  }
+}
+
 export function loadWorkerEnv(env: Env = process.env): WorkerEnv {
   const production = env.NODE_ENV === 'production'
   const apiUrl = parseApiUrl(read(env, 'DRAFTROOM_API_URL'), production)
@@ -142,6 +188,7 @@ export function loadWorkerEnv(env: Env = process.env): WorkerEnv {
     tmpDir: tmpRaw ? resolve(tmpRaw) : tmpdir(),
     ffmpegPath: read(env, 'FFMPEG_PATH'),
     ffprobePath: read(env, 'FFPROBE_PATH'),
+    office: loadOfficeEnv(env, production),
     unusedSecrets: FOREIGN_SECRETS.filter((n) => read(env, n) !== undefined),
   }
 }
