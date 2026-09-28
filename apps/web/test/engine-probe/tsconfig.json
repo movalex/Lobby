@@ -1,0 +1,12 @@
+{
+  "extends": "../../../../tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["es2023", "dom", "dom.iterable"],
+    "jsx": "react-jsx",
+    "types": ["node", "vite/client"],
+    // Playwright is installed by the e2e package (catalog); the runners load it from there at runtime
+    "paths": { "@playwright/test": ["../../../../e2e/node_modules/@playwright/test"] }
+  },
+  "include": ["**/*.ts", "**/*.tsx"],
+  "exclude": ["browser/dist"]
+}

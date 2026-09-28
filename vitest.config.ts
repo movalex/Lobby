@@ -32,6 +32,15 @@ export default defineConfig({
         },
       },
       { test: { name: 'web', environment: 'node', include: ['apps/web/src/**/*.test.ts'] } },
+      // Excalidraw engine probe suite, Node part (docs/EXCALIDRAW-MIGRATION.md §6.5); the browser part runs from its own runner
+      {
+        test: {
+          name: 'engine-probe',
+          environment: 'node',
+          include: ['apps/web/test/engine-probe/**/*.test.ts'],
+          testTimeout: 60_000,
+        },
+      },
       {
         test: {
           name: 'packages',
