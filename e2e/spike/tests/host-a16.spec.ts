@@ -340,6 +340,65 @@ test.describe('A16: editor-open paths (mouse / keyboard)', () => {
     await lab(page, (x) => x.lease.flush())
   })
 
+  test('deny (the note is held by another user): P1 opens nothing, P5 closes unchanged, toast; 20/20 each', async ({
+    page,
+  }) => {
+    test.setTimeout(240_000)
+    await openLab(page, { grant: 'manual' })
+    await warmFonts(page)
+    const out: Record<string, unknown>[] = []
+    for (const kind of ['P1', 'P5'] as const) {
+      for (let i = 0; i < N; i++) {
+        await resetLab(page)
+        const original = `Held ${i}`
+        const ids = await addNote(page, { x: 220, y: 160, size: 200, text: original })
+        await lab(page, (x, id) => x.lease.holdByOther(id), ids.note)
+        await selectByClick(page, ids)
+        const v0 = await versions(page)
+        if (kind === 'P1') await page.keyboard.press('Enter')
+        else {
+          const p = await labelPoint(page, ids)
+          await page.mouse.click(p.x, p.y)
+        }
+        await settle(page)
+        const before = await editor(page)
+        await page.keyboard.type(TYPED)
+        await settle(page, 40)
+        await lab(page, (x) => x.lease.flush())
+        await waitEditor(page, (e) => e.phase === 'idle' && e.textarea === null).catch(() => {})
+        const after = await editor(page)
+        const label = ids.label ? await element(page, ids.label) : undefined
+        const deny = await lab(page, (x) =>
+          x.lease.log().find((l: { message: { type: string } }) => l.message.type === 'lease.deny'),
+        )
+        const toasts = await lab(page, (x) => [...x.toasts])
+        const ok =
+          (kind === 'P1' ? before.textarea === null : before.textarea?.readOnly === true) &&
+          after.phase === 'idle' &&
+          after.textarea === null &&
+          label?.originalText === original &&
+          (await changedSince(page, v0)) === 0 &&
+          deny?.message?.holder?.name === 'Alice' &&
+          toasts.includes('Alice is typing in this note')
+        out.push({
+          kind,
+          i,
+          ok,
+          before: before.phase,
+          after: after.phase,
+          stored: label?.originalText,
+          toasts,
+        })
+      }
+    }
+    const fails = out.filter((r) => !r.ok)
+    console.log(
+      'A16-DENY',
+      JSON.stringify({ pass: out.length - fails.length, of: out.length, sample: [out[0], out[N]], fails }),
+    )
+    expect(fails).toEqual([])
+  })
+
   test('P6-P8 unreachable: setTool refuses text, stickynote, autoshape; T, N, 8, Shift+X never activate them', async ({
     page,
   }) => {

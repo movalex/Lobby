@@ -273,6 +273,7 @@ function createLab(cfg: LabConfig, onAttached: (api: ExcalidrawImperativeAPI) =>
       const st = need().getAppState()
       return {
         activeTool: `${st.activeTool.type}:${st.activeTool.customType ?? ''}`,
+        toolLocked: st.activeTool.locked,
         openDialog: st.openDialog?.name ?? null,
         openPopup: st.openPopup,
         openMenu: st.openMenu,

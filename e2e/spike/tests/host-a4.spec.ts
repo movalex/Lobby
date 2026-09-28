@@ -21,7 +21,7 @@ import {
 // onPointerUpdate stays silent. Scripted per role. Guests run with the export policy "deny" (Lobby's
 // capture copy listener blocks); commenters and viewers with "allow" (Lobby lets copy through and
 // Excalidraw still writes nothing: its copy/cut/paste listeners are not even registered for a
-// non-interactive editor, dist/dev/index.js:49243-49337).
+// non-interactive editor, dist/dev/index.js:49244-49327, before the listeners at 49346-49396).
 
 const settle = (page: Page, ms = 120) =>
   page.evaluate(

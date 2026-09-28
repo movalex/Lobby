@@ -166,8 +166,29 @@ test('A17: remote move/resize while typing; holder re-fit is fit; native Ctrl+Z 
     await page.keyboard.insertText(LONG.repeat(4))
     await page.keyboard.type(' the end')
     await settle(page)
-    const beforeUndo = await editor(page)
     const note4 = await element(page, NOTE)
+    const typed4 = await editor(page)
+
+    // Remote SHRINK back to 200 x 200 (another user's resize, with that user's own height). updateScene
+    // runs no sticky-note re-layout (E7), so the note stays 200 high although the text overflows; the
+    // holder's re-fit then grows it again, and that write must be a fit.
+    await lab(
+      page,
+      (x, id) => x.recorder.applyRemote([{ id, patch: { width: 200, height: 200, baseHeight: 200 } }]),
+      NOTE,
+    )
+    await settle(page)
+    const note5 = await element(page, NOTE)
+    const e5 = await editor(page)
+    const same5 = await page.evaluate(
+      () =>
+        document.querySelector<HTMLTextAreaElement>('textarea.excalidraw-wysiwyg')?.dataset.probe ===
+        'same-node',
+    )
+    await lab(page, (x) => x.recorder.refit())
+    await settle(page)
+    const note6 = await element(page, NOTE)
+    const beforeUndo = await editor(page)
 
     // Native undo / redo inside the textarea.
     const c0 = await lab(page, (x) => ({ ...x.counters }))
@@ -230,6 +251,14 @@ test('A17: remote move/resize while typing; holder re-fit is fit; native Ctrl+Z 
     const followsResize = !!t1 && !!t2 && t2.left > t1.left && t2.top > t1.top
     const rewrapped = (label2?.text ?? '').includes('\n') && !(label3?.text ?? '').includes('\n')
     const grew = !!note4 && note4.height > 260
+    const noRelayoutOnApply = !!note5 && note5.height === 200 && note5.width === 200
+    const keptAfterShrink = same5 && !!e5.textarea?.focused && e5.textarea.value === typed4.textarea?.value
+    const refitGrew = !!note6 && note6.width === 200 && note6.baseHeight === 200 && note6.height > 200
+    const refitIsFit = steps.some(
+      (s: { kind: string; writes: { role: string; fit?: { height?: number }; groups: object }[] }) =>
+        s.kind === 'refit' &&
+        s.writes.some((w) => w.role === 'container' && !!w.fit?.height && Object.keys(w.groups).length === 0),
+    )
     const undoNative =
       !!beforeUndo.textarea &&
       !!afterUndo.textarea &&
@@ -252,6 +281,10 @@ test('A17: remote move/resize while typing; holder re-fit is fit; native Ctrl+Z 
       containerAllFit &&
       containerWrites.length > 0 &&
       grew &&
+      noRelayoutOnApply &&
+      keptAfterShrink &&
+      refitGrew &&
+      refitIsFit &&
       undoNative &&
       lobbyUndoUntouched &&
       stored === afterRedo.textarea?.value &&
@@ -271,6 +304,12 @@ test('A17: remote move/resize while typing; holder re-fit is fit; native Ctrl+Z 
       containerWrites: containerWrites.length,
       grew,
       noteHeight: note4?.height,
+      noRelayoutOnApply,
+      keptAfterShrink,
+      heightAfterShrink: note5?.height,
+      refitGrew,
+      heightAfterRefit: note6?.height,
+      refitIsFit,
       undoNative,
       undoValue: afterUndo.textarea?.value.length,
       beforeUndoValue: beforeUndo.textarea?.value.length,
