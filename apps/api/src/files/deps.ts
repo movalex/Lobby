@@ -35,17 +35,22 @@ export interface FileAuthorizer {
 }
 
 /**
- * Upload limits (docs/SECURITY-REVIEW-2026-09-27.md FC-1). The byte quota covers everything the board's
- * workspace stores (originals, their previews and board thumbnails: usage.ts), the file cap its
+ * Upload limits (docs/SECURITY-REVIEW-2026-09-27.md FC-1). The byte quota covers what the board's
+ * workspace stores in files (originals, their previews and board thumbnails: usage.ts), the file cap its
  * uploaded versions, whoever uploaded them; the rate limit counts upload attempts per signed-in user,
  * never per IP. SEAM-02: a name-only guest (no account) is also held to `guestQuota`, over the
- * originals they uploaded to that workspace, so one anonymous workshop guest cannot fill it for everyone.
+ * originals they uploaded to that workspace, and all name-only guests together to its `poolPercent`
+ * of the workspace quota, so anonymous workshop guests cannot fill it for everyone (not even one
+ * person joining the link again and again under new names).
  */
 export interface UploadPolicy {
   workspaceQuota: { maxBytes: number; maxFiles: number }
   perUser: { max: number; timeWindow: number }
-  /** Per name-only guest per workspace; default DEFAULT_STORAGE_CONFIG.guestQuota (1 GB, 200 files). */
-  guestQuota?: { maxBytes: number; maxFiles: number }
+  /**
+   * Per name-only guest per workspace, and (poolPercent) the share of workspaceQuota all name-only
+   * guests together may use; default DEFAULT_STORAGE_CONFIG.guestQuota (1 GB, 200 files, 50%).
+   */
+  guestQuota?: { maxBytes: number; maxFiles: number; poolPercent?: number }
 }
 
 /** Used when the host passes no policy: the same staging defaults as the API's config. */

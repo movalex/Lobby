@@ -63,7 +63,7 @@ export type AssetGcSummary = z.infer<typeof AssetGcSummary>
 
 export const WorkspaceStorage = z.object({
   workspaceId: z.string(),
-  /** Everything the workspace stores: originals, their previews and dashboard thumbnails. */
+  /** What counts toward the quota: originals, their previews and dashboard thumbnails (not checkpoints). */
   usedBytes: Bytes,
   quotaBytes: Bytes,
   /** Uploaded file versions, and the most the workspace may keep. */

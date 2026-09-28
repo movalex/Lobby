@@ -1,11 +1,12 @@
 // What a workspace stores, and the limits that bound it (FC-1, SEAM-02, SEAM-11).
 //
-// "Used" storage is every byte the workspace keeps in the blob store: uploaded originals, the previews
-// the worker made from them, and the boards' dashboard thumbnails. The upload quota and the storage
-// line in the dashboard read the same numbers. Previews and thumbnails are written without a quota
-// check of their own (the worker's previews are bounded per original; a thumbnail is at most 256 KB
-// per board and replaces the previous one), so "used" can go slightly past the quota; the next upload
-// is then refused.
+// "Used" storage is what counts toward the quota: uploaded originals, the previews the worker made
+// from them, and the boards' dashboard thumbnails. Checkpoint bodies (history, snapshots/...) are also
+// kept in the blob store but are NOT counted (they are bounded per board by history's checkpoint
+// cap). The upload quota and the storage line in the dashboard read the same numbers. Previews and
+// thumbnails are written without a quota check of their own (the worker's previews are bounded per
+// original; a thumbnail is at most 256 KB per board and replaces the previous one, and the board cap
+// bounds their number), so "used" can go past the quota; the next upload is then refused.
 
 import type { Queryable } from '@draftroom/db'
 import { ApiError } from '../errors.ts'
@@ -48,6 +49,20 @@ export async function uploaderUsage(
     `SELECT COALESCE(SUM(size_bytes), 0)::float8 AS bytes, count(*)::int AS files
        FROM asset_versions WHERE workspace_id = $1 AND uploaded_by = $2`,
     [workspaceId, userId],
+  )
+  return { bytes: Number(r.bytes), files: Number(r.files) }
+}
+
+/** Originals all name-only guests (users.kind = 'guest') uploaded to a workspace (the guest pool). */
+export async function guestsUsage(
+  q: Queryable,
+  workspaceId: string,
+): Promise<{ bytes: number; files: number }> {
+  const r = await q.one<{ bytes: number; files: number }>(
+    `SELECT COALESCE(SUM(v.size_bytes), 0)::float8 AS bytes, count(*)::int AS files
+       FROM asset_versions v JOIN users u ON u.id = v.uploaded_by AND u.kind = 'guest'
+      WHERE v.workspace_id = $1`,
+    [workspaceId],
   )
   return { bytes: Number(r.bytes), files: Number(r.files) }
 }

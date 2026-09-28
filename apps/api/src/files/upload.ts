@@ -16,7 +16,7 @@ import { initialServedMime, normalizeDeclaredMime } from './mime.ts'
 import { ReceiveError, receiveToBlob } from './receive.ts'
 import { HttpError, requireAccess, sendJson } from './respond.ts'
 import { DEFAULT_STORAGE_CONFIG } from './storage-config.ts'
-import { isNameOnlyGuest, uploaderUsage, workspaceUsage } from './usage.ts'
+import { guestsUsage, isNameOnlyGuest, uploaderUsage, workspaceUsage } from './usage.ts'
 
 export interface UploadRoute {
   Params: { bid: string }
@@ -47,9 +47,10 @@ const formatBytes = (n: number) =>
   n >= GiB ? `${Math.round((n / GiB) * 10) / 10} GB` : `${Math.max(1, Math.round(n / MiB))} MB`
 
 /**
- * FC-1: 413 when `incomingBytes` more (one more file) would take the workspace past its quota (every
- * byte it stores: usage.ts). SEAM-02: for a name-only guest (`guest`: their user id), also when it
- * would take them past their own allowance in this workspace. Run once before reading the body (from
+ * FC-1: 413 when `incomingBytes` more (one more file) would take the workspace past its quota (what
+ * counts toward it: usage.ts). SEAM-02: for a name-only guest (`guest`: their user id), also when it
+ * would take them past their own allowance in this workspace, or all name-only guests together past
+ * their share of the workspace quota (the guest pool). Run once before reading the body (from
  * Content-Length) and again inside the insert transaction, after the workspace row is locked, with
  * the real size: two uploads that both passed the first check cannot both be stored.
  */
@@ -62,7 +63,8 @@ async function checkQuota(
 ) {
   if (guest) {
     const mine = await uploaderUsage(q, workspaceId, guest)
-    const { maxBytes, maxFiles } = policy.guestQuota ?? DEFAULT_STORAGE_CONFIG.guestQuota
+    const allowance = policy.guestQuota ?? DEFAULT_STORAGE_CONFIG.guestQuota
+    const { maxBytes, maxFiles } = allowance
     if (mine.files + 1 > maxFiles)
       throw reject(
         413,
@@ -74,6 +76,23 @@ async function checkQuota(
         413,
         'GUEST_STORAGE_LIMIT',
         `As a guest you can add up to ${formatBytes(maxBytes)} of files to this workspace, and this file would go over that. Ask the person who shared the link to add it, or sign in with an account.`,
+      )
+    // The guest pool: every name-only guest of the workspace together.
+    const share = (allowance.poolPercent ?? DEFAULT_STORAGE_CONFIG.guestQuota.poolPercent) / 100
+    const poolBytes = Math.floor(policy.workspaceQuota.maxBytes * share)
+    const poolFiles = Math.max(1, Math.floor(policy.workspaceQuota.maxFiles * share))
+    const guests = await guestsUsage(q, workspaceId)
+    if (guests.files + 1 > poolFiles)
+      throw reject(
+        413,
+        'GUEST_POOL_LIMIT',
+        `Guests together can add up to ${poolFiles.toLocaleString('en-US')} files to this workspace, and they've reached that. Ask the person who shared the link to add more, or sign in with an account.`,
+      )
+    if (guests.bytes + incomingBytes > poolBytes)
+      throw reject(
+        413,
+        'GUEST_POOL_LIMIT',
+        `Guests together can add up to ${formatBytes(poolBytes)} of files to this workspace, and this file would go over that. Ask the person who shared the link to add it, or sign in with an account.`,
       )
   }
   const usage = await workspaceUsage(q, workspaceId)

@@ -48,7 +48,7 @@ describe('per-guest upload allowance (SEAM-02)', () => {
   it('defaults: 1 GB and 200 files per guest per workspace, 10,000 boards per workspace, collector report-only', () => {
     const c = loadConfig(testEnv('/tmp/dr'))
     expect(c.storage).toEqual({
-      guestQuota: { maxBytes: 1024 * MiB, maxFiles: 200 },
+      guestQuota: { maxBytes: 1024 * MiB, maxFiles: 200, poolPercent: 50 },
       maxBoardsPerWorkspace: 10_000,
       assetGc: { mode: 'report', intervalMs: 6 * 3600_000, firstRunDelayMs: 10 * 60_000 },
     })
@@ -56,19 +56,22 @@ describe('per-guest upload allowance (SEAM-02)', () => {
       testEnv('/tmp/dr', {
         DRAFTROOM_GUEST_QUOTA_MB: '5',
         DRAFTROOM_GUEST_MAX_FILES: '7',
+        DRAFTROOM_GUEST_POOL_PERCENT: '25',
         DRAFTROOM_WORKSPACE_MAX_BOARDS: '9',
         DRAFTROOM_ASSET_GC: 'delete',
         DRAFTROOM_ASSET_GC_INTERVAL_MIN: '30',
       }),
     ).storage
     expect(set).toEqual({
-      guestQuota: { maxBytes: 5 * MiB, maxFiles: 7 },
+      guestQuota: { maxBytes: 5 * MiB, maxFiles: 7, poolPercent: 25 },
       maxBoardsPerWorkspace: 9,
       assetGc: { mode: 'delete', intervalMs: 30 * 60_000, firstRunDelayMs: 10 * 60_000 },
     })
     for (const [name, value] of [
       ['DRAFTROOM_GUEST_QUOTA_MB', '0'],
       ['DRAFTROOM_GUEST_MAX_FILES', 'many'],
+      ['DRAFTROOM_GUEST_POOL_PERCENT', '0'],
+      ['DRAFTROOM_GUEST_POOL_PERCENT', '101'],
       ['DRAFTROOM_WORKSPACE_MAX_BOARDS', '0'],
       ['DRAFTROOM_ASSET_GC', 'yes'],
       ['DRAFTROOM_ASSET_GC_INTERVAL_MIN', '1'],
@@ -102,6 +105,52 @@ describe('per-guest upload allowance (SEAM-02)', () => {
     // Every guest has an allowance of their own.
     const second = await joinAsGuest(api, (await guestLink(alice, board, { role: 'editor' })).url, 'Bea')
     expect((await upload(second, board, 512 * KiB)).statusCode).toBe(201)
+  })
+
+  it('guests together cannot fill the workspace: a second guest identity from the same link hits the shared guest pool', async () => {
+    // The defaults' proportions (2 GB workspace, 1 GB per guest), scaled down. Name-only guest identities
+    // are cheap (10 per address every 10 minutes, 200 per link), so a per-guest allowance alone lets one
+    // anonymous person fill the workspace by joining the link twice.
+    api = await createTestApi({ env: { DRAFTROOM_WORKSPACE_QUOTA_MB: '2', DRAFTROOM_GUEST_QUOTA_MB: '1' } })
+    const alice = await api.login('alice')
+    const board = await createBoard(alice, DEV_STUDIO, 'Workshop')
+    const other = await createBoard(alice, DEV_STUDIO, 'Another DBC project')
+    const link = (await guestLink(alice, board, { role: 'editor' })).url
+    const first = await joinAsGuest(api, link, 'Anon')
+    const second = await joinAsGuest(api, link, 'Anon again')
+
+    expect((await upload(first, board, MiB - 16 * KiB)).statusCode).toBe(201)
+    const refused = await upload(second, board, MiB - 16 * KiB)
+    expect(refused.statusCode).toBe(413)
+    expect(error(refused).code).toBe('GUEST_POOL_LIMIT')
+    expect(error(refused).message).toMatch(/^Guests together can add up to 1 MB of files to this workspace/)
+    expect(error(refused).message).toMatch(/sign in with an account/i)
+    // Small files from other guests still fit in what is left of the guests' share.
+    expect((await upload(second, board, 8 * KiB)).statusCode).toBe(201)
+    // The members' share is untouched: the owner can still upload on any board.
+    expect((await upload(alice, other, 900 * KiB)).statusCode).toBe(201)
+  })
+
+  it('the guest pool counts files too, and DRAFTROOM_GUEST_POOL_PERCENT sets its share', async () => {
+    api = await createTestApi({
+      env: {
+        DRAFTROOM_WORKSPACE_MAX_FILES: '10',
+        DRAFTROOM_GUEST_MAX_FILES: '5',
+        DRAFTROOM_GUEST_POOL_PERCENT: '40',
+      },
+    })
+    const alice = await api.login('alice')
+    const board = await createBoard(alice, DEV_STUDIO, 'Workshop')
+    const link = (await guestLink(alice, board, { role: 'editor' })).url
+    const first = await joinAsGuest(api, link, 'One')
+    const second = await joinAsGuest(api, link, 'Two')
+    for (let i = 0; i < 3; i++) expect((await upload(first, board, 10)).statusCode).toBe(201)
+    expect((await upload(second, board, 10)).statusCode).toBe(201)
+    // 40% of 10 files: guests together may keep 4.
+    const refused = await upload(second, board, 10)
+    expect(refused.statusCode).toBe(413)
+    expect(error(refused).code).toBe('GUEST_POOL_LIMIT')
+    for (let i = 0; i < 6; i++) expect((await upload(alice, board, 10)).statusCode).toBe(201)
   })
 
   it('counts files too, and only for name-only guests: account users (even workspace guests) have only the workspace quota', async () => {

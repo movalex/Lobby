@@ -8,9 +8,12 @@ import { ASSET_GC_MODES, type AssetGcMode } from '@draftroom/contracts'
 export interface StorageConfig {
   /**
    * SEAM-02: what ONE name-only guest (a user with no account) may store in a workspace: originals
-   * they uploaded, bytes and files. Account users only have the workspace quota.
+   * they uploaded, bytes and files. `poolPercent`: the share of the workspace quota (bytes and files)
+   * ALL name-only guests together may use, so the members always keep the rest (a guest identity is
+   * cheap: one person can join a link again under another name). Account users only have the
+   * workspace quota.
    */
-  guestQuota: { maxBytes: number; maxFiles: number }
+  guestQuota: { maxBytes: number; maxFiles: number; poolPercent: number }
   /** SEAM-11: boards per workspace, every status counted (a trashed board keeps its canvas and files). */
   maxBoardsPerWorkspace: number
   assetGc: {
@@ -27,7 +30,7 @@ const MiB = 1024 * 1024
 const MINUTE = 60_000
 
 export const DEFAULT_STORAGE_CONFIG: Readonly<StorageConfig> = Object.freeze<StorageConfig>({
-  guestQuota: { maxBytes: 1024 * MiB, maxFiles: 200 },
+  guestQuota: { maxBytes: 1024 * MiB, maxFiles: 200, poolPercent: 50 },
   maxBoardsPerWorkspace: 10_000,
   assetGc: { mode: 'report', intervalMs: 360 * MINUTE, firstRunDelayMs: 10 * MINUTE },
 })
@@ -52,6 +55,7 @@ export function parseStorageConfig(env: Env): StorageConfig {
     guestQuota: {
       maxBytes: int(env, 'DRAFTROOM_GUEST_QUOTA_MB', d.guestQuota.maxBytes / MiB, 1, 10_000_000) * MiB,
       maxFiles: int(env, 'DRAFTROOM_GUEST_MAX_FILES', d.guestQuota.maxFiles, 1, 100_000_000),
+      poolPercent: int(env, 'DRAFTROOM_GUEST_POOL_PERCENT', d.guestQuota.poolPercent, 1, 100),
     },
     maxBoardsPerWorkspace: int(env, 'DRAFTROOM_WORKSPACE_MAX_BOARDS', d.maxBoardsPerWorkspace, 1, 10_000_000),
     assetGc: {
