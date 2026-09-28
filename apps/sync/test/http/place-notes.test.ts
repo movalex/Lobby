@@ -309,7 +309,10 @@ describe('revealing into the Lobby tour (round-2 F5)', () => {
     return notesPlaced.map(noteRect)
   }
 
-  it('three notes go into the Brainstorm frame’s empty space: the frame keeps its 16:10 size', () => {
+  // The tour's Brainstorm frame is now a full map (demo polish A), so there may be no free gap: the
+  // guarantee is that the notes never cover what the frame holds, and the frame keeps its width and
+  // only grows downwards when it has to (round-2 F5).
+  it('three notes into the Brainstorm frame never cover its content; it keeps its width and only grows down', () => {
     const db = new DatabaseSync(':memory:')
     try {
       const { storage, frame, all } = tourStorage(db)
@@ -322,12 +325,15 @@ describe('revealing into the Lobby tour (round-2 F5)', () => {
       expect(out.placed).toHaveLength(3)
       const records = all()
       const after = records.find((r) => r.id === frame.id) as unknown as TLFrameShape
-      expect(after.props).toMatchObject({ w: 1600, h: 1000 })
+      expect(after.props.w).toBe(1600)
+      expect(after.props.h).toBeGreaterThanOrEqual(1000)
+      expect(after.x).toBe(frame.x)
+      expect(after.y).toBe(frame.y)
       for (const r of checkClear(records, frame.id, out.placed)) {
         expect(r.x).toBeGreaterThanOrEqual(FRAME_PAD)
         expect(r.y).toBeGreaterThanOrEqual(FRAME_PAD)
         expect(r.x + r.w).toBeLessThanOrEqual(1600 - FRAME_PAD)
-        expect(r.y + r.h).toBeLessThanOrEqual(1000 - FRAME_PAD)
+        expect(r.y + r.h).toBeLessThanOrEqual(after.props.h - FRAME_PAD)
       }
     } finally {
       db.close()

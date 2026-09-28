@@ -207,7 +207,7 @@ describe('internal board text endpoint', () => {
     expect(await same.json()).toEqual({ boardId: BOARD, clock: body.clock, unchanged: true })
 
     // An edit moves the clock: the new text comes back.
-    alice.update('shape:n1', (s) => withText(s, 'Giraffe crossing plan'))
+    alice.update('shape:n1', (s) => withText(s, 'Giraffe crossing plan', ALICE)) // stamped like a real client (SEAM-01)
     await alice.waitForAcked()
     const after = (await (await text(t, `?since=${body.clock}`)).json()) as typeof body
     expect(after.unchanged).toBe(false)
