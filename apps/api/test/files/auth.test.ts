@@ -1,14 +1,7 @@
-import { mkdirSync, writeFileSync } from 'node:fs'
-import {
-  type AssetVersionMeta,
-  type DerivativeRecord,
-  derivativePath,
-  derivativesDir,
-  newId,
-  updateMeta,
-} from '@draftroom/dev-assets'
+import { type AssetVersionMeta, newId } from '@draftroom/dev-assets'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
+  addDerivative,
   BOB,
   listFiles,
   nothingStored,
@@ -47,7 +40,7 @@ describe('upload authorization (edit)', () => {
     expect(r.headers.connection).toBe('close')
     expect(r.ms).toBeLessThan(2_000)
     expect(t.auth.calls.map((c) => [c.boardId, c.action])).toEqual([['board-a', 'edit']])
-    nothingStored(t.layout)
+    await nothingStored(t)
   })
 
   it('viewer: 403 from the headers alone, nothing written', async () => {
@@ -57,11 +50,11 @@ describe('upload authorization (edit)', () => {
     expect(r.json).toEqual({ error: { code: 'FORBIDDEN', message: expect.any(String) } })
     expect(r.headers.connection).toBe('close')
     expect(r.ms).toBeLessThan(2_000)
-    nothingStored(t.layout)
+    await nothingStored(t)
     // and a full upload with a body is refused the same way
     const full = await upload(t.port)
     expect(full.status).toBe(403)
-    nothingStored(t.layout)
+    await nothingStored(t)
   })
 
   it('non-member: the same 404 as any missing resource, nothing written', async () => {
@@ -70,7 +63,7 @@ describe('upload authorization (edit)', () => {
     expect(r.status).toBe(404)
     expect(r.json).toEqual({ error: { code: 'NOT_FOUND', message: 'Not found.' } })
     expect(r.headers.connection).toBe('close')
-    nothingStored(t.layout)
+    await nothingStored(t)
     // editing board-b does not let anyone write into board-a
     expect((await upload(t.port, { board: 'board-a' })).status).toBe(404)
     expect((await upload(t.port, { board: 'board-b' })).status).toBe(201)
@@ -88,7 +81,7 @@ describe('upload authorization (edit)', () => {
     expect(tooBig.status).toBe(403)
     const badName = await upload(t.port, { headers: { 'X-File-Name': '%' } })
     expect(badName.status).toBe(403)
-    nothingStored(t.layout)
+    await nothingStored(t)
   })
 
   it('runs before any body byte is read or any file is created', async () => {
@@ -108,10 +101,10 @@ describe('upload authorization (edit)', () => {
       boardId: 'board-a',
       action: 'edit',
       bodyRead: false,
-      assetsAtCall: [],
+      blobsAtCall: [],
     })
     await new Promise((r) => setTimeout(r, 100))
-    expect(listFiles(t.layout.assets)).toEqual([]) // still waiting on authorize(): nothing touched
+    expect(listFiles(t.blobRoot)).toEqual([]) // still waiting on authorize(): nothing touched
     release()
     sock?.write(body)
     const r = parseRaw(await exchange)
@@ -127,7 +120,7 @@ describe('upload authorization (edit)', () => {
       error: { code: 'INTERNAL', message: 'Something went wrong. Please try again.' },
     })
     expect(r.headers.connection).toBe('close')
-    nothingStored(t.layout)
+    await nothingStored(t)
     expect(t.errors).toHaveLength(1)
     expect(t.errors[0]).toMatchObject({ route: '/api/boards/:bid/assets' })
   })
@@ -146,20 +139,7 @@ describe('read authorization (view)', () => {
 
   beforeEach(async () => {
     img = (await upload(t.port, { board: 'board-a', name: 'a.png' })).json()
-    drvId = newId('drv')
-    mkdirSync(derivativesDir(t.layout, img.assetId, img.versionId), { recursive: true })
-    writeFileSync(derivativePath(t.layout, img.assetId, img.versionId, `${drvId}.webp`), 'webp')
-    const rec = {
-      id: drvId,
-      role: 'thumb',
-      page: null,
-      width: 1,
-      height: 1,
-      mimeType: 'image/webp',
-      bytes: 4,
-      file: `${drvId}.webp`,
-    } as DerivativeRecord
-    updateMeta(t.layout, img.assetId, img.versionId, (m) => ({ ...m, derivatives: [rec] }))
+    drvId = (await addDerivative(t, img, { publish: true })).id
     t.auth.calls.length = 0
   })
 

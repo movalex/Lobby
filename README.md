@@ -31,10 +31,12 @@ pnpm verify
 |---|---|
 | `apps/web` | React + Vite client (tldraw canvas, file cards, board chrome) |
 | `apps/sync` | Node WebSocket server: one tldraw room per board, SQLite persistence, text-edit lease |
-| `apps/api` | Fastify API: accounts, workspaces, boards, permissions, files (milestone 1) |
-| `apps/worker` | Preview worker: image thumbnails, PDF pages, MP4 posters |
+| `apps/api` | Fastify API: accounts, workspaces, boards, permissions, files (streamed to the blob store, metadata in Postgres), preview-job routes for workers |
+| `apps/worker` | Preview worker: image thumbnails, PDF pages, MP4 posters. An HTTP client of the api (`/api/worker/*`); holds no database or storage credentials |
 | `packages/canvas-schema` | Custom shape schema + migrations shared by client and server |
-| `packages/dev-assets` | Local file store + preview job queue (stand-in for object storage) |
+| `packages/blob-store` | Object storage: a local directory (dev, e2e) or Cloudflare R2 (staging) |
+| `packages/dev-assets` | Asset types, ids, limits and URL builders; the worker's local scratch layout |
+| `deploy/nas` | Deploys a preview worker to the NAS |
 | `e2e` | Playwright suites |
 | `docs` | Plan, contracts, research, feasibility, progress |
 

@@ -5,9 +5,10 @@
 // to it; for an import, the caller can view some board of the workspace that shows it.
 
 import type { Queryable } from '@draftroom/db'
-import { type AssetVersionMeta, type DataLayout, isId, readMeta } from '@draftroom/dev-assets'
+import { isId } from '@draftroom/dev-assets'
 import { can } from '@draftroom/permissions'
 import { loadBoardAccess } from '../../access.ts'
+import { loadVersionRows, type VersionRow } from '../../files/meta.ts'
 import { boardsShowingAsset, isAssetLinked } from '../../files-auth.ts'
 import type { ArchiveAssetRef } from './board-ops.ts'
 
@@ -39,42 +40,37 @@ export function referencedFiles(records: Iterable<unknown>): FileRef[] {
   return [...seen.values()]
 }
 
-function metaOf(layout: DataLayout, ref: FileRef): AssetVersionMeta | null {
-  try {
-    const meta = readMeta(layout, ref.assetId, ref.versionId)
-    return meta && meta.assetId === ref.assetId && meta.versionId === ref.versionId ? meta : null
-  } catch {
-    return null
-  }
-}
+const refKey = (ref: FileRef) => `${ref.assetId}/${ref.versionId}`
 
-/** The subset of `refs` that `boardId` can show today (its own uploads, or versions linked to it). */
+/**
+ * The subset of `refs` that `boardId` can show today (its own uploads, or versions linked to it), with
+ * their asset_versions rows (packages/db 0007_assets).
+ */
 export async function filesShownOn(
   q: Queryable,
-  layout: DataLayout,
   workspaceId: string,
   boardId: string,
   refs: readonly FileRef[],
-): Promise<{ shown: FileRef[]; metas: Map<string, AssetVersionMeta>; notShown: number }> {
+): Promise<{ shown: FileRef[]; versions: Map<string, VersionRow>; notShown: number }> {
   const shown: FileRef[] = []
-  const metas = new Map<string, AssetVersionMeta>()
+  const versions = new Map<string, VersionRow>()
+  const rows = await loadVersionRows(q, refs)
   for (const ref of refs) {
-    const meta = metaOf(layout, ref)
-    if (!meta) continue
+    const row = rows.get(refKey(ref))
+    if (!row) continue
     const ok =
-      meta.boardId === boardId ||
-      (await isAssetLinked(q, workspaceId, boardId, { ...ref, ownerBoardId: meta.boardId }))
+      (row.board_id === boardId && row.workspace_id === workspaceId) ||
+      (await isAssetLinked(q, workspaceId, boardId, { ...ref, ownerBoardId: row.board_id }))
     if (!ok) continue
     shown.push(ref)
-    metas.set(`${ref.assetId}/${ref.versionId}`, meta)
+    versions.set(refKey(ref), row)
   }
-  return { shown, metas, notShown: refs.length - shown.length }
+  return { shown, versions, notShown: refs.length - shown.length }
 }
 
 /** The subset of `refs` the caller can view somewhere in the workspace (import). */
 export async function filesViewableBy(
   q: Queryable,
-  layout: DataLayout,
   workspaceId: string,
   userId: string,
   refs: readonly FileRef[],
@@ -82,13 +78,14 @@ export async function filesViewableBy(
   const allowed: FileRef[] = []
   const dropped: FileRef[] = []
   const canView = new Map<string, boolean>()
+  const rows = await loadVersionRows(q, refs)
   for (const ref of refs) {
-    const meta = metaOf(layout, ref)
+    const row = rows.get(refKey(ref))
     let ok = false
-    if (meta) {
+    if (row) {
       for (const boardId of await boardsShowingAsset(q, workspaceId, {
         ...ref,
-        ownerBoardId: meta.boardId,
+        ownerBoardId: row.board_id,
       })) {
         if (!canView.has(boardId)) {
           const access = await loadBoardAccess(q, boardId, userId)
@@ -106,15 +103,15 @@ export async function filesViewableBy(
 }
 
 /** The archive manifest entry of a version (values clamped to what the archive format accepts). */
-export function archiveRef(meta: AssetVersionMeta): ArchiveAssetRef | null {
-  if (!SHA256_HEX.test(meta.sha256) || !Number.isSafeInteger(meta.sizeBytes) || meta.sizeBytes < 0)
-    return null
+export function archiveRef(v: VersionRow): ArchiveAssetRef | null {
+  const sizeBytes = Number(v.size_bytes)
+  if (!SHA256_HEX.test(v.sha256) || !Number.isSafeInteger(sizeBytes) || sizeBytes < 0) return null
   return {
-    assetId: meta.assetId,
-    versionId: meta.versionId,
-    name: String(meta.name ?? '').slice(0, 1024),
-    mimeType: MIME_TYPE.test(meta.mimeType) ? meta.mimeType : 'application/octet-stream',
-    sizeBytes: meta.sizeBytes,
-    sha256: meta.sha256,
+    assetId: v.asset_id,
+    versionId: v.id,
+    name: String(v.name ?? '').slice(0, 1024),
+    mimeType: MIME_TYPE.test(v.mime_type) ? v.mime_type : 'application/octet-stream',
+    sizeBytes,
+    sha256: v.sha256,
   }
 }

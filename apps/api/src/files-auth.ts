@@ -1,10 +1,11 @@
 // `authorize` for the file routes (apps/api/src/files/deps.ts). The file routes never read sessions or
 // ACL tables themselves; they get exactly one answer from here.
 //
-// History phase (docs/FEATURES-M2-CONTRACTS.md "history"): a version uploaded to board A (meta.boardId
-// = A) is also served on board B when B holds a link to it (board_asset_links, same workspace). Links
-// are written only when B was made from content that could already show the file (restore-as-new,
-// duplicate, import); `linkedAsset` answers that second question for the file routes.
+// History phase (docs/FEATURES-M2-CONTRACTS.md "history"): a version uploaded to board A
+// (asset_versions.board_id = A, packages/db 0007_assets) is also served on board B when B holds a link
+// to it (board_asset_links, same workspace). Links are written only when B was made from content that
+// could already show the file (restore-as-new, duplicate, import); `linkedAsset` answers that second
+// question for the file routes.
 
 import type { Db, Queryable } from '@draftroom/db'
 import { can } from '@draftroom/permissions'
@@ -20,7 +21,7 @@ export function createFileAuthorizer(db: Db, sessions: SessionStore): FileAuthor
     // Same rules as the board itself: trashed boards serve nothing, archived boards are read-only.
     if (!access || !can(access.role, 'view', access.board.status)) return { ok: false, status: 404 }
     if (action === 'edit' && !can(access.role, 'edit', access.board.status)) return { ok: false, status: 403 }
-    return { ok: true, userId: user.id }
+    return { ok: true, userId: user.id, workspaceId: access.board.workspace_id }
   }
   authorize.linkedAsset = async (req, boardId, asset) => {
     const user = await sessions.user(req)

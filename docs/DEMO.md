@@ -6,7 +6,7 @@ Start everything with one command from the repo root:
 pnpm dev
 ```
 
-That runs the API (127.0.0.1:5859, with an in-process Postgres under `./.data/pg`), the sync server (127.0.0.1:5858), the preview worker, and the web app at http://127.0.0.1:5173. Sign-in uses **development identities** (the `dev.env` files; never allowed with `NODE_ENV=production`). Board data lives in `./.data` — delete the folder to start fresh. Generate sample files once with `pnpm fixtures` (written to `tests/fixtures/generated/`).
+That runs the API (127.0.0.1:5859, with an in-process Postgres under `./.data/pg`), the sync server (127.0.0.1:5858), the preview worker (since milestone 3 an HTTP client of the api, using the dev-only worker token in both `dev.env` files; uploaded files are under `./.data/blobs`), and the web app at http://127.0.0.1:5173. Sign-in uses **development identities** (the `dev.env` files; never allowed with `NODE_ENV=production`). Board data lives in `./.data` — delete the folder to start fresh. Generate sample files once with `pnpm fixtures` (written to `tests/fixtures/generated/`).
 
 > The **first** person to sign in on a fresh `.data` becomes the owner of the shared **Dev Studio** workspace. Sign in as **alice** first.
 

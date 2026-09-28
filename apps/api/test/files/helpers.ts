@@ -1,17 +1,22 @@
 import { createHash } from 'node:crypto'
-import { mkdtempSync, readdirSync, rmSync, statSync } from 'node:fs'
+import { existsSync, mkdtempSync, readdirSync, rmSync, statSync } from 'node:fs'
 import { request as httpRequest, type IncomingHttpHeaders } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { connect, type Socket } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { type DataLayout, dataLayout, ensureLayout } from '@draftroom/dev-assets'
+import { type BlobStore, createFsBlobStore } from '@draftroom/blob-store'
+import type { PgliteDb } from '@draftroom/db'
+import { openTestDb } from '@draftroom/db/testing'
+import { type DerivativeRecord, newId } from '@draftroom/dev-assets'
 import Fastify, { type FastifyBaseLogger, type FastifyInstance, type FastifyRequest } from 'fastify'
+import { derivativeKey } from '../../src/files/blobs.ts'
 import type { FileAction, FileAuthorization, FilesDeps } from '../../src/files/deps.ts'
 import { filesPlugin } from '../../src/files/plugin.ts'
 
 export const ALICE = 'usr_aliceAAAAAAAAAAAAAAA'
 export const BOB = 'usr_bobBBBBBBBBBBBBBBBBB'
+export const WORKSPACE = 'wsp_filesWSPfilesWSP0000'
 
 export type FakeRole = 'viewer' | 'editor'
 
@@ -20,8 +25,8 @@ export interface AuthCall {
   action: FileAction
   /** Whether any request body byte had been consumed when authorize() was called. */
   bodyRead: boolean
-  /** Files under assets/ at that moment. */
-  assetsAtCall: string[]
+  /** Files under the blob store's root at that moment. */
+  blobsAtCall: string[]
 }
 
 /**
@@ -39,7 +44,7 @@ export interface FakeAuth {
   authorize: FilesDeps['authorize']
 }
 
-function fakeAuth(layout: DataLayout): FakeAuth {
+function fakeAuth(blobRoot: string): FakeAuth {
   const auth: FakeAuth = {
     userId: ALICE,
     roles: { 'board-a': 'editor' },
@@ -51,7 +56,7 @@ function fakeAuth(layout: DataLayout): FakeAuth {
         boardId,
         action,
         bodyRead: req.raw.readableDidRead,
-        assetsAtCall: listFiles(layout.assets),
+        blobsAtCall: listFiles(blobRoot),
       })
       if (auth.gate) await auth.gate
       if (auth.failWith) throw auth.failWith
@@ -59,33 +64,63 @@ function fakeAuth(layout: DataLayout): FakeAuth {
       const role = auth.roles[boardId]
       if (!role) return { ok: false, status: 404 }
       if (action === 'edit' && role !== 'editor') return { ok: false, status: 403 }
-      return { ok: true, userId: auth.userId }
+      return { ok: true, userId: auth.userId, workspaceId: WORKSPACE }
     },
   }
   return auth
 }
 
+/** Users, one workspace and the boards the fake authorizer knows (asset rows reference boards). */
+export async function seedBoards(db: PgliteDb, boards: string[] = ['board-a', 'board-b']) {
+  await db.query(
+    `INSERT INTO users (id, name, handle, color) VALUES ($1, 'Alice', 'alice', '#3355ff'), ($2, 'Bob', 'bob', '#33aa55')
+     ON CONFLICT DO NOTHING`,
+    [ALICE, BOB],
+  )
+  await db.query(
+    `INSERT INTO workspaces (id, name, created_by) VALUES ($1, 'Files', $2) ON CONFLICT DO NOTHING`,
+    [WORKSPACE, ALICE],
+  )
+  for (const b of boards)
+    await db.query(
+      `INSERT INTO boards (id, workspace_id, title, created_by) VALUES ($1, $2, $1, $3) ON CONFLICT DO NOTHING`,
+      [b, WORKSPACE, ALICE],
+    )
+}
+
 export interface TestApp {
   app: FastifyInstance
   port: number
-  layout: DataLayout
+  db: PgliteDb
+  /** What the file routes use (the real fs store unless a test passes `wrap`). */
+  blobs: BlobStore
+  /** The fs store's root directory (every stored byte lives below it). */
+  blobRoot: string
   auth: FakeAuth
   errors: unknown[]
   /** app.close(), once. */
   close(): Promise<void>
-  /** close() and delete the data directory. */
+  /** close(), close the database and delete the data directory. */
   stop(): Promise<void>
 }
 
 /**
  * A host app shaped like the real API: its own parsers (Fastify's JSON + text/plain, plus a buffering
- * octet-stream one), its own error handler and a JSON route, with filesPlugin registered inside it.
- * `direct` calls filesPlugin(app, deps) instead of app.register(filesPlugin, deps).
+ * octet-stream one), its own error handler and a JSON route, with filesPlugin registered inside it,
+ * over a migrated PGlite and the real fs blob store in a temp directory.
+ * `direct` calls filesPlugin(app, deps) instead of app.register(filesPlugin, deps); `wrap` puts a
+ * fault-injecting store in front of the real one.
  */
-export async function startApp(opts: { direct?: boolean } = {}): Promise<TestApp> {
+export async function startApp(
+  opts: { direct?: boolean; wrap?: (store: BlobStore) => BlobStore } = {},
+): Promise<TestApp> {
   const dataDir = mkdtempSync(join(tmpdir(), 'dr-api-files-'))
-  const layout = ensureLayout(dataLayout(dataDir))
-  const auth = fakeAuth(layout)
+  const blobRoot = join(dataDir, 'blobs')
+  const fsStore = createFsBlobStore(blobRoot)
+  const blobs = opts.wrap ? opts.wrap(fsStore) : fsStore
+  const db = await openTestDb()
+  await seedBoards(db)
+  const auth = fakeAuth(blobRoot)
   const errors: unknown[] = []
   const noop = (..._args: unknown[]) => {}
   // Captures error-level logs (the file routes log server errors through request.log).
@@ -111,7 +146,7 @@ export async function startApp(opts: { direct?: boolean } = {}): Promise<TestApp
   app.get('/host/boom', async () => {
     throw new Error('host failure')
   })
-  const deps: FilesDeps = { layout, authorize: auth.authorize }
+  const deps: FilesDeps = { db, blobs, authorize: auth.authorize }
   if (opts.direct) await filesPlugin(app, deps)
   else await app.register(filesPlugin, deps)
   await app.listen({ port: 0, host: '127.0.0.1' })
@@ -124,12 +159,15 @@ export async function startApp(opts: { direct?: boolean } = {}): Promise<TestApp
   return {
     app,
     port,
-    layout,
+    db,
+    blobs,
+    blobRoot,
     auth,
     errors,
     close,
     async stop() {
       await close()
+      await db.close()
       rmSync(dataDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
     },
   }
@@ -268,9 +306,10 @@ export const uploadHead = (o: {
   (o.close ? 'Connection: close\r\n' : '') +
   '\r\n'
 
-/** Every file (relative path) under a directory, recursively. */
+/** Every file (relative path) under a directory, recursively; [] when it does not exist. */
 export function listFiles(dir: string): string[] {
   const out: string[] = []
+  if (!existsSync(dir)) return out
   const walk = (d: string, rel: string) => {
     for (const n of readdirSync(d)) {
       const p = join(d, n)
@@ -292,13 +331,124 @@ export async function waitFor(check: () => boolean, timeoutMs = 5_000, what = 'c
 
 export const sha256 = (b: Buffer) => createHash('sha256').update(b).digest('hex')
 
-/** Nothing of an upload survived: no asset files or directories, no queued job. */
-export function nothingStored(layout: DataLayout): void {
-  const assets = readdirSync(layout.assets)
-  const jobs = readdirSync(layout.jobs.queued)
-  if (assets.length || jobs.length) {
+/** Row counts of the asset tables. */
+export async function assetRows(db: PgliteDb) {
+  const count = async (table: string) =>
+    (await db.one<{ n: number }>(`SELECT count(*)::int AS n FROM ${table}`)).n
+  return {
+    versions: await count('asset_versions'),
+    jobs: await count('preview_jobs'),
+    derivatives: await count('asset_derivatives'),
+  }
+}
+
+/** Nothing of an upload survived: no stored bytes (temp files included) and no rows. */
+export async function nothingStored(t: Pick<TestApp, 'db' | 'blobRoot'>): Promise<void> {
+  const files = listFiles(t.blobRoot)
+  const rows = await assetRows(t.db)
+  if (files.length || rows.versions || rows.jobs) {
     throw new Error(
-      `expected nothing stored, found assets=${JSON.stringify(assets)} jobs=${JSON.stringify(jobs)}`,
+      `expected nothing stored, found files=${JSON.stringify(files)} rows=${JSON.stringify(rows)}`,
     )
+  }
+}
+
+/** Every stored upload: blob paths under the root (no temp files, which contain `~`). */
+export const storedBlobs = (t: Pick<TestApp, 'blobRoot'>) => listFiles(t.blobRoot).sort()
+
+/**
+ * Plays the worker's end result (what `complete` writes): a derivative blob plus, when `publish`, its
+ * asset_derivatives row. An unpublished blob is what a running job's reservation looks like.
+ */
+export async function addDerivative(
+  t: Pick<TestApp, 'db' | 'blobs'>,
+  m: { assetId: string; versionId: string },
+  opts: { publish: boolean; mimeType?: 'image/webp' | 'image/png' } = { publish: true },
+): Promise<{ id: string; bytes: Buffer; record: DerivativeRecord }> {
+  const id = newId('drv')
+  const mimeType = opts.mimeType ?? 'image/webp'
+  const ext = mimeType === 'image/png' ? 'png' : 'webp'
+  const bytes = Buffer.from(`${ext}-bytes-${id}`)
+  const key = derivativeKey(m.assetId, m.versionId, id, ext)
+  await t.blobs.put(key, bytes, { contentType: mimeType, contentLength: bytes.length })
+  if (opts.publish) {
+    const { n } = await t.db.one<{ n: number }>(
+      'SELECT count(*)::int AS n FROM asset_derivatives WHERE version_id = $1',
+      [m.versionId],
+    )
+    await t.db.query(
+      `INSERT INTO asset_derivatives (id, version_id, position, role, page, width, height, mime_type, bytes, blob_key)
+       VALUES ($1, $2, $3, 'thumb', NULL, 1, 1, $4, $5, $6)`,
+      [id, m.versionId, n, mimeType, bytes.length, key],
+    )
+  }
+  const record: DerivativeRecord = {
+    id,
+    role: 'thumb',
+    page: null,
+    width: 1,
+    height: 1,
+    mimeType,
+    bytes: bytes.length,
+    file: `${id}.${ext}`,
+  }
+  return { id, bytes, record }
+}
+
+/** A version's row changed the way the worker's `complete` would change it. */
+export async function setVersion(
+  db: PgliteDb,
+  versionId: string,
+  patch: { status?: string; mimeType?: string; error?: { code: string; message: string } | null },
+) {
+  await db.query(
+    `UPDATE asset_versions SET status = COALESCE($2, status), mime_type = COALESCE($3, mime_type),
+        error_code = CASE WHEN $4::boolean THEN $5 ELSE error_code END,
+        error_message = CASE WHEN $4::boolean THEN $6 ELSE error_message END
+      WHERE id = $1`,
+    [
+      versionId,
+      patch.status ?? null,
+      patch.mimeType ?? null,
+      patch.error !== undefined,
+      patch.error?.code ?? null,
+      patch.error?.message ?? null,
+    ],
+  )
+}
+
+type Fault = (() => Error | null | undefined) | undefined
+
+/**
+ * A store in front of `inner` whose chosen operations fail while their fault function returns an
+ * error (fault injection). A failing put destroys its body, as the real stores do.
+ */
+export function faultyStore(
+  inner: BlobStore,
+  faults: { put?: Fault; get?: Fault; head?: Fault; delete?: Fault },
+): BlobStore {
+  return {
+    kind: inner.kind,
+    put: (k, b, o) => {
+      const f = faults.put?.()
+      if (!f) return inner.put(k, b, o)
+      const s = b as { destroy?: () => void }
+      if (typeof s.destroy === 'function') s.destroy()
+      return Promise.reject(f)
+    },
+    get: (k, o) => {
+      const f = faults.get?.()
+      return f ? Promise.reject(f) : inner.get(k, o)
+    },
+    head: (k) => {
+      const f = faults.head?.()
+      return f ? Promise.reject(f) : inner.head(k)
+    },
+    delete: (k) => {
+      const f = faults.delete?.()
+      return f ? Promise.reject(f) : inner.delete(k)
+    },
+    presignGet: (k, o) => inner.presignGet(k, o),
+    presignPut: (k, o) => inner.presignPut(k, o),
   }
 }

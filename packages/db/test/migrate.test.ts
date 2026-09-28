@@ -132,7 +132,7 @@ describe('shipped migrations', () => {
     expect(shipped[0]?.name).toBe('0001_core')
   })
 
-  it('are the milestone-1 core, the four pre-allocated feature migrations and 0006_workshop_links, in order', () => {
+  it('are the milestone-1 core, the four pre-allocated feature migrations, 0006_workshop_links and 0007_assets, in order', () => {
     expect(loadMigrations(MIGRATIONS_DIR).map((m) => m.name)).toEqual([
       '0001_core',
       '0002_comments',
@@ -140,6 +140,7 @@ describe('shipped migrations', () => {
       '0004_workshops',
       '0005_dashboard',
       '0006_workshop_links',
+      '0007_assets',
     ])
   })
 
@@ -152,10 +153,14 @@ describe('shipped migrations', () => {
       '0004_workshops',
       '0005_dashboard',
       '0006_workshop_links',
+      '0007_assets',
     ])
     expect(await migrate(db)).toEqual({ applied: [] })
     expect(await tableNames()).toEqual([
       'access_requests',
+      'asset_derivative_reservations',
+      'asset_derivatives',
+      'asset_versions',
       'audit_events',
       'board_asset_links',
       'board_members',
@@ -170,6 +175,7 @@ describe('shipped migrations', () => {
       'invitation_redemptions',
       'invitations',
       'notifications',
+      'preview_jobs',
       'projects',
       'schema_migrations',
       'sessions',
@@ -204,6 +210,7 @@ describe('shipped migrations', () => {
       '0004_workshops',
       '0005_dashboard',
       '0006_workshop_links',
+      '0007_assets',
     ])
     expect(await recorded()).toEqual(shipped.map((m) => m.name))
     const inv = await db.one<{ multi_use: boolean; use_count: number }>(

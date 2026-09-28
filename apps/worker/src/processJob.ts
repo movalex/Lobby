@@ -1,6 +1,10 @@
-// One preview job, end to end. Idempotent per versionId (+ PREVIEW_PROFILE): a version that is
-// already `ready` with its derivatives on disk, or already `failed`, is finished without changes.
-// Only the claim holder writes meta.json after upload, so plain read-modify-write is safe.
+// One preview job against a local data layout, end to end. Since milestone 3 the layout is a short-lived
+// temporary directory that remote-job.ts materializes for each job claimed from the API (the original
+// downloaded next to a meta.json and a local queue entry); this module runs every processor with all of
+// its limits there, and remote-job.ts uploads what it produced.
+// Idempotent per versionId (+ PREVIEW_PROFILE): a version that is already `ready` with its derivatives
+// on disk, or already `failed`, is finished without changes. Only the claim holder writes meta.json
+// after upload, so plain read-modify-write is safe.
 import { readFile, stat } from 'node:fs/promises'
 import {
   type AssetVersionMeta,
@@ -39,12 +43,18 @@ export interface ProcessOptions {
   ffmpegPath?: string
   ffprobePath?: string
   pdfTimeoutMs?: number
+  /** --max-old-space-size of the PDF child (WORKER_PDF_HEAP_MB). */
+  pdfHeapMb?: number
   probeTimeoutMs?: number
   posterTimeoutMs?: number
   /** Test hook: replacement pdf child entry point. */
   pdfChildPath?: string
+  /** How often the local claim file is touched while the job runs. */
   heartbeatMs?: number
-  /** Aborting kills running children and releases the job back to the queue (worker shutdown). */
+  /**
+   * Aborting kills running children and releases the job back to the local queue (worker shutdown or
+   * a lost remote lease). A string `reason` passed to abort() is logged.
+   */
   signal?: AbortSignal
   log?: (line: string) => void
 }
@@ -107,6 +117,7 @@ async function derive(
         ...(await derivePdf(path, writer, {
           timeoutMs: opts.pdfTimeoutMs,
           childPath: opts.pdfChildPath,
+          heapMb: opts.pdfHeapMb,
           signal: opts.signal,
         })),
         mimeType,
@@ -123,7 +134,7 @@ export async function processJob(
 ): Promise<JobOutcome> {
   const { assetId, versionId } = claim.job
   const log = opts.log ?? (() => {})
-  const heartbeat = setInterval(() => touchJob(claim), opts.heartbeatMs ?? WORKER.heartbeatMs)
+  const heartbeat = setInterval(() => touchJob(claim), opts.heartbeatMs ?? WORKER.localTouchMs)
   try {
     let current: AssetVersionMeta | null
     try {
@@ -170,7 +181,8 @@ export async function processJob(
           attempts: Math.max(0, m.attempts - 1),
         }))
         releaseJob(l, claim, claim.job.attempt)
-        log(`${versionId} released (worker stopping)`)
+        const reason = opts.signal?.reason
+        log(`${versionId} released (${typeof reason === 'string' ? reason : 'worker stopping'})`)
         return { result: 'released', status: 'queued' }
       }
       if (e instanceof PreviewError) return fail(l, claim, e, log)
@@ -198,7 +210,7 @@ export async function processJob(
     }))
     removeUnreferenced(l, ready)
     finishJob(l, claim, 'done')
-    log(`${versionId} ${meta.kind} ready in ${Date.now() - t0} ms (${out.derivatives.length} derivatives)`)
+    log(`${versionId} ${meta.kind} derived in ${Date.now() - t0} ms (${out.derivatives.length} derivatives)`)
     return { result: 'done', status: 'ready', skipped: false }
   } finally {
     clearInterval(heartbeat)

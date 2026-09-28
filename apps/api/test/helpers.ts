@@ -4,6 +4,7 @@
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import type { BlobStore } from '@draftroom/blob-store'
 import type { Me } from '@draftroom/contracts'
 import type { PgliteDb } from '@draftroom/db'
 import { openTestDb } from '@draftroom/db/testing'
@@ -16,6 +17,7 @@ export const ORIGIN = 'http://127.0.0.1:5173'
 // Test-only values (not the dev.env ones), long enough for checkSecret.
 export const TICKET_SECRET = 'test-ticket-secret-0123456789abcdefghij'
 export const INTERNAL_SECRET = 'test-internal-secret-0123456789abcdefghij'
+export const WORKER_TOKEN = 'test-worker-token-0123456789abcdefghijklmn'
 
 export function testEnv(dataDir: string, extra: Record<string, string> = {}): Record<string, string> {
   return {
@@ -24,6 +26,7 @@ export function testEnv(dataDir: string, extra: Record<string, string> = {}): Re
     PUBLIC_ORIGIN: ORIGIN,
     DRAFTROOM_TICKET_SECRET: TICKET_SECRET,
     DRAFTROOM_INTERNAL_SECRET: INTERNAL_SECRET,
+    DRAFTROOM_WORKER_TOKEN: WORKER_TOKEN,
     AUTH_PROVIDER: 'dev',
     ...extra,
   }
@@ -48,6 +51,8 @@ export interface Client {
 export interface TestApi {
   app: FastifyInstance
   db: PgliteDb
+  /** The api's blob store (a temp directory unless a test injects one). */
+  blobs: BlobStore
   config: ApiConfig
   notifications: AccessChange[]
   clock: { advance(ms: number): void; now(): Date }
@@ -89,6 +94,7 @@ export async function createTestApi(opts: { deps?: Partial<ApiDeps>; env?: Recor
   const api: TestApi = {
     app: server.app,
     db,
+    blobs: server.blobs,
     config,
     notifications: notifier.calls,
     clock: {

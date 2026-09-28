@@ -28,12 +28,7 @@ import type { FeatureContext } from '../context.ts'
 import { ArchiveError, exportBoardArchive, importBoardArchive, type SerializedSchema } from './board-ops.ts'
 import { archiveRef, filesShownOn, filesViewableBy, referencedFiles } from './files.ts'
 import { createBoardFrom, viaSync } from './new-board.ts'
-import {
-  readSnapshotBody,
-  removeSnapshotBody,
-  snapshotStorageKey,
-  writeSnapshotBody,
-} from './snapshot-store.ts'
+import { snapshotBodies, snapshotStorageKey } from './snapshot-store.ts'
 import { createDeletedApi } from './sync-deleted.ts'
 
 /** Checkpoints kept per board (a board past it must be asked to prune; none do yet). */
@@ -86,7 +81,7 @@ const clip = (s: string, max = 120) => (s.length > max ? `${s.slice(0, max - 1)}
 
 export async function registerHistory(app: FastifyInstance, ctx: FeatureContext): Promise<void> {
   const { db } = ctx
-  const dataRoot = ctx.layout.root
+  const bodies = snapshotBodies(ctx.blobs, ctx.layout.root)
   const deleted = createDeletedApi(ctx)
   const warn = (message: string) => app.log.warn({ feature: 'history' }, message)
 
@@ -141,7 +136,7 @@ export async function registerHistory(app: FastifyInstance, ctx: FeatureContext)
       documents,
     }
     const json = JSON.stringify(body)
-    await writeSnapshotBody(dataRoot, key, json)
+    await bodies.write(key, json)
     let row: SnapshotRow
     try {
       const inserted = await db.one<{ id: string }>(
@@ -165,7 +160,9 @@ export async function registerHistory(app: FastifyInstance, ctx: FeatureContext)
         [inserted.id],
       )
     } catch (e) {
-      await removeSnapshotBody(dataRoot, key)
+      await bodies
+        .remove(key)
+        .catch((e: unknown) => warn(`checkpoint body cleanup failed: ${(e as Error)?.name ?? 'Error'}`))
       throw e
     }
     ctx.events.publish(bid, { type: HISTORY_EVENTS.snapshot, data: { snapshotId: id } })
@@ -188,13 +185,12 @@ export async function registerHistory(app: FastifyInstance, ctx: FeatureContext)
     const workspaceId = access.board.workspace_id
     if (snapshot.workspace_id !== workspaceId) throw notFound()
     await requireCreator(workspaceId, user.id)
-    const raw = await readSnapshotBody(dataRoot, snapshot.storage_key)
+    const raw = await bodies.read(snapshot.storage_key)
     if (raw === null) throw gone("This checkpoint's saved content is no longer available.")
     const body = JSON.parse(raw) as CheckpointBody
     const records = (body.documents ?? []).map((d) => d.state)
     const { shown, notShown } = await filesShownOn(
       db,
-      ctx.layout,
       workspaceId,
       snapshot.board_id,
       referencedFiles(records),
@@ -229,7 +225,7 @@ export async function registerHistory(app: FastifyInstance, ctx: FeatureContext)
       throw forbidden('Only the board owner can copy its sharing settings.')
     const snap = await viaSync(() => ctx.sync.snapshot(bid))
     const records = (Array.isArray(snap.documents) ? snap.documents : []).map((d) => d.state)
-    const { shown, notShown } = await filesShownOn(db, ctx.layout, workspaceId, bid, referencedFiles(records))
+    const { shown, notShown } = await filesShownOn(db, workspaceId, bid, referencedFiles(records))
     const board = await createBoardFrom(
       ctx,
       {
@@ -258,16 +254,15 @@ export async function registerHistory(app: FastifyInstance, ctx: FeatureContext)
     const access = await requireBoardAction(db, bid, user.id, 'view')
     const snap = await viaSync(() => ctx.sync.snapshot(bid))
     const records = (Array.isArray(snap.documents) ? snap.documents : []).map((d) => d.state)
-    const { shown, metas } = await filesShownOn(
+    const { shown, versions } = await filesShownOn(
       db,
-      ctx.layout,
       access.board.workspace_id,
       bid,
       referencedFiles(records),
     )
     const assets = shown.flatMap((f) => {
-      const meta = metas.get(`${f.assetId}/${f.versionId}`)
-      const ref = meta ? archiveRef(meta) : null
+      const version = versions.get(`${f.assetId}/${f.versionId}`)
+      const ref = version ? archiveRef(version) : null
       return ref ? [ref] : []
     })
     const archive = exportBoardArchive(
@@ -302,7 +297,7 @@ export async function registerHistory(app: FastifyInstance, ctx: FeatureContext)
       const refs = new Map<string, { assetId: string; versionId: string }>()
       for (const a of imported.assets) refs.set(`${a.assetId}/${a.versionId}`, a)
       for (const f of referencedFiles(imported.records)) refs.set(`${f.assetId}/${f.versionId}`, f)
-      const { allowed, dropped } = await filesViewableBy(db, ctx.layout, wid, user.id, [...refs.values()])
+      const { allowed, dropped } = await filesViewableBy(db, wid, user.id, [...refs.values()])
       const warnings = [...imported.warnings]
       if (dropped.length)
         warnings.push(

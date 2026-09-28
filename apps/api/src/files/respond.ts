@@ -18,8 +18,9 @@ export const notFound = (headers?: Record<string, string>) =>
   new HttpError(404, 'NOT_FOUND', 'Not found.', headers)
 
 /**
- * Runs the API core's authorization for `boardId` and returns the acting user's id. A caller who cannot
- * view the board gets the same 404 as a missing asset, so a denial never reveals that the board exists.
+ * Runs the API core's authorization for `boardId` and returns the acting user's id and the board's
+ * workspace. A caller who cannot view the board gets the same 404 as a missing asset, so a denial never
+ * reveals that the board exists.
  */
 export async function requireAccess(
   deps: FilesDeps,
@@ -27,9 +28,9 @@ export async function requireAccess(
   boardId: string,
   action: FileAction,
   headers?: Record<string, string>,
-): Promise<string> {
+): Promise<{ userId: string; workspaceId: string }> {
   const auth = await deps.authorize(request, boardId, action)
-  if (auth.ok === true) return auth.userId
+  if (auth.ok === true) return { userId: auth.userId, workspaceId: auth.workspaceId }
   if (auth.status === 401) throw new HttpError(401, 'NOT_AUTHENTICATED', 'Sign-in required.', headers)
   if (auth.status === 403) {
     throw new HttpError(403, 'FORBIDDEN', 'You do not have permission to add files to this board.', headers)
@@ -74,8 +75,16 @@ export function fileErrorHandler(err: unknown, request: FastifyRequest, reply: F
     const known = CLIENT_ERRORS[clientStatus] ?? { code: 'BAD_REQUEST', message: 'Bad request.' }
     e = new HttpError(clientStatus, known.code, known.message)
   } else {
-    // The route pattern, never request.url: query strings are not logged.
-    request.log.error({ err, route: request.routeOptions.url }, 'file route failed')
+    // The route pattern, never request.url: query strings are not logged. Name/message/code/stack only:
+    // driver errors carry statement parameters and storage errors may carry more than we want logged.
+    const x = err as { name?: unknown; message?: unknown; code?: unknown; stack?: unknown } | null
+    request.log.error(
+      {
+        err: { name: x?.name, message: x?.message, code: x?.code, stack: x?.stack },
+        route: request.routeOptions.url,
+      },
+      'file route failed',
+    )
     e = new HttpError(500, 'INTERNAL', 'Something went wrong. Please try again.')
   }
   const headers = { ...e.headers }

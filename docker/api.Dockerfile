@@ -1,7 +1,10 @@
-# Draftroom API (Fastify) WITHOUT the preview worker: for hosts where api and worker can share
-# DRAFTROOM_DATA_DIR (e.g. one Docker host with a shared volume) and, from milestone 3, for Render once
-# files live in object storage. Render staging in milestone 1 uses docker/api-worker.Dockerfile instead
-# (docs/DEPLOY.md, "File storage").
+# Draftroom API (Fastify) only: no preview worker, no ffmpeg. Used by Render staging (render.yaml) and by
+# any Docker host. Workers run elsewhere and talk to this API over HTTP (docs/M3-STORAGE-CONTRACTS.md §4).
+# File storage (DRAFTROOM_BLOB_STORE):
+#   r2  Cloudflare R2 (Render): the container keeps nothing durable, so it needs no volume or disk.
+#       DRAFTROOM_DATA_DIR is then scratch only (render.yaml: /tmp/draftroom-api).
+#   fs  (default) blobs under ${DRAFTROOM_DATA_DIR}/blobs: mount a volume there, or they are lost.
+# Without DATABASE_URL the api runs PGlite under ${DRAFTROOM_DATA_DIR}/pg (needs a volume too).
 # Build from the repository root:
 #   docker build -f docker/api.Dockerfile -t draftroom-api .
 
@@ -23,6 +26,8 @@ WORKDIR /app
 COPY --from=manifests /out/ ./
 # A normal filtered workspace install. NOT `pnpm deploy` / injected deps: those copy workspace packages
 # into node_modules, where Node refuses to strip TypeScript (ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING).
+# "@draftroom/api..." includes every workspace package the api depends on (e.g. @draftroom/blob-store
+# and its aws4fetch).
 RUN --mount=type=cache,id=draftroom-pnpm-store,target=/pnpm/store \
   pnpm install --frozen-lockfile --prod --store-dir /pnpm/store --filter "@draftroom/api..."
 
@@ -41,6 +46,8 @@ COPY packages/ packages/
 COPY apps/api/ apps/api/
 COPY docker/entrypoint.sh /usr/local/bin/draftroom-entrypoint
 RUN chmod 0755 /usr/local/bin/draftroom-entrypoint
+# The entrypoint starts as root only to make DRAFTROOM_DATA_DIR writable (a root-owned volume or disk,
+# or a /tmp path that does not exist yet), then runs the api as the unprivileged `node` user.
 ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/draftroom-entrypoint"]
 # Native type stripping (Node 24): the TypeScript sources run as-is, no build step.
 CMD ["node", "apps/api/src/server.ts"]

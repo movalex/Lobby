@@ -1,19 +1,22 @@
 import { createHash } from 'node:crypto'
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Readable } from 'node:stream'
+import { type BlobStore, createFsBlobStore } from '@draftroom/blob-store'
 import { afterEach, describe, expect, it } from 'vitest'
+import { derivativeKey, originalKey } from '../../src/files/blobs.ts'
 import { contentDisposition } from '../../src/files/disposition.ts'
 import { initialServedMime, normalizeDeclaredMime } from '../../src/files/mime.ts'
 import { parseRange } from '../../src/files/range.ts'
-import { ReceiveError, receiveToFile } from '../../src/files/receive.ts'
+import { ReceiveError, receiveToBlob } from '../../src/files/receive.ts'
+import { faultyStore, listFiles } from './helpers.ts'
 
 const dirs: string[] = []
-const tmpFile = () => {
+const store = (): { blobs: BlobStore; root: string } => {
   const d = mkdtempSync(join(tmpdir(), 'dr-api-receive-'))
   dirs.push(d)
-  return join(d, 'upload.tmp')
+  return { blobs: createFsBlobStore(d), root: d }
 }
 afterEach(() => {
   for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true })
@@ -21,45 +24,102 @@ afterEach(() => {
 
 // A source that does what Node's HTTP parser never lets a client do: exceed its Content-Length.
 const source = (...chunks: number[]) => Readable.from(chunks.map((n) => Buffer.alloc(n, 0x61)))
+const KEY = 'assets/ast_aaaaaaaaaaaaaaaaaaaa/ver_bbbbbbbbbbbbbbbbbbbb/original'
+const opts = (declaredBytes: number, maxBytes: number) => ({
+  declaredBytes,
+  maxBytes,
+  contentType: 'application/octet-stream',
+})
 
-describe('receiveToFile (streaming size guard)', () => {
-  it('writes and hashes a body of exactly the declared size', async () => {
-    const dest = tmpFile()
-    const r = await receiveToFile(source(3, 4), dest, { declaredBytes: 7, maxBytes: 10 })
+describe('receiveToBlob (streaming size guard)', () => {
+  it('stores and hashes a body of exactly the declared size', async () => {
+    const { blobs } = store()
+    const r = await receiveToBlob(source(3, 4), blobs, KEY, opts(7, 10))
     expect(r.bytes).toBe(7)
     expect(r.sha256).toBe(createHash('sha256').update(Buffer.alloc(7, 0x61)).digest('hex'))
-    expect(readFileSync(dest).length).toBe(7)
+    expect((await blobs.head(KEY))?.contentLength).toBe(7)
   })
 
-  it('aborts with TOO_LARGE as soon as the body passes its declared size', async () => {
-    const dest = tmpFile()
-    const err = await receiveToFile(source(5, 5, 5), dest, { declaredBytes: 8, maxBytes: 100 }).catch(
-      (e) => e,
-    )
+  it('aborts with TOO_LARGE as soon as the body passes its declared size; nothing is stored', async () => {
+    const { blobs, root } = store()
+    const src = source(5, 5, 5)
+    const err = await receiveToBlob(src, blobs, KEY, opts(8, 100)).catch((e) => e)
     expect(err).toBeInstanceOf(ReceiveError)
     expect(err.reason).toBe('TOO_LARGE')
-    // the chunk that crossed the cap is never written
-    expect(existsSync(dest) ? readFileSync(dest).length : 0).toBeLessThanOrEqual(5)
+    expect(src.destroyed).toBe(true) // stopped reading the request
+    expect(listFiles(root)).toEqual([]) // the store never published a partial object
   })
 
   it('aborts with TOO_LARGE when the body passes the kind limit even if the declared size lies', async () => {
-    const err = await receiveToFile(source(6, 6), tmpFile(), { declaredBytes: 1_000, maxBytes: 10 }).catch(
-      (e) => e,
-    )
+    const { blobs } = store()
+    const err = await receiveToBlob(source(6, 6), blobs, KEY, opts(1_000, 10)).catch((e) => e)
     expect(err.reason).toBe('TOO_LARGE')
   })
 
-  it('rejects a body that ends before its declared size', async () => {
-    const err = await receiveToFile(source(4), tmpFile(), { declaredBytes: 5, maxBytes: 10 }).catch((e) => e)
+  it('rejects a body that ends before its declared size (INCOMPLETE, not a storage error)', async () => {
+    const { blobs, root } = store()
+    const err = await receiveToBlob(source(4), blobs, KEY, opts(5, 10)).catch((e) => e)
+    expect(err).toBeInstanceOf(ReceiveError)
     expect(err.reason).toBe('INCOMPLETE')
+    expect(listFiles(root)).toEqual([])
   })
 
-  it('never overwrites an existing file', async () => {
-    const dest = tmpFile()
-    await receiveToFile(source(1), dest, { declaredBytes: 1, maxBytes: 1 })
-    await expect(receiveToFile(source(1), dest, { declaredBytes: 1, maxBytes: 1 })).rejects.toMatchObject({
-      code: 'EEXIST',
+  it('a body that errors (client gone) is ABORTED; a store that fails is its own error', async () => {
+    const { blobs } = store()
+    const broken = new Readable({
+      read() {
+        this.push(Buffer.alloc(10))
+        this.destroy(Object.assign(new Error('aborted'), { code: 'ECONNRESET' }))
+      },
     })
+    const aborted = await receiveToBlob(broken, blobs, KEY, opts(100, 100)).catch((e) => e)
+    expect(aborted).toBeInstanceOf(ReceiveError)
+    expect(aborted.reason).toBe('ABORTED')
+
+    const failure = new Error('disk full')
+    const failing = faultyStore(blobs, { put: () => failure })
+    const src = source(10, 10)
+    const stored = await receiveToBlob(src, failing, KEY, opts(20, 20)).catch((e) => e)
+    expect(stored).toBe(failure)
+    expect(src.destroyed).toBe(true) // and the request is no longer read
+  })
+
+  it('does not wait forever when the store stops reading without failing', async () => {
+    const { blobs } = store()
+    const lazy: BlobStore = { ...blobs, put: async () => {} } // returns without consuming the body
+    const err = await receiveToBlob(source(10), lazy, KEY, opts(10, 10)).catch((e) => e)
+    expect(err).toBeInstanceOf(Error)
+  })
+})
+
+describe('blob keys', () => {
+  it('are derived from validated ids only', () => {
+    expect(originalKey('ast_aaaaaaaaaaaaaaaaaaaa', 'ver_bbbbbbbbbbbbbbbbbbbb')).toBe(KEY)
+    expect(
+      derivativeKey(
+        'ast_aaaaaaaaaaaaaaaaaaaa',
+        'ver_bbbbbbbbbbbbbbbbbbbb',
+        'drv_cccccccccccccccccccc',
+        'webp',
+      ),
+    ).toBe('assets/ast_aaaaaaaaaaaaaaaaaaaa/ver_bbbbbbbbbbbbbbbbbbbb/d/drv_cccccccccccccccccccc.webp')
+    for (const [a, v] of [
+      ['ast_../../x', 'ver_bbbbbbbbbbbbbbbbbbbb'],
+      ['ast_aaaaaaaaaaaaaaaaaaaa', 'ver_b/c'],
+      ['../ast', 'ver_bbbbbbbbbbbbbbbbbbbb'],
+    ])
+      expect(() => originalKey(a as string, v as string)).toThrow()
+    expect(() =>
+      derivativeKey('ast_aaaaaaaaaaaaaaaaaaaa', 'ver_bbbbbbbbbbbbbbbbbbbb', 'drv_x/../y', 'webp'),
+    ).toThrow()
+    expect(() =>
+      derivativeKey(
+        'ast_aaaaaaaaaaaaaaaaaaaa',
+        'ver_bbbbbbbbbbbbbbbbbbbb',
+        'drv_cccccccccccccccccccc',
+        'svg' as 'png',
+      ),
+    ).toThrow()
   })
 })
 

@@ -1,6 +1,6 @@
 // Named checkpoints (REV-08): save / list / restore as a NEW PRIVATE board (PRF-08), with files
 // carried over as links, the sync seed conflict handled, tenancy and permission failures.
-import { existsSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { EventHub } from '../../../src/events/hub.ts'
@@ -41,13 +41,17 @@ beforeEach(async () => {
 })
 afterEach(() => api.close())
 
+/** Where a checkpoint body lives: the fs blob store (M3), under the row's storage_key. */
+const bodyFile = (bid: string, sid: string) =>
+  join(api.config.dataDir, 'blobs', 'snapshots', bid, `${sid}.json`)
+
 const save = (c: Client, name = 'Before the review', bid = boardId) =>
   c.req('POST', `/api/boards/${bid}/snapshots`, { name })
 const grant = (role: string, who = carol) =>
   bob.req('PUT', `/api/boards/${boardId}/members/${who.userId}`, { role })
 
 describe('POST /api/boards/:bid/snapshots', () => {
-  it('stores the live board as a named checkpoint (atomic file + row) and tells the board', async () => {
+  it('stores the live board as a named checkpoint (blob store + row) and tells the board', async () => {
     const got = recordEvents(events, boardId)
     const res = await save(bob)
     expect(res.statusCode).toBe(201)
@@ -61,8 +65,11 @@ describe('POST /api/boards/:bid/snapshots', () => {
       recordCount: 3,
     })
     expect(snap.id).toMatch(/^snp_/)
-    const file = join(api.config.dataDir, 'snapshots', boardId, `${snap.id}.json`)
+    const file = bodyFile(boardId, snap.id)
     const body = JSON.parse(readFileSync(file, 'utf8'))
+    expect(await api.blobs.head(`snapshots/${boardId}/${snap.id}.json`)).toMatchObject({
+      contentLength: snap.sizeBytes,
+    })
     expect(body).toMatchObject({ format: 'draftroom-checkpoint', version: 1, boardId, documentClock: 42 })
     expect(body.documents.map((d: { state: { id: string } }) => d.state.id)).toContain('shape:n1')
     expect(snap.sizeBytes).toBe(readFileSync(file).length)
@@ -98,7 +105,7 @@ describe('POST /api/boards/:bid/snapshots', () => {
     expect(res.statusCode).toBe(503)
     expect(res.json().error.code).toBe('SYNC_UNAVAILABLE')
     expect((await api.db.query('SELECT 1 FROM board_snapshots')).rowCount).toBe(0)
-    expect(existsSync(join(api.config.dataDir, 'snapshots', boardId))).toBe(false)
+    expect(existsSync(join(api.config.dataDir, 'blobs', 'snapshots', boardId))).toBe(false)
   })
 })
 
@@ -249,9 +256,19 @@ describe('POST /api/snapshots/:sid/restore-as-new', () => {
 
   it('410 when the checkpoint body is gone from storage', async () => {
     const sid = await checkpoint()
-    rmSync(join(api.config.dataDir, 'snapshots', boardId, `${sid}.json`))
+    rmSync(bodyFile(boardId, sid))
     const res = await restore(bob, sid)
     expect(res.statusCode).toBe(410)
     expect(sync.seeds).toHaveLength(0)
+  })
+
+  it('still restores a checkpoint saved before milestone 3 (body at the old DATA_DIR/snapshots path)', async () => {
+    const sid = await checkpoint()
+    const legacy = join(api.config.dataDir, 'snapshots', boardId, `${sid}.json`)
+    mkdirSync(join(legacy, '..'), { recursive: true })
+    renameSync(bodyFile(boardId, sid), legacy)
+    const res = await restore(bob, sid)
+    expect(res.statusCode).toBe(201)
+    expect(sync.seeds).toHaveLength(1)
   })
 })

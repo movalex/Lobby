@@ -1,18 +1,22 @@
-# Draftroom STAGING Blueprint. NOT provisioned. Read docs/DEPLOY.md before syncing it: sign-in (Clerk
-# keys) and the tldraw license key are still open ("Known blockers"), and every UNVERIFIED item needs a
-# check on the first deploy. The milestone-1 wiring blockers are resolved here: the board WebSocket goes
-# straight to the sync service (VITE_DRAFTROOM_SYNC_ORIGIN + sync ALLOWED_ORIGINS), the internal URLs
-# come from fromService hostport, the api trusts a fixed number of proxy hops (TRUST_PROXY) and the api
-# health check is /healthz.
+# Draftroom STAGING Blueprint (milestone 3 topology: files in Cloudflare R2, no api disk). NOT
+# provisioned. Read docs/DEPLOY.md before syncing it: sign-in (Clerk keys) and the tldraw license key
+# are still open ("Known blockers"), and every UNVERIFIED item needs a check on the first deploy.
+#
+# Default cost ~$20/month (docs/DEPLOY.md "Cost"): api + sync on 0.5c-512mb, the smallest paid
+# Postgres, a 1 GB sync disk and a free static site. Preview workers run on the NAS
+# (deploy/nas/README.md); the Render background worker at the end of this file is OPTIONAL and
+# commented out (+$7/month).
 #
 # Checked on 2026-09-27 against https://render.com/docs/blueprint-spec and Render's published JSON
-# schema https://render.com/schema/render.yaml.json (validated; see docs/DEPLOY.md "Validation").
-# Plan IDs use the compute-plan names Render introduced in August 2026
-# (https://render.com/docs/compute-plans). Prices are in docs/DEPLOY.md.
+# schema https://render.com/schema/render.yaml.json (unchanged since 2026-09-26 02:28 GMT; validated
+# with and without the optional worker, see docs/DEPLOY.md "Validation"). Plan IDs are the compute-plan
+# names Render introduced in August 2026 (https://render.com/docs/compute-plans).
+# Render refused `maxShutdownDelaySeconds` on services with a disk on the first sync (2026-09-27); it is
+# not used anywhere here (the default 30 s is enough for every service).
 #
-# Deploy order matters (docs/DEPLOY.md "Deploying"): api (migrations) -> sync -> web. Automatic deploys
-# start each service independently on a commit (no ordering we could find documented), so they are OFF
-# and deploys are manual. AGENTS.md also forbids publishing an unreviewed deployment.
+# Deploy order matters (docs/DEPLOY.md "Deploying"): api (migrations) -> sync -> web (-> worker).
+# Automatic deploys are OFF on every service and the Blueprint should be set to Manual Sync: AGENTS.md
+# forbids publishing an unreviewed deployment.
 
 envVarGroups:
   # Shared by api and sync. Two independent 256-bit random values (base64, 44 chars; the services
@@ -23,6 +27,15 @@ envVarGroups:
         generateValue: true
       - key: DRAFTROOM_INTERNAL_SECRET
         generateValue: true
+  # The preview-worker bearer token (docs/M3-STORAGE-CONTRACTS.md §4), in its OWN group on purpose:
+  # a worker must get this token and nothing else. Linking a worker to draftroom-staging-secrets would
+  # hand it the ticket secret (= mint a ticket for any board) and the internal secret. Linked to the
+  # api (and the optional Render worker). The NAS worker gets the same value by hand: Dashboard ->
+  # Environment Groups -> draftroom-staging-worker-token -> reveal, copy into the NAS env file.
+  - name: draftroom-staging-worker-token
+    envVars:
+      - key: DRAFTROOM_WORKER_TOKEN
+        generateValue: true # base64 256-bit, 44 chars (the api requires >= 32)
 
 databases:
   - name: draftroom-staging-db
@@ -91,37 +104,47 @@ services:
       # Never set VITE_DRAFTROOM_DEV_AUTH here: it enables development identities in the bundle.
 
   # ---------------------------------------------------------------------------------------------
-  # api: Fastify API + (milestones 1-2 only) the preview worker in the SAME container.
-  # Why co-located: the M0/M1 file store is local disk under DRAFTROOM_DATA_DIR, shared by the api
-  # (uploads, job queue) and the worker (derivatives), and a Render disk attaches to ONE service.
-  # A separate background worker would never see an upload. Consequences, accepted for staging:
-  # one instance, no zero-downtime deploys for the api, and a larger plan for the worker's memory.
-  # Milestone 3 (object storage) splits this into docker/api.Dockerfile + a `type: worker` service
-  # built from docker/worker.Dockerfile, and removes the disk.
+  # api: Fastify API only (no preview worker, no ffmpeg), NO disk. Uploads stream to Cloudflare R2,
+  # asset metadata and the preview-job queue live in Postgres (docs/M3-STORAGE-CONTRACTS.md), so the
+  # container filesystem holds nothing durable and zero-downtime deploys work again.
   - type: web
     runtime: docker
     name: draftroom-staging-api
-    plan: 1c-2g # api + worker; the PDF child alone may use a 512 MB heap
+    plan: 0.5c-512mb # ~125 MB RSS with Postgres (docs/DEPLOY.md); uploads stream, never buffered
     region: oregon
-    dockerfilePath: ./docker/api-worker.Dockerfile
-    dockerContext: .
-    numInstances: 1 # required: a service with a disk cannot scale
+    dockerfilePath: ./docker/api.Dockerfile
+    dockerContext: "." # quoted: a strict YAML 1.1 parser reads a bare . as a float
+    # One instance: the board event hub (SSE) and the rate-limit counters are in-process
+    # (apps/api/src/events/hub.ts). A second instance would miss events published by the other.
+    numInstances: 1
     # Liveness only: no database, no auth, not rate limited (apps/api/src/app.ts).
     healthCheckPath: /healthz
     autoDeployTrigger: "off"
-    disk:
-      name: draftroom-staging-files
-      mountPath: /var/data
-      sizeGB: 5 # uploads (<= 500 MB per video) + derivatives; can grow, never shrink
     envVars:
       - key: NODE_ENV
         value: production # also the image default; refuses dev sign-in and dev secrets
       - key: DRAFTROOM_DATA_DIR
-        value: /var/data # the disk mount; files outside it are lost on every deploy
+        # Scratch only, on the ephemeral container filesystem (lost on every deploy). Nothing durable
+        # may live here: blobs are in R2 (DRAFTROOM_BLOB_STORE=r2) and the database is Postgres
+        # (DATABASE_URL; without it the api would put PGlite here and lose it on the next deploy).
+        value: /tmp/draftroom-api
       - key: DATABASE_URL
         fromDatabase:
           name: draftroom-staging-db
           property: connectionString # internal (private network) URL
+      - key: DRAFTROOM_BLOB_STORE
+        value: r2
+      # Cloudflare R2 (docs/DEPLOY.md "Cloudflare R2"). Prompted once, at Blueprint creation; later
+      # Blueprint syncs ignore sync:false values (change them in the Dashboard). Only the api holds
+      # these: workers get short-lived presigned URLs, the browser never talks to R2.
+      - key: R2_ACCOUNT_ID
+        sync: false # the Cloudflare account ID (32 hex characters)
+      - key: R2_ACCESS_KEY_ID
+        sync: false # bucket-scoped "Object Read & Write" API token
+      - key: R2_SECRET_ACCESS_KEY
+        sync: false
+      - key: R2_BUCKET
+        sync: false # draftroom-staging
       - key: PUBLIC_ORIGIN
         # The static site's URL (Origin checks, Secure cookie, invite links). Confirm the hostname
         # Render assigns on first creation and update it here if it differs.
@@ -148,18 +171,19 @@ services:
       - key: CLERK_PUBLISHABLE_KEY
         sync: false
       - fromGroup: draftroom-staging-secrets
+      - fromGroup: draftroom-staging-worker-token
 
   # ---------------------------------------------------------------------------------------------
   # sync: tldraw rooms. EXACTLY ONE instance (one authoritative room per board) with its own disk
   # for the per-board SQLite files. No autoscaling, ever: a second instance would open a second
-  # room on a different disk and split the board.
+  # room on a different disk and split the board. Unchanged by milestone 3.
   - type: web
     runtime: docker
     name: draftroom-staging-sync
     plan: 0.5c-512mb
     region: oregon
     dockerfilePath: ./docker/sync.Dockerfile
-    dockerContext: .
+    dockerContext: "." # quoted: a strict YAML 1.1 parser reads a bare . as a float
     numInstances: 1
     healthCheckPath: /healthz
     autoDeployTrigger: "off"
@@ -186,3 +210,43 @@ services:
       - key: ACCESS_RECHECK_MS
         value: "10000"
       - fromGroup: draftroom-staging-secrets
+
+  # ---------------------------------------------------------------------------------------------
+  # OPTIONAL (+$7/month): an always-on preview worker on Render, as backup for the NAS worker
+  # (deploy/nas/README.md). Not part of the default Blueprint. To enable it, delete the leading "# "
+  # from every line of the block below (keep the indentation), then sync the Blueprint. It holds only
+  # the worker token: no database, no R2 keys (the api hands it presigned URLs that expire in <= 15 min).
+  #
+  # DRAFTROOM_API_URL uses the api's PRIVATE-network address (host:port -> http://host:port, like the
+  # api <-> sync channel), not its public https URL: the Blueprint wires it without a hostname to guess,
+  # the calls never leave Render's private network (background workers may send private traffic; the
+  # api's port 10000 receives it; private traffic is not billed), and they skip the Cloudflare edge. The
+  # worker accepts plain http in production only for such private hosts (apps/worker/src/env.ts). The
+  # NAS worker, outside Render, uses the api's public URL https://draftroom-staging-api.onrender.com.
+  #
+  # Background workers have no health checks. 512 MB is tight for the PDF child: WORKER_PDF_HEAP_MB is
+  # lowered from the default 384 so a huge PDF fails as a job error instead of the instance being
+  # OOM-killed (UNVERIFIED on Render; use 1c-2g, $25, and the default heap if PDFs fail here).
+  #
+  # - type: worker
+  #   runtime: docker
+  #   name: draftroom-staging-worker
+  #   plan: 0.5c-512mb
+  #   region: oregon
+  #   dockerfilePath: ./docker/worker.Dockerfile
+  #   dockerContext: "." # quoted: a strict YAML 1.1 parser reads a bare . as a float
+  #   numInstances: 1
+  #   autoDeployTrigger: "off"
+  #   envVars:
+  #     - key: NODE_ENV
+  #       value: production
+  #     - key: DRAFTROOM_API_URL
+  #       fromService:
+  #         type: web
+  #         name: draftroom-staging-api
+  #         property: hostport
+  #     - key: WORKER_CONCURRENCY
+  #       value: "1"
+  #     - key: WORKER_PDF_HEAP_MB
+  #       value: "256"
+  #     - fromGroup: draftroom-staging-worker-token

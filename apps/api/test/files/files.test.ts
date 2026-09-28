@@ -1,14 +1,8 @@
-import { mkdirSync, writeFileSync } from 'node:fs'
-import {
-  type AssetVersionMeta,
-  type DerivativeRecord,
-  derivativePath,
-  derivativesDir,
-  newId,
-  updateMeta,
-} from '@draftroom/dev-assets'
+import { rmSync } from 'node:fs'
+import { join } from 'node:path'
+import { type AssetVersionMeta, newId } from '@draftroom/dev-assets'
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
-import { rawExchange, req, startApp, type TestApp, upload } from './helpers.ts'
+import { addDerivative, rawExchange, req, setVersion, startApp, type TestApp, upload } from './helpers.ts'
 
 let t: TestApp
 let img: AssetVersionMeta
@@ -31,32 +25,6 @@ const original = (m: AssetVersionMeta, board = m.boardId) =>
 const metaRoute = (m: AssetVersionMeta, board = m.boardId) =>
   `/api/boards/${board}/assets/${m.assetId}/${m.versionId}`
 
-/** Plays the worker: writes a derivative file and (optionally) publishes it in meta. */
-function addDerivative(m: AssetVersionMeta, opts: { list: boolean; mimeType?: string; file?: string }) {
-  const id = newId('drv')
-  const bytes = Buffer.from(`webp-bytes-${id}`)
-  const file = opts.file ?? `${id}.webp`
-  mkdirSync(derivativesDir(t.layout, m.assetId, m.versionId), { recursive: true })
-  if (!file.includes('/')) writeFileSync(derivativePath(t.layout, m.assetId, m.versionId, file), bytes)
-  if (opts.list) {
-    const rec = {
-      id,
-      role: 'thumb',
-      page: null,
-      width: 1,
-      height: 1,
-      mimeType: opts.mimeType ?? 'image/webp',
-      bytes: bytes.length,
-      file,
-    } as DerivativeRecord
-    updateMeta(t.layout, m.assetId, m.versionId, (cur) => ({
-      ...cur,
-      derivatives: [...cur.derivatives, rec],
-    }))
-  }
-  return { id, bytes }
-}
-
 describe('GET meta', () => {
   it('returns the meta for its own board with no-store, 404 for any other board', async () => {
     const ok = await req(t.port, { path: metaRoute(img) })
@@ -73,15 +41,58 @@ describe('GET meta', () => {
     expect(other.body.equals(missing.body)).toBe(true)
     expect(other.json()).toEqual({ error: { code: 'NOT_FOUND', message: expect.any(String) } })
     expect((await req(t.port, { path: metaRoute(img, 'Board-A') })).status).toBe(400)
+    // a real version id under another asset id is not that asset's version
+    const crossed = await req(t.port, { path: metaRoute({ ...img, assetId: newId('ast') }) })
+    expect(crossed.status).toBe(404)
 
     const head = await req(t.port, { method: 'HEAD', path: metaRoute(img) })
     expect(head.status).toBe(200)
     expect(head.body.length).toBe(0)
   })
+
+  it('reflects the worker result from the database: status, confirmed type, error, probe and derivatives in order', async () => {
+    const m = (await upload(t.port, { name: 'scan.png', body: Buffer.alloc(64, 9) })).json<AssetVersionMeta>()
+    const a = await addDerivative(t, m, { publish: true })
+    const b = await addDerivative(t, m, { publish: true, mimeType: 'image/png' })
+    await t.db.query(
+      `UPDATE asset_versions SET status = 'ready', mime_type = 'image/jpeg', attempts = 1,
+          probe = '{"width": 640, "height": 480}'::jsonb WHERE id = $1`,
+      [m.versionId],
+    )
+    const got = (await req(t.port, { path: metaRoute(m) })).json<AssetVersionMeta>()
+    expect(got).toMatchObject({ status: 'ready', mimeType: 'image/jpeg', attempts: 1, error: null })
+    expect(got.probe).toEqual({
+      width: 640,
+      height: 480,
+      pageCount: null,
+      durationMs: null,
+      videoCodec: null,
+      audioCodec: null,
+    })
+    expect(got.derivatives).toEqual([a.record, b.record])
+    expect(Object.keys(got.derivatives[0] ?? {})).toEqual([
+      'id',
+      'role',
+      'page',
+      'width',
+      'height',
+      'mimeType',
+      'bytes',
+      'file',
+    ])
+    await setVersion(t.db, m.versionId, {
+      status: 'failed',
+      error: { code: 'IMAGE_INVALID', message: 'This image could not be previewed.' },
+    })
+    expect((await req(t.port, { path: metaRoute(m) })).json().error).toEqual({
+      code: 'IMAGE_INVALID',
+      message: 'This image could not be previewed.',
+    })
+  })
 })
 
 describe('GET original', () => {
-  it('serves the bytes inline for a previewable kind with the security and cache headers', async () => {
+  it('proxies the bytes inline for a previewable kind with the security and cache headers', async () => {
     const res = await req(t.port, { path: original(img) })
     expect(res.status).toBe(200)
     expect(res.body.equals(imgBytes)).toBe(true)
@@ -123,6 +134,8 @@ describe('GET original', () => {
     expect(mid.headers['content-length']).toBe('4')
     expect(mid.headers['accept-ranges']).toBe('bytes')
     expect(mid.headers['x-content-type-options']).toBe('nosniff')
+    expect(mid.headers['content-security-policy']).toBe("sandbox; default-src 'none'")
+    expect(mid.headers['content-disposition']).toMatch(/^inline; /)
 
     const open = await r('bytes=990-')
     expect(open.status).toBe(206)
@@ -134,6 +147,11 @@ describe('GET original', () => {
 
     const clamped = await r('bytes=998-5000')
     expect(clamped.headers['content-range']).toBe(`bytes 998-999/${imgBytes.length}`)
+    expect(clamped.body.equals(imgBytes.subarray(998))).toBe(true)
+
+    const last = await r('bytes=999-999')
+    expect(last.status).toBe(206)
+    expect(last.body.equals(imgBytes.subarray(999))).toBe(true)
 
     const beyond = await r(`bytes=${imgBytes.length}-`)
     expect(beyond.status).toBe(416)
@@ -177,31 +195,40 @@ describe('GET original', () => {
     expect(res.headers['content-security-policy']).toBe("sandbox; default-src 'none'")
   })
 
-  it('serves a failed asset, or a meta with a non-allowlisted type, as an attachment', async () => {
+  it('serves a failed asset, or a row with a non-allowlisted type, as an attachment', async () => {
     const bad = (await upload(t.port, { name: 'broken.png' })).json<AssetVersionMeta>()
-    updateMeta(t.layout, bad.assetId, bad.versionId, (m) => ({
-      ...m,
+    await setVersion(t.db, bad.versionId, {
       status: 'failed',
       error: { code: 'IMAGE_INVALID', message: 'This image could not be read.' },
-    }))
+    })
     const failed = await req(t.port, { path: original(bad) })
     expect(failed.headers['content-type']).toBe('application/octet-stream')
     expect(failed.headers['content-disposition']).toMatch(/^attachment; /)
 
     const tampered = (await upload(t.port, { name: 'x.png' })).json<AssetVersionMeta>()
-    updateMeta(t.layout, tampered.assetId, tampered.versionId, (m) => ({ ...m, mimeType: 'text/html' }))
+    await setVersion(t.db, tampered.versionId, { mimeType: 'text/html' })
     const res = await req(t.port, { path: original(tampered) })
     expect(res.headers['content-type']).toBe('application/octet-stream')
     expect(res.headers['content-disposition']).toMatch(/^attachment; /)
   })
+
+  it('a row whose blob is gone is a 404 (GET and HEAD), never a 500 or a hanging response', async () => {
+    const lost = (
+      await upload(t.port, { name: 'lost.png', body: Buffer.alloc(10, 1) })
+    ).json<AssetVersionMeta>()
+    rmSync(join(t.blobRoot, 'assets', lost.assetId), { recursive: true, force: true })
+    expect((await req(t.port, { path: original(lost) })).status).toBe(404)
+    expect((await req(t.port, { method: 'HEAD', path: original(lost) })).status).toBe(404)
+    expect((await req(t.port, { path: original(lost), headers: { Range: 'bytes=0-1' } })).status).toBe(404)
+  })
 })
 
 describe('GET derivative', () => {
-  it('serves only derivatives listed in meta, board-scoped, with immutable caching', async () => {
-    const listed = addDerivative(img, { list: true })
-    const unlisted = addDerivative(img, { list: false })
-    const d = (id: string, board = 'board-a') =>
-      req(t.port, { path: `/files/${img.assetId}/${img.versionId}/d/${id}?board=${board}` })
+  it('serves only derivatives that complete published (rows), board-scoped, with immutable caching', async () => {
+    const listed = await addDerivative(t, img, { publish: true })
+    const unlisted = await addDerivative(t, img, { publish: false }) // stored, like a running job's upload
+    const d = (id: string, board = 'board-a', headers: Record<string, string> = {}) =>
+      req(t.port, { path: `/files/${img.assetId}/${img.versionId}/d/${id}?board=${board}`, headers })
 
     const ok = await d(listed.id)
     expect(ok.status).toBe(200)
@@ -214,8 +241,12 @@ describe('GET derivative', () => {
       'cache-control': 'private, max-age=31536000, immutable',
       'accept-ranges': 'bytes',
     })
+    const part = await d(listed.id, 'board-a', { Range: 'bytes=1-3' })
+    expect(part.status).toBe(206)
+    expect(part.body.equals(listed.bytes.subarray(1, 4))).toBe(true)
+    expect(part.headers['content-range']).toBe(`bytes 1-3/${listed.bytes.length}`)
     expect((await d(listed.id, 'board-b')).status).toBe(404)
-    expect((await d(unlisted.id)).status).toBe(404) // on disk, but not published by the worker
+    expect((await d(unlisted.id)).status).toBe(404) // in the store, but not published by the worker
     expect((await d(newId('drv'))).status).toBe(404)
     expect((await d('drv_bad!')).status).toBe(404)
     expect(
@@ -223,22 +254,28 @@ describe('GET derivative', () => {
     ).toBe(400)
   })
 
-  it('refuses derivative records with a non-image type or a path-like file name', async () => {
-    const svg = addDerivative(img, { list: true, mimeType: 'image/svg+xml' })
-    const pathLike = addDerivative(img, { list: true, file: '../meta.json' })
-    for (const id of [svg.id, pathLike.id]) {
-      const res = await req(t.port, { path: `/files/${img.assetId}/${img.versionId}/d/${id}?board=board-a` })
-      expect(res.status).toBe(404)
-    }
+  it('the database refuses derivative rows with a non-image type or a key outside the version', async () => {
+    const id = newId('drv')
+    const insert = (mime: string, key: string) =>
+      t.db.query(
+        `INSERT INTO asset_derivatives (id, version_id, position, role, width, height, mime_type, bytes, blob_key)
+         VALUES ($1, $2, 99, 'thumb', 1, 1, $3, 4, $4)`,
+        [id, img.versionId, mime, key],
+      )
+    const good = `assets/${img.assetId}/${img.versionId}/d/${id}.webp`
+    await expect(insert('image/svg+xml', good)).rejects.toThrow()
+    await expect(insert('image/webp', `assets/${img.assetId}/${img.versionId}/original`)).rejects.toThrow()
+    await expect(insert('image/webp', `assets/${img.assetId}/../../x/d/${id}.webp`)).rejects.toThrow()
+    await expect(insert('image/webp', `rooms/board-a.sqlite`)).rejects.toThrow()
   })
 })
 
-describe('ids are validated before touching the filesystem', () => {
-  it('traversal attempts in every id position are 400/404 and never serve data files', async () => {
+describe('ids are validated before touching storage', () => {
+  it('traversal attempts in every id position are 400/404 and never serve data', async () => {
     const paths = [
       `/files/..%2F..%2Frooms/${img.versionId}/original?board=board-a`,
       `/files/${img.assetId}/..%2Fmeta.json/original?board=board-a`,
-      `/files/${img.assetId}/${img.versionId}/d/..%2F..%2Fmeta.json?board=board-a`,
+      `/files/${img.assetId}/${img.versionId}/d/..%2F..%2Foriginal?board=board-a`,
       `/files/${img.assetId}/${img.versionId}/d/%2e%2e?board=board-a`,
       `/api/boards/board-a/assets/${img.assetId}/..%5C..%5Cjobs`,
       `/api/boards/..%2Fboard-a/assets/${img.assetId}/${img.versionId}`,

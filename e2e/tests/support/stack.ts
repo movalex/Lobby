@@ -1,7 +1,14 @@
-// Runs the REAL api, the REAL sync server and the REAL preview worker as child processes against one
-// temporary DRAFTROOM_DATA_DIR (the api keeps its PGlite database under it), so the browser suites
-// exercise the same entry points as `pnpm dev`. Tests can kill (SIGKILL / TerminateProcess) and
-// restart any of them on demand.
+// Runs the REAL api, the REAL sync server and the REAL preview worker as child processes, so the browser
+// suites exercise the same entry points as `pnpm dev`. The api and sync share one temporary
+// DRAFTROOM_DATA_DIR (the api keeps its PGlite database and, in fs mode, its blobs under it); the worker
+// is an HTTP client of the api (docs/M3-STORAGE-CONTRACTS.md §4-§5) and only gets the api's URL and a
+// per-stack worker token. Tests can kill (SIGKILL / TerminateProcess) and restart any of them on demand.
+//
+// Blob store: fs by default. E2E_BLOB_STORE=r2 (opt-in, never in CI) points the api at a real R2 bucket
+// using R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET (and optional R2_ENDPOINT)
+// from the test runner's environment; only the api receives them, and only a bucket whose name says
+// staging or test is accepted. The run's objects are NOT cleaned up here (the api has no key prefix):
+// the caller lists the stack's asset rows (E2E_KEEP_DATA=1 keeps the database) and deletes them.
 import { type ChildProcess, spawn, spawnSync } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { mkdtempSync, rmSync } from 'node:fs'
@@ -171,7 +178,8 @@ function baseEnv(): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env }
   for (const key of Object.keys(env)) {
     if (
-      /^(DRAFTROOM_|CLERK_)/.test(key) ||
+      // Credentials and worker knobs too: storage keys reach the api only through blobStoreEnv().
+      /^(DRAFTROOM_|CLERK_|R2_|CLOUDFLARE_|RENDER_|WORKER_|E2E_BLOB_STORE$)/.test(key) ||
       [
         'NODE_ENV',
         'NODE_OPTIONS',
@@ -188,6 +196,26 @@ function baseEnv(): NodeJS.ProcessEnv {
     )
       delete env[key]
   }
+  return env
+}
+
+const R2_KEYS = ['R2_ACCOUNT_ID', 'R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY', 'R2_BUCKET'] as const
+
+/** The api's blob-store settings: fs (default), or the opt-in real bucket (E2E_BLOB_STORE=r2). */
+export function blobStoreEnv(): Record<string, string> {
+  const mode = process.env.E2E_BLOB_STORE?.trim() || 'fs'
+  if (mode === 'fs') return { DRAFTROOM_BLOB_STORE: 'fs' }
+  if (mode !== 'r2') throw new Error('E2E_BLOB_STORE must be fs or r2')
+  const missing = R2_KEYS.filter((k) => !process.env[k]?.trim())
+  // Names only: values are credentials.
+  if (missing.length) throw new Error(`E2E_BLOB_STORE=r2 needs ${missing.join(', ')} in the environment`)
+  const env: Record<string, string> = { DRAFTROOM_BLOB_STORE: 'r2' }
+  for (const k of R2_KEYS) env[k] = process.env[k]?.trim() ?? ''
+  if (!/staging|test/.test(env.R2_BUCKET ?? '')) {
+    throw new Error('E2E_BLOB_STORE=r2 only runs against a bucket whose name contains staging or test')
+  }
+  const endpoint = process.env.R2_ENDPOINT?.trim()
+  if (endpoint) env.R2_ENDPOINT = endpoint
   return env
 }
 
@@ -216,6 +244,11 @@ export async function startStack(opts: StackOptions = {}): Promise<Stack> {
     DRAFTROOM_TICKET_SECRET: randomBytes(32).toString('base64url'),
     DRAFTROOM_INTERNAL_SECRET: randomBytes(32).toString('base64url'),
   }
+  // Likewise the preview worker's bearer token, shared by the api and the worker only (never sync).
+  const workerToken = randomBytes(32).toString('base64url')
+  const blobs = blobStoreEnv()
+  // The worker's scratch files (downloaded originals, rendered derivatives) stay inside this stack.
+  const workerTmp = join(dataDir, 'worker-tmp')
 
   const api = managed({
     name: 'api',
@@ -232,6 +265,8 @@ export async function startStack(opts: StackOptions = {}): Promise<Stack> {
       // The browser's origin, not the api's: Origin checks and invite links use it.
       PUBLIC_ORIGIN: WEB_URL,
       DRAFTROOM_SYNC_INTERNAL_URL: SYNC_URL,
+      DRAFTROOM_WORKER_TOKEN: workerToken,
+      ...blobs,
     }),
     ready: (out) => out.includes(`api listening on ${HOST}:${API_PORT} `),
     healthy: apiHealthy,
@@ -269,8 +304,18 @@ export async function startStack(opts: StackOptions = {}): Promise<Stack> {
     name: 'worker',
     entry: WORKER_ENTRY,
     killTree: true,
-    env: () => ({ ...baseEnv(), DRAFTROOM_DATA_DIR: dataDir, WORKER_POLL_MS: '100' }),
-    ready: (out) => out.includes('[worker] started (data: '),
+    // HTTP mode, like `pnpm dev`: no data dir, no database, no storage credentials.
+    env: () => ({
+      ...baseEnv(),
+      DRAFTROOM_API_URL: API_URL,
+      DRAFTROOM_WORKER_TOKEN: workerToken,
+      WORKER_ID: 'e2e-worker',
+      WORKER_TMP_DIR: workerTmp,
+      // Snappy idle polling (the default backoff grows to 15 s between polls).
+      WORKER_POLL_MS: '100',
+      WORKER_POLL_MAX_MS: '500',
+    }),
+    ready: (out) => out.includes(`[worker] started (api: ${API_URL}, `),
     preflight: async () => {
       for (const tool of ['ffprobe', 'ffmpeg']) {
         const r = spawnSync(tool, ['-version'], { stdio: 'ignore', windowsHide: true })

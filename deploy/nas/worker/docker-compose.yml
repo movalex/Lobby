@@ -1,0 +1,54 @@
+# Draftroom preview worker on the NAS (docs/M3-STORAGE-CONTRACTS.md §5-§6; how-to: deploy/nas/README.md).
+#
+# One container, built on the NAS from docker/worker.Dockerfile. It is only an HTTP client of the
+# Draftroom api (/api/worker/*): no published ports, no volumes, no database or storage credentials.
+# Its whole configuration secret is DRAFTROOM_WORKER_TOKEN in ./worker.env (created by
+# deploy/nas/deploy-worker.sh with mode 600; never committed).
+#
+# Own compose project, own names: nothing here refers to any other project on this host.
+name: draftroom-worker
+
+services:
+  worker:
+    image: draftroom-worker:latest
+    build:
+      # ./src is the repository subset uploaded by deploy-worker.sh (manifests + lockfile + sources).
+      context: ./src
+      dockerfile: docker/worker.Dockerfile
+      labels:
+        com.draftroom.component: worker
+    container_name: draftroom-worker
+    labels:
+      com.draftroom.component: worker
+    # Only DRAFTROOM_API_URL, DRAFTROOM_WORKER_TOKEN and WORKER_ID (deploy-worker.sh refuses anything else).
+    env_file: ./worker.env
+    environment:
+      NODE_ENV: production
+      WORKER_CONCURRENCY: "1"
+      WORKER_PDF_HEAP_MB: "384"
+    # Unprivileged from the first instruction (the image also says USER node): nothing here needs root,
+    # so cap_drop: ALL costs nothing.
+    user: node
+    # `init: true` makes Docker's own tini PID 1 (it forwards SIGTERM and reaps ffmpeg/PDF children). The
+    # image's ENTRYPOINT is also tini; it is replaced here instead of nested under the first one.
+    init: true
+    entrypoint: ["node", "apps/worker/src/worker.ts"]
+    restart: unless-stopped
+    # docker stop: SIGTERM, then the worker finishes or releases its job (WORKER_SHUTDOWN_GRACE_MS,
+    # default 10 s) and hands it back to the api; SIGKILL only after this period.
+    stop_grace_period: 30s
+    # Resource caps: the PDF child's V8 heap (384 MB) plus native canvas memory, sharp and ffmpeg fit in
+    # 1.5 GB at concurrency 1. No swap on top.
+    mem_limit: 1500m
+    memswap_limit: 1500m
+    cpus: 3
+    pids_limit: 256
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

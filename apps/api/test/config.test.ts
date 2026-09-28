@@ -1,8 +1,9 @@
+import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { createApiServer } from '../src/app.ts'
 import { createDevAuthProvider } from '../src/auth/dev.ts'
 import { isLoopbackHost, loadConfig, parseTrustProxy } from '../src/config.ts'
-import { createTestApi, ORIGIN, type TestApi, testEnv } from './helpers.ts'
+import { createTestApi, ORIGIN, type TestApi, testEnv, WORKER_TOKEN } from './helpers.ts'
 
 const base = testEnv('./.data-test-never-created')
 const prodSecrets = {
@@ -16,6 +17,13 @@ const prodSecrets = {
   DRAFTROOM_INTERNAL_SECRET: 'prod-internal-secret-0123456789abcdefghij',
   // Render Blueprint: fromService.property hostport
   DRAFTROOM_SYNC_INTERNAL_URL: 'draftroom-staging-sync:10000',
+  DRAFTROOM_WORKER_TOKEN: 'prod-worker-token-0123456789abcdefghijklm',
+  // Render has no disk for the api: R2 (fake values; the live bucket is only used by the opt-in test)
+  DRAFTROOM_BLOB_STORE: 'r2',
+  R2_ACCOUNT_ID: '0123456789abcdef0123456789abcdef',
+  R2_ACCESS_KEY_ID: 'FAKEACCESSKEY0123456789',
+  R2_SECRET_ACCESS_KEY: 'fakeSecretKey/0123456789+abcdefghijklmnop',
+  R2_BUCKET: 'draftroom-test',
 }
 const prod = { ...base, ...prodSecrets }
 
@@ -285,5 +293,81 @@ describe('TRUST_PROXY decides which client a per-IP rate limit sees', () => {
     expect(await status('192.0.2.1, 172.71.0.1', 'x3')).toBe(429)
     // The leftmost (client-written) entry decides: a newly invented address gets a fresh bucket.
     expect(await status('192.0.2.2, 172.71.0.1', 'x4')).toBe(200)
+  })
+})
+
+describe('blob store and worker token (docs/M3-STORAGE-CONTRACTS.md §6)', () => {
+  it('development defaults: the fs store under DRAFTROOM_DATA_DIR/blobs and the configured worker token', () => {
+    const c = loadConfig(base)
+    expect(c.blobStore.kind).toBe('fs')
+    if (c.blobStore.kind !== 'fs') return
+    expect(c.blobStore.root).toBe(join(c.dataDir, 'blobs'))
+    expect(c.workerToken).toBe(WORKER_TOKEN)
+    expect(loadConfig({ ...base, DRAFTROOM_BLOB_STORE: 'fs' }).blobStore.kind).toBe('fs')
+  })
+
+  it('production: R2 with all four variables', () => {
+    const c = loadConfig(prod)
+    expect(c.blobStore).toEqual({
+      kind: 'r2',
+      accountId: prod.R2_ACCOUNT_ID,
+      accessKeyId: prod.R2_ACCESS_KEY_ID,
+      secretAccessKey: prod.R2_SECRET_ACCESS_KEY,
+      bucket: prod.R2_BUCKET,
+      endpoint: null,
+    })
+    expect(
+      loadConfig({ ...prod, R2_ENDPOINT: 'https://acct.eu.r2.cloudflarestorage.com/' }).blobStore,
+    ).toMatchObject({ endpoint: 'https://acct.eu.r2.cloudflarestorage.com' })
+  })
+
+  it('production requires an explicit store choice (no silent local-disk default); fs stays possible', () => {
+    for (const v of [undefined, '', ' '])
+      expect(() => loadConfig({ ...prod, DRAFTROOM_BLOB_STORE: v }), String(v)).toThrow(
+        /DRAFTROOM_BLOB_STORE is required when NODE_ENV=production/,
+      )
+    expect(loadConfig({ ...prod, DRAFTROOM_BLOB_STORE: 'fs' }).blobStore.kind).toBe('fs')
+    expect(() => loadConfig({ ...base, DRAFTROOM_BLOB_STORE: 's3' })).toThrow(/must be fs or r2/)
+  })
+
+  it('r2 names every missing variable, and refuses malformed values without echoing them', () => {
+    for (const name of ['R2_ACCOUNT_ID', 'R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY', 'R2_BUCKET'])
+      expect(() => loadConfig({ ...prod, [name]: '' }), name).toThrow(new RegExp(`requires ${name}`))
+    const secret = 'has spaces in it but is long enough'
+    const cases: Array<[string, string, RegExp]> = [
+      ['R2_ACCOUNT_ID', 'not-hex-account', /R2_ACCOUNT_ID/],
+      ['R2_ACCESS_KEY_ID', 'short', /R2_ACCESS_KEY_ID is malformed/],
+      ['R2_SECRET_ACCESS_KEY', secret, /R2_SECRET_ACCESS_KEY is malformed/],
+      ['R2_SECRET_ACCESS_KEY', prod.R2_ACCESS_KEY_ID, /must differ/],
+      ['R2_BUCKET', 'Draftroom_Staging', /R2_BUCKET/],
+      ['R2_BUCKET', 'a--b', /R2_BUCKET/],
+      ['R2_ENDPOINT', 'http://acct.r2.cloudflarestorage.com', /R2_ENDPOINT/],
+      ['R2_ENDPOINT', 'https://acct.r2.cloudflarestorage.com/bucket', /R2_ENDPOINT/],
+      ['R2_ENDPOINT', 'https://user:pw@acct.r2.cloudflarestorage.com', /R2_ENDPOINT/],
+    ]
+    for (const [name, value, re] of cases) {
+      let message = ''
+      try {
+        loadConfig({ ...prod, [name]: value })
+      } catch (e) {
+        message = (e as Error).message
+      }
+      expect(message, `${name}=${value}`).toMatch(re)
+      expect(message).not.toContain(value)
+    }
+  })
+
+  it('the worker token is required, at least 32 characters, not a dev placeholder in production, and distinct', () => {
+    expect(() => loadConfig({ ...base, DRAFTROOM_WORKER_TOKEN: '' })).toThrow(
+      /DRAFTROOM_WORKER_TOKEN must be at least 32/,
+    )
+    expect(() => loadConfig({ ...base, DRAFTROOM_WORKER_TOKEN: 'short' })).toThrow(/at least 32/)
+    const placeholder = 'dev-only-worker-token-change-me-0123456789'
+    expect(loadConfig({ ...base, DRAFTROOM_WORKER_TOKEN: placeholder }).workerToken).toBe(placeholder)
+    expect(() => loadConfig({ ...prod, DRAFTROOM_WORKER_TOKEN: placeholder })).toThrow(
+      /development placeholder/,
+    )
+    for (const other of [base.DRAFTROOM_TICKET_SECRET, base.DRAFTROOM_INTERNAL_SECRET])
+      expect(() => loadConfig({ ...base, DRAFTROOM_WORKER_TOKEN: other })).toThrow(/must differ/)
   })
 })

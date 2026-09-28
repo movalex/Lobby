@@ -1,5 +1,6 @@
 // The API core's `authorize` for the file routes (apps/api/src/files/deps.ts): 401 without a session,
-// 404 when the caller cannot view the board, 403 when they can view but not edit.
+// 404 when the caller cannot view the board, 403 when they can view but not edit; on success the user
+// and the board's workspace (a new upload's row carries it, packages/db 0007_assets).
 
 import type { FastifyRequest } from 'fastify'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -48,16 +49,25 @@ describe('file route authorization', () => {
       expect(await authorize(reqWith(carol), boardId, 'view'), role).toEqual({
         ok: true,
         userId: carol.userId,
+        workspaceId: DEV_STUDIO,
       })
       expect(await authorize(reqWith(carol), boardId, 'edit'), role).toEqual({ ok: false, status: 403 })
     }
     await bob.req('PUT', `/api/boards/${boardId}/members/${carol.userId}`, { role: 'editor' })
-    expect(await authorize(reqWith(carol), boardId, 'edit')).toEqual({ ok: true, userId: carol.userId })
+    expect(await authorize(reqWith(carol), boardId, 'edit')).toEqual({
+      ok: true,
+      userId: carol.userId,
+      workspaceId: DEV_STUDIO,
+    })
   })
 
   it('archived boards are view-only; trashed boards serve nothing, even to owners', async () => {
     await bob.req('POST', `/api/boards/${boardId}/archive`)
-    expect(await authorize(reqWith(bob), boardId, 'view')).toEqual({ ok: true, userId: bob.userId })
+    expect(await authorize(reqWith(bob), boardId, 'view')).toEqual({
+      ok: true,
+      userId: bob.userId,
+      workspaceId: DEV_STUDIO,
+    })
     expect(await authorize(reqWith(bob), boardId, 'edit')).toEqual({ ok: false, status: 403 })
     await bob.req('POST', `/api/boards/${boardId}/trash`)
     expect(await authorize(reqWith(bob), boardId, 'view')).toEqual({ ok: false, status: 404 })

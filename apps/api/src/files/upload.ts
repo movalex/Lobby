@@ -1,24 +1,17 @@
-import { randomBytes } from 'node:crypto'
-import { mkdirSync } from 'node:fs'
-import { rename, rm } from 'node:fs/promises'
-import { join } from 'node:path'
 import {
-  type AssetVersionMeta,
   BOARD_ID_RE,
   classifyUpload,
-  enqueueJob,
   LIMITS,
   newId,
-  originalPath,
   PREVIEW_PROFILE,
   sanitizeDisplayName,
-  versionDir,
-  writeMeta,
 } from '@draftroom/dev-assets'
 import type { FastifyReply, FastifyRequest } from 'fastify'
+import { deleteQuietly, originalKey } from './blobs.ts'
 import type { FilesDeps } from './deps.ts'
+import { EMPTY_PROBE, toMeta, VERSION_COLUMNS, type VersionRow } from './meta.ts'
 import { initialServedMime, normalizeDeclaredMime } from './mime.ts'
-import { ReceiveError, receiveToFile } from './receive.ts'
+import { ReceiveError, receiveToBlob } from './receive.ts'
 import { HttpError, requireAccess, sendJson } from './respond.ts'
 
 export interface UploadRoute {
@@ -44,22 +37,10 @@ function parseFileName(raw: string | string[] | undefined): string {
   }
 }
 
-async function renameWithRetry(from: string, to: string) {
-  // Windows: a virus scanner or indexer can hold a just-written file for a moment (EPERM/EBUSY).
-  for (let i = 0; ; i++) {
-    try {
-      return await rename(from, to)
-    } catch (e) {
-      const code = (e as NodeJS.ErrnoException).code
-      if (i >= 10 || !(code === 'EPERM' || code === 'EBUSY' || code === 'EACCES')) throw e
-      await new Promise((r) => setTimeout(r, 20 * (i + 1)))
-    }
-  }
-}
-
 /**
  * POST /api/boards/:bid/assets — raw body (never parsed or buffered by Fastify: see plugin.ts), streamed
- * to a temp file while hashing, renamed to `original`, then meta.json (status 'queued') + a preview job.
+ * to the blob store under `assets/<ast>/<ver>/original` while hashing; then ONE transaction inserts the
+ * version (status 'queued') and its preview job. Any failure deletes the partial blob and writes no rows.
  */
 export async function handleUpload(
   request: FastifyRequest<UploadRoute>,
@@ -68,9 +49,9 @@ export async function handleUpload(
 ) {
   const boardId = request.params.bid
   if (!BOARD_ID_RE.test(boardId)) throw reject(400, 'INVALID_BOARD_ID', 'Invalid board id.')
-  // First, before any header is interpreted, any byte is read or any file is touched: a caller who
+  // First, before any header is interpreted, any byte is read or anything is stored: a caller who
   // may not edit this board learns nothing else from this route.
-  const userId = await requireAccess(deps, request, boardId, 'edit', CLOSE)
+  const { userId, workspaceId } = await requireAccess(deps, request, boardId, 'edit', CLOSE)
 
   const lengthHeader = request.headers['content-length']
   if (lengthHeader === undefined) throw reject(411, 'LENGTH_REQUIRED', 'Content-Length is required.')
@@ -90,65 +71,63 @@ export async function handleUpload(
 
   const assetId = newId('ast')
   const versionId = newId('ver')
-  const dir = versionDir(deps.layout, assetId, versionId)
-  // Both ids are fresh, so this whole subtree is ours to delete on failure.
-  const assetRoot = join(deps.layout.assets, assetId)
-  const tmp = join(dir, `.upload-${randomBytes(6).toString('hex')}.tmp`)
-  let meta: AssetVersionMeta
+  const key = originalKey(assetId, versionId) // fresh ids: nothing else can be stored under this key
+  let row: VersionRow
   try {
-    mkdirSync(dir, { recursive: true })
     // request.raw, not a parsed body: the scope's only content-type parser leaves the stream untouched.
-    const { bytes, sha256 } = await receiveToFile(request.raw, tmp, { declaredBytes, maxBytes })
-    await renameWithRetry(tmp, originalPath(deps.layout, assetId, versionId))
-    const now = new Date().toISOString()
-    meta = {
-      schemaVersion: 1,
-      assetId,
-      versionId,
-      boardId,
-      name,
-      declaredMimeType,
-      mimeType: initialServedMime(kind, declaredMimeType, name),
-      kind,
-      sizeBytes: bytes,
-      sha256,
-      uploadedBy: userId,
-      createdAt: now,
-      updatedAt: now,
-      status: 'queued',
-      attempts: 0,
-      error: null,
-      probe: {
-        width: null,
-        height: null,
-        pageCount: null,
-        durationMs: null,
-        videoCodec: null,
-        audioCodec: null,
-      },
-      derivatives: [],
-    }
-    writeMeta(deps.layout, meta)
-    enqueueJob(deps.layout, {
-      assetId,
-      versionId,
-      boardId,
-      profile: PREVIEW_PROFILE,
-      enqueuedAt: now,
-      attempt: 1,
+    // Stored as an opaque octet-stream: the served type is decided per request from the row.
+    const { bytes, sha256 } = await receiveToBlob(request.raw, deps.blobs, key, {
+      declaredBytes,
+      maxBytes,
+      contentType: 'application/octet-stream',
+    })
+    const now = deps.now?.() ?? new Date()
+    row = await deps.db.transaction(async (tx) => {
+      const inserted = await tx.one<VersionRow>(
+        `INSERT INTO asset_versions AS v (id, asset_id, workspace_id, board_id, name, declared_mime_type,
+           mime_type, kind, size_bytes, sha256, uploaded_by, status, attempts, probe, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'queued', 0, $12::jsonb, $13, $13)
+         RETURNING ${VERSION_COLUMNS}`,
+        [
+          versionId,
+          assetId,
+          workspaceId,
+          boardId,
+          name,
+          declaredMimeType,
+          initialServedMime(kind, declaredMimeType, name),
+          kind,
+          bytes,
+          sha256,
+          userId,
+          JSON.stringify(EMPTY_PROBE),
+          now,
+        ],
+      )
+      await tx.query(
+        `INSERT INTO preview_jobs (version_id, profile, status, attempts, run_after, created_at, updated_at)
+         VALUES ($1, $2, 'queued', 0, $3, $3, $3)`,
+        [versionId, PREVIEW_PROFILE, now],
+      )
+      return inserted
     })
   } catch (e) {
-    // Windows keeps a deleted-but-open file in its directory until the handle closes: retry.
-    await rm(assetRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
+    await deleteQuietly(deps.blobs, [key], (_k, err) =>
+      // The route pattern only; the key names ids, not user data, but keys are not logged either.
+      request.log.error({ err: errInfo(err), route: request.routeOptions.url }, 'upload cleanup failed'),
+    )
     if (e instanceof ReceiveError) {
       if (e.reason === 'TOO_LARGE') throw tooLarge()
-      throw reject(400, 'UPLOAD_INCOMPLETE', 'The upload ended early.')
-    }
-    const code = (e as NodeJS.ErrnoException).code
-    if (request.raw.destroyed || code === 'ECONNRESET' || code === 'ERR_STREAM_PREMATURE_CLOSE') {
+      if (e.reason === 'INCOMPLETE') throw reject(400, 'UPLOAD_INCOMPLETE', 'The upload ended early.')
       throw reject(400, 'UPLOAD_ABORTED', 'The upload was interrupted.') // nobody is listening; for the log
     }
-    throw e // disk errors etc.: a 500, logged by the error handler
+    throw e // storage or database errors: a 500, logged by the error handler
   }
-  return sendJson(reply, 201, meta)
+  return sendJson(reply, 201, toMeta(row, []))
+}
+
+/** Name/message/code only: driver and fetch errors can carry statement parameters or URLs. */
+export function errInfo(err: unknown) {
+  const e = err as { name?: unknown; message?: unknown; code?: unknown } | null
+  return { name: e?.name, message: e?.message, code: e?.code }
 }

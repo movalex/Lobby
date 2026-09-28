@@ -1,7 +1,18 @@
-# Draftroom preview worker (thumbnails, PDF pages, video posters) as its own process. It needs the
-# SAME DRAFTROOM_DATA_DIR as the API (M0/M1 file store = local disk), so on Render it only becomes a
-# separate background worker once files move to object storage (milestone 3); until then Render staging
-# runs it inside docker/api-worker.Dockerfile. Use this image where a volume can be shared.
+# Draftroom preview worker (thumbnails, PDF pages, video posters): the HTTP worker of
+# docs/M3-STORAGE-CONTRACTS.md §5. It claims jobs from the API, downloads the original from a presigned
+# URL into a temp file, renders derivatives, uploads them to presigned URLs and reports back.
+# Runs the same on Render (optional background worker in render.yaml), on the NAS
+# (deploy/nas/README.md) or next to a local API.
+#
+# Holds NO database, storage or session credentials and needs NO data directory or volume. Required
+# env: DRAFTROOM_API_URL and DRAFTROOM_WORKER_TOKEN. Optional: WORKER_ID (default: the hostname),
+# WORKER_CONCURRENCY, WORKER_POLL_MS, WORKER_PDF_HEAP_MB, WORKER_TMP_DIR, FFMPEG_PATH, FFPROBE_PATH, ...
+# (see .env.example). Temp files go to WORKER_TMP_DIR (default /tmp): budget >= 1 GB per concurrent job
+# (a 500 MB video original, its derivatives, headroom). Render's /tmp is reportedly capped at 2 GB.
+#
+# Starts directly as the unprivileged `node` user (uid/gid 1000) with no root phase, so it runs under
+# `cap_drop: ALL` + `no-new-privileges` (docker/entrypoint.sh's root phase would need CAP_CHOWN and
+# CAP_SETUID/SETGID, which is why this image does not use it).
 # Build from the repository root:
 #   docker build -f docker/worker.Dockerfile -t draftroom-worker .
 
@@ -33,14 +44,15 @@ FROM base
 RUN apt-get update \
   && apt-get install -y --no-install-recommends tini ffmpeg \
   && rm -rf /var/lib/apt/lists/* \
-  && command -v setpriv && command -v ffmpeg && command -v ffprobe
+  && command -v ffmpeg && command -v ffprobe
 ENV NODE_ENV=production
 WORKDIR /app
 COPY --from=deps /app /app
-# Sources only; tests, fixtures scripts, dev.env and node_modules are excluded by /.dockerignore.
+# Sources only; tests, fixture scripts, dev.env and node_modules are excluded by /.dockerignore.
+# Root-owned, so the worker cannot modify its own code; it writes only to /tmp (HOME is /home/node).
 COPY packages/ packages/
 COPY apps/worker/ apps/worker/
-COPY docker/entrypoint.sh /usr/local/bin/draftroom-entrypoint
-RUN chmod 0755 /usr/local/bin/draftroom-entrypoint
-ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/draftroom-entrypoint"]
+USER node
+ENTRYPOINT ["/usr/bin/tini", "--"]
+# Native type stripping (Node 24): the TypeScript sources run as-is, no build step.
 CMD ["node", "apps/worker/src/worker.ts"]

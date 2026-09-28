@@ -1,4 +1,5 @@
-// API environment (docs/M1-CONTRACTS.md §1, docs/FEATURES-M2-CONTRACTS.md "platform", docs/DEPLOY.md).
+// API environment (docs/M1-CONTRACTS.md §1, docs/FEATURES-M2-CONTRACTS.md "platform", docs/DEPLOY.md,
+// docs/M3-STORAGE-CONTRACTS.md §6 blob store + worker token).
 // Refuses to produce a config for an unsafe combination: development sign-in or development secrets
 // under NODE_ENV=production, and (production) loopback defaults that would silently break the api <-> sync
 // private channel (access pushes; sync's periodic re-checks fail OPEN, so revocation would not apply).
@@ -16,6 +17,22 @@ export type AuthProviderId = 'dev' | 'clerk'
  * trusted proxy addresses/CIDRs/presets, or a hop count as a function (see `TRUST_PROXY` in .env.example).
  */
 export type TrustProxy = boolean | string[] | ((address: string, hop: number) => boolean)
+
+/**
+ * Where uploaded files live (docs/M3-STORAGE-CONTRACTS.md §1, §6). `fs`: a local directory (dev, e2e,
+ * single-host deployments with a volume). `r2`: a Cloudflare R2 bucket (Render: the api has no disk).
+ */
+export type BlobStoreConfig =
+  | { kind: 'fs'; root: string }
+  | {
+      kind: 'r2'
+      accountId: string
+      accessKeyId: string
+      secretAccessKey: string
+      bucket: string
+      /** Override of https://<account>.r2.cloudflarestorage.com (e.g. a jurisdiction endpoint); null = default. */
+      endpoint: string | null
+    }
 
 export interface ApiConfig {
   production: boolean
@@ -38,6 +55,14 @@ export interface ApiConfig {
   syncInternalUrl: string
   /** How `req.ip` (and so every per-IP rate limit) is derived behind reverse proxies. */
   trustProxy: TrustProxy
+  /** DRAFTROOM_BLOB_STORE and R2_*: where originals and derivatives are stored. */
+  blobStore: BlobStoreConfig
+  /**
+   * DRAFTROOM_WORKER_TOKEN: the Bearer token preview workers present on /api/worker/* (≥ 32 chars; the
+   * dev placeholder is refused in production). A capability to read queued originals and write
+   * derivatives, nothing else.
+   */
+  workerToken: string
 }
 
 type Env = Record<string, string | undefined>
@@ -167,6 +192,67 @@ export function parseTrustProxy(raw: string | undefined): TrustProxy {
   return entries
 }
 
+const R2_ACCOUNT_RE = /^[0-9a-f]{32}$/
+// S3/R2 bucket names: 3-63 lowercase letters, digits and hyphens, starting and ending alphanumeric.
+const R2_BUCKET_RE = /^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/
+// Credentials are opaque to us; this only rejects obvious paste mistakes (spaces, quotes, newlines).
+const CREDENTIAL_RE = /^[A-Za-z0-9+/=_-]{16,256}$/
+
+/**
+ * DRAFTROOM_BLOB_STORE=fs|r2. Default `fs` (`${DRAFTROOM_DATA_DIR}/blobs`) outside production; in
+ * production the choice must be explicit, because a silent local-disk default on a host without a
+ * persistent disk (Render's api has none) loses every upload on the next deploy. Error messages name
+ * variables, never their values.
+ */
+export function parseBlobStore(env: Env, dataDir: string, production: boolean): BlobStoreConfig {
+  const raw = read(env, 'DRAFTROOM_BLOB_STORE')
+  if (raw === undefined && production)
+    throw new Error(
+      'DRAFTROOM_BLOB_STORE is required when NODE_ENV=production (r2, or fs with a persistent disk)',
+    )
+  const kind = raw ?? 'fs'
+  if (kind === 'fs') return { kind: 'fs', root: join(dataDir, 'blobs') }
+  if (kind !== 'r2') throw new Error('DRAFTROOM_BLOB_STORE must be fs or r2')
+  const missing = ['R2_ACCOUNT_ID', 'R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY', 'R2_BUCKET'].filter(
+    (n) => read(env, n) === undefined,
+  )
+  if (missing.length) throw new Error(`DRAFTROOM_BLOB_STORE=r2 requires ${missing.join(', ')}`)
+  const accountId = read(env, 'R2_ACCOUNT_ID') ?? ''
+  const accessKeyId = read(env, 'R2_ACCESS_KEY_ID') ?? ''
+  const secretAccessKey = read(env, 'R2_SECRET_ACCESS_KEY') ?? ''
+  const bucket = read(env, 'R2_BUCKET') ?? ''
+  if (!R2_ACCOUNT_RE.test(accountId)) throw new Error('R2_ACCOUNT_ID must be the 32-character hex account id')
+  if (!CREDENTIAL_RE.test(accessKeyId)) throw new Error('R2_ACCESS_KEY_ID is malformed')
+  if (!CREDENTIAL_RE.test(secretAccessKey)) throw new Error('R2_SECRET_ACCESS_KEY is malformed')
+  if (accessKeyId === secretAccessKey)
+    throw new Error('R2_ACCESS_KEY_ID and R2_SECRET_ACCESS_KEY must differ')
+  if (!R2_BUCKET_RE.test(bucket) || bucket.includes('--'))
+    throw new Error('R2_BUCKET must be a valid bucket name (3-63 lowercase letters, digits and hyphens)')
+  let endpoint: string | null = null
+  const endpointRaw = read(env, 'R2_ENDPOINT')
+  if (endpointRaw !== undefined) {
+    let url: URL
+    try {
+      url = new URL(endpointRaw)
+    } catch {
+      throw new Error('R2_ENDPOINT must be an absolute https URL')
+    }
+    if (
+      url.protocol !== 'https:' ||
+      url.pathname !== '/' ||
+      url.search ||
+      url.hash ||
+      url.username ||
+      url.password
+    )
+      throw new Error(
+        'R2_ENDPOINT must be an https origin (scheme://host[:port]) without credentials or path',
+      )
+    endpoint = url.origin
+  }
+  return { kind: 'r2', accountId, accessKeyId, secretAccessKey, bucket, endpoint }
+}
+
 /** Parses and validates the API environment. Throws an operator-facing message on bad input. */
 export function loadConfig(env: Env = process.env): ApiConfig {
   const production = env.NODE_ENV === 'production'
@@ -223,6 +309,12 @@ export function loadConfig(env: Env = process.env): ApiConfig {
   // Separate keys: whoever can mint tickets must not also be able to call internal endpoints.
   if (ticketSecret === internalSecret)
     throw new Error('DRAFTROOM_TICKET_SECRET and DRAFTROOM_INTERNAL_SECRET must differ')
+  // Workers run on other machines (the NAS): their token must not also mint tickets or call sync.
+  const workerToken = checkSecret('DRAFTROOM_WORKER_TOKEN', read(env, 'DRAFTROOM_WORKER_TOKEN'), production)
+  if (workerToken === ticketSecret || workerToken === internalSecret)
+    throw new Error(
+      'DRAFTROOM_WORKER_TOKEN must differ from DRAFTROOM_TICKET_SECRET and DRAFTROOM_INTERNAL_SECRET',
+    )
 
   const dataDir = resolveDataDir(env)
   return {
@@ -240,5 +332,7 @@ export function loadConfig(env: Env = process.env): ApiConfig {
     internalSecret,
     syncInternalUrl,
     trustProxy: parseTrustProxy(env.TRUST_PROXY),
+    blobStore: parseBlobStore(env, dataDir, production),
+    workerToken,
   }
 }

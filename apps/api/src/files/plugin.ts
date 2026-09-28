@@ -1,5 +1,4 @@
 import type { IncomingMessage } from 'node:http'
-import { ensureLayout } from '@draftroom/dev-assets'
 import type { FastifyInstance, HTTPMethods } from 'fastify'
 import type { FilesDeps } from './deps.ts'
 import { fileErrorHandler, HttpError } from './respond.ts'
@@ -28,11 +27,10 @@ const READ: HTTPMethods[] = ['GET', 'HEAD']
 
 /** Board-authorized file routes. Register without a prefix: the paths are absolute. */
 export async function filesPlugin(app: FastifyInstance, deps: FilesDeps): Promise<void> {
-  ensureLayout(deps.layout) // idempotent; the upload writes into assets/ and jobs/queued/
   // A context of its own even when called directly instead of via app.register(): the parser and
   // error-handler changes below must never leak into the rest of the API.
   app.register(async (scope) => {
-    // Uploads are streamed to disk by the handler. Fastify's built-in application/json and text/plain
+    // Uploads are streamed to the blob store by the handler. Fastify's built-in application/json and text/plain
     // parsers, and any the host adds, would buffer the body under bodyLimit (1 MiB by default) and
     // consume the stream. So this scope has exactly one parser, a catch-all that reads nothing. A
     // parser without parseAs gets no bodyLimit, so the per-kind limits in upload.ts are the only cap.
@@ -40,7 +38,7 @@ export async function filesPlugin(app: FastifyInstance, deps: FilesDeps): Promis
     scope.addContentTypeParser('*', (_request, _payload, done) => done(null))
     scope.setErrorHandler(fileErrorHandler)
 
-    // close() must neither hang on a half-sent upload nor return before its partial files are gone.
+    // close() must neither hang on a half-sent upload nor return before its partial blobs are gone.
     const uploads = new Map<IncomingMessage, Promise<unknown>>()
     scope.addHook('preClose', async () => {
       for (const raw of uploads.keys()) raw.destroy()

@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, statSync, utimesSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
@@ -13,7 +13,6 @@ import {
   versionDir,
 } from '@draftroom/dev-assets'
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
-import { startWorker } from '../src/loop.ts'
 import {
   cleanupLayouts,
   derivativeFiles,
@@ -23,7 +22,6 @@ import {
   metaOf,
   processNext,
   tempLayout,
-  waitFor,
 } from './helpers.ts'
 
 const HANG = fileURLToPath(new URL('./children/hang-child.ts', import.meta.url))
@@ -178,87 +176,9 @@ describe('crash safety', () => {
       code: 'INTERNAL',
     })
   })
-
-  it('a claim abandoned by a crashed worker (stale mtime) is requeued and completed by the next loop', async () => {
-    fresh()
-    const i = ingest(l, 'image.png', { mimeType: 'image/png' })
-    const dead = claimNextJob(l)
-    if (!dead) throw new Error('no claim')
-    updateMeta(l, i.meta.assetId, i.meta.versionId, (m) => ({ ...m, status: 'processing', attempts: 1 }))
-    const old = new Date(Date.now() - LIMITS.staleProcessingMs - 5_000)
-    utimesSync(dead.path, old, old)
-    const outcomes: string[] = []
-    const w = startWorker(l, { pollMs: 50, onOutcome: (_v, o) => outcomes.push(o.result) })
-    try {
-      await waitFor(() => metaOf(l, i).status === 'ready', 30_000, 'requeued job to finish')
-    } finally {
-      await w.stop()
-    }
-    expect(outcomes).toEqual(['done'])
-    expect(metaOf(l, i).attempts).toBe(2)
-    expect(readJob(l, 'done', i.meta.versionId).attempt).toBe(2)
-    expect(jobsIn(l, 'processing')).toEqual([])
-  })
-
-  it('a live job is heartbeated (not stolen as stale) and stop(0) kills it and releases it to the queue', async () => {
-    fresh()
-    const i = ingest(l, 'document.pdf', { mimeType: 'application/pdf' })
-    const logs: string[] = []
-    const w = startWorker(l, {
-      pollMs: 50,
-      requeueEveryMs: 100,
-      staleMs: 1_000, // far below the job's runtime: only the heartbeat keeps the claim fresh
-      heartbeatMs: 200,
-      pdfChildPath: HANG,
-      pdfTimeoutMs: 60_000,
-      log: (s) => logs.push(s),
-    })
-    const pidFile = join(versionDir(l, i.meta.assetId, i.meta.versionId), 'child.pid')
-    await waitFor(() => w.currentJob() === i.meta.versionId, 10_000, 'claim')
-    await waitFor(
-      () => {
-        try {
-          return statSync(pidFile).size > 0
-        } catch {
-          return false
-        }
-      },
-      10_000,
-      'child start',
-    )
-    const claimPath = join(l.jobs.processing, `${i.meta.versionId}.json`)
-    const m0 = statSync(claimPath).mtimeMs
-    await new Promise((r) => setTimeout(r, 2_500))
-    expect(statSync(claimPath).mtimeMs).toBeGreaterThan(m0) // heartbeat
-    expect(jobsIn(l, 'queued')).toEqual([]) // not requeued despite staleMs 1 s
-    expect(logs.some((s) => s.includes('requeued'))).toBe(false)
-    const t0 = Date.now()
-    await w.stop(0)
-    expect(Date.now() - t0).toBeLessThan(5_000)
-    expect(alive(Number(readFileSync(pidFile, 'utf8')))).toBe(false)
-    expect(jobsIn(l, 'processing')).toEqual([])
-    expect(readJob(l, 'queued', i.meta.versionId).attempt).toBe(1)
-    expect(metaOf(l, i)).toMatchObject({ status: 'queued', attempts: 0, error: null })
-    expect(derivativeFiles(l, i)).toEqual([])
-  })
-
-  it('stop(grace) lets the current job finish and claims nothing new', async () => {
-    fresh()
-    const pdf = ingest(l, 'document.pdf', { mimeType: 'application/pdf' })
-    const img = ingest(l, 'image.png', { mimeType: 'image/png' })
-    // Make the PDF the oldest queued job so it is claimed first.
-    const older = new Date(Date.now() - 60_000)
-    utimesSync(join(l.jobs.queued, `${pdf.meta.versionId}.json`), older, older)
-    const w = startWorker(l, { pollMs: 50 })
-    await waitFor(() => w.currentJob() === pdf.meta.versionId, 10_000, 'pdf claim')
-    await w.stop(30_000)
-    expect(metaOf(l, pdf).status).toBe('ready')
-    expect(metaOf(l, img).status).toBe('queued')
-    expect(jobsIn(l, 'queued')).toEqual([`${img.meta.versionId}.json`])
-  })
 })
 
 afterEach(() => {
-  // Nothing may be left running between tests (stop() awaited above); this guards against leaks.
+  // No claim may be left behind in the local queue by any path through processJob().
   expect(jobsIn(l, 'processing')).toEqual([])
 })

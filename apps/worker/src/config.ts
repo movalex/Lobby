@@ -12,7 +12,8 @@ export const PREVIEW = {
   displayQuality: 82,
   pageQuality: 82,
   sharpTimeoutSeconds: 20,
-  pdfChildHeapMb: 512,
+  /** Default V8 heap cap of the PDF child (--max-old-space-size); WORKER_PDF_HEAP_MB overrides it. */
+  pdfChildHeapMb: 384,
   pdfEmbeddedImagePixels: 100_000_000,
   probeTimeoutMs: 15_000,
   posterTimeoutMs: 30_000,
@@ -23,9 +24,25 @@ export const PREVIEW = {
 } as const
 
 export const WORKER = {
-  pollMs: 500,
-  requeueEveryMs: 10_000,
-  /** Contract: heartbeat at most every 5 s; staleProcessingMs (120 s) is far above this. */
-  heartbeatMs: 2_000,
+  /** Idle poll (docs/M3-STORAGE-CONTRACTS.md §5): doubles while idle, with jitter, up to pollMaxMs. */
+  pollMs: 2_000,
+  pollMaxMs: 15_000,
+  concurrency: 1,
+  /** Remote lease heartbeat: every leaseMs/4, never more than 30 s apart (contract: ≤ 30 s). */
+  heartbeatMaxMs: 30_000,
+  heartbeatMinMs: 250,
+  /** Touch of the job's claim file inside its temporary local layout (processJob.ts). */
+  localTouchMs: 2_000,
   shutdownGraceMs: 10_000,
+  /** One /api/worker/* JSON call (claim, heartbeat, reserve, complete, retry). */
+  requestTimeoutMs: 15_000,
+  /** Download of the original: no bytes for this long aborts it... */
+  downloadStallMs: 30_000,
+  /** ...and the whole transfer may take 60 s plus 1 s per MB (500 MB video: about 9 minutes). */
+  downloadBaseMs: 60_000,
+  downloadMsPerMb: 1_000,
+  /** One derivative PUT (derivatives are a few MB at most). */
+  uploadTimeoutMs: 60_000,
+  /** Leftover job directories (a crashed process) older than this are removed at startup. */
+  tmpSweepAgeMs: 60 * 60_000,
 } as const

@@ -1,21 +1,24 @@
 // Boundary between the file routes (apps/api/src/files/**) and the rest of the API.
 // The API core supplies `authorize`; the file routes never read sessions or ACL tables themselves.
+// Metadata lives in Postgres (packages/db 0007_assets) and bytes in the blob store (M3 §2–§3).
 
-import type { DataLayout } from '@draftroom/dev-assets'
+import type { Db } from '@draftroom/db'
 import type { FastifyRequest } from 'fastify'
+import type { BlobStore } from './blobs.ts'
 
 export type FileAction = 'view' | 'edit'
 
 export type FileAuthorization =
-  | { ok: true; userId: string }
+  /** `workspaceId`: the board's workspace (a new upload's row carries it). */
+  | { ok: true; userId: string; workspaceId: string }
   /** 401 = not signed in; 404 = cannot view the board (never reveal it exists); 403 = can view but not edit. */
   | { ok: false; status: 401 | 403 | 404 }
 
-/** A version whose meta.json names another board than the one in the request. */
+/** A version whose row names another board than the one in the request. */
 export interface FileAssetRef {
   assetId: string
   versionId: string
-  /** meta.boardId: the board the version was uploaded to. */
+  /** asset_versions.board_id: the board the version was uploaded to. */
   ownerBoardId: string
 }
 
@@ -30,6 +33,9 @@ export interface FileAuthorizer {
 }
 
 export interface FilesDeps {
-  layout: DataLayout
+  db: Db
+  blobs: BlobStore
   authorize: FileAuthorizer
+  /** Clock for row timestamps (tests); default `new Date()`. */
+  now?: () => Date
 }

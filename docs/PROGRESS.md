@@ -82,9 +82,28 @@ Full report: [`docs/REVIEW-2026-09-27.md`](REVIEW-2026-09-27.md) (verdicts, perf
 
 Checks: lint 0 errors / 0 warnings (538 files); typecheck 13 projects; vitest 1,443 passed / 1 skipped (142 files); Playwright **152/152 in 9.2 min, twice in a row** on the default ports.
 
+## Milestone 3 — storage (object store, assets in Postgres, remote preview workers): COMPLETE locally (2026-09-27)
+
+Contract: [`docs/M3-STORAGE-CONTRACTS.md`](M3-STORAGE-CONTRACTS.md) (DEVIATION notes inline; §8 "As built"). Live-bucket evidence and memory: [`docs/DEPLOY.md`](DEPLOY.md), "Milestone 3 integration: live R2 from the dev PC".
+
+| Gate | Status | Evidence |
+|---|---|---|
+| Blob store: fs + R2, streaming, Range, presigned GET/PUT | done | `packages/blob-store/test` against fs, against a fake S3 that re-checks SigV4 signatures, and (opt-in) against live R2: 25 tests |
+| Asset metadata and job queue in Postgres | done | `packages/db/migrations/0007_assets.sql`; `apps/api/test/files/*`, `features/history/assets-db.test.ts` |
+| Upload streams to the store; file routes proxy from it (Range, 206/416, every M0 header) | done | `apps/api/test/files/streaming.test.ts` (200 MiB, retained memory < 16 MiB); live R2 scripted run (59/59 checks) |
+| Worker protocol: claim, leases, heartbeat, derivatives, idempotent complete, retry | done; the real-Postgres `SKIP LOCKED` test was **not run** (no Postgres here) | `apps/api/test/worker/*` (PGlite); `skip-locked.pg.test.ts` needs `DRAFTROOM_TEST_DATABASE_URL` |
+| Remote worker over HTTP, no database or storage credentials | done | `apps/worker/test/remote.test.ts`, `transfer.test.ts`, `process.test.ts` |
+| `pnpm dev` and e2e wired to the new flow | done | `e2e/tests/support/stack.ts`; a `pnpm dev` check from a scratch data dir |
+| Live R2 end to end (browser suite + scripted uploads) | done locally | files suite 8/8 on `E2E_PORT_BASE=6500`; every object deleted, and the bucket lists 0 objects |
+| api memory fits the 512 MB plan | measured locally: working set **+21 MiB** during a 200 MiB upload and **+35 MiB** during its download; UNVERIFIED on Render | DEPLOY.md evidence (PGlite alone peaks at 0.8–1.1 GB at startup, so `DATABASE_URL` is required there) |
+| Render Blueprint without an api disk; NAS worker deploy | written and schema-validated; **not deployed**, images never built (no Docker here) | `render.yaml`, `deploy/nas/`, DEPLOY.md |
+
+Checks: lint 0 errors / 0 warnings (581 files); typecheck 14 projects; vitest 1,628 passed / 5 skipped (the opt-in live R2 tests, the real-Postgres test and the POSIX-only SIGINT test); opt-in live R2 tests 26/26 with `DRAFTROOM_LIVE_R2=1`; Playwright **152/152** on three full runs on the default ports (9.8–9.9 min each; the last two on the final code).
+
 ## Current state (2026-09-27)
 
-- **Built and verified locally**: milestones 0 and 1; the Miro-style feature set (canvas UX, comments, history, present/export, workshops, dashboard/sharing); and the persona-review fixes. The browser suite has 152 tests, and the unit, API and protocol suites have 1,443.
+- **Built and verified locally**: milestones 0, 1 and 3 (storage); the Miro-style feature set (canvas UX, comments, history, present/export, workshops, dashboard/sharing); and the persona-review fixes. The browser suite has 152 tests, and the unit, API and protocol suites have 1,628.
+- **Storage (milestone 3)**: files live in a blob store (a local directory in dev and e2e, Cloudflare R2 on staging), metadata and the preview queue in Postgres, and preview workers are HTTP clients that can run anywhere with only a token. The live-bucket path was proven from the dev PC; Render and the NAS worker are not deployed.
 - **Not built** (top gaps for a Miro user, in priority order; details in the review §4):
   1. name-only guests;
   2. private or anonymous brainstorming;
@@ -94,8 +113,8 @@ Checks: lint 0 errors / 0 warnings (538 files); typecheck 13 projects; vitest 1,
   6. reactions, +1 and raise hand, and a presenter session;
   7. phone cold open and dark mode;
   8. guest export permission, start view, and thumbnails.
-- **Unmeasured**: a real WAN, the agreed laptop, iPad/Safari, Firefox, and phone frame rate.
-- **Deploy prerequisites unchanged**: Clerk keys, a tldraw license key for the host, and a verified Render deployment (docs/DEPLOY.md). Nothing is deployed.
+- **Unmeasured**: a real WAN, the agreed laptop, iPad/Safari, Firefox, and phone frame rate; the api's memory on Render (Linux, real Postgres); `FOR UPDATE SKIP LOCKED` contention on real Postgres.
+- **Deploy prerequisites**: Clerk keys, a tldraw license key for the host, and a verified Render deployment (docs/DEPLOY.md). Nothing is deployed. Also still to do: build the api, sync and worker images (no Docker on the dev PC); deploy the NAS worker (`deploy/nas/README.md`; create its `.env.worker`); and on the first Blueprint sync, check for the old api disk and delete it.
 
 ## Log
 
@@ -145,3 +164,23 @@ Checks: lint 0 errors / 0 warnings (538 files); typecheck 13 projects; vitest 1,
   - `AuditAction` includes `invitation.extend` (cast removed).
 
   pnpm lint/typecheck/test green; e2e 152/152 twice in a row (9.2 min each). Re-measured on the final code: typical open 1.82 s cold, heavy open 3.36 s, heavy pan 26–32 fps at fit with the minimap closed; 20 sessions × 10 min converged with 0 of 866 acknowledged edits missing, and browser edit visibility is p95 283 ms (was 327 ms; tabs zoomed to one frame 209–216 ms), still above the 250 ms gate. Wrote docs/REVIEW-2026-09-27.md and the §3 persona-fix subsection.
+- Milestone 3 (storage), built by four owners against docs/M3-STORAGE-CONTRACTS.md:
+  - **blob-store**: `packages/blob-store` (fs + R2 via aws4fetch). It found that Node's `fetch` keeps a copy of a streamed request body unless `redirect: 'error'` is set.
+  - **api-assets**: migration `0007_assets`, uploads streamed to the store, file routes proxied from it, `/api/worker/*`, and checkpoint bodies moved into the store.
+  - **worker-remote**: an HTTP-mode worker with leases, heartbeats, release on shutdown and bounded downloads, plus `deploy/nas/`.
+  - **deploy-config**: `render.yaml` with no api disk on `0.5c-512mb`, the worker token in its own group, the co-located api+worker image retired, and DEPLOY.md rewritten.
+- M3 integration:
+  - wired the e2e stack: the worker runs in HTTP mode with a random per-stack token shared only with the api, keeps its temp dir inside the stack, and the stack strips credential variables; `E2E_BLOB_STORE=r2` is opt-in;
+  - `pnpm dev` checked end to end from a scratch data dir, and the api's dev watcher now also watches `packages/blob-store/src`;
+  - `FeatureContext` declares `blobs`, so history no longer needs a cast;
+  - idle worker polls log at debug level (they had filled the dev log every 2 s);
+  - the blob-store live test is opt-in with `DRAFTROOM_LIVE_R2=1`, like the api's (before, it ran in every `pnpm test` on this PC);
+  - Biome ignores `.claude/`, whose nested worktree configs had broken `pnpm lint`.
+
+  Live R2 from the dev PC:
+  - files e2e suite 8/8;
+  - scripted PNG/PDF/MP4 uploads: previews ready, downloads and Range through the api;
+  - a 200 MiB upload raised the api's working set by 21 MiB, and its download by 35 MiB;
+  - all 91 objects written were deleted, the bucket lists empty, and no credential appears in any captured log.
+
+  pnpm lint/typecheck/test green (1,628 passed); e2e 152/152 on each full run.

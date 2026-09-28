@@ -1,5 +1,6 @@
 #!/bin/sh
-# Shared container entrypoint (runs as tini's child; see the Dockerfiles in this directory).
+# Container entrypoint of the api and sync images (runs as tini's child). The worker image does not use
+# it: it has no data directory and starts as `node` directly (docker/worker.Dockerfile).
 #
 # The image starts as root ONLY so this script can make DRAFTROOM_DATA_DIR writable, then it drops to
 # the unprivileged `node` user before the application starts. Why: Render mounts persistent disks

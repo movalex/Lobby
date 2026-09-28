@@ -18,6 +18,8 @@ export interface PdfOptions {
   timeoutMs?: number
   /** Test hook: a different child entry (e.g. one that hangs or crashes). */
   childPath?: string
+  /** V8 heap cap of the child in MB (WORKER_PDF_HEAP_MB); default PREVIEW.pdfChildHeapMb. */
+  heapMb?: number
   signal?: AbortSignal
 }
 
@@ -41,7 +43,7 @@ export async function derivePdf(
   const timeoutMs = opts.timeoutMs ?? LIMITS.jobTimeoutMs
   const r = await run(
     process.execPath,
-    [`--max-old-space-size=${PREVIEW.pdfChildHeapMb}`, opts.childPath ?? PDF_CHILD],
+    [`--max-old-space-size=${opts.heapMb ?? PREVIEW.pdfChildHeapMb}`, opts.childPath ?? PDF_CHILD],
     { timeoutMs, maxStdoutBytes: 64 * 1024, stdin: JSON.stringify(req), signal: opts.signal },
   )
   if (r.aborted) throw new AbortedError()

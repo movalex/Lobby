@@ -1,4 +1,5 @@
-// The API process (docs/M1-CONTRACTS.md §1–§7): Fastify 5 over Postgres (PGlite or pg).
+// The API process (docs/M1-CONTRACTS.md §1–§7, docs/M3-STORAGE-CONTRACTS.md): Fastify 5 over Postgres
+// (PGlite or pg), files in the blob store (local directory or R2), preview workers over /api/worker/*.
 // createApiServer() builds a ready-to-inject app; tests use app.inject() and never bind a port.
 
 import type { AddressInfo } from 'node:net'
@@ -20,8 +21,10 @@ import { EventHub } from './events/hub.ts'
 import { registerEventRoutes } from './events/routes.ts'
 import type { FeatureContext } from './features/context.ts'
 import { registerFeatures } from './features/index.ts'
+import type { BlobStore } from './files/blobs.ts'
 import { filesPlugin } from './files/plugin.ts'
-import { createFileAuthorizer } from './files-auth.ts'
+import { openBlobStore } from './files/store.ts'
+import { boardsShowingAsset, createFileAuthorizer } from './files-auth.ts'
 import { createHttpSyncNotifier, type SyncNotifier } from './notifier.ts'
 import { registerAuthRoutes } from './routes/auth.ts'
 import { registerBoardRoutes } from './routes/boards.ts'
@@ -31,6 +34,8 @@ import { registerTicketRoutes } from './routes/tickets.ts'
 import { registerWorkspaceRoutes } from './routes/workspaces.ts'
 import { sessionUserToUser } from './serialize.ts'
 import { createHttpSyncInternalClient, type SyncInternalClient } from './sync-internal.ts'
+import type { VersionChange } from './worker/jobs.ts'
+import { WORKER_PREFIX, type WorkerDeps, workerPlugin } from './worker/routes.ts'
 
 export interface ApiDeps {
   /** A migrated-or-empty database the caller owns (it is migrated here, never closed here). */
@@ -49,11 +54,16 @@ export interface ApiDeps {
   events?: EventHub
   /** api -> sync snapshot/seed client (tests inject a fake). */
   syncInternal?: SyncInternalClient
+  /** Replaces the blob store chosen by config (tests inject fakes or a temp directory). */
+  blobs?: BlobStore
+  /** Worker route limits (tests lower them). */
+  workerRateLimit?: WorkerDeps['rateLimit']
 }
 
 export interface ApiServer {
   app: FastifyInstance
   db: Db
+  blobs: BlobStore
   /** Binds config.host:config.port; resolves with the bound port (useful with PORT=0). */
   listen(): Promise<{ host: string; port: number }>
   /** Stops accepting, finishes in-flight requests and sync notifications, closes the database if owned. */
@@ -85,7 +95,8 @@ export async function createApiServer(config: ApiConfig, deps: ApiDeps = {}): Pr
     ))
   try {
     await migrate(db)
-    return await buildServer(config, deps, provider, db, ownsDb)
+    const blobs = deps.blobs ?? openBlobStore(config.blobStore)
+    return await buildServer(config, deps, provider, db, ownsDb, blobs)
   } catch (e) {
     if (ownsDb) await db.close()
     throw e
@@ -98,6 +109,7 @@ async function buildServer(
   provider: AuthProvider,
   db: Db,
   ownsDb: boolean,
+  blobs: BlobStore,
 ): Promise<ApiServer> {
   const now = deps.now ?? (() => new Date())
   // Request logging is ours (onResponse below): route patterns only, never URLs, so invitation tokens
@@ -173,8 +185,11 @@ async function buildServer(
   })
 
   // CSRF (§4): every mutation must come from the web origin. Answered here directly, not thrown, so no
-  // route scope's error handler can reshape the refusal.
+  // route scope's error handler can reshape the refusal. The worker protocol (M3 §4) is exempt: it is
+  // not a browser route (Bearer token, cookies refused). Decided by the MATCHED route pattern, never by
+  // the raw URL, so no path spelling can borrow the exemption for another route.
   app.addHook('onRequest', async (req, reply) => {
+    if (req.routeOptions.url?.startsWith(WORKER_PREFIX)) return
     if (MUTATING.has(req.method) && req.headers.origin !== config.publicOrigin) {
       return reply.code(403).send({ error: { code: 'FORBIDDEN', message: 'Cross-origin request refused.' } })
     }
@@ -185,10 +200,14 @@ async function buildServer(
     return payload
   })
   app.addHook('onResponse', async (req, reply) => {
-    req.log.info(
+    const route = req.routeOptions.url
+    // An idle worker polls /claim every few seconds forever (204 = nothing to do): debug, not info, so
+    // `pnpm dev` and production logs are not a wall of empty polls. Claims that hand out a job stay info.
+    const idlePoll = route === `${WORKER_PREFIX}claim` && reply.statusCode === 204
+    req.log[idlePoll ? 'debug' : 'info'](
       {
         method: req.method,
-        route: req.routeOptions.url ?? '(no route)',
+        route: route ?? '(no route)',
         status: reply.statusCode,
         ms: Math.round(reply.elapsedTime),
       },
@@ -229,15 +248,44 @@ async function buildServer(
   registerMemberRoutes(app, ctx)
   registerInvitationRoutes(app, ctx)
   registerTicketRoutes(app, ctx)
-  const layout = dataLayout(config.dataDir)
-  await app.register(filesPlugin, { layout, authorize: createFileAuthorizer(db, sessions) })
+  await app.register(filesPlugin, { db, blobs, authorize: createFileAuthorizer(db, sessions), now })
+
+  const events = deps.events ?? new EventHub()
+  /** Board event 'assets.version' (M3 §4) on every board that can show the version, after commit. */
+  const onVersionChange = async (c: VersionChange) => {
+    try {
+      const boards = await boardsShowingAsset(db, c.workspaceId, {
+        assetId: c.assetId,
+        versionId: c.versionId,
+        ownerBoardId: c.boardId,
+      })
+      for (const boardId of boards)
+        events.publish(boardId, {
+          type: 'assets.version',
+          data: { assetId: c.assetId, versionId: c.versionId, status: c.status },
+        })
+    } catch (err) {
+      const e = err as { name?: unknown; message?: unknown }
+      app.log.warn({ err: { name: e?.name, message: e?.message } }, 'assets.version event not published')
+    }
+  }
+  await app.register(workerPlugin, {
+    db,
+    blobs,
+    token: config.workerToken,
+    now,
+    onVersionChange,
+    rateLimit: deps.workerRateLimit,
+  })
 
   // Liveness only (no database, no auth): for Render health checks and local tooling.
   app.get('/healthz', async (_req, reply) => reply.type('text/plain').send('ok'))
 
+  const layout = dataLayout(config.dataDir)
   const features: FeatureContext = {
     ...ctx,
-    events: deps.events ?? new EventHub(),
+    blobs,
+    events,
     sync:
       deps.syncInternal ??
       createHttpSyncInternalClient({ baseUrl: config.syncInternalUrl, secret: config.internalSecret }),
@@ -249,6 +297,7 @@ async function buildServer(
   return {
     app,
     db,
+    blobs,
     async listen() {
       await app.listen({ host: config.host, port: config.port })
       return { host: config.host, port: (app.server.address() as AddressInfo).port }

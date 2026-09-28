@@ -1,7 +1,6 @@
-import { rmSync, writeFileSync } from 'node:fs'
 import { newId } from '@draftroom/dev-assets'
 import { afterEach, describe, expect, it } from 'vitest'
-import { req, startApp, type TestApp, upload } from './helpers.ts'
+import { faultyStore, listFiles, nothingStored, req, startApp, type TestApp, upload } from './helpers.ts'
 
 let t: TestApp | undefined
 afterEach(async () => {
@@ -65,20 +64,57 @@ describe('routing', () => {
   })
 
   it('a storage failure is a generic JSON 500 without paths, logged with the route pattern only', async () => {
-    t = await startApp()
-    // assets/ replaced by a regular file: creating the version directory fails with ENOTDIR/EEXIST
-    rmSync(t.layout.assets, { recursive: true, force: true })
-    writeFileSync(t.layout.assets, 'not a directory')
-    const res = await upload(t.port, { query: '?secret=token123' })
+    // The store refuses the write (a full disk, R2 down) and, like a real store, destroys the body.
+    const failure = () =>
+      Object.assign(new Error('EACCES: permission denied, open C:\\data\\blobs\\assets\\x'), {
+        code: 'EACCES',
+      })
+    t = await startApp({ wrap: (inner) => faultyStore(inner, { put: failure }) })
+    const res = await upload(t.port, { query: '?secret=token123', body: Buffer.alloc(200_000, 1) })
     expect(res.status).toBe(500)
     expect(res.json()).toEqual({
       error: { code: 'INTERNAL', message: 'Something went wrong. Please try again.' },
     })
-    expect(res.body.toString()).not.toMatch(/[\\/]|assets/)
+    expect(res.body.toString()).not.toMatch(/[\\/]|assets|EACCES/)
     expect(t.errors).toHaveLength(1)
-    const logged = t.errors[0] as { route: string; err: unknown }
+    const logged = t.errors[0] as { route: string; err: { code: string } }
     expect(logged.route).toBe('/api/boards/:bid/assets')
+    expect(logged.err.code).toBe('EACCES')
     expect(JSON.stringify(logged)).not.toContain('token123')
-    rmSync(t.layout.assets, { force: true })
+    await nothingStored(t)
+  })
+
+  it('a failing cleanup after a failed upload is logged, and the client still gets the real error', async () => {
+    let refuse = false
+    t = await startApp({
+      wrap: (inner) =>
+        faultyStore(inner, {
+          put: () => (refuse ? new Error('R2 answered 503') : null),
+          delete: () => new Error('R2 delete failed'),
+        }),
+    })
+    refuse = true
+    const res = await upload(t.port, { body: Buffer.alloc(1000, 1) })
+    expect(res.status).toBe(500)
+    const messages = t.errors.map((e) => JSON.stringify(e))
+    expect(messages.some((m) => m.includes('R2 delete failed'))).toBe(true) // cleanup failure reported
+    expect(messages.some((m) => m.includes('R2 answered 503'))).toBe(true) // and the cause
+    expect((await t.db.one<{ n: number }>('SELECT count(*)::int AS n FROM asset_versions')).n).toBe(0)
+    expect(listFiles(t.blobRoot)).toEqual([])
+  })
+
+  it('a read failure of the store is a 500 on the file routes; the meta route still answers', async () => {
+    let failing = false
+    t = await startApp({
+      wrap: (inner) => faultyStore(inner, { get: () => (failing ? new Error('R2 unavailable') : null) }),
+    })
+    const m = (await upload(t.port, { body: Buffer.alloc(100, 2) })).json()
+    failing = true
+    const res = await req(t.port, { path: `/files/${m.assetId}/${m.versionId}/original?board=board-a` })
+    expect(res.status).toBe(500)
+    expect(res.json().error.code).toBe('INTERNAL')
+    expect(
+      (await req(t.port, { path: `/api/boards/board-a/assets/${m.assetId}/${m.versionId}` })).status,
+    ).toBe(200)
   })
 })
