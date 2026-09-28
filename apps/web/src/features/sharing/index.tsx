@@ -1,12 +1,14 @@
 // Feature module: sharing (docs/FEATURES-M2-CONTRACTS.md, dashboard-share). The board header badge
 // (PRS-03): Private / Workspace: view|edit / Link: comment · until <date>, plus a count of pending
 // access requests for owners. Clicking it opens the Share dialog (BoardPage listens for
-// `draftroom:open-share`).
+// `draftroom:open-share`). Wave 3 (export-control): ExportPolicySync keeps the board's export policy
+// (export-policy.ts) current for everything that shows export, copy and download entries.
 
 import type { ShareState } from '@draftroom/contracts'
 import { useEffect, useState } from 'react'
 import type { BoardFeature, FeatureContext } from '../types.ts'
 import { announceRemoteShareChange, openShareDialog, SHARE_CHANGED_EVENT, sharingApi } from './api.ts'
+import { boardExportState, syncExportPolicy } from './export-policy.ts'
 import { shareBadge } from './model.ts'
 import './sharing.css'
 
@@ -108,4 +110,24 @@ function BadgeIcon({ kind }: { kind: 'private' | 'workspace' | 'link' }) {
   )
 }
 
-export const sharingFeature: BoardFeature = { id: 'sharing', TopBarItem: ShareBadge }
+/**
+ * Rendered inside <Tldraw> for the whole board session: feeds the export policy store with the policy
+ * and with the role (which changes live, without remounting features).
+ */
+function ExportPolicySync({ ctx }: { ctx: FeatureContext }) {
+  const { editor, board, api, events, notify, role } = ctx
+  useEffect(
+    () => syncExportPolicy({ editor, boardId: board.id, api, events, notify }),
+    [editor, board.id, api, events, notify],
+  )
+  useEffect(() => {
+    boardExportState(board.id).role.set(role)
+  }, [board.id, role])
+  return null
+}
+
+export const sharingFeature: BoardFeature = {
+  id: 'sharing',
+  TopBarItem: ShareBadge,
+  Overlay: ExportPolicySync,
+}

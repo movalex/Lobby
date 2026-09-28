@@ -6,12 +6,21 @@
 // to it (board_asset_links, same workspace). Links are written only when B was made from content that
 // could already show the file (restore-as-new, duplicate, import); `linkedAsset` answers that second
 // question for the file routes.
+//
+// Wave 3 (docs/WAVE3-CONTRACTS.md "export-control"): on a board whose owner turned exporting off for
+// viewers, the original-file route refuses their downloads with 403 EXPORT_DISABLED, thrown here so the
+// file routes answer it as is. Media elements rendering the board (a <video>, an animated GIF) keep
+// loading, and previews and PDF pages (the derivative route) are never limited.
 
+import { EXPORT_DISABLED_CODE, EXPORT_DISABLED_MESSAGE } from '@draftroom/contracts'
 import type { Db, Queryable } from '@draftroom/db'
 import { can } from '@draftroom/permissions'
 import { loadBoardAccess } from './access.ts'
 import type { SessionStore } from './auth/session.ts'
+import { originalDownloadAllowed } from './features/export-control/policy.ts'
 import type { FileAssetRef, FileAuthorizer } from './files/deps.ts'
+import { FILE_ROUTES } from './files/plugin.ts'
+import { HttpError } from './files/respond.ts'
 
 export function createFileAuthorizer(db: Db, sessions: SessionStore): FileAuthorizer {
   const authorize: FileAuthorizer = async (req, boardId, action) => {
@@ -21,6 +30,8 @@ export function createFileAuthorizer(db: Db, sessions: SessionStore): FileAuthor
     // Same rules as the board itself: trashed boards serve nothing, archived boards are read-only.
     if (!access || !can(access.role, 'view', access.board.status)) return { ok: false, status: 404 }
     if (action === 'edit' && !can(access.role, 'edit', access.board.status)) return { ok: false, status: 403 }
+    if (req.routeOptions?.url === FILE_ROUTES.original && !(await originalDownloadAllowed(db, req, access)))
+      throw new HttpError(403, EXPORT_DISABLED_CODE, EXPORT_DISABLED_MESSAGE)
     return { ok: true, userId: user.id, workspaceId: access.board.workspace_id }
   }
   authorize.linkedAsset = async (req, boardId, asset) => {

@@ -5,7 +5,8 @@
 // default font (RETRO-21a), double-click empty canvas = new note (RETRO-21b), a hint on locked shapes
 // (F8), and the Hand tool for read-only people on touch devices (PRI-13). Second wave: arrange as grid
 // (MAK-18), select by type / keep only (MAK-17), the board menu's "Hide note authors" (FAC-07 partial)
-// and an owner-set start view (PRE-08).
+// and an owner-set start view (PRE-08). Wave 3 (export-control): copy and the menus' copy and export
+// entries follow the board's export policy (export-gate.tsx).
 
 import { DefaultFontStyle, getUserPreferences } from 'tldraw'
 import { isReadonlyRole } from '../../board/access.ts'
@@ -21,6 +22,7 @@ import {
   snapDefaultPatch,
   startToolFor,
 } from './defaults.ts'
+import { installCopyGuard } from './export-gate.tsx'
 import { FramesPanel } from './FramesPanel.tsx'
 import { FramesIcon, SearchIcon, TemplatesIcon } from './icons.tsx'
 import { installCanvasKeyboard } from './keyboard.ts'
@@ -64,6 +66,7 @@ function mount(ctx: FeatureContext): () => void {
   cleanups.push(registerBulkPaste(editor))
   cleanups.push(registerDoubleClickNote(editor))
   cleanups.push(registerLockedHint(editor))
+  cleanups.push(installCopyGuard(editor))
   const startTool = startToolFor({ coarsePointer: isCoarsePrimaryPointer(), readonly })
   if (startTool && editor.getCurrentToolId() === 'select') editor.setCurrentTool(startTool)
 

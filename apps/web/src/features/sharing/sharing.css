@@ -248,3 +248,34 @@
   display: block;
   margin-top: 6px;
 }
+
+/* Export and download (export-control): one checkbox, its honest help text, and the state for
+   people it limits. */
+.dr-sharing__policy {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  font-size: 14px;
+  font-weight: 550;
+  line-height: 1.4;
+  color: var(--dr-ink);
+  cursor: pointer;
+}
+.dr-sharing__policy input {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  margin: 1px 0 0;
+  accent-color: var(--dr-navy);
+}
+.dr-sharing__policy:has(input:disabled) {
+  cursor: default;
+  color: var(--dr-ink-2);
+}
+.dr-sharing__policy-help,
+.dr-sharing__policy-off {
+  margin-left: 28px;
+}
+.dr-share__hint.dr-sharing__policy-off {
+  color: var(--dr-warn);
+}

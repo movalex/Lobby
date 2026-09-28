@@ -20,6 +20,7 @@ import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { api, isApiError } from '../api/client.ts'
 import { useSession } from '../auth/session.tsx'
 import { announceShareChanged, SHARE_REMOTE_EVENT, sharingApi } from '../features/sharing/api.ts'
+import { ExportPolicySection } from '../features/sharing/ExportPolicySection.tsx'
 import {
   canExtend,
   daysLabel,
@@ -259,6 +260,8 @@ export function ShareDialog({
             }
           }}
         />
+
+        <ExportPolicySection boardId={board.id} role={effectiveRole} canManage={canManage} />
 
         <section className="dr-share__section" aria-labelledby="dr-share-people">
           <h3 id="dr-share-people" className="dr-share__heading">

@@ -58,6 +58,11 @@
 .dr-pv__head-actions a.dr-btn {
   text-decoration: none;
 }
+/* export-control: shown, dimmed, and a click says why (the board owner turned downloads off). */
+.dr-pv__download-off {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
 
 .dr-pv__body {
   flex: 1;

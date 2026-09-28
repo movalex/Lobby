@@ -6,6 +6,8 @@
 //  - MAK-05 "Unlock all" while the page has locked shapes on an editable board. tldraw's canvas context
 //    menu has no Unlock all (only the main menu's Edit submenu does), and a locked shape cannot be
 //    selected by a click, so once the selection is gone the context menu is where people look.
+//  - export-control (wave 3): while the board owner turned exporting off for this person, tldraw's Copy,
+//    Copy as, Export as and Download original give way to one line saying so (export-gate.tsx).
 
 import { memo } from 'react'
 import {
@@ -21,6 +23,7 @@ import {
   useValue,
 } from 'tldraw'
 import { canArrangeAsGrid } from './arrange-grid-runtime.ts'
+import { ExportOffContextMenuContent, useExportAllowed } from './export-gate.tsx'
 import {
   keepOnlyCategory,
   pageCategoryCounts,
@@ -103,10 +106,11 @@ function SelectByTypeGroup() {
 }
 
 export const DraftroomContextMenu = memo(function DraftroomContextMenu(props: TLUiContextMenuProps) {
+  const exportAllowed = useExportAllowed()
   return (
     <DefaultContextMenu {...props}>
       <ArrangeGroup />
-      <DefaultContextMenuContent />
+      {exportAllowed ? <DefaultContextMenuContent /> : <ExportOffContextMenuContent />}
       <SelectByTypeGroup />
       <UnlockAllGroup />
     </DefaultContextMenu>

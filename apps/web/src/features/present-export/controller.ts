@@ -1,7 +1,11 @@
 // One controller per editor, shared by the feature's slots (top-bar item, overlay, cursor component,
 // tldraw action overrides — the overrides are module-level and only receive the editor).
+// Wave 3 (export-control): every export entry point below checks the board's export policy first
+// (features/sharing/export-policy.ts); while the owner turned exporting off for this person they only
+// say so. Present is not an export and stays open to everyone.
 import { type Atom, atom, type Editor, type TLShape, type TLShapeId } from 'tldraw'
 import type { NoticeInput } from '../../board/board-context.ts'
+import { exportAllowed, notifyExportOff } from '../sharing/export-policy.ts'
 import { downloadBlob } from './download.ts'
 import { copyPng, renderPng, renderSvg } from './export-render.ts'
 import { exportFilename } from './filename.ts'
@@ -75,11 +79,19 @@ export function getController(editor: Editor): Controller {
       testId: 'export-error-toast',
     })
 
+  /** False (and the reason as a notice) while the board owner turned exporting off for this person. */
+  const mayExport = () => {
+    if (exportAllowed(editor)) return true
+    notifyExportOff(notify)
+    return false
+  }
+
   const controller: Controller = {
     editor,
     presenter,
     exportRequest,
     openExport(focus = 'image') {
+      if (!mayExport()) return
       exportRequest.set({ focus, seq: ++seq })
     },
     closeExport() {
@@ -96,6 +108,7 @@ export function getController(editor: Editor): Controller {
       })
     },
     async quickExport(format, scope) {
+      if (!mayExport()) return
       const { ids, qualifier } = exportTarget(editor, scope)
       if (ids.length === 0) {
         notify({ key: 'present-export', text: 'The board is empty: there is nothing to export yet.' })
@@ -114,6 +127,7 @@ export function getController(editor: Editor): Controller {
       }
     },
     copyAsPng() {
+      if (!mayExport()) return
       const { ids } = exportTarget(editor, 'selection-or-board')
       if (ids.length === 0) return
       copyPng(editor, ids).then(
