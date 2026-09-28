@@ -49,6 +49,7 @@ import type { Params } from '../../context.ts'
 import { ApiError, conflict, forbidden, notFound, parse } from '../../errors.ts'
 import { SlidingWindowLimiter } from '../../rate-limit.ts'
 import type { FeatureContext } from '../context.ts'
+import { checkpointBeforeChange } from '../history/before-change.ts'
 
 export interface PrivateNotesOptions {
   /** Draft writes (add, edit, delete) per person per minute (default 120). */
@@ -597,6 +598,7 @@ export function registerPrivateNotes(
       if (waiting.length > 0) {
         const place = ctx.sync.placeNotes?.bind(ctx.sync)
         if (!place) throw placeFailed()
+        await checkpointBeforeChange(app, marked.row.board_id, 'before_reveal') // R10: the board just before
         const body = await placementRequest(db, marked.row, waiting)
         let answer: unknown
         try {

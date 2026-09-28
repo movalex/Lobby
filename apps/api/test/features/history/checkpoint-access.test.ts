@@ -1,4 +1,5 @@
-// Previewing and deleting checkpoints (docs/WAVE4-CONTRACTS.md checkpoints-2): who may do what.
+// Listing, previewing and deleting checkpoints (docs/WAVE4-CONTRACTS.md checkpoints-2): who may do what.
+//   GET    /api/boards/:bid/snapshots   view, but never a name-only guest (DANA-05; nor saving one)
 //   GET    /api/snapshots/:sid/content  view + a workspace membership above guest
 //   DELETE /api/snapshots/:sid          the board's owners (manage_access), never a guest; audited
 // Guests of both kinds are checked: accounts whose workspace role is `guest`, and name-only guests who
@@ -107,7 +108,6 @@ describe('GET /api/snapshots/:sid/content (preview)', () => {
     }
     const viewerLink = await guestLink(bob, boardId, { role: 'viewer' })
     const sam = await joinAsGuest(api, viewerLink.url, 'Sam')
-    expect((await sam.req('GET', `/api/boards/${boardId}/snapshots`)).statusCode).toBe(200) // the list: yes
     expect((await preview(sam)).statusCode).toBe(403)
     const workshopLink = await guestLink(bob, boardId, { role: 'editor' })
     const kim = await joinAsGuest(api, workshopLink.url, 'Kim')
@@ -119,6 +119,36 @@ describe('GET /api/snapshots/:sid/content (preview)', () => {
     expect((await preview(bob)).statusCode).toBe(410)
     expect((await bob.req('POST', `/api/boards/${boardId}/trash`)).statusCode).toBe(200)
     expect((await preview(bob, autoId)).statusCode).toBe(404)
+  })
+})
+
+describe('GET/POST /api/boards/:bid/snapshots: none of it for name-only guests (DANA-05)', () => {
+  const list = (c: Caller) => c.req('GET', `/api/boards/${boardId}/snapshots`)
+
+  it('a review-link or workshop guest is refused the list and saving (403 GUEST_ACCOUNT_REQUIRED)', async () => {
+    const viewerLink = await guestLink(bob, boardId, { role: 'viewer' })
+    const sam = await joinAsGuest(api, viewerLink.url, 'Sam')
+    const refused = await list(sam)
+    expect(refused.statusCode).toBe(403)
+    expect(code(refused)).toBe('GUEST_ACCOUNT_REQUIRED')
+    expect(refused.body).not.toContain('Draft') // no checkpoint name in the answer
+    const workshopLink = await guestLink(bob, boardId, { role: 'editor' })
+    const kim = await joinAsGuest(api, workshopLink.url, 'Kim')
+    expect((await list(kim)).statusCode).toBe(403)
+    const save = await kim.req('POST', `/api/boards/${boardId}/snapshots`, { name: 'Mine' })
+    expect(save.statusCode).toBe(403)
+    expect(code(save)).toBe('GUEST_ACCOUNT_REQUIRED')
+    expect(await api.db.one('SELECT count(*)::int AS n FROM board_snapshots')).toEqual({ n: 2 })
+  })
+
+  it('people with an account still list them, workspace guests included; outsiders get 404 first', async () => {
+    for (const role of ['viewer', 'editor']) {
+      await grant(gwen, role)
+      expect((await list(gwen)).statusCode, role).toBe(200)
+    }
+    await grant(carol, 'viewer')
+    expect((await list(carol)).json().snapshots.map((s: { id: string }) => s.id)).toEqual([autoId, manualId])
+    expect((await list(dave)).statusCode).toBe(404)
   })
 })
 

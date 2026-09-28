@@ -42,6 +42,7 @@ import type { RoomSnapshotJson } from '../../sync-internal.ts'
 import type { FeatureContext } from '../context.ts'
 import { mayExport } from '../export-control/policy.ts'
 import { guestRefused } from '../guests/guard.ts'
+import { checkpointBeforeChange } from '../history/before-change.ts'
 import { AiLedger, InFlight, type InFlightLimits } from './budget.ts'
 import { aiConfigured } from './config.ts'
 import { type ChatOutcome, createOpenAiClient, type OpenAiClient } from './openai.ts'
@@ -306,6 +307,7 @@ export async function registerAi(app: FastifyInstance, ctx: FeatureContext): Pro
       'ai call',
     )
     if (!plan) throw failure
+    if (plan.action === 'themes') await checkpointBeforeChange(app, access.board.id, 'before_ai_themes') // R10
     return { ...plan, truncated: sources.truncated, budget: await budgetFor(access) } as AiResult
   }
 }

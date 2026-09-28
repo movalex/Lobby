@@ -7,7 +7,8 @@
 //                                                   the route; this listens to its answers)
 //
 // Who may do what (every check is here, server-side; the UI only mirrors it):
-//   list (index.ts)  anyone who can view the board (names, times and reasons only)
+//   list (index.ts)  anyone who can view the board (names, times and reasons only), except name-only
+//                    guests: 403 GUEST_ACCOUNT_REQUIRED (DANA-05; saving one is refused to them too)
 //   preview          view on the board AND a workspace membership above guest: the people who could
 //                    restore it as a new board anyway. Workspace guests and name-only guests get 403:
 //                    a checkpoint can hold content removed before the board was shared with them

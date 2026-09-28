@@ -5,14 +5,13 @@
 //   their own size on the link's line; the workspace picker never offers a name-only guest, and hides
 //   while someone is typed in the invite field;
 // - a workshop guest (an editor) on a board whose owner turned exporting off: limited like a viewer
-//   (SEAM-04), no "Recently deleted" (SEAM-06), and when the link is revoked, a guest screen that never
-//   offers to request access, then "Your guest access has ended" (F16);
+//   (SEAM-04), no History or "Recently deleted" (SEAM-06, DANA-05), and when the link is revoked, a
+//   guest screen that never offers to request access, then "Your guest access has ended" (F16);
 // - the invite page's "Not you?" link in the app's link colour, light and dark (F17).
 import type { BrowserContext, Page } from '@playwright/test'
 import { waitForBoard } from './support/board.ts'
 import { memberRow, openShareFromButton, shareDialog, signedInContext } from './support/dashboard-share.ts'
 import { expect, test } from './support/fixtures.ts'
-import { openHistory } from './support/history.ts'
 import { WEB_URL } from './support/ports.ts'
 
 const ORIGIN = { origin: WEB_URL }
@@ -218,9 +217,11 @@ test('a workshop guest under "editors": limited like a viewer, no Recently delet
     const deleted = await g.request.get(`/api/boards/${board}/deleted`)
     expect(deleted.status()).toBe(403)
     expect(((await deleted.json()) as { error: { code: string } }).error.code).toBe('GUEST_ACCOUNT_REQUIRED')
-    const history = await openHistory(g)
-    await expect(history.getByRole('heading', { name: 'Recently deleted' })).toHaveCount(0)
-    await expect(history.getByTestId('deleted-row')).toHaveCount(0)
+    // DANA-05: nor History at all (the rail has no entry; the checkpoint list is refused too).
+    await expect(g.getByTestId('dock-tab-comments')).toBeVisible()
+    await expect(g.getByTestId('dock-tab-history')).toHaveCount(0)
+    await expect(g.getByTestId('deleted-row')).toHaveCount(0)
+    expect((await g.request.get(`/api/boards/${board}/snapshots`)).status()).toBe(403)
 
     // F16: the link is revoked with removal. The guest sees a guest screen at once (never "ask its
     // owner again" or a request form), then "Your guest access has ended".

@@ -2,6 +2,7 @@ import type { BoardCheckpoint } from '@draftroom/contracts'
 import { describe, expect, it } from 'vitest'
 import {
   AUTOMATIC_EXPLAINED,
+  AUTOMATIC_NONE_YET,
   automaticSummary,
   checkpointAccessHint,
   checkpointMeta,
@@ -56,6 +57,9 @@ describe('the checkpoint list', () => {
       'Before restoring “Draft”',
     )
     expect(checkpointTitle(auto('before_restore', ' '))).toBe('Before a restore')
+    // R10: saved by Lobby right before a reveal and before AI regroups notes.
+    expect(checkpointTitle(auto('before_reveal'))).toBe('Before revealing private notes')
+    expect(checkpointTitle(auto('before_ai_themes'))).toBe('Before AI grouped notes into themes')
     expect(deletedCheckpointSummary(auto('hourly'))).toBe('Deleted “Hourly checkpoint”.')
   })
 
@@ -74,6 +78,11 @@ describe('the checkpoint list', () => {
       'one an hour for 2 days, one a day for 30 days and one a week for 6 months',
     )
     expect(AUTOMATIC_EXPLAINED).not.toMatch(/Draftroom/i)
+    expect(AUTOMATIC_EXPLAINED).toContain('before private notes are revealed or AI groups notes into themes')
+    // The empty list says when the first one comes (R10).
+    expect(AUTOMATIC_NONE_YET).toBe(
+      'None yet. Lobby saves one when everyone leaves, or after an hour of changes.',
+    )
   })
 })
 

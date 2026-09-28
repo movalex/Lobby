@@ -3,8 +3,9 @@
 //
 // Buckets are UTC calendar hours, days and ISO weeks (Monday to Sunday); the checkpoint a bucket keeps
 // is its newest one. By age:
-//   younger than hourlyHours  every "safety" checkpoint (made before a restore, or right after an
-//                             import), and the newest ROUTINE one (hourly, session end) of each hour.
+//   younger than hourlyHours  every "safety" checkpoint (made before a restore, a private-notes reveal
+//                             or an AI regroup, or right after an import), and the newest ROUTINE one
+//                             (hourly, session end) of each hour.
 //                             A safety checkpoint never pushes a routine one out: restoring the
 //                             session-end checkpoint of 10:05 at 10:07 saves the board first, and that
 //                             must not delete the very checkpoint being restored.
@@ -43,7 +44,12 @@ export interface RetentionItem {
 }
 
 /** Checkpoints made before a risky operation: all kept while they are in the hourly tier. */
-export const SAFETY_REASONS: ReadonlySet<string> = new Set<CheckpointReason>(['before_restore', 'import'])
+export const SAFETY_REASONS: ReadonlySet<string> = new Set<CheckpointReason>([
+  'before_restore',
+  'import',
+  'before_reveal',
+  'before_ai_themes',
+])
 const isSafety = (item: RetentionItem) => item.reason !== null && SAFETY_REASONS.has(item.reason)
 
 export const hourBucket = (t: number) => Math.floor(t / HOUR)

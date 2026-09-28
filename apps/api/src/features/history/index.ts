@@ -61,6 +61,9 @@ export const checkpointServices = new WeakMap<FastifyInstance, CheckpointService
 
 const clip = (s: string, max = 120) => (s.length > max ? `${s.slice(0, max - 1)}…` : s)
 
+const CHECKPOINTS_GUESTS =
+  'Checkpoints are for people with an account. Sign in with an account to see earlier versions of this board.'
+
 export async function registerHistory(app: FastifyInstance, ctx: FeatureContext): Promise<void> {
   const { db } = ctx
   const bodies = snapshotBodies(ctx.blobs, ctx.layout.root)
@@ -87,10 +90,19 @@ export async function registerHistory(app: FastifyInstance, ctx: FeatureContext)
 
   // ---- checkpoints -------------------------------------------------------------------------------
 
+  // Name-only guests (a client on a review link, a workshop guest) get no History at all (DANA-05):
+  // checkpoint names ("Before we hide the pricing"), who saved them and when are the team's own. 403
+  // GUEST_ACCOUNT_REQUIRED after the board checks (404 first), like "Recently deleted" below; the
+  // preview refuses them too (checkpoint-routes.ts). The web hides the History panel for them.
+  const refuseGuests = async (userId: string) => {
+    if ((await userKind(db, userId)) === 'guest') throw guestRefused(CHECKPOINTS_GUESTS)
+  }
+
   app.get('/api/boards/:bid/snapshots', async (req) => {
     const user = await ctx.requireUser(req)
     const { bid = '' } = req.params as Params
     const access = await requireBoardAction(db, bid, user.id, 'view')
+    await refuseGuests(user.id)
     const rows = await db.query<SnapshotRow>(
       `SELECT ${SNAPSHOT_COLUMNS} FROM ${SNAPSHOT_FROM}
         WHERE s.board_id = $1 AND s.workspace_id = $2
@@ -105,6 +117,7 @@ export async function registerHistory(app: FastifyInstance, ctx: FeatureContext)
     const { bid = '' } = req.params as Params
     const input = parse(CreateSnapshotInput, req.body)
     const access = await requireBoardAction(db, bid, user.id, 'edit')
+    await refuseGuests(user.id)
     const workspaceId = access.board.workspace_id
     // Only manual checkpoints count: automatic ones are bounded by retention (checkpoints.ts).
     const { n } = await db.one<{ n: number }>(

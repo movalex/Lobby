@@ -8,6 +8,7 @@ import type { BoardCheckpoint } from '@draftroom/contracts'
 import { type KeyboardEvent, useEffect, useRef, useState } from 'react'
 import {
   AUTOMATIC_EXPLAINED,
+  AUTOMATIC_NONE_YET,
   automaticSummary,
   type CheckpointPermissions,
   checkpointAccessHint,
@@ -94,7 +95,7 @@ export function CheckpointList({
         </summary>
         <p className="dr-history__hint">{AUTOMATIC_EXPLAINED}</p>
         {automatic.length === 0 ? (
-          <p className="dr-history__empty">None yet. The first one is saved when the board changes.</p>
+          <p className="dr-history__empty">{AUTOMATIC_NONE_YET}</p>
         ) : (
           <ul className="dr-history__list" aria-label="Automatic checkpoints">
             {automatic.map((c) => (

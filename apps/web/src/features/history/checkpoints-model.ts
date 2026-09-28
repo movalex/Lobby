@@ -30,6 +30,8 @@ const REASON_LABELS: Record<CheckpointReason, string> = {
   session_end: 'After an editing session',
   before_restore: 'Before a restore',
   import: 'As imported',
+  before_reveal: 'Before revealing private notes',
+  before_ai_themes: 'Before AI grouped notes into themes',
 }
 
 /** The row title: a manual checkpoint's own name; an automatic one's name says why it was made. */
@@ -99,12 +101,17 @@ const weeksOrMonths = (days: number) => (days >= 180 ? `${Math.round(days / 30.5
 /** What the automatic section explains (from CHECKPOINT_RETENTION, so the text follows the policy). */
 export const AUTOMATIC_EXPLAINED =
   'Lobby saves the board by itself every hour while it changes, when the last editor leaves, before a ' +
-  'checkpoint is restored and right after an import. It keeps one an hour for ' +
+  'checkpoint is restored, before private notes are revealed or AI groups notes into themes, and right ' +
+  'after an import. It keeps one an hour for ' +
   `${CHECKPOINT_RETENTION.hourlyHours / 24} days, one a day for ${CHECKPOINT_RETENTION.dailyDays} days and one ` +
   `a week for ${weeksOrMonths(CHECKPOINT_RETENTION.weeklyDays)}. Named checkpoints stay until an owner deletes them.`
 
 /** "Automatic (3)". */
 export const automaticSummary = (n: number) => `Automatic (${n})`
+
+/** The empty "Automatic" list: when the first one comes (R10). */
+export const AUTOMATIC_NONE_YET =
+  'None yet. Lobby saves one when everyone leaves, or after an hour of changes.'
 
 /** One line after a delete. */
 export function deletedCheckpointSummary(c: Pick<BoardCheckpoint, 'kind' | 'name' | 'reason'>): string {

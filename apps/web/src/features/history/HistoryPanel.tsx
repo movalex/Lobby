@@ -44,14 +44,20 @@ type Status = { text: string; tone: 'info' | 'error'; openBoardId?: string; open
 const message = (e: unknown, fallback: string) => (isApiError(e) ? e.message : fallback)
 
 export function HistoryPanel({ ctx }: { ctx: FeatureContext; close(): void }) {
-  const { board, role, editor, events, notify, me } = ctx
+  const { board, role, editor, events, notify, me, openPanel } = ctx
   const api = useMemo(() => historyApi(ctx.api), [ctx.api])
   const workspaceRole = me.workspaces.find((w) => w.id === board.workspaceId)?.role ?? null
   const perms = historyPermissions(role, board.status, workspaceRole)
-  // "Recently deleted" is for editors with an account (wave 3, SEAM-06): the api refuses a name-only
-  // guest (403), so it is neither shown nor fetched for one, nor before the kind is known.
+  // History is for people with an account (DANA-05): the rail never offers it to a name-only guest
+  // (index.tsx) and the api refuses them the checkpoint list (403). Nothing is fetched before the
+  // kind is known, and should the panel be open when it turns out to be a guest's, it closes.
   const kind = useUserKind()
-  const canSeeDeleted = perms.canSeeDeleted && kind === 'account'
+  const isAccount = kind === 'account'
+  useEffect(() => {
+    if (kind === 'guest') openPanel(null)
+  }, [kind, openPanel])
+  // "Recently deleted" is for editors with an account (wave 3, SEAM-06).
+  const canSeeDeleted = perms.canSeeDeleted && isAccount
   // Live: the owner can turn exporting off (or back on) while this panel is open.
   const canExport = useValue('dr-history-export', () => exportAllowedOnBoard(board.id), [board.id])
   const copy = copyActions(perms, canExport)
@@ -72,6 +78,7 @@ export function HistoryPanel({ ctx }: { ctx: FeatureContext; close(): void }) {
 
   const loadSnapshots = useCallback(
     async (signal?: AbortSignal) => {
+      if (!isAccount) return
       try {
         setSnapshots(await api.listCheckpoints(board.id, signal))
         setLoadError(null)
@@ -79,7 +86,7 @@ export function HistoryPanel({ ctx }: { ctx: FeatureContext; close(): void }) {
         if (!signal?.aborted) setLoadError(message(e, 'Checkpoints could not be loaded.'))
       }
     },
-    [api, board.id],
+    [api, board.id, isAccount],
   )
   const deletedSeq = useRef(0)
   const loadDeleted = useCallback(async () => {
@@ -274,6 +281,7 @@ export function HistoryPanel({ ctx }: { ctx: FeatureContext; close(): void }) {
 
   // ---- view ---------------------------------------------------------------------------------------
 
+  if (kind === 'guest') return null
   const now = new Date()
   return (
     <div className="dr-history" data-testid="history-panel">
