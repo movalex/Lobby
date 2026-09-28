@@ -1,4 +1,4 @@
-import { guestDisplayName, guestNameProblem } from '@draftroom/contracts'
+import { guestDisplayName, guestLabelName, guestNameProblem } from '@draftroom/contracts'
 import { describe, expect, it } from 'vitest'
 import { BOARD_ID, WS_ID } from '../api/test-fixtures.ts'
 import {
@@ -9,6 +9,7 @@ import {
   invitationSummary,
   rememberAcceptIntent,
   signInHeading,
+  splitGuestMarker,
   takeAcceptIntent,
 } from './model.ts'
 
@@ -118,6 +119,32 @@ describe('joining as a guest (wave 3)', () => {
         'Use letters, numbers, spaces and punctuation only.',
       )
     expect(guestDisplayName(' Sam ')).toBe('Sam (guest)')
+  })
+
+  it('keeps the marker in short labels: cursor names are shortened in front of "(guest)"', () => {
+    expect(guestLabelName('Sam')).toBe('Sam (guest)')
+    expect(guestLabelName('Sam Rivera')).toBe('Sam Rivera (guest)')
+    expect(guestLabelName('Chase Boyajian')).toBe('Chase B… (guest)')
+    // Wide letters, other scripts, emoji and invisible wide fillers all count as wide.
+    expect(guestLabelName('MMMMMMMMMM')).toBe('MMMMM… (guest)')
+    expect(guestLabelName('山田太郎')).toBe('山田太郎 (guest)')
+    expect(guestLabelName('山田太郎山田')).toBe('山田太郎… (guest)')
+    expect(guestLabelName(`${String.fromCodePoint(0x1f3a8)}`.repeat(5))).toBe(
+      `${String.fromCodePoint(0x1f3a8).repeat(3)}… (guest)`,
+    )
+    expect(guestLabelName(`Chase${String.fromCodePoint(0x3164).repeat(10)}x`)).toBe(
+      `Chase${String.fromCodePoint(0x3164)}… (guest)`,
+    )
+    // Zero-width characters take no room.
+    expect(guestLabelName(`Sam${String.fromCodePoint(0x200b).repeat(30)}`)).toBe(
+      `Sam${String.fromCodePoint(0x200b).repeat(30)} (guest)`,
+    )
+  })
+
+  it('splits the marker off a name so a list can cut the name instead', () => {
+    expect(splitGuestMarker('Sam Rivera (guest)')).toEqual(['Sam Rivera', ' (guest)'])
+    expect(splitGuestMarker('Bob Chen')).toEqual(['Bob Chen', null])
+    expect(splitGuestMarker(' (guest)')).toEqual([' (guest)', null])
   })
 
   it('says what others will see and explains refusals', () => {

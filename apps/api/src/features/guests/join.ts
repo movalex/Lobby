@@ -7,11 +7,12 @@
 // `dr_session` that ends at the link's expiry or after 7 days, whichever comes first (and follows the
 // link when a manager extends it: sessions.ts).
 //
-// Abuse limits: new guests per client IP (10 per 10 minutes by default), joins per signed-in guest
-// (the accept limit), and at most GUESTS_PER_LINK guests per link.
+// Abuse limits: new guests per client address (10 per 10 minutes by default; an IPv6 client counts by
+// its /64), joins per signed-in guest (the accept limit), and at most GUESTS_PER_LINK guests per link
+// (limits.ts, which accepting as a signed-in guest applies too).
 
-import { GUESTS_PER_LINK, type GuestJoined, GuestJoinInput, guestDisplayName } from '@draftroom/contracts'
-import { newId, type Queryable } from '@draftroom/db'
+import { type GuestJoined, GuestJoinInput, guestDisplayName } from '@draftroom/contracts'
+import { newId } from '@draftroom/db'
 import type { FastifyInstance } from 'fastify'
 import { isSecretToken, sha256hex } from '../../auth/session.ts'
 import { colorFor, userKind } from '../../auth/users.ts'
@@ -27,6 +28,7 @@ import {
 } from '../../routes/invitations.ts'
 import type { FeatureContext } from '../context.ts'
 import { publishSharingChanged } from '../dashboard/shared.ts'
+import { assertGuestRoomOnLink, clientAddressKey } from './limits.ts'
 import { guestCookieEnd, guestSessionEnd } from './sessions.ts'
 
 /** New guests per client IP. */
@@ -36,18 +38,6 @@ const SESSION_EXTEND_MIN_MS = 60 * 60 * 1000
 
 export const guestsNotAllowed = () =>
   new ApiError(403, 'GUESTS_NOT_ALLOWED', 'This link needs an account. Sign in to accept it.')
-
-/** Guests who joined through `invitationId`, not counting `exceptUserId`. */
-async function guestsOnLink(tx: Queryable, invitationId: string, exceptUserId: string | null) {
-  const row = await tx.one<{ n: number; mine: boolean }>(
-    `SELECT count(*) FILTER (WHERE r.user_id IS DISTINCT FROM $2::text)::int AS n,
-            coalesce(bool_or(r.user_id = $2::text), false) AS mine
-       FROM invitation_redemptions r JOIN users u ON u.id = r.user_id AND u.kind = 'guest'
-      WHERE r.invitation_id = $1`,
-    [invitationId, exceptUserId],
-  )
-  return row
-}
 
 export function registerGuestJoin(
   app: FastifyInstance,
@@ -75,7 +65,10 @@ export function registerGuestJoin(
       guestId = caller.id
     } else {
       if (input.name === undefined) throw badRequest('name: Enter your name.')
-      perIp.check(req.ip)
+      // Counted before the transaction, not after it: simultaneous requests from one address would
+      // otherwise all pass a check made before any of them committed. A refused join (a closed link,
+      // the per-link cap) counts too.
+      perIp.take(clientAddressKey(req.ip))
     }
     const callerSessionId = caller ? sessions.idOf(req) : null
 
@@ -95,12 +88,7 @@ export function registerGuestJoin(
       // grants, so it can never act on the state from before this join.
       if (guestId)
         await tx.one('SELECT id FROM users WHERE id = $1 AND kind = $2 FOR UPDATE', [guestId, 'guest'])
-      const onLink = await guestsOnLink(tx, inv.id, guestId)
-      if (!onLink.mine && onLink.n >= GUESTS_PER_LINK)
-        throw conflict(
-          'GUEST_LIMIT',
-          `This link has let in ${GUESTS_PER_LINK} guests, its limit. Ask whoever shared it for a new link.`,
-        )
+      await assertGuestRoomOnLink(tx, inv.id, guestId)
 
       let userId = guestId
       let name: string
@@ -159,7 +147,6 @@ export function registerGuestJoin(
       return
     }
     const { joined, session, cookieEnd } = result
-    if (joined.created) perIp.record(req.ip)
     if (session) {
       // Replacing a signed-in guest's shorter session: end the old one (and its streams).
       if (caller) await sessions.revoke(req)

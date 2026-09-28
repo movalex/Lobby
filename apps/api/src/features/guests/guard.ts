@@ -5,7 +5,10 @@
 // workspace member list; @draftroom/permissions) and from board roles (a viewer cannot manage people).
 // This root preHandler hook refuses, for a signed-in guest, every route that creates or hands out
 // access, whatever board role the guest was later given (a board owner can raise a guest's role):
-// creating boards, projects, invitations and links; managing people and links; requesting access.
+// creating boards, projects, invitations and links; managing people and links; requesting access;
+// moving a board between projects or changing its workspace access (PATCH /api/boards/:bid with
+// `projectId` or `visibility`: a guest editor may still rename it). HEAD requests count as the GET
+// they mirror.
 // Invitations and links are also refused inside their own routes (routes/invitations.ts,
 // features/dashboard/review-links.ts), so a renamed route cannot slip past this list.
 //
@@ -16,12 +19,12 @@
 // Registered on the root instance, so Fastify binds it to every root route at ready time (like the
 // dashboard's own root hooks). The answer is the same for every board id, so it reveals nothing.
 
-import { TransferOwnershipInput } from '@draftroom/contracts'
+import { PutMemberInput, TransferOwnershipInput } from '@draftroom/contracts'
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { isUserId, requireBoardAction } from '../../access.ts'
 import { userKind } from '../../auth/users.ts'
 import type { Params } from '../../context.ts'
-import { ApiError, conflict } from '../../errors.ts'
+import { ApiError, conflict, notFound } from '../../errors.ts'
 import type { FeatureContext } from '../context.ts'
 
 const CREATE = 'Guests can’t create boards or projects. Sign in with an account to do that.'
@@ -66,14 +69,30 @@ export const guestRefused = (message: string) => new ApiError(403, 'GUEST_ACCOUN
 
 const onlyThroughLinks = (message: string) => conflict('GUEST_ONLY_THROUGH_LINKS', message)
 
-const routeKey = (req: FastifyRequest) => `${req.method} ${req.routeOptions.url ?? ''}`
+/** Moving a board between projects: guests cannot see the workspace's projects, nor reorganise them. */
+const MOVE = 'Guests can’t move boards between projects. Sign in with an account to do that.'
+
+// Fastify answers HEAD on every GET route with the GET handler (exposeHeadRoutes): same refusal.
+const routeKey = (req: FastifyRequest) =>
+  `${req.method === 'HEAD' ? 'GET' : req.method} ${req.routeOptions.url ?? ''}`
+
+/**
+ * PATCH /api/boards/:bid is refused only for what it changes: moving the board between projects, and
+ * its workspace access (that hands out access, like a link). Renaming stays an editor's.
+ */
+function boardPatchRefusal(key: string, body: unknown): string | undefined {
+  if (key !== 'PATCH /api/boards/:bid' || typeof body !== 'object' || body === null) return undefined
+  if (Object.hasOwn(body, 'visibility')) return MANAGE
+  if (Object.hasOwn(body, 'projectId')) return MOVE
+  return undefined
+}
 
 export function registerGuestGuard(app: FastifyInstance, ctx: FeatureContext): void {
   const { db, sessions } = ctx
 
   app.addHook('preHandler', async (req) => {
     const key = routeKey(req)
-    const refused = GUEST_REFUSED_ROUTES[key]
+    const refused = GUEST_REFUSED_ROUTES[key] ?? boardPatchRefusal(key, req.body)
     const target =
       key === 'PUT /api/boards/:bid/members/:uid' || key === 'POST /api/boards/:bid/transfer-ownership'
     if (refused === undefined && !target) return
@@ -95,8 +114,10 @@ async function checkGuestTarget(ctx: FeatureContext, req: FastifyRequest, caller
   let targetId: string | undefined
   let role: unknown
   if (uid !== undefined) {
+    const parsed = PutMemberInput.safeParse(req.body)
+    if (!parsed.success) return // the route answers 400
     targetId = uid
-    role = (req.body as { role?: unknown } | undefined)?.role
+    role = parsed.data.role
   } else {
     const parsed = TransferOwnershipInput.safeParse(req.body)
     if (!parsed.success) return // the route answers 400
@@ -105,7 +126,15 @@ async function checkGuestTarget(ctx: FeatureContext, req: FastifyRequest, caller
   }
   if (!isUserId(targetId)) return
   if ((await userKind(ctx.db, targetId)) !== 'guest') return
-  await requireBoardAction(ctx.db, bid, callerId, 'manage_access')
+  const access = await requireBoardAction(ctx.db, bid, callerId, 'manage_access')
+  // A guest outside the board's workspace: 404, the routes' answer for any outsider (a guest of
+  // another workspace is none of this manager's business). Answered here rather than left to the
+  // route, so a guest who joins this workspace meanwhile is still never added this way.
+  const inWorkspace = await ctx.db.maybeOne(
+    'SELECT 1 AS ok FROM workspace_members WHERE workspace_id = $1 AND user_id = $2',
+    [access.board.workspace_id, targetId],
+  )
+  if (!inWorkspace) throw notFound()
   if (role === 'owner')
     throw onlyThroughLinks('Guests can’t own boards. Ask them to sign in with an account first.')
   const grant = await ctx.db.maybeOne(

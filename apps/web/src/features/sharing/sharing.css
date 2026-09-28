@@ -86,6 +86,21 @@
 .dr-sharing__guests .dr-share__hint {
   margin: 0 0 0 20px;
 }
+/* Wave 3 (guests): in a member row, a long guest name is cut with an ellipsis and "(guest)" stays. */
+.dr-member__name--guest {
+  display: flex;
+  min-width: 0;
+}
+.dr-member__name-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dr-member__marker,
+.dr-member__name--guest .dr-member__you {
+  flex: none;
+  white-space: pre;
+}
 .dr-sharing__guest-note {
   margin: 0;
   color: var(--dr-ink-2);

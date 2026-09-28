@@ -34,6 +34,7 @@ import {
 import { RequestAccess } from '../features/sharing/RequestAccess.tsx'
 import '../features/sharing/sharing.css'
 import { fetchBoardGuests, useIsGuest } from '../invite/guest.tsx'
+import { splitGuestMarker } from '../invite/model.ts'
 import { absoluteUrl, copyText } from '../lib/clipboard.ts'
 import { formatDateTime, formatRelativeTime } from '../lib/format.ts'
 import { initialsFor, safeColor } from '../lib/identity.ts'
@@ -1041,6 +1042,7 @@ function MemberRow({
   const [confirming, setConfirming] = useState(false)
   const [confirmingRemove, setConfirmingRemove] = useState(false)
   const { user } = member
+  const [baseName, marker] = splitGuestMarker(user.name)
   const detailed = member.grant !== undefined && member.workspaceRole !== undefined
   const detail = detailed ? (member as unknown as AccessDetail) : null
   const source = detail
@@ -1063,10 +1065,21 @@ function MemberRow({
     >
       <Avatar user={user} />
       <div className="dr-member__text">
-        <span className="dr-member__name">
-          {user.name}
-          {isSelf && <span className="dr-member__you"> (you)</span>}
-        </span>
+        {marker ? (
+          // Wave 3 (guests): a long name is cut, never the "(guest)" marker (phone widths).
+          <span className="dr-member__name dr-member__name--guest">
+            <span className="dr-member__name-text">{baseName}</span>
+            <span className="dr-member__marker" data-testid="member-guest-marker">
+              {marker}
+            </span>
+            {isSelf && <span className="dr-member__you"> (you)</span>}
+          </span>
+        ) : (
+          <span className="dr-member__name">
+            {user.name}
+            {isSelf && <span className="dr-member__you"> (you)</span>}
+          </span>
+        )}
         <span className="dr-member__sub" data-testid="member-source">
           {user.handle ? `@${user.handle}` : ''}
           {source ? `${user.handle ? ' · ' : ''}${source}` : ''}

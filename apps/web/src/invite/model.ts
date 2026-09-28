@@ -1,4 +1,4 @@
-import { InvitationGoneBody, type InvitationPreview } from '@draftroom/contracts'
+import { GUEST_NAME_SUFFIX, InvitationGoneBody, type InvitationPreview } from '@draftroom/contracts'
 
 const BOARD_ROLE: Record<string, string> = {
   owner: 'Owner',
@@ -45,6 +45,15 @@ export function invitationSummary(inv: InvitationPreview): InvitationSummary {
 export function guestJoinHint(name: string): string {
   const shown = name.trim() ? `“${name.trim()} (guest)”` : 'your name followed by “(guest)”'
   return `No account needed. People on the board see you as ${shown}. Your access ends when the link does, or when you sign out.`
+}
+
+/**
+ * A name as [the name, the guest marker] ("Sam (guest)" → ["Sam", " (guest)"]; no marker → null), so a
+ * list that cuts long names with an ellipsis can cut the name and keep the marker in view.
+ */
+export function splitGuestMarker(name: string): [string, string | null] {
+  if (name.length <= GUEST_NAME_SUFFIX.length || !name.endsWith(GUEST_NAME_SUFFIX)) return [name, null]
+  return [name.slice(0, -GUEST_NAME_SUFFIX.length), GUEST_NAME_SUFFIX]
 }
 
 /**

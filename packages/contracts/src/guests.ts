@@ -57,6 +57,55 @@ export const GuestName = z
 /** The display form of a guest's name ("Sam (guest)"). */
 export const guestDisplayName = (name: string) => `${name.trim()}${GUEST_NAME_SUFFIX}`
 
+// tldraw's cursor name tag is at most 120 px wide (108 px of 12 px text) and cuts the end off what
+// does not fit, so "Chase Boyajian (guest)" reads "Chase Boyajian (gu…": the marker, the one part
+// that must show, is what goes. The name the sync ticket carries (cursor labels, the people on the
+// board) is therefore shortened in front of the marker instead. Widths are the widest of Segoe UI,
+// Arial, Roboto and Helvetica at 12 px, rounded up (summed per character, which overestimates any
+// one font); anything outside Latin counts wide.
+
+/** Room for the name in front of " (guest)" (41 px) in a cursor label, in px of 12 px text. */
+const LABEL_NAME_PX = 108 - 41
+const ELLIPSIS_PX = 12
+
+function glyphPx(ch: string): number {
+  const cp = ch.codePointAt(0) ?? 0
+  if (cp < 0x80) {
+    if ("'ijl".includes(ch)) return 3
+    if (' !,.:;I[]`|'.includes(ch)) return 4
+    if ('"()-/frt{}'.includes(ch)) return 5
+    if ('*vxyz'.includes(ch)) return 6
+    if ('#ABEFKPSTVXYZbdgpq'.includes(ch)) return 8
+    if ('+<=>CDHNRU^w~'.includes(ch)) return 9
+    if ('&GOQ'.includes(ch)) return 10
+    if ('%Mm'.includes(ch)) return 11
+    if (ch === 'W') return 12
+    if (ch === '@') return 13
+    return 7 // digits and the remaining letters and signs
+  }
+  if (/[\p{Mn}\p{Me}\p{Cf}]/u.test(ch)) return 0 // combining marks, invisible format characters
+  if (cp >= 0xc0 && cp <= 0x24f) return 'æœÆŒ'.includes(ch) ? 12 : 9 // accented Latin letters
+  if (cp > 0xffff || /\p{Extended_Pictographic}/u.test(ch)) return 17 // emoji and other astral characters
+  return 13 // other scripts, CJK, fullwidth forms, wide blanks
+}
+
+/**
+ * A guest's name for cursor labels and the people on a board: the display form ("Sam (guest)"), with
+ * a long name shortened ("Chase B… (guest)") so the marker always fits in the label.
+ */
+export function guestLabelName(name: string): string {
+  const chars = [...name.trim()]
+  if (chars.reduce((px, ch) => px + glyphPx(ch), 0) <= LABEL_NAME_PX) return guestDisplayName(name)
+  let kept = ''
+  let used = 0
+  for (const ch of chars) {
+    used += glyphPx(ch)
+    if (used > LABEL_NAME_PX - ELLIPSIS_PX) break
+    kept += ch
+  }
+  return `${kept.trimEnd()}…${GUEST_NAME_SUFFIX}`
+}
+
 /**
  * POST /api/invitations/:token/guest. `name` is required for someone who is not signed in. A guest
  * who is already signed in (they joined through another guest link) keeps their name: the new grant

@@ -4,7 +4,7 @@
 // a commenter guest, editing as a workshop guest, their dashboard and menu, the server-side refusals,
 // and that revoking the link ends the guest's view within seconds (then their session).
 import type { Browser, BrowserContext, Page } from '@playwright/test'
-import { edit, read, waitForBoard } from './support/board.ts'
+import { edit, read, toScreen, waitForBoard } from './support/board.ts'
 import {
   commentAtScreenPoint,
   emptyCanvasPoint,
@@ -250,6 +250,67 @@ test('a workshop guest (dark theme) can edit, sees only their boards with the gu
         { timeout: 15_000 },
       )
       .toBe(false)
+  } finally {
+    await Promise.all(contexts.map((c) => c.close()))
+  }
+})
+
+test('a long guest name keeps its "(guest)" marker: on the cursor label and in the Share dialog on a phone', async ({
+  browser,
+  board,
+}, testInfo) => {
+  const alice = await signedInContext(browser, 'alice')
+  const contexts: BrowserContext[] = [alice.context]
+  try {
+    const a = alice.page
+    const link = await createGuestLink(a, board, 'review')
+    const name = 'Alexandra Richardson-Wells'
+    const guest = await joinAsGuest(browser, link, name)
+    contexts.push(guest.context)
+    const g = guest.page
+
+    // The guest moves their pointer over the canvas: alice sees the cursor label, whose text is
+    // shortened in front of the marker so the label (at most 120 px wide) never cuts "(guest)".
+    await waitForBoard(a)
+    const label = a.locator('.tl-collaborator__cursor .tl-nametag').filter({ hasText: '(guest)' })
+    await expect
+      .poll(
+        async () => {
+          const p = await toScreen(g, { x: 300, y: 250 })
+          await g.mouse.move(p.x - 30, p.y - 30)
+          await g.mouse.move(p.x, p.y, { steps: 4 })
+          return label.count()
+        },
+        { timeout: 20_000 },
+      )
+      .toBe(1)
+    // Nothing of the label is cut off (tldraw would cut the end: the marker)...
+    expect(await label.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true)
+    // ...because the name in front of the marker is the shortened one.
+    await expect(label).toHaveText('Alexandr… (guest)')
+    // The people list's name (from the same ticket) says so too; the full name shows elsewhere.
+    await expect(
+      a.locator(`[data-testid="presence-user"][data-user-id="${guest.id}"] button`),
+    ).toHaveAttribute('title', 'Alexandr… (guest)')
+
+    // On a phone, alice's Share dialog cuts the long name, never the marker.
+    await a.setViewportSize({ width: 390, height: 844 })
+    await openShareFromButton(a)
+    const row = memberRow(a, guest.id)
+    await expect(row).toContainText(`${name} (guest)`)
+    const marker = row.getByTestId('member-guest-marker')
+    await expect(marker).toBeVisible()
+    const fits = await marker.evaluate((el) => {
+      const box = el.getBoundingClientRect()
+      const parent = (el.parentElement as HTMLElement).getBoundingClientRect()
+      return box.width > 0 && box.right <= parent.right + 0.5 && box.left >= parent.left
+    })
+    expect(fits).toBe(true)
+    expect(await noHorizontalScroll(a)).toBe(true)
+    await testInfo.attach('share-long-guest-390.png', {
+      body: await a.screenshot(),
+      contentType: 'image/png',
+    })
   } finally {
     await Promise.all(contexts.map((c) => c.close()))
   }

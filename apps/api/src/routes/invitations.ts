@@ -19,6 +19,7 @@ import { isSecretToken, newSecretToken, sha256hex } from '../auth/session.ts'
 import { userKind } from '../auth/users.ts'
 import type { AppContext, Params } from '../context.ts'
 import { ApiError, forbidden, gone, notFound, parse } from '../errors.ts'
+import { assertGuestRoomOnLink } from '../features/guests/limits.ts'
 import { keyedLimit } from '../rate-limit.ts'
 
 const GONE_MESSAGE = gone().message
@@ -289,7 +290,8 @@ export function registerInvitationRoutes(app: FastifyInstance, ctx: AppContext):
       if (!inv) throw notFound()
       // A name-only guest (wave 3) can only use guest links (joining one more board); a normal
       // invitation needs an account.
-      if ((await userKind(tx, user.id)) === 'guest') {
+      const guest = (await userKind(tx, user.id)) === 'guest'
+      if (guest) {
         if (!(inv.multi_use && inv.allow_guests)) throw guestAccountRequired()
         // The guest sweep takes this lock before it ends a guest's sessions (features/guests).
         await tx.query('SELECT id FROM users WHERE id = $1 FOR UPDATE', [user.id])
@@ -299,6 +301,8 @@ export function registerInvitationRoutes(app: FastifyInstance, ctx: AppContext):
       if (state === 'gone') return { gone: true as const, inv }
       const accepted = { workspaceId: inv.workspace_id, boardId: inv.board_id }
       if (state === 'redeemed_by_caller') return { gone: false as const, accepted, changed: false }
+      // The same per-link guest cap as joining through POST /api/invitations/:token/guest.
+      if (guest) await assertGuestRoomOnLink(tx, inv.id, user.id)
       await redeemInvitation(tx, inv, user.id, at)
       return { gone: false as const, accepted, changed: true }
     })
