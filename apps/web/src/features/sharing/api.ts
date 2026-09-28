@@ -6,6 +6,8 @@ import {
   AccessRequestDecided,
   AccessRequestSent,
   type CreateReviewLinkInput,
+  type EmailInviteInput,
+  EmailInviteResult,
   ListAccessRequestsResponse,
   ListInvitationsResponse,
   ListMembersResponse,
@@ -81,6 +83,12 @@ export function sharingApi(api: ApiClient) {
         body: { removeAccess },
         schema: ReviewLinkRevoked,
       }),
+    /**
+     * Invite by email: the server grants someone who already uses Draftroom at once, emails a
+     * single-use link to anyone else (Clerk), or answers the link to copy when no email went out.
+     */
+    inviteByEmail: (boardId: string, input: EmailInviteInput) =>
+      r('POST', `/api/boards/${enc(boardId)}/invitations/email`, { body: input, schema: EmailInviteResult }),
     /** "+1 h" on an open (workshop) link, capped by the server at its role's maximum. */
     extendReviewLink: (boardId: string, invitationId: string, hours = 1) =>
       r('POST', `/api/boards/${enc(boardId)}/review-links/${enc(invitationId)}/extend`, {

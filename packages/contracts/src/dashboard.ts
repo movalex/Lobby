@@ -255,3 +255,79 @@ export const TransferOwnershipInput = z.object({
     return UserId
   },
 })
+
+// ---- invite by email -----------------------------------------------------------------------------
+
+/** The longest address SMTP can carry (RFC 5321: a 256-octet path, angle brackets included). */
+export const INVITE_EMAIL_MAX_LENGTH = 254
+
+/**
+ * An address to invite: trimmed and lowercased (Clerk compares addresses without case; one spelling
+ * per person keeps lookups, invitations and rate limits consistent).
+ */
+export const InviteEmail = z
+  .string()
+  .trim()
+  .toLowerCase()
+  .min(1, 'Enter an email address.')
+  .max(INVITE_EMAIL_MAX_LENGTH, 'That email address is too long.')
+  .pipe(z.email('Enter a valid email address.'))
+
+/** `POST /api/boards/:bid/invitations/email`: never ownership (the same cap as invite links). */
+export const EmailInviteInput = z.object({ email: InviteEmail, role: RequestableRole })
+export type EmailInviteInput = z.input<typeof EmailInviteInput>
+
+/**
+ * Why an email invitation came back as a link to copy instead:
+ * - `email_not_configured`: this server signs people in without Clerk (development): no email is sent;
+ * - `existing_account`: the address belongs to a sign-in account that has not opened Draftroom yet
+ *   (Clerk emails invitations only to new people);
+ * - `invalid_email`: the email service refused the address;
+ * - `rate_limited`: the email service is limiting invitations right now;
+ * - `provider_error`: the email service failed or did not answer.
+ */
+export const EmailInviteFallbackReason = z.enum([
+  'email_not_configured',
+  'existing_account',
+  'invalid_email',
+  'rate_limited',
+  'provider_error',
+])
+export type EmailInviteFallbackReason = z.infer<typeof EmailInviteFallbackReason>
+
+/**
+ * - `granted`: the address belongs to someone who already uses Draftroom: they have the board role
+ *   now (`role` is their access afterwards; `alreadyHadAccess`: nothing changed, since an invite
+ *   never lowers a role);
+ * - `emailed`: a single-use invite link went to the address by email (the link is not shown here);
+ * - `link`: no email went out (`reason`); the single-use link is for the inviter to send.
+ */
+export const EmailInviteResult = z.discriminatedUnion('mode', [
+  z.object({
+    mode: z.literal('granted'),
+    get user() {
+      return User
+    },
+    role: Role,
+    alreadyHadAccess: z.boolean(),
+  }),
+  z.object({
+    mode: z.literal('emailed'),
+    email: z.string(),
+    get invitationId() {
+      return InvitationId
+    },
+    expiresAt: IsoDate,
+  }),
+  z.object({
+    mode: z.literal('link'),
+    reason: EmailInviteFallbackReason,
+    email: z.string(),
+    get invitationId() {
+      return InvitationId
+    },
+    url: z.string(),
+    expiresAt: IsoDate,
+  }),
+])
+export type EmailInviteResult = z.infer<typeof EmailInviteResult>
