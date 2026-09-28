@@ -22,6 +22,7 @@ import {
   useEditor,
   useValue,
 } from 'tldraw'
+import { MindmapContextMenuGroup } from '../mindmap/ContextMenuGroup.tsx'
 import { canArrangeAsGrid } from './arrange-grid-runtime.ts'
 import { ExportOffContextMenuContent, useExportAllowed } from './export-gate.tsx'
 import {
@@ -109,6 +110,7 @@ export const DraftroomContextMenu = memo(function DraftroomContextMenu(props: TL
   const exportAllowed = useExportAllowed()
   return (
     <DefaultContextMenu {...props}>
+      <MindmapContextMenuGroup />
       <ArrangeGroup />
       {exportAllowed ? <DefaultContextMenuContent /> : <ExportOffContextMenuContent />}
       <SelectByTypeGroup />

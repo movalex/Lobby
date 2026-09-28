@@ -1,0 +1,168 @@
+/* Mind maps (features/mindmap): the topic bar, collapsed-branch badges and the delete confirmation.
+   Only --dr-* tokens (light and dark themes); the topics and lines themselves are tldraw shapes. */
+
+.dr-mm-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 240; /* with canvas-ux's overlay: above tldraw's canvas layers, below its UI panels (300) */
+  overflow: hidden;
+  pointer-events: none;
+}
+.dr-mm-overlay > * {
+  pointer-events: auto;
+}
+
+/* ---- the topic bar ------------------------------------------------------------------------------ */
+
+.dr-mm-bar {
+  position: absolute;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--dr-line);
+  border-radius: 10px;
+  background: var(--dr-surface);
+  box-shadow: var(--dr-shadow);
+}
+.dr-mm-bar__btn {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--dr-ink-2);
+  cursor: pointer;
+}
+.dr-mm-bar__btn--wide {
+  display: flex;
+  gap: 1px;
+  width: auto;
+  padding: 0 4px 0 7px;
+}
+.dr-mm-bar__btn:hover,
+.dr-mm-bar__btn[aria-expanded="true"] {
+  background: var(--dr-hover);
+  color: var(--dr-ink);
+}
+.dr-mm-bar__btn:focus-visible,
+.dr-mm-menu__item:focus-visible,
+.dr-mm-badge:focus-visible {
+  outline: 2px solid var(--dr-focus);
+  outline-offset: 1px;
+}
+.dr-mm-bar__btn[aria-pressed="true"] {
+  color: var(--dr-accent-ink);
+  background: var(--dr-accent-bg);
+}
+.dr-mm-bar__glyph {
+  font: 600 17px / 1 var(--dr-font);
+}
+.dr-mm-bar__sep {
+  width: 1px;
+  height: 18px;
+  margin: 0 3px;
+  background: var(--dr-line);
+}
+
+/* ---- the outline menu --------------------------------------------------------------------------- */
+
+.dr-mm-outline {
+  position: relative;
+  display: flex;
+}
+.dr-mm-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  display: flex;
+  flex-direction: column;
+  min-width: 200px;
+  padding: 4px;
+  border: 1px solid var(--dr-line);
+  border-radius: 10px;
+  background: var(--dr-surface);
+  box-shadow: var(--dr-shadow-pop);
+}
+.dr-mm-menu__item {
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--dr-ink);
+  font: 13.5px / 1.3 var(--dr-font);
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.dr-mm-menu__item:hover,
+.dr-mm-menu__item:focus {
+  background: var(--dr-hover);
+}
+
+/* ---- collapsed-branch badges -------------------------------------------------------------------- */
+
+.dr-mm-badge {
+  position: absolute;
+  min-width: 30px;
+  height: 22px;
+  padding: 0 7px;
+  border: 1px solid var(--dr-line-strong);
+  border-radius: 11px;
+  background: var(--dr-surface);
+  color: var(--dr-ink);
+  box-shadow: var(--dr-shadow);
+  font: 600 12px / 20px var(--dr-font);
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+/* --dr-mm-scale: the badge shrinks with the map when zoomed far out (Overlay.tsx, 0.55..1). */
+.dr-mm-badge--right {
+  transform: translate(6px, -50%) scale(var(--dr-mm-scale, 1));
+  transform-origin: left center;
+}
+.dr-mm-badge--left {
+  transform: translate(calc(-100% - 6px), -50%) scale(var(--dr-mm-scale, 1));
+  transform-origin: right center;
+}
+.dr-mm-badge:hover:not(:disabled) {
+  border-color: var(--dr-accent-line);
+  background: var(--dr-accent-bg);
+  color: var(--dr-accent-ink);
+}
+.dr-mm-badge:disabled {
+  cursor: default;
+}
+
+/* ---- delete confirmation ------------------------------------------------------------------------ */
+
+.dr-mm-danger {
+  border-color: var(--dr-danger-fill);
+  background: var(--dr-danger-fill);
+  color: var(--dr-on-danger);
+}
+.dr-mm-danger:hover {
+  border-color: var(--dr-danger-fill);
+  background: var(--dr-danger-fill);
+  filter: brightness(1.08);
+}
+
+/* ---- presenting: no controls on slides; the badges stay as a read-only hint ---------------------- */
+
+html[data-dr-presenting] .dr-mm-bar {
+  display: none;
+}
+html[data-dr-presenting] .dr-mm-badge {
+  pointer-events: none;
+}
+
+@media (max-width: 480px) {
+  .dr-mm-bar__btn {
+    width: 36px;
+    height: 36px;
+  }
+}

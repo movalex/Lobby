@@ -54,6 +54,7 @@ const MAIN_TOOLS = [
   'tools.frame',
   'tools.asset',
   'tools.comment',
+  'tools.dr-mindmap', // wave 4 (mindmap): a flagged main-toolbar button
   'tools.dr-templates',
 ]
 
@@ -108,7 +109,7 @@ test('toolbar layout pin: the main tools keep their order at 1440×900 (snapshot
   await waitForCanvasUx(a.page)
   await a.page.mouse.move(720, 400) // nowhere near a button: no hover state, no tooltip
 
-  await test.step('pinned order: 11 main tools, one overflow slot, the More button', async () => {
+  await test.step('pinned order: 12 main tools, one overflow slot, the More button', async () => {
     await expect
       .poll(() => visibleToolbarIds(a.page))
       .toEqual([...MAIN_TOOLS, 'tools.eraser', 'tools.more-button'])
