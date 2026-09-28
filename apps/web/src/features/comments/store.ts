@@ -101,7 +101,10 @@ export class CommentsStore {
    * `teamOnlyDefault`: people outside the team can open this board, so it starts on.
    */
   readonly privacy = atom<CommentPrivacy>('dr-comments.privacy', { teamOnly: false, teamOnlyDefault: false })
-  /** F10: the new-comment composer's "Team only" choice; null follows privacy.teamOnlyDefault. */
+  /**
+   * F10: the new-comment composer's "Team only" choice for the comment being written (reset once it
+   * is posted); null follows privacy.teamOnlyDefault.
+   */
   readonly teamOnlyChoice = atom<boolean | null>('dr-comments.team-only-choice', null)
   /** Bumped when drafts change, so composers re-read them. */
   readonly draftsVersion = atom('dr-comments.drafts-version', 0)
@@ -366,6 +369,9 @@ export class CommentsStore {
       const visibility: CommentThreadVisibility = this.newThreadTeamOnly() ? 'team' : 'everyone'
       const thread = await this.api.createThread(this.boardId, anchor, body, visibility)
       this.clearDraft(NEW_THREAD_DRAFT)
+      // F10: the choice went with this comment (like its draft); the next one starts from the board's
+      // default, so one comment shown to the client never leaves "Team only" off for the next remark.
+      this.teamOnlyChoice.set(null)
       this.applyThread(thread)
       this.reads.update((r) => ({ ...r, [thread.id]: thread.updatedAt }))
       if (this.pending.get()) this.pending.set(null)

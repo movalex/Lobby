@@ -31,13 +31,23 @@ async function joinAsGuest(browser: Browser, link: string, name: string) {
   return { context, page }
 }
 
-/** Starts a new comment at an empty spot and sets "Team only" before posting. */
-async function postComment(page: Page, text: string, teamOnly: boolean, dx: number) {
+/**
+ * Starts a new comment at an empty spot and sets "Team only" before posting. `startsOn`: what the
+ * switch must show before it is touched (it is chosen per comment, so it starts from the default).
+ */
+async function postComment(
+  page: Page,
+  text: string,
+  teamOnly: boolean,
+  dx: number,
+  opts: { startsOn?: boolean } = {},
+) {
   await pressCommentTool(page)
   const p = await emptyCanvasPoint(page)
   await page.mouse.click(p.x + dx, p.y)
   const toggle = newCommentPopover(page).getByTestId('new-comment-team-only')
   await expect(toggle).toBeVisible()
+  if (opts.startsOn !== undefined) await expect(toggle).toBeChecked({ checked: opts.startsOn })
   if ((await toggle.isChecked()) !== teamOnly) await toggle.click()
   await expect(toggle).toBeChecked({ checked: teamOnly })
   const composer = newCommentPopover(page).getByTestId('comment-composer')
@@ -131,7 +141,8 @@ test('team-only comments: on by default while a client link is live, never shown
     // Live: another team-only thread never reaches the guest; the next shared one does (so the first
     // would have arrived by then).
     await a.bringToFront()
-    await postComment(a, 'Internal: push the budget talk', true, 30)
+    // The shared comment above turned the switch off for itself only: this one starts on again.
+    await postComment(a, 'Internal: push the budget talk', true, 30, { startsOn: true })
     const later = await postComment(a, 'Here is option C', false, 90)
     await expect(pin(g, later)).toHaveCount(1)
     await expect(pins(g)).toHaveCount(2)

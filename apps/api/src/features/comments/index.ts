@@ -145,6 +145,22 @@ async function mustLoadThread(tx: Queryable, board: BoardRef, threadId: string):
   return thread
 }
 
+/**
+ * F10: the thread as reloaded at the end of a write, for a caller on the team or not. A thread made
+ * team-only by someone else while this request ran (committed after its visibility check) is gone
+ * for people outside the team: 404, and the transaction rolls back rather than hand it to them.
+ */
+async function mustLoadVisibleThread(
+  tx: Queryable,
+  board: BoardRef,
+  threadId: string,
+  team: boolean,
+): Promise<CommentThread> {
+  const thread = await mustLoadThread(tx, board, threadId)
+  if (thread.visibility === 'team' && !team) throw notFound()
+  return thread
+}
+
 export async function registerComments(app: FastifyInstance, ctx: FeatureContext): Promise<void> {
   const { db, now, events } = ctx
   const limiter = createWriteLimiter({ max: WRITES_PER_MINUTE, windowMs: 60_000, now })
@@ -368,7 +384,7 @@ export async function registerComments(app: FastifyInstance, ctx: FeatureContext
     const { cid = '' } = req.params as Params
     const input = parse(EditCommentInput, req.body)
     const { thread, board: ref } = await db.transaction(async (tx) => {
-      const { comment, thread: row, access } = await commentAccess(tx, cid, user.id)
+      const { comment, thread: row, access, team } = await commentAccess(tx, cid, user.id)
       if (comment.author_id !== user.id) throw forbidden('Only the author can edit a comment.')
       spend(user.id)
       const board = access.board
@@ -408,7 +424,7 @@ export async function registerComments(app: FastifyInstance, ctx: FeatureContext
           await recipientsFor(tx, board, user.id, added, [], { team: teamOnly }),
         ),
       )
-      return { thread: await mustLoadThread(tx, board, comment.thread_id), board }
+      return { thread: await mustLoadVisibleThread(tx, board, comment.thread_id, team), board }
     })
     await publishThread(ref, thread)
     return { thread }
@@ -492,14 +508,14 @@ export async function registerComments(app: FastifyInstance, ctx: FeatureContext
                 [row.id, at],
               )
         const changed = updated.rowCount > 0
-        const thread = await mustLoadThread(tx, board, row.id)
+        const thread = await mustLoadVisibleThread(tx, board, row.id, team)
         if (changed && action === 'resolve') {
           const followers = await threadFollowers(tx, row.id)
           const viewers = await viewersAmong(
             tx,
             board,
             followers.filter((id) => id !== user.id),
-            { team: row.visibility === 'team' },
+            { team: thread.visibility === 'team' },
           )
           await insertNotifications(
             tx,

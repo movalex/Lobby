@@ -235,6 +235,40 @@ describe('team-only threads', () => {
     }
   })
 
+  // A thread made team-only while a guest's edit or resolve is in flight (the change commits between
+  // the request's visibility check and its reload of the thread). A trigger stands in for that
+  // concurrent commit: READ COMMITTED lets the later statements see it, as on real Postgres.
+  describe('a thread that turns team-only mid-request is not handed back to people outside the team', () => {
+    it('editing one’s own comment: 404, the edit rolls back', async () => {
+      const t = await create(dana, 'Dana asks about the hero')
+      await api.db.query(`CREATE FUNCTION f10_hide_on_edit() RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN UPDATE comment_threads SET visibility = 'team' WHERE id = NEW.thread_id; RETURN NEW; END $$`)
+      await api.db.query(
+        'CREATE TRIGGER f10_hide_on_edit AFTER UPDATE OF body ON comments FOR EACH ROW EXECUTE FUNCTION f10_hide_on_edit()',
+      )
+      const res = await dana.req('PATCH', `/api/comments/${t.comments[0]?.id}`, { body: 'Edited' })
+      expect(res.statusCode, res.body).toBe(404)
+      expect(res.body).not.toContain(t.id)
+      const [after] = (await list(member)).threads
+      expect(after?.comments.map((c) => c.body)).toEqual(['Dana asks about the hero'])
+    })
+
+    it('resolving one’s own thread: 404, nothing changes', async () => {
+      const t = await create(dana, 'Dana asks about the hero')
+      await api.db.query(`CREATE FUNCTION f10_hide_on_status() RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN NEW.visibility := 'team'; RETURN NEW; END $$`)
+      await api.db.query(
+        'CREATE TRIGGER f10_hide_on_status BEFORE UPDATE OF status ON comment_threads FOR EACH ROW EXECUTE FUNCTION f10_hide_on_status()',
+      )
+      const res = await dana.req('POST', `/api/threads/${t.id}/resolve`)
+      expect(res.statusCode, res.body).toBe(404)
+      expect(res.body).not.toContain(t.id)
+      const [after] = (await list(member)).threads
+      expect(after?.status).toBe('open')
+      expect(after?.visibility).toBe('everyone')
+    })
+  })
+
   it('the default is "everyone" and off for boards nobody outside the team can open', async () => {
     const quiet = await createBoard(owner, DEV_STUDIO, 'Internal board')
     const res = await owner.req('GET', `/api/boards/${quiet}/threads`)

@@ -492,6 +492,40 @@ describe('who can be @mentioned follows sharing changes (F4)', () => {
       }
     })
 
+    it('"Team only" is chosen per comment: after a post the next new comment starts from the board’s default', async () => {
+      const api = fakeApi({ threads: [], reads: {}, privacy: { teamOnly: true, teamOnlyDefault: true } })
+      const s = make(api)
+      await s.load()
+      // One comment meant for the client…
+      s.teamOnlyChoice.set(false)
+      s.setDraft(NEW_THREAD_DRAFT, { text: 'For the client', mentions: [] })
+      expect(await s.createThread({ kind: 'point', x: 0, y: 0 }, s.draft(NEW_THREAD_DRAFT))).not.toBeNull()
+      expect(api.createThread).toHaveBeenLastCalledWith(
+        BOARD,
+        { kind: 'point', x: 0, y: 0 },
+        'For the client',
+        'everyone',
+      )
+      // …never turns the switch off for the internal remark that follows.
+      expect(s.newThreadTeamOnly()).toBe(true)
+      s.setDraft(NEW_THREAD_DRAFT, { text: 'Internal', mentions: [] })
+      await s.createThread({ kind: 'point', x: 0, y: 0 }, s.draft(NEW_THREAD_DRAFT))
+      expect(api.createThread).toHaveBeenLastCalledWith(
+        BOARD,
+        { kind: 'point', x: 0, y: 0 },
+        'Internal',
+        'team',
+      )
+      // A failed post keeps the draft and the choice made for it.
+      s.teamOnlyChoice.set(false)
+      api.createThread = vi.fn(async () => {
+        throw new Error('offline')
+      })
+      s.setDraft(NEW_THREAD_DRAFT, { text: 'Retry me', mentions: [] })
+      expect(await s.createThread({ kind: 'point', x: 0, y: 0 }, s.draft(NEW_THREAD_DRAFT))).toBeNull()
+      expect(s.newThreadTeamOnly()).toBe(false)
+    })
+
     it('setVisibility applies the thread the server returns', async () => {
       const t = makeThread()
       const s = make(fakeApi({ threads: [t], reads: {}, privacy: { teamOnly: true, teamOnlyDefault: true } }))
