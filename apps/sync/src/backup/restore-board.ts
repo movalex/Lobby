@@ -2,21 +2,25 @@
 // running sync server: it only stages; the next server start applies it (staged-restore.ts).
 //
 //   pnpm --filter @draftroom/sync backup:restore-board --from=store|local --board <id> [--file <name>]
+//     [--allow-unsigned]
 //   pnpm --filter @draftroom/sync backup:restore-board --from=file --path <sqlite> --board <id>
 //   pnpm --filter @draftroom/sync backup:restore-board --board <id> --cancel
 //   pnpm --filter @draftroom/sync backup:restore-board --list
 //   (on a server without pnpm: node apps/sync/src/backup/restore-board.ts ...)
 //   Also --data-dir <DATA> (default DRAFTROOM_DATA_DIR).
 //
-// --from=store reads the offsite store configured by DRAFTROOM_BACKUP_STORE (+ R2_*); --from=local
-// reads <DATA>/backups; --from=file takes one board database file (for example the .pre-restore-<stamp>
-// copy an earlier restore kept, to undo it). The backup (newest, or --file) is verified exactly like the
-// restore drill before anything is staged. Exit code 0 only when a restore was staged (or cancelled /
-// listed).
+// --from=store reads the offsite store configured by DRAFTROOM_BACKUP_STORE (+ DRAFTROOM_BACKUP_R2_*
+// or R2_*) and needs the sync server's DRAFTROOM_INTERNAL_SECRET: the manifest and the entry must carry
+// signatures that verify (signing.ts), or, with --allow-unsigned, be unsigned (written before backups
+// were signed) and are then staged with a WARN line; a signature that is present and wrong always
+// refuses. --from=local reads <DATA>/backups; --from=file takes one board database file (for example the
+// .pre-restore-<stamp> copy an earlier restore kept, to undo it). The backup (newest, or --file) is
+// verified exactly like the restore drill before anything is staged. Exit code 0 only when a restore was
+// staged (or cancelled / listed).
 
 import { join } from 'node:path'
 import { dataLayout, resolveDataDir } from '@draftroom/dev-assets'
-import { parseBackupStore } from '../config.ts'
+import { backupSigningSecret, parseBackupStore } from '../config.ts'
 import { BOARD_ID_RE } from '../rooms.ts'
 import { BACKUP_FILE_RE } from './backup.ts'
 import {
@@ -26,6 +30,7 @@ import {
   localBackupSource,
   storeBackupSource,
 } from './drill.ts'
+import { backupSigningKey } from './signing.ts'
 import { cancelStagedRestore, listStagedRestores, stageRestore } from './staged-restore.ts'
 import { openBackupStore } from './store.ts'
 
@@ -38,6 +43,7 @@ function parseArgs(argv: string[]) {
     from: null as 'local' | 'store' | 'file' | null,
     cancel: false,
     list: false,
+    allowUnsigned: false,
   }
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i] ?? ''
@@ -55,8 +61,11 @@ function parseArgs(argv: string[]) {
       out.from = v
     } else if (a === '--cancel') out.cancel = true
     else if (a === '--list') out.list = true
+    else if (a === '--allow-unsigned') out.allowUnsigned = true
     else throw new Error(`unknown argument ${a.slice(0, 40)}`)
   }
+  if (out.allowUnsigned && (out.from !== 'store' || out.cancel || out.list))
+    throw new Error('--allow-unsigned only applies to --from=store (local backups are not signed)')
   if (out.board !== null && !BOARD_ID_RE.test(out.board))
     throw new Error(`invalid board id ${out.board.slice(0, 70)}`)
   if (out.file !== undefined && !BACKUP_FILE_RE.test(out.file)) throw new Error('invalid backup file name')
@@ -93,13 +102,20 @@ async function main() {
       throw new Error(
         'DRAFTROOM_BACKUP_STORE is off: set it to fs or r2 (with R2_*) to restore from the store',
       )
-    source = storeBackupSource(store)
+    source = storeBackupSource(store, {
+      signingKey: backupSigningKey(backupSigningSecret(process.env)),
+      allowUnsigned: args.allowUnsigned,
+    })
   } else if (args.from === 'file') source = fileBackupSource(args.path ?? '')
   else source = localBackupSource(join(dataDir, 'backups'))
   try {
-    const { request, checks } = await stageRestore({ dataDir, source, boardId, file: args.file })
+    const { request, checks, warnings } = await stageRestore({ dataDir, source, boardId, file: args.file })
     for (const c of checks) console.log(`  ok   ${c}`)
-    console.log(`staged ${boardId} from ${request.source} backup ${request.file}`)
+    for (const w of warnings) console.log(`  WARN ${w}`)
+    console.log(
+      `staged ${boardId} from ${request.source} backup ${request.file}` +
+        (request.unsignedAccepted ? ' (UNSIGNED, accepted with --allow-unsigned)' : ''),
+    )
     console.log(
       'restart the sync server to apply it (every board reconnects; open tabs of this board reload its state)',
     )

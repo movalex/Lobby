@@ -5,6 +5,12 @@
 // clock), open it through the real RoomRegistry (the server's code path: SQLiteSyncStorage, schema
 // check, tldraw migrations) and compare the room's records with the backup's, and, when the live board
 // has not changed since, compare with the live board too.
+//
+// From the offsite store, the manifest's checksums are only worth something if the manifest is the
+// sync server's: the index, the manifest and the entry must each carry a signature that verifies
+// (signing.ts) before any checksum is trusted. A signature that is present and wrong always fails.
+// One that is absent (written before signing) or made with another key fails too, unless the caller
+// passed allowUnsigned (--allow-unsigned), and then every such acceptance is reported as a warning.
 
 import { createHash } from 'node:crypto'
 import { createWriteStream, mkdirSync, mkdtempSync, rmSync, statSync } from 'node:fs'
@@ -21,6 +27,7 @@ import { BOARD_ID_RE, boardDbPath, RoomRegistry } from '../rooms.ts'
 import { backedUpBoards, describeBoardDb, inspectBoardDb, readManifest, sha256File } from './backup.ts'
 import { MAX_MANIFEST_BYTES, offsiteKeys, parseIndex, parseManifest } from './offsite-manifest.ts'
 import { restoreBackupFile } from './restore.ts'
+import type { BackupSigningKey, SignatureCheck } from './signing.ts'
 import { describeFailure, getJson, OFFSITE_PREFIX } from './store.ts'
 
 export interface DrillBoardResult {
@@ -31,6 +38,8 @@ export interface DrillBoardResult {
   recordCount: number | null
   /** What was verified, in order. */
   checks: string[]
+  /** What was accepted without being verified (only with allowUnsigned). Never makes `ok` false. */
+  warnings: string[]
   problems: string[]
   /** Comparison with the live board: same clock and identical records, the live board moved on, or none. */
   live: 'identical' | 'moved-on' | 'absent' | 'different'
@@ -41,6 +50,8 @@ export interface DrillReport {
   /** Where the backups came from: 'local', the store kind, or one 'file'. */
   source: BackupSource['kind']
   workDir: string
+  /** About the list of boards itself (an unsigned index accepted with allowUnsigned). */
+  warnings: string[]
   boards: DrillBoardResult[]
 }
 
@@ -53,6 +64,8 @@ export interface DrillEntry {
   sha256: string
   sizeBytes: number
   schema: unknown
+  /** What the source verified about the manifest and this entry, and what it accepted unverified. */
+  trust?: { checks: string[]; warnings: string[] }
 }
 
 /** A drill failure with operator-facing messages (no credentials, no store URLs). */
@@ -67,8 +80,8 @@ export class DrillProblem extends Error {
 /** Where backups are read from. */
 export interface BackupSource {
   readonly kind: 'local' | 'fs' | 'r2' | 'file'
-  /** Boards that have backups there. */
-  boards(): Promise<string[]>
+  /** Boards that have backups there. Throws DrillProblem. */
+  boards(): Promise<{ boardIds: string[]; warnings: string[] }>
   /** The newest entry of a board (or the one named `file`). Throws DrillProblem. */
   entry(boardId: string, file?: string): Promise<DrillEntry>
   /** A local file holding exactly the entry's bytes, checked against it. Throws DrillProblem. */
@@ -107,7 +120,7 @@ export function fileBackupSource(path: string): BackupSource {
   }
   return {
     kind: 'file',
-    boards: async () => [],
+    boards: async () => ({ boardIds: [], warnings: [] }),
     entry: () => describe(),
     async materialize() {
       return { path, checks: [`read ${basename(path)} (${(await describe()).sizeBytes} bytes)`] }
@@ -119,7 +132,7 @@ export function fileBackupSource(path: string): BackupSource {
 export function localBackupSource(backupsRoot: string): BackupSource {
   return {
     kind: 'local',
-    boards: async () => backedUpBoards(backupsRoot),
+    boards: async () => ({ boardIds: backedUpBoards(backupsRoot), warnings: [] }),
     async entry(boardId, file) {
       let manifest: ReturnType<typeof readManifest>
       try {
@@ -148,8 +161,74 @@ export function localBackupSource(backupsRoot: string): BackupSource {
   }
 }
 
-/** The offsite store (offsite.ts writes it): read-only here. */
-export function storeBackupSource(store: BlobStore, prefix = OFFSITE_PREFIX): BackupSource {
+export interface StoreSourceOptions {
+  /** backupSigningKey(DRAFTROOM_INTERNAL_SECRET): the key the sync server signed the store with. */
+  signingKey: BackupSigningKey
+  /**
+   * Accept an index, manifest or entry that has no signature, or one made with another key, and
+   * report each as a warning (--allow-unsigned). A signature that is present and wrong still fails.
+   */
+  allowUnsigned?: boolean
+  /** Key prefix without a trailing slash. Default `backups/sync`. */
+  prefix?: string
+}
+
+type Signed = { kind: 'index' } | { kind: 'manifest' } | { kind: 'entry'; file: string }
+
+/**
+ * The verdict on one signature: a check line, a warning (accepted unverified), or a DrillProblem.
+ * Messages carry key ids (hashes, not secrets) and file names only.
+ */
+function judge(
+  what: Signed,
+  sig: SignatureCheck | undefined,
+  key: BackupSigningKey,
+  allowUnsigned: boolean,
+): { check?: string; warning?: string } {
+  const name =
+    what.kind === 'entry'
+      ? `backup ${what.file}`
+      : `the offsite ${what.kind === 'index' ? 'index' : 'manifest'}`
+  const retry = what.kind === 'index' ? 'rerun with --allow-unsigned, or name the boards with --board' : null
+  switch (sig?.status ?? 'invalid') {
+    case 'valid':
+      return {
+        check:
+          what.kind === 'entry'
+            ? 'manifest entry signature verified'
+            : `offsite ${what.kind} signature verified`,
+      }
+    case 'missing':
+      if (!allowUnsigned)
+        throw new DrillProblem(
+          `${name} is not signed (${what.kind === 'entry' ? 'taken' : 'written'} before backups were signed, or its signature was removed); ${retry ?? 'rerun with --allow-unsigned to accept it'}`,
+        )
+      return {
+        warning: `UNVERIFIED: ${name} is not signed${what.kind === 'entry' ? ', so its checksums prove nothing about who wrote them' : ''}; accepted because of --allow-unsigned`,
+      }
+    case 'unknown-key':
+      if (!allowUnsigned)
+        throw new DrillProblem(
+          `${name} is signed with another key (key id ${sig?.keyId}; this server's is ${key.id}): DRAFTROOM_INTERNAL_SECRET differs from the one that wrote it; ${retry ?? 'rerun with --allow-unsigned to accept it unverified'}`,
+        )
+      return {
+        warning: `UNVERIFIED: ${name} is signed with another key (key id ${sig?.keyId}); accepted because of --allow-unsigned`,
+      }
+    default:
+      // Present and wrong: evidence of a change outside the sync server. Never accepted.
+      throw new DrillProblem(
+        what.kind === 'entry'
+          ? `the manifest entry of ${what.file} does not match its signature: it was changed outside the sync server`
+          : `${name} does not match its signature: it was changed outside the sync server${what.kind === 'index' ? '; name the boards to drill with --board' : ''}`,
+      )
+  }
+}
+
+/** The offsite store (offsite.ts writes it): read-only here, and trusted only as far as its signatures. */
+export function storeBackupSource(store: BlobStore, opts: StoreSourceOptions): BackupSource {
+  const prefix = opts.prefix ?? OFFSITE_PREFIX
+  const key = opts.signingKey
+  const allowUnsigned = opts.allowUnsigned === true
   return {
     kind: store.kind,
     async boards() {
@@ -159,11 +238,17 @@ export function storeBackupSource(store: BlobStore, prefix = OFFSITE_PREFIX): Ba
       } catch (e) {
         throw new DrillProblem(`offsite index unreadable: ${describeFailure(e)}`)
       }
-      if (raw === null) return []
+      if (raw === null) return { boardIds: [], warnings: [] }
+      let parsed: ReturnType<typeof parseIndex>
       try {
-        return parseIndex(raw).boards.map((b) => b.boardId)
+        parsed = parseIndex(raw, key)
       } catch (e) {
         throw new DrillProblem(`offsite index unreadable: ${describeFailure(e)}`)
+      }
+      const verdict = judge({ kind: 'index' }, parsed.signature, key, allowUnsigned)
+      return {
+        boardIds: parsed.index.boards.map((b) => b.boardId),
+        warnings: verdict.warning ? [verdict.warning] : [],
       }
     },
     async entry(boardId, file) {
@@ -174,12 +259,20 @@ export function storeBackupSource(store: BlobStore, prefix = OFFSITE_PREFIX): Ba
         throw new DrillProblem(`offsite manifest unreadable: ${describeFailure(e)}`)
       }
       if (raw === null) throw new DrillProblem('no offsite manifest for this board')
-      let backups: DrillEntry[]
+      let parsed: ReturnType<typeof parseManifest>
       try {
-        backups = parseManifest(raw, prefix, boardId).manifest.backups
+        parsed = parseManifest(raw, prefix, boardId, key)
       } catch (e) {
         throw new DrillProblem(`offsite manifest unreadable: ${describeFailure(e)}`)
       }
+      const trust = { checks: [] as string[], warnings: [] as string[] }
+      const note = (v: { check?: string; warning?: string }) => {
+        if (v.check) trust.checks.push(v.check)
+        if (v.warning) trust.warnings.push(v.warning)
+      }
+      // The list first: without it, "the newest entry" means nothing.
+      note(judge({ kind: 'manifest' }, parsed.signature, key, allowUnsigned))
+      const backups = parsed.manifest.backups
       const entry = file ? backups.find((b) => b.file === file) : backups.at(-1)
       if (!entry)
         throw new DrillProblem(
@@ -187,7 +280,15 @@ export function storeBackupSource(store: BlobStore, prefix = OFFSITE_PREFIX): Ba
             ? `backup ${file} is not listed in the offsite manifest`
             : 'no backup listed in the offsite manifest',
         )
-      return entry
+      note(
+        judge(
+          { kind: 'entry', file: entry.file },
+          parsed.entrySignatures.get(entry.file),
+          key,
+          allowUnsigned,
+        ),
+      )
+      return { ...entry, trust }
     },
     async materialize(boardId, entry, scratchDir) {
       const key = offsiteKeys.file(prefix, boardId, entry.file)
@@ -315,14 +416,22 @@ export async function runRestoreDrill(opts: {
   if (dataLayout(workDir).root === layout.root)
     throw new Error('the drill must restore into a different data dir')
   const boards: DrillBoardResult[] = []
+  let warnings: string[] = []
   try {
-    const boardIds = opts.boardIds?.length ? opts.boardIds : await source.boards()
-    for (const boardId of boardIds)
+    const listed = opts.boardIds?.length ? { boardIds: opts.boardIds, warnings: [] } : await source.boards()
+    warnings = listed.warnings
+    for (const boardId of listed.boardIds)
       boards.push(await drillBoard(boardId, source, layout.rooms, workDir, opts.schema ?? draftroomSchema))
   } finally {
     if (!opts.keepWorkDir) rmSync(workDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
   }
-  return { ok: boards.length > 0 && boards.every((b) => b.ok), source: source.kind, workDir, boards }
+  return {
+    ok: boards.length > 0 && boards.every((b) => b.ok),
+    source: source.kind,
+    workDir,
+    warnings,
+    boards,
+  }
 }
 
 async function drillBoard(
@@ -339,6 +448,7 @@ async function drillBoard(
     documentClock: null,
     recordCount: null,
     checks: [],
+    warnings: [],
     problems: [],
     live: 'absent',
   }
@@ -348,6 +458,8 @@ async function drillBoard(
     result.backupFile = entry.file
     result.documentClock = entry.documentClock
     result.recordCount = entry.recordCount
+    result.checks.push(...(entry.trust?.checks ?? []))
+    result.warnings.push(...(entry.trust?.warnings ?? []))
     const got = await source.materialize(boardId, entry, join(workDir, 'downloads'))
     result.checks.push(...got.checks)
     const verified = await verifyRestorable({

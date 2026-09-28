@@ -11,6 +11,12 @@
 //   read from the store when something has to change, so a pass over unchanged boards costs no request.
 // - One writer: exactly one sync server per data dir (one room owner per board) owns the manifests
 //   under its prefix. The restore tools only read.
+// - Signed (signing.ts): every entry it lists, every manifest and the index it writes. What it reads
+//   back is checked too: an entry whose own signature does not match is dropped (and its backup
+//   uploaded again if it is still on the local disk); entries without a signature (listed before
+//   signing existed) or signed under another key (a rotated DRAFTROOM_INTERNAL_SECRET) are carried
+//   forward as they are, never re-signed, so the restore tools keep treating them as unverified. A
+//   manifest or index not signed by the current key is signed again once.
 
 import { createHash, type Hash } from 'node:crypto'
 import { createReadStream } from 'node:fs'
@@ -42,12 +48,15 @@ import {
   parseManifest,
   sortOldestFirst,
 } from './offsite-manifest.ts'
+import { type BackupSigningKey, type SignatureStatus, signDocument, signEntry } from './signing.ts'
 import { describeFailure, getJson, OFFSITE_PREFIX, OffsiteError, putJson } from './store.ts'
 
 export interface OffsiteOptions {
   store: BlobStore
   /** The local backups root (${DATA}/backups) whose boards are copied. */
   localRoot: string
+  /** Signs every entry, manifest and index written (backupSigningKey(DRAFTROOM_INTERNAL_SECRET)). */
+  signingKey: BackupSigningKey
   /** Key prefix without a trailing slash. Default `backups/sync`. */
   prefix?: string
   /** Retry pass over every board. Default: the backup interval (15 minutes). */
@@ -106,6 +115,19 @@ interface Known {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms).unref?.())
 
+/** Why a manifest or the index read from the store is signed again (nothing when it verified). */
+const RESIGN_REASON: Record<Exclude<SignatureStatus, 'valid'>, (what: string) => string> = {
+  missing: (what) => `${what} is not signed (written before backups were signed); signing it`,
+  'unknown-key': (what) =>
+    `${what} is signed with another key (DRAFTROOM_INTERNAL_SECRET changed?); signing it with the current key`,
+  invalid: (what) => `${what} does not match its signature (changed outside this server?); signing it again`,
+}
+const MANIFEST_RESIGN_DETAIL: Record<Exclude<SignatureStatus, 'valid'>, string> = {
+  missing: ', its older entries stay unsigned',
+  'unknown-key': ', its older entries stay as they are',
+  invalid: ' without the entries that fail their own check',
+}
+
 async function* hashing(source: AsyncIterable<Buffer | string>, hash: Hash): AsyncGenerator<Buffer> {
   for await (const chunk of source) {
     const b = typeof chunk === 'string' ? Buffer.from(chunk) : chunk
@@ -117,6 +139,7 @@ async function* hashing(source: AsyncIterable<Buffer | string>, hash: Hash): Asy
 export class OffsiteBackups {
   private readonly store: BlobStore
   private readonly localRoot: string
+  private readonly signingKey: BackupSigningKey
   private readonly prefix: string
   private readonly intervalMs: number
   private readonly retention: { newest: number; dailyDays: number }
@@ -128,6 +151,10 @@ export class OffsiteBackups {
   private readonly badLocal = new Set<string>()
   private readonly queue = new Set<string>()
   private index: OffsiteIndex | null = null
+  /** The index read from the store is not signed by the current key: write it on the next update. */
+  private indexNeedsSigning = false
+  /** Boards whose manifest in the store is not signed by the current key (or listed bad entries). */
+  private readonly unsignedInStore = new Set<string>()
   private draining: Promise<void> | null = null
   private timer: ReturnType<typeof setInterval> | null = null
   private unsubscribe: (() => void) | null = null
@@ -139,6 +166,7 @@ export class OffsiteBackups {
   constructor(opts: OffsiteOptions) {
     this.store = opts.store
     this.localRoot = opts.localRoot
+    this.signingKey = opts.signingKey
     this.prefix = opts.prefix ?? OFFSITE_PREFIX
     this.intervalMs = opts.intervalMs ?? BACKUP_DEFAULTS.intervalMs
     this.retention = opts.retention ?? OFFSITE_RETENTION
@@ -274,7 +302,7 @@ export class OffsiteBackups {
         local.filter((e) => !inStore.has(e.file) && !this.badLocal.has(`${boardId}/${e.file}`)),
       )
       st.pending = missing.length
-      if (missing.length > 0 || known.pendingDeletes > 0) {
+      if (missing.length > 0 || known.pendingDeletes > 0 || this.unsignedInStore.has(boardId)) {
         manifest ??= await this.fetchManifest(boardId)
         for (const entry of missing) {
           if (this.stopped) return
@@ -283,6 +311,11 @@ export class OffsiteBackups {
         }
         what = 'retention'
         await this.deletePending(boardId, manifest)
+        // Nothing above wrote it: the one write that signs a manifest read unsigned (retried until done).
+        if (this.unsignedInStore.has(boardId)) {
+          what = 'manifest'
+          await this.writeManifest(boardId, manifest)
+        }
       }
       what = 'index'
       await this.updateIndex(boardId)
@@ -326,9 +359,17 @@ export class OffsiteBackups {
     return keep.includes(candidate)
   }
 
-  /** The board's manifest as the store has it (an empty one if there is none, or it is unreadable). */
+  /**
+   * The board's manifest as the store has it (an empty one if there is none, or it is unreadable),
+   * without the entries whose own signature does not match. One that is not signed by the current key,
+   * or lost entries, is marked to be written again even if nothing else changes (unsignedInStore).
+   */
   private async fetchManifest(boardId: string): Promise<OffsiteManifest> {
     const key = offsiteKeys.manifest(this.prefix, boardId)
+    const fresh = () => {
+      this.unsignedInStore.delete(boardId) // nothing worth keeping: the next upload writes a new one
+      return emptyManifest(boardId, this.now())
+    }
     let raw: unknown
     try {
       raw = await getJson(this.store, key, MAX_MANIFEST_BYTES)
@@ -337,20 +378,49 @@ export class OffsiteBackups {
       this.log(
         `[backup] offsite manifest of board ${boardId} is unreadable (${e.message}); starting a new one`,
       )
-      return emptyManifest(boardId, this.now())
+      return fresh()
     }
-    if (raw === null) return emptyManifest(boardId, this.now())
+    if (raw === null) return fresh()
+    let parsed: ReturnType<typeof parseManifest>
     try {
-      const parsed = parseManifest(raw, this.prefix, boardId)
-      if (parsed.ignored)
-        this.log(`[backup] offsite manifest of board ${boardId}: ${parsed.ignored} malformed entries ignored`)
-      return parsed.manifest
+      parsed = parseManifest(raw, this.prefix, boardId, this.signingKey)
     } catch (e) {
       this.log(
         `[backup] offsite manifest of board ${boardId} is unreadable (${describeFailure(e)}); starting a new one`,
       )
-      return emptyManifest(boardId, this.now())
+      return fresh()
     }
+    if (parsed.ignored)
+      this.log(`[backup] offsite manifest of board ${boardId}: ${parsed.ignored} malformed entries ignored`)
+    const status = parsed.signature.status
+    if (status !== 'valid')
+      this.log(
+        `[backup] ${RESIGN_REASON[status](`offsite manifest of board ${boardId}`)}${MANIFEST_RESIGN_DETAIL[status]}`,
+      )
+    // A listed entry whose signature does not match was changed outside this server: never trust it
+    // (for retention either). Its object is left alone; a local copy of that backup goes up again.
+    const backups = parsed.manifest.backups.filter(
+      (b) => parsed.entrySignatures.get(b.file)?.status !== 'invalid',
+    )
+    const dropped = parsed.manifest.backups.length - backups.length
+    if (dropped)
+      this.log(
+        `[backup] offsite manifest of board ${boardId}: ${dropped} entries do not match their signature and were dropped (their objects stay in the store)`,
+      )
+    if (status !== 'valid' || dropped > 0) this.unsignedInStore.add(boardId)
+    else this.unsignedInStore.delete(boardId)
+    return { ...parsed.manifest, backups }
+  }
+
+  /** Signs the manifest and writes it; the next pass works from it. */
+  private async writeManifest(boardId: string, manifest: OffsiteManifest): Promise<void> {
+    await putJson(
+      this.store,
+      offsiteKeys.manifest(this.prefix, boardId),
+      signDocument(this.signingKey, 'manifest', manifest),
+    )
+    this.unsignedInStore.delete(boardId)
+    this.remember(boardId, manifest)
   }
 
   /** Uploads one local backup and lists it; returns the manifest as written. */
@@ -388,7 +458,7 @@ export class OffsiteBackups {
     }
     const assets = cleanAssetRefs(entry.assets) ?? inspectBoardDb(path).assets
     const uploadedAt = this.now().toISOString()
-    const stored: OffsiteEntry = {
+    const facts: OffsiteEntry = {
       file: entry.file,
       key,
       createdAt: entry.createdAt,
@@ -401,6 +471,9 @@ export class OffsiteBackups {
       sizeBytes: size,
       assets,
     }
+    // Signed here, from the local manifest (the sync disk) and the bytes just sent: the only place an
+    // entry is ever signed.
+    const stored: OffsiteEntry = { ...facts, signature: signEntry(this.signingKey, boardId, facts) }
     const { keep, drop } = applyRetention(
       [...current.backups.filter((b) => b.file !== entry.file), stored],
       this.now(),
@@ -416,8 +489,7 @@ export class OffsiteBackups {
       ),
     }
     // The object first, then the manifest that lists it: the manifest never names a missing object.
-    await putJson(this.store, offsiteKeys.manifest(this.prefix, boardId), next)
-    this.remember(boardId, next)
+    await this.writeManifest(boardId, next)
     const st = this.statusOf(boardId)
     st.lastSuccessAt = uploadedAt
     st.lastSuccessFile = entry.file
@@ -440,11 +512,12 @@ export class OffsiteBackups {
         firstError ??= e
       }
     }
-    if (left.length !== manifest.pendingDeletes.length) {
-      const next = { ...manifest, updatedAt: this.now().toISOString(), pendingDeletes: left }
-      await putJson(this.store, offsiteKeys.manifest(this.prefix, boardId), next)
-      this.remember(boardId, next)
-    }
+    if (left.length !== manifest.pendingDeletes.length)
+      await this.writeManifest(boardId, {
+        ...manifest,
+        updatedAt: this.now().toISOString(),
+        pendingDeletes: left,
+      })
     if (firstError !== null) throw firstError
   }
 
@@ -464,7 +537,13 @@ export class OffsiteBackups {
       }
       if (raw !== null)
         try {
-          index = parseIndex(raw)
+          const parsed = parseIndex(raw, this.signingKey)
+          index = parsed.index
+          // Its rows are hints (board ids); what matters is that the index is signed from now on.
+          if (parsed.signature.status !== 'valid') {
+            this.indexNeedsSigning = true
+            this.log(`[backup] ${RESIGN_REASON[parsed.signature.status]('offsite index')}`)
+          }
         } catch (e) {
           this.log(`[backup] offsite index is unreadable (${describeFailure(e)}); starting a new one`)
         }
@@ -479,6 +558,7 @@ export class OffsiteBackups {
     }
     const old = this.index.boards.find((b) => b.boardId === boardId)
     if (
+      !this.indexNeedsSigning &&
       old &&
       old.latestFile === row.latestFile &&
       old.count === row.count &&
@@ -492,7 +572,8 @@ export class OffsiteBackups {
         a.boardId.localeCompare(b.boardId),
       ),
     }
-    await putJson(this.store, offsiteKeys.index(this.prefix), next)
+    await putJson(this.store, offsiteKeys.index(this.prefix), signDocument(this.signingKey, 'index', next))
     this.index = next
+    this.indexNeedsSigning = false
   }
 }

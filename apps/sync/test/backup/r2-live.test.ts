@@ -19,6 +19,7 @@ import { afterAll, describe, expect, it } from 'vitest'
 import { runRestoreDrill, storeBackupSource } from '../../src/backup/drill.ts'
 import { OffsiteBackups } from '../../src/backup/offsite.ts'
 import { type OffsiteManifest, offsiteKeys } from '../../src/backup/offsite-manifest.ts'
+import { backupSigningKey } from '../../src/backup/signing.ts'
 import { RoomRegistry } from '../../src/rooms.ts'
 import { note, RoomClient } from '../deleted/fixtures.ts'
 import { AST_A, fileCard, readJsonObject, tempData, VER_A } from './offsite-fixtures.ts'
@@ -76,6 +77,8 @@ if ('skip' in live) {
   }
   const data = tempData('dr-offsite-live-')
   const logs: string[] = []
+  // A throwaway signing secret: the run prefix holds nothing any real server wrote.
+  const signingKey = backupSigningKey(randomBytes(32).toString('base64url'))
 
   afterAll(async () => {
     for (const key of written) await base.delete(key)
@@ -91,6 +94,7 @@ if ('skip' in live) {
       const offsite = new OffsiteBackups({
         store,
         localRoot: data.backups,
+        signingKey,
         prefix: PREFIX,
         log: (...a) => logs.push(a.map(String).join(' ')),
       })
@@ -109,8 +113,12 @@ if ('skip' in live) {
         ])
         const head = await store.head(offsiteKeys.file(PREFIX, BOARD, entry.file))
         expect(head).toEqual({ contentLength: entry.sizeBytes, contentType: 'application/vnd.sqlite3' })
-        const report = await runRestoreDrill({ dataDir: data.root, source: storeBackupSource(store, PREFIX) })
+        const report = await runRestoreDrill({
+          dataDir: data.root,
+          source: storeBackupSource(store, { signingKey, prefix: PREFIX }),
+        })
         expect(report.boards.map((b) => [b.boardId, b.ok, b.live])).toEqual([[BOARD, true, 'identical']])
+        expect(report.boards[0]?.checks).toContain('manifest entry signature verified')
       } finally {
         await offsite.stop()
         reg.closeAll()

@@ -55,6 +55,8 @@ export interface RestoreRequest {
   documentClock: number
   recordCount: number
   stagedAt: string
+  /** The backup's signature could not be verified and was accepted with --allow-unsigned. */
+  unsignedAccepted?: true
 }
 
 const restoreDir = (dataDir: string) => join(dataLayout(dataDir).root, RESTORE_DIR_NAME)
@@ -78,7 +80,11 @@ function writeJsonAtomic(path: string, value: unknown) {
   renameSync(tmp, path)
 }
 
-/** Verifies a backup and stages it for the next server start. Throws DrillProblem when it does not verify. */
+/**
+ * Verifies a backup and stages it for the next server start. Throws DrillProblem when it does not
+ * verify (from the offsite store: its signatures first, drill.ts). `warnings` lists what was accepted
+ * unverified (only with a source built with allowUnsigned).
+ */
 export async function stageRestore(opts: {
   dataDir: string
   source: BackupSource
@@ -87,7 +93,7 @@ export async function stageRestore(opts: {
   file?: string
   schema?: TLSchema
   now?: () => Date
-}): Promise<{ request: RestoreRequest; checks: string[] }> {
+}): Promise<{ request: RestoreRequest; checks: string[]; warnings: string[] }> {
   const { boardId, source } = opts
   if (!BOARD_ID_RE.test(boardId)) throw new DrillProblem('invalid board id')
   const dir = restoreDir(opts.dataDir)
@@ -107,6 +113,7 @@ export async function stageRestore(opts: {
     const tmp = `${staged}.${randomBytes(4).toString('hex')}.tmp`
     copyFileSync(got.path, tmp)
     renameSync(tmp, staged)
+    const warnings = entry.trust?.warnings ?? []
     const request: RestoreRequest = {
       format: 'draftroom-staged-restore',
       version: 1,
@@ -119,10 +126,11 @@ export async function stageRestore(opts: {
       documentClock: entry.documentClock,
       recordCount: entry.recordCount,
       stagedAt: (opts.now ?? (() => new Date()))().toISOString(),
+      ...(warnings.length ? { unsignedAccepted: true as const } : {}),
     }
     writeJsonAtomic(requestFile(opts.dataDir, boardId), request)
     giveToDataDirOwner(opts.dataDir, [dir, staged, requestFile(opts.dataDir, boardId)])
-    return { request, checks: [...got.checks, ...verified.checks] }
+    return { request, checks: [...(entry.trust?.checks ?? []), ...got.checks, ...verified.checks], warnings }
   } finally {
     rmSync(scratch, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
   }
@@ -250,7 +258,9 @@ export async function applyStagedRestores(opts: {
         } catch {}
       done(
         true,
-        `restored from ${request.source} backup ${request.file} (${request.recordCount} records); clock ${result.documentClock}` +
+        `restored from ${request.source} backup ${request.file} (${request.recordCount} records)` +
+          (request.unsignedAccepted === true ? ' (unsigned backup, accepted with --allow-unsigned)' : '') +
+          `; clock ${result.documentClock}` +
           (kept ? `; previous database kept as ${basename(kept)}` : ''),
       )
     } catch (e) {

@@ -71,11 +71,14 @@ async function settledOffsite(dataDir: string, board: string): Promise<OffsiteMa
   return value
 }
 
-function drill(dataDir: string, board: string) {
+function drill(dataDir: string, board: string, internalSecret: string) {
   const env: NodeJS.ProcessEnv = { ...process.env }
   for (const key of Object.keys(env))
     if (key.startsWith('DRAFTROOM_') || key.startsWith('R2_') || key === 'NODE_OPTIONS') delete env[key]
   env.DRAFTROOM_BACKUP_STORE = 'fs'
+  // The stack's own secret: the drill verifies the manifests its sync server signed (it wins over
+  // apps/sync/dev.env, which --env-file never lets override the environment).
+  env.DRAFTROOM_INTERNAL_SECRET = internalSecret
   if (/["\r\n]/.test(dataDir)) throw new Error(`unexpected data dir ${dataDir}`)
   if (!/^[a-z0-9][a-z0-9_-]{2,63}$/.test(board)) throw new Error(`bad board id ${board}`)
   const command = `pnpm --filter @draftroom/sync backup:restore-drill --from=store --data-dir "${dataDir}" --board ${board}`
@@ -141,7 +144,7 @@ test('an edited board is copied offsite with a manifest of its files, and the dr
   )
   expect(index?.boards).toContainEqual(expect.objectContaining({ boardId: board, latestFile: newest?.file }))
 
-  const run = drill(stack.dataDir, board)
+  const run = drill(stack.dataDir, board, stack.internalSecret)
   test.info().annotations.push({ type: 'drill output', description: run.output })
   expect(run.status, run.output).toBe(0)
   expect(run.output).toContain(`PASS ${board} ${newest?.file}`)
@@ -166,7 +169,7 @@ test('a damaged offsite copy fails the drill from the store', async ({ session, 
   damaged[damaged.length - 100] = (damaged[damaged.length - 100] ?? 0) ^ 0xff
   writeFileSync(file, damaged)
   try {
-    const run = drill(stack.dataDir, board)
+    const run = drill(stack.dataDir, board, stack.internalSecret)
     expect(run.status, run.output).toBe(1)
     expect(run.output).toContain(`FAIL ${board}`)
     expect(run.output).toContain('backup file checksum does not match its manifest')
@@ -174,5 +177,5 @@ test('a damaged offsite copy fails the drill from the store', async ({ session, 
   } finally {
     writeFileSync(file, original)
   }
-  expect(drill(stack.dataDir, board).status).toBe(0)
+  expect(drill(stack.dataDir, board, stack.internalSecret).status).toBe(0)
 })

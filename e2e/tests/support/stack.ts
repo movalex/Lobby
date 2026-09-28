@@ -227,6 +227,11 @@ export interface StackOptions {
 export interface Stack {
   readonly dataDir: string
   readonly syncEnv: Readonly<Record<string, string>>
+  /**
+   * This stack's DRAFTROOM_INTERNAL_SECRET (random per stack), for tools that verify what its sync
+   * server signed: the offsite backup drill and restore-board.
+   */
+  readonly internalSecret: string
   readonly api: ManagedProcess
   readonly sync: ManagedProcess
   readonly worker: ManagedProcess
@@ -340,6 +345,7 @@ export async function startStack(opts: StackOptions = {}): Promise<Stack> {
   return {
     dataDir,
     syncEnv,
+    internalSecret: secrets.DRAFTROOM_INTERNAL_SECRET,
     api,
     sync,
     worker,
