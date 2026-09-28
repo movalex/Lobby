@@ -731,7 +731,9 @@ test('PRE-08 start view: alice saves her view; first visits land exactly there, 
     await waitForSaved(a.page)
     const e = await firstVisit('erin', 'editor')
     try {
-      expect(await startView(e.page)).toBe('fit')
+      // The default first view again: all content, or (DANA-06) the first frame where all of it only
+      // fits unreadably small.
+      expect(['fit', 'first-frame']).toContain(await startView(e.page))
     } finally {
       await e.context.close()
     }

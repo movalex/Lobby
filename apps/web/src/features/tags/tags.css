@@ -24,6 +24,15 @@
   left: 8px;
   right: 8px;
 }
+/* Shapes and text (mind-map topics, labels): just above the top-left corner, so the chips never cover
+   the shape's own centred text. */
+.dr-tag-chips[data-kind="above"] {
+  top: auto;
+  bottom: calc(100% + 4px * var(--dr-tag-s));
+  left: 0;
+  right: auto;
+  max-width: max(100%, calc(200px * var(--dr-tag-s)));
+}
 .dr-tag-chip {
   flex: 0 1 auto;
   min-width: calc(26px * var(--dr-tag-s));

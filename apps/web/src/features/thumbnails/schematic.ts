@@ -7,6 +7,7 @@
 // few milliseconds for hundreds of shapes. Paint order follows the board's (frames clip their
 // children), light mode like the board canvas.
 
+import { FILE_CARD_TYPE, type FileCardShape } from '@draftroom/canvas-schema'
 import {
   type Editor,
   type Geometry2d,
@@ -17,6 +18,7 @@ import {
   type TLShapeId,
   type TLThemeColors,
 } from 'tldraw'
+import { cardCoverUrl } from '../../file-card/open-original.ts'
 import type { ThumbnailFrame } from './plan.ts'
 
 /** tldraw 5.4.2's stroke widths (STROKE_SIZES) per size style, in page units at scale 1. */
@@ -26,6 +28,23 @@ const MAX_IMAGES = 60
 const IMAGE_TIMEOUT_MS = 3000
 const TILE = '#e7e9ee'
 const TILE_LINE = '#c9cdd6'
+/** A file card's footer (name, size) under its cover, in page units (styles.css .dr-fc__footer). */
+const CARD_FOOTER = 56
+
+/** Draws `img` letterboxed (object-fit: contain) inside (x, y, w, h). */
+function drawContained(
+  ctx: CanvasRenderingContext2D,
+  img: HTMLImageElement,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+) {
+  const iw = img.naturalWidth || w
+  const ih = img.naturalHeight || h
+  const k = Math.min(w / iw, h / ih)
+  ctx.drawImage(img, x + (w - iw * k) / 2, y + (h - ih * k) / 2, iw * k, ih * k)
+}
 
 type Props = Record<string, unknown>
 const propsOf = (s: TLShape) => s.props as Props
@@ -91,26 +110,32 @@ function fillFor(colors: TLThemeColors, color: string, fill: string): string | n
   }
 }
 
-/** Loads the screen-sized previews of the image shapes in `ids` (bounded in count and time). */
+/** An image shape's screen-sized preview, or a file card's cover (PDF first page, video poster). */
+async function previewUrl(editor: Editor, shape: TLShape, scale: number): Promise<string | null> {
+  if (shape.type === FILE_CARD_TYPE) return cardCoverUrl(editor, (shape as FileCardShape).props)
+  const assetId = propsOf(shape).assetId
+  if (typeof assetId !== 'string') return null
+  const asset = editor.getAsset(assetId as TLImageAsset['id'])
+  const w = num(propsOf(shape).w, 0)
+  const assetW = asset?.type === 'image' ? asset.props.w : 0
+  return editor.resolveAssetUrl(assetId as TLImageAsset['id'], {
+    screenScale: assetW > 0 ? scale * (w / assetW) : scale,
+    shouldResolveToOriginal: false,
+    dpr: 1,
+  })
+}
+
+/** Loads the previews of the image shapes and file cards in `ids` (bounded in count and time). */
 async function loadImages(editor: Editor, ids: TLShapeId[], scale: number) {
   const out = new Map<TLShapeId, HTMLImageElement>()
   const wanted = ids
     .map((id) => editor.getShape(id))
-    .filter((s): s is TLShape => s?.type === 'image')
+    .filter((s): s is TLShape => s?.type === 'image' || s?.type === FILE_CARD_TYPE)
     .slice(0, MAX_IMAGES)
   await Promise.all(
     wanted.map(async (shape) => {
-      const assetId = propsOf(shape).assetId
-      if (typeof assetId !== 'string') return
-      const asset = editor.getAsset(assetId as TLImageAsset['id'])
-      const w = num(propsOf(shape).w, 0)
-      const assetW = asset?.type === 'image' ? asset.props.w : 0
       try {
-        const url = await editor.resolveAssetUrl(assetId as TLImageAsset['id'], {
-          screenScale: assetW > 0 ? scale * (w / assetW) : scale,
-          shouldResolveToOriginal: false,
-          dpr: 1,
-        })
+        const url = await previewUrl(editor, shape, scale)
         if (!url) return
         const img = new Image()
         img.decoding = 'async'
@@ -265,8 +290,22 @@ export function drawSchematic(
         }
         break
       }
+      case FILE_CARD_TYPE: {
+        // F1: the card's cover (PDF first page, video poster) above its footer, as on the board.
+        ctx.lineWidth = Math.max(1, minLine)
+        ctx.fillStyle = colors.background
+        ctx.fillRect(b.x, b.y, b.w, b.h)
+        const top = Math.max(0, b.h - CARD_FOOTER)
+        ctx.fillStyle = TILE
+        ctx.fillRect(b.x, b.y, b.w, top)
+        const img = images.get(id)
+        if (img && top > 0) drawContained(ctx, img, b.x, b.y, b.w, top)
+        ctx.strokeStyle = TILE_LINE
+        ctx.strokeRect(b.x, b.y, b.w, b.h)
+        break
+      }
       default: {
-        // File cards, videos, embeds, bookmarks and anything else: a tile of its size.
+        // Videos, embeds, bookmarks and anything else: a tile of its size.
         ctx.fillStyle = TILE
         ctx.strokeStyle = TILE_LINE
         ctx.lineWidth = Math.max(1, minLine)

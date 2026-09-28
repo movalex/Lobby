@@ -1,6 +1,6 @@
 import type { FileCardShape } from '@draftroom/canvas-schema'
-import { type PointerEvent, useCallback, useEffect, useState } from 'react'
-import { HTMLContainer, useEditor, useValue } from 'tldraw'
+import { type PointerEvent, useCallback, useEffect, useRef, useState } from 'react'
+import { HTMLContainer, useDelaySvgExport, useEditor, useSvgExportContext, useValue } from 'tldraw'
 import { derivativeUrl, originalUrl } from '../assets/contract.ts'
 import { useAssetMeta } from '../assets/meta-store.ts'
 import { useBoard } from '../board/board-context.ts'
@@ -9,7 +9,7 @@ import { extensionLabel, formatBytes, formatDuration, pluralize } from '../lib/f
 import { type CardView, cardView, coverDerivative, stripPages } from './card-model.ts'
 import './file-card.css'
 import { CONVERSION_DETAIL, CONVERSION_NOTE, cardOfficeFormat, isConvertedPreview } from './office.ts'
-import { registerCardBoard } from './open-original.ts'
+import { cardBoardFor, registerCardBoard } from './open-original.ts'
 import { previewPages } from './pdf-pages.ts'
 import { openPdfViewer } from './viewer-state.ts'
 
@@ -36,14 +36,25 @@ function useInteractive() {
 }
 
 export function FileCardView({ shape }: { shape: FileCardShape }) {
-  const board = useBoard()
+  const boardCtx = useBoard()
   const editor = useEditor()
   // Lets FileCardShapeUtil.onDoubleClick build the same original URL as the Download link.
   useEffect(() => {
-    if (board) registerCardBoard(editor, { boardId: board.boardId, metaStore: board.metaStore })
-  }, [editor, board])
+    if (boardCtx) registerCardBoard(editor, { boardId: boardCtx.boardId, metaStore: boardCtx.metaStore })
+  }, [editor, boardCtx])
+  // F1: an export (PNG, PDF, SVG, the dashboard thumbnail) renders the card in tldraw's own React root,
+  // without our board context. There it resolves its previews through the board the mounted cards
+  // registered (the same board-authorized routes), and holds the export until it knows what to show;
+  // tldraw then inlines the <img>s. Controls (View pages, Download) mean nothing in a picture.
+  const exporting = useSvgExportContext() !== null
+  const board = boardCtx ?? (exporting ? cardBoardFor(editor) : null)
   const p = shape.props
   const snap = useAssetMeta(board?.metaStore ?? null, board?.boardId ?? '', p.assetId, p.versionId)
+  const exportReady = useDelaySvgExport()
+  const settled = snap.missing || snap.error || snap.meta !== null
+  useEffect(() => {
+    if (settled) exportReady()
+  }, [settled, exportReady])
   const view = cardView(p, snap.meta)
   const cover = coverDerivative(snap.meta)
   const coverSrc = board && cover ? derivativeUrl(board.boardId, p.assetId, p.versionId, cover.id) : null
@@ -55,9 +66,12 @@ export function FileCardView({ shape }: { shape: FileCardShape }) {
   // export-control: no Download while the board owner turned downloads off for this person (the api
   // refuses the original anyway). Previews, pages and video playback keep working.
   const boardId = board?.boardId ?? null
-  const canDownload = useValue('dr-fc-can-download', () => (boardId ? exportAllowedOnBoard(boardId) : true), [
-    boardId,
-  ])
+  const downloadAllowed = useValue(
+    'dr-fc-can-download',
+    () => (boardId ? exportAllowedOnBoard(boardId) : true),
+    [boardId],
+  )
+  const canDownload = downloadAllowed && !exporting
 
   return (
     <HTMLContainer
@@ -78,7 +92,7 @@ export function FileCardView({ shape }: { shape: FileCardShape }) {
             canDownload={canDownload}
             missing={snap.missing}
             onViewPages={
-              view.kind === 'pdf' && board && hasPagePreviews(snap.meta)
+              view.kind === 'pdf' && board && !exporting && hasPagePreviews(snap.meta)
                 ? () => openPdfViewer(editor, shape.id)
                 : null
             }
@@ -124,6 +138,27 @@ function Preview({
 }) {
   const onInteract = useInteractive()
   const [playing, setPlaying] = useState(false)
+  // F5: on a touch screen the canvas cancels the tap's touchstart (tldraw prevents its default so it
+  // can pan and pinch), so the browser never sends the button its click. A touch or pen tap opens the
+  // viewer on pointerup instead; the click that some browsers still send after it is then ignored.
+  const tappedAt = useRef(0)
+  const pressed = useRef<number | null>(null)
+  const onViewPagesDown = (e: PointerEvent) => {
+    onInteract(e)
+    pressed.current = e.pointerId
+  }
+  const onViewPagesUp = (e: PointerEvent) => {
+    onInteract(e)
+    const tap = pressed.current === e.pointerId
+    pressed.current = null
+    if (!onViewPages || !tap || e.pointerType === 'mouse' || e.button !== 0) return
+    tappedAt.current = Date.now()
+    onViewPages()
+  }
+  const onViewPagesClick = () => {
+    if (Date.now() - tappedAt.current < 800) return
+    onViewPages?.()
+  }
 
   if (view.status === 'failed') {
     return (
@@ -196,9 +231,9 @@ function Preview({
           className="dr-fc__view dr-interactive"
           data-testid="file-card-view-pages"
           aria-label={`View pages of ${view.name}`}
-          onPointerDown={onInteract}
-          onPointerUp={onInteract}
-          onClick={onViewPages}
+          onPointerDown={onViewPagesDown}
+          onPointerUp={onViewPagesUp}
+          onClick={onViewPagesClick}
         >
           <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
             <path

@@ -1,5 +1,17 @@
 import { searchBoard } from '@draftroom/board-ops'
-import { fileCard, frame, geo, note, PAGE, page, sid, validateAll } from '@draftroom/board-ops/test-fixtures'
+import {
+  arrow,
+  fileCard,
+  frame,
+  geo,
+  image,
+  imageAsset,
+  note,
+  PAGE,
+  page,
+  sid,
+  validateAll,
+} from '@draftroom/board-ops/test-fixtures'
 import { shapeTagMetaKey, type TagDef } from '@draftroom/contracts'
 import type { TLRecord } from 'tldraw'
 import { describe, expect, it } from 'vitest'
@@ -21,7 +33,7 @@ const records: TLRecord[] = [
   note('n3', 'Research budget', { x: 500, y: 0 }), // the word, no tag
   note('n4', '', { x: 20, y: 20, parentId: sid('f'), meta: tagsMeta(USER_RESEARCH) }), // page y = 20
   fileCard('c1', 'survey.pdf', { x: 900, y: 900, meta: tagsMeta(IDEA) }),
-  geo('g1', 'Research', { x: 0, y: 900, meta: tagsMeta(RESEARCH) }), // shapes other than notes/cards: no tags
+  arrow('g1', 'Research', { x: 0, y: 900, meta: tagsMeta(RESEARCH) }), // arrows carry no tags
 ]
 const board = boardTagMap([RESEARCH, IDEA, USER_RESEARCH])
 const run = (query: string, tag: string | null = null) =>
@@ -88,6 +100,27 @@ describe('search by tag', () => {
       (h) => h.shapeId,
     )
     expect(ids).toEqual([sid('n2'), sid('n1')])
+  })
+
+  it('F2 / R8: images and mind-map topics (geo) carry tags too, for the filter and #terms', () => {
+    const WARM = T('warm', 'Warm', 'orange')
+    const mood: TLRecord[] = [
+      page(PAGE, 'Page 1'),
+      imageAsset('a1'),
+      image('i1', 'asset:a1', { x: 0, y: 0, meta: tagsMeta(WARM) }),
+      image('i2', 'asset:a1', { x: 400, y: 0 }),
+      geo('t1', 'Stabilise CI', { x: 0, y: 400, meta: { drMindmap: { rootId: 'r' }, ...tagsMeta(WARM) } }),
+    ]
+    expect(() => validateAll(mood)).not.toThrow()
+    const opts = { limit: 50, board: boardTagMap([WARM]) }
+    expect(searchBoardWithTags(mood, '', { ...opts, tag: 'warm' }).map((h) => h.shapeId)).toEqual([
+      sid('i1'),
+      sid('t1'),
+    ])
+    expect(searchBoardWithTags(mood, '#warm', { ...opts, tag: null }).map((h) => h.shapeId)).toEqual([
+      sid('i1'),
+      sid('t1'),
+    ])
   })
 
   it('respects the limit', () => {

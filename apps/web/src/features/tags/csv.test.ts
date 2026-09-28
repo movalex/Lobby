@@ -50,7 +50,7 @@ describe('CSV tags column', () => {
     expect(byId.get(sid('n1'))?.[7]).toBe('IDEA; Research')
     expect(byId.get(sid('n2'))?.[7]).toBe('')
     expect(byId.get(sid('c1'))?.[7]).toBe('IDEA')
-    expect(byId.get(sid('g1'))?.[7]).toBe('') // only notes and file cards carry tags
+    expect(byId.get(sid('g1'))?.[7]).toBe('IDEA') // shapes (mind-map topics) carry tags too (R8)
     for (const r of rows) expect(r).toHaveLength(8)
   })
 

@@ -132,10 +132,17 @@ export const PHONE_CANVAS_MAX_W = 480
 export const PHONE_FRAME_INSET = 16
 
 /**
+ * Below this zoom a first view of the whole page is an overview nobody can read (DANA-06: the Lobby
+ * tour opened at 12 % for its owner and at 9 % for a client on a desktop): sticky-note text is under
+ * about 10 px there.
+ */
+export const READABLE_FIT_ZOOM = 0.5
+
+/**
  * "Fit all content" (a first visit with no start view) shows the first frame instead when the whole
- * page would not be readable (F15): on a phone-sized canvas, or when even the smallest zoom cannot
- * fit the content (tldraw then shows a clipped strip, e.g. the 10,400 px Lobby tour at 5 % on a
- * 390 px phone). Only when the page has a frame to show.
+ * page would not be readable (F15, DANA-06): on a phone-sized canvas, or on any screen where the whole
+ * page only fits below READABLE_FIT_ZOOM (or not even at the smallest zoom: tldraw then shows a
+ * clipped strip). Only when the page has a frame to show; a small board still opens on all of it.
  */
 export function prefersFirstFrame(input: {
   screen: { w: number; h: number }
@@ -147,7 +154,33 @@ export function prefersFirstFrame(input: {
   if (!input.hasFrame || !(screen.w > 0) || !(screen.h > 0)) return false
   if (screen.w <= PHONE_CANVAS_MAX_W) return true
   if (!(content.w > 0) || !(content.h > 0)) return false
-  return Math.min(screen.w / content.w, screen.h / content.h) < input.minZoom
+  const fit = Math.min(screen.w / content.w, screen.h / content.h)
+  return fit < Math.max(input.minZoom, READABLE_FIT_ZOOM)
+}
+
+/** A frame fitted to a phone below this zoom is a strip of unreadable text (R13). */
+export const PHONE_MIN_FRAME_ZOOM = 0.15
+/** The zoom such a frame opens at instead (at most: a short frame may fill the height at less). */
+export const PHONE_WIDE_FRAME_ZOOM = 0.5
+
+/**
+ * R13: a frame far wider than a phone (the Retrospective's 2,560 px Check-in, 12 % across a 390 px
+ * phone) opens at its left end at a readable zoom, centred vertically; the rest is a swipe away.
+ * Null: fit the whole frame (the tour's 1,600 px frames fit at about 20 %, readable enough). The
+ * camera is tldraw's: a page point p shows at (p + camera) * z from the canvas's top-left.
+ */
+export function phoneFrameCamera(
+  frame: { x: number; y: number; w: number; h: number },
+  screen: { w: number; h: number },
+  inset: number,
+): { x: number; y: number; z: number } | null {
+  const availW = screen.w - inset * 2
+  const availH = screen.h - inset * 2
+  if (!(frame.w > 0) || !(frame.h > 0) || !(availW > 0) || !(availH > 0)) return null
+  const fit = Math.min(availW / frame.w, availH / frame.h)
+  if (fit >= PHONE_MIN_FRAME_ZOOM) return null
+  const z = Math.max(PHONE_MIN_FRAME_ZOOM, Math.min(PHONE_WIDE_FRAME_ZOOM, availH / frame.h))
+  return { x: inset / z - frame.x, y: screen.h / 2 / z - (frame.y + frame.h / 2), z }
 }
 
 /** After restoring a camera: zoom to fit when it shows nothing but the page has content. */

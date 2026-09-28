@@ -147,6 +147,64 @@ export function fitInSlot(size: Size, slot: Rect): Rect {
 }
 
 /**
+ * Template image slots in rows (top to bottom), each row left to right. Slots whose centres are
+ * within half a slot's height of a row's first slot share its row.
+ */
+export function slotRows<T extends { id: string; bounds: Rect }>(slots: readonly T[]): T[][] {
+  const cy = (s: T) => s.bounds.y + s.bounds.h / 2
+  const byY = [...slots].sort((a, b) => cy(a) - cy(b) || a.bounds.x - b.bounds.x)
+  const rows: T[][] = []
+  for (const s of byY) {
+    const row = rows[rows.length - 1]
+    const first = row?.[0]
+    if (row && first && Math.abs(cy(s) - cy(first)) <= Math.min(s.bounds.h, first.bounds.h) / 2) row.push(s)
+    else rows.push([s])
+  }
+  for (const row of rows) row.sort((a, b) => a.bounds.x - b.bounds.x || (a.id < b.id ? -1 : 1))
+  return rows
+}
+
+/**
+ * F6: the order several dropped images fill a frame's empty slots: reading order, starting at the
+ * slot under the pointer (`startId`) and wrapping around to the first ones.
+ */
+export function slotFillOrder<T extends { id: string; bounds: Rect }>(
+  slots: readonly T[],
+  startId: string | null = null,
+): T[] {
+  const order = slotRows(slots).flat()
+  const i = startId ? order.findIndex((s) => s.id === startId) : -1
+  return i > 0 ? [...order.slice(i), ...order.slice(0, i)] : order
+}
+
+/**
+ * Images in a grid of equal cells of `cell`'s size (the template slots' size: F6, the images that
+ * did not find a free slot stay at the same scale as the ones that did), `cols` per row, each image
+ * contain-fitted and centred in its cell.
+ */
+export function layoutCellGrid(sizes: readonly Size[], cell: Size, cols: number, gap: number): Block {
+  if (!sizes.length) return { w: 0, h: 0, items: [] }
+  const c = saneSize(cell)
+  const n = Math.max(1, Math.floor(cols))
+  const items = sizes.map((size, i) => {
+    const r = fitInSlot(size, { x: 0, y: 0, w: c.w, h: c.h })
+    const col = i % n
+    const row = Math.floor(i / n)
+    return { ...r, x: col * (c.w + gap) + r.x, y: row * (c.h + gap) + r.y }
+  })
+  return normalize(items)
+}
+
+/**
+ * Top-left for a block that goes right under a frame (centred on it), or the nearest spot to that
+ * clear of `obstacles` (the page's other content, the frame itself included).
+ */
+export function placeUnder(size: Size, frame: Rect, obstacles: readonly Rect[], clearance: number): Point {
+  const center = { x: frame.x + frame.w / 2, y: frame.y + frame.h + clearance + size.h / 2 }
+  return findEmptySpot(size, center, obstacles, { gap: clearance })
+}
+
+/**
  * Somewhere the block may go: a frame (`bounds`) with its children as obstacles, or the page
  * (`bounds: null`) with its top-level shapes as obstacles.
  */

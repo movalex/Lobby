@@ -20,11 +20,16 @@ import {
 import { type AssetKind, type AssetVersionMeta, LIMITS } from '../assets/contract.ts'
 import {
   cameraTargetAfterDrop,
+  DROP_LAYOUT,
   type DropContainer,
   fitInSlot,
+  layoutCellGrid,
+  placeUnder,
   planDrop,
   type Rect,
   type Size,
+  slotFillOrder,
+  slotRows,
   type View,
 } from '../assets/drop-layout.ts'
 import { type AssetMetaStore, watchMeta } from '../assets/meta-store.ts'
@@ -56,8 +61,8 @@ export const IMAGE_HANDLER_LIMITS = {
  * tldraw creates the images (upload, local preview, its toasts); we then replace its placement
  * (native pixel size, one long row, auto-parented by top-left corner) with drop-layout.ts's:
  * screen-relative sizes in a grid, clear of existing content, inside a frame only when all of it
- * fits there, and the first image (or, with no image, the first video) into an empty template image
- * slot under the drop point.
+ * fits there; a drop on a frame with empty template image slots fills them in reading order (images,
+ * then videos), and the images left over go under that frame at the slots' size (F6).
  *
  * Rendered as a child of <Tldraw> so it can reach the UI toasts/translations the default handler
  * needs. Its effect runs after <Tldraw> registers the defaults (those run in a layout effect).
@@ -192,16 +197,24 @@ function layoutDrop(
   const pageId = editor.getCurrentPageId()
   const createdIds = created.map((s) => s.id)
   const exclude = new Set<TLShapeId>(createdIds)
-  // An empty template image slot under the drop point takes the first image, else the first video
-  // (or other picture card): F9, a video dropped on a Mood board slot used to land above the frame.
-  const slotCard = created.length ? -1 : cards.findIndex((c) => SLOT_CARD_KINDS.has(c.kind))
-  const slot = at.aimed && (created.length || slotCard >= 0) ? slotAt(editor, at, exclude) : null
-  const slotted = slot ? created[0] : undefined
-  const slotRect = slot && slotted ? fitInSlot(nativeSize(editor, slotted), slot.bounds) : null
-  const slottedCard = slot && !slotted ? cards[slotCard] : undefined
-  const cardSlotRect = slot && slottedCard ? fitInSlot(CARD_SIZE[slottedCard.kind], slot.bounds) : null
-  const gridShapes = slotted ? created.slice(1) : created
-  const gridCards = slottedCard ? cards.filter((c) => c !== slottedCard) : cards
+  // F6 (and F9): a drop on a frame with empty template image slots fills them in reading order,
+  // starting at the slot under the pointer: the images first, then videos (or other picture cards).
+  // Images left over go right under the frame at the slots' size; other cards are laid out as usual.
+  const pictureCards = cards.filter((c) => SLOT_CARD_KINDS.has(c.kind))
+  const slots = at.aimed && (created.length || pictureCards.length) ? emptySlotsAt(editor, at, exclude) : []
+  const slottedImages = created.slice(0, slots.length).map((shape, i) => {
+    const slot = slots[i] as Slot
+    return { shape, slot, rect: fitInSlot(nativeSize(editor, shape), slot.bounds) }
+  })
+  const slottedCards = pictureCards.slice(0, slots.length - slottedImages.length).map((card, i) => {
+    const slot = slots[slottedImages.length + i] as Slot
+    return { card, slot, rect: fitInSlot(CARD_SIZE[card.kind], slot.bounds) }
+  })
+  const leftOver = created.slice(slottedImages.length)
+  const under =
+    slots.length && leftOver.length ? planUnderSlots(editor, leftOver, slots, exclude, view) : null
+  const gridShapes = under ? [] : leftOver
+  const gridCards = cards.filter((c) => !slottedCards.some((s) => s.card === c))
   const plan = planDrop({
     images: gridShapes.map((s) => nativeSize(editor, s)),
     cards: gridCards.map((c) => CARD_SIZE[c.kind]),
@@ -217,18 +230,20 @@ function layoutDrop(
       // tldraw parented each image to the frame under its own top-left corner before moving the row,
       // which left images outside the frame that clips them. Start every image on the page.
       editor.reparentShapes(createdIds, pageId)
-      if (slot && slotted && slotRect) {
+      for (const { shape, slot, rect } of slottedImages) {
         editor.updateShapes([
-          {
-            id: slotted.id,
-            type: 'image',
-            x: slotRect.x,
-            y: slotRect.y,
-            props: { w: slotRect.w, h: slotRect.h },
-          },
+          { id: shape.id, type: 'image', x: rect.x, y: rect.y, props: { w: rect.w, h: rect.h } },
         ])
         // The slot's frame, stacked just above the slot (under the panel's notes and text).
-        editor.reparentShapes([slotted.id], slot.parentId, slot.index)
+        editor.reparentShapes([shape.id], slot.parentId, slot.index)
+      }
+      if (under) {
+        editor.updateShapes(
+          leftOver.flatMap((s, i) => {
+            const r = under[i]
+            return r ? [{ id: s.id, type: 'image' as const, x: r.x, y: r.y, props: { w: r.w, h: r.h } }] : []
+          }),
+        )
       }
       editor.updateShapes(
         gridShapes.flatMap((s, i) => {
@@ -248,8 +263,9 @@ function layoutDrop(
 
   // Zoom out only as far as needed to show everything this drop placed, cards included.
   const content = unionRects([
-    ...(slotRect ? [slotRect] : []),
-    ...(cardSlotRect ? [cardSlotRect] : []),
+    ...slottedImages.map((s) => s.rect),
+    ...slottedCards.map((s) => s.rect),
+    ...(under ?? []),
     ...plan.images,
     ...plan.cards,
   ])
@@ -263,12 +279,13 @@ function layoutDrop(
 
   let next = 0
   return cards.map((card): CardSlot => {
-    if (card === slottedCard && slot && cardSlotRect) {
+    const slotted = slottedCards.find((s) => s.card === card)
+    if (slotted) {
       return {
-        page: { x: cardSlotRect.x, y: cardSlotRect.y },
+        page: { x: slotted.rect.x, y: slotted.rect.y },
         parentId: null,
         local: null,
-        imageSlot: slot.id,
+        imageSlot: slotted.slot.id,
       }
     }
     const r = plan.cards[next++] ?? { x: at.x, y: at.y }
@@ -322,38 +339,116 @@ interface Slot {
 /** What already fills a slot: an image, or a file card (a video's poster). */
 const fillsSlot = (s: TLShape | undefined) => isImage(s) || s?.type === FILE_CARD_TYPE
 
+/** A template image slot as a Slot, or null while something already fills it (or it is hidden). */
+function emptySlot(editor: Editor, s: TLShape, exclude: Set<TLShapeId>): Slot | null {
+  if (exclude.has(s.id) || !isImageSlot(s) || editor.isShapeHidden(s)) return null
+  const b = editor.getShapePageBounds(s)
+  if (!b) return null
+  const bounds = toRect(b)
+  const inside = { x: bounds.x - 1, y: bounds.y - 1, w: bounds.w + 2, h: bounds.h + 2 }
+  const occupied = editor.getSortedChildIdsForParent(s.parentId).some((id) => {
+    if (exclude.has(id) || !fillsSlot(editor.getShape(id))) return false
+    const ib = editor.getShapePageBounds(id)
+    return (
+      !!ib &&
+      ib.x >= inside.x &&
+      ib.y >= inside.y &&
+      ib.maxX <= inside.x + inside.w &&
+      ib.maxY <= inside.y + inside.h
+    )
+  })
+  return occupied ? null : { id: s.id, parentId: s.parentId, index: s.index, bounds }
+}
+
 /**
- * The topmost template image slot under `at` (slots arrive locked, so this is our own hit test), if
- * it is empty and its frame is not locked. Boards made before slots were marked have no marker and
- * keep the plain grid.
+ * F6: the empty template image slots a drop at `at` fills, in fill order: those of the frame under
+ * the drop point (the innermost frame that has slots, or the frame of the slot under the pointer),
+ * in reading order from the slot under the pointer. Slots arrive locked, so this is our own hit
+ * test; a locked frame takes nothing. Boards made before slots were marked have no marker and keep
+ * the plain grid.
  */
-function slotAt(editor: Editor, at: VecLike, exclude: Set<TLShapeId>): Slot | null {
+function emptySlotsAt(editor: Editor, at: VecLike, exclude: Set<TLShapeId>): Slot[] {
   const sorted = editor.getCurrentPageShapesSorted()
+  let parentId: TLParentId | null = null
+  let underPointer: TLShapeId | null = null
   for (let i = sorted.length - 1; i >= 0; i--) {
     const s = sorted[i]
-    if (!s || exclude.has(s.id) || !isImageSlot(s)) continue
-    if (editor.isShapeHidden(s)) continue
+    if (!s || exclude.has(s.id) || !isImageSlot(s) || editor.isShapeHidden(s)) continue
     if (!editor.isPointInShape(s, at, { hitInside: true, margin: 0 })) continue
-    const parent = editor.getShape(s.parentId as TLShapeId)
-    if (parent && editor.isShapeOrAncestorLocked(parent)) return null
-    const b = editor.getShapePageBounds(s)
-    if (!b) return null
-    const bounds = toRect(b)
-    const inside = { x: bounds.x - 1, y: bounds.y - 1, w: bounds.w + 2, h: bounds.h + 2 }
-    const occupied = editor.getSortedChildIdsForParent(s.parentId).some((id) => {
-      if (exclude.has(id) || !fillsSlot(editor.getShape(id))) return false
-      const ib = editor.getShapePageBounds(id)
-      return (
-        !!ib &&
-        ib.x >= inside.x &&
-        ib.y >= inside.y &&
-        ib.maxX <= inside.x + inside.w &&
-        ib.maxY <= inside.y + inside.h
-      )
-    })
-    return occupied ? null : { id: s.id, parentId: s.parentId, index: s.index, bounds }
+    parentId = s.parentId
+    underPointer = s.id
+    break
   }
-  return null
+  if (!parentId) {
+    // Not on a slot: the innermost frame under the drop point that holds any.
+    let best: { id: TLShapeId; area: number } | null = null
+    for (const f of editor.getCurrentPageShapes()) {
+      if (f.type !== 'frame' || exclude.has(f.id) || editor.isShapeHidden(f)) continue
+      const b = editor.getShapePageBounds(f)
+      if (!b?.containsPoint(at) || (best && best.area <= b.w * b.h)) continue
+      const hasSlots = editor.getSortedChildIdsForParent(f.id).some((id) => {
+        const c = editor.getShape(id)
+        return !!c && isImageSlot(c)
+      })
+      if (hasSlots) best = { id: f.id, area: b.w * b.h }
+    }
+    parentId = best?.id ?? null
+  }
+  if (!parentId || parentId === editor.getCurrentPageId()) {
+    // A slot straight on the page (no frame): only that one.
+    const s = underPointer ? editor.getShape(underPointer) : undefined
+    const slot = s ? emptySlot(editor, s, exclude) : null
+    return slot ? [slot] : []
+  }
+  const parent = editor.getShape(parentId as TLShapeId)
+  if (parent && editor.isShapeOrAncestorLocked(parent)) return []
+  const slots = editor.getSortedChildIdsForParent(parentId).flatMap((id) => {
+    const s = editor.getShape(id)
+    const slot = s ? emptySlot(editor, s, exclude) : null
+    return slot ? [slot] : []
+  })
+  return slotFillOrder(slots, underPointer)
+}
+
+/**
+ * F6: page rects for the images that found no free slot: a grid right under the slots' frame (clear
+ * of other content), each image in a cell of the slots' size, as many per row as the frame's rows.
+ */
+function planUnderSlots(
+  editor: Editor,
+  images: TLImageShape[],
+  slots: readonly Slot[],
+  exclude: Set<TLShapeId>,
+  view: View,
+): Rect[] | null {
+  const first = slots[0]
+  const frameShape = first ? editor.getShape(first.parentId as TLShapeId) : undefined
+  const frame = frameShape ? editor.getShapePageBounds(frameShape) : undefined
+  if (!first || !frame) return null
+  const all = editor.getSortedChildIdsForParent(first.parentId).flatMap((id) => {
+    const s = editor.getShape(id)
+    const b = s && isImageSlot(s) ? editor.getShapePageBounds(s) : undefined
+    return b ? [{ id, bounds: toRect(b) }] : []
+  })
+  const rows = slotRows(all)
+  const top = rows[0] ?? []
+  const cols = Math.max(1, ...rows.map((r) => r.length))
+  const [a, b] = top
+  const gap = a && b ? Math.max(0, b.bounds.x - (a.bounds.x + a.bounds.w)) : DROP_LAYOUT.gapPx / view.zoom
+  const block = layoutCellGrid(
+    images.map((s) => nativeSize(editor, s)),
+    { w: first.bounds.w, h: first.bounds.h },
+    Math.min(cols, images.length),
+    gap,
+  )
+  const clearance = DROP_LAYOUT.clearancePx / (view.zoom > 0 ? view.zoom : 1)
+  const topLeft = placeUnder(
+    block,
+    toRect(frame),
+    childRects(editor, editor.getCurrentPageId(), exclude),
+    clearance,
+  )
+  return block.items.map((r) => ({ ...r, x: r.x + topLeft.x, y: r.y + topLeft.y }))
 }
 
 async function uploadFileCards(

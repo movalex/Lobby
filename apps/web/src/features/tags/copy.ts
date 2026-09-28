@@ -4,11 +4,31 @@ import { MAX_TAGS_PER_SHAPE } from '@draftroom/contracts'
 
 export const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`
 
-/** "note", "card" or "item" for what a selection holds. */
-export function thingName(kinds: { notes: number; cards: number }): { one: string; many: string } {
-  if (kinds.cards === 0) return { one: 'note', many: 'notes' }
-  if (kinds.notes === 0) return { one: 'card', many: 'cards' }
-  return { one: 'item', many: 'items' }
+/** "note", "card", "image", "shape" or (a mix) "item" for what a selection holds. */
+export function thingName(kinds: { notes: number; cards: number; images?: number; shapes?: number }): {
+  one: string
+  many: string
+} {
+  const images = kinds.images ?? 0
+  const shapes = kinds.shapes ?? 0
+  const present = [kinds.notes, kinds.cards, images, shapes].filter((n) => n > 0).length
+  if (present > 1) return { one: 'item', many: 'items' }
+  if (kinds.cards > 0) return { one: 'card', many: 'cards' }
+  if (images > 0) return { one: 'image', many: 'images' }
+  if (shapes > 0) return { one: 'shape', many: 'shapes' }
+  return { one: 'note', many: 'notes' }
+}
+
+/** The counts thingName takes, from the shapes' types. */
+export function kindCounts(types: Iterable<string>, fileCardType: string) {
+  const out = { notes: 0, cards: 0, images: 0, shapes: 0 }
+  for (const t of types) {
+    if (t === 'note') out.notes++
+    else if (t === fileCardType) out.cards++
+    else if (t === 'image' || t === 'video') out.images++
+    else out.shapes++
+  }
+  return out
 }
 
 /** After an add that had to leave out full shapes. */

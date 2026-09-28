@@ -1,9 +1,9 @@
-// Tags on notes and file cards: the pure part (docs/WAVE4-CONTRACTS.md §2 tags). The storage format and
-// its validation live in @draftroom/contracts (tags.ts): one meta key per tag, on the shape
-// (`drTags:<key>`) and in the board's list on the document record (`drTagList:<key>`).
+// Tags on notes, file cards, images and shapes: the pure part (docs/WAVE4-CONTRACTS.md §2 tags). The
+// storage format and its validation live in @draftroom/contracts (tags.ts): one meta key per tag, on
+// the shape (`drTags:<key>`) and in the board's list on the document record (`drTagList:<key>`).
 //
 // Rules decided here:
-// - Taggable: sticky notes and file cards.
+// - Taggable: sticky notes, file cards, images, videos, geo shapes (mind-map topics) and text.
 // - The board's entry decides a tag's name and colour everywhere; a shape's own copy is the fallback
 //   (pasted from another board, or an entry someone removed while this shape still carried it).
 // - The board's tag list shown to people = the listed tags plus any tag a shape still carries.
@@ -36,8 +36,26 @@ export interface ShapeLike {
   isLocked?: boolean
 }
 
-export const TAGGABLE_TYPES: ReadonlySet<string> = new Set(['note', FILE_CARD_TYPE])
+/**
+ * F2 / R8: images and videos (a mood board is tagged #warm / #option-b), and shapes and text (a mind
+ * map's topics are geo shapes; action items are often plain text), besides notes and file cards.
+ */
+export const TAGGABLE_TYPES: ReadonlySet<string> = new Set([
+  'note',
+  FILE_CARD_TYPE,
+  'image',
+  'video',
+  'geo',
+  'text',
+])
 export const isTaggable = (shape: { type: string }) => TAGGABLE_TYPES.has(shape.type)
+
+/** How chips sit on a shape (ShapeWrapper.tsx, tags.css): inside a note, a card or media; above a shape or text. */
+export type ChipPlacement = 'note' | 'card' | 'above'
+export function chipPlacement(type: string): ChipPlacement {
+  if (type === 'note') return 'note'
+  return type === 'geo' || type === 'text' ? 'above' : 'card'
+}
 
 // Records are immutable, so a meta object's tags never change: parse each one once (a board-wide scan
 // is then one map lookup per shape).
