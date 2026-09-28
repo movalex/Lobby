@@ -1,4 +1,4 @@
--- 0017_checkpoint_reasons (history-polish, R10): two more reasons for an automatic checkpoint, saved
+-- 0019_checkpoint_reasons (history-polish, R10): two more reasons for an automatic checkpoint, saved
 -- right before another feature makes a big change to the board. Shipped migrations are never edited.
 --   before_reveal     a private brainstorm's notes are about to be put on the board (workshops)
 --   before_ai_themes  AI "Group into themes" is about to rearrange notes (ai)

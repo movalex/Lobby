@@ -227,7 +227,7 @@ describe('shipped migrations', () => {
       '0014_checkpoint_policy',
       '0015_board_search',
       '0016_ai_usage',
-      '0017_checkpoint_reasons',
+      '0019_checkpoint_reasons',
     ])
   })
 
@@ -250,7 +250,7 @@ describe('shipped migrations', () => {
       '0014_checkpoint_policy',
       '0015_board_search',
       '0016_ai_usage',
-      '0017_checkpoint_reasons',
+      '0019_checkpoint_reasons',
     ])
     expect(await migrate(db)).toEqual({ applied: [], newer: [] })
     expect(await tableNames()).toEqual([
@@ -333,7 +333,7 @@ describe('shipped migrations', () => {
       '0014_checkpoint_policy',
       '0015_board_search',
       '0016_ai_usage',
-      '0017_checkpoint_reasons',
+      '0019_checkpoint_reasons',
     ])
     expect(await recorded()).toEqual(shipped.map((m) => m.name))
     const inv = await db.one<{ multi_use: boolean; use_count: number }>(
