@@ -6,7 +6,8 @@
 //   - a minimal environment (no worker token, no credentials);
 //   - the import filter forced to the format the content was sniffed as, so a file is never handed to
 //     another importer because of what it claims to be;
-//   - a hard timeout that kills the whole process tree (soffice → oosplash → soffice.bin);
+//   - a hard timeout that kills the whole process tree (soffice → oosplash → soffice.bin), and the same
+//     kill as soon as the output PDF grows past the size cap while it is being written;
 //   - the output re-checked: one regular file where we asked for it, starting with %PDF-, within the size cap.
 // No network and the memory cap come from where it runs: the office sidecar container has no network
 // and its own memory limit (deploy/nas/worker/docker-compose.yml). Run directly by the worker, this is
@@ -46,6 +47,9 @@ export const HARDENING_XCU = `<?xml version="1.0" encoding="UTF-8"?>
 <item oor:path="/org.openoffice.Office.Common/Misc"><prop oor:name="FirstRun" oor:op="fuse"><value>false</value></prop></item>
 </oor:items>
 `
+
+/** How often the output PDF's size is checked while soffice runs. */
+const OUTPUT_POLL_MS = 250
 
 export interface SofficeOptions {
   /** argv prefix: ['soffice'], ['/usr/lib/libreoffice/program/soffice'], or a test stand-in. */
@@ -123,6 +127,17 @@ export async function convertWithSoffice(
       await copyFile(input, src)
     }
     const pdf = outputPdfPath(src, outDir)
+    // The size cap holds while soffice writes, not only once it is done: a document that lays out into
+    // a huge PDF is stopped within one poll of the cap instead of filling the disk until the timeout.
+    const guard = new AbortController()
+    const watch = setInterval(() => {
+      lstat(pdf).then(
+        (st) => {
+          if (st.size > o.maxOutputBytes) guard.abort()
+        },
+        () => {}, // not written yet
+      )
+    }, OUTPUT_POLL_MS)
     const r = await run(
       cmd,
       [
@@ -144,12 +159,15 @@ export async function convertWithSoffice(
       {
         timeoutMs: o.timeoutMs,
         maxStdoutBytes: 64 * 1024,
-        signal: o.signal,
+        signal: o.signal ? AbortSignal.any([o.signal, guard.signal]) : guard.signal,
         env: sofficeEnv(scratch),
         cwd: scratch,
         killTree: true,
       },
-    )
+    ).finally(() => clearInterval(watch))
+    if (r.aborted && !o.signal?.aborted && guard.signal.aborted) {
+      throw new PreviewError('FILE_TOO_LARGE', `converted PDF grew past ${o.maxOutputBytes} bytes`)
+    }
     if (r.aborted) throw new AbortedError()
     if (r.timedOut) throw new PreviewError('TIMEOUT', `soffice killed after ${r.ms} ms`)
     if (r.spawnError) {

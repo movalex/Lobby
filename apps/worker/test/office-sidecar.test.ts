@@ -4,7 +4,16 @@
 // the soffice stand-in; the container settings themselves are checked on the NAS.
 import { type ChildProcess, spawn } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  utimesSync,
+  writeFileSync,
+} from 'node:fs'
 import { connect } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join, resolve as resolvePath } from 'node:path'
@@ -12,7 +21,7 @@ import { fileURLToPath } from 'node:url'
 import { OFFICE_FORMATS } from '@draftroom/dev-assets'
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 import { loadOfficeEnv, loadWorkerEnv } from '../src/env.ts'
-import { socketOfficeConverter } from '../src/office-client.ts'
+import { socketOfficeConverter, sweepOfficeJobs } from '../src/office-client.ts'
 import { OFFICE_PROTOCOL_VERSION, type OfficeResponse, readLine } from '../src/office-protocol.ts'
 import { type OfficeServer, startOfficeServer, sweepOfficePipes } from '../src/office-server.ts'
 import { loadOfficeSidecarEnv, sofficeVersion } from '../src/office-sidecar.ts'
@@ -215,6 +224,20 @@ describe('sidecar and client', () => {
     ctl.abort()
   })
 
+  it('staging directories a killed worker left in the shared volume are removed once they are old', () => {
+    const jobsDir = temp()
+    const old = new Date(Date.now() - 2 * 60 * 60_000)
+    for (const n of ['job-Old123', 'job-New123', 'job-toolong1', 'keep-Old123']) {
+      mkdirSync(join(jobsDir, n, 'out'), { recursive: true })
+      writeFileSync(join(jobsDir, n, 'document.docx'), 'someone’s private document')
+      if (n !== 'job-New123') utimesSync(join(jobsDir, n), old, old)
+    }
+    writeFileSync(join(jobsDir, 'office.sock'), '')
+    expect(sweepOfficeJobs(jobsDir, 60 * 60_000)).toBe(1)
+    expect(readdirSync(jobsDir).sort()).toEqual(['job-New123', 'job-toolong1', 'keep-Old123', 'office.sock'])
+    expect(sweepOfficeJobs(join(jobsDir, 'missing'), 60 * 60_000)).toBe(0)
+  })
+
   it('a sidecar that is not running is transient trouble, not the document’s fault', async () => {
     const jobsDir = temp()
     const client = socketOfficeConverter({ socketPath: socketPath(temp()), jobsDir })
@@ -407,6 +430,12 @@ describe('the two processes, as deployed (worker.ts + office-sidecar.ts)', () =>
     const sc = start(SIDECAR, { OFFICE_SOCKET: sock, OFFICE_JOBS_DIR: jobsDir, SOFFICE_PATH: FAKE_SOFFICE })
     await waitFor(() => sc.out.text.includes('[office] listening'), 15_000, 'sidecar listening')
     expect(sc.out.text).toContain('[office] LibreOffice 0.0.0.0 fake-soffice (test stand-in)')
+    // What a worker killed mid-conversion leaves in the volume, which outlives both containers.
+    const stale = join(jobsDir, 'job-Stale1')
+    mkdirSync(join(stale, 'out'), { recursive: true })
+    writeFileSync(join(stale, 'document.docx'), readFileSync(fixturePath('document.docx')))
+    const old = new Date(Date.now() - 2 * 60 * 60_000)
+    utimesSync(stale, old, old)
     const tmp = tmpRoot()
     const w = start(WORKER, {
       DRAFTROOM_API_URL: f.api,
@@ -421,6 +450,8 @@ describe('the two processes, as deployed (worker.ts + office-sidecar.ts)', () =>
       15_000,
       'worker start',
     )
+    expect(w.out.text).toContain('[worker] removed 1 leftover Office staging directory')
+    expect(existsSync(stale)).toBe(false)
     const job = f.add({ fixture: 'slides.odp', name: 'Board offsite.odp', declaredMimeType: '' })
     await waitFor(() => job.status === 'done', 60_000, 'odp done')
     expect(job.result).toMatchObject({

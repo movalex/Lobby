@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url'
 import { type DataLayout, LIMITS, OFFICE_FORMATS, officeFormatByMime } from '@draftroom/dev-assets'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { FAILURE_MESSAGES } from '../../api/src/worker/protocol.ts'
+import { decoyMacroDocx, understatedBombDocx, zip } from '../scripts/office-fixtures.ts'
 import { FAILURE_CODES, PreviewError, userMessage } from '../src/errors.ts'
 import {
   checkOfficeContainer,
@@ -19,7 +20,7 @@ import {
   officeOff,
   sofficeCommand,
 } from '../src/office.ts'
-import { cfbDirectoryNames, readZipDirectory } from '../src/office-zip.ts'
+import { cfbDirectoryNames, readZipDirectory, readZipEntry } from '../src/office-zip.ts'
 import { sniffFile } from '../src/sniff.ts'
 import { convertWithSoffice, HARDENING_XCU, IMPORT_FILTERS } from '../src/soffice.ts'
 import {
@@ -108,6 +109,19 @@ describe('detection by content', () => {
     expect(Date.now() - t0).toBeLessThan(2_000)
   })
 
+  it('a zip bomb that understates its sizes is refused too: no entry may inflate past what it declares', async () => {
+    const f = join(scratch(), 'understated.docx')
+    writeFileSync(f, understatedBombDocx(64))
+    const entries = await readZipDirectory(f, 100)
+    // It declares next to nothing, so the declared-size cap alone lets it through.
+    expect(entries.reduce((n, e) => n + e.size, 0)).toBeLessThan(64 * 1024)
+    await expect(officeInput(f, await sniffFile(f))).rejects.toMatchObject({ code: 'FILE_TOO_LARGE' })
+    // The real documents still pass (every entry inflates to exactly its declared size).
+    for (const [file] of DOCS) {
+      expect(await officeInput(fixturePath(file), await sniffFile(fixturePath(file))), file).not.toBeNull()
+    }
+  })
+
   it('password-protected documents are named as such: OOXML (MS-CFB) and ODF (manifest)', async () => {
     const cfb = fixturePath('encrypted.docx')
     expect(await cfbDirectoryNames(cfb)).toEqual(['Root Entry', 'EncryptionInfo', 'EncryptedPackage'])
@@ -124,6 +138,34 @@ describe('detection by content', () => {
     expect(s.ext).toBe('docm')
     expect(officeFormatByMime(s.mime)).toBeNull()
     expect(await officeInput(f, s)).toBeNull()
+  })
+
+  it('macros are refused by what LibreOffice would read (the central directory), not only by what the sniffer saw', async () => {
+    const dir = scratch()
+    // A decoy local [Content_Types].xml makes file-type see a .docx; the listed one is macro-enabled.
+    const decoy = join(dir, 'decoy.docx')
+    writeFileSync(decoy, decoyMacroDocx())
+    const s = await sniffFile(decoy)
+    expect(s.ext).toBe('docx')
+    await expect(officeInput(decoy, s)).rejects.toMatchObject({ code: 'TYPE_MISMATCH' })
+    // A VBA project inside a package that otherwise calls itself a plain .docx.
+    const vba = join(dir, 'vba.docx')
+    const parts = await readZipDirectory(fixturePath('document.docx'), 100)
+    writeFileSync(
+      vba,
+      zip([
+        ...(await Promise.all(
+          parts.map(async (e) => ({
+            name: e.name,
+            data: await readZipEntry(fixturePath('document.docx'), e, 1024 * 1024),
+          })),
+        )),
+        { name: 'word/vbaProject.bin', data: Buffer.from('not really VBA') },
+      ]),
+    )
+    const sv = await sniffFile(vba)
+    expect(sv.ext).toBe('docx')
+    await expect(officeInput(vba, sv)).rejects.toMatchObject({ code: 'TYPE_MISMATCH' })
   })
 
   it('a package missing the parts every document of its family has is refused', async () => {
@@ -270,6 +312,44 @@ describe('the LibreOffice runner (soffice.ts)', () => {
     ).rejects.toMatchObject({ code: 'FILE_TOO_LARGE' })
   })
 
+  it('an output that grows past the size cap is stopped while it is being written, not after', async () => {
+    const out = scratch()
+    const t0 = Date.now()
+    await expect(
+      convertWithSoffice(fixturePath('document.docx'), 'docx', out, {
+        command: [process.execPath, FAKE_SOFFICE, '--fake-mode=flood'],
+        workRoot: scratch(),
+        timeoutMs: 60_000,
+        maxOutputBytes: 4 * 1024 * 1024,
+      }),
+    ).rejects.toMatchObject({ code: 'FILE_TOO_LARGE' })
+    // The stand-in would write 256 MiB over ~13 s: it was killed within a few MiB of the cap.
+    expect(Date.now() - t0).toBeLessThan(6_000)
+    const pdf = join(out, 'document.pdf')
+    expect(existsSync(pdf) ? readFileSync(pdf).length : 0).toBeLessThan(32 * 1024 * 1024)
+  })
+
+  it('a helper that escapes the process tree and holds the pipes cannot keep the runner waiting', async () => {
+    const out = scratch()
+    const t0 = Date.now()
+    try {
+      await expect(
+        convertWithSoffice(fixturePath('document.docx'), 'docx', out, {
+          command: [process.execPath, FAKE_SOFFICE, '--fake-mode=escape'],
+          workRoot: scratch(),
+          timeoutMs: 60_000,
+          maxOutputBytes: LIMITS.maxBytes.pdf,
+        }),
+      ).rejects.toMatchObject({ code: 'OFFICE_INVALID' }) // exited 0 without output
+      expect(Date.now() - t0).toBeLessThan(10_000) // not the helper's 30 s
+    } finally {
+      try {
+        const { helper } = JSON.parse(readFileSync(join(out, 'fake-pids.json'), 'utf8')) as { helper: number }
+        process.kill(helper, 'SIGKILL')
+      } catch {}
+    }
+  })
+
   it('a missing soffice is OFFICE_UNAVAILABLE (a permanent, honest failure), not a retry loop', async () => {
     await expect(
       convertWithSoffice(fixturePath('document.docx'), 'docx', scratch(), {
@@ -385,6 +465,11 @@ describe('a whole job (processJob)', () => {
       convert: () => Promise.reject(new Error('converter called')),
     }
     await expectOfficeFailure(ingest(l, 'bomb.docx', { mimeType: '' }), 'FILE_TOO_LARGE', { office: never })
+    await expectOfficeFailure(
+      ingest(l, null, { name: 'understated.docx', mimeType: '', bytes: understatedBombDocx(16) }),
+      'FILE_TOO_LARGE',
+      { office: never },
+    )
     await expectOfficeFailure(ingest(l, 'macro.docx', { mimeType: '' }), 'TYPE_MISMATCH', { office: never })
   })
 

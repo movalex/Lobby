@@ -11,9 +11,12 @@
 //   --fake-mode=garbage    write a "PDF" that is not one
 //   --fake-mode=record     convert, and record argv, env and the profile's settings in DIR/fake-record.json
 //   --fake-mode=pages=N    write an N-page PDF whatever the input
+//   --fake-mode=flood      keep appending to the output PDF (1 MiB every 50 ms, up to 256 MiB), then exit 0
+//   --fake-mode=escape     start a helper outside soffice's process tree that holds soffice's stdout and
+//                          stderr for 30 s, record both pids in DIR/fake-pids.json, exit 0 without output
 // and `--version` prints a version line, like soffice.
 import { spawn } from 'node:child_process'
-import { readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { appendFileSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { basename, extname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { PDFDocument, rgb, StandardFonts } from 'pdf-lib'
@@ -191,6 +194,34 @@ switch (mode) {
     writeFileSync(output, 'this is not a PDF at all')
     process.exit(0)
     break
+  case 'flood': {
+    writeFileSync(output, '%PDF-1.7\n')
+    const chunk = Buffer.alloc(1024 * 1024, 0x20)
+    let written = 0
+    const t = setInterval(() => {
+      appendFileSync(output, chunk)
+      if (++written >= 256) {
+        clearInterval(t)
+        process.exit(0)
+      }
+    }, 50)
+    break
+  }
+  case 'escape': {
+    // Its own session (POSIX) or console (Windows): neither the process group kill nor taskkill /T of
+    // an already exited soffice reaches it, and it inherits the pipes the runner waits on.
+    const helper = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 30_000)'], {
+      detached: true,
+      stdio: ['ignore', 'inherit', 'inherit'],
+    })
+    helper.unref()
+    writeFileSync(
+      join(outDir, 'fake-pids.json'),
+      JSON.stringify({ soffice: process.pid, helper: helper.pid }),
+    )
+    process.exit(0)
+    break
+  }
   default: {
     if (mode === 'record') record()
     const forced = /^pages=(\d+)$/.exec(mode)

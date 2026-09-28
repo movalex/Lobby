@@ -5,7 +5,7 @@ import { createWorkerApi } from './api-client.ts'
 import { WORKER } from './config.ts'
 import { loadWorkerEnv } from './env.ts'
 import { localOfficeConverter, officeOff, sofficeCommand } from './office.ts'
-import { socketOfficeConverter } from './office-client.ts'
+import { socketOfficeConverter, sweepOfficeJobs } from './office-client.ts'
 import { startRemoteWorker } from './remote-loop.ts'
 
 const log = (line: string) => console.log(`[worker] ${line}`)
@@ -24,6 +24,9 @@ const office =
     : cfg.office.mode === 'local'
       ? localOfficeConverter({ command: sofficeCommand(cfg.office.sofficePath), workRoot: cfg.tmpDir })
       : officeOff()
+// Documents a killed worker left staged in the shared volume (it outlives the containers).
+const staleStages =
+  cfg.office.mode === 'socket' ? sweepOfficeJobs(cfg.office.jobsDir, WORKER.tmpSweepAgeMs) : 0
 const api = createWorkerApi({
   baseUrl: cfg.apiUrl,
   token: cfg.token,
@@ -49,6 +52,11 @@ const worker = startRemoteWorker({
 // The origin only: DRAFTROOM_API_URL is refused with credentials, a path or a query (env.ts).
 log(`started (api: ${cfg.apiUrl}, poll ${cfg.pollMs} ms)`)
 log(`id ${cfg.workerId}, concurrency ${cfg.concurrency}, pdf heap ${cfg.pdfHeapMb} MB`)
+if (staleStages) {
+  log(
+    `removed ${staleStages} leftover Office staging director${staleStages === 1 ? 'y' : 'ies'} (a worker stopped mid-conversion)`,
+  )
+}
 log(`office previews: ${office.describe}`)
 if (cfg.unusedSecrets.length) {
   log(

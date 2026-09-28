@@ -1,14 +1,16 @@
 // Structural checks of an Office document's container, before LibreOffice sees it (office.ts):
 //   - OOXML and ODF are ZIP files: the central directory must be intact, the entry count and the sum of
-//     the declared uncompressed sizes are capped (a zip bomb is refused without inflating anything), and
-//     the parts a document needs must be there;
+//     the declared uncompressed sizes are capped (a zip bomb is refused without inflating anything), the
+//     parts a document needs must be there, and then no entry may inflate past its declared size (a
+//     bomb that understates its sizes is refused after inflating at most what it declared);
 //   - a password-protected ODF file says so in META-INF/manifest.xml (encryption-data);
 //   - a password-protected OOXML file is not a ZIP at all but an MS-CFB compound file holding the
 //     streams EncryptionInfo and EncryptedPackage.
 // Everything here reads a bounded number of bytes at offsets the file itself states, and is checked
 // against the real file size first.
 import { type FileHandle, open } from 'node:fs/promises'
-import { inflateRawSync } from 'node:zlib'
+import { pipeline } from 'node:stream/promises'
+import { createInflateRaw, inflateRawSync } from 'node:zlib'
 
 export class ZipFormatError extends Error {
   /** 'limit': a cap was exceeded (too big, not broken). */
@@ -127,6 +129,65 @@ export async function readZipEntry(path: string, entry: ZipEntry, maxBytes: numb
       return inflateRawSync(data, { maxOutputLength: maxBytes })
     } catch {
       throw new ZipFormatError('entry does not inflate')
+    }
+  } finally {
+    await fh.close()
+  }
+}
+
+/** `length` bytes from `start`, in chunks (ends early at EOF: the inflater then reports a truncated stream). */
+async function* byteRange(fh: FileHandle, start: number, length: number) {
+  let pos = start
+  let left = length
+  while (left > 0) {
+    const buf = Buffer.alloc(Math.min(left, 64 * 1024))
+    const { bytesRead } = await fh.read(buf, 0, buf.length, pos)
+    if (bytesRead === 0) return
+    yield buf.subarray(0, bytesRead)
+    pos += bytesRead
+    left -= bytesRead
+  }
+}
+
+/**
+ * Inflates every entry, discarding the output, and refuses one that yields more bytes than it declares:
+ * the declared sizes are what the zip-bomb cap was checked against, and a lying header must not get
+ * past it. Stops each entry one byte past its declared size, so the work is bounded by the sum of the
+ * declared sizes (already capped) and memory by zlib's window. Throws ZipFormatError ('limit' for an
+ * entry that inflates past its declared size, 'invalid' for one that does not inflate at all).
+ */
+export async function checkInflatedSizes(path: string, entries: readonly ZipEntry[]): Promise<void> {
+  const fh = await open(path, 'r')
+  try {
+    for (const entry of entries) {
+      if (entry.method === 0) {
+        if (entry.compressedSize !== entry.size) throw new ZipFormatError('stored entry size mismatch')
+        continue
+      }
+      if (entry.method !== 8) continue // LibreOffice refuses other methods itself
+      if (entry.compressedSize === 0) {
+        if (entry.size !== 0) throw new ZipFormatError('entry does not inflate')
+        continue
+      }
+      const head = await readAt(fh, entry.localHeaderOffset, 30)
+      if (head.readUInt32LE(0) !== LOCAL_SIG) throw new ZipFormatError('bad local header')
+      const start = entry.localHeaderOffset + 30 + head.readUInt16LE(26) + head.readUInt16LE(28)
+      const inflate = createInflateRaw()
+      let out = 0
+      let over = false
+      inflate.on('data', (b: Buffer) => {
+        out += b.length
+        if (out > entry.size && !over) {
+          over = true
+          inflate.destroy()
+        }
+      })
+      try {
+        await pipeline(byteRange(fh, start, entry.compressedSize), inflate)
+      } catch {
+        if (!over) throw new ZipFormatError('entry does not inflate')
+      }
+      if (over) throw new ZipFormatError('an entry inflates past its declared size', 'limit')
     }
   } finally {
     await fh.close()

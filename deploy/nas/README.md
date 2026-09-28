@@ -146,12 +146,13 @@ How it works:
 
 - An upload named `.docx`, `.pptx`, `.xlsx`, `.odt`, `.odp` or `.ods` (or declared with one of their types) is kind `pdf`, with a 100 MB limit. The original is always served as a download, never inline.
 - The worker decides by content (`apps/worker/src/office.ts`):
-  - a truncated package, a zip bomb (more than 1 GiB declared uncompressed, or more than 10,000 entries), a password-protected document (OOXML in an MS-CFB container, or ODF with encryption data in its manifest) and a macro-enabled package under an Office name are all refused **before** LibreOffice sees them;
+  - a truncated package, a zip bomb (more than 1 GiB declared uncompressed, more than 10,000 entries, or an entry that inflates past its declared size), a password-protected document (OOXML in an MS-CFB container, or ODF with encryption data in its manifest) and a macro-enabled package under an Office name (by its content types or a VBA/macro-sheet part, read from the central directory as LibreOffice reads it) are all refused **before** LibreOffice sees them;
   - everything else is staged in the shared `office-jobs` volume and converted by the sidecar (`office-sidecar.ts`, `soffice.ts`):
     - a fresh LibreOffice profile per job, with macros disabled and linked files from untrusted documents blocked;
     - the import filter forced to the sniffed format;
     - a minimal environment;
-    - a 120 s timeout that kills the whole process tree.
+    - a 120 s timeout that kills the whole process tree, and the same kill as soon as the PDF being written passes 100 MB.
+  - Staging directories a killed worker left in the volume (it outlives both containers) are removed when the worker next starts, once they are an hour old.
 - The PDF then goes through the existing PDF pipeline (pages, cover, 2,000-page cap). The card says "Preview made from a PDF conversion".
 
 ### Office previews: evidence from the NAS (2026-09-28)

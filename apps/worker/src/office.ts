@@ -14,7 +14,13 @@ import { LIMITS, type OfficeExt, type OfficeFormat, officeFormatByMime } from '@
 import type { DerivativeWriter } from './derivatives.ts'
 import { PreviewError, throwIfAborted } from './errors.ts'
 import type { Derived } from './image.ts'
-import { cfbDirectoryNames, readZipDirectory, readZipEntry, ZipFormatError } from './office-zip.ts'
+import {
+  cfbDirectoryNames,
+  checkInflatedSizes,
+  readZipDirectory,
+  readZipEntry,
+  ZipFormatError,
+} from './office-zip.ts'
 import { derivePdf } from './pdf.ts'
 import type { Sniffed } from './sniff.ts'
 import { convertWithSoffice } from './soffice.ts'
@@ -63,11 +69,17 @@ export function localOfficeConverter(o: { command: string[]; workRoot: string })
 
 const ODF = new Set<OfficeExt>(['odt', 'odp', 'ods'])
 const MANIFEST_MAX_BYTES = 1024 * 1024
+/** OOXML parts that only macro-enabled packages have: a VBA project, Excel 4.0 macro sheets. */
+const MACRO_PART_RE = /(?:^|\/)(?:vbaProject\.bin$|macrosheets\/)/i
+/** Content types of those parts and of the macro-enabled main parts (…macroEnabled.main+xml). */
+const MACRO_TYPE_RE = /macroEnabled|vbaProject|macrosheet/i
 
 /**
  * Refuses, before any conversion, what LibreOffice should never be asked to open: a broken or
- * truncated ZIP, a zip bomb (declared uncompressed size or entry count over the caps), encrypted
- * entries or an encrypted ODF package, and a package missing the parts every document of its family has.
+ * truncated ZIP, a zip bomb (declared uncompressed size or entry count over the caps, or an entry that
+ * inflates past its declared size), encrypted entries or an encrypted ODF package, a package missing
+ * the parts every document of its family has, and an OOXML package with macros (as the central
+ * directory lists it, whatever the sniffer saw).
  */
 export async function checkOfficeContainer(path: string, format: OfficeFormat): Promise<void> {
   let entries: Awaited<ReturnType<typeof readZipDirectory>>
@@ -90,6 +102,24 @@ export async function checkOfficeContainer(path: string, format: OfficeFormat): 
   for (const part of required) {
     if (!byName.has(part)) throw new PreviewError('OFFICE_INVALID', `missing ${part}`)
   }
+  if (!ODF.has(format.ext)) {
+    // Macro-enabled packages stay attachments. The sniffer (file-type) walks local headers and can be
+    // shown a decoy [Content_Types].xml; LibreOffice reads the central directory, and so does this.
+    if (entries.some((e) => MACRO_PART_RE.test(e.name)))
+      throw new PreviewError('TYPE_MISMATCH', 'macro-enabled package (VBA or macro sheet part)')
+    const types = byName.get('[Content_Types].xml')
+    let xml = ''
+    try {
+      if (types) xml = (await readZipEntry(path, types, MANIFEST_MAX_BYTES)).toString('utf8')
+    } catch (e) {
+      throw new PreviewError(
+        'OFFICE_INVALID',
+        `content types: ${e instanceof ZipFormatError ? e.message : 'unreadable'}`,
+      )
+    }
+    if (MACRO_TYPE_RE.test(xml))
+      throw new PreviewError('TYPE_MISMATCH', 'macro-enabled package (content types)')
+  }
   if (ODF.has(format.ext)) {
     const manifest = byName.get('META-INF/manifest.xml')
     if (!manifest) throw new PreviewError('OFFICE_INVALID', 'missing manifest')
@@ -104,6 +134,13 @@ export async function checkOfficeContainer(path: string, format: OfficeFormat): 
     }
     // A password-protected ODF file lists how each part is encrypted.
     if (xml.includes('encryption-data')) throw new PreviewError('OFFICE_ENCRYPTED', 'encrypted ODF package')
+  }
+  // Last, as it reads the whole file: the declared sizes checked above must be the real ones.
+  try {
+    await checkInflatedSizes(path, entries)
+  } catch (e) {
+    if (e instanceof ZipFormatError && e.kind === 'limit') throw new PreviewError('FILE_TOO_LARGE', e.message)
+    throw new PreviewError('OFFICE_INVALID', e instanceof ZipFormatError ? e.message : 'unreadable ZIP')
   }
 }
 

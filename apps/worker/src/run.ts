@@ -37,6 +37,9 @@ export interface RunResult {
   pid: number | undefined
 }
 
+/** How long a child's stdio may stay open after it exited (held by something it started) before we close it. */
+const PIPE_GRACE_MS = 2_000
+
 /** Children never see the worker's environment (storage/DB credentials later). SYSTEMROOT is required on Windows. */
 export function childEnv(): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { PATH: process.env.PATH ?? '' }
@@ -116,8 +119,18 @@ export function run(cmd: string, args: string[], opts: RunOptions): Promise<RunR
         settle()
       }
     })
-    // A helper that outlives the direct child could keep the stdio pipes (and so 'close') open for ever.
-    if (tree && process.platform !== 'win32') child.on('exit', () => killGroup(child.pid))
+    child.on('exit', () => {
+      // A helper that outlives the direct child could keep the stdio pipes (and so 'close') open for ever.
+      if (tree && process.platform !== 'win32') killGroup(child.pid)
+      // One that escaped even that (its own session, or an orphan taskkill /T no longer finds) still
+      // must not keep us waiting: once the child is gone, its pipes get a short grace and are then closed.
+      const t = setTimeout(() => {
+        child.stdout?.destroy()
+        child.stderr?.destroy()
+        child.stdin?.destroy()
+      }, PIPE_GRACE_MS)
+      child.once('close', () => clearTimeout(t))
+    })
     child.on('close', (code, signal) => {
       res.code = code
       res.signal = signal

@@ -2,7 +2,7 @@
 // directory, asks the sidecar to convert it over the Unix socket, and copies the PDF back into the job's
 // own temp directory. The staging directory is removed whatever happens. What the sidecar wrote is
 // treated as untrusted: it must be the one regular file we expected, within the size cap.
-import { createWriteStream, constants as fsConstants } from 'node:fs'
+import { createWriteStream, constants as fsConstants, lstatSync, readdirSync, rmSync } from 'node:fs'
 import { copyFile, type FileHandle, mkdir, mkdtemp, open, rm } from 'node:fs/promises'
 import { connect } from 'node:net'
 import { join } from 'node:path'
@@ -126,6 +126,35 @@ async function copyOutput(src: string, dest: string) {
   } finally {
     await fh.close()
   }
+}
+
+const STAGE_RE = /^job-[A-Za-z0-9]{6}$/
+
+/**
+ * Removes staging directories (`job-XXXXXX`, mkdtemp's names) older than `ageMs` from the shared jobs
+ * directory. The volume outlives both containers, so a worker killed mid-conversion (OOM, SIGKILL, a
+ * host reboot) would otherwise leave that user's document there for good. A conversion takes minutes
+ * at most, so the age rule never touches a live one. Run at worker startup.
+ */
+export function sweepOfficeJobs(jobsDir: string, ageMs: number, now = Date.now()): number {
+  let names: string[]
+  try {
+    names = readdirSync(jobsDir)
+  } catch {
+    return 0
+  }
+  let removed = 0
+  for (const n of names) {
+    if (!STAGE_RE.test(n)) continue
+    const p = join(jobsDir, n)
+    try {
+      const st = lstatSync(p)
+      if (!st.isDirectory() || now - st.mtimeMs < ageMs) continue
+      rmSync(p, { recursive: true, force: true, maxRetries: 3 })
+      removed++
+    } catch {}
+  }
+  return removed
 }
 
 export function socketOfficeConverter(o: SocketConverterOptions): OfficeConverter {

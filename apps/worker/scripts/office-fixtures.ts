@@ -22,11 +22,13 @@ interface RawEntry {
 
 const DOS_DATE = (0 << 9) | (1 << 5) | 1
 
-function writeZip(entries: RawEntry[]): Buffer {
+/** `orphans`: local entries written first and left out of the central directory (a decoy for sniffers). */
+function writeZip(entries: RawEntry[], orphans: RawEntry[] = []): Buffer {
   const locals: Buffer[] = []
   const centrals: Buffer[] = []
   let offset = 0
-  for (const e of entries) {
+  for (const e of [...orphans, ...entries]) {
+    const orphan = orphans.includes(e)
     const name = Buffer.from(e.name, 'utf8')
     const lh = Buffer.alloc(30)
     lh.writeUInt32LE(0x04034b50, 0)
@@ -54,7 +56,7 @@ function writeZip(entries: RawEntry[]): Buffer {
     ch.writeUInt16LE(name.length, 28)
     ch.writeUInt32LE(offset, 42)
     locals.push(lh, name, e.compressed)
-    centrals.push(ch, name)
+    if (!orphan) centrals.push(ch, name)
     offset += lh.length + name.length + e.compressed.length
   }
   const cd = Buffer.concat(centrals)
@@ -67,16 +69,16 @@ function writeZip(entries: RawEntry[]): Buffer {
   return Buffer.concat([...locals, cd, eocd])
 }
 
-export function zip(files: ZipFile[]): Buffer {
-  return writeZip(
-    files.map((f) => ({
-      name: f.name,
-      method: f.store ? 0 : 8,
-      crc: zlib.crc32(f.data) >>> 0,
-      size: f.data.length,
-      compressed: f.store ? f.data : zlib.deflateRawSync(f.data, { level: 9 }),
-    })),
-  )
+const rawEntry = (f: ZipFile): RawEntry => ({
+  name: f.name,
+  method: f.store ? 0 : 8,
+  crc: zlib.crc32(f.data) >>> 0,
+  size: f.data.length,
+  compressed: f.store ? f.data : zlib.deflateRawSync(f.data, { level: 9 }),
+})
+
+export function zip(files: ZipFile[], orphans: ZipFile[] = []): Buffer {
+  return writeZip(files.map(rawEntry), orphans.map(rawEntry))
 }
 
 const xml = (s: string) =>
@@ -144,8 +146,26 @@ export function docx(opts: { mainType?: string; body?: string } = {}): Buffer {
   ])
 }
 
+const DOCM_MAIN = 'application/vnd.ms-word.document.macroEnabled.main+xml'
+
 /** A DOCX whose package says it holds macros (.docm content under a .docx name). */
-export const macroDocx = () => docx({ mainType: 'application/vnd.ms-word.document.macroEnabled.main+xml' })
+export const macroDocx = () => docx({ mainType: DOCM_MAIN })
+
+/**
+ * The same macro-enabled package behind a decoy: a plain-DOCX [Content_Types].xml written first as a
+ * local entry the central directory does not list. A sniffer that walks local headers (file-type) sees
+ * a .docx; LibreOffice reads the central directory, and so the macro-enabled package.
+ */
+export function decoyMacroDocx(): Buffer {
+  return zip(
+    [
+      { name: '[Content_Types].xml', data: contentTypes([['/word/document.xml', DOCM_MAIN]]) },
+      { name: '_rels/.rels', data: rels([['rId1', 'officeDocument', 'word/document.xml']]) },
+      { name: 'word/document.xml', data: xml(docxBody()) },
+    ],
+    [{ name: '[Content_Types].xml', data: contentTypes([['/word/document.xml', DOCX_MAIN]]) }],
+  )
+}
 
 /** A well-formed package whose main part is not XML at all. */
 export const brokenDocx = () =>
@@ -195,6 +215,32 @@ export async function bombDocx(): Promise<Buffer> {
       crc: crc >>> 0,
       size: chunk.length * chunks,
       compressed: Buffer.concat(out),
+    },
+  ])
+}
+
+/**
+ * A zip bomb that lies: its central directory and local header say document.xml is 1 KB, but the
+ * deflate stream inflates to `inflatedMiB` MiB. The declared-size cap alone does not see it.
+ */
+export function understatedBombDocx(inflatedMiB = 64): Buffer {
+  const plain = (name: string, data: Buffer): RawEntry => ({
+    name,
+    method: 8,
+    crc: zlib.crc32(data) >>> 0,
+    size: data.length,
+    compressed: zlib.deflateRawSync(data),
+  })
+  const inflated = Buffer.alloc(inflatedMiB * 1024 * 1024, 0x20)
+  return writeZip([
+    plain('[Content_Types].xml', contentTypes([['/word/document.xml', DOCX_MAIN]])),
+    plain('_rels/.rels', rels([['rId1', 'officeDocument', 'word/document.xml']])),
+    {
+      name: 'word/document.xml',
+      method: 8,
+      crc: zlib.crc32(inflated) >>> 0,
+      size: 1024,
+      compressed: zlib.deflateRawSync(inflated, { level: 1 }),
     },
   ])
 }
