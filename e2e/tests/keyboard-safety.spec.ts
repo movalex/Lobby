@@ -2,7 +2,7 @@
 // keyboard (A11Y2-02), one undo press undoes the last real change after selection clicks (F11), and a
 // keyboard-only user can comment on a note inside a frame (A11Y2-04).
 import type { Page } from '@playwright/test'
-import { editEd, readEd, waitForCanvasUx } from './support/canvas-ux.ts'
+import { editEd, grantClipboard, readEd, waitForCanvasUx, writeClipboard } from './support/canvas-ux.ts'
 import { expect, test } from './support/fixtures.ts'
 import { createShapes, noteAt } from './support/tags.ts'
 
@@ -107,6 +107,51 @@ test('A11Y2-02: tool letters, Delete and Backspace do nothing to the board while
   await expect.poll(() => exists(page, INNER)).toBe(false)
   await page.keyboard.press('t')
   await expect.poll(() => toolId(page)).toBe('text')
+})
+
+test('A11Y2-02: Ctrl+X, Ctrl+V and "," from the top bar and the rail leave the board alone; Shift+= still zooms', async ({
+  session,
+}) => {
+  const { page, context } = await session('alice')
+  await grantClipboard(context)
+  await setUp(page)
+  const count = () => readEd(page, (ed) => ed.getCurrentPageShapeIds().size)
+  const shapes = await count()
+
+  // Ctrl+X is a delete as much as Delete is (tldraw cuts on the native cut event, not through an action).
+  for (const testId of ['share-button', 'dock-tab-frames', 'board-title']) {
+    await selectThenFocus(page, INNER, () => page.getByTestId(testId).focus())
+    await page.keyboard.press('ControlOrMeta+x')
+    await page.waitForTimeout(200)
+    expect({ testId, note: await exists(page, INNER) }).toEqual({ testId, note: true })
+  }
+
+  // Ctrl+V does not drop the clipboard onto the board.
+  await writeClipboard(page, { 'text/plain': 'Pasted from the top bar' })
+  await page.getByTestId('share-button').focus()
+  await page.keyboard.press('ControlOrMeta+v')
+  await page.waitForTimeout(400)
+  expect(await count()).toBe(shapes)
+
+  // "," (tldraw's click at the pointer) does not place a note from the top bar.
+  await page.mouse.move(600, 700)
+  await editEd(page, (ed) => (ed as unknown as Ed).setCurrentTool('note'))
+  await page.getByTestId('share-button').focus()
+  await page.keyboard.press(',')
+  await page.waitForTimeout(300)
+  expect(await count()).toBe(shapes)
+  await editEd(page, (ed) => (ed as unknown as Ed).setCurrentTool('select'))
+
+  // Zooming at the cursor is a camera key like "=": it still works from the chrome.
+  const z0 = await readEd(page, (ed) => ed.getZoomLevel())
+  await page.getByTestId('share-button').focus()
+  await page.keyboard.press('Shift+Equal')
+  await expect.poll(() => readEd(page, (ed) => ed.getZoomLevel())).toBeGreaterThan(z0)
+
+  // On the canvas, Ctrl+X still cuts.
+  await selectThenFocus(page, INNER, () => page.locator('.tl-container').first().focus())
+  await page.keyboard.press('ControlOrMeta+x')
+  await expect.poll(() => exists(page, INNER)).toBe(false)
 })
 
 test('F11: after selection clicks, one Ctrl+Z undoes the last real change and restores its selection', async ({

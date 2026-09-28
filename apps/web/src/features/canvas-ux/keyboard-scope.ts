@@ -20,6 +20,8 @@ export const CHROME_SAFE_ACTIONS: ReadonlySet<string> = new Set([
   'redo',
   'zoom-in',
   'zoom-out',
+  'zoom-in-on-cursor',
+  'zoom-out-on-cursor',
   'zoom-to-100',
   'zoom-to-fit',
   'zoom-to-selection',
