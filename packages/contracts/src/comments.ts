@@ -203,7 +203,12 @@ export const CommentsDeletedEvent = z.object({ threadId: CommentThreadId, commen
 
 // ---- notifications (in-app only: no email is sent) ------------------------------------------------
 
-export const NotificationKind = z.enum(['mention', 'reply', 'resolved', 'access_request'])
+/**
+ * mention: you were @mentioned; reply: someone replied in a thread you follow; resolved: a thread you
+ * follow was resolved; access_request: someone asked for access (other features insert these);
+ * new_comment (DANA-02): someone started a thread on a board you own (at most a few unread per author).
+ */
+export const NotificationKind = z.enum(['mention', 'reply', 'resolved', 'access_request', 'new_comment'])
 export type NotificationKind = z.infer<typeof NotificationKind>
 
 /** What an access-request notification asks for (the request itself, as it stands now). */

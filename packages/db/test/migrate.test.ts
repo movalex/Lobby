@@ -227,6 +227,7 @@ describe('shipped migrations', () => {
       '0014_checkpoint_policy',
       '0015_board_search',
       '0016_ai_usage',
+      '0017_comment_notifications',
       '0019_checkpoint_reasons',
     ])
   })
@@ -250,6 +251,7 @@ describe('shipped migrations', () => {
       '0014_checkpoint_policy',
       '0015_board_search',
       '0016_ai_usage',
+      '0017_comment_notifications',
       '0019_checkpoint_reasons',
     ])
     expect(await migrate(db)).toEqual({ applied: [], newer: [] })
@@ -333,6 +335,7 @@ describe('shipped migrations', () => {
       '0014_checkpoint_policy',
       '0015_board_search',
       '0016_ai_usage',
+      '0017_comment_notifications',
       '0019_checkpoint_reasons',
     ])
     expect(await recorded()).toEqual(shipped.map((m) => m.name))

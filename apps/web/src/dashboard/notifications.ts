@@ -24,7 +24,12 @@ export const KIND_TEXT: Record<NotificationItem['kind'], string> = {
   reply: 'replied',
   resolved: 'resolved a thread',
   access_request: 'asked for access',
+  // DANA-02: someone started a thread on a board you own ("Priya Shah (guest) commented on …").
+  new_comment: 'commented',
 }
+
+/** Kinds that stand for one new comment (what the board card counts as "new comments"). */
+const COMMENT_KINDS: ReadonlySet<NotificationItem['kind']> = new Set(['mention', 'reply', 'new_comment'])
 
 export const REQUEST_TEXT: Record<NotificationAccessRequest['role'], string> = {
   editor: 'Wants to edit',
@@ -41,6 +46,8 @@ export function notificationHref(n: Pick<NotificationItem, 'boardId' | 'threadId
 
 export interface BoardNews {
   unread: number
+  /** Of `unread`, the ones that are a new comment (a mention, a reply or a new thread). */
+  comments: number
   mentioned: boolean
 }
 
@@ -49,17 +56,22 @@ export function newsByBoard(items: readonly NotificationItem[]): Map<string, Boa
   const out = new Map<string, BoardNews>()
   for (const n of items) {
     if (n.readAt) continue
-    const cur = out.get(n.boardId) ?? { unread: 0, mentioned: false }
+    const cur = out.get(n.boardId) ?? { unread: 0, comments: 0, mentioned: false }
     cur.unread++
+    if (COMMENT_KINDS.has(n.kind)) cur.comments++
     if (n.kind === 'mention') cur.mentioned = true
     out.set(n.boardId, cur)
   }
   return out
 }
 
-/** "2 new · mentioned you", "1 new". */
+/** "2 new comments · mentioned you", "1 new comment"; "3 new" when some are not comments. */
 export function newsLabel(news: BoardNews): string {
-  return `${news.unread} new${news.mentioned ? ' · mentioned you' : ''}`
+  const what =
+    news.comments === news.unread
+      ? `${news.unread} new comment${news.unread === 1 ? '' : 's'}`
+      : `${news.unread} new`
+  return `${what}${news.mentioned ? ' · mentioned you' : ''}`
 }
 
 /** A read state applied locally right away (the server is told in the background). */

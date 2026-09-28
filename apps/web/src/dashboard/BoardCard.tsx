@@ -376,7 +376,18 @@ export function BoardCard<B extends BoardWithRole & { starred?: boolean; thumbna
           )}
           <span className="dr-bcard__meta">
             {news && (
-              <span className="dr-bcard__news" data-testid="board-card-news">
+              <span className="dr-bcard__news" data-testid="board-card-news" data-comments={news.comments}>
+                {news.comments > 0 && (
+                  <svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true">
+                    <path
+                      d="M5 5.5h14a1.5 1.5 0 0 1 1.5 1.5v8.5A1.5 1.5 0 0 1 19 17h-8l-4.5 3.5V17H5a1.5 1.5 0 0 1-1.5-1.5V7A1.5 1.5 0 0 1 5 5.5z"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                )}
                 {newsLabel(news)}
               </span>
             )}

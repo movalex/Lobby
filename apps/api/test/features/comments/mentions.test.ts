@@ -35,14 +35,18 @@ describe('mentions', () => {
     })
     expect(vic.unreadCount).toBe(1)
     expect((await notificationsOf(f.stranger)).notifications).toHaveLength(0)
-    expect(await countRows(f.api, 'notifications')).toBe(1)
+    // The other row: the board owner hears about the new thread (DANA-02, owner-notifications.test.ts).
+    expect(await countRows(f.api, 'notifications')).toBe(2)
+    expect((await notificationsOf(f.owner)).notifications.map((n) => n.kind)).toEqual(['new_comment'])
   })
 
   it('mentioning yourself is kept but notifies no one', async () => {
     const t = await createThread(f.commenter, f.boardId, `${mention(f.commenter)} reminder: check fonts`)
     expect(t.comments[0]?.mentions).toEqual([f.commenter.userId])
     expect((await notificationsOf(f.commenter)).notifications).toHaveLength(0)
-    expect(await countRows(f.api, 'notifications')).toBe(0)
+    // Only the board owner's "commented" item (DANA-02); no mention notification for anyone.
+    expect(await countRows(f.api, 'notifications')).toBe(1)
+    expect((await notificationsOf(f.owner)).notifications.map((n) => n.kind)).toEqual(['new_comment'])
   })
 
   it('caps the number of people one comment can mention', async () => {
@@ -88,16 +92,19 @@ describe('reply and resolve notifications', () => {
       'mention',
       'reply',
     ])
-    // People who never took part get nothing.
+    // People who never took part get nothing; the board owner heard only that the thread started.
     expect((await notificationsOf(f.commenter2)).notifications).toHaveLength(0)
-    expect((await notificationsOf(f.owner)).notifications).toHaveLength(0)
+    expect((await notificationsOf(f.owner)).notifications.map((n) => n.kind)).toEqual(['new_comment'])
   })
 
   it('does not notify followers who lost access to the board', async () => {
     const t = await createThread(f.commenter, f.boardId, 'first')
     await f.owner.req('DELETE', `/api/boards/${f.boardId}/members/${f.commenter.userId}`)
     await reply(f.editor, t.id, `second ${mention(f.commenter)}`)
-    expect(await countRows(f.api, 'notifications')).toBe(0)
+    const rows = await f.api.db.query('SELECT kind FROM notifications WHERE user_id = $1', [
+      f.commenter.userId,
+    ])
+    expect(rows.rows).toEqual([])
   })
 
   it('resolving notifies the other followers', async () => {

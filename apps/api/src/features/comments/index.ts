@@ -2,7 +2,8 @@
 //
 // Threads anchored to a board point, a shape or a file card; replies; edit/delete own comments (board
 // owners may delete any, softly); resolve/reopen; per-person read marks; @mentions that notify only
-// people who can view the board; in-app notifications (no email). Every route decides access with
+// people who can view the board; in-app notifications (no email), including a new thread for the
+// board's owners (DANA-02, capped per author and per board). Every route decides access with
 // requireBoardAction ('comment' to write, 'view' to read); authorship always comes from the session.
 // Board events are published after the transaction commits.
 
@@ -27,12 +28,14 @@ import type { Params } from '../../context.ts'
 import { ApiError, badRequest, conflict, forbidden, notFound, parse } from '../../errors.ts'
 import type { FeatureContext } from '../context.ts'
 import {
+  boardOwners,
   insertNotifications,
   listNotifications,
   markNotificationsRead,
   markThreadNotificationsRead,
   type NewNotification,
   threadFollowers,
+  withinNewCommentCap,
 } from './notifications.ts'
 import { createWriteLimiter } from './rate.ts'
 import {
@@ -85,8 +88,9 @@ async function insertMentions(
 }
 
 /**
- * Who gets notified about a new comment: mentioned people ('mention') and the thread's followers
- * ('reply'), never the author, only people who can view the board now, one notification each.
+ * Who gets notified about a new comment: mentioned people ('mention'), the thread's followers ('reply')
+ * and, for a new thread, the board's owners ('new_comment', DANA-02); never the author, only people who
+ * can view the board now, one notification each (the most specific kind wins).
  */
 async function recipientsFor(
   tx: Queryable,
@@ -94,13 +98,15 @@ async function recipientsFor(
   actorId: string,
   mentioned: readonly string[],
   followers: readonly string[],
+  owners: readonly string[] = [],
 ): Promise<NewNotification[]> {
-  const candidates = [...new Set([...mentioned, ...followers])].filter((id) => id !== actorId)
+  const candidates = [...new Set([...mentioned, ...followers, ...owners])].filter((id) => id !== actorId)
   const viewers = await viewersAmong(tx, board, candidates)
   const out: NewNotification[] = []
   for (const userId of candidates) {
     if (!viewers.has(userId)) continue
-    out.push({ userId, kind: mentioned.includes(userId) ? 'mention' : 'reply' })
+    const kind = mentioned.includes(userId) ? 'mention' : followers.includes(userId) ? 'reply' : 'new_comment'
+    out.push({ userId, kind })
   }
   return out
 }
@@ -203,10 +209,20 @@ export async function registerComments(app: FastifyInstance, ctx: FeatureContext
       )
       await insertMentions(tx, board.workspace_id, commentId, mentioned)
       await markRead(tx, { id: threadId, workspace_id: board.workspace_id }, user.id, at)
+      // DANA-02: the board's owners hear about every new thread (a client's first comment included),
+      // capped per author and per board so neither a guest nor a crowd of guests can flood their bell.
+      const recipients = await recipientsFor(
+        tx,
+        board,
+        user.id,
+        mentioned,
+        [],
+        await boardOwners(tx, board.id),
+      )
       await insertNotifications(
         tx,
         { workspaceId: board.workspace_id, boardId: board.id, threadId, commentId, actorId: user.id, at },
-        await recipientsFor(tx, board, user.id, mentioned, []),
+        await withinNewCommentCap(tx, { boardId: board.id, actorId: user.id, at }, recipients),
       )
       return mustLoadThread(tx, board, threadId)
     })
