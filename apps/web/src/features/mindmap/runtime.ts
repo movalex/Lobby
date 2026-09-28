@@ -49,7 +49,9 @@ import {
   type TLShapePartial,
   toRichText,
 } from 'tldraw'
-import { findEmptySpot } from '../canvas-ux/placement.ts'
+import { findEmptySpot, unionRects } from '../canvas-ux/placement.ts'
+import { frameInView } from '../present-export/export-defaults.ts'
+import { fitFrameAround, placeInFrame } from './frame-place.ts'
 import { blockHeights, DEFAULT_LAYOUT, layoutTree, movedPositions, type Point } from './layout.ts'
 import {
   type Box,
@@ -67,6 +69,7 @@ import {
 } from './model.ts'
 import { BRANCH_COLORS, edgeSize, levelStyle, NEW_ROOT_TEXT, nextBranchColor, ROOT_COLOR } from './style.ts'
 import { edgeMetaOf, hasMindmapMeta, TOPIC_TYPES, TreeIndex, topicMetaOf } from './tree-index.ts'
+import { hiddenByCollapse } from './visibility.ts'
 
 /** Deleting more topics than this at once asks first. */
 export const CONFIRM_DELETE_ABOVE = 10
@@ -552,6 +555,70 @@ export class MindmapRuntime {
       const after = this.readTree(rootId)
       if (after) this.ensureEdges(after)
     }
+    this.keepInFrame(rootId)
+  }
+
+  /**
+   * R7: a map inside a frame stays inside it as it grows. The frame grows right and down around it
+   * (the map moves off the frame's left and top edges first), so no topic is clipped by the frame or
+   * missing from its slide. Part of the same write as the layout (and so of its undo step, if any).
+   */
+  private keepInFrame(rootId: string) {
+    const { editor } = this
+    const root = editor.getShape(rootId as TLShapeId)
+    const frame = root ? editor.getShape(root.parentId as TLShapeId) : undefined
+    if (!root || !frame || frame.type !== 'frame' || editor.isShapeOrAncestorLocked(frame)) return
+    if (editor.getShapePageTransform(frame).rotation() !== 0) return
+    const tree = this.readTree(rootId)
+    const fb = editor.getShapePageBounds(frame)
+    if (!tree || !fb) return
+    const inside: TLShape[] = []
+    for (const id of tree.nodes.keys()) {
+      const s = editor.getShape(id as TLShapeId)
+      if (s && s.parentId === frame.id && !hiddenByCollapse(editor, s)) inside.push(s)
+    }
+    const content = unionRects(inside.map((s) => tree.nodes.get(s.id)?.box ?? { x: 0, y: 0, w: 0, h: 0 }))
+    const fit = fitFrameAround({ x: fb.x, y: fb.y, w: fb.w, h: fb.h }, content)
+    if (!fit) return
+    if (fit.dx || fit.dy) {
+      const updates: TLShapePartial[] = []
+      for (const id of tree.nodes.keys()) {
+        const s = editor.getShape(id as TLShapeId)
+        if (!s || s.parentId !== frame.id) continue
+        const origin = editor.getShapePageTransform(s).point()
+        const local = editor.getPointInParentSpace(s, { x: origin.x + fit.dx, y: origin.y + fit.dy })
+        updates.push({ id: s.id, type: s.type, x: local.x, y: local.y })
+        this.selfWrites.set(s.id, { x: local.x, y: local.y })
+      }
+      editor.updateShapes(updates)
+    }
+    const props = frame.props as { w: number; h: number }
+    if (fit.w !== props.w || fit.h !== props.h) {
+      editor.updateShape({ id: frame.id, type: frame.type, props: { w: fit.w, h: fit.h } })
+    }
+  }
+
+  /**
+   * R7: the frame a new map belongs to: the selected frame, else the one that fills the view (the
+   * Export dialog's rule). Locked frames are skipped: a map in one could not be edited.
+   */
+  private frameForNewMap(): TLShape | null {
+    const { editor } = this
+    const usable = (s: TLShape | undefined | null): s is TLShape =>
+      !!s &&
+      s.type === 'frame' &&
+      !editor.isShapeOrAncestorLocked(s) &&
+      editor.getShapePageTransform(s).rotation() === 0
+    const only = editor.getOnlySelectedShape()
+    if (usable(only)) return only
+    const frames: { id: string; bounds: Box }[] = []
+    for (const s of editor.getCurrentPageShapes()) {
+      if (!usable(s)) continue
+      const b = editor.getShapePageBounds(s)
+      if (b) frames.push({ id: s.id, bounds: { x: b.x, y: b.y, w: b.w, h: b.h } })
+    }
+    const id = frameInView(editor.getViewportPageBounds(), frames)
+    return id ? (editor.getShape(id as TLShapeId) ?? null) : null
   }
 
   private applyPositions(tree: MindmapTree, moved: ReadonlyMap<string, Point>) {
@@ -927,11 +994,35 @@ export class MindmapRuntime {
     return draft
   }
 
+  /** The space a new map keeps free around its central topic: room for a few branches either side. */
+  private newMapRoom() {
+    return { w: levelStyle(0).minW + 2 * (DEFAULT_LAYOUT.hGap(1) + 300), h: 360 }
+  }
+
+  /**
+   * Where a new map goes inside `frame` (R7): its centre, and the frame's new height when the map only
+   * fits below the frame's content.
+   */
+  private spotInFrame(frame: TLShape, center: Point): { center: Point; growToH: number | null } | null {
+    const { editor } = this
+    const fb = editor.getShapePageBounds(frame)
+    if (!fb) return null
+    const children: Box[] = []
+    for (const id of editor.getSortedChildIdsForParent(frame.id)) {
+      const b = editor.getShapePageBounds(id)
+      if (b) children.push({ x: b.x, y: b.y, w: b.w, h: b.h })
+    }
+    const placed = placeInFrame(this.newMapRoom(), center, { x: fb.x, y: fb.y, w: fb.w, h: fb.h }, children)
+    return {
+      center: { x: placed.at.x + placed.room.w / 2, y: placed.at.y + placed.room.h / 2 },
+      growToH: placed.growToH,
+    }
+  }
+
   /** Where a new map goes: the free spot nearest `center` with room for a few branches around it. */
   private spotForNewMap(center: Point): Point {
     const { editor } = this
-    const st = levelStyle(0)
-    const room = { w: st.minW + 2 * (DEFAULT_LAYOUT.hGap(1) + 300), h: 360 }
+    const room = this.newMapRoom()
     const obstacles: Box[] = []
     const pageId = editor.getCurrentPageId()
     for (const s of editor.getCurrentPageShapes()) {
@@ -943,26 +1034,39 @@ export class MindmapRuntime {
     return { x: at.x + room.w / 2, y: at.y + room.h / 2 }
   }
 
-  /** New map: a central topic at the free spot nearest the view's centre, selected for typing. */
+  /**
+   * New map: a central topic at the free spot nearest the view's centre, selected for typing. With a
+   * frame selected or filling the view (R7), inside that frame (which grows downward when it is full),
+   * so the map is on the frame's slide in Present and its page in the PDF.
+   */
   createMap(center?: Point): TLShapeId | null {
     if (!this.canEdit()) return null
     const { editor } = this
-    const c = this.spotForNewMap(center ?? editor.getViewportPageBounds().center)
+    const want = center ?? editor.getViewportPageBounds().center
+    const frame = this.frameForNewMap()
+    const inFrame = frame ? this.spotInFrame(frame, want) : null
+    const c = inFrame?.center ?? this.spotForNewMap(want)
+    const container: TLParentId = frame && inFrame ? frame.id : editor.getCurrentPageId()
     const id = createShapeId()
     editor.markHistoryStoppingPoint('mindmap: new map')
     this.op(() =>
       editor.run(() => {
+        if (frame && inFrame?.growToH) {
+          editor.updateShape({ id: frame.id, type: 'frame', props: { h: Math.ceil(inFrame.growToH) } })
+        }
         const draft = this.geoTopic(
           id,
-          editor.getCurrentPageId(),
+          container,
           c,
           0,
           ROOT_COLOR,
           { rootId: id, parentId: null, side: 'right', collapsed: false },
           NEW_ROOT_TEXT,
         )
-        draft.x = Math.round(c.x - draft.props.w / 2)
-        draft.y = Math.round(c.y - draft.props.h / 2)
+        const topLeft = { x: Math.round(c.x - draft.props.w / 2), y: Math.round(c.y - draft.props.h / 2) }
+        const local = frame && inFrame ? editor.getPointInShapeSpace(frame, topLeft) : topLeft
+        draft.x = local.x
+        draft.y = local.y
         editor.createShape(draft)
       }),
     )

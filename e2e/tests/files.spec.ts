@@ -368,11 +368,6 @@ test('F1/F2 uploads with the view on "3 · Imagery": 3 then 12 images land in gr
 
   const three = await mixedImages(a.page, 'three', 3)
   const twelve = await mixedImages(a.page, 'twelve', 12)
-  const vpScreen = await readF(a.page, (ed) => {
-    const vp = ed.getViewportPageBounds()
-    const z = ed.getZoomLevel()
-    return { w: vp.w * z, h: vp.h * z }
-  })
 
   const upload = async (files: FilePayload[]) => {
     const before = await allShapeIds(a.page)
@@ -395,11 +390,12 @@ test('F1/F2 uploads with the view on "3 · Imagery": 3 then 12 images land in gr
     const grid = all.filter((s) => second.ids.includes(s.id))
     const longest = grid.map((s) => Math.max(s.bounds.w, s.bounds.h))
     expect(Math.max(...longest) / Math.min(...longest)).toBeLessThan(1.01)
-    // A consistent, screen-relative size (not the pixel size): 20–40 % of the shorter viewport side.
-    const onScreen = (longest[0] ?? 0) * second.zoomAtDrop
-    const shorter = Math.min(vpScreen.w, vpScreen.h)
-    expect(onScreen).toBeGreaterThanOrEqual(0.2 * shorter - 1)
-    expect(onScreen).toBeLessThanOrEqual(0.4 * shorter + 1)
+    // F2-01: one page-space size across uploads (not the pixel size, not the zoom): the second drop
+    // matches the first.
+    const firstLongest = all
+      .filter((s) => first.ids.includes(s.id))
+      .map((s) => Math.max(s.bounds.w, s.bounds.h))
+    for (const l of [...firstLongest, ...longest]) expect(l).toBeCloseTo(longest[0] ?? 0, 0)
     const centre = (s: PlacedShape) => ({ x: s.bounds.x + s.bounds.w / 2, y: s.bounds.y + s.bounds.h / 2 })
     expect(new Set(grid.map((s) => Math.round(centre(s).x))).size).toBe(4)
     expect(new Set(grid.map((s) => Math.round(centre(s).y))).size).toBe(3)

@@ -779,12 +779,15 @@ test('frame outline: rows in presentation order, click goes to the frame, drag r
   const indexes = (page: Page) =>
     Promise.all([F1, F2, F3].map((id) => getShape(page, id).then((s) => s?.meta.presentationIndex ?? null)))
 
-  await test.step('clicking a row selects its frame and brings it into view', async () => {
+  await test.step('clicking a row brings its frame into view without selecting it (DANA2-03); a second click selects it', async () => {
     await editEd(a.page, (ed) => ed.setCamera({ x: 30_000, y: 30_000, z: 1 }, { immediate: true }))
     expect(await inView(a.page, [F3])).toBe(false)
     await frameRow(a.page, F3).locator('.dr-cux-frame__name').click()
-    expect(await selectedIds(a.page)).toEqual([F3])
+    expect(await selectedIds(a.page)).toEqual([])
     await expect.poll(() => inView(a.page, [F3])).toBe(true)
+    await expect.poll(() => readEd(a.page, (ed) => ed.getCameraState())).toBe('idle')
+    await frameRow(a.page, F3).locator('.dr-cux-frame__name').click()
+    expect(await selectedIds(a.page)).toEqual([F3])
   })
 
   await test.step('dragging the last row onto the first: explicit indexes on every frame; bob’s panel follows within 2 s', async () => {

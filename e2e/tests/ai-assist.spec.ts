@@ -214,8 +214,16 @@ test('Group into themes on the Lobby tour Brainstorm: notice once, busy state, t
 
   const after = await frameContents(a.page, BRAINSTORM)
   if (!after) throw new Error('no frame')
-  await test.step('tidy: three bold labels over their notes, nothing overlaps, all inside the unchanged frame', async () => {
-    expect([after.w, after.h]).toEqual([before.w, before.h])
+  await test.step('tidy: three bold labels over their notes, under the map, nothing overlaps, all inside the frame', async () => {
+    // DANA-10: the clusters go in clear space under the question, theme cards and connectors (not in a
+    // row beside the cards): the frame grows downward only, never into its neighbours.
+    expect(after.w).toBe(before.w)
+    expect(after.h).toBeGreaterThan(before.h)
+    const mapBottom = Math.max(
+      ...after.kids.filter((k) => k.type === 'arrow' || k.type === 'geo').map((k) => k.b.y + k.b.h),
+    )
+    for (const k of after.kids.filter((k) => k.type === 'note' || aiKind(k) === 'theme-label'))
+      expect(k.b.y, `${k.text} under the map`).toBeGreaterThan(mapBottom)
     const labels = after.kids.filter((k) => aiKind(k) === 'theme-label')
     expect(labels.map((l) => l.text)).toEqual(['Big Gameplay Moments', 'Story Twists', 'Made With Players'])
     const moved = after.kids.filter((k) => k.type === 'note')
@@ -286,7 +294,7 @@ test('Group into themes on the Lobby tour Brainstorm: notice once, busy state, t
     const again = await frameContents(a.page, BRAINSTORM)
     expect(again?.kids.filter((k) => aiKind(k) === 'theme-label')).toHaveLength(3)
     // The same notes and themes land exactly where they were: nothing moves, the frame keeps its size.
-    expect([again?.w, again?.h]).toEqual([before.w, before.h])
+    expect([again?.w, again?.h]).toEqual([after.w, after.h])
     const at = (f: typeof again) =>
       Object.fromEntries(
         (f?.kids ?? [])

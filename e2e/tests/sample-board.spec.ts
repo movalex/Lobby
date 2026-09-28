@@ -164,6 +164,24 @@ test('sample board: "Start with the sample board" on an empty dashboard opens th
     await expect(page.getByTestId('board-title')).toHaveText('Lobby tour')
     const frames = await expectTour(page)
 
+    await test.step('DANA-06: it opens on the Welcome frame, fitted and readable, not a 12 % overview of all six', async () => {
+      const welcome = frames[0]?.id ?? ''
+      const shown = () =>
+        read(
+          page,
+          (ed, id) => {
+            const e = ed as unknown as TourEditor & { getViewportPageBounds(): BoxLike }
+            const vp = e.getViewportPageBounds()
+            const b = ed.getShapePageBounds(id) as BoxLike
+            const has = b.x >= vp.x && b.y >= vp.y && b.x + b.w <= vp.x + vp.w && b.y + b.h <= vp.y + vp.h
+            return { zoom: e.getZoomLevel(), welcome: has, wide: vp.w < 2 * b.w }
+          },
+          welcome,
+        )
+      await expect.poll(shown).toEqual({ zoom: expect.any(Number), welcome: true, wide: true })
+      expect((await shown()).zoom).toBeGreaterThan(0.5)
+    })
+
     await test.step('a normal private board, with the tour stored on the server (a second tab loads it)', async () => {
       const { board } = await api.getBoard(boardId)
       expect(board).toMatchObject({ title: 'Lobby tour', visibility: 'private', workspaceId })

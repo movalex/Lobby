@@ -4,8 +4,10 @@
 // tldraw 5.4.2 creates dropped images at their native pixel size in one long row (47 photos were
 // 88,000 units wide), parents each one to whatever frame is under its own top-left corner, and then
 // moves the row, so images end up outside the frame that clips them. Instead:
-//   - sizes are relative to the screen: one image gets a longest side of about 40 % of the viewport's
-//     shorter side; several share a grid of ceil(sqrt(n)) columns of equal square cells;
+//   - sizes are in page units, the same for every upload (F2-01: they used to follow the zoom, so
+//     three uploads came out at 1x, 2.5x and 5x): the median longest side of the images already in
+//     the frame (or on the page) under the drop point, else DEFAULT_IMAGE_SIDE; several images share a
+//     grid of ceil(sqrt(n)) columns of equal square cells of that side;
 //   - the grid (and the row of file cards under it) is centred on the drop point, moved to the nearest
 //     empty spot if that would cover existing content, and goes into a frame only when all of it fits
 //     inside that frame.
@@ -55,6 +57,32 @@ export const DROP_LAYOUT = {
   barAbovePx: 114,
 } as const
 
+/** F2-01: the longest side (page units) of a dropped image when nothing on the board sets one. */
+export const DEFAULT_IMAGE_SIDE = 400
+/** F2-01: bounds for a longest side taken from the images already there. */
+export const IMAGE_SIDE_RANGE = { min: 120, max: 1600 } as const
+
+/**
+ * F2-01: the longest side new images get: the median longest side of `existing` (the images already
+ * in the frame, or on the page, where they land), else DEFAULT_IMAGE_SIDE. Page units, so a second
+ * upload at another zoom matches the first.
+ */
+export function imageSideFor(existing: readonly Size[]): number {
+  const sides = existing
+    .map((s) => Math.max(s.w, s.h))
+    .filter(finitePositive)
+    .sort((a, b) => a - b)
+  if (!sides.length) return DEFAULT_IMAGE_SIDE
+  const mid = Math.floor(sides.length / 2)
+  const hi = sides[mid] as number
+  const median = sides.length % 2 ? hi : ((sides[mid - 1] as number) + hi) / 2
+  return clamp(Math.round(median), IMAGE_SIDE_RANGE.min, IMAGE_SIDE_RANGE.max)
+}
+
+/** The gap between grid cells of `side` page units (F2-01: page units too). */
+const pageGap = (side: number) => Math.max(20, Math.round(side * 0.05))
+const isSide = (side: number | undefined): side is number => side !== undefined && finitePositive(side)
+
 /** The camera when the files arrived: viewport in page units and the zoom level. */
 export interface View {
   viewport: Rect
@@ -92,7 +120,8 @@ function fitSquare(size: Size, side: number, zoom: number): Size {
  * The side of the square cells for a grid of `n` images: the grid tries to fill 85 % of the viewport,
  * each cell between 20 % and 40 % of the viewport's shorter side (page units).
  */
-export function imageCellSide(n: number, view: View): number {
+export function imageCellSide(n: number, view: View, side?: number): number {
+  if (isSide(side)) return side
   const zoom = saneZoom(view.zoom)
   const vp = view.viewport
   const short = Math.min(vp.w, vp.h)
@@ -121,11 +150,13 @@ export function layoutMixedGrid(
   images: readonly Size[],
   cards: readonly Size[],
   view: View,
+  side?: number,
 ): { block: Block; images: Rect[]; cards: Rect[]; imagesBounds: Rect | null } {
-  const zoom = saneZoom(view.zoom)
-  const gap = DROP_LAYOUT.gapPx / zoom
+  // Page-space sizes (F2-01) cap the upscale in page units, the same at every zoom.
+  const zoom = isSide(side) ? 1 : saneZoom(view.zoom)
   const largestCard = Math.max(0, ...cards.map((c) => Math.max(saneSize(c).w, saneSize(c).h)))
-  const cell = Math.max(imageCellSide(images.length, view), largestCard * DROP_LAYOUT.cardMinScale)
+  const cell = Math.max(imageCellSide(images.length, view, side), largestCard * DROP_LAYOUT.cardMinScale)
+  const gap = isSide(side) ? pageGap(cell) : DROP_LAYOUT.gapPx / zoom
   const cols = Math.max(1, Math.ceil(Math.sqrt(images.length)), Math.ceil(Math.sqrt(cards.length)))
   const at = (index: number, size: Size): Rect => {
     const col = index % cols
@@ -156,13 +187,13 @@ export function layoutMixedGrid(
  * centred in its cell, with even gaps. Cells shrink (down to 20 % of the shorter side) to keep the
  * grid inside the viewport; past that the grid overflows and the caller zooms out.
  */
-export function layoutImageGrid(sizes: readonly Size[], view: View): Block {
+export function layoutImageGrid(sizes: readonly Size[], view: View, side?: number): Block {
   const n = sizes.length
   if (!n) return { w: 0, h: 0, items: [] }
-  const zoom = saneZoom(view.zoom)
-  const gap = DROP_LAYOUT.gapPx / zoom
+  const zoom = isSide(side) ? 1 : saneZoom(view.zoom)
   const cols = Math.ceil(Math.sqrt(n))
-  const cell = imageCellSide(n, view)
+  const cell = imageCellSide(n, view, side)
+  const gap = isSide(side) ? pageGap(cell) : DROP_LAYOUT.gapPx / zoom
   const items = sizes.map((size, i) => {
     const { w, h } = fitSquare(size, cell, zoom)
     const col = i % cols
@@ -204,6 +235,33 @@ export function layoutCardRows(sizes: readonly Size[], opts: { maxRowWidth: numb
     y += Math.max(...r.map((s) => s.h)) + opts.gap
   })
   return normalize(items)
+}
+
+/** tldraw's image crop: the part of the image shown, as fractions (0–1) of the whole image. */
+export interface SlotCrop {
+  topLeft: Point
+  bottomRight: Point
+}
+
+/**
+ * F2-02: an image dropped on a template slot fills it: the image takes the slot's rect and is
+ * centre-cropped to the slot's shape (null crop when the shapes already match), so the slot's
+ * placeholder text never peeks out beside a portrait photo. The whole image stays recoverable
+ * through tldraw's Crop.
+ */
+export function coverSlot(size: Size, slot: Rect): { rect: Rect; crop: SlotCrop | null } {
+  const s = saneSize(size)
+  const rect = { x: slot.x, y: slot.y, w: slot.w, h: slot.h }
+  if (!finitePositive(slot.w) || !finitePositive(slot.h)) return { rect: fitInSlot(size, slot), crop: null }
+  const image = s.w / s.h
+  const target = slot.w / slot.h
+  if (Math.abs(image / target - 1) < 0.005) return { rect, crop: null }
+  if (image > target) {
+    const cut = (1 - target / image) / 2
+    return { rect, crop: { topLeft: { x: cut, y: 0 }, bottomRight: { x: 1 - cut, y: 1 } } }
+  }
+  const cut = (1 - image / target) / 2
+  return { rect, crop: { topLeft: { x: 0, y: cut }, bottomRight: { x: 1, y: 1 - cut } } }
 }
 
 /** Contain-fits an image into a template image slot, centred. */
@@ -350,6 +408,11 @@ export interface DropPlanInput {
   containers: readonly DropContainer[]
   /** Gap between file cards, page units. */
   cardGap: number
+  /**
+   * F2-01: the images' longest side in page units (imageSideFor). Without it, sizes follow the
+   * viewport (the old screen-relative rule).
+   */
+  imageSide?: number
 }
 
 export interface DropPlan {
@@ -376,7 +439,7 @@ function dropBlock(input: DropPlanInput): DropBlock | null {
   const zoom = saneZoom(input.view.zoom)
   if (input.images.length && input.cards.length) {
     // F12: images and cards at one scale, in one grid; the images' part is centred on the drop point.
-    const mixed = layoutMixedGrid(input.images, input.cards, input.view)
+    const mixed = layoutMixedGrid(input.images, input.cards, input.view, input.imageSide)
     const ib = mixed.imagesBounds as Rect
     return {
       w: mixed.block.w,
@@ -386,11 +449,11 @@ function dropBlock(input: DropPlanInput): DropBlock | null {
       anchor: { x: ib.x + ib.w / 2, y: ib.y + ib.h / 2 },
     }
   }
-  const grid = layoutImageGrid(input.images, input.view)
+  const grid = layoutImageGrid(input.images, input.view, input.imageSide)
   const maxRowWidth = Math.max(grid.w, input.view.viewport.w * DROP_LAYOUT.cardRowFraction)
   const cards = layoutCardRows(input.cards, { maxRowWidth, gap: input.cardGap })
   if (!grid.items.length && !cards.items.length) return null
-  const gap = DROP_LAYOUT.gapPx / zoom
+  const gap = isSide(input.imageSide) ? pageGap(input.imageSide) : DROP_LAYOUT.gapPx / zoom
   const sectionGap = grid.items.length && cards.items.length ? Math.max(2 * gap, 2 * input.cardGap) : 0
   const w = Math.max(grid.w, cards.w)
   const h = grid.h + sectionGap + cards.h
