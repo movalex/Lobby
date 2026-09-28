@@ -112,7 +112,6 @@ Checks: lint 0 errors / 0 warnings (581 files); typecheck 14 projects; vitest 1,
 - **Wave 3** (docs/WAVE3-CONTRACTS.md): name-only guests, private brainstorming, dashboard thumbnails, a per-board export policy, offsite board backups to R2, and the "Lobby tour" demo board.
 - **Not built**: email notifications (Resend, later); browser edit latency and big-board frame rate (partly inside tldraw); a presenter session; Office previews; mind maps and Kanban; DBC Ops integration.
 - **Unmeasured**: a real WAN, the agreed laptop, iPad/Safari, Firefox and phone frame rate; `FOR UPDATE SKIP LOCKED` contention on real Postgres.
-- **Open decision**: delete the unused 5 GB api disk `draftroom-staging-files` (about $1.25/month).
 
 ## Log
 

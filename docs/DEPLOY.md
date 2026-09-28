@@ -314,7 +314,7 @@ Steps:
 - `dockerfilePath ./docker/api.Dockerfile`;
 - the four `R2_*` values set with `PUT /v1/services/<api>/env-vars/<key>`.
 
-It was deployed in the order api → sync → web; all three went live on the first try. The old disk `draftroom-staging-files` stayed attached. Staging had no uploads before the switch, so nothing had to be migrated. Deleting the disk needs the owner's go-ahead. The NAS worker (`WORKER_ID=nas-1`) was deployed with `deploy/nas/deploy-worker.sh` against the public api URL.
+It was deployed in the order api → sync → web; all three went live on the first try. The old disk `draftroom-staging-files` stayed attached; staging had no uploads before the switch, so nothing had to be migrated. With the owner's go-ahead it was deleted through the Render API (`DELETE /v1/disks/<id>`, 2026-09-28) after confirming the live api used `/tmp` and R2 only. Render did not restart the api for it, and `/healthz` stayed 200. The NAS worker (`WORKER_ID=nas-1`) was deployed with `deploy/nas/deploy-worker.sh` against the public api URL.
 
 ### What users see during a deploy
 
