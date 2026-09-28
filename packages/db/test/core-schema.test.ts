@@ -3,10 +3,10 @@
 
 import { createHash } from 'node:crypto'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { newBoardId, newId, type PgliteDb, pgErrorCode } from '../src/index.ts'
+import { type Db, newBoardId, newId, pgErrorCode } from '../src/index.ts'
 import { openTestDb } from '../src/testing.ts'
 
-let db: PgliteDb
+let db: Db
 const u1 = newId('usr')
 const w1 = newId('wsp')
 const w2 = newId('wsp')
