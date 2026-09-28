@@ -136,7 +136,7 @@ describe('what the thumbnail shows', () => {
       kind: 'start-view',
       pageId: 'page:2',
       area: expand(frame, 32),
-      fit: 'cover-top',
+      fit: 'frame',
     })
   })
 
@@ -158,7 +158,7 @@ describe('what the thumbnail shows', () => {
     const first = { x: 0, y: 0, w: 1600, h: 1000 }
     const tour = [{ pageId: 'page:1', bounds: { x: 0, y: 0, w: 10_400, h: 1000 }, firstFrame: first }]
     const choice = chooseArea({ startView: null, startFrame: null, pages: tour })
-    expect(choice).toEqual({ kind: 'frame', pageId: 'page:1', area: expand(first, 64), fit: 'cover-top' })
+    expect(choice).toEqual({ kind: 'frame', pageId: 'page:1', area: expand(first, 64), fit: 'frame' })
     if (choice.kind !== 'frame') throw new Error('unreachable')
     const frame = thumbnailFrame(choice.area, choice.fit)
     expect([frame?.width, frame?.height]).toEqual([THUMBNAIL_WIDTH, THUMBNAIL_HEIGHT])
@@ -168,6 +168,35 @@ describe('what the thumbnail shows', () => {
     // An owner's start view still wins over the first frame.
     const startView = { pageId: 'page:1', area: { x: 3520, y: 0, w: 1600, h: 1000 } }
     expect(chooseArea({ startView, startFrame: null, pages: tour })).toMatchObject({ kind: 'start-view' })
+  })
+
+  it('R11: a very wide first frame is shown from its left end, never a centre crop', () => {
+    // The Retrospective template's Check-in frame: 2560 × 420, the next row of frames 80 below it.
+    const checkIn = { x: 0, y: 0, w: 2560, h: 420 }
+    const retro = [{ pageId: 'page:1', bounds: { x: 0, y: 0, w: 3400, h: 1500 }, firstFrame: checkIn }]
+    const choice = chooseArea({ startView: null, startFrame: null, pages: retro })
+    if (choice.kind !== 'frame') throw new Error('expected the first frame')
+    const frame = thumbnailFrame(choice.area, choice.fit)
+    const box = frame?.box as { x: number; y: number; w: number; h: number }
+    // The frame's left edge (heading, the start of every sentence, the first notes) is on the card…
+    expect(box.x).toBeLessThanOrEqual(checkIn.x)
+    // …and its full height, from its top.
+    expect(box.y).toBeLessThanOrEqual(checkIn.y)
+    expect(box.y + box.h).toBeGreaterThanOrEqual(checkIn.y + checkIn.h)
+    // With its margin, it fills half of the card's height (not a thin strip).
+    expect(choice.area.h / box.h).toBeCloseTo(0.5, 6)
+    expect(box.w / box.h).toBeCloseTo(THUMBNAIL_WIDTH / THUMBNAIL_HEIGHT, 6)
+  })
+
+  it('R11: a moderately wide frame is shown whole (letterboxed below), a tall one keeps its top', () => {
+    const wide = { x: 100, y: 50, w: 2000, h: 800 } // 2.5 : 1
+    const w = thumbnailFrame(wide, 'frame')?.box as { x: number; y: number; w: number; h: number }
+    expect(w.x).toBeCloseTo(wide.x, 6)
+    expect(w.w).toBeCloseTo(wide.w, 6)
+    expect(w.y).toBeCloseTo(wide.y, 6)
+    expect(w.h).toBeGreaterThanOrEqual(wide.h)
+    const tall = { x: 0, y: 0, w: 800, h: 2000 }
+    expect(thumbnailFrame(tall, 'frame')?.box).toEqual(thumbnailFrame(tall, 'cover-top')?.box)
   })
 
   it('an empty board shows nothing (the card keeps its placeholder)', () => {

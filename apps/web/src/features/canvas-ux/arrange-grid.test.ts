@@ -88,21 +88,56 @@ describe('columns and gap', () => {
 })
 
 describe('layoutGrid', () => {
-  it('sizes columns by their widest item and rows by their tallest', () => {
+  it('uses one uniform cell (widest × tallest item) and centres every item in its cell', () => {
     const items = [
       note('a', 0, 0, 100, 50),
       note('b', 0, 0, 300, 80),
       note('c', 0, 0, 200, 200),
       note('d', 0, 0, 50, 50),
     ]
+    // Cell 300 × 200, gap 10: cells at x 10 / 320, y 20 / 230.
     const plan = layoutGrid(items, 2, { x: 10, y: 20 }, 10)
     expect(plan.positions).toEqual({
-      a: { x: 10, y: 20 },
-      b: { x: 10 + 200 + 10, y: 20 },
-      c: { x: 10, y: 20 + 80 + 10 },
-      d: { x: 220, y: 110 },
+      a: { x: 10 + 100, y: 20 + 75 },
+      b: { x: 320, y: 20 + 60 },
+      c: { x: 10 + 50, y: 230 },
+      d: { x: 320 + 125, y: 230 + 75 },
     })
-    expect(plan.bounds).toEqual({ x: 10, y: 20, w: 200 + 10 + 300, h: 80 + 10 + 200 })
+    expect(plan.bounds).toEqual({ x: 10, y: 20, w: 300 + 10 + 300, h: 200 + 10 + 200 })
+  })
+
+  it('F7: mixed portrait, landscape and card sizes line up on shared centre lines (no ragged columns)', () => {
+    // 170-wide landscape and portrait images plus a 360-wide video card, as in the mood-board review.
+    const sizes: [number, number][] = [
+      [170, 113],
+      [113, 170],
+      [360, 276],
+      [170, 128],
+      [128, 170],
+      [170, 170],
+    ]
+    const items = sizes.map(([w, h], i) => note(`i${i}`, i * 400, 0, w, h))
+    const plan = layoutGrid(items, 3, { x: 0, y: 0 }, 20)
+    const centre = (id: string) => {
+      const it = items.find((i) => i.id === id) as GridItem
+      const p = plan.positions[id] as { x: number; y: number }
+      return { x: p.x + it.w / 2, y: p.y + it.h / 2 }
+    }
+    // Column centres match row to row; row centres match across a row; the column pitch is uniform.
+    for (let c = 0; c < 3; c++) expect(centre(`i${c}`).x).toBeCloseTo(centre(`i${c + 3}`).x)
+    for (let r = 0; r < 2; r++) {
+      const ys = [0, 1, 2].map((c) => centre(`i${r * 3 + c}`).y)
+      expect(new Set(ys).size).toBe(1)
+    }
+    const pitch1 = centre('i1').x - centre('i0').x
+    const pitch2 = centre('i2').x - centre('i1').x
+    expect(pitch1).toBe(pitch2)
+    expect(pitch1).toBe(360 + 20)
+    // Nothing overlaps.
+    const boxes = items.map((i) => ({ ...plan.positions[i.id], w: i.w, h: i.h }) as GridItem)
+    boxes.forEach((a, i) => {
+      for (const b of boxes.slice(i + 1)) expect(overlaps(a, b)).toBe(false)
+    })
   })
 })
 

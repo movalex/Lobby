@@ -8,6 +8,7 @@
 
 import { type ReactNode, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import { type Editor, type TLShapeId, useActions, useEditor, useValue } from 'tldraw'
+import { PendingImageNames } from '../../assets/PendingImageNames.tsx'
 import { isReadonlyRole } from '../../board/access.ts'
 import { AiBarButton } from '../ai/menus.tsx'
 import { TagsBarButton } from '../tags/TagPicker.tsx'
@@ -612,6 +613,7 @@ export function CanvasUxOverlay({ ctx }: { ctx: FeatureContext }) {
       <SelectionBar ctx={ctx} />
       <LockedHintBar ctx={ctx} />
       <LockedFrameBadges />
+      <PendingImageNames />
       <BulkPastePrompt />
     </div>
   )

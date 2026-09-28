@@ -41,6 +41,18 @@ export const DROP_LAYOUT = {
   maxUpscale: 2,
   /** A row of file cards wraps at this fraction of the viewport width (or the grid's width). */
   cardRowFraction: 0.8,
+  /**
+   * F12: in a drop of images and file cards, the cards share the images' cells, scaled down to at
+   * most this much (their footer and page strip stay readable); the image cells grow to match.
+   */
+  cardMinScale: 0.7,
+  /**
+   * Screen px kept free under the dropped block after the camera move: tldraw's toolbar (about 100)
+   * plus the selection bar (54) that sits under the selection (canvas-ux Overlay.tsx).
+   */
+  barClearancePx: 160,
+  /** Screen px above the block the selection bar needs when it flips over the selection. */
+  barAbovePx: 114,
 } as const
 
 /** The camera when the files arrived: viewport in page units and the zoom level. */
@@ -77,6 +89,68 @@ function fitSquare(size: Size, side: number, zoom: number): Size {
 }
 
 /**
+ * The side of the square cells for a grid of `n` images: the grid tries to fill 85 % of the viewport,
+ * each cell between 20 % and 40 % of the viewport's shorter side (page units).
+ */
+export function imageCellSide(n: number, view: View): number {
+  const zoom = saneZoom(view.zoom)
+  const vp = view.viewport
+  const short = Math.min(vp.w, vp.h)
+  const gap = DROP_LAYOUT.gapPx / zoom
+  const cols = Math.ceil(Math.sqrt(Math.max(1, n)))
+  const rows = Math.ceil(Math.max(1, n) / cols)
+  const fill = DROP_LAYOUT.gridFill
+  const fit = Math.min((vp.w * fill - (cols - 1) * gap) / cols, (vp.h * fill - (rows - 1) * gap) / rows)
+  return clamp(fit, short * DROP_LAYOUT.minCellFraction, short * DROP_LAYOUT.singleFraction)
+}
+
+/** A file card scaled to fit a square cell of side `side`: never enlarged, never below cardMinScale. */
+export function cardInCell(card: Size, side: number): Size {
+  const s = saneSize(card)
+  const k = clamp(side / Math.max(s.w, s.h), DROP_LAYOUT.cardMinScale, 1)
+  return { w: s.w * k, h: s.h * k }
+}
+
+/**
+ * F12: a drop of images and file cards as one grid at one scale. The cells are the images' cells,
+ * grown when needed so the largest card fits at cardMinScale; every image is contain-fitted in its
+ * cell and every card scaled to it, each centred. The images fill the rows in drop order, and the
+ * cards start on the row after them, in the same columns (so nothing reads as a second, bigger grid).
+ */
+export function layoutMixedGrid(
+  images: readonly Size[],
+  cards: readonly Size[],
+  view: View,
+): { block: Block; images: Rect[]; cards: Rect[]; imagesBounds: Rect | null } {
+  const zoom = saneZoom(view.zoom)
+  const gap = DROP_LAYOUT.gapPx / zoom
+  const largestCard = Math.max(0, ...cards.map((c) => Math.max(saneSize(c).w, saneSize(c).h)))
+  const cell = Math.max(imageCellSide(images.length, view), largestCard * DROP_LAYOUT.cardMinScale)
+  const cols = Math.max(1, Math.ceil(Math.sqrt(images.length)), Math.ceil(Math.sqrt(cards.length)))
+  const at = (index: number, size: Size): Rect => {
+    const col = index % cols
+    const row = Math.floor(index / cols)
+    return {
+      x: col * (cell + gap) + (cell - size.w) / 2,
+      y: row * (cell + gap) + (cell - size.h) / 2,
+      w: size.w,
+      h: size.h,
+    }
+  }
+  const imageRects = images.map((size, i) => at(i, fitSquare(size, cell, zoom)))
+  const firstCard = Math.ceil(images.length / cols) * cols
+  const cardRects = cards.map((size, j) => at(firstCard + j, cardInCell(size, cell)))
+  const block = normalize([...imageRects, ...cardRects])
+  const split = imageRects.length
+  return {
+    block,
+    images: block.items.slice(0, split),
+    cards: block.items.slice(split),
+    imagesBounds: unionRects(block.items.slice(0, split)),
+  }
+}
+
+/**
  * Image shapes for `sizes` (native pixel sizes, aspect ratio kept): one image at about 40 % of the
  * viewport's shorter side; several in ceil(sqrt(n)) columns of equal square cells, each image
  * centred in its cell, with even gaps. Cells shrink (down to 20 % of the shorter side) to keep the
@@ -86,14 +160,9 @@ export function layoutImageGrid(sizes: readonly Size[], view: View): Block {
   const n = sizes.length
   if (!n) return { w: 0, h: 0, items: [] }
   const zoom = saneZoom(view.zoom)
-  const vp = view.viewport
-  const short = Math.min(vp.w, vp.h)
   const gap = DROP_LAYOUT.gapPx / zoom
   const cols = Math.ceil(Math.sqrt(n))
-  const rows = Math.ceil(n / cols)
-  const fill = DROP_LAYOUT.gridFill
-  const fit = Math.min((vp.w * fill - (cols - 1) * gap) / cols, (vp.h * fill - (rows - 1) * gap) / rows)
-  const cell = clamp(fit, short * DROP_LAYOUT.minCellFraction, short * DROP_LAYOUT.singleFraction)
+  const cell = imageCellSide(n, view)
   const items = sizes.map((size, i) => {
     const { w, h } = fitSquare(size, cell, zoom)
     const col = i % cols
@@ -294,15 +363,33 @@ export interface DropPlan {
   bounds: Rect | null
 }
 
-/** The whole drop: the image grid, the file cards under it, placed as one block. */
-export function planDrop(input: DropPlanInput): DropPlan {
+/** The drop's rects relative to the block's top-left, and the point that goes on the drop point. */
+interface DropBlock {
+  w: number
+  h: number
+  images: Rect[]
+  cards: Rect[]
+  anchor: Point
+}
+
+function dropBlock(input: DropPlanInput): DropBlock | null {
   const zoom = saneZoom(input.view.zoom)
+  if (input.images.length && input.cards.length) {
+    // F12: images and cards at one scale, in one grid; the images' part is centred on the drop point.
+    const mixed = layoutMixedGrid(input.images, input.cards, input.view)
+    const ib = mixed.imagesBounds as Rect
+    return {
+      w: mixed.block.w,
+      h: mixed.block.h,
+      images: mixed.images,
+      cards: mixed.cards,
+      anchor: { x: ib.x + ib.w / 2, y: ib.y + ib.h / 2 },
+    }
+  }
   const grid = layoutImageGrid(input.images, input.view)
   const maxRowWidth = Math.max(grid.w, input.view.viewport.w * DROP_LAYOUT.cardRowFraction)
   const cards = layoutCardRows(input.cards, { maxRowWidth, gap: input.cardGap })
-  if (!grid.items.length && !cards.items.length) {
-    return { containerId: null, images: [], cards: [], bounds: null }
-  }
+  if (!grid.items.length && !cards.items.length) return null
   const gap = DROP_LAYOUT.gapPx / zoom
   const sectionGap = grid.items.length && cards.items.length ? Math.max(2 * gap, 2 * input.cardGap) : 0
   const w = Math.max(grid.w, cards.w)
@@ -310,33 +397,78 @@ export function planDrop(input: DropPlanInput): DropPlan {
   const gridX = (w - grid.w) / 2
   const cardsX = (w - cards.w) / 2
   const cardsY = grid.h + sectionGap
-  // The image grid is centred on the drop point and the cards hang below it; cards alone are centred.
-  const anchorY = grid.items.length ? grid.h / 2 : h / 2
-  const center = { x: input.center.x, y: input.center.y - anchorY + h / 2 }
+  return {
+    w,
+    h,
+    images: grid.items.map((r) => ({ ...r, x: r.x + gridX })),
+    cards: cards.items.map((r) => ({ ...r, x: r.x + cardsX, y: r.y + cardsY })),
+    // The image grid is centred on the drop point; cards alone are centred.
+    anchor: { x: w / 2, y: grid.items.length ? grid.h / 2 : h / 2 },
+  }
+}
+
+/**
+ * The whole drop, placed as one block: the image grid and the file cards under it. Images alone keep
+ * the screen-relative grid; cards alone keep their size, in rows; both together share one grid of
+ * equal cells (F12), the cards scaled to the images' cells.
+ */
+export function planDrop(input: DropPlanInput): DropPlan {
+  const zoom = saneZoom(input.view.zoom)
+  const block = dropBlock(input)
+  if (!block) return { containerId: null, images: [], cards: [], bounds: null }
+  const { w, h } = block
+  const center = {
+    x: input.center.x - block.anchor.x + w / 2,
+    y: input.center.y - block.anchor.y + h / 2,
+  }
   const { containerId, topLeft } = placeBlock(
     { w, h },
     center,
     input.containers,
     DROP_LAYOUT.clearancePx / zoom,
   )
-  const images = grid.items.map((r) => ({ ...r, x: r.x + topLeft.x + gridX, y: r.y + topLeft.y }))
-  const cardRects = cards.items.map((r) => ({
-    ...r,
-    x: r.x + topLeft.x + cardsX,
-    y: r.y + topLeft.y + cardsY,
-  }))
+  const move = (r: Rect): Rect => ({ ...r, x: r.x + topLeft.x, y: r.y + topLeft.y })
+  const images = block.images.map(move)
+  const cardRects = block.cards.map(move)
   return { containerId, images, cards: cardRects, bounds: unionRects([...images, ...cardRects]) }
+}
+
+/**
+ * `target` grown downward so that, once zoomToBounds (inset `2 × pad` screen px) fits it into a
+ * `screenH` px tall view, barClearancePx stay free under the content whose bottom is `d` page units
+ * below the target's top. Height-limited fit, zoom z = (H − 2·pad) / (h + e): the content's bottom is
+ * at pad + d·z ≤ H − R  ⇒  e ≥ d·(H − 2·pad) / (H − pad − R) − h. A width- or zoom-limited fit only
+ * leaves more room (the target is centred).
+ */
+function withBarRoom(target: Rect, d: number, screenH: number, pad: number): Rect {
+  const room = screenH - pad - DROP_LAYOUT.barClearancePx
+  if (!(room > 0) || !(d > 0)) return target
+  const extra = (d * (screenH - 2 * pad)) / room - target.h
+  return extra > 0 ? { ...target, h: target.h + extra } : target
 }
 
 /**
  * The page rect to bring into view after a drop, or null when everything already is. Zooms out only
  * as far as needed: to the old viewport plus the new content when that costs at most 1.5x the zoom
  * change of the content alone (so the user sees where the files went), else to the content alone.
+ *
+ * F12: the dropped block ends up selected, and the selection bar sits under it (or over it when there
+ * is no room below). "In view" therefore means the bar fits too, and the target keeps a band free
+ * under the content for it and tldraw's toolbar (`zoom`: the camera's zoom when the files arrived).
  */
-export function cameraTargetAfterDrop(viewport: Rect, content: Rect | null): Rect | null {
-  if (!content || rectContains(viewport, content)) return null
+export function cameraTargetAfterDrop(viewport: Rect, content: Rect | null, zoom = 1): Rect | null {
+  if (!content) return null
+  const z = saneZoom(zoom)
+  const vpBottom = viewport.y + viewport.h
+  const contentBottom = content.y + content.h
+  const barFits =
+    contentBottom <= vpBottom - DROP_LAYOUT.barClearancePx / z ||
+    (content.y >= viewport.y + DROP_LAYOUT.barAbovePx / z && contentBottom <= vpBottom - 100 / z)
+  if (rectContains(viewport, content) && barFits) return null
   const union = unionRects([viewport, content])
-  if (!union) return content
   const zoomOut = (r: Rect) => Math.max(r.w / viewport.w, r.h / viewport.h)
-  return zoomOut(union) <= Math.max(zoomOut(content), 1) * 1.5 ? union : content
+  const target = union && zoomOut(union) <= Math.max(zoomOut(content), 1) * 1.5 ? union : content
+  // tldraw's zoomToBounds inset: min(zoomToFitPadding 128, 28 % of the width), half on each side.
+  const pad = Math.min(128, viewport.w * z * 0.28) / 2
+  return withBarRoom(target, contentBottom - target.y, viewport.h * z, pad)
 }
