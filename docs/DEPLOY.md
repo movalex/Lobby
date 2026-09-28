@@ -486,12 +486,38 @@ The windows differ: Postgres goes back 3 days to any minute; board backups go ba
 ## Rollback
 
 - **How.** Dashboard → service → Deploys → *Rollback*. Render reuses the earlier build artifact (no rebuild) and that deploy's environment variables. Disks, plan and static-site settings are *not* rolled back. A Dashboard rollback also disables autodeploy, which is already off.
-- **Database.** Migrations are forward-only (never edit a shipped one). Rolling the api back past a migration is safe only if the older code tolerates the newer schema. Otherwise, fix forward.
+- **Database.** Migrations are forward-only (never edit a shipped one). Rolling the api back past a migration is safe only if the older code tolerates the newer schema. Otherwise, fix forward. By default an older api build **refuses to start** once the database has recorded a migration it doesn't know (`database has migration …, which this build does not know`). To roll back anyway, follow [Rolling the api back past a migration](#rolling-the-api-back-past-a-migration).
 - **api past milestone 3: don't.** A milestone-1/2 api build reads files from `meta.json` on a local disk that no longer exists. It would never see R2 objects or `asset_versions` rows, and it expects its co-located worker. Fix forward instead.
 - **Workers.** Roll a worker back only to a build that speaks the api's current worker protocol. The simplest way to stop previews is to stop the workers: jobs wait in Postgres.
 - **Canvas schema.** Don't roll sync back below a canvas-schema migration. Boards already migrated on disk can't be loaded by the older server (`Incompatible schema?`), and newer clients are refused (`SERVER_TOO_OLD`). Rolling back the web client is safe while every shape migration keeps its `down`: an older client is served down-migrated records. Roll back sync only when its schema didn't change.
 - **Platform config.** A web build from before the platform phase ignores `VITE_DRAFTROOM_SYNC_ORIGIN` and connects to the static site, which can't carry the socket. On Render, don't roll the static site back past it. A sync build from before it ignores `ALLOWED_ORIGINS` and refuses to start with the Blueprint's `host:port` internal URLs.
 - **Disks.** Disk contents never roll back. To recover data you'd need a snapshot restore, which loses newer data (see above).
+
+### Rolling the api back past a migration
+
+`DRAFTROOM_ALLOW_NEWER_SCHEMA=1` lets an api build start on a database that has migrations newer than it knows. With the flag the migration runner:
+
+- tolerates recorded migrations numbered **above** every migration file of the build;
+- applies nothing;
+- logs a warning on every start that names those migrations.
+
+It still refuses to start in four cases, and no flag makes them safe:
+
+- a recorded migration the build should know but doesn't (a gap below its newest file);
+- a checksum mismatch (`changed after it was applied`);
+- a migration of the build that the database never got;
+- a build with no migration files at all (they weren't shipped), which has nothing to check the database against.
+
+Only builds from this change onward read the flag. Every build before it refuses a newer schema, whatever the environment says.
+
+1. **Check that the migrations you are skipping are additive for the older code.** Additive means new tables, new nullable columns or columns with defaults, and new indexes. It rules out dropped or renamed columns, a new `NOT NULL` without a default, and new `CHECK`s or triggers that the older code's writes would break. Also check what the older code *doesn't enforce*: rows the newer build wrote, which the older one would read without the newer rules. If you aren't sure, fix forward instead. `apps/api/test/migrations.pg.test.ts` checks a similar question on real Postgres for 0009 onwards: nothing existing changes, and a pre-wave-3 build's writes still work.
+2. **Set the flag and deploy the older build.**
+   - Set `DRAFTROOM_ALLOW_NEWER_SCHEMA=1` on the api service (Dashboard → Environment).
+   - Deploy the older commit with Manual Deploy → *Deploy a specific commit*. That is a normal deploy, so it builds the commit with the service's current environment.
+   - Don't use *Rollback*: Render's docs say a rollback reuses the **target deploy's** environment variables, so the flag set now wouldn't reach it.
+   - This procedure hasn't been rehearsed on staging.
+3. **Confirm the start.** The api log shows `DRAFTROOM_ALLOW_NEWER_SCHEMA=1: this build is running on a database with newer migrations than it knows`, with `newerMigrations` listing what it skipped.
+4. **Roll forward** as soon as the fix is out. Deploy the newer build again: its migrations are already recorded, so it applies nothing. Then remove the flag. While the flag is set, every start logs a reminder to remove it.
 
 ## Cost
 

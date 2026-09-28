@@ -277,6 +277,12 @@ async function deleteVersion(
   at: Date,
 ): Promise<number | null> {
   const done = await deps.db.transaction(async (tx) => {
+    // The preview job's row first, then the version's: the order of the worker routes (claim, complete
+    // and retry lock the job, then update the version; worker/jobs.ts). The other way round, deleting
+    // a version whose queued job a worker is claiming deadlocks on real Postgres: this delete would
+    // hold the version and wait for the job (it cascades), while the claim holds the job and waits for
+    // the version. A version without a job (none queued yet) has nothing to take.
+    await tx.query('SELECT version_id FROM preview_jobs WHERE version_id = $1 FOR UPDATE', [versionId])
     const v = await tx.maybeOne<{
       id: string
       asset_id: string

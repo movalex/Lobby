@@ -9,6 +9,7 @@ export {
   checksumOf,
   loadMigrations,
   MIGRATIONS_DIR,
+  type MigrateOptions,
   type MigrateResult,
   type Migration,
   migrate,

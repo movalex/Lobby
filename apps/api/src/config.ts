@@ -44,6 +44,12 @@ export interface ApiConfig {
   /** node-postgres connection string, or null to use PGlite at `pgliteDir`. */
   databaseUrl: string | null
   pgliteDir: string
+  /**
+   * DRAFTROOM_ALLOW_NEWER_SCHEMA=1: start although the database recorded migrations newer than this
+   * build (a rollback; docs/DEPLOY.md "Rollback"), with a warning. Off by default: an older build
+   * refuses a newer schema. Unknown older migrations and checksum mismatches are refused either way.
+   */
+  allowNewerSchema: boolean
   /** DRAFTROOM_DEV_AUTH=1: development identities exist only behind this explicit guard. */
   devAuth: boolean
   authProvider: AuthProviderId
@@ -289,6 +295,10 @@ export function loadConfig(env: Env = process.env): ApiConfig {
   const devAuth = devFlag === '1'
   if (devAuth && production) throw new Error('DRAFTROOM_DEV_AUTH=1 is refused when NODE_ENV=production')
 
+  const newerSchemaFlag = read(env, 'DRAFTROOM_ALLOW_NEWER_SCHEMA')
+  if (newerSchemaFlag !== undefined && newerSchemaFlag !== '1' && newerSchemaFlag !== '0')
+    throw new Error('DRAFTROOM_ALLOW_NEWER_SCHEMA must be 1 (a rollback, docs/DEPLOY.md) or unset')
+
   const providerRaw = read(env, 'AUTH_PROVIDER') ?? (devAuth ? 'dev' : 'clerk')
   if (providerRaw !== 'dev' && providerRaw !== 'clerk') throw new Error('AUTH_PROVIDER must be dev or clerk')
   const authProvider: AuthProviderId = providerRaw
@@ -350,6 +360,7 @@ export function loadConfig(env: Env = process.env): ApiConfig {
     dataDir,
     databaseUrl: read(env, 'DATABASE_URL') ?? null,
     pgliteDir: join(dataDir, 'pg'),
+    allowNewerSchema: newerSchemaFlag === '1',
     devAuth,
     authProvider,
     clerk,

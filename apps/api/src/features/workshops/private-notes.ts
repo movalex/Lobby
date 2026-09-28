@@ -626,12 +626,6 @@ export function registerPrivateNotes(
           [locked.id],
         )
         if (locked.status !== 'revealed' || left.n > 0) return { row: locked, changed: false }
-        // The canvas changed: the dashboard's "Edited" time follows (like apps/sync/src/touch.ts reports).
-        if (waiting.length > 0)
-          await tx.query(
-            `UPDATE boards SET updated_at = $2 WHERE id = $1 AND updated_at < $2 AND status <> 'trashed'`,
-            [locked.board_id, at],
-          )
         const row = await tx.one<SessionRow>(
           `UPDATE private_brainstorms SET status = 'placed', ended_at = $2, placed_count = $3 WHERE id = $1
          RETURNING ${SESSION_COLUMNS}`,
@@ -639,6 +633,18 @@ export function registerPrivateNotes(
         )
         return { row, changed: true }
       })
+      // The canvas changed: the dashboard's "Edited" time follows (like apps/sync/src/touch.ts reports).
+      // After the commit, not under the session's lock: the board row comes before a session's row
+      // (the lock order in access.ts), and this touch is only a display time.
+      if (ended.changed && waiting.length > 0)
+        await db
+          .query(
+            `UPDATE boards SET updated_at = $2 WHERE id = $1 AND updated_at < $2 AND status <> 'trashed'`,
+            [ended.row.board_id, at],
+          )
+          .catch((e) =>
+            req.log.warn({ err: { message: (e as Error)?.message } }, 'board edited time not updated'),
+          )
       if (ended.changed) await publish(ended.row)
       if (ended.row.status !== 'placed') {
         // Some drafts were not confirmed (or someone cancelled meanwhile): the session says what is next.

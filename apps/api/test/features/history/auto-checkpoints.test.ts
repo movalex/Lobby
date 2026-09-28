@@ -74,8 +74,28 @@ const at = () => api.clock.now().getTime()
 const alignTo = (minutes: number) => api.clock.advance(HOUR - (at() % HOUR) + minutes * MIN)
 /** What the sync server sends after accepted canvas writes (apps/sync/src/touch.ts). */
 const touch = async (bid = boardId) => {
-  const res = await internal(`/internal/boards/${bid}/touched?at=${at()}`)
+  const reported = at()
+  const res = await internal(`/internal/boards/${bid}/touched?at=${reported}`)
   expect(res.statusCode).toBe(204)
+  await recorded(bid, reported)
+}
+/**
+ * The report is recorded after the answer (an onResponse hook in checkpoint-routes.ts). With a real
+ * Postgres pool (DRAFTROOM_TEST_DATABASE_URL) the test's next query can run first, on another
+ * connection; PGlite's one connection always ran them in order. So wait for it (a trashed or missing
+ * board records nothing).
+ */
+async function recorded(bid: string, reported: number) {
+  for (let i = 0; i < 400; i++) {
+    const row = await api.db.maybeOne<{ t: Date | null; status: string }>(
+      `SELECT s.last_change_at AS t, b.status FROM boards b
+         LEFT JOIN board_checkpoint_state s ON s.board_id = b.id WHERE b.id = $1`,
+      [bid],
+    )
+    if (!row || row.status === 'trashed' || (row.t && row.t.getTime() >= reported)) return
+    await new Promise((r) => setTimeout(r, 5))
+  }
+  throw new Error('the edit report was never recorded')
 }
 /** What the sync server sends when the last editor left after changes (apps/sync/src/session-end.ts). */
 const sessionEnded = (bid = boardId, secret: string | null = INTERNAL_SECRET) =>

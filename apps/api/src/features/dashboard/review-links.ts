@@ -24,7 +24,7 @@ import {
 } from '@draftroom/contracts'
 import { newId, type Queryable } from '@draftroom/db'
 import type { FastifyInstance } from 'fastify'
-import { requireBoardAction } from '../../access.ts'
+import { lockBoardRow, requireBoardAction } from '../../access.ts'
 import { audit } from '../../audit.ts'
 import { sha256hex } from '../../auth/session.ts'
 import { userKind } from '../../auth/users.ts'
@@ -152,13 +152,20 @@ export async function sweepExpiredReviewLinks(ctx: FeatureContext): Promise<numb
   let removed = 0
   for (const { id } of due.rows) {
     const out = await ctx.db.transaction(async (tx) => {
+      // The board row first, then the link (the lock order in access.ts, which revoke and "+1 h" of the
+      // same link follow): its board comes from an unlocked read, and the link is read again locked.
+      const found = await tx.maybeOne<{ board_id: string }>(
+        'SELECT board_id FROM invitations WHERE id = $1 AND multi_use',
+        [id],
+      )
+      if (!found) return null
+      await lockBoardRow(tx, found.board_id)
       const link = await tx.maybeOne<LinkRow>(
         `SELECT ${LINK_COLUMNS} FROM invitations WHERE id = $1 AND multi_use FOR UPDATE`,
         [id],
       )
-      if (!link || link.swept_at) return null
-      // Board row lock: the same order as grant changes (members routes lock the board first).
-      await tx.query('SELECT id FROM boards WHERE id = $1 FOR UPDATE', [link.board_id])
+      // Swept meanwhile (a revoke with removal), or no longer due.
+      if (!link || link.swept_at || link.expires_at.getTime() > at.getTime()) return null
       const users = await removeReviewLinkGrants(tx, link, at)
       await tx.query('UPDATE invitations SET swept_at = $2 WHERE id = $1', [id, at])
       if (users.length)
@@ -314,6 +321,7 @@ export function registerReviewLinkRoutes(app: FastifyInstance, ctx: FeatureConte
     const { bid = '', id = '' } = req.params as Params
     const { removeAccess } = parse(RevokeReviewLinkInput, req.body ?? {})
     const result = await db.transaction(async (tx) => {
+      // The board row, then the link (the lock order in access.ts; joining and accepting follow it).
       const access = await requireBoardAction(tx, bid, user.id, 'manage_access', { forUpdate: true })
       if (!InvitationId.safeParse(id).success) throw notFound()
       const link = await tx.maybeOne<LinkRow>(
@@ -361,6 +369,7 @@ export function registerReviewLinkRoutes(app: FastifyInstance, ctx: FeatureConte
     const { bid = '', id = '' } = req.params as Params
     const { hours } = parse(ExtendReviewLinkInput, req.body ?? {})
     const result = await db.transaction(async (tx) => {
+      // The board row, then the link (the lock order in access.ts).
       const access = await requireBoardAction(tx, bid, user.id, 'manage_access', { forUpdate: true })
       if (!InvitationId.safeParse(id).success) throw notFound()
       const link = await tx.maybeOne<LinkRow>(
