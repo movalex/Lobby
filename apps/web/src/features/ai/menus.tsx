@@ -1,4 +1,5 @@
-// The two ways into AI (docs/WAVE4-CONTRACTS.md §4 ai-assist), both rendered by canvas-ux:
+// The two ways into AI (docs/WAVE4-CONTRACTS.md §4 ai-assist), plus the owners' AI switches in the board
+// menu (AiBoardMenuGroup), all rendered by canvas-ux:
 //  - "AI" in the selection bar: opens the AI menu for the selection;
 //  - "AI ›" in the canvas context menu: the four actions for the selection, or, with nothing selected,
 //    for the frame under the pointer ("Generate ideas…" works anywhere).
@@ -8,13 +9,14 @@
 import { memo, useRef, useState } from 'react'
 import {
   type Editor,
+  TldrawUiMenuCheckboxItem,
   TldrawUiMenuGroup,
   TldrawUiMenuItem,
   TldrawUiMenuSubmenu,
   useEditor,
   useValue,
 } from 'tldraw'
-import { openAiMenu, runAi } from './actions.ts'
+import { openAiMenu, runAi, setBoardAi, setWorkspaceAiDefault } from './actions.ts'
 import { SparkIcon, Spinner } from './icons.tsx'
 import { type AiMenuState, aiJob, aiMenu, aiStatus } from './runtime.ts'
 import { selectionTarget, targetAt } from './target.ts'
@@ -101,7 +103,9 @@ export function AiContextMenuGroup() {
               id="dr-ai-themes"
               label="context-menu.dr-ai-themes"
               disabled={target.notes < 2}
-              onSelect={() => run('themes')}
+              onSelect={() =>
+                target.groups.length ? later(() => openAiMenu(editor, at, target, 'regroup')) : run('themes')
+              }
             />
           )}
           {insert && (
@@ -125,7 +129,42 @@ export function AiContextMenuGroup() {
   )
 }
 
+/**
+ * The AI switches in the board menu's "Board" submenu (canvas-ux MainMenu renders it; DANA-04): "AI on
+ * this board" for its owners, "AI on by default in this workspace" for workspace owners and admins.
+ * Shown even while AI is off here (the owner turns it back on from here); nothing for anyone else.
+ */
+export function AiBoardMenuGroup() {
+  const editor = useEditor()
+  const settings = useValue('dr-ai-board-settings', () => aiStatus(editor).get()?.settings ?? null, [editor])
+  if (!settings || (!settings.canManageBoard && !settings.canManageWorkspace)) return null
+  return (
+    <TldrawUiMenuGroup id="dr-ai-settings">
+      {settings.canManageBoard && (
+        <TldrawUiMenuCheckboxItem
+          id="dr-ai-board"
+          label="menu.dr-ai-board"
+          checked={settings.on}
+          readonlyOk
+          onSelect={() => void setBoardAi(editor, !settings.on)}
+        />
+      )}
+      {settings.canManageWorkspace && (
+        <TldrawUiMenuCheckboxItem
+          id="dr-ai-workspace"
+          label="menu.dr-ai-workspace"
+          checked={settings.workspaceDefault}
+          readonlyOk
+          onSelect={() => void setWorkspaceAiDefault(editor, !settings.workspaceDefault)}
+        />
+      )}
+    </TldrawUiMenuGroup>
+  )
+}
+
 export const AI_TRANSLATIONS = {
+  'menu.dr-ai-board': 'AI on this board',
+  'menu.dr-ai-workspace': 'AI on by default in this workspace',
   'context-menu.dr-ai': 'AI',
   'context-menu.dr-ai-summarize': 'Summarize',
   'context-menu.dr-ai-themes': 'Group into themes',

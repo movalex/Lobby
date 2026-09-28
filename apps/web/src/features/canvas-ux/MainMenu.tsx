@@ -21,6 +21,7 @@ import {
   useEditor,
   useValue,
 } from 'tldraw'
+import { AiBoardMenuGroup } from '../ai/menus.tsx'
 import { readSessionSettings } from '../workshops/session-settings.ts'
 import { ExportOffMainMenuContent, useExportAllowed } from './export-gate.tsx'
 import { toggleHideNoteAuthors } from './overrides.tsx'
@@ -54,6 +55,7 @@ function BoardSubmenu() {
           onSelect={() => void toggleHideNoteAuthors(editor)}
         />
       </TldrawUiMenuGroup>
+      <AiBoardMenuGroup />
     </TldrawUiMenuSubmenu>
   )
 }

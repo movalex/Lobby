@@ -1,5 +1,14 @@
+import { isTeamNote, splitThemeNotes } from '@draftroom/contracts'
 import { describe, expect, it } from 'vitest'
-import { actionItemText, budgetLine, ideasHeading, plural, themesDone } from './copy.ts'
+import {
+  actionItemText,
+  budgetLine,
+  groupNames,
+  ideasHeading,
+  plural,
+  themesDone,
+  themesHint,
+} from './copy.ts'
 
 describe('AI copy', () => {
   it('plural', () => {
@@ -35,5 +44,53 @@ describe('AI copy', () => {
     expect(themesDone({ moved: 1, themes: 1, grew: true, skipped: 2 })).toBe(
       'Grouped 1 note into 1 theme. The frame grew to fit. 2 notes stayed where they were.',
     )
+    expect(themesDone({ moved: 16, themes: 3, grew: false, skipped: 0, prompts: 3 })).toBe(
+      'Grouped 16 notes into 3 themes. The 3 prompt notes stayed where they were.',
+    )
+  })
+
+  it('the menu says which notes move and which prompts stay (R9)', () => {
+    expect(themesHint(1, 0)).toBe('Needs two or more sticky notes')
+    expect(themesHint(8, 0)).toBe('Sorts 8 notes into labelled groups')
+    expect(themesHint(16, 3)).toBe('Sorts 16 notes; 3 prompt notes stay put')
+  })
+
+  it('names the groups notes already sit in (DANA-10)', () => {
+    expect(groupNames(['Gameplay', 'Story'])).toBe('“Gameplay” and “Story”')
+    expect(groupNames(['Gameplay', 'Story', 'Community'])).toBe('“Gameplay”, “Story” and “Community”')
+    expect(groupNames(['A', 'B', 'C', 'D', 'E'])).toBe('“A”, “B”, “C” and 2 more')
+  })
+})
+
+// The shared rule (contracts splitThemeNotes) the api and the menu count with (R9).
+describe('which notes "Group into themes" moves', () => {
+  const typed = (id: string) => ({ id, meta: {}, textLastEditedBy: 'usr_bob' })
+  const seeded = (id: string) => ({ id, meta: {}, textLastEditedBy: null })
+  const facts = (n: { meta: unknown; textLastEditedBy: unknown }) => n
+  const ids = (xs: { id: string }[]) => xs.map((x) => x.id)
+
+  it('a template’s prompts stay once the team has written two notes of its own', () => {
+    const notes = [
+      seeded('p1'),
+      seeded('p2'),
+      typed('t1'),
+      { id: 'r1', meta: { drPrivateNote: { session: 's' } }, textLastEditedBy: null },
+      { id: 'a1', meta: { drAi: { kind: 'idea' } }, textLastEditedBy: null },
+      { id: 'm1', meta: { draftroomPrompt: 'true' }, textLastEditedBy: 'usr_bob' },
+    ]
+    const out = splitThemeNotes(notes, facts)
+    expect(ids(out.ideas)).toEqual(['t1', 'r1', 'a1'])
+    expect(ids(out.prompts).sort()).toEqual(['m1', 'p1', 'p2'])
+  })
+
+  it('sample notes alone (the Lobby tour) group as a whole; one typed note does not change that', () => {
+    expect(ids(splitThemeNotes([seeded('a'), seeded('b'), seeded('c')], facts).ideas)).toEqual([
+      'a',
+      'b',
+      'c',
+    ])
+    expect(ids(splitThemeNotes([seeded('a'), seeded('b'), typed('c')], facts).ideas)).toEqual(['a', 'b', 'c'])
+    expect(ids(splitThemeNotes([typed('a'), typed('b')], facts).ideas)).toEqual(['a', 'b'])
+    expect(isTeamNote({ meta: null, textLastEditedBy: '' })).toBe(false)
   })
 })

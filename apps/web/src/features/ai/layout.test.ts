@@ -1,9 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import {
+  appendInFrame,
+  BESIDE_GAP,
   CLEARANCE,
   type ClusterInput,
   collides,
   FRAME_MARGIN,
+  fitCols,
   frameRegion,
   grid,
   layoutThemes,
@@ -311,5 +314,48 @@ describe('grid and union', () => {
         { x: 20, y: -5, w: 5, h: 5 },
       ]),
     ).toEqual({ x: 0, y: -5, w: 25, h: 15 })
+  })
+})
+
+// DANA-07: results stay in the frame, under its content, aligned with it; the frame grows downwards only.
+describe('appendInFrame and fitCols', () => {
+  // The tour's "5 · Retro" frame: heading, intro, three column headers and two rows of notes.
+  const RETRO = { w: 1600, h: 1000 }
+  const content: Rect[] = [
+    { x: 80, y: 56, w: 1440, h: 64 },
+    { x: 80, y: 136, w: 900, h: 36 },
+    { x: 80, y: 280, w: 480, h: 72 },
+    { x: 80, y: 372, w: 1440, h: 460 },
+  ]
+
+  it('goes under the content, left-aligned with it, and says how tall the frame must be', () => {
+    const at = appendInFrame({ w: 560, h: 200 }, RETRO, content)
+    expect(at.x).toBe(80)
+    expect(at.y).toBe(832 + BESIDE_GAP)
+    expect(at.h).toBe(832 + BESIDE_GAP + 200 + FRAME_MARGIN)
+    // Never over anything already there, never above the frame's top (where its name label is).
+    for (const r of content) expect(collides({ ...at, w: 560, h: 200 }, r)).toBe(false)
+    expect(at.y).toBeGreaterThan(0)
+  })
+
+  it('keeps the frame when the block fits, and stays inside its sides', () => {
+    expect(appendInFrame({ w: 560, h: 60 }, RETRO, content.slice(0, 3))).toEqual({ x: 80, y: 400, h: 1000 })
+    expect(appendInFrame({ w: 1700, h: 60 }, RETRO, content).x).toBe(FRAME_MARGIN)
+    const right = appendInFrame({ w: 600, h: 60 }, RETRO, [{ x: 1200, y: 100, w: 300, h: 100 }])
+    expect(right.x + 600).toBeLessThanOrEqual(RETRO.w - FRAME_MARGIN)
+    expect(appendInFrame({ w: 200, h: 200 }, RETRO, [])).toEqual({
+      x: FRAME_MARGIN,
+      y: FRAME_MARGIN,
+      h: 1000,
+    })
+  })
+
+  it('fitCols: fewer columns when the frame is narrow', () => {
+    expect(fitCols(12, 4, 200, null)).toBe(4)
+    // An 800-wide retro column (720 inside): three 200 px notes fit, four do not.
+    expect(fitCols(12, 4, 200, 720)).toBe(3)
+    expect(fitCols(3, 3, 200, 720)).toBe(3)
+    expect(fitCols(5, 4, 200, 150)).toBe(1)
+    expect(fitCols(2, 4, 200, 2000)).toBe(2)
   })
 })

@@ -35,6 +35,13 @@ describe('with AI configured', () => {
       canSummarize: true,
       noticeAccepted: false,
       budget: null,
+      settings: {
+        board: null,
+        workspaceDefault: true,
+        on: true,
+        canManageBoard: false,
+        canManageWorkspace: false,
+      },
     })
     for (const c of [w.carol, w.dave])
       expect(await status(c)).toMatchObject({
@@ -123,6 +130,7 @@ describe('with AI configured', () => {
       canSummarize: false,
       noticeAccepted: false,
       budget: null,
+      settings: null,
     })
     for (const body of [
       { action: 'summarize', shapeIds: [FRAME], mode: 'panel' },
@@ -196,6 +204,7 @@ describe('without AI', () => {
       canSummarize: false,
       noticeAccepted: false,
       budget: null,
+      settings: null,
     })
     expectError(
       await run(w.alice, w.board, { action: 'themes', shapeIds: [FRAME] }),

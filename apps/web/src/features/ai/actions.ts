@@ -2,8 +2,11 @@
 // per workspace, enforced by the api), one request at a time, a cancellable busy state, then the plan
 // applied as one undo step (apply.ts). Every decision is the api's: this only follows AiStatus and
 // shows the api's own (user-safe) error messages.
+// - A summary always opens in the private panel first; editors add it to the board from there (DANA-04).
+// - The toast's "Undo" only ever undoes the AI result: the toast goes once anything else changes (DANA-09).
+// - The board's AI switch and the workspace default (board menu: menus.tsx) go through the api.
 
-import { AI_ERROR_CODES, AiResult, AiStatus } from '@draftroom/contracts'
+import { AI_ERROR_CODES, AiResult, AiSettings, AiStatus } from '@draftroom/contracts'
 import type { Editor } from 'tldraw'
 import { isApiError } from '../../api/client.ts'
 import { applyNotes, applySummary, applyThemes } from './apply.ts'
@@ -96,7 +99,9 @@ export async function runAi(
     if (at) aiMenu(editor).set({ at, target, view: 'notice', pending: req })
     return
   }
-  const mode = req.action === 'summarize' ? (req.mode ?? (status.canInsert ? 'insert' : 'panel')) : undefined
+  // A summary always opens in the private panel first; an editor adds it to the board from there, so
+  // nothing unreviewed appears on a board a client may be watching live (DANA-04).
+  const mode = req.action === 'summarize' ? (req.mode ?? 'panel') : undefined
   const body = {
     action: req.action,
     shapeIds: target.ids,
@@ -109,6 +114,7 @@ export async function runAi(
   aiMenu(editor).set(null)
   // Back to the board, so Ctrl+Z, Delete and the arrows work on the result straight away.
   editor.focus()
+  endUndoOffer(editor)
   ctx.dismiss(NOTICE_KEY)
   let result: AiResult
   try {
@@ -128,7 +134,12 @@ export async function runAi(
       if (at) aiMenu(editor).set({ at, target, view: 'notice', pending: req })
       return
     }
-    if (isApiError(e) && (e.code === AI_ERROR_CODES.turnedOff || e.code === AI_ERROR_CODES.notConfigured))
+    if (
+      isApiError(e) &&
+      (e.code === AI_ERROR_CODES.turnedOff ||
+        e.code === AI_ERROR_CODES.notConfigured ||
+        e.code === AI_ERROR_CODES.boardOff)
+    )
       void refreshAiStatus(editor)
     ctx.notify({
       key: NOTICE_KEY,
@@ -146,27 +157,141 @@ export async function runAi(
   applyResult(editor, result, target, req)
 }
 
+/** How long the "Undo" toast after an AI result stays up. */
+export const UNDO_TOAST_MS = 7000
+/** Ends the watch behind the current "Undo" toast (null when there is none). */
+const undoWatches = new WeakMap<Editor, () => void>()
+
+function endUndoOffer(editor: Editor) {
+  undoWatches.get(editor)?.()
+}
+
+/**
+ * The toast after an AI result, with an "Undo" that takes back exactly that result (DANA-09). The toast
+ * goes as soon as anything else changes the board from this tab (Ctrl+Z of the result included), so its
+ * button can never undo an unrelated edit. Collaborators' edits never enter this tab's undo stack, so
+ * they leave it up. `store.listen` flushes pending history first: the result itself never counts.
+ */
+function offerUndo(editor: Editor, text: string) {
+  const ctx = getAiCtx(editor)
+  if (!ctx) return
+  endUndoOffer(editor)
+  let live = true
+  const unlisten = editor.store.listen(
+    () => {
+      if (!live) return
+      stop()
+      ctx.dismiss(NOTICE_KEY)
+    },
+    { source: 'user', scope: 'document' },
+  )
+  const timer = setTimeout(() => stop(), UNDO_TOAST_MS + 1000)
+  function stop() {
+    if (!live) return
+    live = false
+    unlisten()
+    clearTimeout(timer)
+    if (undoWatches.get(editor) === stop) undoWatches.delete(editor)
+  }
+  undoWatches.set(editor, stop)
+  ctx.notify({
+    key: NOTICE_KEY,
+    text,
+    testId: 'ai-done',
+    timeoutMs: UNDO_TOAST_MS,
+    action: {
+      label: 'Undo',
+      testId: 'ai-undo',
+      onClick: () => {
+        // Nothing changed since the result (else the toast would be gone): undo is exactly that step.
+        if (!live) return
+        stop()
+        editor.undo()
+      },
+    },
+  })
+}
+
+/** "Add to board" in the summary panel (editors): the summary as a card in the frame it is about. */
+export function addSummaryToBoard(editor: Editor) {
+  const panel = aiPanel(editor).get()
+  if (!panel || editor.getIsReadonly() || !aiStatus(editor).get()?.canInsert) return
+  applySummary(editor, panel.target, panel.summary)
+  // It is on the board now (and the toast can take it back): the private copy goes.
+  aiPanel(editor).set(null)
+  editor.focus()
+  offerUndo(editor, 'Summary added to the board.')
+}
+
+/** The board's AI switch (board owners; the api decides). `enabled` null follows the workspace default. */
+export async function setBoardAi(editor: Editor, enabled: boolean | null): Promise<void> {
+  const ctx = getAiCtx(editor)
+  if (!ctx) return
+  try {
+    await ctx.api.request('PUT', `/api/boards/${enc(ctx.board.id)}/ai/settings`, {
+      body: { enabled },
+      schema: AiSettings,
+    })
+    ctx.notify({
+      key: NOTICE_KEY,
+      text: enabled === false ? 'AI is off on this board.' : 'AI is on for this board.',
+      testId: 'ai-settings-saved',
+      timeoutMs: 4000,
+    })
+  } catch (e) {
+    ctx.notify({
+      key: NOTICE_KEY,
+      text: isApiError(e) ? e.message : 'Lobby couldn’t change the AI setting. Try again.',
+      tone: 'error',
+      timeoutMs: 6000,
+    })
+  }
+  await refreshAiStatus(editor)
+}
+
+/** The workspace default (workspace owners and admins; the api decides). */
+export async function setWorkspaceAiDefault(editor: Editor, enabled: boolean): Promise<void> {
+  const ctx = getAiCtx(editor)
+  if (!ctx) return
+  try {
+    await ctx.api.request('PUT', `/api/workspaces/${enc(ctx.workspace.id)}/ai/settings`, {
+      body: { enabled },
+      schema: null,
+    })
+    ctx.notify({
+      key: NOTICE_KEY,
+      text: enabled
+        ? `AI is on by default for boards in ${ctx.workspace.name}.`
+        : `AI is off by default for boards in ${ctx.workspace.name}.`,
+      testId: 'ai-settings-saved',
+      timeoutMs: 5000,
+    })
+  } catch (e) {
+    ctx.notify({
+      key: NOTICE_KEY,
+      text: isApiError(e) ? e.message : 'Lobby couldn’t change the AI setting. Try again.',
+      tone: 'error',
+      timeoutMs: 6000,
+    })
+  }
+  await refreshAiStatus(editor)
+}
+
 function applyResult(editor: Editor, result: AiResult, target: AiTarget, req: AiRequest) {
   const ctx = getAiCtx(editor)
   if (!ctx) return
   const partly = result.truncated ? ' Only part of the selection fitted in one request.' : ''
-  const done = (text: string) =>
-    ctx.notify({
-      key: NOTICE_KEY,
-      text: `${text}${partly}`,
-      testId: 'ai-done',
-      timeoutMs: 7000,
-      action: { label: 'Undo', onClick: () => editor.undo(), testId: 'ai-undo' },
-    })
+  const done = (text: string) => offerUndo(editor, `${text}${partly}`)
   const canEdit = !editor.getIsReadonly() && (aiStatus(editor).get()?.canInsert ?? false)
   switch (result.action) {
     case 'summarize': {
-      if (!canEdit) {
-        aiPanel(editor).set({ summary: result.summary, about: target.label, truncated: result.truncated })
-        return
-      }
-      applySummary(editor, target, result.summary)
-      done('Summary added.')
+      // Private first, for everyone: an editor puts it on the board with "Add to board".
+      aiPanel(editor).set({
+        summary: result.summary,
+        about: target.label,
+        truncated: result.truncated,
+        target,
+      })
       return
     }
     case 'themes': {
@@ -181,7 +306,7 @@ function applyResult(editor: Editor, result: AiResult, target: AiTarget, req: Ai
         })
         return
       }
-      done(themesDone(out))
+      done(themesDone({ ...out, prompts: target.prompts }))
       return
     }
     case 'actions': {

@@ -22,7 +22,7 @@ function perEditor<T>(make: (editor: Editor) => T) {
 /** A request the person asked for (it may still wait for the privacy notice). */
 export interface AiRequest {
   action: AiAction
-  /** summarize: into the board (editors) or into a panel (everyone). */
+  /** summarize: the web always asks for 'panel' (editors add it to the board from the panel). */
   mode?: 'insert' | 'panel'
   prompt?: string
   count?: number
@@ -31,7 +31,8 @@ export interface AiRequest {
 export interface AiMenuState {
   /** Where the popover points, in px from the editor container's top-left. */
   at: { x: number; top: number; bottom: number }
-  view: 'menu' | 'ideas' | 'notice'
+  /** 'regroup': asked before grouping notes that already sit in groups (DANA-10). */
+  view: 'menu' | 'ideas' | 'notice' | 'regroup'
   target: AiTarget
   /** The request waiting for the notice (view 'notice'). */
   pending: AiRequest | null
@@ -48,6 +49,8 @@ export interface AiPanelState {
   summary: string
   about: string
   truncated: boolean
+  /** What was summarized: "Add to board" puts the card there (DANA-04: nothing lands unasked). */
+  target: AiTarget
 }
 
 /** Null until the api answered (the feature stays hidden until then). */

@@ -227,6 +227,7 @@ describe('shipped migrations', () => {
       '0014_checkpoint_policy',
       '0015_board_search',
       '0016_ai_usage',
+      '0018_ai_settings',
     ])
   })
 
@@ -249,6 +250,7 @@ describe('shipped migrations', () => {
       '0014_checkpoint_policy',
       '0015_board_search',
       '0016_ai_usage',
+      '0018_ai_settings',
     ])
     expect(await migrate(db)).toEqual({ applied: [], newer: [] })
     expect(await tableNames()).toEqual([
@@ -263,6 +265,7 @@ describe('shipped migrations', () => {
       'asset_gc_snapshot_scans',
       'asset_versions',
       'audit_events',
+      'board_ai_settings',
       'board_asset_links',
       'board_checkpoint_state',
       'board_export_policies',
@@ -293,6 +296,7 @@ describe('shipped migrations', () => {
       'vote_sessions',
       'votes',
       'workshop_timers',
+      'workspace_ai_settings',
       'workspace_members',
       'workspaces',
     ])
@@ -331,6 +335,7 @@ describe('shipped migrations', () => {
       '0014_checkpoint_policy',
       '0015_board_search',
       '0016_ai_usage',
+      '0018_ai_settings',
     ])
     expect(await recorded()).toEqual(shipped.map((m) => m.name))
     const inv = await db.one<{ multi_use: boolean; use_count: number }>(
