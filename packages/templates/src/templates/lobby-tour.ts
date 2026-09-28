@@ -127,7 +127,8 @@ function welcome(b: BoardBuilder) {
   })
   b.text(f, { x: M, y: 510, w: 600, text: 'Try this', size: 'l', color: 'black', locked: true })
   const tries: ReadonlyArray<[string, TLDefaultColorStyle]> = [
-    ["Press N, click anywhere and type. That's a sticky note.", 'yellow'],
+    // DANA-11: a client who can only comment reads this board too, so no editor-only promises.
+    ["Can edit? Press N, click anywhere and type. That's a sticky note.", 'yellow'],
     ['Press C, then click this note to leave a comment.', 'orange'],
     ['Click Present at the top to walk these frames as slides.', 'light-blue'],
   ]
@@ -140,7 +141,7 @@ function welcome(b: BoardBuilder) {
     x: M,
     y: 900,
     w: INNER_W,
-    text: 'This board is yours to play with. Edit, move or delete anything; Ctrl/Cmd + Z undoes it.',
+    text: 'Editors can move, change or delete anything here (Ctrl/Cmd + Z undoes it). Everyone can comment.',
     size: 's',
     color: 'grey',
     align: 'middle',

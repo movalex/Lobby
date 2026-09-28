@@ -8,6 +8,8 @@ import {
   shareBadge,
   shortDate,
   shortTime,
+  showsShareBadge,
+  timeOfDay,
   writeSentRequest,
 } from './model.ts'
 
@@ -140,5 +142,25 @@ describe('request form default (PRI-16)', () => {
     expect(pickDefaultRole(all, null, null)).toBe('commenter')
     expect(pickDefaultRole(requestableRoles('viewer'), 'viewer')).toBe('editor')
     expect(pickDefaultRole(requestableRoles('commenter'), 'commenter')).toBe('editor')
+  })
+})
+
+describe('who gets the header sharing badge (R2-11, F14)', () => {
+  it('owners and editors; never a viewer, a commenter or a name-only guest (whose "Link: edit" is not theirs)', () => {
+    expect(showsShareBadge('owner', false)).toBe(true)
+    expect(showsShareBadge('editor', false)).toBe(true)
+    expect(showsShareBadge('commenter', false)).toBe(false)
+    expect(showsShareBadge('viewer', false)).toBe(false)
+    expect(showsShareBadge('editor', true)).toBe(false) // a workshop guest
+    expect(showsShareBadge('commenter', true)).toBe(false) // a client
+  })
+})
+
+describe('one time format (R2-08)', () => {
+  it("follows the locale's hour cycle, and the badge's time is that time", () => {
+    const d = new Date(2026, 8, 28, 8, 39)
+    expect(timeOfDay(d, 'en-US')).toBe('8:39 AM')
+    expect(timeOfDay(d, 'en-GB')).toBe('08:39')
+    expect(shortTime(d.toISOString(), new Date(2026, 8, 28, 6, 0))).toBe(timeOfDay(d))
   })
 })

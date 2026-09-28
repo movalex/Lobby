@@ -86,3 +86,9 @@
   width: 100%;
   justify-content: center;
 }
+
+/* DANA2-07: after a guest's access ends, signing in with an account is a quiet line, not a button. */
+.dr-guest-ended__account {
+  margin: 4px 0 0;
+  font-size: 13.5px;
+}

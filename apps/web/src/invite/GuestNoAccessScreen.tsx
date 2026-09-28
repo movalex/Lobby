@@ -4,7 +4,9 @@ import { api } from '../api/client.ts'
 import { useSession } from '../auth/session.tsx'
 import { linkClick } from '../lib/routing.ts'
 import { MessageScreen } from '../ui/screens.tsx'
+import { GuestAccessEndedBody, GuestAccountSignIn } from './GuestEndedScreen.tsx'
 import { forgetGuestTab } from './guest.tsx'
+import { GUEST_ENDED_COPY } from './model.ts'
 import './invite.css'
 
 /** After a guest lost a board, how often (and how long) to look for the end of their whole session. */
@@ -18,7 +20,7 @@ const SESSION_END_CHECK_FOR_MS = 30_000
  *
  * - `revoked`: the board closed while they had it open (the link was revoked or expired, or they were
  *   removed). Their session usually ends a few seconds later, when it holds no board any more: this
- *   checks for that now and then, so "Your guest access has ended" follows in seconds, not at the next
+ *   checks for that now and then, so the guest-ended screen (the same words) follows in seconds, not at the next
  *   10-second check.
  * - otherwise: they opened a board they never joined with a link.
  */
@@ -37,43 +39,45 @@ export function GuestNoAccessScreen({ revoked }: { revoked: boolean }) {
     return () => clearInterval(t)
   }, [revoked])
 
+  const signIn = () => {
+    // An account's sign-in, not the guest-ended screen: this tab is no longer a guest's.
+    forgetGuestTab()
+    void signOut({ returnTo: here })
+  }
+
+  // DANA2-07: a revoked guest reads the guest-ended screen's message word for word (that screen
+  // follows within seconds), with no button that leads nowhere: no "Go to your boards" (they have
+  // none left), and signing in with an account as a quiet link.
+  if (revoked)
+    return (
+      <MessageScreen
+        testId="no-access"
+        title={GUEST_ENDED_COPY.title}
+        body={
+          <div data-testid="guest-no-access" data-revoked="true">
+            <GuestAccessEndedBody />
+          </div>
+        }
+        actions={<GuestAccountSignIn testId="guest-no-access-signin" onSignIn={signIn} />}
+      />
+    )
+
   return (
     <MessageScreen
       testId="no-access"
-      title={revoked ? 'Your guest access to this board has ended' : 'You don’t have access to this board'}
+      title="You don’t have access to this board"
       body={
         <div data-testid="guest-no-access">
-          <p>
-            {revoked
-              ? 'The link you joined with was revoked or has expired, or you were removed from the board.'
-              : 'As a guest, you can open only the boards you joined with a link.'}
-          </p>
-          <p>
-            {revoked
-              ? 'Open the link again if it still works, or ask whoever shared it for a new one.'
-              : 'Open the link you were given for this board, or ask whoever shared it for one.'}
-          </p>
+          <p>As a guest, you can open only the boards you joined with a link.</p>
+          <p>Open the link you were given for this board, or ask whoever shared it for one.</p>
         </div>
       }
       actions={
         <>
-          {/* DANA2-07: a revoked guest usually has no boards left (their session is ending), so
-              "Go to your boards" would lead nowhere: only the way back with an account. */}
-          {!revoked && (
-            <a className="dr-btn dr-btn--primary" href="/" onClick={linkClick('/')}>
-              Go to your boards
-            </a>
-          )}
-          <button
-            type="button"
-            className="dr-btn"
-            data-testid="guest-no-access-signin"
-            onClick={() => {
-              // An account's sign-in, not the guest-ended screen: this tab is no longer a guest's.
-              forgetGuestTab()
-              void signOut({ returnTo: here })
-            }}
-          >
+          <a className="dr-btn dr-btn--primary" href="/" onClick={linkClick('/')}>
+            Go to your boards
+          </a>
+          <button type="button" className="dr-btn" data-testid="guest-no-access-signin" onClick={signIn}>
             Sign in with an account
           </button>
         </>

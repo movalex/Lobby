@@ -141,9 +141,11 @@ describe('Lobby tour: the frames', () => {
     expect(texts).toContain('Try this')
     const notes = kids(f, 'note').map(textOf)
     expect(notes).toHaveLength(3)
-    expect(notes[0]).toMatch(/^Press N\b/)
+    expect(notes[0]).toMatch(/^Can edit\? Press N\b/)
     expect(notes[1]).toMatch(/^Press C\b/)
     expect(notes[2]).toMatch(/^Click Present\b/)
+    // DANA-11: nothing on it tells a commenting client the board is theirs to edit.
+    expect(texts.join(' ')).not.toMatch(/yours to play with/)
     const pillars = kids(f, 'geo')
     expect(pillars.map((g) => textOf(g).split('\n')[0])).toEqual(['Kick off', 'Make', 'Review'])
     for (const p of pillars) expect(firstLineBold(p)).toBe(true)

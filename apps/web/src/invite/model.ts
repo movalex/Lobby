@@ -57,6 +57,35 @@ export function splitGuestMarker(name: string): [string, string | null] {
 }
 
 /**
+ * F14: someone's own name where "(you)" is added: "Dana Whitfield (guest, you)", never
+ * "Dana Whitfield (guest) (you)"; "Alice (you)" for an account.
+ */
+export function ownName(name: string): string {
+  const [base, marker] = splitGuestMarker(name)
+  return marker ? `${base} (guest, you)` : `${name} (you)`
+}
+
+/**
+ * The " (you)" or ", you" to put after someone's own name that is shown as [name, guest marker] (lists
+ * that cut long names keep the marker and this in view): with the marker, the marker becomes
+ * " (guest, you)" (F14).
+ */
+export function ownNameParts(name: string): [string, string] {
+  const [base, marker] = splitGuestMarker(name)
+  return marker ? [base, ' (guest, you)'] : [name, ' (you)']
+}
+
+/**
+ * DANA2-07: what a guest reads when their access ends, on the board's "revoked" screen and on the
+ * guest-ended screen that follows it: one message, the same words both times.
+ */
+export const GUEST_ENDED_COPY = {
+  title: 'Your guest access has ended',
+  what: 'The link you joined with was revoked or has expired, you were removed from the board, or you signed out.',
+  next: 'To come back, ask whoever shared the link with you for a new one.',
+} as const
+
+/**
  * The words for a refused join or accept, by the API's error code (its message is already
  * user-facing; these only replace the few where the page can say more).
  */

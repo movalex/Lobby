@@ -111,6 +111,8 @@ export function ShareDialog({
   const canChangeVisibility = can(effectiveRole, 'change_visibility', board.status)
   const [error, setError] = useState<string | null>(null)
   const [pendingUser, setPendingUser] = useState<string | null>(null)
+  // R2-11: how many times "Workshop link (guests can edit)" was clicked (opens and focuses that section).
+  const [workshopAsk, setWorkshopAsk] = useState(0)
   const changed = useCallback(() => announceShareChanged(board.id), [board.id])
   // Invitation emails go out only through Clerk (the server has the final word per address).
   const canEmail = useSession().config?.providers.includes('clerk') ?? false
@@ -250,6 +252,10 @@ export function ShareDialog({
           />
         )}
 
+        {canManage && invitations.data && workshopLinks.length === 0 && (
+          <WorkshopShortcut onOpen={() => setWorkshopAsk((n) => n + 1)} />
+        )}
+
         {canManage && (
           <InvitePeople
             boardId={board.id}
@@ -281,9 +287,11 @@ export function ShareDialog({
           <MoreWaysToShare
             workshopLinks={invitations.data ? workshopLinks.length : null}
             unusedInvites={oneTimeInvites.length}
+            openAsk={workshopAsk}
           >
             <WorkshopLinksSection
               boardId={board.id}
+              focusAsk={workshopAsk}
               links={workshopLinks}
               onChange={() => {
                 invitations.reload()
@@ -1391,10 +1399,13 @@ function InviteLinkSection({
  */
 function WorkshopLinksSection({
   boardId,
+  focusAsk = 0,
   links,
   onChange,
 }: {
   boardId: string
+  /** R2-11: bumped by "Workshop link (guests can edit)": let guests in, and bring Create into view. */
+  focusAsk?: number
   links: readonly PendingInvitation[]
   onChange(): void
 }) {
@@ -1404,6 +1415,20 @@ function WorkshopLinksSection({
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [justCreated, setJustCreated] = useState<{ id: string; copied: boolean } | null>(null)
+  const sectionRef = useRef<HTMLElement>(null)
+  const createRef = useRef<HTMLButtonElement>(null)
+  useEffect(() => {
+    if (focusAsk <= 0) return
+    setAllowGuests(true)
+    // After "More ways to share" has opened (its own effect, same commit): scroll and focus.
+    let frame = requestAnimationFrame(() => {
+      frame = requestAnimationFrame(() => {
+        sectionRef.current?.scrollIntoView({ block: 'nearest' })
+        createRef.current?.focus()
+      })
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [focusAsk])
 
   const create = async () => {
     setPending(true)
@@ -1424,7 +1449,12 @@ function WorkshopLinksSection({
   }
 
   return (
-    <section className="dr-share__section" aria-labelledby={`${hoursId}-h`} data-testid="workshop-links">
+    <section
+      ref={sectionRef}
+      className="dr-share__section"
+      aria-labelledby={`${hoursId}-h`}
+      data-testid="workshop-links"
+    >
       <h3 id={`${hoursId}-h`} className="dr-share__heading">
         Workshop link
       </h3>
@@ -1451,6 +1481,7 @@ function WorkshopLinksSection({
           ))}
         </select>
         <button
+          ref={createRef}
           type="button"
           className="dr-btn"
           data-testid="workshop-link-create"
@@ -1601,6 +1632,23 @@ function ClientLinkSection({
 }
 
 /**
+ * R2-11: the retro path, right under the client card. A client link only lets people comment, so a
+ * facilitator who needs everyone to add notes and vote gets the workshop (edit) link from here: one
+ * click opens it under "More ways to share" with guests let in, and puts the focus on its Create.
+ * Once a workshop link is open, that section opens by itself with the dialog, so this is not shown.
+ */
+function WorkshopShortcut({ onOpen }: { onOpen(): void }) {
+  return (
+    <p className="dr-share__hint dr-sharing__workshop-shortcut" data-testid="share-workshop-shortcut">
+      <span>Running a retro or workshop? A client link only lets people comment.</span>{' '}
+      <button type="button" className="dr-linkbtn" data-testid="share-workshop-open" onClick={onOpen}>
+        Workshop link (guests can edit)
+      </button>
+    </p>
+  )
+}
+
+/**
  * DANA-03: workshop link, invite by email and one-time invite links, behind one native disclosure
  * (keyboard and screen readers get its expanded state for free). It opens by itself once, on the
  * first load, when a workshop link is running; the person's own toggling wins after that.
@@ -1608,11 +1656,14 @@ function ClientLinkSection({
 function MoreWaysToShare({
   workshopLinks,
   unusedInvites,
+  openAsk = 0,
   children,
 }: {
   /** Open workshop links; null until the invitations have loaded. */
   workshopLinks: number | null
   unusedInvites: number
+  /** R2-11: bumped by "Workshop link (guests can edit)": open. */
+  openAsk?: number
   children: ReactNode
 }) {
   const [open, setOpen] = useState(false)
@@ -1623,6 +1674,11 @@ function MoreWaysToShare({
     setSettled(true)
     if (workshopLinks > 0) setOpen(true)
   }, [settled, workshopLinks])
+  useEffect(() => {
+    if (openAsk <= 0) return
+    setSettled(true)
+    setOpen(true)
+  }, [openAsk])
   return (
     <details
       className="dr-share__section dr-sharing__more"

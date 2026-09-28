@@ -11,10 +11,21 @@ import { useUserKind } from '../../invite/guest.tsx'
 import type { BoardFeature, FeatureContext } from '../types.ts'
 import { announceRemoteShareChange, openShareDialog, SHARE_CHANGED_EVENT, sharingApi } from './api.ts'
 import { boardExportState, exportAllowedOnBoard, syncExportPolicy } from './export-policy.ts'
-import { shareBadge } from './model.ts'
+import { shareBadge, showsShareBadge } from './model.ts'
 import './sharing.css'
 
 const REFRESH_MS = 30_000
+
+/**
+ * R2-11 / F14: the badge describes the board's links ("Link: edit · until 8:39 AM"): how other people
+ * got in, not what this person can do. A viewer, a commenter or a name-only guest reads it as their own
+ * access, so they do not get it (their role pill says what they can do).
+ */
+function ShareBadgeItem({ ctx }: { ctx: FeatureContext }) {
+  const kind = useUserKind()
+  if (!showsShareBadge(ctx.role, kind === 'guest')) return null
+  return <ShareBadge ctx={ctx} />
+}
 
 function ShareBadge({ ctx }: { ctx: FeatureContext }) {
   const { board, workspace, events } = ctx
@@ -147,6 +158,6 @@ const EXPORT_OFF_ATTR = 'data-dr-export-off'
 
 export const sharingFeature: BoardFeature = {
   id: 'sharing',
-  TopBarItem: ShareBadge,
+  TopBarItem: ShareBadgeItem,
   Overlay: ExportPolicySync,
 }
