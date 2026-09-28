@@ -142,6 +142,7 @@ describe('shipped migrations', () => {
       '0006_workshop_links',
       '0007_assets',
       '0008_session_revocation',
+      '0011_board_thumbnails',
       '0012_board_export_policy',
     ])
   })
@@ -157,6 +158,7 @@ describe('shipped migrations', () => {
       '0006_workshop_links',
       '0007_assets',
       '0008_session_revocation',
+      '0011_board_thumbnails',
       '0012_board_export_policy',
     ])
     expect(await migrate(db)).toEqual({ applied: [] })
@@ -171,6 +173,7 @@ describe('shipped migrations', () => {
       'board_members',
       'board_snapshots',
       'board_stars',
+      'board_thumbnails',
       'boards',
       'comment_mentions',
       'comment_reads',
@@ -219,6 +222,7 @@ describe('shipped migrations', () => {
       '0006_workshop_links',
       '0007_assets',
       '0008_session_revocation',
+      '0011_board_thumbnails',
       '0012_board_export_policy',
     ])
     expect(await recorded()).toEqual(shipped.map((m) => m.name))
