@@ -564,10 +564,16 @@ test('card menu: the full action list, a first-row menu stays above the next row
           return { id: e.getAttribute('data-board-id') ?? '', x: r.x, y: r.y, w: r.width, h: r.height }
         }),
       )
-      const rows = [...new Set(boxes.map((b) => Math.round(b.y)))].sort((a, b) => a - b)
+      // Rows by top edge, a few px apart at most: a hovered card lifts by 1 px, so exact y values would
+      // split the first row in two.
+      const rows: number[] = []
+      for (const y of boxes.map((b) => b.y).sort((a, b) => a - b))
+        if (!rows.length || y - (rows.at(-1) ?? 0) > 8) rows.push(y)
       expect(rows.length).toBeGreaterThanOrEqual(2)
-      const firstRow = boxes.filter((b) => Math.round(b.y) === rows[0])
-      const secondRow = boxes.filter((b) => Math.round(b.y) === rows[1])
+      const inRow = (b: { y: number }, top: number | undefined) =>
+        top !== undefined && Math.abs(b.y - top) <= 8
+      const firstRow = boxes.filter((b) => inRow(b, rows[0]))
+      const secondRow = boxes.filter((b) => inRow(b, rows[1]))
       // The first-row card whose Duplicate item lands on top of a second-row card.
       let target: { card: string; under: string; x: number; y: number } | null = null
       for (const b of firstRow) {
