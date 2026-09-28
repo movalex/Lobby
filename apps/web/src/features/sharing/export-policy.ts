@@ -154,6 +154,22 @@ export function exportAllowed(editor: Editor): boolean {
   return b ? exportAllowedOnBoard(b.boardId) : true
 }
 
+/** Reactive: the export policy of the board `editor` shows (null until known or before binding). */
+export function exportPolicyOf(editor: Editor): ExportPolicy | null {
+  const b = binding(editor).get()
+  return b ? boardExportState(b.boardId).policy.get() : null
+}
+
+/**
+ * F9: the Export dialog's sentence about who may export, from the current policy. Nothing while the
+ * policy is unknown, rather than a guess.
+ */
+export function exportPolicySentence(policy: ExportPolicy | null): string {
+  if (policy === 'everyone') return 'Everyone who can view the board can export it.'
+  if (policy === 'editors') return 'Only editors can export this board: viewers, commenters and guests can’t.'
+  return ''
+}
+
 /** Says why an export, copy or download did nothing. */
 export function notifyExportOff(notify: (n: NoticeInput) => void) {
   notify({ key: 'export-off', text: EXPORT_OFF_TEXT, testId: 'export-off-notice', timeoutMs: 6000 })

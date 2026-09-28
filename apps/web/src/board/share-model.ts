@@ -187,6 +187,51 @@ export function removeConfirmText(name: string, fallback: string | null): string
   return `Remove ${name}? ${name} loses access now.`
 }
 
+// ---- share with a client, workshop link, "More ways to share" (DANA-03, F3, R15) --------------------
+
+/**
+ * "Share with a client" starts as the common case: a review link that lets people comment, and that
+ * a client opens with just a name (no account). It lasts REVIEW_LINK_DEFAULT_DAY (14) days.
+ */
+export const CLIENT_LINK_DEFAULTS = { role: 'commenter', allowGuests: true } as const
+/** A workshop link hands out EDIT access, so guests stay an explicit choice there. */
+export const WORKSHOP_LINK_GUESTS_DEFAULT = false
+
+/**
+ * The line under "Share with a client". It follows the guest option, which sits above the Create
+ * button and applies to the link it creates: it never says "after signing in" while guests may join
+ * with just a name.
+ */
+export function clientLinkHint(role: 'viewer' | 'commenter', allowGuests: boolean): string {
+  const verb = role === 'commenter' ? 'comment' : 'view'
+  return allowGuests
+    ? `One link for clients and reviewers to ${verb}, never edit. No account needed; their access ends with the link.`
+    : `One link for clients and reviewers to ${verb}, never edit. They sign in to open it; their access ends with the link.`
+}
+
+/** The line under "Workshop link" (R15): "after signing in" only when guests are not allowed. */
+export function workshopLinkHint(allowGuests: boolean): string {
+  return allowGuests
+    ? 'For a live session: anyone with the link can edit for a few hours, with just a name or an account. Their edit access ends with the link.'
+    : 'For a live session: anyone with the link can edit for a few hours, after signing in. Their edit access ends with the link.'
+}
+
+const count = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`
+
+/**
+ * The summary of the collapsed "More ways to share" (workshop link, invite by email, one-time invite
+ * links): what is inside, plus what is open in there, so nothing running hides behind the fold.
+ */
+export function moreWaysSummary(open: { workshopLinks: number; unusedInvites: number }): string {
+  const extras = [
+    open.workshopLinks > 0 ? `${count(open.workshopLinks, 'workshop link', 'workshop links')} open` : '',
+    open.unusedInvites > 0 ? count(open.unusedInvites, 'unused invite link', 'unused invite links') : '',
+  ].filter(Boolean)
+  return extras.length
+    ? extras.join(' · ')
+    : 'Workshop link for a live session, invite by email, one-time invite links'
+}
+
 // ---- invite by email ------------------------------------------------------------------------------
 
 /**

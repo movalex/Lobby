@@ -11,6 +11,7 @@ import {
   freshHandle,
   mainCard,
   memberRow,
+  openMoreWaysToShare,
   openShareFromButton,
   shareDialog,
   signedInContext,
@@ -246,8 +247,10 @@ test('RETRO-04a: a workshop link lets an outsider edit after signing in; +1 h ex
     await a.goto(`/b/${boardId}`)
     await waitForBoard(a)
     await openShareFromButton(a)
+    await openMoreWaysToShare(a) // DANA-03: the workshop link is under "More ways to share"
     const section = shareDialog(a).getByTestId('workshop-links')
-    await expect(section).toContainText('anyone with the link can edit, after signing in')
+    // R15: "after signing in" only while guests are not allowed (the default for an edit link).
+    await expect(section).toContainText('anyone with the link can edit for a few hours, after signing in')
     await expect(section.getByTestId('workshop-link-expiry')).toHaveValue('3')
     await section.getByTestId('workshop-link-create').click()
     const row = section.getByTestId('workshop-link-row')
@@ -383,6 +386,8 @@ test('RETRO-19: a note edit on the canvas makes its card say â€œEdited just nowâ
   await expect.poll(() => updated(board), { timeout: 15_000 }).toBeGreaterThan(await updated(later))
   await a.page.goto(`/w/${users.devStudioId}/all`)
   await a.page.getByTestId('dashboard-sort').selectOption('edited')
+  // The grid renders once the list has loaded (slower with the many boards of a long run).
+  await expect(mainCard(a.page, later)).toBeVisible()
   const ids = await a.page
     .getByTestId('board-grid')
     .getByTestId('board-card')

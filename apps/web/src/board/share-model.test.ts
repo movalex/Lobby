@@ -1,9 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import { makeUser, member, wsMember } from '../api/test-fixtures.ts'
+import { REVIEW_LINK_DAY_OPTIONS, REVIEW_LINK_DEFAULT_DAY } from '../features/sharing/model.ts'
 import {
   type AccessDetail,
   accessSource,
+  CLIENT_LINK_DEFAULTS,
   checkInviteEmail,
+  clientLinkHint,
   emailInviteHint,
   emailInviteOutcome,
   grantEditable,
@@ -11,13 +14,45 @@ import {
   linkAccessLine,
   linkForEmailHint,
   memberRoleEditable,
+  moreWaysSummary,
   parseInviteTarget,
   removalNote,
   removeConfirmText,
   shareableWorkspaceMembers,
   sortMembers,
   VISIBILITY_OPTIONS,
+  WORKSHOP_LINK_GUESTS_DEFAULT,
+  workshopLinkHint,
 } from './share-model.ts'
+
+describe('share with a client, workshop link, more ways to share (DANA-03, F3, R15)', () => {
+  it('a client link starts as comment, 14 days, join with just a name; a workshop (edit) link without guests', () => {
+    expect(CLIENT_LINK_DEFAULTS).toEqual({ role: 'commenter', allowGuests: true })
+    expect(REVIEW_LINK_DEFAULT_DAY).toBe(14)
+    expect(REVIEW_LINK_DAY_OPTIONS).toContain(REVIEW_LINK_DEFAULT_DAY)
+    expect(WORKSHOP_LINK_GUESTS_DEFAULT).toBe(false)
+  })
+
+  it('never says "after signing in" while guests may join with just a name', () => {
+    expect(workshopLinkHint(true)).not.toMatch(/sign/i)
+    expect(workshopLinkHint(true)).toContain('with just a name or an account')
+    expect(workshopLinkHint(false)).toContain('after signing in')
+    expect(clientLinkHint('commenter', true)).not.toMatch(/sign/i)
+    expect(clientLinkHint('commenter', true)).toContain('to comment, never edit. No account needed')
+    expect(clientLinkHint('viewer', false)).toContain('to view, never edit. They sign in to open it')
+  })
+
+  it('the collapsed summary names what is inside, or what is open in there', () => {
+    expect(moreWaysSummary({ workshopLinks: 0, unusedInvites: 0 })).toBe(
+      'Workshop link for a live session, invite by email, one-time invite links',
+    )
+    expect(moreWaysSummary({ workshopLinks: 1, unusedInvites: 0 })).toBe('1 workshop link open')
+    expect(moreWaysSummary({ workshopLinks: 2, unusedInvites: 1 })).toBe(
+      '2 workshop links open · 1 unused invite link',
+    )
+    expect(moreWaysSummary({ workshopLinks: 0, unusedInvites: 3 })).toBe('3 unused invite links')
+  })
+})
 
 describe('share dialog model', () => {
   it('invite links never offer ownership', () => {

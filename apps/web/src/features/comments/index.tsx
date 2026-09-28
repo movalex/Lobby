@@ -10,6 +10,7 @@
 // Everything works for commenters on a read-only canvas; the API enforces every rule.
 
 import { COMMENTS_DELETED_EVENT, COMMENTS_THREAD_EVENT, CommentThreadId } from '@draftroom/contracts'
+import { SHARE_CHANGED_EVENT } from '../sharing/api.ts'
 import type { BoardFeature, FeatureContext } from '../types.ts'
 import './comments.css'
 import { CommentsOverlay } from './CommentsOverlay.tsx'
@@ -72,7 +73,8 @@ function mount(ctx: FeatureContext): () => void {
   const offs = [
     events.on(COMMENTS_THREAD_EVENT, (data) => store.handleEvent(COMMENTS_THREAD_EVENT, data)),
     events.on(COMMENTS_DELETED_EVENT, (data) => store.handleEvent(COMMENTS_DELETED_EVENT, data)),
-    // Someone asked for access (or a request was decided): the owners' bell has news right away.
+    // Someone asked for access (or a request was decided): the owners' bell has news right away; and
+    // who can be @mentioned follows any change of who has access (F4).
     events.on(SHARING_CHANGED_EVENT, (data) => store.handleEvent(SHARING_CHANGED_EVENT, data)),
     events.onResync(() => {
       if (Date.now() - lastLoad > RESYNC_DEBOUNCE_MS) void load()
@@ -89,6 +91,13 @@ function mount(ctx: FeatureContext): () => void {
         testId: 'comments-gone',
       })
   })
+  // F4: a change made in this tab's Share dialog (the board event covers everyone else's, and this
+  // tab's too while the stream is up; the store folds the two into one refetch).
+  const onShareChanged = (e: Event) => {
+    const id = (e as CustomEvent<{ boardId?: string }>).detail?.boardId
+    if (!id || id === store.boardId) store.invalidateMentionables()
+  }
+  window.addEventListener(SHARE_CHANGED_EVENT, onShareChanged)
   // Keyboard commenting (PRI-14): with the comment tool on, Tab / Shift+Tab step through the board's
   // objects as they do in tldraw's select tool (which only does so once something is selected; here
   // the first Tab selects the first object), so "C, Tab…, Enter" comments on an object without a
@@ -110,6 +119,7 @@ function mount(ctx: FeatureContext): () => void {
 
   return () => {
     for (const off of offs) off()
+    window.removeEventListener(SHARE_CHANGED_EVENT, onShareChanged)
     container.removeEventListener('keydown', onTab)
     clearInterval(poll)
     window.removeEventListener('focus', onFocus)

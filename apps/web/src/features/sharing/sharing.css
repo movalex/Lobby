@@ -69,11 +69,91 @@
   gap: 6px;
   font-size: 13px;
 }
-/* Wave 3 (guests): "Anyone with the link can join with just a name" under a link's create row. */
+/* Wave 3 (guests): "Anyone with the link can join with just a name", above the Create row it
+   applies to (DANA-03 / R15). */
 .dr-sharing__guests {
   display: grid;
   gap: 2px;
   margin-top: 8px;
+}
+.dr-sharing__create {
+  margin-top: 10px;
+}
+
+/* DANA-03: "Share with a client", the one obvious path, as a card at the top of the dialog. */
+.dr-share .dr-share__section.dr-sharing__client {
+  padding: 14px 16px 16px;
+  border: 1px solid var(--dr-line);
+  border-radius: var(--dr-radius);
+  background: var(--dr-inset);
+}
+.dr-sharing .dr-sharing__client + .dr-share__section {
+  border-top: 0;
+}
+.dr-share__heading.dr-sharing__client-heading {
+  margin-bottom: 4px;
+  font-size: 15px;
+}
+.dr-sharing__client .dr-share__hint {
+  margin-top: 0;
+}
+
+/* DANA-03: "More ways to share" (workshop link, invite by email, one-time links), collapsed. */
+.dr-sharing__more > summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 10px;
+  min-height: 32px;
+  padding: 6px 0;
+  list-style: none;
+  cursor: pointer;
+  border-radius: 6px;
+}
+.dr-sharing__more > summary::-webkit-details-marker {
+  display: none;
+}
+.dr-sharing__more > summary:focus-visible {
+  outline: 2px solid var(--dr-focus);
+  outline-offset: 2px;
+}
+.dr-sharing__more-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--dr-ink);
+  font-size: 13px;
+  font-weight: 650;
+}
+.dr-sharing__more-title::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-right: 1.8px solid currentColor;
+  border-bottom: 1.8px solid currentColor;
+  transform: rotate(-45deg);
+  transition: transform 120ms ease;
+}
+.dr-sharing__more[open] .dr-sharing__more-title::before {
+  transform: rotate(45deg);
+}
+.dr-sharing__more > summary:hover .dr-sharing__more-title {
+  text-decoration: underline;
+}
+.dr-sharing__more-sub {
+  color: var(--dr-ink-2);
+  font-size: 12.5px;
+}
+.dr-sharing .dr-sharing__more > .dr-share__section {
+  margin-top: 10px;
+}
+.dr-share__section.dr-sharing__more:not([open]) {
+  padding-bottom: 6px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .dr-sharing__more-title::before {
+    transition: none;
+  }
 }
 .dr-sharing__guests .dr-sharing__check {
   align-items: flex-start;

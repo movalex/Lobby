@@ -21,6 +21,8 @@ import {
   exportAllowedOnBoard,
   exportAllowedWith,
   exportCertainOnBoard,
+  exportPolicyOf,
+  exportPolicySentence,
   guardExport,
   refreshExportPolicy,
   saveExportPolicy,
@@ -98,6 +100,28 @@ function mount(opts: { role?: 'owner' | 'editor' | 'commenter' | 'viewer'; conne
   cleanups.push(stop)
   return { boardId, editor, ev, api, pending, notices, stop }
 }
+
+describe('the Export dialog sentence follows the policy (F9)', () => {
+  it('says who may export for each policy, and nothing while it is unknown', () => {
+    expect(exportPolicySentence('everyone')).toBe('Everyone who can view the board can export it.')
+    expect(exportPolicySentence('editors')).toBe(
+      'Only editors can export this board: viewers, commenters and guests can’t.',
+    )
+    expect(exportPolicySentence(null)).toBe('')
+  })
+
+  it('reads the policy of the board the editor shows, live, and nothing before binding', () => {
+    expect(exportPolicyOf(fakeEditor())).toBeNull()
+    const m = mount({ role: 'owner', connected: true })
+    expect(exportPolicyOf(m.editor)).toBeNull() // the first answer has not arrived
+    m.ev.emit('export-control.policy', { exportPolicy: 'editors' })
+    expect(exportPolicySentence(exportPolicyOf(m.editor))).toContain('Only editors')
+    m.ev.emit('export-control.policy', { exportPolicy: 'everyone' })
+    expect(exportPolicySentence(exportPolicyOf(m.editor))).toContain('Everyone who can view')
+    m.stop()
+    expect(exportPolicyOf(m.editor)).toBeNull()
+  })
+})
 
 describe('exportAllowedWith', () => {
   it("limits only viewers and commenters, only under 'editors'; unknown role or policy = allowed", () => {

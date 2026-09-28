@@ -36,6 +36,7 @@ import {
   notifications,
   ORIGIN,
   openDashboard,
+  openMoreWaysToShare,
   openShareFromButton,
   personalWorkspace,
   recordNavigations,
@@ -891,6 +892,9 @@ test('invite: @bob gets editor access at once; an email address gets a one-time 
   })
 
   await test.step('the pending link is listed and revoking it makes the link answer 410', async () => {
+    // DANA-03: one-time invite links are under "More ways to share", whose summary counts them.
+    await expect(dialog.getByTestId('share-more-summary')).toHaveText('1 unused invite link')
+    await openMoreWaysToShare(a.page)
     const row = dialog.getByTestId('invitation-row')
     await expect(row).toHaveCount(1)
     await expect(row).toContainText('Can comment')
@@ -1250,7 +1254,10 @@ test('review link: two outsiders join as commenters; revoking with "remove acces
     await expect(url).toHaveValue(new RegExp(`^${WEB_URL}/invite/[A-Za-z0-9_-]{43}$`))
     const link = await url.inputValue()
     const [stored] = await invitations(aliceApi, boardId)
-    expect(stored).toMatchObject({ kind: 'review', role: 'commenter', uses: 0, url: link })
+    // DANA-03 / F3: "Share with a client" lets people join with just a name unless unticked; an
+    // account still works ("Sign in instead", used below).
+    expect(stored).toMatchObject({ kind: 'review', role: 'commenter', uses: 0, url: link, allowGuests: true })
+    await expect(dialog.getByTestId('review-link-row')).toHaveAttribute('data-allow-guests', 'true')
     const days = (Date.parse(stored?.expiresAt ?? '') - Date.now()) / 86_400_000
     expect(days).toBeGreaterThan(13.9)
     expect(days).toBeLessThanOrEqual(14)

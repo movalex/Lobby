@@ -5,7 +5,13 @@
 // the role picked). The Clerk paths (added at once / emailed) are API-tested with a fake Clerk client
 // in apps/api/test/features/dashboard/email-invites.test.ts.
 import { read, signInThroughUi, waitForBoard } from './support/board.ts'
-import { freshHandle, invitations, openShareFromButton, shareDialog } from './support/dashboard-share.ts'
+import {
+  freshHandle,
+  invitations,
+  openMoreWaysToShare,
+  openShareFromButton,
+  shareDialog,
+} from './support/dashboard-share.ts'
 import { expect, test } from './support/fixtures.ts'
 import { WEB_URL } from './support/ports.ts'
 
@@ -21,6 +27,7 @@ test('invite by email without Clerk: a wrong address is refused at the field, th
   const a = await session('alice')
   await a.context.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: WEB_URL })
   await openShareFromButton(a.page)
+  await openMoreWaysToShare(a.page) // DANA-03: invite by email is under "More ways to share"
   const dialog = shareDialog(a.page)
   const section = dialog.getByTestId('share-email-section')
   const input = section.getByTestId('share-email-input')
