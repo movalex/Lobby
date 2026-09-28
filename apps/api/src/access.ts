@@ -82,6 +82,34 @@ function toAccess(row: AccessRow): BoardAccess {
   }
 }
 
+// ---- row-lock order ------------------------------------------------------------------------------
+//
+// With a real Postgres pool, requests run on separate connections at once, and two transactions that
+// lock the same rows in opposite orders deadlock: Postgres then fails one of them (a 500). So every
+// transaction that locks more than one of these takes them top-down, never bottom-up:
+//   1. the board row: FOR UPDATE (requireBoardAction/loadBoardAccess `forUpdate`, lockBoardRow). Note
+//      that inserting a row that references a board (board_members, comments, invitation_redemptions,
+//      ...) takes a key-share lock on the board row, which waits for FOR UPDATE: that is step 1 too;
+//   2. a row that belongs to the board: an invitation or review link, an access request, the board's
+//      timer, thumbnail or export policy, a vote or private-brainstorm session;
+//   3. a name-only guest's user row (joining or accepting a guest link, the guest sweep);
+//   4. board_members and sessions rows.
+// A transaction that only knows a step-2 row (joining through a link, accepting an invitation, the
+// expired-link sweeper) reads it WITHOUT a lock first, locks the board, then locks and re-reads it.
+// Safe exception: a reply locks its comment thread, then inserts the comment (whose key-share lock on
+// the board comes after that thread lock), because no transaction that holds a board lock ever waits
+// for a thread's lock. Keep it that way, or lock the board first there too.
+// Assets have their own order: a preview job before its asset version (the worker routes; files/gc.ts).
+
+/**
+ * Locks the board row (step 1 above) without loading access: for a transaction that found the board
+ * through one of its rows. False when the board does not exist.
+ */
+export async function lockBoardRow(q: Queryable, boardId: string): Promise<boolean> {
+  if (!isBoardId(boardId)) return false
+  return (await q.maybeOne('SELECT id FROM boards WHERE id = $1 FOR UPDATE', [boardId])) !== null
+}
+
 export async function loadBoardAccess(
   q: Queryable,
   boardId: string,

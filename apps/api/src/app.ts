@@ -103,9 +103,20 @@ export async function createApiServer(config: ApiConfig, deps: ApiDeps = {}): Pr
         : { kind: 'pglite', dataDir: config.pgliteDir },
     ))
   try {
-    await migrate(db)
+    const migrated = await migrate(db, { allowNewerSchema: config.allowNewerSchema })
     const blobs = deps.blobs ?? openBlobStore(config.blobStore)
-    return await buildServer(config, deps, provider, db, ownsDb, blobs)
+    const server = await buildServer(config, deps, provider, db, ownsDb, blobs)
+    // A rollback (docs/DEPLOY.md "Rollback"): say so on every start while the flag is on.
+    if (migrated.newer.length)
+      server.app.log.warn(
+        { newerMigrations: migrated.newer },
+        'DRAFTROOM_ALLOW_NEWER_SCHEMA=1: this build is running on a database with newer migrations than it knows. Deploy the newer build again (or fix forward) and remove the flag.',
+      )
+    else if (config.allowNewerSchema)
+      server.app.log.warn(
+        'DRAFTROOM_ALLOW_NEWER_SCHEMA=1 is set but the database has no newer migrations: remove the flag.',
+      )
+    return server
   } catch (e) {
     if (ownsDb) await db.close()
     throw e

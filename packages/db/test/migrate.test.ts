@@ -85,6 +85,72 @@ describe('migration runner', () => {
     await expect(migrate(db, { dir })).rejects.toThrow(/0002_second, which this build does not know/)
   })
 
+  describe('an older build on a newer database (a rollback, allowNewerSchema)', () => {
+    // The newer build applied 0001-0003; the older build knows 0001-0002.
+    async function newerDatabase() {
+      write('0001_first.sql', 'CREATE TABLE a (x int);')
+      write('0002_second.sql', 'CREATE TABLE b (x int);')
+      write('0003_third.sql', 'CREATE TABLE c (x int);')
+      await migrate(db, { dir })
+      rmSync(join(dir, '0003_third.sql'))
+    }
+
+    it('refuses to start by default', async () => {
+      await newerDatabase()
+      await expect(migrate(db, { dir })).rejects.toThrow(/0003_third, which this build does not know/)
+    })
+
+    it('with the opt-in, starts: applies nothing, changes nothing and reports the newer migrations', async () => {
+      await newerDatabase()
+      expect(await migrate(db, { dir, allowNewerSchema: true })).toEqual({
+        applied: [],
+        newer: ['0003_third'],
+      })
+      expect(await recorded()).toEqual(['0001_first', '0002_second', '0003_third'])
+      expect(await tableNames()).toEqual(['a', 'b', 'c', 'schema_migrations'])
+      // Deploying the newer build again finds everything applied.
+      write('0003_third.sql', 'CREATE TABLE c (x int);')
+      expect(await migrate(db, { dir })).toEqual({ applied: [], newer: [] })
+    })
+
+    it('never tolerates an unknown OLDER migration (a gap below the newest file it knows)', async () => {
+      await newerDatabase()
+      write('0003_third.sql', 'CREATE TABLE c (x int);')
+      rmSync(join(dir, '0002_second.sql'))
+      await expect(migrate(db, { dir, allowNewerSchema: true })).rejects.toThrow(
+        /0002_second, which this build does not know/,
+      )
+    })
+
+    it('never tolerates a checksum mismatch', async () => {
+      await newerDatabase()
+      write('0002_second.sql', 'CREATE TABLE b (x int, y int);')
+      await expect(migrate(db, { dir, allowNewerSchema: true })).rejects.toThrow(
+        /0002_second changed after it was applied/,
+      )
+    })
+
+    it('never applies a migration of this build that the newer database never got', async () => {
+      await newerDatabase()
+      // A hotfix build that added its own 0003: the database's 0003 is another migration.
+      write('0003_hotfix.sql', 'CREATE TABLE h (x int);')
+      await expect(migrate(db, { dir, allowNewerSchema: true })).rejects.toThrow(
+        /0003_third changed after it was applied/,
+      )
+      rmSync(join(dir, '0003_hotfix.sql'))
+      // The database is at 0001-0003 plus 0005; this build knows 0001-0004.
+      write('0003_third.sql', 'CREATE TABLE c (x int);')
+      write('0005_fifth.sql', 'CREATE TABLE e (x int);')
+      await migrate(db, { dir })
+      rmSync(join(dir, '0005_fifth.sql'))
+      write('0004_fourth.sql', 'CREATE TABLE d (x int);')
+      await expect(migrate(db, { dir, allowNewerSchema: true })).rejects.toThrow(
+        /0004_fourth was never applied to this database, which already has newer migrations \(0005_fifth\)/,
+      )
+      expect(await tableNames()).toEqual(['a', 'b', 'c', 'e', 'schema_migrations'])
+    })
+  })
+
   it('refuses a new migration numbered below the latest applied one', async () => {
     write('0003_third.sql', 'CREATE TABLE c (x int);')
     await migrate(db, { dir })
@@ -171,7 +237,7 @@ describe('shipped migrations', () => {
       '0014_checkpoint_policy',
       '0015_board_search',
     ])
-    expect(await migrate(db)).toEqual({ applied: [] })
+    expect(await migrate(db)).toEqual({ applied: [], newer: [] })
     expect(await tableNames()).toEqual([
       'access_requests',
       'asset_derivative_reservations',

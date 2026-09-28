@@ -13,7 +13,13 @@ import {
 import { newId, type Queryable } from '@draftroom/db'
 import { type BoardRole, can, canManageWorkspace, type WorkspaceRole } from '@draftroom/permissions'
 import type { FastifyInstance, FastifyReply } from 'fastify'
-import { connectionRole, loadBoardAccess, requireBoardAction, requireWorkspaceRole } from '../access.ts'
+import {
+  connectionRole,
+  loadBoardAccess,
+  lockBoardRow,
+  requireBoardAction,
+  requireWorkspaceRole,
+} from '../access.ts'
 import { audit } from '../audit.ts'
 import { isSecretToken, newSecretToken, sha256hex } from '../auth/session.ts'
 import { userKind } from '../auth/users.ts'
@@ -48,6 +54,28 @@ type InvitationState = 'usable' | 'redeemed_by_caller' | 'gone'
 /** Name-only guests (wave 3) may only use guest links; everything else needs an account. */
 export const guestAccountRequired = (message = 'Sign in with an account to accept this invitation.') =>
   new ApiError(403, 'GUEST_ACCOUNT_REQUIRED', message)
+
+/**
+ * The invitation behind `token`, locked FOR UPDATE for redeeming it (accepting, joining as a guest),
+ * or null when there is none. A board invitation's board row is locked first (the lock order in
+ * access.ts): a revoke or "+1 h" holds the board and then takes the link, so taking the link first and
+ * then the board (which redeeming needs: its grant references the board) deadlocks with them. The
+ * board is found through an unlocked read (an invitation's board never changes), and the row is read
+ * again under the lock, so the caller always decides on its current state.
+ */
+export async function lockInvitation(tx: Queryable, token: string): Promise<InvitationRow | null> {
+  const tokenHash = sha256hex(token)
+  const found = await tx.maybeOne<{ id: string; board_id: string | null }>(
+    'SELECT id, board_id FROM invitations WHERE token_hash = $1',
+    [tokenHash],
+  )
+  if (!found) return null
+  if (found.board_id !== null) await lockBoardRow(tx, found.board_id)
+  return tx.maybeOne<InvitationRow>(
+    `SELECT ${INVITATION_COLUMNS} FROM invitations i WHERE i.id = $1 AND i.token_hash = $2 FOR UPDATE`,
+    [found.id, tokenHash],
+  )
+}
 
 export function stateFor(inv: InvitationRow, callerId: string | null, now: Date): InvitationState {
   if (inv.redeemed_by !== null) return inv.redeemed_by === callerId ? 'redeemed_by_caller' : 'gone'
@@ -120,9 +148,10 @@ export async function sendGone(
 /**
  * Redeems a usable invitation (stateFor === 'usable') for `userId`: the one redemption path of
  * accepting and of joining as a guest (wave 3). Call inside the transaction that locked the
- * invitation row FOR UPDATE. It adds the workspace membership (a board link makes an outsider a
- * workspace guest), raises the board grant to the link's role (never lowers it), records the use (for
- * a multi-use link the 0005 trigger counts it and closes the link at max_uses) and audits it.
+ * invitation row FOR UPDATE, board row first (lockInvitation). It adds the workspace membership (a
+ * board link makes an outsider a workspace guest), raises the board grant to the link's role (never
+ * lowers it), records the use (for a multi-use link the 0005 trigger counts it and closes the link at
+ * max_uses) and audits it.
  */
 export async function redeemInvitation(
   tx: Queryable,
@@ -283,10 +312,7 @@ export function registerInvitationRoutes(app: FastifyInstance, ctx: AppContext):
     if (!isSecretToken(token)) throw notFound()
     const result = await db.transaction(async (tx) => {
       // FOR UPDATE: two accounts accepting the same link at once cannot both redeem it.
-      const inv = await tx.maybeOne<InvitationRow>(
-        `SELECT ${INVITATION_COLUMNS} FROM invitations i WHERE i.token_hash = $1 FOR UPDATE`,
-        [sha256hex(token)],
-      )
+      const inv = await lockInvitation(tx, token)
       if (!inv) throw notFound()
       // A name-only guest (wave 3) can only use guest links (joining one more board); a normal
       // invitation needs an account.

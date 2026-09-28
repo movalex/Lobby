@@ -382,6 +382,26 @@ describe('revealing', () => {
     expect(json<PrivateBrainstormState>(res).placed).toMatchObject({ status: 'placed', placedCount: 0 })
     expect(place.calls).toHaveLength(0)
   })
+
+  it('placing notes moves the board\'s "Edited" time to the placement; an empty reveal leaves it', async () => {
+    await world()
+    fakePlacement(w)
+    const edited = async () =>
+      (
+        await w.api.db.one<{ t: Date }>('SELECT updated_at AS t FROM boards WHERE id = $1', [w.boardId])
+      ).t.getTime()
+    const before = await edited()
+    w.clock.advance(60_000)
+    expectStatus(await reveal(w.editor, (await start(w.editor)).session?.id as string), 200)
+    expect(await edited()).toBe(before)
+    w.clock.advance(60_000)
+    const sid = (await start(w.editor)).session?.id as string
+    await addOk(w.editor, sid, 'n1')
+    w.clock.advance(60_000)
+    expectStatus(await reveal(w.editor, sid), 200)
+    // Written after the session's own transaction (the board row is never locked under a session's).
+    expect(await edited()).toBe(w.clock.now().getTime())
+  })
 })
 
 describe('anonymous sessions', () => {

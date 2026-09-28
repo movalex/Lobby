@@ -212,16 +212,25 @@ describe('authz-005: revoked people stop receiving board events at once', () => 
     const w = await world({ hub, limits: { streamRecheckMs: HOUR } })
     const { guest } = await w.reviewGuest('guest')
     const openStream = hub.openStream.bind(hub)
-    let raced = false
+    const revalidate = hub.revalidate.bind(hub)
+    let removal: Promise<unknown> | null = null
     hub.openStream = (boardId, handle) => {
-      if (!raced && handle.userId === guest.userId) {
-        raced = true
-        // The removal commits and is announced after this stream's own access check passed but before
-        // it was subscribed: the hub had nothing of this person's to re-check.
-        void w.t.db.query('DELETE FROM board_members WHERE user_id = $1', [guest.userId])
+      if (!removal && handle.userId === guest.userId) {
+        // The removal is announced after this stream's own access check passed but before it was
+        // subscribed: the hub had nothing of this person's to re-check. (openStream is synchronous, so
+        // the removal is sent here and awaited below.)
+        removal = w.t.db.query('DELETE FROM board_members WHERE user_id = $1', [guest.userId])
         hub.accessChanged({ boardId, userId: guest.userId })
       }
       return openStream(boardId, handle)
+    }
+    // In the app the removal commits before it is announced. Here the stream's re-check waits for that
+    // commit: with a real Postgres pool (DRAFTROOM_TEST_DATABASE_URL) the re-check runs on another
+    // connection and could otherwise read the grant before the DELETE commits (PGlite, with one
+    // connection, always ran them in order).
+    hub.revalidate = async (streams) => {
+      await removal
+      return revalidate(streams)
     }
     const s = await w.open(guest)
     await s.waitFor('access-lost', 2_000)

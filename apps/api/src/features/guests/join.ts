@@ -22,18 +22,12 @@ import {
 } from '@draftroom/contracts'
 import { newId } from '@draftroom/db'
 import type { FastifyInstance } from 'fastify'
-import { isSecretToken, sha256hex } from '../../auth/session.ts'
+import { isSecretToken } from '../../auth/session.ts'
 import { colorFor, userKind } from '../../auth/users.ts'
 import type { Params } from '../../context.ts'
 import { ApiError, badRequest, conflict, notFound, parse } from '../../errors.ts'
 import { keyedLimit, type RouteRateLimit } from '../../rate-limit.ts'
-import {
-  INVITATION_COLUMNS,
-  type InvitationRow,
-  redeemInvitation,
-  sendGone,
-  stateFor,
-} from '../../routes/invitations.ts'
+import { lockInvitation, redeemInvitation, sendGone, stateFor } from '../../routes/invitations.ts'
 import type { FeatureContext } from '../context.ts'
 import { publishSharingChanged } from '../dashboard/shared.ts'
 import { assertGuestRoomOnLink, clientAddressKey } from './limits.ts'
@@ -84,11 +78,8 @@ export function registerGuestJoin(
     const callerSessionId = caller ? sessions.idOf(req) : null
 
     const result = await db.transaction(async (tx) => {
-      // FOR UPDATE: the same lock as accepting (max uses, the per-link guest cap).
-      const inv = await tx.maybeOne<InvitationRow>(
-        `SELECT ${INVITATION_COLUMNS} FROM invitations i WHERE i.token_hash = $1 FOR UPDATE`,
-        [sha256hex(token)],
-      )
+      // FOR UPDATE: the same locks as accepting (max uses, the per-link guest cap), board row first.
+      const inv = await lockInvitation(tx, token)
       if (!inv) throw notFound()
       if (!inv.multi_use || !inv.allow_guests || inv.board_id === null) throw guestsNotAllowed()
       const boardId = inv.board_id

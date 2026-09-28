@@ -97,8 +97,18 @@ describe('search: freshness', () => {
     expect(boardsOf(await search(bob, DEV_STUDIO, 'zebra'))).toEqual([board])
     expect(await entriesOf(board)).toHaveLength(1)
     expect((await bob.req('POST', `/api/boards/${board}/trash`)).statusCode).toBe(200)
+    // The purge runs right after the answer (an onResponse hook). With a real Postgres pool
+    // (DRAFTROOM_TEST_DATABASE_URL) this test's next query can run first, on another connection;
+    // PGlite's one connection always ran them in order. So wait for it, briefly.
+    const stateOf = () => w.api.db.query('SELECT 1 FROM board_search_state WHERE board_id = $1', [board])
+    for (
+      let i = 0;
+      i < 400 && ((await entriesOf(board)).length > 0 || (await stateOf()).rows.length > 0);
+      i++
+    )
+      await new Promise((r) => setTimeout(r, 5))
     expect(await entriesOf(board)).toEqual([])
-    const state = await w.api.db.query('SELECT 1 FROM board_search_state WHERE board_id = $1', [board])
+    const state = await stateOf()
     expect(state.rows).toEqual([])
     expect(boardsOf(await search(bob, DEV_STUDIO, 'zebra'))).toEqual([])
     expect((await bob.req('POST', `/api/boards/${board}/restore`)).statusCode).toBe(200)
