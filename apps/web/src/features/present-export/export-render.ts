@@ -6,8 +6,10 @@
 // our asset store then returns the uploaded original instead of the canvas-sized derivative. Every export
 // here therefore passes `pixelRatio: undefined` explicitly (toImage would otherwise default it to 2). The
 // bitmap is then drawn at tldraw's default 2× pixel ratio, so `scale` is halved to get N× output.
+import type { VoteResult } from '@draftroom/contracts'
 import { Box, copyAs, type Editor, type TLShape, type TLShapeId } from 'tldraw'
 import { readSessionSettings } from '../workshops/session-settings.ts'
+import { type ExportBadge, voteResultsForExport, withVoteBadges } from '../workshops/vote-export.ts'
 import type { FrameEntry } from './board-ops.ts'
 import { stripNoteAuthors } from './note-authors.ts'
 import { bookmarkTitle, isWinAnsi, type PdfTextItem } from './pdf-build.ts'
@@ -29,18 +31,44 @@ export const IMAGE_SCALES: readonly ImageScale[] = [1, 2, 4]
 const TLDRAW_DEFAULT_PIXEL_RATIO = 2
 const BOARD_PAGE_PADDING = 32
 
+/** Badges for the revealed results on the exported shapes (or inside them: a frame's notes). */
+function voteBadgesFor(
+  editor: Editor,
+  shapes: readonly (TLShapeId | TLShape)[],
+  results: readonly VoteResult[],
+): ExportBadge[] {
+  const ids = shapes.map((s) => (typeof s === 'string' ? s : s.id))
+  const exported = editor.getShapeAndDescendantIds(ids)
+  const out: ExportBadge[] = []
+  for (const r of results) {
+    const id = r.shapeId as TLShapeId
+    if (!exported.has(id)) continue
+    const b = editor.getShapePageBounds(id)
+    if (b) out.push({ x: b.maxX, y: b.minY, rank: r.rank, n: r.count })
+  }
+  return out
+}
+
 /**
- * The editor as exports use it. While the session hides note authors (workshops' "Hide note authors",
- * RETRO-03a), the SVG every export is made from comes without them: `toImage` and `copyAs` build
- * their SVG through `getSvgString`, so a view of the editor whose getSvgString strips the names is
- * enough for PNG, SVG, PDF and the clipboard alike (tldraw's own rasterizing and trimming unchanged).
+ * The editor as exports use it: `toImage` and `copyAs` build their SVG through `getSvgString`, so a
+ * view of the editor whose getSvgString adjusts the SVG is enough for PNG, SVG, PDF and the clipboard
+ * alike (tldraw's own rasterizing and trimming unchanged). It
+ * - strips note authors while the session hides them (workshops' "Hide note authors", RETRO-03a);
+ * - draws a revealed vote's result badges on the voted shapes, as this person sees them on the board
+ *   (final review R14: the badges are an HTML overlay, so tldraw's export alone leaves them out).
  */
 export function exportEditor(editor: Editor): Editor {
-  if (!readSessionSettings(editor).hideNoteAuthors) return editor
+  const hideAuthors = readSessionSettings(editor).hideNoteAuthors
+  const results = voteResultsForExport(editor)
+  if (!hideAuthors && !results) return editor
   const view = Object.create(editor) as Editor
   view.getSvgString = async (shapes, opts) => {
     const result = await editor.getSvgString(shapes, opts)
-    return result && { ...result, svg: stripNoteAuthors(result.svg) }
+    if (!result) return result
+    let svg = result.svg
+    if (hideAuthors) svg = stripNoteAuthors(svg)
+    if (results) svg = withVoteBadges(svg, voteBadgesFor(editor, shapes, results))
+    return { ...result, svg }
   }
   return view
 }

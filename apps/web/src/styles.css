@@ -722,6 +722,15 @@ code {
   transform: translateX(-50%);
   pointer-events: none;
 }
+/* Phones (PL-V8): the same top offset keeps notices below tldraw's page menu; spanning the width
+   (instead of shrinking into the right half from left: 50%) keeps a short notice on one or two lines. */
+@media (max-width: 600px) {
+  .dr-notices {
+    right: 16px;
+    left: 16px;
+    transform: none;
+  }
+}
 .dr-notice {
   display: flex;
   align-items: center;

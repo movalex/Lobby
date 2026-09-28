@@ -15,6 +15,7 @@ import { plusOneIntentsFor, watchPlusOneIntents } from './plus-ones.ts'
 import { mountPrivateNotes, privateNotesPanel } from './private-notes/index.tsx'
 import { HIDE_AUTHORS_ATTR, readSessionSettings } from './session-settings.ts'
 import { VotingPanel } from './VotingPanel.tsx'
+import { provideVoteResultsForExport, shownResults } from './vote-export.ts'
 import { WorkshopBar } from './WorkshopBar.tsx'
 import { WorkshopOverlay } from './WorkshopOverlay.tsx'
 import './workshops.css'
@@ -95,7 +96,11 @@ function mountWorkshops(ctx: FeatureContext) {
   // Private brainstorming: a notice when a session ends; the revealing tab fits the placed notes.
   const stopPrivateNotes = mountPrivateNotes(ctx)
 
+  // Exports draw a revealed vote's result badges, as this person sees them (vote-export.ts, R14).
+  const stopVoteExport = provideVoteResultsForExport(editor, () => shownResults(store.getSnapshot()))
+
   return () => {
+    stopVoteExport()
     stopPrivateNotes()
     stopPlusOnes()
     stopAuthors()

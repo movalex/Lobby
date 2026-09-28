@@ -871,8 +871,9 @@ test.describe('CSV export', () => {
     expect(byId.get(ID.plus)?.[2]).toBe("'+1 555 0100")
     expect(byId.get(ID.at)?.[2]).toBe("'@SUM(A1:A9)")
     expect(byId.get(ID.plain)?.[2]).toBe('Plain, with a comma')
-    expect(byId.get(ID.formula)?.slice(1, 5)).toEqual(['note', `'${FORMULA}`, 'Research', 'yellow'])
-    expect(byId.get(ID.loose)?.slice(3, 7)).toEqual(['', 'yellow', '0', '600'])
+    // Notes carry the palette's name for their colour (stored 'yellow' is "Marigold"; R14).
+    expect(byId.get(ID.formula)?.slice(1, 5)).toEqual(['note', `'${FORMULA}`, 'Research', 'Marigold'])
+    expect(byId.get(ID.loose)?.slice(3, 7)).toEqual(['', 'Marigold', '0', '600'])
     expect(byId.get(ID.frame)?.slice(1, 4)).toEqual(['frame', 'Research', ''])
 
     // One note selected: only its row.
