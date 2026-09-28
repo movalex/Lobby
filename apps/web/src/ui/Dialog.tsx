@@ -1,5 +1,19 @@
 import { type ReactNode, useEffect, useId, useRef } from 'react'
 
+const FIELDS =
+  'input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"]):not([disabled]), textarea:not([disabled]), select:not([disabled])'
+
+/** The first enabled, rendered text field or select below the dialog's header. */
+function firstField(panel: HTMLElement | null): HTMLElement | null {
+  if (!panel) return null
+  for (const el of panel.querySelectorAll<HTMLElement>(FIELDS)) {
+    if (el.closest('.dr-dialog__head')) continue
+    if (el.getClientRects().length === 0 || el.tabIndex < 0) continue
+    return el
+  }
+  return null
+}
+
 /**
  * A modal built on the native <dialog>: showModal() gives the focus trap, inert background, Escape
  * and top-layer stacking (above the tldraw canvas) for free. Mount it only while open.
@@ -25,14 +39,26 @@ export function Dialog({
   const onCloseRef = useRef(onClose)
   onCloseRef.current = onClose
 
+  const panelRef = useRef<HTMLDivElement>(null)
+
   useEffect(() => {
     const dialog = ref.current
     if (!dialog) return
-    // Removing a modal <dialog> from the DOM does not restore focus by itself.
-    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    // Removing a modal <dialog> from the DOM does not restore focus by itself. A field that focused
+    // itself on mount (React's autoFocus runs before this effect) is inside already: keep it.
+    const active = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    const autoFocused = active && dialog.contains(active) ? active : null
+    const opener = autoFocused ? null : active
     if (!dialog.open) dialog.showModal()
+    // A11Y-08: showModal() focuses the first control, the header's ×, so a reflex Enter closed the
+    // dialog. Start on the field that autofocused, else the first field of the body (search, prompt,
+    // title); a dialog without fields keeps the ×.
+    const start = autoFocused ?? firstField(panelRef.current)
+    if (start) start.focus()
     return () => {
       if (dialog.open) dialog.close()
+      // The opener may be gone ("Start a vote…" is replaced by the running vote): then the board's focus
+      // guard (ui/focus.ts) places the keyboard.
       if (opener?.isConnected) opener.focus()
     }
   }, [])
@@ -53,7 +79,7 @@ export function Dialog({
         if (e.target === ref.current) onCloseRef.current()
       }}
     >
-      <div className="dr-dialog__panel">
+      <div className="dr-dialog__panel" ref={panelRef}>
         <header className="dr-dialog__head">
           <div>
             <h2 id={titleId} className="dr-dialog__title">

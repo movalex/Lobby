@@ -1,11 +1,13 @@
 // Pure keyboard predicates (no DOM, no editor): type-to-edit on a selected note (COL-04), the
-// Ctrl/Cmd+F board-search intercept (MAK-12), Enter to rename a selected frame (RETRO-14) and
-// Space-to-pan from a clicked button (F3).
+// Ctrl/Cmd+F board-search intercept (MAK-12), Enter to rename a selected frame (RETRO-14), Enter to edit
+// a selected note with the caret at the end (A11Y-12), Space-to-pan from a clicked button (F3), and the
+// selection toolbar / context menu keys (A11Y-04).
 //
 // COL-04 decision: typing APPENDS. With exactly one unlocked note selected (and nothing being edited),
 // a printable key starts editing that note with the caret at the end of its text and inserts the
-// character there. It never replaces: a stray keystroke cannot wipe a note (Enter still selects all
-// text, so "Enter, then type" is the replace gesture). Excluded so their shortcuts keep working:
+// character there. It never replaces: a stray keystroke cannot wipe a note. Enter edits it with the
+// caret at the end too (A11Y-12: tldraw's own Enter selected all of the text, so the next key wiped the
+// note); Ctrl/Cmd+A then selects the text to replace it. Excluded so their shortcuts keep working:
 // Space (hold to pan), [ and ] (send to back / bring to front), and any Ctrl/Cmd/Alt chord (AltGr
 // characters such as @ on German layouts still type). Single-key tool shortcuts (N, T, L, P, …) work as
 // usual whenever nothing, several shapes, or a non-note is selected.
@@ -96,6 +98,45 @@ export function shouldRenameFrame(e: KeyEventLike, s: TypeToEditState): boolean 
   const only = s.selected[0]
   return only?.type === 'frame' && !only.locked
 }
+
+/**
+ * A11Y-12: Enter (no modifiers) with exactly one unlocked note selected edits it with the caret at the
+ * END of its text. tldraw 5.4.2's own Enter (SelectTool Idle.onKeyUp) starts editing with all of the
+ * text selected, so the first key typed replaced the note.
+ */
+export function shouldEditNoteOnEnter(e: KeyEventLike, s: TypeToEditState): boolean {
+  if (e.key !== 'Enter' || e.isComposing || e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return false
+  if (s.targetIsTextField || s.isEditing || s.isReadonly || s.menusOpen || !s.isIdle) return false
+  if (s.selected.length !== 1) return false
+  const only = s.selected[0]
+  return only?.type === 'note' && !only.locked
+}
+
+/**
+ * A11Y-04: Alt+F10 (the ARIA toolbar convention) moves the keyboard to the selection toolbar under the
+ * selected shapes (copy link, lock, tags, AI, align…). Tab on the canvas cycles shapes, so the bar was
+ * out of the keyboard's reach.
+ */
+export function isSelectionToolbarKey(e: KeyEventLike): boolean {
+  if (e.isComposing || e.ctrlKey || e.metaKey || e.shiftKey || !e.altKey) return false
+  return e.key === 'F10' || e.code === 'F10'
+}
+
+/**
+ * A11Y-04: Shift+F10 and the ContextMenu ("menu") key open the context menu for the selection, as they
+ * do elsewhere on Windows and Linux (tldraw 5.4.2 binds only Ctrl/Cmd+Shift+Enter).
+ */
+export function isContextMenuKey(e: KeyEventLike): boolean {
+  if (e.isComposing || e.ctrlKey || e.metaKey || e.altKey) return false
+  if (e.key === 'ContextMenu' || e.code === 'ContextMenu') return true
+  return e.shiftKey === true && (e.key === 'F10' || e.code === 'F10')
+}
+
+/**
+ * Chords the canvas keyboard listener (keyboard.ts, capture phase) takes itself, in chordsOf() form. They
+ * must never be a tldraw action's or tool's chord (features/keyboard-map.test.ts).
+ */
+export const CANVAS_OWN_KEYS: readonly string[] = ['alt+f10', 'shift+f10', 'contextmenu']
 
 export interface FocusedControlLike {
   /** document.activeElement is a <button> or [role=button]. */

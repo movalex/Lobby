@@ -10,6 +10,7 @@
 
 import { DefaultFontStyle, getUserPreferences } from 'tldraw'
 import { isReadonlyRole } from '../../board/access.ts'
+import { installFocusGuard } from '../../ui/focus.ts'
 import type { BoardFeature, FeatureContext } from '../types.ts'
 import { setFeatureCtx, startViewResult } from './bridge.ts'
 import { registerBulkPaste } from './bulk-paste-handler.ts'
@@ -25,7 +26,7 @@ import {
 import { installCopyGuard } from './export-gate.tsx'
 import { FramesPanel } from './FramesPanel.tsx'
 import { FramesIcon, SearchIcon, TemplatesIcon } from './icons.tsx'
-import { installCanvasKeyboard } from './keyboard.ts'
+import { focusBoard, installCanvasKeyboard } from './keyboard.ts'
 import { registerLockedHint } from './locked-hint-runtime.ts'
 import { DraftroomMainMenu } from './MainMenu.tsx'
 import { DraftroomNavigationPanel } from './NavigationPanel.tsx'
@@ -63,6 +64,16 @@ function mount(ctx: FeatureContext): () => void {
   const readonly = isReadonlyRole(ctx.role, ctx.board.status)
   const cleanups: (() => void)[] = []
   cleanups.push(installCanvasKeyboard(editor, { onBoardSearch: () => openBoardSearch(editor), isModalOpen }))
+  // A11Y-01: a closed popover or a replaced button never leaves the keyboard on <body>; the last resort
+  // is the canvas.
+  cleanups.push(
+    installFocusGuard({
+      doc: editor.getContainer().ownerDocument,
+      fallback: () => {
+        if (!isModalOpen()) focusBoard(editor)
+      },
+    }),
+  )
   cleanups.push(registerBulkPaste(editor))
   cleanups.push(registerDoubleClickNote(editor))
   cleanups.push(registerLockedHint(editor))

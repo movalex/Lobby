@@ -6,6 +6,7 @@ import { useMemo, useState } from 'react'
 import { isReadonlyRole } from '../../board/access.ts'
 import type { FeatureContext } from '../types.ts'
 import { instantiateTemplate, TEMPLATES, type TemplateCategory, type TemplateDefinition } from './deps.ts'
+import { focusBoard } from './keyboard.ts'
 import { NOTE_PALETTE } from './palette.ts'
 import { insertTemplate } from './template-insert.ts'
 
@@ -117,7 +118,7 @@ export function TemplatesPanel({ ctx, close }: { ctx: FeatureContext; close(): v
         })
         return
       }
-      editor.focus()
+      focusBoard(editor)
       ctx.notify({
         key: 'template-insert',
         text: `Added “${t.name}”. Undo removes it.`,

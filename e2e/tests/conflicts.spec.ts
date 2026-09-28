@@ -89,8 +89,12 @@ test('text lease: bob cannot type into the note alice is typing in, until her le
 
   // The expiry itself is under test here, so this is a real wait (plus a margin for clock skew).
   await b.page.waitForTimeout(Math.max(0, lastRenewalSeen + LEASE_MS + 750 - Date.now()))
-  // Enter opens the note with all of its text selected, so bob's typing replaces it.
+  // Enter opens the note with the caret at the end (A11Y-12); Ctrl/Cmd+A selects its text, so bob's
+  // typing replaces it.
   await startTextEditingWithKeyboard(b.page, N)
+  // tldraw moves the caret to the end once more 100 ms after the text editor mounts.
+  await b.page.waitForTimeout(200)
+  await b.page.keyboard.press('ControlOrMeta+a')
   await typeText(b.page, 'bob took over')
   await stopTextEditing(b.page)
   await expect.poll(() => shapeText(a.page, N)).toBe('bob took over')

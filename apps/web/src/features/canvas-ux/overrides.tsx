@@ -231,6 +231,9 @@ export const canvasUxOverrides: TLUiOverrides = {
       'shortcuts-dialog.dr-paste-notes': 'Paste lines or cells as sticky notes',
       'shortcuts-dialog.dr-dblclick-note': 'New sticky note (double-click empty canvas)',
       'shortcuts-dialog.dr-rename-frame': 'Rename the selected frame',
+      'shortcuts-dialog.dr-edit-note': 'Edit the selected note (caret at the end)',
+      'shortcuts-dialog.dr-selection-toolbar': 'Go to the selection toolbar (Esc returns)',
+      'shortcuts-dialog.dr-context-menu': 'Open the context menu for the selection',
     },
   },
 }

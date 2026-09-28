@@ -8,6 +8,7 @@
 
 import { type KeyboardEvent, useEffect, useMemo, useRef, useState } from 'react'
 import { type Editor, type TLShapeId, useValue } from 'tldraw'
+import { isTextEntry } from '../../ui/focus.ts'
 import { SearchTagFilter, searchWithTags, textOfQuery, useSearchTag } from '../tags/SearchTagFilter.tsx'
 import type { FeatureContext } from '../types.ts'
 import { searchMatches, searchState } from './bridge.ts'
@@ -70,9 +71,28 @@ export function SearchPanel({ ctx, close }: { ctx: FeatureContext; close(): void
   const set = (patch: Partial<ReturnType<typeof state.get>>) => state.set({ ...state.get(), ...patch })
 
   useEffect(() => {
-    inputRef.current?.focus()
-    inputRef.current?.select()
-  }, [focusTick])
+    void focusTick
+    const input = inputRef.current
+    if (!input) return
+    input.focus()
+    input.select()
+    // A11Y-13: the board could take the focus back right after the Ctrl/Cmd+F that opened the panel (the
+    // canvas, or a note's text editor, which tldraw focuses again 100 ms after it mounts), so the next
+    // letters switched tools or went into the note. Check again a frame later and twice more shortly
+    // after (focus only: what was typed meanwhile stays). A field outside the board keeps the focus.
+    const again = () => {
+      const a = document.activeElement
+      if (!input.isConnected || a === input) return
+      if (isTextEntry(a) && !editor.getContainer().contains(a)) return
+      input.focus()
+    }
+    const raf = requestAnimationFrame(again)
+    const timers = [setTimeout(again, 150), setTimeout(again, 300)]
+    return () => {
+      cancelAnimationFrame(raf)
+      for (const t of timers) clearTimeout(t)
+    }
+  }, [focusTick, editor])
 
   // Wave 4 tags: words also match tag names, `#word` matches tags only, and the tag filter below the
   // type chips narrows to one tag (tags/search.ts).
@@ -110,10 +130,11 @@ export function SearchPanel({ ctx, close }: { ctx: FeatureContext; close(): void
 
   const onKeyDown = (e: KeyboardEvent) => {
     if (e.key === 'Escape') {
+      // The dock hands the keyboard back to what opened the panel: the board after Ctrl/Cmd+F, the
+      // rail button after a click on it (A11Y-01).
       e.preventDefault()
       e.stopPropagation()
       close()
-      editor.focus()
       return
     }
     if (e.key === 'Enter') {
