@@ -6,6 +6,7 @@
 
 import { HAND_AUTO_LOWER_MS, type RaisedHand } from '@draftroom/contracts'
 import { type Ref, useEffect, useRef, useState } from 'react'
+import { splitGuestMarker } from '../../invite/model.ts'
 import type { FeatureContext } from '../types.ts'
 import { handNotice, waitedFor } from './hand-notices.ts'
 import { isFacilitator, useNow } from './hooks.ts'
@@ -51,14 +52,43 @@ export function HandsChip({ snap, onOpen }: { snap: WorkshopSnapshot; onOpen(): 
 }
 
 /**
+ * A person's name where space is short: a long name is cut with an ellipsis, never the "(guest)"
+ * marker after it (round-2 G-R9; the member-row pattern of the share dialog).
+ */
+export function PersonName({
+  name,
+  suffix,
+  className,
+}: {
+  name: string
+  /** Shown after the marker, never cut either (" (you)"). */
+  suffix?: string
+  className?: string
+}) {
+  const [base, marker] = splitGuestMarker(name)
+  return (
+    <span className={`dr-wk-person${className ? ` ${className}` : ''}`}>
+      <span className="dr-wk-person__name">{base}</span>
+      {marker && (
+        <span className="dr-wk-person__keep" data-testid="guest-marker">
+          {marker}
+        </span>
+      )}
+      {suffix && <span className="dr-wk-person__keep">{suffix}</span>}
+    </span>
+  )
+}
+
+/**
  * While presenting, the top bar (and its chip) and the toasts are hidden: the presenter still sees
- * that hands are up, and whose, in the corner of the slides (next to the floating timer).
+ * that hands are up, and whose, in the corner of the slides (next to the floating timer). Kept on
+ * purpose (FAC-08; round-2 F17 asked): whoever presents is the one who calls on people.
  */
 export function PresentingHands({ snap }: { snap: WorkshopSnapshot }) {
   const n = snap.hands.length
   if (n === 0) return null
   const names = snap.hands.map((h) => h.name)
-  const shown = names.slice(0, 2).join(', ') + (n > 2 ? ` +${n - 2}` : '')
+  const shown = snap.hands.slice(0, 2)
   return (
     <div
       className="dr-wk-floating dr-wk-floating--hands"
@@ -69,7 +99,12 @@ export function PresentingHands({ snap }: { snap: WorkshopSnapshot }) {
     >
       <HandIcon size={18} />
       <span className="dr-wk-floating__n">{n}</span>
-      <span className="dr-wk-floating__names">{shown}</span>
+      <span className="dr-wk-floating__names">
+        {shown.map((h, i) => (
+          <PersonName key={h.userId} name={h.name} suffix={i < shown.length - 1 ? ', ' : undefined} />
+        ))}
+        {n > 2 && <span className="dr-wk-floating__more">{` +${n - 2}`}</span>}
+      </span>
     </div>
   )
 }
@@ -137,8 +172,8 @@ export function HandsSection({
                 <span className="dr-wk-hands__pos" aria-hidden="true">
                   {i + 1}
                 </span>
-                <span className="dr-wk-hands__name">
-                  {mine ? `${h.name} (you)` : h.name}
+                <span className="dr-wk-hands__name" title={mine ? `${h.name} (you)` : h.name}>
+                  <PersonName name={h.name} suffix={mine ? ' (you)' : undefined} />
                   <span className="dr-wk-hands__when">{waitedFor(h.raisedAt, now, offset)}</span>
                 </span>
                 {(facilitator || mine) && (

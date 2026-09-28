@@ -172,6 +172,17 @@
   font-size: 12.5px;
   line-height: 1.4;
 }
+/* Why "Export CSV" is turned off (export-control): the warning ink the other export gates use. */
+.dr-wk-export-off {
+  margin: 6px 0 0;
+  padding: 6px 10px;
+  border: 1px solid var(--dr-warn-line);
+  border-radius: 8px;
+  background: var(--dr-warn-bg);
+  color: var(--dr-warn);
+  font-size: 12.5px;
+  line-height: 1.4;
+}
 .dr-wk-check {
   display: flex;
   align-items: center;
@@ -229,6 +240,22 @@ fieldset.dr-wk-stepper {
   overflow: hidden;
   pointer-events: none;
 }
+/* Revealed vote counts: above the canvas but under the top bar (.dr-topbar is z-index 20 in the same
+   stacking context), so its popovers and menus open over them (round-2 F3). Votes being cast, +1s and
+   the stepper stay in the layer above (they are controls, and must stay clickable over the canvas-ux
+   selection bar and comment pins). */
+.dr-wk-marks {
+  position: absolute;
+  inset: 0;
+  z-index: 15;
+  overflow: hidden;
+  pointer-events: none;
+}
+/* While a top-bar popover or menu is open (its button says aria-expanded), the rest of the workshop
+   layer (the "Results are in" card, the voting bar...) goes under the top bar too. */
+.dr-board:has(.dr-topbar [aria-expanded="true"]) .dr-wk-layer {
+  z-index: 16;
+}
 /* Timer-only layer above everything, including the presentation overlay (z-index 10000). */
 .dr-wk-top {
   position: absolute;
@@ -238,6 +265,7 @@ fieldset.dr-wk-stepper {
   pointer-events: none;
 }
 .dr-wk-layer button,
+.dr-wk-marks button,
 .dr-wk-prompt,
 .dr-wk-votebar,
 .dr-wk-follow,
@@ -323,12 +351,28 @@ fieldset.dr-wk-stepper {
   background: var(--dr-inverse);
   color: var(--dr-on-inverse);
   font: 700 13px / 1 var(--dr-font);
+  white-space: nowrap;
   box-shadow: 0 1px 4px rgb(0 0 0 / 30%);
+  /* Scaled from its corner (ResultBadges sets translate + scale) so it stays on the shape's corner. */
+  transform-origin: 0 0;
   pointer-events: none;
 }
 .dr-wk-badge--top {
   background: var(--dr-amber);
   color: var(--dr-on-amber);
+}
+/* Several results close together when zoomed out: one badge, drawn as a small stack, that zooms in. */
+button.dr-wk-badge--group {
+  margin: 0;
+  cursor: zoom-in;
+  box-shadow:
+    3px 3px 0 -1px var(--dr-surface),
+    3px 3px 0 0 var(--dr-line-strong),
+    0 1px 4px rgb(0 0 0 / 30%);
+}
+button.dr-wk-badge--group:focus-visible {
+  outline: 2px solid var(--dr-focus);
+  outline-offset: 2px;
 }
 .dr-wk-badge__rank {
   font-size: 11px;
@@ -768,11 +812,32 @@ html[data-dr-hide-authors] .tl-note__attribution {
   top: 68px;
 }
 .dr-wk-floating__names {
+  display: flex;
+  min-width: 0;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.dr-wk-floating__more {
+  flex: none;
+  white-space: pre;
+}
+
+/* A name that may be cut: the name gets the ellipsis, "(guest)" and "(you)" always stay (round-2
+   G-R9; the share dialog's member rows work the same way). */
+.dr-wk-person {
+  display: flex;
+  min-width: 0;
+  max-width: 100%;
+}
+.dr-wk-person__name {
   min-width: 0;
   overflow: hidden;
-  font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.dr-wk-person__keep {
+  flex: none;
+  white-space: pre;
 }
 
 .dr-wk-hands {
@@ -807,10 +872,8 @@ html[data-dr-hide-authors] .tl-note__attribution {
   flex: 1;
   flex-direction: column;
   min-width: 0;
-  overflow: hidden;
   font-size: 13px;
   font-weight: 600;
-  text-overflow: ellipsis;
   white-space: nowrap;
 }
 .dr-wk-hands__when {
@@ -960,4 +1023,22 @@ html[data-dr-hide-authors] .tl-note__attribution {
 .dr-wk-plusone[aria-disabled="true"] {
   color: var(--dr-ink-2);
   cursor: not-allowed;
+}
+
+/* Phones: opened from a pill in the "⋯" menu, the workshop tools and the reactions, anchored to the
+   pill's right edge, ran off the screen's left edge. They span the screen under the top bar instead.
+   (Last in the file, so it wins over the rules above.) */
+@media (max-width: 600px) {
+  .dr-wk-pop,
+  .dr-wk-reactbar {
+    position: fixed;
+    top: calc(var(--dr-topbar-h) + 8px);
+    right: 8px;
+    left: 8px;
+    width: auto;
+    max-width: none;
+  }
+  .dr-wk-pop {
+    max-height: calc(100dvh - var(--dr-topbar-h) - 16px);
+  }
 }

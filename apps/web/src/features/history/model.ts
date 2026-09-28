@@ -89,6 +89,33 @@ export function historyPermissions(
   }
 }
 
+/** How an action shows: usable, shown but turned off (with the reason), or not offered at all. */
+export type ActionState = 'on' | 'off' | 'hidden'
+
+export interface CopyActions {
+  duplicate: ActionState
+  restoreAsNew: ActionState
+  exportJson: ActionState
+  /** Show the export-off reason (EXPORT_OFF_TEXT) next to the turned-off actions. */
+  exportOff: boolean
+}
+
+/**
+ * Duplicate, restore a checkpoint as a new board and the .json export are full copies of the board:
+ * when the owner turned exporting off for viewers and commenters (`canExport` false), the api refuses
+ * them (403 EXPORT_DISABLED), so they are shown turned off with the reason. People who cannot create
+ * boards (guests) are not offered the first two at all.
+ */
+export function copyActions(perms: HistoryPermissions, canExport: boolean): CopyActions {
+  const creating: ActionState = !perms.canCreateBoards ? 'hidden' : canExport ? 'on' : 'off'
+  return {
+    duplicate: creating,
+    restoreAsNew: creating,
+    exportJson: canExport ? 'on' : 'off',
+    exportOff: !canExport,
+  }
+}
+
 /** One line after a "Recently deleted" restore. */
 export function restoreSummary(r: RestoreDeletedResponse): string {
   if (r.restored.length === 0) {

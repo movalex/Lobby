@@ -14,7 +14,14 @@
 // Permissions:
 // - GET: `view` (everyone on the board sees the session, its prompt and the counts).
 // - Start, add/edit/delete your own drafts: `edit` on an active board.
-// - Reveal / place / cancel: `edit`, and the person who started it or a board owner.
+// - Reveal / place / cancel: `edit`, and the person who started it or a board owner. Once the starter
+//   can no longer edit the board (removed, lowered to a read-only role, or a name-only guest who
+//   signed out or whose session ended), any editor with an account may too, so a session nobody can
+//   end never blocks the board (round-2 SEAM-07). Guests never take over someone else's session.
+// - At reveal, drafts of people who left the board (removed from it, or a name-only guest who signed
+//   out or whose session ended) are discarded, never placed: in an anonymous session nobody could
+//   tell which note to take down. People lowered to a read-only role are still on the board and keep
+//   their drafts (written while they could edit).
 
 import {
   AddPrivateNoteInput,
@@ -36,7 +43,8 @@ import { isUniqueViolation, type Queryable } from '@draftroom/db'
 import { can } from '@draftroom/permissions'
 import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
-import { type BoardAccess, requireBoardAction } from '../../access.ts'
+import { type BoardAccess, loadBoardAccessMany, pairKey, requireBoardAction } from '../../access.ts'
+import { userKind } from '../../auth/users.ts'
 import type { Params } from '../../context.ts'
 import { ApiError, conflict, forbidden, notFound, parse } from '../../errors.ts'
 import { SlidingWindowLimiter } from '../../rate-limit.ts'
@@ -180,8 +188,65 @@ async function myNotes(q: Queryable, sessionId: string, userId: string): Promise
 }
 
 const mayEdit = (access: BoardAccess) => can(access.role, 'edit', access.board.status)
-const mayReveal = (access: BoardAccess, row: SessionRow, userId: string) =>
-  mayEdit(access) && (row.created_by === userId || access.role === 'owner')
+
+/**
+ * Which of `userIds` may `action` on the board right now: the board role for it and, for a name-only
+ * guest, a live session (a guest who signed out cannot sign in again; the guest sweep removes their
+ * grants later, this does not wait for it).
+ */
+async function allowedNow(
+  q: Queryable,
+  boardId: string,
+  userIds: readonly string[],
+  action: 'view' | 'edit',
+  at: Date,
+): Promise<Set<string>> {
+  const ids = [...new Set(userIds)]
+  if (ids.length === 0) return new Set()
+  const access = await loadBoardAccessMany(
+    q,
+    ids.map((userId) => ({ boardId, userId })),
+  )
+  const allowed = ids.filter((userId) => {
+    const a = access.get(pairKey({ boardId, userId }))
+    return !!a && can(a.role, action, a.board.status)
+  })
+  if (allowed.length === 0) return new Set()
+  const gone = await q.query<{ id: string }>(
+    `SELECT u.id FROM users u
+      WHERE u.id = ANY($1::text[]) AND u.kind = 'guest'
+        AND NOT EXISTS (SELECT 1 FROM sessions s
+                         WHERE s.user_id = u.id AND s.revoked_at IS NULL AND s.expires_at > $2)`,
+    [allowed, at],
+  )
+  const left = new Set(gone.rows.map((r) => r.id))
+  return new Set(allowed.filter((id) => !left.has(id)))
+}
+
+interface RevealRight {
+  canReveal: boolean
+  /** The starter can no longer edit the board (reported to people who can edit it only). */
+  starterLeft: boolean
+}
+
+/**
+ * May the caller reveal, place or cancel `row`? The starter and board owners may; once the starter
+ * can no longer edit the board, so may any editor with an account.
+ */
+async function revealRight(
+  q: Queryable,
+  access: BoardAccess,
+  row: SessionRow,
+  userId: string,
+  at: Date,
+): Promise<RevealRight> {
+  if (!mayEdit(access)) return { canReveal: false, starterLeft: false }
+  if (row.created_by === userId) return { canReveal: true, starterLeft: false }
+  const starterLeft = !(await allowedNow(q, row.board_id, [row.created_by], 'edit', at)).has(row.created_by)
+  if (access.role === 'owner') return { canReveal: true, starterLeft }
+  if (!starterLeft) return { canReveal: false, starterLeft }
+  return { canReveal: (await userKind(q, userId)) === 'account', starterLeft }
+}
 
 // ---- placement ----------------------------------------------------------------------------------------
 
@@ -271,13 +336,20 @@ export function registerPrivateNotes(
   async function stateFor(access: BoardAccess, userId: string): Promise<PrivateBrainstormState> {
     const row = await activeSession(db, access.board.id)
     if (!row)
-      return { session: null, counts: { notes: 0, people: 0 }, myNotes: [], canReveal: false, placed: null }
+      return {
+        session: null,
+        counts: { notes: 0, people: 0 },
+        myNotes: [],
+        canReveal: false,
+        starterLeft: false,
+        placed: null,
+      }
     return {
       session: toSession(row),
       counts: await countsOf(db, row.id),
       // Your own drafts, whatever your role now (you wrote them while you could edit).
       myNotes: await myNotes(db, row.id, userId),
-      canReveal: mayReveal(access, row, userId),
+      ...(await revealRight(db, access, row, userId, now())),
       placed: null,
     }
   }
@@ -461,7 +533,7 @@ export function registerPrivateNotes(
   app.post('/api/private-brainstorms/:sid/reveal', async (req) => {
     const user = await ctx.requireUser(req)
     const { row: found, access } = await sessionFor(req, user.id, 'edit')
-    if (!mayReveal(access, found, user.id))
+    if (!(await revealRight(db, access, found, user.id, now())).canReveal)
       throw forbidden('Only the person who started this brainstorm or a board owner can reveal it.')
     // From reading the drafts until the result is recorded, this reveal holds the session against a
     // cancel (see `placing`): the hold is taken under the session lock, before the drafts go out.
@@ -492,11 +564,29 @@ export function registerPrivateNotes(
           `SELECT ${NOTE_COLUMNS} FROM private_notes WHERE session_id = $1 ORDER BY seq`,
           [row.id],
         )
+        // Drafts of people who left the board (removed, or a guest who signed out) are discarded,
+        // never placed (SEAM-07). Someone lowered to a read-only role is still on the board: their
+        // drafts, written while they could edit, are placed like everyone's.
+        const present = await allowedNow(
+          tx,
+          row.board_id,
+          drafts.rows.map((n) => n.author_id),
+          'view',
+          now(),
+        )
+        const dropped = drafts.rows.filter((n) => !present.has(n.author_id)).map((n) => n.id)
+        if (dropped.length > 0) {
+          await tx.query('DELETE FROM private_notes WHERE session_id = $1 AND id = ANY($2::text[])', [
+            row.id,
+            dropped,
+          ])
+          changed = true // the counts everyone sees went down
+        }
         if (!held) {
           hold(row.id)
           held = true
         }
-        return { row, changed, waiting: drafts.rows }
+        return { row, changed, waiting: drafts.rows.filter((n) => present.has(n.author_id)) }
       })
       if (marked.changed) await publish(marked.row)
       if (marked.row.status === 'placed')
@@ -562,7 +652,7 @@ export function registerPrivateNotes(
   app.post('/api/private-brainstorms/:sid/cancel', async (req) => {
     const user = await ctx.requireUser(req)
     const { row: found, access } = await sessionFor(req, user.id, 'edit')
-    if (!mayReveal(access, found, user.id))
+    if (!(await revealRight(db, access, found, user.id, now())).canReveal)
       throw forbidden('Only the person who started this brainstorm or a board owner can cancel it.')
     const out = await db.transaction(async (tx) => {
       const locked = await lockSession(tx, found.id)

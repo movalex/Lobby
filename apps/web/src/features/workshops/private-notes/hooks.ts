@@ -22,5 +22,11 @@ export function describeCounts(c: { notes: number; people: number }): string {
   return `${notes} from ${c.people} ${c.people === 1 ? 'person' : 'people'}`
 }
 
+/** The top-bar chip's words (round-2 F17): "3 notes from 2 people", never "3 from 2". */
+export function chipCounts(status: string, c: { notes: number; people: number }): string {
+  if (status === 'revealed') return 'Revealing…'
+  return c.notes === 0 ? 'Waiting for notes' : describeCounts(c)
+}
+
 /** The dock panel's id (FeaturePanel.id). */
 export const PRIVATE_PANEL_ID = 'private-notes'

@@ -4,22 +4,39 @@
 import type { VoteResult, WorkshopVoteState } from '@draftroom/contracts'
 
 const MAX_TEXT_NODES = 2_000
+/** Rich-text nodes that end a line. */
+const LINE_ENDS = new Set(['paragraph', 'heading', 'listItem', 'codeBlock', 'blockquote'])
+/** Between the lines of a multi-line note in one-line labels and the CSV (round-2 F17). */
+export const LINE_SEPARATOR = ' · '
 
-/** TipTap JSON -> plain text (paragraphs joined by spaces). Bounded; never throws. */
+/**
+ * TipTap JSON -> one line of plain text: the note's lines joined by " · " ("Book review slots ·
+ * Owner: producer"), empty lines dropped. Bounded; never throws.
+ */
 export function plainTextFromRichText(richText: unknown): string {
-  const out: string[] = []
+  const lines: string[] = []
+  let line = ''
   let visited = 0
+  const endLine = () => {
+    lines.push(line)
+    line = ''
+  }
   const walk = (node: unknown, depth: number) => {
     if (!node || typeof node !== 'object' || depth > 40 || visited++ > MAX_TEXT_NODES) return
     const n = node as { type?: unknown; text?: unknown; content?: unknown }
-    if (typeof n.text === 'string') out.push(n.text)
+    if (typeof n.text === 'string') line += n.text
+    if (n.type === 'hardBreak') endLine()
     if (Array.isArray(n.content)) {
       for (const child of n.content) walk(child, depth + 1)
-      if (n.type === 'paragraph' || n.type === 'heading' || n.type === 'listItem') out.push(' ')
+      if (typeof n.type === 'string' && LINE_ENDS.has(n.type)) endLine()
     }
   }
   walk(richText, 0)
-  return out.join('').replace(/\s+/g, ' ').trim()
+  endLine()
+  return lines
+    .map((l) => l.replace(/\s+/g, ' ').trim())
+    .filter(Boolean)
+    .join(LINE_SEPARATOR)
 }
 
 const TYPE_NAMES: Record<string, string> = {
@@ -45,6 +62,91 @@ export function shapeLabel(shape: { type: string; props?: unknown } | undefined)
   if (typeof props.name === 'string' && props.name.trim()) return props.name.trim()
   if (typeof props.altText === 'string' && props.altText.trim()) return props.altText.trim()
   return `Untitled ${typeName(shape.type).toLowerCase()}`
+}
+
+/**
+ * "1 of 3 done · 6 votes cast" for the facilitator; before anyone joined or voted, "Waiting for
+ * votes" rather than "0 of 0 done · 0 votes cast" (round-2 F17).
+ */
+export function describeProgress(v: {
+  participants: number
+  participantsDone: number
+  totalVotesCast: number
+}): string {
+  if (v.participants === 0 && v.totalVotesCast === 0) return 'Waiting for votes'
+  const votes = `${v.totalVotesCast} vote${v.totalVotesCast === 1 ? '' : 's'} cast`
+  return `${v.participantsDone} of ${v.participants} done · ${votes}`
+}
+
+// ---- result badges on the board (round-2 F3) ----------------------------------------------------------
+
+/** A result badge at a shape's top-right corner, in screen pixels. */
+export interface BadgePlacement {
+  shapeId: string
+  x: number
+  y: number
+  rank: number
+  /** Votes. */
+  n: number
+}
+
+/** Badges that would overlap on screen, shown as one. */
+export interface BadgeGroup {
+  /** Where the best-ranked member's badge sits. */
+  x: number
+  y: number
+  best: number
+  votes: number
+  /** Best rank first. */
+  members: BadgePlacement[]
+}
+
+/** Badge size relative to full: full at 100% zoom and closer, shrinking with the zoom down to 60%. */
+export function badgeScale(zoom: number): number {
+  return Math.min(1, Math.max(0.6, zoom))
+}
+
+/** How close two badge corners may be (px at full size) before the badges overlap. */
+const BADGE_SPAN = { x: 56, y: 32 }
+
+/**
+ * Groups badges that would overlap at `scale` (neighbours of neighbours included, so no two groups
+ * overlap either). Zoomed in, every badge is its own group.
+ */
+export function clusterBadges(items: readonly BadgePlacement[], scale: number): BadgeGroup[] {
+  const sorted = [...items].sort(
+    (a, b) => a.rank - b.rank || b.n - a.n || (a.shapeId < b.shapeId ? -1 : a.shapeId > b.shapeId ? 1 : 0),
+  )
+  const parent = sorted.map((_, i) => i)
+  const root = (i: number): number => {
+    let r = i
+    while (parent[r] !== r) r = parent[r] as number
+    parent[i] = r
+    return r
+  }
+  const dx = BADGE_SPAN.x * scale
+  const dy = BADGE_SPAN.y * scale
+  for (let i = 0; i < sorted.length; i++) {
+    for (let j = i + 1; j < sorted.length; j++) {
+      const a = sorted[i] as BadgePlacement
+      const b = sorted[j] as BadgePlacement
+      if (Math.abs(a.x - b.x) < dx && Math.abs(a.y - b.y) < dy) {
+        const [ra, rb] = [root(i), root(j)]
+        // The better-ranked badge (the lower index) stays the root.
+        if (ra !== rb) parent[Math.max(ra, rb)] = Math.min(ra, rb)
+      }
+    }
+  }
+  const groups = new Map<number, BadgeGroup>()
+  sorted.forEach((b, i) => {
+    const r = root(i)
+    const g = groups.get(r)
+    if (g) {
+      g.members.push(b)
+      g.votes += b.n
+    } else groups.set(r, { x: b.x, y: b.y, best: b.rank, votes: b.n, members: [b] })
+  })
+  return [...groups.values()]
 }
 
 /** The top of the ranking (ties at the cut-off are included, so nobody sharing 3rd place is hidden). */

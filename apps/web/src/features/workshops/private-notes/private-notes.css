@@ -17,8 +17,9 @@
   font-variant-numeric: tabular-nums;
   font-weight: 500;
 }
-/* The overflow menu (phones) has room for the label; the bar itself may not. */
-@media (max-width: 1100px) {
+/* The overflow menu (phones) has room for the label; the bar itself may not: below 1500 px the chip
+   is the lock and "3 notes from 2 people" (its tooltip and accessible name say what it is). */
+@media (max-width: 1500px) {
   .dr-topbar .dr-pn-chip__label {
     display: none;
   }

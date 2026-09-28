@@ -6,18 +6,24 @@ import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { draftroomSchema } from '@draftroom/canvas-schema'
 import { NodeSqliteWrapper, SQLiteSyncStorage } from '@tldraw/sync-core'
-import type { TLRecord } from '@tldraw/tlschema'
+import type { TLArrowBinding, TLFrameShape, TLPageId, TLRecord, TLShape } from '@tldraw/tlschema'
 import { afterEach, describe, expect, it } from 'vitest'
+// The real sample board (a test-only import: the sync server itself never depends on templates).
+import { instantiateTemplate } from '../../../../packages/templates/src/index.ts'
+import { estimateShapeRect } from '../../../../packages/templates/src/layout.ts'
 import { createSyncServer } from '../../src/app.ts'
 import {
   estimateGrowY,
   FRAME_PAD,
   indicesAbove,
   layoutGrid,
+  layoutInFreeSpace,
   NOTE_SIZE,
+  type Obstacle,
   type PlaceNotesRequest,
   parsePlaceRequest,
   placeNotes,
+  SHAPE_CLEARANCE,
 } from '../../src/http/place-notes.ts'
 import { emptyBoardSnapshot } from '../../src/snapshot.ts'
 import { noteShape, PAGE_ID, plainText, type ShapeRecord } from '../harness/records.ts'
@@ -158,6 +164,204 @@ describe('layout', () => {
     for (const k of [keys[0], keys[999], indicesAbove(null, 1)[0]]) {
       const n = { ...noteShape('k', 'x'), index: k }
       expect(() => draftroomSchema.types.shape.validate(n)).not.toThrow()
+    }
+  })
+})
+
+describe('free space inside the frame (round-2 F5)', () => {
+  const notes = (n: number) =>
+    Array.from({ length: n }, (_, i) => ({ id: `n${i}`, height: NOTE_SIZE, group: null }))
+  const rectAt = (p: { x: number; y: number }) => ({ x: p.x, y: p.y, w: NOTE_SIZE, h: NOTE_SIZE })
+
+  it('an empty frame gets the same grid as before, from the top-left corner', () => {
+    const items = notes(3)
+    const free = layoutInFreeSpace({ frameW: 1000, frameH: 600, obstacles: [], items })
+    const grid = layoutGrid({ frameW: 1000, frameH: 600, contentBottom: null, items })
+    expect(free && [...free]).toEqual([...grid.positions])
+  })
+
+  it('goes into the empty part of a frame, lined up with its content and clear of it', () => {
+    const title: Obstacle = { rect: { x: 80, y: 56, w: 1440, h: 80 }, clear: SHAPE_CLEARANCE }
+    const cards: Obstacle = { rect: { x: 80, y: 600, w: 1440, h: 300 }, clear: SHAPE_CLEARANCE }
+    const out = layoutInFreeSpace({
+      frameW: 1600,
+      frameH: 1000,
+      obstacles: [title, cards],
+      items: notes(3),
+      alignX: 80,
+    })
+    const ps = [...(out?.values() ?? [])]
+    expect(ps).toHaveLength(3)
+    expect(ps[0]).toEqual({ x: 80, y: 56 + 80 + SHAPE_CLEARANCE })
+    for (const p of ps)
+      for (const o of [title, cards]) expect(overlaps(rectAt(p), o.rect, SHAPE_CLEARANCE - 1)).toBe(false)
+  })
+
+  it('a connector blocks only along its line, not its whole bounding box', () => {
+    // A diagonal from the top-right to the bottom-left corner: the top-left half of the frame is free.
+    const line: Obstacle = {
+      rect: { x: 0, y: 0, w: 1000, h: 1000 },
+      clear: 24,
+      segments: [
+        [
+          { x: 1000, y: 0 },
+          { x: 0, y: 1000 },
+        ],
+      ],
+    }
+    const out = layoutInFreeSpace({ frameW: 1000, frameH: 1000, obstacles: [line], items: notes(2) })
+    expect(out?.size).toBe(2)
+    for (const p of out?.values() ?? []) expect(p.x + p.y + 2 * NOTE_SIZE).toBeLessThan(1000)
+  })
+
+  it('splits the notes between separate empty areas when no one area holds them all', () => {
+    // Room for two notes left of a central block and two right of it, nothing below.
+    const center: Obstacle = { rect: { x: 560, y: 0, w: 480, h: 1000 }, clear: SHAPE_CLEARANCE }
+    const bottom: Obstacle = { rect: { x: 0, y: 420, w: 1600, h: 580 }, clear: SHAPE_CLEARANCE }
+    const out = layoutInFreeSpace({
+      frameW: 1600,
+      frameH: 1000,
+      obstacles: [center, bottom],
+      items: notes(4),
+    })
+    const ps = [...(out?.values() ?? [])]
+    expect(ps).toHaveLength(4)
+    expect(ps.filter((p) => p.x + NOTE_SIZE <= 560)).toHaveLength(2)
+    expect(ps.filter((p) => p.x >= 1040)).toHaveLength(2)
+    for (let i = 0; i < ps.length; i++)
+      for (let j = i + 1; j < ps.length; j++)
+        expect(
+          overlaps(rectAt(ps[i] as { x: number; y: number }), rectAt(ps[j] as { x: number; y: number })),
+        ).toBe(false)
+  })
+
+  it('no room for every note: null, and the caller grows the frame below its content instead', () => {
+    const full: Obstacle = { rect: { x: 0, y: 0, w: 1000, h: 600 }, clear: SHAPE_CLEARANCE }
+    expect(layoutInFreeSpace({ frameW: 1000, frameH: 600, obstacles: [full], items: notes(1) })).toBeNull()
+    expect(layoutInFreeSpace({ frameW: 1000, frameH: 600, obstacles: [], items: notes(13) })).toBeNull()
+  })
+})
+
+/** Whether two rectangles overlap, or come closer than `gap`. */
+function overlaps(
+  a: { x: number; y: number; w: number; h: number },
+  b: { x: number; y: number; w: number; h: number },
+  gap = 0,
+) {
+  return a.x < b.x + b.w + gap && b.x < a.x + a.w + gap && a.y < b.y + b.h + gap && b.y < a.y + a.h + gap
+}
+
+describe('revealing into the Lobby tour (round-2 F5)', () => {
+  type Rec = TLRecord & { x: number; y: number; parentId: string; type: string; props: Record<string, never> }
+  /** A storage holding the Lobby tour sample board, and its "2 · Brainstorm" frame. */
+  function tourStorage(db: DatabaseSync) {
+    const storage = new SQLiteSyncStorage<TLRecord>({
+      sql: new NodeSqliteWrapper(db),
+      snapshot: emptyBoardSnapshot(draftroomSchema),
+    })
+    const { records } = instantiateTemplate('lobby-tour', {
+      pageId: PAGE_ID as TLPageId,
+      origin: { x: 0, y: 0 },
+    })
+    storage.transaction((txn) => {
+      for (const r of records) txn.set(r.id, r as TLRecord)
+    })
+    const frame = records.find(
+      (r) => r.typeName === 'shape' && r.type === 'frame' && r.props.name === '2 · Brainstorm',
+    ) as TLFrameShape
+    const all = () => storage.transaction((txn) => [...txn.values()]).result as Rec[]
+    return { storage, frame, all }
+  }
+
+  /** Everything the frame held before, as the template estimates it (independent of the endpoint). */
+  function checkClear(all: Rec[], frameId: string, placed: readonly string[]) {
+    const byId = new Map<string, Rec>(all.map((r) => [r.id, r]))
+    const mine = new Set<string>(placed)
+    const kids = all.filter((r) => r.typeName === 'shape' && r.parentId === frameId && !mine.has(r.id))
+    const notesPlaced = placed.map((id) => byId.get(id) as Rec)
+    const noteRect = (n: Rec) => ({
+      x: n.x,
+      y: n.y,
+      w: NOTE_SIZE,
+      h: NOTE_SIZE + Number((n.props as { growY: number }).growY),
+    })
+    for (const k of kids.filter((r) => r.type !== 'arrow')) {
+      const r = estimateShapeRect(k as unknown as TLShape)
+      for (const n of notesPlaced) expect(overlaps(noteRect(n), r), `${n.id} over ${k.id}`).toBe(false)
+    }
+    // Connectors: sample their line between what they are attached to.
+    const bindings = all.filter((r) => r.typeName === 'binding') as unknown as TLArrowBinding[]
+    for (const arrow of kids.filter((r) => r.type === 'arrow')) {
+      const end = (terminal: 'start' | 'end') => {
+        const b = bindings.find((x) => x.fromId === arrow.id && x.props.terminal === terminal)
+        const target = byId.get(b?.toId ?? '') as Rec
+        const r = estimateShapeRect(target as unknown as TLShape)
+        const a = b?.props.isPrecise ? b.props.normalizedAnchor : { x: 0.5, y: 0.5 }
+        return { x: r.x + a.x * r.w, y: r.y + a.y * r.h }
+      }
+      const [p, q] = [end('start'), end('end')]
+      for (let i = 0; i <= 100; i++) {
+        const pt = { x: p.x + ((q.x - p.x) * i) / 100, y: p.y + ((q.y - p.y) * i) / 100 }
+        for (const n of notesPlaced)
+          expect(overlaps(noteRect(n), { ...pt, w: 0, h: 0 }), `${n.id} on ${arrow.id}`).toBe(false)
+      }
+    }
+    return notesPlaced.map(noteRect)
+  }
+
+  it('three notes go into the Brainstorm frame’s empty space: the frame keeps its 16:10 size', () => {
+    const db = new DatabaseSync(':memory:')
+    try {
+      const { storage, frame, all } = tourStorage(db)
+      const input = parsePlaceRequest(
+        request({
+          frame: { id: frame.id, pageId: PAGE_ID, x: frame.x, y: frame.y, w: 1600, h: 1000, name: 'x' },
+        }),
+      )
+      const out = placeNotes({ storage, schema: draftroomSchema, input })
+      expect(out.placed).toHaveLength(3)
+      const records = all()
+      const after = records.find((r) => r.id === frame.id) as unknown as TLFrameShape
+      expect(after.props).toMatchObject({ w: 1600, h: 1000 })
+      for (const r of checkClear(records, frame.id, out.placed)) {
+        expect(r.x).toBeGreaterThanOrEqual(FRAME_PAD)
+        expect(r.y).toBeGreaterThanOrEqual(FRAME_PAD)
+        expect(r.x + r.w).toBeLessThanOrEqual(1600 - FRAME_PAD)
+        expect(r.y + r.h).toBeLessThanOrEqual(1000 - FRAME_PAD)
+      }
+    } finally {
+      db.close()
+    }
+  })
+
+  it('twelve notes do not fit: the frame grows below its content, which they never cover', () => {
+    const db = new DatabaseSync(':memory:')
+    try {
+      const { storage, frame, all } = tourStorage(db)
+      const input = parsePlaceRequest(
+        request({
+          anonymous: true,
+          authors: [],
+          frame: { id: frame.id, pageId: PAGE_ID, x: frame.x, y: frame.y, w: 1600, h: 1000, name: 'x' },
+          notes: Array.from({ length: 12 }, (_, i) => ({
+            id: noteId(i),
+            text: `Idea ${i}`,
+            color: 'yellow',
+            authorId: null,
+          })),
+        }),
+      )
+      const out = placeNotes({ storage, schema: draftroomSchema, input })
+      expect(out.placed).toHaveLength(12)
+      const records = all()
+      const after = records.find((r) => r.id === frame.id) as unknown as TLFrameShape
+      expect(after.props.w).toBe(1600)
+      expect(after.props.h).toBeGreaterThan(1000)
+      const rects = checkClear(records, frame.id, out.placed)
+      // lined up with the frame's content (the tour's 80 px margin), not the frame edge
+      expect(Math.min(...rects.map((r) => r.x))).toBe(80)
+    } finally {
+      db.close()
     }
   })
 })
@@ -335,7 +539,7 @@ describe('internal place-notes endpoint', () => {
     expect(alice.get(`user:${BOB}`)).toMatchObject({ name: 'Bob Chen' })
   })
 
-  it('starts below what the frame already holds and survives a server restart', async () => {
+  it('never covers what the frame already holds, and survives a server restart', async () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'dr-sync-place-'))
     try {
       const start = async () => {
@@ -367,7 +571,14 @@ describe('internal place-notes endpoint', () => {
         await bob.waitForSynced()
         const notes = notesOf(bob)
         expect(notes).toHaveLength(3)
-        for (const n of notes) expect(n.y).toBeGreaterThanOrEqual(40 + NOTE_SIZE)
+        // The note already in the frame (0, 40) keeps its space: the three go into the free space
+        // beside it (the frame has room for them, so it does not grow).
+        const inside = { x: 0, y: 40, w: NOTE_SIZE, h: NOTE_SIZE }
+        for (const n of notes) {
+          const r = { x: n.x, y: n.y, w: NOTE_SIZE, h: NOTE_SIZE + Number(n.props.growY) }
+          expect(overlaps(r, inside, SHAPE_CLEARANCE - 1)).toBe(false)
+        }
+        expect(bob.get('shape:frame1')).toMatchObject({ props: { w: 1000, h: 600 } })
         // and a retry after the restart still places nothing twice
         const again = (await (await place(second, request())).json()) as { placed: string[] }
         expect(again.placed).toEqual([])

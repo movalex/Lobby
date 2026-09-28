@@ -6,7 +6,7 @@
 
 import { isVoteEligible, type VoteEligibilityRule } from '@draftroom/contracts'
 import { type KeyboardEvent as ReactKeyboardEvent, useEffect, useMemo, useRef, useState } from 'react'
-import { type Editor, type TLEventInfo, type TLShapeId, useValue } from 'tldraw'
+import { Box, type Editor, type TLEventInfo, type TLShapeId, useValue } from 'tldraw'
 import type { FeatureContext } from '../types.ts'
 import { formatClock, timerDisplayPhase, timerRemainingMs } from './countdown.ts'
 import { HandToasts, PresentingHands } from './Hands.tsx'
@@ -15,7 +15,7 @@ import { PlusOnes } from './PlusOnes.tsx'
 import { usePresenting } from './presenting.ts'
 import { ReactionBursts } from './Reactions.tsx'
 import type { WorkshopStore } from './store.ts'
-import { readingOrder, shapeLabel, topResults } from './voting.ts'
+import { badgeScale, clusterBadges, readingOrder, shapeLabel, topResults } from './voting.ts'
 import { StopwatchIcon } from './WorkshopBar.tsx'
 
 interface Placed {
@@ -70,15 +70,18 @@ export function WorkshopOverlay({ ctx }: { ctx: FeatureContext }) {
 
   return (
     <>
+      {/* Revealed counts: above the canvas, under the top bar and its popovers (round-2 F3). */}
+      <div className="dr-wk-marks" data-testid="workshop-marks">
+        {vote?.session.status === 'revealed' && vote.results && snap.showResults && (
+          <ResultBadges ctx={ctx} />
+        )}
+      </div>
       <div className="dr-wk-layer" data-testid="workshop-overlay">
         {/* +1s sit under the vote markers (both are on shapes; votes win while a vote runs). */}
         {!presenting && <PlusOnes ctx={ctx} />}
         {joined && snap.ballot && <MyDots ctx={ctx} store={store} myVotes={snap.ballot.myVotes} />}
         {voting && <ClickToVote ctx={ctx} store={store} />}
         {voting && <SelectedStepper ctx={ctx} store={store} />}
-        {vote?.session.status === 'revealed' && vote.results && snap.showResults && (
-          <ResultBadges ctx={ctx} />
-        )}
         {/* One stack, top to bottom, so messages never cover each other (RETRO-11). */}
         {!presenting && (
           <div className="dr-wk-stack" data-testid="workshop-stack">
@@ -481,32 +484,100 @@ function SelectedStepper({ ctx, store }: { ctx: FeatureContext; store: WorkshopS
   )
 }
 
+const votesText = (n: number) => `${n} vote${n === 1 ? '' : 's'}`
+
+/**
+ * Revealed counts on the voted objects (round-2 F3): full size from 100% zoom, smaller as the board
+ * zooms out (down to 60%), and badges that would overlap become one group badge ("#1 +2", the best
+ * rank and how many more) that zooms in to them when clicked. They sit in the marks layer, under the
+ * top bar's popovers.
+ */
 function ResultBadges({ ctx }: { ctx: FeatureContext }) {
   const { snap } = useWorkshop(ctx)
+  const editor = ctx.editor
   const counts = useMemo(
     () =>
       Object.fromEntries((snap.vote?.results ?? []).map((r) => [r.shapeId, { n: r.count, rank: r.rank }])),
     [snap.vote?.results],
   )
   const placed = usePlacements(ctx, counts, 'results')
+  const scale = useValue('dr-wk-badge-scale', () => badgeScale(editor.getZoomLevel()), [editor])
+  const groups = useMemo(
+    () =>
+      clusterBadges(
+        placed.map((p) => ({ shapeId: p.shapeId, x: p.x, y: p.y, n: p.n, rank: p.rank ?? 0 })),
+        scale,
+      ),
+    [placed, scale],
+  )
+  const at = (x: number, y: number) => ({
+    transform: `translate(${x}px, ${y}px) scale(${scale}) translate(-18px, -14px)`,
+  })
   return (
     <>
-      {placed.map((p) => (
-        <div
-          key={p.shapeId}
-          className={`dr-wk-badge${p.rank && p.rank <= 3 ? ' dr-wk-badge--top' : ''}`}
-          data-testid="vote-count"
-          data-shape-id={p.shapeId}
-          data-rank={p.rank}
-          style={{ transform: `translate(${p.x - 18}px, ${p.y - 14}px)` }}
-          title={`${p.n} vote${p.n === 1 ? '' : 's'} (rank ${p.rank})`}
-        >
-          {p.rank && p.rank <= 3 && <span className="dr-wk-badge__rank">#{p.rank}</span>}
-          {p.n}
-        </div>
-      ))}
+      {groups.map((g) => {
+        const [first] = g.members
+        if (!first) return null
+        if (g.members.length === 1)
+          return (
+            <div
+              key={first.shapeId}
+              className={`dr-wk-badge${first.rank <= 3 ? ' dr-wk-badge--top' : ''}`}
+              data-testid="vote-count"
+              data-shape-id={first.shapeId}
+              data-rank={first.rank}
+              style={at(g.x, g.y)}
+              title={`${votesText(first.n)} (rank ${first.rank})`}
+            >
+              {first.rank <= 3 && <span className="dr-wk-badge__rank">#{first.rank}</span>}
+              {first.n}
+            </div>
+          )
+        const label = `${g.members.length} results here, ${votesText(g.votes)} in all, the best ranked ${g.best}. Zoom in to see each.`
+        return (
+          <button
+            type="button"
+            key={`group:${first.shapeId}`}
+            className={`dr-wk-badge dr-wk-badge--group${g.best <= 3 ? ' dr-wk-badge--top' : ''}`}
+            data-testid="vote-count-group"
+            data-count={g.members.length}
+            data-rank={g.best}
+            style={at(g.x, g.y)}
+            title={label}
+            aria-label={label}
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={() =>
+              zoomToShapes(
+                editor,
+                g.members.map((m) => m.shapeId),
+              )
+            }
+          >
+            {g.best <= 3 && <span className="dr-wk-badge__rank">#{g.best}</span>}
+            <span aria-hidden="true">+{g.members.length - 1}</span>
+            {/* Each result stays readable to screen readers (and findable by its shape id). */}
+            <span className="dr-sr-only">
+              {g.members.map((m) => (
+                <span key={m.shapeId} data-testid="vote-count" data-shape-id={m.shapeId} data-rank={m.rank}>
+                  #{m.rank}: {votesText(m.n)}.{' '}
+                </span>
+              ))}
+            </span>
+          </button>
+        )
+      })}
     </>
   )
+}
+
+/** Zooms to what a group badge stands for (at 100% at most), so its badges come apart. */
+function zoomToShapes(editor: Editor, ids: readonly string[]) {
+  const boxes = ids.map((id) => editor.getShapePageBounds(id as TLShapeId)).filter((b): b is Box => !!b)
+  if (boxes.length === 0) return
+  editor.zoomToBounds(Box.Common(boxes), {
+    targetZoom: 1,
+    animation: { duration: editor.options.animationMediumMs },
+  })
 }
 
 function JoinPrompt({ ctx, store }: { ctx: FeatureContext; store: WorkshopStore }) {

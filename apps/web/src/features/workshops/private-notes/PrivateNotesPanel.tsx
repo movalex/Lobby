@@ -16,6 +16,7 @@ import { NOTE_PALETTE } from '../../canvas-ux/palette.ts'
 import type { FeatureContext } from '../../types.ts'
 import { isFacilitator } from '../hooks.ts'
 import { zoomToSession } from './canvas.ts'
+import { composerAfterAnswer, composerOnSubmit } from './composer.ts'
 import { describeCounts, usePrivateNotes } from './hooks.ts'
 import type { ActionResult, PrivateNotesStore } from './store.ts'
 
@@ -107,20 +108,29 @@ function NoteEditor({
   const [text, setText] = useState(initial.text)
   const [color, setColor] = useState<PrivateNoteColor>(initial.color)
   const id = useId()
+  const box = useRef<HTMLTextAreaElement>(null)
   // `busy` arrives with the next render: two presses before it (a double Ctrl+Enter) must not send twice.
   const sending = useRef(false)
   const length = codePointLength(text.trim())
   const tooLong = length > PRIVATE_NOTE_MAX_CHARS
   const ok = length > 0 && !tooLong && !busy
+  // Composing (no Cancel): the box empties as the note is sent and keeps the keyboard, so the next
+  // idea can be typed while this one saves; the answer never erases it (composer.ts, round-2 F6).
+  const composing = !onCancel
   const submit = async () => {
     if (!ok || sending.current) return
     sending.current = true
+    const submitted = text
+    if (composing) {
+      setText(composerOnSubmit(submitted))
+      box.current?.focus()
+    }
+    let saved = false
     try {
-      if (await onSubmit({ text, color })) {
-        if (!onCancel) setText('')
-      }
+      saved = await onSubmit({ text: submitted, color })
     } finally {
       sending.current = false
+      if (composing) setText((current) => composerAfterAnswer({ current, submitted, ok: saved }))
     }
   }
   return (
@@ -129,6 +139,7 @@ function NoteEditor({
         {onCancel ? 'Edit your note' : 'Write a note only you can see'}
       </label>
       <textarea
+        ref={box}
         id={`${id}-text`}
         className="dr-pn-textarea"
         data-testid={`${testPrefix}-text`}
@@ -157,7 +168,7 @@ function NoteEditor({
           <span className="dr-sr-only"> characters. Ctrl or Command + Enter to save.</span>
         </span>
       </div>
-      <ColorPicker ctx={ctx} value={color} onChange={setColor} label="Note colour" />
+      <ColorPicker ctx={ctx} value={color} onChange={setColor} label="Note color" />
       <div className="dr-pn-editor__actions">
         {onCancel && (
           <button type="button" className="dr-btn dr-btn--sm dr-btn--ghost" onClick={onCancel}>
@@ -169,9 +180,10 @@ function NoteEditor({
           className="dr-btn dr-btn--sm dr-btn--primary"
           data-testid={testPrefix === 'pn-compose' ? 'pn-add' : 'pn-note-save'}
           disabled={!ok}
+          aria-busy={busy || undefined}
           onClick={() => void submit()}
         >
-          {submitLabel}
+          {busy && composing ? 'Adding…' : submitLabel}
         </button>
       </div>
     </div>
@@ -395,6 +407,12 @@ export function PrivateNotesPanel({ ctx }: { ctx: FeatureContext; close(): void 
 
       {snap.canReveal && (
         <section className="dr-pn-facil" aria-label="Reveal">
+          {snap.starterLeft && (
+            <p className="dr-pn-hint" data-testid="pn-starter-left">
+              The person who started this brainstorm can no longer edit this board, so you can reveal or
+              cancel it.
+            </p>
+          )}
           {open ? (
             <>
               <p className="dr-pn-hint">
