@@ -36,13 +36,13 @@ import { isBoardId, isUserId, requireBoardAction } from '../../access.ts'
 import type { Params } from '../../context.ts'
 import { ApiError, badRequest, conflict, forbidden, notFound, parse } from '../../errors.ts'
 import type { FeatureContext } from '../context.ts'
-import { requireFacilitatorAccount } from './facilitators.ts'
+import { requireFacilitatorAccount, TIMER_NOT_YOURS } from './facilitators.ts'
 import { HandLimitError, HandRegistry } from './hands.ts'
 import { registerPresentation } from './presentation.ts'
-import { registerPrivateNotes } from './private-notes.ts'
+import { allowedNow, registerPrivateNotes } from './private-notes.ts'
 import { REACTIONS_PER_BOARD_MAX, SlidingWindowLimiter } from './reactions.ts'
 import { createShapeIndex, type ShapeIndex } from './shapes.ts'
-import { applyTimerAction, TimerRuleError, type TimerState, timerView } from './timer.ts'
+import { applyTimerAction, TimerRuleError, type TimerState, timerHolder, timerView } from './timer.ts'
 import {
   aggregates,
   castInLockedSession,
@@ -206,6 +206,15 @@ export function registerWorkshopRoutes(
       const access = await requireBoardAction(tx, bid, user.id, 'edit', { forUpdate: true })
       await requireFacilitatorAccount(tx, user.id)
       const prev = await loadTimer(tx, access.board.id, true)
+      // Someone else's running or paused timer is theirs (R3): the board owner may still act, and so
+      // may anyone once its starter can no longer edit the board (they left, or lost access).
+      const holder = timerHolder(prev, user.id, at)
+      if (
+        holder &&
+        access.role !== 'owner' &&
+        (await allowedNow(tx, access.board.id, [holder], 'edit', at)).has(holder)
+      )
+        throw new ApiError(403, 'TIMER_NOT_YOURS', TIMER_NOT_YOURS)
       let t: ReturnType<typeof applyTimerAction>
       try {
         t = applyTimerAction(prev, action, at, user.id)

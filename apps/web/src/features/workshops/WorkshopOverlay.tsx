@@ -14,7 +14,7 @@ import { HandToasts, PresentingHands } from './Hands.tsx'
 import { editorLookup, useNow, useWorkshop } from './hooks.ts'
 import { PlusOnes } from './PlusOnes.tsx'
 import { usePresenting } from './presenting.ts'
-import { PrivateNotesStartPrompt } from './private-notes/PrivateNotesBar.tsx'
+import { PrivateNotesReminder, PrivateNotesStartPrompt } from './private-notes/PrivateNotesBar.tsx'
 import { ReactionBursts } from './Reactions.tsx'
 import type { WorkshopStore } from './store.ts'
 import { badgeScale, clusterBadges, readingOrder, shapeLabel, topResults } from './voting.ts'
@@ -83,7 +83,7 @@ export function WorkshopOverlay({ ctx }: { ctx: FeatureContext }) {
       </div>
       <div className="dr-wk-layer" data-testid="workshop-overlay">
         {/* +1s sit under the vote markers (both are on shapes; votes win while a vote runs). */}
-        {!presenting && <PlusOnes ctx={ctx} />}
+        {!presenting && <PlusOnes ctx={ctx} voting={open} />}
         {joined && snap.ballot && <MyDots ctx={ctx} store={store} myVotes={snap.ballot.myVotes} />}
         {voting && <ClickToVote ctx={ctx} store={store} />}
         {voting && <SelectedStepper ctx={ctx} store={store} />}
@@ -92,6 +92,7 @@ export function WorkshopOverlay({ ctx }: { ctx: FeatureContext }) {
           <div className="dr-wk-stack" data-testid="workshop-stack">
             {snap.summonedBy && <FollowToast ctx={ctx} store={store} />}
             <PrivateNotesStartPrompt ctx={ctx} />
+            <PrivateNotesReminder ctx={ctx} />
             {resultsCard && <ResultsCard ctx={ctx} store={store} />}
             {open && snap.participation === null && <JoinPrompt ctx={ctx} store={store} />}
             {joined && <VotingBar ctx={ctx} store={store} />}

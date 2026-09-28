@@ -13,6 +13,10 @@ import { guestRefused } from '../guests/guard.ts'
 export const FACILITATE_GUESTS =
   'Guests take part, but the timer, votes, brainstorms and “Gather everyone” are run by editors with an account.'
 
+/** 403 TIMER_NOT_YOURS: someone else's running or paused timer (final review R3). */
+export const TIMER_NOT_YOURS =
+  'Someone else is running this timer. Only they or the board owner can pause, stop or change it.'
+
 /** 403 GUEST_ACCOUNT_REQUIRED for a name-only guest. */
 export async function requireFacilitatorAccount(db: Queryable, userId: string): Promise<void> {
   if ((await userKind(db, userId)) === 'guest') throw guestRefused(FACILITATE_GUESTS)

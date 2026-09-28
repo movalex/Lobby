@@ -136,7 +136,76 @@
 }
 .dr-pn-editor__row {
   display: flex;
-  justify-content: flex-end;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+/* R2-06: Enter adds the note. The hint is for keyboards; a phone's Enter key needs none. */
+.dr-pn-keys {
+  color: var(--dr-ink-2);
+  font-size: 12px;
+}
+.dr-pn-keys kbd {
+  padding: 0 4px;
+  border: 1px solid var(--dr-line);
+  border-radius: 4px;
+  background: var(--dr-paper);
+  font: 600 11px var(--dr-font);
+}
+@media (pointer: coarse) {
+  .dr-pn-keys {
+    visibility: hidden;
+  }
+}
+
+/* R2-02: the timer inside the panel where the panel covers the canvas's own timer. */
+.dr-pn-timer {
+  position: sticky;
+  top: -12px;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  margin: 0;
+  padding: 8px 12px;
+  border: 1px solid var(--dr-line);
+  border-radius: 999px;
+  background: var(--dr-surface, var(--dr-paper));
+  color: var(--dr-ink);
+  font: 700 15px var(--dr-font);
+  font-variant-numeric: tabular-nums;
+  text-align: left;
+}
+.dr-pn-timer .dr-muted {
+  font-weight: 500;
+}
+.dr-pn-timer--up {
+  border-color: var(--dr-danger-fill);
+  background: var(--dr-danger-fill);
+  color: var(--dr-on-danger);
+  cursor: pointer;
+}
+.dr-pn-timer__ok {
+  margin-left: auto;
+  font-size: 13px;
+  text-decoration: underline;
+}
+
+/* R2-12: the open brainstorm's reminder on the canvas (phones; the chip is in the "⋯" menu). */
+.dr-pn-reminder {
+  pointer-events: auto;
+  box-shadow: var(--dr-shadow);
+}
+
+/* R2-03: where the revealed notes went. */
+.dr-pn-ended {
+  display: grid;
+  gap: 8px;
+  justify-items: start;
+}
+.dr-pn-ended p {
+  margin: 0;
 }
 .dr-pn-count {
   color: var(--dr-ink-2);

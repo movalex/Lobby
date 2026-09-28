@@ -457,11 +457,16 @@ test('timer sync: start, pause, +1 min, resume and stop look the same to everyon
   })
 
   let paused = 0
-  await test.step('bob (editor) pauses: every pill freezes on the same value', async () => {
-    const pop = await openWorkshopPopover(b.page)
+  await test.step("bob (editor) can't pause alice's timer (R3); alice pauses: every pill freezes on the same value", async () => {
+    const bobPop = await openWorkshopPopover(b.page)
+    await expect(bobPop.getByTestId('timer-held-hint')).toContainText('is running this timer')
+    await expect(bobPop.getByTestId('timer-pause')).toHaveCount(0)
+    await closeWorkshopPopover(b.page)
+    expect((await post(b, `/api/boards/${board}/timer`, { action: 'pause' })).status()).toBe(403)
+    const pop = await openWorkshopPopover(a.page)
     await pop.getByTestId('timer-pause').click()
     await expect(pop.getByTestId('timer-resume')).toBeVisible()
-    await closeWorkshopPopover(b.page)
+    await closeWorkshopPopover(a.page)
     for (const p of pages) await expect(p.getByTestId('timer-pill')).toHaveAttribute('data-state', 'paused')
     paused = await pillSeconds(a.page)
     for (const p of pages)

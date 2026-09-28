@@ -5,6 +5,7 @@ import {
   normalizeTimer,
   type TimerState,
   timeLeftMs,
+  timerHolder,
   timerView,
 } from '../../../src/features/workshops/timer.ts'
 import { expectStatus, json, setupWorld, type World } from './support.ts'
@@ -21,6 +22,19 @@ function run(steps: [number, Parameters<typeof applyTimerAction>[1]][]): TimerSt
 }
 
 describe('timer arithmetic (pure)', () => {
+  it('a running or paused timer is held by its starter; a stopped or finished one by nobody (R3)', () => {
+    const me = 'usr_facilitator0001'
+    const running = run([[0, { action: 'start', durationMs: MIN }]])
+    expect(timerHolder(null, 'usr_other000000001', at(0))).toBeNull()
+    expect(timerHolder(running, me, at(1000))).toBeNull() // your own
+    expect(timerHolder(running, 'usr_other000000001', at(1000))).toBe(me)
+    const paused = applyTimerAction(running, { action: 'pause' }, at(1000), me).next
+    expect(timerHolder(paused, 'usr_other000000001', at(10 * MIN))).toBe(me)
+    expect(timerHolder(running, 'usr_other000000001', at(2 * MIN))).toBeNull() // finished
+    const stopped = applyTimerAction(running, { action: 'stop' }, at(1000), me).next
+    expect(timerHolder(stopped, 'usr_other000000001', at(2000))).toBeNull()
+  })
+
   it('start stores the end timestamp; time left is derived from it', () => {
     const s = run([[0, { action: 'start', durationMs: 5 * MIN }]])
     expect(s.status).toBe('running')
@@ -119,7 +133,7 @@ describe('timer routes', () => {
     expect(w.events).toHaveLength(0)
 
     expectStatus(await timer(w.editor, { action: 'start', durationMs: MIN }), 200)
-    expectStatus(await timer(w.owner, { action: 'pause' }), 200)
+    expectStatus(await timer(w.owner, { action: 'pause' }), 200) // the board owner may act on anyone's
     for (const c of [w.viewer, w.commenter]) {
       const s = await state(c)
       expect(s.timer).toMatchObject({ status: 'paused', remainingMs: MIN, startedBy: w.editor.userId })
@@ -151,14 +165,43 @@ describe('timer routes', () => {
       remainingMs: 180_000,
       endsAt: null,
     })
-    expectStatus(await timer(w.editor, { action: 'add', addMs: MIN }), 200)
-    expectStatus(await timer(w.editor, { action: 'resume' }), 200)
+    expectStatus(await timer(w.owner, { action: 'add', addMs: MIN }), 200)
+    expectStatus(await timer(w.owner, { action: 'resume' }), 200)
     w.clock.advance(60_000)
     expect((await state(w.viewer)).timer?.remainingMs).toBe(180_000)
     w.clock.advance(180_000)
     expect((await state(w.viewer)).timer).toMatchObject({ status: 'finished', remainingMs: 0 })
     expectStatus(await timer(w.owner, { action: 'stop' }), 200)
     expect((await state(w.viewer)).timer).toMatchObject({ status: 'stopped', remainingMs: 5 * MIN })
+  })
+
+  it("someone else's running or paused timer is theirs: other editors can't pause, stop, extend or restart it (R3)", async () => {
+    w = await setupWorld()
+    expectStatus(await timer(w.owner, { action: 'start', durationMs: 5 * MIN }), 200)
+    w.clock.advance(2_000)
+    for (const body of [
+      { action: 'pause' },
+      { action: 'stop' },
+      { action: 'add', addMs: MIN },
+      { action: 'start', durationMs: MIN },
+    ]) {
+      const res = await timer(w.editor, body)
+      expectStatus(res, 403)
+      expect(json<{ error: { code: string } }>(res).error.code).toBe('TIMER_NOT_YOURS')
+    }
+    expect((await state(w.viewer)).timer).toMatchObject({ status: 'running', startedBy: w.owner.userId })
+    expect(w.events).toHaveLength(1) // only the start
+    expectStatus(await timer(w.owner, { action: 'pause' }), 200)
+    expectStatus(await timer(w.editor, { action: 'resume' }), 403)
+    // Once it is stopped (or finished), anyone who facilitates starts their own; the owner may still
+    // act on it, and the editor on their own.
+    expectStatus(await timer(w.owner, { action: 'stop' }), 200)
+    expectStatus(await timer(w.editor, { action: 'start', durationMs: MIN }), 200)
+    expectStatus(await timer(w.editor, { action: 'pause' }), 200)
+    expectStatus(await timer(w.owner, { action: 'resume' }), 200)
+    w.clock.advance(2 * MIN)
+    expect((await state(w.viewer)).timer?.status).toBe('finished')
+    expectStatus(await timer(w.owner, { action: 'start', durationMs: MIN }), 200)
   })
 
   it('publishes each change (after commit) and nothing for no-ops', async () => {
