@@ -1,5 +1,5 @@
 // Child-process helper: argv array (never a shell), hard SIGKILL timeout, bounded stdout, minimal env.
-import { spawn } from 'node:child_process'
+import { type ChildProcess, spawn, spawnSync } from 'node:child_process'
 import { performance } from 'node:perf_hooks'
 
 export interface RunOptions {
@@ -8,6 +8,15 @@ export interface RunOptions {
   /** Written to the child's stdin, which is then closed. */
   stdin?: string
   signal?: AbortSignal
+  /** The child's whole environment (default childEnv()). Never the worker's own environment. */
+  env?: NodeJS.ProcessEnv
+  cwd?: string
+  /**
+   * The child starts helpers of its own (LibreOffice: oosplash → soffice.bin). Kill the whole tree, not
+   * just the direct child: on a timeout or abort, and on POSIX also whatever is left of its process
+   * group once the direct child has exited.
+   */
+  killTree?: boolean
 }
 
 export interface RunResult {
@@ -55,20 +64,20 @@ export function run(cmd: string, args: string[], opts: RunOptions): Promise<RunR
       resolve(res)
       return
     }
+    const tree = opts.killTree === true
     const child = spawn(cmd, args, {
       stdio: [opts.stdin === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
       windowsHide: true,
-      env: childEnv(),
+      env: opts.env ?? childEnv(),
+      cwd: opts.cwd,
+      // POSIX: its own process group (pgid = pid), so the whole group can be killed at once.
+      detached: tree && process.platform !== 'win32',
     })
     res.pid = child.pid
     const out: Buffer[] = []
     let outBytes = 0
     let settled = false
-    const kill = () => {
-      try {
-        child.kill('SIGKILL')
-      } catch {}
-    }
+    const kill = () => (tree ? killProcessTree(child) : killChild(child))
     // Our own timer (rather than spawn's `timeout`) so a timeout is told apart from other kills.
     const timer = setTimeout(() => {
       res.timedOut = true
@@ -107,6 +116,8 @@ export function run(cmd: string, args: string[], opts: RunOptions): Promise<RunR
         settle()
       }
     })
+    // A helper that outlives the direct child could keep the stdio pipes (and so 'close') open for ever.
+    if (tree && process.platform !== 'win32') child.on('exit', () => killGroup(child.pid))
     child.on('close', (code, signal) => {
       res.code = code
       res.signal = signal
@@ -117,6 +128,32 @@ export function run(cmd: string, args: string[], opts: RunOptions): Promise<RunR
       child.stdin.end(opts.stdin)
     }
   })
+}
+
+function killChild(child: ChildProcess) {
+  try {
+    child.kill('SIGKILL')
+  } catch {}
+}
+
+function killGroup(pid: number | undefined) {
+  if (pid === undefined) return
+  try {
+    process.kill(-pid, 'SIGKILL')
+  } catch {} // ESRCH: the group is already gone
+}
+
+/** SIGKILL for the child and everything it started: its process group (POSIX) or its process tree (Windows). */
+export function killProcessTree(child: ChildProcess) {
+  if (child.pid === undefined) return
+  if (process.platform === 'win32') {
+    // taskkill /T walks the tree from the (still living) child; /F terminates. Nothing else kills grandchildren here.
+    spawnSync('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true })
+    killChild(child)
+    return
+  }
+  killGroup(child.pid)
+  killChild(child)
 }
 
 /** Last lines of stderr for the worker log, with anything path-like removed. */

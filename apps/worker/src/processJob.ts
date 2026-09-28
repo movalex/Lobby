@@ -34,6 +34,7 @@ import {
   userMessage,
 } from './errors.ts'
 import { type Derived, deriveImage } from './image.ts'
+import { deriveOffice, type OfficeConverter, officeInput } from './office.ts'
 import { derivePdf } from './pdf.ts'
 import { releaseJob } from './queue.ts'
 import { confirmKind, sniffFile } from './sniff.ts'
@@ -49,6 +50,10 @@ export interface ProcessOptions {
   posterTimeoutMs?: number
   /** Test hook: replacement pdf child entry point. */
   pdfChildPath?: string
+  /** Converts Office documents to PDF (office.ts); absent: they fail with OFFICE_UNAVAILABLE. */
+  office?: OfficeConverter
+  /** LibreOffice's own budget per document (default LIMITS.officeConvertTimeoutMs). */
+  officeTimeoutMs?: number
   /** How often the local claim file is touched while the job runs. */
   heartbeatMs?: number
   /**
@@ -107,7 +112,23 @@ async function derive(
   if (meta.kind === 'other') return { probe: {}, derivatives: [], mimeType: null }
   const empty = INVALID_EMPTY[meta.kind]
   if (size === 0 && empty) throw new PreviewError(empty, 'empty file')
-  const mimeType = confirmKind(meta.kind, await sniffFile(path))
+  const sniffed = await sniffFile(path)
+  // An upload of kind 'pdf' may be an Office document (dev-assets classifyUpload); its content decides.
+  const office = meta.kind === 'pdf' ? await officeInput(path, sniffed) : null
+  if (office) {
+    return {
+      ...(await deriveOffice(path, office, writer, {
+        office: opts.office,
+        officeTimeoutMs: opts.officeTimeoutMs,
+        pdfTimeoutMs: opts.pdfTimeoutMs,
+        pdfChildPath: opts.pdfChildPath,
+        pdfHeapMb: opts.pdfHeapMb,
+        signal: opts.signal,
+      })),
+      mimeType: office.mime,
+    }
+  }
+  const mimeType = confirmKind(meta.kind, sniffed)
   throwIfAborted(opts.signal)
   switch (meta.kind) {
     case 'image':

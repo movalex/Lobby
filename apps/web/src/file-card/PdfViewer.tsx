@@ -34,6 +34,7 @@ import {
   zoomStep,
 } from './pdf-pages.ts'
 import './pdf-viewer.css'
+import { CONVERSION_DETAIL, CONVERSION_NOTE, documentLabel, isConvertedPreview } from './office.ts'
 import { placePdfPages } from './place-pages.ts'
 import { closePdfViewer, pdfViewerRequest } from './viewer-state.ts'
 
@@ -81,6 +82,9 @@ function PdfViewer({ editor, board, card, initialPage, onClose }: ViewerProps) {
   const available = useMemo(() => pages.map((p) => p.page), [pages])
   const total = documentPageCount(snap.meta, card.props, pages.length)
   const name = snap.meta?.name || card.props.name
+  // Office documents are shown through their PDF conversion (office.ts): named for what they are.
+  const label = documentLabel(snap.meta, card.props)
+  const converted = isConvertedPreview(snap.meta)
   const readonly = useValue('dr-pdf-viewer-readonly', () => editor.getIsReadonly(), [editor])
   // export-control: the page previews stay; the original is not offered while downloads are off.
   const canDownload = useValue('dr-pdf-viewer-download', () => exportAllowedOnBoard(board.boardId), [
@@ -203,7 +207,7 @@ function PdfViewer({ editor, board, card, initialPage, onClose }: ViewerProps) {
             {name}
           </h2>
           <p id={descId} className="dr-pv__desc">
-            PDF · {pluralize(total, 'page')}
+            {label} · {pluralize(total, 'page')}
             {partial ? ` · previews of the first ${pluralize(pages.length, 'page')}` : ''} · ← → to turn pages
           </p>
         </div>
@@ -369,7 +373,13 @@ function PdfViewer({ editor, board, card, initialPage, onClose }: ViewerProps) {
             onZoom={setZoom}
             state={snap.missing ? 'missing' : snap.meta?.status === 'ready' ? 'ready' : 'loading'}
             canDownload={canDownload}
+            noun={label === 'PDF' ? 'PDF' : 'document'}
           />
+          {converted && (
+            <p className="dr-pv__note" data-testid="pdf-viewer-conversion-note" role="note">
+              {CONVERSION_NOTE}. {CONVERSION_DETAIL}
+            </p>
+          )}
           {partial && (
             <p className="dr-pv__note" data-testid="pdf-viewer-partial-note" role="note">
               Previews exist for the first {pluralize(pages.length, 'page')} of {total}.{' '}
@@ -440,6 +450,7 @@ function Stage({
   onZoom,
   state,
   canDownload,
+  noun,
 }: {
   page: PreviewPage | null
   src: string | null
@@ -448,6 +459,8 @@ function Stage({
   onZoom(update: (z: number) => number): void
   state: 'ready' | 'loading' | 'missing'
   canDownload: boolean
+  /** "PDF", or "document" for an Office document shown through its conversion. */
+  noun: string
 }) {
   const ref = useRef<HTMLElement>(null)
   const [stage, setStage] = useState({ w: 0, h: 0 })
@@ -546,8 +559,8 @@ function Stage({
             : state === 'loading'
               ? 'Loading page previews…'
               : canDownload
-                ? 'This PDF has no page previews. Download the original to read it.'
-                : 'This PDF has no page previews, and downloading the original is turned off on this board.'}
+                ? `This ${noun} has no page previews. Download the original to read it.`
+                : `This ${noun} has no page previews, and downloading the original is turned off on this board.`}
         </p>
       )}
       {src && !loaded && <span className="dr-spinner dr-pv__spinner" aria-hidden="true" />}

@@ -1,4 +1,5 @@
-// Generates the milestone-0 preview fixtures into <repo>/tests/fixtures/generated/ (gitignored).
+// Generates the preview fixtures (milestone 0, plus the wave-4 Office documents built by
+// office-fixtures.ts) into <repo>/tests/fixtures/generated/ (gitignored).
 //   pnpm fixtures            create missing fixtures, print the manifest
 //   pnpm fixtures --force    regenerate everything
 // All content is synthetic and non-sensitive. Output is reproducible on one toolchain (ffmpeg
@@ -15,6 +16,7 @@ import { StandardFonts as EncryptingFonts, PDFDocument as EncryptingPDFDocument 
 import { PDFDocument, rgb, StandardFonts } from 'pdf-lib'
 import sharp from 'sharp'
 import { run, stderrTail } from '../src/run.ts'
+import * as office from './office-fixtures.ts'
 
 export const FIXTURES_DIR = fileURLToPath(new URL('../../../tests/fixtures/generated/', import.meta.url))
 export const fixturePath = (name: string) => join(FIXTURES_DIR, name)
@@ -307,6 +309,58 @@ const SPECS: Spec[] = [
       storedZip([
         { name: 'notes.txt', data: Buffer.from('Draftroom fixture attachment. Synthetic, non-sensitive.\n') },
       ]),
+  },
+  // ---- Office documents (wave 4; built in office-fixtures.ts) ----
+  {
+    name: 'document.docx',
+    description: '3-page Word document (US Letter, Calibri)',
+    make: async () => office.docx(),
+  },
+  {
+    name: 'slides.pptx',
+    description: '3-slide 16:9 PowerPoint deck (Arial)',
+    make: async () => office.pptx(),
+  },
+  {
+    name: 'sheet.xlsx',
+    description: 'Excel workbook: a budget with SUM formulas + a notes sheet',
+    make: async () => office.xlsx(),
+  },
+  { name: 'document.odt', description: '3-page OpenDocument text', make: async () => office.odt() },
+  { name: 'slides.odp', description: '3-slide OpenDocument presentation', make: async () => office.odp() },
+  { name: 'sheet.ods', description: 'one-sheet OpenDocument spreadsheet', make: async () => office.ods() },
+  {
+    name: 'truncated.docx',
+    description: 'first 60% of document.docx (no central directory)',
+    make: async () => {
+      const b = await readFile(fixturePath('document.docx'))
+      return b.subarray(0, Math.floor(b.length * 0.6))
+    },
+  },
+  {
+    name: 'broken.docx',
+    description: 'valid package whose word/document.xml is garbage',
+    make: async () => office.brokenDocx(),
+  },
+  {
+    name: 'macro.docx',
+    description: 'macro-enabled package (.docm content) under a .docx name',
+    make: async () => office.macroDocx(),
+  },
+  {
+    name: 'encrypted.docx',
+    description: 'MS-CFB with EncryptionInfo + EncryptedPackage (password-protected OOXML)',
+    make: async () => office.encryptedOoxml(),
+  },
+  {
+    name: 'encrypted.odt',
+    description: 'ODT whose manifest lists encryption-data (password-protected)',
+    make: async () => office.encryptedOdt(),
+  },
+  {
+    name: 'bomb.docx',
+    description: 'zip bomb: word/document.xml inflates to 1120 MiB',
+    make: () => office.bombDocx(),
   },
 ]
 

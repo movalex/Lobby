@@ -107,6 +107,14 @@ export const LIMITS = {
     AssetKind,
     number
   >,
+  /** Office documents (OFFICE_FORMATS): the build plan's "PDFs/Office documents 100 MB". See maxUploadBytes(). */
+  maxOfficeBytes: 100 * MiB,
+  /** LibreOffice's wall clock for converting one Office document to PDF (the page render has its own budget). */
+  officeConvertTimeoutMs: 120_000,
+  /** Sum of the uncompressed sizes an Office document's ZIP may declare (zip-bomb guard, checked before conversion). */
+  officeMaxUnzippedBytes: 1024 * MiB,
+  /** Entries in an Office document's ZIP. */
+  officeMaxZipEntries: 10_000,
   maxNameLength: 200,
   maxInputPixels: 100_000_000,
   maxPdfPages: 2_000,
@@ -125,14 +133,98 @@ export const LIMITS = {
 const IMAGE_MIMES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif'])
 const VIDEO_MIMES = new Set(['video/mp4', 'video/quicktime', 'video/webm'])
 
-/** SVG is deliberately NOT an image here: untrusted SVG is never rendered inline (attachment only). */
+const baseMime = (mimeType: string) => mimeType.toLowerCase().split(';')[0]?.trim() ?? ''
+const extOf = (name: string) => name.toLowerCase().split('.').pop() ?? ''
+
+/**
+ * SVG is deliberately NOT an image here: untrusted SVG is never rendered inline (attachment only).
+ * Office documents (OFFICE_FORMATS) are 'pdf': the worker converts them to PDF and they are previewed
+ * as pages, with the PDF limits and page viewer. Their original is still served as an attachment
+ * (only application/pdf is ever inline), and meta.mimeType says what they really are.
+ */
 export function classifyUpload(mimeType: string, name: string): AssetKind {
-  const mime = mimeType.toLowerCase().split(';')[0]?.trim() ?? ''
-  const ext = name.toLowerCase().split('.').pop() ?? ''
+  const mime = baseMime(mimeType)
+  const ext = extOf(name)
   if (IMAGE_MIMES.has(mime) || ['png', 'jpg', 'jpeg', 'webp', 'gif'].includes(ext)) return 'image'
   if (mime === 'application/pdf' || ext === 'pdf') return 'pdf'
   if (VIDEO_MIMES.has(mime) || ['mp4', 'm4v', 'mov', 'webm'].includes(ext)) return 'video'
+  if (officeFormat(mime, name)) return 'pdf'
   return 'other'
+}
+
+// ---- Office documents (wave 4) ------------------------------------------------------------------------
+
+export type OfficeExt = 'docx' | 'pptx' | 'xlsx' | 'odt' | 'odp' | 'ods'
+
+export interface OfficeFormat {
+  ext: OfficeExt
+  mime: string
+  /** What the card and the page viewer call the file ("Word document"). */
+  label: string
+}
+
+/**
+ * The Office formats the preview worker converts to PDF (with LibreOffice, in isolation). Nothing else:
+ * macro-enabled (.docm, .xlsm, .pptm), legacy binary (.doc, .xls, .ppt) and Apple iWork files stay
+ * attachments. The MIME types are what file-type reports for the content (apps/worker/src/sniff.ts).
+ */
+export const OFFICE_FORMATS: readonly OfficeFormat[] = [
+  {
+    ext: 'docx',
+    mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    label: 'Word document',
+  },
+  {
+    ext: 'pptx',
+    mime: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    label: 'PowerPoint presentation',
+  },
+  {
+    ext: 'xlsx',
+    mime: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    label: 'Excel spreadsheet',
+  },
+  { ext: 'odt', mime: 'application/vnd.oasis.opendocument.text', label: 'OpenDocument text' },
+  {
+    ext: 'odp',
+    mime: 'application/vnd.oasis.opendocument.presentation',
+    label: 'OpenDocument presentation',
+  },
+  {
+    ext: 'ods',
+    mime: 'application/vnd.oasis.opendocument.spreadsheet',
+    label: 'OpenDocument spreadsheet',
+  },
+]
+
+/** The Office format a MIME type names exactly (parameters and case ignored), or null. */
+export function officeFormatByMime(mimeType: string | null | undefined): OfficeFormat | null {
+  const mime = baseMime(mimeType ?? '')
+  return OFFICE_FORMATS.find((f) => f.mime === mime) ?? null
+}
+
+/**
+ * The Office format of an upload: by its declared type, else by its file name's extension. Untrusted
+ * (the worker decides by content); used to classify, to pick the limit and to label a card.
+ */
+export function officeFormat(mimeType: string, name: string): OfficeFormat | null {
+  const ext = extOf(name)
+  return officeFormatByMime(mimeType) ?? OFFICE_FORMATS.find((f) => f.ext === ext) ?? null
+}
+
+/** An upload that classifyUpload made 'pdf' because it is an Office document (not a PDF by type or name). */
+export function isOfficeUpload(kind: AssetKind, mimeType: string, name: string): boolean {
+  return (
+    kind === 'pdf' &&
+    baseMime(mimeType) !== 'application/pdf' &&
+    extOf(name) !== 'pdf' &&
+    officeFormat(mimeType, name) !== null
+  )
+}
+
+/** The upload size limit for a file of `kind` with this declared type and name (Office documents have their own). */
+export function maxUploadBytes(kind: AssetKind, mimeType: string, name: string): number {
+  return isOfficeUpload(kind, mimeType, name) ? LIMITS.maxOfficeBytes : LIMITS.maxBytes[kind]
 }
 
 /** Display name: strip path parts and control characters, cap the length. Never used as a filesystem path. */

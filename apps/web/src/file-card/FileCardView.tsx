@@ -8,6 +8,7 @@ import { exportAllowedOnBoard } from '../features/sharing/export-policy.ts'
 import { extensionLabel, formatBytes, formatDuration, pluralize } from '../lib/format.ts'
 import { type CardView, cardView, coverDerivative, stripPages } from './card-model.ts'
 import './file-card.css'
+import { CONVERSION_DETAIL, CONVERSION_NOTE, cardOfficeFormat, isConvertedPreview } from './office.ts'
 import { registerCardBoard } from './open-original.ts'
 import { previewPages } from './pdf-pages.ts'
 import { openPdfViewer } from './viewer-state.ts'
@@ -48,6 +49,9 @@ export function FileCardView({ shape }: { shape: FileCardShape }) {
   const coverSrc = board && cover ? derivativeUrl(board.boardId, p.assetId, p.versionId, cover.id) : null
   const original = board && !snap.missing ? originalUrl(board.boardId, p.assetId, p.versionId) : null
   const pages = stripPages(snap.meta)
+  // Office documents are previewed through their PDF conversion (office.ts): say so on the card.
+  const office = cardOfficeFormat(snap.meta, p)
+  const converted = isConvertedPreview(snap.meta)
   // export-control: no Download while the board owner turned downloads off for this person (the api
   // refuses the original anyway). Previews, pages and video playback keep working.
   const boardId = board?.boardId ?? null
@@ -61,6 +65,7 @@ export function FileCardView({ shape }: { shape: FileCardShape }) {
       data-testid="file-card"
       data-status={view.status}
       data-kind={view.kind}
+      data-office={office?.ext}
       data-meta={snap.missing ? 'missing' : snap.meta ? 'loaded' : 'pending'}
       aria-label={`${view.name}, ${statusText(view, snap.missing)}`}
     >
@@ -94,6 +99,7 @@ export function FileCardView({ shape }: { shape: FileCardShape }) {
           {pages.length > STRIP_MAX && <span className="dr-fc__more">+{pages.length - STRIP_MAX}</span>}
         </div>
       )}
+      {converted && !snap.missing && <ConversionNote />}
       <Footer view={view} original={canDownload ? original : null} missing={snap.missing} />
     </HTMLContainer>
   )
@@ -230,6 +236,22 @@ function Preview({
     </>
   )
 }
+
+/** The pages are LibreOffice's rendering of the document, not the document: fonts and layout can differ. */
+const ConversionNote = () => (
+  <p className="dr-fc__note" data-testid="file-card-conversion-note" title={CONVERSION_DETAIL}>
+    <svg viewBox="0 0 24 24" width="12" height="12" aria-hidden="true">
+      <path
+        d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 11v5.5M12 7.6v.1"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2.2"
+        strokeLinecap="round"
+      />
+    </svg>
+    {CONVERSION_NOTE}
+  </p>
+)
 
 const PagesBadge = ({ n }: { n: number }) => (
   <span className="dr-fc__chip" data-testid="file-card-pages">

@@ -157,7 +157,7 @@ export function layoutPageRow(sizes: readonly Size[], gap = PAGE_GAP): Block {
 
 /** A placed page's file name: "Q3 brief — page 2.webp" (searchable, and "Download original" names the file). */
 export function pageAssetName(fileName: string, page: number, mimeType: string): string {
-  const stem = fileName.replace(/\.pdf$/i, '').trim() || 'document'
+  const stem = fileName.replace(/\.(?:pdf|docx|pptx|xlsx|odt|odp|ods)$/i, '').trim() || 'document'
   const ext = mimeType === 'image/png' ? 'png' : 'webp'
   return `${stem} — page ${page}.${ext}`.slice(0, 200)
 }

@@ -1,9 +1,15 @@
 # Draftroom preview worker on the NAS (docs/M3-STORAGE-CONTRACTS.md §5-§6; how-to: deploy/nas/README.md).
 #
-# One container, built on the NAS from docker/worker.Dockerfile. It is only an HTTP client of the
-# Draftroom api (/api/worker/*): no published ports, no volumes, no database or storage credentials.
-# Its whole configuration secret is DRAFTROOM_WORKER_TOKEN in ./worker.env (created by
-# deploy/nas/deploy-worker.sh with mode 600; never committed).
+# Two containers from ONE image, built on the NAS from docker/worker.Dockerfile:
+#   worker  an HTTP client of the Draftroom api (/api/worker/*): no published ports, no database or
+#           storage credentials. Its whole configuration secret is DRAFTROOM_WORKER_TOKEN in ./worker.env
+#           (created by deploy/nas/deploy-worker.sh with mode 600; never committed).
+#   office  the Office-document converter (LibreOffice, apps/worker/src/office-sidecar.ts): NO network
+#           at all, NO secrets (no env_file; it refuses to start with a token in its environment), a
+#           read-only root filesystem and its own memory cap. A document that exploits LibreOffice
+#           finds nothing to steal and nowhere to send it.
+# They share only the `office-jobs` volume: the worker stages a document there, asks the sidecar over
+# the Unix socket in it, and reads the PDF back.
 #
 # Own compose project, own names: nothing here refers to any other project on this host.
 name: draftroom-worker
@@ -26,6 +32,16 @@ services:
       NODE_ENV: production
       WORKER_CONCURRENCY: "1"
       WORKER_PDF_HEAP_MB: "384"
+      # Office documents go to the sidecar below (office-client.ts).
+      OFFICE_SOCKET: /office-jobs/office.sock
+      OFFICE_JOBS_DIR: /office-jobs
+    volumes:
+      - office-jobs:/office-jobs
+    # Starts the sidecar too (`up worker` alone would otherwise leave Office previews without it). The
+    # worker copes with a sidecar that is (re)starting: those jobs are retried.
+    depends_on:
+      office:
+        condition: service_started
     # Unprivileged from the first instruction (the image also says USER node): nothing here needs root,
     # so cap_drop: ALL costs nothing.
     user: node
@@ -52,3 +68,51 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+
+  office:
+    # The image the worker service builds; never pulled from a registry.
+    image: draftroom-worker:latest
+    pull_policy: never
+    container_name: draftroom-office
+    labels:
+      com.draftroom.component: office
+    # No env_file: this container holds no secret at all.
+    environment:
+      NODE_ENV: production
+      OFFICE_SOCKET: /office-jobs/office.sock
+      OFFICE_JOBS_DIR: /office-jobs
+      OFFICE_WORK_DIR: /tmp
+    volumes:
+      - office-jobs:/office-jobs
+    # No network interface but loopback. The sidecar also checks this itself and refuses to start otherwise.
+    network_mode: none
+    read_only: true
+    # Each conversion's LibreOffice profile, HOME and TMPDIR (removed after every job). Counts toward mem_limit.
+    tmpfs:
+      - /tmp:size=256m,mode=1777
+    user: node
+    init: true
+    entrypoint: ["node", "apps/worker/src/office-sidecar.ts"]
+    restart: unless-stopped
+    stop_grace_period: 30s
+    # One conversion at a time (office-server.ts queues the rest). The container peaked at 274 MiB on the
+    # NAS converting a 200-page DOCX, a 60-slide PPTX and a 20,000-row XLSX (deploy/nas/README.md "Office
+    # previews"); the cap stops a hostile or huge document, whose conversion is killed and reported as
+    # not convertible.
+    mem_limit: 1g
+    memswap_limit: 1g
+    cpus: 2
+    pids_limit: 128
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  # Scratch only (a job's staged document and its PDF, removed after each job; nothing persists).
+  office-jobs: {}

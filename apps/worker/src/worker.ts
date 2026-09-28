@@ -4,6 +4,8 @@
 import { createWorkerApi } from './api-client.ts'
 import { WORKER } from './config.ts'
 import { loadWorkerEnv } from './env.ts'
+import { localOfficeConverter, officeOff, sofficeCommand } from './office.ts'
+import { socketOfficeConverter } from './office-client.ts'
 import { startRemoteWorker } from './remote-loop.ts'
 
 const log = (line: string) => console.log(`[worker] ${line}`)
@@ -16,6 +18,12 @@ try {
   console.error(`[worker] refusing to start: ${(e as Error).message}`)
   process.exit(1)
 }
+const office =
+  cfg.office.mode === 'socket'
+    ? socketOfficeConverter({ socketPath: cfg.office.socketPath, jobsDir: cfg.office.jobsDir })
+    : cfg.office.mode === 'local'
+      ? localOfficeConverter({ command: sofficeCommand(cfg.office.sofficePath), workRoot: cfg.tmpDir })
+      : officeOff()
 const api = createWorkerApi({
   baseUrl: cfg.apiUrl,
   token: cfg.token,
@@ -33,12 +41,15 @@ const worker = startRemoteWorker({
     ffmpegPath: cfg.ffmpegPath,
     ffprobePath: cfg.ffprobePath,
     pdfHeapMb: cfg.pdfHeapMb,
+    office,
+    officeTimeoutMs: cfg.office.timeoutMs,
   },
   log,
 })
 // The origin only: DRAFTROOM_API_URL is refused with credentials, a path or a query (env.ts).
 log(`started (api: ${cfg.apiUrl}, poll ${cfg.pollMs} ms)`)
 log(`id ${cfg.workerId}, concurrency ${cfg.concurrency}, pdf heap ${cfg.pdfHeapMb} MB`)
+log(`office previews: ${office.describe}`)
 if (cfg.unusedSecrets.length) {
   log(
     `note: ${cfg.unusedSecrets.join(', ')} ${cfg.unusedSecrets.length === 1 ? 'is' : 'are'} set but never used by the worker; remove from its environment`,
