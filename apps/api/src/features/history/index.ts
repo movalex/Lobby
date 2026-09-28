@@ -270,10 +270,7 @@ export async function registerHistory(app: FastifyInstance, ctx: FeatureContext)
       snap.schema as SerializedSchema,
       assets,
     )
-    reply.header(
-      'content-disposition',
-      contentDisposition('attachment', `${access.board.title}.draftroom.json`),
-    )
+    reply.header('content-disposition', contentDisposition('attachment', `${access.board.title}.lobby.json`))
     return archive
   })
 

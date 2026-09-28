@@ -85,7 +85,7 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 /**
  * What the "Invite by @handle or email" field refers to. A handle (with or without @) or an exact
  * name of someone in the workspace is granted directly; an email address or anyone else gets an
- * invite link to send them (Draftroom does not send email).
+ * invite link to send them (Lobby does not send email).
  */
 export function parseInviteTarget(
   text: string,
@@ -194,15 +194,15 @@ export function removeConfirmText(name: string, fallback: string | null): string
  */
 export function emailInviteHint(canEmail: boolean): string {
   return canEmail
-    ? 'We email them an invitation to this board. People who already use Draftroom get access right away.'
+    ? 'We email them an invitation to this board. People who already use Lobby get access right away.'
     : 'This server can’t send email (that needs Clerk sign-in): you get a one-time link to send them instead.'
 }
 
 /** The "@handle, name or email" field's hint for an address, pointing at the email form when it can email. */
 export function linkForEmailHint(canEmail: boolean): string {
   return canEmail
-    ? 'This makes a one-time link for you to send. To have Draftroom email the invitation, use “Invite by email” below.'
-    : 'Draftroom does not send email: you get a one-time invite link to copy and send them yourself.'
+    ? 'This makes a one-time link for you to send. To have Lobby email the invitation, use “Invite by email” below.'
+    : 'Lobby does not send email: you get a one-time invite link to copy and send them yourself.'
 }
 
 /** The address as the API will read it, or the reason it is not one (shown next to the field). */
@@ -226,7 +226,7 @@ const FALLBACK_DETAIL: Record<EmailInviteFallbackReason, (email: string) => stri
   email_not_configured: (email) =>
     `This server can’t send email: that needs Clerk sign-in. Send the link to ${email} yourself.`,
   existing_account: (email) =>
-    `${email} has a sign-in account but hasn’t opened Draftroom yet, and invitation emails only go to new people. Send them the link yourself.`,
+    `${email} has a sign-in account but hasn’t opened Lobby yet, and invitation emails only go to new people. Send them the link yourself.`,
   invalid_email: (email) =>
     `The email service didn’t accept ${email}. Check the address, or send the link yourself.`,
   rate_limited: (email) =>
@@ -254,7 +254,7 @@ export function emailInviteOutcome(
         : {
             tone: 'success',
             text: `Added ${result.user.name} to this board.`,
-            detail: `They already use Draftroom, so they can open it now, ${asRole}.`,
+            detail: `They already use Lobby, so they can open it now, ${asRole}.`,
             link: null,
           }
     case 'emailed':

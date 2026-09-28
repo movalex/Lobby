@@ -497,7 +497,7 @@ function importUnchecked(
   // 1. Envelope (cheap checks on the raw input before copying anything).
   if (!isPlainObject(input)) throw new ArchiveError('invalid-envelope', 'the archive must be a JSON object')
   if (own(input, 'format') !== ARCHIVE_FORMAT) {
-    throw new ArchiveError('wrong-format', 'not a Draftroom board archive', { path: 'format' })
+    throw new ArchiveError('wrong-format', 'not a Lobby board archive', { path: 'format' })
   }
   if (own(input, 'version') !== ARCHIVE_VERSION) {
     throw new ArchiveError('unsupported-version', 'unsupported archive version', { path: 'version' })
@@ -686,7 +686,7 @@ function importUnchecked(
     return draft as unknown as TLRecord
   })
   if (clearedSources > 0)
-    warnings.push(`Cleared ${clearedSources} file source(s) that were not stable Draftroom file references.`)
+    warnings.push(`Cleared ${clearedSources} file source(s) that were not stable Lobby file references.`)
   if (clearedAssetRefs > 0)
     warnings.push(`Cleared ${clearedAssetRefs} reference(s) to files missing from the archive.`)
   if (clearedEmbeds > 0) warnings.push(`Cleared ${clearedEmbeds} embed URL(s) that were not http(s).`)

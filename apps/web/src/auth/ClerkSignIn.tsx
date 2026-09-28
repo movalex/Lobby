@@ -31,7 +31,7 @@ function ClerkExchange({ onDone }: { onDone(): void }) {
         if (!token) throw new Error('no Clerk session token')
         await api.clerkExchange(token)
         if (await refresh()) onDone()
-        else setError('Signed in with Clerk, but Draftroom did not start a session.')
+        else setError('Signed in with Clerk, but Lobby did not start a session.')
       } catch (e) {
         setError(isApiError(e) ? e.message : 'Sign-in failed. Try again.')
       } finally {
@@ -50,7 +50,7 @@ function ClerkExchange({ onDone }: { onDone(): void }) {
   if (auth.isSignedIn) {
     return (
       <div role={error ? 'alert' : 'status'}>
-        <p className="dr-muted">{error ?? 'Signing you in to Draftroom…'}</p>
+        <p className="dr-muted">{error ?? 'Signing you in to Lobby…'}</p>
         {error && (
           <div className="dr-row">
             <button type="button" className="dr-btn dr-btn--primary" onClick={() => setError(null)}>

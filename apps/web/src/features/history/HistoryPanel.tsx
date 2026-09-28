@@ -429,7 +429,7 @@ export function HistoryPanel({ ctx }: { ctx: FeatureContext; close(): void }) {
             {busy === 'export' ? 'Exporting…' : 'Export .json'}
           </button>
           <span className="dr-history__hint">
-            A portable copy of this board that can be imported into Draftroom.
+            A portable copy of this board that can be imported into Lobby.
           </span>
         </div>
       </section>

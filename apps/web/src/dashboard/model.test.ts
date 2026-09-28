@@ -171,12 +171,16 @@ describe('owner filter, stars and duplicate names', () => {
   })
 
   it('titles an import from its file name: export names round-trip, slugs read as words', () => {
-    // What "Export .json" downloads (history feature: "<title>.draftroom.json").
+    // What "Export .json" downloads (history feature: "<title>.lobby.json").
+    expect(importTitle('Pitch v2.lobby.json')).toBe('Pitch v2')
+    expect(importTitle('Q4 - roadmap.LOBBY.JSON')).toBe('Q4 - roadmap')
+    // Exports made before the rename still import under their own title.
     expect(importTitle('Pitch v2.draftroom.json')).toBe('Pitch v2')
     expect(importTitle('Q4 - roadmap.DRAFTROOM.JSON')).toBe('Q4 - roadmap')
     expect(importTitle('brand-refresh_v2.json')).toBe('brand refresh v2')
     expect(importTitle('  Launch   plan .json')).toBe('Launch plan')
     expect(importTitle('.json')).toBeUndefined()
+    expect(importTitle('.lobby.json')).toBeUndefined()
     expect(importTitle('.draftroom.json')).toBeUndefined()
     expect(importTitle(`${'x'.repeat(130)}.json`)).toHaveLength(120)
   })

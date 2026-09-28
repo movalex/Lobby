@@ -123,7 +123,7 @@ describe('createPdfBuilder', () => {
       height: planPdfPage(800, 1200).height,
     })
     expect(doc.getTitle()).toBe('Spring campaign')
-    expect(doc.getCreator()).toBe('Draftroom')
+    expect(doc.getCreator()).toBe('Lobby')
     expect(outlineTitles(doc)).toEqual(['Intro', 'Page 2'])
     expect(doc.catalog.get(PDFName.of('PageMode'))).toBe(PDFName.of('UseOutlines'))
   })

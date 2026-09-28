@@ -91,7 +91,7 @@ describe('sign in, then accept (PRI-16)', () => {
   })
 
   it('the sign-in heading names the board (or workspace) and who invited', () => {
-    expect(signInHeading(null)).toBe('Sign in')
+    expect(signInHeading(null)).toBe('Sign in to your DBC lobby')
     expect(signInHeading({ ...base, board: { id: BOARD_ID, title: 'Rough cut' }, role: 'commenter' })).toBe(
       'Sign in to join “Rough cut” (invited by Alice)',
     )

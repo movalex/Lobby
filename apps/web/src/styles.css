@@ -1,4 +1,5 @@
-/* Draftroom identity: blueprint navy + drafting-pencil amber on warm paper. System fonts only.
+/* Lobby (DBC) shell: blueprint navy + drafting-pencil amber on warm paper; the brand mark is charcoal
+   + DBC orange (#fe5a05), see brand/Wordmark.tsx. System fonts only.
 
    Two themes. html[data-theme="dark"] is set before the first paint by the inline script in
    index.html and kept current by theme/theme.ts (System / Light / Dark in the account menu); tldraw's
@@ -29,6 +30,9 @@
   --dr-ink: #1b2330;
   --dr-ink-2: #4a5566;
   --dr-paper: #f6f4ee;
+  /* the brand mark's L (brand/Wordmark.tsx): charcoal here; a dark surface or theme uses paper */
+  --dr-mark-ink: #1b232e;
+  --dr-mark-ink-on-dark: #f6f4ee;
   --dr-surface: #ffffff;
   --dr-inset: #faf9f5;
   --dr-hover: #f1efe8;
@@ -61,6 +65,8 @@
 }
 /* "Blueprint at night": blue-grey surfaces close to tldraw's dark panels, chalk text, the same amber. */
 :root[data-theme="dark"] {
+  /* the brand mark's L turns paper on dark surfaces; its node stays DBC orange */
+  --dr-mark-ink: #f6f4ee;
   --dr-navy: #3d6cb1;
   --dr-navy-hover: #4575bb;
   --dr-on-navy: #ffffff;
@@ -269,26 +275,42 @@ code {
 
 /* ---- wordmark -------------------------------------------------------------------------------- */
 
+/* Proportions follow the DBC lockups (sl-short.svg, sl-lockup.svg): a light-weight name, a bold "DBC". */
 .dr-wordmark {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  color: var(--dr-ink);
+  gap: 7px;
+  color: var(--dr-mark-ink);
+}
+.dr-wordmark--on-dark {
+  color: var(--dr-mark-ink-on-dark);
 }
 .dr-wordmark__text {
-  font-weight: 750;
-  font-size: 17px;
-  letter-spacing: -0.025em;
+  font-size: 19px;
+  line-height: 1;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+}
+.dr-wordmark__org {
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+.dr-wordmark__name {
+  font-weight: 300;
 }
 .dr-wordmark--lg {
   gap: 12px;
 }
 .dr-wordmark--lg .dr-wordmark__text {
-  font-size: 34px;
+  font-size: 32px;
 }
 .dr-mark {
   flex: none;
   display: block;
+  color: var(--dr-mark-ink);
+}
+.dr-mark--on-dark {
+  color: var(--dr-mark-ink-on-dark);
 }
 
 /* ---- sign-in ---------------------------------------------------------------------------------- */
@@ -306,11 +328,30 @@ code {
 .dr-signin__inner {
   width: min(460px, 100%);
 }
+.dr-signin__brand {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+}
+.dr-signin__hero {
+  display: block;
+  width: 104px;
+  height: 104px;
+  margin-bottom: 18px;
+  /* the tile's own navy; lifts it off the paper without a hard edge */
+  filter: drop-shadow(0 6px 18px rgb(33 49 80 / 22%));
+  user-select: none;
+}
 .dr-home__tagline {
   margin: 14px 0 24px;
   color: var(--dr-ink-2);
   font-size: 16px;
   line-height: 1.5;
+}
+.dr-signin__brand .dr-home__tagline {
+  max-width: 380px;
+  margin-top: 12px;
 }
 .dr-signin__card {
   padding: 24px;

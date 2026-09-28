@@ -212,7 +212,7 @@ export function emptyState(
 
 /** DSH-03: what the Trash promises (no automatic purge exists yet, so nothing expires). */
 export const TRASH_NOTE =
-  'Deleted boards stay here, with all their content and files, until an owner restores them. Draftroom does not empty the trash automatically yet.'
+  'Deleted boards stay here, with all their content and files, until an owner restores them. Lobby does not empty the trash automatically yet.'
 
 // ---- owner filter (DSH-04) -----------------------------------------------------------------------
 
@@ -249,13 +249,14 @@ export function withStarredEntry<B extends { id: string; starred?: boolean }>(
 }
 
 /**
- * Title for a board imported from `fileName`. Exports download as "<title>.draftroom.json" (history
- * feature), so both extensions go; a slug-like name ("brand-refresh_v2.json") reads as words. Titles
- * with spaces keep their dashes ("Q4 - roadmap"). Undefined when nothing is left (server default).
+ * Title for a board imported from `fileName`. Exports download as "<title>.lobby.json" (history
+ * feature; exports from before the rename end in ".draftroom.json"), so both extensions go; a
+ * slug-like name ("brand-refresh_v2.json") reads as words. Titles with spaces keep their dashes
+ * ("Q4 - roadmap"). Undefined when nothing is left (server default).
  */
 export function importTitle(fileName: string): string | undefined {
   const base = fileName
-    .replace(/(\.draftroom)?\.json$/i, '')
+    .replace(/(\.lobby|\.draftroom)?\.json$/i, '')
     .replace(/\s+/g, ' ')
     .trim()
   const words = /\s/.test(base) ? base : base.replace(/[-_]+/g, ' ').trim()

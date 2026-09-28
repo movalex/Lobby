@@ -107,7 +107,7 @@ export function createdSummary(kind: 'restore' | 'duplicate', created: HistoryBo
   return `${head}${files}`
 }
 
-/** "Pitch v2.draftroom.json": the board title with characters file systems reject replaced. */
+/** "Pitch v2.lobby.json": the board title with characters file systems reject replaced. */
 export function archiveFileName(title: string): string {
   const safe = [...title]
     .map((ch) => (ch.charCodeAt(0) < 0x20 || '\\/:*?"<>|'.includes(ch) ? '-' : ch))
@@ -116,7 +116,7 @@ export function archiveFileName(title: string): string {
     .trim()
     .replace(/^\.+/, '')
     .slice(0, 100)
-  return `${safe || 'board'}.draftroom.json`
+  return `${safe || 'board'}.lobby.json`
 }
 
 /** The shapes to select after a restore: those now on the board, in the order the server gave. */

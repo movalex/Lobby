@@ -198,17 +198,17 @@ describe('invite by email', () => {
 
   it('says whether this server can email at all', () => {
     expect(emailInviteHint(true)).toBe(
-      'We email them an invitation to this board. People who already use Draftroom get access right away.',
+      'We email them an invitation to this board. People who already use Lobby get access right away.',
     )
     expect(emailInviteHint(false)).toContain('needs Clerk sign-in')
     // The @handle field keeps its link-only wording on a server that cannot email.
     expect(linkForEmailHint(false)).toBe(
-      'Draftroom does not send email: you get a one-time invite link to copy and send them yourself.',
+      'Lobby does not send email: you get a one-time invite link to copy and send them yourself.',
     )
     expect(linkForEmailHint(true)).toContain('use “Invite by email” below')
   })
 
-  it('someone who already uses Draftroom: added, or already there (nothing lowered)', () => {
+  it('someone who already uses Lobby: added, or already there (nothing lowered)', () => {
     const user = makeUser('bob', { name: 'Bob Chen' })
     expect(
       emailInviteOutcome(
@@ -219,7 +219,7 @@ describe('invite by email', () => {
     ).toEqual({
       tone: 'success',
       text: 'Added Bob Chen to this board.',
-      detail: 'They already use Draftroom, so they can open it now, as “Can comment”.',
+      detail: 'They already use Lobby, so they can open it now, as “Can comment”.',
       link: null,
     })
     const already = emailInviteOutcome(
@@ -252,7 +252,7 @@ describe('invite by email', () => {
   it('no email went out: the link to copy, and why, for every reason', () => {
     const reasons = {
       email_not_configured: 'This server can’t send email: that needs Clerk sign-in.',
-      existing_account: 'pat@client.example has a sign-in account but hasn’t opened Draftroom yet',
+      existing_account: 'pat@client.example has a sign-in account but hasn’t opened Lobby yet',
       invalid_email: 'The email service didn’t accept pat@client.example.',
       rate_limited: 'The email service is limiting invitations right now.',
       provider_error: 'The email service couldn’t send it right now.',

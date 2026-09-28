@@ -29,7 +29,7 @@ export function SignInPage() {
   } else if (configStatus === 'error' || !config) {
     body = (
       <div role="alert">
-        <h1 className="dr-card__title">Can't reach Draftroom</h1>
+        <h1 className="dr-card__title">Can't reach Lobby</h1>
         <p className="dr-muted">The sign-in service did not respond. Check that the API server is running.</p>
         <button type="button" className="dr-btn dr-btn--primary" onClick={retryConfig}>
           Try again
@@ -67,10 +67,22 @@ export function SignInPage() {
   return (
     <main className="dr-signin" data-testid="signin-page">
       <div className="dr-signin__inner">
-        <Wordmark size="lg" />
-        <p className="dr-home__tagline">
-          A shared canvas for sketching, planning and reviewing work together.
-        </p>
+        {/* The glowing hero already carries the mark, so the "DBC Lobby" lockup beside it is text only. */}
+        <header className="dr-signin__brand">
+          <img
+            className="dr-signin__hero"
+            src="/brand/lobby-hero.svg"
+            width={104}
+            height={104}
+            alt=""
+            draggable={false}
+          />
+          <Wordmark size="lg" variant="dbc" mark={false} />
+          <p className="dr-home__tagline">
+            Every DBC project gets its own lobby: shared boards for sketching, planning and reviewing work
+            together.
+          </p>
+        </header>
         <section className="dr-card dr-signin__card">
           {state.status === 'signed-in' && (
             <div className="dr-signin__current">

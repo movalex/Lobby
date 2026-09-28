@@ -3,7 +3,7 @@
 
 export type ExportExtension = 'png' | 'svg' | 'pdf' | 'csv'
 
-export const FALLBACK_FILENAME = 'Draftroom board'
+export const FALLBACK_FILENAME = 'Lobby board'
 /** Code points kept from the base name (before " - qualifier.ext"). */
 export const MAX_BASE_CHARS = 80
 /** UTF-8 bytes for the whole name: common filesystems cap a name at 255 bytes. */

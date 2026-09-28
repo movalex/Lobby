@@ -182,7 +182,7 @@ export function RequestAccess({
         {pending ? 'Sending…' : currentRole ? `Request ${ROLE_WORD[role]} access` : 'Request access'}
       </button>
       <p className="dr-reqaccess__hint">
-        The owners get an in-app notification (Draftroom does not send email yet).
+        The owners get an in-app notification (Lobby does not send email yet).
       </p>
     </form>
   )

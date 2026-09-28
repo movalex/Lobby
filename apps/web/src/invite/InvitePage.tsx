@@ -105,7 +105,7 @@ export function InvitePage({ token }: { token: string }) {
   return (
     <main className="dr-screen dr-screen--page" data-testid="invite-page">
       <div className="dr-card dr-card--narrow dr-invite-card">
-        <a href="/" onClick={linkClick('/')} className="dr-card__brand" aria-label="Draftroom home">
+        <a href="/" onClick={linkClick('/')} className="dr-card__brand" aria-label="Lobby home">
           <Wordmark />
         </a>
         <p className="dr-invite-card__eyebrow">{summary.eyebrow}</p>

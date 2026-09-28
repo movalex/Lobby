@@ -158,11 +158,11 @@ function Dashboard({ workspaceId, section }: { workspaceId: string; section: Das
     [starred.data, owner, me.user.id, query],
   )
 
-  const pageTitle = `${sectionTitle(section, projectList)} · ${workspace?.name ?? 'Draftroom'}`
+  const pageTitle = `${sectionTitle(section, projectList)} · ${workspace?.name ?? 'Lobby'}`
   useEffect(() => {
-    document.title = `${pageTitle} · Draftroom`
+    document.title = `${pageTitle} · Lobby`
     return () => {
-      document.title = 'Draftroom'
+      document.title = 'Lobby'
     }
   }, [pageTitle])
 
@@ -347,7 +347,7 @@ function Dashboard({ workspaceId, section }: { workspaceId: string; section: Das
     } catch (err) {
       const text =
         err instanceof Error && err.message === 'not-json'
-          ? 'That file is not a Draftroom board export (.json).'
+          ? 'That file is not a Lobby board export (.json).'
           : isApiError(err) && err.kind === 'not-found'
             ? 'Importing is not available on this server yet.'
             : isApiError(err)
@@ -532,7 +532,7 @@ function Dashboard({ workspaceId, section }: { workspaceId: string; section: Das
                   className="dr-btn"
                   data-testid="import-board"
                   disabled={importing}
-                  title="Import a board exported from Draftroom (.json)"
+                  title="Import a board exported from Lobby (.json)"
                   onClick={() => importRef.current?.click()}
                 >
                   {importing ? 'Importing…' : 'Import'}

@@ -32,8 +32,7 @@ export function useResource<T>(load: (signal: AbortSignal) => Promise<T>) {
       },
       (e: unknown) => {
         if (controller.signal.aborted) return
-        const error =
-          e instanceof ApiError ? e : new ApiError('network', 0, 'NETWORK', "Can't reach Draftroom.")
+        const error = e instanceof ApiError ? e : new ApiError('network', 0, 'NETWORK', "Can't reach Lobby.")
         setState({ status: 'error', data: null, error })
       },
     )

@@ -716,7 +716,7 @@ test('import: an exported .json becomes a new board with its content; a non-JSON
     expect(exported.status()).toBe(200)
     const disposition = exported.headers()['content-disposition'] ?? ''
     const fileName = /filename="([^"]+)"/.exec(disposition)?.[1] ?? ''
-    expect(fileName).toBe('Pitch v2.draftroom.json')
+    expect(fileName).toBe('Pitch v2.lobby.json')
     const file = testInfo.outputPath(fileName)
     writeFileSync(file, await exported.body())
 
@@ -750,7 +750,7 @@ test('import: an exported .json becomes a new board with its content; a non-JSON
       mimeType: 'image/png',
       buffer: Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0]),
     })
-    await expect(toast(page, 'not a Draftroom board export', 'app-toast')).toBeVisible()
+    await expect(toast(page, 'not a Lobby board export', 'app-toast')).toBeVisible()
     // JSON that is not a board archive: the server refuses it and says why.
     await page.getByTestId('import-board-file').setInputFiles({
       name: 'settings.json',
@@ -871,7 +871,7 @@ test('invite: @bob gets editor access at once; an email address gets a one-time 
   await test.step('pat@client.example defaults to commenter and gets a link to send (no email is sent)', async () => {
     await dialog.getByTestId('share-invite-input').fill('pat@client.example')
     await expect(dialog.getByTestId('share-invite-role')).toHaveValue('commenter')
-    await expect(dialog.getByTestId('share-invite-hint')).toContainText('Draftroom does not send email')
+    await expect(dialog.getByTestId('share-invite-hint')).toContainText('Lobby does not send email')
     await expect(dialog.getByTestId('share-invite-submit')).toHaveText('Create invite link')
     await dialog.getByTestId('share-invite-submit').click()
     const link = dialog.getByTestId('share-invite-link')

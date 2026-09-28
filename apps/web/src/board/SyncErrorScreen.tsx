@@ -2,7 +2,7 @@ const MESSAGES: Record<string, string> = {
   NOT_AUTHENTICATED: 'The board server did not accept this connection ticket. Retry to get a new one.',
   FORBIDDEN: 'You do not have access to this board.',
   NOT_FOUND: 'This board does not exist.',
-  CLIENT_TOO_OLD: 'Draftroom has been updated. Reload the page to continue.',
+  CLIENT_TOO_OLD: 'Lobby has been updated. Reload the page to continue.',
   SERVER_TOO_OLD: 'The board server is running an older version than this page. Reload to continue.',
   INVALID_RECORD: 'The board server rejected a change from this tab. Reload to continue.',
   RATE_LIMITED: 'Too many changes were sent too quickly. Wait a moment, then retry.',

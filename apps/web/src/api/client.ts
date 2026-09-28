@@ -73,9 +73,9 @@ const FALLBACK_MESSAGES: Record<ApiErrorKind, string> = {
   conflict: 'That conflicts with a change someone else just made. Refresh and try again.',
   invalid: 'That request was not accepted.',
   'rate-limited': 'Too many requests. Wait a moment and try again.',
-  server: 'Draftroom had a problem handling that. Try again in a moment.',
-  network: "Can't reach Draftroom. Check your connection and try again.",
-  'bad-response': 'Draftroom sent an unexpected response. Reload the page and try again.',
+  server: 'Lobby had a problem handling that. Try again in a moment.',
+  network: "Can't reach Lobby. Check your connection and try again.",
+  'bad-response': 'Lobby sent an unexpected response. Reload the page and try again.',
 }
 
 const MAX_SERVER_MESSAGE = 300

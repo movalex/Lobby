@@ -68,7 +68,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       else
         setState({
           status: 'unreachable',
-          message: isApiError(e) ? e.message : "Can't reach Draftroom right now.",
+          message: isApiError(e) ? e.message : "Can't reach Lobby right now.",
         })
       return null
     }

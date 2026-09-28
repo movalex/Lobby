@@ -54,7 +54,7 @@ describe('GET /api/boards/:bid/export', () => {
     const res = await exportBoard(bob)
     expect(res.statusCode).toBe(200)
     expect(res.headers['content-disposition']).toBe(
-      `attachment; filename="Pitch / v2.draftroom.json"; filename*=UTF-8''Pitch%20%2F%20v2.draftroom.json`,
+      `attachment; filename="Pitch / v2.lobby.json"; filename*=UTF-8''Pitch%20%2F%20v2.lobby.json`,
     )
     const archive = res.json()
     expect(archive).toMatchObject({ format: 'draftroom-board', version: 1 })

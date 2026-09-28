@@ -29,7 +29,7 @@ export function MessageScreen({
   return (
     <main className="dr-screen dr-screen--page" data-testid={testId}>
       <div className="dr-card dr-card--narrow">
-        <a href="/" onClick={linkClick('/')} className="dr-card__brand" aria-label="Draftroom home">
+        <a href="/" onClick={linkClick('/')} className="dr-card__brand" aria-label="Lobby home">
           <Wordmark />
         </a>
         <h1 className="dr-card__title">{title}</h1>
