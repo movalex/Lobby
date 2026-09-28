@@ -11,7 +11,7 @@ import { openTestDb } from '@draftroom/db/testing'
 import { type DerivativeRecord, newId } from '@draftroom/dev-assets'
 import Fastify, { type FastifyBaseLogger, type FastifyInstance, type FastifyRequest } from 'fastify'
 import { derivativeKey } from '../../src/files/blobs.ts'
-import type { FileAction, FileAuthorization, FilesDeps } from '../../src/files/deps.ts'
+import type { FileAction, FileAuthorization, FilesDeps, UploadPolicy } from '../../src/files/deps.ts'
 import { filesPlugin } from '../../src/files/plugin.ts'
 
 export const ALICE = 'usr_aliceAAAAAAAAAAAAAAA'
@@ -36,6 +36,8 @@ export interface AuthCall {
 export interface FakeAuth {
   userId: string | null
   roles: Record<string, FakeRole>
+  /** The workspace of each board (default WORKSPACE). */
+  workspaces: Record<string, string>
   calls: AuthCall[]
   /** When set, authorize() waits for it before answering. */
   gate: Promise<void> | null
@@ -48,6 +50,7 @@ function fakeAuth(blobRoot: string): FakeAuth {
   const auth: FakeAuth = {
     userId: ALICE,
     roles: { 'board-a': 'editor' },
+    workspaces: {},
     calls: [],
     gate: null,
     failWith: null,
@@ -64,7 +67,7 @@ function fakeAuth(blobRoot: string): FakeAuth {
       const role = auth.roles[boardId]
       if (!role) return { ok: false, status: 404 }
       if (action === 'edit' && role !== 'editor') return { ok: false, status: 403 }
-      return { ok: true, userId: auth.userId, workspaceId: WORKSPACE }
+      return { ok: true, userId: auth.userId, workspaceId: auth.workspaces[boardId] ?? WORKSPACE }
     },
   }
   return auth
@@ -112,7 +115,14 @@ export interface TestApp {
  * fault-injecting store in front of the real one.
  */
 export async function startApp(
-  opts: { direct?: boolean; wrap?: (store: BlobStore) => BlobStore } = {},
+  opts: {
+    direct?: boolean
+    wrap?: (store: BlobStore) => BlobStore
+    /** Upload quota and rate limit (default: DEFAULT_UPLOAD_POLICY). */
+    uploads?: UploadPolicy
+    /** Clock for rows and the upload rate limit. */
+    now?: () => Date
+  } = {},
 ): Promise<TestApp> {
   const dataDir = mkdtempSync(join(tmpdir(), 'dr-api-files-'))
   const blobRoot = join(dataDir, 'blobs')
@@ -146,7 +156,13 @@ export async function startApp(
   app.get('/host/boom', async () => {
     throw new Error('host failure')
   })
-  const deps: FilesDeps = { db, blobs, authorize: auth.authorize }
+  const deps: FilesDeps = {
+    db,
+    blobs,
+    authorize: auth.authorize,
+    ...(opts.uploads ? { uploads: opts.uploads } : {}),
+    ...(opts.now ? { now: opts.now } : {}),
+  }
   if (opts.direct) await filesPlugin(app, deps)
   else await app.register(filesPlugin, deps)
   await app.listen({ port: 0, host: '127.0.0.1' })

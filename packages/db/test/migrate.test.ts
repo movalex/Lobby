@@ -132,7 +132,7 @@ describe('shipped migrations', () => {
     expect(shipped[0]?.name).toBe('0001_core')
   })
 
-  it('are the milestone-1 core, the four pre-allocated feature migrations, 0006_workshop_links and 0007_assets, in order', () => {
+  it('are the milestone-1 core, the four pre-allocated feature migrations, 0006_workshop_links, 0007_assets and 0008_session_revocation, in order', () => {
     expect(loadMigrations(MIGRATIONS_DIR).map((m) => m.name)).toEqual([
       '0001_core',
       '0002_comments',
@@ -141,6 +141,7 @@ describe('shipped migrations', () => {
       '0005_dashboard',
       '0006_workshop_links',
       '0007_assets',
+      '0008_session_revocation',
     ])
   })
 
@@ -154,6 +155,7 @@ describe('shipped migrations', () => {
       '0005_dashboard',
       '0006_workshop_links',
       '0007_assets',
+      '0008_session_revocation',
     ])
     expect(await migrate(db)).toEqual({ applied: [] })
     expect(await tableNames()).toEqual([
@@ -202,6 +204,8 @@ describe('shipped migrations', () => {
       INSERT INTO invitations (id, token_hash, workspace_id, board_id, role, created_by, expires_at)
         VALUES ('inv_aaaaaaaaaaaa', repeat('a', 64), 'wsp_aaaaaaaaaaaa', 'b-aaaaaaaaaa', 'editor',
                 'usr_aaaaaaaaaaaa', now() + interval '60 days');
+      INSERT INTO sessions (id_hash, user_id, expires_at)
+        VALUES (repeat('b', 64), 'usr_aaaaaaaaaaaa', now() + interval '30 days');
     `)
     const next = await migrate(db, { migrations: shipped })
     expect(next.applied).toEqual([
@@ -211,12 +215,18 @@ describe('shipped migrations', () => {
       '0005_dashboard',
       '0006_workshop_links',
       '0007_assets',
+      '0008_session_revocation',
     ])
     expect(await recorded()).toEqual(shipped.map((m) => m.name))
     const inv = await db.one<{ multi_use: boolean; use_count: number }>(
       "SELECT multi_use, use_count FROM invitations WHERE id = 'inv_aaaaaaaaaaaa'",
     )
     expect(inv).toEqual({ multi_use: false, use_count: 0 })
+    // A signed-in person stays signed in across 0008 (no Clerk session is known for old sessions).
+    const session = await db.one<{ clerk_session_id: string | null; revoked_at: Date | null }>(
+      `SELECT clerk_session_id, revoked_at FROM sessions WHERE id_hash = repeat('b', 64)`,
+    )
+    expect(session).toEqual({ clerk_session_id: null, revoked_at: null })
     // The checksum guard covers the feature migrations as well.
     const edited = shipped.map((m) =>
       m.version === 3 ? { ...m, checksum: checksumOf(`${m.sql}\n-- edit`) } : m,

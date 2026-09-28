@@ -4,6 +4,7 @@
 
 import type { Db } from '@draftroom/db'
 import type { FastifyRequest } from 'fastify'
+import { DEFAULT_UPLOAD_LIMITS } from '../config.ts'
 import type { BlobStore } from './blobs.ts'
 
 export type FileAction = 'view' | 'edit'
@@ -32,10 +33,31 @@ export interface FileAuthorizer {
   linkedAsset?(req: FastifyRequest, boardId: string, asset: FileAssetRef): Promise<boolean>
 }
 
+/**
+ * Upload limits (docs/SECURITY-REVIEW-2026-09-27.md FC-1). The quota covers every stored original of
+ * the board's workspace (SUM(size_bytes) and count of asset_versions, whoever uploaded them); the
+ * rate limit counts upload attempts per signed-in user, never per IP.
+ */
+export interface UploadPolicy {
+  workspaceQuota: { maxBytes: number; maxFiles: number }
+  perUser: { max: number; timeWindow: number }
+}
+
+/** Used when the host passes no policy: the same staging defaults as the API's config. */
+export const DEFAULT_UPLOAD_POLICY: Readonly<UploadPolicy> = {
+  workspaceQuota: {
+    maxBytes: DEFAULT_UPLOAD_LIMITS.workspaceQuotaBytes,
+    maxFiles: DEFAULT_UPLOAD_LIMITS.workspaceMaxFiles,
+  },
+  perUser: { max: DEFAULT_UPLOAD_LIMITS.perUserPerMinute, timeWindow: 60_000 },
+}
+
 export interface FilesDeps {
   db: Db
   blobs: BlobStore
   authorize: FileAuthorizer
-  /** Clock for row timestamps (tests); default `new Date()`. */
+  /** Clock for row timestamps and the upload rate limit (tests); default `new Date()`. */
   now?: () => Date
+  /** Quota and rate limit; default DEFAULT_UPLOAD_POLICY (never unlimited). */
+  uploads?: UploadPolicy
 }

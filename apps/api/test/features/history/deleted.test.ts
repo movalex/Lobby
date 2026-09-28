@@ -1,5 +1,7 @@
-// GET /api/boards/:bid/deleted (view) and POST /api/boards/:bid/deleted/restore (edit): the API's
-// permission checks in front of the sync server's "Recently deleted".
+// GET /api/boards/:bid/deleted and POST /api/boards/:bid/deleted/restore (both edit): the API's
+// permission checks in front of the sync server's "Recently deleted". Listing needs edit since
+// docs/SECURITY-REVIEW-2026-09-27.md authz-001: a deleted note's label is its text, and viewers or
+// review-link guests must not read notes deleted before the board was shared with them.
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { EventHub } from '../../../src/events/hub.ts'
 import { type Client, createBoard, createTestApi, DEV_STUDIO, type TestApi } from '../../helpers.ts'
@@ -40,12 +42,30 @@ const restore = (c: Client, ids: unknown = ['shape:n1'], bid = boardId) =>
 const grant = (role: string) => bob.req('PUT', `/api/boards/${boardId}/members/${carol.userId}`, { role })
 
 describe('recently deleted through the API', () => {
-  it('lists for viewers (the sync answer, checked against the contract)', async () => {
-    await grant('viewer')
+  it('lists for editors (the sync answer, checked against the contract)', async () => {
+    await grant('editor')
     const res = await list(carol)
     expect(res.statusCode).toBe(200)
     expect(res.json()).toEqual({ entries: [ENTRY], total: 1, limit: 2000 })
     expect(sync.deletedCalls).toEqual([{ op: 'list', boardId }])
+  })
+
+  it('authz-001: viewers, commenters and review-link guests get 403 and never reach the sync server', async () => {
+    for (const role of ['viewer', 'commenter']) {
+      await grant(role)
+      const res = await list(carol)
+      expect(res.statusCode, role).toBe(403)
+      expect(res.json().error.code).toBe('FORBIDDEN')
+    }
+    // Someone who redeemed a view-only review link (the board is private: the link is their access).
+    const link = await bob.req('POST', `/api/boards/${boardId}/review-links`, { role: 'viewer' })
+    expect(link.statusCode).toBe(201)
+    const token = (link.json() as { url: string }).url.split('/').pop() ?? ''
+    const client = await api.login('client')
+    expect((await client.req('POST', `/api/invitations/${token}/accept`)).statusCode).toBe(200)
+    expect((await client.req('GET', `/api/boards/${boardId}`)).statusCode).toBe(200)
+    expect((await list(client)).statusCode).toBe(403)
+    expect(sync.deletedCalls).toEqual([])
   })
 
   it('restores for editors and tells the board; the ids reach the sync server as sent', async () => {
@@ -68,7 +88,8 @@ describe('recently deleted through the API', () => {
     expect((await api.anon('GET', `/api/boards/${boardId}/deleted`)).statusCode).toBe(401)
     await bob.req('POST', `/api/boards/${boardId}/archive`)
     expect((await restore(bob)).statusCode).toBe(403)
-    expect((await list(bob)).statusCode).toBe(200)
+    // Archived boards are read-only for everyone: the list needs edit, like restore.
+    expect((await list(bob)).statusCode).toBe(403)
     await bob.req('POST', `/api/boards/${boardId}/trash`)
     expect((await list(bob)).statusCode).toBe(404)
     expect(sync.deletedCalls.filter((c) => c.op === 'restore')).toHaveLength(0)

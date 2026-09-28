@@ -321,10 +321,13 @@ export async function registerHistory(app: FastifyInstance, ctx: FeatureContext)
 
   // ---- recently deleted (captured by the sync server) ------------------------------------------
 
+  // `edit`, like restore (docs/SECURITY-REVIEW-2026-09-27.md authz-001): each entry's label is the
+  // deleted note's text, so viewers, commenters and review-link guests must not read what was deleted
+  // before the board was shared with them. Archived boards (read-only) answer 403 as for restore.
   app.get('/api/boards/:bid/deleted', async (req) => {
     const user = await ctx.requireUser(req)
     const { bid = '' } = req.params as Params
-    await requireBoardAction(db, bid, user.id, 'view')
+    await requireBoardAction(db, bid, user.id, 'edit')
     return viaSync(() => deleted.list(bid))
   })
 

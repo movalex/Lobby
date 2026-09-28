@@ -63,6 +63,29 @@ export interface ApiConfig {
    * derivatives, nothing else.
    */
   workerToken: string
+  /**
+   * Upload limits (docs/SECURITY-REVIEW-2026-09-27.md FC-1): per-workspace storage quota over every
+   * stored original (DRAFTROOM_WORKSPACE_QUOTA_MB, DRAFTROOM_WORKSPACE_MAX_FILES) and uploads per
+   * signed-in user per minute (DRAFTROOM_UPLOADS_PER_MINUTE).
+   */
+  uploads: UploadLimitsConfig
+}
+
+export interface UploadLimitsConfig {
+  workspaceQuotaBytes: number
+  workspaceMaxFiles: number
+  perUserPerMinute: number
+}
+
+const MiB = 1024 * 1024
+/**
+ * Staging defaults: 2 GB and 5,000 files per workspace (a handful of workspaces fit R2's free 10 GB),
+ * and 120 uploads a minute per person (a 100-image drop goes through in one go).
+ */
+export const DEFAULT_UPLOAD_LIMITS: Readonly<UploadLimitsConfig> = {
+  workspaceQuotaBytes: 2048 * MiB,
+  workspaceMaxFiles: 5_000,
+  perUserPerMinute: 120,
 }
 
 type Env = Record<string, string | undefined>
@@ -334,5 +357,29 @@ export function loadConfig(env: Env = process.env): ApiConfig {
     trustProxy: parseTrustProxy(env.TRUST_PROXY),
     blobStore: parseBlobStore(env, dataDir, production),
     workerToken,
+    uploads: {
+      workspaceQuotaBytes:
+        int(
+          env,
+          'DRAFTROOM_WORKSPACE_QUOTA_MB',
+          DEFAULT_UPLOAD_LIMITS.workspaceQuotaBytes / MiB,
+          1,
+          10_000_000,
+        ) * MiB,
+      workspaceMaxFiles: int(
+        env,
+        'DRAFTROOM_WORKSPACE_MAX_FILES',
+        DEFAULT_UPLOAD_LIMITS.workspaceMaxFiles,
+        1,
+        100_000_000,
+      ),
+      perUserPerMinute: int(
+        env,
+        'DRAFTROOM_UPLOADS_PER_MINUTE',
+        DEFAULT_UPLOAD_LIMITS.perUserPerMinute,
+        1,
+        100_000,
+      ),
+    },
   }
 }
