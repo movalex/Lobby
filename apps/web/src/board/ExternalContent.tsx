@@ -20,9 +20,11 @@ import {
 import { type AssetKind, type AssetVersionMeta, LIMITS } from '../assets/contract.ts'
 import {
   cameraTargetAfterDrop,
+  coverSlot,
   DROP_LAYOUT,
   type DropContainer,
   fitInSlot,
+  imageSideFor,
   layoutCellGrid,
   placeUnder,
   planDrop,
@@ -209,9 +211,10 @@ function layoutDrop(
   // Images left over go right under the frame at the slots' size; other cards are laid out as usual.
   const pictureCards = cards.filter((c) => SLOT_CARD_KINDS.has(c.kind))
   const slots = at.aimed && (created.length || pictureCards.length) ? emptySlotsAt(editor, at, exclude) : []
+  // F2-02: an image fills its slot, centre-cropped, so the slot's placeholder never shows beside it.
   const slottedImages = created.slice(0, slots.length).map((shape, i) => {
     const slot = slots[i] as Slot
-    return { shape, slot, rect: fitInSlot(nativeSize(editor, shape), slot.bounds) }
+    return { shape, slot, ...coverSlot(nativeSize(editor, shape), slot.bounds) }
   })
   const slottedCards = pictureCards.slice(0, slots.length - slottedImages.length).map((card, i) => {
     const slot = slots[slottedImages.length + i] as Slot
@@ -222,13 +225,15 @@ function layoutDrop(
     slots.length && leftOver.length ? planUnderSlots(editor, leftOver, slots, exclude, view) : null
   const gridShapes = under ? [] : leftOver
   const gridCards = cards.filter((c) => !slottedCards.some((s) => s.card === c))
+  const containers = containersAt(editor, at, exclude)
   const plan = planDrop({
     images: gridShapes.map((s) => nativeSize(editor, s)),
     cards: gridCards.map((c) => CARD_SIZE[c.kind]),
     center: at,
     view,
-    containers: containersAt(editor, at, exclude),
+    containers,
     cardGap: CARD_GAP,
+    imageSide: imageSideAt(editor, containers, exclude),
   })
   const container = plan.containerId ? editor.getShape(plan.containerId as TLShapeId) : undefined
 
@@ -237,9 +242,9 @@ function layoutDrop(
       // tldraw parented each image to the frame under its own top-left corner before moving the row,
       // which left images outside the frame that clips them. Start every image on the page.
       editor.reparentShapes(createdIds, pageId)
-      for (const { shape, slot, rect } of slottedImages) {
+      for (const { shape, slot, rect, crop } of slottedImages) {
         editor.updateShapes([
-          { id: shape.id, type: 'image', x: rect.x, y: rect.y, props: { w: rect.w, h: rect.h } },
+          { id: shape.id, type: 'image', x: rect.x, y: rect.y, props: { w: rect.w, h: rect.h, crop } },
         ])
         // The slot's frame, stacked just above the slot (under the panel's notes and text).
         editor.reparentShapes([shape.id], slot.parentId, slot.index)
@@ -315,6 +320,23 @@ function nativeSize(editor: Editor, shape: TLImageShape): Size {
   const w = asset && 'w' in asset.props ? asset.props.w : 0
   const h = asset && 'h' in asset.props ? asset.props.h : 0
   return w > 0 && h > 0 ? { w, h } : { w: shape.props.w, h: shape.props.h }
+}
+
+/**
+ * F2-01: the longest side (page units) for this drop's images: the median of the images already in
+ * the innermost frame under the drop point, or on the page when it is not over a frame, else the
+ * default. Never the zoom, so separate uploads come out at one size.
+ */
+function imageSideAt(editor: Editor, containers: readonly DropContainer[], exclude: Set<TLShapeId>): number {
+  const target = containers[0]?.id ?? editor.getCurrentPageId()
+  const sizes: Size[] = []
+  for (const id of editor.getSortedChildIdsForParent(target as TLParentId)) {
+    if (exclude.has(id)) continue
+    const s = editor.getShape(id)
+    const b = isImage(s) ? editor.getShapePageBounds(s) : undefined
+    if (b) sizes.push({ w: b.w, h: b.h })
+  }
+  return imageSideFor(sizes)
 }
 
 function childRects(editor: Editor, parentId: TLParentId, exclude: Set<TLShapeId>): Rect[] {

@@ -442,9 +442,13 @@ test('Frames panel: no doubled numbers (F20); "go to frame" shows its heading an
     }
   })
 
-  await test.step('click one frame, then Shift-click two more: 3 frames selected', async () => {
+  await test.step('Shift-click three frames: 3 frames selected', async () => {
     const ids = await rows.evaluateAll((els) => els.map((e) => e.getAttribute('data-frame-id') as string))
-    await rows.nth(0).locator('.dr-cux-frame__name').click()
+    // A plain click only goes to the frame (DANA2-03); Shift-click adds it to the selection.
+    await rows
+      .nth(0)
+      .locator('.dr-cux-frame__name')
+      .click({ modifiers: ['Shift'] })
     await rows
       .nth(1)
       .locator('.dr-cux-frame__name')

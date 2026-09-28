@@ -7,7 +7,9 @@
 //   labelled clusters in the space they occupied and to its right and below, clear of everything that
 //   stays (layout.ts). Labels are bold text shapes measured after creation, then the layout runs again
 //   with their real heights. A frame grows only when the clusters cannot fit. Labels a previous run made
-//   for the same notes are replaced, so grouping twice never stacks labels.
+//   for the same notes are replaced, so grouping twice never stacks labels. Notes beside a map in their
+//   frame (connectors and the cards they join, as on the Lobby tour's Brainstorm) are grouped under the
+//   map instead, the frame growing downward (DANA-10).
 // - Summarize, when an editor adds it from the summary panel: a pale card with a bold "Summary" line.
 // - Action items / Generate ideas: a heading and a grid of new sticky notes.
 // Both stay in the frame the target is, or is in (DANA-07): beside the selection when the frame has room
@@ -36,6 +38,7 @@ import {
 import {
   appendInFrame,
   BESIDE_GAP,
+  bottom,
   type ClusterInput,
   collides,
   FRAME_LABEL_BAND,
@@ -49,6 +52,8 @@ import {
   placeBeside,
   type Rect,
   type Size,
+  type ThemesLayout,
+  type ThemesLayoutInput,
   union,
 } from './layout.ts'
 import type { AiTarget } from './target.ts'
@@ -146,6 +151,54 @@ function labelMetrics(editor: Editor) {
   return { natural, line: Math.ceil(fontSize * lineHeight) }
 }
 
+/** DANA-10: between an existing map and the clusters grouped under it. */
+const MAP_GAP = 96
+
+/**
+ * DANA-10: the map the notes sit beside, if any: the connectors that stay in `parentId` (attached at
+ * both ends to shapes that stay) and the shapes they join, as one rectangle in the parent's space. Only
+ * when it shares the notes' rows (beside them, as the tour's theme cards are); a map above or below the
+ * notes (the clusters of an earlier run, say) leaves them where they are.
+ */
+function mapBesideNotes(
+  editor: Editor,
+  parentId: TLParentId,
+  moving: ReadonlySet<string>,
+  notes: Rect,
+): Rect | null {
+  const parts: Rect[] = []
+  for (const id of editor.getSortedChildIdsForParent(parentId)) {
+    const s = editor.getShape(id)
+    if (s?.type !== 'arrow' || moving.has(id)) continue
+    const ends = editor.getBindingsFromShape(s, 'arrow').map((b) => b.toId)
+    if (ends.length < 2 || ends.some((e) => moving.has(e))) continue
+    const joined = ends
+      .map((e) => editor.getShape(e))
+      .filter((j): j is TLShape => !!j && j.parentId === parentId)
+    if (joined.length < 2) continue
+    parts.push(boundsInParent(editor, s), ...joined.map((j) => boundsInParent(editor, j)))
+  }
+  const map = union(parts)
+  if (!map) return null
+  return map.y < bottom(notes) && notes.y < bottom(map) ? map : null
+}
+
+/**
+ * DANA-10: the clusters under a map, as wide as the frame at most (it grows downward only):
+ * layoutThemes' own choice when that fits, else the lowest of the uniform column counts that fit.
+ */
+function narrowestFit(input: ThemesLayoutInput, counts: readonly number[]): ThemesLayout | null {
+  const own = layoutThemes(input)
+  if (own.overflow.right <= 0) return own
+  let pick: ThemesLayout | null = null
+  for (const c of [4, 3, 2, 1]) {
+    const l = layoutThemes(input, { cols: counts.map((n) => Math.max(1, Math.min(c, n))) })
+    if (l.overflow.right > 0) continue
+    if (!pick || l.bounds.h < pick.bounds.h) pick = l
+  }
+  return pick
+}
+
 export interface ThemesOutcome {
   moved: number
   themes: number
@@ -178,6 +231,8 @@ export function applyThemes(editor: Editor, themes: readonly AiTheme[]): ThemesO
     : (editor.findCommonAncestor(all, (a) => a.type === 'frame') ?? editor.getCurrentPageId())
 
   let outcome: ThemesOutcome | null = null
+  /** DANA-10: the frame to bring into view afterwards, when the clusters went under its map. */
+  let show: TLShapeId | null = null
   editor.markHistoryStoppingPoint('dr-ai-themes')
   editor.run(() => {
     const outside = all.filter((s) => s.parentId !== parentId).map((s) => s.id)
@@ -224,26 +279,54 @@ export function applyThemes(editor: Editor, themes: readonly AiTheme[]): ThemesO
       }))
     const widest = Math.max(...[...rects.values()].map((r) => r.w))
     const frame = frameOf(editor, parentId)
-    const region = frame
-      ? frameRegion(
-          { w: (frame.props as { w: number }).w, h: (frame.props as { h: number }).h },
-          anchor,
-          widest,
-        )
-      : openRegion(anchor, notesBounds, [...rects.values()].reduce((n, r) => n + r.w * r.h, 0) * 2.2, widest)
+    const regionAt = (at: { x: number; y: number }) =>
+      frame
+        ? frameRegion(
+            { w: (frame.props as { w: number }).w, h: (frame.props as { h: number }).h },
+            at,
+            widest,
+          )
+        : openRegion(at, notesBounds, [...rects.values()].reduce((n, r) => n + r.w * r.h, 0) * 2.2, widest)
     const near = frame
       ? undefined
-      : { x: anchor.x - 400, y: anchor.y - 400, w: region.maxX - anchor.x + 1600, h: notesBounds.h + 6000 }
+      : {
+          x: anchor.x - 400,
+          y: anchor.y - 400,
+          w: regionAt(anchor).maxX - anchor.x + 1600,
+          h: notesBounds.h + 6000,
+        }
     const obstacles = obstaclesIn(editor, parentId, moving, near)
     // Every label gets the tallest label's height, so the first notes of the clusters line up.
     const estimates = ordered.map((g) => estimate(g.name))
     const tallest = (w: number) => Math.max(...estimates.map((e) => e(w)))
-    let layout = layoutThemes({
+    const firstInput = (at: { x: number; y: number }) => ({
       clusters: clusters(() => tallest),
-      anchor,
-      region,
+      anchor: at,
+      region: regionAt(at),
       obstacles,
     })
+    let region = regionAt(anchor)
+    let layout = layoutThemes(firstInput(anchor))
+    // DANA-10: notes that sit beside a map in the frame (the tour's question, theme cards and their
+    // connectors) are grouped in clear space under that map, not in a row beside its cards (two sets of
+    // groups side by side read as a bug). The frame grows downward for them, never sideways into its
+    // neighbours; when it may not grow, the clusters stay in the notes' own space as before.
+    const map = frame ? mapBesideNotes(editor, parentId, moving, notesBounds) : null
+    if (frame && map) {
+      const below = { x: Math.max(FRAME_MARGIN, Math.min(map.x, notesBounds.x)), y: bottom(map) + MAP_GAP }
+      const under = narrowestFit(
+        firstInput(below),
+        ordered.map((g) => g.notes.length),
+      )
+      const h = (frame.props as { h: number }).h + Math.ceil(under?.overflow.bottom ?? 0)
+      if (under && mayGrow(editor, frame, h)) {
+        anchor.x = below.x
+        anchor.y = below.y
+        region = regionAt(below)
+        layout = under
+        show = frame.id
+      }
+    }
 
     // Real labels, measured; then the chosen arrangement again with their true heights.
     const labelIds = layout.clusters.map(() => createShapeId())
@@ -320,6 +403,12 @@ export function applyThemes(editor: Editor, themes: readonly AiTheme[]): ThemesO
       skipped: Math.max(0, wanted - all.length),
     }
   })
+  // The grown frame, whole, so the clusters under the map are on screen (never zoomed past 100%), with
+  // room for the bottom toolbar.
+  const shown = show ? editor.getShapePageBounds(show) : undefined
+  if (shown && !editor.getViewportPageBounds().contains(shown)) {
+    editor.zoomToBounds(shown, { inset: 96, targetZoom: 1, animation: { duration: 320 } })
+  }
   return outcome
 }
 

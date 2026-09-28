@@ -264,6 +264,10 @@ export function applyStartView(editor: Editor, opts: StartViewOptions): string {
       const result = insertTemplate(editor, plan.templateId, { history: 'ignore', animate: false })
       if (result.ok) {
         editor.run(() => editor.selectNone(), { history: 'ignore' })
+        // DANA-06: the new board opens like a first visit, on its first frame when the whole template
+        // would not be readable (the Lobby tour's six frames were a 12 % overview), and keeps that view
+        // while the layout settles.
+        if (fitContent(editor) !== 'none') opts.hold?.(holdThroughLayout(editor, () => fitContent(editor)))
         opts.onTemplateInserted?.(plan.templateId)
       } else opts.onTemplateFailed?.(result.reason)
       return `template:${plan.templateId}`

@@ -1,7 +1,7 @@
 // MAK-13 frame outline (dock panel `frames`): every frame by name in presentation order (nested frames
 // indented under their parent). Click → camera fits the frame, heading included, clear of the page bar,
-// the bottom toolbar and the dock, never past 100% (PRI-10), and selects it; Shift/Ctrl/Cmd-click adds
-// the frame to the selection or takes it out (F12), e.g. to export several frames. Drag (or the ↑/↓
+// the bottom toolbar and the dock, never past 100% (PRI-10), without selecting it (DANA2-03; a second
+// click on the row selects it); Shift/Ctrl/Cmd-click adds the frame to the selection or takes it out (F12), e.g. to export several frames. Drag (or the ↑/↓
 // buttons, or Alt+↑/↓ on a focused row) reorders; the order is written as meta.presentationIndex on the
 // frames in one undo step, so every collaborator sees it through sync. "Auto-order" returns to layout
 // order (rows, then left to right), also one undo step. "Skip" writes meta.presentationSkip. A frame
@@ -124,10 +124,19 @@ function uiInsets(editor: Editor): Insets {
   return insets
 }
 
+/** The frame each editor's panel last went to (DANA2-03: a second click on its row selects it). */
+const lastJump = new WeakMap<Editor, string>()
+
+/**
+ * Goes to the frame without selecting it (DANA2-03): with the frame selected, the next drag inside it
+ * (a box-select over its notes, as DEMO.md does) moved the whole frame onto its neighbour. The
+ * selection is cleared, so nothing is left selected elsewhere either.
+ */
 function goToFrame(editor: Editor, id: string) {
   const bounds = editor.getShapePageBounds(id as TLShapeId)
   if (!bounds) return
-  editor.select(id as TLShapeId)
+  editor.selectNone()
+  lastJump.set(editor, id)
   const vp = editor.getViewportScreenBounds()
   const steps = editor.getCameraOptions().zoomSteps
   const camera = frameCamera(bounds, { w: vp.w, h: vp.h }, uiInsets(editor), {
@@ -138,11 +147,19 @@ function goToFrame(editor: Editor, id: string) {
   else editor.zoomToBounds(bounds, { targetZoom: 1, animation: { duration: 280 }, inset: 48 })
 }
 
-/** Row click: go to the frame; with Shift/Ctrl/Cmd, add it to (or take it out of) the selection. */
+/**
+ * Row click: go to the frame; a second click on the row once the frame is in view selects it. With
+ * Shift/Ctrl/Cmd, add it to (or take it out of) the selection.
+ */
 function onFrameClick(editor: Editor, id: string, e: MouseEvent) {
   if (e.shiftKey || e.ctrlKey || e.metaKey) {
     e.preventDefault()
     editor.setSelectedShapes(toggleInSelection(editor.getSelectedShapeIds(), id as TLShapeId))
+    return
+  }
+  const b = editor.getShapePageBounds(id as TLShapeId)
+  if (b && lastJump.get(editor) === id && editor.getViewportPageBounds().contains(b)) {
+    editor.select(id as TLShapeId)
     return
   }
   goToFrame(editor, id)
@@ -272,7 +289,7 @@ export function FramesPanel({ ctx }: { ctx: FeatureContext; close(): void }) {
                 className="dr-cux-frame__name"
                 onClick={(e) => onFrameClick(editor, row.id, e)}
                 onKeyDown={(e) => onRowKeyDown(e, index)}
-                aria-label={`${rowNumberLabel(row.name, index) === null ? '' : `${index + 1}. `}${row.name || 'Untitled frame'}${row.skip ? ' (skipped in presentation)' : ''}. Go to frame; Shift+click adds it to the selection${canEdit ? '; Alt+Up or Alt+Down to reorder' : ''}`}
+                aria-label={`${rowNumberLabel(row.name, index) === null ? '' : `${index + 1}. `}${row.name || 'Untitled frame'}${row.skip ? ' (skipped in presentation)' : ''}. Go to frame; click again to select it, Shift+click adds it to the selection${canEdit ? '; Alt+Up or Alt+Down to reorder' : ''}`}
               >
                 {row.name || <span className="dr-cux-muted">Untitled frame</span>}
               </button>

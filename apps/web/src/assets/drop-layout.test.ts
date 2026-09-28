@@ -2,9 +2,13 @@ import { describe, expect, it } from 'vitest'
 import { rectContains, rectsOverlap } from '../features/canvas-ux/placement.ts'
 import {
   cameraTargetAfterDrop,
+  coverSlot,
+  DEFAULT_IMAGE_SIDE,
   DROP_LAYOUT,
   type DropContainer,
   fitInSlot,
+  IMAGE_SIDE_RANGE,
+  imageSideFor,
   layoutCardRows,
   layoutCellGrid,
   layoutImageGrid,
@@ -455,5 +459,79 @@ describe('F12: the camera after a drop leaves room for the selection bar under t
     expect(cameraTargetAfterDrop(vp, content, 1)).not.toBeNull()
     // With room under it, it stays put.
     expect(cameraTargetAfterDrop(vp, { ...content, h: 500 }, 1)).toBeNull()
+  })
+})
+
+describe('F2-01: uploads keep one page-space size across separate drops', () => {
+  const photos = (n: number, w = 1600, h = 1200): Size[] => Array.from({ length: n }, () => ({ w, h }))
+  const longestOf = (rects: Rect[]) => rects.map((r) => Math.max(r.w, r.h))
+  const drop = (images: Size[], zoom: number, imageSide: number) =>
+    planDrop({
+      images,
+      cards: [],
+      center: { x: 0, y: 0 },
+      view: { viewport: { x: -720 / zoom, y: -450 / zoom, w: 1440 / zoom, h: 900 / zoom }, zoom },
+      containers: [{ id: null, bounds: null, obstacles: [] }],
+      cardGap: 24,
+      imageSide,
+    })
+
+  it('a second and third drop at other zooms match the first (the 252 / 631 / 1278 pyramid)', () => {
+    const first = drop(photos(25), 0.38, imageSideFor([]))
+    const side = longestOf(first.images)[0] as number
+    expect(side).toBe(DEFAULT_IMAGE_SIDE)
+    const existing = first.images.map((r) => ({ w: r.w, h: r.h }))
+    const second = drop(photos(6), 0.54, imageSideFor(existing))
+    const third = drop(photos(6), 0.26, imageSideFor([...existing, ...second.images]))
+    for (const r of [...second.images, ...third.images]) expect(Math.max(r.w, r.h)).toBeCloseTo(side, 6)
+  })
+
+  it('matches the median longest side of the images already there, within bounds', () => {
+    expect(imageSideFor([])).toBe(DEFAULT_IMAGE_SIDE)
+    expect(imageSideFor([{ w: 300, h: 200 }])).toBe(300)
+    expect(
+      imageSideFor([
+        { w: 300, h: 200 },
+        { w: 100, h: 500 },
+        { w: 9000, h: 10 },
+      ]),
+    ).toBe(500)
+    expect(imageSideFor([{ w: 20, h: 10 }])).toBe(IMAGE_SIDE_RANGE.min)
+    expect(imageSideFor([{ w: 90_000, h: 10 }])).toBe(IMAGE_SIDE_RANGE.max)
+  })
+
+  it('never enlarges a small image past 2x its pixels, whatever the zoom', () => {
+    const tiny = drop([{ w: 64, h: 48 }], 4, 400)
+    expect(tiny.images[0]?.w).toBeCloseTo(128, 6)
+    const same = drop([{ w: 64, h: 48 }], 0.1, 400)
+    expect(same.images[0]?.w).toBeCloseTo(128, 6)
+  })
+})
+
+describe('F2-02: an image dropped on a slot fills it (cover crop)', () => {
+  const slot = { x: 10, y: 20, w: 400, h: 225 }
+
+  it('a portrait photo takes the whole slot, cropped top and bottom', () => {
+    const { rect, crop } = coverSlot({ w: 900, h: 1200 }, slot)
+    expect(rect).toEqual(slot)
+    // Shown part: 225/400 of the width's aspect → (900 / (400/225)) / 1200 of the height.
+    const shownH = 900 / (400 / 225) / 1200
+    expect(crop?.topLeft.x).toBe(0)
+    expect(crop?.bottomRight.x).toBe(1)
+    expect((crop?.bottomRight.y ?? 0) - (crop?.topLeft.y ?? 0)).toBeCloseTo(shownH, 6)
+    expect(crop?.topLeft.y).toBeCloseTo((1 - shownH) / 2, 6)
+  })
+
+  it('a wide panorama is cropped left and right, centred', () => {
+    const { rect, crop } = coverSlot({ w: 4000, h: 1000 }, slot)
+    expect(rect).toEqual(slot)
+    const shownW = 400 / 225 / 4
+    expect((crop?.bottomRight.x ?? 0) - (crop?.topLeft.x ?? 0)).toBeCloseTo(shownW, 6)
+    expect(crop?.topLeft.x).toBeCloseTo((1 - shownW) / 2, 6)
+    expect(crop?.topLeft.y).toBe(0)
+  })
+
+  it('an image of the slot’s shape is not cropped', () => {
+    expect(coverSlot({ w: 1600, h: 900 }, slot)).toEqual({ rect: slot, crop: null })
   })
 })
