@@ -100,18 +100,37 @@ Contract: [`docs/M3-STORAGE-CONTRACTS.md`](M3-STORAGE-CONTRACTS.md) (DEVIATION n
 
 Checks: lint 0 errors / 0 warnings (581 files); typecheck 14 projects; vitest 1,628 passed / 5 skipped (the opt-in live R2 tests, the real-Postgres test and the POSIX-only SIGINT test); opt-in live R2 tests 26/26 with `DRAFTROOM_LIVE_R2=1`; Playwright **152/152** on three full runs on the default ports (9.8–9.9 min each; the last two on the final code).
 
-## Current state (2026-09-28)
+## Current state (2026-09-28, after the overnight run)
 
-- **Live on staging** (Render, https://draftroom-staging-web.onrender.com): the milestone-3 layout, with the api on `0.5c-512mb` with no disk, files in Cloudflare R2, and previews made by the NAS worker. Clerk (dev instance) sign-in is branded Lobby. Verified live: sign-in, boards and sync, the tldraw key, uploads to R2 with NAS previews, and light and dark themes.
-- **Built and verified locally**:
-  - milestones 0, 1 and 3 (storage);
-  - the Miro-style feature set (canvas UX, comments, history, present/export, workshops, dashboard/sharing) and the persona-review fixes;
-  - wave 2: reactions, +1 and raise hand; dark mode; arrange as grid and select by type; the owner start view; the PDF page viewer and animated GIFs; invite by email through Clerk;
-  - the Lobby rename;
-  - the fixes from docs/SECURITY-REVIEW-2026-09-27.md.
-- **Wave 3** (docs/WAVE3-CONTRACTS.md): name-only guests, private brainstorming, dashboard thumbnails, a per-board export policy, offsite board backups to R2, and the "Lobby tour" demo board.
-- **Not built**: email notifications (Resend, later); browser edit latency and big-board frame rate (partly inside tldraw); a presenter session; Office previews; mind maps and Kanban; DBC Ops integration.
-- **Unmeasured**: a real WAN, the agreed laptop, iPad/Safari, Firefox and phone frame rate; `FOR UPDATE SKIP LOCKED` contention on real Postgres.
+- **Live on staging** (https://draftroom-staging-web.onrender.com), main 9814d8d, deployed 12:26–12:28Z. It holds everything below.
+  - **Render**: api `0.5c-512mb` with no disk and 100 GB of file storage per workspace in R2; sync with offsite R2 backups; a static web site.
+  - **NAS**: preview worker `nas-1` plus the LibreOffice sidecar.
+  - **AI**: OpenAI gpt-5.4-mini.
+  - **Checked live**: sign-in, boards, sync, thumbnails, the storage line, AI status, graceful shutdown on deploy, and backups written to R2.
+- **Built and verified**:
+  - milestones 0, 1 and 3; the Miro-style features; wave 2; the Lobby rename; and the security fixes;
+  - **wave 3**: name-only guests, private brainstorming, thumbnails, the export policy, offsite backups and the Lobby tour;
+  - **wave 4**:
+    - automatic checkpoints, tags, mind maps, Office previews, search across boards;
+    - AI actions with hard budgets and an owner switch;
+    - present to everyone, follow and the people list;
+    - a performance pass;
+  - two polish rounds from four reviewers (the boss, a designer, a facilitator, accessibility).
+  
+  The gate on the deployed build: lint clean, 3,051 unit/API/protocol tests, 298/298 browser tests. The api suite also ran against a real Postgres 18.
+- **Demo**:
+  - `docs/DEMO.md` (5-minute script);
+  - a narrated 2:18 video with real AI output, re-recordable with `pnpm --filter @draftroom/e2e demo:video` (see `e2e/demo/README.md`);
+  - a Monday briefing doc for leadership.
+- **Not built / open**:
+  - email sending: the from-domain is undecided, and nothing is sent;
+  - the tldraw production license (a quote is needed before a rollout);
+  - DBC Ops integration;
+  - Kanban;
+  - edit latency and pan frame rate on very large boards: the remainder is inside tldraw 5.4.2;
+  - full keyboard-only polish;
+  - a separate least-privilege R2 bucket and token for backups (supported, not set up).
+- **Unmeasured**: a real WAN, iPad/Safari, Firefox, real phones; signed-in flows on staging (the automated runs use local dev sign-in).
 
 ## Log
 
@@ -355,3 +374,5 @@ Checks: lint 0 errors / 0 warnings (581 files); typecheck 14 projects; vitest 1,
     - exports keep vote results and the CSV names colours right;
     - phone notices sit below tldraw's menu.
 - DEMO.md: the script now uses "Share with a client", AI "Group into themes" and "Present to everyone". The "(if merged)" markers are gone, and the extras list covers the phone guest, private brainstorm, mind map, tags and search, and the safety answers.
+- **Demo video**: a pipeline in `e2e/demo/` records the Lobby tour in real browsers (two people side by side plus a phone guest) and composes a 1080p MP4. It has title and outro cards, captions, and an ElevenLabs narration generated once (11 clips, about 1.2k characters). The final cut ran against the final build with real OpenAI output in the AI scene: 138 s, delivered as "Lobby demo (Sep 28).mp4". A critic pass watched the frames every 2 s, twice.
+- Final deploy 9814d8d (12:26–12:28Z). It was the first deploy where both sides ran the tini fix, and neither printed a FATAL on shutdown. The gate: lint clean, typecheck, 3,051 unit tests, 298/298 browser tests.
