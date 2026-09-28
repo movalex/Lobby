@@ -257,3 +257,70 @@ test('checkpoint preview: exportToCanvas bitmaps with Lobby pan and zoom; no sec
   expect(watch.foreignRequests()).toEqual([])
   expect(watch.consoleErrors).toEqual([])
 })
+
+test('checkpoint preview of the heavy board (20 frames, 4,500 notes with labels, 200 images): overview, fit, zoom-in detail', async ({
+  page,
+}) => {
+  test.setTimeout(180_000)
+  const watch = watchPage(page)
+  // the heavy scene, built by the heavy page (render-heavy.tsx) and kept on the fixture server
+  await openSpike(page, 'render-heavy')
+  const built = await page.evaluate(() =>
+    (
+      (window.__lobbySpike as { extra: unknown }).extra as {
+        generate(s: object): { json: string; count: number }
+      }
+    ).generate({ frames: 20, notes: 4500, images: 200 }),
+  )
+  files.put('heavy-preview.json', built.json, 'application/json')
+  await openSpike(page, 'render-preview')
+  const opened = await page.evaluate(async () => {
+    const extra = (window.__lobbySpike as { extra: unknown }).extra as PreviewExtra
+    const els = (await (await fetch('/files/__spike/heavy-preview.json')).json()) as unknown[]
+    const t0 = performance.now()
+    const stats = await extra.openPreview(els)
+    return { stats, totalMs: Math.round(performance.now() - t0), count: els.length }
+  })
+  const fit = await x(page)
+  // a note of frame 0 (perf-n0-0 at frame 0's grid origin): its fill colour at fit
+  const note0 = await page.evaluate(async () => {
+    const els = (await (await fetch('/files/__spike/heavy-preview.json')).json()) as {
+      id: string
+      x: number
+      y: number
+      backgroundColor: string
+    }[]
+    const n = els.find((e) => e.id === 'perf-n0-0')
+    return n ? { x: n.x, y: n.y, color: n.backgroundColor } : null
+  })
+  if (!note0) throw new Error('no perf-n0-0')
+  const hex = note0.color.replace('#', '')
+  const want = [0, 2, 4].map((i) => Number.parseInt(hex.slice(i, i + 2), 16))
+  const fitPixel = await pp(page, note0.x + 100, note0.y + 30)
+  // zoom to 1 on that note, wait for the detail pass
+  await page.evaluate((n) => {
+    const extra = (window.__lobbySpike as { extra: unknown }).extra as PreviewExtra & {
+      preview: { setCamera(c: { x: number; y: number; zoom: number }): void }
+    }
+    extra.preview.setCamera({ x: n.x - 40, y: n.y - 40, zoom: 1 })
+  }, note0)
+  await expect.poll(async () => (await x(page)).stats.detailRenders, { timeout: 20_000 }).toBeGreaterThan(0)
+  const zoomed = await x(page)
+  const zoomPixel = await pp(page, note0.x + 100, note0.y + 30)
+  console.log(
+    'A11-METRICS heavy-preview',
+    JSON.stringify({
+      opened,
+      fit: fit.cam,
+      fitPixel,
+      zoomed: zoomed.cam,
+      stats: zoomed.stats,
+      zoomPixel,
+      want,
+    }),
+  )
+  expect(opened.count).toBe(built.count)
+  expect(near(fitPixel, want, 30)).toBe(true)
+  expect(near(zoomPixel, want)).toBe(true)
+  expect(watch.foreignRequests()).toEqual([])
+})

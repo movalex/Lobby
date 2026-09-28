@@ -387,6 +387,20 @@ test("hit tests stay at document values; Lobby's guard stops clicks, double-clic
     () => ((window.__lobbySpike as { extra: unknown }).extra as LabExtra).guard.log,
   )
   const after = await docState(page)
+  // for the record: the hover cursor over a hidden element (the guard does not touch pointermove)
+  await deselect(page)
+  await page.mouse.move(center.x + 5, center.y + 5)
+  await page.mouse.move(center.x, center.y)
+  const hoverCursor = await page.evaluate(
+    () =>
+      document.querySelector<HTMLCanvasElement>('canvas.excalidraw__canvas.interactive')?.style.cursor ?? '',
+  )
+  const emptyPoint = await client(page, 1180, 120)
+  await page.mouse.move(emptyPoint.x, emptyPoint.y)
+  const emptyCursor = await page.evaluate(
+    () =>
+      document.querySelector<HTMLCanvasElement>('canvas.excalidraw__canvas.interactive')?.style.cursor ?? '',
+  )
 
   console.log(
     'A10-METRICS guard',
@@ -399,6 +413,8 @@ test("hit tests stay at document values; Lobby's guard stops clicks, double-clic
       afterMenu,
       afterBox,
       afterVisible,
+      hoverCursor,
+      emptyCursor,
       guardLog: log.map((e) => `${e.type}:${e.id}:${e.reason.kind}`),
       // with the guard off, opening and closing the label editor (no typing) re-laid out the label
       opsFromGuardOffEditor: base.ops,
