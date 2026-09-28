@@ -30,7 +30,10 @@ export function createFileAuthorizer(db: Db, sessions: SessionStore): FileAuthor
     // Same rules as the board itself: trashed boards serve nothing, archived boards are read-only.
     if (!access || !can(access.role, 'view', access.board.status)) return { ok: false, status: 404 }
     if (action === 'edit' && !can(access.role, 'edit', access.board.status)) return { ok: false, status: 403 }
-    if (req.routeOptions?.url === FILE_ROUTES.original && !(await originalDownloadAllowed(db, req, access)))
+    if (
+      req.routeOptions?.url === FILE_ROUTES.original &&
+      !(await originalDownloadAllowed(db, req, access, user.id))
+    )
       throw new HttpError(403, EXPORT_DISABLED_CODE, EXPORT_DISABLED_MESSAGE)
     return { ok: true, userId: user.id, workspaceId: access.board.workspace_id }
   }

@@ -16,6 +16,37 @@ export const GUEST_NAME_MAX = 40
 export const GUEST_SESSION_MAX_MS = 7 * 24 * 60 * 60 * 1000
 /** Guests one link can let in. */
 export const GUESTS_PER_LINK = 200
+/**
+ * New guests per client address (an IPv6 client counts by its /64). The address a room of people
+ * shares is their office NAT, so this is sized for a workshop, not for one person: a 12-person session
+ * in one office must get in at once (10 per 10 minutes refused the 11th).
+ */
+export const GUEST_JOINS_PER_ADDRESS = { max: 60, windowMs: 10 * 60 * 1000 } as const
+/**
+ * New guests per link, whatever their address, on top of GUESTS_PER_LINK: however many addresses
+ * someone with the link controls, the link lets in at most this many new guests in any window.
+ * Counted from the link's recorded redemptions (the database), so it holds across restarts.
+ */
+export const GUEST_JOINS_PER_LINK = { max: 60, windowMs: 10 * 60 * 1000 } as const
+
+// Per-link caps (SEAM-05). A guest identity costs nothing but a name, so a cap per person multiplies
+// by the guests one person can create. The name-only guests of one link therefore SHARE caps on what
+// reaches everyone on its board, on top of each person's own. People with an account never count, and
+// a request the route refuses anyway never uses up the link's share.
+
+/**
+ * Board event streams the guests of one link may hold open together (on its board): two per guest at
+ * the full GUESTS_PER_LINK (a tab and a reconnect). Past it the link's newcomers get 503
+ * TOO_MANY_SUBSCRIBERS, so one link can never take more than 400 of a board's 2,000 slots.
+ */
+export const GUEST_LINK_STREAMS = 2 * GUESTS_PER_LINK
+/** Reactions the guests of one link may send together: half of the board's own rate (100 per second). */
+export const GUEST_LINK_REACTIONS = { max: 50, windowMs: 1000 } as const
+/**
+ * "Bring everyone to me" (summon) by the guest editors of one link together: one per window, like one
+ * person's own cooldown, so a crowd of guests cannot keep pulling everyone around.
+ */
+export const GUEST_LINK_SUMMONS = { max: 1, windowMs: 3000 } as const
 /** What every place that shows a name adds to a guest's name (the stored name stays as typed). */
 export const GUEST_NAME_SUFFIX = ' (guest)'
 

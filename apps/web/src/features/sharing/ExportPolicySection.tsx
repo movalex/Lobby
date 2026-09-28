@@ -17,7 +17,7 @@ import {
 
 export const EXPORT_POLICY_LABEL = 'Viewers and commenters can export, copy and download files'
 export const EXPORT_POLICY_HELP =
-  'When this is off, viewers and commenters cannot export the board (image, PDF, CSV or .json), copy from it, duplicate it or download its files. File previews on the board keep showing. This is not a data-protection feature: anyone who can see the board can still take screenshots.'
+  'When this is off, viewers, commenters and guests who joined with just a name (even on a workshop link) can’t export the board, copy from it, duplicate it or download its files. Previews keep showing. This is not a data-protection feature: anyone who can see the board can still take screenshots.'
 
 export function ExportPolicySection({
   boardId,
@@ -33,6 +33,7 @@ export function ExportPolicySection({
   const id = useId()
   const state = boardExportState(boardId)
   const policy = useValue('dr-share-export-policy', () => state.policy.get(), [state])
+  const guest = useValue('dr-share-export-guest', () => state.guest.get(), [state])
   // The value being saved: the checkbox shows it at once and stays disabled until the server answers.
   const [saving, setSaving] = useState<ExportPolicy | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -65,7 +66,7 @@ export function ExportPolicySection({
   const pending = saving !== null
   const shown = saving ?? policy
   const known = policy !== null
-  const limitedHere = known && !exportAllowedWith(role, policy)
+  const limitedHere = known && !exportAllowedWith(role, policy, guest)
   return (
     <section
       className="dr-share__section"

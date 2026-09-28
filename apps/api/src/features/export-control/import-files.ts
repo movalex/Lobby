@@ -44,7 +44,7 @@ export async function keepDownloadableFiles<T extends FileRef>(
           const access = await loadBoardAccess(q, boardId, userId)
           allowedOn.set(
             boardId,
-            !!access && can(access.role, 'view', access.board.status) && (await mayExport(q, access)),
+            !!access && can(access.role, 'view', access.board.status) && (await mayExport(q, access, userId)),
           )
         }
         if (allowedOn.get(boardId)) {

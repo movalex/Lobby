@@ -115,16 +115,17 @@ export interface AccessDetail {
   linkEndsAt: string | null
 }
 
-/** "Through which grant" for one person (PRS-02). */
-export function accessSource(
-  m: AccessDetail,
-  workspaceName: string,
-  formatDate: (iso: string) => string,
-): string {
-  if (m.viaReviewLink)
-    return m.linkEndsAt
-      ? `Joined with a review link · until ${formatDate(m.linkEndsAt)}`
-      : 'Joined with a review link'
+/**
+ * "Through which grant" for one person (PRS-02). A grant a link gave carries the link's own role
+ * (GET /api/boards/:bid/sharing/members matches them), and only a workshop link gives edit: so an
+ * editor who joined with a link joined with the workshop link, which ends at a time of day (F7).
+ */
+export function accessSource(m: AccessDetail, workspaceName: string, format: LinkDateFormat): string {
+  if (m.viaReviewLink) {
+    const workshop = m.grant === 'editor'
+    const joined = workshop ? 'Joined with the workshop link' : 'Joined with a review link'
+    return m.linkEndsAt ? `${joined} · until ${format(m.linkEndsAt, workshop ? 'time' : 'date')}` : joined
+  }
   if (m.source === 'workspace') {
     if (m.workspaceRole === 'owner' || m.workspaceRole === 'admin')
       return `${workspaceName} ${m.workspaceRole} · owns every board`

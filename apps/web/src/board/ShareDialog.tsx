@@ -4,6 +4,10 @@
 // ownership), single-use invite links and multi-use review links. Board owners manage; everyone else
 // sees who has access and can ask for more. The API enforces every rule; this only offers what the
 // shared permission rules allow.
+//
+// Order for board owners (F13): the invite forms, pending requests, then the workshop and review links
+// (what people open this dialog for in a session, in view without scrolling at 1440 x 900), then the
+// settings (workspace access, export), who has access, and single-use invite links.
 
 import type {
   AccessRequest,
@@ -259,6 +263,31 @@ export function ShareDialog({
           />
         )}
 
+        {/* F13: the links people come to this dialog for (a workshop, a client review) sit right under
+            the invite forms, above the fold at 1440 x 900; settings and the people list follow. */}
+        {canManage && (
+          <WorkshopLinksSection
+            boardId={board.id}
+            links={(invitations.data ?? []).filter((i) => i.kind === 'review' && i.role === 'editor')}
+            onChange={() => {
+              invitations.reload()
+              members.reload()
+              changed()
+            }}
+          />
+        )}
+        {canManage && (
+          <ReviewLinksSection
+            boardId={board.id}
+            links={(invitations.data ?? []).filter((i) => i.kind === 'review' && i.role !== 'editor')}
+            onChange={() => {
+              invitations.reload()
+              members.reload()
+              changed()
+            }}
+          />
+        )}
+
         <VisibilitySection
           board={board}
           workspaceName={workspace.name}
@@ -359,28 +388,6 @@ export function ShareDialog({
             boardId={board.id}
             invitations={(invitations.data ?? []).filter((i) => i.kind === 'invite')}
             onChange={() => invitations.reload()}
-          />
-        )}
-        {canManage && (
-          <WorkshopLinksSection
-            boardId={board.id}
-            links={(invitations.data ?? []).filter((i) => i.kind === 'review' && i.role === 'editor')}
-            onChange={() => {
-              invitations.reload()
-              members.reload()
-              changed()
-            }}
-          />
-        )}
-        {canManage && (
-          <ReviewLinksSection
-            boardId={board.id}
-            links={(invitations.data ?? []).filter((i) => i.kind === 'review' && i.role !== 'editor')}
-            onChange={() => {
-              invitations.reload()
-              members.reload()
-              changed()
-            }}
           />
         )}
 
@@ -580,7 +587,9 @@ function InvitePeople({
           </p>
         </div>
       )}
-      {addable.length > 0 && (
+      {/* F13: while someone is typed above, the suggestions list is the picker; a second one below
+          would read as another invite row. */}
+      {addable.length > 0 && text.trim() === '' && (
         <AddMember
           candidates={addable}
           pending={pendingAdd}
@@ -1049,7 +1058,7 @@ function MemberRow({
   const detailed = member.grant !== undefined && member.workspaceRole !== undefined
   const detail = detailed ? (member as unknown as AccessDetail) : null
   const source = detail
-    ? accessSource(detail, workspaceName, (iso) => shortDate(iso))
+    ? accessSource(detail, workspaceName, (iso, kind) => (kind === 'time' ? shortTime(iso) : shortDate(iso)))
     : member.source === 'workspace'
       ? 'Access through the workspace'
       : ''
@@ -1406,8 +1415,8 @@ function WorkshopLinksSection({
         Workshop link
       </h3>
       <p className="dr-share__hint">
-        For a live session: anyone with the link can edit, after signing in. It works for a few hours, and the
-        edit access it gave ends with it.
+        For a live session: anyone with the link can edit, after signing in, for a few hours. Their edit
+        access ends with the link.
       </p>
       <div className="dr-row dr-row--wrap">
         <label htmlFor={hoursId} className="dr-sr-only">
@@ -1498,8 +1507,8 @@ function ReviewLinksSection({
         Review links
       </h3>
       <p className="dr-share__hint">
-        One link for many people (clients, reviewers): anyone who opens it and signs in can view or comment —
-        never edit — until it expires. Their access ends when the link does.
+        One link for many people (clients, reviewers) to view or comment, never edit. Their access ends with
+        the link.
       </p>
       <div className="dr-row dr-row--wrap">
         <label htmlFor={roleId} className="dr-sr-only">
@@ -1617,6 +1626,7 @@ function ReviewLinkRow({
   const [removeAccess, setRemoveAccess] = useState(true)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const kindName = workshop ? 'workshop link' : 'review link'
   const revoke = async () => {
     setBusy(true)
     setError(null)
@@ -1624,7 +1634,7 @@ function ReviewLinkRow({
       await sharing.revokeReviewLink(boardId, link.id, removeAccess)
       onChange()
     } catch (e) {
-      setError(isApiError(e) ? e.message : 'The review link could not be revoked.')
+      setError(isApiError(e) ? e.message : `The ${kindName} could not be revoked.`)
       setBusy(false)
     }
   }
@@ -1650,39 +1660,55 @@ function ReviewLinkRow({
       data-allow-guests={link.allowGuests}
     >
       <div className="dr-sharing__link-main">
-        <span className="dr-sharing__link-text">
-          <strong>{ROLE_OPTION_LABEL[link.role]}</strong> · until{' '}
-          {workshop ? shortTime(link.expiresAt) : shortDate(link.expiresAt)} · {joined}
-          {link.maxUses ? ` (max ${link.maxUses})` : ''}
-          {link.allowGuests && (
-            <>
-              {' · '}
-              <span data-testid="link-guests-allowed">guests can join with a name</span>
-            </>
-          )}
-        </span>
-        {workshop && (
-          <button
-            type="button"
-            className="dr-btn dr-btn--sm dr-sharing__extend"
-            data-testid="workshop-link-extend"
-            disabled={busy || !canExtend(link)}
-            title={
-              canExtend(link)
-                ? 'One more hour'
-                : `Workshop links last at most 24 hours (until ${shortTime(link.maxExpiresAt ?? link.expiresAt)})`
-            }
-            onClick={() => void extend()}
-          >
-            +1 h
-          </button>
-        )}
+        {/* F13: what the link is, then its actions on the same line ("+1 h" and "Revoke…" at their own
+            size, never stretched across the row); the URL and Copy below. */}
+        <div className="dr-sharing__link-head">
+          <span className="dr-sharing__link-text">
+            <strong>{ROLE_OPTION_LABEL[link.role]}</strong> · until{' '}
+            {workshop ? shortTime(link.expiresAt) : shortDate(link.expiresAt)} · {joined}
+            {link.maxUses ? ` (max ${link.maxUses})` : ''}
+            {link.allowGuests && (
+              <>
+                {' · '}
+                <span data-testid="link-guests-allowed">guests can join with a name</span>
+              </>
+            )}
+          </span>
+          <span className="dr-sharing__link-actions">
+            {workshop && (
+              <button
+                type="button"
+                className="dr-btn dr-btn--sm dr-sharing__extend"
+                data-testid="workshop-link-extend"
+                disabled={busy || !canExtend(link)}
+                title={
+                  canExtend(link)
+                    ? 'One more hour'
+                    : `Workshop links last at most 24 hours (until ${shortTime(link.maxExpiresAt ?? link.expiresAt)})`
+                }
+                onClick={() => void extend()}
+              >
+                +1 h
+              </button>
+            )}
+            {!confirming && (
+              <button
+                type="button"
+                className="dr-linkbtn dr-sharing__revoke"
+                data-testid="review-link-revoke"
+                onClick={() => setConfirming(true)}
+              >
+                Revoke…
+              </button>
+            )}
+          </span>
+        </div>
         {link.url ? (
           <div className="dr-row">
             <input
               className="dr-input dr-invite__link"
               data-testid="review-link-url"
-              aria-label="Review link"
+              aria-label={workshop ? 'Workshop link' : 'Review link'}
               value={link.url}
               readOnly
               onFocus={(e) => e.currentTarget.select()}
@@ -1699,9 +1725,9 @@ function ReviewLinkRow({
         ) : (
           <span className="dr-share__hint">This link can’t be shown again. Create a new one to share.</span>
         )}
-        {confirming ? (
+        {confirming && (
           <fieldset className="dr-sharing__confirm">
-            <legend className="dr-sr-only">Revoke review link</legend>
+            <legend className="dr-sr-only">{workshop ? 'Revoke workshop link' : 'Revoke review link'}</legend>
             {link.uses > 0 && (
               <label className="dr-sharing__check">
                 <input
@@ -1726,15 +1752,6 @@ function ReviewLinkRow({
               Cancel
             </button>
           </fieldset>
-        ) : (
-          <button
-            type="button"
-            className="dr-linkbtn"
-            data-testid="review-link-revoke"
-            onClick={() => setConfirming(true)}
-          >
-            Revoke…
-          </button>
         )}
         {error && (
           <span className="dr-share__error" role="alert">

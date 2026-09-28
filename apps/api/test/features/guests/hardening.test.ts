@@ -1,7 +1,7 @@
 // Adversarial review of name-only guests (docs/WAVE3-CONTRACTS.md §2 guests): the abuse limits under
 // concurrency and through the other redemption route, HEAD requests against the refusal list, and a
 // guest editor reorganising the workspace's projects.
-import { GUESTS_PER_LINK } from '@draftroom/contracts'
+import { GUEST_JOINS_PER_ADDRESS, GUEST_JOINS_PER_LINK, GUESTS_PER_LINK } from '@draftroom/contracts'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createBoard, DEV_STUDIO } from '../../helpers.ts'
 import {
@@ -39,38 +39,73 @@ async function fillLink(invitationId: string, boardId: string, n = GUESTS_PER_LI
 }
 
 describe('abuse limits cannot be side-stepped', () => {
-  it('a burst of simultaneous joins from one address still lets in at most 10 new guests', async () => {
-    const token = tokenOf((await guestLink(w.bob, w.board)).url)
-    // In-process PGlite answers at once; a networked Postgres takes a moment per transaction, which is
-    // when simultaneous requests overlap. Simulate that latency.
+  /** In-process PGlite answers at once; a networked Postgres takes a moment per transaction, which is
+   * when simultaneous requests overlap. Simulate that latency. */
+  function slowTransactions() {
     const db = w.api.db as unknown as { transaction: (fn: unknown) => Promise<unknown> }
     const transaction = db.transaction.bind(db)
     db.transaction = async (fn) => {
       await new Promise((r) => setTimeout(r, 25))
       return transaction(fn)
     }
+  }
+
+  it(`a burst of simultaneous joins from one address still lets in at most ${GUEST_JOINS_PER_ADDRESS.max} new guests`, async () => {
+    // Two links, so the per-link rate is not what stops the burst.
+    const tokens = [
+      tokenOf((await guestLink(w.bob, w.board)).url),
+      tokenOf((await guestLink(w.bob, w.board, { role: 'editor' })).url),
+    ]
+    slowTransactions()
+    const total = GUEST_JOINS_PER_ADDRESS.max + 10
     const results = await Promise.all(
-      Array.from({ length: 16 }, (_, i) =>
-        joinRequest(w.api, token, { name: `Burst ${i}` }, { ip: '10.7.7.7' }),
+      Array.from({ length: total }, (_, i) =>
+        joinRequest(w.api, tokens[i % 2] ?? '', { name: `Burst ${i}` }, { ip: '10.7.7.7' }),
       ),
     )
     const created = results.filter((r) => r.statusCode === 201).length
-    expect(created).toBeLessThanOrEqual(10)
-    expect(results.filter((r) => r.statusCode === 429)).toHaveLength(16 - created)
+    expect(created).toBeLessThanOrEqual(GUEST_JOINS_PER_ADDRESS.max)
+    expect(results.filter((r) => r.statusCode === 429)).toHaveLength(total - created)
+    expect(await guestCount()).toBe(created)
+  })
+
+  it(`a burst of simultaneous joins on one link, from many addresses, lets in at most ${GUEST_JOINS_PER_LINK.max} new guests`, async () => {
+    const token = tokenOf((await guestLink(w.bob, w.board)).url)
+    slowTransactions()
+    const total = GUEST_JOINS_PER_LINK.max + 10
+    const results = await Promise.all(
+      Array.from({ length: total }, (_, i) =>
+        joinRequest(
+          w.api,
+          token,
+          { name: `Crowd ${i}` },
+          { ip: `10.8.${Math.floor(i / 200)}.${(i % 200) + 1}` },
+        ),
+      ),
+    )
+    const created = results.filter((r) => r.statusCode === 201).length
+    expect(created).toBe(GUEST_JOINS_PER_LINK.max) // the link's row lock orders them: exactly the rate
+    const refused = results.filter((r) => r.statusCode === 429)
+    expect(refused).toHaveLength(total - created)
+    for (const r of refused) expect(errorCode(r)).toBe('RATE_LIMITED')
     expect(await guestCount()).toBe(created)
   })
 
   it('addresses in one IPv6 /64 share the per-address limit (a client picks any address in its /64)', async () => {
-    const token = tokenOf((await guestLink(w.bob, w.board)).url)
-    for (let i = 0; i < 10; i++) {
+    const tokens = [
+      tokenOf((await guestLink(w.bob, w.board)).url),
+      tokenOf((await guestLink(w.bob, w.board, { role: 'editor' })).url),
+    ]
+    for (let i = 0; i < GUEST_JOINS_PER_ADDRESS.max; i++) {
       const res = await joinRequest(
         w.api,
-        token,
+        tokens[i % 2] ?? '',
         { name: `V6 ${i}` },
         { ip: `2001:db8:1:2::${(i + 1).toString(16)}` },
       )
       expect(res.statusCode, res.body).toBe(201)
     }
+    const token = tokens[0] ?? ''
     const same64 = await joinRequest(w.api, token, { name: 'Rotated' }, { ip: '2001:db8:1:2:ffff:1:2:3' })
     expect(same64.statusCode).toBe(429)
     // Another /64 (another customer) is not affected.

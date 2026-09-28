@@ -6,7 +6,9 @@
 // GET /api/boards/:bid/export-policy, every `export-control.policy` board event, a refetch after each
 // event-stream reconnect) and by the Share dialog after an owner changed it. Readers are reactive
 // (tldraw signals): present-export (Export, Copy as PNG, PDF), canvas-ux (copy, menus), the file card
-// (Download) and the PDF viewer (Download original) update the moment the policy or the role changes.
+// (Download) and the PDF viewer (Download original) update the moment the policy, the role or the
+// person's kind (a name-only guest is limited whatever their role) changes. The canvas's asset resolver
+// asks exportCertainOnBoard before playing an animated WebP from its original.
 //
 // Until the first answer arrives the policy counts as 'everyone' (the default and by far the common
 // case), so boards that never limit anyone do not flash disabled entries on open.
@@ -33,6 +35,11 @@ export interface BoardExportState {
   policy: Atom<ExportPolicy | null>
   /** This person's role on the board (from the board page; null until known). */
   role: Atom<BoardRole | null>
+  /**
+   * Whether this person is a name-only guest (GET /api/me `kind`; null until known). Under 'editors'
+   * they are limited whatever their role (a workshop link makes them editors).
+   */
+  guest: Atom<boolean | null>
 }
 
 const boards = new Map<string, BoardExportState>()
@@ -58,6 +65,7 @@ export function boardExportState(boardId: string): BoardExportState {
     state = {
       policy: atom<ExportPolicy | null>(`dr-export-policy:${boardId}`, null),
       role: atom<BoardRole | null>(`dr-export-role:${boardId}`, null),
+      guest: atom<boolean | null>(`dr-export-guest:${boardId}`, null),
     }
     boards.set(boardId, state)
   }
@@ -86,16 +94,41 @@ function beginPolicyRequest(boardId: string): (policy: ExportPolicy) => boolean 
   }
 }
 
-/** Pure rule behind the UI (tested): unknown role or policy = allowed; the server decides anyway. */
-export function exportAllowedWith(role: BoardRole | null, policy: ExportPolicy | null): boolean {
+/**
+ * Pure rule behind the UI (tested): unknown role or policy = allowed, and an unknown kind = not a
+ * name-only guest; the server decides anyway.
+ */
+export function exportAllowedWith(
+  role: BoardRole | null,
+  policy: ExportPolicy | null,
+  guest: boolean | null = null,
+): boolean {
   if (role === null || policy === null) return true
-  return exportAllowedFor(role, policy)
+  return exportAllowedFor(role, policy, { nameOnlyGuest: guest === true })
 }
 
 /** Reactive when read inside useValue / computed: may this person export on `boardId`? */
 export function exportAllowedOnBoard(boardId: string): boolean {
   const s = boardExportState(boardId)
-  return exportAllowedWith(s.role.get(), s.policy.get())
+  return exportAllowedWith(s.role.get(), s.policy.get(), s.guest.get())
+}
+
+/**
+ * Whether this person CERTAINLY may export on `boardId`: the policy is known, and it is 'everyone' or
+ * they are an editor or owner with an account. Unlike exportAllowedOnBoard, anything unknown counts as
+ * no. The canvas asks this before loading an original the api keeps from limited viewers (an animated
+ * WebP: only the uploading client knows it is animated, so the api cannot tell it from a still image
+ * with a preview, SEAM-10), so it never asks for an original the api would refuse.
+ */
+export function exportCertainOnBoard(boardId: string): boolean {
+  const s = boardExportState(boardId)
+  const policy = s.policy.get()
+  if (policy === null) return false
+  if (policy === 'everyone') return true
+  const role = s.role.get()
+  const guest = s.guest.get()
+  if (role === null || guest === null) return false
+  return exportAllowedFor(role, policy, { nameOnlyGuest: guest })
 }
 
 // ---- per editor (for tldraw overrides and shape utils, which only get the editor) ------------------

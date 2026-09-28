@@ -142,6 +142,33 @@
   color: var(--dr-ink);
   overflow-wrap: anywhere;
 }
+/* A review or workshop link row (F13): what the link is, with "+1 h" and "Revoke…" at their own
+   size on the same line; on a narrow screen the actions wrap under the text, left-aligned. */
+.dr-sharing__link-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px 12px;
+}
+.dr-sharing__link-head .dr-sharing__link-text {
+  flex: 1 1 240px;
+  min-width: 0;
+}
+.dr-sharing__link-actions {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 12px;
+}
+.dr-sharing__extend {
+  flex: none;
+  min-width: 48px;
+}
+.dr-sharing__revoke {
+  font-size: 13px;
+  white-space: nowrap;
+}
 .dr-sharing__footer {
   display: flex;
   flex-wrap: wrap;
@@ -274,7 +301,7 @@
   color: var(--dr-live);
 }
 .dr-sharing__email-result[data-tone="info"] {
-  background: #faf9f5;
+  background: var(--dr-inset);
   color: var(--dr-ink-2);
   border: 1px solid var(--dr-line);
 }

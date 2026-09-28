@@ -3,6 +3,8 @@ import { api } from '../api/client.ts'
 import { useSession } from '../auth/session.tsx'
 import { Wordmark } from '../brand/Wordmark.tsx'
 import { RequestAccess } from '../features/sharing/RequestAccess.tsx'
+import { GuestNoAccessScreen } from '../invite/GuestNoAccessScreen.tsx'
+import { useUserKind } from '../invite/guest.tsx'
 import type { BoardRole } from '../lib/permissions.ts'
 import { linkClick, matchRoute } from '../lib/routing.ts'
 
@@ -74,6 +76,9 @@ export function NoAccessScreen({
       () => {},
     )
   }, [boardId])
+  // Wave 3 (F16): a name-only guest cannot request access; their screen says what happened instead.
+  const guest = useUserKind() === 'guest'
+  if (guest && thing === 'board') return <GuestNoAccessScreen revoked={revoked} />
   return (
     <MessageScreen
       testId="no-access"

@@ -3,10 +3,12 @@
 // (features/history). One place decides, so the routes cannot drift apart.
 //
 // Rule (packages/contracts exportAllowedFor): with policy 'editors', a caller whose board role is below
-// editor (viewers, commenters, guests on review links) is refused. Owners and editors never are, and
-// neither is anyone on a board with policy 'everyone' (the default: no row).
+// editor (viewers, commenters, guests on review links) is refused, and so is a name-only guest whatever
+// their role (a workshop link makes them editors: SEAM-04). Owners and editors with an account never
+// are, and neither is anyone on a board with policy 'everyone' (the default: no row).
 
 import {
+  CANVAS_ORIGINAL_LIMITS,
   DEFAULT_EXPORT_POLICY,
   EXPORT_DISABLED_CODE,
   EXPORT_DISABLED_MESSAGE,
@@ -18,6 +20,7 @@ import type { AssetKind, AssetStatus } from '@draftroom/dev-assets'
 import { roleAtLeast } from '@draftroom/permissions'
 import type { FastifyRequest } from 'fastify'
 import type { BoardAccess } from '../../access.ts'
+import { userKind } from '../../auth/users.ts'
 import { ApiError } from '../../errors.ts'
 import { INLINE_MIMES } from '../../files/mime.ts'
 
@@ -30,11 +33,28 @@ export async function loadExportPolicy(q: Queryable, boardId: string): Promise<E
   return row?.policy ?? DEFAULT_EXPORT_POLICY
 }
 
-/** Whether the caller behind `access` may export, copy and download on that board. */
-export async function mayExport(q: Queryable, access: BoardAccess): Promise<boolean> {
-  // Owners and editors are never limited: no query needed.
-  if (roleAtLeast(access.role, 'editor')) return true
-  return exportAllowedFor(access.role, await loadExportPolicy(q, access.board.id))
+/**
+ * Whether `userId` (the caller behind `access`) may export, copy and download on that board under
+ * `policy`. A name-only guest is looked up only when it can matter: policy 'editors', a role that
+ * would otherwise be allowed, and the workspace role every name-only guest has ('guest').
+ */
+export async function exportAllowedForCaller(
+  q: Queryable,
+  access: BoardAccess,
+  userId: string,
+  policy: ExportPolicy,
+): Promise<boolean> {
+  if (!exportAllowedFor(access.role, policy)) return false
+  if (policy === 'everyone' || access.workspaceRole !== 'guest') return true
+  return exportAllowedFor(access.role, policy, { nameOnlyGuest: (await userKind(q, userId)) === 'guest' })
+}
+
+/** Whether `userId`, the caller behind `access`, may export, copy and download on that board. */
+export async function mayExport(q: Queryable, access: BoardAccess, userId: string): Promise<boolean> {
+  // Owners and editors with an account are never limited: no query needed. (Name-only guests always
+  // hold the workspace role 'guest'.)
+  if (roleAtLeast(access.role, 'editor') && access.workspaceRole !== 'guest') return true
+  return exportAllowedForCaller(q, access, userId, await loadExportPolicy(q, access.board.id))
 }
 
 /**
@@ -62,8 +82,8 @@ export async function copyExportPolicy(
 export const exportDisabled = () => new ApiError(403, EXPORT_DISABLED_CODE, EXPORT_DISABLED_MESSAGE)
 
 /** 403 EXPORT_DISABLED unless the caller may export (API routes; `access` already passed `view`). */
-export async function requireExportAllowed(q: Queryable, access: BoardAccess): Promise<void> {
-  if (!(await mayExport(q, access))) throw exportDisabled()
+export async function requireExportAllowed(q: Queryable, access: BoardAccess, userId: string): Promise<void> {
+  if (!(await mayExport(q, access, userId))) throw exportDisabled()
 }
 
 // ---- original files --------------------------------------------------------------------------------
@@ -81,45 +101,101 @@ export function isMediaElementLoad(req: FastifyRequest): boolean {
   return typeof dest === 'string' && MEDIA_DESTINATIONS.has(dest.toLowerCase())
 }
 
+/** What the file tables know about a version, as far as the canvas's choice depends on it. */
+export interface CanvasVersionFacts {
+  kind: AssetKind
+  mimeType: string
+  status: AssetStatus
+  sizeBytes: number
+  width: number | null
+  height: number | null
+  /** A still preview (a `thumb` or `display` derivative) the canvas can show instead. */
+  hasStillPreview: boolean
+}
+
 /**
- * Whether a version is one the board itself renders from its original (its uploaded board or a board
- * linked to it): a video (<video> plays the original), or an image shown before or instead of its
- * previews (an animated GIF, a small image still processing, one without usable previews). Only kinds
- * and types the file routes serve inline, and never a failed version (served as an attachment).
+ * Whether the canvas (apps/web/src/assets/asset-store.ts resolveImageOrVideoUrl) loads this version's
+ * ORIGINAL, rather than a preview, for a viewer who may not export (SEAM-10):
+ * - a video: <video> plays the original;
+ * - an image still being processed, when small (CANVAS_ORIGINAL_LIMITS.smallOriginalBytes);
+ * - a ready image without a still preview (nothing else to show);
+ * - a ready animated GIF within the animated limits (previews are single frames).
+ * Never a still image that has a preview. Animated WebP is not here: only the uploading client knows it
+ * is animated (a flag on the canvas asset), so for limited viewers the canvas shows its preview.
+ * Only kinds and types the file routes serve inline, and never a failed version (an attachment).
  */
-async function rendersFromOriginal(
+export function canvasRendersOriginal(v: CanvasVersionFacts): boolean {
+  if (v.status === 'failed') return false
+  if (v.kind !== 'image' && v.kind !== 'video') return false
+  if (!INLINE_MIMES[v.kind].includes(v.mimeType)) return false
+  if (v.kind === 'video') return true
+  const L = CANVAS_ORIGINAL_LIMITS
+  if (v.status !== 'ready') return v.sizeBytes <= L.smallOriginalBytes
+  if (!v.hasStillPreview) return true
+  if (v.mimeType !== 'image/gif' || v.sizeBytes > L.animatedMaxBytes) return false
+  // Unknown dimensions: the canvas falls back to the asset's own, which the api cannot see.
+  return v.width === null || v.height === null || v.width * v.height <= L.animatedMaxPixels
+}
+
+/**
+ * The version as the board sees it (uploaded to this board, or linked to it), or null when the board
+ * does not show it.
+ */
+async function versionOnBoard(
   q: Queryable,
   access: BoardAccess,
   assetId: string,
   versionId: string,
-): Promise<boolean> {
-  const row = await q.maybeOne<{ kind: AssetKind; mime_type: string; status: AssetStatus }>(
-    `SELECT v.kind, v.mime_type, v.status FROM asset_versions v
+): Promise<CanvasVersionFacts | null> {
+  const row = await q.maybeOne<{
+    kind: AssetKind
+    mime_type: string
+    status: AssetStatus
+    size_bytes: string | number
+    width: number | null
+    height: number | null
+    has_still_preview: boolean
+  }>(
+    `SELECT v.kind, v.mime_type, v.status, v.size_bytes,
+            CASE WHEN jsonb_typeof(v.probe->'width') = 'number' THEN (v.probe->>'width')::float8 END AS width,
+            CASE WHEN jsonb_typeof(v.probe->'height') = 'number' THEN (v.probe->>'height')::float8 END AS height,
+            EXISTS (SELECT 1 FROM asset_derivatives d
+                     WHERE d.version_id = v.id AND d.role IN ('thumb', 'display')) AS has_still_preview
+       FROM asset_versions v
       WHERE v.asset_id = $1 AND v.id = $2 AND v.workspace_id = $3
         AND (v.board_id = $4 OR EXISTS (
           SELECT 1 FROM board_asset_links l
            WHERE l.workspace_id = $3 AND l.board_id = $4 AND l.asset_id = $1 AND l.version_id = $2))`,
     [assetId, versionId, access.board.workspace_id, access.board.id],
   )
-  if (!row || row.status === 'failed') return false
-  if (row.kind !== 'image' && row.kind !== 'video') return false
-  return INLINE_MIMES[row.kind].includes(row.mime_type)
+  if (!row) return null
+  return {
+    kind: row.kind,
+    mimeType: row.mime_type,
+    status: row.status,
+    sizeBytes: Number(row.size_bytes),
+    width: row.width,
+    height: row.height,
+    hasStillPreview: row.has_still_preview,
+  }
 }
 
 /**
  * `GET|HEAD /files/:ast/:ver/original?board=` for a caller who can view the board. Refused (false)
  * only when exporting is off for them AND the request is a download: anything but a media element
- * loading an image or video the canvas renders from its original. Previews and PDF pages (derivatives)
- * are never asked about: they always render.
+ * loading a version the canvas renders from its original (canvasRendersOriginal). Previews and PDF
+ * pages (derivatives) are never asked about: they always render.
  */
 export async function originalDownloadAllowed(
   q: Queryable,
   req: FastifyRequest,
   access: BoardAccess,
+  userId: string,
 ): Promise<boolean> {
-  if (await mayExport(q, access)) return true
+  if (await mayExport(q, access, userId)) return true
   if (!isMediaElementLoad(req)) return false
   const { ast, ver } = (req.params ?? {}) as { ast?: unknown; ver?: unknown }
   if (typeof ast !== 'string' || typeof ver !== 'string') return false
-  return rendersFromOriginal(q, access, ast, ver)
+  const version = await versionOnBoard(q, access, ast, ver)
+  return version !== null && canvasRendersOriginal(version)
 }

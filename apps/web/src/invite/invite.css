@@ -41,6 +41,18 @@
   overflow-wrap: anywhere;
 }
 
+/* "Not you?" under the accept button (F17): the app's link style (as .dr-linkbtn), in both themes,
+   never the browser's default blue and purple. */
+.dr-invite-card__as a {
+  color: var(--dr-accent-ink);
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.dr-invite-card__as a:hover {
+  text-decoration-thickness: 2px;
+}
+
 /* The "Guest" tag on the account button and in its menu. */
 .dr-guest-tag {
   display: inline-flex;

@@ -7,11 +7,19 @@
 // `dr_session` that ends at the link's expiry or after 7 days, whichever comes first (and follows the
 // link when a manager extends it: sessions.ts).
 //
-// Abuse limits: new guests per client address (10 per 10 minutes by default; an IPv6 client counts by
-// its /64), joins per signed-in guest (the accept limit), and at most GUESTS_PER_LINK guests per link
-// (limits.ts, which accepting as a signed-in guest applies too).
+// Abuse limits:
+// - new guests per client address (GUEST_JOINS_PER_ADDRESS: 60 per 10 minutes; an IPv6 client counts
+//   by its /64). The address is the office NAT for a room of people, so it is sized for a workshop;
+// - new guests per link, whatever their address (GUEST_JOINS_PER_LINK: 60 per 10 minutes), and at most
+//   GUESTS_PER_LINK guests per link (limits.ts, which accepting as a signed-in guest applies too);
+// - joins per signed-in guest (the accept limit).
 
-import { type GuestJoined, GuestJoinInput, guestDisplayName } from '@draftroom/contracts'
+import {
+  GUEST_JOINS_PER_ADDRESS,
+  type GuestJoined,
+  GuestJoinInput,
+  guestDisplayName,
+} from '@draftroom/contracts'
 import { newId } from '@draftroom/db'
 import type { FastifyInstance } from 'fastify'
 import { isSecretToken, sha256hex } from '../../auth/session.ts'
@@ -31,8 +39,11 @@ import { publishSharingChanged } from '../dashboard/shared.ts'
 import { assertGuestRoomOnLink, clientAddressKey } from './limits.ts'
 import { guestCookieEnd, guestSessionEnd } from './sessions.ts'
 
-/** New guests per client IP. */
-export const DEFAULT_GUEST_CREATE_LIMIT: RouteRateLimit = { max: 10, timeWindow: 10 * 60_000 }
+/** New guests per client address (an IPv6 client by its /64). */
+export const DEFAULT_GUEST_CREATE_LIMIT: RouteRateLimit = {
+  max: GUEST_JOINS_PER_ADDRESS.max,
+  timeWindow: GUEST_JOINS_PER_ADDRESS.windowMs,
+}
 /** A signed-in guest's session is replaced by a longer one only when that gains at least this much. */
 const SESSION_EXTEND_MIN_MS = 60 * 60 * 1000
 
@@ -88,7 +99,7 @@ export function registerGuestJoin(
       // grants, so it can never act on the state from before this join.
       if (guestId)
         await tx.one('SELECT id FROM users WHERE id = $1 AND kind = $2 FOR UPDATE', [guestId, 'guest'])
-      await assertGuestRoomOnLink(tx, inv.id, guestId)
+      await assertGuestRoomOnLink(tx, inv.id, guestId, at)
 
       let userId = guestId
       let name: string

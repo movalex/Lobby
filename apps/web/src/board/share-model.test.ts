@@ -128,6 +128,33 @@ describe('share dialog: through which grant, and what removal leaves', () => {
     ).toBe('Joined with a review link · until 2026-10-10')
   })
 
+  it('tells a workshop link from a review link, and gives a workshop link its time of day (F7)', () => {
+    // The grant a link gave carries the link's role: only a workshop link gives edit.
+    const kinds: string[] = []
+    const format = (iso: string, kind: 'date' | 'time') => {
+      kinds.push(kind)
+      return kind === 'time' ? `${iso.slice(11, 16)}` : iso.slice(0, 10)
+    }
+    expect(
+      accessSource(
+        detail({ viaReviewLink: true, role: 'editor', grant: 'editor', linkEndsAt: '2026-09-28T00:44:00Z' }),
+        'W',
+        format,
+      ),
+    ).toBe('Joined with the workshop link · until 00:44')
+    expect(accessSource(detail({ viaReviewLink: true, role: 'editor', grant: 'editor' }), 'W', format)).toBe(
+      'Joined with the workshop link',
+    )
+    expect(
+      accessSource(
+        detail({ viaReviewLink: true, role: 'viewer', grant: 'viewer', linkEndsAt: '2026-10-10T00:00:00Z' }),
+        'W',
+        format,
+      ),
+    ).toBe('Joined with a review link · until 2026-10-10')
+    expect(kinds).toEqual(['time', 'date'])
+  })
+
   it('says when removing a direct invite leaves access through the workspace', () => {
     expect(removalNote(detail({ withoutGrant: 'viewer' }))).toBe(
       'Removing their invite leaves “Can view” through the workspace.',
