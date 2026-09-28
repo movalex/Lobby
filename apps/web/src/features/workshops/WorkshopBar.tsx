@@ -4,6 +4,7 @@
 
 import { useEffect, useId, useRef, useState } from 'react'
 import { useValue } from 'tldraw'
+import { bareUserId } from '../../board/presence.ts'
 import type { FeatureContext } from '../types.ts'
 import { installAudioUnlock, playChime, readMuted, writeMuted } from './chime.ts'
 import {
@@ -257,6 +258,24 @@ function WorkshopPopover({
   const vote = snap.vote
   const voteOpen = vote?.session.status === 'open'
   const canStart = phase === 'idle' || phase === 'stopped' || phase === 'finished'
+  // Someone else's running or paused timer is theirs (final review R3): only they and the board owner
+  // may pause, stop or change it (the API enforces it), so nobody silently pauses the facilitator.
+  const startedBy = snap.timer?.startedBy ?? null
+  const heldBy =
+    (phase === 'running' || phase === 'paused') &&
+    startedBy &&
+    startedBy !== ctx.me.user.id &&
+    ctx.role !== 'owner'
+      ? startedBy
+      : null
+  const holderName = useValue(
+    'dr-wk-timer-holder',
+    () =>
+      heldBy
+        ? (ctx.editor.getCollaborators().find((c) => bareUserId(c.userId) === heldBy)?.userName ?? null)
+        : null,
+    [ctx.editor, heldBy],
+  )
 
   return (
     <div
@@ -281,7 +300,12 @@ function WorkshopPopover({
             {phase === 'paused' && <span className="dr-muted"> · paused</span>}
           </span>
         </div>
-        {facilitator ? (
+        {facilitator && heldBy ? (
+          <p className="dr-wk-hint" data-testid="timer-held-hint">
+            {holderName ?? 'Someone else'} is running this timer. Only they or the board owner can pause, stop
+            or change it.
+          </p>
+        ) : facilitator ? (
           <>
             {canStart && (
               <>

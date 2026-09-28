@@ -197,7 +197,7 @@ const mayEdit = (access: BoardAccess) => can(access.role, 'edit', access.board.s
  * guest, a live session (a guest who signed out cannot sign in again; the guest sweep removes their
  * grants later, this does not wait for it).
  */
-async function allowedNow(
+export async function allowedNow(
   q: Queryable,
   boardId: string,
   userIds: readonly string[],

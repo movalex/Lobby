@@ -10,7 +10,15 @@ import { type FormEvent, useId, useMemo, useRef, useState } from 'react'
 import type { TLShapeId } from 'tldraw'
 import { Dialog } from '../../../ui/Dialog.tsx'
 import type { FeatureContext } from '../../types.ts'
-import { createPrivateFrame, frameName, selectedFrame, targetForFrame } from './canvas.ts'
+import { isPresentingNow } from '../presenting.ts'
+import {
+  afterLayout,
+  createPrivateFrame,
+  frameName,
+  selectedFrame,
+  showFrame,
+  targetForFrame,
+} from './canvas.ts'
 import { PRIVATE_PANEL_ID } from './hooks.ts'
 import type { PrivateNotesStore } from './store.ts'
 
@@ -59,6 +67,12 @@ export function SetupDialog({
     }
     onClose()
     ctx.openPanel(PRIVATE_PANEL_ID)
+    // The new frame is in free space beside what was in view (DANA2-02): bring it on screen once the
+    // panel has taken its width (the canvas gets narrower as it opens).
+    if (created) {
+      const frameId = created
+      afterLayout(editor, () => void showFrame(editor, frameId, isPresentingNow()))
+    }
   }
 
   return (

@@ -4,7 +4,13 @@
 
 import type { FeatureContext, FeaturePanel } from '../../types.ts'
 import { isPresentingNow } from '../presenting.ts'
-import { fitPlacedNotes, showPlacedNotes, zoomToSession } from './canvas.ts'
+import {
+  afterLayout,
+  fitPlacedNotes,
+  removeEmptyPrivateFrame,
+  showPlacedNotes,
+  zoomToSession,
+} from './canvas.ts'
 import { PRIVATE_PANEL_ID, privateStoreFor } from './hooks.ts'
 import { PrivateNotesIcon, PrivateNotesPanel } from './PrivateNotesPanel.tsx'
 import './private-notes.css'
@@ -18,10 +24,17 @@ export const privateNotesPanel: FeaturePanel = {
   Component: PrivateNotesPanel,
 }
 
+const coarsePointer = () =>
+  typeof window !== 'undefined' && !!window.matchMedia && window.matchMedia('(pointer: coarse)').matches
+
 export function mountPrivateNotes(ctx: FeatureContext): () => void {
   const store = privateStoreFor(ctx)
   const stops = new Set<() => void>()
-  const off = store.onSessionEnded(({ session, revealedHere }) => {
+  const off = store.onSessionEnded(({ session, revealedHere, endedHere }) => {
+    // The person who ended it tidies up: a "Private ideas" frame made for a brainstorm that put no
+    // notes in it goes away again (R2-01; an ordinary edit, so Ctrl+Z brings it back).
+    if (endedHere && (session.status === 'cancelled' || (session.placedCount ?? 0) === 0))
+      removeEmptyPrivateFrame(ctx.editor, session.frameId)
     if (session.status === 'cancelled') {
       ctx.notify({
         key: 'private-notes',
@@ -36,7 +49,8 @@ export function mountPrivateNotes(ctx: FeatureContext): () => void {
     if (revealedHere && n > 0)
       stops.add(
         fitPlacedNotes(ctx.editor, session.id, n, undefined, (ids) =>
-          showPlacedNotes(ctx.editor, ids, isPresentingNow()),
+          // After the layout settles: on a phone the panel closes as the notes arrive (R2-03).
+          afterLayout(ctx.editor, () => void showPlacedNotes(ctx.editor, ids, isPresentingNow())),
         ),
       )
     ctx.notify({
@@ -46,6 +60,8 @@ export function mountPrivateNotes(ctx: FeatureContext): () => void {
           ? 'The private brainstorm ended with no notes.'
           : `${n} note${n === 1 ? '' : 's'} from the private brainstorm ${n === 1 ? 'is' : 'are'} now on the board.`,
       testId: 'pn-toast',
+      // A phone user may be busy with the panel: "Show me" stays until they have had time to see it.
+      timeoutMs: n > 0 && coarsePointer() ? 20_000 : undefined,
       action:
         n === 0
           ? undefined

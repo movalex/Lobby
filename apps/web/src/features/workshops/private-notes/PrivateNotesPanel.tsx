@@ -7,15 +7,19 @@ import {
   codePointLength,
   PRIVATE_NOTE_MAX_CHARS,
   PRIVATE_NOTES_PER_PERSON_MAX,
+  type PrivateBrainstorm,
   type PrivateNote,
   type PrivateNoteColor,
 } from '@draftroom/contracts'
-import { useId, useRef, useState } from 'react'
-import { useValue } from 'tldraw'
+import { useCallback, useEffect, useId, useRef, useState } from 'react'
+import { type TLShapeId, useValue } from 'tldraw'
+import { TABLET_QUERY, useMediaQuery } from '../../../ui/useMedia.ts'
 import { NOTE_PALETTE } from '../../canvas-ux/palette.ts'
 import type { FeatureContext } from '../../types.ts'
-import { canEditBoard, useIsFacilitator } from '../hooks.ts'
-import { zoomToSession } from './canvas.ts'
+import { formatClock, timerDisplayPhase, timerRemainingMs } from '../countdown.ts'
+import { canEditBoard, useIsFacilitator, useNow, useWorkshop } from '../hooks.ts'
+import { isPresentingNow } from '../presenting.ts'
+import { afterLayout, fitPlacedNotes, frameName, showPlacedNotes, zoomToSession } from './canvas.ts'
 import { composerAfterAnswer, composerOnSubmit } from './composer.ts'
 import { describeCounts, usePrivateNotes } from './hooks.ts'
 import type { ActionResult, PrivateNotesStore } from './store.ts'
@@ -31,6 +35,21 @@ export function LockIcon() {
     <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
       <rect x="5" y="10.5" width="14" height="10" rx="2" fill="none" stroke="currentColor" strokeWidth="2" />
       <path d="M8.5 10.5V8a3.5 3.5 0 0 1 7 0v2.5" fill="none" stroke="currentColor" strokeWidth="2" />
+    </svg>
+  )
+}
+
+/** The timer pill's stopwatch (WorkshopBar imports this module, so it is not imported from there). */
+function StopwatchIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
+      <circle cx="12" cy="13.5" r="7.5" fill="none" stroke="currentColor" strokeWidth="2" />
+      <path
+        d="M12 13.5V9.5M9.5 2.5h5M18.5 6.5l1.5-1.5"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+      />
     </svg>
   )
 }
@@ -96,6 +115,8 @@ function NoteEditor({
   onSubmit,
   onCancel,
   testPrefix,
+  focusRequest = 0,
+  takeFocus,
 }: {
   ctx: FeatureContext
   initial: { text: string; color: PrivateNoteColor }
@@ -104,11 +125,19 @@ function NoteEditor({
   onSubmit(v: { text: string; color: PrivateNoteColor }): Promise<boolean>
   onCancel?(): void
   testPrefix: 'pn-compose' | 'pn-edit'
+  /** A new value asks the box to take the keyboard ("Add your notes", A11Y2-01)… */
+  focusRequest?: number
+  /** …once: true when this box should take it for the latest request. */
+  takeFocus?(): boolean
 }) {
   const [text, setText] = useState(initial.text)
   const [color, setColor] = useState<PrivateNoteColor>(initial.color)
   const id = useId()
   const box = useRef<HTMLTextAreaElement>(null)
+  // Runs before the dock's own "move the keyboard into the panel" effect, which then leaves it here.
+  useEffect(() => {
+    if (focusRequest > 0 && takeFocus?.()) box.current?.focus()
+  }, [focusRequest, takeFocus])
   // `busy` arrives with the next render: two presses before it (a double Ctrl+Enter) must not send twice.
   const sending = useRef(false)
   const length = codePointLength(text.trim())
@@ -152,7 +181,9 @@ function NoteEditor({
         onKeyDown={(e) => {
           // Keep the board's shortcuts out of the text box.
           e.stopPropagation()
-          if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+          // Enter adds the note, as in a chat; Shift+Enter starts a new line (R2-06). Ctrl/Cmd+Enter
+          // still adds it. Never mid-composition (an IME's Enter picks a candidate).
+          if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
             e.preventDefault()
             void submit()
           }
@@ -163,9 +194,15 @@ function NoteEditor({
         }}
       />
       <div className="dr-pn-editor__row">
+        <span className="dr-pn-keys" aria-hidden="true" data-testid={`${testPrefix}-keys`}>
+          <kbd>Enter</kbd> to {composing ? 'add' : 'save'} · <kbd>Shift</kbd>+<kbd>Enter</kbd> new line
+        </span>
         <span id={`${id}-count`} className={`dr-pn-count${tooLong ? ' dr-pn-count--over' : ''}`}>
           {length} / {PRIVATE_NOTE_MAX_CHARS}
-          <span className="dr-sr-only"> characters. Ctrl or Command + Enter to save.</span>
+          <span className="dr-sr-only">
+            {' '}
+            characters. Enter to {composing ? 'add the note' : 'save'}, Shift + Enter for a new line.
+          </span>
         </span>
       </div>
       <ColorPicker ctx={ctx} value={color} onChange={setColor} label="Note color" />
@@ -275,7 +312,99 @@ function MyNote({
   )
 }
 
-export function PrivateNotesPanel({ ctx }: { ctx: FeatureContext; close(): void }) {
+/** Below this width the open panel covers (nearly) all of the canvas. */
+const NARROW_QUERY = '(max-width: 600px)'
+const isNarrow = () =>
+  typeof window !== 'undefined' && !!window.matchMedia && window.matchMedia(NARROW_QUERY).matches
+
+/**
+ * The workshop timer inside the panel where the top bar's pill is in the "⋯" menu and the panel
+ * covers the canvas's floating timer and its "Time's up" (final review R2-02): the countdown while
+ * it runs, and "Time's up" from zero until the person taps it.
+ */
+function PanelTimer({ ctx }: { ctx: FeatureContext }) {
+  const { store, snap } = useWorkshop(ctx)
+  const narrow = useMediaQuery(TABLET_QUERY)
+  // Alerts raised before the panel opened are old news; a tap puts this one away.
+  const [mountSeq] = useState(snap.alertSeq)
+  const [dismissed, setDismissed] = useState<string | null>(null)
+  const running = snap.timer?.status === 'running'
+  const now = useNow(narrow && running)
+  if (!narrow || !snap.timer) return null
+  const offset = store.serverOffsetMs()
+  const phase = timerDisplayPhase(snap.timer, now, offset)
+  const key = `${snap.alertSeq}:${snap.timer.endsAt ?? ''}`
+  const up = (phase === 'finished' || (phase === 'ended' && snap.alertSeq > mountSeq)) && dismissed !== key
+  if (up) {
+    return (
+      <button
+        type="button"
+        className="dr-pn-timer dr-pn-timer--up"
+        data-testid="pn-timer"
+        data-state="finished"
+        onClick={() => setDismissed(key)}
+      >
+        <StopwatchIcon />
+        <span role="status">Time's up</span>
+        <span className="dr-pn-timer__ok" aria-hidden="true">
+          OK
+        </span>
+      </button>
+    )
+  }
+  if (phase !== 'running' && phase !== 'paused') return null
+  return (
+    <p className="dr-pn-timer" data-testid="pn-timer" data-state={phase} role="timer" aria-live="off">
+      <StopwatchIcon />
+      <span data-testid="pn-timer-remaining">{formatClock(timerRemainingMs(snap.timer, now, offset))}</span>
+      <span className="dr-muted">{phase === 'paused' ? 'paused' : 'left'}</span>
+    </p>
+  )
+}
+
+/** After a reveal (R2-03): where the notes went, instead of the intro that reads as if nothing happened. */
+function EndedSummary({ ctx, ended }: { ctx: FeatureContext; ended: PrivateBrainstorm }) {
+  const n = ended.placedCount ?? 0
+  const frame = useValue('dr-pn-ended-frame', () => {
+    const f = ctx.editor.getShape(ended.frameId as TLShapeId)
+    return f?.type === 'frame' ? frameName(f) : null
+  }, [ctx.editor, ended.frameId])
+  if (ended.status === 'cancelled') {
+    return (
+      <p className="dr-pn-status" data-testid="pn-ended" data-state="cancelled">
+        The last private brainstorm was cancelled. Its notes were discarded.
+      </p>
+    )
+  }
+  if (n === 0) {
+    return (
+      <p className="dr-pn-status" data-testid="pn-ended" data-state="empty">
+        The last private brainstorm ended with no notes.
+      </p>
+    )
+  }
+  return (
+    <div className="dr-pn-status dr-pn-ended" data-testid="pn-ended" data-state="placed">
+      <p>
+        <strong>The notes are on the board:</strong> {n} note{n === 1 ? '' : 's'}
+        {frame ? ` in “${frame}”` : ''} for “{ended.prompt}”.
+      </p>
+      <button
+        type="button"
+        className="dr-btn dr-btn--sm"
+        data-testid="pn-ended-show"
+        onClick={() => {
+          if (isNarrow()) ctx.openPanel(null)
+          zoomToSession(ctx.editor, ended.id, ended.frameId)
+        }}
+      >
+        Show me
+      </button>
+    </div>
+  )
+}
+
+export function PrivateNotesPanel({ ctx, close }: { ctx: FeatureContext; close(): void }) {
   const { store, snap } = usePrivateNotes(ctx)
   // Editors and owners write notes (they end up on the canvas), guest editors too; only editors with
   // an account start a brainstorm (final review R3). The API enforces both.
@@ -290,10 +419,38 @@ export function PrivateNotesPanel({ ctx }: { ctx: FeatureContext; close(): void 
     setError(r.ok ? null : (r.error ?? 'That did not work.'))
     return r.ok
   }
+  const takeFocus = useCallback(() => store.takeComposeFocus(), [store])
+
+  // Phones (R2-03): once the notes are revealed, the panel (which covers the canvas) gets out of the
+  // way and the camera goes to the notes as they arrive (the watch stops on its own). The revealing
+  // tab moves its own camera (index.tsx), so only the panel closes there.
+  const closeRef = useRef(close)
+  closeRef.current = close
+  useEffect(
+    () =>
+      store.onSessionEnded(({ session: ended, revealedHere }) => {
+        const n = ended.placedCount ?? 0
+        if (ended.status !== 'placed' || n === 0 || !isNarrow()) return
+        closeRef.current()
+        if (revealedHere) return
+        fitPlacedNotes(
+          ctx.editor,
+          ended.id,
+          n,
+          undefined,
+          // Once the canvas has its width back (the notes may already be here).
+          (ids) => afterLayout(ctx.editor, () => void showPlacedNotes(ctx.editor, ids, isPresentingNow())),
+          { fit: false },
+        )
+      }),
+    [store, ctx.editor],
+  )
 
   if (!session) {
     return (
       <div className="dr-pn" data-testid="pn-panel" data-state="none">
+        <PanelTimer ctx={ctx} />
+        {snap.lastEnded && <EndedSummary ctx={ctx} ended={snap.lastEnded} />}
         <div className="dr-pn-empty">
           <p>
             <strong>Private brainstorm</strong>: everyone writes sticky notes on their own, without seeing
@@ -324,6 +481,7 @@ export function PrivateNotesPanel({ ctx }: { ctx: FeatureContext; close(): void 
   const full = snap.myNotes.length >= PRIVATE_NOTES_PER_PERSON_MAX
   return (
     <div className="dr-pn" data-testid="pn-panel" data-state={session.status}>
+      <PanelTimer ctx={ctx} />
       <section className="dr-pn-head" aria-label="Private brainstorm">
         <p className="dr-pn-eyebrow">
           <LockIcon />
@@ -365,6 +523,8 @@ export function PrivateNotesPanel({ ctx }: { ctx: FeatureContext; close(): void 
               submitLabel="Add note"
               busy={adding}
               testPrefix="pn-compose"
+              focusRequest={snap.composeFocus}
+              takeFocus={takeFocus}
               onSubmit={async (v) => {
                 setAdding(true)
                 lastColor.current = v.color

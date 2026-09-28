@@ -61,6 +61,13 @@ export interface PrivateNotesSnapshot {
    * (final review R2/R4): the canvas asks them to add their notes. Once per session per tab.
    */
   startNews: { sessionId: string } | null
+  /**
+   * The last session that ended while this tab watched it (placed or cancelled), until another one
+   * starts: the panel says where its notes went instead of the intro (final review R2-03).
+   */
+  lastEnded: PrivateBrainstorm | null
+  /** Bumped by requestComposeFocus: the composer takes the keyboard when it sees a new value. */
+  composeFocus: number
 }
 
 /** A session that ended while this tab watched it (placed on the board, or cancelled). */
@@ -68,7 +75,12 @@ export interface SessionEnded {
   session: PrivateBrainstorm
   /** This tab asked for the reveal (it measures the notes' text afterwards, see fit.ts). */
   revealedHere: boolean
+  /** This tab asked for the reveal or the cancel (it tidies up the empty frame it made, R2-01). */
+  endedHere: boolean
 }
+
+/** How long a "focus the composer" request waits for the composer to appear. */
+const COMPOSE_FOCUS_MS = 3_000
 
 const ZERO: PrivateCounts = { notes: 0, people: 0 }
 /** The board event the sharing feature publishes when grants, links or guests change. */
@@ -103,6 +115,11 @@ export class PrivateNotesStore {
   /** Sessions whose end was already announced (the event and a response can both report it). */
   private readonly announced = new Set<string>()
   private readonly revealedHere = new Set<string>()
+  private readonly cancelledHere = new Set<string>()
+  private lastEnded: PrivateBrainstorm | null = null
+  private composeFocus = 0
+  private composeFocusTaken = 0
+  private composeFocusAt = 0
   private readonly listeners = new Set<() => void>()
   private readonly endListeners = new Set<(e: SessionEnded) => void>()
   private readonly unsubscribers: (() => void)[] = []
@@ -162,6 +179,8 @@ export class PrivateNotesStore {
       setupOpen: this.setupOpen,
       busy: this.busy,
       startNews: this.startNews,
+      lastEnded: this.lastEnded,
+      composeFocus: this.composeFocus,
     }
   }
 
@@ -189,7 +208,14 @@ export class PrivateNotesStore {
   private announceEnd(session: PrivateBrainstorm) {
     if (this.announced.has(session.id)) return
     this.announced.add(session.id)
-    const e: SessionEnded = { session, revealedHere: this.revealedHere.has(session.id) }
+    this.lastEnded = session
+    this.emit()
+    const revealedHere = this.revealedHere.has(session.id)
+    const e: SessionEnded = {
+      session,
+      revealedHere,
+      endedHere: revealedHere || this.cancelledHere.has(session.id),
+    }
     for (const l of [...this.endListeners]) {
       try {
         l(e)
@@ -223,6 +249,7 @@ export class PrivateNotesStore {
     this.appliedSeq = seq
     this.state = s
     this.loaded = true
+    if (s.session && s.session.id !== this.lastEnded?.id) this.lastEnded = null
     this.noticeStart(s)
     if (s.placed) this.announceEnd(s.placed)
   }
@@ -311,6 +338,7 @@ export class PrivateNotesStore {
     if (!sid || !path) return { ok: false, error: 'There is no private brainstorm right now.' }
     if (this.busy) return { ok: false, error: 'One moment: the last request is still running.' }
     if (action === 'reveal') this.revealedHere.add(sid)
+    else this.cancelledHere.add(sid)
     this.busy = action
     this.emit()
     try {
@@ -319,6 +347,26 @@ export class PrivateNotesStore {
       this.busy = null
       this.emit()
     }
+  }
+
+  /**
+   * "Add your notes" (the start prompt, the top-bar chip): the composer takes the keyboard as the
+   * panel opens, so typing goes into the note and never into the board's shortcuts (A11Y2-01).
+   */
+  requestComposeFocus(now = Date.now()) {
+    this.composeFocus++
+    this.composeFocusAt = now
+    this.emit()
+  }
+
+  /**
+   * True once per requestComposeFocus, shortly after it: the composer that takes the keyboard for it.
+   * A request nobody took at once (no composer: the person's notes are full) never fires later.
+   */
+  takeComposeFocus(now = Date.now()): boolean {
+    if (this.composeFocusTaken >= this.composeFocus) return false
+    this.composeFocusTaken = this.composeFocus
+    return now - this.composeFocusAt <= COMPOSE_FOCUS_MS
   }
 
   setSetupOpen(open: boolean) {

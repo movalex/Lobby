@@ -3,6 +3,7 @@
 // the workshop tools popover (start one, or open the panel).
 
 import { useEffect } from 'react'
+import { TABLET_QUERY, useMediaQuery } from '../../../ui/useMedia.ts'
 import type { FeatureContext } from '../../types.ts'
 import { canEditBoard, useIsFacilitator } from '../hooks.ts'
 import { chipCounts, describeCounts, PRIVATE_PANEL_ID, usePrivateNotes } from './hooks.ts'
@@ -26,7 +27,11 @@ export function PrivateNotesChip({ ctx }: { ctx: FeatureContext }) {
           data-state={s.status}
           aria-label={`Private brainstorm: ${counts}. Open private notes`}
           title="Open private notes"
-          onClick={() => ctx.openPanel(PRIVATE_PANEL_ID)}
+          onClick={() => {
+            // Someone who can write goes straight to the note box (A11Y2-01).
+            if (s.status === 'open' && canEditBoard(ctx)) store.requestComposeFocus()
+            ctx.openPanel(PRIVATE_PANEL_ID)
+          }}
         >
           <LockIcon />
           <span className="dr-pn-chip__label">Private brainstorm</span>
@@ -55,45 +60,87 @@ export function PrivateNotesStartPrompt({ ctx }: { ctx: FeatureContext }) {
   useEffect(() => {
     if (panelOpen) store.dismissStartNews()
   }, [panelOpen, store])
-  if (!shown || !s) return null
+  // Announced once as it appears (A11Y2-01): the card itself is not a live region (it has buttons).
+  const announce = shown && s ? `Private brainstorm started: ${s.prompt}. Add your notes.` : ''
+  const live = (
+    <p className="dr-sr-only" aria-live="polite" data-testid="pn-start-announce">
+      {announce}
+    </p>
+  )
+  if (!shown || !s) return live
   return (
-    <section
-      className="dr-wk-prompt dr-pn-start"
-      aria-label="Private brainstorm started"
-      data-testid="pn-start-prompt"
+    <>
+      {live}
+      <section
+        className="dr-wk-prompt dr-pn-start"
+        aria-label="Private brainstorm started"
+        data-testid="pn-start-prompt"
+      >
+        <p className="dr-pn-start__title">
+          <LockIcon />
+          <span>
+            <strong>Private brainstorm:</strong> <span data-testid="pn-start-prompt-text">{s.prompt}</span>
+          </span>
+        </p>
+        <p className="dr-wk-hint">
+          Only you see your notes until they're revealed
+          {s.anonymous ? ', and your name is never shown with them.' : ', under your name.'}
+        </p>
+        <div className="dr-wk-row">
+          <button
+            type="button"
+            className="dr-btn dr-btn--primary dr-btn--sm"
+            data-testid="pn-start-prompt-write"
+            onClick={() => {
+              store.dismissStartNews()
+              // The note box takes the keyboard, so typing goes into the note, never into the board's
+              // tool shortcuts (A11Y2-01).
+              store.requestComposeFocus()
+              ctx.openPanel(PRIVATE_PANEL_ID)
+            }}
+          >
+            Add your notes
+          </button>
+          <button
+            type="button"
+            className="dr-btn dr-btn--sm dr-btn--ghost"
+            data-testid="pn-start-prompt-later"
+            onClick={() => store.dismissStartNews()}
+          >
+            Later
+          </button>
+        </div>
+      </section>
+    </>
+  )
+}
+
+/**
+ * Phones and small tablets (the top-bar chip is in the "⋯" menu there): while a brainstorm is open, a
+ * small pill on the canvas reminds everyone who can write, whether or not they wrote already, and
+ * after a reload too (final review R2-12). Not while the start card or the panel is up.
+ */
+export function PrivateNotesReminder({ ctx }: { ctx: FeatureContext }) {
+  const { store, snap } = usePrivateNotes(ctx)
+  const narrow = useMediaQuery(TABLET_QUERY)
+  const s = snap.session
+  const panelOpen = ctx.activePanel === PRIVATE_PANEL_ID
+  const card = !!s && snap.startNews?.sessionId === s.id
+  if (!narrow || !s || s.status !== 'open' || !canEditBoard(ctx) || panelOpen || card) return null
+  const n = snap.myNotes.length
+  return (
+    <button
+      type="button"
+      className="dr-wk-chip dr-pn-chip dr-pn-reminder"
+      data-testid="pn-reminder"
+      onClick={() => {
+        store.requestComposeFocus()
+        ctx.openPanel(PRIVATE_PANEL_ID)
+      }}
     >
-      <p className="dr-pn-start__title">
-        <LockIcon />
-        <span>
-          <strong>Private brainstorm:</strong> <span data-testid="pn-start-prompt-text">{s.prompt}</span>
-        </span>
-      </p>
-      <p className="dr-wk-hint">
-        Only you see your notes until they're revealed
-        {s.anonymous ? ', and your name is never shown with them.' : ', under your name.'}
-      </p>
-      <div className="dr-wk-row">
-        <button
-          type="button"
-          className="dr-btn dr-btn--primary dr-btn--sm"
-          data-testid="pn-start-prompt-write"
-          onClick={() => {
-            store.dismissStartNews()
-            ctx.openPanel(PRIVATE_PANEL_ID)
-          }}
-        >
-          Add your notes
-        </button>
-        <button
-          type="button"
-          className="dr-btn dr-btn--sm dr-btn--ghost"
-          data-testid="pn-start-prompt-later"
-          onClick={() => store.dismissStartNews()}
-        >
-          Later
-        </button>
-      </div>
-    </section>
+      <LockIcon />
+      <span>Private brainstorm · {n === 0 ? 'Add your notes' : `Your notes (${n})`}</span>
+    </button>
   )
 }
 

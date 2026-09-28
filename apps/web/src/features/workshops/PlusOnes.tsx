@@ -30,10 +30,11 @@ function focusBoard(editor: Editor) {
   editor.getContainer().focus({ preventScroll: true })
 }
 
-export function PlusOnes({ ctx }: { ctx: FeatureContext }) {
+export function PlusOnes({ ctx, voting = false }: { ctx: FeatureContext; voting?: boolean }) {
   const { editor } = ctx
   const me = ctx.me.user.id
-  const editable = canPlusOne(ctx)
+  // While a vote is open the counts are plain badges (R2-05, see activeKey).
+  const editable = canPlusOne(ctx) && !voting
   const [said, setSaid] = useState('')
 
   // Notes on this page that have +1s (ids only: recomputed on document changes, not camera moves).
@@ -51,6 +52,9 @@ export function PlusOnes({ ctx }: { ctx: FeatureContext }) {
   // The notes that show the control: the one selected note, and (for people who can +1) the note
   // under the pointer with the select tool. Never the note being edited.
   const activeKey = useValue('dr-wk-plusone-active', () => {
+    // While a dot vote is open, votes are the one way to back a note (final review R2-05): no "+1"
+    // control, so a click never adds a public, named +1 next to anonymous dots. The counts stay.
+    if (voting) return ''
     const editing = editor.getEditingShapeId()
     const out: string[] = []
     const selected = editor.getOnlySelectedShape()
@@ -62,7 +66,7 @@ export function PlusOnes({ ctx }: { ctx: FeatureContext }) {
         out.push(shape.id)
     }
     return out.join(' ')
-  }, [editor, editable])
+  }, [editor, editable, voting])
 
   const key = useValue('dr-wk-plusone-placed', () => {
     const active = new Set(activeKey ? activeKey.split(' ') : [])

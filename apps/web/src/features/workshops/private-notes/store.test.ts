@@ -138,9 +138,52 @@ describe('PrivateNotesStore', () => {
       counts: { notes: 0, people: 0 },
     })
     expect(ended).toEqual([
-      { session: expect.objectContaining({ status: 'cancelled' }), revealedHere: false },
+      { session: expect.objectContaining({ status: 'cancelled' }), revealedHere: false, endedHere: false },
     ])
     expect(store.getSnapshot().session).toBeNull()
+    // R2-03: the panel says what happened instead of the intro, until the next session starts.
+    expect(store.getSnapshot().lastEnded).toMatchObject({ id: SID, status: 'cancelled' })
+  })
+
+  it('a cancel sent from this tab is ended here (it removes the empty frame it made, R2-01)', async () => {
+    const { store, ended } = setup((method, path) => {
+      if (method === 'POST' && path.endsWith('/cancel'))
+        return state({ session: null, placed: session({ status: 'cancelled', endedAt: ISO }) })
+      return state({ canReveal: true })
+    })
+    await store.refresh()
+    expect((await store.cancel()).ok).toBe(true)
+    expect(ended).toEqual([
+      { session: expect.objectContaining({ status: 'cancelled' }), revealedHere: false, endedHere: true },
+    ])
+    expect(store.getSnapshot().lastEnded).toMatchObject({ status: 'cancelled' })
+  })
+
+  it('the last ended session is forgotten once a new one starts', async () => {
+    let server = state()
+    const { store, events } = setup(() => server)
+    await store.refresh()
+    events.emit('workshop.private', {
+      session: session({ status: 'placed', placedCount: 3, endedAt: ISO }),
+      counts: { notes: 0, people: 0 },
+    })
+    expect(store.getSnapshot().lastEnded).toMatchObject({ status: 'placed', placedCount: 3 })
+    server = state({ session: session({ id: 'pbs_abcdefghij0123456789' }) })
+    await store.refresh()
+    expect(store.getSnapshot().lastEnded).toBeNull()
+  })
+
+  it('"Add your notes" asks the composer to take the keyboard once, and only right away (A11Y2-01)', () => {
+    const { store } = setup(() => state())
+    expect(store.takeComposeFocus(0)).toBe(false)
+    const before = store.getSnapshot().composeFocus
+    store.requestComposeFocus(1_000)
+    expect(store.getSnapshot().composeFocus).toBe(before + 1)
+    expect(store.takeComposeFocus(1_100)).toBe(true)
+    expect(store.takeComposeFocus(1_200)).toBe(false) // once
+    // A request nobody could take at once (no composer on screen) never steals the keyboard later.
+    store.requestComposeFocus(2_000)
+    expect(store.takeComposeFocus(60_000)).toBe(false)
   })
 
   it('reports refusals with the server message and refetches when the session moved on', async () => {
@@ -258,6 +301,23 @@ describe('helpers', () => {
     // 4 columns and 3 rows of 200 px notes fit (the sync server's grid: 40 px padding, 24 px gaps)
     expect(Math.floor((NEW_FRAME_W - 80 + 24) / 224)).toBe(4)
     expect(NEW_FRAME_H).toBe(80 + 3 * 200 + 2 * 24)
+  })
+
+  it('puts a new frame in free space beside the frame in view, never over it (DANA2-02, R2-01)', () => {
+    const viewport = { x: -900, y: 100, w: 1800, h: 1100 }
+    // The frame in view ('2 · What went well', 800 × 960) sits where a centred frame would go.
+    const inView = { x: -560, y: 216, w: 800, h: 960 }
+    const neighbour = { x: 400, y: 216, w: 800, h: 960 }
+    const b = newFrameBounds(viewport, [inView, neighbour])
+    expect(b).toMatchObject({ w: NEW_FRAME_W, h: NEW_FRAME_H })
+    const overlaps = (r: typeof inView) =>
+      b.x < r.x + r.w && r.x < b.x + b.w && b.y < r.y + r.h && r.y < b.y + b.h
+    expect(overlaps(inView)).toBe(false)
+    expect(overlaps(neighbour)).toBe(false)
+    // …and still near the view (not somewhere off past everything).
+    const cx = b.x + b.w / 2
+    const cy = b.y + b.h / 2
+    expect(Math.hypot(cx - 0, cy - 650)).toBeLessThan(2_500)
   })
 })
 

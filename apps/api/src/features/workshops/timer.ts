@@ -139,6 +139,18 @@ export function applyTimerAction(
   }
 }
 
+/**
+ * Whose timer this is when someone else started it and it still runs or is paused (final review R3):
+ * then only they, or the board owner, may pause, resume, stop, extend or restart it (Miro's
+ * facilitator rule), so a teammate can no longer silently pause the facilitator's countdown. Null
+ * when anyone who facilitates may act: no timer, your own, or one that is stopped or finished.
+ */
+export function timerHolder(prev: TimerState | null, userId: string, now: Date): string | null {
+  if (!prev?.startedBy || prev.startedBy === userId) return null
+  const status = normalizeTimer(prev, now).status
+  return status === 'running' || status === 'paused' ? prev.startedBy : null
+}
+
 /** The response/event shape: status and time left as of `now`. */
 export function timerView(s: TimerState, now: Date): WorkshopTimer {
   const n = normalizeTimer(s, now)
