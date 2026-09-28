@@ -49,8 +49,9 @@ Use these instead of a step above, or in Q&A. Each one needs its feature on stag
   the people list. **Revoke…** the link (keep **Also remove the … who joined through it** ticked) →
   **Revoke link**, and the guest's view ends within seconds.
 - **Private brainstorm** *(if merged)*: open **Private notes** in the left rail → **Start a private
-  brainstorm…**, type a prompt and choose **A new frame, “Private ideas”, in view** (notes revealed into
-  the tour's Brainstorm frame would land below its ideas and stretch the frame). Both write in **My
+  brainstorm…**, type a prompt and choose **A new frame, “Private ideas”, in view** (the tour's
+  Brainstorm frame keeps a column free on its right for about three revealed notes; a bigger reveal
+  lands below its ideas and stretches the frame). Both write in **My
   private notes**; everyone sees only the counts ("7 notes from 4 people"). **Reveal**: the notes land
   in the new frame as real sticky notes, grouped by author unless *Anonymous* was on.
 - **Dashboard thumbnails** *(if merged)*: after editing, go back to the dashboard. The board's card shows

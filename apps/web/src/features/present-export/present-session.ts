@@ -313,6 +313,18 @@ export function createPresenter(editor: Editor): Presenter {
     editor.setCamera(saved.camera, { immediate: true, force: true })
   }
 
+  // tldraw 5.4.2 measures the viewport's screen bounds from its `.tl-canvas` element (DefaultCanvas,
+  // useScreenBounds) through a 200 ms throttle, plus a once-a-second check. When the presentation ends
+  // less than 200 ms after one of those checks, the editor keeps the full-window bounds for up to
+  // another 200 ms after the board chrome is back: a click or drag in that window lands off by the
+  // dock's width and the top bar's height, so a drag started on a shape brushes the canvas instead of
+  // moving it, or jumps when the bounds catch up mid-drag. Measure it ourselves as soon as the board
+  // layout is back.
+  const measureViewport = () => {
+    const el = container()
+    editor.updateViewportScreenBounds(el.querySelector<HTMLElement>('.tl-canvas') ?? el)
+  }
+
   function stop() {
     const s = state.get()
     if (!s) return
@@ -333,22 +345,34 @@ export function createPresenter(editor: Editor): Presenter {
       if (active && active !== document.body && !overlay?.contains(active)) return
       focusTarget(s.saved.focus)?.focus({ preventScroll: true })
     }
-    if (document.fullscreenElement && document.fullscreenElement === container()) {
-      document.exitFullscreen().then(restoreFocus, () => {})
-    }
     const { saved } = s
+    // The board view once the container is back at its board size: its real screen bounds (see
+    // measureViewport), then exactly the camera it had.
+    const settleView = () => {
+      if (state.get()) return
+      measureViewport()
+      restoreCamera(saved)
+    }
+    if (document.fullscreenElement && document.fullscreenElement === container()) {
+      document.exitFullscreen().then(
+        () => {
+          settleView()
+          restoreFocus()
+        },
+        () => {},
+      )
+    }
     unsafe__withoutCapture(() => {
+      // In-window presentations (and a fullscreen the browser already left) have their board layout
+      // back now that the presenting flag is gone; a native fullscreen still covers the screen here.
+      measureViewport()
       restoreCamera(saved)
       const stillThere = saved.selectedIds.filter((id) => editor.getShape(id))
       if (stillThere.length) editor.setSelectedShapes(stillThere)
     })
-    // The container returns to its board size over the next frames (fullscreen exit is async): set the
-    // camera again once it has, so the board view is exactly where it was.
-    requestAnimationFrame(() =>
-      requestAnimationFrame(() => {
-        if (!state.get()) restoreCamera(saved)
-      }),
-    )
+    // The container returns to its board size over the next frames (fullscreen exit is async): measure
+    // it and set the camera again once it has, so the board view is exactly where it was.
+    requestAnimationFrame(() => requestAnimationFrame(settleView))
     focusTarget(saved.focus)?.focus({ preventScroll: true })
     requestAnimationFrame(() => requestAnimationFrame(restoreFocus))
   }

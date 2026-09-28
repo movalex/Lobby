@@ -14,8 +14,13 @@ import type {
 } from '@tldraw/tlschema'
 import { describe, expect, it } from 'vitest'
 import { getTemplate, IMAGE_SLOT_META, instantiateTemplate, SWATCH_META } from './index.ts'
-import { estimateTextHeight, LABEL_FONT_PX, LABEL_PADDING } from './layout.ts'
-import { LOBBY_TOUR_SECTIONS, TOUR_FRAME_H, TOUR_FRAME_W } from './templates/lobby-tour.ts'
+import { estimateTextHeight, LABEL_FONT_PX, LABEL_PADDING, NOTE_SIZE } from './layout.ts'
+import {
+  BRAINSTORM_MAP_RIGHT,
+  LOBBY_TOUR_SECTIONS,
+  TOUR_FRAME_H,
+  TOUR_FRAME_W,
+} from './templates/lobby-tour.ts'
 import {
   arrowsOf,
   bindingsOf,
@@ -205,6 +210,30 @@ describe('Lobby tour: the frames', () => {
     const slot = { x: last.x + last.w + 20, y: last.y, w: last.w, h: last.h }
     expect(rectContains(frameRect, slot)).toBe(true)
     for (const s of solid) expect(rectsOverlap(slot, pageRect(s, shapes)), textOf(s)).toBe(false)
+  })
+
+  it('2 · Brainstorm keeps a column one note wide free on its right, for a private brainstorm revealed into it (round-2 F5)', () => {
+    const { f } = brainstormParts()
+    const frameRect = pageRect(f, shapes)
+    const [heading, intro, ...map] = childrenOf(records, f.id).filter((s) => s.type !== 'arrow')
+    expect([heading, intro].map((t) => must(t).type)).toEqual(['text', 'text'])
+    // The map ends at BRAINSTORM_MAP_RIGHT; the column after it (40 px clear of it, as apps/sync
+    // place-notes keeps) ends on the frame's 80 px margin.
+    for (const s of map) {
+      const r = pageRect(s, shapes)
+      expect(r.x + r.w - frameRect.x, textOf(s) || s.type).toBeLessThanOrEqual(BRAINSTORM_MAP_RIGHT)
+    }
+    expect(BRAINSTORM_MAP_RIGHT + 40 + NOTE_SIZE).toBe(TOUR_FRAME_W - 80)
+    // Three stacked sticky notes fit in it under the intro, above the frame's bottom padding.
+    const introBottom = pageRect(must(intro), shapes).y + pageRect(must(intro), shapes).h - frameRect.y
+    const column = {
+      x: frameRect.x + BRAINSTORM_MAP_RIGHT + 40,
+      y: frameRect.y + introBottom + 40,
+      w: NOTE_SIZE,
+      h: 3 * NOTE_SIZE + 2 * 24,
+    }
+    expect(rectContains(frameRect, { ...column, h: column.h + 40 })).toBe(true)
+    for (const s of map) expect(rectsOverlap(column, pageRect(s, shapes)), textOf(s)).toBe(false)
   })
 
   it('3 · Plan is a process diagram whose arrows are bound at both ends, with a review loop', () => {
