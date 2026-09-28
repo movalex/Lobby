@@ -75,11 +75,42 @@ async function guestEditor(name = 'Troll') {
 const removeFromBoard = async (userId: string) =>
   expectStatus(await w.owner.req('DELETE', `/api/boards/${w.boardId}/members/${userId}`), 200)
 
+/**
+ * A brainstorm a guest started before guests stopped facilitating (final review R3): such sessions
+ * may still exist, so the take-over rules below still hold for them. Started by the owner, then
+ * recorded as the guest's.
+ */
+async function startedBy(guest: GuestClient) {
+  const sid = await start(w.owner)
+  await w.api.db.query('UPDATE private_brainstorms SET created_by = $2 WHERE id = $1', [sid, guest.userId])
+  return sid
+}
+
+describe('who starts a brainstorm (final review R3)', () => {
+  it('a name-only guest editor cannot start one (403 after the board checks), but writes drafts in one', async () => {
+    w = await setupWorld()
+    const guest = await guestEditor('Jordan')
+    const refused = await guest.req('POST', `/api/boards/${w.boardId}/private-brainstorm`, {
+      prompt: 'What slowed us down?',
+      anonymous: false,
+      target: TARGET,
+    })
+    expectStatus(refused, 403)
+    expect(errCode(refused)).toBe('GUEST_ACCOUNT_REQUIRED')
+    expect((await state(w.owner)).session).toBeNull()
+    // An account editor starts it; the guest takes part.
+    const sid = await start(w.editor)
+    await draft(guest, sid, 'from the guest')
+    expect((await state(guest)).canReveal).toBe(false)
+    expectStatus(await guest.req('POST', `/api/private-brainstorms/${sid}/cancel`), 403)
+  })
+})
+
 describe('a brainstorm whose starter can no longer edit the board', () => {
   it('a guest starter who was removed: any account editor can cancel it and start the next one', async () => {
     w = await setupWorld()
     const guest = await guestEditor()
-    const sid = await start(guest)
+    const sid = await startedBy(guest)
     await draft(guest, sid, 'offensive text')
     // While the guest can still edit, it is theirs (and the board owner's) to end.
     expect((await state(w.editor)).canReveal).toBe(false)
@@ -102,7 +133,7 @@ describe('a brainstorm whose starter can no longer edit the board', () => {
     w = await setupWorld()
     const calls = fakePlacement(w)
     const guest = await guestEditor('Sam')
-    const sid = await start(guest)
+    const sid = await startedBy(guest)
     await draft(guest, sid, 'from the guest who left')
     await draft(w.editor, sid, 'from the editor')
     expectStatus(await guest.req('POST', '/api/auth/logout'), 204)
@@ -141,7 +172,7 @@ describe('a brainstorm whose starter can no longer edit the board', () => {
     w = await setupWorld()
     const first = await guestEditor('First')
     const second = await guestEditor('Second')
-    const sid = await start(first)
+    const sid = await startedBy(first)
     await removeFromBoard(first.userId)
     const asGuest = await state(second)
     expect(asGuest.canReveal).toBe(false)

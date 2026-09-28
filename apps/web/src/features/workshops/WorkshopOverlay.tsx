@@ -7,12 +7,14 @@
 import { isVoteEligible, type VoteEligibilityRule } from '@draftroom/contracts'
 import { type KeyboardEvent as ReactKeyboardEvent, useEffect, useMemo, useRef, useState } from 'react'
 import { Box, type Editor, type TLEventInfo, type TLShapeId, useValue } from 'tldraw'
+import { PHONE_QUERY, useMediaQuery } from '../../ui/useMedia.ts'
 import type { FeatureContext } from '../types.ts'
 import { formatClock, timerDisplayPhase, timerRemainingMs } from './countdown.ts'
 import { HandToasts, PresentingHands } from './Hands.tsx'
 import { editorLookup, useNow, useWorkshop } from './hooks.ts'
 import { PlusOnes } from './PlusOnes.tsx'
 import { usePresenting } from './presenting.ts'
+import { PrivateNotesStartPrompt } from './private-notes/PrivateNotesBar.tsx'
 import { ReactionBursts } from './Reactions.tsx'
 import type { WorkshopStore } from './store.ts'
 import { badgeScale, clusterBadges, readingOrder, shapeLabel, topResults } from './voting.ts'
@@ -56,6 +58,9 @@ function usePlacements(
 export function WorkshopOverlay({ ctx }: { ctx: FeatureContext }) {
   const { store, snap } = useWorkshop(ctx)
   const presenting = usePresenting()
+  // Phones: the timer pill sits in the top bar's "⋯" menu, so a running timer also floats on the
+  // canvas, read-only (final review R2).
+  const phone = useMediaQuery(PHONE_QUERY)
   const vote = snap.vote
   const open = vote?.session.status === 'open'
   const joined = open && snap.participation === 'joined'
@@ -86,6 +91,7 @@ export function WorkshopOverlay({ ctx }: { ctx: FeatureContext }) {
         {!presenting && (
           <div className="dr-wk-stack" data-testid="workshop-stack">
             {snap.summonedBy && <FollowToast ctx={ctx} store={store} />}
+            <PrivateNotesStartPrompt ctx={ctx} />
             {resultsCard && <ResultsCard ctx={ctx} store={store} />}
             {open && snap.participation === null && <JoinPrompt ctx={ctx} store={store} />}
             {joined && <VotingBar ctx={ctx} store={store} />}
@@ -100,7 +106,7 @@ export function WorkshopOverlay({ ctx }: { ctx: FeatureContext }) {
       {/* Above the presentation overlay (z-index 10000), so the timer and its end signal stay visible. */}
       <div className="dr-wk-top">
         <TimerFlash seq={snap.alertSeq} />
-        {presenting && <PresentingTimer store={store} />}
+        {(presenting || phone) && <PresentingTimer store={store} corner={presenting ? 'left' : 'right'} />}
         {presenting && <PresentingHands snap={snap} />}
         <ReactionBursts ctx={ctx} store={store} />
       </div>
@@ -598,9 +604,13 @@ function JoinPrompt({ ctx, store }: { ctx: FeatureContext; store: WorkshopStore 
         place on
         {s.scope === 'frame' ? ' objects in one frame' : ' objects on the board'}.
       </p>
-      <p className="dr-wk-hint" data-testid="vote-keys-hint">
+      <p className="dr-wk-hint dr-wk-hint--fine" data-testid="vote-keys-hint">
         Click objects to vote. Keyboard: Tab from the board goes to an object’s +, Enter or Space adds a vote,
         Tab moves to the next object and Esc returns to the board.
+      </p>
+      {/* Touch screens (final review R6): no keyboard to talk about. */}
+      <p className="dr-wk-hint dr-wk-hint--coarse" data-testid="vote-touch-hint">
+        Tap objects to vote. Tap your dot on an object to take a vote back.
       </p>
       <div className="dr-wk-row">
         <button
@@ -649,7 +659,10 @@ function VotingBar({ ctx, store }: { ctx: FeatureContext; store: WorkshopStore }
       {vote.done ? (
         <span>You're done voting.</span>
       ) : (
-        <span title="Keyboard: Tab from the board to an object’s +, then Enter">Click objects to vote</span>
+        <span title="Keyboard: Tab from the board to an object’s +, then Enter">
+          <span className="dr-wk-hint--fine">Click objects to vote</span>
+          <span className="dr-wk-hint--coarse">Tap objects to vote</span>
+        </span>
       )}
       <span
         className="dr-wk-votebar__left"
@@ -793,9 +806,12 @@ function TimerFlash({ seq }: { seq: number }) {
   )
 }
 
-/** While the board is presented full screen the top bar is gone: show the timer on the canvas instead. */
-/** Read-only timer while presenting (the top bar with the pill is hidden then). Top-left, like Miro. */
-function PresentingTimer({ store }: { store: WorkshopStore }) {
+/**
+ * Read-only timer on the canvas where the top bar's pill cannot be seen: while presenting (the top bar
+ * is hidden then; top-left, like Miro), and on phones (the pill is in the "⋯" menu; top-right, clear
+ * of tldraw's menu).
+ */
+function PresentingTimer({ store, corner }: { store: WorkshopStore; corner: 'left' | 'right' }) {
   const snap = store.getSnapshot()
   const running = snap.timer?.status === 'running'
   const now = useNow(running)
@@ -807,7 +823,7 @@ function PresentingTimer({ store }: { store: WorkshopStore }) {
   if (phase !== 'running' && phase !== 'paused') return null
   return (
     <div
-      className="dr-wk-floating"
+      className={`dr-wk-floating${corner === 'right' ? ' dr-wk-floating--corner' : ''}`}
       data-testid="timer-floating"
       data-state={phase}
       role="timer"

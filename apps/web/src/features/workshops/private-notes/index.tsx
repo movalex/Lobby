@@ -44,7 +44,7 @@ export function mountPrivateNotes(ctx: FeatureContext): () => void {
       text:
         n === 0
           ? 'The private brainstorm ended with no notes.'
-          : `${n} note${n === 1 ? ' is' : 's are'} from the private brainstorm now on the board.`,
+          : `${n} note${n === 1 ? '' : 's'} from the private brainstorm ${n === 1 ? 'is' : 'are'} now on the board.`,
       testId: 'pn-toast',
       action:
         n === 0

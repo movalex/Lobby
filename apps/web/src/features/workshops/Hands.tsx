@@ -9,7 +9,7 @@ import { type Ref, useEffect, useRef, useState } from 'react'
 import { splitGuestMarker } from '../../invite/model.ts'
 import type { FeatureContext } from '../types.ts'
 import { handNotice, waitedFor } from './hand-notices.ts'
-import { isFacilitator, useNow } from './hooks.ts'
+import { useIsFacilitator, useNow } from './hooks.ts'
 import type { WorkshopSnapshot, WorkshopStore } from './store.ts'
 
 export function HandIcon({ size = 15 }: { size?: number }) {
@@ -121,7 +121,7 @@ export function HandsSection({
   snap: WorkshopSnapshot
   sectionRef?: Ref<HTMLElement>
 }) {
-  const facilitator = isFacilitator(ctx)
+  const facilitator = useIsFacilitator(ctx)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const hands = snap.hands
@@ -214,11 +214,13 @@ export function HandsSection({
 export function HandToasts({ ctx, store }: { ctx: FeatureContext; store: WorkshopStore }) {
   const live = useRef(ctx)
   live.current = ctx
+  const facilitating = useRef(false)
+  facilitating.current = useIsFacilitator(ctx)
   useEffect(
     () =>
       store.onHandChanges((changes) => {
         const c = live.current
-        const facilitator = isFacilitator(c)
+        const facilitator = facilitating.current
         const raisedCount = store.getSnapshot().hands.length
         for (const change of changes) {
           const n = handNotice(change, { selfUserId: c.me.user.id, facilitator, raisedCount })

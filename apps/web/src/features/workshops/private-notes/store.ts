@@ -56,6 +56,11 @@ export interface PrivateNotesSnapshot {
   setupOpen: boolean
   /** A reveal or cancel sent from this tab is in flight. */
   busy: 'reveal' | 'cancel' | null
+  /**
+   * An open session someone else started, which this person has not written in or dismissed yet
+   * (final review R2/R4): the canvas asks them to add their notes. Once per session per tab.
+   */
+  startNews: { sessionId: string } | null
 }
 
 /** A session that ended while this tab watched it (placed on the board, or cancelled). */
@@ -83,6 +88,11 @@ const ended = (s: PrivateBrainstorm) => s.status === 'placed' || s.status === 'c
 export class PrivateNotesStore {
   private readonly boardId: string
   private readonly request: RequestFn
+  /** The signed-in person (the starter is never asked to add notes to their own session). */
+  private readonly userId: string | null
+  /** Sessions this tab already asked the person to write in (or that they started). */
+  private readonly startSeen = new Set<string>()
+  private startNews: PrivateNotesSnapshot['startNews'] = null
   private state: PrivateBrainstormState | null = null
   private loaded = false
   private stale = false
@@ -98,9 +108,10 @@ export class PrivateNotesStore {
   private readonly unsubscribers: (() => void)[] = []
   private snap: PrivateNotesSnapshot
 
-  constructor(deps: { boardId: string; request: RequestFn; events: EventSource }) {
+  constructor(deps: { boardId: string; request: RequestFn; events: EventSource; userId?: string }) {
     this.boardId = deps.boardId
     this.request = deps.request
+    this.userId = deps.userId ?? null
     this.snap = this.compute()
     this.unsubscribers.push(
       deps.events.on(PRIVATE_NOTES_EVENTS.changed, (d) => this.onEvent(d)),
@@ -150,7 +161,29 @@ export class PrivateNotesStore {
       starterLeft: s?.starterLeft ?? false,
       setupOpen: this.setupOpen,
       busy: this.busy,
+      startNews: this.startNews,
     }
+  }
+
+  /**
+   * Whether to ask this person to write (R2/R4): the first time this tab sees an open session that
+   * someone else started and in which they have written nothing. Their own session, a session they
+   * already wrote in, or one they already answered never asks again.
+   */
+  private noticeStart(s: PrivateBrainstormState) {
+    const session = s.session
+    if (this.startNews && this.startNews.sessionId !== session?.id) this.startNews = null
+    if (session?.status !== 'open' || this.startSeen.has(session.id)) return
+    this.startSeen.add(session.id)
+    if (session.createdBy === this.userId || s.myNotes.length > 0) return
+    this.startNews = { sessionId: session.id }
+  }
+
+  /** The person answered the "add your notes" prompt (or opened the panel). */
+  dismissStartNews() {
+    if (!this.startNews) return
+    this.startNews = null
+    this.emit()
   }
 
   private announceEnd(session: PrivateBrainstorm) {
@@ -190,6 +223,7 @@ export class PrivateNotesStore {
     this.appliedSeq = seq
     this.state = s
     this.loaded = true
+    this.noticeStart(s)
     if (s.placed) this.announceEnd(s.placed)
   }
 

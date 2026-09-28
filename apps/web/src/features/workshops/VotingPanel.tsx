@@ -7,7 +7,7 @@ import { type Editor, type TLShapeId, useValue } from 'tldraw'
 import { EXPORT_OFF_TEXT, exportAllowedOnBoard } from '../sharing/export-policy.ts'
 import type { FeatureContext } from '../types.ts'
 import { describeClock, formatClock } from './countdown.ts'
-import { isFacilitator, useNow, useWorkshop } from './hooks.ts'
+import { useIsFacilitator, useNow, useWorkshop } from './hooks.ts'
 import type { WorkshopStore } from './store.ts'
 import { describeProgress, resultsCsv, shapeLabel, topResults, typeName } from './voting.ts'
 
@@ -58,7 +58,7 @@ function scopeText(v: WorkshopVoteState, editor: Editor): string {
 
 export function VotingPanel({ ctx }: { ctx: FeatureContext; close(): void }) {
   const { store, snap } = useWorkshop(ctx)
-  const facilitator = isFacilitator(ctx)
+  const facilitator = useIsFacilitator(ctx)
   const vote = snap.vote
   const [past, setPast] = useState<VoteSessionSummary[] | null>(null)
   const [viewing, setViewing] = useState<{ session: VoteSessionSummary; results: VoteResult[] } | null>(null)

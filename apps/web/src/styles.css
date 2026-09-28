@@ -695,7 +695,9 @@ code {
 }
 .dr-notices {
   position: fixed;
-  top: calc(var(--dr-topbar-h) + 12px);
+  /* Below tldraw's top row (the page menu, undo and redo, about 44 px): with a side panel open, a
+     centred toast reached under that menu (final review R12). */
+  top: calc(var(--dr-topbar-h) + 56px);
   left: 50%;
   z-index: 30;
   display: flex;
@@ -2103,6 +2105,17 @@ button.dr-pill--role:disabled {
 }
 .dr-overflow .dr-presence {
   flex-wrap: wrap;
+}
+/* Phones (final review R5): anchored under the "⋯" button (about 77 px from the right edge), a wide
+   row (the brainstorm or vote chip) pushed the panel off the screen's left edge. It keeps its right
+   edge under the button (the inline `right` from OverflowMenu.tsx) and now stops 8 px from the
+   screen's left edge; its rows wrap. */
+@media (max-width: 600px) {
+  .dr-overflow[data-open="true"] {
+    left: 8px;
+    width: auto;
+    max-width: none;
+  }
 }
 
 /* The board page's account badge: drawn in the top bar's right end, last in tab order (RETRO-22a). */
