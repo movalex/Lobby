@@ -9,7 +9,11 @@ import { type KeyboardEvent as ReactKeyboardEvent, useEffect, useMemo, useRef, u
 import { type Editor, type TLEventInfo, type TLShapeId, useValue } from 'tldraw'
 import type { FeatureContext } from '../types.ts'
 import { formatClock, timerDisplayPhase, timerRemainingMs } from './countdown.ts'
+import { HandToasts, PresentingHands } from './Hands.tsx'
 import { editorLookup, useNow, useWorkshop } from './hooks.ts'
+import { PlusOnes } from './PlusOnes.tsx'
+import { usePresenting } from './presenting.ts'
+import { ReactionBursts } from './Reactions.tsx'
 import type { WorkshopStore } from './store.ts'
 import { readingOrder, shapeLabel, topResults } from './voting.ts'
 import { StopwatchIcon } from './WorkshopBar.tsx'
@@ -49,38 +53,6 @@ function usePlacements(
   return useMemo(() => JSON.parse(key) as Placed[], [key])
 }
 
-/**
- * The present-export feature marks a running presentation with this attribute on <html> (see
- * features/present-export/present-session.ts PRESENTING_ATTR); it hides the top bar and the notices.
- */
-const PRESENTING_ATTR = 'data-dr-presenting'
-
-function isPresentingNow(): boolean {
-  if (typeof document === 'undefined') return false
-  if (document.documentElement.hasAttribute(PRESENTING_ATTR)) return true
-  // Full screen without the top bar (e.g. the browser's own full screen on the canvas).
-  const fs = document.fullscreenElement
-  const pill = document.querySelector('[data-testid="timer-pill"]')
-  return !!fs && !(pill && fs.contains(pill))
-}
-
-/** Whether the board is being presented (top bar hidden), kept current with the DOM. */
-export function usePresenting(): boolean {
-  const [presenting, setPresenting] = useState(isPresentingNow)
-  useEffect(() => {
-    const update = () => setPresenting(isPresentingNow())
-    const mo = new MutationObserver(update)
-    mo.observe(document.documentElement, { attributes: true, attributeFilter: [PRESENTING_ATTR] })
-    document.addEventListener('fullscreenchange', update)
-    update()
-    return () => {
-      mo.disconnect()
-      document.removeEventListener('fullscreenchange', update)
-    }
-  }, [])
-  return presenting
-}
-
 export function WorkshopOverlay({ ctx }: { ctx: FeatureContext }) {
   const { store, snap } = useWorkshop(ctx)
   const presenting = usePresenting()
@@ -99,6 +71,8 @@ export function WorkshopOverlay({ ctx }: { ctx: FeatureContext }) {
   return (
     <>
       <div className="dr-wk-layer" data-testid="workshop-overlay">
+        {/* +1s sit under the vote markers (both are on shapes; votes win while a vote runs). */}
+        {!presenting && <PlusOnes ctx={ctx} />}
         {joined && snap.ballot && <MyDots ctx={ctx} store={store} myVotes={snap.ballot.myVotes} />}
         {voting && <ClickToVote ctx={ctx} store={store} />}
         {voting && <SelectedStepper ctx={ctx} store={store} />}
@@ -124,7 +98,10 @@ export function WorkshopOverlay({ ctx }: { ctx: FeatureContext }) {
       <div className="dr-wk-top">
         <TimerFlash seq={snap.alertSeq} />
         {presenting && <PresentingTimer store={store} />}
+        {presenting && <PresentingHands snap={snap} />}
+        <ReactionBursts ctx={ctx} store={store} />
       </div>
+      <HandToasts ctx={ctx} store={store} />
     </>
   )
 }

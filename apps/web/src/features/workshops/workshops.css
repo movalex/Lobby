@@ -616,3 +616,347 @@ html[data-dr-hide-authors] .tl-note__attribution {
 .dr-wk-history__title {
   font-weight: 600;
 }
+
+/* ---- reactions and raise hand (FAC-08) ------------------------------------------------------------ */
+
+.dr-wk-react {
+  position: relative;
+  display: inline-flex;
+}
+.dr-wk-iconbtn {
+  display: inline-grid;
+  place-items: center;
+  width: 30px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid var(--dr-line-strong);
+  border-radius: 999px;
+  background: var(--dr-surface);
+  color: var(--dr-ink);
+  cursor: pointer;
+}
+.dr-wk-iconbtn:hover,
+.dr-wk-iconbtn[aria-expanded="true"] {
+  background: #efece4;
+}
+.dr-wk-iconbtn[data-hand="up"] {
+  border-color: var(--dr-amber);
+  background: var(--dr-warn-bg);
+  color: var(--dr-warn);
+}
+.dr-wk-iconbtn:focus-visible,
+.dr-wk-hands-chip:focus-visible,
+.dr-wk-reactbar button:focus-visible,
+.dr-wk-plusone:focus-visible {
+  outline: 2px solid var(--dr-focus);
+  outline-offset: 2px;
+}
+
+.dr-wk-reactbar {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: max-content;
+  max-width: min(420px, calc(100vw - 24px));
+  padding: 8px;
+  color: var(--dr-ink);
+  background: var(--dr-surface);
+  border: 1px solid var(--dr-line);
+  border-radius: 12px;
+  box-shadow: 0 8px 28px rgb(27 35 48 / 18%);
+}
+.dr-wk-reactbar__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px;
+}
+.dr-wk-reactbar__emoji {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  padding: 0;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+}
+.dr-wk-reactbar__emoji:hover:not(:disabled) {
+  background: var(--dr-paper);
+}
+.dr-wk-reactbar__emoji:active:not(:disabled) span {
+  display: inline-block;
+  transform: scale(0.85);
+}
+.dr-wk-reactbar__emoji:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+.dr-wk-reactbar__sep {
+  width: 1px;
+  height: 26px;
+  margin: 0 4px;
+  background: var(--dr-line);
+}
+.dr-wk-reactbar__hand {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 12px;
+  border: 1px solid var(--dr-line-strong);
+  border-radius: 999px;
+  background: var(--dr-surface);
+  color: var(--dr-ink);
+  font: 600 13px var(--dr-font);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.dr-wk-reactbar__hand[aria-pressed="true"] {
+  border-color: var(--dr-amber);
+  background: var(--dr-warn-bg);
+  color: var(--dr-warn);
+}
+.dr-wk-reactbar__hand:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+.dr-wk-reactbar__hint {
+  margin: 0 4px;
+  max-width: 330px;
+  color: var(--dr-ink-2);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.dr-wk-hands-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--dr-amber);
+  border-radius: 999px;
+  background: var(--dr-warn-bg);
+  color: var(--dr-warn);
+  font: 700 12.5px / 1 var(--dr-font);
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.dr-wk-hands-chip[data-mine="true"] {
+  background: var(--dr-amber);
+  color: var(--dr-ink);
+}
+
+/* While presenting: under the floating timer when there is one (it comes first in the layer). */
+.dr-wk-floating--hands {
+  max-width: min(360px, calc(100% - 32px));
+  background: var(--dr-warn-bg);
+  color: var(--dr-warn);
+  font: 700 15px var(--dr-font);
+}
+.dr-wk-floating ~ .dr-wk-floating--hands {
+  top: 68px;
+}
+.dr-wk-floating__names {
+  min-width: 0;
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dr-wk-hands {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.dr-wk-hands li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 6px;
+  border-radius: 8px;
+  background: var(--dr-paper);
+}
+.dr-wk-hands__pos {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--dr-warn-bg);
+  color: var(--dr-warn);
+  font: 700 12px var(--dr-font);
+}
+.dr-wk-hands__name {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dr-wk-hands__when {
+  color: var(--dr-ink-2);
+  font-size: 11.5px;
+  font-weight: 400;
+}
+
+/* Bursts: a pop, then a drift away (up from a cursor, down from the top bar) and gone. */
+.dr-wk-bursts {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+.dr-wk-burst {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  transform: translate(-50%, -50%);
+  animation: dr-wk-burst-up 2s ease-out forwards;
+  will-change: transform, opacity;
+}
+.dr-wk-burst[data-placement="top"] {
+  animation-name: dr-wk-burst-down;
+}
+.dr-wk-burst__emoji {
+  font-size: 32px;
+  line-height: 1;
+  filter: drop-shadow(0 2px 3px rgb(0 0 0 / 22%));
+}
+.dr-wk-burst__name {
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--dr-ink);
+  color: #fff;
+  font: 600 11px var(--dr-font);
+  white-space: nowrap;
+}
+@keyframes dr-wk-burst-up {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.5);
+  }
+  14% {
+    opacity: 1;
+    transform: translate(-50%, -62%) scale(1.15);
+  }
+  70% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, calc(-50% - 72px)) scale(1);
+  }
+}
+@keyframes dr-wk-burst-down {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, 0) scale(0.5);
+  }
+  14% {
+    opacity: 1;
+    transform: translate(-50%, 6px) scale(1.15);
+  }
+  70% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, 64px) scale(1);
+  }
+}
+@keyframes dr-wk-burst-fade {
+  0% {
+    opacity: 0;
+  }
+  12%,
+  75% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  /* No movement or scaling: the reaction just appears and fades where it would have started. */
+  .dr-wk-burst,
+  .dr-wk-burst[data-placement="top"] {
+    animation-name: dr-wk-burst-fade;
+    animation-timing-function: linear;
+  }
+  .dr-wk-burst[data-placement="top"] {
+    transform: translate(-50%, 0);
+  }
+  .dr-wk-reactbar__emoji:active:not(:disabled) span {
+    transform: none;
+  }
+}
+
+/* ---- +1 on notes ------------------------------------------------------------------------------------ */
+
+.dr-wk-plusone {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid rgb(27 35 48 / 18%);
+  border-radius: 999px;
+  background: rgb(255 255 255 / 92%);
+  color: var(--dr-ink);
+  font: 700 12px / 1 var(--dr-font);
+  font-variant-numeric: tabular-nums;
+  box-shadow: 0 1px 3px rgb(0 0 0 / 18%);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.dr-wk-plusone:hover:not([aria-disabled="true"]) {
+  border-color: var(--dr-navy);
+}
+.dr-wk-plusone[aria-pressed="true"] {
+  border-color: var(--dr-navy);
+  background: var(--dr-navy);
+  color: #fff;
+}
+.dr-wk-plusone__n {
+  min-width: 1ch;
+  padding-left: 5px;
+  border-left: 1px solid rgb(27 35 48 / 20%);
+  text-align: center;
+}
+.dr-wk-plusone[aria-pressed="true"] .dr-wk-plusone__n {
+  border-left-color: rgb(255 255 255 / 45%);
+}
+.dr-wk-plusone__label {
+  opacity: 0.8;
+}
+.dr-wk-plusone--badge {
+  pointer-events: none;
+}
+.dr-wk-plusone[aria-disabled="true"] {
+  color: var(--dr-ink-2);
+  cursor: not-allowed;
+}
