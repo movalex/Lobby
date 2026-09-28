@@ -29,6 +29,8 @@ import { guestRefused } from '../guests/guard.ts'
 
 /** Owners flipping the switch back and forth: generous, but not a firehose of board events. */
 const PUT_RATE = { config: { rateLimit: { max: 60, timeWindow: 60_000 } } }
+/** pg_advisory_xact_lock namespace (the two-key form) of one workspace's AI default ("DRAS"). */
+export const AI_SETTINGS_LOCK_NS = 0x44524153
 
 export interface AiSwitches {
   board: boolean | null
@@ -92,29 +94,36 @@ export function registerAiSettings(app: FastifyInstance, ctx: FeatureContext): v
     const user = await ctx.requireUser(req)
     const { wid = '' } = req.params as Params
     const input = parse(PutAiWorkspaceSettingsInput, req.body)
-    const role = await requireWorkspaceRole(db, wid, user.id)
-    if (!canManageWorkspace(role)) throw forbidden('Only workspace owners and admins can change this.')
-    const previous = await db.maybeOne<{ enabled: boolean }>(
-      'SELECT enabled FROM workspace_ai_settings WHERE workspace_id = $1',
-      [wid],
-    )
-    await db.query(
-      `INSERT INTO workspace_ai_settings (workspace_id, enabled, updated_by, updated_at)
-       VALUES ($1, $2, $3, $4)
-       ON CONFLICT (workspace_id) DO UPDATE
-         SET enabled = EXCLUDED.enabled, updated_by = EXCLUDED.updated_by, updated_at = EXCLUDED.updated_at`,
-      [wid, input.enabled, user.id, ctx.now()],
-    )
-    if ((previous?.enabled ?? true) !== input.enabled) {
+    // AIPV-05: one transaction, serialized per workspace, so two admins changing the default at once
+    // each compare against the value the other committed (and the one whose change flips it publishes).
+    // An advisory lock rather than a row lock: the row may not exist yet. Taken before any row lock.
+    const toHint = await db.transaction(async (tx) => {
+      const role = await requireWorkspaceRole(tx, wid, user.id)
+      if (!canManageWorkspace(role)) throw forbidden('Only workspace owners and admins can change this.')
+      await tx.query('SELECT pg_advisory_xact_lock($1::int, hashtext($2::text))', [AI_SETTINGS_LOCK_NS, wid])
+      const previous = await tx.maybeOne<{ enabled: boolean }>(
+        'SELECT enabled FROM workspace_ai_settings WHERE workspace_id = $1',
+        [wid],
+      )
+      await tx.query(
+        `INSERT INTO workspace_ai_settings (workspace_id, enabled, updated_by, updated_at)
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT (workspace_id) DO UPDATE
+           SET enabled = EXCLUDED.enabled, updated_by = EXCLUDED.updated_by, updated_at = EXCLUDED.updated_at`,
+        [wid, input.enabled, user.id, ctx.now()],
+      )
+      if ((previous?.enabled ?? true) === input.enabled) return []
       // Boards without their own choice change with it; the hint costs nothing on a board nobody has open.
-      const boards = await db.query<{ id: string }>(
+      const boards = await tx.query<{ id: string }>(
         `SELECT b.id FROM boards b
           WHERE b.workspace_id = $1 AND b.status <> 'trashed'
             AND NOT EXISTS (SELECT 1 FROM board_ai_settings s WHERE s.board_id = b.id)`,
         [wid],
       )
-      for (const b of boards.rows) hint(b.id)
-    }
+      return boards.rows.map((b) => b.id)
+    })
+    // After the commit, so a client that re-reads on the hint sees the new default.
+    for (const id of toHint) hint(id)
     return { enabled: input.enabled }
   })
 }
