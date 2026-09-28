@@ -135,3 +135,98 @@ describe('summons per link', () => {
     expect((await b.req('POST', `/api/boards/${w.board}/summon`, {})).statusCode).toBe(202)
   })
 })
+
+// PGlite answers every statement in microtasks, so in-process requests never interleave: each one
+// runs to its response before the next starts. A Postgres pool answers over the network, so many
+// requests sit between their checks and their effects at once. These tests add that latency.
+function withDbLatency(db: unknown, ms = 3) {
+  const q = db as Record<string, (...a: unknown[]) => Promise<unknown>>
+  for (const k of ['query', 'one', 'maybeOne'] as const) {
+    const f = q[k]
+    if (!f) continue
+    q[k] = async (...a: unknown[]) => {
+      await new Promise((r) => setTimeout(r, ms))
+      return f(...a)
+    }
+  }
+}
+
+describe('simultaneous requests from the guests of one link (as a Postgres pool interleaves them)', () => {
+  it('event streams: the link’s share holds, and the owner still connects', async () => {
+    guestLinkCapSettings.streams = 4
+    w = await setupWorld()
+    const base = await listen(w.api)
+    const url = (await guestLink(w.bob, w.board)).url
+    const guests: GuestClient[] = []
+    for (let i = 0; i < 3; i++) guests.push(await joinAsGuest(w.api, url, `G${i}`))
+    withDbLatency(w.api.db)
+    const opened = await Promise.all(
+      guests.flatMap((g) => Array.from({ length: 3 }, () => openSse(base, w.board, g.cookie))),
+    )
+    streams.push(...opened)
+    const statuses = opened.map((s) => s.status).sort()
+    expect(statuses.filter((s) => s === 200)).toHaveLength(4)
+    expect(statuses.filter((s) => s === 503)).toHaveLength(5)
+    const owner = await openSse(base, w.board, w.bob.cookie)
+    streams.push(owner)
+    expect(owner.status).toBe(200)
+    // Refused and admitted streams leave nothing reserved: closing one frees exactly one slot.
+    const [first] = opened.filter((s) => s.status === 200)
+    await first?.close()
+    await until(
+      () => w.events.streams().filter((s) => s.boardId === w.board).length === 4,
+      3000,
+      'the closed stream',
+    )
+    const again = await Promise.all(guests.map((g) => openSse(base, w.board, g.cookie)))
+    streams.push(...again)
+    expect(again.filter((s) => s.status === 200)).toHaveLength(1)
+  })
+
+  it('reactions: at most the link’s share are accepted', async () => {
+    guestLinkCapSettings.reactions = { max: 4, windowMs: 1000 }
+    w = await setupWorld()
+    const url = (await guestLink(w.bob, w.board)).url
+    const guests: GuestClient[] = []
+    for (let i = 0; i < 4; i++) guests.push(await joinAsGuest(w.api, url, `R${i}`))
+    withDbLatency(w.api.db)
+    const res = await Promise.all(
+      guests.flatMap((g) =>
+        [0, 1, 2].map(() => g.req('POST', `/api/boards/${w.board}/reactions`, { emoji: '👏' })),
+      ),
+    )
+    const codes = res.map((r) => r.statusCode)
+    expect(codes.filter((c) => c === 202)).toHaveLength(4)
+    expect(codes.filter((c) => c === 429)).toHaveLength(8)
+  })
+
+  it('summons: one per window', async () => {
+    w = await setupWorld()
+    const url = (await guestLink(w.bob, w.board, { role: 'editor' })).url
+    const guests: GuestClient[] = []
+    for (let i = 0; i < 5; i++) guests.push(await joinAsGuest(w.api, url, `S${i}`))
+    withDbLatency(w.api.db)
+    const res = await Promise.all(guests.map((g) => g.req('POST', `/api/boards/${w.board}/summon`, {})))
+    const codes = res.map((r) => r.statusCode)
+    expect(codes.filter((c) => c === 202)).toHaveLength(1)
+    expect(codes.filter((c) => c === 429)).toHaveLength(4)
+  })
+
+  it('a request the route refuses gives its reservation back, even when it overlapped others', async () => {
+    guestLinkCapSettings.reactions = { max: 2, windowMs: 1000 }
+    w = await setupWorld()
+    const url = (await guestLink(w.bob, w.board)).url
+    const a = await joinAsGuest(w.api, url, 'A')
+    const b = await joinAsGuest(w.api, url, 'B')
+    withDbLatency(w.api.db)
+    // A's malformed reaction (400) and B's valid one at the same time; then B again: both of B's count.
+    const [bad, good] = await Promise.all([
+      a.req('POST', `/api/boards/${w.board}/reactions`, { emoji: 'not an emoji at all' }),
+      b.req('POST', `/api/boards/${w.board}/reactions`, { emoji: '👏' }),
+    ])
+    expect(bad?.statusCode).toBe(400)
+    expect(good?.statusCode).toBe(202)
+    expect((await b.req('POST', `/api/boards/${w.board}/reactions`, { emoji: '👏' })).statusCode).toBe(202)
+    expect((await a.req('POST', `/api/boards/${w.board}/reactions`, { emoji: '👏' })).statusCode).toBe(429)
+  })
+})

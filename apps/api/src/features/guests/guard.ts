@@ -34,11 +34,11 @@ const REQUEST =
   'Guests can’t request access. Ask the person who shared the link with you, or sign in with an account.'
 const PEOPLE = 'Guests see the people on their own boards only.'
 /**
- * GET /api/boards/:bid/deleted (features/history, which refuses it itself after its board checks):
- * "Recently deleted" shows what was deleted before a guest joined.
+ * GET /api/boards/:bid/deleted and POST …/deleted/restore (features/history, which refuses them itself
+ * after its board checks): "Recently deleted" holds what was deleted before a guest joined.
  */
 export const DELETED_GUESTS =
-  'Recently deleted is for editors with an account. Sign in with an account to see it.'
+  'Recently deleted is for editors with an account. Sign in with an account to use it.'
 
 /** `METHOD route-pattern` → the message a signed-in guest gets (403 GUEST_ACCOUNT_REQUIRED). */
 export const GUEST_REFUSED_ROUTES: Readonly<Record<string, string>> = {

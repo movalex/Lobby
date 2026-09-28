@@ -144,4 +144,31 @@ describe('"Recently deleted" (SEAM-06)', () => {
     expect(byEditor.statusCode, byEditor.body).toBe(200)
     expect(ListDeletedResponse.parse(byEditor.json()).entries).toHaveLength(1)
   })
+
+  it('a name-only guest editor cannot restore from it either, even with an id learned elsewhere (a comment’s anchor)', async () => {
+    // bob comments on a note, then deletes the note: the thread (and its anchor's shape id) stays.
+    const thread = await w.bob.req('POST', `/api/boards/${w.board}/threads`, {
+      anchor: { kind: 'shape', shapeId: 'shape:budget', u: 0.5, v: 0.5 },
+      body: 'Pitch 65k, budget 40k',
+    })
+    expect(thread.statusCode, thread.body).toBe(201)
+    const wes = await joinAsGuest(w.api, (await guestLink(w.bob, w.board, { role: 'editor' })).url, 'Wes')
+    expect((await wes.req('GET', `/api/boards/${w.board}/threads`)).body).toContain('shape:budget')
+
+    const byGuest = await wes.req('POST', `/api/boards/${w.board}/deleted/restore`, { ids: ['shape:budget'] })
+    expect(byGuest.statusCode, byGuest.body).toBe(403)
+    expect(errorCode(byGuest)).toBe('GUEST_ACCOUNT_REQUIRED')
+    expect(sync.deletedCalls).toEqual([]) // never reached the sync server
+    // Someone who cannot see the board: 404 first, whoever they are.
+    expect(
+      (await w.carol.req('POST', `/api/boards/${w.board}/deleted/restore`, { ids: ['shape:budget'] }))
+        .statusCode,
+    ).toBe(404)
+    // An editor with an account restores as before.
+    const byOwner = await w.bob.req('POST', `/api/boards/${w.board}/deleted/restore`, {
+      ids: ['shape:budget'],
+    })
+    expect(byOwner.statusCode, byOwner.body).toBe(200)
+    expect(sync.deletedCalls).toEqual([{ op: 'restore', boardId: w.board, ids: ['shape:budget'] }])
+  })
 })

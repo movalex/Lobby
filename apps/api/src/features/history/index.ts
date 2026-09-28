@@ -357,11 +357,15 @@ export async function registerHistory(app: FastifyInstance, ctx: FeatureContext)
     return viaSync(() => deleted.list(bid))
   })
 
+  // Restoring puts deleted content back on the board for everyone, so it follows the list: editors with
+  // an account only. A name-only guest could otherwise restore what was deleted before they joined by
+  // an id learned elsewhere (a comment's anchor keeps the shape id of a deleted note).
   app.post('/api/boards/:bid/deleted/restore', HEAVY, async (req) => {
     const user = await ctx.requireUser(req)
     const { bid = '' } = req.params as Params
     const input = parse(RestoreDeletedInput, req.body)
     await requireBoardAction(db, bid, user.id, 'edit')
+    if ((await userKind(db, user.id)) === 'guest') throw guestRefused(DELETED_GUESTS)
     const result = await viaSync(() => deleted.restore(bid, input.ids))
     if (result.restored.length)
       ctx.events.publish(bid, {
