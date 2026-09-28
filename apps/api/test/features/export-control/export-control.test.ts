@@ -391,6 +391,78 @@ describe('linked files (a board made from another board)', () => {
   })
 })
 
+describe('boards of your own made from this one (review)', () => {
+  const importArchive = (c: Client, archive: unknown) =>
+    c.req('POST', `/api/workspaces/${DEV_STUDIO}/boards/import`, archive)
+
+  it("an import never links files a limited viewer could not download: no original via a board of one's own", async () => {
+    // What the viewer sees through sync is enough to write this archive by hand (records naming the
+    // board's asset and version ids); the owner's export stands in for it.
+    const archive = (await alice.req('GET', `/api/boards/${board}/export`)).json()
+    await setPolicy(alice, 'editors')
+
+    const res = await importArchive(viewer, archive)
+    expect(res.statusCode, res.body).toBe(201)
+    const body = res.json() as {
+      board: { id: string }
+      linkedFiles: number
+      droppedFiles: number
+      warnings: string[]
+    }
+    expect(body).toMatchObject({ linkedFiles: 0, droppedFiles: 3 })
+    expect(body.warnings.join(' ')).toMatch(/turned off downloads for viewers/)
+    const mine = body.board.id
+    for (const kind of ['image', 'pdf', 'video'] as const)
+      expect((await original(viewer, files[kind], {}, mine)).statusCode, `${kind} on the import`).toBe(404)
+    const links = await api.db.one<{ n: number }>(
+      'SELECT count(*)::int AS n FROM board_asset_links WHERE board_id = $1',
+      [mine],
+    )
+    expect(links.n).toBe(0)
+
+    // An editor (never limited) still carries the files over, and so does the viewer once it is back on.
+    expect((await importArchive(editor, archive)).json()).toMatchObject({ linkedFiles: 3 })
+    await setPolicy(alice, 'everyone')
+    const again = (await importArchive(viewer, archive)).json() as {
+      board: { id: string }
+      linkedFiles: number
+    }
+    expect(again.linkedFiles).toBe(3)
+    expect((await original(viewer, files.pdf, {}, again.board.id)).statusCode).toBe(200)
+  })
+
+  it('an import still links a file the limited viewer may download through another board that shows it', async () => {
+    const archive = (await alice.req('GET', `/api/boards/${board}/export`)).json()
+    // A copy (policy 'everyone') that shows the same files, where the viewer is a viewer too.
+    const dup = await alice.req('POST', `/api/boards/${board}/duplicate`, { title: 'Open copy' })
+    const copy = (dup.json() as { board: { id: string } }).board.id
+    await alice.req('PUT', `/api/boards/${copy}/members/${viewer.userId}`, { role: 'viewer' })
+    await setPolicy(alice, 'editors')
+    expect((await importArchive(viewer, archive)).json()).toMatchObject({ linkedFiles: 3, droppedFiles: 0 })
+  })
+
+  it("'keep sharing settings' copies the policy with the people: the same viewers stay limited on the copy", async () => {
+    await setPolicy(alice, 'editors')
+    const dup = await alice.req('POST', `/api/boards/${board}/duplicate`, { keepSharing: true })
+    expect(dup.statusCode, dup.body).toBe(201)
+    const copy = (dup.json() as { board: { id: string } }).board.id
+    expect((await viewer.req('GET', `/api/boards/${copy}/export-policy`)).json()).toEqual({
+      exportPolicy: 'editors',
+      canExport: false,
+    })
+    expectExportDisabled(await original(viewer, files.pdf, {}, copy), 'keepSharing copy, viewer')
+    expectExportDisabled(await viewer.req('GET', `/api/boards/${copy}/export`), 'keepSharing copy archive')
+    expect((await original(alice, files.pdf, {}, copy)).statusCode).toBe(200)
+
+    // A plain duplicate is a private board of your own: nobody else on it, today's default.
+    const plain = await alice.req('POST', `/api/boards/${board}/duplicate`, {})
+    const plainId = (plain.json() as { board: { id: string } }).board.id
+    expect((await alice.req('GET', `/api/boards/${plainId}/export-policy`)).json()).toMatchObject({
+      exportPolicy: 'everyone',
+    })
+  })
+})
+
 describe('failed versions', () => {
   it('a failed version is served as an attachment, so a media element cannot load it while exporting is off', async () => {
     await api.db.query(

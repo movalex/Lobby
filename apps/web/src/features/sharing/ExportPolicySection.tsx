@@ -7,9 +7,13 @@ import { useEffect, useId, useState } from 'react'
 import { useValue } from 'tldraw'
 import { api, isApiError } from '../../api/client.ts'
 import type { BoardRole } from '../../lib/permissions.ts'
-import { boardExportState, EXPORT_OFF_TEXT, exportAllowedWith, exportPolicyApi } from './export-policy.ts'
-
-const policyApi = exportPolicyApi(api)
+import {
+  boardExportState,
+  EXPORT_OFF_TEXT,
+  exportAllowedWith,
+  refreshExportPolicy,
+  saveExportPolicy,
+} from './export-policy.ts'
 
 export const EXPORT_POLICY_LABEL = 'Viewers and commenters can export, copy and download files'
 export const EXPORT_POLICY_HELP =
@@ -34,24 +38,22 @@ export function ExportPolicySection({
   const [error, setError] = useState<string | null>(null)
   const [loadFailed, setLoadFailed] = useState(false)
 
-  // The board page keeps the store current; ask anyway, so the dialog never shows a guess.
+  // The board page keeps the store current; ask anyway, so the dialog never shows a guess. The answer
+  // never overwrites a policy event that arrived after it was asked for (export-policy.ts).
   useEffect(() => {
     const controller = new AbortController()
-    policyApi.get(boardId, controller.signal).then(
-      (s) => state.policy.set(s.exportPolicy),
-      () => {
-        if (!controller.signal.aborted) setLoadFailed(true)
-      },
-    )
+    refreshExportPolicy(api, boardId, controller.signal).catch(() => {
+      if (!controller.signal.aborted) setLoadFailed(true)
+    })
     return () => controller.abort()
-  }, [boardId, state])
+  }, [boardId])
 
   const change = async (next: ExportPolicy) => {
     setSaving(next)
     setError(null)
     try {
-      const saved = await policyApi.put(boardId, next)
-      state.policy.set(saved.exportPolicy) // this tab at once; everyone else through the board event
+      // This tab at once (unless a newer change already arrived); everyone else through the board event.
+      await saveExportPolicy(api, boardId, next)
     } catch (e) {
       // The checkbox goes back to what the server has.
       setError(isApiError(e) ? e.message : 'The setting was not changed. Try again.')

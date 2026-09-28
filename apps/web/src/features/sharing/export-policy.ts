@@ -36,6 +36,21 @@ export interface BoardExportState {
 }
 
 const boards = new Map<string, BoardExportState>()
+/**
+ * Per board, how answers and events are ordered: an answer applies only if no policy event arrived
+ * after its request was sent, and no answer to a later request was applied already. So an answer read
+ * on the server before a change never overwrites the event announcing that change, and a slow answer
+ * never overwrites a newer one (while a failed newer request does not throw away an older answer).
+ */
+const order = new Map<string, { events: number; sent: number; applied: number }>()
+const orderOf = (boardId: string) => {
+  let o = order.get(boardId)
+  if (!o) {
+    o = { events: 0, sent: 0, applied: 0 }
+    order.set(boardId, o)
+  }
+  return o
+}
 
 export function boardExportState(boardId: string): BoardExportState {
   let state = boards.get(boardId)
@@ -47,6 +62,28 @@ export function boardExportState(boardId: string): BoardExportState {
     boards.set(boardId, state)
   }
   return state
+}
+
+/** A board event: always the newest word on the policy. */
+function applyPolicyEvent(boardId: string, policy: ExportPolicy) {
+  orderOf(boardId).events++
+  boardExportState(boardId).policy.set(policy)
+}
+
+/**
+ * Call when sending a request that answers with the policy. The returned function applies that answer
+ * unless something newer landed meanwhile (see `order`); true when it applied.
+ */
+function beginPolicyRequest(boardId: string): (policy: ExportPolicy) => boolean {
+  const o = orderOf(boardId)
+  const mine = ++o.sent
+  const eventsThen = o.events
+  return (policy) => {
+    if (o.events !== eventsThen || o.applied > mine) return false
+    o.applied = mine
+    boardExportState(boardId).policy.set(policy)
+    return true
+  }
 }
 
 /** Pure rule behind the UI (tested): unknown role or policy = allowed; the server decides anyway. */
@@ -116,6 +153,25 @@ export function exportPolicyApi(api: ApiClient) {
   }
 }
 
+/** The Share dialog asking on open: the answer lands in the store unless something newer did first. */
+export async function refreshExportPolicy(api: ApiClient, boardId: string, signal?: AbortSignal) {
+  const apply = beginPolicyRequest(boardId)
+  const s = await exportPolicyApi(api).get(boardId, signal)
+  if (!signal?.aborted) apply(s.exportPolicy)
+}
+
+/** An owner's change (the server checks manage_access); its answer lands like a refresh's. */
+export async function saveExportPolicy(
+  api: ApiClient,
+  boardId: string,
+  exportPolicy: ExportPolicy,
+): Promise<ExportPolicyState> {
+  const apply = beginPolicyRequest(boardId)
+  const saved = await exportPolicyApi(api).put(boardId, exportPolicy)
+  apply(saved.exportPolicy) // this tab at once when the event stream is down; otherwise the event did
+  return saved
+}
+
 /**
  * Binds `editor` to its board and keeps the board's policy current: the answer now, every policy
  * event, and a refetch after every event-stream (re)connect (events are hints; a missed one is
@@ -129,17 +185,15 @@ export function syncExportPolicy(opts: {
   notify(n: NoticeInput): void
 }): () => void {
   const { editor, boardId, events, notify } = opts
-  const state = boardExportState(boardId)
   const client = exportPolicyApi(opts.api)
   binding(editor).set({ boardId, notify })
-  let seq = 0
   let stopped = false
   const controller = new AbortController()
   const refetch = () => {
-    const mine = ++seq
+    const apply = beginPolicyRequest(boardId)
     client.get(boardId, controller.signal).then(
       (s) => {
-        if (!stopped && mine === seq) state.policy.set(s.exportPolicy)
+        if (!stopped) apply(s.exportPolicy)
       },
       () => {}, // keep what we had: the server enforces, and the next resync asks again
     )
@@ -147,8 +201,8 @@ export function syncExportPolicy(opts: {
   const offEvent = events.on(EXPORT_CONTROL_EVENTS.policy, (data) => {
     const parsed = ExportPolicyEvent.safeParse(data)
     if (!parsed.success) return
-    seq++ // an answer to an older request must not overwrite the event
-    state.policy.set(parsed.data.exportPolicy)
+    // An answer to an older request must not overwrite the event.
+    applyPolicyEvent(boardId, parsed.data.exportPolicy)
   })
   // onResync runs at once when the stream is already connected, and after every reconnect.
   let resynced = false

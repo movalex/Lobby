@@ -17,6 +17,8 @@ import {
   exportAllowedOnBoard,
   exportAllowedWith,
   guardExport,
+  refreshExportPolicy,
+  saveExportPolicy,
   syncExportPolicy,
 } from './export-policy.ts'
 
@@ -169,6 +171,38 @@ describe('syncExportPolicy', () => {
     expect(exportAllowed(m.editor)).toBe(false)
     boardExportState(m.boardId).role.set('owner')
     expect(exportAllowed(m.editor)).toBe(true)
+  })
+
+  it("the Share dialog's own fetch never overwrites a newer event (review: stale answer from the dialog)", async () => {
+    const m = mount()
+    m.pending[0]?.resolve({ exportPolicy: 'everyone', canExport: true })
+    await flush()
+    const done = refreshExportPolicy(m.api, m.boardId) // the dialog opens and asks
+    m.ev.emit('export-control.policy', { exportPolicy: 'editors' }) // the owner turns it off meanwhile
+    m.pending[1]?.resolve({ exportPolicy: 'everyone', canExport: true }) // read before that change
+    await done
+    expect(boardExportState(m.boardId).policy.get()).toBe('editors')
+    expect(exportAllowed(m.editor)).toBe(false)
+  })
+
+  it("an owner's save applies its answer, unless a newer change arrived first (two owners at once)", async () => {
+    const m = mount({ role: 'owner' })
+    m.pending[0]?.resolve({ exportPolicy: 'everyone', canExport: true })
+    await flush()
+    // Stream down: no event, the answer is what this tab learns.
+    const first = saveExportPolicy(m.api, m.boardId, 'editors')
+    expect(m.pending[1]?.path).toBe(`/api/boards/${m.boardId}/export-policy`)
+    m.pending[1]?.resolve({ exportPolicy: 'editors', canExport: true })
+    expect(await first).toEqual({ exportPolicy: 'editors', canExport: true })
+    expect(boardExportState(m.boardId).policy.get()).toBe('editors')
+
+    // Our change, then another owner's, both announced before our answer comes back.
+    const second = saveExportPolicy(m.api, m.boardId, 'everyone')
+    m.ev.emit('export-control.policy', { exportPolicy: 'everyone' })
+    m.ev.emit('export-control.policy', { exportPolicy: 'editors' })
+    m.pending[2]?.resolve({ exportPolicy: 'everyone', canExport: true })
+    await second
+    expect(boardExportState(m.boardId).policy.get()).toBe('editors')
   })
 
   it('cleanup unsubscribes, ignores late answers and unbinds the editor', async () => {

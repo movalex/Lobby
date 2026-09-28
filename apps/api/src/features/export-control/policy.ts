@@ -37,6 +37,28 @@ export async function mayExport(q: Queryable, access: BoardAccess): Promise<bool
   return exportAllowedFor(access.role, await loadExportPolicy(q, access.board.id))
 }
 
+/**
+ * The "keep sharing settings" duplicate (features/history): the copy gets the source's people grants,
+ * so it gets the source's policy too, or the very viewers the owner limited could export the same
+ * content from the copy. Runs right after the copy's row committed (history/new-board.ts owns that
+ * transaction), before the route answers or anything announces the copy.
+ */
+export async function copyExportPolicy(
+  q: Queryable,
+  fromBoardId: string,
+  to: { id: string; workspace_id: string },
+  userId: string,
+  at: Date,
+): Promise<void> {
+  await q.query(
+    `INSERT INTO board_export_policies (board_id, workspace_id, policy, updated_by, updated_at)
+     SELECT $1, $2, p.policy, $3, $4 FROM board_export_policies p
+      WHERE p.board_id = $5 AND p.workspace_id = $2
+     ON CONFLICT (board_id) DO NOTHING`,
+    [to.id, to.workspace_id, userId, at, fromBoardId],
+  )
+}
+
 export const exportDisabled = () => new ApiError(403, EXPORT_DISABLED_CODE, EXPORT_DISABLED_MESSAGE)
 
 /** 403 EXPORT_DISABLED unless the caller may export (API routes; `access` already passed `view`). */

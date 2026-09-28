@@ -25,7 +25,8 @@ import { ApiError, conflict, forbidden, gone, notFound, parse } from '../../erro
 import { contentDisposition } from '../../files/disposition.ts'
 import { toBoardWithRole } from '../../serialize.ts'
 import type { FeatureContext } from '../context.ts'
-import { requireExportAllowed } from '../export-control/policy.ts'
+import { keepDownloadableFiles } from '../export-control/import-files.ts'
+import { copyExportPolicy, requireExportAllowed } from '../export-control/policy.ts'
 import { ArchiveError, exportBoardArchive, importBoardArchive, type SerializedSchema } from './board-ops.ts'
 import { archiveRef, filesShownOn, filesViewableBy, referencedFiles } from './files.ts'
 import { createBoardFrom, viaSync } from './new-board.ts'
@@ -246,6 +247,8 @@ export async function registerHistory(app: FastifyInstance, ctx: FeatureContext)
       },
       warn,
     )
+    // export-control: the same people on the copy stay under the same export policy.
+    if (input.keepSharing) await copyExportPolicy(db, bid, board, user.id, ctx.now())
     reply.code(201)
     return created(board, shown.length, notShown)
   })
@@ -299,11 +302,24 @@ export async function registerHistory(app: FastifyInstance, ctx: FeatureContext)
       const refs = new Map<string, { assetId: string; versionId: string }>()
       for (const a of imported.assets) refs.set(`${a.assetId}/${a.versionId}`, a)
       for (const f of referencedFiles(imported.records)) refs.set(`${f.assetId}/${f.versionId}`, f)
-      const { allowed, dropped } = await filesViewableBy(db, wid, user.id, [...refs.values()])
+      const viewable = await filesViewableBy(db, wid, user.id, [...refs.values()])
+      // export-control: only files the importer may also download somewhere (else a limited viewer's
+      // hand-made archive would link them to a board of their own and serve the originals there).
+      const { kept: allowed, dropped: limited } = await keepDownloadableFiles(
+        db,
+        wid,
+        user.id,
+        viewable.allowed,
+      )
+      const dropped = [...viewable.dropped, ...limited]
       const warnings = [...imported.warnings]
-      if (dropped.length)
+      if (viewable.dropped.length)
         warnings.push(
-          `${dropped.length} file(s) in this archive are not available to you in this workspace, so they were not carried over and show as missing.`,
+          `${viewable.dropped.length} file(s) in this archive are not available to you in this workspace, so they were not carried over and show as missing.`,
+        )
+      if (limited.length)
+        warnings.push(
+          `${limited.length} file(s) in this archive are on boards whose owner turned off downloads for viewers, so they were not carried over and show as missing.`,
         )
       const board = await createBoardFrom(
         ctx,
