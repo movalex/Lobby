@@ -1,0 +1,1604 @@
+[
+  {
+    "id": "document:document",
+    "typeName": "document",
+    "gridSize": 10,
+    "name": "",
+    "meta": {}
+  },
+  {
+    "id": "page:page",
+    "typeName": "page",
+    "name": "Page 1",
+    "index": "a1",
+    "meta": {}
+  },
+  {
+    "id": "shape:uZlfX5QLVxH3kcn27Bax1",
+    "typeName": "shape",
+    "x": 0,
+    "y": 0,
+    "rotation": 0,
+    "index": "a0jPj",
+    "parentId": "page:page",
+    "isLocked": false,
+    "opacity": 1,
+    "meta": {},
+    "type": "frame",
+    "props": {
+      "w": 760,
+      "h": 640,
+      "name": "1 · Direction",
+      "color": "black"
+    }
+  },
+  {
+    "id": "shape:zVR7RjULEpbaK9RNx5E7q",
+    "typeName": "shape",
+    "x": 40,
+    "y": 32,
+    "rotation": 0,
+    "index": "a0vHb",
+    "parentId": "shape:uZlfX5QLVxH3kcn27Bax1",
+    "isLocked": true,
+    "opacity": 1,
+    "meta": {},
+    "type": "text",
+    "props": {
+      "color": "black",
+      "size": "l",
+      "font": "sans",
+      "textAlign": "start",
+      "w": 680,
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "What should it feel like?"
+              }
+            ]
+          }
+        ]
+      },
+      "scale": 1,
+      "autoSize": false
+    }
+  },
+  {
+    "id": "shape:rTv_gCNZdUMnkU2_1iX3z",
+    "typeName": "shape",
+    "x": 40,
+    "y": 92,
+    "rotation": 0,
+    "index": "a121E",
+    "parentId": "shape:uZlfX5QLVxH3kcn27Bax1",
+    "isLocked": true,
+    "opacity": 1,
+    "meta": {},
+    "type": "text",
+    "props": {
+      "color": "grey",
+      "size": "s",
+      "font": "sans",
+      "textAlign": "start",
+      "w": 680,
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Sum up the feeling in one sentence, then fill in the words that set the direction."
+              }
+            ]
+          }
+        ]
+      },
+      "scale": 1,
+      "autoSize": false
+    }
+  },
+  {
+    "id": "shape:OGrdjz7PX5_oKWoIkbeoQ",
+    "typeName": "shape",
+    "x": 40,
+    "y": 180,
+    "rotation": 0,
+    "index": "a2NEv",
+    "parentId": "shape:uZlfX5QLVxH3kcn27Bax1",
+    "isLocked": false,
+    "opacity": 1,
+    "meta": {},
+    "type": "note",
+    "props": {
+      "color": "yellow",
+      "labelColor": "black",
+      "size": "s",
+      "font": "sans",
+      "fontSizeAdjustment": 1,
+      "align": "middle",
+      "verticalAlign": "middle",
+      "growY": 0,
+      "url": "",
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "In one sentence, it should feel…"
+              }
+            ]
+          }
+        ]
+      },
+      "scale": 1,
+      "textLastEditedBy": null
+    }
+  },
+  {
+    "id": "shape:SiYbu9c0xBD4JSxMyw9S_",
+    "typeName": "shape",
+    "x": 260,
+    "y": 180,
+    "rotation": 0,
+    "index": "a3rKv",
+    "parentId": "shape:uZlfX5QLVxH3kcn27Bax1",
+    "isLocked": false,
+    "opacity": 1,
+    "meta": {},
+    "type": "note",
+    "props": {
+      "color": "light-blue",
+      "labelColor": "black",
+      "size": "s",
+      "font": "sans",
+      "fontSizeAdjustment": 1,
+      "align": "middle",
+      "verticalAlign": "middle",
+      "growY": 0,
+      "url": "",
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Feeling: e.g. calm, bold, playful"
+              }
+            ]
+          }
+        ]
+      },
+      "scale": 1,
+      "textLastEditedBy": null
+    }
+  },
+  {
+    "id": "shape:cdSlhDXTB2NMTzXlmTf8y",
+    "typeName": "shape",
+    "x": 480,
+    "y": 180,
+    "rotation": 0,
+    "index": "a4D5E",
+    "parentId": "shape:uZlfX5QLVxH3kcn27Bax1",
+    "isLocked": false,
+    "opacity": 1,
+    "meta": {},
+    "type": "note",
+    "props": {
+      "color": "light-green",
+      "labelColor": "black",
+      "size": "s",
+      "font": "sans",
+      "fontSizeAdjustment": 1,
+      "align": "middle",
+      "verticalAlign": "middle",
+      "growY": 0,
+      "url": "",
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Texture: e.g. linen, chrome, paper"
+              }
+            ]
+          }
+        ]
+      },
+      "scale": 1,
+      "textLastEditedBy": null
+    }
+  },
+  {
+    "id": "shape:1TZYByBr6x4sVfGUAY3p9",
+    "typeName": "shape",
+    "x": 40,
+    "y": 400,
+    "rotation": 0,
+    "index": "a5ZFM",
+    "parentId": "shape:uZlfX5QLVxH3kcn27Bax1",
+    "isLocked": false,
+    "opacity": 1,
+    "meta": {},
+    "type": "note",
+    "props": {
+      "color": "orange",
+      "labelColor": "black",
+      "size": "s",
+      "font": "sans",
+      "fontSizeAdjustment": 1,
+      "align": "middle",
+      "verticalAlign": "middle",
+      "growY": 0,
+      "url": "",
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Light: e.g. golden hour, neon, overcast"
+              }
+            ]
+          }
+        ]
+      },
+      "scale": 1,
+      "textLastEditedBy": null
+    }
+  },
+  {
+    "id": "shape:kEXs-6rZ1D7OFVCbRdD8N",
+    "typeName": "shape",
+    "x": 260,
+    "y": 400,
+    "rotation": 0,
+    "index": "a6lrv",
+    "parentId": "shape:uZlfX5QLVxH3kcn27Bax1",
+    "isLocked": false,
+    "opacity": 1,
+    "meta": {},
+    "type": "note",
+    "props": {
+      "color": "light-violet",
+      "labelColor": "black",
+      "size": "s",
+      "font": "sans",
+      "fontSizeAdjustment": 1,
+      "align": "middle",
+      "verticalAlign": "middle",
+      "growY": 0,
+      "url": "",
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Pace: e.g. slow and still, quick cuts"
+              }
+            ]
+          }
+        ]
+      },
+      "scale": 1,
+      "textLastEditedBy": null
+    }
+  },
+  {
+    "id": "shape:BihIOTb_T4HVFM0i8zgcQ",
+    "typeName": "shape",
+    "x": 480,
+    "y": 400,
+    "rotation": 0,
+    "index": "a78l6",
+    "parentId": "shape:uZlfX5QLVxH3kcn27Bax1",
+    "isLocked": false,
+    "opacity": 1,
+    "meta": {},
+    "type": "note",
+    "props": {
+      "color": "light-red",
+      "labelColor": "black",
+      "size": "s",
+      "font": "sans",
+      "fontSizeAdjustment": 1,
+      "align": "middle",
+      "verticalAlign": "middle",
+      "growY": 0,
+      "url": "",
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Sound: e.g. hushed, brassy, lo-fi"
+              }
+            ]
+          }
+        ]
+      },
+      "scale": 1,
+      "textLastEditedBy": null
+    }
+  },
+  {
+    "id": "shape:GZKoo4CF7woa1e3TUOdm8",
+    "typeName": "shape",
+    "x": 840,
+    "y": 0,
+    "rotation": 0,
+    "index": "a1M9A",
+    "parentId": "page:page",
+    "isLocked": false,
+    "opacity": 1,
+    "meta": {},
+    "type": "frame",
+    "props": {
+      "w": 1380,
+      "h": 640,
+      "name": "2 · Palette",
+      "color": "black"
+    }
+  },
+  {
+    "id": "shape:J2zNy8XOOyouELqn_R0Fc",
+    "typeName": "shape",
+    "x": 40,
+    "y": 32,
+    "rotation": 0,
+    "index": "a0n9X",
+    "parentId": "shape:GZKoo4CF7woa1e3TUOdm8",
+    "isLocked": true,
+    "opacity": 1,
+    "meta": {},
+    "type": "text",
+    "props": {
+      "color": "black",
+      "size": "l",
+      "font": "sans",
+      "textAlign": "start",
+      "w": 1300,
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Color palette"
+              }
+            ]
+          }
+        ]
+      },
+      "scale": 1,
+      "autoSize": false
+    }
+  },
+  {
+    "id": "shape:RxG7dDkBbqkEdvzsyu-pN",
+    "typeName": "shape",
+    "x": 40,
+    "y": 92,
+    "rotation": 0,
+    "index": "a1XAQ",
+    "parentId": "shape:GZKoo4CF7woa1e3TUOdm8",
+    "isLocked": true,
+    "opacity": 1,
+    "meta": {},
+    "type": "text",
+    "props": {
+      "color": "grey",
+      "size": "s",
+      "font": "sans",
+      "textAlign": "start",
+      "w": 1000,
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Recolor each swatch from the style panel, then write its name or hex code in the label."
+              }
+            ]
+          }
+        ]
+      },
+      "scale": 1,
+      "autoSize": false
+    }
+  },
+  {
+    "id": "shape:3nqh3txriUIRWlFOvGCA8",
+    "typeName": "shape",
+    "x": 40,
+    "y": 180,
+    "rotation": 0,
+    "index": "a2YK2",
+    "parentId": "shape:GZKoo4CF7woa1e3TUOdm8",
+    "isLocked": false,
+    "opacity": 1,
+    "meta": {},
+    "type": "geo",
+    "props": {
+      "w": 200,
+      "h": 180,
+      "geo": "rectangle",
+      "dash": "solid",
+      "growY": 0,
+      "url": "",
+      "scale": 1,
+      "flipX": false,
+      "flipY": false,
+      "color": "violet",
+      "labelColor": "white",
+      "fill": "fill",
+      "size": "m",
+      "font": "sans",
+      "align": "middle",
+      "verticalAlign": "middle",
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Primary"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "shape:nS_kMj9ytFaD82U-lLiAf",
+    "typeName": "shape",
+    "x": 260,
+    "y": 180,
+    "rotation": 0,
+    "index": "a3rpj",
+    "parentId": "shape:GZKoo4CF7woa1e3TUOdm8",
+    "isLocked": false,
+    "opacity": 1,
+    "meta": {},
+    "type": "geo",
+    "props": {
+      "w": 200,
+      "h": 180,
+      "geo": "rectangle",
+      "dash": "solid",
+      "growY": 0,
+      "url": "",
+      "scale": 1,
+      "flipX": false,
+      "flipY": false,
+      "color": "light-violet",
+      "labelColor": "black",
+      "fill": "fill",
+      "size": "m",
+      "font": "sans",
+      "align": "middle",
+      "verticalAlign": "middle",
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Secondary"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "shape:vDF1UGdCEGA2VPdtzo9Mq",
+    "typeName": "shape",
+    "x": 480,
+    "y": 180,
+    "rotation": 0,
+    "index": "a4z3o",
+    "parentId": "shape:GZKoo4CF7woa1e3TUOdm8",
+    "isLocked": false,
+    "opacity": 1,
+    "meta": {},
+    "type": "geo",
+    "props": {
+      "w": 200,
+      "h": 180,
+      "geo": "rectangle",
+      "dash": "solid",
+      "growY": 0,
+      "url": "",
+      "scale": 1,
+      "flipX": false,
+      "flipY": false,
+      "color": "light-red",
+      "labelColor": "black",
+      "fill": "fill",
+      "size": "m",
+      "font": "sans",
+      "align": "middle",
+      "verticalAlign": "middle",
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Accent"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "shape:dAuH_lTysjmxNllzGf32w",
+    "typeName": "shape",
+    "x": 700,
+    "y": 180,
+    "rotation": 0,
+    "index": "a5R9A",
+    "parentId": "shape:GZKoo4CF7woa1e3TUOdm8",
+    "isLocked": false,
+    "opacity": 1,
+    "meta": {},
+    "type": "geo",
+    "props": {
+      "w": 200,
+      "h": 180,
+      "geo": "rectangle",
+      "dash": "solid",
+      "growY": 0,
+      "url": "",
+      "scale": 1,
+      "flipX": false,
+      "flipY": false,
+      "color": "orange",
+      "labelColor": "black",
+      "fill": "fill",
+      "size": "m",
+      "font": "sans",
+      "align": "middle",
+      "verticalAlign": "middle",
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Warm"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "shape:PY6nbGMuJtHJrB7oDaOiC",
+    "typeName": "shape",
+    "x": 920,
+    "y": 180,
+    "rotation": 0,
+    "index": "a6tqb",
+    "parentId": "shape:GZKoo4CF7woa1e3TUOdm8",
+    "isLocked": false,
+    "opacity": 1,
+    "meta": {},
+    "type": "geo",
+    "props": {
+      "w": 200,
+      "h": 180,
+      "geo": "rectangle",
+      "dash": "solid",
+      "growY": 0,
+      "url": "",
+      "scale": 1,
+      "flipX": false,
+      "flipY": false,
+      "color": "yellow",
+      "labelColor": "black",
+      "fill": "fill",
+      "size": "m",
+      "font": "sans",
+      "align": "middle",
+      "verticalAlign": "middle",
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Highlight"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "shape:UeUHXBsAa85iQybQWIAYn",
+    "typeName": "shape",
+    "x": 1140,
+    "y": 180,
+    "rotation": 0,
+    "index": "a73SI",
+    "parentId": "shape:GZKoo4CF7woa1e3TUOdm8",
+    "isLocked": false,
+    "opacity": 1,
+    "meta": {},
+    "type": "geo",
+    "props": {
+      "w": 200,
+      "h": 180,
+      "geo": "rectangle",
+      "dash": "solid",
+      "growY": 0,
+      "url": "",
+      "scale": 1,
+      "flipX": false,
+      "flipY": false,
+      "color": "grey",
+      "labelColor": "black",
+      "fill": "fill",
+      "size": "m",
+      "font": "sans",
+      "align": "middle",
+      "verticalAlign": "middle",
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Base"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "shape:TCyv3yDCQv_r_U0Gmoexg",
+    "typeName": "shape",
+    "x": 40,
+    "y": 400,
+    "rotation": 0,
+    "index": "a8dlj",
+    "parentId": "shape:GZKoo4CF7woa1e3TUOdm8",
+    "isLocked": false,
+    "opacity": 1,
+    "meta": {},
+    "type": "note",
+    "props": {
+      "color": "light-blue",
+      "labelColor": "black",
+      "size": "s",
+      "font": "sans",
+      "fontSizeAdjustment": 1,
+      "align": "middle",
+      "verticalAlign": "middle",
+      "growY": 0,
+      "url": "",
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Which color leads, and which is a rare accent?"
+              }
+            ]
+          }
+        ]
+      },
+      "scale": 1,
+      "textLastEditedBy": null
+    }
+  },
+  {
+    "id": "shape:lDwJQiJGbSyXnL_zgTETu",
+    "typeName": "shape",
+    "x": 260,
+    "y": 400,
+    "rotation": 0,
+    "index": "a9enn",
+    "parentId": "shape:GZKoo4CF7woa1e3TUOdm8",
+    "isLocked": false,
+    "opacity": 1,
+    "meta": {},
+    "type": "note",
+    "props": {
+      "color": "light-red",
+      "labelColor": "black",
+      "size": "s",
+      "font": "sans",
+      "fontSizeAdjustment": 1,
+      "align": "middle",
+      "verticalAlign": "middle",
+      "growY": 0,
+      "url": "",
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Colors to avoid, and why"
+              }
+            ]
+          }
+        ]
+      },
+      "scale": 1,
+      "textLastEditedBy": null
+    }
+  },
+  {
+    "id": "shape:Iny7yO1bSY0hZdd9MLkvZ",
+    "typeName": "shape",
+    "x": 480,
+    "y": 400,
+    "rotation": 0,
+    "index": "aAMo2",
+    "parentId": "shape:GZKoo4CF7woa1e3TUOdm8",
+    "isLocked": false,
+    "opacity": 1,
+    "meta": {},
+    "type": "note",
+    "props": {
+      "color": "yellow",
+      "labelColor": "black",
+      "size": "s",
+      "font": "sans",
+      "fontSizeAdjustment": 1,
+      "align": "middle",
+      "verticalAlign": "middle",
+      "growY": 0,
+      "url": "",
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Where the palette comes from: a photo, film or place"
+              }
+            ]
+          }
+        ]
+      },
+      "scale": 1,
+      "textLastEditedBy": null
+    }
+  },
+  {
+    "id": "shape:HsNY_eQq2940ZI8zRknSP",
+    "typeName": "shape",
+    "x": 0,
+    "y": 760,
+    "rotation": 0,
+    "index": "a2TUW",
+    "parentId": "page:page",
+    "isLocked": false,
+    "opacity": 1,
+    "meta": {},
+    "type": "frame",
+    "props": {
+      "w": 1520,
+      "h": 900,
+      "name": "3 · Imagery",
+      "color": "black"
+    }
+  },
+  {
+    "id": "shape:X2fc-4-7hZnkvEPxKpnfz",
+    "typeName": "shape",
+    "x": 40,
+    "y": 32,
+    "rotation": 0,
+    "index": "a0U9D",
+    "parentId": "shape:HsNY_eQq2940ZI8zRknSP",
+    "isLocked": true,
+    "opacity": 1,
+    "meta": {},
+    "type": "text",
+    "props": {
+      "color": "black",
+      "size": "l",
+      "font": "sans",
+      "textAlign": "start",
+      "w": 1440,
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Imagery"
+              }
+            ]
+          }
+        ]
+      },
+      "scale": 1,
+      "autoSize": false
+    }
+  },
+  {
+    "id": "shape:JblLas2s_BJYXYMe1fxxW",
+    "typeName": "shape",
+    "x": 40,
+    "y": 92,
+    "rotation": 0,
+    "index": "a1lYX",
+    "parentId": "shape:HsNY_eQq2940ZI8zRknSP",
+    "isLocked": true,
+    "opacity": 1,
+    "meta": {},
+    "type": "text",
+    "props": {
+      "color": "grey",
+      "size": "s",
+      "font": "sans",
+      "textAlign": "start",
+      "w": 1000,
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Drop reference images onto the slots or anywhere in this frame. Aim for a mix: wide and close, people and places."
+              }
+            ]
+          }
+        ]
+      },
+      "scale": 1,
+      "autoSize": false
+    }
+  },
+  {
+    "id": "shape:KKmga3NBMgSUfut_yWftx",
+    "typeName": "shape",
+    "x": 40,
+    "y": 190,
+    "rotation": 0,
+    "index": "a28gf",
+    "parentId": "shape:HsNY_eQq2940ZI8zRknSP",
+    "isLocked": true,
+    "opacity": 1,
+    "meta": {
+      "draftroomSlot": "image"
+    },
+    "type": "geo",
+    "props": {
+      "w": 460,
+      "h": 300,
+      "geo": "rectangle",
+      "dash": "dashed",
+      "growY": 0,
+      "url": "",
+      "scale": 1,
+      "flipX": false,
+      "flipY": false,
+      "color": "grey",
+      "labelColor": "grey",
+      "fill": "semi",
+      "size": "s",
+      "font": "sans",
+      "align": "middle",
+      "verticalAlign": "middle",
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Hero image: the one that sums it up"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "shape:5jpD0OyQ7wHdZ6Mx40Ia6",
+    "typeName": "shape",
+    "x": 530,
+    "y": 190,
+    "rotation": 0,
+    "index": "a3vxn",
+    "parentId": "shape:HsNY_eQq2940ZI8zRknSP",
+    "isLocked": true,
+    "opacity": 1,
+    "meta": {
+      "draftroomSlot": "image"
+    },
+    "type": "geo",
+    "props": {
+      "w": 460,
+      "h": 300,
+      "geo": "rectangle",
+      "dash": "dashed",
+      "growY": 0,
+      "url": "",
+      "scale": 1,
+      "flipX": false,
+      "flipY": false,
+      "color": "grey",
+      "labelColor": "grey",
+      "fill": "semi",
+      "size": "s",
+      "font": "sans",
+      "align": "middle",
+      "verticalAlign": "middle",
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Place or setting"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "shape:8FnDVcb_8fO5KUyAeYE91",
+    "typeName": "shape",
+    "x": 1020,
+    "y": 190,
+    "rotation": 0,
+    "index": "a4Hrb",
+    "parentId": "shape:HsNY_eQq2940ZI8zRknSP",
+    "isLocked": true,
+    "opacity": 1,
+    "meta": {
+      "draftroomSlot": "image"
+    },
+    "type": "geo",
+    "props": {
+      "w": 460,
+      "h": 300,
+      "geo": "rectangle",
+      "dash": "dashed",
+      "growY": 0,
+      "url": "",
+      "scale": 1,
+      "flipX": false,
+      "flipY": false,
+      "color": "grey",
+      "labelColor": "grey",
+      "fill": "semi",
+      "size": "s",
+      "font": "sans",
+      "align": "middle",
+      "verticalAlign": "middle",
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "People or character"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "shape:1ks2VBf6adntY23pZpo1m",
+    "typeName": "shape",
+    "x": 40,
+    "y": 520,
+    "rotation": 0,
+    "index": "a5g7n",
+    "parentId": "shape:HsNY_eQq2940ZI8zRknSP",
+    "isLocked": true,
+    "opacity": 1,
+    "meta": {
+      "draftroomSlot": "image"
+    },
+    "type": "geo",
+    "props": {
+      "w": 460,
+      "h": 300,
+      "geo": "rectangle",
+      "dash": "dashed",
+      "growY": 0,
+      "url": "",
+      "scale": 1,
+      "flipX": false,
+      "flipY": false,
+      "color": "grey",
+      "labelColor": "grey",
+      "fill": "semi",
+      "size": "s",
+      "font": "sans",
+      "align": "middle",
+      "verticalAlign": "middle",
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Texture or material"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "shape:w5W-j8z50cNMYFl20f0oM",
+    "typeName": "shape",
+    "x": 530,
+    "y": 520,
+    "rotation": 0,
+    "index": "a6BHr",
+    "parentId": "shape:HsNY_eQq2940ZI8zRknSP",
+    "isLocked": true,
+    "opacity": 1,
+    "meta": {
+      "draftroomSlot": "image"
+    },
+    "type": "geo",
+    "props": {
+      "w": 460,
+      "h": 300,
+      "geo": "rectangle",
+      "dash": "dashed",
+      "growY": 0,
+      "url": "",
+      "scale": 1,
+      "flipX": false,
+      "flipY": false,
+      "color": "grey",
+      "labelColor": "grey",
+      "fill": "semi",
+      "size": "s",
+      "font": "sans",
+      "align": "middle",
+      "verticalAlign": "middle",
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Type and graphics"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "shape:C6_emBJDQcU2KDcEce-pA",
+    "typeName": "shape",
+    "x": 1020,
+    "y": 520,
+    "rotation": 0,
+    "index": "a7Q0U",
+    "parentId": "shape:HsNY_eQq2940ZI8zRknSP",
+    "isLocked": true,
+    "opacity": 1,
+    "meta": {
+      "draftroomSlot": "image"
+    },
+    "type": "geo",
+    "props": {
+      "w": 460,
+      "h": 300,
+      "geo": "rectangle",
+      "dash": "dashed",
+      "growY": 0,
+      "url": "",
+      "scale": 1,
+      "flipX": false,
+      "flipY": false,
+      "color": "grey",
+      "labelColor": "grey",
+      "fill": "semi",
+      "size": "s",
+      "font": "sans",
+      "align": "middle",
+      "verticalAlign": "middle",
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Wild card from another world"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "shape:XipNb5goVH_3KvRsZ1wyI",
+    "typeName": "shape",
+    "x": 1600,
+    "y": 760,
+    "rotation": 0,
+    "index": "a3y0r",
+    "parentId": "page:page",
+    "isLocked": false,
+    "opacity": 1,
+    "meta": {},
+    "type": "frame",
+    "props": {
+      "w": 620,
+      "h": 900,
+      "name": "4 · This, not that",
+      "color": "black"
+    }
+  },
+  {
+    "id": "shape:pCRapWHQk2fbWHJqJcuVq",
+    "typeName": "shape",
+    "x": 40,
+    "y": 32,
+    "rotation": 0,
+    "index": "a0QzR",
+    "parentId": "shape:XipNb5goVH_3KvRsZ1wyI",
+    "isLocked": true,
+    "opacity": 1,
+    "meta": {},
+    "type": "text",
+    "props": {
+      "color": "black",
+      "size": "l",
+      "font": "sans",
+      "textAlign": "start",
+      "w": 540,
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "This, not that"
+              }
+            ]
+          }
+        ]
+      },
+      "scale": 1,
+      "autoSize": false
+    }
+  },
+  {
+    "id": "shape:FZRfK2CR3qFtamchqyY1Y",
+    "typeName": "shape",
+    "x": 40,
+    "y": 92,
+    "rotation": 0,
+    "index": "a1enb",
+    "parentId": "shape:XipNb5goVH_3KvRsZ1wyI",
+    "isLocked": true,
+    "opacity": 1,
+    "meta": {},
+    "type": "text",
+    "props": {
+      "color": "grey",
+      "size": "s",
+      "font": "sans",
+      "textAlign": "start",
+      "w": 540,
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Sharpen the direction by naming what it isn't."
+              }
+            ]
+          }
+        ]
+      },
+      "scale": 1,
+      "autoSize": false
+    }
+  },
+  {
+    "id": "shape:IeK_gzO5-xqZNrFhbC_Ff",
+    "typeName": "shape",
+    "x": 60,
+    "y": 160,
+    "rotation": 0,
+    "index": "a2OE6",
+    "parentId": "shape:XipNb5goVH_3KvRsZ1wyI",
+    "isLocked": true,
+    "opacity": 1,
+    "meta": {},
+    "type": "text",
+    "props": {
+      "color": "green",
+      "size": "m",
+      "font": "sans",
+      "textAlign": "middle",
+      "w": 200,
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "This"
+              }
+            ]
+          }
+        ]
+      },
+      "scale": 1,
+      "autoSize": false
+    }
+  },
+  {
+    "id": "shape:sai7AUi3-zuT4ON2eUoFF",
+    "typeName": "shape",
+    "x": 360,
+    "y": 160,
+    "rotation": 0,
+    "index": "a36dv",
+    "parentId": "shape:XipNb5goVH_3KvRsZ1wyI",
+    "isLocked": true,
+    "opacity": 1,
+    "meta": {},
+    "type": "text",
+    "props": {
+      "color": "red",
+      "size": "m",
+      "font": "sans",
+      "textAlign": "middle",
+      "w": 200,
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Not that"
+              }
+            ]
+          }
+        ]
+      },
+      "scale": 1,
+      "autoSize": false
+    }
+  },
+  {
+    "id": "shape:nfvX03fOqU-0KfJiDrPdP",
+    "typeName": "shape",
+    "x": 60,
+    "y": 216,
+    "rotation": 0,
+    "index": "a4Pl6",
+    "parentId": "shape:XipNb5goVH_3KvRsZ1wyI",
+    "isLocked": false,
+    "opacity": 1,
+    "meta": {},
+    "type": "note",
+    "props": {
+      "color": "light-green",
+      "labelColor": "black",
+      "size": "s",
+      "font": "sans",
+      "fontSizeAdjustment": 1,
+      "align": "middle",
+      "verticalAlign": "middle",
+      "growY": 0,
+      "url": "",
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "e.g. warm and hand-made"
+              }
+            ]
+          }
+        ]
+      },
+      "scale": 1,
+      "textLastEditedBy": null
+    }
+  },
+  {
+    "id": "shape:9Xi9xw41RPv4kPu9z36Qu",
+    "typeName": "shape",
+    "x": 360,
+    "y": 216,
+    "rotation": 0,
+    "index": "a5ULL",
+    "parentId": "shape:XipNb5goVH_3KvRsZ1wyI",
+    "isLocked": false,
+    "opacity": 1,
+    "meta": {},
+    "type": "note",
+    "props": {
+      "color": "light-red",
+      "labelColor": "black",
+      "size": "s",
+      "font": "sans",
+      "fontSizeAdjustment": 1,
+      "align": "middle",
+      "verticalAlign": "middle",
+      "growY": 0,
+      "url": "",
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "e.g. rustic or twee"
+              }
+            ]
+          }
+        ]
+      },
+      "scale": 1,
+      "textLastEditedBy": null
+    }
+  },
+  {
+    "id": "shape:LM7M7-_Mkg2mbJrxvFiJc",
+    "typeName": "shape",
+    "x": 60,
+    "y": 436,
+    "rotation": 0,
+    "index": "a6uzy",
+    "parentId": "shape:XipNb5goVH_3KvRsZ1wyI",
+    "isLocked": false,
+    "opacity": 1,
+    "meta": {},
+    "type": "note",
+    "props": {
+      "color": "light-green",
+      "labelColor": "black",
+      "size": "s",
+      "font": "sans",
+      "fontSizeAdjustment": 1,
+      "align": "middle",
+      "verticalAlign": "middle",
+      "growY": 0,
+      "url": "",
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "e.g. confident"
+              }
+            ]
+          }
+        ]
+      },
+      "scale": 1,
+      "textLastEditedBy": null
+    }
+  },
+  {
+    "id": "shape:WdjNxw0yPycK51iKfy7CL",
+    "typeName": "shape",
+    "x": 360,
+    "y": 436,
+    "rotation": 0,
+    "index": "a7t5v",
+    "parentId": "shape:XipNb5goVH_3KvRsZ1wyI",
+    "isLocked": false,
+    "opacity": 1,
+    "meta": {},
+    "type": "note",
+    "props": {
+      "color": "light-red",
+      "labelColor": "black",
+      "size": "s",
+      "font": "sans",
+      "fontSizeAdjustment": 1,
+      "align": "middle",
+      "verticalAlign": "middle",
+      "growY": 0,
+      "url": "",
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "e.g. shouty"
+              }
+            ]
+          }
+        ]
+      },
+      "scale": 1,
+      "textLastEditedBy": null
+    }
+  },
+  {
+    "id": "shape:DVnIvKgknH0vmYd7gS2Cy",
+    "typeName": "shape",
+    "x": 60,
+    "y": 656,
+    "rotation": 0,
+    "index": "a8Irb",
+    "parentId": "shape:XipNb5goVH_3KvRsZ1wyI",
+    "isLocked": false,
+    "opacity": 1,
+    "meta": {},
+    "type": "note",
+    "props": {
+      "color": "light-green",
+      "labelColor": "black",
+      "size": "s",
+      "font": "sans",
+      "fontSizeAdjustment": 1,
+      "align": "middle",
+      "verticalAlign": "middle",
+      "growY": 0,
+      "url": "",
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "This…"
+              }
+            ]
+          }
+        ]
+      },
+      "scale": 1,
+      "textLastEditedBy": null
+    }
+  },
+  {
+    "id": "shape:Mx6NVCuHpKOWa2p6Frz9V",
+    "typeName": "shape",
+    "x": 360,
+    "y": 656,
+    "rotation": 0,
+    "index": "a9Imn",
+    "parentId": "shape:XipNb5goVH_3KvRsZ1wyI",
+    "isLocked": false,
+    "opacity": 1,
+    "meta": {},
+    "type": "note",
+    "props": {
+      "color": "light-red",
+      "labelColor": "black",
+      "size": "s",
+      "font": "sans",
+      "fontSizeAdjustment": 1,
+      "align": "middle",
+      "verticalAlign": "middle",
+      "growY": 0,
+      "url": "",
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Not that…"
+              }
+            ]
+          }
+        ]
+      },
+      "scale": 1,
+      "textLastEditedBy": null
+    }
+  }
+]

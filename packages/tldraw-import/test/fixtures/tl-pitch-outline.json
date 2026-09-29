@@ -1,0 +1,1809 @@
+[
+  {
+    "id": "document:document",
+    "typeName": "document",
+    "gridSize": 10,
+    "name": "",
+    "meta": {}
+  },
+  {
+    "id": "page:page",
+    "typeName": "page",
+    "name": "Page 1",
+    "index": "a1",
+    "meta": {}
+  },
+  {
+    "id": "shape:9OHyFGveTr6b8bUYZ6MJ3",
+    "typeName": "shape",
+    "x": 0,
+    "y": 0,
+    "rotation": 0,
+    "index": "a0Y0j",
+    "parentId": "page:page",
+    "isLocked": false,
+    "opacity": 1,
+    "meta": {},
+    "type": "frame",
+    "props": {
+      "w": 2820,
+      "h": 420,
+      "name": "Pitch at a glance",
+      "color": "black"
+    }
+  },
+  {
+    "id": "shape:c8UpbcrgDz3OxKvIz0dm9",
+    "typeName": "shape",
+    "x": 40,
+    "y": 32,
+    "rotation": 0,
+    "index": "a0dNM",
+    "parentId": "shape:9OHyFGveTr6b8bUYZ6MJ3",
+    "isLocked": true,
+    "opacity": 1,
+    "meta": {},
+    "type": "text",
+    "props": {
+      "color": "black",
+      "size": "l",
+      "font": "sans",
+      "textAlign": "start",
+      "w": 2740,
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Pitch outline: project name"
+              }
+            ]
+          }
+        ]
+      },
+      "scale": 1,
+      "autoSize": false
+    }
+  },
+  {
+    "id": "shape:phkU8jVnZoYbPYcqZto-O",
+    "typeName": "shape",
+    "x": 40,
+    "y": 92,
+    "rotation": 0,
+    "index": "a1DJr",
+    "parentId": "shape:9OHyFGveTr6b8bUYZ6MJ3",
+    "isLocked": true,
+    "opacity": 1,
+    "meta": {},
+    "type": "text",
+    "props": {
+      "color": "grey",
+      "size": "s",
+      "font": "sans",
+      "textAlign": "start",
+      "w": 1000,
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Build the story left to right. Each column should land one point; cut anything that doesn't earn its place."
+              }
+            ]
+          }
+        ]
+      },
+      "scale": 1,
+      "autoSize": false
+    }
+  },
+  {
+    "id": "shape:mRNKXeIuFC5mIB_vpcFbk",
+    "typeName": "shape",
+    "x": 40,
+    "y": 180,
+    "rotation": 0,
+    "index": "a2ccQ",
+    "parentId": "shape:9OHyFGveTr6b8bUYZ6MJ3",
+    "isLocked": false,
+    "opacity": 1,
+    "meta": {},
+    "type": "note",
+    "props": {
+      "color": "yellow",
+      "labelColor": "black",
+      "size": "s",
+      "font": "sans",
+      "fontSizeAdjustment": 1,
+      "align": "middle",
+      "verticalAlign": "middle",
+      "growY": 0,
+      "url": "",
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Who are we pitching to?"
+              }
+            ]
+          }
+        ]
+      },
+      "scale": 1,
+      "textLastEditedBy": null
+    }
+  },
+  {
+    "id": "shape:XQPENNoAZCZ_QztNe8X51",
+    "typeName": "shape",
+    "x": 260,
+    "y": 180,
+    "rotation": 0,
+    "index": "a3MEj",
+    "parentId": "shape:9OHyFGveTr6b8bUYZ6MJ3",
+    "isLocked": false,
+    "opacity": 1,
+    "meta": {},
+    "type": "note",
+    "props": {
+      "color": "light-blue",
+      "labelColor": "black",
+      "size": "s",
+      "font": "sans",
+      "fontSizeAdjustment": 1,
+      "align": "middle",
+      "verticalAlign": "middle",
+      "growY": 0,
+      "url": "",
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "What do we want them to decide?"
+              }
+            ]
+          }
+        ]
+      },
+      "scale": 1,
+      "textLastEditedBy": null
+    }
+  },
+  {
+    "id": "shape:yo0yd0zsIQr69jJUqu6_x",
+    "typeName": "shape",
+    "x": 480,
+    "y": 180,
+    "rotation": 0,
+    "index": "a4aMz",
+    "parentId": "shape:9OHyFGveTr6b8bUYZ6MJ3",
+    "isLocked": false,
+    "opacity": 1,
+    "meta": {},
+    "type": "note",
+    "props": {
+      "color": "light-green",
+      "labelColor": "black",
+      "size": "s",
+      "font": "sans",
+      "fontSizeAdjustment": 1,
+      "align": "middle",
+      "verticalAlign": "middle",
+      "growY": 0,
+      "url": "",
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "The pitch in one line"
+              }
+            ]
+          }
+        ]
+      },
+      "scale": 1,
+      "textLastEditedBy": null
+    }
+  },
+  {
+    "id": "shape:D57hGDxJtDijetaq0W20G",
+    "typeName": "shape",
+    "x": 700,
+    "y": 180,
+    "rotation": 0,
+    "index": "a5BXX",
+    "parentId": "shape:9OHyFGveTr6b8bUYZ6MJ3",
+    "isLocked": false,
+    "opacity": 1,
+    "meta": {},
+    "type": "note",
+    "props": {
+      "color": "light-violet",
+      "labelColor": "black",
+      "size": "s",
+      "font": "sans",
+      "fontSizeAdjustment": 1,
+      "align": "middle",
+      "verticalAlign": "middle",
+      "growY": 0,
+      "url": "",
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "What do they already believe, or doubt?"
+              }
+            ]
+          }
+        ]
+      },
+      "scale": 1,
+      "textLastEditedBy": null
+    }
+  },
+  {
+    "id": "shape:BDRC8JiLbMyi14t4kuCn0",
+    "typeName": "shape",
+    "x": 920,
+    "y": 180,
+    "rotation": 0,
+    "index": "a6gQv",
+    "parentId": "shape:9OHyFGveTr6b8bUYZ6MJ3",
+    "isLocked": false,
+    "opacity": 1,
+    "meta": {},
+    "type": "note",
+    "props": {
+      "color": "orange",
+      "labelColor": "black",
+      "size": "s",
+      "font": "sans",
+      "fontSizeAdjustment": 1,
+      "align": "middle",
+      "verticalAlign": "middle",
+      "growY": 0,
+      "url": "",
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Time we have: e.g. 10 min + Q&A"
+              }
+            ]
+          }
+        ]
+      },
+      "scale": 1,
+      "textLastEditedBy": null
+    }
+  },
+  {
+    "id": "shape:ayqivG51p466bt4Kah3Zv",
+    "typeName": "shape",
+    "x": 1140,
+    "y": 180,
+    "rotation": 0,
+    "index": "a7ueA",
+    "parentId": "shape:9OHyFGveTr6b8bUYZ6MJ3",
+    "isLocked": false,
+    "opacity": 1,
+    "meta": {},
+    "type": "note",
+    "props": {
+      "color": "light-red",
+      "labelColor": "black",
+      "size": "s",
+      "font": "sans",
+      "fontSizeAdjustment": 1,
+      "align": "middle",
+      "verticalAlign": "middle",
+      "growY": 0,
+      "url": "",
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Opening line: how we'll start the room"
+              }
+            ]
+          }
+        ]
+      },
+      "scale": 1,
+      "textLastEditedBy": null
+    }
+  },
+  {
+    "id": "shape:v3tQYcH77rDRAGGrRemH7",
+    "typeName": "shape",
+    "x": 1360,
+    "y": 180,
+    "rotation": 0,
+    "index": "a8Vz5",
+    "parentId": "shape:9OHyFGveTr6b8bUYZ6MJ3",
+    "isLocked": false,
+    "opacity": 1,
+    "meta": {},
+    "type": "note",
+    "props": {
+      "color": "yellow",
+      "labelColor": "black",
+      "size": "s",
+      "font": "sans",
+      "fontSizeAdjustment": 1,
+      "align": "middle",
+      "verticalAlign": "middle",
+      "growY": 0,
+      "url": "",
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Closing line: the last thing they hear"
+              }
+            ]
+          }
+        ]
+      },
+      "scale": 1,
+      "textLastEditedBy": null
+    }
+  },
+  {
+    "id": "shape:0fjWLyYkFTMyygj2UCuMU",
+    "typeName": "shape",
+    "x": 0,
+    "y": 540,
+    "rotation": 0,
+    "index": "a1y12",
+    "parentId": "page:page",
+    "isLocked": false,
+    "opacity": 1,
+    "meta": {},
+    "type": "frame",
+    "props": {
+      "w": 500,
+      "h": 720,
+      "name": "1 · Problem",
+      "color": "black"
+    }
+  },
+  {
+    "id": "shape:3e5D4z0krG38HXysjZj6R",
+    "typeName": "shape",
+    "x": 40,
+    "y": 32,
+    "rotation": 0,
+    "index": "a0LUw",
+    "parentId": "shape:0fjWLyYkFTMyygj2UCuMU",
+    "isLocked": true,
+    "opacity": 1,
+    "meta": {},
+    "type": "text",
+    "props": {
+      "color": "black",
+      "size": "l",
+      "font": "sans",
+      "textAlign": "start",
+      "w": 420,
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Problem"
+              }
+            ]
+          }
+        ]
+      },
+      "scale": 1,
+      "autoSize": false
+    }
+  },
+  {
+    "id": "shape:V3BPQ3OlDgfUwEK2x6hzH",
+    "typeName": "shape",
+    "x": 40,
+    "y": 92,
+    "rotation": 0,
+    "index": "a1ew2",
+    "parentId": "shape:0fjWLyYkFTMyygj2UCuMU",
+    "isLocked": true,
+    "opacity": 1,
+    "meta": {},
+    "type": "text",
+    "props": {
+      "color": "grey",
+      "size": "s",
+      "font": "sans",
+      "textAlign": "start",
+      "w": 420,
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Start with a real person and a real pain."
+              }
+            ]
+          }
+        ]
+      },
+      "scale": 1,
+      "autoSize": false
+    }
+  },
+  {
+    "id": "shape:BSJuvz9dyve2RpnP1i-y8",
+    "typeName": "shape",
+    "x": 40,
+    "y": 190,
+    "rotation": 0,
+    "index": "a2Bfr",
+    "parentId": "shape:0fjWLyYkFTMyygj2UCuMU",
+    "isLocked": false,
+    "opacity": 1,
+    "meta": {},
+    "type": "note",
+    "props": {
+      "color": "light-red",
+      "labelColor": "black",
+      "size": "s",
+      "font": "sans",
+      "fontSizeAdjustment": 1,
+      "align": "middle",
+      "verticalAlign": "middle",
+      "growY": 0,
+      "url": "",
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Who has the problem?"
+              }
+            ]
+          }
+        ]
+      },
+      "scale": 1,
+      "textLastEditedBy": null
+    }
+  },
+  {
+    "id": "shape:YiqgA9HFN-dXzHR17yYWB",
+    "typeName": "shape",
+    "x": 260,
+    "y": 190,
+    "rotation": 0,
+    "index": "a38jE",
+    "parentId": "shape:0fjWLyYkFTMyygj2UCuMU",
+    "isLocked": false,
+    "opacity": 1,
+    "meta": {},
+    "type": "note",
+    "props": {
+      "color": "light-red",
+      "labelColor": "black",
+      "size": "s",
+      "font": "sans",
+      "fontSizeAdjustment": 1,
+      "align": "middle",
+      "verticalAlign": "middle",
+      "growY": 0,
+      "url": "",
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "What does it cost them today?"
+              }
+            ]
+          }
+        ]
+      },
+      "scale": 1,
+      "textLastEditedBy": null
+    }
+  },
+  {
+    "id": "shape:nm92E1EZEZ3VSMtyr0O-O",
+    "typeName": "shape",
+    "x": 40,
+    "y": 410,
+    "rotation": 0,
+    "index": "a4qzm",
+    "parentId": "shape:0fjWLyYkFTMyygj2UCuMU",
+    "isLocked": false,
+    "opacity": 1,
+    "meta": {},
+    "type": "note",
+    "props": {
+      "color": "light-red",
+      "labelColor": "black",
+      "size": "s",
+      "font": "sans",
+      "fontSizeAdjustment": 1,
+      "align": "middle",
+      "verticalAlign": "middle",
+      "growY": 0,
+      "url": "",
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Why hasn't it been solved yet?"
+              }
+            ]
+          }
+        ]
+      },
+      "scale": 1,
+      "textLastEditedBy": null
+    }
+  },
+  {
+    "id": "shape:VjmM-TXa2JaJKoBW24nf8",
+    "typeName": "shape",
+    "x": 260,
+    "y": 410,
+    "rotation": 0,
+    "index": "a5Rj2",
+    "parentId": "shape:0fjWLyYkFTMyygj2UCuMU",
+    "isLocked": false,
+    "opacity": 1,
+    "meta": {},
+    "type": "note",
+    "props": {
+      "color": "light-red",
+      "labelColor": "black",
+      "size": "s",
+      "font": "sans",
+      "fontSizeAdjustment": 1,
+      "align": "middle",
+      "verticalAlign": "middle",
+      "growY": 0,
+      "url": "",
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Why does it matter now?"
+              }
+            ]
+          }
+        ]
+      },
+      "scale": 1,
+      "textLastEditedBy": null
+    }
+  },
+  {
+    "id": "shape:sovZvYEbKfX-_yJPe91lu",
+    "typeName": "shape",
+    "x": 580,
+    "y": 540,
+    "rotation": 0,
+    "index": "a2P7A",
+    "parentId": "page:page",
+    "isLocked": false,
+    "opacity": 1,
+    "meta": {},
+    "type": "frame",
+    "props": {
+      "w": 500,
+      "h": 720,
+      "name": "2 · Insight",
+      "color": "black"
+    }
+  },
+  {
+    "id": "shape:NDSiI9y-iRWZDi4JDnf6n",
+    "typeName": "shape",
+    "x": 40,
+    "y": 32,
+    "rotation": 0,
+    "index": "a0Uck",
+    "parentId": "shape:sovZvYEbKfX-_yJPe91lu",
+    "isLocked": true,
+    "opacity": 1,
+    "meta": {},
+    "type": "text",
+    "props": {
+      "color": "black",
+      "size": "l",
+      "font": "sans",
+      "textAlign": "start",
+      "w": 420,
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Insight"
+              }
+            ]
+          }
+        ]
+      },
+      "scale": 1,
+      "autoSize": false
+    }
+  },
+  {
+    "id": "shape:OwS4gKE9CfVXtU8ssmMkF",
+    "typeName": "shape",
+    "x": 40,
+    "y": 92,
+    "rotation": 0,
+    "index": "a1zFT",
+    "parentId": "shape:sovZvYEbKfX-_yJPe91lu",
+    "isLocked": true,
+    "opacity": 1,
+    "meta": {},
+    "type": "text",
+    "props": {
+      "color": "grey",
+      "size": "s",
+      "font": "sans",
+      "textAlign": "start",
+      "w": 420,
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "What do we see that others miss?"
+              }
+            ]
+          }
+        ]
+      },
+      "scale": 1,
+      "autoSize": false
+    }
+  },
+  {
+    "id": "shape:cYd_DAOEk7G8damrv2qtq",
+    "typeName": "shape",
+    "x": 40,
+    "y": 190,
+    "rotation": 0,
+    "index": "a2rXn",
+    "parentId": "shape:sovZvYEbKfX-_yJPe91lu",
+    "isLocked": false,
+    "opacity": 1,
+    "meta": {},
+    "type": "note",
+    "props": {
+      "color": "light-violet",
+      "labelColor": "black",
+      "size": "s",
+      "font": "sans",
+      "fontSizeAdjustment": 1,
+      "align": "middle",
+      "verticalAlign": "middle",
+      "growY": 0,
+      "url": "",
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "The insight in one line"
+              }
+            ]
+          }
+        ]
+      },
+      "scale": 1,
+      "textLastEditedBy": null
+    }
+  },
+  {
+    "id": "shape:ao5v1fZt4vnlS7FCt838j",
+    "typeName": "shape",
+    "x": 260,
+    "y": 190,
+    "rotation": 0,
+    "index": "a3eBE",
+    "parentId": "shape:sovZvYEbKfX-_yJPe91lu",
+    "isLocked": false,
+    "opacity": 1,
+    "meta": {},
+    "type": "note",
+    "props": {
+      "color": "light-violet",
+      "labelColor": "black",
+      "size": "s",
+      "font": "sans",
+      "fontSizeAdjustment": 1,
+      "align": "middle",
+      "verticalAlign": "middle",
+      "growY": 0,
+      "url": "",
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Evidence: a quote, a number or an observation"
+              }
+            ]
+          }
+        ]
+      },
+      "scale": 1,
+      "textLastEditedBy": null
+    }
+  },
+  {
+    "id": "shape:T70gLchxpU4PLf27qvqtj",
+    "typeName": "shape",
+    "x": 40,
+    "y": 410,
+    "rotation": 0,
+    "index": "a49qQ",
+    "parentId": "shape:sovZvYEbKfX-_yJPe91lu",
+    "isLocked": false,
+    "opacity": 1,
+    "meta": {},
+    "type": "note",
+    "props": {
+      "color": "light-violet",
+      "labelColor": "black",
+      "size": "s",
+      "font": "sans",
+      "fontSizeAdjustment": 1,
+      "align": "middle",
+      "verticalAlign": "middle",
+      "growY": 0,
+      "url": "",
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "What most people assume instead"
+              }
+            ]
+          }
+        ]
+      },
+      "scale": 1,
+      "textLastEditedBy": null
+    }
+  },
+  {
+    "id": "shape:F5pNVFmv_fig_-faNYQ2t",
+    "typeName": "shape",
+    "x": 1160,
+    "y": 540,
+    "rotation": 0,
+    "index": "a3ufI",
+    "parentId": "page:page",
+    "isLocked": false,
+    "opacity": 1,
+    "meta": {},
+    "type": "frame",
+    "props": {
+      "w": 500,
+      "h": 720,
+      "name": "3 · Idea",
+      "color": "black"
+    }
+  },
+  {
+    "id": "shape:Kuua8lRSxzdJoKDJYuywQ",
+    "typeName": "shape",
+    "x": 40,
+    "y": 32,
+    "rotation": 0,
+    "index": "a0vM2",
+    "parentId": "shape:F5pNVFmv_fig_-faNYQ2t",
+    "isLocked": true,
+    "opacity": 1,
+    "meta": {},
+    "type": "text",
+    "props": {
+      "color": "black",
+      "size": "l",
+      "font": "sans",
+      "textAlign": "start",
+      "w": 420,
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Idea"
+              }
+            ]
+          }
+        ]
+      },
+      "scale": 1,
+      "autoSize": false
+    }
+  },
+  {
+    "id": "shape:ev8VUsLuSiHUX3N9RCxRG",
+    "typeName": "shape",
+    "x": 40,
+    "y": 92,
+    "rotation": 0,
+    "index": "a16mr",
+    "parentId": "shape:F5pNVFmv_fig_-faNYQ2t",
+    "isLocked": true,
+    "opacity": 1,
+    "meta": {},
+    "type": "text",
+    "props": {
+      "color": "grey",
+      "size": "s",
+      "font": "sans",
+      "textAlign": "start",
+      "w": 420,
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Our answer, simple enough to repeat."
+              }
+            ]
+          }
+        ]
+      },
+      "scale": 1,
+      "autoSize": false
+    }
+  },
+  {
+    "id": "shape:eab4RBWgWiLjmx7c1GK73",
+    "typeName": "shape",
+    "x": 40,
+    "y": 190,
+    "rotation": 0,
+    "index": "a2IzD",
+    "parentId": "shape:F5pNVFmv_fig_-faNYQ2t",
+    "isLocked": false,
+    "opacity": 1,
+    "meta": {},
+    "type": "note",
+    "props": {
+      "color": "yellow",
+      "labelColor": "black",
+      "size": "s",
+      "font": "sans",
+      "fontSizeAdjustment": 1,
+      "align": "middle",
+      "verticalAlign": "middle",
+      "growY": 0,
+      "url": "",
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "The idea in one sentence"
+              }
+            ]
+          }
+        ]
+      },
+      "scale": 1,
+      "textLastEditedBy": null
+    }
+  },
+  {
+    "id": "shape:dr-ZKtRZI6QBNVksmEv4x",
+    "typeName": "shape",
+    "x": 260,
+    "y": 190,
+    "rotation": 0,
+    "index": "a3JwA",
+    "parentId": "shape:F5pNVFmv_fig_-faNYQ2t",
+    "isLocked": false,
+    "opacity": 1,
+    "meta": {},
+    "type": "note",
+    "props": {
+      "color": "yellow",
+      "labelColor": "black",
+      "size": "s",
+      "font": "sans",
+      "fontSizeAdjustment": 1,
+      "align": "middle",
+      "verticalAlign": "middle",
+      "growY": 0,
+      "url": "",
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "How it works, in three steps"
+              }
+            ]
+          }
+        ]
+      },
+      "scale": 1,
+      "textLastEditedBy": null
+    }
+  },
+  {
+    "id": "shape:-s6tFV_fiHTRPgET3uII9",
+    "typeName": "shape",
+    "x": 40,
+    "y": 410,
+    "rotation": 0,
+    "index": "a49HA",
+    "parentId": "shape:F5pNVFmv_fig_-faNYQ2t",
+    "isLocked": true,
+    "opacity": 1,
+    "meta": {
+      "draftroomSlot": "image"
+    },
+    "type": "geo",
+    "props": {
+      "w": 420,
+      "h": 240,
+      "geo": "rectangle",
+      "dash": "dashed",
+      "growY": 0,
+      "url": "",
+      "scale": 1,
+      "flipX": false,
+      "flipY": false,
+      "color": "grey",
+      "labelColor": "grey",
+      "fill": "semi",
+      "size": "s",
+      "font": "sans",
+      "align": "middle",
+      "verticalAlign": "middle",
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Key visual or sketch"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "shape:GpLoPrSiDoAmGJm9cn7IA",
+    "typeName": "shape",
+    "x": 1740,
+    "y": 540,
+    "rotation": 0,
+    "index": "a4XTE",
+    "parentId": "page:page",
+    "isLocked": false,
+    "opacity": 1,
+    "meta": {},
+    "type": "frame",
+    "props": {
+      "w": 500,
+      "h": 720,
+      "name": "4 · Proof",
+      "color": "black"
+    }
+  },
+  {
+    "id": "shape:os8o6NNMmNR5IAd7aQmPa",
+    "typeName": "shape",
+    "x": 40,
+    "y": 32,
+    "rotation": 0,
+    "index": "a0Wr6",
+    "parentId": "shape:GpLoPrSiDoAmGJm9cn7IA",
+    "isLocked": true,
+    "opacity": 1,
+    "meta": {},
+    "type": "text",
+    "props": {
+      "color": "black",
+      "size": "l",
+      "font": "sans",
+      "textAlign": "start",
+      "w": 420,
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Proof"
+              }
+            ]
+          }
+        ]
+      },
+      "scale": 1,
+      "autoSize": false
+    }
+  },
+  {
+    "id": "shape:4kKpiwyTR4yzMmdKRzEfN",
+    "typeName": "shape",
+    "x": 40,
+    "y": 92,
+    "rotation": 0,
+    "index": "a10oA",
+    "parentId": "shape:GpLoPrSiDoAmGJm9cn7IA",
+    "isLocked": true,
+    "opacity": 1,
+    "meta": {},
+    "type": "text",
+    "props": {
+      "color": "grey",
+      "size": "s",
+      "font": "sans",
+      "textAlign": "start",
+      "w": 420,
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Why they should believe it will work."
+              }
+            ]
+          }
+        ]
+      },
+      "scale": 1,
+      "autoSize": false
+    }
+  },
+  {
+    "id": "shape:kDXzhj61-0W7Err4rSyB-",
+    "typeName": "shape",
+    "x": 40,
+    "y": 190,
+    "rotation": 0,
+    "index": "a21jX",
+    "parentId": "shape:GpLoPrSiDoAmGJm9cn7IA",
+    "isLocked": false,
+    "opacity": 1,
+    "meta": {},
+    "type": "note",
+    "props": {
+      "color": "light-green",
+      "labelColor": "black",
+      "size": "s",
+      "font": "sans",
+      "fontSizeAdjustment": 1,
+      "align": "middle",
+      "verticalAlign": "middle",
+      "growY": 0,
+      "url": "",
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Tests, pilots or early results"
+              }
+            ]
+          }
+        ]
+      },
+      "scale": 1,
+      "textLastEditedBy": null
+    }
+  },
+  {
+    "id": "shape:M_mn78uFOQCWYCwbD-Fsk",
+    "typeName": "shape",
+    "x": 260,
+    "y": 190,
+    "rotation": 0,
+    "index": "a3RPU",
+    "parentId": "shape:GpLoPrSiDoAmGJm9cn7IA",
+    "isLocked": false,
+    "opacity": 1,
+    "meta": {},
+    "type": "note",
+    "props": {
+      "color": "light-green",
+      "labelColor": "black",
+      "size": "s",
+      "font": "sans",
+      "fontSizeAdjustment": 1,
+      "align": "middle",
+      "verticalAlign": "middle",
+      "growY": 0,
+      "url": "",
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Why us: team, craft, track record"
+              }
+            ]
+          }
+        ]
+      },
+      "scale": 1,
+      "textLastEditedBy": null
+    }
+  },
+  {
+    "id": "shape:6TnTv7D3mf9xhhMmiZxFI",
+    "typeName": "shape",
+    "x": 40,
+    "y": 410,
+    "rotation": 0,
+    "index": "a4jTE",
+    "parentId": "shape:GpLoPrSiDoAmGJm9cn7IA",
+    "isLocked": false,
+    "opacity": 1,
+    "meta": {},
+    "type": "note",
+    "props": {
+      "color": "light-green",
+      "labelColor": "black",
+      "size": "s",
+      "font": "sans",
+      "fontSizeAdjustment": 1,
+      "align": "middle",
+      "verticalAlign": "middle",
+      "growY": 0,
+      "url": "",
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Risks, and how we handle them"
+              }
+            ]
+          }
+        ]
+      },
+      "scale": 1,
+      "textLastEditedBy": null
+    }
+  },
+  {
+    "id": "shape:gtbxYIK5VaRnNjuqo2dA8",
+    "typeName": "shape",
+    "x": 2320,
+    "y": 540,
+    "rotation": 0,
+    "index": "a5JNf",
+    "parentId": "page:page",
+    "isLocked": false,
+    "opacity": 1,
+    "meta": {},
+    "type": "frame",
+    "props": {
+      "w": 500,
+      "h": 720,
+      "name": "5 · Ask",
+      "color": "black"
+    }
+  },
+  {
+    "id": "shape:crwyWK2-tYZ4PQ4Q4T4tj",
+    "typeName": "shape",
+    "x": 40,
+    "y": 32,
+    "rotation": 0,
+    "index": "a00zR",
+    "parentId": "shape:gtbxYIK5VaRnNjuqo2dA8",
+    "isLocked": true,
+    "opacity": 1,
+    "meta": {},
+    "type": "text",
+    "props": {
+      "color": "black",
+      "size": "l",
+      "font": "sans",
+      "textAlign": "start",
+      "w": 420,
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Ask"
+              }
+            ]
+          }
+        ]
+      },
+      "scale": 1,
+      "autoSize": false
+    }
+  },
+  {
+    "id": "shape:d4y8dtA6LBDfE25h39lrO",
+    "typeName": "shape",
+    "x": 40,
+    "y": 92,
+    "rotation": 0,
+    "index": "a1MyI",
+    "parentId": "shape:gtbxYIK5VaRnNjuqo2dA8",
+    "isLocked": true,
+    "opacity": 1,
+    "meta": {},
+    "type": "text",
+    "props": {
+      "color": "grey",
+      "size": "s",
+      "font": "sans",
+      "textAlign": "start",
+      "w": 420,
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Be specific about what you need."
+              }
+            ]
+          }
+        ]
+      },
+      "scale": 1,
+      "autoSize": false
+    }
+  },
+  {
+    "id": "shape:aSsQHf1eQt-E5EmGGww55",
+    "typeName": "shape",
+    "x": 40,
+    "y": 190,
+    "rotation": 0,
+    "index": "a2z2UV",
+    "parentId": "shape:gtbxYIK5VaRnNjuqo2dA8",
+    "isLocked": false,
+    "opacity": 1,
+    "meta": {},
+    "type": "note",
+    "props": {
+      "color": "light-blue",
+      "labelColor": "black",
+      "size": "s",
+      "font": "sans",
+      "fontSizeAdjustment": 1,
+      "align": "middle",
+      "verticalAlign": "middle",
+      "growY": 0,
+      "url": "",
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Exactly what we need: budget, time, a decision"
+              }
+            ]
+          }
+        ]
+      },
+      "scale": 1,
+      "textLastEditedBy": null
+    }
+  },
+  {
+    "id": "shape:UpC4rsBNUITsUISOAAi3w",
+    "typeName": "shape",
+    "x": 260,
+    "y": 190,
+    "rotation": 0,
+    "index": "a3JkE",
+    "parentId": "shape:gtbxYIK5VaRnNjuqo2dA8",
+    "isLocked": false,
+    "opacity": 1,
+    "meta": {},
+    "type": "note",
+    "props": {
+      "color": "light-blue",
+      "labelColor": "black",
+      "size": "s",
+      "font": "sans",
+      "fontSizeAdjustment": 1,
+      "align": "middle",
+      "verticalAlign": "middle",
+      "growY": 0,
+      "url": "",
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "What happens in the first 30 days"
+              }
+            ]
+          }
+        ]
+      },
+      "scale": 1,
+      "textLastEditedBy": null
+    }
+  },
+  {
+    "id": "shape:5rruBTTxXr_XEOJlCEqKG",
+    "typeName": "shape",
+    "x": 40,
+    "y": 410,
+    "rotation": 0,
+    "index": "a4g1E",
+    "parentId": "shape:gtbxYIK5VaRnNjuqo2dA8",
+    "isLocked": false,
+    "opacity": 1,
+    "meta": {},
+    "type": "note",
+    "props": {
+      "color": "light-blue",
+      "labelColor": "black",
+      "size": "s",
+      "font": "sans",
+      "fontSizeAdjustment": 1,
+      "align": "middle",
+      "verticalAlign": "middle",
+      "growY": 0,
+      "url": "",
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "How we'll measure success"
+              }
+            ]
+          }
+        ]
+      },
+      "scale": 1,
+      "textLastEditedBy": null
+    }
+  },
+  {
+    "id": "shape:K7d5ApHj0yZvZKS4_dSe9",
+    "typeName": "shape",
+    "type": "arrow",
+    "x": 500,
+    "y": 900,
+    "rotation": 0,
+    "index": "a6n56",
+    "parentId": "page:page",
+    "isLocked": false,
+    "opacity": 1,
+    "meta": {},
+    "props": {
+      "kind": "arc",
+      "elbowMidPoint": 0.5,
+      "dash": "solid",
+      "size": "l",
+      "fill": "none",
+      "color": "grey",
+      "labelColor": "black",
+      "bend": 0,
+      "start": {
+        "x": 0,
+        "y": 0
+      },
+      "end": {
+        "x": 80,
+        "y": 0
+      },
+      "arrowheadStart": "none",
+      "arrowheadEnd": "arrow",
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph"
+          }
+        ]
+      },
+      "labelPosition": 0.5,
+      "font": "sans",
+      "scale": 1
+    }
+  },
+  {
+    "id": "shape:x8w99X9oZ48rDGptKjtlx",
+    "typeName": "shape",
+    "type": "arrow",
+    "x": 1080,
+    "y": 900,
+    "rotation": 0,
+    "index": "a7ILA",
+    "parentId": "page:page",
+    "isLocked": false,
+    "opacity": 1,
+    "meta": {},
+    "props": {
+      "kind": "arc",
+      "elbowMidPoint": 0.5,
+      "dash": "solid",
+      "size": "l",
+      "fill": "none",
+      "color": "grey",
+      "labelColor": "black",
+      "bend": 0,
+      "start": {
+        "x": 0,
+        "y": 0
+      },
+      "end": {
+        "x": 80,
+        "y": 0
+      },
+      "arrowheadStart": "none",
+      "arrowheadEnd": "arrow",
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph"
+          }
+        ]
+      },
+      "labelPosition": 0.5,
+      "font": "sans",
+      "scale": 1
+    }
+  },
+  {
+    "id": "shape:4mgFaq3EEZRWZI3ZrfmR3",
+    "typeName": "shape",
+    "type": "arrow",
+    "x": 1660,
+    "y": 900,
+    "rotation": 0,
+    "index": "a8E5M",
+    "parentId": "page:page",
+    "isLocked": false,
+    "opacity": 1,
+    "meta": {},
+    "props": {
+      "kind": "arc",
+      "elbowMidPoint": 0.5,
+      "dash": "solid",
+      "size": "l",
+      "fill": "none",
+      "color": "grey",
+      "labelColor": "black",
+      "bend": 0,
+      "start": {
+        "x": 0,
+        "y": 0
+      },
+      "end": {
+        "x": 80,
+        "y": 0
+      },
+      "arrowheadStart": "none",
+      "arrowheadEnd": "arrow",
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph"
+          }
+        ]
+      },
+      "labelPosition": 0.5,
+      "font": "sans",
+      "scale": 1
+    }
+  },
+  {
+    "id": "shape:R4CA1ybqQfqn2u7LvuOeT",
+    "typeName": "shape",
+    "type": "arrow",
+    "x": 2240,
+    "y": 900,
+    "rotation": 0,
+    "index": "a9B0b",
+    "parentId": "page:page",
+    "isLocked": false,
+    "opacity": 1,
+    "meta": {},
+    "props": {
+      "kind": "arc",
+      "elbowMidPoint": 0.5,
+      "dash": "solid",
+      "size": "l",
+      "fill": "none",
+      "color": "grey",
+      "labelColor": "black",
+      "bend": 0,
+      "start": {
+        "x": 0,
+        "y": 0
+      },
+      "end": {
+        "x": 80,
+        "y": 0
+      },
+      "arrowheadStart": "none",
+      "arrowheadEnd": "arrow",
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph"
+          }
+        ]
+      },
+      "labelPosition": 0.5,
+      "font": "sans",
+      "scale": 1
+    }
+  },
+  {
+    "id": "binding:FfZnCSVeVr-LcQ8C1OBGe",
+    "typeName": "binding",
+    "type": "arrow",
+    "fromId": "shape:K7d5ApHj0yZvZKS4_dSe9",
+    "toId": "shape:0fjWLyYkFTMyygj2UCuMU",
+    "props": {
+      "terminal": "start",
+      "normalizedAnchor": {
+        "x": 0.5,
+        "y": 0.5
+      },
+      "isExact": false,
+      "isPrecise": false,
+      "snap": "none"
+    },
+    "meta": {}
+  },
+  {
+    "id": "binding:0xrfYY-OENaFBRN8WTUUf",
+    "typeName": "binding",
+    "type": "arrow",
+    "fromId": "shape:K7d5ApHj0yZvZKS4_dSe9",
+    "toId": "shape:sovZvYEbKfX-_yJPe91lu",
+    "props": {
+      "terminal": "end",
+      "normalizedAnchor": {
+        "x": 0.5,
+        "y": 0.5
+      },
+      "isExact": false,
+      "isPrecise": false,
+      "snap": "none"
+    },
+    "meta": {}
+  },
+  {
+    "id": "binding:6zJFrJQ7gD8JMFy1tSVJs",
+    "typeName": "binding",
+    "type": "arrow",
+    "fromId": "shape:x8w99X9oZ48rDGptKjtlx",
+    "toId": "shape:sovZvYEbKfX-_yJPe91lu",
+    "props": {
+      "terminal": "start",
+      "normalizedAnchor": {
+        "x": 0.5,
+        "y": 0.5
+      },
+      "isExact": false,
+      "isPrecise": false,
+      "snap": "none"
+    },
+    "meta": {}
+  },
+  {
+    "id": "binding:ntOn9EwkTHHueJb4fc7Hq",
+    "typeName": "binding",
+    "type": "arrow",
+    "fromId": "shape:x8w99X9oZ48rDGptKjtlx",
+    "toId": "shape:F5pNVFmv_fig_-faNYQ2t",
+    "props": {
+      "terminal": "end",
+      "normalizedAnchor": {
+        "x": 0.5,
+        "y": 0.5
+      },
+      "isExact": false,
+      "isPrecise": false,
+      "snap": "none"
+    },
+    "meta": {}
+  },
+  {
+    "id": "binding:bktQ9s5j64m0pOL0aYziD",
+    "typeName": "binding",
+    "type": "arrow",
+    "fromId": "shape:4mgFaq3EEZRWZI3ZrfmR3",
+    "toId": "shape:F5pNVFmv_fig_-faNYQ2t",
+    "props": {
+      "terminal": "start",
+      "normalizedAnchor": {
+        "x": 0.5,
+        "y": 0.5
+      },
+      "isExact": false,
+      "isPrecise": false,
+      "snap": "none"
+    },
+    "meta": {}
+  },
+  {
+    "id": "binding:6MDjGpc3x51DvTfytvy2A",
+    "typeName": "binding",
+    "type": "arrow",
+    "fromId": "shape:4mgFaq3EEZRWZI3ZrfmR3",
+    "toId": "shape:GpLoPrSiDoAmGJm9cn7IA",
+    "props": {
+      "terminal": "end",
+      "normalizedAnchor": {
+        "x": 0.5,
+        "y": 0.5
+      },
+      "isExact": false,
+      "isPrecise": false,
+      "snap": "none"
+    },
+    "meta": {}
+  },
+  {
+    "id": "binding:EjcEkSWJ4cRYXWrW86c0W",
+    "typeName": "binding",
+    "type": "arrow",
+    "fromId": "shape:R4CA1ybqQfqn2u7LvuOeT",
+    "toId": "shape:GpLoPrSiDoAmGJm9cn7IA",
+    "props": {
+      "terminal": "start",
+      "normalizedAnchor": {
+        "x": 0.5,
+        "y": 0.5
+      },
+      "isExact": false,
+      "isPrecise": false,
+      "snap": "none"
+    },
+    "meta": {}
+  },
+  {
+    "id": "binding:4LvNkHbmOWogDMaNawadf",
+    "typeName": "binding",
+    "type": "arrow",
+    "fromId": "shape:R4CA1ybqQfqn2u7LvuOeT",
+    "toId": "shape:gtbxYIK5VaRnNjuqo2dA8",
+    "props": {
+      "terminal": "end",
+      "normalizedAnchor": {
+        "x": 0.5,
+        "y": 0.5
+      },
+      "isExact": false,
+      "isPrecise": false,
+      "snap": "none"
+    },
+    "meta": {}
+  }
+]

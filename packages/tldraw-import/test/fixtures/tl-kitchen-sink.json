@@ -1,0 +1,1383 @@
+[
+  {
+    "id": "document:document",
+    "typeName": "document",
+    "gridSize": 10,
+    "name": "",
+    "meta": {
+      "drStartView": {
+        "pageId": "page:page",
+        "x": -100,
+        "y": -100,
+        "w": 1600,
+        "h": 1000,
+        "frameId": "shape:frameA"
+      },
+      "drWorkshop": {
+        "hideNoteAuthors": true,
+        "hideCursors": false
+      },
+      "drTagList:research": {
+        "name": "Research",
+        "color": "blue"
+      },
+      "drTagList:urgent": {
+        "name": "Urgent",
+        "color": "red"
+      }
+    }
+  },
+  {
+    "id": "page:page",
+    "typeName": "page",
+    "name": "Page 1",
+    "index": "a1",
+    "meta": {}
+  },
+  {
+    "id": "page:second",
+    "typeName": "page",
+    "name": "Moodboard",
+    "index": "a2",
+    "meta": {}
+  },
+  {
+    "id": "user:usr_aaaaaaaaaaaa",
+    "typeName": "user",
+    "name": "Alice",
+    "color": "#1d4ed8",
+    "imageUrl": "",
+    "meta": {}
+  },
+  {
+    "id": "shape:frameA",
+    "typeName": "shape",
+    "type": "frame",
+    "parentId": "page:page",
+    "index": "a1",
+    "x": 0,
+    "y": 0,
+    "rotation": 0,
+    "isLocked": false,
+    "opacity": 1,
+    "meta": {
+      "presentationIndex": 1,
+      "presentationSkip": false
+    },
+    "props": {
+      "w": 1200,
+      "h": 800,
+      "name": "Ideas",
+      "color": "black"
+    }
+  },
+  {
+    "id": "shape:frameInner",
+    "typeName": "shape",
+    "type": "frame",
+    "parentId": "shape:frameA",
+    "index": "a5",
+    "x": 700,
+    "y": 400,
+    "rotation": 0,
+    "isLocked": false,
+    "opacity": 1,
+    "meta": {},
+    "props": {
+      "w": 400,
+      "h": 300,
+      "name": "Inner",
+      "color": "black"
+    }
+  },
+  {
+    "id": "shape:noteInInner",
+    "typeName": "shape",
+    "type": "note",
+    "parentId": "shape:frameInner",
+    "index": "a1",
+    "x": 50,
+    "y": 50,
+    "rotation": 0,
+    "isLocked": false,
+    "opacity": 1,
+    "meta": {},
+    "props": {
+      "color": "green",
+      "labelColor": "black",
+      "size": "m",
+      "font": "sans",
+      "fontSizeAdjustment": 1,
+      "align": "middle",
+      "verticalAlign": "middle",
+      "growY": 0,
+      "url": "",
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Nested frame note"
+              }
+            ]
+          }
+        ]
+      },
+      "scale": 1,
+      "textLastEditedBy": null
+    }
+  },
+  {
+    "id": "shape:note1",
+    "typeName": "shape",
+    "type": "note",
+    "parentId": "shape:frameA",
+    "index": "a1",
+    "x": 40,
+    "y": 40,
+    "rotation": 0,
+    "isLocked": false,
+    "opacity": 1,
+    "meta": {
+      "drTags:research": {
+        "name": "Research",
+        "color": "blue"
+      },
+      "plusOnes": ["usr_aaaaaaaaaaaa", "usr_bbbbbbbbbbbb"]
+    },
+    "props": {
+      "color": "black",
+      "labelColor": "black",
+      "size": "m",
+      "font": "sans",
+      "fontSizeAdjustment": 1,
+      "align": "middle",
+      "verticalAlign": "middle",
+      "growY": 0,
+      "url": "",
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "A tagged note with +1s and an author"
+              }
+            ]
+          }
+        ]
+      },
+      "scale": 1,
+      "textLastEditedBy": "usr_aaaaaaaaaaaa"
+    }
+  },
+  {
+    "id": "shape:note2",
+    "typeName": "shape",
+    "type": "note",
+    "parentId": "shape:frameA",
+    "index": "a2",
+    "x": 280,
+    "y": 40,
+    "rotation": 0.2,
+    "isLocked": false,
+    "opacity": 1,
+    "meta": {
+      "drPrivateNote": {
+        "session": "pbs_aaaaaaaaaaaa"
+      }
+    },
+    "props": {
+      "color": "light-blue",
+      "labelColor": "black",
+      "size": "m",
+      "font": "sans",
+      "fontSizeAdjustment": 1,
+      "align": "middle",
+      "verticalAlign": "middle",
+      "growY": 40,
+      "url": "",
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "This is a much longer sticky note that should wrap onto several lines inside the 200 unit square"
+              }
+            ]
+          }
+        ]
+      },
+      "scale": 1,
+      "textLastEditedBy": null
+    }
+  },
+  {
+    "id": "shape:note3",
+    "typeName": "shape",
+    "type": "note",
+    "parentId": "shape:frameA",
+    "index": "a3",
+    "x": 520,
+    "y": 40,
+    "rotation": 0,
+    "isLocked": false,
+    "opacity": 1,
+    "meta": {},
+    "props": {
+      "color": "orange",
+      "labelColor": "black",
+      "size": "l",
+      "font": "sans",
+      "fontSizeAdjustment": 1,
+      "align": "middle",
+      "verticalAlign": "middle",
+      "growY": 0,
+      "url": "",
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Scaled"
+              }
+            ]
+          }
+        ]
+      },
+      "scale": 1.5,
+      "textLastEditedBy": null
+    }
+  },
+  {
+    "id": "shape:grp",
+    "typeName": "shape",
+    "type": "group",
+    "parentId": "shape:frameA",
+    "index": "a4",
+    "x": 40,
+    "y": 400,
+    "rotation": 0.3,
+    "isLocked": false,
+    "opacity": 1,
+    "meta": {},
+    "props": {}
+  },
+  {
+    "id": "shape:grpGeo",
+    "typeName": "shape",
+    "type": "geo",
+    "parentId": "shape:grp",
+    "index": "a1",
+    "x": 0,
+    "y": 0,
+    "rotation": 0,
+    "isLocked": false,
+    "opacity": 1,
+    "meta": {},
+    "props": {
+      "geo": "ellipse",
+      "dash": "draw",
+      "url": "",
+      "w": 160,
+      "h": 100,
+      "growY": 0,
+      "scale": 1,
+      "flipX": false,
+      "flipY": false,
+      "labelColor": "black",
+      "color": "blue",
+      "fill": "semi",
+      "size": "m",
+      "font": "draw",
+      "align": "middle",
+      "verticalAlign": "middle",
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "In group"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "shape:grpNote",
+    "typeName": "shape",
+    "type": "note",
+    "parentId": "shape:grp",
+    "index": "a2",
+    "x": 180,
+    "y": 0,
+    "rotation": 0,
+    "isLocked": false,
+    "opacity": 1,
+    "meta": {},
+    "props": {
+      "color": "violet",
+      "labelColor": "black",
+      "size": "m",
+      "font": "sans",
+      "fontSizeAdjustment": 1,
+      "align": "middle",
+      "verticalAlign": "middle",
+      "growY": 0,
+      "url": "",
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Group note"
+              }
+            ]
+          }
+        ]
+      },
+      "scale": 1,
+      "textLastEditedBy": null
+    }
+  },
+  {
+    "id": "shape:rect",
+    "typeName": "shape",
+    "type": "geo",
+    "parentId": "page:page",
+    "index": "a2",
+    "x": 1400,
+    "y": 0,
+    "rotation": 0,
+    "isLocked": false,
+    "opacity": 1,
+    "meta": {
+      "drMindmap": {
+        "rootId": "shape:rect",
+        "parentId": null,
+        "side": "right",
+        "collapsed": false
+      }
+    },
+    "props": {
+      "geo": "rectangle",
+      "dash": "solid",
+      "url": "",
+      "w": 240,
+      "h": 140,
+      "growY": 0,
+      "scale": 1,
+      "flipX": false,
+      "flipY": false,
+      "labelColor": "black",
+      "color": "blue",
+      "fill": "solid",
+      "size": "m",
+      "font": "draw",
+      "align": "middle",
+      "verticalAlign": "middle",
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Root topic"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "shape:diamond",
+    "typeName": "shape",
+    "type": "geo",
+    "parentId": "page:page",
+    "index": "a3",
+    "x": 1400,
+    "y": 300,
+    "rotation": 0,
+    "isLocked": false,
+    "opacity": 1,
+    "meta": {
+      "drMindmap": {
+        "rootId": "shape:rect",
+        "parentId": "shape:rect",
+        "side": "right",
+        "collapsed": false
+      }
+    },
+    "props": {
+      "geo": "diamond",
+      "dash": "draw",
+      "url": "",
+      "w": 200,
+      "h": 160,
+      "growY": 0,
+      "scale": 1,
+      "flipX": false,
+      "flipY": false,
+      "labelColor": "black",
+      "color": "red",
+      "fill": "pattern",
+      "size": "m",
+      "font": "draw",
+      "align": "middle",
+      "verticalAlign": "middle",
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Decide"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "shape:star",
+    "typeName": "shape",
+    "type": "geo",
+    "parentId": "page:page",
+    "index": "a4",
+    "x": 1750,
+    "y": 0,
+    "rotation": 0,
+    "isLocked": false,
+    "opacity": 1,
+    "meta": {},
+    "props": {
+      "geo": "star",
+      "dash": "draw",
+      "url": "",
+      "w": 180,
+      "h": 180,
+      "growY": 0,
+      "scale": 1,
+      "flipX": false,
+      "flipY": false,
+      "labelColor": "black",
+      "color": "yellow",
+      "fill": "fill",
+      "size": "m",
+      "font": "draw",
+      "align": "middle",
+      "verticalAlign": "middle",
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Star"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "shape:tri",
+    "typeName": "shape",
+    "type": "geo",
+    "parentId": "page:page",
+    "index": "a5",
+    "x": 1750,
+    "y": 300,
+    "rotation": 0,
+    "isLocked": true,
+    "opacity": 1,
+    "meta": {
+      "draftroomSlot": "image"
+    },
+    "props": {
+      "geo": "triangle",
+      "dash": "dashed",
+      "url": "",
+      "w": 180,
+      "h": 160,
+      "growY": 0,
+      "scale": 1,
+      "flipX": false,
+      "flipY": false,
+      "labelColor": "black",
+      "color": "green",
+      "fill": "semi",
+      "size": "m",
+      "font": "draw",
+      "align": "middle",
+      "verticalAlign": "middle",
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "shape:cloud",
+    "typeName": "shape",
+    "type": "geo",
+    "parentId": "page:page",
+    "index": "a6",
+    "x": 2000,
+    "y": 300,
+    "rotation": 0,
+    "isLocked": false,
+    "opacity": 1,
+    "meta": {},
+    "props": {
+      "geo": "cloud",
+      "dash": "draw",
+      "url": "",
+      "w": 200,
+      "h": 140,
+      "growY": 0,
+      "scale": 1,
+      "flipX": false,
+      "flipY": false,
+      "labelColor": "black",
+      "color": "grey",
+      "fill": "none",
+      "size": "m",
+      "font": "draw",
+      "align": "middle",
+      "verticalAlign": "middle",
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Cloud"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "shape:title",
+    "typeName": "shape",
+    "type": "text",
+    "parentId": "page:page",
+    "index": "a7",
+    "x": 0,
+    "y": -140,
+    "rotation": 0,
+    "isLocked": false,
+    "opacity": 1,
+    "meta": {},
+    "props": {
+      "color": "black",
+      "size": "xl",
+      "font": "sans",
+      "textAlign": "start",
+      "w": 800,
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Bold title",
+                "marks": [
+                  {
+                    "type": "bold"
+                  }
+                ]
+              },
+              {
+                "type": "text",
+                "text": " and plain"
+              }
+            ]
+          },
+          {
+            "type": "bulletList",
+            "content": [
+              {
+                "type": "listItem",
+                "content": [
+                  {
+                    "type": "paragraph",
+                    "content": [
+                      {
+                        "type": "text",
+                        "text": "first bullet"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "type": "listItem",
+                "content": [
+                  {
+                    "type": "paragraph",
+                    "content": [
+                      {
+                        "type": "text",
+                        "text": "a link",
+                        "marks": [
+                          {
+                            "type": "link",
+                            "attrs": {
+                              "href": "https://example.com"
+                            }
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "scale": 1,
+      "autoSize": false
+    }
+  },
+  {
+    "id": "shape:autotext",
+    "typeName": "shape",
+    "type": "text",
+    "parentId": "page:page",
+    "index": "a8",
+    "x": 1400,
+    "y": 600,
+    "rotation": 0,
+    "isLocked": false,
+    "opacity": 1,
+    "meta": {},
+    "props": {
+      "color": "grey",
+      "size": "s",
+      "font": "mono",
+      "textAlign": "middle",
+      "w": 10,
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "mono auto-size"
+              }
+            ]
+          }
+        ]
+      },
+      "scale": 1,
+      "autoSize": true
+    }
+  },
+  {
+    "id": "shape:arr1",
+    "typeName": "shape",
+    "type": "arrow",
+    "parentId": "page:page",
+    "index": "a9",
+    "x": 0,
+    "y": 0,
+    "rotation": 0,
+    "isLocked": false,
+    "opacity": 1,
+    "meta": {},
+    "props": {
+      "kind": "arc",
+      "labelColor": "black",
+      "color": "black",
+      "fill": "none",
+      "dash": "draw",
+      "size": "m",
+      "arrowheadStart": "none",
+      "arrowheadEnd": "arrow",
+      "font": "draw",
+      "start": {
+        "x": 0,
+        "y": 0
+      },
+      "end": {
+        "x": 10,
+        "y": 10
+      },
+      "bend": 0,
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph"
+          }
+        ]
+      },
+      "labelPosition": 0.5,
+      "scale": 1,
+      "elbowMidPoint": 0.5
+    }
+  },
+  {
+    "id": "shape:arr2",
+    "typeName": "shape",
+    "type": "arrow",
+    "parentId": "page:page",
+    "index": "aA",
+    "x": 0,
+    "y": 0,
+    "rotation": 0,
+    "isLocked": false,
+    "opacity": 1,
+    "meta": {},
+    "props": {
+      "kind": "arc",
+      "labelColor": "black",
+      "color": "red",
+      "fill": "none",
+      "dash": "draw",
+      "size": "m",
+      "arrowheadStart": "dot",
+      "arrowheadEnd": "triangle",
+      "font": "draw",
+      "start": {
+        "x": 0,
+        "y": 0
+      },
+      "end": {
+        "x": 10,
+        "y": 10
+      },
+      "bend": 60,
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "yes"
+              }
+            ]
+          }
+        ]
+      },
+      "labelPosition": 0.5,
+      "scale": 1,
+      "elbowMidPoint": 0.5
+    }
+  },
+  {
+    "id": "shape:arr3",
+    "typeName": "shape",
+    "type": "arrow",
+    "parentId": "page:page",
+    "index": "aB",
+    "x": 0,
+    "y": 0,
+    "rotation": 0,
+    "isLocked": false,
+    "opacity": 1,
+    "meta": {},
+    "props": {
+      "kind": "elbow",
+      "labelColor": "black",
+      "color": "black",
+      "fill": "none",
+      "dash": "solid",
+      "size": "m",
+      "arrowheadStart": "none",
+      "arrowheadEnd": "arrow",
+      "font": "draw",
+      "start": {
+        "x": 0,
+        "y": 0
+      },
+      "end": {
+        "x": 10,
+        "y": 10
+      },
+      "bend": 0,
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph"
+          }
+        ]
+      },
+      "labelPosition": 0.5,
+      "scale": 1,
+      "elbowMidPoint": 0.5
+    }
+  },
+  {
+    "id": "shape:arr4",
+    "typeName": "shape",
+    "type": "arrow",
+    "parentId": "page:page",
+    "index": "aC",
+    "x": 2000,
+    "y": 700,
+    "rotation": 0,
+    "isLocked": false,
+    "opacity": 1,
+    "meta": {
+      "drMindmapEdge": {
+        "rootId": "shape:rect",
+        "parentId": "shape:rect",
+        "childId": "shape:diamond"
+      }
+    },
+    "props": {
+      "kind": "arc",
+      "labelColor": "black",
+      "color": "black",
+      "fill": "none",
+      "dash": "dotted",
+      "size": "m",
+      "arrowheadStart": "none",
+      "arrowheadEnd": "square",
+      "font": "draw",
+      "start": {
+        "x": 0,
+        "y": 0
+      },
+      "end": {
+        "x": 200,
+        "y": 150
+      },
+      "bend": 0,
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph"
+          }
+        ]
+      },
+      "labelPosition": 0.5,
+      "scale": 1,
+      "elbowMidPoint": 0.5
+    }
+  },
+  {
+    "id": "shape:draw1",
+    "typeName": "shape",
+    "type": "draw",
+    "parentId": "page:page",
+    "index": "aD",
+    "x": 2300,
+    "y": 0,
+    "rotation": 0,
+    "isLocked": false,
+    "opacity": 1,
+    "meta": {},
+    "props": {
+      "color": "violet",
+      "fill": "none",
+      "dash": "draw",
+      "size": "m",
+      "segments": [
+        {
+          "type": "free",
+          "path": "AAAAAAAAAAAATYBPAFEASQBRgM8=",
+          "dim": 2
+        },
+        {
+          "type": "straight",
+          "path": "AADIQgAAIEEAUQBV",
+          "dim": 2
+        }
+      ],
+      "isComplete": true,
+      "isClosed": false,
+      "isPen": false,
+      "scale": 1,
+      "scaleX": 1,
+      "scaleY": 1
+    }
+  },
+  {
+    "id": "shape:pen1",
+    "typeName": "shape",
+    "type": "draw",
+    "parentId": "page:page",
+    "index": "aE",
+    "x": 2300,
+    "y": 200,
+    "rotation": 0,
+    "isLocked": false,
+    "opacity": 1,
+    "meta": {},
+    "props": {
+      "color": "black",
+      "fill": "none",
+      "dash": "draw",
+      "size": "s",
+      "segments": [
+        {
+          "type": "free",
+          "path": "AAAAAAAAAADNzEw+gE8ASWY2gE8Ayc00",
+          "dim": 3
+        }
+      ],
+      "isComplete": true,
+      "isClosed": false,
+      "isPen": true,
+      "scale": 1,
+      "scaleX": 1,
+      "scaleY": 1
+    }
+  },
+  {
+    "id": "shape:hl",
+    "typeName": "shape",
+    "type": "highlight",
+    "parentId": "page:page",
+    "index": "aF",
+    "x": 0,
+    "y": 900,
+    "rotation": 0,
+    "isLocked": false,
+    "opacity": 1,
+    "meta": {},
+    "props": {
+      "color": "yellow",
+      "size": "l",
+      "segments": [
+        {
+          "type": "free",
+          "path": "AAAAAAAAAACwXABF",
+          "dim": 2
+        }
+      ],
+      "isComplete": true,
+      "isPen": false,
+      "scale": 1,
+      "scaleX": 1,
+      "scaleY": 1
+    }
+  },
+  {
+    "id": "shape:line1",
+    "typeName": "shape",
+    "type": "line",
+    "parentId": "page:page",
+    "index": "aG",
+    "x": 2300,
+    "y": 400,
+    "rotation": 0,
+    "isLocked": false,
+    "opacity": 1,
+    "meta": {},
+    "props": {
+      "color": "blue",
+      "dash": "dashed",
+      "size": "m",
+      "spline": "cubic",
+      "scale": 1,
+      "points": {
+        "p1": {
+          "id": "p1",
+          "index": "a1",
+          "x": 0,
+          "y": 0
+        },
+        "p2": {
+          "id": "p2",
+          "index": "a2",
+          "x": 80,
+          "y": 60
+        },
+        "p3": {
+          "id": "p3",
+          "index": "a3",
+          "x": 160,
+          "y": 0
+        }
+      }
+    }
+  },
+  {
+    "id": "asset:img1",
+    "typeName": "asset",
+    "type": "image",
+    "meta": {
+      "assetId": "ast_aaaaaaaaaaaa",
+      "versionId": "ver_aaaaaaaaaaaa"
+    },
+    "props": {
+      "name": "photo.jpg",
+      "src": "/files/ast_aaaaaaaaaaaa/ver_aaaaaaaaaaaa/original",
+      "w": 1600,
+      "h": 1200,
+      "mimeType": "image/jpeg",
+      "isAnimated": false,
+      "fileSize": 123456
+    }
+  },
+  {
+    "id": "asset:pdfp",
+    "typeName": "asset",
+    "type": "image",
+    "meta": {
+      "assetId": "ast_pdfpdfpdfpdf",
+      "versionId": "ver_pdfpdfpdfpdf",
+      "drPdfPage": 3
+    },
+    "props": {
+      "name": "deck.pdf",
+      "src": "/files/ast_pdfpdfpdfpdf/ver_pdfpdfpdfpdf/original",
+      "w": 1240,
+      "h": 1754,
+      "mimeType": "image/png",
+      "isAnimated": false
+    }
+  },
+  {
+    "id": "asset:vid1",
+    "typeName": "asset",
+    "type": "video",
+    "meta": {},
+    "props": {
+      "name": "clip.mp4",
+      "src": "/files/ast_vvvvvvvvvvvv/ver_vvvvvvvvvvvv/original",
+      "w": 1920,
+      "h": 1080,
+      "mimeType": "video/mp4",
+      "isAnimated": true
+    }
+  },
+  {
+    "id": "asset:bm1",
+    "typeName": "asset",
+    "type": "bookmark",
+    "meta": {},
+    "props": {
+      "src": "https://example.com/article",
+      "title": "An article",
+      "description": "Summary",
+      "image": "https://example.com/og.png",
+      "favicon": "https://example.com/favicon.ico"
+    }
+  },
+  {
+    "id": "shape:img1",
+    "typeName": "shape",
+    "type": "image",
+    "parentId": "page:second",
+    "index": "a1",
+    "x": 0,
+    "y": 0,
+    "rotation": 0,
+    "isLocked": false,
+    "opacity": 1,
+    "meta": {
+      "drTags:urgent": {
+        "name": "Urgent",
+        "color": "red"
+      }
+    },
+    "props": {
+      "w": 400,
+      "h": 300,
+      "playing": true,
+      "url": "",
+      "assetId": "asset:img1",
+      "altText": "A photo",
+      "flipX": true,
+      "flipY": false,
+      "crop": {
+        "topLeft": {
+          "x": 0.1,
+          "y": 0.1
+        },
+        "bottomRight": {
+          "x": 0.9,
+          "y": 0.9
+        }
+      }
+    }
+  },
+  {
+    "id": "shape:pdfPage",
+    "typeName": "shape",
+    "type": "image",
+    "parentId": "page:second",
+    "index": "a2",
+    "x": 450,
+    "y": 0,
+    "rotation": 0,
+    "isLocked": false,
+    "opacity": 1,
+    "meta": {},
+    "props": {
+      "w": 310,
+      "h": 438,
+      "playing": true,
+      "url": "",
+      "assetId": "asset:pdfp",
+      "altText": "",
+      "flipX": false,
+      "flipY": false,
+      "crop": null
+    }
+  },
+  {
+    "id": "shape:vid1",
+    "typeName": "shape",
+    "type": "video",
+    "parentId": "page:second",
+    "index": "a3",
+    "x": 0,
+    "y": 350,
+    "rotation": 0,
+    "isLocked": false,
+    "opacity": 1,
+    "meta": {},
+    "props": {
+      "w": 480,
+      "h": 270,
+      "time": 0,
+      "playing": false,
+      "autoplay": false,
+      "url": "",
+      "assetId": "asset:vid1",
+      "altText": ""
+    }
+  },
+  {
+    "id": "shape:emb1",
+    "typeName": "shape",
+    "type": "embed",
+    "parentId": "page:second",
+    "index": "a4",
+    "x": 500,
+    "y": 500,
+    "rotation": 0,
+    "isLocked": false,
+    "opacity": 1,
+    "meta": {},
+    "props": {
+      "w": 560,
+      "h": 315,
+      "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+    }
+  },
+  {
+    "id": "shape:bm1",
+    "typeName": "shape",
+    "type": "bookmark",
+    "parentId": "page:second",
+    "index": "a5",
+    "x": 1100,
+    "y": 0,
+    "rotation": 0,
+    "isLocked": false,
+    "opacity": 1,
+    "meta": {},
+    "props": {
+      "w": 300,
+      "h": 320,
+      "assetId": "asset:bm1",
+      "url": "https://example.com/article"
+    }
+  },
+  {
+    "id": "shape:card1",
+    "typeName": "shape",
+    "type": "dr-file-card",
+    "parentId": "page:second",
+    "index": "a6",
+    "x": 1100,
+    "y": 400,
+    "rotation": 0,
+    "isLocked": false,
+    "opacity": 1,
+    "meta": {},
+    "props": {
+      "w": 320,
+      "h": 240,
+      "assetId": "ast_ffffffffffff",
+      "versionId": "ver_ffffffffffff",
+      "kind": "pdf",
+      "name": "brief.pdf",
+      "mimeType": "application/pdf",
+      "sizeBytes": 2048,
+      "status": "ready",
+      "pageCount": 12,
+      "durationMs": null,
+      "posterDerivativeId": "drv_dddddddddddd"
+    }
+  },
+  {
+    "id": "binding:b1s",
+    "typeName": "binding",
+    "type": "arrow",
+    "fromId": "shape:arr1",
+    "toId": "shape:note1",
+    "meta": {},
+    "props": {
+      "terminal": "start",
+      "normalizedAnchor": {
+        "x": 0.5,
+        "y": 0.5
+      },
+      "isExact": false,
+      "isPrecise": false,
+      "snap": "none"
+    }
+  },
+  {
+    "id": "binding:b1e",
+    "typeName": "binding",
+    "type": "arrow",
+    "fromId": "shape:arr1",
+    "toId": "shape:rect",
+    "meta": {},
+    "props": {
+      "terminal": "end",
+      "normalizedAnchor": {
+        "x": 0.5,
+        "y": 0.5
+      },
+      "isExact": false,
+      "isPrecise": false,
+      "snap": "none"
+    }
+  },
+  {
+    "id": "binding:b2s",
+    "typeName": "binding",
+    "type": "arrow",
+    "fromId": "shape:arr2",
+    "toId": "shape:rect",
+    "meta": {},
+    "props": {
+      "terminal": "start",
+      "normalizedAnchor": {
+        "x": 0.5,
+        "y": 1
+      },
+      "isExact": false,
+      "isPrecise": true,
+      "snap": "none"
+    }
+  },
+  {
+    "id": "binding:b2e",
+    "typeName": "binding",
+    "type": "arrow",
+    "fromId": "shape:arr2",
+    "toId": "shape:diamond",
+    "meta": {},
+    "props": {
+      "terminal": "end",
+      "normalizedAnchor": {
+        "x": 0.5,
+        "y": 0.5
+      },
+      "isExact": false,
+      "isPrecise": false,
+      "snap": "none"
+    }
+  },
+  {
+    "id": "binding:b3s",
+    "typeName": "binding",
+    "type": "arrow",
+    "fromId": "shape:arr3",
+    "toId": "shape:diamond",
+    "meta": {},
+    "props": {
+      "terminal": "start",
+      "normalizedAnchor": {
+        "x": 1,
+        "y": 0.5
+      },
+      "isExact": false,
+      "isPrecise": true,
+      "snap": "edge"
+    }
+  },
+  {
+    "id": "binding:b3e",
+    "typeName": "binding",
+    "type": "arrow",
+    "fromId": "shape:arr3",
+    "toId": "shape:star",
+    "meta": {},
+    "props": {
+      "terminal": "end",
+      "normalizedAnchor": {
+        "x": 0.5,
+        "y": 1
+      },
+      "isExact": false,
+      "isPrecise": true,
+      "snap": "edge"
+    }
+  },
+  {
+    "id": "binding:b4e",
+    "typeName": "binding",
+    "type": "arrow",
+    "fromId": "shape:arr4",
+    "toId": "shape:draw1",
+    "meta": {},
+    "props": {
+      "terminal": "end",
+      "normalizedAnchor": {
+        "x": 0.5,
+        "y": 0.5
+      },
+      "isExact": false,
+      "isPrecise": false,
+      "snap": "none"
+    }
+  }
+]
