@@ -1,6 +1,6 @@
 # Domain access: contracts
 
-Status: contracts committed (step A, §12), 2026-09-29, on branch `next` (base a571636: 19 backlog fixes, not deployed). Revised after the security and regression reviews: every blocking item is resolved, and §16 (Review log) says what was accepted, rejected or deferred. **API steps B1 and B2 are built** on branch `da/api` (§17, As built); the web (step C) and the integration (step D) are not done yet.
+Status: contracts committed (step A, §12), 2026-09-29, on branch `next` (base a571636: 19 backlog fixes, not deployed). Revised after the security and regression reviews: every blocking item is resolved, and §16 (Review log) says what was accepted, rejected or deferred. **API steps B1 and B2 are built** on branch `da/api` (§17, As built), **the web (step C) on `da/web`**, and both are **merged into `next`** (step D, §18: the gate is recorded there and in docs/PROGRESS.md). Still to do: the opt-in real-Postgres run, the independent security review (§14) and the deploy (§13).
 
 Owner decisions: 2026-09-29, final (restated in §0). Two builders work in parallel: an **API owner** and a **WEB owner** (§12). This file is the only coordination channel between them. Contract changes go through the API owner and are recorded here.
 
@@ -752,7 +752,11 @@ Nobody edits the other owner's files. If the web needs a contract change, the WE
 - **C. WEB owner**: §9, §11.4 and §11.5.
 - **D. Integration** (API owner or the lead): merge; the full `pnpm verify` and the real-Postgres run; three green runs of `domain-access.spec.ts`; an independent security review against §14; then the lead deploys (§13).
 
-**Contract change requests**: none from the WEB owner yet. Changes the API owner made while building B1/B2 (each small and local; the reasons are in §17):
+**Contract change requests**: none from the WEB owner. Two readings of §9 the WEB owner asked to confirm, accepted at integration (step D) because they match D4 and need no api change:
+- For a non-creator manager, `InviteLinkSection` hides its create form but keeps the pending one-time invitations ("Unused invitations", Revoke only), as D4 says ("non-creator managers still see the pending list"). Open review and workshop links are listed the same way, with Revoke only.
+- `invite/guest.tsx`: besides the `GuestAwarePreview` line (§10), its import list gains `InvitationEmailLock`, which that line needs to compile.
+
+Changes the API owner made while building B1/B2 (each small and local; the reasons are in §17):
 1. `replaceUserEmails` writes when the stored `identity_checked_at` is NULL or **at or before** `fetchedAt` (`<=`, not `<`), so two dev logins within one millisecond both write; an older snapshot still never overwrites a newer one.
 2. `AuthProvider.refreshIdentity` takes a `Db` (not a `Queryable`): the provider writes each snapshot in one transaction, after its network calls.
 3. §2: the running provider is `provider.id` (the `AuthProvider` field), not `provider.name`.
@@ -881,3 +885,16 @@ Branch `da/api` (B1 1af29c4; B2 on top). Everything in §2 to §8 and §11.1 to 
 **Opt-in real Postgres** (`DRAFTROOM_TEST_DATABASE_URL`): `migrations.pg.test.ts` asserts 0021 (open unbound single-use links revoked, the others untouched, `personal_of` with Dev Studio excluded: the seed gained a Dev Studio row, nobody confirmed, no address stored); `concurrency.pg.test.ts` adds the creator first-sign-in race and the concurrent `ensurePersonalWorkspace`; `lock-order.pg.test.ts` adds "accepting a locked invitation takes the board row before the invitation". **Not run for B2**: no Postgres was available to this builder; they typecheck and are skipped without the variable. Run them in step D.
 
 **For the WEB owner**: `/api/me`, `/api/auth/me` and the sign-in responses carry `access` (never `legacy`); single-use invitation bodies must carry `email` (400 without it); the preview carries `InvitationEmailLock`; accept can answer 403 `INVITATION_EMAIL_MISMATCH` (body `InvitationEmailMismatchBody`), 409 `ROLE_REQUIRES_CREATOR` and 503 `IDENTITY_UNAVAILABLE`; `PendingInvitation.email` and `ShareMember.canOwn` are computed; `url` is null for non-creator managers. `/api/auth/me` answers 401 (not 204) when an awaited refresh finds the account gone or banned, as §8 says. Dev logins accept `email` (`DevLoginInput`).
+
+## 18. Integration (step D)
+
+`next` merged `origin/da/api` (db73946, B1 + B2) and then `origin/da/web` (9ec92a8, step C, which already contained both api commits), each with a merge commit and no conflicts. No integration fix was needed: nothing in `apps/`, `packages/` or `e2e/` changed at integration. The web owner's two §9 readings are accepted (§12).
+
+**Gate on the merged `next`** (Windows 11, Node 24, headless Chromium, `E2E_PORT_BASE=6800`):
+- `pnpm lint`: clean (1,035 files). `pnpm -r typecheck`: every project clean.
+- `pnpm test`: 293 files passed, 9 skipped; 3,297 tests passed, 36 skipped (the opt-in real-Postgres and Chrome-only cases).
+- `e2e/tests/domain-access.spec.ts`: three separate runs in a row, 5/5 each (15/15).
+- The whole e2e suite once: 332 tests, 331 passed in 23.8 min. The one failure is `workshop-copy.spec.ts` "R2-11, R2-09, R2-08", a time-of-day artefact unrelated to domain access: run at 23:29 local, its 3-hour link ends after midnight, so the badge (unchanged `shortTime`) rightly adds the date ("until Sep 29, 2:25 AM") while the test expects the time alone. The spec and the badge code are unchanged from `next` before this work (§10 requires the spec unmodified). Re-run unmodified at 00:00 local (same build, same port base): 2/2 passed, so every one of the 332 tests has passed on the merged `next`.
+- The §10 and §11.5 "must stay green unmodified" specs are byte-for-byte unchanged and passed in that run (apart from the workshop-copy case above).
+
+**Not done at integration**: the opt-in real-Postgres run (`migrations.pg`, `concurrency.pg`, `lock-order.pg`, and the api suite with `DRAFTROOM_TEST_DATABASE_URL`): no Postgres is installed on this PC and none was provisioned for this run; the demo video and perf smoke checks (§11.5); the independent security review (§14); recording in DEPLOY.md that Clerk test mode is off (§13, the lead); the deploy.
