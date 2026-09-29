@@ -446,3 +446,39 @@ describe('engine core: rejects, retries, offline (§2.4.2, §2.5.6)', () => {
     expect(await a.hash()).toBe(await h.roomHash())
   })
 })
+
+describe('engine core: an editor opened without a grant (§2.9.2 guard step 3)', () => {
+  const seedNote = () => [
+    stored(note('n1', 'a0', { boundElements: [{ id: 'n1.t', type: 'text' }] })),
+    stored(text('n1.t', 'a1', { containerId: 'n1', x: 20, y: 80 })),
+  ]
+
+  it('the open-time re-measure of a guard-caught editor is never pushed, and goes back when it closes ungranted', async () => {
+    const h = createHarness({ seed: seedNote() })
+    const a = h.client('alice')
+    h.settle()
+    // Excalidraw opened the editor (P5) and re-measured the label before Lobby's acquire went out
+    a.change('n1.t', { x: 21.5, width: 61 }, { editingTextElementId: 'n1.t' })
+    h.clock.advance(1000)
+    expect(a.core.pushLog()).toHaveLength(0)
+    // the guard closed it (another request was in flight): no grant ever came
+    a.gesture()
+    h.settle()
+    expect(a.core.pushLog()).toHaveLength(0)
+    expect(a.get('n1.t')?.x).toBe(20)
+    expect(await a.hash()).toBe(await h.roomHash())
+  })
+
+  it('the same change is pushed once the guard gets the grant', () => {
+    const h = createHarness({ seed: seedNote() })
+    const a = h.client('alice', { latencyMs: 100 })
+    h.settle()
+    const editing = { editingTextElementId: 'n1.t' }
+    a.change('n1.t', { x: 21.5, width: 61 }, editing)
+    a.core.leaseConnect(() => {}).send({ type: 'lease.acquire', req: 1, id: 'n1' })
+    h.clock.advance(30)
+    expect(a.core.pushLog()).toHaveLength(0)
+    h.settle()
+    expect(patchOf(a, 'n1.t').map((o) => Object.keys(o.g ?? {}))).toEqual([['layout']])
+  })
+})

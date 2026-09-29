@@ -78,6 +78,11 @@ export interface CanvasInputOptions {
   trace?: (t: InputTrace | EditTrace) => void
   /** Spike control runs only: 'off' lets every key reach Excalidraw (shows what the allowlist stops). */
   allowlist?: 'on' | 'off'
+  /**
+   * The hit guard (registries.hitGuard, O5): a point on a hidden element or under a peer's drag preview.
+   * A double-click or a double-tap there is swallowed with no lease request (§2.7 touch rule).
+   */
+  isBlocked?: (scene: { x: number; y: number }) => boolean
   /** Spike control runs only: false lets every dblclick / touchstart through. */
   interceptDoubleClicks?: boolean
 }
@@ -424,6 +429,12 @@ export class CanvasInput {
       })(),
       ctrlOrCmd: e.ctrlKey || e.metaKey,
     }
+    if (this.opts.isBlocked?.(scene)) {
+      e.stopPropagation()
+      e.preventDefault()
+      this.trace('dblclick', { verdict: 'blocked' })
+      return
+    }
     const verdict = classifyDoubleClick(view)
     this.trace('dblclick', { verdict: verdict.kind === 'text' ? 'text' : `forward:${verdict.reason}` })
     if (verdict.kind === 'forward') return
@@ -450,6 +461,10 @@ export class CanvasInput {
       prevented: e.defaultPrevented,
     })
     const scene = this.toScene(verdict.clientX, verdict.clientY)
+    if (this.opts.isBlocked?.(scene)) {
+      this.trace('doubletap-blocked', {})
+      return
+    }
     this.editAt(scene.x, scene.y, 'P4-doubletap', false)
   }
 

@@ -103,6 +103,12 @@ interface Tracked {
   replay: boolean
   /** the element was a leased free text's own fit (its `fit` carries x, y only) */
   freeTextFit?: boolean
+  /**
+   * The lease id whose grant this text change needs: it was made in an editor this tab opened without a
+   * granted lease (a guard-caught open, the open-time re-measure of §2.9.2 step 3). Pushed only once that
+   * lease is granted; reset when the editor closes without it.
+   */
+  needsLease?: string
 }
 
 interface Inflight {
@@ -444,6 +450,7 @@ export class LobbyEngineCore implements EngineCore {
     }
     // derived changes with nothing of this client behind them are reset in this same scan (§2.5.2)
     this.releaseHeld(reset)
+    this.dropUngranted(reset)
     // the gesture ended: the remote changes it held back land now, and its edits go out at once
     if (wasGesture && !gestureNow) {
       for (const id of this.heldBack) reset.add(id)
@@ -608,6 +615,13 @@ export class LobbyEngineCore implements EngineCore {
       if (!t) continue
       if (isText(el)) {
         const standing = this.leaseStanding(leaseIdOf(el))
+        // a change in an editor open without this tab's grant waits for it (and goes back without it)
+        if (
+          this.editingLabel === el.id &&
+          standing !== 'held' &&
+          [...t.dirty].some((g) => LEASED_GROUPS.has(g))
+        )
+          t.needsLease = leaseIdOf(el)
         if (standing === 'other') {
           const drop = t.isNew ? [...t.dirty] : [...t.dirty].filter((g) => LEASED_GROUPS.has(g))
           if (drop.length) {
@@ -1154,17 +1168,18 @@ export class LobbyEngineCore implements EngineCore {
     if (isText(el)) {
       const standing = this.leaseStanding(leaseIdOf(el))
       const editingHere = this.editingLabel === id
-      const gate = standing === 'pending' || standing === 'other' || (editingHere && standing !== 'held')
+      const gate =
+        standing === 'pending' ||
+        standing === 'other' ||
+        (editingHere && standing !== 'held') ||
+        (t.needsLease !== undefined && this.leaseStanding(t.needsLease) !== 'held')
       if (gate) {
         if (create) return null
         for (const g of LEASED_GROUPS) groups.delete(g)
       }
     }
-    if (groups.has('fit')) {
-      const lease = t.freeTextFit ? id : id
-      const standing = this.leaseStanding(lease)
-      if (standing !== 'held') groups.delete('fit')
-    }
+    // a fit is the lease holder's (the container's lease, or a free text's own): only while held
+    if (groups.has('fit') && this.leaseStanding(id) !== 'held') groups.delete('fit')
     if (groups.has('bound')) {
       // a container's bound change waits while it names a label whose create waits
       const added = ((el.boundElements as { id: string; type: string }[] | null | undefined) ?? []).filter(
@@ -1266,6 +1281,10 @@ export class LobbyEngineCore implements EngineCore {
   }
 
   private sendLease(message: LeaseClientMessage): void {
+    const online = this.connected && !!this.welcome && !this.awaitingSnapshot
+    // the per-session FIFO (§2.4.3): the create before its acquire, the editor's final push (made while
+    // the lease is still held, so its text is not gated) before its release
+    if (online) this.flushNow(true)
     if (message.type === 'lease.acquire') {
       this.leaseReq.set(message.req, message.id)
       this.leasePending.add(message.id)
@@ -1273,13 +1292,8 @@ export class LobbyEngineCore implements EngineCore {
       this.leaseHeld.delete(message.id)
       this.leasePending.delete(message.id)
     }
-    // the per-session FIFO (§2.4.3): the create before its acquire, the final push before its release
-    if (this.connected && this.welcome && !this.awaitingSnapshot) {
-      this.flushNow(true)
-      this.transport.send(message)
-    } else if (message.type === 'lease.acquire') {
-      this.queuedLease.push(message)
-    }
+    if (online) this.transport.send(message)
+    else if (message.type === 'lease.acquire') this.queuedLease.push(message)
     // a release while offline is not sent: the server lets the lease expire (§2.9.3)
     this.updateSaved()
   }
@@ -1301,12 +1315,34 @@ export class LobbyEngineCore implements EngineCore {
       }
     }
     this.leaseListener?.(m)
+    this.dropUngranted(affected)
     if (affected.size) {
       this.releaseHeld(affected)
       this.applyScene(affected)
     }
     this.scheduleFlush(false)
     this.updateSaved()
+  }
+
+  /**
+   * Text changes made in an editor this tab opened without a grant, once that editor is gone and no
+   * request of this tab is out (the guard closed it, the deny came, the user left it): they go back.
+   */
+  private dropUngranted(affected: Set<string>): void {
+    for (const [id, t] of [...this.tracked]) {
+      if (t.needsLease === undefined || this.editingLabel === id) continue
+      const standing = this.leaseStanding(t.needsLease)
+      if (standing === 'held' || standing === 'pending') continue
+      t.needsLease = undefined
+      if (t.isNew && !this.confirmedMap.has(id)) {
+        this.tracked.delete(id)
+        this.vanish.add(id)
+      } else {
+        for (const g of LEASED_GROUPS) t.dirty.delete(g)
+        if (t.dirty.size === 0) this.tracked.delete(id)
+      }
+      affected.add(id)
+    }
   }
 
   /** A lease this tab does not get (deny) or lost: its label's text, layout and life, and the fit, go back. */
@@ -1342,7 +1378,8 @@ export class LobbyEngineCore implements EngineCore {
     // keep a drag's ids (the first message of a drag) and an end (null) that were not sent yet
     if (prev?.drag && next.drag && prev.drag.ids && prev.drag.d === next.drag.d && !next.drag.ids)
       next = { ...next, drag: { ...next.drag, ids: prev.drag.ids } }
-    if (prev?.drag === null && next.drag === undefined) next = { ...next, drag: null }
+    // a message without `drag` (a pointer move) never replaces an unsent drag start, move or end
+    if (prev && prev.drag !== undefined && next.drag === undefined) next = { ...next, drag: prev.drag }
     this.presencePending = next
     const interval = 1000 / PRESENCE_IN_HZ
     const wait = this.presenceLast + interval - this.now()

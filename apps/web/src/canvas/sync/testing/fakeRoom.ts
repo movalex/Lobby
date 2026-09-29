@@ -145,6 +145,11 @@ export class FakeRoom {
         return state
       },
       send(message: ClientMessage) {
+        // a frame sent while the socket opens (a real server may read it before its open handler ran) waits
+        if (state === 'connecting') {
+          early.push(message)
+          return
+        }
         if (state !== 'open') return
         const copy = JSON.parse(JSON.stringify(message))
         room.c.setTimer(() => room.receive(session, copy), session.latencyMs / 2)
@@ -175,9 +180,11 @@ export class FakeRoom {
       },
     }
     // open on the next tick, as a socket would
+    const early: ClientMessage[] = []
     this.c.setTimer(() => {
       session.open = true
       setState('open')
+      for (const m of early.splice(0)) transport.send(m)
     }, 0)
     return transport
   }
