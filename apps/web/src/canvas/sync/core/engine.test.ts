@@ -392,6 +392,67 @@ describe('engine core: the text lease gate (§2.9.2, §2.9.4)', () => {
     expect(await a.hash()).toBe(await h.roomHash())
   })
 
+  it('an ack that lands while the editor is open, then a close with no change: the scene holds the server copy (B3 L6 dry run)', async () => {
+    const h = createHarness({ seed: seedNote() })
+    const a = h.client('alice')
+    h.settle()
+    a.core.leaseConnect(() => {}).send({ type: 'lease.acquire', req: 1, id: 'n1' })
+    h.settle()
+    const editing = { editingTextElementId: 'n1.t' }
+    a.change('n1.t', { originalText: 'typed', text: 'typed' }, editing)
+    h.settle() // pushed and acknowledged while the editor is still open: the label keeps its local version
+    expect(a.core.saveStatus.state).toBe('saved')
+    a.gesture() // the editor closes; Excalidraw's submit changes nothing
+    h.settle()
+    expect(a.get('n1.t')?.version).toBe(h.room.elements.get('n1.t')?.version)
+    expect(a.get('n1.t')?.versionNonce).toBe(h.room.elements.get('n1.t')?.versionNonce)
+    expect(await a.hash()).toBe(await h.roomHash())
+    expect(a.core.pushLog()).toHaveLength(1)
+  })
+
+  const freeText = () => {
+    const h = createHarness({
+      seed: [stored(text('t1', 'a0', { x: 100, y: 50, width: 80, textAlign: 'center' }))],
+    })
+    const a = h.client('alice', { latencyMs: 200 })
+    const b = h.client('bob')
+    h.settle()
+    a.core.leaseConnect(() => {}).send({ type: 'lease.acquire', req: 1, id: 't1' })
+    h.settle()
+    const refits: { id: string; dx?: number; dy?: number }[] = []
+    a.core.on((e) => {
+      if (e.kind === 'refit') refits.push({ id: e.id, dx: e.dx, dy: e.dy })
+    })
+    return { h, a, b, refits }
+  }
+  // A's typing grows the centred text by 40: its x moves left by 20 (a fit); B moves the text meanwhile
+  const grow = { originalText: 'grown', text: 'grown', width: 120, x: 80 }
+
+  it("a leased free text's x fit in flight when B moves it: fitDropped, reported with its own shift (L10 5)", () => {
+    const { h, a, b, refits } = freeText()
+    a.change('t1', grow, { editingTextElementId: 't1' })
+    h.clock.advance(520) // the typing push is out (it reaches the room 100 ms later)
+    expect(patchOf(a, 't1')[0]?.fit).toMatchObject({ x: 80 })
+    b.change('t1', { x: 300, y: 90 })
+    h.settle()
+    expect(h.room.elements.get('t1')?.x).toBe(300) // B's move is kept: A's fit was computed before it
+    expect(h.room.elements.get('t1')?.width).toBe(120) // A's layout is not conditional
+    expect(refits).toEqual([{ id: 't1', dx: -20, dy: 0 }])
+  })
+
+  it("a leased free text's unsent x fit when B's move arrives: never sent, reported with its own shift (L10 5)", () => {
+    const { h, a, b, refits } = freeText()
+    a.change('t1', grow, { editingTextElementId: 't1' })
+    h.clock.advance(10)
+    b.change('t1', { x: 300, y: 90 })
+    h.settle()
+    expect(patchOf(a, 't1').some((p) => p.fit)).toBe(false)
+    expect(h.room.elements.get('t1')?.x).toBe(300)
+    expect(h.room.elements.get('t1')?.width).toBe(120)
+    expect(a.get('t1')?.x).toBe(300)
+    expect(refits).toEqual([{ id: 't1', dx: -20, dy: 0 }])
+  })
+
   it("the release goes out after the editor's final push (the session's FIFO)", () => {
     const h = createHarness({ seed: seedNote() })
     const a = h.client('alice')

@@ -6,6 +6,8 @@
  *  - Recording: `boundary()` at a step boundary (the end of a gesture, a text-editor close, one keyboard
  *    action, one `CanvasPort.transact`) diffs the scene against `lastLocal`. An arrow whose change is only
  *    derived (E10, held by the core) is recorded at its server copy, so it never becomes a step.
+ *  - A reconnect (a welcome of the same epoch) keeps both stacks; the first welcome and an epoch change
+ *    (a restore) start them afresh.
  *  - Remote changes and the core's own resets (a deny, a reject, a held derived change released) arrive
  *    as the core's `applied` event and are ABSORBED, never recorded. `markPushed` follows `push`, `onAck`
  *    folds `fix` and `derived` rows (no fix or repair ever creates a step).
@@ -20,6 +22,7 @@ import type { LobbyEngineCore } from '../sync/core/engine.ts'
 import type { SceneAdapter, SceneElement } from '../sync/types.ts'
 import type { ApplyContext, ApplyResult } from './apply.ts'
 import type { HistEl, Scene } from './diff.ts'
+import { fieldGroup } from './fields.ts'
 import { type Entry, LobbyHistory } from './stack.ts'
 
 export interface UndoControllerOptions {
@@ -55,10 +58,16 @@ export class UndoController {
     const sceneMap = () => this.sceneMap(false)
     // attached after the welcome: start from the scene as it is (nothing before this is undoable)
     if (o.core.welcome) this.history.reset(this.sceneMap(true))
+    let epoch = o.core.welcome?.epoch ?? null
     this.off.push(
       o.core.on((e) => {
-        if (e.kind === 'welcome') this.history.reset(this.sceneMap(true))
-        else if (e.kind === 'applied') {
+        if (e.kind === 'welcome') {
+          // the first welcome, or a board restored to another epoch: nothing before is undoable. A
+          // reconnect to the same epoch keeps the stacks (B3 L6 3f: an edit made offline is undone after
+          // its replay); what changed meanwhile arrived as the core's 'applied' event and was absorbed like any remote edit
+          if (epoch === null || e.welcome.epoch !== epoch) this.history.reset(this.sceneMap(true))
+          epoch = e.welcome.epoch
+        } else if (e.kind === 'applied') {
           const now = sceneMap()
           for (const id of e.ids) this.history.absorb(e.before.get(id) as HistEl | undefined, now.get(id))
         } else if (e.kind === 'push') this.history.markPushed(e.record.seq, e.ids)
@@ -71,14 +80,31 @@ export class UndoController {
     for (const f of this.off.splice(0)) f()
   }
 
-  /** The scene as undo sees it; `forRecord`: a held derived arrow change counts as its server copy. */
+  /**
+   * The scene as undo sees it. `forRecord`: a held derived arrow change counts as its server copy, and so
+   * do the `text` and `layout` fields of a text whose lease another session holds (this tab cannot write
+   * them: the core puts them back, §2.9.2), so neither is ever part of a step. B3 L6 (4): B's frame drag
+   * moves N's label locally while A types in it; recording that move made B's undo of the drag report
+   * "1 change kept" for a label position B never wrote.
+   */
   private sceneMap(forRecord: boolean): Scene {
     const m = new Map<string, HistEl>()
+    const holders = forRecord ? this.o.core.leaseHolders() : null
+    const me = this.o.core.sid
     for (const el of this.o.scene.read().elements) {
       if (forRecord && this.o.core.isDerivedHeld(el.id)) {
         const conf = this.o.core.confirmed(el.id)
         if (conf) {
           m.set(el.id, conf as unknown as HistEl)
+          continue
+        }
+      }
+      if (holders && el.type === 'text') {
+        const leaseId = (el as { containerId?: string | null }).containerId || el.id
+        const h = holders.get(leaseId)
+        const conf = h && h.sid !== me ? this.o.core.confirmed(el.id) : undefined
+        if (conf) {
+          m.set(el.id, withLeasedFrom(el, conf) as unknown as HistEl)
           continue
         }
       }
@@ -138,4 +164,17 @@ function keptBy(result: ApplyResult, holders: ReadonlyMap<string, LeaseHolder>):
     if (h) return h.name
   }
   return null
+}
+
+/** `el` with its `text` and `layout` fields (the lease-gated ones of a text) taken from `conf`. */
+function withLeasedFrom(el: SceneElement, conf: SceneElement): SceneElement {
+  const out: Record<string, unknown> = { ...(el as unknown as Record<string, unknown>) }
+  const src = conf as unknown as Record<string, unknown>
+  for (const k of new Set([...Object.keys(out), ...Object.keys(src)])) {
+    const g = fieldGroup(el, k)
+    if (g !== 'text' && g !== 'layout') continue
+    if (k in src) out[k] = src[k]
+    else delete out[k]
+  }
+  return out as unknown as SceneElement
 }

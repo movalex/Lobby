@@ -54,6 +54,8 @@ type Order = 'C-first' | 'B-first'
 const ORDERS: Order[] = ['C-first', 'B-first']
 /** the latency (ms, both ways together) of the side that must commit second */
 const LAG = 1_000
+/** the same when one side is A's typing (its pushes go out at most every TYPING_PUSH_MS, 500 ms) */
+const TYPING_LAG = 2_400
 
 let r: Room
 let slot = 0
@@ -105,33 +107,50 @@ async function arrow(page: Page, props: Record<string, unknown>, start: End, end
   return id
 }
 
-/** Gives elbow arrow `E` a fixed inner vertical segment (Excalidraw's router), and returns it. */
-async function fixSegment(page: Page, E: string): Promise<{ index: number; x: number }> {
-  const el = (await lc(page).get(E)) as unknown as { x: number; points: Pt[] }
+/** A fixed segment of an elbow arrow: its index, orientation (v: vertical) and scene position across its axis. */
+type Seg = { index: number; v: boolean; cross: number }
+
+/** Gives elbow arrow `E` a fixed inner segment (Excalidraw's router picks the route), and returns it. */
+async function fixSegment(page: Page, E: string): Promise<Seg> {
+  const el = (await lc(page).get(E)) as unknown as { x: number; y: number; points: Pt[] }
   let k = -1
+  let v = true
   for (let i = 2; i < el.points.length - 1; i++) {
     const p = el.points[i - 1] as Pt
     const q = el.points[i] as Pt
-    if (Math.abs(p[0] - q[0]) < 1e-6 && Math.abs(p[1] - q[1]) > 1) {
+    const dx = Math.abs(p[0] - q[0])
+    const dy = Math.abs(p[1] - q[1])
+    if ((dx < 1e-6 && dy > 1) || (dy < 1e-6 && dx > 1)) {
       k = i
+      v = dx < 1e-6
       break
     }
   }
-  if (k < 0) throw new Error(`no inner vertical segment in ${JSON.stringify(el.points)}`)
-  const x = Math.round(el.x + (el.points[k] as Pt)[0])
-  await hp(page, 'routeElbow', E, { index: k, x })
+  if (k < 0) throw new Error(`no inner segment in ${JSON.stringify(el.points)}`)
+  const q = el.points[k] as Pt
+  const cross = Math.round(v ? el.x + q[0] : el.y + q[1])
+  await hp(page, 'routeElbow', E, { index: k, x: cross, y: cross })
   await allSaved(r.browsers)
-  const seg = (await segments(page, E)).find((s) => s.v && Math.abs(s.cross - x) <= TOL)
+  const seg = (await segments(page, E)).find((s) => s.v === v && Math.abs(s.cross - cross) <= TOL)
   if (!seg) throw new Error(`segment not fixed: ${JSON.stringify(await segments(page, E))}`)
-  return { index: seg.index, x }
+  return { index: seg.index, v, cross }
 }
+/** C's drag of that segment by 50 px across its axis. */
+const dragSeg = (page: Page, E: string, s: Seg, by = 50) =>
+  hp(page, 'dragSegment', E, s.index, s.cross + by, s.cross + by)
+const moved = (s: Seg, by = 50) => ({ v: s.v, cross: s.cross + by })
 
 /**
  * Releases two actions on one barrier; `late` (the side that must commit second) goes through the
  * latency relay meanwhile.
  */
-async function race(late: Page, one: () => Promise<unknown>, two: () => Promise<unknown>): Promise<void> {
-  const off = await hooks().withLatency(late, LAG)
+async function race(
+  late: Page,
+  one: () => Promise<unknown>,
+  two: () => Promise<unknown>,
+  lag = LAG,
+): Promise<void> {
+  const off = await hooks().withLatency(late, lag)
   try {
     const barrier = harness.createBarrier(2)
     await Promise.all(
@@ -140,7 +159,7 @@ async function race(late: Page, one: () => Promise<unknown>, two: () => Promise<
         await f()
       }),
     )
-    await late.waitForTimeout(LAG * 1.5)
+    await late.waitForTimeout(lag * 1.5)
   } finally {
     await off()
   }
@@ -161,8 +180,8 @@ interface Want {
   point?: { i: number; at: Pt }
   /** point `i` at `rel` from point 0 (a self-loop's midpoint moves with its start, §2.9.4) */
   rel?: { i: number; rel: Pt }
-  /** a fixed vertical segment across its axis at scene x */
-  seg?: number
+  /** a fixed segment of this orientation, across its axis at this scene position */
+  seg?: { v: boolean; cross: number }
   /** the stored route is orthogonal */
   orthogonal?: boolean
 }
@@ -183,10 +202,11 @@ async function arrowChecks(id: string, want: Want = {}): Promise<string[]> {
       if (!(dist(p, want.rel.rel) <= TOL))
         bad.push(`${b.name} rel ${want.rel.i} ${JSON.stringify(p)} want ${JSON.stringify(want.rel.rel)}`)
     }
-    if (want.seg !== undefined) {
+    if (want.seg) {
+      const w = want.seg
       const s = await segments(b.page, id)
-      if (!s.some((x) => x.v && Math.abs(x.cross - (want.seg as number)) <= TOL))
-        bad.push(`${b.name} segments ${JSON.stringify(s)} want x ${want.seg}`)
+      if (!s.some((x) => x.v === w.v && Math.abs(x.cross - w.cross) <= TOL))
+        bad.push(`${b.name} segments ${JSON.stringify(s)} want ${JSON.stringify(w)}`)
     }
   }
   if (want.orthogonal) {
@@ -204,23 +224,71 @@ async function arrowChecks(id: string, want: Want = {}): Promise<string[]> {
 }
 
 /** The page's undo; returns the toasts it raised ("N change(s) kept — X edited it since"). */
+/** The page's undo; returns its toasts, and `skip <id> <what> <reason>` for each non-silent skip. */
 async function undo(page: Page): Promise<string[]> {
   const t0 = (await toasts(page)).length
+  const e0 = await eventCount(page)
   await focusCanvas(page)
   await page.keyboard.press('Control+z')
   await waitSaved(page)
-  await allSaved(r.browsers)
-  return (await toasts(page)).slice(t0)
+  await converge(r)
+  const skips = (await events(page, e0))
+    .filter((e) => e.kind === 'undo')
+    .flatMap(
+      (e) => JSON.parse(e.detail ?? '[]') as { id: string; what: string; reason: string; silent: boolean }[],
+    )
+    .filter((s) => !s.silent)
+    .map((s) => `skip ${s.id} ${s.what} ${s.reason}`)
+  return [...(await toasts(page)).slice(t0), ...skips]
 }
 const kept = (ts: readonly string[]) => ts.filter((t) => /kept/.test(t))
+/** Records a repetition's row (and prints it, so a failed convergence still shows it). */
+function rec(rows: Record<string, unknown>[], row: Record<string, unknown>): void {
+  rows.push(row)
+  console.log('row', JSON.stringify(row))
+}
 
-type LogEntry = { kind: string; id: string | null; detail: string | null }
-/** The session's event log (rejects, refits, notices) of a page since `from`. */
+type LogEntry = { kind: string; id: string | null; detail: string | null; n: number }
+/** The session's event log (acks, rejects, refits, notices) of a page after entry `from`. */
 const events = (page: Page, from: number) =>
-  board(page, (b, f: number) => (b.session.eventLog as LogEntry[]).slice(f), from)
-const eventCount = (page: Page) => board(page, (b) => (b.session.eventLog as unknown[]).length)
+  board(page, (b, f: number) => (b.session.eventLog as LogEntry[]).filter((e) => e.n > f), from)
+/** The number of the page's last event-log entry. */
+const eventCount = (page: Page) =>
+  board(page, (b) => ((b.session.eventLog as LogEntry[]).at(-1)?.n ?? 0) as number)
 const rejectsSince = async (page: Page, from: number) =>
   (await events(page, from)).filter((e) => e.kind === 'reject')
+
+/**
+ * The commit clock of the first push `page` made after push `fromPush` (and log entry `fromEvent`) that
+ * wrote `id` (the ack's `clock`): which of two racing writes the server committed first.
+ */
+async function commitClock(
+  page: Page,
+  id: string,
+  fromPush: number,
+  fromEvent: number,
+): Promise<number | null> {
+  const log = await lc(page).pushedOps()
+  const seqs = log
+    .slice(fromPush)
+    .filter((p) => p.ops.some((o) => (o.k === 'c' ? o.el.id : o.id) === id))
+    .map((p) => p.seq)
+  if (!seqs.length) return null
+  const acks = (await events(page, fromEvent)).filter((e) => e.kind === 'ack')
+  const clocks = acks.filter((a) => seqs.includes(Number(a.id))).map((a) => Number(a.detail))
+  return clocks.length ? Math.min(...clocks) : null
+}
+/** Which of B's write of `bId` and C's write of `cId` committed first (from the acks' clocks). */
+async function committedFirst(
+  bId: string,
+  cId: string,
+  from: { B: number; C: number; eB: number; eC: number },
+): Promise<string> {
+  const b = await commitClock(B(), bId, from.B, from.eB)
+  const c = await commitClock(C(), cId, from.C, from.eC)
+  if (b === null || c === null) return `unknown (B ${b}, C ${c})`
+  return c < b ? 'C-first' : 'B-first'
+}
 
 /** A types `text` at the caret of its open editor. */
 const type = (text: string) => A().keyboard.type(text, { delay: 4 })
@@ -231,9 +299,19 @@ const LONG =
 
 /** A's text intact: the label's text in every browser equals what A typed. */
 async function textIntact(label: string | null, typed: string | null): Promise<boolean> {
-  if (!label || typed === null) return false
-  for (const b of r.browsers) if ((await labelText(b.page, label)) !== typed) return false
-  return true
+  if (!label || typed === null) {
+    console.log('intact: no label or buffer', JSON.stringify({ label, typed }))
+    return false
+  }
+  let ok = true
+  for (const b of r.browsers) {
+    const got = await labelText(b.page, label)
+    if (got !== typed) {
+      ok = false
+      console.log('intact:', b.name, JSON.stringify({ got, typed }))
+    }
+  }
+  return ok
 }
 
 /** The label of a container, in `page`'s map. */
@@ -436,7 +514,8 @@ test('L6 1-2: B resizes N while A types (and moves N rotated 15°); arrows follo
       const live = await rewrappedLive(s.n.id, want.width)
       const typed = await buffer()
       await closeEditor(A())
-      await allSaved(r.browsers)
+      // every map equals the snapshot first: the checks then read the final state in every browser
+      await converge(r)
       const bad = [...(await noteKept(s.n.id, want))]
       for (const a of arrowsOf(s)) bad.push(...(await arrowChecks(a, { orthogonal: a === s.E })))
       const aArrow = await arrowOps(A(), arrowsOf(s), from.A)
@@ -444,7 +523,7 @@ test('L6 1-2: B resizes N while A types (and moves N rotated 15°); arrows follo
       const cOps = (await pushCount(C())) - from.C
       const intact = await textIntact(s.n.label, typed)
       const ok = bad.length === 0 && aArrow === 0 && bArrow === 0 && cOps === 0 && intact && live
-      rows.push({ variant, i, ok, bad, aArrow, bArrow, cOps, intact, live })
+      rec(rows, { variant, i, ok, bad, aArrow, bArrow, cOps, intact, live })
       await converge(r)
     }
   }
@@ -479,12 +558,13 @@ test("L6 3/3a-3c + 5: C's free end, loop midpoint or fixed segment survives B's 
         } else {
           target = s.E as string
           const seg = await fixSegment(C(), target)
-          before = { seg: seg.x, orthogonal: true }
-          want = { seg: seg.x + 50, orthogonal: true }
-          drag = () => hp(C(), 'dragSegment', target, seg.index, seg.x + 50)
+          before = { seg: moved(seg, 0), orthogonal: true }
+          want = { seg: moved(seg), orthogonal: true }
+          drag = () => dragSeg(C(), target, seg)
         }
         const from = { A: await pushCount(A()), B: await pushCount(B()), C: await pushCount(C()) }
         const ev = await eventCount(C())
+        const evB = await eventCount(B())
         await openEditor(A(), s.n.id)
         await A().keyboard.press('End')
         await type(LONG)
@@ -499,7 +579,8 @@ test("L6 3/3a-3c + 5: C's free end, loop midpoint or fixed segment survives B's 
         await type(' more')
         const typed = await buffer()
         await closeEditor(A())
-        await allSaved(r.browsers)
+        // every map equals the snapshot first: the checks then read the final state in every browser
+        await converge(r)
         const bad = [
           ...(await noteKept(s.n.id, { width: w, baseHeight: 300 })),
           ...(await arrowChecks(target, want)),
@@ -511,6 +592,7 @@ test("L6 3/3a-3c + 5: C's free end, loop midpoint or fixed segment survives B's 
         const cOps = (await pushCount(C())) - from.C
         const cRejects = await rejectsSince(C(), ev)
         const intact = await textIntact(s.n.label, typed)
+        const committed = await committedFirst(s.n.id, target, { B: from.B, C: from.C, eB: evB, eC: ev })
         // 5: C undoes its drag after B's write landed: the dragged point back, bound ends on N's current edge
         const t = await undo(C())
         const undoBad = await arrowChecks(target, before)
@@ -522,11 +604,13 @@ test("L6 3/3a-3c + 5: C's free end, loop midpoint or fixed segment survives B's 
           cOps === 1 &&
           cRejects.length === 0 &&
           intact &&
+          committed === order &&
           undoBad.length === 0 &&
           kept(t).length === 0
-        rows.push({
+        rec(rows, {
           kind,
           order,
+          committed,
           i,
           ok,
           bad,
@@ -561,17 +645,21 @@ test("L6 4 + 5: B drags frame F (N and an arrow with a free end and a bend) whil
       await openEditor(A(), s.n.id)
       await A().keyboard.press('End')
       await type(' typing')
+      await waitSaved(A())
+      const at = { A: await pushCount(A()), eA: await eventCount(A()), eB: await eventCount(B()) }
       // A's fit (keystrokes that re-lay the label out) and B's frame drag on one barrier; the side that
       // must commit second goes through the relay
       await race(
         order === 'drag-first' ? A() : B(),
         () => hp(B(), 'dragFrame', F, by),
         () => type(LONG),
+        TYPING_LAG,
       )
       await type(' more')
       const typed = await buffer()
       await closeEditor(A())
-      await allSaved(r.browsers)
+      // every map equals the snapshot first: the checks then read the final state in every browser
+      await converge(r)
       const bad = [
         ...(await noteKept(s.n.id, { x: s.at.x + by.x, y: s.at.y + by.y })),
         ...(await arrowChecks(s.S, { point: { i: -1, at: [free0[0] + by.x, free0[1] + by.y] } })),
@@ -600,6 +688,10 @@ test("L6 4 + 5: B drags frame F (N and an arrow with a free end and a bend) whil
       const aArrow = await arrowOps(A(), [s.S], from.A)
       const bS = (await opsFor(B(), s.S, from.B)).length
       const intact = await textIntact(s.n.label, typed)
+      const cf = await commitClock(A(), s.n.label as string, at.A, at.eA)
+      const cd = await commitClock(B(), s.n.id, from.B, at.eB)
+      const committed =
+        cf === null || cd === null ? `unknown (fit ${cf}, drag ${cd})` : cd < cf ? 'drag-first' : 'fit-first'
       // 5: B undoes the frame drag: F, N and the arrow back by F's offset; the bound end on N's edge
       const t = await undo(B())
       const undoBad = await arrowChecks(s.S, { point: { i: -1, at: free0 } })
@@ -607,8 +699,14 @@ test("L6 4 + 5: B drags frame F (N and an arrow with a free end and a bend) whil
       if (!(Math.abs(fBack.x - f0.x) <= TOL && Math.abs(fBack.y - f0.y) <= TOL))
         undoBad.push(`F back at ${fBack.x},${fBack.y}`)
       const ok =
-        bad.length === 0 && aArrow === 0 && bS === 1 && intact && undoBad.length === 0 && kept(t).length === 0
-      rows.push({ order, i, ok, bad, aArrow, bS, intact, undoBad, undoToasts: t })
+        bad.length === 0 &&
+        aArrow === 0 &&
+        bS === 1 &&
+        intact &&
+        committed === order &&
+        undoBad.length === 0 &&
+        kept(t).length === 0
+      rec(rows, { order, committed, i, ok, bad, aArrow, bS, intact, undoBad, undoToasts: t })
       await converge(r)
     }
   }
@@ -622,11 +720,16 @@ async function rotateVsSegment(
   order: Order,
   target: string,
   E: string,
-  seg: { index: number; x: number },
+  seg: Seg,
 ): Promise<Record<string, unknown>> {
   const rot = () => hp(B(), 'editTarget', target, { angle: Math.PI / 2 })
-  const drag = () => hp(C(), 'dragSegment', E, seg.index, seg.x + 50)
-  let orderSeen: string | null = null
+  const drag = () => dragSeg(C(), E, seg)
+  const from = {
+    B: await pushCount(B()),
+    C: await pushCount(C()),
+    eB: await eventCount(B()),
+    eC: await eventCount(C()),
+  }
   if (mode === 'live') await raceBC(order, rot, drag)
   else {
     await hooks().cutSocket(C())
@@ -637,16 +740,13 @@ async function rotateVsSegment(
       await waitSaved(B())
       await hooks().restoreSocket(C())
       await waitSaved(C())
-      orderSeen = 'B-first'
     } else {
       // C's replay commits before B's rotation, which B makes on a copy taken before the replay reached it
       const off = await hooks().withLatency(B(), 6_000)
       try {
         await hooks().restoreSocket(C())
-        const t0 = Date.now()
         await rot()
         await waitSaved(C())
-        orderSeen = Date.now() - t0 < 3_000 ? 'C-first' : 'unsure'
         await waitSaved(B(), 30_000)
       } finally {
         await off()
@@ -654,7 +754,7 @@ async function rotateVsSegment(
     }
   }
   await allSaved(r.browsers)
-  return { orderSeen }
+  return { committed: await committedFirst(target, E, from) }
 }
 
 test("L6 3d-3f + 5: a 90° turn of N against C's segment drag (live and offline replay) and a selection rotation against C's free-end drag, both orders", async () => {
@@ -679,9 +779,11 @@ test("L6 3d-3f + 5: a 90° turn of N against C's segment drag (live and offline 
           )
           await type(' more')
           await closeEditor(A())
-          await allSaved(r.browsers)
+          // every map equals the snapshot first: the checks then read the final state in every browser
+          await converge(r)
+          if (row.committed !== order) bad.push(`committed ${row.committed}`)
           bad.push(
-            ...(await arrowChecks(E, { seg: seg.x + 50, orthogonal: true })),
+            ...(await arrowChecks(E, { seg: moved(seg), orthogonal: true })),
             ...(await arrowChecks(s.S)),
           )
           const cRejects = await rejectsSince(C(), ev)
@@ -690,9 +792,9 @@ test("L6 3d-3f + 5: a 90° turn of N against C's segment drag (live and offline 
           if (cE !== 1) bad.push(`C pushed E ${cE} times`)
           // 5: C's undo finds the renumbered segment by order; then B's undo of the turn leaves C's segment
           const tc = await undo(C())
-          const undoC = await arrowChecks(E, { seg: seg.x, orthogonal: true })
+          const undoC = await arrowChecks(E, { seg: moved(seg, 0), orthogonal: true })
           const tb = await undo(B())
-          const undoB = await arrowChecks(E, { seg: seg.x, orthogonal: true })
+          const undoB = await arrowChecks(E, { seg: moved(seg, 0), orthogonal: true })
           if (kept(tc).length || kept(tb).length) bad.push(`kept: ${JSON.stringify([...tc, ...tb])}`)
           bad.push(...undoC.map((x) => `C undo: ${x}`), ...undoB.map((x) => `B undo: ${x}`))
         } else {
@@ -700,6 +802,12 @@ test("L6 3d-3f + 5: a 90° turn of N against C's segment drag (live and offline 
           const p0 = await pointAt(C(), s.S, -1)
           const to: Pt = [p0[0] + 30, p0[1] + 80]
           const versions: { B?: { angle: number; end: Pt }; C?: { angle: number; end: Pt } } = {}
+          const at = {
+            B: await pushCount(B()),
+            C: await pushCount(C()),
+            eB: await eventCount(B()),
+            eC: await eventCount(C()),
+          }
           await raceBC(
             order,
             async () => {
@@ -714,23 +822,30 @@ test("L6 3d-3f + 5: a 90° turn of N against C's segment drag (live and offline 
             },
           )
           await closeEditor(A())
-          await allSaved(r.browsers)
+          // every map equals the snapshot first: the checks then read the final state in every browser
+          await converge(r)
           const stored = (await lc(C()).get(s.S)) as unknown as { angle: number }
           const end = await pointAt(C(), s.S, -1)
           const is = (v?: { angle: number; end: Pt }) =>
             !!v && Math.abs(v.angle - stored.angle) <= 1e-6 && dist(v.end, end) <= TOL
           const whose = is(versions.C) ? 'C' : is(versions.B) ? 'B' : 'mixture'
           row.whose = whose
+          row.committed = await committedFirst(s.S, s.S, at)
+          if (row.committed !== order) bad.push(`committed ${row.committed}`)
+          // the later commit's whole version is stored
+          if (whose !== (order === 'C-first' ? 'B' : 'C'))
+            bad.push(`stored is ${whose}'s, the later writer is not`)
           if (whose === 'mixture')
             bad.push(`stored ${JSON.stringify({ angle: stored.angle, end })} vs ${JSON.stringify(versions)}`)
           bad.push(...(await arrowChecks(s.S)))
           const bS = (await opsFor(B(), s.S, from.B)).length
           if (bS !== 1) bad.push(`B pushed S ${bS} times`)
-          // 5: the later writer's undo applies; the earlier writer's is skipped as changed
+          // 5: the earlier writer's undo is skipped as changed (the later version is stored); the later
+          // writer's undo then applies
           const later = whose === 'C' ? C() : B()
           const earlier = whose === 'C' ? B() : C()
-          const tl = await undo(later)
           const te = await undo(earlier)
+          const tl = await undo(later)
           row.undo = { later: tl, earlier: te }
           if (kept(tl).length) bad.push(`later undo kept: ${JSON.stringify(tl)}`)
           if (!kept(te).length) bad.push(`earlier undo not skipped: ${JSON.stringify(te)}`)
@@ -739,7 +854,7 @@ test("L6 3d-3f + 5: a 90° turn of N against C's segment drag (live and offline 
         const aArrow = await arrowOps(A(), arrowsOf(s), from.A)
         const bArrow = await arrowOps(B(), kind === '3e-rotate-selection' ? [E] : arrowsOf(s), from.B)
         if (aArrow || bArrow) bad.push(`arrow ops A ${aArrow} B ${bArrow}`)
-        rows.push({ ...row, ok: bad.length === 0, bad })
+        rec(rows, { ...row, ok: bad.length === 0, bad })
         await converge(r)
       }
     }
@@ -786,6 +901,7 @@ test("L10 1-2 + 4: A types in a rectangle's label until it grows while B resizes
         const rb = (await lc(B()).get(R)) as unknown as Geo
         const w = rb.width + 90
         const resize = () => hp(B(), 'editTarget', R, { width: w })
+        const ev = { B: from.B, C: from.C, eB: await eventCount(B()), eC: await eventCount(C()) }
         if (withC) await raceBC(order, resize, () => hp(C(), 'dragPoint', S, -1, to))
         else {
           await resize()
@@ -794,7 +910,8 @@ test("L10 1-2 + 4: A types in a rectangle's label until it grows while B resizes
         await type(' and again')
         const typed = await buffer()
         await closeEditor(A())
-        await allSaved(r.browsers)
+        // every map equals the snapshot first: the checks then read the final state in every browser
+        await converge(r)
         const label = await labelOf(C(), R)
         const bad = await arrowChecks(S, withC ? { point: { i: -1, at: to } } : {})
         for (const b of r.browsers) {
@@ -808,6 +925,7 @@ test("L10 1-2 + 4: A types in a rectangle's label until it grows while B resizes
         const aArrow = await arrowOps(A(), [S], from.A)
         const bArrow = await arrowOps(B(), [S], from.B)
         const cOps = (await pushCount(C())) - from.C
+        const committed = withC ? await committedFirst(R, S, ev) : null
         let undoBad: string[] = []
         let t: string[] = []
         if (withC) {
@@ -820,9 +938,23 @@ test("L10 1-2 + 4: A types in a rectangle's label until it grows while B resizes
           aArrow === 0 &&
           bArrow === 0 &&
           cOps === (withC ? 1 : 0) &&
+          (!withC || committed === order) &&
           undoBad.length === 0 &&
           kept(t).length === 0
-        rows.push({ withC, order, i, ok, bad, intact, aArrow, bArrow, cOps, undoBad, undoToasts: t })
+        rec(rows, {
+          withC,
+          order,
+          committed,
+          i,
+          ok,
+          bad,
+          intact,
+          aArrow,
+          bArrow,
+          cOps,
+          undoBad,
+          undoToasts: t,
+        })
         await converge(r)
       }
     }
@@ -867,28 +999,47 @@ test("L10 3-5: an arrow bound to a free text T follows T's box on every write wh
         await openEditor(A(), T)
         await A().keyboard.press('End')
         await type(' grows')
+        await waitSaved(A())
         const other = variant === '3-left' ? C() : B()
-        let bMove: { x: number; y: number; cx: number } | null = null
+        const otherId = variant === '3-left' ? S : T
+        const at0 = {
+          A: await pushCount(A()),
+          O: await pushCount(other),
+          eA: await eventCount(A()),
+          eO: await eventCount(other),
+        }
+        let bMove: { x: number; y: number; w: number; cx: number } | null = null
         if (variant === '3-left')
           await race(
             order === 'A-first' ? other : A(),
             () => type(' wider and wider'),
             () => hp(C(), 'dragPoint', S, -1, to),
+            TYPING_LAG,
           )
         else {
           const tb = (await lc(B()).get(T)) as unknown as Geo
-          const move = { x: tb.x + 80, y: tb.y + 50, cx: tb.x + 80 + tb.width / 2 }
+          const move = { x: tb.x + 80, y: tb.y + 50, w: tb.width, cx: tb.x + 80 + tb.width / 2 }
           bMove = move
           await race(
             order === 'A-first' ? other : A(),
             () => type(' centred text grows'),
             () => hp(B(), 'editTarget', T, { x: move.x, y: move.y }),
+            TYPING_LAG,
           )
         }
+        const geo = async (p: Page) => {
+          const e = (await lc(p).get(T)) as unknown as Geo
+          return { x: e.x, w: e.width, cx: e.x + e.width / 2 }
+        }
+        const trace: Record<string, unknown> = { beforeEnd: { A: await geo(A()), C: await geo(C()) } }
         await type(' end')
+        await waitSaved(A())
+        trace.afterEnd = { A: await geo(A()), C: await geo(C()) }
         const typed = await buffer()
         await closeEditor(A())
-        await allSaved(r.browsers)
+        // every map equals the snapshot first: the checks then read the final state in every browser
+        await converge(r)
+        trace.closed = { A: await geo(A()) }
         const samples: Record<string, unknown> = {}
         let followMax = 0
         for (const b of r.browsers) {
@@ -906,10 +1057,22 @@ test("L10 3-5: an arrow bound to a free text T follows T's box on every write wh
           for (const b of r.browsers) {
             const e = (await lc(b.page).get(T)) as unknown as Geo
             if (!(Math.abs(e.y - bMove.y) <= TOL)) bad.push(`${b.name} y ${e.y} want ${bMove.y}`)
-            if (!(Math.abs(e.x + e.width / 2 - bMove.cx) <= TOL))
-              bad.push(`${b.name} centre ${e.x + e.width / 2} want ${bMove.cx}`)
+            // B's move committed first: A's fit (computed before it) is dropped and redone on B's position,
+            // so the text grows around the centre B left. A's fit first: B's write (x from B's copy) lands
+            // on the grown text; from there A's typing keeps the centre, which lies between the two bounds
+            const cx = e.x + e.width / 2
+            const lo = bMove.cx
+            const hi = bMove.x + e.width / 2
+            const inRange =
+              order === 'other-first' ? Math.abs(cx - lo) <= TOL : cx >= lo - TOL && cx <= hi + TOL
+            if (!inRange)
+              bad.push(`${b.name} centre ${cx} want ${order === 'other-first' ? lo : `[${lo}, ${hi}]`}`)
           }
         const refits = (await events(A(), evA)).filter((e) => e.kind === 'refit').length
+        const ca = await commitClock(A(), T, at0.A, at0.eA)
+        const co = await commitClock(other, otherId, at0.O, at0.eO)
+        const committed =
+          ca === null || co === null ? `unknown (A ${ca}, other ${co})` : ca < co ? 'A-first' : 'other-first'
         const aArrow = await arrowOps(A(), [S], from.A)
         const bArrow = await arrowOps(B(), [S], from.B)
         const cOps = (await pushCount(C())) - from.C
@@ -925,11 +1088,13 @@ test("L10 3-5: an arrow bound to a free text T follows T's box on every write wh
           aArrow === 0 &&
           bArrow === 0 &&
           cOps === (variant === '3-left' ? 1 : 0) &&
+          committed === order &&
           undoBad.length === 0 &&
           kept(t).length === 0
-        rows.push({
+        rec(rows, {
           variant,
           order,
+          committed,
           i,
           ok,
           bad,
@@ -939,6 +1104,7 @@ test("L10 3-5: an arrow bound to a free text T follows T's box on every write wh
           cOps,
           refits,
           followMax,
+          ...(bMove ? { trace, bMove } : {}),
           undoBad,
           undoToasts: t,
         })
@@ -993,8 +1159,10 @@ test("L10 6: B turns a rectangle 90° while C drags its elbow arrow's fixed segm
         const row = await rotateVsSegment(mode, order, R, E, seg)
         await type(' more')
         await closeEditor(A())
-        await allSaved(r.browsers)
-        const bad = await arrowChecks(E, { seg: seg.x + 50, orthogonal: true })
+        // every map equals the snapshot first: the checks then read the final state in every browser
+        await converge(r)
+        const bad = await arrowChecks(E, { seg: moved(seg), orthogonal: true })
+        if (row.committed !== order) bad.push(`committed ${row.committed}`)
         const cRejects = await rejectsSince(C(), ev)
         if (cRejects.length) bad.push(`C rejects ${JSON.stringify(cRejects)}`)
         const cE = (await opsFor(C(), E, from.C)).length
@@ -1003,10 +1171,10 @@ test("L10 6: B turns a rectangle 90° while C drags its elbow arrow's fixed segm
         const bArrow = await arrowOps(B(), [E], from.B)
         if (aArrow || bArrow) bad.push(`arrow ops A ${aArrow} B ${bArrow}`)
         const t = await undo(C())
-        const undoBad = await arrowChecks(E, { seg: seg.x, orthogonal: true })
+        const undoBad = await arrowChecks(E, { seg: moved(seg, 0), orthogonal: true })
         if (kept(t).length) undoBad.push(`kept ${JSON.stringify(t)}`)
         const ok = bad.length === 0 && undoBad.length === 0
-        rows.push({ mode, order, i, ok, bad, undoBad, ...row })
+        rec(rows, { mode, order, i, ok, bad, undoBad, ...row })
         await converge(r)
       }
     }

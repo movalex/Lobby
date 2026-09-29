@@ -111,13 +111,23 @@ interface Tracked {
   needsLease?: string
 }
 
+interface Sent {
+  groups: Set<GroupKey>
+  el: SceneElement
+  create: boolean
+  ref?: SceneElement
+}
+
 interface Inflight {
   readonly seq: number
   readonly base: number
   readonly ops: Op[]
   readonly record: PushRecord
-  /** per element: the groups this push carries and the local copy they were taken from */
-  readonly sent: Map<string, { groups: Set<GroupKey>; el: SceneElement; create: boolean }>
+  /**
+   * per element: the groups this push carries, the local copy they were taken from, and `ref`: the copy
+   * the patch was computed against (base: the server copy plus earlier pushes in flight)
+   */
+  readonly sent: Map<string, Sent>
   readonly forced: boolean
 }
 
@@ -133,7 +143,12 @@ export type CoreEvent =
   | { kind: 'message'; message: ServerMessage }
   | { kind: 'push'; record: PushRecord; ids: readonly string[] }
   /** the server dropped a conditional fit of this container (or free text): the holder re-fits (§2.9.4 rule 4) */
-  | { kind: 'refit'; id: string }
+  /**
+   * an ack's `fitDropped` (§2.9.4 rule 4): the holder re-fits on the server's position. For a leased
+   * FREE text, `dx`/`dy` are the shift the dropped fit carried (its own growth: a centred text moves
+   * left by half of it), to re-apply on the new position; a container re-runs its layout instead
+   */
+  | { kind: 'refit'; id: string; dx?: number; dy?: number }
   /** a non-retryable reject (Change not saved, with the reason) */
   | { kind: 'reject'; id: string; code: RejectCode }
   /** elements the core just installed in the scene (changed ids), with the copies before */
@@ -519,11 +534,24 @@ export class LobbyEngineCore implements EngineCore {
       for (const id of this.heldBack) reset.add(id)
       this.heldBack.clear()
     }
-    if (reset.size) this.applyScene(reset)
     const editorClosed = prevEditing !== null && snapshot.gesture.editingTextElementId === null
+    // while the editor was open, rebuild() kept the edited label's local copy (its text and layout are
+    // held back); an ack that landed meanwhile left nothing to re-examine it after the close, and the
+    // submit usually changes nothing. Clean now: the scene must hold the server's copy exactly (B3 L6)
+    if (prevEditing !== null && prevEditing !== snapshot.gesture.editingTextElementId)
+      this.settleClean(prevEditing, reset)
+    if (reset.size) this.applyScene(reset)
     this.scheduleFlush(editorClosed || (wasGesture && !gestureNow))
     this.schedulePersist()
     this.updateSaved()
+  }
+
+  /** `id` has nothing dirty, in flight or held: its scene copy goes back to the server's, version included. */
+  private settleClean(id: string, reset: Set<string>): void {
+    if (this.tracked.has(id) || this.inflightHas(id) || this.held.has(id)) return
+    const conf = this.confirmedMap.get(id)
+    const el = this.current.get(id)
+    if (conf && el && (conf.version !== el.version || conf.versionNonce !== el.versionNonce)) reset.add(id)
   }
 
   private readScene(elements: readonly SceneElement[]): void {
@@ -1081,7 +1109,9 @@ export class LobbyEngineCore implements EngineCore {
   private onChanges(m: Changes): void {
     if (this.resyncing || this.awaitingSnapshot || !this.welcome) return
     const affected = new Set<string>()
+    const refits: CoreEvent[] = []
     for (const op of m.ops) {
+      if (op.k === 'p') this.staleFit(op, refits)
       if (!this.applyServerOp(op, affected)) {
         this.resync()
         return
@@ -1098,7 +1128,31 @@ export class LobbyEngineCore implements EngineCore {
     this.releaseHeld(affected)
     // elements that are now equal to the server's copy in their dirty groups are clean
     this.applyScene(affected)
+    for (const e of refits) this.emit(e)
     this.updateSaved()
+  }
+
+  /**
+   * A remote ordinary write to the position (or, for a container, the size) of an element whose fit this
+   * holder has not sent yet: that fit was computed on the old position, so it is never sent (the server
+   * would take it, its base now includes the remote write, and undo the other user's move: B3 L10 5).
+   * It is dropped like a `fitDropped` one and redone on the new position (§2.9.4 rule 4).
+   */
+  private staleFit(op: Extract<ServerOp, { k: 'p' }>, refits: CoreEvent[]): void {
+    const t = this.tracked.get(op.id)
+    if (!t?.dirty.has('fit')) return
+    const g = (op as { g?: Record<string, unknown> }).g ?? {}
+    const free = !!t.freeTextFit
+    if (!('pos' in g) && (free || !('shape' in g))) return
+    const local = this.current.get(op.id) as { x?: number; y?: number } | undefined
+    const ref = this.base(op.id) as { x?: number; y?: number } | undefined
+    t.dirty.delete('fit')
+    if (t.dirty.size === 0) this.tracked.delete(op.id)
+    refits.push(
+      free && local && ref
+        ? { kind: 'refit', id: op.id, dx: (local.x ?? 0) - (ref.x ?? 0), dy: (local.y ?? 0) - (ref.y ?? 0) }
+        : { kind: 'refit', id: op.id },
+    )
   }
 
   private resync(): void {
@@ -1147,7 +1201,13 @@ export class LobbyEngineCore implements EngineCore {
           this.lastReject = { id, code: r.denied.code }
           this.emit({ kind: 'reject', id, code: r.denied.code })
         }
-        if (r.fitDropped) this.emit({ kind: 'refit', id })
+        if (r.fitDropped) {
+          const ref = sent?.ref as { x?: number; y?: number; containerId?: string | null } | undefined
+          const el = sent?.el as { x?: number; y?: number } | undefined
+          if (sent && ref && el && isText(sent.el) && !ref.containerId)
+            this.emit({ kind: 'refit', id, dx: (el.x ?? 0) - (ref.x ?? 0), dy: (el.y ?? 0) - (ref.y ?? 0) })
+          else this.emit({ kind: 'refit', id })
+        }
         return
       }
       const info = REJECT_CODE_INFO[r.code]
@@ -1322,7 +1382,7 @@ export class LobbyEngineCore implements EngineCore {
     }
     if (!forced && this.inflight.length >= MAX_IN_FLIGHT_PUSHES) return
     let ops: Op[] = []
-    let sent = new Map<string, { groups: Set<GroupKey>; el: SceneElement; create: boolean }>()
+    let sent = new Map<string, Sent>()
     let bytes = 0
     // doc writes ride in the first push of this flush (no later than any element edit made after them)
     let doc: Record<string, unknown> | null = Object.keys(this.pendingDoc).length ? this.pendingDoc : null
@@ -1365,6 +1425,7 @@ export class LobbyEngineCore implements EngineCore {
         groups: p.create ? new Set(diffGroups(el, undefined).groups) : new Set(p.groups),
         el: clone(el),
         create: p.create,
+        ...(p.create ? {} : { ref: this.base(id) }),
       })
       if (!forced && this.inflight.length >= MAX_IN_FLIGHT_PUSHES) break
     }
@@ -1374,7 +1435,7 @@ export class LobbyEngineCore implements EngineCore {
 
   private sendPush(
     ops: Op[],
-    sent: Map<string, { groups: Set<GroupKey>; el: SceneElement; create: boolean }>,
+    sent: Map<string, Sent>,
     forced: boolean,
     doc: Record<string, unknown> | null = null,
   ): void {

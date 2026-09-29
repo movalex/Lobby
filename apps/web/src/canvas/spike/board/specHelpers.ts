@@ -70,19 +70,25 @@ export function createSpecHelpers(port: LobbyCanvasPort) {
       X.LinearElementEditor.movePoints(a, fakeScene(map), new Map([[idx, { point: local }]]))
       port.transact('spec.dragPoint', (tx) => tx.update(id, pathOf(a)))
     },
-    /** An elbow arrow's segment `index` dragged to scene `x` (a vertical segment), as one edit. */
-    dragSegment(id: string, index: number, x: number): void {
+    /** An elbow arrow's segment `index` dragged to scene `x` (a vertical segment) or `y` (a horizontal one), as one edit. */
+    dragSegment(id: string, index: number, x: number, y = 0): void {
       const map = copyScene(port)
-      X.LinearElementEditor.moveFixedSegment({ elementId: id }, index, x, 0, fakeScene(map))
+      X.LinearElementEditor.moveFixedSegment({ elementId: id }, index, x, y, fakeScene(map))
       port.transact('spec.dragSegment', (tx) => tx.update(id, pathOf(map.get(id))))
     },
     /** Routes an elbow arrow (Excalidraw's router) and fixes its segment `index` at scene `x`, as one edit. */
-    routeElbow(id: string, fixAt?: { index: number; x: number }): void {
+    routeElbow(id: string, fixAt?: { index: number; x: number; y?: number }): void {
       const map = copyScene(port)
       const a = map.get(id)
       Object.assign(a, X.updateElbowArrowPoints(a, map, { points: a.points }, {}))
       if (fixAt)
-        X.LinearElementEditor.moveFixedSegment({ elementId: id }, fixAt.index, fixAt.x, 0, fakeScene(map))
+        X.LinearElementEditor.moveFixedSegment(
+          { elementId: id },
+          fixAt.index,
+          fixAt.x,
+          fixAt.y ?? 0,
+          fakeScene(map),
+        )
       port.transact('spec.routeElbow', (tx) => tx.update(id, pathOf(map.get(id))))
     },
     /**

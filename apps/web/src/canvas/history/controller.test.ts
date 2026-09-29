@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { bump } from '../sync/headless/scene.ts'
-import { note, rect } from '../sync/testing/elements.ts'
+import { note, rect, text } from '../sync/testing/elements.ts'
 import { stored } from '../sync/testing/fakeRoom.ts'
 import { createHarness, type TestClient } from '../sync/testing/harness.ts'
 import { UndoController } from './controller.ts'
@@ -124,5 +124,64 @@ describe('undo on the engine (§2.8)', () => {
     h.settle()
     expect(a.get('M')?.y).toBe(99)
     expect(a.get('N')?.x).toBe(0)
+  })
+
+  it('B3 L6 (4): B moves a note with its label while A types in it; the label layout is not recorded, the undo keeps nothing', async () => {
+    const h = createHarness({
+      seed: [
+        stored(note('n1', 'a0', { boundElements: [{ id: 'n1.t', type: 'text' }] })),
+        stored(text('n1.t', 'a1', { containerId: 'n1', x: 20, y: 80 })),
+      ],
+    })
+    const a = h.client('alice')
+    const b = h.client('bob')
+    h.settle()
+    a.core.leaseConnect(() => {}).send({ type: 'lease.acquire', req: 1, id: 'n1' })
+    h.settle()
+    const ub = undoFor(b)
+    // B's drag moves the note and (locally) its label; the label's layout is lease-gated: the core resets
+    // it. In the browser the step boundary (CanvasPort.transact) comes BEFORE the core's scan (Excalidraw's
+    // onChange runs after React's render), so the step is recorded from the scene first
+    const m = (b.scene as unknown as { map: Map<string, never> }).map
+    m.set('n1', bump(m.get('n1') as never, { x: 70, y: 45 }) as never)
+    m.set('n1.t', bump(m.get('n1.t') as never, { x: 90, y: 125 }) as never)
+    ub.ctl.boundary()
+    b.gesture() // the core's scan
+    h.settle()
+    // A, the holder, re-lays the label out on the note's new position
+    a.change('n1.t', { x: 90.5, y: 125 }, { editingTextElementId: 'n1.t' })
+    h.settle()
+    a.gesture()
+    h.settle()
+    const r = ub.ctl.undo()
+    expect(r?.kept).toBe(0)
+    expect(r?.result.skips.filter((s) => !s.silent)).toEqual([])
+    h.settle()
+    expect(b.get('n1')?.x).toBe(0)
+    expect(h.room.elements.get('n1')?.x).toBe(0)
+    expect(h.room.elements.get('n1.t')?.x).toBe(90.5)
+    expect(await b.hash()).toBe(await h.roomHash())
+  })
+
+  it('B3 L6 (3f): an edit made offline is undoable after the reconnect (the stacks survive a welcome of the same epoch)', async () => {
+    const h = createHarness({ seed: [stored(rect('N', 'a0'))] })
+    const a = h.client('alice')
+    const b = h.client('bob')
+    h.settle()
+    const ua = undoFor(a)
+    h.room.cut(a.transport)
+    h.settle()
+    ua.act('N', { x: 300 })
+    b.change('N', { strokeColor: '#ff0000' })
+    h.clock.advance(2_000)
+    ;(a.transport as unknown as { reopen(): void }).reopen()
+    h.settle()
+    expect(h.room.elements.get('N')?.x).toBe(300)
+    expect(ua.ctl.history.undoSize).toBe(1)
+    expect(ua.ctl.undo()?.kept).toBe(0)
+    h.settle()
+    expect(h.room.elements.get('N')?.x).toBe(0)
+    expect(h.room.elements.get('N')?.strokeColor).toBe('#ff0000')
+    expect(await a.hash()).toBe(await h.roomHash())
   })
 })

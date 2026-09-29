@@ -9,6 +9,7 @@
  * undo's actions; then the installers; then the socket connects.
  */
 import type { TicketResponse } from '@draftroom/contracts'
+import * as ExcalidrawElementNs from '@excalidraw/element'
 import { CaptureUpdateAction } from '@excalidraw/excalidraw'
 import type { ExcalidrawImperativeAPI } from '@excalidraw/excalidraw/types'
 import { api as apiClient } from '../../../api/client.ts'
@@ -194,12 +195,14 @@ export class BoardSession {
           } else if (e.state === 'closed' && this.snap.phase === 'ready') this.set({ phase: 'offline' })
         } else if (e.kind === 'message' && e.message.type === 'roster')
           this.set({ people: this.core.roster().size })
+        else if (e.kind === 'message' && e.message.type === 'ack')
+          this.logEvent({ kind: 'ack', id: String(e.message.seq), detail: String(e.message.clock) })
         else if (e.kind === 'reject') {
           this.logEvent({ kind: 'reject', id: e.id, detail: e.code })
           this.toast(rejectText(e.code, e.id, this.core))
         } else if (e.kind === 'refit') {
           this.logEvent({ kind: 'refit', id: e.id, detail: null })
-          this.refit(e.id)
+          this.refit(e.id, e.dx, e.dy)
         }
       }),
     )
@@ -221,21 +224,27 @@ export class BoardSession {
     for (const l of [...this.listeners]) l()
   }
 
-  /** rejects, refits (an ack's fitDropped) and editor notices, in order, for the specs (ids and codes, no text) */
+  /**
+   * Acks (push seq → commit clock: which write committed first), rejects, refits (an ack's fitDropped) and
+   * editor notices, in order, for the specs (ids, codes and clocks, never text)
+   */
   readonly eventLog: {
-    kind: 'reject' | 'refit' | 'notice'
+    kind: 'ack' | 'reject' | 'refit' | 'notice' | 'undo'
     id: string | null
     detail: string | null
+    /** a running number (the log keeps the last 5000 entries; read "since n", never by position) */
+    n: number
     at: number
   }[] = []
+  private eventSeq = 0
 
   private logEvent(e: {
-    kind: 'reject' | 'refit' | 'notice'
+    kind: 'ack' | 'reject' | 'refit' | 'notice' | 'undo'
     id: string | null
     detail: string | null
   }): void {
-    this.eventLog.push({ ...e, at: Date.now() })
-    if (this.eventLog.length > 1000) this.eventLog.splice(0, this.eventLog.length - 1000)
+    this.eventLog.push({ ...e, n: ++this.eventSeq, at: Date.now() })
+    if (this.eventLog.length > 5000) this.eventLog.splice(0, this.eventLog.length - 5000)
   }
 
   /** every toast shown, in order (the specs read it: the screen keeps only the last few, for 5 s) */
@@ -463,15 +472,58 @@ export class BoardSession {
 
   runUndo(dir: 'undo' | 'redo'): void {
     const out = dir === 'undo' ? this.undo?.undo() : this.undo?.redo()
+    if (out)
+      this.logEvent({
+        kind: 'undo',
+        id: dir,
+        detail: JSON.stringify(
+          out.result.skips.map((k) => ({ id: k.id, what: k.what, reason: k.reason, silent: k.silent })),
+        ),
+      })
     if (!out || out.kept === 0) return
     const who = out.keptBy ? ` — ${out.keptBy} edited it since` : ' — someone edited it since'
     this.toast(`${out.kept} change${out.kept === 1 ? '' : 's'} kept${who}`)
   }
 
-  /** The holder re-fits after a dropped fit (§2.9.4 rule 4): Excalidraw's editor re-runs its layout. */
-  private refit(_id: string): void {
+  /**
+   * The holder re-fits after a dropped fit (§2.9.4 rule 4). A container: Excalidraw's editor re-runs its
+   * layout on the container as it is now. A leased free text (`dx`/`dy` given): the dropped fit's own
+   * shift (a centred text grows around its centre) is re-applied on the server's position, with
+   * Excalidraw's follow of the arrows bound to it (derived, held by the core), after the core has
+   * installed the server's copy (B3 L10 5).
+   */
+  private refit(id: string, dx?: number, dy?: number): void {
+    if (dx !== undefined || dy !== undefined) {
+      if (dx || dy) setTimeout(() => this.shiftFreeText(id, dx ?? 0, dy ?? 0), 0)
+      return
+    }
     const ta = this.input.editorLease?.textarea()
     if (ta && this.input.editorLease?.isWritable(ta)) ta.dispatchEvent(new Event('input', { bubbles: true }))
+  }
+
+  private shiftFreeText(id: string, dx: number, dy: number): void {
+    const api = this.api
+    if (!api) return
+    const els = api.getSceneElements() as unknown as SceneElement[]
+    // biome-ignore lint/suspicious/noExplicitAny: Excalidraw's element helpers work on plain copies here
+    const map = new Map<string, any>(els.map((e) => [e.id, structuredClone(e)]))
+    const t = map.get(id)
+    if (!t || t.isDeleted) return
+    const scene = {
+      // biome-ignore lint/suspicious/noExplicitAny: see above
+      mutateElement: (el: any, u: any, o?: any) => ExcalidrawElementLib.mutateElement(el, map, u, o),
+      getNonDeletedElementsMap: () => map,
+      getElementsMapIncludingDeleted: () => map,
+      getNonDeletedElements: () => [...map.values()],
+      triggerUpdate: () => {},
+    }
+    ExcalidrawElementLib.mutateElement(t, map, { x: t.x + dx, y: t.y + dy })
+    ExcalidrawElementLib.updateBoundElements(t, scene as never)
+    const next = els.map((e) => {
+      const c = map.get(e.id)
+      return c && c.version !== e.version ? c : e
+    })
+    api.updateScene({ elements: next as never, captureUpdate: CaptureUpdateAction.NEVER })
   }
 
   dispose(): void {
@@ -481,6 +533,9 @@ export class BoardSession {
     this.store?.release()
   }
 }
+
+// biome-ignore lint/suspicious/noExplicitAny: Excalidraw's element helpers, typed loosely on purpose
+const ExcalidrawElementLib = ExcalidrawElementNs as any
 
 function rejectText(code: string, id: string, core: LobbyEngineCore): string {
   if (code === 'LEASED') {

@@ -162,9 +162,73 @@ export async function converge(r: Room, bs: readonly BrowserProcess[] = r.browse
   const report = await harness.converged(r.stack, r.boardId, bs, { horizonAtStart, timeoutMs: 20_000 })
   const inv = harness.checkInvariants(report.snapshot)
   expect(report.horizonMoved, 'no compaction inside the check window').toBe(false)
-  expect(report.ok, `hashes ${JSON.stringify(report.hashes)} vs ${report.snapshot.hash}`).toBe(true)
+  if (!report.ok) {
+    // say which elements and fields differ (ids, field names and geometry numbers; test data only)
+    const diffs: Record<string, unknown> = {}
+    for (const b of bs)
+      if (report.hashes[b.name] !== report.snapshot.hash)
+        diffs[b.name] = await divergence(
+          b.page,
+          report.snapshot.elements as unknown as Record<string, unknown>[],
+        )
+    expect(
+      report.ok,
+      `hashes ${JSON.stringify(report.hashes)} vs ${report.snapshot.hash}; ${JSON.stringify(diffs)}`,
+    ).toBe(true)
+  }
   expect(inv.violations, 'invariants').toEqual([])
   return report
+}
+
+/** How a page's engine map differs from the snapshot: per element id, the differing fields (both values). */
+export async function divergence(
+  page: Page,
+  snapshot: readonly Record<string, unknown>[],
+): Promise<Record<string, Record<string, [unknown, unknown]>>> {
+  const mine = await board(page, (b) =>
+    [...(b.core.elements() as Map<string, Record<string, unknown>>).values()].map((e) =>
+      JSON.parse(JSON.stringify(e)),
+    ),
+  )
+  const by = new Map(mine.map((e: Record<string, unknown>) => [e.id as string, e]))
+  const out: Record<string, Record<string, [unknown, unknown]>> = {}
+  const ids = new Set([...by.keys(), ...snapshot.map((e) => e.id as string)])
+  for (const id of ids) {
+    const a = by.get(id) ?? {}
+    const s = snapshot.find((e) => e.id === id) ?? {}
+    for (const k of new Set([...Object.keys(a), ...Object.keys(s)])) {
+      if (k === 'status') continue
+      if (JSON.stringify(a[k]) !== JSON.stringify(s[k])) {
+        out[id] ??= {}
+        ;(out[id] as Record<string, [unknown, unknown]>)[k] = [a[k], s[k]]
+      }
+    }
+  }
+  // the core's bookkeeping for the diverging ids (a debugging aid: private fields, read at runtime)
+  const state = await board(
+    page,
+    (b, ids: string[]) => {
+      const c = b.core
+      return Object.fromEntries(
+        ids.map((id) => [
+          id,
+          {
+            type: c.current?.get(id)?.type,
+            tracked: c.tracked?.get(id)
+              ? { ...c.tracked.get(id), dirty: [...c.tracked.get(id).dirty] }
+              : null,
+            inflight: c.inflight?.some((p: { sent: Map<string, unknown> }) => p.sent.has(id)) ?? null,
+            held: c.held?.get(id) ?? null,
+            known: c.known?.get(id) ?? null,
+            editingLabel: c.editingLabel ?? null,
+          },
+        ]),
+      )
+    },
+    Object.keys(out),
+  )
+  for (const [id, s] of Object.entries(state)) (out[id] as Record<string, unknown>).__core = [s, null]
+  return out
 }
 
 /** A client (viewport) point at the centre of an element. */
