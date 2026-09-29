@@ -799,7 +799,7 @@ export class LobbyEngineCore implements EngineCore {
   private rebuild(id: string): SceneElement | undefined {
     const conf = this.confirmedMap.get(id)
     const local = this.current.get(id)
-    if (!local) return conf
+    if (!local) return conf ? clone(conf) : undefined
     const t = this.tracked.get(id)
     if (!conf) return t?.isNew || this.inflightHas(id) ? local : undefined
     const groups = new Set<GroupKey>([...(t?.dirty ?? []), ...this.inflightGroups(id)])
@@ -814,7 +814,7 @@ export class LobbyEngineCore implements EngineCore {
     }
     if (this.held.has(id))
       groups.add(id === this.editingLabel ? 'layout' : local.type === 'arrow' ? 'path' : 'layout')
-    if (groups.size === 0) return conf
+    if (groups.size === 0) return clone(conf)
     const out = copyGroups(conf, local, groups) as Record<string, unknown>
     out.version = Math.max(local.version, conf.version)
     out.versionNonce = local.versionNonce
@@ -866,7 +866,7 @@ export class LobbyEngineCore implements EngineCore {
       if (seen.has(id) || this.vanish.has(id)) continue
       before.set(id, undefined)
       touched.push(id)
-      put(id, el)
+      put(id, clone(el))
     }
     this.vanish.clear()
     if (touched.length === 0) return

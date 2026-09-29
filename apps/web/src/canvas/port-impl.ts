@@ -218,7 +218,8 @@ export function createCanvasPort(deps: PortDeps): LobbyCanvasPort {
         const w = Math.max(1, x2 - x1)
         const h = Math.max(1, y2 - y1)
         // Excalidraw clamps below 0.1 (getNormalizedZoom); Lobby's own sub-0.1 fit is wave 3b (§4.2)
-        const zoom = Math.max(0.1, Math.min(4, Math.min(s.width / w, s.height / h) * 0.9))
+        // never above 100% (a fit of a few elements is not a magnifier), a margin for the chrome
+        const zoom = Math.max(0.1, Math.min(1, Math.min(s.width / w, s.height / h) * 0.8))
         api.updateScene({
           appState: {
             zoom: { value: zoom as AppState['zoom']['value'] },

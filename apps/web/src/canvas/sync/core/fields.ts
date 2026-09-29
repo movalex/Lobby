@@ -159,7 +159,8 @@ export function boundPatch(
  * Server-owned fields stay `dst`'s.
  */
 export function copyGroups(dst: SceneElement, src: SceneElement, groups: Iterable<GroupKey>): SceneElement {
-  const out: Record<string, unknown> = { ...dst }
+  // a deep copy: the result goes into the scene, and Excalidraw mutates scene elements in place
+  const out: Record<string, unknown> = structuredClone(dst) as Record<string, unknown>
   const kind = kindOrNull(src) ?? kindOrNull(dst)
   let lobby: Record<string, unknown> | null = null
   for (const g of groups) {

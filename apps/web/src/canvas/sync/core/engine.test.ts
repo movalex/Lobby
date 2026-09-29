@@ -515,3 +515,34 @@ describe('engine core: the board document (O5 CR: doc() and setDoc())', () => {
     expect(v.core.doc().has('tagDef:y')).toBe(false)
   })
 })
+
+describe('engine core: Excalidraw mutates scene elements in place (§2.5.1: confirmed is a clone)', () => {
+  it('an in-place drag of a frame and its child (mutateElement) is pushed, and the server copy is untouched', async () => {
+    const h = createHarness({
+      seed: [stored(rect('f', 'a0', { width: 400 })), stored(rect('k', 'a1', { x: 20 }))],
+    })
+    const a = h.client('alice')
+    h.settle()
+    const drag = { dragging: true, selectedElementIds: ['f'] }
+    // what dragSelectedElements does: the SAME objects, x and version and versionNonce bumped in place
+    for (let s = 1; s <= 3; s++) {
+      for (const id of ['f', 'k']) {
+        const el = a.scene.map.get(id) as unknown as { x: number; version: number; versionNonce: number }
+        el.x += 10
+        el.version += 1
+        el.versionNonce = 1000 + s
+      }
+      a.gesture(drag)
+    }
+    expect(a.core.confirmed('k')?.x).toBe(20) // the server copy did not move with the scene object
+    a.gesture()
+    h.settle()
+    expect(
+      ops(a)
+        .map((o) => (o.k === 'p' ? o.id : o.el.id))
+        .sort(),
+    ).toEqual(['f', 'k'])
+    expect(h.room.elements.get('k')?.x).toBe(50)
+    expect(await a.hash()).toBe(await h.roomHash())
+  })
+})
