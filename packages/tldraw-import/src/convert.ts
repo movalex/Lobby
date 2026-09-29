@@ -324,6 +324,52 @@ function roughSize(s: TlRecord): { w: number; h: number } {
   }
 }
 
+/** The rough bounds of a page's root shapes (null for an empty page), as the page offsets measure them. */
+export function pageBounds(
+  snap: Snapshot,
+  pageId: string,
+): { minX: number; minY: number; maxX: number } | null {
+  const legacyIds: Record<string, string> = {}
+  let minX = Number.POSITIVE_INFINITY
+  let minY = Number.POSITIVE_INFINITY
+  let maxX = Number.NEGATIVE_INFINITY
+  for (const s of snap.children.get(pageId) ?? []) {
+    const n = resolveNode(snap, s.id, legacyIds)
+    if (!n) continue
+    const sz = roughSize(s)
+    for (const [x, y] of [
+      [0, 0],
+      [sz.w, 0],
+      [0, sz.h],
+      [sz.w, sz.h],
+    ] as const) {
+      const q = apply(n.m, x, y)
+      minX = Math.min(minX, q.x)
+      maxX = Math.max(maxX, q.x)
+      minY = Math.min(minY, q.y)
+    }
+  }
+  return minX === Number.POSITIVE_INFINITY ? null : { minX, minY, maxX }
+}
+
+/**
+ * The offset of a page that has none yet (created on R0 during a rollback, §5.9 b): to the right of the
+ * board's current bounds (`boardRight`, top at `boardTop`), with the usual gap.
+ */
+export function offsetForNewPage(
+  snap: Snapshot,
+  pageId: string,
+  boardRight: number,
+  boardTop: number,
+  pageGap = 800,
+): LegacyPage {
+  const b = pageBounds(snap, pageId)
+  const index = Math.max(0, snap.pageOrder.indexOf(pageId))
+  const name = str(snap.pages.get(pageId)?.name).slice(0, 200)
+  if (!b || !Number.isFinite(boardRight)) return { dx: 0, dy: 0, index, name }
+  return { dx: round2(boardRight + pageGap - b.minX), dy: round2(boardTop - b.minY), index, name }
+}
+
 /** The frozen offsets of every page: page 1 stays put, each later page goes to the right of the ones before. */
 export function computeLegacyPages(snap: Snapshot, pageGap = 800): LegacyPages {
   const legacyIds: Record<string, string> = {}
@@ -1344,7 +1390,7 @@ export interface ConvertResult {
 }
 
 /** Paint order: pages in order, children by (index, id), depth first; orphans at the end of the first page. */
-function paintOrder(snap: Snapshot): string[] {
+export function paintOrder(snap: Snapshot): string[] {
   const out: string[] = []
   const seen = new Set<string>()
   const visit = (s: TlRecord, depth: number) => {

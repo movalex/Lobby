@@ -27,10 +27,14 @@ export {
   type LocalResult,
   lossyCounts,
   normalizeFixedPoint,
+  offsetForNewPage,
+  pageBounds,
+  paintOrder,
   type Snapshot,
 } from './convert.ts'
 export { convertDeleted, type DeletedConversion, type LbDeletedRow } from './deleted.ts'
 export { currentSchema, type MigrateResult, migrateRecords } from './migrate.ts'
+export { approxResnap, refitLabel } from './relayout.ts'
 export { plainLines } from './rich-text.ts'
 export * from './types.ts'
 
