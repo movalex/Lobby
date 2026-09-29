@@ -351,7 +351,12 @@ export class ElementRoom {
     if (msg.type === 'hello') return this.hello(s, msg.since, msg.epoch)
     if (msg.type === 'ping')
       return s.out.send(JSON.stringify({ type: 'pong', ...(msg.n !== undefined ? { n: msg.n } : {}) }))
-    if (!s.welcomed) return this.terminal(s, 'INVALID_MESSAGE')
+    if (!s.welcomed) {
+      // presence before hello is dropped (a client may start its pointer stream early); a push or a lease
+      // message before hello is malformed: the session has no clock yet
+      if (msg.type === 'presence') return
+      return this.terminal(s, 'INVALID_MESSAGE')
+    }
     if (msg.type === 'presence') {
       const ok = this.presence.input(
         s.identity.sid,
