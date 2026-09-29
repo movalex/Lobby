@@ -119,7 +119,8 @@ test('probe: rAF rate while panning the spike board, by camera method', async ()
         }
       }
       const self = new Map<number, number>()
-      p.samples.forEach((id, i) => self.set(id, (self.get(id) ?? 0) + (p.timeDeltas[i] ?? 0) / 1000))
+      for (const [i, id] of p.samples.entries())
+        self.set(id, (self.get(id) ?? 0) + (p.timeDeltas[i] ?? 0) / 1000)
       const byUrl = new Map<string, number>()
       const byFn = new Map<string, number>()
       for (const n of p.nodes) {
