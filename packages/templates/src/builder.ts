@@ -533,8 +533,3 @@ function exitPoint(
   t = Math.max(0, t)
   return { x: inside.x + dx * t, y: inside.y + dy * t }
 }
-
-/** The page-space bounds of the plan's top-level nodes (frames and page-level arrows). */
-export function planTopLevel(plan: BoardPlan): PlanNode[] {
-  return plan.nodes.filter((n) => n.parent === null)
-}
