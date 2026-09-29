@@ -7,6 +7,7 @@
 
 import type { ClerkClient } from '@clerk/backend'
 import type { EmailInviteFallbackReason } from '@draftroom/contracts'
+import { normalizeEmail } from '../../auth/creators.ts'
 
 export interface ClerkDirectory {
   /** Clerk user ids that have `email` (lowercased) as a VERIFIED address. */
@@ -16,11 +17,11 @@ export interface ClerkDirectory {
 }
 
 /** A Clerk call slower than this counts as failed (the inviter gets the link instead). */
-const CLERK_TIMEOUT_MS = 10_000
+export const CLERK_TIMEOUT_MS = 10_000
 /** More accounts than this for one address would be odd; only the first few are considered. */
 const MAX_MATCHES = 10
 
-function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+export function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined
   const timeout = new Promise<never>((_, reject) => {
     timer = setTimeout(
@@ -46,11 +47,13 @@ export function createClerkDirectory(keys: { secretKey: string; publishableKey: 
         clerk.users.getUserList({ emailAddress: [email], limit: MAX_MATCHES }),
         CLERK_TIMEOUT_MS,
       )
-      // Checked here as well: only a verified address proves the account is that person's.
+      // Checked here as well: only a verified address proves the account is that person's. The same
+      // normal form as the creator rule and the invitation lock (normalizeEmail: ASCII-only
+      // lowercasing, never a "+clerk_test" address; docs/DOMAIN-ACCESS-CONTRACTS.md §3.1).
       return data
         .filter((u) =>
           u.emailAddresses.some(
-            (a) => a.emailAddress.toLowerCase() === email && a.verification?.status === 'verified',
+            (a) => normalizeEmail(a.emailAddress) === email && a.verification?.status === 'verified',
           ),
         )
         .map((u) => u.id)

@@ -95,6 +95,12 @@ const CLERK_KEYS = { secretKey: 'sk_test_fake_secret_0123456789', publishableKey
 const PEOPLE = ['alice', 'bob', 'carol', 'dave', 'erin', 'frank'] as const
 type Person = (typeof PEOPLE)[number]
 const clerkIdOf = (p: Person) => `user_clerk_${p}`
+/**
+ * Domain access (docs/DOMAIN-ACCESS-CONTRACTS.md §11.3): each person's verified sign-in address.
+ * alice works at a creator domain; everyone else is a client.
+ */
+const clerkEmailOf = (p: Person) =>
+  p === 'alice' ? 'lobby-test-alice@darkburn.com' : `${p}@client.example.test`
 
 interface ClerkWorld {
   api: TestApi
@@ -125,8 +131,12 @@ async function clerkWorld(): Promise<ClerkWorld> {
             return { sub: clerkIdOf(p) }
           },
           profile: async (sub) => {
-            const p = sub.replace('user_clerk_', '')
-            return { name: p.charAt(0).toUpperCase() + p.slice(1), avatarUrl: null }
+            const p = sub.replace('user_clerk_', '') as Person
+            return {
+              name: p.charAt(0).toUpperCase() + p.slice(1),
+              avatarUrl: null,
+              emails: [{ email: clerkEmailOf(p), isPrimary: true, strategy: 'email_code' }],
+            }
           },
         },
       }),

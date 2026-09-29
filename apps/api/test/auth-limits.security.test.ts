@@ -154,7 +154,7 @@ describe('Clerk exchange (fake verifier)', () => {
               if (!m) throw new Error('invalid')
               return { sub: `user_${m[1]}` }
             },
-            profile: async (sub) => ({ name: `Name of ${sub}`, avatarUrl: null }),
+            profile: async (sub) => ({ name: `Name of ${sub}`, avatarUrl: null, emails: [] }),
           },
         }),
       },
