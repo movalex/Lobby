@@ -7,6 +7,10 @@ import { PROFILES } from './profiles.ts'
 import { boardsFromSpecs, runInThread, type WorkerJob } from './runner.ts'
 
 const job = workerData as WorkerJob
+let stop = false
+parentPort?.on('message', (m: { type?: string }) => {
+  if (m?.type === 'stop') stop = true
+})
 try {
   const profile = PROFILES[job.profileName]
   if (!profile) throw new Error(`unknown profile ${job.profileName}`)
@@ -24,10 +28,12 @@ try {
       durationMs: job.durationMs,
       probeSids: new Map(job.probeSids),
       reconnectAfterMs: job.reconnectAfterMs,
+      stopped: () => stop,
     },
     createClient,
   )
   parentPort?.postMessage(result)
+  parentPort?.close()
 } catch (e) {
   parentPort?.postMessage({ error: e instanceof Error ? e.message : String(e) })
 }

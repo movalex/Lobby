@@ -15,7 +15,7 @@ import { type Profile, sessionCount } from './profiles.ts'
 import { buildReport, type FinalCheck, type HostSample, type RunReport, reportMarkdown } from './report.ts'
 import { runInThread, runInWorkers, type ThreadResult } from './runner.ts'
 import { openNodeSocket, seedElements } from './seed.ts'
-import type { ClientFactory, SessionPlan } from './session.ts'
+import type { ClientFactory } from './session.ts'
 import { loadUser, mintTicket, type RunSecrets } from './tickets.ts'
 
 export interface LoadRunOptions {
@@ -243,7 +243,16 @@ export async function runLoad(o: LoadRunOptions): Promise<RunReport> {
   let results: ThreadResult[]
   if (o.threads > 0 && !o.fake)
     results = await runInWorkers(
-      { ...run, profileName: profile.name, probeSids: [...probes.entries()], plans: plans as SessionPlan[] },
+      {
+        profileName: profile.name,
+        plans,
+        syncHttpUrl: o.syncHttpUrl,
+        t0,
+        durationMs: profile.durationMs,
+        probeSids: [...probes.entries()],
+        reconnectAfterMs: 5_000,
+        stopped: o.stopped,
+      },
       o.threads,
     )
   else results = [await runInThread(run, createClient)]

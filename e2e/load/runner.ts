@@ -70,26 +70,49 @@ export interface WorkerJob {
   readonly boardSpecs?: readonly BoardSpec[]
 }
 
-/** Splits the plans round-robin over `threads` workers (worker.ts) and merges their results. */
+/**
+ * Splits the plans round-robin over `threads` workers (worker.ts) and merges their results. Only the
+ * WorkerJob fields cross into a worker (a function or a board map would not clone, or clone for nothing);
+ * `stopped` is polled here and sent to the workers as a stop message.
+ */
 export async function runInWorkers(
-  job: Omit<WorkerJob, 'plans'> & { plans: readonly SessionPlan[] },
+  job: WorkerJob & { readonly stopped?: () => boolean },
   threads: number,
 ): Promise<ThreadResult[]> {
   const parts: SessionPlan[][] = Array.from({ length: threads }, () => [])
   for (const [i, p] of job.plans.entries()) parts[i % threads]?.push(p)
-  return Promise.all(
-    parts.map(
-      (plans) =>
-        new Promise<ThreadResult>((resolve, reject) => {
-          const w = new Worker(new URL('./worker.ts', import.meta.url), { workerData: { ...job, plans } })
-          w.once('message', (m: ThreadResult | { error: string }) =>
-            'error' in m ? reject(new Error(m.error)) : resolve(m),
-          )
-          w.once('error', reject)
-          w.once('exit', (code) => {
-            if (code !== 0) reject(new Error(`load worker exited with ${code}`))
-          })
-        }),
-    ),
-  )
+  const base: Omit<WorkerJob, 'plans'> = {
+    profileName: job.profileName,
+    syncHttpUrl: job.syncHttpUrl,
+    t0: job.t0,
+    durationMs: job.durationMs,
+    probeSids: [...job.probeSids],
+    reconnectAfterMs: job.reconnectAfterMs,
+    fileIds: job.fileIds,
+    boardSpecs: job.boardSpecs,
+  }
+  const workers: Worker[] = []
+  const poll = setInterval(() => {
+    if (job.stopped?.()) for (const w of workers) w.postMessage({ type: 'stop' })
+  }, 500)
+  try {
+    return await Promise.all(
+      parts.map(
+        (plans) =>
+          new Promise<ThreadResult>((resolve, reject) => {
+            const w = new Worker(new URL('./worker.ts', import.meta.url), { workerData: { ...base, plans } })
+            workers.push(w)
+            w.once('message', (m: ThreadResult | { error: string }) =>
+              'error' in m ? reject(new Error(m.error)) : resolve(m),
+            )
+            w.once('error', reject)
+            w.once('exit', (code) => {
+              if (code !== 0) reject(new Error(`load worker exited with ${code}`))
+            })
+          }),
+      ),
+    )
+  } finally {
+    clearInterval(poll)
+  }
 }

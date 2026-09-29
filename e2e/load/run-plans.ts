@@ -56,10 +56,13 @@ let results: ThreadResult[]
 if (threads > 0)
   results = await runInWorkers(
     {
-      ...run,
       profileName: profile.name,
-      probeSids: job.probeSids,
       plans: job.plans,
+      syncHttpUrl: job.syncHttpUrl,
+      t0,
+      durationMs: job.durationMs,
+      probeSids: job.probeSids,
+      reconnectAfterMs: 5_000,
       boardSpecs: job.boardSpecs,
     },
     threads,
