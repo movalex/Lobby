@@ -12,15 +12,15 @@
 //   L4  A closes the editor             → the badge is gone on B and C within 1 s; B can now edit N
 //   L5  A and B press Enter on the same UNLABELLED note at once → exactly one editor; one label; C sees one badge
 //
-// Run: SPIKE_B_PORT_BASE=<base> pnpm --filter @draftroom/e2e spike-b -- b3-l1-l5   (SPIKE_B3_REPS, default 20)
+// Run: SPIKE_B_PORT_BASE=<base> pnpm --filter @draftroom/e2e spike-b b3-l1-l5   (SPIKE_B3_REPS, default 20)
 import { expect, type Page, test } from '@playwright/test'
 import { harness } from '../support/harness.ts'
 import {
   allSaved,
   board,
-  centre,
   closeEditor,
   converge,
+  type EditPath,
   editorState,
   everywhere,
   focusCanvas,
@@ -32,9 +32,8 @@ import {
   REPS,
   type Room,
   room,
-  screenOf,
-  show,
   toasts,
+  tryPath,
   waitEditor,
   waitSaved,
   wall,
@@ -95,68 +94,6 @@ test('L1: "A is typing" on B and C within 300 ms (p95 over 20)', async () => {
   await converge(r)
 })
 
-type Path = 'enter' | 'dbl-body' | 'dbl-label' | 'type' | 'p5' | 'double-tap' | 'text-tool' | 'arrow-dbl'
-
-async function tryPath(
-  path: Path,
-  target: { id: string; label: string | null },
-  arrowId: string,
-): Promise<void> {
-  const b = B()
-  await show(b, [target.id])
-  const body = await screenOf(
-    b,
-    await (async () => {
-      const bb = await lc(b).bounds(target.id)
-      return { x: (bb?.x ?? 0) + 18, y: (bb?.y ?? 0) + 18 }
-    })(),
-  )
-  const lab = target.label ? await centre(b, target.label) : await centre(b, target.id)
-  switch (path) {
-    case 'enter':
-      await lc(b).select([target.id])
-      await focusCanvas(b)
-      await b.keyboard.press('Enter')
-      break
-    case 'dbl-body':
-      await b.mouse.dblclick(body.x, body.y)
-      break
-    case 'dbl-label':
-      await lc(b).select([])
-      await b.mouse.dblclick(lab.x, lab.y)
-      break
-    case 'type':
-      await lc(b).select([target.id])
-      await focusCanvas(b)
-      await b.keyboard.press('q')
-      break
-    case 'p5':
-      await b.mouse.click(body.x, body.y)
-      await b.waitForTimeout(600)
-      await b.mouse.click(lab.x, lab.y)
-      break
-    case 'double-tap':
-      await b.touchscreen.tap(lab.x, lab.y)
-      await b.waitForTimeout(60)
-      await b.touchscreen.tap(lab.x, lab.y)
-      break
-    case 'text-tool':
-      await lc(b).setTool('text')
-      await b.mouse.click(lab.x, lab.y)
-      await lc(b).setTool('select')
-      break
-    case 'arrow-dbl': {
-      await show(b, [arrowId])
-      const a = await centre(b, arrowId)
-      await lc(b).select([])
-      await b.mouse.dblclick(a.x, a.y)
-      break
-    }
-  }
-  // keys that must never land anywhere
-  await b.keyboard.type('zz')
-}
-
 test('L2: every editor-open path on a note A holds: no editor on B, the toast, 0 ops', async () => {
   const at = spot()
   const n = await note(A(), r.browsers, at, 'held by A')
@@ -172,7 +109,7 @@ test('L2: every editor-open path on a note A holds: no editor on B, the toast, 0
   await everywhere(r.browsers, arrowId)
   await allSaved(r.browsers)
   const rows: Record<string, unknown>[] = []
-  const paths: Path[] = [
+  const paths: EditPath[] = [
     'enter',
     'dbl-body',
     'dbl-label',
@@ -196,7 +133,7 @@ test('L2: every editor-open path on a note A holds: no editor on B, the toast, 0
         .not.toBeNull()
       const before = await pushCount(B())
       const t0 = (await toasts(B())).length
-      await tryPath(path, n, arrowId)
+      await tryPath(B(), path, n, arrowId)
       await B().waitForTimeout(500)
       const e = await editorState(B())
       const after = await pushCount(B())

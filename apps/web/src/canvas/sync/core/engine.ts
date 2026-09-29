@@ -468,6 +468,13 @@ export class LobbyEngineCore implements EngineCore {
     return [...this.tracked.entries()].filter(([, t]) => t.dirty.size > 0 || t.isNew).map(([id]) => id)
   }
 
+  /** Elements with a change not sent yet: dirty groups, or a create that is not in a push (in flight or acknowledged). */
+  unsentIds(): string[] {
+    return [...this.tracked.entries()]
+      .filter(([id, t]) => t.dirty.size > 0 || (t.isNew && !this.inflightHas(id)))
+      .map(([id]) => id)
+  }
+
   private emit(e: CoreEvent): void {
     for (const l of [...this.eventListeners]) l(e)
   }

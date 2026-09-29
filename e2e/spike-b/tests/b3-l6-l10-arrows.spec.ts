@@ -17,7 +17,7 @@
 // Deviation (recorded in B3.md): B's and C's gestures are not pointer drags (their pointer paths are B1's
 // and the arrow acceptance tests' client copies).
 //
-// Run: SPIKE_B_PORT_BASE=<base> pnpm --filter @draftroom/e2e spike-b -- b3-l6-l10   (SPIKE_B3_ARROW_REPS, default 20)
+// Run: SPIKE_B_PORT_BASE=<base> pnpm --filter @draftroom/e2e spike-b b3-l6-l10   (SPIKE_B3_ARROW_REPS, default 20)
 import { expect, type Page, test } from '@playwright/test'
 import { GEOMETRY_TOLERANCE_PX as TOL } from '../../../packages/canvas-schema/src/limits.ts'
 import { harness } from '../support/harness.ts'

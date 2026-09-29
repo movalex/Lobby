@@ -35,6 +35,7 @@ import { IDLE_GESTURE } from '../../sync/types.ts'
 import { attachCustomTools, type CustomToolClick } from '../../tools/customTools.ts'
 import { setTool } from '../../tools/tools.ts'
 import { installAll } from '../installers.ts'
+import { createGuardMonitor } from './monitor.ts'
 import { createSpecHelpers } from './specHelpers.ts'
 
 export type BoardPhase = 'connecting' | 'ready' | 'offline' | 'no-access' | 'signed-out' | 'closed'
@@ -392,6 +393,15 @@ export class BoardSession {
     this.set({})
     // the §8.4 client timings (lobby.* performance measures, read and cleared by O3's facade)
     ;(globalThis as { LOBBY_MEASURE?: boolean }).LOBBY_MEASURE = true
+    // the editor-guard monitor the B3 specs start and read (./monitor.ts; off until started)
+    const monitor = createGuardMonitor({
+      api,
+      lease: this.lease,
+      input: this.input,
+      core: this.core,
+      root: wrapper,
+    })
+    offs.push(() => monitor.dispose())
     // spike-only debug handle (this page exists only behind the dev-auth guard): the specs' way in
     // until O3's facade (`window.lobbyCanvas`) is installed, and the probes' after it
     ;(window as unknown as { __lobbyBoard?: unknown }).__lobbyBoard = {
@@ -403,6 +413,7 @@ export class BoardSession {
       input: this.input,
       undo: this.undo,
       helpers: createSpecHelpers(port),
+      monitor,
     }
     // 7. connect
     this.core.start()

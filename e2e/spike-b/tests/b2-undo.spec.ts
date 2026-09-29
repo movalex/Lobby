@@ -19,7 +19,7 @@
 //       (binding nulled); A undoes each                     → no "change kept"; stack ≤ A's real actions
 //   U11 A deletes X by an undo; B restores X; C deletes X again; A redoes → X stays deleted
 //
-// Run: SPIKE_B_PORT_BASE=<base> pnpm --filter @draftroom/e2e spike-b -- b2-undo   (SPIKE_B2_REPS, default 3)
+// Run: SPIKE_B_PORT_BASE=<base> pnpm --filter @draftroom/e2e spike-b b2-undo   (SPIKE_B2_REPS, default 3)
 import { expect, type Page, test } from '@playwright/test'
 import { harness } from '../support/harness.ts'
 import {

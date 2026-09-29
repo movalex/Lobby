@@ -95,9 +95,11 @@ export async function room(
     roles?: Record<string, 'editor' | 'commenter' | 'viewer'>
     touch?: string[]
     viewport?: Record<string, { width: number; height: number }>
+    /** another room's stack (one stack per port base): this room's close() then leaves it running */
+    stack?: SpikeBStack
   } = {},
 ): Promise<Room> {
-  const stack = await harness.startStack()
+  const stack = o.stack ?? (await harness.startStack())
   const browsers: BrowserProcess[] = []
   for (const name of names)
     browsers.push(
@@ -122,7 +124,7 @@ export async function room(
     by,
     close: async () => {
       for (const b of browsers) await b.close().catch(() => {})
-      await stack.stop()
+      if (!o.stack) await stack.stop()
     },
   }
 }
@@ -335,4 +337,86 @@ export const wall = () => Date.now()
 export async function show(page: Page, ids: string[]): Promise<void> {
   await board(page, (b, a) => b.port.viewport.fit(a), ids)
   await page.waitForTimeout(50)
+}
+
+// ---- the editor-open paths (L2, L9, L11) -----------------------------------------------------------
+
+/** Every way the text editor opens on a note (§2.9.2): P1 Enter, P3 double-click body and label (P3b), P2
+ * type-to-edit, P5 a second click on a selected note's label, P4 a touch double-tap, the text tool, and a
+ * double-click on an arrow (its label). */
+export type EditPath =
+  | 'enter'
+  | 'dbl-body'
+  | 'dbl-label'
+  | 'type'
+  | 'p5'
+  | 'double-tap'
+  | 'text-tool'
+  | 'arrow-dbl'
+export const EDIT_PATHS: EditPath[] = [
+  'enter',
+  'dbl-body',
+  'dbl-label',
+  'type',
+  'p5',
+  'double-tap',
+  'text-tool',
+  'arrow-dbl',
+]
+
+/** Uses `path` on `target` (or on `arrowId` for 'arrow-dbl') in `page`, then types `keys` at once. */
+export async function tryPath(
+  page: Page,
+  path: EditPath,
+  target: { id: string; label: string | null },
+  arrowId: string,
+  keys = 'zz',
+): Promise<void> {
+  const b = page
+  await show(b, [target.id])
+  const bb = await lc(b).bounds(target.id)
+  const body = await screenOf(b, { x: (bb?.x ?? 0) + 18, y: (bb?.y ?? 0) + 18 })
+  const lab = target.label ? await centre(b, target.label) : await centre(b, target.id)
+  switch (path) {
+    case 'enter':
+      await lc(b).select([target.id])
+      await focusCanvas(b)
+      await b.keyboard.press('Enter')
+      break
+    case 'dbl-body':
+      await b.mouse.dblclick(body.x, body.y)
+      break
+    case 'dbl-label':
+      await lc(b).select([])
+      await b.mouse.dblclick(lab.x, lab.y)
+      break
+    case 'type':
+      await lc(b).select([target.id])
+      await focusCanvas(b)
+      await b.keyboard.press('q')
+      break
+    case 'p5':
+      await b.mouse.click(body.x, body.y)
+      await b.waitForTimeout(600)
+      await b.mouse.click(lab.x, lab.y)
+      break
+    case 'double-tap':
+      await b.touchscreen.tap(lab.x, lab.y)
+      await b.waitForTimeout(60)
+      await b.touchscreen.tap(lab.x, lab.y)
+      break
+    case 'text-tool':
+      await lc(b).setTool('text')
+      await b.mouse.click(lab.x, lab.y)
+      await lc(b).setTool('select')
+      break
+    case 'arrow-dbl': {
+      await show(b, [arrowId])
+      const a = await centre(b, arrowId)
+      await lc(b).select([])
+      await b.mouse.dblclick(a.x, a.y)
+      break
+    }
+  }
+  if (keys) await b.keyboard.type(keys)
 }

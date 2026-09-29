@@ -28,7 +28,7 @@ import {
 // Every case failed before the fix (docs/research/excalidraw/spike-b/L13-verifier-k.md). Emulated, as the
 // verifier's were: no NumLock-off numpad, BÉPO or Neo layer was physically used.
 //
-// Run: SPIKE_B_PORT_BASE=7870 pnpm --filter @draftroom/e2e spike-b -- b3-l13-keys-k   (SPIKE_REPS: default 3)
+// Run: SPIKE_B_PORT_BASE=7870 pnpm --filter @draftroom/e2e spike-b b3-l13-keys-k   (SPIKE_REPS: default 3)
 
 const N = Number(process.env.SPIKE_REPS ?? 3)
 

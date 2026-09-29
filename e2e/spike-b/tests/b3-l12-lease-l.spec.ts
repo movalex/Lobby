@@ -33,7 +33,7 @@ import {
 // The deny of L1 is delivered by `flush` (grant=manual) rather than a 150 ms timer, so the remote keystroke
 // lands before the answer every time; the verifier's timed variant is the same code path.
 //
-// Run: SPIKE_B_PORT_BASE=7870 pnpm --filter @draftroom/e2e spike-b -- b3-l12-lease-l   (SPIKE_REPS: default 20)
+// Run: SPIKE_B_PORT_BASE=7870 pnpm --filter @draftroom/e2e spike-b b3-l12-lease-l   (SPIKE_REPS: default 20)
 
 const N = Number(process.env.SPIKE_REPS ?? 20)
 
