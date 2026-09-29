@@ -43,12 +43,17 @@ export interface RetentionItem {
   reason: CheckpointReason | null
 }
 
-/** Checkpoints made before a risky operation: all kept while they are in the hourly tier. */
+/**
+ * Checkpoints made before a risky operation: all kept while they are in the hourly tier. The
+ * Excalidraw build's `engine_migration` restore point too (bridge release R0: this build prunes the
+ * automatic checkpoints the new build made, during a rollback, by the same rule).
+ */
 export const SAFETY_REASONS: ReadonlySet<string> = new Set<CheckpointReason>([
   'before_restore',
   'import',
   'before_reveal',
   'before_ai_themes',
+  'engine_migration',
 ])
 const isSafety = (item: RetentionItem) => item.reason !== null && SAFETY_REASONS.has(item.reason)
 

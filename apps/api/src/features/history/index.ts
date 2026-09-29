@@ -11,6 +11,7 @@ import {
   IMPORT_BODY_LIMIT_BYTES,
   ImportBoardQuery,
   MAX_MANUAL_CHECKPOINTS,
+  NEW_CANVAS_ARCHIVE_MESSAGE,
   RestoreDeletedInput,
   RestoreSnapshotInput,
   SNAPSHOT_ID_PATTERN,
@@ -37,15 +38,21 @@ import {
   startCheckpointTimers,
 } from './checkpoints.ts'
 import { archiveRef, filesShownOn, filesViewableBy, referencedFiles } from './files.ts'
-import { createBoardFrom, viaSync } from './new-board.ts'
+import { createBoardFrom, newCanvasBoard, viaSync } from './new-board.ts'
 import {
-  type CheckpointBody,
   checkpointBodyOf,
+  isNewCanvasRow,
+  newCanvasCheckpoint,
+  parseV1Body,
   SNAPSHOT_COLUMNS,
   SNAPSHOT_FROM,
   type SnapshotRow,
   toCheckpoint,
 } from './snapshot-rows.ts'
+
+/** Bridge release R0: the error code of an import of an archive exported from the new canvas. */
+const NEW_CANVAS_ARCHIVE_ERROR = 'NEW_CANVAS_ARCHIVE'
+
 import { snapshotBodies, snapshotStorageKey } from './snapshot-store.ts'
 import { createDeletedApi } from './sync-deleted.ts'
 
@@ -123,6 +130,7 @@ export async function registerHistory(app: FastifyInstance, ctx: FeatureContext)
     const input = parse(CreateSnapshotInput, req.body)
     const access = await requireBoardAction(db, bid, user.id, 'edit')
     await refuseGuests(user.id)
+    if (access.board.new_canvas) throw newCanvasBoard() // bridge release R0: saved on the new canvas only
     const workspaceId = access.board.workspace_id
     // Only manual checkpoints count: automatic ones are bounded by retention (checkpoints.ts).
     const { n } = await db.one<{ n: number }>(
@@ -187,14 +195,17 @@ export async function registerHistory(app: FastifyInstance, ctx: FeatureContext)
     await requireBoardCreator(workspaceId, user.id, req.routeOptions.url ?? '')
     // A new board of your own is a full copy (export-control, docs/WAVE3-CONTRACTS.md).
     await requireExportAllowed(db, access, user.id)
+    // Bridge release R0: a checkpoint made on the new canvas (a v2 body) is restored after the switch.
+    // Refused before anything else happens, and again if the body itself is not a tldraw one.
+    if (isNewCanvasRow(snapshot)) throw newCanvasCheckpoint()
     const raw = await bodies.read(snapshot.storage_key)
     if (raw === null) throw gone("This checkpoint's saved content is no longer available.")
+    const body = parseV1Body(raw)
     // The board as it is right now gets an automatic checkpoint first (unless an equal one exists), so
     // going back to an older version never loses track of where the board was. Best effort: a failure
     // is logged and the restore goes on (it never changes this board). After the read above, so
     // retention running with it can never take the content being restored.
     await checkpoints.captureQuietly(snapshot.board_id, 'before_restore', { restoredName: snapshot.name })
-    const body = JSON.parse(raw) as CheckpointBody
     const records = (body.documents ?? []).map((d) => d.state)
     const { shown, notShown } = await filesShownOn(
       db,
@@ -229,6 +240,7 @@ export async function registerHistory(app: FastifyInstance, ctx: FeatureContext)
     const workspaceId = access.board.workspace_id
     await requireBoardCreator(workspaceId, user.id, req.routeOptions.url ?? '')
     await requireExportAllowed(db, access, user.id) // a duplicate is a full copy (export-control)
+    if (access.board.new_canvas) throw newCanvasBoard() // bridge release R0: duplicated after the switch
     if (input.keepSharing && !can(access.role, 'manage_access', access.board.status))
       throw forbidden('Only the board owner can copy its sharing settings.')
     const snap = await viaSync(() => ctx.sync.snapshot(bid))
@@ -263,6 +275,7 @@ export async function registerHistory(app: FastifyInstance, ctx: FeatureContext)
     const { bid = '' } = req.params as Params
     const access = await requireBoardAction(db, bid, user.id, 'view')
     await requireExportAllowed(db, access, user.id) // export-control: 403 EXPORT_DISABLED for limited viewers
+    if (access.board.new_canvas) throw newCanvasBoard() // bridge release R0: exported after the switch
     const snap = await viaSync(() => ctx.sync.snapshot(bid))
     const records = (Array.isArray(snap.documents) ? snap.documents : []).map((d) => d.state)
     const { shown, versions } = await filesShownOn(
@@ -294,6 +307,11 @@ export async function registerHistory(app: FastifyInstance, ctx: FeatureContext)
       await requireBoardCreator(wid, user.id, req.routeOptions.url ?? '')
       const query = parse(ImportBoardQuery, req.query)
       if (query.projectId) await requireProjectInWorkspace(db, query.projectId, wid)
+      // Bridge release R0: an archive exported from the new canvas (`lobby-board`, v2) is imported after
+      // the switch; said plainly instead of "not a Lobby archive".
+      const format = (req.body as { format?: unknown } | null)?.format
+      if (format === 'lobby-board')
+        throw new ApiError(400, NEW_CANVAS_ARCHIVE_ERROR, NEW_CANVAS_ARCHIVE_MESSAGE)
       let imported: ReturnType<typeof importBoardArchive>
       try {
         imported = importBoardArchive(req.body, { targetPageId: 'page:page' as never })

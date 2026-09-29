@@ -26,6 +26,11 @@ export interface BoardRow {
   created_at: Date
   updated_at: Date
   last_opened_at: Date | null
+  /**
+   * Bridge release R0 (migration 0022): the board was born on the new canvas (Excalidraw). This build
+   * cannot open, duplicate or export it; the API says so (NEW_CANVAS_BOARD_MESSAGE).
+   */
+  new_canvas: boolean
 }
 
 const BOARD_FIELDS = [
@@ -40,6 +45,7 @@ const BOARD_FIELDS = [
   'created_at',
   'updated_at',
   'last_opened_at',
+  'new_canvas',
 ] as const satisfies readonly (keyof BoardRow)[]
 /** Board columns qualified with the `b` alias (SELECT … FROM boards b). */
 export const BOARD_COLUMNS = BOARD_FIELDS.map((f) => `b.${f}`).join(', ')

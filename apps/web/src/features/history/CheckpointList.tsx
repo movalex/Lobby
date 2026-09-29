@@ -14,6 +14,7 @@ import {
   checkpointAccessHint,
   checkpointMeta,
   checkpointTitle,
+  newCanvasNote,
   splitCheckpoints,
 } from './checkpoints-model.ts'
 
@@ -147,7 +148,11 @@ function CheckpointRow({
   }
   const title = checkpointTitle(c)
   const { busy } = actions
-  const hasActions = perms.canPreview || canRestore || perms.canDelete
+  // Bridge release R0: made on the new canvas: listed, but previewed and restored after the switch.
+  const newCanvas = newCanvasNote(c)
+  const canPreview = perms.canPreview && !newCanvas
+  const canRestoreThis = canRestore && !newCanvas
+  const hasActions = canPreview || canRestoreThis || perms.canDelete
   return (
     <li
       className="dr-history__row dr-history__row--checkpoint"
@@ -155,14 +160,20 @@ function CheckpointRow({
       data-snapshot-id={c.id}
       data-kind={c.kind}
       data-reason={c.reason ?? ''}
+      data-new-canvas={newCanvas ? '1' : undefined}
     >
       <div className="dr-history__row-text">
         <span className="dr-history__row-title">{title}</span>
         <span className="dr-history__row-meta">{checkpointMeta(c, now)}</span>
+        {newCanvas && (
+          <span className="dr-history__row-meta" data-testid="checkpoint-new-canvas">
+            {newCanvas}
+          </span>
+        )}
       </div>
       {hasActions && !confirming && (
         <div className="dr-history__row-actions">
-          {perms.canPreview && (
+          {canPreview && (
             <button
               type="button"
               className="dr-btn"
@@ -174,7 +185,7 @@ function CheckpointRow({
               Preview
             </button>
           )}
-          {canRestore && (
+          {canRestoreThis && (
             <button
               type="button"
               className="dr-btn"

@@ -33,6 +33,7 @@ import {
 import { newId, type Queryable } from '@draftroom/db'
 import type { FastifyInstance } from 'fastify'
 import { audit } from '../../audit.ts'
+import { SyncNewCanvasBoard } from '../../sync-internal.ts'
 import type { FeatureContext } from '../context.ts'
 import { planRetention, type RetentionPolicy, SAFETY_REASONS } from './retention.ts'
 import { checkpointBodyOf, SNAPSHOT_COLUMNS, type SnapshotRow, toCheckpoint } from './snapshot-rows.ts'
@@ -88,7 +89,8 @@ export const checkpointSettings: CheckpointSettings = {
 export type CaptureOutcome =
   | { status: 'saved'; checkpoint: BoardCheckpoint }
   | { status: 'unchanged' }
-  | { status: 'skipped'; why: 'missing' | 'trashed' | 'limit' }
+  /** new-canvas (bridge release R0): the board was made on the new canvas; this build cannot read it. */
+  | { status: 'skipped'; why: 'missing' | 'trashed' | 'limit' | 'new-canvas' }
 
 /** What an automatic checkpoint was made before, in its name (R2-09: two of the same reason can be told apart). */
 export interface CheckpointAbout {
@@ -132,6 +134,9 @@ export function autoCheckpointName(reason: CheckpointReason, about: CheckpointAb
       const name = about.restoredName.length > 90 ? `${about.restoredName.slice(0, 89)}…` : about.restoredName
       return `Before restoring “${name}”`
     }
+    // Bridge release R0: only the Excalidraw build makes these (right after converting a board).
+    case 'engine_migration':
+      return 'Moved to the new canvas'
   }
 }
 
@@ -251,8 +256,8 @@ export function createCheckpointService(
     reason: CheckpointReason,
     opts: CheckpointAbout,
   ): Promise<CaptureOutcome> {
-    const board = await db.maybeOne<{ workspace_id: string; status: string }>(
-      'SELECT workspace_id, status FROM boards WHERE id = $1',
+    const board = await db.maybeOne<{ workspace_id: string; status: string; new_canvas: boolean }>(
+      'SELECT workspace_id, status, new_canvas FROM boards WHERE id = $1',
       [boardId],
     )
     if (!board) return { status: 'skipped', why: 'missing' }
@@ -260,8 +265,16 @@ export function createCheckpointService(
       await forget(boardId)
       return { status: 'skipped', why: 'trashed' }
     }
+    // Bridge release R0: a board made on the new canvas is not this build's to read (its sync refuses it).
+    if (board.new_canvas) return { status: 'skipped', why: 'new-canvas' }
     const startedAt = now()
-    const snap = await ctx.sync.snapshot(boardId)
+    let snap: Awaited<ReturnType<typeof ctx.sync.snapshot>>
+    try {
+      snap = await ctx.sync.snapshot(boardId)
+    } catch (e) {
+      if (e instanceof SyncNewCanvasBoard) return { status: 'skipped', why: 'new-canvas' }
+      throw e
+    }
     const made = checkpointBodyOf(boardId, snap)
     const newest = await db.maybeOne<{ content_hash: string | null; document_clock: number }>(
       `SELECT content_hash, document_clock::float8 AS document_clock FROM board_snapshots
@@ -379,8 +392,9 @@ export function createCheckpointService(
         const outcome = await capture(boardId, reason)
         if (outcome.status === 'skipped' && outcome.why === 'missing') await forget(boardId)
         // At the limit: retention frees room by the hour at most, so try again then (not every tick,
-        // which would read the whole board from sync each minute). Still pending meanwhile.
-        else if (outcome.status === 'skipped' && outcome.why === 'limit')
+        // which would read the whole board from sync each minute). Still pending meanwhile. A board
+        // made on the new canvas (bridge release R0) likewise: kept pending for the new build.
+        else if (outcome.status === 'skipped' && (outcome.why === 'limit' || outcome.why === 'new-canvas'))
           await postpone(boardId, settings.hourlyMs)
         else if (outcome.status === 'skipped') await release(boardId)
       } catch (e) {

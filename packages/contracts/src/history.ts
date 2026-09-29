@@ -166,7 +166,8 @@ export const HISTORY_EVENTS = {
 /**
  * Why an automatic checkpoint was made. Appended (history-polish, R10; migration 0017): right before a
  * private brainstorm's notes are put on the board (`before_reveal`), and before AI "Group into themes"
- * rearranges notes (`before_ai_themes`).
+ * rearranges notes (`before_ai_themes`). Bridge release R0 (migration 0022, docs/EXCALIDRAW-MIGRATION.md
+ * §5.5): `engine_migration`, the restore point the Excalidraw build saves right after converting a board.
  */
 export const CHECKPOINT_REASONS = [
   'hourly',
@@ -175,13 +176,38 @@ export const CHECKPOINT_REASONS = [
   'import',
   'before_reveal',
   'before_ai_themes',
+  'engine_migration',
 ] as const
 export const CheckpointReason = z.enum(CHECKPOINT_REASONS)
 export type CheckpointReason = z.infer<typeof CheckpointReason>
 
-/** A checkpoint as the list shows it: `reason` is null for manual (and legacy pre_restore) ones. */
-export const BoardCheckpoint = BoardSnapshot.extend({ reason: CheckpointReason.nullable() })
+/**
+ * A checkpoint as the list shows it: `reason` is null for manual (and legacy pre_restore) ones.
+ * `newCanvas` (bridge release R0): the checkpoint was made on the new canvas (Excalidraw; a v2 body).
+ * This build lists it but can neither preview nor restore it (NEW_CANVAS_CHECKPOINT_MESSAGE). Absent on
+ * every other checkpoint.
+ */
+export const BoardCheckpoint = BoardSnapshot.extend({
+  reason: CheckpointReason.nullable(),
+  newCanvas: z.literal(true).optional(),
+})
 export type BoardCheckpoint = z.infer<typeof BoardCheckpoint>
+
+// ---- the new canvas (bridge release R0, docs/EXCALIDRAW-MIGRATION.md §5.9 step 4, §5.10) --------------
+//
+// Lobby's canvas moves from tldraw to Excalidraw. R0 is the last tldraw build: it stays the rollback
+// target, so it understands what the new canvas leaves behind and says so instead of failing.
+
+/** Shown on a checkpoint made on the new canvas; the answer to previewing or restoring one (409 NEW_CANVAS). */
+export const NEW_CANVAS_CHECKPOINT_MESSAGE = 'Made on the new canvas — preview and restore after the switch'
+/** Shown for a board made on the new canvas; the answer to opening, duplicating or exporting it (409 NEW_CANVAS). */
+export const NEW_CANVAS_BOARD_MESSAGE =
+  'This board was made on the new canvas. It opens again after the switch.'
+/** The answer to importing a board archive exported from the new canvas (400 NEW_CANVAS_ARCHIVE). */
+export const NEW_CANVAS_ARCHIVE_MESSAGE =
+  'This file was exported from the new canvas. It can be imported after the switch.'
+/** The error code of those refusals. */
+export const NEW_CANVAS_ERROR = 'NEW_CANVAS'
 
 /** GET /api/boards/:bid/snapshots (view) as the checkpoints UI reads it: every kind, newest first. */
 export const ListCheckpointsResponse = z.object({ snapshots: z.array(BoardCheckpoint) })

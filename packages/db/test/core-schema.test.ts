@@ -192,3 +192,64 @@ describe('0021_domain_access', () => {
       expect(await sqlstate(invite(bad, false)), bad).toBe('23514')
   })
 })
+
+describe('0022_engine_migration (bridge release R0)', () => {
+  async function board() {
+    const b = newBoardId()
+    await db.query("INSERT INTO boards (id, workspace_id, title, created_by) VALUES ($1, $2, 'T', $3)", [
+      b,
+      w1,
+      u1,
+    ])
+    return b
+  }
+  const snapshot = (b: string, extra: { reason?: string; bodyVersion?: number } = {}) => {
+    const id = newId('snp')
+    const cols = extra.bodyVersion === undefined ? '' : ', body_version'
+    const vals = extra.bodyVersion === undefined ? '' : ', $7'
+    return db.query(
+      `INSERT INTO board_snapshots (id, workspace_id, board_id, name, kind, reason, document_clock, record_count,
+         size_bytes, storage_key${cols})
+       VALUES ($1, $2, $3, 'n', $4, $5, 1, 1, 1, $6${vals})`,
+      [
+        id,
+        w1,
+        b,
+        extra.reason ? 'auto' : 'manual',
+        extra.reason ?? null,
+        `snapshots/${b}/${id}.json`,
+        ...(extra.bodyVersion === undefined ? [] : [extra.bodyVersion]),
+      ],
+    )
+  }
+
+  it('boards default to new_canvas = false, and the Excalidraw build can set it', async () => {
+    const b = await board()
+    expect(await db.one('SELECT new_canvas FROM boards WHERE id = $1', [b])).toEqual({ new_canvas: false })
+    await db.query('UPDATE boards SET new_canvas = true WHERE id = $1', [b])
+    expect(await db.one('SELECT new_canvas FROM boards WHERE id = $1', [b])).toEqual({ new_canvas: true })
+    expect(await sqlstate(db.query('UPDATE boards SET new_canvas = NULL WHERE id = $1', [b]))).toBe('23502')
+  })
+
+  it('checkpoints default to body version 1, accept 2, and the engine_migration reason', async () => {
+    const b = await board()
+    expect(await sqlstate(snapshot(b))).toBe('no error')
+    expect(await db.one('SELECT body_version FROM board_snapshots WHERE board_id = $1', [b])).toEqual({
+      body_version: 1,
+    })
+    expect(await sqlstate(snapshot(b, { bodyVersion: 2 }))).toBe('no error')
+    expect(await sqlstate(snapshot(b, { bodyVersion: 3 }))).toBe('23514')
+    expect(await sqlstate(snapshot(b, { bodyVersion: 0 }))).toBe('23514')
+    expect(await sqlstate(snapshot(b, { reason: 'engine_migration', bodyVersion: 2 }))).toBe('no error')
+    for (const reason of [
+      'hourly',
+      'session_end',
+      'before_restore',
+      'import',
+      'before_reveal',
+      'before_ai_themes',
+    ])
+      expect(await sqlstate(snapshot(b, { reason })), reason).toBe('no error')
+    expect(await sqlstate(snapshot(b, { reason: 'engine-migration' }))).toBe('23514')
+  })
+})

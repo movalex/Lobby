@@ -1,4 +1,4 @@
-import { type BoardWithRole, thumbnailPath } from '@draftroom/contracts'
+import { type BoardWithRole, NEW_CANVAS_BOARD_MESSAGE, thumbnailPath } from '@draftroom/contracts'
 import { type CSSProperties, useEffect, useId, useState } from 'react'
 import { onThumbnailUpdated } from '../features/thumbnails/card-events.ts'
 import { formatRelativeTime } from '../lib/format.ts'
@@ -392,6 +392,16 @@ export function BoardCard<B extends BoardWithRole & { starred?: boolean; thumbna
               </span>
             )}
             <span>{when}</span>
+            {/* Bridge release R0: made on the new canvas (this build cannot open it; the title says why). */}
+            {board.newCanvas && (
+              <span
+                className="dr-bcard__canvas"
+                data-testid="board-card-new-canvas"
+                title={NEW_CANVAS_BOARD_MESSAGE}
+              >
+                New canvas
+              </span>
+            )}
             {layout === 'list' && projectName && <span className="dr-bcard__project">{projectName}</span>}
             <span className="dr-role" data-role={board.role}>
               {ROLE_LABEL[board.role]}

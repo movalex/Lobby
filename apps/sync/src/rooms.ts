@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs'
 import { basename, dirname, join, resolve } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { NodeSqliteWrapper, type RoomSnapshot, SQLiteSyncStorage, TLSocketRoom } from '@tldraw/sync-core'
@@ -12,6 +12,7 @@ import { hookedSqlWrapper } from './deleted/sql.ts'
 import { type DeletedEntry, type DeletedLimits, DeletedStore, ensureDeletedTables } from './deleted/store.ts'
 import { createTextLease, type TextLease } from './lease.ts'
 import type { BoardRole } from './permissions.ts'
+import { runPreOpenChecks } from './r0/pre-open.ts'
 import { authorizeUserRecord } from './user-records.ts'
 
 /** Per-session data taken from the verified ticket (docs/M1-CONTRACTS.md §6). */
@@ -47,6 +48,9 @@ interface RoomEntry {
  * 'board' would otherwise be two TLSocketRoom instances on ONE sqlite file (split room).
  */
 export const BOARD_ID_RE = /^[a-z0-9][a-z0-9_-]{2,63}$/
+
+/** A board database file name in the data dir (boardDbPath); the capture is the board id. */
+const BOARD_FILE_RE = /^board-([a-z0-9][a-z0-9_-]{2,63})\.sqlite$/
 
 export function boardDbPath(dataDir: string, boardId: string): string {
   if (!BOARD_ID_RE.test(boardId)) throw new Error('invalid board id')
@@ -242,6 +246,53 @@ export class RoomRegistry {
     return entry ? this.backupEntry(entry) : Promise.resolve(null)
   }
 
+  /** Ids of every board that has a database file in this registry's data dir, sorted. */
+  boardFileIds(): string[] {
+    let names: string[]
+    try {
+      names = readdirSync(this.opts.dataDir)
+    } catch {
+      return []
+    }
+    return names
+      .map((n) => BOARD_FILE_RE.exec(n)?.[1])
+      .filter((id): id is string => id !== undefined && BOARD_ID_RE.test(id))
+      .sort()
+  }
+
+  /**
+   * A fresh backup of one board, whether or not it changed (POST /internal/backups/run-all, bridge
+   * release R0): an open board through its room's own connection, after any backup in progress; any
+   * other board file through a READ-ONLY connection, so no room is opened and nothing is written to the
+   * file (a board born on the new canvas is copied whole: backup.ts). Throws when backups are off or the
+   * copy fails.
+   */
+  async backupFresh(boardId: string): Promise<BackupEntry> {
+    const b = this.backup
+    if (!b) throw new Error('backups are off')
+    const entry = this.live(boardId)
+    if (entry) {
+      await entry.backingUp
+      const current = this.live(boardId)
+      if (current) {
+        const made = await this.backupEntry(current)
+        if (!made) throw new Error('the backup failed (see the log)')
+        return made
+      }
+    }
+    const path = boardDbPath(this.opts.dataDir, boardId)
+    if (!existsSync(path)) throw new Error('the board has no database file')
+    const db = new DatabaseSync(path, { readOnly: true })
+    try {
+      db.exec('PRAGMA busy_timeout = 5000')
+      const made = await backupBoard({ db, boardId, root: b.dir, keep: b.keep })
+      if (!made.format) this.lastBackupClock.set(boardId, made.documentClock)
+      return made
+    } finally {
+      db.close()
+    }
+  }
+
   /** One pass of the periodic backup: every open board that changed since its last backup, one at a time. */
   runBackupPass(): Promise<void> {
     if (!this.backup) return Promise.resolve()
@@ -296,6 +347,9 @@ export class RoomRegistry {
 
   private open(boardId: string, seed?: RoomSnapshot): RoomEntry | 'exists' {
     const path = boardDbPath(this.opts.dataDir, boardId)
+    // Bridge release R0 (r0/pre-open.ts): before any writable handle exists, a board born on the new
+    // canvas is refused (BoardOpenRefused), so no TLSocketRoom or tldraw table is ever created in it.
+    runPreOpenChecks({ boardId, path, exists: existsSync(path) })
     // A seed that fails leaves the board as it found it: no data, and no file it created itself.
     let removeOnFailure = seed !== undefined && !existsSync(path)
     const db = new DatabaseSync(path)

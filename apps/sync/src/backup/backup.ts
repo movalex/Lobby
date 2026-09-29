@@ -22,6 +22,8 @@ import {
 } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { backup, DatabaseSync } from 'node:sqlite'
+import { isLbTable, tableNames } from '../r0/born-after.ts'
+import { type BackupFormat, lbFileFacts } from '../r0/lb-files.ts'
 import { type AssetRef, AssetRefCollector } from './asset-refs.ts'
 
 export const BACKUP_DEFAULTS = Object.freeze({
@@ -55,6 +57,13 @@ export interface BackupEntry {
   sizeBytes: number
   /** Uploaded files the board references (asset-refs.ts). Absent in entries written before wave 3. */
   assets?: AssetRef[]
+  /**
+   * Bridge release R0 (open item 9): `lobby-elements` when the file holds only the new engine's lb_*
+   * tables (a board born on the new canvas, copied whole). Then documentClock is `lb_meta.clock`,
+   * recordCount the `lb_elements` rows, recordsSha256 the lb_* digest (r0/lb-files.ts) and assets empty
+   * (R0 does not read Excalidraw elements). Absent = a tldraw board (every entry before R0).
+   */
+  format?: BackupFormat
 }
 
 export interface BackupManifest {
@@ -115,12 +124,16 @@ export interface BoardDbFacts {
   recordCount: number
   recordsSha256: string
   assets: AssetRef[]
+  /** `lobby-elements` for a file with only lb_* tables (see BackupEntry.format); absent for tldraw. */
+  format?: BackupFormat
 }
 
 /**
  * Reads a board database file READ-ONLY (tldraw's tables are only ever read here): integrity check,
  * clock, schema, a digest of the document records and the files they reference, plus every record
- * as stored (the drill compares them). Throws when the file is not a healthy board.
+ * as stored (the drill compares them). A file with only the new engine's lb_* tables (born on the new
+ * canvas) is described from those instead, with no records (R0, open item 9). Throws when the file is
+ * not a healthy board.
  */
 export function describeBoardDb(path: string): BoardDbFacts & { records: Map<string, string> } {
   return readBoardDb(path, new Map())
@@ -141,6 +154,11 @@ function readBoardDb(
     const check = db.prepare('PRAGMA quick_check').all() as Array<Record<string, unknown>>
     const verdict = check.map((r) => Object.values(r)[0]).join('; ')
     if (verdict !== 'ok') throw new Error(`integrity check failed: ${verdict.slice(0, 200)}`)
+    const tables = tableNames(db)
+    if (!tables.has('metadata') && !tables.has('documents') && [...tables].some(isLbTable)) {
+      // Born on the new canvas: copied whole, described from its lb_* tables (read-only).
+      return { ...lbFileFacts(db), assets: [], records: records ?? new Map(), format: 'lobby-elements' }
+    }
     const meta = db.prepare('SELECT documentClock, schema FROM metadata LIMIT 1').get() as
       | { documentClock: number; schema: string }
       | undefined
@@ -213,6 +231,7 @@ export async function backupBoard(opts: {
       sha256,
       sizeBytes,
       assets: facts.assets,
+      ...(facts.format ? { format: facts.format } : {}),
     }
     const manifest = readManifest(opts.root, opts.boardId) ?? {
       format: 'draftroom-board-backups',

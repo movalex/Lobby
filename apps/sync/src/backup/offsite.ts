@@ -218,6 +218,14 @@ export class OffsiteBackups {
     return this.enqueue([boardId])
   }
 
+  /**
+   * The object key of backup `file` of `boardId` when the store holds it, as of the last manifest this
+   * service read or wrote (after syncBoard() resolved: whether that copy made it). Null otherwise.
+   */
+  storedKey(boardId: string, file: string): string | null {
+    return this.known.get(boardId)?.files.has(file) ? offsiteKeys.file(this.prefix, boardId, file) : null
+  }
+
   /** Resolves once nothing is queued or uploading. */
   async idle(): Promise<void> {
     while (this.draining) await this.draining
@@ -470,6 +478,8 @@ export class OffsiteBackups {
       sha256: entry.sha256,
       sizeBytes: size,
       assets,
+      // R0 (open item 9): a file with only lb_* tables says so; signed with every other field.
+      ...(entry.format ? { format: entry.format } : {}),
     }
     // Signed here, from the local manifest (the sync disk) and the bytes just sent: the only place an
     // entry is ever signed.

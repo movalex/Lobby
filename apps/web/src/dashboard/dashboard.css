@@ -743,3 +743,14 @@
 .dr-dash__title:focus {
   outline: none;
 }
+
+/* ---- Bridge release R0: a board made on the new canvas (this build cannot open it) --------------- */
+.dr-bcard__canvas {
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--dr-chip);
+  color: var(--dr-ink-2);
+  font-size: 11.5px;
+  font-weight: 600;
+  white-space: nowrap;
+}

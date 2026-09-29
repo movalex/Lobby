@@ -1,3 +1,5 @@
+import { NEW_CANVAS_BOARD_MESSAGE } from '@draftroom/contracts'
+
 const MESSAGES: Record<string, string> = {
   NOT_AUTHENTICATED: 'The board server did not accept this connection ticket. Retry to get a new one.',
   FORBIDDEN: 'You do not have access to this board.',
@@ -8,10 +10,24 @@ const MESSAGES: Record<string, string> = {
   RATE_LIMITED: 'Too many changes were sent too quickly. Wait a moment, then retry.',
   ROOM_FULL: 'This board has too many people on it right now.',
   UNKNOWN_ERROR: 'The board could not be opened.',
+  // Bridge release R0 (docs/EXCALIDRAW-MIGRATION.md §5.10): the board server's maintenance mode, and a
+  // board made on the new canvas, which this build cannot open.
+  MAINTENANCE: 'Lobby is updating. Your board opens again in a few minutes: retry then.',
+  NEW_CANVAS_BOARD: NEW_CANVAS_BOARD_MESSAGE,
+}
+
+/** A heading of its own where "Can't reach this board" would mislead. */
+const TITLES: Record<string, string> = {
+  MAINTENANCE: 'Lobby is updating',
+  NEW_CANVAS_BOARD: 'Made on the new canvas',
 }
 
 export function describeSyncError(reason: string): string {
   return MESSAGES[reason] ?? 'The connection to this board ended unexpectedly.'
+}
+
+export function syncErrorTitle(reason: string): string {
+  return TITLES[reason] ?? "Can't reach this board"
 }
 
 /** Terminal sync errors are not retried by useSync; Retry remounts the board (new socket, new store). */
@@ -20,7 +36,7 @@ export function SyncErrorScreen({ reason, onRetry }: { reason: string; onRetry()
   return (
     <div className="dr-screen dr-screen--overlay" data-testid="sync-error" role="alert">
       <div className="dr-card dr-card--narrow">
-        <h1 className="dr-card__title">Can't reach this board</h1>
+        <h1 className="dr-card__title">{syncErrorTitle(reason)}</h1>
         <p>{describeSyncError(reason)}</p>
         <p className="dr-muted">
           Reason: <code data-testid="sync-error-reason">{reason}</code>

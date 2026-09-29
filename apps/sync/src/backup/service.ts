@@ -15,6 +15,12 @@ export interface BackupService {
   start(): Promise<void>
   stop(): Promise<void>
   status(): OffsiteStatus
+  /**
+   * Copies what one board's local backups are missing offsite now (POST /internal/backups/run-all).
+   * Resolves with the object key of backup `file` once the store holds it; null when offsite backups
+   * are off, or when that copy did not make it (the failure is in status()).
+   */
+  copyOffsite(boardId: string, file: string): Promise<string | null>
 }
 
 export function createBackupService(opts: {
@@ -46,6 +52,11 @@ export function createBackupService(opts: {
       await offsite?.stop()
     },
     status: () => offsite?.status() ?? offsiteOffStatus(),
+    async copyOffsite(boardId, file) {
+      if (!offsite) return null
+      await offsite.syncBoard(boardId)
+      return offsite.storedKey(boardId, file)
+    },
   }
 }
 

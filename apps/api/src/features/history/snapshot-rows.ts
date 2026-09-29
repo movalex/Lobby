@@ -2,7 +2,14 @@
 // hash that keeps a checkpoint of unchanged content from being saved twice (0014_checkpoint_policy).
 
 import { createHash } from 'node:crypto'
-import type { BoardCheckpoint, CheckpointReason, SnapshotKind } from '@draftroom/contracts'
+import {
+  type BoardCheckpoint,
+  type CheckpointReason,
+  NEW_CANVAS_CHECKPOINT_MESSAGE,
+  NEW_CANVAS_ERROR,
+  type SnapshotKind,
+} from '@draftroom/contracts'
+import { ApiError } from '../../errors.ts'
 import type { RoomSnapshotJson } from '../../sync-internal.ts'
 
 export interface SnapshotRow {
@@ -20,12 +27,14 @@ export interface SnapshotRow {
   size_bytes: number
   storage_key: string
   content_hash: string | null
+  /** Bridge release R0 (migration 0022): 1 = a tldraw body (CheckpointBody); 2 = made on the new canvas. */
+  body_version: number
 }
 
 /** Columns of a SnapshotRow: `FROM board_snapshots s LEFT JOIN users u ON u.id = s.created_by`. */
 export const SNAPSHOT_COLUMNS = `s.id, s.workspace_id, s.board_id, s.name, s.kind, s.reason, s.created_by,
   u.name AS creator_name, s.created_at, s.document_clock::float8 AS document_clock, s.record_count,
-  s.size_bytes::float8 AS size_bytes, s.storage_key, s.content_hash`
+  s.size_bytes::float8 AS size_bytes, s.storage_key, s.content_hash, s.body_version`
 
 export const SNAPSHOT_FROM = 'board_snapshots s LEFT JOIN users u ON u.id = s.created_by'
 
@@ -41,7 +50,27 @@ export const toCheckpoint = (r: SnapshotRow): BoardCheckpoint => ({
   documentClock: Number(r.document_clock),
   recordCount: Number(r.record_count),
   sizeBytes: Number(r.size_bytes),
+  // Bridge release R0: made on the new canvas (a v2 body): listed, never previewed or restored here.
+  ...(isNewCanvasRow(r) ? { newCanvas: true as const } : {}),
 })
+
+/** Bridge release R0: a checkpoint whose row says its body is not this build's (v2, the new canvas). */
+export const isNewCanvasRow = (r: Pick<SnapshotRow, 'body_version'>) =>
+  r.body_version !== undefined && r.body_version !== null && Number(r.body_version) !== 1
+
+/** 409 NEW_CANVAS: a checkpoint made on the new canvas cannot be previewed or restored by this build. */
+export const newCanvasCheckpoint = () => new ApiError(409, NEW_CANVAS_ERROR, NEW_CANVAS_CHECKPOINT_MESSAGE)
+
+/**
+ * A stored body as this build reads it: only the tldraw body (`draftroom-checkpoint` v1). Anything else,
+ * the new canvas's `lobby-checkpoint` v2 above all, is refused with 409 NEW_CANVAS, whatever its row
+ * says: read as v1, a v2 body would have no records and restore as an empty board.
+ */
+export function parseV1Body(raw: string): CheckpointBody {
+  const body = JSON.parse(raw) as Partial<CheckpointBody> | null
+  if (body?.format !== 'draftroom-checkpoint' || body.version !== 1) throw newCanvasCheckpoint()
+  return body as CheckpointBody
+}
 
 /** The stored checkpoint body (object store). */
 export interface CheckpointBody {

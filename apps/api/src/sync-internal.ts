@@ -41,7 +41,35 @@ export class SyncSeedConflict extends Error {
   }
 }
 
-export class SyncUnavailable extends Error {}
+export class SyncUnavailable extends Error {
+  /** The HTTP status sync answered with, when it answered at all. */
+  readonly status: number | null
+  constructor(message?: string, status: number | null = null) {
+    super(message)
+    this.status = status
+  }
+}
+
+/**
+ * Bridge release R0 (docs/EXCALIDRAW-MIGRATION.md §5.9 step 4): the sync server refused the board
+ * because it was made on the new canvas (409 `new-canvas`). A SyncUnavailable, so every existing
+ * caller keeps treating the board as unreadable (retry later, keep its files); the history routes say
+ * why (new-board.ts viaSync).
+ */
+export class SyncNewCanvasBoard extends SyncUnavailable {
+  constructor() {
+    super('the board was made on the new canvas', 409)
+  }
+}
+
+/** A failed answer: SyncNewCanvasBoard for sync's 409 `new-canvas`, else SyncUnavailable. */
+async function failure(res: Response, what: string): Promise<SyncUnavailable> {
+  if (res.status === 409) {
+    const body = (await res.json().catch(() => null)) as { error?: { code?: unknown } } | null
+    if (body?.error?.code === 'new-canvas') return new SyncNewCanvasBoard()
+  } else await res.body?.cancel().catch(() => {})
+  return new SyncUnavailable(`${what} failed with ${res.status}`, res.status)
+}
 
 export function createHttpSyncInternalClient(opts: {
   baseUrl: string
@@ -66,7 +94,7 @@ export function createHttpSyncInternalClient(opts: {
   return {
     async snapshot(boardId) {
       const res = await call(`/internal/boards/${encodeURIComponent(boardId)}/snapshot`)
-      if (!res.ok) throw new SyncUnavailable(`snapshot failed with ${res.status}`)
+      if (!res.ok) throw await failure(res, 'snapshot')
       return (await res.json()) as RoomSnapshotJson
     },
     async seed(boardId, snapshot) {
@@ -86,12 +114,12 @@ export function createHttpSyncInternalClient(opts: {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(body),
       })
-      if (!res.ok) throw new SyncUnavailable(`place-notes failed with ${res.status}`)
+      if (!res.ok) throw await failure(res, 'place-notes')
       return (await res.json()) as unknown
     },
     async assetRefs(boardId) {
       const res = await call(`/internal/boards/${encodeURIComponent(boardId)}/asset-refs`)
-      if (!res.ok) throw new SyncUnavailable(`asset-refs failed with ${res.status}`)
+      if (!res.ok) throw await failure(res, 'asset-refs')
       return (await res.json()) as unknown
     },
     async boardText(boardId, opts = {}) {
@@ -100,7 +128,7 @@ export function createHttpSyncInternalClient(opts: {
       if (opts.maxBytes !== undefined) params.set('maxBytes', String(opts.maxBytes))
       const qs = params.size ? `?${params}` : ''
       const res = await call(`/internal/boards/${encodeURIComponent(boardId)}/text${qs}`)
-      if (!res.ok) throw new SyncUnavailable(`board text failed with ${res.status}`)
+      if (!res.ok) throw await failure(res, 'board text')
       return (await res.json()) as unknown
     },
   }

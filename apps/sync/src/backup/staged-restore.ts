@@ -29,6 +29,7 @@ import { basename, join } from 'node:path'
 import { backup, DatabaseSync } from 'node:sqlite'
 import { dataLayout } from '@draftroom/dev-assets'
 import type { TLSchema } from '@tldraw/tlschema'
+import { classifyBoardFile, isServable } from '../r0/born-after.ts'
 import { BOARD_ID_RE, boardDbPath } from '../rooms.ts'
 import { inspectBoardDb, sha256File } from './backup.ts'
 import { type BackupSource, DrillProblem, verifyRestorable } from './drill.ts'
@@ -57,6 +58,18 @@ export interface RestoreRequest {
   stagedAt: string
   /** The backup's signature could not be verified and was accepted with --allow-unsigned. */
   unsignedAccepted?: true
+}
+
+/**
+ * Whether the board file at `path` was made on the new canvas (bridge release R0). A file that cannot be
+ * read is not (a damaged database is often why a restore is made; the restore then handles it as before).
+ */
+function madeOnNewCanvas(path: string): boolean {
+  try {
+    return !isServable(classifyBoardFile(path))
+  } catch {
+    return false
+  }
 }
 
 const restoreDir = (dataDir: string) => join(dataLayout(dataDir).root, RESTORE_DIR_NAME)
@@ -109,6 +122,15 @@ export async function stageRestore(opts: {
       workRooms: join(scratch, 'rooms'),
       schema: opts.schema,
     })
+    // Bridge release R0: a board made on the new canvas is restored by the new build (it gives the
+    // board a new epoch); this build copies such files whole but never puts one in place. And it never
+    // replaces a live board that was made on the new canvas.
+    if (verified.format)
+      throw new DrillProblem(
+        'this backup is of a board made on the new canvas: it can be restored after the switch, by the new build',
+      )
+    if (madeOnNewCanvas(boardDbPath(dataLayout(opts.dataDir).rooms, boardId)))
+      throw new DrillProblem('the live board was made on the new canvas: this build does not replace it')
     const staged = stagedFile(opts.dataDir, boardId)
     const tmp = `${staged}.${randomBytes(4).toString('hex')}.tmp`
     copyFileSync(got.path, tmp)
@@ -213,6 +235,9 @@ export async function applyStagedRestores(opts: {
       if ((await sha256File(staged)) !== request.sha256)
         throw new Error('the staged backup file does not match its request (sha256)')
       const live = boardDbPath(rooms, boardId)
+      // Bridge release R0: never replace (or even open for writing) a board made on the new canvas.
+      if (madeOnNewCanvas(live))
+        throw new Error('the live board was made on the new canvas: this build does not replace it')
       const stamp = (opts.now ?? (() => new Date()))().toISOString().replace(/[:.]/g, '-')
       let liveClock: number | null = null
       let kept: string | null = null

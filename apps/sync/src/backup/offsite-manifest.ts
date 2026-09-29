@@ -11,6 +11,7 @@
 // written before signing existed have none: parsing reports each one's status and leaves the decision
 // (drop, carry forward, refuse, or accept with --allow-unsigned) to the uploader and the restore tools.
 
+import type { BackupFormat } from '../r0/lb-files.ts'
 import { BOARD_ID_RE } from '../rooms.ts'
 import { type AssetRef, cleanAssetRefs } from './asset-refs.ts'
 import { BACKUP_FILE_RE } from './backup.ts'
@@ -49,6 +50,8 @@ export interface OffsiteEntry {
   sizeBytes: number
   /** Asset versions the board references (asset-refs.ts). */
   assets: AssetRef[]
+  /** `lobby-elements`: the file holds only the new engine's lb_* tables (backup.ts BackupEntry.format). */
+  format?: BackupFormat
   /** Over every other field and the board id (signing.ts). Absent in entries written before signing. */
   signature?: Signature
 }
@@ -158,6 +161,7 @@ export function parseManifest(
       typeof e.recordsSha256 === 'string' &&
       SHA_RE.test(e.recordsSha256) &&
       assets !== undefined &&
+      (e.format === undefined || e.format === 'lobby-elements') &&
       !backups.some((b) => b.file === e.file)
     if (!ok) {
       ignored++

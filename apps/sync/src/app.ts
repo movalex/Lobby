@@ -12,15 +12,20 @@ import {
   createAccessMonitor,
   createApiAccessClient,
 } from './access.ts'
+import { createRunAll } from './backup/run-all.ts'
 import { type BackupService, createBackupService } from './backup/service.ts'
 import { isAllowedOrigin, type SyncConfig } from './config.ts'
-import { createRequestHandler } from './http/router.ts'
+import { createRequestHandler, type MaintenanceControl } from './http/router.ts'
 import { JoinQueue } from './join-queue.ts'
 import { canEditCanvas } from './permissions.ts'
 import { InboundFrames, presenceIdentity } from './presence.ts'
+import { BoardOpenRefused, NEW_CANVAS_CLOSE_REASON } from './r0/pre-open.ts'
 import { BOARD_ID_RE, RoomRegistry } from './rooms.ts'
 import { createApiSessionEndClient, createSessionEndReporter, type SessionEndClient } from './session-end.ts'
 import { createApiTouchClient, createTouchReporter, type TouchClient, type TouchReporter } from './touch.ts'
+
+/** The terminal close reason of every socket while maintenance is on (the web: "Lobby is updating"). */
+export const MAINTENANCE_REASON = 'MAINTENANCE'
 
 export interface SyncServerOptions {
   /** Request log lines and room warnings. Default: console.log. */
@@ -41,6 +46,8 @@ export interface SyncServer {
   touches: TouchReporter
   /** Offsite copies of the backups, staged restores, the backup status (backup/service.ts). */
   backups: BackupService
+  /** Maintenance mode (bridge release R0; POST /internal/maintenance drives the same switch). */
+  maintenance: MaintenanceControl
   /** Resolves with the bound port (useful with `port: 0`). */
   listen(): Promise<{ port: number }>
   /** Stops accepting, drops every socket, waits for in-flight requests, closes every room + DB. */
@@ -95,6 +102,38 @@ export function createSyncServer(config: SyncConfig, opts: SyncServerOptions = {
 
   let closing: Promise<void> | null = null
   const inflight = new Set<Promise<void>>()
+
+  // ---- maintenance mode (bridge release R0, docs/EXCALIDRAW-MIGRATION.md §5.10, §7.5 step 3) --------
+  // POST /internal/maintenance {on}. On: the pushes that already reached the server (held behind a
+  // queued connect, join-queue.ts) are delivered and commit, then every socket is closed with 4099
+  // MAINTENANCE (terminal on the client: the web shows "Lobby is updating"), and new ones are refused
+  // the same way, after the ticket check and before any room is touched. Internal reads keep working
+  // (snapshot for the final checkpoints, backups, run-all); the internal routes that write a board are
+  // refused (router.ts). A runtime switch: a restart or a redeploy starts with it off.
+  let maintenance = false
+  const setMaintenance = (on: boolean) => {
+    const was = maintenance
+    maintenance = on
+    let closedSockets = 0
+    if (on) {
+      joins.flush()
+      for (const [key, ws] of [...liveSockets]) {
+        const slash = key.indexOf('/')
+        const boardId = key.slice(0, slash)
+        const sid = key.slice(slash + 1)
+        const room = registry.roomIfOpen(boardId)
+        if (room?.getSessions().some((s) => s.sessionId === sid)) room.closeSession(sid, MAINTENANCE_REASON)
+        // Not in the room (or the room did not close it): closed here. 0 CONNECTING, 1 OPEN.
+        if (ws.readyState < 2) ws.close(TLSyncErrorCloseEventCode, MAINTENANCE_REASON)
+        closedSockets++
+      }
+    }
+    if (on !== was) log(`[maintenance] ${on ? 'on' : 'off'}${on ? `: ${closedSockets} sockets closed` : ''}`)
+    return { maintenance, closedSockets }
+  }
+  const maintenanceControl: MaintenanceControl = { on: () => maintenance, set: setMaintenance }
+  const runAll = createRunAll({ registry, backups, log })
+
   const handle = createRequestHandler({
     internalSecret: config.internalSecret,
     registry,
@@ -103,6 +142,8 @@ export function createSyncServer(config: SyncConfig, opts: SyncServerOptions = {
     backups,
     isClosing: () => closing !== null,
     log,
+    maintenance: maintenanceControl,
+    runAll: () => runAll.run(),
   })
   const http = createServer((req, res) => {
     const p = handle(req, res)
@@ -154,11 +195,18 @@ export function createSyncServer(config: SyncConfig, opts: SyncServerOptions = {
         // 4099 = terminal on the client (an HTTP 401 before the upgrade would retry forever)
         return ws.close(TLSyncErrorCloseEventCode, reason)
       }
+      // Maintenance (bridge release R0): refused before any room is touched; terminal on the client.
+      if (maintenance) return ws.close(TLSyncErrorCloseEventCode, MAINTENANCE_REASON)
       const { uid, role, name, color, iat } = verdict.claims
       let room: ReturnType<RoomRegistry['getOrCreate']>
       try {
         room = registry.getOrCreate(boardId) // synchronous from here on
       } catch (e) {
+        // Bridge release R0: a board born on the new canvas; refused without touching the file.
+        if (e instanceof BoardOpenRefused) {
+          log(`[connect] refused on board ${boardId}: made on the new canvas`)
+          return ws.close(TLSyncErrorCloseEventCode, NEW_CANVAS_CLOSE_REASON)
+        }
         log('room open failed', boardId, e)
         return ws.close(TLSyncErrorCloseEventCode, TLSyncErrorCloseEventReason.UNKNOWN_ERROR)
       }
@@ -251,6 +299,7 @@ export function createSyncServer(config: SyncConfig, opts: SyncServerOptions = {
     monitor: access,
     touches,
     backups,
+    maintenance: maintenanceControl,
     async listen() {
       await backups.start() // staged restores first: no room can be open yet
       return new Promise((resolve, reject) => {

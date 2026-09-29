@@ -7,6 +7,7 @@ import {
   CHECKPOINT_RETENTION,
   type CheckpointContent,
   type CheckpointReason,
+  NEW_CANVAS_CHECKPOINT_MESSAGE,
 } from '@draftroom/contracts'
 import { formatRelativeTime, pluralize } from '../../lib/format.ts'
 import {
@@ -33,6 +34,16 @@ const REASON_LABELS: Record<CheckpointReason, string> = {
   import: 'As imported',
   before_reveal: 'Before revealing private notes',
   before_ai_themes: 'Before AI grouped notes into themes',
+  // Bridge release R0: saved by the new canvas's build right after it converted the board.
+  engine_migration: 'Moved to the new canvas',
+}
+
+/**
+ * Bridge release R0: a checkpoint made on the new canvas is listed with this line instead of Preview and
+ * Restore (the API refuses both with the same message).
+ */
+export function newCanvasNote(c: Pick<BoardCheckpoint, 'newCanvas'>): string | null {
+  return c.newCanvas ? NEW_CANVAS_CHECKPOINT_MESSAGE : null
 }
 
 /** Automatic checkpoints whose server-given name says more than the reason's label. */

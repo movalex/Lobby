@@ -21,6 +21,8 @@ export function toBoard(r: BoardRow): Board {
     createdAt: iso(r.created_at),
     updatedAt: iso(r.updated_at),
     lastOpenedAt: isoOrNull(r.last_opened_at),
+    // Bridge release R0: only boards born on the new canvas carry the field (the "new canvas" badge).
+    ...(r.new_canvas === true ? { newCanvas: true as const } : {}),
   }
 }
 

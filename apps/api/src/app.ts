@@ -31,6 +31,7 @@ import { boardsShowingAsset, createFileAuthorizer } from './files-auth.ts'
 import { createHttpSyncNotifier, fanOutAccessChanges, type SyncNotifier } from './notifier.ts'
 import { registerAuthRoutes } from './routes/auth.ts'
 import { registerBoardRoutes } from './routes/boards.ts'
+import { registerEngineInternalRoutes } from './routes/engine-internal.ts'
 import { registerInvitationRoutes } from './routes/invitations.ts'
 import { registerMemberRoutes } from './routes/members.ts'
 import { registerTicketRoutes } from './routes/tickets.ts'
@@ -321,6 +322,8 @@ async function buildServer(
   registerMemberRoutes(app, ctx)
   registerInvitationRoutes(app, ctx)
   registerTicketRoutes(app, ctx)
+  // Bridge release R0: A1 file-refs and A2 workshop-state, for the Excalidraw sync (docs/EXCALIDRAW-MIGRATION.md §5.10).
+  registerEngineInternalRoutes(app, ctx)
   await app.register(filesPlugin, {
     db,
     blobs,
