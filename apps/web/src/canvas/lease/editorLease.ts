@@ -39,7 +39,7 @@
 //    on another element is given up, never made writable.
 //  - The label deleted, unbound or replaced remotely while its editor is open, and a lease lost to another
 //    session (§2.9.3): Excalidraw's submit would write the textarea into it (it un-deletes the label and
-//    re-binds it, 25479-25503 and 49803-49835). Such an editor is closed WITHOUT the submit (see
+//    re-binds it, 25482-25526 and 49806-49845). Such an editor is closed WITHOUT the submit (see
 //    `closeWithoutSubmit`), and its text is offered (onNotice: the plan's "Copy my text"). A lost lease
 //    makes the editor read-only at once; it stays open with the banner until the user leaves it, and then
 //    closes without a write. No release is sent for a lease this session no longer holds.
@@ -894,10 +894,10 @@ export class EditorLease {
 
   /**
    * Closes one Excalidraw editor WITHOUT its submit. Excalidraw has no public close, and its only close
-   * (the textarea's handleSubmit, index.js:25479-25503) writes the textarea into the label: it un-deletes a
-   * deleted label (isDeleted = !text.trim(), 49870), re-binds an unbound one, or writes a stale text over a
+   * (the textarea's handleSubmit, index.js:25482-25526) writes the textarea into the label: it un-deletes a
+   * deleted label (isDeleted = !text.trim(), 49872), re-binds an unbound one, or writes a stale text over a
    * newer one. handleSubmit runs its cleanup (listeners, the textarea) and then returns WITHOUT writing
-   * when the label is not in the scene (`if (!updateElement) return`, 25487-25490). So for the one
+   * when the label is not in the scene (`if (!updateElement) return`, 25487-25493). So for the one
    * synchronous call Lobby takes the label out of the scene, lets the Escape run the cleanup, and puts the
    * label back unchanged (same object, same version), clearing editingTextElement (onSubmit, which would
    * have, did not run). Both scene updates are captureUpdate NEVER: no history entry, and no element
