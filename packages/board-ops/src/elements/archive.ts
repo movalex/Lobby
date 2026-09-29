@@ -34,7 +34,7 @@ import {
   type WireElement,
 } from '@draftroom/canvas-schema/elements'
 import { checkInvariants } from '@draftroom/canvas-schema/invariants'
-import { ARCHIVE_MAX_ELEMENTS, FILE_ID_PATTERN, versionIdOf } from '@draftroom/canvas-schema/limits'
+import { ARCHIVE_MAX_ELEMENTS } from '@draftroom/canvas-schema/limits'
 import { ELEMENT_SCHEMA_VERSION } from '@draftroom/canvas-schema/protocol'
 import {
   ARCHIVE_LIMITS,
@@ -49,6 +49,7 @@ import {
   sanitizeJson,
   shortId,
 } from '../archive-common.ts'
+import { elementFileRefs } from './files.ts'
 import type { IdSource } from './ids.ts'
 import { asElements, type BoardElement, compareByIndex, isLive } from './read.ts'
 import { remapElements } from './remap.ts'
@@ -351,6 +352,8 @@ export function importElements(
       return
     }
     const el = portableElement(value as unknown as BoardElement, { keepUnknown: true })
+    // server-owned fields restart on import (remapElements), so their archived values are not checked
+    Object.assign(el, { version: 1, versionNonce: 1, created: null, updated: 0 })
     const check = checkElement(el)
     if (!check.ok)
       throw new ArchiveError(
@@ -383,29 +386,24 @@ export function importElements(
 
   // 3. tags must be defined on the board (the server's rule), files should be in the manifest
   let strippedTags = 0
-  const unlisted = new Set<string>()
-  const listed = new Set(manifest.map((a) => a.versionId))
   for (const el of valid) {
     const cd = isObj(el.customData) ? el.customData : null
     const lobby = cd && isObj(cd.lobby) ? cd.lobby : null
-    if (lobby) {
-      for (const k of Object.keys(lobby)) {
-        if (!k.startsWith(TAG_KEY_PREFIX)) continue
-        if (!Object.hasOwn(doc, `${TAG_DEF_KEY_PREFIX}${k.slice(TAG_KEY_PREFIX.length)}`)) {
-          delete lobby[k]
-          strippedTags++
-        }
+    if (!lobby) continue
+    for (const k of Object.keys(lobby)) {
+      if (!k.startsWith(TAG_KEY_PREFIX)) continue
+      if (!Object.hasOwn(doc, `${TAG_DEF_KEY_PREFIX}${k.slice(TAG_KEY_PREFIX.length)}`)) {
+        delete lobby[k]
+        strippedTags++
       }
-      if (!Object.keys(lobby).length) delete el.customData
     }
-    if (typeof el.fileId === 'string' && FILE_ID_PATTERN.test(el.fileId)) {
-      const v = versionIdOf(el.fileId)
-      if (!listed.has(v)) unlisted.add(v)
-    }
+    if (!Object.keys(lobby).length) delete el.customData
   }
   if (strippedTags) warnings.push(`Removed ${strippedTags} tag(s) the archive does not define.`)
-  if (unlisted.size)
-    warnings.push(`${unlisted.size} referenced file(s) are not listed in the archive manifest.`)
+  const listed = new Set(manifest.map((a) => a.versionId))
+  const unlisted = elementFileRefs(valid).filter((f) => !listed.has(f.versionId))
+  if (unlisted.length)
+    warnings.push(`${unlisted.length} referenced file(s) are not listed in the archive manifest.`)
 
   // 4. fresh ids, references remapped or cut, indices above the target's top
   const remapped = remapElements(valid, {

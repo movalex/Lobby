@@ -7,7 +7,8 @@
  * The notes look like today's pasted notes: Lobby's note fill for `color` (default `black`, "Butter"), the
  * hand-drawn face (tldraw's `draw` font is Excalifont on the new canvas) at the `m` label size (22 px).
  *
- * Text layout needs text metrics: in a browser the engine measures with the canvas; in Node the caller
+ * Text layout needs text metrics: in a browser the engine measures with the canvas (call this once Lobby's
+ * fonts have loaded, `document.fonts.ready`, or the wraps follow the fallback font); in Node the caller
  * installs the server table first (`installServerTextMetrics`, as apps/sync does at start-up).
  */
 
@@ -87,5 +88,8 @@ export function noteElementsFromText(
       } as unknown as WireElement)
     noteIds.push(id)
   })
+  // plain JSON: the engine's constructors leave `customData: undefined` on a note
+  for (const e of elements as unknown as Record<string, unknown>[])
+    for (const k of Object.keys(e)) if (e[k] === undefined) delete e[k]
   return { elements, noteIds, truncated }
 }

@@ -94,8 +94,9 @@ function importV1(
     .map(([code, n]) => `${code} ${n}`)
   if (lost.length)
     warnings.push(`Converted from the old canvas; not everything carries over: ${lost.join(', ')}.`)
-  // the converter's output is ours, not the file's, but it goes through the same caps and checks
-  const plain = sanitizeJson({ elements: conv.elements, doc }, ELEMENT_ARCHIVE_LIMITS) as {
+  // the converter's output is ours, not the file's, but it goes through the same caps and checks (as JSON)
+  const json = JSON.parse(JSON.stringify({ elements: conv.elements, doc })) as unknown
+  const plain = sanitizeJson(json, ELEMENT_ARCHIVE_LIMITS) as {
     elements: unknown[]
     doc: Record<string, unknown>
   }

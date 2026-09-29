@@ -117,7 +117,7 @@ describe.each(TEMPLATE_INFOS.map((t) => [t.id, t] as const))('%s on the new canv
   })
 
   it('is plain JSON with no shared objects, URLs or embedded data', () => {
-    expect(JSON.parse(JSON.stringify(elements))).toEqual(JSON.parse(JSON.stringify(elements)))
+    expect(JSON.parse(JSON.stringify(elements))).toStrictEqual(elements)
     const dupes: object[] = []
     collectObjects(elements, new Set(), dupes)
     expect(dupes).toEqual([])

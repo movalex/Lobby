@@ -48,6 +48,7 @@ export {
   PASTED_NOTE_FONT_SIZE,
 } from './bulk-notes.ts'
 export { colorCellOf, elementsToCsv } from './csv.ts'
+export { type ElementFileRef, elementFileRefs } from './files.ts'
 export {
   type ElementFrameEntry,
   type ElementFrameOrderOptions,

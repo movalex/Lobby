@@ -12,6 +12,7 @@ import { parseBulkText } from '../bulk-notes.ts'
 import {
   colorCellOf,
   elementBounds,
+  elementFileRefs,
   elementsToCsv,
   elementText,
   frameOutlineOf,
@@ -316,6 +317,7 @@ describe('pasted notes', () => {
       expect(label?.type === 'text' && [label.originalText.length > 0, label.fontFamily]).toEqual([true, 5])
     }
     for (const e of elements) expect(checkElement(e), e.id).toMatchObject({ ok: true })
+    expect(JSON.parse(JSON.stringify(elements))).toStrictEqual(elements)
     const withFrame = [el('F'), ...elements]
     expect(checkInvariants(withFrame)).toEqual([])
     for (const e of elements) expect((e.index as string) > 'a5').toBe(true)
@@ -372,5 +374,26 @@ describe('entry points', () => {
   it('the v1 reader is its own entry point (it carries the tldraw schema)', () => {
     expect(graph('elements/index.ts').files).not.toContain('elements/archive-v1.ts')
     expect(graph('elements/archive-v1.ts').files).toContain('archive.ts')
+  })
+})
+
+describe('referenced files', () => {
+  it('lists each file version once: images by fileId (PDF pages to their version), cards by customData.lobby.file', () => {
+    const els = [
+      ...board,
+      { id: 'p3', type: 'image', fileId: 'ver_0123456789abcdef.p3' },
+      {
+        id: 'c1',
+        type: 'image',
+        fileId: 'ver_ffffffffff',
+        customData: { lobby: { file: { assetId: 'ast_aaaaaaaaaa', versionId: 'ver_ffffffffff' } } },
+      },
+      { id: 'gone', type: 'image', fileId: 'ver_9999999999', isDeleted: true },
+      { id: 'bad', type: 'image', fileId: 'https://example.com/x.png' },
+    ]
+    expect(elementFileRefs(els)).toEqual([
+      { versionId: 'ver_0123456789abcdef', assetId: 'ast_0123456789abcdef' },
+      { versionId: 'ver_ffffffffff', assetId: 'ast_aaaaaaaaaa' },
+    ])
   })
 })

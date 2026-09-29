@@ -23,7 +23,8 @@
  * label); indices are fresh keys above `indexAbove`. Every element passes the server's `checkElement` and
  * the set passes `checkInvariants`, or this throws TemplateError('invalid-output').
  *
- * Text layout needs text metrics: in a browser the engine measures with the canvas; in Node the caller
+ * Text layout needs text metrics: in a browser the engine measures with the canvas (call this once Lobby's
+ * fonts have loaded, `document.fonts.ready`, or the wraps follow the fallback font); in Node the caller
  * installs the server table first (`installServerTextMetrics`), as apps/sync does at start-up.
  */
 
@@ -317,6 +318,8 @@ export function planToScene(plan: BoardPlan, opts: SceneEmitOptions = {}): Scene
     const check = checkElement(el)
     if (!check.ok)
       throw new TemplateError('invalid-output', `Template produced an invalid element: ${check.detail}`)
+    // plain JSON: the engine's constructors leave `customData: undefined` on a note
+    for (const k of Object.keys(el)) if (el[k] === undefined) delete el[k]
     return el as unknown as WireElement
   })
   const violations = checkInvariants(elements)

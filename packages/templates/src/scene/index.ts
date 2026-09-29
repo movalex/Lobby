@@ -26,6 +26,20 @@ import { getTemplateSource, planOf } from '../source.ts'
 import { planToScene } from './emit.ts'
 
 export {
+  IMAGE_SLOT_META,
+  isTemplateId,
+  planBounds,
+  planTemplate,
+  SWATCH_META,
+  TEMPLATE_INFOS,
+  type TemplateBounds,
+  type TemplateCategory,
+  TemplateError,
+  type TemplateId,
+  type TemplateInfo,
+  type TemplatePoint,
+} from '../plan.ts'
+export {
   FONT_FAMILY,
   LABEL_FONT_SIZE,
   LINE_HEIGHT,
