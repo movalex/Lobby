@@ -9,26 +9,53 @@
 // budget (64 MiB, one entry per board), and with DRAFTROOM_TEST_HOOKS=1 registers the test hooks
 // (snapshot with tombstones, lease-hook, fail-commit; test-hooks.ts).
 //
+// Conversion on room open (§5.3 "Lazy", §5.9 step 3, §2.13): a board file with tldraw tables and no
+// `lb_meta` (or a converted board whose tldraw side moved during a rollback) is prepared by O4's
+// MigrationService (room/migrate/**) before its room opens: one job at a time process-wide, in a capped
+// worker, behind the RSS gate. Its joiners are held (notice PREPARING, their messages buffered) and admitted
+// in order when the board is ready. A failed job leaves the board on its tldraw tables: the joiners get
+// 4099 CONVERSION_FAILED, and the board is not re-queued by later joiners (only a maintenance run converts
+// it; transient failures are retried after FAILED_RETRY_MS). The service's routes (convert-all, status)
+// are mounted with the room's; closeAll closes it (the running worker is terminated). The internal routes
+// that open a board (the snapshot, the test snapshot) wait for the same preparation.
+//
 // Engine code on the server: pure helpers only, through @draftroom/canvas-schema/engine (§2.4.1). The
 // text metrics provider is installed once, before any layout.
 
 import { existsSync, mkdirSync } from 'node:fs'
 import { installedServerTextMetrics, installServerTextMetrics } from '@draftroom/canvas-schema/engine'
 import { LEASE_TTL_MS } from '@draftroom/canvas-schema/limits'
-import { CLOSE_RECONNECT, type LeaseHookRequest } from '@draftroom/canvas-schema/protocol'
+import {
+  CLOSE_RECONNECT,
+  CLOSE_TERMINAL,
+  type LeaseHookRequest,
+  NOTICE_CODES,
+  TERMINAL_CLOSE_REASONS,
+} from '@draftroom/canvas-schema/protocol'
 import {
   type ElementRoomDeps,
   type ElementRoomService,
+  type ElementSessionHandle,
+  type ElementSessionInfo,
+  type ElementSocket,
   type LiveElementSession,
   registerElementRoom,
 } from '../engine-switch.ts'
 import { createFileRefsClient } from '../file-refs.ts'
+import { HttpError } from '../http/respond.ts'
 import { BOARD_ID_RE, boardDbPath } from '../rooms.ts'
 import { registerTestHooks } from '../test-hooks.ts'
 import { createWorkshopStateClient } from '../workshop-state.ts'
-import { ElementRoom } from './element-room.ts'
+import { ElementRoom, type Session } from './element-room.ts'
 import { roomRoutes } from './http.ts'
 import { RoomMetrics } from './metrics.ts'
+import {
+  type BoardFileState,
+  boardFileState,
+  MigrationService,
+  type MigrationServiceOptions,
+  type PrepareResult,
+} from './migrate/index.ts'
 import { OUTBOUND } from './outbound.ts'
 
 /** The global snapshot cache budget (§2.4.5): one entry per board, least recently built dropped first. */
@@ -36,7 +63,62 @@ const SNAPSHOT_BUDGET_BYTES = 64 * 1024 * 1024
 /** today's tldraw default of TEXT_LEASE_MS: when it is unchanged the new lease uses §2.9.2's 10 s */
 const TLDRAW_DEFAULT_TEXT_LEASE_MS = 5_000
 
+/** A joiner held while its board is prepared: at most this many messages (presence is dropped, as before hello). */
+export const PENDING_MAX_MESSAGES = 64
+export const PENDING_MAX_BYTES = 1024 * 1024
+/** A transient conversion failure (time budget, a worker crash) is retried by a joiner after this long (§5.3). */
+export const FAILED_RETRY_MS = 5 * 60_000
+/** Failures a joiner never retries at runtime: only a maintenance run converts these boards (§5.3, §2.13). */
+const TRANSIENT_FAILURES = /^(time-budget|worker-error|worker-exit|error:|closed|already-converted)/
+
+/** The terminal reason for a board that could not be prepared (CR CONVERSION_FAILED; MAINTENANCE before it). */
+const CONVERSION_FAILED: string = (TERMINAL_CLOSE_REASONS as readonly string[]).includes('CONVERSION_FAILED')
+  ? 'CONVERSION_FAILED'
+  : 'MAINTENANCE'
+/** The notice a held joiner gets first (CR PREPARING; nothing before it). */
+const PREPARING_NOTICE: string | null = (NOTICE_CODES as readonly string[]).includes('PREPARING')
+  ? JSON.stringify({ type: 'notice', code: 'PREPARING' })
+  : null
+
+/** A joiner held while its board is converted or rolled forward. */
+interface Waiter {
+  readonly info: ElementSessionInfo
+  readonly socket: ElementSocket
+  buffer: string[]
+  bytes: number
+  /** the session once admitted to the opened room */
+  target: { room: ElementRoom; s: Session } | null
+  /** closed or refused before admission (removed and reported once) */
+  gone: boolean
+}
+
+interface Preparation {
+  readonly promise: Promise<PrepareResult>
+  readonly waiters: Set<Waiter>
+}
+
+type OpenPlan = { kind: 'open' } | { kind: 'prepare' } | { kind: 'refuse'; reason: string }
+
+/** Test-only knobs (DRAFTROOM_TEST_HOOKS=1 only, never in production): a small heap cap or time budget. */
+function testMigrationOptions(testHooks: boolean): Partial<MigrationServiceOptions> {
+  if (!testHooks) return {}
+  const cap = Number(process.env.DRAFTROOM_TEST_MIGRATE_CAP_MB)
+  const budget = Number(process.env.DRAFTROOM_TEST_MIGRATE_TIME_MS)
+  return {
+    ...(cap > 0 ? { runtimeCapMb: cap } : {}),
+    ...(budget > 0 ? { timeBudgetMs: budget } : {}),
+  }
+}
+
 export function createElementRoomService(deps: ElementRoomDeps): ElementRoomService {
+  return createElementRoomServiceWith(deps)
+}
+
+/** The factory with the migration service's options (in-process tests). */
+export function createElementRoomServiceWith(
+  deps: ElementRoomDeps,
+  migrationOptions: Partial<MigrationServiceOptions> = {},
+): ElementRoomService {
   if (!installedServerTextMetrics()) installServerTextMetrics()
   const now = deps.now ?? (() => Date.now())
   const config = deps.config
@@ -56,7 +138,24 @@ export function createElementRoomService(deps: ElementRoomDeps): ElementRoomServ
   /** hooks set before a board's room opened */
   const pendingHooks = new Map<string, { lease?: LeaseHookRequest; failCommits: number }>()
   const snapshotSizes = new Map<ElementRoom, number>()
+  /** boards being converted or rolled forward, with their held joiners */
+  const preparing = new Map<string, Preparation>()
+  /** boards whose preparation failed: refused without a new job (see FAILED_RETRY_MS) */
+  const failures = new Map<string, { reason: string; at: number; permanent: boolean }>()
   let closed = false
+
+  // The migration service (O4): one per process; its queue runs one job at a time. Before a runtime job it
+  // flushes every room's snapshot cache (§2.13 "after flushing the snapshot cache").
+  const migration = new MigrationService({
+    roomsDir: deps.dataDir,
+    log: deps.log,
+    flushCaches: () => {
+      for (const r of rooms.values()) r.dropSnapshotCache()
+      snapshotSizes.clear()
+    },
+    ...testMigrationOptions(config.testHooks === true),
+    ...migrationOptions,
+  })
 
   const onIdle = (room: ElementRoom) => {
     if (closed || evictTimers.has(room.boardId)) return
@@ -84,6 +183,7 @@ export function createElementRoomService(deps: ElementRoomDeps): ElementRoomServ
     }
   }
 
+  /** Opens the board's room from its file (which must not need a conversion). Synchronous. */
   function open(boardId: string): ElementRoom {
     const cur = rooms.get(boardId)
     if (cur) {
@@ -120,10 +220,192 @@ export function createElementRoomService(deps: ElementRoomDeps): ElementRoomServ
     return room
   }
 
-  const existing = (boardId: string): ElementRoom | null => {
+  // ---- conversion on open ---------------------------------------------------------------------------
+
+  /** What a board's file needs before its room can open (one read-only look at the file). */
+  function planOpen(boardId: string): OpenPlan {
+    const state: BoardFileState = boardFileState(boardDbPath(deps.dataDir, boardId))
+    if (state === 'missing' || state === 'element' || state === 'converted') {
+      failures.delete(boardId)
+      return { kind: 'open' }
+    }
+    if (state === 'unknown') return { kind: 'refuse', reason: 'unreadable' }
+    const f = failures.get(boardId)
+    if (f && (f.permanent || now() - f.at < FAILED_RETRY_MS)) return { kind: 'refuse', reason: f.reason }
+    return { kind: 'prepare' }
+  }
+
+  const dropWaiter = (w: Waiter) => {
+    if (w.gone || w.target) return
+    w.gone = true
+    w.buffer = []
+    preparing.get(w.info.boardId)?.waiters.delete(w)
+    deps.onSessionRemoved(w.info.boardId, w.info.sid, {
+      userId: w.info.uid,
+      role: w.info.role,
+      name: w.info.name,
+      color: w.info.color,
+    })
+  }
+
+  const closeWaiter = (w: Waiter, code: number, reason: string) => {
+    if (w.gone || w.target) return
+    metrics.inc('lobby_closes_total', { code: String(code), reason })
+    try {
+      w.socket.close(code, reason)
+    } catch {
+      // already closed
+    }
+    dropWaiter(w)
+  }
+
+  /** One message into an admitted session (the same guard as a direct connect). */
+  const deliver = (room: ElementRoom, s: Session, boardId: string, text: string) => {
+    try {
+      room.message(s, text)
+    } catch (e) {
+      deps.log('[room] message failed', boardId, (e as Error)?.name ?? 'error')
+      s.closeWith(CLOSE_TERMINAL, 'UNKNOWN_ERROR')
+      room.closed_(s)
+    }
+  }
+
+  const admit = (w: Waiter, room: ElementRoom) => {
+    if (w.gone || w.target) return
+    const s = room.connect(w.info, w.socket)
+    w.target = { room, s }
+    const buffered = w.buffer
+    w.buffer = []
+    w.bytes = 0
+    for (const text of buffered) deliver(room, s, w.info.boardId, text)
+  }
+
+  /** The board's preparation (one per board; joiners and internal routes share it). */
+  function prepare(boardId: string): Preparation {
+    const cur = preparing.get(boardId)
+    if (cur) return cur
+    const t0 = now()
+    const promise = migration
+      .prepare(boardId)
+      .catch((e): PrepareResult => ({ ready: false, reason: `error: ${(e as Error)?.name ?? 'Error'}` }))
+    const p: Preparation = { promise, waiters: new Set() }
+    preparing.set(boardId, p)
+    metrics.inc('lobby_board_prepare_total', { result: 'started' })
+    void promise.then((res) => settle(boardId, p, res, now() - t0))
+    return p
+  }
+
+  function settle(boardId: string, p: Preparation, res: PrepareResult, ms: number): void {
+    if (preparing.get(boardId) === p) preparing.delete(boardId)
+    const waiters = [...p.waiters].filter((w) => !w.gone && !w.target)
+    if (closed) {
+      for (const w of waiters) closeWaiter(w, CLOSE_RECONNECT, 'RECONNECT')
+      return
+    }
+    let ready = res.ready
+    if (!ready) {
+      // another path may have converted it meanwhile (a maintenance run, `already-converted`)
+      try {
+        const st = boardFileState(boardDbPath(deps.dataDir, boardId))
+        ready = st === 'converted' || st === 'element'
+      } catch {
+        ready = false
+      }
+    }
+    if (!ready) {
+      const reason = res.ready ? 'unknown' : res.reason
+      const permanent = !TRANSIENT_FAILURES.test(reason)
+      failures.set(boardId, { reason, at: now(), permanent })
+      metrics.inc('lobby_board_prepare_total', { result: 'failed' })
+      deps.log('[room] board not prepared for the new canvas', boardId, reason, `${ms} ms`)
+      for (const w of waiters) closeWaiter(w, CLOSE_TERMINAL, CONVERSION_FAILED)
+      return
+    }
+    failures.delete(boardId)
+    metrics.inc('lobby_board_prepare_total', {
+      result: res.ready ? (res.did === 'none' ? 'none' : res.did) : 'converted-elsewhere',
+    })
+    if (res.ready && res.did !== 'none')
+      deps.log('[room] board prepared for the new canvas', boardId, res.did, `${ms} ms`)
+    if (!waiters.length) return
+    let room: ElementRoom
+    try {
+      room = open(boardId)
+    } catch (e) {
+      deps.log('[room] open after preparation failed', boardId, (e as Error)?.name ?? 'error')
+      for (const w of waiters) closeWaiter(w, CLOSE_TERMINAL, 'UNKNOWN_ERROR')
+      return
+    }
+    for (const w of waiters) admit(w, room)
+    if (room.sessionCount === 0) onIdle(room)
+  }
+
+  /** A joiner of a board being prepared: held, answered with PREPARING, admitted when ready. */
+  function hold(info: ElementSessionInfo, socket: ElementSocket, p: Preparation): ElementSessionHandle {
+    const w: Waiter = { info, socket, buffer: [], bytes: 0, target: null, gone: false }
+    p.waiters.add(w)
+    if (PREPARING_NOTICE) {
+      try {
+        socket.send(PREPARING_NOTICE)
+      } catch {
+        // the socket closed meanwhile; closed() follows
+      }
+    }
+    return {
+      message(text: string) {
+        if (w.target) return deliver(w.target.room, w.target.s, info.boardId, text)
+        if (w.gone) return
+        if (text.length < 4096 && text.includes('"presence"')) {
+          try {
+            if ((JSON.parse(text) as { type?: unknown } | null)?.type === 'presence') return
+          } catch {
+            // buffered; the room answers it after admission
+          }
+        }
+        const bytes = Buffer.byteLength(text, 'utf8')
+        if (w.buffer.length >= PENDING_MAX_MESSAGES || w.bytes + bytes > PENDING_MAX_BYTES)
+          return closeWaiter(w, CLOSE_TERMINAL, 'RATE_LIMITED')
+        w.buffer.push(text)
+        w.bytes += bytes
+      },
+      closed() {
+        if (w.target) w.target.room.closed_(w.target.s)
+        else dropWaiter(w)
+      },
+    }
+  }
+
+  /**
+   * A joiner of a board that could not be prepared: closed at once, 4099 CONVERSION_FAILED. Its removal is
+   * reported when app.ts sees the socket close (after it admitted the session to the access monitor).
+   */
+  function refuse(info: ElementSessionInfo, socket: ElementSocket): ElementSessionHandle {
+    const w: Waiter = { info, socket, buffer: [], bytes: 0, target: null, gone: false }
+    metrics.inc('lobby_closes_total', { code: String(CLOSE_TERMINAL), reason: CONVERSION_FAILED })
+    try {
+      socket.close(CLOSE_TERMINAL, CONVERSION_FAILED)
+    } catch {
+      // already closed
+    }
+    return { message() {}, closed: () => dropWaiter(w) }
+  }
+
+  /** The board's room for an internal route: opened (after its preparation) or null when it has no file. */
+  const existing = async (boardId: string): Promise<ElementRoom | null> => {
     const cur = rooms.get(boardId)
     if (cur) return cur
     if (!BOARD_ID_RE.test(boardId) || !existsSync(boardDbPath(deps.dataDir, boardId))) return null
+    const plan: OpenPlan = preparing.has(boardId) ? { kind: 'prepare' } : planOpen(boardId)
+    if (plan.kind === 'refuse')
+      throw new HttpError(503, 'unavailable', 'This board is not ready on the new canvas.')
+    if (plan.kind === 'prepare') {
+      const res = await prepare(boardId).promise
+      const opened = rooms.get(boardId)
+      if (opened) return opened
+      if (!res.ready || failures.has(boardId))
+        throw new HttpError(503, 'unavailable', 'This board is not ready on the new canvas.')
+      if (closed) throw new HttpError(503, 'unavailable', 'Closing.')
+    }
     const room = open(boardId)
     onIdle(room)
     return room
@@ -148,7 +430,7 @@ export function createElementRoomService(deps: ElementRoomDeps): ElementRoomServ
 
   const offHooks = config.testHooks
     ? registerTestHooks({
-        snapshot: (boardId) => existing(boardId)?.testSnapshot() ?? null,
+        snapshot: async (boardId) => (await existing(boardId))?.testSnapshot() ?? null,
         leaseHook: (boardId, req) => {
           const room = rooms.get(boardId)
           if (room) room.leaseHook(req)
@@ -170,30 +452,40 @@ export function createElementRoomService(deps: ElementRoomDeps): ElementRoomServ
       })
     : () => {}
 
+  const waitersOf = (boardId: string): Waiter[] =>
+    [...(preparing.get(boardId)?.waiters ?? [])].filter((w) => !w.gone && !w.target)
+
   return {
     connect(session, socket) {
-      const room = open(session.boardId)
-      const s = room.connect(session, socket)
+      if (closed) throw new Error('closing')
+      const boardId = session.boardId
+      let room = rooms.get(boardId)
+      if (!room) {
+        const pending = preparing.get(boardId)
+        if (pending) return hold(session, socket, pending)
+        const plan = planOpen(boardId)
+        if (plan.kind === 'refuse') return refuse(session, socket)
+        if (plan.kind === 'prepare') return hold(session, socket, prepare(boardId))
+        room = open(boardId)
+      } else open(boardId) // clears a pending eviction
+      const r = room
+      const s = r.connect(session, socket)
       return {
         message(text: string) {
-          try {
-            room.message(s, text)
-          } catch (e) {
-            deps.log('[room] message failed', session.boardId, (e as Error)?.name ?? 'error')
-            s.closeWith(4099, 'UNKNOWN_ERROR')
-            room.closed_(s)
-          }
+          deliver(r, s, boardId, text)
         },
         closed() {
-          room.closed_(s)
+          r.closed_(s)
         },
       }
     },
-    routes: () =>
-      roomRoutes({
+    routes: () => [
+      ...roomRoutes({
         existing,
         ifOpen: (boardId) => rooms.get(boardId) ?? null,
       }),
+      ...migration.routes(),
+    ],
     metrics() {
       const sessionsByRole: Record<string, number> = { owner: 0, editor: 0, commenter: 0, viewer: 0 }
       const boards = []
@@ -209,29 +501,47 @@ export function createElementRoomService(deps: ElementRoomDeps): ElementRoomServ
       clearInterval(budgetTimer)
       for (const t of evictTimers.values()) clearTimeout(t)
       evictTimers.clear()
+      for (const p of preparing.values())
+        for (const w of [...p.waiters]) closeWaiter(w, CLOSE_RECONNECT, 'RECONNECT')
       for (const room of rooms.values()) room.close()
       rooms.clear()
       offHooks()
       metrics.stop()
+      await migration.close()
     },
     roomIfOpen(boardId) {
       const room = rooms.get(boardId)
-      return room ? { closeSession: (sid: string, reason?: string) => room.closeSession(sid, reason) } : null
+      if (room) return { closeSession: (sid: string, reason?: string) => room.closeSession(sid, reason) }
+      if (!preparing.has(boardId)) return null
+      return {
+        closeSession: (sid: string, reason?: string) => {
+          for (const w of waitersOf(boardId))
+            if (w.info.sid === sid)
+              closeWaiter(w, reason ? CLOSE_TERMINAL : CLOSE_RECONNECT, reason ?? 'RECONNECT')
+        },
+      }
     },
     sessionsOf(boardId): LiveElementSession[] {
       const room = rooms.get(boardId)
-      if (!room) return []
-      return [...room.sessions].map((s) => ({
-        sessionId: s.identity.sid,
-        meta: {
-          userId: s.identity.uid,
-          role: s.identity.role,
-          name: s.identity.name,
-          color: s.identity.color,
-        },
-      }))
+      const live = room
+        ? [...room.sessions].map((s) => ({
+            sessionId: s.identity.sid,
+            meta: {
+              userId: s.identity.uid,
+              role: s.identity.role,
+              name: s.identity.name,
+              color: s.identity.color,
+            },
+          }))
+        : []
+      for (const w of waitersOf(boardId))
+        live.push({
+          sessionId: w.info.sid,
+          meta: { userId: w.info.uid, role: w.info.role, name: w.info.name, color: w.info.color },
+        })
+      return live
     },
-    openBoards: () => [...rooms.keys()],
+    openBoards: () => [...new Set([...rooms.keys(), ...preparing.keys()])],
   }
 }
 
