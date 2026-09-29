@@ -1,5 +1,6 @@
 import { defineConfig, devices } from '@playwright/test'
 import { API_URL, RUN_TAG, SYNC_URL, WEB_PORT, WEB_URL } from '../tests/support/ports.ts'
+import type { StackEngine } from '../tests/support/stack.ts'
 
 // PORTED specs on the Excalidraw engine (docs/EXCALIDRAW-CONTRACTS.md §9). Frozen at wave 1.
 //
@@ -8,7 +9,10 @@ import { API_URL, RUN_TAG, SYNC_URL, WEB_PORT, WEB_URL } from '../tests/support/
 // Same stack fixture as the default suite (tests/support/fixtures.ts: api + sync + worker per run, dev
 // sign-in), with the sync server on DRAFTROOM_ENGINE=excalidraw and the web app built with
 // VITE_LOBBY_ENGINE=excalidraw and the dev-auth guard (the Excalidraw board page is behind both until
-// wave 4). Backups are off on these stacks until 2B ports the backup job to lb_* files.
+// wave 4). The fixture's `engine: 'excalidraw'` option makes the stack launcher start sync with
+// EXCALIDRAW_SYNC_ENV (tests/support/stack.ts: the engine, its test hooks, backups off until 2B ports the
+// backup job to lb_* files) UNDER any per-spec `syncEnv`, so a spec's test.use({ syncEnv }) keeps the
+// engine (CR W1-2E-1, docs/EXCALIDRAW-CONTRACTS.md §12).
 //
 // Specs live here as `<feature>-<topic>.spec.ts` and import `test`/`expect` and the helpers from
 // ../tests/support/canvas.ts. The default suite (../playwright.config.ts, tests/) is the tldraw app and is
@@ -16,7 +20,7 @@ import { API_URL, RUN_TAG, SYNC_URL, WEB_PORT, WEB_URL } from '../tests/support/
 // the default suite on another E2E_PORT_BASE never shares them.
 const WEB_OUT_DIR = `dist/lc-${RUN_TAG}`
 
-export default defineConfig<Record<never, never>, { syncEnv: Record<string, string> }>({
+export default defineConfig<Record<never, never>, { engine: StackEngine }>({
   testDir: '.',
   testMatch: /.*\.spec\.ts$/,
   outputDir: `../test-results/lc-${RUN_TAG}`,
@@ -31,7 +35,7 @@ export default defineConfig<Record<never, never>, { syncEnv: Record<string, stri
     baseURL: WEB_URL,
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
-    syncEnv: { DRAFTROOM_ENGINE: 'excalidraw', DRAFTROOM_BACKUP_STORE: 'off' },
+    engine: 'excalidraw',
   },
   projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
   webServer: [
