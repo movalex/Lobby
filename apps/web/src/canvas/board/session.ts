@@ -26,8 +26,14 @@ import { createTicketUri } from '../../board/ticket.ts'
 import { DEV_AUTH_ENABLED } from '../../lib/identity.ts'
 import { engineRejectNotice } from '../../sync-quality/copy.ts'
 import { type BoardConcern, type BoardEvent, createLobbyCanvas, type LobbyCanvasHandle } from '../api/impl.ts'
-import type { CanvasChange, CanvasInputEvent, LobbyCanvas, LobbyCanvasEventMap } from '../api/lobby-canvas.ts'
-import { createFeatureRegistries, type FeatureRegistries } from '../api/registries.ts'
+import type {
+  CanvasChange,
+  CanvasInputEvent,
+  LobbyCanvas,
+  LobbyCanvasEventMap,
+  ScenePoint,
+} from '../api/lobby-canvas.ts'
+import { createFeatureRegistries, type ExternalContent, type FeatureRegistries } from '../api/registries.ts'
 import type { LobbyRole } from '../engine/interaction.ts'
 import { attachBoardFiles, installBoardFiles } from '../files/board.ts'
 import { UndoController } from '../history/controller.ts'
@@ -50,6 +56,7 @@ import { install as installFacade } from '../test-facade.ts'
 import { attachCustomTools, type CustomToolClick } from '../tools/customTools.ts'
 import { setTool } from '../tools/tools.ts'
 import { ChangeClassifier } from './changes.ts'
+import { contentOf } from './content.ts'
 import { createBoardHandles } from './handles.ts'
 import { BoardInput } from './input.ts'
 import { PeerStore } from './peers.ts'
@@ -107,6 +114,13 @@ export const lobbyRoleOf = (r: TicketResponse['role'], readonly: boolean): Lobby
 
 type Listener<E extends BoardEvent> = LobbyCanvasEventMap[E]
 
+/** Takes pasted or dropped content (resolves whether a feature took it). */
+export type ContentSink = (
+  content: ExternalContent,
+  at: ScenePoint | null,
+  source: 'paste' | 'drop' | 'insert',
+) => Promise<boolean>
+
 export class LobbyBoardSession {
   readonly registries: FeatureRegistries = createFeatureRegistries()
   readonly settings: SettingsStore
@@ -139,6 +153,7 @@ export class LobbyBoardSession {
   private lastTool: string | null = null
   private lastEditing: string | null = null
   private rootEl: HTMLElement | null = null
+  private contentSink: ContentSink | null = null
 
   constructor(o: LobbyBoardSessionOptions) {
     this.o = o
@@ -223,6 +238,11 @@ export class LobbyBoardSession {
       isBlocked: (p) => this.registries.hitGuard.isBlocked(p) !== null,
       isConfirmed: (id) => this.core.confirmed(id) !== undefined,
       onEmptyDoubleClick: (p) => this.createFreeText(p.x, p.y),
+      // a drop on the board (editors): the features' content handlers (./content.ts), through the page
+      onDrop: (e) => {
+        const content = contentOf(e.dataTransfer)
+        if (content) void this.contentSink?.(content, this.input.toScene(e.clientX, e.clientY), 'drop')
+      },
       onDeny: (leaseId, holder) =>
         o.notices.notify({
           key: `lease:${leaseId}`,
@@ -262,6 +282,11 @@ export class LobbyBoardSession {
   /** The board's canvas region (the page sets it; the outer input layer listens there). */
   setRoot(el: HTMLElement | null): void {
     this.rootEl = el
+  }
+
+  /** Where drops go (the page dispatches them to the features' content handlers with its context). */
+  setContentSink(sink: ContentSink | null): void {
+    this.contentSink = sink
   }
 
   setTheme(theme: 'light' | 'dark'): void {

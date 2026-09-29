@@ -59,6 +59,7 @@ import {
   topBarItems,
   useRegistries,
 } from './chrome.tsx'
+import { contentOf, dispatchContent } from './content.ts'
 import { PROBE_FEATURE } from './probe.tsx'
 import { LobbyBoardSession, type LobbyBoardSnapshot } from './session.ts'
 import { duplicateLobbyData } from './tx.ts'
@@ -427,6 +428,30 @@ function LobbyBoardView({
   )
 
   const wiring = useMemo<readonly HostWiring[]>(() => [session.attach], [session])
+
+  // paste and drop go to the features' content handlers first (docs/EXCALIDRAW-CONTRACTS.md §3)
+  useEffect(() => {
+    if (!ctx) return
+    session.setContentSink((content, at, source) =>
+      dispatchContent(ctx.registries.contentHandlers.list(), content, ctx, at, source),
+    )
+    return () => session.setContentSink(null)
+  }, [ctx, session])
+  const ctxRef = useRef(ctx)
+  ctxRef.current = ctx
+  const onPaste = useCallback<NonNullable<ExcalidrawHostProps['onPaste']>>(async (data, event) => {
+    // Excalidraw's own clipboard (elements copied on a board) is Excalidraw's to paste
+    if (data.elements?.length) return true
+    const c = ctxRef.current
+    const content = contentOf(event?.clipboardData)
+    if (c && content) {
+      const p = c.canvas.pointer()
+      const at = p?.overCanvas ? p.scene : null
+      if (await dispatchContent(c.registries.contentHandlers.list(), content, c, at, 'paste')) return false
+    }
+    // Excalidraw's own paste path never takes files (its base64 copies, §2.10.1): Lobby's upload path does
+    return !(data.files && Object.keys(data.files).length) && !event?.clipboardData?.files.length
+  }, [])
   const onDuplicate = useCallback<NonNullable<ExcalidrawHostProps['onDuplicate']>>(
     (next, _prev, data) => {
       const handlers = session.registries.customData.list()
@@ -541,11 +566,6 @@ function LobbyBoardView({
   // always the same tree (a provider that appears later would remount the canvas)
   return <CanvasFeatureContextProvider value={ctx}>{board_}</CanvasFeatureContextProvider>
 }
-
-/** Excalidraw's own paste path never takes files (its base64 copies, §2.10.1): Lobby's upload path (3g) does. */
-const onPaste: ExcalidrawHostProps['onPaste'] = (data) =>
-  !(data as { files?: Record<string, unknown> }).files ||
-  Object.keys((data as { files?: Record<string, unknown> }).files ?? {}).length === 0
 
 /**
  * An element's link (§2.3.2 onLinkOpen): Excalidraw never navigates by itself. A link into Lobby opens

@@ -20,6 +20,8 @@ export interface ProbeRecord {
   toolUps: (string | null)[]
   toolDoubleClicks: (string | null)[]
   toolExits: number
+  /** content the probe's handler saw (paste or drop), and whether it took it */
+  contents: { kind: string; source: string; text: string | null; at: boolean; took: boolean }[]
 }
 
 declare global {
@@ -118,6 +120,19 @@ export const PROBE_FEATURE: CanvasFeature = {
       },
     },
   ],
+  contentHandlers: [
+    {
+      id: 'probe-text',
+      kinds: ['text', 'url'],
+      priority: 10,
+      handle: (content, _ctx, at, source) => {
+        const text = content.kind === 'text' ? content.text : content.kind === 'url' ? content.url : null
+        const took = !!text?.startsWith('probe:')
+        window.__lobbyProbe?.contents.push({ kind: content.kind, source, text, at: at !== null, took })
+        return took
+      },
+    },
+  ],
   commands: [
     {
       id: 'probe.hello',
@@ -139,6 +154,7 @@ export const PROBE_FEATURE: CanvasFeature = {
       toolUps: [],
       toolDoubleClicks: [],
       toolExits: 0,
+      contents: [],
     }
     window.__lobbyProbe = rec
     const offChange = ctx.canvas.on('change', (c) => {

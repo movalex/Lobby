@@ -29,6 +29,7 @@ interface ProbeView {
   toolUps: (string | null)[]
   toolDoubleClicks: (string | null)[]
   toolExits: number
+  contents: { kind: string; source: string; text: string | null; at: boolean; took: boolean }[]
 }
 const probe = (page: Page) =>
   page.evaluate(() => (window as unknown as { __lobbyProbe?: ProbeView }).__lobbyProbe ?? null)
@@ -119,6 +120,34 @@ test('the feature host renders the registries: dock, top bar, overlays, the tool
   expect(await editingId(a.page)).toBeNull()
   expect(await setTool(a.page, 'select')).toBe(true)
   await expect.poll(async () => (await probe(a.page))?.toolExits).toBe(1)
+
+  // paste and drop reach the features' content handlers first: a taken paste creates nothing
+  const before = (await items(a.page)).length
+  await focusBoard(a.page)
+  await a.page.evaluate(() => {
+    const dt = new DataTransfer()
+    dt.setData('text/plain', 'probe: pasted words')
+    const target = document.activeElement ?? document.body
+    target.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }))
+  })
+  await expect
+    .poll(async () => (await probe(a.page))?.contents.find((c) => c.source === 'paste'))
+    .toEqual({ kind: 'text', source: 'paste', text: 'probe: pasted words', at: true, took: true })
+  await a.page.evaluate(() => {
+    const dt = new DataTransfer()
+    dt.setData('text/plain', 'https://example.com/dropped')
+    const canvas =
+      document.querySelector('.excalidraw canvas.interactive') ?? document.querySelector('.excalidraw')
+    const r = (canvas as HTMLElement).getBoundingClientRect()
+    const init = { dataTransfer: dt, bubbles: true, cancelable: true, clientX: r.x + 300, clientY: r.y + 300 }
+    canvas?.dispatchEvent(new DragEvent('dragover', init))
+    canvas?.dispatchEvent(new DragEvent('drop', init))
+  })
+  await expect
+    .poll(async () => (await probe(a.page))?.contents.find((c) => c.source === 'drop'))
+    .toEqual({ kind: 'url', source: 'drop', text: 'https://example.com/dropped', at: true, took: false })
+  await a.page.waitForTimeout(300)
+  expect((await items(a.page)).length).toBe(before)
 
   // focus mode: the chrome and the layers go, a layer that says `show` stays
   await a.page.getByTestId('probe-screen').click()

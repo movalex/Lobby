@@ -2,10 +2,13 @@
 // (transact joinPrevious), the peer store (presence.peers) and the local settings.
 import type { RosterEntry, ServerMessage } from '@draftroom/canvas-schema/protocol'
 import { describe, expect, it } from 'vitest'
+import type { CanvasFeatureContext } from '../api/feature.ts'
+import type { ContentHandlerSpec } from '../api/registries.ts'
 import type { HistEl, Scene } from '../history/diff.ts'
 import { LobbyHistory } from '../history/stack.ts'
 import { createRegistries } from '../registries.ts'
 import { ChangeClassifier, type ChangeElement } from './changes.ts'
+import { contentOf, dispatchContent, handlersFor } from './content.ts'
 import { joinInto, joinMark } from './history-join.ts'
 import { type PeerSource, PeerStore } from './peers.ts'
 import { SETTINGS_KEY, SettingsStore } from './settings.ts'
@@ -214,5 +217,87 @@ describe('uploads in flight', () => {
     await Promise.resolve()
     expect(uploadsInFlight(r)).toBe(0)
     expect(seen).toEqual([1, 2, 1, 0])
+  })
+})
+
+describe('paste and drop content', () => {
+  const t = (data: Record<string, string>, files: File[] = []) => ({
+    files,
+    getData: (type: string) => data[type] ?? '',
+  })
+
+  it('reads files first, then a lone URL, then text with its HTML', () => {
+    const f = new File(['x'], 'a.png', { type: 'image/png' })
+    expect(contentOf(t({ 'text/plain': 'ignored' }, [f]))).toEqual({ kind: 'files', files: [f] })
+    expect(contentOf(t({ 'text/plain': ' https://example.com/a ' }))).toEqual({
+      kind: 'url',
+      url: 'https://example.com/a',
+    })
+    expect(contentOf(t({ 'text/uri-list': '# comment\nhttps://x.test/p' }))).toEqual({
+      kind: 'url',
+      url: 'https://x.test/p',
+    })
+    expect(contentOf(t({ 'text/plain': 'a\tb', 'text/html': '<table/>' }))).toEqual({
+      kind: 'text',
+      text: 'a\tb',
+      html: '<table/>',
+    })
+    expect(contentOf(t({}))).toBeNull()
+    expect(contentOf(null)).toBeNull()
+  })
+
+  it('runs the handlers for the kind by priority until one takes it; a throwing one is passed over', async () => {
+    const ran: string[] = []
+    const h = (
+      id: string,
+      priority: number,
+      take: boolean | 'throw',
+      kinds: ContentHandlerSpec['kinds'] = ['text'],
+    ): ContentHandlerSpec => ({
+      id,
+      kinds: [...kinds],
+      priority,
+      handle: () => {
+        ran.push(id)
+        if (take === 'throw') throw new Error('boom')
+        return take
+      },
+    })
+    const handlers = [
+      h('low', 1, true),
+      h('files', 9, true, ['files']),
+      h('high', 5, false),
+      h('bad', 7, 'throw'),
+    ]
+    expect(handlersFor(handlers, { kind: 'text', text: 'x' }).map((x) => x.id)).toEqual([
+      'bad',
+      'high',
+      'low',
+    ])
+    const orig = console.error
+    console.error = () => {}
+    try {
+      expect(
+        await dispatchContent(
+          handlers,
+          { kind: 'text', text: 'x' },
+          {} as CanvasFeatureContext,
+          null,
+          'paste',
+        ),
+      ).toBe(true)
+    } finally {
+      console.error = orig
+    }
+    expect(ran).toEqual(['bad', 'high', 'low'])
+    expect(
+      await dispatchContent(
+        [h('none', 1, false)],
+        { kind: 'text', text: 'x' },
+        {} as CanvasFeatureContext,
+        null,
+        'drop',
+      ),
+    ).toBe(false)
   })
 })
