@@ -201,6 +201,7 @@ interface InvitationListRow {
   token_hash: string
   creator_id: string
   creator_name: string
+  invited_email: string | null
 }
 
 export function registerReviewLinkRoutes(app: FastifyInstance, ctx: FeatureContext): void {
@@ -212,9 +213,12 @@ export function registerReviewLinkRoutes(app: FastifyInstance, ctx: FeatureConte
     const user = await ctx.requireUser(req)
     const { bid = '' } = req.params as Params
     const access = await requireBoardAction(db, bid, user.id, 'manage_access')
+    // Domain access (D4): a manager who is not a creator (stored status) sees the list, but never a
+    // multi-use link's URL, so they cannot hand out a link that already exists.
+    const mayShare = await ctx.identity.isCreatorUser(db, user.id)
     const rows = await db.query<InvitationListRow>(
       `SELECT i.id, i.role, i.multi_use, i.allow_guests, i.max_uses, i.use_count, i.created_at, i.expires_at, i.token_hash,
-              u.id AS creator_id, u.name AS creator_name
+              u.id AS creator_id, u.name AS creator_name, i.invited_email
          FROM invitations i JOIN users u ON u.id = i.created_by
         WHERE i.board_id = $1 AND i.workspace_id = $2 AND i.revoked_at IS NULL AND i.redeemed_by IS NULL
           AND i.expires_at > $3
@@ -224,7 +228,7 @@ export function registerReviewLinkRoutes(app: FastifyInstance, ctx: FeatureConte
     )
     const invitations: PendingInvitation[] = rows.rows.map((r) => {
       let url: string | null = null
-      if (r.multi_use) {
+      if (r.multi_use && mayShare) {
         const token = reviewLinkToken(config.ticketSecret, r.id)
         // A rotated secret cannot rebuild the link: say so (null) instead of showing a dead URL.
         if (sha256hex(token) === r.token_hash) url = linkUrl(token)
@@ -243,8 +247,9 @@ export function registerReviewLinkRoutes(app: FastifyInstance, ctx: FeatureConte
           ? new Date(r.created_at.getTime() + reviewLinkMaxLifetimeMs(r.role)).toISOString()
           : null,
         allowGuests: r.multi_use && r.allow_guests,
-        // Domain access STEP A: no invitation is locked yet (B2 reads invitations.invited_email here).
-        email: null,
+        // Domain access: the full address a single-use invitation is locked to (this manager-only list is
+        // the one response that carries it).
+        email: r.multi_use ? null : r.invited_email,
       }
     })
     return { invitations }
@@ -259,6 +264,11 @@ export function registerReviewLinkRoutes(app: FastifyInstance, ctx: FeatureConte
       // Wave 3: a name-only guest never hands out links, whatever board role they were given.
       if ((await userKind(tx, user.id)) === 'guest')
         throw guestAccountRequired('Sign in with an account to create links.')
+      // Domain access (D4): review, workshop and client guest links are creator-only.
+      await ctx.identity.requireCreator(tx, user.id, 'share', {
+        route: req.routeOptions.url ?? '',
+        by: 'route',
+      })
       const at = now()
       const open = await tx.one<{ n: number }>(
         `SELECT count(*)::int AS n FROM invitations
@@ -383,6 +393,11 @@ export function registerReviewLinkRoutes(app: FastifyInstance, ctx: FeatureConte
     const result = await db.transaction(async (tx) => {
       // The board row, then the link (the lock order in access.ts).
       const access = await requireBoardAction(tx, bid, user.id, 'manage_access', { forUpdate: true })
+      // Domain access (D4): extending a link hands out access for longer: creator-only.
+      await ctx.identity.requireCreator(tx, user.id, 'share', {
+        route: req.routeOptions.url ?? '',
+        by: 'route',
+      })
       if (!InvitationId.safeParse(id).success) throw notFound()
       const link = await tx.maybeOne<LinkRow>(
         `SELECT ${LINK_COLUMNS} FROM invitations WHERE id = $1 AND board_id = $2 AND multi_use FOR UPDATE`,

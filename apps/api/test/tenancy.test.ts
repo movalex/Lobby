@@ -4,7 +4,7 @@
 
 import { InvitationCreated, Project } from '@draftroom/contracts'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { type Client, createBoard, createTestApi, type TestApi } from './helpers.ts'
+import { type Client, createBoard, createTestApi, devEmail, type TestApi } from './helpers.ts'
 
 let api: TestApi
 let owner: Client // owns workspace B (their personal workspace)
@@ -14,6 +14,8 @@ let boardB: string
 let projectB: string
 let invitationB: string
 let boardInviteB: string
+// Domain access: single-use invitations name an address (so the 400 for a missing one never masks a 404).
+const INVITEE = devEmail('invitee')
 
 beforeAll(async () => {
   api = await createTestApi()
@@ -27,10 +29,12 @@ beforeAll(async () => {
     (await owner.req('POST', `/api/workspaces/${wsB}/projects`, { name: 'B' })).json(),
   ).id
   invitationB = InvitationCreated.parse(
-    (await owner.req('POST', `/api/workspaces/${wsB}/invitations`, { role: 'member' })).json(),
+    (
+      await owner.req('POST', `/api/workspaces/${wsB}/invitations`, { role: 'member', email: INVITEE })
+    ).json(),
   ).id
   boardInviteB = InvitationCreated.parse(
-    (await owner.req('POST', `/api/boards/${boardB}/invitations`, { role: 'viewer' })).json(),
+    (await owner.req('POST', `/api/boards/${boardB}/invitations`, { role: 'viewer', email: INVITEE })).json(),
   ).id
   // Both users also share Dev Studio; that shared tenant must not bridge into B.
 })
@@ -48,8 +52,8 @@ const probes = (): Array<[string, 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE', s
   ['grant self', 'PUT', `/api/boards/${boardB}/members/placeholder`, { role: 'owner' }],
   ['revoke owner', 'DELETE', `/api/boards/${boardB}/members/placeholder-owner`, undefined],
   ['ticket', 'POST', `/api/boards/${boardB}/ticket`, undefined],
-  ['board invitation', 'POST', `/api/boards/${boardB}/invitations`, { role: 'viewer' }],
-  ['workspace invitation', 'POST', `/api/workspaces/${wsB}/invitations`, { role: 'member' }],
+  ['board invitation', 'POST', `/api/boards/${boardB}/invitations`, { role: 'viewer', email: INVITEE }],
+  ['workspace invitation', 'POST', `/api/workspaces/${wsB}/invitations`, { role: 'member', email: INVITEE }],
   ['revoke ws invitation', 'DELETE', `/api/invitations/${invitationB}`, undefined],
   ['revoke board invitation', 'DELETE', `/api/invitations/${boardInviteB}`, undefined],
   ['workspace members', 'GET', `/api/workspaces/${wsB}/members`, undefined],

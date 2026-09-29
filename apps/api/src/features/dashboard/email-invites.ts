@@ -14,6 +14,11 @@
 //     session, guest membership. If Clerk refuses or fails, the inviter gets the link instead.
 // With the development sign-in provider nothing is emailed: the inviter gets the link.
 //
+// Domain access (docs/DOMAIN-ACCESS-CONTRACTS.md §6.1): only creators invite, and every link this
+// route makes (emailed, existing_account, email_not_configured, invalid_email, rate_limited,
+// provider_error) is locked to the invited address. The `granted` path is unchanged apart from the
+// creator check.
+//
 // The address itself is never logged: log lines carry its domain and a keyed hash.
 
 import { createHmac } from 'node:crypto'
@@ -57,8 +62,17 @@ export function registerEmailInviteRoutes(app: FastifyInstance, ctx: FeatureCont
     emailRef: createHmac('sha256', logKey).update(email).digest('hex').slice(0, 12),
   })
 
-  /** A single-use board invitation (access re-checked: Clerk calls may have taken a while). */
-  const newInvitation = (boardId: string, actorId: string, role: RequestableRole) =>
+  /**
+   * A single-use board invitation locked to `email` (access and creator status re-checked: Clerk calls
+   * may have taken a while).
+   */
+  const newInvitation = (
+    boardId: string,
+    actorId: string,
+    role: RequestableRole,
+    email: string,
+    route: string,
+  ) =>
     db.transaction(async (tx) => {
       const access = await requireBoardAction(tx, boardId, actorId, 'manage_access')
       return createInvitation(tx, ctx, {
@@ -67,14 +81,17 @@ export function registerEmailInviteRoutes(app: FastifyInstance, ctx: FeatureCont
         role,
         userId: actorId,
         via: 'email',
+        email,
+        route,
       })
     })
 
   /** Gives someone who already uses Draftroom the role now (never lowering what they have). */
-  const grant = (boardId: string, actorId: string, userId: string, role: RequestableRole) =>
+  const grant = (boardId: string, actorId: string, userId: string, role: RequestableRole, route: string) =>
     db.transaction(async (tx) => {
       // The board row lock orders this with every other access change (members.ts, access requests).
       const access = await requireBoardAction(tx, boardId, actorId, 'manage_access', { forUpdate: true })
+      await ctx.identity.requireCreator(tx, actorId, 'share', { route, by: 'route' })
       const target = await loadBoardAccess(tx, boardId, userId)
       const row = await tx.maybeOne<UserRow>(
         'SELECT id, name, handle, color, avatar_url FROM users WHERE id = $1',
@@ -123,14 +140,17 @@ export function registerEmailInviteRoutes(app: FastifyInstance, ctx: FeatureCont
       const me = await ctx.requireUser(req)
       const { bid = '' } = req.params as Params
       const { email, role } = parse(EmailInviteInput, req.body)
-      // The board's own answer first (404 without access, 403 without manage_access), then the limit.
+      // The board's own answer first (404 without access, 403 without manage_access), then the creator
+      // check (domain access), then the limit.
       await requireBoardAction(db, bid, me.id, 'manage_access')
+      const route = req.routeOptions.url ?? ''
+      await ctx.identity.requireCreator(db, me.id, 'share', { route, by: 'route' })
       if (!limiter.hit(me.id))
         throw new ApiError(429, 'RATE_LIMITED', 'Too many email invitations. Wait a while and try again.')
       const log = logFields(bid, email)
 
       const asLink = async (reason: LinkReason): Promise<EmailInviteResult> => {
-        const inv = await newInvitation(bid, me.id, role)
+        const inv = await newInvitation(bid, me.id, role, email, route)
         req.log.info({ ...log, mode: 'link', reason }, 'board email invitation')
         publishSharingChanged(ctx, bid, 'invitation')
         reply.code(201)
@@ -159,7 +179,7 @@ export function registerEmailInviteRoutes(app: FastifyInstance, ctx: FeatureCont
           [clerkIds],
         )
         if (!linked) return asLink('existing_account')
-        const g = await grant(bid, me.id, linked.user_id, role)
+        const g = await grant(bid, me.id, linked.user_id, role, route)
         req.log.info({ ...log, mode: 'granted', changed: g.changed }, 'board email invitation')
         if (g.changed) {
           notifier.accessChanged({ boardId: bid, userId: g.user.id })
@@ -168,7 +188,7 @@ export function registerEmailInviteRoutes(app: FastifyInstance, ctx: FeatureCont
         return { mode: 'granted', user: g.user, role: g.role, alreadyHadAccess: !g.changed }
       }
 
-      const inv = await newInvitation(bid, me.id, role)
+      const inv = await newInvitation(bid, me.id, role, email, route)
       publishSharingChanged(ctx, bid, 'invitation')
       reply.code(201)
       try {

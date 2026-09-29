@@ -85,13 +85,16 @@ export async function createTestApi(
   opts: {
     deps?: Partial<ApiDeps>
     env?: Record<string, string>
+    /** An existing (migrated) database to run over, e.g. an api re-created with another config; not closed. */
+    db?: Db
     /** TEST-ONLY: false leaves the domain-access root guard out (in-route checks alone). */
     domainAccessGuard?: boolean
   } = {},
 ) {
   const dataDir = mkdtempSync(join(tmpdir(), 'dr-api-'))
   const config = loadConfig(testEnv(dataDir, opts.env))
-  const db = await openTestDb()
+  const ownsDb = !opts.db
+  const db = opts.db ?? (await openTestDb())
   const notifier = createRecordingNotifier()
   let offset = 0
   const now = () => new Date(Date.now() + offset)
@@ -154,7 +157,7 @@ export async function createTestApi(
     anon: (method, url, body, headers = {}) => inject(method, url, body, headers),
     async close() {
       await server.close()
-      await db.close()
+      if (ownsDb) await db.close()
       rmSync(dataDir, { recursive: true, force: true })
     },
   }

@@ -12,7 +12,7 @@ import {
   sweepExpiredReviewLinks,
 } from '../../../src/features/dashboard/review-links.ts'
 import type { AccessChange } from '../../../src/notifier.ts'
-import { type Client, ORIGIN } from '../../helpers.ts'
+import { type Client, devEmail, ORIGIN } from '../../helpers.ts'
 import { boardRole, DAY, setupWorld, singleUseInvite, tokenOf, type World } from './setup.ts'
 
 let w: World
@@ -210,10 +210,10 @@ describe('review links', () => {
 
   it('the invitation list shows pending single-use links (URL shown once) and open review links only', async () => {
     const { bob, erin, board, api } = w
-    const single = await singleUseInvite(bob, board, 'editor')
-    const used = await singleUseInvite(bob, board, 'viewer')
+    const single = await singleUseInvite(bob, board, 'editor', devEmail('frank'))
+    const used = await singleUseInvite(bob, board, 'viewer', devEmail('erin'))
     await accept(erin, used.url)
-    const revoked = await singleUseInvite(bob, board, 'viewer')
+    const revoked = await singleUseInvite(bob, board, 'viewer', devEmail('frank'))
     await bob.req('DELETE', `/api/invitations/${revoked.id}`)
     const review = await reviewLink(bob, board, { role: 'viewer' })
     const list = await invitations(bob, board)
@@ -228,7 +228,7 @@ describe('review links', () => {
 
   it('M1 single-use links stay single-use', async () => {
     const { bob, erin, frank, board } = w
-    const inv = await singleUseInvite(bob, board, 'viewer')
+    const inv = await singleUseInvite(bob, board, 'viewer', devEmail('erin'))
     expect((await accept(erin, inv.url)).statusCode).toBe(200)
     expect((await accept(frank, inv.url)).statusCode).toBe(410)
   })

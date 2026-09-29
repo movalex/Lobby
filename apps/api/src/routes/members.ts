@@ -1,4 +1,9 @@
 // Board members: who has access and why, plus grant/change/revoke (docs/M1-CONTRACTS.md §5).
+//
+// Domain access (docs/DOMAIN-ACCESS-CONTRACTS.md D4, D5, §4.2): PUT gives access only when the caller
+// is a creator (adding a grant, raising one, owner). Lowering a direct grant, keeping it, and DELETE
+// stay open to every manager, a creator's grant included (the last-owner rule is unchanged). Nobody
+// makes a non-creator a board owner.
 
 import { type BoardMember, PutMemberInput } from '@draftroom/contracts'
 import type { Queryable } from '@draftroom/db'
@@ -12,6 +17,7 @@ import {
 import type { FastifyInstance } from 'fastify'
 import { type BoardAccess, isUserId, requireBoardAction } from '../access.ts'
 import { audit } from '../audit.ts'
+import { roleRequiresCreator } from '../auth/identity.ts'
 import type { AppContext, Params } from '../context.ts'
 import { conflict, notFound, parse } from '../errors.ts'
 import { toUser, type UserRow } from '../serialize.ts'
@@ -110,13 +116,34 @@ export function registerMemberRoutes(app: FastifyInstance, ctx: AppContext): voi
     const user = await ctx.requireUser(req)
     const { bid = '', uid = '' } = req.params as Params
     const { role } = parse(PutMemberInput, req.body)
+    const route = req.routeOptions.url ?? ''
+    if (role === 'owner') {
+      // Unlocked pre-check (today's 404/403 answers), then the target's identity when unknown or
+      // stale: outside any transaction, never throwing, never signing anyone out. Only a creator's
+      // request can make an owner, so nobody else triggers a provider call here.
+      const seen = await requireBoardAction(db, bid, user.id, 'manage_access')
+      if (!isUserId(uid)) throw notFound()
+      const member = await db.maybeOne(
+        'SELECT 1 AS ok FROM workspace_members WHERE workspace_id = $1 AND user_id = $2',
+        [seen.board.workspace_id, uid],
+      )
+      if (!member) throw notFound()
+      if (await ctx.identity.isCreatorUser(db, user.id)) await ctx.identity.refreshTarget(uid)
+    }
     const result = await db.transaction(async (tx) => {
       const access = await requireBoardAction(tx, bid, user.id, 'manage_access', { forUpdate: true })
       if (!isUserId(uid)) throw notFound()
       const target = await loadTarget(tx, access, uid)
+      const changed = target.board_grant !== role
+      // D5: nobody makes a non-creator an owner (whoever asks). Keeping an existing grant is a no-op.
+      if (changed && role === 'owner' && !(await ctx.identity.isCreatorUser(tx, uid)))
+        throw roleRequiresCreator()
       if (target.board_grant === 'owner' && role !== 'owner' && (await otherOwners(tx, access, uid)) === 0)
         throw conflict('LAST_OWNER', LAST_OWNER_MESSAGE)
-      const changed = target.board_grant !== role
+      // D4: lowering a direct grant is open to every manager; adding or raising one needs a creator.
+      const lowering = target.board_grant !== null && RANK[role] < RANK[target.board_grant]
+      if (changed && !lowering)
+        await ctx.identity.requireCreator(tx, user.id, 'share', { route, by: 'route' })
       if (changed) {
         const at = now()
         await tx.query(

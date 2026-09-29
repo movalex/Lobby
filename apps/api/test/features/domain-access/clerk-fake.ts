@@ -40,11 +40,14 @@ export const fakeClerk = {
   failures: new Map<string, Failure>(),
   /** When set, every getUser waits for it (single-flight and ordering tests). */
   gate: null as Promise<void> | null,
+  /** Invitation emails Clerk was asked to send (invite by email). */
+  invitations: [] as Record<string, unknown>[],
   reset() {
     this.users.clear()
     this.calls = []
     this.failures.clear()
     this.gate = null
+    this.invitations = []
   },
 }
 
@@ -70,9 +73,21 @@ export const clerkBackendModule = {
         if (!u) throw notFound()
         return u
       },
-      getUserList: async () => ({ data: [], totalCount: 0 }),
+      // Like Clerk: an exact (case-insensitive) address filter, verified or not.
+      getUserList: async (params: { emailAddress?: string[] }) => {
+        const wanted = new Set((params.emailAddress ?? []).map((e) => e.toLowerCase()))
+        const data = [...fakeClerk.users.values()].filter((u) =>
+          u.emailAddresses.some((a) => wanted.has(a.emailAddress.toLowerCase())),
+        )
+        return { data, totalCount: data.length }
+      },
     },
-    invitations: { createInvitation: async () => ({ id: 'inv_clerk_fake' }) },
+    invitations: {
+      createInvitation: async (params: Record<string, unknown>) => {
+        fakeClerk.invitations.push(params)
+        return { id: 'inv_clerk_fake' }
+      },
+    },
     sessions: {
       getSessionList: async () => ({ data: [] }),
       revokeSession: async () => ({}),

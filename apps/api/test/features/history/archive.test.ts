@@ -1,6 +1,14 @@
 // GET /api/boards/:bid/export (BoardArchiveV1) and POST /api/workspaces/:wid/boards/import.
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { type Client, createBoard, createTestApi, DEV_STUDIO, ORIGIN, type TestApi } from '../../helpers.ts'
+import {
+  type Client,
+  createBoard,
+  createTestApi,
+  DEV_STUDIO,
+  devEmail,
+  ORIGIN,
+  type TestApi,
+} from '../../helpers.ts'
 import {
   assertValid,
   baseRecords,
@@ -188,7 +196,10 @@ describe('POST /api/workspaces/:wid/boards/import', () => {
     expect(inProject.json().board.projectId).toBe(here.json().id)
     // guest of bob's personal workspace through a board invitation
     const personal = await createBoard(bob, bob.personalWorkspaceId, 'Personal')
-    const inv = await bob.req('POST', `/api/boards/${personal}/invitations`, { role: 'editor' })
+    const inv = await bob.req('POST', `/api/boards/${personal}/invitations`, {
+      role: 'editor',
+      email: devEmail('dave'),
+    })
     await outsider.req('POST', `/api/invitations/${new URL(inv.json().url).pathname.split('/').pop()}/accept`)
     expect((await importArchive(outsider, archive, '', bob.personalWorkspaceId)).statusCode).toBe(403)
   })

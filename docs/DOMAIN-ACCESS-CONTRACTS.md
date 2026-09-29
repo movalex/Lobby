@@ -1,6 +1,6 @@
 # Domain access: contracts
 
-Status: contracts committed (step A, §12), 2026-09-29, on branch `next` (base a571636: 19 backlog fixes, not deployed). The feature itself is not built yet. Revised after the security and regression reviews: every blocking item is resolved, and §16 (Review log) says what was accepted, rejected or deferred.
+Status: contracts committed (step A, §12), 2026-09-29, on branch `next` (base a571636: 19 backlog fixes, not deployed). Revised after the security and regression reviews: every blocking item is resolved, and §16 (Review log) says what was accepted, rejected or deferred. **API steps B1 and B2 are built** on branch `da/api` (§17, As built); the web (step C) and the integration (step D) are not done yet.
 
 Owner decisions: 2026-09-29, final (restated in §0). Two builders work in parallel: an **API owner** and a **WEB owner** (§12). This file is the only coordination channel between them. Contract changes go through the API owner and are recorded here.
 
@@ -75,7 +75,7 @@ export const DEFAULT_CREATOR_DOMAINS = ['darkburn.com', 'trailerparkgroup.com'] 
 export const DEV_CREATOR_DOMAIN = 'dev.invalid'
 ```
 
-The dev domain and the `user_emails.source` filter are keyed on the provider instance the api actually runs (`provider.name`; app.ts:92 lets `deps.authProvider` differ from `config.authProvider`), never on the `AUTH_PROVIDER` variable.
+The dev domain and the `user_emails.source` filter are keyed on the provider instance the api actually runs (`provider.id`; app.ts:92 lets `deps.authProvider` differ from `config.authProvider`), never on the `AUTH_PROVIDER` variable.
 
 | Variable | Unset or blank (config.ts `read` treats blank as unset) | Set |
 |---|---|---|
@@ -752,7 +752,13 @@ Nobody edits the other owner's files. If the web needs a contract change, the WE
 - **C. WEB owner**: §9, §11.4 and §11.5.
 - **D. Integration** (API owner or the lead): merge; the full `pnpm verify` and the real-Postgres run; three green runs of `domain-access.spec.ts`; an independent security review against §14; then the lead deploys (§13).
 
-**Contract change requests**: (none yet)
+**Contract change requests**: none from the WEB owner yet. Changes the API owner made while building B1/B2 (each small and local; the reasons are in §17):
+1. `replaceUserEmails` writes when the stored `identity_checked_at` is NULL or **at or before** `fetchedAt` (`<=`, not `<`), so two dev logins within one millisecond both write; an older snapshot still never overwrites a newer one.
+2. `AuthProvider.refreshIdentity` takes a `Db` (not a `Queryable`): the provider writes each snapshot in one transaction, after its network calls.
+3. §2: the running provider is `provider.id` (the `AuthProvider` field), not `provider.name`.
+4. `ShareMember.canOwn` is also false for name-only guests (they can never own a board; the guest guard answers 409 `GUEST_ONLY_THROUGH_LINKS`).
+5. `PUT …/members/:uid`: an unchanged role is a no-op (200) before the D5 check, so putting `owner` again on a pre-existing outsider owner does not answer 409. The target refresh for `role: 'owner'` runs only when the caller is a creator (stored status), and transfer of ownership checks the caller's creator status in its unlocked pre-check, before `refreshTarget`: a non-creator can never make Lobby call Clerk about someone else.
+6. `identity.status(user, q?)` takes an optional `Queryable` (the sign-in response computes it inside the sign-in transaction, §8).
 
 ## 13. Rollout, rollback, offboarding
 
@@ -854,3 +860,24 @@ Rejected, with reasons:
 Deferred: the access-request requester's email domain in the approval row (a follow-up; approval is already creator-only); enforcing the verification strategy; Clerk webhooks.
 
 Corrections to the first draft: `migrations.pg.test.ts:564` counts the tables before the upgrade, so it stays 29; the "B1 is everything the e2e flows need" claim was wrong (flows 2 and 5 need B2).
+
+## 17. As built (API owner, steps B1 and B2)
+
+Branch `da/api` (B1 1af29c4; B2 on top). Everything in §2 to §8 and §11.1 to §11.3 is built; the contract changes above are the only divergences.
+
+**Where things are**
+- Policy (pure): `apps/api/src/auth/creators.ts` (`normalizeEmail`, `emailDomain`, `creatorMatch`, `isCreatorEmail`, `creatorReason`, `distinctDomains`, `parseCreatorPolicy`), parsed into `ApiConfig.creators` (config.ts). The startup log line is `'domain access policy'` with `{ creators: { domains, exceptions } }`.
+- The one SQL fragment and the freshness constants: `apps/api/src/auth/creator-sql.ts` (a leaf module, so session.ts, users.ts and identity.ts share it without an import cycle; identity.ts re-exports the constants). `SessionUser` has `kind`, `creator`, `identityCheckedAt`; `SessionStore.reload(req)` replaces the per-request cache entry.
+- Addresses: `users.ts` `cleanProfileEmails` (normalise, dedupe, one primary first, at most 20, strategy `^[a-z0-9_:.-]{1,100}$` else null), `replaceUserEmails`, `stampIdentityChecked`, `ensurePersonalWorkspace`, `findOrCreateUser` (D9: a first sign-in without a profile throws 503 inside the sign-in transaction, so no user is created). `clerk.ts` `verifiedProfileEmails` and `classifyProfileFailure` (`isClerkAPIResponseError`, loaded lazily from `@clerk/backend/errors`, plus 404 and `resource_not_found`); the profile call has the 10 s timeout of clerk-directory.ts. `dev.ts` `devEmail(handle)`.
+- `apps/api/src/auth/identity.ts`: `createIdentityService` → `ctx.identity` (`status`, `freshen(req, user, mode, { strict })`, `refreshTarget`, `requireCreator`, `isCreatorUser`, `creatorsAmong`, `canOwnAmong`, `ensurePersonalWorkspace`, `settled`, `lookup`). `ApiServer.identity` exposes it (tests call `settled()`); the api's `onClose` waits for it.
+- The guard: `apps/api/src/features/domain-access/{index.ts,guard.ts}` (`CREATOR_ROUTES`), registered right after `registerGuests`. Test-only seam: `ApiDeps.domainAccessGuard: false` / `createTestApi({ domainAccessGuard: false })`.
+- In-route checks, all after the route's own 404/403: routes/boards.ts (create; PATCH visibility raise), routes/workspaces.ts (create project; PATCH project), routes/invitations.ts (`createInvitation`: guest check, then `requireCreator`, then D5 for workspace `admin`/`owner`; accept: the lock; preview: `InvitationEmailLock`), routes/members.ts (PUT), features/history/index.ts (`requireBoardCreator` for import, duplicate, restore as new), features/history/new-board.ts (the re-check in the transaction; keep-sharing caps non-creators' owner grants at editor via `creatorsAmong`), features/dashboard/{email-invites,review-links,access-requests,sharing}.ts.
+- Refusal logs: `creator.refused` (`userId`, `route` pattern, `by`, `purpose`, `reason` `outside` or `unconfirmed`, `emailDomains`); `invitation.email_mismatch`; `identity.refresh_failed` (`userId` null at the exchange; `status`, `code`); `identity.creator_changed`; `identity.sessions_revoked`.
+
+**Creation paths.** A fresh grep of `apps/api/src` found no creation or hand-out path beyond §4.2. Every `INSERT INTO workspaces|projects|boards|invitations|board_members|workspace_members` (22 sites) and every raising `UPDATE` (4 sites) is listed, with the reason it is allowed, in the tripwire of `apps/api/test/features/domain-access/creation-matrix.test.ts`. The sync server's seed route is unchanged (§4.2).
+
+**Tests** (`apps/api/test/features/domain-access/`): `policy`, `sign-in`, `refresh`, `creation-matrix` (the guard, the in-route layer alone, uniform ids, creators, tenancy, guests, route completeness, the source tripwire), `sharing-rules`, `existing-accounts`, `invite-lock`, `no-leak`; a fake Clerk Backend API in `clerk-fake.ts` (the real adapter code runs against it). Also `config.test.ts` (domain access), `auth.test.ts` (an outsider case), the §11.3 fixture updates, and `createTestApi({ db })` to re-create an api over the same database (a policy change applied at restart). Deviations in the test setup: the creation matrix's outsider is a workspace **admin** (the strongest role a pre-existing outsider can hold), so that the in-route layer is reached on the workspace-invitation route too; the guard run repeats every entry for a plain member. In `email-invites.test.ts`, dave is a creator (`lobby-test-dave@darkburn.com`), so "a person outside the board gets 404" still holds, and an outsider's 403 `CREATOR_REQUIRED` is added. In `features/guests/refusals.test.ts`, the unused single-use invitation is locked to `erin@dev.invalid`, because the test lets erin use it (a fixture body; no expectation changed).
+
+**Opt-in real Postgres** (`DRAFTROOM_TEST_DATABASE_URL`): `migrations.pg.test.ts` asserts 0021 (open unbound single-use links revoked, the others untouched, `personal_of` with Dev Studio excluded: the seed gained a Dev Studio row, nobody confirmed, no address stored); `concurrency.pg.test.ts` adds the creator first-sign-in race and the concurrent `ensurePersonalWorkspace`; `lock-order.pg.test.ts` adds "accepting a locked invitation takes the board row before the invitation". **Not run for B2**: no Postgres was available to this builder; they typecheck and are skipped without the variable. Run them in step D.
+
+**For the WEB owner**: `/api/me`, `/api/auth/me` and the sign-in responses carry `access` (never `legacy`); single-use invitation bodies must carry `email` (400 without it); the preview carries `InvitationEmailLock`; accept can answer 403 `INVITATION_EMAIL_MISMATCH` (body `InvitationEmailMismatchBody`), 409 `ROLE_REQUIRES_CREATOR` and 503 `IDENTITY_UNAVAILABLE`; `PendingInvitation.email` and `ShareMember.canOwn` are computed; `url` is null for non-creator managers. `/api/auth/me` answers 401 (not 204) when an awaited refresh finds the account gone or banned, as §8 says. Dev logins accept `email` (`DevLoginInput`).

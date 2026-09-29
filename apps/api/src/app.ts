@@ -366,7 +366,7 @@ async function buildServer(
     layout,
   }
   registerEventRoutes(app, features)
-  await registerFeatures(app, features)
+  await registerFeatures(app, features, { domainAccessGuard: deps.domainAccessGuard !== false })
   // Workspace storage and the unreferenced-file collector (UPL-1; DRAFTROOM_ASSET_GC, report-only by default).
   registerStorage(app, ctx, { blobs, sync: features.sync, dataRoot: layout.root })
 

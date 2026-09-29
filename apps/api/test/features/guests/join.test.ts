@@ -141,7 +141,10 @@ describe('joining a guest link', () => {
     expect(await preview(without.url)).toBe(false)
     expect(without.allowGuests).toBe(false)
     // The flag cannot be set on a single-use invitation.
-    const single = await bob.req('POST', `/api/boards/${board}/invitations`, { role: 'viewer' })
+    const single = await bob.req('POST', `/api/boards/${board}/invitations`, {
+      role: 'viewer',
+      email: 'sam@client.example.test',
+    })
     const singleId = (single.json() as { id: string }).id
     await expect(
       api.db.query('UPDATE invitations SET allow_guests = true WHERE id = $1', [singleId]),
@@ -293,14 +296,22 @@ describe('joining a guest link', () => {
     expect(res.statusCode).toBe(403)
     expect(errorCode(res)).toBe('GUESTS_NOT_ALLOWED')
     // A single-use board invitation or a workspace invitation never lets guests in.
-    const single = (await bob.req('POST', `/api/boards/${board}/invitations`, { role: 'viewer' })).json() as {
+    const single = (
+      await bob.req('POST', `/api/boards/${board}/invitations`, {
+        role: 'viewer',
+        email: 'sam@client.example.test',
+      })
+    ).json() as {
       url: string
     }
     expect(errorCode(await joinRequest(api, tokenOf(single.url), { name: 'Sam' }, { ip: freshIp() }))).toBe(
       'GUESTS_NOT_ALLOWED',
     )
     const ws = (
-      await w.alice.req('POST', `/api/workspaces/${DEV_STUDIO}/invitations`, { role: 'member' })
+      await w.alice.req('POST', `/api/workspaces/${DEV_STUDIO}/invitations`, {
+        role: 'member',
+        email: 'sam@client.example.test',
+      })
     ).json() as {
       url: string
     }

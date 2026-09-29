@@ -9,7 +9,15 @@ import {
 } from '@draftroom/contracts'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { sha256hex } from '../src/auth/session.ts'
-import { type Client, createBoard, createTestApi, DEV_STUDIO, ORIGIN, type TestApi } from './helpers.ts'
+import {
+  type Client,
+  createBoard,
+  createTestApi,
+  DEV_STUDIO,
+  devEmail,
+  ORIGIN,
+  type TestApi,
+} from './helpers.ts'
 
 let api: TestApi
 let alice: Client // Dev Studio owner
@@ -31,8 +39,9 @@ afterEach(() => api.close())
 const tokenOf = (url: string) => url.slice(url.lastIndexOf('/') + 1)
 const DAY = 24 * 60 * 60 * 1000
 
-async function boardInvite(c: Client, boardId: string, role = 'editor') {
-  const res = await c.req('POST', `/api/boards/${boardId}/invitations`, { role })
+/** A single-use board link, locked (domain access) to `email`: erin's by default (she accepts most). */
+async function boardInvite(c: Client, boardId: string, role = 'editor', email = devEmail('erin')) {
+  const res = await c.req('POST', `/api/boards/${boardId}/invitations`, { role, email })
   expect(res.statusCode, res.body).toBe(201)
   return InvitationCreated.parse(res.json())
 }
@@ -142,7 +151,7 @@ describe('board invitations', () => {
     const boardId = await createBoard(bob, DEV_STUDIO)
     const carol = await api.login('carol')
     await bob.req('PUT', `/api/boards/${boardId}/members/${carol.userId}`, { role: 'editor' })
-    const token = tokenOf((await boardInvite(bob, boardId, 'viewer')).url)
+    const token = tokenOf((await boardInvite(bob, boardId, 'viewer', devEmail('carol'))).url)
     expect((await carol.req('POST', `/api/invitations/${token}/accept`)).statusCode).toBe(200)
     expect(BoardDetail.parse((await carol.req('GET', `/api/boards/${boardId}`)).json()).role).toBe('editor')
     const me = Me.parse((await carol.req('GET', '/api/me')).json())
@@ -151,15 +160,16 @@ describe('board invitations', () => {
 
   it('only board managers can create board links; owner links are refused', async () => {
     const boardId = await createBoard(bob, DEV_STUDIO)
-    expect((await bob.req('POST', `/api/boards/${boardId}/invitations`, { role: 'owner' })).statusCode).toBe(
-      400,
-    )
+    const email = devEmail('erin')
+    expect(
+      (await bob.req('POST', `/api/boards/${boardId}/invitations`, { role: 'owner', email })).statusCode,
+    ).toBe(400)
     const carol = await api.login('carol')
     expect(
-      (await carol.req('POST', `/api/boards/${boardId}/invitations`, { role: 'viewer' })).statusCode,
+      (await carol.req('POST', `/api/boards/${boardId}/invitations`, { role: 'viewer', email })).statusCode,
     ).toBe(404)
     expect(
-      (await api.anon('POST', `/api/boards/${boardId}/invitations`, { role: 'viewer' })).statusCode,
+      (await api.anon('POST', `/api/boards/${boardId}/invitations`, { role: 'viewer', email })).statusCode,
     ).toBe(401)
   })
 
@@ -172,10 +182,15 @@ describe('board invitations', () => {
 
 describe('workspace invitations', () => {
   it('admins+ invite with a workspace role; accepting joins the workspace; members cannot invite', async () => {
+    const email = devEmail('erin')
     expect(
-      (await bob.req('POST', `/api/workspaces/${DEV_STUDIO}/invitations`, { role: 'member' })).statusCode,
+      (await bob.req('POST', `/api/workspaces/${DEV_STUDIO}/invitations`, { role: 'member', email }))
+        .statusCode,
     ).toBe(403)
-    const res = await alice.req('POST', `/api/workspaces/${DEV_STUDIO}/invitations`, { role: 'member' })
+    const res = await alice.req('POST', `/api/workspaces/${DEV_STUDIO}/invitations`, {
+      role: 'member',
+      email,
+    })
     expect(res.statusCode).toBe(201)
     const inv = InvitationCreated.parse(res.json())
     const preview = InvitationPreview.parse(
@@ -187,13 +202,19 @@ describe('workspace invitations', () => {
     const me = Me.parse((await erin.req('GET', '/api/me')).json())
     expect(me.workspaces.find((w) => w.id === DEV_STUDIO)?.role).toBe('member')
     expect(
-      (await alice.req('POST', `/api/workspaces/${DEV_STUDIO}/invitations`, { role: 'owner' })).statusCode,
+      (await alice.req('POST', `/api/workspaces/${DEV_STUDIO}/invitations`, { role: 'owner', email }))
+        .statusCode,
     ).toBe(400)
   })
 
   it('a guest link does not demote the workspace owner who accepts it', async () => {
     const inv = InvitationCreated.parse(
-      (await alice.req('POST', `/api/workspaces/${DEV_STUDIO}/invitations`, { role: 'guest' })).json(),
+      (
+        await alice.req('POST', `/api/workspaces/${DEV_STUDIO}/invitations`, {
+          role: 'guest',
+          email: devEmail('alice'),
+        })
+      ).json(),
     )
     await alice.req('POST', `/api/invitations/${tokenOf(inv.url)}/accept`)
     const me = Me.parse((await alice.req('GET', '/api/me')).json())
