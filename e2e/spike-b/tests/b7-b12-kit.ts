@@ -63,6 +63,29 @@ export async function centreOf(page: Page, id: string): Promise<{ x: number; y: 
   }, id)
 }
 
+/**
+ * A client point inside `id`'s box where Excalidraw's interactive canvas itself is the top element, so a
+ * press there reaches the canvas and not Lobby's floating UI (the features toolbar sits at the bottom
+ * centre: at 1024 x 768 it covers a topic's centre; M1/M2's touch control tapped the toolbar). The centre
+ * first, then points over the inner part of the box; throws when every candidate is covered.
+ */
+export async function canvasPointOf(page: Page, id: string): Promise<{ x: number; y: number }> {
+  return page.evaluate((id) => {
+    const f = window.lobbyCanvas
+    const b = f?.bounds(id)
+    if (!f || !b) throw new Error(`no bounds for ${id}`)
+    const fractions: [number, number][] = [[0.5, 0.5]]
+    for (const fy of [0.35, 0.25, 0.65, 0.75, 0.15, 0.85])
+      for (const fx of [0.5, 0.3, 0.7]) fractions.push([fx, fy])
+    for (const [fx, fy] of fractions) {
+      const p = f.sceneToScreen({ x: b.x + b.width * fx, y: b.y + b.height * fy })
+      const top = document.elementFromPoint(p.x, p.y)
+      if (top instanceof HTMLCanvasElement && top.classList.contains('interactive')) return p
+    }
+    throw new Error(`every candidate point of ${id} is covered by UI or off screen`)
+  }, id)
+}
+
 /** RGBA of Excalidraw's static canvas at a client point (device pixels read, DPR applied). */
 export async function staticPixel(page: Page, clientX: number, clientY: number): Promise<number[]> {
   return page.evaluate(

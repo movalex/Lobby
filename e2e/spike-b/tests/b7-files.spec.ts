@@ -263,6 +263,21 @@ test('exports: the PNG contains the image; the SVG renders with the network off,
   expect(svg?.text).toMatch(/data:font\/woff2;base64,/)
   expect(svg?.text).not.toMatch(/blob:|\/files\//)
   expect(svg?.embeddedFiles).toContain(image.versionId)
+  // the SVG embeds the image's BYTES, never a URL: every <image> href is a base64 data: URL of an image
+  const hrefs = [...(svg?.text ?? '').matchAll(/<image\b[^>]*?\shref="([^"]*)"/g)].map((m) => m[1] ?? '')
+  expect(hrefs.length).toBeGreaterThanOrEqual(1)
+  for (const h of hrefs) expect(h).toMatch(/^data:image\/(png|jpeg|webp|gif|avif);base64,[A-Za-z0-9+/]+=*$/)
+  // … and they are exactly the bytes the board shows: the same-origin derivative the loader fetched
+  const derivative = (r: { url: string }) => r.url.includes(`/files/${image.assetId}/${image.versionId}/d/`)
+  const shown = requests.filter((r) => r.who === 'A' && derivative(r)).at(-1)
+  expect(shown, 'the loader fetched the image derivative from /files').toBeDefined()
+  const servedB64 = await A.page.evaluate(async (url) => {
+    const res = await fetch(url, { credentials: 'same-origin' })
+    const u8 = new Uint8Array(await res.arrayBuffer())
+    let bin = ''
+    for (let i = 0; i < u8.length; i += 0x8000) bin += String.fromCharCode(...u8.subarray(i, i + 0x8000))
+    return btoa(bin)
+  }, shown?.url ?? '')
 
   // open it in a fresh context with every request aborted
   const ctx = await browser.newContext()
@@ -280,8 +295,22 @@ test('exports: the PNG contains the image; the SVG renders with the network off,
     [...document.fonts].filter((f) => f.status === 'loaded').map((f) => f.family.replace(/"/g, '')),
   )
   expect(fontsLoaded).toContain('Nunito')
-  const box = await offline.locator('svg image').first().boundingBox()
+  // Excalidraw's SVG puts each file ONCE in <defs> as <symbol id="image-<fileId>"><image width="100%"
+  // height="100%"> and draws it with <use href="#image-<fileId>" x/y/width/height> (chunk-FN755BR4.js
+  // 4253-4330). The <image> inside the symbol is never rendered itself: its box is the whole SVG's
+  // viewport (100%), so its centre is the SVG's centre, not the image (the M1/M2 failure: that point lay
+  // between the image and the text, white). The pixel is read at the centre of the drawn <use>.
+  const symbolHref = await offline.evaluate(
+    (id) => document.querySelector(`symbol[id="image-${id}"] image`)?.getAttribute('href') ?? null,
+    image.versionId,
+  )
+  expect(symbolHref?.slice(symbolHref.indexOf(',') + 1)).toBe(servedB64)
+  const drawn = offline.locator(`svg use[href="#image-${image.versionId}"]`)
+  await expect(drawn).toHaveCount(1)
+  const box = await drawn.boundingBox()
   expect(box).not.toBeNull()
+  expect(box?.width ?? 0).toBeGreaterThan(8)
+  expect(box?.height ?? 0).toBeGreaterThan(8)
   const shot = await offline.screenshot({
     clip: {
       x: (box?.x ?? 0) + (box?.width ?? 0) / 2,
@@ -311,6 +340,12 @@ test('exports: the PNG contains the image; the SVG renders with the network off,
       fonts: svg?.embeddedFonts.length,
       pngBytes: png?.bytes,
       evalCalls,
+      images: hrefs.length,
+      embeddedImageType: symbolHref?.slice(5, symbolHref.indexOf(';')),
+      embeddedImageBytes: (servedB64.length * 3) / 4 - (servedB64.match(/=*$/)?.[0].length ?? 0),
+      drawnBox: box,
+      offlineCentre: rgb,
+      offlineRequests: attempted,
     }),
   )
 })
@@ -339,6 +374,18 @@ test(`mood board: ${MOOD} images; fetches never exceed 6 at once; memory and der
   expect(ids).toHaveLength(MOOD)
   await saved(A.page)
   await saved(B.page)
+  // every placed image is stored: a create that vanished before its push is lost for everyone, and would
+  // otherwise show up only as a load that never finishes. A soft failure (the test FAILS), so the loader's
+  // numbers below are still measured on what was stored.
+  const stored = new Set(
+    (await harness.readSnapshot(stack, boardId)).elements
+      .filter((e) => e.type === 'image' && !e.isDeleted)
+      .map((e) => e.id),
+  )
+  const lost = ids.filter((id) => !stored.has(id))
+  expect
+    .soft(lost, 'mood images placed through CanvasPort.transact but never stored (lost before their push)')
+    .toEqual([])
 
   // a third look: B reloads at a fit that shows the whole mood board; count /files/ fetches in flight
   let inFlight = 0
@@ -367,7 +414,8 @@ test(`mood board: ${MOOD} images; fetches never exceed 6 at once; memory and der
         intervals: [1_000],
       },
     )
-    .toBeGreaterThanOrEqual(MOOD + 2) // the mood board, the first image and the PDF card's face
+    // the stored mood images, the first image and the PDF card's face (with nothing lost: MOOD + 2)
+    .toBeGreaterThanOrEqual(MOOD - lost.length + 2)
   const loadMs = Date.now() - t0
   const loader = await B.page.evaluate(() => window.lobbySpikeFeatures?.loader())
   const heap1 = await B.page.evaluate(
@@ -379,6 +427,7 @@ test(`mood board: ${MOOD} images; fetches never exceed 6 at once; memory and der
     'B7-METRICS mood',
     JSON.stringify({
       images: MOOD,
+      lostCreates: lost.length,
       loadMs,
       maxInFlightNetwork: maxInFlight,
       loader: loader?.stats,

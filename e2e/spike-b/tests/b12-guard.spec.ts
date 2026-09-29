@@ -15,6 +15,7 @@ import { stackFromEnv } from '../support/ports.ts'
 import type { BrowserProcess, SpikeBStack } from '../support/types.ts'
 import {
   buildMindMap,
+  canvasPointOf,
   centreOf,
   createNote,
   featuresReady,
@@ -85,8 +86,8 @@ test('the cursor over a hidden element, and over one under a remote preview, is 
   await expect
     .poll(() => A.page.evaluate(() => document.querySelector('.lobby-hit-blocked') !== null))
     .toBe(true)
-  // over a visible topic the rule is off (Excalidraw's own cursor)
-  const topic = await centreOf(A.page, map.a2)
+  // over a visible topic the rule is off (Excalidraw's own cursor); a point where the canvas is on top
+  const topic = await canvasPointOf(A.page, map.a2)
   await A.page.mouse.move(topic.x, topic.y)
   await expect
     .poll(() => A.page.evaluate(() => document.querySelector('.lobby-hit-blocked') !== null))
@@ -120,7 +121,9 @@ test('the cursor over a hidden element, and over one under a remote preview, is 
 
 test('touch: a tap, a double-tap and a long-press on a hidden element do nothing', async () => {
   const pushes = await harness.recordPushes(T.page)
-  const leaf = await centreOf(T.page, map.leaves[0])
+  // every press lands on the canvas itself (not on Lobby's floating UI), so "nothing happens" is not a
+  // tap on a toolbar (M1/M2: at 1024 x 768 the features toolbar covers Topic A2's centre)
+  const leaf = await canvasPointOf(T.page, map.leaves[0])
   await T.page.touchscreen.tap(leaf.x, leaf.y)
   expect(await selection(T.page)).toEqual([])
   // a double-tap: two taps within the engine's 300 ms window
@@ -141,8 +144,8 @@ test('touch: a tap, a double-tap and a long-press on a hidden element do nothing
   expect(await T.page.locator('.context-menu, [data-testid="context-menu"]').count()).toBe(0)
   expect(await selection(T.page)).toEqual([])
   expect(await pushes.count()).toBe(0)
-  // a visible topic still takes a tap
-  const topic = await centreOf(T.page, map.a2)
+  // a visible topic still takes a tap (on a point of it the toolbar does not cover)
+  const topic = await canvasPointOf(T.page, map.a2)
   await T.page.touchscreen.tap(topic.x, topic.y)
   await expect.poll(() => selection(T.page)).toEqual([map.a2])
 })
