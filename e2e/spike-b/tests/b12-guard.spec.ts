@@ -93,7 +93,8 @@ test('the cursor over a hidden element, and over one under a remote preview, is 
     .toBe(false)
 
   // a remote preview: B drags note M and holds it
-  const m = await createNote(B.page, 1300, 120, 'Bob moves me')
+  // on screen: the default 1280 px viewport ends before x 1300 (lead, M1/M2: the hover and the click missed)
+  const m = await createNote(B.page, 950, 120, 'Bob moves me')
   await saved(B.page)
   await seen([A], m)
   const mB = await centreOf(B.page, m)
@@ -148,8 +149,8 @@ test('touch: a tap, a double-tap and a long-press on a hidden element do nothing
 
 test("the dead zone: a click on a remote-dragged note's old spot selects the visible note under it and says who moves it", async () => {
   // U lies under M (M created later, on top); B drags M away and holds it
-  const u = await createNote(A.page, 1300, 500, 'Under')
-  const m = await createNote(A.page, 1320, 520, 'Moving')
+  const u = await createNote(A.page, 950, 500, 'Under')
+  const m = await createNote(A.page, 970, 520, 'Moving')
   await saved(A.page)
   await seen([B], m)
   const mB = await centreOf(B.page, m)
