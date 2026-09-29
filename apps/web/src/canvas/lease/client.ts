@@ -15,7 +15,7 @@
 //  - A lease lost to another session (a holder broadcast naming someone else, or clearing it while this
 //    session held it) emits 'lost', so the open editor can go read-only at once (§2.9.3).
 
-import type { LeaseTransport } from './fakeServer.ts'
+import type { LeaseTransport } from '../sync/types.ts'
 import {
   type LeaseClientMessage,
   type LeaseHolder,

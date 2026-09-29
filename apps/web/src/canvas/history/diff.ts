@@ -40,6 +40,12 @@ export interface ElementChange {
   groupIds?: { added: string[]; removed: string[]; before: string[]; after: string[] }
   /** refs added and removed, by id */
   bound?: { added: BoundRef[]; removed: BoundRef[] }
+  /**
+   * The life version of the element (LobbyHistory: flips of `isDeleted` by others it absorbed) when this
+   * change was last applied by an undo or a redo: the next apply changes `isDeleted` only if it is unchanged
+   * (the life-version check of §2.8, U11). Undefined for a change as recorded.
+   */
+  lifeAt?: number
 }
 
 const lobbyOf = (el: HistEl | undefined): Record<string, unknown> => {
@@ -66,13 +72,24 @@ export const diffElement = (prev: HistEl | undefined, next: HistEl): ElementChan
     return change
   }
   const keys = new Set([...Object.keys(prev), ...Object.keys(next)])
+  let path = false
   for (const k of keys) {
     if (SPECIAL.has(k)) continue
     if (fieldGroup(next, k) === null && fieldGroup(prev, k) === null) continue
     const a = normalizeField(k, prev[k])
     const b = normalizeField(k, next[k])
-    if (!deepEqual(a, b)) change.fields[k] = { before: clone(a), after: clone(b) }
+    if (!deepEqual(a, b)) {
+      change.fields[k] = { before: clone(a), after: clone(b) }
+      if (fieldGroup(next, k) === 'path') path = true
+    }
   }
+  // An arrow's or a line's geometry is one unit (§2.8, spike B): when any of it changed, the whole unit is
+  // recorded on both sides, so its compare (user-set geometry in scene coordinates) and its restore never
+  // mix this step's points with another moment's `x`, `y` or `angle`.
+  if (path)
+    for (const k of keys)
+      if (fieldGroup(next, k) === 'path' && !change.fields[k])
+        change.fields[k] = { before: clone(prev[k]), after: clone(next[k]) }
   const la = lobbyOf(prev)
   const lb = lobbyOf(next)
   for (const k of new Set([...Object.keys(la), ...Object.keys(lb)])) {

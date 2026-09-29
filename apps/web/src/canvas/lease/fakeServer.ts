@@ -16,9 +16,11 @@ import {
   leaseClientMessage,
 } from './protocol.ts'
 
-export interface LeaseTransport {
-  send(message: LeaseClientMessage): void
-}
+// The interface the real engine core implements too (sync/types.ts, frozen at C0), so spike A's pages
+// keep working on this fake while the spike B board page runs the same LeaseClient on the real socket.
+export type { LeaseTransport } from '../sync/types.ts'
+
+import type { LeaseTransport } from '../sync/types.ts'
 
 export interface LeaseLogEntry {
   dir: 'up' | 'down'

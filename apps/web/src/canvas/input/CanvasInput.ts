@@ -37,7 +37,12 @@ import { bufferedKeyOf } from '../lease/replay.ts'
 import { classifyDoubleClick, type DblClickElement } from './dblclick.ts'
 import { DoubleTapMirror } from './doubleTap.ts'
 import { classifyKey, type KeyContext, type KeyVerdict, keyLikeOf, type LobbyKeyAction } from './keymap.ts'
+import { installKeyupGate, keyIdOf, keyupVerdict, registerKeyupClient } from './keyupGate.ts'
 import { computeSelectAll } from './selectAll.ts'
+
+// K1 (spike B): the document keyup gate must be registered before Excalidraw's own document keyup
+// listener, so it is installed when this module is evaluated, before any <Excalidraw> can mount.
+if (typeof document !== 'undefined') installKeyupGate(document)
 
 export type InputRole = 'editor' | 'readonly'
 
@@ -64,6 +69,8 @@ export interface CanvasInputOptions {
   /** A double-click / double-tap on empty canvas (editors): Lobby creates a text there. */
   onEmptyDoubleClick?: (scene: { x: number; y: number }) => void
   onDeny?: (leaseId: string, holderName: string) => void
+  /** The sync engine: whether an element is on the server (EditorLease `isConfirmed`, L3). */
+  isConfirmed?: (id: string) => boolean
   /** Notices for the user: a deny, a cancelled open, unsaved text ("Copy my text"), a lost lease. */
   onNotice?: (notice: EditNotice) => void
   /** The editor session's state (the pending affordance and the lost-lease banner). */
@@ -71,6 +78,11 @@ export interface CanvasInputOptions {
   trace?: (t: InputTrace | EditTrace) => void
   /** Spike control runs only: 'off' lets every key reach Excalidraw (shows what the allowlist stops). */
   allowlist?: 'on' | 'off'
+  /**
+   * The hit guard (registries.hitGuard, O5): a point on a hidden element or under a peer's drag preview.
+   * A double-click or a double-tap there is swallowed with no lease request (§2.7 touch rule).
+   */
+  isBlocked?: (scene: { x: number; y: number }) => boolean
   /** Spike control runs only: false lets every dblclick / touchstart through. */
   interceptDoubleClicks?: boolean
 }
@@ -127,6 +139,8 @@ function containsPoint(el: SceneEl, x: number, y: number): boolean {
 export class CanvasInput {
   readonly synthetic = new WeakSet<Event>()
   private readonly blockedKeyups = new Set<string>()
+  /** Keys whose keydown was delegated to Excalidraw's canvas handling: only their keyups reach it (K1). */
+  private readonly delegatedKeys = new Set<string>()
   private readonly tapMirror = new DoubleTapMirror()
   private editor: EditorLease | null = null
   private api: ExcalidrawImperativeAPI | null = null
@@ -153,6 +167,7 @@ export class CanvasInput {
       lease: this.opts.lease,
       synthetic: this.synthetic,
       onDeny: this.opts.onDeny,
+      isConfirmed: this.opts.isConfirmed,
       onNotice: (n) => this.opts.onNotice?.(n),
       onState: (s) => this.opts.onEditState?.(s),
       trace: (t) => this.opts.trace?.(t),
@@ -178,7 +193,16 @@ export class CanvasInput {
     const unsubscribe = api.onChange((_elements, appState) => {
       this.editor?.onEngineChange(appState.editingTextElement, 'onChange', appState.selectedElementIds)
     })
+    const doc = wrapper.ownerDocument
+    const win = doc.defaultView
+    const leaveKeyupGate = registerKeyupClient(doc, this)
+    // a keyup that never comes (the window lost focus) must not let a later one through
+    const forgetDelegated = () => this.delegatedKeys.clear()
+    win?.addEventListener('blur', forgetDelegated)
     return () => {
+      leaveKeyupGate()
+      win?.removeEventListener('blur', forgetDelegated)
+      this.delegatedKeys.clear()
       unsubscribe()
       stopWatching()
       wrapper.removeEventListener('keydown', this.onKeyDown, capture)
@@ -288,16 +312,21 @@ export class CanvasInput {
     if (textEditor && editor?.mustNotSubmit(textEditor) && e.key === 'Escape') {
       e.stopPropagation()
       e.preventDefault()
-      if (e.code) this.blockedKeyups.add(e.code)
+      this.blockedKeyups.add(keyIdOf(e))
       this.trace('key', { key: e.key, code: e.code, verdict: 'leave-without-submit', inTextEditor: true })
       editor.leaveWithoutSubmit(textEditor, 'escape')
       return
     }
     const verdict = classifyKey(keyLikeOf(e), this.keyContext(textEditor))
     this.trace('key', { key: e.key, code: e.code, verdict: verdictName(verdict), inTextEditor: !!textEditor })
-    if (verdict.kind === 'delegate') return
+    if (verdict.kind === 'delegate') {
+      // K1: its keyup may reach Excalidraw's document listener (a key typed into the text editor is not
+      // canvas handling: the textarea has no keyup handler, and App.onKeyUp would re-bind arrows)
+      if (!textEditor) this.delegatedKeys.add(keyIdOf(e))
+      return
+    }
     e.stopPropagation()
-    if (e.code) this.blockedKeyups.add(e.code)
+    this.blockedKeyups.add(keyIdOf(e))
     switch (verdict.kind) {
       case 'browser':
         return
@@ -321,7 +350,17 @@ export class CanvasInput {
 
   private readonly onKeyUp = (e: KeyboardEvent): void => {
     if (this.synthetic.has(e) || this.opts.allowlist === 'off') return
-    if (e.code && this.blockedKeyups.delete(e.code)) e.stopPropagation()
+    if (this.blockedKeyups.delete(keyIdOf(e))) e.stopPropagation()
+  }
+
+  /** The document keyup gate (./keyupGate.ts, K1): only keyups of keys this board delegated pass. */
+  allowsKeyup(e: KeyboardEvent): boolean {
+    const verdict = keyupVerdict(e, this.delegatedKeys, {
+      allowlistOff: this.opts.allowlist === 'off',
+      synthetic: this.synthetic.has(e),
+    })
+    if (verdict === 'stop') this.trace('keyup-gated', { key: e.key, code: e.code })
+    return verdict === 'pass'
   }
 
   private runAction(action: LobbyKeyAction, e: KeyboardEvent): void {
@@ -390,6 +429,12 @@ export class CanvasInput {
       })(),
       ctrlOrCmd: e.ctrlKey || e.metaKey,
     }
+    if (this.opts.isBlocked?.(scene)) {
+      e.stopPropagation()
+      e.preventDefault()
+      this.trace('dblclick', { verdict: 'blocked' })
+      return
+    }
     const verdict = classifyDoubleClick(view)
     this.trace('dblclick', { verdict: verdict.kind === 'text' ? 'text' : `forward:${verdict.reason}` })
     if (verdict.kind === 'forward') return
@@ -416,6 +461,10 @@ export class CanvasInput {
       prevented: e.defaultPrevented,
     })
     const scene = this.toScene(verdict.clientX, verdict.clientY)
+    if (this.opts.isBlocked?.(scene)) {
+      this.trace('doubletap-blocked', {})
+      return
+    }
     this.editAt(scene.x, scene.y, 'P4-doubletap', false)
   }
 
