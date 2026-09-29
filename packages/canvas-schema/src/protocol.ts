@@ -469,13 +469,24 @@ export const TERMINAL_CLOSE_REASONS = [
   'MAINTENANCE',
   /** The R0 stand-in (tldraw sync) refusing a board born on the new canvas (§8.3 B8, pre-open check). */
   'NEW_CANVAS_BOARD',
+  /**
+   * The ElementRoom could not prepare a tldraw board for the new canvas: its lazy conversion or roll-forward
+   * failed (heap cap, time budget, disk check, limits, semantic diff; §5.3, §5.9). The board stays on its
+   * tldraw tables; only a maintenance run converts it. Terminal, so joiners do not re-queue the job.
+   */
+  'CONVERSION_FAILED',
 ] as const
 export type TerminalCloseReason = (typeof TERMINAL_CLOSE_REASONS)[number]
 /** 4000: role change, backpressure, a room reopened after a COMMIT failure. */
 export const RECONNECT_CLOSE_REASONS = ['RECONNECT'] as const
 export type ReconnectCloseReason = (typeof RECONNECT_CLOSE_REASONS)[number]
 
-export const NOTICE_CODES = ['SLOW_DOWN', 'LIMIT_NEAR', 'RESYNC', 'DISK'] as const
+/**
+ * `PREPARING` (CR, O1): the board is being converted or rolled forward on room open (§5.3, §5.9, §2.13). Sent
+ * once, right after the socket opens, to a joiner the server holds; its `welcome` follows when the board is
+ * ready (or the socket closes 4099 CONVERSION_FAILED). The client shows "Preparing this board…".
+ */
+export const NOTICE_CODES = ['SLOW_DOWN', 'LIMIT_NEAR', 'RESYNC', 'DISK', 'PREPARING'] as const
 export type NoticeCode = (typeof NOTICE_CODES)[number]
 
 // ---- server → client ---------------------------------------------------------------------------------
