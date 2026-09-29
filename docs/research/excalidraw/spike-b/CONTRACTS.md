@@ -13,7 +13,8 @@ another owner's file or invents a shape another owner also implements.
 | Engine | `@excalidraw/*` `0.18.0-1118751`, pinned by the catalog |
 | Gate | see "The C0 gate" at the end |
 
-`CONTRACTS_REV` in `packages/canvas-schema/src/protocol.ts` is **1** at C0 (**3** after the M1 integration; see "Change log").
+`CONTRACTS_REV` in `packages/canvas-schema/src/protocol.ts` is **1** at C0 (**3** after the M1 integration, **4**
+after the M3 integration; see "Change log").
 
 ## The change-request rule
 
@@ -313,6 +314,17 @@ Recorded with the integration in `spike-b/M1-M2.md`:
    `support/types.ts` (`restoreSocket` options, `newTab`, `relayStats`), O4's `lb_source` schema text in
    `room/schema.ts` (wave 2D).
 
+## Lead decisions at the M3 integration (recorded in `spike-b/M3.md`)
+
+1. **Decision 3 above is superseded.** O3's harness now signs a name-only guest in through the product's
+   invite page (`BrowserOptions.guest`; O3's `O3BrowserOptions.guestRole`: `viewer`, the default, is the
+   limited guest; `commenter`, `editor`). A spec may use `guest: true`; specs that run the A3 flow themselves
+   (O5's `b12-phone`, O2's `b5-r3-keys`) keep working and may switch.
+2. **O1's CR `b5689e0` is accepted** (rev 4, change log below).
+3. **Still deferred:** `EngineCore.pendingLeases()`, the `support/types.ts` additions, O4's `lb_source` schema
+   text; O2's proposal of an idempotent offline-queue entry (a push id the room deduplicates, or the confirmed
+   version per entry) touches `protocol.ts` or the queue format and needs O1's and O2's OK as a CR.
+
 ## Change log
 
 | Rev | Date | Change | By |
@@ -320,6 +332,7 @@ Recorded with the integration in `spike-b/M1-M2.md`:
 | 1 | 2026-09-29 | C0 | lead |
 | 2 | 2026-09-29 | `custom-data.ts`: `prompt`, `slot`, `swatch` (class 5 "free", `MarkerValue` = boolean or a 1-64 character string, 72 B, duplicate `keep`), which §3.3 lists and C0 left out; `limits.test.ts` name list. Additive: O1 validates them through the registry with no code change; O2/O5 clients may write them; O4's converter carries the template markers instead of `meta-dropped`. Accepted at M1 (CR `1370281` on `spike/b-convert`, applied as `bf11de0`) | O4 (CR), lead |
 | 3 | 2026-09-29 | `apps/web/src/canvas/sync/types.ts`: `EngineCore.doc()` and `EngineCore.setDoc(set)` for `lb_doc` keys (O5's tags write `tagDef:<key>` before an element's `tag:<key>`, §3.3). Additive; O2's core implements both (`sync/core/engine.ts`), and a `setDoc` is sent no later than the element push after it. Accepted at M1 (CR `35f0ae2` on `spike/b-features`, applied as `ac9a358`) | O5 (CR), O2, lead |
+| 4 | 2026-09-29 | `protocol.ts`: notice `PREPARING` (a joiner held while the room converts or rolls forward a tldraw board on open, §2.13 "Preparing this board…") and the terminal close reason `CONVERSION_FAILED` (4099; a failed lazy conversion or roll-forward, so joiners do not re-queue the job; the board stays on its tldraw tables, §5.3); a `PREPARING` round trip in `protocol.test.ts`. Additive. Accepted at M3 (CR `b5689e0` on `spike/b-room`, merged with `166850c`). Two ends: O1 (the CR); O2's end needs no code change (its core ignores a notice code it does not handle, `engine.ts` `case 'notice'`, and its page shows the closed state with `data-reason` for every 4099, `session.ts`); O2's explicit OK was not given in this round (O2 finished before the CR existed) and is asked for in the next one, with the page's "Preparing this board…" state. If O2 declines, reverting the CR needs no room change (the room reads both lists at run time: no notice, `MAINTENANCE`), but O1's `conversion.test.ts` would need its expectations changed | O1 (CR), lead |
 
 ## The C0 gate
 
