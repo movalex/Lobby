@@ -407,3 +407,8 @@ Checks: lint 0 errors / 0 warnings (581 files); typecheck 14 projects; vitest 1,
   - Design: Lobby-owned server-authoritative sync (`ElementRoom`) in `apps/sync`, one SQLite file per board as today. Last writer wins per field group; a server-enforced text lease; Lobby's own field-level undo. Conversion of tldraw boards runs inside the sync process, and a reversible rollback goes through a tldraw bridge release.
   - Estimate ≈261 pd, about 20 working days to cut-over (26 with buffer). No cut-over date is set before the spike's go/no-go.
   - **Next: spike A (engine checks)** on branch `spike/excalidraw`.
+- **Spike A (engine checks A1-A17): done on `spike/excalidraw`** (not merged to main; reference code for waves 1-2). Report: `docs/research/excalidraw/SPIKE-A-REPORT.md`; per-check evidence in `docs/research/excalidraw/spike-a/`.
+  - 14 PASS, 2 PARTIAL (A12 CSP: the zod fix is emulated and the Clerk origins are unverified; A14: laptop half unrun), 1 FAIL as written (A16: every editor-open path is held by the lease or the guard, but three statements of the check are wrong about the engine; corrected criteria proposed).
+  - Measured again on the merged branch, 3 runs in a row: lint, typecheck, 1,389 unit tests, 50 spike browser tests, and the normal tldraw build carries no engine code.
+  - The plan needs about 20 corrections (report §4). The main ones: server text metrics need kerning, E3 is not enforced by Excalidraw, the fit clamp at zoom 0.1, the fit-fps conditional applies, auto-fit rewrites bound arrows, and the CSP needs same-origin fonts plus a zod fix.
+  - **Next: spike B.**
