@@ -49,14 +49,22 @@ export function signedTickets(ticketSecret: string): TicketSource {
 
 const EDITING_KINDS = new Set(['gesture', 'typist', 'oneshot', 'light'])
 
+export interface PlanOptions {
+  /** the boards and their ids (default: the profile's fixed ids, boardIdsOf) — a real stack's api ids */
+  readonly idsOf?: { load: BoardLoad; ids: string[] }[]
+  /** who each session is (default: synthetic load users) — a real stack's dev users */
+  readonly userFor?: (boardIndex: number, n: number, role: 'editor' | 'viewer') => LoadUser
+}
+
 export function buildPlans(
   p: Profile,
   boards: Map<string, GeneratedBoard>,
   tickets: TicketSource,
+  opts: PlanOptions = {},
 ): SessionPlan[] {
   const plans: SessionPlan[] = []
   let boardIndex = 0
-  for (const { load, ids } of boardIdsOf(p)) {
+  for (const { load, ids } of opts.idsOf ?? boardIdsOf(p)) {
     for (const boardId of ids) {
       const board = boards.get(boardId)
       if (!board) throw new Error(`no generated board ${boardId}`)
@@ -69,7 +77,7 @@ export function buildPlans(
       let n = 0
       for (const [gi, group] of load.groups.entries()) {
         for (let i = 0; i < group.count; i++) {
-          const user = loadUser(boardIndex, n, group.role)
+          const user = (opts.userFor ?? loadUser)(boardIndex, n, group.role)
           const own = EDITING_KINDS.has(group.kind) ? pool.slice(owner * slice, (owner + 1) * slice) : []
           if (EDITING_KINDS.has(group.kind)) owner++
           plans.push({

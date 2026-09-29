@@ -4,9 +4,14 @@
 // the report can flag a run whose clients could not keep up.
 import { monitorEventLoopDelay } from 'node:perf_hooks'
 import { Worker } from 'node:worker_threads'
-import type { GeneratedBoard } from './boards.ts'
+import { type BoardSpec, type GeneratedBoard, generateBoard } from './boards.ts'
 import type { Profile } from './profiles.ts'
 import { type ClientFactory, LoadSession, type SessionPlan, type SessionReport } from './session.ts'
+
+/** Regenerates boards from their specs (deterministic), keyed by id. */
+export function boardsFromSpecs(specs: readonly BoardSpec[]): Map<string, GeneratedBoard> {
+  return new Map(specs.map((s) => [s.id, generateBoard(s)]))
+}
 
 export interface ThreadResult {
   readonly reports: SessionReport[]
@@ -61,6 +66,8 @@ export interface WorkerJob {
   readonly probeSids: readonly [string, string][]
   readonly reconnectAfterMs?: number
   readonly fileIds?: readonly string[]
+  /** explicit boards (a real stack's ids) instead of the profile's fixed ones */
+  readonly boardSpecs?: readonly BoardSpec[]
 }
 
 /** Splits the plans round-robin over `threads` workers (worker.ts) and merges their results. */

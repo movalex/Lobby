@@ -68,6 +68,10 @@ export interface SeedResult {
 }
 
 /** Pushes `elements` as creates on a socket that has had its `welcome`. */
+/**
+ * Pushes `elements` as creates on a socket that has had its `welcome`. Tombstones (`isDeleted: true`)
+ * are created live first and deleted afterwards with a `life` patch, as a user's delete stores them.
+ */
 export async function seedElements(
   io: SeedIo,
   elements: readonly WireElement[],
@@ -77,16 +81,13 @@ export async function seedElements(
   let seq = 0
   let clock = base
   let ok = 0
+  let pushes = 0
   const rejected: Record<string, number> = {}
   const rejectedIds: string[] = []
-  const chunks = chunkCreates(elements)
-  for (const chunk of chunks) {
-    const push = {
-      type: 'push' as const,
-      seq: ++seq,
-      base: clock,
-      ops: chunk.map((el) => ({ k: 'c' as const, el })),
-    }
+  const versions = new Map<string, number>()
+  const send = async (ops: unknown[]) => {
+    const push = { type: 'push' as const, seq: ++seq, base: clock, ops }
+    pushes++
     await io.send(push as ClientMessage)
     let ack: Ack
     for (;;) {
@@ -94,23 +95,39 @@ export async function seedElements(
       if (ack.seq === push.seq) break
     }
     clock = Math.max(clock, ack.clock)
+    return ack
+  }
+  const live = elements.map((el) => (el.isDeleted ? ({ ...el, isDeleted: false } as WireElement) : el))
+  for (const chunk of chunkCreates(live)) {
+    const ack = await send(chunk.map((el) => ({ k: 'c' as const, el })))
     for (const r of ack.r) {
-      if (r.ok) ok++
-      else {
+      if (r.ok) {
+        ok++
+        versions.set(r.id, r.v)
+      } else {
         rejected[r.code] = (rejected[r.code] ?? 0) + 1
         if (rejectedIds.length < 20) rejectedIds.push(r.id)
       }
     }
   }
-  return {
-    pushes: chunks.length,
-    ops: elements.length,
-    ok,
-    rejected,
-    rejectedIds,
-    clock,
-    ms: Date.now() - t0,
+  const dead = elements.filter((el) => el.isDeleted && versions.has(el.id))
+  for (let i = 0; i < dead.length; i += SEED_MAX_OPS) {
+    const ack = await send(
+      dead.slice(i, i + SEED_MAX_OPS).map((el) => ({
+        k: 'p' as const,
+        id: el.id,
+        pv: versions.get(el.id) as number,
+        g: { life: { isDeleted: true } },
+      })),
+    )
+    for (const r of ack.r)
+      if (!r.ok) {
+        ok--
+        rejected[`delete:${r.code}`] = (rejected[`delete:${r.code}`] ?? 0) + 1
+        if (rejectedIds.length < 20) rejectedIds.push(r.id)
+      }
   }
+  return { pushes, ops: elements.length, ok, rejected, rejectedIds, clock, ms: Date.now() - t0 }
 }
 
 /** A Node WebSocket as a SeedIo (validation is the caller's: the seeder reads acks only). */

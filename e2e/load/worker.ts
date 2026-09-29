@@ -4,13 +4,15 @@ import { parentPort, workerData } from 'node:worker_threads'
 import { loadHeadlessFactory } from './headless.ts'
 import { boardsOf } from './plan.ts'
 import { PROFILES } from './profiles.ts'
-import { runInThread, type WorkerJob } from './runner.ts'
+import { boardsFromSpecs, runInThread, type WorkerJob } from './runner.ts'
 
 const job = workerData as WorkerJob
 try {
   const profile = PROFILES[job.profileName]
   if (!profile) throw new Error(`unknown profile ${job.profileName}`)
-  const boards = boardsOf(profile, { fileIds: job.fileIds })
+  const boards = job.boardSpecs
+    ? boardsFromSpecs(job.boardSpecs)
+    : boardsOf(profile, { fileIds: job.fileIds })
   const createClient = await loadHeadlessFactory()
   const result = await runInThread(
     {
