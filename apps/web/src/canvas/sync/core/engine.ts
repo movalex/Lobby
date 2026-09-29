@@ -315,9 +315,14 @@ export class LobbyEngineCore implements EngineCore {
   elements(): ReadonlyMap<string, SceneElement> {
     const out = new Map<string, SceneElement>()
     for (const [id, el] of this.current) {
-      const t = this.tracked.get(id)
-      // a local create deleted before it was ever pushed is not part of the board
-      if (t?.isNew && el.isDeleted && !this.confirmedMap.has(id) && !this.inflightHas(id)) continue
+      // a local-only element that is not being created (one deleted before it was ever pushed) is not
+      // part of the board
+      if (
+        !this.confirmedMap.has(id) &&
+        !this.inflightHas(id) &&
+        (!this.tracked.get(id)?.isNew || el.isDeleted)
+      )
+        continue
       out.set(id, withoutArtifacts(el))
     }
     for (const [id, el] of this.confirmedMap) if (!out.has(id)) out.set(id, el)
@@ -524,7 +529,12 @@ export class LobbyEngineCore implements EngineCore {
       const ref = this.base(el.id)
       const t = this.tracked.get(el.id)
       if (!ref) {
-        // a local create (or the local copy of an element the server does not know)
+        // a local create (or the local copy of an element the server does not know); one deleted before
+        // it was ever pushed is nothing to say (it stays out of the board's map, see elements())
+        if (el.isDeleted) {
+          this.tracked.delete(el.id)
+          continue
+        }
         const isNew = t?.isNew ?? true
         this.track(el.id, new Set(diffGroups(el, undefined).groups), isNew)
         continue
@@ -955,14 +965,8 @@ export class LobbyEngineCore implements EngineCore {
       if (this.confirmedMap.has(id)) t.isNew = false
       else if (!t.isNew) this.tracked.delete(id)
     }
-    this.held.clear()
-    this.heldBack.clear()
-    // the whole scene is rebuilt from the new server state and the local changes
-    const all = new Set<string>([...this.current.keys(), ...this.confirmedMap.keys()])
-    for (const id of this.current.keys())
-      if (!this.confirmedMap.has(id) && !this.tracked.has(id)) this.vanish.add(id)
-    this.applyScene(all)
-    // dirty groups equal to the new server copy are not changes any more
+    // dirty groups equal to the new server copy are not changes any more (a push lost with the socket
+    // that had committed): decided BEFORE the rebuild, so those elements become the server copy exactly
     for (const [id, t] of [...this.tracked]) {
       if (t.isNew) continue
       const el = this.current.get(id)
@@ -972,6 +976,14 @@ export class LobbyEngineCore implements EngineCore {
       for (const g of [...t.dirty]) if (g !== 'fit' && !diff.has(g)) t.dirty.delete(g)
       if (t.dirty.size === 0) this.tracked.delete(id)
     }
+    this.dropDeadCreates()
+    this.held.clear()
+    this.heldBack.clear()
+    // the whole scene is rebuilt from the new server state and the local changes
+    const all = new Set<string>([...this.current.keys(), ...this.confirmedMap.keys()])
+    for (const id of this.current.keys())
+      if (!this.confirmedMap.has(id) && !this.tracked.has(id)) this.vanish.add(id)
+    this.applyScene(all)
     // lease messages asked for while disconnected go out now, behind any push
     this.flushNow(true)
     for (const m of this.queuedLease.splice(0)) this.transport.send(m)
@@ -1194,6 +1206,20 @@ export class LobbyEngineCore implements EngineCore {
     return groups.size ? { groups, create: false } : null
   }
 
+  /**
+   * A create the server never got (never sent, or lost with a socket) whose element is deleted locally
+   * now: nothing to say to anyone. Its tracking goes, and the element leaves the scene.
+   */
+  private dropDeadCreates(): void {
+    for (const [id, t] of [...this.tracked]) {
+      if (!t.isNew || this.confirmedMap.has(id) || this.inflightHas(id)) continue
+      const el = this.current.get(id)
+      if (el && !el.isDeleted) continue
+      this.tracked.delete(id)
+      this.vanish.add(id)
+    }
+  }
+
   /** Builds and sends pushes for everything pushable. `forced`: a lease message follows (no cap). */
   private flushNow(forced: boolean): void {
     if (this.flushTimer !== null) {
@@ -1201,6 +1227,7 @@ export class LobbyEngineCore implements EngineCore {
       this.flushTimer = null
       this.flushDue = Number.POSITIVE_INFINITY
     }
+    this.dropDeadCreates()
     if (!this.connected || !this.welcome || this.awaitingSnapshot || this.resyncing) {
       this.schedulePersist()
       this.updateSaved()

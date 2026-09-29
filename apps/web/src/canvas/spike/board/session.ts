@@ -82,12 +82,11 @@ export class BoardSession {
   private toastSeq = 0
   private readonly detach: (() => void)[] = []
   private guest = false
-  private ticketUser: TicketResponse['user']
   private ticketRole: TicketResponse['role']
 
   constructor(o: BoardSessionOptions) {
     this.tab = tabId()
-    this.ticketUser = o.first.user
+
     this.ticketRole = o.first.role
     let firstTicket: TicketResponse | null = o.first
     const tickets = createTicketUri({
@@ -103,7 +102,6 @@ export class BoardSession {
         return apiClient.boardTicket(bid)
       },
       onTicket: (t) => {
-        this.ticketUser = t.user
         this.ticketRole = t.role
       },
       onAccessLost: () => this.set({ phase: 'no-access' }),

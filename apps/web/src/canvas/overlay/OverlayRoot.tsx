@@ -23,7 +23,6 @@ export interface OverlayRootProps {
 
 function useRerender(subscribe: (bump: () => void) => () => void, deps: readonly unknown[]): void {
   const [, bump] = useReducer((n: number) => n + 1, 0)
-  // biome-ignore lint/correctness/useExhaustiveDependencies: the caller names the subscription's inputs
   useEffect(() => subscribe(bump), deps)
 }
 
