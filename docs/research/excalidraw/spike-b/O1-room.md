@@ -32,11 +32,12 @@ running.
 |---|---|
 | **C0 arrow acceptance tests** `pnpm test:arrows` (85 tests, 13 files, against this room in-process) | **85/85, 3/3** (9.2–9.8 s per run; s1-sweep's 2,000 races 7.0 s, r35's 1,000 re-snaps 4.8 s). Per file: r33-freeend-rel 1, r33-label-node 2, r34-elbow-fixed 2, r35-drift 1, s1-freeend 7, s1-sweep 5, s2-midpoint 10, s3-elbow 30, s3-elbow-sweep 1, s4-frame 10, s5-freetext 6, s6-twotargets 8, s7-angle-mix 2. First passing run: `4c0a570` |
 | Protocol suites `pnpm exec vitest run --project sync apps/sync/test/element-room` (real server process, raw WebSocket client, fake api) | **82/82, 3/3** (21.9–22.0 s). baseline 2, bound-arrows 10, conflicts 6, convergence 4, durability 3, lifecycle 14, presence 4, readonly 4, security 22, text-lease 13 |
+| M2's gate "the headless client passes O1's protocol suites": `apps/sync/test/element-room/headless.test.ts` (O2's frozen `HeadlessClient` against the real server process: B10's receiving-only client, 2 × 50 concurrent creates at the top of the order, rule 7 through the core) | skipped on this branch (O2's module is the C0 stub; the suite says so). On a local trial merge with O2's `spike/b-engine` 8eec700 (never pushed): **3/3 runs pass**, and with it the whole room suite (85 passed, 1 skipped placeholder) and the arrow tests (85/85) |
 | Unit: `packages/canvas-schema/src/engine/binding.test.ts` (11, incl. the elbow-in-Node and label-node probes), `invariants.test.ts` (16, incl. a 200-board property test) | pass |
-| Whole unit suite `pnpm test` | 3,597 passed, 33 skipped, 0 failed (C0: 3,466 / 33) |
-| `pnpm lint` | 1,230 files, 0 errors |
+| Whole unit suite `pnpm test` | 3,597 passed, 37 skipped (the 4 of headless.test.ts), 0 failed (C0: 3,466 / 33) |
+| `pnpm lint` | 1,231 files, 0 errors, 0 warnings |
 | `pnpm -r typecheck` (15 packages) and `tsc -p apps/sync/tsconfig.node-safe.json --noEmit` | pass |
-| Specs `e2e/spike-b/tests/b3-l8-*`, `b4-server-*`, `b5-r1-*`, `b5-r4-*`, `b6-*` (21 tests, 6 files) | **written, typecheck, collected (`--list`); NOT RUN**: they need O2's board page and O3's harness, both stubs on this branch |
+| Specs `e2e/spike-b/tests/b3-l8-*`, `b4-server-*`, `b5-r1-*`, `b5-r4-*`, `b6-*` (22 tests, 6 files) | not runnable on this branch alone (O2's page and O3's harness are stubs here). On a local trial merge with O2, O3 and O5 (never pushed; port base 7860), 3 runs: **20 passed, 1 skipped, 1 failed each**: D3, D4, R1 (forged, viewer and commenter presence), R4 and B6 F1–F17 pass; R1's guest part is skipped (the harness cannot sign a guest in yet); L8's 20/20 forged part passes and its final convergence fails on A's label `versionNonce` (an O2 client finding, B3-L8.md) |
 
 Per check: `B3-L8.md`, `B4-D3.md`, `B4-D4.md`, `B5-R1.md`, `B5-R4.md`, `B6.md`, and the server half of L6/L10
 in `B3-L6-L10-server.md`.
