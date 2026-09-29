@@ -17,6 +17,7 @@ import { getController } from '../present-export/controller.ts'
 import {
   boardExportState,
   clientExportAllowed,
+  clientLinkWillLimit,
   EXPORT_OFF_TEXT,
   exportAllowed,
   exportAllowedOnBoard,
@@ -467,5 +468,18 @@ describe('gates', () => {
       'export-off-notice',
       'export-off-notice',
     ])
+  })
+})
+
+describe('the "Creating a client link turns this off" line (DANA2-01, domain access fixer round 1)', () => {
+  it('only for someone who can create client links, on a board nobody chose for', () => {
+    const base = { canManage: true, canCreateLinks: true, policy: 'everyone', stored: false } as const
+    expect(clientLinkWillLimit(base)).toBe(true)
+    // A board owner who may only reduce access (not a creator) cannot create client links.
+    expect(clientLinkWillLimit({ ...base, canCreateLinks: false })).toBe(false)
+    expect(clientLinkWillLimit({ ...base, canManage: false })).toBe(false)
+    expect(clientLinkWillLimit({ ...base, stored: true })).toBe(false)
+    expect(clientLinkWillLimit({ ...base, policy: 'editors' })).toBe(false)
+    expect(clientLinkWillLimit({ ...base, policy: null })).toBe(false)
   })
 })

@@ -200,6 +200,20 @@ export interface AnchorContext {
    * itself for a comment on a frame), or the frame a point pin sits in. Null outside any frame.
    */
   frameName?: string | null
+  /**
+   * F2-09: the file an image, video or file card shows ("halden-05-option-b-sage.jpg"), so a thread
+   * says which of 37 photos it is about. Null or absent when there is none.
+   */
+  fileName?: string | null
+}
+
+/** A file name on one line, at most 60 characters (the middle gives way, the extension stays). */
+export function shortFileName(name: unknown): string | null {
+  const clean = typeof name === 'string' ? name.replace(/\s+/g, ' ').trim() : ''
+  if (!clean) return null
+  const chars = Array.from(clean)
+  if (chars.length <= 60) return clean
+  return `${chars.slice(0, 40).join('')}…${chars.slice(-19).join('')}`
 }
 
 const FRIENDLY_TYPES: Record<string, string> = {
@@ -249,7 +263,9 @@ export function anchorLabel(
   if (anchor.kind === 'point') base = frame ? `In ${frame}` : 'On the board'
   else {
     const type = anchor.kind === 'asset' ? 'file' : friendlyShapeType(context.shapeType)
-    base = frame ? `${frame} · ${type}` : `On ${withArticle(type)}`
+    const file = shortFileName(context.fileName)
+    // F2-09: the file's name says which image or file it is ("On halden-05.jpg"), the type otherwise.
+    base = frame ? `${frame} · ${file ?? type}` : file ? `On ${file}` : `On ${withArticle(type)}`
   }
   const detail =
     anchor.kind === 'asset' && anchor.page

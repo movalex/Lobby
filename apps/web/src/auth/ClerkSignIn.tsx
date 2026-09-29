@@ -15,6 +15,8 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { api, isApiError } from '../api/client.ts'
 import { useTheme } from '../theme/useTheme.ts'
 import { type ClerkAppearance, clerkAppearance, readThemeTokens } from './clerkAppearance.ts'
+import { ExchangeStatus } from './ExchangeStatus.tsx'
+import { type ExchangeErrorView, exchangeErrorView } from './exchange-error.ts'
 import { useSession } from './session.tsx'
 import { clerkAccountLabel, clerkSignInView } from './signOut.ts'
 import { signedOutMarks } from './signOutMark.ts'
@@ -38,7 +40,7 @@ function ClerkExchange({ onDone, appearance }: { onDone(): void; appearance: Cle
   // Read once per visit to this page: a sign-in that completes here clears it.
   const [mark] = useState(() => signedOutMarks.read())
   const [confirmed, setConfirmed] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const [error, setError] = useState<ExchangeErrorView | null>(null)
   const [switchError, setSwitchError] = useState<string | null>(null)
   const exchanging = useRef(false)
   const view = clerkSignInView({
@@ -60,9 +62,10 @@ function ClerkExchange({ onDone, appearance }: { onDone(): void; appearance: Cle
         if (await refresh()) {
           signedOutMarks.clear()
           onDone()
-        } else setError('Signed in with Clerk, but Lobby did not start a session.')
+        } else setError({ message: 'Signed in with Clerk, but Lobby did not start a session.', retry: true })
       } catch (e) {
-        setError(isApiError(e) ? e.message : 'Sign-in failed. Try again.')
+        // Domain access: ACCOUNT_DISABLED (no retry) and IDENTITY_UNAVAILABLE (retry) have their words.
+        setError(exchangeErrorView(isApiError(e) ? e : null))
       } finally {
         exchanging.current = false
       }
@@ -127,18 +130,12 @@ function ClerkExchange({ onDone, appearance }: { onDone(): void; appearance: Cle
   }
   if (view === 'exchange' || view === 'error') {
     return (
-      <div role={error ? 'alert' : 'status'}>
-        <p className="dr-muted">{error ?? 'Signing you in to Lobby…'}</p>
-        {error && (
-          <div className="dr-row dr-row--wrap">
-            <button type="button" className="dr-btn dr-btn--primary" onClick={() => setError(null)}>
-              Try again
-            </button>
-            {switchButton}
-          </div>
-        )}
-        {switchProblem}
-      </div>
+      <ExchangeStatus
+        error={error}
+        onRetry={() => setError(null)}
+        actions={switchButton}
+        problem={switchProblem}
+      />
     )
   }
   // Hash routing keeps Clerk's multi-step flow inside /signin without touching our router.

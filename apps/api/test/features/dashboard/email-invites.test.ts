@@ -8,6 +8,8 @@ import {
   BoardDetail,
   EmailInviteResult,
   InvitationAccepted,
+  InvitationEmailLock,
+  InvitationEmailMismatchBody,
   InvitationPreview,
   ListInvitationsResponse,
   Me,
@@ -95,6 +97,12 @@ const CLERK_KEYS = { secretKey: 'sk_test_fake_secret_0123456789', publishableKey
 const PEOPLE = ['alice', 'bob', 'carol', 'dave', 'erin', 'frank'] as const
 type Person = (typeof PEOPLE)[number]
 const clerkIdOf = (p: Person) => `user_clerk_${p}`
+/**
+ * Domain access (docs/DOMAIN-ACCESS-CONTRACTS.md §11.3): each person's verified sign-in address.
+ * alice (and dave, a creator in another workspace) work at a creator domain; everyone else is a client.
+ */
+const clerkEmailOf = (p: Person) =>
+  p === 'alice' || p === 'dave' ? `lobby-test-${p}@darkburn.com` : `${p}@client.example.test`
 
 interface ClerkWorld {
   api: TestApi
@@ -125,8 +133,12 @@ async function clerkWorld(): Promise<ClerkWorld> {
             return { sub: clerkIdOf(p) }
           },
           profile: async (sub) => {
-            const p = sub.replace('user_clerk_', '')
-            return { name: p.charAt(0).toUpperCase() + p.slice(1), avatarUrl: null }
+            const p = sub.replace('user_clerk_', '') as Person
+            return {
+              name: p.charAt(0).toUpperCase() + p.slice(1),
+              avatarUrl: null,
+              emails: [{ email: clerkEmailOf(p), isPrimary: true, strategy: 'email_code' }],
+            }
           },
         },
       }),
@@ -235,12 +247,12 @@ describe('invite by email with Clerk sign-in (UNVERIFIED against a live Clerk; f
     expect(w.api.notifications.slice(before)).toHaveLength(2)
   })
 
-  it('a new person gets a single-use invitation emailed by Clerk (right redirect URL); nothing is granted until they accept, once', async () => {
-    const { res, body } = await sendInvite(alice, board, 'New.Person@Example.org', 'viewer')
+  it('a new person gets a single-use invitation emailed by Clerk (right redirect URL), locked to that address; nothing is granted until they accept, once', async () => {
+    const { res, body } = await sendInvite(alice, board, 'Erin@Client.Example.Test', 'viewer')
     expect(res.statusCode, res.body).toBe(201)
     expect(body).toEqual({
       mode: 'emailed',
-      email: 'new.person@example.org',
+      email: 'erin@client.example.test',
       invitationId: expect.stringMatching(/^inv_/),
       expiresAt: expect.any(String),
     })
@@ -248,7 +260,7 @@ describe('invite by email with Clerk sign-in (UNVERIFIED against a live Clerk; f
     expect(res.body).not.toContain('/invite/')
     expect(clerk.invitations).toEqual([
       {
-        emailAddress: 'new.person@example.org',
+        emailAddress: 'erin@client.example.test',
         redirectUrl: expect.stringMatching(INVITE_URL),
         notify: true,
         ignoreExisting: true,
@@ -260,17 +272,26 @@ describe('invite by email with Clerk sign-in (UNVERIFIED against a live Clerk; f
       role: string
       multi_use: boolean
       redeemed_by: string | null
-    }>('SELECT id, role, multi_use, redeemed_by FROM invitations WHERE board_id = $1', [board])
+      invited_email: string | null
+    }>('SELECT id, role, multi_use, redeemed_by, invited_email FROM invitations WHERE board_id = $1', [board])
     expect(inv).toEqual({
       id: body?.mode === 'emailed' ? body.invitationId : '',
       role: 'viewer',
       multi_use: false,
       redeemed_by: null,
+      invited_email: 'erin@client.example.test',
     })
     const created = await w.api.db.one<{ detail: Record<string, unknown> }>(
       "SELECT detail FROM audit_events WHERE action = 'invitation.create'",
     )
-    expect(created.detail).toEqual({ boardId: board, role: 'viewer', via: 'email' })
+    // Domain access: the audit row says it is locked and to which domain, never the address.
+    expect(created.detail).toEqual({
+      boardId: board,
+      role: 'viewer',
+      via: 'email',
+      emailLocked: true,
+      emailDomain: 'client.example.test',
+    })
     expect(await countRows(w.api, 'board_members WHERE board_id = $1', [board])).toBe(1) // alice only
     const expiresAt = body?.mode === 'emailed' ? body.expiresAt : ''
     expect(new Date(expiresAt).getTime() - Date.now()).toBeGreaterThan(7 * 86_400_000 - 60_000)
@@ -280,15 +301,45 @@ describe('invite by email with Clerk sign-in (UNVERIFIED against a live Clerk; f
       (await alice.req('GET', `/api/boards/${board}/invitations`)).json(),
     )
     expect(pending.invitations).toEqual([
-      expect.objectContaining({ id: inv.id, kind: 'invite', role: 'viewer', url: null }),
+      expect.objectContaining({
+        id: inv.id,
+        kind: 'invite',
+        role: 'viewer',
+        url: null,
+        email: 'erin@client.example.test',
+      }),
     ])
 
-    // The emailed link: public preview, accepted with the accepting person's own session.
+    // The emailed link: public preview (masked address), accepted with the accepting person's own
+    // session, and only by an account with that verified address.
     const token = tokenOf(String(clerk.invitations[0]?.redirectUrl))
-    const preview = InvitationPreview.parse((await w.api.anon('GET', `/api/invitations/${token}`)).json())
-    expect(preview).toMatchObject({ board: { id: board, title: 'Launch plan' }, role: 'viewer' })
+    const preview = InvitationPreview.extend(InvitationEmailLock.shape).parse(
+      (await w.api.anon('GET', `/api/invitations/${token}`)).json(),
+    )
+    expect(preview).toMatchObject({
+      board: { id: board, title: 'Launch plan' },
+      role: 'viewer',
+      emailLocked: true,
+      invitedEmailHint: 'e•••@client.example.test',
+      matchesYou: null,
+    })
     expect((await w.api.anon('POST', `/api/invitations/${token}/accept`)).statusCode).toBe(401)
-    const erin = await w.signIn('erin') // signs up through the email, then signs in to Draftroom
+    // A different account: 403 with the masked address; nothing is redeemed and the link stays usable.
+    const frank = await w.signIn('frank')
+    const wrong = await frank.req('POST', `/api/invitations/${token}/accept`)
+    expect(wrong.statusCode).toBe(403)
+    expect(InvitationEmailMismatchBody.parse(wrong.json())).toEqual({
+      error: {
+        code: 'INVITATION_EMAIL_MISMATCH',
+        message:
+          'This invitation is for e•••@client.example.test. Sign in with that email address to accept it.',
+      },
+      mismatch: { invitedEmailHint: 'e•••@client.example.test', invitedBy: { name: 'Alice' } },
+    })
+    expect(wrong.body).not.toContain('erin@')
+    expect(await boardRole(frank, board)).toBeNull()
+    expect((await w.api.anon('GET', `/api/invitations/${token}`)).statusCode).toBe(200)
+    const erin = await w.signIn('erin') // signs up through the email (Clerk verifies it), then signs in
     const before = w.api.notifications.length
     const accepted = await erin.req('POST', `/api/invitations/${token}/accept`)
     expect(accepted.statusCode, accepted.body).toBe(200)
@@ -303,7 +354,6 @@ describe('invite by email with Clerk sign-in (UNVERIFIED against a live Clerk; f
     )
     // Only once: again for erin is a no-op, anyone else gets 410.
     expect((await erin.req('POST', `/api/invitations/${token}/accept`)).statusCode).toBe(200)
-    const frank = await w.signIn('frank')
     expect((await frank.req('POST', `/api/invitations/${token}/accept`)).statusCode).toBe(410)
     expect(await boardRole(frank, board)).toBeNull()
     expect(w.api.notifications.slice(before)).toEqual([{ boardId: board, userId: erin.userId }])
@@ -422,16 +472,21 @@ describe('invite by email with Clerk sign-in (UNVERIFIED against a live Clerk; f
     expect(String(invites[0]?.emailRef)).toMatch(/^[0-9a-f]{12}$/)
   })
 
-  it('editors without manage_access get 403, people outside the board 404, and neither reaches Clerk', async () => {
+  it('editors without manage_access get 403, people outside the board 404, outsiders 403, and none reaches Clerk', async () => {
     const carol = await w.signIn('carol')
     clerk.users = [verified(clerkIdOf('carol'), 'carol@example.com')]
     expect((await sendInvite(alice, board, 'carol@example.com', 'editor')).body?.mode).toBe('granted')
     clerk.reset()
-    const dave = await w.signIn('dave') // another workspace, no access to this board
+    const dave = await w.signIn('dave') // a creator in another workspace, no access to this board
     const asEditor = await sendInvite(carol, board, 'someone@example.com')
     expect(asEditor.res.statusCode).toBe(403)
     const asOutsider = await sendInvite(dave, board, 'someone@example.com')
     expect(asOutsider.res.statusCode).toBe(404)
+    // Domain access: someone who is not a creator gets the same 403 whatever the board.
+    const erin = await w.signIn('erin')
+    const notCreator = await sendInvite(erin, board, 'someone@example.com')
+    expect(notCreator.res.statusCode).toBe(403)
+    expect(notCreator.res.json().error.code).toBe('CREATOR_REQUIRED')
     expect(clerk.lookups).toEqual([])
     expect(clerk.invitations).toEqual([])
     expect(await countRows(w.api, 'invitations')).toBe(0)
@@ -447,7 +502,7 @@ describe('invite by email with the development sign-in provider', () => {
   })
   afterEach(() => world.api.close())
 
-  it('answers a single-use link to copy (email needs Clerk) and never loads the Clerk client', async () => {
+  it('answers a single-use link to copy (email needs Clerk), locked to the address, and never loads the Clerk client', async () => {
     const { bob, board, erin, frank, api } = world
     const { res, body } = await sendInvite(bob, board, 'Sam@Client.example', 'editor')
     expect(res.statusCode, res.body).toBe(201)
@@ -469,19 +524,28 @@ describe('invite by email with the development sign-in provider', () => {
       (await bob.req('GET', `/api/boards/${board}/invitations`)).json(),
     )
     expect(pending.invitations).toEqual([
-      expect.objectContaining({ kind: 'invite', role: 'editor', uses: 0 }),
+      expect.objectContaining({ kind: 'invite', role: 'editor', uses: 0, email: 'sam@client.example' }),
     ])
 
-    // Accepting grants exactly that role, as a guest, and only once.
+    // Domain access: another account gets 403 with the masked address; the link stays usable.
     const token = tokenOf(body?.mode === 'link' ? body.url : '')
-    expect((await erin.req('POST', `/api/invitations/${token}/accept`)).statusCode).toBe(200)
-    expect(await boardRole(erin, board)).toBe('editor')
-    const me = Me.parse((await erin.req('GET', '/api/me')).json())
+    const wrong = await erin.req('POST', `/api/invitations/${token}/accept`)
+    expect(wrong.statusCode).toBe(403)
+    expect(wrong.json()).toMatchObject({
+      error: { code: 'INVITATION_EMAIL_MISMATCH' },
+      mismatch: { invitedEmailHint: 's•••@client.example', invitedBy: { name: 'bob' } },
+    })
+    expect(await boardRole(erin, board)).toBeNull()
+    // The invitee (an account with that verified address) accepts: exactly that role, as a guest, once.
+    const sam = await api.login('sam', 'Sam', { email: 'sam@client.example' })
+    expect((await sam.req('POST', `/api/invitations/${token}/accept`)).statusCode).toBe(200)
+    expect(await boardRole(sam, board)).toBe('editor')
+    const me = Me.parse((await sam.req('GET', '/api/me')).json())
     expect(me.workspaces).toContainEqual(expect.objectContaining({ id: DEV_STUDIO, role: 'guest' }))
     expect((await frank.req('POST', `/api/invitations/${token}/accept`)).statusCode).toBe(410)
     expect(await boardRole(frank, board)).toBeNull()
     expect(api.notifications.filter((n) => n.boardId === board)).toEqual([
-      { boardId: board, userId: erin.userId },
+      { boardId: board, userId: sam.userId },
     ])
   })
 

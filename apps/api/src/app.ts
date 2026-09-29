@@ -10,7 +10,9 @@ import fastifyCookie from '@fastify/cookie'
 import fastifyRateLimit from '@fastify/rate-limit'
 import Fastify, { type FastifyInstance, type FastifyServerOptions } from 'fastify'
 import { createClerkAuthProvider } from './auth/clerk.ts'
+import { creatorLookup } from './auth/creator-sql.ts'
 import { createDevAuthProvider } from './auth/dev.ts'
+import { createIdentityService, type IdentityService } from './auth/identity.ts'
 import type { AuthProvider, RouteRateLimit, SignInContext } from './auth/provider.ts'
 import { createSessionStore } from './auth/session.ts'
 import { listUserWorkspaces } from './auth/users.ts'
@@ -68,12 +70,19 @@ export interface ApiDeps {
   blobs?: BlobStore
   /** Worker route limits (tests lower them). */
   workerRateLimit?: WorkerDeps['rateLimit']
+  /**
+   * TEST-ONLY seam (docs/DOMAIN-ACCESS-CONTRACTS.md §11.1 creation matrix): false leaves the domain-access
+   * root guard out, to prove the in-route creator checks hold on their own. Never set outside tests.
+   */
+  domainAccessGuard?: boolean
 }
 
 export interface ApiServer {
   app: FastifyInstance
   db: Db
   blobs: BlobStore
+  /** Domain access: creator status and identity refreshes (tests await identity.settled()). */
+  identity: IdentityService
   /** Binds config.host:config.port; resolves with the bound port (useful with PORT=0). */
   listen(): Promise<{ host: string; port: number }>
   /** Stops accepting, finishes in-flight requests and sync notifications, closes the database if owned. */
@@ -147,7 +156,20 @@ async function buildServer(
   const events = deps.events ?? new EventHub()
   // Every "access changed" reaches the canvas sockets (sync) and the board event streams (authz-005).
   const notifier = fanOutAccessChanges(syncNotifier, events)
-  const sessions = createSessionStore({ db, secureCookies: config.publicOrigin.startsWith('https:'), now })
+  // Domain access: only the RUNNING provider's stored addresses count (never the AUTH_PROVIDER variable).
+  const creators = creatorLookup(config.creators, provider.id)
+  const sessions = createSessionStore({
+    db,
+    secureCookies: config.publicOrigin.startsWith('https:'),
+    now,
+    creators,
+  })
+  const identity = createIdentityService({ db, sessions, provider, lookup: creators, now, log: app.log })
+  // Never an address: the domains and how many exceptions there are.
+  app.log.info(
+    { creators: { domains: [...config.creators.domains], exceptions: config.creators.emails.length } },
+    'domain access policy',
+  )
   const authRateLimit = deps.authRateLimit ?? { max: provider.id === 'dev' ? 600 : 60, timeWindow: 60_000 }
   const limits: ApiLimits = {
     ...DEFAULT_LIMITS,
@@ -162,6 +184,7 @@ async function buildServer(
     now,
     authRateLimit,
     limits,
+    identity,
     async requireUser(req) {
       const user = await sessions.user(req)
       if (!user) throw unauthenticated()
@@ -250,12 +273,27 @@ async function buildServer(
     rateLimit: authRateLimit,
     log: app.log,
     now,
+    creators,
+    async endBannedAccount(providerId, subject) {
+      const row = await db.maybeOne<{ user_id: string }>(
+        'SELECT user_id FROM identities WHERE provider = $1 AND subject = $2',
+        [providerId, subject],
+      )
+      if (!row) return
+      const ids = await sessions.revokeAll(row.user_id)
+      app.log.info(
+        { evt: 'identity.sessions_revoked', userId: row.user_id, outcome: 'banned', sessions: ids.length },
+        'account ended',
+      )
+    },
     async signIn(req, reply, provision, opts = {}) {
       const run = () =>
         db.transaction(async (tx) => {
           const user = await provision(tx, now())
           const session = await sessions.create(tx, user.id, { clerkSessionId: opts.clerkSessionId ?? null })
-          return { user, session, workspaces: await listUserWorkspaces(tx, user.id) }
+          // Stored data only, which provisioning has just written (docs/DOMAIN-ACCESS-CONTRACTS.md §8).
+          const access = await identity.status(user, tx)
+          return { user, session, access, workspaces: await listUserWorkspaces(tx, user.id) }
         })
       let result: Awaited<ReturnType<typeof run>>
       try {
@@ -268,7 +306,11 @@ async function buildServer(
       // A new sign-in in this browser ends the session it had (e.g. switching dev users).
       await sessions.revoke(req)
       sessions.setCookie(reply, result.session.token, result.session.expiresAt)
-      const me: Me = { user: sessionUserToUser(result.user), workspaces: result.workspaces }
+      const me: Me = {
+        user: sessionUserToUser(result.user),
+        workspaces: result.workspaces,
+        access: result.access,
+      }
       return me
     },
   }
@@ -339,14 +381,20 @@ async function buildServer(
     layout,
   }
   registerEventRoutes(app, features)
-  await registerFeatures(app, features)
+  await registerFeatures(app, features, { domainAccessGuard: deps.domainAccessGuard !== false })
   // Workspace storage and the unreferenced-file collector (UPL-1; DRAFTROOM_ASSET_GC, report-only by default).
   registerStorage(app, ctx, { blobs, sync: features.sync, dataRoot: layout.root })
+
+  // Background identity refreshes finish before the database closes.
+  app.addHook('onClose', async () => {
+    await identity.settled()
+  })
 
   return {
     app,
     db,
     blobs,
+    identity,
     async listen() {
       await app.listen({ host: config.host, port: config.port })
       return { host: config.host, port: (app.server.address() as AddressInfo).port }

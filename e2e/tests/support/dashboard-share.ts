@@ -28,15 +28,19 @@ export interface Person {
   readonly page: Page
 }
 
-/** A new browser context signed in (dev login endpoint) as `handle`, on a blank page. */
+/**
+ * A new browser context signed in (dev login endpoint) as `handle`, on a blank page. `email` (domain
+ * access) signs in with that address; give an outside address only to a freshHandle() (support/api.ts).
+ * An outside account has no personal workspace: never call personalWorkspace() on its `me`.
+ */
 export async function signedInContext(
   browser: Browser,
   handle: string,
-  opts: { name?: string; viewport?: { width: number; height: number } } = {},
+  opts: { name?: string; email?: string; viewport?: { width: number; height: number } } = {},
 ): Promise<Person> {
   const context = await browser.newContext({ viewport: opts.viewport ?? { width: 1360, height: 860 } })
   const name = opts.name ?? displayName(handle)
-  const me = await signInContext(context, handle, name)
+  const me = await signInContext(context, handle, name, opts.email === undefined ? {} : { email: opts.email })
   const page = await context.newPage()
   return { handle, name, me, context, page }
 }
@@ -186,6 +190,8 @@ export interface PendingInvitationBody {
   uses: number
   maxUses: number | null
   url: string | null
+  /** Domain access: the address a single-use invitation is locked to (manager-only list). */
+  email?: string | null
 }
 export const invitations = async (api: Api, boardId: string) =>
   (await json<{ invitations: PendingInvitationBody[] }>(api, 'GET', `/api/boards/${boardId}/invitations`))

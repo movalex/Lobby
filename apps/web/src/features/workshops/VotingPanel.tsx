@@ -4,6 +4,7 @@
 import type { VoteResult, VoteSessionSummary, WorkshopVoteState } from '@draftroom/contracts'
 import { useCallback, useEffect, useId, useMemo, useState } from 'react'
 import { type Editor, type TLShapeId, useValue } from 'tldraw'
+import { formatDateTime } from '../../lib/format.ts'
 import { EXPORT_OFF_TEXT, exportAllowedOnBoard } from '../sharing/export-policy.ts'
 import type { FeatureContext } from '../types.ts'
 import { describeClock, formatClock } from './countdown.ts'
@@ -140,7 +141,8 @@ export function VotingPanel({ ctx }: { ctx: FeatureContext; close(): void }) {
                 <li key={p.id} data-testid="vote-history-row" data-session-id={p.id}>
                   <span className="dr-wk-history__title">{p.title}</span>
                   <span className="dr-muted">
-                    {new Date(p.createdAt).toLocaleString()} · {p.totalVotesCast} votes
+                    {/* R2-08: no seconds, the same hour cycle as every other time */}
+                    {formatDateTime(p.createdAt)} · {p.totalVotesCast} votes
                   </span>
                   {p.status === 'revealed' ? (
                     <button

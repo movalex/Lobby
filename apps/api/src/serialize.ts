@@ -42,7 +42,14 @@ export const toUser = (r: UserRow): User => ({
   avatarUrl: r.avatar_url,
 })
 
-export const sessionUserToUser = (u: SessionUser): User => ({ ...u })
+/** Lists the five User fields: SessionUser carries more (domain access), and none of it may leak. */
+export const sessionUserToUser = (u: SessionUser): User => ({
+  id: u.id,
+  name: u.name,
+  handle: u.handle,
+  color: u.color,
+  avatarUrl: u.avatarUrl,
+})
 
 export interface ProjectRow {
   id: string

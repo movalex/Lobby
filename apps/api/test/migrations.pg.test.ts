@@ -106,6 +106,14 @@ async function seedOldData(db: Db, now: Date) {
     expires_at: t(-3 * D),
   })
   await ins(db, 'sessions', { id_hash: sha('s-erin'), user_id: U.erin, expires_at: t(D) })
+  // The dev sign-in's shared workspace (fixed id), created by carol before anything else: migration
+  // 0021's backfill must not mark it as anyone's personal workspace.
+  await ins(db, 'workspaces', {
+    id: 'wsp_DevStudio00000000000',
+    name: 'Dev Studio',
+    created_by: U.carol,
+    created_at: t(-30 * D),
+  })
   await ins(db, 'workspaces', { id: W.studio, name: 'Studio', created_by: U.alice })
   await ins(db, 'workspaces', { id: W.other, name: 'Other', created_by: U.bob })
   for (const [u, role] of [
@@ -589,7 +597,14 @@ describe.skipIf(!PG_URL)('every migration after 0008 on a real Postgres holding 
       if (after.constraints.get(k) !== v) changed.push(`constraint ${k}: ${v} -> ${after.constraints.get(k)}`)
     for (const [k, v] of before.indexes) if (after.indexes.get(k) !== v) changed.push(`index ${k}`)
     for (const k of before.triggers) if (!after.triggers.has(k)) changed.push(`trigger ${k}`)
-    expect(changed).toEqual([])
+    // The one intended change to an existing object: 0017_comment_notifications widens the notification
+    // kinds with 'new_comment' (drop and re-add of the CHECK). Anything else is still a failure.
+    const kinds = (list: string[]) =>
+      `CHECK ((kind = ANY (ARRAY[${list.map((k) => `'${k}'::text`).join(', ')}])))`
+    const m1Kinds = ['mention', 'reply', 'resolved', 'access_request']
+    expect(changed).toEqual([
+      `constraint notifications.notifications_kind_check: ${kinds(m1Kinds)} -> ${kinds([...m1Kinds, 'new_comment'])}`,
+    ])
     // New columns on existing tables: NOT NULL ones need a default (an old build's INSERTs omit them).
     const added = [...after.columns].filter(
       ([k]) => !before.columns.has(k) && before.columns.has(`${k.split('.')[0]}.id`),
@@ -606,6 +621,28 @@ describe.skipIf(!PG_URL)('every migration after 0008 on a real Postgres holding 
       (await s.db.query("SELECT id FROM users WHERE kind <> 'account' OR guest_name IS NOT NULL")).rows,
     ).toEqual([])
     expect((await s.db.query('SELECT id FROM invitations WHERE allow_guests')).rows).toEqual([])
+    // 0021_domain_access (docs/DOMAIN-ACCESS-CONTRACTS.md §3.2, D3): the open single-use links bound
+    // to nobody are revoked; redeemed, multi-use, already revoked and expired ones are untouched.
+    const revoked = Object.fromEntries(
+      (
+        await s.db.query<{ id: string; revoked_at: Date | null }>('SELECT id, revoked_at FROM invitations')
+      ).rows.map((r) => [r.id, r.revoked_at]),
+    )
+    expect(revoked[INV.single]).toBeInstanceOf(Date)
+    expect(revoked[INV.board]).toBeInstanceOf(Date)
+    for (const id of [INV.wsGuest, INV.review, INV.workshop, INV.expired]) expect(revoked[id], id).toBeNull()
+    expect(revoked[INV.revoked]?.getTime()).toBe(now.getTime() - D)
+    expect((await s.db.query('SELECT id FROM invitations WHERE invited_email IS NOT NULL')).rows).toEqual([])
+    // Personal workspaces are marked (each creator's earliest one), Dev Studio never.
+    const personal = Object.fromEntries(
+      (
+        await s.db.query<{ id: string; personal_of: string | null }>('SELECT id, personal_of FROM workspaces')
+      ).rows.map((r) => [r.id, r.personal_of]),
+    )
+    expect(personal).toEqual({ [W.studio]: U.alice, [W.other]: U.bob, wsp_DevStudio00000000000: null })
+    // Nobody is confirmed yet, and no address is stored.
+    expect((await s.db.query('SELECT id FROM users WHERE identity_checked_at IS NOT NULL')).rows).toEqual([])
+    expect((await s.db.one<{ n: number }>('SELECT count(*)::int AS n FROM user_emails')).n).toBe(0)
     const afterCounts = await counts(s.db, s.schema)
     for (const [t, n] of Object.entries(beforeCounts))
       if (t !== 'schema_migrations') expect(afterCounts[t], t).toBe(n)
@@ -721,6 +758,14 @@ describe.skipIf(!PG_URL)('every migration after 0008 on a real Postgres holding 
       const refused = await inject('POST', `/api/invitations/${oldTok}/guest`, { name: 'Sam' })
       expect(refused.statusCode, refused.body).toBe(403)
 
+      // old boards: no export policy stored, so the default (read before any new link below: since
+      // cdaf361 the first client link on such a board stores 'editors')
+      const polBefore = await inject('GET', `/api/boards/${B.main}/export-policy`, undefined, {
+        cookie: carol.cookie,
+      })
+      expect(polBefore.statusCode, polBefore.body).toBe(200)
+      expect(polBefore.json()).toEqual({ exportPolicy: 'everyone', canExport: true, policySet: false })
+
       // a new guest link and a guest next to the accounts
       const created = await inject(
         'POST',
@@ -749,20 +794,27 @@ describe.skipIf(!PG_URL)('every migration after 0008 on a real Postgres holding 
         },
       )
       expect(ext.statusCode, ext.body).toBe(200)
-      // old boards: export policy default, thumbnails, private brainstorm
+      // DANA2-01 (cdaf361): that first commenter (client) link stored 'editors' on the old board, whose
+      // owner never chose a policy; carol, not an editor there, may no longer export
       const pol = await inject('GET', `/api/boards/${B.main}/export-policy`, undefined, {
         cookie: carol.cookie,
       })
-      expect(pol.json()).toEqual({ exportPolicy: 'everyone', canExport: true })
+      expect(pol.json()).toEqual({ exportPolicy: 'editors', canExport: false, policySet: true })
+      // the owner's explicit choice on the old board is stored and kept
       const put = await inject(
         'PUT',
         `/api/boards/${B.main}/export-policy`,
-        { exportPolicy: 'editors' },
+        { exportPolicy: 'everyone' },
         {
           cookie: alice.cookie,
         },
       )
       expect(put.statusCode, put.body).toBe(200)
+      const polAfter = await inject('GET', `/api/boards/${B.main}/export-policy`, undefined, {
+        cookie: carol.cookie,
+      })
+      expect(polAfter.json()).toEqual({ exportPolicy: 'everyone', canExport: true, policySet: true })
+      // private brainstorm on the old board
       const start = await inject(
         'POST',
         `/api/boards/${B.main}/private-brainstorm`,

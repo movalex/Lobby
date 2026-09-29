@@ -480,6 +480,31 @@
 .dr-cux-gridcols__step:disabled:hover {
   background: transparent;
 }
+/* A11Y2-06: phone-width canvases. The bar never runs past the canvas edges, and align, distribute and
+   arrange sit behind "More", as a second row that wraps when it is opened. */
+.dr-cux-selbar[data-compact] {
+  flex-wrap: wrap;
+  justify-content: center;
+  max-width: calc(100% - 16px);
+}
+.dr-cux-selbar__more {
+  display: flex;
+  flex-basis: 100%;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+  gap: 2px;
+  margin-top: 3px;
+  padding-top: 3px;
+  border-top: 1px solid var(--dr-line);
+}
+/* Touch targets: 36 px buttons on a coarse pointer. */
+@media (pointer: coarse) {
+  .dr-cux-selbar[data-compact] .dr-cux-selbar__btn {
+    width: 36px;
+    height: 36px;
+  }
+}
 .dr-cux-gridcols__label {
   min-width: 66px;
   color: var(--dr-ink-2);

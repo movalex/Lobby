@@ -116,6 +116,20 @@ export function clientExportAllowed(policy: ExportPolicy | null, stored: boolean
 }
 
 /**
+ * DANA2-01: the Share dialog's "Creating a client link turns this off…" line, for a board nobody chose
+ * a setting for yet. Only for someone who can create client links: a board owner who may only reduce
+ * access (not a creator, domain access D4) is not told about a link it cannot make.
+ */
+export function clientLinkWillLimit(opts: {
+  canManage: boolean
+  canCreateLinks: boolean
+  policy: ExportPolicy | null
+  stored: boolean | null
+}): boolean {
+  return opts.canManage && opts.canCreateLinks && opts.policy === 'everyone' && opts.stored === false
+}
+
+/**
  * Pure rule behind the UI (tested): unknown role or policy = allowed, and an unknown kind = not a
  * name-only guest; the server decides anyway.
  */

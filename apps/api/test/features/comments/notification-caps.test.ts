@@ -93,22 +93,23 @@ describe('mention cap (NC-V4)', () => {
 
 describe('caps under simultaneous requests (NC-V3)', () => {
   it('the per-board lock is transaction-scoped: held inside the transaction, gone after it', async () => {
-    const held = await f.api.db.transaction(async (tx) => {
-      await lockBoardNotifications(tx, f.boardId)
-      return (
-        await tx.one<{ n: number }>(
+    // This board's lock only (any holder, granted or waiting): on a real Postgres other test files
+    // running at the same time hold advisory locks of their own, which say nothing about this one.
+    const thisLock = async (q: Pick<typeof f.api.db, 'one'>, granted: boolean | null) =>
+      (
+        await q.one<{ n: number }>(
           `SELECT count(*)::int AS n FROM pg_locks
             WHERE locktype = 'advisory' AND classid = $1::int::oid AND objid = hashtext($2)::oid
-              AND objsubid = 2 AND granted`,
-          [NOTIFY_LOCK_NS, f.boardId],
+              AND objsubid = 2 AND ($3::boolean IS NULL OR granted = $3::boolean)`,
+          [NOTIFY_LOCK_NS, f.boardId, granted],
         )
       ).n
+    const held = await f.api.db.transaction(async (tx) => {
+      await lockBoardNotifications(tx, f.boardId)
+      return thisLock(tx, true)
     })
     expect(held).toBe(1)
-    const after = await f.api.db.one<{ n: number }>(
-      "SELECT count(*)::int AS n FROM pg_locks WHERE locktype = 'advisory'",
-    )
-    expect(after.n).toBe(0)
+    expect(await thisLock(f.api.db, null)).toBe(0)
   })
 
   it('threads posted at once still queue at most the per-author cap', async () => {

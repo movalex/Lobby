@@ -2,14 +2,14 @@ import { lazy, type ReactNode, Suspense, useEffect } from 'react'
 import { SignInPage } from './auth/SignInPage.tsx'
 import { SessionProvider, useSession } from './auth/session.tsx'
 import { DashboardPage } from './dashboard/DashboardPage.tsx'
-import { landingWorkspace } from './dashboard/model.ts'
+import { landingWorkspace, noWorkspaceCopy } from './dashboard/model.ts'
 import { GuestEndedScreen } from './invite/GuestEndedScreen.tsx'
 import { GuestKindProvider, wasGuestTab } from './invite/guest.tsx'
 import { InvitePage } from './invite/InvitePage.tsx'
 import { DEV_AUTH_ENABLED } from './lib/identity.ts'
 import { matchRoute, navigate, signInPath, useLocationKey, workspacePath } from './lib/routing.ts'
 import { readLastWorkspace } from './lib/storage.ts'
-import { LoadingScreen, MessageScreen } from './ui/screens.tsx'
+import { LoadingScreen, MessageScreen, UnreachableScreen } from './ui/screens.tsx'
 
 // The board pulls in tldraw (~2 MB); the dashboard and sign-in should not have to download it.
 const BoardPage = lazy(() => import('./board/BoardPage.tsx').then((m) => ({ default: m.BoardPage })))
@@ -108,25 +108,13 @@ function RequireSession({ children }: { children: ReactNode }) {
 
   if (guestEnded) return <GuestEndedScreen />
   if (state.status === 'signed-in') return <>{children}</>
-  if (state.status === 'unreachable') {
-    return (
-      <MessageScreen
-        testId="api-unreachable"
-        title="Can't reach Lobby"
-        body={state.message}
-        actions={
-          <button type="button" className="dr-btn dr-btn--primary" onClick={() => void refresh()}>
-            Try again
-          </button>
-        }
-      />
-    )
-  }
+  if (state.status === 'unreachable')
+    return <UnreachableScreen message={state.message} onRetry={() => void refresh()} />
   return <LoadingScreen testId="session-loading" />
 }
 
 function RootRedirect() {
-  const { state } = useSession()
+  const { state, signOut, signingOut } = useSession()
   const me = state.status === 'signed-in' ? state.me : null
   const target = me ? landingWorkspace(me.workspaces, readLastWorkspace()) : null
   const targetId = target?.id
@@ -134,12 +122,44 @@ function RootRedirect() {
     if (targetId) navigate(workspacePath(targetId), { replace: true })
   }, [targetId])
   if (me && !target) {
+    // Domain access (docs/DOMAIN-ACCESS-CONTRACTS.md §9): an outside account gets only what it is
+    // invited to, so with nothing shared yet it lands here and is told why.
+    const copy = noWorkspaceCopy(me.access)
     return (
       <MessageScreen
         testId="no-workspace"
-        title="You're not in a workspace yet"
-        body="Open an invite link from a teammate to join their workspace or board."
-        actions={<span />}
+        reason={copy.reason}
+        title={copy.title}
+        body={copy.body.map((p, i) => (
+          <p key={p} data-testid={i === 0 && copy.reason === 'outside' ? 'no-workspace-account' : undefined}>
+            {p}
+          </p>
+        ))}
+        actions={
+          copy.action === 'switch-account' ? (
+            <button
+              type="button"
+              className="dr-btn dr-btn--primary"
+              data-testid="no-workspace-switch"
+              disabled={signingOut}
+              aria-busy={signingOut || undefined}
+              onClick={() => void signOut()}
+            >
+              {signingOut ? 'Signing out…' : 'Sign in with a different account'}
+            </button>
+          ) : copy.action === 'reload' ? (
+            <button
+              type="button"
+              className="dr-btn dr-btn--primary"
+              data-testid="no-workspace-reload"
+              onClick={() => location.reload()}
+            >
+              Reload
+            </button>
+          ) : (
+            <span />
+          )
+        }
       />
     )
   }

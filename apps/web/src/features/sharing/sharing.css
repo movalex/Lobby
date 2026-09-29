@@ -106,6 +106,16 @@
   margin-left: 2px;
 }
 
+/* R2-11: the retro path to an editable link, right under the client card. */
+.dr-share .dr-share__hint.dr-sharing__workshop-shortcut {
+  margin: 10px 2px 14px;
+  color: var(--dr-ink);
+  font-size: 13px;
+}
+.dr-sharing__workshop-shortcut .dr-linkbtn {
+  font-weight: 650;
+}
+
 /* F2-04: while exporting is off for this person, tldraw's image and video toolbars offer no
    "Download original" (the api refuses it anyway), and a toolbar left with nothing to offer is gone. */
 .tl-container[data-dr-export-off="true"]
@@ -266,9 +276,21 @@
   flex: none;
   min-width: 48px;
 }
-.dr-sharing__revoke {
+/* A11Y-08: at least 24 px tall and wide (WCAG 2.5.8); doubled class, as .dr-linkbtn (styles.css, loaded
+   later) zeroes the padding. */
+.dr-linkbtn.dr-sharing__revoke {
+  display: inline-flex;
+  align-items: center;
+  min-width: 24px;
+  min-height: 24px;
+  padding: 2px 4px;
   font-size: 13px;
   white-space: nowrap;
+}
+/* A11Y-01: "Create…" keeps the keyboard while it works (aria-disabled, not disabled). */
+.dr-sharing__create .dr-btn[aria-disabled="true"] {
+  opacity: 0.6;
+  cursor: progress;
 }
 .dr-sharing__footer {
   display: flex;
@@ -285,6 +307,11 @@
 }
 
 /* ---- header badge (PRS-03) -------------------------------------------------------------------- */
+
+/* R2-11 / F14: viewers, commenters and guests get no badge; the "⋯" menu drops its empty "Sharing" row. */
+.dr-overflow__item[data-feature="sharing"]:not(:has(.dr-sharebadge)) {
+  display: none;
+}
 
 .dr-sharebadge {
   display: inline-flex;
@@ -444,4 +471,23 @@
 }
 .dr-share__hint.dr-sharing__policy-off {
   color: var(--dr-warn);
+}
+
+/* Domain access (docs/DOMAIN-ACCESS-CONTRACTS.md §9, fixer round 2): why Owner is off for people
+   outside Dark Burn Creative and Trailer Park Group, said once under "People with access". */
+.dr-share__hint.dr-sharing__owner-note {
+  margin: -4px 0 8px;
+}
+
+/* Domain access (docs/DOMAIN-ACCESS-CONTRACTS.md §9): a board manager who is not at Dark Burn Creative
+   or Trailer Park Group can only reduce access; the note at the top of the dialog says why. */
+.dr-share__note.dr-sharing__creator-note {
+  margin: 0 0 14px;
+  padding: 10px 12px;
+  border: 1px solid var(--dr-accent-line);
+  border-radius: 8px;
+  background: var(--dr-accent-bg);
+  color: var(--dr-accent-ink);
+  font-size: 13px;
+  line-height: 1.45;
 }

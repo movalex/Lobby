@@ -1,13 +1,17 @@
 import { describe, expect, it } from 'vitest'
 import {
   canExtend,
+  createdSaying,
   hoursLabel,
   pickDefaultRole,
   readSentRequest,
   requestableRoles,
   shareBadge,
+  shareBadgeName,
   shortDate,
   shortTime,
+  showsShareBadge,
+  timeOfDay,
   writeSentRequest,
 } from './model.ts'
 
@@ -47,6 +51,40 @@ describe('board header sharing badge (PRS-03)', () => {
     expect(b.label).toBe('Link: comment · until Oct 10')
     expect(b.description).toContain('(3 links)')
     expect(b.description).toContain('Everyone in Dev Studio can view')
+  })
+
+  it('A11Y2-10: the accessible name starts with the visible text (voice control), then explains', () => {
+    for (const state of [
+      { ...base, visibility: 'private' as const, links: [] },
+      { ...base, visibility: 'workspace_edit' as const, links: [], pendingRequests: 1 },
+      {
+        ...base,
+        visibility: 'private' as const,
+        links: [{ role: 'editor' as const, expiresAt: '2026-10-01T08:42:00' }],
+      },
+      {
+        ...base,
+        visibility: 'workspace_view' as const,
+        links: [{ role: 'commenter' as const, expiresAt: '2026-10-10T10:00:00' }],
+      },
+    ]) {
+      const b = shareBadge(state, 'Dev Studio', now)
+      const name = shareBadgeName(b)
+      expect(name.startsWith(`${b.label}. `)).toBe(true)
+      expect(name).toContain(b.description)
+      expect(name.endsWith('Open sharing settings.')).toBe(true)
+    }
+    const withRequests = shareBadge(
+      { ...base, visibility: 'private', links: [], pendingRequests: 2 },
+      'W',
+      now,
+    )
+    expect(shareBadgeName(withRequests)).toContain('2 pending access requests.')
+  })
+
+  it('A11Y-01: says what Create did', () => {
+    expect(createdSaying('Client link', true)).toBe('Client link created and copied to the clipboard.')
+    expect(createdSaying('Workshop link', false)).toBe('Workshop link created. Copy it from the list below.')
   })
 
   it('carries the pending request count for owners only', () => {
@@ -140,5 +178,25 @@ describe('request form default (PRI-16)', () => {
     expect(pickDefaultRole(all, null, null)).toBe('commenter')
     expect(pickDefaultRole(requestableRoles('viewer'), 'viewer')).toBe('editor')
     expect(pickDefaultRole(requestableRoles('commenter'), 'commenter')).toBe('editor')
+  })
+})
+
+describe('who gets the header sharing badge (R2-11, F14)', () => {
+  it('owners and editors; never a viewer, a commenter or a name-only guest (whose "Link: edit" is not theirs)', () => {
+    expect(showsShareBadge('owner', false)).toBe(true)
+    expect(showsShareBadge('editor', false)).toBe(true)
+    expect(showsShareBadge('commenter', false)).toBe(false)
+    expect(showsShareBadge('viewer', false)).toBe(false)
+    expect(showsShareBadge('editor', true)).toBe(false) // a workshop guest
+    expect(showsShareBadge('commenter', true)).toBe(false) // a client
+  })
+})
+
+describe('one time format (R2-08)', () => {
+  it("follows the locale's hour cycle, and the badge's time is that time", () => {
+    const d = new Date(2026, 8, 28, 8, 39)
+    expect(timeOfDay(d, 'en-US')).toBe('8:39 AM')
+    expect(timeOfDay(d, 'en-GB')).toBe('08:39')
+    expect(shortTime(d.toISOString(), new Date(2026, 8, 28, 6, 0))).toBe(timeOfDay(d))
   })
 })

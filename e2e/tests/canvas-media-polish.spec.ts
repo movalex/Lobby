@@ -265,7 +265,7 @@ test('F2 R8 images and mind-map topics take tags: picker, chips, "Show only" and
     await expect(picker.getByTestId('tag-picker-input')).toBeFocused()
     await a.page.keyboard.type('Warm')
     await a.page.keyboard.press('Enter')
-    await expect(picker.getByTestId('tag-picker-status')).toHaveText('Created “Warm”.')
+    await expect(picker.getByTestId('tag-picker-status')).toHaveText('Created “#Warm”.')
     await expect.poll(() => chipKeys(a.page, imageId)).toEqual(['warm'])
     await a.page.keyboard.press('Escape')
   })

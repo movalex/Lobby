@@ -148,6 +148,7 @@ test('PRI-03: on a phone, tapping a thread in the Comments panel opens a full-wi
     await edit(page, (ed) => (ed as unknown as Ed).setCamera({ x: 0, y: 0, z: 1 }))
     const api = commentsApi(await users.api('alice'))
     const t = await api.createThread(board, { kind: 'shape', shapeId: NOTE, u: 0.5, v: 0.9 }, 'On my phone')
+    await page.getByTestId('dock-rail-toggle').tap() // the phone rail is folded (R13)
     await page.getByTestId('dock-tab-comments').tap()
     await expect(page.getByTestId('comments-panel')).toBeVisible()
     await commentRow(page, t.id).tap()

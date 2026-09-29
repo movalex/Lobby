@@ -8,8 +8,13 @@
 // "P+A+G+E+U+P". A leading `[[PgUp]]` alternative is display-only: tldraw renders `[[…]]` atomically
 // and its parsed key ("[[pgup]]") can never equal a real `event.key`.
 
-/** Replacement `kbd` strings for existing tldraw actions (first alternative = what menus show). */
-export const ACTION_KBD_OVERRIDES: Readonly<Record<string, string>> = {
+/** Replacement `kbd` strings for existing tldraw actions (first alternative = what menus show). `null` removes the key. */
+export const ACTION_KBD_OVERRIDES: Readonly<Record<string, string | null>> = {
+  // A11Y2-07: "?" (Shift+/) and Ctrl/Cmd+/ open the keyboard shortcuts, as in most web apps; tldraw's
+  // Ctrl/Cmd+Alt+/ still works. "[[?]]" is what menus show (display-only, it never matches a key).
+  'open-kbd-shortcuts': '[[?]],shift+/,cmd+/,ctrl+/,cmd+alt+/,ctrl+alt+/',
+  // A11Y2-07: Ctrl/Cmd+/ flipped the whole app's theme without a word. The theme is in the account menu.
+  'toggle-dark-mode': null,
   // MAK-10: Alt/Option+1 fit, Alt/Option+2 selection, Ctrl/Cmd+0 100% (tldraw's handler calls
   // preventDefault, so the browser's own zoom reset does not run). tldraw's Shift+1/2/0 keep working.
   'zoom-to-fit': 'alt+1,shift+1',

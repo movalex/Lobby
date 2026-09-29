@@ -50,8 +50,9 @@ export async function boardRole(c: Client, boardId: string): Promise<string | nu
   return (res.json() as { role: string }).role
 }
 
-export async function singleUseInvite(c: Client, boardId: string, role = 'viewer') {
-  const res = await c.req('POST', `/api/boards/${boardId}/invitations`, { role })
+/** A single-use board link locked (domain access) to `email` (a handle-only user: devEmail(handle)). */
+export async function singleUseInvite(c: Client, boardId: string, role: string, email: string) {
+  const res = await c.req('POST', `/api/boards/${boardId}/invitations`, { role, email })
   expect(res.statusCode, res.body).toBe(201)
   return InvitationCreated.parse(res.json())
 }

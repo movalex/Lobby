@@ -2,6 +2,7 @@
 // the Share dialog (PRS-02), and transfer of ownership.
 
 import { type ShareMember, TransferOwnershipInput } from '@draftroom/contracts'
+import type { Queryable } from '@draftroom/db'
 import {
   BOARD_ROLES,
   type BoardRole,
@@ -12,6 +13,7 @@ import {
 import type { FastifyInstance } from 'fastify'
 import { isUserId, requireBoardAction } from '../../access.ts'
 import { audit } from '../../audit.ts'
+import { roleRequiresCreator } from '../../auth/identity.ts'
 import type { Params } from '../../context.ts'
 import { badRequest, notFound, parse } from '../../errors.ts'
 import { listBoardMembers } from '../../routes/members.ts'
@@ -83,16 +85,21 @@ export function registerSharingRoutes(app: FastifyInstance, ctx: FeatureContext)
     const user = await ctx.requireUser(req)
     const { bid = '' } = req.params as Params
     const access = await requireBoardAction(db, bid, user.id, 'manage_access')
-    const { board } = access
-    const rows = await db.query<
-      UserRow & {
-        workspace_role: WorkspaceRole
-        board_grant: BoardRole | null
-        via_link: boolean
-        link_ends_at: Date | null
-      }
-    >(
-      `SELECT u.id, u.name, u.handle, u.color, u.avatar_url, wm.role AS workspace_role, bm.role AS board_grant,
+    // Domain access (§4.2): the caller is freshened like at /api/me (a background refresh after 1 h), so a
+    // manager who never loads /api/me still loses a removed company address. After the permission check:
+    // nobody else makes Lobby call the provider from here. Fixer round 4 (§22): the list (canOwn included)
+    // is read before a due background refresh starts (freshenThen), so it is stored data on a pool too.
+    return ctx.identity.freshenThen(req, user, async () => {
+      const { board } = access
+      const rows = await db.query<
+        UserRow & {
+          workspace_role: WorkspaceRole
+          board_grant: BoardRole | null
+          via_link: boolean
+          link_ends_at: Date | null
+        }
+      >(
+        `SELECT u.id, u.name, u.handle, u.color, u.avatar_url, wm.role AS workspace_role, bm.role AS board_grant,
               EXISTS (
                 SELECT 1 FROM invitation_redemptions r JOIN invitations i ON i.id = r.invitation_id
                  WHERE r.board_id = $1 AND r.user_id = u.id AND i.multi_use
@@ -107,54 +114,77 @@ export function registerSharingRoutes(app: FastifyInstance, ctx: FeatureContext)
         WHERE wm.workspace_id = $2
           AND (wm.role IN ('owner', 'admin') OR bm.role IS NOT NULL
                OR (wm.role = 'member' AND $3::text <> 'private'))`,
-      [board.id, board.workspace_id, board.visibility],
-    )
-    const members: ShareMember[] = []
-    for (const { workspace_role, board_grant, via_link, link_ends_at, ...u } of rows.rows) {
-      const role = resolveBoardRole({
-        workspaceRole: workspace_role,
-        boardGrant: board_grant,
-        visibility: board.visibility,
-      })
-      if (!role) continue
-      const viaReviewLink = board_grant !== null && via_link
-      members.push({
-        user: toUser(u),
-        role,
-        source: board_grant && board_grant === role ? 'grant' : 'workspace',
-        grant: board_grant,
-        workspaceRole: workspace_role,
-        withoutGrant: resolveBoardRole({
+        [board.id, board.workspace_id, board.visibility],
+      )
+      // Domain access (D5): who may be made an owner. One query; true while someone was never checked
+      // (the server refreshes and decides at PUT).
+      const canOwn = await ctx.identity.canOwnAmong(
+        db,
+        rows.rows.map((r) => r.id),
+      )
+      const members: ShareMember[] = []
+      for (const { workspace_role, board_grant, via_link, link_ends_at, ...u } of rows.rows) {
+        const role = resolveBoardRole({
           workspaceRole: workspace_role,
-          boardGrant: null,
+          boardGrant: board_grant,
           visibility: board.visibility,
-        }),
-        viaReviewLink,
-        linkEndsAt: viaReviewLink && link_ends_at ? link_ends_at.toISOString() : null,
-      })
-    }
-    members.sort((a, b) => RANK[b.role] - RANK[a.role] || a.user.name.localeCompare(b.user.name))
-    return { members }
+        })
+        if (!role) continue
+        const viaReviewLink = board_grant !== null && via_link
+        members.push({
+          user: toUser(u),
+          role,
+          source: board_grant && board_grant === role ? 'grant' : 'workspace',
+          grant: board_grant,
+          workspaceRole: workspace_role,
+          withoutGrant: resolveBoardRole({
+            workspaceRole: workspace_role,
+            boardGrant: null,
+            visibility: board.visibility,
+          }),
+          viaReviewLink,
+          linkEndsAt: viaReviewLink && link_ends_at ? link_ends_at.toISOString() : null,
+          canOwn: canOwn.get(u.id) ?? false,
+        })
+      }
+      members.sort((a, b) => RANK[b.role] - RANK[a.role] || a.user.name.localeCompare(b.user.name))
+      return { members }
+    })
   })
 
   // Makes someone in the workspace an owner and steps the caller's own owner grant down to editor, in
   // one transaction (so the board never has zero owners in between). A workspace owner/admin keeps
   // owning every board through the workspace; only their direct grant changes.
+  // Domain access (D4, D5): the caller must be a creator, and so must the target. The target's stored
+  // addresses are confirmed first (identity.refreshTarget) when unknown or older than 24 h, after the
+  // route's own permission checks and outside any transaction; it never throws or signs anyone out.
   app.post('/api/boards/:bid/transfer-ownership', async (req) => {
     const user = await ctx.requireUser(req)
     const { bid = '' } = req.params as Params
     const { userId } = parse(TransferOwnershipInput, req.body)
-    const result = await db.transaction(async (tx) => {
-      const access = await requireBoardAction(tx, bid, user.id, 'manage_access', { forUpdate: true })
-      if (userId === user.id) throw badRequest('Pick someone else to transfer ownership to.')
-      if (!isUserId(userId)) throw notFound()
-      const target = await tx.maybeOne<{ board_grant: BoardRole | null }>(
+    const route = req.routeOptions.url ?? ''
+    const findTarget = (q: Queryable, workspaceId: string) =>
+      q.maybeOne<{ board_grant: BoardRole | null }>(
         `SELECT bm.role AS board_grant FROM workspace_members wm
            LEFT JOIN board_members bm ON bm.board_id = $1 AND bm.user_id = wm.user_id
           WHERE wm.workspace_id = $2 AND wm.user_id = $3`,
-        [bid, access.board.workspace_id, userId],
+        [bid, workspaceId, userId],
       )
+    // 1) Unlocked pre-check: today's answers (404/403/400), then the caller's creator status.
+    const seen = await requireBoardAction(db, bid, user.id, 'manage_access')
+    if (userId === user.id) throw badRequest('Pick someone else to transfer ownership to.')
+    if (!isUserId(userId)) throw notFound()
+    if (!(await findTarget(db, seen.board.workspace_id))) throw notFound()
+    await ctx.identity.requireCreator(db, user.id, 'share', { route, by: 'route' })
+    // 2) The target's identity, when unknown or stale (no lock held).
+    await ctx.identity.refreshTarget(userId)
+    // 3) The change, deciding on stored data.
+    const result = await db.transaction(async (tx) => {
+      const access = await requireBoardAction(tx, bid, user.id, 'manage_access', { forUpdate: true })
+      await ctx.identity.requireCreator(tx, user.id, 'share', { route, by: 'route' })
+      const target = await findTarget(tx, access.board.workspace_id)
       if (!target) throw notFound() // outsiders are added through invitations first
+      if (!(await ctx.identity.isCreatorUser(tx, userId))) throw roleRequiresCreator()
       const at = now()
       await tx.query(
         `INSERT INTO board_members (board_id, user_id, role, added_by, created_at) VALUES ($1, $2, 'owner', $3, $4)

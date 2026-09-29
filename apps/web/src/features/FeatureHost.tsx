@@ -1,7 +1,7 @@
 // Renders the feature slots (docs/FEATURES-M2-CONTRACTS.md): the dock rail + open panel, top-bar
 // items, canvas overlays, and the merged tldraw overrides/components/options. Integration owner.
 
-import { Fragment, useEffect, useId, useLayoutEffect, useMemo, useRef } from 'react'
+import { Fragment, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { type Editor, type TLComponents, type TLUiOverrides, type TldrawOptions, useValue } from 'tldraw'
 import { can } from '../lib/permissions.ts'
 import { isFocusLost, isTextEntry, tryFocus } from '../ui/focus.ts'
@@ -136,7 +136,7 @@ function PlaceOnEnter({ editor }: { editor: Editor }) {
  * A11Y-07: "Add a sticky note" at the end of the rail, for people who can edit: a keyboard-only way to
  * put the first note on a blank board (it lands in the middle of the view, ready to type in).
  */
-function AddNoteButton({ ctx }: { ctx: FeatureContext }) {
+function AddNoteButton({ ctx, onPress }: { ctx: FeatureContext; onPress?: () => void }) {
   const editor = ctx.editor
   const readonly = useValue('dr-add-note-readonly', () => editor.getIsReadonly(), [editor])
   if (readonly || !can(ctx.role, 'edit', ctx.board.status)) return null
@@ -148,6 +148,7 @@ function AddNoteButton({ ctx }: { ctx: FeatureContext }) {
       aria-label="Add a sticky note"
       title="Add a sticky note in the middle of the view (or press N, then Enter)"
       onClick={() => {
+        onPress?.()
         // The board takes the keyboard first, so the new note's text field keeps it.
         editor.focus()
         editor.getContainer().focus({ preventScroll: true })
@@ -164,6 +165,9 @@ function AddNoteButton({ ctx }: { ctx: FeatureContext }) {
         />
         <path d="M12 11v6M9 14h6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
       </svg>
+      <span className="dr-dock__label" aria-hidden="true">
+        Add a sticky note
+      </span>
     </button>
   )
 }
@@ -201,6 +205,21 @@ export function FeatureDock({
   const openerWasControl = useRef(false)
   const shown = useRef<string | null>(null)
   const editor = ctx?.editor
+  // R13 / A11Y-06: on phones (styles.css, below 600 px) the rail folds behind one button over the board
+  // and a panel opens as a full-width sheet over it. Wider screens ignore this state.
+  const [railOpen, setRailOpen] = useState(false)
+  const toggleRef = useRef<HTMLButtonElement>(null)
+  const railId = useId()
+
+  // The open phone rail lies over the board: a press anywhere else folds it away again.
+  useEffect(() => {
+    if (!railOpen) return
+    const onDown = (e: PointerEvent) => {
+      if (!railRef.current?.contains(e.target as Node)) setRailOpen(false)
+    }
+    document.addEventListener('pointerdown', onDown, true)
+    return () => document.removeEventListener('pointerdown', onDown, true)
+  }, [railOpen])
 
   useEffect(() => {
     const onFocusIn = (e: FocusEvent) => {
@@ -220,7 +239,8 @@ export function FeatureDock({
       focusInPanel.current = false
       if (!activeId) {
         const rail = railRef.current?.querySelector(`[data-panel-id="${CSS.escape(prev)}"]`)
-        if (!tryFocus(opener.current)) tryFocus(rail)
+        // On phones the rail is folded away again: its button takes the keyboard instead.
+        if (!tryFocus(opener.current) && !tryFocus(rail)) tryFocus(toggleRef.current)
       }
     }
     if (activeId) {
@@ -243,8 +263,46 @@ export function FeatureDock({
   if (!ctx || panels.length === 0) return null
   const close = () => ctx.openPanel(null)
   return (
-    <aside className="dr-dock" data-testid="feature-dock" data-open={active ? 'true' : 'false'}>
-      <nav ref={railRef} className="dr-dock__rail" aria-label="Board panels">
+    <aside
+      className="dr-dock"
+      data-testid="feature-dock"
+      data-open={active ? 'true' : 'false'}
+      data-rail={railOpen ? 'open' : 'closed'}
+      onKeyDown={(e) => {
+        if (e.key !== 'Escape' || !railOpen || e.defaultPrevented) return
+        if (!railRef.current?.contains(e.target as Node)) return
+        e.preventDefault()
+        e.stopPropagation()
+        setRailOpen(false)
+        tryFocus(toggleRef.current)
+      }}
+    >
+      <nav ref={railRef} id={railId} className="dr-dock__rail" aria-label="Board panels">
+        <button
+          ref={toggleRef}
+          type="button"
+          className="dr-dock__tab dr-dock__toggle"
+          data-testid="dock-rail-toggle"
+          aria-expanded={railOpen}
+          aria-controls={railId}
+          aria-label={railOpen ? 'Hide board panels' : 'Board panels'}
+          title={railOpen ? 'Hide board panels' : 'Board panels'}
+          onClick={() => setRailOpen((o) => !o)}
+        >
+          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+            {railOpen ? (
+              <path d="M6 6l12 12M18 6L6 18" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+            ) : (
+              <path
+                d="M4 5h6v6H4zM14 5h6v6h-6zM4 15h6v4H4zM14 15h6v4h-6z"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                strokeLinejoin="round"
+              />
+            )}
+          </svg>
+        </button>
         {panels.map((p) => (
           <button
             key={p.id}
@@ -256,12 +314,18 @@ export function FeatureDock({
             aria-controls={active?.id === p.id ? panelDomId : undefined}
             title={p.shortcutHint ? `${p.label} (${p.shortcutHint})` : p.label}
             aria-label={p.label}
-            onClick={() => ctx.openPanel(active?.id === p.id ? null : p.id)}
+            onClick={() => {
+              setRailOpen(false)
+              ctx.openPanel(active?.id === p.id ? null : p.id)
+            }}
           >
             {p.icon}
+            <span className="dr-dock__label" aria-hidden="true">
+              {p.label}
+            </span>
           </button>
         ))}
-        <AddNoteButton ctx={ctx} />
+        <AddNoteButton ctx={ctx} onPress={() => setRailOpen(false)} />
       </nav>
       {active && (
         <section

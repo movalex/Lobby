@@ -13,6 +13,7 @@ import { type Editor, useValue } from 'tldraw'
 import { presenceUsers } from '../../board/presence.ts'
 import { initialsFor } from '../../lib/identity.ts'
 import { can } from '../../lib/permissions.ts'
+import { onFocusLeave, trapTab } from '../../ui/focus.ts'
 import { PHONE_QUERY } from '../../ui/useMedia.ts'
 import { getLive } from '../present-export/live/controller.ts'
 import { namesText } from '../present-export/live/words.ts'
@@ -275,16 +276,32 @@ function PeoplePanel({
       onClose(false)
     }
     const onKey = (e: KeyboardEvent) => {
+      const el = panel.current
+      // A11Y2-05: Tab stays inside the list (portaled to the end of the page, it used to leave the page).
+      if (e.key === 'Tab' && el?.contains(document.activeElement)) {
+        trapTab(e, el)
+        return
+      }
       if (e.key !== 'Escape') return
-      if (!panel.current?.contains(document.activeElement) && document.activeElement !== document.body) return
+      if (!el?.contains(document.activeElement) && document.activeElement !== document.body) return
       e.stopPropagation()
       onClose(true)
     }
     document.addEventListener('pointerdown', onDown, true)
     document.addEventListener('keydown', onKey, true)
+    // A11Y2-05: the keyboard moving elsewhere (a dialog opening, a shortcut) closes the list, so it
+    // never stays open under a later dialog.
+    const off = panel.current
+      ? onFocusLeave(
+          panel.current,
+          () => onClose(false),
+          (to) => anchor.current?.contains(to) === true,
+        )
+      : () => {}
     return () => {
       document.removeEventListener('pointerdown', onDown, true)
       document.removeEventListener('keydown', onKey, true)
+      off()
     }
   }, [anchor, onClose])
 

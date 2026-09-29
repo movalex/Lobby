@@ -182,7 +182,12 @@ describe('patch permissions', () => {
         role,
       ).toBe(403)
       expect(
-        (await carol.req('POST', `/api/boards/${id}/invitations`, { role: 'viewer' })).statusCode,
+        (
+          await carol.req('POST', `/api/boards/${id}/invitations`, {
+            role: 'viewer',
+            email: 'pat@client.example.test',
+          })
+        ).statusCode,
         role,
       ).toBe(403)
       expect((await carol.req('POST', `/api/boards/${id}/archive`)).statusCode, role).toBe(403)

@@ -21,15 +21,18 @@ export function MessageScreen({
   title,
   body,
   testId,
+  reason,
   actions,
 }: {
   title: string
   body: ReactNode
   testId?: string
+  /** `data-reason` on the screen: which variant of a screen this is (for tests and styles). */
+  reason?: string
   actions?: ReactNode
 }) {
   return (
-    <main className="dr-screen dr-screen--page" data-testid={testId}>
+    <main className="dr-screen dr-screen--page" data-testid={testId} data-reason={reason}>
       <div className="dr-card dr-card--narrow">
         <a href="/" onClick={linkClick('/')} className="dr-card__brand" aria-label="Lobby home">
           <Wordmark />
@@ -45,6 +48,32 @@ export function MessageScreen({
         </div>
       </div>
     </main>
+  )
+}
+
+/**
+ * "Can't reach Lobby": the api gave no answer or a 5xx while a page read what it needs (the session,
+ * an invitation). One screen for every page, with the retry that page needs: RequireSession re-reads
+ * the session, the invite page re-reads what failed. A failure to reach Lobby is never shown as
+ * "signed out", "no access" or a wrong account (fixer round 3, docs/DOMAIN-ACCESS-CONTRACTS.md §21).
+ */
+export function UnreachableScreen({ message, onRetry }: { message: string; onRetry(): void }) {
+  return (
+    <MessageScreen
+      testId="api-unreachable"
+      title="Can't reach Lobby"
+      body={message}
+      actions={
+        <button
+          type="button"
+          className="dr-btn dr-btn--primary"
+          data-testid="api-unreachable-retry"
+          onClick={onRetry}
+        >
+          Try again
+        </button>
+      }
+    />
   )
 }
 

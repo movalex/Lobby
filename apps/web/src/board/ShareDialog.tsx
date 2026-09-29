@@ -11,16 +11,17 @@
 // links), then the settings (workspace access, export) and who has access. Every guest option sits
 // above its Create button and applies to the link that button makes.
 
-import type {
-  AccessRequest,
-  Board,
-  BoardMember,
-  EmailInviteResult,
-  InvitationCreated,
-  PendingInvitation,
-  RequestableRole,
-  ShareState,
-  WorkspaceMember,
+import {
+  type AccessRequest,
+  type Board,
+  type BoardMember,
+  DOMAIN_ACCESS_CODES,
+  type EmailInviteResult,
+  type InvitationCreated,
+  type PendingInvitation,
+  type RequestableRole,
+  type ShareState,
+  type WorkspaceMember,
 } from '@draftroom/contracts'
 import { type ReactNode, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { api, isApiError } from '../api/client.ts'
@@ -30,6 +31,7 @@ import { ClientExportLine, ExportPolicySection } from '../features/sharing/Expor
 import { refreshExportPolicy } from '../features/sharing/export-policy.ts'
 import {
   canExtend,
+  createdSaying,
   daysLabel,
   hoursLabel,
   REVIEW_LINK_DAY_OPTIONS,
@@ -46,12 +48,14 @@ import { splitGuestMarker } from '../invite/model.ts'
 import { absoluteUrl, copyText } from '../lib/clipboard.ts'
 import { formatDateTime, formatRelativeTime } from '../lib/format.ts'
 import { initialsFor, safeColor } from '../lib/identity.ts'
-import { BOARD_ROLES, type BoardRole, type BoardVisibility, can } from '../lib/permissions.ts'
+import { type BoardRole, type BoardVisibility, can, canHandOutAccess } from '../lib/permissions.ts'
 import { boardPath } from '../lib/routing.ts'
 import { useResource } from '../lib/useResource.ts'
 import { Dialog } from '../ui/Dialog.tsx'
 import {
   type AccessDetail,
+  ADD_MEMBER_ROLES,
+  ASK_EMAIL_PROMPT,
   accessSource,
   CLIENT_LINK_DEFAULTS,
   checkInviteEmail,
@@ -60,24 +64,48 @@ import {
   emailInviteHint,
   emailInviteOutcome,
   grantEditable,
+  invitePlan,
   inviteRoleOptions,
+  isOwnAddress,
   linkAccessLine,
   linkForEmailHint,
+  listShowsOwnerNote,
+  lockedLinkNote,
+  memberRoleChoices,
   moreWaysSummary,
+  OWN_ADDRESS_MESSAGE,
+  OWNER_NEEDS_CREATOR,
+  OWNER_NEEDS_CREATOR_NOTE,
+  type OwnerNoteRow,
   parseInviteTarget,
+  pendingInviteLabel,
   ROLE_OPTION_LABEL,
   removalNote,
   removeConfirmText,
+  rowNeedsOwnerNote,
   shareableWorkspaceMembers,
+  shareCreatorNote,
   sortMembers,
   VISIBILITY_OPTIONS,
+  visibilityChoices,
   WORKSHOP_LINK_GUESTS_DEFAULT,
   workshopLinkHint,
 } from './share-model.ts'
 
 const sharing = sharingApi(api)
 
-type Row = BoardMember & Partial<Omit<AccessDetail, 'user' | 'role' | 'source'>>
+/** A person with access; managers get the detailed fields (grant, workspace role, links, canOwn). */
+type Row = BoardMember & Partial<Omit<AccessDetail, 'user' | 'role' | 'source'>> & { canOwn?: boolean }
+
+/** A manager's detailed row (grant, workspace role, links), else null (the M1 list). */
+function rowDetail(member: Row): AccessDetail | null {
+  return member.grant !== undefined && member.workspaceRole !== undefined
+    ? (member as unknown as AccessDetail)
+    : null
+}
+
+/** The role a row's menu shows: a workspace-derived role with a lower direct grant edits the grant. */
+const rowSelectValue = (member: Row): BoardRole => rowDetail(member)?.grant ?? member.role
 
 /** Applies an M1 member list (the answer to PUT/DELETE) onto the detailed rows until they reload. */
 function mergeRows(prev: readonly Row[], next: readonly BoardMember[]): Row[] {
@@ -111,9 +139,22 @@ export function ShareDialog({
   const canChangeVisibility = can(effectiveRole, 'change_visibility', board.status)
   const [error, setError] = useState<string | null>(null)
   const [pendingUser, setPendingUser] = useState<string | null>(null)
+  // R2-11: how many times "Workshop link (guests can edit)" was clicked (opens and focuses that section).
+  const [workshopAsk, setWorkshopAsk] = useState(0)
   const changed = useCallback(() => announceShareChanged(board.id), [board.id])
+  const session = useSession()
   // Invitation emails go out only through Clerk (the server has the final word per address).
-  const canEmail = useSession().config?.providers.includes('clerk') ?? false
+  const canEmail = session.config?.providers.includes('clerk') ?? false
+  // Domain access (docs/DOMAIN-ACCESS-CONTRACTS.md §9, D4): only creators hand out access (invitations,
+  // links, extending, approving, raising a role or the visibility, transferring ownership). A manager
+  // who is not a creator (a pre-existing outside owner) keeps every way to reduce access: revoke,
+  // remove, lower, deny. The api refuses the rest with 403 CREATOR_REQUIRED.
+  const access = session.state.status === 'signed-in' ? session.state.me.access : null
+  const creator = access?.creator ?? false
+  const canShare = canHandOutAccess(creator, effectiveRole, board.status)
+  const reduceOnly = canManage && !canShare
+  // An account Lobby could not confirm is told it is paused, never that it is not at Dark Burn Creative.
+  const creatorNote = shareCreatorNote(access)
   // A name-only guest (wave 3) cannot ask for more access; the dialog says what they can do instead.
   const guest = useIsGuest()
 
@@ -216,12 +257,27 @@ export function ShareDialog({
   const sorted = useMemo(() => sortMembers(rows, selfUserId), [rows, selfUserId])
   const addable = useMemo(() => shareableWorkspaceMembers(wsMembers.data ?? [], rows), [wsMembers.data, rows])
   const self = rows.find((m) => m.user.id === selfUserId)
-  const canTransfer = canManage && self?.grant === 'owner'
+  const canTransfer = canShare && self?.grant === 'owner'
   const selfRole = self?.role ?? effectiveRole
   const allInvites = invitations.data ?? []
   const reviewLinks = allInvites.filter((i) => i.kind === 'review' && i.role !== 'editor')
   const workshopLinks = allInvites.filter((i) => i.kind === 'review' && i.role === 'editor')
   const oneTimeInvites = allInvites.filter((i) => i.kind === 'invite')
+  // The people list: which rows the caller can edit, and (domain access) why Owner is off for someone,
+  // said once under the heading (`member-owner-note`) for every row it applies to.
+  const ownerNoteId = useId()
+  const people = sorted.map((m) => {
+    const row: OwnerNoteRow & { member: Row } = {
+      member: m,
+      editable:
+        canManage && (m.grant !== undefined ? grantEditable(m as AccessDetail) : m.source === 'grant'),
+      guest: boardGuests.data?.has(m.user.id) ?? false,
+      canOwn: m.canOwn,
+      current: rowSelectValue(m),
+    }
+    return row
+  })
+  const ownerNote = listShowsOwnerNote(people, canShare)
 
   return (
     <Dialog
@@ -236,12 +292,26 @@ export function ShareDialog({
       size="lg"
     >
       <div className="dr-share dr-sharing">
+        {/* Domain access: a manager who is not a creator is told why nothing here hands out access. */}
+        {reduceOnly && (
+          <p
+            className="dr-share__note dr-sharing__creator-note"
+            role="note"
+            data-testid="share-creator-note"
+            data-reason={creatorNote.reason}
+          >
+            {creatorNote.text}
+          </p>
+        )}
+
         {/* DANA-03 / F3: the one obvious path for a client, first. A review link that lets people
-            comment for 14 days and join with just a name; one button creates and copies it. */}
-        {canManage && (
+            comment for 14 days and join with just a name; one button creates and copies it. Someone
+            who may only reduce access sees the open links, to revoke them. */}
+        {canManage && (canShare || reviewLinks.length > 0) && (
           <ClientLinkSection
             boardId={board.id}
             links={reviewLinks}
+            canCreate={canShare}
             onChange={() => {
               invitations.reload()
               members.reload()
@@ -250,7 +320,11 @@ export function ShareDialog({
           />
         )}
 
-        {canManage && (
+        {canShare && invitations.data && workshopLinks.length === 0 && (
+          <WorkshopShortcut onOpen={() => setWorkshopAsk((n) => n + 1)} />
+        )}
+
+        {canShare && (
           <InvitePeople
             boardId={board.id}
             workspaceName={workspace.name}
@@ -259,6 +333,7 @@ export function ShareDialog({
             addable={addable}
             pendingAdd={pendingUser === 'add'}
             canEmail={canEmail}
+            ownEmail={access?.email ?? null}
             onGrant={(userId, r) => run('add', () => api.putMember(board.id, userId, r))}
             onLinkCreated={() => invitations.reload()}
           />
@@ -267,6 +342,7 @@ export function ShareDialog({
         {canManage && (requests.data?.length ?? 0) > 0 && (
           <AccessRequests
             requests={requests.data ?? []}
+            canApprove={canShare}
             onDecided={() => {
               requests.reload()
               members.reload()
@@ -277,14 +353,17 @@ export function ShareDialog({
 
         {/* DANA-03: the other mechanisms, one click away. An open workshop link opens this on the
             first load (a facilitator's "+1 h" stays at hand); the summary names what is open inside. */}
-        {canManage && (
+        {canShare && (
           <MoreWaysToShare
             workshopLinks={invitations.data ? workshopLinks.length : null}
             unusedInvites={oneTimeInvites.length}
+            openAsk={workshopAsk}
           >
             <WorkshopLinksSection
               boardId={board.id}
+              focusAsk={workshopAsk}
               links={workshopLinks}
+              canCreate
               onChange={() => {
                 invitations.reload()
                 members.reload()
@@ -305,14 +384,40 @@ export function ShareDialog({
             <InviteLinkSection
               boardId={board.id}
               invitations={oneTimeInvites}
+              canCreate
+              ownEmail={access?.email ?? null}
               onChange={() => invitations.reload()}
             />
           </MoreWaysToShare>
         )}
 
+        {/* Domain access: what is open, for someone who may only revoke it. */}
+        {reduceOnly && workshopLinks.length > 0 && (
+          <WorkshopLinksSection
+            boardId={board.id}
+            links={workshopLinks}
+            canCreate={false}
+            onChange={() => {
+              invitations.reload()
+              members.reload()
+              changed()
+            }}
+          />
+        )}
+        {reduceOnly && oneTimeInvites.length > 0 && (
+          <InviteLinkSection
+            boardId={board.id}
+            invitations={oneTimeInvites}
+            canCreate={false}
+            ownEmail={access?.email ?? null}
+            onChange={() => invitations.reload()}
+          />
+        )}
+
         <VisibilitySection
           board={board}
           workspaceName={workspace.name}
+          canRaise={canShare}
           editable={canChangeVisibility}
           linkNote={canManage ? null : linkLine}
           onChange={async (visibility) => {
@@ -327,7 +432,12 @@ export function ShareDialog({
           }}
         />
 
-        <ExportPolicySection boardId={board.id} role={effectiveRole} canManage={canManage} />
+        <ExportPolicySection
+          boardId={board.id}
+          role={effectiveRole}
+          canManage={canManage}
+          canCreateLinks={canShare}
+        />
 
         <section className="dr-share__section" aria-labelledby="dr-share-people">
           <h3 id="dr-share-people" className="dr-share__heading">
@@ -347,25 +457,28 @@ export function ShareDialog({
               </button>
             </p>
           )}
+          {members.data && ownerNote && (
+            <p
+              className="dr-share__hint dr-sharing__owner-note"
+              id={ownerNoteId}
+              data-testid="member-owner-note"
+            >
+              {OWNER_NEEDS_CREATOR_NOTE}
+            </p>
+          )}
           {members.data && (
             <ul className="dr-members" data-testid="member-list">
-              {sorted.map((m) => (
+              {people.map(({ member: m, ...row }) => (
                 <MemberRow
                   key={m.user.id}
                   member={m}
                   workspaceName={workspace.name}
                   isSelf={m.user.id === selfUserId}
-                  editable={
-                    canManage &&
-                    (m.grant !== undefined ? grantEditable(m as AccessDetail) : m.source === 'grant')
-                  }
-                  guest={boardGuests.data?.has(m.user.id) ?? false}
-                  transferable={
-                    canTransfer &&
-                    m.user.id !== selfUserId &&
-                    m.role !== 'owner' &&
-                    !(boardGuests.data?.has(m.user.id) ?? false)
-                  }
+                  editable={row.editable}
+                  guest={row.guest}
+                  canShare={canShare}
+                  ownerNoteId={rowNeedsOwnerNote(row, canShare) ? ownerNoteId : undefined}
+                  transferable={canTransfer && m.user.id !== selfUserId && m.role !== 'owner' && !row.guest}
                   pending={pendingUser === m.user.id}
                   onRole={(r) => void run(m.user.id, () => api.putMember(board.id, m.user.id, r))}
                   onRemove={() => void run(m.user.id, () => api.removeMember(board.id, m.user.id))}
@@ -421,6 +534,7 @@ function InvitePeople({
   addable,
   pendingAdd,
   canEmail,
+  ownEmail,
   onGrant,
   onLinkCreated,
 }: {
@@ -432,6 +546,8 @@ function InvitePeople({
   pendingAdd: boolean
   /** This server can email invitations (the "Invite by email" form below does). */
   canEmail: boolean
+  /** The signed-in account's own address (`Me.access.email`): never locked a link to (fixer round 3). */
+  ownEmail: string | null
   /** Resolves false when the grant failed (the dialog shows the server's reason). */
   onGrant(userId: string, role: BoardRole): Promise<boolean>
   onLinkCreated(): void
@@ -444,11 +560,13 @@ function InvitePeople({
   const [roleTouched, setRoleTouched] = useState(false)
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState<{ tone: 'info' | 'error'; text: string } | null>(null)
-  const [link, setLink] = useState<{ url: string; to: string; role: BoardRole; expiresAt: string } | null>(
+  const [link, setLink] = useState<{ url: string; email: string; role: BoardRole; expiresAt: string } | null>(
     null,
   )
   const [copied, setCopied] = useState(false)
   const target = parseInviteTarget(text, workspaceMembers, boardMembers)
+  // Fixer round 3 (§21): said at once, while typing, and nothing is created for it.
+  const ownAddress = target.kind === 'email' && isOwnAddress(target.email, ownEmail)
 
   // Default role (checklist decision 2): edit for workspace members, comment for everyone else.
   useEffect(() => {
@@ -460,29 +578,36 @@ function InvitePeople({
     setNotice(null)
     setLink(null)
     setCopied(false)
-    if (target.kind === 'empty') return
-    if (target.kind === 'already') {
-      setNotice({
-        tone: 'info',
-        text: `${target.member.user.name} already has access. Change their role below.`,
-      })
-      return
+    // Domain access (D13): an address gets a single-use link that only that verified address can
+    // accept; a name that is neither an address nor someone in the workspace gets nothing.
+    const plan = invitePlan(target, ownEmail)
+    switch (plan.kind) {
+      case 'none':
+        return
+      case 'already':
+        setNotice({
+          tone: 'info',
+          text: `${plan.member.user.name} already has access. Change their role below.`,
+        })
+        return
+      case 'ask-email':
+        setNotice({ tone: 'info', text: ASK_EMAIL_PROMPT })
+        return
+      case 'invalid-email':
+      case 'own-address':
+        setNotice({ tone: 'error', text: plan.message })
+        return
     }
     setBusy(true)
     try {
-      if (target.kind === 'member') {
-        const ok = await onGrant(target.member.user.id, role)
+      if (plan.kind === 'grant') {
+        const ok = await onGrant(plan.member.user.id, role)
         if (!ok) return // the reason is shown with the people list
-        setNotice({ tone: 'info', text: `${target.member.user.name} can now open this board.` })
+        setNotice({ tone: 'info', text: `${plan.member.user.name} can now open this board.` })
       } else {
-        const inv: InvitationCreated = await api.createBoardInvitation(boardId, role)
+        const inv: InvitationCreated = await api.createBoardInvitation(boardId, { role, email: plan.email })
         const url = inv.url.startsWith('/') ? absoluteUrl(inv.url) : inv.url
-        setLink({
-          url,
-          to: target.kind === 'email' ? target.email : target.text,
-          role,
-          expiresAt: inv.expiresAt,
-        })
+        setLink({ url, email: plan.email, role, expiresAt: inv.expiresAt })
         setCopied(await copyText(url))
         onLinkCreated()
       }
@@ -555,17 +680,23 @@ function InvitePeople({
           data-testid="share-invite-submit"
           disabled={busy || target.kind === 'empty'}
         >
-          {target.kind === 'email' || target.kind === 'unknown' ? 'Create invite link' : 'Invite'}
+          {target.kind === 'email' ? 'Create invite link' : 'Invite'}
         </button>
       </form>
       <p className="dr-share__hint" data-testid="share-invite-hint">
         {target.kind === 'member' &&
           `${target.member.user.name} is in ${workspaceName}: they get access right away.`}
-        {target.kind === 'email' && linkForEmailHint(canEmail)}
-        {target.kind === 'unknown' &&
-          `No one in ${workspaceName} matches. You get a one-time invite link to copy and send them.`}
+        {/* Fixer round 4 (§22): the own-address sentence is said once: here while typing, then as the
+            alert below after a submit (never both). */}
+        {target.kind === 'email' &&
+          (ownAddress
+            ? notice?.text === OWN_ADDRESS_MESSAGE
+              ? null
+              : OWN_ADDRESS_MESSAGE
+            : linkForEmailHint(canEmail))}
+        {target.kind === 'unknown' && `No one in ${workspaceName} matches. ${ASK_EMAIL_PROMPT}`}
         {(target.kind === 'empty' || target.kind === 'already') &&
-          'People in the workspace get access right away. For anyone else you get a link to send.'}
+          'People in the workspace get access right away. For anyone else, enter their email.'}
       </p>
       {notice && (
         <p
@@ -582,7 +713,7 @@ function InvitePeople({
             <input
               className="dr-input dr-invite__link"
               data-testid="share-invite-link"
-              aria-label={`Invite link for ${link.to}`}
+              aria-label={`Invite link for ${link.email}`}
               value={link.url}
               readOnly
               onFocus={(e) => e.currentTarget.select()}
@@ -595,9 +726,9 @@ function InvitePeople({
               {copied ? 'Copied' : 'Copy'}
             </button>
           </div>
-          <p className="dr-share__hint" role="status">
-            {copied ? 'Copied. ' : ''}Copy the link to send it to <strong>{link.to}</strong> — no email is
-            sent. It works once, as “{ROLE_OPTION_LABEL[link.role]}”, until {formatDateTime(link.expiresAt)}.
+          <p className="dr-share__hint" role="status" data-testid="share-invite-lock-note">
+            {copied ? 'Copied. ' : ''}
+            {lockedLinkNote(link, formatDateTime)}
           </p>
         </div>
       )}
@@ -628,7 +759,8 @@ function AddMember({
   const personId = useId()
   const roleId = useId()
   const [userId, setUserId] = useState('')
-  const [role, setRole] = useState<BoardRole>('editor')
+  // Never owner here (like Invite people): ownership is set on the person's row, which knows who may own.
+  const [role, setRole] = useState<Exclude<BoardRole, 'owner'>>('editor')
   return (
     <form
       className="dr-share__add"
@@ -664,9 +796,9 @@ function AddMember({
         className="dr-input dr-select dr-select--compact"
         data-testid="share-add-role"
         value={role}
-        onChange={(e) => setRole(e.target.value as BoardRole)}
+        onChange={(e) => setRole(e.target.value as Exclude<BoardRole, 'owner'>)}
       >
-        {BOARD_ROLES.map((r) => (
+        {ADD_MEMBER_ROLES.map((r) => (
           <option key={r} value={r}>
             {ROLE_OPTION_LABEL[r]}
           </option>
@@ -867,7 +999,16 @@ function EmailInvite({
 
 // ---- access requests -----------------------------------------------------------------------------
 
-function AccessRequests({ requests, onDecided }: { requests: readonly AccessRequest[]; onDecided(): void }) {
+function AccessRequests({
+  requests,
+  canApprove,
+  onDecided,
+}: {
+  requests: readonly AccessRequest[]
+  /** Domain access: only creators approve (it hands out access); anyone who manages access may deny. */
+  canApprove: boolean
+  onDecided(): void
+}) {
   return (
     <section className="dr-share__section dr-sharing__requests" aria-labelledby="dr-share-requests">
       <h3 id="dr-share-requests" className="dr-share__heading">
@@ -875,14 +1016,22 @@ function AccessRequests({ requests, onDecided }: { requests: readonly AccessRequ
       </h3>
       <ul className="dr-members" data-testid="access-request-list">
         {requests.map((r) => (
-          <AccessRequestRow key={r.id} request={r} onDecided={onDecided} />
+          <AccessRequestRow key={r.id} request={r} canApprove={canApprove} onDecided={onDecided} />
         ))}
       </ul>
     </section>
   )
 }
 
-function AccessRequestRow({ request, onDecided }: { request: AccessRequest; onDecided(): void }) {
+function AccessRequestRow({
+  request,
+  canApprove,
+  onDecided,
+}: {
+  request: AccessRequest
+  canApprove: boolean
+  onDecided(): void
+}) {
   const roleId = useId()
   const [role, setRole] = useState<RequestableRole>(request.roleRequested)
   const [busy, setBusy] = useState(false)
@@ -929,32 +1078,36 @@ function AccessRequestRow({ request, onDecided }: { request: AccessRequest; onDe
         )}
       </div>
       <div className="dr-member__actions">
-        <label htmlFor={roleId} className="dr-sr-only">
-          Role to give {user.name}
-        </label>
-        <select
-          id={roleId}
-          className="dr-input dr-select dr-select--compact"
-          data-testid="access-request-grant-role"
-          value={role}
-          disabled={busy}
-          onChange={(e) => setRole(e.target.value as RequestableRole)}
-        >
-          {inviteRoleOptions().map((r) => (
-            <option key={r} value={r}>
-              {ROLE_OPTION_LABEL[r]}
-            </option>
-          ))}
-        </select>
-        <button
-          type="button"
-          className="dr-btn dr-btn--primary dr-btn--sm"
-          data-testid="access-request-approve"
-          disabled={busy}
-          onClick={() => void decide(true)}
-        >
-          Approve
-        </button>
+        {canApprove && (
+          <>
+            <label htmlFor={roleId} className="dr-sr-only">
+              Role to give {user.name}
+            </label>
+            <select
+              id={roleId}
+              className="dr-input dr-select dr-select--compact"
+              data-testid="access-request-grant-role"
+              value={role}
+              disabled={busy}
+              onChange={(e) => setRole(e.target.value as RequestableRole)}
+            >
+              {inviteRoleOptions().map((r) => (
+                <option key={r} value={r}>
+                  {ROLE_OPTION_LABEL[r]}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              className="dr-btn dr-btn--primary dr-btn--sm"
+              data-testid="access-request-approve"
+              disabled={busy}
+              onClick={() => void decide(true)}
+            >
+              Approve
+            </button>
+          </>
+        )}
         <button
           type="button"
           className="dr-btn dr-btn--sm"
@@ -975,12 +1128,15 @@ function VisibilitySection({
   board,
   workspaceName,
   editable,
+  canRaise,
   linkNote = null,
   onChange,
 }: {
   board: Board
   workspaceName: string
   editable: boolean
+  /** Domain access: only creators widen workspace access; anyone who may change it can narrow it. */
+  canRaise: boolean
   /** For people who cannot manage access: an open link also lets people in (PRI-07). */
   linkNote?: string | null
   onChange(v: BoardVisibility): Promise<void>
@@ -1008,8 +1164,8 @@ function VisibilitySection({
               setPending(false)
             }}
           >
-            {VISIBILITY_OPTIONS.map((o) => (
-              <option key={o.value} value={o.value}>
+            {visibilityChoices(board.visibility, canRaise).map((o) => (
+              <option key={o.value} value={o.value} disabled={o.disabled}>
                 {o.label}
               </option>
             ))}
@@ -1046,6 +1202,8 @@ function MemberRow({
   isSelf,
   editable,
   guest = false,
+  canShare,
+  ownerNoteId,
   transferable,
   pending,
   onRole,
@@ -1058,6 +1216,13 @@ function MemberRow({
   editable: boolean
   /** A name-only guest (wave 3): never an owner, so ownership is not offered. */
   guest?: boolean
+  /** Domain access: the caller may raise roles (a creator); otherwise the menu only lowers. */
+  canShare: boolean
+  /**
+   * Domain access: the id of the list's note saying why Owner is off for this person (they cannot own
+   * boards); the role menu and the transfer button point to it. Undefined when it does not apply.
+   */
+  ownerNoteId?: string
   transferable: boolean
   pending: boolean
   onRole(role: BoardRole): void
@@ -1069,8 +1234,7 @@ function MemberRow({
   const [confirmingRemove, setConfirmingRemove] = useState(false)
   const { user } = member
   const [baseName, marker] = splitGuestMarker(user.name)
-  const detailed = member.grant !== undefined && member.workspaceRole !== undefined
-  const detail = detailed ? (member as unknown as AccessDetail) : null
+  const detail = rowDetail(member)
   const source = detail
     ? accessSource(detail, workspaceName, (iso, kind) => (kind === 'time' ? shortTime(iso) : shortDate(iso)))
     : member.source === 'workspace'
@@ -1078,7 +1242,10 @@ function MemberRow({
       : ''
   const fallback = detail ? removalNote(detail) : null
   // A workspace-derived role with a lower direct grant: the select edits the grant, not the effective role.
-  const selectValue = detail?.grant ?? member.role
+  const selectValue = rowSelectValue(member)
+  // Domain access: someone confirmed not to be a creator cannot own boards (the server answers 409).
+  const cannotOwn = member.canOwn === false
+  const roleChoices = memberRoleChoices({ current: selectValue, canShare, canOwn: member.canOwn, guest })
   return (
     <li
       className="dr-member"
@@ -1174,11 +1341,12 @@ function MemberRow({
             data-testid="member-role"
             value={selectValue}
             disabled={pending}
+            aria-describedby={ownerNoteId}
             onChange={(e) => onRole(e.target.value as BoardRole)}
           >
-            {BOARD_ROLES.filter((r) => !(guest && r === 'owner')).map((r) => (
-              <option key={r} value={r}>
-                {ROLE_OPTION_LABEL[r]}
+            {roleChoices.map((c) => (
+              <option key={c.role} value={c.role} disabled={c.disabled} title={c.title}>
+                {ROLE_OPTION_LABEL[c.role]}
               </option>
             ))}
           </select>
@@ -1188,8 +1356,9 @@ function MemberRow({
               className="dr-iconbtn"
               data-testid="member-transfer"
               aria-label={`Transfer ownership to ${user.name}`}
-              title="Transfer ownership"
-              disabled={pending}
+              title={cannotOwn ? OWNER_NEEDS_CREATOR : 'Transfer ownership'}
+              aria-describedby={ownerNoteId}
+              disabled={pending || cannotOwn}
               onClick={() => setConfirming(true)}
             >
               <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
@@ -1228,19 +1397,37 @@ function MemberRow({
 
 // ---- links ---------------------------------------------------------------------------------------
 
+/**
+ * "Link for one person" (domain access, D2/D13): a single-use link locked to one email address. Only an
+ * account with that verified address can accept it; anyone else who opens it is turned away. Lobby
+ * sends no email for it. Someone who may only reduce access (not a creator) sees the pending ones, to
+ * revoke them.
+ */
 function InviteLinkSection({
   boardId,
   invitations,
+  canCreate,
+  ownEmail,
   onChange,
 }: {
   boardId: string
   invitations: readonly PendingInvitation[]
+  canCreate: boolean
+  /** The signed-in account's own address: never locked a link to (fixer round 3, §21). */
+  ownEmail: string | null
   onChange(): void
 }) {
   const roleId = useId()
   const linkId = useId()
+  const emailId = useId()
+  const errorId = useId()
+  const emailRef = useRef<HTMLInputElement>(null)
+  const [email, setEmail] = useState('')
+  const [fieldError, setFieldError] = useState<string | null>(null)
   const [role, setRole] = useState<Exclude<BoardRole, 'owner'>>('viewer')
-  const [created, setCreated] = useState<InvitationCreated | null>(null)
+  const [created, setCreated] = useState<
+    (InvitationCreated & { email: string; role: Exclude<BoardRole, 'owner'> }) | null
+  >(null)
   const [copied, setCopied] = useState(false)
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -1248,16 +1435,34 @@ function InviteLinkSection({
   const url = created ? (created.url.startsWith('/') ? absoluteUrl(created.url) : created.url) : ''
 
   const create = async () => {
-    setPending(true)
     setError(null)
     setCopied(false)
+    const checked = checkInviteEmail(email)
+    if (!checked.ok) {
+      setFieldError(checked.message)
+      emailRef.current?.focus()
+      return
+    }
+    if (isOwnAddress(checked.email, ownEmail)) {
+      setFieldError(OWN_ADDRESS_MESSAGE)
+      emailRef.current?.focus()
+      return
+    }
+    setFieldError(null)
+    setPending(true)
     try {
-      const inv = await api.createBoardInvitation(boardId, role)
-      setCreated(inv)
+      const inv = await api.createBoardInvitation(boardId, { role, email: checked.email })
+      setCreated({ ...inv, email: checked.email, role })
+      setEmail('')
       setCopied(await copyText(inv.url.startsWith('/') ? absoluteUrl(inv.url) : inv.url))
       onChange()
     } catch (e) {
-      setError(isApiError(e) ? e.message : 'The invite link could not be created.')
+      // A 400 (or 409 INVITATION_TO_SELF, another address of the caller's) is about the address (the
+      // server's words); anything else is about the link.
+      if (isApiError(e) && (e.kind === 'invalid' || e.code === DOMAIN_ACCESS_CODES.invitationToSelf)) {
+        setFieldError(e.message.replace(/^email: /, ''))
+        emailRef.current?.focus()
+      } else setError(isApiError(e) ? e.message : 'The invite link could not be created.')
     } finally {
       setPending(false)
     }
@@ -1280,37 +1485,71 @@ function InviteLinkSection({
   const others = invitations.filter((i) => i.id !== created?.id)
 
   return (
-    <section className="dr-share__section" aria-labelledby={`${roleId}-h`}>
+    <section className="dr-share__section" aria-labelledby={`${roleId}-h`} data-testid="one-person-link">
       <h3 id={`${roleId}-h`} className="dr-share__heading">
-        One-time invite links
+        {canCreate ? 'Link for one person' : 'Unused invitations'}
       </h3>
-      <div className="dr-row dr-row--wrap">
-        <label htmlFor={roleId} className="dr-sr-only">
-          Role for people who use the link
-        </label>
-        <select
-          id={roleId}
-          className="dr-input dr-select dr-select--compact"
-          data-testid="invite-role"
-          value={role}
-          onChange={(e) => setRole(e.target.value as Exclude<BoardRole, 'owner'>)}
-        >
-          {inviteRoleOptions().map((r) => (
-            <option key={r} value={r}>
-              {ROLE_OPTION_LABEL[r]}
-            </option>
-          ))}
-        </select>
-        <button
-          type="button"
-          className="dr-btn"
-          data-testid="invite-create"
-          disabled={pending}
-          onClick={() => void create()}
-        >
-          {created ? 'Create another link' : 'Create invite link'}
-        </button>
-      </div>
+      {canCreate && (
+        <>
+          <form
+            className="dr-row dr-row--wrap"
+            noValidate
+            onSubmit={(e) => {
+              e.preventDefault()
+              void create()
+            }}
+          >
+            <label htmlFor={emailId} className="dr-sr-only">
+              Email address of the person the link is for
+            </label>
+            <input
+              ref={emailRef}
+              id={emailId}
+              type="email"
+              inputMode="email"
+              required
+              className="dr-input dr-sharing__invite-input"
+              data-testid="one-person-link-email"
+              placeholder="Their email address"
+              autoComplete="off"
+              autoCapitalize="none"
+              spellCheck={false}
+              value={email}
+              aria-invalid={fieldError ? true : undefined}
+              aria-describedby={fieldError ? errorId : undefined}
+              onChange={(e) => {
+                setEmail(e.target.value)
+                // Fixer round 3: the inviter's own address is named at once, before anything is sent.
+                setFieldError(isOwnAddress(e.target.value, ownEmail) ? OWN_ADDRESS_MESSAGE : null)
+              }}
+            />
+            <label htmlFor={roleId} className="dr-sr-only">
+              Role for the person who uses the link
+            </label>
+            <select
+              id={roleId}
+              className="dr-input dr-select dr-select--compact"
+              data-testid="invite-role"
+              value={role}
+              onChange={(e) => setRole(e.target.value as Exclude<BoardRole, 'owner'>)}
+            >
+              {inviteRoleOptions().map((r) => (
+                <option key={r} value={r}>
+                  {ROLE_OPTION_LABEL[r]}
+                </option>
+              ))}
+            </select>
+            <button type="submit" className="dr-btn" data-testid="invite-create" disabled={pending}>
+              {created ? 'Create another link' : 'Create invite link'}
+            </button>
+          </form>
+          {fieldError && (
+            <p id={errorId} className="dr-field-error" role="alert" data-testid="one-person-link-error">
+              {fieldError}
+            </p>
+          )}
+        </>
+      )}
       {error && (
         <p className="dr-share__error" role="alert">
           {error}
@@ -1319,7 +1558,7 @@ function InviteLinkSection({
       {created && (
         <div className="dr-invite" data-testid="invite-result">
           <label htmlFor={linkId} className="dr-sr-only">
-            Invite link
+            Invite link for {created.email}
           </label>
           <div className="dr-row">
             <input
@@ -1340,9 +1579,8 @@ function InviteLinkSection({
             </button>
           </div>
           <p className="dr-share__hint" role="status">
-            {copied ? 'Copied to your clipboard. ' : ''}This link is shown only once and works for one person.
-            Whoever opens it and signs in joins as “{ROLE_OPTION_LABEL[role]}” until{' '}
-            {formatDateTime(created.expiresAt)}.{' '}
+            {copied ? 'Copied to your clipboard. ' : ''}This link is shown only once.{' '}
+            {lockedLinkNote(created, formatDateTime)}{' '}
             <button
               type="button"
               className="dr-linkbtn"
@@ -1363,13 +1601,10 @@ function InviteLinkSection({
               data-testid="invitation-row"
               data-invitation-id={i.id}
             >
-              <span className="dr-sharing__link-text">
-                Unused link · {ROLE_OPTION_LABEL[i.role]} · expires {shortDate(i.expiresAt)} · by{' '}
-                {i.createdBy.name}
-              </span>
+              <span className="dr-sharing__link-text">{pendingInviteLabel(i, shortDate)}</span>
               <button
                 type="button"
-                className="dr-linkbtn"
+                className="dr-linkbtn dr-sharing__revoke"
                 data-testid="invitation-revoke"
                 disabled={pending}
                 onClick={() => void revoke(i.id)}
@@ -1391,11 +1626,17 @@ function InviteLinkSection({
  */
 function WorkshopLinksSection({
   boardId,
+  focusAsk = 0,
   links,
+  canCreate,
   onChange,
 }: {
   boardId: string
+  /** R2-11: bumped by "Workshop link (guests can edit)": let guests in, and bring Create into view. */
+  focusAsk?: number
   links: readonly PendingInvitation[]
+  /** Domain access: creating and extending are for creators; everyone who manages access may revoke. */
+  canCreate: boolean
   onChange(): void
 }) {
   const hoursId = useId()
@@ -1404,17 +1645,37 @@ function WorkshopLinksSection({
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [justCreated, setJustCreated] = useState<{ id: string; copied: boolean } | null>(null)
+  // A11Y-01: what a screen reader hears after Create (the button keeps the keyboard).
+  const [said, setSaid] = useState('')
+  const sectionRef = useRef<HTMLElement>(null)
+  const createRef = useRef<HTMLButtonElement>(null)
+  useEffect(() => {
+    if (focusAsk <= 0) return
+    setAllowGuests(true)
+    // After "More ways to share" has opened (its own effect, same commit): scroll and focus.
+    let frame = requestAnimationFrame(() => {
+      frame = requestAnimationFrame(() => {
+        sectionRef.current?.scrollIntoView({ block: 'nearest' })
+        createRef.current?.focus()
+      })
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [focusAsk])
 
   const create = async () => {
+    if (pending) return
     setPending(true)
     setError(null)
+    setSaid('')
     try {
       const link = await sharing.createReviewLink(boardId, {
         role: 'editor',
         expiresInHours: hours,
         allowGuests,
       })
-      setJustCreated({ id: link.id, copied: await copyText(link.url) })
+      const copied = await copyText(link.url)
+      setJustCreated({ id: link.id, copied })
+      setSaid(createdSaying('Workshop link', copied))
       onChange()
     } catch (e) {
       setError(isApiError(e) ? e.message : 'The workshop link could not be created.')
@@ -1424,42 +1685,58 @@ function WorkshopLinksSection({
   }
 
   return (
-    <section className="dr-share__section" aria-labelledby={`${hoursId}-h`} data-testid="workshop-links">
+    <section
+      ref={sectionRef}
+      className="dr-share__section"
+      aria-labelledby={`${hoursId}-h`}
+      data-testid="workshop-links"
+    >
       <h3 id={`${hoursId}-h`} className="dr-share__heading">
-        Workshop link
+        {canCreate ? 'Workshop link' : 'Open workshop links'}
       </h3>
-      <p className="dr-share__hint" data-testid="workshop-link-hint">
-        {workshopLinkHint(allowGuests)}
+      {canCreate && (
+        <>
+          <p className="dr-share__hint" data-testid="workshop-link-hint">
+            {workshopLinkHint(allowGuests)}
+          </p>
+          {/* R15: the guest choice comes before Create, and applies to the link it makes. */}
+          <GuestsOption testId="workshop-link-guests" checked={allowGuests} onChange={setAllowGuests} />
+        </>
+      )}
+      {canCreate && (
+        <div className="dr-row dr-row--wrap dr-sharing__create">
+          <label htmlFor={hoursId} className="dr-sr-only">
+            Workshop link works for
+          </label>
+          <select
+            id={hoursId}
+            className="dr-input dr-select dr-select--compact"
+            data-testid="workshop-link-expiry"
+            value={hours}
+            onChange={(e) => setHours(Number(e.target.value))}
+          >
+            {WORKSHOP_LINK_HOUR_OPTIONS.map((h) => (
+              <option key={h} value={h}>
+                For {hoursLabel(h)}
+              </option>
+            ))}
+          </select>
+          <button
+            ref={createRef}
+            type="button"
+            className="dr-btn"
+            data-testid="workshop-link-create"
+            aria-disabled={pending || undefined}
+            aria-busy={pending || undefined}
+            onClick={() => void create()}
+          >
+            {pending ? 'Creating…' : 'Create workshop link'}
+          </button>
+        </div>
+      )}
+      <p className="dr-sr-only" role="status" data-testid="workshop-link-status">
+        {said}
       </p>
-      {/* R15: the guest choice comes before Create, and applies to the link it makes. */}
-      <GuestsOption testId="workshop-link-guests" checked={allowGuests} onChange={setAllowGuests} />
-      <div className="dr-row dr-row--wrap dr-sharing__create">
-        <label htmlFor={hoursId} className="dr-sr-only">
-          Workshop link works for
-        </label>
-        <select
-          id={hoursId}
-          className="dr-input dr-select dr-select--compact"
-          data-testid="workshop-link-expiry"
-          value={hours}
-          onChange={(e) => setHours(Number(e.target.value))}
-        >
-          {WORKSHOP_LINK_HOUR_OPTIONS.map((h) => (
-            <option key={h} value={h}>
-              For {hoursLabel(h)}
-            </option>
-          ))}
-        </select>
-        <button
-          type="button"
-          className="dr-btn"
-          data-testid="workshop-link-create"
-          disabled={pending}
-          onClick={() => void create()}
-        >
-          Create workshop link
-        </button>
-      </div>
       {error && (
         <p className="dr-share__error" role="alert">
           {error}
@@ -1473,6 +1750,7 @@ function WorkshopLinksSection({
               boardId={boardId}
               link={l}
               workshop
+              canShare={canCreate}
               copiedOnCreate={justCreated?.id === l.id && justCreated.copied}
               onChange={onChange}
             />
@@ -1491,10 +1769,13 @@ function WorkshopLinksSection({
 function ClientLinkSection({
   boardId,
   links,
+  canCreate,
   onChange,
 }: {
   boardId: string
   links: readonly PendingInvitation[]
+  /** Domain access: creating is for creators; everyone who manages access may revoke. */
+  canCreate: boolean
   onChange(): void
 }) {
   const roleId = useId()
@@ -1505,13 +1786,19 @@ function ClientLinkSection({
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [justCreated, setJustCreated] = useState<{ id: string; copied: boolean } | null>(null)
+  // A11Y-01: what a screen reader hears after Create (the button keeps the keyboard).
+  const [said, setSaid] = useState('')
 
   const create = async () => {
+    if (pending) return
     setPending(true)
     setError(null)
+    setSaid('')
     try {
       const link = await sharing.createReviewLink(boardId, { role, expiresInDays: days, allowGuests })
-      setJustCreated({ id: link.id, copied: await copyText(link.url) })
+      const copied = await copyText(link.url)
+      setJustCreated({ id: link.id, copied })
+      setSaid(createdSaying('Client link', copied))
       onChange()
       // DANA2-01: the first client link may have turned exporting off. The board event says so too,
       // but this dialog also opens from the dashboard, where no board events arrive.
@@ -1530,54 +1817,63 @@ function ClientLinkSection({
       data-testid="share-client"
     >
       <h3 id={`${roleId}-h`} className="dr-share__heading dr-sharing__client-heading">
-        Share with a client
+        {canCreate ? 'Share with a client' : 'Open review links'}
       </h3>
-      <p className="dr-share__hint" data-testid="review-link-hint">
-        {clientLinkHint(role, allowGuests)}
+      {canCreate && (
+        <>
+          <p className="dr-share__hint" data-testid="review-link-hint">
+            {clientLinkHint(role, allowGuests)}
+          </p>
+          <GuestsOption testId="review-link-guests" checked={allowGuests} onChange={setAllowGuests} />
+          <ClientExportLine boardId={boardId} />
+        </>
+      )}
+      {canCreate && (
+        <div className="dr-row dr-row--wrap dr-sharing__create">
+          <label htmlFor={roleId} className="dr-sr-only">
+            What people with the review link can do
+          </label>
+          <select
+            id={roleId}
+            className="dr-input dr-select dr-select--compact"
+            data-testid="review-link-role"
+            value={role}
+            onChange={(e) => setRole(e.target.value as 'viewer' | 'commenter')}
+          >
+            <option value="commenter">Can comment</option>
+            <option value="viewer">Can view</option>
+          </select>
+          <label htmlFor={daysId} className="dr-sr-only">
+            Link expires after
+          </label>
+          <select
+            id={daysId}
+            className="dr-input dr-select dr-select--compact"
+            data-testid="review-link-expiry"
+            value={days}
+            onChange={(e) => setDays(Number(e.target.value))}
+          >
+            {REVIEW_LINK_DAY_OPTIONS.map((d) => (
+              <option key={d} value={d}>
+                Expires in {daysLabel(d)}
+              </option>
+            ))}
+          </select>
+          <button
+            type="button"
+            className="dr-btn dr-btn--primary"
+            data-testid="review-link-create"
+            aria-disabled={pending || undefined}
+            aria-busy={pending || undefined}
+            onClick={() => void create()}
+          >
+            {pending ? 'Creating…' : 'Create and copy link'}
+          </button>
+        </div>
+      )}
+      <p className="dr-sr-only" role="status" data-testid="review-link-status">
+        {said}
       </p>
-      <GuestsOption testId="review-link-guests" checked={allowGuests} onChange={setAllowGuests} />
-      <ClientExportLine boardId={boardId} />
-      <div className="dr-row dr-row--wrap dr-sharing__create">
-        <label htmlFor={roleId} className="dr-sr-only">
-          What people with the review link can do
-        </label>
-        <select
-          id={roleId}
-          className="dr-input dr-select dr-select--compact"
-          data-testid="review-link-role"
-          value={role}
-          onChange={(e) => setRole(e.target.value as 'viewer' | 'commenter')}
-        >
-          <option value="commenter">Can comment</option>
-          <option value="viewer">Can view</option>
-        </select>
-        <label htmlFor={daysId} className="dr-sr-only">
-          Link expires after
-        </label>
-        <select
-          id={daysId}
-          className="dr-input dr-select dr-select--compact"
-          data-testid="review-link-expiry"
-          value={days}
-          onChange={(e) => setDays(Number(e.target.value))}
-        >
-          {REVIEW_LINK_DAY_OPTIONS.map((d) => (
-            <option key={d} value={d}>
-              Expires in {daysLabel(d)}
-            </option>
-          ))}
-        </select>
-        <button
-          type="button"
-          className="dr-btn dr-btn--primary"
-          data-testid="review-link-create"
-          disabled={pending}
-          aria-busy={pending || undefined}
-          onClick={() => void create()}
-        >
-          {pending ? 'Creating…' : 'Create and copy link'}
-        </button>
-      </div>
       {error && (
         <p className="dr-share__error" role="alert">
           {error}
@@ -1590,6 +1886,7 @@ function ClientLinkSection({
               key={l.id}
               boardId={boardId}
               link={l}
+              canShare={canCreate}
               copiedOnCreate={justCreated?.id === l.id && justCreated.copied}
               onChange={onChange}
             />
@@ -1601,6 +1898,23 @@ function ClientLinkSection({
 }
 
 /**
+ * R2-11: the retro path, right under the client card. A client link only lets people comment, so a
+ * facilitator who needs everyone to add notes and vote gets the workshop (edit) link from here: one
+ * click opens it under "More ways to share" with guests let in, and puts the focus on its Create.
+ * Once a workshop link is open, that section opens by itself with the dialog, so this is not shown.
+ */
+function WorkshopShortcut({ onOpen }: { onOpen(): void }) {
+  return (
+    <p className="dr-share__hint dr-sharing__workshop-shortcut" data-testid="share-workshop-shortcut">
+      <span>Running a retro or workshop? A client link only lets people comment.</span>{' '}
+      <button type="button" className="dr-linkbtn" data-testid="share-workshop-open" onClick={onOpen}>
+        Workshop link (guests can edit)
+      </button>
+    </p>
+  )
+}
+
+/**
  * DANA-03: workshop link, invite by email and one-time invite links, behind one native disclosure
  * (keyboard and screen readers get its expanded state for free). It opens by itself once, on the
  * first load, when a workshop link is running; the person's own toggling wins after that.
@@ -1608,11 +1922,14 @@ function ClientLinkSection({
 function MoreWaysToShare({
   workshopLinks,
   unusedInvites,
+  openAsk = 0,
   children,
 }: {
   /** Open workshop links; null until the invitations have loaded. */
   workshopLinks: number | null
   unusedInvites: number
+  /** R2-11: bumped by "Workshop link (guests can edit)": open. */
+  openAsk?: number
   children: ReactNode
 }) {
   const [open, setOpen] = useState(false)
@@ -1623,6 +1940,11 @@ function MoreWaysToShare({
     setSettled(true)
     if (workshopLinks > 0) setOpen(true)
   }, [settled, workshopLinks])
+  useEffect(() => {
+    if (openAsk <= 0) return
+    setSettled(true)
+    setOpen(true)
+  }, [openAsk])
   return (
     <details
       className="dr-share__section dr-sharing__more"
@@ -1682,6 +2004,7 @@ function ReviewLinkRow({
   link,
   copiedOnCreate,
   workshop = false,
+  canShare,
   onChange,
 }: {
   boardId: string
@@ -1689,6 +2012,11 @@ function ReviewLinkRow({
   copiedOnCreate: boolean
   /** A workshop (edit) link: ends at a time of day, and offers "+1 h". */
   workshop?: boolean
+  /**
+   * Domain access: extending and copying the link hand out access, so they are for creators (the api
+   * sends `url: null` to anyone else and refuses the extension). Revoke stays for every manager.
+   */
+  canShare: boolean
   onChange(): void
 }) {
   const [copied, setCopied] = useState(copiedOnCreate)
@@ -1745,7 +2073,7 @@ function ReviewLinkRow({
             )}
           </span>
           <span className="dr-sharing__link-actions">
-            {workshop && (
+            {workshop && canShare && (
               <button
                 type="button"
                 className="dr-btn dr-btn--sm dr-sharing__extend"
@@ -1773,7 +2101,7 @@ function ReviewLinkRow({
             )}
           </span>
         </div>
-        {link.url ? (
+        {!canShare ? null : link.url ? (
           <div className="dr-row">
             <input
               className="dr-input dr-invite__link"

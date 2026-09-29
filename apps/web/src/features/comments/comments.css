@@ -402,6 +402,16 @@ html[data-dr-presenting] .dr-comments-layer {
   color: var(--dr-ink-2);
   font-size: 11.5px;
 }
+/* F14: key hints are for keyboards; on a phone the Reply button is the way to post. */
+@media (pointer: coarse) {
+  .dr-ccomposer__hint,
+  .dr-cpanel__check kbd {
+    display: none;
+  }
+  .dr-ccomposer__bar {
+    justify-content: flex-end;
+  }
+}
 .dr-cmention-list {
   position: absolute;
   z-index: 2;

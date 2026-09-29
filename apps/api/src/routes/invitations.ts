@@ -1,14 +1,30 @@
 // Invitation links (docs/M1-CONTRACTS.md §5). The token is shown once, in the returned URL; only its
 // sha256 is stored. A link is single-use: the first account that accepts it owns it (accepting again
 // is a no-op for that account; anyone else gets 410), and it expires after 7 days.
+//
+// Domain access (docs/DOMAIN-ACCESS-CONTRACTS.md §6.1): every single-use invitation is locked to one
+// address (invitations.invited_email). Only an account with that VERIFIED address (primary or
+// secondary, confirmed at most 5 minutes before accepting) can accept it; anyone else gets 403
+// INVITATION_EMAIL_MISMATCH with a masked hint, nothing is redeemed and the link stays usable for the
+// invitee. Only creators create invitations, and nobody invites an outside address as a workspace
+// admin. An unbound single-use link (from before the lock, or made by an older build during a
+// rollback) is gone. The full address appears only in the manager-only pending list; logs and audit
+// rows carry its domain.
 
 import {
+  BOARD_IN_TRASH,
   CreateBoardInvitationInput,
   CreateWorkspaceInvitationInput,
+  DOMAIN_ACCESS_CODES,
+  DOMAIN_ACCESS_MESSAGES,
+  type InvitationBoardState,
+  type InvitationEmailLock,
+  type InvitationEmailMismatchBody,
   type InvitationGoneBody,
   type InvitationGuestAccess,
   InvitationId,
   type InvitationPreview,
+  invitationEmailMismatchMessage,
 } from '@draftroom/contracts'
 import { newId, type Queryable } from '@draftroom/db'
 import { type BoardRole, can, canManageWorkspace, type WorkspaceRole } from '@draftroom/permissions'
@@ -21,10 +37,12 @@ import {
   requireWorkspaceRole,
 } from '../access.ts'
 import { audit } from '../audit.ts'
+import { distinctDomains, emailDomain, isCreatorEmail, normalizeEmail } from '../auth/creators.ts'
+import { roleRequiresCreator } from '../auth/identity.ts'
 import { isSecretToken, newSecretToken, sha256hex } from '../auth/session.ts'
-import { userKind } from '../auth/users.ts'
+import { storedEmails, userKind } from '../auth/users.ts'
 import type { AppContext, Params } from '../context.ts'
-import { ApiError, forbidden, gone, notFound, parse } from '../errors.ts'
+import { ApiError, badRequest, forbidden, gone, notFound, parse } from '../errors.ts'
 import { assertGuestRoomOnLink } from '../features/guests/limits.ts'
 import { keyedLimit } from '../rate-limit.ts'
 
@@ -45,15 +63,30 @@ export interface InvitationRow {
   multi_use: boolean
   /** 0009_guests: people can join through this (multi-use) link with just a name. */
   allow_guests: boolean
+  /** 0021_domain_access: the one address that may accept this single-use invitation (null: unbound, gone). */
+  invited_email: string | null
 }
 export const INVITATION_COLUMNS =
-  'i.id, i.workspace_id, i.board_id, i.role, i.created_by, i.created_at, i.expires_at, i.redeemed_by, i.revoked_at, i.multi_use, i.allow_guests'
+  'i.id, i.workspace_id, i.board_id, i.role, i.created_by, i.created_at, i.expires_at, i.redeemed_by, i.revoked_at, i.multi_use, i.allow_guests, i.invited_email'
 
 type InvitationState = 'usable' | 'redeemed_by_caller' | 'gone'
 
 /** Name-only guests (wave 3) may only use guest links; everything else needs an account. */
 export const guestAccountRequired = (message = 'Sign in with an account to accept this invitation.') =>
   new ApiError(403, 'GUEST_ACCOUNT_REQUIRED', message)
+
+/**
+ * 409 INVITATION_TO_SELF (fixer round 3, contracts doc §21): a locked invitation to an address of the
+ * inviter's own account would let only the inviter in, and accepting it would use it up for nothing.
+ */
+export const invitationToSelf = () =>
+  new ApiError(409, DOMAIN_ACCESS_CODES.invitationToSelf, DOMAIN_ACCESS_MESSAGES.invitationToSelf)
+
+/**
+ * 409 BOARD_IN_TRASH (fixer round 3, §21): accepting an invitation whose board is in the trash. Nothing
+ * is redeemed; once the board is restored the link works again, until it expires.
+ */
+export const boardInTrash = () => new ApiError(409, BOARD_IN_TRASH.code, BOARD_IN_TRASH.message)
 
 /**
  * The invitation behind `token`, locked FOR UPDATE for redeeming it (accepting, joining as a guest),
@@ -77,10 +110,25 @@ export async function lockInvitation(tx: Queryable, token: string): Promise<Invi
   )
 }
 
-export function stateFor(inv: InvitationRow, callerId: string | null, now: Date): InvitationState {
+export function stateFor(
+  inv: Pick<InvitationRow, 'redeemed_by' | 'revoked_at' | 'expires_at' | 'multi_use' | 'invited_email'>,
+  callerId: string | null,
+  now: Date,
+): InvitationState {
   if (inv.redeemed_by !== null) return inv.redeemed_by === callerId ? 'redeemed_by_caller' : 'gone'
+  // Domain access (D3): a single-use link bound to nobody can no longer be used (migration 0021
+  // revoked the open ones; an older build may create more during a rollback).
+  if (!inv.multi_use && inv.invited_email === null) return 'gone'
   if (inv.revoked_at !== null || inv.expires_at.getTime() <= now.getTime()) return 'gone'
   return 'usable'
+}
+
+/**
+ * The address a locked invitation shows before it is accepted: the first character of the local
+ * part, then "•••@", then the domain (`jane.doe@client.example` → `j•••@client.example`). Api only.
+ */
+export function maskEmail(email: string): string {
+  return `${email.slice(0, 1)}•••@${emailDomain(email)}`
 }
 
 // Ranks for "never downgrade on accept": accepting a guest link must not demote an existing member.
@@ -97,26 +145,68 @@ const boardRank = (column: string) =>
 export async function createInvitation(
   tx: Queryable,
   ctx: AppContext,
-  input: { workspaceId: string; boardId: string | null; role: string; userId: string; via?: 'email' },
+  input: {
+    workspaceId: string
+    boardId: string | null
+    role: string
+    userId: string
+    via?: 'email'
+    /** The one address that may accept it (already through AccountEmail). */
+    email: string
+    /** The route pattern, for the creator-refusal log. */
+    route: string
+  },
 ) {
   // Wave 3: a name-only guest never hands out access (whatever board role they were given).
   if ((await userKind(tx, input.userId)) === 'guest')
     throw guestAccountRequired('Sign in with an account to invite people.')
+  // Domain access (D4): only creators hand out access.
+  await ctx.identity.requireCreator(tx, input.userId, 'share', { route: input.route, by: 'route' })
+  const email = normalizeEmail(input.email)
+  if (email === null) throw badRequest('email: Enter a valid email address.')
+  // D5: nobody makes an outside address a workspace admin (or owner).
+  const { policy, devDomain } = ctx.identity.lookup
+  if (
+    input.boardId === null &&
+    (input.role === 'admin' || input.role === 'owner') &&
+    !isCreatorEmail(email, policy, devDomain)
+  )
+    throw roleRequiresCreator()
+  // Fixer round 3 (§21): never a link locked to one of the inviter's own addresses (any stored one of
+  // the running provider, as accepting would count it).
+  if ((await storedEmails(tx, input.userId, ctx.identity.lookup.source)).includes(email))
+    throw invitationToSelf()
   const token = newSecretToken()
   const id = newId('inv')
   const createdAt = ctx.now()
   const expiresAt = new Date(createdAt.getTime() + INVITATION_TTL_MS)
   await tx.query(
-    `INSERT INTO invitations (id, token_hash, workspace_id, board_id, role, created_by, created_at, expires_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-    [id, sha256hex(token), input.workspaceId, input.boardId, input.role, input.userId, createdAt, expiresAt],
+    `INSERT INTO invitations (id, token_hash, workspace_id, board_id, role, created_by, created_at, expires_at, invited_email)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+    [
+      id,
+      sha256hex(token),
+      input.workspaceId,
+      input.boardId,
+      input.role,
+      input.userId,
+      createdAt,
+      expiresAt,
+      email,
+    ],
   )
   await audit(tx, {
     workspaceId: input.workspaceId,
     actorId: input.userId,
     action: 'invitation.create',
     target: id,
-    detail: { boardId: input.boardId, role: input.role, ...(input.via ? { via: input.via } : {}) },
+    detail: {
+      boardId: input.boardId,
+      role: input.role,
+      ...(input.via ? { via: input.via } : {}),
+      emailLocked: true,
+      emailDomain: emailDomain(email),
+    },
     at: createdAt,
   })
   return { id, url: `${ctx.config.publicOrigin}/invite/${token}`, expiresAt: expiresAt.toISOString() }
@@ -143,6 +233,24 @@ export async function sendGone(
     gone: { invitedBy: inviter ? { name: inviter.name } : null, boardId },
   }
   return reply.code(410).send(body)
+}
+
+/**
+ * 403 INVITATION_EMAIL_MISMATCH (accept): who sent it and the masked address, never the full one.
+ * Nothing was redeemed; the link stays usable for the invitee.
+ */
+async function sendMismatch(
+  q: Queryable,
+  reply: FastifyReply,
+  inv: Pick<InvitationRow, 'created_by' | 'invited_email'>,
+) {
+  const inviter = await q.maybeOne<{ name: string }>('SELECT name FROM users WHERE id = $1', [inv.created_by])
+  const hint = maskEmail(inv.invited_email ?? '')
+  const body: InvitationEmailMismatchBody = {
+    error: { code: 'INVITATION_EMAIL_MISMATCH', message: invitationEmailMismatchMessage(hint) },
+    mismatch: { invitedEmailHint: hint, invitedBy: inviter ? { name: inviter.name } : null },
+  }
+  return reply.code(403).send(body)
 }
 
 /**
@@ -221,7 +329,12 @@ export async function redeemInvitation(
     actorId: userId,
     action: 'invitation.accept',
     target: inv.id,
-    detail: { boardId: inv.board_id, role: inv.role, ...(opts.via ? { via: opts.via } : {}) },
+    detail: {
+      boardId: inv.board_id,
+      role: inv.role,
+      ...(opts.via ? { via: opts.via } : {}),
+      ...(inv.invited_email !== null ? { emailLocked: true } : {}),
+    },
     at,
   })
 }
@@ -239,11 +352,18 @@ export function registerInvitationRoutes(app: FastifyInstance, ctx: AppContext):
   app.post('/api/workspaces/:wid/invitations', async (req, reply) => {
     const user = await ctx.requireUser(req)
     const { wid = '' } = req.params as Params
-    const { role } = parse(CreateWorkspaceInvitationInput, req.body)
+    const { role, email } = parse(CreateWorkspaceInvitationInput, req.body)
     const created = await db.transaction(async (tx) => {
       const workspaceRole = await requireWorkspaceRole(tx, wid, user.id)
       if (!canManageWorkspace(workspaceRole)) throw forbidden()
-      return createInvitation(tx, ctx, { workspaceId: wid, boardId: null, role, userId: user.id })
+      return createInvitation(tx, ctx, {
+        workspaceId: wid,
+        boardId: null,
+        role,
+        userId: user.id,
+        email,
+        route: req.routeOptions.url ?? '',
+      })
     })
     reply.code(201)
     return created
@@ -252,7 +372,7 @@ export function registerInvitationRoutes(app: FastifyInstance, ctx: AppContext):
   app.post('/api/boards/:bid/invitations', async (req, reply) => {
     const user = await ctx.requireUser(req)
     const { bid = '' } = req.params as Params
-    const { role } = parse(CreateBoardInvitationInput, req.body)
+    const { role, email } = parse(CreateBoardInvitationInput, req.body)
     const created = await db.transaction(async (tx) => {
       const access = await requireBoardAction(tx, bid, user.id, 'manage_access')
       return createInvitation(tx, ctx, {
@@ -260,6 +380,8 @@ export function registerInvitationRoutes(app: FastifyInstance, ctx: AppContext):
         boardId: bid,
         role,
         userId: user.id,
+        email,
+        route: req.routeOptions.url ?? '',
       })
     })
     reply.code(201)
@@ -271,15 +393,26 @@ export function registerInvitationRoutes(app: FastifyInstance, ctx: AppContext):
   app.get(
     '/api/invitations/:token',
     previewRoute,
-    async (req, reply): Promise<(InvitationPreview & InvitationGuestAccess) | undefined> => {
+    async (
+      req,
+      reply,
+    ): Promise<
+      (InvitationPreview & InvitationGuestAccess & InvitationEmailLock & InvitationBoardState) | undefined
+    > => {
       const { token } = req.params as Params
       if (!isSecretToken(token)) throw notFound()
       const tokenHash = sha256hex(token)
       perToken.take(tokenHash)
       const row = await db.maybeOne<
-        InvitationRow & { workspace_name: string; board_title: string | null; inviter_name: string }
+        InvitationRow & {
+          workspace_name: string
+          board_title: string | null
+          board_status: string | null
+          inviter_name: string
+        }
       >(
-        `SELECT ${INVITATION_COLUMNS}, w.name AS workspace_name, b.title AS board_title, u.name AS inviter_name
+        `SELECT ${INVITATION_COLUMNS}, w.name AS workspace_name, b.title AS board_title, b.status AS board_status,
+                u.name AS inviter_name
          FROM invitations i
          JOIN workspaces w ON w.id = i.workspace_id
          LEFT JOIN boards b ON b.id = i.board_id
@@ -289,10 +422,19 @@ export function registerInvitationRoutes(app: FastifyInstance, ctx: AppContext):
       )
       if (!row) throw notFound()
       const caller = await sessions.user(req)
-      if (stateFor(row, caller?.id ?? null, now()) === 'gone') {
+      const state = stateFor(row, caller?.id ?? null, now())
+      if (state === 'gone') {
         await sendGone(db, reply, row, caller?.id ?? null)
         return
       }
+      // Domain access: whether the signed-in account has the invited address, from its STORED
+      // addresses (no provider call here: accepting re-checks with fresh data).
+      const locked = row.invited_email !== null
+      let matchesYou: boolean | null = null
+      if (locked && caller && caller.kind !== 'guest')
+        matchesYou = (await storedEmails(db, caller.id, ctx.identity.lookup.source)).includes(
+          row.invited_email ?? '',
+        )
       return {
         workspace: { id: row.workspace_id, name: row.workspace_name },
         board: row.board_id && row.board_title !== null ? { id: row.board_id, title: row.board_title } : null,
@@ -301,38 +443,91 @@ export function registerInvitationRoutes(app: FastifyInstance, ctx: AppContext):
         expiresAt: row.expires_at.toISOString(),
         // Wave 3: the invite page offers "Join as a guest" (name only) for such links.
         allowGuests: row.multi_use && row.allow_guests,
+        emailLocked: locked,
+        invitedEmailHint: locked && state === 'usable' ? maskEmail(row.invited_email ?? '') : null,
+        matchesYou,
+        // The inviter opening their own locked link (to check it) is told whom it is for.
+        sentByYou: locked && caller !== null && row.created_by === caller.id,
+        // Fixer round 3 (§21): nothing can be accepted while the board is in the trash (the page says
+        // so instead of offering to join); restoring it makes the link usable again.
+        boardInTrash: row.board_status === 'trashed',
       }
     },
   )
 
   app.post('/api/invitations/:token/accept', async (req, reply) => {
-    const user = await ctx.requireUser(req)
+    let user = await ctx.requireUser(req)
     perUser.take(user.id)
     const { token } = req.params as Params
     if (!isSecretToken(token)) throw notFound()
+    // Domain access, BEFORE any transaction (no provider call ever happens while the board or
+    // invitation lock is held): an unlocked read of the lock, then the caller's addresses at most
+    // 5 minutes old (503 IDENTITY_UNAVAILABLE otherwise, with nothing redeemed).
+    const lock = await db.maybeOne<{ invited_email: string | null }>(
+      'SELECT invited_email FROM invitations WHERE token_hash = $1',
+      [sha256hex(token)],
+    )
+    let callerEmails: ReadonlySet<string> = new Set()
+    if (lock?.invited_email) {
+      user = await ctx.identity.freshen(req, user, 'accept')
+      callerEmails = new Set(await storedEmails(db, user.id, ctx.identity.lookup.source))
+    }
+    const caller = user
     const result = await db.transaction(async (tx) => {
       // FOR UPDATE: two accounts accepting the same link at once cannot both redeem it.
       const inv = await lockInvitation(tx, token)
       if (!inv) throw notFound()
       // A name-only guest (wave 3) can only use guest links (joining one more board); a normal
       // invitation needs an account.
-      const guest = (await userKind(tx, user.id)) === 'guest'
+      const guest = (await userKind(tx, caller.id)) === 'guest'
       if (guest) {
         if (!(inv.multi_use && inv.allow_guests)) throw guestAccountRequired()
         // The guest sweep takes this lock before it ends a guest's sessions (features/guests).
-        await tx.query('SELECT id FROM users WHERE id = $1 FOR UPDATE', [user.id])
+        await tx.query('SELECT id FROM users WHERE id = $1 FOR UPDATE', [caller.id])
       }
       const at = now()
-      const state = stateFor(inv, user.id, at)
-      if (state === 'gone') return { gone: true as const, inv }
+      const state = stateFor(inv, caller.id, at)
+      if (state === 'gone') return { outcome: 'gone' as const, inv }
+      // Fixer round 3 (§21): never a role on a board in the trash (nobody can open it). Nothing is
+      // redeemed, so the link works again once the board is restored (lockInvitation took the board
+      // row first, so a restore or trash waits for this answer).
+      if (inv.board_id !== null) {
+        const board = await tx.maybeOne<{ status: string }>('SELECT status FROM boards WHERE id = $1', [
+          inv.board_id,
+        ])
+        if (board?.status === 'trashed') throw boardInTrash()
+      }
       const accepted = { workspaceId: inv.workspace_id, boardId: inv.board_id }
-      if (state === 'redeemed_by_caller') return { gone: false as const, accepted, changed: false }
+      if (state === 'redeemed_by_caller') return { outcome: 'ok' as const, accepted, changed: false }
+      // Domain access: only an account with the invited (verified) address accepts a locked link.
+      if (inv.invited_email !== null && !callerEmails.has(inv.invited_email))
+        return { outcome: 'mismatch' as const, inv }
+      // D5: the exceptions may have changed since a workspace admin invitation was created.
+      if (
+        inv.board_id === null &&
+        (inv.role === 'admin' || inv.role === 'owner') &&
+        !(await ctx.identity.isCreatorUser(tx, caller.id))
+      )
+        throw roleRequiresCreator()
       // The same per-link guest cap and rate as joining through POST /api/invitations/:token/guest.
-      if (guest) await assertGuestRoomOnLink(tx, inv.id, user.id, at)
-      await redeemInvitation(tx, inv, user.id, at)
-      return { gone: false as const, accepted, changed: true }
+      if (guest) await assertGuestRoomOnLink(tx, inv.id, caller.id, at)
+      await redeemInvitation(tx, inv, caller.id, at)
+      return { outcome: 'ok' as const, accepted, changed: true }
     })
-    if (result.gone) return sendGone(db, reply, result.inv, user.id)
+    if (result.outcome === 'gone') return sendGone(db, reply, result.inv, user.id)
+    if (result.outcome === 'mismatch') {
+      req.log.info(
+        {
+          evt: 'invitation.email_mismatch',
+          userId: user.id,
+          invitationId: result.inv.id,
+          invitedDomain: emailDomain(result.inv.invited_email ?? ''),
+          callerDomains: distinctDomains([...callerEmails]),
+        },
+        'invitation email mismatch',
+      )
+      return sendMismatch(db, reply, result.inv)
+    }
     // Workspace links change no board grant; live sessions pick up role increases on the next periodic check.
     if (result.changed && result.accepted.boardId)
       notifier.accessChanged({ boardId: result.accepted.boardId, userId: user.id })

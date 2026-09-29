@@ -90,8 +90,26 @@ export type CaptureOutcome =
   | { status: 'unchanged' }
   | { status: 'skipped'; why: 'missing' | 'trashed' | 'limit' }
 
+/** What an automatic checkpoint was made before, in its name (R2-09: two of the same reason can be told apart). */
+export interface CheckpointAbout {
+  /** before_restore: the name of the checkpoint that was restored. */
+  restoredName?: string
+  /** before_reveal: the private brainstorm's prompt. */
+  prompt?: string
+  /** before_ai_themes: how many notes AI grouped, and the frame they are in when there is one. */
+  notes?: number
+  frame?: string
+}
+
+/** A name part on one line, cut to `max` characters (whole code points) with an ellipsis. */
+function clip(text: string, max: number): string {
+  const one = text.replace(/\s+/g, ' ').trim()
+  const chars = [...one]
+  return chars.length > max ? `${chars.slice(0, max - 1).join('')}…` : one
+}
+
 /** Names shown for automatic checkpoints (the UI labels them by reason too). */
-export function autoCheckpointName(reason: CheckpointReason, restoredName?: string): string {
+export function autoCheckpointName(reason: CheckpointReason, about: CheckpointAbout = {}): string {
   switch (reason) {
     case 'hourly':
       return 'Hourly checkpoint'
@@ -99,13 +117,19 @@ export function autoCheckpointName(reason: CheckpointReason, restoredName?: stri
       return 'After an editing session'
     case 'import':
       return 'As imported'
-    case 'before_reveal':
-      return 'Before revealing private notes'
-    case 'before_ai_themes':
-      return 'Before AI grouped notes into themes'
+    case 'before_reveal': {
+      const prompt = about.prompt ? clip(about.prompt, 72) : ''
+      return prompt ? `Before revealing private notes: “${prompt}”` : 'Before revealing private notes'
+    }
+    case 'before_ai_themes': {
+      const n = about.notes && about.notes > 0 ? about.notes : 0
+      const what = n ? `${n} ${n === 1 ? 'note' : 'notes'}` : 'notes'
+      const frame = about.frame ? clip(about.frame, 60) : ''
+      return frame ? `Before AI grouped ${what} in ${frame}` : `Before AI grouped ${what} into themes`
+    }
     case 'before_restore': {
-      if (!restoredName) return 'Before a restore'
-      const name = restoredName.length > 90 ? `${restoredName.slice(0, 89)}…` : restoredName
+      if (!about.restoredName) return 'Before a restore'
+      const name = about.restoredName.length > 90 ? `${about.restoredName.slice(0, 89)}…` : about.restoredName
       return `Before restoring “${name}”`
     }
   }
@@ -113,16 +137,12 @@ export function autoCheckpointName(reason: CheckpointReason, restoredName?: stri
 
 export interface CheckpointService {
   /** Saves an automatic checkpoint of the board now, unless its content is unchanged. Throws SyncUnavailable. */
-  capture(
-    boardId: string,
-    reason: CheckpointReason,
-    opts?: { restoredName?: string },
-  ): Promise<CaptureOutcome>
+  capture(boardId: string, reason: CheckpointReason, opts?: CheckpointAbout): Promise<CaptureOutcome>
   /** capture() that logs instead of throwing (before risky operations: they must not fail because of it). */
   captureQuietly(
     boardId: string,
     reason: CheckpointReason,
-    opts?: { restoredName?: string },
+    opts?: CheckpointAbout,
   ): Promise<CaptureOutcome | null>
   /** The sync server reported a canvas change at `at`. */
   changed(boardId: string, at: Date): Promise<void>
@@ -229,7 +249,7 @@ export function createCheckpointService(
   async function captureNow(
     boardId: string,
     reason: CheckpointReason,
-    opts: { restoredName?: string },
+    opts: CheckpointAbout,
   ): Promise<CaptureOutcome> {
     const board = await db.maybeOne<{ workspace_id: string; status: string }>(
       'SELECT workspace_id, status FROM boards WHERE id = $1',
@@ -291,7 +311,7 @@ export function createCheckpointService(
           id,
           board.workspace_id,
           boardId,
-          autoCheckpointName(reason, opts.restoredName),
+          autoCheckpointName(reason, opts),
           reason,
           now(),
           made.documentClock,

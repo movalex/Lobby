@@ -1,5 +1,6 @@
 import type { Db } from '@draftroom/db'
 import type { FastifyRequest } from 'fastify'
+import type { IdentityService } from './auth/identity.ts'
 import type { SessionStore, SessionUser } from './auth/session.ts'
 import type { ApiConfig } from './config.ts'
 import type { SyncNotifier } from './notifier.ts'
@@ -53,6 +54,11 @@ export interface AppContext {
   /** Sign-in attempts per client IP (see SignInContext.rateLimit). */
   authRateLimit: RouteRateLimit
   limits: ApiLimits
+  /**
+   * Domain access (docs/DOMAIN-ACCESS-CONTRACTS.md §3.4, §4.1): creator status, identity freshness and
+   * the one creator check (requireCreator).
+   */
+  identity: IdentityService
 }
 
 /** Route params arrive untyped; every route validates them (a malformed id is a 404, like a missing one). */

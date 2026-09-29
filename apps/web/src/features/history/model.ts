@@ -7,9 +7,10 @@ import {
   type BoardRole,
   type BoardStatus,
   can,
-  canCreateInWorkspace,
+  canCreateContent,
   type WorkspaceRole,
 } from '../../lib/permissions.ts'
+import { timeOfDay } from '../sharing/model.ts'
 
 const TYPE_LABELS: Record<string, string> = {
   note: 'Sticky note',
@@ -47,11 +48,12 @@ export function deletedDetail(entry: Pick<DeletedShapeEntry, 'type' | 'childCoun
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 
-/** A useful default checkpoint name, e.g. "Checkpoint Sep 27, 14:05". */
-export function defaultCheckpointName(now: Date = new Date()): string {
-  const hh = String(now.getHours()).padStart(2, '0')
-  const mm = String(now.getMinutes()).padStart(2, '0')
-  return `Checkpoint ${MONTHS[now.getMonth()]} ${now.getDate()}, ${hh}:${mm}`
+/**
+ * A useful default checkpoint name, e.g. "Checkpoint Sep 27, 2:05 PM" (R2-08: the time in the
+ * browser's locale and hour cycle, like every other time on the board).
+ */
+export function defaultCheckpointName(now: Date = new Date(), locale?: string): string {
+  return `Checkpoint ${MONTHS[now.getMonth()]} ${now.getDate()}, ${timeOfDay(now, locale)}`
 }
 
 /** What the name field submits: the typed name trimmed and capped, or the default. */
@@ -69,22 +71,34 @@ export interface HistoryPermissions {
    * a review-link guest. The API requires `edit` for GET /api/boards/:bid/deleted too.
    */
   canSeeDeleted: boolean
-  /** Restore as new / duplicate (workspace members and above; guests cannot create boards). */
+  /**
+   * Restore as new / duplicate: creators (domain access, `/api/me` `access.creator`) who are workspace
+   * members and above; guests and outside accounts cannot create boards (the api answers 403).
+   */
   canCreateBoards: boolean
   /** Duplicate with sharing settings (board owners). */
   canKeepSharing: boolean
+}
+
+export interface HistoryPermissionOptions {
+  /**
+   * Domain access (docs/DOMAIN-ACCESS-CONTRACTS.md §9): whether the caller may create boards at all
+   * (`me.access.creator`; true for an api from before domain access, `reason: 'legacy'`).
+   */
+  creator: boolean
 }
 
 export function historyPermissions(
   role: BoardRole,
   status: BoardStatus,
   workspaceRole: WorkspaceRole | null | undefined,
+  { creator }: HistoryPermissionOptions = { creator: true },
 ): HistoryPermissions {
   const canEdit = can(role, 'edit', status)
   return {
     canEdit,
     canSeeDeleted: canEdit,
-    canCreateBoards: !!workspaceRole && canCreateInWorkspace(workspaceRole) && can(role, 'view', status),
+    canCreateBoards: !!workspaceRole && canCreateContent(creator, workspaceRole) && can(role, 'view', status),
     canKeepSharing: can(role, 'manage_access', status),
   }
 }
@@ -106,6 +120,27 @@ export interface CopyActions {
  * them (403 EXPORT_DISABLED), so they are shown turned off with the reason. People who cannot create
  * boards (guests) are not offered the first two at all.
  */
+export const CHECKPOINTS_HINT =
+  'A checkpoint keeps this board as it is now. Restoring one makes a new board that only you can see; this board is not changed.'
+
+/**
+ * The line under "Checkpoints". It promises restoring only to someone who is offered "Restore as new
+ * board"; an outside account (domain access) is told who can, an unconfirmed one that it is paused.
+ */
+export function checkpointsHint(
+  restoreAsNew: ActionState,
+  access: { creator: boolean; reason: string },
+): string {
+  if (restoreAsNew !== 'hidden') return CHECKPOINTS_HINT
+  const keeps = 'A checkpoint keeps this board as it is now.'
+  if (access.creator) return keeps
+  if (access.reason === 'outside')
+    return `${keeps} Only people at Dark Burn Creative or Trailer Park Group can restore one as a new board.`
+  if (access.reason === 'unconfirmed')
+    return `${keeps} Restoring one as a new board is paused until Lobby can confirm your account.`
+  return keeps
+}
+
 export function copyActions(perms: HistoryPermissions, canExport: boolean): CopyActions {
   const creating: ActionState = !perms.canCreateBoards ? 'hidden' : canExport ? 'on' : 'off'
   return {

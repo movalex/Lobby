@@ -82,10 +82,15 @@ export async function registerHistory(app: FastifyInstance, ctx: FeatureContext)
   startCheckpointTimers(app, checkpoints, settings)
   registerCheckpointRoutes(app, ctx, checkpoints, bodies)
 
-  /** The caller may create boards in the workspace (members and above; guests may not). */
-  async function requireCreator(workspaceId: string, userId: string) {
+  /**
+   * The caller may create boards in the workspace: members and above (guests may not), and a creator
+   * (domain access, docs/DOMAIN-ACCESS-CONTRACTS.md §4.2). Always the first check of a route that makes
+   * a new board, before anything heavy (an archive is parsed, a snapshot is taken or captured).
+   */
+  async function requireBoardCreator(workspaceId: string, userId: string, route: string) {
     const role = await requireWorkspaceRole(db, workspaceId, userId)
     if (!canCreateInWorkspace(role)) throw forbidden('Only workspace members can create boards.')
+    await ctx.identity.requireCreator(db, userId, 'create', { route, by: 'route' })
   }
 
   // ---- checkpoints -------------------------------------------------------------------------------
@@ -179,7 +184,7 @@ export async function registerHistory(app: FastifyInstance, ctx: FeatureContext)
     const access = await requireBoardAction(db, snapshot.board_id, user.id, 'view')
     const workspaceId = access.board.workspace_id
     if (snapshot.workspace_id !== workspaceId) throw notFound()
-    await requireCreator(workspaceId, user.id)
+    await requireBoardCreator(workspaceId, user.id, req.routeOptions.url ?? '')
     // A new board of your own is a full copy (export-control, docs/WAVE3-CONTRACTS.md).
     await requireExportAllowed(db, access, user.id)
     const raw = await bodies.read(snapshot.storage_key)
@@ -222,7 +227,7 @@ export async function registerHistory(app: FastifyInstance, ctx: FeatureContext)
     const input = parse(DuplicateBoardInput, req.body ?? {})
     const access = await requireBoardAction(db, bid, user.id, 'view')
     const workspaceId = access.board.workspace_id
-    await requireCreator(workspaceId, user.id)
+    await requireBoardCreator(workspaceId, user.id, req.routeOptions.url ?? '')
     await requireExportAllowed(db, access, user.id) // a duplicate is a full copy (export-control)
     if (input.keepSharing && !can(access.role, 'manage_access', access.board.status))
       throw forbidden('Only the board owner can copy its sharing settings.')
@@ -286,7 +291,7 @@ export async function registerHistory(app: FastifyInstance, ctx: FeatureContext)
     async (req, reply) => {
       const user = await ctx.requireUser(req)
       const { wid = '' } = req.params as Params
-      await requireCreator(wid, user.id)
+      await requireBoardCreator(wid, user.id, req.routeOptions.url ?? '')
       const query = parse(ImportBoardQuery, req.query)
       if (query.projectId) await requireProjectInWorkspace(db, query.projectId, wid)
       let imported: ReturnType<typeof importBoardArchive>

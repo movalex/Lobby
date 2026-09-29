@@ -8,6 +8,7 @@
 
 import { BOARD_ROLES, BOARD_VISIBILITIES, WORKSPACE_ROLES } from '@draftroom/permissions'
 import { z } from 'zod'
+import { ACCOUNT_EMAIL_MAX_LENGTH, AccountEmail } from './domain-access.ts'
 import { BoardWithRole, InvitationId, User, UserId } from './index.ts'
 
 const IsoDate = z.string()
@@ -200,6 +201,11 @@ export const PendingInvitation = z.object({
   maxExpiresAt: IsoDate.nullable().default(null),
   /** Wave 3 (guests): multi-use links anyone can join with just a name (no account). */
   allowGuests: z.boolean().default(false),
+  /**
+   * Domain access: the full address a single-use invitation is locked to (`kind: 'invite'` only; null
+   * for links and for invitations from before the lock). Only this manager-only list carries it.
+   */
+  email: z.string().nullable().default(null),
 })
 export type PendingInvitation = z.infer<typeof PendingInvitation>
 
@@ -254,6 +260,11 @@ export const ShareMember = z.object({
   /** Their direct grant came from a review link; `linkEndsAt` = when that access ends. */
   viaReviewLink: z.boolean(),
   linkEndsAt: IsoDate.nullable(),
+  /**
+   * Domain access: whether this person may be made a board owner (false: confirmed not a creator). An
+   * older api omits it and still allows owner, so the default is true. The server decides either way.
+   */
+  canOwn: z.boolean().default(true),
 })
 export type ShareMember = z.infer<typeof ShareMember>
 
@@ -268,19 +279,14 @@ export const TransferOwnershipInput = z.object({
 // ---- invite by email -----------------------------------------------------------------------------
 
 /** The longest address SMTP can carry (RFC 5321: a 256-octet path, angle brackets included). */
-export const INVITE_EMAIL_MAX_LENGTH = 254
+export const INVITE_EMAIL_MAX_LENGTH = ACCOUNT_EMAIL_MAX_LENGTH
 
 /**
- * An address to invite: trimmed and lowercased (Clerk compares addresses without case; one spelling
- * per person keeps lookups, invitations and rate limits consistent).
+ * An address to invite: domain access's AccountEmail (trimmed, printable ASCII only, no Clerk test
+ * subaddress, ASCII-lowercased). Clerk compares addresses without case; one spelling per person keeps
+ * lookups, invitations, the email lock and rate limits consistent.
  */
-export const InviteEmail = z
-  .string()
-  .trim()
-  .toLowerCase()
-  .min(1, 'Enter an email address.')
-  .max(INVITE_EMAIL_MAX_LENGTH, 'That email address is too long.')
-  .pipe(z.email('Enter a valid email address.'))
+export const InviteEmail = AccountEmail
 
 /** `POST /api/boards/:bid/invitations/email`: never ownership (the same cap as invite links). */
 export const EmailInviteInput = z.object({ email: InviteEmail, role: RequestableRole })

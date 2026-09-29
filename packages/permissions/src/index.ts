@@ -100,3 +100,25 @@ export function canCreateInWorkspace(role: WorkspaceRole | null): boolean {
 export function canManageWorkspace(role: WorkspaceRole | null): boolean {
   return role === 'owner' || role === 'admin'
 }
+
+/**
+ * Domain access (docs/DOMAIN-ACCESS-CONTRACTS.md §4.1): creating workspaces, projects and boards (in
+ * any form) needs a creator AND a workspace role that may create. `canCreateInWorkspace` itself stays
+ * role-only: it also gates reads (members, projects, storage).
+ */
+export function canCreateContent(creator: boolean, role: WorkspaceRole | null): boolean {
+  return creator && canCreateInWorkspace(role)
+}
+
+/**
+ * Domain access: handing out access on a board (invitations, review/workshop/guest links, extending a
+ * link, approving a request, raising a role or the visibility) needs a creator AND manage_access.
+ * Lowering, removing, revoking and denying stay role-only.
+ */
+export function canHandOutAccess(
+  creator: boolean,
+  role: BoardRole | null,
+  status: BoardStatus = 'active',
+): boolean {
+  return creator && can(role, 'manage_access', status)
+}

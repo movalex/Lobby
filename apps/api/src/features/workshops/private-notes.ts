@@ -602,7 +602,8 @@ export function registerPrivateNotes(
       if (waiting.length > 0) {
         const place = ctx.sync.placeNotes?.bind(ctx.sync)
         if (!place) throw placeFailed()
-        await checkpointBeforeChange(app, marked.row.board_id, 'before_reveal') // R10: the board just before
+        // R10: the board just before; R2-09: named after the prompt, so two reveals can be told apart.
+        await checkpointBeforeChange(app, marked.row.board_id, 'before_reveal', { prompt: marked.row.prompt })
         const body = await placementRequest(db, marked.row, waiting)
         let answer: unknown
         try {

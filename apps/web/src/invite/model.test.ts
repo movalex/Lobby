@@ -2,12 +2,24 @@ import { guestDisplayName, guestLabelName, guestNameProblem } from '@draftroom/c
 import { describe, expect, it } from 'vitest'
 import { BOARD_ID, WS_ID } from '../api/test-fixtures.ts'
 import {
+  acceptErrorCopy,
+  boardInTrashCopy,
+  emailMismatchCopy,
   fetchGoneDetails,
+  GUEST_ENDED_COPY,
   goneCopy,
   guestJoinError,
   guestJoinHint,
   invitationSummary,
+  inviteUnreachable,
+  isEmailMismatch,
+  lockedHint,
+  lockedSignInLabel,
+  ownInvitationWayBack,
+  ownName,
+  ownNameParts,
   rememberAcceptIntent,
+  shouldAutoAccept,
   signInHeading,
   splitGuestMarker,
   takeAcceptIntent,
@@ -25,9 +37,31 @@ describe('invitation summary', () => {
     expect(s).toEqual({
       eyebrow: 'Alice invited you to a board',
       title: 'Join “Q3 planning”',
+      roleHeading: 'Your role',
       roleLabel: 'Can comment',
       acceptLabel: 'Accept and open board',
     })
+  })
+
+  it('the inviter’s own locked link is about their invitation, and leads back, never to a sign-out', () => {
+    const board = { ...base, board: { id: BOARD_ID, title: 'Q3 planning' }, role: 'viewer' }
+    expect(invitationSummary(board, { sentByYou: true })).toEqual({
+      eyebrow: 'Your invitation to a board',
+      title: '“Q3 planning”',
+      roleHeading: 'Their role',
+      roleLabel: 'Can view',
+      acceptLabel: 'Accept and open board',
+    })
+    const workspace = { ...base, board: null, role: 'member' }
+    expect(invitationSummary(workspace, { sentByYou: true })).toMatchObject({
+      eyebrow: 'Your invitation to a workspace',
+      title: 'Dev Studio',
+      roleHeading: 'Their role',
+    })
+    // Not the inviter's (or an older api without sentByYou): as before.
+    expect(invitationSummary(board, { sentByYou: false }).eyebrow).toBe('Alice invited you to a board')
+    expect(ownInvitationWayBack(board)).toEqual({ label: 'Back to the board', href: `/b/${BOARD_ID}` })
+    expect(ownInvitationWayBack(workspace)).toEqual({ label: 'Go to the workspace', href: `/w/${WS_ID}` })
   })
 
   it('workspace invitations name the workspace and the workspace role', () => {
@@ -155,5 +189,202 @@ describe('joining as a guest (wave 3)', () => {
       'This link needs an account. Sign in to accept it.',
     )
     expect(guestJoinError('RATE_LIMITED', 'Wait a few minutes')).toBe('Wait a few minutes')
+  })
+})
+
+describe("someone's own name (F14)", () => {
+  it('a guest reads "(guest, you)", never "(guest) (you)"; an account "(you)"', () => {
+    expect(ownName('Dana Whitfield (guest)')).toBe('Dana Whitfield (guest, you)')
+    expect(ownName('Alice Park')).toBe('Alice Park (you)')
+    expect(ownNameParts('Kai (guest)')).toEqual(['Kai', ' (guest, you)'])
+    expect(ownNameParts('Alice')).toEqual(['Alice', ' (you)'])
+  })
+})
+
+describe('when guest access ends (DANA2-07)', () => {
+  it('one message: what happened and what to do, with no way on that needs an account', () => {
+    expect(GUEST_ENDED_COPY.title).toBe('Your guest access has ended')
+    expect(GUEST_ENDED_COPY.what).toMatch(/revoked or has expired/)
+    expect(GUEST_ENDED_COPY.next).toMatch(/ask whoever shared the link/)
+    expect(Object.values(GUEST_ENDED_COPY).join(' ')).not.toMatch(/your boards|request access/i)
+  })
+})
+
+describe('invitations locked to an email address (domain access, docs/DOMAIN-ACCESS-CONTRACTS.md §9)', () => {
+  const board = { ...base, board: { id: BOARD_ID, title: 'Rough cut' }, role: 'commenter' }
+  const locked = { emailLocked: true, invitedEmailHint: 'p•••@client.example.test', matchesYou: null }
+
+  it('signed out: the facts, the action and the sign-in heading repeat the masked address', () => {
+    expect(lockedHint(locked)).toBe('p•••@client.example.test')
+    expect(lockedSignInLabel('p•••@client.example.test')).toBe(
+      'Sign in or create an account with p•••@client.example.test',
+    )
+    expect(signInHeading({ ...board, ...locked })).toBe(
+      'Sign in with p•••@client.example.test to join “Rough cut” (invited by Alice)',
+    )
+    expect(signInHeading({ ...base, board: null, role: 'member', ...locked })).toBe(
+      'Sign in with p•••@client.example.test to join Dev Studio (invited by Alice)',
+    )
+    // Not locked (guest and review links, an older api): as before.
+    expect(lockedHint({ emailLocked: false, invitedEmailHint: null, matchesYou: null })).toBeNull()
+    expect(lockedHint(undefined)).toBeNull()
+    expect(signInHeading({ ...board, emailLocked: false, invitedEmailHint: null, matchesYou: null })).toBe(
+      'Sign in to join “Rough cut” (invited by Alice)',
+    )
+    // A locked flag without a hint (no longer usable) never prints "null".
+    expect(signInHeading({ ...board, emailLocked: true, invitedEmailHint: null })).toBe(
+      'Sign in to join “Rough cut” (invited by Alice)',
+    )
+  })
+
+  it('the right account accepts as today (auto-accept after sign-in included)', () => {
+    expect(isEmailMismatch({ ...locked, matchesYou: true }, false)).toBe(false)
+    expect(shouldAutoAccept({ ...locked, matchesYou: true })).toBe(true)
+    expect(shouldAutoAccept({ ...locked, matchesYou: null })).toBe(true)
+    expect(shouldAutoAccept({ emailLocked: false, invitedEmailHint: null, matchesYou: null })).toBe(true)
+  })
+
+  it('the wrong account: the mismatch state, and never an auto-accept', () => {
+    expect(isEmailMismatch({ ...locked, matchesYou: false }, false)).toBe(true)
+    expect(shouldAutoAccept({ ...locked, matchesYou: false })).toBe(false)
+    // A 403 INVITATION_EMAIL_MISMATCH at accept (fresher data than the preview) shows it too.
+    expect(isEmailMismatch({ ...locked, matchesYou: true }, true)).toBe(true)
+    // An unlocked invitation is never a mismatch, whatever matchesYou says.
+    expect(isEmailMismatch({ emailLocked: false, invitedEmailHint: null, matchesYou: false }, false)).toBe(
+      false,
+    )
+  })
+
+  it('the mismatch copy names both addresses, and falls back without an address or an inviter', () => {
+    expect(
+      emailMismatchCopy({
+        hint: 'p•••@client.example.test',
+        email: 'sam@client.example.test',
+        invitedBy: 'Alice',
+      }).body,
+    ).toBe(
+      "This invitation was sent to p•••@client.example.test. You're signed in as sam@client.example.test. Sign in with the invited address, or ask Alice to invite sam@client.example.test.",
+    )
+    expect(
+      emailMismatchCopy({ hint: 'p•••@client.example.test', email: null, invitedBy: 'Alice' }).body,
+    ).toBe(
+      "This invitation was sent to p•••@client.example.test. You're signed in with a different account. Sign in with the invited address, or ask Alice for a new invitation.",
+    )
+    expect(
+      emailMismatchCopy({
+        hint: 'p•••@client.example.test',
+        email: 'sam@client.example.test',
+        invitedBy: '  ',
+      }).body,
+    ).toContain('ask the person who invited you to invite sam@client.example.test')
+    expect(
+      emailMismatchCopy({ hint: 'p•••@client.example.test', email: null, invitedBy: null }).body,
+    ).toContain('ask the person who invited you for a new invitation')
+    // The full invited address is never known here, so it can never be shown.
+    expect(emailMismatchCopy({ hint: null, email: null, invitedBy: null }).body).not.toMatch(/null/)
+  })
+
+  it('the inviter opening their own locked link is told whom it is for, never to ask themselves', () => {
+    const own = emailMismatchCopy({
+      hint: 'p•••@client.example.test',
+      email: 'alice@dev.invalid',
+      invitedBy: 'Alice Park',
+      sentByYou: true,
+    })
+    expect(own).toEqual({
+      title: 'This is the invitation you sent',
+      body: "Only p•••@client.example.test can use this link. It won't let you in as alice@dev.invalid. Send it to them: they sign in with that address to join.",
+    })
+    expect(own.body).not.toContain('ask Alice Park')
+    expect(
+      emailMismatchCopy({ hint: 'p•••@client.example.test', email: null, invitedBy: 'A', sentByYou: true })
+        .body,
+    ).toBe(
+      'Only p•••@client.example.test can use this link. Send it to them: they sign in with that address to join.',
+    )
+    // sentByYou false (or an older api without it): the copy for the wrong account, as before.
+    expect(
+      emailMismatchCopy({
+        hint: 'p•••@client.example.test',
+        email: 'a@x.test',
+        invitedBy: 'A',
+        sentByYou: false,
+      }).title,
+    ).toBe('This invitation is for someone else')
+  })
+
+  it('accepting while the sign-in service is down: a retry; 409 and the rest: the server’s words', () => {
+    expect(acceptErrorCopy('IDENTITY_UNAVAILABLE', 'x')).toEqual({
+      message: 'Couldn’t confirm your email right now. Try again in a minute.',
+      retry: true,
+    })
+    expect(acceptErrorCopy('ROLE_REQUIRES_CREATOR', 'Only people at Dark Burn Creative …')).toEqual({
+      message: 'Only people at Dark Burn Creative …',
+      retry: false,
+    })
+    expect(acceptErrorCopy('GUEST_LIMIT', 'x').message).toContain('as many guests as it can')
+  })
+})
+
+describe('fixer round 3 (docs/DOMAIN-ACCESS-CONTRACTS.md §21)', () => {
+  const board = { ...base, board: { id: BOARD_ID, title: 'Q3 planning' }, role: 'viewer' }
+
+  it("Lobby can't be reached: the invitation or the session read failed (no answer, 5xx), never another state", () => {
+    const signedIn = { status: 'signed-in' } as const
+    const network = { kind: 'network', message: "Can't reach Lobby. Check your connection and try again." }
+    const server = { kind: 'server', message: 'Lobby had a problem handling that. Try again in a moment.' }
+    expect(inviteUnreachable(signedIn, network)).toBe(network.message)
+    expect(inviteUnreachable({ status: 'signed-out' }, server)).toBe(server.message)
+    // The session read failed (also the re-read after a 403 INVITATION_EMAIL_MISMATCH).
+    expect(inviteUnreachable({ status: 'unreachable', message: 'Down.' }, null)).toBe('Down.')
+    // Real answers are not "unreachable": the page shows them as before.
+    for (const kind of ['not-found', 'gone', 'rate-limited', 'forbidden'])
+      expect(inviteUnreachable(signedIn, { kind, message: 'x' })).toBeNull()
+    expect(inviteUnreachable({ status: 'signed-out' }, null)).toBeNull()
+    expect(inviteUnreachable(signedIn, null)).toBeNull()
+  })
+
+  it('a board in the trash: no "Join", no auto-accept, and whom to ask (not the inviter themselves)', () => {
+    expect(invitationSummary(board, { boardInTrash: true }).title).toBe('“Q3 planning”')
+    expect(invitationSummary(board).title).toBe('Join “Q3 planning”')
+    expect(shouldAutoAccept({ boardInTrash: true })).toBe(false)
+    expect(shouldAutoAccept({ boardInTrash: false })).toBe(true)
+    expect(boardInTrashCopy(board, { sentByYou: false })).toEqual({
+      title: 'This board is in the trash',
+      body: '“Q3 planning” is in the trash, so this invitation can’t be used right now. Ask Alice to restore it: the link works again once the board is back, until it expires.',
+    })
+    expect(boardInTrashCopy({ ...board, invitedBy: { name: ' ' } }, { sentByYou: false }).body).toContain(
+      'Ask the person who invited you to restore it',
+    )
+    const own = boardInTrashCopy(board, { sentByYou: true }).body
+    expect(own).toBe(
+      '“Q3 planning” is in the trash, so nobody can use this link right now. Once the board is restored, the link works again until it expires.',
+    )
+    expect(own).not.toContain('Ask')
+  })
+
+  it('a board in the trash opened by the wrong account: whom the link is for, never "works again" (fixer round 4)', () => {
+    const wrong = boardInTrashCopy(board, {
+      sentByYou: false,
+      forSomeoneElse: { hint: 't•••@client.example.test', email: 'wes@client.example.test' },
+    })
+    expect(wrong).toEqual({
+      title: 'This board is in the trash',
+      body: '“Q3 planning” is in the trash. This link is for t•••@client.example.test, so it won’t let you in as wes@client.example.test, even once the board is restored.',
+    })
+    expect(wrong.body).not.toContain('works again')
+    expect(wrong.body).not.toContain('Ask')
+    const fallback = boardInTrashCopy(board, {
+      sentByYou: false,
+      forSomeoneElse: { hint: null, email: null },
+    }).body
+    expect(fallback).toBe(
+      '“Q3 planning” is in the trash. This link is for a different email address, so it won’t let you in with this account, even once the board is restored.',
+    )
+    // The inviter's own link keeps its own words; no account in question keeps the "ask" copy.
+    expect(
+      boardInTrashCopy(board, { sentByYou: true, forSomeoneElse: { hint: 'x', email: 'y' } }).body,
+    ).toContain('nobody can use this link')
+    expect(boardInTrashCopy(board, { sentByYou: false, forSomeoneElse: null }).body).toContain('Ask Alice')
   })
 })

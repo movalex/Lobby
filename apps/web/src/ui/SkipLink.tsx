@@ -29,6 +29,12 @@ export function skipToCanvas(editor: Editor) {
   editor.getContainer().focus()
 }
 
+/** A11Y2-09: the accessible name of the board's canvas region ("Lobby tour board"). */
+export function boardRegionName(title: string): string {
+  const t = title.trim()
+  return t ? `${t} board` : 'Untitled board'
+}
+
 /** "Skip to canvas", once the board's editor exists (before that there is no canvas to go to). */
 export function BoardSkipLink({ editor }: { editor: Editor | null }) {
   if (!editor) return null

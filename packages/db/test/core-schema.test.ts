@@ -128,3 +128,67 @@ describe('0001_core', () => {
     ).toBe('23514')
   })
 })
+
+describe('0021_domain_access', () => {
+  const addEmail = (email: string, opts: { primary?: boolean; source?: string; user?: string } = {}) =>
+    db.query(
+      `INSERT INTO user_emails (user_id, email, is_primary, source, seen_at) VALUES ($1, $2, $3, $4, now())`,
+      [opts.user ?? u1, email, opts.primary ?? false, opts.source ?? 'clerk'],
+    )
+
+  it('stores only normalised addresses, never a Clerk test-mode one, and derives the domain after the last @', async () => {
+    expect(await sqlstate(addEmail('ann@darkburn.com', { primary: true }))).toBe('no error')
+    expect(await db.one('SELECT domain FROM user_emails WHERE user_id = $1', [u1])).toEqual({
+      domain: 'darkburn.com',
+    })
+    expect(await sqlstate(addEmail('"a@darkburn.com"@evil.test'))).toBe('no error')
+    expect(await db.one(`SELECT domain FROM user_emails WHERE email = '"a@darkburn.com"@evil.test'`)).toEqual(
+      { domain: 'evil.test' },
+    )
+    for (const bad of [
+      'Ann@darkburn.com', // not lowercased
+      'ann@darKburn.com', // non-ASCII
+      'ann @darkburn.com', // space
+      'ann@', // no domain
+      '@darkburn.com', // no local part
+      'anyone+clerk_test@darkburn.com', // Clerk test mode
+    ])
+      expect(await sqlstate(addEmail(bad)), bad).toBe('23514')
+    expect(await sqlstate(addEmail('ann@other.example', { source: 'okta' }))).toBe('23514')
+  })
+
+  it('allows one primary address per user and provider', async () => {
+    await addEmail('ann@darkburn.com', { primary: true })
+    expect(await sqlstate(addEmail('ann@other.example', { primary: true }))).toBe('23505')
+    expect(await sqlstate(addEmail('ann@dev.invalid', { primary: true, source: 'dev' }))).toBe('no error')
+    expect(await sqlstate(addEmail('ann@darkburn.com', { source: 'dev' }))).toBe('23505') // one row per address
+  })
+
+  it('marks at most one personal workspace per user', async () => {
+    await db.query('UPDATE workspaces SET personal_of = $1 WHERE id = $2', [u1, w1])
+    expect(await sqlstate(db.query('UPDATE workspaces SET personal_of = $1 WHERE id = $2', [u1, w2]))).toBe(
+      '23505',
+    )
+  })
+
+  it('locks only single-use invitations, to a normalised address', async () => {
+    const b = newBoardId()
+    await db.query("INSERT INTO boards (id, workspace_id, title, created_by) VALUES ($1, $2, 'T', $3)", [
+      b,
+      w1,
+      u1,
+    ])
+    const invite = (email: string | null, multiUse: boolean) =>
+      db.query(
+        `INSERT INTO invitations (id, token_hash, workspace_id, board_id, role, created_by, expires_at, multi_use, invited_email)
+         VALUES ($1, $2, $3, $4, 'viewer', $5, now() + interval '7 days', $6, $7)`,
+        [newId('inv'), createHash('sha256').update(newId('inv')).digest('hex'), w1, b, u1, multiUse, email],
+      )
+    expect(await sqlstate(invite('pat@client.example', false))).toBe('no error')
+    expect(await sqlstate(invite(null, false))).toBe('no error') // an older build's row
+    expect(await sqlstate(invite(null, true))).toBe('no error')
+    expect(await sqlstate(invite('pat@client.example', true))).toBe('23514')
+    for (const bad of ['Pat@client.example', 'pát@client.example', 'pat+clerk_test@client.example', 'pat@'])
+      expect(await sqlstate(invite(bad, false)), bad).toBe('23514')
+  })
+})

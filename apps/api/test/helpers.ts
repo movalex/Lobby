@@ -11,6 +11,7 @@ import type { Db } from '@draftroom/db'
 import { openTestDb } from '@draftroom/db/testing'
 import type { FastifyInstance, LightMyRequestResponse } from 'fastify'
 import { type ApiDeps, createApiServer } from '../src/app.ts'
+import type { IdentityService } from '../src/auth/identity.ts'
 import { type ApiConfig, loadConfig } from '../src/config.ts'
 import { type AccessChange, createRecordingNotifier } from '../src/notifier.ts'
 
@@ -19,6 +20,12 @@ export const ORIGIN = 'http://127.0.0.1:5173'
 export const TICKET_SECRET = 'test-ticket-secret-0123456789abcdefghij'
 export const INTERNAL_SECRET = 'test-internal-secret-0123456789abcdefghij'
 export const WORKER_TOKEN = 'test-worker-token-0123456789abcdefghijklmn'
+
+/**
+ * The address a handle-only dev login gets (docs/DOMAIN-ACCESS-CONTRACTS.md D8): invitation tests
+ * lock links to it. `.invalid` can never be a real address.
+ */
+export const devEmail = (handle: string) => `${handle}@dev.invalid`
 
 export function testEnv(dataDir: string, extra: Record<string, string> = {}): Record<string, string> {
   return {
@@ -57,8 +64,13 @@ export interface TestApi {
   config: ApiConfig
   notifications: AccessChange[]
   clock: { advance(ms: number): void; now(): Date }
-  /** Dev login; the first login of an app owns Dev Studio. */
-  login(handle: string, name?: string): Promise<Client>
+  /** Domain access: creator status and refreshes (await identity.settled() for background ones). */
+  identity: IdentityService
+  /**
+   * Dev login; the first login of an app owns Dev Studio. `email` (domain access): the verified
+   * address the dev login stores instead of `<handle>@dev.invalid`; every login replaces it.
+   */
+  login(handle: string, name?: string, opts?: { email?: string }): Promise<Client>
   /** Requests without a session (still same-origin). */
   anon(
     method: Method,
@@ -69,14 +81,30 @@ export interface TestApi {
   close(): Promise<void>
 }
 
-export async function createTestApi(opts: { deps?: Partial<ApiDeps>; env?: Record<string, string> } = {}) {
+export async function createTestApi(
+  opts: {
+    deps?: Partial<ApiDeps>
+    env?: Record<string, string>
+    /** An existing (migrated) database to run over, e.g. an api re-created with another config; not closed. */
+    db?: Db
+    /** TEST-ONLY: false leaves the domain-access root guard out (in-route checks alone). */
+    domainAccessGuard?: boolean
+  } = {},
+) {
   const dataDir = mkdtempSync(join(tmpdir(), 'dr-api-'))
   const config = loadConfig(testEnv(dataDir, opts.env))
-  const db = await openTestDb()
+  const ownsDb = !opts.db
+  const db = opts.db ?? (await openTestDb())
   const notifier = createRecordingNotifier()
   let offset = 0
   const now = () => new Date(Date.now() + offset)
-  const server = await createApiServer(config, { db, notifier, now, ...opts.deps })
+  const server = await createApiServer(config, {
+    db,
+    notifier,
+    now,
+    ...(opts.domainAccessGuard === false ? { domainAccessGuard: false } : {}),
+    ...opts.deps,
+  })
   await server.app.ready()
 
   const inject = (
@@ -104,8 +132,14 @@ export async function createTestApi(opts: { deps?: Partial<ApiDeps>; env?: Recor
       },
       now,
     },
-    async login(handle, name) {
-      const res = await inject('POST', '/api/auth/dev/login', name ? { handle, name } : { handle }, {})
+    identity: server.identity,
+    async login(handle, name, loginOpts = {}) {
+      const body = {
+        handle,
+        ...(name ? { name } : {}),
+        ...(loginOpts.email !== undefined ? { email: loginOpts.email } : {}),
+      }
+      const res = await inject('POST', '/api/auth/dev/login', body, {})
       if (res.statusCode !== 200) throw new Error(`login ${handle} failed: ${res.statusCode} ${res.body}`)
       const cookie = res.cookies.find((c) => c.name === 'dr_session')
       if (!cookie) throw new Error('no session cookie')
@@ -123,7 +157,7 @@ export async function createTestApi(opts: { deps?: Partial<ApiDeps>; env?: Recor
     anon: (method, url, body, headers = {}) => inject(method, url, body, headers),
     async close() {
       await server.close()
-      await db.close()
+      if (ownsDb) await db.close()
       rmSync(dataDir, { recursive: true, force: true })
     },
   }

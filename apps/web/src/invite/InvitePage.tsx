@@ -1,4 +1,4 @@
-import { GUEST_NAME_MAX, guestNameProblem } from '@draftroom/contracts'
+import { BOARD_IN_TRASH, DOMAIN_ACCESS_CODES, GUEST_NAME_MAX, guestNameProblem } from '@draftroom/contracts'
 import { type FormEvent, type ReactNode, useCallback, useEffect, useId, useRef, useState } from 'react'
 import { api, isApiError } from '../api/client.ts'
 import { useSession } from '../auth/session.tsx'
@@ -6,18 +6,28 @@ import { Wordmark } from '../brand/Wordmark.tsx'
 import { formatDateTime } from '../lib/format.ts'
 import { boardPath, invitePath, linkClick, navigate, signInPath, workspacePath } from '../lib/routing.ts'
 import { useResource } from '../lib/useResource.ts'
-import { LoadingScreen, MessageScreen } from '../ui/screens.tsx'
+import { LoadingScreen, MessageScreen, UnreachableScreen } from '../ui/screens.tsx'
 import { fetchInvitation, joinAsGuest, rememberGuestTab, seedUserKind, useUserKind } from './guest.tsx'
 import './invite.css'
 import {
+  acceptErrorCopy,
+  boardInTrashCopy,
+  emailMismatchCopy,
   fetchGoneDetails,
   type GoneDetails,
   goneCopy,
   guestJoinError,
   guestJoinHint,
   invitationSummary,
+  inviteUnreachable,
+  isEmailMismatch,
+  lockedHint,
+  lockedSignInLabel,
+  ownInvitationWayBack,
+  ownName,
   rememberAcceptIntent,
   safeSessionStorage,
+  shouldAutoAccept,
   takeAcceptIntent,
 } from './model.ts'
 
@@ -31,7 +41,15 @@ export function InvitePage({ token }: { token: string }) {
   const load = useCallback((signal: AbortSignal) => fetchInvitation(token, signal), [token])
   const preview = useResource(load)
   const [accepting, setAccepting] = useState(false)
-  const [acceptError, setAcceptError] = useState<{ gone: boolean; message: string } | null>(null)
+  const [acceptError, setAcceptError] = useState<{ gone: boolean; message: string; retry?: boolean } | null>(
+    null,
+  )
+  // Domain access: accepting answered 403 INVITATION_EMAIL_MISMATCH (the signed-in account has no
+  // verified address the invitation is locked to). Nothing was redeemed; the link still works for them.
+  const [mismatchAtAccept, setMismatchAtAccept] = useState(false)
+  // Fixer round 3 (§21): accepting answered 409 BOARD_IN_TRASH (the board went to the trash after this
+  // page loaded). Nothing was redeemed; the page then shows the same state as a preview that says so.
+  const [trashedAtAccept, setTrashedAtAccept] = useState(false)
   // A link that no longer works (PRI-04): who sent it, and — only for someone who can open the board
   // right now — the board, which then opens instead of a dead end.
   const [gone, setGone] = useState<GoneDetails | 'loading' | null>(null)
@@ -65,6 +83,7 @@ export function InvitePage({ token }: { token: string }) {
   const accept = useCallback(async () => {
     setAccepting(true)
     setAcceptError(null)
+    setMismatchAtAccept(false)
     try {
       const result = await api.acceptInvitation(token)
       // A board invitation can add a workspace (guest) membership: refresh before navigating so the
@@ -77,6 +96,26 @@ export function InvitePage({ token }: { token: string }) {
       if (isApiError(e) && e.kind === 'unauthorized') {
         setAccepting(false)
         return // the session guard shows sign-in
+      }
+      if (isApiError(e) && e.code === DOMAIN_ACCESS_CODES.emailMismatch) {
+        // The page already has the masked address from the preview; the 403 body is not read. The
+        // account's own address is read again: accept checked it against the sign-in service, and the
+        // api stored what it found, so the session's copy (which the preview matched) is out of date.
+        await refresh()
+        setAccepting(false)
+        setMismatchAtAccept(true)
+        return
+      }
+      if (isApiError(e) && e.code === BOARD_IN_TRASH.code) {
+        setAccepting(false)
+        setTrashedAtAccept(true)
+        return
+      }
+      if (isApiError(e) && e.kind !== 'gone') {
+        // 503 IDENTITY_UNAVAILABLE: a retry; 409 ROLE_REQUIRES_CREATOR and the rest: the server's words.
+        setAccepting(false)
+        setAcceptError({ gone: false, ...acceptErrorCopy(e.code, e.message) })
+        return
       }
       failed(e, 'The invitation could not be accepted. Try again.')
     }
@@ -104,12 +143,15 @@ export function InvitePage({ token }: { token: string }) {
   // PRI-16: back from "Sign in to accept": accept right away (once), no second click.
   const autoAccepted = useRef(false)
   const ready = preview.status === 'ready' && state.status === 'signed-in' && kind === 'account'
+  const previewData = preview.status === 'ready' ? preview.data : null
   useEffect(() => {
     if (!ready || autoAccepted.current) return
     if (!takeAcceptIntent(safeSessionStorage(), token)) return
     autoAccepted.current = true
+    // Domain access: never on the wrong account. The intent is consumed above, so it cannot loop.
+    if (!shouldAutoAccept(previewData)) return
     void accept()
-  }, [ready, token, accept])
+  }, [ready, token, accept, previewData])
 
   const signedIn = state.status === 'signed-in'
   if (
@@ -119,6 +161,20 @@ export function InvitePage({ token }: { token: string }) {
     (signedIn && kind === null && preview.status === 'ready')
   ) {
     return <LoadingScreen label="Loading invitation…" testId="invite-loading" />
+  }
+  // Fixer round 3 (§21): Lobby could not be reached (the invitation or the session read got no answer
+  // or a 5xx): the same screen and retry as RequireSession, never a signed-out or mismatch state.
+  const unreachable = inviteUnreachable(state, preview.status === 'error' ? preview.error : null)
+  if (unreachable !== null) {
+    return (
+      <UnreachableScreen
+        message={unreachable}
+        onRetry={() => {
+          if (state.status === 'unreachable') void refresh()
+          if (preview.status === 'error') preview.reload()
+        }}
+      />
+    )
   }
   if (previewGone || acceptError?.gone) {
     const copy = goneCopy(gone)
@@ -136,12 +192,50 @@ export function InvitePage({ token }: { token: string }) {
   }
 
   const inv = preview.data
-  const summary = invitationSummary(inv)
   const here = invitePath(token)
   const guestLink = inv.allowGuests && inv.board !== null
+  // Domain access: an invitation locked to one address (never a guest link) names it, masked.
+  const hint = lockedHint(inv)
+  const mismatch = signedIn && kind === 'account' && isEmailMismatch(inv, mismatchAtAccept)
+  // The inviter checking their own locked link: the page is about their invitation, and its action
+  // goes back to the board or workspace (never a sign-out).
+  const ownLink = mismatch && inv.sentByYou
+  // Fixer round 3 (§21): a board in the trash: nothing can be accepted or joined until it is restored.
+  const inTrash = inv.board !== null && (inv.boardInTrash || trashedAtAccept)
+  const summary = invitationSummary(inv, { sentByYou: ownLink, boardInTrash: inTrash })
 
   let actions: ReactNode
-  if (signedIn && kind === 'guest') {
+  if (inTrash) {
+    // Fixer round 4 (§22): the wrong account learns whom the link is for, not that a restore helps.
+    const copy = boardInTrashCopy(inv, {
+      sentByYou: inv.sentByYou,
+      forSomeoneElse: signedIn && mismatch && !inv.sentByYou ? { hint, email: state.me.access.email } : null,
+    })
+    actions = (
+      <>
+        <div
+          className="dr-invite-mismatch dr-invite-mismatch--own"
+          role="status"
+          data-testid="invite-board-trashed"
+        >
+          <p className="dr-invite-mismatch__title">
+            <strong>{copy.title}</strong>
+          </p>
+          <p data-testid="invite-board-trashed-body">{copy.body}</p>
+        </div>
+        {signedIn && kind === 'account' && (
+          <a
+            className="dr-btn dr-btn--lg"
+            data-testid="invite-trashed-home"
+            href="/"
+            onClick={linkClick('/')}
+          >
+            Go to your boards
+          </a>
+        )}
+      </>
+    )
+  } else if (signedIn && kind === 'guest') {
     actions = guestLink ? (
       <>
         <button
@@ -175,6 +269,55 @@ export function InvitePage({ token }: { token: string }) {
         >
           {signingOut ? 'Signing out…' : 'Sign in with an account'}
         </button>
+      </>
+    )
+  } else if (signedIn && mismatch) {
+    // State 3: the wrong account. One way on: sign in with the invited address (and accept after it).
+    // The inviter's own link is not an error: it says whom the link is for, and leads back.
+    const copy = emailMismatchCopy({
+      hint,
+      email: state.me.access.email,
+      invitedBy: inv.invitedBy.name,
+      sentByYou: ownLink,
+    })
+    const back = ownLink ? ownInvitationWayBack(inv) : null
+    actions = (
+      <>
+        <div
+          className={ownLink ? 'dr-invite-mismatch dr-invite-mismatch--own' : 'dr-invite-mismatch'}
+          role={ownLink ? 'status' : 'alert'}
+          data-testid="invite-email-mismatch"
+          data-sent-by-you={ownLink || undefined}
+        >
+          <p className="dr-invite-mismatch__title">
+            <strong>{copy.title}</strong>
+          </p>
+          <p data-testid="invite-email-mismatch-body">{copy.body}</p>
+        </div>
+        {back ? (
+          <a
+            className="dr-btn dr-btn--primary dr-btn--lg"
+            data-testid="invite-own-back"
+            href={back.href}
+            onClick={linkClick(back.href)}
+          >
+            {back.label}
+          </a>
+        ) : (
+          <button
+            type="button"
+            className="dr-btn dr-btn--primary dr-btn--lg"
+            data-testid="invite-mismatch-switch"
+            disabled={signingOut}
+            aria-busy={signingOut || undefined}
+            onClick={() => {
+              rememberAcceptIntent(safeSessionStorage(), token)
+              void signOut({ returnTo: here })
+            }}
+          >
+            {signingOut ? 'Signing out…' : 'Sign in with a different account'}
+          </button>
+        )}
       </>
     )
   } else if (signedIn) {
@@ -230,9 +373,13 @@ export function InvitePage({ token }: { token: string }) {
             linkClick(signInPath(here))(e)
           }}
         >
-          Sign in to accept
+          {hint ? lockedSignInLabel(hint) : 'Sign in to accept'}
         </a>
-        <p className="dr-invite-card__as">You'll join right after signing in.</p>
+        <p className="dr-invite-card__as">
+          {hint
+            ? 'Only an account with that email address can accept it. You join right after signing in.'
+            : "You'll join right after signing in."}
+        </p>
       </>
     )
   }
@@ -250,25 +397,44 @@ export function InvitePage({ token }: { token: string }) {
         <dl className="dr-invite-card__facts">
           <div>
             <dt>Invited by</dt>
-            <dd data-testid="invite-inviter">{inv.invitedBy.name}</dd>
+            <dd data-testid="invite-inviter">{ownLink ? ownName(inv.invitedBy.name) : inv.invitedBy.name}</dd>
           </div>
           <div>
             <dt>Workspace</dt>
             <dd>{inv.workspace.name}</dd>
           </div>
           <div>
-            <dt>Your role</dt>
+            <dt>{summary.roleHeading}</dt>
             <dd data-testid="invite-role-label">{summary.roleLabel}</dd>
           </div>
           <div>
             <dt>Expires</dt>
             <dd>{formatDateTime(inv.expiresAt)}</dd>
           </div>
+          {hint && (
+            <div>
+              <dt>For</dt>
+              <dd data-testid="invite-locked-hint">{hint}</dd>
+            </div>
+          )}
         </dl>
-        {acceptError && (
-          <p className="dr-field-error" role="alert" data-testid="invite-error">
-            {acceptError.message}
-          </p>
+        {acceptError && !mismatch && !inTrash && (
+          <div className="dr-invite-error">
+            <p className="dr-field-error" role="alert" data-testid="invite-error">
+              {acceptError.message}
+            </p>
+            {acceptError.retry && (
+              <button
+                type="button"
+                className="dr-btn"
+                data-testid="invite-retry"
+                disabled={accepting}
+                onClick={() => void accept()}
+              >
+                Try again
+              </button>
+            )}
+          </div>
         )}
         {actions}
       </div>

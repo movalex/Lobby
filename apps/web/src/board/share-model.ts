@@ -1,5 +1,6 @@
 import {
   type BoardMember,
+  DOMAIN_ACCESS_MESSAGES,
   type EmailInviteFallbackReason,
   type EmailInviteResult,
   InviteEmail,
@@ -102,6 +103,188 @@ export function parseInviteTarget(
   if (!member) return { kind: 'unknown', text: t }
   const granted = boardMembers.some((b) => b.user.id === member.user.id && b.source === 'grant')
   return granted ? { kind: 'already', member } : { kind: 'member', member }
+}
+
+// ---- domain access (docs/DOMAIN-ACCESS-CONTRACTS.md §9) --------------------------------------------
+
+/** What "Invite" does with what was typed (the server has the final word on every step). */
+export type InvitePlan =
+  | { kind: 'none' }
+  | { kind: 'already'; member: WorkspaceMember }
+  /** Someone in the workspace: a direct grant. */
+  | { kind: 'grant'; member: WorkspaceMember }
+  /** An address: a single-use link only that verified address can accept (D13; no email is sent). */
+  | { kind: 'locked-link'; email: string }
+  | { kind: 'invalid-email'; message: string }
+  /** Neither an address nor someone in the workspace: ask for their address, make nothing. */
+  | { kind: 'ask-email' }
+  /** The inviter's own address (fixer round 3, §21): nothing is created (the api answers 409). */
+  | { kind: 'own-address'; message: string }
+
+/** The prompt for a name that is neither an address nor a known @handle. */
+export const ASK_EMAIL_PROMPT = 'Enter their email address to invite them.'
+
+/**
+ * Fixer round 3 (§21): an address that is the signed-in account's own (`Me.access.email`, stored
+ * normalised), compared the way the api compares. A link locked to it would let only the inviter in, so
+ * the dialog says so at once and creates nothing; the api refuses it too (409 INVITATION_TO_SELF), for
+ * the account's other verified addresses as well.
+ */
+export function isOwnAddress(email: string, own: string | null | undefined): boolean {
+  if (!own) return false
+  const checked = checkInviteEmail(email)
+  return checked.ok && checked.email === own.toLowerCase()
+}
+
+/** What the Share dialog says for the inviter's own address (the api's words for its 409). */
+export const OWN_ADDRESS_MESSAGE = DOMAIN_ACCESS_MESSAGES.invitationToSelf
+
+export function invitePlan(target: InviteTarget, ownEmail: string | null = null): InvitePlan {
+  switch (target.kind) {
+    case 'empty':
+      return { kind: 'none' }
+    case 'already':
+      return { kind: 'already', member: target.member }
+    case 'member':
+      return { kind: 'grant', member: target.member }
+    case 'unknown':
+      return { kind: 'ask-email' }
+    case 'email': {
+      const checked = checkInviteEmail(target.email)
+      if (!checked.ok) return { kind: 'invalid-email', message: checked.message }
+      if (isOwnAddress(checked.email, ownEmail)) return { kind: 'own-address', message: OWN_ADDRESS_MESSAGE }
+      return { kind: 'locked-link', email: checked.email }
+    }
+  }
+}
+
+/**
+ * Under a new single-use link (Invite people, and "Link for one person"): it works for one verified
+ * address only, once. Lobby sends no email for it.
+ */
+export function lockedLinkNote(
+  link: { email: string; role: BoardRole; expiresAt: string },
+  formatDate: (iso: string) => string,
+): string {
+  return `Only ${link.email} can use this link, once, until ${formatDate(link.expiresAt)}. Anyone else who opens it is turned away. Send it to them yourself (no email is sent); they join as “${ROLE_OPTION_LABEL[link.role]}”.`
+}
+
+/** A pending single-use invitation: "For pat@… · Can view · expires Oct 4 · by Alice" (older: "Unused link"). */
+export function pendingInviteLabel(
+  inv: { email: string | null; role: BoardRole; expiresAt: string; createdBy: { name: string } },
+  formatDate: (iso: string) => string,
+): string {
+  const head = inv.email ? `For ${inv.email}` : 'Unused link'
+  return `${head} · ${ROLE_OPTION_LABEL[inv.role]} · expires ${formatDate(inv.expiresAt)} · by ${inv.createdBy.name}`
+}
+
+/** Why the owner option (and transfer of ownership) is off for someone (`ShareMember.canOwn` false). */
+export const OWNER_NEEDS_CREATOR = 'Only people at Dark Burn Creative or Trailer Park Group can own boards'
+
+/**
+ * The same reason as visible text (`member-owner-note`): a disabled option in a native select popup
+ * shows no tooltip, and a disabled button takes no focus, so a title alone is rarely seen or announced.
+ * It is said once, under "People with access", and the role menu and transfer button of every row it
+ * applies to point to it (`aria-describedby`). Fixer round 2: on each row it repeated down a list of
+ * client reviewers and, at 390 px, grew each of their rows to about eight lines.
+ */
+export const OWNER_NEEDS_CREATOR_NOTE = `${OWNER_NEEDS_CREATOR}, so Owner is turned off for everyone else here.`
+
+/** Whether that person's Owner option is off because they cannot own boards (a creator is managing). */
+export const showOwnerNote = (m: { canShare: boolean; canOwn?: boolean; current: BoardRole }): boolean =>
+  m.canShare && m.canOwn === false && m.current !== 'owner'
+
+/** One row of the people list, as the owner note needs it. */
+export interface OwnerNoteRow {
+  /** The caller can change this person's direct grant (the row has a role menu). */
+  editable: boolean
+  /** A name-only guest: Owner is never offered, for another reason. */
+  guest: boolean
+  /** `ShareMember.canOwn`. */
+  canOwn?: boolean
+  /** The role the row's menu shows (their direct grant, else their effective role). */
+  current: BoardRole
+}
+
+/** Whether this row's role menu (and transfer button) points to the owner note. */
+export const rowNeedsOwnerNote = (row: OwnerNoteRow, canShare: boolean): boolean =>
+  row.editable && !row.guest && showOwnerNote({ canShare, canOwn: row.canOwn, current: row.current })
+
+/** Whether the people list shows the owner note (once): some row's Owner option is off for that reason. */
+export const listShowsOwnerNote = (rows: readonly OwnerNoteRow[], canShare: boolean): boolean =>
+  rows.some((row) => rowNeedsOwnerNote(row, canShare))
+
+/** The roles "Or pick someone from the workspace…" offers: never owner (set that on the person's row). */
+export const ADD_MEMBER_ROLES: readonly Exclude<BoardRole, 'owner'>[] = BOARD_ROLES.filter(
+  (r): r is Exclude<BoardRole, 'owner'> => r !== 'owner',
+)
+
+/** While Lobby could not confirm the caller's account (`access.reason` 'unconfirmed'). */
+export const UNCONFIRMED_SHARE_NOTE =
+  "Lobby couldn't confirm your account, so inviting people, creating links and giving more access are paused. You can still lower or remove access. Reload in a minute to try again."
+
+/**
+ * The Share dialog's note for a manager who may not hand out access (`share-creator-note`): an outside
+ * account gets the server's CREATOR_REQUIRED message; a creator Lobby could not confirm is told it is
+ * paused, never that they are not at Dark Burn Creative.
+ */
+export function shareCreatorNote(access: { creator: boolean; reason: string } | null): {
+  reason: 'unconfirmed' | 'outside'
+  text: string
+} {
+  return access && !access.creator && access.reason === 'unconfirmed'
+    ? { reason: 'unconfirmed', text: UNCONFIRMED_SHARE_NOTE }
+    : { reason: 'outside', text: DOMAIN_ACCESS_MESSAGES.creatorRequiredShare }
+}
+
+export interface RoleChoice {
+  role: BoardRole
+  disabled: boolean
+  /** The reason, as a tooltip, when disabled. */
+  title?: string
+}
+
+/**
+ * The role menu of one person's direct grant. A creator who manages access gets every role (never
+ * owner for a name-only guest; owner turned off for someone who cannot own boards). A manager who is
+ * not a creator may only lower: the current role and the ones below it (Remove stays).
+ */
+export function memberRoleChoices(m: {
+  /** The role the select shows: their direct grant (else their effective role). */
+  current: BoardRole
+  /** The caller may hand out access (`canHandOutAccess`). */
+  canShare: boolean
+  /** `ShareMember.canOwn` (undefined: an older api, which allows it). */
+  canOwn?: boolean
+  /** A name-only guest: never an owner. */
+  guest?: boolean
+}): RoleChoice[] {
+  const roles = BOARD_ROLES.filter((r) => !(m.guest && r === 'owner'))
+  if (!m.canShare) {
+    return roles.filter((r) => roleAtLeast(m.current, r)).map((role) => ({ role, disabled: false }))
+  }
+  return roles.map((role) =>
+    role === 'owner' && m.canOwn === false && m.current !== 'owner'
+      ? { role, disabled: true, title: OWNER_NEEDS_CREATOR }
+      : { role, disabled: false },
+  )
+}
+
+const VISIBILITY_RANK: Record<BoardVisibility, number> = { private: 0, workspace_view: 1, workspace_edit: 2 }
+
+/**
+ * The workspace-access select: someone who may not hand out access can only lower it (the options
+ * above the current one are turned off; the server refuses raising with 403 CREATOR_REQUIRED).
+ */
+export function visibilityChoices(
+  current: BoardVisibility,
+  canRaise: boolean,
+): { value: BoardVisibility; label: string; disabled: boolean }[] {
+  return VISIBILITY_OPTIONS.map((o) => ({
+    value: o.value,
+    label: o.label,
+    disabled: !canRaise && VISIBILITY_RANK[o.value] > VISIBILITY_RANK[current],
+  }))
 }
 
 export interface AccessDetail {
@@ -240,15 +423,15 @@ export function moreWaysSummary(open: { workshopLinks: number; unusedInvites: nu
  */
 export function emailInviteHint(canEmail: boolean): string {
   return canEmail
-    ? 'We email them an invitation to this board. People who already use Lobby get access right away.'
-    : 'This server can’t send email (that needs Clerk sign-in): you get a one-time link to send them instead.'
+    ? 'We email them an invitation to this board that works only for that address. People who already use Lobby get access right away.'
+    : 'This server can’t send email (that needs Clerk sign-in): you get a one-time link that works only for that address, to send them instead.'
 }
 
 /** The "@handle, name or email" field's hint for an address, pointing at the email form when it can email. */
 export function linkForEmailHint(canEmail: boolean): string {
   return canEmail
-    ? 'This makes a one-time link for you to send. To have Lobby email the invitation, use “Invite by email” below.'
-    : 'Lobby does not send email: you get a one-time invite link to copy and send them yourself.'
+    ? 'This makes a one-time link that only this address can use, for you to send. To have Lobby email the invitation, use “Invite by email” below.'
+    : 'Lobby does not send email: you get a one-time invite link that only this address can use, to copy and send them yourself.'
 }
 
 /** The address as the API will read it, or the reason it is not one (shown next to the field). */
@@ -307,14 +490,14 @@ export function emailInviteOutcome(
       return {
         tone: 'success',
         text: `Invitation email sent to ${result.email}.`,
-        detail: `The link in it works once, ${asRole}, until ${formatDate(result.expiresAt)}.`,
+        detail: `The link in it works once, only for ${result.email}, ${asRole}, until ${formatDate(result.expiresAt)}.`,
         link: null,
       }
     case 'link':
       return {
         tone: 'fallback',
         text: 'Couldn’t email — copy this link instead.',
-        detail: `${FALLBACK_DETAIL[result.reason](result.email)} It works once, ${asRole}, until ${formatDate(result.expiresAt)}.`,
+        detail: `${FALLBACK_DETAIL[result.reason](result.email)} It works once, only for ${result.email}, ${asRole}, until ${formatDate(result.expiresAt)}.`,
         link: result.url,
       }
   }

@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, rmSync } from 'node:fs
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { EventHub } from '../../../src/events/hub.ts'
-import { type Client, createBoard, createTestApi, DEV_STUDIO, type TestApi } from '../../helpers.ts'
+import { type Client, createBoard, createTestApi, DEV_STUDIO, devEmail, type TestApi } from '../../helpers.ts'
 import {
   assertValid,
   baseRecords,
@@ -141,7 +141,10 @@ describe('POST /api/snapshots/:sid/restore-as-new', () => {
     // the source is shared every way it can be
     await bob.req('PATCH', `/api/boards/${boardId}`, { visibility: 'workspace_edit' })
     await grant('editor')
-    const invite = await bob.req('POST', `/api/boards/${boardId}/invitations`, { role: 'viewer' })
+    const invite = await bob.req('POST', `/api/boards/${boardId}/invitations`, {
+      role: 'viewer',
+      email: devEmail('dave'),
+    })
     expect(invite.statusCode).toBe(201)
     const sid = await checkpoint()
     // the live board moves on after the checkpoint
@@ -202,7 +205,10 @@ describe('POST /api/snapshots/:sid/restore-as-new', () => {
     const psid = (await save(bob, 'p', personal)).json().id
     expect((await restore(carol, psid)).statusCode).toBe(404)
     // a guest (board invitation into another workspace) can view but not create boards
-    const inv = await bob.req('POST', `/api/boards/${personal}/invitations`, { role: 'viewer' })
+    const inv = await bob.req('POST', `/api/boards/${personal}/invitations`, {
+      role: 'viewer',
+      email: devEmail('carol'),
+    })
     const token = new URL(inv.json().url).pathname.split('/').pop() ?? ''
     expect((await carol.req('POST', `/api/invitations/${token}/accept`)).statusCode).toBe(200)
     expect((await carol.req('GET', `/api/boards/${personal}`)).statusCode).toBe(200)

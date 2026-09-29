@@ -8,6 +8,7 @@ import { readSessionSettings, writeSessionSettings } from '../workshops/session-
 import { runArrangeAsGrid } from './arrange-grid-runtime.ts'
 import { getFeatureCtx, minimapOpen, openPanel, searchState, setMinimapOpen, togglePanel } from './bridge.ts'
 import { copySelectionLink } from './copy-link.ts'
+import { sequentialDownloadOriginal } from './download-originals.ts'
 import { EXPORT_OFF_MENU_LABEL, gateExportActions } from './export-gate.tsx'
 import { TemplatesIcon } from './icons.tsx'
 import { ACTION_KBD_OVERRIDES, applyKbdOverrides, NEW_ACTION_KBDS, TOOL_KBD_OVERRIDES } from './shortcuts.ts'
@@ -93,6 +94,9 @@ export const canvasUxOverrides: TLUiOverrides = {
     // F20/RETRO-23b: tldraw's debug mode (Preferences → Debug mode) is a developer tool; the menu item
     // renders only while its action exists.
     if (!import.meta.env?.DEV) delete items['toggle-debug-mode']
+    // A11Y2-07: viewers and commenters can open the shortcuts too (tldraw skips its key on read-only boards).
+    const kbdHelp = items['open-kbd-shortcuts']
+    if (kbdHelp) items['open-kbd-shortcuts'] = { ...kbdHelp, readonlyOk: true }
     // MAK-05: tldraw deselects shapes when it locks them, so the same shortcut could never unlock them.
     // Keep the (now locked) selection, as Miro does: locked shapes still refuse moves, resizes, edits and
     // deletes (Editor.updateShapes / deleteShapes skip them), and Ctrl/Cmd+Shift+L again unlocks.
@@ -185,7 +189,8 @@ export const canvasUxOverrides: TLUiOverrides = {
     ]
     for (const a of added) items[a.id] = a
     // export-control: copy, Copy as SVG/JSON and Download original explain instead while exporting is off.
-    return gateExportActions(editor, items)
+    // F2-05: several originals download one after another, after a question (download-originals.ts).
+    return gateExportActions(editor, sequentialDownloadOriginal(editor, items))
   },
   tools(editor, tools) {
     const { items, missing } = applyKbdOverrides(tools, TOOL_KBD_OVERRIDES)

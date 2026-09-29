@@ -117,14 +117,24 @@ const overlap = (a: BoxLike, b: BoxLike) =>
 
 async function openVotingPanel(page: Page) {
   const panel = page.getByTestId('dock-panel-voting')
-  if (!(await panel.isVisible())) await page.getByTestId('dock-tab-voting').click()
+  if (!(await panel.isVisible())) {
+    // On a phone the rail is folded behind one button (R13).
+    const toggle = page.getByTestId('dock-rail-toggle')
+    if (await toggle.isVisible()) await toggle.click()
+    await page.getByTestId('dock-tab-voting').click()
+  }
   await expect(panel).toBeVisible()
   return panel
 }
 
 async function openPrivatePanel(page: Page) {
   const panel = page.getByTestId('pn-panel')
-  if (!(await panel.isVisible())) await page.getByTestId('dock-tab-private-notes').click()
+  if (!(await panel.isVisible())) {
+    // On a phone the rail is folded behind one button (R13).
+    const toggle = page.getByTestId('dock-rail-toggle')
+    if (await toggle.isVisible()) await toggle.click()
+    await page.getByTestId('dock-tab-private-notes').click()
+  }
   await expect(panel).toBeVisible()
   return panel
 }

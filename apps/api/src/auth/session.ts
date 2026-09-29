@@ -4,6 +4,7 @@
 import { createHash, randomBytes } from 'node:crypto'
 import type { Db, Queryable } from '@draftroom/db'
 import type { FastifyReply, FastifyRequest } from 'fastify'
+import { type CreatorLookup, NO_CREATORS, userColumns, userParams } from './creator-sql.ts'
 
 export const SESSION_COOKIE = 'dr_session'
 export const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000
@@ -14,6 +15,15 @@ export interface SessionUser {
   handle: string | null
   color: string
   avatarUrl: string | null
+  /** 'guest' for a name-only guest (0009_guests), 'account' for everyone who signed in with a provider. */
+  kind: 'account' | 'guest'
+  /**
+   * Domain access (docs/DOMAIN-ACCESS-CONTRACTS.md §3.4): a creator right now, from the stored verified
+   * addresses, the current policy and their freshness (creator-sql.ts). Never serialized.
+   */
+  creator: boolean
+  /** When the stored addresses were last confirmed with the provider; null = never. */
+  identityCheckedAt: Date | null
 }
 
 export const sha256hex = (value: string) => createHash('sha256').update(value).digest('hex')
@@ -37,6 +47,11 @@ export interface SessionStore {
   ): Promise<{ token: string; expiresAt: Date }>
   /** The signed-in user for this request (cached per request), or null. */
   user(req: FastifyRequest): Promise<SessionUser | null>
+  /**
+   * Looks the request's user up again and REPLACES the per-request cache entry (after an identity
+   * refresh wrote new addresses, so the rest of the request decides on them).
+   */
+  reload(req: FastifyRequest): Promise<SessionUser | null>
   /**
    * The id of the session this request presents (sessions.id_hash: the sha256 of the cookie), or
    * null without a well-formed cookie. Says nothing about whether the session is valid.
@@ -63,24 +78,38 @@ export interface SessionStore {
 const CLERK_SESSION_RE = /^sess_[A-Za-z0-9]{1,120}$/
 export const isClerkSessionId = (v: unknown): v is string => typeof v === 'string' && CLERK_SESSION_RE.test(v)
 
-interface UserRow {
+/** A users row read through creator-sql.ts userColumns. */
+export interface SessionUserRow {
   id: string
   name: string
   handle: string | null
   color: string
   avatar_url: string | null
+  kind: string
+  identity_checked_at: Date | null
+  creator: boolean
 }
 
-export const toSessionUser = (r: UserRow): SessionUser => ({
+export const toSessionUser = (r: SessionUserRow): SessionUser => ({
   id: r.id,
   name: r.name,
   handle: r.handle,
   color: r.color,
   avatarUrl: r.avatar_url,
+  kind: r.kind === 'guest' ? 'guest' : 'account',
+  creator: r.creator === true,
+  identityCheckedAt: r.identity_checked_at,
 })
 
-export function createSessionStore(opts: { db: Db; secureCookies: boolean; now: () => Date }): SessionStore {
+export function createSessionStore(opts: {
+  db: Db
+  secureCookies: boolean
+  now: () => Date
+  /** Which stored addresses make a creator (the running provider and policy); default: nobody. */
+  creators?: CreatorLookup
+}): SessionStore {
   const { db, now } = opts
+  const creators = opts.creators ?? NO_CREATORS
   const cache = new WeakMap<FastifyRequest, Promise<SessionUser | null>>()
 
   const tokenOf = (req: FastifyRequest): string | null => {
@@ -91,11 +120,12 @@ export function createSessionStore(opts: { db: Db; secureCookies: boolean; now: 
   async function lookup(req: FastifyRequest): Promise<SessionUser | null> {
     const token = tokenOf(req)
     if (!token) return null
-    const row = await db.maybeOne<UserRow>(
-      `SELECT u.id, u.name, u.handle, u.color, u.avatar_url
+    const at = now()
+    const row = await db.maybeOne<SessionUserRow>(
+      `SELECT ${userColumns(3)}
          FROM sessions s JOIN users u ON u.id = s.user_id
         WHERE s.id_hash = $1 AND s.revoked_at IS NULL AND s.expires_at > $2`,
-      [sha256hex(token), now()],
+      [sha256hex(token), at, ...userParams(creators, at)],
     )
     return row ? toSessionUser(row) : null
   }
@@ -140,6 +170,11 @@ export function createSessionStore(opts: { db: Db; secureCookies: boolean; now: 
         p = lookup(req)
         cache.set(req, p)
       }
+      return p
+    },
+    reload(req) {
+      const p = lookup(req)
+      cache.set(req, p)
       return p
     },
     idOf(req) {

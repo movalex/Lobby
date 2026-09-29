@@ -22,7 +22,9 @@ export function Sidebar({
   section,
   projects,
   projectsError,
-  canManageProjects,
+  canSeeProjects,
+  canCreateProjects,
+  canRenameProjects,
   onCreateProject,
   onRenameProject,
 }: {
@@ -31,7 +33,12 @@ export function Sidebar({
   section: DashboardSection
   projects: readonly Project[]
   projectsError: string | null
-  canManageProjects: boolean
+  /** The project list and the storage line (workspace members and above; guests get 403). */
+  canSeeProjects: boolean
+  /** "New project lobby" (domain access: creators who are members and above). */
+  canCreateProjects: boolean
+  /** Rename a project (domain access D6: creators only, like creating one). */
+  canRenameProjects: boolean
   onCreateProject(name: string): Promise<void>
   onRenameProject(project: Project, name: string): Promise<void>
 }) {
@@ -139,8 +146,10 @@ export function Sidebar({
             section={section}
             projects={projects}
             projectsError={projectsError}
-            canManageProjects={canManageProjects}
-            creating={creating}
+            canSeeProjects={canSeeProjects}
+            canCreateProjects={canCreateProjects}
+            canRenameProjects={canRenameProjects}
+            creating={creating && canCreateProjects}
             renaming={renaming}
             setCreating={setCreating}
             setRenaming={setRenaming}
@@ -150,7 +159,7 @@ export function Sidebar({
           />
         </nav>
         {/* Guests do not see the workspace's storage (the api answers them 403). */}
-        {canManageProjects && <StorageLine workspaceId={workspace.id} />}
+        {canSeeProjects && <StorageLine workspaceId={workspace.id} />}
       </div>
     </aside>
   )
@@ -165,7 +174,9 @@ function SidebarProjects({
   section,
   projects,
   projectsError,
-  canManageProjects,
+  canSeeProjects,
+  canCreateProjects,
+  canRenameProjects,
   creating,
   renaming,
   setCreating,
@@ -178,7 +189,9 @@ function SidebarProjects({
   section: DashboardSection
   projects: readonly Project[]
   projectsError: string | null
-  canManageProjects: boolean
+  canSeeProjects: boolean
+  canCreateProjects: boolean
+  canRenameProjects: boolean
   creating: boolean
   renaming: string | null
   setCreating(on: boolean): void
@@ -188,27 +201,29 @@ function SidebarProjects({
   onRenameProject(project: Project, name: string): Promise<void>
 }) {
   // Guests cannot list projects; they only reach the boards shared with them.
-  if (!canManageProjects) return null
+  if (!canSeeProjects) return null
   return (
     <>
       <div className="dr-nav__group">
         <span className="dr-nav__heading" id="dr-projects-heading">
           {PROJECTS_HEADING}
         </span>
-        <button
-          type="button"
-          className="dr-iconbtn dr-iconbtn--sm"
-          aria-label="New project lobby"
-          title="New project lobby"
-          data-testid="create-project"
-          onClick={() => setCreating(true)}
-        >
-          <Icon d="M12 5v14M5 12h14" />
-        </button>
+        {canCreateProjects && (
+          <button
+            type="button"
+            className="dr-iconbtn dr-iconbtn--sm"
+            aria-label="New project lobby"
+            title="New project lobby"
+            data-testid="create-project"
+            onClick={() => setCreating(true)}
+          >
+            <Icon d="M12 5v14M5 12h14" />
+          </button>
+        )}
       </div>
       <ul className="dr-nav" aria-labelledby="dr-projects-heading" data-testid="project-list">
         {projects.map((p) =>
-          renaming === p.id ? (
+          renaming === p.id && canRenameProjects ? (
             <li key={p.id} className="dr-nav__edit">
               <RenameInput
                 initial={p.name}
@@ -228,7 +243,7 @@ function SidebarProjects({
               project={p}
               href={workspacePath(workspaceId, { kind: 'project', projectId: p.id })}
               current={section.kind === 'project' && section.projectId === p.id}
-              canRename={canManageProjects}
+              canRename={canRenameProjects}
               onNavigate={navClick}
               onRename={() => setRenaming(p.id)}
             />
@@ -246,7 +261,11 @@ function SidebarProjects({
           </li>
         )}
       </ul>
-      {!projects.length && !creating && <p className="dr-nav__hint">{projectsError ?? PROJECTS_HINT}</p>}
+      {!projects.length && !creating && (
+        <p className="dr-nav__hint">
+          {projectsError ?? (canCreateProjects ? PROJECTS_HINT : PROJECTS_HINT_NO_CREATE)}
+        </p>
+      )}
     </>
   )
 }
@@ -254,6 +273,8 @@ function SidebarProjects({
 /** DANA-08: the sidebar's words for projects (exported for the copy test). */
 export const PROJECTS_HEADING = 'Project lobbies'
 export const PROJECTS_HINT = 'Give each DBC project a lobby that keeps its boards together. Use + to add one.'
+/** Domain access: the same list for someone who cannot add lobbies (no "+" to point at). */
+export const PROJECTS_HINT_NO_CREATE = 'Project lobbies in this workspace show up here.'
 
 const KB = 1024
 const MB = 1024 * KB

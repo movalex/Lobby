@@ -4,6 +4,10 @@
 // errors, the clipboard, what the server stored, and the invitee joining through the link, once, as
 // the role picked). The Clerk paths (added at once / emailed) are API-tested with a fake Clerk client
 // in apps/api/test/features/dashboard/email-invites.test.ts.
+//
+// Domain access (docs/DOMAIN-ACCESS-CONTRACTS.md §6.1): the link is locked to the address it was made
+// for. Someone signed in with another address is turned away (and redeems nothing); the invitee, a
+// fresh dev account signed in with that address, joins.
 import { read, signInThroughUi, waitForBoard } from './support/board.ts'
 import {
   freshHandle,
@@ -37,7 +41,7 @@ test('invite by email without Clerk: a wrong address is refused at the field, th
     await expect(section.getByLabel('Email address to invite')).toBeVisible()
     await expect(section.getByLabel('Role for the person you email')).toHaveValue('commenter')
     await expect(section.getByTestId('share-email-hint')).toHaveText(
-      'This server can’t send email (that needs Clerk sign-in): you get a one-time link to send them instead.',
+      'This server can’t send email (that needs Clerk sign-in): you get a one-time link that works only for that address, to send them instead.',
     )
     await expect(section.getByTestId('share-email-submit')).toHaveText('Send invite')
   })
@@ -61,16 +65,18 @@ test('invite by email without Clerk: a wrong address is refused at the field, th
 
   let link = ''
   await test.step('Send invite: “Couldn’t email — copy this link instead”, with the link and a copy button', async () => {
-    await input.fill('  Sam@Client.example ')
+    await input.fill('  Sam@Client.Example.test ')
     await section.getByTestId('share-email-role').selectOption('viewer')
     await section.getByTestId('share-email-submit').click()
     const result = section.getByTestId('share-email-result')
     await expect(result).toHaveAttribute('data-mode', 'link')
     await expect(result).toContainText('Couldn’t email — copy this link instead.')
     await expect(result).toContainText(
-      'This server can’t send email: that needs Clerk sign-in. Send the link to sam@client.example yourself.',
+      'This server can’t send email: that needs Clerk sign-in. Send the link to sam@client.example.test yourself.',
     )
-    await expect(result).toContainText('It works once, as “Can view”, until')
+    await expect(result).toContainText(
+      'It works once, only for sam@client.example.test, as “Can view”, until',
+    )
     // The outcome sits in a live region, so screen readers announce it.
     await expect(section.getByRole('status')).toContainText('Couldn’t email — copy this link instead.')
     await expect(input).toHaveValue('')
@@ -86,24 +92,40 @@ test('invite by email without Clerk: a wrong address is refused at the field, th
 
   await test.step('the server holds one unused single-use viewer link, listed in the dialog', async () => {
     expect(await invitations(aliceApi, board)).toEqual([
-      expect.objectContaining({ kind: 'invite', role: 'viewer', uses: 0, url: null }),
+      expect.objectContaining({
+        kind: 'invite',
+        role: 'viewer',
+        uses: 0,
+        url: null,
+        email: 'sam@client.example.test',
+      }),
     ])
     await expect(dialog.getByTestId('invitation-row')).toHaveCount(1)
-    await expect(dialog.getByTestId('invitation-row')).toContainText('Can view')
+    await expect(dialog.getByTestId('invitation-row')).toContainText('For sam@client.example.test · Can view')
     // No one got access by the invitation alone.
     const alice = await users.get('alice')
     expect((await aliceApi.members(board)).map((m) => m.user.id)).toEqual([alice.id])
   })
 
-  const sam = { handle: freshHandle('sam'), name: 'Sam Client' }
-  await test.step('the invitee opens the link, signs in and joins as exactly “Can view”', async () => {
+  const sam = { handle: freshHandle('sam'), name: 'Sam Client', email: 'sam@client.example.test' }
+  const other = { handle: freshHandle('kim'), name: 'Kim Other', email: 'kim@client.example.test' }
+  await test.step('the wrong account is turned away, then the invitee signs in and joins as exactly “Can view”', async () => {
     const context = await browser.newContext()
     try {
       const page = await context.newPage()
       await page.goto(link)
       await expect(page.getByTestId('invite-page')).toBeVisible()
       await expect(page.getByTestId('invite-role-label')).toHaveText('Can view')
+      await expect(page.getByTestId('invite-locked-hint')).toHaveText('s•••@client.example.test')
       await page.getByTestId('invite-signin').click()
+      await signInThroughUi(page, other)
+      await expect(page.getByTestId('invite-email-mismatch')).toContainText(
+        "You're signed in as kim@client.example.test.",
+      )
+      expect(await invitations(aliceApi, board)).toEqual([
+        expect.objectContaining({ kind: 'invite', uses: 0 }),
+      ])
+      await page.getByTestId('invite-mismatch-switch').click()
       await signInThroughUi(page, sam)
       await expect(page).toHaveURL(new RegExp(`/b/${board}$`))
       await waitForBoard(page)

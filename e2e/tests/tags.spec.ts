@@ -80,9 +80,11 @@ test('COL-11 picker: alice creates and applies tags to two notes from the select
     await expect(picker.getByTestId('tag-picker-input')).toBeFocused()
     await expect(picker).toContainText('No tags on this board yet. Type a name to create one.')
     await a.page.keyboard.type('#Research')
-    await expect(picker.getByTestId('tag-create')).toHaveText('+ Create “Research”')
+    // F15: the typed "#" becomes the field's prefix (the field holds the name), and the offer keeps it.
+    await expect(picker.getByTestId('tag-picker-input')).toHaveValue('Research')
+    await expect(picker.getByTestId('tag-create')).toHaveText('+ Create “#Research”')
     await a.page.keyboard.press('Enter')
-    await expect(picker.getByTestId('tag-picker-status')).toHaveText('Created “Research”.')
+    await expect(picker.getByTestId('tag-picker-status')).toHaveText('Created “#Research”.')
     await expect(picker.getByTestId('tag-picker-input')).toHaveValue('')
     await expect(option(a.page, 'research')).toHaveAttribute('data-state', 'all')
     for (const id of [N1, N2]) expect(await storedTagKeys(a.page, id)).toEqual(['research'])
@@ -651,7 +653,8 @@ test('the look at 390 px, light and dark: the picker stays on screen clear of th
         (ed) => (ed as unknown as { getViewportScreenBounds(): { w: number } }).getViewportScreenBounds().w,
       ),
     )
-    .toBeLessThan(390)
+    // The whole width on a phone: the dock rail folds over the board there (R13).
+    .toBeLessThanOrEqual(390)
   for (const scheme of ['light', 'dark'] as const) {
     await test.step(scheme, async () => {
       await a.page.emulateMedia({ colorScheme: scheme })
@@ -672,7 +675,7 @@ test('the look at 390 px, light and dark: the picker stays on screen clear of th
         true,
       )
       await capture(`tags-panel-390-${scheme}.png`, a.page, test.info())
-      await a.page.getByTestId('dock-tab-tags').click() // close the dock
+      await a.page.getByTestId('dock-panel-close').click() // close the dock (a sheet on a phone)
       await expect.poll(() => insideViewport(a.page, '[data-testid="tag-filter-bar"]', 4)).toBe(true)
       await capture(`tags-filter-390-${scheme}.png`, a.page, test.info())
       await a.page.getByTestId('tag-filter-clear').click()

@@ -8,6 +8,7 @@ import { isIP } from 'node:net'
 import { join } from 'node:path'
 import { checkSecret } from '@draftroom/auth-tickets'
 import { resolveDataDir } from '@draftroom/dev-assets'
+import { type CreatorPolicy, parseCreatorPolicy } from './auth/creators.ts'
 import { type AiConfig, parseAiConfig } from './features/ai/config.ts'
 import { parseStorageConfig, type StorageConfig } from './files/storage-config.ts'
 
@@ -81,6 +82,11 @@ export interface ApiConfig {
   storage: StorageConfig
   /** AI on the board: OPENAI_* and DRAFTROOM_AI_* (features/ai/config.ts), with its hard cost limits. */
   ai: AiConfig
+  /**
+   * Domain access (docs/DOMAIN-ACCESS-CONTRACTS.md §2): DRAFTROOM_CREATOR_DOMAINS (default darkburn.com,
+   * trailerparkgroup.com) and DRAFTROOM_CREATOR_EMAILS (the exceptions; default none). Always on.
+   */
+  creators: CreatorPolicy
 }
 
 export interface UploadLimitsConfig {
@@ -400,5 +406,6 @@ export function loadConfig(env: Env = process.env): ApiConfig {
     },
     storage: parseStorageConfig(env),
     ai: parseAiConfig(env, production),
+    creators: parseCreatorPolicy(env),
   }
 }

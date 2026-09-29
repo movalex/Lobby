@@ -25,6 +25,7 @@ import { checkpointPermissions, deletedCheckpointSummary } from './checkpoints-m
 import {
   archiveFileName,
   checkpointNameToSave,
+  checkpointsHint,
   copyActions,
   createdSummary,
   defaultCheckpointName,
@@ -47,7 +48,8 @@ export function HistoryPanel({ ctx }: { ctx: FeatureContext; close(): void }) {
   const { board, role, editor, events, notify, me, openPanel } = ctx
   const api = useMemo(() => historyApi(ctx.api), [ctx.api])
   const workspaceRole = me.workspaces.find((w) => w.id === board.workspaceId)?.role ?? null
-  const perms = historyPermissions(role, board.status, workspaceRole)
+  // Domain access: only creators duplicate or restore as a new board (the api refuses anyone else).
+  const perms = historyPermissions(role, board.status, workspaceRole, { creator: me.access.creator })
   // History is for people with an account (DANA-05): the rail never offers it to a name-only guest
   // (index.tsx) and the api refuses them the checkpoint list (403). Nothing is fetched before the
   // kind is known, and should the panel be open when it turns out to be a guest's, it closes.
@@ -324,9 +326,8 @@ export function HistoryPanel({ ctx }: { ctx: FeatureContext; close(): void }) {
 
       <section className="dr-history__section" aria-labelledby="dr-history-checkpoints">
         <h3 id="dr-history-checkpoints">Checkpoints</h3>
-        <p className="dr-history__hint">
-          A checkpoint keeps this board as it is now. Restoring one makes a new board that only you can see;
-          this board is not changed.
+        <p className="dr-history__hint" data-testid="checkpoints-hint">
+          {checkpointsHint(copy.restoreAsNew, me.access)}
         </p>
         {perms.canEdit && (
           <form

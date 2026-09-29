@@ -6,6 +6,8 @@
 import {
   BoardGuests,
   GuestJoined,
+  InvitationBoardState,
+  InvitationEmailLock,
   InvitationGuestAccess,
   InvitationPreview,
   MeKind,
@@ -20,6 +22,8 @@ const enc = encodeURIComponent
 
 /** GET /api/invitations/:token, with this feature's `allowGuests`. */
 export const GuestAwarePreview = InvitationPreview.extend(InvitationGuestAccess.shape)
+  .extend(InvitationEmailLock.shape)
+  .extend(InvitationBoardState.shape)
 export type GuestAwarePreview = z.infer<typeof GuestAwarePreview>
 
 export const fetchInvitation = (token: string, signal?: AbortSignal) =>

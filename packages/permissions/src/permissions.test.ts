@@ -5,7 +5,10 @@ import {
   BOARD_VISIBILITIES,
   type BoardRole,
   can,
+  canCreateContent,
+  canCreateInWorkspace,
   canEditCanvas,
+  canHandOutAccess,
   resolveBoardRole,
   WORKSPACE_ROLES,
 } from './index.ts'
@@ -94,5 +97,24 @@ describe('can', () => {
   it('every workspace role is covered by resolveBoardRole without throwing', () => {
     for (const workspaceRole of WORKSPACE_ROLES)
       expect(() => resolveBoardRole({ workspaceRole, boardGrant: null, visibility: 'private' })).not.toThrow()
+  })
+})
+
+describe('domain access predicates', () => {
+  it('creating content needs a creator and a workspace role that may create', () => {
+    for (const role of [...WORKSPACE_ROLES, null]) {
+      expect(canCreateContent(true, role), `creator ${role}`).toBe(canCreateInWorkspace(role))
+      expect(canCreateContent(false, role), `outside ${role}`).toBe(false)
+    }
+  })
+
+  it('handing out access needs a creator and manage_access', () => {
+    for (const role of [...BOARD_ROLES, null])
+      for (const status of ['active', 'archived', 'trashed'] as const) {
+        expect(canHandOutAccess(true, role, status), `creator ${role} ${status}`).toBe(
+          can(role, 'manage_access', status),
+        )
+        expect(canHandOutAccess(false, role, status), `outside ${role} ${status}`).toBe(false)
+      }
   })
 })

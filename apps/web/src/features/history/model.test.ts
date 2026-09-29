@@ -2,7 +2,9 @@ import { HistoryBoardCreated } from '@draftroom/contracts'
 import { describe, expect, it } from 'vitest'
 import {
   archiveFileName,
+  CHECKPOINTS_HINT,
   checkpointNameToSave,
+  checkpointsHint,
   copyActions,
   createdSummary,
   defaultCheckpointName,
@@ -35,8 +37,10 @@ describe('labels', () => {
 
 describe('checkpoint names', () => {
   it('defaults to a dated name and caps typed names at 120 characters', () => {
-    expect(defaultCheckpointName(at)).toBe('Checkpoint Sep 27, 09:05')
-    expect(checkpointNameToSave('   ', at)).toBe('Checkpoint Sep 27, 09:05')
+    // R2-08: the time in the browser's locale and hour cycle.
+    expect(defaultCheckpointName(at, 'en-GB')).toBe('Checkpoint Sep 27, 09:05')
+    expect(defaultCheckpointName(at, 'en-US')).toBe('Checkpoint Sep 27, 9:05 AM')
+    expect(checkpointNameToSave('   ', at)).toBe(defaultCheckpointName(at))
     expect(checkpointNameToSave('  Before   review ', at)).toBe('Before review')
     expect(checkpointNameToSave('x'.repeat(200), at)).toHaveLength(120)
   })
@@ -84,6 +88,31 @@ describe('permissions (UI hints)', () => {
   it('guests and callers without a workspace role cannot create boards', () => {
     expect(historyPermissions('editor', 'active', 'guest').canCreateBoards).toBe(false)
     expect(historyPermissions('editor', 'active', null).canCreateBoards).toBe(false)
+  })
+
+  // Domain access (docs/DOMAIN-ACCESS-CONTRACTS.md §9): only creators duplicate or restore as a new board.
+  it('someone who is not a creator never duplicates or restores as new, whatever their roles', () => {
+    for (const ws of ['owner', 'admin', 'member', 'guest', null] as const) {
+      for (const role of ['owner', 'editor', 'commenter', 'viewer'] as const) {
+        const perms = historyPermissions(role, 'active', ws, { creator: false })
+        expect(perms.canCreateBoards, `${role}/${ws}`).toBe(false)
+        expect(copyActions(perms, true)).toMatchObject({ duplicate: 'hidden', restoreAsNew: 'hidden' })
+      }
+    }
+    // Everything else is role-based, as before: an outside owner still saves checkpoints and keeps sharing.
+    expect(historyPermissions('owner', 'active', 'member', { creator: false })).toEqual({
+      canEdit: true,
+      canSeeDeleted: true,
+      canCreateBoards: false,
+      canKeepSharing: true,
+    })
+    // A creator (and an older api, "legacy", which is one) keeps both.
+    expect(historyPermissions('viewer', 'active', 'member', { creator: true }).canCreateBoards).toBe(true)
+    expect(historyPermissions('viewer', 'active', 'member').canCreateBoards).toBe(true)
+    // The .json export is not a board: it follows the export policy only.
+    expect(
+      copyActions(historyPermissions('viewer', 'active', 'member', { creator: false }), true).exportJson,
+    ).toBe('on')
   })
 })
 
@@ -200,5 +229,28 @@ describe('copy and export under the board export policy', () => {
       exportOff: true,
     })
     expect(copyActions(historyPermissions('owner', 'active', 'owner'), true).exportOff).toBe(false)
+  })
+})
+
+describe('the checkpoints line promises restoring only to those who may (domain access, fixer round 1)', () => {
+  it('as today when "Restore as new board" is offered or turned off; otherwise it says who can', () => {
+    const dev = { creator: true, reason: 'dev' }
+    expect(checkpointsHint('on', dev)).toBe(CHECKPOINTS_HINT)
+    expect(checkpointsHint('off', dev)).toBe(CHECKPOINTS_HINT)
+    expect(checkpointsHint('hidden', { creator: false, reason: 'outside' })).toBe(
+      'A checkpoint keeps this board as it is now. Only people at Dark Burn Creative or Trailer Park Group can restore one as a new board.',
+    )
+    expect(checkpointsHint('hidden', { creator: false, reason: 'unconfirmed' })).toMatch(
+      /paused until Lobby can confirm your account/,
+    )
+    // A creator who is a workspace guest, or a name-only guest: no promise, no domain wording.
+    expect(checkpointsHint('hidden', dev)).toBe('A checkpoint keeps this board as it is now.')
+    expect(checkpointsHint('hidden', { creator: false, reason: 'guest' })).toBe(
+      'A checkpoint keeps this board as it is now.',
+    )
+    // An outsider's panel: hidden actions, so the restore promise is gone.
+    const perms = historyPermissions('owner', 'active', 'member', { creator: false })
+    const hint = checkpointsHint(copyActions(perms, true).restoreAsNew, { creator: false, reason: 'outside' })
+    expect(hint).not.toMatch(/Restoring one makes a new board/)
   })
 })

@@ -1,6 +1,125 @@
-import type { BoardWithRole, Project, WorkspaceSummary } from '@draftroom/contracts'
-import { type BoardRole, type BoardStatus, can } from '../lib/permissions.ts'
+import type { BoardWithRole, MeAccess, Project, WorkspaceSummary } from '@draftroom/contracts'
+import {
+  type BoardRole,
+  type BoardStatus,
+  can,
+  canCreateContent,
+  canCreateInWorkspace,
+  type WorkspaceRole,
+} from '../lib/permissions.ts'
 import type { DashboardSection } from '../lib/routing.ts'
+
+// ---- domain access (docs/DOMAIN-ACCESS-CONTRACTS.md §9) --------------------------------------------
+
+/**
+ * Why this person cannot create here, when that is about who they are rather than their workspace
+ * role: `outside` (not at Dark Burn Creative or Trailer Park Group), `unconfirmed` (Lobby could not
+ * confirm their address, so creating and sharing are paused). null otherwise (a creator, an older api
+ * (`legacy`), or a name-only guest, whose copy is unchanged).
+ */
+export type CreateLimit = 'outside' | 'unconfirmed' | null
+
+export interface DashboardAccess {
+  /** New board, templates, import, sample board, duplicate, new project, rename project. */
+  canCreate: boolean
+  /**
+   * A workspace role that may read the project list, move boards between projects and see storage
+   * (members and above). Separate from `canCreate`: outsiders who are members keep these.
+   */
+  inWorkspace: boolean
+  limit: CreateLimit
+}
+
+/**
+ * The dashboard's two flags from `/api/me`'s `access` and the workspace role. The server enforces both
+ * (403 CREATOR_REQUIRED); hiding is a courtesy. `reason: 'legacy'` (an api from before domain access)
+ * is a creator, so the dashboard behaves exactly as before.
+ */
+export function dashboardAccess(access: MeAccess, role: WorkspaceRole | null): DashboardAccess {
+  return {
+    canCreate: canCreateContent(access.creator, role),
+    inWorkspace: canCreateInWorkspace(role),
+    limit: createLimit(access),
+  }
+}
+
+export function createLimit(access: MeAccess): CreateLimit {
+  if (access.creator) return null
+  if (access.reason === 'outside') return 'outside'
+  if (access.reason === 'unconfirmed') return 'unconfirmed'
+  return null
+}
+
+/** The line every outside-account screen ends with. */
+export const OUTSIDE_CREATE_NOTE =
+  'Only people at Dark Burn Creative or Trailer Park Group can create boards. Work there? Sign in with your work email.'
+
+/** The dashboard notice while the account is unconfirmed (`access-unconfirmed`). */
+export const UNCONFIRMED_NOTICE = "Lobby couldn't confirm your account, so creating and sharing are paused."
+
+/** The dashboard notice for an outside account whose workspace role would let it create (`access-outside`). */
+export const OUTSIDE_NOTICE = {
+  title:
+    'Only people at Dark Burn Creative or Trailer Park Group can create boards, projects and links in Lobby.',
+  body: 'You can open and work on the boards shared with you. Work there? Sign in with your work email.',
+} as const
+
+/**
+ * Whether the dashboard says why New board, Import, Templates and "New project lobby" are missing
+ * (`access-outside`): an outside account whose workspace role (owner, admin, member) would otherwise
+ * create, for example an existing account that lost creator status, even in its own workspace.
+ * Workspace guests never create, so they keep the role's copy; Trash and Archived offer no creating.
+ */
+export function showOutsideNotice(a: DashboardAccess, section: DashboardSection): boolean {
+  return a.limit === 'outside' && a.inWorkspace && section.kind !== 'archived' && section.kind !== 'trash'
+}
+
+export interface NoWorkspaceCopy {
+  /** `data-reason` of the screen. */
+  reason: 'outside' | 'unconfirmed' | 'none'
+  title: string
+  /** Paragraphs, in order. */
+  body: string[]
+  /** The one action: sign in with a different account, reload, or none (today's screen). */
+  action: 'switch-account' | 'reload' | null
+}
+
+/**
+ * "/" for someone with no workspace (App.tsx RootRedirect, `no-workspace`). An outside account has
+ * nothing until someone invites it; `none` (a creator without a workspace, which should not happen,
+ * or an older api) keeps today's copy.
+ */
+export function noWorkspaceCopy(access: MeAccess): NoWorkspaceCopy {
+  if (!access.creator && access.reason === 'outside') {
+    return {
+      reason: 'outside',
+      title: 'Nothing has been shared with you yet',
+      body: [
+        access.email
+          ? `You're signed in as ${access.email}.`
+          : "You're signed in with an account that has no confirmed email address.",
+        'When someone at Dark Burn Creative or Trailer Park Group invites this address, open the invite link they send you. Work there? Sign in with your work email.',
+      ],
+      action: 'switch-account',
+    }
+  }
+  if (!access.creator && access.reason === 'unconfirmed') {
+    return {
+      reason: 'unconfirmed',
+      title: "We couldn't confirm your account",
+      body: [
+        'Lobby couldn’t confirm your email address with the sign-in service, so it can’t show your boards yet. Reload in a minute to try again.',
+      ],
+      action: 'reload',
+    }
+  }
+  return {
+    reason: 'none',
+    title: "You're not in a workspace yet",
+    body: ['Open an invite link from a teammate to join their workspace or board.'],
+    action: null,
+  }
+}
 
 // ---- card menu -----------------------------------------------------------------------------------
 
@@ -24,7 +143,10 @@ export interface BoardMenuItem {
 }
 
 export interface BoardMenuContext {
-  /** Workspace members (not guests) may create boards, so they may duplicate one. */
+  /**
+   * Creators who are workspace members (not guests) may create boards, so they may duplicate one
+   * (`DashboardAccess.canCreate`).
+   */
   canCreate: boolean
   /** Moving needs the project list, which guests cannot read. */
   canMove: boolean
@@ -165,12 +287,37 @@ export interface EmptyState {
 
 export function emptyState(
   section: DashboardSection,
-  opts: { searching: boolean; canCreate: boolean },
+  opts: {
+    searching: boolean
+    canCreate: boolean
+    /** Domain access: why a member cannot create (`dashboardAccess().limit`); null = the role's copy. */
+    limit?: CreateLimit
+    /** The `access-outside` notice is on screen (showOutsideNotice), so the note is not repeated. */
+    outsideNotice?: boolean
+  },
 ): EmptyState {
   if (opts.searching) {
     return {
       title: 'No boards match your search',
       body: 'Try a shorter or different word. Search looks at board titles in this list only.',
+      offerCreate: false,
+    }
+  }
+  const limit = opts.canCreate ? null : (opts.limit ?? null)
+  if (limit && (section.kind === 'recent' || section.kind === 'all' || section.kind === 'project')) {
+    // An outside account (or one Lobby could not confirm) never creates, whatever its workspace role.
+    const shared =
+      section.kind === 'project'
+        ? 'Boards in this project that are shared with you appear here.'
+        : 'Boards shared with you appear here.'
+    return {
+      title: section.kind === 'project' ? "This project's lobby has no boards yet" : 'No boards yet',
+      body:
+        limit === 'outside'
+          ? opts.outsideNotice
+            ? shared
+            : `${shared} ${OUTSIDE_CREATE_NOTE}`
+          : `${shared} Creating boards is paused until Lobby can confirm your account.`,
       offerCreate: false,
     }
   }

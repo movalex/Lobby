@@ -49,7 +49,7 @@ const box = async (l: Locator): Promise<BoxLike> => {
   return { x: b.x, y: b.y, w: b.width, h: b.height }
 }
 
-test('F7 Arrange as grid: mixed sizes land centred in uniform cells (shared column and row centre lines)', async ({
+test('F7 Arrange as grid: mixed sizes land centred in their cells (shared column pitch and row centre lines)', async ({
   session,
 }) => {
   const a = await session('alice')
@@ -102,11 +102,13 @@ test('F7 Arrange as grid: mixed sizes land centred in uniform cells (shared colu
   expect(rows).toHaveLength(3)
   const [c0, c1, c2] = cols as [number, number, number]
   const [r0, r1, r2] = rows as [number, number, number]
+  // Columns share one pitch (the widest item plus the gap). Rows are as tall as their tallest item
+  // (F2-06: a row of landscape photos is not spaced as if it held the tallest card), so the row pitch
+  // may differ from row to row, but every row clears the one above it.
   expect(Math.abs(c1 - c0 - (c2 - c1))).toBeLessThan(0.5)
-  expect(Math.abs(r1 - r0 - (r2 - r1))).toBeLessThan(0.5)
-  // The pitch comes from the largest item (360 × 276) plus the gap.
   expect(c1 - c0).toBeGreaterThanOrEqual(360)
-  expect(r1 - r0).toBeGreaterThanOrEqual(276)
+  expect(r1).toBeGreaterThan(r0)
+  expect(r2).toBeGreaterThan(r1)
   placed.forEach((p, i) => {
     for (const q of placed.slice(i + 1)) expect(overlap(p, q)).toBe(false)
   })

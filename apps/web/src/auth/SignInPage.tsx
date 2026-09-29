@@ -1,7 +1,8 @@
-import type { InvitationPreview } from '@draftroom/contracts'
+import { AccountEmail } from '@draftroom/contracts'
 import { type FormEvent, lazy, type ReactNode, Suspense, useEffect, useId, useState } from 'react'
 import { api, isApiError } from '../api/client.ts'
 import { Wordmark } from '../brand/Wordmark.tsx'
+import { fetchInvitation, type GuestAwarePreview } from '../invite/guest.tsx'
 import { signInHeading } from '../invite/model.ts'
 import { colorForUser, DEV_HANDLE_RE, DEV_QUICK_PICKS, initialsFor } from '../lib/identity.ts'
 import { matchRoute, navigate, safeReturnTo } from '../lib/routing.ts'
@@ -109,9 +110,12 @@ export function SignInPage() {
   )
 }
 
-/** The invitation behind `returnTo` (/invite/:token), for the sign-in heading; null otherwise. */
-function useInvitePreview(returnTo: string | null): InvitationPreview | null {
-  const [inv, setInv] = useState<InvitationPreview | null>(null)
+/**
+ * The invitation behind `returnTo` (/invite/:token), for the sign-in heading (with the masked address
+ * of an invitation locked to one, domain access); null otherwise.
+ */
+function useInvitePreview(returnTo: string | null): GuestAwarePreview | null {
+  const [inv, setInv] = useState<GuestAwarePreview | null>(null)
   const token = (() => {
     if (!returnTo) return null
     const route = matchRoute(new URL(returnTo, location.origin).pathname)
@@ -120,7 +124,7 @@ function useInvitePreview(returnTo: string | null): InvitationPreview | null {
   useEffect(() => {
     if (!token) return
     const controller = new AbortController()
-    api.getInvitation(token, controller.signal).then(setInv, () => setInv(null))
+    fetchInvitation(token, controller.signal).then(setInv, () => setInv(null))
     return () => controller.abort()
   }, [token])
   return token ? inv : null
@@ -130,18 +134,26 @@ function DevSignIn({ onDone, heading }: { onDone(): void; heading: string }) {
   const { refresh } = useSession()
   const handleId = useId()
   const nameId = useId()
+  const emailId = useId()
   const errorId = useId()
   const [handle, setHandle] = useState('')
   const [name, setName] = useState('')
+  // Domain access (dev builds only): the address this dev account signs in with, trusted as verified by
+  // the dev-guarded api route. Without one the account is <handle>@dev.invalid, a creator.
+  const [email, setEmail] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [pending, setPending] = useState<string | null>(null)
 
-  const signIn = async (h: string, displayName?: string) => {
+  const signIn = async (h: string, displayName?: string, devEmail?: string) => {
     setPending(h)
     setError(null)
     try {
       // Switching user needs no logout first: the API revokes this browser's old session on sign-in.
-      await api.devLogin(displayName ? { handle: h, name: displayName } : { handle: h })
+      await api.devLogin({
+        handle: h,
+        ...(displayName ? { name: displayName } : {}),
+        ...(devEmail ? { email: devEmail } : {}),
+      })
       const me = await refresh()
       if (!me) throw new Error('no session after sign-in')
       // A completed sign-in ends the explicit sign-out of this tab (SCA-1, signOutMark.ts).
@@ -165,7 +177,16 @@ function DevSignIn({ onDone, heading }: { onDone(): void; heading: string }) {
       setError('Display names can be at most 80 characters.')
       return
     }
-    void signIn(h, n || undefined)
+    let devEmail: string | undefined
+    if (email.trim()) {
+      const checked = AccountEmail.safeParse(email)
+      if (!checked.success) {
+        setError(checked.error.issues[0]?.message ?? 'Enter a valid email address.')
+        return
+      }
+      devEmail = checked.data
+    }
+    void signIn(h, n || undefined, devEmail)
   }
 
   return (
@@ -243,6 +264,25 @@ function DevSignIn({ onDone, heading }: { onDone(): void; heading: string }) {
           placeholder="e.g. Dana Rivera"
           autoComplete="name"
           maxLength={80}
+        />
+        <label htmlFor={emailId}>
+          Email (dev only) <span className="dr-optional">(optional)</span>
+        </label>
+        <input
+          id={emailId}
+          type="email"
+          inputMode="email"
+          className="dr-input dr-input--block"
+          data-testid="dev-login-email"
+          value={email}
+          onChange={(e) => {
+            setEmail(e.target.value)
+            setError(null)
+          }}
+          placeholder="e.g. pat@client.example.test"
+          autoComplete="off"
+          autoCapitalize="none"
+          spellCheck={false}
         />
         {error && (
           <p id={errorId} className="dr-field-error" data-testid="signin-error" role="alert">

@@ -7,12 +7,15 @@
 //    right; the grid is filled row by row in that order.
 //  - Column count: near-square overall (ceil(sqrt(n × cellH / cellW)) from the cell size), then
 //    balanced so the last row is as full as it can be. An explicit count (the stepper) wins.
-//  - Cells: uniform. Every cell is as wide as the widest item and as tall as the tallest, and each item
-//    is centred in its cell, so columns and rows share one centre line and no column is wider than
-//    another (mixed portrait / landscape images and cards no longer leave ragged gutters). One even
-//    gap between cells: max(20, 10% of the median item's shorter side), at most 200 (notes: 20, like
-//    bulk paste).
+//  - Cells: every column is as wide as the widest item, so columns share one centre line and one pitch
+//    (mixed portrait / landscape images and cards no longer leave ragged columns). Each row is as tall
+//    as its tallest item (F2-06: a row of landscape photos is not spaced as if they were portrait), and
+//    each item is centred in its cell. One even gap between cells: max(20, 10% of the median item's
+//    shorter side), at most 200 (notes: 20, like bulk paste).
 //  - The grid starts at the selection's top-left, so the arranged block stays where it was.
+//  - F2-03: arranging part of a board must not grow over its neighbours (the unselected shapes in the
+//    same parent, `obstacles`). An automatic column count that stays clear of them is preferred (closest
+//    to the near-square one); when none does, the neighbours the grid still covers move down below it.
 //  - Inside a frame the grid must stay inside it: it is shifted to fit, an automatic column count that
 //    fits is preferred, and only when nothing fits does the frame grow (never shrink).
 
@@ -102,6 +105,16 @@ export function gridCell(items: readonly GridItem[]): { w: number; h: number } {
   return { w, h }
 }
 
+/** Each row's height (its tallest item) when `ordered` fills `cols` columns. */
+function rowHeights(ordered: readonly GridItem[], cols: number): number[] {
+  const heights: number[] = []
+  ordered.forEach((item, i) => {
+    const r = Math.floor(i / cols)
+    heights[r] = Math.max(heights[r] ?? 0, item.h)
+  })
+  return heights
+}
+
 /** The automatic column count: a near-square grid, balanced so no row is much emptier than needed. */
 export function autoColumns(items: readonly GridItem[], gap = gridGap(items)): number {
   const n = items.length
@@ -123,9 +136,12 @@ export function clampColumns(columns: number, n: number): number {
 /** The grid's size only (no positions): cheap enough to try every column count. */
 function gridSize(ordered: readonly GridItem[], columns: number, gap: number): { w: number; h: number } {
   const cols = clampColumns(columns, ordered.length)
-  const rows = Math.max(1, Math.ceil(ordered.length / cols))
+  const heights = rowHeights(ordered, cols)
   const cell = gridCell(ordered)
-  return { w: cols * cell.w + gap * (cols - 1), h: rows * cell.h + gap * (rows - 1) }
+  return {
+    w: cols * cell.w + gap * (cols - 1),
+    h: heights.reduce((s, h) => s + h, 0) + gap * (heights.length - 1),
+  }
 }
 
 /** Lays `ordered` (already in fill order) out in `columns` columns, starting at `origin`. */
@@ -139,14 +155,23 @@ export function layoutGrid(
   const cols = clampColumns(columns, n)
   const rows = Math.max(1, Math.ceil(n / cols))
   const cell = gridCell(ordered)
+  const heights = rowHeights(ordered, cols)
+  const rowTops: number[] = []
+  let top = origin.y
+  for (const h of heights) {
+    rowTops.push(top)
+    top += h + gap
+  }
   const positions: GridLayout['positions'] = {}
   ordered.forEach((item, i) => {
+    const r = Math.floor(i / cols)
     const cellX = origin.x + (i % cols) * (cell.w + gap)
-    const cellY = origin.y + Math.floor(i / cols) * (cell.h + gap)
-    positions[item.id] = { x: cellX + (cell.w - item.w) / 2, y: cellY + (cell.h - item.h) / 2 }
+    const cellY = rowTops[r] as number
+    const cellH = heights[r] as number
+    positions[item.id] = { x: cellX + (cell.w - item.w) / 2, y: cellY + (cellH - item.h) / 2 }
   })
   const width = cols * cell.w + gap * (cols - 1)
-  const height = rows * cell.h + gap * (rows - 1)
+  const height = heights.reduce((s, h) => s + h, 0) + gap * (rows - 1)
   return {
     order: ordered.map((i) => i.id),
     columns: cols,
@@ -179,11 +204,43 @@ export interface ArrangeInput {
    * the grid lives on the page or in a group.
    */
   frame?: { w: number; h: number }
+  /** F2-03: the unselected shapes in the same parent, in its space (the grid should not cover them). */
+  obstacles?: readonly GridItem[]
 }
 
 export interface ArrangeResult extends GridLayout {
   /** The frame size the grid needs when it had to grow (only when `frame` was given). */
   frameSize?: { w: number; h: number }
+  /** F2-03: neighbours the grid still covered, moved down below it: new top-left per id. */
+  pushed?: Record<string, { x: number; y: number }>
+}
+
+const rectsOverlap = (a: Rect, b: Rect) =>
+  a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h
+
+/** The obstacles the grid's area (with its gap around it) covers. */
+function covered(bounds: Rect, gap: number, obstacles: readonly GridItem[]): GridItem[] {
+  const area = { x: bounds.x - gap / 2, y: bounds.y - gap / 2, w: bounds.w + gap, h: bounds.h + gap }
+  return obstacles.filter((o) => rectsOverlap(area, o))
+}
+
+/**
+ * Moves the neighbours a grid covers down below it, keeping their order and spacing: every obstacle
+ * below the top of the first covered one, in the grid's columns, moves by the same amount.
+ */
+function pushBelow(bounds: Rect, gap: number, obstacles: readonly GridItem[]): ArrangeResult['pushed'] {
+  const hit = covered(bounds, gap, obstacles)
+  if (!hit.length) return undefined
+  const top = Math.min(...hit.map((o) => o.y))
+  const dy = bounds.y + bounds.h + gap - top
+  if (dy <= 0) return undefined
+  const band = { x: bounds.x, w: bounds.w }
+  const pushed: NonNullable<ArrangeResult['pushed']> = {}
+  for (const o of obstacles) {
+    const inBand = o.x < band.x + band.w && band.x < o.x + o.w
+    if (inBand && o.y >= top - 1e-6) pushed[o.id] = { x: o.x, y: o.y + dy }
+  }
+  return pushed
 }
 
 /** Orders `items` by `order` (ids missing from it go last, in reading order). */
@@ -209,7 +266,37 @@ export function arrangeAsGrid(input: ArrangeInput): ArrangeResult | null {
   const explicit = input.columns !== undefined
   let columns = explicit ? clampColumns(input.columns as number, items.length) : autoColumns(items, gap)
   const frame = input.frame
-  if (!frame) return layoutGrid(ordered, columns, origin, gap)
+  // Shapes the selection already overlapped (a zone drawn behind notes, a card among photos) are not
+  // neighbours it grows over: only those clear of its old footprint count.
+  const footprint = {
+    x: origin.x,
+    y: origin.y,
+    w: items.reduce((m, i) => Math.max(m, i.x + i.w), Number.NEGATIVE_INFINITY) - origin.x,
+    h: items.reduce((m, i) => Math.max(m, i.y + i.h), Number.NEGATIVE_INFINITY) - origin.y,
+  }
+  const obstacles = (input.obstacles ?? []).filter((o) => !rectsOverlap(footprint, o))
+  if (!frame) {
+    if (!explicit && obstacles.length) {
+      // F2-03: the automatic count closest to the near-square one that covers no neighbour.
+      const clear = (c: number) =>
+        covered(layoutGrid(ordered, c, origin, gap).bounds, gap, obstacles).length === 0
+      if (!clear(columns)) {
+        // Within half to twice the near-square count: a single long row is no tidier than an overlap.
+        const lo = Math.max(1, Math.floor(columns / 2))
+        const hi = Math.min(items.length, columns * 2)
+        for (let d = 1; columns + d <= hi || columns - d >= lo; d++) {
+          const c = [columns + d, columns - d].find((k) => k >= lo && k <= hi && clear(k))
+          if (c !== undefined) {
+            columns = c
+            break
+          }
+        }
+      }
+    }
+    const layout = layoutGrid(ordered, columns, origin, gap)
+    const pushed = pushBelow(layout.bounds, gap, obstacles)
+    return pushed ? { ...layout, pushed } : layout
+  }
 
   const pad = gap
   const fits = (s: { w: number; h: number }) => s.w <= frame.w - 2 * pad && s.h <= frame.h - 2 * pad

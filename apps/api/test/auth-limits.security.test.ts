@@ -8,7 +8,7 @@
 
 import { afterEach, describe, expect, it } from 'vitest'
 import { CLERK_EXCHANGES_PER_SUBJECT, createClerkAuthProvider } from '../src/auth/clerk.ts'
-import { createBoard, createTestApi, ORIGIN, type TestApi } from './helpers.ts'
+import { createBoard, createTestApi, devEmail, ORIGIN, type TestApi } from './helpers.ts'
 
 let api: TestApi | undefined
 afterEach(async () => {
@@ -57,7 +57,10 @@ describe('invitations behind one NAT', () => {
     const boardId = await createBoard(owner, owner.personalWorkspaceId, 'Workshop')
     const codes: number[] = []
     for (let i = 0; i < 25; i++) {
-      const inv = await owner.req('POST', `/api/boards/${boardId}/invitations`, { role: 'viewer' })
+      const inv = await owner.req('POST', `/api/boards/${boardId}/invitations`, {
+        role: 'viewer',
+        email: devEmail(`invitee-${i}`),
+      })
       const token = tokenOf((inv.json() as { url: string }).url)
       for (let k = 0; k < 3; k++) codes.push((await api.anon('GET', `/api/invitations/${token}`)).statusCode)
       const person = await api.login(`invitee-${i}`)
@@ -75,7 +78,12 @@ describe('invitations behind one NAT', () => {
     const mk = async () =>
       tokenOf(
         (
-          (await owner.req('POST', `/api/boards/${boardId}/invitations`, { role: 'viewer' })).json() as {
+          (
+            await owner.req('POST', `/api/boards/${boardId}/invitations`, {
+              role: 'viewer',
+              email: devEmail('someone'),
+            })
+          ).json() as {
             url: string
           }
         ).url,
@@ -121,7 +129,12 @@ describe('invitations behind one NAT', () => {
       tokens.push(
         tokenOf(
           (
-            (await owner.req('POST', `/api/boards/${boardId}/invitations`, { role: 'viewer' })).json() as {
+            (
+              await owner.req('POST', `/api/boards/${boardId}/invitations`, {
+                role: 'viewer',
+                email: devEmail(i < 3 ? 'zoe' : 'yan'),
+              })
+            ).json() as {
               url: string
             }
           ).url,
@@ -154,7 +167,7 @@ describe('Clerk exchange (fake verifier)', () => {
               if (!m) throw new Error('invalid')
               return { sub: `user_${m[1]}` }
             },
-            profile: async (sub) => ({ name: `Name of ${sub}`, avatarUrl: null }),
+            profile: async (sub) => ({ name: `Name of ${sub}`, avatarUrl: null, emails: [] }),
           },
         }),
       },

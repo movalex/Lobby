@@ -103,6 +103,19 @@ function ancestors(el: Element): Element[] {
 }
 
 /**
+ * A11Y-01: how long a control that disabled itself while it works ("Creating…", "Rendering PDF…") may
+ * take to come back before the keyboard goes elsewhere in its dialog or panel.
+ */
+export const BUSY_CONTROL_WAIT_MS = 10_000
+const BUSY_POLL_MS = 100
+
+/** The control lost the keyboard because it was disabled, and is still on the page. */
+function isBusyControl(el: Element | undefined): el is HTMLElement {
+  if (!el?.isConnected || typeof (el as HTMLElement).matches !== 'function') return false
+  return (el as HTMLElement).matches(':disabled') && !el.closest('[inert], [hidden]')
+}
+
+/**
  * Moves the focus somewhere sensible when it falls to <body> WITHOUT the pointer causing it (a click on
  * empty page chrome is left alone): the nearest control that is still there, inside the same dialog or
  * panel; else into the open modal; else `fallback()` (the board: the canvas). Checked one frame later,
@@ -120,7 +133,13 @@ export function installFocusGuard({
   let chain: Element[] = []
   let pointerTask = false
   let frame = 0
+  let waiting = 0
+  const stopWaiting = () => {
+    if (waiting) win.clearTimeout(waiting)
+    waiting = 0
+  }
   const onFocusIn = (e: FocusEvent) => {
+    stopWaiting()
     if (e.target instanceof win.Element) chain = ancestors(e.target)
   }
   const onPointerDown = () => {
@@ -129,8 +148,37 @@ export function installFocusGuard({
       pointerTask = false
     }, 0)
   }
+  /**
+   * A11Y-01: the control that had the keyboard disabled itself while it works (Share's "Create…",
+   * Export's "Download PDF"). It gets the keyboard back when it is enabled again, so a reflex Enter
+   * never lands on the dialog's ×; if it leaves the page or stays disabled, the usual rules apply.
+   */
+  const waitForControl = (control: HTMLElement, lost: Element[]) => {
+    stopWaiting()
+    const until = Date.now() + BUSY_CONTROL_WAIT_MS
+    const check = () => {
+      waiting = 0
+      if (!isFocusLost(doc)) return
+      if (control.isConnected && !control.matches(':disabled')) {
+        if (tryFocus(control)) return
+      } else if (control.isConnected && Date.now() < until) {
+        waiting = win.setTimeout(check, BUSY_POLL_MS)
+        return
+      }
+      settle(lost)
+    }
+    waiting = win.setTimeout(check, BUSY_POLL_MS)
+  }
   const recover = (lost: Element[]) => {
     if (!doc.hasFocus() || !isFocusLost(doc)) return
+    if (isBusyControl(lost[0])) {
+      waitForControl(lost[0], lost)
+      return
+    }
+    settle(lost)
+  }
+  const settle = (lost: Element[]) => {
+    if (!isFocusLost(doc)) return
     for (const el of lost) {
       if (!el.isConnected) continue
       const scope = el.closest(SCOPES)
@@ -162,5 +210,6 @@ export function installFocusGuard({
     doc.removeEventListener('focusout', onFocusOut, true)
     doc.removeEventListener('pointerdown', onPointerDown, true)
     if (frame) win.cancelAnimationFrame(frame)
+    stopWaiting()
   }
 }

@@ -42,14 +42,33 @@ const VIS_DESCRIPTION: Record<ShareState['visibility'], (ws: string) => string> 
   workspace_edit: (ws) => `Everyone in ${ws} can edit this board`,
 }
 
+/**
+ * R2-08: a time of day in the browser's locale and hour cycle ("3:40 PM" in en-US, "15:40" in en-GB).
+ * Every clock time Lobby shows next to another one (the link badge, History, votes) comes from here,
+ * so one screen never mixes 12- and 24-hour times.
+ */
+export function timeOfDay(d: Date, locale?: string): string {
+  // The locale's own short time, as formatDateTime (lib/format.ts) shows it next to a date.
+  return d.toLocaleTimeString(locale, { timeStyle: 'short' })
+}
+
 /** "3:40 PM" today, "Sep 28, 3:40 PM" otherwise (local time; workshop links last hours, not days). */
 export function shortTime(iso: string, now: Date = new Date()): string {
   const d = new Date(iso)
   if (!Number.isFinite(d.getTime())) return ''
-  const time = d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
+  const time = timeOfDay(d)
   const sameDay =
     d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate()
   return sameDay ? time : `${shortDate(iso, now)}, ${time}`
+}
+
+/**
+ * Whether this person gets the header sharing badge (R2-11 / F14). It describes the board's links, so
+ * only people who can edit (and may pass the board on) see it; viewers, commenters and name-only guests
+ * would read "Link: edit" as their own access.
+ */
+export function showsShareBadge(role: RequestableRole | 'owner', guest: boolean): boolean {
+  return !guest && (role === 'owner' || role === 'editor')
 }
 
 /**
@@ -91,6 +110,23 @@ export function shareBadge(state: ShareState, workspaceName: string, now: Date =
     description: `${vis}.`,
     requests,
   }
+}
+
+/**
+ * A11Y2-10 (WCAG 2.5.3): the badge's accessible name starts with the words it shows, so "click Link
+ * edit" works for voice control; the longer explanation follows.
+ */
+export function shareBadgeName(badge: ShareBadge): string {
+  const n = badge.requests
+  const pending = n ? ` ${n} pending access ${n === 1 ? 'request' : 'requests'}.` : ''
+  return `${badge.label}. ${badge.description}${pending} Open sharing settings.`
+}
+
+/** A11Y-01: what the Share dialog announces after "Create…" ("Client link created and copied."). */
+export function createdSaying(what: 'Client link' | 'Workshop link', copied: boolean): string {
+  return copied
+    ? `${what} created and copied to the clipboard.`
+    : `${what} created. Copy it from the list below.`
 }
 
 // ---- "request sent" memory (per browser, per user + board) ----------------------------------------
