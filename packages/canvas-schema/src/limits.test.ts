@@ -192,6 +192,9 @@ describe('customData classes (§3.3)', () => {
         'mindmapEdge',
         'alt',
         'present',
+        'prompt',
+        'slot',
+        'swatch',
       ].sort(),
     )
     expect(lobbyKeySpec('plusOne:usr_0123456789')?.class).toBe('identity-bound')
