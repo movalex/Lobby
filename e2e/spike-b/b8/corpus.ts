@@ -48,7 +48,8 @@ import {
 import { instantiateTemplate } from '../../../packages/templates/src/index.ts'
 import { callInternal, REPO_ROOT, startSync } from './stand-in.ts'
 
-export const CORPUS_PORT = 7900
+/** O4 runs the stand-in on 7900; the lead's integration pass sets SPIKE_B8_STANDIN_PORT inside 7850-7859 (§8.6.8). */
+export const CORPUS_PORT = Number(process.env.SPIKE_B8_STANDIN_PORT ?? 7900)
 
 async function withClient<T>(
   wsUrl: string,

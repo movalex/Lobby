@@ -49,7 +49,8 @@ import { indexKeyBetween } from '../../../packages/canvas-schema/src/engine/frac
 import { elementIdOf } from '../../../packages/tldraw-import/src/convert.ts'
 import { callInternal, startSync } from './stand-in.ts'
 
-export const STAND_IN_PORT = 7900
+/** O4 runs the stand-in on 7900; the lead's integration pass sets SPIKE_B8_STANDIN_PORT inside 7850-7859 (§8.6.8). */
+export const STAND_IN_PORT = Number(process.env.SPIKE_B8_STANDIN_PORT ?? 7900)
 const USER = 'usr_b8drill00001'
 
 type Rec = Record<string, unknown> & { id: string; typeName: string }

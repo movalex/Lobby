@@ -13,7 +13,8 @@ import { harness } from '../support/harness.ts'
 import type { BrowserProcess, DevUser, SpikeBStack } from '../support/types.ts'
 import type { AEdits, ExcalidrawSide } from './drill.ts'
 
-export const EXCALIDRAW_BASE = 7905
+/** O4's Excalidraw stack is 7905; the lead's integration pass runs these specs on its own SPIKE_B_PORT_BASE. */
+export const EXCALIDRAW_BASE = Number(process.env.SPIKE_B_PORT_BASE ?? 7905)
 
 /** Copies a board file (and its WAL) to `boardId`'s path in the stack's data dir, before its room opens. */
 export function placeBoardFile(stack: SpikeBStack, source: string, boardId: string): string {

@@ -68,7 +68,10 @@ export async function startSync(opts: {
   env?: Record<string, string>
 }): Promise<SyncProcess> {
   assertNoR2()
-  if (opts.port < 7900 || opts.port > 7909) throw new Error('O4 stacks use ports 7900-7909 only (§8.6.5)')
+  // O4's range, or the lead's (its integration pass runs B8's generated rows, §8.6.8)
+  const inRange = (lo: number, hi: number) => opts.port >= lo && opts.port <= hi
+  if (!inRange(7900, 7909) && !inRange(7850, 7859))
+    throw new Error('B8 stacks use ports 7900-7909 (O4) or 7850-7859 (the lead) only (§8.6.5)')
   if (await healthy(opts.port)) throw new Error(`port ${opts.port} already serves something`)
   const env: NodeJS.ProcessEnv = {}
   for (const [k, v] of Object.entries(process.env))
