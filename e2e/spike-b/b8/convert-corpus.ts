@@ -10,7 +10,10 @@
 // worker per board, the disk check, the one transaction, the semantic diff with the local-mode check), and
 // checks what the service does not: the tldraw tables and dr_deleted_* byte-identical, lb_source's digest
 // equal to the input's (and, with --backups, to the restored backup object's) recordsSha256, every
-// dr_deleted row mapped, the anchors resolving, the element count within the item caps.
+// dr_deleted row mapped, the anchors resolving, the element count within the item caps. It also re-reads
+// the converted file as the room will load it: every stored lb_elements row through O1's invariant checker
+// (`invariants-stored`) and the server's element schema (`limits-stored`), with the row's columns equal to
+// its JSON (`stored-rows-consistent`); the service's own `invariants` row must say the checker ran.
 //
 // --staging (the restored staging copies, §8.6.7): SPIKE_B8_DIR must be set and --work must lie inside it;
 // TEMP/TMP are moved inside it; every output holds ids, counts, codes, timings, bytes and hashes only.
@@ -33,6 +36,8 @@ import { parseArgs } from 'node:util'
 import type { ConvertReport } from '../../../apps/sync/src/room/migrate/convert-board.ts'
 import { drDeletedDigests, recordsSha256, tableDigest } from '../../../apps/sync/src/room/migrate/digest.ts'
 import { MigrationService } from '../../../apps/sync/src/room/migrate/service.ts'
+import { checkElement } from '../../../packages/canvas-schema/src/elements.ts'
+import { checkInvariantsOf, type InvariantElement } from '../../../packages/canvas-schema/src/invariants.ts'
 import { MAX_ITEMS, MAX_LIVE_ELEMENTS } from '../../../packages/canvas-schema/src/limits.ts'
 import { assertNoR2 } from './stand-in.ts'
 
@@ -128,10 +133,12 @@ export async function convertCorpus(opts: {
         ? (JSON.parse(readFileSync(reportPath, 'utf8')) as ConvertReport)
         : null
       const checks: Record<string, { pass: boolean; total?: number; failed?: number; note?: string }> = {}
-      if (report?.invariants === 'ran')
+      // O1's checker is implemented since M1: a conversion that did not run it fails this row
+      if (report?.ok || report?.invariants)
         checks.invariants = {
-          pass: (report.violations ?? []).length === 0,
-          failed: (report.violations ?? []).length,
+          pass: report?.invariants === 'ran' && (report.violations ?? []).length === 0,
+          failed: (report?.violations ?? []).length,
+          ...(report?.invariants === 'ran' ? {} : { note: String(report?.invariants ?? 'missing') }),
         }
       for (const c of report?.diff?.checks ?? [])
         checks[`diff:${c.name}`] = {
@@ -153,7 +160,43 @@ export async function convertCorpus(opts: {
             type: string
             data: string
           }>,
+          rows: db
+            .prepare('SELECT id, type, idx, version, deleted, data FROM lb_elements ORDER BY id')
+            .all() as Array<{
+            id: string
+            type: string
+            idx: string
+            version: number
+            deleted: number
+            data: string
+          }>,
         }))
+        // the file as the room will load it: every stored row (live and deleted) through O1's invariant
+        // checker and the server's element schema, and its columns equal to its JSON (ids and codes only)
+        const stored = after.rows.map((r) => JSON.parse(r.data) as InvariantElement & { version: number })
+        const violations = checkInvariantsOf(stored)
+        checks['invariants-stored'] = {
+          pass: violations.length === 0,
+          total: stored.length,
+          failed: violations.length,
+        }
+        const schemaFailed = stored.filter((e) => !checkElement(e).ok).length
+        checks['limits-stored'] = { pass: schemaFailed === 0, total: stored.length, failed: schemaFailed }
+        const inconsistent = after.rows.filter((r, i) => {
+          const e = stored[i] as InvariantElement & { version: number }
+          return (
+            e.id !== r.id ||
+            e.type !== r.type ||
+            (e.index ?? '') !== r.idx ||
+            e.version !== r.version ||
+            (e.isDeleted ? 1 : 0) !== r.deleted
+          )
+        }).length
+        checks['stored-rows-consistent'] = {
+          pass: inconsistent === 0,
+          total: after.rows.length,
+          failed: inconsistent,
+        }
         checks['tldraw-tables-identical'] = {
           pass:
             JSON.stringify([after.documents, after.metadata]) ===
