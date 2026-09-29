@@ -115,6 +115,9 @@ const PresentValue = z.strictObject({
   skip: z.boolean().optional(),
 })
 
+/** `prompt`, `slot`, `swatch`: a template's marker (a short word such as `image`, `color` or `true`). */
+const MarkerValue = z.union([z.boolean(), z.string().min(1).max(64)])
+
 export const TAG_KEY_PREFIX = 'tag:'
 export const PLUS_ONE_KEY_PREFIX = 'plusOne:'
 
@@ -189,6 +192,11 @@ export const LOBBY_KEY_SPECS: readonly LobbyKeySpec[] = [
     maxBytes: 64,
     duplicate: 'strip-index',
   },
+  // §3.3 class 5 lists `prompt`, `slot`, `swatch` (today's `draftroomPrompt`, `draftroomSlot`,
+  // `draftroomSwatch` template markers); the converter carries them (spike B8, change request by O4)
+  { match: 'exact', name: 'prompt', class: 'free', value: MarkerValue, maxBytes: 72, duplicate: 'keep' },
+  { match: 'exact', name: 'slot', class: 'free', value: MarkerValue, maxBytes: 72, duplicate: 'keep' },
+  { match: 'exact', name: 'swatch', class: 'free', value: MarkerValue, maxBytes: 72, duplicate: 'keep' },
 ]
 
 const EXACT = new Map(LOBBY_KEY_SPECS.filter((s) => s.match === 'exact').map((s) => [s.name, s]))
