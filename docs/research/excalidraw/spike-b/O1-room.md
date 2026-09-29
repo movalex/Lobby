@@ -1,4 +1,104 @@
-# O1 room: the ElementRoom slice (spike B, before integration)
+# O1 room: the ElementRoom slice (spike B)
+
+## Part 2: after the M1/M2 integration
+
+Branch `spike/b-room`, on `spike/excalidraw` `76c937f` (the lead's M1/M2 integration; fast-forward, no
+conflict) plus O1's commits `b5689e0` (CR), `c8cac73`, `34a69a1`, `b7ed554`, `eedc2c9`. Evidence on
+`eedc2c9`. Windows 11 workstation, Node 24.19.0, pnpm 10.34.5, Playwright 1.63.0, headless Chromium only.
+Ports 7860-7862 (O1's range); nothing listened in 7860-7869 before or after any run. Every stack ran with
+`DRAFTROOM_BACKUP_STORE=off`; no R2 write; `.env.deploy.local` never read. NOT a quiet window (other agents'
+runs shared the machine), so timing numbers are informational.
+
+### Built in part 2
+
+| What | Where | Plan |
+|---|---|---|
+| **Conversion on room open.** A board file with tldraw tables and no `lb_meta`, or a converted board whose tldraw side moved during a rollback, is prepared by O4's `MigrationService` before its room opens: one job at a time process-wide, in the capped worker behind the RSS gate (the rooms' snapshot caches are flushed first). Joiners are held: notice `PREPARING` first, their messages buffered (presence dropped as before hello; 64 messages / 1 MiB, then 4099 RATE_LIMITED), then admitted in order to the opened room. A failed job leaves the board on its tldraw tables; its joiners get 4099 `CONVERSION_FAILED`, and later joiners are refused at once with no new job (a transient failure, time budget or a worker crash, is retried after 5 min; out-of-memory, disk, limits, migration, diff and invariant failures only by a maintenance run or a restart). The access monitor and the session-end reporter see held joiners (`roomIfOpen`, `sessionsOf`, `openBoards`). The internal snapshot route and the test snapshot wait for the same preparation (503 `unavailable` on a failure). `service.routes()` (`POST /internal/migrate/convert-all`, `GET /internal/migrate/status`) are mounted with the room's routes; `closeAll` closes the service (held joiners get 4000 RECONNECT; the running worker is terminated). Test-only knobs `DRAFTROOM_TEST_MIGRATE_CAP_MB` / `DRAFTROOM_TEST_MIGRATE_TIME_MS` are read only with `DRAFTROOM_TEST_HOOKS=1` | `room/index.ts`, `room/http.ts` | §5.3 "Lazy", §5.9 step 3, §2.13 |
+| **Rule 6 for rectangles, ellipses and diamonds.** The lease-expiry re-fit uses `redrawTextBoundingBox` (the helper the holder's client runs, rule 4) through `layoutBoundText` in `canvas-schema/engine` (copies over a stand-in scene: the engine's `Scene` validates indices through `window` in its dev build, index.js:18949). The label is re-wrapped for the container's current width, the container grows to hold it (derived, `gclock.fit` only), bound arrows re-snap | `room/merge.ts`, `engine/layout.ts`, `engine/raw.ts` | §2.9.4 rule 6 |
+| **R1's limited guest runs.** The spec lets a dev-user browser in as a name-only guest through a view link with guests allowed (the A3 flow, as b5-r3 and b12-phone do) and checks its welcome says guest and read-only | `e2e/spike-b/tests/b5-r1-readonly-forged.spec.ts` | §8.3 B5 R1 |
+| The headless suite's stub placeholder (a permanent "1 skipped") is gone: O2's client is integrated | `test/element-room/headless.test.ts` | |
+| O1's check runner (3 runs, a fresh build per spec, each spec's Playwright folder copied, listeners checked) | `scripts/o1-checks.sh` | §8.6.8 |
+
+Not built, because no check or the drill needs it on this room: the internal routes `seed`,
+`place-notes`, `text`, `asset-refs`, `deleted` (the drill calls them on the R0 stand-in only; in
+excalidraw mode the api's template, duplicate and restore flows still get 404); presence's "always
+included" peers (no protocol fields). Epochs on restore: a lazy conversion and a roll-forward write a new
+epoch (O4's worker; the roll-forward's new epoch is asserted in conversion.test.ts); a staged restore of an element board is not built (no check needs it).
+
+### Change request
+
+`b5689e0` **CR: protocol.ts** (additive): notice code `PREPARING` and terminal close reason
+`CONVERSION_FAILED`. Why: the frozen set had no way to tell a held joiner that its board is being prepared
+(§2.13 "Preparing this board…"), and no clear close for a failed conversion (`MAINTENANCE` means the
+cut-over; `UNKNOWN_ERROR` is not clear, and a retryable close would re-queue the job). Touches O1 (this
+room sends them) and O2 (the client should show "Preparing this board…" on the notice and a clear message on
+the close; until then an unknown notice is dropped by the client's schema check, and any 4099 shows the
+closed state). The room reads both lists at runtime, so if the lead declines the CR it sends no notice and
+closes with `MAINTENANCE` instead. Needs O2's OK, the `CONTRACTS_REV` bump and the change-log line (the
+lead's). protocol.test.ts gains the notice's round trip.
+
+### Handover (part 2)
+
+- **O2**: a held joiner gets `{type: 'notice', code: 'PREPARING'}` as its first frame, before its welcome
+  (show "Preparing this board…"; the socket stays open, `hello` is answered when the board is ready). A
+  failed preparation closes 4099 `CONVERSION_FAILED` (terminal; the board stays on the old canvas until a
+  maintenance run). Both depend on the CR.
+- **O3**: B9's conversion-under-load run: two unconverted boards opened at once queue in one process-wide
+  queue (`GET /internal/migrate/status` shows `running` and `queued`); the planted over-cap board's joiner
+  gets 4099 `CONVERSION_FAILED`, its status is `failed` / `out-of-memory`, and the board keeps its tldraw
+  tables. For a quick over-cap test without a huge board, `DRAFTROOM_TEST_MIGRATE_CAP_MB=4` (test hooks
+  only) makes any conversion run out of memory.
+- **O4**: the room calls `prepare(boardId)` for `tldraw` and `rollforward-needed` files only (one read-only
+  `boardFileState` per room open), with `roomsDir` = the rooms folder, so reports land in `<data>/migration`.
+  A job that fails with `already-converted` is re-checked and opened. `b8-two-browsers` and `b8-drill` should
+  now pass; I could not run them in O1's range (the stand-in's port check).
+
+### Evidence, 3 runs on `eedc2c9`
+
+`O1_OUT=<dir> RUNS=3 bash docs/research/excalidraw/spike-b/scripts/o1-checks.sh`, 2026-09-29 15:31-15:40Z (logs
+and each spec's Playwright folder in O1's scratchpad `o1/runs/`, never committed).
+
+| Check | Spec or suite | Run 1 | Run 2 | Run 3 | Numbers |
+|---|---|---|---|---|---|
+| B3 L8 | `b3-l8-leased-forged` | PASS | PASS | PASS | 20/20 forged repetitions each; final convergence and 0 violations each (the part-1 trial's nonce divergence did not recur) |
+| B4 D3 | `b4-server-d3-sigkill` | PASS | PASS | PASS | acked at the 3 kills: 774/774/774, 789/777/777, 771/771/777 of 960 sent; 0 missing |
+| B4 D4 | `b4-server-d4-commit` | PASS | PASS | PASS | Saved states seen: saving, offline, saved (never saved before the move was stored) |
+| B5 R1 | `b5-r1-readonly-forged` (3 tests: forged part, viewer + commenter presence, limited guest presence) | PASS 3/3 | PASS 3/3 | PASS 3/3 | presence p95 viewer / commenter / guest: 126/125/127, 126/127/126, 126/126/125 ms (informational: not a quiet window; the 200 ms gate is asserted only with `SPIKE_B_QUIET=1`) |
+| B5 R4 | `b5-r4-downgrade` | PASS | PASS | PASS | 4000 on the downgrade, read-only reconnect, READ_ONLY for the queued edit |
+| B6 | `b6-forged` (F1–F17 in 15 tests) | 15/15 | 15/15 | 15/15 | |
+| Server half of L6/L10, and the room | `vitest run apps/sync/test/element-room packages/canvas-schema/src/engine packages/canvas-schema/src/invariants.test.ts` (16 files, incl. conversion.test.ts, headless.test.ts, the rule-6 tests) | 136/136 | 136/136 | 136/136 | 24.0 / 24.2 / 24.5 s |
+| C0 arrow acceptance tests | `pnpm test:arrows` | 85/85 | 85/85 | 85/85 | 10.3 / 10.1 / 10.3 s |
+
+`apps/sync/test/element-room/conversion.test.ts` (real server process; in each run above): (1) two joiners of
+a tldraw board (O4's kitchen-sink fixture) get `PREPARING` first, then welcomes with equal epochs and
+hashes equal to the test snapshot; one `convert` job `done`; the report `ok`; a later joiner gets no
+`PREPARING`; an edit lands; the tldraw `documents` digest is unchanged and `converted_from` is recorded; (2)
+the internal snapshot route converts a board it opens, racing the test snapshot, one job; (3) after an R0
+edit of the tldraw side (a shape moved 250 px), the next open rolls the board forward: the joiner sees the
+move, a new epoch, `converted_from.cycle` 1, one `rollforward` job; (4) a 4 MB test heap cap: the joiner
+gets `PREPARING` then 4099 `CONVERSION_FAILED`, the status says `failed` / `out-of-memory`, a second joiner
+is refused at once with no second job, the snapshot route answers 503, another board keeps serving, and the
+file is byte-identical with the same tables and no WAL.
+
+Gate on `eedc2c9` (once): `biome check .` 1,421 files, 0 errors; `pnpm -r typecheck` pass; `tsc -p
+apps/sync/tsconfig.node-safe.json --noEmit` pass; `pnpm test` 3,968 passed, 33 skipped, 0 failed (the lead's
+M1/M2 gate: 3,957 / 34; +4 conversion, +2 rule-6 room tests, +5 layout unit tests, −1 placeholder skip).
+Not re-run here: the spike A suite, the A8 probe and the normal-build marker check (no file under
+`apps/web` changed; `canvas-schema/engine` gained `layoutBoundText` and `miniScene` and no new import; no file under
+`apps/web` imports `canvas-schema/engine`).
+
+### Conversion on open in two browsers (a trial, not a check)
+
+A throwaway spec (never committed; base 7860; one run): four tldraw board files written by today's
+`RoomRegistry` from O4's fixtures (kitchen sink, Lobby tour, mood board) and O4's HEAVY generator, placed
+under new board ids made through the api, then opened by two browsers (dev users A and B) at the same time.
+Each board was converted by the room on open; both browsers converged with the test snapshot, 0 invariant
+violations, 0 pushes from either, the conversion report `ok`: kitchen sink 45 elements (open and converge
+1.1 s), tour 167 (1.1 s), mood board 68 (1.0 s), heavy 9,220 (4.3 s). O4's `b8-two-browsers` and
+`b8-drill` were NOT run here: their R0 stand-in only binds 7850-7859 or 7900-7909 (`b8/stand-in.ts`), O4's
+and the lead's ranges.
+
+## Part 1 (before integration)
 
 Owner O1 (docs/EXCALIDRAW-MIGRATION.md §8.6.3). Branch `spike/b-room`, based on `spike/excalidraw` 93e3c3e
 (C0 975b531 plus B0). Code on `c54d6ab` (the evidence below was run on that tree; an earlier 3-run pass on `071648d` gave the same results with 78 protocol tests). Windows 11 workstation, Node 24.19.0, pnpm 10.34.5. Ports: none
@@ -104,10 +204,8 @@ run in-process in the C0 arrow tests s3, s4, s5).
 
 - Internal routes `seed`, `place-notes`, `text`, `asset-refs`, `deleted` (§2.4.6); the tldraw ones are not
   mounted in excalidraw mode (CONTRACTS.md decision 11).
-- Epochs on restore; the lazy conversion hook (O4's `room/migrate/**` has no entry point in this room yet:
-  a board file with tldraw tables and no `lb_meta` is refused with `BoardNeedsConversion`, sessions closed
-  4099 UNKNOWN_ERROR). The integration point is `BoardStore`'s constructor.
-- Rule 6 (the lease-expiry re-fit) for rectangles, ellipses and diamonds (sticky notes are done).
+- Epochs on restore; the lazy conversion hook (built in part 2, above).
+- Rule 6 (the lease-expiry re-fit) for rectangles, ellipses and diamonds (built in part 2, above).
 - Presence's "always included" peers (followed peer, presenter, summoner): the protocol has no fields for
   them yet.
 - `lb_deleted` trim: whole batches beyond 10,000 rows, every 100 deletions (not the tldraw store's
@@ -123,4 +221,5 @@ run in-process in the C0 arrow tests s3, s4, s5).
   target's edge" without importing the engine; `checkInvariants` is implemented. The test hooks answer for
   a board whose room is not open yet (the hook applies when it opens).
 - **O4**: the store refuses a file with tldraw tables and no `lb_meta` (`BoardNeedsConversion`); rule-7
-  helpers and `checkInvariants` are ready for step g.
+  helpers and `checkInvariants` are ready for step g. (Part 2: the room now calls `prepare` before the
+  store opens, so the store never sees such a file from the room.)
