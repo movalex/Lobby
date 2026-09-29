@@ -13,7 +13,7 @@ another owner's file or invents a shape another owner also implements.
 | Engine | `@excalidraw/*` `0.18.0-1118751`, pinned by the catalog |
 | Gate | see "The C0 gate" at the end |
 
-`CONTRACTS_REV` in `packages/canvas-schema/src/protocol.ts` is **1** at C0.
+`CONTRACTS_REV` in `packages/canvas-schema/src/protocol.ts` is **1** at C0 (**3** after the M1 integration; see "Change log").
 
 ## The change-request rule
 
@@ -301,6 +301,8 @@ until B0 is confirmed (§8.6.1).
 | Rev | Date | Change | By |
 |---|---|---|---|
 | 1 | 2026-09-29 | C0 | lead |
+| 2 | 2026-09-29 | `custom-data.ts`: `prompt`, `slot`, `swatch` (class 5 "free", `MarkerValue` = boolean or a 1-64 character string, 72 B, duplicate `keep`), which §3.3 lists and C0 left out; `limits.test.ts` name list. Additive: O1 validates them through the registry with no code change; O2/O5 clients may write them; O4's converter carries the template markers instead of `meta-dropped`. Accepted at M1 (CR `1370281` on `spike/b-convert`, applied as `bf11de0`) | O4 (CR), lead |
+| 3 | 2026-09-29 | `apps/web/src/canvas/sync/types.ts`: `EngineCore.doc()` and `EngineCore.setDoc(set)` for `lb_doc` keys (O5's tags write `tagDef:<key>` before an element's `tag:<key>`, §3.3). Additive; O2's core implements both (`sync/core/engine.ts`), and a `setDoc` is sent no later than the element push after it. Accepted at M1 (CR `35f0ae2` on `spike/b-features`, applied as `ac9a358`) | O5 (CR), O2, lead |
 
 ## The C0 gate
 
