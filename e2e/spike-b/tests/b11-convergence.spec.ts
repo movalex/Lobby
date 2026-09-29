@@ -28,6 +28,7 @@ import { Meter } from '../../load/meter.ts'
 import { mutated } from '../../load/session.ts'
 import type { O3BrowserProcess } from '../support/browsers.ts'
 import { closeWindow, openWindow, writeEvidence } from '../support/checks.ts'
+import { divergenceDetail, enableBoardLog } from '../support/diverge.ts'
 import { canvasOf, closeAllBrowsers, harness } from '../support/harness.ts'
 import { apiTicket } from '../support/seed.ts'
 import type { O3Stack } from '../support/stack.ts'
@@ -62,6 +63,8 @@ test.beforeAll(async () => {
     members: browsers.slice(1).map((b) => ({ user: b.user, role: 'editor' as const })),
     title: 'B11',
   }))
+  // the board session's own log (ids and counts), read if the maps do not converge
+  for (const b of browsers) await enableBoardLog(b.page)
   for (const b of browsers) await b.openBoard(boardId)
 })
 test.afterAll(async () => {
@@ -357,21 +360,33 @@ test('B11: 3 browsers + 50 headless clients, random ops, disconnects and one SIG
       hash: () => hashElements((p.client as HeadlessClient).core.elements().values()),
     })),
   ]
-  const report = await closeWindow(stack, boardId, targets, w, { timeoutMs: 60_000 })
+  const evidence = (extra: Record<string, unknown>) =>
+    writeEvidence(testInfo, 'B11', {
+      durationMs: DURATION_MS,
+      headless: HEADLESS,
+      counts,
+      killed: kill.done,
+      connectsPerHeadless: people.map((p) => p.connects),
+      headlessEdits: people.reduce((n, p) => n + p.edits, 0),
+      headlessErrorCount: people.reduce((n, p) => n + p.errorCount, 0),
+      headlessErrors: people.flatMap((p) => p.errors).slice(0, 20),
+      headlessCreated: people.reduce((n, p) => n + p.own.length, 0),
+      ...extra,
+    })
+  let report: Awaited<ReturnType<typeof closeWindow>>
+  try {
+    report = await closeWindow(stack, boardId, targets, w, { timeoutMs: 60_000 })
+  } catch (e) {
+    // not converged: what each diverging browser holds (scene, core, snapshot; flags; its board log)
+    const detail = await divergenceDetail(stack, boardId, browsers).catch((x) => String(x))
+    const file = evidence({ notConverged: detail, error: String(e).slice(0, 4_000) })
+    throw new Error(`${String(e).slice(0, 1_500)} (detail in ${file})`)
+  }
   const headlessIds = new Set(people.flatMap((p) => p.own))
   const headlessStored = report.snapshot.elements.filter((e) => headlessIds.has(e.id)).length
-  writeEvidence(testInfo, 'B11', {
-    durationMs: DURATION_MS,
-    headless: HEADLESS,
-    counts,
-    killed: kill.done,
+  evidence({
     elements: report.snapshot.elements.length,
     tombstones: report.snapshot.elements.filter((e) => e.isDeleted).length,
-    connectsPerHeadless: people.map((p) => p.connects),
-    headlessEdits: people.reduce((n, p) => n + p.edits, 0),
-    headlessErrorCount: people.reduce((n, p) => n + p.errorCount, 0),
-    headlessErrors: people.flatMap((p) => p.errors).slice(0, 20),
-    headlessCreated: people.reduce((n, p) => n + p.own.length, 0),
     headlessElementsStored: headlessStored,
   })
   // the headless half must really write: every op applied, and their notes are on the board
