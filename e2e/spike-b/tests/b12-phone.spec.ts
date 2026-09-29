@@ -33,9 +33,10 @@ test.beforeAll(async () => {
   const alice = harness.devUser('b12-alice')
   ;({ boardId } = await stack.createBoard({ owner: alice }))
   A = await harness.launchBrowser(stack, alice, { name: 'A' })
+  // a dev-user browser: the test itself turns it into a name-only guest through the A3 flow (joinAsGuest);
+  // the harness's `guest: true` (a guest signed in by the harness) is not available yet (lead, M1/M2)
   G = await harness.launchBrowser(stack, harness.devUser('b12-guest'), {
     name: 'G',
-    guest: true,
     touch: true,
     viewport: { width: 390, height: 844 },
   })
