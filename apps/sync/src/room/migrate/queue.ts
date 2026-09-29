@@ -21,7 +21,9 @@ export const RUNTIME_RSS_LIMIT_MB = 440
 export const MAINTENANCE_CAP_MB = 256
 /** §2.13: 1.5 × the largest board's measured peak, at most 128 MB (set from spike B8's numbers). */
 export const RUNTIME_CAP_MB_MAX = 128
-export const DEFAULT_RUNTIME_CAP_MB = 128
+/** Spike B8: the heavy board (4,922 records → 9,220 elements) peaked at 65.3 MB of committed heap (51.2 MB
+ * used) and converts with a 40 MB old generation (32 MB: ERR_WORKER_OUT_OF_MEMORY); 1.5 × 65.3 ≈ 98 MB. */
+export const DEFAULT_RUNTIME_CAP_MB = 98
 export const TIME_BUDGET_MS = 60_000
 export const YOUNG_GEN_MB = 16
 export const STACK_MB = 4
