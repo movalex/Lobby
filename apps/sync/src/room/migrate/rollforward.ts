@@ -557,62 +557,78 @@ export function rollForwardBoardFile(job: RollForwardJob, metrics: ServerTextMet
       if ((gclocks.get(main)?.z ?? 0) > cf.lbClock) conflicts.push({ elementId: main, group: 'z' })
       else toPlace.add(id)
     }
-    const sortedLive = () =>
-      [...idx.entries()]
-        .filter(([id]) => isLive(id))
-        .sort(([ia, a], [ib, b]) => (a < b ? -1 : a > b ? 1 : ia < ib ? -1 : 1))
+    // the live keys in order; a placed element always goes right after its preceding neighbour, before
+    // whatever follows that neighbour in ours, so a new key never collides with an existing one
+    const liveKeys = [...idx.entries()]
+      .filter(([id]) => isLive(id))
+      .map(([, k]) => k)
+      .sort()
+    const successor = (lo: string | null): string | null => {
+      let a = 0
+      let b = liveKeys.length
+      while (a < b) {
+        const m = (a + b) >> 1
+        if (lo !== null && (liveKeys[m] as string) <= lo) a = m + 1
+        else b = m
+      }
+      return liveKeys[a] ?? null
+    }
+    const insertKey = (k: string) => {
+      let a = 0
+      let b = liveKeys.length
+      while (a < b) {
+        const m = (a + b) >> 1
+        if ((liveKeys[m] as string) < k) a = m + 1
+        else b = m
+      }
+      liveKeys.splice(a, 0, k)
+    }
+    const removeKey = (k: string) => {
+      const i = liveKeys.indexOf(k)
+      if (i >= 0) liveKeys.splice(i, 1)
+    }
+    const placed = new Set<string>()
     for (const shapeId of [...toPlace].sort((a, b) => (positionOf.get(a) ?? 0) - (positionOf.get(b) ?? 0))) {
       const els = (theirsConv.elements.get(shapeId) ?? [])
         .map((e) => e.id)
         .filter((id) => written.has(id) || idx.has(id))
       if (!els.length) continue
+      // the element's old keys are free again (it is re-placed)
+      for (const id of els) {
+        const old = idx.get(id)
+        if (old !== undefined && isLive(id)) removeKey(old)
+      }
       const pos = positionOf.get(shapeId) ?? 0
       let lo: string | null = null
-      let hi: string | null = null
       for (let i = pos - 1; i >= 0 && lo === null; i--) {
         const n = order[i] as string
-        if (toPlace.has(n) && !idx.has(elementIdOf(n))) continue
+        // a neighbour that is itself waiting to be re-placed is not where it will be: skip it
+        if (toPlace.has(n) && !placed.has(n)) continue
         const keys = ownerElements(n)
           .filter((id) => isLive(id) && !els.includes(id))
           .map((id) => idx.get(id) as string)
         if (keys.length) lo = keys.sort().at(-1) as string
       }
-      for (let i = pos + 1; i < order.length && hi === null; i++) {
-        const n = order[i] as string
-        if (toPlace.has(n) && !idx.has(elementIdOf(n))) continue
-        const keys = ownerElements(n)
-          .filter((id) => isLive(id) && !els.includes(id))
-          .map((id) => idx.get(id) as string)
-        if (keys.length) hi = keys.sort()[0] as string
-      }
-      if (lo !== null && hi !== null && lo >= hi) {
-        // ours re-ordered the neighbours: go right after `lo`, before whatever follows it in ours
-        const after = lo
-        const live = sortedLive()
-          .map(([, k]) => k)
-          .filter((k) => k > after)
-        hi = live[0] ?? null
-      }
       for (const id of els) {
-        const key = indexKeyBetween(lo, hi)
+        const key = indexKeyBetween(lo, successor(lo))
         idx.set(id, key)
+        insertKey(key)
         const w = work(id) ?? (written.get(id) as Record<string, unknown>)
         w.index = key
         mark(id, 'z')
         lo = key
       }
+      placed.add(shapeId)
     }
     // a new label of an existing container goes right after its container
     for (const id of inserted) {
       const e = written.get(id) as Record<string, unknown>
       if (e.index !== null && e.index !== undefined && idx.has(id)) continue
       const container = typeof e.containerId === 'string' ? e.containerId : null
-      const lo = container ? (idx.get(container) ?? null) : (sortedLive().at(-1)?.[1] ?? null)
-      const live = sortedLive()
-        .map(([, k]) => k)
-        .filter((k) => lo === null || k > lo)
-      const key = indexKeyBetween(lo, live[0] ?? null)
+      const lo = container ? (idx.get(container) ?? null) : (liveKeys.at(-1) ?? null)
+      const key = indexKeyBetween(lo, successor(lo))
       idx.set(id, key)
+      insertKey(key)
       e.index = key
       mark(id, 'z')
     }
