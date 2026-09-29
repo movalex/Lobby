@@ -6,8 +6,9 @@
  * The same builder runs in the browser probe (`apps/web/test/engine-probe/browser`) with Chromium's
  * canvas metrics, which is how spike check A3 compares the two.
  */
-import { raw, rawCommon } from './raw.ts'
+import { miniScene, raw, rawCommon } from './raw.ts'
 import type {
+  EngineElement,
   LobbyFontFamily,
   StickyNoteElement,
   StickyNoteLayout,
@@ -115,6 +116,33 @@ export const buildStickyNote = (spec: NoteSpec): BuiltNote => {
   const note = { ...note0, ...lay.container }
   const label = lay.text ? { ...label0, ...lay.text } : label0
   return { note, label }
+}
+
+/** What `layoutBoundText` changes: the container's size, the label's wrapped text and box. */
+export interface BoundTextLayout {
+  container: { width: number; height: number }
+  text: Pick<TextElement, 'text' | 'width' | 'height' | 'x' | 'y' | 'angle'>
+}
+
+/**
+ * The label layout of a rectangle, ellipse or diamond (plan §2.9.4 rules 4 and 6): Excalidraw's own
+ * `redrawTextBoundingBox`, the helper the holder's client runs, on copies in a throwaway scene. The label is
+ * re-wrapped for the container's width, and the container grows when the text overflows (it never
+ * shrinks here, as in the engine). Sticky notes use `layoutStickyNote`. Pure for the caller.
+ */
+export const layoutBoundText = (container: EngineElement, label: TextElement): BoundTextLayout => {
+  // a stand-in scene over copies; the helper mutates them in place (`scene.mutateElement`)
+  const c = structuredClone(container) as EngineElement
+  const t = structuredClone(label) as TextElement
+  const map = new Map<string, EngineElement>([
+    [c.id, c],
+    [t.id, t as unknown as EngineElement],
+  ])
+  raw.redrawTextBoundingBox(t, c, miniScene(map))
+  return {
+    container: { width: c.width, height: c.height },
+    text: { text: t.text, width: t.width, height: t.height, x: t.x, y: t.y, angle: t.angle },
+  }
 }
 
 /** Wrap one label's `originalText` the way the note layout does (`wrapText`, index.js:6062). */

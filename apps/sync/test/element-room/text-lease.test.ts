@@ -5,9 +5,22 @@
 // fit (dropped after a newer pos/shape write or from a non-holder; accepted on a newer base; advancing
 // only gclock.fit), and a leased free text's own x as its fit.
 
+import { hashElements } from '@draftroom/canvas-schema/hash'
 import { describe, expect, it } from 'vitest'
 import type { RawClient } from './support/client.ts'
-import { assetId, image, label, note, text, versionId, withLabel } from './support/elements.ts'
+import {
+  arrow,
+  assetId,
+  bindArrow,
+  ellipse,
+  image,
+  label,
+  note,
+  rect,
+  text,
+  versionId,
+  withLabel,
+} from './support/elements.ts'
 import { newBoardId, useElementHarness } from './support/stack.ts'
 
 const h = useElementHarness()
@@ -301,6 +314,62 @@ describe('lease expiry (§2.9.4 rule 6)', () => {
     expect(after.width).not.toBe(before.width)
     expect(after.x as number).toBeGreaterThan(before.x as number)
   })
+
+  for (const make of [rect, ellipse] as const)
+    it(`the same for a ${make('x').type}: on expiry the server re-wraps the label for B's width and grows the container to fit it`, async () => {
+      const st = await h.stack({ env: { TEXT_LEASE_MS: '800' } })
+      const b = newBoardId()
+      const a = await st.client({ boardId: b, user: 'alice' })
+      const bob = await st.client({ boardId: b, user: 'bob' })
+      const words = 'a label long enough to wrap onto several lines once the shape is made narrow'
+      const r = make('r1', { x: 0, y: 0, width: 800, height: 60, index: 'a0' })
+      const t = label('r1.t', 'r1', {
+        text: words,
+        originalText: words,
+        x: 20,
+        y: 18,
+        width: 760,
+        height: 25,
+        index: 'a1',
+      })
+      withLabel(r, t)
+      const arrowToR = arrow('ar', {
+        x: -200,
+        y: 30,
+        points: [
+          [0, 0],
+          [190, 0],
+        ],
+        width: 190,
+        index: 'a2',
+      })
+      bindArrow(arrowToR, null, r, [1, 0.5], [0, 0.5])
+      await a.create([r, t, arrowToR])
+      await bob.untilClock(a.clock)
+      expect((await a.acquire('r1')).type).toBe('lease.grant')
+      // B makes the shape narrow while A holds the label: A's stale layout would overflow it
+      await bob.push([{ k: 'p', id: 'r1', pv: pv(bob, 'r1'), g: { shape: { width: 160 } } }])
+      const before = (await st.snapshot(b)).elements.find((e) => e.id === 'r1.t') as Record<string, unknown>
+      a.terminate() // the holder vanishes; no release
+      await bob.until(() => bob.of('lease').some((l) => l.id === 'r1' && l.holder === null), 'expiry', 5_000)
+      await bob.until(
+        () => (bob.confirmed.get('r1.t')?.version ?? 0) > (before.version as number),
+        'server re-fit',
+        5_000,
+      )
+      const snap = await st.snapshot(b)
+      const lab = snap.elements.find((e) => e.id === 'r1.t') as Record<string, unknown>
+      const box = snap.elements.find((e) => e.id === 'r1') as Record<string, unknown>
+      expect(lab.originalText).toBe(words)
+      expect((lab.text as string).split('\n').length).toBeGreaterThan(2)
+      expect(lab.width as number).toBeLessThanOrEqual(160)
+      // B's width is kept; the height grew to hold the wrapped text (a fit write: gclock.fit only)
+      expect(box.width).toBe(160)
+      expect(box.height as number).toBeGreaterThan(60)
+      expect(box.height as number).toBeGreaterThanOrEqual(lab.height as number)
+      // the arrow bound to the shape follows it (rule 7), and every client converges
+      expect(await bob.hash()).toBe(await hashElements(snap.elements))
+    })
 })
 
 describe('the lease-grant test hook (§2.4.6, for B3 L12)', () => {

@@ -158,7 +158,3 @@ describe.skipIf(!available)('the headless client (O2) against the room', () => {
     expect(arrowOps).toEqual([])
   })
 })
-
-describe.runIf(!available)('the headless client (O2) against the room', () => {
-  it.skip("skipped: O2's headless client is still the C0 stub on this branch", () => {})
-})

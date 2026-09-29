@@ -69,6 +69,19 @@ interface RawElementApi {
     text: TextElement | null,
     opts?: StickyNoteLayoutOpts,
   ): StickyNoteLayout
+  /**
+   * The bound-text layout of a non-sticky container (index.js:6267-6331): re-wraps the label for the
+   * container's width, grows the container's height (and width, for a word wider than it) when the text
+   * overflows, and centres the label. Mutates both through `scene.mutateElement`.
+   */
+  redrawTextBoundingBox(textElement: TextElement, container: EngineElement | null, scene: MiniScene): void
+  /** Assigns `updates` in place and bumps version, nonce and `updated` (index.js mutateElement). */
+  mutateElement<T extends EngineElement>(
+    el: T,
+    elementsMap: ReadonlyMap<string, EngineElement>,
+    updates: Partial<T>,
+    options?: { isDragging?: boolean },
+  ): T
   getStickyNoteFooter(
     el: Pick<StickyNoteElement, 'created' | 'width' | 'height'>,
     now?: number,
@@ -89,12 +102,37 @@ interface RawElementApi {
     el: T,
     randomizeSeed?: boolean,
   ): T
-  Scene: new (
-    elements?: readonly EngineElement[] | null,
-  ) => {
-    replaceAllElements(elements: readonly EngineElement[], opts?: { skipValidation?: boolean }): void
-    getElementsIncludingDeleted(): readonly EngineElement[]
+  Scene: new (elements?: readonly EngineElement[] | null) => RawScene
+}
+
+/**
+ * What the engine's layout helpers call on a scene. A real `Scene` validates indices through `window` in
+ * the dev build (index.js:18949), so Node code passes this stand-in over a plain map.
+ */
+export interface MiniScene {
+  mutateElement(el: EngineElement, updates: Record<string, unknown>, options?: Record<string, unknown>): void
+  getNonDeletedElementsMap(): ReadonlyMap<string, EngineElement>
+  getElementsMapIncludingDeleted(): ReadonlyMap<string, EngineElement>
+  getNonDeletedElements(): readonly EngineElement[]
+  triggerUpdate(): void
+}
+
+/** A `MiniScene` over a plain map of copies (mutated in place). */
+export function miniScene(map: Map<string, EngineElement>): MiniScene {
+  return {
+    mutateElement: (el, updates, options) => {
+      raw.mutateElement(el, map, updates as never, options)
+    },
+    getNonDeletedElementsMap: () => map,
+    getElementsMapIncludingDeleted: () => map,
+    getNonDeletedElements: () => [...map.values()],
+    triggerUpdate: () => {},
   }
+}
+
+export interface RawScene {
+  replaceAllElements(elements: readonly EngineElement[], opts?: { skipValidation?: boolean }): void
+  getElementsIncludingDeleted(): readonly EngineElement[]
 }
 
 export const raw = element as unknown as RawElementApi

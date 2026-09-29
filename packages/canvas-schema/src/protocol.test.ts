@@ -313,6 +313,7 @@ const SERVER: Record<string, unknown[]> = {
   notice: [
     { type: 'notice', code: 'SLOW_DOWN' },
     { type: 'notice', code: 'DISK', detail: 'free space below 5%' },
+    { type: 'notice', code: 'PREPARING' },
   ],
   pong: [{ type: 'pong' }, { type: 'pong', n: 7 }],
 }

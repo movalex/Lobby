@@ -17,8 +17,11 @@ import { BOARD_ID_RE } from '../rooms.ts'
 import type { ElementRoom } from './element-room.ts'
 
 export interface RoomLookup {
-  /** The open room, or the board's room opened from its file; null when the board has no file. */
-  existing(boardId: string): ElementRoom | null
+  /**
+   * The open room, or the board's room opened from its file (after its conversion or roll-forward, which it
+   * waits for); null when the board has no file. Throws HttpError 503 when the board could not be prepared.
+   */
+  existing(boardId: string): Promise<ElementRoom | null>
   /** The open room only. */
   ifOpen(boardId: string): ElementRoom | null
 }
@@ -39,8 +42,8 @@ export function roomRoutes(rooms: RoomLookup): InternalRoute[] {
     {
       method: 'GET',
       path: /^\/internal\/boards\/([^/]+)\/snapshot$/,
-      handle: (_req, res, [raw = '']) => {
-        const room = rooms.existing(boardParam(raw))
+      handle: async (_req, res, [raw = '']) => {
+        const room = await rooms.existing(boardParam(raw))
         if (!room) throw new HttpError(404, 'board-not-found', 'No such board.')
         sendJson(res, 200, room.liveSnapshot())
       },
