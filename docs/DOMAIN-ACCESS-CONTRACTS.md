@@ -1,6 +1,6 @@
 # Domain access: contracts
 
-Status: contracts committed (step A, §12), 2026-09-29, on branch `next` (base a571636: 19 backlog fixes, not deployed). Revised after the security and regression reviews: every blocking item is resolved, and §16 (Review log) says what was accepted, rejected or deferred. **API steps B1 and B2 are built** on branch `da/api` (§17, As built), **the web (step C) on `da/web`**, and both are **merged into `next`** (step D, §18: the gate is recorded there and in docs/PROGRESS.md). **Verifier findings, fixer round 1** (§19): fixed on `next`, with the contract changes marked "fixer round 1" in §3.3, §3.4, §4.2, §6.1, §7, §9, §14 and §15. **Fixer round 2** (§20): four web findings, fixed on `next`, with the §9 changes marked "fixer round 2". Still to do: the opt-in real-Postgres run, the independent security review (§14) and the deploy (§13).
+Status: contracts committed (step A, §12), 2026-09-29, on branch `next` (base a571636: 19 backlog fixes, not deployed). Revised after the security and regression reviews: every blocking item is resolved, and §16 (Review log) says what was accepted, rejected or deferred. **API steps B1 and B2 are built** on branch `da/api` (§17, As built), **the web (step C) on `da/web`**, and both are **merged into `next`** (step D, §18: the gate is recorded there and in docs/PROGRESS.md). **Verifier findings, fixer round 1** (§19): fixed on `next`, with the contract changes marked "fixer round 1" in §3.3, §3.4, §4.2, §6.1, §7, §9, §14 and §15. **Fixer round 2** (§20): four web findings, fixed on `next`, with the §9 changes marked "fixer round 2". **Fixer round 3** (§21): three low findings (an unreachable invite page, links locked to the inviter's own address, invitations to a board in the trash) plus a time-of-day e2e fix, on `next`, with the contract changes marked "fixer round 3" in §4.3, §6.1, §7, §7.1, §9 and §10. Still to do: the opt-in real-Postgres run, the independent security review (§14) and the deploy (§13).
 
 Owner decisions: 2026-09-29, final (restated in §0). Two builders work in parallel: an **API owner** and a **WEB owner** (§12). This file is the only coordination channel between them. Contract changes go through the API owner and are recorded here.
 
@@ -336,6 +336,8 @@ The codes and messages are exported from contracts (`DOMAIN_ACCESS_CODES`, `DOMA
 | `INVITATION_EMAIL_MISMATCH` | 403 | This invitation is for {hint}. Sign in with that email address to accept it. (body §7) |
 | `IDENTITY_UNAVAILABLE` | 503 | Lobby couldn’t confirm your email address with the sign-in service. Try again in a minute. |
 | `ACCOUNT_DISABLED` | 403 | This account can’t sign in to Lobby. Contact the person who runs Lobby at Dark Burn Creative. |
+| `INVITATION_TO_SELF` (fixer round 3) | 409 | That’s your own address. Enter the email address of the person you want to invite. |
+| `BOARD_IN_TRASH` (fixer round 3; exported as `BOARD_IN_TRASH` from `index.ts`, not a domain-access code) | 409 | This board is in the trash, so the invitation can’t be used right now. It works again if the board is restored before the link expires. |
 | (validation, 400) | 400 | `AccountEmail` messages; a `+clerk_test` address: "Lobby doesn’t accept Clerk test addresses (+clerk_test)." |
 
 ### 4.4 Audit and logs
@@ -370,6 +372,7 @@ The codes and messages are exported from contracts (`DOMAIN_ACCESS_CODES`, `DOMA
   - All three single-use routes pass it: board, workspace, and the email route's `newInvitation`.
   - The email route's `emailed`, `existing_account`, `email_not_configured`, `invalid_email`, `rate_limited` and `provider_error` links are therefore all locked to the address.
   - The `granted` path (an existing Lobby user whose Clerk address is verified) is unchanged apart from the creator check.
+  - (Fixer round 3, §21) An address that is one of the inviter's own stored verified addresses (running provider's source, the set accepting would count) → 409 `INVITATION_TO_SELF`, nothing created or audited. It is checked in `createInvitation`, so it covers all three routes. With Clerk, the email route's `granted` path already answers `alreadyHadAccess` for the inviter's own address; only its link fallbacks reach the check.
 - **Workspace invitations**: `role: 'admin'` for an address where `!isCreatorEmail` → 409 `ROLE_REQUIRES_CREATOR` (D5). `member` and `guest` are allowed for anyone.
 - **State.** `stateFor` (invitations.ts:80-84), after the `redeemed_by` branch: `!inv.multi_use && inv.invited_email === null` → `'gone'` (D3). The preview therefore also answers 410 through `sendGone`. Guest join checks `multi_use` before `stateFor` (features/guests/join.ts:84-87), so guests never reach this branch.
 - **Accept** (`POST /api/invitations/:token/accept`, invitations.ts:308-340):
@@ -378,6 +381,7 @@ The codes and messages are exported from contracts (`DOMAIN_ACCESS_CODES`, `DOMA
   3. Inside the transaction:
      - `lockInvitation` → the existing guest check (name-only guests get `GUEST_ACCOUNT_REQUIRED`, as today);
      - `state === 'gone'` → 410 (no hint);
+     - (Fixer round 3, §21) a board invitation whose board is `trashed` → 409 `BOARD_IN_TRASH`, for `'usable'` and `'redeemed_by_caller'` alike, before the email check. Nothing is redeemed and no grant is written; `lockInvitation` already holds the board row, so a trash or restore waits for this answer. Restoring the board makes a link that is still valid usable again (the expiry clock keeps running while it is in the trash). Workspaces have no trash, so workspace invitations never get this;
      - `'redeemed_by_caller'` → no-op;
      - `'usable'`: if `inv.invited_email !== null` and the Set does not contain it → mismatch. The transaction returns a marker, and the route answers `reply.code(403).send(InvitationEmailMismatchBody)`, the way `sendGone` answers. Nothing is redeemed, and the link stays usable for the invitee.
      - A workspace invitation with `role` admin/owner while the caller is not a creator → 409 `ROLE_REQUIRES_CREATOR` (the exceptions may have changed since it was created).
@@ -389,6 +393,7 @@ The codes and messages are exported from contracts (`DOMAIN_ACCESS_CODES`, `DOMA
   - `invitedEmailHint`, the masked address, for usable locked links only;
   - `matchesYou`: true or false for a signed-in account, from its stored addresses (no Clerk call here: accept re-checks with fresh data); null when signed out, for guests and for unlocked links;
   - `sentByYou` (fixer round 1, §19): true when the signed-in caller created this locked invitation (an inviter opening their own link to check it), else false. The page then says whom the link is for instead of "ask {inviter} to invite {you}".
+  - `boardInTrash` (fixer round 3, §21; `InvitationBoardState` in `index.ts`): true when the invitation's board is in the trash, for every usable board invitation (locked, review, workshop and guest links alike), else false. A used, revoked or expired link still answers 410 first.
 
   The mask is the first character of the local part, then `•••@`, then the domain: `jane.doe@client.com` → `j•••@client.com`. `maskEmail` lives in the api only. The full address is returned to others in exactly one response, the manager-only `GET /api/boards/:bid/invitations` (`PendingInvitation.email`); besides that, `POST /api/boards/:bid/invitations/email` echoes it back (`EmailInviteResult.email`) only to the creator who just typed it (wording corrected in fixer round 1, §19).
 
@@ -418,7 +423,10 @@ New file **`packages/contracts/src/domain-access.ts`**. It imports only `zod`, s
 - `ME_ACCESS_LEGACY = { creator: true, reason: 'legacy', email: null }` (D11);
 - `DOMAIN_ACCESS_CODES`, `DomainAccessCode`, `DOMAIN_ACCESS_MESSAGES`, `invitationEmailMismatchMessage(hint)` (§4.3);
 - `InvitationEmailLock = { emailLocked: default false, invitedEmailHint: string | null default null, matchesYou: boolean | null default null, sentByYou: boolean default false }` (`sentByYou` added in fixer round 1, §19);
-- `InvitationEmailMismatchBody = { error: { code: 'INVITATION_EMAIL_MISMATCH', message }, mismatch: { invitedEmailHint: string, invitedBy: { name } | null } }`.
+- `InvitationEmailMismatchBody = { error: { code: 'INVITATION_EMAIL_MISMATCH', message }, mismatch: { invitedEmailHint: string, invitedBy: { name } | null } }`;
+- (fixer round 3, §21) `DOMAIN_ACCESS_CODES.invitationToSelf` (`'INVITATION_TO_SELF'`) and `DOMAIN_ACCESS_MESSAGES.invitationToSelf`.
+
+(Fixer round 3, §21) **`packages/contracts/src/index.ts`** also gains, next to `InvitationPreview` (which itself does not change): `InvitationBoardState = { boardInTrash: boolean default false }` (an older api's preview still parses) and `BOARD_IN_TRASH = { code: 'BOARD_IN_TRASH', message }`.
 
 Edits to **`packages/contracts/src/index.ts`** (it also `export * from './domain-access.ts'`):
 - `DevLoginInput` gains `email: AccountEmail.optional()`;
@@ -449,10 +457,10 @@ Once B2 makes `email` required, the old web (which sends `{ role }`) gets 400 on
 | `POST /api/auth/clerk/session` | new 403 `ACCOUNT_DISABLED`; 503 `IDENTITY_UNAVAILABLE` (first sign-in only); response `Me.access` |
 | `GET /api/me`, `GET /api/auth/me`, sign-in responses | `access: MeAccess`; refresh per §3.4; ensure personal workspace |
 | every `CREATOR_ROUTES` `always` route | 403 `CREATOR_REQUIRED` (guests keep `GUEST_ACCOUNT_REQUIRED`); 503 `IDENTITY_UNAVAILABLE` when unconfirmed |
-| `POST /api/boards/:bid/invitations`, `POST /api/workspaces/:wid/invitations` | `email` (required from B2); workspace `admin` for an outside address → 409 |
+| `POST /api/boards/:bid/invitations`, `POST /api/workspaces/:wid/invitations` | `email` (required from B2); workspace `admin` for an outside address → 409; (fixer round 3) one of the inviter's own addresses → 409 `INVITATION_TO_SELF` (also the email route's link fallbacks) |
 | any body with an address | 400 for non-ASCII and `+clerk_test` addresses |
-| `GET /api/invitations/:token` | + `InvitationEmailLock`; unbound single-use → 410 |
-| `POST /api/invitations/:token/accept` | 403 `INVITATION_EMAIL_MISMATCH` (body above); 503; 409 |
+| `GET /api/invitations/:token` | + `InvitationEmailLock`; unbound single-use → 410; (fixer round 3) + `InvitationBoardState.boardInTrash` |
+| `POST /api/invitations/:token/accept` | 403 `INVITATION_EMAIL_MISMATCH` (body above); 503; 409; (fixer round 3) 409 `BOARD_IN_TRASH`, nothing redeemed |
 | `GET /api/boards/:bid/invitations` | `PendingInvitation.email`; `url: null` for non-creator callers |
 | `GET /api/boards/:bid/sharing/members` | `ShareMember.canOwn` (`creatorsAmong`, one query; true while a member was never checked, since the server decides at PUT) |
 | `PUT …/members/:uid` | 409 `ROLE_REQUIRES_CREATOR`; a non-creator may only lower |
@@ -520,6 +528,7 @@ Everything reads `useMe().access`. The server stays authoritative, so the UI onl
   - Pending rows (:1366-1392) read "For {email} · {role} · expires …" (no email: today's row).
   - The owner option (and the transfer-ownership target) is disabled for members with `canOwn === false`. Its tooltip: "Only people at Dark Burn Creative or Trailer Park Group can own boards". (Fixer round 1, §19: a disabled option in a native select popup shows no tooltip and a disabled button takes no focus, so the reason is also shown as text, `member-owner-note`, tied to the select and the transfer button with `aria-describedby`.) (Fixer round 2, §20: the note is shown **once**, under "People with access", when any row the caller can edit has Owner off for this reason (`listShowsOwnerNote`); it reads "Only people at Dark Burn Creative or Trailer Park Group can own boards, so Owner is turned off for everyone else here." The select and transfer button of each such row (`rowNeedsOwnerNote`) point to it with `aria-describedby`; a creator's row does not. On every row it repeated down a list of client reviewers, and at 390 px grew each of their rows from 47 to about 209 px.)
   - (Fixer round 1) "Or pick someone from the workspace…" (`AddMember`) offers Can edit, Can comment and Can view, never Owner, like "Invite people": `WorkspaceMember` carries no `canOwn`, so Owner would be offered to outsiders and refused with 409 after Add. Ownership is set on the person's row, which knows `canOwn`.
+  - (Fixer round 3, §21) The creator's own address (`me.access.email`, compared after `checkInviteEmail`: `isOwnAddress`) in "Invite people" or "Link for one person": said at once, while typing, as `DOMAIN_ACCESS_MESSAGES.invitationToSelf` ("That's your own address…"): in `share-invite-hint`, and as the `one-person-link-error` field error. Submitting creates nothing (`invitePlan` answers `own-address`; `share-invite-notice` `role="alert"`). The api's 409 `INVITATION_TO_SELF` for another of the account's verified addresses shows the same words (as the field error in "Link for one person").
 - Update the copy helpers `emailInviteHint`, `linkForEmailHint` and `emailInviteOutcome` to say the link works only for that address.
 - `CREATOR_REQUIRED` and `ROLE_REQUIRES_CREATOR` errors show the server's message.
 
@@ -542,6 +551,8 @@ Everything reads `useMe().access`. The server stays authoritative, so the UI onl
   4. Accept answers 503 `IDENTITY_UNAVAILABLE`: "Couldn't confirm your email right now", with a retry.
   5. Accept answers 409 `ROLE_REQUIRES_CREATOR`: the server message.
   6. Gone (410) and guest links (`allowGuests`): unchanged.
+  7. (Fixer round 3, §21) **Lobby can't be reached**: the invitation read got no answer or a 5xx, or the session read did (state `unreachable`, the re-read after a 403 `INVITATION_EMAIL_MISMATCH` included; `inviteUnreachable`). The page shows `UnreachableScreen` (`api-unreachable`, "Can't reach Lobby", the error's message and `api-unreachable-retry` "Try again"), the same screen RequireSession now renders. The retry re-reads whatever failed (the session, the invitation or both), and the state reached before is kept, so a mismatch shows once the session answers. It is never the signed-out "Sign in or create an account with {hint}", the mismatch state or "Invitation unavailable". Other answers (404, 410, 429, 403) keep their screens.
+  8. (Fixer round 3, §21) **Board in the trash** (`boardInTrash`, or accept answered 409 `BOARD_IN_TRASH` after the page loaded): the facts stay, the title drops "Join", and the one block is `invite-board-trashed` (`role="status"`): "This board is in the trash" / "“{title}” is in the trash, so this invitation can’t be used right now. Ask {invitedBy} to restore it: the link works again once the board is back, until it expires." For `sentByYou`: "…so nobody can use this link right now. Once the board is restored, the link works again until it expires." There is no accept, sign-in, guest-join or own-link action, and no auto-accept (`shouldAutoAccept`); a signed-in account gets "Go to your boards" (`invite-trashed-home`). This takes precedence over states 1-3 and the guest-link form.
 
 **Sign-in**
 - `ClerkSignIn.tsx` maps `ACCOUNT_DISABLED` and `IDENTITY_UNAVAILABLE` from the exchange to their messages, with a retry for the 503. (Fixer round 2, §20: the markup after Clerk's form lives in `auth/ExchangeStatus.tsx`, free of Clerk hooks, so a unit test renders it.)
@@ -561,7 +572,8 @@ The only guest-adjacent changes allowed:
 - a `requireCreator` call placed after the guest check in review-links create;
 - `requireCreator` answering guests with `GUEST_ACCOUNT_REQUIRED`;
 - `InvitationEmailLock` defaults (false/null) on guest-link previews;
-- in `apps/web/src/invite/guest.tsx`, only the `GuestAwarePreview` schema line (it adds `.extend(InvitationEmailLock.shape)`);
+- in `apps/web/src/invite/guest.tsx`, only the `GuestAwarePreview` schema line (it adds `.extend(InvitationEmailLock.shape)`, and in fixer round 3 `.extend(InvitationBoardState.shape)`, with their imports);
+- (fixer round 3, §21) on a guest link whose board is in the trash, the invite page shows the "board in the trash" state instead of `GuestJoinForm` (the form itself is unchanged). The guest join route (`features/guests/join.ts`) is **not** changed, so a hand-made `POST /api/invitations/:token/guest` on such a link still joins, as before; see §21;
 - in guest api tests, only the **fixture bodies** of single-use invitations, which gain an `email` (§11.3). No guest expectation changes.
 
 Proof: with only those fixture edits, these pass:
@@ -950,3 +962,28 @@ A second verification of `next` (regression lens) found one medium and three low
 Run against the pre-fix source (source changes stashed, the new tests kept; E2E_PORT_BASE 6800): the three changed unit files failed (share-model 1, invite model 2, exchange-status could not load), and `domain-access.spec.ts` failed 4 of 11 on the new assertions (flow 2 `role` "alert", the owner note count 2, the workspace link's `data-sent-by-you`, the stale "signed in as ivy@…"); the other 7 passed.
 
 **Gate after the fixes** (Windows 11, Node 24, headless Chromium, `E2E_PORT_BASE=6800`): `pnpm lint` clean (1,038 files); `pnpm -r typecheck` clean (14 projects); `pnpm test` 295 files passed / 9 skipped, 3,319 tests passed / 36 skipped (5 more than round 1); `domain-access.spec.ts` 11/11 in three runs in a row (33/33); the e2e specs that touch the Share dialog's member rows or the invite page, run once: `client-defaults`, `dashboard-share`, `demo-polish-b`, `guests`, `guests-2`, `invite-email`, `permissions`, `search`, `security-web.fix`, `sharing-polish`, `shell-sharing-platform.fix`, `theme`, 66/66. Not re-run: the whole e2e suite, the opt-in real-Postgres tests (no Postgres here), the demo and perf smoke checks.
+
+## 21. Verifier findings, fixer round 3
+
+A third verification of `next` (724ec3e, regression lens; the creation and invites lenses stayed clean) found three low findings. Each fix has a test that failed before it and passes after, and is marked "fixer round 3" where it changes a section above. A fourth item is a test-only fix for a time-of-day failure in `workshop-copy.spec.ts`, in its own commit.
+
+| # | Finding | Resolution | Tests |
+|---|---|---|---|
+| 1 | `/invite` is a public route, so InvitePage never showed "Can't reach Lobby". When the invitation read failed it showed "Invitation unavailable" with no retry. When the session read failed (at load, or in the round-2 re-read after a 403 `INVITATION_EMAIL_MISMATCH`), a signed-in person saw the signed-out "Sign in or create an account with {hint}" state. | `UnreachableScreen` (`ui/screens.tsx`) is the one "Can't reach Lobby" screen, used by RequireSession and by the invite page (`inviteUnreachable`: an invitation read with no answer or a 5xx, or session state `unreachable`). Its "Try again" re-reads what failed and keeps the page's state, so a mismatch shows once the session answers (§9 invite page, state 7). | web `invite/model.test.ts`, `ui/unreachable-screen.test.ts`; e2e "fixer round 3: the invite page when Lobby can’t be reached…" (a 502 preview, a dropped `/api/auth/me`, and a 502 re-read after a routed 403, then a real accept) |
+| 2 | A creator could lock a one-time link to their own address, and nothing said so. Opening it showed "Join … / Accept", because `sentByYou` and `matchesYou` were both true. Accepting used the link up and changed nothing. | The api refuses it: `createInvitation` answers 409 `INVITATION_TO_SELF` for any of the inviter's stored verified addresses, on the board, workspace and email routes (§4.3, §6.1). Share > Invite people and "Link for one person" say "That's your own address…" while the address is typed, and create nothing (§9). | api `fixer-round-3.test.ts` (dev: board, workspace and email route, in any case; Clerk: a secondary verified address counts, an unverified one does not); web `share-model.test.ts`; contracts `domain-access.test.ts`; e2e "fixer round 3: a creator typing her own address…" |
+| 3 | This predates domain access. A pending link to a board in the trash still previewed and could be accepted. The link was used up, and the invitee got a role on a board nobody can open, then a no-access screen. | The preview adds `boardInTrash` (`InvitationBoardState`). Accept answers 409 `BOARD_IN_TRASH` inside the locked transaction: nothing is redeemed, no grant or workspace membership is written, and nothing is audited. After a restore, a link that is still valid works again; an expired one stays 410. Review and workshop links accepted by an account get the same answer. An archived board is not in the trash, and its links work as before. The invite page shows the "board in the trash" state (§9, state 8), and a 409 at accept, after a trash that happened while the page was open, shows the same state. **Workspace-level invitations**: workspaces have no trash (there is no status column), so nothing applies; a test pins `boardInTrash: false`. | api `fixer-round-3.test.ts` (preview for signed out, invitee and inviter; 409 with no grant; the link still pending after a restore, then accepted; a wrong account; the expired link; a review link; archived; workspace); web `invite/model.test.ts`; e2e "fixer round 3: an invitation to a board in the trash…" (invitee, signed out, inviter, a trash between load and click, then a restore and an accept as viewer) |
+| 4 | `workshop-copy.spec.ts:36` (R2-08) failed whenever the run crossed midnight. A 3-hour link made after 21:00 local ends the next day, and the unchanged badge (`shortTime`) rightly says "until Sep 29, 2:25 AM". | Test-only: the assertion builds the exact text the page draws, for the local day at the test's start and for the day now. The History "Today …" row gets the same treatment. The app is unchanged. | Before the fix, with the browser in `Pacific/Tongatapu` at 22:53 local, the old assertion failed ("until 1:53 AM" expected, "until Sep 30, 1:53 AM" shown) and the new one passed. The new one also passes at 02:53 local. |
+
+**Kept as it is (a follow-up, not a regression)**: the name-only guest join route (`features/guests/join.ts`), frozen by §10, is unchanged. The invite page no longer offers "Join as a guest" for a guest link whose board is in the trash, but a hand-made `POST /api/invitations/:token/guest` on that link still joins, as it did before. The inviter's own locked links made before this fix (`matchesYou` true) still read "Join" (no deploy carries the lock yet, so none exist outside test databases).
+
+`api/test/invitations.test.ts` "a guest link does not demote the workspace owner who accepts it" used to lock alice's own guest invitation to her own address. The invitation now comes from a second admin (bob), and the test also checks that accept answers 200. The expectation is unchanged.
+
+Run against the pre-fix source (the source changes stashed, the new contracts and tests kept; E2E_PORT_BASE 6800): 10 of the new unit and api tests failed. Those were 5 of the 9 api cases (the 4 that passed guard behaviour that already worked: another person's address, an expired link, an archived board, workspace invitations) and all 5 new web cases. All 3 new e2e tests failed.
+
+**Gate after the fixes** (Windows 11, Node 24, headless Chromium, `E2E_PORT_BASE=6800`, on b35cbcc + 0ddfedc):
+- `pnpm lint` clean (1,040 files); `pnpm -r typecheck` clean (14 projects).
+- `pnpm test`: 297 files passed / 9 skipped; 3,334 tests passed / 36 skipped. That is 15 more than round 2: api 9, web 5, contracts 1.
+- The invitation, sharing and workshop specs, run once: `invite-email`, `permissions`, `dashboard-share`, `sharing-polish`, `shell-sharing-platform.fix`, `security-web.fix`, `guests`, `guests-2`, `workshop-copy`: 52/52.
+- `domain-access.spec.ts`: 14/14 in three runs in a row (42/42).
+- **The whole e2e suite once: 341/341 passed in 24.1 min** (338 before this round, plus the 3 new tests). It ran at 03:01 to 03:25 local, so the workshop-copy change is proven across midnight by the timezone check above, not by this run.
+- Not run: the opt-in real-Postgres tests (no Postgres here), and the demo and perf smoke checks.
