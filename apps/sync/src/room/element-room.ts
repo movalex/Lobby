@@ -249,7 +249,6 @@ export class ElementRoom {
     size: number
     at: number
   } | null = null
-  private lastDiskNotice = 0
   private lastDiskCheck = 0
   private deletedSinceTrim = 0
 
@@ -951,7 +950,6 @@ export class ElementRoom {
     try {
       const st = statfsSync(dirname(this.deps.path))
       if (st.blocks > 0 && st.bavail / st.blocks < DISK_LOW_FRACTION) {
-        this.lastDiskNotice = now
         this.broadcast(JSON.stringify({ type: 'notice', code: 'DISK' }))
       }
     } catch {
