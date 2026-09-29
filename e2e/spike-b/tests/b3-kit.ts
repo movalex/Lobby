@@ -131,12 +131,95 @@ export async function room(
 
 // ---- waits ------------------------------------------------------------------------------------------
 
+/**
+ * The engine core's bookkeeping behind the Saved indicator (ids, group names, seqs, clocks and codes;
+ * never element text): what is dirty, in flight, queued, and the session's last events. A spec that
+ * times out waiting for "Saved" reports this, so a stall keeps its own trace.
+ */
+export function coreState(page: Page) {
+  return board(page, (b) => {
+    // biome-ignore lint/suspicious/noExplicitAny: the core's private records and the session's logs, read at runtime
+    type R = any
+    const c: R = b.core
+    const keys = (o: unknown) => (o && typeof o === 'object' ? Object.keys(o) : undefined)
+    const tracked = [...(c.tracked ?? new Map()).entries()].map(([id, t]: [string, R]) => ({
+      id,
+      dirty: [...t.dirty],
+      isNew: t.isNew,
+      replay: t.replay,
+      since: t.since,
+      needsLease: t.needsLease ?? null,
+    }))
+    const op = (o: R) => ({
+      k: o.k,
+      id: o.k === 'c' ? o.el.id : o.id,
+      g: keys(o.g),
+      c: keys(o.c),
+      fit: keys(o.fit),
+      off: o.off,
+    })
+    return {
+      save: c.saveStatus,
+      transport: b.session.transport?.state ?? null,
+      connected: c.connected,
+      welcome: c.welcome ? { sid: c.welcome.sid, clock: c.welcome.clock, reset: c.welcome.reset } : null,
+      clock: c.clock,
+      awaitingSnapshot: c.awaitingSnapshot,
+      resyncing: c.resyncing,
+      trackedN: tracked.length,
+      tracked: tracked.slice(0, 20),
+      inflight: (c.inflight ?? []).map((p: R) => ({
+        seq: p.seq,
+        base: p.base,
+        at: p.record?.at,
+        ids: [...p.sent.keys()].slice(0, 10),
+        groups: [...p.sent.values()].slice(0, 10).map((x: R) => [...x.groups]),
+      })),
+      pendingDoc: keys(c.pendingDoc),
+      inflightDoc: [...(c.inflightDoc?.keys() ?? [])],
+      leasePending: [...(c.leasePending ?? [])],
+      queuedLease: (c.queuedLease ?? []).length,
+      timers: {
+        flush: c.flushTimer !== null,
+        retry: c.retryTimer !== null,
+        persist: c.persistTimer !== null,
+      },
+      unavailableSince: c.unavailableSince,
+      offlineQueued: c.offlineQueued,
+      gesture: c.gesture,
+      pushes: c
+        .pushLog()
+        .slice(-8)
+        .map((p: R) => ({ seq: p.seq, base: p.base, at: p.at, ops: p.ops.map(op) })),
+      events: (b.session.eventLog ?? [])
+        .slice(-30)
+        .map((e: R) => `${e.n} ${e.kind} ${e.id ?? ''} ${e.detail ?? ''} @${e.at}`),
+      coreLog: (b.session.coreLog ?? [])
+        .slice(-30)
+        .map((e: R) => ({ n: e.n, event: e.event, detail: e.detail, at: e.at })),
+      now: Date.now(),
+    }
+  })
+}
+
 export async function waitSaved(page: Page, timeout = 30_000): Promise<void> {
-  await expect.poll(async () => (await lc(page).saveState()).state, { timeout }).toBe('saved')
+  try {
+    await expect.poll(async () => (await lc(page).saveState()).state, { timeout }).toBe('saved')
+  } catch (e) {
+    // keep the stall's trace: the core's bookkeeping at the timeout (ids, groups, seqs, clocks only)
+    const state = await coreState(page).catch((err) => ({ unreadable: String(err) }))
+    console.log('waitSaved timeout', JSON.stringify(state))
+    throw new Error(`not Saved within ${timeout} ms: ${JSON.stringify(state)}`, { cause: e })
+  }
 }
 
 export async function allSaved(bs: readonly BrowserProcess[], timeout = 30_000): Promise<void> {
-  for (const b of bs) await waitSaved(b.page, timeout)
+  for (const b of bs)
+    try {
+      await waitSaved(b.page, timeout)
+    } catch (e) {
+      throw new Error(`browser ${b.name}: ${(e as Error).message}`, { cause: e })
+    }
 }
 
 /** Resolves when `id` is in every browser's map (optionally with `pred` true on it). */

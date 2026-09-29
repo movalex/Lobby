@@ -17,7 +17,9 @@
 // Deviation (recorded in B3.md): B's and C's gestures are not pointer drags (their pointer paths are B1's
 // and the arrow acceptance tests' client copies).
 //
-// Run: SPIKE_B_PORT_BASE=<base> pnpm --filter @draftroom/e2e spike-b b3-l6-l10   (SPIKE_B3_ARROW_REPS, default 20)
+// Run: SPIKE_B_PORT_BASE=<base> pnpm --filter @draftroom/e2e spike-b b3-l6-l10   (SPIKE_B3_ARROW_REPS, default 20;
+//      SPIKE_B3_L10_VARIANTS, a comma list of L10 3-5's variants to run, default all of
+//      3-left,5-centred-moved,5-slow-typist; a filtered run is a repro aid, never the check's evidence)
 import { expect, type Page, test } from '@playwright/test'
 import { GEOMETRY_TOLERANCE_PX as TOL } from '../../../packages/canvas-schema/src/limits.ts'
 import { harness } from '../support/harness.ts'
@@ -255,6 +257,39 @@ const events = (page: Page, from: number) =>
 /** The number of the page's last event-log entry. */
 const eventCount = (page: Page) =>
   board(page, (b) => ((b.session.eventLog as LogEntry[]).at(-1)?.n ?? 0) as number)
+type CoreLogEntry = { n: number; event: string; detail: unknown }
+/** The number of the page's last core-log entry (session.coreLog: ids, counts and clocks only). */
+const boardLogCount = (page: Page) =>
+  board(page, (b) => ((b.session.coreLog as CoreLogEntry[]).at(-1)?.n ?? 0) as number)
+/**
+ * A's record of one L10 5 race: its pushes of `id` after push `fromPush` (seq, base, sent at, the fit and
+ * the group names), its acks, refits and the core's fit_superseded records after `fromEvent`/`fromLog`.
+ */
+async function aTrace(id: string, fromPush: number, fromEvent: number, fromLog: number) {
+  const pushes = (await lc(A()).pushedOps()).slice(fromPush).flatMap((p) =>
+    p.ops
+      .filter((o) => o.k === 'p' && o.id === id)
+      .map((o) => ({
+        seq: p.seq,
+        base: p.base,
+        at: p.at,
+        fit: (o as { fit?: unknown }).fit ?? null,
+        g: Object.keys((o as { g?: object }).g ?? {}),
+      })),
+  )
+  const ev = (await events(A(), fromEvent))
+    .filter((e) => e.kind === 'ack' || e.kind === 'refit' || e.kind === 'welcome')
+    .map((e) => `${e.kind} ${e.id ?? ''} ${e.detail ?? ''}`.trim())
+  const superseded = await board(
+    A(),
+    (b, from: number) =>
+      (b.session.coreLog as CoreLogEntry[])
+        .filter((e) => e.n > from && e.event.startsWith('fit_superseded'))
+        .map((e) => e.detail),
+    fromLog,
+  )
+  return { pushes, ev, superseded }
+}
 const rejectsSince = async (page: Page, from: number) =>
   (await events(page, from)).filter((e) => e.kind === 'reject')
 
@@ -290,8 +325,14 @@ async function committedFirst(
   return c < b ? 'C-first' : 'B-first'
 }
 
-/** A types `text` at the caret of its open editor. */
-const type = (text: string) => A().keyboard.type(text, { delay: 4 })
+/** A types `text` at the caret of its open editor (`delay` ms between keys). */
+const type = (text: string, delay = 4) => A().keyboard.type(text, { delay })
+/**
+ * L10 5's slow typist: A's race typing spans several typing pushes (TYPING_PUSH_MS, 500 ms), so more than
+ * one of A's x fits is in flight when B's move reaches A. The integration's first run hit this on a loaded
+ * machine (B's move lost 20/20); a fast run (one push) never did.
+ */
+const SLOW_KEY_MS = 90
 const buffer = () => editorState(A()).then((e) => e.value)
 
 const LONG =
@@ -965,7 +1006,10 @@ test("L10 1-2 + 4: A types in a rectangle's label until it grows while B resizes
 
 test("L10 3-5: an arrow bound to a free text T follows T's box on every write while A types; C's free end survives; a centred T moved by B keeps B's move", async () => {
   const rows: Record<string, unknown>[] = []
-  for (const variant of ['3-left', '5-centred-moved'] as const) {
+  const all = ['3-left', '5-centred-moved', '5-slow-typist'] as const
+  const pick = (process.env.SPIKE_B3_L10_VARIANTS ?? '').split(',').filter(Boolean)
+  for (const variant of all.filter((v) => !pick.length || pick.includes(v))) {
+    const slow = variant === '5-slow-typist'
     for (const order of ['A-first', 'other-first'] as const) {
       for (let i = 0; i < N; i++) {
         const at = spot()
@@ -1007,8 +1051,10 @@ test("L10 3-5: an arrow bound to a free text T follows T's box on every write wh
           O: await pushCount(other),
           eA: await eventCount(A()),
           eO: await eventCount(other),
+          lA: await boardLogCount(A()),
         }
         let bMove: { x: number; y: number; w: number; cx: number } | null = null
+        const trace: Record<string, unknown> = {}
         if (variant === '3-left')
           await race(
             order === 'A-first' ? other : A(),
@@ -1022,7 +1068,7 @@ test("L10 3-5: an arrow bound to a free text T follows T's box on every write wh
           bMove = move
           await race(
             order === 'A-first' ? other : A(),
-            () => type(' centred text grows'),
+            () => type(' centred text grows', slow ? SLOW_KEY_MS : 4),
             () => hp(B(), 'editTarget', T, { x: move.x, y: move.y }),
             TYPING_LAG,
           )
@@ -1031,7 +1077,7 @@ test("L10 3-5: an arrow bound to a free text T follows T's box on every write wh
           const e = (await lc(p).get(T)) as unknown as Geo
           return { x: e.x, w: e.width, cx: e.x + e.width / 2 }
         }
-        const trace: Record<string, unknown> = { beforeEnd: { A: await geo(A()), C: await geo(C()) } }
+        trace.beforeEnd = { A: await geo(A()), C: await geo(C()) }
         await type(' end')
         await waitSaved(A())
         trace.afterEnd = { A: await geo(A()), C: await geo(C()) }
@@ -1069,6 +1115,9 @@ test("L10 3-5: an arrow bound to a free text T follows T's box on every write wh
               bad.push(`${b.name} centre ${cx} want ${order === 'other-first' ? lo : `[${lo}, ${hi}]`}`)
           }
         const refits = (await events(A(), evA)).filter((e) => e.kind === 'refit').length
+        // A's side of the race, for the evidence: its pushes of T (seq, base, the fit and the groups), its
+        // acks (seq -> commit clock) and refits, and the core's fit_superseded records (ids and numbers only)
+        if (bMove) trace.a = await aTrace(T, at0.A, at0.eA, at0.lA)
         const ca = await commitClock(A(), T, at0.A, at0.eA)
         const co = await commitClock(other, otherId, at0.O, at0.eO)
         const committed =
