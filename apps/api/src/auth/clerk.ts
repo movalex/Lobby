@@ -12,8 +12,9 @@
 // Domain access (docs/DOMAIN-ACCESS-CONTRACTS.md §3.1, §3.3): the profile's VERIFIED addresses
 // (primary and secondary; never 'transferable', unverified, non-ASCII or "+clerk_test" ones) are
 // stored with the sign-in, with Clerk's verification strategy. A banned or locked account is refused
-// (403 ACCOUNT_DISABLED) before any session exists. A FIRST sign-in whose profile cannot be fetched is
-// refused (503 IDENTITY_UNAVAILABLE, D9); a later one signs in on the stored addresses.
+// (403 ACCOUNT_DISABLED) before any new session exists, and a banned one's existing sessions end too.
+// A FIRST sign-in whose profile cannot be fetched is refused (503 IDENTITY_UNAVAILABLE, D9); a later
+// one signs in on the stored addresses.
 // refreshIdentity asks Clerk again (identity.ts decides when). Only a 404 whose errors include
 // `resource_not_found` means the account is gone. Clerk error messages never reach a log (they can
 // quote the address): the failure log carries Clerk's HTTP status and first error code only.
@@ -230,7 +231,13 @@ export function createClerkAuthProvider(opts: ClerkProviderOptions): AuthProvide
             'clerk profile unavailable',
           )
         }
-        if (profile && (profile.banned === true || profile.locked === true)) throw accountDisabled()
+        if (profile && (profile.banned === true || profile.locked === true)) {
+          // A banned account's existing sessions end too, as a refresh that finds it banned ends them. A
+          // locked one (a temporary lockout, which failed sign-in attempts by anyone can cause) is only
+          // refused here.
+          if (profile.banned === true) await ctx.endBannedAccount('clerk', sub)
+          throw accountDisabled()
+        }
         return ctx.signIn(
           req,
           reply,
@@ -279,7 +286,7 @@ export function createClerkAuthProvider(opts: ClerkProviderOptions): AuthProvide
         [userId],
       )
       if (!identities.rows.length) {
-        await stampIdentityChecked(db, userId, fetchedAt)
+        await stampIdentityChecked(db, userId, fetchedAt, { now: clock() })
         return 'none'
       }
       // Every network call first, outside any transaction; then one write.
@@ -300,7 +307,9 @@ export function createClerkAuthProvider(opts: ClerkProviderOptions): AuthProvide
       if (!profiles.length) return 'gone'
       if (profiles.some((p) => p.banned === true)) return 'banned'
       const emails = profiles.flatMap((p) => p.emails)
-      await db.transaction((tx) => replaceUserEmails(tx, userId, 'clerk', emails, fetchedAt))
+      await db.transaction((tx) =>
+        replaceUserEmails(tx, userId, 'clerk', emails, fetchedAt, { now: clock() }),
+      )
       return 'ok'
     },
   }

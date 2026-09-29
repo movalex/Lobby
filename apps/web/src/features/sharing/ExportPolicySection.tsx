@@ -10,6 +10,7 @@ import type { BoardRole } from '../../lib/permissions.ts'
 import {
   boardExportState,
   clientExportAllowed,
+  clientLinkWillLimit,
   EXPORT_OFF_TEXT,
   exportAllowedWith,
   refreshExportPolicy,
@@ -70,12 +71,15 @@ export function ExportPolicySection({
   boardId,
   role,
   canManage,
+  canCreateLinks = true,
 }: {
   boardId: string
   /** The caller's current role (the dialog's, which follows a role change made in it). */
   role: BoardRole
   /** Board owners (manage_access): only they may change it; the server checks again. */
   canManage: boolean
+  /** The caller may create client links (domain access: a creator); else no line about them. */
+  canCreateLinks?: boolean
 }) {
   const id = useId()
   const state = boardExportState(boardId)
@@ -116,7 +120,7 @@ export function ExportPolicySection({
   const known = policy !== null
   const limitedHere = known && !exportAllowedWith(role, policy, guest)
   // DANA2-01: nobody chose yet, so the first client link will turn this off.
-  const clientLinkWillLimit = canManage && policy === 'everyone' && stored === false
+  const linkWillLimit = clientLinkWillLimit({ canManage, canCreateLinks, policy, stored })
   return (
     <section
       className="dr-share__section"
@@ -148,7 +152,7 @@ export function ExportPolicySection({
       <p id={`${id}-help`} className="dr-share__hint dr-sharing__policy-help">
         {EXPORT_POLICY_HELP}
       </p>
-      {clientLinkWillLimit && (
+      {linkWillLimit && (
         <p className="dr-share__hint" data-testid="share-export-policy-default">
           {EXPORT_POLICY_DEFAULT_NOTE}
         </p>

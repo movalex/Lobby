@@ -417,6 +417,8 @@ export function registerInvitationRoutes(app: FastifyInstance, ctx: AppContext):
         emailLocked: locked,
         invitedEmailHint: locked && state === 'usable' ? maskEmail(row.invited_email ?? '') : null,
         matchesYou,
+        // The inviter opening their own locked link (to check it) is told whom it is for.
+        sentByYou: locked && caller !== null && row.created_by === caller.id,
       }
     },
   )

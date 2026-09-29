@@ -22,6 +22,7 @@ import {
   openDashboard,
   openShareFromButton,
   personalWorkspace,
+  requestRow,
   shareDialog,
   signedInContext,
 } from './support/dashboard-share.ts'
@@ -38,6 +39,13 @@ const SHARE_NOTE =
   'Only people at Dark Burn Creative or Trailer Park Group can invite people, create links or give more access in Lobby. You can still lower or remove access.'
 const OUTSIDE_EMPTY =
   'Boards shared with you appear here. Only people at Dark Burn Creative or Trailer Park Group can create boards. Work there? Sign in with your work email.'
+/** The dashboard notice (access-outside) for an outside account whose workspace role would create. */
+const OUTSIDE_NOTICE =
+  'Only people at Dark Burn Creative or Trailer Park Group can create boards, projects and links in Lobby.'
+const UNCONFIRMED_SHARE_NOTE =
+  "Lobby couldn't confirm your account, so inviting people, creating links and giving more access are paused. You can still lower or remove access. Reload in a minute to try again."
+const RESTORE_ONLY_CREATORS =
+  'A checkpoint keeps this board as it is now. Only people at Dark Burn Creative or Trailer Park Group can restore one as a new board.'
 
 /** The error code of a refused API call. */
 async function errorCode(res: { json(): Promise<unknown> }): Promise<string | null> {
@@ -79,6 +87,9 @@ test('outside account with nothing shared: an honest landing, and every create r
       await expect(screen.getByRole('heading')).toHaveText('Nothing has been shared with you yet')
       await expect(screen.getByTestId('no-workspace-account')).toHaveText(`You're signed in as ${email}.`)
       await expect(screen).toContainText('Work there? Sign in with your work email.')
+      // D13: "Invite people" and "Link for one person" send no email, so nothing says to wait for one.
+      await expect(screen).toContainText('open the invite link they send you')
+      await expect(screen).not.toContainText('in their email')
       await expect(screen.getByTestId('no-workspace-switch')).toHaveText('Sign in with a different account')
       await capture('domain-access-outside-landing.png', client.page, testInfo)
       await client.page.setViewportSize({ width: 390, height: 844 })
@@ -157,6 +168,18 @@ test('email lock: a link for pat@ turns sam@ away (no auto-accept), then pat sig
       expect.objectContaining({ kind: 'invite', role: 'commenter', uses: 0, email: pat.email }),
     ])
     await a.page.keyboard.press('Escape')
+  })
+
+  await test.step('alice opens her own link to check it: it says whom it is for, never "ask Alice"', async () => {
+    await a.page.goto(link)
+    const mismatch = a.page.getByTestId('invite-email-mismatch')
+    await expect(mismatch).toContainText('This is the invitation you sent')
+    await expect(a.page.getByTestId('invite-email-mismatch-body')).toHaveText(
+      `Only ${hint} can use this link. It won't let you in as alice@dev.invalid. Send it to them: they sign in with that address to join.`,
+    )
+    await expect(mismatch).not.toContainText('ask Alice Park')
+    await expect(a.page.getByTestId('invite-accept')).toHaveCount(0)
+    expect(await invitations(aliceApi, board)).toEqual([expect.objectContaining({ kind: 'invite', uses: 0 })])
   })
 
   // One browser: sam signs in from the link, is turned away, switches to pat.
@@ -423,9 +446,10 @@ test('a board owner who is not a creator: the Share dialog only reduces access (
       await expect(panel.getByTestId('history-duplicate')).toHaveCount(0)
     })
 
-    await test.step('the dashboard: the board can be moved, never duplicated; nothing to create', async () => {
+    await test.step('the dashboard: the board can be moved, never duplicated; nothing to create, and it says why', async () => {
       await openDashboard(page, users.devStudioId)
       await expectNoCreateControls(page)
+      await expect(page.getByTestId('access-outside')).toContainText(OUTSIDE_NOTICE)
       const actions = await menuActions(mainCard(page, boardId))
       expect(actions).toContain('move')
       expect(actions).not.toContain('duplicate')
@@ -433,4 +457,411 @@ test('a board owner who is not a creator: the Share dialog only reduces access (
   } finally {
     await own.context.close()
   }
+})
+
+// ---- fixer round 1: the flows the review found untested or unclear ----------------------------------
+
+test('a name-only guest joins a creator’s client link, unchanged under the domain-access policy (§11.5 flow 6)', async ({
+  browser,
+  users,
+  board,
+}) => {
+  const aliceApi = await users.api('alice')
+  const created = await aliceApi.fetch('POST', `/api/boards/${board}/review-links`, {
+    role: 'commenter',
+    expiresInDays: 14,
+    allowGuests: true,
+  })
+  expect(created.status()).toBe(201)
+  const link = ((await created.json()) as { url: string }).url
+  const context = await browser.newContext()
+  try {
+    const page = await context.newPage()
+    await page.goto(link)
+    await expect(page.getByTestId('invite-page')).toHaveAttribute('data-allow-guests', 'true')
+    // A guest link is not locked to an address.
+    await expect(page.getByTestId('invite-locked-hint')).toHaveCount(0)
+    await page.getByTestId('invite-guest-name').fill('Gia Guest')
+    await page.getByTestId('invite-guest-join').click()
+    await expect(page).toHaveURL(new RegExp(`/b/${board}$`), { timeout: 30_000 })
+    await waitForBoard(page)
+    await expect(page.getByTestId('user-menu')).toHaveAttribute('data-kind', 'guest')
+    await expect(page.getByTestId('readonly-pill')).toHaveAttribute('data-role', 'commenter')
+    const guestApi = new Api(context.request)
+    expect((await guestApi.me()).access).toEqual({ creator: false, reason: 'guest', email: null })
+    // Guests keep their own refusal, never CREATOR_REQUIRED.
+    const refused = await guestApi.fetch('POST', `/api/workspaces/${users.devStudioId}/boards`, {
+      title: 'No',
+    })
+    expect(refused.status()).toBe(403)
+    expect(await errorCode(refused)).toBe('GUEST_ACCOUNT_REQUIRED')
+  } finally {
+    await context.close()
+  }
+})
+
+test('an existing account that lost creator status: its own workspace says why nothing can be created, and Share and History promise nothing it cannot do', async ({
+  browser,
+  playwright,
+  users,
+}, testInfo) => {
+  const handle = freshHandle('exo')
+  const name = 'Exa Former'
+  let personal = ''
+  let boardId = ''
+  await test.step('set-up while a creator: a board in its personal workspace, with a checkpoint', async () => {
+    const { api, me } = await Api.signIn(playwright, handle, name)
+    try {
+      personal = personalWorkspace(me)
+      boardId = (await api.createBoard(personal, 'Own board')).id
+      expect((await api.fetch('POST', `/api/boards/${boardId}/snapshots`, { name: 'Draft' })).status()).toBe(
+        201,
+      )
+    } finally {
+      await api.dispose()
+    }
+  })
+
+  const exo = await signedInContext(browser, handle, { name, email: 'exo@client.example.test' })
+  try {
+    const page = exo.page
+    expect(exo.me.access).toMatchObject({ creator: false, reason: 'outside' })
+    expect(exo.me.workspaces).toContainEqual(expect.objectContaining({ id: personal, role: 'owner' }))
+
+    await test.step('its own workspace (Owner): the board is there, the create controls are not, and a notice says why', async () => {
+      await openDashboard(page, personal)
+      await expect(mainCard(page, boardId)).toBeVisible()
+      await expectNoCreateControls(page)
+      const notice = page.getByTestId('access-outside')
+      await expect(notice).toContainText(OUTSIDE_NOTICE)
+      await expect(notice).toContainText('Work there? Sign in with your work email.')
+      await capture('domain-access-outside-own-workspace.png', page, testInfo)
+      // Dev Studio, where it is a member: the same notice.
+      await openDashboard(page, users.devStudioId)
+      await expect(page.getByTestId('access-outside')).toContainText(OUTSIDE_NOTICE)
+      // Trash offers no creating to anyone: no notice there.
+      await openDashboard(page, personal, 'trash')
+      await expect(page.getByTestId('access-outside')).toHaveCount(0)
+    })
+
+    await test.step('Share: the note, and no line about creating client links it cannot make', async () => {
+      await page.goto(`/b/${boardId}`)
+      await waitForBoard(page)
+      await openShareFromButton(page)
+      const dialog = shareDialog(page)
+      await expect(dialog.getByTestId('share-creator-note')).toHaveAttribute('data-reason', 'outside')
+      await expect(dialog.getByTestId('share-creator-note')).toHaveText(SHARE_NOTE)
+      await expect(dialog.getByTestId('share-export-policy')).toBeVisible()
+      await expect(dialog.getByTestId('share-export-policy')).toHaveAttribute('data-policy', 'everyone')
+      await expect(dialog.getByTestId('share-export-policy-default')).toHaveCount(0)
+      await page.keyboard.press('Escape')
+    })
+
+    await test.step('History: the checkpoint is listed, nothing promises restoring it', async () => {
+      const panel = await openHistory(page)
+      await expect(panel.getByTestId('checkpoint-row').first()).toBeVisible()
+      await expect(panel.getByTestId('checkpoint-restore')).toHaveCount(0)
+      await expect(panel.getByTestId('checkpoints-hint')).toHaveText(RESTORE_ONLY_CREATORS)
+    })
+  } finally {
+    await exo.context.close()
+  }
+})
+
+test('a creator managing an outside member: Owner is off with the reason in words, transfer is off, and "pick someone" never offers Owner', async ({
+  playwright,
+  users,
+  board,
+  session,
+}, testInfo) => {
+  const aliceApi = await users.api('alice')
+  // Two Dev Studio members (joined while creators) who are outside accounts now.
+  const olga = { handle: freshHandle('olga'), name: 'Olga Outside' }
+  const nils = { handle: freshHandle('nils'), name: 'Nils Outside' }
+  for (const p of [olga, nils]) {
+    const { api } = await Api.signIn(playwright, p.handle, p.name)
+    await api.dispose()
+  }
+  const olgaNow = await Api.signIn(playwright, olga.handle, olga.name, { email: 'olga@client.example.test' })
+  const nilsNow = await Api.signIn(playwright, nils.handle, nils.name, { email: 'nils@client.example.test' })
+  const olgaId = olgaNow.me.user.id
+  try {
+    expect(olgaNow.me.access).toMatchObject({ creator: false, reason: 'outside' })
+    await aliceApi.putMember(board, olgaId, 'editor')
+    const a = await session('alice')
+
+    await test.step('olga’s row: Owner is turned off, and the row says why in words', async () => {
+      await openShareFromButton(a.page)
+      const row = memberRow(a.page, olgaId)
+      await expect(row).toHaveAttribute('data-role', 'editor')
+      await expect(row.getByTestId('member-role').locator('option[value="owner"]')).toBeDisabled()
+      const note = row.getByTestId('member-owner-note')
+      await expect(note).toHaveText(
+        "Can't own this board. Only people at Dark Burn Creative or Trailer Park Group can own boards.",
+      )
+      const noteId = (await note.getAttribute('id')) ?? ''
+      expect(noteId).not.toBe('')
+      await expect(row.getByTestId('member-role')).toHaveAttribute('aria-describedby', noteId)
+      await expect(row.getByTestId('member-transfer')).toBeDisabled()
+      await expect(row.getByTestId('member-transfer')).toHaveAttribute('aria-describedby', noteId)
+      // A creator's row has no such note.
+      const bob = await users.get('bob')
+      await aliceApi.putMember(board, bob.id, 'viewer')
+      await expect(memberRow(a.page, bob.id)).toBeVisible()
+      await expect(memberRow(a.page, bob.id).getByTestId('member-owner-note')).toHaveCount(0)
+      await capture('domain-access-owner-off-note.png', shareDialog(a.page), testInfo)
+    })
+
+    await test.step('"Or pick someone from the workspace…" lists nils, and offers edit, comment or view only', async () => {
+      const dialog = shareDialog(a.page)
+      await expect(
+        dialog.getByTestId('share-add-member').locator(`option[value="${nilsNow.me.user.id}"]`),
+      ).toHaveCount(1)
+      await expect(dialog.getByTestId('share-add-role').locator('option')).toHaveText([
+        'Can edit',
+        'Can comment',
+        'Can view',
+      ])
+    })
+
+    await test.step('the server agrees: owner for olga is 409, transfer to olga is 409', async () => {
+      const put = await aliceApi.fetch('PUT', `/api/boards/${board}/members/${olgaId}`, { role: 'owner' })
+      expect(put.status()).toBe(409)
+      expect(await errorCode(put)).toBe('ROLE_REQUIRES_CREATOR')
+      const transfer = await aliceApi.fetch('POST', `/api/boards/${board}/transfer-ownership`, {
+        userId: olgaId,
+      })
+      expect(transfer.status()).toBe(409)
+      expect(await errorCode(transfer)).toBe('ROLE_REQUIRES_CREATOR')
+    })
+  } finally {
+    await olgaNow.api.dispose()
+    await nilsNow.api.dispose()
+  }
+})
+
+test('an outsider opens a board link: the no-access screen, a request, a creator approves, and the board opens at the granted role', async ({
+  browser,
+  users,
+  board,
+  session,
+}) => {
+  const rae = await signedInContext(browser, freshHandle('rae'), {
+    name: 'Rae Request',
+    email: 'rae@client.example.test',
+  })
+  try {
+    const page = rae.page
+    expect(rae.me.workspaces).toEqual([])
+    await test.step('rae (no workspace) opens the board URL and asks to comment', async () => {
+      await page.goto(`/b/${board}`)
+      await expect(page.getByTestId('no-access')).toContainText("You don't have access to this board")
+      await expect(page.getByTestId('access-request-form')).toBeVisible()
+      await page.getByTestId('access-request-role').selectOption('commenter')
+      await page.getByTestId('access-request-button').click()
+      await expect(page.getByTestId('access-request-status')).toContainText('requested')
+    })
+
+    await test.step('alice (a creator) approves it in the Share dialog; rae’s page opens the board by itself', async () => {
+      const a = await session('alice')
+      const badge = a.page.getByTestId('share-badge')
+      await expect(badge).toHaveAttribute('data-requests', '1', { timeout: 15_000 })
+      await badge.click()
+      const row = requestRow(a.page, rae.me.user.id)
+      await expect(row).toBeVisible()
+      await row.getByTestId('access-request-approve').click()
+      await expect(requestRow(a.page, rae.me.user.id)).toHaveCount(0)
+      await expect(memberRow(a.page, rae.me.user.id)).toHaveAttribute('data-role', 'commenter')
+      await page.waitForFunction(() => window.editor !== undefined, undefined, { timeout: 15_000 })
+      await waitForBoard(page)
+      await expect(page.getByTestId('readonly-pill')).toHaveAttribute('data-role', 'commenter')
+    })
+
+    await test.step('rae is a workspace guest of Dev Studio, still an outside account that creates nothing', async () => {
+      const me = await new Api(rae.context.request).me()
+      expect(me.access).toEqual({ creator: false, reason: 'outside', email: 'rae@client.example.test' })
+      expect(me.workspaces).toContainEqual(expect.objectContaining({ id: users.devStudioId, role: 'guest' }))
+      await openDashboard(page, users.devStudioId)
+      await expectNoCreateControls(page)
+      await expect(mainCard(page, board)).toBeVisible()
+    })
+  } finally {
+    await rae.context.close()
+  }
+})
+
+test('an email-locked workspace invitation: admin for an outside address is refused; as member, the outsider signs in with that address and joins', async ({
+  browser,
+  users,
+}) => {
+  const aliceApi = await users.api('alice')
+  const email = 'wes@client.example.test'
+  const wes = { handle: freshHandle('wes'), name: 'Wes Workspace', email }
+
+  const admin = await aliceApi.fetch('POST', `/api/workspaces/${users.devStudioId}/invitations`, {
+    role: 'admin',
+    email,
+  })
+  expect(admin.status()).toBe(409)
+  expect(await errorCode(admin)).toBe('ROLE_REQUIRES_CREATOR')
+  const created = await aliceApi.fetch('POST', `/api/workspaces/${users.devStudioId}/invitations`, {
+    role: 'member',
+    email,
+  })
+  expect(created.status()).toBe(201)
+  const link = ((await created.json()) as { url: string }).url
+
+  const context = await browser.newContext()
+  try {
+    const page = await context.newPage()
+    await page.goto(link)
+    await expect(page.getByTestId('invite-locked-hint')).toHaveText('w•••@client.example.test')
+    await page.getByTestId('invite-signin').click()
+    await signInThroughUi(page, wes)
+    await expect(page).toHaveURL(new RegExp(`/w/${users.devStudioId}`), { timeout: 30_000 })
+    await expect(page.getByTestId('dashboard')).toBeVisible()
+    const me = await new Api(context.request).me()
+    expect(me.access).toEqual({ creator: false, reason: 'outside', email })
+    expect(me.workspaces).toContainEqual(expect.objectContaining({ id: users.devStudioId, role: 'member' }))
+    // A member who is an outside account: nothing to create, and the dashboard says why.
+    await expectNoCreateControls(page)
+    await expect(page.getByTestId('access-outside')).toContainText(OUTSIDE_NOTICE)
+  } finally {
+    await context.close()
+  }
+})
+
+/**
+ * Rewrites what the web reads about the signed-in account (GET /api/auth/me, GET /api/me): the states
+ * the dev provider can never produce (an unconfirmed account).
+ */
+async function rewriteMe(
+  page: Page,
+  change: (me: Record<string, unknown>) => Record<string, unknown>,
+): Promise<void> {
+  for (const path of ['**/api/auth/me', '**/api/me']) {
+    await page.route(path, async (route) => {
+      const res = await route.fetch()
+      if (res.status() !== 200) return route.fulfill({ response: res })
+      await route.fulfill({ response: res, json: change((await res.json()) as Record<string, unknown>) })
+    })
+  }
+}
+
+test('failure states the dev provider cannot produce: an unconfirmed account (dashboard, landing, Share) and refused accepts (503 retry, 409, 403 mismatch)', async ({
+  browser,
+  users,
+  board,
+}, testInfo) => {
+  const unconfirmed = { creator: false, reason: 'unconfirmed', email: 'alice@dev.invalid' }
+
+  await test.step('alice, unconfirmed: the dashboard pauses creating, and Share says paused, not "not at Dark Burn"', async () => {
+    const alice = await signedInContext(browser, 'alice')
+    try {
+      await rewriteMe(alice.page, (me) => ({ ...me, access: unconfirmed }))
+      await openDashboard(alice.page, users.devStudioId)
+      await expect(alice.page.getByTestId('access-unconfirmed')).toContainText(
+        "Lobby couldn't confirm your account, so creating and sharing are paused.",
+      )
+      await expectNoCreateControls(alice.page)
+      await expect(alice.page.getByTestId('access-outside')).toHaveCount(0)
+      await alice.page.goto(`/b/${board}`)
+      await waitForBoard(alice.page)
+      await openShareFromButton(alice.page)
+      const note = shareDialog(alice.page).getByTestId('share-creator-note')
+      await expect(note).toHaveAttribute('data-reason', 'unconfirmed')
+      await expect(note).toHaveText(UNCONFIRMED_SHARE_NOTE)
+      await expect(note).not.toContainText('Only people at Dark Burn Creative')
+      await capture('domain-access-unconfirmed-share.png', shareDialog(alice.page), testInfo)
+    } finally {
+      await alice.context.close()
+    }
+  })
+
+  await test.step('an unconfirmed account with no workspace: "We couldn’t confirm your account" and Reload', async () => {
+    const nobody = await signedInContext(browser, freshHandle('unc'), {
+      name: 'Una Confirmed',
+      email: 'una@client.example.test',
+    })
+    try {
+      await rewriteMe(nobody.page, (me) => ({ ...me, access: { ...unconfirmed, email: null } }))
+      await nobody.page.goto('/')
+      const screen = nobody.page.getByTestId('no-workspace')
+      await expect(screen).toHaveAttribute('data-reason', 'unconfirmed')
+      await expect(screen.getByRole('heading')).toHaveText("We couldn't confirm your account")
+      await expect(screen.getByTestId('no-workspace-reload')).toBeVisible()
+      await expect(screen.getByTestId('no-workspace-switch')).toHaveCount(0)
+    } finally {
+      await nobody.context.close()
+    }
+  })
+
+  await test.step('refused accepts: 503 offers "Try again", 409 shows the server’s words, 403 shows the mismatch state', async () => {
+    const aliceApi = await users.api('alice')
+    const email = 'ivy@client.example.test'
+    const res = await aliceApi.fetch('POST', `/api/boards/${board}/invitations`, { role: 'viewer', email })
+    expect(res.status()).toBe(201)
+    const link = ((await res.json()) as { url: string }).url
+    const token = inviteToken(link)
+    const ivy = await signedInContext(browser, freshHandle('ivy'), { name: 'Ivy Invitee', email })
+    try {
+      const page = ivy.page
+      const accept = `**/api/invitations/${token}/accept`
+      const refuse = (status: number, body: unknown) =>
+        page.route(accept, (route) => route.fulfill({ status, json: body }))
+
+      // 503 IDENTITY_UNAVAILABLE: the page offers a retry.
+      await refuse(503, {
+        error: {
+          code: 'IDENTITY_UNAVAILABLE',
+          message:
+            'Lobby couldn’t confirm your email address with the sign-in service. Try again in a minute.',
+        },
+      })
+      await page.goto(link)
+      await page.getByTestId('invite-accept').click()
+      await expect(page.getByTestId('invite-error')).toHaveText(
+        'Couldn’t confirm your email right now. Try again in a minute.',
+      )
+      await expect(page.getByTestId('invite-retry')).toBeVisible()
+
+      // 409 ROLE_REQUIRES_CREATOR: the server's words, no retry.
+      await page.unroute(accept)
+      const roleMessage =
+        'Only people at Dark Burn Creative or Trailer Park Group can own boards or be workspace admins in Lobby. Choose a different role for this person.'
+      await refuse(409, { error: { code: 'ROLE_REQUIRES_CREATOR', message: roleMessage } })
+      await page.getByTestId('invite-retry').click()
+      await expect(page.getByTestId('invite-error')).toHaveText(roleMessage)
+      await expect(page.getByTestId('invite-retry')).toHaveCount(0)
+
+      // 403 INVITATION_EMAIL_MISMATCH although the preview said this account matches (fresher data at
+      // accept): the mismatch state, from the preview's masked address.
+      await page.unroute(accept)
+      await refuse(403, {
+        error: {
+          code: 'INVITATION_EMAIL_MISMATCH',
+          message: 'This invitation is for i•••@client.example.test.',
+        },
+        mismatch: { invitedEmailHint: 'i•••@client.example.test', invitedBy: { name: 'Alice Park' } },
+      })
+      await page.reload()
+      await page.getByTestId('invite-accept').click()
+      await expect(page.getByTestId('invite-email-mismatch')).toContainText(
+        'This invitation was sent to i•••@client.example.test.',
+      )
+      await expect(page.getByTestId('invite-mismatch-switch')).toBeVisible()
+      expect(await invitations(aliceApi, board)).toContainEqual(
+        expect.objectContaining({ kind: 'invite', email, uses: 0 }),
+      )
+
+      // The real api: ivy has the invited address, so accepting works.
+      await page.unroute(accept)
+      await page.reload()
+      await page.getByTestId('invite-accept').click()
+      await expect(page).toHaveURL(new RegExp(`/b/${board}$`), { timeout: 30_000 })
+      await waitForBoard(page)
+    } finally {
+      await ivy.context.close()
+    }
+  })
 })

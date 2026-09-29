@@ -259,6 +259,35 @@ describe('invitations locked to an email address (domain access, docs/DOMAIN-ACC
     expect(emailMismatchCopy({ hint: null, email: null, invitedBy: null }).body).not.toMatch(/null/)
   })
 
+  it('the inviter opening their own locked link is told whom it is for, never to ask themselves', () => {
+    const own = emailMismatchCopy({
+      hint: 'p•••@client.example.test',
+      email: 'alice@dev.invalid',
+      invitedBy: 'Alice Park',
+      sentByYou: true,
+    })
+    expect(own).toEqual({
+      title: 'This is the invitation you sent',
+      body: "Only p•••@client.example.test can use this link. It won't let you in as alice@dev.invalid. Send it to them: they sign in with that address to join.",
+    })
+    expect(own.body).not.toContain('ask Alice Park')
+    expect(
+      emailMismatchCopy({ hint: 'p•••@client.example.test', email: null, invitedBy: 'A', sentByYou: true })
+        .body,
+    ).toBe(
+      'Only p•••@client.example.test can use this link. Send it to them: they sign in with that address to join.',
+    )
+    // sentByYou false (or an older api without it): the copy for the wrong account, as before.
+    expect(
+      emailMismatchCopy({
+        hint: 'p•••@client.example.test',
+        email: 'a@x.test',
+        invitedBy: 'A',
+        sentByYou: false,
+      }).title,
+    ).toBe('This invitation is for someone else')
+  })
+
   it('accepting while the sign-in service is down: a retry; 409 and the rest: the server’s words', () => {
     expect(acceptErrorCopy('IDENTITY_UNAVAILABLE', 'x')).toEqual({
       message: 'Couldn’t confirm your email right now. Try again in a minute.',

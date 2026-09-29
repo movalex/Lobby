@@ -1,6 +1,6 @@
 # Domain access: contracts
 
-Status: contracts committed (step A, §12), 2026-09-29, on branch `next` (base a571636: 19 backlog fixes, not deployed). Revised after the security and regression reviews: every blocking item is resolved, and §16 (Review log) says what was accepted, rejected or deferred. **API steps B1 and B2 are built** on branch `da/api` (§17, As built), **the web (step C) on `da/web`**, and both are **merged into `next`** (step D, §18: the gate is recorded there and in docs/PROGRESS.md). Still to do: the opt-in real-Postgres run, the independent security review (§14) and the deploy (§13).
+Status: contracts committed (step A, §12), 2026-09-29, on branch `next` (base a571636: 19 backlog fixes, not deployed). Revised after the security and regression reviews: every blocking item is resolved, and §16 (Review log) says what was accepted, rejected or deferred. **API steps B1 and B2 are built** on branch `da/api` (§17, As built), **the web (step C) on `da/web`**, and both are **merged into `next`** (step D, §18: the gate is recorded there and in docs/PROGRESS.md). **Verifier findings, fixer round 1** (§19): fixed on `next`, with the contract changes marked "fixer round 1" in §3.3, §3.4, §4.2, §6.1, §7, §9, §14 and §15. Still to do: the opt-in real-Postgres run, the independent security review (§14) and the deploy (§13).
 
 Owner decisions: 2026-09-29, final (restated in §0). Two builders work in parallel: an **API owner** and a **WEB owner** (§12). This file is the only coordination channel between them. Contract changes go through the API owner and are recorded here.
 
@@ -178,13 +178,14 @@ The table stores **verified addresses only**, and nothing ever logs them. The mi
 
 `replaceUserEmails(tx, userId, source, emails, fetchedAt)`, where `fetchedAt` is `ctx.now()` read **before** the provider call started:
 1. `UPDATE users SET identity_checked_at = $fetchedAt WHERE id = $userId AND (identity_checked_at IS NULL OR identity_checked_at < $fetchedAt)`. When it updates no row, a newer snapshot is already stored: stop, write nothing (two sign-ins, or a sign-in and a refresh, racing).
+   (Fixer round 1, §19: `<=` as built (§12 item 1); a stored `identity_checked_at` more than `CLOCK_SKEW_TOLERANCE_MS` (60 s) **ahead of this process's clock** never blocks a write, since a process whose clock ran ahead wrote it (a deploy overlap) and its snapshot is not known to be newer; and the **dev login writes unconditionally**, since its address is not a remote snapshot but the one it was just given.)
 2. Delete that user's rows for `source`, then insert `emails` with `ON CONFLICT (user_id, email) DO UPDATE` setting `is_primary`, `source`, `verification_strategy` and `seen_at`.
 
 The function is idempotent: the sign-in transaction is retried once on a unique violation (app.ts:259-266).
 
 Writers:
 - **Clerk exchange** (clerk.ts:123-168):
-  1. `profile.banned || profile.locked` → 403 `ACCOUNT_DISABLED`, before `signIn`, and no session is created.
+  1. `profile.banned || profile.locked` → 403 `ACCOUNT_DISABLED`, before `signIn`, and no session is created. When `banned` and an `identities` row exists for `sub`, every existing session of that account is revoked too (`sessions.revokeAll`, as a refresh that finds 'banned' does; fixer round 1, §19). A `locked` account (a temporary lockout, which anyone's failed sign-in attempts can cause) keeps its sessions.
   2. Profile unavailable on a **first** sign-in (no `identities` row for `sub`) → 503 `IDENTITY_UNAVAILABLE`, and no user is created (D9).
   3. Profile unavailable on a later sign-in → the sign-in succeeds, the stored emails are kept, and `identity_checked_at` is not bumped.
   4. Otherwise `findOrCreateUser` gets `emails` and writes them in the sign-in transaction. A profile whose only addresses are `+clerk_test` ones signs in as an outsider with no stored address.
@@ -233,11 +234,12 @@ refreshIdentity?(db: Queryable, userId: string, fetchedAt: Date): Promise<'ok' |
 
 | mode, caller | Awaits a refresh when the stored data is | If that refresh fails | Starts a background refresh when older than |
 |---|---|---|---|
-| `'me'`: GET /api/me, GET /api/auth/me | never checked, or older than 24 h | keeps the stored data (status says `'unconfirmed'`), still 200 | 1 h |
+| `'me'`: GET /api/me, GET /api/auth/me, and (fixer round 1) the Share dialog's reads GET /api/boards/:bid/invitations and GET /api/boards/:bid/sharing/members, after their own permission check | never checked, or older than 24 h | keeps the stored data (status says `'unconfirmed'`), still 200 | 1 h |
 | `'confirm'`: the creator guard, every guarded route | never checked, or older than 24 h | 503 `IDENTITY_UNAVAILABLE` on `refuse: 'always'` routes; keeps the stored data on `'in-route'` routes | 1 h |
 | `'accept'`: accepting a locked invitation | older than 5 min, or never checked | 503 `IDENTITY_UNAVAILABLE`, nothing redeemed | n/a |
 
 - It is a no-op for name-only guests and when the provider has no `refreshIdentity`.
+- A stored `identity_checked_at` more than 60 s ahead of this process's clock (a deploy overlap on a host whose clock ran ahead) has an unknown real age: it counts as stale but not unconfirmed (a background refresh; `'accept'` awaits one), and that refresh's write replaces it (§3.3). Fixer round 1, §19.
 - One in-flight refresh per user (awaited and background share it). After a failure, no new call for `REFRESH_FAILURE_BACKOFF_MS` (60 s): during that window an awaited refresh counts as failed at once (strict callers answer 503), and a background one is skipped.
 - `'gone'` / `'banned'` from the caller's **own** refresh → `sessions.revokeAll(userId)` plus announce. An awaited refresh then throws 401 `NOT_AUTHENTICATED`; a background one simply ends, and the next request is 401. Stored emails are left as they are.
 - After an awaited refresh, `freshen` returns `await sessions.reload(req)`: a new SessionStore method that re-runs the lookup and **replaces the per-request cache entry** (session.ts:84-144 caches the user in a WeakMap). `status`, `ensurePersonalWorkspace` and the guard's decision all use the reloaded user. A backfilled creator's first /api/me therefore says `'domain'`, not `'unconfirmed'`.
@@ -309,7 +311,7 @@ requireCreator(q: Queryable, userId: string, purpose: CreatorPurpose, log: { rou
 | `POST /api/boards/:bid/transfer-ownership` | share | always | sharing.ts: 1) unlocked pre-check: `requireBoardAction(db, …, 'manage_access')` and the target is a workspace member (today's 404s); 2) `refreshTarget`; 3) the transaction as today, plus: a non-creator target → 409 `ROLE_REQUIRES_CREATOR` |
 | `PUT /api/boards/:bid/members/:uid` | share | in-route | members.ts. With `role: 'owner'`: the same unlocked pre-check, then `refreshTarget`. In the transaction, after `loadTarget`: `role: 'owner'` for a non-creator target → 409 `ROLE_REQUIRES_CREATOR`, whoever the caller is. A **lowering** (`target.board_grant !== null` and the new role ranks below it) is open to every manager, and so is an unchanged role (a no-op). Anything else (adding a grant, raising, owner) needs a creator caller: unconfirmed → 503, outside → 403 `CREATOR_REQUIRED`. |
 | `PATCH /api/boards/:bid` (only when the body has `visibility`) | share | in-route | routes/boards.ts, after the `change_visibility` check: lowering (`workspace_edit` > `workspace_view` > `private`) is open; raising needs a creator caller (503 / 403 as above). |
-| `GET /api/boards/:bid/invitations` | n/a | none | review-links.ts (~:227-231): for a caller who is not a creator (stored status), multi-use links come back with `url: null`. Everything else unchanged. |
+| `GET /api/boards/:bid/invitations` | n/a | none | review-links.ts (~:227-231): for a caller who is not a creator (stored status), multi-use links come back with `url: null`. Everything else unchanged. Fixer round 1 (§19): after `requireBoardAction(manage_access)` the route calls `identity.freshen(req, user, 'me')`, as does `GET /api/boards/:bid/sharing/members`, so a manager who never loads /api/me is confirmed when unconfirmed and refreshed in the background after 1 h; the decision reads the database, so an awaited refresh counts at once. |
 
 These stay open to non-creators with the role they already have:
 - `DELETE /api/invitations/:id`, `POST …/review-links/:id/revoke`;
@@ -385,9 +387,10 @@ The codes and messages are exported from contracts (`DOMAIN_ACCESS_CODES`, `DOMA
 - **Preview** (`GET /api/invitations/:token`) adds:
   - `emailLocked`;
   - `invitedEmailHint`, the masked address, for usable locked links only;
-  - `matchesYou`: true or false for a signed-in account, from its stored addresses (no Clerk call here: accept re-checks with fresh data); null when signed out, for guests and for unlocked links.
+  - `matchesYou`: true or false for a signed-in account, from its stored addresses (no Clerk call here: accept re-checks with fresh data); null when signed out, for guests and for unlocked links;
+  - `sentByYou` (fixer round 1, §19): true when the signed-in caller created this locked invitation (an inviter opening their own link to check it), else false. The page then says whom the link is for instead of "ask {inviter} to invite {you}".
 
-  The mask is the first character of the local part, then `•••@`, then the domain: `jane.doe@client.com` → `j•••@client.com`. `maskEmail` lives in the api only. The full address appears in exactly one response: the manager-only `GET /api/boards/:bid/invitations` (`PendingInvitation.email`).
+  The mask is the first character of the local part, then `•••@`, then the domain: `jane.doe@client.com` → `j•••@client.com`. `maskEmail` lives in the api only. The full address is returned to others in exactly one response, the manager-only `GET /api/boards/:bid/invitations` (`PendingInvitation.email`); besides that, `POST /api/boards/:bid/invitations/email` echoes it back (`EmailInviteResult.email`) only to the creator who just typed it (wording corrected in fixer round 1, §19).
 
 ### 6.2 Existing links
 
@@ -414,7 +417,7 @@ New file **`packages/contracts/src/domain-access.ts`**. It imports only `zod`, s
 - `MeAccess = { creator: boolean, reason: CreatorReason, email: string | null }` (`email`: the caller's own primary verified address, else their first verified one, else null);
 - `ME_ACCESS_LEGACY = { creator: true, reason: 'legacy', email: null }` (D11);
 - `DOMAIN_ACCESS_CODES`, `DomainAccessCode`, `DOMAIN_ACCESS_MESSAGES`, `invitationEmailMismatchMessage(hint)` (§4.3);
-- `InvitationEmailLock = { emailLocked: default false, invitedEmailHint: string | null default null, matchesYou: boolean | null default null }`;
+- `InvitationEmailLock = { emailLocked: default false, invitedEmailHint: string | null default null, matchesYou: boolean | null default null, sentByYou: boolean default false }` (`sentByYou` added in fixer round 1, §19);
 - `InvitationEmailMismatchBody = { error: { code: 'INVITATION_EMAIL_MISMATCH', message }, mismatch: { invitedEmailHint: string, invitedBy: { name } | null } }`.
 
 Edits to **`packages/contracts/src/index.ts`** (it also `export * from './domain-access.ts'`):
@@ -487,9 +490,10 @@ Everything reads `useMe().access`. The server stays authoritative, so the UI onl
   - `canRenameProjects` (D6), which equals `canCreate`.
 - `emptyState` (model.ts:168-210) gets an outside-member variant: "Boards shared with you appear here. Only people at Dark Burn Creative or Trailer Park Group can create boards. Work there? Sign in with your work email." The guest copy is unchanged.
 - `reason: 'unconfirmed'` with workspaces: a notice (`access-unconfirmed`): "Lobby couldn't confirm your account, so creating and sharing are paused." plus a Reload button.
+- (Fixer round 1, §19) `reason: 'outside'` in a workspace whose role would let it create (owner, admin, member; `showOutsideNotice`), outside Trash and Archived: a notice (`access-outside`): "Only people at Dark Burn Creative or Trailer Park Group can create boards, projects and links in Lobby." / "You can open and work on the boards shared with you. Work there? Sign in with your work email." Without it, an existing account that lost creator status (the owner's personal account while `DRAFTROOM_CREATOR_EMAILS` is unset included) saw New board, Import, Templates and "New project lobby" vanish from its own workspace with no reason. While the notice shows, the outside empty state says only "Boards shared with you appear here." (no repeat). Workspace guests keep the empty-state copy above.
 
 **Landing with nothing shared** (`App.tsx` RootRedirect, `no-workspace`). Add `data-reason`:
-- `outside`: title "Nothing has been shared with you yet". Body: "You're signed in as {access.email}." (without an address: "You're signed in with an account that has no confirmed email address.") "When someone at Dark Burn Creative or Trailer Park Group invites this address, open the link in their email. Work there? Sign in with your work email." Action: "Sign in with a different account" (`signOut`).
+- `outside`: title "Nothing has been shared with you yet". Body: "You're signed in as {access.email}." (without an address: "You're signed in with an account that has no confirmed email address.") "When someone at Dark Burn Creative or Trailer Park Group invites this address, open the invite link they send you. Work there? Sign in with your work email." (Fixer round 1: was "open the link in their email", but under D13 "Invite people" and "Link for one person" send no email.) Action: "Sign in with a different account" (`signOut`).
 - `unconfirmed`: "We couldn't confirm your account" plus a Reload button.
 - `none` (a creator with no workspace, which should not happen): today's copy.
 
@@ -497,6 +501,7 @@ Everything reads `useMe().access`. The server stays authoritative, so the UI onl
 - `historyPermissions` takes the creator flag through an options object. The one production caller passes `me.access.creator`.
 - `canCreateBoards` requires it, so for non-creators "Duplicate board" and "Restore as new board" are `hidden`.
 - The checkpoint preview gate (checkpoints-model.ts:96-98) stays role-based.
+- (Fixer round 1, §19) The line under "Checkpoints" (`checkpoints-hint`, `checkpointsHint`) promises "Restoring one makes a new board…" only when "Restore as new board" is offered (or shown turned off). Otherwise: "A checkpoint keeps this board as it is now.", plus "Only people at Dark Burn Creative or Trailer Park Group can restore one as a new board." for `outside`, or "Restoring one as a new board is paused until Lobby can confirm your account." for `unconfirmed`.
 
 **Share dialog** (`board/ShareDialog.tsx`, `board/share-model.ts`, `features/sharing/api.ts`, `api/client.ts`)
 - `canShare = canHandOutAccess(me.access.creator, role, status)`.
@@ -505,14 +510,16 @@ Everything reads `useMe().access`. The server stays authoritative, so the UI onl
   - hide `ReviewLinkRow`'s Extend and copy-link (the url is null; keep Revoke) and `AccessRequestRow`'s Approve (keep Deny);
   - `VisibilitySection`: options above the current one are disabled;
   - `MemberRow`'s role menu offers only roles below the current direct grant, plus Remove;
-  - show a note (`share-creator-note`) with `DOMAIN_ACCESS_MESSAGES.creatorRequiredShare`.
+  - show a note (`share-creator-note`) with `DOMAIN_ACCESS_MESSAGES.creatorRequiredShare`. (Fixer round 1, §19: for `reason: 'unconfirmed'` the note, `data-reason="unconfirmed"`, says instead "Lobby couldn't confirm your account, so inviting people, creating links and giving more access are paused. You can still lower or remove access. Reload in a minute to try again.", so a Dark Burn person Lobby could not confirm is never told they are not at Dark Burn; `data-reason="outside"` otherwise.)
+  - the Export and download section leaves out "Creating a client link turns this off…" (`clientLinkWillLimit` takes `canCreateLinks`), since this manager cannot create client links (fixer round 1).
 - For creators:
   - `api.createBoardInvitation(boardId, { role, email })` replaces `(boardId, role)` (client.ts:252), at both callers.
   - `InvitePeople` with an email target makes a locked link through it (:487, D13), not through the email route. Its result copy: "Only {email} can use this link, once, until {date}. Anyone else who opens it is turned away."
   - An unknown name (neither an email nor a known @handle) asks "Enter their email address to invite them" instead of making a link (:575).
   - `InviteLinkSection` becomes "Link for one person": a required email field (`one-person-link-email`) plus a role, with the same copy.
   - Pending rows (:1366-1392) read "For {email} · {role} · expires …" (no email: today's row).
-  - The owner option (and the transfer-ownership target) is disabled for members with `canOwn === false`. Its tooltip: "Only people at Dark Burn Creative or Trailer Park Group can own boards".
+  - The owner option (and the transfer-ownership target) is disabled for members with `canOwn === false`. Its tooltip: "Only people at Dark Burn Creative or Trailer Park Group can own boards". (Fixer round 1, §19: a disabled option in a native select popup shows no tooltip and a disabled button takes no focus, so that row also shows the reason as text, `member-owner-note`: "Can't own this board. Only people at Dark Burn Creative or Trailer Park Group can own boards.", tied to the select and the transfer button with `aria-describedby`.)
+  - (Fixer round 1) "Or pick someone from the workspace…" (`AddMember`) offers Can edit, Can comment and Can view, never Owner, like "Invite people": `WorkspaceMember` carries no `canOwn`, so Owner would be offered to outsiders and refused with 409 after Add. Ownership is set on the person's row, which knows `canOwn`.
 - Update the copy helpers `emailInviteHint`, `linkForEmailHint` and `emailInviteOutcome` to say the link works only for that address.
 - `CREATOR_REQUIRED` and `ROLE_REQUIRES_CREATOR` errors show the server's message.
 
@@ -526,6 +533,7 @@ Everything reads `useMe().access`. The server stays authoritative, so the UI onl
      - it says "This invitation was sent to {hint}. You're signed in as {access.email}. Sign in with the invited address, or ask {invitedBy} to invite {access.email}." Fallbacks: without `access.email`, "You're signed in with a different account" and "ask {invitedBy} for a new invitation"; without `invitedBy`, "the person who invited you";
      - one action: "Sign in with a different account" (`invite-mismatch-switch`: `rememberAcceptIntent` plus `signOut({ returnTo })`, as at :160-179). There is no "Check again": Lobby has no account-management UI, so nothing the person does in Lobby can change the answer;
      - **No auto-accept on this state.** The intent is consumed once (`takeAcceptIntent`), so it can never loop. The full address is never shown.
+     - (Fixer round 1, §19) When the preview says `sentByYou` (the inviter opening their own link to check it): "This is the invitation you sent" / "Only {hint} can use this link. It won't let you in as {access.email}. Send it to them: they sign in with that address to join." (without `access.email` the middle sentence is left out). It never says "ask {invitedBy} to invite {you}".
   4. Accept answers 503 `IDENTITY_UNAVAILABLE`: "Couldn't confirm your email right now", with a retry.
   5. Accept answers 409 `ROLE_REQUIRES_CREATOR`: the server message.
   6. Gone (410) and guest links (`allowGuests`): unchanged.
@@ -815,13 +823,13 @@ Add all of this to DEPLOY.md.
 2. Domain and exception matching is exact ASCII: the last `@`, no `endsWith`, no Unicode case folding, and non-ASCII addresses dropped at every entry point (Clerk profile, dev login, invitations, config).
 3. `+clerk_test` addresses are refused or dropped at every entry point (`AccountEmail`, `normalizeEmail` for every source, both DB CHECKs), and DEPLOY.md records that Clerk test mode is off on the staging instance.
 4. Only `verification.status === 'verified'` addresses are stored or compared, only rows of the running provider's source count, and a dev email is accepted only on the dev-guarded route.
-5. `creator` and addresses never appear in `User` JSON, logs or audit rows. The full invited address appears only in the manager-only pending list. The hint is masked. No Clerk error message and no accept token reaches a log.
+5. `creator` and addresses never appear in `User` JSON, logs or audit rows. The full invited address is returned to others only in the manager-only pending list (the email route echoes it back only to the creator who typed it, §6.1). The hint is masked. No Clerk error message and no accept token reaches a log.
 6. No network call happens inside a transaction or while holding a board or invitation lock. The accept path fails closed (503) and leaves a mismatched link usable. A refresh reloads the request's cached user before it is used. An older Clerk snapshot never overwrites a newer one.
 7. Target refreshes run only after the route's own permission check, and never revoke or throw. Only a 404 with `resource_not_found` or `banned` revokes, and only from the user's own refresh.
 8. Guests keep `GUEST_ACCOUNT_REQUIRED` on every route, and §10's code is unchanged.
 9. Tenancy: creators still get 404 for foreign ids; the outsiders' uniform 403/503 reveals nothing about ids.
 10. Unbound single-use links are dead (migration plus `stateFor`), and the rollback notes exist.
-11. There is no outsider path to board `owner` or workspace `admin` (PUT, transfer, workspace invitations and accept, duplicate), and no non-creator path to minting access (including reading an existing link's URL).
+11. There is no outsider path to board `owner` or workspace `admin` (PUT, transfer, workspace invitations and accept, duplicate), and no non-creator path to minting access (including reading an existing link's URL). "Non-creator" means the stored status, which follows Clerk within the freshness rules of §3.4 (D12): up to about 1 h after the person's next request to /api/me, the Share dialog's lists or a gated route, and at most 24 h without one.
 12. Config errors never echo values, and the startup log shows only the exceptions count.
 13. `ME_ACCESS_LEGACY` no longer appears in apps/api/src, and the api never sends `reason: 'legacy'`; `PendingInvitation.email` and `ShareMember.canOwn` are computed, not the step-A constants.
 
@@ -832,7 +840,7 @@ Add all of this to DEPLOY.md.
   - Later hardening, prepared: `user_emails.verification_strategy` is stored, so a per-strategy rule for creator domains (for example Google only) needs no migration.
 - **Microsoft/Entra ("nOAuth")**: some identity providers' email claims are not proof of mailbox control. If a Microsoft/Entra connection is ever enabled in Clerk, creator domains must not rely on it.
 - **Anyone who receives a forwarded Clerk sign-up email before the invitee acts can create the account that owns the address**, and so passes the lock. This is inherent to email as proof.
-- **Staleness.** A Clerk-side change reaches Lobby within about 1 h of the person's next page load, or at the next sign-in. Stored emails are trusted for up to 24 h while Clerk is unreachable; after that the person is `'unconfirmed'` (no creating or sharing) until Clerk answers.
+- **Staleness.** A Clerk-side change reaches Lobby within about 1 h of the person's next page load, or at the next sign-in. More exactly (fixer round 1): after 1 h, the next request that freshens the caller starts a background refresh: GET /api/me or /api/auth/me (every page load), the Share dialog's GET …/invitations and GET …/sharing/members, and every guarded create or share route. The request that starts it still answers from the stored data, so one guarded call can succeed on stale data before the refresh lands (D12, accepted). Stored emails are trusted for up to 24 h while Clerk is unreachable; after that the person is `'unconfirmed'` (no creating or sharing) until Clerk answers. A ban seen at a sign-in exchange ends the account's sessions at once (§3.3).
 - **Signed-in outsiders holding a multi-use review or workshop link get its role** (D7, by design: creators make those links for exactly that). Links an outsider created before the deploy stay valid until they expire (at most 30 days) unless revoked (§13 optional check).
 - **Outsider workspace members still see workspace-visible boards, projects, the member list and storage** (the role they were given, decision 2).
 - **Pre-existing outsider board owners keep board settings that are not access**: the export policy (downloads for viewers) and AI settings. They are the board's owners (decision 4); the lead can extend D4 to these later.
@@ -898,3 +906,27 @@ Branch `da/api` (B1 1af29c4; B2 on top). Everything in §2 to §8 and §11.1 to 
 - The §10 and §11.5 "must stay green unmodified" specs are byte-for-byte unchanged and passed in that run (apart from the workshop-copy case above).
 
 **Not done at integration**: the opt-in real-Postgres run (`migrations.pg`, `concurrency.pg`, `lock-order.pg`, and the api suite with `DRAFTROOM_TEST_DATABASE_URL`): no Postgres is installed on this PC and none was provisioned for this run; the demo video and perf smoke checks (§11.5); the independent security review (§14); recording in DEPLOY.md that Clerk test mode is off (§13, the lead); the deploy.
+
+## 19. Verifier findings, fixer round 1
+
+An independent verification of the merged `next` (three lenses: creation, invites, regression) found no blocking defect: one medium and eleven low. Each fix below is small and local, has a test that failed before it and passes after, and is marked "fixer round 1" where it changes a section above.
+
+| # | Lens, severity | Finding | Resolution | Tests |
+|---|---|---|---|---|
+| 1 | creation, low | GET …/invitations (`url` of multi-use links) and GET …/sharing/members decided on the stored status and never freshened the caller: a former creator who skipped /api/me kept link URLs for 24 h with no Clerk call, and a guarded share call later in that window still succeeded. | Both routes call `identity.freshen(req, user, 'me')` after their permission check (§3.4, §4.2). A removed company address now stops URLs and link minting about 1 h after any of these requests; the request that starts the refresh still answers from stored data (D12, stated in §14 item 11 and §15). | api `staleness.test.ts` (4 cases) |
+| 2 | creation, low | The Clerk exchange that saw `banned` answered 403 but left the account's existing sessions alive, with creator rights until a refresh. | A banned exchange with an `identities` row revokes every session of the account (`SignInContext.endBannedAccount`, §3.3 step 1). `locked` does not (a temporary lockout anyone's failed attempts can cause). | api `staleness.test.ts` (3 cases) |
+| 3 | creation, low | A stored `identity_checked_at` later than the running clock (written by a process whose clock ran ahead) blocked newer snapshots and stopped freshen from refreshing; a dev login with an outside email under such skew kept `<handle>@dev.invalid`. | `replaceUserEmails` / `stampIdentityChecked` take `{ now, always? }`: a stored time more than 60 s (`CLOCK_SKEW_TOLERANCE_MS`) ahead of `now` never blocks a write; the dev login writes always. `freshen` treats such a time as stale but not unconfirmed (§3.3, §3.4). | api `staleness.test.ts` (3 cases) |
+| 4 | invites, low | §6.1 and §14 item 5 said the full invited address appears in exactly one response, but the email route echoes it back to its caller. | Wording only: returned to others only in the manager-only pending list; echoed back only to the creator who typed it (§6.1, §14 item 5). | none (documentation) |
+| 5 | regression, medium | An outside account with an owner/admin/member workspace role saw New board, Import, Templates and "New project lobby" vanish once any board was listed, with no reason (worst case: the owner's personal account while `DRAFTROOM_CREATOR_EMAILS` is unset). | Dashboard notice `access-outside` (§9, `showOutsideNotice`, `OUTSIDE_NOTICE`); the outside empty state does not repeat it while it shows. | web `dashboard/model.test.ts`; e2e `domain-access.spec.ts` flow 5, "an existing account that lost creator status" (its own workspace as Owner) and "an email-locked workspace invitation" (a new outside member) |
+| 6 | regression, low | An unconfirmed creator's Share dialog said "Only people at Dark Burn Creative or Trailer Park Group can…". | `shareCreatorNote`: `data-reason="unconfirmed"` and a "paused" message (§9). | web `share-model.test.ts`; e2e failure-states test |
+| 7 | regression, low | The outside landing said "open the link in their email", but D13 links are sent by the inviter, not by email. | "open the invite link they send you" (§9). | web `dashboard/model.test.ts`; e2e flow 1 |
+| 8 | regression, low | An inviter opening their own locked link was told to "ask {themselves} to invite {their address}". | `InvitationEmailLock.sentByYou` (contracts, api preview) and its copy on the invite page (§6.1, §7, §9 state 3). | contracts `domain-access.test.ts`; api `invite-lock.test.ts`; web `invite/model.test.ts`; e2e flow 2 |
+| 9 | regression, low | "Or pick someone from the workspace…" offered Owner for outsiders (409 after Add); the disabled Owner option and transfer button gave their reason only in a `title`. | AddMember offers edit, comment and view only (`ADD_MEMBER_ROLES`); the row shows `member-owner-note` as text, tied with `aria-describedby` (§9). | web `share-model.test.ts`; e2e "a creator managing an outside member" |
+| 10 | regression, low | History promised "Restoring one makes a new board…" to people with no Restore button; the export setting told a reduce-only owner that "Creating a client link turns this off". | `checkpointsHint` (`checkpoints-hint`) and `clientLinkWillLimit({ canCreateLinks })` (§9). | web `history/model.test.ts`, `export-policy.test.ts`; e2e "an existing account that lost creator status" |
+| 11 | regression, low | §11.5 flow 6 (a name-only guest joins a creator's client link under the domain-access env) was missing. | Added. | e2e flow 6 |
+| 12 | regression, low | The failure-mode UI was never rendered in a test. | e2e "failure states…" rewrites /api/auth/me, /api/me and the accept response with `page.route`: `access-unconfirmed`, `no-workspace[data-reason=unconfirmed]`, the unconfirmed Share note, 503 `invite-retry`, 409 server message, 403 mismatch after a matching preview. **Not covered**: `ClerkSignIn`'s `clerk-exchange-error` rendering (the e2e stack runs the dev provider and cannot load Clerk); its code-to-message mapping stays unit-tested in `auth/exchange-error.test.ts`. | e2e failure-states test |
+| 13 | regression, low | No e2e for the creator-side `canOwn` UI, an outsider's request-access path, or an email-locked workspace invitation. | Added: "a creator managing an outside member", "an outsider opens a board link…", "an email-locked workspace invitation…" (workspace admin for an outside address is 409). | e2e (3 tests) |
+
+`domain-access.spec.ts` now has 11 tests. Run against the pre-fix source (source changes stashed, the new tests kept; E2E_PORT_BASE 6800), 7 failed: flows 1, 2 and 5 on their new assertions, "an existing account that lost creator status", "a creator managing an outside member", "an email-locked workspace invitation" (its `access-outside` assertion) and "failure states…" (the unconfirmed Share note). 4 passed: flows 3 and 4, the guest flow 6 and "an outsider opens a board link", which were added for missing coverage and test behaviour that already worked.
+
+**Gate after the fixes** (Windows 11, Node 24, headless Chromium, `E2E_PORT_BASE=6800`): `pnpm lint` clean (1,036 files); `pnpm -r typecheck` clean; `pnpm test` 294 files passed / 9 skipped, 3,314 tests passed / 36 skipped (17 more than at step D: `staleness.test.ts` 10, plus the new unit cases in contracts, invite-lock and the web models); `domain-access.spec.ts` 11/11 in three runs in a row (33/33); the e2e specs that touch the changed UI, run once: `client-defaults`, `dashboard-share`, `dashboard`, `guests`, `guests-2`, `invite-email`, `permissions`, `sample-board`, `search`, `sharing-polish`, `history`, `checkpoints`, `export-control`, 65/65. Not re-run: the whole e2e suite, the opt-in real-Postgres tests (no Postgres here), the demo and perf smoke checks.

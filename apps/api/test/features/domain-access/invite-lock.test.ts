@@ -130,6 +130,9 @@ describe('creating locked invitations (dev provider)', () => {
       const token = tokenOf(link.url)
       const preview = Preview.parse((await outsider.req('GET', `/api/invitations/${token}`)).json())
       expect(preview).toMatchObject({ emailLocked: false, invitedEmailHint: null, matchesYou: null })
+      // Not locked: never "sent by you", not even for the creator of the link.
+      const own = Preview.parse((await alice.req('GET', `/api/invitations/${token}`)).json())
+      expect(own.sentByYou).toBe(false)
       expect((await outsider.req('POST', `/api/invitations/${token}/accept`)).statusCode).toBe(200)
       const anon = Preview.parse((await api.anon('GET', `/api/invitations/${token}`)).json())
       expect(anon.allowGuests).toBe(body.allowGuests === true)
@@ -219,6 +222,10 @@ describe('accepting locked invitations (Clerk)', () => {
     expect((await preview(token, await w.signIn('user_pat'))).matchesYou).toBe(true)
     expect((await preview(token, await w.signIn('user_sam'))).matchesYou).toBe(false)
     expect((await preview(token, alice)).matchesYou).toBe(false)
+    // sentByYou: only the inviter who created this locked link, never anyone else (or signed out).
+    expect((await preview(token, alice)).sentByYou).toBe(true)
+    expect((await preview(token, await w.signIn('user_sam'))).sentByYou).toBe(false)
+    expect((await preview(token)).sentByYou).toBe(false)
     // The full address never appears in the preview.
     expect(JSON.stringify(await preview(token))).not.toContain('pat.doe')
   })

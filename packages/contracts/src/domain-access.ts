@@ -125,6 +125,11 @@ export const InvitationEmailLock = z.object({
    * one. null when signed out, for name-only guests and for invitations that are not locked.
    */
   matchesYou: z.boolean().nullable().default(null),
+  /**
+   * The signed-in caller created this email-locked invitation (an inviter checking their own link), so
+   * the page says whom it is for instead of "ask {inviter}". false otherwise, and from an older api.
+   */
+  sentByYou: z.boolean().default(false),
 })
 export type InvitationEmailLock = z.infer<typeof InvitationEmailLock>
 

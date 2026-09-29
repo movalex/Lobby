@@ -25,6 +25,7 @@ import { checkpointPermissions, deletedCheckpointSummary } from './checkpoints-m
 import {
   archiveFileName,
   checkpointNameToSave,
+  checkpointsHint,
   copyActions,
   createdSummary,
   defaultCheckpointName,
@@ -325,9 +326,8 @@ export function HistoryPanel({ ctx }: { ctx: FeatureContext; close(): void }) {
 
       <section className="dr-history__section" aria-labelledby="dr-history-checkpoints">
         <h3 id="dr-history-checkpoints">Checkpoints</h3>
-        <p className="dr-history__hint">
-          A checkpoint keeps this board as it is now. Restoring one makes a new board that only you can see;
-          this board is not changed.
+        <p className="dr-history__hint" data-testid="checkpoints-hint">
+          {checkpointsHint(copy.restoreAsNew, me.access)}
         </p>
         {perms.canEdit && (
           <form

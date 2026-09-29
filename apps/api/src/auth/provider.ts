@@ -41,6 +41,12 @@ export interface SignInContext {
     provision: (tx: Queryable, now: Date) => Promise<SessionUser>,
     opts?: { clerkSessionId?: string | null },
   ): Promise<Me>
+  /**
+   * Domain access (docs/DOMAIN-ACCESS-CONTRACTS.md §3.3 step 1): the provider says the account behind
+   * this subject is banned. Ends every session the account already has, as an identity refresh that
+   * finds it banned does. A no-op when no account has this identity yet.
+   */
+  endBannedAccount(provider: AuthProviderId, subject: string): Promise<void>
   now: () => Date
   log: { warn(obj: object, msg: string): void; info(obj: object, msg: string): void }
   /** Which stored addresses make a creator (the running provider and the policy): findOrCreateUser. */

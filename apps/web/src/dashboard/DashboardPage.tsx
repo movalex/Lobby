@@ -28,10 +28,12 @@ import {
   filterBoards,
   filterByOwner,
   importTitle,
+  OUTSIDE_NOTICE,
   type OwnerFilter,
   RECENT_LIMIT,
   recentBoards,
   sectionTitle,
+  showOutsideNotice,
   sortBoards,
   TRASH_NOTE,
   UNCONFIRMED_NOTICE,
@@ -102,7 +104,8 @@ function Dashboard({ workspaceId, section }: { workspaceId: string; section: Das
   const workspace = me.workspaces.find((w) => w.id === workspaceId) ?? me.workspaces[0]
   // Domain access (docs/DOMAIN-ACCESS-CONTRACTS.md §9): creating needs a creator AND a workspace role that
   // may create; reading the project list, moving boards and the storage line need only the role.
-  const { canCreate, inWorkspace, limit } = dashboardAccess(me.access, workspace?.role ?? null)
+  const access = dashboardAccess(me.access, workspace?.role ?? null)
+  const { canCreate, inWorkspace, limit } = access
   const { notices, notify, dismiss } = useNotices()
   const searchId = useId()
   const sortId = useId()
@@ -206,7 +209,9 @@ function Dashboard({ workspaceId, section }: { workspaceId: string; section: Das
   if (!workspace) return <NoAccessScreen thing="workspace" />
 
   const title = sectionTitle(section, projectList)
-  const empty = emptyState(section, { searching: query.trim().length > 0, canCreate, limit })
+  // Domain access: an outside account whose role would create is told why the create controls are missing.
+  const outsideNotice = showOutsideNotice(access, section)
+  const empty = emptyState(section, { searching: query.trim().length > 0, canCreate, limit, outsideNotice })
   // Search across boards (wave 4): "Inside boards" results below the title matches.
   const contentSearching = contentSearchApplies(section, query)
   const showSort = section.kind !== 'recent'
@@ -626,6 +631,13 @@ function Dashboard({ workspaceId, section }: { workspaceId: string; section: Das
                 Reload
               </button>
             </span>
+          </div>
+        )}
+
+        {outsideNotice && (
+          <div className="dr-dash__guest" role="note" data-testid="access-outside">
+            <strong>{OUTSIDE_NOTICE.title}</strong>
+            <span>{OUTSIDE_NOTICE.body}</span>
           </div>
         )}
 

@@ -19,6 +19,18 @@ export const IDENTITY_GRACE_MS = 24 * HOUR_MS
 export const ACCEPT_IDENTITY_MAX_AGE_MS = 5 * 60 * 1000
 /** After a failed refresh, no new provider call for this user for this long (per process). */
 export const REFRESH_FAILURE_BACKOFF_MS = 60 * 1000
+/**
+ * A stored identity_checked_at more than this far AHEAD of this process's clock was written by a
+ * process whose clock ran ahead (a deploy overlap on another host), so its real age is unknown. It
+ * never blocks a newer snapshot (users.ts replaceUserEmails) and counts as stale (identity.ts
+ * freshen). Within one process a stored check time is never later than now; the tolerance only
+ * absorbs small skews.
+ */
+export const CLOCK_SKEW_TOLERANCE_MS = 60 * 1000
+
+/** A check time from a clock that ran ahead of this one by more than CLOCK_SKEW_TOLERANCE_MS. */
+export const isFutureCheck = (checkedAt: Date | null, now: Date): boolean =>
+  checkedAt !== null && checkedAt.getTime() > now.getTime() + CLOCK_SKEW_TOLERANCE_MS
 
 export type EmailSource = 'dev' | 'clerk'
 

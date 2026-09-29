@@ -6,7 +6,13 @@ import { DOMAIN_ACCESS_CODES, DOMAIN_ACCESS_MESSAGES } from '@draftroom/contract
 import { newId, type Queryable } from '@draftroom/db'
 import type { WorkspaceRole } from '@draftroom/permissions'
 import { ApiError } from '../errors.ts'
-import { type CreatorLookup, type EmailSource, userColumns, userParams } from './creator-sql.ts'
+import {
+  CLOCK_SKEW_TOLERANCE_MS,
+  type CreatorLookup,
+  type EmailSource,
+  userColumns,
+  userParams,
+} from './creator-sql.ts'
 import { normalizeEmail } from './creators.ts'
 import type { SessionUser, SessionUserRow } from './session.ts'
 import { toSessionUser } from './session.ts'
@@ -63,10 +69,33 @@ export function cleanProfileEmails(list: readonly ProfileEmail[]): ProfileEmail[
 }
 
 /**
+ * When a snapshot may replace the stored one (docs/DOMAIN-ACCESS-CONTRACTS.md §3.3):
+ * - `now` is this process's clock at the write. A snapshot older than the stored one (two sign-ins,
+ *   or a sign-in and a refresh, racing) writes nothing, unless the stored check time is more than
+ *   CLOCK_SKEW_TOLERANCE_MS ahead of `now`: a process whose clock ran ahead (a deploy overlap) wrote
+ *   it, it is not known to be newer, and it never blocks this snapshot.
+ * - `always`: the dev login, whose address is not a remote snapshot but the one it was just given
+ *   ("every login replaces the previous dev emails").
+ */
+export interface SnapshotWrite {
+  now: Date
+  always?: boolean
+}
+
+const STAMP_WHERE = `id = $1 AND ($3::boolean OR identity_checked_at IS NULL OR identity_checked_at <= $2
+      OR identity_checked_at > $4::timestamptz)`
+const stampParams = (userId: string, fetchedAt: Date, write: SnapshotWrite): unknown[] => [
+  userId,
+  fetchedAt,
+  write.always === true,
+  new Date(write.now.getTime() + CLOCK_SKEW_TOLERANCE_MS),
+]
+
+/**
  * Stores a snapshot of a user's verified addresses from `source` (docs/DOMAIN-ACCESS-CONTRACTS.md
- * §3.3). `fetchedAt` is ctx.now() read BEFORE the provider was asked: a snapshot older than the one
- * already stored (two sign-ins, or a sign-in and a refresh, racing) writes nothing. Idempotent (the
- * sign-in transaction is retried once on a unique violation). Resolves true when it wrote.
+ * §3.3). `fetchedAt` is ctx.now() read BEFORE the provider was asked; `write` says when it may replace
+ * the stored snapshot (SnapshotWrite). Idempotent (the sign-in transaction is retried once on a
+ * unique violation). Resolves true when it wrote.
  */
 export async function replaceUserEmails(
   tx: Queryable,
@@ -74,13 +103,14 @@ export async function replaceUserEmails(
   source: EmailSource,
   emails: readonly ProfileEmail[],
   fetchedAt: Date,
+  write: SnapshotWrite,
 ): Promise<boolean> {
   // `<=`, not `<`: two logins within one millisecond both write (the later one wins); an OLDER
-  // snapshot never does (contracts doc §17, as built).
+  // snapshot never does (contracts doc §17, as built), unless the stored time came from a clock that
+  // ran ahead (SnapshotWrite).
   const stamped = await tx.query<{ id: string }>(
-    `UPDATE users SET identity_checked_at = $2
-      WHERE id = $1 AND (identity_checked_at IS NULL OR identity_checked_at <= $2) RETURNING id`,
-    [userId, fetchedAt],
+    `UPDATE users SET identity_checked_at = $2 WHERE ${STAMP_WHERE} RETURNING id`,
+    stampParams(userId, fetchedAt, write),
   )
   if (!stamped.rows.length) return false
   await tx.query('DELETE FROM user_emails WHERE user_id = $1 AND source = $2', [userId, source])
@@ -96,11 +126,15 @@ export async function replaceUserEmails(
 }
 
 /** Stamps identity_checked_at alone (a refresh with nothing to find), under the same fetch-time rule. */
-export async function stampIdentityChecked(tx: Queryable, userId: string, fetchedAt: Date): Promise<void> {
+export async function stampIdentityChecked(
+  tx: Queryable,
+  userId: string,
+  fetchedAt: Date,
+  write: SnapshotWrite,
+): Promise<void> {
   await tx.query(
-    `UPDATE users SET identity_checked_at = $2
-      WHERE id = $1 AND (identity_checked_at IS NULL OR identity_checked_at <= $2)`,
-    [userId, fetchedAt],
+    `UPDATE users SET identity_checked_at = $2 WHERE ${STAMP_WHERE}`,
+    stampParams(userId, fetchedAt, write),
   )
 }
 
@@ -144,6 +178,8 @@ export interface IdentityInput {
   emails: readonly ProfileEmail[] | null
   /** ctx.now() read BEFORE the provider call started (replaceUserEmails). */
   fetchedAt: Date
+  /** The dev login: `emails` replace the stored ones whatever their check time (SnapshotWrite.always). */
+  authoritative?: boolean
 }
 
 export interface ProvisionResult {
@@ -222,7 +258,10 @@ export async function findOrCreateUser(
     created = true
   }
   if (input.emails !== null)
-    await replaceUserEmails(tx, userId, input.provider, input.emails, input.fetchedAt)
+    await replaceUserEmails(tx, userId, input.provider, input.emails, input.fetchedAt, {
+      now,
+      always: input.authoritative === true,
+    })
   let user = await loadSessionUser(tx, userId, creators, now)
   if (!user) throw new Error('provisioned user not found')
   if (user.creator && (await ensurePersonalWorkspace(tx, userId, user.name, now)))

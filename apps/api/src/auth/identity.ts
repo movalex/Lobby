@@ -24,6 +24,7 @@ import {
   IDENTITY_GRACE_MS,
   IDENTITY_RECHECK_MS,
   isConfirmed,
+  isFutureCheck,
   REFRESH_FAILURE_BACKOFF_MS,
   userColumns,
   userParams,
@@ -99,6 +100,9 @@ export const roleRequiresCreator = () =>
 
 export const accountDisabled = () =>
   new ApiError(403, DOMAIN_ACCESS_CODES.accountDisabled, DOMAIN_ACCESS_MESSAGES.accountDisabled)
+
+/** The age freshen gives a check time from a clock that ran ahead: stale, but not unconfirmed. */
+const FUTURE_CHECK_AGE_MS = IDENTITY_RECHECK_MS + 1
 
 // A name-only guest keeps GUEST_ACCOUNT_REQUIRED everywhere, with the guest guard's own messages.
 const GUEST_CREATE = GUEST_REFUSED_ROUTES['POST /api/workspaces/:wid/boards'] ?? ''
@@ -240,8 +244,16 @@ export function createIdentityService(deps: Deps): IdentityService {
 
     async freshen(req, user, mode, opts = {}) {
       if (user.kind === 'guest' || !provider.refreshIdentity) return user
-      const t = now().getTime()
-      const age = user.identityCheckedAt ? t - user.identityCheckedAt.getTime() : Number.POSITIVE_INFINITY
+      const at = now()
+      const t = at.getTime()
+      // A check time from a clock that ran ahead of this one (a deploy overlap): its real age is
+      // unknown, so it counts as stale (a background refresh; 'accept' awaits one), and that refresh's
+      // write replaces it (users.ts SnapshotWrite).
+      const age = !user.identityCheckedAt
+        ? Number.POSITIVE_INFINITY
+        : isFutureCheck(user.identityCheckedAt, at)
+          ? FUTURE_CHECK_AGE_MS
+          : t - user.identityCheckedAt.getTime()
       const limit = mode === 'accept' ? ACCEPT_IDENTITY_MAX_AGE_MS : IDENTITY_GRACE_MS
       if (age > limit) {
         const outcome = await refresh(user.id)

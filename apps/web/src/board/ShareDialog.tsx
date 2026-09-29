@@ -11,17 +11,16 @@
 // links), then the settings (workspace access, export) and who has access. Every guest option sits
 // above its Create button and applies to the link that button makes.
 
-import {
-  type AccessRequest,
-  type Board,
-  type BoardMember,
-  DOMAIN_ACCESS_MESSAGES,
-  type EmailInviteResult,
-  type InvitationCreated,
-  type PendingInvitation,
-  type RequestableRole,
-  type ShareState,
-  type WorkspaceMember,
+import type {
+  AccessRequest,
+  Board,
+  BoardMember,
+  EmailInviteResult,
+  InvitationCreated,
+  PendingInvitation,
+  RequestableRole,
+  ShareState,
+  WorkspaceMember,
 } from '@draftroom/contracts'
 import { type ReactNode, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { api, isApiError } from '../api/client.ts'
@@ -48,18 +47,13 @@ import { splitGuestMarker } from '../invite/model.ts'
 import { absoluteUrl, copyText } from '../lib/clipboard.ts'
 import { formatDateTime, formatRelativeTime } from '../lib/format.ts'
 import { initialsFor, safeColor } from '../lib/identity.ts'
-import {
-  BOARD_ROLES,
-  type BoardRole,
-  type BoardVisibility,
-  can,
-  canHandOutAccess,
-} from '../lib/permissions.ts'
+import { type BoardRole, type BoardVisibility, can, canHandOutAccess } from '../lib/permissions.ts'
 import { boardPath } from '../lib/routing.ts'
 import { useResource } from '../lib/useResource.ts'
 import { Dialog } from '../ui/Dialog.tsx'
 import {
   type AccessDetail,
+  ADD_MEMBER_ROLES,
   ASK_EMAIL_PROMPT,
   accessSource,
   CLIENT_LINK_DEFAULTS,
@@ -77,12 +71,15 @@ import {
   memberRoleChoices,
   moreWaysSummary,
   OWNER_NEEDS_CREATOR,
+  OWNER_NEEDS_CREATOR_NOTE,
   parseInviteTarget,
   pendingInviteLabel,
   ROLE_OPTION_LABEL,
   removalNote,
   removeConfirmText,
   shareableWorkspaceMembers,
+  shareCreatorNote,
+  showOwnerNote,
   sortMembers,
   VISIBILITY_OPTIONS,
   visibilityChoices,
@@ -137,9 +134,12 @@ export function ShareDialog({
   // links, extending, approving, raising a role or the visibility, transferring ownership). A manager
   // who is not a creator (a pre-existing outside owner) keeps every way to reduce access: revoke,
   // remove, lower, deny. The api refuses the rest with 403 CREATOR_REQUIRED.
-  const creator = session.state.status === 'signed-in' ? session.state.me.access.creator : false
+  const access = session.state.status === 'signed-in' ? session.state.me.access : null
+  const creator = access?.creator ?? false
   const canShare = canHandOutAccess(creator, effectiveRole, board.status)
   const reduceOnly = canManage && !canShare
+  // An account Lobby could not confirm is told it is paused, never that it is not at Dark Burn Creative.
+  const creatorNote = shareCreatorNote(access)
   // A name-only guest (wave 3) cannot ask for more access; the dialog says what they can do instead.
   const guest = useIsGuest()
 
@@ -264,8 +264,13 @@ export function ShareDialog({
       <div className="dr-share dr-sharing">
         {/* Domain access: a manager who is not a creator is told why nothing here hands out access. */}
         {reduceOnly && (
-          <p className="dr-share__note dr-sharing__creator-note" role="note" data-testid="share-creator-note">
-            {DOMAIN_ACCESS_MESSAGES.creatorRequiredShare}
+          <p
+            className="dr-share__note dr-sharing__creator-note"
+            role="note"
+            data-testid="share-creator-note"
+            data-reason={creatorNote.reason}
+          >
+            {creatorNote.text}
           </p>
         )}
 
@@ -394,7 +399,12 @@ export function ShareDialog({
           }}
         />
 
-        <ExportPolicySection boardId={board.id} role={effectiveRole} canManage={canManage} />
+        <ExportPolicySection
+          boardId={board.id}
+          role={effectiveRole}
+          canManage={canManage}
+          canCreateLinks={canShare}
+        />
 
         <section className="dr-share__section" aria-labelledby="dr-share-people">
           <h3 id="dr-share-people" className="dr-share__heading">
@@ -701,7 +711,8 @@ function AddMember({
   const personId = useId()
   const roleId = useId()
   const [userId, setUserId] = useState('')
-  const [role, setRole] = useState<BoardRole>('editor')
+  // Never owner here (like Invite people): ownership is set on the person's row, which knows who may own.
+  const [role, setRole] = useState<Exclude<BoardRole, 'owner'>>('editor')
   return (
     <form
       className="dr-share__add"
@@ -737,9 +748,9 @@ function AddMember({
         className="dr-input dr-select dr-select--compact"
         data-testid="share-add-role"
         value={role}
-        onChange={(e) => setRole(e.target.value as BoardRole)}
+        onChange={(e) => setRole(e.target.value as Exclude<BoardRole, 'owner'>)}
       >
-        {BOARD_ROLES.map((r) => (
+        {ADD_MEMBER_ROLES.map((r) => (
           <option key={r} value={r}>
             {ROLE_OPTION_LABEL[r]}
           </option>
@@ -1165,6 +1176,7 @@ function MemberRow({
   onTransfer(): void
 }) {
   const selectId = useId()
+  const ownerNoteId = useId()
   const [confirming, setConfirming] = useState(false)
   const [confirmingRemove, setConfirmingRemove] = useState(false)
   const { user } = member
@@ -1182,6 +1194,9 @@ function MemberRow({
   // Domain access: someone confirmed not to be a creator cannot own boards (the server answers 409).
   const cannotOwn = member.canOwn === false
   const roleChoices = memberRoleChoices({ current: selectValue, canShare, canOwn: member.canOwn, guest })
+  // Why Owner (and transfer) is off, as visible text: a disabled option or button rarely shows a title.
+  const ownerNote =
+    editable && !guest && showOwnerNote({ canShare, canOwn: member.canOwn, current: selectValue })
   return (
     <li
       className="dr-member"
@@ -1213,6 +1228,11 @@ function MemberRow({
           {user.handle ? `@${user.handle}` : ''}
           {source ? `${user.handle ? ' · ' : ''}${source}` : ''}
         </span>
+        {ownerNote && (
+          <span className="dr-sharing__fallback" id={ownerNoteId} data-testid="member-owner-note">
+            {OWNER_NEEDS_CREATOR_NOTE}
+          </span>
+        )}
         {editable && !isSelf && fallback && (
           <span className="dr-sharing__fallback" data-testid="member-fallback">
             {fallback}
@@ -1277,6 +1297,7 @@ function MemberRow({
             data-testid="member-role"
             value={selectValue}
             disabled={pending}
+            aria-describedby={ownerNote ? ownerNoteId : undefined}
             onChange={(e) => onRole(e.target.value as BoardRole)}
           >
             {roleChoices.map((c) => (
@@ -1292,6 +1313,7 @@ function MemberRow({
               data-testid="member-transfer"
               aria-label={`Transfer ownership to ${user.name}`}
               title={cannotOwn ? OWNER_NEEDS_CREATOR : 'Transfer ownership'}
+              aria-describedby={ownerNote ? ownerNoteId : undefined}
               disabled={pending || cannotOwn}
               onClick={() => setConfirming(true)}
             >

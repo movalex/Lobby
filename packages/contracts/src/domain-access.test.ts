@@ -125,6 +125,7 @@ describe('responses', () => {
       emailLocked: false,
       invitedEmailHint: null,
       matchesYou: null,
+      sentByYou: false,
     })
     expect(
       Preview.parse({
@@ -134,6 +135,9 @@ describe('responses', () => {
         matchesYou: false,
       }),
     ).toMatchObject({ emailLocked: true, invitedEmailHint: 'p•••@client.example', matchesYou: false })
+    // Fixer round 1: an inviter checking their own locked link.
+    expect(Preview.parse({ ...preview, emailLocked: true, sentByYou: true }).sentByYou).toBe(true)
+    expect(Preview.safeParse({ ...preview, sentByYou: 'yes' }).success).toBe(false)
   })
 
   it('the mismatch body has its own code and a masked hint', () => {

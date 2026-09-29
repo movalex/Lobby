@@ -213,8 +213,12 @@ export function registerReviewLinkRoutes(app: FastifyInstance, ctx: FeatureConte
     const user = await ctx.requireUser(req)
     const { bid = '' } = req.params as Params
     const access = await requireBoardAction(db, bid, user.id, 'manage_access')
-    // Domain access (D4): a manager who is not a creator (stored status) sees the list, but never a
-    // multi-use link's URL, so they cannot hand out a link that already exists.
+    // Domain access (D4): a manager who is not a creator sees the list, but never a multi-use link's URL,
+    // so they cannot hand out a link that already exists. The caller is freshened like at /api/me
+    // (confirmed first when unconfirmed, a background refresh after 1 h; after the permission check), so
+    // a manager who never loads /api/me still loses a removed company address. The decision reads the
+    // database, so an awaited refresh counts at once.
+    await ctx.identity.freshen(req, user, 'me')
     const mayShare = await ctx.identity.isCreatorUser(db, user.id)
     const rows = await db.query<InvitationListRow>(
       `SELECT i.id, i.role, i.multi_use, i.allow_guests, i.max_uses, i.use_count, i.created_at, i.expires_at, i.token_hash,

@@ -38,10 +38,12 @@ async function joinDevStudio(tx: Queryable, userId: string, now: Date): Promise<
 }
 
 export function createDevAuthProvider(): AuthProvider {
+  let clock: () => Date = () => new Date()
   return {
     id: 'dev',
     publicConfig: () => ({ providers: ['dev'] }),
     register(app, ctx) {
+      clock = ctx.now
       app.post('/api/auth/dev/login', { config: { rateLimit: ctx.rateLimit } }, async (req, reply) => {
         const input = parse(DevLoginInput, req.body)
         const email = input.email ?? devEmail(input.handle)
@@ -57,6 +59,8 @@ export function createDevAuthProvider(): AuthProvider {
               refreshProfile: input.name !== undefined,
               emails: [{ email, isPrimary: true, strategy: null }],
               fetchedAt: now,
+              // Not a remote snapshot: the address this login was just given replaces the stored one.
+              authoritative: true,
             },
             now,
             ctx.creators,
@@ -87,11 +91,12 @@ export function createDevAuthProvider(): AuthProvider {
               'dev',
               [{ email: devEmail(identity.subject), isPrimary: true, strategy: null }],
               fetchedAt,
+              { now: clock() },
             )
             return
           }
         }
-        await stampIdentityChecked(tx, userId, fetchedAt)
+        await stampIdentityChecked(tx, userId, fetchedAt, { now: clock() })
       })
       return 'ok'
     },

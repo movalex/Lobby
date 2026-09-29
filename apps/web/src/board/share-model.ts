@@ -1,5 +1,6 @@
 import {
   type BoardMember,
+  DOMAIN_ACCESS_MESSAGES,
   type EmailInviteFallbackReason,
   type EmailInviteResult,
   InviteEmail,
@@ -162,6 +163,40 @@ export function pendingInviteLabel(
 
 /** Why the owner option (and transfer of ownership) is off for someone (`ShareMember.canOwn` false). */
 export const OWNER_NEEDS_CREATOR = 'Only people at Dark Burn Creative or Trailer Park Group can own boards'
+
+/**
+ * The same reason as visible text on that person's row (`member-owner-note`): a disabled option in a
+ * native select popup shows no tooltip, and a disabled button takes no focus, so a title alone is
+ * rarely seen or announced.
+ */
+export const OWNER_NEEDS_CREATOR_NOTE = `Can't own this board. ${OWNER_NEEDS_CREATOR}.`
+
+/** Whether that person's row says why they cannot be made the owner (a creator is managing). */
+export const showOwnerNote = (m: { canShare: boolean; canOwn?: boolean; current: BoardRole }): boolean =>
+  m.canShare && m.canOwn === false && m.current !== 'owner'
+
+/** The roles "Or pick someone from the workspace…" offers: never owner (set that on the person's row). */
+export const ADD_MEMBER_ROLES: readonly Exclude<BoardRole, 'owner'>[] = BOARD_ROLES.filter(
+  (r): r is Exclude<BoardRole, 'owner'> => r !== 'owner',
+)
+
+/** While Lobby could not confirm the caller's account (`access.reason` 'unconfirmed'). */
+export const UNCONFIRMED_SHARE_NOTE =
+  "Lobby couldn't confirm your account, so inviting people, creating links and giving more access are paused. You can still lower or remove access. Reload in a minute to try again."
+
+/**
+ * The Share dialog's note for a manager who may not hand out access (`share-creator-note`): an outside
+ * account gets the server's CREATOR_REQUIRED message; a creator Lobby could not confirm is told it is
+ * paused, never that they are not at Dark Burn Creative.
+ */
+export function shareCreatorNote(access: { creator: boolean; reason: string } | null): {
+  reason: 'unconfirmed' | 'outside'
+  text: string
+} {
+  return access && !access.creator && access.reason === 'unconfirmed'
+    ? { reason: 'unconfirmed', text: UNCONFIRMED_SHARE_NOTE }
+    : { reason: 'outside', text: DOMAIN_ACCESS_MESSAGES.creatorRequiredShare }
+}
 
 export interface RoleChoice {
   role: BoardRole

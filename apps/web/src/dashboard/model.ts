@@ -57,6 +57,23 @@ export const OUTSIDE_CREATE_NOTE =
 /** The dashboard notice while the account is unconfirmed (`access-unconfirmed`). */
 export const UNCONFIRMED_NOTICE = "Lobby couldn't confirm your account, so creating and sharing are paused."
 
+/** The dashboard notice for an outside account whose workspace role would let it create (`access-outside`). */
+export const OUTSIDE_NOTICE = {
+  title:
+    'Only people at Dark Burn Creative or Trailer Park Group can create boards, projects and links in Lobby.',
+  body: 'You can open and work on the boards shared with you. Work there? Sign in with your work email.',
+} as const
+
+/**
+ * Whether the dashboard says why New board, Import, Templates and "New project lobby" are missing
+ * (`access-outside`): an outside account whose workspace role (owner, admin, member) would otherwise
+ * create, for example an existing account that lost creator status, even in its own workspace.
+ * Workspace guests never create, so they keep the role's copy; Trash and Archived offer no creating.
+ */
+export function showOutsideNotice(a: DashboardAccess, section: DashboardSection): boolean {
+  return a.limit === 'outside' && a.inWorkspace && section.kind !== 'archived' && section.kind !== 'trash'
+}
+
 export interface NoWorkspaceCopy {
   /** `data-reason` of the screen. */
   reason: 'outside' | 'unconfirmed' | 'none'
@@ -81,7 +98,7 @@ export function noWorkspaceCopy(access: MeAccess): NoWorkspaceCopy {
         access.email
           ? `You're signed in as ${access.email}.`
           : "You're signed in with an account that has no confirmed email address.",
-        'When someone at Dark Burn Creative or Trailer Park Group invites this address, open the link in their email. Work there? Sign in with your work email.',
+        'When someone at Dark Burn Creative or Trailer Park Group invites this address, open the invite link they send you. Work there? Sign in with your work email.',
       ],
       action: 'switch-account',
     }
@@ -275,6 +292,8 @@ export function emptyState(
     canCreate: boolean
     /** Domain access: why a member cannot create (`dashboardAccess().limit`); null = the role's copy. */
     limit?: CreateLimit
+    /** The `access-outside` notice is on screen (showOutsideNotice), so the note is not repeated. */
+    outsideNotice?: boolean
   },
 ): EmptyState {
   if (opts.searching) {
@@ -295,7 +314,9 @@ export function emptyState(
       title: section.kind === 'project' ? "This project's lobby has no boards yet" : 'No boards yet',
       body:
         limit === 'outside'
-          ? `${shared} ${OUTSIDE_CREATE_NOTE}`
+          ? opts.outsideNotice
+            ? shared
+            : `${shared} ${OUTSIDE_CREATE_NOTE}`
           : `${shared} Creating boards is paused until Lobby can confirm your account.`,
       offerCreate: false,
     }

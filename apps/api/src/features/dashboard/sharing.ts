@@ -85,6 +85,10 @@ export function registerSharingRoutes(app: FastifyInstance, ctx: FeatureContext)
     const user = await ctx.requireUser(req)
     const { bid = '' } = req.params as Params
     const access = await requireBoardAction(db, bid, user.id, 'manage_access')
+    // Domain access (§4.2): the caller is freshened like at /api/me (a background refresh after 1 h), so a
+    // manager who never loads /api/me still loses a removed company address. After the permission check:
+    // nobody else makes Lobby call the provider from here.
+    await ctx.identity.freshen(req, user, 'me')
     const { board } = access
     const rows = await db.query<
       UserRow & {

@@ -1,9 +1,10 @@
-import { CLERK_TEST_ADDRESS_MESSAGE } from '@draftroom/contracts'
+import { CLERK_TEST_ADDRESS_MESSAGE, DOMAIN_ACCESS_MESSAGES } from '@draftroom/contracts'
 import { describe, expect, it } from 'vitest'
 import { makeUser, member, wsMember } from '../api/test-fixtures.ts'
 import { REVIEW_LINK_DAY_OPTIONS, REVIEW_LINK_DEFAULT_DAY } from '../features/sharing/model.ts'
 import {
   type AccessDetail,
+  ADD_MEMBER_ROLES,
   ASK_EMAIL_PROMPT,
   accessSource,
   CLIENT_LINK_DEFAULTS,
@@ -21,12 +22,16 @@ import {
   memberRoleEditable,
   moreWaysSummary,
   OWNER_NEEDS_CREATOR,
+  OWNER_NEEDS_CREATOR_NOTE,
   parseInviteTarget,
   pendingInviteLabel,
   removalNote,
   removeConfirmText,
   shareableWorkspaceMembers,
+  shareCreatorNote,
+  showOwnerNote,
   sortMembers,
+  UNCONFIRMED_SHARE_NOTE,
   VISIBILITY_OPTIONS,
   visibilityChoices,
   WORKSHOP_LINK_GUESTS_DEFAULT,
@@ -480,5 +485,38 @@ describe('domain access: what a manager who is not a creator can do (D4, D5)', (
     expect(visibilityChoices('private', true).map((o) => o.label)).toEqual(
       VISIBILITY_OPTIONS.map((o) => o.label),
     )
+  })
+})
+
+describe('domain access, fixer round 1: the notes a non-creator and a creator managing outsiders read', () => {
+  it('the Share note: an outside account gets the server message; an unconfirmed one is told it is paused', () => {
+    expect(shareCreatorNote({ creator: false, reason: 'outside' })).toEqual({
+      reason: 'outside',
+      text: DOMAIN_ACCESS_MESSAGES.creatorRequiredShare,
+    })
+    const paused = shareCreatorNote({ creator: false, reason: 'unconfirmed' })
+    expect(paused).toEqual({ reason: 'unconfirmed', text: UNCONFIRMED_SHARE_NOTE })
+    // A Dark Burn person Lobby could not confirm is never told they are not at Dark Burn Creative.
+    expect(paused.text).not.toMatch(/Only people at Dark Burn/)
+    expect(paused.text).toMatch(/couldn't confirm your account/)
+    expect(paused.text).toMatch(/You can still lower or remove access/)
+    // No session yet: the server's message (the note only shows for managers anyway).
+    expect(shareCreatorNote(null).reason).toBe('outside')
+  })
+
+  it('"Or pick someone from the workspace…" never offers owner; ownership is set on the person’s row', () => {
+    expect(ADD_MEMBER_ROLES).toEqual(['editor', 'commenter', 'viewer'])
+  })
+
+  it('a row says in words why its owner option is off (a creator managing an outsider)', () => {
+    expect(OWNER_NEEDS_CREATOR_NOTE).toBe(
+      "Can't own this board. Only people at Dark Burn Creative or Trailer Park Group can own boards.",
+    )
+    expect(showOwnerNote({ canShare: true, canOwn: false, current: 'editor' })).toBe(true)
+    // Already an owner (decision 4), a creator, an older api (undefined) or a reduce-only manager: no note.
+    expect(showOwnerNote({ canShare: true, canOwn: false, current: 'owner' })).toBe(false)
+    expect(showOwnerNote({ canShare: true, canOwn: true, current: 'editor' })).toBe(false)
+    expect(showOwnerNote({ canShare: true, current: 'editor' })).toBe(false)
+    expect(showOwnerNote({ canShare: false, canOwn: false, current: 'editor' })).toBe(false)
   })
 })

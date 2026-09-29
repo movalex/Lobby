@@ -213,6 +213,7 @@ export function InvitePage({ token }: { token: string }) {
       hint,
       email: state.me.access.email,
       invitedBy: inv.invitedBy.name,
+      sentByYou: inv.sentByYou,
     })
     actions = (
       <>

@@ -2,7 +2,9 @@ import { HistoryBoardCreated } from '@draftroom/contracts'
 import { describe, expect, it } from 'vitest'
 import {
   archiveFileName,
+  CHECKPOINTS_HINT,
   checkpointNameToSave,
+  checkpointsHint,
   copyActions,
   createdSummary,
   defaultCheckpointName,
@@ -227,5 +229,28 @@ describe('copy and export under the board export policy', () => {
       exportOff: true,
     })
     expect(copyActions(historyPermissions('owner', 'active', 'owner'), true).exportOff).toBe(false)
+  })
+})
+
+describe('the checkpoints line promises restoring only to those who may (domain access, fixer round 1)', () => {
+  it('as today when "Restore as new board" is offered or turned off; otherwise it says who can', () => {
+    const dev = { creator: true, reason: 'dev' }
+    expect(checkpointsHint('on', dev)).toBe(CHECKPOINTS_HINT)
+    expect(checkpointsHint('off', dev)).toBe(CHECKPOINTS_HINT)
+    expect(checkpointsHint('hidden', { creator: false, reason: 'outside' })).toBe(
+      'A checkpoint keeps this board as it is now. Only people at Dark Burn Creative or Trailer Park Group can restore one as a new board.',
+    )
+    expect(checkpointsHint('hidden', { creator: false, reason: 'unconfirmed' })).toMatch(
+      /paused until Lobby can confirm your account/,
+    )
+    // A creator who is a workspace guest, or a name-only guest: no promise, no domain wording.
+    expect(checkpointsHint('hidden', dev)).toBe('A checkpoint keeps this board as it is now.')
+    expect(checkpointsHint('hidden', { creator: false, reason: 'guest' })).toBe(
+      'A checkpoint keeps this board as it is now.',
+    )
+    // An outsider's panel: hidden actions, so the restore promise is gone.
+    const perms = historyPermissions('owner', 'active', 'member', { creator: false })
+    const hint = checkpointsHint(copyActions(perms, true).restoreAsNew, { creator: false, reason: 'outside' })
+    expect(hint).not.toMatch(/Restoring one makes a new board/)
   })
 })

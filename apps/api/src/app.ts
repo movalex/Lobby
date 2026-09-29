@@ -273,6 +273,18 @@ async function buildServer(
     log: app.log,
     now,
     creators,
+    async endBannedAccount(providerId, subject) {
+      const row = await db.maybeOne<{ user_id: string }>(
+        'SELECT user_id FROM identities WHERE provider = $1 AND subject = $2',
+        [providerId, subject],
+      )
+      if (!row) return
+      const ids = await sessions.revokeAll(row.user_id)
+      app.log.info(
+        { evt: 'identity.sessions_revoked', userId: row.user_id, outcome: 'banned', sessions: ids.length },
+        'account ended',
+      )
+    },
     async signIn(req, reply, provision, opts = {}) {
       const run = () =>
         db.transaction(async (tx) => {

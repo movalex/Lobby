@@ -15,8 +15,10 @@ import {
   landingWorkspace,
   noWorkspaceCopy,
   OUTSIDE_CREATE_NOTE,
+  OUTSIDE_NOTICE,
   recentBoards,
   sectionTitle,
+  showOutsideNotice,
   sortBoards,
   TRASH_NOTE,
   thumbStyle,
@@ -417,6 +419,39 @@ describe('domain access: the dashboard for someone who is not a creator (docs/DO
     ).toBe(true)
   })
 
+  it('an outside account whose role would create is told why the create controls are missing (access-outside)', () => {
+    const recent = { kind: 'recent' } as const
+    // An existing account that lost creator status, in its own workspace or as a member.
+    expect(showOutsideNotice(dashboardAccess(outside, 'owner'), recent)).toBe(true)
+    expect(showOutsideNotice(dashboardAccess(outside, 'admin'), recent)).toBe(true)
+    expect(showOutsideNotice(dashboardAccess(outside, 'member'), { kind: 'all' })).toBe(true)
+    expect(
+      showOutsideNotice(dashboardAccess(outside, 'member'), { kind: 'project', projectId: PRJ_ID }),
+    ).toBe(true)
+    // Workspace guests never create (the role's copy); Trash and Archived offer no creating.
+    expect(showOutsideNotice(dashboardAccess(outside, 'guest'), recent)).toBe(false)
+    expect(showOutsideNotice(dashboardAccess(outside, 'member'), { kind: 'trash' })).toBe(false)
+    expect(showOutsideNotice(dashboardAccess(outside, 'member'), { kind: 'archived' })).toBe(false)
+    // Creators, legacy, unconfirmed (its own notice) and name-only guests: no such notice.
+    expect(showOutsideNotice(dashboardAccess(dev, 'member'), recent)).toBe(false)
+    expect(showOutsideNotice(dashboardAccess(ME_ACCESS_LEGACY, 'member'), recent)).toBe(false)
+    expect(showOutsideNotice(dashboardAccess(unconfirmed, 'member'), recent)).toBe(false)
+    expect(
+      showOutsideNotice(dashboardAccess({ creator: false, reason: 'guest', email: null }, 'guest'), recent),
+    ).toBe(false)
+    expect(OUTSIDE_NOTICE.title).toBe(
+      'Only people at Dark Burn Creative or Trailer Park Group can create boards, projects and links in Lobby.',
+    )
+    // With the notice on screen the empty state does not repeat it.
+    expect(
+      emptyState(recent, { searching: false, canCreate: false, limit: 'outside', outsideNotice: true }),
+    ).toEqual({
+      title: 'No boards yet',
+      body: 'Boards shared with you appear here.',
+      offerCreate: false,
+    })
+  })
+
   it('an account with no workspace: outside (with and without an address), unconfirmed, none', () => {
     expect(landingWorkspace([], null)).toBeNull()
     const withEmail = noWorkspaceCopy(outside)
@@ -426,9 +461,11 @@ describe('domain access: the dashboard for someone who is not a creator (docs/DO
       action: 'switch-account',
     })
     expect(withEmail.body[0]).toBe("You're signed in as pat@client.example.test.")
+    // "open the invite link they send you": "Invite people" and "Link for one person" send no email (D13).
     expect(withEmail.body[1]).toBe(
-      'When someone at Dark Burn Creative or Trailer Park Group invites this address, open the link in their email. Work there? Sign in with your work email.',
+      'When someone at Dark Burn Creative or Trailer Park Group invites this address, open the invite link they send you. Work there? Sign in with your work email.',
     )
+    expect(withEmail.body.join(' ')).not.toMatch(/in their email/)
     const noEmail = noWorkspaceCopy({ ...outside, email: null })
     expect(noEmail.body[0]).toBe("You're signed in with an account that has no confirmed email address.")
     expect(noEmail.body.join(' ')).not.toMatch(/null|undefined/)

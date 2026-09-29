@@ -8,6 +8,7 @@
 // '@clerk/backend/errors', which is not replaced), like email-invites.test.ts.
 
 import { ClerkAPIResponseError } from '@clerk/backend/errors'
+import type { Db } from '@draftroom/db'
 import type { LightMyRequestResponse } from 'fastify'
 import { createClerkAuthProvider } from '../../../src/auth/clerk.ts'
 import { type Client, createTestApi, ORIGIN, type TestApi } from '../../helpers.ts'
@@ -139,7 +140,14 @@ export interface ClerkWorld {
   signIn(sub: string): Promise<Client>
 }
 
-export async function clerkWorld(opts: { env?: Record<string, string>; domainAccessGuard?: boolean } = {}) {
+export async function clerkWorld(
+  opts: {
+    env?: Record<string, string>
+    domainAccessGuard?: boolean
+    /** Another api over this (migrated) database: a second process, e.g. a deploy overlap. */
+    db?: Db
+  } = {},
+) {
   const logs: string[] = []
   const api = await createTestApi({
     env: {
@@ -149,6 +157,7 @@ export async function clerkWorld(opts: { env?: Record<string, string>; domainAcc
       ...opts.env,
     },
     ...(opts.domainAccessGuard === false ? { domainAccessGuard: false } : {}),
+    ...(opts.db ? { db: opts.db } : {}),
     deps: {
       logger: { level: 'debug', stream: { write: (line: string) => void logs.push(line) } },
       authProvider: createClerkAuthProvider({

@@ -120,6 +120,27 @@ export interface CopyActions {
  * them (403 EXPORT_DISABLED), so they are shown turned off with the reason. People who cannot create
  * boards (guests) are not offered the first two at all.
  */
+export const CHECKPOINTS_HINT =
+  'A checkpoint keeps this board as it is now. Restoring one makes a new board that only you can see; this board is not changed.'
+
+/**
+ * The line under "Checkpoints". It promises restoring only to someone who is offered "Restore as new
+ * board"; an outside account (domain access) is told who can, an unconfirmed one that it is paused.
+ */
+export function checkpointsHint(
+  restoreAsNew: ActionState,
+  access: { creator: boolean; reason: string },
+): string {
+  if (restoreAsNew !== 'hidden') return CHECKPOINTS_HINT
+  const keeps = 'A checkpoint keeps this board as it is now.'
+  if (access.creator) return keeps
+  if (access.reason === 'outside')
+    return `${keeps} Only people at Dark Burn Creative or Trailer Park Group can restore one as a new board.`
+  if (access.reason === 'unconfirmed')
+    return `${keeps} Restoring one as a new board is paused until Lobby can confirm your account.`
+  return keeps
+}
+
 export function copyActions(perms: HistoryPermissions, canExport: boolean): CopyActions {
   const creating: ActionState = !perms.canCreateBoards ? 'hidden' : canExport ? 'on' : 'off'
   return {

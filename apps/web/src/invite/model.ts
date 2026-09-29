@@ -238,8 +238,18 @@ export function emailMismatchCopy(opts: {
   hint: string | null
   email: string | null
   invitedBy: string | null
+  /** The signed-in account created this invitation (`sentByYou`): an inviter checking their link. */
+  sentByYou?: boolean
 }): { title: string; body: string } {
   const sentTo = opts.hint ?? 'a different email address'
+  if (opts.sentByYou) {
+    // Never "ask yourself to invite yourself": say whom the link is for and what to do with it.
+    const asYou = opts.email ? ` It won't let you in as ${opts.email}.` : ''
+    return {
+      title: 'This is the invitation you sent',
+      body: `Only ${sentTo} can use this link.${asYou} Send it to them: they sign in with that address to join.`,
+    }
+  }
   const inviter = opts.invitedBy?.trim() || 'the person who invited you'
   const signedInAs = opts.email
     ? `You're signed in as ${opts.email}.`
