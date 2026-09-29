@@ -5,6 +5,7 @@
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 import { createTableTextMetrics, installServerTextMetrics } from '@draftroom/canvas-schema/engine'
 import type { TLRecord } from '@tldraw/tlschema'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
@@ -262,5 +263,92 @@ describe('the rollback drill, in-process', () => {
       ok: true,
       reason: 'nothing-to-merge',
     })
+  })
+})
+
+describe('the roll-forward, other cases', () => {
+  it('a page created on R0 gets one new offset right of the board, appended to the frozen legacyPages', () => {
+    const rooms = join(suiteDir, 'newpage', 'rooms')
+    const boardId = 'b-newpage01'
+    const path = seedBoardRecords(rooms, boardId, fixtureRecords('brainstorm'))
+    expect(
+      convertBoardFile(
+        { kind: 'convert', boardId, path, reportDir: join(rooms, '..', 'migration'), backupKey: null, at: 1 },
+        metrics,
+      ).ok,
+    ).toBe(true)
+    const importOf = () =>
+      readDb(path, (db) =>
+        JSON.parse(
+          (db.prepare("SELECT value FROM lb_doc WHERE key = 'import'").get() as { value: string }).value,
+        ),
+      ) as {
+        legacyPages: Record<string, { dx: number; dy: number; index: number }>
+      }
+    const frozen = importOf().legacyPages
+    const right = Math.max(
+      ...[...lbRows(path).values()].map((r) => JSON.parse(r.data)).map((e) => e.x + e.width),
+    )
+    r0Edit(rooms, boardId, (txn) => {
+      txn.set('page:later', {
+        id: 'page:later',
+        typeName: 'page',
+        name: 'Later',
+        index: 'a5',
+        meta: {},
+      } as unknown as TLRecord)
+      const note = [...fixtureRecords('brainstorm')].find(
+        (r) => (r as unknown as { type?: string }).type === 'note',
+      ) as TLRecord & Record<string, unknown>
+      txn.set('shape:on-later', {
+        ...note,
+        id: 'shape:on-later',
+        parentId: 'page:later',
+        x: 0,
+        y: 0,
+        index: 'a1',
+        meta: {},
+      } as unknown as TLRecord)
+    })
+    const rep = rollForwardBoardFile(
+      { kind: 'rollforward', boardId, path, reportDir: join(rooms, '..', 'migration'), at: 2 },
+      metrics,
+    )
+    expect(rep.ok).toBe(true)
+    expect(rep.counts.pagesAppended).toBe(1)
+    const pages = importOf().legacyPages
+    // every frozen offset is unchanged; the new page is right of everything that was there
+    for (const [id, p] of Object.entries(frozen)) expect(pages[id]).toEqual(p)
+    expect(pages['page:later']?.dx).toBeGreaterThan(0)
+    const added = JSON.parse(lbRows(path).get('on-later')?.data ?? 'null') as { x: number } | null
+    expect(added?.x).toBeGreaterThan(right)
+  })
+
+  it('refuses a board whose lb_source no longer matches its recorded digest (the board stays closed)', () => {
+    const rooms = join(suiteDir, 'tampered', 'rooms')
+    const boardId = 'b-tampered1'
+    const path = seedBoardRecords(rooms, boardId, fixtureRecords('retrospective'))
+    expect(
+      convertBoardFile(
+        { kind: 'convert', boardId, path, reportDir: join(rooms, '..', 'migration'), backupKey: null, at: 1 },
+        metrics,
+      ).ok,
+    ).toBe(true)
+    r0Edit(rooms, boardId, (txn) => {
+      const f = [...fixtureRecords('retrospective')].find((r) => r.typeName === 'shape') as TLRecord & {
+        x: number
+      }
+      txn.set(f.id, { ...f, x: f.x + 1 } as TLRecord)
+    })
+    const db = new DatabaseSync(path)
+    db.exec("UPDATE lb_source SET state = '{}' WHERE rowid = (SELECT min(rowid) FROM lb_source)")
+    db.close()
+    const rows = lbRows(path)
+    const rep = rollForwardBoardFile(
+      { kind: 'rollforward', boardId, path, reportDir: join(rooms, '..', 'migration') },
+      metrics,
+    )
+    expect(rep).toMatchObject({ ok: false, reason: 'base-digest' })
+    expect(lbRows(path)).toEqual(rows)
   })
 })

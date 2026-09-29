@@ -149,3 +149,50 @@ describe('MigrationService.prepare', () => {
     await svc.close()
   })
 })
+
+describe('the migration routes (mounted behind the internal secret by the room)', () => {
+  const call = async (route: { handle: (req: never, res: never, p: string[]) => unknown }) => {
+    let status = 0
+    let body = ''
+    const res = {
+      writeHead: (s: number) => {
+        status = s
+        return res
+      },
+      end: (b: string) => {
+        body = b
+      },
+    }
+    await route.handle({} as never, res as never, [])
+    return { status, body: JSON.parse(body) as Record<string, unknown> }
+  }
+
+  it('POST convert-all starts the maintenance run (202) and GET status reports every board', async () => {
+    const dataDir = tempDir()
+    const rooms = join(dataDir, 'rooms')
+    seedBoardRecords(rooms, 'b-rt0000001', fixtureRecords('retrospective'))
+    seedBoardRecords(rooms, 'b-rt0000002', fixtureRecords('brainstorm'))
+    const svc = new MigrationService({ roomsDir: rooms })
+    const [all, status] = svc.routes()
+    expect(all?.method).toBe('POST')
+    expect(all?.path.test('/internal/migrate/convert-all')).toBe(true)
+    expect(status?.path.test('/internal/migrate/status')).toBe(true)
+    expect((await call(all as never)).status).toBe(202)
+    for (let i = 0; i < 200 && svc.status().convertAll === 'running'; i++)
+      await new Promise((r) => setTimeout(r, 50))
+    const st = await call(status as never)
+    expect(st.status).toBe(200)
+    expect(
+      (st.body.boards as { boardId: string; state: string; mode: string }[]).map((b) => [
+        b.boardId,
+        b.state,
+        b.mode,
+      ]),
+    ).toEqual([
+      ['b-rt0000001', 'done', 'maintenance'],
+      ['b-rt0000002', 'done', 'maintenance'],
+    ])
+    expect(boardFileState(boardDbPath(rooms, 'b-rt0000001'))).toBe('converted')
+    await svc.close()
+  }, 60_000)
+})

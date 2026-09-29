@@ -19,7 +19,9 @@ import { existsSync, mkdirSync, renameSync, statfsSync, statSync, writeFileSync 
 import { dirname, join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { getHeapStatistics } from 'node:v8'
+import type { WireElement } from '@draftroom/canvas-schema/elements'
 import type { ServerTextMetrics } from '@draftroom/canvas-schema/engine'
+import { checkInvariants } from '@draftroom/canvas-schema/invariants'
 import {
   CONVERTED_FROM,
   CONVERTER_VERSION,
@@ -127,6 +129,26 @@ export interface ConvertReport {
   readonly peakHeapTotalMb: number
   readonly diff: DiffReport | null
   readonly converterVersion: string
+  /** whether the §2.4.4 invariant checker ran (O1's) and what it found (ids and codes) */
+  readonly invariants?: 'ran' | 'not-implemented'
+  readonly violations?: readonly { code: string; id: string }[]
+}
+
+/** O1's invariant checker on a converted board, or `not-implemented` while it is the C0 stub. */
+export function runInvariants(elements: readonly WireElement[]): {
+  invariants: 'ran' | 'not-implemented'
+  violations: { code: string; id: string }[]
+} {
+  try {
+    return {
+      invariants: 'ran',
+      violations: checkInvariants(elements).map((v) => ({ code: v.code, id: v.id })),
+    }
+  } catch (e) {
+    if (/not implemented/.test(String((e as Error)?.message)))
+      return { invariants: 'not-implemented', violations: [] }
+    throw e
+  }
 }
 
 export const fileBytes = (path: string) =>
@@ -245,6 +267,10 @@ export function convertBoardFile(job: ConvertJob, metrics: ServerTextMetrics): C
     })
     heap.sample('diff')
     if (!diff.ok) return done({ ok: false, reason: 'diff', ...counts, deleted: deletedCounts, diff })
+    // the §2.4.4 invariants (O1's checker; skipped, and reported so, while it is the C0 stub)
+    const inv = runInvariants(conv.elements)
+    if (inv.violations.length)
+      return done({ ok: false, reason: 'invariants', ...counts, deleted: deletedCounts, diff, ...inv })
 
     // 3. one transaction
     const epoch = newEpoch()
@@ -322,6 +348,7 @@ export function convertBoardFile(job: ConvertJob, metrics: ServerTextMetrics): C
       sourceSha256,
       sourceMatchesBackup: matches,
       diff,
+      ...inv,
     })
   } catch (e) {
     return done({ ok: false, reason: `error: ${(e as Error)?.name ?? 'Error'}` })

@@ -128,6 +128,11 @@ export async function convertCorpus(opts: {
         ? (JSON.parse(readFileSync(reportPath, 'utf8')) as ConvertReport)
         : null
       const checks: Record<string, { pass: boolean; total?: number; failed?: number; note?: string }> = {}
+      if (report?.invariants === 'ran')
+        checks.invariants = {
+          pass: (report.violations ?? []).length === 0,
+          failed: (report.violations ?? []).length,
+        }
       for (const c of report?.diff?.checks ?? [])
         checks[`diff:${c.name}`] = {
           pass: c.pass,
