@@ -124,7 +124,7 @@ Checks: lint 0 errors / 0 warnings (581 files); typecheck 14 projects; vitest 1,
   - a Monday briefing doc for leadership.
 - **Not built / open**:
   - email sending: the from-domain is undecided, and nothing is sent;
-  - the tldraw production license. **The owner decided to move the canvas to Excalidraw (MIT) instead**, so Lobby runs with no licence fee. The plan is `docs/EXCALIDRAW-MIGRATION.md` (revision 3.2). Staging stays on tldraw, under the trial key, until a rehearsed cut-over that the owner signs off;
+  - the tldraw production license. **The owner decided to move the canvas to Excalidraw (MIT) instead**, so Lobby runs with no licence fee. The plan is `docs/EXCALIDRAW-MIGRATION.md` (revision 3.3). Staging stays on tldraw, under the trial key, until a rehearsed cut-over that the owner signs off;
   - DBC Ops integration;
   - Kanban;
   - edit latency and pan frame rate on very large boards: the remainder is inside tldraw 5.4.2;
@@ -408,4 +408,5 @@ Checks: lint 0 errors / 0 warnings (581 files); typecheck 14 projects; vitest 1,
   - Estimate ≈261 pd, about 20 working days to cut-over (26 with buffer). No cut-over date is set before the spike's go/no-go.
   - **Spike A done** on `spike/excalidraw` (5203e41; `docs/research/excalidraw/SPIKE-A-REPORT.md` there): 14 PASS, 2 PARTIAL (A12 CSP, A14 laptop half), 1 FAIL as written (A16). The independent verifier found two guard bugs in Lobby's code (Ctrl+Alt+S in the text editor; an editor opened during a pending lease request); a fix round is running.
   - **Plan revision 3.2** folds in spike A: bound arrows re-snapped by the server on a container fit, lease messages through the per-session FIFO, drag ids once per drag, R0's born-after check in the B8 drill, the editor's chord allowlist and the guard invariant, same-origin font fallback and a CSP without `unsafe-eval`, the level-of-detail pass (fit is below 24 fps on both engines), and the spike B execution plan (§8.6: contracts step, 5 owners + lead, 3 verifiers). Estimate ≈266 pd; the calendar is unchanged.
+  - **Plan revision 3.3** applies the critic's result on 3.2 (5 blocking items) with the lead's decisions: bound-arrow endpoints are always server-derived (no client pushes an arrow change caused only by its target moving; the server re-snaps both ends, elbow routes and the label on every target write), owners and pd for the unowned measurements and go gates (O3), contracts frozen at C0 (a test snapshot with tombstones, the api↔sync internal contracts, registries' slots and installers, test hooks, Node-safety typecheck), B7 on the fs blob store (no R2 writes), and tighter privacy paths for B8's staging copies. Spike B 58.5 pd, total ≈270 pd; the calendar is unchanged. No checks were run for the revision beyond read-only probes.
   - **Next: spike B**, after the fix round is re-verified.
