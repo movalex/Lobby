@@ -32,6 +32,9 @@ if (SYNC_PORT !== SPIKE_B_STACK.sync || API_PORT !== SPIKE_B_STACK.api || WEB_PO
     `e2e/tests/support/ports.ts loaded before e2e/spike-b/support/env.ts (sync ${SYNC_PORT}, expected ${SPIKE_B_STACK.sync}): import the spike B harness before any e2e/tests support module`,
   )
 
+/** A board role a guest link can carry (packages/contracts `ReviewLinkRole`). */
+export type GuestRole = 'editor' | 'commenter' | 'viewer'
+
 /** O3's stack: the frozen SpikeBStack plus what the harness itself needs. */
 export interface O3Stack extends SpikeBStack {
   /** the underlying e2e stack (api, sync, worker processes and their logs) */
@@ -41,6 +44,15 @@ export interface O3Stack extends SpikeBStack {
   readonly testHooks: boolean
   /** an api client signed in as `user` (cached per handle; disposed by `stop`) */
   api(user: DevUser): Promise<{ api: Api; me: Me }>
+  /** the owner `createBoard` made `boardId` for (null for a board it did not make) */
+  boardOwner(boardId: string): DevUser | null
+  /**
+   * A guest link to `boardId` with `role` (A3; a board link with "Join as a guest" on), created by the
+   * board's owner through the api the Share dialog calls (`POST /api/boards/:bid/review-links` with
+   * `allowGuests`). One link per board and role, reused by every guest of this stack (a link takes 60
+   * guests; a board keeps at most a few open links). Returns the invite path `/invite/<token>`.
+   */
+  guestLink(boardId: string, role: GuestRole): Promise<string>
   /** everything sync printed (for evidence; it never prints tickets or secrets) */
   syncLogs(): string
 }
@@ -105,6 +117,8 @@ export async function startSpikeStack(opts: StackOptions = {}): Promise<O3Stack>
   // every file under spike-b8/ (§8.6.7).
   const e2e = await withTempDir(opts.dataDir, () => startE2eStack({ syncEnv }))
   const apis = new Map<string, Promise<{ api: Api; me: Me }>>()
+  const owners = new Map<string, DevUser>()
+  const guestLinks = new Map<string, Promise<string>>()
 
   const api = (user: DevUser) => {
     let entry = apis.get(user.handle)
@@ -131,11 +145,44 @@ export async function startSpikeStack(opts: StackOptions = {}): Promise<O3Stack>
       const studio = me.workspaces.find((w) => w.name === DEV_STUDIO_NAME)
       if (!studio) throw new Error(`dev user ${owner.handle} is not in ${DEV_STUDIO_NAME}`)
       const board = await ownerApi.createBoard(studio.id, title ?? `spike-b ${new Date().toISOString()}`)
+      owners.set(board.id, owner)
       for (const m of members) {
         const { me: memberMe } = await api(m.user)
         await ownerApi.putMember(board.id, memberMe.user.id, m.role)
       }
       return { boardId: board.id }
+    },
+    boardOwner: (boardId) => owners.get(boardId) ?? null,
+    guestLink(boardId, role) {
+      const key = `${boardId}:${role}`
+      let link = guestLinks.get(key)
+      if (!link) {
+        const owner = owners.get(boardId)
+        if (!owner)
+          return Promise.reject(
+            new Error(`guest link for ${boardId}: only boards made by stack.createBoard have a known owner`),
+          )
+        link = (async () => {
+          const { api: ownerApi } = await api(owner)
+          const res = await ownerApi.fetch(
+            'POST',
+            `/api/boards/${encodeURIComponent(boardId)}/review-links`,
+            {
+              role,
+              allowGuests: true,
+            },
+          )
+          if (res.status() !== 201)
+            throw new Error(`guest link for ${boardId} (${role}): HTTP ${res.status()} ${await res.text()}`)
+          const { url } = (await res.json()) as { url: string }
+          const token = url.slice(url.lastIndexOf('/invite/') + '/invite/'.length)
+          if (!token) throw new Error(`guest link for ${boardId}: no token in the link`)
+          return `/invite/${token}`
+        })()
+        guestLinks.set(key, link)
+        link.catch(() => guestLinks.delete(key))
+      }
+      return link
     },
     async killSync(signal = 'SIGKILL') {
       if (signal === 'SIGKILL') return e2e.sync.kill()

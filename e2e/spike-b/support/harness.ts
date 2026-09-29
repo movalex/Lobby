@@ -9,6 +9,11 @@
 //   const report = await harness.converged(stack, boardId, [a, b], { horizonAtStart: snap.horizon })
 //   expect(harness.checkInvariants(report.snapshot).ok).toBe(true)
 //
+// A name-only guest (A3): `launchBrowser(stack, harness.devUser('Sam'), { name: 'G', guest: true })` starts
+// with no session; its `openBoard(boardId)` joins through the product's invite page with the DevUser's name,
+// on a guest link the board's owner makes (`stack.createBoard` boards only). A limited (read-only, viewer)
+// guest by default; `guestRole: 'editor'` (a workshop link) or `'commenter'` for the others.
+//
 // The modules behind it (all O3's): stack.ts (launcher on e2e/tests/support/stack.ts), browsers.ts
 // (separate Chromium processes, dev sign-in), relay.ts (latency relay and socket cut), barrier.ts,
 // forge.ts (raw sockets with the page's own ticket), snapshot.ts (test snapshot, hash, invariants,
@@ -47,7 +52,7 @@ export const harness: O3Harness = {
 }
 
 export { createBarrier, releaseTogether, runTogether } from './barrier.ts'
-export { closeAllBrowsers, waitBoardReady } from './browsers.ts'
+export { closeAllBrowsers, joinBoardAsGuest, waitBoardReady } from './browsers.ts'
 export { canvasOf, waitElement, waitSaved } from './facade.ts'
 export { forgeSession, freshHello } from './forge.ts'
 export { writePushEvidence } from './pushes.ts'

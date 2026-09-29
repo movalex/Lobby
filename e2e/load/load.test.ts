@@ -14,7 +14,7 @@ import { Meter, messageType, probePointer, probeSentAt } from './meter.ts'
 import { parsePrometheus } from './metrics.ts'
 import { boardsOf, buildPlans, membersOf, probeSids, signedTickets } from './plan.ts'
 import { DRY, L1, L2, plannedWritesPerSecond, sessionCount } from './profiles.ts'
-import { ackedButMissing, visibilitySamples } from './report.ts'
+import { ackedButMissing, histogramOver, visibilitySamples } from './report.ts'
 import { chunkCreates, SEED_MAX_BYTES } from './seed.ts'
 import type { SessionReport } from './session.ts'
 import { percentile, Recorder } from './stats.ts'
@@ -147,6 +147,27 @@ describe('meter', () => {
 })
 
 describe('seeding, stats and the report joins', () => {
+  it("reads O1's histograms over the run (last scrape minus first) and its event-loop gauge", () => {
+    const text = (n5: number, n25: number, nInf: number, sum: number, p99: number) =>
+      [
+        `lobby_receive_to_ack_ms_bucket{le="5"} ${n5}`,
+        `lobby_receive_to_ack_ms_bucket{le="25"} ${n25}`,
+        `lobby_receive_to_ack_ms_bucket{le="+Inf"} ${nInf}`,
+        `lobby_receive_to_ack_ms_sum ${sum}`,
+        `lobby_receive_to_ack_ms_count ${nInf}`,
+        'lobby_event_loop_delay_ms{quantile="0.5"} 1',
+        `lobby_event_loop_delay_ms{quantile="0.99"} ${p99}`,
+        'lobby_event_loop_delay_ms{quantile="1"} 90',
+      ].join('\n')
+    const scrape = (at: number, t: string) => ({ at, ok: true, status: 200, samples: parsePrometheus(t) })
+    // before the run 10 pushes (all ≤ 5 ms); during it 100 more: 50 ≤ 5, 45 ≤ 25, 5 above
+    const h = histogramOver(
+      [scrape(0, text(10, 10, 10, 20, 3)), scrape(1, text(60, 105, 110, 820, 7))],
+      'lobby_receive_to_ack_ms',
+    )
+    expect(h).toEqual({ n: 100, p50: 5, p95: 25, p99: Number.POSITIVE_INFINITY, mean: 8 })
+    expect(histogramOver([], 'lobby_receive_to_ack_ms')).toBeNull()
+  })
   it('chunks creates within 500 ops and 500 KiB, a label with its note', () => {
     const b = l1Board('seed-x')
     const chunks = chunkCreates(b.elements)

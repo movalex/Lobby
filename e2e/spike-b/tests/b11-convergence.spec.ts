@@ -16,13 +16,19 @@
 // Opt-in (SPIKE_B11=1; 10 minutes, SPIKE_B11_MS to shorten a dry run), 3 runs (SPIKE_B_RUN=1..3). Needs M2.
 import { expect, test } from '@playwright/test'
 import type { HeadlessClient, SceneElement } from '../../../apps/web/src/canvas/sync/types.ts'
-import { buildStickyNote, indexKeyBetween } from '../../../packages/canvas-schema/src/engine/index.ts'
+import {
+  buildStickyNote,
+  indexKeyBetween,
+  installedServerTextMetrics,
+  installServerTextMetrics,
+} from '../../../packages/canvas-schema/src/engine/index.ts'
 import { hashElements } from '../../../packages/canvas-schema/src/hash.ts'
 import { loadHeadlessFactory } from '../../load/headless.ts'
 import { Meter } from '../../load/meter.ts'
 import { mutated } from '../../load/session.ts'
 import type { O3BrowserProcess } from '../support/browsers.ts'
 import { closeWindow, openWindow, writeEvidence } from '../support/checks.ts'
+import { divergenceDetail, enableBoardLog } from '../support/diverge.ts'
 import { canvasOf, closeAllBrowsers, harness } from '../support/harness.ts'
 import { apiTicket } from '../support/seed.ts'
 import type { O3Stack } from '../support/stack.ts'
@@ -45,6 +51,10 @@ const browsers: O3BrowserProcess[] = []
 let boardId: string
 
 test.beforeAll(async () => {
+  // the headless clients build their notes in Node, where the label's measure needs the server's text
+  // metrics (as the room and e2e/load/boards.ts install them); without them every headless create threw
+  // "document is not defined" and the 50 clients wrote nothing (the first 3-run pass, 75fe4d5)
+  if (!installedServerTextMetrics()) installServerTextMetrics()
   stack = await harness.startStack()
   for (const name of ['A', 'B', 'C'])
     browsers.push(await harness.launchBrowser(stack, harness.devUser(name), { name }))
@@ -53,6 +63,8 @@ test.beforeAll(async () => {
     members: browsers.slice(1).map((b) => ({ user: b.user, role: 'editor' as const })),
     title: 'B11',
   }))
+  // the board session's own log (ids and counts), read if the maps do not converge
+  for (const b of browsers) await enableBoardLog(b.page)
   for (const b of browsers) await b.openBoard(boardId)
 })
 test.afterAll(async () => {
@@ -70,6 +82,10 @@ class Participant {
   readonly pushedAt = new Map<string, number>()
   connects = 0
   errors: string[] = []
+  /** every op that threw (the first 10 messages are kept in `errors`) */
+  errorCount = 0
+  /** ops that reached the client's scene (an edit call that did not throw) */
+  edits = 0
   private create: Awaited<ReturnType<typeof loadHeadlessFactory>> | null = null
   constructor(name: string, dev: DevUser) {
     this.name = name
@@ -124,6 +140,7 @@ class Participant {
         })
         this.own.push(id)
         this.pushedAt.set(id, now)
+        this.edits++
         return
       }
       const id = live[rnd(live.length)] as string
@@ -147,7 +164,9 @@ class Participant {
             s.set(label.id, mutated(label, { text: `t${rnd(1000)}`, originalText: `t${rnd(1000)}` })),
           )
       }
+      this.edits++
     } catch (e) {
+      this.errorCount++
       if (this.errors.length < 10) this.errors.push(String(e).slice(0, 160))
     }
   }
@@ -341,17 +360,41 @@ test('B11: 3 browsers + 50 headless clients, random ops, disconnects and one SIG
       hash: () => hashElements((p.client as HeadlessClient).core.elements().values()),
     })),
   ]
-  const report = await closeWindow(stack, boardId, targets, w, { timeoutMs: 60_000 })
-  writeEvidence(testInfo, 'B11', {
-    durationMs: DURATION_MS,
-    headless: HEADLESS,
-    counts,
-    killed: kill.done,
+  const evidence = (extra: Record<string, unknown>) =>
+    writeEvidence(testInfo, 'B11', {
+      durationMs: DURATION_MS,
+      headless: HEADLESS,
+      counts,
+      killed: kill.done,
+      connectsPerHeadless: people.map((p) => p.connects),
+      headlessEdits: people.reduce((n, p) => n + p.edits, 0),
+      headlessErrorCount: people.reduce((n, p) => n + p.errorCount, 0),
+      headlessErrors: people.flatMap((p) => p.errors).slice(0, 20),
+      headlessCreated: people.reduce((n, p) => n + p.own.length, 0),
+      ...extra,
+    })
+  let report: Awaited<ReturnType<typeof closeWindow>>
+  try {
+    report = await closeWindow(stack, boardId, targets, w, { timeoutMs: 60_000 })
+  } catch (e) {
+    // not converged: what each diverging browser holds (scene, core, snapshot; flags; its board log)
+    const detail = await divergenceDetail(stack, boardId, browsers).catch((x) => String(x))
+    const file = evidence({ notConverged: detail, error: String(e).slice(0, 4_000) })
+    throw new Error(`${String(e).slice(0, 1_500)} (detail in ${file})`)
+  }
+  const headlessIds = new Set(people.flatMap((p) => p.own))
+  const headlessStored = report.snapshot.elements.filter((e) => headlessIds.has(e.id)).length
+  evidence({
     elements: report.snapshot.elements.length,
     tombstones: report.snapshot.elements.filter((e) => e.isDeleted).length,
-    connectsPerHeadless: people.map((p) => p.connects),
-    headlessErrors: people.flatMap((p) => p.errors).slice(0, 20),
+    headlessElementsStored: headlessStored,
   })
+  // the headless half must really write: every op applied, and their notes are on the board
+  expect(
+    people.reduce((n, p) => n + p.errorCount, 0),
+    'headless ops that threw',
+  ).toBe(0)
+  expect(headlessStored, 'elements the headless clients created, in the test snapshot').toBeGreaterThan(0)
   expect(kill.done, 'the SIGKILL happened inside the window').not.toBeNull()
   expect(kill.done?.check.missing, `acked-but-missing (of ${kill.done?.check.checked} checked)`).toEqual([])
 })

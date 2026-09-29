@@ -22,6 +22,9 @@ test.skip(
   'set SPIKE_PERF=1 (quiet window, SPIKE_B_PORT_BASE=7885) for the §8.4 numbers',
 )
 test.setTimeout(45 * 60_000)
+// no Playwright trace or screenshots while measuring (a trace's screencast and snapshots add main-thread work);
+// o3-measure.sh runs spike A's tldraw baseline with --trace off too, so both engines are measured the same way
+test.use({ trace: 'off', screenshot: 'off' })
 
 let stack: O3Stack
 let owner: DevUser
