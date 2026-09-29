@@ -99,7 +99,7 @@ describe('Clerk sessions (fake Clerk)', () => {
               if (!sub?.startsWith('user_')) throw new Error('invalid')
               return { sub, ...(sid === undefined ? {} : { sid }) }
             },
-            profile: async (sub) => ({ name: `Name of ${sub}`, avatarUrl: null }),
+            profile: async (sub) => ({ name: `Name of ${sub}`, avatarUrl: null, emails: [] }),
             revokeSessions: async (sub, known) => {
               revokeCalls.push({ sub, known: [...known].sort() })
               if (failRevoke) throw new Error('clerk unavailable')

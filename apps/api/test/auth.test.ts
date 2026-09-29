@@ -230,7 +230,7 @@ describe('auth config and rate limit', () => {
           publicOrigin: ORIGIN,
           deps: {
             verify: async () => ({ sub: 'user_x' }),
-            profile: async () => ({ name: 'X', avatarUrl: null }),
+            profile: async () => ({ name: 'X', avatarUrl: null, emails: [] }),
           },
         }),
       },
@@ -248,7 +248,17 @@ describe('auth config and rate limit', () => {
 })
 
 describe('clerk provider (UNVERIFIED against real Clerk; exercised with a fake verifier)', () => {
-  const tokens: Record<string, string> = { 'good-token-1': 'user_clerk1', 'good-token-2': 'user_clerk2' }
+  const tokens: Record<string, string> = {
+    'good-token-1': 'user_clerk1',
+    'good-token-2': 'user_clerk2',
+    'outside-token': 'user_clerk3',
+  }
+  // Domain access: verified addresses (docs/DOMAIN-ACCESS-CONTRACTS.md §11.3). Fake local parts only.
+  const emailOf: Record<string, string> = {
+    user_clerk1: 'lobby-test-alice@darkburn.com',
+    user_clerk2: 'lobby-test-bob@darkburn.com',
+    user_clerk3: 'pat@client.example.test',
+  }
   let clerk: TestApi
   beforeEach(async () => {
     clerk = await createTestApi({
@@ -263,7 +273,11 @@ describe('clerk provider (UNVERIFIED against real Clerk; exercised with a fake v
               if (!sub) throw new Error('invalid')
               return { sub }
             },
-            profile: async (sub) => ({ name: `Name of ${sub}`, avatarUrl: 'https://img.example/a.png' }),
+            profile: async (sub) => ({
+              name: `Name of ${sub}`,
+              avatarUrl: 'https://img.example/a.png',
+              emails: [{ email: emailOf[sub] ?? '', isPrimary: true, strategy: 'email_code' }],
+            }),
           },
         }),
       },
@@ -295,6 +309,21 @@ describe('clerk provider (UNVERIFIED against real Clerk; exercised with a fake v
     const identity = await clerk.db.one('SELECT provider, subject, user_id FROM identities')
     expect(identity).toEqual({ provider: 'clerk', subject: 'user_clerk1', user_id: me.user.id })
     expect(Me.parse((await exchange('good-token-2')).json()).user.id).not.toBe(me.user.id)
+  })
+
+  it('an account without a creator address signs in as an outsider: no workspace, access "outside"', async () => {
+    const res = await exchange('outside-token')
+    expect(res.statusCode, res.body).toBe(200)
+    const me = Me.parse(res.json())
+    expect(me.workspaces).toEqual([])
+    expect(me.access).toEqual({ creator: false, reason: 'outside', email: 'pat@client.example.test' })
+    const creator = Me.parse((await exchange('good-token-1')).json())
+    expect(creator.access).toEqual({
+      creator: true,
+      reason: 'domain',
+      email: 'lobby-test-alice@darkburn.com',
+    })
+    expect((await clerk.db.one<{ n: number }>('SELECT count(*)::int AS n FROM workspaces')).n).toBe(1)
   })
 
   it('rejects missing and invalid tokens with 401 and issues no session', async () => {

@@ -106,6 +106,14 @@ async function seedOldData(db: Db, now: Date) {
     expires_at: t(-3 * D),
   })
   await ins(db, 'sessions', { id_hash: sha('s-erin'), user_id: U.erin, expires_at: t(D) })
+  // The dev sign-in's shared workspace (fixed id), created by carol before anything else: migration
+  // 0021's backfill must not mark it as anyone's personal workspace.
+  await ins(db, 'workspaces', {
+    id: 'wsp_DevStudio00000000000',
+    name: 'Dev Studio',
+    created_by: U.carol,
+    created_at: t(-30 * D),
+  })
   await ins(db, 'workspaces', { id: W.studio, name: 'Studio', created_by: U.alice })
   await ins(db, 'workspaces', { id: W.other, name: 'Other', created_by: U.bob })
   for (const [u, role] of [
@@ -606,6 +614,28 @@ describe.skipIf(!PG_URL)('every migration after 0008 on a real Postgres holding 
       (await s.db.query("SELECT id FROM users WHERE kind <> 'account' OR guest_name IS NOT NULL")).rows,
     ).toEqual([])
     expect((await s.db.query('SELECT id FROM invitations WHERE allow_guests')).rows).toEqual([])
+    // 0021_domain_access (docs/DOMAIN-ACCESS-CONTRACTS.md §3.2, D3): the open single-use links bound
+    // to nobody are revoked; redeemed, multi-use, already revoked and expired ones are untouched.
+    const revoked = Object.fromEntries(
+      (
+        await s.db.query<{ id: string; revoked_at: Date | null }>('SELECT id, revoked_at FROM invitations')
+      ).rows.map((r) => [r.id, r.revoked_at]),
+    )
+    expect(revoked[INV.single]).toBeInstanceOf(Date)
+    expect(revoked[INV.board]).toBeInstanceOf(Date)
+    for (const id of [INV.wsGuest, INV.review, INV.workshop, INV.expired]) expect(revoked[id], id).toBeNull()
+    expect(revoked[INV.revoked]?.getTime()).toBe(now.getTime() - D)
+    expect((await s.db.query('SELECT id FROM invitations WHERE invited_email IS NOT NULL')).rows).toEqual([])
+    // Personal workspaces are marked (each creator's earliest one), Dev Studio never.
+    const personal = Object.fromEntries(
+      (
+        await s.db.query<{ id: string; personal_of: string | null }>('SELECT id, personal_of FROM workspaces')
+      ).rows.map((r) => [r.id, r.personal_of]),
+    )
+    expect(personal).toEqual({ [W.studio]: U.alice, [W.other]: U.bob, wsp_DevStudio00000000000: null })
+    // Nobody is confirmed yet, and no address is stored.
+    expect((await s.db.query('SELECT id FROM users WHERE identity_checked_at IS NOT NULL')).rows).toEqual([])
+    expect((await s.db.one<{ n: number }>('SELECT count(*)::int AS n FROM user_emails')).n).toBe(0)
     const afterCounts = await counts(s.db, s.schema)
     for (const [t, n] of Object.entries(beforeCounts))
       if (t !== 'schema_migrations') expect(afterCounts[t], t).toBe(n)

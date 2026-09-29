@@ -252,6 +252,12 @@ export function registerAccessRequestRoutes(app: FastifyInstance, ctx: FeatureCo
         const access = await requireBoardAction(tx, found.board_id, user.id, 'manage_access', {
           forUpdate: true,
         })
+        // Domain access (D4): approving hands out access (creator-only); denying stays open.
+        if (decision === 'approve')
+          await ctx.identity.requireCreator(tx, user.id, 'share', {
+            route: req.routeOptions.url ?? '',
+            by: 'route',
+          })
         const r = await tx.one<RequestRow>(
           `SELECT ${REQUEST_COLUMNS} FROM access_requests r WHERE r.id = $1 FOR UPDATE`,
           [id],

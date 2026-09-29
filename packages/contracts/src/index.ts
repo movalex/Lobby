@@ -161,17 +161,16 @@ export const PatchProjectInput = z.object({ name: Name.optional(), archived: z.b
 // ---- invitations ---------------------------------------------------------------------------------
 
 /**
- * Single-use invitations are locked to `email` (domain access, contracts doc §6.1). STEP A: `email` is
- * optional so the api suite stays green until the lock is built; the API owner makes it required in
- * step B2 (contracts doc §12). The web always sends it.
+ * Single-use invitations are locked to `email` (domain access, contracts doc §6.1): only an account
+ * with that verified address can accept one. Required since step B2.
  */
 export const CreateWorkspaceInvitationInput = z.object({
   role: z.enum(['admin', 'member', 'guest']),
-  email: AccountEmail.optional(),
+  email: AccountEmail,
 })
 export const CreateBoardInvitationInput = z.object({
   role: BoardRole.exclude(['owner']),
-  email: AccountEmail.optional(),
+  email: AccountEmail,
 })
 export const InvitationCreated = z.object({ id: InvitationId, url: z.string(), expiresAt: IsoDate })
 export type InvitationCreated = z.infer<typeof InvitationCreated>

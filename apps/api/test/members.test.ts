@@ -1,6 +1,6 @@
 import { ListMembersResponse } from '@draftroom/contracts'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { type Client, createBoard, createTestApi, DEV_STUDIO, type TestApi } from './helpers.ts'
+import { type Client, createBoard, createTestApi, DEV_STUDIO, devEmail, type TestApi } from './helpers.ts'
 
 let api: TestApi
 let alice: Client // Dev Studio owner
@@ -128,7 +128,10 @@ describe('board members', () => {
 
 describe('what a guest sees (RETRO-17)', () => {
   it('a guest who joined through a link sees who has access, but not the members’ @handles (their own stays)', async () => {
-    const inv = await bob.req('POST', `/api/boards/${boardId}/invitations`, { role: 'commenter' })
+    const inv = await bob.req('POST', `/api/boards/${boardId}/invitations`, {
+      role: 'commenter',
+      email: devEmail('erin'),
+    })
     const token = (inv.json() as { url: string }).url.split('/').pop()
     const erin = await api.login('erin')
     await api.db.query('DELETE FROM workspace_members WHERE user_id = $1 AND workspace_id = $2', [

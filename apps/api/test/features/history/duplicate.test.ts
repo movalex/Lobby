@@ -1,6 +1,6 @@
 // POST /api/boards/:bid/duplicate (DSH-02) and the files of a restored-from-trash board (DSH-03).
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { type Client, createBoard, createTestApi, DEV_STUDIO, type TestApi } from '../../helpers.ts'
+import { type Client, createBoard, createTestApi, DEV_STUDIO, devEmail, type TestApi } from '../../helpers.ts'
 import {
   assertValid,
   baseRecords,
@@ -61,7 +61,11 @@ describe('POST /api/boards/:bid/duplicate', () => {
     await bob.req('PATCH', `/api/boards/${boardId}`, { visibility: 'workspace_view' })
     await grant('editor', carol)
     await grant('commenter', dave)
-    await bob.req('POST', `/api/boards/${boardId}/invitations`, { role: 'viewer' })
+    const invite = await bob.req('POST', `/api/boards/${boardId}/invitations`, {
+      role: 'viewer',
+      email: devEmail('someone'),
+    })
+    expect(invite.statusCode).toBe(201)
     const res = await duplicate(bob, { keepSharing: true, title: 'Shared copy' })
     expect(res.statusCode).toBe(201)
     const { board } = res.json()
@@ -91,7 +95,10 @@ describe('POST /api/boards/:bid/duplicate', () => {
     expect((await duplicate(bob, { keepSharing: 'yes' })).statusCode).toBe(400)
     // guest: a board invitation into bob's personal workspace
     const personal = await createBoard(bob, bob.personalWorkspaceId, 'Personal')
-    const inv = await bob.req('POST', `/api/boards/${personal}/invitations`, { role: 'editor' })
+    const inv = await bob.req('POST', `/api/boards/${personal}/invitations`, {
+      role: 'editor',
+      email: devEmail('erin'),
+    })
     const token = new URL(inv.json().url).pathname.split('/').pop() ?? ''
     await outsider.req('POST', `/api/invitations/${token}/accept`)
     expect((await outsider.req('GET', `/api/boards/${personal}`)).statusCode).toBe(200)

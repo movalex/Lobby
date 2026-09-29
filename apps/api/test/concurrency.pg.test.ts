@@ -830,6 +830,61 @@ describe.skipIf(!PG_URL)('wave-3 concurrency on real Postgres (DRAFTROOM_TEST_DA
     expect(t.failures).toEqual([])
   })
 
+  it('domain access: concurrent first sign-ins of one creator make one user and one personal workspace', async () => {
+    const log = errorLog()
+    const api = await createTestApi({ deps: { logger: log.logger as never } })
+    cleanup.push(() => api.close())
+    const t = newTally()
+    for (let i = 0; i < ITER; i++) {
+      const handle = `racer-${i}`
+      await race(
+        Array.from({ length: 6 }, () => async () => {
+          const r = await api.anon('POST', '/api/auth/dev/login', { handle })
+          tally(t, 'login', r)
+        }),
+        10,
+      )
+      const users = await api.db.query<{ id: string }>('SELECT id FROM users WHERE handle = $1', [handle])
+      expect(users.rows).toHaveLength(1)
+      const personal = await api.db.one<{ n: number }>(
+        'SELECT count(*)::int AS n FROM workspaces WHERE personal_of = $1',
+        [users.rows[0]?.id],
+      )
+      expect(personal.n).toBe(1)
+    }
+    report('first sign-in race', t, log, 0)
+    expect(t.failures).toEqual([])
+  })
+
+  it('domain access: concurrent GET /api/me of a creator without a personal workspace creates exactly one', async () => {
+    const log = errorLog()
+    const api = await createTestApi({ deps: { logger: log.logger as never } })
+    cleanup.push(() => api.close())
+    const t = newTally()
+    const kim = await api.login('kim')
+    for (let i = 0; i < ITER; i++) {
+      // As if an exception had just made kim a creator: no personal workspace is marked.
+      await api.db.query('UPDATE workspaces SET personal_of = NULL WHERE personal_of = $1', [kim.userId])
+      await race(
+        Array.from({ length: 6 }, () => async () => tally(t, 'me', await kim.req('GET', '/api/me'))),
+        10,
+      )
+      const personal = await api.db.one<{ n: number }>(
+        'SELECT count(*)::int AS n FROM workspaces WHERE personal_of = $1',
+        [kim.userId],
+      )
+      expect(personal.n).toBe(1)
+      const owned = await api.db.one<{ n: number }>(
+        `SELECT count(*)::int AS n FROM workspace_members m JOIN workspaces w ON w.id = m.workspace_id
+          WHERE w.personal_of = $1 AND m.user_id = $1 AND m.role = 'owner'`,
+        [kim.userId],
+      )
+      expect(owned.n).toBe(1)
+    }
+    report('ensurePersonalWorkspace race', t, log, 0)
+    expect(t.failures).toEqual([])
+  })
+
   it('export-policy PUT vs downloads: a download that starts after the PUT answered is refused', async () => {
     const events = new EventHub()
     const log = errorLog()

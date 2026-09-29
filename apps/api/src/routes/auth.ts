@@ -16,10 +16,11 @@
 // in the Clerk dashboard take effect here within seconds. Until then an operator offboards someone
 // with "sign out everywhere" on their behalf or SQL (docs/SECURITY-REVIEW-2026-09-27.md §6 item 6).
 
-import { ME_ACCESS_LEGACY, type Me, type MeKind, type RevokeAllSessionsResponse } from '@draftroom/contracts'
-import type { FastifyInstance } from 'fastify'
+import type { Me, MeKind, RevokeAllSessionsResponse } from '@draftroom/contracts'
+import type { FastifyInstance, FastifyRequest } from 'fastify'
 import type { AuthProvider } from '../auth/provider.ts'
-import { listUserWorkspaces, userKind } from '../auth/users.ts'
+import type { SessionUser } from '../auth/session.ts'
+import { listUserWorkspaces } from '../auth/users.ts'
 import type { AppContext } from '../context.ts'
 import { ApiError } from '../errors.ts'
 import { keyedLimit } from '../rate-limit.ts'
@@ -33,14 +34,25 @@ export function registerAuthRoutes(app: FastifyInstance, ctx: AppContext, provid
 
   app.get('/api/auth/config', async () => provider.publicConfig())
 
-  // `kind` (wave 3, guests): 'guest' for a name-only guest, 'account' otherwise (contracts MeKind).
-  // `access` (domain access): STEP A sends ME_ACCESS_LEGACY (this build enforces no creator rule yet);
-  // step B1 replaces it with identity.status (docs/DOMAIN-ACCESS-CONTRACTS.md §8, §12).
-  app.get('/api/me', async (req): Promise<Me & MeKind> => {
-    const user = await ctx.requireUser(req)
-    const [workspaces, kind] = await Promise.all([listUserWorkspaces(db, user.id), userKind(db, user.id)])
-    return { user: sessionUserToUser(user), workspaces, kind, access: ME_ACCESS_LEGACY }
-  })
+  /**
+   * `kind` (wave 3, guests): 'guest' for a name-only guest, 'account' otherwise (contracts MeKind).
+   * `access` (domain access, docs/DOMAIN-ACCESS-CONTRACTS.md §8): the identity is confirmed with the
+   * provider first when the stored addresses are unknown or older than 24 h (a failure keeps the stored
+   * data: 'unconfirmed', still 200) and refreshed in the background when older than 1 h; a creator
+   * without a personal workspace gets one. An awaited refresh that finds the account gone or banned
+   * ends its sessions: 401.
+   */
+  const meOf = async (req: FastifyRequest, signedIn: SessionUser): Promise<Me & MeKind> => {
+    const user = await ctx.identity.freshen(req, signedIn, 'me')
+    await ctx.identity.ensurePersonalWorkspace(user)
+    const [workspaces, access] = await Promise.all([
+      listUserWorkspaces(db, user.id),
+      ctx.identity.status(user),
+    ])
+    return { user: sessionUserToUser(user), workspaces, kind: user.kind, access }
+  }
+
+  app.get('/api/me', async (req): Promise<Me & MeKind> => meOf(req, await ctx.requireUser(req)))
 
   // A11Y-17: the web app's session check when a page loads. Signed out is an expected answer there, so
   // it is 204 No Content instead of a 401 that every browser logs as an error (the sign-in page's
@@ -48,8 +60,7 @@ export function registerAuthRoutes(app: FastifyInstance, ctx: AppContext, provid
   app.get('/api/auth/me', async (req, reply): Promise<(Me & MeKind) | undefined> => {
     const user = await sessions.user(req)
     if (!user) return reply.code(204).send()
-    const [workspaces, kind] = await Promise.all([listUserWorkspaces(db, user.id), userKind(db, user.id)])
-    return { user: sessionUserToUser(user), workspaces, kind, access: ME_ACCESS_LEGACY }
+    return meOf(req, user)
   })
 
   // Always 204, signed in or not: logging out twice (or from a stale tab) is not an error.

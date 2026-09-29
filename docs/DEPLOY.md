@@ -231,6 +231,8 @@ Every variable is documented with a safe placeholder in `.env.example`. Where ea
 | `DRAFTROOM_BACKUP_STORE`, `DRAFTROOM_BACKUP_INTERVAL_MS` | sync | `sync: false` / default ([backups](#backups)): `r2` on staging, set together with the sync's `R2_*`. |
 | `DATABASE_URL` | api | `fromDatabase … connectionString` (the internal URL). Internal connections don't require TLS. For `sslmode=require`, append it by hand; `verify-full` isn't supported internally. |
 | `CLERK_SECRET_KEY`, `CLERK_PUBLISHABLE_KEY` | api | `sync: false` |
+| `DRAFTROOM_CREATOR_DOMAINS` | api | not in `render.yaml`: unset means `darkburn.com,trailerparkgroup.com` ([domain access](#domain-access)) |
+| `DRAFTROOM_CREATOR_EMAILS` | api | not in `render.yaml`: set by the lead in the Render Dashboard only, never in git ([domain access](#domain-access)) |
 | `DRAFTROOM_SYNC_INTERNAL_URL` | api | `fromService: {type: web, name: draftroom-staging-sync, property: hostport}` → `draftroom-staging-sync-xxxx:10000` → `http://…`. Required, non-loopback in production. |
 | `DRAFTROOM_API_INTERNAL_URL` | sync | `fromService: {type: web, name: draftroom-staging-api, property: hostport}`. Same rules. |
 | `DRAFTROOM_API_URL` | Render worker | the same `fromService … hostport` as above ([public or private](#public-url-or-private-hostport)); NAS: the api's public URL |
@@ -254,6 +256,78 @@ Rules:
 - Don't add Render "secret files" for these services either. Render copies secret files into the build context root, and while our Dockerfiles copy only explicit paths, this is easy to get wrong later.
 - Logs contain route patterns, not URLs. Tickets, query strings, invitation tokens, worker tokens and presigned URLs never appear. The sync examples (`refused on board …: bad_signature`, `refused: Origin "https://evil.example" is not in ALLOWED_ORIGINS`) were verified in the platform phase. The worker-route rules are in the contract (§4, §7); re-check the logs on the first deploy.
 - **Rotating** a group secret restarts every linked service. Render redeploys linked services on env-group changes when autodeploy is on. Autodeploy is off here, so redeploy the linked services by hand, together. Tickets live 60 s, so in-flight reconnects fail once and retry.
+
+## Domain access
+
+Only **creators** create workspaces, projects and boards (in any form: new, template, sample, duplicate, import, restore as new) and hand out access (invitations, review, workshop and guest links, "+1 h", approving a request, raising a role or a board's visibility, transferring ownership). Everyone else gets only what they were invited to, and may still lower or remove access. Contract: `docs/DOMAIN-ACCESS-CONTRACTS.md`.
+
+A creator has a **verified** sign-in address (primary or secondary) whose domain is exactly one of the creator domains, or an address on the exceptions list. Clerk test-mode addresses (`+clerk_test`) never count, anywhere. Creator status is computed on every request from the stored addresses and the current configuration, so a changed variable applies at the next api start without anyone signing in again.
+
+| Variable | Unset or blank | Set |
+|---|---|---|
+| `DRAFTROOM_CREATOR_DOMAINS` | `darkburn.com,trailerparkgroup.com` (every environment, production included) | Comma-separated exact ASCII domains, replacing the default. Punycode for internationalised domains. Subdomains are separate entries. `*.invalid` is refused. |
+| `DRAFTROOM_CREATOR_EMAILS` | no exceptions | Comma-separated exact addresses, at most 50, never `+clerk_test`. Gmail dots and `+tags` are **not** normalised: list the exact address Clerk verified. |
+
+- **Fail closed.** No value turns the rule off. An invalid value stops the api at startup, with a message that names the variable and the entry number, never the value. The startup log shows `{ creators: { domains, exceptions: <count> } }` and never an address.
+- **Where to set it.** `render.yaml` does not change (a Blueprint sync on a push to `main` could otherwise redeploy the api early). The lead sets `DRAFTROOM_CREATOR_EMAILS` on `draftroom-staging-api` in the Render Dashboard (or through the Render API), never in git. That env edit redeploys the current build. If it is forgotten, nothing is lost: the owner's personal account is an outsider (it keeps everything and cannot create or share) until the value is set.
+- **Checking it.** `GET /api/me` → `access.reason`: `exception` for the owner's personal account, `domain` for a Dark Burn or Trailer Park Group account, `outside` for anyone else, `unconfirmed` while Clerk cannot confirm the account (creating and sharing are paused, everything else works).
+- **Freshness.** Stored addresses are confirmed with Clerk before they are first trusted (every existing user, once, after the deploy), then refreshed in the background at most hourly while the person uses Lobby. After 24 h without a confirmation the person is `unconfirmed`. Accepting an email-locked invitation always uses addresses at most 5 minutes old.
+
+### Clerk settings for domain access (the lead, before the deploy)
+
+1. Clerk Dashboard → the **staging instance** → Instance Settings → turn **Test mode off**, and record here that it is off (date, who). Test mode verifies any `+clerk_test` address with the fixed code 424242 and sends no email; Lobby ignores such addresses anyway, and turning it off also stops the fixed code from verifying anything. Status: **not yet recorded**.
+2. Confirm and record the enabled sign-in methods. Company addresses should sign in through email code or Google. Do not enable a Microsoft/Entra connection: its email claims are not proof of mailbox control (`docs/DOMAIN-ACCESS-CONTRACTS.md` §15).
+3. Do **not** switch Clerk instances (development → production) as part of this deploy. A switch changes every Clerk user id: sign-in would create new Lobby users with none of their memberships, and the identity refresh would treat the old ids as gone and sign them out. An instance switch needs its own plan that remaps `identities` first.
+4. Development Clerk instances are capped at 100 users (confirm against the plan). Outside accounts now sign in too and count toward the cap.
+
+### Deploying domain access
+
+1. Deploy the api. Migration `0021_domain_access` runs: it revokes the open single-use invitation links that name no address (tell the team to send new ones; holders see the usual "ask for a new link" page) and marks personal workspaces. It deletes no membership, grant or workspace. Then deploy sync (no change) and the web.
+2. Check `GET /api/me` → `access.reason` as above, and that a name-only guest link still works.
+3. Optional, a day later (once most people have loaded a page, so their addresses are stored): list open multi-use links whose creator is now an outsider, and revoke any the team did not expect.
+
+```sql
+SELECT i.id, i.board_id, i.role, i.expires_at, i.created_by
+  FROM invitations i
+ WHERE i.multi_use AND i.revoked_at IS NULL AND i.expires_at > now()
+   AND NOT EXISTS (
+     SELECT 1 FROM user_emails e
+      WHERE e.user_id = i.created_by AND e.source = 'clerk'
+        AND (e.domain IN ('darkburn.com', 'trailerparkgroup.com')
+             OR e.email = ANY (string_to_array('<the DRAFTROOM_CREATOR_EMAILS value>', ','))));
+```
+
+### Rolling domain access back
+
+Rolling the api back to a build from before domain access needs `DRAFTROOM_ALLOW_NEWER_SCHEMA=1` ([Rolling the api back past a migration](#rolling-the-api-back-past-a-migration)). The older build enforces no creator rule and ignores `invited_email`. For the whole rollback window every outsider can again create boards, projects, invitations and links, new outsiders get a personal workspace, and any account could redeem an email-locked link. Keep the window short.
+
+1. **Before starting the older build**, close the email-locked links (the older build would let anyone redeem them):
+
+   ```sql
+   UPDATE invitations SET revoked_at = now()
+    WHERE invited_email IS NOT NULL AND redeemed_by IS NULL AND revoked_at IS NULL;
+   ```
+
+2. The web does not need to be rolled back: without `access` in `/api/me` it falls back to the permissive `legacy` behaviour and shows what it always showed. The server stays authoritative either way.
+3. **Before starting the domain-access build again**, mark the personal workspaces the older build created, so their owners do not get a second one:
+
+   ```sql
+   UPDATE workspaces w SET personal_of = w.created_by
+     FROM (SELECT DISTINCT ON (created_by) id FROM workspaces
+            WHERE id <> 'wsp_DevStudio00000000000'
+              AND created_by NOT IN (SELECT personal_of FROM workspaces WHERE personal_of IS NOT NULL)
+            ORDER BY created_by, created_at, id) pick
+    WHERE w.id = pick.id;
+   ```
+
+4. Single-use links the older build created (unbound) are treated as gone once the new build is back. Users it provisioned have no stored addresses: they are confirmed on their next request and keep what they have.
+
+### Offboarding a leaver
+
+- A Clerk address stays "verified" after the mailbox is gone, so **ban or delete the user in Clerk**. Lobby then signs every session of theirs out: within about 1 h of their next page load, or at their next create or share action once the stored data is older than 24 h. (Only Clerk's 404 `resource_not_found` or a ban does this; a Clerk outage never signs anyone out.)
+- For an immediate stop, use "sign out everywhere" on their behalf. This matters for an idle open board tab, which keeps its sync session until then.
+- Remove their memberships by hand: losing creator status removes nothing.
+- Clerk webhooks (`user.updated`, `user.deleted`) remain future work.
 
 ## tldraw license key
 
@@ -487,6 +561,7 @@ The windows differ: Postgres goes back 3 days to any minute; board backups go ba
 
 - **How.** Dashboard → service → Deploys → *Rollback*. Render reuses the earlier build artifact (no rebuild) and that deploy's environment variables. Disks, plan and static-site settings are *not* rolled back. A Dashboard rollback also disables autodeploy, which is already off.
 - **Database.** Migrations are forward-only (never edit a shipped one). Rolling the api back past a migration is safe only if the older code tolerates the newer schema. Otherwise, fix forward. By default an older api build **refuses to start** once the database has recorded a migration it doesn't know (`database has migration …, which this build does not know`). To roll back anyway, follow [Rolling the api back past a migration](#rolling-the-api-back-past-a-migration).
+- **api past domain access (migration 0021).** Possible, with the extra steps in [Rolling domain access back](#rolling-domain-access-back): close the email-locked links first, and mark the personal workspaces before the newer build returns.
 - **api past milestone 3: don't.** A milestone-1/2 api build reads files from `meta.json` on a local disk that no longer exists. It would never see R2 objects or `asset_versions` rows, and it expects its co-located worker. Fix forward instead.
 - **Workers.** Roll a worker back only to a build that speaks the api's current worker protocol. The simplest way to stop previews is to stop the workers: jobs wait in Postgres.
 - **Canvas schema.** Don't roll sync back below a canvas-schema migration. Boards already migrated on disk can't be loaded by the older server (`Incompatible schema?`), and newer clients are refused (`SERVER_TOO_OLD`). Rolling back the web client is safe while every shape migration keeps its `down`: an older client is served down-migrated records. Roll back sync only when its schema didn't change.
