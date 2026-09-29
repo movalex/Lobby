@@ -199,6 +199,12 @@ describe('the container fit (§2.9.4)', () => {
       fitDropped: true,
     })
     expect((await a.acquire('n1')).type).toBe('lease.grant')
+    // a fit aimed at the label (not a container, not a free text) is dropped even from the holder
+    expect(
+      (await a.push([{ k: 'p', id: 'n1.t', pv: pv(a, 'n1.t'), fit: { x: 5, y: 5 } }])).r[0],
+    ).toMatchObject({
+      fitDropped: true,
+    })
     expect((await a.push([{ k: 'p', id: 'n1', pv: pv(a, 'n1'), fit: { height: 333 } }])).r[0]).toMatchObject({
       ok: true,
     })
