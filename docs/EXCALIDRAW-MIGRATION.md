@@ -261,7 +261,7 @@ The recheck of revision 3 (2026-09-28) found all 3 open musts and all 11 new pro
 | A1 | `GET /internal/boards/:bid/file-refs?ids=ver_a,ver_b,…` (≤ 100 ids), internal secret | new api route; sync client in `apps/sync/src/file-refs.ts`. A1–A3 are first written in the spike branch (§8.1); R0 and wave 2F ship the reviewed versions. | The sync server checks every `fileId` against the board's workspace (§2.10.2). A GET, like `touched` and `session-ended`, because the api's root CSRF hook refuses server-to-server POSTs (`apps/sync/src/touch.ts:23-26`) [rev-run]. |
 | A2 | `GET /internal/boards/:bid/workshop-state` (sync pulls on room open) and `POST <sync>/internal/boards/:bid/workshop-state` (api pushes on change) | new api route + new sync route | The server refuses new +1s and drops selection presence while a dot vote is open (§3.3, §2.7). Today that rule is client-side only (`PlusOnes.tsx:55-57`) [rev-run]. |
 | A3 | Optional `guest` claim in `TicketClaims` | `packages/auth-tickets` | Guest limits are enforced by sync. Additive: `TicketClaims` has no such field today (`index.ts:9-18`) [rev-run]. |
-| A4 | Checkpoint bodies v1 and v2, the new `engine-migration` reason (migration `0021`) | api history | Shipped first in the tldraw **bridge release** so a rollback lands on a build that understands them (§5.10). |
+| A4 | Checkpoint bodies v1 and v2, the new `engine-migration` reason (migration `0022`) | api history | Shipped first in the tldraw **bridge release** so a rollback lands on a build that understands them (§5.10). |
 | A5 | Snapshot readers: `ai/sources.ts`, `workshops/shapes.ts`, `search/indexer.ts`, `history/*`, `files/gc-refs.ts` | api | Read `lobby-elements` through `canvas-schema/items.ts`. |
 | C1 | `PrivateTarget.pageId` keeps its type; after cut-over clients send the constant `page:page`; sync maps a legacy page id through `lb_doc.import.legacyPages` | contracts unchanged; sync `place-notes` | Sessions still open at cut-over reveal notes in the right place (§5.8). |
 | C2 | Deep links: new `?el=<id>,<id>` and `?view=x,y,w,h`; the legacy `?d=` parser stays | web (`copy-link.ts`, `content-search.ts`) | tldraw links use `.` separators, and converted ids contain `.` (§3.6). |
@@ -1410,7 +1410,7 @@ Legend: **Keep** (no canvas change, or config only), **Rewrite** (same behaviour
 |---|---|---|
 | api | `features/ai/sources.ts`, `features/workshops/shapes.ts`, `features/search/indexer.ts`, `features/history/{snapshot-rows,files,board-ops,checkpoint-routes}.ts`, `files/gc-refs.ts`, `sync-internal.ts`; **new**: `file-refs` and `workshop-state` routes | §1 A1–A5 |
 | packages | `board-ops` (16 files use tldraw), `templates` (17), `canvas-schema` (3), `auth-tickets` (`guest` claim) | Rewritten on elements; tldraw schema moves into `tldraw-import` |
-| contracts | none structurally | `shape:` refs kept; `PrivateTarget.pageId` kept (C1); migration `0021` adds `engine-migration` |
+| contracts | none structurally | `shape:` refs kept; `PrivateTarget.pageId` kept (C1); migration `0022` adds `engine-migration` |
 | Unchanged | auth, sharing, dashboard, notifications, comments privacy, AI budgets, storage, worker, Office sidecar | none |
 
 ---
@@ -1631,7 +1631,7 @@ The owner signs off on lossy counts from the rehearsal (§7.5).
 | `dr_deleted_records`, `dr_deleted_schemas` | Never written, trimmed or rebuilt by the new build (§5.4) | R0 finds them exactly as it left them; the new engine uses its own `lb_deleted` |
 | `lb_source`, `lb_prev_*`, the tldraw tables | Kept until `drop-legacy` | the base and the history of every cycle stay available |
 | Boards born after the cut-over | R0 refuses them without opening a room (step 4) | the file is never modified by R0 |
-| Migration `0021` | In R0, before the cut-over | additive; R0 understands it |
+| Migration `0022` | In R0, before the cut-over | additive; R0 understands it |
 | `drop-legacy` (remove the tldraw tables, `dr_deleted_*`, `lb_source` and `lb_prev_*`; then `VACUUM`) | Day 7 after cut-over, owner OK | after the window |
 | Asset GC out of report mode | Day 30 | after the window |
 
@@ -1656,7 +1656,7 @@ A normal tldraw release, deployed at least 3 days before the cut-over, so that a
 
 | Part | R0 behaviour |
 |---|---|
-| api | Lists v2 checkpoints and shows "Made on the new canvas — preview and restore after the switch"; refuses v2 restore with that message. Accepts the `engine-migration` reason (migration `0021`, additive). Refuses v2 archive import with a clear message. Shows boards born on the new canvas with a "new canvas" badge, and refuses to duplicate or export them with the same message. Has the `file-refs` and `workshop-state` routes (unused by tldraw sync; reviewed versions of the spike's code, §8.1). |
+| api | Lists v2 checkpoints and shows "Made on the new canvas — preview and restore after the switch"; refuses v2 restore with that message. Accepts the `engine-migration` reason (migration `0022`, additive). Refuses v2 archive import with a clear message. Shows boards born on the new canvas with a "new canvas" badge, and refuses to duplicate or export them with the same message. Has the `file-refs` and `workshop-state` routes (unused by tldraw sync; reviewed versions of the spike's code, §8.1). |
 | sync | Serves the tldraw tables. **Never writes or trims any `lb_*` table** (it reads only whether `lb_meta.converted_from` exists), and keeps managing its own `dr_deleted_*` as today. Refuses boards with `lb_meta` and no `converted_from` without opening a room (§5.9 step 4). Its backups copy the whole file, `lb_*` included. **Maintenance mode (new):** `POST /internal/maintenance {on}` lets pending pushes commit, closes every socket with 4099 `MAINTENANCE`, and refuses new ones; internal routes keep working. **`POST /internal/backups/run-all` (new)** writes a fresh local and offsite backup of every board and returns each object key and `recordsSha256` for the cut-over runbook (§7.5). |
 | web | Unchanged apart from R0 api messages, the maintenance notice and the "new canvas" message. |
 | Tests | R0's gate runs a board file that contains every `lb_*` table and checks that each of them is byte-identical after R0 served, backed up and trimmed the board. A born-after board is refused, with no tldraw table created. A v2 checkpoint row. Maintenance on closes and refuses sockets. `run-all` returns digests equal to the files'. |
@@ -1801,7 +1801,7 @@ Person-days (pd) are human-engineer equivalents, used for sizing. **Every row, t
 | **0A Spike A** (§8) | 3 owners + lead | `spike/excalidraw` branch: engine checks (summed per check in §8.2). **Done** (5203e41), plus the A6/A16 fix round | 14 |
 | **0B Spike B** (§8) | 5 owners + lead | `spike/excalidraw`: contracts step, minimal room and engine core, lease client on the real protocol, facade and browser harness, load harness and NAS containers, conversion port on the restored staging boards, roll-forward drill with the R0 stand-in, routes A1–A3, the minimal features the checks need, three independent verifiers (§8.1 has the breakdown, §8.6 the owners) | 60 |
 | **1 Contracts + freeze** | contracts (+1) | `packages/canvas-schema/src/**` (new files, §3; spike B's contract drafts reviewed and frozen); `docs/EXCALIDRAW-CONTRACTS.md`; `canvas/port.ts`, `canvas/registries.ts`; facade types; lockfile PR #1; probes into `docs/research/excalidraw/`, including the four missing browser probes (§6.5) | 7 |
-| **R0 Bridge release** | bridge | api: v2 checkpoint listing and messages, migration `0021`, routes A1/A2 (reviewed from the spike branch), "new canvas" board badge; sync: maintenance mode, `backups/run-all`, refusal of boards born on the new canvas, byte-identity tests for every `lb_*` table; staging deploy (owner OK) | 4.5 |
+| **R0 Bridge release** | bridge | api: v2 checkpoint listing and messages, migration `0022`, routes A1/A2 (reviewed from the spike branch), "new canvas" board badge; sync: maintenance mode, `backups/run-all`, refusal of boards born on the new canvas, byte-identity tests for every `lb_*` table; staging deploy (owner OK) | 4.5 |
 | **2 Engine core** | 2A sync-room | `apps/sync/src/room/**` (not `migrate/`), `rooms.ts`, `app.ts`, `presence.ts` (drag relay with ids once), lease with the conditional container fit, the server-derived bound arrows (re-snap on every target and arrow geometry write, the arrow label's derived layout, `fix`/`derived` ack rows), attribution ledger, outbound budgets, the test-only routes; `user-records.ts` deleted | 16.5 |
 | | 2B sync-edges | `apps/sync/src/{http,backup,deleted}/**` (`lb_deleted` store), `snapshot.ts`, `room/migrate/**` (capped conversion worker and queue, `lb_source`, record-level roll-forward merge), `file-refs.ts`, `workshop-state.ts`, `/internal/metrics` | 9.5 |
 | | 2C web-engine | `apps/web/src/canvas/**` (engine, sync adapter with fit and derived-arrow classification, history with `lastLocal`, fix and `derived` folding and arrow points compared without their bound endpoints, overrides, input framework with the editor-open guard and its invariant, the editor's chord allowlist, the double-tap detector and Ctrl+A, the presence pointer listener, image loader core, facade), `board/BoardPage.tsx`, `board/presence.ts`, `board/touch-guard.ts`, `sync-quality/**` | 20.5 |
@@ -2733,7 +2733,7 @@ Spike A's findings and corrections (revision 3.2) are mapped in the table "What 
 | Priority | Review item | Where | What changed in the design |
 |---|---|---|---|
 | must | Rollback and the lazy converter | §5.3, §5.9 | `converted_from` records the source clock, hash and backup; a room refuses stale `lb_*` and runs a 3-way roll-forward merge; `lb_prev_*` kept; exports to R2 before rollback; drill in spike B8 and the rehearsal |
-| must | Irreversible jobs inside the window | §5.5, §5.8, §5.9, §5.10 | No checkpoint rewrite; anchor shifts at read time; `0021` ships in the bridge release R0 |
+| must | Irreversible jobs inside the window | §5.5, §5.8, §5.9, §5.10 | No checkpoint rewrite; anchor shifts at read time; `0022` ships in the bridge release R0 |
 | must | Echo 1: image `status` | §2.5.5 E1, §2.10.3 | `status` local-only; Lobby's loader hands `blob:` URLs only after success; test |
 | must | Echo 2: index re-keying | §2.5.5 E2–E3, §2.4.3 | Own-only pre-pass; server keeps labels after containers; dev assertion; concurrent-create test |
 | must | Undo reverts others' `customData`/`groupIds` | §2.8 | Field-level stack with 3-way compare-and-set per field, key and group id; side-effect geometry pushed separately; leased labels untouched |
