@@ -56,20 +56,21 @@ function rejectPass(p: PushApplier): boolean {
           revert(w.id, 'INVALID')
           continue
         }
-        const others = (x.boundElements ?? []).filter(
-          (r: Ref) => r.type === 'text' && r.id !== el.id && p.live(r.id)?.containerId === x.id,
-        )
-        const sameBatch = labelsOf.get(x.id) ?? []
-        if (others.length || sameBatch.length) {
-          revert(w.id, 'INVALID')
-          continue
-        }
+        // the container's lease and lock first: a writer who may not touch X is told why (B3 L8)
         if (p.leasedByOther(x.id)) {
           revert(w.id, 'LEASED')
           continue
         }
         if (x.locked) {
           revert(w.id, 'LOCKED')
+          continue
+        }
+        const others = (x.boundElements ?? []).filter(
+          (r: Ref) => r.type === 'text' && r.id !== el.id && p.live(r.id)?.containerId === x.id,
+        )
+        const sameBatch = labelsOf.get(x.id) ?? []
+        if (others.length || sameBatch.length) {
+          revert(w.id, 'INVALID')
           continue
         }
         labelsOf.set(x.id, [...sameBatch, el.id])
