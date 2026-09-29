@@ -20,11 +20,20 @@ check_free() {
   log "7880-7899 free ($1)"
 }
 
-# Runs one spike B Playwright spec file on a base, as run $2 (a fresh web build per invocation).
+# Runs one spike B Playwright spec file on a base, as run $2 (a fresh web build per invocation). Playwright
+# wipes its output folder (e2e/test-results/spike-b-<web port>) on every invocation, so the run's folder
+# (evidence JSON, traces, screenshots) is copied to $LOGDIR/<spec>-run<n>.results right after it.
 run_spec() {
-  local base="$1" run="$2" spec="$3"
+  local base="$1" run="$2" spec="$3" code=0
   shift 3
+  local name out
+  name="$(basename "$spec" .spec.ts)"
+  out="$REPO/e2e/test-results/spike-b-$((base + 2))"
   log "run $run: $spec on $base $*"
   (cd "$REPO/e2e" && env SPIKE_B_PORT_BASE="$base" SPIKE_B_RUN="$run" "$@" pnpm exec playwright test -c spike-b/playwright.config.ts "$spec") \
-    >"$LOGDIR/$(basename "$spec" .spec.ts)-run$run.log" 2>&1
+    >"$LOGDIR/$name-run$run.log" 2>&1 || code=$?
+  if [[ -d "$out" ]]; then rm -rf "$LOGDIR/$name-run$run.results"; cp -r "$out" "$LOGDIR/$name-run$run.results"; fi
+  grep -hE '^\s+[0-9]+ (passed|failed|skipped|flaky|did not run|interrupted)' "$LOGDIR/$name-run$run.log" | tr -s ' ' | tr '\n' ' ' | sed "s/^/$name run $run: /" | tee -a "$LOGDIR/run.log" >&2 || true
+  printf '\n' >&2
+  return "$code"
 }
