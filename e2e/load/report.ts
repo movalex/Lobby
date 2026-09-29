@@ -85,7 +85,19 @@ export interface RunReport {
     readonly receiversThatPushed: number
     readonly receiverOps: number
   }
-  readonly server: { readonly scrapes: number; readonly okScrapes: number; readonly names: string[] }
+  readonly server: {
+    readonly scrapes: number
+    readonly okScrapes: number
+    readonly names: string[]
+    /** O1's histograms over the run (last scrape minus first): ms from a push arriving to its ack */
+    readonly receiveToAckMs?: HistogramSummary | null
+    /** ms per group commit (BEGIN to COMMIT) */
+    readonly commitMs?: HistogramSummary | null
+    /** pushes per group commit */
+    readonly pushesPerCommit?: HistogramSummary | null
+    /** the largest scraped event-loop delay p99 (O1's gauge: since sync started), ms */
+    readonly eventLoopP99Ms?: number | null
+  }
   readonly host: readonly HostSample[]
   readonly targets: readonly Target[]
   readonly errors: readonly string[]
@@ -138,17 +150,69 @@ export function ackedButMissing(sessions: readonly SessionReport[], final: Final
   return { checked, missing, method: final.method, ids }
 }
 
-export const SERVER_METRICS = {
-  eventLoopP99: ['lobby_event_loop_delay_p99_ms', 'event_loop_delay_p99_ms'],
-  rssBytes: ['process_resident_memory_bytes', 'lobby_rss_bytes'],
-} as const
+/** A metric by name and exact labels (O1's names, apps/sync/src/room/metrics.ts, first). */
+interface MetricRef {
+  readonly name: string
+  readonly labels?: Readonly<Record<string, string>>
+}
+export const SERVER_METRICS: {
+  readonly eventLoopP99: readonly MetricRef[]
+  readonly rssBytes: readonly MetricRef[]
+} = {
+  eventLoopP99: [
+    { name: 'lobby_event_loop_delay_ms', labels: { quantile: '0.99' } },
+    { name: 'lobby_event_loop_delay_p99_ms' },
+  ],
+  // O1 exposes no RSS: on the NAS it comes from docker stats (host samples)
+  rssBytes: [{ name: 'process_resident_memory_bytes' }, { name: 'lobby_rss_bytes' }],
+}
 
-function lastOf(scrapes: readonly Scrape[], names: readonly string[], t0: number): number | null {
-  for (const n of names) {
-    const s = series(scrapes, n, t0)
+function lastOf(scrapes: readonly Scrape[], refs: readonly MetricRef[], t0: number): number | null {
+  for (const r of refs) {
+    const s = series(scrapes, r.name, t0, { ...r.labels })
     if (s.length) return Math.max(...s.map(([, v]) => v))
   }
   return null
+}
+
+export interface HistogramSummary {
+  readonly n: number
+  /** upper bucket bounds (`le`) holding the quantile, ms or count */
+  readonly p50: number | null
+  readonly p95: number | null
+  readonly p99: number | null
+  readonly mean: number | null
+}
+
+/**
+ * A Prometheus histogram over the run: the last ok scrape's cumulative buckets minus the first's, and the
+ * quantiles as the upper bound of the bucket that reaches them (the resolution is the bucket layout).
+ */
+export function histogramOver(scrapes: readonly Scrape[], name: string): HistogramSummary | null {
+  const ok = scrapes.filter((s) => s.ok && s.samples.some((m) => m.name === `${name}_bucket`))
+  const first = ok[0]
+  const last = ok.at(-1)
+  if (!first || !last) return null
+  const buckets = (sc: Scrape) =>
+    new Map(
+      sc.samples
+        .filter((m) => m.name === `${name}_bucket` && m.labels.le !== undefined)
+        .map((m) => [m.labels.le as string, m.value] as const),
+    )
+  const a = buckets(first)
+  const b = buckets(last)
+  const les = [...b.keys()].sort((x, y) => (x === '+Inf' ? 1 : y === '+Inf' ? -1 : Number(x) - Number(y)))
+  const cum = les.map((le) => [le, (b.get(le) ?? 0) - (ok.length > 1 ? (a.get(le) ?? 0) : 0)] as const)
+  const n = cum.at(-1)?.[1] ?? 0
+  const one = (sc: Scrape, suffix: string) =>
+    sc.samples.find((m) => m.name === `${name}_${suffix}`)?.value ?? 0
+  const sum = one(last, 'sum') - (ok.length > 1 ? one(first, 'sum') : 0)
+  const q = (p: number) => {
+    if (!n) return null
+    const hit = cum.find(([, c]) => c >= p * n)
+    return hit ? (hit[0] === '+Inf' ? Number.POSITIVE_INFINITY : Number(hit[0])) : null
+  }
+  return { n, p50: q(0.5), p95: q(0.95), p99: q(0.99), mean: n ? Math.round((sum / n) * 10) / 10 : null }
 }
 
 const verdict = (value: number | null, ok: (v: number) => boolean): Verdict =>
@@ -329,6 +393,10 @@ export function buildReport(
       scrapes: scrapes.length,
       okScrapes: scrapes.filter((s) => s.ok).length,
       names: [...new Set(scrapes.flatMap((s) => s.samples.map((m) => m.name)))].sort(),
+      receiveToAckMs: histogramOver(scrapes, 'lobby_receive_to_ack_ms'),
+      commitMs: histogramOver(scrapes, 'lobby_commit_ms'),
+      pushesPerCommit: histogramOver(scrapes, 'lobby_pushes_per_commit'),
+      eventLoopP99Ms: eventLoopP99,
     },
     host,
     targets,
@@ -336,6 +404,8 @@ export function buildReport(
   }
 }
 
+const h = (x: HistogramSummary | null | undefined) =>
+  x ? `n ${x.n}, p50 ≤ ${x.p50}, p95 ≤ ${x.p95}, p99 ≤ ${x.p99}, mean ${x.mean}` : '—'
 const fmt = (v: number | null | undefined, unit = '') =>
   v === null || v === undefined || Number.isNaN(v) ? '—' : `${Math.round(v * 10) / 10}${unit}`
 
@@ -368,6 +438,10 @@ export function reportMarkdown(r: RunReport): string {
     `| acked-but-missing | ${r.ackedButMissing.missing} of ${r.ackedButMissing.checked} (${r.ackedButMissing.method}) |`,
     `| echo (B10) | ${r.echo.receiversThatPushed} of ${r.echo.receivers} receivers pushed (${r.echo.receiverOps} ops) |`,
     `| server scrapes | ${r.server.okScrapes}/${r.server.scrapes} |`,
+    `| server: push received → ack (ms, bucket bounds) | ${h(r.server.receiveToAckMs)} |`,
+    `| server: group commit (ms, bucket bounds) | ${h(r.server.commitMs)} |`,
+    `| server: pushes per commit | ${h(r.server.pushesPerCommit)} |`,
+    `| server: event-loop delay p99 (ms, since start) | ${fmt(r.server.eventLoopP99Ms)} |`,
     '',
     '| Target (§2.13) | Limit | Value | Verdict |',
     '|---|---|---|---|',

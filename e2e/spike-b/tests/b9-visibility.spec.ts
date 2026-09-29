@@ -13,6 +13,7 @@
 // socket relay (it would add a hop). Needs M2 (O2's headless client, O1's room, O5's A1 file-refs).
 import { type ChildProcess, spawn } from 'node:child_process'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { availableParallelism } from 'node:os'
 import { join } from 'node:path'
 import { expect, test } from '@playwright/test'
 import { buildPlans, probeSids } from '../../load/plan.ts'
@@ -40,6 +41,14 @@ const LOAD_MS = Number(process.env.SPIKE_B9_LOAD_MS ?? 5 * 60_000)
 const IMAGES = Number(process.env.SPIKE_B9_IMAGES ?? 200)
 /** SPIKE_B9_LOAD=0: the same two browsers with no L2 running (a diagnostic control, never evidence) */
 const WITH_LOAD = process.env.SPIKE_B9_LOAD !== '0'
+/**
+ * Worker threads of the L2 load process. Each headless session holds the whole 9,220-element board and
+ * applies every change, so 30 sessions on 2 threads were client-bound (event-loop p99 about 780 ms per
+ * thread, diag2): the load then arrives late and bunched. 3 sessions per thread by default.
+ */
+const LOAD_THREADS = Number(
+  process.env.SPIKE_B9_LOAD_THREADS ?? Math.max(2, Math.min(10, Math.floor(availableParallelism() / 4))),
+)
 const REPO = join(import.meta.dirname, '..', '..', '..')
 
 let stack: O3Stack
@@ -181,6 +190,26 @@ interface ViewResult {
   zoom: number
   timelines: Timeline[]
   lostLocal: { edit: number; diag: unknown }[]
+  /** O2's lobby.* measures in A and B during this view (the apply and scan cost on the heavy board) */
+  measures?: Record<string, unknown>
+}
+
+/** O2's lobby.* measures of a page since the last read (cleared), per name: count, p50, p95, max, ms busy per s. */
+async function measuresOf(page: import('@playwright/test').Page, seconds: number) {
+  const ms = await canvasOf(page).measures(true)
+  const names = [...new Set(ms.map((m) => m.name))]
+  return Object.fromEntries(
+    names.map((n) => {
+      const d = ms.filter((m) => m.name === n).map((m) => m.duration)
+      return [
+        n,
+        {
+          ...summarize(d),
+          busyMsPerS: Math.round((d.reduce((a, b) => a + b, 0) / Math.max(1, seconds)) * 10) / 10,
+        },
+      ]
+    }),
+  )
 }
 
 function timeline(target: string, sentAt: number, w: { appliedAt: number; paintedAt: number }): Timeline {
@@ -243,7 +272,15 @@ test('B9 workstation: A→B edit visibility at 100% and at fit while a local L2 
     // the L2 load in its own Node process (it never shares a thread with the test runner)
     const c = spawn(
       process.execPath,
-      [join(REPO, 'e2e/load/run-plans.ts'), '--job', jobFile, '--out', outFile],
+      [
+        join(REPO, 'e2e/load/run-plans.ts'),
+        '--job',
+        jobFile,
+        '--out',
+        outFile,
+        '--threads',
+        String(LOAD_THREADS),
+      ],
       {
         cwd: REPO,
         env: { ...process.env, O3_INTERNAL_SECRET: stack.internalSecret },
@@ -287,6 +324,8 @@ test('B9 workstation: A→B edit visibility at 100% and at fit while a local L2 
       }
     }
     await sleep(2_000)
+    await Promise.all([canvasOf(A.page).measures(true), canvasOf(B.page).measures(true)])
+    const viewStart = Date.now()
     const base = (await canvasOf(A.page).get(target))?.x as number
     const r: ViewResult = { samples: [], discarded: 0, zoom: 0, timelines: [], lostLocal: [] }
     results[view] = r
@@ -332,6 +371,12 @@ test('B9 workstation: A→B edit visibility at 100% and at fit while a local L2 
       await sleep(500)
     }
     r.zoom = (await canvasOf(B.page).viewport()).zoom
+    const secs = (Date.now() - viewStart) / 1000
+    r.measures = {
+      seconds: Math.round(secs),
+      A: await measuresOf(A.page, secs),
+      B: await measuresOf(B.page, secs),
+    }
   }
   const code = WITH_LOAD ? await Promise.race([childDone, sleep(LOAD_MS + 120_000).then(() => null)]) : 0
   if (code === null) child?.kill()
@@ -349,6 +394,7 @@ test('B9 workstation: A→B edit visibility at 100% and at fit while a local L2 
         lostLocal: r.lostLocal.length,
         zoom: r.zoom,
         stages: stageSummary(r.timelines),
+        measures: r.measures,
       },
     ]),
   )
@@ -356,6 +402,9 @@ test('B9 workstation: A→B edit visibility at 100% and at fit while a local L2 
   evidence({
     visibility: summary,
     lostLocal: lost,
+    loadThreads: WITH_LOAD ? LOAD_THREADS : 0,
+    loadClientLoopP99Ms:
+      (load as { meta?: { clientLoopDelayP99Ms?: number[] } } | null)?.meta?.clientLoopDelayP99Ms ?? null,
     frames: { A: frameCounts(tapA.frames()), B: frameCounts(tapB.frames()) },
     loadExit: code,
     loadReport: load,
