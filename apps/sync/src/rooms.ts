@@ -10,6 +10,7 @@ import { withDeleteCapture } from './deleted/capture.ts'
 import { type RestoreSummary, restoreDeleted } from './deleted/restore.ts'
 import { hookedSqlWrapper } from './deleted/sql.ts'
 import { type DeletedEntry, type DeletedLimits, DeletedStore, ensureDeletedTables } from './deleted/store.ts'
+import { runPreOpenChecks } from './engine-switch.ts'
 import { createTextLease, type TextLease } from './lease.ts'
 import type { BoardRole } from './permissions.ts'
 import { authorizeUserRecord } from './user-records.ts'
@@ -296,6 +297,9 @@ export class RoomRegistry {
 
   private open(boardId: string, seed?: RoomSnapshot): RoomEntry | 'exists' {
     const path = boardDbPath(this.opts.dataDir, boardId)
+    // Spike B (engine-switch.ts): registered pre-open checks run before any writable handle exists, and
+    // throw BoardOpenRefused (O4's R0 born-after check). None are registered unless loadEngine() ran.
+    runPreOpenChecks({ boardId, path, exists: existsSync(path) })
     // A seed that fails leaves the board as it found it: no data, and no file it created itself.
     let removeOnFailure = seed !== undefined && !existsSync(path)
     const db = new DatabaseSync(path)

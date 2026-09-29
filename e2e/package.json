@@ -9,7 +9,9 @@
     "demo:video": "node demo/run.ts",
     "perf": "node perf/run.ts --budget",
     "install-browsers": "playwright install --only-shell chromium",
-    "typecheck": "tsc -p ."
+    "typecheck": "tsc -p .",
+    "spike-b": "playwright test -c spike-b/playwright.config.ts",
+    "spike-b:contracts": "playwright test -c spike-b/contracts/playwright.config.ts"
   },
   "devDependencies": {
     "@playwright/test": "catalog:",

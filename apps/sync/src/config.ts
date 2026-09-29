@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import { checkSecret } from '@draftroom/auth-tickets'
 import { resolveDataDir } from '@draftroom/dev-assets'
 import { BACKUP_DEFAULTS } from './backup/backup.ts'
+import { parseEngine, type SyncEngine } from './engine-switch.ts'
 
 export interface SyncConfig {
   host: string
@@ -41,6 +42,16 @@ export interface SyncConfig {
    * offsite copy retries what is still missing. Default 15 minutes.
    */
   backupIntervalMs?: number
+  /**
+   * DRAFTROOM_ENGINE (spike B, engine-switch.ts): `tldraw` (default: TLSocketRoom) or `excalidraw` (the
+   * ElementRoom). Absent in configs built by hand = tldraw.
+   */
+  engine?: SyncEngine
+  /**
+   * DRAFTROOM_TEST_HOOKS=1 (spike B, test-hooks.ts): serve the test-only routes behind the internal secret.
+   * Refused at start-up with NODE_ENV=production. Absent = off.
+   */
+  testHooks?: boolean
 }
 
 /**
@@ -309,6 +320,16 @@ export function backupSigningSecret(env: Env): string {
   return checkSecret('DRAFTROOM_INTERNAL_SECRET', value, env.NODE_ENV === 'production')
 }
 
+/** DRAFTROOM_TEST_HOOKS: `1` on, unset/`0` off; never with NODE_ENV=production (like DRAFTROOM_DEV_AUTH in the api). */
+export function parseTestHooks(env: Env): boolean {
+  const raw = read(env, 'DRAFTROOM_TEST_HOOKS')
+  if (raw === undefined || raw === '0') return false
+  if (raw !== '1') throw new Error('DRAFTROOM_TEST_HOOKS must be 1 or 0')
+  if (env.NODE_ENV === 'production')
+    throw new Error('DRAFTROOM_TEST_HOOKS is refused when NODE_ENV=production')
+  return true
+}
+
 /** Parses and validates the sync server environment. Throws with an operator-facing message on bad input. */
 export function loadConfig(env: Env = process.env): SyncConfig {
   const production = env.NODE_ENV === 'production'
@@ -347,5 +368,7 @@ export function loadConfig(env: Env = process.env): SyncConfig {
       1_000,
       24 * 60 * 60_000,
     ),
+    engine: parseEngine(read(env, 'DRAFTROOM_ENGINE')),
+    testHooks: parseTestHooks(env),
   }
 }

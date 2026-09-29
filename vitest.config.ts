@@ -1,5 +1,13 @@
 import { defineConfig } from 'vitest/config'
 
+/**
+ * Spike B (docs/EXCALIDRAW-MIGRATION.md §8.6.2): the C0 arrow acceptance tests run against O1's real room
+ * and FAIL against the C0 stubs, so they are kept out of the default run until M1 and run on their own:
+ * `pnpm test:arrows` (vitest.arrows.config.ts, project `sync-arrows-acceptance`). From M1 on the lead moves
+ * that project into this list, and they are part of every gate.
+ */
+export const ARROWS_ACCEPTANCE = 'apps/sync/test/room/arrows/**'
+
 export default defineConfig({
   test: {
     projects: [
@@ -18,6 +26,7 @@ export default defineConfig({
           name: 'sync',
           environment: 'node',
           include: ['apps/sync/src/**/*.test.ts', 'apps/sync/test/**/*.test.ts'],
+          exclude: [ARROWS_ACCEPTANCE, '**/node_modules/**'],
           testTimeout: 60_000,
           hookTimeout: 60_000,
         },
@@ -55,10 +64,15 @@ export default defineConfig({
             'packages/templates/src/**/*.test.ts',
             'packages/blob-store/src/**/*.test.ts',
             'packages/blob-store/test/**/*.test.ts',
+            // spike B: O4's converter package
+            'packages/tldraw-import/src/**/*.test.ts',
+            'packages/tldraw-import/test/**/*.test.ts',
           ],
           testTimeout: 60_000,
         },
       },
+      // spike B: O3's load generator's own unit tests (e2e/load/**; the runs themselves are Node scripts)
+      { test: { name: 'e2e-load', environment: 'node', include: ['e2e/load/**/*.test.ts'] } },
       {
         test: {
           name: 'api',

@@ -25,7 +25,7 @@
             "patterns": [
               {
                 "group": ["@excalidraw/*", "@excalidraw/**"],
-                "message": "Only apps/web/src/canvas/**, apps/web/test/engine-probe/** and packages/canvas-schema/src/engine/** may import @excalidraw/* (docs/EXCALIDRAW-MIGRATION.md §2.3.1). Go through the canvas port or the canvas-schema engine wrappers."
+                "message": "Only apps/web/src/canvas/**, apps/web/test/engine-probe/** and packages/canvas-schema/src/engine/** may import @excalidraw/* (docs/EXCALIDRAW-MIGRATION.md §2.3.1); tests that build engine samples (packages/canvas-schema/src/**/*.test.ts, the C0 arrow acceptance tests) too. Go through the canvas port or the canvas-schema engine wrappers."
               }
             ]
           }
@@ -38,7 +38,9 @@
       "includes": [
         "apps/web/src/canvas/**",
         "apps/web/test/engine-probe/**",
-        "packages/canvas-schema/src/engine/**"
+        "packages/canvas-schema/src/engine/**",
+        "packages/canvas-schema/src/**/*.test.ts",
+        "apps/sync/test/room/arrows/**"
       ],
       "linter": { "rules": { "style": { "noRestrictedImports": "off" } } }
     }

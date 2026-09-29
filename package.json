@@ -17,7 +17,8 @@
     "fixtures": "pnpm --filter @draftroom/worker fixtures",
     "lint": "biome check .",
     "format": "biome check --write .",
-    "verify": "pnpm lint && pnpm typecheck && pnpm test && pnpm e2e"
+    "verify": "pnpm lint && pnpm typecheck && pnpm test && pnpm e2e",
+    "test:arrows": "vitest run -c vitest.arrows.config.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "catalog:",

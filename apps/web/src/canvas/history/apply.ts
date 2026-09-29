@@ -76,7 +76,9 @@ const isBookkeepingOnly = (c: ElementChange) =>
   Object.keys(c.fields).length === 0 && Object.keys(c.lobby).length === 0 && !c.groupIds && !!c.bound
 
 /** groups whose recorded fields are compared and restored as one unit */
-const COUPLED = new Set<GroupName>(['pos', 'shape', 'layout'])
+// `path`: an arrow's or a line's whole geometry (canvas-schema groups.ts, revisions 3.4/3.5). O2 replaces its
+// field compare with the user-set geometry compare of §2.8 (`sameUserSetGeometry`) in spike B.
+const COUPLED = new Set<GroupName>(['pos', 'shape', 'layout', 'path'])
 
 const REF_FIELDS = ['containerId', 'frameId'] as const
 

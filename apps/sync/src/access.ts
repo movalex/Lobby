@@ -2,8 +2,8 @@
 // module notices revocations and role changes while sockets stay open.
 import { INTERNAL_SECRET_HEADER } from '@draftroom/auth-tickets'
 import { TLSyncErrorCloseEventReason } from '@tldraw/sync-core'
+import type { SessionDirectory } from './engine-switch.ts'
 import { BOARD_ROLES, type BoardRole } from './permissions.ts'
-import type { RoomRegistry } from './rooms.ts'
 
 export interface AccessClient {
   /** The user's current role on the board, or null for no access. Throws when the API cannot answer. */
@@ -60,7 +60,8 @@ export function createApiAccessClient(opts: ApiAccessClientOptions): AccessClien
 }
 
 export interface AccessMonitorOptions {
-  registry: RoomRegistry
+  /** The tldraw RoomRegistry, or the ElementRoom service (spike B): both are a SessionDirectory. */
+  registry: SessionDirectory
   client: AccessClient
   intervalMs: number
   log: (...a: unknown[]) => void

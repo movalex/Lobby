@@ -1,3 +1,4 @@
+import { createHmac } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { checkInternalSecret, checkSecret, signTicket, TICKET_TTL_MS, verifyTicket } from './index.ts'
 
@@ -57,5 +58,49 @@ describe('secrets', () => {
     expect(checkInternalSecret(`${SECRET} `, SECRET)).toBe(false)
     expect(checkInternalSecret(undefined, SECRET)).toBe(false)
     expect(checkInternalSecret(['a'], SECRET)).toBe(false)
+  })
+})
+
+// Spike B contracts step C0 (docs/EXCALIDRAW-MIGRATION.md §1 A3, §3.5).
+describe('A3 guest claim and the uid length', () => {
+  const resign = (claims: object) => {
+    // a correctly signed ticket around arbitrary claims (what a buggy or hostile signer could produce)
+    const signed = `v1.${Buffer.from(JSON.stringify(claims)).toString('base64url')}`
+    return `${signed}.${createHmac('sha256', SECRET).update(signed).digest('base64url')}`
+  }
+
+  it('carries guest: true only when asked, and verifies it', () => {
+    const g = signTicket(SECRET, { ...base, guest: true, now: 1_000 })
+    expect(g.claims.guest).toBe(true)
+    expect(verifyTicket(SECRET, g.ticket, { boardId: base.bid, now: 2_000 })).toEqual({
+      ok: true,
+      claims: g.claims,
+    })
+    const n = signTicket(SECRET, { ...base, guest: false, now: 1_000 })
+    expect('guest' in n.claims).toBe(false)
+    expect(JSON.parse(Buffer.from(n.ticket.split('.')[1] ?? '', 'base64url').toString())).not.toHaveProperty(
+      'guest',
+    )
+  })
+
+  it('refuses a guest claim that is not exactly true', () => {
+    const { claims } = signTicket(SECRET, { ...base, now: 1_000 })
+    for (const guest of [false, 'true', 1, null])
+      expect(verifyTicket(SECRET, resign({ ...claims, guest }), { boardId: base.bid, now: 2_000 })).toEqual({
+        ok: false,
+        reason: 'bad_claims',
+      })
+  })
+
+  it('caps the uid at 60 characters when signing and when verifying', () => {
+    expect(() => signTicket(SECRET, { ...base, uid: 'u'.repeat(61) })).toThrow(/uid/)
+    expect(signTicket(SECRET, { ...base, uid: 'u'.repeat(60) }).claims.uid).toHaveLength(60)
+    const { claims } = signTicket(SECRET, { ...base, now: 1_000 })
+    expect(
+      verifyTicket(SECRET, resign({ ...claims, uid: 'u'.repeat(61) }), { boardId: base.bid, now: 2_000 }),
+    ).toEqual({
+      ok: false,
+      reason: 'bad_claims',
+    })
   })
 })

@@ -1,5 +1,6 @@
 import { createSyncServer } from './app.ts'
 import { loadConfig, type SyncConfig } from './config.ts'
+import { loadEngine } from './engine-switch.ts'
 
 let config: SyncConfig
 try {
@@ -10,7 +11,15 @@ try {
   process.exit(1)
 }
 
-const server = createSyncServer(config)
+// Spike B (engine-switch.ts): the engine's own modules register themselves before the server is built.
+let server: ReturnType<typeof createSyncServer>
+try {
+  await loadEngine(config.engine ?? 'tldraw')
+  server = createSyncServer(config)
+} catch (e) {
+  console.error(`sync: cannot start: ${(e as Error).message}`)
+  process.exit(1)
+}
 let port: number
 try {
   ;({ port } = await server.listen())

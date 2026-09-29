@@ -15,7 +15,16 @@ export interface TicketClaims {
   iat: number
   exp: number
   jti: string
+  /**
+   * A3 (docs/EXCALIDRAW-MIGRATION.md §1): present and true for a name-only guest. Guest limits (half the
+   * op rate, a 500-item creation cap, Lobby-relative links only, no lock or unlock) are enforced by sync
+   * from this claim. Absent for everyone else (older tickets never carry it).
+   */
+  guest?: true
 }
+
+/** A ticket's `uid` is at most this many characters (§3.5: the +1 budget assumes it; api ids are 44). */
+export const MAX_TICKET_UID_CHARS = 60
 
 export const TICKET_TTL_MS = 60_000
 export const INTERNAL_SECRET_HEADER = 'x-draftroom-internal'
@@ -41,11 +50,15 @@ export interface SignInput {
   name: string
   color: string
   role: TicketRole
+  /** A3: sign a guest's ticket (the claim is only ever `true`; omit it for everyone else). */
+  guest?: boolean
   ttlMs?: number
   now?: number
 }
 
 export function signTicket(secret: string, input: SignInput): { ticket: string; claims: TicketClaims } {
+  if (!input.uid || input.uid.length > MAX_TICKET_UID_CHARS)
+    throw new Error(`ticket uid must be 1-${MAX_TICKET_UID_CHARS} characters`)
   const now = input.now ?? Date.now()
   const claims: TicketClaims = {
     bid: input.bid,
@@ -57,6 +70,7 @@ export function signTicket(secret: string, input: SignInput): { ticket: string; 
     exp: now + (input.ttlMs ?? TICKET_TTL_MS),
     jti: randomBytes(12).toString('base64url'),
   }
+  if (input.guest) claims.guest = true
   const payload = b64(JSON.stringify(claims))
   const signed = `${VERSION}.${payload}`
   return { ticket: `${signed}.${b64(mac(secret, signed))}`, claims }
@@ -106,6 +120,8 @@ function isClaims(c: unknown): c is TicketClaims {
     typeof o.bid === 'string' &&
     typeof o.uid === 'string' &&
     o.uid.length > 0 &&
+    o.uid.length <= MAX_TICKET_UID_CHARS &&
+    (o.guest === undefined || o.guest === true) &&
     typeof o.name === 'string' &&
     typeof o.color === 'string' &&
     typeof o.role === 'string' &&

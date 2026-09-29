@@ -14,13 +14,17 @@
     "@draftroom/auth-tickets": "workspace:*",
     "@draftroom/blob-store": "workspace:*",
     "@draftroom/canvas-schema": "workspace:*",
+    "@draftroom/contracts": "workspace:*",
     "@draftroom/dev-assets": "workspace:*",
     "@draftroom/permissions": "workspace:*",
+    "@draftroom/tldraw-import": "workspace:*",
     "@tldraw/sync-core": "catalog:",
     "@tldraw/tlschema": "catalog:",
-    "ws": "catalog:"
+    "ws": "catalog:",
+    "zod": "catalog:"
   },
   "devDependencies": {
+    "@excalidraw/element": "catalog:",
     "@types/ws": "catalog:"
   }
 }

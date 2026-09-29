@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { checkInternalSecret, INTERNAL_SECRET_HEADER } from '@draftroom/auth-tickets'
 import { type BackupService, handleBackupStatus } from '../backup/service.ts'
+import { BoardOpenRefused, type InternalRoute } from '../engine-switch.ts'
 import { handleAssetRefs } from './asset-refs.ts'
 import { handleBoardText } from './board-text.ts'
 import {
@@ -18,13 +19,22 @@ export interface RouterDeps extends InternalDeps {
   internalSecret: string
   /** Offsite backup status (absent = off). */
   backups?: Pick<BackupService, 'status'>
+  /**
+   * Spike B (engine-switch.ts): routes of the running engine (the ElementRoom's board routes,
+   * /internal/metrics, the test hooks), matched first. Behind the same secret check.
+   */
+  engineRoutes?: readonly InternalRoute[]
+  /** false: the tldraw board routes are not mounted (DRAFTROOM_ENGINE=excalidraw). Default true. */
+  tldrawBoardRoutes?: boolean
 }
 
 type Handler = (req: IncomingMessage, res: ServerResponse, deps: RouterDeps, seg: string[]) => unknown
+type Route = { re: RegExp; methods: string[]; handle: Handler }
 
 // Captures are raw (still percent-encoded) path segments; board ids are checked against a strict
 // pattern before use, so an encoded '/' or '..' can only ever fail that check.
-const INTERNAL_ROUTES: Array<{ re: RegExp; methods: string[]; handle: Handler }> = [
+// Engine-neutral routes: served whatever DRAFTROOM_ENGINE is.
+const NEUTRAL_ROUTES: Route[] = [
   {
     re: /^\/internal\/access-changed$/,
     methods: ['POST'],
@@ -36,6 +46,9 @@ const INTERNAL_ROUTES: Array<{ re: RegExp; methods: string[]; handle: Handler }>
     methods: ['GET'],
     handle: (_req, res, deps) => handleBackupStatus(res, deps.backups),
   },
+]
+// The tldraw board routes open tldraw storage on the board file: only with the tldraw engine.
+const TLDRAW_BOARD_ROUTES: Route[] = [
   {
     re: /^\/internal\/boards\/([^/]+)\/snapshot$/,
     methods: ['GET'],
@@ -87,7 +100,17 @@ async function route(req: IncomingMessage, res: ServerResponse, url: URL, deps: 
     // Before routing: without the secret, the internal surface is indistinguishable from a wall.
     if (!checkInternalSecret(req.headers[INTERNAL_SECRET_HEADER], deps.internalSecret))
       throw new HttpError(401, 'UNAUTHORIZED', 'Missing or invalid internal credentials.')
-    for (const r of INTERNAL_ROUTES) {
+    const engine: Route[] = (deps.engineRoutes ?? []).map((r) => ({
+      re: r.path,
+      methods: [r.method],
+      handle: (req, res, _deps, seg) => r.handle(req, res, seg),
+    }))
+    const routes = [
+      ...engine,
+      ...NEUTRAL_ROUTES,
+      ...(deps.tldrawBoardRoutes === false ? [] : TLDRAW_BOARD_ROUTES),
+    ]
+    for (const r of routes) {
       const m = r.re.exec(p)
       if (!m) continue
       if (!r.methods.includes(req.method ?? '')) {
@@ -123,6 +146,8 @@ export function createRequestHandler(deps: RouterDeps) {
     return handled.catch((e: unknown) => {
       let err: HttpError
       if (e instanceof HttpError) err = e
+      // The R0 stand-in refusing a board born on the new canvas (spike B, engine-switch.ts pre-open checks).
+      else if (e instanceof BoardOpenRefused) err = new HttpError(409, 'new-canvas', e.message)
       else {
         deps.log('[http error]', req.method, path, e)
         err = new HttpError(500, 'INTERNAL', 'Something went wrong. Please try again.')

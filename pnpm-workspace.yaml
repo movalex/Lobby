@@ -9,6 +9,9 @@ catalog:
   tldraw: 5.4.2
   '@tldraw/sync': 5.4.2
   '@tldraw/sync-core': 5.4.2
+  # packages/tldraw-import keeps exactly five MIT tldraw packages (D13): tlschema, utils, store, state, validate
+  '@tldraw/state': 5.4.2
+  '@tldraw/store': 5.4.2
   '@tldraw/tlschema': 5.4.2
   '@tldraw/validate': 5.4.2
   '@tldraw/assets': 5.4.2

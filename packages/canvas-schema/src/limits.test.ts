@@ -1,0 +1,269 @@
+/**
+ * Limit samples (spike B contracts step C0; docs/EXCALIDRAW-MIGRATION.md §3.3–3.6, §6.1): a valid and
+ * an invalid sample per element type, every limit of §3.5 with worst-case samples, the rounding rule,
+ * links and `fileId`s, the customData classes' value schemas and budgets, doc keys and object refs.
+ */
+import { describe, expect, it } from 'vitest'
+import { checkLobbyData, LOBBY_KEY_SPECS, lobbyKeySpec, lobbyValueProblem } from './custom-data.ts'
+import { canWriteDocKey, docValueProblem } from './doc.ts'
+import { checkElement, ELEMENT_TYPES, REFUSED_ELEMENT_TYPES } from './elements.ts'
+import {
+  COORD_LIMIT,
+  FILE_ID_PATTERN,
+  GEOMETRY_TOLERANCE_PX,
+  isAllowedLink,
+  jsonByteLength,
+  MAX_ELEMENT_BYTES,
+  MAX_FREEDRAW_POINTS,
+  MAX_LINEAR_POINTS,
+  MAX_ORIGINAL_TEXT_CHARS,
+  PLUS_ONES_MAX,
+  pdfPageOf,
+  roundGeometry,
+  stripLocalFileSuffix,
+  versionIdOf,
+} from './limits.ts'
+import { fromShapeRef, toShapeRef } from './refs.ts'
+import { SAMPLE_ELEMENTS as E } from './test-samples.ts'
+
+// biome-ignore lint/suspicious/noExplicitAny: the engine's own element objects, built by its constructors
+type Any = any
+const code = (el: unknown) => {
+  const r = checkElement(el)
+  return r.ok ? 'ok' : r.code
+}
+
+describe('element schemas (§3.1, §3.5)', () => {
+  it('a valid sample of every stored type passes', () => {
+    const types = new Set(Object.values(E).map((e) => e.type))
+    expect([...types].sort()).toEqual([...ELEMENT_TYPES].sort())
+    for (const [name, el] of Object.entries(E)) expect(code(el), name).toBe('ok')
+  })
+
+  it('an invalid sample of every type is refused', () => {
+    for (const [name, el] of Object.entries(E)) {
+      expect(code({ ...el, surprise: true }), `${name} + unknown key`).toBe('INVALID')
+      expect(code({ ...el, x: Number.NaN }), `${name} NaN`).toBe('INVALID')
+      const { id: _, ...noId } = el as Any
+      expect(code(noId), `${name} without id`).toBe('INVALID')
+    }
+    for (const t of REFUSED_ELEMENT_TYPES) expect(code({ ...E.rectangle, type: t }), t).toBe('INVALID')
+  })
+
+  it('fonts are 5, 6 or 8 (F15)', () => {
+    for (const f of [5, 6, 8]) expect(code({ ...E.text, fontFamily: f })).toBe('ok')
+    for (const f of [1, 2, 3, 4, 7, 9, 10])
+      expect(code({ ...E.text, fontFamily: f }), `family ${f}`).toBe('INVALID')
+  })
+
+  it('x, y, width and height within ±1e6 (F16)', () => {
+    expect(code({ ...E.rectangle, x: COORD_LIMIT })).toBe('ok')
+    expect(code({ ...E.rectangle, x: 2e6 })).toBe('INVALID')
+    expect(code({ ...E.rectangle, width: -COORD_LIMIT - 1 })).toBe('INVALID')
+  })
+
+  it('point counts: 1,000 for lines and arrows, 2,500 for freedraw', () => {
+    const pts = (n: number) => Array.from({ length: n }, (_, i) => [i % 97, Math.floor(i / 97)])
+    expect(code({ ...E.line, points: pts(MAX_LINEAR_POINTS) })).toBe('ok')
+    expect(code({ ...E.line, points: pts(MAX_LINEAR_POINTS + 1) })).toBe('INVALID')
+    expect(code({ ...E.arrow, points: pts(MAX_LINEAR_POINTS + 1) })).toBe('INVALID')
+    expect(code({ ...E.freedraw, points: pts(MAX_FREEDRAW_POINTS) })).toBe('ok')
+    expect(code({ ...E.freedraw, points: pts(MAX_FREEDRAW_POINTS + 1) })).toBe('INVALID')
+  })
+
+  it('per-type byte limits hold their worst cases (text 144 KiB, freedraw 64 KiB, others 32 KiB)', () => {
+    // two copies of 20,000 three-byte characters fit a text; a 20,001-character original does not
+    const worst = 'あ'.repeat(MAX_ORIGINAL_TEXT_CHARS)
+    const text = { ...E.text, text: worst, originalText: worst }
+    expect(jsonByteLength(text)).toBeLessThan(MAX_ELEMENT_BYTES.text)
+    expect(code(text)).toBe('ok')
+    expect(code({ ...E.text, originalText: 'x'.repeat(MAX_ORIGINAL_TEXT_CHARS + 1) })).toBe('INVALID')
+    // 2,500 rounded points with pressures fit a freedraw
+    const pts = Array.from({ length: MAX_FREEDRAW_POINTS }, (_, i) => [123.45 + i, 678.9 - i])
+    const draw = { ...E.freedraw, points: pts, pressures: pts.map(() => 0.55), simulatePressure: false }
+    expect(code(draw)).toBe('ok')
+    // 1,000 rounded arrow points fit 32 KiB; 1,000 unrounded ones do not (spike A16-static: 39.6 KB)
+    const rounded = Array.from({ length: MAX_LINEAR_POINTS }, (_, i): [number, number] => [
+      1234.56 + i,
+      -987.65 - i,
+    ])
+    expect(code({ ...E.arrow, points: rounded })).toBe('ok')
+    const raw = rounded.map(([x, y]) => [x + 0.123456789012, y - 0.987654321098])
+    expect(code({ ...E.arrow, points: raw })).toBe('TOO_LARGE')
+    // a rectangle over 32 KiB (a huge link is refused first; use the frame name budget instead)
+    expect(code({ ...E.frame, name: 'n'.repeat(201) })).toBe('INVALID')
+  })
+
+  it('freedraw pressures match its points', () => {
+    expect(code({ ...E.freedraw, pressures: [0.5] })).toBe('INVALID')
+    expect(code({ ...E.freedraw, pressures: [0.5, 0.5, 0.5] })).toBe('ok')
+  })
+
+  it('links: http(s), mailto or Lobby-relative; never data:, javascript: or signed (F10)', () => {
+    for (const l of ['https://example.com/a?b=1', 'http://x.test', 'mailto:a@b.test', '/b/board-1?el=a,b'])
+      expect(isAllowedLink(l), l).toBe(true)
+    for (const l of [
+      'javascript:alert(1)',
+      'data:text/html,hi',
+      'https://bucket.r2.cloudflarestorage.com/k?X-Amz-Signature=abc',
+      'https://cdn.test/f?Signature=abc&Expires=1',
+      '//evil.test/a',
+      'ftp://x.test',
+      `https://x.test/${'a'.repeat(2100)}`,
+      'https://user:pw@x.test',
+    ])
+      expect(isAllowedLink(l), l).toBe(false)
+    expect(isAllowedLink('https://example.com', { guest: true })).toBe(false)
+    expect(isAllowedLink('/b/board-1', { guest: true })).toBe(true)
+    expect(code({ ...E.rectangle, link: 'javascript:alert(1)' })).toBe('INVALID')
+  })
+
+  it('fileId: a Lobby version id, or a placed PDF page (F9, §3.1)', () => {
+    for (const f of ['ver_0123456789', 'ver_0123456789abcdef.p3', 'ver_0123456789.p9999'])
+      expect(FILE_ID_PATTERN.test(f), f).toBe(true)
+    for (const f of [
+      'ver_short',
+      'ast_0123456789',
+      'blob:http://x/1',
+      'data:image/png;base64,AA',
+      'ver_0123456789.p0',
+    ])
+      expect(FILE_ID_PATTERN.test(f), f).toBe(false)
+    expect(pdfPageOf('ver_0123456789.p12')).toBe(12)
+    expect(versionIdOf('ver_0123456789.p12')).toBe('ver_0123456789')
+    expect(stripLocalFileSuffix('ver_0123456789@thumb')).toBe('ver_0123456789')
+    expect(code({ ...E.image, fileId: 'data:image/png;base64,AA' })).toBe('INVALID')
+  })
+})
+
+describe('the rounding rule and the tolerance (revision 3.5)', () => {
+  it('rounds points, pressures and fixed segments to 2 decimals; x, y only when unrotated', () => {
+    const arrow = {
+      ...E.arrow,
+      x: 205.123456,
+      y: 50.987654,
+      points: [
+        [0, 0],
+        [300.004, 299.996],
+      ],
+    } as Any
+    const r = roundGeometry(arrow)
+    expect(r.x).toBe(205.12)
+    expect(r.y).toBe(50.99)
+    expect(r.points).toEqual([
+      [0, 0],
+      [300, 300],
+    ])
+    const rotated = roundGeometry({ ...arrow, angle: 0.6 })
+    expect(rotated.x).toBe(205.123456)
+    expect(rotated.y).toBe(50.987654)
+    expect(rotated.points).toEqual([
+      [0, 0],
+      [300, 300],
+    ])
+    const elbow = roundGeometry({
+      ...E.elbow,
+      fixedSegments: [{ start: [50.004, 0], end: [50.004, 100.006], index: 2 }],
+    } as Any)
+    expect(elbow.fixedSegments).toEqual([{ start: [50, 0], end: [50, 100.01], index: 2 }])
+    const draw = roundGeometry({ ...E.freedraw, points: [[1.234, 5.678]], pressures: [0.5555] } as Any)
+    expect(draw.points).toEqual([[1.23, 5.68]])
+    expect(draw.pressures).toEqual([0.56])
+    expect(draw.x).toBe(0)
+    const rect = { ...E.rectangle, x: 1.23456 } as Any
+    expect(roundGeometry(rect)).toBe(rect)
+    expect(GEOMETRY_TOLERANCE_PX).toBe(0.5)
+  })
+})
+
+describe('customData classes (§3.3)', () => {
+  it('every key the checks use has a spec with a class and a duplicate rule', () => {
+    const names = LOBBY_KEY_SPECS.map((s) => s.name).sort()
+    expect(names).toEqual(
+      [
+        'tag:',
+        'plusOne:',
+        'file',
+        'pdfPage',
+        'kind',
+        'ai',
+        'privateFrame',
+        'mindmap',
+        'mindmapEdge',
+        'alt',
+        'present',
+      ].sort(),
+    )
+    expect(lobbyKeySpec('plusOne:usr_0123456789')?.class).toBe('identity-bound')
+    expect(lobbyKeySpec('ai')?.class).toBe('create-only')
+    expect(lobbyKeySpec('file')?.class).toBe('api-validated')
+    expect(lobbyKeySpec('ai')?.duplicate).toBe('strip')
+    expect(lobbyKeySpec('present')?.duplicate).toBe('strip-index')
+    expect(lobbyKeySpec('whatever')).toBeNull()
+  })
+
+  it('value schemas: tags as today, +1 as an epoch ms, file facts canonical, create-only stamps', () => {
+    expect(lobbyValueProblem('tag:research', { name: 'research', color: 'blue' })).toBeNull()
+    expect(lobbyValueProblem('tag:research', { name: 'Research', color: 'blue' })).toBeNull()
+    expect(lobbyValueProblem('tag:other', { name: 'research', color: 'blue' })).not.toBeNull()
+    expect(lobbyValueProblem('tag:research', { name: 'research', color: 'magenta' })).not.toBeNull()
+    expect(lobbyValueProblem('plusOne:usr_0123456789', true)).toBeNull()
+    expect(lobbyValueProblem('plusOne:usr_0123456789', 1_790_000_000_000)).not.toBeNull()
+    expect(lobbyValueProblem(`plusOne:${'u'.repeat(61)}`, true)).not.toBeNull()
+    expect(lobbyValueProblem('ai', { by: 'usr_0123456789', run: 'r1' })).toBeNull()
+    expect(lobbyValueProblem('privateFrame', { session: 's1', by: 'usr_0123456789' })).toBeNull()
+    expect(
+      lobbyValueProblem('mindmap', { rootId: 'a', parentId: null, side: 'right', collapsed: true }),
+    ).toBeNull()
+    expect(
+      lobbyValueProblem('mindmap', { rootId: 'shape:a b', parentId: null, side: 'right', collapsed: true }),
+    ).not.toBeNull()
+    expect(lobbyValueProblem('alt', 'x'.repeat(501))).not.toBeNull()
+    expect(lobbyValueProblem('present', { index: 2 })).toBeNull()
+  })
+
+  it('budgets: 200 +1s of 60-character uids within 16 KiB; 8 KiB for the rest; 10 tags', () => {
+    const plus: Record<string, unknown> = {}
+    for (let i = 0; i < PLUS_ONES_MAX; i++) plus[`plusOne:${`u${i}`.padEnd(60, 'x')}`] = true
+    expect(checkLobbyData(plus)).toEqual({ ok: true })
+    expect(checkLobbyData({ ...plus, [`plusOne:${'z'.repeat(60)}`]: true })).toMatchObject({
+      ok: false,
+      code: 'INVALID',
+    })
+    const tags: Record<string, unknown> = {}
+    for (let i = 0; i < 11; i++) tags[`tag:t${i}`] = { name: `t${i}`, color: 'blue' }
+    expect(checkLobbyData(tags)).toMatchObject({ ok: false, code: 'INVALID' })
+    const big: Record<string, unknown> = { alt: 'あ'.repeat(500) }
+    for (let i = 0; i < 10; i++)
+      big[`tag:${'t'.repeat(20)}${i}`] = { name: `${'t'.repeat(20)}${i}`, color: 'blue' }
+    expect(checkLobbyData(big)).toEqual({ ok: true })
+    expect(checkLobbyData({ 'made-up': 1 })).toMatchObject({ ok: false, code: 'INVALID' })
+    expect(code({ ...E.rectangle, customData: { other: {} } })).toBe('INVALID')
+    expect(code({ ...E.rectangle, customData: { lobby: { 'plusOne:usr_1': 'x' } } })).toBe('INVALID')
+    // the worst case of §3.5: 200 +1s of 60-character uids on one note
+    expect(code({ ...E.stickynote, customData: { lobby: plus } })).toBe('ok')
+  })
+})
+
+describe('the board document (§3.4) and object refs (§3.6)', () => {
+  it('doc keys are validated per key; import is the server’s', () => {
+    expect(docValueProblem('startView', { x: 0, y: 0, w: 10, h: 10 })).toBeNull()
+    expect(docValueProblem('startView', { x: 0, y: 0, w: 10, h: 10, pageId: 'page:1' })).not.toBeNull()
+    expect(docValueProblem('tagDef:research', { name: 'research', color: 'blue' })).toBeNull()
+    expect(docValueProblem('tagDef:other', { name: 'research', color: 'blue' })).not.toBeNull()
+    expect(docValueProblem('workshop', null)).toBeNull()
+    expect(docValueProblem('drStartView', {})).not.toBeNull()
+    expect(canWriteDocKey('import', 'owner')).toBe(false)
+    expect(canWriteDocKey('startView', 'editor')).toBe(false)
+    expect(canWriteDocKey('workshop', 'editor')).toBe(true)
+    expect(canWriteDocKey('tagDef:x', 'commenter')).toBe(false)
+  })
+
+  it('shape: refs map to element ids and back', () => {
+    expect(toShapeRef('abc_1.t')).toBe('shape:abc_1.t')
+    expect(fromShapeRef('shape:abc_1.t')).toBe('abc_1.t')
+    expect(fromShapeRef('page:abc')).toBeNull()
+    expect(fromShapeRef('shape:a,b')).toBeNull()
+    expect(() => toShapeRef('a b')).toThrow()
+  })
+})

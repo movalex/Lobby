@@ -1,0 +1,285 @@
+/**
+ * The `customData` key registry (docs/EXCALIDRAW-MIGRATION.md §3.3), frozen at the spike B contracts
+ * step C0. Only two top-level keys exist: `lobby` (client-writable, per key, by class) and `lobbyServer`
+ * (server-owned). Every `customData.lobby` key has a spec here: its class, its value schema, its size and
+ * what `onDuplicate` does with it. A key with no spec is `INVALID`.
+ *
+ * The CLASS rules (who may write a key, and when) are enforced by the server (`apps/sync/src/room/
+ * custom-data.ts`, O1); this file only says which class a key is in and what a valid value looks like.
+ *
+ * Pure: zod and `@draftroom/contracts` (browser-safe), no engine code.
+ */
+import { MINDMAP_SIDES, parseTagValue } from '@draftroom/contracts'
+import { z } from 'zod'
+import {
+  ASSET_ID_PATTERN,
+  ELEMENT_ID_PATTERN,
+  jsonByteLength,
+  MAX_ALT_CHARS,
+  MAX_FILE_NAME_CHARS,
+  MAX_LOBBY_CUSTOM_DATA_BYTES,
+  MAX_TAGS_PER_ELEMENT,
+  MAX_UID_CHARS,
+  PLUS_ONES_BUDGET_BYTES,
+  PLUS_ONES_MAX,
+  VERSION_ID_PATTERN,
+} from './limits.ts'
+
+/** The two top-level `customData` keys (§3.3). Anything else is `INVALID`. */
+export const CUSTOM_DATA_KEYS = ['lobby', 'lobbyServer'] as const
+
+/**
+ * The five classes (§3.3):
+ * 1. `server-owned` — `customData.lobbyServer`; only the server writes it; a client value is replaced by the stored one.
+ * 2. `create-only` — accepted only in the op that creates the element; `by` must equal the writer's uid
+ *    (stamped if absent); later changes are `INVALID`; removal allowed for the `by` user or an owner.
+ * 3. `identity-bound` — `plusOne:<uid>`: add or remove only where `<uid>` is the writer's uid; an addition
+ *    while a dot vote is open is `VOTE_OPEN`.
+ * 4. `api-validated` — `file` (canonicalized from the file-refs answer; `versionId` must equal the
+ *    version in `fileId`; `name` is client-writable) and `pdfPage` (derived from the `.p<n>` suffix).
+ * 5. `free` — zod per key.
+ */
+export type CustomDataClass = 'server-owned' | 'create-only' | 'identity-bound' | 'api-validated' | 'free'
+
+/**
+ * What `onDuplicate` (Ctrl+D, Alt-drag, paste) does with a key (§3.3 "On duplicate / paste"):
+ * `keep` it; `strip` it; `relink` the element ids inside it to the copies, or strip it when the copy
+ * leaves the tree (`mindmap`, `mindmapEdge`); `strip-index` removes only `present.index`.
+ */
+export type DuplicateRule = 'keep' | 'strip' | 'relink' | 'strip-index'
+
+export interface LobbyKeySpec {
+  /** `exact`: the key is `name`; `prefix`: the key is `name` + a suffix (`tag:<tagKey>`, `plusOne:<uid>`). */
+  readonly match: 'exact' | 'prefix'
+  readonly name: string
+  readonly class: Exclude<CustomDataClass, 'server-owned'>
+  /** The value's schema. For `prefix` keys the suffix is checked by `suffix`. */
+  readonly value: z.ZodType
+  readonly suffix?: (suffix: string, value: unknown) => boolean
+  /** UTF-8 JSON bytes of the value. */
+  readonly maxBytes: number
+  readonly duplicate: DuplicateRule
+}
+
+const Uid = z.string().min(1).max(MAX_UID_CHARS)
+const ElementRef = z.string().regex(ELEMENT_ID_PATTERN)
+const Session = z.string().min(1).max(200)
+
+/** `tag:<tagKey>` → `{name, color}` exactly as today's tag contract validates it (`parseTagValue`). */
+const TagValue = z.strictObject({ name: z.string().min(1).max(100), color: z.string().min(1).max(32) })
+/**
+ * `plusOne:<uid>` → `true`. The value is kept this short on purpose: §3.5's +1 budget (16 KiB) must hold
+ * 200 keys of 60-character uids (about 76 B each with `true`; an epoch-ms value would make it 85 B, 17 KB).
+ * The order of +1s is therefore not stored; readers order them by uid.
+ */
+const PlusOneValue = z.literal(true)
+/** `file`: the card's stable facts (§2.10.4); live facts come from the api at runtime, never from here. */
+export const FileValue = z.strictObject({
+  assetId: z.string().regex(ASSET_ID_PATTERN),
+  versionId: z.string().regex(VERSION_ID_PATTERN),
+  kind: z.enum(['image', 'pdf', 'video', 'other']),
+  name: z.string().max(MAX_FILE_NAME_CHARS),
+  mimeType: z.string().min(1).max(255),
+  sizeBytes: z.number().int().nonnegative(),
+})
+export type FileValue = z.infer<typeof FileValue>
+/** `pdfPage`: the page of a placed PDF page (derived from `fileId`'s `.p<n>`). */
+const PdfPageValue = z.number().int().min(1).max(9_999)
+/**
+ * `kind`: what Lobby made an element as, when its type alone does not say (`highlight` for a
+ * highlighter `freedraw`, §3.1). A short lowercase word; the converter may add kinds.
+ */
+const KindValue = z.string().regex(/^[a-z][a-z0-9-]{0,31}$/)
+/** `ai`: made by an AI run for user `by`. */
+const AiValue = z.strictObject({ by: Uid, run: z.string().min(1).max(64).optional() })
+/** `privateFrame`: a private-brainstorm frame of session `session`, made by `by`. */
+const PrivateFrameValue = z.strictObject({ session: Session, by: Uid })
+/** `mindmap`: a topic's place in its map (today's `drMindmap`, with element ids instead of `shape:` refs). */
+export const MindmapValue = z.strictObject({
+  rootId: ElementRef,
+  parentId: ElementRef.nullable(),
+  side: z.enum(MINDMAP_SIDES),
+  collapsed: z.boolean(),
+})
+/** `mindmapEdge`: the arrow from `parentId` to `childId` (today's `drMindmapEdge`). */
+export const MindmapEdgeValue = z.strictObject({
+  rootId: ElementRef,
+  parentId: ElementRef,
+  childId: ElementRef,
+})
+/** `alt`: alternative text. */
+const AltValue = z.string().max(MAX_ALT_CHARS)
+/** `present`: a frame's place in the presentation. */
+const PresentValue = z.strictObject({
+  index: z.number().int().nonnegative().optional(),
+  skip: z.boolean().optional(),
+})
+
+export const TAG_KEY_PREFIX = 'tag:'
+export const PLUS_ONE_KEY_PREFIX = 'plusOne:'
+
+/** The registry, for the keys spike B's checks use (§8.6.2). Order does not matter; names are unique. */
+export const LOBBY_KEY_SPECS: readonly LobbyKeySpec[] = [
+  {
+    match: 'prefix',
+    name: TAG_KEY_PREFIX,
+    class: 'free',
+    value: TagValue,
+    suffix: (key, value) => key.length <= 100 && !/\s/u.test(key) && parseTagValue(key, value) !== null,
+    maxBytes: 256,
+    duplicate: 'keep',
+  },
+  {
+    match: 'prefix',
+    name: PLUS_ONE_KEY_PREFIX,
+    class: 'identity-bound',
+    value: PlusOneValue,
+    suffix: (uid) => Uid.safeParse(uid).success,
+    maxBytes: 32,
+    duplicate: 'strip',
+  },
+  {
+    match: 'exact',
+    name: 'file',
+    class: 'api-validated',
+    value: FileValue,
+    maxBytes: 1024,
+    duplicate: 'keep',
+  },
+  {
+    match: 'exact',
+    name: 'pdfPage',
+    class: 'api-validated',
+    value: PdfPageValue,
+    maxBytes: 16,
+    duplicate: 'keep',
+  },
+  { match: 'exact', name: 'kind', class: 'create-only', value: KindValue, maxBytes: 64, duplicate: 'keep' },
+  { match: 'exact', name: 'ai', class: 'create-only', value: AiValue, maxBytes: 256, duplicate: 'strip' },
+  {
+    match: 'exact',
+    name: 'privateFrame',
+    class: 'create-only',
+    value: PrivateFrameValue,
+    maxBytes: 512,
+    duplicate: 'strip',
+  },
+  { match: 'exact', name: 'mindmap', class: 'free', value: MindmapValue, maxBytes: 512, duplicate: 'relink' },
+  {
+    match: 'exact',
+    name: 'mindmapEdge',
+    class: 'free',
+    value: MindmapEdgeValue,
+    maxBytes: 512,
+    duplicate: 'relink',
+  },
+  {
+    match: 'exact',
+    name: 'alt',
+    class: 'free',
+    value: AltValue,
+    maxBytes: 4 * MAX_ALT_CHARS + 8,
+    duplicate: 'keep',
+  },
+  {
+    match: 'exact',
+    name: 'present',
+    class: 'free',
+    value: PresentValue,
+    maxBytes: 64,
+    duplicate: 'strip-index',
+  },
+]
+
+const EXACT = new Map(LOBBY_KEY_SPECS.filter((s) => s.match === 'exact').map((s) => [s.name, s]))
+const PREFIXED = LOBBY_KEY_SPECS.filter((s) => s.match === 'prefix')
+
+/** The spec of a `customData.lobby` key, or null (an unknown key is `INVALID`). */
+export function lobbyKeySpec(key: string): LobbyKeySpec | null {
+  const exact = EXACT.get(key)
+  if (exact) return exact
+  for (const s of PREFIXED) if (key.startsWith(s.name) && key.length > s.name.length) return s
+  return null
+}
+
+/** The `<uid>` of a `plusOne:<uid>` key, or null. */
+export const plusOneUid = (key: string): string | null =>
+  key.startsWith(PLUS_ONE_KEY_PREFIX) && key.length > PLUS_ONE_KEY_PREFIX.length
+    ? key.slice(PLUS_ONE_KEY_PREFIX.length)
+    : null
+/** The `<tagKey>` of a `tag:<tagKey>` key, or null. */
+export const tagKeyOf = (key: string): string | null =>
+  key.startsWith(TAG_KEY_PREFIX) && key.length > TAG_KEY_PREFIX.length
+    ? key.slice(TAG_KEY_PREFIX.length)
+    : null
+
+/** Why one `customData.lobby` value is not valid, or null when it is. */
+export function lobbyValueProblem(key: string, value: unknown): string | null {
+  const spec = lobbyKeySpec(key)
+  if (!spec) return `unknown customData.lobby key ${JSON.stringify(key.slice(0, 64))}`
+  if (!spec.value.safeParse(value).success) return `invalid value for ${spec.name}`
+  if (spec.suffix && !spec.suffix(key.slice(spec.name.length), value)) return `invalid key ${spec.name}…`
+  if (jsonByteLength(value) > spec.maxBytes) return `${spec.name} is too large`
+  return null
+}
+
+export type LobbyCheck = { ok: true } | { ok: false; code: 'INVALID' | 'TOO_LARGE'; detail: string }
+
+/**
+ * The whole `customData.lobby` of one element: every key known and valid, at most 10 tags, at most 200
+ * `plusOne:*` keys within their own 16 KiB, and everything else within 8 KiB (§3.5).
+ */
+export function checkLobbyData(lobby: Readonly<Record<string, unknown>>): LobbyCheck {
+  let plusOnes = 0
+  let tags = 0
+  const plus: Record<string, unknown> = {}
+  const rest: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(lobby)) {
+    const problem = lobbyValueProblem(key, value)
+    if (problem) return { ok: false, code: 'INVALID', detail: problem }
+    if (key.startsWith(PLUS_ONE_KEY_PREFIX)) {
+      plusOnes++
+      plus[key] = value
+    } else {
+      if (key.startsWith(TAG_KEY_PREFIX)) tags++
+      rest[key] = value
+    }
+  }
+  if (plusOnes > PLUS_ONES_MAX)
+    return { ok: false, code: 'INVALID', detail: `more than ${PLUS_ONES_MAX} +1s` }
+  if (tags > MAX_TAGS_PER_ELEMENT)
+    return { ok: false, code: 'INVALID', detail: `more than ${MAX_TAGS_PER_ELEMENT} tags` }
+  if (jsonByteLength(plus) > PLUS_ONES_BUDGET_BYTES)
+    return { ok: false, code: 'TOO_LARGE', detail: '+1 keys over their budget' }
+  if (jsonByteLength(rest) > MAX_LOBBY_CUSTOM_DATA_BYTES)
+    return { ok: false, code: 'TOO_LARGE', detail: 'customData.lobby over its budget' }
+  return { ok: true }
+}
+
+/** Who made or edited an element, from the ticket (never from the client). */
+export const Attribution = z.strictObject({ uid: Uid, name: z.string().max(200), guest: z.boolean() })
+export type Attribution = z.infer<typeof Attribution>
+
+/**
+ * `customData.lobbyServer` (class 1, §3.3). Only the server writes it: `createdBy`/`createdAt` on
+ * create, `lastEditedBy`/`lastEditedAt` on text changes of text elements (it replaces
+ * `props.textLastEditedBy`), `privateNote` only through the `place-notes` endpoint. An anonymous reveal
+ * writes `null` authors. Archive export strips `privateNote.author` and `lastEditedBy`.
+ */
+export const LobbyServer = z.strictObject({
+  createdBy: Attribution.nullable(),
+  createdAt: z.number().int().nonnegative(),
+  lastEditedBy: Attribution.nullable(),
+  lastEditedAt: z.number().int().nonnegative(),
+  privateNote: z
+    .strictObject({ session: Session, author: z.string().min(1).max(MAX_UID_CHARS).optional() })
+    .optional(),
+})
+export type LobbyServer = z.infer<typeof LobbyServer>
+
+/** `customData` as stored and on the wire: only `lobby` and `lobbyServer`. */
+export const CustomData = z.strictObject({
+  lobby: z.record(z.string().min(1).max(200), z.unknown()).optional(),
+  lobbyServer: LobbyServer.optional(),
+})
+export type CustomData = z.infer<typeof CustomData>
