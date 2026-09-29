@@ -638,7 +638,7 @@ function InvitePeople({
         {target.kind === 'email' && linkForEmailHint(canEmail)}
         {target.kind === 'unknown' && `No one in ${workspaceName} matches. ${ASK_EMAIL_PROMPT}`}
         {(target.kind === 'empty' || target.kind === 'already') &&
-          'People in the workspace get access right away. For anyone else, enter their email address: you get a link only they can use.'}
+          'People in the workspace get access right away. For anyone else, enter their email.'}
       </p>
       {notice && (
         <p
