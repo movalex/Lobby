@@ -269,7 +269,10 @@ export interface StackOptions {
 
 export interface Stack {
   readonly dataDir: string
-  /** The canvas engine sync runs (the tldraw stacks of the default suite say `tldraw`). */
+  /**
+   * The canvas engine sync runs: from `engine`, or from a `syncEnv` that sets DRAFTROOM_ENGINE itself
+   * (spike B's launcher does); the default suite's stacks say `tldraw`.
+   */
   readonly engine: StackEngine
   readonly syncEnv: Readonly<Record<string, string>>
   /**
@@ -286,8 +289,8 @@ export interface Stack {
 }
 
 export async function startStack(opts: StackOptions = {}): Promise<Stack> {
-  const engine = opts.engine ?? 'tldraw'
-  const syncEnv = engineSyncEnv(engine, opts.syncEnv)
+  const syncEnv = engineSyncEnv(opts.engine ?? 'tldraw', opts.syncEnv)
+  const engine: StackEngine = syncEnv.DRAFTROOM_ENGINE === 'excalidraw' ? 'excalidraw' : 'tldraw'
   const dataDir = mkdtempSync(join(tmpdir(), 'dr-e2e-'))
   // Fresh secrets per stack, shared by exactly these two processes: a ticket minted by any other api
   // (a developer's `pnpm dev`, an earlier run) cannot open a board here.
