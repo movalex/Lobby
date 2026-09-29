@@ -285,6 +285,9 @@ test('invitation link: alice invites as commenter; carol signs in, accepts, and 
     const dialog = a.page.getByTestId('share-dialog')
     await expect(dialog.getByTestId('share-workspace-name')).toHaveText(`${aliceUser.name}'s workspace`)
     await openMoreWaysToShare(a.page) // DANA-03: one-time invite links are under "More ways to share"
+    // Domain access: a one-time link is for one address; carol signs in without an email, so her
+    // verified address is carol@dev.invalid.
+    await dialog.getByTestId('one-person-link-email').fill('carol@dev.invalid')
     await dialog.getByTestId('invite-role').selectOption('commenter')
     await dialog.getByTestId('invite-create').click()
     await expect(dialog.getByTestId('invite-link')).toHaveValue(/\/invite\//)
@@ -304,7 +307,7 @@ test('invitation link: alice invites as commenter; carol signs in, accepts, and 
     await page.getByTestId('invite-signin').click()
     // PRI-16: back from signing in, the invitation is accepted without a second click.
     await expect(page.getByTestId('signin-heading')).toHaveText(
-      `Sign in to join “Design review” (invited by ${aliceUser.name})`,
+      `Sign in with c•••@dev.invalid to join “Design review” (invited by ${aliceUser.name})`,
     )
     await signInThroughUi(page, { handle: 'carol', name: displayName('carol') })
     await expect(page).toHaveURL(new RegExp(`/b/${board}$`))

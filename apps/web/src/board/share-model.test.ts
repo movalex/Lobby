@@ -1,8 +1,10 @@
+import { CLERK_TEST_ADDRESS_MESSAGE } from '@draftroom/contracts'
 import { describe, expect, it } from 'vitest'
 import { makeUser, member, wsMember } from '../api/test-fixtures.ts'
 import { REVIEW_LINK_DAY_OPTIONS, REVIEW_LINK_DEFAULT_DAY } from '../features/sharing/model.ts'
 import {
   type AccessDetail,
+  ASK_EMAIL_PROMPT,
   accessSource,
   CLIENT_LINK_DEFAULTS,
   checkInviteEmail,
@@ -10,17 +12,23 @@ import {
   emailInviteHint,
   emailInviteOutcome,
   grantEditable,
+  invitePlan,
   inviteRoleOptions,
   linkAccessLine,
   linkForEmailHint,
+  lockedLinkNote,
+  memberRoleChoices,
   memberRoleEditable,
   moreWaysSummary,
+  OWNER_NEEDS_CREATOR,
   parseInviteTarget,
+  pendingInviteLabel,
   removalNote,
   removeConfirmText,
   shareableWorkspaceMembers,
   sortMembers,
   VISIBILITY_OPTIONS,
+  visibilityChoices,
   WORKSHOP_LINK_GUESTS_DEFAULT,
   workshopLinkHint,
 } from './share-model.ts'
@@ -260,14 +268,17 @@ describe('invite by email', () => {
 
   it('says whether this server can email at all', () => {
     expect(emailInviteHint(true)).toBe(
-      'We email them an invitation to this board. People who already use Lobby get access right away.',
+      'We email them an invitation to this board that works only for that address. People who already use Lobby get access right away.',
     )
     expect(emailInviteHint(false)).toContain('needs Clerk sign-in')
+    // Domain access: every invitation to an address works only for that address.
+    expect(emailInviteHint(false)).toContain('works only for that address')
     // The @handle field keeps its link-only wording on a server that cannot email.
     expect(linkForEmailHint(false)).toBe(
-      'Lobby does not send email: you get a one-time invite link to copy and send them yourself.',
+      'Lobby does not send email: you get a one-time invite link that only this address can use, to copy and send them yourself.',
     )
     expect(linkForEmailHint(true)).toContain('use “Invite by email” below')
+    expect(linkForEmailHint(true)).toContain('only this address can use')
   })
 
   it('someone who already uses Lobby: added, or already there (nothing lowered)', () => {
@@ -306,7 +317,7 @@ describe('invite by email', () => {
     ).toEqual({
       tone: 'success',
       text: 'Invitation email sent to pat@client.example.',
-      detail: 'The link in it works once, as “Can view”, until date:10-04.',
+      detail: 'The link in it works once, only for pat@client.example, as “Can view”, until date:10-04.',
       link: null,
     })
   })
@@ -335,8 +346,139 @@ describe('invite by email', () => {
       expect(outcome.tone).toBe('fallback')
       expect(outcome.text).toBe('Couldn’t email — copy this link instead.')
       expect(outcome.detail).toContain(why)
-      expect(outcome.detail).toContain('It works once, as “Can edit”, until date:10-04.')
+      expect(outcome.detail).toContain(
+        'It works once, only for pat@client.example, as “Can edit”, until date:10-04.',
+      )
       expect(outcome.link).toBe(url)
     }
+  })
+})
+
+describe('domain access: invitations locked to an address (docs/DOMAIN-ACCESS-CONTRACTS.md §9)', () => {
+  const ws = [wsMember('bob', 'member'), wsMember('carol', 'member')]
+  const board = [member('carol', 'viewer', 'grant')]
+  const plan = (text: string) => invitePlan(parseInviteTarget(text, ws, board))
+  const fmt = (iso: string) => `date:${iso.slice(5, 10)}`
+
+  it('an email target makes a locked link (normalised address) through createBoardInvitation, never a grant', () => {
+    expect(plan('  Pat@Client.Example.Test ')).toEqual({
+      kind: 'locked-link',
+      email: 'pat@client.example.test',
+    })
+    expect(plan('@bob')).toMatchObject({ kind: 'grant', member: { user: { handle: 'bob' } } })
+    expect(plan('@carol')).toMatchObject({ kind: 'already' })
+    expect(plan('  ')).toEqual({ kind: 'none' })
+  })
+
+  it('an unknown name asks for their email address instead of making a link', () => {
+    expect(plan('@zed')).toEqual({ kind: 'ask-email' })
+    expect(plan('Someone New')).toEqual({ kind: 'ask-email' })
+    expect(ASK_EMAIL_PROMPT).toBe('Enter their email address to invite them.')
+  })
+
+  it('an address the api would refuse is refused here: Clerk test addresses, non-ASCII look-alikes', () => {
+    expect(plan('anyone+clerk_test@darkburn.com')).toEqual({
+      kind: 'invalid-email',
+      message: CLERK_TEST_ADDRESS_MESSAGE,
+    })
+    expect(plan('Anyone+CLERK_TEST@client.example.test')).toMatchObject({ kind: 'invalid-email' })
+    // U+212A KELVIN SIGN: never lowercased into a real domain.
+    expect(plan('pat@dar\u212Aburn.com')).toEqual({
+      kind: 'invalid-email',
+      message: 'Enter a valid email address.',
+    })
+  })
+
+  it('checkInviteEmail refuses +clerk_test in any case', () => {
+    expect(checkInviteEmail('a+clerk_test@client.example.test')).toEqual({
+      ok: false,
+      message: CLERK_TEST_ADDRESS_MESSAGE,
+    })
+    expect(checkInviteEmail('A+Clerk_Test@client.example.test')).toMatchObject({ ok: false })
+  })
+
+  it('the locked-link copy: only that address, once, until when; anyone else is turned away; no email', () => {
+    const note = lockedLinkNote(
+      { email: 'pat@client.example.test', role: 'commenter', expiresAt: '2026-10-04T12:00:00.000Z' },
+      fmt,
+    )
+    expect(note).toContain('Only pat@client.example.test can use this link, once, until date:10-04.')
+    expect(note).toContain('Anyone else who opens it is turned away.')
+    expect(note).toContain('no email is sent')
+    expect(note).toContain('“Can comment”')
+  })
+
+  it('a pending row names the address it is for; an older one reads as before', () => {
+    const inv = {
+      role: 'viewer' as const,
+      expiresAt: '2026-10-04T12:00:00.000Z',
+      createdBy: { name: 'Alice' },
+    }
+    expect(pendingInviteLabel({ ...inv, email: 'pat@client.example.test' }, fmt)).toBe(
+      'For pat@client.example.test · Can view · expires date:10-04 · by Alice',
+    )
+    expect(pendingInviteLabel({ ...inv, email: null }, fmt)).toBe(
+      'Unused link · Can view · expires date:10-04 · by Alice',
+    )
+  })
+})
+
+describe('domain access: what a manager who is not a creator can do (D4, D5)', () => {
+  const roles = (c: ReturnType<typeof memberRoleChoices>) => c.map((x) => x.role)
+
+  it('a creator gets every role; owner is off, with the reason, for someone who cannot own boards', () => {
+    expect(roles(memberRoleChoices({ current: 'viewer', canShare: true }))).toEqual([
+      'owner',
+      'editor',
+      'commenter',
+      'viewer',
+    ])
+    const outsider = memberRoleChoices({ current: 'editor', canShare: true, canOwn: false })
+    expect(outsider.find((c) => c.role === 'owner')).toEqual({
+      role: 'owner',
+      disabled: true,
+      title: OWNER_NEEDS_CREATOR,
+    })
+    expect(outsider.filter((c) => c.disabled).map((c) => c.role)).toEqual(['owner'])
+    // An older api omits canOwn: owner stays on (its server allows it).
+    expect(memberRoleChoices({ current: 'editor', canShare: true }).every((c) => !c.disabled)).toBe(true)
+    // An existing owner who is an outsider keeps the current value selectable (decision 4).
+    expect(memberRoleChoices({ current: 'owner', canShare: true, canOwn: false })[0]).toEqual({
+      role: 'owner',
+      disabled: false,
+    })
+    // Name-only guests are never offered ownership.
+    expect(roles(memberRoleChoices({ current: 'viewer', canShare: true, guest: true }))).not.toContain(
+      'owner',
+    )
+  })
+
+  it('a non-creator manager only lowers: the current role and the ones below it', () => {
+    expect(roles(memberRoleChoices({ current: 'editor', canShare: false }))).toEqual([
+      'editor',
+      'commenter',
+      'viewer',
+    ])
+    expect(roles(memberRoleChoices({ current: 'owner', canShare: false }))).toEqual([
+      'owner',
+      'editor',
+      'commenter',
+      'viewer',
+    ])
+    expect(roles(memberRoleChoices({ current: 'viewer', canShare: false }))).toEqual(['viewer'])
+  })
+
+  it('workspace access: a non-creator can narrow it, never widen it', () => {
+    const off = (v: Parameters<typeof visibilityChoices>[0], raise: boolean) =>
+      visibilityChoices(v, raise)
+        .filter((o) => o.disabled)
+        .map((o) => o.value)
+    expect(off('workspace_view', false)).toEqual(['workspace_edit'])
+    expect(off('private', false)).toEqual(['workspace_view', 'workspace_edit'])
+    expect(off('workspace_edit', false)).toEqual([])
+    expect(off('private', true)).toEqual([])
+    expect(visibilityChoices('private', true).map((o) => o.label)).toEqual(
+      VISIBILITY_OPTIONS.map((o) => o.label),
+    )
   })
 })

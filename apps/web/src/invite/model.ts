@@ -1,4 +1,10 @@
-import { GUEST_NAME_SUFFIX, InvitationGoneBody, type InvitationPreview } from '@draftroom/contracts'
+import {
+  DOMAIN_ACCESS_CODES,
+  GUEST_NAME_SUFFIX,
+  type InvitationEmailLock,
+  InvitationGoneBody,
+  type InvitationPreview,
+} from '@draftroom/contracts'
 
 const BOARD_ROLE: Record<string, string> = {
   owner: 'Owner',
@@ -184,11 +190,73 @@ export function safeSessionStorage(): Storage | null {
 }
 
 /** The sign-in heading when someone arrives from an invitation (PRI-16). */
-export function signInHeading(inv: InvitationPreview | null): string {
+export function signInHeading(inv: (InvitationPreview & Partial<InvitationEmailLock>) | null): string {
   // DANA-08: a lobby is a project's space; signing in opens Lobby, the app (and every lobby in it).
   if (!inv) return 'Sign in to Lobby'
   const who = inv.invitedBy.name ? ` (invited by ${inv.invitedBy.name})` : ''
-  return inv.board
-    ? `Sign in to join “${inv.board.title}”${who}`
-    : `Sign in to join ${inv.workspace.name}${who}`
+  // Domain access: a locked invitation only works for one address, so the heading repeats it (masked).
+  const lock = lockedHint(inv)
+  const verb = lock ? `Sign in with ${lock} to join` : 'Sign in to join'
+  return inv.board ? `${verb} “${inv.board.title}”${who}` : `${verb} ${inv.workspace.name}${who}`
+}
+
+// ---- invitations locked to an email address (domain access, contracts doc §9) ------------------------
+
+/** The masked invited address of a usable locked invitation ("p•••@client.example"), else null. */
+export function lockedHint(inv: Partial<InvitationEmailLock> | null | undefined): string | null {
+  return inv?.emailLocked && inv.invitedEmailHint ? inv.invitedEmailHint : null
+}
+
+/** The primary action on a locked invitation for someone signed out (state 1). */
+export const lockedSignInLabel = (hint: string) => `Sign in or create an account with ${hint}`
+
+/**
+ * Whether the signed-in account is the wrong one for this invitation (state 3): the preview says so
+ * (`matchesYou === false`, from its stored verified addresses), or accepting answered 403
+ * INVITATION_EMAIL_MISMATCH (fresher data than the preview's).
+ */
+export function isEmailMismatch(
+  inv: Partial<InvitationEmailLock> | null | undefined,
+  mismatchAtAccept: boolean,
+): boolean {
+  return mismatchAtAccept || (!!inv?.emailLocked && inv.matchesYou === false)
+}
+
+/**
+ * PRI-16 auto-accept after "Sign in to accept": never on a mismatch (the caller consumes the intent
+ * first, so a wrong account never loops through sign-in and back).
+ */
+export function shouldAutoAccept(inv: Partial<InvitationEmailLock> | null | undefined): boolean {
+  return !isEmailMismatch(inv, false)
+}
+
+/**
+ * What the wrong account reads (state 3). The full invited address is never shown, only the hint;
+ * the account's own address comes from `/api/me` `access.email`.
+ */
+export function emailMismatchCopy(opts: {
+  hint: string | null
+  email: string | null
+  invitedBy: string | null
+}): { title: string; body: string } {
+  const sentTo = opts.hint ?? 'a different email address'
+  const inviter = opts.invitedBy?.trim() || 'the person who invited you'
+  const signedInAs = opts.email
+    ? `You're signed in as ${opts.email}.`
+    : "You're signed in with a different account."
+  const ask = opts.email ? `ask ${inviter} to invite ${opts.email}` : `ask ${inviter} for a new invitation`
+  return {
+    title: 'This invitation is for someone else',
+    body: `This invitation was sent to ${sentTo}. ${signedInAs} Sign in with the invited address, or ${ask}.`,
+  }
+}
+
+/** What a refused accept shows, by the api's code (its message is already user-facing). */
+export function acceptErrorCopy(code: string, message: string): { message: string; retry: boolean } {
+  switch (code) {
+    case DOMAIN_ACCESS_CODES.identityUnavailable:
+      return { message: 'Couldn’t confirm your email right now. Try again in a minute.', retry: true }
+    default:
+      return { message: guestJoinError(code, message), retry: false }
+  }
 }

@@ -249,9 +249,13 @@ export function createApiClient(opts: ApiClientOptions = {}) {
       ).members,
 
     // ---- invitations ---------------------------------------------------------------------------
-    createBoardInvitation: (boardId: string, role: Exclude<BoardRole, 'owner'>) =>
+    /**
+     * A single-use board invitation, locked to `email` (domain access, D2): only an account with that
+     * verified address can accept it. Lobby sends no email for it.
+     */
+    createBoardInvitation: (boardId: string, input: { role: Exclude<BoardRole, 'owner'>; email: string }) =>
       request('POST', `/api/boards/${enc(boardId)}/invitations`, {
-        body: { role },
+        body: { role: input.role, email: input.email },
         schema: InvitationCreated,
       }),
     getInvitation: (token: string, signal?: AbortSignal) =>

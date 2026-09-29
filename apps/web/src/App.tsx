@@ -2,7 +2,7 @@ import { lazy, type ReactNode, Suspense, useEffect } from 'react'
 import { SignInPage } from './auth/SignInPage.tsx'
 import { SessionProvider, useSession } from './auth/session.tsx'
 import { DashboardPage } from './dashboard/DashboardPage.tsx'
-import { landingWorkspace } from './dashboard/model.ts'
+import { landingWorkspace, noWorkspaceCopy } from './dashboard/model.ts'
 import { GuestEndedScreen } from './invite/GuestEndedScreen.tsx'
 import { GuestKindProvider, wasGuestTab } from './invite/guest.tsx'
 import { InvitePage } from './invite/InvitePage.tsx'
@@ -96,7 +96,7 @@ function RequireSession({ children }: { children: ReactNode }) {
 }
 
 function RootRedirect() {
-  const { state } = useSession()
+  const { state, signOut, signingOut } = useSession()
   const me = state.status === 'signed-in' ? state.me : null
   const target = me ? landingWorkspace(me.workspaces, readLastWorkspace()) : null
   const targetId = target?.id
@@ -104,12 +104,44 @@ function RootRedirect() {
     if (targetId) navigate(workspacePath(targetId), { replace: true })
   }, [targetId])
   if (me && !target) {
+    // Domain access (docs/DOMAIN-ACCESS-CONTRACTS.md §9): an outside account gets only what it is
+    // invited to, so with nothing shared yet it lands here and is told why.
+    const copy = noWorkspaceCopy(me.access)
     return (
       <MessageScreen
         testId="no-workspace"
-        title="You're not in a workspace yet"
-        body="Open an invite link from a teammate to join their workspace or board."
-        actions={<span />}
+        reason={copy.reason}
+        title={copy.title}
+        body={copy.body.map((p, i) => (
+          <p key={p} data-testid={i === 0 && copy.reason === 'outside' ? 'no-workspace-account' : undefined}>
+            {p}
+          </p>
+        ))}
+        actions={
+          copy.action === 'switch-account' ? (
+            <button
+              type="button"
+              className="dr-btn dr-btn--primary"
+              data-testid="no-workspace-switch"
+              disabled={signingOut}
+              aria-busy={signingOut || undefined}
+              onClick={() => void signOut()}
+            >
+              {signingOut ? 'Signing out…' : 'Sign in with a different account'}
+            </button>
+          ) : copy.action === 'reload' ? (
+            <button
+              type="button"
+              className="dr-btn dr-btn--primary"
+              data-testid="no-workspace-reload"
+              onClick={() => location.reload()}
+            >
+              Reload
+            </button>
+          ) : (
+            <span />
+          )
+        }
       />
     )
   }

@@ -472,3 +472,16 @@
 .dr-share__hint.dr-sharing__policy-off {
   color: var(--dr-warn);
 }
+
+/* Domain access (docs/DOMAIN-ACCESS-CONTRACTS.md §9): a board manager who is not at Dark Burn Creative
+   or Trailer Park Group can only reduce access; the note at the top of the dialog says why. */
+.dr-share__note.dr-sharing__creator-note {
+  margin: 0 0 14px;
+  padding: 10px 12px;
+  border: 1px solid var(--dr-accent-line);
+  border-radius: 8px;
+  background: var(--dr-accent-bg);
+  color: var(--dr-accent-ink);
+  font-size: 13px;
+  line-height: 1.45;
+}

@@ -712,7 +712,11 @@ test('duplicate from the history panel: a viewer gets a private copy they own wi
   await test.step('owner with keep sharing: visibility and people grants, never invitations or links', async () => {
     const carol = await users.grant(board, 'carol', 'commenter')
     await aliceApi.patchBoard(board, { visibility: 'workspace_view' })
-    const invite = await aliceApi.fetch('POST', `/api/boards/${board}/invitations`, { role: 'commenter' })
+    // Domain access: a single-use invitation names the one address that may accept it.
+    const invite = await aliceApi.fetch('POST', `/api/boards/${board}/invitations`, {
+      role: 'commenter',
+      email: 'reviewer@client.example.test',
+    })
     expect(invite.status()).toBe(201)
     const link = await aliceApi.fetch('POST', `/api/boards/${board}/review-links`, {})
     expect(link.status()).toBe(201)

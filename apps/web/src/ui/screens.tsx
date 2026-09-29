@@ -21,15 +21,18 @@ export function MessageScreen({
   title,
   body,
   testId,
+  reason,
   actions,
 }: {
   title: string
   body: ReactNode
   testId?: string
+  /** `data-reason` on the screen: which variant of a screen this is (for tests and styles). */
+  reason?: string
   actions?: ReactNode
 }) {
   return (
-    <main className="dr-screen dr-screen--page" data-testid={testId}>
+    <main className="dr-screen dr-screen--page" data-testid={testId} data-reason={reason}>
       <div className="dr-card dr-card--narrow">
         <a href="/" onClick={linkClick('/')} className="dr-card__brand" aria-label="Lobby home">
           <Wordmark />

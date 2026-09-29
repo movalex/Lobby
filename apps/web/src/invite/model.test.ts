@@ -2,15 +2,21 @@ import { guestDisplayName, guestLabelName, guestNameProblem } from '@draftroom/c
 import { describe, expect, it } from 'vitest'
 import { BOARD_ID, WS_ID } from '../api/test-fixtures.ts'
 import {
+  acceptErrorCopy,
+  emailMismatchCopy,
   fetchGoneDetails,
   GUEST_ENDED_COPY,
   goneCopy,
   guestJoinError,
   guestJoinHint,
   invitationSummary,
+  isEmailMismatch,
+  lockedHint,
+  lockedSignInLabel,
   ownName,
   ownNameParts,
   rememberAcceptIntent,
+  shouldAutoAccept,
   signInHeading,
   splitGuestMarker,
   takeAcceptIntent,
@@ -176,5 +182,92 @@ describe('when guest access ends (DANA2-07)', () => {
     expect(GUEST_ENDED_COPY.what).toMatch(/revoked or has expired/)
     expect(GUEST_ENDED_COPY.next).toMatch(/ask whoever shared the link/)
     expect(Object.values(GUEST_ENDED_COPY).join(' ')).not.toMatch(/your boards|request access/i)
+  })
+})
+
+describe('invitations locked to an email address (domain access, docs/DOMAIN-ACCESS-CONTRACTS.md §9)', () => {
+  const board = { ...base, board: { id: BOARD_ID, title: 'Rough cut' }, role: 'commenter' }
+  const locked = { emailLocked: true, invitedEmailHint: 'p•••@client.example.test', matchesYou: null }
+
+  it('signed out: the facts, the action and the sign-in heading repeat the masked address', () => {
+    expect(lockedHint(locked)).toBe('p•••@client.example.test')
+    expect(lockedSignInLabel('p•••@client.example.test')).toBe(
+      'Sign in or create an account with p•••@client.example.test',
+    )
+    expect(signInHeading({ ...board, ...locked })).toBe(
+      'Sign in with p•••@client.example.test to join “Rough cut” (invited by Alice)',
+    )
+    expect(signInHeading({ ...base, board: null, role: 'member', ...locked })).toBe(
+      'Sign in with p•••@client.example.test to join Dev Studio (invited by Alice)',
+    )
+    // Not locked (guest and review links, an older api): as before.
+    expect(lockedHint({ emailLocked: false, invitedEmailHint: null, matchesYou: null })).toBeNull()
+    expect(lockedHint(undefined)).toBeNull()
+    expect(signInHeading({ ...board, emailLocked: false, invitedEmailHint: null, matchesYou: null })).toBe(
+      'Sign in to join “Rough cut” (invited by Alice)',
+    )
+    // A locked flag without a hint (no longer usable) never prints "null".
+    expect(signInHeading({ ...board, emailLocked: true, invitedEmailHint: null })).toBe(
+      'Sign in to join “Rough cut” (invited by Alice)',
+    )
+  })
+
+  it('the right account accepts as today (auto-accept after sign-in included)', () => {
+    expect(isEmailMismatch({ ...locked, matchesYou: true }, false)).toBe(false)
+    expect(shouldAutoAccept({ ...locked, matchesYou: true })).toBe(true)
+    expect(shouldAutoAccept({ ...locked, matchesYou: null })).toBe(true)
+    expect(shouldAutoAccept({ emailLocked: false, invitedEmailHint: null, matchesYou: null })).toBe(true)
+  })
+
+  it('the wrong account: the mismatch state, and never an auto-accept', () => {
+    expect(isEmailMismatch({ ...locked, matchesYou: false }, false)).toBe(true)
+    expect(shouldAutoAccept({ ...locked, matchesYou: false })).toBe(false)
+    // A 403 INVITATION_EMAIL_MISMATCH at accept (fresher data than the preview) shows it too.
+    expect(isEmailMismatch({ ...locked, matchesYou: true }, true)).toBe(true)
+    // An unlocked invitation is never a mismatch, whatever matchesYou says.
+    expect(isEmailMismatch({ emailLocked: false, invitedEmailHint: null, matchesYou: false }, false)).toBe(
+      false,
+    )
+  })
+
+  it('the mismatch copy names both addresses, and falls back without an address or an inviter', () => {
+    expect(
+      emailMismatchCopy({
+        hint: 'p•••@client.example.test',
+        email: 'sam@client.example.test',
+        invitedBy: 'Alice',
+      }).body,
+    ).toBe(
+      "This invitation was sent to p•••@client.example.test. You're signed in as sam@client.example.test. Sign in with the invited address, or ask Alice to invite sam@client.example.test.",
+    )
+    expect(
+      emailMismatchCopy({ hint: 'p•••@client.example.test', email: null, invitedBy: 'Alice' }).body,
+    ).toBe(
+      "This invitation was sent to p•••@client.example.test. You're signed in with a different account. Sign in with the invited address, or ask Alice for a new invitation.",
+    )
+    expect(
+      emailMismatchCopy({
+        hint: 'p•••@client.example.test',
+        email: 'sam@client.example.test',
+        invitedBy: '  ',
+      }).body,
+    ).toContain('ask the person who invited you to invite sam@client.example.test')
+    expect(
+      emailMismatchCopy({ hint: 'p•••@client.example.test', email: null, invitedBy: null }).body,
+    ).toContain('ask the person who invited you for a new invitation')
+    // The full invited address is never known here, so it can never be shown.
+    expect(emailMismatchCopy({ hint: null, email: null, invitedBy: null }).body).not.toMatch(/null/)
+  })
+
+  it('accepting while the sign-in service is down: a retry; 409 and the rest: the server’s words', () => {
+    expect(acceptErrorCopy('IDENTITY_UNAVAILABLE', 'x')).toEqual({
+      message: 'Couldn’t confirm your email right now. Try again in a minute.',
+      retry: true,
+    })
+    expect(acceptErrorCopy('ROLE_REQUIRES_CREATOR', 'Only people at Dark Burn Creative …')).toEqual({
+      message: 'Only people at Dark Burn Creative …',
+      retry: false,
+    })
+    expect(acceptErrorCopy('GUEST_LIMIT', 'x').message).toContain('as many guests as it can')
   })
 })

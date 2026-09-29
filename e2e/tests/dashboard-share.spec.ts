@@ -886,6 +886,13 @@ test('invite: @bob gets editor access at once; an email address gets a one-time 
     token = inviteToken(await link.inputValue())
     await expect(dialog.getByTestId('share-invite-result')).toContainText('no email is sent')
     await expect(dialog.getByTestId('share-invite-result')).toContainText('pat@client.example')
+    // Domain access: the link is locked to that address.
+    await expect(dialog.getByTestId('share-invite-lock-note')).toContainText(
+      'Only pat@client.example can use this link, once, until',
+    )
+    await expect(dialog.getByTestId('share-invite-lock-note')).toContainText(
+      'Anyone else who opens it is turned away.',
+    )
     const pending = await invitations(aliceApi, board)
     expect(pending).toEqual([expect.objectContaining({ kind: 'invite', role: 'commenter', uses: 0 })])
     expect((await aliceApi.fetch('GET', `/api/invitations/${token}`)).status()).toBe(200)
