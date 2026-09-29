@@ -2,7 +2,7 @@
 // handle (`window.__lobbyBoard`, dev-auth builds only) for what the wave-1 facade verbs will cover once
 // 2E lands them, and real-pointer helpers over empty canvas.
 import { expect, type Page } from '@playwright/test'
-import { pushedOps } from '../tests/support/canvas.ts'
+import { expectSaved, pushedOps } from '../tests/support/canvas.ts'
 
 /** The page's debug handle, typed on what these specs read. */
 export interface BoardHandleView {
@@ -48,3 +48,15 @@ export async function focusBoard(page: Page): Promise<void> {
 
 /** The connection pill (`data-state`: connecting, online, offline, error). */
 export const connPill = (page: Page) => page.getByTestId('conn-status')
+
+/**
+ * A facade write, then "Saved" before the next one. Spike B's open O2 defect (docs/research/excalidraw/
+ * spike-b/M3.md "Open problems"): a local write that a server frame (the previous write's ack) overtakes
+ * before Excalidraw reports it is lost. Specs that seed several elements in a row wait for Saved between
+ * writes so they test the board page, not that race; remove once O2's fix is merged.
+ */
+export async function settled<T>(page: Page, write: Promise<T>): Promise<T> {
+  const out = await write
+  await expectSaved(page)
+  return out
+}

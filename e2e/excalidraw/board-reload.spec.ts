@@ -18,7 +18,7 @@ import {
   waitForItem,
 } from '../tests/support/canvas.ts'
 import { expectSaveState, saveStatus } from '../tests/support/collab-quality.ts'
-import { connPill } from './board-kit.ts'
+import { connPill, settled } from './board-kit.ts'
 
 /** A note's words (its bound label's text). */
 async function noteText(page: Page, id: string): Promise<string | null> {
@@ -32,25 +32,34 @@ async function noteText(page: Page, id: string): Promise<string | null> {
 
 /** A small board: a note with words, a shape in a frame, and an arrow bound from the shape to the note. */
 async function seed(page: Page) {
-  const frame = await createItem(page, 'frame', { x: 40, y: 360, width: 420, height: 260, name: 'Sprint' })
-  const box = await createItem(page, 'rectangle', {
-    x: 80,
-    y: 420,
-    width: 140,
-    height: 90,
-    backgroundColor: '#a5d8ff',
-    fillStyle: 'solid',
-    frameId: frame,
-  })
-  const note = await createNote(page, { x: 480, y: 80, text: 'Hello from alice' })
-  const arrow = await createItem(page, 'arrow', {
-    x: 220,
-    y: 440,
-    points: [
-      [0, 0],
-      [260, -260],
-    ],
-  })
+  const frame = await settled(
+    page,
+    createItem(page, 'frame', { x: 40, y: 360, width: 420, height: 260, name: 'Sprint' }),
+  )
+  const box = await settled(
+    page,
+    createItem(page, 'rectangle', {
+      x: 80,
+      y: 420,
+      width: 140,
+      height: 90,
+      backgroundColor: '#a5d8ff',
+      fillStyle: 'solid',
+      frameId: frame,
+    }),
+  )
+  const note = await settled(page, createNote(page, { x: 480, y: 80, text: 'Hello from alice' }))
+  const arrow = await settled(
+    page,
+    createItem(page, 'arrow', {
+      x: 220,
+      y: 440,
+      points: [
+        [0, 0],
+        [260, -260],
+      ],
+    }),
+  )
   // bound by an update of the arrow (the server keeps the targets' boundElements symmetric)
   await updateItem(page, arrow, {
     startBinding: { elementId: box, fixedPoint: [1, 0.5], mode: 'orbit' },

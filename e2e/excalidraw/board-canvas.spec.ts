@@ -14,6 +14,7 @@ import {
   test,
   waitForItem,
 } from '../tests/support/canvas.ts'
+import { settled } from './board-kit.ts'
 
 /** Runs `fn(canvas, arg)` in the page against the board page's LobbyCanvas. */
 async function withCanvas<T, A>(
@@ -118,9 +119,15 @@ test('writes: text.replace through the lease, and the structural tx writes, conv
 }) => {
   const a = await canvasSession('alice')
   const b = await canvasSession('bob')
-  const note = await createNote(a.page, { x: 100, y: 100, text: 'Before' })
-  const r1 = await createItem(a.page, 'rectangle', { x: 400, y: 100, width: 100, height: 80 })
-  const r2 = await createItem(a.page, 'rectangle', { x: 560, y: 100, width: 100, height: 80 })
+  const note = await settled(a.page, createNote(a.page, { x: 100, y: 100, text: 'Before' }))
+  const r1 = await settled(
+    a.page,
+    createItem(a.page, 'rectangle', { x: 400, y: 100, width: 100, height: 80 }),
+  )
+  const r2 = await settled(
+    a.page,
+    createItem(a.page, 'rectangle', { x: 560, y: 100, width: 100, height: 80 }),
+  )
   const arrow = await createItem(a.page, 'arrow', {
     x: 500,
     y: 140,
@@ -175,8 +182,14 @@ test('history: canUndo, undo and redo, and transact joinPrevious folding a deriv
 }) => {
   const a = await canvasSession('alice')
   const b = await canvasSession('bob')
-  const box = await createItem(a.page, 'rectangle', { x: 100, y: 100, width: 100, height: 80 })
-  const other = await createItem(a.page, 'rectangle', { x: 300, y: 100, width: 100, height: 80 })
+  const box = await settled(
+    a.page,
+    createItem(a.page, 'rectangle', { x: 100, y: 100, width: 100, height: 80 }),
+  )
+  const other = await settled(
+    a.page,
+    createItem(a.page, 'rectangle', { x: 300, y: 100, width: 100, height: 80 }),
+  )
   await waitForItem(b.page, other)
   expect(await withCanvas(a.page, (c) => c.history.canUndo(), null)).toBe(true)
   // the user's step (a move), then a derived write joined to it (the other box follows)
