@@ -162,7 +162,10 @@ export class BoardSession {
       isConfirmed: (id) => this.core.confirmed(id) !== undefined,
       onEmptyDoubleClick: (p) => this.createFreeText(p.x, p.y),
       onDeny: (_id, holder) => this.toast(`${holder} is typing in this note`),
-      onNotice: (n) => this.set({ notice: { ...n, id: ++this.toastSeq } }),
+      onNotice: (n) => {
+        this.logEvent({ kind: 'notice', id: n.leaseId, detail: n.kind })
+        this.set({ notice: { ...n, id: ++this.toastSeq } })
+      },
       onEditState: (s) => this.set({ edit: s }),
     })
     this.detach.push(
@@ -191,8 +194,13 @@ export class BoardSession {
           } else if (e.state === 'closed' && this.snap.phase === 'ready') this.set({ phase: 'offline' })
         } else if (e.kind === 'message' && e.message.type === 'roster')
           this.set({ people: this.core.roster().size })
-        else if (e.kind === 'reject') this.toast(rejectText(e.code, e.id, this.core))
-        else if (e.kind === 'refit') this.refit(e.id)
+        else if (e.kind === 'reject') {
+          this.logEvent({ kind: 'reject', id: e.id, detail: e.code })
+          this.toast(rejectText(e.code, e.id, this.core))
+        } else if (e.kind === 'refit') {
+          this.logEvent({ kind: 'refit', id: e.id, detail: null })
+          this.refit(e.id)
+        }
       }),
     )
   }
@@ -211,6 +219,23 @@ export class BoardSession {
   private set(patch: Partial<BoardSnapshot>): void {
     this.snap = { ...this.snap, ...patch }
     for (const l of [...this.listeners]) l()
+  }
+
+  /** rejects, refits (an ack's fitDropped) and editor notices, in order, for the specs (ids and codes, no text) */
+  readonly eventLog: {
+    kind: 'reject' | 'refit' | 'notice'
+    id: string | null
+    detail: string | null
+    at: number
+  }[] = []
+
+  private logEvent(e: {
+    kind: 'reject' | 'refit' | 'notice'
+    id: string | null
+    detail: string | null
+  }): void {
+    this.eventLog.push({ ...e, at: Date.now() })
+    if (this.eventLog.length > 1000) this.eventLog.splice(0, this.eventLog.length - 1000)
   }
 
   /** every toast shown, in order (the specs read it: the screen keeps only the last few, for 5 s) */
