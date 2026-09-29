@@ -1009,12 +1009,28 @@ export class LobbyEngineCore implements EngineCore {
     this.epoch = w.epoch
     this.horizon = w.horizon
     this.serverDoc = { ...w.doc }
+    const before = new Map(this.holders)
     this.holders.clear()
     for (const l of w.leases) this.holders.set(l.id, l.holder)
     this.rosterMap.clear()
     for (const r of w.roster) this.rosterMap.set(r.sid, r)
-    // a lease this tab thought it held but the server does not name it for is gone (§2.9.3)
-    for (const id of [...this.leaseHeld]) if (this.holders.get(id)?.sid !== w.sid) this.leaseHeld.delete(id)
+    // a lease this tab thought it held but the server does not name it for is gone (§2.9.3); its local
+    // text, layout and fit are not ours to write any more
+    const lost = new Set<string>()
+    for (const id of [...this.leaseHeld])
+      if (this.holders.get(id)?.sid !== w.sid) {
+        this.leaseHeld.delete(id)
+        lost.add(id)
+      }
+    const dropped = new Set<string>()
+    for (const id of lost) this.dropLeased(id, dropped)
+    // the lease client learns the table as broadcasts: every lease whose holder changed while this tab
+    // was away (B3 L7: A held N, went offline, the lease expired and B took it; A's editor then says so)
+    for (const id of new Set([...before.keys(), ...this.holders.keys(), ...lost])) {
+      const now = this.holders.get(id) ?? null
+      if (lost.has(id) || before.get(id)?.sid !== now?.sid)
+        this.leaseListener?.({ type: 'lease', id, holder: now })
+    }
     if (w.reset) {
       this.awaitingSnapshot = true
       if (epochChanged) this.log('epoch_reset', { epoch: w.epoch })

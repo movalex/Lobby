@@ -453,6 +453,40 @@ describe('engine core: the text lease gate (§2.9.2, §2.9.4)', () => {
     expect(refits).toEqual([{ id: 't1', dx: -20, dy: 0 }])
   })
 
+  it('a lease lost while offline: the welcome tells the lease client, and the offline text is never pushed (L7)', async () => {
+    const h = createHarness({ seed: seedNote() })
+    const a = h.client('alice')
+    const b = h.client('bob')
+    h.settle()
+    const toA: { type: string; id?: string; holder?: { sid: string } | null }[] = []
+    a.core.leaseConnect((m) => toA.push(m as never)).send({ type: 'lease.acquire', req: 1, id: 'n1' })
+    h.settle()
+    const editing = { editingTextElementId: 'n1.t' }
+    a.change('n1.t', { originalText: 'memo A', text: 'memo A' }, editing)
+    h.settle()
+    h.room.cut(a.transport) // the fake lets the lease go with the session (the room's TTL, sooner)
+    h.settle()
+    b.core.leaseConnect(() => {}).send({ type: 'lease.acquire', req: 1, id: 'n1' })
+    h.settle()
+    b.change('n1.t', { originalText: 'memo B', text: 'memo B' }, editing)
+    h.settle()
+    a.change('n1.t', { originalText: 'memo A offline', text: 'memo A offline' }, editing)
+    h.clock.advance(1_000)
+    const pushes = a.core.pushLog().length
+    ;(a.transport as unknown as { reopen(): void }).reopen()
+    h.settle()
+    expect(toA.at(-1)).toMatchObject({ type: 'lease', id: 'n1', holder: { sid: b.core.sid } })
+    expect(
+      a.core
+        .pushLog()
+        .slice(pushes)
+        .flatMap((p) => [...p.ops]),
+    ).toEqual([])
+    expect(h.room.elements.get('n1.t')?.originalText).toBe('memo B')
+    expect(a.get('n1.t')?.originalText).toBe('memo B')
+    expect(await a.hash()).toBe(await h.roomHash())
+  })
+
   it("the release goes out after the editor's final push (the session's FIFO)", () => {
     const h = createHarness({ seed: seedNote() })
     const a = h.client('alice')
