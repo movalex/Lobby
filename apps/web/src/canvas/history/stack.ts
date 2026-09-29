@@ -41,6 +41,11 @@ export type AckResult =
 export interface Ack {
   seq: number
   r: AckResult[]
+  /**
+   * Elements the server re-snapped because of this push although it did not write them (bound arrows and
+   * their labels, §2.4.2): folded like a fix, never a step (§2.8, spike B).
+   */
+  derived?: readonly { id: string; v?: number; fix: Record<string, unknown> }[]
 }
 
 export interface HistoryOptions {
@@ -55,6 +60,8 @@ const readFix = (key: string): { lobby: boolean; name: string } =>
 
 export class LobbyHistory {
   private lastLocal = new Map<string, HistEl>()
+  /** flips of `isDeleted` by others (absorbed), per element: the life version of §2.8's check */
+  private readonly lifeFlips = new Map<string, number>()
   private undos: Entry[] = []
   private redos: Entry[] = []
   private nextId = 1
@@ -155,7 +162,21 @@ export class LobbyHistory {
       }
       for (const { change } of carrying) change.pending = change.pending.filter((p) => p.seq !== ack.seq)
     }
+    // re-snaps this push caused on elements it did not write: folded, never a step
+    for (const d of ack.derived ?? []) this.foldDerived(d.id, d.fix, scene)
     this.prune()
+  }
+
+  /** A `derived` ack row: like a local fix for entries that recorded the element, and `lastLocal` always. */
+  private foldDerived(id: string, fix: Record<string, unknown>, scene?: Scene) {
+    const carrying: { entry: Entry; change: TrackedChange; side: Side }[] = []
+    for (const entry of [...this.undos, ...this.redos]) {
+      const change = entry.changes.get(id)
+      if (!change) continue
+      const side = change.unsent ?? change.pending[change.pending.length - 1]?.side ?? 'after'
+      carrying.push({ entry, change, side })
+    }
+    this.foldFix(id, fix, carrying, scene)
   }
 
   /**
@@ -182,6 +203,8 @@ export class LobbyHistory {
    * change. Never a step.
    */
   absorb(before: HistEl | undefined, after: HistEl | undefined) {
+    if (before && after && !!before.isDeleted !== !!after.isDeleted)
+      this.lifeFlips.set(after.id, (this.lifeFlips.get(after.id) ?? 0) + 1)
     if (!after) {
       if (before) this.lastLocal.delete(before.id)
       return
@@ -229,7 +252,8 @@ export class LobbyHistory {
     const to = dir === 'undo' ? this.redos : this.undos
     const entry = from.pop()
     if (!entry) return null
-    const res = applyChanges([...entry.changes.values()], dir, scene, ctx)
+    const lifeVersion = (id: string) => this.lifeFlips.get(id) ?? 0
+    const res = applyChanges([...entry.changes.values()], dir, scene, { ...ctx, lifeVersion })
     // what this apply wrote is the local state now: never recorded as a new step
     for (const [id, el] of res.elements) this.lastLocal.set(id, clone(el))
     if (res.applied.length) {
@@ -237,7 +261,14 @@ export class LobbyHistory {
       to.push({
         id: entry.id,
         label: entry.label,
-        changes: new Map(res.applied.map((c) => [c.id, track(c, side)])),
+        changes: new Map(
+          res.applied.map((c) => {
+            const t = track(c, side)
+            // the life version as it stands after this apply: the mirror step checks it (U11)
+            if (c.fields.isDeleted) t.lifeAt = lifeVersion(c.id)
+            return [c.id, t]
+          }),
+        ),
       })
     }
     return res

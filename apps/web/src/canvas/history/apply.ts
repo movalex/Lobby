@@ -15,6 +15,7 @@
  */
 import type { BoundRef, ElementChange, FieldChange, HistEl, Scene, Side } from './diff.ts'
 import { clone, deepEqual, fieldGroup, type GroupName } from './fields.ts'
+import { samePathUnit } from './geometry.ts'
 
 export type Direction = 'undo' | 'redo'
 
@@ -48,6 +49,11 @@ export interface ApplyContext {
     touched: readonly string[],
     next: ReadonlyMap<string, HistEl>,
   ) => ReadonlyMap<string, Record<string, unknown>>
+  /**
+   * The life version of an element (flips of `isDeleted` by others since the stack started): a change
+   * whose `lifeAt` differs from it leaves `isDeleted` alone (the life-version check of §2.8, U11).
+   */
+  lifeVersion?: (id: string) => number
 }
 
 export interface ApplyResult {
@@ -76,8 +82,8 @@ const isBookkeepingOnly = (c: ElementChange) =>
   Object.keys(c.fields).length === 0 && Object.keys(c.lobby).length === 0 && !c.groupIds && !!c.bound
 
 /** groups whose recorded fields are compared and restored as one unit */
-// `path`: an arrow's or a line's whole geometry (canvas-schema groups.ts, revisions 3.4/3.5). O2 replaces its
-// field compare with the user-set geometry compare of §2.8 (`sameUserSetGeometry`) in spike B.
+// `path`: an arrow's or a line's whole geometry (canvas-schema groups.ts, revisions 3.4/3.5), compared through
+// its user-set geometry within the tolerance (./geometry.ts, spike B).
 const COUPLED = new Set<GroupName>(['pos', 'shape', 'layout', 'path'])
 
 const REF_FIELDS = ['containerId', 'frameId'] as const
@@ -129,8 +135,10 @@ export const applyChanges = (
       skip(c.id, 'element', life && life[want] === false ? 'orphan' : 'gone', isBookkeepingOnly(c))
       continue
     }
+    // the life-version check (§2.8, U11): someone restored or deleted it again since this entry's last apply
+    const lifeMoved = !!life && c.lifeAt !== undefined && ctx.lifeVersion?.(c.id) !== c.lifeAt
     if (cur.isDeleted) {
-      const revives = !!life && life[have] === true && life[want] === false
+      const revives = !!life && life[have] === true && life[want] === false && !lifeMoved
       if (!revives) {
         skip(c.id, 'element', 'deleted', isBookkeepingOnly(c))
         continue
@@ -142,7 +150,7 @@ export const applyChanges = (
       lifeTarget.set(c.id, false)
       liveAfter.set(c.id, true)
     } else if (life && life[want] === true) {
-      if (life[have] !== false) {
+      if (life[have] !== false || lifeMoved) {
         skip(c.id, 'isDeleted', 'changed')
       } else if (lifeLeased(cur)) {
         skip(c.id, 'isDeleted', 'locked')
@@ -257,8 +265,15 @@ export const applyChanges = (
         for (const f of fields) skip(c.id, f, 'locked')
         continue
       }
-      const atHave = fields.every((f) => deepEqual(cur[f], (c.fields[f] as FieldChange)[have]))
-      const atWant = fields.every((f) => deepEqual(cur[f], (c.fields[f] as FieldChange)[want]))
+      const side = (s: Side) => Object.fromEntries(fields.map((f) => [f, (c.fields[f] as FieldChange)[s]]))
+      const linear = group === 'path' && (cur.type === 'arrow' || cur.type === 'line')
+      // an arrow's or a line's geometry: its user-set geometry within the tolerance (./geometry.ts)
+      const atHave = linear
+        ? samePathUnit(cur, side(have), fields)
+        : fields.every((f) => deepEqual(cur[f], (c.fields[f] as FieldChange)[have]))
+      const atWant = linear
+        ? samePathUnit(cur, side(want), fields)
+        : fields.every((f) => deepEqual(cur[f], (c.fields[f] as FieldChange)[want]))
       if (atHave) {
         for (const f of fields) {
           patch[f] = clone((c.fields[f] as FieldChange)[want])
