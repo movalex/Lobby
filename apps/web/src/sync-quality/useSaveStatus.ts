@@ -3,7 +3,11 @@ import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { type Atom, useValue } from 'tldraw'
 import type { SaveSnapshot, SaveState, SaveTracker } from './saveTracker.ts'
 
-export type DisplayState = SaveState | 'readonly'
+/**
+ * `retrying` comes only from the Excalidraw engine (UNAVAILABLE for 30 s, docs/EXCALIDRAW-MIGRATION.md
+ * §2.5.7; ./engineSave.ts); the tldraw tracker never reports it.
+ */
+export type DisplayState = SaveState | 'readonly' | 'retrying'
 
 const CONNECTING: SaveSnapshot = {
   state: 'connecting',

@@ -22,14 +22,15 @@ const SpikeRoute =
   DEV_AUTH_ENABLED
     ? lazy(() => import('./canvas/spike/SpikeRoute.tsx'))
     : null
-// Spike B (docs/EXCALIDRAW-MIGRATION.md §8.6.2): /b/:boardId opens the Excalidraw spike board page instead
-// of the tldraw BoardPage, under the same inlined guard (engine flag AND dev auth), so the normal build and
-// an engine-flag build without the guard carry none of it.
-const SpikeBoardPage =
+// Wave 2C (docs/EXCALIDRAW-MIGRATION.md §7.2): /b/:boardId opens Lobby's board page on the Excalidraw
+// engine instead of the tldraw BoardPage (or spike B's board page, canvas/board/route.tsx), under the same
+// inlined guard (engine flag AND dev auth), so the normal build and an engine-flag build without the
+// guard carry none of it.
+const ExcalidrawBoardRoute =
   import.meta.env.VITE_LOBBY_ENGINE === 'excalidraw' &&
   (import.meta.env.DEV || import.meta.env.VITE_DRAFTROOM_DEV_AUTH === '1') &&
   DEV_AUTH_ENABLED
-    ? lazy(() => import('./canvas/spike/board/SpikeBoardPage.tsx'))
+    ? lazy(() => import('./canvas/board/route.tsx'))
     : null
 
 export function App() {
@@ -74,8 +75,8 @@ function Routes() {
       return (
         <RequireSession>
           <Suspense fallback={<LoadingScreen label="Opening board…" testId="board-loading" />}>
-            {SpikeBoardPage ? (
-              <SpikeBoardPage boardId={route.boardId} />
+            {ExcalidrawBoardRoute ? (
+              <ExcalidrawBoardRoute boardId={route.boardId} />
             ) : (
               <BoardPage boardId={route.boardId} />
             )}
