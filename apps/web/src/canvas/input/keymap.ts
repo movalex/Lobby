@@ -518,6 +518,15 @@ export function delegatedChord(e: KeyLike, mac: boolean): DelegatedAction | null
   return action && DELEGATED_ACTIONS.has(action) ? (action as DelegatedAction) : null
 }
 
+/** Ctrl/Cmd+C (copy) and Ctrl/Cmd+V or Shift+V (paste): the platform's command key alone, no Alt or AltGr. */
+function clipboardChord(e: KeyLike, mac: boolean): boolean {
+  const cmd = mac ? e.metaKey : e.ctrlKey
+  const other = mac ? e.ctrlKey : e.metaKey
+  if (!cmd || other || e.altKey || e.altGraph || e.isComposing) return false
+  const letter = chordLetter(e)
+  return (letter === 'c' && !e.shiftKey) || letter === 'v'
+}
+
 /** One character (or a dead key) the browser types by default: AltGr and macOS Option characters. */
 function typesCharacter(e: KeyLike): boolean {
   return e.key === 'Dead' || ([...e.key].length === 1 && !/\p{C}/u.test(e.key))
@@ -653,6 +662,14 @@ export function classifyKey(e: KeyLike, ctx: KeyContext): KeyVerdict {
   // Ctrl+D, Ctrl+G, Ctrl+Shift+G, Ctrl+Shift+L, Ctrl+[ ], Ctrl+Shift+[ ] (Cmd+Option+[ ] on macOS),
   // Ctrl+= / Ctrl+-: only when Excalidraw would run exactly that action for this event (see above).
   if (delegated) return { kind: 'delegate' }
+
+  // Spike B (B5 R3): Ctrl/Cmd+C and Ctrl/Cmd+V (Shift: paste as plain text) are the browser's clipboard
+  // commands, not Excalidraw keydown actions: its copy and paste events carry them (plan §2.3.3
+  // "Clipboard"; Excalidraw's document listeners, X 49346), where Lobby's capture listeners apply the
+  // export policy and the paste rules. Stopped before Excalidraw's keydown, never prevented: preventing
+  // them (the old `block`) meant an editor could not copy or paste with the keyboard at all. Ctrl+X stays
+  // blocked: Excalidraw's actionCut has a keydown keyTest (spike A, A6).
+  if (clipboardChord(e, mac)) return { kind: 'browser' }
 
   if (mod && !e.altKey && !e.shiftKey && letterIs(e, 'z')) return { kind: 'lobby', action: 'undo' }
   if (mod && !e.altKey && e.shiftKey && letterIs(e, 'z')) return { kind: 'lobby', action: 'redo' }

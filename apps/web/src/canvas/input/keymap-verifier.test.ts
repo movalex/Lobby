@@ -255,3 +255,31 @@ describe('spike B K2-K5: key and code that disagree', () => {
         expect(textareaKeyAction(e, mac), JSON.stringify(e)).toBe(excalidrawTextareaAction(e, mac))
   })
 })
+
+describe('spike B R3: the clipboard chords go to the browser (plan §2.3.3 "Clipboard")', () => {
+  const kind = (e: KeyLike, ctx: KeyContext) => classifyKey(e, ctx)
+  it("an editor's Ctrl+C, Ctrl+V and Ctrl+Shift+V are the browser's (stopped, not prevented): copy/paste events carry them", () => {
+    for (const e of [
+      raw('c', 'KeyC', { ctrlKey: true }),
+      raw('v', 'KeyV', { ctrlKey: true }),
+      raw('V', 'KeyV', { ctrlKey: true, shiftKey: true }),
+    ])
+      expect(kind(e, EDITOR)).toEqual({ kind: 'browser' })
+    // macOS: Cmd, not Ctrl
+    expect(kind(raw('c', 'KeyC', { metaKey: true }), { ...EDITOR, mac: true })).toEqual({ kind: 'browser' })
+    expect(kind(raw('c', 'KeyC', { ctrlKey: true }), { ...EDITOR, mac: true }).kind).toBe('block')
+  })
+  it('Ctrl+X (Excalidraw keydown actionCut), Ctrl+Shift+C, Ctrl+Alt+C and AltGr stay blocked; read-only roles are unchanged', () => {
+    expect(kind(raw('x', 'KeyX', { ctrlKey: true }), EDITOR)).toMatchObject({
+      kind: 'block',
+      preventDefault: true,
+    })
+    expect(kind(raw('C', 'KeyC', { ctrlKey: true, shiftKey: true }), EDITOR).kind).not.toBe('browser')
+    expect(kind(raw('c', 'KeyC', { ctrlKey: true, altKey: true }), EDITOR).kind).not.toBe('browser')
+    expect(kind(raw('c', 'KeyC', { ctrlKey: true, altKey: true, altGraph: true }), EDITOR).kind).not.toBe(
+      'browser',
+    )
+    for (const e of [raw('c', 'KeyC', { ctrlKey: true }), raw('v', 'KeyV', { ctrlKey: true })])
+      expect(kind(e, READONLY)).toMatchObject({ kind: 'block', preventDefault: true })
+  })
+})
