@@ -16,7 +16,11 @@
 //  - contextmenu: Lobby's menu, never Excalidraw's.
 //  - copy / cut: the export policy. paste: read-only roles get nothing. dragover / drop: Lobby's upload
 //    path for editors, nothing for read-only roles; never Excalidraw's, never the browser's.
-//  - api.onChange: the editor-open guard (../lease/editorLease.ts).
+//  - api.onChange: the editor-open rule (../lease/editorLease.ts).
+//  - beforeinput / input / composition / paste / drop aimed at a text editor that is not the granted
+//    one: prevented, so text that arrives without a keydown (an IME commit, dictation, the emoji panel,
+//    a soft keyboard's keyCode 229, Excalidraw's own clipboard paste, a drop) never lands in it. The
+//    textarea is also read-only from the task it appeared in (EditorLease.watch).
 //
 // Events Lobby dispatches itself (the synthetic Enter / Escape) are in `synthetic` and pass untouched.
 
@@ -28,7 +32,7 @@ import { EditorLease, type EditTrace } from '../lease/editorLease.ts'
 import { bufferedKeyOf } from '../lease/replay.ts'
 import { classifyDoubleClick, type DblClickElement } from './dblclick.ts'
 import { DoubleTapMirror } from './doubleTap.ts'
-import { classifyKey, type KeyContext, type KeyVerdict, type LobbyKeyAction } from './keymap.ts'
+import { classifyKey, type KeyContext, type KeyVerdict, keyLikeOf, type LobbyKeyAction } from './keymap.ts'
 import { computeSelectAll } from './selectAll.ts'
 
 export type InputRole = 'editor' | 'readonly'
@@ -118,6 +122,8 @@ export class CanvasInput {
   private readonly tapMirror = new DoubleTapMirror()
   private editor: EditorLease | null = null
   private api: ExcalidrawImperativeAPI | null = null
+  /** macOS, decided as Excalidraw decides CTRL_OR_CMD (common dist/dev/index.js:2242). */
+  private mac = false
 
   readonly opts: CanvasInputOptions
 
@@ -132,7 +138,8 @@ export class CanvasInput {
   /** ExcalidrawHost wiring: attach once the engine is initialised. */
   readonly attach = (wrapper: HTMLElement, api: ExcalidrawImperativeAPI): (() => void) => {
     this.api = api
-    this.editor = new EditorLease({
+    this.mac = /Mac|iPod|iPhone|iPad/.test(wrapper.ownerDocument.defaultView?.navigator.platform ?? '')
+    const editor = new EditorLease({
       api,
       wrapper,
       lease: this.opts.lease,
@@ -140,6 +147,8 @@ export class CanvasInput {
       onDeny: this.opts.onDeny,
       trace: (t) => this.opts.trace?.(t),
     })
+    this.editor = editor
+    const stopWatching = editor.watch()
     const capture = { capture: true } as const
     const activeCapture = { capture: true, passive: false } as const
     wrapper.addEventListener('keydown', this.onKeyDown, capture)
@@ -152,11 +161,15 @@ export class CanvasInput {
     wrapper.addEventListener('paste', this.onPaste, capture)
     wrapper.addEventListener('dragover', this.onDragOver, activeCapture)
     wrapper.addEventListener('drop', this.onDrop, activeCapture)
+    wrapper.addEventListener('beforeinput', this.onBeforeInput, capture)
+    wrapper.addEventListener('input', this.onInput, capture)
+    wrapper.addEventListener('compositionstart', this.onComposition, capture)
     const unsubscribe = api.onChange((_elements, appState) => {
       this.editor?.onEngineChange(appState.editingTextElement)
     })
     return () => {
       unsubscribe()
+      stopWatching()
       wrapper.removeEventListener('keydown', this.onKeyDown, capture)
       wrapper.removeEventListener('keyup', this.onKeyUp, capture)
       wrapper.removeEventListener('dblclick', this.onDblClick, capture)
@@ -167,6 +180,9 @@ export class CanvasInput {
       wrapper.removeEventListener('paste', this.onPaste, capture)
       wrapper.removeEventListener('dragover', this.onDragOver, activeCapture)
       wrapper.removeEventListener('drop', this.onDrop, activeCapture)
+      wrapper.removeEventListener('beforeinput', this.onBeforeInput, capture)
+      wrapper.removeEventListener('input', this.onInput, capture)
+      wrapper.removeEventListener('compositionstart', this.onComposition, capture)
       this.editor = null
       this.api = null
     }
@@ -226,13 +242,20 @@ export class CanvasInput {
     return target instanceof HTMLTextAreaElement && target.classList.contains('excalidraw-wysiwyg')
   }
 
-  private keyContext(inTextEditor: boolean): KeyContext {
+  /** A text editor a key or input event is aimed at that is not the granted one: nothing may land. */
+  private notWritable(target: EventTarget | null): target is HTMLTextAreaElement {
+    return this.isTextEditor(target) && !this.editor?.isWritable(target)
+  }
+
+  private keyContext(textEditor: HTMLTextAreaElement | null): KeyContext {
     const sel = this.selected()
     const only = sel.length === 1 ? sel[0] : undefined
+    const editor = this.editor
     return {
       role: this.opts.role(),
-      editor: this.editor?.keyState() ?? 'none',
-      inTextEditor,
+      editor: !editor ? 'none' : textEditor ? editor.keyStateFor(textEditor) : editor.keyState(),
+      inTextEditor: textEditor !== null,
+      mac: this.mac,
       singleTextTarget:
         !!only && (only.type === 'text' || only.type === 'arrow' || TEXT_CONTAINERS.has(only.type)),
       singleNote: !!only && only.type === 'stickynote' && !only.locked,
@@ -243,14 +266,13 @@ export class CanvasInput {
 
   private readonly onKeyDown = (e: KeyboardEvent): void => {
     if (this.synthetic.has(e) || this.opts.allowlist === 'off') return
-    const inTextEditor = this.isTextEditor(e.target)
+    const textEditor = this.isTextEditor(e.target) ? e.target : null
     const editor = this.editor
-    if (inTextEditor && editor && editor.phase === 'idle') {
-      const editing = this.api?.getAppState().editingTextElement
-      if (editing) editor.guardOpen(editing, 'keydown')
-    }
-    const verdict = classifyKey(e, this.keyContext(inTextEditor))
-    this.trace('key', { key: e.key, code: e.code, verdict: verdictName(verdict), inTextEditor })
+    // The editor-open rule runs before the key acts, whatever the session's phase (a key can reach an
+    // editor Excalidraw opened before its onChange ran).
+    if (textEditor && editor) editor.checkTextarea(textEditor, 'keydown')
+    const verdict = classifyKey(keyLikeOf(e), this.keyContext(textEditor))
+    this.trace('key', { key: e.key, code: e.code, verdict: verdictName(verdict), inTextEditor: !!textEditor })
     if (verdict.kind === 'delegate') return
     e.stopPropagation()
     if (e.code) this.blockedKeyups.add(e.code)
@@ -390,7 +412,7 @@ export class CanvasInput {
   // --- menus, clipboard, drop ------------------------------------------------------------------------
 
   private readonly onContextMenu = (e: MouseEvent): void => {
-    if (this.isTextEditor(e.target) && this.editor?.phase === 'open') return // the textarea's own menu
+    if (this.isTextEditor(e.target) && this.editor?.isWritable(e.target)) return // the textarea's own menu
     e.preventDefault()
     e.stopPropagation()
     this.trace('contextmenu', {})
@@ -410,8 +432,8 @@ export class CanvasInput {
   }
 
   private readonly onCut = (e: ClipboardEvent): void => {
-    if (this.isTextEditor(e.target) && this.editor?.phase === 'open') return
-    if (this.opts.role() === 'editor' && this.canCopy()) return
+    if (this.isTextEditor(e.target) && this.editor?.isWritable(e.target)) return
+    if (!this.isTextEditor(e.target) && this.opts.role() === 'editor' && this.canCopy()) return
     e.preventDefault()
     e.stopPropagation()
     this.trace('cut-blocked', {})
@@ -419,10 +441,13 @@ export class CanvasInput {
 
   private readonly onPaste = (e: ClipboardEvent): void => {
     if (this.isTextEditor(e.target)) {
-      if (this.editor?.phase === 'open') return
-      e.preventDefault() // no paste into an editor whose lease is pending
+      if (this.editor?.isWritable(e.target)) return
+      // No paste into an editor that is not the granted one: Excalidraw's own onpaste writes Excalidraw
+      // clipboard text into the value by script (index.js:25303-25320), which read-only does not stop.
+      e.preventDefault()
       e.stopPropagation()
-      this.trace('paste-blocked', { where: 'pending-editor' })
+      this.trace('paste-blocked', { where: 'not-granted-editor' })
+      this.editor?.checkTextarea(e.target, 'paste')
       return
     }
     if (this.opts.role() === 'editor') return // Excalidraw -> props.onPaste (Lobby's handler)
@@ -432,18 +457,52 @@ export class CanvasInput {
   }
 
   private readonly onDragOver = (e: DragEvent): void => {
-    if (this.isTextEditor(e.target) && this.editor?.phase === 'open') return
+    if (this.isTextEditor(e.target) && this.editor?.isWritable(e.target)) return
     e.preventDefault() // the drop lands here, not in a new browser tab
     e.stopPropagation()
   }
 
   private readonly onDrop = (e: DragEvent): void => {
-    if (this.isTextEditor(e.target) && this.editor?.phase === 'open') return
+    if (this.isTextEditor(e.target) && this.editor?.isWritable(e.target)) return
     e.preventDefault()
     e.stopPropagation()
+    if (this.isTextEditor(e.target)) {
+      this.trace('drop-blocked', { where: 'not-granted-editor' })
+      return
+    }
     const editor = this.opts.role() === 'editor'
     this.trace('drop', { files: e.dataTransfer?.files.length ?? 0, handled: editor })
     if (editor) this.opts.onDrop?.(e)
+  }
+
+  // --- text that arrives without a keydown -----------------------------------------------------------
+
+  /** IME commits, dictation, the emoji panel, keyCode-229 keyboards, drops: blocked before they type. */
+  private readonly onBeforeInput = (e: Event): void => {
+    if (!this.notWritable(e.target)) return
+    e.preventDefault()
+    e.stopPropagation()
+    this.trace('beforeinput-blocked', { inputType: (e as InputEvent).inputType ?? '' })
+    this.editor?.checkTextarea(e.target, 'beforeinput')
+  }
+
+  /**
+   * Last line: an input that still reached a not-granted editor (no known path does: the textarea is
+   * read-only and beforeinput is prevented). Excalidraw's `oninput` never sees it, and the text is put back.
+   */
+  private readonly onInput = (e: Event): void => {
+    if (!this.notWritable(e.target)) return
+    e.stopImmediatePropagation()
+    this.trace('input-leak', { inputType: (e as InputEvent).inputType ?? '', value: e.target.value })
+    this.editor?.revert(e.target)
+    this.editor?.checkTextarea(e.target, 'input')
+  }
+
+  /** A composition cannot be cancelled; the textarea is read-only, so the IME has nothing to type into. */
+  private readonly onComposition = (e: CompositionEvent): void => {
+    if (!this.notWritable(e.target)) return
+    this.trace('composition-in-not-granted-editor', {})
+    this.editor?.checkTextarea(e.target, 'composition')
   }
 }
 

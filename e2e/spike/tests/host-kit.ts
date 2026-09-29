@@ -72,6 +72,8 @@ export interface EditorState {
   origin: string | null
   leaseId: string | null
   editingId: string | null
+  /** Excalidraw text editors in the DOM (textarea.excalidraw-wysiwyg). */
+  textareas: number
   textarea: null | {
     readOnly: boolean
     value: string
@@ -160,6 +162,68 @@ export async function waitEditor(
     .toBe(true)
   if (!last) throw new Error('unreachable')
   return last
+}
+
+/** host-lab's A6/A16 regression monitor (apps/web/src/canvas/spike/pages/host-lab.tsx). */
+export interface MonitorReport {
+  /** writable-editor-without-lease, input-into-unleased-editor, disagree (Lobby vs Excalidraw). */
+  violations: { kind: string; [key: string]: unknown }[]
+  releases: { id: string; text: string | null; at: number }[]
+  textWrites: { id: string; text: string; held: boolean; at: number }[]
+  reached: {
+    probe: string
+    key: string
+    code: string
+    ctrl: boolean
+    meta: boolean
+    alt: boolean
+    shift: boolean
+  }[]
+  inputs: { probe: string; type: string; inputType: string; leased: boolean; value: string }[]
+}
+
+export interface Agreement {
+  ok: boolean
+  issues: string[]
+  phase: string
+  origin: string | null
+  leaseId: string | null
+  editing: string | null
+  textareas: number
+}
+
+export const monitorStart = (page: Page) => lab(page, (x) => x.monitor.start())
+export const monitorReport = (page: Page): Promise<MonitorReport> => lab(page, (x) => x.monitor.report())
+export const agreement = (page: Page): Promise<Agreement> => lab(page, (x) => x.agreement())
+
+/** Two animation frames, then `ms`. */
+export const settle = (page: Page, ms = 120) =>
+  page.evaluate(
+    (t) =>
+      new Promise<void>((r) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(() => r(), t))),
+      ),
+    ms,
+  )
+
+/** The lease ids this session asked for (lease.acquire messages), in order. */
+export async function acquires(page: Page): Promise<string[]> {
+  return lab(page, (x) =>
+    x.lease
+      .log()
+      .filter(
+        (l: { dir: string; message: { type: string } }) =>
+          l.dir === 'up' && l.message.type === 'lease.acquire',
+      )
+      .map((l: { message: { id: string } }) => l.message.id),
+  )
+}
+
+/** A point on a note's body, away from its centered label. */
+export async function bodyPoint(page: Page, id: string): Promise<{ x: number; y: number }> {
+  const el = await element(page, id)
+  if (!el) throw new Error('no note')
+  return toClient(page, el.x + 24, el.y + 24)
 }
 
 /** Deterministic pseudo-random strings for repeated cases. */

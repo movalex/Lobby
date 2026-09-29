@@ -201,9 +201,195 @@ function createLab(cfg: LabConfig, onAttached: (api: ExcalidrawImperativeAPI) =>
     },
   }
 
+  // --- A6/A16 regression monitor ---------------------------------------------------------------------
+  // Independent of EditorLease's bookkeeping: a textarea may be writable, and may receive input, only if
+  // this session holds (or created) the lease of the element Excalidraw opened it for.
+  const monitor = {
+    on: false,
+    violations: [] as Record<string, unknown>[],
+    /** Every lease release, with the leased label's stored text at that moment. */
+    releases: [] as { id: string; text: string | null; at: number }[],
+    /** Every change of a label's stored text, and whether its lease was held when it was written. */
+    textWrites: [] as { id: string; text: string; held: boolean; at: number }[],
+    /** Keydowns that reached a textarea's own handlers (target phase), per textarea probe id. */
+    reached: [] as {
+      probe: string
+      key: string
+      code: string
+      ctrl: boolean
+      meta: boolean
+      alt: boolean
+      shift: boolean
+    }[],
+    /** input / beforeinput events on a textarea, and whether its lease was held. */
+    inputs: [] as { probe: string; type: string; inputType: string; leased: boolean; value: string }[],
+    lastText: new Map<string, string>(),
+    probes: 0,
+  }
+  let wrapperEl: HTMLElement | null = null
+  const textareas = () =>
+    wrapperEl
+      ? Array.from(wrapperEl.querySelectorAll<HTMLTextAreaElement>('textarea.excalidraw-wysiwyg'))
+      : []
+  const leasedId = (id: string | null | undefined) => !!id && (lease.isHeld(id) || lease.isCreatedHere(id))
+  const editingLeaseId = () => {
+    const e = api?.getAppState().editingTextElement
+    return e ? (e.containerId ?? e.id) : null
+  }
+  /** The lease id of the element a textarea edits (tagged when it appeared). */
+  const leaseOfTextarea = (ta: HTMLTextAreaElement) => {
+    if (!ta.dataset.probeLease) ta.dataset.probeLease = editingLeaseId() ?? ''
+    return ta.dataset.probeLease || null
+  }
+  const violation = (kind: string, data: Record<string, unknown> = {}) => {
+    if (monitor.on) monitor.violations.push({ kind, at: performance.now(), ...data })
+  }
+  const agreement = () => {
+    const st = need().getAppState()
+    const editing = st.editingTextElement
+    const el = input.editorLease
+    const phase = el?.phase ?? 'idle'
+    const tas = textareas()
+    const issues: string[] = []
+    if (tas.length > 1) issues.push(`${tas.length} textareas`)
+    if (editing) {
+      const id = editing.containerId ?? editing.id
+      if (phase === 'idle') issues.push('an editor is open and Lobby is idle')
+      else if (el?.leaseId !== id) issues.push(`editor on ${id}, Lobby session on ${el?.leaseId}`)
+      else if (phase === 'pending' && el?.origin !== 'guard')
+        issues.push('an editor is open before the grant')
+      if (tas.length === 0) issues.push('editingTextElement without a textarea')
+    } else {
+      if (tas.length > 0) issues.push('a textarea without editingTextElement')
+      if (phase === 'open') issues.push('Lobby open, no editor')
+      if (phase === 'pending' && el?.origin === 'guard') issues.push('Lobby guards a closed editor')
+    }
+    for (const ta of tas) {
+      if (!ta.readOnly && !leasedId(leaseOfTextarea(ta)))
+        issues.push('a writable textarea without a granted lease')
+    }
+    if (phase === 'open' && !leasedId(el?.leaseId)) issues.push('Lobby open without a lease')
+    return {
+      ok: issues.length === 0,
+      issues,
+      phase,
+      origin: el?.origin ?? null,
+      leaseId: el?.leaseId ?? null,
+      editing: editing?.id ?? null,
+      textareas: tas.length,
+    }
+  }
+  const watchTextarea = (ta: HTMLTextAreaElement) => {
+    if (ta.dataset.probe) return
+    ta.dataset.probe = String(++monitor.probes)
+    leaseOfTextarea(ta)
+    ta.addEventListener('keydown', (e) => {
+      if (!monitor.on) return
+      monitor.reached.push({
+        probe: ta.dataset.probe ?? '',
+        key: e.key,
+        code: e.code,
+        ctrl: e.ctrlKey,
+        meta: e.metaKey,
+        alt: e.altKey,
+        shift: e.shiftKey,
+      })
+    })
+    for (const type of ['beforeinput', 'input'] as const) {
+      ta.addEventListener(type, (e) => {
+        if (!monitor.on) return
+        const leased = leasedId(leaseOfTextarea(ta))
+        monitor.inputs.push({
+          probe: ta.dataset.probe ?? '',
+          type,
+          inputType: (e as InputEvent).inputType ?? '',
+          leased,
+          value: ta.value,
+        })
+        if (type === 'input' && !leased) violation('input-into-unleased-editor', { value: ta.value })
+      })
+    }
+  }
+  /**
+   * Checked at task boundaries (a timer, an animation frame): input arrives in a task of its own, so a
+   * textarea that Excalidraw appended and Lobby locked within one task was never writable for the user.
+   */
+  const monitorTick = () => {
+    for (const ta of textareas()) {
+      watchTextarea(ta)
+      if (!ta.readOnly && !leasedId(leaseOfTextarea(ta))) {
+        violation('writable-editor-without-lease', { lease: leaseOfTextarea(ta), value: ta.value })
+      }
+    }
+  }
+  const tickLater = () => setTimeout(() => monitor.on && monitorTick(), 0)
+  const monitorOnChange = () => {
+    if (!monitor.on) return
+    for (const e of need().getSceneElementsIncludingDeleted()) {
+      if (e.type !== 'text') continue
+      const text = (e as { originalText: string }).originalText
+      const prev = monitor.lastText.get(e.id)
+      monitor.lastText.set(e.id, text)
+      if (prev === undefined || prev === text) continue
+      const id = (e as { containerId?: string | null }).containerId ?? e.id
+      monitor.textWrites.push({ id, text, held: leasedId(id), at: performance.now() })
+    }
+    for (const ta of textareas()) watchTextarea(ta)
+    tickLater()
+    // After this task's microtasks (Lobby's deferred closes), Lobby and Excalidraw must agree.
+    setTimeout(() => {
+      if (!monitor.on) return
+      const a = agreement()
+      if (!a.ok) violation('disagree', a)
+    }, 0)
+  }
+  lease.on((ev) => {
+    if (!monitor.on || ev.kind !== 'release') return
+    const label = api
+      ?.getSceneElementsIncludingDeleted()
+      .find(
+        (e) => e.type === 'text' && ((e as { containerId?: string | null }).containerId ?? e.id) === ev.id,
+      )
+    monitor.releases.push({
+      id: ev.id,
+      text: (label as { originalText?: string } | undefined)?.originalText ?? null,
+      at: performance.now(),
+    })
+  })
+
   const extra = {
     config: cfg,
     input,
+    agreement,
+    monitor: {
+      start: () => {
+        monitor.violations.length = 0
+        monitor.releases.length = 0
+        monitor.textWrites.length = 0
+        monitor.reached.length = 0
+        monitor.inputs.length = 0
+        monitor.lastText = new Map(
+          need()
+            .getSceneElementsIncludingDeleted()
+            .filter((e) => e.type === 'text')
+            .map((e) => [e.id, (e as { originalText: string }).originalText]),
+        )
+        monitor.on = true
+      },
+      report: () => ({
+        violations: [...monitor.violations],
+        releases: [...monitor.releases],
+        textWrites: [...monitor.textWrites],
+        reached: [...monitor.reached],
+        inputs: [...monitor.inputs],
+      }),
+      stop: () => {
+        monitor.on = false
+      },
+      /** Keydowns that reached any textarea's own handlers since `from`. */
+      reachedSince: (from: number) => monitor.reached.slice(from),
+      reachedCount: () => monitor.reached.length,
+    },
     lease: {
       client: lease,
       server,
@@ -345,6 +531,7 @@ function createLab(cfg: LabConfig, onAttached: (api: ExcalidrawImperativeAPI) =>
         origin: input.editorLease?.origin ?? null,
         leaseId: input.editorLease?.leaseId ?? null,
         editingId: s?.editingTextElement?.id ?? null,
+        textareas: textareas().length,
         textarea: ta
           ? {
               readOnly: ta.readOnly,
@@ -425,6 +612,21 @@ function createLab(cfg: LabConfig, onAttached: (api: ExcalidrawImperativeAPI) =>
 
   const attach: HostWiring = (wrapper, readyApi) => {
     api = readyApi
+    wrapperEl = wrapper
+    // The monitor subscribes BEFORE Lobby's input layer: in one onChange it sees a label's final text
+    // write before Lobby's release for the same close runs.
+    const offMonitor = readyApi.onChange(monitorOnChange)
+    const monitorObserver = new MutationObserver(() => {
+      for (const ta of textareas()) watchTextarea(ta)
+      if (monitor.on) tickLater()
+    })
+    monitorObserver.observe(wrapper, { childList: true, subtree: true })
+    let raf = 0
+    const frame = () => {
+      if (monitor.on) monitorTick()
+      raf = requestAnimationFrame(frame)
+    }
+    raf = requestAnimationFrame(frame)
     const detachInput = input.attach(wrapper, readyApi)
     const detachPresence = attachPresencePointer(wrapper, {
       toScene: (x, y) => input.toScene(x, y),
@@ -463,6 +665,10 @@ function createLab(cfg: LabConfig, onAttached: (api: ExcalidrawImperativeAPI) =>
       detachTools()
       detachPresence()
       detachInput()
+      cancelAnimationFrame(raf)
+      monitorObserver.disconnect()
+      offMonitor()
+      wrapperEl = null
       api = null
     }
   }

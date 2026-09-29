@@ -23,7 +23,7 @@ pnpm lint >"$OUT/lint.log" 2>&1; r_lint=$?
 pnpm -r typecheck >"$OUT/typecheck.log" 2>&1; r_tc=$?
 (cd apps/web && npx tsc -p test/engine-probe) >"$OUT/tsc-engine-probe.log" 2>&1; r_tcp=$?
 pnpm exec vitest run --project web --project canvas-schema --project engine-probe >"$OUT/unit.log" 2>&1; r_unit=$?
-(cd apps/web && node --test build/excalidraw-host-rewrite.test.ts) >"$OUT/plugin-unit.log" 2>&1; r_plug=$?
+(cd apps/web && node --test build/excalidraw-host-rewrite.test.ts build/excalidraw-assets.test.ts) >"$OUT/plugin-unit.log" 2>&1; r_plug=$?
 
 t0=$(date +%s)
 (
@@ -47,17 +47,22 @@ for m in EXCALIDRAW_ASSET_PATH EXCALIDRAW_THROTTLE_RENDER excalidraw-assets exca
   c=$(grep -rl -- "$m" apps/web/dist/int-normal | wc -l); echo "$m $c" >>"$OUT/normal-grep.txt"; hits=$((hits + c))
 done
 [ -d apps/web/dist/int-normal/excalidraw-assets ] && hits=$((hits + 1000))
-# Engine flag WITHOUT the dev-auth guard: the spike route and its chunks must be absent.
+# Engine flag WITHOUT the dev-auth guard: the spike route, its chunks and the engine fonts must be absent.
+# The WHOLE dist is searched (the first version searched assets/ only and missed a 14 MB
+# excalidraw-assets/ folder of fonts; the assets plugin now follows the route's gate).
 rm -rf apps/web/dist/int-noguard
 (cd apps/web && VITE_LOBBY_ENGINE=excalidraw pnpm exec vite build --outDir dist/int-noguard) >"$OUT/noguard-build.log" 2>&1; r_ng=$?
 ng=0
-for m in __lobbySpike spike-engine spike-missing excalidraw__canvas EXCALIDRAW_ASSET_PATH "@excalidraw/"; do
-  ng=$((ng + $(grep -rl -- "$m" apps/web/dist/int-noguard/assets | wc -l)))
+: >"$OUT/noguard-grep.txt"
+for m in __lobbySpike spike-engine spike-missing excalidraw__canvas EXCALIDRAW_ASSET_PATH "@excalidraw/" excalidraw-assets; do
+  c=$(grep -rl -- "$m" apps/web/dist/int-noguard | wc -l); echo "$m $c" >>"$OUT/noguard-grep.txt"; ng=$((ng + c))
 done
+[ -d apps/web/dist/int-noguard/excalidraw-assets ] && ng=$((ng + 1000))
+echo "files $(find apps/web/dist/int-noguard -type f | wc -l)" >>"$OUT/noguard-grep.txt"
 
 echo "run $n: lint=$(st $r_lint) typecheck=$(st $r_tc) engine-probe-tsc=$(st $r_tcp)" \
   "unit=$(st $r_unit) [$(grep -E 'Tests +[0-9]' "$OUT/unit.log" | tr -s ' ')]" \
-  "plugin-unit=$(st $r_plug) [$(grep -E '^. (pass|fail) ' "$OUT/plugin-unit.log" | tr -s ' ' | tr '\n' ' ')]" \
+  "plugin-unit=$(st $r_plug) [$(grep -E ' (pass|fail) [0-9]+$' "$OUT/plugin-unit.log" | tr -s ' ' | tr '\n' ' ')]" \
   "spike=$(st $r_spike) [$(grep -E '^ +[0-9]+ (passed|failed|skipped|flaky)' "$OUT/spike.log" | tr -s ' ' | tr '\n' ' ')in $((t1 - t0)) s, build $([ "$spike_mtime" -ge "$t0" ] && echo fresh || echo STALE)]" \
   "a8-browser=$(st $r_a8) normal-build=$(st $r_build) normal-grep-hits=$hits" \
   "noguard-build=$(st $r_ng) noguard-marker-files=$ng total $(($(date +%s) - t_start)) s" | tee -a "$OUT/../summary.txt"

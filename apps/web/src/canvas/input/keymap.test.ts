@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { chordOf, classifyKey, type KeyContext, type KeyLike, type KeyVerdict } from './keymap.ts'
+import {
+  chordOf,
+  classifyKey,
+  isKeptTextEditorChord,
+  type KeyContext,
+  type KeyLike,
+  type KeyVerdict,
+  keyLikeOf,
+} from './keymap.ts'
 
 // Pins the allowlist of docs/EXCALIDRAW-MIGRATION.md §2.3.3 (the plan's keyboard-map test).
 
@@ -225,10 +233,105 @@ describe('classifyKey: the text editor', () => {
     }
   })
 
-  it('blocks Ctrl+S, Cmd+S and Ctrl+Shift+S inside the editor (open item 1), with preventDefault', () => {
-    for (const spec of ['mod+s', 'meta+s', 'mod+shift+s', 'meta+shift+s']) {
+  it('blocks every save chord inside the editor (open item 1), Alt included, with preventDefault', () => {
+    for (const spec of [
+      'mod+s',
+      'meta+s',
+      'mod+shift+s',
+      'meta+shift+s',
+      // The verifier's finding: Excalidraw's save key test ignores Alt (index.js:11606).
+      'mod+alt+s',
+      'meta+alt+s',
+      'mod+alt+shift+s',
+      'meta+alt+shift+s',
+      'mod+meta+s',
+      'mod+meta+alt+s',
+    ]) {
+      expect(classifyKey(k(spec), granted), spec).toEqual({ kind: 'block', preventDefault: true })
+      expect(classifyKey(k(spec), { ...granted, mac: true }), `mac ${spec}`).toEqual({
+        kind: 'block',
+        preventDefault: true,
+      })
+    }
+  })
+
+  it("blocks the textarea's other actions: zoom, font size, Ctrl+Enter submit, Ctrl+[ ] indent, Ctrl+P", () => {
+    for (const spec of [
+      'mod+=',
+      'mod+-',
+      'mod+0',
+      'mod+shift+,',
+      'mod+shift+.',
+      'mod+Enter',
+      'mod+[',
+      'mod+]',
+      'mod+p',
+    ]) {
+      expect(classifyKey(k(spec), granted).kind, spec).toBe('block')
+    }
+    // Tab with a modifier would indent too (the textarea's Tab test ignores modifiers).
+    expect(classifyKey(k('mod+Tab'), granted).kind).toBe('block')
+    expect(classifyKey(k('alt+Tab'), granted).kind).toBe('block')
+  })
+
+  it('keeps the text-editing chords: caret moves, word deletes, undo/redo, select all, clipboard', () => {
+    for (const spec of [
+      'mod+ArrowLeft',
+      'mod+shift+ArrowRight',
+      'shift+ArrowUp',
+      'mod+Home',
+      'mod+shift+End',
+      'mod+Backspace',
+      'mod+Delete',
+      'alt+Backspace',
+      'meta+Backspace',
+      'mod+z',
+      'meta+z',
+      'mod+shift+z',
+      'mod+y',
+      'mod+a',
+      'meta+a',
+      'mod+c',
+      'mod+x',
+      'mod+v',
+      'mod+shift+v',
+      'mod+Insert',
+      'shift+Insert',
+      'shift+Delete',
+    ]) {
+      expect(classifyKey(k(spec), granted), spec).toEqual({ kind: 'delegate' })
+    }
+    // Not kept: Cmd+Y is not a text shortcut; Ctrl+Shift+A/C/X; Ctrl+Alt+Z.
+    for (const spec of ['meta+y', 'mod+shift+a', 'mod+shift+c', 'mod+shift+x', 'mod+alt+z', 'mod+meta+z']) {
+      expect(classifyKey(k(spec), granted).kind, spec).toBe('block')
+    }
+  })
+
+  it('Alt+Arrow / Alt+Home: word moves on macOS; Back / Forward / Home page elsewhere, so blocked', () => {
+    for (const spec of ['alt+ArrowLeft', 'alt+ArrowRight', 'alt+shift+ArrowLeft', 'alt+Home']) {
+      expect(classifyKey(k(spec), { ...granted, mac: true }), spec).toEqual({ kind: 'delegate' })
       expect(classifyKey(k(spec), granted), spec).toEqual({ kind: 'block', preventDefault: true })
     }
+  })
+
+  it('AltGr and macOS Option characters type through the browser; their keydown never reaches Excalidraw', () => {
+    expect(classifyKey(k('mod+alt+q', { key: '@', altGraph: true }), granted)).toEqual({ kind: 'browser' })
+    // AltGr+S on a layout with no AltGr character reports 's': still stopped (it would be a save chord).
+    expect(classifyKey(k('mod+alt+s', { altGraph: true }), granted)).toEqual({ kind: 'browser' })
+    expect(classifyKey(k('alt+s', { key: 'ß' }), { ...granted, mac: true })).toEqual({ kind: 'browser' })
+    expect(classifyKey(k('alt+e', { key: 'Dead' }), { ...granted, mac: true })).toEqual({ kind: 'browser' })
+    // Off macOS, Alt+letter types nothing: a blocked chord.
+    expect(classifyKey(k('alt+s'), granted)).toEqual({ kind: 'block', preventDefault: true })
+    // An IME composing (keyCode 229): the browser's.
+    expect(classifyKey(k('mod+a', { key: 'Process', keyCode: 229 }), granted)).toEqual({ kind: 'browser' })
+  })
+
+  it('a key aimed at a text editor the session does not own (foreign) acts nowhere', () => {
+    const foreign: KeyContext = { ...EDITOR, editor: 'foreign', inTextEditor: true }
+    for (const spec of ['a', 'Enter', 'Escape', 'mod+z', 'mod+s', 'mod+alt+s']) {
+      expect(classifyKey(k(spec), foreign).kind, spec).toBe('block')
+    }
+    expect(classifyKey(k('Shift'), foreign)).toEqual({ kind: 'block', preventDefault: false })
   })
 
   it('buffers printable keys, Enter, Backspace and Delete while the lease is pending; Escape cancels', () => {
@@ -249,6 +352,144 @@ describe('classifyKey: the text editor', () => {
   it('AltGr characters still type (Windows reports AltGr as Ctrl+Alt)', () => {
     const pending: KeyContext = { ...EDITOR, editor: 'pending', inTextEditor: true }
     expect(classifyKey(k('mod+alt+q', { key: '@', altGraph: true }), pending)).toEqual({ kind: 'buffer' })
+  })
+})
+
+/**
+ * A mirror of Excalidraw 0.18.0-1118751's text editor keydown handler (dist/dev/index.js:25367-25409) and
+ * of what its container's onKeyDown still does for a textarea target (:43983-44011). CTRL_OR_CMD is
+ * metaKey on macOS, ctrlKey elsewhere (common :2391).
+ */
+function excalidrawTextareaAction(e: KeyLike, mac: boolean): string | null {
+  const cmd = mac ? e.metaKey : e.ctrlKey
+  const code = e.code ?? ''
+  if (!e.shiftKey && (code === 'Equal' || code === 'NumpadAdd') && (cmd || e.shiftKey)) return 'zoomIn'
+  if (!e.shiftKey && (code === 'Minus' || code === 'NumpadSubtract') && (cmd || e.shiftKey)) return 'zoomOut'
+  if (!e.shiftKey && (code === 'Digit0' || code === 'Numpad0') && (cmd || e.shiftKey)) return 'resetZoom'
+  if (cmd && e.shiftKey && (e.key === '<' || e.key === ',')) return 'decreaseFontSize'
+  if (cmd && e.shiftKey && (e.key === '>' || e.key === '.')) return 'increaseFontSize'
+  if (e.key === 'Escape') return 'submit'
+  if (e.key === 's' && cmd && !e.shiftKey) return 'saveToActiveFile'
+  if (e.key === 'Enter' && cmd) return 'submit'
+  if (e.key === 'Tab' || (cmd && (code === 'BracketLeft' || code === 'BracketRight'))) return 'indent'
+  // The container's onKeyDown, before it returns for a writable target:
+  if (cmd && e.key === 'p' && !e.shiftKey && !e.altKey) return 'toast'
+  return null
+}
+
+describe('the text editor allowlist against every action of the textarea handler', () => {
+  const keys: { key: string; code: string; shifted?: string }[] = [
+    ...'abcdefghijklmnopqrstuvwxyz'
+      .split('')
+      .map((c) => ({ key: c, code: `Key${c.toUpperCase()}`, shifted: c.toUpperCase() })),
+    ...'0123456789'.split('').map((d, i) => ({ key: d, code: `Digit${d}`, shifted: ')!@#$%^&*('[i] })),
+    { key: '`', code: 'Backquote', shifted: '~' },
+    { key: '-', code: 'Minus', shifted: '_' },
+    { key: '=', code: 'Equal', shifted: '+' },
+    { key: '[', code: 'BracketLeft', shifted: '{' },
+    { key: ']', code: 'BracketRight', shifted: '}' },
+    { key: '\\', code: 'Backslash', shifted: '|' },
+    { key: ';', code: 'Semicolon', shifted: ':' },
+    { key: "'", code: 'Quote', shifted: '"' },
+    { key: ',', code: 'Comma', shifted: '<' },
+    { key: '.', code: 'Period', shifted: '>' },
+    { key: '/', code: 'Slash', shifted: '?' },
+    { key: '+', code: 'NumpadAdd' },
+    { key: '-', code: 'NumpadSubtract' },
+    { key: '0', code: 'Numpad0' },
+    ...[
+      'Enter',
+      'Tab',
+      'Escape',
+      'Backspace',
+      'Delete',
+      'Insert',
+      'Home',
+      'End',
+      'PageUp',
+      'PageDown',
+      ' ',
+    ].map((key) => ({ key, code: key === ' ' ? 'Space' : key })),
+    ...['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].map((key) => ({ key, code: key })),
+    ...Array.from({ length: 12 }, (_, i) => ({ key: `F${i + 1}`, code: `F${i + 1}` })),
+  ]
+  const events: KeyLike[] = []
+  for (const kk of keys) {
+    for (let m = 0; m < 16; m++) {
+      const shiftKey = (m & 8) !== 0
+      events.push({
+        key: shiftKey && kk.shifted ? kk.shifted : kk.key,
+        code: kk.code,
+        ctrlKey: (m & 1) !== 0,
+        metaKey: (m & 2) !== 0,
+        altKey: (m & 4) !== 0,
+        shiftKey,
+      })
+    }
+  }
+
+  for (const mac of [false, true]) {
+    it(`${mac ? 'macOS' : 'Windows'}: a delegated key never triggers a textarea action except Escape and Tab/Shift+Tab`, () => {
+      const ctx: KeyContext = { ...EDITOR, editor: 'granted', inTextEditor: true, mac }
+      const leaks: string[] = []
+      let delegated = 0
+      for (const e of events) {
+        const v = classifyKey(e, ctx)
+        const action = excalidrawTextareaAction(e, mac)
+        if (v.kind !== 'delegate') continue
+        delegated++
+        const chord = e.ctrlKey || e.metaKey || e.altKey
+        const kept =
+          (action === 'submit' && e.key === 'Escape' && !chord) ||
+          (action === 'indent' && e.key === 'Tab' && !chord)
+        if (action && !kept) leaks.push(`${JSON.stringify(e)} -> ${action}`)
+      }
+      expect(leaks).toEqual([])
+      expect(delegated).toBeGreaterThan(100)
+    })
+
+    it(`${mac ? 'macOS' : 'Windows'}: every chord with Ctrl, Cmd or Alt is stopped unless it is a kept chord`, () => {
+      const ctx: KeyContext = { ...EDITOR, editor: 'granted', inTextEditor: true, mac }
+      const delegatedChords = new Set<string>()
+      for (const e of events) {
+        if (!(e.ctrlKey || e.metaKey || e.altKey)) continue
+        const v = classifyKey(e, ctx)
+        if (v.kind === 'delegate') {
+          expect(isKeptTextEditorChord(e, mac), JSON.stringify(e)).toBe(true)
+          delegatedChords.add(chordOf(e))
+        } else {
+          expect(['block', 'browser'], JSON.stringify(e)).toContain(v.kind)
+        }
+      }
+      // Of the 47 letter/digit/punctuation keys, only these kept chords are delegated.
+      const letters = [...delegatedChords].filter((c) => /\+[a-z0-9`\-=[\]\\;',./]$/.test(c)).sort()
+      expect(letters).toEqual([
+        'mod+a',
+        'mod+c',
+        'mod+shift+v',
+        'mod+shift+z',
+        'mod+v',
+        'mod+x',
+        'mod+y',
+        'mod+z',
+      ])
+    })
+  }
+
+  it('keyLikeOf reads AltGr from getModifierState (a KeyboardEvent has no altGraph field)', () => {
+    const ev = {
+      key: '@',
+      code: 'KeyQ',
+      ctrlKey: true,
+      metaKey: false,
+      altKey: true,
+      shiftKey: false,
+      isComposing: false,
+      repeat: false,
+      keyCode: 81,
+      getModifierState: (m: string) => m === 'AltGraph',
+    } as unknown as KeyboardEvent
+    expect(keyLikeOf(ev)).toMatchObject({ key: '@', altGraph: true, keyCode: 81 })
   })
 })
 

@@ -5,9 +5,37 @@
 // Why an allowlist: Excalidraw's own handlers download the board (Ctrl+Shift+S has viewMode: true and no
 // predicate, index.js:11608-11651), load files (Ctrl+O), copy the board as PNG (Alt+Shift+C), change an
 // element's type in place (Tab, :43960-43977), make flowchart nodes (Ctrl+Arrow) and switch to tools whose
-// clicks open the text editor without the lease (T, N, Shift+X; TOOLS at :9934). Its text editor's own
-// onkeydown runs actionSaveToActiveFile on Ctrl/Cmd+S (:25388) through executeAction, which skips the
-// action's predicate (:23095-23106), so `canvasActions.saveToActiveFile: false` does not stop it.
+// clicks open the text editor without the lease (T, N, Shift+X; TOOLS at :9934).
+//
+// Inside the text editor the rule is an allowlist too (classifyTextEditorKey). The textarea's own
+// `onkeydown` (index.js:25367-25409, the whole handler) can trigger, in its order:
+//   :25368  zoom in       — actionZoomIn.keyTest (:9593): code Equal|NumpadAdd and (CTRL_OR_CMD or Shift),
+//                           guarded by !Shift, so CTRL_OR_CMD+=, Alt ignored
+//   :25372  zoom out      — actionZoomOut.keyTest (:9638): Minus|NumpadSubtract, same modifiers
+//   :25376  reset zoom    — actionResetZoom.keyTest (:9686): Digit0|Numpad0, same modifiers
+//   :25380  font size -   — actionDecreaseFontSize.keyTest (:8326): CTRL_OR_CMD+Shift and key '<' or ','
+//                           (writes the label's fontSize), Alt ignored
+//   :25382  font size +   — actionIncreaseFontSize.keyTest (:8346): CTRL_OR_CMD+Shift and key '>' or '.'
+//   :25384  submit        — key Escape, any modifiers (closes the editor)
+//   :25388  save          — actionSaveToActiveFile.keyTest (:11606): key 's', CTRL_OR_CMD, !Shift, Alt
+//                           IGNORED; submits, then executeAction, which skips the predicate (:23095-23106):
+//                           showSaveFilePicker (the whole board). So Ctrl+Alt+S / Cmd+Alt+S save too.
+//   :25392  submit        — key Enter with CTRL_OR_CMD, any other modifiers
+//   :25399  indent/outdent — key Tab with ANY modifiers (Shift outdents), or CTRL_OR_CMD+[ / ] by code
+// CTRL_OR_CMD is metaKey on macOS and ctrlKey elsewhere, from navigator.platform at load (common :2242,
+// :2391). Excalidraw's container onKeyDown then sees what bubbles: for a textarea target it shows a toast
+// on CTRL_OR_CMD+P (:43983) and prevents CTRL_OR_CMD+-/= (:43999) before returning (:44005-44011).
+//
+// Kept (delegated) there: every key without Ctrl, Cmd or Alt (typing, dead keys, IME keys, Enter,
+// Shift+Enter, Tab / Shift+Tab indent, Escape submit, caret keys, Backspace, Delete); caret and selection
+// moves with modifiers (Alt only on macOS: elsewhere Alt+Left/Right/Home are Back/Forward/Home page);
+// Ctrl/Cmd/Alt+Backspace/Delete (word and line deletes); Ctrl/Cmd+Z, Ctrl/Cmd+Shift+Z, Ctrl+Y (native
+// undo/redo of the typing); Ctrl/Cmd+A (select the text); Ctrl/Cmd+C, X, V, Shift+V, Ctrl+Insert (the
+// clipboard arrives as copy/cut/paste events, where the export policy applies). None of the kept chords
+// matches any key test above (the container only notes Ctrl/Cmd+V as a plain-paste flag, :43992). AltGr
+// characters (Windows reports AltGr as Ctrl+Alt) and macOS Option characters type through the browser's
+// default, but their keydown is stopped. Every other chord with Ctrl, Cmd or Alt is stopped (and
+// prevented, except browser chords), whatever the other modifiers.
 //
 // Type-to-edit semantics follow today's Lobby (features/canvas-ux/keys.ts, COL-04 and A11Y-12): a
 // printable key on the one selected note APPENDS, and Enter edits with the caret at the end. The two
@@ -24,6 +52,24 @@ export interface KeyLike {
   repeat?: boolean
   /** KeyboardEvent.getModifierState('AltGraph'): Windows reports AltGr as Ctrl+Alt. */
   altGraph?: boolean
+  /** 229 while an IME or a soft keyboard composes ('Process' / 'Unidentified'). */
+  keyCode?: number
+}
+
+/** The fields of a DOM KeyboardEvent the allowlist reads (a KeyboardEvent has no `altGraph` field). */
+export function keyLikeOf(e: KeyboardEvent): KeyLike {
+  return {
+    key: e.key,
+    code: e.code,
+    ctrlKey: e.ctrlKey,
+    metaKey: e.metaKey,
+    altKey: e.altKey,
+    shiftKey: e.shiftKey,
+    isComposing: e.isComposing,
+    repeat: e.repeat,
+    altGraph: typeof e.getModifierState === 'function' && e.getModifierState('AltGraph'),
+    keyCode: e.keyCode,
+  }
 }
 
 export type LobbyKeyAction =
@@ -74,11 +120,15 @@ export interface KeyContext {
   role: 'editor' | 'readonly'
   /**
    * The text editor's state: 'none' (closed), 'granted' (open, this session holds the lease) or
-   * 'pending' (open read-only by the guard, or being opened, while the lease is asked for).
+   * 'pending' (open read-only by the guard, or being opened, while the lease is asked for). For a key
+   * aimed at a textarea: 'foreign' when that textarea is not the one Lobby's session owns (an editor
+   * Excalidraw opened without a grant, being closed or re-queued by the guard).
    */
-  editor: 'none' | 'granted' | 'pending'
+  editor: 'none' | 'granted' | 'pending' | 'foreign'
   /** The key's target is Excalidraw's text editor (textarea.excalidraw-wysiwyg). */
   inTextEditor: boolean
+  /** macOS (navigator.platform, as Excalidraw decides CTRL_OR_CMD): Option types and moves by word. */
+  mac?: boolean
   /** Exactly one element is selected and it is a text or a text container (P1's target). */
   singleTextTarget: boolean
   /** Exactly one unlocked sticky note is selected (P2's target). */
@@ -187,9 +237,70 @@ const codeIs = (e: KeyLike, ...codes: string[]) => codes.includes(e.code ?? '')
 const letterIs = (e: KeyLike, letter: string) =>
   e.code === `Key${letter.toUpperCase()}` || e.key.toLowerCase() === letter
 
-/** Ctrl/Cmd+S with or without Shift: Excalidraw's save paths (open item 1). */
-export function isSaveChord(e: KeyLike): boolean {
-  return isMod(e) && !e.altKey && letterIs(e, 's')
+const CARET_KEYS = new Set([...ARROWS, 'Home', 'End', 'PageUp', 'PageDown'])
+
+/**
+ * The letter a chord names: its `key` when that is a Latin letter (the browser's editing commands follow
+ * the layout), else its `code` (non-Latin layouts: Ctrl+Я is still Ctrl+Z to the browser).
+ */
+function chordLetter(e: KeyLike): string | null {
+  if (/^[a-z]$/i.test(e.key)) return e.key.toLowerCase()
+  const code = e.code ?? ''
+  return /^Key[A-Z]$/.test(code) ? code.slice(3).toLowerCase() : null
+}
+
+/** One character (or a dead key) the browser types by default: AltGr and macOS Option characters. */
+function typesCharacter(e: KeyLike): boolean {
+  return e.key === 'Dead' || ([...e.key].length === 1 && !/\p{C}/u.test(e.key))
+}
+
+/**
+ * A kept text-editing chord inside the granted text editor (Ctrl, Cmd or Alt held). None of these matches
+ * a key test of the textarea's handler (see the header), so delegating them runs only the browser's own
+ * editing: caret and selection moves, word/line deletes, native undo/redo, select all, clipboard events.
+ */
+export function isKeptTextEditorChord(e: KeyLike, mac: boolean): boolean {
+  if (CARET_KEYS.has(e.key)) return !e.altKey || mac // Alt+Left/Right/Home: Back/Forward/Home page off macOS
+  if (e.key === 'Backspace' || e.key === 'Delete') return !e.shiftKey // Ctrl/Alt/Cmd word and line deletes
+  if (e.altKey || e.ctrlKey === e.metaKey) return false // exactly one of Ctrl / Cmd, no Alt
+  if (e.key === 'Insert') return !e.shiftKey // Ctrl+Insert: copy
+  switch (chordLetter(e)) {
+    case 'z': // undo, Shift: redo
+    case 'v': // paste, Shift: paste as plain text
+      return true
+    case 'a': // select the text
+    case 'c': // copy
+    case 'x': // cut
+      return !e.shiftKey
+    case 'y': // redo (Windows / Linux)
+      return e.ctrlKey && !e.shiftKey
+    default:
+      return false
+  }
+}
+
+/**
+ * Inside the granted text editor (open item 1, corrected after the verifier found Ctrl+Alt+S and
+ * Cmd+Alt+S still saving): an allowlist, not a list of save chords.
+ */
+export function classifyTextEditorKey(e: KeyLike, ctx: Pick<KeyContext, 'inMindMap' | 'mac'>): KeyVerdict {
+  const mod = isMod(e)
+  if (ctx.inMindMap && (e.key === 'Tab' || (e.key === 'Enter' && !mod && !e.altKey))) {
+    return { kind: 'lobby', action: 'mindmap' }
+  }
+  if (MODIFIER_KEYS.has(e.key)) return { kind: 'delegate' }
+  // No Ctrl, Cmd or Alt: the textarea's handler acts only on Escape (submit) and Tab / Shift+Tab (indent),
+  // both kept. The rest is the browser's own typing, dead keys, IME keys and caret keys.
+  if (!mod && !e.altKey) return { kind: 'delegate' }
+  // An IME composing (keyCode 229 'Process'): the browser owns it; Excalidraw does not see it.
+  if (e.isComposing || e.keyCode === 229 || e.key === 'Process') return { kind: 'browser' }
+  // A character typed with AltGr (Windows: Ctrl+Alt) or macOS Option: the browser types it by default,
+  // but its keydown never reaches Excalidraw (AltGr+S on a layout with no AltGr character reports 's').
+  if (typesCharacter(e) && (e.altGraph || (ctx.mac && e.altKey && !e.ctrlKey && !e.metaKey))) {
+    return { kind: 'browser' }
+  }
+  if (isKeptTextEditorChord(e, ctx.mac === true)) return { kind: 'delegate' }
+  return block(e)
 }
 
 /** Lobby-owned keys that make sense for every role (navigation, search, menus). */
@@ -215,19 +326,16 @@ export function classifyKey(e: KeyLike, ctx: KeyContext): KeyVerdict {
     return block(e)
   }
 
-  // 2. The text editor has the keyboard and this session holds the lease: everything goes to the
-  //    textarea (native typing, native Ctrl+Z / Ctrl+Y, Ctrl+A selects the text), except the save chords.
-  if (ctx.editor === 'granted' && ctx.inTextEditor) {
-    if (isSaveChord(e)) return { kind: 'block', preventDefault: true }
-    if (ctx.inMindMap && (e.key === 'Tab' || (e.key === 'Enter' && !isMod(e) && !e.altKey))) {
-      return { kind: 'lobby', action: 'mindmap' }
-    }
-    return { kind: 'delegate' }
-  }
+  // 2. The text editor has the keyboard and this session holds the lease: the text-editor allowlist
+  //    (native typing and editing, native Ctrl+Z / Ctrl+Y, Ctrl+A selects the text, clipboard events).
+  if (ctx.editor === 'granted' && ctx.inTextEditor) return classifyTextEditorKey(e, ctx)
 
-  // A key aimed at a text editor Lobby did not open is a guard case (CanvasInput turns it into
-  // 'pending' before calling this); if one gets here anyway, nobody acts.
-  if (ctx.inTextEditor) return block(e)
+  // A key aimed at a text editor Lobby's session does not own ('foreign': an editor Excalidraw opened
+  // without a grant, which the guard is closing or re-queuing): nobody acts.
+  if (ctx.inTextEditor) {
+    if (MODIFIER_KEYS.has(e.key)) return { kind: 'block', preventDefault: false }
+    return block(e)
+  }
 
   if (MODIFIER_KEYS.has(e.key)) return { kind: 'delegate' }
   if (e.key === 'Tab' && !isMod(e) && !e.altKey) {

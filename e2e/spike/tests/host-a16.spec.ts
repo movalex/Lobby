@@ -106,7 +106,10 @@ interface PathCase {
   replacesAll?: boolean
 }
 
-/** Labels made before Nunito loads are measured with a fallback font; see the cold-open test. */
+/**
+ * The 20-case loops load Nunito first. On a fresh page the first open re-lays out the label before any
+ * key (see the cold-open test, which records what changes; its cause is not established).
+ */
 async function warmFonts(page: Page): Promise<void> {
   await page.evaluate(async () => {
     await document.fonts.load('20px Nunito', 'Label Tap 0123456789 zq')
@@ -311,12 +314,16 @@ test.describe('A16: editor-open paths (mouse / keyboard)', () => {
     })
   }
 
-  test('cold open (finding): opening re-lays out a label measured before Nunito loaded; the guard holds it back', async ({
+  test('cold open (finding): the first open on a fresh page re-lays out the label before any key; the guard holds it back', async ({
     page,
   }) => {
     await openLab(page, { grant: 'manual' })
     await resetLab(page)
-    const fontBefore = await page.evaluate(() => document.fonts.check('20px Nunito', 'Label'))
+    // Recorded, not asserted. It reports true here (it is also true while no Nunito face is registered),
+    // so this test does not show that the label was measured before Nunito loaded (the verifier's
+    // correction to the old title). It shows that the open itself writes the label, and that the guard
+    // holds those writes back.
+    const nunitoCheckAtCreate = await page.evaluate(() => document.fonts.check('20px Nunito', 'Label'))
     const original = 'Label cold'
     const ids = await addNote(page, { x: 220, y: 160, size: 200, text: original })
     await selectByClick(page, ids)
@@ -328,7 +335,7 @@ test.describe('A16: editor-open paths (mouse / keyboard)', () => {
     await settle(page, 60)
     const writes = await lab(page, (x, before) => x.classifySince(before), prev)
     const st = await editor(page)
-    console.log('A16-COLD-OPEN', JSON.stringify({ fontLoadedAtCreate: fontBefore, writes, editor: st }))
+    console.log('A16-COLD-OPEN', JSON.stringify({ nunitoCheckAtCreate, writes, editor: st }))
     expect(st).toMatchObject({
       phase: 'pending',
       origin: 'guard',
