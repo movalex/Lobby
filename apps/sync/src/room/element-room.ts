@@ -250,6 +250,7 @@ export class ElementRoom {
     at: number
   } | null = null
   private lastDiskNotice = 0
+  private lastDiskCheck = 0
   private deletedSinceTrim = 0
 
   private readonly deps: RoomDeps
@@ -685,6 +686,7 @@ export class ElementRoom {
   }
 
   private leaseTick(): void {
+    this.checkDisk() // at most once a minute: DISK when free space is below 5%
     const expired = this.leases.expire(this.deps.now())
     for (const l of expired) {
       this.broadcast(JSON.stringify({ type: 'lease', id: l.id, holder: null }))
@@ -944,7 +946,8 @@ export class ElementRoom {
 
   private checkDisk(force = false): void {
     const now = this.deps.now()
-    if (!force && now - this.lastDiskNotice < 60_000) return
+    if (!force && now - this.lastDiskCheck < 60_000) return
+    this.lastDiskCheck = now
     try {
       const st = statfsSync(dirname(this.deps.path))
       if (st.blocks > 0 && st.bavail / st.blocks < DISK_LOW_FRACTION) {

@@ -113,6 +113,8 @@ const equal = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.st
 const clone = <T>(v: T): T => (v === undefined ? v : (JSON.parse(JSON.stringify(v)) as T))
 const isLabel = (el: El | null | undefined): boolean => !!el && el.type === 'text' && !!el.containerId
 const isFreeText = (el: El | null | undefined): boolean => !!el && el.type === 'text' && !el.containerId
+/** The largest `version` a create may carry from a client. */
+const MAX_CLIENT_VERSION = 2 ** 31
 const FIT_CONTAINERS = new Set(['rectangle', 'ellipse', 'diamond', 'stickynote'])
 /** The lease id that protects an element's `text`, `layout` and `life`: a label's container, else itself. */
 export const leaseIdOf = (el: El): string => (isLabel(el) ? (el.containerId as string) : el.id)
@@ -347,7 +349,8 @@ export class PushApplier {
       ...(Object.keys(canon.value).length ? { lobby: canon.value } : {}),
       lobbyServer,
     }
-    next.version = Math.max(prev?.version ?? 0, pushed.version) + 1
+    // version = max(stored, client) + 1, the client's capped (a forged 2^53 would break the arithmetic)
+    next.version = Math.max(prev?.version ?? 0, Math.min(pushed.version, MAX_CLIENT_VERSION)) + 1
     next.versionNonce = this.env.nonce()
     next.updated = this.env.now
     next.created = next.type === 'stickynote' ? null : (prev?.created ?? this.env.now)
