@@ -697,11 +697,57 @@ export function onOverrides(registries: CanvasRegistries, cb: (o: RenderOverride
   return () => set.delete(cb)
 }
 
+/**
+ * The board page's engine handles, for O5's modules that must READ the engine (the image loader hands
+ * decoded files to `api.addFiles`; exports read `getFiles`, `getAppState`). Every WRITE still goes
+ * through `CanvasPort.transact` and the sync engine.
+ */
+export interface BoardEngine {
+  readonly api: ExcalidrawImperativeAPI
+  readonly wrapper: HTMLElement
+  /** the board id (`/b/:boardId`): the file routes need `?board=` */
+  readonly boardId: string | null
+}
+
+const boardEngines = new WeakMap<CanvasRegistries, BoardEngine>()
+const waitingEngine = new WeakMap<CanvasRegistries, Set<(e: BoardEngine) => void>>()
+
+/** Makes `engine` the board page's engine for `registries` (modules waiting for it are called). */
+export function attachBoardEngine(registries: CanvasRegistries, engine: BoardEngine): () => void {
+  boardEngines.set(registries, engine)
+  const pending = waitingEngine.get(registries)
+  waitingEngine.delete(registries)
+  for (const cb of pending ?? []) cb(engine)
+  return () => {
+    if (boardEngines.get(registries) === engine) boardEngines.delete(registries)
+  }
+}
+
+/** The board page's engine, if attached. */
+export function boardEngineOf(registries: CanvasRegistries): BoardEngine | null {
+  return boardEngines.get(registries) ?? null
+}
+
+/** Calls `cb` with the board page's engine now, or once attached. Returns the cancel. */
+export function onBoardEngine(registries: CanvasRegistries, cb: (e: BoardEngine) => void): () => void {
+  const now = boardEngines.get(registries)
+  if (now) {
+    cb(now)
+    return () => {}
+  }
+  const set = waitingEngine.get(registries) ?? new Set()
+  set.add(cb)
+  waitingEngine.set(registries, set)
+  return () => set.delete(cb)
+}
+
 export interface BoardOverridesOptions {
   api: ExcalidrawImperativeAPI
   /** Lobby's board wrapper (an ancestor of Excalidraw's canvases). */
   wrapper: HTMLElement
   registries: CanvasRegistries
+  /** The board id (for O5's file routes); default: read from `/b/:boardId` in the page URL. */
+  boardId?: string
   /** "Bob is moving this" (default: a small status line inside the wrapper, `data-lobby-hit-toast`). */
   toast?: (message: string) => void
   /** Every swallowed event (tests and evidence). */
@@ -777,10 +823,16 @@ export function installBoardOverrides(opts: BoardOverridesOptions): BoardOverrid
   // New labels and frame children join a collapsed branch as they arrive.
   const unsubscribeScene = api.onChange(() => overrides.refresh())
   const detach = attachOverrides(registries, overrides)
+  const detachEngine = attachBoardEngine(registries, {
+    api,
+    wrapper,
+    boardId: opts.boardId ?? boardIdFromLocation(),
+  })
   return {
     overrides,
     log,
     dispose() {
+      detachEngine()
       detach()
       unsubscribeScene()
       unprovideHidden()
@@ -790,4 +842,11 @@ export function installBoardOverrides(opts: BoardOverridesOptions): BoardOverrid
       api.setElementRenderOverrides(null)
     },
   }
+}
+
+/** `/b/:boardId` of the page URL (the spike board page's route), or null. */
+export function boardIdFromLocation(): string | null {
+  const path = (globalThis as { location?: { pathname?: string } }).location?.pathname ?? ''
+  const m = /^\/b\/([a-z0-9][a-z0-9_-]{2,63})(?:\/|$)/.exec(path)
+  return m?.[1] ?? null
 }
