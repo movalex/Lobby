@@ -52,6 +52,8 @@ type Outcome = 'grant' | 'manual-grant' | 'deny' | 'escape'
 
 /** Timed grants: long enough that B's action lands while A's request is pending. */
 const GRANT_MS: Record<BAction, number> = { 'dblclick-label': 300, p5: 1500, 'type-to-edit': 300 }
+/** Timed grant for B's own request (set after A's request went out). */
+const B_GRANT_MS = 1500
 
 async function warm(page: Page): Promise<void> {
   await page.evaluate(() => document.fonts.load('20px Nunito', 'Note A B zqxkKIMEok'))
@@ -113,6 +115,9 @@ async function pendingCase(
   await select(page, [A.note])
   await focusCanvas(page)
   await page.keyboard.press(startKey)
+  // Timed grants: B's own request (made after A is cancelled) must still be out when the IME text and
+  // the keys arrive, or they would legitimately land in a granted B (run 2 of fix round 2 caught that race).
+  if (outcome === 'grant') await lab(page, (x, d) => x.lease.setDelay(d), B_GRANT_MS)
   const beforeB = await editor(page)
   const affordance = await lab(page, (x) => x.pendingVisible())
   // 2. B's action while A's answer is still out: it selects B first, which cancels A (defect 8).
@@ -176,6 +181,13 @@ async function pendingCase(
     A.note,
     B.note,
   ])
+  // A timed server applies the release of A's late grant after its delay (in request order).
+  if (outcome !== 'deny') {
+    await expect
+      .poll(() => lab(page, (x, id) => x.lease.server.holderOf(id)?.name ?? null, A.note), { timeout: 5000 })
+      .toBeNull()
+      .catch(() => {})
+  }
   const aOnServer = await lab(page, (x, id) => x.lease.server.holderOf(id)?.name ?? null, A.note)
 
   const checks: Record<string, boolean> = {
