@@ -12,7 +12,7 @@ import { stackFromEnv } from '../support/ports.ts'
 import type { BrowserProcess, SpikeBStack } from '../support/types.ts'
 import {
   buildMindMap,
-  centreOf,
+  canvasPointOf,
   clientOf,
   featuresReady,
   hiddenSets,
@@ -63,7 +63,8 @@ test('collapse: hidden everywhere (labels included), not clickable, not in Ctrl+
   const horizonAtStart = (await harness.readSnapshot(stack, boardId)).horizon
   const bPushes = await harness.recordPushes(B.page)
   const [l1, l2] = map.leaves
-  const leafCentre = await centreOf(B.page, l1)
+  // a point of the leaf where the canvas itself is on top (no Lobby UI over it), so the click reaches it
+  const leafCentre = await canvasPointOf(B.page, l1)
   const inkBefore = await staticPixel(B.page, leafCentre.x, leafCentre.y)
 
   // A collapses A1 through the chevron (one transact step: mindmap.collapsed on A1 only)
