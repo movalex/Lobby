@@ -131,6 +131,36 @@ export function clerkUser(
 
 export const CLERK_KEYS = { secretKey: 'sk_test_domain_access_0123456789', publishableKey: 'pk_test_da' }
 
+/**
+ * Fixer round 4 (docs/DOMAIN-ACCESS-CONTRACTS.md §22): PGlite behaving like a connection pool for one
+ * read. The next `api.db.query` whose SQL matches first waits for every identity refresh already
+ * running to finish, as if that refresh's write had committed on another pooled connection before the
+ * read. (PGlite runs every statement on one connection in order, which hid a response that mixed stored
+ * and refreshed data; on a real Postgres with the fake Clerk answering at once the refresh often won.)
+ * A refresh that has not started yet is not waited for. Returns the undo.
+ */
+export function refreshCommitsBefore(api: TestApi, sql: RegExp): () => void {
+  const db = api.db
+  const original = db.query
+  let armed = true
+  db.query = (async (text: string, params?: readonly unknown[]) => {
+    if (armed && sql.test(text)) {
+      armed = false
+      // Bounded, so a mistake in the pattern (a read the refresh itself makes) fails instead of hanging.
+      await Promise.race([api.identity.settled(), new Promise((r) => setTimeout(r, 5_000))])
+    }
+    return original(text, params)
+  }) as typeof db.query
+  return () => {
+    db.query = original
+  }
+}
+
+/** The stored-address read of identity.status (GET /api/me `access`). */
+export const STATUS_READ = /FROM user_emails WHERE user_id = \$1 AND source = \$2/
+/** The creator read of isCreatorUser / canOwnAmong (the Share dialog's lists). */
+export const CREATOR_READ = /FROM users u WHERE u\.id = ANY\(\$1::text\[\]\)/
+
 export interface ClerkWorld {
   api: TestApi
   logs: string[]

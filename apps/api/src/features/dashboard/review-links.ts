@@ -217,46 +217,48 @@ export function registerReviewLinkRoutes(app: FastifyInstance, ctx: FeatureConte
     // so they cannot hand out a link that already exists. The caller is freshened like at /api/me
     // (confirmed first when unconfirmed, a background refresh after 1 h; after the permission check), so
     // a manager who never loads /api/me still loses a removed company address. The decision reads the
-    // database, so an awaited refresh counts at once.
-    await ctx.identity.freshen(req, user, 'me')
-    const mayShare = await ctx.identity.isCreatorUser(db, user.id)
-    const rows = await db.query<InvitationListRow>(
-      `SELECT i.id, i.role, i.multi_use, i.allow_guests, i.max_uses, i.use_count, i.created_at, i.expires_at, i.token_hash,
+    // database, so an awaited refresh counts at once. Fixer round 4 (§22): the list is read before a due
+    // background refresh starts (freshenThen), so `url` follows the stored status on a pool too.
+    return ctx.identity.freshenThen(req, user, async () => {
+      const mayShare = await ctx.identity.isCreatorUser(db, user.id)
+      const rows = await db.query<InvitationListRow>(
+        `SELECT i.id, i.role, i.multi_use, i.allow_guests, i.max_uses, i.use_count, i.created_at, i.expires_at, i.token_hash,
               u.id AS creator_id, u.name AS creator_name, i.invited_email
          FROM invitations i JOIN users u ON u.id = i.created_by
         WHERE i.board_id = $1 AND i.workspace_id = $2 AND i.revoked_at IS NULL AND i.redeemed_by IS NULL
           AND i.expires_at > $3
         ORDER BY i.multi_use DESC, i.created_at DESC, i.id
         LIMIT 200`,
-      [bid, access.board.workspace_id, now()],
-    )
-    const invitations: PendingInvitation[] = rows.rows.map((r) => {
-      let url: string | null = null
-      if (r.multi_use && mayShare) {
-        const token = reviewLinkToken(config.ticketSecret, r.id)
-        // A rotated secret cannot rebuild the link: say so (null) instead of showing a dead URL.
-        if (sha256hex(token) === r.token_hash) url = linkUrl(token)
-      }
-      return {
-        id: r.id,
-        kind: r.multi_use ? 'review' : 'invite',
-        role: r.role,
-        createdAt: r.created_at.toISOString(),
-        expiresAt: r.expires_at.toISOString(),
-        createdBy: { id: r.creator_id, name: r.creator_name },
-        uses: r.use_count,
-        maxUses: r.max_uses,
-        url,
-        maxExpiresAt: r.multi_use
-          ? new Date(r.created_at.getTime() + reviewLinkMaxLifetimeMs(r.role)).toISOString()
-          : null,
-        allowGuests: r.multi_use && r.allow_guests,
-        // Domain access: the full address a single-use invitation is locked to (this manager-only list is
-        // the one response that carries it).
-        email: r.multi_use ? null : r.invited_email,
-      }
+        [bid, access.board.workspace_id, now()],
+      )
+      const invitations: PendingInvitation[] = rows.rows.map((r) => {
+        let url: string | null = null
+        if (r.multi_use && mayShare) {
+          const token = reviewLinkToken(config.ticketSecret, r.id)
+          // A rotated secret cannot rebuild the link: say so (null) instead of showing a dead URL.
+          if (sha256hex(token) === r.token_hash) url = linkUrl(token)
+        }
+        return {
+          id: r.id,
+          kind: r.multi_use ? 'review' : 'invite',
+          role: r.role,
+          createdAt: r.created_at.toISOString(),
+          expiresAt: r.expires_at.toISOString(),
+          createdBy: { id: r.creator_id, name: r.creator_name },
+          uses: r.use_count,
+          maxUses: r.max_uses,
+          url,
+          maxExpiresAt: r.multi_use
+            ? new Date(r.created_at.getTime() + reviewLinkMaxLifetimeMs(r.role)).toISOString()
+            : null,
+          allowGuests: r.multi_use && r.allow_guests,
+          // Domain access: the full address a single-use invitation is locked to (this manager-only list is
+          // the one response that carries it).
+          email: r.multi_use ? null : r.invited_email,
+        }
+      })
+      return { invitations }
     })
-    return { invitations }
   })
 
   app.post('/api/boards/:bid/review-links', async (req, reply) => {

@@ -11,7 +11,15 @@ import { Me } from '@draftroom/contracts'
 import type { LightMyRequestResponse } from 'fastify'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { type Client, createBoard, createTestApi, DEV_STUDIO, ORIGIN, type TestApi } from '../../helpers.ts'
-import { type ClerkWorld, clerkUser, clerkWorld, fakeClerk } from './clerk-fake.ts'
+import {
+  type ClerkWorld,
+  CREATOR_READ,
+  clerkUser,
+  clerkWorld,
+  fakeClerk,
+  refreshCommitsBefore,
+  STATUS_READ,
+} from './clerk-fake.ts'
 
 vi.mock('@clerk/backend', async () => (await import('./clerk-fake.ts')).clerkBackendModule)
 
@@ -74,7 +82,11 @@ describe('the Share dialog’s read paths freshen the caller (Clerk)', () => {
     expect(fakeClerk.calls).toEqual([])
 
     w.api.clock.advance(2 * HOUR)
+    // Fixer round 4 (§22): stored data even when a running refresh would commit before the list's own
+    // creator read (a connection pool): the refresh starts after the list is read.
+    const undo = refreshCommitsBefore(w.api, CREATOR_READ)
     expect(await reviewUrls(bob)).toEqual(['url']) // this response still answers from stored data
+    undo()
     await w.api.identity.settled()
     expect(fakeClerk.calls).toEqual(['user_bob'])
     expect(await reviewUrls(bob)).toEqual([null])
@@ -90,11 +102,20 @@ describe('the Share dialog’s read paths freshen the caller (Clerk)', () => {
 
   it('GET …/sharing/members starts the same background refresh for the caller', async () => {
     w.api.clock.advance(2 * HOUR)
+    const canOwnBob = (res: LightMyRequestResponse) =>
+      (res.json() as { members: { user: { id: string }; canOwn: boolean }[] }).members.find(
+        (m) => m.user.id === bob.userId,
+      )?.canOwn
+    // Fixer round 4 (§22): this response is the stored data (bob still a creator), also on a pool.
+    const undo = refreshCommitsBefore(w.api, CREATOR_READ)
     const res = await bob.req('GET', `/api/boards/${board}/sharing/members`)
+    undo()
     expect(res.statusCode, res.body).toBe(200)
+    expect(canOwnBob(res)).toBe(true)
     await w.api.identity.settled()
     expect(fakeClerk.calls).toEqual(['user_bob'])
     expect(await reviewUrls(bob)).toEqual([null])
+    expect(canOwnBob(await bob.req('GET', `/api/boards/${board}/sharing/members`))).toBe(false)
   })
 
   it('a manager whose stored data is older than 24 h is confirmed first (awaited), so the list already says url null', async () => {
@@ -215,7 +236,10 @@ describe('a stored check time later than this process’s clock (deploy overlap,
   it('/api/me on the slower clock treats the future stamp as stale: a background refresh corrects it', async () => {
     const { s, w2 } = await skewedCreator()
     const get = () => w2.api.app.inject({ method: 'GET', url: '/api/me', headers: { cookie: s.cookie } })
-    expect(me(await get()).access.reason).toBe('domain') // stored data, at once
+    // Fixer round 4 (§22): stored data, at once, even when a running refresh would commit first (a pool).
+    const undo = refreshCommitsBefore(w2.api, STATUS_READ)
+    expect(me(await get()).access.reason).toBe('domain')
+    undo()
     await w2.api.identity.settled()
     expect(fakeClerk.calls).toEqual(['user_s'])
     expect(me(await get()).access).toEqual({

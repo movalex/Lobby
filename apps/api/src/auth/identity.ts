@@ -6,6 +6,10 @@
 //   An awaited refresh reloads the request's cached user, so the rest of the request decides on the
 //   new addresses. The caller's OWN refresh that finds the account gone (404 resource_not_found) or
 //   banned ends every session of that account.
+// - freshenThen(req, user, answer): the 'me' freshen of a read (GET /api/me, /api/auth/me, the Share
+//   dialog's lists) that answers from stored data: `answer` runs BEFORE a due background refresh
+//   starts, so the whole response comes from one stored state, on a connection pool as on PGlite
+//   (fixer round 4, §22).
 // - refreshTarget(userId): only where the TARGET's creator status decides the answer (PUT owner,
 //   transfer), after the route's own permission check. Never throws, never revokes anything.
 // - requireCreator(q, userId, purpose, log): stored status only, no network; safe in a transaction.
@@ -68,6 +72,17 @@ export interface IdentityService {
     mode: FreshenMode,
     opts?: { strict?: boolean },
   ): Promise<SessionUser>
+  /**
+   * freshen(req, user, 'me'), then `answer` on the (possibly reloaded) user, and only then the
+   * background refresh when the stored data is merely stale (also when `answer` throws). Everything
+   * `answer` reads is the stored data (D12): the refresh cannot commit in between on another pooled
+   * connection.
+   */
+  freshenThen<T>(
+    req: FastifyRequest,
+    user: SessionUser,
+    answer: (user: SessionUser) => Promise<T>,
+  ): Promise<T>
   refreshTarget(userId: string): Promise<void>
   requireCreator(q: Queryable, userId: string, purpose: CreatorPurpose, log: RefusalLog): Promise<void>
   /** Stored status only; unconfirmed counts as not a creator. */
@@ -221,6 +236,42 @@ export function createIdentityService(deps: Deps): IdentityService {
     background.add(p)
   }
 
+  /** freshen's decision: the user to answer with, and whether a background refresh is due. */
+  async function check(
+    req: FastifyRequest,
+    user: SessionUser,
+    mode: FreshenMode,
+    opts: { strict?: boolean },
+  ): Promise<{ user: SessionUser; background: boolean }> {
+    if (user.kind === 'guest' || !provider.refreshIdentity) return { user, background: false }
+    const at = now()
+    const t = at.getTime()
+    // A check time from a clock that ran ahead of this one (a deploy overlap): its real age is
+    // unknown, so it counts as stale (a background refresh; 'accept' awaits one), and that refresh's
+    // write replaces it (users.ts SnapshotWrite).
+    const age = !user.identityCheckedAt
+      ? Number.POSITIVE_INFINITY
+      : isFutureCheck(user.identityCheckedAt, at)
+        ? FUTURE_CHECK_AGE_MS
+        : t - user.identityCheckedAt.getTime()
+    const limit = mode === 'accept' ? ACCEPT_IDENTITY_MAX_AGE_MS : IDENTITY_GRACE_MS
+    if (age > limit) {
+      const outcome = await refresh(user.id)
+      if (outcome === 'gone' || outcome === 'banned') {
+        await endSessions(user.id, outcome)
+        throw unauthenticated()
+      }
+      if (outcome === 'unavailable') {
+        if (mode === 'accept' || (mode === 'confirm' && opts.strict)) throw identityUnavailable()
+        return { user, background: false }
+      }
+      const reloaded = await sessions.reload(req)
+      if (!reloaded) throw unauthenticated()
+      return { user: reloaded, background: false }
+    }
+    return { user, background: mode !== 'accept' && age > IDENTITY_RECHECK_MS }
+  }
+
   async function creatorRows(q: Queryable, userIds: readonly string[]): Promise<CreatorRow[]> {
     if (!userIds.length) return []
     const rows = await q.query<SessionUserRow>(
@@ -243,34 +294,18 @@ export function createIdentityService(deps: Deps): IdentityService {
     },
 
     async freshen(req, user, mode, opts = {}) {
-      if (user.kind === 'guest' || !provider.refreshIdentity) return user
-      const at = now()
-      const t = at.getTime()
-      // A check time from a clock that ran ahead of this one (a deploy overlap): its real age is
-      // unknown, so it counts as stale (a background refresh; 'accept' awaits one), and that refresh's
-      // write replaces it (users.ts SnapshotWrite).
-      const age = !user.identityCheckedAt
-        ? Number.POSITIVE_INFINITY
-        : isFutureCheck(user.identityCheckedAt, at)
-          ? FUTURE_CHECK_AGE_MS
-          : t - user.identityCheckedAt.getTime()
-      const limit = mode === 'accept' ? ACCEPT_IDENTITY_MAX_AGE_MS : IDENTITY_GRACE_MS
-      if (age > limit) {
-        const outcome = await refresh(user.id)
-        if (outcome === 'gone' || outcome === 'banned') {
-          await endSessions(user.id, outcome)
-          throw unauthenticated()
-        }
-        if (outcome === 'unavailable') {
-          if (mode === 'accept' || (mode === 'confirm' && opts.strict)) throw identityUnavailable()
-          return user
-        }
-        const reloaded = await sessions.reload(req)
-        if (!reloaded) throw unauthenticated()
-        return reloaded
+      const checked = await check(req, user, mode, opts)
+      if (checked.background) startBackground(user.id)
+      return checked.user
+    },
+
+    async freshenThen(req, user, answer) {
+      const checked = await check(req, user, 'me', {})
+      try {
+        return await answer(checked.user)
+      } finally {
+        if (checked.background) startBackground(user.id)
       }
-      if (mode !== 'accept' && age > IDENTITY_RECHECK_MS) startBackground(user.id)
-      return user
     },
 
     async refreshTarget(userId) {

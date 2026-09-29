@@ -362,4 +362,29 @@ describe('fixer round 3 (docs/DOMAIN-ACCESS-CONTRACTS.md §21)', () => {
     )
     expect(own).not.toContain('Ask')
   })
+
+  it('a board in the trash opened by the wrong account: whom the link is for, never "works again" (fixer round 4)', () => {
+    const wrong = boardInTrashCopy(board, {
+      sentByYou: false,
+      forSomeoneElse: { hint: 't•••@client.example.test', email: 'wes@client.example.test' },
+    })
+    expect(wrong).toEqual({
+      title: 'This board is in the trash',
+      body: '“Q3 planning” is in the trash. This link is for t•••@client.example.test, so it won’t let you in as wes@client.example.test, even once the board is restored.',
+    })
+    expect(wrong.body).not.toContain('works again')
+    expect(wrong.body).not.toContain('Ask')
+    const fallback = boardInTrashCopy(board, {
+      sentByYou: false,
+      forSomeoneElse: { hint: null, email: null },
+    }).body
+    expect(fallback).toBe(
+      '“Q3 planning” is in the trash. This link is for a different email address, so it won’t let you in with this account, even once the board is restored.',
+    )
+    // The inviter's own link keeps its own words; no account in question keeps the "ask" copy.
+    expect(
+      boardInTrashCopy(board, { sentByYou: true, forSomeoneElse: { hint: 'x', email: 'y' } }).body,
+    ).toContain('nobody can use this link')
+    expect(boardInTrashCopy(board, { sentByYou: false, forSomeoneElse: null }).body).toContain('Ask Alice')
+  })
 })

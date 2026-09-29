@@ -3,9 +3,10 @@
 // the test clock moves time; identity.settled() waits for background refreshes.
 
 import { Me } from '@draftroom/contracts'
-import type { LightMyRequestResponse } from 'fastify'
+import type { FastifyRequest, LightMyRequestResponse } from 'fastify'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createClerkAuthProvider } from '../../../src/auth/clerk.ts'
+import { loadSessionUser } from '../../../src/auth/users.ts'
 import { createTestApi, ORIGIN, type TestApi } from '../../helpers.ts'
 import {
   CLERK_KEYS,
@@ -15,6 +16,8 @@ import {
   clerkWorld,
   fakeClerk,
   notFound,
+  refreshCommitsBefore,
+  STATUS_READ,
 } from './clerk-fake.ts'
 
 vi.mock('@clerk/backend', async () => (await import('./clerk-fake.ts')).clerkBackendModule)
@@ -69,7 +72,16 @@ describe('identity refresh with Clerk', () => {
     const a = await creator()
     clerkUser('user_a', ['pat@client.example.test']) // Clerk now says something else
     w.api.clock.advance(2 * HOUR)
-    expect(me(await a.req('GET', '/api/me')).access.reason).toBe('domain') // stored data
+    // Fixer round 4 (§22): even when a running refresh would commit before the response's own read (a
+    // connection pool), the response is the stored data: the refresh starts after the answer is read.
+    const undo = refreshCommitsBefore(w.api, STATUS_READ)
+    const first = me(await a.req('GET', '/api/me'))
+    undo()
+    expect(first.access).toEqual({
+      creator: true,
+      reason: 'domain',
+      email: 'lobby-test-user-a@darkburn.com',
+    }) // stored data
     await w.api.identity.settled()
     expect(fakeClerk.calls).toEqual(['user_a'])
     expect(me(await a.req('GET', '/api/me')).access).toEqual({
@@ -86,6 +98,25 @@ describe('identity refresh with Clerk', () => {
     clerkUser('user_a', ['pat@client.example.test'])
     w.api.clock.advance(25 * HOUR)
     expect(me(await a.req('GET', '/api/me')).access.reason).toBe('outside')
+    expect(fakeClerk.calls).toEqual(['user_a'])
+  })
+
+  it('freshenThen: the answer is read before a due background refresh starts, which also starts when the answer throws', async () => {
+    const a = await creator()
+    w.api.clock.advance(2 * HOUR)
+    const user = await loadSessionUser(w.api.db, a.userId, w.api.identity.lookup, w.api.clock.now())
+    if (!user) throw new Error('no user')
+    const req = {} as FastifyRequest // the stale (not expired) path never reloads the session
+    let during: string[] | null = null
+    await expect(
+      w.api.identity.freshenThen(req, user, async () => {
+        await w.api.identity.settled() // nothing is running yet
+        during = [...fakeClerk.calls]
+        throw new Error('answer failed')
+      }),
+    ).rejects.toThrow('answer failed')
+    expect(during).toEqual([])
+    await w.api.identity.settled()
     expect(fakeClerk.calls).toEqual(['user_a'])
   })
 

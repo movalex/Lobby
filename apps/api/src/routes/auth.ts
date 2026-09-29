@@ -41,16 +41,19 @@ export function registerAuthRoutes(app: FastifyInstance, ctx: AppContext, provid
    * data: 'unconfirmed', still 200) and refreshed in the background when older than 1 h; a creator
    * without a personal workspace gets one. An awaited refresh that finds the account gone or banned
    * ends its sessions: 401.
+   * Fixer round 4 (§22): the whole answer (the personal workspace decision, the workspaces, `access`)
+   * is computed before a background refresh starts (`freshenThen`), so it is one stored state even on a
+   * connection pool, where that refresh could otherwise commit between these reads.
    */
-  const meOf = async (req: FastifyRequest, signedIn: SessionUser): Promise<Me & MeKind> => {
-    const user = await ctx.identity.freshen(req, signedIn, 'me')
-    await ctx.identity.ensurePersonalWorkspace(user)
-    const [workspaces, access] = await Promise.all([
-      listUserWorkspaces(db, user.id),
-      ctx.identity.status(user),
-    ])
-    return { user: sessionUserToUser(user), workspaces, kind: user.kind, access }
-  }
+  const meOf = (req: FastifyRequest, signedIn: SessionUser): Promise<Me & MeKind> =>
+    ctx.identity.freshenThen(req, signedIn, async (user) => {
+      await ctx.identity.ensurePersonalWorkspace(user)
+      const [workspaces, access] = await Promise.all([
+        listUserWorkspaces(db, user.id),
+        ctx.identity.status(user),
+      ])
+      return { user: sessionUserToUser(user), workspaces, kind: user.kind, access }
+    })
 
   app.get('/api/me', async (req): Promise<Me & MeKind> => meOf(req, await ctx.requireUser(req)))
 

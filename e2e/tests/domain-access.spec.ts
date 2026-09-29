@@ -1085,7 +1085,15 @@ test('fixer round 3: a creator typing her own address in Invite people or Link f
     await dialog.getByTestId('share-invite-submit').click()
     await expect(dialog.getByTestId('share-invite-notice')).toHaveText(OWN_ADDRESS)
     await expect(dialog.getByTestId('share-invite-notice')).toHaveAttribute('role', 'alert')
+    // Fixer round 4 (§22): said once: the alert replaces the hint's copy of the sentence.
+    await expect(dialog.getByTestId('share-invite-hint')).toHaveText('')
+    await expect(dialog.getByText(OWN_ADDRESS, { exact: true })).toHaveCount(1)
     await expect(dialog.getByTestId('share-invite-link')).toHaveCount(0)
+    // Typing again clears the alert, and the hint says it again (once).
+    await input.fill(own)
+    await expect(dialog.getByTestId('share-invite-notice')).toHaveCount(0)
+    await expect(dialog.getByTestId('share-invite-hint')).toHaveText(OWN_ADDRESS)
+    await expect(dialog.getByText(OWN_ADDRESS, { exact: true })).toHaveCount(1)
     // Someone else's address: the usual hint again.
     await input.fill('pat@client.example.test')
     await expect(dialog.getByTestId('share-invite-hint')).toContainText('only this address can use')
@@ -1176,6 +1184,23 @@ test('fixer round 3: an invitation to a board in the trash says so and cannot be
         await expect(alice.page.getByTestId('invite-own-back')).toHaveCount(0)
       } finally {
         await alice.context.close()
+      }
+    })
+
+    await test.step('fixer round 4: the wrong account learns whom the link is for, and no "works again" promise', async () => {
+      const wesEmail = 'wes@client.example.test'
+      const wes = await signedInContext(browser, freshHandle('wes'), { name: 'Wes Wrong', email: wesEmail })
+      try {
+        await wes.page.goto(link)
+        await expect(wes.page.getByTestId('invite-board-trashed')).toContainText('This board is in the trash')
+        await expect(wes.page.getByTestId('invite-board-trashed-body')).toHaveText(
+          `“${title}” is in the trash. This link is for t•••@client.example.test, so it won’t let you in as ${wesEmail}, even once the board is restored.`,
+        )
+        await expect(wes.page.getByTestId('invite-board-trashed-body')).not.toContainText('works again')
+        await expect(wes.page.getByTestId('invite-accept')).toHaveCount(0)
+        await expect(wes.page.getByTestId('invite-trashed-home')).toBeVisible()
+      } finally {
+        await wes.context.close()
       }
     })
 

@@ -206,7 +206,11 @@ export function InvitePage({ token }: { token: string }) {
 
   let actions: ReactNode
   if (inTrash) {
-    const copy = boardInTrashCopy(inv, { sentByYou: inv.sentByYou })
+    // Fixer round 4 (§22): the wrong account learns whom the link is for, not that a restore helps.
+    const copy = boardInTrashCopy(inv, {
+      sentByYou: inv.sentByYou,
+      forSomeoneElse: signedIn && mismatch && !inv.sentByYou ? { hint, email: state.me.access.email } : null,
+    })
     actions = (
       <>
         <div

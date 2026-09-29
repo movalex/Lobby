@@ -87,18 +87,19 @@ export function registerSharingRoutes(app: FastifyInstance, ctx: FeatureContext)
     const access = await requireBoardAction(db, bid, user.id, 'manage_access')
     // Domain access (§4.2): the caller is freshened like at /api/me (a background refresh after 1 h), so a
     // manager who never loads /api/me still loses a removed company address. After the permission check:
-    // nobody else makes Lobby call the provider from here.
-    await ctx.identity.freshen(req, user, 'me')
-    const { board } = access
-    const rows = await db.query<
-      UserRow & {
-        workspace_role: WorkspaceRole
-        board_grant: BoardRole | null
-        via_link: boolean
-        link_ends_at: Date | null
-      }
-    >(
-      `SELECT u.id, u.name, u.handle, u.color, u.avatar_url, wm.role AS workspace_role, bm.role AS board_grant,
+    // nobody else makes Lobby call the provider from here. Fixer round 4 (§22): the list (canOwn included)
+    // is read before a due background refresh starts (freshenThen), so it is stored data on a pool too.
+    return ctx.identity.freshenThen(req, user, async () => {
+      const { board } = access
+      const rows = await db.query<
+        UserRow & {
+          workspace_role: WorkspaceRole
+          board_grant: BoardRole | null
+          via_link: boolean
+          link_ends_at: Date | null
+        }
+      >(
+        `SELECT u.id, u.name, u.handle, u.color, u.avatar_url, wm.role AS workspace_role, bm.role AS board_grant,
               EXISTS (
                 SELECT 1 FROM invitation_redemptions r JOIN invitations i ON i.id = r.invitation_id
                  WHERE r.board_id = $1 AND r.user_id = u.id AND i.multi_use
@@ -113,41 +114,42 @@ export function registerSharingRoutes(app: FastifyInstance, ctx: FeatureContext)
         WHERE wm.workspace_id = $2
           AND (wm.role IN ('owner', 'admin') OR bm.role IS NOT NULL
                OR (wm.role = 'member' AND $3::text <> 'private'))`,
-      [board.id, board.workspace_id, board.visibility],
-    )
-    // Domain access (D5): who may be made an owner. One query; true while someone was never checked
-    // (the server refreshes and decides at PUT).
-    const canOwn = await ctx.identity.canOwnAmong(
-      db,
-      rows.rows.map((r) => r.id),
-    )
-    const members: ShareMember[] = []
-    for (const { workspace_role, board_grant, via_link, link_ends_at, ...u } of rows.rows) {
-      const role = resolveBoardRole({
-        workspaceRole: workspace_role,
-        boardGrant: board_grant,
-        visibility: board.visibility,
-      })
-      if (!role) continue
-      const viaReviewLink = board_grant !== null && via_link
-      members.push({
-        user: toUser(u),
-        role,
-        source: board_grant && board_grant === role ? 'grant' : 'workspace',
-        grant: board_grant,
-        workspaceRole: workspace_role,
-        withoutGrant: resolveBoardRole({
+        [board.id, board.workspace_id, board.visibility],
+      )
+      // Domain access (D5): who may be made an owner. One query; true while someone was never checked
+      // (the server refreshes and decides at PUT).
+      const canOwn = await ctx.identity.canOwnAmong(
+        db,
+        rows.rows.map((r) => r.id),
+      )
+      const members: ShareMember[] = []
+      for (const { workspace_role, board_grant, via_link, link_ends_at, ...u } of rows.rows) {
+        const role = resolveBoardRole({
           workspaceRole: workspace_role,
-          boardGrant: null,
+          boardGrant: board_grant,
           visibility: board.visibility,
-        }),
-        viaReviewLink,
-        linkEndsAt: viaReviewLink && link_ends_at ? link_ends_at.toISOString() : null,
-        canOwn: canOwn.get(u.id) ?? false,
-      })
-    }
-    members.sort((a, b) => RANK[b.role] - RANK[a.role] || a.user.name.localeCompare(b.user.name))
-    return { members }
+        })
+        if (!role) continue
+        const viaReviewLink = board_grant !== null && via_link
+        members.push({
+          user: toUser(u),
+          role,
+          source: board_grant && board_grant === role ? 'grant' : 'workspace',
+          grant: board_grant,
+          workspaceRole: workspace_role,
+          withoutGrant: resolveBoardRole({
+            workspaceRole: workspace_role,
+            boardGrant: null,
+            visibility: board.visibility,
+          }),
+          viaReviewLink,
+          linkEndsAt: viaReviewLink && link_ends_at ? link_ends_at.toISOString() : null,
+          canOwn: canOwn.get(u.id) ?? false,
+        })
+      }
+      members.sort((a, b) => RANK[b.role] - RANK[a.role] || a.user.name.localeCompare(b.user.name))
+      return { members }
+    })
   })
 
   // Makes someone in the workspace an owner and steps the caller's own owner grant down to editor, in

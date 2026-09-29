@@ -331,10 +331,12 @@ export function inviteUnreachable(
  * A board invitation whose board is in the trash (the preview's `boardInTrash`, or accepting answered
  * 409 BOARD_IN_TRASH): nothing can be accepted until the board is restored, and then the link works
  * again until it expires. The inviter checking their own locked link is not told to ask themselves.
+ * `forSomeoneElse` (fixer round 4, §22): the signed-in account is the wrong one for a locked link
+ * (`matchesYou === false`): it says whom the link is for and never promises that a restore lets them in.
  */
 export function boardInTrashCopy(
   inv: Pick<InvitationPreview, 'board' | 'invitedBy'>,
-  opts: { sentByYou: boolean },
+  opts: { sentByYou: boolean; forSomeoneElse?: { hint: string | null; email: string | null } | null },
 ): { title: string; body: string } {
   const board = inv.board ? `“${inv.board.title}”` : 'This board'
   const title = 'This board is in the trash'
@@ -343,6 +345,14 @@ export function boardInTrashCopy(
       title,
       body: `${board} is in the trash, so nobody can use this link right now. Once the board is restored, the link works again until it expires.`,
     }
+  if (opts.forSomeoneElse) {
+    const sentTo = opts.forSomeoneElse.hint ?? 'a different email address'
+    const asYou = opts.forSomeoneElse.email ? ` as ${opts.forSomeoneElse.email}` : ' with this account'
+    return {
+      title,
+      body: `${board} is in the trash. This link is for ${sentTo}, so it won’t let you in${asYou}, even once the board is restored.`,
+    }
+  }
   const who = inv.invitedBy.name.trim() || 'the person who invited you'
   return {
     title,

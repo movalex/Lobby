@@ -686,7 +686,14 @@ function InvitePeople({
       <p className="dr-share__hint" data-testid="share-invite-hint">
         {target.kind === 'member' &&
           `${target.member.user.name} is in ${workspaceName}: they get access right away.`}
-        {target.kind === 'email' && (ownAddress ? OWN_ADDRESS_MESSAGE : linkForEmailHint(canEmail))}
+        {/* Fixer round 4 (§22): the own-address sentence is said once: here while typing, then as the
+            alert below after a submit (never both). */}
+        {target.kind === 'email' &&
+          (ownAddress
+            ? notice?.text === OWN_ADDRESS_MESSAGE
+              ? null
+              : OWN_ADDRESS_MESSAGE
+            : linkForEmailHint(canEmail))}
         {target.kind === 'unknown' && `No one in ${workspaceName} matches. ${ASK_EMAIL_PROMPT}`}
         {(target.kind === 'empty' || target.kind === 'already') &&
           'People in the workspace get access right away. For anyone else, enter their email.'}
