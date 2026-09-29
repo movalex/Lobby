@@ -835,7 +835,8 @@ export class ElementRoom {
     if (pushes) this.deps.metrics.pushesPerCommit.observe(pushes)
     this.lastCommitAt = this.deps.now()
     store.meta.clock = clock
-    if (clock !== startClock) this.snapshotCache = null
+    // the cached reset snapshot stays valid for its 5 s: a joiner gets it plus a catch-up since its clock
+    // (§2.4.5), so a join storm on a busy board compresses one snapshot, not one per write
     // after COMMIT: the batch's changes (once, for everyone), then acks and lease events in order
     if (after.size || Object.keys(doc).length) {
       const ops: ServerOp[] = []
