@@ -1,10 +1,9 @@
 import { defineConfig } from 'vitest/config'
 
 /**
- * Spike B (docs/EXCALIDRAW-MIGRATION.md §8.6.2): the C0 arrow acceptance tests run against O1's real room
- * and FAIL against the C0 stubs, so they are kept out of the default run until M1 and run on their own:
- * `pnpm test:arrows` (vitest.arrows.config.ts, project `sync-arrows-acceptance`). From M1 on the lead moves
- * that project into this list, and they are part of every gate.
+ * Spike B (docs/EXCALIDRAW-MIGRATION.md §8.6.2): the C0 arrow acceptance tests run against O1's real room.
+ * They stayed out of the default run until M1; since the M1 integration their project
+ * `sync-arrows-acceptance` is in this list and in every gate. `pnpm test:arrows` still runs them alone.
  */
 export const ARROWS_ACCEPTANCE = 'apps/sync/test/room/arrows/**'
 
@@ -38,6 +37,16 @@ export default defineConfig({
           include: ['apps/worker/src/**/*.test.ts', 'apps/worker/test/**/*.test.ts'],
           testTimeout: 120_000,
           hookTimeout: 120_000,
+        },
+      },
+      // spike B, from M1: the C0 arrow acceptance tests against O1's room (as in vitest.arrows.config.ts)
+      {
+        test: {
+          name: 'sync-arrows-acceptance',
+          environment: 'node',
+          include: [`${ARROWS_ACCEPTANCE}/*.test.ts`],
+          testTimeout: 180_000,
+          hookTimeout: 60_000,
         },
       },
       { test: { name: 'web', environment: 'node', include: ['apps/web/src/**/*.test.ts'] } },
