@@ -1,7 +1,7 @@
 # O1 room: the ElementRoom slice (spike B, before integration)
 
 Owner O1 (docs/EXCALIDRAW-MIGRATION.md §8.6.3). Branch `spike/b-room`, based on `spike/excalidraw` 93e3c3e
-(C0 975b531 plus B0). Code on `071648d`. Windows 11 workstation, Node 24.19.0, pnpm 10.34.5. Ports: none
+(C0 975b531 plus B0). Code on `c54d6ab` (the evidence below was run on that tree; an earlier 3-run pass on `071648d` gave the same results with 78 protocol tests). Windows 11 workstation, Node 24.19.0, pnpm 10.34.5. Ports: none
 bound in O1's range 7860–7869 (every test here uses port 0, as §8.6.5 says for the sync protocol
 harness); the listing before and after this phase was empty, and no process of this worktree was left
 running.
@@ -30,10 +30,10 @@ running.
 
 | Evidence | Result (3 runs in a row, this tree) |
 |---|---|
-| **C0 arrow acceptance tests** `pnpm test:arrows` (85 tests, 13 files, against this room in-process) | **85/85, 3/3** (9.5–9.7 s per run; s1-sweep's 2,000 races 7.0 s, r35's 1,000 re-snaps 4.8 s). Per file: r33-freeend-rel 1, r33-label-node 2, r34-elbow-fixed 2, r35-drift 1, s1-freeend 7, s1-sweep 5, s2-midpoint 10, s3-elbow 30, s3-elbow-sweep 1, s4-frame 10, s5-freetext 6, s6-twotargets 8, s7-angle-mix 2. First passing run: `4c0a570` |
-| Protocol suites `pnpm exec vitest run --project sync apps/sync/test/element-room` (real server process, raw WebSocket client, fake api) | **78/78, 3/3** (18.3–18.7 s). baseline 2, bound-arrows 10, conflicts 6, convergence 4, durability 3, lifecycle 14, presence 4, readonly 4, security 20, text-lease 11 |
+| **C0 arrow acceptance tests** `pnpm test:arrows` (85 tests, 13 files, against this room in-process) | **85/85, 3/3** (9.2–9.8 s per run; s1-sweep's 2,000 races 7.0 s, r35's 1,000 re-snaps 4.8 s). Per file: r33-freeend-rel 1, r33-label-node 2, r34-elbow-fixed 2, r35-drift 1, s1-freeend 7, s1-sweep 5, s2-midpoint 10, s3-elbow 30, s3-elbow-sweep 1, s4-frame 10, s5-freetext 6, s6-twotargets 8, s7-angle-mix 2. First passing run: `4c0a570` |
+| Protocol suites `pnpm exec vitest run --project sync apps/sync/test/element-room` (real server process, raw WebSocket client, fake api) | **82/82, 3/3** (21.9–22.0 s). baseline 2, bound-arrows 10, conflicts 6, convergence 4, durability 3, lifecycle 14, presence 4, readonly 4, security 22, text-lease 13 |
 | Unit: `packages/canvas-schema/src/engine/binding.test.ts` (11, incl. the elbow-in-Node and label-node probes), `invariants.test.ts` (16, incl. a 200-board property test) | pass |
-| Whole unit suite `pnpm test` | 3,593 passed, 33 skipped, 0 failed (C0: 3,466 / 33) |
+| Whole unit suite `pnpm test` | 3,597 passed, 33 skipped, 0 failed (C0: 3,466 / 33) |
 | `pnpm lint` | 1,230 files, 0 errors |
 | `pnpm -r typecheck` (15 packages) and `tsc -p apps/sync/tsconfig.node-safe.json --noEmit` | pass |
 | Specs `e2e/spike-b/tests/b3-l8-*`, `b4-server-*`, `b5-r1-*`, `b5-r4-*`, `b6-*` (21 tests, 6 files) | **written, typecheck, collected (`--list`); NOT RUN**: they need O2's board page and O3's harness, both stubs on this branch |
@@ -90,6 +90,14 @@ run in-process in the C0 arrow tests s3, s4, s5).
     bounded to 200,000 clocks; after a restart, earlier clocks count as someone else's.
 11. **The reset snapshot** is cached for 5 s across writes (a joiner gets it plus a catch-up `changes` since
     its clock); `welcome.snapshot.bytes` is the compressed frame's size.
+12. **Stage 0 enforces the 3 s file-refs timeout itself** (on top of the HTTP client's), so an injected or
+    hanging lookup can never block a session's FIFO; its ops get UNAVAILABLE.
+13. **The caps count the push's own earlier creates and undeletes** (an undelete by a `life: false` patch
+    counts like a create); a create's client `version` is capped at 2^31 before `max(stored, client) + 1`.
+14. **A `presence` before `hello` is dropped**; a push or lease message before `hello` closes 4099
+    INVALID_MESSAGE.
+15. **After a failed COMMIT** the batch's lease replies are still sent (leases live in memory), then every
+    session gets 4000 RECONNECT.
 
 ## Not built (not needed by a spike check, or another owner's)
 

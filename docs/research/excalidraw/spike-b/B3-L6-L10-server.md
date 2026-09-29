@@ -2,7 +2,7 @@
 
 L6 and L10's specs and evidence are O2's (§8.6.3). O1 owns the server half: the conditional container fit
 (§2.9.4 rules 1–5), the free text's own fit (3.5), the lease-expiry re-fit (rule 6) and the server-derived
-bound arrows (rule 7), with their unit and protocol tests. This file is that half's evidence, on `071648d`.
+bound arrows (rule 7), with their unit and protocol tests. This file is that half's evidence, on `c54d6ab`.
 
 | Server behaviour L6/L10 rely on | Where it is tested | Result (3 runs) |
 |---|---|---|
@@ -17,5 +17,5 @@ bound arrows (rule 7), with their unit and protocol tests. This file is that hal
 | a locked arrow follows its target; a deleted target nulls the binding and leaves the end in place; a no-op target write re-snaps nothing | bound-arrows.test.ts | pass |
 
 Commands: `pnpm test:arrows` (85/85, 3/3) and `pnpm exec vitest run --project sync
-apps/sync/test/element-room` (78/78, 3/3); the unit tests of the helpers in
+apps/sync/test/element-room` (82/82, 3/3); the unit tests of the helpers in
 `packages/canvas-schema/src/engine/binding.test.ts`.
