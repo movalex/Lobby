@@ -1,22 +1,54 @@
-// O3's spike B harness (types: ./types.ts). STUB written by the lead at the contracts step C0; O3 owns
-// e2e/spike-b/support/** except types.ts and ports.ts from C0 on. Every owner's spec imports `harness`
-// from here.
+// O3's spike B harness (docs/EXCALIDRAW-MIGRATION.md §8.1, §8.6.2; types: ./types.ts, frozen at C0).
+// Every owner's spec imports `harness` from here:
+//
+//   const stack = await harness.startStack()                    // api + sync (+ worker) on SPIKE_B_PORT_BASE
+//   const a = await harness.launchBrowser(stack, harness.devUser('A'), { name: 'A' })   // its own process
+//   const { boardId } = await stack.createBoard({ owner: a.user, members: [{ user: b.user, role: 'editor' }] })
+//   await a.openBoard(boardId)                                  // facade installed, welcome applied
+//   const snap = await harness.readSnapshot(stack, boardId)     // live + tombstones, hash.ts digest
+//   const report = await harness.converged(stack, boardId, [a, b], { horizonAtStart: snap.horizon })
+//   expect(harness.checkInvariants(report.snapshot).ok).toBe(true)
+//
+// The modules behind it (all O3's): stack.ts (launcher on e2e/tests/support/stack.ts), browsers.ts
+// (separate Chromium processes, dev sign-in), relay.ts (latency relay and socket cut), barrier.ts,
+// forge.ts (raw sockets with the page's own ticket), snapshot.ts (test snapshot, hash, invariants,
+// convergence), pushes.ts (B10 recorder and evidence), hooks.ts (lease and COMMIT hooks), facade.ts
+// (typed facade calls). Import those directly for their extras.
+import './env.ts'
+import { createBarrier } from './barrier.ts'
+import { launchSpikeBrowser, type O3BrowserOptions, type O3BrowserProcess } from './browsers.ts'
+import { forgeSocket, type O3ForgeSocket } from './forge.ts'
+import { type O3TestHooks, testHooksFor } from './hooks.ts'
+import { recordPushes } from './pushes.ts'
+import { checkInvariants, converged, readSnapshot } from './snapshot.ts'
+import { type O3Stack, startSpikeStack } from './stack.ts'
+import type { DevUser, SpikeBHarness, SpikeBStack, StackOptions } from './types.ts'
+import { devUser } from './users.ts'
 
-import type { SpikeBHarness } from './types.ts'
-
-const missing = (name: string) => () => {
-  throw new Error(`not implemented (O3): e2e/spike-b/support/harness.ts ${name}`)
+/** The frozen harness, with O3's richer return types (every extra is optional to use). */
+export interface O3Harness extends SpikeBHarness {
+  startStack(opts?: StackOptions): Promise<O3Stack>
+  launchBrowser(stack: SpikeBStack, user: DevUser, opts: O3BrowserOptions): Promise<O3BrowserProcess>
+  forgeSocket(page: import('@playwright/test').Page, boardId: string): Promise<O3ForgeSocket>
+  testHooks(stack: SpikeBStack): O3TestHooks
 }
 
-export const harness: SpikeBHarness = {
-  startStack: missing('startStack'),
-  launchBrowser: missing('launchBrowser'),
-  devUser: missing('devUser'),
-  createBarrier: missing('createBarrier'),
-  forgeSocket: missing('forgeSocket'),
-  readSnapshot: missing('readSnapshot'),
-  checkInvariants: missing('checkInvariants'),
-  converged: missing('converged'),
-  recordPushes: missing('recordPushes'),
-  testHooks: missing('testHooks'),
+export const harness: O3Harness = {
+  startStack: startSpikeStack,
+  launchBrowser: launchSpikeBrowser,
+  devUser,
+  createBarrier: (parties) => createBarrier(parties),
+  forgeSocket,
+  readSnapshot,
+  checkInvariants,
+  converged: (stack, boardId, targets, opts) => converged(stack, boardId, targets, opts),
+  recordPushes,
+  testHooks: testHooksFor,
 }
+
+export { createBarrier, releaseTogether, runTogether } from './barrier.ts'
+export { closeAllBrowsers, waitBoardReady } from './browsers.ts'
+export { canvasOf, waitElement, waitSaved } from './facade.ts'
+export { forgeSession, freshHello } from './forge.ts'
+export { writePushEvidence } from './pushes.ts'
+export { divergence, explainDivergence } from './snapshot.ts'

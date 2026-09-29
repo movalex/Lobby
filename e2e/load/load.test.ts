@@ -1,0 +1,258 @@
+// The load generator's own checks (vitest project e2e-load): tickets, the fake api on the frozen internal
+// contracts, the plans, the meter, the seeding chunks, the report's joins, and a short run end to end on
+// the in-memory room (plumbing only; no number here is a measurement of sync).
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterAll, describe, expect, it } from 'vitest'
+import { verifyTicket } from '../../packages/auth-tickets/src/index.ts'
+import { FileRefsResponse, SyncInternalErrorBody } from '../../packages/contracts/src/sync-internal.ts'
+import { l1Board, smallBoard } from './boards.ts'
+import { startFakeApi } from './fake-api.ts'
+import { runLoad } from './load.ts'
+import { Meter, messageType, probePointer, probeSentAt } from './meter.ts'
+import { parsePrometheus } from './metrics.ts'
+import { boardsOf, buildPlans, membersOf, probeSids, signedTickets } from './plan.ts'
+import { DRY, L1, L2, plannedWritesPerSecond, sessionCount } from './profiles.ts'
+import { ackedButMissing, visibilitySamples } from './report.ts'
+import { chunkCreates, SEED_MAX_BYTES } from './seed.ts'
+import type { SessionReport } from './session.ts'
+import { percentile, Recorder } from './stats.ts'
+import { loadUser, mintTicket, newRunSecrets, runEnvText, secretsFromEnv } from './tickets.ts'
+
+const dirs: string[] = []
+afterAll(() => {
+  for (const d of dirs) rmSync(d, { recursive: true, force: true })
+})
+
+describe('tickets and secrets', () => {
+  it('fresh different secrets per run, and tickets sync accepts', () => {
+    const a = newRunSecrets()
+    const b = newRunSecrets()
+    expect(a.ticketSecret).not.toBe(b.ticketSecret)
+    expect(a.ticketSecret).not.toBe(a.internalSecret)
+    expect(a.ticketSecret.length).toBeGreaterThanOrEqual(32)
+    const env = Object.fromEntries(
+      runEnvText(a, 'http://draftroom-spike-load:7899')
+        .trim()
+        .split('\n')
+        .map((l) => l.split(/=(.*)/s).slice(0, 2)),
+    )
+    expect(secretsFromEnv(env)).toEqual(a)
+    expect(() => secretsFromEnv({})).toThrow(/required/)
+    const t = mintTicket(a.ticketSecret, 'l1-l1', loadUser(0, 3, 'viewer'))
+    const v = verifyTicket(a.ticketSecret, t, { boardId: 'l1-l1' })
+    expect(v.ok && v.claims.role).toBe('viewer')
+    expect(verifyTicket(b.ticketSecret, t, { boardId: 'l1-l1' }).ok).toBe(false)
+  })
+})
+
+describe('fake api', () => {
+  it('answers every route sync calls, on the frozen shapes, behind the secret', async () => {
+    const api = await startFakeApi({ internalSecret: 's'.repeat(40) })
+    try {
+      api.addBoard('b1', [['usr_1', 'editor']], ['ver_AAAAAAAAAA01'])
+      const h = { 'x-draftroom-internal': 's'.repeat(40) }
+      const bad = await fetch(`${api.url}/internal/access?boardId=b1&userId=usr_1`, {
+        headers: { 'x-draftroom-internal': 'nope' },
+      })
+      expect(bad.status).toBe(401)
+      expect(SyncInternalErrorBody.parse(await bad.json()).error.code).toBe('bad-secret')
+      const access = await fetch(`${api.url}/internal/access?boardId=b1&userId=usr_1`, { headers: h })
+      expect(await access.json()).toEqual({ role: 'editor' })
+      const none = await fetch(`${api.url}/internal/access?boardId=b1&userId=usr_2`, { headers: h })
+      expect(await none.json()).toEqual({ role: null })
+      const refs = await fetch(
+        `${api.url}/internal/boards/b1/file-refs?ids=ver_AAAAAAAAAA01,ver_BBBBBBBBBB02`,
+        { headers: h },
+      )
+      const body = FileRefsResponse.parse(await refs.json())
+      expect(body.ok.map((r) => r.versionId)).toEqual(['ver_AAAAAAAAAA01'])
+      expect(body.missing).toEqual(['ver_BBBBBBBBBB02'])
+      const malformed = await fetch(`${api.url}/internal/boards/b1/file-refs?ids=nope`, { headers: h })
+      expect(malformed.status).toBe(400)
+      const ws = await fetch(`${api.url}/internal/boards/b1/workshop-state`, { headers: h })
+      expect(await ws.json()).toEqual({ voteOpen: false, anonymous: false })
+      expect((await fetch(`${api.url}/internal/boards/zz/workshop-state`, { headers: h })).status).toBe(404)
+      expect((await fetch(`${api.url}/internal/boards/b1/touched?at=1`, { headers: h })).status).toBe(204)
+      expect((await fetch(`${api.url}/internal/boards/b1/session-ended?at=1`, { headers: h })).status).toBe(
+        204,
+      )
+      api.setDown(true)
+      expect(
+        (await fetch(`${api.url}/internal/boards/b1/file-refs?ids=ver_AAAAAAAAAA01`, { headers: h })).status,
+      ).toBe(503)
+      expect(api.counts).toMatchObject({ access: 2, fileRefs: 2, badSecret: 1, workshopState: 1, touched: 1 })
+    } finally {
+      await api.close()
+    }
+  })
+})
+
+describe('profiles and plans', () => {
+  it('L1 is 260 sessions (200 on the workshop board), about 20-30 pushes/s there; L2 is 30 sessions at 20 edits/s', () => {
+    expect(sessionCount(L1)).toBe(260)
+    expect(L1.boards[0]?.groups.reduce((n, g) => n + g.count, 0)).toBe(200)
+    // the budget: "Pushes: ~20/s on the big board", "about 30 writes/s" with the typists' fits
+    expect(plannedWritesPerSecond(L1.boards[0] as never)).toBeGreaterThan(18)
+    expect(plannedWritesPerSecond(L1.boards[0] as never)).toBeLessThan(30)
+    expect(sessionCount(L2)).toBe(30)
+    expect(plannedWritesPerSecond(L2.boards[0] as never)).toBe(20)
+  })
+
+  it('plans: unique tabs, disjoint notes per editor, a ramp over joinRampMs, members for the fake api', () => {
+    const boards = boardsOf(DRY)
+    const s = newRunSecrets()
+    const plans = buildPlans(DRY, boards, signedTickets(s.ticketSecret))
+    expect(new Set(plans.map((p) => p.key)).size).toBe(plans.length)
+    const owned = plans.flatMap((p) => p.ownNotes)
+    expect(new Set(owned).size).toBe(owned.length)
+    for (const p of plans) if (p.group.kind === 'watcher') expect(p.ownNotes).toEqual([])
+    const joins = plans.map((p) => p.joinAtMs)
+    expect(Math.min(...joins)).toBe(0)
+    expect(Math.max(...joins)).toBe(DRY.joinRampMs)
+    const members = membersOf(plans)
+    expect([...members.keys()].sort()).toEqual([...boards.keys()].sort())
+    expect(probeSids(plans).size).toBe(1)
+  })
+})
+
+describe('meter', () => {
+  it('counts frames by type, splits drag ids from deltas, decodes the probe cursor', () => {
+    const m = new Meter({ parsePresence: true })
+    m.probeSid = 'u:probe'
+    const t = 1_790_000_123_456
+    m.received(JSON.stringify({ type: 'welcome', clock: 1 }), t)
+    m.received(new ArrayBuffer(100), t)
+    m.received(
+      JSON.stringify({
+        type: 'presence',
+        peers: [{ sid: 'u:probe', pointer: probePointer(t - 37) }],
+        drags: [
+          { sid: 'x', d: 1, ids: ['a', 'b'], dx: 0, dy: 0 },
+          { sid: 'y', d: 2, dx: 1, dy: 1 },
+        ],
+      }),
+      t,
+    )
+    const s = m.snapshot()
+    expect(Object.keys(s.in).sort()).toEqual(['presence', 'snapshot', 'welcome'])
+    expect(s.dragStartsSeen).toBe(1)
+    expect(s.dragIdsBytes).toBeGreaterThan(s.dragDeltaBytes)
+    expect(m.presenceDelay.values()).toEqual([37])
+    expect(m.welcomes[0]?.snapshotBytes).toBe(100)
+    expect(messageType('{"type":"lease.grant","req":1}')).toBe('lease.grant')
+    expect(probeSentAt(probePointer(t))).toBe(t % 1_000_000)
+  })
+})
+
+describe('seeding, stats and the report joins', () => {
+  it('chunks creates within 500 ops and 500 KiB, a label with its note', () => {
+    const b = l1Board('seed-x')
+    const chunks = chunkCreates(b.elements)
+    expect(chunks.flat()).toHaveLength(b.elements.length)
+    for (const c of chunks) {
+      expect(c.length).toBeLessThanOrEqual(500)
+      expect(Buffer.byteLength(JSON.stringify(c))).toBeLessThanOrEqual(SEED_MAX_BYTES)
+      const last = c.at(-1)
+      expect(last?.type === 'stickynote' && last.boundElements?.some((r) => r.type === 'text')).toBe(false)
+    }
+  })
+
+  it('percentiles, the reservoir and prometheus text', () => {
+    expect(percentile([5, 1, 3, 2, 4], 50)).toBe(3)
+    expect(percentile([1, 2, 3, 4, 100], 95)).toBe(100)
+    const r = new Recorder(10)
+    for (let i = 0; i < 1000; i++) r.add(i)
+    expect(r.count).toBe(1000)
+    expect(r.values()).toHaveLength(10)
+    expect(r.summary().max).toBe(999)
+    const m = parsePrometheus('# HELP x\nlobby_pushes_total{code="ok"} 12\nlobby_rss_bytes 1.5e8\nbad line\n')
+    expect(m).toEqual([
+      { name: 'lobby_pushes_total', labels: { code: 'ok' }, value: 12 },
+      { name: 'lobby_rss_bytes', labels: {}, value: 1.5e8 },
+    ])
+  })
+
+  it("visibility joins an editor's acked edits with other sessions' arrivals on the same board", () => {
+    const base = { acked: {}, arrivals: {}, edits: [] } as unknown as SessionReport
+    const editor = { ...base, key: 'e', boardId: 'b', edits: [{ id: 'n1', v: 3, sentAt: 1000, ackAt: 1040 }] }
+    const w1 = { ...base, key: 'w1', boardId: 'b', arrivals: { 'n1:3': 1030 } }
+    const w2 = { ...base, key: 'w2', boardId: 'other', arrivals: { 'n1:3': 1500 } }
+    expect(visibilitySamples([editor, w1, w2] as SessionReport[])).toEqual([30])
+    const s = { ...base, key: 'e', acked: { n1: { x: 5 }, n2: { x: 1 } } } as SessionReport
+    const stored = new Map([
+      ['n1', { x: 5 }],
+      ['n2', { x: 2 }],
+    ])
+    expect(ackedButMissing([s], { stored, method: 't' })).toMatchObject({
+      checked: 2,
+      missing: 1,
+      ids: ['n2'],
+    })
+    expect(ackedButMissing([s], { stored: null, method: 't' }).method).toMatch(/UNVERIFIED/)
+  })
+})
+
+describe('a short run on the in-memory room (plumbing)', () => {
+  it('joins every session, edits, measures, and receivers push nothing', async () => {
+    const out = mkdtempSync(join(tmpdir(), 'o3-load-'))
+    dirs.push(out)
+    const report = await runLoad({
+      profile: { ...DRY, joinRampMs: 1_000 },
+      syncHttpUrl: 'http://fake',
+      secrets: newRunSecrets(),
+      seed: 'none',
+      threads: 0,
+      durationMs: 6_000,
+      tag: 'test',
+      out,
+      fake: true,
+      log: () => undefined,
+    })
+    expect(report.joins.joined).toBe(sessionCount(DRY))
+    expect(report.protocol.pushes).toBeGreaterThan(0)
+    expect(report.latency.ack.n).toBeGreaterThan(0)
+    expect(report.latency.visibility.n).toBeGreaterThan(0)
+    expect(report.latency.presence.n).toBeGreaterThan(0)
+    expect(report.echo.receiversThatPushed).toBe(0)
+    expect(report.ackedButMissing.missing).toBe(0)
+    expect(report.meta.notes?.[0]).toMatch(/PLUMBING DRY RUN/)
+    expect(smallBoard('x', 1).elements.length).toBeGreaterThan(80)
+  }, 30_000)
+})
+
+describe('board files (gen-boards)', () => {
+  it('writes lb_* rows with the frozen DDL and a real tldraw board file; never overwrites', async () => {
+    const { DatabaseSync } = await import('node:sqlite')
+    const { writeLbBoard, writeTldrawBoard } = await import('./board-files.ts')
+    const { LB_TABLES } = await import('../../apps/sync/src/room/schema.ts')
+    const data = mkdtempSync(join(tmpdir(), 'o3-gen-'))
+    dirs.push(data)
+    const b = smallBoard('gen-s00', 7)
+    const w = writeLbBoard(data, 'gen-s00', b.elements)
+    expect(w.rows).toBe(b.elements.length)
+    expect(() => writeLbBoard(data, 'gen-s00', b.elements)).toThrow(/exists/)
+    const db = new DatabaseSync(w.path, { readOnly: true })
+    const tables = (
+      db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as { name: string }[]
+    ).map((r) => r.name)
+    for (const t of LB_TABLES) expect(tables).toContain(t)
+    expect(tables).not.toContain('documents')
+    const n = db.prepare('SELECT count(*) AS n FROM lb_elements WHERE deleted = 0').get() as { n: number }
+    expect(n.n).toBe(b.elements.length)
+    const first = db.prepare('SELECT data FROM lb_elements ORDER BY idx, id LIMIT 1').get() as {
+      data: string
+    }
+    expect(JSON.parse(first.data).id).toBe(b.elements[0]?.id)
+    db.close()
+    const t = writeTldrawBoard(data, 'gen-tl', { notes: 30 })
+    const tdb = new DatabaseSync(t.path, { readOnly: true })
+    const ttables = (
+      tdb.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as { name: string }[]
+    ).map((r) => r.name)
+    expect(ttables).toContain('documents')
+    expect(ttables.some((x) => x.startsWith('lb_'))).toBe(false)
+    tdb.close()
+  })
+})
