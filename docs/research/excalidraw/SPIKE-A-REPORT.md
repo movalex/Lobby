@@ -9,9 +9,17 @@ agree except where noted: A13 is +1.0 KiB, and A14 has a wider spread in how soo
   picker (A6, open item 1 was not closed), and that an editor Excalidraw opened on another note while a
   Lobby lease request was pending was writable without any lease (A16). Both are fixed in `f17ce48`, with
   regression specs that fail on the old code and pass 3 of 3 runs on the new. A6 is PASS after the fix.
-- **A16 fails on the plan's wording (3 points, section 3.4).** After the fix, every editor-open path is held
-  by the lease or the guard, including a second editor while a request is pending: 20/20 per case in every
-  run, no key or text lands and nothing is pushed before a grant. The corrected criteria pass 3/3.
+- **And a second verification found those corrections still incomplete (section 0b).** Outside the text
+  editor, some keyboard layouts still reached Excalidraw's board save picker and help dialog (A6: Lobby
+  delegated chords by physical key); and in A16, "created here" let every later open of a note this
+  session made skip the lease, even over another session's lease, a cancel-then-reopen left Lobby stuck
+  swallowing keys, and four lower-severity paths wrote or lost text. All are fixed in `dc56247` (branch
+  `spike/a-fix2`), with regression specs that fail on `45574c6` and pass 3 of 3 runs of every host
+  spec (84/84 each) on the new code; the whole suite passes (99 passed, 2 skipped).
+- **A16 fails on the plan's wording (3 points, section 3.4).** After fix round 2, every editor-open path is
+  held by the lease or the guard, including a second editor while a request is pending, a re-open after a
+  cancel, a note this session created earlier, a remote delete and a lost lease: no key or text lands
+  without a held lease and nothing is pushed before a grant, in every run. The corrected criteria pass.
 - **A12 is PARTIAL** because one CSP fix is Lobby app code that was emulated, not committed; the whole-dist
   grep cannot pass while tldraw is in the build; and the Clerk origins are unverified.
 - **A14 is PARTIAL** because the laptop half was not run. On the workstation, both engines are below 24 fps
@@ -21,7 +29,7 @@ agree except where noted: A13 is +1.0 KiB, and A14 has a wider spread in how soo
 
 | | |
 |---|---|
-| Branch | `spike/excalidraw`: scaffold `b9252d9` + merges of `spike/a-node` 4581fd8 (576df0f), `spike/a-host` 11a5d6d (c733cd2), `spike/a-render` 1a489c2 (7eccb51). The runs below are at 7eccb51 plus this report and the two integration scripts; the corrections of section 0 were run at `f17ce48`. |
+| Branch | `spike/excalidraw`: scaffold `b9252d9` + merges of `spike/a-node` 4581fd8 (576df0f), `spike/a-host` 11a5d6d (c733cd2), `spike/a-render` 1a489c2 (7eccb51). The runs below are at 7eccb51 plus this report and the two integration scripts; the corrections of section 0 were run at `f17ce48`, fix round 2 (section 0b) at `dc56247` on `spike/a-fix2` (branched from `45574c6`). |
 | Engine | `@excalidraw/excalidraw`, `element`, `common`, `math`, `fractional-indexing` 0.18.0-1118751 (pinned by the catalog) |
 | Machine | Windows 11 workstation (Threadripper 9970X, RTX 5090), Node 24, pnpm 10.34.5, Vite 8.3.1 (rolldown), Playwright 1.63.0, headless Chromium shell 153.0.8010.12 |
 | Date | 2026-09-28 / 29 (UTC) |
@@ -121,6 +129,98 @@ A16 (every path 20/20, deny 40/40) unchanged. The per-check files give the detai
 new ones (their pass/fail only; their metric lines were not compared number by number with section 1).
 A14 laptop, A12's CSP harness and the A13 dist report were not re-run: the fix does not touch them.
 
+## 0b. Second verification and fix round 2 (2026-09-29)
+
+A second independent verifier re-ran the corrected code (`45574c6`: 42/42 A6 and A16 tests three times,
+the whole suite 69 passed / 2 skipped, the first verifier's probes 11/11) and then attacked both fixes.
+Both held against what they targeted, but **section 0's corrected claims were still false in two
+places**:
+
+- **A6: "0 downloads, dialogs or pickers" failed outside the text editor on some keyboard layouts.** Lobby
+  delegated Ctrl+D, Ctrl+G, Ctrl+Shift+L, Ctrl+= / - and Ctrl+[ ] to Excalidraw by physical `code`, while
+  most of Excalidraw's handlers test `key`. A Bone-layout Ctrl+Shift+S (code `KeyL`, key `S`) passed as the
+  lock chord and Excalidraw's `saveFileToDisk` called `showSaveFilePicker` (3/3 Windows, 3/3 macOS
+  emulation). German Ctrl+Shift+ß and Dvorak Ctrl+Shift+[ report key `?` and opened the help dialog
+  (X 44013). (Events emulated through CDP, not a real layout.)
+- **A16: "every editor-open path is held by the lease or the guard ... no key or text lands" was false.**
+  Defect 1 (high): an element this session created kept its "created here" flag for the whole session,
+  and the flag skipped the lease. P5 on any note the user had made earlier opened writable with no
+  acquire; with another session holding that note, P1/P2 opened writable and the deny wrote the typed
+  text (open item 7 violated). host-lab's monitor counted "created here" as leased, so it could not see
+  this. Defect 2 (medium): cancel then re-open within one round trip left Lobby stuck in `pending` with
+  the lease held and no editor, every key swallowed (the re-acquire reused an already-resolved promise).
+  Lower severity: (5) a granted Enter on an unlabelled container whose centre another text covers dropped
+  the buffered keys; (6) a remote delete or label re-create while typing was submitted into the deleted
+  or replaced label, un-deleting or duplicating it; (7) a lost lease left the editor writable, with no
+  banner; (8) selecting another element did not cancel a pending request, so its keys landed in the first
+  note.
+
+None is an engine path Lobby cannot hold, so §8.5 is not triggered. All were in Lobby's code.
+
+**The fixes (`dc56247`, branch `spike/a-fix2`):**
+- **A6, outside the editor** (`keymap.ts`, `delegatedChord`): a Ctrl/Cmd chord is delegated only when
+  Excalidraw itself would run exactly one delegated action for that event, decided by its own tests:
+  `key` after its CapsLock fix where the delegated keyTest reads key (duplicate, group, ungroup, lock),
+  `code` only where it reads code (zoom, z-order); Excalidraw's CTRL_OR_CMD (so macOS Ctrl+G, which opens
+  a popup, is blocked); nothing claimed first by a pre-action handler (key `?`, image export, the Ctrl+P
+  toast); exactly one of the bundle's 46 keyTests matching (all transcribed, each pinned by name and line
+  in a unit test). Lobby-owned letters and the browser-chord list follow the layout's character too.
+- **A16** (`client.ts`, `editorLease.ts`, `CanvasInput.ts`): "created here" is one-shot (the first open
+  only, 5 s, refused when another session is known to hold the lease; the acquire still goes out in
+  parallel); a re-acquire after a cancel is a new request, and a stale answer is ignored while a newer
+  request is out and released when none is; `pending` always has exactly one live request and a visible
+  affordance; an unlabelled container covered by another text gets its own label before the synthetic
+  Enter; a remotely deleted, unbound or replaced label, and an editor whose lease was lost, are closed
+  WITHOUT Excalidraw's submit (the label is taken out of the scene for that one call: `handleSubmit`
+  cleans up and returns without writing, X 25487-25493) and the typed text is offered ("Copy my text");
+  a lost lease makes the editor read-only at once with the §2.9.3 banner (minimal), and no release is
+  sent; selecting another element cancels a pending Lobby request (keys discarded with a notice: the
+  plan's buffer rule has no re-targeting).
+- **The monitor** (`host-lab.tsx`) counts only a held lease. Its one allowance is the New element rule's
+  first open, while the acquire is out and the server's own table names no other holder. It asserts that
+  `pending` has exactly one live request and a visible affordance, that `idle` has none, and that a lost
+  lease leaves no writable editor.
+
+**Regression specs** (they fail on `45574c6` and pass on `dc56247`; the per-test failure reasons are in
+A6.md and A16.md): `host-a6-layouts.spec.ts` (the verifier's five CDP cases; a sweep of every delegated
+chord over the (code, key) pairs 7 layouts produce, 81 presses on Windows and 93 under macOS emulation,
+each measured against Excalidraw itself with the allowlist off and its actions hooked);
+`host-a16-fix2.spec.ts` (defects 1, 2, 5, 6, 7, 8 and two monitor controls, 10 repetitions per case);
+`host-a16-pending.spec.ts` rewritten for defect 8 (selecting B now cancels A); unit tests for the lease
+client, the layout sweep and the keyTest pin. On `45574c6` (new specs and monitor copied into a temporary
+worktree, 3 repetitions per case): 38 of 45 tests failed. The 7 that passed are behaviours the fix keeps
+(a new note's first open, an uncovered container, a click on A itself, the three unchanged pending-spec
+tests) and the pending-invariant control.
+
+**New engine facts** (3.1 item 8, 3.4 items 10-12): Excalidraw's own key handling on other layouts
+(German Ctrl++ is bring-forward, Dvorak Ctrl+- is grid mode, macOS Cmd+Option+[ ] matches two actions
+and does nothing); `handleSubmit` un-deletes and re-binds, and returns early when its label is not in the
+scene; Enter on an unlabelled container edits whatever text is at its centre.
+
+**Runs of fix round 2** (code `dc56247` + `014990e`, the pending spec's timing, + `f38f17c`, comments
+only; branch `spike/a-fix2`; port 7790; 2026-09-29 UTC):
+
+| Gate | Result |
+|---|---|
+| `pnpm lint` (Biome, 1,127 files) | PASS |
+| `pnpm -r typecheck` + `tsc -p apps/web/test/engine-probe` | PASS |
+| vitest `web` + `engine-probe` (the new client, layout-sweep and keyTest-pin tests included) | 1,418/1,418 |
+| Every `host-*.spec.ts`, 3 runs back to back (84 tests each, fresh build) | 84/84, 84/84, 84/84 (1,198, 1,150, 1,128 s; from 05:34:25, 05:54:23, 06:13:34) |
+| Whole spike suite once (fresh build, from 06:32:39) | 99 passed, 2 skipped (the opt-in A14 specs), 19.3 min |
+
+The numbers were identical in the three runs: the fix-round-2 spec 24 cases x 10/10 plus both monitor
+controls; the rewritten pending spec 12 x 20/20 and its three other tests 20/20; the layout sweep 53 of
+81 presses delegated on Windows and 46 of 93 under macOS emulation, exactly the ones Excalidraw ran as a
+single delegated action with the allowlist off, 0 pickers, 0 dialogs; the verifier's five cases blocked
+3/3 on both platforms; the in-editor sweep 0 of 658 acted per platform; the first version's A6 (140
+presses, 0 acted) and A16 (16 tests) and A1, A2, A4, A5, A17 unchanged. A first attempt at the three runs
+(same code) was stopped in its run 2, where 3 of 20 cases of one pending-spec test failed on the spec's
+own timing (B's own timed grant arrived before the `insertText` step, so the IME text landed in a
+granted B, which is allowed); `014990e` fixes the spec, and the three runs above are the complete series
+after it. The whole-suite count grew by the 30 new tests (69 + 30 = 99). A14 laptop, A12's CSP harness
+and the A13 dist report were not re-run: the fix does not touch them. The plugin node tests were not
+re-run either (no build plugin changed).
+
 ## 1. Results
 
 "Runs" means the runs on the merged branch; every check passed or failed the same way in all 3.
@@ -132,7 +232,7 @@ A14 laptop, A12's CSP harness and the A13 dist report were not re-run: the fix d
 | A3 | PASS | 3/3 | Line breaks differ in 0/208 labels (criterion ≤ 3); 0 font-size differences. The plan's per-character table without kerning: 6/208 | Server layout in Node matches Chromium only with measured pair kerning. The plan's plain per-character table would fail. | A3.md, `apps/web/test/engine-probe/a3/` |
 | A4 | PASS | 3/3 (commenter, viewer, guest, editor control) | Presence 11-12 samples (15-16 Hz), `onPointerUpdate` 0 with no tool; keys, clipboard and drop 0 | The interaction config behaves as planned. Excalidraw refuses even `setActiveTool('selection')` for read-only roles, so Lobby sets the tool through `appState`. | A4.md, `host-a4.spec.ts` |
 | A5 | PASS | 3/3 | 0 visible matches for 33 selectors in 6 states; 0 off-background pixels outside Lobby's toolbar | `ui={false}` hides every engine control. Lobby's toolbar drives all 9 tools. | A5.md, `host-a5.spec.ts` |
-| A6 | PASS after the fix (section 0) | 3/3 at `f17ce48` | Allowlist on: 140 presses, 0 acted, 0 downloads, dialogs or pickers. Control: 89/140 acted (54 keys). Inside a granted editor: 658 chords per platform, 0 acted, 0 reached the textarea except the 15 kept ones | First version (wrong): only Ctrl/Cmd+S and Ctrl/Cmd+Shift+S were blocked in the editor, and Ctrl+Alt+S / Cmd+Alt+S still saved. Now an allowlist inside the editor; every other Ctrl/Cmd/Alt chord is stopped. | A6.md, `host-a6.spec.ts`, `host-a6-editor.spec.ts`, `keymap.test.ts` |
+| A6 | PASS after two fixes (sections 0 and 0b) | 3/3 at `f17ce48`; 3/3 at `dc56247` | Allowlist on: 140 presses, 0 acted, 0 downloads, dialogs or pickers. Control: 89/140 acted (54 keys). Inside a granted editor: 658 chords per platform, 0 acted, 0 reached the textarea except the 15 kept ones. Outside it, 7 layouts: 81 presses (Windows) and 93 (macOS emulation), Lobby delegated exactly the 53 / 46 that Excalidraw runs as a delegated action, 0 pickers or dialogs | First version (wrong): only Ctrl/Cmd+S and Ctrl/Cmd+Shift+S were blocked in the editor. First fix (incomplete): outside the editor chords were delegated by physical key, so a Bone Ctrl+Shift+S saved the board and a `?` key opened help. Now: an allowlist inside the editor, and outside it only what Excalidraw's own key tests run as one delegated action. | A6.md, `host-a6.spec.ts`, `host-a6-editor.spec.ts`, `host-a6-layouts.spec.ts`, `keymap.test.ts` |
 | A7 | PASS | 3/3 | Engine path: 1 op (`status`, v2→v3), never retried. Lobby loader: 0 ops, 0 drift, loaded after 15.9 s; 30 images: 6 in flight at most, the 4 visible first | E1 is confirmed. Lobby's loader with a local-only status pushes nothing. | A7.md, `render-a7-images.spec.ts` |
 | A8 | PASS | 3/3 Node (13/13) + 3/3 browser | Without the pre-pass, confirmed `c2` goes v3→v4. With the pre-pass, `X0` is re-keyed a1→a1V and 0 confirmed versions change | The pre-pass keeps `syncInvalidIndices` away from confirmed elements. Excalidraw does not enforce E3 in the npm builds. | A8.md, `apps/web/src/canvas/sync/index-keys.test.ts`, `engine-probe/a8/` |
 | A9 | PASS | 3/3 | 17 elements, 27 font files: 0 ops, 0 drift, 0 size changes, 0 foreign requests | Font loading bumps no version. Labels are not re-measured after a late font load. | A9.md, `render-a9-fonts.spec.ts` |
@@ -142,7 +242,7 @@ A14 laptop, A12's CSP harness and the A13 dist report were not re-run: the fix d
 | A13 | PASS (reported, no gate) | 3/3 | tldraw board route 1086.2 KiB gzip; Excalidraw engine route 1306.9 KiB (+1.0 KiB against the render branch: `ExcalidrawHost` now imports `tools/notes.ts`); run time 1308.4 KiB | The plan's ≈881 KiB baseline does not reproduce. About 1066 KiB is projected after cut-over. | A13.md, `e2e/spike/csp/dist-report.ts` |
 | A14 | PARTIAL | Workstation 3/3 for each engine (+3 more Excalidraw runs); laptop UNRUN | Median fps, fit / 0.25 / 1. Excalidraw: 17.7 at its own fit (clamped to zoom 0.1), 13.9 at the true fit (0.054) / 53.7 / 60. tldraw: 18.2 at fit (0.05) / 56 / 59. Open: Excalidraw 666-701 ms without a sync server; tldraw 3,700-3,916 ms | Excalidraw's own fit stops at zoom 0.1. At fit, both engines are below 24 fps; at 0.25 and 1, both are above 30. Details in the note below the table. | A14.md, `render-a14-*.spec.ts` |
 | A15 | PASS | 3/3, 31/31 | `record()` at 20,000 elements: about 5 ms | Field-level undo: every §2.8 case passes, and probe2's loss reproduces on Excalidraw's own `ElementsDelta`. The CAS unit is refined (section 4). | A15.md, `apps/web/src/canvas/history/` |
-| A16 | FAIL as written (plan wording) | 3/3 at `f17ce48` (16 + 15 tests per run) + static 3/3 (23/23) | Call sites: 7 `startTextEditing` and 2 `handleTextWysiwyg`, in dev and prod. P1, P2, P3a, P3b, P4, P5 and P6: 20/20 each; deny 40/40; group and line forwards 20/20. A second editor while a request is pending: 12 cases x 20/20; text without keydown into a guarded editor 20/20 | First version (wrong): "the security property holds"; an editor opened while another request was pending was writable without a lease. Fixed; the property now holds. The plan's wording still fails on 3 points (section 3.4); the corrected criteria pass. | A16.md, A16-static.md, `host-a16.spec.ts`, `host-a16-pending.spec.ts`, `openRule.test.ts`, `engine-probe/editor-open-paths.test.ts` |
+| A16 | FAIL as written (plan wording) | 3/3 at `f17ce48` (16 + 15 tests per run); 3/3 at `dc56247` (16 + 15 + 26 tests per run) + static 3/3 (23/23) | Call sites: 7 `startTextEditing` and 2 `handleTextWysiwyg`, in dev and prod. P1, P2, P3a, P3b, P4, P5 and P6: 20/20 each; deny 40/40; group and line forwards 20/20. Pending A, then B selected and acted on: 12 cases x 20/20; text without keydown into a guarded editor 20/20. Fix round 2: created-here, cancel/re-open, own label, remote delete, lost lease and selection cases 24 x 10/10 | First version (wrong): "the security property holds"; an editor opened while another request was pending was writable without a lease. First fix (incomplete): "created here" skipped the lease forever, a cancel/re-open stuck Lobby in pending, and remote deletes, lost leases and selection changes wrote or lost text. Fixed in `dc56247`; the property now holds. The plan's wording still fails on 3 points (section 3.4); the corrected criteria pass. | A16.md, A16-static.md, `host-a16.spec.ts`, `host-a16-pending.spec.ts`, `host-a16-fix2.spec.ts`, `openRule.test.ts`, `client.test.ts`, `engine-probe/editor-open-paths.test.ts` |
 | A17 | PASS | 3/3, 20/20 | Textarea moved exactly (120, 40). The note grew to 392 px while typing, stayed 200 after a remote shrink, and re-fit to 652 as a `fit` write | `updateScene` with the editor open keeps the textarea, caret and text. Native Ctrl+Z stays in the textarea. The holder's auto-fit rewrites bound arrows (open item 3). | A17.md, `host-a17.spec.ts` |
 
 **A14 on the merged branch: what differs from the render branch.** The code under test is identical; only
@@ -250,6 +350,14 @@ against the installed files; they match.
    `font-src` violations, so the fallback must be same-origin (A12).
 7. **`onExcalidrawAPI` fires before the editor is initialised** (X 49154). **`onInitialize` fires after the
    first scene** (X 49441). From the scaffold.
+8. **Excalidraw's shortcuts on other keyboard layouts (section 0b).** Most keyTests read `key` (after a
+   CapsLock fix, X 43925-43939); zoom, z-order, grid mode, reset zoom and the Alt toggles read `code`; the
+   help dialog opens on key `?` with any modifiers, before any action (X 44013). Measured with the
+   allowlist off: German Ctrl++ (code `BracketRight`) is bring forward, not zoom; German Ctrl+Ü is send
+   backward; Dvorak Ctrl+- (code `Quote`) toggles grid mode; AZERTY and German Ctrl+- do nothing; a
+   Bone Ctrl+Shift+S on the physical L key is `saveFileToDisk`; macOS Cmd+Option+[ ] (Excalidraw's own
+   to-back / to-front) matches `sendBackward` too (its keyTest ignores Alt), so `handleKeyDown` gives up
+   (X 23064-23069) and nothing happens; macOS Ctrl+G opens the background popup (X 44193-44205).
 
 ### 3.2 Index keys and echo (§2.5.4-2.5.5)
 1. **Confirmed: `updateScene` re-keys the later of two colliding elements and bumps its version.** The path
@@ -309,6 +417,20 @@ against the installed files; they match.
    25303-25320, for Excalidraw-clipboard data), so `readOnly` does not stop it; Lobby's capture `paste`
    listener does. Excalidraw's container prevents every dragover and drop (X 43022, 49404-49416), so text
    cannot be dropped into its editor at all.
+10. **Excalidraw's submit writes into a deleted or replaced label (section 0b).** `onSubmit` recomputes
+    `isDeleted = !text.trim()` (X 49872) and `updateElement` writes it into the scene's copy (X
+    49806-49845), so submitting an editor whose label was deleted remotely un-deletes it; `handleSubmit`
+    re-binds a label its container no longer lists (X 25498-25507), duplicating a re-created label. After a
+    remote delete, `componentDidUpdate` clears `editingTextElement` but leaves the textarea (X
+    49530-49537). Excalidraw has no close without a write, but `handleSubmit` runs its cleanup and then
+    returns without writing when the label is not in the scene (X 25487-25493); Lobby uses that.
+11. **Enter on an unlabelled container edits the text at its centre** (`startTextEditing` takes
+    `getSelectedTextElement(container) || getTextElementAtPosition(centre)`, X 44579-44582): a free text
+    or another note's label over the centre is opened instead of a new label. A bound label that exists
+    is found first (X 49928-49944), so Lobby binds one before its synthetic Enter when the centre is
+    covered.
+12. **An editor's value is never refreshed from the scene** (item 6): after a lost lease, a newer remote
+    text is overwritten by the next submit unless that submit is skipped.
 
 ### 3.5 Files (§2.10)
 1. **E1 confirmed at X 47091-47111** (the plan cites 47089). `updateImageCache` marks an errored file's
@@ -367,7 +489,13 @@ Consolidated from the owners' results, grouped by plan section. Each has evidenc
      wrong, and open item 1 is not closed by naming save chords: inside the editor, keep only keys without
      Ctrl/Cmd/Alt, caret moves (Alt only on macOS), Ctrl/Cmd/Alt+Backspace/Delete, Ctrl/Cmd+Z,
      Ctrl/Cmd+Shift+Z, Ctrl+Y, Ctrl/Cmd+A and Ctrl/Cmd+C/X/V/Shift+V; let AltGr and Option characters type
-     with their keydown stopped; stop and prevent every other Ctrl/Cmd/Alt chord (section 0, A6.md).
+     with their keydown stopped; stop and prevent every other Ctrl/Cmd/Alt chord (section 0, A6.md);
+   - the "Delegated to Excalidraw" row must be decided the way Excalidraw decides, not by physical key: a
+     Ctrl/Cmd chord is delegated only when Excalidraw's own key tests (key where they read key, code where
+     they read code, its CTRL_OR_CMD) pick exactly one delegated action and no earlier handler (key `?`)
+     claims it (section 0b, A6.md). Two consequences for the row: on German layouts Ctrl++ is Excalidraw's
+     bring-forward, and on macOS Excalidraw's Cmd+Option+[ ] (to back / to front) does nothing in
+     0.18.0-1118751 (two keyTests match); Lobby either lives with that or owns z-order.
 2. **§2.3.4 / §2.7** (A4): for read-only roles, `CanvasPort.setTool('select')` must write
    `appState.activeTool`.
 3. **§2.3.2** (host, scaffold): define "Lobby yellow" (`currentItemStickynoteBackgroundColor`); the spike
@@ -400,7 +528,19 @@ Consolidated from the owners' results, grouped by plan section. Each has evidenc
       of Lobby's own request", not "an open that did not follow a grant": while another request or editor
       is in flight, the unrequested editor is closed at once, unchanged; text that arrives without a
       keydown (beforeinput, paste, drop) is prevented as well as keys; Lobby's session follows
-      `editingTextElement`, and a lease is released only after its editor is gone (section 0, A16.md).
+      `editingTextElement`, and a lease is released only after its editor is gone (section 0, A16.md);
+    - the New element row (open item 7): *"the FIRST open of an element this session just created opens
+      at once; the acquire is still sent in parallel; it never applies when another session is known to
+      hold the lease; every later open is an ordinary request"*; and the server must deny the id if
+      another session holds it, whoever created it (section 0b);
+    - the buffer rule: *"selecting another element while a request is pending cancels it; the buffered
+      keys are discarded with a notice"* (the plan has no re-targeting); a re-open after a cancel is a new
+      request; `pending` shows an affordance (section 0b, A16.md);
+    - guard step 5 and §2.9.3: an editor whose label was deleted, unbound or replaced remotely, or whose
+      lease was lost, is closed without Excalidraw's submit (it would un-delete, re-bind or overwrite),
+      and the text is offered ("Copy my text"); a lost lease makes the editor read-only at once;
+    - the Granted row, for an unlabelled container: open the container's own label (bind one first when
+      another text covers its centre), never the covering text.
 
     The proposed criterion is in A16.md. It reads: "P1, P2, P3 off the label, P4 and the T tool open only
     after the grant. P3 on the label and P5 are guard-caught: read-only from the first frame, no key
@@ -475,6 +615,13 @@ Consolidated from the owners' results, grouped by plan section. Each has evidenc
   real IME or Android keyboard. AltGr was checked in unit tests only (Playwright cannot set the AltGraph
   state). By design, text an IME commits while a lease is pending is blocked, not buffered: the plan's
   "IME composition starts only after the grant"; nothing is lost silently, but the user types it again.
+- **Keyboard layouts are emulated (section 0b).** The layout sweep sends CDP key events with the `key`
+  and `code` Chromium on Windows reports for QWERTY, QWERTZ, AZERTY, Dvorak, Colemak, Neo 2 and Bone
+  (tables in `apps/web/src/canvas/input/layouts.ts`, written from the layouts' published maps, not
+  captured from real keyboards). No real layout was installed. Neo and Bone drivers can also send QWERTZ
+  letters while Ctrl is held (a driver option); that case is QWERTZ. macOS layouts were emulated with the
+  same tables under `navigator.platform` emulation; real macOS `key` values for Cmd+Option chords are
+  UNVERIFIED.
 - **One browser engine only.** Every browser check ran in the headless Chromium shell: no Firefox, no
   WebKit, no Safari/iOS, no real touch device. P4 used Playwright touch emulation. A3's table reproduces
   Windows Chromium, and macOS/iOS font fallback for CJK and emoji was not measured.
@@ -511,6 +658,11 @@ node docs/research/excalidraw/spike-a/scripts/integration-summary.mjs <log dir> 
 FIX_OUT=<log dir> bash docs/research/excalidraw/spike-a/scripts/fix-run.sh gates
 FIX_OUT=<log dir> bash docs/research/excalidraw/spike-a/scripts/fix-run.sh a6a16 1
 FIX_OUT=<log dir> bash docs/research/excalidraw/spike-a/scripts/fix-run.sh suite
+
+# Fix round 2 (section 0b; branch spike/a-fix2, port 7790): pnpm lint, pnpm -r typecheck, the engine-probe tsc and
+# vitest web + engine-probe, then every host spec 3 times (one invocation each), then the whole suite once:
+(cd e2e && SPIKE_WEB_PORT=7790 pnpm exec playwright test -c spike/playwright.config.ts spike/tests/host-*.spec.ts)
+(cd e2e && SPIKE_WEB_PORT=7790 pnpm exec playwright test -c spike/playwright.config.ts)
 
 # A3 (3 runs inside; port 7734)
 node apps/web/test/engine-probe/a3/run.ts --runs=3 --port=7734

@@ -6,6 +6,7 @@ import ExcalidrawHost, { type HostWiring } from '../../engine/ExcalidrawHost.tsx
 import { LOBBY_ROLES, type LobbyRole } from '../../engine/interaction.ts'
 import { CanvasInput, type InputTrace } from '../../input/CanvasInput.ts'
 import { LeaseClient } from '../../lease/client.ts'
+import type { EditNotice, EditState } from '../../lease/editorLease.ts'
 import { FakeLeaseServer } from '../../lease/fakeServer.ts'
 import { classifyEditorWrites, type ElementSnapshot } from '../../lease/fit.ts'
 import { attachPresencePointer, type PresenceSample } from '../../presence/pointer.ts'
@@ -52,6 +53,118 @@ function readConfig(): LabConfig {
 type Plain = Record<string, unknown> & { id: string; type: string }
 const plain = (e: ExcalidrawElement): Plain => JSON.parse(JSON.stringify(e)) as Plain
 
+/**
+ * Lobby's minimal lease UI, imperative so it changes in the same task as the session (the monitor reads
+ * it at the next task boundary):
+ *  - the pending affordance (§2.9.5): "Opening… Esc cancels" while a lease request is out, so keys typed
+ *    meanwhile are never swallowed silently;
+ *  - the notice banner: a deny, a cancelled open, and the plan's lost-lease banner (§2.9.3, minimal):
+ *    "Not saved — Alice is editing this note now" with **Copy my text**.
+ */
+function createLeaseUi(notices: (EditNotice & { copied: boolean })[]) {
+  const status = document.createElement('div')
+  status.dataset.testid = 'lease-status'
+  status.setAttribute('role', 'status')
+  status.setAttribute('aria-live', 'polite')
+  Object.assign(status.style, {
+    position: 'fixed',
+    bottom: '16px',
+    left: '16px',
+    padding: '6px 10px',
+    borderRadius: '6px',
+    background: '#1f2937',
+    color: '#fff',
+    font: '13px system-ui, sans-serif',
+    zIndex: '20',
+    display: 'none',
+  })
+  const banner = document.createElement('div')
+  banner.dataset.testid = 'lease-notice'
+  banner.setAttribute('role', 'alert')
+  Object.assign(banner.style, {
+    position: 'fixed',
+    top: '56px',
+    left: '50%',
+    transform: 'translateX(-50%)',
+    maxWidth: 'min(560px, calc(100vw - 32px))',
+    padding: '8px 12px',
+    borderRadius: '8px',
+    background: '#7c2d12',
+    color: '#fff',
+    font: '13px system-ui, sans-serif',
+    zIndex: '20',
+    display: 'none',
+    gap: '8px',
+    alignItems: 'center',
+  })
+  const message = document.createElement('span')
+  const copy = document.createElement('button')
+  copy.type = 'button'
+  copy.textContent = 'Copy my text'
+  copy.dataset.testid = 'lease-copy'
+  const close = document.createElement('button')
+  close.type = 'button'
+  close.textContent = 'Dismiss'
+  close.dataset.testid = 'lease-dismiss'
+  banner.append(message, copy, close)
+  let shown = -1
+  copy.addEventListener('click', () => {
+    const n = notices[shown]
+    if (!n?.text) return
+    n.copied = true
+    void navigator.clipboard?.writeText(n.text).catch(() => {})
+  })
+  close.addEventListener('click', () => {
+    banner.style.display = 'none'
+  })
+  return {
+    mount: () => {
+      document.body.append(status, banner)
+      return () => {
+        status.remove()
+        banner.remove()
+      }
+    },
+    showState: (s: EditState) => {
+      status.dataset.phase = s.phase
+      status.dataset.lease = s.leaseId ?? ''
+      status.dataset.lost = s.lost ? '1' : ''
+      if (s.phase === 'pending' || s.phase === 'opening') {
+        status.textContent =
+          s.buffered > 0
+            ? `Opening the note… (${s.buffered} typed, Esc cancels)`
+            : 'Opening the note… (Esc cancels)'
+        status.style.display = 'block'
+      } else if (s.lost) {
+        status.textContent = `Read-only: ${s.lost.name} is editing this note`
+        status.style.display = 'block'
+      } else {
+        status.textContent = ''
+        status.style.display = 'none'
+      }
+    },
+    showNotice: (i: number) => {
+      const n = notices[i]
+      if (!n) return
+      shown = i
+      message.textContent = n.message
+      copy.style.display = n.text ? '' : 'none'
+      banner.style.display = 'flex'
+    },
+    /** The pending affordance is on screen (the monitor's invariant). */
+    pendingVisible: () =>
+      status.isConnected &&
+      status.dataset.phase === 'pending' &&
+      status.style.display !== 'none' &&
+      status.getBoundingClientRect().width > 0 &&
+      (status.textContent ?? '').length > 0,
+    reset: () => {
+      banner.style.display = 'none'
+      shown = -1
+    },
+  }
+}
+
 /** Everything the specs drive, behind window.__lobbySpike.extra. */
 function createLab(cfg: LabConfig, onAttached: (api: ExcalidrawImperativeAPI) => void) {
   const server = new FakeLeaseServer({ me: ME, delayMs: cfg.grant })
@@ -62,6 +175,10 @@ function createLab(cfg: LabConfig, onAttached: (api: ExcalidrawImperativeAPI) =>
   const linkOpens: string[] = []
   const customClicks: CustomToolClick[] = []
   const toasts: string[] = []
+  /** Every EditNotice, with whether its "Copy my text" was clicked. */
+  const notices: (EditNotice & { at: number; copied: boolean })[] = []
+  /** Every EditState change, in order (the pending affordance's history). */
+  const editStates: (EditState & { at: number })[] = []
   const counters = {
     lobbyUndo: 0,
     lobbyRedo: 0,
@@ -79,6 +196,7 @@ function createLab(cfg: LabConfig, onAttached: (api: ExcalidrawImperativeAPI) =>
   }
   const readOnly = cfg.role !== 'editor'
   let hidden = new Set<string>()
+  const ui = createLeaseUi(notices)
 
   const input = new CanvasInput({
     hiddenIds: () => hidden,
@@ -108,6 +226,14 @@ function createLab(cfg: LabConfig, onAttached: (api: ExcalidrawImperativeAPI) =>
       addFreeText(p.x, p.y)
     },
     onDeny: (_id, holder) => toasts.push(`${holder} is typing in this note`),
+    onNotice: (n) => {
+      notices.push({ ...n, at: performance.now(), copied: false })
+      ui.showNotice(notices.length - 1)
+    },
+    onEditState: (s) => {
+      editStates.push({ ...s, at: performance.now() })
+      ui.showState(s)
+    },
     trace: (t) => traces.push(t),
     allowlist: cfg.allowlist,
     interceptDoubleClicks: cfg.dbl === 'on',
@@ -153,6 +279,7 @@ function createLab(cfg: LabConfig, onAttached: (api: ExcalidrawImperativeAPI) =>
     })
     addElements(els, 'immediately')
     lease.markCreated(id)
+    createdIds.add(id)
     input.editorLease?.requestEdit(id, { reason: 'new-text', caretEnd: true })
     return id
   }
@@ -163,6 +290,7 @@ function createLab(cfg: LabConfig, onAttached: (api: ExcalidrawImperativeAPI) =>
       const size = 200
       const made = note({ x: c.x - size / 2, y: c.y - size / 2, size })
       lease.markCreated(made.note)
+      createdIds.add(made.note)
       setTool(need(), 'select', { readOnly })
       input.editorLease?.requestEdit(made.note, { reason: 'new-note', caretEnd: true })
     } else if (c.tool === 'text' && !readOnly) {
@@ -203,14 +331,23 @@ function createLab(cfg: LabConfig, onAttached: (api: ExcalidrawImperativeAPI) =>
 
   // --- A6/A16 regression monitor ---------------------------------------------------------------------
   // Independent of EditorLease's bookkeeping: a textarea may be writable, and may receive input, only if
-  // this session holds (or created) the lease of the element Excalidraw opened it for.
+  // this session HOLDS the lease of the element Excalidraw opened it for (LeaseClient.isHeld: the grant
+  // arrived and no broadcast took it away). "Created here" is NOT a lease (the second verifier found the
+  // old monitor counting it as one, so it could not see an unbounded New-element bypass). The one
+  // exception is the New element rule itself (§2.9.2): the FIRST textarea on an element this page created
+  // may be writable before the grant, only while its acquire is out and the SERVER names no other holder.
+  // Invariants: phase 'pending' implies exactly one live request (for the session's id) and a visible
+  // pending affordance; phase 'idle' implies no live request; a lost lease leaves no writable editor.
   const monitor = {
     on: false,
     violations: [] as Record<string, unknown>[],
     /** Every lease release, with the leased label's stored text at that moment. */
     releases: [] as { id: string; text: string | null; at: number }[],
-    /** Every change of a label's stored text, and whether its lease was held when it was written. */
-    textWrites: [] as { id: string; text: string; held: boolean; at: number }[],
+    /**
+     * Every change of a label's stored text, and whether its lease was held when it was written
+     * (`provisional`: not held, but the New element allowance above applied).
+     */
+    textWrites: [] as { id: string; text: string; held: boolean; provisional: boolean; at: number }[],
     /** Keydowns that reached a textarea's own handlers (target phase), per textarea probe id. */
     reached: [] as {
       probe: string
@@ -231,18 +368,55 @@ function createLab(cfg: LabConfig, onAttached: (api: ExcalidrawImperativeAPI) =>
     wrapperEl
       ? Array.from(wrapperEl.querySelectorAll<HTMLTextAreaElement>('textarea.excalidraw-wysiwyg'))
       : []
-  const leasedId = (id: string | null | undefined) => !!id && (lease.isHeld(id) || lease.isCreatedHere(id))
+  /** Elements this page created with Lobby's tools (the N tool, a new free text): the monitor's record. */
+  const createdIds = new Set<string>()
+  /** Lease ids that have had a textarea: a later textarea on one is not a first open. */
+  const openedLeases = new Set<string>()
+  const heldHere = (id: string | null | undefined) => !!id && lease.isHeld(id)
+  /** The fake server's own table (the truth), not what the client was told. */
+  const otherHolds = (id: string) => {
+    const h = server.holderOf(id)
+    return !!h && h.sid !== ME.sid
+  }
   const editingLeaseId = () => {
     const e = api?.getAppState().editingTextElement
     return e ? (e.containerId ?? e.id) : null
   }
-  /** The lease id of the element a textarea edits (tagged when it appeared). */
+  /** The lease id of the element a textarea edits (tagged when it appeared), and whether it is a first open. */
   const leaseOfTextarea = (ta: HTMLTextAreaElement) => {
-    if (!ta.dataset.probeLease) ta.dataset.probeLease = editingLeaseId() ?? ''
+    if (!ta.dataset.probeLease) {
+      const id = editingLeaseId() ?? ''
+      ta.dataset.probeLease = id
+      if (id) {
+        ta.dataset.probeFirst = openedLeases.has(id) ? '0' : '1'
+        openedLeases.add(id)
+      }
+    }
     return ta.dataset.probeLease || null
+  }
+  /** The New element allowance: first textarea on a created element, acquire out, no other holder. */
+  const provisional = (ta: HTMLTextAreaElement, id: string | null) =>
+    !!id && createdIds.has(id) && ta.dataset.probeFirst === '1' && lease.isPending(id) && !otherHolds(id)
+  const mayWrite = (ta: HTMLTextAreaElement) => {
+    const id = leaseOfTextarea(ta)
+    return heldHere(id) || provisional(ta, id)
   }
   const violation = (kind: string, data: Record<string, unknown> = {}) => {
     if (monitor.on) monitor.violations.push({ kind, at: performance.now(), ...data })
+  }
+  /** Phase 'pending' implies exactly one live request (the session's) and a visible affordance. */
+  const pendingIssues = () => {
+    const el = input.editorLease
+    const phase = el?.phase ?? 'idle'
+    const live = lease.livePending()
+    const issues: string[] = []
+    if (phase === 'pending') {
+      if (live.length !== 1 || live[0] !== el?.leaseId)
+        issues.push(`pending on ${el?.leaseId} with live requests [${live.join(',')}]`)
+      if (!ui.pendingVisible()) issues.push('pending without a visible affordance')
+    }
+    if (phase === 'idle' && live.length > 0) issues.push(`idle with live requests [${live.join(',')}]`)
+    return issues
   }
   const agreement = () => {
     const st = need().getAppState()
@@ -265,10 +439,13 @@ function createLab(cfg: LabConfig, onAttached: (api: ExcalidrawImperativeAPI) =>
       if (phase === 'pending' && el?.origin === 'guard') issues.push('Lobby guards a closed editor')
     }
     for (const ta of tas) {
-      if (!ta.readOnly && !leasedId(leaseOfTextarea(ta)))
-        issues.push('a writable textarea without a granted lease')
+      if (!ta.readOnly && !mayWrite(ta)) issues.push('a writable textarea without a granted lease')
     }
-    if (phase === 'open' && !leasedId(el?.leaseId)) issues.push('Lobby open without a lease')
+    const own = input.editorLease?.textarea() ?? null
+    if (phase === 'open' && !el?.lost && !heldHere(el?.leaseId) && !(own && mayWrite(own)))
+      issues.push('Lobby open without a lease')
+    if (el?.lost) for (const ta of tas) if (!ta.readOnly) issues.push('lease lost, editor still writable')
+    issues.push(...pendingIssues())
     return {
       ok: issues.length === 0,
       issues,
@@ -277,6 +454,7 @@ function createLab(cfg: LabConfig, onAttached: (api: ExcalidrawImperativeAPI) =>
       leaseId: el?.leaseId ?? null,
       editing: editing?.id ?? null,
       textareas: tas.length,
+      lost: el?.lost?.name ?? null,
     }
   }
   const watchTextarea = (ta: HTMLTextAreaElement) => {
@@ -298,7 +476,7 @@ function createLab(cfg: LabConfig, onAttached: (api: ExcalidrawImperativeAPI) =>
     for (const type of ['beforeinput', 'input'] as const) {
       ta.addEventListener(type, (e) => {
         if (!monitor.on) return
-        const leased = leasedId(leaseOfTextarea(ta))
+        const leased = mayWrite(ta)
         monitor.inputs.push({
           probe: ta.dataset.probe ?? '',
           type,
@@ -317,10 +495,18 @@ function createLab(cfg: LabConfig, onAttached: (api: ExcalidrawImperativeAPI) =>
   const monitorTick = () => {
     for (const ta of textareas()) {
       watchTextarea(ta)
-      if (!ta.readOnly && !leasedId(leaseOfTextarea(ta))) {
-        violation('writable-editor-without-lease', { lease: leaseOfTextarea(ta), value: ta.value })
+      if (!ta.readOnly && !mayWrite(ta)) {
+        violation('writable-editor-without-lease', {
+          lease: leaseOfTextarea(ta),
+          value: ta.value,
+          firstOpen: ta.dataset.probeFirst === '1',
+          createdHere: createdIds.has(leaseOfTextarea(ta) ?? ''),
+          otherHolder: server.holderOf(leaseOfTextarea(ta) ?? '')?.name ?? null,
+        })
       }
     }
+    const pi = pendingIssues()
+    if (pi.length) violation('pending-invariant', { issues: pi, phase: input.editorLease?.phase ?? 'idle' })
   }
   const tickLater = () => setTimeout(() => monitor.on && monitorTick(), 0)
   const monitorOnChange = () => {
@@ -332,7 +518,9 @@ function createLab(cfg: LabConfig, onAttached: (api: ExcalidrawImperativeAPI) =>
       monitor.lastText.set(e.id, text)
       if (prev === undefined || prev === text) continue
       const id = (e as { containerId?: string | null }).containerId ?? e.id
-      monitor.textWrites.push({ id, text, held: leasedId(id), at: performance.now() })
+      const held = heldHere(id)
+      const prov = !held && textareas().some((ta) => leaseOfTextarea(ta) === id && provisional(ta, id))
+      monitor.textWrites.push({ id, text, held, provisional: prov, at: performance.now() })
     }
     for (const ta of textareas()) watchTextarea(ta)
     tickLater()
@@ -361,6 +549,14 @@ function createLab(cfg: LabConfig, onAttached: (api: ExcalidrawImperativeAPI) =>
     config: cfg,
     input,
     agreement,
+    notices,
+    editStates,
+    pendingVisible: () => ui.pendingVisible(),
+    /** The banner's "Copy my text" (a user click, as a spec would do it). */
+    copyNoticeText: () => {
+      document.querySelector<HTMLButtonElement>('[data-testid="lease-copy"]')?.click()
+      return notices.filter((n) => n.copied).length
+    },
     monitor: {
       start: () => {
         monitor.violations.length = 0
@@ -605,6 +801,10 @@ function createLab(cfg: LabConfig, onAttached: (api: ExcalidrawImperativeAPI) =>
       linkOpens.length = 0
       customClicks.length = 0
       toasts.length = 0
+      notices.length = 0
+      editStates.length = 0
+      createdIds.clear()
+      ui.reset()
       server.log.length = 0
       for (const k of Object.keys(counters) as (keyof typeof counters)[]) counters[k] = 0
     },
@@ -627,6 +827,7 @@ function createLab(cfg: LabConfig, onAttached: (api: ExcalidrawImperativeAPI) =>
       raf = requestAnimationFrame(frame)
     }
     raf = requestAnimationFrame(frame)
+    const unmountUi = ui.mount()
     const detachInput = input.attach(wrapper, readyApi)
     const detachPresence = attachPresencePointer(wrapper, {
       toScene: (x, y) => input.toScene(x, y),
@@ -665,6 +866,7 @@ function createLab(cfg: LabConfig, onAttached: (api: ExcalidrawImperativeAPI) =>
       detachTools()
       detachPresence()
       detachInput()
+      unmountUi()
       cancelAnimationFrame(raf)
       monitorObserver.disconnect()
       offMonitor()

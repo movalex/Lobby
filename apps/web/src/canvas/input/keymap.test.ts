@@ -1,13 +1,20 @@
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import {
   chordOf,
   classifyKey,
+  delegatedChord,
+  ENGINE_KEY_TEST_LINES,
+  engineChordAction,
+  engineKeyOf,
   isKeptTextEditorChord,
   type KeyContext,
   type KeyLike,
   type KeyVerdict,
   keyLikeOf,
 } from './keymap.ts'
+import { LAYOUTS, layoutPresses } from './layouts.ts'
 
 // Pins the allowlist of docs/EXCALIDRAW-MIGRATION.md §2.3.3 (the plan's keyboard-map test).
 
@@ -186,9 +193,12 @@ describe('classifyKey: editors, no text editor open (§2.3.3)', () => {
     expect(kind(classifyKey(k(spec), EDITOR))).toBe(want)
   })
 
-  it('Cmd works like Ctrl for Lobby and delegated chords', () => {
+  it("Cmd works like Ctrl for Lobby's chords; delegated chords follow Excalidraw's CTRL_OR_CMD", () => {
     expect(kind(classifyKey(k('meta+z'), EDITOR))).toBe('lobby:undo')
-    expect(kind(classifyKey(k('meta+d'), EDITOR))).toBe('delegate')
+    // Excalidraw's CTRL_OR_CMD is metaKey on macOS and ctrlKey elsewhere (common index.js:2391).
+    expect(kind(classifyKey(k('meta+d'), { ...EDITOR, mac: true }))).toBe('delegate')
+    expect(kind(classifyKey(k('meta+d'), EDITOR))).toBe('block')
+    expect(kind(classifyKey(k('ctrl+d'), { ...EDITOR, mac: true }))).toBe('block')
     expect(classifyKey(k('meta+s'), EDITOR)).toEqual({ kind: 'block', preventDefault: true })
   })
 
@@ -523,5 +533,215 @@ describe('chordOf', () => {
     expect(chordOf(k('meta+s'))).toBe('mod+s')
     expect(chordOf(k('alt+1'))).toBe('alt+1')
     expect(chordOf(k('F5'))).toBe('f5')
+  })
+})
+
+// --- Delegation outside the text editor (second verifier, A6 defects 3 and 4) -----------------------
+//
+// Lobby used to delegate Ctrl+D / G / Shift+L / = / - / [ ] by physical code while Excalidraw's handlers
+// test `key`: Bone Ctrl+Shift+S on the physical L key ran saveFileToDisk, and a '?' key opened the help
+// dialog. The rule now (keymap.ts delegatedChord): Excalidraw's own key tests decide, and only a unique
+// delegated action is delegated.
+
+const DELEGATED = new Set([
+  'duplicateSelection',
+  'group',
+  'ungroup',
+  'toggleElementLock',
+  'sendBackward',
+  'bringForward',
+  'sendToBack',
+  'bringToFront',
+  'zoomIn',
+  'zoomOut',
+])
+
+/** A layout press as Chromium reports it: the layout's character as `key`, the physical key as `code`. */
+function press(
+  code: string,
+  key: string,
+  mods: { shift?: boolean; alt?: boolean; mac?: boolean; otherMod?: boolean } = {},
+): KeyLike {
+  const mac = mods.mac === true
+  const other = mods.otherMod === true
+  // Excalidraw's CTRL_OR_CMD: Cmd on macOS, Ctrl elsewhere; `otherMod` presses the other one instead.
+  const cmd = mac ? !other : false
+  const ctrl = mac ? other : !other
+  return {
+    key,
+    code,
+    ctrlKey: ctrl,
+    metaKey: cmd || (!mac && other),
+    altKey: mods.alt === true,
+    shiftKey: mods.shift === true,
+  }
+}
+
+describe("classifyKey: delegated chords outside the text editor follow Excalidraw's key tests", () => {
+  for (const mac of [false, true]) {
+    const ctx: KeyContext = { ...EDITOR, mac }
+    const os = mac ? 'macOS' : 'Windows'
+    const verdict = (code: string, key: string, shift = false, alt = false) =>
+      classifyKey(press(code, key, { shift, alt, mac }), ctx)
+
+    it(`${os}: the verifier's layout cases are blocked and prevented`, () => {
+      const cases: [string, string, string, boolean][] = [
+        ['Bone Ctrl+Shift+S on KeyL (was: lock chord, then saveFileToDisk)', 'KeyL', 'S', true],
+        ['Colemak Ctrl+S on KeyD (was: duplicate chord)', 'KeyD', 's', false],
+        ['Neo 2 Ctrl+O on KeyG (was: group chord)', 'KeyG', 'o', false],
+        ['QWERTZ Ctrl+Shift+ss on Minus, key ? (was: zoom, then help)', 'Minus', '?', true],
+        ['Dvorak Ctrl+Shift+[ on BracketLeft, key ? (was: z-order, then help)', 'BracketLeft', '?', true],
+      ]
+      for (const [name, code, key, shift] of cases) {
+        expect(verdict(code, key, shift), name).toEqual({ kind: 'block', preventDefault: true })
+        expect(delegatedChord(press(code, key, { shift, mac }), mac), name).toBeNull()
+      }
+    })
+
+    it(`${os}: the plan's delegated chords on QWERTY are delegated`, () => {
+      const want: [string, string, boolean, boolean, string][] = [
+        ['KeyD', 'd', false, false, 'duplicateSelection'],
+        ['KeyG', 'g', false, false, 'group'],
+        ['KeyG', 'G', true, false, 'ungroup'],
+        ['KeyL', 'L', true, false, 'toggleElementLock'],
+        ['BracketLeft', '[', false, false, 'sendBackward'],
+        ['BracketRight', ']', false, false, 'bringForward'],
+        ['Equal', '=', false, false, 'zoomIn'],
+        ['Equal', '+', true, false, 'zoomIn'],
+        ['Minus', '-', false, false, 'zoomOut'],
+        ['NumpadAdd', '+', false, false, 'zoomIn'],
+        ['NumpadSubtract', '-', false, false, 'zoomOut'],
+      ]
+      // To back / to front: Ctrl+Shift+[ ] on Windows (index.js:3588, 3613).
+      if (!mac) {
+        want.push(
+          ['BracketLeft', '{', true, false, 'sendToBack'],
+          ['BracketRight', '}', true, false, 'bringToFront'],
+        )
+      }
+      for (const [code, key, shift, alt, action] of want) {
+        expect(delegatedChord(press(code, key, { shift, alt, mac }), mac), `${code}/${key}`).toBe(action)
+        expect(verdict(code, key, shift, alt), `${code}/${key}`).toEqual({ kind: 'delegate' })
+      }
+      if (mac) {
+        // Excalidraw's macOS to back / to front is Cmd+Option+[ ], but sendBackward's keyTest ignores Alt,
+        // so TWO actions match and handleKeyDown gives up (index.js:23064-23069): Excalidraw does nothing,
+        // and Lobby blocks it. (An Excalidraw bug; recorded in A6.md.)
+        expect(engineChordAction(press('BracketLeft', '“', { alt: true, mac }), mac)).toBe('ambiguous')
+        expect(delegatedChord(press('BracketLeft', '“', { alt: true, mac }), mac)).toBeNull()
+        expect(delegatedChord(press('BracketRight', '‘', { alt: true, mac }), mac)).toBeNull()
+        // Cmd+Shift+[ ] matches nothing on macOS.
+        expect(engineChordAction(press('BracketLeft', '{', { shift: true, mac }), mac)).toBeNull()
+      }
+    })
+
+    it(`${os}: layouts where Excalidraw's own test still picks a delegated action`, () => {
+      // Key-tested actions follow the character: Colemak's D and G are on the physical G and T keys.
+      expect(delegatedChord(press('KeyG', 'd', { mac }), mac)).toBe('duplicateSelection')
+      expect(delegatedChord(press('KeyT', 'g', { mac }), mac)).toBe('group')
+      expect(delegatedChord(press('KeyU', 'L', { shift: true, mac }), mac)).toBe('toggleElementLock')
+      // Code-tested actions follow the physical key, as Excalidraw's keyTests read `code`:
+      expect(delegatedChord(press('BracketLeft', 'ü', { mac }), mac)).toBe('sendBackward') // QWERTZ Ctrl+Ü
+      expect(delegatedChord(press('BracketRight', '+', { mac }), mac)).toBe('bringForward') // QWERTZ Ctrl++
+      expect(delegatedChord(press('Equal', 'Dead', { mac }), mac)).toBe('zoomIn') // QWERTZ dead acute
+      expect(delegatedChord(press('Minus', '[', { mac }), mac)).toBe('zoomOut') // Dvorak's Minus key
+      expect(delegatedChord(press('BracketLeft', 'ß', { mac }), mac)).toBe('sendBackward') // Neo 2 / Bone
+    })
+
+    it(`${os}: layouts where Excalidraw would do nothing, or something else, are blocked`, () => {
+      const blocked: [string, string, boolean][] = [
+        ['KeyD', 'в', false], // Russian Ctrl+В: Excalidraw tests key 'd', so nothing
+        ['KeyD', 'Unidentified', false], // key unusable: duplicate tests key, no code fallback
+        ['KeyG', 'Dead', false],
+        ['Digit6', '-', false], // AZERTY Ctrl+-: zoomOut tests code Minus, so nothing
+        ['Slash', '-', false], // QWERTZ Ctrl+-: the same
+        ['KeyG', 'i', false], // Dvorak Ctrl+I on the physical G
+        ['KeyL', 'O', true], // Workman Ctrl+Shift+O on the physical L
+        ['KeyD', 'a', false], // Neo 2 Ctrl+A on the physical D: Lobby's select-all, not duplicate
+        ['Digit0', '=', true], // QWERTZ Ctrl+Shift+0 types '=': resetZoom (code Digit0), not zoom in
+        ['KeyE', 'E', true], // Ctrl+Shift+E: image export
+        ['Quote', '-', false], // Dvorak Ctrl+- (on the physical Quote key): gridMode tests code Quote
+      ]
+      for (const [code, key, shift] of blocked) {
+        expect(delegatedChord(press(code, key, { shift, mac }), mac), `${code}/${key}`).toBeNull()
+        expect(verdict(code, key, shift).kind, `${code}/${key}`).not.toBe('delegate')
+      }
+      // Excalidraw's CTRL_OR_CMD only: on macOS Ctrl+G opens its background popup (index.js:44193-44205).
+      expect(delegatedChord(press('KeyG', 'g', { mac, otherMod: true }), mac)).toBeNull()
+      expect(verdict('KeyG', 'g').kind).toBe('delegate')
+      // Alt: Excalidraw's delegated keyTests ignore it, so the same action runs (sendBackward on Windows;
+      // on macOS Cmd+Option+[ also matches sendToBack: two matches, nothing). AltGr is never delegated.
+      expect(delegatedChord(press('BracketLeft', '[', { alt: true, mac }), mac)).toBe(
+        mac ? null : 'sendBackward',
+      )
+      expect(delegatedChord(press('KeyD', 'd', { alt: true, mac }), mac)).toBe('duplicateSelection')
+      expect(delegatedChord({ ...press('KeyD', 'd', { mac }), altGraph: true }, mac)).toBeNull()
+    })
+
+    it(`${os}: sweep over 7 layouts: delegated only where Excalidraw's own tests pick exactly that delegated action`, () => {
+      const presses = layoutPresses()
+      expect(presses.length).toBeGreaterThan(60)
+      let delegated = 0
+      for (const p of presses) {
+        if (p.alt && !mac) continue // Cmd+Option chords are macOS's
+        const e = press(p.code, p.key, { shift: p.shift, alt: p.alt, mac })
+        const v = classifyKey(e, ctx)
+        const action = engineChordAction(e, mac)
+        const k = engineKeyOf(e)
+        const label = `${p.layout} ${p.chord}: ${p.code}/${p.key}${p.shift ? '+shift' : ''} -> ${action}`
+        if (v.kind === 'delegate') {
+          delegated++
+          expect(k, label).not.toBe('?')
+          expect(DELEGATED.has(action ?? ''), label).toBe(true)
+          expect(delegatedChord(e, mac), label).toBe(action)
+          // A key that names a non-delegated Excalidraw key action (save, open, export, cut, link,
+          // search, select all, font size, help) is never delegated.
+          expect(/^[aoskxfpe?<>,.]$/i.test(k), label).toBe(false)
+        } else {
+          expect(['block', 'lobby'], label).toContain(v.kind)
+          // Not prevented only for a browser chord (reload, tabs, windows, devtools: Dvorak Ctrl+Shift+I on the physical G).
+          if (v.kind === 'block' && !v.preventDefault) {
+            expect(chordOf(e), label).toMatch(/^mod\+(shift\+)?[rltwn]$|^mod\+shift\+[ijc]$/)
+          }
+          // Never blocked where Excalidraw would run exactly one delegated action.
+          expect(!!action && DELEGATED.has(action), label).toBe(false)
+        }
+      }
+      expect(delegated).toBeGreaterThan(20)
+    })
+  }
+
+  it('pins every transcribed keyTest against the pinned bundle (name and line)', () => {
+    const src = readFileSync(
+      fileURLToPath(
+        new URL('../../../node_modules/@excalidraw/excalidraw/dist/dev/index.js', import.meta.url),
+      ),
+      'utf8',
+    ).split('\n')
+    const withTest = src.filter((l) => /^\s*keyTest: /.test(l) && !/keyTest: void 0/.test(l)).length
+    expect(ENGINE_KEY_TEST_LINES).toHaveLength(withTest)
+    for (const { name, line } of ENGINE_KEY_TEST_LINES) {
+      expect(src[line - 1], `${name} @${line}`).toMatch(/^\s*keyTest: /)
+      const before = src.slice(Math.max(0, line - 400), line).join('\n')
+      const names = [...before.matchAll(/name: "([A-Za-z]+)"/g)].map((m) => m[1])
+      expect(names.at(-1), `${name} @${line}`).toBe(name)
+    }
+  })
+
+  it("every layout table has 26 letters, and the sweep covers the verifier's five cases", () => {
+    for (const [name, map] of Object.entries(LAYOUTS)) {
+      const letters = Object.values(map)
+        .map(([lo]) => lo)
+        .filter((c) => /^\p{Ll}$/u.test(c))
+      expect(new Set(letters).size, name).toBeGreaterThanOrEqual(26)
+    }
+    const presses = layoutPresses()
+    const has = (code: string, key: string, shift: boolean) =>
+      presses.some((p) => p.code === code && p.key === key && p.shift === shift)
+    expect(has('KeyL', 'S', true)).toBe(true) // Bone
+    expect(has('KeyD', 's', false)).toBe(true) // Colemak
+    expect(has('KeyG', 'o', false)).toBe(true) // Neo 2
+    expect(has('Minus', '?', true)).toBe(true) // QWERTZ
+    expect(has('BracketLeft', '?', true)).toBe(true) // Dvorak
   })
 })

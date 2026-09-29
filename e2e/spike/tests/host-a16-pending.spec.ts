@@ -30,10 +30,19 @@ import {
 // closed unchanged when another request is in flight, or re-queued as its own lease request (the plan's
 // P5 guard) when Lobby is idle.
 //
+// Changed in fix round 2 (the second verifier's defect 8): SELECTING another element while a Lobby
+// request is pending cancels that request. The plan's buffer rule has no re-targeting, so A's buffered
+// keys are discarded with a notice ("You selected something else…"). Every B action below starts by
+// selecting B (a click, the first click of a double-click), so A is cancelled first and B then goes
+// through its own lease: these cases used to expect the keys typed after B's action to land in A.
+// 'deny' now holds B too, so B's own request is the one denied.
+//
 // host-lab's monitor checks, independently of EditorLease: no textarea is ever writable (at a task
-// boundary) or receives input unless this session holds the lease of the element it edits; after every
-// engine change Lobby's session agrees with Excalidraw's editingTextElement; every write of a label's
-// text happens while its lease is held; every release happens after the label's final text is written.
+// boundary) or receives input unless this session HOLDS the lease of the element it edits ("created
+// here" no longer counts); after every engine change Lobby's session agrees with Excalidraw's
+// editingTextElement; 'pending' always has exactly one live request and a visible affordance; every
+// write of a label's text happens while its lease is held; every release happens after the label's final
+// text is written.
 
 // SPIKE_REPS lowers the repetitions for a quick look (the gate is 20).
 const N = Number(process.env.SPIKE_REPS ?? 20)
@@ -43,6 +52,8 @@ type Outcome = 'grant' | 'manual-grant' | 'deny' | 'escape'
 
 /** Timed grants: long enough that B's action lands while A's request is pending. */
 const GRANT_MS: Record<BAction, number> = { 'dblclick-label': 300, p5: 1500, 'type-to-edit': 300 }
+/** Timed grant for B's own request (set after A's request went out). */
+const B_GRANT_MS = 1500
 
 async function warm(page: Page): Promise<void> {
   await page.evaluate(() => document.fonts.load('20px Nunito', 'Note A B zqxkKIMEok'))
@@ -93,7 +104,10 @@ async function pendingCase(
   await lab(page, (x, d) => x.lease.setDelay(d), outcome === 'grant' ? GRANT_MS[action] : 'manual')
   const A = await addNote(page, { id: `A${i}`, x: 80, y: 160, size: 200, text: 'Note A' })
   const B = await addNote(page, { id: `B${i}`, x: 480, y: 160, size: 200, text: 'Note B' })
-  if (outcome === 'deny') await lab(page, (x, id) => x.lease.holdByOther(id), A.note)
+  if (outcome === 'deny') {
+    await lab(page, (x, id) => x.lease.holdByOther(id), A.note)
+    await lab(page, (x, id) => x.lease.holdByOther(id), B.note)
+  }
   await monitorStart(page)
 
   // 1. Lobby's request for A (P1 Enter or P2 type-to-edit), pending.
@@ -101,21 +115,34 @@ async function pendingCase(
   await select(page, [A.note])
   await focusCanvas(page)
   await page.keyboard.press(startKey)
-  // 2. B's action while A's answer is still out.
+  // Timed grants: B's own request (made after A is cancelled) must still be out when the IME text and
+  // the keys arrive, or they would legitimately land in a granted B (run 2 of fix round 2 caught that race).
+  if (outcome === 'grant') await lab(page, (x, d) => x.lease.setDelay(d), B_GRANT_MS)
+  const beforeB = await editor(page)
+  const affordance = await lab(page, (x) => x.pendingVisible())
+  // 2. B's action while A's answer is still out: it selects B first, which cancels A (defect 8).
   await bAction(page, action, B)
   const answeredBeforeB = await answered(page)
   await settle(page, 40)
   const afterB = await editor(page)
   const agreeAfterB = await agreement(page)
+  const aCancelled = await lab(
+    page,
+    (x, id) =>
+      x.notices.some(
+        (n: { kind: string; leaseId: string }) => n.kind === 'cancelled-selection' && n.leaseId === id,
+      ),
+    A.note,
+  )
   // 3. Text with no keydown (an IME commit, the emoji panel, dictation).
   await page.keyboard.insertText('IME')
   await settle(page, 40)
   const bAfterIme = await labelText(page, B)
   const valueAfterIme = (await editor(page)).textarea?.value ?? null
-  // 4. Typed keys.
+  // 4. Typed keys (B's request is the pending one now).
   await page.keyboard.type('zq')
   await settle(page, 40)
-  // 5. The answer.
+  // 5. The answer (for 'manual-grant' and 'deny' A's cancelled request is answered first).
   if (outcome === 'escape') await page.keyboard.press('Escape')
   else if (outcome !== 'grant') await lab(page, (x) => x.lease.flush())
   const granted = outcome === 'grant' || outcome === 'manual-grant'
@@ -142,31 +169,51 @@ async function pendingCase(
   const acq = await acquires(page)
   const aText = await labelText(page, A)
   const bText = await labelText(page, B)
-  const expectA = granted
-    ? `Note A${startKey === 'k' ? 'k' : ''}${action === 'type-to-edit' ? 'x' : ''}zqKK`
-    : 'Note A'
+  const typed = `${action === 'type-to-edit' ? 'x' : ''}zqKK`
+  // B granted: its buffered keys, then KK, at the caret its open placed: the end (P2, P3), Excalidraw's
+  // click position (P5), or replacing the whole text (a guard opened by a double-click selects all).
+  const bRest = bText?.replace(typed, '')
+  const bOk = granted ? !!bText?.includes(typed) && (bRest === 'Note B' || bRest === '') : bText === 'Note B'
   const aWrites = textWritesOf(report, A.note)
-  const aReleases = report.releases.filter((r) => r.id === A.note)
+  const bWrites = textWritesOf(report, B.note)
+  const bReleases = report.releases.filter((r) => r.id === B.note)
   const heldAtEnd = await lab(page, (x, ids) => ids.filter((id: string) => x.lease.isHeld(id)), [
     A.note,
     B.note,
   ])
+  // A timed server applies the release of A's late grant after its delay (in request order).
+  if (outcome !== 'deny') {
+    await expect
+      .poll(() => lab(page, (x, id) => x.lease.server.holderOf(id)?.name ?? null, A.note), { timeout: 5000 })
+      .toBeNull()
+      .catch(() => {})
+  }
+  const aOnServer = await lab(page, (x, id) => x.lease.server.holderOf(id)?.name ?? null, A.note)
 
   const checks: Record<string, boolean> = {
-    precondition: !answeredBeforeB && afterB.leaseId === A.note && afterB.phase === 'pending',
+    precondition:
+      !answeredBeforeB &&
+      beforeB.leaseId === A.note &&
+      beforeB.phase === 'pending' &&
+      beforeB.origin === 'lobby' &&
+      affordance,
+    aCancelledBySelection: aCancelled && afterB.leaseId !== A.note,
     noViolations: report.violations.length === 0,
     agreeAfterB: agreeAfterB.ok,
     agreeAfterAnswer: agreeAfterAnswer.ok,
     agreeEnd:
       agreeEnd.ok && agreeEnd.phase === 'idle' && agreeEnd.textareas === 0 && agreeEnd.editing === null,
-    noEditorOnBAfterB: afterB.textarea === null || afterB.textarea.readOnly,
-    bUnchanged: bAfterIme === 'Note B' && bText === 'Note B' && textWritesOf(report, B.note).length === 0,
-    noAcquireForB: !acq.includes(B.note) && acq.filter((id) => id === A.note).length === 1,
-    aText: aText === expectA,
-    aWritesHeld: aWrites.every((w) => w.held) && (granted ? aWrites.length > 0 : aWrites.length === 0),
-    aReleasedAfterWrite: granted ? aReleases.length === 1 && aReleases[0]?.text === expectA : true,
+    noWritableEditorAfterB: afterB.textarea === null || afterB.textarea.readOnly,
+    aUnchanged: aText === 'Note A' && aWrites.length === 0,
+    aNotKept: outcome === 'deny' ? aOnServer === 'Alice' : aOnServer === null,
+    noImeAnywhere: bAfterIme === 'Note B' && !`${aText}${bText}`.includes('IME'),
+    oneAcquireEach:
+      acq.filter((id) => id === A.note).length === 1 && acq.filter((id) => id === B.note).length === 1,
+    bText: bOk,
+    bWritesHeld: bWrites.every((w) => w.held) && (granted ? bWrites.length > 0 : bWrites.length === 0),
+    bReleasedAfterWrite: granted ? bReleases.length === 1 && bReleases[0]?.text === bText : true,
     answerState: granted
-      ? afterAnswer.phase === 'open' && afterAnswer.leaseId === A.note
+      ? afterAnswer.phase === 'open' && afterAnswer.leaseId === B.note
       : afterAnswer.phase === 'idle',
     nothingHeld: heldAtEnd.length === 0,
   }
@@ -179,6 +226,7 @@ async function pendingCase(
     afterB: {
       phase: afterB.phase,
       lease: afterB.leaseId,
+      origin: afterB.origin,
       editing: afterB.editingId,
       textareas: afterB.textareas,
       readOnly: afterB.textarea?.readOnly ?? null,
@@ -186,7 +234,6 @@ async function pendingCase(
     valueAfterIme,
     bAfterIme,
     stored: { A: aText, B: bText },
-    expectA,
     acquires: acq,
     releases: report.releases,
     violations: report.violations.slice(0, 6),
@@ -203,7 +250,7 @@ test.describe('A16 regression: another editor while a lease request is pending',
 
   for (const action of ['dblclick-label', 'p5', 'type-to-edit'] as const) {
     for (const outcome of ['grant', 'manual-grant', 'deny', 'escape'] as const) {
-      test(`pending A + ${action} on B, then ${outcome}: no lease-less writable editor, B unchanged, A written once; 20/20`, async ({
+      test(`pending A + ${action} on B, then ${outcome}: selecting B cancels A (keys discarded, notice); B only through its own lease; no lease-less writable editor; 20/20`, async ({
         page,
       }) => {
         const watch = watchPage(page)
