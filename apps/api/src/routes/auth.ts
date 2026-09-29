@@ -16,7 +16,7 @@
 // in the Clerk dashboard take effect here within seconds. Until then an operator offboards someone
 // with "sign out everywhere" on their behalf or SQL (docs/SECURITY-REVIEW-2026-09-27.md §6 item 6).
 
-import type { Me, MeKind, RevokeAllSessionsResponse } from '@draftroom/contracts'
+import { ME_ACCESS_LEGACY, type Me, type MeKind, type RevokeAllSessionsResponse } from '@draftroom/contracts'
 import type { FastifyInstance } from 'fastify'
 import type { AuthProvider } from '../auth/provider.ts'
 import { listUserWorkspaces, userKind } from '../auth/users.ts'
@@ -34,10 +34,12 @@ export function registerAuthRoutes(app: FastifyInstance, ctx: AppContext, provid
   app.get('/api/auth/config', async () => provider.publicConfig())
 
   // `kind` (wave 3, guests): 'guest' for a name-only guest, 'account' otherwise (contracts MeKind).
+  // `access` (domain access): STEP A sends ME_ACCESS_LEGACY (this build enforces no creator rule yet);
+  // step B1 replaces it with identity.status (docs/DOMAIN-ACCESS-CONTRACTS.md §8, §12).
   app.get('/api/me', async (req): Promise<Me & MeKind> => {
     const user = await ctx.requireUser(req)
     const [workspaces, kind] = await Promise.all([listUserWorkspaces(db, user.id), userKind(db, user.id)])
-    return { user: sessionUserToUser(user), workspaces, kind }
+    return { user: sessionUserToUser(user), workspaces, kind, access: ME_ACCESS_LEGACY }
   })
 
   // A11Y-17: the web app's session check when a page loads. Signed out is an expected answer there, so
@@ -47,7 +49,7 @@ export function registerAuthRoutes(app: FastifyInstance, ctx: AppContext, provid
     const user = await sessions.user(req)
     if (!user) return reply.code(204).send()
     const [workspaces, kind] = await Promise.all([listUserWorkspaces(db, user.id), userKind(db, user.id)])
-    return { user: sessionUserToUser(user), workspaces, kind }
+    return { user: sessionUserToUser(user), workspaces, kind, access: ME_ACCESS_LEGACY }
   })
 
   // Always 204, signed in or not: logging out twice (or from a stale tab) is not an error.

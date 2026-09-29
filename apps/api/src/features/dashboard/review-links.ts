@@ -243,6 +243,8 @@ export function registerReviewLinkRoutes(app: FastifyInstance, ctx: FeatureConte
           ? new Date(r.created_at.getTime() + reviewLinkMaxLifetimeMs(r.role)).toISOString()
           : null,
         allowGuests: r.multi_use && r.allow_guests,
+        // Domain access STEP A: no invitation is locked yet (B2 reads invitations.invited_email here).
+        email: null,
       }
     })
     return { invitations }

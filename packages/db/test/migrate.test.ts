@@ -231,6 +231,7 @@ describe('shipped migrations', () => {
       '0018_ai_settings',
       '0019_checkpoint_reasons',
       '0020_comment_visibility',
+      '0021_domain_access',
     ])
   })
 
@@ -257,6 +258,7 @@ describe('shipped migrations', () => {
       '0018_ai_settings',
       '0019_checkpoint_reasons',
       '0020_comment_visibility',
+      '0021_domain_access',
     ])
     expect(await migrate(db)).toEqual({ applied: [], newer: [] })
     expect(await tableNames()).toEqual([
@@ -297,6 +299,7 @@ describe('shipped migrations', () => {
       'projects',
       'schema_migrations',
       'sessions',
+      'user_emails',
       'users',
       'vote_done',
       'vote_sessions',
@@ -345,6 +348,7 @@ describe('shipped migrations', () => {
       '0018_ai_settings',
       '0019_checkpoint_reasons',
       '0020_comment_visibility',
+      '0021_domain_access',
     ])
     expect(await recorded()).toEqual(shipped.map((m) => m.name))
     const inv = await db.one<{ multi_use: boolean; use_count: number }>(
@@ -364,6 +368,23 @@ describe('shipped migrations', () => {
     expect(await db.one("SELECT allow_guests FROM invitations WHERE id = 'inv_aaaaaaaaaaaa'")).toEqual({
       allow_guests: false,
     })
+    // 0021 (domain access): the open single-use link was bound to nobody, so it is revoked (D3); the
+    // user's only workspace becomes their personal one; nobody has confirmed addresses yet.
+    const unbound = await db.one<{
+      invited_email: string | null
+      revoked: boolean
+      redeemed_by: string | null
+    }>(
+      "SELECT invited_email, revoked_at IS NOT NULL AS revoked, redeemed_by FROM invitations WHERE id = 'inv_aaaaaaaaaaaa'",
+    )
+    expect(unbound).toEqual({ invited_email: null, revoked: true, redeemed_by: null })
+    expect(await db.one("SELECT personal_of FROM workspaces WHERE id = 'wsp_aaaaaaaaaaaa'")).toEqual({
+      personal_of: 'usr_aaaaaaaaaaaa',
+    })
+    expect(await db.one("SELECT identity_checked_at FROM users WHERE id = 'usr_aaaaaaaaaaaa'")).toEqual({
+      identity_checked_at: null,
+    })
+    expect(await db.one('SELECT count(*)::int AS n FROM user_emails')).toEqual({ n: 0 })
     // The checksum guard covers the feature migrations as well.
     const edited = shipped.map((m) =>
       m.version === 3 ? { ...m, checksum: checksumOf(`${m.sql}\n-- edit`) } : m,

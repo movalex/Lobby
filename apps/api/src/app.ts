@@ -3,7 +3,7 @@
 // createApiServer() builds a ready-to-inject app; tests use app.inject() and never bind a port.
 
 import type { AddressInfo } from 'node:net'
-import type { Me } from '@draftroom/contracts'
+import { ME_ACCESS_LEGACY, type Me } from '@draftroom/contracts'
 import { type Db, isUniqueViolation, migrate, openDb } from '@draftroom/db'
 import { dataLayout } from '@draftroom/dev-assets'
 import fastifyCookie from '@fastify/cookie'
@@ -267,7 +267,12 @@ async function buildServer(
       // A new sign-in in this browser ends the session it had (e.g. switching dev users).
       await sessions.revoke(req)
       sessions.setCookie(reply, result.session.token, result.session.expiresAt)
-      const me: Me = { user: sessionUserToUser(result.user), workspaces: result.workspaces }
+      // STEP A of domain access: B1 replaces ME_ACCESS_LEGACY with the status stored by provisioning.
+      const me: Me = {
+        user: sessionUserToUser(result.user),
+        workspaces: result.workspaces,
+        access: ME_ACCESS_LEGACY,
+      }
       return me
     },
   }

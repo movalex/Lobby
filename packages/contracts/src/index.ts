@@ -3,6 +3,7 @@
 
 import { BOARD_ROLES, BOARD_STATUSES, BOARD_VISIBILITIES, WORKSPACE_ROLES } from '@draftroom/permissions'
 import { z } from 'zod'
+import { AccountEmail, ME_ACCESS_LEGACY, MeAccess } from './domain-access.ts'
 
 export const BoardRole = z.enum(BOARD_ROLES)
 export const WorkspaceRole = z.enum(WORKSPACE_ROLES)
@@ -82,10 +83,28 @@ export const AuthConfig = z.object({
 })
 export type AuthConfig = z.infer<typeof AuthConfig>
 
-export const DevLoginInput = z.object({ handle: DevHandle, name: Name.optional() })
+/**
+ * `email` (domain access, docs/DOMAIN-ACCESS-CONTRACTS.md §3.3): trusted as verified, by the dev-guarded
+ * route only. Without it the account gets `<handle>@dev.invalid`, a creator while the api runs the dev
+ * provider.
+ */
+export const DevLoginInput = z.object({
+  handle: DevHandle,
+  name: Name.optional(),
+  email: AccountEmail.optional(),
+})
 export type DevLoginInput = z.infer<typeof DevLoginInput>
 
-export const Me = z.object({ user: User, workspaces: z.array(WorkspaceSummary) })
+/**
+ * `access` (domain access): whether the caller is a creator, and why. The inferred output type makes it
+ * required, so every api place that builds a `Me` must set it; an older api's response parses with
+ * ME_ACCESS_LEGACY.
+ */
+export const Me = z.object({
+  user: User,
+  workspaces: z.array(WorkspaceSummary),
+  access: MeAccess.default(ME_ACCESS_LEGACY),
+})
 export type Me = z.infer<typeof Me>
 
 /**
@@ -141,8 +160,19 @@ export const PatchProjectInput = z.object({ name: Name.optional(), archived: z.b
 
 // ---- invitations ---------------------------------------------------------------------------------
 
-export const CreateWorkspaceInvitationInput = z.object({ role: z.enum(['admin', 'member', 'guest']) })
-export const CreateBoardInvitationInput = z.object({ role: BoardRole.exclude(['owner']) })
+/**
+ * Single-use invitations are locked to `email` (domain access, contracts doc §6.1). STEP A: `email` is
+ * optional so the api suite stays green until the lock is built; the API owner makes it required in
+ * step B2 (contracts doc §12). The web always sends it.
+ */
+export const CreateWorkspaceInvitationInput = z.object({
+  role: z.enum(['admin', 'member', 'guest']),
+  email: AccountEmail.optional(),
+})
+export const CreateBoardInvitationInput = z.object({
+  role: BoardRole.exclude(['owner']),
+  email: AccountEmail.optional(),
+})
 export const InvitationCreated = z.object({ id: InvitationId, url: z.string(), expiresAt: IsoDate })
 export type InvitationCreated = z.infer<typeof InvitationCreated>
 
@@ -181,6 +211,7 @@ export type ErrorBody = z.infer<typeof ErrorBody>
 export * from './ai.ts'
 export * from './comments.ts'
 export * from './dashboard.ts'
+export * from './domain-access.ts'
 export * from './export-control.ts'
 export * from './guests.ts'
 export * from './history.ts'

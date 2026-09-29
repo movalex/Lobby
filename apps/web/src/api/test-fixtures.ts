@@ -25,6 +25,8 @@ export function makeMe(over: Partial<Me> = {}): Me {
       { id: WS_ID, name: 'Dev Studio', role: 'owner' },
       { id: WS2_ID, name: 'Alice (personal)', role: 'owner' },
     ],
+    // Domain access (docs/DOMAIN-ACCESS-CONTRACTS.md §7): a handle-only dev sign-in is a creator.
+    access: { creator: true, reason: 'dev', email: 'alice@dev.invalid' },
     ...over,
   }
 }

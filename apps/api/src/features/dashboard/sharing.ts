@@ -131,6 +131,8 @@ export function registerSharingRoutes(app: FastifyInstance, ctx: FeatureContext)
         }),
         viaReviewLink,
         linkEndsAt: viaReviewLink && link_ends_at ? link_ends_at.toISOString() : null,
+        // Domain access STEP A: no creator rule yet (B2 sets it from creatorsAmong).
+        canOwn: true,
       })
     }
     members.sort((a, b) => RANK[b.role] - RANK[a.role] || a.user.name.localeCompare(b.user.name))
