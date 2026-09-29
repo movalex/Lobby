@@ -34,6 +34,9 @@ test.skip(
   "set SPIKE_B9_WS=1 (quiet window, SPIKE_B_PORT_BASE=7895) to run B9's workstation half",
 )
 test.setTimeout(45 * 60_000)
+// no Playwright trace or screenshots while measuring: the trace's screencast and snapshots run in both
+// browsers for the whole test (a 122 MB trace in diag3) and add their own main-thread work
+test.use({ trace: 'off', screenshot: 'off' })
 
 const EDITS = Number(process.env.SPIKE_B9_EDITS ?? 30)
 const LOAD_MS = Number(process.env.SPIKE_B9_LOAD_MS ?? 5 * 60_000)
@@ -172,15 +175,20 @@ async function diagnose(boardId: string, target: string, x: number, sentAt: numb
 }
 
 /**
- * Where one edit's time went, ms after A's `update` (A's page clock): A's push leaving (the core's
- * coalescing), A's ack, the `changes` frame reaching B, B's apply (the facade's `changed` with the value)
- * and B's paint (two frames later). The frame times are when the test process got the CDP WebSocket
- * events for them, so they carry that event path's lag: an upper bound for each stage, not an exact one.
+ * Where one edit's time went, ms after A's `update` (every clock is the machine's `Date.now()`):
+ *  - aCoreMs: A's engine core sent the push (its push log, A's main thread);
+ *  - aPushMs, aAckMs: the push frame and its ack on A's socket (CDP WebSocket events, network level);
+ *  - bChangesMs: the `changes` frame naming the note on B's socket (network level);
+ *  - bMainMs: B's engine core received that frame (B's main thread; bMainMs - bChangesMs is B's queue);
+ *  - appliedMs, paintedMs: B's port reported the value, and two animation frames later.
+ * The network-level times are when the test process got the CDP events: an upper bound for each.
  */
 interface Timeline {
+  readonly aCoreMs: number | null
   readonly aPushMs: number | null
   readonly aAckMs: number | null
   readonly bChangesMs: number | null
+  readonly bMainMs: number | null
   readonly appliedMs: number
   readonly paintedMs: number
 }
@@ -212,7 +220,48 @@ async function measuresOf(page: import('@playwright/test').Page, seconds: number
   )
 }
 
-function timeline(target: string, sentAt: number, w: { appliedAt: number; paintedAt: number }): Timeline {
+/** Records, in B's page, when B's engine core receives a `changes` frame naming `id` (O2's debug handle). */
+async function stampChanges(page: import('@playwright/test').Page, id: string): Promise<void> {
+  await page.evaluate((id) => {
+    const w = window as unknown as {
+      __o3Seen?: number[]
+      __lobbyBoard?: {
+        core: {
+          on(
+            l: (e: {
+              kind: string
+              message?: { type: string; ops?: { k: string; id?: string; el?: { id: string } }[] }
+            }) => void,
+          ): () => void
+        }
+      }
+    }
+    w.__o3Seen = []
+    w.__lobbyBoard?.core.on((e) => {
+      const m = e.kind === 'message' ? e.message : undefined
+      if (m?.type === 'changes' && m.ops?.some((o) => (o.k === 'c' ? o.el?.id : o.id) === id))
+        w.__o3Seen?.push(Date.now())
+    })
+  }, id)
+}
+
+async function timeline(
+  target: string,
+  sentAt: number,
+  w: { appliedAt: number; paintedAt: number },
+): Promise<Timeline> {
+  const aCore = await A.page.evaluate(
+    ({ id, sentAt }) =>
+      (window.lobbyCanvas?.pushedOps() ?? []).find(
+        (p) => p.at >= sentAt && p.ops.some((o) => (o.k === 'c' ? o.el.id : o.id) === id),
+      )?.at ?? null,
+    { id: target, sentAt },
+  )
+  const bMain = await B.page.evaluate(
+    (sentAt) =>
+      ((window as unknown as { __o3Seen?: number[] }).__o3Seen ?? []).find((t) => t >= sentAt) ?? null,
+    sentAt,
+  )
   const push = tapA.frames({ after: sentAt, dir: 'out', type: 'push', mentions: target })[0]
   const ack =
     push?.seq === undefined
@@ -221,16 +270,18 @@ function timeline(target: string, sentAt: number, w: { appliedAt: number; painte
   const bIn = tapB.frames({ after: sentAt, dir: 'in', type: 'changes', mentions: target })[0]
   const rel = (t: number | undefined) => (t === undefined ? null : t - sentAt)
   return {
+    aCoreMs: rel(aCore ?? undefined),
     aPushMs: rel(push?.at),
     aAckMs: rel(ack?.at),
     bChangesMs: rel(bIn?.at),
+    bMainMs: rel(bMain ?? undefined),
     appliedMs: w.appliedAt - sentAt,
     paintedMs: w.paintedAt - sentAt,
   }
 }
 
 function stageSummary(ts: readonly Timeline[]) {
-  const keys = ['aPushMs', 'aAckMs', 'bChangesMs', 'appliedMs', 'paintedMs'] as const
+  const keys = ['aCoreMs', 'aPushMs', 'aAckMs', 'bChangesMs', 'bMainMs', 'appliedMs', 'paintedMs'] as const
   return Object.fromEntries(
     keys.map((k) => [k, summarize(ts.map((t) => t[k]).filter((v): v is number => v !== null))]),
   )
@@ -301,6 +352,7 @@ test('B9 workstation: A→B edit visibility at 100% and at fit while a local L2 
   await A.openBoard(boardId)
   await B.openBoard(boardId)
   const target = heavy.board.frame0Notes[0] as string
+  await stampChanges(B.page, target)
   await sleep(20_000) // the load's join ramp and first edits
   const results: Record<string, ViewResult> = {}
   const evidence = (extra: Record<string, unknown>) =>
@@ -367,7 +419,7 @@ test('B9 workstation: A→B edit visibility at 100% and at fit while a local L2 
       }
       if (w.already) r.discarded++
       else r.samples.push(w.paintedAt - sentAt)
-      r.timelines.push(timeline(target, sentAt, w))
+      r.timelines.push(await timeline(target, sentAt, w))
       await sleep(500)
     }
     r.zoom = (await canvasOf(B.page).viewport()).zoom
