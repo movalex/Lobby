@@ -2,6 +2,16 @@
 // Every accessor tolerates malformed data (missing parents, parent cycles, non-finite numbers).
 import type { TLPage, TLPageId, TLRecord, TLShape } from '@tldraw/tlschema'
 import { getIndexAbove, type IndexKey } from '@tldraw/utils'
+import { type Box, finiteOr, isRecordObject } from './common.ts'
+
+export {
+  type Box,
+  DEFAULT_ROW_TOLERANCE,
+  finiteOr,
+  isRecordObject,
+  readingOrder,
+  truncateText,
+} from './common.ts'
 
 /** Parent chains longer than this are treated as broken (real boards nest a handful of levels). */
 const MAX_PARENT_DEPTH = 256
@@ -10,17 +20,6 @@ export interface PageTransform {
   x: number
   y: number
   rotation: number
-}
-
-export interface Box {
-  x: number
-  y: number
-  w: number
-  h: number
-}
-
-export function isRecordObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 /** `validateIndexKey` is `@internal` in @tldraw/utils 5.4.2; index generation validates its lower bound, so use that. */
@@ -32,10 +31,6 @@ export function isValidIndexKey(key: unknown): key is IndexKey {
   } catch {
     return false
   }
-}
-
-export function finiteOr(value: unknown, fallback: number): number {
-  return typeof value === 'number' && Number.isFinite(value) ? value : fallback
 }
 
 export function propsOf(shape: TLShape): Record<string, unknown> {
@@ -207,46 +202,4 @@ export function pageBounds(t: PageTransform, w: number, h: number): Box {
   const minX = Math.min(...xs)
   const minY = Math.min(...ys)
   return { x: t.x + minX, y: t.y + minY, w: Math.max(...xs) - minX, h: Math.max(...ys) - minY }
-}
-
-/** Minimum vertical jitter (page units) tolerated between items that share a reading-order row. */
-export const DEFAULT_ROW_TOLERANCE = 24
-
-/**
- * Reading order: items are grouped into rows by their top edge (an item joins the current row when its
- * top is within `tolerance` of the row's topmost item), rows go top to bottom and each row left to right.
- * Default tolerance: max(24, 25% of the smaller of the two heights). Ties break by id for determinism.
- */
-export function readingOrder<T extends { id: string; bounds: Box }>(
-  items: readonly T[],
-  tolerance?: number,
-): T[] {
-  const byId = (a: T, b: T) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
-  const sorted = [...items].sort((a, b) => a.bounds.y - b.bounds.y || a.bounds.x - b.bounds.x || byId(a, b))
-  const rows: T[][] = []
-  for (const item of sorted) {
-    const row = rows.at(-1)
-    const first = row?.[0]
-    if (row && first) {
-      const tol =
-        tolerance !== undefined && Number.isFinite(tolerance) && tolerance >= 0
-          ? tolerance
-          : Math.max(DEFAULT_ROW_TOLERANCE, 0.25 * Math.min(first.bounds.h, item.bounds.h))
-      if (item.bounds.y - first.bounds.y <= tol) {
-        row.push(item)
-        continue
-      }
-    }
-    rows.push([item])
-  }
-  return rows.flatMap((row) =>
-    row.sort((a, b) => a.bounds.x - b.bounds.x || a.bounds.y - b.bounds.y || byId(a, b)),
-  )
-}
-
-/** `text.slice(0, max)` that never ends on the high half of a surrogate pair (no lone surrogates). */
-export function truncateText(text: string, max: number): string {
-  if (text.length <= max) return text
-  const code = text.charCodeAt(max - 1)
-  return text.slice(0, code >= 0xd800 && code <= 0xdbff ? max - 1 : max)
 }

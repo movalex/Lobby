@@ -1,6 +1,5 @@
-import type { TLDefaultColorStyle } from '@tldraw/tlschema'
-import { CONTENT_Y, createBoardBuilder, PAD } from '../builder.ts'
-import type { TemplateDefinition } from '../types.ts'
+import { CONTENT_Y, type LobbyColor, PAD } from '../builder.ts'
+import type { TemplateSource } from '../source.ts'
 
 const SECTIONS = ['1 · Brainstorm', '2 · Shortlist', '3 · Parking lot'] as const
 
@@ -16,7 +15,7 @@ const BOTTOM_ROW_Y = 700
 interface Cluster {
   x: number
   y: number
-  color: TLDefaultColorStyle
+  color: LobbyColor
   label: string
   prompts: [string, string]
   /** Which side of the label faces the central question. */
@@ -58,15 +57,13 @@ const CLUSTERS: Cluster[] = [
   },
 ]
 
-export const brainstorm: TemplateDefinition = {
+export const brainstorm: TemplateSource = {
   id: 'brainstorm',
   name: 'Brainstorm',
   description: 'Gather ideas around one central question, cluster them into themes and shortlist the best.',
   category: 'ideate',
   sections: SECTIONS,
-  build(ctx) {
-    const b = createBoardBuilder(ctx)
-
+  plan(b) {
     const map = b.section({
       x: 0,
       y: 0,
@@ -152,7 +149,5 @@ export const brainstorm: TemplateDefinition = {
       locked: true, // an instruction (PRE-07)
     })
     b.note(parking, { x: SIDE_W - PAD - 200, y: 100, text: 'Idea for later', color: 'orange' })
-
-    return { records: b.finish() }
   },
 }

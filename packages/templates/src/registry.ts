@@ -1,22 +1,22 @@
+// The tldraw registry (default build, until wave 4): the engine-neutral sources (./source.ts) emitted as
+// tldraw records (./tldraw.ts) and validated against draftroomSchema.
+
 import { draftroomSchema } from '@draftroom/canvas-schema'
 import type { TLPageId, TLRecord } from '@tldraw/tlschema'
 import { getIndexAbove, type IndexKey } from '@tldraw/utils'
-import { estimateShapeRect, unionRects } from './layout.ts'
-import { brainstorm } from './templates/brainstorm.ts'
-import { lobbyTour } from './templates/lobby-tour.ts'
-import { moodBoard } from './templates/mood-board.ts'
-import { pitchOutline } from './templates/pitch-outline.ts'
-import { productionPlan } from './templates/production-plan.ts'
-import { retrospective } from './templates/retrospective.ts'
-import { storyboard } from './templates/storyboard.ts'
-import {
-  type TemplateBuildResult,
-  type TemplateContext,
-  type TemplateDefinition,
-  TemplateError,
-  type TemplateId,
-  type TemplateInstance,
+import { guardContext, ownProp, readOrigin, TemplateError, unionRects } from './common.ts'
+import { estimateShapeRect } from './layout.ts'
+import { getTemplateSource, planOf, TEMPLATE_SOURCES, type TemplateSource } from './source.ts'
+import { planToRecords } from './tldraw.ts'
+import type {
+  TemplateBuildResult,
+  TemplateContext,
+  TemplateDefinition,
+  TemplateId,
+  TemplateInstance,
 } from './types.ts'
+
+export { isTemplateId } from './source.ts'
 
 /** Largest accepted |origin| coordinate; keeps every produced coordinate finite and precise. */
 export const MAX_TEMPLATE_ORIGIN = 1e9
@@ -28,13 +28,7 @@ const INDEX_KEY_RE = /^[A-Za-z][0-9A-Za-z]{1,200}$/
  * prototype tricks survive) or throws TemplateError('invalid-context').
  */
 export function parseTemplateContext(input: unknown): TemplateContext {
-  try {
-    return parseContextUnsafe(input)
-  } catch (err) {
-    if (err instanceof TemplateError) throw err
-    // e.g. a throwing getter or a Proxy trap on the untrusted object
-    throw new TemplateError('invalid-context', 'Template context could not be read')
-  }
+  return guardContext(() => parseContextUnsafe(input))
 }
 
 function parseContextUnsafe(input: unknown): TemplateContext {
@@ -45,18 +39,7 @@ function parseContextUnsafe(input: unknown): TemplateContext {
   if (typeof pageId !== 'string' || !PAGE_ID_RE.test(pageId)) {
     throw new TemplateError('invalid-context', 'Template context pageId must be a page id ("page:…")')
   }
-  const origin = ownProp(input, 'origin')
-  if (origin === null || typeof origin !== 'object') {
-    throw new TemplateError('invalid-context', 'Template context origin must be an { x, y } object')
-  }
-  const x = ownProp(origin, 'x')
-  const y = ownProp(origin, 'y')
-  if (!isCoordinate(x) || !isCoordinate(y)) {
-    throw new TemplateError(
-      'invalid-context',
-      `Template context origin must be finite numbers within ±${MAX_TEMPLATE_ORIGIN}`,
-    )
-  }
+  const origin = readOrigin(input, MAX_TEMPLATE_ORIGIN)
   let indexAbove: IndexKey | null = null
   const key = ownProp(input, 'indexAbove')
   if (key !== undefined && key !== null) {
@@ -70,45 +53,30 @@ function parseContextUnsafe(input: unknown): TemplateContext {
     }
     indexAbove = key as IndexKey
   }
-  return { pageId: pageId as TLPageId, origin: { x, y }, indexAbove }
+  return { pageId: pageId as TLPageId, origin, indexAbove }
 }
 
-/** Reads an own property only, so values inherited from a polluted prototype are ignored. */
-function ownProp(obj: object, key: string): unknown {
-  return Object.hasOwn(obj, key) ? (obj as Record<string, unknown>)[key] : undefined
-}
-
-function isCoordinate(v: unknown): v is number {
-  return typeof v === 'number' && Number.isFinite(v) && Math.abs(v) <= MAX_TEMPLATE_ORIGIN
-}
-
-/** Wraps a raw definition so `build` validates its context and returns fresh records every call. */
-function define(def: TemplateDefinition): TemplateDefinition {
-  const build = def.build
+/** Wraps a source so `build` validates its context and returns fresh records every call. */
+function define(source: TemplateSource): TemplateDefinition {
   return Object.freeze({
-    id: def.id,
-    name: def.name,
-    description: def.description,
-    category: def.category,
-    sections: Object.freeze([...def.sections]),
+    id: source.id,
+    name: source.name,
+    description: source.description,
+    category: source.category,
+    sections: Object.freeze([...source.sections]),
     build(ctx: TemplateContext): TemplateBuildResult {
-      return build(parseTemplateContext(ctx))
+      const parsed = parseTemplateContext(ctx)
+      return { records: planToRecords(planOf(source, parsed.origin), parsed) }
     },
   })
 }
 
-export const TEMPLATES: readonly TemplateDefinition[] = Object.freeze(
-  [brainstorm, moodBoard, storyboard, pitchOutline, retrospective, productionPlan, lobbyTour].map(define),
-)
+export const TEMPLATES: readonly TemplateDefinition[] = Object.freeze(TEMPLATE_SOURCES.map(define))
 
 const BY_ID = new Map<string, TemplateDefinition>(TEMPLATES.map((t) => [t.id, t]))
 
-export function isTemplateId(value: unknown): value is TemplateId {
-  return typeof value === 'string' && BY_ID.has(value)
-}
-
 export function getTemplate(id: unknown): TemplateDefinition | undefined {
-  return typeof id === 'string' ? BY_ID.get(id) : undefined
+  return typeof id === 'string' && getTemplateSource(id) ? BY_ID.get(id) : undefined
 }
 
 /**

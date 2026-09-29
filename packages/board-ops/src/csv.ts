@@ -1,36 +1,12 @@
 import type { TLPageId, TLRecord, TLShape } from '@tldraw/tlschema'
 import { BoardIndex, type Box, localSize, pageBounds, readingOrder, stringProp } from './board-index.ts'
+import { CSV_HEADER, csvNumberCell, csvTextCell } from './csv-cell.ts'
 import { extractSearchableText } from './search.ts'
+
+export { CSV_HEADER, csvTextCell } from './csv-cell.ts'
 
 /** Shape types without text or position meaning for a spreadsheet (pure ink and grouping). */
 const SKIPPED_TYPES = new Set(['group', 'draw', 'highlight', 'line'])
-
-export const CSV_HEADER = ['id', 'type', 'text', 'frame', 'color', 'x', 'y'] as const
-
-/**
- * Formula triggers (OWASP CSV injection: `=` `+` `-` `@`, plus their fullwidth forms, which some
- * spreadsheet locales treat alike), also after leading whitespace (spreadsheets and "trim spaces"
- * import options can drop it), and a leading tab / CR.
- */
-const FORMULA_PREFIX = /^(?:[\t\r]|\s*[=+\-@\uff1d\uff0b\uff0d\uff20])/u
-const NEEDS_QUOTES = /[",\r\n]/
-
-/**
- * One RFC 4180 field for a user-controlled string. Cells that a spreadsheet could evaluate as a formula
- * (first non-whitespace character `=`, `+`, `-`, `@` or a fullwidth form of them, or a leading tab or
- * CR) get a leading `'`; CR/CRLF inside text become LF; fields with a comma, quote or line break are
- * quoted with inner quotes doubled.
- */
-export function csvTextCell(value: string): string {
-  let cell = FORMULA_PREFIX.test(value) ? `'${value}` : value
-  cell = cell.replace(/\r\n?/g, '\n')
-  return NEEDS_QUOTES.test(cell) ? `"${cell.replace(/"/g, '""')}"` : cell
-}
-
-function csvNumberCell(value: number): string {
-  const rounded = Math.round(value * 100) / 100
-  return Object.is(rounded, -0) ? '0' : String(rounded)
-}
 
 interface Row {
   id: string

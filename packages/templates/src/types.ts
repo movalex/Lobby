@@ -1,30 +1,18 @@
 import type { TLPageId, TLRecord } from '@tldraw/tlschema'
 import type { IndexKey } from '@tldraw/utils'
+import type { TemplateBounds, TemplatePoint } from './common.ts'
+import type { TemplateInfo } from './source.ts'
 
-export type TemplateId =
-  | 'brainstorm'
-  | 'mood-board'
-  | 'storyboard'
-  | 'pitch-outline'
-  | 'retrospective'
-  | 'production-plan'
-  | 'lobby-tour'
+export {
+  type TemplateBounds,
+  type TemplateCategory,
+  TemplateError,
+  type TemplateErrorCode,
+  type TemplateId,
+  type TemplatePoint,
+} from './common.ts'
 
-/** 'sample': the Lobby tour demo board (shown first on the dashboard, under no category chip). */
-export type TemplateCategory = 'ideate' | 'visual' | 'plan' | 'review' | 'sample'
-
-export interface TemplatePoint {
-  x: number
-  y: number
-}
-
-export interface TemplateBounds {
-  x: number
-  y: number
-  w: number
-  h: number
-}
-
+/** The tldraw build's context (the Excalidraw scene's is `SceneTemplateContext`, ./scene/index.ts). */
 export interface TemplateContext {
   /** Page the template's top-level shapes are parented to. */
   pageId: TLPageId
@@ -42,14 +30,7 @@ export interface TemplateBuildResult {
   records: TLRecord[]
 }
 
-export interface TemplateDefinition {
-  id: TemplateId
-  name: string
-  /** One sentence for the template picker. */
-  description: string
-  category: TemplateCategory
-  /** Frame names in the intended reading order (rows top to bottom, then left to right). */
-  sections: readonly string[]
+export interface TemplateDefinition extends TemplateInfo {
   /** Builds shape + binding records with fresh ids on every call. */
   build(ctx: TemplateContext): TemplateBuildResult
 }
@@ -58,17 +39,4 @@ export interface TemplateInstance {
   records: TLRecord[]
   /** Page-space bounds of the template's top-level shapes. */
   bounds: TemplateBounds
-}
-
-export type TemplateErrorCode = 'unknown-template' | 'invalid-context' | 'invalid-output'
-
-/** Typed error for bad template ids, bad contexts, and (never expected) invalid output. */
-export class TemplateError extends Error {
-  readonly code: TemplateErrorCode
-
-  constructor(code: TemplateErrorCode, message: string) {
-    super(message)
-    this.name = 'TemplateError'
-    this.code = code
-  }
 }
