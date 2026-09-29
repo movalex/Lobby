@@ -33,6 +33,54 @@ export interface LoadRunOptions {
   readonly fake?: boolean
   readonly log?: (line: string) => void
   readonly stopped?: () => boolean
+  /**
+   * The conversion-under-load run (§8.3 B9): at `atMs` (default minute 5) a joiner opens each of these
+   * unconverted tldraw boards (gen-boards --cul): a lazy conversion, a second that must queue behind it,
+   * and the planted over-cap board whose worker must be terminated while every room keeps serving.
+   */
+  readonly cul?: { readonly atMs?: number; readonly boards?: readonly string[] }
+}
+
+export const CUL_BOARDS = ['cul-heavy', 'cul-second', 'cul-overcap'] as const
+
+export interface CulJoin {
+  readonly boardId: string
+  readonly startedAt: number
+  readonly welcomedAt: number | null
+  readonly elements: number | null
+  readonly error: string | null
+}
+
+/** One joiner of a not-yet-converted board: waits (up to 10 min) for its welcome and snapshot. */
+async function culJoin(o: LoadRunOptions, boardId: string, i: number): Promise<CulJoin> {
+  const startedAt = Date.now()
+  try {
+    const sock = await openNodeSocket(
+      o.syncHttpUrl,
+      boardId,
+      mintTicket(o.secrets.ticketSecret, boardId, seeder(50 + i)),
+      `load-cul-${i}`,
+      600_000,
+    )
+    const snap = sock.welcome.reset ? await sock.snapshot(600_000) : null
+    const welcomedAt = Date.now()
+    sock.close()
+    return {
+      boardId,
+      startedAt,
+      welcomedAt,
+      elements: snap?.elements.length ?? sock.welcome.catchUp?.length ?? 0,
+      error: null,
+    }
+  } catch (e) {
+    return {
+      boardId,
+      startedAt,
+      welcomedAt: null,
+      elements: null,
+      error: (e instanceof Error ? e.message : String(e)).slice(0, 200),
+    }
+  }
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
@@ -159,6 +207,9 @@ export async function runLoad(o: LoadRunOptions): Promise<RunReport> {
       m.set(seeder(i).uid, 'editor')
       m.set(seeder(0).uid, 'editor')
       api.addBoard(id, m, b.files)
+      if (o.cul)
+        for (const [k, c] of (o.cul.boards ?? CUL_BOARDS).entries())
+          api.addBoard(c, [[seeder(50 + k).uid, 'editor']])
       i++
     }
     log(`fake api on ${api.url}`)
@@ -167,6 +218,13 @@ export async function runLoad(o: LoadRunOptions): Promise<RunReport> {
     createClient = await loadHeadlessFactory()
   }
 
+  const culAt = o.cul?.atMs ?? Math.min(5 * 60_000, Math.floor((o.durationMs ?? o.profile.durationMs) / 2))
+  const culRuns: Promise<CulJoin[]> =
+    o.cul && !o.fake
+      ? sleep(2_000 + culAt).then(() =>
+          Promise.all((o.cul?.boards ?? CUL_BOARDS).map((b, i) => culJoin(o, b, i))),
+        )
+      : Promise.resolve([])
   const scraper = o.fake
     ? null
     : startScraper(o.syncHttpUrl, o.secrets.internalSecret, profile.metricsEveryMs)
@@ -189,6 +247,7 @@ export async function runLoad(o: LoadRunOptions): Promise<RunReport> {
       o.threads,
     )
   else results = [await runInThread(run, createClient)]
+  const cul = await culRuns
   const endedAt = Date.now()
   const scrapes = scraper ? await scraper.stop() : []
   const final: FinalCheck = o.fake
@@ -212,6 +271,10 @@ export async function runLoad(o: LoadRunOptions): Promise<RunReport> {
       notes: [
         ...(o.fake ? ['PLUMBING DRY RUN on an in-memory room: no number here is a measurement of sync'] : []),
         ...(api ? [`fake api calls: ${JSON.stringify(api.counts)}`] : []),
+        ...cul.map(
+          (c) =>
+            `conversion under load: ${c.boardId} ${c.welcomedAt ? `served ${c.elements} elements after ${c.welcomedAt - c.startedAt} ms` : `not served: ${c.error}`}`,
+        ),
       ],
       clientLoopDelayP99Ms: results.map((r) => r.loopDelayP99Ms),
     },

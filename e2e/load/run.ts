@@ -34,6 +34,7 @@ async function main() {
       out: { type: 'string' },
       'host-samples': { type: 'string' },
       fake: { type: 'boolean', default: false },
+      cul: { type: 'boolean', default: false },
     },
   })
   const profile = PROFILES[values.profile as string]
@@ -58,6 +59,7 @@ async function main() {
     out: values.out ?? null,
     hostSamples: values['host-samples'],
     fake: values.fake,
+    cul: values.cul ? {} : undefined,
     stopped: () => stop,
   })
   process.stdout.write(reportMarkdown(report))

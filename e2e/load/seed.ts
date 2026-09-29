@@ -119,6 +119,7 @@ export async function openNodeSocket(
   boardId: string,
   ticket: string,
   tab: string,
+  welcomeTimeoutMs = 30_000,
 ): Promise<
   SeedIo & { welcome: Welcome; snapshot(timeoutMs?: number): Promise<SnapshotFrame>; close(): void }
 > {
@@ -161,7 +162,7 @@ export async function openNodeSocket(
   }
   const io = { send: (m: ClientMessage) => ws.send(JSON.stringify(m)), next }
   io.send({ type: 'hello', proto: PROTO, schema: ELEMENT_SCHEMA_VERSION, since: 0, epoch: null, tab })
-  const welcome = (await next('welcome', 30_000)) as Welcome
+  const welcome = (await next('welcome', welcomeTimeoutMs)) as Welcome
   const snapshot = async (timeoutMs = 60_000): Promise<SnapshotFrame> => {
     const end = Date.now() + timeoutMs
     while (frames.length === 0) {
