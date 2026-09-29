@@ -160,13 +160,16 @@ test('B1.2: A tags N, B adds a +1, C moves N: all three kept', async () => {
             page: A.page,
             arg: { id: N },
             fn: ({ id }) =>
-              window.lobbyCanvas?.update(id, { customData: { 'tag:x': { name: 'x', color: 'blue' } } }),
+              window.lobbyCanvas?.update(id, {
+                customData: { lobby: { 'tag:x': { name: 'x', color: 'blue' } } },
+              }),
           },
           {
             name: 'B +1',
             page: B.page,
             arg: { id: N, uid: bUid as string },
-            fn: ({ id, uid }) => window.lobbyCanvas?.update(id, { customData: { [`plusOne:${uid}`]: true } }),
+            fn: ({ id, uid }) =>
+              window.lobbyCanvas?.update(id, { customData: { lobby: { [`plusOne:${uid}`]: true } } }),
           },
           {
             name: 'C move',
