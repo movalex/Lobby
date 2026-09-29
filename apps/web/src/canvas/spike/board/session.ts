@@ -174,6 +174,7 @@ export class BoardSession {
       this.core.onSaveStatus((s) => this.set({ save: s })),
       this.core.on((e) => {
         if (e.kind === 'welcome') {
+          this.logEvent({ kind: 'welcome', id: e.welcome.sid, detail: String(e.welcome.clock) })
           if (e.welcome.you.guest && !this.guest) {
             this.guest = true
             void idb.purge()
@@ -230,7 +231,7 @@ export class BoardSession {
    * editor notices, in order, for the specs (ids, codes and clocks, never text)
    */
   readonly eventLog: {
-    kind: 'ack' | 'reject' | 'refit' | 'notice' | 'undo'
+    kind: 'ack' | 'welcome' | 'reject' | 'refit' | 'notice' | 'undo'
     id: string | null
     detail: string | null
     /** a running number (the log keeps the last 5000 entries; read "since n", never by position) */
@@ -240,7 +241,7 @@ export class BoardSession {
   private eventSeq = 0
 
   private logEvent(e: {
-    kind: 'ack' | 'reject' | 'refit' | 'notice' | 'undo'
+    kind: 'ack' | 'welcome' | 'reject' | 'refit' | 'notice' | 'undo'
     id: string | null
     detail: string | null
   }): void {

@@ -86,23 +86,28 @@ const indicator = (p: Page) =>
   p.evaluate(
     () => (window as unknown as { __ind?: { states: { s: string; at: number }[] } }).__ind?.states ?? [],
   )
-/** Push send times (the push log) and ack receive times (the session's event log), since `from`. */
-async function pushesAndAcks(
-  p: Page,
-): Promise<{ sent: { seq: number; at: number }[]; acked: { seq: number; at: number }[] }> {
+/**
+ * Push send times (the push log), ack receive times and welcome times (the session's event log). A push
+ * in flight when the socket died is never acked: after the welcome its content goes out again in a new
+ * push (the core turns what was in flight back into dirty groups), so a welcome settles it.
+ */
+async function pushesAndAcks(p: Page): Promise<{
+  sent: { seq: number; at: number }[]
+  acked: { seq: number; at: number }[]
+  welcomes: number[]
+}> {
   const sent = (await lc(p).pushedOps()).map((x) => ({ seq: x.seq, at: x.at }))
-  const acked = await board(p, (b) =>
-    (b.session.eventLog as { kind: string; id: string | null; at: number }[])
-      .filter((e) => e.kind === 'ack')
-      .map((e) => ({ seq: Number(e.id), at: e.at })),
-  )
-  return { sent, acked }
+  const log = await board(p, (b) => b.session.eventLog as { kind: string; id: string | null; at: number }[])
+  const acked = log.filter((e) => e.kind === 'ack').map((e) => ({ seq: Number(e.id), at: e.at }))
+  const welcomes = log.filter((e) => e.kind === 'welcome').map((e) => e.at)
+  return { sent, acked, welcomes }
 }
-/** Transitions to "saved" at which a push sent before it had no ack yet. */
+/** Transitions to "saved" at which a push sent before it had no ack yet (and no welcome after it). */
 function savedTooEarly(
   states: { s: string; at: number }[],
   sent: { seq: number; at: number }[],
   acked: { seq: number; at: number }[],
+  welcomes: number[] = [],
 ): { at: number; unacked: number[] }[] {
   const bad: { at: number; unacked: number[] }[] = []
   for (const st of states) {
@@ -110,6 +115,7 @@ function savedTooEarly(
     const unacked = sent
       .filter((x) => x.at <= st.at)
       .filter((x) => !acked.some((a) => a.seq === x.seq && a.at <= st.at))
+      .filter((x) => !welcomes.some((w) => w > x.at && w <= st.at))
       .map((x) => x.seq)
     if (unacked.length) bad.push({ at: st.at, unacked })
   }
@@ -311,6 +317,8 @@ test('D2: 5 edits/s each in A and B, sync SIGKILLed at a random moment and resta
     await A().waitForTimeout(1000 + Math.floor(Math.random() * 3000))
     const tKill = Date.now()
     await r.stack.killSync('SIGKILL')
+    // the process is gone once killSync returned; an ack that left it before that is a real ack
+    const tDead = Date.now()
     await A().waitForTimeout(3000)
     const tRestart = Date.now()
     await r.stack.restartSync()
@@ -321,7 +329,12 @@ test('D2: 5 edits/s each in A and B, sync SIGKILLed at a random moment and resta
     await converge(r)
     const snap = await harness.readSnapshot(r.stack, r.boardId)
     const live = new Set(snap.elements.filter((e) => !e.isDeleted).map((e) => e.id))
-    const out: Record<string, unknown> = { round, killAfterMs: tKill - t0, downMs: tUp - tKill }
+    const out: Record<string, unknown> = {
+      round,
+      killAfterMs: tKill - t0,
+      killMs: tDead - tKill,
+      downMs: tUp - tKill,
+    }
     let ok = true
     for (const [name, p] of [
       ['A', A()],
@@ -332,13 +345,14 @@ test('D2: 5 edits/s each in A and B, sync SIGKILLed at a random moment and resta
       const covered = edits[name].filter((e) => savedTimes.some((t) => t > e.at))
       const missingCovered = covered.filter((e) => !live.has(e.id)).length
       const missingAll = edits[name].filter((e) => !live.has(e.id)).length
-      // no transition to "saved" while sync was down (from the kill to the restart)
-      const savedWhileDown = states.filter((s) => s.s === 'saved' && s.at > tKill && s.at < tRestart).length
-      const { sent, acked } = await pushesAndAcks(p)
+      // no transition to "saved" while sync was down (from its death to the restart)
+      const savedWhileDown = states.filter((s) => s.s === 'saved' && s.at > tDead && s.at < tRestart).length
+      const { sent, acked, welcomes } = await pushesAndAcks(p)
       const early = savedTooEarly(
         states,
         sent.filter((x) => x.at >= t0),
         acked,
+        welcomes,
       )
       const downStates = [...new Set(states.filter((s) => s.at > tKill && s.at < tUp).map((s) => s.s))]
       out[name] = {
@@ -349,6 +363,12 @@ test('D2: 5 edits/s each in A and B, sync SIGKILLed at a random moment and resta
         savedWhileDown,
         downStates,
         early: early.length,
+        earlyAt: early.slice(0, 2).map((x) => ({ at: x.at - tKill, unacked: x.unacked.slice(0, 4) })),
+        welcomes: welcomes.filter((w) => w >= t0).map((w) => w - tKill),
+        sentAround: sent
+          .filter((x) => x.at >= tKill - 500)
+          .slice(0, 6)
+          .map((x) => ({ seq: x.seq, at: x.at - tKill })),
         finalState: states.at(-1)?.s,
       }
       if (missingCovered || missingAll || savedWhileDown || early.length || states.at(-1)?.s !== 'saved')
