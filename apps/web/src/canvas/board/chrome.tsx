@@ -260,6 +260,8 @@ function TypingBadges({ canvas }: { canvas: LobbyCanvas }) {
 
 /** Remote cursors with name tags (§2.7), filtered by `cursorVisible` (present mode, "hide cursors"). */
 function Cursors({ canvas, registries }: { canvas: LobbyCanvas; registries: FeatureRegistries }) {
+  // a new cursor filter (a registry change) recomputes the list
+  const version = useRegistries(registries)
   const cursors = useValue(
     'lobby-cursors',
     () =>
@@ -267,7 +269,7 @@ function Cursors({ canvas, registries }: { canvas: LobbyCanvas; registries: Feat
         .peers()
         .filter((p) => p.point && registries.cursorVisible.call(p.sid))
         .map((p) => ({ ...p, at: canvas.sceneToOverlay(p.point as { x: number; y: number }) })),
-    [canvas, registries],
+    [canvas, registries, version],
   )
   return (
     <>

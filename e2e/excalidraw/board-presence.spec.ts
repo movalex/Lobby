@@ -61,6 +61,25 @@ test('two people see one another: the people list, a named cursor where the poin
   // it follows the pointer
   const next = await hover(b, -180, -90)
   await expectCursorAt(a.page, cursor, next)
+  // a feature's cursor filter (present mode, "hide cursors") hides it until it stops filtering
+  await a.page.evaluate(
+    (sid) => {
+      const r = (
+        window as unknown as {
+          __lobbyBoard?: {
+            registries: { cursorVisible: { provide(fn: (sid: string) => boolean): () => void } }
+          }
+        }
+      ).__lobbyBoard?.registries
+      ;(window as unknown as { __unhide?: () => void }).__unhide = r?.cursorVisible.provide((s) => s !== sid)
+    },
+    await cursor.getAttribute('data-sid'),
+  )
+  await hover(b, -170, -80)
+  await expect(cursor).toHaveCount(0)
+  await a.page.evaluate(() => (window as unknown as { __unhide?: () => void }).__unhide?.())
+  await hover(b, -160, -70)
+  await expect(cursor).toBeVisible()
 
   const note = await createNote(a.page, { x: 140, y: 120, text: 'Hi' })
   await waitForItem(b.page, note)
