@@ -65,12 +65,19 @@ out.push('### 2.1 LobbyCanvas members (generated)\n')
 out.push('| Member | Owner | Today |')
 out.push('|---|---|---|')
 for (const m of LOBBY_CANVAS_MEMBERS) {
-  const today = m.status === 'core' ? 'C0 port (real)' : m.status === 'composed' ? 'composed at wave 1 (real)' : 'stub'
+  const today =
+    m.status === 'core'
+      ? 'C0 port (real)'
+      : m.status === 'composed'
+        ? 'composed (real)'
+        : m.status === 'board'
+          ? 'board page (real with the board handles)'
+          : 'stub'
   out.push(`| \`${m.path}\` | ${m.owner} | ${today} |`)
 }
 const count = (s: string) => LOBBY_CANVAS_MEMBERS.filter((m) => m.status === s).length
 out.push(
-  `\n${LOBBY_CANVAS_MEMBERS.length} members: ${count('core')} C0 port, ${count('composed')} composed, ${count('stub')} stubs (${Object.entries(
+  `\n${LOBBY_CANVAS_MEMBERS.length} members: ${count('core')} C0 port, ${count('composed')} composed, ${count('board')} board page, ${count('stub')} stubs (${Object.entries(
     LOBBY_CANVAS_MEMBERS.filter((m) => m.status === 'stub').reduce<Record<string, number>>((a, m) => {
       a[m.owner] = (a[m.owner] ?? 0) + 1
       return a

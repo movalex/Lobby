@@ -67,7 +67,7 @@ After this commit the files below change only through a **change request to the 
 
 ### 2.2 Who implements what
 
-The board page (2C) builds the canvas with `createLobbyCanvas({port, registries})` (`canvas/api/impl.ts`). At wave 1 the C0 members delegate to the spike's port, the reads the port has events for are reactive (document, selection, viewport, save state), and seven members are composed from port members (`boundsOf`, `isHidden`, `isLocked`, `doc.get/entries/set`, `tx.createMany`). Every other member is a stub naming its owner. The table is generated from `LOBBY_CANVAS_MEMBERS`; the contracts test fails when the object, the table and the `@owner` annotations in `lobby-canvas.ts` disagree.
+The board page (2C) builds the canvas with `createLobbyCanvas({port, registries, board})` (`canvas/api/impl.ts`; `board` is the page's engine handles, `canvas/board/handles.ts`). The C0 members delegate to the port, the reads are reactive (a signal source per concern), and 17 members are composed from port members alone (wave 1's seven plus 2C's `text.of`, `visibleBounds`, `sceneToOverlay`, `overlayToScene` and the six structural `tx` writes of `canvas/board/tx.ts`). 2C's other members are the board page's (status `board`): real when the page passes its `board` handles, a stub naming 2C on a bare port (as in the unit tests). Every member of a wave-3 owner is a stub naming its owner until the owner lands its part (W1-2). The table is generated from `LOBBY_CANVAS_MEMBERS`; the contracts test fails when the object, the table and the `@owner` annotations in `lobby-canvas.ts` disagree.
 
 #### The member table (generated from `LOBBY_CANVAS_MEMBERS`)
 
@@ -99,81 +99,81 @@ The board page (2C) builds the canvas with `createLobbyCanvas({port, registries}
 | `on:selectionChanged` | 2C | C0 port (real) |
 | `on:viewportChanged` | 2C | C0 port (real) |
 | `on:pointer` | 2C | C0 port (real) |
-| `boundsOf` | 2C | composed at wave 1 (real) |
-| `isHidden` | 2C | composed at wave 1 (real) |
-| `isLocked` | 2C | composed at wave 1 (real) |
-| `doc.get` | 2C | composed at wave 1 (real) |
-| `doc.entries` | 2C | composed at wave 1 (real) |
-| `doc.set` | 2C | composed at wave 1 (real) |
-| `tx.createMany` | 2C | composed at wave 1 (real) |
-| `transact.joinPrevious` | 2C | stub |
+| `boundsOf` | 2C | composed (real) |
+| `isHidden` | 2C | composed (real) |
+| `isLocked` | 2C | composed (real) |
+| `doc.get` | 2C | composed (real) |
+| `doc.entries` | 2C | composed (real) |
+| `doc.set` | 2C | composed (real) |
+| `tx.createMany` | 2C | composed (real) |
+| `transact.joinPrevious` | 2C | board page (real with the board handles) |
 | `viewport.zoomTo` | 3b | stub |
 | `viewport.centerOn` | 3b | stub |
 | `viewport.ensureVisible` | 3b | stub |
 | `viewport.zoomStep` | 3b | stub |
-| `viewport.stop` | 2C | stub |
-| `viewport.moving` | 2C | stub |
+| `viewport.stop` | 2C | board page (real with the board handles) |
+| `viewport.moving` | 2C | board page (real with the board handles) |
 | `viewport.limits` | 3b | stub |
-| `viewport.screenRect` | 2C | stub |
-| `viewport.remeasure` | 2C | stub |
-| `readOnly` | 2C | stub |
-| `container` | 2C | stub |
-| `focus` | 2C | stub |
-| `hasKeyboard` | 2C | stub |
-| `setCursor` | 2C | stub |
-| `pointer` | 2C | stub |
-| `gesture` | 2C | stub |
-| `hitTest` | 2C | stub |
-| `hovered` | 2C | stub |
-| `visibleBounds` | 2C | stub |
-| `hide` | 2C | stub |
-| `sceneToOverlay` | 2C | stub |
-| `overlayToScene` | 2C | stub |
-| `theme` | 2C | stub |
-| `text.of` | 2C | stub |
-| `text.canEdit` | 2C | stub |
-| `text.edit` | 2C | stub |
-| `text.stop` | 2C | stub |
-| `text.editorElement` | 2C | stub |
-| `text.measure` | 2C | stub |
-| `text.replace` | 2C | stub |
-| `styles.next` | 2C | stub |
-| `styles.setNext` | 2C | stub |
+| `viewport.screenRect` | 2C | board page (real with the board handles) |
+| `viewport.remeasure` | 2C | board page (real with the board handles) |
+| `readOnly` | 2C | board page (real with the board handles) |
+| `container` | 2C | board page (real with the board handles) |
+| `focus` | 2C | board page (real with the board handles) |
+| `hasKeyboard` | 2C | board page (real with the board handles) |
+| `setCursor` | 2C | board page (real with the board handles) |
+| `pointer` | 2C | board page (real with the board handles) |
+| `gesture` | 2C | board page (real with the board handles) |
+| `hitTest` | 2C | board page (real with the board handles) |
+| `hovered` | 2C | board page (real with the board handles) |
+| `visibleBounds` | 2C | composed (real) |
+| `hide` | 2C | board page (real with the board handles) |
+| `sceneToOverlay` | 2C | composed (real) |
+| `overlayToScene` | 2C | composed (real) |
+| `theme` | 2C | board page (real with the board handles) |
+| `text.of` | 2C | composed (real) |
+| `text.canEdit` | 2C | board page (real with the board handles) |
+| `text.edit` | 2C | board page (real with the board handles) |
+| `text.stop` | 2C | board page (real with the board handles) |
+| `text.editorElement` | 2C | board page (real with the board handles) |
+| `text.measure` | 2C | board page (real with the board handles) |
+| `text.replace` | 2C | board page (real with the board handles) |
+| `styles.next` | 2C | board page (real with the board handles) |
+| `styles.setNext` | 2C | board page (real with the board handles) |
 | `styles.of` | 3a | stub |
 | `styles.apply` | 3a | stub |
-| `presence.peers` | 2C | stub |
-| `presence.peer` | 2C | stub |
+| `presence.peers` | 2C | board page (real with the board handles) |
+| `presence.peer` | 2C | board page (real with the board handles) |
 | `follow.current` | 3c | stub |
 | `follow.start` | 3c | stub |
 | `follow.stop` | 3c | stub |
-| `history.undo` | 2C | stub |
-| `history.redo` | 2C | stub |
-| `history.canUndo` | 2C | stub |
-| `history.canRedo` | 2C | stub |
+| `history.undo` | 2C | board page (real with the board handles) |
+| `history.redo` | 2C | board page (real with the board handles) |
+| `history.canUndo` | 2C | board page (real with the board handles) |
+| `history.canRedo` | 2C | board page (real with the board handles) |
 | `export.svg` | 3e | stub |
 | `export.png` | 3e | stub |
 | `export.canvas` | 3e | stub |
 | `export.copy` | 3e | stub |
 | `files.urlOf` | 3g | stub |
-| `files.status` | 2C | stub |
+| `files.status` | 2C | board page (real with the board handles) |
 | `files.insert` | 3g | stub |
-| `settings.get` | 2C | stub |
-| `settings.set` | 2C | stub |
-| `tx.reorder` | 2C | stub |
-| `tx.setFrame` | 2C | stub |
-| `tx.group` | 2C | stub |
-| `tx.ungroup` | 2C | stub |
-| `tx.bind` | 2C | stub |
-| `tx.duplicate` | 2C | stub |
-| `on:change` | 2C | stub |
-| `on:input` | 2C | stub |
-| `on:toolChanged` | 2C | stub |
-| `on:editingChanged` | 2C | stub |
-| `on:resize` | 2C | stub |
-| `on:docChanged` | 2C | stub |
+| `settings.get` | 2C | board page (real with the board handles) |
+| `settings.set` | 2C | board page (real with the board handles) |
+| `tx.reorder` | 2C | composed (real) |
+| `tx.setFrame` | 2C | composed (real) |
+| `tx.group` | 2C | composed (real) |
+| `tx.ungroup` | 2C | composed (real) |
+| `tx.bind` | 2C | composed (real) |
+| `tx.duplicate` | 2C | composed (real) |
+| `on:change` | 2C | board page (real with the board handles) |
+| `on:input` | 2C | board page (real with the board handles) |
+| `on:toolChanged` | 2C | board page (real with the board handles) |
+| `on:editingChanged` | 2C | board page (real with the board handles) |
+| `on:resize` | 2C | board page (real with the board handles) |
+| `on:docChanged` | 2C | board page (real with the board handles) |
 | `on:followChanged` | 3c | stub |
 
-99 members: 26 C0 port, 7 composed, 66 stubs (2C 49, 3b 5, 3a 2, 3c 4, 3e 4, 3g 2).
+99 members: 26 C0 port, 17 composed, 39 board page, 17 stubs (3b 5, 3a 2, 3c 4, 3e 4, 3g 2).
 
 ### 2.3 Parts: no owner edits another owner's file
 
@@ -555,3 +555,4 @@ Not re-run on the working tree: the default e2e suite and the spike A suite (the
 | Rev | Date | Change | By |
 |---|---|---|---|
 | W1-1 | 2026-09-29 | The wave-1 freeze (this document) | contracts |
+| W1-2 | 2026-09-29 | CR by 2C (wave 2): `MemberStatus` gains `board` (2C's members that need the board page's engine: real with the `board` handles of `createLobbyCanvas`, a stub naming 2C on a bare port); 2C's 49 stubs become 10 composed and 39 board-page members; the contracts test checks `board` members as stubs on a bare port and as real members with fake board handles, and runs the composed `tx` writes on a bare port. The list of members, their owners and every signature are unchanged. | 2C |
