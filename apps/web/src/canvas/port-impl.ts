@@ -129,7 +129,13 @@ export function createCanvasPort(deps: PortDeps): LobbyCanvasPort {
             labelId: props.labelId as string | undefined,
           } as never,
         )
-        return withIndex(els as ExcalidrawElement[])
+        // port.ts: create's props carry `customData` like every other kind (O5's mind map and tags create
+        // notes with customData.lobby); it goes on the note, not its label (lead, M1/M2)
+        const custom = props.customData
+        const out = (els as ExcalidrawElement[]).map((e) =>
+          custom !== undefined && e.id === id ? ({ ...e, customData: custom } as ExcalidrawElement) : e,
+        )
+        return withIndex(out)
       }
       case 'text':
         return withIndex([
