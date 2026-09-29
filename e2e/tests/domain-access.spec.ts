@@ -28,6 +28,7 @@ import {
 import { expect, test } from './support/fixtures.ts'
 import { openHistory } from './support/history.ts'
 import { WEB_URL } from './support/ports.ts'
+import { capture } from './support/screenshots.ts'
 
 const EXCEPTION = 'owner@personal.example.test'
 test.use({ apiEnv: { DRAFTROOM_CREATOR_EMAILS: EXCEPTION } })
@@ -44,6 +45,13 @@ async function errorCode(res: { json(): Promise<unknown> }): Promise<string | nu
   return body?.error?.code ?? null
 }
 
+/** Nothing scrolls sideways (390 px phones). */
+async function expectNoSideScroll(page: Page) {
+  expect(
+    await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth),
+  ).toBeLessThanOrEqual(0)
+}
+
 /** The dashboard's creation entry points are all absent (New board, Templates, Import, sample). */
 async function expectNoCreateControls(page: Page) {
   await expect(page.getByTestId('dashboard')).toBeVisible()
@@ -55,7 +63,7 @@ test('outside account with nothing shared: an honest landing, and every create r
   browser,
   users,
   board,
-}) => {
+}, testInfo) => {
   const email = 'client@client.example.test'
   const client = await signedInContext(browser, freshHandle('client'), { name: 'Casey Client', email })
   try {
@@ -72,6 +80,11 @@ test('outside account with nothing shared: an honest landing, and every create r
       await expect(screen.getByTestId('no-workspace-account')).toHaveText(`You're signed in as ${email}.`)
       await expect(screen).toContainText('Work there? Sign in with your work email.')
       await expect(screen.getByTestId('no-workspace-switch')).toHaveText('Sign in with a different account')
+      await capture('domain-access-outside-landing.png', client.page, testInfo)
+      await client.page.setViewportSize({ width: 390, height: 844 })
+      await expect(screen.getByTestId('no-workspace-switch')).toBeInViewport()
+      await expectNoSideScroll(client.page)
+      await capture('domain-access-outside-landing-390.png', client.page, testInfo)
     })
 
     await test.step('every create and share route answers 403 CREATOR_REQUIRED (uniform, whatever the id)', async () => {
@@ -116,7 +129,7 @@ test('email lock: a link for pat@ turns sam@ away (no auto-accept), then pat sig
   users,
   board,
   session,
-}) => {
+}, testInfo) => {
   const aliceApi = await users.api('alice')
   const a = await session('alice')
   const pat = { handle: freshHandle('pat'), name: 'Pat Client', email: 'pat@client.example.test' }
@@ -170,6 +183,7 @@ test('email lock: a link for pat@ turns sam@ away (no auto-accept), then pat sig
       await expect(mismatch).toContainText(`You're signed in as ${sam.email}.`)
       await expect(mismatch).toContainText(`ask Alice Park to invite ${sam.email}`)
       await expect(page.getByTestId('invite-accept')).toHaveCount(0)
+      await capture('domain-access-invite-mismatch.png', page, testInfo)
       // No auto-accept: the link is still unused, and sam cannot open the board.
       expect(await invitations(aliceApi, board)).toEqual([
         expect.objectContaining({ kind: 'invite', uses: 0 }),
@@ -284,7 +298,7 @@ test('a board owner who is not a creator: the Share dialog only reduces access (
   browser,
   playwright,
   users,
-}) => {
+}, testInfo) => {
   const handle = freshHandle('own')
   const name = 'Olive Owner'
   const [bob, carol, dave] = await Promise.all([users.get('bob'), users.get('carol'), users.get('dave')])
@@ -362,6 +376,7 @@ test('a board owner who is not a creator: the Share dialog only reduces access (
       await expect(visibility).toHaveValue('private')
       await expect(visibility.locator('option[value="workspace_view"]')).toBeDisabled()
       await expect(visibility.locator('option[value="workspace_edit"]')).toBeDisabled()
+      await capture('domain-access-share-reduce-only.png', dialog, testInfo)
     })
 
     await test.step('lowering works; raising is not offered', async () => {
