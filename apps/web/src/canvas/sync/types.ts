@@ -214,6 +214,21 @@ export interface EngineCore {
   /** Every push sent, in order. */
   pushLog(): readonly PushRecord[]
 
+  /**
+   * The board document (`lb_doc`, canvas-schema doc.ts) as this client last applied it: `welcome.doc`,
+   * then every `changes` batch's `doc` (a null value removes the key). CR by O5 (spike B): the contracts
+   * had `Push.doc` and `PushRecord.doc` but no way for a feature to write or read a doc key.
+   */
+  doc(): ReadonlyMap<string, unknown>
+  /**
+   * Writes board-document keys as a push's `doc: {set}` (null removes a key), ordered with this
+   * session's element pushes (a doc write queued before an element edit is sent no later than it). The
+   * server validates each key (doc.ts `docValueProblem`, `canWriteDocKey`). O5's tags write
+   * `tagDef:<key>` before the element's `tag:<key>`, which the server accepts only for a tag in `lb_doc`
+   * (§3.3).
+   */
+  setDoc(set: Readonly<Record<string, unknown>>): void
+
   /** The lease side for spike A's `LeaseClient`. */
   readonly leaseConnect: LeaseConnect
   /** Who holds each leased id right now (from `welcome.leases` and `lease` broadcasts). */
