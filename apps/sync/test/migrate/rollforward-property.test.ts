@@ -97,9 +97,35 @@ describe('roll-forward property test', () => {
           })
           oursEdits.set(id, { kind, value })
         } else if (kind === 'delete') {
+          // as O1's room stores a delete (§2.4.4 repairs): the label goes with its container and every
+          // binding to the deleted element is nulled. (Lead, M1 integration: with O1's real checkInvariants
+          // a bare container delete left LABEL_ORPHANED / BINDING_TARGET_INVALID in "ours", which the
+          // room can never store, and the roll-forward's step g refused it.)
+          const rows = lbRows(path)
           excalidrawEdit(path, id, ['life'], (e) => {
             e.isDeleted = true
           })
+          for (const [rid, row] of rows) {
+            if (row.deleted) continue
+            const el = JSON.parse(row.data) as {
+              type: string
+              containerId?: string | null
+              startBinding?: { elementId: string } | null
+              endBinding?: { elementId: string } | null
+            }
+            if (el.type === 'text' && el.containerId === id)
+              excalidrawEdit(path, rid, ['life'], (e) => {
+                e.isDeleted = true
+              })
+            else if (
+              el.type === 'arrow' &&
+              (el.startBinding?.elementId === id || el.endBinding?.elementId === id)
+            )
+              excalidrawEdit(path, rid, ['bind'], (e) => {
+                for (const end of ['startBinding', 'endBinding'] as const)
+                  if ((e[end] as { elementId?: string } | null)?.elementId === id) e[end] = null
+              })
+          }
           oursEdits.set(id, { kind })
         } else {
           const linear = ['line1', 'draw1', 'pen1', 'hl'].includes(id)
