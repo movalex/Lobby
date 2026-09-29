@@ -302,3 +302,41 @@ describe('lease expiry (§2.9.4 rule 6)', () => {
     expect(after.x as number).toBeGreaterThan(before.x as number)
   })
 })
+
+describe('the lease-grant test hook (§2.4.6, for B3 L12)', () => {
+  it("delay: the grant arrives after the delay; the lease is already the requester's (a competitor is denied)", async () => {
+    const st = await h.stack()
+    const b = newBoardId()
+    const a = await st.client({ boardId: b, user: 'alice' })
+    const bob = await st.client({ boardId: b, user: 'bob' })
+    await noteWithLabel(a)
+    await st.leaseHook(b, { mode: 'delay', ms: 400 })
+    const t0 = Date.now()
+    const pending = a.acquireNow('n1')
+    await sleep(100)
+    expect(await bob.acquire('n1')).toMatchObject({ type: 'lease.deny', holder: { uid: 'alice' } })
+    expect((await pending.answer).type).toBe('lease.grant')
+    expect(Date.now() - t0).toBeGreaterThanOrEqual(380)
+    await st.leaseHook(b, { mode: 'off' })
+  })
+
+  it('hold: no grant until release; a request released meanwhile gets no late grant', async () => {
+    const st = await h.stack()
+    const b = newBoardId()
+    const a = await st.client({ boardId: b, user: 'alice' })
+    await noteWithLabel(a)
+    await a.create([note('n2')])
+    await st.leaseHook(b, { mode: 'hold' })
+    const held = a.acquireNow('n1')
+    const abandoned = a.acquireNow('n2')
+    await sleep(300)
+    expect(a.of('lease.grant')).toEqual([])
+    a.release('n2') // the client gave up on n2 before the answer
+    await sleep(100)
+    await st.leaseHook(b, { mode: 'release' })
+    expect((await held.answer).type).toBe('lease.grant')
+    await sleep(300)
+    expect(a.of('lease.grant').map((g) => g.id)).toEqual(['n1'])
+    void abandoned
+  })
+})

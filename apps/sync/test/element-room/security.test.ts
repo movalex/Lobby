@@ -444,3 +444,38 @@ describe('the drag relay caps (F17)', () => {
 function ellipseLike(id: string) {
   return { ...rect(id), type: 'ellipse' }
 }
+
+describe('caps and fail-closed lookups', () => {
+  it('a guest may create at most 500 items; the cap counts the same push', async () => {
+    const st = await h.stack()
+    const b = newBoardId()
+    const g = await st.client({ boardId: b, user: 'guest', guest: true })
+    const ack = await g.push(Array.from({ length: 500 }, (_, i) => ({ k: 'c', el: rect(`g${i}`) })))
+    expect(ack.r.every((r) => r.ok)).toBe(true)
+    const more = await g.push([
+      { k: 'c', el: rect('g500') },
+      { k: 'c', el: rect('g501') },
+    ])
+    expect(more.r.map((r) => (r.ok ? 'ok' : r.code))).toEqual(['GUEST_LIMIT', 'GUEST_LIMIT'])
+    const g2 = await st.client({ boardId: b, user: 'guest2', guest: true })
+    // the cap counts the push's own earlier creates: 400, then 101 in one push → the last one refused
+    const first = await g2.push(Array.from({ length: 400 }, (_, i) => ({ k: 'c', el: rect(`h${i}`) })))
+    expect(first.r.every((r) => r.ok)).toBe(true)
+    const second = await g2.push(Array.from({ length: 101 }, (_, i) => ({ k: 'c', el: rect(`k${i}`) })))
+    expect(second.r.filter((r) => r.ok)).toHaveLength(100)
+    expect(second.r.at(-1)).toMatchObject({ ok: false, code: 'GUEST_LIMIT' })
+  })
+
+  it('a file-refs lookup that hangs fails closed after 3 s (UNAVAILABLE) and does not block the session', async () => {
+    const st = await h.stack()
+    const b = newBoardId()
+    st.api.fileRefsMode = 'hang'
+    const a = await st.client({ boardId: b, user: 'alice' })
+    const t0 = Date.now()
+    const hung = a.pushNow([{ k: 'c', el: image('i1', versionId(9)) }])
+    const after = a.pushNow([{ k: 'c', el: rect('r-after') }])
+    expect((await hung.ack).r[0]).toMatchObject({ ok: false, code: 'UNAVAILABLE' })
+    expect(Date.now() - t0).toBeGreaterThanOrEqual(2_900)
+    expect((await after.ack).r[0]).toMatchObject({ ok: true })
+  })
+})

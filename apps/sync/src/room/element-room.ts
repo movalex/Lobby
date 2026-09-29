@@ -43,6 +43,7 @@ import {
   type ServerOp,
   type TerminalCloseReason,
 } from '@draftroom/canvas-schema/protocol'
+import { SYNC_INTERNAL_TIMEOUT_MS } from '@draftroom/contracts'
 import type {
   ElementSessionInfo,
   ElementSocket,
@@ -116,6 +117,18 @@ type QueueEntry =
   | { kind: 'relayout'; id: string }
 
 let handleSeq = 0
+
+/** Rejects when `p` takes longer than `ms` (the api's 3 s timeout, enforced here too: fail closed). */
+function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  return Promise.race([
+    p,
+    new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error('timed out')), ms)
+      timer.unref?.()
+    }),
+  ]).finally(() => clearTimeout(timer))
+}
 
 /** The server's own writes (the lease-expiry re-fit): attributed to nobody, never read-only. */
 const SERVER_IDENTITY: SessionIdentity = {
@@ -366,14 +379,15 @@ export class ElementRoom {
       const r = Op.safeParse(rawOp)
       return r.success ? { op: r.data, id: opIdOf(rawOp) } : { reject: 'INVALID' as const, id: opIdOf(rawOp) }
     })
-    const tooLarge = text.length > MAX_PUSH_BYTES
+    const bytes = Buffer.byteLength(text, 'utf8')
+    const tooLarge = bytes > MAX_PUSH_BYTES
     const item: FifoItem = {
       kind: 'push',
       seq: msg.seq,
       base: msg.base,
       ops: tooLarge ? ops.map((o) => ({ reject: 'TOO_LARGE' as const, id: o.id })) : ops,
       ...(msg.doc !== undefined ? { doc: msg.doc as { set: Record<string, unknown> } } : {}),
-      cost: { ops: Math.max(1, ops.length), bytes: text.length },
+      cost: { ops: Math.max(1, ops.length), bytes },
       rateRejected: false,
       paid: false,
       files: new Map(),
@@ -408,7 +422,7 @@ export class ElementRoom {
         else unknown.push(v)
       }
       if (unknown.length)
-        item.lookup = this.deps.fileRefs(this.boardId, unknown).then(
+        item.lookup = withTimeout(this.deps.fileRefs(this.boardId, unknown), SYNC_INTERNAL_TIMEOUT_MS).then(
           (res) => {
             this.fileCache.put(res)
             for (const v of unknown) {
@@ -738,6 +752,8 @@ export class ElementRoom {
     const startClock = store.meta.clock
     let clock = startClock
     const deliveries: (() => void)[] = []
+    /** the lease replies alone: they are sent even when the COMMIT fails (leases live in memory) */
+    const leaseDeliveries: (() => void)[] = []
     const pushEntries: { session: Session; push: PreparedPush }[] = []
     const before = new Map<string, WireElement | null>()
     const after = new Map<string, WireElement>()
@@ -748,11 +764,15 @@ export class ElementRoom {
     while (this.queue.length && pushes < DRAIN.maxPushes && performance.now() - t0 < DRAIN.maxWorkMs) {
       const e = this.queue.shift() as QueueEntry
       if (e.kind === 'acquire') {
-        deliveries.push(this.acquire(e.session, e.req, e.id, now))
+        const d = this.acquire(e.session, e.req, e.id, now)
+        deliveries.push(d)
+        leaseDeliveries.push(d)
         continue
       }
       if (e.kind === 'release') {
-        deliveries.push(this.release(e.session, e.id, now))
+        const d = this.release(e.session, e.id, now)
+        deliveries.push(d)
+        leaseDeliveries.push(d)
         continue
       }
       if (e.kind === 'relayout') {
@@ -826,7 +846,7 @@ export class ElementRoom {
       store.commit()
     } catch (err) {
       store.rollback()
-      this.commitFailed(pushEntries, deliveries, err as Error)
+      this.commitFailed(pushEntries, leaseDeliveries, err as Error)
       return
     }
     const t1 = performance.now()
@@ -904,7 +924,7 @@ export class ElementRoom {
       const outcome = this.rejectedOutcome(push, 'UNAVAILABLE')
       this.ackDelivery(session, push, outcome, this.store.meta.clock)()
     }
-    void leaseDeliveries
+    for (const d of leaseDeliveries) d()
     this.checkDisk(true)
     // nothing in memory changed: reopen the board file from disk and resync every session
     try {

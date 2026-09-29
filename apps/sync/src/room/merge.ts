@@ -138,6 +138,10 @@ export class PushApplier {
   readonly resnapArrows = new Set<string>()
   /** bindable elements whose x, y, width, height or angle changed (rule 7 trigger 1) */
   readonly movedTargets = new Set<string>()
+  /** live elements and items this push added so far (the caps count them before Phase F) */
+  private addedElements = 0
+  private addedItems = 0
+  private addedGuestItems = 0
 
   private readonly env: MergeEnv
   private readonly s: SessionIdentity
@@ -290,6 +294,28 @@ export class PushApplier {
     return null
   }
 
+  /** ELEMENT_LIMIT / GUEST_LIMIT for one more live element (§3.5), counting this push's earlier ones. */
+  private capProblem(el: El, create: boolean): RejectCode | null {
+    const label = isLabel(el)
+    if (this.env.counts.elements + this.addedElements + 1 > MAX_LIVE_ELEMENTS) return 'ELEMENT_LIMIT'
+    if (!label && this.env.counts.items + this.addedItems + 1 > MAX_ITEMS) return 'ELEMENT_LIMIT'
+    if (
+      create &&
+      this.s.guest &&
+      !label &&
+      (this.env.guestCreated.get(this.s.sid) ?? 0) + this.addedGuestItems + 1 > GUEST_ITEM_CAP
+    )
+      return 'GUEST_LIMIT'
+    return null
+  }
+  private countAdded(el: El, create: boolean): void {
+    this.addedElements++
+    if (!isLabel(el)) {
+      this.addedItems++
+      if (create && this.s.guest) this.addedGuestItems++
+    }
+  }
+
   private applyCreate(i: number, op: CreateOp) {
     const st = this.ops[i] as OpState
     const pushed = op.el as El
@@ -300,11 +326,8 @@ export class PushApplier {
     if (prev && !prev.isDeleted) return this.reject(i, 'INVALID')
     if (prev && this.leasedByOther(leaseIdOf(prev))) return this.reject(i, 'LEASED')
     if (!pushed.isDeleted) {
-      const label = isLabel(pushed)
-      if (this.env.counts.elements + 1 > MAX_LIVE_ELEMENTS) return this.reject(i, 'ELEMENT_LIMIT')
-      if (!label && this.env.counts.items + 1 > MAX_ITEMS) return this.reject(i, 'ELEMENT_LIMIT')
-      if (this.s.guest && !label && (this.env.guestCreated.get(this.s.sid) ?? 0) + 1 > GUEST_ITEM_CAP)
-        return this.reject(i, 'GUEST_LIMIT')
+      const cap = this.capProblem(pushed, true)
+      if (cap) return this.reject(i, cap)
     }
     const lobby = checkCreateLobby(
       pushed.customData?.lobby as Record<string, unknown> | undefined,
@@ -337,6 +360,7 @@ export class PushApplier {
     if (prev) for (const g of GROUP_NAMES) w.gclock[g] = this.clock
     this.writerOk(w, i, next)
     st.ok = true
+    if (!next.isDeleted) this.countAdded(next, true)
     if (next.type === 'arrow') this.resnapArrows.add(next.id)
     if ((next.boundElements ?? []).some((r: { type: string }) => r.type === 'arrow'))
       this.movedTargets.add(next.id)
@@ -508,6 +532,12 @@ export class PushApplier {
       return this.reject(i, 'INVALID')
     const check = checkElement(next)
     if (!check.ok) return this.reject(i, check.code)
+    // an undelete by patch (life false) counts toward the caps like a create
+    const revived = cur.isDeleted && !next.isDeleted
+    if (revived) {
+      const cap = this.capProblem(next, false)
+      if (cap) return this.reject(i, cap)
+    }
 
     const changed = !sameContent(cur, next)
     if (changed) {
@@ -524,6 +554,7 @@ export class PushApplier {
     } else next = cur
     this.writerOk(w, i, next)
     st.ok = true
+    if (revived) this.countAdded(next, false)
     st.applied = { groups, c: cApplied }
     if (denied) st.denied = denied
     this.env.leases.renew(leaseIdOf(cur), this.s.sid, this.env.now)
