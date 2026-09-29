@@ -7,7 +7,7 @@
 //     before any room opens: the page says "This board was made on the new canvas. It opens again after
 //     the switch." and the file is left byte-identical.
 import { createHash } from 'node:crypto'
-import { readFileSync } from 'node:fs'
+import { readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import type { Page } from '@playwright/test'
@@ -97,30 +97,37 @@ test('a board born on the new canvas is refused with its message and left untouc
   const sha = () => createHash('sha256').update(readFileSync(path)).digest('hex')
   const before = sha()
 
-  const context = await browser.newContext()
   try {
-    await signInContext(context, 'alice')
-    const page = await context.newPage()
-    await page.goto(`/b/${board}`)
-    await expectSyncError(
-      page,
-      'NEW_CANVAS_BOARD',
-      'Made on the new canvas',
-      'This board was made on the new canvas. It opens again after the switch.',
-    )
+    const context = await browser.newContext()
+    try {
+      await signInContext(context, 'alice')
+      const page = await context.newPage()
+      await page.goto(`/b/${board}`)
+      await expectSyncError(
+        page,
+        'NEW_CANVAS_BOARD',
+        'Made on the new canvas',
+        'This board was made on the new canvas. It opens again after the switch.',
+      )
+    } finally {
+      await context.close()
+    }
+    expect(sha()).toBe(before)
+    const check = new DatabaseSync(path, { readOnly: true })
+    try {
+      const tables = (
+        check.prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name").all() as Array<{
+          name: string
+        }>
+      ).map((r) => r.name)
+      expect(tables).toEqual(['lb_elements', 'lb_meta'])
+    } finally {
+      check.close()
+    }
   } finally {
-    await context.close()
-  }
-  expect(sha()).toBe(before)
-  const check = new DatabaseSync(path, { readOnly: true })
-  try {
-    const tables = (
-      check.prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name").all() as Array<{
-        name: string
-      }>
-    ).map((r) => r.name)
-    expect(tables).toEqual(['lb_elements', 'lb_meta'])
-  } finally {
-    check.close()
+    // The stack is shared with later specs: R0 rightly cannot read this board (the asset collector's
+    // pass over Dev Studio would stay incomplete, storage-2.spec.ts), so the file goes with the test.
+    // Sync never opened it, so nothing holds it.
+    for (const suffix of ['', '-wal', '-shm']) rmSync(path + suffix, { force: true })
   }
 })
