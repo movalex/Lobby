@@ -213,8 +213,13 @@ export class BoardSession {
     for (const l of [...this.listeners]) l()
   }
 
+  /** every toast shown, in order (the specs read it: the screen keeps only the last few, for 5 s) */
+  readonly toastLog: { id: number; text: string; at: number }[] = []
+
   toast(text: string): void {
     const id = ++this.toastSeq
+    this.toastLog.push({ id, text, at: Date.now() })
+    if (this.toastLog.length > 1000) this.toastLog.splice(0, this.toastLog.length - 1000)
     this.set({ toasts: [...this.snap.toasts.slice(-3), { id, text }] })
     setTimeout(() => this.set({ toasts: this.snap.toasts.filter((t) => t.id !== id) }), 5_000)
   }

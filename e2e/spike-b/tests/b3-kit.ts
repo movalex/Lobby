@@ -177,8 +177,9 @@ export async function centre(page: Page, id: string): Promise<{ x: number; y: nu
 /** A client point at scene `p`. */
 export const screenOf = (page: Page, p: ScenePoint) => lc(page).sceneToScreen(p)
 
-/** The toasts on screen. */
-export const toasts = (page: Page) => page.locator('[data-testid="toast"]').allInnerTexts()
+/** Every toast the page showed so far, in order (the session's log: the screen keeps only the last few). */
+export const toasts = (page: Page) =>
+  board(page, (b) => (b.session.toastLog as { text: string }[]).map((t) => t.text) as string[])
 
 /** Ops a page pushed since `from` (a pushedOps length) that write `id`. */
 export async function opsFor(page: Page, id: string, from = 0): Promise<Op[]> {
