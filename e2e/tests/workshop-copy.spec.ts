@@ -29,9 +29,45 @@ async function guestOn(context: BrowserContext, token: string, name: string) {
   return { page, id: joined.user.id }
 }
 
-/** The page's own time-of-day format (the sharing badge's). */
-const timeInPage = (page: Page, iso: string) =>
-  page.evaluate((i) => new Date(i).toLocaleTimeString(undefined, { timeStyle: 'short' }), iso)
+/**
+ * How the page writes the moment `iso` as seen at the page's time `at` (ms; now when omitted), the way
+ * the sharing badge (features/sharing/model.ts shortTime) and History (checkpoints-model.ts
+ * checkpointTime) do: the time of day in the page's own format, whether it falls on the same local day,
+ * and the date they add when it does not ("Sep 29", or "Sep 29, 2027" in another year).
+ */
+const whenInPage = (page: Page, iso: string, at?: number) =>
+  page.evaluate(
+    ([i, n]) => {
+      const d = new Date(i)
+      const now = n === null ? new Date() : new Date(n)
+      const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+      const md = `${months[d.getMonth()]} ${d.getDate()}`
+      return {
+        time: d.toLocaleTimeString(undefined, { timeStyle: 'short' }),
+        sameDay: d.toDateString() === now.toDateString(),
+        date: d.getFullYear() === now.getFullYear() ? md : `${md}, ${d.getFullYear()}`,
+      }
+    },
+    [iso, at ?? null] as const,
+  )
+
+const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+/**
+ * The texts `format` gives for `iso` at any moment since `since` (ms, page time): the page drew it at
+ * one of them, and within a test the local day changes at most once, so those are the day at `since`
+ * and the day now. A run around midnight (a 3-hour link made after 21:00 local ends the next day, and
+ * the badge then adds the date) is as correct as one at noon, and the assertion stays exact.
+ */
+async function drawnAs(
+  page: Page,
+  iso: string,
+  since: number,
+  format: (w: { time: string; sameDay: boolean; date: string }) => string,
+): Promise<RegExp> {
+  const forms = new Set([format(await whenInPage(page, iso, since)), format(await whenInPage(page, iso))])
+  return new RegExp(`(?:${[...forms].map(escapeRegExp).join('|')})`)
+}
 
 test('R2-11, R2-09, R2-08: the retro link path in Share; reveals named after their prompts, in the badge’s time format', async ({
   session,
@@ -42,6 +78,8 @@ test('R2-11, R2-09, R2-08: the retro link path in Share; reveals named after the
   const alice = await session('alice')
   const page = alice.page
   await page.setViewportSize({ width: 1440, height: 900 })
+  // Everything this test reads a time of day from is made after this moment (page time).
+  const startedAt = await page.evaluate(() => Date.now())
 
   await test.step('R2-11: "Workshop link (guests can edit)" is in view under the client card and opens that link', async () => {
     await page.getByTestId('share-button').click()
@@ -117,15 +155,23 @@ test('R2-11, R2-09, R2-08: the retro link path in Share; reveals named after the
       snapshots: { createdAt: string; kind: string }[]
     }
     const auto = listed.snapshots.find((s) => s.kind === 'auto')
-    const time = await timeInPage(page, auto?.createdAt ?? '')
-    await expect(rows.nth(0)).toContainText(`Today ${time}`)
-    // The badge's "until …" uses the very same format.
+    // "Today 11:10 PM" (a checkpoint made a moment ago; the date form only if midnight passed since).
+    await expect(rows.nth(0)).toContainText(
+      await drawnAs(page, auto?.createdAt ?? '', startedAt, (w) =>
+        w.sameDay ? `Today ${w.time}` : `${w.date}, ${w.time}`,
+      ),
+    )
+    // The badge's "until …" uses the very same time format. The 3-hour link ends on another day when
+    // it was made after 21:00 local; the badge then says "until Sep 29, 2:25 AM", which is right too.
     const link = (await (await aliceApi.fetch('GET', `/api/boards/${board}/invitations`)).json()) as {
       invitations: { kind: string; role: string; expiresAt: string }[]
     }
     const workshop = link.invitations.find((i) => i.kind === 'review' && i.role === 'editor')
-    const until = await timeInPage(page, workshop?.expiresAt ?? '')
-    await expect(page.getByTestId('share-badge')).toContainText(`until ${until}`)
+    await expect(page.getByTestId('share-badge')).toContainText(
+      await drawnAs(page, workshop?.expiresAt ?? '', startedAt, (w) =>
+        w.sameDay ? `until ${w.time}` : `until ${w.date}, ${w.time}`,
+      ),
+    )
   })
 })
 
