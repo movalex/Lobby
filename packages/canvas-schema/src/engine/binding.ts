@@ -260,3 +260,39 @@ export function arrowLabelLayout(
   const at = api.LinearElementEditor.getBoundTextElementPosition(a, t, map)
   return { x: at.x, y: at.y }
 }
+
+/**
+ * How far an arrow's bound ends are from where a re-snap against `elements` puts them, in scene units
+ * (0: on the targets' edges as their FixedPointBindings say; ends that are not bound are not measured).
+ * For tests and checkers that may not import the engine directly (the room's protocol tests, the spike B
+ * harness); the C0 arrow acceptance tests measure the same with Excalidraw's own follow (`followError`).
+ */
+export function boundEndsOffEdge(arrow: ArrowElementLike, elements: ElementsById): number {
+  const r = resnapArrow(arrow, elements)
+  if (!r.changed) return 0
+  const after = { ...(copy(arrow) as Mut), ...copy(r.path) } as Mut
+  for (const f of ['fixedSegments', 'startIsSpecial', 'endIsSpecial']) if (!(f in r.path)) delete after[f]
+  const last = arrow.points.length - 1
+  const lastAfter = after.points.length - 1
+  let d = 0
+  const at = (el: Mut, i: number) => {
+    const p = linearApi.LinearElementEditor.getPointAtIndexGlobalCoordinates(el, i, new Map([[el.id, el]]))
+    return [p[0], p[1]] as const
+  }
+  for (const [bound, i, j] of [
+    [arrow.startBinding, 0, 0],
+    [arrow.endBinding, last, lastAfter],
+  ] as const) {
+    if (!bound) continue
+    const p = at(arrow, i)
+    const q = at(after, j)
+    d = Math.max(d, Math.abs(p[0] - q[0]), Math.abs(p[1] - q[1]))
+  }
+  return d
+}
+
+const linearApi = element as unknown as {
+  LinearElementEditor: {
+    getPointAtIndexGlobalCoordinates(el: Mut, i: number, map: WorkMap): [number, number]
+  }
+}
