@@ -211,17 +211,32 @@ export function isBufferableKey(e: KeyLike): boolean {
   return e.key === 'Enter' || e.key === 'Backspace' || e.key === 'Delete'
 }
 
-/** `mod+shift+s` style name (mod = Ctrl or Cmd). Letters and digits by `code`, so layouts don't matter. */
+/**
+ * The letter a chord names: its `key` when that is a Latin letter (the layout's character: the browser's
+ * accelerators and editing commands follow it), else its `code` (non-Latin layouts: Ctrl+Я is still
+ * Ctrl+Z to the browser, and a dead key or 'Unidentified' names no letter).
+ */
+function chordLetter(e: KeyLike): string | null {
+  if (/^[a-z]$/i.test(e.key)) return e.key.toLowerCase()
+  const code = e.code ?? ''
+  return /^Key[A-Z]$/.test(code) ? code.slice(3).toLowerCase() : null
+}
+
+/**
+ * `mod+shift+s` style name (mod = Ctrl or Cmd). Letters by the layout's character (chordLetter: Colemak's
+ * Ctrl+T on the physical F key is Ctrl+T to the browser), digits by `code`.
+ */
 export function chordOf(e: KeyLike): string {
   const parts: string[] = []
   if (e.ctrlKey || e.metaKey) parts.push('mod')
   if (e.altKey) parts.push('alt')
   if (e.shiftKey) parts.push('shift')
   const code = e.code ?? ''
+  const letter = chordLetter(e)
   let name: string
-  if (/^Key[A-Z]$/.test(code)) name = code.slice(3).toLowerCase()
+  if (letter) name = letter
   else if (/^Digit[0-9]$/.test(code)) name = code.slice(5)
-  else name = e.key.length === 1 ? e.key.toLowerCase() : e.key.toLowerCase()
+  else name = e.key.toLowerCase()
   parts.push(name)
   return parts.join('+')
 }
@@ -234,19 +249,220 @@ const block = (e: KeyLike): KeyVerdict => {
 
 const isMod = (e: KeyLike) => e.ctrlKey || e.metaKey
 const codeIs = (e: KeyLike, ...codes: string[]) => codes.includes(e.code ?? '')
-const letterIs = (e: KeyLike, letter: string) =>
-  e.code === `Key${letter.toUpperCase()}` || e.key.toLowerCase() === letter
+/** A Lobby-owned chord's letter, by the layout's character (chordLetter), never by the physical key alone. */
+const letterIs = (e: KeyLike, letter: string) => chordLetter(e) === letter
 
 const CARET_KEYS = new Set([...ARROWS, 'Home', 'End', 'PageUp', 'PageDown'])
 
+// --- Delegation outside the text editor ------------------------------------------------------------
+//
+// Corrected after the second verifier: Lobby used to pass Ctrl+D, Ctrl+G, Ctrl+Shift+L, Ctrl+= / - and
+// Ctrl+[ ] to Excalidraw by physical `code`, while most of Excalidraw's handlers test `key`. On a layout
+// that puts S on the physical L key (Bone), Ctrl+Shift+S reports code KeyL and key 'S': Lobby passed it as
+// the lock chord and Excalidraw ran saveFileToDisk (a whole-board save picker). German Ctrl+Shift+ß
+// (code Minus, key '?') and Dvorak Ctrl+Shift+[ (code BracketLeft, key '?') opened the help dialog.
+//
+// The rule now: a chord is delegated only when Excalidraw itself would run exactly one delegated action
+// for that very event, decided the way its handlers decide (index.js, App.onKeyDown 43923-44030 and
+// ActionManager.handleKeyDown 23055-23093):
+//   - the key its handlers test is `key` after its CapsLock fix (43925-43939); `code` is read only where
+//     the delegated action's own keyTest reads it (zoom: Equal / Minus / Numpad, z-order: brackets). So
+//     duplicate, group, ungroup and lock are decided by key, and a dead key or 'Unidentified' never
+//     delegates them; zoom and z-order follow the physical key as Excalidraw does, a dead key included;
+//   - CTRL_OR_CMD is Excalidraw's (metaKey on macOS, ctrlKey elsewhere, common index.js:2391): on macOS
+//     Ctrl+G is not group to Excalidraw (it opens the background popup, 44193-44205), so it is blocked;
+//   - no handler that runs before the actions claims the event: help on key '?' with any modifiers
+//     (44013), image export (44018), the command-palette toast (43983);
+//   - exactly one action's keyTest matches (handleKeyDown gives up on two, 23064-23069) and it is on the
+//     plan's delegated list (§2.3.3). Every keyTest in the bundle is transcribed below (46 with a test,
+//     `keymap.test.ts` pins the count and the lines against the dist).
+// Anything else is blocked (and prevented, except browser chords).
+
+/** Excalidraw's CapsLock fix (App.onKeyDown, index.js:43925-43939): the `key` its handlers compare. */
+export function engineKeyOf(e: KeyLike): string {
+  const key = typeof e.key === 'string' ? e.key : ''
+  if (!e.shiftKey && /^[A-Z]$/.test(key)) return key.toLowerCase()
+  if (e.shiftKey && /^[a-z]$/.test(key)) return key.toUpperCase()
+  return key
+}
+
+/** The Excalidraw actions Lobby delegates outside the text editor (plan §2.3.3, first row). */
+export type DelegatedAction =
+  | 'duplicateSelection'
+  | 'group'
+  | 'ungroup'
+  | 'toggleElementLock'
+  | 'sendBackward'
+  | 'bringForward'
+  | 'sendToBack'
+  | 'bringToFront'
+  | 'zoomIn'
+  | 'zoomOut'
+
+interface EngineKeyEvent {
+  /** `key` after Excalidraw's CapsLock fix. */
+  k: string
+  code: string
+  /** Excalidraw's CTRL_OR_CMD. */
+  cmd: boolean
+  shift: boolean
+  alt: boolean
+  mac: boolean
+  /** Excalidraw's matchKey (common index.js:2443-2449): the key, or the code for a non-Latin key. */
+  z: boolean
+  y: boolean
+}
+
+const ARROW_KEYS = ARROWS
+
 /**
- * The letter a chord names: its `key` when that is a Latin letter (the browser's editing commands follow
- * the layout), else its `code` (non-Latin layouts: Ctrl+Я is still Ctrl+Z to the browser).
+ * Every Excalidraw action with a keyTest (dist/dev/index.js, the line of each keyTest), as its test reads
+ * the event. appState / selection conditions are left out: they only narrow a match (deselect, finalize,
+ * lock), so leaving them out can only block more.
  */
-function chordLetter(e: KeyLike): string | null {
-  if (/^[a-z]$/i.test(e.key)) return e.key.toLowerCase()
-  const code = e.code ?? ''
-  return /^Key[A-Z]$/.test(code) ? code.slice(3).toLowerCase() : null
+const ENGINE_KEY_TESTS: readonly { name: string; line: number; test: (x: EngineKeyEvent) => boolean }[] = [
+  {
+    name: 'deleteSelectedElements',
+    line: 3481,
+    test: (x) => (x.k === 'Backspace' || x.k === 'Delete') && !x.cmd,
+  },
+  { name: 'sendBackward', line: 3537, test: (x) => x.cmd && !x.shift && x.code === 'BracketLeft' },
+  { name: 'bringForward', line: 3563, test: (x) => x.cmd && !x.shift && x.code === 'BracketRight' },
+  {
+    name: 'sendToBack',
+    line: 3588,
+    test: (x) => (x.mac ? x.cmd && x.alt : x.cmd && x.shift) && x.code === 'BracketLeft',
+  },
+  {
+    name: 'bringToFront',
+    line: 3613,
+    test: (x) => (x.mac ? x.cmd && x.alt : x.cmd && x.shift) && x.code === 'BracketRight',
+  },
+  { name: 'selectAll', line: 3672, test: (x) => x.cmd && x.k === 'a' },
+  { name: 'duplicateSelection', line: 3763, test: (x) => x.cmd && x.k === 'd' },
+  { name: 'decreaseFontSize', line: 8326, test: (x) => x.cmd && x.shift && (x.k === '<' || x.k === ',') },
+  { name: 'increaseFontSize', line: 8346, test: (x) => x.cmd && x.shift && (x.k === '>' || x.k === '.') },
+  {
+    name: 'zoomIn',
+    line: 9593,
+    test: (x) => (x.code === 'Equal' || x.code === 'NumpadAdd') && (x.cmd || x.shift),
+  },
+  {
+    name: 'zoomOut',
+    line: 9638,
+    test: (x) => (x.code === 'Minus' || x.code === 'NumpadSubtract') && (x.cmd || x.shift),
+  },
+  {
+    name: 'resetZoom',
+    line: 9686,
+    test: (x) => (x.code === 'Digit0' || x.code === 'Numpad0') && (x.cmd || x.shift),
+  },
+  {
+    name: 'zoomToFitSelectionInViewport',
+    line: 9728,
+    test: (x) => x.code === 'Digit2' && x.shift && !x.alt && !x.cmd,
+  },
+  { name: 'zoomToFitSelection', line: 9761, test: (x) => x.code === 'Digit3' && x.shift && !x.alt && !x.cmd },
+  { name: 'zoomToFit', line: 9789, test: (x) => x.code === 'Digit1' && x.shift && !x.alt && !x.cmd },
+  { name: 'toggleTheme', line: 9814, test: (x) => !x.cmd && x.alt && x.shift && x.code === 'KeyD' },
+  { name: 'finalize', line: 10482, test: (x) => x.k === 'Escape' || x.k === 'Enter' },
+  { name: 'deselect', line: 10600, test: (x) => x.k === 'Escape' },
+  { name: 'saveToActiveFile', line: 11606, test: (x) => x.k === 's' && x.cmd && !x.shift },
+  { name: 'saveFileToDisk', line: 11651, test: (x) => x.k.toLowerCase() === 's' && x.shift && x.cmd },
+  { name: 'loadScene', line: 11699, test: (x) => x.cmd && x.k === 'o' },
+  { name: 'copyStyles', line: 11797, test: (x) => x.cmd && x.alt && x.code === 'KeyC' },
+  { name: 'pasteStyles', line: 11912, test: (x) => x.cmd && x.alt && x.code === 'KeyV' },
+  { name: 'help', line: 11940, test: (x) => x.k === '?' },
+  { name: 'group', line: 12085, test: (x) => !x.shift && x.cmd && x.k === 'g' },
+  { name: 'ungroup', line: 12175, test: (x) => x.shift && x.cmd && x.k === 'G' },
+  { name: 'alignTop', line: 12661, test: (x) => x.cmd && x.shift && x.k === 'ArrowUp' },
+  { name: 'alignBottom', line: 12693, test: (x) => x.cmd && x.shift && x.k === 'ArrowDown' },
+  { name: 'alignLeft', line: 12725, test: (x) => x.cmd && x.shift && x.k === 'ArrowLeft' },
+  { name: 'alignRight', line: 12757, test: (x) => x.cmd && x.shift && x.k === 'ArrowRight' },
+  { name: 'distributeHorizontally', line: 12880, test: (x) => !x.cmd && x.alt && x.code === 'KeyH' },
+  { name: 'distributeVertically', line: 12910, test: (x) => !x.cmd && x.alt && x.code === 'KeyV' },
+  { name: 'flipHorizontal', line: 12958, test: (x) => x.shift && x.code === 'KeyH' },
+  { name: 'flipVertical', line: 12982, test: (x) => x.shift && x.code === 'KeyV' && !x.cmd },
+  { name: 'cut', line: 13153, test: (x) => x.cmd && x.k === 'x' },
+  { name: 'copyAsPng', line: 13267, test: (x) => x.code === 'KeyC' && x.alt && x.shift },
+  { name: 'gridMode', line: 13324, test: (x) => x.cmd && x.code === 'Quote' },
+  { name: 'zenMode', line: 13352, test: (x) => !x.cmd && x.alt && x.code === 'KeyZ' },
+  { name: 'objectsSnapMode', line: 13381, test: (x) => !x.cmd && x.alt && x.code === 'KeyS' },
+  { name: 'stats', line: 13450, test: (x) => !x.cmd && x.alt && x.code === 'Slash' },
+  { name: 'hyperlink', line: 14133, test: (x) => x.cmd && x.k === 'k' },
+  {
+    name: 'toggleElementLock',
+    line: 14251,
+    test: (x) => x.k.toLocaleLowerCase() === 'l' && x.cmd && x.shift,
+  },
+  { name: 'viewMode', line: 18556, test: (x) => !x.cmd && x.alt && x.code === 'KeyR' },
+  { name: 'searchMenu', line: 22406, test: (x) => x.cmd && x.k === 'f' },
+  { name: 'undo', line: 22832, test: (x) => x.cmd && x.z && !x.shift },
+  { name: 'redo', line: 22870, test: (x) => (x.cmd && x.shift && x.z) || (x.cmd && !x.shift && x.y) },
+]
+
+/** The transcribed keyTests, name and dist line (keymap.test.ts pins both against the pinned dist). */
+export const ENGINE_KEY_TEST_LINES: readonly { name: string; line: number }[] = ENGINE_KEY_TESTS.map(
+  ({ name, line }) => ({ name, line }),
+)
+
+/** Handlers of App.onKeyDown that run before the action manager and act on a Ctrl/Cmd chord. */
+function claimedBeforeActions(x: EngineKeyEvent): string | null {
+  if (x.cmd && x.k === 'p' && !x.shift && !x.alt) return 'commandPaletteToast' // 43983
+  if (x.k === '?') return 'helpDialog' // 44013, any modifiers
+  if (x.k.toLowerCase() === 'e' && x.shift && x.cmd) return 'imageExportDialog' // 44018
+  if (x.k === 'PageUp' || x.k === 'PageDown') return 'pageScroll' // 43041
+  if (ARROW_KEYS.has(x.k) && ((x.cmd && !x.shift) || x.alt)) return 'flowchart' // 28674-28710
+  return null
+}
+
+const DELEGATED_ACTIONS: ReadonlySet<string> = new Set<DelegatedAction>([
+  'duplicateSelection',
+  'group',
+  'ungroup',
+  'toggleElementLock',
+  'sendBackward',
+  'bringForward',
+  'sendToBack',
+  'bringToFront',
+  'zoomIn',
+  'zoomOut',
+])
+
+/** What Excalidraw's container keydown would do with a Ctrl/Cmd chord outside an input (null: nothing). */
+export function engineChordAction(e: KeyLike, mac: boolean): string | null {
+  const k = engineKeyOf(e)
+  const latin = /^[a-z]$/.test(k.toLowerCase())
+  const x: EngineKeyEvent = {
+    k,
+    code: e.code ?? '',
+    cmd: mac ? e.metaKey : e.ctrlKey,
+    shift: e.shiftKey,
+    alt: e.altKey,
+    mac,
+    z: k.toLowerCase() === 'z' || (!latin && e.code === 'KeyZ'),
+    y: k.toLowerCase() === 'y' || (!latin && e.code === 'KeyY'),
+  }
+  const pre = claimedBeforeActions(x)
+  if (pre) return pre
+  const matches = ENGINE_KEY_TESTS.filter((t) => t.test(x))
+  if (matches.length === 1) return matches[0]?.name ?? null
+  return matches.length > 1 ? 'ambiguous' : null
+}
+
+/**
+ * The delegated action a chord would run in Excalidraw, or null (blocked). Excalidraw's own decision
+ * (engineChordAction) with only this on top: the platform's Ctrl/Cmd held and not the other one (the
+ * other one is not CTRL_OR_CMD to Excalidraw, and on macOS Ctrl+G opens a popup), no AltGr (Windows
+ * reports AltGr as Ctrl+Alt; getModifierState('AltGraph') tells them apart) and no IME. Alt is not
+ * narrowed further: where Excalidraw's delegated keyTests ignore Alt, the same delegated action runs.
+ */
+export function delegatedChord(e: KeyLike, mac: boolean): DelegatedAction | null {
+  const cmd = mac ? e.metaKey : e.ctrlKey
+  const other = mac ? e.ctrlKey : e.metaKey
+  if (!cmd || other || e.altGraph || e.isComposing || e.keyCode === 229) return null
+  const action = engineChordAction(e, mac)
+  return action && DELEGATED_ACTIONS.has(action) ? (action as DelegatedAction) : null
 }
 
 /** One character (or a dead key) the browser types by default: AltGr and macOS Option characters. */
@@ -347,11 +563,11 @@ export function classifyKey(e: KeyLike, ctx: KeyContext): KeyVerdict {
 
   const mod = isMod(e)
 
+  const delegated = delegatedChord(e, ctx.mac === true)
+
   // 3. Read-only roles: canvas zoom keys only (Excalidraw's `interaction.navigation` handles them).
   if (ctx.role === 'readonly') {
-    if (mod && !e.altKey && codeIs(e, 'Equal', 'Minus', 'NumpadAdd', 'NumpadSubtract')) {
-      return { kind: 'delegate' }
-    }
+    if (delegated === 'zoomIn' || delegated === 'zoomOut') return { kind: 'delegate' }
     if (!mod && !e.altKey && !e.shiftKey) {
       if (letterIs(e, 'v')) return { kind: 'lobby', action: 'tool:select' }
       if (letterIs(e, 'h')) return { kind: 'lobby', action: 'tool:hand' }
@@ -365,16 +581,9 @@ export function classifyKey(e: KeyLike, ctx: KeyContext): KeyVerdict {
   if (ARROWS.has(e.key)) return !mod && !e.altKey ? { kind: 'delegate' } : block(e)
   if ((e.key === 'Delete' || e.key === 'Backspace') && !mod && !e.altKey) return { kind: 'delegate' }
   if (e.key === ' ' && !mod && !e.altKey && !e.shiftKey) return { kind: 'delegate' }
-  if (mod && !e.altKey && codeIs(e, 'Equal', 'Minus', 'NumpadAdd', 'NumpadSubtract')) {
-    return { kind: 'delegate' }
-  }
-  if (mod && !e.altKey && !e.shiftKey && letterIs(e, 'd')) return { kind: 'delegate' }
-  if (mod && !e.altKey && letterIs(e, 'g')) return { kind: 'delegate' }
-  if (mod && !e.altKey && e.shiftKey && letterIs(e, 'l')) return { kind: 'delegate' }
-  // z-order: Ctrl+[ ] and Ctrl+Shift+[ ] (Excalidraw uses Cmd+Alt+[ ] for the latter on macOS).
-  if (mod && codeIs(e, 'BracketLeft', 'BracketRight') && !(e.altKey && e.shiftKey)) {
-    return { kind: 'delegate' }
-  }
+  // Ctrl+D, Ctrl+G, Ctrl+Shift+G, Ctrl+Shift+L, Ctrl+[ ], Ctrl+Shift+[ ] (Cmd+Option+[ ] on macOS),
+  // Ctrl+= / Ctrl+-: only when Excalidraw would run exactly that action for this event (see above).
+  if (delegated) return { kind: 'delegate' }
 
   if (mod && !e.altKey && !e.shiftKey && letterIs(e, 'z')) return { kind: 'lobby', action: 'undo' }
   if (mod && !e.altKey && e.shiftKey && letterIs(e, 'z')) return { kind: 'lobby', action: 'redo' }

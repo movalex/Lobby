@@ -1,6 +1,19 @@
 // The client side of the text lease (docs/EXCALIDRAW-MIGRATION.md §2.9.2). Transport-agnostic: the spike
 // connects it to ./fakeServer.ts; spike B connects it to the real socket. A lease is held per session
-// (tab). One acquire per id at a time: a second request for an id already pending shares its answer.
+// (tab). One live acquire per id at a time: a second request for an id already pending shares its answer.
+//
+// Corrected after the second verifier:
+//  - A re-acquire after a cancel is a NEW request (new req id, new promise). It used to reuse the
+//    cancelled entry, whose promise cancel() had already resolved, so the new session never got an answer
+//    and Lobby stayed 'pending' with the lease held and no editor. The cancelled request's answer is then
+//    stale: ignored while a newer request for the id is out (the server answers in order, so the newer
+//    answer follows and decides), released at once when none is.
+//  - "Created here" is one-shot: `markCreated` records an element this session just created, and the
+//    FIRST open takes it (`takeCreated`). It is refused when another session is known to hold the lease
+//    (open item 7: the New element rule never overrides a live lease), it expires, and it never skips the
+//    acquire (EditorLease still sends one in parallel).
+//  - A lease lost to another session (a holder broadcast naming someone else, or clearing it while this
+//    session held it) emits 'lost', so the open editor can go read-only at once (§2.9.3).
 
 import type { LeaseTransport } from './fakeServer.ts'
 import {
@@ -29,35 +42,47 @@ export type LeaseEvent =
   | { kind: 'deny'; id: string; req: number; holder: LeaseHolder }
   | { kind: 'release'; id: string }
   | { kind: 'holder'; id: string; holder: LeaseHolder | null }
+  /** This session held `id` and the server now names someone else (or nobody): §2.9.3. */
+  | { kind: 'lost'; id: string; holder: LeaseHolder | null }
+  /** An answer for a request that is no longer live (cancelled, or superseded by a newer one). */
+  | { kind: 'stale'; id: string; req: number; answer: 'grant' | 'deny'; action: 'ignored' | 'released' }
+
+/** How long "created here" lasts without an open (ms): the New element rule is for a JUST-created element. */
+export const CREATED_HERE_TTL_MS = 5_000
 
 export class LeaseClient {
   private readonly transport: LeaseTransport
   private nextReq = 1
   private readonly pending = new Map<string, Pending>()
+  /** Every request not answered yet, live or cancelled: req -> id. */
   private readonly byReq = new Map<number, string>()
   private readonly held = new Set<string>()
   private readonly holders = new Map<string, LeaseHolder>()
-  private readonly createdHere = new Set<string>()
+  /** Elements this session just created and has not opened yet: id -> when. */
+  private readonly createdHere = new Map<string, number>()
   private readonly listeners = new Set<(event: LeaseEvent) => void>()
+  private readonly now: () => number
 
   readonly me: LeaseHolder
 
   constructor(
     connect: (onMessage: (message: LeaseServerMessage) => void) => LeaseTransport,
     me: LeaseHolder,
+    opts: { now?: () => number } = {},
   ) {
     this.me = me
+    this.now = opts.now ?? (() => Date.now())
     this.transport = connect((message) => this.receive(message))
   }
 
-  /** Asks for the lease on `id`. Already held: resolves granted at once, with no message. */
+  /**
+   * Asks for the lease on `id`. Already held: resolves granted at once, with no message. A live request
+   * for `id` shares its answer; a cancelled one is replaced by a new request (fresh req id and promise).
+   */
   acquire(id: string): Promise<LeaseOutcome> {
     if (this.held.has(id)) return Promise.resolve({ granted: true, id, ttlMs: 0 })
     const existing = this.pending.get(id)
-    if (existing) {
-      existing.cancelled = false
-      return existing.promise
-    }
+    if (existing && !existing.cancelled) return existing.promise
     const req = this.nextReq++
     let resolve: (outcome: LeaseOutcome) => void = () => {}
     const promise = new Promise<LeaseOutcome>((r) => {
@@ -84,7 +109,7 @@ export class LeaseClient {
       this.cancel(id)
       return
     }
-    if (!this.held.delete(id)) return
+    if (!this.held.delete(id)) return // not held (never granted, or lost): nothing to give back
     this.emit({ kind: 'release', id })
     this.send({ type: 'lease.release', id })
   }
@@ -93,9 +118,15 @@ export class LeaseClient {
     return this.held.has(id)
   }
 
+  /** A live (not cancelled) request for `id` is out. */
   isPending(id: string): boolean {
     const p = this.pending.get(id)
     return !!p && !p.cancelled
+  }
+
+  /** The ids with a live request out (the monitor's "exactly one live request" invariant). */
+  livePending(): string[] {
+    return [...this.pending].filter(([, p]) => !p.cancelled).map(([id]) => id)
   }
 
   /** The holder from the server's broadcasts (null: nobody, as far as this client knows). */
@@ -103,13 +134,38 @@ export class LeaseClient {
     return this.holders.get(id) ?? null
   }
 
-  /** "New element" rule (§2.9.2): an element this session just created; its grant is certain. */
-  markCreated(id: string): void {
-    this.createdHere.add(id)
+  /** Another session holds `id`, as far as this client knows. */
+  heldByOther(id: string): LeaseHolder | null {
+    const h = this.holders.get(id)
+    return h && h.sid !== this.me.sid ? h : null
   }
 
+  /** "New element" rule (§2.9.2): an element this session just created. One-shot; see `takeCreated`. */
+  markCreated(id: string): void {
+    this.createdHere.set(id, this.now())
+  }
+
+  /** Created here, not opened yet, not expired, and not known to be held by another session. */
   isCreatedHere(id: string): boolean {
-    return this.createdHere.has(id)
+    const at = this.createdHere.get(id)
+    if (at === undefined) return false
+    if (this.now() - at > CREATED_HERE_TTL_MS || this.heldByOther(id)) {
+      this.createdHere.delete(id)
+      return false
+    }
+    return true
+  }
+
+  /** The first open of a just-created element takes the flag: true once, then never again. */
+  takeCreated(id: string): boolean {
+    const fresh = this.isCreatedHere(id)
+    this.createdHere.delete(id)
+    return fresh
+  }
+
+  /** Any open of `id` ends its "created here" (the rule covers the first open only). */
+  forgetCreated(id: string): void {
+    this.createdHere.delete(id)
   }
 
   on(listener: (event: LeaseEvent) => void): () => void {
@@ -126,20 +182,30 @@ export class LeaseClient {
     if (message.type === 'lease') {
       if (message.holder) this.holders.set(message.id, message.holder)
       else this.holders.delete(message.id)
-      if (message.holder && message.holder.sid !== this.me.sid) this.held.delete(message.id)
+      const mine = message.holder?.sid === this.me.sid
+      const lost = !mine && this.held.delete(message.id)
       this.emit({ kind: 'holder', id: message.id, holder: message.holder })
+      if (lost) this.emit({ kind: 'lost', id: message.id, holder: message.holder })
       return
     }
     const id = this.byReq.get(message.req)
     this.byReq.delete(message.req)
-    if (id === undefined || id !== message.id) return // not ours, or stale
+    if (id === undefined || id !== message.id) return // not ours
     const p = this.pending.get(id)
-    if (!p || p.req !== message.req) return
+    const answer = message.type === 'lease.grant' ? 'grant' : 'deny'
+    if (!p || p.req !== message.req) {
+      // A cancelled request superseded by a newer one for the same id. The server answers in request
+      // order, so the newer answer is still to come and decides; releasing now would drop the lease the
+      // newer request is about to be granted.
+      this.emit({ kind: 'stale', id, req: message.req, answer, action: 'ignored' })
+      return
+    }
     this.pending.delete(id)
     if (message.type === 'lease.grant') {
       this.held.add(id)
       this.emit({ kind: 'grant', id, req: message.req })
       if (p.cancelled) {
+        this.emit({ kind: 'stale', id, req: message.req, answer, action: 'released' })
         this.release(id) // Escape came first: give it straight back
         return
       }

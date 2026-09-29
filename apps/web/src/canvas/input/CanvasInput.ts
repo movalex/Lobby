@@ -21,6 +21,10 @@
 //    one: prevented, so text that arrives without a keydown (an IME commit, dictation, the emoji panel,
 //    a soft keyboard's keyCode 229, Excalidraw's own clipboard paste, a drop) never lands in it. The
 //    textarea is also read-only from the task it appeared in (EditorLease.watch).
+//  - blur (capture) and Escape on an editor that must not be submitted (its lease lost, its label deleted
+//    or replaced remotely): Excalidraw's handleSubmit never runs; EditorLease closes it without a write.
+//  - keys outside the text editor: delegated only when Excalidraw would run exactly the delegated action
+//    for that very event, decided by its own key tests (keymap.ts delegatedChord), not by physical code.
 //
 // Events Lobby dispatches itself (the synthetic Enter / Escape) are in `synthetic` and pass untouched.
 
@@ -28,7 +32,7 @@ import { viewportCoordsToSceneCoords } from '@excalidraw/excalidraw'
 import type { ExcalidrawElement } from '@excalidraw/excalidraw/element/types'
 import type { ExcalidrawImperativeAPI } from '@excalidraw/excalidraw/types'
 import type { LeaseClient } from '../lease/client.ts'
-import { EditorLease, type EditTrace } from '../lease/editorLease.ts'
+import { type EditNotice, EditorLease, type EditState, type EditTrace } from '../lease/editorLease.ts'
 import { bufferedKeyOf } from '../lease/replay.ts'
 import { classifyDoubleClick, type DblClickElement } from './dblclick.ts'
 import { DoubleTapMirror } from './doubleTap.ts'
@@ -60,6 +64,10 @@ export interface CanvasInputOptions {
   /** A double-click / double-tap on empty canvas (editors): Lobby creates a text there. */
   onEmptyDoubleClick?: (scene: { x: number; y: number }) => void
   onDeny?: (leaseId: string, holderName: string) => void
+  /** Notices for the user: a deny, a cancelled open, unsaved text ("Copy my text"), a lost lease. */
+  onNotice?: (notice: EditNotice) => void
+  /** The editor session's state (the pending affordance and the lost-lease banner). */
+  onEditState?: (state: EditState) => void
   trace?: (t: InputTrace | EditTrace) => void
   /** Spike control runs only: 'off' lets every key reach Excalidraw (shows what the allowlist stops). */
   allowlist?: 'on' | 'off'
@@ -145,6 +153,8 @@ export class CanvasInput {
       lease: this.opts.lease,
       synthetic: this.synthetic,
       onDeny: this.opts.onDeny,
+      onNotice: (n) => this.opts.onNotice?.(n),
+      onState: (s) => this.opts.onEditState?.(s),
       trace: (t) => this.opts.trace?.(t),
     })
     this.editor = editor
@@ -164,8 +174,9 @@ export class CanvasInput {
     wrapper.addEventListener('beforeinput', this.onBeforeInput, capture)
     wrapper.addEventListener('input', this.onInput, capture)
     wrapper.addEventListener('compositionstart', this.onComposition, capture)
+    wrapper.addEventListener('blur', this.onBlur, capture)
     const unsubscribe = api.onChange((_elements, appState) => {
-      this.editor?.onEngineChange(appState.editingTextElement)
+      this.editor?.onEngineChange(appState.editingTextElement, 'onChange', appState.selectedElementIds)
     })
     return () => {
       unsubscribe()
@@ -183,6 +194,7 @@ export class CanvasInput {
       wrapper.removeEventListener('beforeinput', this.onBeforeInput, capture)
       wrapper.removeEventListener('input', this.onInput, capture)
       wrapper.removeEventListener('compositionstart', this.onComposition, capture)
+      wrapper.removeEventListener('blur', this.onBlur, capture)
       this.editor = null
       this.api = null
     }
@@ -271,6 +283,16 @@ export class CanvasInput {
     // The editor-open rule runs before the key acts, whatever the session's phase (a key can reach an
     // editor Excalidraw opened before its onChange ran).
     if (textEditor && editor) editor.checkTextarea(textEditor, 'keydown')
+    // An editor that must not be submitted (its lease lost, its label deleted or replaced): every key is
+    // blocked (keyStateFor: 'foreign'), and Escape leaves it without Excalidraw's submit.
+    if (textEditor && editor?.mustNotSubmit(textEditor) && e.key === 'Escape') {
+      e.stopPropagation()
+      e.preventDefault()
+      if (e.code) this.blockedKeyups.add(e.code)
+      this.trace('key', { key: e.key, code: e.code, verdict: 'leave-without-submit', inTextEditor: true })
+      editor.leaveWithoutSubmit(textEditor, 'escape')
+      return
+    }
     const verdict = classifyKey(keyLikeOf(e), this.keyContext(textEditor))
     this.trace('key', { key: e.key, code: e.code, verdict: verdictName(verdict), inTextEditor: !!textEditor })
     if (verdict.kind === 'delegate') return
@@ -496,6 +518,19 @@ export class CanvasInput {
     this.trace('input-leak', { inputType: (e as InputEvent).inputType ?? '', value: e.target.value })
     this.editor?.revert(e.target)
     this.editor?.checkTextarea(e.target, 'input')
+  }
+
+  /**
+   * Leaving an editor that must not be submitted (its lease lost, its label deleted or replaced): its
+   * blur would run Excalidraw's `editable.onblur = handleSubmit` (index.js:25545-25561), which writes the
+   * textarea into the label. blur does not bubble, but its capture phase passes the wrapper first, so the
+   * target's handler never runs; Lobby closes the editor without the submit instead.
+   */
+  private readonly onBlur = (e: FocusEvent): void => {
+    if (!this.isTextEditor(e.target) || !this.editor?.mustNotSubmit(e.target)) return
+    e.stopImmediatePropagation()
+    this.trace('blur-without-submit', {})
+    this.editor.leaveWithoutSubmit(e.target, 'blur')
   }
 
   /** A composition cannot be cancelled; the textarea is read-only, so the IME has nothing to type into. */
