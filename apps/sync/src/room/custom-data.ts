@@ -1,0 +1,187 @@
+// The server rules of the five customData classes (docs/EXCALIDRAW-MIGRATION.md §3.3, §2.4.3 step 7).
+// The key registry (class, value schema, size) is canvas-schema's custom-data.ts; this file decides who
+// may write a key, and when:
+//  1. server-owned `customData.lobbyServer`: only the server writes it; a client value is replaced
+//     (built fresh on a create; `privateNote` only through place-notes, never from a socket);
+//  2. create-only `kind`, `ai`, `privateFrame`: only in the op that creates the element; `by` must be the
+//     writer's uid; a later change is INVALID; removal only by the `by` user (for `kind`, the creator) or
+//     an owner;
+//  3. identity-bound `plusOne:<uid>`: only where `<uid>` is the writer; an addition while a dot vote is
+//     open is VOTE_OPEN (UNAVAILABLE while the vote state is still unknown);
+//  4. api-validated `file` (canonicalized from the file-refs answer; `versionId` must be the version in
+//     `fileId`; `name` is the client's) and `pdfPage` (derived from `fileId`'s `.p<n>`);
+//  5. free keys (`tag:*` needs its `tagDef:*` in lb_doc; the others are schema-checked only).
+
+import {
+  type Attribution,
+  type FileValue,
+  type LobbyServer,
+  lobbyKeySpec,
+  plusOneUid,
+  tagKeyOf,
+} from '@draftroom/canvas-schema/custom-data'
+import { TAG_DEF_KEY_PREFIX } from '@draftroom/canvas-schema/doc'
+import { pdfPageOf, versionIdOf } from '@draftroom/canvas-schema/limits'
+import type { RejectCode } from '@draftroom/canvas-schema/protocol'
+import type { FileRefAnswer } from '../file-refs.ts'
+
+export interface Writer {
+  readonly uid: string
+  readonly name: string
+  readonly guest: boolean
+  readonly role: 'owner' | 'editor' | 'commenter' | 'viewer'
+}
+
+export interface CustomDataContext {
+  readonly writer: Writer
+  /** the vote state: open, closed, or not known yet (the pull has not answered) */
+  readonly voteOpen: boolean | null
+  /** a `tagDef:<key>` exists in lb_doc (or in this push's doc writes) */
+  readonly tagExists: (tagKey: string) => boolean
+  /** the cached file-refs answer for a bare version id (undefined: the lookup failed or never ran) */
+  readonly fileRef: (versionId: string) => FileRefAnswer | undefined
+}
+
+export type Verdict<T> =
+  | { readonly ok: true; readonly value: T }
+  | { readonly ok: false; readonly code: RejectCode }
+
+const bad = (code: RejectCode): { ok: false; code: RejectCode } => ({ ok: false, code })
+
+/** The attribution of the writer (from the ticket, never from the client). */
+export const attributionOf = (w: Writer): Attribution => ({ uid: w.uid, name: w.name, guest: w.guest })
+
+/** A fresh `lobbyServer` for an element this writer creates (a copy never inherits `privateNote`). */
+export function freshLobbyServer(w: Writer, now: number, text: boolean): LobbyServer {
+  return {
+    createdBy: attributionOf(w),
+    createdAt: now,
+    lastEditedBy: text ? attributionOf(w) : null,
+    lastEditedAt: now,
+  }
+}
+
+const equal = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)
+
+/** One key of a write: create (`isCreate`) or patch; `value` null removes. Returns the value to store. */
+function checkKey(
+  key: string,
+  value: unknown,
+  stored: Readonly<Record<string, unknown>>,
+  isCreate: boolean,
+  creatorUid: string | null,
+  ctx: CustomDataContext,
+): Verdict<unknown> {
+  const spec = lobbyKeySpec(key)
+  if (!spec) return bad('INVALID')
+  const w = ctx.writer
+  switch (spec.class) {
+    case 'create-only': {
+      if (value === null) {
+        if (!(key in stored)) return { ok: true, value: null }
+        const by = (stored[key] as { by?: string } | undefined)?.by ?? creatorUid
+        return by === w.uid || w.role === 'owner' ? { ok: true, value: null } : bad('INVALID')
+      }
+      if (!isCreate) return equal(stored[key], value) ? { ok: true, value } : bad('INVALID')
+      const by = (value as { by?: unknown }).by
+      if (key !== 'kind' && by !== w.uid) return bad('INVALID')
+      return { ok: true, value }
+    }
+    case 'identity-bound': {
+      if (plusOneUid(key) !== w.uid) return bad('INVALID')
+      if (value === null) return { ok: true, value: null }
+      if (key in stored) return { ok: true, value } // already there: not an addition
+      if (ctx.voteOpen === null) return bad('UNAVAILABLE')
+      if (ctx.voteOpen) return bad('VOTE_OPEN')
+      return { ok: true, value }
+    }
+    case 'api-validated': {
+      if (key === 'pdfPage') return { ok: true, value } // canonicalized from fileId (canonicalizeFile)
+      if (value === null) return { ok: true, value: null }
+      const v = value as FileValue
+      const ans = ctx.fileRef(v.versionId)
+      if (!ans) return bad('UNAVAILABLE')
+      if (ans.status !== 'ok') return bad('INVALID')
+      const ref = ans.ref
+      return {
+        ok: true,
+        value: {
+          assetId: ref.assetId,
+          versionId: ref.versionId,
+          kind: ref.kind,
+          name: v.name,
+          mimeType: ref.mimeType,
+          sizeBytes: ref.sizeBytes,
+        },
+      }
+    }
+    default: {
+      if (value === null) return { ok: true, value: null }
+      const tag = tagKeyOf(key)
+      if (tag !== null && !ctx.tagExists(tag)) return bad('INVALID')
+      return { ok: true, value }
+    }
+  }
+}
+
+/** A create's `customData.lobby`: every key checked as written at creation. */
+export function checkCreateLobby(
+  lobby: Readonly<Record<string, unknown>> | undefined,
+  ctx: CustomDataContext,
+  undeleteOf: Readonly<Record<string, unknown>> | null,
+): Verdict<Record<string, unknown>> {
+  const out: Record<string, unknown> = {}
+  for (const [k, v] of Object.entries(lobby ?? {})) {
+    // an undelete keeps the keys the tombstone already had, whoever wrote them
+    if (undeleteOf && equal(undeleteOf[k], v)) {
+      out[k] = v
+      continue
+    }
+    const r = checkKey(k, v, {}, true, ctx.writer.uid, ctx)
+    if (!r.ok) return r
+    if (r.value !== null) out[k] = r.value
+  }
+  return { ok: true, value: out }
+}
+
+/** A patch's `c`: each key by its class. Returns the keys to apply (null removes). */
+export function checkPatchLobby(
+  c: Readonly<Record<string, unknown>>,
+  stored: Readonly<Record<string, unknown>>,
+  creatorUid: string | null,
+  ctx: CustomDataContext,
+): Verdict<Record<string, unknown>> {
+  const out: Record<string, unknown> = {}
+  for (const [k, v] of Object.entries(c)) {
+    const r = checkKey(k, v, stored, false, creatorUid, ctx)
+    if (!r.ok) return r
+    out[k] = r.value
+  }
+  return { ok: true, value: out }
+}
+
+/**
+ * The api-validated keys of an image after a write: `file.versionId` must be the version of `fileId`,
+ * and `pdfPage` is derived from `fileId`'s `.p<n>` (removed when there is none). Keys on other types are
+ * INVALID. Returns the corrected lobby (or the verdict).
+ */
+export function canonicalizeFile(
+  type: string,
+  fileId: string | undefined,
+  lobby: Readonly<Record<string, unknown>>,
+): Verdict<Record<string, unknown>> {
+  const out = { ...lobby }
+  if (type !== 'image') {
+    if ('file' in out || 'pdfPage' in out) return bad('INVALID')
+    return { ok: true, value: out }
+  }
+  const page = fileId ? pdfPageOf(fileId) : null
+  if (page === null) delete out.pdfPage
+  else out.pdfPage = page
+  const file = out.file as FileValue | undefined
+  if (file && (!fileId || versionIdOf(fileId) !== file.versionId)) return bad('INVALID')
+  return { ok: true, value: out }
+}
+
+/** Whether a `tag:<key>` may be written: its definition exists in lb_doc. */
+export const tagDefKey = (tagKey: string) => `${TAG_DEF_KEY_PREFIX}${tagKey}`
