@@ -49,12 +49,11 @@ import {
   type SnapshotRow,
   toCheckpoint,
 } from './snapshot-rows.ts'
+import { snapshotBodies, snapshotStorageKey } from './snapshot-store.ts'
+import { createDeletedApi } from './sync-deleted.ts'
 
 /** Bridge release R0: the error code of an import of an archive exported from the new canvas. */
 const NEW_CANVAS_ARCHIVE_ERROR = 'NEW_CANVAS_ARCHIVE'
-
-import { snapshotBodies, snapshotStorageKey } from './snapshot-store.ts'
-import { createDeletedApi } from './sync-deleted.ts'
 
 /** Manual checkpoints kept per board (automatic ones are bounded by retention instead). */
 export const MAX_SNAPSHOTS_PER_BOARD = MAX_MANUAL_CHECKPOINTS

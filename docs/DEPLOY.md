@@ -558,11 +558,66 @@ Tests: `apps/sync/test/backup/` (fs driver: upload, manifest, index, retention, 
 
 The windows differ: Postgres goes back 3 days to any minute; board backups go back 14 days, one per day beyond the newest 12. To restore everything to a time T within the last 3 days: recover Postgres to T, then restore each board from its newest offsite backup at or before T (`--file`). Files deleted from R2 after T are gone. The backup manifests list what each board needs, so a missing file can be found, not recovered. This has **not been rehearsed** on staging.
 
+## Bridge release R0 (the last tldraw build)
+
+Lobby's canvas moves from tldraw to Excalidraw. The plan is `docs/EXCALIDRAW-MIGRATION.md` on the `excalidraw` branch: §5.9 (rollback and roll-forward), §5.10 (this release), §7.5 (the cut-over order). **R0 is the last tldraw release.** It ships before the cut-over, so that a rollback lands on a build that understands what the new canvas leaves behind (checkpoints, boards and board files made on Excalidraw) and says so, instead of failing or damaging them.
+
+- **Additive.** No setting, no environment variable and no behaviour of a tldraw board changes. Everything R0 adds is either new (routes, messages, a migration that only adds a reason and two columns with defaults) or only takes effect on data that only the Excalidraw build writes.
+- **At least 3 days before the cut-over.** R0 must be live on staging (api, sync and web) at least 3 days before the cut-over starts (§7.5 step 0), so that it has run on the real boards and is the build a rollback returns to.
+- **Owner OK.** Like every staging deploy, R0 is deployed only with the owner's OK.
+
+### What it adds
+
+| Part | Addition |
+|---|---|
+| api: migration `0022_engine_migration` | The checkpoint reason `engine_migration` (the restore point the Excalidraw build saves right after converting a board). `board_snapshots.body_version` (`smallint`, default 1: the tldraw body; 2: a body made on the new canvas). `boards.new_canvas` (`boolean`, default false; true for a board born on the new canvas). Existing rows keep their meaning and R0's own inserts do not change. **The Excalidraw build writes `body_version = 2` on every checkpoint it saves and `new_canvas = true` on every board it creates** (new, duplicate, restore as new, import, template); converted boards keep false. |
+| api: checkpoints | A v2 checkpoint is listed with `newCanvas: true` and the line "Made on the new canvas — preview and restore after the switch". Preview and restore as new answer 409 `NEW_CANVAS` with that message, before anything is read or saved. A stored body that is not the tldraw one (`draftroom-checkpoint` v1) is refused the same way even when its row says v1, so it can never be restored as an empty board. Retention keeps `engine_migration` checkpoints like the other safety checkpoints. |
+| api: boards born on the new canvas | Board answers carry `newCanvas: true` (the dashboard shows a "New canvas" badge). Duplicate, export and "Save checkpoint" answer 409 `NEW_CANVAS`: "This board was made on the new canvas. It opens again after the switch." Automatic checkpoints skip such a board and keep it pending (retried hourly) for the new build. The sync server's own 409 `new-canvas` gives the same answers for a board whose row is not marked. |
+| api: import | A `.lobby.json` exported from the new canvas (`format: "lobby-board"`) answers 400 `NEW_CANVAS_ARCHIVE`: "This file was exported from the new canvas. It can be imported after the switch." |
+| api: A1 and A2 | `GET /internal/boards/:bid/file-refs?ids=ver_…` (at most 100 ids) and `GET /internal/boards/:bid/workshop-state`, behind the internal secret, contract `packages/contracts/src/sync-internal.ts` (reviewed from the spike). The tldraw sync never calls them; the Excalidraw sync does, also while a roll-forward runs against R0's api. Errors: 401 `bad-secret`, 400 `bad-request`, 404 `board-not-found`, 503 `unavailable`; sync fails closed on anything but 200. The api's push of the vote state to sync (a POST to sync) and the ticket's guest claim (A3) ship with the Excalidraw build. |
+| sync: boards born on the new canvas | Before any room opens (`RoomRegistry.open`, `apps/sync/src/r0/`), the board file is read with one read-only connection. A file with `lb_*` tables is refused unless `lb_meta` has a `converted_from` row and the tldraw `documents` and `metadata` tables exist. A refused board's socket closes with 4099 `NEW_CANVAS_BOARD` (the web: "This board was made on the new canvas. It opens again after the switch."), every internal board route (snapshot, text, asset-refs, deleted, restore, seed, place-notes) answers 409 `new-canvas`, no tldraw table is ever created in the file, and the file stays byte-identical. |
+| sync: converted boards | Served from their tldraw tables as today. R0 never writes, trims or alters any `lb_*` table (`lb_meta`, `lb_elements`, `lb_doc`, `lb_deleted`, `lb_source`, `lb_prev_*`), and keeps managing its own `dr_deleted_*`. Gate: `apps/sync/test/r0/lb-identity.test.ts` (every lb_* table's schema and row digest, the lb_* indexes and counters, before and after R0 served, backed up, trimmed, crashed and restarted). |
+| sync: maintenance mode | `POST /internal/maintenance {"on": true}`: the pushes that already reached the server commit, every socket closes with 4099 `MAINTENANCE` (the web: "Lobby is updating"), new sockets are refused the same way before any room is touched, internal reads keep working, and the internal routes that write a board (seed, deleted/restore, place-notes) answer 503 `MAINTENANCE`. `{"on": false}` ends it; `GET /internal/maintenance` shows it. **A runtime switch only: a restart or a redeploy starts with it off** (the Excalidraw build boots in maintenance from an env flag, open item 11). |
+| sync: `POST /internal/backups/run-all` | A fresh local and offsite backup of every board file, open or not, changed or not, one board at a time (a second call while one runs gets the same answer). Answers `{ok, offsite, startedAt, finishedAt, boards: [{boardId, ok, file, format?, documentClock, recordCount, recordsSha256, sha256, sizeBytes, offsiteKey, error?}]}`. Boards that are not open are copied through a read-only connection: no room opens and no file is written. `ok` needs every local backup and, unless offsite backups are off, every offsite copy. |
+| sync: files with only `lb_*` tables (open item 9) | Backups copy them whole (`format: "lobby-elements"` in the local and the signed offsite manifest entry; `documentClock` = `lb_meta.clock`, `recordCount` = `lb_elements` rows, `recordsSha256` = the digest of every lb_* table from `apps/sync/src/r0/lb-files.ts`, no asset list). The restore drill checks what it can (file size and sha256, signatures, integrity, the lb_* digest and clock, and the live board) and never opens a room on it. A staged restore refuses such a backup ("restore it after the switch, by the new build") and never replaces a live board made on the new canvas. Gate: `apps/sync/test/r0/backup-lb-only.test.ts`. |
+| web | The two sync messages above, the "New canvas" dashboard badge, the v2 checkpoint line (that row has no Preview or Restore), and the `engine_migration` label "Moved to the new canvas". Nothing else. |
+
+### Deploying R0
+
+The usual order: api (migration 0022 runs at start), then sync, then the web. No environment variable changes.
+
+### Checking it after the deploy
+
+1. **api.** `/healthz` is 200 and the log shows no error; `schema_migrations` lists `0022_engine_migration`. Existing checkpoints list as before (no `newCanvas` field), and duplicating and exporting a board work as before.
+2. **sync.** From the sync service's Shell, maintenance must be off:
+
+   ```sh
+   node -e "fetch('http://127.0.0.1:'+(process.env.PORT||10000)+'/internal/maintenance',{headers:{'x-draftroom-internal':process.env.DRAFTROOM_INTERNAL_SECRET}}).then(r=>r.text()).then(console.log)"
+   ```
+
+   prints `{"maintenance":false}`. Do **not** switch it on outside the cut-over window: it closes every board for everyone.
+3. **run-all (optional, at a quiet time).** It writes one extra backup of every board (local retention keeps the newest 12):
+
+   ```sh
+   node -e "fetch('http://127.0.0.1:'+(process.env.PORT||10000)+'/internal/backups/run-all',{method:'POST',headers:{'x-draftroom-internal':process.env.DRAFTROOM_INTERNAL_SECRET}}).then(r=>r.text()).then(console.log)"
+   ```
+
+   It must print `"ok":true`, `"offsite":"r2"`, one row per board and an `offsiteKey` on each.
+4. **A2 on the api (optional).** In the same Shell, with a board id: `node -e "fetch(process.env.DRAFTROOM_API_INTERNAL_URL.replace(/^(?!https?:)/,'http://')+'/internal/boards/<board id>/workshop-state',{headers:{'x-draftroom-internal':process.env.DRAFTROOM_INTERNAL_SECRET}}).then(r=>r.text()).then(console.log)"` prints `{"voteOpen":false,"anonymous":false}` for a board without an open vote.
+5. **web.** Open a board and edit it with two people as usual; the History panel lists checkpoints as before.
+
+### R0 at the cut-over and in a rollback
+
+- **Cut-over** (§7.5): step 3 is `POST /internal/maintenance {"on": true}` on R0; step 4 is `POST /internal/backups/run-all`, and the runbook stores every board's `offsiteKey` and `recordsSha256` (the conversion checks `lb_source` against it). Then the new api, the new sync (booting in maintenance) and the web.
+- **Rollback to R0** (§5.9 step 2): deploy R0's api, sync and web. If the Excalidraw build has added migrations after 0022, R0's api needs `DRAFTROOM_ALLOW_NEWER_SCHEMA=1` ([Rolling the api back past a migration](#rolling-the-api-back-past-a-migration)); check first that they are additive for R0. R0 serves converted boards from their tldraw tables and leaves every lb_* table alone, refuses boards born on the new canvas, and backs their files up whole. Edits made on the new canvas are hidden during the rollback, not lost.
+- **Roll-forward**: the Excalidraw build merges what R0's users changed (§5.9 step 3). It must read R0's `format: "lobby-elements"` backup entries, and mirror R0's "Recently deleted" restores and trims into `lb_deleted` (open item 10).
+
 ## Rollback
 
 - **How.** Dashboard → service → Deploys → *Rollback*. Render reuses the earlier build artifact (no rebuild) and that deploy's environment variables. Disks, plan and static-site settings are *not* rolled back. A Dashboard rollback also disables autodeploy, which is already off.
 - **Database.** Migrations are forward-only (never edit a shipped one). Rolling the api back past a migration is safe only if the older code tolerates the newer schema. Otherwise, fix forward. By default an older api build **refuses to start** once the database has recorded a migration it doesn't know (`database has migration …, which this build does not know`). To roll back anyway, follow [Rolling the api back past a migration](#rolling-the-api-back-past-a-migration).
 - **api past domain access (migration 0021).** Possible, with the extra steps in [Rolling domain access back](#rolling-domain-access-back): close the email-locked links first, and mark the personal workspaces before the newer build returns.
+- **The Excalidraw canvas back to tldraw.** Only to the bridge release R0, never to an older build: [R0 at the cut-over and in a rollback](#r0-at-the-cut-over-and-in-a-rollback).
 - **api past milestone 3: don't.** A milestone-1/2 api build reads files from `meta.json` on a local disk that no longer exists. It would never see R2 objects or `asset_versions` rows, and it expects its co-located worker. Fix forward instead.
 - **Workers.** Roll a worker back only to a build that speaks the api's current worker protocol. The simplest way to stop previews is to stop the workers: jobs wait in Postgres.
 - **Canvas schema.** Don't roll sync back below a canvas-schema migration. Boards already migrated on disk can't be loaded by the older server (`Incompatible schema?`), and newer clients are refused (`SERVER_TOO_OLD`). Rolling back the web client is safe while every shape migration keeps its `down`: an older client is served down-migrated records. Roll back sync only when its schema didn't change.
