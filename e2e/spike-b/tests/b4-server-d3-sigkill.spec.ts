@@ -1,18 +1,25 @@
 // B4 D3 (docs/EXCALIDRAW-MIGRATION.md §8.3): 3 SIGKILLs of sync during 64-push group commits. Pass: 0
 // acked-but-missing: every op the server acked is in the test snapshot after the restart. Owner: O1.
 //
-// The pushes come from a socket opened inside a signed-in page with its own ticket (the stream is the
-// protocol's, not the page's client); the browser only provides the ticket. The protocol twin of this
-// check is apps/sync/test/element-room/durability.test.ts.
+// The pushes come from a socket opened inside a signed-in page with its own ticket (b6-forge-kit.ts
+// `burstSocket`): bursts of 64 pushes of 3 creates each, sent in ONE page task so they reach sync together
+// and the drain commits them in 64-push batches (within app.ts's message budget and the room's op budget).
+// The kill is fired while the 5th burst is being committed; a round whose kill landed after every sent op
+// was acked did not test anything and is repeated (at most 5 attempts per round, reported). The protocol
+// twin is apps/sync/test/element-room/durability.test.ts.
 
 import { expect, test } from '@playwright/test'
 import { harness } from '../support/harness.ts'
 import type { BrowserProcess, SpikeBStack } from '../support/types.ts'
-import { forge, rectEl } from './b6-forge-kit.ts'
+import { burstSocket, rectEl } from './b6-forge-kit.ts'
 
 let stack: SpikeBStack
 let A: BrowserProcess
 let boardId: string
+
+const BURST = 64
+const OPS = 3
+const BURSTS = 5
 
 test.beforeAll(async () => {
   stack = await harness.startStack()
@@ -26,36 +33,62 @@ test.afterAll(async () => {
   await stack?.stop()
 })
 
-test('D3: 3 SIGKILLs during group commits, 0 acked-but-missing', async () => {
-  const rounds: { round: number; acked: number; missing: number }[] = []
+test('D3: 3 SIGKILLs during 64-push group commits, 0 acked-but-missing', async () => {
+  const rounds: {
+    round: number
+    attempt: number
+    sent: number
+    acked: number
+    stored: number
+    missing: number
+  }[] = []
+  let seq = 0
   for (let round = 1; round <= 3; round++) {
-    await A.openBoard(boardId) // a fresh page ticket after each restart
-    const w = await forge(A.page, boardId)
-    const acked = new Set<string>()
-    const base = await w.clock()
-    for (let k = 0; k < 300; k++) {
-      const ops = Array.from({ length: 5 }, (_, j) => ({
-        k: 'c',
-        el: rectEl(`d3-${round}-${k}-${j}`, { x: k, y: j }),
-      }))
-      void w.send({ type: 'push', seq: 10_000 * round + k, base, ops } as never)
-    }
-    // kill once some batches have committed
-    await expect
-      .poll(async () => {
-        for (const m of await w.socket.messages())
-          if (m.type === 'ack') for (const r of m.r) if (r.ok) acked.add(r.id)
-        return acked.size
+    for (let attempt = 1; ; attempt++) {
+      await A.openBoard(boardId) // a fresh page (and ticket) after each restart
+      const w = await burstSocket(A.page, boardId)
+      let sent = 0
+      const frames = (b: number) =>
+        Array.from({ length: BURST }, (_, k) => {
+          sent += OPS
+          return {
+            type: 'push',
+            seq: ++seq,
+            base: w.clock,
+            ops: Array.from({ length: OPS }, (_, j) => ({
+              k: 'c',
+              el: rectEl(`d3-${round}-${attempt}-${b}-${k}-${j}`, { x: k, y: j }),
+            })),
+          }
+        })
+      for (let b = 1; b < BURSTS; b++) {
+        await w.burst(frames(b))
+        await A.page.waitForTimeout(150)
+      }
+      // the last burst and the kill together: the room is committing that burst when sync dies
+      const last = w.burst(frames(BURSTS))
+      await A.page.waitForTimeout(3)
+      await stack.killSync('SIGKILL')
+      await last.catch(() => {})
+      const acked = new Set(await w.acked())
+      await stack.restartSync()
+      const stored = new Set((await harness.readSnapshot(stack, boardId)).elements.map((e) => e.id))
+      const missing = [...acked].filter((id) => !stored.has(id))
+      const prefix = `d3-${round}-${attempt}-`
+      const storedOfStream = [...stored].filter((id) => id.startsWith(prefix)).length
+      rounds.push({
+        round,
+        attempt,
+        sent,
+        acked: acked.size,
+        stored: storedOfStream,
+        missing: missing.length,
       })
-      .toBeGreaterThanOrEqual(64 * 5)
-    await stack.killSync('SIGKILL')
-    for (const m of await w.socket.messages())
-      if (m.type === 'ack') for (const r of m.r) if (r.ok) acked.add(r.id)
-    await stack.restartSync()
-    const stored = new Set((await harness.readSnapshot(stack, boardId)).elements.map((e) => e.id))
-    const missing = [...acked].filter((id) => !stored.has(id))
-    rounds.push({ round, acked: acked.size, missing: missing.length })
-    expect(missing).toEqual([])
+      expect(missing).toEqual([])
+      if (acked.size < sent) break // the kill landed inside the stream
+      expect(attempt, 'the kill never landed before the last ack').toBeLessThan(5)
+    }
   }
   test.info().annotations.push({ type: 'D3', description: JSON.stringify(rounds) })
+  console.log('[evidence] D3', JSON.stringify(rounds))
 })

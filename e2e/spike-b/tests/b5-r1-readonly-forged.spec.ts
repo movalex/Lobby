@@ -18,7 +18,6 @@ let stack: SpikeBStack
 let E: BrowserProcess
 let V: BrowserProcess
 let C: BrowserProcess
-let G: BrowserProcess
 let boardId: string
 
 test.beforeAll(async () => {
@@ -36,11 +35,10 @@ test.beforeAll(async () => {
   E = await harness.launchBrowser(stack, ue, { name: 'editor' })
   V = await harness.launchBrowser(stack, uv, { name: 'viewer' })
   C = await harness.launchBrowser(stack, uc, { name: 'commenter' })
-  G = await harness.launchBrowser(stack, harness.devUser('r1-guest'), { name: 'guest', guest: true })
-  for (const p of [E, V, C, G]) await p.openBoard(boardId)
+  for (const p of [E, V, C]) await p.openBoard(boardId)
 })
 test.afterAll(async () => {
-  for (const p of [E, V, C, G]) await p?.close()
+  for (const p of [E, V, C]) await p?.close()
   await stack?.stop()
 })
 
@@ -92,33 +90,66 @@ test('R1: forged writes from a viewer are READ_ONLY; its drag never reaches the 
   await v.socket.next('pong')
 })
 
-test('R1: presence of the viewer, the commenter and the guest reaches the editor (p95 ≤ 200 ms in the quiet window)', async () => {
+/** 20 real pointer moves over `p`'s canvas (no tool selected); ms until the editor's socket gets each one. */
+async function presenceLatency(p: BrowserProcess): Promise<number[]> {
   const editorSide = await forge(E.page, boardId)
-  const lat: Record<string, number[]> = {}
-  for (const p of [V, C, G]) {
-    lat[p.name] = []
-    const box = await p.page.locator('canvas').last().boundingBox()
-    if (!box) throw new Error('no canvas')
-    for (let i = 0; i < 20; i++) {
-      const x = box.x + 50 + i * 7
-      const y = box.y + 60 + (i % 5) * 9
-      const t0 = Date.now()
-      await p.page.mouse.move(x, y)
-      const seenBefore = (await editorSide.socket.messages()).length
-      await expect
-        .poll(async () =>
-          (await editorSide.socket.messages())
-            .slice(seenBefore)
-            .some((m) => m.type === 'presence' && m.peers.some((q) => q.pointer !== null)),
-        )
-        .toBe(true)
-      lat[p.name]?.push(Date.now() - t0)
-      await p.page.waitForTimeout(60)
-    }
+  const uid = (await forge(p.page, boardId)).welcome.you.uid // the page's user (its own session id is its tab's)
+  const box = await p.page.locator('canvas').last().boundingBox()
+  if (!box) throw new Error('no canvas')
+  const out: number[] = []
+  for (let i = 0; i < 20; i++) {
+    const seenBefore = (await editorSide.socket.messages()).length
+    const t0 = Date.now()
+    await p.page.mouse.move(box.x + 50 + i * 7, box.y + 60 + (i % 5) * 9)
+    await expect
+      .poll(async () =>
+        (await editorSide.socket.messages())
+          .slice(seenBefore)
+          .some(
+            (m) =>
+              m.type === 'presence' &&
+              m.peers.some(
+                (q) => q.sid.startsWith(`${uid}:`) && !q.sid.includes(':forge-') && q.pointer !== null,
+              ),
+          ),
+      )
+      .toBe(true)
+    out.push(Date.now() - t0)
+    await p.page.waitForTimeout(60)
   }
-  const p95 = (xs: number[]) => [...xs].sort((a, b) => a - b)[Math.ceil(xs.length * 0.95) - 1] ?? Number.NaN
-  const summary = Object.fromEntries(Object.entries(lat).map(([k, v]) => [k, p95(v)]))
+  await editorSide.socket.close()
+  return out
+}
+const p95 = (xs: number[]) => [...xs].sort((a, b) => a - b)[Math.ceil(xs.length * 0.95) - 1] ?? Number.NaN
+
+test('R1: presence of the viewer and the commenter reaches the editor (p95 ≤ 200 ms in the quiet window)', async () => {
+  const summary: Record<string, number> = {}
+  for (const p of [V, C]) summary[p.name] = p95(await presenceLatency(p))
   test.info().annotations.push({ type: 'R1-presence-p95-ms', description: JSON.stringify(summary) })
+  console.log('[evidence] R1-presence-p95-ms', JSON.stringify(summary))
   if (process.env.SPIKE_B_QUIET === '1')
     for (const v of Object.values(summary)) expect(v).toBeLessThanOrEqual(200)
+})
+
+test("R1: a limited guest's presence reaches the editor (p95 ≤ 200 ms in the quiet window)", async () => {
+  let G: BrowserProcess | null = null
+  try {
+    G = await harness.launchBrowser(stack, harness.devUser('r1-guest'), { name: 'guest', guest: true })
+  } catch (e) {
+    // the harness signs guests in through O5's A3 flow; until it can, this part is NOT RUN (never a pass)
+    test.skip(
+      /not available/.test(String((e as Error)?.message)),
+      `guest sign-in unavailable: ${(e as Error)?.message}`,
+    )
+    throw e
+  }
+  try {
+    await G.openBoard(boardId)
+    const ms = p95(await presenceLatency(G))
+    test.info().annotations.push({ type: 'R1-presence-p95-ms', description: JSON.stringify({ guest: ms }) })
+    console.log('[evidence] R1-presence-p95-ms', JSON.stringify({ guest: ms }))
+    if (process.env.SPIKE_B_QUIET === '1') expect(ms).toBeLessThanOrEqual(200)
+  } finally {
+    await G.close()
+  }
 })

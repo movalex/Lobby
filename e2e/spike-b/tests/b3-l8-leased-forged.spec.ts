@@ -45,8 +45,15 @@ test('L8: forged writes to a note A is typing in are LEASED, the fit dropped, no
     type: string
   }[]
   const labelId = refs.find((r) => r.type === 'text')?.id as string
-  // A opens the editor on N (Enter on the selected note): Lobby acquires the lease
-  await A.page.evaluate((id) => window.lobbyCanvas?.select([id]), noteId)
+  // A opens the editor on N (a click on the note, then Enter, P1): Lobby acquires the lease
+  const center = await A.page.evaluate((id) => {
+    const c = window.lobbyCanvas
+    const b = c?.bounds(id)
+    return b && c ? c.sceneToScreen({ x: b.x + b.width / 2, y: b.y + b.height * 0.25 }) : null
+  }, noteId)
+  expect(center).not.toBeNull()
+  await A.page.mouse.click(center?.x ?? 0, center?.y ?? 0)
+  await expect.poll(() => A.page.evaluate(() => window.lobbyCanvas?.selection() ?? [])).toContain(noteId)
   await A.page.keyboard.press('Enter')
   await expect
     .poll(() => A.page.evaluate((id) => window.lobbyCanvas?.leaseState().held.includes(id), noteId))
@@ -76,14 +83,24 @@ test('L8: forged writes to a note A is typing in are LEASED, the fit dropped, no
     report.push(got)
     expect(got.slice(0, 3)).toEqual(['LEASED', 'LEASED', 'LEASED'])
     expect(ack.r[3]).toMatchObject({ ok: true, fitDropped: true })
+    // nothing of B's is stored (A, the holder, may write its own label layout meanwhile: the editor's
+    // open-time re-measure, §2.9.2 step 3, so the board as a whole is not compared)
     const after = await harness.readSnapshot(stack, boardId)
-    expect(after.hash).toBe(before.hash) // nothing stored
-    expect(bob.socket).toBeTruthy()
+    const byId = new Map(after.elements.map((e) => [e.id, e as unknown as Record<string, unknown>]))
+    expect(byId.get(labelId)?.originalText).not.toBe(`bob ${i}`)
+    expect(byId.has(`l8-forged-${i}`)).toBe(false)
+    expect(byId.get(noteId)?.isDeleted).toBe(false)
+    expect(byId.get(noteId)?.height).not.toBe(900)
   }
   await bob.socket.close()
+  // the check ends quiescent: A closes its editor (Escape) and everything is saved before the comparison
+  await A.page.keyboard.press('Escape')
+  await expect.poll(() => A.page.evaluate(() => window.lobbyCanvas?.editingId() ?? null)).toBeNull()
+  await expect.poll(() => A.page.evaluate(() => window.lobbyCanvas?.saveState().state)).toBe('saved')
   const conv = await harness.converged(stack, boardId, [A, B], { horizonAtStart: horizon })
   expect(conv.horizonMoved).toBe(false)
   expect(conv.ok).toBe(true)
   expect(harness.checkInvariants(conv.snapshot).violations).toEqual([])
   test.info().annotations.push({ type: 'L8', description: JSON.stringify({ runs: report.length }) })
+  console.log('[evidence] L8', JSON.stringify({ runs: report.length }))
 })

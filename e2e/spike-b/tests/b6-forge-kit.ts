@@ -131,3 +131,92 @@ export function textEl(id: string, o: Record<string, unknown> = {}): Record<stri
     ...o,
   }
 }
+
+/**
+ * A raw socket inside `page` (the page's own ticket, from the api like harness.forgeSocket) that can send
+ * MANY frames in one page task, so a burst of pushes reaches sync together and the drain commits it in
+ * 64-push batches (B4 D3). Acks are collected in the page; nothing of the page's client runs on it.
+ */
+export interface BurstSocket {
+  /** sends every frame of `frames` in one task (after the hello's welcome) */
+  burst(frames: readonly unknown[]): Promise<void>
+  /** the ids of every op acked `ok` so far */
+  acked(): Promise<string[]>
+  /** the socket's server clock at the welcome */
+  readonly clock: number
+}
+
+let burstSeq = 0
+
+export async function burstSocket(page: Page, boardId: string): Promise<BurstSocket> {
+  const key = `o1burst${++burstSeq}${Date.now().toString(36)}`
+  const clock = await page.evaluate(
+    async ({ boardId, key }) => {
+      const res = await fetch(`/api/boards/${encodeURIComponent(boardId)}/ticket`, {
+        method: 'POST',
+        credentials: 'same-origin',
+      })
+      if (res.status !== 200) throw new Error(`ticket: ${res.status}`)
+      const { ticket } = (await res.json()) as { ticket: string }
+      const url = `${location.origin.replace(/^http/, 'ws')}/connect/${encodeURIComponent(boardId)}?${new URLSearchParams(
+        { sessionId: `forge-${key}`, ticket },
+      )}`
+      const w = window as unknown as { __o1Burst?: Record<string, { ws: WebSocket; acked: string[] }> }
+      w.__o1Burst ??= {}
+      const ws = new WebSocket(url)
+      const st = { ws, acked: [] as string[] }
+      w.__o1Burst[key] = st
+      return await new Promise<number>((resolve, reject) => {
+        let welcomeClock = -1
+        ws.onmessage = (e) => {
+          if (typeof e.data !== 'string') {
+            if (welcomeClock >= 0) resolve(welcomeClock)
+            return
+          }
+          const m = JSON.parse(e.data) as {
+            type: string
+            reset?: boolean
+            clock?: number
+            r?: { ok: boolean; id: string }[]
+          }
+          if (m.type === 'welcome') {
+            welcomeClock = m.clock ?? 0
+            if (!m.reset) resolve(welcomeClock)
+          } else if (m.type === 'ack') for (const r of m.r ?? []) if (r.ok) st.acked.push(r.id)
+        }
+        ws.onclose = (e) => reject(new Error(`closed ${e.code} ${e.reason}`))
+        ws.onopen = () =>
+          ws.send(
+            JSON.stringify({
+              type: 'hello',
+              proto: 1,
+              schema: 1,
+              since: 0,
+              epoch: null,
+              tab: `forge-${key}`,
+            }),
+          )
+      })
+    },
+    { boardId, key },
+  )
+  return {
+    clock,
+    burst: (frames) =>
+      page.evaluate(
+        ({ key, frames }) => {
+          const st = (window as unknown as { __o1Burst: Record<string, { ws: WebSocket }> }).__o1Burst[key]
+          for (const f of frames) st?.ws.send(JSON.stringify(f))
+        },
+        { key, frames },
+      ),
+    acked: () =>
+      page.evaluate(
+        (key) => [
+          ...((window as unknown as { __o1Burst: Record<string, { acked: string[] }> }).__o1Burst[key]
+            ?.acked ?? []),
+        ],
+        key,
+      ),
+  }
+}

@@ -53,4 +53,5 @@ test('D4: COMMIT failure → UNAVAILABLE, retry, nothing lost, Saved only after 
   const conv = await harness.converged(stack, boardId, [A])
   expect(conv.ok).toBe(true)
   test.info().annotations.push({ type: 'D4', description: JSON.stringify([...new Set(seen)]) })
+  console.log('[evidence] D4', JSON.stringify([...new Set(seen)]))
 })
