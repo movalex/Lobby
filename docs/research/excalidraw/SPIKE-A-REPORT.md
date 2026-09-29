@@ -38,6 +38,8 @@ Per-check evidence is in `docs/research/excalidraw/spike-a/<id>.md`, written by 
 This report adds the merged-branch runs. Where a merged number differs from the owner's file, the table
 says so.
 
+> **Status after fix round 2 (2026-09-29, lead).** Fix round 2 (spike/a-fix2, 7734c0d) is merged as B0. Its two independent verifiers still returned **FAIL**, so **A6 and A16 are not passing**. The lease verifier found 2 high text-loss paths: a guard textarea opened before the grant keeps a stale copy, which can overwrite the lease holder's text on deny, Escape or click-away, and the previous holder's last edits on grant. The keys verifier found 1 medium defect (keyups from outside the board re-bind selected arrows) and several low key and layout leaks. Neither found a way to type into a note without a lease, or to download, open a picker or dialog, or replace the scene with any real layout. These are Lobby-side guard bugs, not engine paths that cannot be held, so §8.5's stop condition is not triggered. They are carried into spike B as O2's first tasks: see `docs/research/excalidraw/spike-b/OPEN-FROM-SPIKE-A.md`.
+
 ## 0. Corrections after the independent verification (2026-09-29)
 
 An independent verifier re-ran the suite (it reproduced 50 passed / 2 skipped, 1,389 unit tests, A3, A8
