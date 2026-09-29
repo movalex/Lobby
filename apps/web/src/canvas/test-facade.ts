@@ -28,6 +28,8 @@ export interface FacadeSession {
   readonly sid: string | null
   readonly uid: string | null
   readonly role: string | null
+  /** whether the server's welcome names this session a name-only guest (A3's ticket claim) */
+  readonly guest: boolean | null
   readonly readonly: boolean | null
   readonly clock: number
   readonly epoch: string | null
@@ -139,6 +141,7 @@ export function createFacade(port: CanvasPort): {
       sid: w?.sid ?? null,
       uid: w?.you.uid ?? null,
       role: w?.you.role ?? null,
+      guest: w?.you.guest ?? null,
       readonly: w?.readonly ?? null,
       clock: port.engine?.clock ?? 0,
       epoch: port.engine?.epoch ?? null,
