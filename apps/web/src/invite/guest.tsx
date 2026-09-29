@@ -6,6 +6,7 @@
 import {
   BoardGuests,
   GuestJoined,
+  InvitationBoardState,
   InvitationEmailLock,
   InvitationGuestAccess,
   InvitationPreview,
@@ -20,9 +21,9 @@ import { useSession } from '../auth/session.tsx'
 const enc = encodeURIComponent
 
 /** GET /api/invitations/:token, with this feature's `allowGuests`. */
-export const GuestAwarePreview = InvitationPreview.extend(InvitationGuestAccess.shape).extend(
-  InvitationEmailLock.shape,
-)
+export const GuestAwarePreview = InvitationPreview.extend(InvitationGuestAccess.shape)
+  .extend(InvitationEmailLock.shape)
+  .extend(InvitationBoardState.shape)
 export type GuestAwarePreview = z.infer<typeof GuestAwarePreview>
 
 export const fetchInvitation = (token: string, signal?: AbortSignal) =>

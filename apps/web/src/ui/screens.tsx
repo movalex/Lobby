@@ -52,6 +52,32 @@ export function MessageScreen({
 }
 
 /**
+ * "Can't reach Lobby": the api gave no answer or a 5xx while a page read what it needs (the session,
+ * an invitation). One screen for every page, with the retry that page needs: RequireSession re-reads
+ * the session, the invite page re-reads what failed. A failure to reach Lobby is never shown as
+ * "signed out", "no access" or a wrong account (fixer round 3, docs/DOMAIN-ACCESS-CONTRACTS.md §21).
+ */
+export function UnreachableScreen({ message, onRetry }: { message: string; onRetry(): void }) {
+  return (
+    <MessageScreen
+      testId="api-unreachable"
+      title="Can't reach Lobby"
+      body={message}
+      actions={
+        <button
+          type="button"
+          className="dr-btn dr-btn--primary"
+          data-testid="api-unreachable-retry"
+          onClick={onRetry}
+        >
+          Try again
+        </button>
+      }
+    />
+  )
+}
+
+/**
  * One screen for "not found" and "forbidden": the API answers 404 for both so a board's existence
  * never leaks, and the UI does not try to tell them apart either. On a board link, a signed-in user
  * can request access (PRS-04); the server answers the same whether or not the board exists.

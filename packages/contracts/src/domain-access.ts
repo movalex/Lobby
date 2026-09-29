@@ -88,6 +88,8 @@ export const DOMAIN_ACCESS_CODES = {
   emailMismatch: 'INVITATION_EMAIL_MISMATCH',
   identityUnavailable: 'IDENTITY_UNAVAILABLE',
   accountDisabled: 'ACCOUNT_DISABLED',
+  /** 409: a locked invitation to an address of the inviter's own account (fixer round 3, §21). */
+  invitationToSelf: 'INVITATION_TO_SELF',
 } as const
 export type DomainAccessCode = (typeof DOMAIN_ACCESS_CODES)[keyof typeof DOMAIN_ACCESS_CODES]
 
@@ -108,6 +110,11 @@ export const DOMAIN_ACCESS_MESSAGES = {
   /** 403 ACCOUNT_DISABLED (Clerk exchange). */
   accountDisabled:
     'This account can’t sign in to Lobby. Contact the person who runs Lobby at Dark Burn Creative.',
+  /**
+   * 409 INVITATION_TO_SELF: a link locked to the inviter's own address would only let the inviter in
+   * (who already has access), and accepting it would use it up for nothing.
+   */
+  invitationToSelf: 'That’s your own address. Enter the email address of the person you want to invite.',
 } as const
 
 /** 403 INVITATION_EMAIL_MISMATCH: `hint` is the masked invited address, never the full one. */

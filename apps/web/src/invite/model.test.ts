@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { BOARD_ID, WS_ID } from '../api/test-fixtures.ts'
 import {
   acceptErrorCopy,
+  boardInTrashCopy,
   emailMismatchCopy,
   fetchGoneDetails,
   GUEST_ENDED_COPY,
@@ -10,6 +11,7 @@ import {
   guestJoinError,
   guestJoinHint,
   invitationSummary,
+  inviteUnreachable,
   isEmailMismatch,
   lockedHint,
   lockedSignInLabel,
@@ -321,5 +323,43 @@ describe('invitations locked to an email address (domain access, docs/DOMAIN-ACC
       retry: false,
     })
     expect(acceptErrorCopy('GUEST_LIMIT', 'x').message).toContain('as many guests as it can')
+  })
+})
+
+describe('fixer round 3 (docs/DOMAIN-ACCESS-CONTRACTS.md §21)', () => {
+  const board = { ...base, board: { id: BOARD_ID, title: 'Q3 planning' }, role: 'viewer' }
+
+  it("Lobby can't be reached: the invitation or the session read failed (no answer, 5xx), never another state", () => {
+    const signedIn = { status: 'signed-in' } as const
+    const network = { kind: 'network', message: "Can't reach Lobby. Check your connection and try again." }
+    const server = { kind: 'server', message: 'Lobby had a problem handling that. Try again in a moment.' }
+    expect(inviteUnreachable(signedIn, network)).toBe(network.message)
+    expect(inviteUnreachable({ status: 'signed-out' }, server)).toBe(server.message)
+    // The session read failed (also the re-read after a 403 INVITATION_EMAIL_MISMATCH).
+    expect(inviteUnreachable({ status: 'unreachable', message: 'Down.' }, null)).toBe('Down.')
+    // Real answers are not "unreachable": the page shows them as before.
+    for (const kind of ['not-found', 'gone', 'rate-limited', 'forbidden'])
+      expect(inviteUnreachable(signedIn, { kind, message: 'x' })).toBeNull()
+    expect(inviteUnreachable({ status: 'signed-out' }, null)).toBeNull()
+    expect(inviteUnreachable(signedIn, null)).toBeNull()
+  })
+
+  it('a board in the trash: no "Join", no auto-accept, and whom to ask (not the inviter themselves)', () => {
+    expect(invitationSummary(board, { boardInTrash: true }).title).toBe('“Q3 planning”')
+    expect(invitationSummary(board).title).toBe('Join “Q3 planning”')
+    expect(shouldAutoAccept({ boardInTrash: true })).toBe(false)
+    expect(shouldAutoAccept({ boardInTrash: false })).toBe(true)
+    expect(boardInTrashCopy(board, { sentByYou: false })).toEqual({
+      title: 'This board is in the trash',
+      body: '“Q3 planning” is in the trash, so this invitation can’t be used right now. Ask Alice to restore it: the link works again once the board is back, until it expires.',
+    })
+    expect(boardInTrashCopy({ ...board, invitedBy: { name: ' ' } }, { sentByYou: false }).body).toContain(
+      'Ask the person who invited you to restore it',
+    )
+    const own = boardInTrashCopy(board, { sentByYou: true }).body
+    expect(own).toBe(
+      '“Q3 planning” is in the trash, so nobody can use this link right now. Once the board is restored, the link works again until it expires.',
+    )
+    expect(own).not.toContain('Ask')
   })
 })

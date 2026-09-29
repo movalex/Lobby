@@ -1,6 +1,7 @@
 import {
   DOMAIN_ACCESS_CODES,
   GUEST_NAME_SUFFIX,
+  type InvitationBoardState,
   type InvitationEmailLock,
   InvitationGoneBody,
   type InvitationPreview,
@@ -36,7 +37,7 @@ export interface InvitationSummary {
  */
 export function invitationSummary(
   inv: InvitationPreview,
-  opts: { sentByYou?: boolean } = {},
+  opts: { sentByYou?: boolean; boardInTrash?: boolean } = {},
 ): InvitationSummary {
   const who = inv.invitedBy.name || 'Someone'
   const own = opts.sentByYou === true
@@ -44,7 +45,8 @@ export function invitationSummary(
   if (inv.board) {
     return {
       eyebrow: own ? 'Your invitation to a board' : `${who} invited you to a board`,
-      title: own ? `“${inv.board.title}”` : `Join “${inv.board.title}”`,
+      // Fixer round 3 (§21): nobody can join a board in the trash, so the title does not say "Join".
+      title: own || opts.boardInTrash ? `“${inv.board.title}”` : `Join “${inv.board.title}”`,
       roleHeading,
       roleLabel: BOARD_ROLE[inv.role] ?? 'Can view',
       acceptLabel: 'Accept and open board',
@@ -253,8 +255,11 @@ export function isEmailMismatch(
  * PRI-16 auto-accept after "Sign in to accept": never on a mismatch (the caller consumes the intent
  * first, so a wrong account never loops through sign-in and back).
  */
-export function shouldAutoAccept(inv: Partial<InvitationEmailLock> | null | undefined): boolean {
-  return !isEmailMismatch(inv, false)
+export function shouldAutoAccept(
+  inv: (Partial<InvitationEmailLock> & Partial<InvitationBoardState>) | null | undefined,
+): boolean {
+  // Fixer round 3 (§21): nor for a board in the trash (accepting is refused until it is restored).
+  return !isEmailMismatch(inv, false) && inv?.boardInTrash !== true
 }
 
 /**
@@ -295,5 +300,52 @@ export function acceptErrorCopy(code: string, message: string): { message: strin
       return { message: 'Couldn’t confirm your email right now. Try again in a minute.', retry: true }
     default:
       return { message: guestJoinError(code, message), retry: false }
+  }
+}
+
+// ---- fixer round 3 (docs/DOMAIN-ACCESS-CONTRACTS.md §21) ---------------------------------------------
+
+/** The part of the session state the invite page's "Can't reach Lobby" check reads. */
+export type SessionReachability =
+  | { status: 'loading' | 'signed-out' | 'signed-in' }
+  | { status: 'unreachable'; message: string }
+
+/**
+ * What the invite page says, instead of anything else, when Lobby cannot be reached (UnreachableScreen,
+ * as RequireSession shows): the invitation read got no answer or a 5xx, or the session read did (state
+ * 'unreachable', also after the re-read that follows a 403 INVITATION_EMAIL_MISMATCH). null when both
+ * answered. The page is public, so before this it showed someone who is signed in, and only cut off,
+ * the signed-out "Sign in…" state (or "Invitation unavailable" with no way to retry).
+ */
+export function inviteUnreachable(
+  session: SessionReachability,
+  previewError: { kind: string; message: string } | null,
+): string | null {
+  if (previewError && (previewError.kind === 'network' || previewError.kind === 'server'))
+    return previewError.message
+  if (session.status === 'unreachable') return session.message
+  return null
+}
+
+/**
+ * A board invitation whose board is in the trash (the preview's `boardInTrash`, or accepting answered
+ * 409 BOARD_IN_TRASH): nothing can be accepted until the board is restored, and then the link works
+ * again until it expires. The inviter checking their own locked link is not told to ask themselves.
+ */
+export function boardInTrashCopy(
+  inv: Pick<InvitationPreview, 'board' | 'invitedBy'>,
+  opts: { sentByYou: boolean },
+): { title: string; body: string } {
+  const board = inv.board ? `“${inv.board.title}”` : 'This board'
+  const title = 'This board is in the trash'
+  if (opts.sentByYou)
+    return {
+      title,
+      body: `${board} is in the trash, so nobody can use this link right now. Once the board is restored, the link works again until it expires.`,
+    }
+  const who = inv.invitedBy.name.trim() || 'the person who invited you'
+  return {
+    title,
+    body: `${board} is in the trash, so this invitation can’t be used right now. Ask ${who} to restore it: the link works again once the board is back, until it expires.`,
   }
 }

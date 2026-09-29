@@ -20,6 +20,7 @@ import {
   memberRow,
   menuActions,
   openDashboard,
+  openMoreWaysToShare,
   openShareFromButton,
   personalWorkspace,
   requestRow,
@@ -971,4 +972,237 @@ test('failure states the dev provider cannot produce: an unconfirmed account (da
       await ivy.context.close()
     }
   })
+})
+
+// ---- fixer round 3 (docs/DOMAIN-ACCESS-CONTRACTS.md §21) ------------------------------------------------
+
+const OWN_ADDRESS = 'That’s your own address. Enter the email address of the person you want to invite.'
+
+test('fixer round 3: the invite page when Lobby can’t be reached says so with a retry, never the signed-out or another state', async ({
+  browser,
+  users,
+  board,
+}, testInfo) => {
+  const aliceApi = await users.api('alice')
+  const email = 'ivo@client.example.test'
+  const res = await aliceApi.fetch('POST', `/api/boards/${board}/invitations`, { role: 'viewer', email })
+  expect(res.status()).toBe(201)
+  const link = ((await res.json()) as { url: string }).url
+  const token = inviteToken(link)
+  const ivo = await signedInContext(browser, freshHandle('ivo'), { name: 'Ivo Invitee', email })
+  try {
+    const page = ivo.page
+    const unreachable = page.getByTestId('api-unreachable')
+    const retry = page.getByTestId('api-unreachable-retry')
+    const preview = `**/api/invitations/${token}`
+    const badGateway = { status: 502, contentType: 'text/plain', body: 'Bad gateway' }
+
+    await test.step('the invitation read answers 502: "Can’t reach Lobby", and Try again loads it', async () => {
+      await page.route(preview, (route) => route.fulfill(badGateway))
+      await page.goto(link)
+      await expect(unreachable).toBeVisible()
+      await expect(unreachable.getByRole('heading')).toHaveText("Can't reach Lobby")
+      await expect(unreachable).toContainText('Lobby had a problem handling that. Try again in a moment.')
+      await expect(page.getByTestId('invite-invalid')).toHaveCount(0)
+      await capture('domain-access-invite-unreachable.png', page, testInfo)
+      await page.unroute(preview)
+      await retry.click()
+      await expect(page.getByTestId('invite-accept')).toBeVisible()
+      await expect(unreachable).toHaveCount(0)
+    })
+
+    await test.step('the connection drops while the session is read: not the signed-out "Sign in or create an account with …"', async () => {
+      await page.route('**/api/auth/me', (route) => route.abort('connectionreset'))
+      await page.reload()
+      await expect(unreachable).toBeVisible()
+      await expect(page.getByTestId('invite-signin')).toHaveCount(0)
+      await expect(page.getByTestId('invite-page')).toHaveCount(0)
+      await page.unroute('**/api/auth/me')
+      await retry.click()
+      await expect(page.getByTestId('invite-accept')).toBeVisible()
+    })
+
+    await test.step('the session re-read after a 403 mismatch fails: "Can’t reach Lobby"; Try again shows the mismatch', async () => {
+      const accept = `**/api/invitations/${token}/accept`
+      let refused = false
+      await page.route(accept, (route) => {
+        refused = true
+        return route.fulfill({
+          status: 403,
+          json: {
+            error: {
+              code: 'INVITATION_EMAIL_MISMATCH',
+              message: 'This invitation is for i•••@client.example.test.',
+            },
+            mismatch: { invitedEmailHint: 'i•••@client.example.test', invitedBy: { name: 'Alice Park' } },
+          },
+        })
+      })
+      for (const path of ['**/api/auth/me', '**/api/me'])
+        await page.route(path, (route) => (refused ? route.fulfill(badGateway) : route.continue()))
+      await page.getByTestId('invite-accept').click()
+      await expect(unreachable).toBeVisible()
+      await expect(page.getByTestId('invite-signin')).toHaveCount(0)
+      await expect(page.getByTestId('invite-email-mismatch')).toHaveCount(0)
+      await page.unroute('**/api/auth/me')
+      await page.unroute('**/api/me')
+      await retry.click()
+      const mismatch = page.getByTestId('invite-email-mismatch')
+      await expect(mismatch).toContainText('This invitation was sent to i•••@client.example.test.')
+      await expect(mismatch).toContainText(`You're signed in as ${email}.`)
+      await page.unroute(accept)
+    })
+
+    // Nothing was redeemed on the way: the real accept still works.
+    expect(await invitations(aliceApi, board)).toContainEqual(
+      expect.objectContaining({ kind: 'invite', email, uses: 0 }),
+    )
+    await page.reload()
+    await page.getByTestId('invite-accept').click()
+    await expect(page).toHaveURL(new RegExp(`/b/${board}$`), { timeout: 30_000 })
+    await waitForBoard(page)
+  } finally {
+    await ivo.context.close()
+  }
+})
+
+test('fixer round 3: a creator typing her own address in Invite people or Link for one person is told at once, and no link is made', async ({
+  users,
+  board,
+  session,
+}) => {
+  const aliceApi = await users.api('alice')
+  const own = (await aliceApi.me()).access?.email ?? ''
+  expect(own).toBe('alice@dev.invalid')
+  const a = await session('alice')
+  await openShareFromButton(a.page)
+  const dialog = shareDialog(a.page)
+
+  await test.step('Invite people: the hint says so while typing; Create invite link makes nothing', async () => {
+    const input = dialog.getByTestId('share-invite-input')
+    await input.fill(` ${own.toUpperCase()}`)
+    await expect(dialog.getByTestId('share-invite-hint')).toHaveText(OWN_ADDRESS)
+    await dialog.getByTestId('share-invite-submit').click()
+    await expect(dialog.getByTestId('share-invite-notice')).toHaveText(OWN_ADDRESS)
+    await expect(dialog.getByTestId('share-invite-notice')).toHaveAttribute('role', 'alert')
+    await expect(dialog.getByTestId('share-invite-link')).toHaveCount(0)
+    // Someone else's address: the usual hint again.
+    await input.fill('pat@client.example.test')
+    await expect(dialog.getByTestId('share-invite-hint')).toContainText('only this address can use')
+    await input.fill('')
+  })
+
+  await test.step('Link for one person: the field error says so while typing; Create invite link makes nothing', async () => {
+    await openMoreWaysToShare(a.page)
+    await dialog.getByTestId('one-person-link-email').fill(own)
+    await expect(dialog.getByTestId('one-person-link-error')).toHaveText(OWN_ADDRESS)
+    await dialog.getByTestId('invite-create').click()
+    await expect(dialog.getByTestId('one-person-link-error')).toHaveText(OWN_ADDRESS)
+    await expect(dialog.getByTestId('invite-link')).toHaveCount(0)
+  })
+
+  expect(await invitations(aliceApi, board)).toEqual([])
+  // The api refuses it too (any of her verified addresses), with the same words.
+  const refused = await aliceApi.fetch('POST', `/api/boards/${board}/invitations`, {
+    role: 'viewer',
+    email: own,
+  })
+  expect(refused.status()).toBe(409)
+  expect(await errorCode(refused)).toBe('INVITATION_TO_SELF')
+  expect(await invitations(aliceApi, board)).toEqual([])
+})
+
+test('fixer round 3: an invitation to a board in the trash says so and cannot be accepted; after a restore it works again', async ({
+  browser,
+  users,
+  board,
+}, testInfo) => {
+  const aliceApi = await users.api('alice')
+  const title = (
+    (await (await aliceApi.fetch('GET', `/api/boards/${board}`)).json()) as { board: { title: string } }
+  ).board.title
+  const email = 'tina@client.example.test'
+  const res = await aliceApi.fetch('POST', `/api/boards/${board}/invitations`, { role: 'viewer', email })
+  expect(res.status()).toBe(201)
+  const link = ((await res.json()) as { url: string }).url
+  const token = inviteToken(link)
+  const trash = async () =>
+    expect((await aliceApi.fetch('POST', `/api/boards/${board}/trash`)).status()).toBe(200)
+  const restore = async () =>
+    expect((await aliceApi.fetch('POST', `/api/boards/${board}/restore`)).status()).toBe(200)
+  await trash()
+
+  const tina = await signedInContext(browser, freshHandle('tina'), { name: 'Tina Invitee', email })
+  try {
+    const page = tina.page
+    const trashed = page.getByTestId('invite-board-trashed')
+
+    await test.step('the invitee: "This board is in the trash", whom to ask, and nothing to accept', async () => {
+      await page.goto(link)
+      await expect(trashed).toContainText('This board is in the trash')
+      await expect(trashed).toHaveAttribute('role', 'status')
+      await expect(page.getByTestId('invite-board-trashed-body')).toHaveText(
+        `“${title}” is in the trash, so this invitation can’t be used right now. Ask Alice Park to restore it: the link works again once the board is back, until it expires.`,
+      )
+      await expect(page.getByTestId('invite-title')).toHaveText(`“${title}”`)
+      await expect(page.getByTestId('invite-accept')).toHaveCount(0)
+      await expect(page.getByTestId('invite-trashed-home')).toBeVisible()
+      await capture('domain-access-invite-board-trashed.png', page, testInfo)
+      // A forged accept is refused and redeems nothing.
+      const forged = await tina.context.request.post(`${WEB_URL}/api/invitations/${token}/accept`, {
+        headers: { origin: WEB_URL },
+      })
+      expect(forged.status()).toBe(409)
+      expect(await errorCode(forged)).toBe('BOARD_IN_TRASH')
+    })
+
+    await test.step('signed out and as the inviter: the same state, with no sign-in and no "ask yourself"', async () => {
+      const anon = await browser.newContext()
+      try {
+        const p = await anon.newPage()
+        await p.goto(link)
+        await expect(p.getByTestId('invite-board-trashed')).toBeVisible()
+        await expect(p.getByTestId('invite-signin')).toHaveCount(0)
+        await expect(p.getByTestId('invite-guest-form')).toHaveCount(0)
+      } finally {
+        await anon.close()
+      }
+      const alice = await signedInContext(browser, 'alice')
+      try {
+        await alice.page.goto(link)
+        await expect(alice.page.getByTestId('invite-board-trashed-body')).toHaveText(
+          `“${title}” is in the trash, so nobody can use this link right now. Once the board is restored, the link works again until it expires.`,
+        )
+        await expect(alice.page.getByTestId('invite-own-back')).toHaveCount(0)
+      } finally {
+        await alice.context.close()
+      }
+    })
+
+    await test.step('restored: the link is still unused and offers Accept; trashed again before the click: the page says so', async () => {
+      await restore()
+      expect(await invitations(aliceApi, board)).toEqual([
+        expect.objectContaining({ kind: 'invite', email, uses: 0 }),
+      ])
+      await page.reload()
+      await expect(page.getByTestId('invite-title')).toHaveText(`Join “${title}”`)
+      await trash()
+      await page.getByTestId('invite-accept').click()
+      await expect(trashed).toContainText('This board is in the trash')
+      await expect(page.getByTestId('invite-accept')).toHaveCount(0)
+      await expect(page.getByTestId('invite-error')).toHaveCount(0)
+    })
+
+    await test.step('restored again: tina accepts and opens the board as a viewer', async () => {
+      await restore()
+      await page.reload()
+      await page.getByTestId('invite-accept').click()
+      await expect(page).toHaveURL(new RegExp(`/b/${board}$`), { timeout: 30_000 })
+      await waitForBoard(page)
+      await expect(page.getByTestId('readonly-pill')).toHaveAttribute('data-role', 'viewer')
+      expect(await invitations(aliceApi, board)).toEqual([])
+    })
+  } finally {
+    await tina.context.close()
+  }
 })

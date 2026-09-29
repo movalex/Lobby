@@ -11,16 +11,17 @@
 // links), then the settings (workspace access, export) and who has access. Every guest option sits
 // above its Create button and applies to the link that button makes.
 
-import type {
-  AccessRequest,
-  Board,
-  BoardMember,
-  EmailInviteResult,
-  InvitationCreated,
-  PendingInvitation,
-  RequestableRole,
-  ShareState,
-  WorkspaceMember,
+import {
+  type AccessRequest,
+  type Board,
+  type BoardMember,
+  DOMAIN_ACCESS_CODES,
+  type EmailInviteResult,
+  type InvitationCreated,
+  type PendingInvitation,
+  type RequestableRole,
+  type ShareState,
+  type WorkspaceMember,
 } from '@draftroom/contracts'
 import { type ReactNode, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { api, isApiError } from '../api/client.ts'
@@ -65,12 +66,14 @@ import {
   grantEditable,
   invitePlan,
   inviteRoleOptions,
+  isOwnAddress,
   linkAccessLine,
   linkForEmailHint,
   listShowsOwnerNote,
   lockedLinkNote,
   memberRoleChoices,
   moreWaysSummary,
+  OWN_ADDRESS_MESSAGE,
   OWNER_NEEDS_CREATOR,
   OWNER_NEEDS_CREATOR_NOTE,
   type OwnerNoteRow,
@@ -330,6 +333,7 @@ export function ShareDialog({
             addable={addable}
             pendingAdd={pendingUser === 'add'}
             canEmail={canEmail}
+            ownEmail={access?.email ?? null}
             onGrant={(userId, r) => run('add', () => api.putMember(board.id, userId, r))}
             onLinkCreated={() => invitations.reload()}
           />
@@ -381,6 +385,7 @@ export function ShareDialog({
               boardId={board.id}
               invitations={oneTimeInvites}
               canCreate
+              ownEmail={access?.email ?? null}
               onChange={() => invitations.reload()}
             />
           </MoreWaysToShare>
@@ -404,6 +409,7 @@ export function ShareDialog({
             boardId={board.id}
             invitations={oneTimeInvites}
             canCreate={false}
+            ownEmail={access?.email ?? null}
             onChange={() => invitations.reload()}
           />
         )}
@@ -528,6 +534,7 @@ function InvitePeople({
   addable,
   pendingAdd,
   canEmail,
+  ownEmail,
   onGrant,
   onLinkCreated,
 }: {
@@ -539,6 +546,8 @@ function InvitePeople({
   pendingAdd: boolean
   /** This server can email invitations (the "Invite by email" form below does). */
   canEmail: boolean
+  /** The signed-in account's own address (`Me.access.email`): never locked a link to (fixer round 3). */
+  ownEmail: string | null
   /** Resolves false when the grant failed (the dialog shows the server's reason). */
   onGrant(userId: string, role: BoardRole): Promise<boolean>
   onLinkCreated(): void
@@ -556,6 +565,8 @@ function InvitePeople({
   )
   const [copied, setCopied] = useState(false)
   const target = parseInviteTarget(text, workspaceMembers, boardMembers)
+  // Fixer round 3 (§21): said at once, while typing, and nothing is created for it.
+  const ownAddress = target.kind === 'email' && isOwnAddress(target.email, ownEmail)
 
   // Default role (checklist decision 2): edit for workspace members, comment for everyone else.
   useEffect(() => {
@@ -569,7 +580,7 @@ function InvitePeople({
     setCopied(false)
     // Domain access (D13): an address gets a single-use link that only that verified address can
     // accept; a name that is neither an address nor someone in the workspace gets nothing.
-    const plan = invitePlan(target)
+    const plan = invitePlan(target, ownEmail)
     switch (plan.kind) {
       case 'none':
         return
@@ -583,6 +594,7 @@ function InvitePeople({
         setNotice({ tone: 'info', text: ASK_EMAIL_PROMPT })
         return
       case 'invalid-email':
+      case 'own-address':
         setNotice({ tone: 'error', text: plan.message })
         return
     }
@@ -674,7 +686,7 @@ function InvitePeople({
       <p className="dr-share__hint" data-testid="share-invite-hint">
         {target.kind === 'member' &&
           `${target.member.user.name} is in ${workspaceName}: they get access right away.`}
-        {target.kind === 'email' && linkForEmailHint(canEmail)}
+        {target.kind === 'email' && (ownAddress ? OWN_ADDRESS_MESSAGE : linkForEmailHint(canEmail))}
         {target.kind === 'unknown' && `No one in ${workspaceName} matches. ${ASK_EMAIL_PROMPT}`}
         {(target.kind === 'empty' || target.kind === 'already') &&
           'People in the workspace get access right away. For anyone else, enter their email.'}
@@ -1388,11 +1400,14 @@ function InviteLinkSection({
   boardId,
   invitations,
   canCreate,
+  ownEmail,
   onChange,
 }: {
   boardId: string
   invitations: readonly PendingInvitation[]
   canCreate: boolean
+  /** The signed-in account's own address: never locked a link to (fixer round 3, §21). */
+  ownEmail: string | null
   onChange(): void
 }) {
   const roleId = useId()
@@ -1421,6 +1436,11 @@ function InviteLinkSection({
       emailRef.current?.focus()
       return
     }
+    if (isOwnAddress(checked.email, ownEmail)) {
+      setFieldError(OWN_ADDRESS_MESSAGE)
+      emailRef.current?.focus()
+      return
+    }
     setFieldError(null)
     setPending(true)
     try {
@@ -1430,8 +1450,9 @@ function InviteLinkSection({
       setCopied(await copyText(inv.url.startsWith('/') ? absoluteUrl(inv.url) : inv.url))
       onChange()
     } catch (e) {
-      // A 400 is about the address (the server's words); anything else is about the link.
-      if (isApiError(e) && e.kind === 'invalid') {
+      // A 400 (or 409 INVITATION_TO_SELF, another address of the caller's) is about the address (the
+      // server's words); anything else is about the link.
+      if (isApiError(e) && (e.kind === 'invalid' || e.code === DOMAIN_ACCESS_CODES.invitationToSelf)) {
         setFieldError(e.message.replace(/^email: /, ''))
         emailRef.current?.focus()
       } else setError(isApiError(e) ? e.message : 'The invite link could not be created.')
@@ -1491,7 +1512,8 @@ function InviteLinkSection({
               aria-describedby={fieldError ? errorId : undefined}
               onChange={(e) => {
                 setEmail(e.target.value)
-                setFieldError(null)
+                // Fixer round 3: the inviter's own address is named at once, before anything is sent.
+                setFieldError(isOwnAddress(e.target.value, ownEmail) ? OWN_ADDRESS_MESSAGE : null)
               }}
             />
             <label htmlFor={roleId} className="dr-sr-only">

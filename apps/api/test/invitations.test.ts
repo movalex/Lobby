@@ -208,15 +208,21 @@ describe('workspace invitations', () => {
   })
 
   it('a guest link does not demote the workspace owner who accepts it', async () => {
+    // Fixer round 3 (domain access §21): nobody locks an invitation to their own address, so another
+    // manager (bob, made admin) sends alice the guest invitation.
+    await api.db.query(
+      "UPDATE workspace_members SET role = 'admin' WHERE user_id = $1 AND workspace_id = $2",
+      [bob.userId, DEV_STUDIO],
+    )
     const inv = InvitationCreated.parse(
       (
-        await alice.req('POST', `/api/workspaces/${DEV_STUDIO}/invitations`, {
+        await bob.req('POST', `/api/workspaces/${DEV_STUDIO}/invitations`, {
           role: 'guest',
           email: devEmail('alice'),
         })
       ).json(),
     )
-    await alice.req('POST', `/api/invitations/${tokenOf(inv.url)}/accept`)
+    expect((await alice.req('POST', `/api/invitations/${tokenOf(inv.url)}/accept`)).statusCode).toBe(200)
     const me = Me.parse((await alice.req('GET', '/api/me')).json())
     expect(me.workspaces.find((w) => w.id === DEV_STUDIO)?.role).toBe('owner')
   })

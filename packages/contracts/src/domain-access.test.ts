@@ -3,12 +3,15 @@ import { describe, expect, it } from 'vitest'
 import {
   AccountEmail,
   asciiLowercase,
+  BOARD_IN_TRASH,
   CreateBoardInvitationInput,
   CreateWorkspaceInvitationInput,
   DevLoginInput,
   DOMAIN_ACCESS_CODES,
+  DOMAIN_ACCESS_MESSAGES,
   EmailInviteInput,
   INVITE_EMAIL_MAX_LENGTH,
+  InvitationBoardState,
   InvitationEmailLock,
   InvitationEmailMismatchBody,
   InvitationPreview,
@@ -180,5 +183,25 @@ describe('responses', () => {
     }
     expect(ShareMember.parse(member).canOwn).toBe(true)
     expect(ShareMember.parse({ ...member, canOwn: false }).canOwn).toBe(false)
+  })
+})
+
+describe('fixer round 3 (§21)', () => {
+  it('previews gain boardInTrash (false by default, so an older api still parses); the two new codes', () => {
+    const preview = {
+      workspace: { id: 'wsp_0123456789abcdefghij', name: 'Studio' },
+      board: { id: 'b-0123456789', title: 'Pitch' },
+      role: 'viewer',
+      invitedBy: { name: 'Alice' },
+      expiresAt: '2026-10-04T12:00:00.000Z',
+    }
+    const Preview = InvitationPreview.extend(InvitationEmailLock.shape).extend(InvitationBoardState.shape)
+    expect(Preview.parse(preview).boardInTrash).toBe(false)
+    expect(Preview.parse({ ...preview, boardInTrash: true }).boardInTrash).toBe(true)
+    expect(Preview.safeParse({ ...preview, boardInTrash: 'yes' }).success).toBe(false)
+    expect(BOARD_IN_TRASH.code).toBe('BOARD_IN_TRASH')
+    expect(BOARD_IN_TRASH.message).toMatch(/^This board is in the trash/)
+    expect(DOMAIN_ACCESS_CODES.invitationToSelf).toBe('INVITATION_TO_SELF')
+    expect(DOMAIN_ACCESS_MESSAGES.invitationToSelf).toMatch(/^That’s your own address\./)
   })
 })

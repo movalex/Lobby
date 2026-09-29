@@ -118,11 +118,28 @@ export type InvitePlan =
   | { kind: 'invalid-email'; message: string }
   /** Neither an address nor someone in the workspace: ask for their address, make nothing. */
   | { kind: 'ask-email' }
+  /** The inviter's own address (fixer round 3, §21): nothing is created (the api answers 409). */
+  | { kind: 'own-address'; message: string }
 
 /** The prompt for a name that is neither an address nor a known @handle. */
 export const ASK_EMAIL_PROMPT = 'Enter their email address to invite them.'
 
-export function invitePlan(target: InviteTarget): InvitePlan {
+/**
+ * Fixer round 3 (§21): an address that is the signed-in account's own (`Me.access.email`, stored
+ * normalised), compared the way the api compares. A link locked to it would let only the inviter in, so
+ * the dialog says so at once and creates nothing; the api refuses it too (409 INVITATION_TO_SELF), for
+ * the account's other verified addresses as well.
+ */
+export function isOwnAddress(email: string, own: string | null | undefined): boolean {
+  if (!own) return false
+  const checked = checkInviteEmail(email)
+  return checked.ok && checked.email === own.toLowerCase()
+}
+
+/** What the Share dialog says for the inviter's own address (the api's words for its 409). */
+export const OWN_ADDRESS_MESSAGE = DOMAIN_ACCESS_MESSAGES.invitationToSelf
+
+export function invitePlan(target: InviteTarget, ownEmail: string | null = null): InvitePlan {
   switch (target.kind) {
     case 'empty':
       return { kind: 'none' }
@@ -134,9 +151,9 @@ export function invitePlan(target: InviteTarget): InvitePlan {
       return { kind: 'ask-email' }
     case 'email': {
       const checked = checkInviteEmail(target.email)
-      return checked.ok
-        ? { kind: 'locked-link', email: checked.email }
-        : { kind: 'invalid-email', message: checked.message }
+      if (!checked.ok) return { kind: 'invalid-email', message: checked.message }
+      if (isOwnAddress(checked.email, ownEmail)) return { kind: 'own-address', message: OWN_ADDRESS_MESSAGE }
+      return { kind: 'locked-link', email: checked.email }
     }
   }
 }

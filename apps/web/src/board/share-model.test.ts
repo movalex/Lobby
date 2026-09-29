@@ -15,6 +15,7 @@ import {
   grantEditable,
   invitePlan,
   inviteRoleOptions,
+  isOwnAddress,
   linkAccessLine,
   linkForEmailHint,
   listShowsOwnerNote,
@@ -22,6 +23,7 @@ import {
   memberRoleChoices,
   memberRoleEditable,
   moreWaysSummary,
+  OWN_ADDRESS_MESSAGE,
   OWNER_NEEDS_CREATOR,
   OWNER_NEEDS_CREATOR_NOTE,
   type OwnerNoteRow,
@@ -549,5 +551,33 @@ describe('domain access, fixer round 1: the notes a non-creator and a creator ma
     expect(showOwnerNote({ canShare: true, canOwn: true, current: 'editor' })).toBe(false)
     expect(showOwnerNote({ canShare: true, current: 'editor' })).toBe(false)
     expect(showOwnerNote({ canShare: false, canOwn: false, current: 'editor' })).toBe(false)
+  })
+})
+
+describe('fixer round 3 (docs/DOMAIN-ACCESS-CONTRACTS.md §21): the inviter’s own address', () => {
+  const ws = [wsMember('bob', 'member')]
+  const plan = (text: string, own: string | null) => invitePlan(parseInviteTarget(text, ws, []), own)
+
+  it('is refused before anything is sent, with the api’s words (in any case, with spaces)', () => {
+    expect(OWN_ADDRESS_MESSAGE).toBe(DOMAIN_ACCESS_MESSAGES.invitationToSelf)
+    expect(OWN_ADDRESS_MESSAGE).toMatch(/^That’s your own address\./)
+    expect(plan('alice@dev.invalid', 'alice@dev.invalid')).toEqual({
+      kind: 'own-address',
+      message: OWN_ADDRESS_MESSAGE,
+    })
+    expect(plan('  Alice@Dev.Invalid ', 'alice@dev.invalid')).toMatchObject({ kind: 'own-address' })
+    expect(isOwnAddress(' ALICE@dev.invalid', 'alice@dev.invalid')).toBe(true)
+  })
+
+  it('anyone else’s address, or no known own address, makes the locked link as before', () => {
+    expect(plan('pat@client.example.test', 'alice@dev.invalid')).toEqual({
+      kind: 'locked-link',
+      email: 'pat@client.example.test',
+    })
+    expect(plan('alice@dev.invalid', null)).toMatchObject({ kind: 'locked-link' })
+    expect(isOwnAddress('alice@dev.invalid', null)).toBe(false)
+    expect(isOwnAddress('not an address', 'alice@dev.invalid')).toBe(false)
+    // A look-alike is not her address (and is refused as invalid anyway).
+    expect(isOwnAddress('alice@dev.invKlid', 'alice@dev.invalid')).toBe(false)
   })
 })

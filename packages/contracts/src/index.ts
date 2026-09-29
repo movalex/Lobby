@@ -184,6 +184,22 @@ export const InvitationPreview = z.object({
 })
 export type InvitationPreview = z.infer<typeof InvitationPreview>
 
+/**
+ * GET /api/invitations/:token addition (docs/DOMAIN-ACCESS-CONTRACTS.md §21, fixer round 3): the
+ * board of a board invitation is in the trash. Nobody can accept it then (409 BOARD_IN_TRASH, nothing
+ * redeemed); once the board is restored the link works again, until it expires. Defaults to false, so
+ * an older api's preview still parses.
+ */
+export const InvitationBoardState = z.object({ boardInTrash: z.boolean().default(false) })
+export type InvitationBoardState = z.infer<typeof InvitationBoardState>
+
+/** 409 from accepting an invitation to a board in the trash (the link is not used up). */
+export const BOARD_IN_TRASH = {
+  code: 'BOARD_IN_TRASH',
+  message:
+    'This board is in the trash, so the invitation can’t be used right now. It works again if the board is restored before the link expires.',
+} as const
+
 export const InvitationAccepted = z.object({ workspaceId: WorkspaceId, boardId: BoardId.nullable() })
 
 // ---- sync tickets ----------------------------------------------------------------------------------

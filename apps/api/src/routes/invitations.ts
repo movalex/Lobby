@@ -12,8 +12,12 @@
 // rows carry its domain.
 
 import {
+  BOARD_IN_TRASH,
   CreateBoardInvitationInput,
   CreateWorkspaceInvitationInput,
+  DOMAIN_ACCESS_CODES,
+  DOMAIN_ACCESS_MESSAGES,
+  type InvitationBoardState,
   type InvitationEmailLock,
   type InvitationEmailMismatchBody,
   type InvitationGoneBody,
@@ -70,6 +74,19 @@ type InvitationState = 'usable' | 'redeemed_by_caller' | 'gone'
 /** Name-only guests (wave 3) may only use guest links; everything else needs an account. */
 export const guestAccountRequired = (message = 'Sign in with an account to accept this invitation.') =>
   new ApiError(403, 'GUEST_ACCOUNT_REQUIRED', message)
+
+/**
+ * 409 INVITATION_TO_SELF (fixer round 3, contracts doc §21): a locked invitation to an address of the
+ * inviter's own account would let only the inviter in, and accepting it would use it up for nothing.
+ */
+export const invitationToSelf = () =>
+  new ApiError(409, DOMAIN_ACCESS_CODES.invitationToSelf, DOMAIN_ACCESS_MESSAGES.invitationToSelf)
+
+/**
+ * 409 BOARD_IN_TRASH (fixer round 3, §21): accepting an invitation whose board is in the trash. Nothing
+ * is redeemed; once the board is restored the link works again, until it expires.
+ */
+export const boardInTrash = () => new ApiError(409, BOARD_IN_TRASH.code, BOARD_IN_TRASH.message)
 
 /**
  * The invitation behind `token`, locked FOR UPDATE for redeeming it (accepting, joining as a guest),
@@ -155,6 +172,10 @@ export async function createInvitation(
     !isCreatorEmail(email, policy, devDomain)
   )
     throw roleRequiresCreator()
+  // Fixer round 3 (§21): never a link locked to one of the inviter's own addresses (any stored one of
+  // the running provider, as accepting would count it).
+  if ((await storedEmails(tx, input.userId, ctx.identity.lookup.source)).includes(email))
+    throw invitationToSelf()
   const token = newSecretToken()
   const id = newId('inv')
   const createdAt = ctx.now()
@@ -375,15 +396,23 @@ export function registerInvitationRoutes(app: FastifyInstance, ctx: AppContext):
     async (
       req,
       reply,
-    ): Promise<(InvitationPreview & InvitationGuestAccess & InvitationEmailLock) | undefined> => {
+    ): Promise<
+      (InvitationPreview & InvitationGuestAccess & InvitationEmailLock & InvitationBoardState) | undefined
+    > => {
       const { token } = req.params as Params
       if (!isSecretToken(token)) throw notFound()
       const tokenHash = sha256hex(token)
       perToken.take(tokenHash)
       const row = await db.maybeOne<
-        InvitationRow & { workspace_name: string; board_title: string | null; inviter_name: string }
+        InvitationRow & {
+          workspace_name: string
+          board_title: string | null
+          board_status: string | null
+          inviter_name: string
+        }
       >(
-        `SELECT ${INVITATION_COLUMNS}, w.name AS workspace_name, b.title AS board_title, u.name AS inviter_name
+        `SELECT ${INVITATION_COLUMNS}, w.name AS workspace_name, b.title AS board_title, b.status AS board_status,
+                u.name AS inviter_name
          FROM invitations i
          JOIN workspaces w ON w.id = i.workspace_id
          LEFT JOIN boards b ON b.id = i.board_id
@@ -419,6 +448,9 @@ export function registerInvitationRoutes(app: FastifyInstance, ctx: AppContext):
         matchesYou,
         // The inviter opening their own locked link (to check it) is told whom it is for.
         sentByYou: locked && caller !== null && row.created_by === caller.id,
+        // Fixer round 3 (§21): nothing can be accepted while the board is in the trash (the page says
+        // so instead of offering to join); restoring it makes the link usable again.
+        boardInTrash: row.board_status === 'trashed',
       }
     },
   )
@@ -456,6 +488,15 @@ export function registerInvitationRoutes(app: FastifyInstance, ctx: AppContext):
       const at = now()
       const state = stateFor(inv, caller.id, at)
       if (state === 'gone') return { outcome: 'gone' as const, inv }
+      // Fixer round 3 (§21): never a role on a board in the trash (nobody can open it). Nothing is
+      // redeemed, so the link works again once the board is restored (lockInvitation took the board
+      // row first, so a restore or trash waits for this answer).
+      if (inv.board_id !== null) {
+        const board = await tx.maybeOne<{ status: string }>('SELECT status FROM boards WHERE id = $1', [
+          inv.board_id,
+        ])
+        if (board?.status === 'trashed') throw boardInTrash()
+      }
       const accepted = { workspaceId: inv.workspace_id, boardId: inv.board_id }
       if (state === 'redeemed_by_caller') return { outcome: 'ok' as const, accepted, changed: false }
       // Domain access: only an account with the invited (verified) address accepts a locked link.

@@ -8,7 +8,7 @@ import { GuestKindProvider, wasGuestTab } from './invite/guest.tsx'
 import { InvitePage } from './invite/InvitePage.tsx'
 import { matchRoute, navigate, signInPath, useLocationKey, workspacePath } from './lib/routing.ts'
 import { readLastWorkspace } from './lib/storage.ts'
-import { LoadingScreen, MessageScreen } from './ui/screens.tsx'
+import { LoadingScreen, MessageScreen, UnreachableScreen } from './ui/screens.tsx'
 
 // The board pulls in tldraw (~2 MB); the dashboard and sign-in should not have to download it.
 const BoardPage = lazy(() => import('./board/BoardPage.tsx').then((m) => ({ default: m.BoardPage })))
@@ -78,20 +78,8 @@ function RequireSession({ children }: { children: ReactNode }) {
 
   if (guestEnded) return <GuestEndedScreen />
   if (state.status === 'signed-in') return <>{children}</>
-  if (state.status === 'unreachable') {
-    return (
-      <MessageScreen
-        testId="api-unreachable"
-        title="Can't reach Lobby"
-        body={state.message}
-        actions={
-          <button type="button" className="dr-btn dr-btn--primary" onClick={() => void refresh()}>
-            Try again
-          </button>
-        }
-      />
-    )
-  }
+  if (state.status === 'unreachable')
+    return <UnreachableScreen message={state.message} onRetry={() => void refresh()} />
   return <LoadingScreen testId="session-loading" />
 }
 

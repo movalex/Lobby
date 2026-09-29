@@ -1,4 +1,4 @@
-import { DOMAIN_ACCESS_CODES, GUEST_NAME_MAX, guestNameProblem } from '@draftroom/contracts'
+import { BOARD_IN_TRASH, DOMAIN_ACCESS_CODES, GUEST_NAME_MAX, guestNameProblem } from '@draftroom/contracts'
 import { type FormEvent, type ReactNode, useCallback, useEffect, useId, useRef, useState } from 'react'
 import { api, isApiError } from '../api/client.ts'
 import { useSession } from '../auth/session.tsx'
@@ -6,11 +6,12 @@ import { Wordmark } from '../brand/Wordmark.tsx'
 import { formatDateTime } from '../lib/format.ts'
 import { boardPath, invitePath, linkClick, navigate, signInPath, workspacePath } from '../lib/routing.ts'
 import { useResource } from '../lib/useResource.ts'
-import { LoadingScreen, MessageScreen } from '../ui/screens.tsx'
+import { LoadingScreen, MessageScreen, UnreachableScreen } from '../ui/screens.tsx'
 import { fetchInvitation, joinAsGuest, rememberGuestTab, seedUserKind, useUserKind } from './guest.tsx'
 import './invite.css'
 import {
   acceptErrorCopy,
+  boardInTrashCopy,
   emailMismatchCopy,
   fetchGoneDetails,
   type GoneDetails,
@@ -18,6 +19,7 @@ import {
   guestJoinError,
   guestJoinHint,
   invitationSummary,
+  inviteUnreachable,
   isEmailMismatch,
   lockedHint,
   lockedSignInLabel,
@@ -45,6 +47,9 @@ export function InvitePage({ token }: { token: string }) {
   // Domain access: accepting answered 403 INVITATION_EMAIL_MISMATCH (the signed-in account has no
   // verified address the invitation is locked to). Nothing was redeemed; the link still works for them.
   const [mismatchAtAccept, setMismatchAtAccept] = useState(false)
+  // Fixer round 3 (§21): accepting answered 409 BOARD_IN_TRASH (the board went to the trash after this
+  // page loaded). Nothing was redeemed; the page then shows the same state as a preview that says so.
+  const [trashedAtAccept, setTrashedAtAccept] = useState(false)
   // A link that no longer works (PRI-04): who sent it, and — only for someone who can open the board
   // right now — the board, which then opens instead of a dead end.
   const [gone, setGone] = useState<GoneDetails | 'loading' | null>(null)
@@ -101,6 +106,11 @@ export function InvitePage({ token }: { token: string }) {
         setMismatchAtAccept(true)
         return
       }
+      if (isApiError(e) && e.code === BOARD_IN_TRASH.code) {
+        setAccepting(false)
+        setTrashedAtAccept(true)
+        return
+      }
       if (isApiError(e) && e.kind !== 'gone') {
         // 503 IDENTITY_UNAVAILABLE: a retry; 409 ROLE_REQUIRES_CREATOR and the rest: the server's words.
         setAccepting(false)
@@ -152,6 +162,20 @@ export function InvitePage({ token }: { token: string }) {
   ) {
     return <LoadingScreen label="Loading invitation…" testId="invite-loading" />
   }
+  // Fixer round 3 (§21): Lobby could not be reached (the invitation or the session read got no answer
+  // or a 5xx): the same screen and retry as RequireSession, never a signed-out or mismatch state.
+  const unreachable = inviteUnreachable(state, preview.status === 'error' ? preview.error : null)
+  if (unreachable !== null) {
+    return (
+      <UnreachableScreen
+        message={unreachable}
+        onRetry={() => {
+          if (state.status === 'unreachable') void refresh()
+          if (preview.status === 'error') preview.reload()
+        }}
+      />
+    )
+  }
   if (previewGone || acceptError?.gone) {
     const copy = goneCopy(gone)
     return <MessageScreen testId="invite-invalid" title={copy.title} body={copy.body} />
@@ -176,10 +200,38 @@ export function InvitePage({ token }: { token: string }) {
   // The inviter checking their own locked link: the page is about their invitation, and its action
   // goes back to the board or workspace (never a sign-out).
   const ownLink = mismatch && inv.sentByYou
-  const summary = invitationSummary(inv, { sentByYou: ownLink })
+  // Fixer round 3 (§21): a board in the trash: nothing can be accepted or joined until it is restored.
+  const inTrash = inv.board !== null && (inv.boardInTrash || trashedAtAccept)
+  const summary = invitationSummary(inv, { sentByYou: ownLink, boardInTrash: inTrash })
 
   let actions: ReactNode
-  if (signedIn && kind === 'guest') {
+  if (inTrash) {
+    const copy = boardInTrashCopy(inv, { sentByYou: inv.sentByYou })
+    actions = (
+      <>
+        <div
+          className="dr-invite-mismatch dr-invite-mismatch--own"
+          role="status"
+          data-testid="invite-board-trashed"
+        >
+          <p className="dr-invite-mismatch__title">
+            <strong>{copy.title}</strong>
+          </p>
+          <p data-testid="invite-board-trashed-body">{copy.body}</p>
+        </div>
+        {signedIn && kind === 'account' && (
+          <a
+            className="dr-btn dr-btn--lg"
+            data-testid="invite-trashed-home"
+            href="/"
+            onClick={linkClick('/')}
+          >
+            Go to your boards
+          </a>
+        )}
+      </>
+    )
+  } else if (signedIn && kind === 'guest') {
     actions = guestLink ? (
       <>
         <button
@@ -362,7 +414,7 @@ export function InvitePage({ token }: { token: string }) {
             </div>
           )}
         </dl>
-        {acceptError && !mismatch && (
+        {acceptError && !mismatch && !inTrash && (
           <div className="dr-invite-error">
             <p className="dr-field-error" role="alert" data-testid="invite-error">
               {acceptError.message}
