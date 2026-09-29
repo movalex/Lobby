@@ -19,6 +19,11 @@
 //   - hit tests, selection, editing and exports keep using document values. Hence the guard below: a
 //     press on a hidden element (or on the document position of an element a peer is dragging) never
 //     reaches Excalidraw, and a box/lasso selection is post-filtered.
+//
+// Spike B (O5, §8.6.3) closes the guard's three gaps from A10 (§2.7): the dead zone (a swallowed press
+// selects the visible element under it), the hover cursor (`default` over blocked elements) and touch
+// (taps, double-taps and long-presses), and adds the board page seam at the end of this file:
+// `installBoardOverrides` provides `isBlocked` and `isHidden` through `registries.ts`.
 import {
   DEFAULT_COLLISION_THRESHOLD,
   sceneCoordsToViewportCoords,
@@ -44,6 +49,8 @@ import type {
 } from '@excalidraw/excalidraw/types'
 import { pointFrom } from '@excalidraw/math'
 import type { GlobalPoint } from '@excalidraw/math/types'
+import type { ScenePoint } from './port.ts'
+import type { CanvasRegistries, HitBlock } from './registries.ts'
 
 export interface Offset {
   readonly x: number
@@ -206,6 +213,11 @@ export class RenderOverrides {
     return this.hiddenExpanded.has(id)
   }
 
+  /** Whether any peer's drag preview is active. */
+  hasDrags(): boolean {
+    return this.drags.size > 0
+  }
+
   /** The peer whose drag preview currently moves this element, if any. */
   movingSource(id: string): string | null {
     let found: string | null = null
@@ -288,12 +300,17 @@ const hitThreshold = (el: ExcalidrawElement, zoom: number) =>
  * as App.getElementsAtPosition / getElementAtPosition (dist/dev/index.js:49977-50037): live, unlocked,
  * not a bound label (its container counts through hitElementBoundText), inside its frame when frames
  * clip; the topmost, re-checked with half the threshold, else the one below it.
+ *
+ * `skip` leaves elements out as if they were not in the scene: the guard's own hit test (§2.7 "the dead
+ * zone") skips hidden elements and elements under a peer's drag preview, to find what the user SEES at
+ * the point.
  */
 export function elementAtScenePoint(
   elements: readonly ExcalidrawElement[],
   appState: Pick<AppState, 'zoom' | 'frameRendering'>,
   x: number,
   y: number,
+  skip?: (el: ExcalidrawElement) => boolean,
 ): ExcalidrawElement | null {
   const live = elements.filter((e) => !e.isDeleted)
   const map = new Map(live.map((e) => [e.id, e])) as unknown as ElementsMap
@@ -303,6 +320,7 @@ export function elementAtScenePoint(
   for (const el of live) {
     if (el.locked) continue
     if (el.type === 'text' && el.containerId) continue
+    if (skip?.(el)) continue
     const hit =
       hitElementBoundText(point, el, map) ||
       hitElementItself({ point, element: el, threshold: hitThreshold(el, zoom), elementsMap: map })
@@ -330,77 +348,260 @@ export interface HitGuardEvent {
   id: string
   reason: BlockReason
   type: string
+  /**
+   * §2.7 "the dead zone": a swallowed press whose point shows a visible element (under the hidden or
+   * moving one) selected that element instead. Absent when nothing visible lay there.
+   */
+  selected?: string
 }
+
+/** Who drags an element right now: O2's presence (registries `dragger`), for "Bob is moving this". */
+export type DraggerLookup = (id: string) => { readonly sid: string; readonly name: string } | null
+
+/** The engine API surface the guard uses (ExcalidrawImperativeAPI satisfies it; tests pass a fake). */
+export type GuardApi = Pick<
+  ExcalidrawImperativeAPI,
+  'getAppState' | 'getSceneElements' | 'updateScene' | 'onChange'
+>
 
 export interface HitGuardOptions {
   /** Lobby's board wrapper (an ancestor of Excalidraw's canvases). */
   wrapper: HTMLElement
-  api: ExcalidrawImperativeAPI
+  api: GuardApi
   overrides: RenderOverrides
   /** Called for each swallowed event (e.g. to toast "Bob is moving this"). */
   onBlocked?: (e: HitGuardEvent) => void
+  /** O2's presence: who drags an element (a drag it knows of blocks presses as `moving` too). */
+  dragger?: DraggerLookup
+  /**
+   * §2.7 dead zone: when a press is swallowed, select the visible element under it through `appState`
+   * (selection only; a drag needs a second press). Default true.
+   */
+  deadZone?: boolean
+  /** §2.7 hover cursor: force `cursor: default` over blocked elements. Default true. */
+  hoverCursor?: boolean
+  /** Where Space is tracked (default: the window, when there is one). */
+  keyTarget?: Pick<EventTarget, 'addEventListener' | 'removeEventListener'> | null
+  /** Schedules the hover test (default: one per animation frame; a microtask outside a browser). */
+  scheduleHover?: (fn: () => void) => void
 }
 
-const isInteractiveCanvas = (t: EventTarget | null) =>
-  t instanceof HTMLCanvasElement && t.classList.contains('interactive')
+/** Excalidraw's interactive canvas (the one its pointer handlers listen on). No DOM globals needed. */
+const isInteractiveCanvas = (t: EventTarget | null) => {
+  const el = t as { tagName?: string; classList?: { contains(c: string): boolean } } | null
+  return !!el && el.tagName === 'CANVAS' && !!el.classList?.contains('interactive')
+}
 
 /** Tools whose press never selects or edits (panning, the laser): let them through. */
 const PASS_TOOLS = new Set(['hand', 'laser'])
+
+/** The wrapper class the hover rule toggles; the style below turns the canvas cursor to `default`. */
+export const HIT_BLOCKED_CLASS = 'lobby-hit-blocked'
+const HIT_BLOCKED_STYLE_ID = 'lobby-hit-blocked-style'
+/**
+ * Excalidraw writes the cursor inline on the interactive canvas (App.cursor.set, dist/dev/index.js
+ * 27988-27991), without `!important`, so an important author rule wins over it.
+ */
+const HIT_BLOCKED_CSS = `.${HIT_BLOCKED_CLASS} canvas.interactive { cursor: default !important; }`
+
+function ensureBlockedStyle(): void {
+  const doc = (globalThis as { document?: Document }).document
+  if (!doc || doc.getElementById(HIT_BLOCKED_STYLE_ID)) return
+  const style = doc.createElement('style')
+  style.id = HIT_BLOCKED_STYLE_ID
+  style.textContent = HIT_BLOCKED_CSS
+  doc.head.appendChild(style)
+}
+
+/** A blocked hit: the element Excalidraw would pick, and why a press on it must not reach Excalidraw. */
+export interface BlockedHit {
+  id: string
+  reason: BlockReason
+  /** the dragger's name for `moving` (null when nobody named it) */
+  name: string | null
+}
+
+/**
+ * The guard's decisions, DOM-free (unit-tested in Node): what Excalidraw would pick at a scene point,
+ * whether that is blocked, and what the user sees there instead.
+ */
+export class HitGuardCore {
+  private readonly api: GuardApi
+  private readonly overrides: RenderOverrides
+  private readonly dragger: DraggerLookup | undefined
+
+  constructor(api: GuardApi, overrides: RenderOverrides, dragger?: DraggerLookup) {
+    this.api = api
+    this.overrides = overrides
+    this.dragger = dragger
+  }
+
+  /** Whether any element can be blocked at all (cheap: the hover test skips the hit test otherwise). */
+  anyBlocked(): boolean {
+    return this.overrides.hiddenIds().size > 0 || this.overrides.hasDrags()
+  }
+
+  /**
+   * Why a press on `id` must not reach Excalidraw: hidden, or drawn elsewhere by a peer's drag preview
+   * (a preview is what moves the drawing away from the document position, so only a preview blocks; the
+   * dragger lookup only names the peer).
+   */
+  private reasonOf(id: string): { reason: BlockReason; name: string | null } | null {
+    const r = this.overrides.blockReason(id)
+    if (!r) return null
+    if (r.kind === 'hidden') return { reason: r, name: null }
+    return { reason: r, name: this.dragger?.(id)?.name ?? null }
+  }
+
+  blockedAtScene(x: number, y: number): BlockedHit | null {
+    const appState = this.api.getAppState()
+    const el = elementAtScenePoint(this.api.getSceneElements() as ExcalidrawElement[], appState, x, y)
+    if (!el) return null
+    const r = this.reasonOf(el.id)
+    return r ? { id: el.id, ...r } : null
+  }
+
+  blockedAtClient(clientX: number, clientY: number): BlockedHit | null {
+    const p = viewportCoordsToSceneCoords({ clientX, clientY }, this.api.getAppState())
+    return this.blockedAtScene(p.x, p.y)
+  }
+
+  /** §2.7 dead zone: the visible element at the point, skipping hidden and moving ones, or null. */
+  visibleAtScene(x: number, y: number): ExcalidrawElement | null {
+    const appState = this.api.getAppState()
+    return elementAtScenePoint(
+      this.api.getSceneElements() as ExcalidrawElement[],
+      appState,
+      x,
+      y,
+      (el) => this.reasonOf(el.id) !== null,
+    )
+  }
+
+  /** The registries' `hitGuard.isBlocked` (O2's double-tap detector and double-click classifier). */
+  isBlocked(point: ScenePoint): HitBlock | null {
+    const hit = this.blockedAtScene(point.x, point.y)
+    if (!hit) return null
+    if (hit.reason.kind === 'hidden') return { kind: 'hidden' }
+    return { kind: 'moving', sid: hit.reason.source, name: hit.name ?? '' }
+  }
+}
 
 /**
  * Capture-phase guard on the wrapper. It runs before Excalidraw's handlers (React's root listener and the
  * interactive canvas's own touchstart listener) and swallows, when the element Excalidraw would pick is
  * hidden or under a peer's drag preview:
- *   - pointerdown (primary button; not while Space is held, not with the hand or laser tool): no select,
- *     no drag, no text editing on the second click, no custom-tool action;
+ *   - pointerdown (primary button, mouse, TOUCH and PEN alike; not while Space is held, not with the hand
+ *     or laser tool): no select, no drag, no text editing on the second click, no custom-tool action, and
+ *     on touch no long-press menu (Excalidraw arms it inside its pointerdown,
+ *     maybeOpenContextMenuAfterPointerDownOnTouchDevices, dist/dev/index.js:45941-45955);
  *   - dblclick (text editing, entering a group, the linear editor);
- *   - contextmenu (Excalidraw selects the element under the pointer first);
+ *   - contextmenu (Excalidraw selects the element under the pointer first; also a long-press's menu);
  *   - a one-finger touchstart (Excalidraw's own double-tap detector opens the text editor).
+ * §2.7's gaps, closed in spike B:
+ *   - the dead zone: a swallowed press selects the visible element Lobby's own hit test finds at that
+ *     point (skipping hidden and moving elements), through `appState` only;
+ *   - the hover cursor: a passive pointermove test toggles HIT_BLOCKED_CLASS on the wrapper, so the
+ *     cursor over a blocked element is `default`, not `move`;
+ *   - touch: the rules above run for touch and pen pointers too.
  * It also post-filters the selection: an element hidden by a collapse never stays selected (box and
  * lasso selections are Excalidraw's own). Returns the uninstaller.
  */
 export function installHitGuard(opts: HitGuardOptions): () => void {
   const { wrapper, api, overrides } = opts
+  const core = new HitGuardCore(api, overrides, opts.dragger)
+  const deadZone = opts.deadZone ?? true
+  const hoverCursor = opts.hoverCursor ?? true
   let spaceHeld = false
 
-  const blockedAt = (clientX: number, clientY: number): { id: string; reason: BlockReason } | null => {
-    const appState = api.getAppState()
-    const p = viewportCoordsToSceneCoords({ clientX, clientY }, appState)
-    const el = elementAtScenePoint(api.getSceneElements() as ExcalidrawElement[], appState, p.x, p.y)
-    if (!el) return null
-    const reason = overrides.blockReason(el.id)
-    return reason ? { id: el.id, reason } : null
-  }
-  const swallow = (e: Event, hit: { id: string; reason: BlockReason }) => {
+  const swallow = (e: Event, hit: BlockedHit, selected?: string) => {
     e.stopPropagation()
     e.stopImmediatePropagation()
     if (e.cancelable) e.preventDefault()
-    opts.onBlocked?.({ ...hit, type: e.type })
+    opts.onBlocked?.({
+      id: hit.id,
+      reason: hit.reason,
+      type: e.type,
+      ...(selected ? { selected } : {}),
+    })
+  }
+
+  /** The dead-zone rule: select what the user sees at the press (nothing when nothing visible is there). */
+  const selectVisibleAt = (clientX: number, clientY: number): string | undefined => {
+    if (!deadZone) return undefined
+    const p = viewportCoordsToSceneCoords({ clientX, clientY }, api.getAppState())
+    const visible = core.visibleAtScene(p.x, p.y)
+    if (!visible) return undefined
+    const groups = visible.groupIds ?? []
+    api.updateScene({
+      appState: {
+        selectedElementIds: { [visible.id]: true },
+        // the outermost group, as a click on a grouped element selects it (selection only, no document change)
+        selectedGroupIds: groups.length ? { [groups[groups.length - 1] as string]: true } : {},
+      },
+    })
+    return visible.id
   }
 
   const onPointerDown = (e: PointerEvent) => {
     if (!isInteractiveCanvas(e.target) || e.button !== 0 || spaceHeld) return
     if (PASS_TOOLS.has(api.getAppState().activeTool.type)) return
-    const hit = blockedAt(e.clientX, e.clientY)
-    if (hit) swallow(e, hit)
+    const hit = core.blockedAtClient(e.clientX, e.clientY)
+    if (!hit) return
+    // Selection only on a primary press of the pointer that started it (never on the second of a pair).
+    swallow(e, hit, e.isPrimary === false ? undefined : selectVisibleAt(e.clientX, e.clientY))
   }
   const onMouseLike = (e: MouseEvent) => {
     if (!isInteractiveCanvas(e.target)) return
-    const hit = blockedAt(e.clientX, e.clientY)
+    const hit = core.blockedAtClient(e.clientX, e.clientY)
     if (hit) swallow(e, hit)
   }
   const onTouchStart = (e: TouchEvent) => {
     if (!isInteractiveCanvas(e.target) || e.touches.length !== 1) return
     const t = e.touches[0]
     if (!t) return
-    const hit = blockedAt(t.clientX, t.clientY)
+    const hit = core.blockedAtClient(t.clientX, t.clientY)
     if (hit) swallow(e, hit)
   }
-  const onKey = (e: KeyboardEvent) => {
-    if (e.code === 'Space') spaceHeld = e.type === 'keydown'
+  const onKey = (e: Event) => {
+    const k = e as KeyboardEvent
+    if (k.code === 'Space') spaceHeld = k.type === 'keydown'
   }
   const onBlur = () => {
     spaceHeld = false
+  }
+
+  // §2.7 hover cursor: one test per frame at the last pointer position; never while a button is held
+  // (the user's own drag), never with the hand or laser tool.
+  let hoverAt: { x: number; y: number } | null = null
+  let hoverScheduled = false
+  let blockedClass = false
+  const setBlockedClass = (on: boolean) => {
+    if (on === blockedClass) return
+    blockedClass = on
+    wrapper.classList.toggle(HIT_BLOCKED_CLASS, on)
+  }
+  const schedule =
+    opts.scheduleHover ??
+    ((fn: () => void) =>
+      typeof requestAnimationFrame === 'function' ? requestAnimationFrame(() => fn()) : queueMicrotask(fn))
+  const runHover = () => {
+    hoverScheduled = false
+    const at = hoverAt
+    if (!at) return setBlockedClass(false)
+    if (!core.anyBlocked() || PASS_TOOLS.has(api.getAppState().activeTool.type)) return setBlockedClass(false)
+    setBlockedClass(core.blockedAtClient(at.x, at.y) !== null)
+  }
+  const onPointerMove = (e: PointerEvent) => {
+    if (e.buttons !== 0) return
+    hoverAt = isInteractiveCanvas(e.target) ? { x: e.clientX, y: e.clientY } : null
+    if (hoverScheduled) return
+    hoverScheduled = true
+    schedule(runHover)
+  }
+  const onPointerLeave = () => {
+    hoverAt = null
+    setBlockedClass(false)
   }
 
   // Selection post-filter: hidden ids never stay selected.
@@ -414,27 +615,238 @@ export function installHitGuard(opts: HitGuardOptions): () => void {
     api.updateScene({ appState: { selectedElementIds: keep } })
   })
 
+  const keyTarget =
+    opts.keyTarget === undefined ? ((globalThis as { window?: EventTarget }).window ?? null) : opts.keyTarget
   const cap = { capture: true } as const
+  if (hoverCursor) ensureBlockedStyle()
   wrapper.addEventListener('pointerdown', onPointerDown, cap)
   wrapper.addEventListener('dblclick', onMouseLike, cap)
   wrapper.addEventListener('contextmenu', onMouseLike, cap)
   wrapper.addEventListener('touchstart', onTouchStart, { capture: true, passive: false })
-  window.addEventListener('keydown', onKey, cap)
-  window.addEventListener('keyup', onKey, cap)
-  window.addEventListener('blur', onBlur)
+  if (hoverCursor) {
+    wrapper.addEventListener('pointermove', onPointerMove, { capture: true, passive: true })
+    wrapper.addEventListener('pointerleave', onPointerLeave, { passive: true })
+  }
+  keyTarget?.addEventListener('keydown', onKey, cap)
+  keyTarget?.addEventListener('keyup', onKey, cap)
+  keyTarget?.addEventListener('blur', onBlur)
   return () => {
     unsubscribe()
     wrapper.removeEventListener('pointerdown', onPointerDown, cap)
     wrapper.removeEventListener('dblclick', onMouseLike, cap)
     wrapper.removeEventListener('contextmenu', onMouseLike, cap)
     wrapper.removeEventListener('touchstart', onTouchStart, cap)
-    window.removeEventListener('keydown', onKey, cap)
-    window.removeEventListener('keyup', onKey, cap)
-    window.removeEventListener('blur', onBlur)
+    wrapper.removeEventListener('pointermove', onPointerMove, cap)
+    wrapper.removeEventListener('pointerleave', onPointerLeave)
+    keyTarget?.removeEventListener('keydown', onKey, cap)
+    keyTarget?.removeEventListener('keyup', onKey, cap)
+    keyTarget?.removeEventListener('blur', onBlur)
+    setBlockedClass(false)
+    hoverAt = null
   }
 }
 
 /** Scene → client coordinates (for overlays and tests). */
 export function sceneToClient(api: ExcalidrawImperativeAPI, x: number, y: number): { x: number; y: number } {
   return sceneCoordsToViewportCoords({ sceneX: x, sceneY: y }, api.getAppState())
+}
+
+// ---- the board page seam (spike B, §8.6.3) ------------------------------------------------------------
+//
+// One RenderOverrides and one hit guard per board page. O2's board page (or port-impl) calls
+// `installBoardOverrides` once the Excalidraw API is ready, and uses the returned `overrides` for drag
+// previews (`setDrag`, `clearDragFor`: the existing drag-offset API). This module then:
+//   - provides `registries.hitGuard.isBlocked` (O2's double-tap detector and double-click classifier)
+//     and `registries.hidden.isHidden` (O2's selectAll.ts and the box/lasso post-filter);
+//   - reads O2's `registries.dragger.draggerOf` for "Bob is moving this";
+//   - hands the same RenderOverrides to O5's features (the mind-map collapse) through `onOverrides`, so
+//     neither side edits the other's file and there is one snapshot owner (see the header).
+
+const boardOverrides = new WeakMap<CanvasRegistries, RenderOverrides>()
+const waiting = new WeakMap<CanvasRegistries, Set<(o: RenderOverrides) => void>>()
+
+/** Makes `overrides` the board page's overrides for `registries` (features waiting for it are called). */
+export function attachOverrides(registries: CanvasRegistries, overrides: RenderOverrides): () => void {
+  boardOverrides.set(registries, overrides)
+  const pending = waiting.get(registries)
+  waiting.delete(registries)
+  for (const cb of pending ?? []) cb(overrides)
+  return () => {
+    if (boardOverrides.get(registries) === overrides) boardOverrides.delete(registries)
+  }
+}
+
+/** The board page's overrides, if installed. */
+export function overridesOf(registries: CanvasRegistries): RenderOverrides | null {
+  return boardOverrides.get(registries) ?? null
+}
+
+/**
+ * Calls `cb` with the board page's overrides now, or as soon as the board page attaches them (features
+ * may install before the engine is ready). Returns the cancel.
+ */
+export function onOverrides(registries: CanvasRegistries, cb: (o: RenderOverrides) => void): () => void {
+  const now = boardOverrides.get(registries)
+  if (now) {
+    cb(now)
+    return () => {}
+  }
+  const set = waiting.get(registries) ?? new Set()
+  set.add(cb)
+  waiting.set(registries, set)
+  return () => set.delete(cb)
+}
+
+/**
+ * The board page's engine handles, for O5's modules that must READ the engine (the image loader hands
+ * decoded files to `api.addFiles`; exports read `getFiles`, `getAppState`). Every WRITE still goes
+ * through `CanvasPort.transact` and the sync engine.
+ */
+export interface BoardEngine {
+  readonly api: ExcalidrawImperativeAPI
+  readonly wrapper: HTMLElement
+  /** the board id (`/b/:boardId`): the file routes need `?board=` */
+  readonly boardId: string | null
+}
+
+const boardEngines = new WeakMap<CanvasRegistries, BoardEngine>()
+const waitingEngine = new WeakMap<CanvasRegistries, Set<(e: BoardEngine) => void>>()
+
+/** Makes `engine` the board page's engine for `registries` (modules waiting for it are called). */
+export function attachBoardEngine(registries: CanvasRegistries, engine: BoardEngine): () => void {
+  boardEngines.set(registries, engine)
+  const pending = waitingEngine.get(registries)
+  waitingEngine.delete(registries)
+  for (const cb of pending ?? []) cb(engine)
+  return () => {
+    if (boardEngines.get(registries) === engine) boardEngines.delete(registries)
+  }
+}
+
+/** The board page's engine, if attached. */
+export function boardEngineOf(registries: CanvasRegistries): BoardEngine | null {
+  return boardEngines.get(registries) ?? null
+}
+
+/** Calls `cb` with the board page's engine now, or once attached. Returns the cancel. */
+export function onBoardEngine(registries: CanvasRegistries, cb: (e: BoardEngine) => void): () => void {
+  const now = boardEngines.get(registries)
+  if (now) {
+    cb(now)
+    return () => {}
+  }
+  const set = waitingEngine.get(registries) ?? new Set()
+  set.add(cb)
+  waitingEngine.set(registries, set)
+  return () => set.delete(cb)
+}
+
+export interface BoardOverridesOptions {
+  api: ExcalidrawImperativeAPI
+  /** Lobby's board wrapper (an ancestor of Excalidraw's canvases). */
+  wrapper: HTMLElement
+  registries: CanvasRegistries
+  /** The board id (for O5's file routes); default: read from `/b/:boardId` in the page URL. */
+  boardId?: string
+  /** "Bob is moving this" (default: a small status line inside the wrapper, `data-lobby-hit-toast`). */
+  toast?: (message: string) => void
+  /** Every swallowed event (tests and evidence). */
+  onBlocked?: (e: HitGuardEvent) => void
+}
+
+export interface BoardOverrides {
+  readonly overrides: RenderOverrides
+  /** The swallowed events so far (at most 200, newest last). */
+  readonly log: readonly HitGuardEvent[]
+  dispose(): void
+}
+
+/** The default toast: one status line in the wrapper, gone after 2.5 s. */
+function wrapperToast(wrapper: HTMLElement): (message: string) => void {
+  let timer: ReturnType<typeof setTimeout> | null = null
+  return (message) => {
+    const doc = wrapper.ownerDocument
+    let el = wrapper.querySelector<HTMLElement>('[data-lobby-hit-toast]')
+    if (!el) {
+      el = doc.createElement('div')
+      el.setAttribute('data-lobby-hit-toast', '')
+      el.setAttribute('role', 'status')
+      el.style.cssText =
+        'position:absolute;left:50%;bottom:72px;transform:translateX(-50%);z-index:30;padding:6px 12px;' +
+        'border-radius:8px;background:rgba(20,20,24,.88);color:#fff;font:13px/1.3 system-ui,sans-serif;' +
+        'pointer-events:none;max-width:calc(100% - 32px);white-space:nowrap;overflow:hidden;text-overflow:ellipsis'
+      wrapper.appendChild(el)
+    }
+    el.textContent = message
+    el.hidden = false
+    if (timer) clearTimeout(timer)
+    timer = setTimeout(() => {
+      if (el) el.hidden = true
+    }, 2_500)
+  }
+}
+
+/** The message of a swallowed press on an element a peer is dragging (§2.7). */
+export const movingMessage = (name: string | null) => `${name?.trim() || 'Someone'} is moving this`
+
+/**
+ * The board page's overrides and hit guard (see the section header). O2 calls it once per board page
+ * after the Excalidraw API is ready; the returned `dispose` undoes everything.
+ */
+export function installBoardOverrides(opts: BoardOverridesOptions): BoardOverrides {
+  const { api, wrapper, registries } = opts
+  const overrides = new RenderOverrides(api, {
+    elements: () => api.getSceneElementsIncludingDeleted() as unknown as Iterable<OverrideElementInfo>,
+  })
+  const dragger: DraggerLookup = (id) => registries.dragger.draggerOf(id)
+  const core = new HitGuardCore(api, overrides, dragger)
+  const toast = opts.toast ?? wrapperToast(wrapper)
+  const log: HitGuardEvent[] = []
+  const uninstallGuard = installHitGuard({
+    wrapper,
+    api,
+    overrides,
+    dragger,
+    onBlocked: (e) => {
+      log.push(e)
+      if (log.length > 200) log.shift()
+      opts.onBlocked?.(e)
+      // One toast per press (pointerdown or a touch's touchstart), for moving elements only.
+      if (e.reason.kind === 'moving' && (e.type === 'pointerdown' || e.type === 'touchstart')) {
+        const who = registries.dragger.draggerOf(e.id)
+        toast(movingMessage(who?.name ?? null))
+      }
+    },
+  })
+  const unprovideBlocked = registries.hitGuard.provide((point) => core.isBlocked(point))
+  const unprovideHidden = registries.hidden.provide((id) => overrides.isHidden(id))
+  // New labels and frame children join a collapsed branch as they arrive.
+  const unsubscribeScene = api.onChange(() => overrides.refresh())
+  const detach = attachOverrides(registries, overrides)
+  const detachEngine = attachBoardEngine(registries, {
+    api,
+    wrapper,
+    boardId: opts.boardId ?? boardIdFromLocation(),
+  })
+  return {
+    overrides,
+    log,
+    dispose() {
+      detachEngine()
+      detach()
+      unsubscribeScene()
+      unprovideHidden()
+      unprovideBlocked()
+      uninstallGuard()
+      overrides.dispose()
+      api.setElementRenderOverrides(null)
+    },
+  }
+}
+
+/** `/b/:boardId` of the page URL (the spike board page's route), or null. */
+export function boardIdFromLocation(): string | null {
+  const path = (globalThis as { location?: { pathname?: string } }).location?.pathname ?? ''
+  const m = /^\/b\/([a-z0-9][a-z0-9_-]{2,63})(?:\/|$)/.exec(path)
+  return m?.[1] ?? null
 }

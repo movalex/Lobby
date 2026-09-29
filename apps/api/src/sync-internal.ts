@@ -2,6 +2,7 @@
 // board. Other services never open the sync server's disk; they ask it over this authenticated API.
 
 import { INTERNAL_SECRET_HEADER } from '@draftroom/auth-tickets'
+import { SYNC_INTERNAL_TIMEOUT_MS, type WorkshopStateBody, workshopStatePath } from '@draftroom/contracts'
 
 /** A tldraw RoomSnapshot as JSON (documents + schema + clocks). Treated as opaque data here. */
 export type RoomSnapshotJson = {
@@ -33,6 +34,13 @@ export interface SyncInternalClient {
    * (features/search validates it).
    */
   boardText?(boardId: string, opts?: { since?: number; maxBytes?: number }): Promise<unknown>
+  /**
+   * Excalidraw engine, A2 (docs/EXCALIDRAW-MIGRATION.md §1, §2.4.6; @draftroom/contracts
+   * sync-internal.ts): tells sync whether a dot vote is open (POST /internal/boards/:bid/workshop-state,
+   * 204), so it refuses new +1s and drops selection presence meanwhile. Optional like placeNotes. Throws
+   * SyncUnavailable on anything but 2xx; a tldraw sync answers 404 (it has no such route).
+   */
+  workshopState?(boardId: string, body: WorkshopStateBody): Promise<void>
 }
 
 export class SyncSeedConflict extends Error {
@@ -41,7 +49,14 @@ export class SyncSeedConflict extends Error {
   }
 }
 
-export class SyncUnavailable extends Error {}
+export class SyncUnavailable extends Error {
+  /** The HTTP status sync answered with, when it answered at all. */
+  readonly status: number | null
+  constructor(message?: string, status: number | null = null) {
+    super(message)
+    this.status = status
+  }
+}
 
 export function createHttpSyncInternalClient(opts: {
   baseUrl: string
@@ -102,6 +117,22 @@ export function createHttpSyncInternalClient(opts: {
       const res = await call(`/internal/boards/${encodeURIComponent(boardId)}/text${qs}`)
       if (!res.ok) throw new SyncUnavailable(`board text failed with ${res.status}`)
       return (await res.json()) as unknown
+    },
+    async workshopState(boardId, body) {
+      let res: Response
+      try {
+        res = await fetch(`${base}${workshopStatePath(boardId)}`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', [INTERNAL_SECRET_HEADER]: opts.secret },
+          body: JSON.stringify(body),
+          signal: AbortSignal.timeout(Math.min(timeout, SYNC_INTERNAL_TIMEOUT_MS)),
+          redirect: 'error', // never forward the secret anywhere else
+        })
+      } catch (e) {
+        throw new SyncUnavailable(`sync unreachable: ${(e as Error).name}`)
+      }
+      await res.body?.cancel()
+      if (!res.ok) throw new SyncUnavailable(`workshop-state failed with ${res.status}`, res.status)
     },
   }
 }

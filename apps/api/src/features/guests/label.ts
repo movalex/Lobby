@@ -7,9 +7,23 @@ import { guestLabelName } from '@draftroom/contracts'
 import type { Queryable } from '@draftroom/db'
 
 export async function ticketName(db: Queryable, user: { id: string; name: string }): Promise<string> {
-  const row = await db.maybeOne<{ guest_name: string | null }>(
-    "SELECT guest_name FROM users WHERE id = $1 AND kind = 'guest'",
+  return (await ticketIdentity(db, user)).name
+}
+
+/**
+ * The name a ticket carries and whether it is a name-only guest's (A3, docs/EXCALIDRAW-MIGRATION.md §1:
+ * the ticket's `guest` claim, from which the Excalidraw engine's sync enforces the guest limits: half
+ * the op rate, a 500-item creation cap, Lobby-relative links only, no lock or unlock). Read from the
+ * users row, never from the request: a guest cannot drop the claim, and nobody else can get it.
+ */
+export async function ticketIdentity(
+  db: Queryable,
+  user: { id: string; name: string },
+): Promise<{ name: string; guest: boolean }> {
+  const row = await db.maybeOne<{ kind: string; guest_name: string | null }>(
+    'SELECT kind, guest_name FROM users WHERE id = $1',
     [user.id],
   )
-  return row?.guest_name ? guestLabelName(row.guest_name) : user.name
+  const guest = row?.kind === 'guest'
+  return { name: guest && row?.guest_name ? guestLabelName(row.guest_name) : user.name, guest }
 }
