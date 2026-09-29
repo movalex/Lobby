@@ -32,6 +32,7 @@ import { SyncErrorScreen } from '../../board/SyncErrorScreen.tsx'
 import { BoardAccount, type ConnState, TopBarFrame } from '../../board/TopBarFrame.tsx'
 import { CANVAS_FEATURES } from '../../features/canvas-registry.ts'
 import { type BoardEvents, createBoardEvents } from '../../features/events.ts'
+import { DEV_AUTH_ENABLED } from '../../lib/identity.ts'
 import type { BoardRole } from '../../lib/permissions.ts'
 import { boardPath, setLeaveGuard } from '../../lib/routing.ts'
 import { useResource } from '../../lib/useResource.ts'
@@ -58,6 +59,7 @@ import {
   topBarItems,
   useRegistries,
 } from './chrome.tsx'
+import { PROBE_FEATURE } from './probe.tsx'
 import { LobbyBoardSession, type LobbyBoardSnapshot } from './session.ts'
 import { duplicateLobbyData } from './tx.ts'
 import './board.css'
@@ -288,6 +290,25 @@ function LobbyBoardView({
   useEffect(() => {
     if (!ctx || !welcomed) return
     return installCanvasFeatures(CANVAS_FEATURES, ctx)
+  }, [ctx, welcomed])
+  // dev-auth builds: the board page's own e2e checks install a probe feature through the debug handle
+  useEffect(() => {
+    if (!ctx || !welcomed || !DEV_AUTH_ENABLED) return
+    const handle = (window as unknown as { __lobbyBoard?: Record<string, unknown> }).__lobbyBoard
+    if (!handle) return
+    let uninstall: (() => void) | null = null
+    handle.installProbe = () => {
+      uninstall ??= installCanvasFeatures([PROBE_FEATURE], ctx)
+    }
+    handle.uninstallProbe = () => {
+      uninstall?.()
+      uninstall = null
+    }
+    return () => {
+      uninstall?.()
+      delete handle.installProbe
+      delete handle.uninstallProbe
+    }
   }, [ctx, welcomed])
 
   const uploading = 0

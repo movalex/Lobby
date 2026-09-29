@@ -16,7 +16,7 @@
  * the custom and pointer tools, undo's actions; the outer input layer; the LobbyCanvas; the test facade
  * (dev-auth builds only); then the socket connects.
  */
-import { CLOSE_TERMINAL, type RosterEntry } from '@draftroom/canvas-schema/protocol'
+import { CLOSE_TERMINAL, type RosterEntry, type ServerMessage } from '@draftroom/canvas-schema/protocol'
 import type { TicketResponse } from '@draftroom/contracts'
 import * as ExcalidrawElementNs from '@excalidraw/element'
 import { CaptureUpdateAction } from '@excalidraw/excalidraw'
@@ -352,15 +352,12 @@ export class LobbyBoardSession {
         this.set({ phase: 'closed', closeReason: reason })
       } else if (e.state === 'closed' && this.snap.phase !== 'closed') this.set({ phase: 'offline' })
     } else if (e.kind === 'message') {
+      // the core reports a message BEFORE it applies it (its roster, lease table and document are still
+      // the old ones here): read them once it has
       const m = e.message
-      if (m.type === 'roster') {
-        this.set({ roster: [...this.core.roster().values()] })
-        this.peers.rosterChanged()
-      } else if (m.type === 'lease') this.concern('presence')
-      else if (m.type === 'changes' && m.doc) {
-        this.emit('docChanged', Object.keys(m.doc.set))
-        this.concern('docKeys')
-      } else if (m.type === 'notice' && m.code === 'PREPARING' && !this.snap.welcomed)
+      if (m.type === 'roster' || m.type === 'lease' || (m.type === 'changes' && m.doc))
+        queueMicrotask(() => this.afterMessage(m))
+      else if (m.type === 'notice' && m.code === 'PREPARING' && !this.snap.welcomed)
         this.set({ phase: 'preparing' })
     } else if (e.kind === 'reject') {
       const el = this.core.confirmed(e.id) as { containerId?: string | null } | undefined
@@ -377,6 +374,18 @@ export class LobbyBoardSession {
         this.emitChange(this.classifier.applied(e.ids, (id) => byId.get(id) as never))
       }
       this.boardInput?.invalidateHover()
+    }
+  }
+
+  private afterMessage(m: ServerMessage): void {
+    if (m.type === 'roster') {
+      this.set({ roster: [...this.core.roster().values()] })
+      this.peers.rosterChanged()
+      this.concern('presence')
+    } else if (m.type === 'lease') this.concern('presence')
+    else if (m.type === 'changes' && m.doc) {
+      this.emit('docChanged', Object.keys(m.doc.set))
+      this.concern('docKeys')
     }
   }
 

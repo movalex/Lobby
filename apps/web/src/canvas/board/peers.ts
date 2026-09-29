@@ -97,8 +97,17 @@ export class PeerStore {
     this.changed()
   }
 
+  private scheduled = false
+
+  /** Listeners hear of a change after the core applied the message (it reports messages before). */
   private changed(): void {
     this.cache = null
-    for (const l of [...this.listeners]) l()
+    if (this.scheduled) return
+    this.scheduled = true
+    queueMicrotask(() => {
+      this.scheduled = false
+      this.cache = null
+      for (const l of [...this.listeners]) l()
+    })
   }
 }

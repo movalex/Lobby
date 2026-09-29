@@ -119,7 +119,7 @@ describe('PeerStore', () => {
     return { src, send: (message: ServerMessage) => listener?.({ kind: 'message', message }) }
   }
 
-  it('keeps each peer frame with its view, joins identity from the roster, and leaves out this tab', () => {
+  it('keeps each peer frame with its view, joins identity from the roster, and leaves out this tab', async () => {
     const s = source()
     const store = new PeerStore(s.src)
     let bumps = 0
@@ -154,8 +154,11 @@ describe('PeerStore', () => {
       },
     ])
     expect(store.peer('s2')?.name).toBe('Bob')
+    await Promise.resolve()
+    expect(bumps).toBe(1)
     s.send({ type: 'presence', peers: [], off: ['s2'] } as ServerMessage)
     expect(store.peers()).toEqual([])
+    await Promise.resolve()
     expect(bumps).toBe(2)
   })
 })
