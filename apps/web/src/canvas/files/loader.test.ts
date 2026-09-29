@@ -74,7 +74,7 @@ function harness(opts: Partial<ImageLoaderOptions> & { fail?: Set<string>; conte
 
 describe('parseFileKey', () => {
   it('reads a version id and an optional derivative suffix', () => {
-    expect(parseFileKey(VER(1))).toEqual({ key: VER(1), versionId: VER(1), derivative: 'thumb' })
+    expect(parseFileKey(VER(1))).toEqual({ key: VER(1), versionId: VER(1), derivative: 'thumb', page: null })
     expect(parseFileKey(`${VER(1)}@display`)?.derivative).toBe('display')
     expect(parseFileKey(`${VER(1)}@original`)).toBeNull()
     expect(parseFileKey('9b3c0a…base64')).toBeNull()
@@ -142,11 +142,11 @@ describe('ImageLoader', () => {
     expect(h.loader.stats.gaveUp).toBe(1)
   })
 
-  it('refuses a non-raster response and a URL that is not a same-origin path', async () => {
-    const svg = harness({ contentType: 'image/svg+xml' })
-    svg.loader.request([VER(3)])
-    await svg.respond(true)
-    expect(svg.added).toEqual([])
+  it('refuses a non-image response and a URL that is not a same-origin path', async () => {
+    const html = harness({ contentType: 'text/html' })
+    html.loader.request([VER(3)])
+    await html.respond(true)
+    expect(html.added).toEqual([])
     const foreign = harness({ resolveUrl: () => 'https://cdn.example/x.webp' })
     foreign.loader.request([VER(4)])
     await foreign.respond(true)
