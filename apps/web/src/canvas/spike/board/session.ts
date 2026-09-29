@@ -34,6 +34,7 @@ import { IDLE_GESTURE } from '../../sync/types.ts'
 import { attachCustomTools, type CustomToolClick } from '../../tools/customTools.ts'
 import { setTool } from '../../tools/tools.ts'
 import { installAll } from '../installers.ts'
+import { createSpecHelpers } from './specHelpers.ts'
 
 export type BoardPhase = 'connecting' | 'ready' | 'offline' | 'no-access' | 'signed-out' | 'closed'
 
@@ -362,6 +363,7 @@ export class BoardSession {
       lease: this.lease,
       input: this.input,
       undo: this.undo,
+      helpers: createSpecHelpers(port),
     }
     // 7. connect
     this.core.start()

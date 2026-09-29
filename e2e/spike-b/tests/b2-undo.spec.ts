@@ -313,7 +313,7 @@ test('U10: fixes and repairs create no step and no "change kept"', async () => {
     await lc(A()).setTool('select')
     await waitSaved(A())
     // 2. an arrow bound to a note B deletes: the room nulls the binding (a repair)
-    const target = await rect(A(), {})
+    const target = await rect(B()) // the note is B's (A's undo never touches it)
     const arrowId = await lc(A()).create('arrow', {
       x: at.x + 300,
       y: at.y + 200,
@@ -327,8 +327,8 @@ test('U10: fixes and repairs create no step and no "change kept"', async () => {
     await everywhere(r.browsers, arrowId)
     await allSaved(r.browsers)
     const size1 = await board(A(), (b) => b.undo.history.undoSize as number)
-    // A's real actions since size0: the stroke, the target, the arrow (3); a fix never adds one
-    expect(size1 - size0).toBeLessThanOrEqual(3)
+    // A's real actions since size0: the stroke and the arrow (2); a fix or a repair never adds one
+    expect(size1 - size0).toBeLessThanOrEqual(2)
     for (let k = 0; k < size1 - size0; k++) await undo(A())
     expect((await toasts(A())).slice(t0).filter((t) => /kept/.test(t))).toEqual([])
     await converge(r)
