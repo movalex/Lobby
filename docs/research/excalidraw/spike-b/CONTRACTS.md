@@ -296,6 +296,23 @@ until B0 is confirmed (§8.6.1).
 4. **Excalidraw's constructors default to roughness 1**, so every test element must set roughness 0 to
    match Lobby (the acceptance tests' helpers do).
 
+## Lead decisions at the M1/M2 integration (no frozen file changed)
+
+Recorded with the integration in `spike-b/M1-M2.md`:
+
+1. **O1's op and byte budgets** park a push inside one burst before answering RATE (O1-room.md deviation 1):
+   accepted for the spike, because the frozen arrow tests burst far above §2.4.5's budget. The frozen tests
+   stay as they are.
+2. **A port patch's `customData`** (port.ts `CanvasTx.update`/`create`) has the element field's shape,
+   `{lobby: {key: value | null}}` (null removes a key); flat keys under `customData` are not read.
+3. **`BrowserOptions.guest`** means a guest signed in by the harness, which is not available yet (the
+   harness throws "not available"; R1's guest part stays NOT RUN on it). A spec that runs the A3 guest flow
+   itself launches a dev-user browser.
+4. **Not accepted now (not blocking)**: O3's `EngineCore.pendingLeases()` (O2 implements it; the facade
+   reads it structurally, and a required member would break O3's facade test), O2/O3's additions to
+   `support/types.ts` (`restoreSocket` options, `newTab`, `relayStats`), O4's `lb_source` schema text in
+   `room/schema.ts` (wave 2D).
+
 ## Change log
 
 | Rev | Date | Change | By |
