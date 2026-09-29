@@ -15,6 +15,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { api, isApiError } from '../api/client.ts'
 import { useTheme } from '../theme/useTheme.ts'
 import { type ClerkAppearance, clerkAppearance, readThemeTokens } from './clerkAppearance.ts'
+import { ExchangeStatus } from './ExchangeStatus.tsx'
 import { type ExchangeErrorView, exchangeErrorView } from './exchange-error.ts'
 import { useSession } from './session.tsx'
 import { clerkAccountLabel, clerkSignInView } from './signOut.ts'
@@ -129,22 +130,12 @@ function ClerkExchange({ onDone, appearance }: { onDone(): void; appearance: Cle
   }
   if (view === 'exchange' || view === 'error') {
     return (
-      <div role={error ? 'alert' : 'status'}>
-        <p className="dr-muted" data-testid={error ? 'clerk-exchange-error' : undefined}>
-          {error?.message ?? 'Signing you in to Lobby…'}
-        </p>
-        {error && (
-          <div className="dr-row dr-row--wrap">
-            {error.retry && (
-              <button type="button" className="dr-btn dr-btn--primary" onClick={() => setError(null)}>
-                Try again
-              </button>
-            )}
-            {switchButton}
-          </div>
-        )}
-        {switchProblem}
-      </div>
+      <ExchangeStatus
+        error={error}
+        onRetry={() => setError(null)}
+        actions={switchButton}
+        problem={switchProblem}
+      />
     )
   }
   // Hash routing keeps Clerk's multi-step flow inside /signin without touching our router.

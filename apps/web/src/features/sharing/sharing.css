@@ -473,6 +473,12 @@
   color: var(--dr-warn);
 }
 
+/* Domain access (docs/DOMAIN-ACCESS-CONTRACTS.md §9, fixer round 2): why Owner is off for people
+   outside Dark Burn Creative and Trailer Park Group, said once under "People with access". */
+.dr-share__hint.dr-sharing__owner-note {
+  margin: -4px 0 8px;
+}
+
 /* Domain access (docs/DOMAIN-ACCESS-CONTRACTS.md §9): a board manager who is not at Dark Burn Creative
    or Trailer Park Group can only reduce access; the note at the top of the dialog says why. */
 .dr-share__note.dr-sharing__creator-note {

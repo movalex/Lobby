@@ -13,6 +13,7 @@ import {
   isEmailMismatch,
   lockedHint,
   lockedSignInLabel,
+  ownInvitationWayBack,
   ownName,
   ownNameParts,
   rememberAcceptIntent,
@@ -34,9 +35,31 @@ describe('invitation summary', () => {
     expect(s).toEqual({
       eyebrow: 'Alice invited you to a board',
       title: 'Join “Q3 planning”',
+      roleHeading: 'Your role',
       roleLabel: 'Can comment',
       acceptLabel: 'Accept and open board',
     })
+  })
+
+  it('the inviter’s own locked link is about their invitation, and leads back, never to a sign-out', () => {
+    const board = { ...base, board: { id: BOARD_ID, title: 'Q3 planning' }, role: 'viewer' }
+    expect(invitationSummary(board, { sentByYou: true })).toEqual({
+      eyebrow: 'Your invitation to a board',
+      title: '“Q3 planning”',
+      roleHeading: 'Their role',
+      roleLabel: 'Can view',
+      acceptLabel: 'Accept and open board',
+    })
+    const workspace = { ...base, board: null, role: 'member' }
+    expect(invitationSummary(workspace, { sentByYou: true })).toMatchObject({
+      eyebrow: 'Your invitation to a workspace',
+      title: 'Dev Studio',
+      roleHeading: 'Their role',
+    })
+    // Not the inviter's (or an older api without sentByYou): as before.
+    expect(invitationSummary(board, { sentByYou: false }).eyebrow).toBe('Alice invited you to a board')
+    expect(ownInvitationWayBack(board)).toEqual({ label: 'Back to the board', href: `/b/${BOARD_ID}` })
+    expect(ownInvitationWayBack(workspace)).toEqual({ label: 'Go to the workspace', href: `/w/${WS_ID}` })
   })
 
   it('workspace invitations name the workspace and the workspace role', () => {

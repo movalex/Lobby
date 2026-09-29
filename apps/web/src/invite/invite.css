@@ -106,6 +106,12 @@
   line-height: 1.45;
   overflow-wrap: anywhere;
 }
+/* The inviter's own link (fixer round 2): information, not a warning. */
+.dr-invite-mismatch.dr-invite-mismatch--own {
+  border-color: var(--dr-accent-line);
+  background: var(--dr-accent-bg);
+  color: var(--dr-accent-ink);
+}
 .dr-invite-mismatch p {
   margin: 0;
 }

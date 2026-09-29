@@ -21,6 +21,8 @@ import {
   isEmailMismatch,
   lockedHint,
   lockedSignInLabel,
+  ownInvitationWayBack,
+  ownName,
   rememberAcceptIntent,
   safeSessionStorage,
   shouldAutoAccept,
@@ -91,7 +93,10 @@ export function InvitePage({ token }: { token: string }) {
         return // the session guard shows sign-in
       }
       if (isApiError(e) && e.code === DOMAIN_ACCESS_CODES.emailMismatch) {
-        // The page already has the masked address from the preview; the 403 body is not read.
+        // The page already has the masked address from the preview; the 403 body is not read. The
+        // account's own address is read again: accept checked it against the sign-in service, and the
+        // api stored what it found, so the session's copy (which the preview matched) is out of date.
+        await refresh()
         setAccepting(false)
         setMismatchAtAccept(true)
         return
@@ -163,12 +168,15 @@ export function InvitePage({ token }: { token: string }) {
   }
 
   const inv = preview.data
-  const summary = invitationSummary(inv)
   const here = invitePath(token)
   const guestLink = inv.allowGuests && inv.board !== null
   // Domain access: an invitation locked to one address (never a guest link) names it, masked.
   const hint = lockedHint(inv)
   const mismatch = signedIn && kind === 'account' && isEmailMismatch(inv, mismatchAtAccept)
+  // The inviter checking their own locked link: the page is about their invitation, and its action
+  // goes back to the board or workspace (never a sign-out).
+  const ownLink = mismatch && inv.sentByYou
+  const summary = invitationSummary(inv, { sentByYou: ownLink })
 
   let actions: ReactNode
   if (signedIn && kind === 'guest') {
@@ -209,33 +217,51 @@ export function InvitePage({ token }: { token: string }) {
     )
   } else if (signedIn && mismatch) {
     // State 3: the wrong account. One way on: sign in with the invited address (and accept after it).
+    // The inviter's own link is not an error: it says whom the link is for, and leads back.
     const copy = emailMismatchCopy({
       hint,
       email: state.me.access.email,
       invitedBy: inv.invitedBy.name,
-      sentByYou: inv.sentByYou,
+      sentByYou: ownLink,
     })
+    const back = ownLink ? ownInvitationWayBack(inv) : null
     actions = (
       <>
-        <div className="dr-invite-mismatch" role="alert" data-testid="invite-email-mismatch">
+        <div
+          className={ownLink ? 'dr-invite-mismatch dr-invite-mismatch--own' : 'dr-invite-mismatch'}
+          role={ownLink ? 'status' : 'alert'}
+          data-testid="invite-email-mismatch"
+          data-sent-by-you={ownLink || undefined}
+        >
           <p className="dr-invite-mismatch__title">
             <strong>{copy.title}</strong>
           </p>
           <p data-testid="invite-email-mismatch-body">{copy.body}</p>
         </div>
-        <button
-          type="button"
-          className="dr-btn dr-btn--primary dr-btn--lg"
-          data-testid="invite-mismatch-switch"
-          disabled={signingOut}
-          aria-busy={signingOut || undefined}
-          onClick={() => {
-            rememberAcceptIntent(safeSessionStorage(), token)
-            void signOut({ returnTo: here })
-          }}
-        >
-          {signingOut ? 'Signing out…' : 'Sign in with a different account'}
-        </button>
+        {back ? (
+          <a
+            className="dr-btn dr-btn--primary dr-btn--lg"
+            data-testid="invite-own-back"
+            href={back.href}
+            onClick={linkClick(back.href)}
+          >
+            {back.label}
+          </a>
+        ) : (
+          <button
+            type="button"
+            className="dr-btn dr-btn--primary dr-btn--lg"
+            data-testid="invite-mismatch-switch"
+            disabled={signingOut}
+            aria-busy={signingOut || undefined}
+            onClick={() => {
+              rememberAcceptIntent(safeSessionStorage(), token)
+              void signOut({ returnTo: here })
+            }}
+          >
+            {signingOut ? 'Signing out…' : 'Sign in with a different account'}
+          </button>
+        )}
       </>
     )
   } else if (signedIn) {
@@ -315,14 +341,14 @@ export function InvitePage({ token }: { token: string }) {
         <dl className="dr-invite-card__facts">
           <div>
             <dt>Invited by</dt>
-            <dd data-testid="invite-inviter">{inv.invitedBy.name}</dd>
+            <dd data-testid="invite-inviter">{ownLink ? ownName(inv.invitedBy.name) : inv.invitedBy.name}</dd>
           </div>
           <div>
             <dt>Workspace</dt>
             <dd>{inv.workspace.name}</dd>
           </div>
           <div>
-            <dt>Your role</dt>
+            <dt>{summary.roleHeading}</dt>
             <dd data-testid="invite-role-label">{summary.roleLabel}</dd>
           </div>
           <div>

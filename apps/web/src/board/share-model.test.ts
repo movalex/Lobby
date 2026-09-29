@@ -17,16 +17,19 @@ import {
   inviteRoleOptions,
   linkAccessLine,
   linkForEmailHint,
+  listShowsOwnerNote,
   lockedLinkNote,
   memberRoleChoices,
   memberRoleEditable,
   moreWaysSummary,
   OWNER_NEEDS_CREATOR,
   OWNER_NEEDS_CREATOR_NOTE,
+  type OwnerNoteRow,
   parseInviteTarget,
   pendingInviteLabel,
   removalNote,
   removeConfirmText,
+  rowNeedsOwnerNote,
   shareableWorkspaceMembers,
   shareCreatorNote,
   showOwnerNote,
@@ -508,10 +511,38 @@ describe('domain access, fixer round 1: the notes a non-creator and a creator ma
     expect(ADD_MEMBER_ROLES).toEqual(['editor', 'commenter', 'viewer'])
   })
 
-  it('a row says in words why its owner option is off (a creator managing an outsider)', () => {
+  it('the people list says once, in words, why Owner is off for people outside (a creator managing)', () => {
     expect(OWNER_NEEDS_CREATOR_NOTE).toBe(
-      "Can't own this board. Only people at Dark Burn Creative or Trailer Park Group can own boards.",
+      'Only people at Dark Burn Creative or Trailer Park Group can own boards, so Owner is turned off for everyone else here.',
     )
+    const row = (r: Partial<OwnerNoteRow>): OwnerNoteRow => ({
+      editable: true,
+      guest: false,
+      canOwn: true,
+      current: 'viewer',
+      ...r,
+    })
+    // A creator's list with client reviewers (editor, commenter, viewer): one note for all of them, and
+    // each of their rows points to it.
+    const rows = [
+      row({ current: 'owner', editable: false }),
+      row({ canOwn: false, current: 'editor' }),
+      row({ canOwn: false, current: 'commenter' }),
+      row({ canOwn: false, current: 'viewer' }),
+      row({ canOwn: true }),
+    ]
+    expect(listShowsOwnerNote(rows, true)).toBe(true)
+    expect(rows.map((r) => rowNeedsOwnerNote(r, true))).toEqual([false, true, true, true, false])
+    // No such row (creators only, an outsider who already owns it, a row the caller cannot edit, a
+    // name-only guest), or a manager who may only reduce access: no note.
+    expect(listShowsOwnerNote([row({}), row({ canOwn: false, current: 'owner' })], true)).toBe(false)
+    expect(listShowsOwnerNote([row({ canOwn: false, editable: false })], true)).toBe(false)
+    expect(listShowsOwnerNote([row({ canOwn: false, guest: true })], true)).toBe(false)
+    expect(listShowsOwnerNote(rows, false)).toBe(false)
+    expect(listShowsOwnerNote([], true)).toBe(false)
+  })
+
+  it('whether someone’s Owner option is off because they cannot own boards', () => {
     expect(showOwnerNote({ canShare: true, canOwn: false, current: 'editor' })).toBe(true)
     // Already an owner (decision 4), a creator, an older api (undefined) or a reduce-only manager: no note.
     expect(showOwnerNote({ canShare: true, canOwn: false, current: 'owner' })).toBe(false)

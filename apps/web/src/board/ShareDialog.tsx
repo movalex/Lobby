@@ -67,19 +67,21 @@ import {
   inviteRoleOptions,
   linkAccessLine,
   linkForEmailHint,
+  listShowsOwnerNote,
   lockedLinkNote,
   memberRoleChoices,
   moreWaysSummary,
   OWNER_NEEDS_CREATOR,
   OWNER_NEEDS_CREATOR_NOTE,
+  type OwnerNoteRow,
   parseInviteTarget,
   pendingInviteLabel,
   ROLE_OPTION_LABEL,
   removalNote,
   removeConfirmText,
+  rowNeedsOwnerNote,
   shareableWorkspaceMembers,
   shareCreatorNote,
-  showOwnerNote,
   sortMembers,
   VISIBILITY_OPTIONS,
   visibilityChoices,
@@ -91,6 +93,16 @@ const sharing = sharingApi(api)
 
 /** A person with access; managers get the detailed fields (grant, workspace role, links, canOwn). */
 type Row = BoardMember & Partial<Omit<AccessDetail, 'user' | 'role' | 'source'>> & { canOwn?: boolean }
+
+/** A manager's detailed row (grant, workspace role, links), else null (the M1 list). */
+function rowDetail(member: Row): AccessDetail | null {
+  return member.grant !== undefined && member.workspaceRole !== undefined
+    ? (member as unknown as AccessDetail)
+    : null
+}
+
+/** The role a row's menu shows: a workspace-derived role with a lower direct grant edits the grant. */
+const rowSelectValue = (member: Row): BoardRole => rowDetail(member)?.grant ?? member.role
 
 /** Applies an M1 member list (the answer to PUT/DELETE) onto the detailed rows until they reload. */
 function mergeRows(prev: readonly Row[], next: readonly BoardMember[]): Row[] {
@@ -248,6 +260,21 @@ export function ShareDialog({
   const reviewLinks = allInvites.filter((i) => i.kind === 'review' && i.role !== 'editor')
   const workshopLinks = allInvites.filter((i) => i.kind === 'review' && i.role === 'editor')
   const oneTimeInvites = allInvites.filter((i) => i.kind === 'invite')
+  // The people list: which rows the caller can edit, and (domain access) why Owner is off for someone,
+  // said once under the heading (`member-owner-note`) for every row it applies to.
+  const ownerNoteId = useId()
+  const people = sorted.map((m) => {
+    const row: OwnerNoteRow & { member: Row } = {
+      member: m,
+      editable:
+        canManage && (m.grant !== undefined ? grantEditable(m as AccessDetail) : m.source === 'grant'),
+      guest: boardGuests.data?.has(m.user.id) ?? false,
+      canOwn: m.canOwn,
+      current: rowSelectValue(m),
+    }
+    return row
+  })
+  const ownerNote = listShowsOwnerNote(people, canShare)
 
   return (
     <Dialog
@@ -424,26 +451,28 @@ export function ShareDialog({
               </button>
             </p>
           )}
+          {members.data && ownerNote && (
+            <p
+              className="dr-share__hint dr-sharing__owner-note"
+              id={ownerNoteId}
+              data-testid="member-owner-note"
+            >
+              {OWNER_NEEDS_CREATOR_NOTE}
+            </p>
+          )}
           {members.data && (
             <ul className="dr-members" data-testid="member-list">
-              {sorted.map((m) => (
+              {people.map(({ member: m, ...row }) => (
                 <MemberRow
                   key={m.user.id}
                   member={m}
                   workspaceName={workspace.name}
                   isSelf={m.user.id === selfUserId}
-                  editable={
-                    canManage &&
-                    (m.grant !== undefined ? grantEditable(m as AccessDetail) : m.source === 'grant')
-                  }
-                  guest={boardGuests.data?.has(m.user.id) ?? false}
+                  editable={row.editable}
+                  guest={row.guest}
                   canShare={canShare}
-                  transferable={
-                    canTransfer &&
-                    m.user.id !== selfUserId &&
-                    m.role !== 'owner' &&
-                    !(boardGuests.data?.has(m.user.id) ?? false)
-                  }
+                  ownerNoteId={rowNeedsOwnerNote(row, canShare) ? ownerNoteId : undefined}
+                  transferable={canTransfer && m.user.id !== selfUserId && m.role !== 'owner' && !row.guest}
                   pending={pendingUser === m.user.id}
                   onRole={(r) => void run(m.user.id, () => api.putMember(board.id, m.user.id, r))}
                   onRemove={() => void run(m.user.id, () => api.removeMember(board.id, m.user.id))}
@@ -1155,6 +1184,7 @@ function MemberRow({
   editable,
   guest = false,
   canShare,
+  ownerNoteId,
   transferable,
   pending,
   onRole,
@@ -1169,6 +1199,11 @@ function MemberRow({
   guest?: boolean
   /** Domain access: the caller may raise roles (a creator); otherwise the menu only lowers. */
   canShare: boolean
+  /**
+   * Domain access: the id of the list's note saying why Owner is off for this person (they cannot own
+   * boards); the role menu and the transfer button point to it. Undefined when it does not apply.
+   */
+  ownerNoteId?: string
   transferable: boolean
   pending: boolean
   onRole(role: BoardRole): void
@@ -1176,13 +1211,11 @@ function MemberRow({
   onTransfer(): void
 }) {
   const selectId = useId()
-  const ownerNoteId = useId()
   const [confirming, setConfirming] = useState(false)
   const [confirmingRemove, setConfirmingRemove] = useState(false)
   const { user } = member
   const [baseName, marker] = splitGuestMarker(user.name)
-  const detailed = member.grant !== undefined && member.workspaceRole !== undefined
-  const detail = detailed ? (member as unknown as AccessDetail) : null
+  const detail = rowDetail(member)
   const source = detail
     ? accessSource(detail, workspaceName, (iso, kind) => (kind === 'time' ? shortTime(iso) : shortDate(iso)))
     : member.source === 'workspace'
@@ -1190,13 +1223,10 @@ function MemberRow({
       : ''
   const fallback = detail ? removalNote(detail) : null
   // A workspace-derived role with a lower direct grant: the select edits the grant, not the effective role.
-  const selectValue = detail?.grant ?? member.role
+  const selectValue = rowSelectValue(member)
   // Domain access: someone confirmed not to be a creator cannot own boards (the server answers 409).
   const cannotOwn = member.canOwn === false
   const roleChoices = memberRoleChoices({ current: selectValue, canShare, canOwn: member.canOwn, guest })
-  // Why Owner (and transfer) is off, as visible text: a disabled option or button rarely shows a title.
-  const ownerNote =
-    editable && !guest && showOwnerNote({ canShare, canOwn: member.canOwn, current: selectValue })
   return (
     <li
       className="dr-member"
@@ -1228,11 +1258,6 @@ function MemberRow({
           {user.handle ? `@${user.handle}` : ''}
           {source ? `${user.handle ? ' · ' : ''}${source}` : ''}
         </span>
-        {ownerNote && (
-          <span className="dr-sharing__fallback" id={ownerNoteId} data-testid="member-owner-note">
-            {OWNER_NEEDS_CREATOR_NOTE}
-          </span>
-        )}
         {editable && !isSelf && fallback && (
           <span className="dr-sharing__fallback" data-testid="member-fallback">
             {fallback}
@@ -1297,7 +1322,7 @@ function MemberRow({
             data-testid="member-role"
             value={selectValue}
             disabled={pending}
-            aria-describedby={ownerNote ? ownerNoteId : undefined}
+            aria-describedby={ownerNoteId}
             onChange={(e) => onRole(e.target.value as BoardRole)}
           >
             {roleChoices.map((c) => (
@@ -1313,7 +1338,7 @@ function MemberRow({
               data-testid="member-transfer"
               aria-label={`Transfer ownership to ${user.name}`}
               title={cannotOwn ? OWNER_NEEDS_CREATOR : 'Transfer ownership'}
-              aria-describedby={ownerNote ? ownerNoteId : undefined}
+              aria-describedby={ownerNoteId}
               disabled={pending || cannotOwn}
               onClick={() => setConfirming(true)}
             >

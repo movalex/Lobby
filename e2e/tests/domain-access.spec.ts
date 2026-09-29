@@ -182,6 +182,29 @@ test('email lock: a link for pat@ turns sam@ away (no auto-accept), then pat sig
     expect(await invitations(aliceApi, board)).toEqual([expect.objectContaining({ kind: 'invite', uses: 0 })])
   })
 
+  await test.step('fixer round 2: her own link is not an error and not "invited you"; its one action leads back to the board, signed in', async () => {
+    const invitePage = a.page.getByTestId('invite-page')
+    const mismatch = a.page.getByTestId('invite-email-mismatch')
+    await expect(mismatch).toHaveAttribute('role', 'status')
+    await expect(mismatch).toHaveAttribute('data-sent-by-you', 'true')
+    await expect(invitePage).toContainText('Your invitation to a board')
+    await expect(invitePage).not.toContainText('invited you')
+    await expect(a.page.getByTestId('invite-title')).not.toContainText('Join')
+    await expect(invitePage).toContainText('Their role')
+    await expect(a.page.getByTestId('invite-inviter')).toHaveText('Alice Park (you)')
+    // No way into signing out: the only action goes back to the board.
+    await expect(a.page.getByTestId('invite-mismatch-switch')).toHaveCount(0)
+    await expect(invitePage.getByRole('button')).toHaveCount(0)
+    const back = a.page.getByTestId('invite-own-back')
+    await expect(back).toHaveText('Back to the board')
+    await capture('domain-access-invite-own-link.png', a.page, testInfo)
+    await back.click()
+    await expect(a.page).toHaveURL(new RegExp(`/b/${board}$`))
+    await waitForBoard(a.page)
+    expect((await a.context.request.get(`${WEB_URL}/api/me`)).status()).toBe(200)
+    expect(await invitations(aliceApi, board)).toEqual([expect.objectContaining({ kind: 'invite', uses: 0 })])
+  })
+
   // One browser: sam signs in from the link, is turned away, switches to pat.
   const context = await browser.newContext()
   try {
@@ -568,6 +591,9 @@ test('an existing account that lost creator status: its own workspace says why n
   }
 })
 
+/** The Share dialog's "People with access" section (the list and its owner note). */
+const peopleSection = (page: Page) => shareDialog(page).locator('section[aria-labelledby="dr-share-people"]')
+
 test('a creator managing an outside member: Owner is off with the reason in words, transfer is off, and "pick someone" never offers Owner', async ({
   playwright,
   users,
@@ -575,41 +601,78 @@ test('a creator managing an outside member: Owner is off with the reason in word
   session,
 }, testInfo) => {
   const aliceApi = await users.api('alice')
-  // Two Dev Studio members (joined while creators) who are outside accounts now.
+  // Three Dev Studio members (joined while creators) who are outside accounts now.
   const olga = { handle: freshHandle('olga'), name: 'Olga Outside' }
+  const pia = { handle: freshHandle('pia'), name: 'Pia Outside' }
   const nils = { handle: freshHandle('nils'), name: 'Nils Outside' }
-  for (const p of [olga, nils]) {
+  for (const p of [olga, pia, nils]) {
     const { api } = await Api.signIn(playwright, p.handle, p.name)
     await api.dispose()
   }
   const olgaNow = await Api.signIn(playwright, olga.handle, olga.name, { email: 'olga@client.example.test' })
+  const piaNow = await Api.signIn(playwright, pia.handle, pia.name, { email: 'pia@client.example.test' })
   const nilsNow = await Api.signIn(playwright, nils.handle, nils.name, { email: 'nils@client.example.test' })
   const olgaId = olgaNow.me.user.id
+  const piaId = piaNow.me.user.id
   try {
     expect(olgaNow.me.access).toMatchObject({ creator: false, reason: 'outside' })
+    const bob = await users.get('bob')
     await aliceApi.putMember(board, olgaId, 'editor')
+    await aliceApi.putMember(board, piaId, 'viewer')
+    await aliceApi.putMember(board, bob.id, 'viewer')
     const a = await session('alice')
+    const OWNER_NOTE =
+      'Only people at Dark Burn Creative or Trailer Park Group can own boards, so Owner is turned off for everyone else here.'
 
-    await test.step('olga’s row: Owner is turned off, and the row says why in words', async () => {
+    await test.step('olga’s and pia’s rows: Owner is turned off, and the list says why in words, once', async () => {
       await openShareFromButton(a.page)
-      const row = memberRow(a.page, olgaId)
-      await expect(row).toHaveAttribute('data-role', 'editor')
-      await expect(row.getByTestId('member-role').locator('option[value="owner"]')).toBeDisabled()
-      const note = row.getByTestId('member-owner-note')
-      await expect(note).toHaveText(
-        "Can't own this board. Only people at Dark Burn Creative or Trailer Park Group can own boards.",
-      )
+      const dialog = shareDialog(a.page)
+      for (const [id, role] of [
+        [olgaId, 'editor'],
+        [piaId, 'viewer'],
+      ] as const) {
+        await expect(memberRow(a.page, id)).toHaveAttribute('data-role', role)
+      }
+      // Fixer round 2: one note under "People with access", not one per row (a list of client
+      // reviewers repeated it on every row).
+      const note = dialog.getByTestId('member-owner-note')
+      await expect(note).toHaveCount(1)
+      await expect(note).toHaveText(OWNER_NOTE)
+      await expect(dialog.getByTestId('member-list').getByTestId('member-owner-note')).toHaveCount(0)
       const noteId = (await note.getAttribute('id')) ?? ''
       expect(noteId).not.toBe('')
-      await expect(row.getByTestId('member-role')).toHaveAttribute('aria-describedby', noteId)
-      await expect(row.getByTestId('member-transfer')).toBeDisabled()
-      await expect(row.getByTestId('member-transfer')).toHaveAttribute('aria-describedby', noteId)
-      // A creator's row has no such note.
-      const bob = await users.get('bob')
-      await aliceApi.putMember(board, bob.id, 'viewer')
-      await expect(memberRow(a.page, bob.id)).toBeVisible()
-      await expect(memberRow(a.page, bob.id).getByTestId('member-owner-note')).toHaveCount(0)
-      await capture('domain-access-owner-off-note.png', shareDialog(a.page), testInfo)
+      for (const id of [olgaId, piaId]) {
+        const row = memberRow(a.page, id)
+        await expect(row.getByTestId('member-role').locator('option[value="owner"]')).toBeDisabled()
+        await expect(row.getByTestId('member-role')).toHaveAttribute('aria-describedby', noteId)
+        await expect(row.getByTestId('member-transfer')).toBeDisabled()
+        await expect(row.getByTestId('member-transfer')).toHaveAttribute('aria-describedby', noteId)
+      }
+      // A creator's row: Owner is offered, and nothing points to the note.
+      const bobRow = memberRow(a.page, bob.id)
+      await expect(bobRow.getByTestId('member-role').locator('option[value="owner"]')).toBeEnabled()
+      await expect(bobRow.getByTestId('member-role')).not.toHaveAttribute('aria-describedby', /.+/)
+      await expect(bobRow.getByTestId('member-transfer')).not.toHaveAttribute('aria-describedby', /.+/)
+      await capture('domain-access-owner-off-note.png', peopleSection(a.page), testInfo)
+    })
+
+    await test.step('an outsider’s row is as tall as a creator’s, on a desktop and at 390 px', async () => {
+      const heights = async () => {
+        const of = async (id: string) => (await memberRow(a.page, id).boundingBox())?.height ?? 0
+        return { bob: await of(bob.id), olga: await of(olgaId), pia: await of(piaId) }
+      }
+      const wide = await heights()
+      expect(wide.bob).toBeGreaterThan(0)
+      expect(Math.abs(wide.olga - wide.bob), JSON.stringify(wide)).toBeLessThanOrEqual(2)
+      expect(Math.abs(wide.pia - wide.bob), JSON.stringify(wide)).toBeLessThanOrEqual(2)
+      await a.page.setViewportSize({ width: 390, height: 844 })
+      await expect(shareDialog(a.page).getByTestId('member-owner-note')).toBeVisible()
+      const narrow = await heights()
+      expect(Math.abs(narrow.olga - narrow.bob), JSON.stringify(narrow)).toBeLessThanOrEqual(2)
+      expect(Math.abs(narrow.pia - narrow.bob), JSON.stringify(narrow)).toBeLessThanOrEqual(2)
+      await expectNoSideScroll(a.page)
+      await capture('domain-access-owner-off-note-390.png', peopleSection(a.page), testInfo)
+      await a.page.setViewportSize({ width: 1280, height: 720 })
     })
 
     await test.step('"Or pick someone from the workspace…" lists nils, and offers edit, comment or view only', async () => {
@@ -636,6 +699,7 @@ test('a creator managing an outside member: Owner is off with the reason in word
     })
   } finally {
     await olgaNow.api.dispose()
+    await piaNow.api.dispose()
     await nilsNow.api.dispose()
   }
 })
@@ -710,6 +774,27 @@ test('an email-locked workspace invitation: admin for an outside address is refu
   })
   expect(created.status()).toBe(201)
   const link = ((await created.json()) as { url: string }).url
+
+  await test.step('fixer round 2: alice opens her own workspace link: it leads back to the workspace, signed in', async () => {
+    const alice = await signedInContext(browser, 'alice')
+    try {
+      await alice.page.goto(link)
+      await expect(alice.page.getByTestId('invite-email-mismatch')).toHaveAttribute(
+        'data-sent-by-you',
+        'true',
+      )
+      await expect(alice.page.getByTestId('invite-page')).toContainText('Your invitation to a workspace')
+      await expect(alice.page.getByTestId('invite-mismatch-switch')).toHaveCount(0)
+      const back = alice.page.getByTestId('invite-own-back')
+      await expect(back).toHaveText('Go to the workspace')
+      await back.click()
+      await expect(alice.page).toHaveURL(new RegExp(`/w/${users.devStudioId}$`))
+      await expect(alice.page.getByTestId('dashboard')).toBeVisible()
+      expect((await alice.context.request.get(`${WEB_URL}/api/me`)).status()).toBe(200)
+    } finally {
+      await alice.context.close()
+    }
+  })
 
   const context = await browser.newContext()
   try {
@@ -835,20 +920,40 @@ test('failure states the dev provider cannot produce: an unconfirmed account (da
       await expect(page.getByTestId('invite-retry')).toHaveCount(0)
 
       // 403 INVITATION_EMAIL_MISMATCH although the preview said this account matches (fresher data at
-      // accept): the mismatch state, from the preview's masked address.
+      // accept): the mismatch state, from the preview's masked address. Accept checked the account
+      // with the sign-in service, found the invited address gone and stored what it found, so the page
+      // reads the session again and names the account's address as it is now (fixer round 2; this
+      // rewrite of /api/me stands in for the api's stored addresses after that check).
       await page.unroute(accept)
-      await refuse(403, {
-        error: {
-          code: 'INVITATION_EMAIL_MISMATCH',
-          message: 'This invitation is for i•••@client.example.test.',
-        },
-        mismatch: { invitedEmailHint: 'i•••@client.example.test', invitedBy: { name: 'Alice Park' } },
+      let refused403 = false
+      let meReadsAfter = 0
+      const nowEmail = 'ivy.now@client.example.test'
+      await page.route(accept, (route) => {
+        refused403 = true
+        return route.fulfill({
+          status: 403,
+          json: {
+            error: {
+              code: 'INVITATION_EMAIL_MISMATCH',
+              message: 'This invitation is for i•••@client.example.test.',
+            },
+            mismatch: { invitedEmailHint: 'i•••@client.example.test', invitedBy: { name: 'Alice Park' } },
+          },
+        })
+      })
+      await rewriteMe(page, (me) => {
+        if (!refused403) return me
+        meReadsAfter++
+        return { ...me, access: { creator: false, reason: 'outside', email: nowEmail } }
       })
       await page.reload()
       await page.getByTestId('invite-accept').click()
-      await expect(page.getByTestId('invite-email-mismatch')).toContainText(
-        'This invitation was sent to i•••@client.example.test.',
-      )
+      const mismatch = page.getByTestId('invite-email-mismatch')
+      await expect(mismatch).toContainText('This invitation was sent to i•••@client.example.test.')
+      await expect(mismatch).toContainText(`You're signed in as ${nowEmail}.`)
+      await expect(mismatch).toContainText(`ask Alice Park to invite ${nowEmail}.`)
+      await expect(mismatch).not.toContainText(email)
+      expect(meReadsAfter).toBeGreaterThan(0)
       await expect(page.getByTestId('invite-mismatch-switch')).toBeVisible()
       expect(await invitations(aliceApi, board)).toContainEqual(
         expect.objectContaining({ kind: 'invite', email, uses: 0 }),
@@ -856,6 +961,8 @@ test('failure states the dev provider cannot produce: an unconfirmed account (da
 
       // The real api: ivy has the invited address, so accepting works.
       await page.unroute(accept)
+      await page.unroute('**/api/auth/me')
+      await page.unroute('**/api/me')
       await page.reload()
       await page.getByTestId('invite-accept').click()
       await expect(page).toHaveURL(new RegExp(`/b/${board}$`), { timeout: 30_000 })

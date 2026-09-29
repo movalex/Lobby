@@ -165,15 +165,37 @@ export function pendingInviteLabel(
 export const OWNER_NEEDS_CREATOR = 'Only people at Dark Burn Creative or Trailer Park Group can own boards'
 
 /**
- * The same reason as visible text on that person's row (`member-owner-note`): a disabled option in a
- * native select popup shows no tooltip, and a disabled button takes no focus, so a title alone is
- * rarely seen or announced.
+ * The same reason as visible text (`member-owner-note`): a disabled option in a native select popup
+ * shows no tooltip, and a disabled button takes no focus, so a title alone is rarely seen or announced.
+ * It is said once, under "People with access", and the role menu and transfer button of every row it
+ * applies to point to it (`aria-describedby`). Fixer round 2: on each row it repeated down a list of
+ * client reviewers and, at 390 px, grew each of their rows to about eight lines.
  */
-export const OWNER_NEEDS_CREATOR_NOTE = `Can't own this board. ${OWNER_NEEDS_CREATOR}.`
+export const OWNER_NEEDS_CREATOR_NOTE = `${OWNER_NEEDS_CREATOR}, so Owner is turned off for everyone else here.`
 
-/** Whether that person's row says why they cannot be made the owner (a creator is managing). */
+/** Whether that person's Owner option is off because they cannot own boards (a creator is managing). */
 export const showOwnerNote = (m: { canShare: boolean; canOwn?: boolean; current: BoardRole }): boolean =>
   m.canShare && m.canOwn === false && m.current !== 'owner'
+
+/** One row of the people list, as the owner note needs it. */
+export interface OwnerNoteRow {
+  /** The caller can change this person's direct grant (the row has a role menu). */
+  editable: boolean
+  /** A name-only guest: Owner is never offered, for another reason. */
+  guest: boolean
+  /** `ShareMember.canOwn`. */
+  canOwn?: boolean
+  /** The role the row's menu shows (their direct grant, else their effective role). */
+  current: BoardRole
+}
+
+/** Whether this row's role menu (and transfer button) points to the owner note. */
+export const rowNeedsOwnerNote = (row: OwnerNoteRow, canShare: boolean): boolean =>
+  row.editable && !row.guest && showOwnerNote({ canShare, canOwn: row.canOwn, current: row.current })
+
+/** Whether the people list shows the owner note (once): some row's Owner option is off for that reason. */
+export const listShowsOwnerNote = (rows: readonly OwnerNoteRow[], canShare: boolean): boolean =>
+  rows.some((row) => rowNeedsOwnerNote(row, canShare))
 
 /** The roles "Or pick someone from the workspace…" offers: never owner (set that on the person's row). */
 export const ADD_MEMBER_ROLES: readonly Exclude<BoardRole, 'owner'>[] = BOARD_ROLES.filter(

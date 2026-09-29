@@ -5,6 +5,7 @@ import {
   InvitationGoneBody,
   type InvitationPreview,
 } from '@draftroom/contracts'
+import { boardPath, workspacePath } from '../lib/routing.ts'
 
 const BOARD_ROLE: Record<string, string> = {
   owner: 'Owner',
@@ -22,27 +23,53 @@ const WORKSPACE_ROLE: Record<string, string> = {
 export interface InvitationSummary {
   eyebrow: string
   title: string
+  /** The heading of the role fact: "Your role", or "Their role" on the inviter's own link. */
+  roleHeading: string
   roleLabel: string
   acceptLabel: string
 }
 
-/** Copy for the invitation screen. Unknown roles are shown as "Member"/"Can view" rather than raw. */
-export function invitationSummary(inv: InvitationPreview): InvitationSummary {
+/**
+ * Copy for the invitation screen. Unknown roles are shown as "Member"/"Can view" rather than raw.
+ * `sentByYou`: the inviter is looking at their own locked link (domain access, §9 state 3, fixer round
+ * 2), so the page is about their invitation, never "{inviter} invited you… Join".
+ */
+export function invitationSummary(
+  inv: InvitationPreview,
+  opts: { sentByYou?: boolean } = {},
+): InvitationSummary {
   const who = inv.invitedBy.name || 'Someone'
+  const own = opts.sentByYou === true
+  const roleHeading = own ? 'Their role' : 'Your role'
   if (inv.board) {
     return {
-      eyebrow: `${who} invited you to a board`,
-      title: `Join “${inv.board.title}”`,
+      eyebrow: own ? 'Your invitation to a board' : `${who} invited you to a board`,
+      title: own ? `“${inv.board.title}”` : `Join “${inv.board.title}”`,
+      roleHeading,
       roleLabel: BOARD_ROLE[inv.role] ?? 'Can view',
       acceptLabel: 'Accept and open board',
     }
   }
   return {
-    eyebrow: `${who} invited you to a workspace`,
-    title: `Join ${inv.workspace.name}`,
+    eyebrow: own ? 'Your invitation to a workspace' : `${who} invited you to a workspace`,
+    title: own ? inv.workspace.name : `Join ${inv.workspace.name}`,
+    roleHeading,
     roleLabel: WORKSPACE_ROLE[inv.role] ?? 'Member',
     acceptLabel: 'Accept and open workspace',
   }
+}
+
+/**
+ * The one action on the inviter's own locked link (fixer round 2): back to what they shared. Never
+ * "Sign in with a different account", which would sign the inviter out.
+ */
+export function ownInvitationWayBack(inv: Pick<InvitationPreview, 'board' | 'workspace'>): {
+  label: string
+  href: string
+} {
+  return inv.board
+    ? { label: 'Back to the board', href: boardPath(inv.board.id) }
+    : { label: 'Go to the workspace', href: workspacePath(inv.workspace.id) }
 }
 
 // ---- name-only guests (wave 3) -------------------------------------------------------------------
