@@ -272,13 +272,20 @@ export class BoardSession {
     return this.core.sid
   }
 
+  /**
+   * The engine core's and the transport's log (ids, counts, clocks and codes only; never element text),
+   * the last 2000 entries, numbered: the specs' trace of what the core did (a resync, an unknown ack, an
+   * offline adoption, a superseded fit). Read it "since n", never by position.
+   */
+  readonly coreLog: { n: number; event: string; detail: Readonly<Record<string, unknown>>; at: number }[] = []
+  private coreSeq = 0
+
   private log(event: string, detail: Readonly<Record<string, unknown>>): void {
     // ids and counts only; never element text
-    ;(window as unknown as { __lobbyBoardLog?: unknown[] }).__lobbyBoardLog?.push({
-      event,
-      detail,
-      at: Date.now(),
-    })
+    const entry = { n: ++this.coreSeq, event, detail, at: Date.now() }
+    this.coreLog.push(entry)
+    if (this.coreLog.length > 2000) this.coreLog.splice(0, this.coreLog.length - 2000)
+    ;(window as unknown as { __lobbyBoardLog?: unknown[] }).__lobbyBoardLog?.push(entry)
     if (event === 'echo_suspect') console.warn('lobby: echo_suspect', detail)
   }
 

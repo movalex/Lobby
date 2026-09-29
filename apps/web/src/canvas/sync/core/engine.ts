@@ -116,6 +116,12 @@ interface Sent {
   el: SceneElement
   create: boolean
   ref?: SceneElement
+  /**
+   * This push's fit was given up when another user's position (or container size) write reached this
+   * client before its ack (`placedByOther`): the server drops it, and its shift was already redone on the
+   * new position, so its `fitDropped` asks for nothing more
+   */
+  fitSuperseded?: boolean
 }
 
 interface Inflight {
@@ -253,6 +259,13 @@ export class LobbyEngineCore implements EngineCore {
   private unavailableSince: number | null = null
   private lastReject: SaveStatus['lastReject'] = null
   private offlineQueued = 0
+  /**
+   * Queued entries loaded from the offline store before a welcome (and its snapshot) was processed: adopted
+   * in afterWelcome, once the server's copies are known, so an adopted copy is rebased on them and put in
+   * the scene there (adopted earlier, the next scan dropped it from the scene, and a create queued offline
+   * was then never pushed)
+   */
+  private pendingAdopt: OfflineEntry[] | null = null
   private persistTimer: unknown = null
 
   // ---- lease
@@ -1061,6 +1074,10 @@ export class LobbyEngineCore implements EngineCore {
   /** After a welcome (catch-up or reset): rebase every local change on the new server state, then push. */
   private afterWelcome(): void {
     this.resyncing = false
+    if (this.pendingAdopt) {
+      for (const e of this.pendingAdopt) this.adoptOffline(e)
+      this.pendingAdopt = null
+    }
     // pushes with no ack were lost with the old socket: their groups are dirty again (replayed with `off`)
     for (const p of this.inflight) {
       for (const [id, s] of p.sent) {
@@ -1089,15 +1106,7 @@ export class LobbyEngineCore implements EngineCore {
     }
     // dirty groups equal to the new server copy are not changes any more (a push lost with the socket
     // that had committed): decided BEFORE the rebuild, so those elements become the server copy exactly
-    for (const [id, t] of [...this.tracked]) {
-      if (t.isNew) continue
-      const el = this.current.get(id)
-      const conf = this.confirmedMap.get(id)
-      if (!el || !conf) continue
-      const diff = diffGroups(el, conf).groups
-      for (const g of [...t.dirty]) if (g !== 'fit' && !diff.has(g)) t.dirty.delete(g)
-      if (t.dirty.size === 0) this.tracked.delete(id)
-    }
+    for (const [id, t] of [...this.tracked]) this.settleDirty(id, t)
     this.dropDeadCreates()
     this.held.clear()
     this.heldBack.clear()
@@ -1111,6 +1120,21 @@ export class LobbyEngineCore implements EngineCore {
     for (const m of this.queuedLease.splice(0)) this.transport.send(m)
     this.retryDelay = 0
     this.updateSaved()
+  }
+
+  /**
+   * Dirty groups of `id` equal to the server's copy are not changes any more (a push that committed but
+   * whose ack was lost, a queued offline entry that had landed): dropped, and the element is untracked
+   * when nothing is left. A create is left alone (its ack or the server's copy settles it first).
+   */
+  private settleDirty(id: string, t: Tracked): void {
+    if (t.isNew) return
+    const el = this.current.get(id)
+    const conf = this.confirmedMap.get(id)
+    if (!el || !conf) return
+    const diff = diffGroups(el, conf).groups
+    for (const g of [...t.dirty]) if (g !== 'fit' && !diff.has(g)) t.dirty.delete(g)
+    if (t.dirty.size === 0) this.tracked.delete(id)
   }
 
   private applyServerOp(op: ServerOp, affected: Set<string>): boolean {
@@ -1134,7 +1158,7 @@ export class LobbyEngineCore implements EngineCore {
     const affected = new Set<string>()
     const refits: CoreEvent[] = []
     for (const op of m.ops) {
-      if (op.k === 'p') this.staleFit(op, refits)
+      if (op.k === 'p') this.placedByOther(op, refits)
       if (!this.applyServerOp(op, affected)) {
         this.resync()
         return
@@ -1146,6 +1170,18 @@ export class LobbyEngineCore implements EngineCore {
         else this.serverDoc[k] = v
       }
     this.clock = m.clock
+    // an element this client still counts as its own create, now on the server though no create of ours is
+    // in flight: that create landed before (a push whose ack was lost, a queued entry replayed after a
+    // reload that the server already had, a reset snapshot older than the create followed by its catch-up).
+    // It is an ordinary element from here on; otherwise it stayed "new" and Saved never came (B4 D1)
+    for (const id of affected) {
+      const t = this.tracked.get(id)
+      if (!t?.isNew || !this.confirmedMap.has(id)) continue
+      if (this.inflight.some((p) => p.sent.get(id)?.create)) continue // its ack settles it
+      t.isNew = false
+      this.settleDirty(id, t)
+      this.log('create_settled', { id })
+    }
     // the server's value for a held derived change arrived: it replaces the local follow (§2.5.2)
     for (const id of affected) this.held.delete(id)
     this.releaseHeld(affected)
@@ -1156,26 +1192,79 @@ export class LobbyEngineCore implements EngineCore {
   }
 
   /**
-   * A remote ordinary write to the position (or, for a container, the size) of an element whose fit this
-   * holder has not sent yet: that fit was computed on the old position, so it is never sent (the server
-   * would take it, its base now includes the remote write, and undo the other user's move: B3 L10 5).
-   * It is dropped like a `fitDropped` one and redone on the new position (§2.9.4 rule 4).
+   * A server write to the position of an element this holder has a fit for (a leased free text's own
+   * `x`/`y`), or to the position or size of a container it fits, dirty or in flight (§2.9.4 rules 3, 4).
+   * Called for each op of a `changes` batch before the op is applied.
+   *
+   * This client's own fit, applied, is recognised by its values and changes nothing. Any other such write
+   * (B moved or resized the element) makes EVERY fit of this client that the server has not applied yet
+   * stale at once: the ones in flight have a base older than the write, so the server drops them; a dirty
+   * one was computed on the old position. None of them may hold the old position in the scene any more:
+   * while one did, `rebuild` kept the local `x`, `y` over the server's, the next keystroke diffed the old
+   * position against a base that already had B's move, and that fit went out on a base the server
+   * accepts, undoing B's move (B3 L10 5, "B's move first", lost 20/20 on a loaded machine where A's typing
+   * spanned several pushes). So their fields leave the in-flight records (`base` and `rebuild` then take
+   * the server's position), the dirty fit is dropped, and ONE refit redoes their combined effect on the
+   * new position: a free text's shift since the server's copy before this write (`dx`/`dy`), or a
+   * container's layout re-run. Their later `fitDropped` acks ask for nothing more.
    */
-  private staleFit(op: Extract<ServerOp, { k: 'p' }>, refits: CoreEvent[]): void {
-    const t = this.tracked.get(op.id)
-    if (!t?.dirty.has('fit')) return
-    const g = (op as { g?: Record<string, unknown> }).g ?? {}
-    const free = !!t.freeTextFit
-    if (!('pos' in g) && (free || !('shape' in g))) return
-    const local = this.current.get(op.id) as { x?: number; y?: number } | undefined
-    const ref = this.base(op.id) as { x?: number; y?: number } | undefined
-    t.dirty.delete('fit')
-    if (t.dirty.size === 0) this.tracked.delete(op.id)
-    refits.push(
-      free && local && ref
-        ? { kind: 'refit', id: op.id, dx: (local.x ?? 0) - (ref.x ?? 0), dy: (local.y ?? 0) - (ref.y ?? 0) }
-        : { kind: 'refit', id: op.id },
-    )
+  private placedByOther(op: Extract<ServerOp, { k: 'p' }>, refits: CoreEvent[]): void {
+    const id = op.id
+    const t = this.tracked.get(id)
+    const dirtyFit = !!t?.dirty.has('fit')
+    const flying = this.inflight.filter((p) => !!p.sent.get(id)?.groups.has('fit'))
+    if (!dirtyFit && flying.length === 0) return
+    const local = this.current.get(id)
+    const conf = this.confirmedMap.get(id)
+    const kindOf = local ?? conf
+    const free = isText(kindOf) && !containerOf(kindOf)
+    const g = (op.g ?? {}) as Record<string, Record<string, unknown> | undefined>
+    // what the server checks a fit against (merge.ts): a free text's pos; a container's pos and shape
+    const placed: Record<string, unknown> = { ...(g.pos ?? {}), ...(free ? {} : (g.shape ?? {})) }
+    if (Object.keys(placed).length === 0) return
+    if (flying.some((p) => this.ownPlacement(p, id, placed))) return
+    let dx = 0
+    let dy = 0
+    if (free && local && conf) {
+      // the shift of every fit not applied yet: the scene copy against the server's copy before this write
+      // (unless an ordinary position change of this client is also pending: then nothing to separate)
+      const posPending = !!t?.dirty.has('pos') || this.inflightGroups(id).has('pos')
+      if (!posPending) {
+        dx = ((local as { x?: number }).x ?? 0) - ((conf as { x?: number }).x ?? 0)
+        dy = ((local as { y?: number }).y ?? 0) - ((conf as { y?: number }).y ?? 0)
+      }
+    }
+    for (const p of flying) {
+      const s = p.sent.get(id) as Sent
+      s.groups.delete('fit')
+      s.fitSuperseded = true
+    }
+    if (t && dirtyFit) {
+      t.dirty.delete('fit')
+      if (t.dirty.size === 0 && !t.isNew) this.tracked.delete(id)
+    }
+    this.log('fit_superseded', {
+      id,
+      inflight: flying.map((p) => p.seq),
+      dirty: dirtyFit,
+      fields: Object.keys(placed),
+      dx,
+      dy,
+    })
+    refits.push(free ? { kind: 'refit', id, dx, dy } : { kind: 'refit', id })
+  }
+
+  /** `placed` (a server op's position/size values for `id`) is what push `p` sent for it: its own fit applied. */
+  private ownPlacement(p: Inflight, id: string, placed: Readonly<Record<string, unknown>>): boolean {
+    const op = p.ops.find((o): o is Extract<Op, { k: 'p' }> => o.k === 'p' && o.id === id)
+    if (!op?.fit) return false
+    const fit = op.fit as Record<string, unknown>
+    const g = (op.g ?? {}) as Record<string, Record<string, unknown> | undefined>
+    for (const [f, v] of Object.entries(placed)) {
+      const sent = f in fit ? fit[f] : (g.pos?.[f] ?? g.shape?.[f])
+      if (!deepEqual(sent, v)) return false
+    }
+    return true
   }
 
   private resync(): void {
@@ -1224,7 +1313,11 @@ export class LobbyEngineCore implements EngineCore {
           this.lastReject = { id, code: r.denied.code }
           this.emit({ kind: 'reject', id, code: r.denied.code })
         }
-        if (r.fitDropped) {
+        if (sent?.fitSuperseded) {
+          // given up at another user's write (placedByOther): dropped as expected, already redone. Applied
+          // would mean it committed before that write, which its own values should have shown
+          if (!r.fitDropped) this.log('fit_superseded_applied', { id, seq: ack.seq })
+        } else if (r.fitDropped) {
           const ref = sent?.ref as { x?: number; y?: number; containerId?: string | null } | undefined
           const el = sent?.el as { x?: number; y?: number } | undefined
           if (sent && ref && el && isText(sent.el) && !ref.containerId)
@@ -1251,11 +1344,29 @@ export class LobbyEngineCore implements EngineCore {
         }
         return
       }
+      const stored = r.el as unknown as SceneElement | null | undefined
+      if (sent?.create && r.code === 'INVALID' && stored && !stored.isDeleted) {
+        // a create of an id the server has, live: this client's own create landed before (element ids are
+        // random), its ack lost with a socket, or a queued offline entry replayed after a reload (B4 D1).
+        // Not a refusal: the server's copy is the element, and whatever is still dirty goes out as patches
+        this.confirmedMap.set(id, stored)
+        const t = this.tracked.get(id)
+        if (t) {
+          t.isNew = false
+          this.settleDirty(id, t)
+        }
+        this.log('create_exists', { id, seq: ack.seq })
+        return
+      }
       allOk = false
       this.lastReject = { id, code: r.code }
       this.emit({ kind: 'reject', id, code: r.code })
-      if (r.el) this.confirmedMap.set(id, r.el as unknown as SceneElement)
-      else if (!this.confirmedMap.has(id)) {
+      if (stored) {
+        this.confirmedMap.set(id, stored)
+        // a refused create goes back to the server's copy: it is no create of ours any more (it stayed
+        // "new" and Saved never came)
+        if (sent?.create) this.tracked.delete(id)
+      } else if (!this.confirmedMap.has(id)) {
         // a create the server refused: the element never existed for anyone
         this.tracked.delete(id)
         this.vanish.add(id)
@@ -1272,6 +1383,9 @@ export class LobbyEngineCore implements EngineCore {
     this.applyScene(affected)
     if (retry) this.scheduleRetry()
     else this.scheduleFlush(false)
+    // the offline queue drops what this ack settled now, not on the next scan's 100 ms tick: a reload
+    // right after "Saved" found the in-flight create still queued and replayed it (B4 D1)
+    this.schedulePersist(true)
     this.updateSaved()
   }
 
@@ -1615,13 +1729,38 @@ export class LobbyEngineCore implements EngineCore {
     try {
       const entries = await this.store.load()
       if (!entries.length) return
-      for (const e of entries) this.adoptOffline(e)
       this.log('offline_adopted', { entries: entries.length })
+      if (this.connected && this.welcome && !this.awaitingSnapshot && !this.resyncing) this.adoptNow(entries)
+      else {
+        // no server state yet: adopted at the next welcome (afterWelcome), counted meanwhile
+        this.pendingAdopt = [...(this.pendingAdopt ?? []), ...entries]
+        this.offlineQueued = Math.max(this.offlineQueued, this.pendingAdopt.length)
+      }
       this.updateSaved()
-      if (this.welcome && !this.awaitingSnapshot) this.afterWelcome()
     } catch (err) {
       this.log('offline_load_failed', { error: String(err) })
     }
+  }
+
+  /** Adopts queued entries while connected: rebased on the server's copies, put in the scene, pushed. */
+  private adoptNow(entries: readonly OfflineEntry[]): void {
+    const ids = new Set<string>()
+    for (const e of entries) {
+      this.adoptOffline(e)
+      ids.add(e.element.id)
+    }
+    for (const id of ids) {
+      const t = this.tracked.get(id)
+      if (!t) continue
+      if (this.confirmedMap.has(id)) t.isNew = false
+      else if (!t.isNew) {
+        this.tracked.delete(id)
+        continue
+      }
+      this.settleDirty(id, t)
+    }
+    this.applyScene(ids)
+    this.flushNow(false)
   }
 
   private adoptOffline(e: OfflineEntry): void {
@@ -1657,15 +1796,25 @@ export class LobbyEngineCore implements EngineCore {
         seen.add(id)
         add(id, s.groups, s.create, p.record.at)
       }
+    // loaded but not adopted yet (no welcome so far): kept in the store as they were
+    for (const e of this.pendingAdopt ?? []) if (!seen.has(e.element.id)) out.push(e)
     return out
   }
 
-  private schedulePersist(): void {
-    if (!this.store || this.persistTimer !== null) return
-    this.persistTimer = this.setTimer(() => {
-      this.persistTimer = null
-      void this.persist()
-    }, 100)
+  /** Writes the offline queue 100 ms after a change (`immediate`: on the next tick, e.g. after an ack). */
+  private schedulePersist(immediate = false): void {
+    if (!this.store) return
+    if (this.persistTimer !== null) {
+      if (!immediate) return
+      this.clearTimer(this.persistTimer)
+    }
+    this.persistTimer = this.setTimer(
+      () => {
+        this.persistTimer = null
+        void this.persist()
+      },
+      immediate ? 0 : 100,
+    )
   }
 
   private async persist(): Promise<void> {

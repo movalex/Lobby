@@ -4,6 +4,7 @@ import { bump } from '../headless/scene.ts'
 import { arrow, binding, note, rect, text } from '../testing/elements.ts'
 import { stored } from '../testing/fakeRoom.ts'
 import { createHarness, type TestClient } from '../testing/harness.ts'
+import { createMemoryOfflineStore } from './offline-memory.ts'
 
 // The engine core against the protocol fake (docs/EXCALIDRAW-MIGRATION.md §2.5, §6.1). Every frame goes
 // through the manual clock, so each test decides the order.
@@ -453,6 +454,162 @@ describe('engine core: the text lease gate (§2.9.2, §2.9.4)', () => {
     expect(refits).toEqual([{ id: 't1', dx: -20, dy: 0 }])
   })
 
+  /**
+   * The board page's refit handler (session.ts `refit` / `shiftFreeText`), on the manual clock: a leased
+   * free text's dropped shift is re-applied to the scene copy on the next tick, as Excalidraw's element
+   * operation would. Returns the refits seen.
+   */
+  const pageRefits = (h: ReturnType<typeof createHarness>, a: TestClient) => {
+    const seen: { id: string; dx?: number; dy?: number; at: number }[] = []
+    a.core.on((e) => {
+      if (e.kind !== 'refit') return
+      seen.push({ id: e.id, dx: e.dx, dy: e.dy, at: h.clock.now() })
+      if (!e.dx && !e.dy) return
+      h.clock.setTimer(() => {
+        const el = a.get(e.id) as unknown as { x: number; y: number }
+        a.change(e.id, { x: el.x + (e.dx ?? 0), y: el.y + (e.dy ?? 0) }, { editingTextElementId: e.id })
+      }, 0)
+    })
+    return seen
+  }
+
+  it("L10 5 (B's move first): fits of A's still in flight when B's move arrives never undo it, however A's pushes and acks interleave", async () => {
+    // A types in a centred free text (80 wide at x 100) over a slow link (1.2 s each way), so several
+    // typing pushes with an x fit are out when B's move (x 300, y 90) reaches A. Every fit computed on
+    // the old position is dropped by the server; A's scene must take B's position at once and redo its
+    // own growth around it, so nothing A sends later carries the old position (the first integration
+    // run lost B's move 20/20 on a loaded machine, where A's typing spanned more than one push)
+    const h = createHarness({
+      seed: [stored(text('t1', 'a0', { x: 100, y: 50, width: 80, textAlign: 'center' }))],
+    })
+    const a = h.client('alice', { latencyMs: 2400 })
+    const b = h.client('bob')
+    h.settle()
+    a.core.leaseConnect(() => {}).send({ type: 'lease.acquire', req: 1, id: 't1' })
+    h.settle()
+    const refits = pageRefits(h, a)
+    const editing = { editingTextElementId: 't1' }
+    // Excalidraw's typing in a centred text: the box grows around the scene copy's centre
+    const grow = (w: number, s: string) => {
+      const el = a.get('t1') as unknown as { x: number; width: number }
+      a.change('t1', { originalText: s, text: s, width: w, x: el.x - (w - el.width) / 2 }, editing)
+    }
+    grow(100, 'g1') // x 90
+    h.clock.advance(510) // push 1 (fit x 90) is out
+    grow(120, 'g12') // x 80
+    h.clock.advance(500) // push 2 (fit x 80) is out
+    b.change('t1', { x: 300, y: 90 }) // B's move commits first (B's link is fast)
+    h.clock.advance(90)
+    grow(140, 'g123') // x 70: still typing
+    h.settle()
+    const stored1 = h.room.elements.get('t1') as unknown as { x: number; y: number; width: number }
+    // B's move kept: y exactly B's, and the centre where B left it (300 + 80/2), grown to 140
+    expect(stored1.y).toBe(90)
+    expect(stored1.width).toBe(140)
+    expect(stored1.x + stored1.width / 2).toBe(340)
+    expect(a.get('t1')?.x).toBe(stored1.x)
+    expect(a.get('t1')?.y).toBe(90)
+    // no fit A pushed after B's move reached it carries the old y
+    expect(patchOf(a, 't1').filter((p) => p.fit && 'y' in p.fit)).toEqual([])
+    a.gesture() // the editor closes
+    h.settle()
+    expect(await a.hash()).toBe(await h.roomHash())
+    expect(await b.hash()).toBe(await h.roomHash())
+    expect(refits.length).toBeGreaterThan(0)
+  })
+
+  it("L10 5 (B's move first), a slow typist: A types through every ack; B's move survives, x and y", async () => {
+    // one key every 150 ms for 5 s: pushes every 500 ms, acks 2.4 s later, a dirty fit at every ack
+    const h = createHarness({
+      seed: [stored(text('t1', 'a0', { x: 100, y: 50, width: 80, textAlign: 'center' }))],
+    })
+    const a = h.client('alice', { latencyMs: 2400 })
+    const b = h.client('bob')
+    h.settle()
+    a.core.leaseConnect(() => {}).send({ type: 'lease.acquire', req: 1, id: 't1' })
+    h.settle()
+    pageRefits(h, a)
+    const editing = { editingTextElementId: 't1' }
+    let s = ''
+    for (let k = 1; k <= 33; k++) {
+      s += 'k'
+      const el = a.get('t1') as unknown as { x: number; width: number }
+      a.change('t1', { originalText: s, text: s, width: el.width + 4, x: el.x - 2 }, editing)
+      if (k === 4) b.change('t1', { x: 300, y: 90 }) // B's move, 600 ms in
+      h.clock.advance(150)
+    }
+    h.settle()
+    const st = h.room.elements.get('t1') as unknown as { x: number; y: number; width: number }
+    expect(st.width).toBe(80 + 4 * 33)
+    expect(st.y).toBe(90)
+    expect(st.x + st.width / 2).toBe(340)
+    a.gesture() // the editor closes
+    h.settle()
+    expect(await a.hash()).toBe(await h.roomHash())
+    expect(await b.hash()).toBe(await h.roomHash())
+  })
+
+  it("L6/L10 1: a container fit in flight when B's resize arrives: the scene takes B's size at once, one refit, B's size kept", async () => {
+    const h = createHarness({ seed: seedNote() })
+    const a = h.client('alice', { latencyMs: 2400 })
+    const b = h.client('bob')
+    h.settle()
+    a.core.leaseConnect(() => {}).send({ type: 'lease.acquire', req: 1, id: 'n1' })
+    h.settle()
+    const refits: string[] = []
+    a.core.on((e) => {
+      if (e.kind === 'refit') refits.push(e.id)
+    })
+    const editing = { editingTextElementId: 'n1.t' }
+    a.change('n1.t', { originalText: 'memo!', text: 'memo!' }, editing)
+    a.change('n1', { height: 240 }, editing) // the label grew the note: a container fit
+    h.clock.advance(510) // pushed (fit height 240); it reaches the room 1.2 s later
+    expect(patchOf(a, 'n1')[0]?.fit).toEqual({ height: 240 })
+    b.change('n1', { width: 320 }) // B's resize commits first
+    h.clock.advance(1300) // B's resize has reached A; A's push is still unacknowledged
+    expect(a.get('n1')?.width).toBe(320) // not held back by the fit in flight
+    expect(refits).toEqual(['n1'])
+    h.settle()
+    expect(refits).toEqual(['n1']) // the fitDropped ack asks for nothing more
+    expect(h.room.elements.get('n1')?.width).toBe(320)
+    a.gesture()
+    h.settle()
+    expect(await a.hash()).toBe(await h.roomHash())
+  })
+
+  it("L10 5 (A's fit first): an own applied fit is not a remote move; B's later move is kept once, with no double shift", async () => {
+    const h = createHarness({
+      seed: [stored(text('t1', 'a0', { x: 100, y: 50, width: 80, textAlign: 'center' }))],
+    })
+    const a = h.client('alice', { latencyMs: 2400 })
+    const b = h.client('bob')
+    h.settle()
+    a.core.leaseConnect(() => {}).send({ type: 'lease.acquire', req: 1, id: 't1' })
+    h.settle()
+    pageRefits(h, a)
+    const editing = { editingTextElementId: 't1' }
+    // Excalidraw's typing in a centred text: the box grows around the scene copy's centre
+    const grow = (w: number, s: string) => {
+      const el = a.get('t1') as unknown as { x: number; width: number }
+      a.change('t1', { originalText: s, text: s, width: w, x: el.x - (w - el.width) / 2 }, editing)
+    }
+    grow(100, 'g1') // x 90
+    h.clock.advance(510) // push 1 out; it commits at the room 1.2 s later
+    grow(120, 'g12') // x 80
+    h.clock.advance(500) // push 2 out
+    h.clock.advance(800) // push 1 committed (A's fit x 90 applied)
+    b.change('t1', { x: 300, y: 90 }) // then B's move (absolute, from B's copy)
+    h.settle()
+    const s1 = h.room.elements.get('t1') as unknown as { x: number; y: number; width: number }
+    expect(s1.y).toBe(90)
+    expect(s1.width).toBe(120)
+    // A's growth after its applied fit (x 90 -> 80) is re-applied once on B's x
+    expect(s1.x).toBe(290)
+    a.gesture() // the editor closes
+    h.settle()
+    expect(await a.hash()).toBe(await h.roomHash())
+  })
+
   it('a lease lost while offline: the welcome tells the lease client, and the offline text is never pushed (L7)', async () => {
     const h = createHarness({ seed: seedNote() })
     const a = h.client('alice')
@@ -539,6 +696,56 @@ describe('engine core: rejects, retries, offline (§2.4.2, §2.5.6)', () => {
     expect(h.room.elements.get('r1')?.x).toBe(77)
     expect(a.core.saveStatus.state).toBe('saved')
     expect(await a.hash()).toBe(await h.roomHash())
+  })
+
+  // B4 D1 (the M1/M2 integration's stall): A creates a rectangle and reloads right after "Saved"; its
+  // offline store still held the create (persisted while it was in flight), and the reset welcome carried
+  // a snapshot older than the create (the room caches one for 5 s), its catch-up coming after it. The
+  // reloaded page replayed the create, the room refused it INVALID (the id exists), and the core kept the
+  // element as its own unsent create: pending 1, "Saving…" for ever.
+  it('B4 D1: a queued create the server already has (behind a reset snapshot older than it) settles: no refusal, Saved', async () => {
+    const r9 = rect('r9', 'a5', { x: 35, strokeColor: '#e03131' })
+    const queued = {
+      element: { ...r9, version: 9 },
+      groups: ['create', 'pos', 'style'],
+      base: 0,
+      queuedAt: 1,
+    }
+    const store = createMemoryOfflineStore([queued as never])
+    const h = createHarness()
+    const a = h.client('alice', { latencyMs: 200, offline: store })
+    await Promise.resolve() // the store's load resolves before the socket opens: nothing adopted yet
+    h.clock.advance(100) // the hello reaches the room; its reset welcome and empty snapshot are on their way
+    h.room.seed([stored(r9, 3)]) // the room has the element (A's create committed before the reload)
+    const rejects: string[] = []
+    a.core.on((e) => {
+      if (e.kind === 'reject') rejects.push(`${e.id} ${e.code}`)
+    })
+    h.settle()
+    expect(a.core.saveStatus.state).toBe('saved')
+    expect(a.core.saveStatus.lastReject).toBeNull()
+    expect(rejects).toEqual([])
+    expect(a.core.dirtyIds()).toEqual([])
+    expect(a.get('r9')?.x).toBe(35)
+    expect(await a.hash()).toBe(await h.roomHash())
+    await Promise.resolve()
+    expect(store.entries()).toEqual([])
+  })
+
+  it('B4 D1: after the last ack the offline queue is emptied on the next tick, not 100 ms later', async () => {
+    const store = createMemoryOfflineStore()
+    const h = createHarness()
+    const a = h.client('alice', { latencyMs: 400, offline: store })
+    h.settle()
+    a.edit((m) => m.set('r9', rect('r9', 'a5')))
+    h.clock.advance(150) // coalesced and pushed at 50 ms; the queue persisted at 100 ms holds the create
+    await Promise.resolve()
+    expect(store.entries().map((e) => e.element.id)).toEqual(['r9'])
+    h.clock.advance(400) // the ack arrives (450 ms)
+    expect(a.core.saveStatus.state).toBe('saved')
+    h.clock.advance(0)
+    await Promise.resolve()
+    expect(store.entries()).toEqual([])
   })
 })
 

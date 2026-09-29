@@ -18,7 +18,8 @@
 //       1's queue once
 //
 // Run: SPIKE_B_PORT_BASE=<base> pnpm --filter @draftroom/e2e spike-b b4-client
-//      (SPIKE_B4_REPS default 3 for D1; SPIKE_B4_D5_MS default 60000; SPIKE_B4_D2_ROUNDS default 3)
+//      (SPIKE_B4_REPS default 3 for D1; SPIKE_B4_D1_FRESH_REPS default 5 for D1 in fresh rooms;
+//      SPIKE_B4_D5_MS default 60000; SPIKE_B4_D2_ROUNDS default 3)
 import { expect, type Page, test } from '@playwright/test'
 import type { Op } from '../../../packages/canvas-schema/src/protocol.ts'
 import { harness } from '../support/harness.ts'
@@ -160,6 +161,75 @@ test('D1: A edits, waits for Saved, reloads: the content is kept; Saved never be
     await converge(r)
   }
   console.log('B4-D1', JSON.stringify({ n: rows.length, rows }))
+  expect(rows.filter((x) => !x.ok)).toEqual([])
+})
+
+/**
+ * D1's first iteration as the M1/M2 integration's first run met it (A stayed "Saving…" 30 s): a FRESH room
+ * (a new board and browsers, so the room's cached reset snapshot, kept 5 s, predates A's edit), A's ack
+ * slowed through its socket relay (as on a loaded machine: the offline queue is persisted while the create
+ * is in flight), and the reload the moment the indicator says Saved. Before O2's fix the reloaded page
+ * replayed the queued create, the room refused it INVALID (the id exists) and the core kept it as an
+ * unsent create for ever. Pass: content kept, Saved after the reload in both browsers, no refusal shown,
+ * "Saved" never before the last ack (the same record as D1).
+ */
+test('D1 (fresh rooms, a slow ack, the reload at once): the content is kept and Saved comes back', async () => {
+  const rows: Record<string, unknown>[] = []
+  const reps = REPS('B4_D1_FRESH', 5)
+  for (let i = 0; i < reps; i++) {
+    const q = await room(['A', 'B'], { stack: r.stack })
+    const a = q.by.A?.page as Page
+    let row: Record<string, unknown> = { i }
+    try {
+      await recordIndicator(a)
+      const t0 = Date.now()
+      const off = await harness.testHooks(q.stack).withLatency(a, 400)
+      const id = await lc(a).create('rectangle', { x: 0, y: 0, width: 120, height: 80, roughness: 0 })
+      for (let k = 1; k <= 5; k++) await lc(a).update(id, { x: k * 7 })
+      await lc(a).update(id, { strokeColor: '#e03131' })
+      await a.waitForFunction(
+        () =>
+          (window as unknown as { lobbyCanvas: { saveState(): { state: string } } }).lobbyCanvas.saveState()
+            .state === 'saved',
+        undefined,
+        { timeout: 30_000, polling: 5 },
+      )
+      const states = (await indicator(a)).filter((s) => s.at >= t0)
+      const { sent, acked } = await pushesAndAcks(a)
+      const early = savedTooEarly(
+        states,
+        sent.filter((x) => x.at >= t0),
+        acked,
+      )
+      await off()
+      await a.reload()
+      await waitBoardReady(a)
+      await allSaved(q.browsers)
+      const el = (await lc(a).get(id)) as { x?: number; strokeColor?: string } | null
+      const snap = await harness.readSnapshot(q.stack, q.boardId)
+      const stored = snap.elements.find((e) => e.id === id) as
+        | { x?: number; strokeColor?: string }
+        | undefined
+      const kept = el?.x === 35 && el?.strokeColor === '#e03131' && stored?.x === 35
+      const rejects = await board(
+        a,
+        (b) => (b.session.eventLog as { kind: string }[]).filter((e) => e.kind === 'reject').length,
+      )
+      const adopted = await board(a, (b) =>
+        (b.session.coreLog as { event: string; detail: unknown }[])
+          .filter((e) => /offline_adopted|create_exists|create_settled/.test(e.event))
+          .map((e) => `${e.event} ${JSON.stringify(e.detail)}`),
+      )
+      row = { i, ok: kept && early.length === 0 && rejects === 0, kept, early, rejects, adopted }
+      await converge(q)
+    } catch (e) {
+      row = { i, ok: false, error: String((e as Error).message).slice(0, 4000) }
+    }
+    console.log('row', JSON.stringify(row))
+    rows.push(row)
+    await q.close()
+  }
+  console.log('B4-D1-fresh', JSON.stringify({ n: rows.length, failed: rows.filter((x) => !x.ok) }))
   expect(rows.filter((x) => !x.ok)).toEqual([])
 })
 
