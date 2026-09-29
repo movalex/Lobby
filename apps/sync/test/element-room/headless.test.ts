@@ -60,8 +60,19 @@ describe.skipIf(!available)('the headless client (O2) against the room', () => {
     await c.connect()
     return c
   }
+  /** Pushes everything now and waits until it is acked (the core coalesces edits for up to 50 ms). */
+  const settle = async (c: HeadlessClient) => {
+    c.core.flush()
+    await c.saved(20_000)
+  }
+  /** Waits until `c` has processed the server clock `clock`. */
+  const reach = async (c: HeadlessClient, clock: number) => {
+    const deadline = Date.now() + 10_000
+    while (c.core.clock < clock && Date.now() < deadline) await new Promise((r) => setTimeout(r, 20))
+    expect(c.core.clock).toBeGreaterThanOrEqual(clock)
+  }
   const converge = async (st: Awaited<ReturnType<typeof h.stack>>, boardId: string, cs: HeadlessClient[]) => {
-    for (const c of cs) await c.saved(20_000)
+    for (const c of cs) await settle(c)
     const snap = await st.snapshot(boardId)
     const digest = await hashElements(snap.elements)
     for (const c of cs) {
@@ -83,8 +94,9 @@ describe.skipIf(!available)('the headless client (O2) against the room', () => {
     A.edit((s) => {
       for (let i = 0; i < 10; i++) s.set(`a${i}`, rect(`a${i}`, { x: i * 20 }) as SceneElement)
     })
-    await A.saved()
-    await B.saved()
+    await settle(A)
+    expect(A.core.pushLog().length).toBeGreaterThan(0)
+    await reach(B, A.core.clock)
     B.edit((s) => {
       for (let i = 0; i < 10; i += 2) s.set(`a${i}`, bumped(s.get(`a${i}`) as SceneElement, { y: 300 }))
     })
@@ -134,8 +146,9 @@ describe.skipIf(!available)('the headless client (O2) against the room', () => {
       s.set('X', X as SceneElement)
       s.set('A1', a1 as SceneElement)
     })
-    await A.saved()
+    await settle(A)
     const B = await open(st.server.wsUrl, b, 'bob')
+    await reach(B, A.core.clock)
     B.edit((s) => s.set('X', bumped(s.get('X') as SceneElement, { height: 180 })))
     await converge(st, b, [A, B])
     const arrowOps = B.core
