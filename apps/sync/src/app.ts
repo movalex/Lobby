@@ -16,7 +16,9 @@ import { type BackupService, createBackupService } from './backup/service.ts'
 import { isAllowedOrigin, type SyncConfig } from './config.ts'
 import {
   BoardOpenRefused,
+  type ElementRoomDeps,
   type ElementRoomService,
+  extendElementRoom,
   type InternalRoute,
   registeredElementRoom,
   type SessionDirectory,
@@ -423,13 +425,15 @@ function createElementRooms(
     throw new Error(
       'DRAFTROOM_ENGINE=excalidraw but no ElementRoom is registered (loadEngine() imports apps/sync/src/room/index.ts)',
     )
-  return factory({
+  const deps: ElementRoomDeps = {
     dataDir: dataLayout(config.dataDir).rooms,
     config,
     log,
     onSessionRemoved: (boardId, sessionId, meta) => report.removed(boardId, sessionId, meta),
     onDocumentChange: (boardId) => report.changed(boardId),
-  })
+  }
+  // CR 2F-1: the registered room extensions' routes (apps/sync/src/room-internal/) join the room's own
+  return extendElementRoom(factory(deps), deps)
 }
 
 /** GET /internal/metrics (§2.4.6): the ElementRoom's Prometheus text. */
