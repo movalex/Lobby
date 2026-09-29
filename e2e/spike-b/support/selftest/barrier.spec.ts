@@ -58,6 +58,9 @@ test('in-page actions armed for one instant start within 20 ms across three proc
     for (const p of r.parties) expect(p.startedAt).toBeGreaterThanOrEqual(r.releaseAt)
   }
   test.info().annotations.push({ type: 'in-page spread ms', description: spreads.join(' ') })
+  console.log(
+    `O3-SELFTEST in-page release spread ms (3 processes, ${REPS} releases): max ${Math.max(...spreads)}, all ${spreads.join(' ')}`,
+  )
   expect(Math.max(...spreads)).toBeLessThanOrEqual(20)
 })
 
@@ -82,5 +85,8 @@ test('a Node barrier releasing pointer actions: the spread is measured', async (
     type: 'node barrier spread ms (start / completion)',
     description: `${spreads.join(' ')} / ${done.join(' ')}`,
   })
+  console.log(
+    `O3-SELFTEST node barrier spread ms: start max ${Math.max(...spreads)}, completion (mouse.move over CDP) max ${Math.max(...done)}; completions ${done.join(' ')}`,
+  )
   expect(Math.max(...spreads)).toBeLessThanOrEqual(20)
 })

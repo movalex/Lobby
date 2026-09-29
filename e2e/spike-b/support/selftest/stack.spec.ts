@@ -79,6 +79,7 @@ test('stack, sharing and two separate browser processes', async () => {
   expect(a.pid).not.toBeNull()
   expect(b.pid).not.toBeNull()
   expect(a.pid).not.toBe(b.pid)
+  console.log(`O3-SELFTEST browser processes: A pid ${a.pid}, B pid ${b.pid}`)
   const { boardId } = await stack.createBoard({ owner: a.user, members: [{ user: b.user, role: 'viewer' }] })
   expect(boardId).toMatch(/^[A-Za-z0-9_-]+$/)
   // each page gets its own role's ticket through its own session cookie
@@ -125,6 +126,9 @@ test('relay: latency is added each way, a cut closes and holds reconnects, resto
     type: 'relay latency',
     description: `round trip median ${med(base)} ms; with 300 ms: ${med(slow)} ms; after removal ${after} ms`,
   })
+  console.log(
+    `O3-SELFTEST relay round trip median: ${med(base)} ms; with 300 ms latency: ${med(slow)} ms; after removal: ${after} ms`,
+  )
   expect(med(slow) - med(base)).toBeGreaterThanOrEqual(290)
   expect(med(slow) - med(base)).toBeLessThan(400)
   expect(after).toBeLessThan(med(slow))

@@ -24,7 +24,8 @@ test.describe('barrier', () => {
     expect(b.arrivals()).toHaveLength(3)
     expect(b.releasedAt()).not.toBeNull()
     expect(Math.max(...released) - Math.min(...released)).toBeLessThanOrEqual(5)
-    expect((b.arrivals()[2] ?? 0) - (b.arrivals()[0] ?? 0)).toBeGreaterThanOrEqual(50)
+    // the parties arrived 0, 30 and 60 ms apart (setTimeout; Windows timers fire a few ms early or late)
+    expect((b.arrivals()[2] ?? 0) - (b.arrivals()[0] ?? 0)).toBeGreaterThanOrEqual(40)
   })
 
   test('refuses extra arrivals and fails every waiter on timeout', async () => {
