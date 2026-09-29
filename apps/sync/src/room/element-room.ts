@@ -113,8 +113,20 @@ type QueueEntry =
   | { kind: 'push'; session: Session; push: PreparedPush; rejectAll?: RejectCode }
   | { kind: 'acquire'; session: Session; req: number; id: string }
   | { kind: 'release'; session: Session; id: string }
+  | { kind: 'relayout'; id: string }
 
 let handleSeq = 0
+
+/** The server's own writes (the lease-expiry re-fit): attributed to nobody, never read-only. */
+const SERVER_IDENTITY: SessionIdentity = {
+  sid: 'lobby:server',
+  uid: 'lobby-server',
+  name: 'Lobby',
+  color: '#000000',
+  role: 'owner',
+  guest: false,
+  readonly: false,
+}
 
 export class Session {
   readonly key = ++handleSeq
@@ -660,7 +672,11 @@ export class ElementRoom {
 
   private leaseTick(): void {
     const expired = this.leases.expire(this.deps.now())
-    for (const l of expired) this.broadcast(JSON.stringify({ type: 'lease', id: l.id, holder: null }))
+    for (const l of expired) {
+      this.broadcast(JSON.stringify({ type: 'lease', id: l.id, holder: null }))
+      // rule 6: the holder vanished; the server re-fits the container if its geometry changed since
+      this.enqueue({ kind: 'relayout', id: l.id })
+    }
   }
 
   // ---- the room queue and the drain ---------------------------------------------------------------
@@ -737,6 +753,33 @@ export class ElementRoom {
       }
       if (e.kind === 'release') {
         deliveries.push(this.release(e.session, e.id, now))
+        continue
+      }
+      if (e.kind === 'relayout') {
+        store.savepoint('push')
+        try {
+          const push: PreparedPush = {
+            seq: 0,
+            base: clock,
+            ops: [],
+            files: new Map(),
+            receivedAt: now,
+            relayout: e.id,
+          }
+          const outcome = new PushApplier(this.env(now), SERVER_IDENTITY, push, clock + 1).run()
+          store.release('push')
+          if (outcome.clock !== null) {
+            clock = outcome.clock
+            for (const [id, ch] of outcome.changed) {
+              if (!before.has(id)) before.set(id, ch.before)
+              after.set(id, ch.after)
+            }
+          }
+        } catch (err) {
+          store.rollbackTo('push')
+          this.deps.log('[room] lease-expiry re-fit failed', this.boardId, (err as Error)?.name)
+          this.rebuildCaches()
+        }
         continue
       }
       pushes++

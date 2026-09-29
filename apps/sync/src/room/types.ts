@@ -30,6 +30,8 @@ export interface PreparedPush {
   readonly files: ReadonlyMap<string, FileRefAnswer>
   /** when the push arrived (receive → ack metric) */
   readonly receivedAt: number
+  /** a server write instead of client ops: the lease-expiry re-fit of one container (§2.9.4 rule 6) */
+  readonly relayout?: string
 }
 
 /** What the drain produces for one push. */

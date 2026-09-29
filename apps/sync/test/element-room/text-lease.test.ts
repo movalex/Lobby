@@ -265,3 +265,34 @@ describe('the container fit (§2.9.4)', () => {
     expect(stale.r[0]).toMatchObject({ ok: false, code: 'STALE' })
   })
 })
+
+describe('lease expiry (§2.9.4 rule 6)', () => {
+  it('the holder vanished after a resize of its note: on expiry the server re-fits the label for the new size', async () => {
+    const st = await h.stack({ env: { TEXT_LEASE_MS: '800' } })
+    const b = newBoardId()
+    const a = await st.client({ boardId: b, user: 'alice' })
+    const bob = await st.client({ boardId: b, user: 'bob' })
+    const words = 'a label long enough to wrap onto more than one line in a small note'
+    const n = note('n1', { width: 200, height: 200, baseHeight: 200 })
+    const t = label('n1.t', 'n1', { text: words, originalText: words, x: 10, y: 50, width: 180, height: 100 })
+    withLabel(n, t)
+    await a.create([n, t])
+    await bob.untilClock(a.clock)
+    expect((await a.acquire('n1')).type).toBe('lease.grant')
+    await bob.push([
+      { k: 'p', id: 'n1', pv: pv(bob, 'n1'), g: { shape: { width: 500, baseHeight: 500, height: 500 } } },
+    ])
+    const before = (await st.snapshot(b)).elements.find((e) => e.id === 'n1.t') as Record<string, unknown>
+    a.terminate() // the holder vanishes; no release
+    await bob.until(() => bob.of('lease').some((l) => l.id === 'n1' && l.holder === null), 'expiry', 5_000)
+    await bob.until(
+      () => (bob.confirmed.get('n1.t')?.version ?? 0) > (before.version as number),
+      'server re-fit',
+      5_000,
+    )
+    const after = (await st.snapshot(b)).elements.find((e) => e.id === 'n1.t') as Record<string, unknown>
+    expect(after.originalText).toBe(words)
+    expect(after.width).not.toBe(before.width)
+    expect(after.x as number).toBeGreaterThan(before.x as number)
+  })
+})

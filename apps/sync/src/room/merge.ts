@@ -13,7 +13,7 @@
 
 import { canWriteDocKey, DocSet, docValueProblem, TAG_DEF_KEY_PREFIX } from '@draftroom/canvas-schema/doc'
 import { checkElement, type WireElement } from '@draftroom/canvas-schema/elements'
-import { isBindable } from '@draftroom/canvas-schema/engine'
+import { isBindable, layoutStickyNote } from '@draftroom/canvas-schema/engine'
 import {
   fieldGroupOf,
   kindOf,
@@ -237,6 +237,7 @@ export class PushApplier {
   // ---- the run ---------------------------------------------------------------------------------
 
   run(): PushOutcome {
+    if (this.push.relayout) this.serverRelayout(this.push.relayout)
     this.applyDoc()
     this.push.ops.forEach((pre, i) => {
       this.ops[i] = { id: pre.id, kind: pre.op?.k ?? 'p', ok: false, applied: { groups: {}, c: {} } }
@@ -532,6 +533,44 @@ export class PushApplier {
       this.resnapArrows.add(next.id)
     if (isBindable(next as never) && RESNAP_TRIGGER_FIELDS.some((f) => !equal(cur[f], next[f])))
       this.movedTargets.add(next.id)
+  }
+
+  // ---- rule 6: the server re-fits a container whose lease expired --------------------------------
+
+  /**
+   * §2.9.4 rule 6: the holder vanished (its lease expired) and the container's geometry changed after its
+   * last fit, so the server re-fits the label and the container with Excalidraw's own layout helper and
+   * the metrics table (§2.11). Sticky notes only in spike B (`getStickyNoteLayout`); other containers keep
+   * their layout until someone edits the label. A derived write: `gclock.fit` only.
+   */
+  private serverRelayout(id: string): void {
+    const cw = this.get(id)
+    const note = cw.el
+    if (!note || note.isDeleted || note.type !== 'stickynote') return
+    const fit = cw.gclock.fit ?? 0
+    if ((cw.gclock.pos ?? 0) <= fit && (cw.gclock.shape ?? 0) <= fit) return
+    const ref = (note.boundElements ?? []).find((r: { type: string }) => r.type === 'text')
+    const lw = ref ? this.get(ref.id) : null
+    const lab = lw?.el
+    if (!lw || !lab || lab.isDeleted || lab.containerId !== id) return
+    const lay = layoutStickyNote(note as never, lab as never)
+    const nextNote = { ...note, ...lay.container } as El
+    if (!sameContent(nextNote, note)) {
+      cw.el = nextNote
+      this.bump(cw)
+      cw.gclock.fit = this.clock
+      cw.derived = true
+      if (RESNAP_TRIGGER_FIELDS.some((f) => !equal(note[f], nextNote[f]))) this.movedTargets.add(id)
+    }
+    if (lay.text) {
+      const nextLabel = { ...lab, ...lay.text } as El
+      if (!sameContent(nextLabel, lab)) {
+        lw.el = nextLabel
+        this.bump(lw)
+        lw.gclock.fit = this.clock
+        lw.derived = true
+      }
+    }
   }
 
   // ---- doc writes (before the ops, so a tag defined in this push can be used by its ops) -----------
