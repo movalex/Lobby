@@ -56,7 +56,7 @@ import {
   type SnapshotFrame,
   type Welcome,
 } from '@draftroom/canvas-schema/protocol'
-import { indexPrePass } from '../index-keys.ts'
+import { compareIndexThenId, indexPrePass } from '../index-keys.ts'
 import type {
   EngineCore,
   EngineCoreOptions,
@@ -143,6 +143,19 @@ export type CoreEvent =
   | { kind: 'echo_suspect'; ids: readonly string[] }
 
 const now0 = () => Date.now()
+const nowMs = () => (typeof performance !== 'undefined' ? performance.now() : Date.now())
+/** A `lobby.*` performance measure (§8.4's client numbers; O3's facade reads and clears them). */
+function measure(name: string, start: number): void {
+  // opt-in (the spike board page sets it): user-timing entries accumulate until someone clears them, so
+  // headless clients (200 in a load run) never record them
+  if (!(globalThis as { LOBBY_MEASURE?: boolean }).LOBBY_MEASURE) return
+  if (typeof performance === 'undefined' || typeof performance.measure !== 'function') return
+  try {
+    performance.measure(name, { start, end: nowMs() })
+  } catch {
+    // a runtime without user timing: no number
+  }
+}
 const GESTURE_FLAGS: readonly (keyof GestureState)[] = [
   'dragging',
   'resizing',
@@ -187,7 +200,10 @@ export class LobbyEngineCore implements EngineCore {
   epoch: string | null = null
   private horizon = 0
   private readonly confirmedMap = new Map<string, SceneElement>()
-  private doc: Record<string, unknown> = {}
+  private serverDoc: Record<string, unknown> = {}
+  /** doc writes of this client not sent yet (setDoc), and sent but not acked: overlaid on the server copy */
+  private pendingDoc: Record<string, unknown> = {}
+  private readonly inflightDoc = new Map<number, Record<string, unknown>>()
   private readonly holders = new Map<string, LeaseHolder>()
   private readonly rosterMap = new Map<string, RosterEntry>()
   private awaitingSnapshot = false
@@ -377,7 +393,40 @@ export class LobbyEngineCore implements EngineCore {
 
   /** The board document (`lb_doc` keys) as the server last sent it. */
   docValues(): Readonly<Record<string, unknown>> {
-    return this.doc
+    return this.serverDoc
+  }
+
+  /**
+   * The board document (`lb_doc`) as this client sees it: the server's copy (welcome, then every
+   * `changes` batch's `doc`), overlaid with this client's writes not acked yet (O5's CR on EngineCore).
+   */
+  doc(): ReadonlyMap<string, unknown> {
+    const out = new Map<string, unknown>(Object.entries(this.serverDoc))
+    const overlay = (set: Record<string, unknown>) => {
+      for (const [k, v] of Object.entries(set)) {
+        if (v === null) out.delete(k)
+        else out.set(k, v)
+      }
+    }
+    for (const set of this.inflightDoc.values()) overlay(set)
+    overlay(this.pendingDoc)
+    return out
+  }
+
+  /**
+   * Writes board-document keys (null removes one) as a push's `doc: {set}`, ordered with this client's
+   * element pushes: it goes out in the next push, so a doc write made before an element edit is sent no
+   * later than it (O5's tags: `tagDef:<key>` before the element's `tag:<key>`).
+   */
+  setDoc(set: Readonly<Record<string, unknown>>): void {
+    for (const [k, v] of Object.entries(set)) this.pendingDoc[k] = v === undefined ? null : clone(v)
+    this.scheduleFlush(true)
+    this.updateSaved()
+  }
+
+  /** The ids this tab asked a lease for and has no answer for yet (O3's facade `leaseState().pending`). */
+  pendingLeases(): readonly string[] {
+    return [...this.leasePending]
   }
 
   /** This session's id (`welcome.sid`), or null before the first welcome. */
@@ -418,6 +467,15 @@ export class LobbyEngineCore implements EngineCore {
 
   onSceneChange(snapshot: SceneSnapshot): void {
     if (this.stopped) return
+    const t0 = nowMs()
+    try {
+      this.scan(snapshot)
+    } finally {
+      measure('lobby.onChange', t0)
+    }
+  }
+
+  private scan(snapshot: SceneSnapshot): void {
     const wasGesture = gestureActive(this.gesture)
     const prevEditing = this.gesture.editingTextElementId
     this.gesture = snapshot.gesture
@@ -812,39 +870,48 @@ export class LobbyEngineCore implements EngineCore {
     }
     this.vanish.clear()
     if (touched.length === 0) return
-    const own = (el: SceneElement) => {
-      const t = this.tracked.get(el.id)
-      return !!t?.isNew && !this.confirmedMap.has(el.id)
-    }
-    const pre = indexPrePass(out, {
-      isOwnUnacked: (el) => own(el) || (this.inflightHas(el.id) && !this.confirmedMap.has(el.id)),
-      isInFlight: (el) => this.inflightHas(el.id),
-      withIndex: (el, index) => ({ ...el, index }) as SceneElement,
-    })
-    if (pre.confirmedConflicts.length)
-      this.log('index_conflict', { ids: pre.confirmedConflicts.slice(0, 20) })
-    for (const r of pre.rekeys) {
-      if (!r.inFlight) {
-        const t = this.tracked.get(r.id)
-        if (t && !t.isNew) t.dirty.add('z')
+    const ownUnacked = (el: SceneElement) =>
+      !this.confirmedMap.has(el.id) && (!!this.tracked.get(el.id)?.isNew || this.inflightHas(el.id))
+    // the index pre-pass (E2, E3), skipped when this client has no unacknowledged element of its own
+    // (§2.5.4); the array is then only sorted by (index, id)
+    const t0 = nowMs()
+    let next: SceneElement[]
+    if (out.some(ownUnacked)) {
+      const pre = indexPrePass(out, {
+        isOwnUnacked: ownUnacked,
+        isInFlight: (el) => this.inflightHas(el.id),
+        withIndex: (el, index) => ({ ...el, index }) as SceneElement,
+      })
+      if (pre.confirmedConflicts.length)
+        this.log('index_conflict', { ids: pre.confirmedConflicts.slice(0, 20) })
+      for (const r of pre.rekeys) {
+        if (!r.inFlight) {
+          const t = this.tracked.get(r.id)
+          if (t && !t.isNew) t.dirty.add('z')
+        }
+        if (!before.has(r.id)) {
+          before.set(r.id, this.current.get(r.id))
+          touched.push(r.id)
+        }
       }
-      if (!before.has(r.id)) {
-        before.set(r.id, this.current.get(r.id))
-        touched.push(r.id)
-      }
-    }
-    const next = pre.elements
+      next = pre.elements
+    } else next = out.sort(compareIndexThenId)
+    measure('lobby.prepass', t0)
+    const inNext = new Set<string>()
     for (const el of next) {
+      inNext.add(el.id)
       this.known.set(el.id, { v: el.version, vn: el.versionNonce })
       this.last.set(el.id, el)
     }
     for (const id of touched)
-      if (!next.some((e) => e.id === id)) {
+      if (!inNext.has(id)) {
         this.known.delete(id)
         this.last.delete(id)
       }
     this.readScene(next)
+    const t1 = nowMs()
     this.scene.apply(next)
+    measure('lobby.updateScene', t1)
     // the global guard (§2.5.5): what the scene holds now for a clean confirmed element is the server's copy
     const after = this.scene.read().elements
     const suspects: string[] = []
@@ -906,7 +973,7 @@ export class LobbyEngineCore implements EngineCore {
     this.welcome = w
     this.epoch = w.epoch
     this.horizon = w.horizon
-    this.doc = { ...w.doc }
+    this.serverDoc = { ...w.doc }
     this.holders.clear()
     for (const l of w.leases) this.holders.set(l.id, l.holder)
     this.rosterMap.clear()
@@ -935,7 +1002,7 @@ export class LobbyEngineCore implements EngineCore {
     this.clock = frame.clock
     this.epoch = frame.epoch
     this.horizon = frame.horizon
-    this.doc = { ...frame.doc }
+    this.serverDoc = { ...frame.doc }
     this.afterWelcome()
     if (this.welcome) this.emit({ kind: 'welcome', welcome: this.welcome })
   }
@@ -961,6 +1028,10 @@ export class LobbyEngineCore implements EngineCore {
       }
     }
     this.inflight = []
+    // doc writes lost with the socket go again (a newer write of the same key wins)
+    for (const set of this.inflightDoc.values())
+      for (const [k, v] of Object.entries(set)) if (!(k in this.pendingDoc)) this.pendingDoc[k] = v
+    this.inflightDoc.clear()
     for (const [id, t] of [...this.tracked]) {
       if (this.confirmedMap.has(id)) t.isNew = false
       else if (!t.isNew) this.tracked.delete(id)
@@ -1018,8 +1089,8 @@ export class LobbyEngineCore implements EngineCore {
     }
     if (m.doc)
       for (const [k, v] of Object.entries(m.doc.set)) {
-        if (v === null) delete this.doc[k]
-        else this.doc[k] = v
+        if (v === null) delete this.serverDoc[k]
+        else this.serverDoc[k] = v
       }
     this.clock = m.clock
     // the server's value for a held derived change arrived: it replaces the local follow (§2.5.2)
@@ -1047,6 +1118,21 @@ export class LobbyEngineCore implements EngineCore {
     this.inflight.splice(i, 1)
     const affected = new Set<string>()
     let retry = false
+    let docRejected = false
+    // the push's doc write: accepted (the batch's changes carried it), retried, or not saved
+    const doc = this.inflightDoc.get(ack.seq)
+    this.inflightDoc.delete(ack.seq)
+    if (doc && ack.docDenied) {
+      if (REJECT_CODE_INFO[ack.docDenied.code].retryable) {
+        retry = true
+        for (const k of ack.docDenied.keys)
+          if (k in doc && !(k in this.pendingDoc)) this.pendingDoc[k] = doc[k]
+      } else {
+        docRejected = true
+        this.lastReject = { id: `doc:${ack.docDenied.keys[0] ?? ''}`, code: ack.docDenied.code }
+        this.emit({ kind: 'reject', id: `doc:${ack.docDenied.keys[0] ?? ''}`, code: ack.docDenied.code })
+      }
+    }
     let allOk = true
     ack.r.forEach((r, n) => {
       const op = push.ops[n]
@@ -1096,7 +1182,7 @@ export class LobbyEngineCore implements EngineCore {
       this.unavailableSince = null
       this.retryDelay = 0
     }
-    if (allOk && !retry) this.lastReject = null
+    if (allOk && !retry && !docRejected) this.lastReject = null
     for (const d of ack.derived ?? []) affected.add(d.id)
     for (const l of [...this.ackListeners]) l(ack)
     this.releaseHeld(affected)
@@ -1149,6 +1235,7 @@ export class LobbyEngineCore implements EngineCore {
   }
 
   private hasPushable(): boolean {
+    if (Object.keys(this.pendingDoc).length) return true
     for (const [id] of this.tracked) if (this.pushableGroups(id)) return true
     return false
   }
@@ -1237,9 +1324,13 @@ export class LobbyEngineCore implements EngineCore {
     let ops: Op[] = []
     let sent = new Map<string, { groups: Set<GroupKey>; el: SceneElement; create: boolean }>()
     let bytes = 0
+    // doc writes ride in the first push of this flush (no later than any element edit made after them)
+    let doc: Record<string, unknown> | null = Object.keys(this.pendingDoc).length ? this.pendingDoc : null
+    this.pendingDoc = {}
     const flushOne = () => {
-      if (ops.length === 0) return
-      this.sendPush(ops, sent, forced)
+      if (ops.length === 0 && !doc) return
+      this.sendPush(ops, sent, forced, doc)
+      doc = null
       ops = []
       sent = new Map()
       bytes = 0
@@ -1285,13 +1376,15 @@ export class LobbyEngineCore implements EngineCore {
     ops: Op[],
     sent: Map<string, { groups: Set<GroupKey>; el: SceneElement; create: boolean }>,
     forced: boolean,
+    doc: Record<string, unknown> | null = null,
   ): void {
     const seq = ++this.seq
     const base = this.clock
-    const record: PushRecord = { seq, base, at: this.now(), ops }
+    const record: PushRecord = { seq, base, at: this.now(), ops, ...(doc ? { doc: { set: doc } } : {}) }
     this.inflight.push({ seq, base, ops, record, sent, forced })
+    if (doc) this.inflightDoc.set(seq, doc)
     this.pushes.push(record)
-    this.transport.send({ type: 'push', seq, base, ops })
+    this.transport.send({ type: 'push', seq, base, ops, ...(doc ? { doc: { set: doc } } : {}) })
     for (const t of this.tracked.values()) if (t.dirty.size === 0) t.replay = false
     this.emit({ kind: 'push', record, ids: [...sent.keys()] })
   }
@@ -1511,6 +1604,8 @@ export class LobbyEngineCore implements EngineCore {
   private updateSaved(): void {
     let dirty = 0
     for (const t of this.tracked.values()) if (t.dirty.size > 0 || t.isNew) dirty++
+    // a doc write not sent or not acked keeps the board unsaved too
+    dirty += (Object.keys(this.pendingDoc).length ? 1 : 0) + this.inflightDoc.size
     const inputs: SaveInputs = {
       connected: this.connected && !!this.welcome && !this.awaitingSnapshot,
       dirty,

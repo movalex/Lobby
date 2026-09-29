@@ -350,6 +350,8 @@ export class BoardSession {
     offs.push(installAll(port, this.registries))
     // the page renders the overlay and the slots once the port exists
     this.set({})
+    // the §8.4 client timings (lobby.* performance measures, read and cleared by O3's facade)
+    ;(globalThis as { LOBBY_MEASURE?: boolean }).LOBBY_MEASURE = true
     // spike-only debug handle (this page exists only behind the dev-auth guard): the specs' way in
     // until O3's facade (`window.lobbyCanvas`) is installed, and the probes' after it
     ;(window as unknown as { __lobbyBoard?: unknown }).__lobbyBoard = {

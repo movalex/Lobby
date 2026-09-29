@@ -468,11 +468,32 @@ export class FakeRoom {
         ...(denied.length ? { denied: { groups: denied, code: 'LEASED' as const } } : {}),
       })
     }
-    if (out.length) {
+    // the board document (doc.ts keys; the fake accepts every key a client may write)
+    const docSet = (push.doc as { set?: Record<string, unknown> } | undefined)?.set
+    if (docSet && !s.readonly)
+      for (const [k, v] of Object.entries(docSet)) {
+        if (v === null) delete this.doc[k]
+        else this.doc[k] = v
+      }
+    const wrote = out.length > 0 || (!!docSet && !s.readonly)
+    if (wrote) {
       this.clock = clock
-      this.broadcast({ type: 'changes', clock, ops: out })
+      this.broadcast({
+        type: 'changes',
+        clock,
+        ops: out,
+        ...(docSet && !s.readonly ? { doc: { set: docSet } } : {}),
+      })
     }
-    this.send(s, { type: 'ack', seq: push.seq, clock: out.length ? clock : this.clock, r: results })
+    this.send(s, {
+      type: 'ack',
+      seq: push.seq,
+      clock: wrote ? clock : this.clock,
+      r: results,
+      ...(docSet && s.readonly
+        ? { docDenied: { keys: Object.keys(docSet), code: 'READ_ONLY' as const } }
+        : {}),
+    })
   }
 
   private leasedByOther(s: Session, id: string): boolean {

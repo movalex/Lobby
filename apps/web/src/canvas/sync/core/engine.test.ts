@@ -482,3 +482,36 @@ describe('engine core: an editor opened without a grant (§2.9.2 guard step 3)',
     expect(patchOf(a, 'n1.t').map((o) => Object.keys(o.g ?? {}))).toEqual([['layout']])
   })
 })
+
+describe('engine core: the board document (O5 CR: doc() and setDoc())', () => {
+  it('a doc write goes out no later than an element edit made after it; everyone sees it; Saved after its ack', () => {
+    const h = createHarness({ seed: [stored(note('N', 'a0'))] })
+    const a = h.client('alice', { latencyMs: 60 })
+    const b = h.client('bob')
+    h.settle()
+    a.core.setDoc({ 'tagDef:x': { name: 'x', color: 'blue' } })
+    a.change('N', { customData: { lobby: { 'tag:x': { name: 'x', color: 'blue' } } } })
+    expect(a.core.doc().get('tagDef:x')).toEqual({ name: 'x', color: 'blue' }) // local write visible at once
+    expect(a.core.saveStatus.state).toBe('saving')
+    h.clock.advance(1)
+    const first = a.core.pushLog()[0]
+    expect(first?.doc).toEqual({ set: { 'tagDef:x': { name: 'x', color: 'blue' } } })
+    h.settle()
+    expect(b.core.doc().get('tagDef:x')).toEqual({ name: 'x', color: 'blue' })
+    expect(a.core.saveStatus.state).toBe('saved')
+    // a removal
+    a.core.setDoc({ 'tagDef:x': null })
+    h.settle()
+    expect(b.core.doc().has('tagDef:x')).toBe(false)
+  })
+
+  it("a read-only session's doc write is denied and reported (Change not saved)", () => {
+    const h = createHarness()
+    const v = h.client('viewer', { readonly: true })
+    h.settle()
+    v.core.setDoc({ 'tagDef:y': { name: 'y', color: 'red' } })
+    h.settle()
+    expect(v.core.saveStatus.state).toBe('not-saved')
+    expect(v.core.doc().has('tagDef:y')).toBe(false)
+  })
+})
