@@ -66,6 +66,8 @@ fi
 # 5. wait for the load generator, then bring back only the JSON/markdown reports (never a board file)
 nas "docker wait $C_LOAD"
 mkdir -p "$EVIDENCE_DIR/b9"
+# no OOM of the sync container, and how often it restarted (the kill is one)
+nas "docker inspect $C_SYNC --format 'sync: OOMKilled={{.State.OOMKilled}} restarts={{.RestartCount}} exit={{.State.ExitCode}} status={{.State.Status}}'" | tee -a "$LOG"
 for f in "$P-$TAG.json" "$P-$TAG.md" "host-$P-$TAG.jsonl" "kill-$P-$TAG.txt"; do
   if [[ "$DRY_RUN" == "0" ]]; then nas "test -f $S/reports/$f && cat $S/reports/$f" >"$EVIDENCE_DIR/b9/$f" || true
   else nas "cat $S/reports/$f"; fi
@@ -78,6 +80,11 @@ nas "test -f $S/reports/STOP && cat $S/reports/STOP || true" | tee -a "$LOG"
 list_spike | tee -a "$LOG"
 remove_container "$C_LOAD"
 remove_container "$C_SYNC"
+if [[ -n "$CUL" ]]; then
+  # with sync stopped: the planted board must still be on its tldraw tables, the other two converted
+  # (table names only; opened read-only; --network none)
+  nas "docker run --rm --name $C_GEN --user $U --network none -v $S/src:/app:ro -v $S/data:/var/data -w /app '$IMG' node e2e/load/board-tables.ts /var/data/rooms/board-cul-overcap.sqlite /var/data/rooms/board-cul-heavy.sqlite /var/data/rooms/board-cul-second.sqlite" | tee "$EVIDENCE_DIR/b9/cul-tables-$TAG.jsonl"
+fi
 nas "rm -f -- $S/run.env"
 check_cap
 log "run $P $TAG done; reports in $EVIDENCE_DIR/b9"
