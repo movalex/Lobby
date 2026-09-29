@@ -18,6 +18,25 @@ export interface ApiUser {
 export interface Me {
   user: ApiUser
   workspaces: { id: string; name: string; role: 'owner' | 'admin' | 'member' | 'guest' }[]
+  /**
+   * Domain access (docs/DOMAIN-ACCESS-CONTRACTS.md §7): whether this account may create and hand out
+   * access. Optional here: an api from before domain access does not send it.
+   */
+  access?: {
+    creator: boolean
+    reason: 'domain' | 'exception' | 'dev' | 'outside' | 'guest' | 'unconfirmed' | 'legacy'
+    email: string | null
+  }
+}
+
+/**
+ * Dev sign-in options. `email` (domain access): the address the dev account signs in with, trusted as
+ * verified by the dev-guarded route. Without it the account is `<handle>@dev.invalid`, a creator.
+ * Every dev login REPLACES the account's dev emails, so an outside address is only ever given to a
+ * fresh handle (freshHandle()), never to alice/bob/carol, whose sessions the stack caches.
+ */
+export interface SignInOptions {
+  email?: string
 }
 export interface ApiBoard {
   id: string
@@ -62,8 +81,14 @@ export interface RequestFactory {
   request: { newContext(options: { baseURL: string }): Promise<APIRequestContext> }
 }
 
-async function signInWith(request: APIRequestContext, handle: string, name = displayName(handle)) {
-  const res = await request.post(`${WEB_URL}/api/auth/dev/login`, { headers: ORIGIN, data: { handle, name } })
+async function signInWith(
+  request: APIRequestContext,
+  handle: string,
+  name = displayName(handle),
+  opts: SignInOptions = {},
+) {
+  const data = opts.email === undefined ? { handle, name } : { handle, name, email: opts.email }
+  const res = await request.post(`${WEB_URL}/api/auth/dev/login`, { headers: ORIGIN, data })
   if (res.status() !== 200) throw new ApiError('POST', '/api/auth/dev/login', res.status(), await res.text())
   return (await res.json()) as Me
 }
@@ -72,8 +97,13 @@ async function signInWith(request: APIRequestContext, handle: string, name = dis
  * Signs a BROWSER CONTEXT in through the real dev login endpoint: the response's HttpOnly
  * `dr_session` cookie lands in the context's cookie jar, as it would after the sign-in form.
  */
-export async function signInContext(context: BrowserContext, handle: string, name?: string): Promise<Me> {
-  return signInWith(context.request, handle, name)
+export async function signInContext(
+  context: BrowserContext,
+  handle: string,
+  name?: string,
+  opts: SignInOptions = {},
+): Promise<Me> {
+  return signInWith(context.request, handle, name, opts)
 }
 
 /** Requests as one signed-in user (its own cookie jar). */
@@ -88,10 +118,11 @@ export class Api {
     playwright: RequestFactory,
     handle: string,
     name?: string,
+    opts: SignInOptions = {},
   ): Promise<{ api: Api; me: Me }> {
     const request = await playwright.request.newContext({ baseURL: WEB_URL })
     try {
-      return { api: new Api(request), me: await signInWith(request, handle, name) }
+      return { api: new Api(request), me: await signInWith(request, handle, name, opts) }
     } catch (e) {
       await request.dispose()
       throw e

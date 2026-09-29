@@ -7,7 +7,6 @@ import { NoticeRegion, useNotices } from '../board/Notices.tsx'
 import { ShareDialog } from '../board/ShareDialog.tsx'
 import { useIsGuest } from '../invite/guest.tsx'
 import { absoluteUrl, copyText } from '../lib/clipboard.ts'
-import { canCreateInWorkspace } from '../lib/permissions.ts'
 import { boardPath, type DashboardSection, navigate, workspacePath } from '../lib/routing.ts'
 import { writeLastWorkspace } from '../lib/storage.ts'
 import { useResource } from '../lib/useResource.ts'
@@ -23,6 +22,7 @@ import {
   type BoardMenuAction,
   type BoardSort,
   boardsQueryForSection,
+  dashboardAccess,
   duplicateTitle,
   emptyState,
   filterBoards,
@@ -34,6 +34,7 @@ import {
   sectionTitle,
   sortBoards,
   TRASH_NOTE,
+  UNCONFIRMED_NOTICE,
   withStar,
   withStarredEntry,
 } from './model.ts'
@@ -99,7 +100,9 @@ function Dashboard({ workspaceId, section }: { workspaceId: string; section: Das
   // A name-only guest (wave 3): only the boards of their guest links, and a note saying so.
   const guest = useIsGuest()
   const workspace = me.workspaces.find((w) => w.id === workspaceId) ?? me.workspaces[0]
-  const canCreate = canCreateInWorkspace(workspace?.role ?? null)
+  // Domain access (docs/DOMAIN-ACCESS-CONTRACTS.md §9): creating needs a creator AND a workspace role that
+  // may create; reading the project list, moving boards and the storage line need only the role.
+  const { canCreate, inWorkspace, limit } = dashboardAccess(me.access, workspace?.role ?? null)
   const { notices, notify, dismiss } = useNotices()
   const searchId = useId()
   const sortId = useId()
@@ -144,8 +147,8 @@ function Dashboard({ workspaceId, section }: { workspaceId: string; section: Das
 
   // Guests may not list projects (the API answers 403); they only see boards shared with them.
   const projectsLoad = useCallback(
-    (signal: AbortSignal) => (canCreate ? api.listProjects(workspaceId, signal) : Promise.resolve([])),
-    [workspaceId, canCreate],
+    (signal: AbortSignal) => (inWorkspace ? api.listProjects(workspaceId, signal) : Promise.resolve([])),
+    [workspaceId, inWorkspace],
   )
   const projects = useResource(projectsLoad)
 
@@ -203,14 +206,14 @@ function Dashboard({ workspaceId, section }: { workspaceId: string; section: Das
   if (!workspace) return <NoAccessScreen thing="workspace" />
 
   const title = sectionTitle(section, projectList)
-  const empty = emptyState(section, { searching: query.trim().length > 0, canCreate })
+  const empty = emptyState(section, { searching: query.trim().length > 0, canCreate, limit })
   // Search across boards (wave 4): "Inside boards" results below the title matches.
   const contentSearching = contentSearchApplies(section, query)
   const showSort = section.kind !== 'recent'
   // New boards are active: offering "New board" while looking at Trash or Archived would be confusing.
   const showCreate = canCreate && section.kind !== 'archived' && section.kind !== 'trash'
   const totalCount = boards.data?.length ?? 0
-  const menu = { canCreate, canMove: canCreate }
+  const menu = { canCreate, canMove: inWorkspace }
   const defaultProjectId = section.kind === 'project' ? section.projectId : null
 
   const updateBoard = (id: string, fn: (b: DashBoard) => DashBoard) => {
@@ -328,6 +331,7 @@ function Dashboard({ workspaceId, section }: { workspaceId: string; section: Das
   // "New board": the template picker, unless this user ticked "Don't show on new boards" (PRE-01);
   // then one click makes a blank board and opens it.
   const newBoard = async () => {
+    if (!canCreate) return
     if (!readPickerHidden(me.user.id)) {
       setCreating(true)
       return
@@ -352,7 +356,7 @@ function Dashboard({ workspaceId, section }: { workspaceId: string; section: Das
   const onImportFile = async (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     e.target.value = '' // the same file can be picked again after an error
-    if (!file) return
+    if (!file || !canCreate) return
     if (file.size > IMPORT_BODY_LIMIT_BYTES) {
       notify({ key: 'import', text: 'That file is larger than 25 MB, the import limit.', tone: 'error' })
       return
@@ -436,7 +440,9 @@ function Dashboard({ workspaceId, section }: { workspaceId: string; section: Das
         section={section}
         projects={projectList}
         projectsError={projects.status === 'error' ? projects.error.message : null}
-        canManageProjects={canCreate}
+        canSeeProjects={inWorkspace}
+        canCreateProjects={canCreate}
+        canRenameProjects={canCreate}
         onCreateProject={createProject}
         onRenameProject={renameProject}
       />
@@ -612,6 +618,17 @@ function Dashboard({ workspaceId, section }: { workspaceId: string; section: Das
           </div>
         </div>
 
+        {limit === 'unconfirmed' && (
+          <div className="dr-dash__guest" role="note" data-testid="access-unconfirmed">
+            <strong>{UNCONFIRMED_NOTICE}</strong>
+            <span>
+              <button type="button" className="dr-btn dr-btn--sm" onClick={() => location.reload()}>
+                Reload
+              </button>
+            </span>
+          </div>
+        )}
+
         {guest && (
           <div className="dr-dash__guest" role="note" data-testid="guest-banner">
             <strong>You're a guest. Sign in with an account to keep access.</strong>
@@ -705,7 +722,7 @@ function Dashboard({ workspaceId, section }: { workspaceId: string; section: Das
           </p>
         )}
       </main>
-      {creating && (
+      {creating && canCreate && (
         <CreateBoardDialog
           workspaceId={workspace.id}
           workspaceName={workspace.name}
@@ -752,7 +769,7 @@ function Dashboard({ workspaceId, section }: { workspaceId: string; section: Das
           }}
         />
       )}
-      {dialog?.kind === 'duplicate' && (
+      {dialog?.kind === 'duplicate' && canCreate && (
         <DuplicateBoardDialog
           board={dialog.board}
           defaultTitle={duplicateTitle(dialog.board.title)}

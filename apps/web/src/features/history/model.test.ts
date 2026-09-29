@@ -87,6 +87,31 @@ describe('permissions (UI hints)', () => {
     expect(historyPermissions('editor', 'active', 'guest').canCreateBoards).toBe(false)
     expect(historyPermissions('editor', 'active', null).canCreateBoards).toBe(false)
   })
+
+  // Domain access (docs/DOMAIN-ACCESS-CONTRACTS.md §9): only creators duplicate or restore as a new board.
+  it('someone who is not a creator never duplicates or restores as new, whatever their roles', () => {
+    for (const ws of ['owner', 'admin', 'member', 'guest', null] as const) {
+      for (const role of ['owner', 'editor', 'commenter', 'viewer'] as const) {
+        const perms = historyPermissions(role, 'active', ws, { creator: false })
+        expect(perms.canCreateBoards, `${role}/${ws}`).toBe(false)
+        expect(copyActions(perms, true)).toMatchObject({ duplicate: 'hidden', restoreAsNew: 'hidden' })
+      }
+    }
+    // Everything else is role-based, as before: an outside owner still saves checkpoints and keeps sharing.
+    expect(historyPermissions('owner', 'active', 'member', { creator: false })).toEqual({
+      canEdit: true,
+      canSeeDeleted: true,
+      canCreateBoards: false,
+      canKeepSharing: true,
+    })
+    // A creator (and an older api, "legacy", which is one) keeps both.
+    expect(historyPermissions('viewer', 'active', 'member', { creator: true }).canCreateBoards).toBe(true)
+    expect(historyPermissions('viewer', 'active', 'member').canCreateBoards).toBe(true)
+    // The .json export is not a board: it follows the export policy only.
+    expect(
+      copyActions(historyPermissions('viewer', 'active', 'member', { creator: false }), true).exportJson,
+    ).toBe('on')
+  })
 })
 
 describe('messages', () => {

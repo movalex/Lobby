@@ -204,7 +204,11 @@ test('theme: the signed-out pages (sign-in, invitation) follow the stored choice
   users,
 }) => {
   const alice = await users.api('alice')
-  const res = await alice.fetch('POST', `/api/boards/${board}/invitations`, { role: 'editor' })
+  // Domain access: a single-use invitation names the one address that may accept it.
+  const res = await alice.fetch('POST', `/api/boards/${board}/invitations`, {
+    role: 'editor',
+    email: 'guest-theme@client.example.test',
+  })
   expect(res.status()).toBe(201)
   const invite = new URL(((await res.json()) as { url: string }).url).pathname
   const context = await themedContext(browser, 'light')

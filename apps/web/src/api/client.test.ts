@@ -54,6 +54,26 @@ describe('api client: requests', () => {
     expect(JSON.parse(String(calls[0]?.init.body))).toEqual({ title: 'Retro', projectId: null })
   })
 
+  it('domain access: a board invitation is locked to an address, sent as { role, email }', async () => {
+    const created = {
+      id: 'inv_0123456789abcdefghij',
+      url: '/invite/abc',
+      expiresAt: '2026-10-04T12:00:00.000Z',
+    }
+    const { calls, fetchImpl } = fakeFetch(() => json(created, 201))
+    const out = await createApiClient({ fetchImpl }).createBoardInvitation(BOARD_ID, {
+      role: 'commenter',
+      email: 'pat@client.example.test',
+    })
+    expect(out).toEqual(created)
+    expect(calls[0]?.url).toBe(`/api/boards/${BOARD_ID}/invitations`)
+    expect(calls[0]?.init.method).toBe('POST')
+    expect(JSON.parse(String(calls[0]?.init.body))).toEqual({
+      role: 'commenter',
+      email: 'pat@client.example.test',
+    })
+  })
+
   it('sends body-less POSTs (status changes, tickets, logout) without a content-type', async () => {
     const { calls, fetchImpl } = fakeFetch((c) =>
       c.url.endsWith('/ticket')

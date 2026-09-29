@@ -1,3 +1,4 @@
+import { ME_ACCESS_LEGACY, type MeAccess } from '@draftroom/contracts'
 import { describe, expect, it } from 'vitest'
 import { makeBoard, PRJ_ID, WS_ID, WS2_ID } from '../api/test-fixtures.ts'
 import { BOARD_ROLES, type BoardStatus, can } from '../lib/permissions.ts'
@@ -5,12 +6,15 @@ import {
   type BoardMenuAction,
   boardMenuItems,
   boardsQueryForSection,
+  dashboardAccess,
   duplicateTitle,
   emptyState,
   filterBoards,
   filterByOwner,
   importTitle,
   landingWorkspace,
+  noWorkspaceCopy,
+  OUTSIDE_CREATE_NOTE,
   recentBoards,
   sectionTitle,
   sortBoards,
@@ -310,5 +314,134 @@ describe('thumbnails and landing', () => {
     expect(landingWorkspace(ws, null)?.id).toBe(WS2_ID)
     expect(landingWorkspace(ws, WS_ID)?.id).toBe(WS_ID) // explicitly last used: respected
     expect(landingWorkspace([ws[0] as (typeof ws)[number]], null)?.id).toBe(WS_ID) // guest-only users still land
+  })
+})
+
+describe('domain access: the dashboard for someone who is not a creator (docs/DOMAIN-ACCESS-CONTRACTS.md §9)', () => {
+  const outside: MeAccess = { creator: false, reason: 'outside', email: 'pat@client.example.test' }
+  const unconfirmed: MeAccess = { creator: false, reason: 'unconfirmed', email: null }
+  const dev: MeAccess = { creator: true, reason: 'dev', email: 'alice@dev.invalid' }
+
+  it('an outside workspace member keeps the project list, moving and storage, but creates nothing', () => {
+    expect(dashboardAccess(outside, 'member')).toEqual({
+      canCreate: false,
+      inWorkspace: true,
+      limit: 'outside',
+    })
+    expect(dashboardAccess(outside, 'owner')).toEqual({
+      canCreate: false,
+      inWorkspace: true,
+      limit: 'outside',
+    })
+    expect(dashboardAccess(outside, 'guest')).toEqual({
+      canCreate: false,
+      inWorkspace: false,
+      limit: 'outside',
+    })
+    expect(dashboardAccess(unconfirmed, 'member')).toMatchObject({ canCreate: false, limit: 'unconfirmed' })
+    expect(dashboardAccess(dev, 'member')).toEqual({ canCreate: true, inWorkspace: true, limit: null })
+    // A creator who is a workspace guest: the role decides, and the guest copy stays.
+    expect(dashboardAccess(dev, 'guest')).toEqual({ canCreate: false, inWorkspace: false, limit: null })
+    // A name-only guest keeps the guest copy.
+    expect(dashboardAccess({ creator: false, reason: 'guest', email: null }, 'guest').limit).toBeNull()
+  })
+
+  it('"legacy" (an api from before domain access) behaves exactly as a creator did before', () => {
+    expect(dashboardAccess(ME_ACCESS_LEGACY, 'member')).toEqual({
+      canCreate: true,
+      inWorkspace: true,
+      limit: null,
+    })
+    expect(dashboardAccess(ME_ACCESS_LEGACY, 'guest')).toEqual({
+      canCreate: false,
+      inWorkspace: false,
+      limit: null,
+    })
+    expect(noWorkspaceCopy(ME_ACCESS_LEGACY).reason).toBe('none')
+  })
+
+  it('the card menu of an outside member: move stays, duplicate goes', () => {
+    const { canCreate, inWorkspace } = dashboardAccess(outside, 'member')
+    const items = actions('editor', 'active', { canCreate, canMove: inWorkspace })
+    expect(items).toContain('move')
+    expect(items).not.toContain('duplicate')
+    expect(actions('owner', 'active', { canCreate, canMove: inWorkspace })).toEqual([
+      'open',
+      'copy-link',
+      'share',
+      'rename',
+      'move',
+      'star',
+      'details',
+      'archive',
+      'trash',
+    ])
+  })
+
+  it('the empty state of an outside member says who can create and never offers it', () => {
+    for (const section of [{ kind: 'recent' }, { kind: 'all' }] as const) {
+      const e = emptyState(section, { searching: false, canCreate: false, limit: 'outside' })
+      expect(e).toEqual({
+        title: 'No boards yet',
+        body: `Boards shared with you appear here. ${OUTSIDE_CREATE_NOTE}`,
+        offerCreate: false,
+      })
+    }
+    expect(OUTSIDE_CREATE_NOTE).toBe(
+      'Only people at Dark Burn Creative or Trailer Park Group can create boards. Work there? Sign in with your work email.',
+    )
+    const project = emptyState(
+      { kind: 'project', projectId: PRJ_ID },
+      { searching: false, canCreate: false, limit: 'outside' },
+    )
+    expect(project.offerCreate).toBe(false)
+    expect(project.body).toContain(OUTSIDE_CREATE_NOTE)
+    expect(project.body).not.toMatch(/Guests/)
+    // Unconfirmed: paused, without the "work email" advice.
+    const paused = emptyState({ kind: 'all' }, { searching: false, canCreate: false, limit: 'unconfirmed' })
+    expect(paused.body).toMatch(/paused until Lobby can confirm your account/)
+    expect(paused.offerCreate).toBe(false)
+    // Trash, Archived and search keep their own copy; the guest copy is unchanged.
+    expect(
+      emptyState({ kind: 'trash' }, { searching: false, canCreate: false, limit: 'outside' }).title,
+    ).toBe('Trash is empty')
+    expect(
+      emptyState({ kind: 'all' }, { searching: true, canCreate: false, limit: 'outside' }).title,
+    ).toMatch(/search/)
+    expect(emptyState({ kind: 'all' }, { searching: false, canCreate: false, limit: null }).body).toMatch(
+      /Guests/,
+    )
+    // A limit never hides "create" from someone who can create.
+    expect(
+      emptyState({ kind: 'all' }, { searching: false, canCreate: true, limit: 'outside' }).offerCreate,
+    ).toBe(true)
+  })
+
+  it('an account with no workspace: outside (with and without an address), unconfirmed, none', () => {
+    expect(landingWorkspace([], null)).toBeNull()
+    const withEmail = noWorkspaceCopy(outside)
+    expect(withEmail).toMatchObject({
+      reason: 'outside',
+      title: 'Nothing has been shared with you yet',
+      action: 'switch-account',
+    })
+    expect(withEmail.body[0]).toBe("You're signed in as pat@client.example.test.")
+    expect(withEmail.body[1]).toBe(
+      'When someone at Dark Burn Creative or Trailer Park Group invites this address, open the link in their email. Work there? Sign in with your work email.',
+    )
+    const noEmail = noWorkspaceCopy({ ...outside, email: null })
+    expect(noEmail.body[0]).toBe("You're signed in with an account that has no confirmed email address.")
+    expect(noEmail.body.join(' ')).not.toMatch(/null|undefined/)
+    expect(noWorkspaceCopy(unconfirmed)).toMatchObject({
+      reason: 'unconfirmed',
+      title: "We couldn't confirm your account",
+      action: 'reload',
+    })
+    expect(noWorkspaceCopy(dev)).toEqual({
+      reason: 'none',
+      title: "You're not in a workspace yet",
+      body: ['Open an invite link from a teammate to join their workspace or board.'],
+      action: null,
+    })
   })
 })

@@ -1,4 +1,4 @@
-import { GUEST_NAME_MAX, guestNameProblem } from '@draftroom/contracts'
+import { DOMAIN_ACCESS_CODES, GUEST_NAME_MAX, guestNameProblem } from '@draftroom/contracts'
 import { type FormEvent, type ReactNode, useCallback, useEffect, useId, useRef, useState } from 'react'
 import { api, isApiError } from '../api/client.ts'
 import { useSession } from '../auth/session.tsx'
@@ -10,14 +10,20 @@ import { LoadingScreen, MessageScreen } from '../ui/screens.tsx'
 import { fetchInvitation, joinAsGuest, rememberGuestTab, seedUserKind, useUserKind } from './guest.tsx'
 import './invite.css'
 import {
+  acceptErrorCopy,
+  emailMismatchCopy,
   fetchGoneDetails,
   type GoneDetails,
   goneCopy,
   guestJoinError,
   guestJoinHint,
   invitationSummary,
+  isEmailMismatch,
+  lockedHint,
+  lockedSignInLabel,
   rememberAcceptIntent,
   safeSessionStorage,
+  shouldAutoAccept,
   takeAcceptIntent,
 } from './model.ts'
 
@@ -31,7 +37,12 @@ export function InvitePage({ token }: { token: string }) {
   const load = useCallback((signal: AbortSignal) => fetchInvitation(token, signal), [token])
   const preview = useResource(load)
   const [accepting, setAccepting] = useState(false)
-  const [acceptError, setAcceptError] = useState<{ gone: boolean; message: string } | null>(null)
+  const [acceptError, setAcceptError] = useState<{ gone: boolean; message: string; retry?: boolean } | null>(
+    null,
+  )
+  // Domain access: accepting answered 403 INVITATION_EMAIL_MISMATCH (the signed-in account has no
+  // verified address the invitation is locked to). Nothing was redeemed; the link still works for them.
+  const [mismatchAtAccept, setMismatchAtAccept] = useState(false)
   // A link that no longer works (PRI-04): who sent it, and — only for someone who can open the board
   // right now — the board, which then opens instead of a dead end.
   const [gone, setGone] = useState<GoneDetails | 'loading' | null>(null)
@@ -65,6 +76,7 @@ export function InvitePage({ token }: { token: string }) {
   const accept = useCallback(async () => {
     setAccepting(true)
     setAcceptError(null)
+    setMismatchAtAccept(false)
     try {
       const result = await api.acceptInvitation(token)
       // A board invitation can add a workspace (guest) membership: refresh before navigating so the
@@ -77,6 +89,18 @@ export function InvitePage({ token }: { token: string }) {
       if (isApiError(e) && e.kind === 'unauthorized') {
         setAccepting(false)
         return // the session guard shows sign-in
+      }
+      if (isApiError(e) && e.code === DOMAIN_ACCESS_CODES.emailMismatch) {
+        // The page already has the masked address from the preview; the 403 body is not read.
+        setAccepting(false)
+        setMismatchAtAccept(true)
+        return
+      }
+      if (isApiError(e) && e.kind !== 'gone') {
+        // 503 IDENTITY_UNAVAILABLE: a retry; 409 ROLE_REQUIRES_CREATOR and the rest: the server's words.
+        setAccepting(false)
+        setAcceptError({ gone: false, ...acceptErrorCopy(e.code, e.message) })
+        return
       }
       failed(e, 'The invitation could not be accepted. Try again.')
     }
@@ -104,12 +128,15 @@ export function InvitePage({ token }: { token: string }) {
   // PRI-16: back from "Sign in to accept": accept right away (once), no second click.
   const autoAccepted = useRef(false)
   const ready = preview.status === 'ready' && state.status === 'signed-in' && kind === 'account'
+  const previewData = preview.status === 'ready' ? preview.data : null
   useEffect(() => {
     if (!ready || autoAccepted.current) return
     if (!takeAcceptIntent(safeSessionStorage(), token)) return
     autoAccepted.current = true
+    // Domain access: never on the wrong account. The intent is consumed above, so it cannot loop.
+    if (!shouldAutoAccept(previewData)) return
     void accept()
-  }, [ready, token, accept])
+  }, [ready, token, accept, previewData])
 
   const signedIn = state.status === 'signed-in'
   if (
@@ -139,6 +166,9 @@ export function InvitePage({ token }: { token: string }) {
   const summary = invitationSummary(inv)
   const here = invitePath(token)
   const guestLink = inv.allowGuests && inv.board !== null
+  // Domain access: an invitation locked to one address (never a guest link) names it, masked.
+  const hint = lockedHint(inv)
+  const mismatch = signedIn && kind === 'account' && isEmailMismatch(inv, mismatchAtAccept)
 
   let actions: ReactNode
   if (signedIn && kind === 'guest') {
@@ -174,6 +204,36 @@ export function InvitePage({ token }: { token: string }) {
           }}
         >
           {signingOut ? 'Signing out…' : 'Sign in with an account'}
+        </button>
+      </>
+    )
+  } else if (signedIn && mismatch) {
+    // State 3: the wrong account. One way on: sign in with the invited address (and accept after it).
+    const copy = emailMismatchCopy({
+      hint,
+      email: state.me.access.email,
+      invitedBy: inv.invitedBy.name,
+    })
+    actions = (
+      <>
+        <div className="dr-invite-mismatch" role="alert" data-testid="invite-email-mismatch">
+          <p className="dr-invite-mismatch__title">
+            <strong>{copy.title}</strong>
+          </p>
+          <p data-testid="invite-email-mismatch-body">{copy.body}</p>
+        </div>
+        <button
+          type="button"
+          className="dr-btn dr-btn--primary dr-btn--lg"
+          data-testid="invite-mismatch-switch"
+          disabled={signingOut}
+          aria-busy={signingOut || undefined}
+          onClick={() => {
+            rememberAcceptIntent(safeSessionStorage(), token)
+            void signOut({ returnTo: here })
+          }}
+        >
+          {signingOut ? 'Signing out…' : 'Sign in with a different account'}
         </button>
       </>
     )
@@ -230,9 +290,13 @@ export function InvitePage({ token }: { token: string }) {
             linkClick(signInPath(here))(e)
           }}
         >
-          Sign in to accept
+          {hint ? lockedSignInLabel(hint) : 'Sign in to accept'}
         </a>
-        <p className="dr-invite-card__as">You'll join right after signing in.</p>
+        <p className="dr-invite-card__as">
+          {hint
+            ? 'Only an account with that email address can accept it. You join right after signing in.'
+            : "You'll join right after signing in."}
+        </p>
       </>
     )
   }
@@ -264,11 +328,30 @@ export function InvitePage({ token }: { token: string }) {
             <dt>Expires</dt>
             <dd>{formatDateTime(inv.expiresAt)}</dd>
           </div>
+          {hint && (
+            <div>
+              <dt>For</dt>
+              <dd data-testid="invite-locked-hint">{hint}</dd>
+            </div>
+          )}
         </dl>
-        {acceptError && (
-          <p className="dr-field-error" role="alert" data-testid="invite-error">
-            {acceptError.message}
-          </p>
+        {acceptError && !mismatch && (
+          <div className="dr-invite-error">
+            <p className="dr-field-error" role="alert" data-testid="invite-error">
+              {acceptError.message}
+            </p>
+            {acceptError.retry && (
+              <button
+                type="button"
+                className="dr-btn"
+                data-testid="invite-retry"
+                disabled={accepting}
+                onClick={() => void accept()}
+              >
+                Try again
+              </button>
+            )}
+          </div>
         )}
         {actions}
       </div>

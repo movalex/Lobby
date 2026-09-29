@@ -92,3 +92,33 @@
   margin: 4px 0 0;
   font-size: 13.5px;
 }
+
+/* Domain access (docs/DOMAIN-ACCESS-CONTRACTS.md §9): an invitation locked to another address than the
+   signed-in account's. The masked address and the account's own address can be long: they wrap. */
+.dr-invite-mismatch {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--dr-warn-line);
+  border-radius: 10px;
+  background: var(--dr-warn-bg);
+  color: var(--dr-warn);
+  font-size: 13.5px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.dr-invite-mismatch p {
+  margin: 0;
+}
+.dr-invite-mismatch p + p {
+  margin-top: 4px;
+}
+.dr-invite-error {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 12px;
+}
+.dr-invite-error .dr-field-error {
+  margin: 0;
+}

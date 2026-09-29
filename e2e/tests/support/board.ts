@@ -23,13 +23,15 @@ export async function waitForBoard(page: Page) {
 
 /**
  * The real dev sign-in form. The page must be on /signin (or be redirected there, as any protected
- * page is when signed out); afterwards the app returns to where it was sent from.
+ * page is when signed out); afterwards the app returns to where it was sent from. `email` (domain
+ * access) fills "Email (dev only)"; without it the account is <handle>@dev.invalid, a creator.
  */
-export async function signInThroughUi(page: Page, user: { handle: string; name: string }) {
+export async function signInThroughUi(page: Page, user: { handle: string; name: string; email?: string }) {
   await expect(page.getByTestId('signin-form')).toBeVisible({ timeout: 30_000 })
   await expect(page.getByTestId('dev-signin-notice')).toBeVisible()
   await page.getByTestId('signin-handle').fill(user.handle)
   await page.getByTestId('signin-name').fill(user.name)
+  if (user.email !== undefined) await page.getByTestId('dev-login-email').fill(user.email)
   await page.getByTestId('signin-submit').click()
   await expect(page.getByTestId('signin-form')).toHaveCount(0, { timeout: 30_000 })
 }

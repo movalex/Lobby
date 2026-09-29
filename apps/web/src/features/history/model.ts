@@ -7,7 +7,7 @@ import {
   type BoardRole,
   type BoardStatus,
   can,
-  canCreateInWorkspace,
+  canCreateContent,
   type WorkspaceRole,
 } from '../../lib/permissions.ts'
 import { timeOfDay } from '../sharing/model.ts'
@@ -71,22 +71,34 @@ export interface HistoryPermissions {
    * a review-link guest. The API requires `edit` for GET /api/boards/:bid/deleted too.
    */
   canSeeDeleted: boolean
-  /** Restore as new / duplicate (workspace members and above; guests cannot create boards). */
+  /**
+   * Restore as new / duplicate: creators (domain access, `/api/me` `access.creator`) who are workspace
+   * members and above; guests and outside accounts cannot create boards (the api answers 403).
+   */
   canCreateBoards: boolean
   /** Duplicate with sharing settings (board owners). */
   canKeepSharing: boolean
+}
+
+export interface HistoryPermissionOptions {
+  /**
+   * Domain access (docs/DOMAIN-ACCESS-CONTRACTS.md §9): whether the caller may create boards at all
+   * (`me.access.creator`; true for an api from before domain access, `reason: 'legacy'`).
+   */
+  creator: boolean
 }
 
 export function historyPermissions(
   role: BoardRole,
   status: BoardStatus,
   workspaceRole: WorkspaceRole | null | undefined,
+  { creator }: HistoryPermissionOptions = { creator: true },
 ): HistoryPermissions {
   const canEdit = can(role, 'edit', status)
   return {
     canEdit,
     canSeeDeleted: canEdit,
-    canCreateBoards: !!workspaceRole && canCreateInWorkspace(workspaceRole) && can(role, 'view', status),
+    canCreateBoards: !!workspaceRole && canCreateContent(creator, workspaceRole) && can(role, 'view', status),
     canKeepSharing: can(role, 'manage_access', status),
   }
 }
