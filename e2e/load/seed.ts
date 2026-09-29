@@ -97,7 +97,13 @@ export async function seedElements(
     clock = Math.max(clock, ack.clock)
     return ack
   }
-  const live = elements.map((el) => (el.isDeleted ? ({ ...el, isDeleted: false } as WireElement) : el))
+  // frames first: the room refuses a `frameId` naming an element that does not exist yet (INVALID), and a
+  // generated board lists each frame after its children (paint order), so a push boundary between them
+  // made ≥ 60 INVALID ops and the abuse close (lead, M1/M2). `index` is explicit, so the order is kept.
+  const live = [
+    ...elements.filter((el) => el.type === 'frame'),
+    ...elements.filter((el) => el.type !== 'frame'),
+  ].map((el) => (el.isDeleted ? ({ ...el, isDeleted: false } as WireElement) : el))
   for (const chunk of chunkCreates(live)) {
     const ack = await send(chunk.map((el) => ({ k: 'c' as const, el })))
     for (const r of ack.r) {

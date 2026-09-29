@@ -11,6 +11,7 @@
 // The web build is served by playwright.config.ts on the same base (SPIKE_B_PORT_BASE), so a stack on
 // another base is refused: the browsers would reach another stack's api through the preview proxy.
 import './env.ts'
+import { mkdirSync } from 'node:fs'
 import { request } from '@playwright/test'
 import { Api, type Me } from '../../tests/support/api.ts'
 import { API_PORT, SYNC_PORT, WEB_PORT } from '../../tests/support/ports.ts'
@@ -78,6 +79,8 @@ export function resolveStackPorts(opts: StackOptions): StackPorts {
 /** Runs `fn` with the temp directory pointed at `dir` (the launcher makes its data dir in tmpdir()). */
 async function withTempDir<T>(dir: string | undefined, fn: () => Promise<T>): Promise<T> {
   if (!dir) return fn()
+  // the launcher's mkdtemp needs the folder to exist (B8's specs pass a fresh path; lead, M1/M2)
+  mkdirSync(dir, { recursive: true })
   const keys = ['TEMP', 'TMP', 'TMPDIR'] as const
   const saved = keys.map((k) => [k, process.env[k]] as const)
   for (const k of keys) process.env[k] = dir
