@@ -2,7 +2,23 @@
 
 Owner O2. Items: `docs/research/excalidraw/spike-b/OPEN-FROM-SPIKE-A.md` §"Lease and editor-open verifier" (L1 high, L2 high, L3 low, L4 low). Fix: commit `7ea91e2` on `spike/b-engine` (`apps/web/src/canvas/lease/editorLease.ts`, `lease/openRule.ts`).
 
-**Status: fixed; every regression test failed before the fix and passes after it.** These are dry runs on O2's worktree, not the lead's quiet-window runs.
+**Status: fixed; every regression test failed before the fix and passes after it. Spike B part 2: owner's 3-run pass of `b3-l12-lease-l` on O2's branch after the merge: PASS 3/3** (below).
+
+## Owner's 3-run pass (part 2)
+
+Branch `spike/b-engine` at **`396ebac`** (O2's part 2 fixes `18254dd` plus the runner; `origin/spike/excalidraw`
+`76c937f` merged in). Command, 3 times in a row (each spec invocation builds the web app afresh; its
+Playwright output kept in `<logs>/<spec>.results`):
+`SPIKE_B_PORT_BASE=7870 docs/research/excalidraw/spike-b/scripts/o2-checks.sh <repo> <logs> b2-undo b3-l1-l5 b3-l7 b3-l9-l12 b3-l13-chords b3-l13-keys-k b3-l12-lease-l b4-client b5-r3`,
+ports 7870–7872, default repetitions, 2026-09-29: run 1 15:50–16:08Z, run 2 16:08–16:26Z, run 3
+16:26–16:43Z. Headless Chromium, `DRAFTROOM_BACKUP_STORE=off`. Not a quiet window (a shared machine; this
+check is not timing-gated). Nothing listened in 7870–7872 before or after; no process left.
+
+| Run | Result (`b3-l12-lease-l`, 9 cases × 20) |
+|---|---|
+| 1 | **9/9 cases, each 20/20** (L1 deny, Escape, click away, blur; L2 P5, double-click label; L3; L4 click away, blur; 2.0 min) |
+| 2 | **9/9 × 20/20** (1.9 min) |
+| 3 | **9/9 × 20/20** (1.9 min) |
 
 ## What changed
 
