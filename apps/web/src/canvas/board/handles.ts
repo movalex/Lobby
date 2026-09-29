@@ -61,6 +61,8 @@ export interface HandleDeps {
   docWritten(keys: readonly string[]): void
   /** waits until the core has pushed its pending changes to `ids` (or `timeoutMs`) */
   pushed(ids: readonly string[], timeoutMs: number): Promise<void>
+  /** a concern changed that only the handles know of (the next-element styles) */
+  changed(concern: BoardConcern): void
 }
 
 const excalidrawContainer = (root: HTMLElement) => root.querySelector<HTMLElement>('.excalidraw')
@@ -184,6 +186,7 @@ export function createBoardHandles(d: HandleDeps): BoardHandles & {
     () => port.viewport.get(),
   )
   const editWaiters = new Set<(phase: string, leaseId: string | null) => void>()
+  const pendingNext: Record<string, unknown> = {}
   const hiddenOwners = new Map<string, Set<string>>()
 
   const fitTarget = (ids?: readonly string[]) => {
@@ -379,10 +382,20 @@ export function createBoardHandles(d: HandleDeps): BoardHandles & {
       },
     },
     styles: {
-      next: () => nextStyles(api),
+      // Excalidraw applies an appState update on its next render: until then the values just set are
+      // read from here, so a read right after setNext sees them
+      next() {
+        const base = nextStyles(api) as Record<string, unknown>
+        for (const [k, v] of Object.entries(pendingNext)) if (base[k] === v) delete pendingNext[k]
+        return { ...base, ...pendingNext } as StyleValues
+      },
       setNext(patch) {
         const appState = nextStylePatch(patch)
-        if (Object.keys(appState).length) api.updateScene({ appState: appState as never })
+        if (!Object.keys(appState).length) return
+        for (const [k, v] of Object.entries(patch))
+          if (v !== undefined && k !== 'strokeWidth') pendingNext[k] = v
+        api.updateScene({ appState: appState as never })
+        d.changed('tool')
       },
     },
     presence: {

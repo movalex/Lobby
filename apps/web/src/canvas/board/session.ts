@@ -596,6 +596,7 @@ export class LobbyBoardSession {
         this.concern('docKeys')
       },
       pushed: (ids, ms) => this.pushed(ids, ms),
+      changed: (c) => this.concern(c),
     })
     this.handlesExtra = handles
     offs.push(() => handles.dispose())
