@@ -5,7 +5,14 @@
 //
 // - Run after maintenance is on (every socket closed, none accepted), so no edit lands between this
 //   backup and the conversion. It also works outside maintenance (then it is just a backup of everything).
-// - One board at a time; one run at a time (a second call while one runs gets the same run's answer).
+// - One board at a time; one run at a time. Every answer comes from a run that STARTED AFTER its call:
+//   a call made while a run is in progress (an operator's earlier check, started before maintenance went
+//   on) waits for it and gets the next run, which every caller that arrives meanwhile shares. So the
+//   cut-over's call made after maintenance is on never gets backups taken before the last edits.
+// - `inMaintenance`: maintenance was on from the start of the run to its end (what §7.5 step 4 needs).
+// - Every backup it writes is held for RUN_ALL_HOLD_DAYS (90) outside the count-based retention, locally
+//   and offsite (backup.ts BackupEntry.holdUntil): the final set before a cut-over is kept 90 days
+//   (§5.6, §7.5 step 4), however many backups the board gets after it.
 // - Open boards are copied through their room's connection; the others through a read-only connection,
 //   so no room is opened and no board file is written (RoomRegistry.backupFresh). A board born on the new
 //   canvas is copied whole (backup.ts, format `lobby-elements`).
@@ -34,6 +41,8 @@ export interface RunAllBoard {
   sizeBytes: number | null
   /** The offsite object key once the store holds the file; null when offsite is off or the copy failed. */
   offsiteKey: string | null
+  /** Kept outside retention until then (ISO, local and offsite); null when the local backup failed. */
+  holdUntil: string | null
   error?: string
 }
 
@@ -41,14 +50,21 @@ export interface RunAllReport {
   ok: boolean
   /** Where offsite copies go ('off': local backups only). */
   offsite: 'off' | 'fs' | 'r2'
+  /** Maintenance was on when this run started and still on when it finished. */
+  inMaintenance: boolean
   startedAt: string
   finishedAt: string
   boards: RunAllBoard[]
 }
 
+/** How long run-all's backups are kept outside retention (docs/EXCALIDRAW-MIGRATION.md §5.6: 90 days). */
+export const RUN_ALL_HOLD_DAYS = 90
+
 export interface RunAllDeps {
   registry: Pick<RoomRegistry, 'boardFileIds' | 'backupFresh'>
   backups: Pick<BackupService, 'copyOffsite' | 'status'>
+  /** Whether maintenance mode is on (app.ts). Absent: never. */
+  maintenance?: () => boolean
   now?: () => Date
   log?: (...a: unknown[]) => void
 }
@@ -59,10 +75,16 @@ const why = (e: unknown) => clip(`${(e as Error)?.name ?? 'Error'}: ${(e as Erro
 export function createRunAll(deps: RunAllDeps): { run(): Promise<RunAllReport>; running(): boolean } {
   const now = deps.now ?? (() => new Date())
   const log = deps.log ?? (() => {})
+  const maintenance = deps.maintenance ?? (() => false)
   let current: Promise<RunAllReport> | null = null
+  /** The run that starts once `current` is done, shared by every call made while `current` runs. */
+  let queued: Promise<RunAllReport> | null = null
 
   async function once(): Promise<RunAllReport> {
-    const startedAt = now().toISOString()
+    const started = now()
+    const startedAt = started.toISOString()
+    const maintenanceAtStart = maintenance()
+    const holdUntil = new Date(started.getTime() + RUN_ALL_HOLD_DAYS * 86_400_000)
     const offsite = deps.backups.status().store
     const boards: RunAllBoard[] = []
     for (const boardId of deps.registry.boardFileIds()) {
@@ -76,10 +98,11 @@ export function createRunAll(deps: RunAllDeps): { run(): Promise<RunAllReport>; 
         sha256: null,
         sizeBytes: null,
         offsiteKey: null,
+        holdUntil: null,
       }
       boards.push(row)
       try {
-        const made = await deps.registry.backupFresh(boardId)
+        const made = await deps.registry.backupFresh(boardId, { holdUntil })
         Object.assign(row, {
           file: made.file,
           ...(made.format ? { format: made.format } : {}),
@@ -88,6 +111,7 @@ export function createRunAll(deps: RunAllDeps): { run(): Promise<RunAllReport>; 
           recordsSha256: made.recordsSha256,
           sha256: made.sha256,
           sizeBytes: made.sizeBytes,
+          holdUntil: made.holdUntil ?? null,
         })
       } catch (e) {
         row.error = `local backup failed (${why(e)})`
@@ -113,6 +137,7 @@ export function createRunAll(deps: RunAllDeps): { run(): Promise<RunAllReport>; 
     const report: RunAllReport = {
       ok: boards.every((b) => b.ok),
       offsite,
+      inMaintenance: maintenanceAtStart && maintenance(),
       startedAt,
       finishedAt: now().toISOString(),
       boards,
@@ -123,13 +148,30 @@ export function createRunAll(deps: RunAllDeps): { run(): Promise<RunAllReport>; 
     return report
   }
 
+  function start(): Promise<RunAllReport> {
+    const run: Promise<RunAllReport> = once().finally(() => {
+      if (current === run) current = null
+    })
+    current = run
+    return run
+  }
+
   return {
     run() {
-      current ??= once().finally(() => {
-        current = null
+      if (queued) return queued
+      if (!current) return start()
+      // A run in progress started before this call: its backups can predate the caller's last edits.
+      const after = current.then(
+        () => undefined,
+        () => undefined,
+      )
+      const next: Promise<RunAllReport> = after.then(() => {
+        queued = null
+        return start()
       })
-      return current
+      queued = next
+      return next
     },
-    running: () => current !== null,
+    running: () => current !== null || queued !== null,
   }
 }

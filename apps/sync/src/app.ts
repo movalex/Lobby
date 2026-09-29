@@ -132,7 +132,7 @@ export function createSyncServer(config: SyncConfig, opts: SyncServerOptions = {
     return { maintenance, closedSockets }
   }
   const maintenanceControl: MaintenanceControl = { on: () => maintenance, set: setMaintenance }
-  const runAll = createRunAll({ registry, backups, log })
+  const runAll = createRunAll({ registry, backups, log, maintenance: () => maintenance })
 
   const handle = createRequestHandler({
     internalSecret: config.internalSecret,

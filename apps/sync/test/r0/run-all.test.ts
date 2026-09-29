@@ -58,9 +58,14 @@ describe('POST /internal/backups/run-all in the real sync process', () => {
     ])
     expect(res.status).toBe(200)
     const report = (await res.json()) as RunAllReport
-    // a second call while one runs gets that run's answer
-    expect(await second.json()).toEqual(report)
+    // a second call while one runs waits for it and gets a run of its own, started after it
+    // (run-all-fresh.test.ts): never a report older than the call
+    const later = (await second.json()) as RunAllReport
+    expect(later.ok).toBe(true)
+    expect(Date.parse(later.startedAt)).toBeGreaterThanOrEqual(Date.parse(report.finishedAt))
+    expect(later.boards.map((b) => b.boardId)).toEqual(report.boards.map((b) => b.boardId))
     expect(report.ok).toBe(true)
+    expect(report.inMaintenance).toBe(false)
     expect(report.offsite).toBe('fs')
     expect(report.boards.map((b) => b.boardId)).toEqual([BORN, CLOSED, CONVERTED, OPEN].sort())
     a.dispose()
@@ -69,8 +74,13 @@ describe('POST /internal/backups/run-all in the real sync process', () => {
     const store = createFsBlobStore(join(dataDir, 'blobs'))
     for (const row of report.boards) {
       const live = boardDbPath(rooms, row.boardId)
-      const entry = readManifest(join(dataDir, 'backups'), row.boardId)?.backups.at(-1)
+      const entry = readManifest(join(dataDir, 'backups'), row.boardId)?.backups.find(
+        (b) => b.file === row.file,
+      )
       expect(entry?.file).toBe(row.file)
+      // held 90 days outside retention (final-backup-hold.test.ts)
+      expect(entry?.holdUntil).toBe(row.holdUntil)
+      expect(Date.parse(row.holdUntil as string) - Date.parse(report.startedAt)).toBe(90 * 86_400_000)
       const copy = join(dataDir, 'backups', row.boardId, row.file as string)
       expect(row.ok).toBe(true)
       // the digests the runbook stores are the board file's own and the backup file's own

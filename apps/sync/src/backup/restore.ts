@@ -15,6 +15,7 @@ import { copyFileSync, existsSync, mkdirSync, renameSync, rmSync } from 'node:fs
 import { dirname } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { isLbTable, tableNames } from '../r0/born-after.ts'
+import { carryLbTables } from '../r0/lb-carry.ts'
 import { lbFileFacts } from '../r0/lb-files.ts'
 import { boardDbPath } from '../rooms.ts'
 
@@ -28,6 +29,12 @@ export interface RestoreBackupOptions {
   overwrite?: boolean
   /** Raise the clock by this much (0 = keep it; the drill keeps it to compare exactly). */
   bumpClockBy?: number
+  /**
+   * Bridge release R0: a consistent copy of the live board (a CONVERTED board, with lb_* tables) whose
+   * new-canvas tables replace the restored copy's before it is put in place (r0/lb-carry.ts), so a
+   * tldraw restore during a rollback keeps the Excalidraw-era edits. Absent: the backup as it is.
+   */
+  carryLbFrom?: string
 }
 
 /**
@@ -96,6 +103,7 @@ export function restoreBackupFile(opts: RestoreBackupOptions): { path: string; d
       }
       const row = db.prepare('SELECT documentClock FROM metadata LIMIT 1').get() as { documentClock: number }
       documentClock = Number(row.documentClock)
+      if (opts.carryLbFrom) carryLbTables(db, opts.carryLbFrom)
     } finally {
       db.close() // the last connection: checkpoints and removes the copy's own -wal/-shm
     }

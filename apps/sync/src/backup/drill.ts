@@ -23,7 +23,7 @@ import type { BlobStore } from '@draftroom/blob-store'
 import { draftroomSchema } from '@draftroom/canvas-schema'
 import { dataLayout } from '@draftroom/dev-assets'
 import type { TLSchema } from '@tldraw/tlschema'
-import type { BackupFormat } from '../r0/lb-files.ts'
+import { type BackupFormat, LB_BACKUP_FORMAT } from '../r0/lb-files.ts'
 import { BOARD_ID_RE, boardDbPath, RoomRegistry } from '../rooms.ts'
 import { backedUpBoards, describeBoardDb, inspectBoardDb, readManifest, sha256File } from './backup.ts'
 import { MAX_MANIFEST_BYTES, offsiteKeys, parseIndex, parseManifest } from './offsite-manifest.ts'
@@ -65,8 +65,11 @@ export interface DrillEntry {
   sha256: string
   sizeBytes: number
   schema: unknown
-  /** `lobby-elements`: a board made on the new canvas (backup.ts BackupEntry.format); absent = tldraw. */
-  format?: BackupFormat
+  /**
+   * `lobby-elements`: a board made on the new canvas (backup.ts BackupEntry.format); absent = tldraw.
+   * Any other name is a newer build's format (offsite-manifest.ts OffsiteEntry.format): never restored here.
+   */
+  format?: BackupFormat | (string & {})
   /** What the source verified about the manifest and this entry, and what it accepted unverified. */
   trust?: { checks: string[]; warnings: string[] }
 }
@@ -340,6 +343,12 @@ export async function verifyRestorable(opts: {
 }): Promise<{ checks: string[]; restoredPath: string; recordsSha256: string; format?: BackupFormat }> {
   const { boardId, entry } = opts
   const checks: string[] = []
+  // A format this build does not know (a newer build's, listed in the same manifest): it stays in the
+  // manifest and under retention, but is neither checked nor restored here.
+  if (entry.format !== undefined && entry.format !== LB_BACKUP_FORMAT)
+    throw new DrillProblem(
+      `backup ${entry.file} is in format "${entry.format}", written by a newer build: this build cannot check or restore it`,
+    )
   let restoredPath: string
   try {
     restoredPath = restoreBackupFile({

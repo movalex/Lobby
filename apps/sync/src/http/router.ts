@@ -13,6 +13,7 @@ import {
   handleSeed,
   handleSnapshot,
   type InternalDeps,
+  refuseInMaintenance,
 } from './internal.ts'
 import { handlePlaceNotes } from './place-notes.ts'
 import { HttpError, notFound, sendError, sendJson } from './respond.ts'
@@ -37,15 +38,15 @@ export interface MaintenanceControl {
 
 type Handler = (req: IncomingMessage, res: ServerResponse, deps: RouterDeps, seg: string[]) => unknown
 
-/** While maintenance is on, the internal routes that WRITE a board answer this (reads keep working). */
-const inMaintenance = () =>
-  new HttpError(503, 'MAINTENANCE', 'Lobby is updating. Board changes are paused for a few minutes.')
-
-/** Wraps a board-writing handler: refused while maintenance is on, so no edit reaches a board file. */
+/**
+ * Wraps a board-writing handler: refused while maintenance is on, so no edit reaches a board file. This
+ * is the check on entry, before the body is read; each handler checks again after reading it
+ * (refuseInMaintenance, internal.ts), because maintenance can go on while a body is still arriving.
+ */
 const writing =
   (handle: Handler): Handler =>
   (req, res, deps, seg) => {
-    if (deps.maintenance?.on()) throw inMaintenance()
+    refuseInMaintenance(deps)
     return handle(req, res, deps, seg)
   }
 

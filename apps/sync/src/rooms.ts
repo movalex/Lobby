@@ -207,6 +207,24 @@ export class RoomRegistry {
     return true
   }
 
+  /**
+   * Whether the OPEN board's file also holds the new canvas's lb_* tables (a board converted at the
+   * cut-over, served here from its tldraw tables during a rollback): what this build reads of such a
+   * board is not all of it (http/asset-refs.ts). One read of the file's schema through the room's own
+   * connection; no lb_* table is read. false when the board is not open.
+   */
+  hasNewCanvasTables(boardId: string): boolean {
+    const entry = this.live(boardId)
+    if (!entry) return false
+    return (
+      entry.db
+        .prepare(
+          "SELECT 1 AS x FROM sqlite_master WHERE type = 'table' AND substr(name, 1, 3) = 'lb_' LIMIT 1",
+        )
+        .get() !== undefined
+    )
+  }
+
   /** Puts captured shapes back (validated; see deleted/restore.ts). */
   restoreDeleted(boardId: string, ids: readonly string[]): RestoreSummary {
     const entry = this.existing(boardId)
@@ -264,28 +282,29 @@ export class RoomRegistry {
    * A fresh backup of one board, whether or not it changed (POST /internal/backups/run-all, bridge
    * release R0): an open board through its room's own connection, after any backup in progress; any
    * other board file through a READ-ONLY connection, so no room is opened and nothing is written to the
-   * file (a board born on the new canvas is copied whole: backup.ts). Throws when backups are off or the
-   * copy fails.
+   * file (a board born on the new canvas is copied whole: backup.ts). `holdUntil`: kept outside the
+   * count-based retention until then (backup.ts BackupEntry.holdUntil). Throws when backups are off or
+   * the copy fails. The backup is always one started after this call (never one already in progress).
    */
-  async backupFresh(boardId: string): Promise<BackupEntry> {
+  async backupFresh(boardId: string, opts: { holdUntil?: Date } = {}): Promise<BackupEntry> {
     const b = this.backup
     if (!b) throw new Error('backups are off')
-    const entry = this.live(boardId)
-    if (entry) {
+    let entry = this.live(boardId)
+    while (entry?.backingUp) {
       await entry.backingUp
-      const current = this.live(boardId)
-      if (current) {
-        const made = await this.backupEntry(current)
-        if (!made) throw new Error('the backup failed (see the log)')
-        return made
-      }
+      entry = this.live(boardId)
+    }
+    if (entry) {
+      const made = await this.backupEntry(entry, opts.holdUntil)
+      if (!made) throw new Error('the backup failed (see the log)')
+      return made
     }
     const path = boardDbPath(this.opts.dataDir, boardId)
     if (!existsSync(path)) throw new Error('the board has no database file')
     const db = new DatabaseSync(path, { readOnly: true })
     try {
       db.exec('PRAGMA busy_timeout = 5000')
-      const made = await backupBoard({ db, boardId, root: b.dir, keep: b.keep })
+      const made = await backupBoard({ db, boardId, root: b.dir, keep: b.keep, holdUntil: opts.holdUntil })
       if (!made.format) this.lastBackupClock.set(boardId, made.documentClock)
       return made
     } finally {
@@ -499,13 +518,20 @@ export class RoomRegistry {
     return last === null || last === undefined || last !== entry.storage.getClock()
   }
 
-  private backupEntry(entry: RoomEntry): Promise<BackupEntry | null> {
+  /** One backup of an open board at a time; `holdUntil` (backupFresh) is only asked for when none runs. */
+  private backupEntry(entry: RoomEntry, holdUntil?: Date): Promise<BackupEntry | null> {
     const b = this.backup
     if (!b) return Promise.resolve(null)
     if (entry.backingUp) return entry.backingUp
     const run = (async () => {
       try {
-        const made = await backupBoard({ db: entry.db, boardId: entry.roomId, root: b.dir, keep: b.keep })
+        const made = await backupBoard({
+          db: entry.db,
+          boardId: entry.roomId,
+          root: b.dir,
+          keep: b.keep,
+          holdUntil,
+        })
         this.lastBackupClock.set(entry.roomId, made.documentClock)
         return made
       } catch (e) {
