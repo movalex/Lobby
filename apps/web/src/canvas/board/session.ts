@@ -403,17 +403,20 @@ export class LobbyBoardSession {
   // ---- the scene the core reads and applies (the api arrives after the engine initialises) ----------
 
   private sceneAdapter(): SceneAdapter {
+    // one adapter per engine instance: a re-mounted host brings a new API
     let real: ReturnType<typeof createExcalidrawScene> | null = null
+    let realApi: ExcalidrawImperativeAPI | null = null
+    const scene = (api: ExcalidrawImperativeAPI) => {
+      if (!real || realApi !== api) {
+        real = createExcalidrawScene(api)
+        realApi = api
+      }
+      return real
+    }
     return {
-      read: () => {
-        if (!this.api) return { elements: [], gesture: IDLE_GESTURE }
-        real ??= createExcalidrawScene(this.api)
-        return real.read()
-      },
+      read: () => (this.api ? scene(this.api).read() : { elements: [], gesture: IDLE_GESTURE }),
       apply: (elements) => {
-        if (!this.api) return
-        real ??= createExcalidrawScene(this.api)
-        real.apply(elements)
+        if (this.api) scene(this.api).apply(elements)
       },
     }
   }
@@ -562,6 +565,17 @@ export class LobbyBoardSession {
     })
     this.boardInput = boardInput
     offs.push(() => boardInput.dispose())
+    // a pointer tool's double-click (the open-card tool) takes the event before the engine's own
+    offs.push(
+      this.onBoardEvent('input', (e) => {
+        if (e.type !== 'double-click' || !this.port) return
+        const tool = this.port.tool()
+        const spec = tool ? this.registries.pointerTools.get(tool) : undefined
+        if (!spec?.onDoubleClick) return
+        spec.onDoubleClick(e.scene, e.hit, this.port)
+        e.handled()
+      }),
+    )
     offs.push(api.onScrollChange(() => this.handlesExtra?.userMoved()))
     // resize: the canvas container changed size
     const container = root.querySelector<HTMLElement>('.excalidraw') ?? wrapper

@@ -17,6 +17,13 @@
 // (TldrawUiMenuItem's onTouchStart calls preventDefault, then selects the tool; the click that follows
 // selects it again, which is harmless). That handler has no "already handled" check, so silencing it
 // would mean overriding preventDefault on tldraw's own events; it belongs upstream.
+//
+// The Excalidraw board page (canvas/board/**) installs no touch guard: Excalidraw takes touchstart
+// through a NON-passive native listener on its interactive canvas (App.handleInteractiveCanvasRef,
+// @excalidraw/excalidraw 0.18.0-1118751 dist/dev/index.js ~47143), so its preventDefault is honoured and
+// logs nothing, and the one touchstart it would turn into a double-tap (an editor opened without the text
+// lease) is swallowed by Lobby's tap-twice mirror first (canvas/input/CanvasInput.ts, doubleTap.ts).
+// Safari's pinch (`gesturestart`/`gesturechange`) is Excalidraw's own while navigation is enabled.
 
 import type { Editor } from 'tldraw'
 

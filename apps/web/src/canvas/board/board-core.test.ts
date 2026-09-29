@@ -4,10 +4,12 @@ import type { RosterEntry, ServerMessage } from '@draftroom/canvas-schema/protoc
 import { describe, expect, it } from 'vitest'
 import type { HistEl, Scene } from '../history/diff.ts'
 import { LobbyHistory } from '../history/stack.ts'
+import { createRegistries } from '../registries.ts'
 import { ChangeClassifier, type ChangeElement } from './changes.ts'
 import { joinInto, joinMark } from './history-join.ts'
 import { type PeerSource, PeerStore } from './peers.ts'
 import { SETTINGS_KEY, SettingsStore } from './settings.ts'
+import { onUploads, trackUpload, uploadsInFlight } from './uploads.ts'
 
 describe('ChangeClassifier', () => {
   const lookup = (m: Map<string, ChangeElement>) => (id: string) => m.get(id)
@@ -190,5 +192,27 @@ describe('SettingsStore', () => {
     expect(b.get().grid).toBe(false)
     b.set({ snap: true })
     expect(b.get().snap).toBe(true)
+  })
+})
+
+describe('uploads in flight', () => {
+  it('counts each tracked upload until it settles (resolved or rejected), per board page', async () => {
+    const r = createRegistries()
+    const other = createRegistries()
+    const seen: number[] = []
+    onUploads(r, () => seen.push(uploadsInFlight(r)))
+    let ok: () => void = () => {}
+    let fail: (e: Error) => void = () => {}
+    const a = trackUpload(r, new Promise<void>((res) => (ok = res)))
+    const b = trackUpload(r, new Promise<void>((_, rej) => (fail = rej)))
+    expect(uploadsInFlight(r)).toBe(2)
+    expect(uploadsInFlight(other)).toBe(0)
+    ok()
+    await a
+    fail(new Error('network'))
+    await b.catch(() => {})
+    await Promise.resolve()
+    expect(uploadsInFlight(r)).toBe(0)
+    expect(seen).toEqual([1, 2, 1, 0])
   })
 })

@@ -16,6 +16,10 @@ export interface ProbeRecord {
   changes: CanvasChange[]
   inputs: number
   commands: number
+  /** the probe tool's pointer-ups and double-clicks (the hit element's id, or null), and its exits */
+  toolUps: (string | null)[]
+  toolDoubleClicks: (string | null)[]
+  toolExits: number
 }
 
 declare global {
@@ -101,6 +105,19 @@ export const PROBE_FEATURE: CanvasFeature = {
   slots: {
     toolbar: () => <div data-testid="probe-toolbar">Probe toolbar</div>,
   },
+  tools: [
+    {
+      id: 'probe-tool',
+      label: 'Probe tool',
+      readOnlyAllowed: true,
+      cursor: 'crosshair',
+      onPointerUp: (e) => void window.__lobbyProbe?.toolUps.push(e.hit?.id ?? null),
+      onDoubleClick: (e) => void window.__lobbyProbe?.toolDoubleClicks.push(e.hit?.id ?? null),
+      onExit: () => {
+        if (window.__lobbyProbe) window.__lobbyProbe.toolExits++
+      },
+    },
+  ],
   commands: [
     {
       id: 'probe.hello',
@@ -113,7 +130,16 @@ export const PROBE_FEATURE: CanvasFeature = {
     },
   ],
   onMount(ctx) {
-    const rec: ProbeRecord = { mounted: true, role: ctx.role, changes: [], inputs: 0, commands: 0 }
+    const rec: ProbeRecord = {
+      mounted: true,
+      role: ctx.role,
+      changes: [],
+      inputs: 0,
+      commands: 0,
+      toolUps: [],
+      toolDoubleClicks: [],
+      toolExits: 0,
+    }
     window.__lobbyProbe = rec
     const offChange = ctx.canvas.on('change', (c) => {
       rec.changes.push(c)

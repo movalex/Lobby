@@ -4,7 +4,20 @@
 // item, a scene overlay pinned to an element, a screen overlay that stays in focus mode, the toolbar
 // host slot, a command's chord, and the change and input streams (local, remote, history).
 import type { Page } from '@playwright/test'
-import { createNote, expect, sceneToScreen, setViewport, test, waitForItem } from '../tests/support/canvas.ts'
+import {
+  clickItem,
+  createNote,
+  dblclickItem,
+  editingId,
+  expect,
+  items,
+  sceneToScreen,
+  setTool,
+  setViewport,
+  test,
+  tool,
+  waitForItem,
+} from '../tests/support/canvas.ts'
 import { focusBoard } from './board-kit.ts'
 
 interface ProbeView {
@@ -13,6 +26,9 @@ interface ProbeView {
   changes: { source: string; created: string[]; updated: string[]; deleted: string[] }[]
   inputs: number
   commands: number
+  toolUps: (string | null)[]
+  toolDoubleClicks: (string | null)[]
+  toolExits: number
 }
 const probe = (page: Page) =>
   page.evaluate(() => (window as unknown as { __lobbyProbe?: ProbeView }).__lobbyProbe ?? null)
@@ -90,6 +106,19 @@ test('the feature host renders the registries: dock, top bar, overlays, the tool
       (c) => c.source !== 'remote' && (c.created.includes(bobs) || c.updated.includes(bobs)),
     ),
   ).toBe(false)
+
+  // a feature's pointer tool: setTool takes its name, a click and a double-click reach it with the
+  // element under the pointer (never Excalidraw's editor), and leaving it runs its onExit
+  expect(await setTool(a.page, 'probe-tool')).toBe(true)
+  expect(await tool(a.page)).toBe('probe-tool')
+  const note = (await items(a.page)).find((e) => e.type === 'stickynote' && e.id !== bobs)?.id as string
+  await clickItem(a.page, note)
+  await expect.poll(async () => (await probe(a.page))?.toolUps).toContain(note)
+  await dblclickItem(a.page, note)
+  await expect.poll(async () => (await probe(a.page))?.toolDoubleClicks).toContain(note)
+  expect(await editingId(a.page)).toBeNull()
+  expect(await setTool(a.page, 'select')).toBe(true)
+  await expect.poll(async () => (await probe(a.page))?.toolExits).toBe(1)
 
   // focus mode: the chrome and the layers go, a layer that says `show` stays
   await a.page.getByTestId('probe-screen').click()

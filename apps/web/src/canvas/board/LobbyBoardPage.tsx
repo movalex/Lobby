@@ -34,7 +34,7 @@ import { CANVAS_FEATURES } from '../../features/canvas-registry.ts'
 import { type BoardEvents, createBoardEvents } from '../../features/events.ts'
 import { DEV_AUTH_ENABLED } from '../../lib/identity.ts'
 import type { BoardRole } from '../../lib/permissions.ts'
-import { boardPath, setLeaveGuard } from '../../lib/routing.ts'
+import { boardPath, navigate, setLeaveGuard } from '../../lib/routing.ts'
 import { useResource } from '../../lib/useResource.ts'
 import { useEngineSaveStatus } from '../../sync-quality/useEngineSaveStatus.ts'
 import { useTheme } from '../../theme/useTheme.ts'
@@ -62,6 +62,7 @@ import {
 import { PROBE_FEATURE } from './probe.tsx'
 import { LobbyBoardSession, type LobbyBoardSnapshot } from './session.ts'
 import { duplicateLobbyData } from './tx.ts'
+import { onUploads, uploadsInFlight } from './uploads.ts'
 import './board.css'
 
 const ShareDialog = lazy(() =>
@@ -291,6 +292,17 @@ function LobbyBoardView({
     if (!ctx || !welcomed) return
     return installCanvasFeatures(CANVAS_FEATURES, ctx)
   }, [ctx, welcomed])
+  // a feature tool's onExit when another tool takes over (Escape, a toolbar button, setTool)
+  useEffect(() => {
+    if (!ctx) return
+    let previous = ctx.canvas.tool()
+    return ctx.canvas.on('toolChanged', (tool) => {
+      const left = previous ? ctx.registries.tools.get(previous) : undefined
+      previous = tool
+      if (left?.onExit && left.id !== tool) left.onExit(ctx)
+    })
+  }, [ctx])
+
   // dev-auth builds: the board page's own e2e checks install a probe feature through the debug handle
   useEffect(() => {
     if (!ctx || !welcomed || !DEV_AUTH_ENABLED) return
@@ -311,7 +323,11 @@ function LobbyBoardView({
     }
   }, [ctx, welcomed])
 
-  const uploading = 0
+  // uploads of this tab still on their way (3g's files.insert tracks them): never "Saved" before
+  const uploading = useSyncExternalStore(
+    (l) => onUploads(session.registries, l),
+    () => uploadsInFlight(session.registries),
+  )
   const save = useEngineSaveStatus({
     status: snap.save,
     welcomed: snap.welcomed,
@@ -324,7 +340,7 @@ function LobbyBoardView({
 
   // In-app navigation away from the board holds until this tab's last changes are acknowledged (bounded).
   useEffect(() => {
-    const settling = () => session.snapshot.save.state === 'saving'
+    const settling = () => session.snapshot.save.state === 'saving' || uploadsInFlight(session.registries) > 0
     return setLeaveGuard((to) => {
       if (new URL(to, location.origin).pathname === boardPath(boardId)) return
       if (!settling()) return
@@ -485,6 +501,7 @@ function LobbyBoardView({
                 wiring={wiring}
                 onPaste={onPaste}
                 onDuplicate={onDuplicate}
+                onLinkOpen={onLinkOpen}
                 gridModeEnabled={settings.grid}
                 objectsSnapModeEnabled={settings.snap}
               />
@@ -529,6 +546,26 @@ function LobbyBoardView({
 const onPaste: ExcalidrawHostProps['onPaste'] = (data) =>
   !(data as { files?: Record<string, unknown> }).files ||
   Object.keys((data as { files?: Record<string, unknown> }).files ?? {}).length === 0
+
+/**
+ * An element's link (§2.3.2 onLinkOpen): Excalidraw never navigates by itself. A link into Lobby opens
+ * in this tab through the app's router; an http(s) link opens in a new tab without an opener; anything
+ * else (javascript:, data:, a file) is ignored.
+ */
+const onLinkOpen: ExcalidrawHostProps['onLinkOpen'] = (element, event) => {
+  event.preventDefault()
+  const raw = (element as { link?: string | null }).link
+  if (!raw) return
+  let url: URL
+  try {
+    url = new URL(raw, location.origin)
+  } catch {
+    return
+  }
+  if (url.origin === location.origin) navigate(`${url.pathname}${url.search}${url.hash}`)
+  else if (url.protocol === 'https:' || url.protocol === 'http:')
+    window.open(url.href, '_blank', 'noopener,noreferrer')
+}
 
 /** PRI-08 on the Excalidraw page: the read-only role's first blocked edit, explained once per tab. */
 function useBlockedEditHint(
