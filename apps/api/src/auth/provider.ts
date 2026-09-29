@@ -3,13 +3,24 @@
 // rest of the API understands (the `dr_session` cookie).
 
 import type { AuthConfig, Me, ProviderSessionsRevoked } from '@draftroom/contracts'
-import type { Queryable } from '@draftroom/db'
+import type { Db, Queryable } from '@draftroom/db'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import type { AuthProviderId } from '../config.ts'
 import type { RouteRateLimit } from '../rate-limit.ts'
+import type { CreatorLookup } from './creator-sql.ts'
 import type { SessionUser } from './session.ts'
 
 export type { RouteRateLimit } from '../rate-limit.ts'
+
+/**
+ * What an identity refresh found (docs/DOMAIN-ACCESS-CONTRACTS.md §3.4):
+ * - 'ok': the provider answered and the addresses were stored (unless a newer snapshot already was);
+ * - 'none': the user has no identity with this provider (identity_checked_at is stamped: nothing to find);
+ * - 'gone': the provider says the account no longer exists (Clerk: 404 resource_not_found only);
+ * - 'banned': the provider says the account is banned;
+ * - 'unavailable': anything else (timeouts, 5xx, a wrong key, a 404 without that code).
+ */
+export type RefreshOutcome = 'ok' | 'none' | 'gone' | 'banned' | 'unavailable'
 
 export interface SignInContext {
   /**
@@ -21,7 +32,8 @@ export interface SignInContext {
   /**
    * Runs `provision` and session creation in one transaction (retried once on a concurrent first
    * sign-in), revokes the session this browser had before, sets the new session cookie and returns
-   * the signed-in user's `Me`. `clerkSessionId` is stored with the new session (SCA-4).
+   * the signed-in user's `Me` (its `access` from the data provisioning just stored). `clerkSessionId`
+   * is stored with the new session (SCA-4).
    */
   signIn(
     req: FastifyRequest,
@@ -30,7 +42,9 @@ export interface SignInContext {
     opts?: { clerkSessionId?: string | null },
   ): Promise<Me>
   now: () => Date
-  log: { warn(obj: object, msg: string): void }
+  log: { warn(obj: object, msg: string): void; info(obj: object, msg: string): void }
+  /** Which stored addresses make a creator (the running provider and the policy): findOrCreateUser. */
+  creators: CreatorLookup
 }
 
 export interface AuthProvider {
@@ -44,4 +58,11 @@ export interface AuthProvider {
    * provider's sessions may still be alive.
    */
   revokeProviderSessions?(db: Queryable, userId: string): Promise<ProviderSessionsRevoked>
+  /**
+   * Domain access: asks the provider for the user's verified addresses again and stores them
+   * (replaceUserEmails, `fetchedAt` read before the call). The network call is made outside any
+   * transaction. Never throws for a provider failure: it answers 'unavailable'. Absent = nothing to
+   * refresh (the identity service then never refreshes).
+   */
+  refreshIdentity?(db: Db, userId: string, fetchedAt: Date): Promise<RefreshOutcome>
 }

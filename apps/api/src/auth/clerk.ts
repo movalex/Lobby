@@ -9,6 +9,15 @@
 // auto-provision the internal user on first sign-in, and issue our own `dr_session` cookie. Clerk's
 // token is never stored or logged; its session id (`sid`) is stored with our session (SCA-4).
 //
+// Domain access (docs/DOMAIN-ACCESS-CONTRACTS.md §3.1, §3.3): the profile's VERIFIED addresses
+// (primary and secondary; never 'transferable', unverified, non-ASCII or "+clerk_test" ones) are
+// stored with the sign-in, with Clerk's verification strategy. A banned or locked account is refused
+// (403 ACCOUNT_DISABLED) before any session exists. A FIRST sign-in whose profile cannot be fetched is
+// refused (503 IDENTITY_UNAVAILABLE, D9); a later one signs in on the stored addresses.
+// refreshIdentity asks Clerk again (identity.ts decides when). Only a 404 whose errors include
+// `resource_not_found` means the account is gone. Clerk error messages never reach a log (they can
+// quote the address): the failure log carries Clerk's HTTP status and first error code only.
+//
 // Limits (docs/SECURITY-REVIEW-2026-09-27.md SCA-2): only FAILED verifications count against the
 // per-IP sign-in limit, so an office full of people signing in behind one NAT is never refused, while
 // someone guessing or replaying bad tokens is. Successful exchanges are bounded per Clerk user
@@ -17,16 +26,20 @@
 // Sign out everywhere (routes/auth.ts) ends the person's Clerk sessions too (revokeProviderSessions):
 // every active session Clerk lists for the user plus the ones we stored, so no other device can
 // exchange its way back in. Clerk session JWTs live about a minute, so a token minted just before can
-// still be exchanged within that minute (documented residual). Webhook-driven revocation (Clerk →
+// still be exchanged within that minute (documented residual). Webhook-driven revocation (Clerk to
 // us) is future work: see routes/auth.ts.
 
 import type { ProviderSessionsRevoked } from '@draftroom/contracts'
 import type { Queryable } from '@draftroom/db'
 import { unauthenticated } from '../errors.ts'
+import { CLERK_TIMEOUT_MS, withTimeout } from '../features/dashboard/clerk-directory.ts'
 import { keyedLimit, type RouteRateLimit } from '../rate-limit.ts'
-import type { AuthProvider } from './provider.ts'
+import { accountDisabled } from './identity.ts'
+import type { AuthProvider, RefreshOutcome } from './provider.ts'
 import { SESSION_TTL_MS } from './session.ts'
-import { findOrCreateUser } from './users.ts'
+import { findOrCreateUser, type ProfileEmail, replaceUserEmails, stampIdentityChecked } from './users.ts'
+
+export type { ProfileEmail } from './users.ts'
 
 export const CLERK_EXCHANGE_PATH = '/api/auth/clerk/session'
 
@@ -36,11 +49,18 @@ export const CLERK_EXCHANGES_PER_SUBJECT: RouteRateLimit = { max: 20, timeWindow
 export interface ClerkProfile {
   name: string
   avatarUrl: string | null
+  /** Verified, normalised (normalizeEmail), deduplicated, primary first. Required. */
+  emails: readonly ProfileEmail[]
+  /** default false */
+  banned?: boolean
+  /** default false */
+  locked?: boolean
 }
 
 export interface ClerkDeps {
   /** Verifies a Clerk session token; resolves with its subject (Clerk user id) and session id, or rejects. */
   verify(token: string): Promise<{ sub: string; sid?: string }>
+  /** The Clerk user's profile; rejects with Clerk's error (a ClerkAPIResponseError when Clerk answered). */
   profile(sub: string): Promise<ClerkProfile>
   /**
    * Revokes the Clerk user's sessions: every active one Clerk lists, plus `known` (session ids we
@@ -59,6 +79,33 @@ export interface ClerkProviderOptions {
 
 const MAX_TOKEN_LENGTH = 8192
 const MAX_LISTED_SESSIONS = 100
+
+/** The parts of a Clerk User (@clerk/backend 3.20.1 User.d.ts, EmailAddress.d.ts) the profile reads. */
+export interface ClerkUserEmails {
+  primaryEmailAddressId: string | null
+  emailAddresses: readonly {
+    id: string
+    emailAddress: string
+    verification: { status: string; strategy?: string | null } | null
+  }[]
+}
+
+/**
+ * The addresses of a Clerk user that count (§3.1): `verification.status === 'verified'` only, primary
+ * first. users.ts cleanProfileEmails then drops non-ASCII and "+clerk_test" ones, dedupes and caps.
+ */
+export function verifiedProfileEmails(u: ClerkUserEmails): ProfileEmail[] {
+  const out: ProfileEmail[] = []
+  for (const a of u.emailAddresses) {
+    if (a.verification?.status !== 'verified') continue
+    const strategy = typeof a.verification.strategy === 'string' ? a.verification.strategy : null
+    const isPrimary = a.id === u.primaryEmailAddressId
+    const entry = { email: a.emailAddress, isPrimary, strategy }
+    if (isPrimary) out.unshift(entry)
+    else out.push(entry)
+  }
+  return out
+}
 
 function defaultDeps(opts: ClerkProviderOptions): ClerkDeps {
   // Loaded lazily: dev-provider runs (and tests with fakes) never load the Clerk SDK.
@@ -83,10 +130,16 @@ function defaultDeps(opts: ClerkProviderOptions): ClerkDeps {
     },
     async profile(sub) {
       const clerk = await client()
-      const u = await clerk.users.getUser(sub)
+      const u = await withTimeout(clerk.users.getUser(sub), CLERK_TIMEOUT_MS)
       const email = u.primaryEmailAddress?.emailAddress
       const name = u.fullName ?? u.username ?? (email ? email.split('@')[0] : null) ?? 'Clerk user'
-      return { name: name.slice(0, 200) || 'Clerk user', avatarUrl: u.imageUrl || null }
+      return {
+        name: name.slice(0, 200) || 'Clerk user',
+        avatarUrl: u.imageUrl || null,
+        emails: verifiedProfileEmails(u),
+        banned: u.banned === true,
+        locked: u.locked === true,
+      }
     },
     async revokeSessions(sub, known) {
       const clerk = await client()
@@ -110,14 +163,40 @@ function defaultDeps(opts: ClerkProviderOptions): ClerkDeps {
   }
 }
 
+export interface ClerkFailureInfo {
+  /** Only a ClerkAPIResponseError 404 whose errors include `resource_not_found`. */
+  gone: boolean
+  /** Clerk's HTTP status (null: no answer, e.g. a timeout). */
+  status: number | null
+  /** Clerk's first error code (never its message). */
+  code: string | null
+}
+
+/** Classifies a failed Clerk profile call (§3.1). Never reads or returns Clerk's message. */
+export async function classifyProfileFailure(e: unknown): Promise<ClerkFailureInfo> {
+  const err = (typeof e === 'object' && e !== null ? e : {}) as { status?: unknown; errors?: unknown }
+  const status = typeof err.status === 'number' ? err.status : null
+  const list = Array.isArray(err.errors) ? (err.errors as { code?: unknown }[]) : []
+  const first = list[0]?.code
+  const code = typeof first === 'string' ? first.slice(0, 64) : null
+  let gone = false
+  if (status === 404) {
+    const { isClerkAPIResponseError } = await import('@clerk/backend/errors')
+    gone = isClerkAPIResponseError(e) && e.errors.some((x) => x.code === 'resource_not_found')
+  }
+  return { gone, status, code }
+}
+
 export function createClerkAuthProvider(opts: ClerkProviderOptions): AuthProvider {
   const deps: ClerkDeps = { ...defaultDeps(opts), ...opts.deps }
   let clock: () => Date = () => new Date()
+  let log: { warn(obj: object, msg: string): void } = { warn: () => {} }
   return {
     id: 'clerk',
     publicConfig: () => ({ providers: ['clerk'], clerkPublishableKey: opts.publishableKey }),
     register(app, ctx) {
       clock = ctx.now
+      log = ctx.log
       const failures = keyedLimit(ctx.rateLimit, ctx.now)
       const perSubject = keyedLimit(CLERK_EXCHANGES_PER_SUBJECT, ctx.now)
       app.post(CLERK_EXCHANGE_PATH, async (req, reply) => {
@@ -138,13 +217,20 @@ export function createClerkAuthProvider(opts: ClerkProviderOptions): AuthProvide
         }
         const { sub, sid } = verified
         perSubject.take(sub)
+        // Read BEFORE asking Clerk: an older snapshot never overwrites a newer one (users.ts).
+        const fetchedAt = ctx.now()
         let profile: ClerkProfile | null = null
         try {
           profile = await deps.profile(sub)
         } catch (e) {
-          // Sign-in still works without a profile; name and avatar are refreshed on the next sign-in.
-          ctx.log.warn({ reason: (e as Error)?.name ?? 'error' }, 'clerk profile unavailable')
+          // A later sign-in still works on the stored addresses; a first one is refused (D9, users.ts).
+          const f = await classifyProfileFailure(e)
+          ctx.log.warn(
+            { evt: 'identity.refresh_failed', userId: null, status: f.status, code: f.code },
+            'clerk profile unavailable',
+          )
         }
+        if (profile && (profile.banned === true || profile.locked === true)) throw accountDisabled()
         return ctx.signIn(
           req,
           reply,
@@ -158,8 +244,11 @@ export function createClerkAuthProvider(opts: ClerkProviderOptions): AuthProvide
                 handle: null,
                 avatarUrl: profile?.avatarUrl ?? null,
                 refreshProfile: profile !== null,
+                emails: profile ? profile.emails : null,
+                fetchedAt,
               },
               now,
+              ctx.creators,
             )
             return user
           },
@@ -183,6 +272,36 @@ export function createClerkAuthProvider(opts: ClerkProviderOptions): AuthProvide
       let revoked = 0
       for (const { subject } of identities.rows) revoked += await deps.revokeSessions(subject, knownIds)
       return { status: 'revoked', revoked }
+    },
+    async refreshIdentity(db, userId, fetchedAt): Promise<RefreshOutcome> {
+      const identities = await db.query<{ subject: string }>(
+        "SELECT subject FROM identities WHERE provider = 'clerk' AND user_id = $1 ORDER BY subject",
+        [userId],
+      )
+      if (!identities.rows.length) {
+        await stampIdentityChecked(db, userId, fetchedAt)
+        return 'none'
+      }
+      // Every network call first, outside any transaction; then one write.
+      const profiles: ClerkProfile[] = []
+      for (const { subject } of identities.rows) {
+        try {
+          profiles.push(await deps.profile(subject))
+        } catch (e) {
+          const f = await classifyProfileFailure(e)
+          log.warn(
+            { evt: 'identity.refresh_failed', userId, status: f.status, code: f.code },
+            'identity refresh failed',
+          )
+          if (f.gone) continue
+          return 'unavailable'
+        }
+      }
+      if (!profiles.length) return 'gone'
+      if (profiles.some((p) => p.banned === true)) return 'banned'
+      const emails = profiles.flatMap((p) => p.emails)
+      await db.transaction((tx) => replaceUserEmails(tx, userId, 'clerk', emails, fetchedAt))
+      return 'ok'
     },
   }
 }

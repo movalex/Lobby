@@ -371,3 +371,61 @@ describe('blob store and worker token (docs/M3-STORAGE-CONTRACTS.md §6)', () =>
       expect(() => loadConfig({ ...base, DRAFTROOM_WORKER_TOKEN: other })).toThrow(/must differ/)
   })
 })
+
+describe('domain access policy (docs/DOMAIN-ACCESS-CONTRACTS.md §2)', () => {
+  it('defaults to the two built-in domains and no exceptions, in development and production', () => {
+    const expected = { domains: ['darkburn.com', 'trailerparkgroup.com'], emails: [] }
+    expect(loadConfig(base).creators).toEqual(expected)
+    // Neither variable is required in production: the api starts with the default policy.
+    expect(loadConfig(prod).creators).toEqual(expected)
+  })
+
+  it('DRAFTROOM_CREATOR_DOMAINS replaces the default; DRAFTROOM_CREATOR_EMAILS adds exceptions', () => {
+    const c = loadConfig({
+      ...base,
+      DRAFTROOM_CREATOR_DOMAINS: 'example.test',
+      DRAFTROOM_CREATOR_EMAILS: 'Owner@Personal.Example.Test',
+    })
+    expect(c.creators).toEqual({ domains: ['example.test'], emails: ['owner@personal.example.test'] })
+  })
+
+  it('blank values mean the default (config.ts read treats blank as unset)', () => {
+    expect(
+      loadConfig({ ...base, DRAFTROOM_CREATOR_DOMAINS: ' ', DRAFTROOM_CREATOR_EMAILS: '' }).creators,
+    ).toEqual({
+      domains: ['darkburn.com', 'trailerparkgroup.com'],
+      emails: [],
+    })
+  })
+
+  it('fails closed: an empty list after parsing, *.invalid and too many exceptions stop the api', () => {
+    expect(() => loadConfig({ ...base, DRAFTROOM_CREATOR_DOMAINS: ',,' })).toThrow(
+      'DRAFTROOM_CREATOR_DOMAINS lists no domain',
+    )
+    expect(() => loadConfig({ ...base, DRAFTROOM_CREATOR_DOMAINS: 'dev.invalid' })).toThrow(
+      'DRAFTROOM_CREATOR_DOMAINS entry 1 is not a valid domain',
+    )
+    expect(() => loadConfig({ ...prod, DRAFTROOM_CREATOR_DOMAINS: 'darkburn.com,x.invalid' })).toThrow(
+      'DRAFTROOM_CREATOR_DOMAINS entry 2 is not a valid domain',
+    )
+    const many = Array.from({ length: 51 }, (_, i) => `p${i}@example.test`).join(',')
+    expect(() => loadConfig({ ...base, DRAFTROOM_CREATOR_EMAILS: many })).toThrow(
+      'DRAFTROOM_CREATOR_EMAILS lists more than 50 addresses',
+    )
+  })
+
+  it('the startup log shows the domains and the number of exceptions, never an address', async () => {
+    const lines: string[] = []
+    const api = await createTestApi({
+      env: { DRAFTROOM_CREATOR_EMAILS: 'owner@personal.example.test,second@personal.example.test' },
+      deps: { logger: { level: 'info', stream: { write: (l: string) => void lines.push(l) } } },
+    })
+    try {
+      const entry = lines.map((l) => JSON.parse(l) as Record<string, unknown>).find((l) => 'creators' in l)
+      expect(entry?.creators).toEqual({ domains: ['darkburn.com', 'trailerparkgroup.com'], exceptions: 2 })
+      expect(lines.join('\n')).not.toContain('personal.example.test')
+    } finally {
+      await api.close()
+    }
+  })
+})
