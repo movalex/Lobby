@@ -10,7 +10,7 @@
 // wave-3 postgres-integrity review, PG-1 and PG-2), a failed delete pass for the file collector (found
 // in the audit that followed). concurrency.pg.test.ts runs the review's races at random.
 
-import { ReviewLinkCreated } from '@draftroom/contracts'
+import { InvitationCreated, ReviewLinkCreated } from '@draftroom/contracts'
 import { type Db, pgErrorCode, type Queryable } from '@draftroom/db'
 import { afterEach, describe, expect, it } from 'vitest'
 import { collectWorkspace } from '../src/files/gc.ts'
@@ -23,7 +23,7 @@ import {
   type World,
 } from './features/guests/support.ts'
 import { upload } from './features/history/helpers.ts'
-import { createBoard, createTestApi, DEV_STUDIO, type TestApi } from './helpers.ts'
+import { createBoard, createTestApi, DEV_STUDIO, devEmail, type TestApi } from './helpers.ts'
 
 const PG = !!process.env.DRAFTROOM_TEST_DATABASE_URL
 const DAY = 86_400_000
@@ -146,6 +146,29 @@ describe.skipIf(!PG)('row-lock order on a real Postgres (DRAFTROOM_TEST_DATABASE
     )
     expect(after.expires_at.getTime() - before.expires_at.getTime()).toBe(3_600_000)
     expect(after.use_count).toBe(1)
+  })
+
+  it('accepting an email-locked invitation: the pre-transaction read of the lock takes no lock; the board row still comes first', async () => {
+    const w = await guestsWorld()
+    const res = await w.bob.req('POST', `/api/boards/${w.board}/invitations`, {
+      role: 'editor',
+      email: devEmail('erin'),
+    })
+    expect(res.statusCode, res.body).toBe(201)
+    const inv = InvitationCreated.parse(res.json())
+    // A revoke of another link on the board, midway: it holds the board row, then takes this row.
+    const accepted = await holding(
+      w.api.db,
+      ['SELECT id FROM boards WHERE id = $1 FOR UPDATE', [w.board]],
+      async (tx, pid) => {
+        const started = w.erin.req('POST', `/api/invitations/${tokenOf(inv.url)}/accept`)
+        await blockedBy(w.api.db, pid, 'the locked accept')
+        expect(await rowLock(w.api.db, 'invitations', inv.id)).toBe('free')
+        await tx.query('SELECT id FROM invitations WHERE id = $1 FOR UPDATE', [inv.id])
+        return { started }
+      },
+    )
+    expect(accepted.statusCode, accepted.body).toBe(200)
   })
 
   it('the expired-link sweeper waits for the board row before it takes the link (PG-2: sweeper vs revoke)', async () => {

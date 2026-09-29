@@ -23,8 +23,14 @@ describe('contracts', () => {
   })
 
   it('board invitations cannot hand out ownership', () => {
-    expect(CreateBoardInvitationInput.safeParse({ role: 'owner' }).success).toBe(false)
-    expect(CreateBoardInvitationInput.safeParse({ role: 'commenter' }).success).toBe(true)
+    expect(CreateBoardInvitationInput.safeParse({ role: 'owner', email: 'pat@client.example' }).success).toBe(
+      false,
+    )
+    // Domain access (step B2): every single-use invitation names the address it is locked to.
+    expect(CreateBoardInvitationInput.safeParse({ role: 'commenter' }).success).toBe(false)
+    expect(
+      CreateBoardInvitationInput.safeParse({ role: 'commenter', email: 'pat@client.example' }).success,
+    ).toBe(true)
   })
 
   it('dev handles are constrained', () => {

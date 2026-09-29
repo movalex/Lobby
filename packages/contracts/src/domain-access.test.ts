@@ -82,7 +82,7 @@ describe('inputs', () => {
     expect(DevLoginInput.safeParse({ handle: 'sam', email: 'sam' }).success).toBe(false)
   })
 
-  it('single-use invitations carry the address they are locked to (optional until step B2)', () => {
+  it('single-use invitations carry the address they are locked to (required since step B2)', () => {
     expect(CreateBoardInvitationInput.parse({ role: 'editor', email: ' Pat@Client.Example ' })).toEqual({
       role: 'editor',
       email: 'pat@client.example',
@@ -95,6 +95,11 @@ describe('inputs', () => {
       email: 'pat@client.example',
     })
     expect(CreateWorkspaceInvitationInput.safeParse({ role: 'member', email: 'nope' }).success).toBe(false)
+    expect(CreateWorkspaceInvitationInput.safeParse({ role: 'member' }).success).toBe(false)
+    expect(CreateBoardInvitationInput.safeParse({ role: 'viewer' }).success).toBe(false)
+    expect(
+      CreateBoardInvitationInput.safeParse({ role: 'viewer', email: 'x+clerk_test@client.example' }).success,
+    ).toBe(false)
   })
 })
 

@@ -4,8 +4,10 @@ import { checkInternalSecret, INTERNAL_SECRET_HEADER } from '@draftroom/auth-tic
 import { CreateBoardInput, ListBoardsQuery, PatchBoardInput } from '@draftroom/contracts'
 import { newBoardId } from '@draftroom/db'
 import {
+  BOARD_VISIBILITIES,
   type BoardRole,
   type BoardStatus,
+  type BoardVisibility,
   can,
   canCreateInWorkspace,
   resolveBoardRole,
@@ -33,6 +35,9 @@ const MAX_LISTED = 500
 /** `at`: epoch ms of the board's latest accepted canvas write (sync's clock; clamped to ours). */
 const TouchedQuery = z.object({ at: z.coerce.number().int().min(0).max(8.64e15).optional() })
 const escapeLike = (s: string) => s.replace(/[\\%_]/g, (c) => `\\${c}`)
+
+/** Domain access (D4): private < workspace_view < workspace_edit. Lowering is open; raising needs a creator. */
+const visibilityRank = (v: BoardVisibility) => BOARD_VISIBILITIES.indexOf(v)
 
 const TRANSITIONS = { archive: 'archived', trash: 'trashed', restore: 'active' } as const satisfies Record<
   string,
@@ -87,6 +92,11 @@ export function registerBoardRoutes(app: FastifyInstance, ctx: AppContext): void
     const row = await db.transaction(async (tx) => {
       const workspaceRole = await requireWorkspaceRole(tx, wid, user.id)
       if (!canCreateInWorkspace(workspaceRole)) throw forbidden()
+      // Domain access: only creators create boards (every template, sample board and "Untitled").
+      await ctx.identity.requireCreator(tx, user.id, 'create', {
+        route: req.routeOptions.url ?? '',
+        by: 'route',
+      })
       const projectId = input.projectId ?? null
       if (projectId) await requireProjectInWorkspace(tx, projectId, wid)
       await assertBoardRoom(tx, wid, ctx.config.storage.maxBoardsPerWorkspace) // SEAM-11
@@ -143,6 +153,16 @@ export function registerBoardRoutes(app: FastifyInstance, ctx: AppContext): void
       if ((input.title !== undefined || input.projectId !== undefined) && !can(access.role, 'rename', status))
         throw forbidden()
       if (input.visibility !== undefined && !can(access.role, 'change_visibility', status)) throw forbidden()
+      // Domain access (D4): raising the visibility hands out access, so only a creator may; lowering
+      // (or keeping it) stays open to whoever may change it.
+      if (
+        input.visibility !== undefined &&
+        visibilityRank(input.visibility) > visibilityRank(access.board.visibility)
+      )
+        await ctx.identity.requireCreator(tx, user.id, 'share', {
+          route: req.routeOptions.url ?? '',
+          by: 'route',
+        })
       if (input.projectId) await requireProjectInWorkspace(tx, input.projectId, workspace_id)
       const at = now()
       const row = await tx.one<BoardRow>(

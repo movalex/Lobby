@@ -56,8 +56,18 @@ function refusedCalls(board: string, other: string, userId: string): [string, Me
     ['POST /api/snapshots/:sid/restore-as-new', 'POST', `/api/snapshots/${SNAPSHOT}/restore-as-new`, {}],
     ['GET /api/workspaces/:wid/members', 'GET', `${ws}/members`, undefined],
     ['GET /api/workspaces/:wid/projects', 'GET', `${ws}/projects`, undefined],
-    ['POST /api/workspaces/:wid/invitations', 'POST', `${ws}/invitations`, { role: 'member' }],
-    ['POST /api/boards/:bid/invitations', 'POST', `${b}/invitations`, { role: 'viewer' }],
+    [
+      'POST /api/workspaces/:wid/invitations',
+      'POST',
+      `${ws}/invitations`,
+      { role: 'member', email: 'x@example.com' },
+    ],
+    [
+      'POST /api/boards/:bid/invitations',
+      'POST',
+      `${b}/invitations`,
+      { role: 'viewer', email: 'x@example.com' },
+    ],
     [
       'POST /api/boards/:bid/invitations/email',
       'POST',
@@ -136,7 +146,7 @@ describe('what a guest cannot do', () => {
     ])
     expect(await boardRole(sam, w.board)).toBe('owner')
     for (const [method, url, body] of [
-      ['POST', `/api/boards/${w.board}/invitations`, { role: 'viewer' }],
+      ['POST', `/api/boards/${w.board}/invitations`, { role: 'viewer', email: 'x@example.com' }],
       ['POST', `/api/boards/${w.board}/review-links`, { role: 'viewer' }],
       ['POST', `/api/boards/${w.board}/invitations/email`, { email: 'x@example.com', role: 'viewer' }],
       ['PUT', `/api/boards/${w.board}/members/${w.carol.userId}`, { role: 'editor' }],
@@ -150,12 +160,18 @@ describe('what a guest cannot do', () => {
 
   it('cannot accept a normal invitation: 403 "Sign in with an account to accept this invitation"', async () => {
     const single = (
-      await w.bob.req('POST', `/api/boards/${others.priv}/invitations`, { role: 'editor' })
+      await w.bob.req('POST', `/api/boards/${others.priv}/invitations`, {
+        role: 'editor',
+        email: 'erin@dev.invalid', // the account that uses it below
+      })
     ).json() as {
       url: string
     }
     const workspace = (
-      await w.alice.req('POST', `/api/workspaces/${DEV_STUDIO}/invitations`, { role: 'member' })
+      await w.alice.req('POST', `/api/workspaces/${DEV_STUDIO}/invitations`, {
+        role: 'member',
+        email: 'x@example.com',
+      })
     ).json() as { url: string }
     const review = await guestLink(w.bob, others.priv, { role: 'viewer', allowGuests: false })
     for (const url of [single.url, workspace.url, review.url]) {

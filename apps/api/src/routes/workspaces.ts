@@ -52,6 +52,11 @@ export function registerWorkspaceRoutes(app: FastifyInstance, ctx: AppContext): 
     const input = parse(CreateProjectInput, req.body)
     const role = await requireWorkspaceRole(db, wid, user.id)
     if (!canCreateInWorkspace(role)) throw forbidden()
+    // Domain access: only creators create projects.
+    await ctx.identity.requireCreator(db, user.id, 'create', {
+      route: req.routeOptions.url ?? '',
+      by: 'route',
+    })
     const row = await db.one<ProjectRow>(
       `INSERT INTO projects (id, workspace_id, name, created_at) VALUES ($1, $2, $3, $4) RETURNING ${PROJECT_COLUMNS}`,
       [newId('prj'), wid, input.name, now()],
@@ -75,6 +80,11 @@ export function registerWorkspaceRoutes(app: FastifyInstance, ctx: AppContext): 
       )
       // Guests cannot list projects, so for them a project id is as invisible as another tenant's.
       if (!project || !canCreateInWorkspace(project.role)) throw notFound()
+      // Domain access (D6): renaming, archiving and unarchiving a project lobby is creator-only.
+      await ctx.identity.requireCreator(tx, user.id, 'create', {
+        route: req.routeOptions.url ?? '',
+        by: 'route',
+      })
       return tx.one<ProjectRow>(
         `UPDATE projects
             SET name = COALESCE($2::text, name),

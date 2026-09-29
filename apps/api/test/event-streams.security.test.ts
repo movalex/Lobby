@@ -8,7 +8,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { EventHub } from '../src/events/hub.ts'
 import { ACCESS_RECHECK_MS } from '../src/events/routes.ts'
-import { type Client, createBoard, createTestApi, type TestApi } from './helpers.ts'
+import { type Client, createBoard, createTestApi, devEmail, type TestApi } from './helpers.ts'
 import { listen, openSse, type SseStream, until } from './sse.ts'
 
 let api: TestApi | undefined
@@ -113,7 +113,10 @@ describe('authz-005: revoked people stop receiving board events at once', () => 
     const carol = await w.t.login('carol')
     // carol must be a workspace member for an explicit grant; the owner's personal workspace has
     // none, so she comes in as a guest through a board invitation.
-    const inv = await w.owner.req('POST', `/api/boards/${w.boardId}/invitations`, { role: 'viewer' })
+    const inv = await w.owner.req('POST', `/api/boards/${w.boardId}/invitations`, {
+      role: 'viewer',
+      email: devEmail('carol'),
+    })
     const token = (inv.json() as { url: string }).url.split('/').pop() ?? ''
     expect((await carol.req('POST', `/api/invitations/${token}/accept`)).statusCode).toBe(200)
     const s = await w.open(carol)
