@@ -198,6 +198,7 @@ export async function writeBoard<T>(
   } finally {
     store.close()
   }
-  if (wrote) ctx.deps.onDocumentChange(boardId)
+  // a seed makes a board before its row exists: not an edit anyone made (the tldraw seed reports none)
+  if (wrote && !opts.create) ctx.deps.onDocumentChange(boardId)
   return result
 }

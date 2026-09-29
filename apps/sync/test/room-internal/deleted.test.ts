@@ -3,6 +3,7 @@
 // until CR 2F-2 lands, a write to an open board answers 503 and is retried after the room's eviction).
 
 import { checkInvariants } from '@draftroom/canvas-schema/invariants'
+import { ListDeletedResponse, RestoreDeletedResponse } from '@draftroom/contracts'
 import { describe, expect, it } from 'vitest'
 import { arrow, bindArrow, type El, rect, text } from '../element-room/support/elements.ts'
 import { newBoardId, useElementHarness } from '../element-room/support/stack.ts'
@@ -61,6 +62,7 @@ describe('recently deleted (Excalidraw engine)', () => {
     const { st, b } = await boardWithDeletions()
     const list = await call<List>(st, 'GET', `/internal/boards/${b}/deleted`)
     expect(list.status).toBe(200)
+    ListDeletedResponse.parse(list.body) // what the api proxies (history sync-deleted.ts)
     expect(list.body.total).toBe(2)
     expect(list.body.limit).toBe(2000)
     expect(list.body.entries.map((e) => [e.shapeId, e.type, e.label, e.childCount])).toEqual([
@@ -86,6 +88,7 @@ describe('recently deleted (Excalidraw engine)', () => {
       }),
     )
     expect(res.status).toBe(200)
+    RestoreDeletedResponse.parse(res.body)
     expect([...res.body.restored].sort()).toEqual(['shape:F', 'shape:N1', 'shape:N2', 'shape:R'])
     expect(res.body.skipped).toEqual([
       { id: 'shape:T', reason: 'exists' },
