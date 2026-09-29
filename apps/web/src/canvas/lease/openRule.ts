@@ -69,3 +69,50 @@ export function decideEngineChange(v: EngineView): EngineDecision {
   // Another element, or this element's lease not granted (a Lobby request still pending): not granted.
   return { kind: 'close-current' }
 }
+
+// ---- spike B: the lease verifier's L1-L4 (docs/research/excalidraw/spike-b/OPEN-FROM-SPIKE-A.md) -------
+
+/** Keys buffered while a lease was pending, as the text they would have typed (for "Copy my text"). */
+export function bufferText(keys: readonly { readonly key: string }[]): string {
+  return keys.map((k) => (k.key === 'Enter' ? '\n' : [...k.key].length === 1 ? k.key : '')).join('')
+}
+
+/**
+ * L2: a guard-caught editor holds the copy Excalidraw made when it opened (index.js:25247), never
+ * refreshed. When its grant arrives, the label may hold newer text (the previous holder's last keystrokes
+ * before she released): the editor must show that text before it becomes writable, or the first keystroke
+ * writes the old copy back (Excalidraw's oninput writes the whole value, 25356-25364). Returns the value
+ * and selection to install, or null when the editor is already current. The selection keeps its meaning:
+ * all the text stays all the text (a double-click selects all), otherwise the offsets are clamped.
+ */
+export function refreshOnGrant(
+  editor: { readonly value: string; readonly selectionStart: number; readonly selectionEnd: number },
+  stored: string | undefined,
+): { value: string; selectionStart: number; selectionEnd: number } | null {
+  if (stored === undefined || stored === editor.value) return null
+  const all =
+    editor.selectionStart === 0 && editor.selectionEnd === editor.value.length && editor.value.length > 0
+  if (all) return { value: stored, selectionStart: 0, selectionEnd: stored.length }
+  const clamp = (n: number) => Math.max(0, Math.min(stored.length, n))
+  return {
+    value: stored,
+    selectionStart: clamp(editor.selectionStart),
+    selectionEnd: clamp(editor.selectionEnd),
+  }
+}
+
+/**
+ * L3: how a New-element editor closes on a deny. When the label holds only this session's own typing
+ * (its text equals the editor's), Excalidraw's submit of the text it opened with puts it back (an empty
+ * label this open created is dropped), unless the label is on the server, which the sync engine resets.
+ * When someone else's text is in the label (the holder wrote it meanwhile), it closes WITHOUT the submit,
+ * so their text is never overwritten or deleted.
+ */
+export function denyNewClose(o: {
+  readonly labelText: string | undefined
+  readonly editorValue: string
+  readonly labelConfirmed: boolean
+}): 'restore-and-submit' | 'close-without-submit' {
+  const ownTypingOnly = o.labelText === undefined || o.labelText === o.editorValue
+  return ownTypingOnly && !o.labelConfirmed ? 'restore-and-submit' : 'close-without-submit'
+}

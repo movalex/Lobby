@@ -51,7 +51,7 @@ import type { ExcalidrawElement, ExcalidrawTextContainer } from '@excalidraw/exc
 import type { ExcalidrawImperativeAPI } from '@excalidraw/excalidraw/types'
 import { flushSync } from 'react-dom'
 import type { LeaseClient, LeaseEvent, LeaseOutcome } from './client.ts'
-import { decideEngineChange, type EditPhase } from './openRule.ts'
+import { bufferText, decideEngineChange, denyNewClose, type EditPhase, refreshOnGrant } from './openRule.ts'
 import type { LeaseHolder } from './protocol.ts'
 import { type BufferedKey, replayKeys } from './replay.ts'
 
@@ -74,6 +74,10 @@ export interface EditNotice {
     | 'lost'
     | 'wrong-element'
     | 'new-denied'
+    /** a pending editor left by a click away or a blur, with keys typed (spike B, L4) */
+    | 'left-pending'
+    /** a granted open that never became an editor, with keys typed (spike B, L4) */
+    | 'open-failed'
   leaseId: string
   message: string
   /** Text the user typed that was NOT saved (the plan's "Copy my text"); null when there is none. */
@@ -105,6 +109,12 @@ export interface EditorLeaseOptions {
   trace?: (t: EditTrace) => void
   /** How long a granted open may take before it is given up (ms). */
   openTimeoutMs?: number
+  /**
+   * The sync engine's view: the element is on the server (`EngineCore.confirmed`). Spike A's pages have no
+   * server and leave it out. Used on a New-element deny (L3): a label the server holds is never submitted
+   * empty (which would delete it); the engine resets it from `confirmed` instead.
+   */
+  isConfirmed?: (id: string) => boolean
 }
 
 interface Session {
@@ -222,10 +232,17 @@ export class EditorLease {
     return !!s && s.phase === 'open' && !s.lost && !!ta && s.textarea === ta && !this.noSubmit.has(s.textarea)
   }
 
-  /** Must `ta` close without Excalidraw's submit (its label is gone or replaced, or its lease was lost)? */
+  /**
+   * Must `ta` close without Excalidraw's submit? Its label is gone or replaced, its lease was lost, or
+   * (spike B, the lease verifier's L1) it is not the writable editor of a granted lease: a guard-caught or
+   * still-opening editor holds the copy Excalidraw made when it opened (index.js:25247), never refreshed,
+   * and its submit (deny, Escape, a click away, a blur) would write that old copy over the holder's newer
+   * text. Only the granted editor's own text is ever submitted.
+   */
   mustNotSubmit(ta: HTMLTextAreaElement): boolean {
     if (!ta.isConnected) return false
     if (this.noSubmit.has(ta)) return true
+    if (!this.isWritable(ta)) return true
     const label = this.labelOf.get(ta)
     return !!label && this.labelGone(label) !== null
   }
@@ -366,6 +383,19 @@ export class EditorLease {
   leaveWithoutSubmit(ta: HTMLTextAreaElement, via: string): void {
     const s = this.session
     if (s && s.textarea === ta) {
+      // L4 (spike B): keys typed into a pending editor that is left by a click away or a blur are not
+      // saved; say so and offer them, as the selection-change cancel does (Escape is an explicit cancel).
+      if (s.phase !== 'open' && !s.lost && via !== 'escape') {
+        const typed = this.bufferedText(s)
+        if (typed) {
+          this.notice({
+            kind: 'left-pending',
+            leaseId: s.leaseId,
+            message: 'The note did not open, so what you typed was not saved.',
+            text: typed,
+          })
+        }
+      }
       this.closeOwnWithoutSubmit(s, via)
       return
     }
@@ -504,7 +534,7 @@ export class EditorLease {
   }
 
   private cancelWithNotice(s: Session, n: { kind: EditNotice['kind']; message: string }): void {
-    const text = s.buffer.map((k) => (k.key === 'Enter' ? '\n' : k.key.length === 1 ? k.key : '')).join('')
+    const text = this.bufferedText(s) ?? ''
     this.setSession(null)
     this.o.lease.release(s.leaseId) // pending -> cancelled (a late grant is released at once)
     this.closeTextarea(s.textarea, n.kind)
@@ -619,7 +649,21 @@ export class EditorLease {
       this.closing.add(ta)
       ta.readOnly = true
       const opened = this.openedValue.get(ta) ?? ''
+      const labelId = this.labelOf.get(ta) ?? this.o.api.getAppState().editingTextElement?.id ?? null
+      const label = labelId ? this.element(labelId) : undefined
+      // L3 (spike B): someone else's text in the label is never overwritten by the text this editor
+      // opened with (an empty one deleted the label while the holder typed in it).
+      const how = denyNewClose({
+        labelText: label && !label.isDeleted ? (label as { originalText?: string }).originalText : undefined,
+        editorValue: ta.value,
+        labelConfirmed: !!labelId && (this.o.isConfirmed?.(labelId) ?? false),
+      })
+      this.trace('new-denied-close', { leaseId: s.leaseId, how })
       queueMicrotask(() => {
+        if (how === 'close-without-submit') {
+          this.closeWithoutSubmit(ta, 'new-denied')
+          return
+        }
         ta.value = opened
         this.escape(ta, 'new-denied')
       })
@@ -773,10 +817,34 @@ export class EditorLease {
       return
     }
     const keys = s.buffer.splice(0)
+    // L2 (spike B): the editor still holds the copy Excalidraw made when it opened; the label may have
+    // changed since (the previous holder's last keystrokes). Show the stored text before it is writable.
+    // A New element's editor was writable from the start: its text is the user's own.
+    let refreshed = false
+    if (s.origin !== 'new') {
+      const labelId = this.labelOf.get(ta) ?? this.o.api.getAppState().editingTextElement?.id ?? null
+      const label = labelId ? this.element(labelId) : undefined
+      const fresh = refreshOnGrant(
+        ta,
+        label && !label.isDeleted ? (label as { originalText?: string }).originalText : undefined,
+      )
+      if (fresh) {
+        ta.value = fresh.value
+        ta.setSelectionRange(fresh.selectionStart, fresh.selectionEnd)
+        this.openedValue.set(ta, fresh.value)
+        this.lockedValue.set(ta, fresh.value)
+        this.trace('refresh-on-grant', { leaseId: s.leaseId, label: labelId })
+        refreshed = true
+      }
+    }
     // Writable from here on: the session owns it and the lease is granted (or the element is new).
     s.textarea = ta
     s.phase = 'open'
     ta.readOnly = false
+    // The refreshed editor is still sized for the old text (Excalidraw sizes it in updateWysiwygStyle on
+    // its own input): one input event with the same text lets Excalidraw lay it out again (it writes the
+    // label's unchanged text, under the lease this session now holds).
+    if (refreshed) ta.dispatchEvent(new Event('input', { bubbles: true }))
     if (s.caretEnd) ta.setSelectionRange(ta.value.length, ta.value.length)
     const fallbacks = replayKeys(ta, keys)
     this.trace('open', {
@@ -792,7 +860,7 @@ export class EditorLease {
 
   private giveUp(s: Session, why: string, message?: string): void {
     this.trace('open-failed', { leaseId: s.leaseId, why })
-    const text = s.buffer.map((k) => (k.key === 'Enter' ? '\n' : k.key.length === 1 ? k.key : '')).join('')
+    const text = this.bufferedText(s) ?? ''
     this.setSession(null)
     this.o.lease.release(s.leaseId)
     this.closeTextarea(s.textarea ?? this.currentTextarea(), 'give-up')
@@ -802,6 +870,14 @@ export class EditorLease {
         leaseId: s.leaseId,
         message,
         text: text || null,
+      })
+    } else if (text) {
+      // L4 (spike B): 'no-editor' / 'no-focus' / 'no-container' dropped the typed keys with no word.
+      this.notice({
+        kind: 'open-failed',
+        leaseId: s.leaseId,
+        message: 'The note did not open, so what you typed was not saved.',
+        text,
       })
     }
   }
@@ -851,6 +927,12 @@ export class EditorLease {
 
   private element(id: string): ExcalidrawElement | undefined {
     return this.o.api.getSceneElementsIncludingDeleted().find((e) => e.id === id)
+  }
+
+  /** The keys buffered while pending, as text (null: none). */
+  private bufferedText(s: Session): string | null {
+    const text = bufferText(s.buffer)
+    return text.length > 0 ? text : null
   }
 
   /** What the user typed into the session's editor (null: nothing beyond what it opened with). */

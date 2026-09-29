@@ -213,11 +213,18 @@ export function isBufferableKey(e: KeyLike): boolean {
 
 /**
  * The letter a chord names: its `key` when that is a Latin letter (the layout's character: the browser's
- * accelerators and editing commands follow it), else its `code` (non-Latin layouts: Ctrl+Я is still
- * Ctrl+Z to the browser, and a dead key or 'Unidentified' names no letter).
+ * accelerators and editing commands follow it), else, for a single non-Latin LETTER, its `code`
+ * (non-Latin layouts: Ctrl+Я is still Ctrl+Z to the browser). Anything else names no letter: a named key
+ * ('Enter', 'Escape', 'Tab', 'Dead', 'Unidentified'), a digit or punctuation.
+ *
+ * Spike B (the keys verifier's K4): the code fallback used to apply to named keys too, so a navigation key
+ * sent from a letter key (Neo 2 layer 4 on Linux: Mod4+V gives Enter on code KeyV) was kept as a letter
+ * chord, and Excalidraw's textarea ran Ctrl+Enter submit (index.js:25392) or Ctrl+Escape submit. K5: the
+ * same fallback kept key '<' on code KeyV as Ctrl+Shift+V.
  */
 function chordLetter(e: KeyLike): string | null {
   if (/^[a-z]$/i.test(e.key)) return e.key.toLowerCase()
+  if (!/^\p{L}$/u.test(e.key)) return null
   const code = e.code ?? ''
   return /^Key[A-Z]$/.test(code) ? code.slice(3).toLowerCase() : null
 }
@@ -429,11 +436,10 @@ const DELEGATED_ACTIONS: ReadonlySet<string> = new Set<DelegatedAction>([
   'zoomOut',
 ])
 
-/** What Excalidraw's container keydown would do with a Ctrl/Cmd chord outside an input (null: nothing). */
-export function engineChordAction(e: KeyLike, mac: boolean): string | null {
+function engineEventOf(e: KeyLike, mac: boolean): EngineKeyEvent {
   const k = engineKeyOf(e)
   const latin = /^[a-z]$/.test(k.toLowerCase())
-  const x: EngineKeyEvent = {
+  return {
     k,
     code: e.code ?? '',
     cmd: mac ? e.metaKey : e.ctrlKey,
@@ -443,11 +449,58 @@ export function engineChordAction(e: KeyLike, mac: boolean): string | null {
     z: k.toLowerCase() === 'z' || (!latin && e.code === 'KeyZ'),
     y: k.toLowerCase() === 'y' || (!latin && e.code === 'KeyY'),
   }
+}
+
+/** What Excalidraw's container keydown would do with a Ctrl/Cmd chord outside an input (null: nothing). */
+export function engineChordAction(e: KeyLike, mac: boolean): string | null {
+  const x = engineEventOf(e, mac)
   const pre = claimedBeforeActions(x)
   if (pre) return pre
   const matches = ENGINE_KEY_TESTS.filter((t) => t.test(x))
   if (matches.length === 1) return matches[0]?.name ?? null
   return matches.length > 1 ? 'ambiguous' : null
+}
+
+/**
+ * EVERY action Excalidraw's container keydown could run for this event outside an input: the handlers
+ * that run before the action manager, and every keyTest that matches (appState conditions left out, so
+ * this can only over-report). Spike B (the keys verifier's K5): Lobby delegated modifier keys, arrows,
+ * Escape, Delete/Backspace and Space by `key` alone, while Excalidraw's keyTests read `code` too, so a
+ * crafted or remapped event ({key: 'Shift', code: 'KeyC'} with Alt) ran copyAsPng, and
+ * {key: 'ArrowUp', code: 'KeyH'} with Shift flipped the selection.
+ */
+export function engineKeyActions(e: KeyLike, mac: boolean): string[] {
+  const x = engineEventOf(e, mac)
+  const out: string[] = []
+  const pre = claimedBeforeActions(x)
+  if (pre) out.push(pre)
+  for (const t of ENGINE_KEY_TESTS) if (t.test(x)) out.push(t.name)
+  return out
+}
+
+/** A plain key is delegated only when Excalidraw could run nothing but these actions for it (K5). */
+const onlyEngineActions = (e: KeyLike, mac: boolean, allowed: readonly string[]): boolean =>
+  engineKeyActions(e, mac).every((a) => allowed.includes(a))
+
+/**
+ * What the text editor's own keydown handler (index.js:25367-25409, the whole handler, in its order) and
+ * its container's onKeyDown for a writable target (43983-44011) would do with this event, or null.
+ * CTRL_OR_CMD is metaKey on macOS, ctrlKey elsewhere (common :2391).
+ */
+export function textareaKeyAction(e: KeyLike, mac: boolean): string | null {
+  const cmd = mac ? e.metaKey : e.ctrlKey
+  const code = e.code ?? ''
+  if (!e.shiftKey && (code === 'Equal' || code === 'NumpadAdd') && cmd) return 'zoomIn'
+  if (!e.shiftKey && (code === 'Minus' || code === 'NumpadSubtract') && cmd) return 'zoomOut'
+  if (!e.shiftKey && (code === 'Digit0' || code === 'Numpad0') && cmd) return 'resetZoom'
+  if (cmd && e.shiftKey && (e.key === '<' || e.key === ',')) return 'decreaseFontSize'
+  if (cmd && e.shiftKey && (e.key === '>' || e.key === '.')) return 'increaseFontSize'
+  if (e.key === 'Escape') return 'submit'
+  if (e.key === 's' && cmd && !e.shiftKey) return 'saveToActiveFile'
+  if (e.key === 'Enter' && cmd) return 'submit'
+  if (e.key === 'Tab' || (cmd && (code === 'BracketLeft' || code === 'BracketRight'))) return 'indent'
+  if (cmd && e.key === 'p' && !e.shiftKey && !e.altKey) return 'toast'
+  return null
 }
 
 /**
@@ -504,7 +557,13 @@ export function classifyTextEditorKey(e: KeyLike, ctx: Pick<KeyContext, 'inMindM
   if (ctx.inMindMap && (e.key === 'Tab' || (e.key === 'Enter' && !mod && !e.altKey))) {
     return { kind: 'lobby', action: 'mindmap' }
   }
-  if (MODIFIER_KEYS.has(e.key)) return { kind: 'delegate' }
+  // Spike B (K2, K3, K5): a delegated key reaches the textarea's own handler, which tests `code` for zoom
+  // and indent. A key it would misread (Ctrl+Insert typed as NumLock-off Numpad0 is resetZoom; BÉPO's
+  // Ctrl+Z on the physical BracketLeft is outdent; a modifier or caret key on Equal is zoom) goes to the
+  // browser instead: stopped before Excalidraw, not prevented, so the browser's own editing still runs
+  // (copy, native undo) and Excalidraw's handler never sees it.
+  const misread = () => textareaKeyAction(e, ctx.mac === true) !== null
+  if (MODIFIER_KEYS.has(e.key)) return misread() ? { kind: 'browser' } : { kind: 'delegate' }
   // No Ctrl, Cmd or Alt: the textarea's handler acts only on Escape (submit) and Tab / Shift+Tab (indent),
   // both kept. The rest is the browser's own typing, dead keys, IME keys and caret keys.
   if (!mod && !e.altKey) return { kind: 'delegate' }
@@ -515,7 +574,8 @@ export function classifyTextEditorKey(e: KeyLike, ctx: Pick<KeyContext, 'inMindM
   if (typesCharacter(e) && (e.altGraph || (ctx.mac && e.altKey && !e.ctrlKey && !e.metaKey))) {
     return { kind: 'browser' }
   }
-  if (isKeptTextEditorChord(e, ctx.mac === true)) return { kind: 'delegate' }
+  if (isKeptTextEditorChord(e, ctx.mac === true))
+    return misread() ? { kind: 'browser' } : { kind: 'delegate' }
   return block(e)
 }
 
@@ -553,7 +613,12 @@ export function classifyKey(e: KeyLike, ctx: KeyContext): KeyVerdict {
     return block(e)
   }
 
-  if (MODIFIER_KEYS.has(e.key)) return { kind: 'delegate' }
+  const mac = ctx.mac === true
+  // K5: a bare modifier key acts on nothing in Excalidraw's keyTests; one whose `code` a keyTest reads
+  // ({key: 'Shift', code: 'KeyC'} with Alt is copyAsPng; {key: 'Shift', code: 'Digit0'} is resetZoom, also
+  // for read-only roles) is stopped.
+  if (MODIFIER_KEYS.has(e.key))
+    return onlyEngineActions(e, mac, []) ? { kind: 'delegate' } : { kind: 'block', preventDefault: false }
   if (e.key === 'Tab' && !isMod(e) && !e.altKey) {
     return ctx.inMindMap ? { kind: 'lobby', action: 'mindmap' } : { kind: 'browser' }
   }
@@ -563,7 +628,7 @@ export function classifyKey(e: KeyLike, ctx: KeyContext): KeyVerdict {
 
   const mod = isMod(e)
 
-  const delegated = delegatedChord(e, ctx.mac === true)
+  const delegated = delegatedChord(e, mac)
 
   // 3. Read-only roles: canvas zoom keys only (Excalidraw's `interaction.navigation` handles them).
   if (ctx.role === 'readonly') {
@@ -576,11 +641,15 @@ export function classifyKey(e: KeyLike, ctx: KeyContext): KeyVerdict {
     return block(e)
   }
 
-  // 4. Editors, no text editor open.
-  if (e.key === 'Escape' && !mod && !e.altKey) return { kind: 'delegate' }
-  if (ARROWS.has(e.key)) return !mod && !e.altKey ? { kind: 'delegate' } : block(e)
-  if ((e.key === 'Delete' || e.key === 'Backspace') && !mod && !e.altKey) return { kind: 'delegate' }
-  if (e.key === ' ' && !mod && !e.altKey && !e.shiftKey) return { kind: 'delegate' }
+  // 4. Editors, no text editor open. K5: each plain key is delegated only when Excalidraw's keyTests (which
+  //    read `code` too) could run nothing but its own action for this very event.
+  const plain = (allowed: readonly string[]): KeyVerdict =>
+    onlyEngineActions(e, mac, allowed) ? { kind: 'delegate' } : block(e)
+  if (e.key === 'Escape' && !mod && !e.altKey) return plain(['finalize', 'deselect'])
+  if (ARROWS.has(e.key)) return !mod && !e.altKey ? plain([]) : block(e)
+  if ((e.key === 'Delete' || e.key === 'Backspace') && !mod && !e.altKey)
+    return plain(['deleteSelectedElements'])
+  if (e.key === ' ' && !mod && !e.altKey && !e.shiftKey) return plain([])
   // Ctrl+D, Ctrl+G, Ctrl+Shift+G, Ctrl+Shift+L, Ctrl+[ ], Ctrl+Shift+[ ] (Cmd+Option+[ ] on macOS),
   // Ctrl+= / Ctrl+-: only when Excalidraw would run exactly that action for this event (see above).
   if (delegated) return { kind: 'delegate' }
