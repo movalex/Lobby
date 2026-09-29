@@ -49,7 +49,9 @@ describe('presence', () => {
       Array.from({ length: 45 }, (_, i) => st.client({ boardId: b, user: `m${i}` })),
     )
     for (let round = 0; round < 4; round++) {
-      peers.forEach((p, i) => p.presence({ pointer: { x: i * 10 + round, y: 5 } }))
+      peers.forEach((p, i) => {
+        p.presence({ pointer: { x: i * 10 + round, y: 5 } })
+      })
       await sleep(150)
     }
     await sleep(300)

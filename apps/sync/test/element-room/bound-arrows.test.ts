@@ -15,7 +15,10 @@ import { newBoardId, useElementHarness } from './support/stack.ts'
 
 const h = useElementHarness()
 const pv = (c: RawClient, id: string) => c.confirmed.get(id)?.version ?? 1
-const scene = (a: El, i: number): [number, number] => pointAtIndexGlobal(a as never, i)
+const scene = (a: El | undefined, i: number): [number, number] => {
+  if (!a) throw new Error('no such element')
+  return pointAtIndexGlobal(a as never, i)
+}
 const dist = (p: number[], q: number[]) =>
   Math.max(Math.abs((p[0] ?? 0) - (q[0] ?? 0)), Math.abs((p[1] ?? 0) - (q[1] ?? 0)))
 const byId = (els: readonly El[]) => new Map(els.map((e) => [e.id as string, e]))
@@ -90,7 +93,7 @@ describe('rule 7 over the wire', () => {
       const bob = await st.client({ boardId: b, user: 'bob' })
       const c = await st.client({ boardId: b, user: 'carol' })
       const drop: [number, number] = [605, 400]
-      const cArrow = dragFree(c.confirmed.get('A'), drop)
+      const cArrow = dragFree(c.confirmed.get('A') as El, drop)
       const opC = { k: 'p', id: 'A', pv: pv(c, 'A'), g: { path: pathUnit(cArrow) } }
       const opB = { k: 'p', id: 'X', pv: pv(bob, 'X'), g: { shape: { height: 180 } } }
       const [bc, bb] = [c.clock, bob.clock]
@@ -140,7 +143,7 @@ describe('rule 7 over the wire', () => {
           k: 'p',
           id: 'A',
           pv: pv(c, 'A'),
-          g: { path: pathUnit(dragFree(c.confirmed.get('A'), drop)) },
+          g: { path: pathUnit(dragFree(c.confirmed.get('A') as El, drop)) },
         }
         const opB = {
           k: 'p',
