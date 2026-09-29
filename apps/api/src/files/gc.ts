@@ -40,7 +40,12 @@ import { type Db, pgErrorCode, type Queryable } from '@draftroom/db'
 import { snapshotBodies } from '../features/history/snapshot-store.ts'
 import type { BlobStore } from './blobs.ts'
 import { originalKey } from './blobs.ts'
-import { parseBoardRefs, type VersionRef, versionsInCheckpoint } from './gc-refs.ts'
+import {
+  type CheckpointVersionRef,
+  parseBoardRefs,
+  type VersionRef,
+  versionsInCheckpoint,
+} from './gc-refs.ts'
 
 const DAY = 86_400_000
 
@@ -109,6 +114,31 @@ const FOREIGN_KEY_VIOLATION = '23503'
  * recorded with no references. A read that fails (the blob store is unreachable) is counted and
  * retried by the next pass.
  */
+/**
+ * The refs of a checkpoint with every asset id known: a v2 element may name only its version, whose
+ * asset is read from asset_versions (in the workspace). A version that no longer exists needs no keeping.
+ */
+async function withAssetIds(
+  deps: AssetGcDeps,
+  workspaceId: string,
+  named: readonly CheckpointVersionRef[],
+): Promise<VersionRef[]> {
+  const out: VersionRef[] = []
+  const bare: string[] = []
+  for (const r of named) {
+    if (r.assetId) out.push({ assetId: r.assetId, versionId: r.versionId })
+    else bare.push(r.versionId)
+  }
+  for (let i = 0; i < bare.length; i += 500) {
+    const rows = await deps.db.query<{ id: string; asset_id: string }>(
+      'SELECT id, asset_id FROM asset_versions WHERE workspace_id = $1 AND id = ANY($2::text[])',
+      [workspaceId, bare.slice(i, i + 500)],
+    )
+    for (const r of rows.rows) out.push({ assetId: r.asset_id, versionId: r.id })
+  }
+  return out
+}
+
 async function scanCheckpoints(deps: AssetGcDeps, workspaceId: string): Promise<number> {
   const pending = await deps.db.query<{ id: string; storage_key: string }>(
     `SELECT s.id, s.storage_key FROM board_snapshots s
@@ -129,16 +159,24 @@ async function scanCheckpoints(deps: AssetGcDeps, workspaceId: string): Promise<
       deps.log.warn({ err: errInfo(err), snapshotId: s.id }, 'asset gc: checkpoint body unreadable')
       continue
     }
-    let refs: VersionRef[] = []
+    let named: CheckpointVersionRef[] = []
     if (raw !== null) {
       try {
-        refs = versionsInCheckpoint(raw)
+        named = versionsInCheckpoint(raw)
       } catch {
         deps.log.warn(
           { snapshotId: s.id },
           'asset gc: checkpoint body is not valid JSON (it restores nothing)',
         )
       }
+    }
+    let refs: VersionRef[]
+    try {
+      refs = await withAssetIds(deps, workspaceId, named)
+    } catch (err) {
+      failed++
+      deps.log.warn({ err: errInfo(err), snapshotId: s.id }, 'asset gc: checkpoint refs not resolved')
+      continue
     }
     try {
       await deps.db.transaction(async (tx) => {
@@ -216,6 +254,7 @@ async function gatherReferences(deps: AssetGcDeps, workspaceId: string): Promise
       if (!refs) throw new Error('unexpected asset-refs answer')
       for (const r of refs.canvas) versions.add(r.versionId)
       for (const r of refs.deleted) versions.add(r.versionId)
+      for (const v of refs.versions) versions.add(v)
       boardsScanned++
     } catch (err) {
       boardsFailed++

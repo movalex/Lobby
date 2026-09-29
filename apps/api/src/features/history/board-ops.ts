@@ -2,6 +2,7 @@
 export {
   type ArchiveAssetRef,
   ArchiveError,
+  type ArchiveErrorCode,
   type BoardArchiveV1,
   exportBoardArchive,
   importBoardArchive,

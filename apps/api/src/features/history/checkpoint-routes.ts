@@ -28,7 +28,7 @@ import { ApiError, forbidden, gone, notFound, parse } from '../../errors.ts'
 import type { FeatureContext } from '../context.ts'
 import type { CheckpointService } from './checkpoints.ts'
 import {
-  type CheckpointBody,
+  readCheckpointBody,
   SNAPSHOT_COLUMNS,
   SNAPSHOT_FROM,
   type SnapshotRow,
@@ -123,12 +123,22 @@ export function registerCheckpointRoutes(
     if (!(await isWorkspacePerson(access, user.id))) throw forbidden(GUEST_PREVIEW)
     const raw = await bodies.read(row.storage_key)
     if (raw === null) throw gone("This checkpoint's saved content is no longer available.")
-    const body = JSON.parse(raw) as CheckpointBody
+    const body = readCheckpointBody(raw)
     reply.header('cache-control', 'private, no-store')
+    // v2 (Excalidraw engine): elements and the board document; v1: the tldraw records, as before
+    if (body.version === 2)
+      return {
+        snapshot: toCheckpoint(row),
+        schema: body.schema,
+        records: [],
+        format: 'lobby-elements',
+        elements: body.elements as NonNullable<CheckpointContent['elements']>,
+        doc: body.doc,
+      }
     return {
       snapshot: toCheckpoint(row),
       schema: body.schema,
-      records: (body.documents ?? []).map((d) => d.state) as CheckpointContent['records'],
+      records: body.records as CheckpointContent['records'],
     }
   })
 

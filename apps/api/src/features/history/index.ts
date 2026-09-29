@@ -20,14 +20,17 @@ import { can, canCreateInWorkspace } from '@draftroom/permissions'
 import type { FastifyInstance } from 'fastify'
 import { requireBoardAction, requireProjectInWorkspace, requireWorkspaceRole } from '../../access.ts'
 import { userKind } from '../../auth/users.ts'
+import { liveElements, lobbySnapshotOf } from '../../canvas/lobby-elements.ts'
 import type { Params } from '../../context.ts'
 import { ApiError, conflict, forbidden, gone, notFound, parse } from '../../errors.ts'
 import { contentDisposition } from '../../files/disposition.ts'
 import { toBoardWithRole } from '../../serialize.ts'
+import type { BoardSnapshotJson, RoomSnapshotJson } from '../../sync-internal.ts'
 import type { FeatureContext } from '../context.ts'
 import { keepDownloadableFiles } from '../export-control/import-files.ts'
 import { copyExportPolicy, requireExportAllowed } from '../export-control/policy.ts'
 import { DELETED_GUESTS, guestRefused } from '../guests/guard.ts'
+import { exportLobbyArchive, importLobbyArchive, isLobbyArchive } from './archive-v2.ts'
 import { ArchiveError, exportBoardArchive, importBoardArchive, type SerializedSchema } from './board-ops.ts'
 import { registerCheckpointRoutes } from './checkpoint-routes.ts'
 import {
@@ -36,11 +39,17 @@ import {
   createCheckpointService,
   startCheckpointTimers,
 } from './checkpoints.ts'
-import { archiveRef, filesShownOn, filesViewableBy, referencedFiles } from './files.ts'
-import { createBoardFrom, viaSync } from './new-board.ts'
 import {
-  type CheckpointBody,
+  archiveRef,
+  filesShownOn,
+  filesViewableBy,
+  referencedElementFiles,
+  referencedFiles,
+} from './files.ts'
+import { type BoardContent, createBoardFrom, viaSync } from './new-board.ts'
+import {
   checkpointBodyOf,
+  readCheckpointBody,
   SNAPSHOT_COLUMNS,
   SNAPSHOT_FROM,
   type SnapshotRow,
@@ -194,13 +203,18 @@ export async function registerHistory(app: FastifyInstance, ctx: FeatureContext)
     // is logged and the restore goes on (it never changes this board). After the read above, so
     // retention running with it can never take the content being restored.
     await checkpoints.captureQuietly(snapshot.board_id, 'before_restore', { restoredName: snapshot.name })
-    const body = JSON.parse(raw) as CheckpointBody
-    const records = (body.documents ?? []).map((d) => d.state)
+    // v1 bodies are tldraw records (a sync on the Excalidraw engine converts them at the seed, §5.5);
+    // v2 bodies are elements (docs/EXCALIDRAW-MIGRATION.md §3.7)
+    const body = readCheckpointBody(raw)
+    const content: BoardContent =
+      body.version === 2
+        ? { format: 'lobby-elements', elements: body.elements, doc: body.doc }
+        : { format: 'tldraw', records: body.records, schema: body.schema }
     const { shown, notShown } = await filesShownOn(
       db,
       workspaceId,
       snapshot.board_id,
-      referencedFiles(records),
+      body.version === 2 ? await referencedElementFiles(db, body.elements) : referencedFiles(body.records),
     )
     const board = await createBoardFrom(
       ctx,
@@ -209,8 +223,7 @@ export async function registerHistory(app: FastifyInstance, ctx: FeatureContext)
         workspaceId,
         projectId: access.board.project_id,
         title: input.title ?? clip(`${access.board.title} (${snapshot.name})`),
-        records,
-        schema: body.schema,
+        content,
         files: shown,
         via: 'restore',
         from: { boardId: snapshot.board_id, snapshotId: snapshot.id },
@@ -232,8 +245,14 @@ export async function registerHistory(app: FastifyInstance, ctx: FeatureContext)
     if (input.keepSharing && !can(access.role, 'manage_access', access.board.status))
       throw forbidden('Only the board owner can copy its sharing settings.')
     const snap = await viaSync(() => ctx.sync.snapshot(bid))
-    const records = (Array.isArray(snap.documents) ? snap.documents : []).map((d) => d.state)
-    const { shown, notShown } = await filesShownOn(db, workspaceId, bid, referencedFiles(records))
+    const lobby = lobbySnapshotOf(snap)
+    const content = contentOf(snap)
+    const { shown, notShown } = await filesShownOn(
+      db,
+      workspaceId,
+      bid,
+      lobby ? await referencedElementFiles(db, lobby.elements) : referencedFiles(recordsOf(snap)),
+    )
     const board = await createBoardFrom(
       ctx,
       {
@@ -241,8 +260,7 @@ export async function registerHistory(app: FastifyInstance, ctx: FeatureContext)
         workspaceId,
         projectId: access.board.project_id,
         title: input.title ?? clip(`Copy of ${access.board.title}`),
-        records,
-        schema: snap.schema,
+        content,
         files: shown,
         shareLike: input.keepSharing ? { boardId: bid, visibility: access.board.visibility } : undefined,
         via: 'duplicate',
@@ -264,23 +282,27 @@ export async function registerHistory(app: FastifyInstance, ctx: FeatureContext)
     const access = await requireBoardAction(db, bid, user.id, 'view')
     await requireExportAllowed(db, access, user.id) // export-control: 403 EXPORT_DISABLED for limited viewers
     const snap = await viaSync(() => ctx.sync.snapshot(bid))
-    const records = (Array.isArray(snap.documents) ? snap.documents : []).map((d) => d.state)
+    const lobby = lobbySnapshotOf(snap)
+    const records = recordsOf(snap)
     const { shown, versions } = await filesShownOn(
       db,
       access.board.workspace_id,
       bid,
-      referencedFiles(records),
+      lobby ? await referencedElementFiles(db, lobby.elements) : referencedFiles(records),
     )
     const assets = shown.flatMap((f) => {
       const version = versions.get(`${f.assetId}/${f.versionId}`)
       const ref = version ? archiveRef(version) : null
       return ref ? [ref] : []
     })
-    const archive = exportBoardArchive(
-      records as unknown as Parameters<typeof exportBoardArchive>[0],
-      snap.schema as SerializedSchema,
-      assets,
-    )
+    // a board on the Excalidraw engine exports the v2 archive (docs/EXCALIDRAW-MIGRATION.md §3.7)
+    const archive = lobby
+      ? exportLobbyArchive(lobby.elements, lobby.doc, lobby.schema, assets, ctx.now())
+      : exportBoardArchive(
+          records as unknown as Parameters<typeof exportBoardArchive>[0],
+          (snap as RoomSnapshotJson).schema as SerializedSchema,
+          assets,
+        )
     reply.header('content-disposition', contentDisposition('attachment', `${access.board.title}.lobby.json`))
     return archive
   })
@@ -294,9 +316,32 @@ export async function registerHistory(app: FastifyInstance, ctx: FeatureContext)
       await requireBoardCreator(wid, user.id, req.routeOptions.url ?? '')
       const query = parse(ImportBoardQuery, req.query)
       if (query.projectId) await requireProjectInWorkspace(db, query.projectId, wid)
-      let imported: ReturnType<typeof importBoardArchive>
+      // v2 archives (a board of the new canvas, docs/EXCALIDRAW-MIGRATION.md §3.7) are elements; v1 ones
+      // are tldraw records, which a sync on the Excalidraw engine converts at the seed
+      let imported: {
+        content: BoardContent
+        assets: { assetId: string; versionId: string }[]
+        warnings: string[]
+        files: { assetId: string; versionId: string }[]
+      }
       try {
-        imported = importBoardArchive(req.body, { targetPageId: 'page:page' as never })
+        if (isLobbyArchive(req.body)) {
+          const v2 = importLobbyArchive(req.body)
+          imported = {
+            content: { format: 'lobby-elements', elements: v2.elements, doc: v2.doc },
+            assets: v2.assets,
+            warnings: v2.warnings,
+            files: await referencedElementFiles(db, v2.elements),
+          }
+        } else {
+          const v1 = importBoardArchive(req.body, { targetPageId: 'page:page' as never })
+          imported = {
+            content: { format: 'tldraw', records: v1.records, schema: draftroomSchema.serialize() },
+            assets: v1.assets,
+            warnings: v1.warnings,
+            files: referencedFiles(v1.records),
+          }
+        }
       } catch (e) {
         if (e instanceof ArchiveError)
           throw new ApiError(400, 'INVALID_ARCHIVE', clip(`This file can't be imported: ${e.message}.`, 300))
@@ -304,7 +349,7 @@ export async function registerHistory(app: FastifyInstance, ctx: FeatureContext)
       }
       const refs = new Map<string, { assetId: string; versionId: string }>()
       for (const a of imported.assets) refs.set(`${a.assetId}/${a.versionId}`, a)
-      for (const f of referencedFiles(imported.records)) refs.set(`${f.assetId}/${f.versionId}`, f)
+      for (const f of imported.files) refs.set(`${f.assetId}/${f.versionId}`, f)
       const viewable = await filesViewableBy(db, wid, user.id, [...refs.values()])
       // export-control: only files the importer may also download somewhere (else a limited viewer's
       // hand-made archive would link them to a board of their own and serve the originals there).
@@ -331,8 +376,7 @@ export async function registerHistory(app: FastifyInstance, ctx: FeatureContext)
           workspaceId: wid,
           projectId: query.projectId ?? null,
           title: query.title ?? 'Imported board',
-          records: imported.records,
-          schema: draftroomSchema.serialize(),
+          content: imported.content,
           files: allowed,
           via: 'import',
         },
@@ -377,6 +421,20 @@ export async function registerHistory(app: FastifyInstance, ctx: FeatureContext)
       })
     return result
   })
+}
+
+/** A tldraw snapshot's records (none for the Excalidraw engine's envelope). */
+function recordsOf(snap: BoardSnapshotJson): Record<string, unknown>[] {
+  if (lobbySnapshotOf(snap)) return []
+  const docs = (snap as RoomSnapshotJson).documents
+  return (Array.isArray(docs) ? docs : []).map((d) => d.state)
+}
+
+/** A live board as the content of a new one, in its engine's format. */
+function contentOf(snap: BoardSnapshotJson): BoardContent {
+  const lobby = lobbySnapshotOf(snap)
+  if (lobby) return { format: 'lobby-elements', elements: liveElements(lobby.elements), doc: lobby.doc }
+  return { format: 'tldraw', records: recordsOf(snap), schema: (snap as RoomSnapshotJson).schema }
 }
 
 function created(board: Parameters<typeof toBoardWithRole>[0], linked: number, dropped: number) {
