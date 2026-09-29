@@ -9,7 +9,7 @@ another owner's file or invents a shape another owner also implements.
 | Branch | `spike/excalidraw` |
 | B0 (candidate) | `45574c6` (spike A plus the A6/A16 fix round). Its re-verification was still running when C0 was written; the final B0 hash is confirmed later. C0 touches none of the fix round's files. |
 | Plan | revision 3.5 plus the lead's confirmation `00a3724`, merged into `spike/excalidraw` as `d344f69` (docs only; the `docs/PROGRESS.md` conflict kept both sides) |
-| C0 | the commit that adds this file (its hash is recorded by the next, docs-only commit) |
+| C0 | **`975b531`** (the contracts commit). Owners branch `spike/b-<name>` from the `spike/excalidraw` commit that records this hash (docs only on top of C0), rebased on B0 once B0 is confirmed. |
 | Engine | `@excalidraw/*` `0.18.0-1118751`, pinned by the catalog |
 | Gate | see "The C0 gate" at the end |
 
@@ -328,4 +328,10 @@ Run on the working tree that became C0, Windows 11 workstation, Node 24.19.0, pn
 "then grant" cases: IME text reached A's editor because A's grant arrived before the test's IME step. The
 spike A pages import nothing C0 changed (`host-lab.tsx` imports the engine host, input, lease, presence and
 tools modules, all untouched). Re-running that spec file alone on C0, 3 times: 1 case failed once
-("p5 on B, then grant", 19/20), then 15/15 and 15/15. (The same spec on the B0 candidate: recorded by the next commit.)
+("p5 on B, then grant", 19/20), then 15/15 and 15/15. The same spec file on the B0 candidate
+`45574c6` (a temporary worktree, SPIKE_WEB_PORT=7855), right after: 15/15 three times; then on C0 again
+under the same conditions: 15/15 three times (CPU at 23% at the end). The failing cases are the "then grant"
+variants, whose grant is a fixed timer (`GRANT_MS`: 300 ms, 1,500 ms for P5) racing the spec's own steps:
+under load the grant lands before the IME step. The "manual-grant" variants never failed. So this is a
+timing weakness of the fix round's spec under CPU load, not a C0 regression; reported to the fix round's
+verification, and the lead runs timing-sensitive specs in the quiet windows.
