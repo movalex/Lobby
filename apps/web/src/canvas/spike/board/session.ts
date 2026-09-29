@@ -19,7 +19,7 @@ import { UndoController } from '../../history/controller.ts'
 import { CanvasInput } from '../../input/CanvasInput.ts'
 import { LeaseClient } from '../../lease/client.ts'
 import type { EditNotice, EditState } from '../../lease/editorLease.ts'
-import { RenderOverrides } from '../../overrides.ts'
+import { installBoardOverrides, type RenderOverrides } from '../../overrides.ts'
 import { createCanvasPort, type LobbyCanvasPort } from '../../port-impl.ts'
 import { PresenceHub } from '../../presence/hub.ts'
 import { attachPresencePointer } from '../../presence/pointer.ts'
@@ -305,7 +305,11 @@ export class BoardSession {
   readonly attach = (wrapper: HTMLElement, api: ExcalidrawImperativeAPI): (() => void) => {
     this.api = api
     const offs: (() => void)[] = []
-    this.overrides = new RenderOverrides(api, { elements: () => api.getSceneElementsIncludingDeleted() })
+    // the one RenderOverrides, the hit guard (isBlocked, isHidden) and the engine seam for O5's features
+    // (image loader, file cards, exports, collapse) come from O5's installBoardOverrides (lead, M1/M2: the
+    // page created its own RenderOverrides, so nothing of O5's that needs the engine was ever installed)
+    const board = installBoardOverrides({ api, wrapper, registries: this.registries })
+    this.overrides = board.overrides
     this.undo = new UndoController({
       core: this.core,
       scene: this.sceneAdapter(),
@@ -423,7 +427,7 @@ export class BoardSession {
       for (const f of offs.reverse()) f()
       this.presence?.dispose()
       this.undo?.dispose()
-      this.overrides?.dispose()
+      board.dispose()
       this.port?.dispose()
       this.api = null
     }
