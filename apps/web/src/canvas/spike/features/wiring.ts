@@ -1,6 +1,7 @@
 // Registers every spike B feature on a board page and keeps the handles the test hooks use.
 import { exportBoardPng, exportBoardSvg, type SvgExportResult } from '../../export/svg.ts'
 import { attachBoardFiles, type BoardFiles, installBoardFiles } from '../../files/board.ts'
+import { installFileCardOpen } from '../../files/card.ts'
 import { boardEngineOf, onBoardEngine } from '../../overrides.ts'
 import type { CanvasPort } from '../../port.ts'
 import type { CanvasRegistries } from '../../registries.ts'
@@ -9,6 +10,7 @@ import { installCollapse, makeCollapseChevrons } from './mindmap.tsx'
 import { boardIdFromPath, FeatureRuntime } from './runtime.ts'
 import { makeTagsLayer } from './tags.tsx'
 import { makeSheet, makeTimer, makeToast, makeToolbar } from './ui.tsx'
+import { makeCardLayer, makeViewer, ViewerStore } from './viewer.tsx'
 import { makeVoteBadges, voteTool } from './votes.tsx'
 import { WorkshopStore } from './workshop.ts'
 
@@ -16,6 +18,7 @@ export interface FeatureSet {
   readonly rt: FeatureRuntime
   readonly workshop: WorkshopStore
   readonly comments: CommentsStore
+  readonly viewer: ViewerStore
   /** the board page's loader (once its engine is attached) */
   files(): BoardFiles | null
   exportSvg(opts?: { only?: readonly string[] }): Promise<SvgExportResult>
@@ -28,6 +31,7 @@ export function installFeatureSet(port: CanvasPort, registries: CanvasRegistries
   const rt = new FeatureRuntime(port, registries, boardIdFromPath(path))
   const workshop = new WorkshopStore(rt)
   const comments = new CommentsStore(rt)
+  const viewer = new ViewerStore()
   const undo: (() => void)[] = []
   let files: BoardFiles | null = null
 
@@ -39,7 +43,15 @@ export function installFeatureSet(port: CanvasPort, registries: CanvasRegistries
       files = installBoardFiles({ api: engine.api, boardId })
       const detach = attachBoardFiles(registries, files)
       const f = files
+      // a double-click on a file card opens the viewer (never Excalidraw's image cropping)
+      const unCards = installFileCardOpen({
+        wrapper: engine.wrapper,
+        api: engine.api,
+        isBlocked: (id) => registries.hidden.isHidden(id),
+        open: (facts, id) => viewer.open(facts, id),
+      })
       undo.push(() => {
+        unCards()
         detach()
         f.dispose()
       })
@@ -89,6 +101,23 @@ export function installFeatureSet(port: CanvasPort, registries: CanvasRegistries
   )
   undo.push(registries.overlays.register({ id: 'spike-toast', order: 90, component: makeToast(rt) }))
   undo.push(
+    registries.overlays.register({
+      id: 'spike-cards',
+      order: 10,
+      component: makeCardLayer(
+        (id) => registries.hidden.isHidden(id),
+        (fileId) => files?.loader.state(fileId),
+      ),
+    }),
+  )
+  undo.push(
+    registries.overlays.register({
+      id: 'spike-viewer',
+      order: 95,
+      component: makeViewer(viewer, () => rt.boardId),
+    }),
+  )
+  undo.push(
     registries.slots.register('toolbar', { id: 'spike-features', order: 50, component: makeToolbar(ui) }),
   )
   undo.push(registries.slots.register('sheet', { id: 'spike-sheet', order: 50, component: makeSheet(ui) }))
@@ -103,6 +132,7 @@ export function installFeatureSet(port: CanvasPort, registries: CanvasRegistries
     rt,
     workshop,
     comments,
+    viewer,
     files: () => files,
     exportSvg,
     exportPng,

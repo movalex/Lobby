@@ -4,6 +4,7 @@
 // the features' own paths (CanvasPort.transact, the engine core's setDoc, the api), never straight into
 // the engine, so specs test what the UI does. Return values are JSON-serializable.
 import { DEV_AUTH_ENABLED } from '../../../lib/identity.ts'
+import { placeFile, uploadToBoard, waitForProcessing } from '../../files/place.ts'
 import { overridesOf } from '../../overrides.ts'
 import { setCollapsed } from './mindmap.tsx'
 import { mindmapHidden, plusOnesOf, tagsOf } from './model.ts'
@@ -47,6 +48,26 @@ export interface LobbySpikeFeatures {
   exportPng(only?: string[]): Promise<{ dataUrl: string; bytes: number }>
   /** the loader's state (B7: fetches in flight, addFiles calls, …) */
   loader(): { states: Record<string, number>; stats: Record<string, number> } | null
+  /**
+   * B7: uploads bytes (base64) through `/api`, waits for the worker (up to `waitMs`), and places one
+   * `image` element holding only the version id and the card facts.
+   */
+  upload(
+    base64: string,
+    name: string,
+    mimeType: string,
+    opts?: { at?: { x: number; y: number }; waitMs?: number },
+  ): Promise<{
+    elementId: string
+    versionId: string
+    assetId: string
+    kind: string
+    status: string
+    pageCount: number | null
+  }>
+  /** the open file-card viewer (its version id), or null */
+  viewer(): string | null
+  closeViewer(): void
 }
 
 declare global {
@@ -120,6 +141,25 @@ export function installFeatureHooks(set: FeatureSet): () => void {
       for (let i = 0; i < u8.length; i += 0x8000) bin += String.fromCharCode(...u8.subarray(i, i + 0x8000))
       return { dataUrl: `data:image/png;base64,${btoa(bin)}`, bytes: u8.length }
     },
+    upload: async (base64, name, mimeType, opts = {}) => {
+      const bid = rt.boardId
+      if (!bid) throw new Error('no board')
+      const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0))
+      const meta = await uploadToBoard(bid, new Blob([bytes], { type: mimeType }), name)
+      const done = await waitForProcessing(bid, meta, { timeoutMs: opts.waitMs ?? 60_000 })
+      const elementId = placeFile(port, done, opts.at ?? { x: 400, y: 300 }, set.files()?.resolver)
+      set.files()?.sync()
+      return {
+        elementId,
+        versionId: done.versionId,
+        assetId: done.assetId,
+        kind: done.kind,
+        status: done.status,
+        pageCount: done.probe?.pageCount ?? null,
+      }
+    },
+    viewer: () => set.viewer.current?.facts.versionId ?? null,
+    closeViewer: () => set.viewer.close(),
     loader: () => {
       const f = set.files()
       return f ? { states: { ...f.loader.states() }, stats: { ...f.loader.stats } } : null
