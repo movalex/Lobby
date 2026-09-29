@@ -100,10 +100,32 @@ export async function seedElements(
   // frames first: the room refuses a `frameId` naming an element that does not exist yet (INVALID), and a
   // generated board lists each frame after its children (paint order), so a push boundary between them
   // made ≥ 60 INVALID ops and the abuse close (lead, M1/M2). `index` is explicit, so the order is kept.
+  const doomed = new Set(elements.filter((el) => el.isDeleted).map((el) => el.id))
   const live = [
     ...elements.filter((el) => el.type === 'frame'),
     ...elements.filter((el) => el.type !== 'frame'),
   ].map((el) => (el.isDeleted ? ({ ...el, isDeleted: false } as WireElement) : el))
+  // a chunk's tombstones are deleted right after it lands, so they never count as live items together:
+  // the room caps live items at MAX_ITEMS (20,000), which "10,000 notes + 10,000 deleted" would pass if
+  // every tombstone were live at once (perf-client's 20k + 10k deleted board: 45 ELEMENT_LIMIT rejects)
+  const kill = async (ids: readonly string[]) => {
+    for (let i = 0; i < ids.length; i += SEED_MAX_OPS) {
+      const ack = await send(
+        ids.slice(i, i + SEED_MAX_OPS).map((id) => ({
+          k: 'p' as const,
+          id,
+          pv: versions.get(id) as number,
+          g: { life: { isDeleted: true } },
+        })),
+      )
+      for (const r of ack.r)
+        if (!r.ok) {
+          ok--
+          rejected[`delete:${r.code}`] = (rejected[`delete:${r.code}`] ?? 0) + 1
+          if (rejectedIds.length < 20) rejectedIds.push(r.id)
+        }
+    }
+  }
   for (const chunk of chunkCreates(live)) {
     const ack = await send(chunk.map((el) => ({ k: 'c' as const, el })))
     for (const r of ack.r) {
@@ -115,23 +137,8 @@ export async function seedElements(
         if (rejectedIds.length < 20) rejectedIds.push(r.id)
       }
     }
-  }
-  const dead = elements.filter((el) => el.isDeleted && versions.has(el.id))
-  for (let i = 0; i < dead.length; i += SEED_MAX_OPS) {
-    const ack = await send(
-      dead.slice(i, i + SEED_MAX_OPS).map((el) => ({
-        k: 'p' as const,
-        id: el.id,
-        pv: versions.get(el.id) as number,
-        g: { life: { isDeleted: true } },
-      })),
-    )
-    for (const r of ack.r)
-      if (!r.ok) {
-        ok--
-        rejected[`delete:${r.code}`] = (rejected[`delete:${r.code}`] ?? 0) + 1
-        if (rejectedIds.length < 20) rejectedIds.push(r.id)
-      }
+    const dead = chunk.filter((el) => doomed.has(el.id) && versions.has(el.id)).map((el) => el.id)
+    if (dead.length) await kill(dead)
   }
   return { pushes, ops: elements.length, ok, rejected, rejectedIds, clock, ms: Date.now() - t0 }
 }
