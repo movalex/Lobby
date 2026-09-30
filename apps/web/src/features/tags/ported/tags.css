@@ -51,3 +51,10 @@
   transform: none;
   pointer-events: auto;
 }
+/* Placed above its anchor, it still sets only `top`: the tldraw bar's rule for the picker above
+   (../tags.css, `bottom: calc(100% + 10px)`) would pin its bottom too and collapse its height, so the
+   placement flipped between above and below on every render (React's update limit; found at the wave-3
+   integration, where 3a's toolbar leaves too little room below a selection near it). */
+.dr-tag-picker--floating[data-side="above"] {
+  bottom: auto;
+}

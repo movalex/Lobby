@@ -40,7 +40,9 @@ function useSyncSnapshot(store: WorkshopStore) {
 /**
  * FAC-01: "Following Bob" in Bob's colour while your view follows someone (an avatar click, the people
  * list), with a frame in that colour around the canvas and "Stop following" (RETRO-11: the one way out on
- * screen). After "Gather everyone" the workshops notice says it instead; a presentation shows its own.
+ * screen). After "Gather everyone" the workshops notice says whom you follow, so the label keeps only its
+ * "Stop following" (the tldraw page had its own button for it, which the notice points to; the wave-3
+ * integration). A presentation shows its own.
  */
 function FollowingLabel({ ctx }: { ctx: CanvasFeatureContext }) {
   const { canvas } = ctx
@@ -52,7 +54,7 @@ function FollowingLabel({ ctx }: { ctx: CanvasFeatureContext }) {
     const r = canvas.collaborators().find((x) => x.sid === sid)
     return r ? `${r.color}|${r.name}` : null
   }, [canvas])
-  if (!who || presenting || summoned) return null
+  if (!who || presenting) return null
   const [color = '', ...rest] = who.split('|')
   const name = rest.join('|')
   return (
@@ -64,12 +66,17 @@ function FollowingLabel({ ctx }: { ctx: CanvasFeatureContext }) {
         style={{ background: color }}
         role="status"
       >
-        Following <PersonName name={name} className="dr-people-following__name" />
+        {summoned ? null : (
+          <>
+            Following <PersonName name={name} className="dr-people-following__name" />
+          </>
+        )}
         <button
           type="button"
           className="dr-people-following__stop"
           data-testid="following-stop"
-          aria-label={`Stop following ${name}`}
+          // the name is its text, "Stop following", as tldraw's one button (RETRO-11); the label beside it
+          // names the person (the wave-3 integration)
           onClick={() => canvas.follow.stop()}
         >
           Stop following

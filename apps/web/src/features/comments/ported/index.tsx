@@ -21,7 +21,7 @@ import { CommentsOverlay } from './CommentsOverlay.tsx'
 import { CommentsPanel } from './CommentsPanel.tsx'
 import { CommentsTopBar } from './CommentsTopBar.tsx'
 import { COMMENT_TOOL_ID, controllerFor, focusThread, selectCommentTool } from './controller.ts'
-import { anchorAt } from './geometry.ts'
+import { anchorAt, anchorForKeyboard } from './geometry.ts'
 import { COMMENT_TOOL_KEYS, placeCommentFromKeyboard } from './keys.ts'
 import { mountCommentTool } from './tool.ts'
 
@@ -45,8 +45,31 @@ function takeDeepLinkedThread(): string | null {
 
 /** Picks the comment tool and opens a new thread on the selection (a no-op for people who cannot comment). */
 export function commentOnSelection(ctx: CanvasFeatureContext) {
+  const ids = [...ctx.canvas.selection]
+  const anchor = anchorForKeyboard(ctx.canvas)
   selectCommentTool(ctx)
-  if (ctx.canvas.tool() === COMMENT_TOOL_ID) placeCommentFromKeyboard(ctx)
+  if (ctx.canvas.tool() === COMMENT_TOOL_ID) {
+    placeCommentFromKeyboard(ctx)
+    return
+  }
+  // The tool can land a render later (the board page reports it through toolChanged): the composer opens
+  // once it is on (the wave-3 integration: 3a's context menu "Comment" found the tool still off).
+  let done = false
+  const finish = () => {
+    done = true
+    off()
+    clearTimeout(timer)
+  }
+  const off = ctx.canvas.on('toolChanged', (tool) => {
+    if (done || tool !== COMMENT_TOOL_ID) return
+    finish()
+    // the switch may have dropped the selection the comment is for: it is the selection when asked
+    if (ids.length && ctx.canvas.selection.length === 0) ctx.canvas.select(ids)
+    placeCommentFromKeyboard(ctx, anchor)
+  })
+  const timer = setTimeout(() => {
+    if (!done) finish()
+  }, 1000)
 }
 
 function mount(ctx: CanvasFeatureContext): () => void {

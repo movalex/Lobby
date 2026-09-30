@@ -3,7 +3,8 @@
 .lobby-board-canvas {
   position: absolute;
   inset: 0;
-  overflow: hidden;
+  /* clip, not hidden: nothing may scroll the canvas region (the wave-3 integration; see chrome.tsx) */
+  overflow: clip;
 }
 
 /* a layer that takes clicks lets its own top-level elements take them; the layer itself never does */

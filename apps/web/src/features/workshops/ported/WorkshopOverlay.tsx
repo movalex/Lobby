@@ -624,12 +624,13 @@ function FollowToast({ ctx, store }: { ctx: Ctx; store: WorkshopStore }) {
   const who = store.getSnapshot().summonedBy
   const following = useValue('dr-wk-following', () => followingNow(ctx.canvas), [ctx.canvas])
   if (!who || !following) return null
-  // One way out on screen: the follow feature's own "Stop following". This notice explains.
+  // One way out on screen: the people feature's "Stop following" on the "Following …" label at the top of the
+  // canvas (3c; the tldraw page's button sat at the top left). This notice explains.
   return (
     <div className="dr-wk-follow" role="status" data-testid="follow-toast">
       <span>
         Following <strong>{who.name}</strong>. Move, zoom or click to look around on your own, or use{' '}
-        <em>Stop following</em> at the top left.
+        <em>Stop following</em> at the top.
       </span>
     </div>
   )

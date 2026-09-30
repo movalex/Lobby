@@ -9,7 +9,7 @@
 //    alignment, label alignment, arrowheads, line kind), mapped to the engine's fields by
 //    ./style-vocabulary.ts. Every pick is one undo step and sets the style of the next shapes too.
 // People who cannot edit get no style panel.
-import { useId } from 'react'
+import { useEffect, useId, useState, useSyncExternalStore } from 'react'
 import type {
   CanvasElement,
   CanvasFeatureContext,
@@ -480,7 +480,62 @@ function ArrowheadSelect({
   )
 }
 
+/** Phone widths (A11Y2-06's breakpoint): the panel folds behind a Styles button. */
+const PHONE_QUERY = '(max-width: 599px)'
+
+function usePhoneWidth(): boolean {
+  return useSyncExternalStore(
+    (changed) => {
+      const m = window.matchMedia(PHONE_QUERY)
+      m.addEventListener('change', changed)
+      return () => m.removeEventListener('change', changed)
+    },
+    () => window.matchMedia(PHONE_QUERY).matches,
+    () => false,
+  )
+}
+
+/**
+ * The style panel host slot. On a phone the whole panel would cover about half of the board (and the
+ * notices and bars placed at the top), so it folds behind a Styles button there, as tldraw's phone toolbar
+ * did; it folds again when the selection changes (the wave-3 integration).
+ */
 export function StylePanel({ ctx }: { ctx: CanvasFeatureContext }) {
+  const { canvas } = ctx
+  const phone = usePhoneWidth()
+  const [open, setOpen] = useState(false)
+  const sel = useValue('cux-style-sel', () => canvas.selection.join(' '), [canvas])
+  useEffect(() => {
+    void sel
+    setOpen(false)
+  }, [sel])
+  const shown = useValue('cux-style-shown', () => !canvas.readOnly() && targetOf(canvas) !== null, [canvas])
+  if (!phone) return <StylePanelBody ctx={ctx} />
+  if (!shown) return null
+  return (
+    <div className="cux-style-phone">
+      <button
+        type="button"
+        className="cux-style-toggle"
+        data-testid="style.panel-toggle"
+        aria-expanded={open}
+        aria-label="Styles"
+        title="Styles"
+        onClick={() => setOpen((o) => !o)}
+      >
+        <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+          <circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" strokeWidth="2" />
+          <circle cx="9" cy="10" r="1.5" fill="currentColor" />
+          <circle cx="14" cy="8.5" r="1.5" fill="currentColor" />
+          <circle cx="15.5" cy="13" r="1.5" fill="currentColor" />
+        </svg>
+      </button>
+      {open ? <StylePanelBody ctx={ctx} /> : null}
+    </div>
+  )
+}
+
+function StylePanelBody({ ctx }: { ctx: CanvasFeatureContext }) {
   const { canvas } = ctx
   const readOnly = useValue('cux-readonly', () => canvas.readOnly(), [canvas])
   const t = useValue('cux-style-target', () => (readOnly ? null : targetOf(canvas)), [canvas, readOnly])

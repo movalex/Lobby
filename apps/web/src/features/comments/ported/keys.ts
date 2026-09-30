@@ -8,6 +8,7 @@
 //   selected frame and Ctrl/Cmd+Shift+↑ back out, so "C, Tab…, Enter" comments on an object without a
 //   mouse.
 
+import type { CommentAnchor } from '@draftroom/contracts'
 import {
   type CanvasElement,
   type CanvasFeatureContext,
@@ -87,10 +88,10 @@ export function stepLevel(canvas: LobbyCanvas, dir: 'in' | 'out'): boolean {
 }
 
 /** Enter in the comment tool (and the context menu's "Comment"): a new thread on the selection. */
-export function placeCommentFromKeyboard(ctx: CanvasFeatureContext) {
+export function placeCommentFromKeyboard(ctx: CanvasFeatureContext, on?: CommentAnchor) {
   const { store } = controllerFor(ctx)
   if (!store.canComment.get()) return
-  const anchor = anchorForKeyboard(ctx.canvas)
+  const anchor = on ?? anchorForKeyboard(ctx.canvas)
   store.startNewThread(anchor)
   // The selected object may be out of view (keyboard users step through the board).
   const point = anchorPoint(ctx.canvas, anchor)

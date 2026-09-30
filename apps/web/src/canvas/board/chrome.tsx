@@ -200,7 +200,9 @@ export function OverlayRoot({
     <div
       data-testid="lobby-overlay"
       data-focus-mode={focusMode || undefined}
-      style={{ position: 'absolute', inset: 0, pointerEvents: 'none', overflow: 'hidden', zIndex: 5 }}
+      // clip, not hidden: a hidden box can still be scrolled, and focusing or clicking something past its edge
+      // (a phone's toolbar, a panel) scrolled every layer sideways (found at the wave-3 integration)
+      style={{ position: 'absolute', inset: 0, pointerEvents: 'none', overflow: 'clip', zIndex: 5 }}
     >
       <div data-lobby-layer="scene" style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
         <TypingBadges canvas={ctx.canvas} />

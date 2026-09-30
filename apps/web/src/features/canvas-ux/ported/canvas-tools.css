@@ -30,6 +30,16 @@
   flex-wrap: wrap;
   max-width: 240px;
 }
+/* On a phone the toolbar is wider than the canvas: it scrolls sideways inside itself instead of overflowing
+   the canvas region (a focused or clicked tool off the edge scrolled the whole region, and everything placed
+   against it, sideways; found at the wave-3 integration). 3i's "Board actions" sheet holds every tool too. */
+@media (max-width: 599px) {
+  .cux-toolbar {
+    max-width: calc(100vw - 24px);
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+}
 .cux-tool {
   display: grid;
   place-items: center;
@@ -68,6 +78,34 @@
   color: var(--dr-ink);
   font: 12.5px / 1.3 var(--dr-font);
   pointer-events: auto;
+}
+.cux-style-phone {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  pointer-events: auto;
+}
+.cux-style-toggle {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border: 1px solid var(--dr-line);
+  border-radius: 12px;
+  background: var(--dr-surface);
+  box-shadow: var(--dr-shadow);
+  color: var(--dr-ink);
+  cursor: pointer;
+}
+.cux-style-toggle[aria-expanded="true"] {
+  background: var(--dr-navy);
+  color: var(--dr-on-navy);
+}
+.cux-style-toggle:focus-visible {
+  outline: 2px solid var(--dr-focus);
+  outline-offset: 1px;
 }
 .cux-style__section + .cux-style__section {
   margin-top: 6px;
@@ -181,6 +219,11 @@
 .cux-menu--sub {
   top: -6px;
   left: calc(100% - 4px);
+}
+/* near the canvas's right edge the submenu opens to the left of its item (Menu.tsx) */
+.cux-menu--sub[data-side="left"] {
+  left: auto;
+  right: calc(100% - 4px);
 }
 .cux-menu__list,
 .cux-menu__group {

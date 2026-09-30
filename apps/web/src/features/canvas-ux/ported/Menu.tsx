@@ -9,7 +9,14 @@
 //
 // Export control: while exporting is off for this person, the `export` group and the clipboard's copy
 // entries give way to one line saying so (./export-gate.ts); choosing it repeats the reason.
-import { type KeyboardEvent as ReactKeyboardEvent, type ReactNode, useEffect, useRef, useState } from 'react'
+import {
+  type KeyboardEvent as ReactKeyboardEvent,
+  type ReactNode,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from 'react'
 import type {
   CanvasFeatureContext,
   CommandSource,
@@ -202,6 +209,26 @@ function MenuItem({
   onDone(): void
 }) {
   const btn = useRef<HTMLButtonElement>(null)
+  const sub = useRef<HTMLDivElement>(null)
+  // A submenu opens to the right of its item, or to the left when that would leave the canvas, and moves
+  // up when it would go past the bottom (the wave-3 integration: a context menu near the canvas's right edge
+  // opened its submenus off screen). Measured from the item, so the choice never feeds back into itself.
+  const [side, setSide] = useState<'right' | 'left'>('right')
+  const [lift, setLift] = useState(0)
+  useLayoutEffect(() => {
+    const el = sub.current
+    const b = btn.current
+    if (!open || !el || !b) return
+    const region = el.closest<HTMLElement>('[data-lobby-board-canvas]')?.getBoundingClientRect()
+    const area = region ?? { left: 0, top: 0, right: window.innerWidth, bottom: window.innerHeight }
+    const r = b.getBoundingClientRect()
+    const w = el.offsetWidth
+    const h = el.offsetHeight
+    const nextSide = r.right - 4 + w > area.right && r.left + 4 - w >= area.left ? 'left' : 'right'
+    const nextLift = Math.max(0, Math.min(r.top - 6 - area.top, r.top - 6 + h - (area.bottom - 4)))
+    if (nextSide !== side) setSide(nextSide)
+    if (nextLift !== lift) setLift(nextLift)
+  }, [open, side, lift])
   const platform = currentPlatform()
   if (row.custom) {
     return (
@@ -237,7 +264,13 @@ function MenuItem({
           <ChevronRightIcon />
         </button>
         {open && (
-          <div className="cux-menu cux-menu--sub" data-testid={`${prefix}-sub.${row.id}-content`}>
+          <div
+            ref={sub}
+            className="cux-menu cux-menu--sub"
+            data-side={side}
+            style={lift ? { top: -6 - lift } : undefined}
+            data-testid={`${prefix}-sub.${row.id}-content`}
+          >
             <MenuList
               rows={row.submenu}
               prefix={prefix}
