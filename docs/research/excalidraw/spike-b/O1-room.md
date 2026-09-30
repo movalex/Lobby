@@ -361,3 +361,14 @@ run in-process in the C0 arrow tests s3, s4, s5).
 - **O4**: the store refuses a file with tldraw tables and no `lb_meta` (`BoardNeedsConversion`); rule-7
   helpers and `checkInvariants` are ready for step g. (Part 2: the room now calls `prepare` before the
   store opens, so the store never sees such a file from the room.)
+
+## The verifiers' fix round (part 3)
+
+V2's and V1's room findings on `37bdfa9` are fixed on `spike/b-room` (`486a08e`, `46fea60`, `2f34836`),
+with `apps/sync/test/element-room/verifier-fixes.test.ts` (14 tests, each failing on `37bdfa9`),
+`e2e/spike-b/tests/b3-l8-bind-escape.spec.ts` and `b6-cross-workspace.spec.ts`: the lease also denies a
+text's `bind`; a container never loses a live label to a `b.rm`; `hello` floods close RATE_LIMITED and
+welcomes are built a slice at a time; a failed COMMIT restores the lease table and answers no lease message
+of its batch (the "lease replies still sent" rule above is superseded); unrouted elbow arrows are routed;
+server writes keep leases and invariants; and the lows (guest locks, the guest cap by uid, `file` values,
+the lease cap, drag TTL). Per-defect results: `M3-fixes.md`.
