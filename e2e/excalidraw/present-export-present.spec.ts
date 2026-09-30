@@ -1,6 +1,7 @@
 // present-export on the Excalidraw board page (wave 3e; the port of ../tests/present-export.spec.ts
-// "present mode" and "integration": PRS-01): slides from frames, keys, skipped frames, hidden chrome and
-// cursors, Esc restores the board, live edits by a collaborator. Every write goes through the page's
+// "present mode" and "integration": PRS-01): slides from frames, keys, skipped frames, hidden chrome,
+// cursors and comment pins, Esc restores the board, live edits by a collaborator, and the event stream
+// surviving an api restart (comments reach both pages). Every write goes through the page's
 // canvas (the facade or the canvas transact), collaborators are second browser contexts, and server
 // state is checked through the sync server's test snapshot.
 //
@@ -8,9 +9,11 @@
 //  - the fullscreen element is the board's canvas region (`[data-lobby-board-canvas]`), not `.tl-container`;
 //  - "tools, menus, frame titles hidden" is the board page's focus mode (top bar, dock and host slots
 //    are not rendered); frame names are drawn by the engine outside the slide, under the surround;
-//  - the Tab order has no "Present to everyone" button until present-live (3c) plugs into the chrome;
-//  - the comment-pin half of the integration test waits for the ported comments (3c).
-import type { Page } from '@playwright/test'
+//  - the selection bar is 3a's (in a host slot, hidden with every slot but the live region); the Tab
+//    order has present-live's "Present to everyone" (3c);
+//  - comment pins are the ported comments' (3c); a thread's anchor is the element's api ref (`shape:<id>`).
+import type { Browser, Page } from '@playwright/test'
+import { signInContext } from '../tests/support/api.ts'
 import {
   canvasCall,
   clickItem,
@@ -30,7 +33,15 @@ import {
   zoomToFit,
 } from '../tests/support/canvas.ts'
 import { serverSnapshot } from '../tests/support/excalidraw.ts'
-import { focusedTestId, nextFrames, visibleCount } from '../tests/support/present-export.ts'
+import {
+  commentPin,
+  focusedTestId,
+  nextFrames,
+  postThread,
+  trackRequests,
+  visibleCount,
+} from '../tests/support/present-export.ts'
+import type { TestUser } from '../tests/support/users.ts'
 import { focusBoard } from './board-kit.ts'
 import {
   canUndo,
@@ -65,6 +76,22 @@ const DECK: DeckSpec = {
 }
 
 const html = (page: Page) => page.locator('html')
+
+/** The board page in a context of its own, with `beforeGoto` run before the first request. */
+async function openTracked(
+  browser: Browser,
+  board: string,
+  user: TestUser,
+  beforeGoto: (page: Page) => void,
+): Promise<{ page: Page; close(): Promise<void> }> {
+  const context = await browser.newContext()
+  const page = await context.newPage()
+  await signInContext(context, user.handle, user.name)
+  beforeGoto(page)
+  await page.goto(`/b/${board}`)
+  await waitForCanvas(page)
+  return { page, close: () => context.close() }
+}
 
 /** The host slots of the board's chrome: every slot but the live region, which stays in focus mode. */
 const CHROME_SLOTS = '[data-lobby-slot]:not([data-lobby-slot="liveRegion"])'
@@ -419,23 +446,45 @@ test.describe('present mode', () => {
 })
 
 test.describe('integration', () => {
-  test('presentation is clean: the top bar and the host slots are hidden while presenting and come back after Esc; a viewer presents with the shortcuts', async ({
+  test('presentation is clean: comment pins, the selection bar, the top bar and the host slots are hidden while presenting and come back after Esc; a viewer presents with the shortcuts', async ({
     canvasSession,
+    users,
+    board,
   }) => {
     const a = await canvasSession('alice')
     await seedDeck(a.page, DECK)
     await zoomToFit(a.page)
+    // An open (unresolved) thread in the corner of the note on slide 2, and that note selected (with the
+    // selection bar): the presentation then starts on slide 2, right where the pin is.
+    const thread = await postThread(
+      await users.api('alice'),
+      board,
+      `shape:${N.plan}`,
+      'Is this the right order?',
+      {
+        u: 0.85,
+        v: 0.15,
+      },
+    )
+    const pin = commentPin(a.page, thread)
+    await expect(pin).toBeVisible()
     await focusBoard(a.page)
     await clickItem(a.page, N.plan)
+    const selbar = a.page.getByTestId('selection-bar')
+    await expect.poll(() => visibleCount(selbar)).toBeGreaterThan(0)
     const ui = presentUi(a.page)
 
     await ui.button.click()
     await expect(ui.counter).toHaveText('2 / 2')
-    await expectSlideOnScreen(a.page, F.plan)
+    await expectSlideOnScreen(a.page, F.plan) // the pinned note is on this slide
+    await expect.poll(() => visibleCount(a.page.locator('[data-testid="comment-pin"]'))).toBe(0)
+    await expect.poll(() => visibleCount(selbar)).toBe(0)
     await expect(a.page.locator('.dr-topbar')).toBeHidden()
     await expect.poll(() => visibleCount(a.page.locator(CHROME_SLOTS))).toBe(0)
     await a.page.keyboard.press('Escape')
     await expect(ui.overlay).toHaveCount(0)
+    await expect(pin).toBeVisible()
+    await expect.poll(() => visibleCount(selbar)).toBeGreaterThan(0)
     await expect(a.page.locator('.dr-topbar')).toBeVisible()
 
     // A viewer (read-only canvas) presents too: the shortcuts work on a read-only canvas.
@@ -454,5 +503,75 @@ test.describe('integration', () => {
     await expect(vu.counter).toHaveText('1 / 2')
     await vu.exit.click()
     await expect(vu.overlay).toHaveCount(0)
+  })
+
+  test('event stream survives an API restart: after a SIGKILL of the api, comments reach both pages without a reload and each page keeps exactly one stream', async ({
+    browser,
+    board,
+    users,
+    stack,
+  }) => {
+    test.setTimeout(180_000)
+    // Regression (the validation phase, tldraw page): an api that died mid-stream left the page's
+    // EventSource attached to a dead response. The same-origin proxy aborts such responses and the
+    // client's watchdog (features/events.ts) expects the api's data pings; the Excalidraw page shares both,
+    // and its comment pins are the ported comments' (3c).
+    const NOTE = 'pe-events-note'
+    const eventsPath = `/api/boards/${board}/events`
+    const alice = await users.get('alice')
+    const bob = await users.grant(board, 'bob', 'editor')
+    const streams: Record<string, ReturnType<typeof trackRequests>> = {}
+    const open = (who: TestUser) =>
+      openTracked(browser, board, who, (page) => {
+        streams[who.handle] = trackRequests(page, (u) => u.pathname === eventsPath)
+      })
+    const a = await open(alice)
+    const b = await open(bob)
+    try {
+      const pending = () => [streams.alice?.pending(), streams.bob?.pending()]
+      await expect.poll(pending).toEqual([1, 1])
+      await seedDeck(a.page, { notes: [{ id: NOTE, x: 200, y: 200, text: 'Comment on me' }] })
+      await expectItems(b.page, [NOTE])
+      await zoomToFit(a.page)
+      await zoomToFit(b.page)
+      // Marks the documents: still there at the end = no reload happened.
+      for (const s of [a, b]) await s.page.evaluate(() => Object.assign(window, { __peNoReload: true }))
+      const bobApi = await users.api('bob')
+      const aliceApi = await users.api('alice')
+      const ref = `shape:${NOTE}`
+
+      const t0 = await postThread(bobApi, board, ref, 'Before the restart')
+      await expect(commentPin(a.page, t0)).toBeVisible()
+
+      await stack.api.restart() // SIGKILL (TerminateProcess on Windows), then a fresh process
+      // Posted as soon as the api is back: A shows it from the resumed stream or from the refetch that
+      // follows every reconnect, whichever comes first.
+      const t1 = await postThread(bobApi, board, ref, 'Right after the restart')
+
+      // Each page notices the dead stream and opens a new one (a 1 s..30 s backoff).
+      await expect
+        .poll(() => [streams.alice?.total() ?? 0, streams.bob?.total() ?? 0].every((n) => n > 1), {
+          timeout: 30_000,
+          message: 'each page opened a new /events stream after the api restart',
+        })
+        .toBe(true)
+      await expect(commentPin(a.page, t1)).toBeVisible({ timeout: 30_000 })
+      await expect(commentPin(b.page, t1)).toBeVisible({ timeout: 30_000 })
+      // ...and holds exactly one open stream again.
+      await expect.poll(pending, { timeout: 30_000 }).toEqual([1, 1])
+
+      // Live, event-driven, both directions.
+      const t2 = await postThread(bobApi, board, ref, 'Live after the reconnect, from Bob')
+      await expect(commentPin(a.page, t2)).toBeVisible()
+      const t3 = await postThread(aliceApi, board, ref, 'Live after the reconnect, from Alice')
+      await expect(commentPin(b.page, t3)).toBeVisible()
+      expect(pending()).toEqual([1, 1])
+      for (const s of [a, b])
+        expect(
+          await s.page.evaluate(() => (window as unknown as { __peNoReload?: boolean }).__peNoReload),
+        ).toBe(true)
+    } finally {
+      await Promise.all([a.close(), b.close()])
+    }
   })
 })

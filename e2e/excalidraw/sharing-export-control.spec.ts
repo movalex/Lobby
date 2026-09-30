@@ -4,11 +4,13 @@
 // export, copy and download files" in the Share dialog; the viewer's entries follow live (no reload),
 // and the api refuses the viewer's board archive and originals with 403 EXPORT_DISABLED.
 //
-// Not here (other owners' features, ported with them): file-card downloads (3g), Ctrl/Cmd+C and the
-// context menu's Copy / Copy as / Export as (3a), the PDF viewer and video playback (3g).
+// The context menu's Export as (present-export's entry in 3a's menu) follows the policy too. Not here (other
+// owners' features, ported with them): file-card downloads (3g), Ctrl/Cmd+C and the context menu's Copy
+// and its export-off line (3a: canvas-ux-menus.spec.ts), the PDF viewer and video playback (3g).
 import type { Locator, Page } from '@playwright/test'
 import { clickItem, expect, test } from '../tests/support/canvas.ts'
 import { WEB_URL } from '../tests/support/ports.ts'
+import { downloadFrom, readPng } from '../tests/support/present-export.ts'
 import { expectItems, placeUploadedImage, seedDeck } from './present-kit.ts'
 
 const OFF_TEXT = 'The board owner turned off exporting for viewers.'
@@ -23,12 +25,25 @@ async function openShare(page: Page): Promise<Locator> {
   return section
 }
 
+/** Right-clicks `id` (it is selected and the context menu opens). */
+async function contextMenuOn(page: Page, id: string): Promise<Locator> {
+  await clickItem(page, id, { button: 'right' })
+  const menu = page.getByTestId('context-menu')
+  await expect(menu).toBeVisible()
+  return menu
+}
+
+async function closeMenu(page: Page) {
+  await page.keyboard.press('Escape')
+  await expect(page.getByTestId('context-menu')).toHaveCount(0)
+}
+
 async function closeShare(page: Page) {
   await page.keyboard.press('Escape')
   await expect(page.getByTestId('share-dialog')).toHaveCount(0)
 }
 
-test('export control: the owner turns it off in Share and the viewer loses Export, the PDF shortcut and Copy as PNG live; originals and the archive are refused (403)', async ({
+test('export control: the owner turns it off in Share and the viewer loses Export, the PDF shortcut, Copy as PNG and the context menu’s Export as live; originals and the archive are refused (403)', async ({
   canvasSession,
   users,
   board,
@@ -65,6 +80,10 @@ test('export control: the owner turns it off in Share and the viewer loses Expor
     await clickItem(b.page, 'ec-note')
     await b.page.keyboard.press('Control+Shift+C')
     await expect(b.page.getByTestId('copy-png-toast')).toBeVisible()
+    await contextMenuOn(b.page, imageId)
+    await expect(b.page.getByTestId('context-menu-sub.export-as-button')).toBeVisible()
+    await expect(b.page.getByTestId('context-menu.dr-export-off')).toHaveCount(0)
+    await closeMenu(b.page)
   })
 
   await test.step('an open Export dialog closes the moment the owner turns exporting off', async () => {
@@ -102,6 +121,11 @@ test('export control: the owner turns it off in Share and the viewer loses Expor
     await expect(b.page.getByTestId('export-off-notice')).toHaveText(OFF_TEXT)
     await b.page.waitForTimeout(500)
     expect(await b.page.evaluate(() => navigator.clipboard.readText())).toBe('clipboard sentinel')
+    // The context menu: no Export as, the one line saying why instead.
+    await contextMenuOn(b.page, imageId)
+    await expect(b.page.getByTestId('context-menu.dr-export-off')).toHaveText(OFF_TEXT.replace(/\.$/, ''))
+    await expect(b.page.getByTestId('context-menu-sub.export-as-button')).toHaveCount(0)
+    await closeMenu(b.page)
   })
 
   await test.step('the api refuses the viewer: the original and the archive', async () => {
@@ -138,5 +162,13 @@ test('export control: the owner turns it off in Share and the viewer loses Expor
     expect((await b.page.request.get(href)).status()).toBe(200)
     await b.page.getByTestId('export-button').click()
     await expect(b.page.getByTestId('export-dialog')).toBeVisible()
+    await b.page.keyboard.press('Escape')
+    await expect(b.page.getByTestId('export-dialog')).toHaveCount(0)
+    // …and the context menu's Export as, which draws the image from its original (a 2× PNG of it).
+    await contextMenuOn(b.page, imageId)
+    await b.page.getByTestId('context-menu-sub.export-as-button').click()
+    const png = await downloadFrom(b.page, () => b.page.getByTestId('context-menu.export-as-png').click())
+    expect(png.name).toMatch(/ - selection\.png$/)
+    expect(readPng(png.bytes)).toMatchObject({ width: 640, height: 360 })
   })
 })
