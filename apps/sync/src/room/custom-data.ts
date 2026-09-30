@@ -17,6 +17,7 @@ import {
   type FileValue,
   type LobbyServer,
   lobbyKeySpec,
+  lobbyValueProblem,
   plusOneUid,
   tagKeyOf,
 } from '@draftroom/canvas-schema/custom-data'
@@ -74,6 +75,10 @@ function checkKey(
 ): Verdict<unknown> {
   const spec = lobbyKeySpec(key)
   if (!spec) return bad('INVALID')
+  // the value's schema first (a patch's `c` was checked at parse time, a create's was not): a malformed
+  // `file` on an image create read `versionId` of a string and answered UNAVAILABLE, retryable and
+  // outside the abuse count (V2)
+  if (value !== null && lobbyValueProblem(key, value)) return bad('INVALID')
   const w = ctx.writer
   switch (spec.class) {
     case 'create-only': {

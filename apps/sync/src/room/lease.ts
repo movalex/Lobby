@@ -97,6 +97,40 @@ export class LeaseTable {
     return out
   }
 
+  /**
+   * The table as it is now, for `restore` (a drain batch takes one before its lease messages: a failed
+   * COMMIT puts the table back, so a release or a grant of that batch never takes effect, §2.4.3
+   * "nothing in memory changed").
+   */
+  snapshot(): { readonly leases: readonly Lease[]; readonly seq: number } {
+    return { leases: [...this.leases.values()].map((l) => ({ ...l })), seq: this.seq }
+  }
+
+  restore(s: { readonly leases: readonly Lease[]; readonly seq: number }): void {
+    this.leases.clear()
+    for (const l of s.leases) this.leases.set(l.id, { ...l })
+    // grant numbers are never reused: a postponed grant of the failed batch stays stale
+    this.seq = Math.max(this.seq, s.seq)
+  }
+
+  /**
+   * Keeps at most `max` live leases of `sid` (the per-session cap): the oldest grants other than `keep`
+   * are released. Returns the ids released.
+   */
+  trimHeldBy(sid: string, keep: string, max: number, now: number): string[] {
+    const mine = [...this.leases.values()]
+      .filter((l) => l.holder.sid === sid && l.expiresAt > now)
+      .sort((a, b) => a.seq - b.seq)
+    const out: string[] = []
+    for (const l of mine) {
+      if (mine.length - out.length <= max) break
+      if (l.id === keep) continue
+      this.leases.delete(l.id)
+      out.push(l.id)
+    }
+    return out
+  }
+
   /** Every live lease (welcome.leases). */
   live(now: number): { id: string; holder: LeaseHolderInfo }[] {
     const out: { id: string; holder: LeaseHolderInfo }[] = []
