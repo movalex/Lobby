@@ -2,8 +2,7 @@
 // page navigation, the page selection, zoom steps and the row the placed pages form. No editor, no
 // DOM: unit-tested in pdf-pages.test.ts.
 import type { FileCardShape } from '@draftroom/canvas-schema'
-import { pageRenderings } from '../assets/asset-store.ts'
-import type { AssetVersionMeta, DerivativeRecord } from '../assets/contract.ts'
+import { type AssetVersionMeta, type DerivativeRecord, pageRenderings } from '../assets/contract.ts'
 import type { Block, Size } from '../assets/drop-layout.ts'
 
 export interface PreviewPage {

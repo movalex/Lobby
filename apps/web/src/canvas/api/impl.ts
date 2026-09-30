@@ -145,6 +145,9 @@ const LANDED_PARTS: ReadonlySet<string> = new Set([
   'follow.start',
   'follow.stop',
   'on:followChanged',
+  // 3g: parts/files.ts
+  'files.urlOf',
+  'files.insert',
 ])
 
 /** 2C's members composed from port members alone (the rest of 2C's are the board page's). */

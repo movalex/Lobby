@@ -1,0 +1,73 @@
+/* OWNER: 3g. The media feature's faces on the Excalidraw board page (./CardLayer.tsx). The card's inner
+   parts keep today's classes (styles.css "file card", file-card.css); only the root differs: on tldraw it
+   is the shape's HTML container, here a box in the overlay's scene layer, in scene units, scaled with the
+   zoom. The layer takes no pointer events; the card's buttons, links and video do (.dr-interactive). */
+
+.lobby-fc.dr-fc {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  overflow: hidden;
+  border: 1px solid var(--dr-line, #dcd8cc);
+  border-radius: 10px;
+  background: var(--dr-surface, #fff);
+  color: var(--dr-ink, #1b2330);
+  font-family: var(--dr-font);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 6%);
+  pointer-events: none;
+}
+.lobby-fc .dr-interactive {
+  pointer-events: auto;
+}
+
+/* F8: an image or placed page the canvas cannot show yet, with its file name; F5: one it never will. */
+.lobby-pending {
+  container-type: size;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2cqh;
+  box-sizing: border-box;
+  overflow: hidden;
+  background-color: #eeebe3;
+  background-image: linear-gradient(105deg, transparent 35%, rgb(255 255 255 / 60%) 50%, transparent 65%);
+  background-repeat: no-repeat;
+  background-size: 250% 100%;
+  box-shadow: inset 0 0 0 1px #dcd8cc;
+  color: #4a5566;
+  font-family: var(--dr-font, system-ui, sans-serif);
+  pointer-events: none;
+  animation: lobby-pending-shimmer 1.8s ease-in-out infinite;
+}
+.lobby-pending > * {
+  max-width: 88%;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: min(9cqw, 14cqh, 16px);
+  line-height: 1.3;
+}
+.lobby-pending strong {
+  color: #1b2330;
+  font-weight: 650;
+}
+.lobby-pending[data-state="unavailable"] {
+  background-image: none;
+  background-color: #f3f1ea;
+  animation: none;
+}
+@keyframes lobby-pending-shimmer {
+  from {
+    background-position: 110% 0;
+  }
+  to {
+    background-position: -110% 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .lobby-pending {
+    animation: none;
+  }
+}

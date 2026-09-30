@@ -154,9 +154,9 @@ The board page (2C) builds the canvas with `createLobbyCanvas({port, registries,
 | `export.png` | 3e | stub |
 | `export.canvas` | 3e | stub |
 | `export.copy` | 3e | stub |
-| `files.urlOf` | 3g | stub |
+| `files.urlOf` | 3g | part (real) |
 | `files.status` | 2C | board page (real with the board handles) |
-| `files.insert` | 3g | stub |
+| `files.insert` | 3g | part (real) |
 | `settings.get` | 2C | board page (real with the board handles) |
 | `settings.set` | 2C | board page (real with the board handles) |
 | `tx.reorder` | 2C | composed (real) |
