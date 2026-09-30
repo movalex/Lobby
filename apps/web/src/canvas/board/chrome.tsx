@@ -304,15 +304,20 @@ function Cursors({ canvas, registries }: { canvas: LobbyCanvas; registries: Feat
 
 // ---- host slots ------------------------------------------------------------------------------------------------
 
-/** Where each host slot sits over the canvas (the tldraw component of the same job sat there). */
+/**
+ * Where each host slot sits over the canvas (the tldraw component of the same job sat there). The board
+ * menu's and the navigation panel's corners are in board.css (`.lobby-slot--mainMenu`, `--navigation`):
+ * narrow layouts move them, as the tldraw page's layout did (R13: the board menu beside the dock's fold
+ * button on a phone, not under it; the navigation panel above a toolbar that is as wide as the canvas).
+ */
 const SLOT_STYLE: Record<HostSlotName, CSSProperties> = {
   toolbar: { position: 'absolute', left: '50%', bottom: 12, transform: 'translateX(-50%)', zIndex: 20 },
   stylePanel: { position: 'absolute', right: 12, top: 12, zIndex: 20 },
   contextMenu: { position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 40 },
-  mainMenu: { position: 'absolute', left: 12, top: 12, zIndex: 20 },
+  mainMenu: { position: 'absolute', zIndex: 20 },
   shortcutsDialog: { position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 45 },
   selectionBar: { position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 21 },
-  navigation: { position: 'absolute', left: 12, bottom: 12, zIndex: 20 },
+  navigation: { position: 'absolute', zIndex: 20 },
   phoneSheet: { position: 'absolute', left: 0, right: 0, bottom: 0, zIndex: 30 },
   liveRegion: { position: 'absolute', width: 1, height: 1, overflow: 'hidden', clipPath: 'inset(50%)' },
 }
@@ -339,7 +344,13 @@ export function HostSlots({ ctx, focusMode }: { ctx: CanvasFeatureContext; focus
         // the live region stays in focus mode (a screen reader still hears the presentation)
         if (focusMode && name !== 'liveRegion') return null
         return (
-          <div key={name} data-lobby-slot={name} data-feature={entry.featureId} style={SLOT_STYLE[name]}>
+          <div
+            key={name}
+            className={`lobby-slot lobby-slot--${name}`}
+            data-lobby-slot={name}
+            data-feature={entry.featureId}
+            style={SLOT_STYLE[name]}
+          >
             <entry.component ctx={ctx} />
           </div>
         )

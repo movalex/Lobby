@@ -7,6 +7,33 @@
   overflow: clip;
 }
 
+/* The board menu (top left) and the navigation panel (bottom left) host slots (chrome.tsx SLOT_STYLE has the
+   rest of their style). R13 / A11Y-06: on a phone the dock folds behind one button in the board's top-left
+   corner (styles.css, 600 px), and the board menu moves right of it instead of sitting under it (the tldraw
+   page moved its page menu the same way). Below 800 px the toolbar (3a's, 568 px for an editor, as wide as the
+   canvas on a phone) reached the navigation panel's corner and covered its first tools: the panel sits
+   above the toolbar's row there. */
+.lobby-slot--mainMenu {
+  left: 12px;
+  top: 12px;
+}
+.lobby-slot--navigation {
+  left: 12px;
+  bottom: 12px;
+}
+@media (max-width: 800px) {
+  .lobby-slot--navigation {
+    /* the toolbar's row: 12 px from the bottom, 48 px high, then 8 px apart */
+    bottom: 68px;
+  }
+}
+@media (max-width: 600px) {
+  .lobby-slot--mainMenu {
+    /* the fold button: 4 px from the corner, 40 px wide, then 8 px apart */
+    left: 52px;
+  }
+}
+
 /* a layer that takes clicks lets its own top-level elements take them; the layer itself never does */
 .lobby-overlay-layer[data-pointer="auto"] > * {
   pointer-events: auto;
@@ -21,15 +48,20 @@
   white-space: nowrap;
 }
 
+/* at most 120 px, the end cut with an ellipsis (tldraw's .tl-nametag): a guest's label is shortened in front
+   of its "(guest)" marker by the api (contracts guestLabelName), so the cut never reaches the marker */
 .lobby-cursor__name {
   position: absolute;
   left: 12px;
   top: 12px;
+  max-width: 120px;
   padding: 0 5px;
   border-radius: 3px;
   color: #fff;
   font: 11px / 1.5 var(--dr-font, system-ui, sans-serif);
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .lobby-lease-status {
