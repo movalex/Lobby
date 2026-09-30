@@ -7,7 +7,10 @@
  *    queues of the same user and board whose lock is free (a closed tab, D6), so their edits are replayed,
  *    not lost, and two tabs never replay the same queue;
  *  - guests get no persistence (the board page gives them the memory store), and `purge()` removes every
- *    queue of the board for this user (sign-out, a FORBIDDEN close, a revocation).
+ *    queue of the board for this user (sign-out, a FORBIDDEN close, a revocation);
+ *  - a `save` or `clear` starts its transaction in the call itself once the database is open (and asks
+ *    it to commit at once), so a write the core starts right before a reload or in `pagehide` is not
+ *    left waiting for a later task (spike B part 3: the offline window); it resolves once committed.
  *
  * Browser only (not node-safe).
  */
@@ -45,7 +48,13 @@ function tx<T>(
   return new Promise((resolve, reject) => {
     const t = db.transaction(STORE, mode)
     const r = fn(t.objectStore(STORE))
-    r.onsuccess = () => resolve(r.result)
+    if (mode === 'readwrite') {
+      // resolved when durable (committed), not when the request succeeds
+      t.oncomplete = () => resolve(r.result)
+      t.onabort = () => reject(t.error ?? new Error('offline queue write aborted'))
+      // no further request comes: commit now rather than when this task ends
+      ;(t as IDBTransaction & { commit?: () => void }).commit?.()
+    } else r.onsuccess = () => resolve(r.result)
     r.onerror = () => reject(r.error)
   })
 }
@@ -89,6 +98,16 @@ export function createIdbOfflineStore(o: { boardId: string; uid: string; tab: st
     })
   })
   const dbp = openDb()
+  // the open database, once there is one: writes start in the call (see the header)
+  let opened: IDBDatabase | null = null
+  void dbp.then(
+    (db) => {
+      opened = db
+    },
+    () => {},
+  )
+  const write = <T>(fn: (s: IDBObjectStore) => IDBRequest<T>): Promise<T> =>
+    opened ? tx(opened, 'readwrite', fn) : dbp.then((db) => tx(db, 'readwrite', fn))
 
   const adoptOthers = async (db: IDBDatabase): Promise<OfflineEntry[]> => {
     const all = (await tx(db, 'readonly', (s) => s.getAll())) as QueueRecord[]
@@ -141,8 +160,7 @@ export function createIdbOfflineStore(o: { boardId: string; uid: string; tab: st
       return entries
     },
     async save(entries) {
-      const db = await dbp
-      await tx(db, 'readwrite', (s) =>
+      await write((s) =>
         s.put({
           key,
           boardId: o.boardId,
@@ -154,8 +172,7 @@ export function createIdbOfflineStore(o: { boardId: string; uid: string; tab: st
       )
     },
     async clear() {
-      const db = await dbp
-      await tx(db, 'readwrite', (s) => s.delete(key))
+      await write((s) => s.delete(key))
     },
     async purge() {
       const db = await dbp

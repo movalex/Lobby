@@ -2,6 +2,8 @@
 
 Owner O2 (the client half; D3 and D4 are O1's server half). Plan: `docs/EXCALIDRAW-MIGRATION.md` §8.3 B4, §2.5.6 (offline queue), §2.5.7 ("Saved" exactly). Spec: `e2e/spike-b/tests/b4-client-durability.spec.ts`. Code: `apps/web/src/canvas/sync/core/**` (`saved.ts`, the offline queue in `engine.ts`), `sync/adapter/offline-idb.ts` (IndexedDB per tab, Web Locks adoption), the board page's indicator (`canvas/spike/board/SpikeBoardPage.tsx`, `save-state`).
 
+**Status (spike B part 3): D7 added (edits and a reload in the same task, online and offline: wave 2's offline-queue window); the queue is written at once, `persistNow()` on pagehide, adopted copies are installed at once, and queued edits behind a stale (cached) reset snapshot wait for its catch-up; owner's 3 runs at `319d532`: D1-D7 pass each time. See `O2-part3.md`.** The part 2 record follows.
+
 **Status (spike B part 2): the M1/M2 integration's D1 stall is explained and fixed (`18254dd`); owner's
 3-run pass on `spike/b-engine` after merging the integrated branch: see "Owner's 3-run pass" below.** D1–D6 are
 not timing-gated (§8.6.4); the lead's final pass still reruns them on the merged tree.
