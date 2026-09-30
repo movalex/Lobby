@@ -302,7 +302,7 @@ export function Toolbar({ ctx }: { ctx: CanvasFeatureContext }) {
           <StylePanelBody ctx={ctx} />
         </div>
       )}
-      {plan.quickOnToolbar && <QuickActions ctx={ctx} phone={phone} />}
+      {plan.quickOnToolbar && <QuickActions ctx={ctx} phone={phone} indent={plan.quickIndent} />}
       <div className="cux-toolbar-row">
         <div
           ref={barRef}

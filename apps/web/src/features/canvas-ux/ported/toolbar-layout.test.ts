@@ -80,6 +80,28 @@ describe('planToolbar', () => {
     expect(390 / 2 + width / 2 + p.shift).toBeLessThanOrEqual(390 - 12)
   })
 
+  it('the quick-actions strip starts right of a navigation slot lifted into its band (the wave-3b integration)', () => {
+    const at = (width: number, quickLeft: number) =>
+      planToolbar({
+        ordered: ORDERED,
+        mainCount: MAIN.length,
+        lastUsed: null,
+        room: { width, left: 12, right: 12, quickLeft },
+        editor: true,
+        styles: true,
+      })
+    for (const width of [390, 560, 700]) {
+      const p = at(width, 58)
+      const shownWidth = (p.shown.length + (p.more.length ? 1 : 0)) * 40 + 8 + (p.stylesButton ? 46 : 0)
+      // the strip's left: the bar's left, its own 8 px margin and the indent
+      const stripLeft = width / 2 - shownWidth / 2 + p.shift + 8 + p.quickIndent
+      expect(stripLeft).toBeGreaterThanOrEqual(58)
+    }
+    // no slot in the band: the strip keeps its place; a wide canvas has no strip at all
+    expect(at(560, 0).quickIndent).toBe(0)
+    expect(at(1280, 58).quickIndent).toBe(0)
+  })
+
   it('a tool picked from More on a phone takes the last slot', () => {
     const p = plan(390, 'frame', 58)
     expect(p.shown).toEqual([...MAIN.slice(0, 4), 'frame'])

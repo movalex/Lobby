@@ -20,6 +20,7 @@ import { AlignIcons } from '../icons.tsx'
 import { CMD, runCommand } from './commands.ts'
 import { uxState } from './state.ts'
 import { moveInToolbar } from './toolbar-keys.ts'
+import { QUICK_MARGIN_PX } from './toolbar-layout.ts'
 
 function Svg({ children }: { children: ReactNode }) {
   return (
@@ -248,10 +249,13 @@ function ActionButton(props: {
 export function QuickActions({
   ctx,
   phone = false,
+  indent = 0,
 }: {
   ctx: CanvasFeatureContext
   /** a phone-width canvas (the actions menu adds zoom to 100%) */
   phone?: boolean
+  /** px the strip moves right of its place to clear the navigation slot (toolbar-layout.ts quickIndent) */
+  indent?: number
 }) {
   const { canvas } = ctx
   const state = uxState(canvas)
@@ -291,7 +295,10 @@ export function QuickActions({
   const Comment = comment?.toolbar?.icon
   const items = actionsMenuItems({ phone, ungroup: enabled.ungroupable === true })
   return (
-    <div className="cux-quick cux-quick--toolbar">
+    <div
+      className="cux-quick cux-quick--toolbar"
+      style={indent > 0 ? { marginLeft: QUICK_MARGIN_PX + Math.round(indent) } : undefined}
+    >
       <div
         ref={barRef}
         className="cux-quick__bar"

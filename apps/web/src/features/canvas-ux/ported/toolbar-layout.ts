@@ -30,6 +30,13 @@ export const BAR_CHROME_PX = 8
 export const STYLES_BUTTON_PX = 46
 /** The margin kept from the canvas's edges and from the navigation slot. */
 export const EDGE_PX = 12
+/** The quick-actions strip's own left margin in the toolbar (canvas-tools.css `.cux-quick--toolbar`). */
+export const QUICK_MARGIN_PX = 8
+/**
+ * The band above the tools the quick-actions strip takes, in px from the canvas's bottom: the toolbar's row
+ * (12 px from the bottom, 48 px high), then the strip (6 px apart, 40 px high), with a little room.
+ */
+export const QUICK_BAND_PX: readonly [number, number] = [60, 116]
 
 /** tldraw's `modulate` with clamping: `value` mapped from [a0, a1] onto [b0, b1]. Pure. */
 export function modulate(value: number, [a0, a1]: [number, number], [b0, b1]: [number, number]): number {
@@ -53,6 +60,12 @@ export interface ToolbarRoom {
   /** px kept free at the left: the navigation slot's right edge plus a margin, or the edge margin */
   readonly left: number
   readonly right: number
+  /**
+   * px from the canvas's left the quick-actions strip keeps free: the navigation slot's right edge plus a
+   * margin where the slot reaches into the strip's band (the board page lifts it above the tools' row on a
+   * narrow canvas, 2C's board.css), else 0. The wave-3b integration: the two collided at 390 to 800 px.
+   */
+  readonly quickLeft?: number
 }
 
 export interface ToolbarPlan<T> {
@@ -66,6 +79,8 @@ export interface ToolbarPlan<T> {
   readonly stylesButton: boolean
   /** px the bar moves right from the canvas's centre so that it clears the navigation slot */
   readonly shift: number
+  /** px the quick-actions strip moves right of its place (the bar's left) to clear the navigation slot */
+  readonly quickIndent: number
 }
 
 /**
@@ -108,7 +123,10 @@ export function planToolbar<T>(opts: {
   const centredLeft = room.width / 2 - barWidth / 2
   const maxShift = Math.max(0, room.width - room.right - barWidth - centredLeft)
   const shift = Math.min(maxShift, Math.max(0, room.left - centredLeft))
-  return { shown, more, quickOnToolbar, stylesButton, shift }
+  const quickIndent = quickOnToolbar
+    ? Math.max(0, (room.quickLeft ?? 0) - (centredLeft + shift) - QUICK_MARGIN_PX)
+    : 0
+  return { shown, more, quickOnToolbar, stylesButton, shift, quickIndent }
 }
 
 /**
@@ -122,6 +140,7 @@ export function useCanvasRoom(canvas: LobbyCanvas): ToolbarRoom {
     width: Math.round(canvas.container()?.getBoundingClientRect().width ?? 0),
     left: EDGE_PX,
     right: EDGE_PX,
+    quickLeft: 0,
   }))
   useEffect(() => {
     const root = canvas.container()
@@ -131,16 +150,27 @@ export function useCanvasRoom(canvas: LobbyCanvas): ToolbarRoom {
       const r = root.getBoundingClientRect()
       const el = root.querySelector('[data-lobby-slot="navigation"]')
       let left = EDGE_PX
+      let quickLeft = 0
       if (el) {
         let right = -1
+        let quickRight = -1
+        const [bandLow, bandHigh] = QUICK_BAND_PX
         for (const c of [el, ...el.querySelectorAll('*')]) {
           const b = c.getBoundingClientRect()
-          if (b.width > 0 && b.height > 0 && b.bottom > r.bottom - 64) right = Math.max(right, b.right)
+          if (b.width <= 0 || b.height <= 0) continue
+          if (b.bottom > r.bottom - 64) right = Math.max(right, b.right)
+          if (b.bottom > r.bottom - bandHigh && b.top < r.bottom - bandLow)
+            quickRight = Math.max(quickRight, b.right)
         }
         if (right >= 0) left = Math.ceil(right - r.left) + EDGE_PX / 2
+        if (quickRight >= 0) quickLeft = Math.ceil(quickRight - r.left) + EDGE_PX / 2
       }
       const width = Math.round(r.width)
-      setRoom((v) => (v.width === width && v.left === left ? v : { width, left, right: EDGE_PX }))
+      setRoom((v) =>
+        v.width === width && v.left === left && v.quickLeft === quickLeft
+          ? v
+          : { width, left, right: EDGE_PX, quickLeft },
+      )
       if (el !== nav) {
         if (nav) ro.unobserve(nav)
         nav = el
