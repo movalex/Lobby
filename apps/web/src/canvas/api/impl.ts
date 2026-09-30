@@ -296,6 +296,7 @@ export const LOBBY_CANVAS_MEMBERS: readonly MemberInfo[] = [
       ['tx.ungroup', '2C'],
       ['tx.bind', '2C'],
       ['tx.duplicate', '2C'],
+      ['tx.insert', '2C'],
       ['on:change', '2C'],
       ['on:input', '2C'],
       ['on:toolChanged', '2C'],
@@ -512,6 +513,14 @@ export function createLobbyCanvas(deps: LobbyCanvasDeps): LobbyCanvasHandle {
       bind: (arrowId, end, targetId) => bindTx(view, arrowId, end, targetId),
       duplicate: (ids, offset) =>
         duplicateTx(view, ids, offset ?? { x: 20, y: 20 }, registries.customData.list()),
+      // CR-2D-2 (W3-9): the board page's port transaction has `insert` (spike B O2, canvas/port-impl.ts
+      // LobbyCanvasTx); a bare C0 port does not, so the member names 2C there
+      insert: (elements) => {
+        const insert = (tx as { insert?: (e: readonly Readonly<Record<string, unknown>>[]) => string[] })
+          .insert
+        if (typeof insert !== 'function') return stub('tx.insert')(elements)
+        return insert.call(tx, elements)
+      },
     }
   }
 

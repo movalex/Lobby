@@ -77,6 +77,10 @@ export function fakeCanvas(elements: CanvasElement[] = []): FakeCanvas {
     return e ? { x: e.x, y: e.y, width: e.width, height: e.height } : null
   }
   const tx: LobbyTx = {
+    // LobbyTx.insert (CR-2D-2, the wave-3 integration): not used by these tests
+    insert() {
+      throw new Error('insert: not in this in-memory canvas')
+    },
     create(kind, props) {
       const id = String(props.id ?? `new-${state.elements.length}`)
       state.elements.push(el(id, kind === 'note' ? 'stickynote' : kind, { ...props, id }))

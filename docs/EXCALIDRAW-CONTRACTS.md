@@ -61,7 +61,7 @@ After this commit the files below change only through a **change request to the 
 - **Pointer and hit testing:** `pointer` (scene and screen point, modifiers, over-canvas, button down), `gesture` (`idle`, `dragging`, `editing-text`, …), `hitTest(point, {margin, hitInside, selectedFirst, skipLocked, filter})`, `hovered`.
 - **Reads:** `boundsOf(ids?)`, `visibleBounds(id)` (clipped by its frame), `isLocked`, `isHidden`, `hide(owner, ids)` (the render side of a mind-map collapse), `sceneToOverlay` / `overlayToScene` (overlay-root pixels).
 - **`viewport`** (widened): `zoomTo`, `centerOn`, `ensureVisible`, `zoomStep`, `stop`, `moving`, `limits`, `screenRect`, `remeasure`; `set` and `fit` take `{animate, force}`.
-- **`transact(label, fn, {joinPrevious})`** with **`LobbyTx`**: `createMany`, `reorder`, `setFrame`, `group`, `ungroup`, `bind`, `duplicate` besides C0's `create`, `update`, `delete`.
+- **`transact(label, fn, {joinPrevious})`** with **`LobbyTx`**: `createMany`, `reorder`, `setFrame`, `group`, `ungroup`, `bind`, `duplicate` and (since W3-9) `insert` besides C0's `create`, `update`, `delete`.
 - **Namespaces:** `text` (`of`, `canEdit`, `edit`, `stop`, `editorElement`, `measure`, `replace`), `styles` (`next`, `setNext`, `of`, `apply`; values in the engine's field names), `presence` (`peers`, `peer`), `follow` (`current`, `start`, `stop`), `history` (`undo`, `redo`, `canUndo`, `canRedo`), `doc` (`get`, `entries`, `set`), `export` (`svg`, `png`, `canvas`, `copy`), `files` (`urlOf`, `status`, `insert`), `settings` (`get`, `set`).
 - **Events** (`on`): `change` (created/updated/deleted with source `local`, `history` or `remote`), `input` (capture-phase pointer/wheel/key events with `handled()`), `toolChanged`, `editingChanged`, `resize`, `docChanged`, `followChanged`, besides C0's `changed`, `selectionChanged`, `viewportChanged`, `pointer`.
 
@@ -165,6 +165,7 @@ The board page (2C) builds the canvas with `createLobbyCanvas({port, registries,
 | `tx.ungroup` | 2C | composed (real) |
 | `tx.bind` | 2C | composed (real) |
 | `tx.duplicate` | 2C | composed (real) |
+| `tx.insert` | 2C | board page (real with the board handles) |
 | `on:change` | 2C | board page (real with the board handles) |
 | `on:input` | 2C | board page (real with the board handles) |
 | `on:toolChanged` | 2C | board page (real with the board handles) |
@@ -173,7 +174,7 @@ The board page (2C) builds the canvas with `createLobbyCanvas({port, registries,
 | `on:docChanged` | 2C | board page (real with the board handles) |
 | `on:followChanged` | 3c | part (real) |
 
-99 members: 26 C0 port, 17 composed, 39 board page, 13 landed parts, 4 landed board-engine parts, 0 stubs.
+100 members: 26 C0 port, 17 composed, 40 board page, 13 landed parts, 4 landed board-engine parts, 0 stubs.
 
 ### 2.3 Parts: no owner edits another owner's file
 
@@ -574,3 +575,4 @@ Not re-run on the working tree: the default e2e suite and the spike A suite (the
 | W3-6 | 2026-09-29 | 3c's CR on 2C's `canvas/board/session.ts` (commit `418e36b`), **accepted**: Excalidraw's `onScrollChange` re-sends this tab's presence (the last pointer sample, or a null-pointer sample), so followers read a current `view` after a pan or zoom with no pointer move; the core keeps its 20 Hz cap. Review note: the re-sent sample keeps its scene point from before the scroll, so a still cursor stays where it was in the scene until the pointer moves (as before the change). | 3c |
 | W3-7 | 2026-09-29 | Integration decisions in owners' files, not frozen (`WAVE-3.md` §2): Ctrl/Cmd+U belongs to media (3g), canvas-ux's command keeps no `kbd`; the keyboard-map test (3a) gains `TOOL_SCOPED_KEYS` (comments' Enter, Escape, Tab, Shift+Tab, Ctrl/Cmd+Shift+↑/↓ act only with the comment tool, and comments come first in `CANVAS_FEATURES`; this stands in for 3c's requested tool qualifier on `KeyClaim`), `TAKES_ENGINE_KEY` for navigation's Ctrl/Cmd+= and Ctrl/Cmd+- and `TAKES_BROWSER_CHORD` for present-export's Ctrl/Cmd+Shift+C (the tldraw page's Copy as PNG); present-live mounts on present mode through `features/present-export/live/ported/present-mode.ts` (CR-3C-2); 3b's first view keeps a camera moved before it is decided; 3b's search panel searches by tag with 3d's helpers; and the fixes of `07e6a77` (among them 2C's overlay root and canvas region clip their overflow). | integration |
 | W3-8 | 2026-09-29 | Requests recorded and **not applied** (owners and details in `WAVE-3.md` §5): CR-2D-2 (still open); CR 2F-2 (still open); the transact defect reported four times (3b F1, CR-3D-1, CR-3H-3, CR-3F-6: an update to an element created in the same `transact` is dropped, `canvas/port-impl.ts`); DEF-3F-1 = 3b F2 (a join within 5 s of a doc write gets the cached snapshot's old `lb_doc`); CR-3A-3 to CR-3A-7; CR 3b-2 to 3b-4; CR-3C-1; CR-3D-2 to CR-3D-5; CR-3F-1 to CR-3F-4; CR 3G-2 and 3g's requests to O2, 2C/O5 and the paste hook; CR-3H-2; CR-3I-1; `LobbyHistory.mergeTop()` (W1-9). | integration |
+| W3-9 | 2026-09-30 | CR-2D-2 (2D, wave 2; W1-9), **applied by the integration** after merging spike B's part 3 (`37bdfa9`), whose O2 added `LobbyCanvasTx.insert` / `LobbyEngineCore.prepareInsert` on the port: `LobbyTx.insert(elements)` in `canvas/api/lobby-canvas.ts` (`@owner 2C`), delegated by `impl.ts` to the board page's port transaction (a stub naming 2C on a bare C0 port), member row `tx.insert` (status `board`; §2.2 regenerated: 100 members, 40 board page), a contracts test for both cases, and `insert` in 3b's and 3f's in-memory test canvases. Additive for callers; an implementor of `LobbyTx` must add it. 3b's template insert (`template-insert.ts` `insertElements`) already called it when present. | integration (contracts), 2C |

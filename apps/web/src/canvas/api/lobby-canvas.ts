@@ -334,6 +334,14 @@ export interface LobbyTx extends CanvasTx {
   bind(arrowId: string, end: 'start' | 'end', targetId: string | null): void
   /** @owner 2C · duplicateShapes: copies through the `onDuplicate` rules (customData registry); returns old → new ids */
   duplicate(ids: readonly string[], offset?: ScenePoint): ReadonlyMap<string, string>
+  /**
+   * @owner 2C · putContentOntoCurrentPage / createShapes of prepared records (CR-2D-2, W3-9): installs
+   * prepared elements (a template scene, pasted notes: `WireElement`-shaped) as new elements, exactly as
+   * given, in this transaction. Ids are kept; `index` is replaced by keys on top of the scene in the given
+   * order (the server assigns the final ones). Throws, writing nothing, on a missing id or type, a deleted
+   * element, a repeated id or an id the board already has. Returns the ids.
+   */
+  insert(elements: readonly Readonly<Record<string, unknown>>[]): string[]
 }
 
 export interface TransactOptions {

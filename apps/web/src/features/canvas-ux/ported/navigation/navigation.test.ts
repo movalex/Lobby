@@ -109,6 +109,10 @@ function fake(list: El[], opts: { readOnly?: boolean; role?: string } = {}): Fak
     }
   }
   const tx: LobbyTx = {
+    // LobbyTx.insert (CR-2D-2, the wave-3 integration): not used by these tests
+    insert() {
+      throw new Error('insert: not in this in-memory canvas')
+    },
     create(kind, props) {
       const id = (props.id as string | undefined) ?? `new${++next}`
       if (kind === 'note') {

@@ -249,7 +249,8 @@ describe('the LobbyCanvas member table', () => {
     })
     const built = walk(canvas)
     for (const m of LOBBY_CANVAS_MEMBERS.filter((x) => x.status === 'board')) {
-      if (m.path.startsWith('on:') || m.path === 'transact.joinPrevious') continue
+      // events, joinPrevious and tx.insert (the port transaction's, below) are not canvas properties
+      if (m.path.startsWith('on:') || m.path.startsWith('tx.') || m.path === 'transact.joinPrevious') continue
       expect(built.has(m.path), m.path).toBe(true)
       expect(stubOwner(built.get(m.path)), `${m.path} should be real on the board page`).toBeNull()
     }
@@ -309,6 +310,31 @@ describe('the LobbyCanvas member table', () => {
     expect(writes).toEqual([['c', { frameId: 'frame-1' }]])
     expect(canvas.text.of('a')).toBe('')
     expect(canvas.sceneToOverlay({ x: 10, y: 20 })).toEqual({ x: 10, y: 20 })
+  })
+
+  it('tx.insert delegates to the board page port transaction and names 2C on a bare port (CR-2D-2, W3-9)', () => {
+    const bare = createLobbyCanvas({ port: fakePort(), registries: createFeatureRegistries() })
+    expect(() => bare.canvas.transact('t', (tx) => tx.insert([{ id: 'n1', type: 'rectangle' }]))).toThrow(
+      /not implemented \(2C\): tx.insert/,
+    )
+    const got: unknown[] = []
+    const port = fakePort()
+    const withInsert = {
+      ...port,
+      transact: <T>(label: string, fn: (tx: never) => T) =>
+        port.transact(label, (tx) =>
+          fn({
+            ...tx,
+            insert: (els: readonly Record<string, unknown>[]) => {
+              got.push(...els)
+              return els.map((e) => e.id as string)
+            },
+          } as never),
+        ),
+    } as typeof port
+    const real = createLobbyCanvas({ port: withInsert, registries: createFeatureRegistries() })
+    expect(real.canvas.transact('t', (tx) => tx.insert([{ id: 'n1', type: 'rectangle' }]))).toEqual(['n1'])
+    expect(got).toHaveLength(1)
   })
 
   it('the @owner annotations in lobby-canvas.ts agree with the table', () => {
