@@ -12,11 +12,11 @@ import * as schemaRefs from '@draftroom/canvas-schema/refs'
 import { describe, expect, it } from 'vitest'
 import { CANVAS_FEATURES } from '../../features/canvas-registry.ts'
 import * as signals from '../../lib/signals.ts'
-import type { CanvasPort } from '../port.ts'
+import type { CanvasElement, CanvasPort } from '../port.ts'
 import * as feature from './feature.ts'
 import { CANVAS_FEATURE_CONTEXT_KEYS, type CanvasFeatureContext, installCanvasFeatures } from './feature.ts'
 import * as geometry from './geometry.ts'
-import { createLobbyCanvas, LOBBY_CANVAS_MEMBERS } from './impl.ts'
+import { type BoardHandles, createLobbyCanvas, LOBBY_CANVAS_MEMBERS } from './impl.ts'
 import * as items from './items.ts'
 import * as keys from './keys.ts'
 import { isOwner, NotImplementedError, stubOwner } from './owners.ts'
@@ -46,6 +46,55 @@ function fakePort(): CanvasPort {
     collaborators: () => [],
     saveStatus: () => ({ state: 'saved', pending: 0, offlineChanges: 0, lastReject: null }),
     engine: null,
+  }
+}
+
+/** Board handles that do nothing (the board page's engine is not under test here). */
+function fakeBoard(): BoardHandles {
+  const noop = () => {}
+  const off = () => noop
+  return {
+    subscribe: off,
+    on: off,
+    readOnly: () => false,
+    container: () => null,
+    focus: noop,
+    hasKeyboard: () => false,
+    setCursor: noop,
+    theme: () => 'light',
+    pointer: () => null,
+    gesture: () => 'idle',
+    hitTest: () => null,
+    hovered: () => null,
+    hide: off,
+    viewport: {
+      set: noop,
+      fit: noop,
+      stop: noop,
+      moving: () => false,
+      screenRect: () => ({ x: 0, y: 0, width: 100, height: 100 }),
+      remeasure: noop,
+    },
+    text: {
+      edit: async () => false,
+      stop: noop,
+      editorElement: () => null,
+      measure: () => ({ width: 0, height: 0 }),
+      replace: async () => false,
+    },
+    styles: { next: () => ({}), setNext: noop },
+    presence: { peers: () => [], peer: () => null },
+    history: {
+      undo: noop,
+      redo: noop,
+      canUndo: () => false,
+      canRedo: () => false,
+      joinPrevious: (write) => write(),
+    },
+    files: { status: () => null },
+    settings: { get: () => ({ grid: false, snap: false, focusMode: false }), set: noop },
+    docWritten: noop,
+    newId: () => 'fresh',
   }
 }
 
@@ -158,7 +207,8 @@ describe('the LobbyCanvas member table', () => {
       expect(m, `member ${path} is not in LOBBY_CANVAS_MEMBERS`).toBeDefined()
       if (!m) continue
       const s = stubOwner(fn)
-      if (m.status === 'stub') expect(s?.owner, path).toBe(m.owner)
+      // on a bare port (no board handles) the board page's members are stubs naming 2C
+      if (m.status === 'stub' || m.status === 'board') expect(s?.owner, path).toBe(m.owner)
       else expect(s, `${path} should not be a stub`).toBeNull()
     }
     for (const m of LOBBY_CANVAS_MEMBERS) {
@@ -176,10 +226,80 @@ describe('the LobbyCanvas member table', () => {
     )
     expect(() => canvas.on('change', () => {})).toThrow(/not implemented \(2C\): on:change/)
     expect(() => canvas.transact('x', () => 1, { joinPrevious: true })).toThrow(/transact.joinPrevious/)
-    expect(() => canvas.transact('x', (tx) => tx.reorder(['a'], 'front'))).toThrow(/tx.reorder/)
+    expect(() => canvas.on('followChanged', () => {})).toThrow(/not implemented \(3c\): on:followChanged/)
     expect(canvas.transact('x', (tx) => tx.createMany([{ kind: 'note', props: {} }]))).toEqual(['new'])
     const off = canvas.on('changed', () => {})
     expect(typeof off).toBe('function')
+  })
+
+  it('with the board handles, the board page members are real and board events subscribe', () => {
+    const { canvas, dispose } = createLobbyCanvas({
+      port: fakePort(),
+      registries: createFeatureRegistries(),
+      board: fakeBoard(),
+    })
+    const built = walk(canvas)
+    for (const m of LOBBY_CANVAS_MEMBERS.filter((x) => x.status === 'board')) {
+      if (m.path.startsWith('on:') || m.path === 'transact.joinPrevious') continue
+      expect(built.has(m.path), m.path).toBe(true)
+      expect(stubOwner(built.get(m.path)), `${m.path} should be real on the board page`).toBeNull()
+    }
+    for (const e of ['change', 'input', 'toolChanged', 'editingChanged', 'resize', 'docChanged'] as const)
+      expect(typeof canvas.on(e, () => {})).toBe('function')
+    expect(canvas.transact('x', () => 7, { joinPrevious: true })).toBe(7)
+    expect(canvas.readOnly()).toBe(false)
+    dispose()
+  })
+
+  it("2C's composed tx writes run on a bare port (group, reorder, frames)", () => {
+    const writes: [string, Record<string, unknown>][] = []
+    const els = new Map<string, CanvasElement>(
+      ['a', 'b', 'c'].map((id, i) => [
+        id,
+        {
+          id,
+          type: 'rectangle',
+          x: i * 10,
+          y: 0,
+          width: 10,
+          height: 10,
+          angle: 0,
+          groupIds: [],
+          frameId: null,
+          locked: false,
+          version: 1,
+          versionNonce: 1,
+          isDeleted: false,
+          index: `a${i}`,
+        } as unknown as CanvasElement,
+      ]),
+    )
+    const port: CanvasPort = {
+      ...fakePort(),
+      items: () => [...els.values()],
+      get: (id) => els.get(id),
+      transact: (_label, fn) =>
+        fn({
+          create: () => 'new',
+          update: (id, patch) => void writes.push([id, { ...patch }]),
+          delete: () => {},
+        }),
+    }
+    const { canvas } = createLobbyCanvas({ port, registries: createFeatureRegistries() })
+    const gid = canvas.transact('g', (tx) => tx.group(['a', 'b']))
+    expect(writes.map(([id, p]) => [id, p.groupIds])).toEqual([
+      ['a', [gid]],
+      ['b', [gid]],
+    ])
+    writes.length = 0
+    canvas.transact('r', (tx) => tx.reorder(['a'], 'front'))
+    expect(writes).toHaveLength(1)
+    expect(String(writes[0]?.[1].index) > 'a2').toBe(true)
+    writes.length = 0
+    canvas.transact('f', (tx) => tx.setFrame(['c'], 'frame-1'))
+    expect(writes).toEqual([['c', { frameId: 'frame-1' }]])
+    expect(canvas.text.of('a')).toBe('')
+    expect(canvas.sceneToOverlay({ x: 10, y: 20 })).toEqual({ x: 10, y: 20 })
   })
 
   it('the @owner annotations in lobby-canvas.ts agree with the table', () => {

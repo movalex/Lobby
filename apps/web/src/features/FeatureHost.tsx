@@ -1,11 +1,11 @@
 // Renders the feature slots (docs/FEATURES-M2-CONTRACTS.md): the dock rail + open panel, top-bar
 // items, canvas overlays, and the merged tldraw overrides/components/options. Integration owner.
 
-import { Fragment, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useEffect, useMemo } from 'react'
 import { type Editor, type TLComponents, type TLUiOverrides, type TldrawOptions, useValue } from 'tldraw'
 import { can } from '../lib/permissions.ts'
-import { isFocusLost, isTextEntry, tryFocus } from '../ui/focus.ts'
 import { installPlaceOnEnter, placeAtCenter } from '../ui/place-at-center.ts'
+import { type DockPanelView, FeatureDockView, TopBarOverflowRow } from './FeatureHostCore.tsx'
 import type { BoardFeature, FeatureContext, FeaturePanel } from './types.ts'
 
 export interface MergedFeatureProps {
@@ -94,16 +94,9 @@ export function FeatureTopBarItems({
     <>
       {shown.map((f) =>
         f.TopBarItem ? (
-          <div key={f.id} className="dr-overflow__item" data-feature={f.id}>
-            {OVERFLOW_CAPTION[f.id] && (
-              <span className="dr-overflow__caption" aria-hidden="true">
-                {OVERFLOW_CAPTION[f.id]}
-              </span>
-            )}
-            <div className="dr-overflow__controls">
-              <f.TopBarItem ctx={ctx} />
-            </div>
-          </div>
+          <TopBarOverflowRow key={f.id} featureId={f.id} caption={OVERFLOW_CAPTION[f.id]}>
+            <f.TopBarItem ctx={ctx} />
+          </TopBarOverflowRow>
         ) : null,
       )}
     </>
@@ -172,18 +165,6 @@ function AddNoteButton({ ctx, onPress }: { ctx: FeatureContext; onPress?: () => 
   )
 }
 
-/**
- * Moves the keyboard into a panel that just opened (A11Y-02) when the user opened it with a control (a
- * rail button, a toolbar button, a chip) or the focus had nowhere to be. A panel opened while someone
- * works on the canvas or types in a field (a remote event, a background open) leaves their focus alone.
- */
-function shouldFocusOpenedPanel(active: Element | null, editing: boolean): boolean {
-  if (isFocusLost()) return true
-  if (editing || isTextEntry(active)) return false
-  const tag = active?.tagName
-  return tag === 'BUTTON' || tag === 'A' || active?.getAttribute('role') === 'menuitem'
-}
-
 export function FeatureDock({
   features,
   ctx,
@@ -192,175 +173,28 @@ export function FeatureDock({
   ctx: FeatureContext | null
 }) {
   const panels = useMemo(() => visiblePanels(features, ctx), [features, ctx])
-  const active = (ctx && panels.find((p) => p.id === ctx.activePanel)) ?? null
-  const activeId = active?.id ?? null
-  const railRef = useRef<HTMLElement>(null)
-  const panelRef = useRef<HTMLElement>(null)
-  const headingRef = useRef<HTMLHeadingElement>(null)
-  const panelDomId = useId()
-  /** The focus was inside the open panel at the last focus change (it is gone once the panel closes). */
-  const focusInPanel = useRef(false)
-  /** What had the focus when the panel opened; it gets it back when the panel closes (A11Y-01/02). */
-  const opener = useRef<HTMLElement | null>(null)
-  const openerWasControl = useRef(false)
-  const shown = useRef<string | null>(null)
+  const views = useMemo<DockPanelView[]>(
+    () =>
+      ctx
+        ? panels.map((p) => ({
+            id: p.id,
+            label: p.label,
+            icon: p.icon,
+            ...(p.shortcutHint ? { shortcutHint: p.shortcutHint } : {}),
+            render: (close: () => void) => <p.Component ctx={ctx} close={close} />,
+          }))
+        : [],
+    [panels, ctx],
+  )
   const editor = ctx?.editor
-  // R13 / A11Y-06: on phones (styles.css, below 600 px) the rail folds behind one button over the board
-  // and a panel opens as a full-width sheet over it. Wider screens ignore this state.
-  const [railOpen, setRailOpen] = useState(false)
-  const toggleRef = useRef<HTMLButtonElement>(null)
-  const railId = useId()
-
-  // The open phone rail lies over the board: a press anywhere else folds it away again.
-  useEffect(() => {
-    if (!railOpen) return
-    const onDown = (e: PointerEvent) => {
-      if (!railRef.current?.contains(e.target as Node)) setRailOpen(false)
-    }
-    document.addEventListener('pointerdown', onDown, true)
-    return () => document.removeEventListener('pointerdown', onDown, true)
-  }, [railOpen])
-
-  useEffect(() => {
-    const onFocusIn = (e: FocusEvent) => {
-      focusInPanel.current = panelRef.current?.contains(e.target as Node) === true
-    }
-    document.addEventListener('focusin', onFocusIn, true)
-    return () => document.removeEventListener('focusin', onFocusIn, true)
-  }, [])
-
-  // Closing (×, Escape, the panel's own close, another feature closing it): the keyboard goes back to
-  // whatever opened the panel, else to its rail button, never to <body>.
-  useLayoutEffect(() => {
-    const prev = shown.current
-    if (prev === activeId) return
-    shown.current = activeId
-    if (prev && (focusInPanel.current || isFocusLost())) {
-      focusInPanel.current = false
-      if (!activeId) {
-        const rail = railRef.current?.querySelector(`[data-panel-id="${CSS.escape(prev)}"]`)
-        // On phones the rail is folded away again: its button takes the keyboard instead.
-        if (!tryFocus(opener.current) && !tryFocus(rail)) tryFocus(toggleRef.current)
-      }
-    }
-    if (activeId) {
-      const a = document.activeElement
-      opener.current =
-        a instanceof HTMLElement && a !== document.body && !panelRef.current?.contains(a) ? a : null
-      openerWasControl.current = shouldFocusOpenedPanel(a, editor?.getEditingShapeId() != null)
-    }
-  }, [activeId, editor])
-
-  // Opening: after the panel's own effects (a search field focuses itself), move the keyboard into it.
-  useEffect(() => {
-    if (!activeId || !openerWasControl.current) return
-    openerWasControl.current = false
-    const panel = panelRef.current
-    if (!panel || panel.contains(document.activeElement)) return
-    headingRef.current?.focus({ preventScroll: true })
-  }, [activeId])
-
-  if (!ctx || panels.length === 0) return null
-  const close = () => ctx.openPanel(null)
+  if (!ctx || views.length === 0) return null
   return (
-    <aside
-      className="dr-dock"
-      data-testid="feature-dock"
-      data-open={active ? 'true' : 'false'}
-      data-rail={railOpen ? 'open' : 'closed'}
-      onKeyDown={(e) => {
-        if (e.key !== 'Escape' || !railOpen || e.defaultPrevented) return
-        if (!railRef.current?.contains(e.target as Node)) return
-        e.preventDefault()
-        e.stopPropagation()
-        setRailOpen(false)
-        tryFocus(toggleRef.current)
-      }}
-    >
-      <nav ref={railRef} id={railId} className="dr-dock__rail" aria-label="Board panels">
-        <button
-          ref={toggleRef}
-          type="button"
-          className="dr-dock__tab dr-dock__toggle"
-          data-testid="dock-rail-toggle"
-          aria-expanded={railOpen}
-          aria-controls={railId}
-          aria-label={railOpen ? 'Hide board panels' : 'Board panels'}
-          title={railOpen ? 'Hide board panels' : 'Board panels'}
-          onClick={() => setRailOpen((o) => !o)}
-        >
-          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
-            {railOpen ? (
-              <path d="M6 6l12 12M18 6L6 18" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-            ) : (
-              <path
-                d="M4 5h6v6H4zM14 5h6v6h-6zM4 15h6v4H4zM14 15h6v4h-6z"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.8"
-                strokeLinejoin="round"
-              />
-            )}
-          </svg>
-        </button>
-        {panels.map((p) => (
-          <button
-            key={p.id}
-            type="button"
-            className="dr-dock__tab"
-            data-testid={`dock-tab-${p.id}`}
-            data-panel-id={p.id}
-            aria-expanded={active?.id === p.id}
-            aria-controls={active?.id === p.id ? panelDomId : undefined}
-            title={p.shortcutHint ? `${p.label} (${p.shortcutHint})` : p.label}
-            aria-label={p.label}
-            onClick={() => {
-              setRailOpen(false)
-              ctx.openPanel(active?.id === p.id ? null : p.id)
-            }}
-          >
-            {p.icon}
-            <span className="dr-dock__label" aria-hidden="true">
-              {p.label}
-            </span>
-          </button>
-        ))}
-        <AddNoteButton ctx={ctx} onPress={() => setRailOpen(false)} />
-      </nav>
-      {active && (
-        <section
-          ref={panelRef}
-          id={panelDomId}
-          className="dr-dock__panel"
-          data-testid={`dock-panel-${active.id}`}
-          aria-label={active.label}
-          onKeyDown={(e) => {
-            // Controls with their own Escape (a composer, a rename field, a menu) handle it first.
-            if (e.key !== 'Escape' || e.defaultPrevented || e.nativeEvent.isComposing) return
-            e.preventDefault()
-            e.stopPropagation()
-            close()
-          }}
-        >
-          <header className="dr-dock__head">
-            <h2 ref={headingRef} tabIndex={-1}>
-              {active.label}
-            </h2>
-            <button
-              type="button"
-              className="dr-iconbtn"
-              data-testid="dock-panel-close"
-              aria-label={`Close ${active.label}`}
-              onClick={close}
-            >
-              ×
-            </button>
-          </header>
-          <div className="dr-dock__body">
-            <active.Component ctx={ctx} close={close} />
-          </div>
-        </section>
-      )}
-    </aside>
+    <FeatureDockView
+      panels={views}
+      activePanel={ctx.activePanel}
+      openPanel={ctx.openPanel}
+      isEditingText={() => editor?.getEditingShapeId() != null}
+      renderAddNote={(closeRail) => <AddNoteButton ctx={ctx} onPress={closeRail} />}
+    />
   )
 }

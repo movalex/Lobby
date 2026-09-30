@@ -12,6 +12,12 @@ export interface SaveStatusView {
   uploading?: number
   /** The caller's board role: a commenter's read-only line says her comments are saved. */
   role?: string
+  /**
+   * The Excalidraw engine's own words (./engineSave.ts): its offline line counts the changes on this
+   * device, and a refused change says why from its reject code. The tldraw page leaves both unset.
+   */
+  label?: string
+  title?: string
 }
 
 const TONE: Record<DisplayState, 'quiet' | 'busy' | 'warn' | 'danger'> = {
@@ -24,6 +30,7 @@ const TONE: Record<DisplayState, 'quiet' | 'busy' | 'warn' | 'danger'> = {
   error: 'danger',
   unsupported: 'quiet',
   readonly: 'quiet',
+  retrying: 'warn',
 }
 
 function Icon({ state }: { state: DisplayState }) {
@@ -50,7 +57,13 @@ function Icon({ state }: { state: DisplayState }) {
 }
 
 /** States worth interrupting a screen-reader user for: something is not being saved. */
-const TROUBLE: ReadonlySet<DisplayState> = new Set(['offline', 'offline-pending', 'rejected', 'error'])
+const TROUBLE: ReadonlySet<DisplayState> = new Set([
+  'offline',
+  'offline-pending',
+  'rejected',
+  'error',
+  'retrying',
+])
 
 export interface Announcement {
   /** What the live region says now, or null to stay quiet. */
@@ -71,8 +84,10 @@ export function saveAnnouncement(
   next: DisplayState,
   trouble: DisplayState | null,
   role?: string,
+  label?: string,
 ): Announcement {
-  if (TROUBLE.has(next)) return { say: prev === next ? null : saveLabel(next, role), trouble: next }
+  if (TROUBLE.has(next))
+    return { say: prev === next ? null : (label ?? saveLabel(next, role)), trouble: next }
   if (!trouble) return { say: null, trouble: null }
   // Still on the way back: say it when it is all stored (or, read-only, simply connected again).
   if (next === 'saving' || next === 'connecting') return { say: null, trouble }
@@ -83,18 +98,18 @@ export function saveAnnouncement(
 }
 
 /** The words for the hidden live region, updated only when saveAnnouncement has something to say. */
-function useSaveAnnouncement(state: DisplayState, role?: string): string {
+function useSaveAnnouncement(state: DisplayState, role?: string, label?: string): string {
   const [text, setText] = useState('')
   const prev = useRef<DisplayState | null>(null)
   const trouble = useRef<DisplayState | null>(null)
   useEffect(() => {
-    const a = saveAnnouncement(prev.current, state, trouble.current, role)
+    const a = saveAnnouncement(prev.current, state, trouble.current, role, label)
     prev.current = state
     trouble.current = a.trouble
     const say = a.say
     // The same words twice (offline again) must change the region's text to be spoken again.
     if (say) setText((t) => (t === say ? `${say} ` : say))
-  }, [state, role])
+  }, [state, role, label])
   return text
 }
 
@@ -106,7 +121,7 @@ function useSaveAnnouncement(state: DisplayState, role?: string): string {
  */
 export function SaveStatus({ view, hidden = false }: { view: SaveStatusView; hidden?: boolean }) {
   const { state } = view
-  const announcement = useSaveAnnouncement(state, view.role)
+  const announcement = useSaveAnnouncement(state, view.role, view.label)
   return (
     <>
       <span
@@ -117,10 +132,10 @@ export function SaveStatus({ view, hidden = false }: { view: SaveStatusView; hid
         // Hidden, not removed, when the role pill already says it: it comes back by itself if the
         // session goes offline or errors.
         hidden={hidden}
-        title={saveTitle(state, view.rejection, view.readonly, view.uploading, view.role)}
+        title={view.title ?? saveTitle(state, view.rejection, view.readonly, view.uploading, view.role)}
       >
         <Icon state={state} />
-        <span className="dr-save__label">{saveLabel(state, view.role)}</span>
+        <span className="dr-save__label">{view.label ?? saveLabel(state, view.role)}</span>
       </span>
       <span className="dr-sr-only" role="status" aria-live="polite" data-testid="save-announcer">
         {announcement}

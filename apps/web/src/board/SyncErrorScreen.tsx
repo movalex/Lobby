@@ -7,6 +7,8 @@ const MESSAGES: Record<string, string> = {
   INVALID_RECORD: 'The board server rejected a change from this tab. Reload to continue.',
   RATE_LIMITED: 'Too many changes were sent too quickly. Wait a moment, then retry.',
   ROOM_FULL: 'This board has too many people on it right now.',
+  MAINTENANCE: 'Lobby is being updated. Try again in a few minutes.',
+  CONVERSION_FAILED: 'This board could not be prepared for the new canvas. Try again later, or ask an owner.',
   UNKNOWN_ERROR: 'The board could not be opened.',
 }
 

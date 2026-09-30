@@ -16,6 +16,7 @@ export const SAVE_LABEL: Record<DisplayState, string> = {
   // The tracker cannot read this protocol version, so it never claims "Saved" (fail safe).
   unsupported: 'Live',
   readonly: 'View only',
+  retrying: "Can't save right now — retrying",
 }
 
 const SAVE_TITLE: Record<DisplayState, string> = {
@@ -31,6 +32,8 @@ const SAVE_TITLE: Record<DisplayState, string> = {
   unsupported: 'Connected. This version cannot confirm that your changes are saved.',
   // Never "not saved": a commenter's comments ARE saved, and a viewer has nothing unsaved (RETRO-17).
   readonly: 'You can look around; only people who can edit change this board',
+  retrying:
+    'The board server cannot store changes right now. Lobby keeps trying; your changes stay on this device until then.',
 }
 
 /** A commenter's read-only indicator says what she can do, and that it is kept (RETRO-17). */
@@ -116,4 +119,56 @@ export function undoNotice(r: UndoReplayReport): string | null {
     return 'Someone is editing that text, so it was left as is.'
   if (r.noop) return 'Someone changed this since, so there was nothing left to undo.'
   return null // partial skips of fields someone else changed are silent
+}
+
+// ---- the Excalidraw engine's indicator (docs/EXCALIDRAW-MIGRATION.md §2.5.7) --------------------------------
+//
+// The engine keeps offline changes in this browser (IndexedDB, per tab, §2.5.6), so its offline line says
+// how many there are and that they are on this device; a guest's are in memory only. A change the server
+// refused carries its reject code, said in words here.
+
+/** "Offline — 3 changes on this device" (the engine's queue; none: plain "Offline"). */
+export function engineOfflineLabel(changes: number): string {
+  if (changes <= 0) return SAVE_LABEL.offline
+  return `Offline — ${changes} change${changes === 1 ? '' : 's'} on this device`
+}
+
+/** The offline tooltip: a member's changes survive a reload; a guest's live in this tab only. */
+export function engineOfflineTitle(changes: number, guest: boolean): string {
+  if (changes <= 0) return SAVE_TITLE.offline
+  return guest
+    ? 'Offline: your latest changes are kept in this tab only and will sync when the connection returns. Reloading or closing the tab now would lose them.'
+    : 'Offline: your latest changes are kept on this device and will sync when the connection returns, also after a reload.'
+}
+
+const ENGINE_REJECT_REASON: Readonly<Record<string, string>> = {
+  READ_ONLY: 'you can only view this board',
+  LOCKED: 'that object is locked',
+  LEASED: 'someone else is editing that text',
+  GONE: 'someone else deleted that object',
+  ELEMENT_LIMIT: 'the board is full',
+  GUEST_LIMIT: 'the guest limit of this board is reached',
+  VOTE_OPEN: 'a vote is open',
+  STALE: 'someone changed it while you were offline',
+  TOO_LARGE: 'it is too large',
+}
+
+/** The words for an engine reject code, or null for a code with none (INVALID, TYPE_CHANGE, …). */
+export function engineRejectReason(code: string | null | undefined): string | null {
+  return (code && ENGINE_REJECT_REASON[code]) || null
+}
+
+/** The tooltip of "Change not saved" for an engine reject. */
+export function engineRejectTitle(code: string | null | undefined): string {
+  const why = engineRejectReason(code)
+  return why ? `Your last change was not saved: ${why}` : SAVE_TITLE.rejected
+}
+
+/** The toast for an engine reject (null for LEASED: the lease notice already says who is typing). */
+export function engineRejectNotice(code: string, holder?: string | null): string | null {
+  if (code === 'LEASED') return holder ? `Change not saved — ${holder} is typing in this note` : null
+  if (code === 'READ_ONLY') return 'You can only view this board, so your change was not saved.'
+  if (code === 'GONE') return 'Someone else deleted that object, so your change to it was not saved.'
+  const why = engineRejectReason(code)
+  return why ? `Change not saved — ${why}.` : 'The board did not accept your last change, so it was undone.'
 }

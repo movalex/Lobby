@@ -1,0 +1,59 @@
+/* The Excalidraw board page's own overlay chrome (canvas/board/chrome.tsx). */
+
+.lobby-board-canvas {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+}
+
+/* a layer that takes clicks lets its own top-level elements take them; the layer itself never does */
+.lobby-overlay-layer[data-pointer="auto"] > * {
+  pointer-events: auto;
+}
+
+.lobby-typing-badge {
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--dr-ink, #1f2937);
+  color: #fff;
+  font: 12px / 1.4 var(--dr-font, system-ui, sans-serif);
+  white-space: nowrap;
+}
+
+.lobby-cursor__name {
+  position: absolute;
+  left: 12px;
+  top: 12px;
+  padding: 0 5px;
+  border-radius: 3px;
+  color: #fff;
+  font: 11px / 1.5 var(--dr-font, system-ui, sans-serif);
+  white-space: nowrap;
+}
+
+.lobby-lease-status {
+  position: absolute;
+  left: 16px;
+  bottom: 16px;
+  z-index: 25;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: var(--dr-ink, #1f2937);
+  color: #fff;
+  font: 13px / 1.4 var(--dr-font, system-ui, sans-serif);
+}
+.lobby-lease-status[hidden] {
+  display: none;
+}
+
+.lobby-lease-notice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.lobby-canvas-screen {
+  position: absolute;
+  inset: 0;
+  z-index: 50;
+}
