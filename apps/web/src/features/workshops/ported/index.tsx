@@ -7,11 +7,12 @@
 //  - +1 on notes, reactions and raise hand;
 //  - private brainstorming (drafts, the "Private ideas" frame, reveal through the api's place-notes);
 //  - "Gather everyone": others follow the facilitator's view (3c's follow) until they move;
-//  - the session settings "Hide note authors" and "Hide everyone's cursors" (lb_doc `workshop`).
+//  - the session settings "Hide note authors" and "Hide everyone's cursors" (lb_doc `workshop`), and the
+//    note-author label they hide (./NoteAuthors.tsx; CR-3F-4: this feature draws the overlays on notes).
 //
 // Registry entries (docs/EXCALIDRAW-CONTRACTS.md §3): the top-bar item `workshops`, the dock panels
-// `voting` and `private-notes`, three overlay layers (./WorkshopOverlay.tsx), the `vote` tool, the
-// cursor filter while cursors are hidden, and (only while this person votes) a Tab key.
+// `voting` and `private-notes`, four overlay layers (./WorkshopOverlay.tsx, ./NoteAuthors.tsx), the `vote`
+// tool, the cursor filter while cursors are hidden, and (only while this person votes) a Tab key.
 import { WORKSHOP_EVENTS, WorkshopSummonEvent } from '@draftroom/contracts'
 import type {
   CanvasFeature,
@@ -24,7 +25,14 @@ import { react } from '../../../lib/signals.ts'
 import { installAudioUnlock } from '../chime.ts'
 import { provideVoteResultsForExport, shownResults } from '../vote-export.ts'
 import { storeFor } from '../workshop-context.ts'
-import { followingNow, onFollowChanged, startFollowing, stopFollowing } from './camera.ts'
+import {
+  followingNow,
+  onFollowChanged,
+  readableFollowCamera,
+  startFollowing,
+  stopFollowing,
+} from './camera.ts'
+import { NoteAuthorsLayer } from './NoteAuthors.tsx'
 import { isPresentingHere } from './presenting.ts'
 import { mountPrivateNotes, privateNotesPanel } from './private-notes/index.tsx'
 import { HIDE_AUTHORS_ATTR, workshopSettingsOf } from './session-settings.ts'
@@ -161,12 +169,15 @@ function mountWorkshops(ctx: Ctx) {
   const offs: (() => void)[] = []
 
   // Gather everyone: follow the summoner's view (3c's follow). Their presence may arrive a moment after
-  // the event (e.g. they just joined), so retry briefly.
+  // the event (e.g. they just joined), so retry briefly. R2-04: while gathered, a much narrower screen
+  // (a phone) sees the summoner's view centre at a readable zoom, not all of it at 11 % (./camera.ts
+  // readableFollowCamera, from the canvas size the summon carries).
   offs.push(
     ctx.events.on(WORKSHOP_EVENTS.summon, (data) => {
       const p = WorkshopSummonEvent.safeParse(data)
       if (!p.success || !summonApplies(p.data, ctx.me.user.id)) return
       const { userId, name } = p.data
+      const camera = readableFollowCamera(p.data.screen)
       const unavailable = () =>
         ctx.notify({
           key: 'summon',
@@ -176,7 +187,7 @@ function mountWorkshops(ctx: Ctx) {
       const attempt = (n: number) => {
         const sid = followSidFor(canvas, userId)
         if (sid) {
-          if (!startFollowing(canvas, sid)) return unavailable()
+          if (!startFollowing(canvas, sid, { camera })) return unavailable()
           if (followingNow(canvas) === sid) store.setSummonedBy({ userId, name })
           return
         }
@@ -203,8 +214,8 @@ function mountWorkshops(ctx: Ctx) {
     }),
   )
 
-  // "Hide note authors" (a synced session setting): whatever draws note attribution hides it through
-  // this <html> attribute (workshops.css); exports strip it in present-export.
+  // "Hide note authors" (a synced session setting): the note-author layer (./NoteAuthors.tsx) stops
+  // drawing, and whatever else draws note attribution hides it through this <html> attribute.
   const root = canvas.container()?.ownerDocument.documentElement ?? document.documentElement
   offs.push(
     react('dr-wk-hide-authors', () => {
@@ -295,6 +306,16 @@ export const feature: CanvasFeature = {
     privateNotesPanel,
   ],
   overlays: [
+    // who last edited each note: part of the note's face, so under every other layer (tags' Show only
+    // veil and search's dimming included); shown while presenting, as tldraw's note face was
+    {
+      id: 'workshops-authors',
+      layer: 'scene',
+      order: 4,
+      pointer: 'none',
+      focusMode: 'show',
+      component: NoteAuthorsLayer,
+    },
     // the revealed counts sit under the top bar's popovers; the rest above the canvas's own chrome
     {
       id: 'workshops-marks',

@@ -196,8 +196,25 @@ export type VoteResultsResponse = z.infer<typeof VoteResultsResponse>
 
 // ---- gather everyone -----------------------------------------------------------------------------
 
-/** Body optional. `targetUserId` = bring one person; omitted = everyone. */
-export const SummonInput = z.object({ targetUserId: WsUserId.optional() }).optional()
+/** The largest canvas side a summon may report, CSS px. */
+export const SUMMON_SCREEN_MAX_PX = 100_000
+
+/**
+ * The summoner's canvas size in CSS pixels (R2-04). The Excalidraw board's presence carries only the
+ * visible scene rectangle, so a follower tells the summoner's zoom from it with this (zoom = h / the view's
+ * height): a phone gathered to a desktop then sees the leader's view centre at a readable zoom, not the
+ * whole view at 11 %. Optional: the tldraw board's presence has its own camera and screen size.
+ */
+export const SummonScreen = z.object({
+  w: z.number().positive().max(SUMMON_SCREEN_MAX_PX),
+  h: z.number().positive().max(SUMMON_SCREEN_MAX_PX),
+})
+export type SummonScreen = z.infer<typeof SummonScreen>
+
+/** Body optional. `targetUserId` = bring one person; omitted = everyone. `screen`: see SummonScreen. */
+export const SummonInput = z
+  .object({ targetUserId: WsUserId.optional(), screen: SummonScreen.optional() })
+  .optional()
 
 // ---- reactions (FAC-08; relayed as events only, never stored) -------------------------------------
 
@@ -346,6 +363,8 @@ export const WorkshopSummonEvent = z.object({
   userId: WsUserId,
   name: z.string(),
   targetUserId: WsUserId.nullable(),
+  /** the summoner's canvas size, when their client sent it (SummonScreen) */
+  screen: SummonScreen.optional(),
 })
 export type WorkshopSummonEvent = z.infer<typeof WorkshopSummonEvent>
 

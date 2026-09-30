@@ -28,10 +28,15 @@ import {
   post,
   reloadBoard,
   seed,
+  showAll,
   test,
   type WorkshopCanvasSession,
   waitForWorkshopBoard,
 } from './workshops-kit.ts'
+
+/** The note-author labels (the workshops feature's overlay, CR-3F-4) on the notes `ids`. */
+const authorLabels = (page: Page, ids: readonly string[]) =>
+  page.locator(ids.map((id) => `[data-testid="note-author"][data-note-id="${id}"]`).join(', '))
 
 interface ApiPrivateState {
   session: { id: string; status: string; frameId: string; anonymous: boolean } | null
@@ -264,6 +269,16 @@ test('private notes: the reveal puts every note in the frame for everyone, with 
       return !!f && within(v, f)
     })
     .toBe(true)
+  // Names show like any note's (the tldraw spec's attributions); the board's "Hide note authors" hides
+  // them on the placed notes too (CR-3F-4).
+  const labels = authorLabels(alice.page, [...byText.values()])
+  await expect(labels).toHaveCount(4)
+  await expect(labels.filter({ hasText: alice.name.split(' ')[0] ?? alice.name })).toHaveCount(2)
+  await expect(labels.first()).toBeVisible()
+  const pop = await openWorkshopPopover(alice.page)
+  await pop.getByTestId('session-hide-authors').check()
+  await closeWorkshopPopover(alice.page)
+  await expect(labels).toHaveCount(0)
 })
 
 test('private notes: a viewer sees the prompt and counts but cannot write; only the starter or an owner may reveal', async ({
@@ -337,6 +352,14 @@ test('private notes: an anonymous reveal names nobody, and a doubled reveal plac
       expect(n.privateNote).toEqual({ session: sid })
       expect(JSON.stringify(await item(s.page, n.id))).not.toMatch(/usr_/)
     }
+    // …and no note-author label on them (the tldraw spec's attribution check)
+    await showAll(s.page)
+    await expect(
+      authorLabels(
+        s.page,
+        notes.map((n) => n.id),
+      ),
+    ).toHaveCount(0)
   }
   expect((await alice.api.fetch('POST', `/api/private-brainstorms/${sid}/reveal`)).status()).toBe(200)
   await alice.page.waitForTimeout(500) // a duplicate would arrive over the socket within this

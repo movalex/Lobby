@@ -4,9 +4,10 @@
 // Following someone's view is 3c's (`canvas.follow`, canvas/api/parts/follow.ts), built beside this
 // feature in wave 3; until it lands the feature tells a summoned person "…isn't available here yet". So
 // the summon itself (the api, the event, the cooldown, the facilitator's toast) is a test that must
-// pass, and every test that follows a view is marked as expected to fail until 3c's follow is in (remove
-// the marks at the wave-3 integration). R2-04's readable zoom on a phone needs a hook in 3c's follow
-// camera (change request CR-3F-3, docs/research/excalidraw/wave3/3F.md).
+// pass, and every test that follows a view was marked as expected to fail until 3c's follow was in (the
+// marks came off at the wave-3 integration). R2-04's readable zoom on a phone is the workshops feature's
+// camera rule on 3c's follow camera hook (CR-3F-3, wave 3b): the summon carries the summoner's canvas
+// size, so a follower can tell their zoom from their presence view.
 import type { Page } from '@playwright/test'
 import { canvasCall, setViewport, viewport } from '../tests/support/canvas.ts'
 import { capture } from '../tests/support/screenshots.ts'
@@ -173,7 +174,6 @@ test('RETRO-11: the "Following" notice sits above the vote prompt, and followers
 test('R2-04: "Gather everyone" shows a phone the leader view at a readable zoom (3c follow, CR-3F-3)', async ({
   join,
 }, testInfo) => {
-  test.fail(true, 'CR-3F-3: the readable follow zoom for a gathered phone needs a hook in 3c’s follow camera')
   const a = await join('alice')
   const b = await join('bob', 'editor')
   await a.page.setViewportSize({ width: 1440, height: 900 })

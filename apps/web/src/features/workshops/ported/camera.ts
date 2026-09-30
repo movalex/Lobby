@@ -1,17 +1,23 @@
-// OWNER: 3f. Camera moves and follow state the workshops feature asks for, through the canvas API.
+// OWNER: 3f. Camera moves and follow state the workshops feature asks for, through the canvas API, and
+// R2-04's readable follow for a gathered phone (`readableFollowCamera`, on 3c's follow camera hook).
 //
 // `viewport.zoomTo` and `viewport.ensureVisible` are 3b's members and `follow.*` is 3c's (wave 3, built
 // beside this feature). Until an owner lands its member it throws NotImplementedError; the feature then
 // does the same thing with the core camera (`viewport.get`/`set` and `screenRect`, real on the board page)
 // so it works on its own (docs/EXCALIDRAW-CONTRACTS.md §1 rule 10: call the member where the feature
 // needs it). Once 3b's and 3c's parts land, their members are used and these fallbacks are dead code.
+import type { SummonScreen } from '@draftroom/contracts'
 import {
   type Bounds,
   CAMERA_ANIMATION_MS,
+  type FollowCamera,
+  type FollowCameraInput,
+  type FollowOptions,
   geometry,
   type LobbyCanvas,
   NotImplementedError,
 } from '../../../canvas/api/index.ts'
+import { readableFollowViewport } from '../follow.ts'
 
 const isStub = (e: unknown): boolean => e instanceof NotImplementedError
 
@@ -101,10 +107,61 @@ export function followingNow(canvas: LobbyCanvas): string | null {
   }
 }
 
-/** Starts following `sid`; false when following is not available on this page yet (3c's part). */
-export function startFollowing(canvas: LobbyCanvas, sid: string): boolean {
+/**
+ * This canvas's size for a summon (`SummonScreen`, CSS px), so the people it gathers can tell this
+ * person's zoom from their presence view (R2-04); undefined when there is no canvas to measure.
+ */
+export function summonScreen(canvas: LobbyCanvas): SummonScreen | undefined {
   try {
-    canvas.follow.start(sid)
+    const r = canvas.viewport.screenRect()
+    if (r.width > 0 && r.height > 0) return { w: Math.round(r.width), h: Math.round(r.height) }
+  } catch {
+    // no board handles (a bare port): send none, followers keep the plain fit
+  }
+  return undefined
+}
+
+/**
+ * R2-04 on this page (the tldraw board's `installReadableFollow`): the camera rule for a gathered
+ * follower (CR-3F-3, `follow.start(sid, {camera})`). Presence carries the leader's visible scene rectangle
+ * only, so their zoom is their canvas height (`leaderScreen`, sent with the summon) over the rectangle's
+ * height (the width when it has none); a dock panel they open later changes their canvas's width, not its
+ * height. `readableFollowViewport` (../follow.ts, the tldraw board's rule) then decides: a much narrower
+ * screen (a phone following a desktop) sees the leader's view centre at the leader's zoom, at most
+ * READABLE_FOLLOW_ZOOM; everyone else keeps the fit (null). Without `leaderScreen` the fit stays.
+ */
+export function readableFollowCamera(
+  leaderScreen: SummonScreen | null | undefined,
+): (input: FollowCameraInput) => FollowCamera | null {
+  return ({ leader, screen, fit }) => {
+    if (!leaderScreen) return null
+    const zoom =
+      leader.height > 0
+        ? leaderScreen.h / leader.height
+        : leader.width > 0
+          ? leaderScreen.w / leader.width
+          : 0
+    if (!(zoom > 0) || !Number.isFinite(zoom)) return null
+    const v = readableFollowViewport(
+      { x: fit.x, y: fit.y, w: screen.width / fit.zoom, h: screen.height / fit.zoom },
+      {
+        // tldraw's camera is the negated scene point at the top left
+        camera: { x: -leader.x, y: -leader.y, z: zoom },
+        screenBounds: { w: leader.width * zoom, h: leader.height * zoom },
+      },
+      { w: screen.width, h: screen.height },
+    )
+    return v ? { x: v.x, y: v.y, zoom: screen.width / v.w } : null
+  }
+}
+
+/**
+ * Starts following `sid` (with `options`: a camera rule); false when following is not available on this
+ * page yet (3c's part).
+ */
+export function startFollowing(canvas: LobbyCanvas, sid: string, options?: FollowOptions): boolean {
+  try {
+    canvas.follow.start(sid, options)
     return true
   } catch (e) {
     if (isStub(e)) return false
