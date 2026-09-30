@@ -9,11 +9,13 @@ import {
   clickItem,
   createItem,
   createNote,
+  editingId,
   expect,
   expectConverged,
   itemCenterOnScreen,
   sceneToScreen,
   selection,
+  TEXT_EDITOR,
   test,
   waitForItem,
 } from '../tests/support/canvas.ts'
@@ -411,14 +413,27 @@ test('mind map: start from a sticky note in a frame (Alt+Shift+M), drag the cent
   expect([...new Set(v.topics.map((t) => t.frameId))]).toEqual([frame])
 
   await test.step('dragging the central topic takes the whole map along (when it is dropped)', async () => {
+    // the last topic's editor has closed (a press while it closes only ends the typing)
+    await expect(a.page.locator(TEXT_EDITOR)).toHaveCount(0)
+    await expect.poll(() => editingId(a.page)).toBeNull()
     const before = await mapView(a.page)
     const root = byText(before, 'Q4 goals')
-    await dragScene(
-      a.page,
-      { x: root.box.x + 30, y: root.box.y + 30 },
-      { x: root.box.x + 30 + 60, y: root.box.y + 30 + 90 },
-      10,
-    )
+    const drag = () =>
+      dragScene(
+        a.page,
+        { x: root.box.x + 30, y: root.box.y + 30 },
+        { x: root.box.x + 30 + 60, y: root.box.y + 30 + 90 },
+        10,
+      )
+    await drag()
+    // Observed under load (2 of about 25 runs): the engine took no part of the first drag after the typing
+    // (nothing selected, nothing moved; 3D.md, evidence). Retried once, with a note in the report.
+    if (!(await selection(a.page)).includes(root.id)) {
+      test
+        .info()
+        .annotations.push({ type: 'retried', description: 'root drag: the first press was not taken' })
+      await drag()
+    }
     await expectTidy(a.page)
     await expect
       .poll(async () => {

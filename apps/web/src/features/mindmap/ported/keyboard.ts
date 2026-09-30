@@ -234,9 +234,15 @@ export class MindmapKeyboard {
     )
       await frame()
     // Writes the words and checks they stayed: a clean-up that lands after the write (the engine's
-    // submit of the closed editor) is followed by the write again.
+    // submit of the closed editor) is followed by the write again. Never in the middle of a press or a
+    // drag the person has started meanwhile (a write there would end it).
+    const busy = () => {
+      const g = this.canvas.gesture()
+      return g !== 'idle' && g !== 'tool' && g !== 'editing-text'
+    }
     const write = async (topic: string, text: string) => {
       for (let i = 0; i < 20 && !this.disposed; i++) {
+        for (let j = 0; j < 600 && busy(); j++) await frame()
         if (this.rt.setTopicText(topic, text)) {
           await frame()
           await wait(60)
