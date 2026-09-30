@@ -7,6 +7,8 @@
 //   - a text naming a container that is missing, deleted or not a text container → INVALID
 //   - a second label for a container → INVALID
 //   - a label created for (or pointed at) a container leased by another session → LEASED; locked → LOCKED
+//     (a container locked before the push; a label made in the same push as its new locked container,
+//     or one revived with it, is kept: CR-2D-1)
 //   - `frameId` naming something that is not a frame, or a frame inside a frame → INVALID
 //   - a group id that would get a second parent group → INVALID
 //  REPAIRS (server writes in the same clock):
@@ -26,6 +28,8 @@ const clone = <T>(v: T): T => JSON.parse(JSON.stringify(v)) as T
 const isLabel = (el: El | null | undefined): boolean => !!el && el.type === 'text' && !!el.containerId
 const wasLive = (w: Work) => !!w.before && !w.before.isDeleted
 const isLive = (w: Work) => !!w.el && !w.el.isDeleted
+/** A container that was live and locked before this push (the lock rule's scope, CR-2D-1). */
+const lockedBefore = (w: Work) => wasLive(w) && !!w.before?.locked
 
 type Ref = { id: string; type: 'arrow' | 'text' }
 
@@ -61,7 +65,9 @@ function rejectPass(p: PushApplier): boolean {
           revert(w.id, 'LEASED')
           continue
         }
-        if (x.locked) {
+        // the lock guards what was on the board before this push (CR-2D-1): a label created with its new
+        // locked container (a template's image slot, a pasted or imported locked card) is kept
+        if (lockedBefore(p.get(x.id)) && x.locked) {
           revert(w.id, 'LOCKED')
           continue
         }

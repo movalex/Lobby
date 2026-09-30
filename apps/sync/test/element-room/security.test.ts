@@ -168,6 +168,40 @@ describe('cross-element invariants (§2.4.4)', () => {
     ).toBeNull()
   })
 
+  it('F6 (CR-2D-1) the lock guards containers locked before the push: a label made with its NEW locked container is kept', async () => {
+    const st = await h.stack()
+    const b = newBoardId()
+    const a = await st.client({ boardId: b, user: 'alice' })
+    const m = await st.client({ boardId: b, user: 'mallory' })
+    // a template's locked slot, or a pasted locked card: container and label in one push
+    const t1 = label('n1.t', 'n1', { text: 'slot', originalText: 'slot' })
+    const created = await a.create([withLabel(note('n1', { locked: true }), t1), t1])
+    expect(created.r).toMatchObject([{ ok: true }, { ok: true }])
+    // a container locked in the same push as its new label (it was not locked before it)
+    await a.create([note('n2')])
+    const t2 = label('n2.t', 'n2')
+    const both = await a.push([patch(a, 'n2', { g: { meta: { locked: true } } }), { k: 'c', el: t2 }])
+    expect(both.r).toMatchObject([{ ok: true }, { ok: true }])
+    // an existing locked container still refuses a new label, and a label pointed at it
+    await m.untilClock(a.clock)
+    expect(r0(await m.create([label('n1.t2', 'n1')]))).toMatchObject({ ok: false, code: 'LOCKED' })
+    await m.create([text('t3')])
+    expect(r0(await m.push([patch(m, 't3', { g: { bind: { containerId: 'n2' } } })]))).toMatchObject({
+      ok: false,
+      code: 'LOCKED',
+    })
+    const s = await st.snapshot(b)
+    const byId = new Map(
+      s.elements.map((e) => [e.id, e as { containerId?: unknown; boundElements?: unknown }]),
+    )
+    expect(byId.get('n1.t')?.containerId).toBe('n1')
+    expect(byId.get('n1')?.boundElements).toEqual([{ id: 'n1.t', type: 'text' }])
+    expect(byId.get('n2.t')?.containerId).toBe('n2')
+    expect(byId.get('n2')?.boundElements).toEqual([{ id: 'n2.t', type: 'text' }])
+    expect(byId.has('n1.t2')).toBe(false)
+    expect(byId.get('t3')?.containerId).toBeNull()
+  })
+
   it('F7 an arrow bound to a missing id: the binding is set to null (fix); the target lists a bound arrow', async () => {
     const st = await h.stack()
     const b = newBoardId()

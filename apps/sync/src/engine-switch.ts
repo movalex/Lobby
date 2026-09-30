@@ -14,9 +14,11 @@
 // Nothing here imports engine code: the ElementRoom is loaded only when DRAFTROOM_ENGINE=excalidraw.
 
 import type { IncomingMessage, ServerResponse } from 'node:http'
+import type { WireElement } from '@draftroom/canvas-schema/elements'
 import type { FileRefsResponse, WorkshopStateBody } from '@draftroom/contracts'
 import type { SyncConfig } from './config.ts'
 import type { BoardRole } from './permissions.ts'
+import type { BoardStore } from './room/store.ts'
 
 export const SYNC_ENGINES = ['tldraw', 'excalidraw'] as const
 export type SyncEngine = (typeof SYNC_ENGINES)[number]
@@ -154,7 +156,48 @@ export interface ElementRoomService extends SessionDirectory {
   metrics(): string
   /** closes every room, session and board file */
   closeAll(): Promise<void>
+  /**
+   * CR 2F-2 (optional; O1 implements it): the board's room opened for an internal route, after the
+   * board's conversion or roll-forward when its file needs one (what the room's snapshot route waits for,
+   * `existing` in room/index.ts). Resolves true when the room is open, false when the board has no file;
+   * throws HttpError 503 `unavailable` when the board could not be prepared.
+   */
+  prepareBoard?(boardId: string): Promise<boolean>
+  /**
+   * CR 2F-2 (optional; O1 implements it): a server-originated write into the board's room (place-notes,
+   * "Recently deleted" restore), queued with the sessions' pushes. The room opens the board if needed
+   * (as `prepareBoard`), and in its drain runs `apply` inside the batch's transaction (its own SAVEPOINT)
+   * with `clock` = the batch's next clock. Rows `apply` upserts carry that clock; after it, the room
+   * rebuilds its caches from the store (index, groups, counts), drops its snapshot cache, broadcasts
+   * `changed` as server ops and `doc` as a doc set with the batch's `changes`, calls `onDocumentChange`,
+   * and resolves with `result`. A throw rolls the SAVEPOINT back and rejects. Nothing else writes an open
+   * room's board file.
+   */
+  serverWrite?<T>(boardId: string, apply: ServerWriteApply<T>): Promise<T>
 }
+
+/** CR 2F-2: what a server write sees inside the transaction it commits in. */
+export interface ServerWriteTx {
+  /** the board file (room/store.ts), inside the transaction (and SAVEPOINT) the write commits in */
+  readonly store: BoardStore
+  /** the clock every row the write upserts carries */
+  readonly clock: number
+  readonly now: number
+}
+/** CR 2F-2: one element a server write changed (`before` null for a create). */
+export interface ServerWriteChange {
+  readonly before: WireElement | null
+  readonly after: WireElement
+}
+/** CR 2F-2: a server write's changes, for the broadcast, and its answer. */
+export interface ServerWriteOutcome<T> {
+  readonly changed: readonly ServerWriteChange[]
+  /** lb_doc keys written (null = removed) */
+  readonly doc: Readonly<Record<string, unknown>>
+  readonly result: T
+}
+/** CR 2F-2: synchronous from the first read to the last upsert (it runs inside the room's drain). */
+export type ServerWriteApply<T> = (tx: ServerWriteTx) => ServerWriteOutcome<T>
 
 export type ElementRoomFactory = (deps: ElementRoomDeps) => ElementRoomService
 

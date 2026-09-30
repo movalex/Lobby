@@ -1,5 +1,143 @@
 # O1 room: the ElementRoom slice (spike B)
 
+## Part 3: wave 2's change requests (CR 2F-2, CR-2D-1) and the items left from parts 1-2
+
+Branch `spike/b-room`: `spike/excalidraw` `92b1098` (the lead's M3 report; a fast-forward from `d495f06`)
+plus `6055baf` (CR), `61d3ad9`, `f98ce33`, `d22686f` and this file. The requests come from wave 2's owners
+on `engine/excalidraw` (`5b9c87a`): 2F's CR 2F-2 (`8a7e7af`), 2D's CR-2D-1, and the integrator's list for
+O1. Windows 11 workstation, Node 24.19.0, pnpm 10.34.5, Playwright 1.63.0, headless Chromium only. Ports
+7860-7862 (O1's range); nothing listened in 7860-7869 before or after any run. Every stack ran with
+`DRAFTROOM_BACKUP_STORE=off`; no R2 write; `.env.deploy.local` never read. NOT a quiet window.
+
+### Built in part 3
+
+| What | Where | Plan / request |
+|---|---|---|
+| **`prepareBoard(boardId)`** on the room service: the board's room opened after its conversion or roll-forward (the snapshot route's `existing`). `true` when open, `false` when the board has no file, 503 `unavailable` when it cannot be prepared | `room/index.ts` | CR 2F-2 |
+| **`serverWrite(boardId, apply)`**: opens the board the same way (404 `board-not-found` without a file) and queues a server write in its room with the sessions' pushes. The drain runs `apply` in the batch's transaction, in its own SAVEPOINT, at the batch's next clock. Its changes go out in the batch's one `changes` frame (its doc keys as the frame's doc set), for every session; nobody is acked. The caller's promise settles after the COMMIT: the write's result; the write's own error, rolled back, when `apply` throws (a route's `HttpError` passes through: 2F's 409s); 503 `unavailable` when the COMMIT fails (every session then resyncs, as for a push) or the room closes first | `room/element-room.ts`, `room/server-write.ts` | CR 2F-2 |
+| **The contract the room holds a server write to** (a violation rolls it back; the route answers 500): every reported element is stored at the write's clock exactly as reported, passes the element check and has a `version` above the stored one; nothing unreported is stored at that clock; every reported doc key is stored at that clock with a value its key allows, and no other; a live element has a valid index no other live element uses, and a label sorts after its container. A write that adds elements beyond the board caps is refused 409 `element-limit` | `room/server-write.ts` | §2.4.3, §3.5 |
+| **Stamped as the server's**: `before` is the stored row as the write found it (read by `tx.store.upsert` before it writes), so a wrong `before` in a report cannot corrupt the patch ops; group clocks never go back and every group whose fields changed is at the write's clock (so a stale offline replay, a text write on an older base and the conditional fit see it); the writer ledger names the server for that clock (a session's STALE check treats it as someone else's write); a deletion gets its tombstone clock and time and an `lb_deleted` row by "Lobby" (`lobby-server`), unless `apply` wrote one. **Rule 7**: arrows bound to a target the write moved, and arrows it moved, rebound or brought back, are re-snapped in the same clock and frame (merge.ts `PushApplier`, the server's identity, no ops). The index, group and live-count caches follow; the snapshot cache is dropped | `room/server-write.ts` | §2.4.3 steps 8-12, §2.9.4 rule 7 |
+| Test-only routes `POST /internal/test/boards/:bid/prepare` and `…/server-write` (a canned `apply`: puts, deletions, revivals, doc keys, and deliberate contract breaks), mounted with the room's routes only when `DRAFTROOM_TEST_HOOKS=1` | `room/test-routes.ts` | for the protocol tests |
+| **CR-2D-1**: the LOCKED rule for a label applies to a container that was live and locked before the push. A label created with its new locked container (a template's locked slot, a pasted or imported locked card), with a container revived in the push or with one locked in the same push is kept; a new label for, or a text pointed at, an existing locked container is still LOCKED | `room/invariants.ts` | CR-2D-1 |
+| **`lb_deleted` retention per room session** (§2.6: today's store's limits and rules): each row names the room session that deleted it (one id per room open, in `lb_deleted.epoch`, as `deleted/store.ts` does; converted rows keep their tldraw session's id); after every 100 deletions the newest 1,000 rows of any session plus the current session's are kept, up to 10,000, in whole batches. "Older" is by insertion order, never by batch number: a converted board's rows keep tldraw's batch numbers, which overlap the room's (a push's clock), so the old `batch <` rule could drop a newer row | `room/store.ts`, `merge.ts`, `element-room.ts` | §2.6 |
+| The header of `room/http.ts` no longer says seed, place-notes, text, asset-refs and deleted are "not built": they are wave 2F's (`room-internal/` on `engine/excalidraw`), reaching an open board through `prepareBoard` and `serverWrite` | `room/http.ts` | integrator's note |
+
+New tests (all in `apps/sync/test/element-room/`, inside the room suites below):
+- `server-write.test.ts` (7, real server process): a write reaches two open sessions in one `changes` frame at
+  its clock (doc set included), no ack to either, the answer after the COMMIT, a reconnect's catch-up
+  carries it; a push and a write in flight take separate clocks, the stored group clocks are kept and the
+  changed ones stamped, and a text push on a base older than the write is STALE (on a fresh base, ok); a
+  thrown write (409), eight contract breaks (500: wrong clock, unreported row, an async `apply`, a version
+  not raised, a live element's index, a label below its container, an invalid element, no index, a refused
+  and an unknown doc key) and a failed COMMIT (503, both sessions 4000 RECONNECT) each leave the test
+  snapshot byte-identical, send no frame, and the room keeps serving; a deletion's tombstone fields and
+  its `lb_deleted` row by Lobby, a revival clearing them, a session's delete in the same session id; rule 7
+  (a moved target's arrow re-snapped in the write's frame); `prepareBoard` on a tldraw board (one
+  `convert` job, then the write; the joiner gets no PREPARING), `false` / 404 for a board without a file,
+  a write to a board whose room is closed (after a restart), and 503 for a board whose conversion fails.
+- `security.test.ts` "F6 (CR-2D-1)": fails on the old rule, passes on the new.
+- `store-deleted.test.ts` (4, in-process): the limits pinned to today's `DELETED_LIMITS`; the per-session
+  rule across three sessions; whole batches; the overlapping batch numbers never drop a newer row.
+- `epochs.test.ts` (1, real server process): see "Epochs on restore".
+
+### Change request
+
+`6055baf` **CR: engine-switch.ts** (additive, optional): CR 2F-2's declarations taken verbatim from
+`8a7e7af`: two of its four hunks (the `WireElement` and `BoardStore` type imports; `prepareBoard?`,
+`serverWrite?` and the types `ServerWriteTx`, `ServerWriteChange`, `ServerWriteOutcome`,
+`ServerWriteApply`). CR 2F-1 (the extension mount point, `loadEngine` importing `./room-internal/index.ts`,
+the `app.ts` wrap) is NOT taken: `room-internal/` exists only on `engine/excalidraw`. The integrator has
+already accepted 8a7e7af there; the spike lead records it (CONTRACTS change log, both CRs).
+
+### A trial on `engine/excalidraw` (not a check; never pushed)
+
+A throwaway worktree (removed afterwards): `origin/engine/excalidraw` `5b9c87a` with `spike/b-room`
+`d22686f` merged. **The merge is clean**; `engine-switch.ts` and `app.ts` come out identical to
+engine/excalidraw's (`git diff` empty), so this CR adds no conflict to the engine branch's next merge of
+the spike.
+- `vitest --project sync`: 662 passed, 1 skipped, **2 failed: 2F's two "503 on an open room" assertions**
+  (`test/room-internal/deleted.test.ts:83`, `place-notes.test.ts:141`), which now answer 200. Every other
+  2F test passes, and so does everything else in the project.
+- A throwaway test of 2F's own routes on an OPEN board (kept in O1's scratchpad, `open-room.trial.test.ts`),
+  2/2: the "Recently deleted" restore of a frame with its notes, a box and an arrow while two sessions are
+  on the board answers 200 with 2F's expected body; both sessions converge on the snapshot with no schema
+  error and no ack; 0 invariant violations; the list is empty after it; the restored note takes a push at
+  once. The place-notes reveal of 12 notes answers 200; the frame grows, and **the arrow bound to the frame
+  is re-snapped by the room** (version raised, `boundEndsOffEdge` within 0.5 px); the session converges;
+  every note carries the session's `privateNote`; a retried reveal places nothing and moves no clock.
+
+### Items left from parts 1-2
+
+- **Epochs on restore: nothing to build in the room; now tested.** §2.6 says every restore writes a new
+  epoch. The restore paths an element board has today: a lazy conversion (new epoch, O4's), a roll-forward
+  (new epoch, O4's; conversion.test.ts checks it), and the staged restore of a CONVERTED board's backup:
+  `restoreBackupFile` raises the tldraw clock, so the next open is a roll-forward, which writes a new epoch.
+  `epochs.test.ts` runs that path end to end (a backup by SQLite's online backup, an element added after
+  it, the restore with the server stopped, the restart): the stale client is held (`PREPARING`), then gets
+  a reset with a new epoch and no ghost element; a client from the pre-backup epoch resets too; one
+  `rollforward` job. The one restore without an epoch step, a board BORN on the new canvas, does not exist
+  yet: the backup code (`apps/sync/src/backup/**`, frozen in the spike, 2B's in the waves) reads tldraw's
+  `metadata` table to back up (`backup.ts:144`) and to restore (`restore.ts`), so such a board can be
+  neither backed up nor restored. When 2B teaches it the element format, its restore step must write a new
+  `lb_meta.epoch` (and a clock above the live file's) before the room opens; the room then resets every
+  stale client (`baseline.test.ts`: another epoch gets a reset). No room change is needed for that.
+- **`lb_deleted` retention per session: built** (above). It is what 3h's "Recently deleted" port will show.
+- **Presence's "always included" peers: not built, because the protocol cannot carry them.** §2.7 says the
+  followed peer, the presenter and anyone who summoned the recipient are always in its presence frames.
+  The cap they bypass (40 cursors per recipient) applies only above 41 peers in a room; below that everyone
+  already gets everyone. The room cannot know any of the three: the presence input (`protocol.ts`
+  `Presence`: pointer, button, sel, view, idle, editing, drag) has no follow target, and no client or api
+  message names a presenter or a summons. Once there is a CR for them (both ends, O1 and O2; the design is
+  wave 3c's: e.g. presence `follow: sid | null`, and the presenter and summons pushed by the api the way
+  the workshop state is, A2), the room change is a few lines in `presence.ts`: those sids are added to a
+  capped recipient's shown set before the view-based choice.
+- Not the room's: the internal routes (wave 2F's); CR-2D-2 `LobbyTx.insert` (contracts owner and 2C); O2's
+  data-loss defects (the drag-recolour overwrite, the lost-edit/lost-create race, the offline-queue window).
+
+### Handover (part 3)
+
+- **Wave 2F**: `serverWrite` and `prepareBoard` now exist, so `writeBoard` and `readableBoard`
+  (`room-internal/board.ts`) take the room path; the closed-room path is left for `create` (seed). Flip the
+  two "503 on an open room" assertions (`deleted.test.ts:83`, `place-notes.test.ts:141`) to the open-room
+  success. What an `apply` must do: write through `tx.store.upsert` (the room reads `before` there) at
+  `tx.clock`, raise every `version`, report every row and doc key it writes, keep indices valid and
+  unique; the room stamps group clocks, tombstones and `lb_deleted` rows, and re-snaps bound arrows
+  (place-notes' grown frame included, so its `gclock: {}` for an existing frame is now harmless).
+- **O4 and wave 2F**: converted `lb_deleted` rows keep tldraw's batch numbers (`convert-board.ts`,
+  `rollforward.ts`), and the room's live rows use the push's clock, so the two ranges overlap. The room's
+  trim no longer depends on batch numbers, but 2F's list and restore (`room-internal/deleted.ts` `byBatch`)
+  read one batch number as one batch: a converted batch `n` and a live batch at clock `n` are grouped
+  together (an entry can be hidden as "inside" the other's frame, or restored with it). Rare (it needs an
+  element of one to name an element of the other), but real. Suggestion: O4 writes converted and appended
+  rows with batch numbers outside the room's range (for example negative), or 2F groups by `(batch,
+  origin)`.
+- **Spike B lead**: record `6055baf` (CR 2F-2's declarations; CR 2F-1 not taken) in CONTRACTS.md.
+- **Waves 3f and 3h**: the private brainstorm's reveal and the "Recently deleted" restore work on an open
+  board (the trial above).
+- **Wave 2D**: CR-2D-1 is in; the templates' expected failure can become a pass.
+
+### Evidence, 3 runs on `d22686f`
+
+`O1_OUT=<dir> RUNS=3 bash docs/research/excalidraw/spike-b/scripts/o1-checks.sh`, 2026-09-30 01:19:26-01:28:16Z
+(logs and each spec's Playwright folder in O1's scratchpad `o1/p3/runs/`, never committed). Nothing
+listened in 7860-7869 before or after any spec.
+
+| Check | Spec or suite | Run 1 | Run 2 | Run 3 | Numbers |
+|---|---|---|---|---|---|
+| B3 L8 | `b3-l8-leased-forged` | PASS | PASS | PASS | 20/20 forged repetitions each; final convergence and 0 violations each |
+| B4 D3 | `b4-server-d3-sigkill` | PASS | PASS | PASS | acked = stored at the 3 kills: 774/774/777, 786/786/780, 771/777/780 of 960 sent; 0 missing |
+| B4 D4 | `b4-server-d4-commit` | PASS | PASS | PASS | Saved states seen: saving, offline, saved (never saved before the move was stored) |
+| B5 R1 | `b5-r1-readonly-forged` (forged part, viewer + commenter presence, limited guest presence) | PASS 3/3 | PASS 3/3 | PASS 3/3 | presence p95 viewer / commenter / guest: 127/125/126, 127/126/126, 126/126/126 ms (informational: not a quiet window; the 200 ms gate is asserted only with `SPIKE_B_QUIET=1`) |
+| B5 R4 | `b5-r4-downgrade` | PASS | PASS | PASS | 4000 on the downgrade, read-only reconnect, READ_ONLY for the queued edit |
+| B6 | `b6-forged` (F1-F17 in 15 tests) | 15/15 | 15/15 | 15/15 | |
+| Server half of L6/L10, and the room | `vitest run apps/sync/test/element-room packages/canvas-schema/src/engine packages/canvas-schema/src/invariants.test.ts` (19 files; part 2's 16 plus server-write, store-deleted, epochs; security gains F6 CR-2D-1) | 149/149 | 149/149 | 149/149 | 26.0 / 26.1 / 26.6 s (part 2: 136) |
+| C0 arrow acceptance tests | `pnpm test:arrows` | 85/85 | 85/85 | 85/85 | 9.8 / 9.9 / 9.8 s |
+
+Gate on `d22686f` (once): `biome check .` 1,433 files, 0 errors; `pnpm -r typecheck` (15 projects) pass;
+`tsc -p apps/sync/tsconfig.node-safe.json --noEmit` pass; `pnpm test` 3,988 passed, 33 skipped, 0 failed
+(the lead's M3 gate: 3,975 / 33; +13 new room tests). Not re-run here: the spike A suite, the A8 probe and
+the normal-build marker check (no file under `apps/web` changed).
+
 ## Part 2: after the M1/M2 integration
 
 Branch `spike/b-room`, on `spike/excalidraw` `76c937f` (the lead's M1/M2 integration; fast-forward, no
