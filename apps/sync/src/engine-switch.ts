@@ -14,9 +14,11 @@
 // Nothing here imports engine code: the ElementRoom is loaded only when DRAFTROOM_ENGINE=excalidraw.
 
 import type { IncomingMessage, ServerResponse } from 'node:http'
+import type { WireElement } from '@draftroom/canvas-schema/elements'
 import type { FileRefsResponse, WorkshopStateBody } from '@draftroom/contracts'
 import type { SyncConfig } from './config.ts'
 import type { BoardRole } from './permissions.ts'
+import type { BoardStore } from './room/store.ts'
 
 export const SYNC_ENGINES = ['tldraw', 'excalidraw'] as const
 export type SyncEngine = (typeof SYNC_ENGINES)[number]
@@ -34,8 +36,11 @@ export function parseEngine(raw: string | undefined): SyncEngine {
  * R0 stand-in pre-open checks for `tldraw`. Idempotent (modules load once).
  */
 export async function loadEngine(engine: SyncEngine): Promise<void> {
-  if (engine === 'excalidraw') await import('./room/index.ts')
-  else await import('./r0/index.ts')
+  if (engine === 'excalidraw') {
+    await import('./room/index.ts')
+    // CR 2F-1: the internal routes built outside the room register themselves (registerRoomExtension)
+    await import('./room-internal/index.ts')
+  } else await import('./r0/index.ts')
 }
 
 // ---- internal routes ------------------------------------------------------------------------------
@@ -154,7 +159,48 @@ export interface ElementRoomService extends SessionDirectory {
   metrics(): string
   /** closes every room, session and board file */
   closeAll(): Promise<void>
+  /**
+   * CR 2F-2 (optional; O1 implements it): the board's room opened for an internal route, after the
+   * board's conversion or roll-forward when its file needs one (what the room's snapshot route waits for,
+   * `existing` in room/index.ts). Resolves true when the room is open, false when the board has no file;
+   * throws HttpError 503 `unavailable` when the board could not be prepared.
+   */
+  prepareBoard?(boardId: string): Promise<boolean>
+  /**
+   * CR 2F-2 (optional; O1 implements it): a server-originated write into the board's room (place-notes,
+   * "Recently deleted" restore), queued with the sessions' pushes. The room opens the board if needed
+   * (as `prepareBoard`), and in its drain runs `apply` inside the batch's transaction (its own SAVEPOINT)
+   * with `clock` = the batch's next clock. Rows `apply` upserts carry that clock; after it, the room
+   * rebuilds its caches from the store (index, groups, counts), drops its snapshot cache, broadcasts
+   * `changed` as server ops and `doc` as a doc set with the batch's `changes`, calls `onDocumentChange`,
+   * and resolves with `result`. A throw rolls the SAVEPOINT back and rejects. Nothing else writes an open
+   * room's board file.
+   */
+  serverWrite?<T>(boardId: string, apply: ServerWriteApply<T>): Promise<T>
 }
+
+/** CR 2F-2: what a server write sees inside the transaction it commits in. */
+export interface ServerWriteTx {
+  /** the board file (room/store.ts), inside the transaction (and SAVEPOINT) the write commits in */
+  readonly store: BoardStore
+  /** the clock every row the write upserts carries */
+  readonly clock: number
+  readonly now: number
+}
+/** CR 2F-2: one element a server write changed (`before` null for a create). */
+export interface ServerWriteChange {
+  readonly before: WireElement | null
+  readonly after: WireElement
+}
+/** CR 2F-2: a server write's changes, for the broadcast, and its answer. */
+export interface ServerWriteOutcome<T> {
+  readonly changed: readonly ServerWriteChange[]
+  /** lb_doc keys written (null = removed) */
+  readonly doc: Readonly<Record<string, unknown>>
+  readonly result: T
+}
+/** CR 2F-2: synchronous from the first read to the last upsert (it runs inside the room's drain). */
+export type ServerWriteApply<T> = (tx: ServerWriteTx) => ServerWriteOutcome<T>
 
 export type ElementRoomFactory = (deps: ElementRoomDeps) => ElementRoomService
 
@@ -168,6 +214,65 @@ export function registerElementRoom(factory: ElementRoomFactory): void {
 /** The registered factory, or null when `./room/index.ts` was not loaded (loadEngine('excalidraw')). */
 export function registeredElementRoom(): ElementRoomFactory | null {
   return elementRoomFactory
+}
+
+// ---- room extensions (CR 2F-1) --------------------------------------------------------------------------
+
+/**
+ * What a room extension builds its routes from: the service it extends (its public surface: the session
+ * directory, `routes()`, and the optional CR 2F-2 members when the room has them) and the deps the service
+ * was built with (the rooms folder, config, log, clock and the document-change reporter).
+ */
+export interface RoomExtensionContext {
+  readonly service: ElementRoomService
+  readonly deps: ElementRoomDeps
+}
+/**
+ * Internal routes built outside the room (apps/sync/src/room-internal/**: seed, place-notes, text,
+ * asset-refs, deleted), mounted after the room's own routes, behind the same secret check.
+ */
+export type RoomExtension = (ctx: RoomExtensionContext) => readonly InternalRoute[]
+
+const roomExtensions: RoomExtension[] = []
+
+/** Called by `./room-internal/index.ts` at import (loadEngine('excalidraw')). Returns the unregister function. */
+export function registerRoomExtension(ext: RoomExtension): () => void {
+  roomExtensions.push(ext)
+  return () => {
+    const i = roomExtensions.indexOf(ext)
+    if (i >= 0) roomExtensions.splice(i, 1)
+  }
+}
+
+/**
+ * The service with the registered extensions' routes appended to its own (app.ts calls it on the
+ * factory's service). With no extension registered it is the service itself.
+ */
+export function extendElementRoom(service: ElementRoomService, deps: ElementRoomDeps): ElementRoomService {
+  if (roomExtensions.length === 0) return service
+  const exts = [...roomExtensions]
+  let extra: InternalRoute[] | null = null
+  const extended: ElementRoomService = {
+    connect: (session, socket) => service.connect(session, socket),
+    routes: () => {
+      extra ??= exts.flatMap((ext) => [...ext({ service, deps })])
+      return [...service.routes(), ...extra]
+    },
+    metrics: () => service.metrics(),
+    closeAll: () => service.closeAll(),
+    roomIfOpen: (boardId) => service.roomIfOpen(boardId),
+    sessionsOf: (boardId) => service.sessionsOf(boardId),
+    openBoards: () => service.openBoards(),
+  }
+  if (service.prepareBoard) {
+    const prepare = service.prepareBoard.bind(service)
+    Object.assign(extended, { prepareBoard: prepare })
+  }
+  if (service.serverWrite) {
+    const write = service.serverWrite.bind(service)
+    Object.assign(extended, { serverWrite: write })
+  }
+  return extended
 }
 
 // ---- pre-open checks (O4, the R0 stand-in's born-after check) ----------------------------------------

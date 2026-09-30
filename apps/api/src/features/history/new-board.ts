@@ -18,19 +18,31 @@ import { BOARD_RETURNING, type BoardRow, requireWorkspaceRole } from '../../acce
 import { audit } from '../../audit.ts'
 import { ApiError, forbidden } from '../../errors.ts'
 import { assertBoardRoom } from '../../files/usage.ts'
-import { SyncSeedConflict, SyncUnavailable } from '../../sync-internal.ts'
+import {
+  type LobbySeed,
+  type RoomSnapshotJson,
+  SyncSeedConflict,
+  SyncUnavailable,
+} from '../../sync-internal.ts'
 import type { FeatureContext } from '../context.ts'
 import type { FileRef } from './files.ts'
+
+/**
+ * What the new board starts with (validated again by the sync server's seed): tldraw records with the
+ * serialized schema they are in (a v1 checkpoint or archive, a tldraw board; a sync on the Excalidraw
+ * engine converts them), or elements of the Excalidraw engine with its board document (a v2 checkpoint or
+ * archive, a board on the new canvas).
+ */
+export type BoardContent =
+  | { format: 'tldraw'; records: unknown[]; schema: unknown }
+  | { format: 'lobby-elements'; elements: unknown[]; doc: Record<string, unknown> }
 
 export interface NewBoardPlan {
   userId: string
   workspaceId: string
   projectId: string | null
   title: string
-  /** Document records (validated again by the sync server's seed). */
-  records: unknown[]
-  /** Serialized tldraw schema the records are in. */
-  schema: unknown
+  content: BoardContent
   /** File versions the new board may show. */
   files: readonly FileRef[]
   /** keepSharing duplicate only. */
@@ -82,13 +94,17 @@ export async function createBoardFrom(
   plan: NewBoardPlan,
   log?: (message: string) => void,
 ): Promise<BoardRow> {
-  const snapshot = {
-    schema: plan.schema,
-    documents: plan.records.map((state) => ({
-      state: state as Record<string, unknown>,
-      lastChangedClock: 0,
-    })),
-  }
+  const content = plan.content
+  const snapshot: RoomSnapshotJson | LobbySeed =
+    content.format === 'lobby-elements'
+      ? { format: 'lobby-elements', elements: content.elements, doc: content.doc }
+      : {
+          schema: content.schema,
+          documents: content.records.map((state) => ({
+            state: state as Record<string, unknown>,
+            lastChangedClock: 0,
+          })),
+        }
   // SEAM-11: before the seed, so a full workspace never leaves an orphan canvas behind (and again below).
   await assertBoardRoom(ctx.db, plan.workspaceId, ctx.config.storage.maxBoardsPerWorkspace)
   let boardId: string | null = null

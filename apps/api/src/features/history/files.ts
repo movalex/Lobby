@@ -8,6 +8,7 @@ import type { Queryable } from '@draftroom/db'
 import { isId } from '@draftroom/dev-assets'
 import { can } from '@draftroom/permissions'
 import { loadBoardAccess } from '../../access.ts'
+import { filesOfElements } from '../../canvas/lobby-elements.ts'
 import { loadVersionRows, type VersionRow } from '../../files/meta.ts'
 import { boardsShowingAsset, isAssetLinked } from '../../files-auth.ts'
 import type { ArchiveAssetRef } from './board-ops.ts'
@@ -38,6 +39,29 @@ export function referencedFiles(records: Iterable<unknown>): FileRef[] {
     } else if (r.typeName === 'shape' && r.type === 'dr-file-card') add(r.props.assetId, r.props.versionId)
   }
   return [...seen.values()]
+}
+
+/**
+ * Distinct file versions elements of the Excalidraw engine show (an image's `fileId`, D7), as the same
+ * refs: `customData.lobby.file` names the asset; an image without those facts gets its version's asset
+ * from asset_versions (a version id is unique), and a version that no longer exists is left out.
+ */
+export async function referencedElementFiles(q: Queryable, elements: Iterable<unknown>): Promise<FileRef[]> {
+  const files = filesOfElements(elements)
+  const known: FileRef[] = []
+  const bare: string[] = []
+  for (const f of files) {
+    if (f.assetId) known.push({ assetId: f.assetId, versionId: f.versionId })
+    else bare.push(f.versionId)
+  }
+  for (let i = 0; i < bare.length; i += 500) {
+    const rows = await q.query<{ id: string; asset_id: string }>(
+      'SELECT id, asset_id FROM asset_versions WHERE id = ANY($1::text[])',
+      [bare.slice(i, i + 500)],
+    )
+    for (const r of rows.rows) known.push({ assetId: r.asset_id, versionId: r.id })
+  }
+  return known
 }
 
 const refKey = (ref: FileRef) => `${ref.assetId}/${ref.versionId}`

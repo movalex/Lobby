@@ -3,7 +3,8 @@
 
 import { createHash } from 'node:crypto'
 import type { BoardCheckpoint, CheckpointReason, SnapshotKind } from '@draftroom/contracts'
-import type { RoomSnapshotJson } from '../../sync-internal.ts'
+import { liveElements, lobbySnapshotOf } from '../../canvas/lobby-elements.ts'
+import type { BoardSnapshotJson, RoomSnapshotJson } from '../../sync-internal.ts'
 
 export interface SnapshotRow {
   id: string
@@ -43,8 +44,8 @@ export const toCheckpoint = (r: SnapshotRow): BoardCheckpoint => ({
   sizeBytes: Number(r.size_bytes),
 })
 
-/** The stored checkpoint body (object store). */
-export interface CheckpointBody {
+/** The stored checkpoint body (object store), v1: tldraw records. */
+export interface CheckpointBodyV1 {
   format: 'draftroom-checkpoint'
   version: 1
   boardId: string
@@ -53,19 +54,83 @@ export interface CheckpointBody {
   documents: { state: Record<string, unknown>; lastChangedClock: number }[]
 }
 
+/**
+ * v2 (docs/EXCALIDRAW-MIGRATION.md §3.7, §5.5): a board of the Excalidraw engine, as its sync snapshot
+ * gave it: the live elements and the board document at the lb `clock`.
+ */
+export interface CheckpointBodyV2 {
+  format: 'lobby-checkpoint'
+  version: 2
+  boardId: string
+  clock: number
+  /** the element schema version (canvas-schema protocol.ts ELEMENT_SCHEMA_VERSION) */
+  schema: number
+  elements: Record<string, unknown>[]
+  doc: Record<string, unknown>
+}
+
+export type CheckpointBody = CheckpointBodyV1 | CheckpointBodyV2
+
+/** A stored body as the readers use it: v1 is never rewritten (§5.5), both are read. */
+export type CheckpointContentOf =
+  | { version: 1; schema: unknown; records: Record<string, unknown>[] }
+  | { version: 2; schema: number; elements: Record<string, unknown>[]; doc: Record<string, unknown> }
+
+/** Reads a stored body (JSON). Throws on a body of neither format. */
+export function readCheckpointBody(raw: string): CheckpointContentOf {
+  const body = JSON.parse(raw) as Partial<CheckpointBodyV1> & Partial<CheckpointBodyV2> & { format?: unknown }
+  if (body.format === 'lobby-checkpoint' && body.version === 2)
+    return {
+      version: 2,
+      schema: Number(body.schema) || 1,
+      elements: Array.isArray(body.elements) ? body.elements : [],
+      doc: body.doc && typeof body.doc === 'object' && !Array.isArray(body.doc) ? body.doc : {},
+    }
+  if (body.format === 'draftroom-checkpoint' || body.format === undefined)
+    return {
+      version: 1,
+      schema: body.schema,
+      records: (Array.isArray(body.documents) ? body.documents : []).map((d) => d.state),
+    }
+  throw new Error('unknown checkpoint body format')
+}
+
 /** A sync snapshot as the body stores it, with its document clock and the hash of its content. */
-export function checkpointBodyOf(boardId: string, snap: RoomSnapshotJson) {
-  const documents = (Array.isArray(snap.documents) ? snap.documents : []).map((d) => ({
+export function checkpointBodyOf(boardId: string, snap: BoardSnapshotJson) {
+  const lobby = lobbySnapshotOf(snap)
+  if (lobby) {
+    const elements = liveElements(lobby.elements)
+    const body: CheckpointBodyV2 = {
+      format: 'lobby-checkpoint',
+      version: 2,
+      boardId,
+      clock: lobby.clock,
+      schema: lobby.schema,
+      elements,
+      doc: lobby.doc,
+    }
+    const json = JSON.stringify(body)
+    return {
+      body,
+      json,
+      documentClock: lobby.clock,
+      recordCount: elements.length,
+      sizeBytes: Buffer.byteLength(json),
+      contentHash: elementsContentHash(elements, lobby.doc),
+    }
+  }
+  const tl = snap as RoomSnapshotJson
+  const documents = (Array.isArray(tl.documents) ? tl.documents : []).map((d) => ({
     state: d.state,
     lastChangedClock: Number(d.lastChangedClock ?? 0),
   }))
-  const documentClock = Math.max(0, Math.floor(Number(snap.documentClock ?? 0)) || 0)
-  const body: CheckpointBody = {
+  const documentClock = Math.max(0, Math.floor(Number(tl.documentClock ?? 0)) || 0)
+  const body: CheckpointBodyV1 = {
     format: 'draftroom-checkpoint',
     version: 1,
     boardId,
     documentClock,
-    schema: snap.schema,
+    schema: tl.schema,
     documents,
   }
   const json = JSON.stringify(body)
@@ -105,5 +170,23 @@ export function contentHash(records: readonly Record<string, unknown>[]): string
     .sort((a, b) => (id(a) < id(b) ? -1 : id(a) > id(b) ? 1 : 0))
   const hash = createHash('sha256')
   for (const r of content) hash.update(`${stableJson(r)}\n`)
+  return hash.digest('hex')
+}
+
+/**
+ * sha256 of a v2 body's content: the live elements in id order, then the board document (a tag
+ * definition or the start view is content too). Prefixed so it never equals a v1 hash: the first
+ * checkpoint after a board's conversion is always saved (§5.5).
+ */
+export function elementsContentHash(
+  elements: readonly Record<string, unknown>[],
+  doc: Readonly<Record<string, unknown>>,
+): string {
+  const id = (r: Record<string, unknown>) => String(r.id ?? '')
+  const sorted = [...elements].sort((a, b) => (id(a) < id(b) ? -1 : id(a) > id(b) ? 1 : 0))
+  const hash = createHash('sha256')
+  hash.update('lobby-checkpoint 2\n')
+  for (const el of sorted) hash.update(`${stableJson(el)}\n`)
+  hash.update(`doc ${stableJson(doc)}\n`)
   return hash.digest('hex')
 }

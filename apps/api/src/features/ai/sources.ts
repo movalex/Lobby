@@ -17,9 +17,21 @@
 // items stop at the caller's token budget (`truncated` then says so).
 
 import { plainTextOf } from '@draftroom/board-ops'
-import type { AiAction } from '@draftroom/contracts'
-import { AI_THEMES_MAX_NOTES, splitThemeNotes } from '@draftroom/contracts'
-import type { RoomSnapshotJson } from '../../sync-internal.ts'
+import type { AiAction, AiNoteFacts } from '@draftroom/contracts'
+import { AI_PROMPT_META_KEY, AI_THEMES_MAX_NOTES, splitThemeNotes } from '@draftroom/contracts'
+import {
+  isObject as isRecord,
+  labelsByContainer,
+  liveElements,
+  lobbyOf,
+  lobbyServerOf,
+  lobbySnapshotOf,
+  objectTypeOf,
+  refOf,
+  SINGLE_PAGE_ID,
+  textOfElement,
+} from '../../canvas/lobby-elements.ts'
+import type { BoardSnapshotJson, RoomSnapshotJson } from '../../sync-internal.ts'
 
 export type SourceKind = 'note' | 'text' | 'shape' | 'arrow'
 
@@ -59,16 +71,66 @@ interface ShapeRec {
   isLocked: boolean
   props: Record<string, unknown>
   meta: Record<string, unknown>
+  /** Excalidraw engine: the object's plain text (its label's), read from the elements */
+  text?: string
+  /** Excalidraw engine: `x`, `y` are scene coordinates (no parent offsets to add) */
+  absolute?: boolean
+  /** Excalidraw engine: what "Group into themes" asks of a note (contracts AiNoteFacts) */
+  facts?: AiNoteFacts
 }
 
 const isObject = (v: unknown): v is Record<string, unknown> =>
   typeof v === 'object' && v !== null && !Array.isArray(v)
 const finite = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : 0)
 
-/** The snapshot's shape records by id (anything malformed is skipped). */
-export function shapesOf(snapshot: RoomSnapshotJson): Map<string, ShapeRec> {
+/**
+ * The objects of a board of the Excalidraw engine (`lobby-elements`), as the shape records the rules
+ * below read: `shape:<elementId>` ids, the api's object types, frames as parents (`frameId`), a note's
+ * text from its bound label, and its theme facts from customData (the prompt marker, a revealed private
+ * note, an AI note, who last typed its label).
+ */
+function shapesOfElements(elements: readonly unknown[]): Map<string, ShapeRec> {
   const out = new Map<string, ShapeRec>()
-  const docs = Array.isArray(snapshot?.documents) ? snapshot.documents : []
+  const live = liveElements(elements)
+  const labels = labelsByContainer(live)
+  for (const el of live) {
+    const type = objectTypeOf(el)
+    const id = refOf(el.id)
+    if (!type || !id || out.has(id)) continue
+    const lobby = lobbyOf(el)
+    const label = labels.get(el.id)
+    const editedBy = label ? lobbyServerOf(label).lastEditedBy : undefined
+    out.set(id, {
+      id,
+      type,
+      parentId: (typeof el.frameId === 'string' && refOf(el.frameId)) || SINGLE_PAGE_ID,
+      x: finite(el.x),
+      y: finite(el.y),
+      isLocked: el.locked === true,
+      props: type === 'frame' ? { name: typeof el.name === 'string' ? el.name : '' } : {},
+      meta: {},
+      text: textOfElement(el, labels),
+      absolute: true,
+      facts: {
+        meta: {
+          [AI_PROMPT_META_KEY]: lobby.prompt,
+          drPrivateNote: lobbyServerOf(el).privateNote,
+          drAi: lobby.ai,
+        },
+        textLastEditedBy: isRecord(editedBy) && typeof editedBy.uid === 'string' ? editedBy.uid : null,
+      },
+    })
+  }
+  return out
+}
+
+/** The snapshot's shape records by id (anything malformed is skipped). */
+export function shapesOf(snapshot: BoardSnapshotJson): Map<string, ShapeRec> {
+  const lobby = lobbySnapshotOf(snapshot)
+  if (lobby) return shapesOfElements(lobby.elements)
+  const out = new Map<string, ShapeRec>()
+  const tl = snapshot as RoomSnapshotJson
+  const docs = Array.isArray(tl?.documents) ? tl.documents : []
   for (const doc of docs) {
     const s = isObject(doc) ? doc.state : undefined
     if (!isObject(s) || s.typeName !== 'shape') continue
@@ -139,7 +201,10 @@ function textOf(shape: ShapeRec): string {
     case 'text':
     case 'geo':
     case 'arrow':
-      return cleanText(plainTextOf(shape.props.richText), MAX_ITEM_CHARS)
+      return cleanText(
+        shape.text !== undefined ? shape.text : plainTextOf(shape.props.richText),
+        MAX_ITEM_CHARS,
+      )
     default:
       return ''
   }
@@ -164,7 +229,7 @@ export interface CollectOptions {
 }
 
 export function collectSources(
-  snapshot: RoomSnapshotJson,
+  snapshot: BoardSnapshotJson,
   requested: readonly string[],
   opts: CollectOptions,
 ): Sources {
@@ -184,6 +249,7 @@ export function collectSources(
 
   /** Page position (ancestor offsets added up; rotation ignored: only used to order items). */
   const position = (s: ShapeRec) => {
+    if (s.absolute) return { x: s.x, y: s.y }
     let x = s.x
     let y = s.y
     let p = shapes.get(s.parentId)
@@ -254,10 +320,10 @@ export function collectSources(
   }
   // Themes group ideas only: a template's prompt and instruction notes stay where they are (R9).
   if (themes)
-    eligible = splitThemeNotes(eligible, (e) => ({
-      meta: e.s.meta,
-      textLastEditedBy: e.s.props.textLastEditedBy,
-    })).ideas
+    eligible = splitThemeNotes(
+      eligible,
+      (e) => e.s.facts ?? { meta: e.s.meta, textLastEditedBy: e.s.props.textLastEditedBy },
+    ).ideas
   // Reading order: rows about a note tall, left to right.
   eligible.sort((a, b) => Math.floor(a.at.y / 120) - Math.floor(b.at.y / 120) || a.at.x - b.at.x)
   for (const e of eligible) addFrameName(shapes.get(e.s.parentId))

@@ -6,6 +6,7 @@
 // record would keep every image and video ever placed, forever.
 
 import { isId } from '@draftroom/dev-assets'
+import { filesOfElements } from '../canvas/lobby-elements.ts'
 
 export interface VersionRef {
   assetId: string
@@ -41,9 +42,24 @@ export function versionsInRecords(records: Iterable<unknown>): VersionRef[] {
   return [...out.values()]
 }
 
-/** A checkpoint body (history's `draftroom-checkpoint` JSON): the versions its records reference. */
-export function versionsInCheckpoint(raw: string): VersionRef[] {
-  const body = JSON.parse(raw) as { documents?: unknown }
+/** A version a checkpoint names; `assetId` null when a v2 element names only its version (`fileId`). */
+export interface CheckpointVersionRef {
+  assetId: string | null
+  versionId: string
+}
+
+/**
+ * A checkpoint body (history's snapshot-rows.ts): the versions it references. v1 (`draftroom-checkpoint`)
+ * holds tldraw records; v2 (`lobby-checkpoint`, the Excalidraw engine, docs/EXCALIDRAW-MIGRATION.md
+ * §3.7) holds elements, whose images name their version by `fileId` (D7). The collector finds the asset
+ * of a version named without one (scanCheckpoints).
+ */
+export function versionsInCheckpoint(raw: string): CheckpointVersionRef[] {
+  const body = JSON.parse(raw) as { format?: unknown; documents?: unknown; elements?: unknown }
+  if (body?.format === 'lobby-checkpoint') {
+    const elements = Array.isArray(body.elements) ? body.elements : []
+    return filesOfElements(elements)
+  }
   const docs = Array.isArray(body?.documents) ? body.documents : []
   return versionsInRecords(docs.map((d) => (isObject(d) ? d.state : null)))
 }
@@ -51,6 +67,11 @@ export function versionsInCheckpoint(raw: string): VersionRef[] {
 export interface BoardRefs {
   canvas: VersionRef[]
   deleted: VersionRef[]
+  /**
+   * Excalidraw engine (apps/sync/src/room-internal/asset-refs.ts `versionsOnly`): versions an image
+   * names by `fileId` with no file facts, on the canvas or in what could come back. Kept like the others.
+   */
+  versions: string[]
 }
 
 const isRef = (v: unknown): v is VersionRef =>
@@ -65,5 +86,10 @@ export function parseBoardRefs(value: unknown, boardId: string): BoardRefs | nul
   const { canvas, deleted } = value
   if (!Array.isArray(canvas) || !Array.isArray(deleted)) return null
   if (!canvas.every(isRef) || !deleted.every(isRef)) return null
-  return { canvas, deleted }
+  const only = value.versionsOnly
+  if (only === undefined) return { canvas, deleted, versions: [] }
+  if (!isObject(only) || !Array.isArray(only.canvas) || !Array.isArray(only.deleted)) return null
+  const versions = [...only.canvas, ...only.deleted]
+  if (!versions.every((v) => isId('ver', v))) return null
+  return { canvas, deleted, versions: versions as string[] }
 }
