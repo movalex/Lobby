@@ -12,7 +12,9 @@
 //    (Excalidraw's own lock deselects and groups a locked multi-selection; this one only sets `locked`).
 //    Locking a frame locks what is inside it, as Excalidraw's own lock does.
 //  - MAK-06: PgUp/PgDn to front/back, Shift+PgUp/PgDn one step; tldraw's ] [ and Alt+] Alt+[ kept.
-//  - tldraw's align keys (Alt+A/H/D/W/V/S, Alt+Shift+H/V) stay on the selection's align and distribute.
+//  - tldraw's align keys (Alt+A/H/W/V/S, Alt+Shift+H/V) stay on the selection's align and distribute.
+//    Align right loses tldraw's Alt+D: it is the browser's address bar (plan §2.3.3 "browser chords pass
+//    untouched"); the button and the menus still have it.
 //  - A11Y2-07: "?" and Ctrl/Cmd+/ open the keyboard shortcuts (Ctrl/Cmd+Alt+/ too); nothing flips the theme.
 //  - Ctrl/Cmd+U opens the file picker (Insert file).
 import type {
@@ -360,7 +362,7 @@ export const COMMANDS: readonly CommandSpec[] = [
     [
       [CMD.alignLeft, 'Align left', 'alt+a', 'left'],
       [CMD.alignCenterH, 'Align horizontally', 'alt+h', 'center-horizontal'],
-      [CMD.alignRight, 'Align right', 'alt+d', 'right'],
+      [CMD.alignRight, 'Align right', null, 'right'],
       [CMD.alignTop, 'Align top', 'alt+w', 'top'],
       [CMD.alignCenterV, 'Align vertically', 'alt+v', 'center-vertical'],
       [CMD.alignBottom, 'Align bottom', 'alt+s', 'bottom'],
@@ -369,7 +371,7 @@ export const COMMANDS: readonly CommandSpec[] = [
     ([id, label, kbd, op]): CommandSpec => ({
       id,
       label,
-      kbd: [kbd],
+      ...(kbd ? { kbd: [kbd] } : {}),
       enabled: (ctx) => editable(ctx) && selectionAtLeast(2)(ctx),
       run: (ctx) => align(ctx, op),
     }),

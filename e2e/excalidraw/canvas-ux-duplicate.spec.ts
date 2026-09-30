@@ -111,7 +111,9 @@ test('onDuplicate: Ctrl+D copies a note and a frame by the rules (tags and alt k
   expect((await lobbyOf(b.page, frame)).present).toEqual({ index: 2, skip: true })
 })
 
-test('onDuplicate: the context menu’s Duplicate and an Alt-drag copy by the same rules', async ({ canvasSession }) => {
+test('onDuplicate: the context menu’s Duplicate and an Alt-drag copy by the same rules', async ({
+  canvasSession,
+}) => {
   const a = await canvasSession('alice')
   const b = await canvasSession('bob')
   await waitForCanvasUx(a.page)
@@ -128,10 +130,14 @@ test('onDuplicate: the context menu’s Duplicate and an Alt-drag copy by the sa
   })
 
   await test.step('Alt-drag', async () => {
-    const box = await withCanvas(a.page, (c, id) => {
-      const bb = c.bounds(id)
-      return bb ? c.sceneToScreen({ x: bb.x + bb.width / 2, y: bb.y + bb.height / 2 }) : null
-    }, note)
+    const box = await withCanvas(
+      a.page,
+      (c, id) => {
+        const bb = c.bounds(id)
+        return bb ? c.sceneToScreen({ x: bb.x + bb.width / 2, y: bb.y + bb.height / 2 }) : null
+      },
+      note,
+    )
     if (!box) throw new Error('no note')
     await a.page.mouse.move(box.x, box.y)
     await a.page.keyboard.down('Alt')

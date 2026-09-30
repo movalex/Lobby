@@ -150,7 +150,11 @@ function plainWrites(
   if (!label || (label as { isDeleted?: boolean }).isDeleted) return
   const lf: Record<string, unknown> = {}
   if (patch.opacity !== undefined && (label as Loose).opacity !== patch.opacity) lf.opacity = patch.opacity
-  if (el.type === 'stickynote' && patch.strokeColor !== undefined && (label as Loose).strokeColor !== patch.strokeColor)
+  if (
+    el.type === 'stickynote' &&
+    patch.strokeColor !== undefined &&
+    (label as Loose).strokeColor !== patch.strokeColor
+  )
     lf.strokeColor = patch.strokeColor
   if (Object.keys(lf).length) add(label.id, lf)
 }
@@ -185,7 +189,7 @@ export function textWrites(
   const notes = new Set<string>()
   for (const id of textIds) {
     const t = map.get(id) as Copy
-    if (!t || t.type !== 'text' || t.isDeleted) continue
+    if (t?.type !== 'text' || t.isDeleted) continue
     const container = t.containerId ? (map.get(t.containerId) ?? null) : null
     touch(id)
     if (container) touch(container.id)
@@ -240,14 +244,16 @@ export function textWrites(
 
 export function createStylesPart(deps: PartDeps): StylesPart {
   const canvas = () => deps.self()
-  const setNext = (patch: StyleValues) => {
+  /** A board-page member on a canvas without the board page (unit tests): its fallback. */
+  const orElse = <T>(read: () => T, fallback: T): T => {
     try {
-      canvas().styles.setNext(patch)
+      return read()
     } catch (e) {
-      // a canvas without the board page (unit tests): no engine state to keep
-      if (!(e instanceof NotImplementedError)) throw e
+      if (e instanceof NotImplementedError) return fallback
+      throw e
     }
   }
+  const setNext = (patch: StyleValues) => orElse(() => canvas().styles.setNext(patch), undefined)
   const of = (ids?: readonly string[]): MixedStyles => {
     const c = canvas()
     const list = (ids ?? c.selection).map((id) => c.get(id)).filter((e): e is CanvasElement => !!e)
@@ -256,7 +262,7 @@ export function createStylesPart(deps: PartDeps): StylesPart {
   const apply = (patch: StyleValues, ids?: readonly string[]): void => {
     const c = canvas()
     setNext(patch)
-    if (c.readOnly()) return
+    if (orElse(() => c.readOnly(), false)) return
     const targets = (ids ?? c.selection)
       .map((id) => c.get(id))
       .filter((e): e is CanvasElement => !!e && !(e as { isDeleted?: boolean }).isDeleted)
