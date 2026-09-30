@@ -7,24 +7,11 @@ import { useEffect, useState } from 'react'
 import type { Editor } from 'tldraw'
 import type { BoardTagRow } from './model.ts'
 import { boardTagRowsOf } from './runtime.ts'
+import { sameRows } from './tag-core.ts'
 
 export const ROWS_THROTTLE_MS = 200
 
-export function sameRows(a: readonly BoardTagRow[], b: readonly BoardTagRow[]): boolean {
-  if (a === b) return true
-  if (a.length !== b.length) return false
-  return a.every((r, i) => {
-    const o = b[i]
-    return (
-      o !== undefined &&
-      o.key === r.key &&
-      o.name === r.name &&
-      o.color === r.color &&
-      o.count === r.count &&
-      o.listed === r.listed
-    )
-  })
-}
+export { sameRows } from './tag-core.ts'
 
 export function useTagRows(editor: Editor): BoardTagRow[] {
   const [rows, setRows] = useState(() => boardTagRowsOf(editor).get())
