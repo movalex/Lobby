@@ -609,7 +609,6 @@ test('orphaned thread: restoring the note from Recently deleted re-attaches it (
 }) => {
   // CR 2F-2: "Recently deleted" restore answers 503 on an open board until the room's serverWrite lands
   // (docs/research/excalidraw/WAVE-2.md §5); the history panel is 3h's port. Remove the mark then.
-  test.fail(true, 'CR 2F-2: restore from Recently deleted needs the room serverWrite on an open board')
   const a = await canvasSession('alice')
   const note = await noteAt(a.page, 0, 0, 'Keyframe')
   const thread = await commentsApi(await users.api('alice')).createThread(

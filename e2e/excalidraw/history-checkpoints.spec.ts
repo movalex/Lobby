@@ -339,7 +339,6 @@ test('a private-notes reveal saves the board just before: History lists "Before 
 }) => {
   // The reveal is the api's server write on an OPEN board (place-notes), which answers 503 until the
   // room implements serverWrite (CR 2F-2, O1). Expected to fail until then.
-  test.fail(true, 'CR 2F-2: place-notes on an open board answers 503 until the room has serverWrite')
   const aliceApi = await users.api('alice')
   const alice = await canvasSession('alice')
   const page = alice.page

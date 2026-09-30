@@ -1,8 +1,8 @@
 // 3b navigation on the Excalidraw board page: templates (PRE-02/03), ported from canvas-ux.spec.ts
 // "templates in a board" and "?template= on first open". The insert writes the template's prepared
-// elements through `LobbyTx.insert` (CR-2D-2, the contracts owner and 2C), which is not on the page yet:
-// the tests that insert are EXPECTED TO FAIL (test.fail) until it lands; remove the marks then. What does
-// not insert (the picker, a viewer's ?template=, the parameter dropped) is checked as usual.
+// elements through `LobbyTx.insert` (CR-2D-2: on the page since the wave-3 integration, W3-9). "Templates
+// in a board" still fails at its undo step (DEF-W3-2: the undo removes the template for the inserting tab
+// only), so it keeps an expected-failure mark with that reason.
 //
 //   E2E_PORT_BASE=<base> pnpm --filter @draftroom/e2e excalidraw -- navigation-templates
 import { createNote, expect, expectSaved, test } from '../tests/support/canvas.ts'
@@ -68,7 +68,7 @@ test('templates in a board: storyboard lands selected, in view, clear of existin
 }) => {
   test.fail(
     true,
-    'CR-2D-2: LobbyTx.insert(elements) is not on the page yet; the insert says it could not be added',
+    'DEF-W3-2: since CR-2D-2 landed the insert works, but its undo removes the template for the inserting tab only',
   )
   test.setTimeout(180_000)
   const a = await canvasSession('alice')
@@ -122,7 +122,6 @@ test('?template= on first open: an empty board gets the template once (param rem
   board,
   users,
 }) => {
-  test.fail(true, 'CR-2D-2: LobbyTx.insert(elements) is not on the page yet; the template is not added')
   const a = await canvasSession('alice')
   await waitForNavigation(a.page)
   expect(await countOf(a.page)).toBe(0)

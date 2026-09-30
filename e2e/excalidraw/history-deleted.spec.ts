@@ -36,7 +36,11 @@ import {
   undoWithKeyboard,
 } from './history-kit.ts'
 
-const CR_2F_2 = 'CR 2F-2: a restore on an open board answers 503 until the room has serverWrite'
+// CR 2F-2 landed with spike B's part 3 (the room's serverWrite): a restore on an open board goes through the
+// room. Two tests still fail: the restore does not re-bind a live connector to what it brings back
+// (DEF-W3-1, 2F's restore through serverWrite / O1).
+const DEF_W3_1 =
+  'DEF-W3-1: a restore through the open room does not re-bind a live connector to the restored element'
 
 const selectedIds = async (page: Page) => ((await canvasCall(page, 'selection')) as string[]).sort()
 
@@ -210,7 +214,7 @@ test('restoring a deleted frame puts its 2 notes back in place inside it, re-bin
   users,
   stack,
 }) => {
-  test.fail(true, CR_2F_2)
+  test.fail(true, DEF_W3_1)
   const a = await canvasSession('alice')
   const b = await canvasSession('bob')
   const bobApi = await users.api('bob')
@@ -246,7 +250,6 @@ test('restoring a note and a connector together (bob, multi-select) puts them ba
   board,
   users,
 }) => {
-  test.fail(true, CR_2F_2)
   const a = await canvasSession('alice')
   const b = await canvasSession('bob')
   const bobApi = await users.api('bob')
@@ -272,7 +275,7 @@ test('restoring a note and a connector together (bob, multi-select) puts them ba
 test('restoring a note whose frame is gone puts it on the board where it was and reconnects its connector; the frame comes back without it (CR 2F-2)', async ({
   canvasSession,
 }) => {
-  test.fail(true, CR_2F_2)
+  test.fail(true, DEF_W3_1)
   const a = await canvasSession('alice')
   const b = await canvasSession('bob')
   const ids = await drawFrameBoard(a.page, 'rg')

@@ -257,16 +257,9 @@ test('undo never brings back an element someone else deleted, and says so', asyn
 test('undo: bob recolours while alice is still dragging; her undo moves it back and keeps his colour', async ({
   canvasSession,
 }) => {
-  // KNOWN DEFECT of the web engine core (spike B's canvas/sync/core, reported by 2E at wave 2): the
-  // colour bob writes while alice drags is held back from her scene until the gesture ends (§2.5.4), and
-  // her pointer-up push then carries her stale `style` group ({strokeColor: '#1e1e1e'}) with her `pos`,
-  // so the server stores alice's old colour and bob's edit is lost for everyone (all tabs Saved). This
-  // test is the acceptance test of the fix: until then Playwright expects it to fail, and it reports an
-  // unexpected pass once the defect is fixed (then delete this line).
-  test.fail(
-    true,
-    'known defect: a remote edit to an element this tab drags is overwritten by its pointer-up push',
-  )
+  // Wave 2's known defect (2E): alice's pointer-up push carried her stale colour and bob's recolour was lost.
+  // Fixed by spike B's O2 in part 3 (the held remote change is kept; merged into engine/excalidraw at the
+  // wave-3 integration), so this is the fix's acceptance test.
   // The case a naive whole-element undo gets wrong: bob's colour lands during alice's gesture, so her
   // step's "after" side holds it. Field-level undo moves only what she changed.
   const X = 'recoloured-mid-drag'

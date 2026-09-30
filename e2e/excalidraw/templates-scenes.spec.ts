@@ -166,7 +166,6 @@ test('a template pushed as authored keeps the labels of its locked image slots (
   canvasSession,
   board,
 }) => {
-  test.fail(true, 'CR-2D-1: the room refuses a label created with its new locked container')
   const scenes = allScenes().filter((s) => s.id === 'mood-board')
   const alice = await canvasSession('alice')
   const { rejected } = await pushScenes(alice.page, board, scenes, { lockAfter: false })

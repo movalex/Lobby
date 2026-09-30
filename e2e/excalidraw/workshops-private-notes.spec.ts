@@ -3,12 +3,10 @@
 // tests/workshops-2.fix.spec.ts (F6, F5, SEAM-07) and tests/facilitation-polish.fix.spec.ts (R1).
 // alice = board owner (she starts and reveals), bob = editor, carol = viewer.
 //
-// The REVEAL is blocked on this engine: the api's place-notes call answers 503 on a board whose room is
-// open (CR 2F-2: the room's `serverWrite` is not implemented yet; apps/sync room-internal/board.ts), and
-// in every one of these tests someone has the board open. So each tldraw test is split: what works now
-// (drafting, privacy, the frame, the panel, cancel) is a test that must pass; the reveal and what follows
-// it is its own test, marked as expected to fail with CR 2F-2 (remove the marks when O1 lands
-// `serverWrite`). Their assertions are already written for this engine: a placed note is a `stickynote`
+// Each tldraw test is split: drafting, privacy, the frame, the panel and cancel in one test, the reveal and
+// what follows it in its own ("(CR 2F-2)" in the title). The reveal was blocked until the room implemented
+// `serverWrite` (CR 2F-2, spike B's part 3, merged at the wave-3 integration): place-notes then answered 503
+// on a board whose room was open. The reveal tests must pass now. Their assertions are already written for this engine: a placed note is a `stickynote`
 // with `customData.lobbyServer.privateNote {session, author?}`, its text in its bound label, the author as
 // its `lobbyServer.createdBy` (docs/research/excalidraw/wave3/3F.md).
 import type { Page } from '@playwright/test'
@@ -34,9 +32,6 @@ import {
   type WorkshopCanvasSession,
   waitForWorkshopBoard,
 } from './workshops-kit.ts'
-
-const CR_2F_2 =
-  'CR 2F-2: place-notes answers 503 on a board whose room is open until the room implements serverWrite'
 
 interface ApiPrivateState {
   session: { id: string; status: string; frameId: string; anonymous: boolean } | null
@@ -227,7 +222,6 @@ test('private notes: the reveal puts every note in the frame for everyone, with 
   join,
   board,
 }) => {
-  test.fail(true, CR_2F_2)
   const alice = await join('alice', 'owner')
   const bob = await join('bob', 'editor')
   await startBrainstorm(alice.page, { prompt: 'What should we change?', anonymous: false, target: 'new' })
@@ -315,7 +309,6 @@ test('private notes: an anonymous reveal names nobody, and a doubled reveal plac
   join,
   board,
 }) => {
-  test.fail(true, CR_2F_2)
   const alice = await join('alice', 'owner')
   const bob = await join('bob', 'editor')
   await seed(alice.page, { frames: [{ id: 'retro', x: 0, y: 0, w: 700, h: 500, name: 'Retro' }] })
@@ -387,7 +380,6 @@ test('private notes: once the canvas is back, "Place notes" finishes a reveal th
   board,
   stack,
 }) => {
-  test.fail(true, CR_2F_2)
   const alice = await join('alice', 'owner')
   const bob = await join('bob', 'editor')
   await startBrainstorm(alice.page, { prompt: 'Risks?', anonymous: false, target: 'new' })
@@ -667,7 +659,6 @@ test('private notes on a phone: the panel shows the timer and "Time\'s up" until
 test('private notes on a phone: after the reveal the panel closes onto the notes (R2-03) (CR 2F-2)', async ({
   join,
 }) => {
-  test.fail(true, CR_2F_2)
   const host = await join('erin', 'editor')
   const bob = await join('bob', 'editor')
   await bob.page.setViewportSize({ width: 390, height: 844 })
@@ -809,7 +800,6 @@ test('private notes: a guest removed mid-session keeps their draft off the board
   browser,
   board,
 }) => {
-  test.fail(true, CR_2F_2)
   const alice = await join('alice', 'owner')
   const bob = await join('bob', 'editor')
   const context = await browser.newContext({ viewport: { width: 1280, height: 820 } })
@@ -847,7 +837,6 @@ test('R1: 16 notes revealed into a retro column keep its width and never reach t
   board,
   join,
 }) => {
-  test.fail(true, CR_2F_2)
   const alice = await join('alice')
   const bob = await join('bob', 'editor')
   await seed(alice.page, {
