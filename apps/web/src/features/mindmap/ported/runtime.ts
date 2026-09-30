@@ -16,9 +16,10 @@
 //    the gesture ends or the editor closes.
 //  - Changes from other people are checked 400 ms after they settle, and only for a map this tab changed in
 //    the last 5 s (when two people changed the same map at once). Their own client lays out its changes,
-//    so normally there is nothing to do; the fix-up joins this tab's last step (never a step of its own)
-//    and is skipped while this tab can redo. Undo and redo are never followed by a layout write (each step
-//    carries its layout; a write there would clear the redo stack).
+//    so normally there is nothing to do; the fix-up moves topics only (lines stay their writers'), joins
+//    this tab's last step (never a step of its own) and is skipped while this tab can redo. Undo and redo
+//    are never followed by a layout write (each step carries its layout; a write there would clear the redo
+//    stack).
 //  - Read-only people never write (the server refuses their pushes anyway).
 //
 // The collapse (decided in spike B, B12): only `collapsed` is stored, on the parent's `mindmap` value;
@@ -463,14 +464,17 @@ export class MindmapRuntime {
       // Only a tab that changed the same map a moment ago fixes it up (two people changed it at once):
       // the fix-up joins that tab's own change, so one undo still takes back what it did, and nobody
       // else's undo stack gets a step they never made. Not right after an undo or a redo either: a new
-      // step would clear the redo stack and take the next Ctrl+Z.
+      // step would clear the redo stack and take the next Ctrl+Z. Positions only (and the geometry of the
+      // lines whose ends it moves): making, replacing or re-binding a line is its writer's, and a line this
+      // tab bound to someone else's new topic would keep their undo from taking the topic back (Lobby's
+      // undo does not delete what someone else has since bound to).
       const now = Date.now()
       const roots = [...this.dirtyRemote].filter((r) => now - (this.lastLocal.get(r) ?? 0) < RECENT_LOCAL_MS)
       this.dirtyRemote.clear()
       if (!roots.length || untracked(() => this.canvas.history.canRedo())) return
       const d = new Draft(this.canvas)
       untracked(() => {
-        for (const rootId of roots) this.layoutNow(d, rootId, { edges: true })
+        for (const rootId of roots) this.layoutNow(d, rootId, { edges: false })
       })
       this.commit(d, 'mindmap: layout', true)
     }, REMOTE_SETTLE_MS)
@@ -577,13 +581,25 @@ export class MindmapRuntime {
     else this.refreshLines(d, after)
   }
 
+  /**
+   * Moves the topics the layout placed elsewhere. A topic someone else is typing in stays: its label is
+   * theirs under the lease (the server would refuse the label's move and take the box alone, leaving the
+   * words outside it), and their own client lays the map out when their editor closes.
+   */
   private applyPositions(d: Draft, tree: MindmapTree, moved: ReadonlyMap<string, Point>) {
     for (const [id, p] of moved) {
+      if (this.heldByOther(id)) continue
       const el = d.get(id)
       const box = tree.nodes.get(id)?.box
       if (!el || !box) continue
       d.move(id, p.x + (el.x - box.x), p.y + (el.y - box.y))
     }
+  }
+
+  /** Whether another session holds the text lease of `id` (its label is being typed in there). */
+  private heldByOther(id: string): boolean {
+    const holder = this.canvas.leaseHolder(id)
+    return !!holder && holder.sid !== (this.canvas.engine?.welcome?.sid ?? null)
   }
 
   /**

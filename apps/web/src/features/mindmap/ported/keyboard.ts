@@ -117,6 +117,7 @@ export function textAfter(base: string, mode: EditorMode, words: string): string
 export class MindmapKeyboard {
   private pending: Pending | null = null
   private offs: (() => void)[] = []
+  private disposed = false
   readonly rt: MindmapRuntime
   readonly canvas: LobbyCanvas
 
@@ -141,6 +142,7 @@ export class MindmapKeyboard {
       this.offs.push(() => doc.removeEventListener('keydown', onKey, { capture: true }))
     }
     return () => {
+      this.disposed = true
       for (const f of this.offs.splice(0)) f()
       if (this.pending) this.pending.done = true
       this.pending = null
@@ -220,11 +222,28 @@ export class MindmapKeyboard {
    */
   private async replayWithoutEditor(id: string, mode: EditorMode, base: string, queue: Queued[]) {
     // the cancelled open first closes the editor the engine may have begun (its clean-up runs a moment
-    // later and selects the topic it was for): act once that is over
+    // later, selects the topic it was for and may drop the empty label it had open): act once that is over
     const frame = () => new Promise<void>((r) => requestAnimationFrame(() => r()))
+    const wait = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
     await frame()
     await frame()
-    for (let i = 0; i < 60 && this.canvas.gesture() === 'editing-text'; i++) await frame()
+    for (
+      let i = 0;
+      i < 60 && (this.canvas.gesture() === 'editing-text' || this.canvas.text.editorElement() !== null);
+      i++
+    )
+      await frame()
+    // Writes the words and checks they stayed: a clean-up that lands after the write (the engine's
+    // submit of the closed editor) is followed by the write again.
+    const write = async (topic: string, text: string) => {
+      for (let i = 0; i < 20 && !this.disposed; i++) {
+        if (this.rt.setTopicText(topic, text)) {
+          await frame()
+          await wait(60)
+          if (this.rt.textOf(topic) === text) return
+        } else await wait(60)
+      }
+    }
     let cur = id
     let curMode = mode
     let curBase = base
@@ -234,7 +253,7 @@ export class MindmapKeyboard {
       let i = 0
       for (; i < q.length && q[i]?.kind === 'text'; i++) words += (q[i] as { text: string }).text
       const text = textAfter(curBase, curMode, words)
-      if (text !== curBase) this.rt.setTopicText(cur, text)
+      if (text !== curBase) await write(cur, text)
       const key = q[i]
       q = q.slice(i + 1)
       if (key?.kind !== 'key') {
