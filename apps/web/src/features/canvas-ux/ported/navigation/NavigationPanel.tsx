@@ -93,7 +93,8 @@ function ZoomMenu({ canvas, showValue }: { canvas: LobbyCanvas; showValue: boole
   const menuId = useId()
   const buttonRef = useRef<HTMLButtonElement>(null)
   const menuRef = useRef<HTMLDivElement>(null)
-  const value = `${Math.floor(zoom * 100)}%`
+  // an animated move can end a hair below its step (0.9999…): never show 99% for 100%
+  const value = `${Math.floor(zoom * 100 + 1e-6)}%`
 
   useEffect(() => {
     if (!open) return

@@ -15,6 +15,12 @@ import { frameRows } from './model.ts'
 /** A tldraw camera (screen = (page + camera) * z) as the viewport Lobby sets: the scene's top-left and zoom. */
 export const fromTldrawCamera = (c: { x: number; y: number; z: number }) => ({ x: -c.x, y: -c.y, zoom: c.z })
 
+/** The visible scene rectangle now. */
+export function viewOf(canvas: LobbyCanvas): Bounds {
+  const v = canvas.viewport.get()
+  return { x: v.x, y: v.y, width: v.width, height: v.height }
+}
+
 /** The canvas's size on screen (CSS pixels). */
 export function screenSize(canvas: LobbyCanvas): { w: number; h: number } {
   const v = canvas.viewport.get()
@@ -31,10 +37,12 @@ export function contentBounds(canvas: LobbyCanvas): Bounds | null {
   )
 }
 
-/** Whether any content item is (at least partly) on screen. */
-export function viewportHasContent(canvas: LobbyCanvas): boolean {
-  const v = canvas.viewport.get()
-  const view = { x: v.x, y: v.y, width: v.width, height: v.height }
+/**
+ * Whether any content item is (at least partly) inside `view` (default: the camera now). A camera just
+ * set is not read back at once (the engine applies it on its next render), so a caller that moved the
+ * camera passes the rectangle it moved to.
+ */
+export function viewportHasContent(canvas: LobbyCanvas, view: Bounds = viewOf(canvas)): boolean {
   for (const e of items.contentItems(canvas.items())) {
     if (canvas.isHidden(e.id)) continue
     const b = canvas.bounds(e.id)

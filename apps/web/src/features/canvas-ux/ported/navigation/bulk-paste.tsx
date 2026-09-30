@@ -126,11 +126,16 @@ export function pasteAsNotes(ctx: CanvasFeatureContext, text: string, center: Sc
       })
     frameId = containingFrame(bounds, frames)?.id ?? null
   }
-  const ids = canvas.transact('paste as notes', (tx) => {
-    const made = cells.map((c) => tx.create('note', { x: c.x + dx, y: c.y + dy, text: c.text, size: NOTE }))
-    if (frameId) tx.setFrame(made, frameId)
-    return made
-  })
+  const ids = canvas.transact('paste as notes', (tx) =>
+    cells.map((c) => tx.create('note', { x: c.x + dx, y: c.y + dy, text: c.text, size: NOTE })),
+  )
+  // into the frame in a second write folded into the same undo step: the board page's port drops an
+  // update to an element created in the same transaction (canvas/port-impl.ts builds the scene from the
+  // created copies), so the notes and their labels join the frame once they exist
+  if (frameId) {
+    const frame = frameId
+    canvas.transact('paste as notes', (tx) => tx.setFrame(ids, frame), { joinPrevious: true })
+  }
   canvas.select(ids)
   // keep the whole grid in view (zooming out only, never in)
   const v = canvas.viewport.get()

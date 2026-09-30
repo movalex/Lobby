@@ -176,8 +176,8 @@ function fake(list: El[], opts: { readOnly?: boolean; role?: string } = {}): Fak
     setTool: () => true,
     focus: () => {},
     container: () => null,
-    transact<T>(label: string, fn: (t: LobbyTx) => T): T {
-      steps.push(label)
+    transact<T>(label: string, fn: (t: LobbyTx) => T, o?: { joinPrevious?: boolean }): T {
+      steps.push(o?.joinPrevious ? `${label} (joined)` : label)
       return fn(tx)
     },
     doc: {
@@ -488,6 +488,9 @@ describe('paste as notes', () => {
     const f = fake([el('fr', 'frame', 0, 0, 2000, 2000)])
     const ids = pasteAsNotes(f.ctx, 'a\nb\nc', { x: 1000, y: 1000 })
     expect(ids.map((id) => (f.els.get(id) as El).frameId)).toEqual(['fr', 'fr', 'fr'])
+    expect(ids.map((id) => (f.els.get(`${id}.t`) as El).frameId)).toEqual(['fr', 'fr', 'fr'])
+    // one undo step: the frame membership is folded into the paste
+    expect(f.steps).toEqual(['paste as notes', 'paste as notes (joined)'])
   })
 })
 

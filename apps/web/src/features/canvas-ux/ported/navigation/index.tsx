@@ -32,6 +32,7 @@ import { categoryLabel, TYPE_CATEGORIES, type TypeCategory } from '../../select-
 import { canArrangeAsGrid, runArrangeAsGrid } from './arrange-grid.ts'
 import { BULK_PASTE_HANDLER, BulkPastePrompt } from './bulk-paste.tsx'
 import { copySelectionLink } from './copy-link.ts'
+import { installNavigationDevHook } from './dev-hook.ts'
 import { FramesPanel } from './FramesPanel.tsx'
 import { NavigationPanel } from './NavigationPanel.tsx'
 import { SearchHighlights, SearchPanel } from './SearchPanel.tsx'
@@ -333,16 +334,21 @@ function mount(ctx: CanvasFeatureContext): () => void {
         tone: 'error',
         text: 'The template could not be added to this board.',
       }),
-  }).then(
-    (did) => {
-      if (live) startViewResult(canvas).set(did)
-    },
-    (e) => {
-      console.error('navigation: start view failed', e)
-      if (live) startViewResult(canvas).set('failed')
-    },
-  )
-  cleanups.push(persistView(canvas, ctx.board.id, ctx.me.user.id))
+  })
+    .then(
+      (did) => {
+        if (live) startViewResult(canvas).set(did)
+      },
+      (e) => {
+        console.error('navigation: start view failed', e)
+        if (live) startViewResult(canvas).set('failed')
+      },
+    )
+    // this user's camera is kept from the first view on (never the camera the board opened with)
+    .then(() => {
+      if (live) cleanups.push(persistView(canvas, ctx.board.id, ctx.me.user.id))
+    })
+  cleanups.push(installNavigationDevHook(ctx))
   return () => {
     live = false
     for (const c of cleanups.reverse()) c()

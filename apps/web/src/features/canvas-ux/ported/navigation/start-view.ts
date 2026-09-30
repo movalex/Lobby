@@ -24,7 +24,7 @@ import {
   TEMPLATE_PARAM,
   templateInsertedKey,
 } from '../../start-view.ts'
-import { contentBounds, fitContent, showFrame, viewportHasContent } from './camera.ts'
+import { contentBounds, fitContent, screenSize, showFrame, viewportHasContent } from './camera.ts'
 import { insertTemplate } from './template-insert.ts'
 
 function storageGet(storage: 'local' | 'session', key: string): string | null {
@@ -97,13 +97,8 @@ export function persistView(canvas: LobbyCanvas, boardId: string, userId: string
     const v = canvas.viewport.get()
     storageSet('local', key, JSON.stringify({ x: v.x, y: v.y, zoom: v.zoom }))
   }
-  let first = true
   const stop = react('nav-persist-view', () => {
     canvas.viewport.get()
-    if (first) {
-      first = false
-      return
-    }
     if (timer) clearTimeout(timer)
     timer = setTimeout(save, 400)
   })
@@ -209,19 +204,19 @@ function fitAllAt100(canvas: LobbyCanvas) {
   if (b) canvas.viewport.zoomTo(b, { maxZoom: 1 })
 }
 
-function showElements(canvas: LobbyCanvas, ids: readonly string[]): boolean {
+function showElements(canvas: LobbyCanvas, ids: readonly string[]): Bounds | null {
   const live = ids.filter((id) => {
     const el = canvas.get(id)
     return !!el && !el.isDeleted && !canvas.isHidden(id)
   })
   if (!live.length) {
     fitAllAt100(canvas)
-    return false
+    return null
   }
   canvas.select(live)
   const b = canvas.boundsOf(live)
   if (b) canvas.viewport.zoomTo(b, { maxZoom: 1 })
-  return true
+  return b
 }
 
 const rectToBounds = (r: { x: number; y: number; w: number; h: number }): Bounds => ({
@@ -234,37 +229,33 @@ const rectToBounds = (r: { x: number; y: number; w: number; h: number }): Bounds
 /**
  * Goes where a deep link points (tldraw's navigateToDeepLink): elements are selected and fitted at no
  * more than 100%; a view rectangle is shown exactly; a legacy page link shows the board's content.
+ * Returns the scene rectangle it went to (null when it showed all content).
  */
-export function navigateToDeepLink(canvas: LobbyCanvas, link: DeepLink): void {
+export function navigateToDeepLink(canvas: LobbyCanvas, link: DeepLink): Bounds | null {
   const importDoc = canvas.doc.get('import')
   switch (link.kind) {
     case 'elements':
-      showElements(canvas, link.ids)
-      return
+      return showElements(canvas, link.ids)
     case 'legacy-shapes': {
       const isLive = (id: string) => {
         const el = canvas.get(id)
         return !!el && !el.isDeleted
       }
-      showElements(canvas, resolveLegacyShapes(link.parts, isLive, legacyIdsOf(importDoc)))
-      return
+      return showElements(canvas, resolveLegacyShapes(link.parts, isLive, legacyIdsOf(importDoc)))
     }
     case 'view':
-      canvas.viewport.zoomTo(rectToBounds(link.bounds), { inset: 0, maxZoom: canvas.viewport.limits().max })
-      return
-    case 'legacy-view':
-      canvas.viewport.zoomTo(
-        rectToBounds(legacyViewBounds(link.bounds, link.pageId, legacyPagesOf(importDoc))),
-        {
-          inset: 0,
-          maxZoom: canvas.viewport.limits().max,
-        },
-      )
-      return
+    case 'legacy-view': {
+      const r =
+        link.kind === 'view'
+          ? rectToBounds(link.bounds)
+          : rectToBounds(legacyViewBounds(link.bounds, link.pageId, legacyPagesOf(importDoc)))
+      canvas.viewport.zoomTo(r, { inset: 0, maxZoom: canvas.viewport.limits().max })
+      return r
+    }
     case 'legacy-page':
       // the converter flattened the pages side by side with no stored extent: the board's content
       fitAllAt100(canvas)
-      return
+      return null
   }
 }
 
@@ -279,6 +270,32 @@ export interface StartViewOptions {
   hold?(dispose: () => void): void
 }
 
+/**
+ * Resolves once the board's first content has arrived: no change for `quietMs`, at most `maxMs` after the
+ * call. Features mount after the first `welcome`, but a fresh session's welcome may carry the room's
+ * cached snapshot (up to 5 s old, apps/sync room/element-room.ts `snapshotFor`) with a `changes` catch-up
+ * right behind it, so the board can still be filling in when `onMount` runs.
+ */
+export function whenSettled(canvas: LobbyCanvas, quietMs = 150, maxMs = 2500): Promise<void> {
+  return new Promise((resolve) => {
+    let quiet: ReturnType<typeof setTimeout> | null = null
+    let off: (() => void) | null = null
+    const done = () => {
+      if (quiet) clearTimeout(quiet)
+      clearTimeout(max)
+      off?.()
+      resolve()
+    }
+    const arm = () => {
+      if (quiet) clearTimeout(quiet)
+      quiet = setTimeout(done, quietMs)
+    }
+    const max = setTimeout(done, maxMs)
+    off = canvas.on('changed', arm)
+    arm()
+  })
+}
+
 /** How long after opening the first view is re-applied while the board's layout settles. */
 const SETTLE_MS = 2500
 
@@ -288,10 +305,15 @@ const SETTLE_MS = 2500
  * moment after opening, re-apply it on every canvas resize, until the person moves the camera themselves.
  */
 function holdThroughLayout(canvas: LobbyCanvas, apply: () => void): () => void {
-  let expected = canvas.viewport.get()
+  // the camera just set is read back once the engine has rendered it (the next frame)
+  let expected: { x: number; y: number; zoom: number } | null = null
+  let frame = requestAnimationFrame(() => {
+    expected = canvas.viewport.get()
+  })
   const unchanged = () => {
     const v = canvas.viewport.get()
-    return Math.abs(v.x - expected.x) < 1e-6 && Math.abs(v.y - expected.y) < 1e-6 && v.zoom === expected.zoom
+    const e = expected
+    return !e || (Math.abs(v.x - e.x) < 1e-6 && Math.abs(v.y - e.y) < 1e-6 && v.zoom === e.zoom)
   }
   const off = canvas.on('resize', () => {
     if (!unchanged()) {
@@ -299,11 +321,15 @@ function holdThroughLayout(canvas: LobbyCanvas, apply: () => void): () => void {
       return
     }
     apply()
-    expected = canvas.viewport.get()
+    cancelAnimationFrame(frame)
+    frame = requestAnimationFrame(() => {
+      expected = canvas.viewport.get()
+    })
   })
   const timer = setTimeout(() => stop(), SETTLE_MS)
   function stop() {
     clearTimeout(timer)
+    cancelAnimationFrame(frame)
     off()
   }
   return stop
@@ -315,11 +341,14 @@ function holdThroughLayout(canvas: LobbyCanvas, apply: () => void): () => void {
  */
 export async function applyStartView(ctx: CanvasFeatureContext, opts: StartViewOptions): Promise<string> {
   const { canvas } = ctx
+  // the stored camera is read before anything can move the camera (and so be persisted)
+  const storedAtOpen = readStoredView(canvas, opts.boardId, opts.userId)
+  await whenSettled(canvas)
   const href = window.location.href
   const url = new URL(href)
   const templateId = url.searchParams.get(TEMPLATE_PARAM)?.trim() || null
   const link = readDeepLink(href)
-  const stored = readStoredView(canvas, opts.boardId, opts.userId)
+  const stored = storedAtOpen
   const boardStart = readBoardStartView(canvas)
   const boardIsEmpty = contentBounds(canvas) === null
   const plan = planStartView({
@@ -347,7 +376,11 @@ export async function applyStartView(ctx: CanvasFeatureContext, opts: StartViewO
     }
   }
 
-  const fitIfEmpty = () => fitIfViewportEmpty(viewportHasContent(canvas), contentBounds(canvas) !== null)
+  // whether the rectangle the first view went to shows nothing while the board has content (PRE-06);
+  // the rectangle, not the camera: a camera just set is read back only after the engine renders it
+  const fitIfEmpty = (shown: Bounds) =>
+    fitIfViewportEmpty(viewportHasContent(canvas, shown), contentBounds(canvas) !== null)
+  const screen = screenSize(canvas)
 
   switch (plan.kind) {
     case 'template': {
@@ -362,14 +395,15 @@ export async function applyStartView(ctx: CanvasFeatureContext, opts: StartViewO
       return `template:${plan.templateId}`
     }
     case 'deep-link': {
-      if (link) navigateToDeepLink(canvas, link)
-      if (fitIfEmpty()) fitContent(canvas)
+      const shown = link ? navigateToDeepLink(canvas, link) : null
+      if (shown && fitIfEmpty(shown)) fitContent(canvas)
       return 'deep-link'
     }
     case 'restore': {
       // the stored view went into the tldraw rules as a camera of scene coordinates (see above)
-      canvas.viewport.set({ x: plan.camera.x, y: plan.camera.y, zoom: plan.camera.z })
-      if (fitIfEmpty()) {
+      const { x, y, z } = plan.camera
+      canvas.viewport.set({ x, y, zoom: z })
+      if (fitIfEmpty({ x, y, width: screen.w / z, height: screen.h / z })) {
         fitContent(canvas)
         return 'restore+fit'
       }
@@ -380,7 +414,8 @@ export async function applyStartView(ctx: CanvasFeatureContext, opts: StartViewO
         ? { x: plan.view.x, y: plan.view.y, w: plan.view.w, h: plan.view.h, frameId: plan.view.frameId }
         : { x: plan.view.x, y: plan.view.y, w: plan.view.w, h: plan.view.h }
       showBoardStartView(canvas, view, false)
-      if (fitIfEmpty()) {
+      const frame = view.frameId ? canvas.bounds(view.frameId) : null
+      if (fitIfEmpty(frame ?? { x: view.x, y: view.y, width: view.w, height: view.h })) {
         fitContent(canvas)
         return 'start-view+fit'
       }
