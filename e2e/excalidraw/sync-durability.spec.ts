@@ -33,6 +33,7 @@ import {
   goOffline,
   goOnline,
   openRelayedCanvasSession,
+  saveIndicator,
   serverSnapshot,
   storedElement,
 } from '../tests/support/excalidraw.ts'
@@ -41,13 +42,24 @@ import {
 async function recordSaveStates(page: Page): Promise<void> {
   await page.evaluate(() => {
     const w = window as unknown as { __saveLog?: string[] }
-    const el = document.querySelector('[data-testid="save-state"]')
-    if (!el) throw new Error('no save-state indicator on the page')
-    w.__saveLog = [el.getAttribute('data-state') ?? '']
+    // the board page's indicator (save-status) or the spike page's (save-state); re-read on every
+    // mutation so a re-rendered indicator is still followed
+    const read = () =>
+      document
+        .querySelector('[data-testid="save-status"], [data-testid="save-state"]')
+        ?.getAttribute('data-state') ?? null
+    const first = read()
+    if (first === null) throw new Error('no Saved indicator on the page')
+    w.__saveLog = [first]
     new MutationObserver(() => {
-      const s = el.getAttribute('data-state') ?? ''
+      const s = read() ?? ''
       if (w.__saveLog?.at(-1) !== s) w.__saveLog?.push(s)
-    }).observe(el, { attributes: true, attributeFilter: ['data-state'] })
+    }).observe(document.body, {
+      subtree: true,
+      childList: true,
+      attributes: true,
+      attributeFilter: ['data-state'],
+    })
   })
 }
 const saveLog = (page: Page) =>
@@ -75,7 +87,7 @@ test('each edit shows Saving… then Saved, and what Saved promised is on the se
   const b = await canvasSession('bob')
   await expectSaved(a.page)
   await expectSaved(b.page)
-  await expect(a.page.getByTestId('save-state')).toHaveText('Saved')
+  await expect(saveIndicator(a.page)).toHaveText('Saved')
   await recordSaveStates(a.page)
   await recordSaveStates(b.page)
 
@@ -128,7 +140,7 @@ test('with the sync server killed, 10 edits stay on the device, survive a reload
       strokeColor: '#1971c2',
     })
   await expect.poll(async () => (await saveState(a.page)).offlineChanges).toBe(10)
-  await expect(a.page.getByTestId('save-state')).toHaveText('Offline — 10 changes on this device')
+  await expect(saveIndicator(a.page)).toHaveText('Offline — 10 changes on this device')
   // bob made no edits: his tab has nothing on the device
   expect((await saveState(b.page)).offlineChanges).toBe(0)
   expect((await saveLog(a.page)).slice(1)).not.toContain('saved')
@@ -236,7 +248,7 @@ test('a change the server refuses (LOCKED after a reconnect) shows "Change not s
 
     await expectSaveState(b.page, 'not-saved', 30_000)
     expect((await saveState(b.page)).lastReject).toMatchObject({ id: 'to-lock', code: 'LOCKED' })
-    await expect(b.page.getByTestId('save-state')).toContainText('Change not saved')
+    await expect(saveIndicator(b.page)).toContainText('Change not saved')
     expect((await saveLog(b.page)).slice(1)).not.toContain('saved')
     // rolled back on bob's tab; the owner's copy and the server kept the lock and the colour
     await expect

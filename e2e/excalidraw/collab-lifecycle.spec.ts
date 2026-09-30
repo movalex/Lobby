@@ -48,6 +48,7 @@ import {
   labelText,
   pressRedo,
   pressUndo,
+  saveIndicator,
   serverSnapshot,
 } from '../tests/support/excalidraw.ts'
 import type { TestUser } from '../tests/support/users.ts'
@@ -312,7 +313,7 @@ test.describe
       // An edit made while the server is down stays on A's device and is pushed after the restart.
       await updateItem(a.page, ID.undo, { x: 1300, y: 300 })
       await expect.poll(async () => (await saveState(a.page)).offlineChanges).toBe(1)
-      await expect(a.page.getByTestId('save-state')).toContainText('Offline')
+      await expect(saveIndicator(a.page)).toContainText('Offline')
 
       await stack.sync.start()
       await expectSaved(a.page)

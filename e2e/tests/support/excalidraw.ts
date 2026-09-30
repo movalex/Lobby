@@ -244,8 +244,19 @@ export async function pressRedo(page: Page): Promise<void> {
 export const noAccessScreen = (page: Page): Locator =>
   page.locator('[data-testid="no-access"], [data-testid="spike-board-no-access"]')
 
-/** The toasts on screen now (their texts). */
-export const toastTexts = (page: Page): Promise<string[]> => page.getByTestId('toast').allInnerTexts()
+/**
+ * The Saved indicator: the board page's (`save-status`, the tldraw page's indicator with the engine's
+ * words, data-state = its DisplayState) or the spike board page's (`save-state`, at ?page=spike).
+ */
+export const saveIndicator = (page: Page): Locator =>
+  page.locator('[data-testid="save-status"], [data-testid="save-state"]')
+
+/**
+ * The toasts on screen now (their texts): the board page's notices (NoticeRegion's `.dr-notice`: the
+ * lease, undo-kept and save-rejected toasts) and the spike board page's `toast`s.
+ */
+export const toastTexts = (page: Page): Promise<string[]> =>
+  page.locator('.dr-notice, [data-testid="toast"]').allInnerTexts()
 
 /** A peer's cursor as this tab draws it (the overlay's cursor layer). */
 export const cursorOf = (page: Page, name: string): Locator =>

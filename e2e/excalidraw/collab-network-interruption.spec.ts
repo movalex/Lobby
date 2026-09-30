@@ -24,6 +24,7 @@ import {
   goOnline,
   openRelayedCanvasSession,
   relayStats,
+  saveIndicator,
   storedElement,
 } from '../tests/support/excalidraw.ts'
 
@@ -69,7 +70,7 @@ test('offline A + online B: both converge and B’s edits survive A’s reconnec
 
     await goOffline(a)
     await expectSaveState(a.page, 'offline')
-    await expect(a.page.getByTestId('save-state')).toHaveText(/^Offline/)
+    await expect(saveIndicator(a.page)).toHaveText(/^Offline/)
 
     // B edits X (move + recolour) and adds Z while A is cut off.
     await updateItem(b.page, X, { x: 140, y: 300, strokeColor: '#e03131' })
@@ -85,7 +86,7 @@ test('offline A + online B: both converge and B’s edits survive A’s reconnec
     const pushesBefore = (await pushedOps(a.page)).length
     await updateItem(a.page, Y, { x: 460, y: 320, strokeColor: '#1971c2' })
     await expect.poll(async () => (await saveState(a.page)).offlineChanges).toBe(1)
-    await expect(a.page.getByTestId('save-state')).toHaveText('Offline — 1 change on this device')
+    await expect(saveIndicator(a.page)).toHaveText('Offline — 1 change on this device')
     expect(await facts(b.page, Y)).toEqual({ x: 420, y: 120, color: '#1e1e1e' })
     // the held reconnects carried nothing to the server
     expect((await storedElement(stack, board, Y))?.x).toBe(420)
