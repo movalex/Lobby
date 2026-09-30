@@ -19,6 +19,13 @@
 // are mounted with the room's; closeAll closes it (the running worker is terminated). The internal routes
 // that open a board (the snapshot, the test snapshot) wait for the same preparation.
 //
+// CR 2F-2 (engine-switch.ts): `prepareBoard(boardId)` is that preparation for any in-process caller (the
+// api's internal routes built outside the room, room-internal/** on engine/excalidraw): the board's room
+// opened, after its conversion or roll-forward. `serverWrite(boardId, apply)` opens the board the same way
+// and queues a server write in its room (element-room.ts, server-write.ts): place-notes and the "Recently
+// deleted" restore on a board people have open. With DRAFTROOM_TEST_HOOKS=1 both are also reachable
+// through test-only routes (test-routes.ts), for the protocol tests.
+//
 // Engine code on the server: pure helpers only, through @draftroom/canvas-schema/engine (§2.4.1). The
 // text metrics provider is installed once, before any layout.
 
@@ -57,6 +64,7 @@ import {
   type PrepareResult,
 } from './migrate/index.ts'
 import { OUTBOUND } from './outbound.ts'
+import { testRoomRoutes } from './test-routes.ts'
 
 /** The global snapshot cache budget (§2.4.5): one entry per board, least recently built dropped first. */
 const SNAPSHOT_BUDGET_BYTES = 64 * 1024 * 1024
@@ -455,7 +463,7 @@ export function createElementRoomServiceWith(
   const waitersOf = (boardId: string): Waiter[] =>
     [...(preparing.get(boardId)?.waiters ?? [])].filter((w) => !w.gone && !w.target)
 
-  return {
+  const service: ElementRoomService = {
     connect(session, socket) {
       if (closed) throw new Error('closing')
       const boardId = session.boardId
@@ -485,6 +493,7 @@ export function createElementRoomServiceWith(
         ifOpen: (boardId) => rooms.get(boardId) ?? null,
       }),
       ...migration.routes(),
+      ...(config.testHooks ? testRoomRoutes(() => service) : []),
     ],
     metrics() {
       const sessionsByRole: Record<string, number> = { owner: 0, editor: 0, commenter: 0, viewer: 0 }
@@ -542,7 +551,19 @@ export function createElementRoomServiceWith(
       return live
     },
     openBoards: () => [...new Set([...rooms.keys(), ...preparing.keys()])],
+    // CR 2F-2
+    async prepareBoard(boardId) {
+      if (closed) throw new HttpError(503, 'unavailable', 'Closing.')
+      return (await existing(boardId)) !== null
+    },
+    async serverWrite(boardId, apply) {
+      if (closed) throw new HttpError(503, 'unavailable', 'Closing.')
+      const room = await existing(boardId)
+      if (!room) throw new HttpError(404, 'board-not-found', 'No such board.')
+      return room.serverWrite(apply)
+    },
   }
+  return service
 }
 
 registerElementRoom(createElementRoomService)

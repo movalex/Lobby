@@ -77,6 +77,8 @@ export interface MergeEnv {
   readonly guestCreated: Map<string, number>
   readonly now: number
   readonly epoch: string
+  /** the room session `lb_deleted` rows name (one per room open; store.ts DeletedRowWrite.session) */
+  readonly deletedSession: string
   nonce(): number
 }
 
@@ -806,6 +808,7 @@ export class PushApplier {
             deletedBy: this.s.uid,
             deletedByName: this.s.name,
             deletedAt: now,
+            session: this.env.deletedSession,
           })
         // caches: live counts, groups, guest creations
         const wasLive = !!before && !before.isDeleted

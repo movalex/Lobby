@@ -14,7 +14,12 @@
 // for every session (the writer included), then the acks and lease events in queue order. If COMMIT
 // fails: ROLLBACK, every push of the batch is answered UNAVAILABLE, the room reopens its board file from
 // disk and every session gets 4000 RECONNECT.
+//
+// Server writes (CR 2F-2, server-write.ts: place-notes, the "Recently deleted" restore) are queue entries
+// too: run in the drain at the batch's next clock, broadcast in the batch's `changes`, acked to nobody;
+// their callers' promises settle after the COMMIT (a failed COMMIT rejects them 503).
 
+import { randomUUID } from 'node:crypto'
 import { statfsSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { gzip } from 'node:zlib'
@@ -48,9 +53,11 @@ import type {
   ElementSessionInfo,
   ElementSocket,
   FileRefsLookup,
+  ServerWriteApply,
   WorkshopStateLookup,
 } from '../engine-switch.ts'
 import { type FileRefAnswer, FileRefsCache } from '../file-refs.ts'
+import { HttpError } from '../http/respond.ts'
 import { GroupMap, type LiveCounts, WriterLedger } from './caches.ts'
 import { IndexCache } from './index-keys.ts'
 import { type LeaseHolderInfo, LeaseTable } from './lease.ts'
@@ -59,7 +66,8 @@ import type { RoomMetrics } from './metrics.ts'
 import { Outbound } from './outbound.ts'
 import { PresenceHub, rosterEntry } from './presence.ts'
 import { type SessionBudgets, sessionBudgets } from './rates.ts'
-import { BoardStore } from './store.ts'
+import { runServerWrite, type ServerWriteEntry } from './server-write.ts'
+import { BoardStore, LB_DELETED_LIMITS } from './store.ts'
 import type { PreOp, PreparedPush, PushOutcome, SessionIdentity } from './types.ts'
 
 /** The drain's limits (§2.4.3 stage 1). */
@@ -115,6 +123,7 @@ type QueueEntry =
   | { kind: 'acquire'; session: Session; req: number; id: string }
   | { kind: 'release'; session: Session; id: string }
   | { kind: 'relayout'; id: string }
+  | ServerWriteEntry
 
 let handleSeq = 0
 
@@ -130,7 +139,13 @@ function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
   ]).finally(() => clearTimeout(timer))
 }
 
-/** The server's own writes (the lease-expiry re-fit): attributed to nobody, never read-only. */
+/** 503 for a server write the room could not commit or run (closing, a failed COMMIT). */
+const unavailable = (message: string) => new HttpError(503, 'unavailable', message)
+
+/**
+ * The server's own writes (the lease-expiry re-fit, CR 2F-2's server writes): attributed to nobody (an
+ * `lb_deleted` row names "Lobby"), never read-only.
+ */
 const SERVER_IDENTITY: SessionIdentity = {
   sid: 'lobby:server',
   uid: 'lobby-server',
@@ -251,6 +266,8 @@ export class ElementRoom {
   } | null = null
   private lastDiskCheck = 0
   private deletedSinceTrim = 0
+  /** this room open's session id, named by its `lb_deleted` rows (the per-session retention, store.ts) */
+  readonly deletedSession = randomUUID()
 
   private readonly deps: RoomDeps
 
@@ -734,8 +751,26 @@ export class ElementRoom {
       guestCreated: this.guestCreated,
       now,
       epoch: this.store.meta.epoch,
+      deletedSession: this.deletedSession,
       nonce: () => Math.floor(Math.random() * 2 ** 31),
     }
+  }
+
+  /**
+   * CR 2F-2: a server write (server-write.ts), queued with the sessions' pushes. Resolves with the write's
+   * result after its batch COMMITs; rejects with the write's own error (its SAVEPOINT rolled back), or 503
+   * `unavailable` when the COMMIT fails or the room closes first.
+   */
+  serverWrite<T>(apply: ServerWriteApply<T>): Promise<T> {
+    if (this.closed) return Promise.reject(unavailable('This board is closing. Try again in a moment.'))
+    return new Promise<T>((resolve, reject) =>
+      this.enqueue({
+        kind: 'server',
+        apply: apply as ServerWriteApply<unknown>,
+        resolve: resolve as (value: unknown) => void,
+        reject,
+      }),
+    )
   }
 
   /** Runs one batch. Synchronous from BEGIN to the fan-out. */
@@ -761,6 +796,8 @@ export class ElementRoom {
     /** the lease replies alone: they are sent even when the COMMIT fails (leases live in memory) */
     const leaseDeliveries: (() => void)[] = []
     const pushEntries: { session: Session; push: PreparedPush }[] = []
+    /** the batch's server writes, in queue order, with their answers (settled after the COMMIT) */
+    const serverWrites: { entry: ServerWriteEntry; ok: boolean; value: unknown }[] = []
     const before = new Map<string, WireElement | null>()
     const after = new Map<string, WireElement>()
     const doc: Record<string, unknown> = {}
@@ -779,6 +816,48 @@ export class ElementRoom {
         const d = this.release(e.session, e.id, now)
         deliveries.push(d)
         leaseDeliveries.push(d)
+        continue
+      }
+      if (e.kind === 'server') {
+        pushes++
+        const touched = { caches: false }
+        store.savepoint('push')
+        try {
+          const done = runServerWrite(
+            {
+              store,
+              clock: clock + 1,
+              now,
+              identity: SERVER_IDENTITY,
+              deletedSession: this.deletedSession,
+              index: this.index,
+              groups: this.groups,
+              counts: this.counts,
+              ledger: this.ledger,
+              env: () => this.env(now),
+            },
+            e.apply,
+            touched,
+          )
+          store.release('push')
+          if (done.wrote) {
+            clock++
+            for (const [id, ch] of done.changed) {
+              if (!before.has(id)) before.set(id, ch.before)
+              after.set(id, ch.after)
+            }
+            Object.assign(doc, done.doc)
+            this.deletedSinceTrim += done.deletions
+            this.snapshotCache = null
+          }
+          serverWrites.push({ entry: e, ok: true, value: done.result })
+        } catch (err) {
+          store.rollbackTo('push')
+          if (touched.caches) this.rebuildCaches()
+          const code = err instanceof HttpError ? err.code : ((err as Error)?.name ?? 'error')
+          this.deps.log('[room] server write refused', this.boardId, code)
+          serverWrites.push({ entry: e, ok: false, value: err })
+        }
         continue
       }
       if (e.kind === 'relayout') {
@@ -853,6 +932,8 @@ export class ElementRoom {
     } catch (err) {
       store.rollback()
       this.commitFailed(pushEntries, leaseDeliveries, err as Error)
+      for (const w of serverWrites)
+        w.entry.reject(w.ok ? unavailable('The board could not save this change. Try again.') : w.value)
       return
     }
     const t1 = performance.now()
@@ -877,10 +958,11 @@ export class ElementRoom {
       this.deps.onDocumentChange(this.boardId)
     }
     for (const d of deliveries) d()
-    if (this.deletedSinceTrim >= 100) {
+    for (const w of serverWrites) (w.ok ? w.entry.resolve : w.entry.reject)(w.value)
+    if (this.deletedSinceTrim >= LB_DELETED_LIMITS.trimEvery) {
       this.deletedSinceTrim = 0
       try {
-        store.trimDeleted(10_000)
+        store.trimDeleted(LB_DELETED_LIMITS, this.deletedSession)
       } catch {
         this.deps.log('[room] lb_deleted trim failed', this.boardId)
       }
@@ -1082,6 +1164,8 @@ export class ElementRoom {
       if (s.pumpTimer) clearTimeout(s.pumpTimer)
     }
     this.sessions.clear()
+    for (const e of this.queue.splice(0))
+      if (e.kind === 'server') e.reject(unavailable('This board is closing. Try again in a moment.'))
     this.store.close()
   }
 
