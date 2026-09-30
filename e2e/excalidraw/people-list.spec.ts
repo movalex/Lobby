@@ -166,7 +166,6 @@ test('"Bring here" on carol: only carol follows alice now (3f: the summon handle
 }) => {
   // The receiving side of "Bring here" / "Gather everyone" (follow the summoner) is the workshops feature's
   // (features/workshops, 3f's port, on canvas.follow.start). Remove the mark when it lands.
-  test.fail(true, '3f: the workshops summon handler is not on the Excalidraw page yet')
   const a = await canvasSession('alice')
   const b = await canvasSession('bob', { role: 'editor' })
   const c = await canvasSession('carol', { role: 'viewer' })

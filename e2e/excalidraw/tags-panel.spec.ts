@@ -11,7 +11,7 @@
 //    export dialog: those steps run only when those parts are on the page;
 //  - a guest cannot create a tag: the room refuses every guest's lb_doc write (CR-3D-5, a test.fail below).
 import type { Page } from '@playwright/test'
-import { canvasCall, expect, item, test } from '../tests/support/canvas.ts'
+import { canvasCall, createItem, expect, expectSaved, item, items, test } from '../tests/support/canvas.ts'
 import { forgeSession, pressUndo } from '../tests/support/excalidraw.ts'
 import { downloadFrom, parseCsv } from '../tests/support/present-export.ts'
 import { capture } from '../tests/support/screenshots.ts'
@@ -69,7 +69,26 @@ async function taggedNotes(pages: Page[], tags: Record<string, Tag[]>, listed: T
 /** Focus mode on or off (present mode; 3e's button when it is on the page). */
 async function presenting(page: Page, on: boolean) {
   if (on && (await page.getByTestId('present-button').count()) > 0) {
+    // present mode shows frames: a frame "Findings" around the notes first, as the tldraw spec makes one
+    // (the wave-3 integration: 3e's Present button is on this page now)
+    if (!(await items(page)).some((e) => e.type === 'frame')) {
+      const all = await items(page)
+      const xs = all.flatMap((e) => [e.x, e.x + e.width])
+      const ys = all.flatMap((e) => [e.y, e.y + e.height])
+      const x = Math.min(...xs) - 40
+      const y = Math.min(...ys) - 40
+      await createItem(page, 'frame', {
+        id: 'tg-frame',
+        x,
+        y,
+        width: Math.max(...xs) + 40 - x,
+        height: Math.max(...ys) + 40 - y,
+        name: 'Findings',
+      })
+      await expectSaved(page)
+    }
     await page.getByTestId('present-button').click()
+    await expect(page.getByTestId('present-overlay')).toBeVisible()
     return
   }
   if (!on && (await page.getByTestId('present-overlay').count()) > 0) {

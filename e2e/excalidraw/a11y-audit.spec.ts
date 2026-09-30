@@ -93,8 +93,10 @@ const audit = (page: Page) =>
     if (mains.length !== 1) out.push({ rule: 'landmark-one-main', what: String(mains.length) })
     const region = document.querySelector('[data-lobby-board-canvas]')
     if (!region?.getAttribute('aria-label')) out.push({ rule: 'region-name', what: 'the board canvas' })
-    // 6. over the canvas, only the known live regions speak (the canvas announcer, the lease status)
-    const known = new Set(['canvas-announcer', 'lease-status'])
+    // 6. over the canvas, only the known live regions speak (the canvas announcer, the lease status, and
+    // since the wave-3 integration the two polite status lines the tldraw page has too: the private
+    // brainstorm's start (3f, A11Y2-01) and the mind map's status (3d))
+    const known = new Set(['canvas-announcer', 'lease-status', 'pn-start-announce', 'mindmap-status'])
     for (const el of region?.querySelectorAll('[aria-live], [role="status"], [role="alert"]') ?? []) {
       const id = el.getAttribute('data-testid') ?? ''
       if (!known.has(id)) out.push({ rule: 'live-region', what: describe(el) })

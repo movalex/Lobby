@@ -19,7 +19,6 @@ import {
   focusCanvas,
   focusOf,
   MISSING_FEATURE_MS,
-  needs,
   note,
   selected,
   waitForA11y,
@@ -61,7 +60,6 @@ const canvasMode = (page: Page) =>
 test('A11Y2-03: a summary asked for from the keyboard takes the focus and is announced; Escape closes it from anywhere and keeps the selection', async ({
   canvasSession,
 }) => {
-  needs('3h', 'the AI summary panel (selection-ai, ai-summarize, ai-summary-panel)')
   const a = await canvasSession('alice')
   await waitForA11y(a.page)
   const ids = await threeNotes(a.page)
@@ -145,7 +143,6 @@ test('A11Y-01 + A11Y-08: Share "Create…" keeps the keyboard and says what it d
 test('A11Y-01: Export "Download PDF" by keyboard: the button has the keyboard again afterwards', async ({
   canvasSession,
 }) => {
-  needs('3e', 'the Export dialog (export-button, export-pdf)')
   const a = await canvasSession('alice')
   await waitForA11y(a.page)
   await note(a.page, 0, 0, TEXTS[0] as string)
@@ -164,7 +161,6 @@ test('A11Y-01: Export "Download PDF" by keyboard: the button has the keyboard ag
 test('A11Y-08: the checkpoint preview opens with the keyboard inside it (Zoom to fit), not on ×', async ({
   canvasSession,
 }) => {
-  needs('3h', 'the History panel and the checkpoint preview')
   const a = await canvasSession('alice')
   await waitForA11y(a.page)
   await note(a.page, 0, 0, TEXTS[0] as string)
@@ -246,7 +242,6 @@ test('A11Y2-07: Ctrl+/ and "?" on the board leave the theme alone', async ({ can
 test('A11Y2-07 + A11Y2-08: "?" and Ctrl+/ open the shortcuts, which say how to go inside a frame', async ({
   canvasSession,
 }) => {
-  needs('3a', 'the keyboard shortcuts dialog (shortcutsDialog slot)')
   const a = await canvasSession('alice')
   await waitForA11y(a.page)
   await focusCanvas(a.page)
@@ -255,7 +250,8 @@ test('A11Y2-07 + A11Y2-08: "?" and Ctrl+/ open the shortcuts, which say how to g
   await expect(dialog).toBeVisible({ timeout: MISSING_FEATURE_MS })
   await a.page.keyboard.press('Escape')
   await expect(dialog).toHaveCount(0)
-  await a.page.keyboard.press('Shift+/')
+  // "?" as a keyboard types it (Shift+/ on a US layout gives the key "?"); Playwright's Shift+/ sends "/"
+  await a.page.keyboard.press('Shift+?')
   await expect(dialog).toBeVisible()
   await expect(dialog).toContainText('Go inside the selected frame')
 })

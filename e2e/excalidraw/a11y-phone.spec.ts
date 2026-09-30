@@ -161,7 +161,7 @@ test('at 390 px: no sideways scroll; the rail folds and a panel is a full-width 
   }
 })
 
-test('a viewer on a phone gets Select, Hand and Laser in the sheet, and no Undo', async ({
+test('a viewer on a phone gets Select, Hand, Laser and Comment in the sheet, and no Undo', async ({
   browser,
   board,
   users,
@@ -175,7 +175,8 @@ test('a viewer on a phone gets Select, Hand and Laser in the sheet, and no Undo'
       await sheet
         .getByTestId('phone-sheet-tool')
         .evaluateAll((els) => els.map((e) => e.getAttribute('data-tool'))),
-    ).toEqual(['select', 'hand', 'laser'])
+      // Comment is the comments feature's tool (3c), offered to every role as on the tldraw toolbar
+    ).toEqual(['select', 'hand', 'laser', 'comment'])
     await expect(sheet.getByTestId('phone-sheet-undo')).toHaveCount(0)
     await expect(v.page.getByTestId('dock-add-note')).toHaveCount(0)
     expect(await scrollsSideways(v.page)).toBe(false)

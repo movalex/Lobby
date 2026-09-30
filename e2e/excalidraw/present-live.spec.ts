@@ -3,10 +3,9 @@
 // hand-off, recovery from reloads, the presenter leaving and an api restart, and what guests and viewers
 // may do. The api's state is the second witness (GET /api/boards/:bid/presentation as the user).
 //
-// Present-live (3c) runs on present mode's presenter, which present mode (3e) provides on this page
-// (features/present-export/live/ported/presenter.ts `provideLivePresenter`) with its Present button and
-// chrome. Until 3e lands that, every test here is an expected failure (CR-3C-2), and fails fast on the
-// missing Present button. The people-list part of the tldraw spec is people-list.spec.ts.
+// Present-live (3c) runs on present mode's presenter (3e): features/present-export/live/ported/present-mode.ts
+// joins the two (the wave-3 integration, CR-3C-2), so present mode's Present button and chrome carry the
+// live controls. The people-list part of the tldraw spec is people-list.spec.ts.
 import type { Browser, BrowserContext, Page } from '@playwright/test'
 import {
   type CanvasSession,
@@ -23,8 +22,6 @@ import {
 } from '../tests/support/canvas.ts'
 import { WEB_URL } from '../tests/support/ports.ts'
 import type { Users } from '../tests/support/users.ts'
-
-const PRESENTER_NEEDED = 'CR-3C-2: present mode (3e) provides its presenter to present-live on this page'
 
 interface Deck {
   one: string
@@ -181,7 +178,6 @@ test.describe('present to everyone', () => {
     canvasSession,
     users,
   }) => {
-    test.fail(true, PRESENTER_NEEDED)
     const a = await canvasSession('alice')
     await expectPresentMode(a.page)
     const b = await canvasSession('bob', { role: 'editor' })
@@ -238,7 +234,6 @@ test.describe('present to everyone', () => {
     canvasSession,
     users,
   }) => {
-    test.fail(true, PRESENTER_NEEDED)
     const a = await canvasSession('alice')
     await expectPresentMode(a.page)
     const b = await canvasSession('bob', { role: 'commenter' })
@@ -281,7 +276,6 @@ test.describe('present to everyone', () => {
     canvasSession,
     users,
   }) => {
-    test.fail(true, PRESENTER_NEEDED)
     const a = await canvasSession('alice')
     await expectPresentMode(a.page)
     const b = await canvasSession('bob', { role: 'editor' })
@@ -324,7 +318,6 @@ test.describe('present to everyone', () => {
     canvasSession,
     users,
   }) => {
-    test.fail(true, PRESENTER_NEEDED)
     test.setTimeout(150_000)
     const a = await canvasSession('alice')
     await expectPresentMode(a.page)
@@ -365,7 +358,6 @@ test.describe('present to everyone', () => {
     users,
     stack,
   }) => {
-    test.fail(true, PRESENTER_NEEDED)
     const a = await canvasSession('alice')
     await expectPresentMode(a.page)
     const b = await canvasSession('bob', { role: 'viewer' })
@@ -391,7 +383,6 @@ test.describe('present to everyone', () => {
     canvasSession,
     users,
   }) => {
-    test.fail(true, PRESENTER_NEEDED)
     const a = await canvasSession('alice')
     await expectPresentMode(a.page)
     const c = await canvasSession('carol', { role: 'viewer' })

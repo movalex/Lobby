@@ -201,6 +201,8 @@ test.describe('image exports', () => {
 
   // 3a renders the context menu (host slot `contextMenu`) from the registry entries this feature adds
   // ('export-as' → 'export-as-png' / 'export-as-svg'); until that shell lands there is no menu to open.
+  // 3a's context-menu shell is on the page since the wave-3 integration; this test's body is still to be
+  // ported from the tldraw spec (3e)
   test.fixme('context menu: Export as PNG and SVG go through the same pipeline (board-titled files, 2×, from the original upload)', async () => {})
 
   test('copy as PNG: Ctrl+Shift+C and the dialog button put an image/png of the selection on the clipboard', async ({

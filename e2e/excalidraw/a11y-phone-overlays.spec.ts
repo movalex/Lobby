@@ -33,7 +33,6 @@ const centre = (b: Box) => ({ x: b.x + b.width / 2, y: b.y + b.height / 2 })
 test('A11Y2-06: on a phone a multi-selection keeps the selection bar on screen; arrange waits behind More', async ({
   canvasSession,
 }) => {
-  needs('3a', 'the selection bar (selection-bar, selection-more, align and arrange buttons)')
   const a = await canvasSession('alice')
   await waitForA11y(a.page)
   await a.page.setViewportSize(PHONE)
@@ -80,7 +79,7 @@ test('A11Y2-06: on a phone a multi-selection keeps the selection bar on screen; 
 test('R2-04: "Gather everyone" shows a phone the leader view at a readable zoom', async ({
   canvasSession,
 }) => {
-  needs('3f', 'the workshop popover (timer-pill, summon-button); 3c follow')
+  needs('CR-3F-3', "the readable follow zoom for a gathered phone (a hook in 3c's follow camera)")
   const a = await canvasSession('alice')
   const b = await canvasSession('bob')
   await waitForA11y(a.page)
@@ -164,7 +163,6 @@ test('R13 / A11Y-06: on a phone the rail folds behind one button and a panel ope
 test('R2-07: an open workshop popover stays above the notices and the canvas cursors; no "Show queue" toast over an open queue', async ({
   canvasSession,
 }) => {
-  needs('3f', 'the workshop popover, raise hand and the hands queue')
   const a = await canvasSession('alice')
   const b = await canvasSession('bob')
   await waitForA11y(a.page)
@@ -201,7 +199,6 @@ test('R2-07: an open workshop popover stays above the notices and the canvas cur
 test('A11Y2-05: People, Reactions and Notifications close when the keyboard leaves them', async ({
   canvasSession,
 }) => {
-  needs('3c', 'the people list (people-open) and the notifications inbox; 3f the reactions bar')
   const a = await canvasSession('alice')
   await waitForA11y(a.page)
 

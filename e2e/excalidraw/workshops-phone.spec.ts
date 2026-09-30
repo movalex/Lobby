@@ -23,8 +23,6 @@ import {
 
 const PHONE = { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, deviceScaleFactor: 2 }
 const PROMPT = 'What slowed us down this sprint?'
-const NEEDS_PRESENT = 'needs 3e present mode on the Excalidraw page (present-button, present-overlay)'
-
 async function ok(res: Promise<{ status(): number; text(): Promise<string> }>, status = 200) {
   const r = await res
   expect(r.status(), await r.text()).toBe(status)
@@ -298,7 +296,6 @@ test('raised hands: presenting, the chip in the corner of the slides names who i
   browser,
   board,
 }) => {
-  test.fail(true, NEEDS_PRESENT)
   const alice = await join('alice', 'owner')
   const contexts: BrowserContext[] = []
   try {

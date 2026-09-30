@@ -429,8 +429,7 @@ test('A11Y2-04: the context menu’s "Comment" on the selection opens the compos
   canvasSession,
 }) => {
   // The entry is 3c's (the contextMenu registry, group "collaborate"); the menu that renders it is 3a's
-  // context-menu host slot. Remove the mark when it lands.
-  test.fail(true, '3a: the context-menu host slot is not on the Excalidraw page yet')
+  // context-menu host slot (both on the page since the wave-3 integration).
   const { page } = await canvasSession('alice')
   const { inner } = await retroBoard(page)
   await select(page, [inner])

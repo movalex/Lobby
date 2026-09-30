@@ -409,6 +409,8 @@ test('Action items and Generate ideas: new sticky notes beside the target, one u
 
   await test.step('Generate ideas: a prompt and a count; the notes land beside the selection, overlapping nothing', async () => {
     const notes = await frameNotes(a.page, BRAINSTORM)
+    // 3a's selection bar (the wave-3 integration) shows only while the selection is on screen
+    await showFrame(a.page, BRAINSTORM)
     await selectIds(
       a.page,
       notes.slice(0, 2).map((n) => n.id),
@@ -548,7 +550,9 @@ test('Results stay in the frame; the Undo toast only ever undoes the AI result; 
     const aliceApi = await users.api('alice')
     const turn = async (on: boolean) => {
       if (await hasShell(a.page, 'mainMenu')) {
-        await a.page.getByRole('button', { name: /menu/i }).first().click()
+        // 3a's board menu folds the `board` and `ai` groups into Board ▸ (the wave-3 integration)
+        await a.page.getByTestId('main-menu.button').click()
+        await a.page.getByTestId('main-menu-sub.dr-board-button').click()
         await a.page.getByRole('menuitemcheckbox', { name: /AI on this board/ }).click()
         await expect(a.page.getByTestId('ai-settings-saved')).toContainText(
           on ? 'AI is on for this board.' : 'AI is off on this board.',

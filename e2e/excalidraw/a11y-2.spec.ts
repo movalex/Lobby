@@ -32,7 +32,6 @@ import {
   focusOf,
   inside,
   MISSING_FEATURE_MS,
-  needs,
   note,
   waitForA11y,
 } from './a11y-kit.ts'
@@ -83,7 +82,6 @@ test('A11Y-07: with the keyboard only, "Add a sticky note" puts a note in the mi
 test('A11Y-07: N or R, then Enter, place a note or a rectangle in the middle of the view, ready to type in; the shortcuts say so', async ({
   canvasSession,
 }) => {
-  needs('3a', "canvas-ux's place tool (N/R then Enter) and the shortcuts dialog")
   const a = await canvasSession('alice')
   await waitForA11y(a.page)
   const first = await note(a.page, 0, 0, 'First')
@@ -130,7 +128,6 @@ test('A11Y-07: a viewer gets no "Add a sticky note"', async ({ canvasSession }) 
 test('A11Y-15 / A11Y-08: the AI popover opens on its first action, keeps Tab inside, and Escape or focus leaving closes it, giving the keyboard back to the AI button; its × is at least 24 px', async ({
   canvasSession,
 }) => {
-  needs('3h', 'the AI popover (selection-ai, ai-menu) on the selection bar (3a)')
   const a = await canvasSession('alice')
   await waitForA11y(a.page)
   const n1 = await note(a.page, 200, 200, 'Faster builds')
@@ -178,7 +175,6 @@ test('A11Y-15 / A11Y-08: the AI popover opens on its first action, keeps Tab ins
 test('A11Y-15: the tag picker keeps Tab inside, closes on Escape or when the focus leaves, and gives the keyboard back to the Tags button', async ({
   canvasSession,
 }) => {
-  needs('3d', 'the tag picker (selection-tags, tag-picker) on the selection bar (3a)')
   const a = await canvasSession('alice')
   await waitForA11y(a.page)
   const n = await note(a.page, 200, 200, 'Tag me')

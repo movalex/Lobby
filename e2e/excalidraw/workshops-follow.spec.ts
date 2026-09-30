@@ -21,8 +21,6 @@ import {
   type WorkshopCanvasSession,
 } from './workshops-kit.ts'
 
-const NEEDS_FOLLOW = 'needs 3c follow (canvas.follow.start / current / followChanged) on the Excalidraw page'
-
 /** The session this page follows (3c's follow.current), or null (also while follow is not in). */
 const following = (page: Page) =>
   page.evaluate(() => {
@@ -86,7 +84,6 @@ test('gather everyone: the summon reaches everyone on the board; a second one wi
 test('gather everyone: bob and carol follow alice’s view until they stop, click or scroll (3c follow)', async ({
   join,
 }) => {
-  test.fail(true, NEEDS_FOLLOW)
   const a = await join('alice')
   const b = await join('bob', 'editor')
   const c = await join('carol', 'viewer')
@@ -150,7 +147,6 @@ test('RETRO-11: the "Following" notice sits above the vote prompt, and followers
   join,
   board,
 }) => {
-  test.fail(true, NEEDS_FOLLOW)
   const a = await join('alice')
   const b = await join('bob', 'editor')
   await seed(a.page, { notes: [{ id: 'fr-v1', x: 0, y: 0, text: 'Alpha' }] })
@@ -177,7 +173,7 @@ test('RETRO-11: the "Following" notice sits above the vote prompt, and followers
 test('R2-04: "Gather everyone" shows a phone the leader view at a readable zoom (3c follow, CR-3F-3)', async ({
   join,
 }, testInfo) => {
-  test.fail(true, `${NEEDS_FOLLOW}; CR-3F-3 (the readable follow zoom is a hook in 3c's follow camera)`)
+  test.fail(true, 'CR-3F-3: the readable follow zoom for a gathered phone needs a hook in 3c’s follow camera')
   const a = await join('alice')
   const b = await join('bob', 'editor')
   await a.page.setViewportSize({ width: 1440, height: 900 })

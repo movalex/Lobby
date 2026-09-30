@@ -48,8 +48,6 @@ import {
 } from './workshops-kit.ts'
 
 const EMOJIS = ['👍', '❤️', '😂', '🎉', '🤔', '👏']
-const NEEDS_PRESENT = 'needs 3e present mode on the Excalidraw page (present-button, present-overlay)'
-
 /** The sender's cursor as `s` draws it, in overlay pixels (the board page's cursor layer), or null. */
 const cursorOnScreen = (s: WorkshopCanvasSession, userId: string) =>
   s.page.evaluate((uid) => {
@@ -311,7 +309,6 @@ test('+1 on notes: a +1 is not an undo step (Ctrl+Z undoes the colour change bef
 })
 
 test('+1 on notes: hidden while presenting, back after Esc (3e present mode)', async ({ join }) => {
-  test.fail(true, NEEDS_PRESENT)
   const a = await join('alice')
   await twoNotesInAFrame(a.page)
   await showAll(a.page)
@@ -410,7 +407,6 @@ test('raise hand: a viewer and an editor raise hands, facilitators are told and 
 test('raise hand: presenting hides the top bar and the toasts, the presenter still sees the hands, and whose (3e present mode)', async ({
   join,
 }) => {
-  test.fail(true, NEEDS_PRESENT)
   const a = await join('alice')
   const c = await join('carol', 'viewer')
   const d = await join('dave', 'commenter')

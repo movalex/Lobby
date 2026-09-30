@@ -27,8 +27,6 @@ import {
   type WorkshopCanvasSession,
 } from './workshops-kit.ts'
 
-const NEEDS_PRESENT = 'needs 3e present mode on the Excalidraw page (present-button, present-overlay)'
-
 test('timer sync: start, pause, +1 min, resume and stop look the same to everyone; late joiners agree within 1 s; a viewer cannot set it', async ({
   join,
   board,
@@ -166,7 +164,6 @@ test('timer sync: while carol presents, the timer floats over the slides (3e pre
   join,
   board,
 }, testInfo) => {
-  test.fail(true, NEEDS_PRESENT)
   const a = await join('alice')
   const c = await join('carol', 'viewer')
   await seed(a.page, { frames: [{ id: 'wk-agenda', x: 0, y: 0, w: 800, h: 450, name: 'Agenda' }] })
@@ -277,7 +274,6 @@ test("time's up: presenting a board whose timer has finished shows no floating t
   join,
   board,
 }) => {
-  test.fail(true, NEEDS_PRESENT)
   const a = await join('alice')
   const c = await join('carol', 'viewer')
   expect((await post(a, `/api/boards/${board}/timer`, { action: 'start', durationMs: 2_000 })).status()).toBe(

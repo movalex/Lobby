@@ -196,6 +196,18 @@ export async function frameNotes(page: Page, name: string): Promise<Kid[]> {
 
 /** Puts a scene rectangle in view (with `inset` screen px around it), at most 100%. */
 export async function showBounds(page: Page, b: BoxLike, inset = 48) {
+  // an animated camera move still running (the AI result's, since 3b's zoomTo animates) would overwrite the
+  // facade's set, which does not stop it (the wave-3 integration)
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (
+            window as unknown as { __lobbyBoard?: { canvas: { viewport: { moving(): boolean } } } }
+          ).__lobbyBoard?.canvas.viewport.moving() ?? false,
+      ),
+    )
+    .toBe(false)
   const v = await viewport(page)
   const sw = v.width * v.zoom
   const sh = v.height * v.zoom

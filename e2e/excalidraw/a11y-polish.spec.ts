@@ -20,7 +20,6 @@ import {
   focusCanvas,
   focusOf,
   MISSING_FEATURE_MS,
-  needs,
   note,
   selected,
   waitForA11y,
@@ -101,7 +100,6 @@ test('A11Y-02 / A11Y-01: a dock panel opened from the keyboard takes the focus; 
 test('A11Y-13 / A11Y-01: Ctrl+F focuses the search field every time (typed letters never change tools); Escape gives the keyboard back to the board', async ({
   canvasSession,
 }) => {
-  needs('3b', 'the board search panel (Ctrl+F, search-input)')
   const a = await canvasSession('alice')
   await waitForA11y(a.page)
   await focusCanvas(a.page)
@@ -123,7 +121,6 @@ test('A11Y-13 / A11Y-01: Ctrl+F focuses the search field every time (typed lette
 test('A11Y-04 / A11Y-03: Alt+F10 reaches the selection toolbar (arrows move, Escape returns to the board); Shift+F10 opens the context menu; overlay fields show a focus ring', async ({
   canvasSession,
 }) => {
-  needs('3a', 'the selection toolbar (Alt+F10) and the context menu (Shift+F10); 3d the tag picker')
   const a = await canvasSession('alice')
   await waitForA11y(a.page)
   const n = await note(a.page, 300, 250, 'Tag me')

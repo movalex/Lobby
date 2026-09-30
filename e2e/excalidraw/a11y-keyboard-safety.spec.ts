@@ -169,6 +169,8 @@ test('A11Y2-02: on the canvas, Ctrl+X still cuts', async ({ canvasSession }) => 
 })
 
 test('A11Y2-02: zooming at the cursor (Shift+=) still works from the chrome', async ({ canvasSession }) => {
+  // 3i asked 3b: the zoom keys are canvas-scope on this page (it passed once only because a late first view
+  // moved the camera; fixed at the wave-3 integration)
   needs('3b', 'the zoom keys from the chrome (Shift+= with the keyboard outside the canvas)')
   const { page } = await canvasSession('alice')
   await setUp(page)
@@ -224,7 +226,6 @@ test('F11: the undo restores the selection the change was made with', async ({ c
 test('A11Y2-04: with the keyboard only, a note inside a frame gets a comment (context menu, or the comment tool going inside the frame)', async ({
   canvasSession,
 }) => {
-  needs('3c', 'the comment tool and composer; 3a the context menu (Shift+F10)')
   const { page } = await canvasSession('alice')
   const { retro, inner } = await setUp(page)
   const composer = page.getByTestId('new-comment-popover')

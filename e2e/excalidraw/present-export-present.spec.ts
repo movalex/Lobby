@@ -66,6 +66,9 @@ const DECK: DeckSpec = {
 
 const html = (page: Page) => page.locator('html')
 
+/** The host slots of the board's chrome: every slot but the live region, which stays in focus mode. */
+const CHROME_SLOTS = '[data-lobby-slot]:not([data-lobby-slot="liveRegion"])'
+
 test.describe('present mode', () => {
   test('present: frames become slides without the skipped one, keys stop at both ends, and Esc restores the board and its view', async ({
     canvasSession,
@@ -94,7 +97,8 @@ test.describe('present mode', () => {
     expect(await focusMode(a.page)).toBe(true)
     await expect(a.page.locator('.dr-topbar')).toBeHidden()
     await expect(a.page.locator('.dr-dock')).toHaveCount(0)
-    await expect(a.page.locator('[data-lobby-slot]')).toHaveCount(0)
+    // every host slot goes but the live region (2C keeps it in focus mode: announcements go on)
+    await expect(a.page.locator(CHROME_SLOTS)).toHaveCount(0)
 
     await a.page.keyboard.press('ArrowRight')
     await expect(ui.counter).toHaveText('2 / 2')
@@ -272,10 +276,10 @@ test.describe('present mode', () => {
     expect(await facts(a.page)).toEqual(before)
     expect(await item(a.page, EXTRA)).not.toBeNull()
 
-    // Tab stays inside the presentation controls, in order, and wraps; Shift+Tab goes back. (No
-    // "Present to everyone" button: present-live, 3c, plugs into the chrome later.)
+    // Tab stays inside the presentation controls, in order, and wraps; Shift+Tab goes back. "Present to
+    // everyone" is present-live's (3c), in the chrome since the wave-3 integration, as on the tldraw page.
     const seen: (string | null)[] = []
-    for (let i = 0; i < 5; i++) {
+    for (let i = 0; i < 6; i++) {
       await a.page.keyboard.press('Tab')
       seen.push(await focusedTestId(a.page))
     }
@@ -283,6 +287,7 @@ test.describe('present mode', () => {
       'present-prev',
       'present-next',
       'present-grid-toggle',
+      'present-invite', // present-live (3c): alice may present to everyone
       'present-exit',
       'present-prev',
     ])
@@ -428,7 +433,7 @@ test.describe('integration', () => {
     await expect(ui.counter).toHaveText('2 / 2')
     await expectSlideOnScreen(a.page, F.plan)
     await expect(a.page.locator('.dr-topbar')).toBeHidden()
-    await expect.poll(() => visibleCount(a.page.locator('[data-lobby-slot]'))).toBe(0)
+    await expect.poll(() => visibleCount(a.page.locator(CHROME_SLOTS))).toBe(0)
     await a.page.keyboard.press('Escape')
     await expect(ui.overlay).toHaveCount(0)
     await expect(a.page.locator('.dr-topbar')).toBeVisible()
