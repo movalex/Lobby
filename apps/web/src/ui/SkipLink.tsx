@@ -5,9 +5,24 @@
 import type { Editor } from 'tldraw'
 import './skip-link.css'
 
+/**
+ * Dispatched on `document` after a skip link's own `onSkip` ran. The Excalidraw board page's a11y feature
+ * (features/a11y/ported) listens for it and enters the canvas the way F6 does (the first element in
+ * reading order selected when nothing is, as tldraw's own skip button does); the tldraw page ignores it.
+ */
+export const SKIP_TO_CANVAS_EVENT = 'draftroom:skip-to-canvas'
+
 export function SkipLink({ label, testId, onSkip }: { label: string; testId: string; onSkip(): void }) {
   return (
-    <button type="button" className="dr-skip" data-testid={testId} onClick={onSkip}>
+    <button
+      type="button"
+      className="dr-skip"
+      data-testid={testId}
+      onClick={() => {
+        onSkip()
+        if (testId === 'skip-to-canvas') document.dispatchEvent(new CustomEvent(SKIP_TO_CANVAS_EVENT))
+      }}
+    >
       {label}
     </button>
   )

@@ -1,0 +1,142 @@
+/* OWNER: 3i. The a11y feature's chrome on the Excalidraw board page: the content list (Contents panel) and the
+   phone sheet. Colours and focus rings come from the app's tokens (styles.css). */
+
+.dr-a11y-muted {
+  margin: 0 0 8px;
+  color: var(--dr-ink-2);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+/* ---- the content list ---- */
+
+.dr-a11y-contents__list,
+.dr-a11y-contents__inner {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.dr-a11y-contents__inner {
+  margin: 2px 0 6px 14px;
+  padding-left: 8px;
+  border-left: 2px solid var(--dr-line);
+}
+.dr-a11y-contents__row {
+  display: block;
+  width: 100%;
+  min-height: 32px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--dr-ink);
+  font: 14px / 1.35 var(--dr-font);
+  text-align: left;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+.dr-a11y-contents__row:hover {
+  background: var(--dr-hover);
+}
+.dr-a11y-contents__row[aria-current="true"] {
+  background: var(--dr-accent-bg);
+  color: var(--dr-accent-ink);
+}
+.dr-a11y-contents__row:focus-visible {
+  outline: 2px solid var(--dr-focus);
+  outline-offset: -2px;
+}
+.dr-a11y-contents__count {
+  color: var(--dr-ink-2);
+}
+
+/* ---- the phone sheet (phoneSheet slot: a zero-height strip at the bottom of the canvas) ---- */
+
+.dr-a11y-sheet-root {
+  position: relative;
+}
+.dr-a11y-sheet__toggle {
+  position: absolute;
+  right: 12px;
+  /* above a toolbar along the bottom edge */
+  bottom: 76px;
+  width: 48px;
+  height: 48px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--dr-line-strong);
+  border-radius: 24px;
+  background: var(--dr-surface);
+  color: var(--dr-ink);
+  box-shadow: var(--dr-shadow-pop);
+  cursor: pointer;
+}
+.dr-a11y-sheet__toggle[aria-expanded="true"] {
+  background: var(--dr-navy);
+  color: var(--dr-on-navy);
+}
+.dr-a11y-sheet {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  max-height: 60vh;
+  overflow-y: auto;
+  box-sizing: border-box;
+  padding: 12px 16px 16px;
+  border-radius: 14px 14px 0 0;
+  background: var(--dr-surface);
+  color: var(--dr-ink);
+  box-shadow: var(--dr-shadow-dialog);
+}
+.dr-a11y-sheet__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+.dr-a11y-sheet__head h2 {
+  margin: 0;
+  font-size: 16px;
+}
+.dr-a11y-sheet__close {
+  min-width: 44px;
+  min-height: 44px;
+}
+.dr-a11y-sheet__caption {
+  margin: 10px 0 6px;
+  color: var(--dr-ink-2);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+.dr-a11y-sheet__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(104px, 1fr));
+  gap: 6px;
+}
+.dr-a11y-sheet__row {
+  min-height: 44px;
+  padding: 8px 10px;
+  border: 1px solid var(--dr-line);
+  border-radius: 8px;
+  background: var(--dr-inset);
+  color: var(--dr-ink);
+  font: 14px / 1.2 var(--dr-font);
+  cursor: pointer;
+}
+.dr-a11y-sheet__row[aria-pressed="true"] {
+  border-color: var(--dr-navy);
+  background: var(--dr-navy);
+  color: var(--dr-on-navy);
+}
+.dr-a11y-sheet__row:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.dr-a11y-sheet__row:focus-visible,
+.dr-a11y-sheet__toggle:focus-visible {
+  outline: 2px solid var(--dr-focus);
+  outline-offset: 2px;
+}
