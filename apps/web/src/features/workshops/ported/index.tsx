@@ -119,13 +119,15 @@ export const VOTE_TAB_KEY: FeatureKeySpec = {
   },
 }
 
-let toolPress: { x: number; y: number; zoom: number } | null = null
+/** Where the vote tool's press started: the scene point, and the pointer on screen then. */
+let toolPress: { point: { x: number; y: number }; screen: { x: number; y: number } | null } | null = null
 
 /**
  * The `vote` pointer tool (docs/EXCALIDRAW-CONTRACTS.md §3: comment, vote and open-card are Lobby's
  * custom tools, also for read-only roles): a click on an object casts one of my dots, and never selects
  * it. The select and hand tools vote the same way while this person votes (./WorkshopOverlay.tsx
- * ClickToVote), so the tool has no toolbar button: other UI (a phone sheet) may pick it.
+ * ClickToVote), so the tool has no toolbar button: other UI (a phone sheet) may pick it. A drag is not a
+ * click: the engine reports a custom tool's release at its press, so the move is read from the pointer.
  */
 export const VOTE_TOOL: FeatureToolSpec = {
   id: 'vote',
@@ -133,15 +135,17 @@ export const VOTE_TOOL: FeatureToolSpec = {
   readOnlyAllowed: true,
   cursor: 'pointer',
   onPointerDown(e, ctx) {
-    toolPress = { x: e.point.x, y: e.point.y, zoom: ctx.canvas.viewport.get().zoom }
+    toolPress = { point: { x: e.point.x, y: e.point.y }, screen: ctx.canvas.pointer()?.screen ?? null }
   },
-  onPointerUp(e, ctx) {
+  onPointerUp(_e, ctx) {
     const p = toolPress
     toolPress = null
-    if (!p || Math.hypot(e.point.x - p.x, e.point.y - p.y) * p.zoom > CLICK_SLOP_PX) return
+    if (!p) return
+    const now = ctx.canvas.pointer()?.screen ?? null
+    if (!p.screen || !now || Math.hypot(now.x - p.screen.x, now.y - p.screen.y) > CLICK_SLOP_PX) return
     const rule = ruleNow(ctx)
     if (!rule || !votingNow(ctx)) return
-    const el = eligibleAt(ctx.canvas, e.point, rule)
+    const el = eligibleAt(ctx.canvas, p.point, rule)
     if (el) void castVote(ctx, storeFor(ctx), `shape:${el.id}`, 1)
   },
   onExit() {

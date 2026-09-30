@@ -12,7 +12,15 @@
 // open); a selection is read with the facade.
 import { readFileSync } from 'node:fs'
 import type { Page } from '@playwright/test'
-import { select, selection, selectNone, setViewport, viewport } from '../tests/support/canvas.ts'
+import {
+  select,
+  selection,
+  selectNone,
+  setTool,
+  setViewport,
+  tool,
+  viewport,
+} from '../tests/support/canvas.ts'
 import { capture } from '../tests/support/screenshots.ts'
 import {
   type ApiVoteState,
@@ -798,6 +806,34 @@ test('vote results: badges shrink and group when zoomed out, stay under the work
     await groups.first().click()
     await expect.poll(async () => (await viewport(a)).zoom).toBeGreaterThan(before * 2)
   })
+})
+
+// ---- the vote pointer tool (new on this page: docs/research/excalidraw/wave3/3F.md D7) ------------------------
+
+test('the vote tool: for a viewer too, a click on an object casts a dot and selects nothing; a drag casts nothing', async ({
+  join,
+  board,
+}) => {
+  const a = await join('alice')
+  const c = await join('carol', 'viewer')
+  await seed(a.page, { notes: [{ id: 'wk-tool-1', x: 0, y: 0, text: 'Tool' }] })
+  await expectItemsEverywhere([c], ['wk-tool-1'])
+  await post(a, `/api/boards/${board}/votes`, { votesPerPerson: 2, onePerObject: false, scope: 'board' })
+  await joinVote(c, 2)
+  await showAll(c.page)
+  expect(await setTool(c.page, 'vote')).toBe(true)
+  expect(await tool(c.page)).toBe('vote')
+  const at = await reachableCenter(c.page, 'wk-tool-1')
+  await c.page.mouse.move(at.x, at.y)
+  await c.page.mouse.down()
+  await c.page.mouse.move(at.x + 40, at.y + 30, { steps: 4 })
+  await c.page.mouse.up()
+  await expect(remaining(c)).toHaveAttribute('data-remaining', '2')
+  await c.page.mouse.click(at.x, at.y)
+  await expect(dot(c.page, 'wk-tool-1')).toHaveAttribute('data-count', '1')
+  await expect(remaining(c)).toHaveAttribute('data-remaining', '1')
+  expect(await selection(c.page)).toEqual([])
+  expect(await setTool(c.page, 'select')).toBe(true)
 })
 
 // ---- R2-05: no +1 while a dot vote is open (workshops-3.fix) ----------------------------------------------------

@@ -26,7 +26,7 @@ function describeRef(canvas: LobbyCanvas, ref: string) {
   return { type: typeNameOfRef(ref, get(canvas)), label: labelOfRef(ref, get(canvas)) }
 }
 
-/** Selects the object and brings it to 100% in view (tldraw's select + zoomToBounds targetZoom 1). */
+/** Selects the object and brings it into view, at 100% at most (tldraw's select + zoomToBounds targetZoom 1). */
 function zoomTo(canvas: LobbyCanvas, ref: string) {
   const id = elementIdOf(ref)
   const el = id ? canvas.get(id) : undefined
