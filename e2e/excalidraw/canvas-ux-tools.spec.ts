@@ -38,6 +38,29 @@ const rect = async (page: Page, testId: string) => {
   return b
 }
 
+type Box = { x: number; y: number; width: number; height: number }
+/** Two boxes that do not overlap (1 px of slack). */
+const apart = (a: Box, b: Box) =>
+  a.x + a.width <= b.x + 1 ||
+  b.x + b.width <= a.x + 1 ||
+  a.y + a.height <= b.y + 1 ||
+  b.y + b.height <= a.y + 1
+
+/**
+ * The navigation slot (bottom left) is under neither the toolbar nor its quick-actions strip. Below 800 px
+ * the board page lifts the slot above the tools' row (2C's board.css), so the bar need not move right of it;
+ * the strip then starts right of it (the wave-3b integration).
+ */
+async function clearOfNavigation(page: Page, withQuick: boolean) {
+  const nav = await page.locator('[data-lobby-slot="navigation"]').boundingBox()
+  if (!nav) return
+  expect(apart(await rect(page, 'main-toolbar'), nav), 'the toolbar is clear of the navigation slot').toBe(
+    true,
+  )
+  if (withQuick)
+    expect(apart(await rect(page, 'quick-actions'), nav), 'the quick actions are clear of it').toBe(true)
+}
+
 test('A11Y2-02: Ctrl/Cmd+Z and redo act on the board from the top bar and the dock, through the board history; the quick actions (a canvas of 840 px or less) and Board ▸ Edit do the same', async ({
   canvasSession,
 }) => {
@@ -252,9 +275,8 @@ test('the phone toolbar (390 px, touch): quick actions on top, the tools that fi
       const ids = await toolbarIds(page)
       expect(ids[0]).toBe('tools.select')
       expect(ids.at(-1)).toBe('tools.more-button')
-      // the zoom button (navigation, bottom left) is never under the toolbar
-      const nav = await page.locator('[data-lobby-slot="navigation"]').boundingBox()
-      if (nav) expect(bar.x).toBeGreaterThanOrEqual(nav.x + nav.width - 1)
+      // the zoom button (navigation, bottom left) is never under the toolbar or its quick actions
+      await clearOfNavigation(page, true)
       const styles = await rect(page, 'mobile-styles.button')
       expect(styles.x + styles.width).toBeLessThanOrEqual(PHONE.width)
       expect(await scrollsSideways(page)).toBe(false)
@@ -316,10 +338,8 @@ test('the toolbar by canvas width: at 700 px the quick actions sit on the toolba
   expect(q.y + q.height).toBeLessThanOrEqual((await rect(a.page, 'main-toolbar')).y + 1)
   await expect(a.page.getByTestId('mobile-styles.button')).toHaveCount(0)
   await expect(a.page.locator('[data-lobby-slot="stylePanel"] [data-testid="style.panel"]')).toBeVisible()
-  // the bar clears the zoom menu at the bottom left
-  const bar = await rect(a.page, 'main-toolbar')
-  const nav = await a.page.locator('[data-lobby-slot="navigation"]').boundingBox()
-  if (nav) expect(bar.x).toBeGreaterThanOrEqual(nav.x + nav.width - 1)
+  // the bar and its quick actions clear the zoom menu at the bottom left
+  await clearOfNavigation(a.page, true)
   await a.page.setViewportSize({ width: 1440, height: 900 })
   await expect(quick).toHaveCount(0)
 })
