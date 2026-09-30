@@ -414,6 +414,7 @@ test('mind map: start from a sticky note in a frame (Alt+Shift+M), drag the cent
 
   await test.step('dragging the central topic takes the whole map along (when it is dropped)', async () => {
     // the last topic's editor has closed (a press while it closes only ends the typing)
+    await expect(a.page.getByTestId('lease-status')).toHaveAttribute('data-phase', 'idle')
     await expect(a.page.locator(TEXT_EDITOR)).toHaveCount(0)
     await expect.poll(() => editingId(a.page)).toBeNull()
     const before = await mapView(a.page)

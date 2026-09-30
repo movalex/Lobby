@@ -3,7 +3,15 @@
 // keyboard-first. Two browsers: whatever one person does, the other sees live, and both hold the same
 // elements with nothing overlapping.
 import type { Page } from '@playwright/test'
-import { editingId, expect, expectConverged, selection, setTool, test } from '../tests/support/canvas.ts'
+import {
+  editingId,
+  expect,
+  expectConverged,
+  selection,
+  setTool,
+  TEXT_EDITOR,
+  test,
+} from '../tests/support/canvas.ts'
 import { focusBoard } from './board-kit.ts'
 import {
   byText,
@@ -178,6 +186,10 @@ test('mind map: fast typing never loses a key; Shift+Tab moves up a level; an em
     .toEqual(['(root) Root', 'Idea > Detail one', 'Root > Detail two', 'Root > Idea', 'Root > Next idea'])
   await expectTidy(a.page)
   const v = await mapView(a.page)
+  await expect.poll(() => selection(a.page)).toEqual([byText(v, 'Next idea').id])
+  // the lease has closed the last topic's editor (its clean-up would take a selection made before)
+  await expect(a.page.getByTestId('lease-status')).toHaveAttribute('data-phase', 'idle')
+  await expect(a.page.locator(TEXT_EDITOR)).toHaveCount(0)
   await expect.poll(() => selection(a.page)).toEqual([byText(v, 'Next idea').id])
   // "Detail two" moved up a level: it is a branch now, sized and styled like one, after "Idea".
   expect(byText(v, 'Detail two').box.h).toBeGreaterThanOrEqual(byText(v, 'Detail one').box.h)
