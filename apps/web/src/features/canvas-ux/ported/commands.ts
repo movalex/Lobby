@@ -413,7 +413,8 @@ export const COMMANDS: readonly CommandSpec[] = [
   {
     id: CMD.insertFile,
     label: 'Upload media…',
-    kbd: ['mod+u'],
+    // Ctrl/Cmd+U is the media feature's (media.insert-file, 3g: it also tells a read-only person why
+    // nothing happens); this command is the toolbar's and the menus' (wave-3 integration)
     enabled: editable,
     run: (ctx) => void pickFiles(ctx),
   },

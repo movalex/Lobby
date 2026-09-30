@@ -70,7 +70,36 @@ const ENGINE_KEYS = [
 const TAKES_ENGINE_KEY: Readonly<Record<string, string>> = {
   [canonical('mod+shift+l')]:
     'canvas-ux.toggle-lock: MAK-05 keeps the selection and never groups a locked selection',
+  // wave-3 integration: plan §4.2 gives the zoom keys to 3b
+  [canonical('mod+=')]:
+    'navigation.zoom-in: MAK-10, Lobby’s zoom steps and limits (below the engine’s 0.1, down to the whole-board fit)',
+  [canonical('mod+-')]:
+    'navigation.zoom-out: MAK-10, Lobby’s zoom steps and limits (below the engine’s 0.1, down to the whole-board fit)',
 }
+
+/**
+ * Browser chords a feature takes anyway, each with why (wave-3 integration). The key registry sees the
+ * key before the allowlist, so the feature acts and the browser does not.
+ */
+const TAKES_BROWSER_CHORD: Readonly<Record<string, string>> = {
+  [canonical('mod+shift+c')]:
+    'present-export.copy-as-png: Copy as PNG keeps the tldraw page’s Ctrl/Cmd+Shift+C (F12 and Ctrl/Cmd+Shift+I still open devtools)',
+}
+
+/**
+ * Keys that act only while one pointer tool is on (their `match` checks `canvas.tool()`), so they cannot
+ * collide at run time with a claim that acts under another tool. They are checked for that instead of for
+ * conflicts: each belongs to a feature that comes before every other claimant of its chord (so it wins while
+ * its tool is on), and it steps aside under the select tool. (3c asked for a tool qualifier on key claims;
+ * this table is the integration's stand-in.)
+ */
+const TOOL_SCOPED_KEYS: Readonly<Record<string, string>> = {
+  'comments.tool-enter': 'comment',
+  'comments.tool-escape': 'comment',
+  'comments.tool-tab': 'comment',
+  'comments.tool-level': 'comment',
+}
+const contextual = (by: string) => DEFERRING_KEYS.has(by) || by in TOOL_SCOPED_KEYS
 
 describe('the keyboard map of CANVAS_FEATURES', () => {
   it('every claimed chord parses', () => {
@@ -78,18 +107,58 @@ describe('the keyboard map of CANVAS_FEATURES', () => {
   })
 
   it('binds no chord twice in one scope (deferring keys aside)', () => {
-    const firm = claims.filter((c) => !DEFERRING_KEYS.has(c.by))
+    const firm = claims.filter((c) => !contextual(c.by))
     expect(keyConflicts(firm)).toEqual([])
   })
 
   it('takes no browser chord', () => {
-    const taken = claims.filter((c) => BROWSER.includes(canonical(c.chord)))
+    const taken = claims.filter(
+      (c) => BROWSER.includes(canonical(c.chord)) && !TAKES_BROWSER_CHORD[canonical(c.chord)],
+    )
     expect(taken.map((c) => `${c.by}: ${c.chord}`)).toEqual([])
   })
 
   it('takes an engine key only where the table says why', () => {
-    const taken = claims.filter((c) => ENGINE_KEYS.includes(canonical(c.chord)) && !DEFERRING_KEYS.has(c.by))
-    for (const c of taken) expect(TAKES_ENGINE_KEY[canonical(c.chord)], `${c.by}: ${c.chord}`).toBeTruthy()
+    const taken = claims.filter((c) => ENGINE_KEYS.includes(canonical(c.chord)) && !contextual(c.by))
+    expect(
+      taken.filter((c) => !TAKES_ENGINE_KEY[canonical(c.chord)]).map((c) => `${c.by}: ${c.chord}`),
+    ).toEqual([])
+  })
+
+  it('a tool-scoped key wins while its tool is on and steps aside under the select tool', () => {
+    const order = CANVAS_FEATURES.map((f) => f.id)
+    const specs = CANVAS_FEATURES.flatMap((f) => (f.keys ?? []).map((k) => ({ f: f.id, k })))
+    for (const [id, tool] of Object.entries(TOOL_SCOPED_KEYS)) {
+      const own = specs.find((s) => s.k.id === id)
+      expect(own, id).toBeDefined()
+      if (!own) continue
+      for (const chord of own.k.chords) {
+        const same = claims.filter(
+          (c) =>
+            c.by !== id &&
+            // canvas-ux's deferring keys step aside for any other feature's key at run time
+            !DEFERRING_KEYS.has(c.by) &&
+            (c.scope === own.k.scope || c.scope === 'anywhere') &&
+            canonical(c.chord) === canonical(chord),
+        )
+        for (const c of same)
+          expect(order.indexOf(own.f), `${id} before ${c.by} (${chord})`).toBeLessThan(
+            order.indexOf(c.featureId),
+          )
+      }
+      const ctxWith = (t: string) =>
+        ({ canvas: { tool: () => t, pointer: () => null } }) as unknown as CanvasFeatureContext
+      const e = {
+        key: 'Enter',
+        code: 'Enter',
+        ctrlKey: false,
+        metaKey: false,
+        altKey: false,
+        shiftKey: false,
+      }
+      expect(own.k.match?.(e, ctxWith('select')) ?? true, `${id} under select`).toBe(false)
+      expect(own.k.match?.(e, ctxWith(tool)) ?? true, `${id} under ${tool}`).toBe(true)
+    }
   })
 })
 
@@ -120,7 +189,6 @@ describe('canvas-ux’s own keys (a change here is a change of docs/PROGRESS.md�
         'canvas shift+? → canvas-ux.keyboard-shortcuts',
         'canvas mod+/ → canvas-ux.keyboard-shortcuts',
         'canvas mod+alt+/ → canvas-ux.keyboard-shortcuts',
-        'canvas mod+u → canvas-ux.insert-file',
         'canvas shift+f10 → canvas-ux.context-menu-key',
         'canvas contextmenu → canvas-ux.context-menu-key',
         'canvas alt+f10 → canvas-ux.selection-bar-key',
