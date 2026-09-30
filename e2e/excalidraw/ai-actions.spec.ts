@@ -491,9 +491,12 @@ test('Results stay in the frame; the Undo toast only ever undoes the AI result; 
     // The reviewer's steps: move a note, run AI, Ctrl+Z: the moved note stays moved.
     const first = notes[0]
     if (!first) throw new Error('no note')
+    // every write before the move has landed first (spike B's open O2 race, board-kit.ts settled)
+    await expectSaved(b.page)
     const y0 = await noteY(first.id)
     await nudge(b.page, first.id, 122)
     await expectSaved(b.page)
+    expect(await noteY(first.id)).toBe((y0 ?? 0) + 122)
     await actionItemsOnFrame()
     await pressUndo(b.page)
     await expect(b.page.getByTestId('ai-done')).toHaveCount(0)
@@ -504,9 +507,11 @@ test('Results stay in the frame; the Undo toast only ever undoes the AI result; 
   await test.step('DANA-09: the toast’s Undo takes back exactly the AI result, never the edit before it', async () => {
     const third = notes[2]
     if (!third) throw new Error('no note')
+    await expectSaved(b.page)
     const y0 = (await noteY(third.id)) ?? 0
     await nudge(b.page, third.id, 60)
     await expectSaved(b.page)
+    expect(await noteY(third.id)).toBe(y0 + 60)
     await actionItemsOnFrame()
     await b.page.getByTestId('ai-undo').click()
     await expect.poll(aiCount).toBe(0)
@@ -529,6 +534,7 @@ test('Results stay in the frame; the Undo toast only ever undoes the AI result; 
     await expect.poll(() => noteY(second.id)).toBe(second.y + 40)
     await expect(b.page.getByTestId('ai-undo')).toBeVisible()
     // bob moves one himself: the toast goes, and his undo takes his own move back first.
+    await expectSaved(b.page)
     await nudge(b.page, second.id, 40)
     await expect(b.page.getByTestId('ai-done')).toHaveCount(0)
     await expectSaved(b.page)
