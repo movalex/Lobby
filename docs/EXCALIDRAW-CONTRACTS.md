@@ -34,6 +34,21 @@ After this commit the files below change only through a **change request to the 
 
 **While spike B runs** (it is fixing the O2 lost-edit race in `canvas/sync/core`), spike B's owners still own `apps/sync/src/room/**`, `apps/sync/src/room/migrate/**`, `apps/web/src/canvas/{sync,lease,history,input,engine,presence,tools,overlay}/**`, `packages/tldraw-import/**` and `e2e/spike-b/**`; the lead merges their later fixes into `engine/excalidraw`. Nothing in this freeze edits those folders: the new API wraps the C0 port (`canvas/port.ts`, unchanged) instead of changing it.
 
+## 0a. Spike B code ownership moves to the wave owners (2026-09-30, lead)
+
+Spike B's code-ownership freeze **ends now**. Spike B's remaining work is B9 (the NAS load test and the workstation half), the quiet-window measurements and the report. It runs on `engine/excalidraw`, not on `spike/excalidraw`. Every fix from now on is made on `engine/excalidraw` by the owner below. `spike/excalidraw` stays as history at beff59d, merged here as 7b528a9. `spike/b-harness-wip-b9` holds O3's unverified B9 script changes, for 2E to finish.
+
+| Former spike owner | Files | New owner |
+|---|---|---|
+| O1 room | `apps/sync/src/room/**` except `room/migrate/**`; `apps/sync/src/{file-refs,workshop-state}.ts`; `packages/canvas-schema/src/{invariants.ts,engine/**}` | **2A** (sync room) |
+| O4 conversion | `packages/tldraw-import/**`, `apps/sync/src/room/migrate/**`, `apps/sync/src/r0/**`, `e2e/spike-b/b8/**`; also the backup, retention and maintenance code the Excalidraw build needs for R0's contracts | **2B** (sync edges) |
+| O2 web engine | `apps/web/src/canvas/{sync,lease,history,input,engine,presence,tools,overlay}/**`, `canvas/port-impl.ts` | **2C** (web engine) |
+| O5 canvas parts | `apps/web/src/canvas/overrides.ts`, `canvas/files/**`, `canvas/export/**` | **2C** (web engine); 3g and 3e own the features on top |
+| O3 harness | `canvas/test-facade.ts`, `e2e/spike-b/support/**`, `e2e/load/**`, `docs/research/excalidraw/spike-b/scripts/nas-*` | **2E** (harness) |
+| lead | `packages/canvas-schema/src/{protocol,groups,custom-data,limits,elements,doc,refs,hash}.ts`, `apps/sync/src/{engine-switch,test-hooks}.ts`, `room/schema.ts` | **contracts owner** (the lead). A change request still needs both ends, and bumps `CONTRACTS_REV` |
+
+The frozen parts of §0 still apply to feature owners: they reach these files through the canvas API or a change request.
+
 ## 1. Rules for porting a feature (wave 3)
 
 1. **Both engines keep working until wave 4.** The default build (no `VITE_LOBBY_ENGINE`) is today's tldraw app and keeps passing its e2e suite. So a feature is ported **beside** its tldraw code, not over it:
