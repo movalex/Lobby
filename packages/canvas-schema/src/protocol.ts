@@ -33,7 +33,7 @@ import {
 /** The wire protocol version (`hello.proto`, `welcome.proto`). */
 export const PROTO = 1 as const
 /** Bumped by the lead on every change request applied after C0 (CONTRACTS.md). C0 is revision 1. */
-export const CONTRACTS_REV = 5
+export const CONTRACTS_REV = 6
 /**
  * The element schema version (`hello.schema`, `welcome.schema`, `lb_meta.schemaVersion`). A client one
  * version older is served; a newer one gets 4099 `SERVER_TOO_OLD`, an older one `CLIENT_TOO_OLD` (§6.2 `schema`).

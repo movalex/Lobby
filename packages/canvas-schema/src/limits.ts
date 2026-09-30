@@ -177,6 +177,26 @@ const SIGNED_URL =
   /(?:[?&](?:X-Amz-(?:Signature|Credential|Security-Token)|Signature|Expires|Key-Pair-Id|sig)=)/i
 
 /**
+ * A signed-URL parameter in `query`, as written or percent-encoded (`X%2DAmz%2DSignature=`, decoded up to
+ * three times; V2, part-3 round: an encoded name passed the check and was stored).
+ */
+function signedQuery(query: string): boolean {
+  let cur = query
+  for (let i = 0; i < 4; i++) {
+    if (SIGNED_URL.test(cur)) return true
+    let next: string
+    try {
+      next = decodeURIComponent(cur)
+    } catch {
+      return false
+    }
+    if (next === cur) return false
+    cur = next
+  }
+  return SIGNED_URL.test(cur)
+}
+
+/**
  * Whether `link` may be stored (§3.5 "Links"): `http:`/`https:` URLs, `mailto:`, or a Lobby-relative
  * path (`/…`, never `//…`); at most 2 KiB; never a signed or expiring URL. Guests may only store
  * Lobby-relative links (§3.5 "Guests"; `guest: true`).
@@ -187,7 +207,7 @@ export function isAllowedLink(link: string, opts: { guest?: boolean } = {}): boo
     const c = link.charCodeAt(i)
     if (c < 0x20 || c === 0x7f) return false
   }
-  if (link.startsWith('/') && !link.startsWith('//') && !link.startsWith('/\\')) return !SIGNED_URL.test(link)
+  if (link.startsWith('/') && !link.startsWith('//') && !link.startsWith('/\\')) return !signedQuery(link)
   if (opts.guest) return false
   let url: URL
   try {
@@ -198,7 +218,7 @@ export function isAllowedLink(link: string, opts: { guest?: boolean } = {}): boo
   if (url.protocol === 'mailto:') return true
   if (url.protocol !== 'http:' && url.protocol !== 'https:') return false
   if (url.username || url.password) return false
-  return !SIGNED_URL.test(url.search)
+  return !signedQuery(url.search)
 }
 
 // ---- board and session limits ------------------------------------------------------------------------
