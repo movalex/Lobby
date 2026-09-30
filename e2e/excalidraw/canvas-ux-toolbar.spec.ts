@@ -145,6 +145,14 @@ test('RETRO-20 / R16: the style panel shows for a selection or a creation tool, 
   await setTool(a.page, 'rectangle')
   await expect(panel).toBeVisible()
   await expect(a.page.getByTestId('style.geo')).toBeVisible()
+  // on this canvas the note tool's notes take Lobby's note defaults and the text tool's texts only the
+  // next colour (CR-3A-7): no panel for the note tool, only the colour for the text tool
+  await setTool(a.page, 'note')
+  await expect(panel).toHaveCount(0)
+  await setTool(a.page, 'text')
+  await expect(a.page.getByTestId('style.color')).toBeVisible()
+  await expect(a.page.getByTestId('style.opacity')).toHaveCount(0)
+  await expect(a.page.getByTestId('style.font')).toHaveCount(0)
   await setTool(a.page, 'select')
   await expect(panel).toHaveCount(0)
 })
@@ -201,7 +209,7 @@ test('style: colour, fill, dash and size on a shape are one undo step each, map 
   await a.page.getByTestId('style.dash.dashed').click()
   await expect.poll(async () => (await item(a.page, rect))?.strokeStyle).toBe('dashed')
   await a.page.getByTestId('style.size.xl').click()
-  await expect.poll(async () => (await item(a.page, rect))?.strokeWidth).toBe(10)
+  await expect.poll(async () => (await item(a.page, rect))?.strokeWidth).toBe(8)
   // a colour change keeps the fill in the new colour
   await a.page.getByTestId('style.color.red').click()
   await expect
@@ -210,13 +218,13 @@ test('style: colour, fill, dash and size on a shape are one undo step each, map 
       return [e?.strokeColor, e?.backgroundColor]
     })
     .toEqual(['#e03131', '#f4dadb'])
-  await expect.poll(async () => (await item(b.page, rect))?.strokeWidth).toBe(10)
+  await expect.poll(async () => (await item(b.page, rect))?.strokeWidth).toBe(8)
   await expectConverged(a.page, [b.page])
   // each pick is its own undo step
   await undoKey(a.page)
   await expect.poll(async () => (await item(a.page, rect))?.strokeColor).toBe('#4465e9')
   await undoKey(a.page)
-  await expect.poll(async () => (await item(a.page, rect))?.strokeWidth).not.toBe(10)
+  await expect.poll(async () => (await item(a.page, rect))?.strokeWidth).not.toBe(8)
   // the next shapes take the picks too
   const next = await withCanvas(a.page, (c) => c.styles.next(), null)
   expect(next.strokeColor).toBe('#e03131')

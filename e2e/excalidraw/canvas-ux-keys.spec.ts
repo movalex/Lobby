@@ -10,6 +10,7 @@ import {
   createNote,
   editingId,
   expect,
+  expectSaved,
   item,
   items,
   itemText,
@@ -281,7 +282,13 @@ test('RETRO-09: Tab while editing a note makes the next note beside it, and typi
     await expect.poll(() => tool(a.page)).toBe('note')
     await clickScene(a.page, { x: 200, y: 200 + run * 300 })
     const first = await waitForTextEditor(a.page)
+    // spike B's open O2 race (board-kit `settled`): a server frame that overtakes a local edit before the
+    // engine reports it loses the edit. Saved before and after the first note's words, so this checks the
+    // Tab and the keys typed straight after it, not that race.
+    await expectSaved(a.page)
     await a.page.keyboard.type('Alpha')
+    await expect.poll(() => itemText(a.page, first)).toBe('Alpha')
+    await expectSaved(a.page)
     await a.page.keyboard.press('Tab')
     await a.page.keyboard.type('Scope creep')
     await expect
