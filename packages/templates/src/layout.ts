@@ -4,16 +4,10 @@
 // by the editor at render time, so heights here are deliberately conservative estimates.
 
 import type { TLDefaultSizeStyle, TLShape } from '@tldraw/tlschema'
-
-export interface Rect {
-  x: number
-  y: number
-  w: number
-  h: number
-}
+import { NOTE_SIZE, type Rect } from './common.ts'
 
 /** tldraw note shapes are 200 x 200 (times `scale`), plus `growY`. */
-export const NOTE_SIZE = 200
+export { NOTE_SIZE, type Rect, unionRects } from './common.ts'
 /** Padding around note and geo labels (LABEL_PADDING). */
 export const LABEL_PADDING = 16
 const BASE_FONT_SIZE = 16
@@ -129,20 +123,4 @@ export function estimateShapeRect(shape: TLShape): Rect {
       return { x: shape.x, y: shape.y, w, h }
     }
   }
-}
-
-export function unionRects(rects: Iterable<Rect>): Rect | null {
-  let minX = Number.POSITIVE_INFINITY
-  let minY = Number.POSITIVE_INFINITY
-  let maxX = Number.NEGATIVE_INFINITY
-  let maxY = Number.NEGATIVE_INFINITY
-  let any = false
-  for (const r of rects) {
-    any = true
-    minX = Math.min(minX, r.x)
-    minY = Math.min(minY, r.y)
-    maxX = Math.max(maxX, r.x + r.w)
-    maxY = Math.max(maxY, r.y + r.h)
-  }
-  return any ? { x: minX, y: minY, w: maxX - minX, h: maxY - minY } : null
 }

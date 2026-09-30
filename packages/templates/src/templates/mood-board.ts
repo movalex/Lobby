@@ -1,6 +1,5 @@
-import type { TLDefaultColorStyle } from '@tldraw/tlschema'
-import { CONTENT_Y, createBoardBuilder, NOTE_GAP, PAD } from '../builder.ts'
-import type { TemplateDefinition } from '../types.ts'
+import { CONTENT_Y, type LobbyColor, NOTE_GAP, PAD } from '../builder.ts'
+import type { TemplateSource } from '../source.ts'
 
 const SECTIONS = ['1 · Direction', '2 · Palette', '3 · Imagery', '4 · This, not that'] as const
 
@@ -10,8 +9,8 @@ const BOTTOM_H = 900
 
 const SWATCHES: ReadonlyArray<{
   label: string
-  color: TLDefaultColorStyle
-  labelColor: TLDefaultColorStyle
+  color: LobbyColor
+  labelColor: LobbyColor
 }> = [
   { label: 'Primary', color: 'violet', labelColor: 'white' },
   { label: 'Secondary', color: 'light-violet', labelColor: 'black' },
@@ -30,15 +29,13 @@ const IMAGE_SLOTS = [
   'Wild card from another world',
 ]
 
-export const moodBoard: TemplateDefinition = {
+export const moodBoard: TemplateSource = {
   id: 'mood-board',
   name: 'Mood board',
   description: 'Set a visual direction with keywords, a color palette, image slots and a this-not-that list.',
   category: 'visual',
   sections: SECTIONS,
-  build(ctx) {
-    const b = createBoardBuilder(ctx)
-
+  plan(b) {
     const direction = b.section({
       x: 0,
       y: 0,
@@ -156,7 +153,5 @@ export const moodBoard: TemplateDefinition = {
       b.note(contrast, { x: colX[0], y, text: yes, color: 'light-green' })
       b.note(contrast, { x: colX[1], y, text: no, color: 'light-red' })
     })
-
-    return { records: b.finish() }
   },
 }

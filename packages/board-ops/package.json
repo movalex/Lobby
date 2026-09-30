@@ -5,6 +5,8 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
+    "./elements": "./src/elements/index.ts",
+    "./elements/v1": "./src/elements/archive-v1.ts",
     "./test-fixtures": "./src/test-fixtures.ts"
   },
   "scripts": {

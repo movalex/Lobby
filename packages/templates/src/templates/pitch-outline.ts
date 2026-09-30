@@ -1,6 +1,5 @@
-import type { TLDefaultColorStyle, TLFrameShape } from '@tldraw/tlschema'
-import { CONTENT_Y, createBoardBuilder, PAD } from '../builder.ts'
-import type { TemplateDefinition } from '../types.ts'
+import { CONTENT_Y, type LobbyColor, PAD, type PlanFrame } from '../builder.ts'
+import type { TemplateSource } from '../source.ts'
 
 const COL_W = 500
 const COL_GAP = 80
@@ -11,7 +10,7 @@ interface Step {
   name: string
   heading: string
   intro: string
-  color: TLDefaultColorStyle
+  color: LobbyColor
   prompts: string[]
   visual?: string
 }
@@ -75,14 +74,13 @@ const STEPS: Step[] = [
 const GLANCE = 'Pitch at a glance'
 const SECTIONS = [GLANCE, ...STEPS.map((s) => s.name)]
 
-export const pitchOutline: TemplateDefinition = {
+export const pitchOutline: TemplateSource = {
   id: 'pitch-outline',
   name: 'Pitch outline',
   description: 'Shape a pitch step by step, from the problem and insight to the idea, proof and a clear ask.',
   category: 'plan',
   sections: SECTIONS,
-  build(ctx) {
-    const b = createBoardBuilder(ctx)
+  plan(b) {
     const totalW = STEPS.length * COL_W + (STEPS.length - 1) * COL_GAP
 
     const glance = b.section({
@@ -106,7 +104,7 @@ export const pitchOutline: TemplateDefinition = {
       { text: 'Closing line: the last thing they hear', color: 'yellow' },
     ])
 
-    const columns: TLFrameShape[] = []
+    const columns: PlanFrame[] = []
     STEPS.forEach((step, i) => {
       const col = b.section({
         x: i * (COL_W + COL_GAP),
@@ -136,7 +134,5 @@ export const pitchOutline: TemplateDefinition = {
     })
 
     b.chain(columns, { size: 'l' })
-
-    return { records: b.finish() }
   },
 }
