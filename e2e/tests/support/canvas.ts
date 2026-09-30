@@ -14,7 +14,8 @@
 //
 // Verbs: the C0 facade (apps/web/src/canvas/test-facade.types.ts) plus the wave-1 verbs
 // (apps/web/src/canvas/api/facade.types.ts). Until 2E adds a wave-1 verb to the page, the helper falls
-// back to spike B's harness channel (`window.__lobbyHarness`) where it has the same verb, else fails with
+// back to spike B's harness channel (`window.__lobbyHarness`) where it has the same verb, or derives it
+// from the C0 facade and the harness (`text`, `readOnly`; CR W1-2E-2), else fails with
 // "facade verb <name> not implemented (2E)".
 import { type Browser, type BrowserContext, expect, type Page } from '@playwright/test'
 import type { FacadeMe, LobbyCanvasFacadeV1 } from '../../../apps/web/src/canvas/api/facade.types.ts'
@@ -58,7 +59,8 @@ export const TEXT_EDITOR = 'textarea.excalidraw-wysiwyg'
 
 /**
  * Calls one facade verb in the page and returns its (JSON) result. Falls back to the spike harness for
- * the verbs it shares (`viewport`, `setViewport`, `screenToScene`, `ready`, `me`) until 2E lands them.
+ * the verbs it shares (`viewport`, `setViewport`, `screenToScene`, `ready`, `me`), and derives `readOnly`
+ * and `text` from the harness and the C0 facade, until 2E lands them on the page.
  */
 export async function canvasCall<V extends CanvasVerb>(
   page: Page,
@@ -77,6 +79,7 @@ export async function canvasCall<V extends CanvasVerb>(
         sid: string | null
         role: string | null
         guest: boolean | null
+        readonly: boolean | null
       }
       const h = (window as unknown as { __lobbyHarness?: Record<string, unknown> & { session(): Session } })
         .__lobbyHarness
@@ -87,6 +90,25 @@ export async function canvasCall<V extends CanvasVerb>(
           return s.welcomed && s.uid && s.sid
             ? { uid: s.uid, sid: s.sid, role: s.role, guest: !!s.guest }
             : null
+        }
+        // derived until the page has the verb: the welcome's read-only flag; an element's plain text (a
+        // text's own, a frame's name, else its bound label's; '' when it has none)
+        if (verb === 'readOnly') return h.session().readonly === true
+        if (verb === 'text') {
+          type El = {
+            id: string
+            type: string
+            originalText?: string
+            name?: string | null
+            boundElements?: { id: string; type: string }[] | null
+          }
+          const all = (f.items as () => El[])()
+          const el = all.find((e) => e.id === args[0])
+          if (!el) return ''
+          if (el.type === 'text') return el.originalText ?? ''
+          if (el.type === 'frame') return el.name ?? ''
+          const lbl = (el.boundElements ?? []).find((b) => b.type === 'text')
+          return (lbl ? all.find((e) => e.id === lbl.id)?.originalText : undefined) ?? ''
         }
         const shared = h[verb]
         if (typeof shared === 'function') return await (shared as (...a: unknown[]) => unknown).apply(h, args)
@@ -267,6 +289,8 @@ export async function startTextEditing(page: Page, id: string): Promise<void> {
 /** Selects the element and presses Enter (the P1 path; a note opens with the caret at the end). */
 export async function startTextEditingWithKeyboard(page: Page, id: string): Promise<void> {
   await select(page, [id])
+  // the board's keys go to the focused canvas: a tab that has not clicked it yet must be given it
+  await page.evaluate(() => document.querySelector<HTMLElement>('.excalidraw')?.focus())
   await page.keyboard.press('Enter')
   await waitForTextEditor(page, id)
 }

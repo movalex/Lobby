@@ -1,10 +1,16 @@
 import { test as base, expect } from '@playwright/test'
 import type { BoardRole } from './api.ts'
 import { openSession, type Session } from './board.ts'
-import { type Stack, startStack } from './stack.ts'
+import { type Stack, type StackEngine, startStack } from './stack.ts'
 import { createUsers, type Users } from './users.ts'
 
 interface WorkerFixtures {
+  /**
+   * The canvas engine of this worker's stack: tldraw (default, today's app) or excalidraw (set by
+   * e2e/excalidraw/playwright.config.ts for the ported specs; sync then runs EXCALIDRAW_SYNC_ENV under
+   * any `syncEnv`). The web build must match: each config builds its own.
+   */
+  engine: StackEngine
   /** Extra sync server env for this worker's stack. Override per file with test.use({ syncEnv }). */
   syncEnv: Record<string, string>
   /** Extra preview worker env for this worker's stack (test.use({ workerEnv })). */
@@ -29,14 +35,15 @@ interface TestFixtures {
 }
 
 export const test = base.extend<TestFixtures, WorkerFixtures>({
+  engine: ['tldraw', { option: true, scope: 'worker' }],
   syncEnv: [{}, { option: true, scope: 'worker' }],
   workerEnv: [{}, { option: true, scope: 'worker' }],
   apiEnv: [{}, { option: true, scope: 'worker' }],
 
   // One api + sync server + worker per Playwright worker (workers: 1, so one per project/env).
   stack: [
-    async ({ syncEnv, workerEnv, apiEnv }, use) => {
-      const stack = await startStack({ syncEnv, workerEnv, apiEnv })
+    async ({ engine, syncEnv, workerEnv, apiEnv }, use) => {
+      const stack = await startStack({ engine, syncEnv, workerEnv, apiEnv })
       await use(stack)
       await stack.stop()
     },

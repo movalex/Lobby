@@ -10,6 +10,8 @@ export interface MintOptions {
   now?: number
   ttlMs?: number
   secret?: string
+  /** A3's name-only guest claim (Excalidraw engine; the tldraw engine ignores it) */
+  guest?: boolean
 }
 
 export function mintTicket(
@@ -26,6 +28,7 @@ export function mintTicket(
     role,
     now: o.now,
     ttlMs: o.ttlMs,
+    ...(o.guest ? { guest: true } : {}),
   }).ticket
 }
 
