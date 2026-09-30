@@ -2,8 +2,8 @@
 // on the tldraw page (DefaultToolbar, OverflowingToolbar, DefaultQuickActions, MobileStylePanel; the
 // breakpoints are tldraw's PORTRAIT_BREAKPOINTS, measured on the canvas, not the window):
 //  - a canvas of 840 px or less: the quick actions (Undo, Redo, Delete, Duplicate, Comment and the "⋮"
-//    actions menu) sit in a strip on top of the tools, at its left; on a wider canvas they sit beside the
-//    board menu at the top left;
+//    actions menu) sit in a strip on top of the tools, at its left (tldraw's wider canvas has them in its
+//    top-left menu zone; this one has none there, ./QuickActions.tsx says why);
 //  - 640 px or less: the style panel folds behind a Styles button to the right of the tools, and opens
 //    above it;
 //  - the number of tools shown grows with the width (tldraw's `modulate(width, [320, 560], [5, n])`); the
@@ -60,7 +60,7 @@ export interface ToolbarPlan<T> {
   readonly shown: readonly T[]
   /** the tools in "More", in their order */
   readonly more: readonly T[]
-  /** the quick actions sit on the toolbar (else beside the board menu) */
+  /** the quick actions sit on the toolbar (a wider canvas has none: ./QuickActions.tsx) */
   readonly quickOnToolbar: boolean
   /** the Styles button (the folded style panel) */
   readonly stylesButton: boolean

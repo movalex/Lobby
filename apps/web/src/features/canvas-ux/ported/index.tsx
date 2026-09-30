@@ -5,7 +5,7 @@
 //    (./ContextMenu.tsx, ./MainMenu.tsx: every feature's entries), the keyboard shortcuts dialog
 //    (./ShortcutsDialog.tsx) and the selection bar (./SelectionBar.tsx: every feature's items);
 //  - the quick actions (./QuickActions.tsx: Undo, Redo, Delete, Duplicate, the actions menu) on the toolbar
-//    or beside the board menu by canvas width, and the phone layout of the toolbar (./toolbar-layout.ts);
+//    of a canvas of 840 px or less, and the toolbar's layout by canvas width (./toolbar-layout.ts);
 //  - the history keys from Lobby's chrome (./chrome-keys.ts, A11Y2-02);
 //  - the Miro keys, keyboard safety and Ctrl+U as commands and keys (./commands.ts, ./keys.ts): the key
 //    registry dispatches them before the allowlist (canvas/input/keymap.ts), which keeps type-to-edit,

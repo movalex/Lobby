@@ -17,10 +17,8 @@ import { EXPORT_OFF_ENTRY, gatedEntries } from './ContextMenu.tsx'
 import { CMD } from './commands.ts'
 import { MenuIcon } from './icons.tsx'
 import { groupRows, MenuList, type MenuRow } from './Menu.tsx'
-import { QuickActions } from './QuickActions.tsx'
 import { readSessionSettings } from './session-settings.ts'
 import { uxState } from './state.ts'
-import { QUICK_ACTIONS_ON_TOOLBAR_MAX, useCanvasRoom } from './toolbar-layout.ts'
 
 /** canvas-ux's own board-menu entries. */
 export const MAIN_MENU_ENTRIES: readonly MenuEntrySpec[] = [
@@ -123,11 +121,6 @@ export function MainMenu({ ctx }: { ctx: CanvasFeatureContext }) {
         : '',
     [canvas, open],
   )
-  // on a canvas wider than 840 px the quick actions sit beside the menu (tldraw's menu zone); narrower, on
-  // the toolbar (./Toolbar.tsx)
-  const readOnly = useValue('cux-main-menu-readonly', () => canvas.readOnly(), [canvas])
-  const room = useCanvasRoom(canvas)
-  const quickBeside = !readOnly && room.width > QUICK_ACTIONS_ON_TOOLBAR_MAX
   const wrap = useRef<HTMLDivElement>(null)
   const button = useRef<HTMLButtonElement>(null)
   const byKeyboard = useRef(false)
@@ -142,7 +135,7 @@ export function MainMenu({ ctx }: { ctx: CanvasFeatureContext }) {
     return () => doc.removeEventListener('pointerdown', onDown, true)
   }, [open, state])
   return (
-    <div ref={wrap} className="cux-mainmenu" data-quick={quickBeside ? 'menu' : undefined}>
+    <div ref={wrap} className="cux-mainmenu">
       <button
         ref={button}
         type="button"
@@ -187,7 +180,6 @@ export function MainMenu({ ctx }: { ctx: CanvasFeatureContext }) {
           />
         </div>
       )}
-      {quickBeside && <QuickActions ctx={ctx} placement="menu" />}
     </div>
   )
 }

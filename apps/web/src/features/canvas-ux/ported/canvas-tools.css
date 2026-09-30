@@ -83,15 +83,10 @@
 .cux-quick__menu {
   position: absolute;
   z-index: 3;
+  bottom: calc(100% + 6px);
+  left: 0;
   display: grid;
   grid-template-columns: repeat(4, 34px);
-  left: 0;
-}
-.cux-quick--toolbar .cux-quick__menu {
-  bottom: calc(100% + 6px);
-}
-.cux-quick--menu .cux-quick__menu {
-  top: calc(100% + 6px);
 }
 .cux-quick__btn {
   display: grid;
@@ -121,11 +116,6 @@
 .cux-quick__btn:focus-visible {
   outline: 2px solid var(--dr-focus);
   outline-offset: 1px;
-}
-.cux-mainmenu[data-quick] {
-  display: flex;
-  align-items: flex-start;
-  gap: 6px;
 }
 /* the workshop cards (vote join, voting bar, results, brainstorm prompt) stand above the toolbar's two rows,
    as workshops.css's rule for tldraw's mobile layout does on the tldraw page */

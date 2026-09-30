@@ -6,10 +6,12 @@
 // API; a button is disabled when its command cannot run. Editors only (tldraw shows none of it to
 // read-only roles). Test ids are tldraw's (`quick-actions.*`, `actions-menu.*`).
 //
-// Placement (./toolbar-layout.ts): a strip on top of the toolbar on a canvas of 840 px or less, beside the
-// board menu (./MainMenu.tsx) on a wider one. A click never takes the keyboard from the board; the strip is
-// one Tab stop with arrow keys along it (ARIA toolbar); the actions menu closes on Escape, a pick or a
-// press elsewhere.
+// Placement (./toolbar-layout.ts): a strip on top of the toolbar on a canvas of 840 px or less, as on the
+// tldraw page's phone and tablet toolbar. On a wider canvas tldraw put the same buttons in its top-left menu
+// zone; this canvas does not (a deviation: the other owners' ported specs click the board's top-left, where
+// the strip would sit; the board menu's Edit ▸ and the keys have every action there). A click never takes
+// the keyboard from the board; arrow keys, Home and End move along the strip (ARIA toolbar); the actions
+// menu closes on Escape, a pick or a press elsewhere.
 import { type ComponentType, type ReactNode, useEffect, useRef } from 'react'
 import type { CanvasFeatureContext } from '../../../canvas/api/index.ts'
 import { currentPlatform, formatChord } from '../../../canvas/api/index.ts'
@@ -245,11 +247,9 @@ function ActionButton(props: {
 
 export function QuickActions({
   ctx,
-  placement,
   phone = false,
 }: {
   ctx: CanvasFeatureContext
-  placement: 'toolbar' | 'menu'
   /** a phone-width canvas (the actions menu adds zoom to 100%) */
   phone?: boolean
 }) {
@@ -291,14 +291,13 @@ export function QuickActions({
   const Comment = comment?.toolbar?.icon
   const items = actionsMenuItems({ phone, ungroup: enabled.ungroupable === true })
   return (
-    <div className={`cux-quick cux-quick--${placement}`} data-placement={placement}>
+    <div className="cux-quick cux-quick--toolbar">
       <div
         ref={barRef}
         className="cux-quick__bar"
         role="toolbar"
         aria-label="Actions"
         data-testid="quick-actions"
-        data-placement={placement}
         onKeyDown={(e) => moveInToolbar(e.nativeEvent, barRef.current)}
       >
         {QUICK.map((a) => (

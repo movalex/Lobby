@@ -38,7 +38,7 @@ const rect = async (page: Page, testId: string) => {
   return b
 }
 
-test('A11Y2-02: Ctrl/Cmd+Z and redo act on the board from the top bar and the dock, through the board history; the quick actions and Board ▸ Edit do the same', async ({
+test('A11Y2-02: Ctrl/Cmd+Z and redo act on the board from the top bar and the dock, through the board history; the quick actions (a canvas of 840 px or less) and Board ▸ Edit do the same', async ({
   canvasSession,
 }) => {
   const a = await canvasSession('alice')
@@ -61,10 +61,13 @@ test('A11Y2-02: Ctrl/Cmd+Z and redo act on the board from the top bar and the do
     await expect(a.page.getByTestId('dock-tab-contents')).toBeFocused()
   })
 
-  await test.step('the quick actions beside the board menu (a desktop canvas): Undo, Redo, their disabled state', async () => {
+  await test.step('the quick actions on a tablet-width canvas (840 px or less): Undo, Redo, their disabled state', async () => {
+    // none on a desktop canvas (tldraw's top-left menu zone is not reproduced: QuickActions.tsx)
+    await expect(a.page.getByTestId('main-menu.button')).toBeVisible()
+    await expect(a.page.getByTestId('quick-actions')).toHaveCount(0)
+    await a.page.setViewportSize({ width: 800, height: 900 })
     const undo = a.page.getByTestId('quick-actions.undo')
     const redo = a.page.getByTestId('quick-actions.redo')
-    await expect(a.page.getByTestId('main-menu.button')).toBeVisible()
     await expect(undo).toBeVisible()
     await expect(redo).toBeDisabled()
     await undo.click()
@@ -83,6 +86,8 @@ test('A11Y2-02: Ctrl/Cmd+Z and redo act on the board from the top bar and the do
     await expect
       .poll(async () => (await items(a.page)).filter((e) => e.type === 'stickynote' && !e.isDeleted).length)
       .toBe(1)
+    await a.page.setViewportSize({ width: 1440, height: 900 })
+    await expect(a.page.getByTestId('quick-actions')).toHaveCount(0)
   })
 
   await test.step('Board ▸ Edit ▸ Undo and Redo', async () => {
@@ -297,7 +302,7 @@ test('the phone toolbar (390 px, touch): quick actions on top, the tools that fi
   }
 })
 
-test('the toolbar by canvas width: at 700 px the quick actions sit on the toolbar and the style panel at the top right; wider, beside the board menu', async ({
+test('the toolbar by canvas width: at 700 px the quick actions sit on the toolbar and the style panel at the top right; wider, no quick actions', async ({
   canvasSession,
 }) => {
   const a = await canvasSession('alice')
@@ -306,7 +311,9 @@ test('the toolbar by canvas width: at 700 px the quick actions sit on the toolba
   await select(a.page, [n])
   await a.page.setViewportSize({ width: 700, height: 844 })
   const quick = a.page.getByTestId('quick-actions')
-  await expect(quick).toHaveAttribute('data-placement', 'toolbar')
+  await expect(quick).toBeVisible()
+  const q = await rect(a.page, 'quick-actions')
+  expect(q.y + q.height).toBeLessThanOrEqual((await rect(a.page, 'main-toolbar')).y + 1)
   await expect(a.page.getByTestId('mobile-styles.button')).toHaveCount(0)
   await expect(a.page.locator('[data-lobby-slot="stylePanel"] [data-testid="style.panel"]')).toBeVisible()
   // the bar clears the zoom menu at the bottom left
@@ -314,5 +321,5 @@ test('the toolbar by canvas width: at 700 px the quick actions sit on the toolba
   const nav = await a.page.locator('[data-lobby-slot="navigation"]').boundingBox()
   if (nav) expect(bar.x).toBeGreaterThanOrEqual(nav.x + nav.width - 1)
   await a.page.setViewportSize({ width: 1440, height: 900 })
-  await expect(quick).toHaveAttribute('data-placement', 'menu')
+  await expect(quick).toHaveCount(0)
 })
