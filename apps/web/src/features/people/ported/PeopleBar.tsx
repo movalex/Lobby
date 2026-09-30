@@ -22,6 +22,7 @@ import { PHONE_QUERY, useTopBarWidth } from '../../../ui/useMedia.ts'
 import { getLive } from '../../present-export/live/ported/controller.ts'
 import { namesText } from '../../present-export/live/words.ts'
 import { PersonName } from '../../workshops/Hands.tsx'
+import { summonScreen } from '../../workshops/ported/camera.ts'
 import { WorkshopStore, workshopStoreFor } from '../../workshops/store.ts'
 import {
   buildPeople,
@@ -351,7 +352,7 @@ function PeoplePanel({
   const others = rows.length - 1
 
   const bring = async (row: PersonRow | null) => {
-    const r = await workshopsOf(ctx).summon(row?.userId)
+    const r = await workshopsOf(ctx).summon(row?.userId, summonScreen(ctx.canvas))
     if (r.ok) {
       onClose(false)
       ctx.notify({

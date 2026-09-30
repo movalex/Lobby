@@ -11,9 +11,10 @@
 //  - "A +1 is not an undo step" is its own test, expected to fail until transact can skip the undo stack
 //    (change request CR-3F-1); on this page a +1 is a `transact`, one undo step.
 //  - Steps that present the board are their own tests, expected to fail until 3e's present mode is on
-//    this page; the note-author label is 2C's note face, not drawn on this page yet (CR-3F-4).
+//    this page. The note-author label is the workshops feature's overlay (CR-3F-4, wave 3b), not the
+//    tldraw note face (`.tl-note__attribution`): the test id `note-author`.
 import type { Locator, Page } from '@playwright/test'
-import { item, select, updateItem } from '../tests/support/canvas.ts'
+import { item, itemBounds, select, updateItem, viewport } from '../tests/support/canvas.ts'
 import { forgeSession, storedElement } from '../tests/support/excalidraw.ts'
 import { capture } from '../tests/support/screenshots.ts'
 import { closeWorkshopPopover, openWorkshopPopover } from '../tests/support/workshops.ts'
@@ -542,17 +543,54 @@ test('RETRO-03a: someone who joins right after a facilitator changed the session
 test('RETRO-03a: the note-author label on the board hides with "Hide note authors" (CR-3F-4)', async ({
   join,
 }) => {
-  test.fail(
-    true,
-    'CR-3F-4: the Excalidraw page draws no note-author label yet (the tldraw note face shows it)',
-  )
   const a = await join('alice')
   const b = await join('bob', 'editor')
   await seed(a.page, { notes: [{ id: 'fr-authored', x: 0, y: 0, text: 'Anonymous idea' }] })
   await expectItemsEverywhere([b], ['fr-authored'])
   await showAll(b.page)
-  const label = b.page.locator('[data-testid="note-author"]')
-  await expect(label).toHaveText('Alice', { timeout: 5_000 })
+  const label = (page: Page) => page.locator('[data-testid="note-author"][data-note-id="fr-authored"]')
+  const first = a.name.split(' ')[0] ?? a.name
+
+  await test.step('before: bob sees alice’s first name in the note’s bottom right corner', async () => {
+    await expect(label(b.page)).toHaveText(first, { timeout: 5_000 })
+    await expect(label(b.page)).toHaveAttribute('title', a.name)
+    await expect(label(b.page)).toBeVisible()
+    const note = await itemBounds(b.page, 'fr-authored')
+    const v = await viewport(b.page)
+    const canvasBox = await b.page.locator('[data-lobby-board-canvas]').boundingBox()
+    const box = await label(b.page).boundingBox()
+    if (!note || !canvasBox || !box) throw new Error('no note, canvas or label box')
+    // the note's bottom right, on screen
+    const right = canvasBox.x + (note.x + note.width - v.x) * v.zoom
+    const bottom = canvasBox.y + (note.y + note.height - v.y) * v.zoom
+    expect(box.x + box.width).toBeLessThanOrEqual(right + 1)
+    expect(box.x + box.width).toBeGreaterThan(right - 16 * v.zoom)
+    expect(box.y + box.height).toBeLessThanOrEqual(bottom + 1)
+    expect(box.y + box.height).toBeGreaterThan(bottom - 12 * v.zoom)
+    // it never takes the note's clicks
+    await expect(label(b.page)).toHaveCSS('pointer-events', 'none')
+  })
+
+  await test.step('the label follows the note when it moves', async () => {
+    const before = await label(b.page).boundingBox()
+    await updateItem(a.page, 'fr-authored', { x: 60 })
+    await expect
+      .poll(async () => ((await label(b.page).boundingBox())?.x ?? 0) - (before?.x ?? 0))
+      .toBeGreaterThan(20)
+  })
+
+  await test.step('alice switches "Hide note authors" on: no label for bob or alice; off: back', async () => {
+    const pop = await openWorkshopPopover(a.page)
+    await pop.getByTestId('session-hide-authors').check()
+    await closeWorkshopPopover(a.page)
+    await expect(b.page.locator('html')).toHaveAttribute('data-dr-hide-authors', 'true')
+    await expect(label(b.page)).toHaveCount(0)
+    await expect(label(a.page)).toHaveCount(0)
+    const again = await openWorkshopPopover(a.page)
+    await again.getByTestId('session-hide-authors').uncheck()
+    await closeWorkshopPopover(a.page)
+    await expect(label(b.page)).toHaveText(first)
+  })
 })
 
 // ---- R2-07 and A11Y2-05 (phone-overlays) -------------------------------------------------------------------

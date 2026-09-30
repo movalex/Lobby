@@ -388,11 +388,41 @@ export interface LobbyPresence {
   peer(sid: string): RemoteCursor | null
 }
 
+/** A follower's camera: the scene point at the canvas's top left, and the zoom (what `viewport.set` takes). */
+export interface FollowCamera {
+  readonly x: number
+  readonly y: number
+  readonly zoom: number
+}
+
+/** What a follow camera rule (`FollowOptions.camera`) is given. */
+export interface FollowCameraInput {
+  /** the followed session's visible scene rectangle (their presence `view`) */
+  readonly leader: Bounds
+  /** this canvas's size on screen, px */
+  readonly screen: { readonly width: number; readonly height: number }
+  /** the default camera: `leader` fitted whole into `screen`, centred (tldraw's follow) */
+  readonly fit: FollowCamera
+}
+
+/** CR-3F-3 (W3-10): how `follow.start` places this tab's camera. */
+export interface FollowOptions {
+  /**
+   * Shapes the follower's camera (tldraw's per-instance `getViewportPageBoundsForFollowing`; R2-04's
+   * readable zoom for a gathered phone): called for every new `view` of the followed session and on every
+   * resize. Returns the camera to use, or null for `fit`. A camera move only, never a document write.
+   */
+  readonly camera?: (input: FollowCameraInput) => FollowCamera | null
+}
+
 export interface LobbyFollow {
   /** @owner 3c · getInstanceState().followingUserId: the session followed, or null */
   current(): string | null
-  /** @owner 3c · startFollowingUser (the camera follows their `view`) */
-  start(sid: string): void
+  /**
+   * @owner 3c · startFollowingUser (the camera follows their `view`). Starting the session already followed
+   * keeps following and replaces the options (a summon over a plain follow).
+   */
+  start(sid: string, options?: FollowOptions): void
   /** @owner 3c · stopFollowingUser */
   stop(): void
 }

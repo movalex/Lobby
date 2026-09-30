@@ -15,6 +15,7 @@ import {
   ListVoteSessionsResponse,
   type RaisedHand,
   type ReactionEmoji,
+  type SummonScreen,
   type TimerActionInput,
   TimerResponse,
   VoteResultsResponse,
@@ -543,10 +544,14 @@ export class WorkshopStore {
 
   // ---- gather everyone -------------------------------------------------------------------------------
 
-  async summon(targetUserId?: string): Promise<ActionResult> {
+  /**
+   * Everyone (or `targetUserId`) follows this person's view. `screen`: this canvas's size, so followers
+   * can tell this person's zoom from their presence view (the Excalidraw board; R2-04, SummonScreen).
+   */
+  async summon(targetUserId?: string, screen?: SummonScreen): Promise<ActionResult> {
     try {
       await this.request('POST', `/api/boards/${encodeURIComponent(this.boardId)}/summon`, {
-        body: targetUserId ? { targetUserId } : {},
+        body: { ...(targetUserId ? { targetUserId } : {}), ...(screen ? { screen } : {}) },
         schema: null,
       })
       return { ok: true }

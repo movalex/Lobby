@@ -20,6 +20,7 @@ import {
 import { HandsChip, HandsSection } from '../Hands.tsx'
 import type { WorkshopStore } from '../store.ts'
 import { canEditBoard, useIsFacilitator, useNow, useWorkshop } from '../workshop-context.ts'
+import { summonScreen } from './camera.ts'
 import { PrivateNotesChip, PrivateNotesSection } from './private-notes/PrivateNotesBar.tsx'
 import { ReactionControl } from './Reactions.tsx'
 import { workshopSettingsOf, writeWorkshopSettings } from './session-settings.ts'
@@ -489,7 +490,7 @@ function WorkshopPopover({
             data-testid="summon-button"
             disabled={busy}
             onClick={async () => {
-              if (await act(() => store.summon())) {
+              if (await act(() => store.summon(undefined, summonScreen(ctx.canvas)))) {
                 onClose(false)
                 ctx.notify({
                   key: 'summon',

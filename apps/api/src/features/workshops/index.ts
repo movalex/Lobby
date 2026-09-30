@@ -503,6 +503,8 @@ export function registerWorkshopRoutes(
       userId: user.id,
       name: user.name,
       targetUserId: input?.targetUserId ?? null,
+      // the summoner's canvas size, as their client reports it: it only shapes followers' cameras (R2-04)
+      ...(input?.screen ? { screen: { w: input.screen.w, h: input.screen.h } } : {}),
     }
     events.publish(access.board.id, { type: WORKSHOP_EVENTS.summon, data })
     return reply.code(202).send({ ok: true })

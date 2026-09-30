@@ -8,11 +8,12 @@
 //
 // Deviations from the tldraw spec: R13 opens the a11y feature's Contents panel (History is 3h's) and checks
 // that nothing covers the fold button (tldraw's page menu, which sat beside it, is gone; the board menu is
-// 3a's slot). The other tests exercise other owners' features and are expected failures (`needs`) until
-// those ports land; camera moves use the viewport ({x, y, zoom}) instead of tldraw's camera.
+// 3a's slot). The other tests exercise other owners' features (their `needs` marks came off as those ports
+// landed; R2-04's with CR-3F-3 at wave 3b); camera moves use the viewport ({x, y, zoom}) instead of
+// tldraw's camera.
 import type { Page } from '@playwright/test'
 import { expect, itemBounds, select, setViewport, test, viewport } from '../tests/support/canvas.ts'
-import { MISSING_FEATURE_MS, needs, note, PHONE, waitForA11y } from './a11y-kit.ts'
+import { MISSING_FEATURE_MS, note, PHONE, waitForA11y } from './a11y-kit.ts'
 
 interface Box {
   x: number
@@ -87,7 +88,6 @@ test('A11Y2-06: on a phone a multi-selection keeps the selection bar on screen; 
 test('R2-04: "Gather everyone" shows a phone the leader view at a readable zoom', async ({
   canvasSession,
 }) => {
-  needs('CR-3F-3', "the readable follow zoom for a gathered phone (a hook in 3c's follow camera)")
   const a = await canvasSession('alice')
   const b = await canvasSession('bob')
   await waitForA11y(a.page)
