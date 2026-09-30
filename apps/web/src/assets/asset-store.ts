@@ -6,6 +6,7 @@ import {
   derivativeUrl,
   isId,
   originalUrl,
+  pageRenderings,
   stableFileRef,
   usableDerivatives,
 } from './contract.ts'
@@ -13,6 +14,9 @@ import { type AssetMetaStore, isTerminal, waitForTerminalMeta } from './meta-sto
 import './pending-image.css'
 import { whilePending } from './pending-images.ts'
 import { uploadFile } from './upload.ts'
+
+// Moved to the tldraw-free contract module (the Excalidraw board page's file cards use it too).
+export { pageRenderings }
 
 const FILE_REF_RE = /^\/files\/([^/]+)\/([^/]+)\/original$/
 
@@ -60,16 +64,6 @@ export const PDF_PAGE_META_KEY = 'drPdfPage'
 export function pdfPageOf(asset: Pick<TLAsset, 'meta'>): number | null {
   const page = (asset.meta as Record<string, unknown> | undefined)?.[PDF_PAGE_META_KEY]
   return typeof page === 'number' && Number.isInteger(page) && page >= 1 ? page : null
-}
-
-/** Every rendering the worker made of `page` (the page image, and the thumb for the cover), smallest first. */
-export function pageRenderings(meta: AssetVersionMeta, page: number): DerivativeRecord[] {
-  if (meta.kind !== 'pdf') return []
-  return usableDerivatives(meta)
-    .filter(
-      (d) => (d.role === 'page' || d.role === 'thumb') && d.page === page && d.width > 0 && d.height > 0,
-    )
-    .sort((a, b) => a.width - b.width)
 }
 
 /**
