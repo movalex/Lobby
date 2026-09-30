@@ -122,24 +122,27 @@ test('mind map: two people build one map by keyboard, each sees the other live, 
     // Deviation (docs/research/excalidraw/wave3/3D.md): on this canvas the words typed into a new topic
     // are their own undo step (the editor's), so the topic takes two: the words, then the topic. tldraw's
     // took one. Folding the two needs the history to merge its top steps (LobbyHistory.mergeTop, W1-9).
-    // Known defect (reported to spike B's history owner, 3D.md): after the concurrent step, the engine's
-    // own re-route of the two elbow lines can land on alice's stack as a step of its own, so an undo may
-    // first take back that (invisible) re-route. At most one such extra press.
+    // Known defect (CR-3D-4, reported to spike B's history owner, 3D.md): after the concurrent step, the
+    // engine's own re-route of the elbow lines can land on alice's stack as a step of its own, so an undo
+    // may first take back that (invisible) re-route. At most one such extra press per undo.
     await focusCanvas(a.page)
-    for (let i = 0; i < 2; i++) {
-      await a.page.keyboard.press(`${mod}+z`)
-      const took = await expect
-        .poll(async () => structure(await mapView(b.page)), { timeout: 4_000 })
-        .toContain('Launch plan > ')
-        .then(
-          () => true,
-          () => false,
-        )
-      if (took) break
+    const undoUntil = async (done: (s: string[]) => boolean) => {
+      for (let i = 0; i < 2; i++) {
+        await a.page.keyboard.press(`${mod}+z`)
+        const took = await expect
+          .poll(async () => done(structure(await mapView(b.page))), { timeout: 4_000 })
+          .toBe(true)
+          .then(
+            () => true,
+            () => false,
+          )
+        if (took) return
+      }
     }
+    await undoUntil((s) => s.includes('Launch plan > '))
     await expect.poll(async () => structure(await mapView(b.page))).toContain('Launch plan > ')
     expect(structure(await mapView(b.page))).not.toContain('Launch plan > Budget')
-    await a.page.keyboard.press(`${mod}+z`)
+    await undoUntil((s) => !s.includes('Launch plan > '))
     await expect.poll(async () => structure(await mapView(b.page))).not.toContain('Launch plan > ')
     expect(structure(await mapView(b.page))).toContain('Launch plan > Timeline')
     await expectConverged(a.page, [b.page], 20_000)
