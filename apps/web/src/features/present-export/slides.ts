@@ -1,5 +1,6 @@
 // Pure slide logic for present mode and PDF export (no editor, no DOM): which frames are slides, where a
 // presentation starts, how the current slide survives live edits, and which frames become PDF pages.
+// Generic over the id (wave 3e): tldraw shape ids here, element ids on the Excalidraw page (ported/).
 import type { TLShapeId } from 'tldraw'
 import type { FrameEntry } from './board-ops.ts'
 
@@ -10,8 +11,8 @@ export interface SlideBox {
   h: number
 }
 
-export interface Slide {
-  id: TLShapeId
+export interface Slide<Id extends string = TLShapeId> {
+  id: Id
   /** The frame's name as typed ('' when unnamed); use `slideTitle` for display. */
   name: string
   bounds: SlideBox
@@ -33,11 +34,18 @@ export function isSkipped(shape: MetaCarrier | undefined): boolean {
  * Slides = the page's top-level frames in presentation order (board-ops `presentationOrder`), minus
  * frames marked "skip in presentation". Frames with an empty area are left out (nothing to fit to).
  */
-export function buildSlides(
-  order: readonly FrameEntry[],
-  shapeOf: (id: TLShapeId) => MetaCarrier | undefined,
-): Slide[] {
-  const slides: Slide[] = []
+/** What a frame entry needs for the slide logic (board-ops FrameEntry and ElementFrameEntry both fit). */
+export interface SlideSource<Id extends string = TLShapeId> {
+  id: Id
+  name: string
+  bounds: SlideBox
+}
+
+export function buildSlides<Id extends string = TLShapeId>(
+  order: readonly SlideSource<Id>[],
+  shapeOf: (id: Id) => MetaCarrier | undefined,
+): Slide<Id>[] {
+  const slides: Slide<Id>[] = []
   for (const entry of order) {
     if (isSkipped(shapeOf(entry.id))) continue
     if (!(entry.bounds.w > 0 && entry.bounds.h > 0)) continue
@@ -59,11 +67,11 @@ export function slideTitle(name: string, index: number): string {
  * `ancestorsOf(id)` lists the shape's ancestors nearest first (tldraw `getShapeAncestors`, reversed).
  * Returns -1 when there are no slides.
  */
-export function findStartIndex(
-  slides: readonly Slide[],
-  order: readonly FrameEntry[],
-  selectedIds: readonly TLShapeId[],
-  ancestorsOf: (id: TLShapeId) => readonly TLShapeId[],
+export function findStartIndex<Id extends string = TLShapeId>(
+  slides: readonly Slide<Id>[],
+  order: readonly { id: Id }[],
+  selectedIds: readonly Id[],
+  ancestorsOf: (id: Id) => readonly Id[],
 ): number {
   if (slides.length === 0) return -1
   const slideIndex = new Map(slides.map((s, i) => [s.id as string, i]))
@@ -127,10 +135,10 @@ export function stepIndex(index: number, delta: number, count: number): number {
  * reordered, skipped or deleted frames): the same frame if it is still a slide, otherwise the slide that
  * now sits where it was (clamped), or -1 when no slides are left.
  */
-export function reconcileIndex(
+export function reconcileIndex<Id extends string = TLShapeId>(
   previousIndex: number,
-  currentId: TLShapeId | null,
-  next: readonly Slide[],
+  currentId: Id | null,
+  next: readonly Slide<Id>[],
 ): number {
   if (next.length === 0) return -1
   if (currentId) {
@@ -140,8 +148,8 @@ export function reconcileIndex(
   return Math.max(0, Math.min(next.length - 1, previousIndex))
 }
 
-export interface PdfFramePick {
-  frames: FrameEntry[]
+export interface PdfFramePick<E = FrameEntry> {
+  frames: E[]
   /** 'selection' when the user's selection contains frames; 'all' otherwise. */
   source: 'selection' | 'all'
   /** Top-level frames left out because they are marked "skip in presentation" (source 'all' only). */
@@ -153,16 +161,16 @@ export interface PdfFramePick {
  * outline order for nested ones; an explicit selection includes skipped frames. Without a frame selection
  * it is every top-level frame in presentation order, minus skipped ones unless `includeSkipped`.
  */
-export function pickPdfFrames(
-  order: readonly FrameEntry[],
-  outline: readonly FrameEntry[],
-  selectedIds: readonly TLShapeId[],
-  shapeOf: (id: TLShapeId) => MetaCarrier | undefined,
+export function pickPdfFrames<Id extends string = TLShapeId, E extends { id: Id } = FrameEntry & { id: Id }>(
+  order: readonly E[],
+  outline: readonly E[],
+  selectedIds: readonly Id[],
+  shapeOf: (id: Id) => MetaCarrier | undefined,
   opts: { includeSkipped: boolean },
-): PdfFramePick {
+): PdfFramePick<E> {
   const selected = new Set<string>(selectedIds)
   if (selected.size > 0) {
-    const picked: FrameEntry[] = []
+    const picked: E[] = []
     const seen = new Set<string>()
     for (const entry of [...order, ...outline]) {
       if (!selected.has(entry.id) || seen.has(entry.id)) continue
@@ -171,7 +179,7 @@ export function pickPdfFrames(
     }
     if (picked.length > 0) return { frames: picked, source: 'selection', skippedCount: 0 }
   }
-  const frames: FrameEntry[] = []
+  const frames: E[] = []
   let skippedCount = 0
   for (const entry of order) {
     if (isSkipped(shapeOf(entry.id))) {

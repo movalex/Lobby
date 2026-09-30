@@ -4,31 +4,13 @@
 // editor opens it, e.g. boards from before this feature).
 
 import type { Editor } from 'tldraw'
+import { hasStandIn, markStandIn } from './capture-state.ts'
 import { changesContent, type RecordsDiff } from './changes.ts'
 import { boardHasContent, isBusy, renderNowSync, renderThumbnail } from './render.ts'
 import { CaptureScheduler, type CaptureStatus, RENDER_QUIET_MS } from './scheduler.ts'
 import { hasStoredThumbnail, sendLeftover, sendThumbnail } from './upload.ts'
 
-/**
- * DANA2-06: boards whose stored thumbnail is the quick stand-in drawn while leaving (renderNowSync), per
- * browser. The api cannot tell the two kinds apart; this browser drew it, so this browser redraws it.
- */
-const standInKey = (boardId: string) => `draftroom.thumbnail.stand-in.${boardId}`
-export function markStandIn(boardId: string, on: boolean) {
-  try {
-    if (on) localStorage.setItem(standInKey(boardId), '1')
-    else localStorage.removeItem(standInKey(boardId))
-  } catch {
-    // blocked storage: the next edit redraws it anyway
-  }
-}
-export function hasStandIn(boardId: string): boolean {
-  try {
-    return localStorage.getItem(standInKey(boardId)) === '1'
-  } catch {
-    return false
-  }
-}
+export { hasStandIn, markStandIn }
 
 /** Pointer presses, keys and wheel turns anywhere on the page count as "the person is active". */
 const INPUT_EVENTS = ['pointerdown', 'keydown', 'wheel'] as const
