@@ -6,7 +6,7 @@ import { checkInvariants } from '@draftroom/canvas-schema/invariants'
 import { describe, expect, it } from 'vitest'
 import { type El, frame, rect } from '../element-room/support/elements.ts'
 import { newBoardId, useElementHarness } from '../element-room/support/stack.ts'
-import { call, seed, whenEvicted } from './support.ts'
+import { call, seed } from './support.ts'
 
 const h = useElementHarness()
 
@@ -132,15 +132,15 @@ describe('place-notes (Excalidraw engine)', () => {
     expect(checkInvariants(snap.elements)).toEqual([])
   })
 
-  it('makes the frame again where the session started when it was deleted, and waits for a closed room', async () => {
+  it('makes the frame again where the session started when it was deleted, through the open room', async () => {
     const { st, b } = await board()
     const c = await st.client({ boardId: b, user: 'ann' })
     await c.push([
       { k: 'p', id: 'F', pv: c.confirmed.get('F')?.version ?? 1, g: { life: { isDeleted: true } } },
     ])
-    expect((await place(st, b, request())).status).toBe(503) // the room is open (CR 2F-2)
+    // the room is open: the write goes through it (CR 2F-2, the room's serverWrite since spike B's part 3)
+    const res = await place(st, b, request())
     c.close()
-    const res = await whenEvicted(() => place(st, b, request()))
     expect(res.status).toBe(200)
     expect(res.body).toMatchObject({ frameId: 'shape:F', frameCreated: true })
     const snap = await st.snapshot(b)

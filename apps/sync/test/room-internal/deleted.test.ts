@@ -76,17 +76,14 @@ describe('recently deleted (Excalidraw engine)', () => {
     expect(one.body.entries).toHaveLength(1)
   })
 
-  it('restores an entry with its content once the room is closed; the board stays consistent', async () => {
+  it('restores an entry with its content through the open room; the board stays consistent', async () => {
     const { st, b, c } = await boardWithDeletions()
-    // while the room is open, the write waits for CR 2F-2 (a 503 the api retries)
-    const open = await call(st, 'POST', `/internal/boards/${b}/deleted/restore`, { ids: ['shape:F'] })
-    expect(open.status).toBe(503)
+    // the room is open: the write goes through it (CR 2F-2, the room's serverWrite since spike B's part 3;
+    // before it, a 503 the api retried until the room closed)
+    const res = await call<Restored>(st, 'POST', `/internal/boards/${b}/deleted/restore`, {
+      ids: ['shape:F', 'shape:R', 'shape:T', 'shape:nope'],
+    })
     c.close()
-    const res = await whenEvicted(() =>
-      call<Restored>(st, 'POST', `/internal/boards/${b}/deleted/restore`, {
-        ids: ['shape:F', 'shape:R', 'shape:T', 'shape:nope'],
-      }),
-    )
     expect(res.status).toBe(200)
     RestoreDeletedResponse.parse(res.body)
     expect([...res.body.restored].sort()).toEqual(['shape:F', 'shape:N1', 'shape:N2', 'shape:R'])
