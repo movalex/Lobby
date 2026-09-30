@@ -12,6 +12,7 @@ import {
   editingId,
   expect,
   expectConverged,
+  expectSaved,
   item,
   items,
   itemText,
@@ -46,6 +47,8 @@ test('RETRO-21b: a double-click on empty canvas makes a note there (inside the f
   await dblclickScene(a.page, { x: 300, y: 250 })
   const created = await waitForTextEditor(a.page)
   expect(created).not.toBe(kept)
+  // spike B's open O2 race: the new note's own ack can overtake the first keys (board-kit `settled`)
+  await expectSaved(a.page)
   await a.page.keyboard.type('On the page')
   await a.page.keyboard.press('Escape')
   await expect.poll(() => itemText(a.page, created)).toBe('On the page')
@@ -59,6 +62,7 @@ test('RETRO-21b: a double-click on empty canvas makes a note there (inside the f
 
   await dblclickScene(a.page, { x: 1000, y: 400 })
   const framed = await waitForTextEditor(a.page)
+  await expectSaved(a.page)
   await a.page.keyboard.type('In the frame')
   await a.page.keyboard.press('Escape')
   await expect.poll(() => itemText(a.page, framed)).toBe('In the frame')

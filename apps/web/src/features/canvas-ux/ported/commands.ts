@@ -256,10 +256,18 @@ export const COMMANDS: readonly CommandSpec[] = [
     enabled: (ctx) => editable(ctx) && selectedRoots(ctx.canvas).some((e) => !e.locked),
     run: (ctx, source) => {
       const { canvas } = ctx
-      const ids = selectedRoots(canvas)
-        .filter((e) => !e.locked)
-        .map((e) => e.id)
-      if (!ids.length) return
+      const roots = selectedRoots(canvas).filter((e) => !e.locked)
+      if (!roots.length) return
+      // a frame goes with what is inside it, as the engine's own Delete does (labels go with their
+      // containers in `tx.delete`)
+      const all = canvas.items()
+      const ids = new Set(roots.map((e) => e.id))
+      for (const r of roots)
+        if (r.type === 'frame')
+          for (const c of itemsApi.childrenOf(r.id, all)) {
+            const child = canvas.get(c)
+            if (live(child) && !child.locked && !(child.type === 'text' && child.containerId)) ids.add(c)
+          }
       canvas.transact('delete', (tx) => {
         for (const id of ids) tx.delete(id)
       })
