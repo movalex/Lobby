@@ -94,7 +94,8 @@ export function zoomToCamera(
   limits: Pick<ZoomLimits, 'min' | 'max'>,
   opts: Pick<ZoomToOptions, 'inset' | 'zoom' | 'maxZoom'> = {},
 ): CameraTarget {
-  const wanted = opts.zoom ?? Math.min(fitZoom(bounds, screen, opts.inset ?? DEFAULT_INSET), opts.maxZoom ?? 1)
+  const wanted =
+    opts.zoom ?? Math.min(fitZoom(bounds, screen, opts.inset ?? DEFAULT_INSET), opts.maxZoom ?? 1)
   const zoom = clamp(wanted, limits.min, limits.max)
   return centeredOn({ x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 }, zoom, screen)
 }

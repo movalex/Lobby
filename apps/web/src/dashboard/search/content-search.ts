@@ -2,6 +2,7 @@
 // for the "Inside boards" results (ContentSearch.tsx). No React, no tldraw (the dashboard bundle must
 // not pull the canvas in just to build a link).
 
+import { fromShapeRef } from '@draftroom/canvas-schema/refs'
 import {
   SEARCH_MAX_QUERY_CHARS,
   SEARCH_MIN_TERM_CHARS,
@@ -10,7 +11,6 @@ import {
   SearchResponse,
   type SearchStatus,
 } from '@draftroom/contracts'
-import { fromShapeRef } from '@draftroom/canvas-schema/refs'
 import type { ApiClient } from '../../api/client.ts'
 import { NEW_CANVAS_BOARD_PAGE } from '../../lib/board-engine.ts'
 import { elementsLink, legacyShapesLink } from '../../lib/deep-link.ts'

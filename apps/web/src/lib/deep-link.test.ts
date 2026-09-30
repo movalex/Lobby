@@ -85,7 +85,8 @@ describe('legacy tldraw links (?d=)', () => {
     })
     const p = 'pthree'
     expect(parseLegacyDeepLink(p)).toEqual({ kind: 'legacy-page', pageId: 'page:three' })
-    for (const bad of ['', 'x1', 's', 'v1.2.3', 'vA.2.3.4', 's%zz']) expect(parseLegacyDeepLink(bad)).toBeNull()
+    for (const bad of ['', 'x1', 's', 'v1.2.3', 'vA.2.3.4', 's%zz'])
+      expect(parseLegacyDeepLink(bad)).toBeNull()
   })
 
   it('maps shape ids to live element ids: directly, through legacyIds, and a dotted list longest match first', () => {

@@ -182,7 +182,9 @@ function fake(list: El[], opts: { readOnly?: boolean; role?: string } = {}): Fak
     },
     doc: {
       get: (k: string) => doc.get(k),
-      set: (e: Record<string, unknown>) => Object.entries(e).forEach(([k, v]) => doc.set(k, v)),
+      set: (e: Record<string, unknown>) => {
+        for (const [k, v] of Object.entries(e)) doc.set(k, v)
+      },
     },
     viewport: {
       get: () => view,

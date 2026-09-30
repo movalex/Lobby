@@ -171,7 +171,9 @@ export function resolveLegacyShapes(
 ): string[] {
   const out: string[] = []
   const lookup = (candidate: string): string | null => {
-    const mapped = Object.hasOwn(legacyIds, `shape:${candidate}`) ? legacyIds[`shape:${candidate}`] : undefined
+    const mapped = Object.hasOwn(legacyIds, `shape:${candidate}`)
+      ? legacyIds[`shape:${candidate}`]
+      : undefined
     if (mapped && isLive(mapped)) return mapped
     return isLive(candidate) ? candidate : null
   }

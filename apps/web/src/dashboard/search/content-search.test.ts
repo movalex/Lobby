@@ -78,7 +78,12 @@ describe('content search helpers', () => {
   })
 
   it('the legacy link reader agrees with tldraw’s own deep-link strings', () => {
-    for (const ids of [['shape:abc123'], ['shape:with.dots'], ['shape:ünï cødé/?&#'], ['shape:a', 'shape:b']]) {
+    for (const ids of [
+      ['shape:abc123'],
+      ['shape:with.dots'],
+      ['shape:ünï cødé/?&#'],
+      ['shape:a', 'shape:b'],
+    ]) {
       const theirs = createDeepLinkString({ type: 'shapes', shapeIds: ids as TLShapeId[] })
       expect(parseLegacyDeepLink(theirs)).toEqual({
         kind: 'legacy-shapes',
