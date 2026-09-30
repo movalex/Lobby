@@ -39,7 +39,15 @@ export const CONTEXT_MENU_ENTRIES: readonly MenuEntrySpec[] = [
     command: CMD.cut,
     visible: (c) => editable(c) && atLeast(1)(c),
   },
-  { id: 'copy', group: 'clipboard', order: 20, label: '', command: CMD.copy, visible: atLeast(1) },
+  // read-only roles cannot copy on this canvas yet (the input layer's copy rule is editors only: CR-3A-4)
+  {
+    id: 'copy',
+    group: 'clipboard',
+    order: 20,
+    label: '',
+    command: CMD.copy,
+    visible: (c) => editable(c) && atLeast(1)(c),
+  },
   {
     id: 'duplicate',
     group: 'clipboard',
@@ -181,14 +189,37 @@ export function ContextMenu({ ctx }: { ctx: CanvasFeatureContext }) {
       state.contextMenu.set(null)
     }
     const onBlur = () => state.contextMenu.set(null)
+    // while it is open the menu has the keys, even when the board kept the keyboard (a right-click leaves
+    // the focus on the canvas): Escape closes it, the arrows walk it instead of moving the selection
+    const onKey = (e: KeyboardEvent) => {
+      const el = ref.current
+      if (!el || el.contains(doc.activeElement)) return
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        e.stopPropagation()
+        state.contextMenu.set(null)
+        canvas.focus({ preventScroll: true })
+      } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp' || e.key === 'Home' || e.key === 'End') {
+        e.preventDefault()
+        e.stopPropagation()
+        const all = [
+          ...el.querySelectorAll<HTMLElement>(
+            '[role="menu"] > [role^="menuitem"], [role="menu"] > .cux-menu__subwrap > [role^="menuitem"]',
+          ),
+        ].filter((b) => b.getAttribute('aria-disabled') !== 'true')
+        ;(e.key === 'ArrowUp' || e.key === 'End' ? all[all.length - 1] : all[0])?.focus()
+      }
+    }
     // a press anywhere else closes it (a right-click elsewhere opens the next one)
     doc.addEventListener('pointerdown', onDown, true)
+    doc.addEventListener('keydown', onKey, true)
     doc.defaultView?.addEventListener('blur', onBlur)
     return () => {
       doc.removeEventListener('pointerdown', onDown, true)
+      doc.removeEventListener('keydown', onKey, true)
       doc.defaultView?.removeEventListener('blur', onBlur)
     }
-  }, [open, state])
+  }, [open, state, canvas])
 
   if (!open) return null
   const target: MenuTarget = open.target
@@ -202,7 +233,9 @@ export function ContextMenu({ ctx }: { ctx: CanvasFeatureContext }) {
     <div
       ref={ref}
       className="cux-menu cux-menu--context"
-      style={{ left: pos?.x ?? open.at.x, top: pos?.y ?? open.at.y, visibility: pos ? 'visible' : 'hidden' }}
+      // clamped inside the canvas before the first paint (useLayoutEffect); never hidden, so the first
+      // entry can take the keyboard at once
+      style={{ left: pos?.x ?? open.at.x, top: pos?.y ?? open.at.y }}
       data-testid="context-menu-root"
     >
       <MenuList

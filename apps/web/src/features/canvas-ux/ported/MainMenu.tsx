@@ -13,7 +13,7 @@
 import { useEffect, useRef } from 'react'
 import type { CanvasFeatureContext, MenuEntrySpec, MenuGroup, MenuTarget } from '../../../canvas/api/index.ts'
 import { useValue } from '../../../lib/signals.ts'
-import { gatedEntries } from './ContextMenu.tsx'
+import { EXPORT_OFF_ENTRY, gatedEntries } from './ContextMenu.tsx'
 import { CMD } from './commands.ts'
 import { MenuIcon } from './icons.tsx'
 import { groupRows, MenuList, type MenuRow } from './Menu.tsx'
@@ -45,6 +45,7 @@ export const MAIN_MENU_ENTRIES: readonly MenuEntrySpec[] = [
   { id: 'unlock-all', group: 'arrange', order: 40, label: '', command: CMD.unlockAll },
   { id: 'select-all', group: 'select', order: 10, label: '', command: CMD.selectAll, kbdHint: 'mod+a' },
   { id: 'select-none', group: 'select', order: 20, label: '', command: CMD.selectNone },
+  EXPORT_OFF_ENTRY,
 ]
 
 const EDIT_GROUPS: readonly MenuGroup[] = ['clipboard', 'edit', 'arrange', 'select']

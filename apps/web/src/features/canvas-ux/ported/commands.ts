@@ -228,9 +228,10 @@ export const COMMANDS: readonly CommandSpec[] = [
     run: (ctx) => clipboard(ctx, 'cut'),
   },
   {
+    // editors only on this canvas: the input layer lets only editors copy (CR-3A-4 asks it to follow the
+    // export policy, as the tldraw page does for viewers and commenters)
     id: CMD.copy,
     label: 'Copy',
-    readOnlyAllowed: true,
     enabled: selectionAtLeast(1),
     run: (ctx) => clipboard(ctx, 'copy'),
   },

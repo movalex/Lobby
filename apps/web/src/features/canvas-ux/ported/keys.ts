@@ -14,6 +14,8 @@
 //    selection toolbar (A11Y-04).
 //  - Delete / Backspace on a selection that holds locked elements delete only the unlocked ones (a
 //    locked element never goes; MAK-05 keeps it selected after locking).
+//  - export control: while exporting is off for this person, Ctrl/Cmd+C and +X on a selection say why (the
+//    allowlist keeps the key from read-only roles, so no copy event ever reaches ./export-gate.ts's guard).
 //
 // Keys that act only in a narrow state DEFER: when another feature's key takes the same event (a mind
 // map's Enter or Tab, a feature's letter), theirs runs instead (`othersTake`). The keyboard-map test
@@ -21,6 +23,7 @@
 import type { CanvasFeatureContext, FeatureKeySpec, KeyEventLike } from '../../../canvas/api/index.ts'
 import { items } from '../../../canvas/api/index.ts'
 import { openContextMenuForSelection } from './context-menu-open.ts'
+import { exportAllowed, notifyExportOff } from './export-gate.ts'
 import { editAdjacentNote, type NoteDirection } from './notes.ts'
 import { placeAtCenter, placeableTool } from './place.ts'
 import { uxState } from './state.ts'
@@ -50,6 +53,7 @@ export const DEFERRING_KEYS: ReadonlySet<string> = new Set([
   'canvas-ux.enter',
   'canvas-ux.next-note',
   'canvas-ux.locked-delete',
+  'canvas-ux.export-off-copy',
 ])
 
 const plain = (e: KeyEventLike) => !e.ctrlKey && !e.metaKey && !e.altKey
@@ -145,6 +149,16 @@ export const KEYS: readonly FeatureKeySpec[] = [
       if (!ctx.canvas.selection.length) return false
       const s = uxState(ctx.canvas)
       s.selectionBarFocus.set(s.selectionBarFocus.get() + 1)
+      return true
+    },
+  },
+  {
+    id: 'canvas-ux.export-off-copy',
+    scope: 'canvas',
+    chords: ['mod+c', 'mod+x'],
+    match: (_e, ctx) => ctx.canvas.selection.length > 0 && !exportAllowed(ctx),
+    handle: (_e, ctx) => {
+      notifyExportOff(ctx)
       return true
     },
   },

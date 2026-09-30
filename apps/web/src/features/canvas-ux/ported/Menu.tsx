@@ -224,7 +224,7 @@ function MenuItem({
           data-testid={`${prefix}-sub.${row.id}-button`}
           onMouseDown={(e) => e.preventDefault()}
           onPointerEnter={() => setOpen(true)}
-          onClick={() => setOpen(!open, true)}
+          onClick={() => setOpen(true, true)}
           onKeyDown={(e) => {
             if (e.key === 'ArrowRight' || e.key === 'Enter' || e.key === ' ') {
               e.preventDefault()
