@@ -785,11 +785,23 @@ export async function runDrill(opts: {
           : [],
       )
       const frameDesc = new Set(t.frameDescendants.map((id) => el(id)))
-      const isTouched = (id: string) =>
+      const touchedShape = (id: string) =>
         touchedOwners.has(id.split('.')[0] as string) ||
         frameDesc.has(id.split('.')[0] as string) ||
-        frameKids.has(id) ||
-        beforeR0.get(id)?.type === 'arrow'
+        frameKids.has(id)
+      // an arrow is touched only when an end is bound to a touched element (the room re-snaps it, and its
+      // label follows); every other arrow must be byte-identical too (V3: every arrow was left out)
+      const arrowTouched = (id: string) => {
+        const r = beforeR0.get(id)
+        if (r?.type !== 'arrow') return false
+        const d = JSON.parse(r.data) as {
+          startBinding?: { elementId?: string } | null
+          endBinding?: { elementId?: string } | null
+        }
+        return [d.startBinding?.elementId, d.endBinding?.elementId].some((e) => !!e && touchedShape(e))
+      }
+      const isTouched = (id: string) =>
+        touchedShape(id) || arrowTouched(id) || arrowTouched(id.split('.')[0] as string)
       const untouched = [...beforeR0.keys()].filter((id) => !isTouched(id))
       const changed = untouched.filter(
         (id) => JSON.stringify(after.get(id)) !== JSON.stringify(beforeR0.get(id)),
