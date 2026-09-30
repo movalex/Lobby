@@ -74,6 +74,24 @@ export interface DeletedRowWrite {
   readonly deletedBy: string
   readonly deletedByName: string
   readonly deletedAt: number
+  /**
+   * The room session that deleted it (one id per room open, element-room.ts), stored in `lb_deleted.epoch`
+   * as today's store does (deleted/store.ts `epoch`; a converted row keeps its tldraw session's id).
+   */
+  readonly session: string
+}
+
+/**
+ * "Recently deleted" retention (§2.6: the same limits and trim rules as today's store, deleted/store.ts
+ * DELETED_LIMITS, pinned equal by store-deleted.test.ts): the most recent `retainRecent` rows of any room
+ * session, plus everything the current room session deleted, up to `hardCap` rows in all; whole batches
+ * are dropped, oldest first, so each limit is rounded up to the batch it falls in. Trimmed after every
+ * `trimEvery` new deletions, outside the push that made them.
+ */
+export const LB_DELETED_LIMITS = Object.freeze({ retainRecent: 1_000, hardCap: 10_000, trimEvery: 100 })
+export interface DeletedRetention {
+  readonly retainRecent: number
+  readonly hardCap: number
 }
 
 /** Board-level meta (lb_meta). */
@@ -258,6 +276,10 @@ export class BoardStore {
   docCountPrefix(prefix: string): number {
     return (this.st.docCountPrefix.get(prefix.length, prefix) as { n: number }).n
   }
+  /** How many doc keys were written at `clock` (a server write's report is checked against it). */
+  docCountAt(clock: number): number {
+    return (this.st.docCountAt.get(clock) as { n: number }).n
+  }
 
   // ---- recently deleted ------------------------------------------------------------------------
 
@@ -273,16 +295,32 @@ export class BoardStore {
       w.deletedBy,
       w.deletedByName,
       w.deletedAt,
-      this.meta.epoch,
+      w.session,
     )
   }
 
-  /** Keeps at most `hardCap` rows, dropping whole batches, oldest first (outside a push). */
-  trimDeleted(hardCap: number): void {
-    const n = (this.st.deletedCount.get() as { n: number }).n
-    if (n <= hardCap) return
-    const cut = this.st.deletedCutBatch.get(hardCap) as { batch: number } | undefined
-    if (cut) this.st.deletedTrim.run(cut.batch + 1)
+  /**
+   * The retention of LB_DELETED_LIMITS (outside a push): rows of other room sessions older than the
+   * batch of the `retainRecent`-th newest row go, then every row older than the batch of the
+   * `hardCap`-th newest row. "Older" is by `seq` (insertion order), never by batch number: a converted
+   * board's rows keep their tldraw batch numbers, which overlap the room's (a push's clock). A batch
+   * is kept whole from its first row on. Returns how many rows were dropped.
+   */
+  trimDeleted(limits: DeletedRetention, session: string): number {
+    const floorOf = (nth: number): number | null => {
+      const row = this.st.deletedNth.get(nth - 1) as { batch: number } | undefined
+      if (!row) return null
+      return (this.st.deletedBatchFloor.get(row.batch) as { s: number }).s
+    }
+    let dropped = 0
+    const recent = floorOf(limits.retainRecent)
+    if (recent !== null) dropped += Number(this.st.deletedTrimOld.run(recent, session).changes)
+    const cap = floorOf(limits.hardCap)
+    if (cap !== null) dropped += Number(this.st.deletedTrimAll.run(cap).changes)
+    return dropped
+  }
+  deletedCount(): number {
+    return (this.st.deletedCount.get() as { n: number }).n
   }
 
   // ---- compaction (§2.6): at room open ---------------------------------------------------------
@@ -374,8 +412,11 @@ function prepareStatements(db: DatabaseSync) {
          deleted_by_name, deleted_at, epoch, origin) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'live')`,
     ),
     deletedCount: p('SELECT count(*) AS n FROM lb_deleted'),
-    deletedCutBatch: p('SELECT batch FROM lb_deleted ORDER BY seq DESC LIMIT 1 OFFSET ?'),
-    deletedTrim: p('DELETE FROM lb_deleted WHERE batch < ?'),
+    deletedNth: p('SELECT batch FROM lb_deleted ORDER BY seq DESC LIMIT 1 OFFSET ?'),
+    deletedBatchFloor: p('SELECT min(seq) AS s FROM lb_deleted WHERE batch = ?'),
+    deletedTrimOld: p('DELETE FROM lb_deleted WHERE seq < ? AND epoch <> ?'),
+    deletedTrimAll: p('DELETE FROM lb_deleted WHERE seq < ?'),
+    docCountAt: p('SELECT count(*) AS n FROM lb_doc WHERE clock = ?'),
     tombstonesOlder: p(
       'SELECT id, deleted_clock FROM lb_elements WHERE deleted = 1 AND deleted_at IS NOT NULL AND deleted_at < ?',
     ),

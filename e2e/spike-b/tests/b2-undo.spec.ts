@@ -18,6 +18,9 @@
 //   U10 A draws a stroke (the server rounds its points: fix) and binds an arrow to a note B deletes
 //       (binding nulled); A undoes each                     → no "change kept"; stack ≤ A's real actions
 //   U11 A deletes X by an undo; B restores X; C deletes X again; A redoes → X stays deleted
+//   U12 B recolours N while A is still dragging it (a real pointer drag; wave 2's drag-recolour defect,
+//       e2e/excalidraw collab-conflicts): the colour is held back from A until her pointer-up, which
+//       pushes only her move       → B's colour everywhere and stored; A undoes → N back, B's colour stays
 //
 // Run: SPIKE_B_PORT_BASE=<base> pnpm --filter @draftroom/e2e spike-b b2-undo   (SPIKE_B2_REPS, default 3)
 import { expect, type Page, test } from '@playwright/test'
@@ -355,4 +358,53 @@ test('U11: the life-version check: a redo never revives what someone deleted aga
   }
 })
 
-void centre
+test("U12: B recolours N while A drags it: A's pointer-up keeps B's colour; her undo moves N back and keeps it", async () => {
+  for (let i = 0; i < N; i++) {
+    const n = await rect(A(), { strokeColor: '#1e1e1e', backgroundColor: '#ffec99', fillStyle: 'solid' })
+    const before = (await lc(A()).get(n)) as { x: number; y: number }
+    const pushes0 = (await lc(A()).pushedOps()).length
+    await show(A(), [n])
+    await lc(A()).select([n])
+    const from = await centre(A(), n)
+    await A().mouse.move(from.x, from.y)
+    await A().mouse.down()
+    for (let s = 1; s <= 10; s++) await A().mouse.move(from.x + s * 12, from.y)
+    // B recolours N; it reaches A's core while her drag runs (held back from her scene, §2.5.4)
+    await lc(B()).update(n, { strokeColor: '#e03131' })
+    await expect
+      .poll(() => board(A(), (b, id) => (b.core.confirmed(id) as { strokeColor?: string })?.strokeColor, n))
+      .toBe('#e03131')
+    const heldDuringDrag = await board(
+      A(),
+      (b, id) =>
+        (
+          b.api.getSceneElementsIncludingDeleted().find((e: { id: string }) => e.id === id) as {
+            strokeColor?: string
+          }
+        )?.strokeColor,
+      n,
+    )
+    for (let s = 11; s <= 25; s++) await A().mouse.move(from.x + s * 12, from.y)
+    await A().mouse.up()
+    await everywhere(r.browsers, n, (e) => e.x > before.x + 200 && e.strokeColor === '#e03131')
+    await allSaved(r.browsers)
+    const snap = await harness.readSnapshot(r.stack, r.boardId)
+    const stored = snap.elements.find((e) => e.id === n) as { strokeColor?: string; x?: number } | undefined
+    // what A pushed for N: her move only (pos), never a style group
+    const groups = (await lc(A()).pushedOps())
+      .slice(pushes0)
+      .flatMap((x) => x.ops)
+      .filter((o) => o.k === 'p' && o.id === n)
+      .map((o) => Object.keys((o as { g?: Record<string, unknown> }).g ?? {}).join('+'))
+    console.log('B2-U12', JSON.stringify({ i, heldDuringDrag, stored: stored?.strokeColor, groups }))
+    expect(stored?.strokeColor).toBe('#e03131')
+    expect(groups.every((g) => !g.includes('style'))).toBe(true)
+    await undo(A())
+    await everywhere(
+      r.browsers,
+      n,
+      (e) => e.x === before.x && e.y === before.y && e.strokeColor === '#e03131',
+    )
+    await converge(r)
+  }
+})

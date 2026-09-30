@@ -55,6 +55,9 @@ export default defineConfig({
       env: {
         VITE_LOBBY_ENGINE: 'excalidraw',
         VITE_DRAFTROOM_DEV_AUTH: '1',
+        // on engine/excalidraw /b/:id is Lobby's board page unless this is set (wave 2, W1-8); on
+        // spike/excalidraw nothing reads it (App.tsx routes /b/:id to the spike page)
+        VITE_LOBBY_BOARD_PAGE: 'spike',
         DRAFTROOM_API_ORIGIN: stack.apiUrl,
         DRAFTROOM_SYNC_ORIGIN: stack.syncUrl,
       },

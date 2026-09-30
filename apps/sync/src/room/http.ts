@@ -1,13 +1,19 @@
-// The ElementRoom's internal routes (docs/EXCALIDRAW-MIGRATION.md §2.4.6), mounted by the router behind
-// the internal secret instead of the tldraw board routes (engine-switch.ts InternalRoute):
+// The ElementRoom's own internal routes (docs/EXCALIDRAW-MIGRATION.md §2.4.6), mounted by the router
+// behind the internal secret instead of the tldraw board routes (engine-switch.ts InternalRoute):
 //
 //   GET  /internal/boards/:bid/snapshot         → 200 LobbyElementsSnapshot (live elements and the doc); 404
 //   POST /internal/boards/:bid/workshop-state   WorkshopStateBody → 204 (A2, the api's push)
 //
-// The test-only routes (snapshot with tombstones, lease-hook, fail-commit) are test-hooks.ts's; the room
+// Mounted next to them by index.ts: O4's migration routes (convert-all, status; room/migrate/**), and with
+// DRAFTROOM_TEST_HOOKS=1 the room's test-only prepare and server-write routes (test-routes.ts). The other
+// test-only routes (snapshot with tombstones, lease-hook, fail-commit) are test-hooks.ts's; the room
 // registers their implementation there (index.ts).
 //
-// Not built in spike B (not needed by a check): seed, place-notes, text, asset-refs, deleted.
+// The plan's other internal routes, seed, place-notes, text, asset-refs and deleted, are not the room's:
+// wave 2F builds them outside it (apps/sync/src/room-internal/ on engine/excalidraw, mounted through CR
+// 2F-1's extendElementRoom). They reach an open board only through the service's CR 2F-2 members:
+// prepareBoard (the board opened after its conversion or roll-forward, like `existing` below) and
+// serverWrite (a write queued in the room's drain; element-room.ts, server-write.ts).
 
 import { WorkshopStateBody } from '@draftroom/contracts'
 import type { InternalRoute } from '../engine-switch.ts'

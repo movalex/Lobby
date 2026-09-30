@@ -118,6 +118,20 @@ export class UndoController {
     return this.history.record(this.sceneMap(true), label)
   }
 
+  /**
+   * Runs `write` (one `CanvasPort.transact`, which records its own step) as part of this tab's previous
+   * step (`LobbyHistory.mergeTop`): what the user did before and was not recorded yet becomes its own
+   * step first. No join when nothing precedes it, after an undo or a redo, or when `write` recorded
+   * nothing or more than one step.
+   */
+  joinPrevious<T>(write: () => T): T {
+    this.boundary()
+    const mark = this.history.mark()
+    const result = write()
+    this.history.mergeTop(mark)
+    return result
+  }
+
   undo(): UndoOutcome | null {
     return this.step('undo')
   }
