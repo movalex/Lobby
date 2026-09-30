@@ -5,6 +5,8 @@
  * `./impl.ts` (2C), created by the board page. Frozen at wave 1.
  */
 
+// CR-3H-1: the checkpoint preview's types (see loadCheckpointPreview at the end)
+export type { CheckpointPreviewHandle, CheckpointPreviewInput } from '../preview/index.ts'
 export type { KeyEventLike } from '../registries.ts'
 export type { CanvasFeature, CanvasFeatureContext, KeyClaim } from './feature.ts'
 export {
@@ -89,3 +91,8 @@ export type {
   TopBarItemSpec,
 } from './registries.ts'
 export { createFeatureRegistries, HOST_SLOTS, MENU_GROUPS } from './registries.ts'
+// CR-3H-1 (3h, wave 3): the checkpoint preview (canvas/preview/**, 3h's; plan §4.6): a read-only bitmap of
+// a checkpoint's elements drawn with the engine's exporter and Lobby's own pan and zoom, never a second
+// editor. A checkpoint is not the live scene, so `LobbyCanvas.export.canvas` (live items) cannot draw it.
+// Loaded on first use; the History panel is its only caller.
+export const loadCheckpointPreview = () => import('../preview/index.ts').then((m) => m.mountCheckpointPreview)
