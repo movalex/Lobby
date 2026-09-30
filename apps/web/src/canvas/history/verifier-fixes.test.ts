@@ -123,3 +123,54 @@ describe('V1: history after an ack', () => {
     expect(res?.applied.map((c) => Object.keys(c.fields))).toEqual([['x']])
   })
 })
+
+describe('V1 P6 (wave 2E): a local create absorbed before its boundary is still recorded as created', () => {
+  it('a label made in the editor and re-keyed by the engine before the editor closes: one undo removes it, the next the note', () => {
+    const h = new LobbyHistory()
+    h.reset(new Map())
+    const note = {
+      id: 'n',
+      type: 'stickynote',
+      x: 0,
+      y: 0,
+      isDeleted: false,
+      boundElements: null,
+      version: 1,
+      versionNonce: 1,
+    }
+    h.record(new Map([['n', note as never]]))
+    // the editor makes the label (not recorded yet: its boundary is the editor's close); the engine's index
+    // pre-pass re-keys it, an apply the history absorbs
+    const noteB = { ...note, boundElements: [{ id: 'n.t', type: 'text' }], version: 2, versionNonce: 2 }
+    const label = {
+      id: 'n.t',
+      type: 'text',
+      containerId: 'n',
+      text: '',
+      originalText: '',
+      index: 'a0',
+      isDeleted: false,
+      version: 1,
+      versionNonce: 3,
+    }
+    const rekeyed = { ...label, index: 'a1', version: 2, versionNonce: 4 }
+    h.absorb(label as never, rekeyed as never)
+    // typing, then the editor closes: the boundary
+    const typed = { ...rekeyed, text: 'own words', originalText: 'own words', version: 3, versionNonce: 5 }
+    const scene = new Map([
+      ['n', noteB as never],
+      ['n.t', typed as never],
+    ])
+    const e = h.record(scene)
+    expect(e?.changes.get('n.t')?.created).toBe(true)
+    const u1 = h.undo(scene)
+    expect(u1?.applied.map((c) => c.id).sort()).toEqual(['n', 'n.t'])
+    const afterU1 = new Map<string, never>([
+      ['n', { ...noteB, boundElements: null, version: 3, versionNonce: 6 } as never],
+      ['n.t', { ...typed, isDeleted: true, version: 4, versionNonce: 7 } as never],
+    ])
+    const u2 = h.undo(afterU1)
+    expect(u2?.applied.map((c) => c.id)).toEqual(['n'])
+    expect((u2?.patches.get('n') as { isDeleted?: boolean } | undefined)?.isDeleted).toBe(true)
+  })
+})
