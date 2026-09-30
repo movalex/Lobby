@@ -1,0 +1,132 @@
+// The board's export policy rules, engine-neutral (docs/WAVE3-CONTRACTS.md "export-control"): pure
+// functions and the api calls, shared by the tldraw page's store (./export-policy.ts, tldraw signals) and
+// the Excalidraw page's (./ported/export-policy.ts, lib/signals). No tldraw, no engine: wave 3e split
+// them out of export-policy.ts so ported code can use them; export-policy.ts re-exports every name.
+
+import {
+  EXPORT_DISABLED_MESSAGE,
+  type ExportPolicy,
+  ExportPolicyState,
+  exportAllowedFor,
+} from '@draftroom/contracts'
+import type { ApiClient } from '../../api/client.ts'
+import type { NoticeInput } from '../../board/board-context.ts'
+import type { BoardRole } from '../../lib/permissions.ts'
+
+/** What people see wherever an export, copy or download entry is turned off. */
+export const EXPORT_OFF_TEXT = EXPORT_DISABLED_MESSAGE
+
+/**
+ * Pure rule behind the UI (tested): unknown role or policy = allowed, and an unknown kind = not a
+ * name-only guest; the server decides anyway.
+ */
+export function exportAllowedWith(
+  role: BoardRole | null,
+  policy: ExportPolicy | null,
+  guest: boolean | null = null,
+): boolean {
+  if (role === null || policy === null) return true
+  return exportAllowedFor(role, policy, { nameOnlyGuest: guest === true })
+}
+
+/**
+ * Whether this person CERTAINLY may export: the policy is known, and it is 'everyone' or they are an
+ * editor or owner with an account. Unlike exportAllowedWith, anything unknown counts as no.
+ */
+export function exportCertainWith(
+  role: BoardRole | null,
+  policy: ExportPolicy | null,
+  guest: boolean | null,
+): boolean {
+  if (policy === null) return false
+  if (policy === 'everyone') return true
+  if (role === null || guest === null) return false
+  return exportAllowedFor(role, policy, { nameOnlyGuest: guest })
+}
+
+/**
+ * DANA2-01, the Share dialog's client card: whether people who join through a client link (viewers,
+ * commenters, name-only guests) may download files and export. A board that still uses the default
+ * counts as off, since the first client link turns it off. null while that is unknown.
+ */
+export function clientExportAllowed(policy: ExportPolicy | null, stored: boolean | null): boolean | null {
+  if (policy === null) return null
+  if (policy === 'editors') return false
+  return stored
+}
+
+/**
+ * DANA2-01: the Share dialog's "Creating a client link turns this off…" line, for a board nobody chose
+ * a setting for yet. Only for someone who can create client links: a board owner who may only reduce
+ * access (not a creator, domain access D4) is not told about a link it cannot make.
+ */
+export function clientLinkWillLimit(opts: {
+  canManage: boolean
+  canCreateLinks: boolean
+  policy: ExportPolicy | null
+  stored: boolean | null
+}): boolean {
+  return opts.canManage && opts.canCreateLinks && opts.policy === 'everyone' && opts.stored === false
+}
+
+/**
+ * F9: the Export dialog's sentence about who may export, from the current policy. Nothing while the
+ * policy is unknown, rather than a guess.
+ */
+export function exportPolicySentence(policy: ExportPolicy | null): string {
+  if (policy === 'everyone') return 'Everyone who can view the board can export it.'
+  if (policy === 'editors') return 'Only editors can export this board: viewers, commenters and guests can’t.'
+  return ''
+}
+
+/** Says why an export, copy or download did nothing. */
+export function notifyExportOff(notify: (n: NoticeInput) => void) {
+  notify({ key: 'export-off', text: EXPORT_OFF_TEXT, testId: 'export-off-notice', timeoutMs: 6000 })
+}
+
+const enc = encodeURIComponent
+
+export function exportPolicyApi(api: ApiClient) {
+  return {
+    get: (boardId: string, signal?: AbortSignal) =>
+      api.request('GET', `/api/boards/${enc(boardId)}/export-policy`, { schema: ExportPolicyState, signal }),
+    put: (boardId: string, exportPolicy: ExportPolicy) =>
+      api.request('PUT', `/api/boards/${enc(boardId)}/export-policy`, {
+        body: { exportPolicy },
+        schema: ExportPolicyState,
+      }),
+  }
+}
+
+/**
+ * How answers and events are ordered for one board: an answer applies only if no policy event arrived
+ * after its request was sent, and no answer to a later request was applied already. So an answer read
+ * on the server before a change never overwrites the event announcing that change, and a slow answer
+ * never overwrites a newer one (while a failed newer request does not throw away an older answer).
+ */
+export interface PolicyOrder {
+  /** a policy event arrived */
+  event(): void
+  /** a request is sent: the returned check says whether its answer may still apply (and records it) */
+  begin(): () => boolean
+}
+
+export function createPolicyOrder(): PolicyOrder {
+  let events = 0
+  let sent = 0
+  let applied = 0
+  return {
+    event: () => {
+      events++
+    },
+    begin() {
+      const mine = ++sent
+      const eventsThen = events
+      return () => {
+        if (events !== eventsThen || applied > mine) return false
+        applied = mine
+        return true
+      }
+    },
+  }
+}

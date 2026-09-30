@@ -15,20 +15,27 @@
 
 import {
   EXPORT_CONTROL_EVENTS,
-  EXPORT_DISABLED_MESSAGE,
   type ExportPolicy,
   ExportPolicyEvent,
-  ExportPolicyState,
-  exportAllowedFor,
+  type ExportPolicyState,
 } from '@draftroom/contracts'
 import { type Atom, atom, type Editor } from 'tldraw'
 import type { ApiClient } from '../../api/client.ts'
 import type { NoticeInput } from '../../board/board-context.ts'
 import type { BoardRole } from '../../lib/permissions.ts'
 import type { BoardEvents } from '../events.ts'
+import { exportAllowedWith, exportCertainWith, exportPolicyApi, notifyExportOff } from './export-rules.ts'
 
-/** What people see wherever an export, copy or download entry is turned off. */
-export const EXPORT_OFF_TEXT = EXPORT_DISABLED_MESSAGE
+// The engine-neutral rules live in ./export-rules.ts (wave 3e: the Excalidraw page's store uses them too).
+export {
+  clientExportAllowed,
+  clientLinkWillLimit,
+  EXPORT_OFF_TEXT,
+  exportAllowedWith,
+  exportPolicyApi,
+  exportPolicySentence,
+  notifyExportOff,
+} from './export-rules.ts'
 
 export interface BoardExportState {
   /** null until the first answer (treated like 'everyone'). */
@@ -104,44 +111,6 @@ function beginPolicyRequest(boardId: string): (policy: ExportPolicy, stored?: bo
   }
 }
 
-/**
- * DANA2-01, the Share dialog's client card: whether people who join through a client link (viewers,
- * commenters, name-only guests) may download files and export. A board that still uses the default
- * counts as off, since the first client link turns it off. null while that is unknown.
- */
-export function clientExportAllowed(policy: ExportPolicy | null, stored: boolean | null): boolean | null {
-  if (policy === null) return null
-  if (policy === 'editors') return false
-  return stored
-}
-
-/**
- * DANA2-01: the Share dialog's "Creating a client link turns this off…" line, for a board nobody chose
- * a setting for yet. Only for someone who can create client links: a board owner who may only reduce
- * access (not a creator, domain access D4) is not told about a link it cannot make.
- */
-export function clientLinkWillLimit(opts: {
-  canManage: boolean
-  canCreateLinks: boolean
-  policy: ExportPolicy | null
-  stored: boolean | null
-}): boolean {
-  return opts.canManage && opts.canCreateLinks && opts.policy === 'everyone' && opts.stored === false
-}
-
-/**
- * Pure rule behind the UI (tested): unknown role or policy = allowed, and an unknown kind = not a
- * name-only guest; the server decides anyway.
- */
-export function exportAllowedWith(
-  role: BoardRole | null,
-  policy: ExportPolicy | null,
-  guest: boolean | null = null,
-): boolean {
-  if (role === null || policy === null) return true
-  return exportAllowedFor(role, policy, { nameOnlyGuest: guest === true })
-}
-
 /** Reactive when read inside useValue / computed: may this person export on `boardId`? */
 export function exportAllowedOnBoard(boardId: string): boolean {
   const s = boardExportState(boardId)
@@ -157,13 +126,7 @@ export function exportAllowedOnBoard(boardId: string): boolean {
  */
 export function exportCertainOnBoard(boardId: string): boolean {
   const s = boardExportState(boardId)
-  const policy = s.policy.get()
-  if (policy === null) return false
-  if (policy === 'everyone') return true
-  const role = s.role.get()
-  const guest = s.guest.get()
-  if (role === null || guest === null) return false
-  return exportAllowedFor(role, policy, { nameOnlyGuest: guest })
+  return exportCertainWith(s.role.get(), s.policy.get(), s.guest.get())
 }
 
 // ---- per editor (for tldraw overrides and shape utils, which only get the editor) ------------------
@@ -196,21 +159,6 @@ export function exportPolicyOf(editor: Editor): ExportPolicy | null {
 }
 
 /**
- * F9: the Export dialog's sentence about who may export, from the current policy. Nothing while the
- * policy is unknown, rather than a guess.
- */
-export function exportPolicySentence(policy: ExportPolicy | null): string {
-  if (policy === 'everyone') return 'Everyone who can view the board can export it.'
-  if (policy === 'editors') return 'Only editors can export this board: viewers, commenters and guests can’t.'
-  return ''
-}
-
-/** Says why an export, copy or download did nothing. */
-export function notifyExportOff(notify: (n: NoticeInput) => void) {
-  notify({ key: 'export-off', text: EXPORT_OFF_TEXT, testId: 'export-off-notice', timeoutMs: 6000 })
-}
-
-/**
  * For entry points that only have the editor (tldraw actions, the clipboard hook, shape utils): true
  * when exporting is allowed; otherwise shows the notice and returns false.
  */
@@ -222,20 +170,6 @@ export function guardExport(editor: Editor): boolean {
 }
 
 // ---- feeding the store ---------------------------------------------------------------------------
-
-const enc = encodeURIComponent
-
-export function exportPolicyApi(api: ApiClient) {
-  return {
-    get: (boardId: string, signal?: AbortSignal) =>
-      api.request('GET', `/api/boards/${enc(boardId)}/export-policy`, { schema: ExportPolicyState, signal }),
-    put: (boardId: string, exportPolicy: ExportPolicy) =>
-      api.request('PUT', `/api/boards/${enc(boardId)}/export-policy`, {
-        body: { exportPolicy },
-        schema: ExportPolicyState,
-      }),
-  }
-}
 
 /** The Share dialog asking on open: the answer lands in the store unless something newer did first. */
 export async function refreshExportPolicy(api: ApiClient, boardId: string, signal?: AbortSignal) {

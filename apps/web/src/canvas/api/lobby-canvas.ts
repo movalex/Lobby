@@ -417,6 +417,13 @@ export interface ExportOptions {
   readonly theme?: 'light' | 'dark'
   /** cap the bitmap's longer side (thumbnails) */
   readonly maxSide?: number
+  /**
+   * Which bytes an uploaded image is drawn from (CR 3E-1): `original` (the upload; the default of
+   * `png`, `canvas` and `copy`), `display` (the 2,048 px preview; the default of `svg`, which embeds
+   * every image) or `canvas` (what the canvas shows now, nothing fetched: thumbnails). File cards and
+   * placed PDF pages draw their face's preview.
+   */
+  readonly files?: 'original' | 'display' | 'canvas'
 }
 
 export interface LobbyExport {
