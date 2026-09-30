@@ -43,7 +43,7 @@ import type { EditNotice, EditState } from '../lease/editorLease.ts'
 import { installBoardOverrides } from '../overrides.ts'
 import { createCanvasPort, type LobbyCanvasPort } from '../port-impl.ts'
 import { PresenceHub } from '../presence/hub.ts'
-import { attachPresencePointer } from '../presence/pointer.ts'
+import { attachPresencePointer, type PresenceSample } from '../presence/pointer.ts'
 import { attachEngine, createExcalidrawScene } from '../sync/adapter/excalidraw.ts'
 import { createIdbOfflineStore, type IdbOfflineStore, tabId } from '../sync/adapter/offline-idb.ts'
 import { LobbyEngineCore } from '../sync/core/engine.ts'
@@ -547,10 +547,12 @@ export class LobbyBoardSession {
     // 2. spike B's input layer (allowlist, guard, double-click and double-tap, clipboard and drop)
     offs.push(this.input.attach(wrapper, api))
     // 3. presence pointer for every role
+    let lastSample: PresenceSample | null = null
     offs.push(
       attachPresencePointer(wrapper, {
         toScene: (x, y) => this.input.toScene(x, y),
         onSample: (s) => {
+          lastSample = s
           presence.onPointer(s)
           port.emitPointer(s.pointer)
         },
@@ -601,7 +603,16 @@ export class LobbyBoardSession {
         e.handled()
       }),
     )
-    offs.push(api.onScrollChange(() => this.handlesExtra?.userMoved()))
+    offs.push(
+      api.onScrollChange(() => {
+        this.handlesExtra?.userMoved()
+        // 3c (CR): a pan or zoom alone (a wheel, a key, a follow) re-sends presence, so the `view`
+        // the people who follow this tab read is current without a pointer move (the core keeps 20 Hz)
+        presence.onPointer(
+          lastSample ?? { pointer: null, button: 'up', source: 'view', pointerType: 'mouse' },
+        )
+      }),
+    )
     // resize: the canvas container changed size
     const container = root.querySelector<HTMLElement>('.excalidraw') ?? wrapper
     const ro = new ResizeObserver(() => {
