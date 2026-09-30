@@ -14,7 +14,7 @@ another owner's file or invents a shape another owner also implements.
 | Gate | see "The C0 gate" at the end |
 
 `CONTRACTS_REV` in `packages/canvas-schema/src/protocol.ts` is **1** at C0 (**3** after the M1 integration, **4**
-after the M3 integration; see "Change log").
+after the M3 integration, **5** after the part-3 integration; see "Change log").
 
 ## The change-request rule
 
@@ -325,6 +325,32 @@ Recorded with the integration in `spike-b/M1-M2.md`:
    text; O2's proposal of an idempotent offline-queue entry (a push id the room deduplicates, or the confirmed
    version per entry) touches `protocol.ts` or the queue format and needs O1's and O2's OK as a CR.
 
+## Lead decisions at the part-3 integration (recorded in `spike-b/M3-part3.md`)
+
+1. **O1's CR `6055baf` is accepted** (rev 5, change log below): CR 2F-2's declarations in `engine-switch.ts`.
+   CR 2F-1 (the extension mount point, `room-internal/` loaded by `loadEngine`, the `app.ts` wrap) is not
+   taken on `spike/excalidraw`: `room-internal/` exists only on `engine/excalidraw`, which already has it
+   (wave 2's W1-5). The two branches' `engine-switch.ts` then differ only by CR 2F-1's lines.
+2. **O2's OK for `b5689e0` (rev 4) is given** (`O2-part3.md`, "For other owners"): the core acts on `RESYNC`
+   and `SLOW_DOWN` only and ignores other notice codes. Row 4's open question is closed. The spike page's
+   "Preparing this board…" state on `PREPARING` is still O2's to build.
+3. **Wave 2's engine requests are met by additions on O2's own classes, not by a frozen-file change.**
+   CR-2D-2's insert is `LobbyEngineCore.prepareInsert`/`insert` and `LobbyCanvasTx.insert`
+   (`port-impl.ts`, `LobbyCanvasPort.transact`); the write-path hooks are `LobbyEngineCore.syncScene()` and
+   `persistNow()`; 2C's `mergeTop` is `LobbyHistory.mark()`/`mergeTop(since?)` and
+   `UndoController.joinPrevious(write)`. The frozen `EngineCore` (`sync/types.ts`), `CanvasPort` and
+   `CanvasTx` (`port.ts`) are unchanged; wave 2's `LobbyTx.insert` maps onto `LobbyCanvasTx.insert`. The
+   core's `message` event is now emitted after the apply (2C's request; `CoreEvent` is O2's type).
+4. **`e2e/spike-b/playwright.config.ts` sets `VITE_LOBBY_BOARD_PAGE=spike`** for its build (wave 2's request
+   after W1-8). On `engine/excalidraw` `/b/:id` is Lobby's board page unless that variable is set; on
+   `spike/excalidraw` nothing reads it (App.tsx routes `/b/:id` to `SpikeBoardPage`), so the spike's own
+   runs are unchanged.
+5. **Wave 2's integrator notes on the seam, recorded:** `engine-switch.ts` now type-imports `BoardStore`
+   (`room/store.ts`) and `WireElement` (`canvas-schema/elements`). Both are `import type`, erased at run
+   time, so "nothing here imports engine code" still holds; the Node-safety check passes. On
+   `engine/excalidraw`, `extendElementRoom` forwards the service's members by name, so a later optional
+   `ElementRoomService` member must be added there too or it is silently dropped.
+
 ## Change log
 
 | Rev | Date | Change | By |
@@ -332,7 +358,8 @@ Recorded with the integration in `spike-b/M1-M2.md`:
 | 1 | 2026-09-29 | C0 | lead |
 | 2 | 2026-09-29 | `custom-data.ts`: `prompt`, `slot`, `swatch` (class 5 "free", `MarkerValue` = boolean or a 1-64 character string, 72 B, duplicate `keep`), which §3.3 lists and C0 left out; `limits.test.ts` name list. Additive: O1 validates them through the registry with no code change; O2/O5 clients may write them; O4's converter carries the template markers instead of `meta-dropped`. Accepted at M1 (CR `1370281` on `spike/b-convert`, applied as `bf11de0`) | O4 (CR), lead |
 | 3 | 2026-09-29 | `apps/web/src/canvas/sync/types.ts`: `EngineCore.doc()` and `EngineCore.setDoc(set)` for `lb_doc` keys (O5's tags write `tagDef:<key>` before an element's `tag:<key>`, §3.3). Additive; O2's core implements both (`sync/core/engine.ts`), and a `setDoc` is sent no later than the element push after it. Accepted at M1 (CR `35f0ae2` on `spike/b-features`, applied as `ac9a358`) | O5 (CR), O2, lead |
-| 4 | 2026-09-29 | `protocol.ts`: notice `PREPARING` (a joiner held while the room converts or rolls forward a tldraw board on open, §2.13 "Preparing this board…") and the terminal close reason `CONVERSION_FAILED` (4099; a failed lazy conversion or roll-forward, so joiners do not re-queue the job; the board stays on its tldraw tables, §5.3); a `PREPARING` round trip in `protocol.test.ts`. Additive. Accepted at M3 (CR `b5689e0` on `spike/b-room`, merged with `166850c`). Two ends: O1 (the CR); O2's end needs no code change (its core ignores a notice code it does not handle, `engine.ts` `case 'notice'`, and its page shows the closed state with `data-reason` for every 4099, `session.ts`); O2's explicit OK was not given in this round (O2 finished before the CR existed) and is asked for in the next one, with the page's "Preparing this board…" state. If O2 declines, reverting the CR needs no room change (the room reads both lists at run time: no notice, `MAINTENANCE`), but O1's `conversion.test.ts` would need its expectations changed | O1 (CR), lead |
+| 4 | 2026-09-29 | `protocol.ts`: notice `PREPARING` (a joiner held while the room converts or rolls forward a tldraw board on open, §2.13 "Preparing this board…") and the terminal close reason `CONVERSION_FAILED` (4099; a failed lazy conversion or roll-forward, so joiners do not re-queue the job; the board stays on its tldraw tables, §5.3); a `PREPARING` round trip in `protocol.test.ts`. Additive. Accepted at M3 (CR `b5689e0` on `spike/b-room`, merged with `166850c`). Two ends: O1 (the CR); O2's end needs no code change (its core ignores a notice code it does not handle, `engine.ts` `case 'notice'`, and its page shows the closed state with `data-reason` for every 4099, `session.ts`); O2's explicit OK was not given in this round (O2 finished before the CR existed) and is asked for in the next one, with the page's "Preparing this board…" state. If O2 declines, reverting the CR needs no room change (the room reads both lists at run time: no notice, `MAINTENANCE`), but O1's `conversion.test.ts` would need its expectations changed. **O2's OK given at the part-3 integration** (`O2-part3.md`) | O1 (CR), lead |
+| 5 | 2026-09-29 | `apps/sync/src/engine-switch.ts`: CR 2F-2's optional `ElementRoomService` members `prepareBoard?(boardId)` and `serverWrite?(boardId, apply)` and the types `ServerWriteTx`, `ServerWriteChange`, `ServerWriteOutcome`, `ServerWriteApply` (plus their two `import type` lines), byte for byte as wave 2F wrote them in `8a7e7af` on `engine/excalidraw` (accepted there as W1-6). Additive and optional: no caller breaks without them. O1's room implements both (`room/index.ts`, `room/element-room.ts`, `room/server-write.ts`). CR 2F-1 is not taken (decision 1 above). Accepted at the part-3 integration (CR `6055baf` on `spike/b-room`, merged with `2e250c8`). `engine-switch.ts` is the lead's seam file, not a two-end file | O1 (CR, from 2F), lead |
 
 ## The C0 gate
 
