@@ -176,3 +176,30 @@ test('"Bring here" on carol: only carol follows alice now (3f: the summon handle
   await expect.poll(() => followingSid(c.page), { timeout: 5_000 }).toBe(await sessionId(a.page))
   expect(await followingSid(b.page)).toBeNull()
 })
+
+test('A11Y2-05: People and Notifications close when the keyboard leaves them (ported from phone-overlays.spec.ts)', async ({
+  canvasSession,
+}) => {
+  const a = await canvasSession('alice')
+  await canvasSession('bob')
+
+  await test.step('People: Tab stays in the list; focus moving elsewhere closes it', async () => {
+    await a.page.getByTestId('people-open').click()
+    const panel = a.page.getByTestId('people-panel')
+    await expect(panel).toBeVisible()
+    for (let i = 0; i < 8; i++) await a.page.keyboard.press('Tab')
+    await expect(panel).toBeVisible()
+    expect(await panel.evaluate((el) => el.contains(document.activeElement))).toBe(true)
+    await a.page.getByTestId('share-button').focus()
+    await expect(panel).toHaveCount(0)
+  })
+
+  await test.step('Notifications: focus moving out of the inbox closes it', async () => {
+    await a.page.getByTestId('notifications-bell').click()
+    const inbox = a.page.getByTestId('notifications-panel')
+    await expect(inbox).toBeVisible()
+    await inbox.focus()
+    await a.page.getByTestId('share-button').focus()
+    await expect(inbox).toHaveCount(0)
+  })
+})

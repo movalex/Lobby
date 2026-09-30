@@ -6,7 +6,7 @@
 // handling, and legacy point anchors on the one page. Collaborative behaviour is checked in a second
 // browser context, and what the server stored (or refused) through the API as the user in question.
 //
-// Differences from the tldraw spec, by design (docs/research/excalidraw/wave3/3C.md): element ids are the
+// Differences from the tldraw spec, by design (docs/PROGRESS.md, wave 3C): element ids are the
 // canvas's own (anchors name them `shape:<id>`); a new point anchor carries no page id (one page, plan
 // §5.8); the comment toasts are the board page's notices; "restore from Recently deleted" is its own test,
 // expected to fail until the room's server write (CR 2F-2) lands.
