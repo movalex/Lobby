@@ -10,7 +10,10 @@ import {
   SearchResponse,
   type SearchStatus,
 } from '@draftroom/contracts'
+import { fromShapeRef } from '@draftroom/canvas-schema/refs'
 import type { ApiClient } from '../../api/client.ts'
+import { NEW_CANVAS_BOARD_PAGE } from '../../lib/board-engine.ts'
+import { elementsLink, legacyShapesLink } from '../../lib/deep-link.ts'
 import { boardPath, type DashboardSection } from '../../lib/routing.ts'
 
 /** Typing pauses this long before a search goes out. */
@@ -78,21 +81,35 @@ export const kindLabel = (kind: SearchHitKind): string => KIND_LABELS[kind]
  * A tldraw deep-link string to shapes (`s<id>.<id>`), as Editor.createDeepLink builds it: the id
  * without its `shape:` prefix, URI-encoded, with dots encoded too (they separate ids).
  */
-export function shapesDeepLink(shapeIds: readonly string[]): string {
-  const enc = (id: string) => encodeURIComponent(id.replace(/^shape:/, '')).replace(/\./g, '%2E')
-  return `s${shapeIds.map(enc).join('.')}`
-}
+export const shapesDeepLink = (shapeIds: readonly string[]): string => legacyShapesLink(shapeIds)
 
 /**
- * Where a hit opens: the board zoomed to the object and with it selected (`?d=`, handled by the
- * board's start view), or with the comment thread open (`?thread=`, handled by comments).
+ * Which link the board page of this build reads: `el` on the new canvas (docs/EXCALIDRAW-MIGRATION.md
+ * §3.6: `?el=<id>`, whose board page also reads the legacy `?d=`), `d` on the tldraw board page.
  */
-export function hitHref(boardId: string, hit: Pick<SearchHit, 'kind' | 'objectId'>): string {
+export type HitLinkFormat = 'd' | 'el'
+export const HIT_LINK_FORMAT: HitLinkFormat = NEW_CANVAS_BOARD_PAGE ? 'el' : 'd'
+
+/**
+ * Where a hit opens: the board zoomed to the object and with it selected (`?d=`, or `?el=` on the new
+ * canvas, handled by the board's start view), or with the comment thread open (`?thread=`, handled by
+ * comments).
+ */
+export function hitHref(
+  boardId: string,
+  hit: Pick<SearchHit, 'kind' | 'objectId'>,
+  format: HitLinkFormat = HIT_LINK_FORMAT,
+): string {
   const base = boardPath(boardId)
   if (hit.kind === 'comment' || hit.kind === 'resolved-comment')
     return `${base}?${new URLSearchParams({ thread: hit.objectId })}`
-  if (hit.objectId.startsWith('shape:'))
+  if (hit.objectId.startsWith('shape:')) {
+    if (format === 'el') {
+      const id = fromShapeRef(hit.objectId)
+      return id ? elementsLink(base, [id]) : base
+    }
     return `${base}?${new URLSearchParams({ d: shapesDeepLink([hit.objectId]) })}`
+  }
   return base
 }
 

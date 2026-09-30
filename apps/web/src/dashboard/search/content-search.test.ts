@@ -1,7 +1,9 @@
-import { createDeepLinkString, parseDeepLinkString, type TLShapeId } from 'tldraw'
+import { createDeepLinkString, parseDeepLinkString, type TLPageId, type TLShapeId } from 'tldraw'
 import { describe, expect, it } from 'vitest'
+import { parseLegacyDeepLink, readDeepLink } from '../../lib/deep-link.ts'
 import {
   contentSearchApplies,
+  HIT_LINK_FORMAT,
   hitHref,
   isSearchable,
   kindLabel,
@@ -60,6 +62,41 @@ describe('content search helpers', () => {
     expect(hitHref('b-board1', { kind: 'resolved-comment', objectId: 'thr_AAAAAAAAAAAA' })).toBe(
       '/b/b-board1?thread=thr_AAAAAAAAAAAA',
     )
+  })
+
+  it('on the new canvas: ?el=<element id> (dots kept, the new board page also reads ?d=)', () => {
+    // this build's default is the tldraw board page's link
+    expect(HIT_LINK_FORMAT).toBe('d')
+    expect(hitHref('b-board1', { kind: 'note', objectId: 'shape:n1' }, 'el')).toBe('/b/b-board1?el=n1')
+    const href = hitHref('b-board1', { kind: 'frame', objectId: 'shape:a.b' }, 'el')
+    expect(href).toBe('/b/b-board1?el=a.b')
+    expect(readDeepLink(new URL(href, 'http://x').toString())).toEqual({ kind: 'elements', ids: ['a.b'] })
+    expect(hitHref('b-board1', { kind: 'note', objectId: 'shape:bad id' }, 'el')).toBe('/b/b-board1')
+    expect(hitHref('b-board1', { kind: 'comment', objectId: 'thr_AAAAAAAAAAAA' }, 'el')).toBe(
+      '/b/b-board1?thread=thr_AAAAAAAAAAAA',
+    )
+  })
+
+  it('the legacy link reader agrees with tldraw’s own deep-link strings', () => {
+    for (const ids of [['shape:abc123'], ['shape:with.dots'], ['shape:ünï cødé/?&#'], ['shape:a', 'shape:b']]) {
+      const theirs = createDeepLinkString({ type: 'shapes', shapeIds: ids as TLShapeId[] })
+      expect(parseLegacyDeepLink(theirs)).toEqual({
+        kind: 'legacy-shapes',
+        parts: ids.map((id) => id.replace(/^shape:/, '')),
+      })
+    }
+    const view = createDeepLinkString({
+      type: 'viewport',
+      bounds: { x: -10.4, y: 20, w: 300, h: 200 },
+      pageId: 'page:two' as TLPageId,
+    })
+    expect(parseLegacyDeepLink(view)).toEqual({
+      kind: 'legacy-view',
+      bounds: { x: -10, y: 20, w: 300, h: 200 },
+      pageId: 'page:two',
+    })
+    const page = createDeepLinkString({ type: 'page', pageId: 'page:three' as TLPageId })
+    expect(parseLegacyDeepLink(page)).toEqual({ kind: 'legacy-page', pageId: 'page:three' })
   })
 
   it('says what was found in plain words', () => {
