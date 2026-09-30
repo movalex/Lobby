@@ -337,13 +337,24 @@ function holdThroughLayout(canvas: LobbyCanvas, apply: () => void): () => void {
 
 /**
  * Decides the first view once the board opens. Resolves with what it did ('template:<id>', 'deep-link',
- * 'restore', 'restore+fit', 'start-view', 'start-view+fit', 'fit', 'first-frame', 'none').
+ * 'restore', 'restore+fit', 'start-view', 'start-view+fit', 'fit', 'first-frame', 'none', or 'kept' when the
+ * camera moved while the board was filling in).
  */
 export async function applyStartView(ctx: CanvasFeatureContext, opts: StartViewOptions): Promise<string> {
   const { canvas } = ctx
   // the stored camera is read before anything can move the camera (and so be persisted)
   const storedAtOpen = readStoredView(canvas, opts.boardId, opts.userId)
+  const cameraAtOpen = canvas.viewport.get()
   await whenSettled(canvas)
+  // Wave-3 integration: the first view is decided up to 2.5 s after the canvas mounts (D6). When the
+  // camera moved in that time (the person scrolled or zoomed, a feature or a spec set a view), that view
+  // is kept: the tldraw board decided its first view before anyone could move the camera. A resize keeps
+  // the camera's top-left and zoom, so it does not count.
+  const cameraNow = canvas.viewport.get()
+  const movedMeanwhile =
+    Math.abs(cameraNow.x - cameraAtOpen.x) > 1e-6 ||
+    Math.abs(cameraNow.y - cameraAtOpen.y) > 1e-6 ||
+    Math.abs(cameraNow.zoom - cameraAtOpen.zoom) > 1e-9
   const href = window.location.href
   const url = new URL(href)
   const templateId = url.searchParams.get(TEMPLATE_PARAM)?.trim() || null
@@ -382,6 +393,8 @@ export async function applyStartView(ctx: CanvasFeatureContext, opts: StartViewO
     fitIfViewportEmpty(viewportHasContent(canvas, shown), contentBounds(canvas) !== null)
   const screen = screenSize(canvas)
 
+  if (movedMeanwhile && (plan.kind === 'restore' || plan.kind === 'start-view' || plan.kind === 'fit'))
+    return 'kept'
   switch (plan.kind) {
     case 'template': {
       storageSet('session', templateInsertedKey(opts.boardId), '1')
