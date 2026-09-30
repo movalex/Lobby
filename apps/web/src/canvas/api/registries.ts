@@ -267,7 +267,11 @@ export interface FeatureRegistries extends CanvasRegistries {
     provide(slot: HostSlotName, entry: HostSlotEntry): () => void
     get(slot: HostSlotName): HostSlotEntry | null
   }
-  /** whether a remote cursor is drawn (present mode and "hide cursors" say no); default: shown */
+  /**
+   * whether a remote cursor is drawn (present mode and "hide cursors" say no); default: shown. Several
+   * features may provide at once (3e present mode, 3f "Hide everyone's cursors"): a cursor is drawn only
+   * when every provider says yes, and each `provide` returns its own undo (CR-3F-5 / CR 3E-3, W3-4).
+   */
   readonly cursorVisible: Provider<(sid: string) => boolean>
   /** whether a Lobby menu or popover is open (tldraw's `menus.hasAnyOpenMenus`); 3a provides */
   readonly menusOpen: Provider<() => boolean>
@@ -313,6 +317,29 @@ function createProvider<F extends (...args: never[]) => unknown>(
   }
 }
 
+/**
+ * A filter every provider contributes to: `call` is true only when all of them say yes (true with none).
+ * `provide` adds a provider and returns its own removal (CR-3F-5 / CR 3E-3).
+ */
+function createAllProvider<A extends unknown[]>(changed: () => void): Provider<(...args: A) => boolean> {
+  const providers: ((...args: A) => boolean)[] = []
+  return {
+    provide(fn) {
+      providers.push(fn)
+      changed()
+      let on = true
+      return () => {
+        if (!on) return
+        on = false
+        const i = providers.indexOf(fn)
+        if (i >= 0) providers.splice(i, 1)
+        changed()
+      }
+    },
+    call: (...args: A) => providers.every((p) => p(...args)),
+  }
+}
+
 /** A fresh set of feature registries for one board page (the C0 registries included). */
 export function createFeatureRegistries(): FeatureRegistries {
   const core = createRegistries()
@@ -355,7 +382,7 @@ export function createFeatureRegistries(): FeatureRegistries {
       },
       get: (slot) => slots.get(slot) ?? null,
     },
-    cursorVisible: createProvider<(sid: string) => boolean>(() => true, changed),
+    cursorVisible: createAllProvider<[sid: string]>(changed),
     menusOpen: createProvider<() => boolean>(() => false, changed),
     sorted: (registry) =>
       [...registry.list()].sort((a, b) => a.order - b.order || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)),

@@ -127,9 +127,10 @@ export interface BoardHandles {
 /**
  * How each member is provided today: the C0 port; composed here from port members; the board page's
  * (real when createLobbyCanvas gets the board handles, a stub naming 2C on a bare port); a wave-3
- * owner's landed part (./parts/*.ts, real everywhere); or a stub for its owner.
+ * owner's landed part (./parts/*.ts, real everywhere); a landed part that needs the board page's engine
+ * (real on the board page, a stub naming its owner on a bare port); or a stub for its owner.
  */
-export type MemberStatus = 'core' | 'composed' | 'board' | 'part' | 'stub'
+export type MemberStatus = 'core' | 'composed' | 'board' | 'part' | 'board-part' | 'stub'
 
 /**
  * Members a wave-3 owner has landed in its part (./parts/*.ts): real on a bare port and on the board page
@@ -155,6 +156,19 @@ const LANDED_PARTS: ReadonlySet<string> = new Set([
   'viewport.ensureVisible',
   'viewport.zoomStep',
   'viewport.limits',
+])
+
+/**
+ * Members a wave-3 owner has landed in a part that needs the board page's engine (status `board-part`): real
+ * when the engine is attached before the canvas is created (the board page), a stub naming the owner on a
+ * bare port (CR 3E-2, accepted at the wave-3 integration, W3-1).
+ */
+const LANDED_BOARD_PARTS: ReadonlySet<string> = new Set([
+  // 3e: parts/export.ts (the engine's exporters)
+  'export.svg',
+  'export.png',
+  'export.canvas',
+  'export.copy',
 ])
 
 /** 2C's members composed from port members alone (the rest of 2C's are the board page's). */
@@ -298,7 +312,9 @@ export const LOBBY_CANVAS_MEMBERS: readonly MemberInfo[] = [
         owner !== '2C'
           ? LANDED_PARTS.has(path)
             ? 'part'
-            : 'stub'
+            : LANDED_BOARD_PARTS.has(path)
+              ? 'board-part'
+              : 'stub'
           : COMPOSED_BY_2C.has(path)
             ? 'composed'
             : 'board',

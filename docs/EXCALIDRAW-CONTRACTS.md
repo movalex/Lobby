@@ -67,7 +67,7 @@ After this commit the files below change only through a **change request to the 
 
 ### 2.2 Who implements what
 
-The board page (2C) builds the canvas with `createLobbyCanvas({port, registries, board})` (`canvas/api/impl.ts`; `board` is the page's engine handles, `canvas/board/handles.ts`). The C0 members delegate to the port, the reads are reactive (a signal source per concern), and 22 members are composed from port members alone (wave 1's seven, 2C's `text.of`, `visibleBounds`, `sceneToOverlay`, `overlayToScene` and the six structural `tx` writes of `canvas/board/tx.ts`, and 3b's five camera members of `canvas/api/parts/navigation.ts`, CR 3b-1). 2C's other members are the board page's (status `board`): real when the page passes its `board` handles, a stub naming 2C on a bare port (as in the unit tests). Every member of a wave-3 owner is a stub naming its owner until the owner lands its part (W1-2); a landed part composed from the canvas's own members is listed in `COMPOSED_BY_PARTS` and is `composed` (CR 3b-1). The table is generated from `LOBBY_CANVAS_MEMBERS`; the contracts test fails when the object, the table and the `@owner` annotations in `lobby-canvas.ts` disagree.
+The board page (2C) builds the canvas with `createLobbyCanvas({port, registries, board})` (`canvas/api/impl.ts`; `board` is the page's engine handles, `canvas/board/handles.ts`). The C0 members delegate to the port, the reads are reactive (a signal source per concern), and 17 members are composed from port members alone (wave 1's seven plus 2C's `text.of`, `visibleBounds`, `sceneToOverlay`, `overlayToScene` and the six structural `tx` writes of `canvas/board/tx.ts`). 2C's other members are the board page's (status `board`): real when the page passes its `board` handles, a stub naming 2C on a bare port (as in the unit tests). Every member of a wave-3 owner was a stub naming its owner until the owner landed its part (W1-2). Since the wave-3 integration (W3-1) a landed part is listed in `LANDED_PARTS` (status `part`: real on any canvas, 3a's styles, 3b's camera members, 3c's follow, 3g's files) or, when it needs the board page's engine, in `LANDED_BOARD_PARTS` (status `board-part`: real on the board page, a stub naming its owner on a bare port, 3e's exports). The table is generated from `LOBBY_CANVAS_MEMBERS`; the contracts test fails when the object, the table and the `@owner` annotations in `lobby-canvas.ts` disagree.
 
 #### The member table (generated from `LOBBY_CANVAS_MEMBERS`)
 
@@ -107,13 +107,13 @@ The board page (2C) builds the canvas with `createLobbyCanvas({port, registries,
 | `doc.set` | 2C | composed (real) |
 | `tx.createMany` | 2C | composed (real) |
 | `transact.joinPrevious` | 2C | board page (real with the board handles) |
-| `viewport.zoomTo` | 3b | composed (real) |
-| `viewport.centerOn` | 3b | composed (real) |
-| `viewport.ensureVisible` | 3b | composed (real) |
-| `viewport.zoomStep` | 3b | composed (real) |
+| `viewport.zoomTo` | 3b | part (real) |
+| `viewport.centerOn` | 3b | part (real) |
+| `viewport.ensureVisible` | 3b | part (real) |
+| `viewport.zoomStep` | 3b | part (real) |
 | `viewport.stop` | 2C | board page (real with the board handles) |
 | `viewport.moving` | 2C | board page (real with the board handles) |
-| `viewport.limits` | 3b | composed (real) |
+| `viewport.limits` | 3b | part (real) |
 | `viewport.screenRect` | 2C | board page (real with the board handles) |
 | `viewport.remeasure` | 2C | board page (real with the board handles) |
 | `readOnly` | 2C | board page (real with the board handles) |
@@ -143,17 +143,17 @@ The board page (2C) builds the canvas with `createLobbyCanvas({port, registries,
 | `styles.apply` | 3a | part (real) |
 | `presence.peers` | 2C | board page (real with the board handles) |
 | `presence.peer` | 2C | board page (real with the board handles) |
-| `follow.current` | 3c | stub |
-| `follow.start` | 3c | stub |
-| `follow.stop` | 3c | stub |
+| `follow.current` | 3c | part (real) |
+| `follow.start` | 3c | part (real) |
+| `follow.stop` | 3c | part (real) |
 | `history.undo` | 2C | board page (real with the board handles) |
 | `history.redo` | 2C | board page (real with the board handles) |
 | `history.canUndo` | 2C | board page (real with the board handles) |
 | `history.canRedo` | 2C | board page (real with the board handles) |
-| `export.svg` | 3e | stub |
-| `export.png` | 3e | stub |
-| `export.canvas` | 3e | stub |
-| `export.copy` | 3e | stub |
+| `export.svg` | 3e | part (real with the board engine; a stub on a bare port) |
+| `export.png` | 3e | part (real with the board engine; a stub on a bare port) |
+| `export.canvas` | 3e | part (real with the board engine; a stub on a bare port) |
+| `export.copy` | 3e | part (real with the board engine; a stub on a bare port) |
 | `files.urlOf` | 3g | part (real) |
 | `files.status` | 2C | board page (real with the board handles) |
 | `files.insert` | 3g | part (real) |
@@ -171,9 +171,9 @@ The board page (2C) builds the canvas with `createLobbyCanvas({port, registries,
 | `on:editingChanged` | 2C | board page (real with the board handles) |
 | `on:resize` | 2C | board page (real with the board handles) |
 | `on:docChanged` | 2C | board page (real with the board handles) |
-| `on:followChanged` | 3c | stub |
+| `on:followChanged` | 3c | part (real) |
 
-99 members: 26 C0 port, 17 composed, 39 board page, 2 landed parts, 15 stubs (3b 5, 3c 4, 3e 4, 3g 2).
+99 members: 26 C0 port, 17 composed, 39 board page, 13 landed parts, 4 landed board-engine parts, 0 stubs.
 
 ### 2.3 Parts: no owner edits another owner's file
 
@@ -197,7 +197,7 @@ The members owned by wave-3 owners are built in their own module under `canvas/a
 | `hostSlots` | one component per `HostSlotName` | `components.Toolbar`, `StylePanel`, `ContextMenu`, `MainMenu`, `KeyboardShortcutsDialog`, `NavigationPanel` | 2C's board page | the slot's owner (below) |
 | `contentHandlers` | `ContentHandlerSpec` (kinds, priority, `handle`) | `registerExternalContentHandler`, `putExternalContent` | 2C's paste/drop listeners, `files.insert` | 3b (paste as notes), 3g (files) |
 | `customData` (C0) | `CustomDataHandlerSpec` (`onDuplicate`) | `onDuplicate` of meta keys | 2C's `onDuplicate` | 3d (mind-map relink), 3e (`present.index`) |
-| `cursorVisible` | provider `(sid) => boolean` | `components.CollaboratorCursor` (present-aware cursor), "hide cursors" | 2C's cursor layer | 3e (present), 3f (hide cursors) |
+| `cursorVisible` | provider `(sid) => boolean`, combined: a cursor shows only when every provider says yes (W3-4) | `components.CollaboratorCursor` (present-aware cursor), "hide cursors" | 2C's cursor layer | 3e (present), 3f (hide cursors) |
 | `menusOpen` | provider `() => boolean` | `editor.menus.hasAnyOpenMenus()` | anyone | 3a |
 | `hitGuard`, `hidden`, `dragger`, `slots`, `overlays` (C0) | as C0 | — | as C0 | as C0 (`hidden` through `canvas.hide`) |
 
@@ -415,7 +415,7 @@ The tables below are generated by `docs/research/excalidraw/wave1/gen-contract-t
 | 2C | 23 (8) | `board/BoardPage.tsx`, `board/EditingBadges.tsx`, `board/TopBar.tsx`, `board/note-label-cache.test.ts`, `board/note-label-cache.ts`, `board/pan-layer.test.ts`, `board/pan-layer.ts`, `board/presence.test.ts`, `board/presence.ts`, `board/touch-guard.ts`, `features/FeatureHost.tsx`, `features/types.ts`, `sync-quality/perPropUndo.test.ts`, `sync-quality/perPropUndo.ts`, `sync-quality/rebaseGuard.test.ts`, `sync-quality/rebaseGuard.ts`, `sync-quality/saveTracker.test.ts`, `sync-quality/saveTracker.ts`, `sync-quality/undoSteps.test.ts`, `sync-quality/uploads.test.ts`, `sync-quality/uploads.ts`, `sync-quality/useSaveStatus.ts`, `theme/tldraw-sync.ts` |
 | 3a | 21 (4) | `features/canvas-ux/ContextMenu.tsx`, `features/canvas-ux/MainMenu.tsx`, `features/canvas-ux/Overlay.tsx`, `features/canvas-ux/ShortcutsDialog.tsx`, `features/canvas-ux/StylePanel.tsx`, `features/canvas-ux/Toolbar.tsx`, `features/canvas-ux/bridge.ts`, `features/canvas-ux/dblclick-note.ts`, `features/canvas-ux/export-gate.tsx`, `features/canvas-ux/index.tsx`, `features/canvas-ux/keyboard-scope.test.ts`, `features/canvas-ux/keyboard-scope.ts`, `features/canvas-ux/keyboard.ts`, `features/canvas-ux/keys.ts`, `features/canvas-ux/locked-hint-runtime.ts`, `features/canvas-ux/overrides.tsx`, `features/canvas-ux/palette.test.ts`, `features/canvas-ux/palette.ts`, `features/canvas-ux/ui-defaults.test.ts`, `features/keyboard-map.test.ts`, `ui/place-at-center.ts` |
 | 3b | 15 (3) | `dashboard/search/content-search.test.ts`, `features/canvas-ux/FramesPanel.tsx`, `features/canvas-ux/NavigationPanel.tsx`, `features/canvas-ux/SearchPanel.tsx`, `features/canvas-ux/TemplatesPanel.tsx`, `features/canvas-ux/arrange-grid-runtime.ts`, `features/canvas-ux/board-start-view.ts`, `features/canvas-ux/bulk-paste-handler.ts`, `features/canvas-ux/bulk-paste.ts`, `features/canvas-ux/copy-link.ts`, `features/canvas-ux/frame-order.test.ts`, `features/canvas-ux/search-filter.test.ts`, `features/canvas-ux/select-by-type-runtime.ts`, `features/canvas-ux/start-view-runtime.ts`, `features/canvas-ux/template-insert.ts` |
-| 3c | 22 (4) | `features/comments/CommentsOverlay.tsx`, `features/comments/CommentsPanel.tsx`, `features/comments/CommentsTopBar.tsx`, `features/comments/Composer.tsx`, `features/comments/ContextMenuItem.tsx`, `features/comments/ThreadView.tsx`, `features/comments/controller.test.ts`, `features/comments/controller.ts`, `features/comments/geometry.ts`, `features/comments/index.tsx`, `features/comments/model.test.ts`, `features/comments/store.ts`, `features/comments/tool.ts`, `features/people/PeopleBar.tsx`, `features/people/frames.test.ts`, `features/people/frames.ts`, `features/people/index.tsx`, `features/people/roster.ts`, `features/present-export/live/LiveUi.tsx`, `features/present-export/live/controller.test.ts`, `features/present-export/live/controller.ts`, `features/present-export/live/store.ts` |
+| 3c | 19 (4) | `features/comments/CommentsOverlay.tsx`, `features/comments/CommentsPanel.tsx`, `features/comments/CommentsTopBar.tsx`, `features/comments/ContextMenuItem.tsx`, `features/comments/controller.test.ts`, `features/comments/controller.ts`, `features/comments/geometry.ts`, `features/comments/index.tsx`, `features/comments/model.test.ts`, `features/comments/tldraw-cells.ts`, `features/comments/tool.ts`, `features/people/PeopleBar.tsx`, `features/people/frames.test.ts`, `features/people/frames.ts`, `features/people/index.tsx`, `features/people/roster.ts`, `features/present-export/live/LiveUi.tsx`, `features/present-export/live/controller.test.ts`, `features/present-export/live/controller.ts` |
 | 3d | 26 (4) | `features/mindmap/ContextMenuGroup.tsx`, `features/mindmap/Overlay.tsx`, `features/mindmap/bridge.ts`, `features/mindmap/commands.ts`, `features/mindmap/keyboard.ts`, `features/mindmap/keys.ts`, `features/mindmap/overrides.tsx`, `features/mindmap/runtime.ts`, `features/mindmap/style.ts`, `features/mindmap/tree-index.test.ts`, `features/mindmap/tree-index.ts`, `features/mindmap/visibility.test.ts`, `features/mindmap/visibility.ts`, `features/tags/ContextMenu.tsx`, `features/tags/Overlay.tsx`, `features/tags/SearchTagFilter.tsx`, `features/tags/ShapeWrapper.tsx`, `features/tags/TagPicker.tsx`, `features/tags/TagsPanel.tsx`, `features/tags/csv.test.ts`, `features/tags/csv.ts`, `features/tags/hooks.ts`, `features/tags/index.tsx`, `features/tags/runtime.ts`, `features/tags/search.test.ts`, `features/tags/search.ts` |
 | 3e | 21 (5) | `features/present-export/ExportDialog.tsx`, `features/present-export/PresentOverlay.tsx`, `features/present-export/controller.ts`, `features/present-export/csv-export.test.ts`, `features/present-export/csv-export.ts`, `features/present-export/export-render.ts`, `features/present-export/index.tsx`, `features/present-export/present-session.ts`, `features/present-export/slides.test.ts`, `features/present-export/slides.ts`, `features/present-export/text-layer.test.ts`, `features/present-export/text-layer.ts`, `features/sharing/ExportPolicySection.tsx`, `features/sharing/export-policy.test.ts`, `features/sharing/export-policy.ts`, `features/sharing/index.tsx`, `features/thumbnails/capture.ts`, `features/thumbnails/changes.test.ts`, `features/thumbnails/changes.ts`, `features/thumbnails/render.ts`, `features/thumbnails/schematic.ts` |
 | 3f | 15 (1) | `features/workshops/PlusOnes.tsx`, `features/workshops/Reactions.tsx`, `features/workshops/VoteSetupDialog.tsx`, `features/workshops/VotingPanel.tsx`, `features/workshops/WorkshopBar.tsx`, `features/workshops/WorkshopOverlay.tsx`, `features/workshops/follow.ts`, `features/workshops/hooks.ts`, `features/workshops/index.tsx`, `features/workshops/plus-ones.test.ts`, `features/workshops/plus-ones.ts`, `features/workshops/private-notes/PrivateNotesPanel.tsx`, `features/workshops/private-notes/SetupDialog.tsx`, `features/workshops/private-notes/canvas.ts`, `features/workshops/session-settings.ts` |
@@ -424,7 +424,7 @@ The tables below are generated by `docs/research/excalidraw/wave1/gen-contract-t
 | 3i | 1 (0) | `ui/SkipLink.tsx` |
 | W4 | 2 (1) | `negative-types.ts`, `schema.test.ts` |
 
-167 files (32 tests); 0 without an owner.
+164 files (32 tests); 0 without an owner.
 
 ### 7.2 Where each owner's ported code goes
 

@@ -207,8 +207,10 @@ describe('the LobbyCanvas member table', () => {
       expect(m, `member ${path} is not in LOBBY_CANVAS_MEMBERS`).toBeDefined()
       if (!m) continue
       const s = stubOwner(fn)
-      // on a bare port (no board handles) the board page's members are stubs naming 2C
-      if (m.status === 'stub' || m.status === 'board') expect(s?.owner, path).toBe(m.owner)
+      // on a bare port (no board handles, no engine) the board page's members are stubs naming 2C, and a
+      // landed part that needs the engine (board-part) a stub naming its owner
+      if (m.status === 'stub' || m.status === 'board' || m.status === 'board-part')
+        expect(s?.owner, path).toBe(m.owner)
       else expect(s, `${path} should not be a stub`).toBeNull()
     }
     for (const m of LOBBY_CANVAS_MEMBERS) {
@@ -472,6 +474,26 @@ describe('feature registries and installation', () => {
     } finally {
       console.error = orig
     }
+  })
+
+  it('the cursor filter combines its providers: a cursor shows only when every provider says yes (W3-4)', () => {
+    const r = createFeatureRegistries()
+    expect(r.cursorVisible.call('s1')).toBe(true)
+    let presenting = false
+    const offPresent = r.cursorVisible.provide(() => !presenting)
+    const offHide = r.cursorVisible.provide((sid) => sid !== 's2')
+    expect(r.cursorVisible.call('s1')).toBe(true)
+    expect(r.cursorVisible.call('s2')).toBe(false)
+    presenting = true
+    expect(r.cursorVisible.call('s1')).toBe(false)
+    // removing one provider keeps the other; a second removal is a no-op
+    offHide()
+    offHide()
+    expect(r.cursorVisible.call('s2')).toBe(false)
+    presenting = false
+    expect(r.cursorVisible.call('s2')).toBe(true)
+    offPresent()
+    expect(r.cursorVisible.call('s2')).toBe(true)
   })
 
   it('installs static declarations in feature order, wires kbd commands into the C0 key registry, and undoes it all', () => {

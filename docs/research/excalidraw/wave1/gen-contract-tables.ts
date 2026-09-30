@@ -74,19 +74,21 @@ for (const m of LOBBY_CANVAS_MEMBERS) {
           ? 'board page (real with the board handles)'
           : m.status === 'part'
             ? 'part (real)'
-            : 'stub'
+            : m.status === 'board-part'
+              ? 'part (real with the board engine; a stub on a bare port)'
+              : 'stub'
   out.push(`| \`${m.path}\` | ${m.owner} | ${today} |`)
 }
 const count = (s: string) => LOBBY_CANVAS_MEMBERS.filter((m) => m.status === s).length
 out.push(
-  `\n${LOBBY_CANVAS_MEMBERS.length} members: ${count('core')} C0 port, ${count('composed')} composed, ${count('board')} board page, ${count('part')} landed parts, ${count('stub')} stubs (${Object.entries(
+  `\n${LOBBY_CANVAS_MEMBERS.length} members: ${count('core')} C0 port, ${count('composed')} composed, ${count('board')} board page, ${count('part')} landed parts, ${count('board-part')} landed board-engine parts, ${count('stub')} stubs${count('stub') ? ' (' : ''}${Object.entries(
     LOBBY_CANVAS_MEMBERS.filter((m) => m.status === 'stub').reduce<Record<string, number>>((a, m) => {
       a[m.owner] = (a[m.owner] ?? 0) + 1
       return a
     }, {}),
   )
     .map(([o, n]) => `${o} ${n}`)
-    .join(', ')}).\n`,
+    .join(', ')}${count('stub') ? ')' : ''}.\n`,
 )
 
 out.push('### 6.1 `editor.*` members → replacement (generated)\n')
