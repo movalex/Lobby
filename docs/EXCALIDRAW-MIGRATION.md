@@ -26,7 +26,7 @@ R0 is built and verified on `r0/bridge` (30a08f7) but not yet deployed. The Exca
 1. **Reason name:** `engine_migration` (snake_case, like the existing reasons). Migration 0022's CHECK refuses `engine-migration`.
 2. **Migration 0022 adds two markers,** and the Excalidraw build must write them:
    - `board_snapshots.body_version`: 1 for tldraw bodies, **2** for Lobby-element bodies;
-   - `boards.new_canvas`: **true** for every board created or converted on the new canvas.
+   - `boards.new_canvas`: **true** only for boards **born** on the new canvas (created after cut-over). Converted boards stay **false**: R0 refuses the ticket of any `new_canvas` board, so a converted board marked true would not open during a rollback.
 
    R0 recognises v2 checkpoints and boards born on the new canvas by these columns, and by the body format as a second check.
 3. **Final backup hold:** every backup that `POST /internal/backups/run-all` writes carries a signed `holdUntil` 90 days ahead. The Excalidraw build's local and offsite retention must keep any entry whose `holdUntil` is in the future, and count it outside the retention budget.
