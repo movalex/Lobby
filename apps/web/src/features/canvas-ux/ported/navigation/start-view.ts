@@ -345,13 +345,32 @@ export async function applyStartView(ctx: CanvasFeatureContext, opts: StartViewO
   // the stored camera is read before anything can move the camera (and so be persisted)
   const storedAtOpen = readStoredView(canvas, opts.boardId, opts.userId)
   const cameraAtOpen = canvas.viewport.get()
+  // ...or when the person started working meanwhile (a press, a wheel, a key, a local change: a board made
+  // empty and drawn on at once, or a spec that seeds and clicks): the tldraw board decided before either
+  const offs: (() => void)[] = []
+  let acted = false
+  try {
+    offs.push(
+      canvas.on('change', (c) => {
+        if (c.source === 'local') acted = true
+      }),
+      canvas.on('input', (e) => {
+        if (e.type === 'pointer-down' || e.type === 'wheel' || e.type === 'pinch' || e.type === 'key-down')
+          acted = true
+      }),
+    )
+  } catch {
+    // a canvas without the board page's events (unit tests): the camera check alone
+  }
   await whenSettled(canvas)
+  for (const off of offs) off()
   // Wave-3 integration: the first view is decided up to 2.5 s after the canvas mounts (D6). When the
   // camera moved in that time (the person scrolled or zoomed, a feature or a spec set a view), that view
   // is kept: the tldraw board decided its first view before anyone could move the camera. A resize keeps
   // the camera's top-left and zoom, so it does not count.
   const cameraNow = canvas.viewport.get()
   const movedMeanwhile =
+    acted ||
     Math.abs(cameraNow.x - cameraAtOpen.x) > 1e-6 ||
     Math.abs(cameraNow.y - cameraAtOpen.y) > 1e-6 ||
     Math.abs(cameraNow.zoom - cameraAtOpen.zoom) > 1e-9

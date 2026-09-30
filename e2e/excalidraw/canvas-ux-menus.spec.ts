@@ -87,12 +87,15 @@ test('two-browser lock: bob sees alice’s Ctrl+Shift+L within 2 s and cannot dr
     await a.page.evaluate(() => document.querySelector<HTMLElement>('.excalidraw')?.focus())
     await a.page.keyboard.press('ControlOrMeta+Shift+L')
     await expect.poll(() => locked(b.page, n), { timeout: 2_000 }).toBe(true)
-    await clickScene(b.page, { x: 1100, y: 150 }, { button: 'right' })
+    // an empty spot of bob's view, clear of the chrome: since the wave-3 integration bob's first view is
+    // 3b's (the scene point this used to pick sat under the style panel of his selection)
+    const empty = { x: 320, y: 620 }
+    await b.page.mouse.click(empty.x, empty.y, { button: 'right' })
     await expect(b.page.getByTestId('context-menu')).toBeVisible()
     await b.page.getByTestId('context-menu.unlock-all').click()
     await expect.poll(() => locked(a.page, n), { timeout: 2_000 }).toBe(false)
     await expect(b.page.getByTestId('context-menu')).toHaveCount(0)
-    await clickScene(b.page, { x: 1100, y: 150 }, { button: 'right' })
+    await b.page.mouse.click(empty.x, empty.y, { button: 'right' })
     await expect(b.page.getByTestId('context-menu')).toBeVisible()
     await expect(b.page.getByTestId('context-menu.unlock-all')).toHaveCount(0)
     await b.page.keyboard.press('Escape')

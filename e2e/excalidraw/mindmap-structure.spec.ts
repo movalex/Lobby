@@ -15,6 +15,7 @@ import {
   itemCenterOnScreen,
   sceneToScreen,
   selection,
+  selectNone,
   TEXT_EDITOR,
   test,
   waitForItem,
@@ -460,6 +461,9 @@ test('mind map: start from a sticky note in a frame (Alt+Shift+M), drag the cent
     const rev = byText(now, 'Revenue')
     const root = byText(now, 'Q4 goals')
     const target = rev.side === 'right' ? root.box.x - 400 : root.box.x + root.box.w + 400
+    // nothing selected first: 3a's style panel (on the page since the wave-3 integration) sits over the
+    // right of the view while something is selected, where this branch is
+    await selectNone(a.page)
     await dragScene(a.page, { x: rev.box.x + 20, y: rev.box.y + rev.box.h / 2 }, { x: target, y: root.box.y })
     await expect.poll(async () => byText(await mapView(a.page), 'Revenue').side).not.toBe(rev.side)
     await expectTidy(a.page)
