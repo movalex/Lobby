@@ -9,6 +9,7 @@ import {
   items,
   itemText,
   pushedOps,
+  select,
   setViewport,
   test,
   typeText,
@@ -27,6 +28,7 @@ import {
   selected,
   textItem,
   waitForA11y,
+  withCanvas,
 } from './a11y-kit.ts'
 
 test.use({ viewport: { width: 1440, height: 900 } })
@@ -207,4 +209,32 @@ test('F6 on an empty board gives the board the keyboard and says there is nothin
   await expect.poll(() => boardHasFocus(a.page)).toBe(true)
   await expect(announcer(a.page)).toHaveText('Nothing on this board yet.')
   expect(await selected(a.page)).toEqual([])
+})
+
+test('collapsed (hidden) items are skipped by Alt+Arrow and left out of the live count and the Contents list', async ({
+  canvasSession,
+}) => {
+  const a = await canvasSession('alice')
+  await waitForA11y(a.page)
+  const one = await note(a.page, 0, 0, 'One')
+  const two = await note(a.page, 300, 0, 'Two')
+  const three = await note(a.page, 600, 0, 'Three')
+  await zoomToFit(a.page)
+  // a mind-map collapse hides a branch through LobbyCanvas.hide (the render override and the guards)
+  await withCanvas(a.page, (c, id) => void c.hide('a11y-spec', [id]), two)
+  await select(a.page, [one])
+  await expect(announcer(a.page)).toHaveText('Sticky note: One. 1 of 2')
+  await focusCanvas(a.page)
+  await a.page.keyboard.press('Alt+ArrowRight')
+  await expect.poll(() => selected(a.page)).toEqual([three])
+  await expect(announcer(a.page)).toHaveText('Sticky note: Three. 2 of 2')
+  await a.page.getByTestId('dock-tab-contents').click()
+  await expect
+    .poll(() =>
+      a.page
+        .getByTestId('board-contents')
+        .getByTestId('contents-item')
+        .evaluateAll((els) => els.map((e) => e.textContent?.trim() ?? '')),
+    )
+    .toEqual(['Sticky note: One', 'Sticky note: Three'])
 })
