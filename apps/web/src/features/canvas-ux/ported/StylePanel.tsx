@@ -43,9 +43,11 @@ import {
   FONT_FAMILY,
   FONT_LABELS,
   FONTS,
+  FREEDRAW_WIDTH,
   fillNameOf,
   fontNameOf,
   LABEL_SIZE,
+  NEXT_STROKE_WIDTH,
   noteColorOf,
   noteFillOf,
   OPACITY_STEPS,
@@ -67,9 +69,12 @@ import {
 /** What the panel styles: an element kind, or the kind the picked tool makes. */
 export type StyleKind = 'note' | 'text' | 'shape' | 'arrow' | 'line' | 'draw' | 'frame' | 'image' | 'other'
 
-/** Creation tools whose next shape the panel sets (Lobby tool names). */
+/**
+ * Creation tools whose next shape the panel sets (Lobby tool names). The note tool is not one on this
+ * canvas: its notes take Lobby's note defaults, not the next style (CR-3A-7); the text tool's texts take
+ * only the next colour (CR-3A-7), so it gets only the colour.
+ */
 export const STYLED_TOOLS: Readonly<Record<string, StyleKind>> = {
-  note: 'note',
   text: 'text',
   rectangle: 'shape',
   ellipse: 'shape',
@@ -177,13 +182,15 @@ function pickColor(canvas: LobbyCanvas, t: Target, name: ColorName) {
     }
   }
   write(canvas, 'color', w)
-  if (!has(t, 'note') || t.els.length === 0) {
-    const nextFill = fillNameOf(canvas.styles.next().backgroundColor, canvas.styles.next().fillStyle)
-    const next: StyleValues =
+  // the next shapes take the colour too (a pick on notes alone is only theirs: the note palette)
+  if (t.next || t.els.some((e) => kindOf(e) !== 'note')) {
+    const n = canvas.styles.next()
+    const nextFill = fillNameOf(n.backgroundColor, n.fillStyle)
+    canvas.styles.setNext(
       nextFill && nextFill !== 'none'
         ? { strokeColor: c.solid, backgroundColor: shapeFields(name, nextFill).backgroundColor }
-        : { strokeColor: c.solid }
-    if (!has(t, 'note')) canvas.styles.setNext(next)
+        : { strokeColor: c.solid },
+    )
   }
 }
 
@@ -243,16 +250,13 @@ function pickSize(canvas: LobbyCanvas, t: Target, size: SizeName) {
     stepped = true
   }
   const w: Writes = new Map()
-  for (const el of t.els)
-    if (['shape', 'arrow', 'line', 'draw'].includes(kindOf(el)))
-      put(w, el.id, { strokeWidth: STROKE_WIDTH[size] })
-  write(canvas, 'size', w, stepped)
-  if (t.next) {
-    const k = [...t.kinds][0]
-    if (k === 'text') canvas.styles.setNext({ fontSize: TEXT_SIZE[size] })
-    else if (k === 'note') canvas.styles.setNext({ fontSize: LABEL_SIZE[size] })
-    else canvas.styles.setNext({ strokeWidth: STROKE_WIDTH[size] })
+  for (const el of t.els) {
+    const k = kindOf(el)
+    if (k === 'draw') put(w, el.id, { strokeWidth: FREEDRAW_WIDTH[size] })
+    else if (['shape', 'arrow', 'line'].includes(k)) put(w, el.id, { strokeWidth: STROKE_WIDTH[size] })
   }
+  write(canvas, 'size', w, stepped)
+  if (t.next) canvas.styles.setNext({ strokeWidth: NEXT_STROKE_WIDTH[size] })
 }
 
 /** `styles.apply` folded into the previous step (a second kind of the same pick). */
@@ -487,7 +491,8 @@ export function StylePanel({ ctx }: { ctx: CanvasFeatureContext }) {
   )
   if (!t) return null
   const allNotes = !t.next ? t.els.every((e) => kindOf(e) === 'note') : false
-  const noteOnlyTool = t.next && has(t, 'note')
+  // the text tool's next text takes only a colour (CR-3A-7)
+  const textTool = t.next && has(t, 'text')
   const strokeKinds = has(t, 'shape', 'text', 'arrow', 'line', 'draw')
   const color = (() => {
     if (t.next) return colorNameOf(styles.strokeColor)
@@ -523,21 +528,21 @@ export function StylePanel({ ctx }: { ctx: CanvasFeatureContext }) {
   const size = (() => {
     const names: (SizeName | null)[] = []
     if (t.next) {
-      const k = [...t.kinds][0]
-      if (k === 'text') names.push(sizeNameOf(styles.fontSize, TEXT_SIZE))
-      else if (k === 'note') names.push(sizeNameOf(styles.fontSize, LABEL_SIZE))
-      else names.push(sizeNameOf((styles as { strokeWidth?: number }).strokeWidth, STROKE_WIDTH))
+      if (textTool) return undefined
+      names.push(sizeNameOf((styles as { strokeWidth?: number }).strokeWidth, NEXT_STROKE_WIDTH))
     } else
       for (const el of t.els) {
         const k = kindOf(el)
         if (k === 'text') names.push(sizeNameOf(canvas.styles.of([el.id]).fontSize, TEXT_SIZE))
         else if (k === 'note') names.push(sizeNameOf(canvas.styles.of([el.id]).fontSize, LABEL_SIZE))
-        else if (['shape', 'arrow', 'line', 'draw'].includes(k))
+        else if (k === 'draw')
+          names.push(sizeNameOf((el as { strokeWidth?: number }).strokeWidth, FREEDRAW_WIDTH))
+        else if (['shape', 'arrow', 'line'].includes(k))
           names.push(sizeNameOf((el as { strokeWidth?: number }).strokeWidth, STROKE_WIDTH))
       }
     return sharedOf(names)
   })()
-  const textual = has(t, 'text', 'note', 'shape', 'arrow')
+  const textual = !textTool && has(t, 'text', 'note', 'shape', 'arrow')
   const font = textual ? (styles.fontFamily === 'mixed' ? 'mixed' : fontNameOf(styles.fontFamily)) : undefined
   const align = textual ? (styles.textAlign as AlignName | 'mixed' | undefined) : undefined
   const valign =
@@ -576,10 +581,10 @@ export function StylePanel({ ctx }: { ctx: CanvasFeatureContext }) {
       <div className="cux-style__section">
         {allNotes ? (
           <NoteColorPicker canvas={canvas} t={t} />
-        ) : noteOnlyTool ? null : strokeKinds || has(t, 'note') ? (
+        ) : strokeKinds || has(t, 'note') ? (
           <ColorPicker canvas={canvas} t={t} value={color} />
         ) : null}
-        {!noteOnlyTool && <OpacityPicker canvas={canvas} t={t} value={opacity} alone={onlyOpacity} />}
+        {!textTool && <OpacityPicker canvas={canvas} t={t} value={opacity} alone={onlyOpacity} />}
       </div>
       {(fill !== undefined || dash !== undefined || size !== undefined) && (
         <div className="cux-style__section">

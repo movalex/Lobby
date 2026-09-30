@@ -163,8 +163,19 @@ export const SIZE_LABELS: Readonly<Record<SizeName, string>> = {
   l: 'Large',
   xl: 'Extra large',
 }
-/** Stroke width per size (tldraw's STROKE_SIZES, as the converter writes them). */
-export const STROKE_WIDTH: Readonly<Record<SizeName, number>> = { s: 2, m: 3.5, l: 5, xl: 10 }
+/**
+ * Stroke width per size: the engine's own widths (thin 1, medium 2, bold 4, extra bold 8; @excalidraw/common
+ * STROKE_WIDTH), so a shape drawn with the engine's tools and one resized here read the same. tldraw's widths
+ * (2, 3.5, 5, 10) are what converted boards carry: they keep them, and show no size until one is picked.
+ */
+export const STROKE_WIDTH: Readonly<Record<SizeName, number>> = { s: 1, m: 2, l: 4, xl: 8 }
+/** A pen stroke's width per size (the engine's FREEDRAW_STROKE_WIDTH). */
+export const FREEDRAW_WIDTH: Readonly<Record<SizeName, number>> = { s: 0.5, m: 1, l: 2, xl: 4 }
+/**
+ * The next shape's width key per size, as a width the canvas's next style takes (thin, medium, bold: the
+ * engine has no extra bold key for new shapes).
+ */
+export const NEXT_STROKE_WIDTH: Readonly<Record<SizeName, number>> = { s: 1, m: 2, l: 4, xl: 4 }
 /** Free text font size per size (tldraw's FONT_SIZES). */
 export const TEXT_SIZE: Readonly<Record<SizeName, number>> = { s: 18, m: 24, l: 36, xl: 44 }
 /** Note and label font size per size (tldraw's LABEL_FONT_SIZES). */
