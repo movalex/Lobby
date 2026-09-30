@@ -249,6 +249,10 @@ export class BoardInput {
     const ev: CanvasInputEvent = {
       type: e.ctrlKey ? 'pinch' : 'wheel',
       screen: { x: e.clientX, y: e.clientY },
+      // CR 3b-2: what the engine would zoom or pan by
+      deltaX: e.deltaX,
+      deltaY: e.deltaY,
+      deltaMode: e.deltaMode,
       handled() {
         handled = true
       },
