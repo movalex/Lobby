@@ -264,3 +264,14 @@ Not in this part (still open): the per-item "Offline — N changes" count (2C), 
 after typing into an empty note, redo of Ctrl+G in a long sequence), B11's one unexplained divergence, the
 `CanvasPort.bounds` cost. A pointer edit still reaches the page's indicator at Excalidraw's `onChange` (one
 React commit later); the core's `saveStatus` getter already reports it pending.
+
+## The verifiers' fix round (part 3)
+
+V1's engine findings on `37bdfa9` are fixed on `spike/b-engine` (`c28c311`, `2ac9a37`, `96f0676`), with
+`sync/core/verifier-fixes.test.ts`, `history/verifier-fixes.test.ts` and V1's probes adopted as
+`apps/sync/test/verifier-v1/` (real room): a lost push's groups go again only when the server copy shows
+they did not land; replays carry their own base and `off`; an overtaken dirty group leaves the scene at the
+server copy; undo keeps a change for its retry; the fold keeps the path unit; doc writes are in the offline
+queue; an unbound arrow's change is never derived; `holdSaved` and the queue load keep Saved honest; lease
+requests a failed batch never answered are re-sent; a local create absorbed before its boundary is still
+recorded as created (wave 2E's undo defect). Per-defect results: `M3-fixes.md`.
