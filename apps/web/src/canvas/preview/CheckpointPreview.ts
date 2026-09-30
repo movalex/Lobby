@@ -35,6 +35,8 @@ export interface PreviewOptions {
   /** Runtime files for the checkpoint's images (blob: URLs from Lobby's loader). */
   files: BinaryFiles
   background?: string
+  /** The view's own fill around the bitmaps (default: `background`; the dark theme's page colour). */
+  fill?: string
   dark?: boolean
   /** Pixel budget per bitmap (default 16.7 M: 4096 × 4096). */
   maxPixels?: number
@@ -291,7 +293,7 @@ export class CheckpointPreview {
     if (!ctx) return
     this.stats.draws++
     ctx.setTransform(1, 0, 0, 1, 0, 0)
-    ctx.fillStyle = this.opts.background ?? '#ffffff'
+    ctx.fillStyle = this.opts.fill ?? this.opts.background ?? '#ffffff'
     ctx.fillRect(0, 0, pw, ph)
     ctx.imageSmoothingEnabled = true
     ctx.imageSmoothingQuality = 'high'
