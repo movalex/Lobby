@@ -557,8 +557,10 @@ async function startBrainstorm3(page: Page, target: 'new' | 'selected') {
 test('private notes: a new "Private ideas" frame lands in free space, is shown, and Cancel removes it (DANA2-02, R2-01)', async ({
   join,
 }, testInfo) => {
-  const alice = await join('alice', 'owner')
-  const page = alice.page
+  // Two starts: by a host of its own, as the tests after it (the api allows a person 10 starts a minute,
+  // private-notes.ts `startsPerMinute`, and alice's in the tests before it use them up once reveals pass)
+  const host = await join('dana', 'editor')
+  const page = host.page
   await busyFrameInView(page)
   await expect.poll(async () => (await frames(page)).length).toBe(1)
 
