@@ -174,6 +174,17 @@ function snapOnce(a: Mut, map: WorkMap): void {
 
 const unitKey = (el: Mut): string => JSON.stringify(pathUnitOf(el))
 
+/** An elbow arrow whose points are not an orthogonal route (a diagonal segment): never routed yet. */
+export function isUnroutedElbow(a: { elbowed?: boolean; points?: readonly Pt[] }): boolean {
+  if (!a.elbowed || !a.points || a.points.length < 2) return false
+  for (let i = 1; i < a.points.length; i++) {
+    const p = a.points[i - 1] as Pt
+    const q = a.points[i] as Pt
+    if (Math.abs(p[0] - q[0]) > 1e-6 && Math.abs(p[1] - q[1]) > 1e-6) return true
+  }
+  return false
+}
+
 function resnap(arrow: ArrowElementLike, elements: ElementsById): ResnapResult {
   const { a, map } = workMapFor(arrow, elements)
   const before = unitKey(arrow as Mut)
@@ -184,6 +195,15 @@ function resnap(arrow: ArrowElementLike, elements: ElementsById): ResnapResult {
     const next = unitKey(a)
     if (next === prev) break
     prev = next
+  }
+  // an elbow arrow still unrouted (its create carried the two points it was drawn with, and no bound end
+  // moved, so no follow ran the router): routed as Excalidraw normalizes one (`mutateElement` with no
+  // updates runs `updateElbowArrowPoints`, E 5538-5557), so the stored copy is always a route (V1, B3
+  // L10 6: stored at its two create points while the client held its local route as derived)
+  if (isUnroutedElbow(a)) {
+    api.mutateElement(a, map, {})
+    for (const f of ENGINE_ARTIFACT_FIELDS) delete a[f]
+    Object.assign(a, roundGeometry(a))
   }
   const path = pathUnitOf(a) as unknown as ArrowPathUnit
   return { path, changed: unitKey(a) !== before }

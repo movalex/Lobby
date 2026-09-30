@@ -324,6 +324,49 @@ describe('the roll-forward, other cases', () => {
     expect(added?.x).toBeGreaterThan(right)
   })
 
+  it('a shape R0 adds where R0 deleted one never takes the tombstone key: keys stay unique over live elements and tombstones', () => {
+    // B8 phase 3 (the drill through the browser, kitchen sink): R0 deleted `rect` and added a shape whose
+    // paint-order neighbour sat right below it; the merge placed the new shape between the live keys
+    // around it and got `rect`'s key. A client holds the tombstones in its scene array, so Excalidraw
+    // re-keyed the tombstone on open and pushed it back.
+    const rooms = join(suiteDir, 'tombkey', 'rooms')
+    const boardId = 'b-tombkey01'
+    const path = seedBoardRecords(rooms, boardId, fixtureRecords('kitchen-sink'))
+    expect(
+      convertBoardFile(
+        { kind: 'convert', boardId, path, reportDir: join(rooms, '..', 'migration'), backupKey: null, at: 1 },
+        metrics,
+      ).ok,
+    ).toBe(true)
+    const rectKey = lbRows(path).get('rect')?.idx
+    expect(rectKey).toBeTruthy()
+    r0Edit(rooms, boardId, (txn) => {
+      const text = txn.get('shape:autotext') as TLRecord & Record<string, unknown>
+      txn.delete('shape:rect')
+      txn.set('shape:added', {
+        ...text,
+        id: 'shape:added',
+        parentId: 'page:page',
+        x: 5_000,
+        y: 5_000,
+        index: 'a1V',
+        meta: {},
+      } as unknown as TLRecord)
+    })
+    const rep = rollForwardBoardFile(
+      { kind: 'rollforward', boardId, path, reportDir: join(rooms, '..', 'migration'), at: 2 },
+      metrics,
+    )
+    expect(rep.ok).toBe(true)
+    const rows = [...lbRows(path).values()]
+    expect(rows.find((r) => r.id === 'rect')?.deleted).toBe(1)
+    expect(rows.find((r) => r.id === 'added')?.deleted).toBe(0)
+    expect(rows.find((r) => r.id === 'added')?.idx).not.toBe(rectKey)
+    // every key unique, tombstones included
+    const keys = rows.map((r) => r.idx)
+    expect(new Set(keys).size).toBe(keys.length)
+  })
+
   it('refuses a board whose lb_source no longer matches its recorded digest (the board stays closed)', () => {
     const rooms = join(suiteDir, 'tampered', 'rooms')
     const boardId = 'b-tampered1'

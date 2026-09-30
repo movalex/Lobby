@@ -107,6 +107,11 @@ describe('element schemas (§3.1, §3.5)', () => {
       'data:text/html,hi',
       'https://bucket.r2.cloudflarestorage.com/k?X-Amz-Signature=abc',
       'https://cdn.test/f?Signature=abc&Expires=1',
+      // percent-encoded parameter names (V2, part-3 round)
+      'https://x.example/k?X%2DAmz%2DSignature=abc',
+      'https://x.example/k?%53ignature=abc',
+      'https://x.example/k?X%252DAmz%252DCredential=abc',
+      '/b/board-1?X%2DAmz%2DSignature=abc',
       '//evil.test/a',
       'ftp://x.test',
       `https://x.test/${'a'.repeat(2100)}`,

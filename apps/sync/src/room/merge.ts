@@ -74,6 +74,7 @@ export interface MergeEnv {
   readonly voteOpen: boolean | null
   readonly fileCache: FileRefsCache
   readonly ledger: WriterLedger
+  /** items created by each guest (by uid, not session: a new tab id is no new budget, V2), live at open or since */
   readonly guestCreated: Map<string, number>
   readonly now: number
   readonly epoch: string
@@ -307,7 +308,7 @@ export class PushApplier {
       create &&
       this.s.guest &&
       !label &&
-      (this.env.guestCreated.get(this.s.sid) ?? 0) + this.addedGuestItems + 1 > GUEST_ITEM_CAP
+      (this.env.guestCreated.get(this.s.uid) ?? 0) + this.addedGuestItems + 1 > GUEST_ITEM_CAP
     )
       return 'GUEST_LIMIT'
     return null
@@ -343,6 +344,9 @@ export class PushApplier {
     if (fileCode) return this.reject(i, fileCode)
 
     let next = stripEngineArtifacts({ ...clone(pushed) }) as El
+    // guests can neither lock nor unlock (§3.5), a create included: a guest's element (or its undelete of a
+    // tombstone) is stored unlocked, and the ack's `fix` says so (V2: a guest could lock by creating)
+    if (this.s.guest && next.locked) next.locked = false
     const text = next.type === 'text' && typeof next.originalText === 'string' && next.originalText.length > 0
     const lobbyServer = prev?.customData?.lobbyServer ?? freshLobbyServer(this.writer, this.env.now, text)
     const canon = canonicalizeFile(next.type, next.fileId as string | undefined, lobby.value)
@@ -382,7 +386,13 @@ export class PushApplier {
     const bindG = op.g?.bind as Record<string, unknown> | undefined
     const containerId =
       bindG && 'containerId' in bindG ? (bindG.containerId as string | null) : (cur.containerId ?? null)
-    const kindEl = { type: cur.type, containerId }
+    // the fields' groups follow the stored kind while the text's own lease denies its `bind` (step 6):
+    // a denied detach must not make the rest of the op read as a free text's (a label's x is layout)
+    const bindDenied =
+      cur.type === 'text' &&
+      containerId !== (cur.containerId ?? null) &&
+      (this.leasedByOther(leaseIdOf(cur)) || (!!containerId && this.leasedByOther(containerId)))
+    const kindEl = { type: cur.type, containerId: bindDenied ? (cur.containerId ?? null) : containerId }
     if (!kindOf(kindEl)) return this.reject(i, 'INVALID')
     for (const [group, fields] of Object.entries(op.g ?? {}))
       for (const f of Object.keys(fields as object))
@@ -432,11 +442,17 @@ export class PushApplier {
       }
     }
 
-    // 6. lease: text, layout and life of an element (or a label of a container) leased by another session
+    // 6. lease: text, layout and life of an element (or a label of a container) leased by another session.
+    // For a TEXT element also `bind` (V2): its `containerId` decides which lease protects it, so a
+    // non-holder who could detach a leased label (containerId null) or move a leased label or free text
+    // into a note of its own would take it out from under the lease and could then rewrite or delete it
+    // (the holder's next push STALE, its text lost while Saved showed)
     const leaseIds = new Set([leaseIdOf(cur)])
     if (containerId && containerId !== cur.containerId) leaseIds.add(containerId)
     if ([...leaseIds].some((id) => this.leasedByOther(id))) {
-      const names = ['text', 'layout', 'life'].filter((g) => g in groups)
+      const leasedGroups =
+        cur.type === 'text' ? ['text', 'layout', 'life', 'bind'] : ['text', 'layout', 'life']
+      const names = leasedGroups.filter((g) => g in groups)
       for (const g of names) delete groups[g]
       deny(names, 'LEASED')
     }
@@ -825,7 +841,7 @@ export class PushApplier {
           this.env.groups.add(after.groupIds)
         }
         if (this.s.guest && !before && isLive && !isLabel(after as El))
-          this.env.guestCreated.set(this.s.sid, (this.env.guestCreated.get(this.s.sid) ?? 0) + 1)
+          this.env.guestCreated.set(this.s.uid, (this.env.guestCreated.get(this.s.uid) ?? 0) + 1)
       }
       for (const [key, value] of Object.entries(this.docWrites)) store.docSet(key, this.clock, value)
       this.env.ledger.set(this.clock, this.s.uid)

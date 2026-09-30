@@ -168,7 +168,12 @@ export class BoardSession {
         this.logEvent({ kind: 'notice', id: n.leaseId, detail: n.kind })
         this.set({ notice: { ...n, id: ++this.toastSeq } })
       },
-      onEditState: (s) => this.set({ edit: s }),
+      onEditState: (s) => {
+        this.set({ edit: s })
+        // keys typed into an editor that waits for its lease are unsent text: no Saved meanwhile (§2.5.7,
+        // V1 P1)
+        this.core.holdSaved('editor-buffer', s.phase !== 'idle' && s.phase !== 'open' && s.buffered > 0)
+      },
     })
     this.detach.push(
       this.core.onSaveStatus((s) => this.set({ save: s })),

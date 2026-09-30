@@ -14,7 +14,8 @@ another owner's file or invents a shape another owner also implements.
 | Gate | see "The C0 gate" at the end |
 
 `CONTRACTS_REV` in `packages/canvas-schema/src/protocol.ts` is **1** at C0 (**3** after the M1 integration, **4**
-after the M3 integration, **5** after the part-3 integration; see "Change log").
+after the M3 integration, **5** after the part-3 integration, **6** after the verifiers' fix round; see "Change
+log").
 
 ## The change-request rule
 
@@ -351,6 +352,20 @@ Recorded with the integration in `spike-b/M1-M2.md`:
    `engine/excalidraw`, `extendElementRoom` forwards the service's members by name, so a later optional
    `ElementRoomService` member must be added there too or it is silently dropped.
 
+## Lead decisions at the verifiers' fix round (recorded in `spike-b/M3-fixes.md`)
+
+1. **The lead's CR (rev 6):** `limits.ts` `isAllowedLink` refuses a signed-URL parameter whose name is
+   percent-encoded (V2 low). A tightening of a frozen file: no client or room code changes with it.
+2. **No wire or schema change for the lost-ack replay (V1 high).** O2's earlier proposal (decision 3 of the
+   M3 integration: a push id the room deduplicates, or the confirmed version per entry) is not taken: the
+   core decides each lost group from the server copy after the welcome (the value the first lost push was
+   built on, an earlier lost value, the last one, or another user's), so `protocol.ts`, `types.ts` and the
+   room schema are unchanged. A board-document write in the offline queue travels as one pseudo-entry of
+   the frozen `OfflineEntry` shape (id `#doc`, which no element id can be).
+3. **The room's COMMIT failure takes no lease effect** (V1 N7): the drain restores the lease table and sends
+   none of the batch's lease replies; the core re-asks an unanswered acquire after the welcome and releases
+   a lease the server still names it for. `O1-room.md`'s "lease replies still sent" is superseded.
+
 ## Change log
 
 | Rev | Date | Change | By |
@@ -360,6 +375,7 @@ Recorded with the integration in `spike-b/M1-M2.md`:
 | 3 | 2026-09-29 | `apps/web/src/canvas/sync/types.ts`: `EngineCore.doc()` and `EngineCore.setDoc(set)` for `lb_doc` keys (O5's tags write `tagDef:<key>` before an element's `tag:<key>`, §3.3). Additive; O2's core implements both (`sync/core/engine.ts`), and a `setDoc` is sent no later than the element push after it. Accepted at M1 (CR `35f0ae2` on `spike/b-features`, applied as `ac9a358`) | O5 (CR), O2, lead |
 | 4 | 2026-09-29 | `protocol.ts`: notice `PREPARING` (a joiner held while the room converts or rolls forward a tldraw board on open, §2.13 "Preparing this board…") and the terminal close reason `CONVERSION_FAILED` (4099; a failed lazy conversion or roll-forward, so joiners do not re-queue the job; the board stays on its tldraw tables, §5.3); a `PREPARING` round trip in `protocol.test.ts`. Additive. Accepted at M3 (CR `b5689e0` on `spike/b-room`, merged with `166850c`). Two ends: O1 (the CR); O2's end needs no code change (its core ignores a notice code it does not handle, `engine.ts` `case 'notice'`, and its page shows the closed state with `data-reason` for every 4099, `session.ts`); O2's explicit OK was not given in this round (O2 finished before the CR existed) and is asked for in the next one, with the page's "Preparing this board…" state. If O2 declines, reverting the CR needs no room change (the room reads both lists at run time: no notice, `MAINTENANCE`), but O1's `conversion.test.ts` would need its expectations changed. **O2's OK given at the part-3 integration** (`O2-part3.md`) | O1 (CR), lead |
 | 5 | 2026-09-29 | `apps/sync/src/engine-switch.ts`: CR 2F-2's optional `ElementRoomService` members `prepareBoard?(boardId)` and `serverWrite?(boardId, apply)` and the types `ServerWriteTx`, `ServerWriteChange`, `ServerWriteOutcome`, `ServerWriteApply` (plus their two `import type` lines), byte for byte as wave 2F wrote them in `8a7e7af` on `engine/excalidraw` (accepted there as W1-6). Additive and optional: no caller breaks without them. O1's room implements both (`room/index.ts`, `room/element-room.ts`, `room/server-write.ts`). CR 2F-1 is not taken (decision 1 above). Accepted at the part-3 integration (CR `6055baf` on `spike/b-room`, merged with `2e250c8`). `engine-switch.ts` is the lead's seam file, not a two-end file | O1 (CR, from 2F), lead |
+| 6 | 2026-09-30 | `packages/canvas-schema/src/limits.ts`: `isAllowedLink` also refuses a signed-URL parameter whose name is percent-encoded (`X%2DAmz%2DSignature=`, decoded up to three times), in a URL's query and in a Lobby-relative link; four cases in `limits.test.ts`. A tightening (V2, part-3 round, low): nothing a client stores today changes. No two-end file | lead (fixer round) |
 
 ## The C0 gate
 

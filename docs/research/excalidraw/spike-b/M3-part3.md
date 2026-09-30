@@ -1,5 +1,8 @@
 # Spike B: part-3 integration (lead)
 
+> The verifiers' findings on this integration (V1, V2, V3) and their fixes are in `M3-fixes.md`, which is
+> now the current state of `spike/excalidraw`.
+
 The lead's integration of O1's and O2's part-3 branches (docs/EXCALIDRAW-MIGRATION.md §8.6.4): the review,
 the merges, the change request, the gate, and **one run of every spike-b spec on the integrated tree**
 (except B8's staging rows and B9's NAS half). It follows `M3.md`, which stays as the record of the first M3

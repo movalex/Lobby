@@ -36,6 +36,7 @@ import { checkElement, type WireElement } from '@draftroom/canvas-schema/element
 import { isBindable } from '@draftroom/canvas-schema/engine'
 import { fieldGroupOf, pathUnitOf, RESNAP_TRIGGER_FIELDS } from '@draftroom/canvas-schema/groups'
 import { canonicalJson } from '@draftroom/canvas-schema/hash'
+import { checkInvariantsOf } from '@draftroom/canvas-schema/invariants'
 import { MAX_ITEMS, MAX_LIVE_ELEMENTS } from '@draftroom/canvas-schema/limits'
 import type { ServerWriteApply, ServerWriteTx } from '../engine-switch.ts'
 import { HttpError } from '../http/respond.ts'
@@ -205,6 +206,45 @@ export function runServerWrite(
   }
   if (store.docCountAt(clock) !== Object.keys(doc).length)
     throw new ServerWriteContractError("doc keys are stored at the write's clock that it did not report")
+
+  // 1b. the text lease and the cross-element invariants hold for server writes too (V2: the contract left
+  // them to the route, and a route that forgot could store a label of a missing container, a frameId on a
+  // rectangle, or overwrite text someone is typing, whose next push was then STALE). A write that changes a
+  // text's `text`, `layout`, `life` or `bind`, or a container's `life`, while anyone holds the lease is
+  // refused 409 `leased`; one that leaves an invariant broken around what it wrote is a contract error.
+  const leases = ctx.env().leases
+  for (const { before, after } of changes.values()) {
+    if (!before) continue
+    const slots = changedSlots(before, after)
+    const guarded = before.type === 'text' ? ['text', 'layout', 'life', 'bind'] : ['life']
+    if (!guarded.some((g) => slots.has(g))) continue
+    const ids = new Set([isLabel(before) ? (before.containerId as string) : before.id])
+    if (isLabel(after)) ids.add(after.containerId as string)
+    if ([...ids].some((id) => leases.holderOf(id, now) !== null))
+      throw new HttpError(409, 'leased', 'Someone is typing in this text. Try again in a moment.')
+  }
+  const around = new Map<string, El>()
+  const take = (id: string | null | undefined) => {
+    if (!id || around.has(id)) return
+    const c = changes.get(id)
+    const el = c ? c.after : (store.get(id)?.el as El | undefined)
+    if (el) around.set(id, el)
+  }
+  for (const { after } of changes.values()) {
+    take(after.id)
+    take(after.containerId)
+    take(after.frameId)
+    take(after.startBinding?.elementId)
+    take(after.endBinding?.elementId)
+    for (const r of (after.boundElements ?? []) as { id: string }[]) take(r.id)
+  }
+  for (const id of [...around.keys()])
+    for (const r of (around.get(id)?.boundElements ?? []) as { id: string }[]) take(r.id)
+  const broken = checkInvariantsOf([...around.values()] as never).filter((v) => changes.has(v.id))
+  if (broken.length)
+    throw new ServerWriteContractError(
+      `the write breaks an invariant (${broken.map((v) => v.code).join(', ')})`,
+    )
 
   // 2. stamped as the server's: group clocks, tombstones, "Recently deleted"
   let deletions = 0

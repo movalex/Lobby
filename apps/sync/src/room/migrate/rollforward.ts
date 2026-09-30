@@ -557,12 +557,11 @@ export function rollForwardBoardFile(job: RollForwardJob, metrics: ServerTextMet
       if ((gclocks.get(main)?.z ?? 0) > cf.lbClock) conflicts.push({ elementId: main, group: 'z' })
       else toPlace.add(id)
     }
-    // the live keys in order; a placed element always goes right after its preceding neighbour, before
-    // whatever follows that neighbour in ours, so a new key never collides with an existing one
-    const liveKeys = [...idx.entries()]
-      .filter(([id]) => isLive(id))
-      .map(([, k]) => k)
-      .sort()
+    // every key in use, tombstones included (a client's scene array holds the tombstones, and a key equal
+    // to one would make Excalidraw re-key the element and push it back, §2.5.4); a placed element goes
+    // right after its preceding live neighbour, before the next key in use, so a new key never collides
+    // with an existing one (B8 phase 3: a shape R0 added took the key of one R0 deleted)
+    const liveKeys = [...idx.values()].sort()
     const successor = (lo: string | null): string | null => {
       let a = 0
       let b = liveKeys.length
@@ -596,7 +595,7 @@ export function rollForwardBoardFile(job: RollForwardJob, metrics: ServerTextMet
       // the element's old keys are free again (it is re-placed)
       for (const id of els) {
         const old = idx.get(id)
-        if (old !== undefined && isLive(id)) removeKey(old)
+        if (old !== undefined) removeKey(old)
       }
       const pos = positionOf.get(shapeId) ?? 0
       let lo: string | null = null
@@ -741,12 +740,21 @@ export function rollForwardBoardFile(job: RollForwardJob, metrics: ServerTextMet
       if (!c.ok) failures.push({ id, code: c.code })
     }
     const liveIdx = new Map<string, string>()
+    const allIdx = new Map<string, string[]>()
     for (const e of view.values()) {
-      if (e.isDeleted) continue
       const k = idx.get(e.id) ?? (e.index as string)
+      allIdx.set(k, [...(allIdx.get(k) ?? []), e.id])
+      if (e.isDeleted) continue
       const other = liveIdx.get(k)
       if (other) failures.push({ id: e.id, code: 'INDEX_DUPLICATE' })
       liveIdx.set(k, e.id)
+    }
+    // a key this merge wrote is unique among every element, tombstones included (keys it did not write
+    // are ours' and stay as they are)
+    for (const [id, w] of written) {
+      const k = idx.get(id) ?? (w.index as string)
+      if ((allIdx.get(k)?.length ?? 0) > 1 && !failures.some((f) => f.id === id))
+        failures.push({ id, code: 'INDEX_DUPLICATE' })
     }
     if (invariantsAvailable()) {
       invariants = 'ran'

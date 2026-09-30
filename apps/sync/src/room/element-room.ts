@@ -127,6 +127,43 @@ type QueueEntry =
 
 let handleSeq = 0
 
+/**
+ * `hello` frames a session may send: at most `burst` within `windowMs`, more close it 4099 RATE_LIMITED
+ * before any work (V2: a viewer sending 400 hellos made the room build and serialize 400 catch-ups of up
+ * to 5,000 rows, and stalled every board of the process for 8-9 s). A client sends one per connection and
+ * one per resync.
+ */
+export const HELLO_LIMIT = { burst: 5, windowMs: 10_000 } as const
+/**
+ * The welcomes of every room of the process are built in arrival order, a slice at a time (at most
+ * `sliceMs` of work, then the event loop runs other boards' pushes and frames): a join storm, or one
+ * board's large catch-ups, no longer block every other board (PERF-05's join queue, for the new engine).
+ */
+export const HELLO_SLICE_MS = 20
+const helloQueue: (() => void)[] = []
+let helloTimer: ReturnType<typeof setImmediate> | null = null
+function queueHello(run: () => void): void {
+  helloQueue.push(run)
+  if (!helloTimer) helloTimer = setImmediate(drainHellos)
+}
+function drainHellos(): void {
+  helloTimer = null
+  const t0 = performance.now()
+  while (helloQueue.length) {
+    const run = helloQueue.shift() as () => void
+    try {
+      run()
+    } catch {
+      // a failed welcome closes nothing else; the session's socket error path handles it
+    }
+    if (performance.now() - t0 >= HELLO_SLICE_MS) break
+  }
+  if (helloQueue.length) helloTimer = setImmediate(drainHellos)
+}
+
+/** Live leases one session may hold at once; a further new one is denied (V2: lease squatting). */
+export const MAX_LEASES_PER_SESSION = 4
+
 /** Rejects when `p` takes longer than `ms` (the api's 3 s timeout, enforced here too: fail closed). */
 function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined
@@ -166,6 +203,7 @@ export class Session {
   closed = false
   pumpTimer: ReturnType<typeof setTimeout> | null = null
   private readonly abuse: number[] = []
+  private readonly hellos: number[] = []
 
   readonly info: ElementSessionInfo
   readonly socket: ElementSocket
@@ -197,6 +235,13 @@ export class Session {
     for (let i = 0; i < n; i++) this.abuse.push(now)
     while (this.abuse.length && (this.abuse[0] as number) < now - 60_000) this.abuse.shift()
     return this.abuse.length > ABUSE_REJECTS_PER_MINUTE
+  }
+
+  /** Counts a `hello`; false when it is over HELLO_LIMIT. */
+  helloAllowed(now: number): boolean {
+    this.hellos.push(now)
+    while (this.hellos.length && (this.hellos[0] as number) <= now - HELLO_LIMIT.windowMs) this.hellos.shift()
+    return this.hellos.length <= HELLO_LIMIT.burst
   }
 
   closeWith(code: number, reason: string): void {
@@ -298,10 +343,16 @@ export class ElementRoom {
     this.groups.reset()
     this.counts.elements = rows.length
     this.counts.items = 0
+    this.guestCreated.clear()
     for (const r of rows) {
       const el = JSON.parse(r.data) as El
       this.groups.add(el.groupIds)
-      if (!(el.type === 'text' && el.containerId)) this.counts.items++
+      if (!(el.type === 'text' && el.containerId)) {
+        this.counts.items++
+        // the guest cap survives a room eviction: a guest's live items count against it (V2)
+        const by = el.customData?.lobbyServer?.createdBy
+        if (by?.guest) this.guestCreated.set(by.uid, (this.guestCreated.get(by.uid) ?? 0) + 1)
+      }
     }
   }
 
@@ -365,7 +416,13 @@ export class ElementRoom {
     const parsed = ClientEnvelope.safeParse(raw)
     if (!parsed.success) return this.terminal(s, 'INVALID_MESSAGE')
     const msg = parsed.data
-    if (msg.type === 'hello') return this.hello(s, msg.since, msg.epoch)
+    if (msg.type === 'hello') {
+      if (!s.helloAllowed(this.deps.now())) return this.terminal(s, 'RATE_LIMITED')
+      const { since, epoch } = msg
+      return queueHello(() => {
+        if (!s.closed && !this.closed) this.hello(s, since, epoch)
+      })
+    }
     if (msg.type === 'ping')
       return s.out.send(JSON.stringify({ type: 'pong', ...(msg.n !== undefined ? { n: msg.n } : {}) }))
     if (!s.welcomed) {
@@ -793,8 +850,13 @@ export class ElementRoom {
     const startClock = store.meta.clock
     let clock = startClock
     const deliveries: (() => void)[] = []
-    /** the lease replies alone: they are sent even when the COMMIT fails (leases live in memory) */
-    const leaseDeliveries: (() => void)[] = []
+    /**
+     * The lease table before this batch: a failed COMMIT puts it back and sends none of the batch's lease
+     * replies (V1: a release in a batch whose COMMIT failed still took effect, so another session was
+     * granted the lease and the holder's retried final text push got LEASED; §2.4.3 "nothing in memory
+     * changed"). The sessions are closed 4000 and resync; the clients re-send what was not answered.
+     */
+    const leaseSnap = this.leases.snapshot()
     const pushEntries: { session: Session; push: PreparedPush }[] = []
     /** the batch's server writes, in queue order, with their answers (settled after the COMMIT) */
     const serverWrites: { entry: ServerWriteEntry; ok: boolean; value: unknown }[] = []
@@ -807,15 +869,11 @@ export class ElementRoom {
     while (this.queue.length && pushes < DRAIN.maxPushes && performance.now() - t0 < DRAIN.maxWorkMs) {
       const e = this.queue.shift() as QueueEntry
       if (e.kind === 'acquire') {
-        const d = this.acquire(e.session, e.req, e.id, now)
-        deliveries.push(d)
-        leaseDeliveries.push(d)
+        deliveries.push(this.acquire(e.session, e.req, e.id, now))
         continue
       }
       if (e.kind === 'release') {
-        const d = this.release(e.session, e.id, now)
-        deliveries.push(d)
-        leaseDeliveries.push(d)
+        deliveries.push(this.release(e.session, e.id, now))
         continue
       }
       if (e.kind === 'server') {
@@ -931,7 +989,8 @@ export class ElementRoom {
       store.commit()
     } catch (err) {
       store.rollback()
-      this.commitFailed(pushEntries, leaseDeliveries, err as Error)
+      this.leases.restore(leaseSnap)
+      this.commitFailed(pushEntries, err as Error)
       for (const w of serverWrites)
         w.entry.reject(w.ok ? unavailable('The board could not save this change. Try again.') : w.value)
       return
@@ -1001,18 +1060,14 @@ export class ElementRoom {
     }
   }
 
-  private commitFailed(
-    pushes: { session: Session; push: PreparedPush }[],
-    leaseDeliveries: (() => void)[],
-    err: Error,
-  ): void {
+  private commitFailed(pushes: { session: Session; push: PreparedPush }[], err: Error): void {
     this.deps.log('[room] COMMIT failed; batch answered UNAVAILABLE, reopening', this.boardId, err.name)
     this.deps.metrics.inc('lobby_commit_failures_total')
     for (const { session, push } of pushes) {
       const outcome = this.rejectedOutcome(push, 'UNAVAILABLE')
       this.ackDelivery(session, push, outcome, this.store.meta.clock)()
     }
-    for (const d of leaseDeliveries) d()
+    // the batch's lease messages took no effect (drainBatch restored the table): no reply goes out
     this.checkDisk(true)
     // nothing in memory changed: reopen the board file from disk and resync every session
     try {
@@ -1066,6 +1121,32 @@ export class ElementRoom {
             },
           }),
         )
+    }
+    // a label's own id is never a lease id (its container's is, §2.9.2): refused like a read-only request
+    const stored = this.store.get(id)
+    const el = stored?.el as { type?: string; containerId?: string | null } | undefined
+    if (stored && !stored.deleted && el?.type === 'text' && el.containerId) {
+      this.deps.metrics.inc('lobby_lease_total', { result: 'deny' })
+      return () =>
+        s.out.send(
+          JSON.stringify({
+            type: 'lease.deny',
+            req,
+            id,
+            holder: { sid: 'not-a-lease', uid: 'not-a-lease', name: 'not-a-lease' },
+          }),
+        )
+    }
+    // one session holds at most MAX_LEASES_PER_SESSION leases (V2: one editor could hold every note's lease
+    // and deny everyone else's text; a tab edits one text at a time): beyond it a NEW lease is denied, the
+    // requester named as the holder (every request is answered; a renewal of one it holds is not new)
+    if (
+      !this.leases.holds(id, s.identity.sid, now) &&
+      this.leases.heldBy(s.identity.sid, now) >= MAX_LEASES_PER_SESSION
+    ) {
+      this.deps.metrics.inc('lobby_lease_total', { result: 'deny' })
+      const self = this.holderOf(s)
+      return () => s.out.send(JSON.stringify({ type: 'lease.deny', req, id, holder: self }))
     }
     const r = this.leases.acquire(id, this.holderOf(s), now)
     if (!r.granted) {

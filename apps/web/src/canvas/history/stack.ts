@@ -112,6 +112,9 @@ export interface HistoryOptions {
 
 const track = (c: ElementChange, unsent: Side): TrackedChange => ({ ...c, pending: [], unsent })
 
+/** Reject codes the engine retries (protocol.ts REJECT_CODE_INFO `retryable`): the change is sent again. */
+const RETRYABLE: ReadonlySet<string> = new Set(['RATE', 'UNAVAILABLE'])
+
 /** a fix key is a top-level field, or `c:<key>` for `customData.lobby.<key>` */
 const readFix = (key: string): { lobby: boolean; name: string } =>
   key.startsWith('c:') ? { lobby: true, name: key.slice(2) } : { lobby: false, name: key }
@@ -212,7 +215,12 @@ export class LobbyHistory {
   onAck(ack: Ack, scene?: Scene) {
     for (const r of ack.r) {
       const carrying = this.carrying(ack.seq, r.id)
-      if (!r.ok) {
+      if (!r.ok && RETRYABLE.has(r.code)) {
+        // RATE, UNAVAILABLE: the engine sends the change again under a new seq; it stays in its entry and
+        // waits for that push (`markPushed` picks the side up again). Before, it left its entry here, the
+        // retry landed, and the next Ctrl+Z undid the step before (V1 N9, N9b)
+        for (const { change, side } of carrying) change.unsent ??= side
+      } else if (!r.ok) {
         for (const { entry, change } of carrying) entry.changes.delete(change.id)
       } else {
         if (r.denied) for (const { change } of carrying) this.dropGroups(change, r.denied.groups)
@@ -268,6 +276,12 @@ export class LobbyHistory {
       return
     }
     const last = this.lastLocal.get(after.id)
+    // an element the scene held before this apply but no step recorded yet is a local create waiting for
+    // its boundary (a label the text editor made, re-keyed by the index pre-pass or answered by the server
+    // before the editor closed): it stays unrecorded, so the boundary records it as created. Taking it into
+    // `lastLocal` here made its creation part of no step: after typing into a note created empty, undo
+    // left an empty label and never removed it (wave 2E, V1 P6)
+    if (!last && before) return
     if (!last || !before) {
       this.lastLocal.set(after.id, clone(after))
       return
@@ -445,10 +459,18 @@ export class LobbyHistory {
       }
       this.lastLocal.set(id, next as HistEl)
     }
-    // a field whose two sides became equal is no change any more
+    // a field whose two sides became equal is no change any more; but an arrow's or a line's `path` unit
+    // stays whole while any of it still changes (diff.ts records it whole: its compare and its restore
+    // never mix this step's points with another moment's `x`, `y` or `angle`; V1 U-a: a fold dropped them,
+    // and the undo of a free end after a re-snap was skipped as "changed")
     for (const { change } of carrying) {
+      const kind = this.lastLocal.get(change.id) ?? scene?.get(change.id)
+      const isPath = (f: string) => !!kind && fieldGroup(kind, f) === 'path'
+      const pathChanges = Object.entries(change.fields).some(
+        ([f, fc]) => isPath(f) && !deepEqual(fc.before, fc.after),
+      )
       for (const [f, fc] of Object.entries(change.fields))
-        if (deepEqual(fc.before, fc.after)) delete change.fields[f]
+        if (deepEqual(fc.before, fc.after) && !(pathChanges && isPath(f))) delete change.fields[f]
       for (const [k, fc] of Object.entries(change.lobby))
         if (deepEqual(fc.before, fc.after)) delete change.lobby[k]
     }
