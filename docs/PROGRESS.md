@@ -545,3 +545,31 @@ Checks: lint 0 errors / 0 warnings (581 files); typecheck 14 projects; vitest 1,
   - **Specs:** 22 ported tests in `e2e/excalidraw/media-*.spec.ts` (files, video, viewer, office, drops): **22/22 three runs in a row** (the first as part of the whole `e2e/excalidraw` folder, 75 passed). The tldraw specs are unchanged; the default build's media spec files passed once, **43/43**. Lint, typecheck and `pnpm test` (4,595 passed, 22 new) pass.
   - **Deviations** (3G.md §2): no hint props ("Loading" until the meta answers), no local preview while an image uploads, a drop's images land together, new elements go on top of a slot, GIFs show their first frame (the plan defers playback), the export policy reader is the media feature's own until 3e lands.
   - **Requests:** CR 3G-2 (`LobbyFiles.track`), O2 (keep the local `@display` suffix on a server rebuild), 2C (the engine's files map can keep a revoked `blob:` URL), 3a (the context-menu and selection-bar shells show Download original), 3e (the export policy reader).
+- **Excalidraw migration, wave 3b (navigation) on `engine/w3-3b`** (from `engine/excalidraw` 5b9c87a; `docs/research/excalidraw/wave3/3B.md`). The ported `navigation` feature (`features/canvas-ux/ported/navigation/**`) is on the Excalidraw board page, on `canvas/api` only. The tldraw build is unchanged except the dashboard's content-search links, which keep `?d=` in the default build.
+  - **Built:**
+    - Lobby's camera: `viewport.zoomTo`, `centerOn`, `ensureVisible`, `zoomStep` and `limits`, going below Excalidraw's 0.1 down to the whole-board fit. Change request CR 3b-1 (a `CR:` commit) makes them `composed` in the member table.
+    - The zoom keys and zoom menu, the Lobby-drawn minimap (closed by default), and the navigation host slot with phone-width Zoom to fit.
+    - Board search, the Frames panel (`customData.lobby.present`), and the Templates picker.
+    - Copy link with `?el=` and `?view=` links and the legacy `?d=` reader (`lib/deep-link.ts`), and `?el=` dashboard content-search links on the new board page.
+    - The first view (template, links, the last camera with v1 cameras read through the frozen page offsets, `lb_doc.startView`, fit or first frame) and PRE-08.
+    - Arrange as grid, select by type, and paste as sticky notes.
+  - **Blocked, built and marked:** the template insert (CR-2D-2 `LobbyTx.insert`; its 2 specs are `test.fail`).
+  - **Deviations** (3B.md §3):
+    - only owners can set the start view (canvas-schema `startView` is an owner key);
+    - a locked frame keeps its presentation place (the room refuses `customData` on locked elements);
+    - pasted notes use the new-note face;
+    - the dashboard template insert is an undo step;
+    - the first view waits about 150 ms for the board to settle.
+  - **Found** (3B.md §4):
+    - `port-impl.ts` drops an update to an element created in the same `transact` (so does 2C's `tx.duplicate` structure write);
+    - a first visit within 5 s of an `lb_doc` write gets the old doc (the room's cached reset snapshot; pinned by a `test.fail` spec);
+    - features mount before the board's content is in;
+    - `viewport.set` is not read back at once.
+  - **Requested:** CR 3b-2 (wheel and pinch deltas on the input stream, for the wheel below 0.1), CR 3b-3 (`startView` editor-writable), CR 3b-4 (`present` writable on locked frames).
+  - **Not ported:** the wheel below 0.1, the level-of-detail pass, the UI clicks on 3a's shells (the specs run the same entries through the page's dev-only registry hook), search by tag (3d), and F15's upload e2e (3g).
+  - **Gate** (`E2E_PORT_BASE` 6440 and 6450; the machine was shared with other agents' runs):
+    - lint, typecheck (15 projects), engine-probe, e2e and Node-safety tsc;
+    - `pnpm test` 4,609 passed / 36 skipped (36 new);
+    - the ported specs `e2e/excalidraw/navigation-*.spec.ts` **22/22 three runs in a row** (3 of them `test.fail`: the 2 inserts blocked by CR-2D-2, and the stale-doc defect);
+    - the default-build specs of these features (`canvas-ux`, `canvas-ux-2`, `canvas-ux.fix`, `search`) **36/36 once**;
+    - the normal build and the engine-flag build without the guard carry no ported navigation code.

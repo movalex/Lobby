@@ -221,9 +221,15 @@ describe('the LobbyCanvas member table', () => {
   it('stubs throw NotImplementedError naming the owner; tx and event stubs too', () => {
     const { canvas } = createLobbyCanvas({ port: fakePort(), registries: createFeatureRegistries() })
     expect(() => canvas.text.edit('x', { via: 'api' })).toThrow(NotImplementedError)
-    expect(() => canvas.viewport.zoomTo({ x: 0, y: 0, width: 1, height: 1 })).toThrow(
-      /not implemented \(3b\)/,
-    )
+    // every member still a stub in the table throws, naming its owner (CR 3b-1: whichever parts have landed)
+    const built = walk(canvas)
+    for (const m of LOBBY_CANVAS_MEMBERS.filter((x) => x.status === 'stub' && built.has(x.path))) {
+      const fn = built.get(m.path) as (...a: unknown[]) => unknown
+      expect(() => fn(), m.path).toThrow(new RegExp(`not implemented \\(${m.owner}\\): ${m.path}`))
+    }
+    // a landed part composed from other members is real (3b's camera members on a bare port)
+    canvas.viewport.zoomTo({ x: 0, y: 0, width: 1, height: 1 })
+    expect(canvas.viewport.limits().min).toBeGreaterThan(0)
     expect(() => canvas.on('change', () => {})).toThrow(/not implemented \(2C\): on:change/)
     expect(() => canvas.transact('x', () => 1, { joinPrevious: true })).toThrow(/transact.joinPrevious/)
     // 3c's follow part has landed (impl.ts LANDED_PARTS): its event subscribes on a bare port too

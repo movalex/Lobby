@@ -67,7 +67,7 @@ After this commit the files below change only through a **change request to the 
 
 ### 2.2 Who implements what
 
-The board page (2C) builds the canvas with `createLobbyCanvas({port, registries, board})` (`canvas/api/impl.ts`; `board` is the page's engine handles, `canvas/board/handles.ts`). The C0 members delegate to the port, the reads are reactive (a signal source per concern), and 17 members are composed from port members alone (wave 1's seven plus 2C's `text.of`, `visibleBounds`, `sceneToOverlay`, `overlayToScene` and the six structural `tx` writes of `canvas/board/tx.ts`). 2C's other members are the board page's (status `board`): real when the page passes its `board` handles, a stub naming 2C on a bare port (as in the unit tests). Every member of a wave-3 owner is a stub naming its owner until the owner lands its part (W1-2). The table is generated from `LOBBY_CANVAS_MEMBERS`; the contracts test fails when the object, the table and the `@owner` annotations in `lobby-canvas.ts` disagree.
+The board page (2C) builds the canvas with `createLobbyCanvas({port, registries, board})` (`canvas/api/impl.ts`; `board` is the page's engine handles, `canvas/board/handles.ts`). The C0 members delegate to the port, the reads are reactive (a signal source per concern), and 22 members are composed from port members alone (wave 1's seven, 2C's `text.of`, `visibleBounds`, `sceneToOverlay`, `overlayToScene` and the six structural `tx` writes of `canvas/board/tx.ts`, and 3b's five camera members of `canvas/api/parts/navigation.ts`, CR 3b-1). 2C's other members are the board page's (status `board`): real when the page passes its `board` handles, a stub naming 2C on a bare port (as in the unit tests). Every member of a wave-3 owner is a stub naming its owner until the owner lands its part (W1-2); a landed part composed from the canvas's own members is listed in `COMPOSED_BY_PARTS` and is `composed` (CR 3b-1). The table is generated from `LOBBY_CANVAS_MEMBERS`; the contracts test fails when the object, the table and the `@owner` annotations in `lobby-canvas.ts` disagree.
 
 #### The member table (generated from `LOBBY_CANVAS_MEMBERS`)
 
@@ -107,13 +107,13 @@ The board page (2C) builds the canvas with `createLobbyCanvas({port, registries,
 | `doc.set` | 2C | composed (real) |
 | `tx.createMany` | 2C | composed (real) |
 | `transact.joinPrevious` | 2C | board page (real with the board handles) |
-| `viewport.zoomTo` | 3b | stub |
-| `viewport.centerOn` | 3b | stub |
-| `viewport.ensureVisible` | 3b | stub |
-| `viewport.zoomStep` | 3b | stub |
+| `viewport.zoomTo` | 3b | composed (real) |
+| `viewport.centerOn` | 3b | composed (real) |
+| `viewport.ensureVisible` | 3b | composed (real) |
+| `viewport.zoomStep` | 3b | composed (real) |
 | `viewport.stop` | 2C | board page (real with the board handles) |
 | `viewport.moving` | 2C | board page (real with the board handles) |
-| `viewport.limits` | 3b | stub |
+| `viewport.limits` | 3b | composed (real) |
 | `viewport.screenRect` | 2C | board page (real with the board handles) |
 | `viewport.remeasure` | 2C | board page (real with the board handles) |
 | `readOnly` | 2C | board page (real with the board handles) |

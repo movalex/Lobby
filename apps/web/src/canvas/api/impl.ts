@@ -14,7 +14,8 @@
  *  - members that need the board page's engine (the Excalidraw host, the input layer, the lease, undo,
  *    presence): real when the board page passes its `board` handles (canvas/board/handles.ts), a stub
  *    naming 2C otherwise (a canvas built on a bare port, as in the unit tests);
- *  - every member owned by a wave-3 owner is its part's.
+ *  - every member owned by a wave-3 owner is its part's (a stub naming the owner until the part lands;
+ *    status `part` once it has, LANDED_PARTS below).
  *
  * NODE-SAFE: no engine and no DOM imports here (the board handles bring the engine).
  */
@@ -148,6 +149,12 @@ const LANDED_PARTS: ReadonlySet<string> = new Set([
   // 3g: parts/files.ts
   'files.urlOf',
   'files.insert',
+  // 3b: parts/navigation.ts (composed from the canvas's own members; CR 3b-1)
+  'viewport.zoomTo',
+  'viewport.centerOn',
+  'viewport.ensureVisible',
+  'viewport.zoomStep',
+  'viewport.limits',
 ])
 
 /** 2C's members composed from port members alone (the rest of 2C's are the board page's). */

@@ -1,0 +1,117 @@
+/* The navigation host slot on the new canvas (NavigationPanel.tsx, Minimap.tsx) and the navigation overlay.
+   The panels, the paste prompt and the search dim reuse canvas-ux.css's dr-cux-* rules. */
+
+.dr-nav {
+  display: flex;
+  flex-direction: column-reverse;
+  align-items: flex-start;
+  gap: 6px;
+  pointer-events: auto;
+}
+
+.dr-nav__bar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--dr-line);
+  border-radius: var(--dr-radius);
+  background: var(--dr-surface);
+  box-shadow: var(--dr-shadow);
+}
+
+.dr-nav--compact {
+  padding: 3px;
+  border: 1px solid var(--dr-line);
+  border-radius: var(--dr-radius);
+  background: var(--dr-surface);
+  box-shadow: var(--dr-shadow);
+}
+
+.dr-nav__btn {
+  display: inline-grid;
+  place-items: center;
+  min-width: 32px;
+  height: 32px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--dr-ink-2);
+  font: 600 12px / 1 var(--dr-font);
+  cursor: pointer;
+}
+.dr-nav__btn:hover,
+.dr-nav__btn[aria-pressed="true"],
+.dr-nav__btn[aria-expanded="true"] {
+  background: var(--dr-hover);
+  color: var(--dr-ink);
+}
+.dr-nav__btn:focus-visible,
+.dr-nav__item:focus-visible {
+  outline: 2px solid var(--dr-focus);
+  outline-offset: 1px;
+}
+
+.dr-nav__zoom {
+  position: relative;
+}
+.dr-nav__zoombtn {
+  min-width: 52px;
+}
+
+.dr-nav__menu {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  z-index: 30;
+  display: grid;
+  min-width: 200px;
+  padding: 4px;
+  border: 1px solid var(--dr-line);
+  border-radius: var(--dr-radius);
+  background: var(--dr-surface);
+  box-shadow: var(--dr-shadow-pop);
+}
+
+.dr-nav__item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--dr-ink);
+  font: 13px / 1.2 var(--dr-font);
+  text-align: left;
+  cursor: pointer;
+}
+.dr-nav__item:hover:not(:disabled) {
+  background: var(--dr-hover);
+}
+.dr-nav__item:disabled {
+  color: var(--dr-placeholder);
+  cursor: default;
+}
+.dr-nav__kbd {
+  color: var(--dr-ink-2);
+  font: 12px / 1 var(--dr-font);
+}
+
+.dr-nav-minimap {
+  display: block;
+  border: 1px solid var(--dr-line);
+  border-radius: var(--dr-radius);
+  background: var(--dr-surface);
+  box-shadow: var(--dr-shadow);
+  cursor: pointer;
+  touch-action: none;
+}
+
+.dr-nav-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
