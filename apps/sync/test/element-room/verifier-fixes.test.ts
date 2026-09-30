@@ -404,13 +404,22 @@ describe('V2 lows', () => {
       await a.create(els)
       const m = await st.client({ boardId: b, user: 'mallory' })
       await m.untilClock(a.clock)
-      for (let k = 0; k < 8; k++) expect((await m.acquire(`n${k}`)).type).toBe('lease.grant')
+      // all asked at once (one drain batch): every request is answered, the first 4 granted
+      const answers = await Promise.all(Array.from({ length: 8 }, (_, k) => m.acquire(`n${k}`)))
+      expect(answers.map((x) => x.type)).toEqual([
+        ...Array(MAX_LEASES_PER_SESSION).fill('lease.grant'),
+        ...Array(8 - MAX_LEASES_PER_SESSION).fill('lease.deny'),
+      ])
+      // a renewal of a lease it holds is granted; a label id is no lease id
+      expect((await m.acquire('n0')).type).toBe('lease.grant')
       expect((await m.acquire('n0.t')).type).toBe('lease.deny')
       const w = await st.client({ boardId: b, user: 'walt' })
       const held = w.welcome?.leases.filter((l) => l.holder.uid === 'mallory').map((l) => l.id) ?? []
-      expect(held.length).toBe(MAX_LEASES_PER_SESSION)
-      expect(held).toEqual(['n4', 'n5', 'n6', 'n7'])
-      expect((await a.acquire('n0')).type).toBe('lease.grant')
+      expect(held.sort()).toEqual(['n0', 'n1', 'n2', 'n3'])
+      expect((await a.acquire('n5')).type).toBe('lease.grant')
+      // once one is released, a new one may be taken
+      m.release('n1')
+      expect((await m.acquire('n6')).type).toBe('lease.grant')
     },
     T,
   )

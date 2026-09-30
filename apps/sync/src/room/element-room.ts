@@ -161,7 +161,7 @@ function drainHellos(): void {
   if (helloQueue.length) helloTimer = setImmediate(drainHellos)
 }
 
-/** Live leases one session may hold at once; a further grant releases its oldest (V2: lease squatting). */
+/** Live leases one session may hold at once; a further new one is denied (V2: lease squatting). */
 export const MAX_LEASES_PER_SESSION = 4
 
 /** Rejects when `p` takes longer than `ms` (the api's 3 s timeout, enforced here too: fail closed). */
@@ -1137,14 +1137,22 @@ export class ElementRoom {
           }),
         )
     }
+    // one session holds at most MAX_LEASES_PER_SESSION leases (V2: one editor could hold every note's lease
+    // and deny everyone else's text; a tab edits one text at a time): beyond it a NEW lease is denied, the
+    // requester named as the holder (every request is answered; a renewal of one it holds is not new)
+    if (
+      !this.leases.holds(id, s.identity.sid, now) &&
+      this.leases.heldBy(s.identity.sid, now) >= MAX_LEASES_PER_SESSION
+    ) {
+      this.deps.metrics.inc('lobby_lease_total', { result: 'deny' })
+      const self = this.holderOf(s)
+      return () => s.out.send(JSON.stringify({ type: 'lease.deny', req, id, holder: self }))
+    }
     const r = this.leases.acquire(id, this.holderOf(s), now)
     if (!r.granted) {
       this.deps.metrics.inc('lobby_lease_total', { result: 'deny' })
       return () => s.out.send(JSON.stringify({ type: 'lease.deny', req, id, holder: r.holder }))
     }
-    // one session holds at most MAX_LEASES_PER_SESSION leases: a new one releases its oldest (V2: one
-    // editor could hold every note's lease and deny everyone else's text; a tab edits one text at a time)
-    const dropped = r.fresh ? this.leases.trimHeldBy(s.identity.sid, id, MAX_LEASES_PER_SESSION, now) : []
     this.deps.metrics.inc('lobby_lease_total', { result: 'grant' })
     const holder = this.holderOf(s)
     const grant = () => {
@@ -1152,25 +1160,10 @@ export class ElementRoom {
       s.out.send(JSON.stringify({ type: 'lease.grant', req, id, ttlMs: this.leases.ttlMs }))
       if (r.fresh) this.broadcast(JSON.stringify({ type: 'lease', id, holder }))
     }
-    // the leases the cap released are announced after the COMMIT, with the batch's other lease events
-    const announce = () => {
-      for (const d of dropped) this.broadcast(JSON.stringify({ type: 'lease', id: d, holder: null }))
-    }
     const hook = this.leases.hook
-    if (hook.mode === 'delay' && hook.ms > 0)
-      return () => {
-        announce()
-        setTimeout(grant, hook.ms).unref?.()
-      }
-    if (hook.mode === 'hold')
-      return () => {
-        announce()
-        this.heldGrants.push(grant)
-      }
-    return () => {
-      announce()
-      grant()
-    }
+    if (hook.mode === 'delay' && hook.ms > 0) return () => void setTimeout(grant, hook.ms).unref?.()
+    if (hook.mode === 'hold') return () => void this.heldGrants.push(grant)
+    return grant
   }
 
   private release(s: Session, id: string, now: number): () => void {
