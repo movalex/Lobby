@@ -19,6 +19,21 @@ File shorthand for dist line numbers, all `0.18.0-1118751` `dist/dev`: **X** = `
 
 ---
 
+## Contracts R0 fixed (2026-09-30, from the bridge release as built)
+
+R0 is built and verified on `r0/bridge` (30a08f7) but not yet deployed. The Excalidraw build must honour these R0 contracts. They override anything below that differs:
+
+1. **Reason name:** `engine_migration` (snake_case, like the existing reasons). Migration 0022's CHECK refuses `engine-migration`.
+2. **Migration 0022 adds two markers,** and the Excalidraw build must write them:
+   - `board_snapshots.body_version`: 1 for tldraw bodies, **2** for Lobby-element bodies;
+   - `boards.new_canvas`: **true** for every board created or converted on the new canvas.
+
+   R0 recognises v2 checkpoints and boards born on the new canvas by these columns, and by the body format as a second check.
+3. **Final backup hold:** every backup that `POST /internal/backups/run-all` writes carries a signed `holdUntil` 90 days ahead. The Excalidraw build's local and offsite retention must keep any entry whose `holdUntil` is in the future, and count it outside the retention budget.
+4. **Offsite entries for lb-only files** carry `format: "lobby-elements"` and an `lb_*` digest as `recordsSha256`. The Excalidraw build reads them. R0 refuses a staged restore of such an entry, and never replaces a live board born on the new canvas.
+5. **Maintenance** is a runtime `POST`/`GET /internal/maintenance` in R0. The seed, deleted/restore and place-notes routes re-check it after reading the body. Open item 11 still applies: the new build must boot in maintenance through an env flag.
+6. **Converted boards during a rollback:** a staged restore copies the live file's `lb_*` tables into the restored file and verifies their digests; asset-refs answers `newCanvasTables: true`; the asset collector marks such a pass incomplete.
+
 ## What changed in revision 3.5 (the recheck of 3.4, the lead's decisions)
 
 The recheck found 3.4's `path` unit, structural derived test and wider trigger sound for every case the recheck of 3.3 raised: in both commit orders, a start-bound free end, a curved midpoint, an elbow segment against a move or resize, a frame drag against the holder's fit, an arrow bound to a typed-in free text, and two targets moved at once [critic-3.4]. It listed 2 blocking items. Both sit in rules C0 freezes (`groups.ts`, `limits.ts`, the `binding.ts` contract), so they are fixed before C0. Text only.
@@ -261,7 +276,7 @@ The recheck of revision 3 (2026-09-28) found all 3 open musts and all 11 new pro
 | A1 | `GET /internal/boards/:bid/file-refs?ids=ver_a,ver_b,…` (≤ 100 ids), internal secret | new api route; sync client in `apps/sync/src/file-refs.ts`. A1–A3 are first written in the spike branch (§8.1); R0 and wave 2F ship the reviewed versions. | The sync server checks every `fileId` against the board's workspace (§2.10.2). A GET, like `touched` and `session-ended`, because the api's root CSRF hook refuses server-to-server POSTs (`apps/sync/src/touch.ts:23-26`) [rev-run]. |
 | A2 | `GET /internal/boards/:bid/workshop-state` (sync pulls on room open) and `POST <sync>/internal/boards/:bid/workshop-state` (api pushes on change) | new api route + new sync route | The server refuses new +1s and drops selection presence while a dot vote is open (§3.3, §2.7). Today that rule is client-side only (`PlusOnes.tsx:55-57`) [rev-run]. |
 | A3 | Optional `guest` claim in `TicketClaims` | `packages/auth-tickets` | Guest limits are enforced by sync. Additive: `TicketClaims` has no such field today (`index.ts:9-18`) [rev-run]. |
-| A4 | Checkpoint bodies v1 and v2, the new `engine-migration` reason (migration `0022`) | api history | Shipped first in the tldraw **bridge release** so a rollback lands on a build that understands them (§5.10). |
+| A4 | Checkpoint bodies v1 and v2, the new `engine_migration` reason (migration `0022`) | api history | Shipped first in the tldraw **bridge release** so a rollback lands on a build that understands them (§5.10). |
 | A5 | Snapshot readers: `ai/sources.ts`, `workshops/shapes.ts`, `search/indexer.ts`, `history/*`, `files/gc-refs.ts` | api | Read `lobby-elements` through `canvas-schema/items.ts`. |
 | C1 | `PrivateTarget.pageId` keeps its type; after cut-over clients send the constant `page:page`; sync maps a legacy page id through `lb_doc.import.legacyPages` | contracts unchanged; sync `place-notes` | Sessions still open at cut-over reveal notes in the right place (§5.8). |
 | C2 | Deep links: new `?el=<id>,<id>` and `?view=x,y,w,h`; the legacy `?d=` parser stays | web (`copy-link.ts`, `content-search.ts`) | tldraw links use `.` separators, and converted ids contain `.` (§3.6). |
@@ -1410,7 +1425,7 @@ Legend: **Keep** (no canvas change, or config only), **Rewrite** (same behaviour
 |---|---|---|
 | api | `features/ai/sources.ts`, `features/workshops/shapes.ts`, `features/search/indexer.ts`, `features/history/{snapshot-rows,files,board-ops,checkpoint-routes}.ts`, `files/gc-refs.ts`, `sync-internal.ts`; **new**: `file-refs` and `workshop-state` routes | §1 A1–A5 |
 | packages | `board-ops` (16 files use tldraw), `templates` (17), `canvas-schema` (3), `auth-tickets` (`guest` claim) | Rewritten on elements; tldraw schema moves into `tldraw-import` |
-| contracts | none structurally | `shape:` refs kept; `PrivateTarget.pageId` kept (C1); migration `0022` adds `engine-migration` |
+| contracts | none structurally | `shape:` refs kept; `PrivateTarget.pageId` kept (C1); migration `0022` adds `engine_migration` |
 | Unchanged | auth, sharing, dashboard, notifications, comments privacy, AI budgets, storage, worker, Office sidecar | none |
 
 ---
@@ -1528,7 +1543,7 @@ The owner signs off on lossy counts from the rehearsal (§7.5).
 
 - The api reads **v1 and v2**. A v1 body is converted **on read** (preview, restore, duplicate) through `tldraw-import`. Element ids are kept, so they match the live board [DATA]. Page offsets are taken from the board's frozen `lb_doc.import.legacyPages` when it has them, so a multi-page checkpoint lines up with the live board.
 - **No batch rewrite** of stored bodies in this project. v1 bodies stay as they are, so a rollback never meets a rewritten body, and signed backups stay intact. A rewrite can be a later, separate decision; `tldraw-import` stays at least 6 months anyway (§5.7).
-- One checkpoint per board with the new reason `engine-migration` is taken right after conversion, as a restore point. The reason ships first in the bridge release (§5.10).
+- One checkpoint per board with the new reason `engine_migration` is taken right after conversion, as a restore point. The reason ships first in the bridge release (§5.10).
 
 ### 5.6 Backups
 
@@ -1656,7 +1671,7 @@ A normal tldraw release, deployed at least 3 days before the cut-over, so that a
 
 | Part | R0 behaviour |
 |---|---|
-| api | Lists v2 checkpoints and shows "Made on the new canvas — preview and restore after the switch"; refuses v2 restore with that message. Accepts the `engine-migration` reason (migration `0022`, additive). Refuses v2 archive import with a clear message. Shows boards born on the new canvas with a "new canvas" badge, and refuses to duplicate or export them with the same message. Has the `file-refs` and `workshop-state` routes (unused by tldraw sync; reviewed versions of the spike's code, §8.1). |
+| api | Lists v2 checkpoints and shows "Made on the new canvas — preview and restore after the switch"; refuses v2 restore with that message. Accepts the `engine_migration` reason (migration `0022`, additive). Refuses v2 archive import with a clear message. Shows boards born on the new canvas with a "new canvas" badge, and refuses to duplicate or export them with the same message. Has the `file-refs` and `workshop-state` routes (unused by tldraw sync; reviewed versions of the spike's code, §8.1). |
 | sync | Serves the tldraw tables. **Never writes or trims any `lb_*` table** (it reads only whether `lb_meta.converted_from` exists), and keeps managing its own `dr_deleted_*` as today. Refuses boards with `lb_meta` and no `converted_from` without opening a room (§5.9 step 4). Its backups copy the whole file, `lb_*` included. **Maintenance mode (new):** `POST /internal/maintenance {on}` lets pending pushes commit, closes every socket with 4099 `MAINTENANCE`, and refuses new ones; internal routes keep working. **`POST /internal/backups/run-all` (new)** writes a fresh local and offsite backup of every board and returns each object key and `recordsSha256` for the cut-over runbook (§7.5). |
 | web | Unchanged apart from R0 api messages, the maintenance notice and the "new canvas" message. |
 | Tests | R0's gate runs a board file that contains every `lb_*` table and checks that each of them is byte-identical after R0 served, backed up and trimmed the board. A born-after board is refused, with no tldraw table created. A v2 checkpoint row. Maintenance on closes and refuses sockets. `run-all` returns digests equal to the files'. |
