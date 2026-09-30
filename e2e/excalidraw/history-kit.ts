@@ -12,6 +12,7 @@ import {
   item,
   items,
   select,
+  selection,
   selectNone,
   updateItem,
 } from '../tests/support/canvas.ts'
@@ -200,6 +201,9 @@ export async function labelOf(page: Page, id: string): Promise<string | null> {
 export async function deleteWithKeyboard(page: Page, ids: string[]): Promise<void> {
   await focusBoard(page)
   await select(page, ids)
+  // the focusing click can land after the selection and clear it (seen once in three runs at the wave-3
+  // integration): Delete only once the selection is there
+  await expect.poll(async () => [...(await selection(page))].sort()).toEqual([...ids].sort())
   await page.keyboard.press('Delete')
   await expect
     .poll(async () => {

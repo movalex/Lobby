@@ -36,6 +36,14 @@ test('A11Y2-06: on a phone a multi-selection keeps the selection bar on screen; 
   const a = await canvasSession('alice')
   await waitForA11y(a.page)
   await a.page.setViewportSize(PHONE)
+  // the canvas reports its new size a render later: place the notes in the phone's view, not the old one
+  // (the wave-3 integration: 3b's first view no longer moves the camera onto them afterwards)
+  await expect
+    .poll(async () => {
+      const w = await viewport(a.page)
+      return w.width * w.zoom <= PHONE.width
+    })
+    .toBe(true)
   const v = await viewport(a.page)
   const ids: string[] = []
   for (let i = 0; i < 3; i++)
