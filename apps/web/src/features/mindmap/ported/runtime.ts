@@ -644,7 +644,7 @@ export class MindmapRuntime {
         startArrowhead: null,
         endArrowhead: null,
       }
-      if (!keep) {
+      const createLine = () => {
         const id = d.create('arrow', {
           ...g,
           ...style,
@@ -657,9 +657,11 @@ export class MindmapRuntime {
         d.bind(id, 'start', parent.id)
         d.bind(id, 'end', n.id)
         wanted.add(id)
+      }
+      if (!keep) {
+        createLine()
         continue
       }
-      wanted.add(keep)
       const el = d.get(keep) as unknown as Record<string, unknown>
       const fix: Record<string, unknown> = {}
       for (const [k, v] of Object.entries(style)) if (el[k] !== v) fix[k] = v
@@ -670,7 +672,7 @@ export class MindmapRuntime {
         { end: 'start' as const, target: parent.id, fp: side(n.side).parent },
         { end: 'end' as const, target: n.id, fp: side(n.side).child },
       ]
-      const rebind = ends.filter(({ end, target, fp }) => {
+      const rebind = ends.some(({ end, target, fp }) => {
         const got = fixedPointOf(d.get(keep), end)
         return (
           bindingOf(d.get(keep), end) !== target ||
@@ -679,12 +681,20 @@ export class MindmapRuntime {
           !near(got[1] ?? -1, fp[1])
         )
       })
-      // the geometry goes first (a new binding's fixed point is where its end is); otherwise only when an
-      // end moved here (see movesHere)
       const endsMoved = this.movesHere(d, n.id) || this.movesHere(d, parent.id)
-      if ((rebind.length || endsMoved) && !sameLine(el as never, g)) Object.assign(fix, g)
+      // A line whose ends change, or whose style changes while an end moves (a topic moved to another
+      // parent or level), is replaced rather than rewritten: Lobby's history takes a bound arrow's change
+      // as derived from its moving ends and records it later as a step of its own (CR-3D-4), while a new
+      // line is part of the step that makes it.
+      if (rebind || (Object.keys(fix).length && endsMoved)) {
+        this.deleteLine(d, keep)
+        createLine()
+        continue
+      }
+      wanted.add(keep)
+      // the geometry only when an end moved here (see movesHere)
+      if (endsMoved && !sameLine(el as never, g)) Object.assign(fix, g)
       if (Object.keys(fix).length) d.update(keep, fix)
-      for (const { end, target } of rebind) d.bind(keep, end, target)
     }
     // lines of this map whose child is no longer one of its topics
     for (const id of new Set([...this.index.edges.keys(), ...d.touchedIds()])) {

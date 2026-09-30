@@ -4,8 +4,10 @@
 // (`window.__lobbyMindmap`, behind the same local-dev guard as the board page's debug handle). Reads go
 // through the facade (`window.lobbyCanvas`) and the board page's canvas (`window.__lobbyBoard.canvas`,
 // for the wave-1 members 2E has not put on the facade yet: `isHidden`, `text`).
-import { expect, type Page } from '@playwright/test'
+import { readFileSync } from 'node:fs'
+import { type BrowserContext, type Download, expect, type Page } from '@playwright/test'
 import { editingId, TEXT_EDITOR } from '../tests/support/canvas.ts'
+import { WEB_URL } from '../tests/support/ports.ts'
 
 export interface BoxLike {
   x: number
@@ -259,4 +261,48 @@ export const hidden = (page: Page, id: string) =>
 export async function focusCanvas(page: Page) {
   await page.evaluate(() => document.querySelector<HTMLElement>('.excalidraw')?.focus())
   await expect.poll(() => page.evaluate(() => !!document.activeElement?.closest('.excalidraw'))).toBe(true)
+}
+
+/** Clipboard access for copy/paste and "Copy outline" (the page's origin). */
+export async function grantClipboard(context: BrowserContext) {
+  await context.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: WEB_URL })
+}
+export const readClipboardText = (page: Page) => page.evaluate(() => navigator.clipboard.readText())
+
+/** A download's bytes. */
+export async function downloadBytes(download: Download): Promise<Buffer> {
+  return readFileSync(await download.path())
+}
+
+/**
+ * Whether another wave-3 owner's part is on this page (3a's menu shell, 3e's export): a spec step that
+ * needs it runs only then (on the integrated branch), and is skipped with a note before it lands.
+ */
+export async function hostSlot(page: Page, slot: string): Promise<boolean> {
+  return (await page.locator(`[data-lobby-slot="${slot}"]`).count()) > 0
+}
+
+/** The SVG export of `ids` (3e's `canvas.export.svg`), or null while that part is still a stub. */
+export async function exportSvg(page: Page, ids: string[]): Promise<string | null> {
+  return page.evaluate(async (list) => {
+    const b = (
+      window as unknown as { __lobbyBoard: { canvas: { export: { svg(o: unknown): Promise<string> } } } }
+    ).__lobbyBoard
+    try {
+      return await b.canvas.export.svg({ ids: list })
+    } catch (e) {
+      if ((e as { name?: string }).name === 'NotImplementedError' || /not implemented/i.test(String(e)))
+        return null
+      throw e
+    }
+  }, ids)
+}
+
+/** The whole map's scene box (hidden topics included). */
+export function mapBox(view: MapView): BoxLike {
+  const x0 = Math.min(...view.topics.map((t) => t.box.x))
+  const y0 = Math.min(...view.topics.map((t) => t.box.y))
+  const x1 = Math.max(...view.topics.map((t) => t.box.x + t.box.w))
+  const y1 = Math.max(...view.topics.map((t) => t.box.y + t.box.h))
+  return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 }
 }

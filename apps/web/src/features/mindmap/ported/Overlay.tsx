@@ -236,7 +236,9 @@ function TopicBar({ ctx, m }: { ctx: CanvasFeatureContext; m: Mindmap }) {
     rt.index.version.get()
     const id = selectedTopic(rt)
     if (!id) return null
-    if (canvas.gesture() !== 'idle' || canvas.editingId()) return null
+    // hidden while something moves or is typed in; a press (on the bar's own buttons, too) keeps it
+    const g = canvas.gesture()
+    if ((g !== 'idle' && g !== 'pressing') || canvas.editingId()) return null
     const b = canvas.bounds(id)
     if (!b) return null
     const vp = canvas.viewport.screenRect()
