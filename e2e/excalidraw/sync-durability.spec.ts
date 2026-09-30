@@ -65,6 +65,42 @@ async function recordSaveStates(page: Page): Promise<void> {
 const saveLog = (page: Page) =>
   page.evaluate(() => [...((window as unknown as { __saveLog?: string[] }).__saveLog ?? [])])
 
+/**
+ * The indicator itself shows Saved. The board page's indicator follows the engine's Saved state with the
+ * tldraw page's hold and settle rules (sync-quality/useEngineSaveStatus.ts): after a change it keeps
+ * "Saving…" on screen for a moment after the engine (`expectSaved`) is already saved.
+ */
+const expectIndicatorSaved = (page: Page) =>
+  expect(saveIndicator(page)).toHaveAttribute('data-state', 'saved', { timeout: 30_000 })
+
+/**
+ * The element ids in this tab's offline queue in IndexedDB (canvas/sync/adapter/offline-idb.ts: one record
+ * per board, user and tab). The engine writes the queue 100 ms after a change (sync/core/engine.ts
+ * schedulePersist), while the indicator already counts the change: a reload inside that window loses it
+ * (docs/research/excalidraw/WAVE-2.md, open problems).
+ */
+const offlineQueueIds = (page: Page, board: string): Promise<string[]> =>
+  page.evaluate(
+    (boardId) =>
+      new Promise<string[]>((resolve, reject) => {
+        const open = indexedDB.open('lobby-offline')
+        open.onerror = () => reject(open.error)
+        open.onsuccess = () => {
+          const db = open.result
+          if (!db.objectStoreNames.contains('queues')) return resolve([])
+          const req = db.transaction('queues', 'readonly').objectStore('queues').getAll()
+          req.onerror = () => reject(req.error)
+          req.onsuccess = () => {
+            const recs = req.result as { boardId: string; entries: { element: { id: string } }[] }[]
+            resolve(
+              recs.filter((r) => r.boardId === boardId).flatMap((r) => r.entries.map((e) => e.element.id)),
+            )
+          }
+        }
+      }),
+    board,
+  )
+
 /** Live element ids of `ids` stored on the server. */
 async function storedLive(
   stack: Parameters<typeof serverSnapshot>[0],
@@ -99,6 +135,7 @@ test('each edit shows Saving… then Saved, and what Saved promised is on the se
 
   await updateItem(a.page, 'saved-box', { x: 400, strokeColor: '#e03131' })
   await expectSaved(a.page)
+  await expectIndicatorSaved(a.page)
   expect(await storedElement(stack, board, 'saved-box')).toMatchObject({ x: 400, strokeColor: '#e03131' })
   const log = await saveLog(a.page)
   expect(new Set(log)).toEqual(new Set(['saved', 'saving']))
@@ -146,6 +183,16 @@ test('with the sync server killed, 10 edits stay on the device, survive a reload
   expect((await saveLog(a.page)).slice(1)).not.toContain('saved')
 
   // a reload while the server is down: the edits live in the device's offline queue, not in the tab
+  // (once it holds them: the queue is written a moment after each change)
+  await expect
+    .poll(
+      async () => {
+        const queued = new Set(await offlineQueueIds(a.page, board))
+        return ids.filter((id) => !queued.has(id))
+      },
+      { message: 'every offline edit is in the device queue' },
+    )
+    .toEqual([])
   await a.page.reload()
   await stack.sync.start()
   await waitForCanvas(a.page)
@@ -197,12 +244,14 @@ test('an injected COMMIT failure: the tab reconnects and pushes the create again
   const b = await canvasSession('bob')
   await createItem(a.page, 'rectangle', { id: 'before-failure', x: 100, y: 100, width: 100, height: 100 })
   await expectSaved(a.page)
+  await expectIndicatorSaved(a.page)
   await recordSaveStates(a.page)
   await failNextCommits(stack, board, 1)
   await createItem(a.page, 'rectangle', { id: 'across-failure', x: 300, y: 100, width: 100, height: 100 })
   // the moment the indicator says Saved, the element is stored
   await expectSaved(a.page, 30_000)
   expect((await storedElement(stack, board, 'across-failure'))?.type).toBe('rectangle')
+  await expectIndicatorSaved(a.page)
   const log = await saveLog(a.page)
   expect(log[0]).toBe('saved')
   expect(log.slice(1, -1)).not.toContain('saved')

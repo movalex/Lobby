@@ -178,7 +178,7 @@ test('shared as viewer: read-only and forged writes never land; upgraded to edit
 
   await test.step('bob has no way back in; alice keeps working', async () => {
     await b.page.reload()
-    await expect(b.page.getByText("You don't have access to this board.")).toBeVisible()
+    await expect(b.page.getByText(/^You don't have access to this board\.?$/)).toBeVisible()
     expect(await b.page.evaluate(() => window.lobbyCanvas === undefined)).toBe(true)
     expect(await ownerFacts(a.page, note)).toEqual({ ...UNTOUCHED, note: '#d0bfff' })
     await expectServerConverged(stack, board, [a.page])
@@ -198,7 +198,7 @@ test('a user from another workspace opening the board link gets "no access", and
     await signInContext(context, erin.handle, erin.name)
     const page = await context.newPage()
     await page.goto(`/b/${privateBoard}`)
-    await expect(page.getByText("You don't have access to this board.")).toBeVisible()
+    await expect(page.getByText(/^You don't have access to this board\.?$/)).toBeVisible()
     expect(await page.evaluate(() => window.lobbyCanvas === undefined)).toBe(true)
   } finally {
     await context.close()
