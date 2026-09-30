@@ -489,3 +489,25 @@ Checks: lint 0 errors / 0 warnings (581 files); typecheck 14 projects; vitest 1,
     - CR-2D-1 (O1);
     - `serverWrite` (O1): until it exists, restore and place-notes answer 503 on an open board.
   - **Wave 3 can start on the real board page,** with 82 real `LobbyCanvas` members and every registry. 3b's template insert needs CR-2D-2 (`LobbyTx.insert`). The spike B suite needs `VITE_LOBBY_BOARD_PAGE=spike` on this branch (a request to spike B). AGENTS.md is unchanged (the owner's).
+- **Excalidraw migration, wave 3b (navigation) on `engine/w3-3b`** (from `engine/excalidraw` 5b9c87a; `docs/research/excalidraw/wave3/3B.md`). The ported `navigation` feature (`features/canvas-ux/ported/navigation/**`) is on the Excalidraw board page, on `canvas/api` only. The tldraw build is unchanged except the dashboard's content-search links, which keep `?d=` in the default build.
+  - **Built:**
+    - Lobby's camera: `viewport.zoomTo`, `centerOn`, `ensureVisible`, `zoomStep` and `limits`, going below Excalidraw's 0.1 down to the whole-board fit. Change request CR 3b-1 (a `CR:` commit) makes them `composed` in the member table.
+    - The zoom keys and zoom menu, the Lobby-drawn minimap (closed by default), and the navigation host slot with phone-width Zoom to fit.
+    - Board search, the Frames panel (`customData.lobby.present`), and the Templates picker.
+    - Copy link with `?el=` and `?view=` links and the legacy `?d=` reader (`lib/deep-link.ts`), and `?el=` dashboard content-search links on the new board page.
+    - The first view (template, links, the last camera with v1 cameras read through the frozen page offsets, `lb_doc.startView`, fit or first frame) and PRE-08.
+    - Arrange as grid, select by type, and paste as sticky notes.
+  - **Blocked, built and marked:** the template insert (CR-2D-2 `LobbyTx.insert`; its 2 specs are `test.fail`).
+  - **Deviations** (3B.md §3):
+    - only owners can set the start view (canvas-schema `startView` is an owner key);
+    - a locked frame keeps its presentation place (the room refuses `customData` on locked elements);
+    - pasted notes use the new-note face;
+    - the dashboard template insert is an undo step;
+    - the first view waits about 150 ms for the board to settle.
+  - **Found** (3B.md §4):
+    - `port-impl.ts` drops an update to an element created in the same `transact` (so does 2C's `tx.duplicate` structure write);
+    - a first visit within 5 s of an `lb_doc` write gets the old doc (the room's cached reset snapshot; pinned by a `test.fail` spec);
+    - features mount before the board's content is in;
+    - `viewport.set` is not read back at once.
+  - **Requested:** CR 3b-2 (wheel and pinch deltas on the input stream, for the wheel below 0.1), CR 3b-3 (`startView` editor-writable), CR 3b-4 (`present` writable on locked frames).
+  - **Not ported:** the wheel below 0.1, the level-of-detail pass, the UI clicks on 3a's shells (the specs run the same entries through the page's dev-only registry hook), search by tag (3d), and F15's upload e2e (3g).
