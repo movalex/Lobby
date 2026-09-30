@@ -40,6 +40,7 @@ import { UndoController } from '../history/controller.ts'
 import { CanvasInput } from '../input/CanvasInput.ts'
 import { LeaseClient } from '../lease/client.ts'
 import type { EditNotice, EditState } from '../lease/editorLease.ts'
+import { createLodTarget, installLod } from '../lod/index.ts'
 import { installBoardOverrides } from '../overrides.ts'
 import { createCanvasPort, type LobbyCanvasPort } from '../port-impl.ts'
 import { PresenceHub } from '../presence/hub.ts'
@@ -452,8 +453,11 @@ export class LobbyBoardSession {
     this.api = api
     const offs: (() => void)[] = []
     const root = this.rootEl ?? (wrapper.parentElement as HTMLElement)
+    // 3b's level-of-detail pass adds its culled ids to the render-override snapshot the board's overrides
+    // submit (canvas/lod/cull.ts; CR 3b-5 moves that merge into RenderOverrides)
+    const lodTarget = createLodTarget(api)
     const board = installBoardOverrides({
-      api,
+      api: lodTarget.api,
       wrapper,
       registries: this.registries,
       boardId: this.o.boardId,
@@ -652,6 +656,15 @@ export class LobbyBoardSession {
     offs.push(() => handles.dispose())
     offs.push(this.settings.subscribe(() => this.concern('settings')))
     this.handle = createLobbyCanvas({ port, registries: this.registries, board: handles })
+    // 3b: the level-of-detail pass for zoomed-out views (docs/EXCALIDRAW-MIGRATION.md §8.5)
+    const lod = installLod({
+      api,
+      target: lodTarget,
+      canvas: this.handle.canvas,
+      isHidden: (id) => this.registries.hidden.isHidden(id),
+      root,
+    })
+    offs.push(() => lod.dispose())
     // the test facade and the debug handle (dev-auth builds only: the facade checks the guard itself)
     const uninstallFacade = installFacade(port, this.registries)
     if (uninstallFacade) offs.push(uninstallFacade)
