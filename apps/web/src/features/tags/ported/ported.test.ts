@@ -360,6 +360,19 @@ describe('runtime writes (a fake canvas)', () => {
     f.log.length = 0
     f.emit({ updated: ['a'], source: 'local' } as never)
     expect(f.log).toEqual([])
+    // a recolour taken back: the list follows the copy the undo restored
+    const recolor = rt.recolorTag('idea', 'red')
+    expect(recolor.ok && recolor.value).toBe(1)
+    expect(rt.board.get().get('idea')?.color).toBe('red')
+    f.store.set('a', a)
+    f.log.length = 0
+    f.emit({ updated: ['a'], source: 'history' } as never)
+    expect(f.log).toEqual(['doc tagDef:idea'])
+    expect(rt.board.get().get('idea')?.color).toBe('green')
+    // nothing to do when the list already agrees
+    f.log.length = 0
+    f.emit({ updated: ['a'], source: 'history' } as never)
+    expect(f.log).toEqual([])
     off()
   })
 })

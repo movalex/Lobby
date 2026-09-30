@@ -172,7 +172,7 @@ test('Tags panel: "Show only" fades everything else for alice alone; rename, rec
     expect((await boardList(a.page)).idea).toEqual({ name: 'Idea', color: 'red' })
   })
 
-  await test.step('delete “Idea” everywhere (after a confirmation): gone from both notes and the list, for bob too; Ctrl+Z brings it all back', async () => {
+  await test.step('delete “Idea” everywhere (after a confirmation): gone from both notes and the list, for bob too; Ctrl+Z brings it all back, then the colour', async () => {
     await a.page.getByTestId('tag-delete').click()
     await expect(a.page.getByTestId('tag-editor')).toContainText(
       'Delete “Idea” from 2 items? The notes and cards stay.',
@@ -190,6 +190,10 @@ test('Tags panel: "Show only" fades everything else for alice alone; rename, rec
     await expect(chips(b.page, N2)).toHaveText(['Idea', 'User research'])
     // lb_doc is not part of the undo: the notes' copies put the definition back (./runtime.ts)
     await expect.poll(async () => (await boardList(b.page)).idea).toEqual({ name: 'Idea', color: 'red' })
+    // once more: the recolour goes back (the notes' copies, and the list follows them)
+    await pressUndo(a.page)
+    await expect(chips(b.page, N3)).toHaveAttribute('data-dr-tag-color', 'green', { timeout: 2_000 })
+    await expect.poll(async () => (await boardList(b.page)).idea).toEqual({ name: 'Idea', color: 'green' })
   })
 
   await test.step('bob deletes the tag alice is showing only: her filter ends by itself', async () => {

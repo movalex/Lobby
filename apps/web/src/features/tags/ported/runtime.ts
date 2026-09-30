@@ -3,8 +3,9 @@
 //  - the element keys of one change go into ONE `transact` (one undo step, pushed by the sync engine);
 //  - the board's list is lb_doc (`canvas.doc.set`), written just before, so it travels in the same push
 //    (the server takes a `tag:<key>` only with its `tagDef:<key>`). lb_doc is per-key last-writer-wins and
-//    not part of Lobby's undo (the history is the elements'): an undo takes back the elements' tags and
-//    leaves the list as it is; an undo that puts back a tag whose definition is gone lists it again.
+//    not part of Lobby's undo (the history is the elements'): an undo takes back the elements' tags, and
+//    the list then follows the elements' own copies (a definition that went is listed again, a colour or
+//    name the undo changed is written back); a tag that only the undone step created stays listed.
 //
 // Who may write: whoever may edit the canvas. The server refuses read-only sessions' pushes (and a
 // guest's doc writes), which is the enforcement; `canvas.readOnly()` only keeps the UI from trying.
@@ -71,19 +72,25 @@ export class TagsRuntime {
   }
 
   /**
-   * An undo or redo that puts a tag back on an element after its definition went (delete everywhere,
-   * then Ctrl+Z): the definition comes back from the element's own copy, so the list shows it again.
+   * The board's list follows an undo or redo of the elements (lb_doc is not part of Lobby's history):
+   * a tag put back on an element after its definition went (delete everywhere, then Ctrl+Z) is listed
+   * again from the element's own copy, and a copy whose name or colour the undo changed (a recolour
+   * taken back) sets the definition to it. Every change plans the copies and the list together, so after
+   * an undo the elements' copies are what the list said at that step.
    */
   private onChange(c: CanvasChange) {
     if (c.source !== 'history' || this.canvas.readOnly()) return
     untracked(() => {
       const board = this.board.get()
-      const missing: Record<string, { name: string; color: TagColor }> = {}
+      const defs: Record<string, { name: string; color: TagColor }> = {}
       for (const id of [...c.updated, ...c.created]) {
-        for (const t of elementTags(this.canvas.get(id)))
-          if (!board.has(t.key)) missing[tagDefKey(t.key)] = { name: t.name, color: t.color }
+        for (const t of elementTags(this.canvas.get(id))) {
+          const listed = board.get(t.key)
+          if (!listed || listed.name !== t.name || listed.color !== t.color)
+            defs[tagDefKey(t.key)] = { name: t.name, color: t.color }
+        }
       }
-      if (Object.keys(missing).length) this.canvas.doc.set(missing)
+      if (Object.keys(defs).length) this.canvas.doc.set(defs)
     })
   }
 

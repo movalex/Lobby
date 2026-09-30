@@ -13,15 +13,16 @@
 // Never losing a keystroke. A new topic's editor opens through the text lease: between the Tab (or Enter)
 // and the grant, the editor is "pending" and the board page keeps printable keys, Enter and Backspace in
 // the lease's buffer (replayed into the editor on the grant) and stops the rest, feature keys included. So
-// while its own new topic is pending this observes the TRUSTED key-downs on the board (a passive
-// document-capture listener filtered to the board's container: the input stream's `on('input')` also
-// reports the lease's own synthetic Enter, CR-3D-2), keeps them in order, and when the editor opens it puts
-// the words typed before the first Tab, Enter, Shift+Tab or Esc into the topic (replacing what the replay
-// typed, which turned an Enter into a new line) and runs the key itself; the keys after it wait for the next
-// topic's editor. Esc before the grant cancels the lease: the queued words are then written without an
-// editor (the runtime's `setTopicText`) and an empty new topic is taken back. Keys are held at most
-// HOLD_LIMIT_MS. "Idea<Tab>Detail<Enter>Other" typed at full speed builds the same map as typed slowly, as
-// it does on the tldraw page.
+// while its own new topic is pending this observes the TRUSTED key-downs on the board (a document-capture
+// listener filtered to the board's container; the input stream's `on('input')` also reports the lease's own
+// synthetic Enter, CR-3D-2), keeps them in order (between one topic's editor closing and the next one's
+// lease request it also keeps them from the board, which would take a letter for a tool key), and when the
+// editor opens it puts the words typed before the first Tab, Enter, Shift+Tab or Esc into the topic
+// (replacing what the replay typed, which turned an Enter into a new line) and runs the key itself; the keys
+// after it wait for the next topic's editor. Esc before the grant cancels the lease: the queued words are
+// then written without an editor (the runtime's `setTopicText`) and an empty new topic is taken back. Keys
+// are held at most HOLD_LIMIT_MS. "Idea<Tab>Detail<Enter>Other" typed at full speed builds the same map as
+// typed slowly, as it does on the tldraw page.
 //
 // A new map's central topic says "Central topic" as a placeholder: it opens with all of its text selected,
 // so the first character typed replaces it.
@@ -125,8 +126,8 @@ export class MindmapKeyboard {
   }
 
   install(): () => void {
-    // A passive observer of the board's key-downs (it never stops, prevents or acts on one), trusted
-    // events only: the lease's own synthetic Enter, which opens an editor, must never be taken for a key
+    // An observer of the board's key-downs (it acts on none; it stops one only in the moment between two
+    // topics' editors, see onKey), trusted events only: the lease's own synthetic Enter, which opens an editor, must never be taken for a key
     // the person typed, and the `input` stream does not say which key-downs are synthetic (CR-3D-2).
     // On the document, so it sees a key before the board's own dispatch: the Tab that starts a new topic
     // is handled there, and only the keys AFTER it are the new topic's.
@@ -164,7 +165,15 @@ export class MindmapKeyboard {
     // the editor is open: the editor-scope keys and the textarea take it from here
     if (p.id && this.canvas.text.editorElement() && this.canvas.editingId() === p.id) return
     const q = queuedOf({ key: e.key, shift: e.shiftKey, ctrl: e.ctrlKey, meta: e.metaKey, alt: e.altKey })
-    if (q) enqueue(p.queue, q)
+    if (!q) return
+    enqueue(p.queue, q)
+    // Between a topic's editor closing and the next topic's lease request (no lease is pending yet, so
+    // the board would take a letter for a tool key and the closing editor would take the rest), the key
+    // is the next topic's alone: nothing else sees it. Once the request is out, the lease keeps the keys.
+    if (p.id === null) {
+      e.preventDefault()
+      e.stopImmediatePropagation()
+    }
   }
 
   /** Opens `id`'s editor through the lease; keys typed until it is open are kept for it (see the header). */
