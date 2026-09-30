@@ -153,14 +153,16 @@ async function main(): Promise<{ code: number; out?: string }> {
   }
 }
 
+// No process.exit(): the process ends on its own once the report is written out, so a piped report is
+// never cut short, and no exit races the fetch sockets still closing (on Windows that aborts the
+// process in libuv, "Assertion failed: !(handle->flags & UV_HANDLE_CLOSING)", after the report).
 main().then(
   ({ code, out }) => {
-    // Exit once stdout is flushed: a piped report must never be cut short.
-    if (out) process.stdout.write(out, () => process.exit(code))
-    else process.exit(code)
+    if (out) process.stdout.write(out)
+    process.exitCode = code
   },
   (e: unknown) => {
     say(`checkpoints: ${(e as Error)?.message ?? e}`)
-    process.exit(1)
+    process.exitCode = 1
   },
 )
