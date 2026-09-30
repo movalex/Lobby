@@ -157,6 +157,8 @@ export function SelectionBar({ ctx }: { ctx: CanvasFeatureContext }) {
   const view = useValue('cux-selbar', () => {
     const ids = canvas.selection
     if (!ids.length || canvas.editingId() !== null) return null
+    // the style panel opened from the phone toolbar's Styles button covers the board's lower half
+    if (state.stylesOpen.get()) return null
     const g = canvas.gesture()
     if (g !== 'idle' && g !== 'pressing' && g !== 'tool') return null
     const b = canvas.boundsOf(ids)

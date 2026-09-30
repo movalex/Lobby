@@ -6,7 +6,8 @@
 // Deviations from the tldraw spec: the places the keyboard sits outside the board are the rail, the a11y
 // feature's Contents panel and its rows, Share and the board title (History, Present and Frames are 3h's,
 // 3e's and 3b's); the keys that still act from the chrome on tldraw (Ctrl+Z, Shift+= zoom) are their own
-// tests and expected failures until their owners bring them to the new page; the comment test is 3c's
+// tests (Ctrl+Z from the chrome and Ctrl+X on the canvas since 3a's wave 3b; Shift+= an expected failure until 3b
+// brings it to the new page); the comment test is 3c's
 // (the context menu is 3a's). The select tool's own "into the frame" keys are a11y-traversal.spec.ts's.
 import type { Page } from '@playwright/test'
 import {
@@ -113,7 +114,6 @@ test('A11Y2-02: tool letters, Delete and Backspace do nothing to the board while
 test('A11Y2-02: undo still works from the chrome (history keys are not board content)', async ({
   canvasSession,
 }) => {
-  needs('3a', 'the history keys from the chrome (Ctrl+Z with the keyboard outside the canvas)')
   const { page } = await canvasSession('alice')
   const { loose } = await setUp(page)
   await updateItem(page, loose, { x: 1100 })
@@ -156,10 +156,6 @@ test('A11Y2-02: Ctrl+X, Ctrl+V and "," from the top bar and the rail leave the b
 })
 
 test('A11Y2-02: on the canvas, Ctrl+X still cuts', async ({ canvasSession }) => {
-  needs(
-    '2C / 3a',
-    "a cut on the canvas: the key allowlist blocks Ctrl+X (canvas/input/keymap.ts: Excalidraw's actionCut keydown test, spike A A6)",
-  )
   const { page, context } = await canvasSession('alice')
   await grantClipboard(context)
   const { inner } = await setUp(page)

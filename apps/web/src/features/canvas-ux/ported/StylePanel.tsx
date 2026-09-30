@@ -9,7 +9,7 @@
 //    alignment, label alignment, arrowheads, line kind), mapped to the engine's fields by
 //    ./style-vocabulary.ts. Every pick is one undo step and sets the style of the next shapes too.
 // People who cannot edit get no style panel.
-import { useEffect, useId, useState, useSyncExternalStore } from 'react'
+import { useId } from 'react'
 import type {
   CanvasElement,
   CanvasFeatureContext,
@@ -46,6 +46,8 @@ import {
   FREEDRAW_WIDTH,
   fillNameOf,
   fontNameOf,
+  HIGHLIGHT_SHADES,
+  highlightNameOf,
   LABEL_SIZE,
   NEXT_STROKE_WIDTH,
   noteColorOf,
@@ -65,9 +67,20 @@ import {
   VALIGNS,
   type VAlignName,
 } from './style-vocabulary.ts'
+import { STYLES_BUTTON_MAX, useCanvasRoom } from './toolbar-layout.ts'
 
 /** What the panel styles: an element kind, or the kind the picked tool makes. */
-export type StyleKind = 'note' | 'text' | 'shape' | 'arrow' | 'line' | 'draw' | 'frame' | 'image' | 'other'
+export type StyleKind =
+  | 'note'
+  | 'text'
+  | 'shape'
+  | 'arrow'
+  | 'line'
+  | 'draw'
+  | 'highlight'
+  | 'frame'
+  | 'image'
+  | 'other'
 
 /**
  * Creation tools whose next shape the panel sets (Lobby tool names). The note tool is not one on this
@@ -82,6 +95,8 @@ export const STYLED_TOOLS: Readonly<Record<string, StyleKind>> = {
   arrow: 'arrow',
   line: 'line',
   freedraw: 'draw',
+  // the highlighter's next stroke takes a colour only (its width and opacity are the highlighter's)
+  highlight: 'highlight',
 }
 
 export function kindOf(el: CanvasElement): StyleKind {
@@ -178,10 +193,17 @@ function pickColor(canvas: LobbyCanvas, t: Target, name: ColorName) {
           : { strokeColor: c.solid },
       )
     } else if (k === 'text' || k === 'arrow' || k === 'line' || k === 'draw') {
-      put(w, el.id, { strokeColor: c.solid })
+      // a highlight stroke keeps the highlighter's shade of the colour
+      const highlight = items.itemKindOf(el) === 'highlight'
+      put(w, el.id, { strokeColor: highlight ? HIGHLIGHT_SHADES[name] : c.solid })
     }
   }
   write(canvas, 'color', w)
+  // the highlighter's next stroke: its shade of the colour (the pen's own colour comes back after it)
+  if (t.next && has(t, 'highlight')) {
+    canvas.styles.setNext({ strokeColor: HIGHLIGHT_SHADES[name] })
+    return
+  }
   // the next shapes take the colour too (a pick on notes alone is only theirs: the note palette)
   if (t.next || t.els.some((e) => kindOf(e) !== 'note')) {
     const n = canvas.styles.next()
@@ -359,10 +381,13 @@ function ColorPicker({
   canvas,
   t,
   value,
+  highlight = false,
 }: {
   canvas: LobbyCanvas
   t: Target
   value: ColorName | 'mixed' | null | undefined
+  /** the highlighter's swatches (its shade of each colour) */
+  highlight?: boolean
 }) {
   const theme = useValue('cux-theme', () => canvas.theme(), [canvas])
   return (
@@ -383,7 +408,10 @@ function ColorPicker({
           >
             <span
               className="cux-style__swatch-dot"
-              style={{ background: SHADES[n].solid, filter: theme === 'dark' ? THEME_FILTER : undefined }}
+              style={{
+                background: highlight ? HIGHLIGHT_SHADES[n] : SHADES[n].solid,
+                filter: theme === 'dark' ? THEME_FILTER : undefined,
+              }}
             />
           </button>
         ))}
@@ -480,62 +508,41 @@ function ArrowheadSelect({
   )
 }
 
-/** Phone widths (A11Y2-06's breakpoint): the panel folds behind a Styles button. */
-const PHONE_QUERY = '(max-width: 599px)'
-
-function usePhoneWidth(): boolean {
-  return useSyncExternalStore(
-    (changed) => {
-      const m = window.matchMedia(PHONE_QUERY)
-      m.addEventListener('change', changed)
-      return () => m.removeEventListener('change', changed)
-    },
-    () => window.matchMedia(PHONE_QUERY).matches,
-    () => false,
-  )
-}
-
 /**
- * The style panel host slot. On a phone the whole panel would cover about half of the board (and the
- * notices and bars placed at the top), so it folds behind a Styles button there, as tldraw's phone toolbar
- * did; it folds again when the selection changes (the wave-3 integration).
+ * The style panel host slot (top right). On a canvas of 640 px or less (tldraw's TABLET_SM) it folds: the
+ * toolbar's Styles button (./Toolbar.tsx) opens the same panel above the toolbar, as tldraw's phone toolbar
+ * does (MobileStylePanel), so here the slot shows nothing.
  */
 export function StylePanel({ ctx }: { ctx: CanvasFeatureContext }) {
-  const { canvas } = ctx
-  const phone = usePhoneWidth()
-  const [open, setOpen] = useState(false)
-  const sel = useValue('cux-style-sel', () => canvas.selection.join(' '), [canvas])
-  useEffect(() => {
-    void sel
-    setOpen(false)
-  }, [sel])
-  const shown = useValue('cux-style-shown', () => !canvas.readOnly() && targetOf(canvas) !== null, [canvas])
-  if (!phone) return <StylePanelBody ctx={ctx} />
-  if (!shown) return null
-  return (
-    <div className="cux-style-phone">
-      <button
-        type="button"
-        className="cux-style-toggle"
-        data-testid="style.panel-toggle"
-        aria-expanded={open}
-        aria-label="Styles"
-        title="Styles"
-        onClick={() => setOpen((o) => !o)}
-      >
-        <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
-          <circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" strokeWidth="2" />
-          <circle cx="9" cy="10" r="1.5" fill="currentColor" />
-          <circle cx="14" cy="8.5" r="1.5" fill="currentColor" />
-          <circle cx="15.5" cy="13" r="1.5" fill="currentColor" />
-        </svg>
-      </button>
-      {open ? <StylePanelBody ctx={ctx} /> : null}
-    </div>
-  )
+  const { width } = useCanvasRoom(ctx.canvas)
+  if (width <= STYLES_BUTTON_MAX) return null
+  return <StylePanelBody ctx={ctx} />
 }
 
-function StylePanelBody({ ctx }: { ctx: CanvasFeatureContext }) {
+/** Whether the style panel has something to style (a selection that is not only frames, or a styled tool). */
+export const hasStyleTarget = (canvas: LobbyCanvas) => !canvas.readOnly() && targetOf(canvas) !== null
+
+/**
+ * The colour the Styles button shows (tldraw's MobileStylePanel): the selection's shared colour, else the
+ * next shape's; null when mixed or none.
+ */
+export function styleSwatchOf(canvas: LobbyCanvas): string | null {
+  const t = targetOf(canvas)
+  if (!t) return null
+  if (t.next) return canvas.styles.next().strokeColor ?? null
+  const colors = new Set<string>()
+  for (const el of t.els) {
+    const k = kindOf(el)
+    const c =
+      k === 'note'
+        ? (el as { backgroundColor?: string }).backgroundColor
+        : (el as { strokeColor?: string }).strokeColor
+    if (c) colors.add(c)
+  }
+  return colors.size === 1 ? ([...colors][0] ?? null) : null
+}
+
+export function StylePanelBody({ ctx }: { ctx: CanvasFeatureContext }) {
   const { canvas } = ctx
   const readOnly = useValue('cux-readonly', () => canvas.readOnly(), [canvas])
   const t = useValue('cux-style-target', () => (readOnly ? null : targetOf(canvas)), [canvas, readOnly])
@@ -545,6 +552,16 @@ function StylePanelBody({ ctx }: { ctx: CanvasFeatureContext }) {
     [canvas, t],
   )
   if (!t) return null
+  // the highlighter's next stroke: its colour only (tldraw's highlighter has colour and size; the size here
+  // is the highlighter's one width)
+  if (t.next && has(t, 'highlight'))
+    return (
+      <section className="cux-style" aria-label="Styles" data-testid="style.panel">
+        <div className="cux-style__section">
+          <ColorPicker canvas={canvas} t={t} value={highlightNameOf(styles.strokeColor)} highlight />
+        </div>
+      </section>
+    )
   const allNotes = !t.next ? t.els.every((e) => kindOf(e) === 'note') : false
   // the text tool's next text takes only a colour (CR-3A-7)
   const textTool = t.next && has(t, 'text')
@@ -554,9 +571,10 @@ function StylePanelBody({ ctx }: { ctx: CanvasFeatureContext }) {
     const names: (ColorName | null)[] = []
     for (const el of t.els) {
       const k = kindOf(el)
+      const stroke = (el as { strokeColor?: string }).strokeColor
       if (k === 'note') names.push(noteColorOf((el as { backgroundColor?: string }).backgroundColor))
-      else if (k !== 'image' && k !== 'other' && k !== 'frame')
-        names.push(colorNameOf((el as { strokeColor?: string }).strokeColor))
+      else if (items.itemKindOf(el) === 'highlight') names.push(highlightNameOf(stroke))
+      else if (k !== 'image' && k !== 'other' && k !== 'frame') names.push(colorNameOf(stroke))
     }
     return sharedOf(names)
   })()
