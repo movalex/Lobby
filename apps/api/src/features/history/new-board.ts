@@ -12,6 +12,7 @@
 // an id collision or a leftover from an earlier failed attempt) just draws a new id. If the row
 // insert fails after a successful seed, the canvas file is an orphan nobody can open (logged).
 
+import { NEW_CANVAS_BOARD_MESSAGE, NEW_CANVAS_ERROR } from '@draftroom/contracts'
 import { newBoardId, type Queryable } from '@draftroom/db'
 import { type BoardVisibility, canCreateInWorkspace } from '@draftroom/permissions'
 import { BOARD_RETURNING, type BoardRow, requireWorkspaceRole } from '../../access.ts'
@@ -21,6 +22,7 @@ import { assertBoardRoom } from '../../files/usage.ts'
 import {
   type LobbySeed,
   type RoomSnapshotJson,
+  SyncNewCanvasBoard,
   SyncSeedConflict,
   SyncUnavailable,
 } from '../../sync-internal.ts'
@@ -56,11 +58,18 @@ const SEED_ATTEMPTS = 4
 export const syncUnavailable = () =>
   new ApiError(503, 'SYNC_UNAVAILABLE', 'The board server is not reachable right now. Try again in a moment.')
 
-/** Wraps a sync call: an unreachable or failing sync server is a 503 with a user-safe message. */
+/** Bridge release R0: the board was made on the new canvas (409; the message says when it works again). */
+export const newCanvasBoard = () => new ApiError(409, NEW_CANVAS_ERROR, NEW_CANVAS_BOARD_MESSAGE)
+
+/**
+ * Wraps a sync call: an unreachable or failing sync server is a 503 with a user-safe message; a board
+ * the sync server refused because it was made on the new canvas is a 409 that says so (R0).
+ */
 export async function viaSync<T>(fn: () => Promise<T>): Promise<T> {
   try {
     return await fn()
   } catch (e) {
+    if (e instanceof SyncNewCanvasBoard) throw newCanvasBoard()
     if (e instanceof SyncUnavailable) throw syncUnavailable()
     throw e
   }

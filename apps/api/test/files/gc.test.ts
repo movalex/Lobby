@@ -6,9 +6,11 @@
 // the same rule as apps/sync/src/http/asset-refs.ts (the sync tests cover the real endpoint).
 
 import type { AssetGcReport, WorkspaceStorage } from '@draftroom/contracts'
+import { newId as newDbId } from '@draftroom/db'
 import type { AssetVersionMeta } from '@draftroom/dev-assets'
 import { newId } from '@draftroom/dev-assets'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { snapshotStorageKey } from '../../src/features/history/snapshot-store.ts'
 import { derivativeKey, originalKey } from '../../src/files/blobs.ts'
 import { type AssetGcDeps, collectWorkspace, createAssetGc, type GcPassMode } from '../../src/files/gc.ts'
 import { type VersionRef, versionsInRecords } from '../../src/files/gc-refs.ts'
@@ -38,6 +40,8 @@ function gcSync() {
     failing,
     /** Called before each answer with the running call count (to change the world mid-pass). */
     onAssetRefs: null as null | ((boardId: string, call: number) => Promise<void> | void),
+    /** Boards whose file also holds the new canvas's tables (converted; R0's sync says so). */
+    converted: new Set<string>(),
     async assetRefs(boardId: string) {
       calls++
       await sync.onAssetRefs?.(boardId, calls)
@@ -48,6 +52,7 @@ function gcSync() {
         canvas: versionsInRecords(base.records(boardId)),
         deleted: deleted.get(boardId) ?? [],
         unusedAssetRecords: [],
+        ...(sync.converted.has(boardId) ? { newCanvasTables: true } : {}),
       }
     },
   })
@@ -501,5 +506,107 @@ describe('the timer', () => {
     await vi.waitFor(async () => expect((await w.marks())[m.versionId]).not.toBeNull(), { timeout: 5_000 })
     await gc.stop()
     expect(await exists(w, originalKey(m.assetId, m.versionId))).toBe(true)
+  })
+})
+
+// Bridge release R0 (docs/EXCALIDRAW-MIGRATION.md §5.8 "Asset GC", §5.9 step 2): during a rollback R0 meets
+// what the Excalidraw build left behind and cannot read. A checkpoint made on the new canvas (a v2 body)
+// and a converted board's new-canvas elements can show files R0 cannot see, so the pass is incomplete:
+// nothing new is marked or deleted, and no scan row is recorded for the checkpoint (a scan is never
+// repeated, so a row saying "no references" would outlive the roll-forward). Verifier: gc-v2.
+describe('what the new canvas left behind (bridge release R0)', () => {
+  /** A checkpoint row as the Excalidraw build writes one, its v2 body showing `m`. */
+  async function v2Checkpoint(w: World, m: AssetVersionMeta, bodyVersion: 1 | 2 = 2) {
+    const id = newDbId('snp')
+    const key = snapshotStorageKey(w.board, id)
+    const body = JSON.stringify({
+      format: 'lobby-checkpoint',
+      version: 2,
+      boardId: w.board,
+      clock: 3,
+      schema: 1,
+      elements: [{ id: 'img1', type: 'image', fileId: m.versionId }],
+      doc: {},
+    })
+    await w.api.blobs.put(key, Buffer.from(body), {
+      contentType: 'application/json',
+      contentLength: body.length,
+    })
+    await w.api.db.query(
+      `INSERT INTO board_snapshots (id, workspace_id, board_id, name, kind, reason, created_by, created_at,
+         document_clock, record_count, size_bytes, storage_key, body_version)
+       VALUES ($1, $2, $3, 'Moved to the new canvas', 'auto', 'engine_migration', NULL, now(), 3, 1, $4, $5, $6)`,
+      [id, DEV_STUDIO, w.board, body.length, key, bodyVersion],
+    )
+    return id
+  }
+  const scans = (w: World) => w.api.db.query('SELECT snapshot_id, ref_count FROM asset_gc_snapshot_scans')
+
+  it('a v2 checkpoint (row body_version 2) makes the pass incomplete and is never recorded', async () => {
+    const w = await world()
+    const m = await upload(w.api, w.alice, w.board, 'excalidraw-era.png')
+    w.sync.setBoard(w.board, baseRecords()) // the canvas no longer shows it
+    await v2Checkpoint(w, m, 2)
+    w.api.clock.advance(8 * DAY)
+    const r = await w.collect()
+    expect(r).toMatchObject({ complete: false, checkpointsFailed: 1, marked: 0 })
+    expect((await scans(w)).rows).toEqual([])
+    expect((await w.marks())[m.versionId]).toBeNull()
+    w.api.clock.advance(31 * DAY)
+    const d = await w.collect('delete')
+    expect(d).toMatchObject({ complete: false, deleted: { versions: 0 } })
+    expect(await exists(w, originalKey(m.assetId, m.versionId))).toBe(true)
+    expect((await scans(w)).rows).toEqual([])
+  })
+
+  // The Excalidraw branch's collector reads v2 bodies (gc-refs.ts versionsInCheckpoint): a v2 body behind a
+  // row that says v1 shows its image and is recorded. R0 (the tldraw build, on main) counts it as unread.
+  it('a v2 checkpoint behind a row that says v1 is read on this branch: its image is kept, the scan recorded', async () => {
+    const w = await world()
+    const m = await upload(w.api, w.alice, w.board, 'excalidraw-era.png')
+    w.sync.setBoard(w.board, baseRecords()) // the canvas no longer shows it
+    const id = await v2Checkpoint(w, m, 1)
+    w.api.clock.advance(8 * DAY)
+    expect(await w.collect()).toMatchObject({ complete: true, checkpointsFailed: 0, marked: 0 })
+    expect((await scans(w)).rows).toEqual([{ snapshot_id: id, ref_count: 1 }])
+    expect((await w.marks())[m.versionId]).toBeNull()
+    w.api.clock.advance(31 * DAY)
+    await w.collect('delete')
+    expect(await exists(w, originalKey(m.assetId, m.versionId))).toBe(true)
+  })
+
+  it('a body that is not JSON still counts as restoring nothing (as before)', async () => {
+    const w = await world()
+    const m = await upload(w.api, w.alice, w.board, 'plain.png')
+    const id = newDbId('snp')
+    const key = snapshotStorageKey(w.board, id)
+    await w.api.blobs.put(key, Buffer.from('not json'), { contentType: 'application/json', contentLength: 8 })
+    await w.api.db.query(
+      `INSERT INTO board_snapshots (id, workspace_id, board_id, name, kind, created_by, created_at,
+         document_clock, record_count, size_bytes, storage_key)
+       VALUES ($1, $2, $3, 'Broken', 'manual', $4, now(), 3, 1, 8, $5)`,
+      [id, DEV_STUDIO, w.board, w.alice.userId, key],
+    )
+    w.api.clock.advance(8 * DAY)
+    expect(await w.collect()).toMatchObject({ complete: true, checkpointsFailed: 0, marked: 1 })
+    expect((await scans(w)).rows).toEqual([{ snapshot_id: id, ref_count: 0 }])
+    expect((await w.marks())[m.versionId]).not.toBeNull()
+  })
+
+  it("a converted board's refs count, but the pass is incomplete (its new-canvas elements are unread)", async () => {
+    const w = await world()
+    const shown = await upload(w.api, w.alice, w.board, 'tldraw-side.png')
+    const excalidraw = await upload(w.api, w.alice, w.board, 'excalidraw-era.png')
+    w.api.clock.advance(8 * DAY)
+    await w.collect() // both unreferenced: marked
+    w.sync.setBoard(w.board, card(shown))
+    w.sync.converted.add(w.board)
+    const r = await w.collect()
+    expect(r).toMatchObject({ complete: false, boardsFailed: 1, cleared: 1, marked: 0 })
+    const marks = await w.marks()
+    expect(marks[shown.versionId]).toBeNull() // the tldraw side's refs still clear marks
+    w.api.clock.advance(31 * DAY)
+    expect(await w.collect('delete')).toMatchObject({ complete: false, deleted: { versions: 0 } })
+    expect(await exists(w, originalKey(excalidraw.assetId, excalidraw.versionId))).toBe(true)
   })
 })

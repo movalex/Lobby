@@ -30,6 +30,12 @@ export interface BoardAssetRefs {
   deleted: AssetRef[]
   /** Versions only an asset record no shape uses points at (tldraw leaves these behind). */
   unusedAssetRecords: AssetRef[]
+  /**
+   * Bridge release R0: the board file also holds the new canvas's lb_* tables (converted at the cut-over),
+   * which this build does not read, so `canvas` and `deleted` may miss files only the new canvas shows.
+   * The api's collector then counts the board as not fully read (apps/api/src/files/gc.ts). Absent otherwise.
+   */
+  newCanvasTables?: true
 }
 
 const AST_RE = /^ast_[0-9A-Za-z]{10,40}$/
@@ -129,5 +135,8 @@ export function handleAssetRefs(res: ServerResponse, deps: InternalDeps, rawBoar
     (record) => scan.addCanvas(record),
     (state) => scan.addDeleted(state),
   )
-  sendJson(res, 200, scan.result(rawBoardId, exists))
+  // Bridge release R0: a converted board also holds the new canvas's elements (lb_*), which this build
+  // never reads; files only they show are not in this answer, so the collector must not call it complete.
+  const partial = exists && deps.registry.hasNewCanvasTables(rawBoardId)
+  sendJson(res, 200, { ...scan.result(rawBoardId, exists), ...(partial ? { newCanvasTables: true } : {}) })
 }

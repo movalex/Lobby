@@ -1,9 +1,12 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { checkInternalSecret, INTERNAL_SECRET_HEADER } from '@draftroom/auth-tickets'
+import { RUN_ALL_ID_RE, type RunAll } from '../backup/run-all.ts'
 import { type BackupService, handleBackupStatus } from '../backup/service.ts'
-import { BoardOpenRefused, type InternalRoute } from '../engine-switch.ts'
+import type { InternalRoute } from '../engine-switch.ts'
+import { BoardOpenRefused, NEW_CANVAS_ERROR_CODE } from '../r0/pre-open.ts'
 import { handleAssetRefs } from './asset-refs.ts'
 import { handleBoardText } from './board-text.ts'
+import { readJson } from './body.ts'
 import {
   handleAccessChanged,
   handleListDeleted,
@@ -11,9 +14,10 @@ import {
   handleSeed,
   handleSnapshot,
   type InternalDeps,
+  refuseInMaintenance,
 } from './internal.ts'
 import { handlePlaceNotes } from './place-notes.ts'
-import { HttpError, notFound, sendError } from './respond.ts'
+import { HttpError, notFound, sendError, sendJson } from './respond.ts'
 
 export interface RouterDeps extends InternalDeps {
   internalSecret: string
@@ -26,10 +30,82 @@ export interface RouterDeps extends InternalDeps {
   engineRoutes?: readonly InternalRoute[]
   /** false: the tldraw board routes are not mounted (DRAFTROOM_ENGINE=excalidraw). Default true. */
   tldrawBoardRoutes?: boolean
+  /**
+   * Maintenance mode (bridge release R0, app.ts): `set(true)` lets the pushes that reached the server
+   * commit, closes every socket with 4099 MAINTENANCE and refuses new ones. Absent: the routes answer 404.
+   */
+  maintenance?: MaintenanceControl
+  /**
+   * POST /internal/backups/run-all starts a run (202 with its id), GET …/run-all/<runId> reads it, with
+   * its report once done, and GET …/run-all lists the runs (backup/run-all.ts). Absent: 404.
+   */
+  runAll?: Pick<RunAll, 'request' | 'get' | 'list'>
+}
+
+export interface MaintenanceControl {
+  on(): boolean
+  set(on: boolean): { maintenance: boolean; closedSockets: number }
 }
 
 type Handler = (req: IncomingMessage, res: ServerResponse, deps: RouterDeps, seg: string[]) => unknown
 type Route = { re: RegExp; methods: string[]; handle: Handler }
+
+/**
+ * Wraps a board-writing handler: refused while maintenance is on, so no edit reaches a board file. This
+ * is the check on entry, before the body is read; each handler checks again after reading it
+ * (refuseInMaintenance, internal.ts), because maintenance can go on while a body is still arriving.
+ */
+const writing =
+  (handle: Handler): Handler =>
+  (req, res, deps, seg) => {
+    refuseInMaintenance(deps)
+    return handle(req, res, deps, seg)
+  }
+
+const MAINTENANCE_LIMIT_BYTES = 1024
+
+async function handleMaintenance(req: IncomingMessage, res: ServerResponse, deps: RouterDeps) {
+  const control = deps.maintenance
+  if (!control) throw notFound()
+  if (req.method === 'GET') return sendJson(res, 200, { maintenance: control.on() })
+  const body = (await readJson(req, MAINTENANCE_LIMIT_BYTES)) as { on?: unknown } | null
+  if (typeof body?.on !== 'boolean' || Object.keys(body).length !== 1)
+    throw new HttpError(400, 'BAD_REQUEST', 'The body must be {"on": true} or {"on": false}.')
+  sendJson(res, 200, control.set(body.on))
+}
+
+/** Where a run is read (the POST's Location). */
+export const runAllPath = (runId: string) => `/internal/backups/run-all/${runId}`
+
+/**
+ * POST: starts a run, or joins the one that will answer this call (backup/run-all.ts), and answers at
+ * once with 202 and the run's id. The run goes on in the server; GET …/run-all/<runId> has its report
+ * once it is done. No client waits on one request for a run that can take many minutes.
+ */
+function handleRunAllStart(res: ServerResponse, deps: RouterDeps) {
+  if (!deps.runAll) throw notFound()
+  if (!deps.registry.backupsDir())
+    throw new HttpError(409, 'BACKUPS_OFF', 'Local backups are off on this server.')
+  const run = deps.runAll.request()
+  sendJson(res, 202, run, { Location: runAllPath(run.runId) })
+}
+
+function handleRunAllList(res: ServerResponse, deps: RouterDeps) {
+  if (!deps.runAll) throw notFound()
+  sendJson(res, 200, { runs: deps.runAll.list() })
+}
+
+function handleRunAllGet(res: ServerResponse, deps: RouterDeps, rawRunId: string) {
+  if (!deps.runAll) throw notFound()
+  const run = RUN_ALL_ID_RE.test(rawRunId) ? deps.runAll.get(rawRunId) : null
+  if (!run)
+    throw new HttpError(
+      404,
+      'RUN_NOT_FOUND',
+      'This server has no run-all run with that id. Runs are kept until the sync server restarts, which also turns maintenance off.',
+    )
+  sendJson(res, 200, run)
+}
 
 // Captures are raw (still percent-encoded) path segments; board ids are checked against a strict
 // pattern before use, so an encoded '/' or '..' can only ever fail that check.
@@ -46,6 +122,25 @@ const NEUTRAL_ROUTES: Route[] = [
     methods: ['GET'],
     handle: (_req, res, deps) => handleBackupStatus(res, deps.backups),
   },
+  // Bridge release R0: a fresh local + offsite backup of every board, for the cut-over runbook. POST
+  // starts a run (202), GET lists the runs, GET …/<runId> answers with the report once it is done.
+  {
+    re: /^\/internal\/backups\/run-all$/,
+    methods: ['GET', 'POST'],
+    handle: (req, res, deps) =>
+      req.method === 'POST' ? handleRunAllStart(res, deps) : handleRunAllList(res, deps),
+  },
+  {
+    re: /^\/internal\/backups\/run-all\/([^/]+)$/,
+    methods: ['GET'],
+    handle: (_req, res, deps, [runId = '']) => handleRunAllGet(res, deps, runId),
+  },
+  // Bridge release R0: maintenance mode (sockets closed and refused; internal reads keep working)
+  {
+    re: /^\/internal\/maintenance$/,
+    methods: ['GET', 'POST'],
+    handle: (req, res, deps) => handleMaintenance(req, res, deps),
+  },
 ]
 // The tldraw board routes open tldraw storage on the board file: only with the tldraw engine.
 const TLDRAW_BOARD_ROUTES: Route[] = [
@@ -57,7 +152,7 @@ const TLDRAW_BOARD_ROUTES: Route[] = [
   {
     re: /^\/internal\/boards\/([^/]+)\/seed$/,
     methods: ['POST'],
-    handle: (req, res, deps, [board = '']) => handleSeed(req, res, deps, board),
+    handle: writing((req, res, deps, [board = '']) => handleSeed(req, res, deps, board)),
   },
   // "Recently deleted" (history feature; handlers in internal.ts)
   {
@@ -68,7 +163,7 @@ const TLDRAW_BOARD_ROUTES: Route[] = [
   {
     re: /^\/internal\/boards\/([^/]+)\/deleted\/restore$/,
     methods: ['POST'],
-    handle: (req, res, deps, [board = '']) => handleRestoreDeleted(req, res, deps, board),
+    handle: writing((req, res, deps, [board = '']) => handleRestoreDeleted(req, res, deps, board)),
   },
   // The api's asset collector: files the canvas and "Recently deleted" still reference (asset-refs.ts)
   {
@@ -80,7 +175,7 @@ const TLDRAW_BOARD_ROUTES: Route[] = [
   {
     re: /^\/internal\/boards\/([^/]+)\/place-notes$/,
     methods: ['POST'],
-    handle: (req, res, deps, [board = '']) => handlePlaceNotes(req, res, deps, board),
+    handle: writing((req, res, deps, [board = '']) => handlePlaceNotes(req, res, deps, board)),
   },
   // Search across boards: a board's searchable text for the API's index (search; board-text.ts)
   {
@@ -146,8 +241,8 @@ export function createRequestHandler(deps: RouterDeps) {
     return handled.catch((e: unknown) => {
       let err: HttpError
       if (e instanceof HttpError) err = e
-      // The R0 stand-in refusing a board born on the new canvas (spike B, engine-switch.ts pre-open checks).
-      else if (e instanceof BoardOpenRefused) err = new HttpError(409, 'new-canvas', e.message)
+      // Bridge release R0: a board born on the new canvas (r0/pre-open.ts), refused before any room opened.
+      else if (e instanceof BoardOpenRefused) err = new HttpError(409, NEW_CANVAS_ERROR_CODE, e.message)
       else {
         deps.log('[http error]', req.method, path, e)
         err = new HttpError(500, 'INTERNAL', 'Something went wrong. Please try again.')

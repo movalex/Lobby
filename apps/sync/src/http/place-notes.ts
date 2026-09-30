@@ -23,12 +23,15 @@ import type { TLSyncStorage } from '@tldraw/sync-core'
 import { b64Vecs, type TLRecord, type TLSchema, type TLShape, toRichText } from '@tldraw/tlschema'
 import { BOARD_ID_RE, type RoomRegistry } from '../rooms.ts'
 import { readJson } from './body.ts'
+import { refuseInMaintenance } from './internal.ts'
 import { HttpError, sendJson } from './respond.ts'
 
 export interface PlaceNotesDeps {
   registry: RoomRegistry
   schema: TLSchema
   isClosing(): boolean
+  /** Maintenance mode (bridge release R0, router.ts). Absent: never on. */
+  maintenance?: { on(): boolean }
 }
 
 /** 1,000 notes × 500 code points × 4 bytes, plus JSON overhead. */
@@ -1031,6 +1034,8 @@ export async function handlePlaceNotes(
   if (!BOARD_ID_RE.test(rawBoardId)) throw new HttpError(400, 'INVALID_BOARD_ID', 'Invalid board id.')
   const input = parsePlaceRequest(await readJson(req, PLACE_LIMIT_BYTES))
   if (deps.isClosing()) throw new HttpError(503, 'SHUTTING_DOWN', 'The sync server is shutting down.')
+  // Checked again now that the body is read (the router checked on entry); synchronous to the write.
+  refuseInMaintenance(deps)
   const room = openRoom(deps.registry, rawBoardId)
   if (!room) throw new HttpError(409, 'NO_CANVAS', 'This board has no canvas yet.')
   sendJson(res, 200, placeNotes({ storage: room.storage, schema: deps.schema, input }))

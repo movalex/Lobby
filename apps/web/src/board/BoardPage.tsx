@@ -65,7 +65,7 @@ import { LobbyNoteShapeUtil } from './note-label-cache.ts'
 import { installPanLayer } from './pan-layer.ts'
 import { getDraftroomPresence, holderName, parseLeaseDenied } from './presence.ts'
 import { ShareDialog } from './ShareDialog.tsx'
-import { SyncErrorScreen } from './SyncErrorScreen.tsx'
+import { NewCanvasBoardScreen, SyncErrorScreen } from './SyncErrorScreen.tsx'
 import { BoardAccount, type ConnState, TopBar } from './TopBar.tsx'
 import { createTicketUri } from './ticket.ts'
 import { installTouchStartGuard } from './touch-guard.ts'
@@ -190,6 +190,9 @@ function BoardShell({ initial }: { initial: BoardDetail }) {
 
   // The request form starts from the role they had (PRI-16): most people want it back.
   if (accessLost) return <NoAccessScreen revoked previousRole={role} />
+  // Bridge release R0: a board made on the new canvas is not this build's to open. Said at once, with no
+  // socket: the api refuses its ticket anyway (409 NEW_CANVAS).
+  if (board.newCanvas) return <NewCanvasBoardScreen />
   // A fresh key = a fresh useSync (new socket + store): the only way out of a terminal sync error.
   return (
     <BoardSession
@@ -350,11 +353,19 @@ function BoardSession({
 
   // The ticket callbacks change identity every render; the uri function must not (it is a useSync
   // effect dependency: a new one would reconnect). Route them through a ref.
-  const handlers = useRef({ onTicket: (_t: TicketResponse) => {}, onAccessLost, onSignedOut: () => {} })
+  // Bridge release R0: the api refused the ticket because the board was made on the new canvas.
+  const [newCanvas, setNewCanvas] = useState(false)
+  const handlers = useRef({
+    onTicket: (_t: TicketResponse) => {},
+    onAccessLost,
+    onSignedOut: () => {},
+    onNewCanvas: () => {},
+  })
   handlers.current = {
     onTicket: (t) => onRole(t.role),
     onAccessLost,
     onSignedOut: () => void refresh(),
+    onNewCanvas: () => setNewCanvas(true),
   }
   const ticketUri = useMemo(
     () =>
@@ -368,6 +379,7 @@ function BoardSession({
         },
         onAccessLost: () => handlers.current.onAccessLost(),
         onSignedOut: () => handlers.current.onSignedOut(),
+        onNewCanvas: () => handlers.current.onNewCanvas(),
         origin: location,
       }),
     [boardId, ticketUserAtom],
@@ -439,8 +451,9 @@ function BoardSession({
     else dismiss('save-rejected') // the lease toast already explains it
   }, [rejection, sessionReadonly, notify, dismiss])
 
-  const syncError =
-    store.status === 'error'
+  const syncError = newCanvas
+    ? 'NEW_CANVAS_BOARD'
+    : store.status === 'error'
       ? String(store.error instanceof TLRemoteSyncError ? store.error.reason : store.error.message)
       : null
   // Access revoked while open: the sync server closes the session with FORBIDDEN (terminal).
@@ -677,7 +690,7 @@ function BoardSession({
         <div className="dr-board__body">
           <FeatureDock features={BOARD_FEATURES} ctx={featureCtx} />
           <main className="dr-board__canvas" aria-label="Board canvas">
-            {store.status === 'loading' && (
+            {store.status === 'loading' && !newCanvas && (
               <div className="dr-screen" data-testid="sync-loading">
                 <span className="dr-spinner" aria-hidden="true" />
                 <p>Connecting to board…</p>

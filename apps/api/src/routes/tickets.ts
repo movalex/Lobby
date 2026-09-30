@@ -2,7 +2,13 @@
 // Both answer with connectionRole(), so a ticket and a later re-check can never disagree.
 
 import { checkInternalSecret, INTERNAL_SECRET_HEADER, signTicket } from '@draftroom/auth-tickets'
-import { BoardId, type TicketResponse, UserId } from '@draftroom/contracts'
+import {
+  BoardId,
+  NEW_CANVAS_BOARD_MESSAGE,
+  NEW_CANVAS_ERROR,
+  type TicketResponse,
+  UserId,
+} from '@draftroom/contracts'
 import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import { connectionRole, loadBoardAccess } from '../access.ts'
@@ -18,9 +24,14 @@ export function registerTicketRoutes(app: FastifyInstance, ctx: AppContext): voi
   app.post('/api/boards/:bid/ticket', async (req): Promise<TicketResponse> => {
     const user = await ctx.requireUser(req)
     const { bid = '' } = req.params as Params
-    const role = connectionRole(await loadBoardAccess(db, bid, user.id))
+    const access = await loadBoardAccess(db, bid, user.id)
+    const role = connectionRole(access)
     // No access, trashed, or unknown: one answer, so a ticket request cannot probe for board ids.
     if (!role) throw notFound()
+    // Bridge release R0 (docs/EXCALIDRAW-MIGRATION.md §5.9 step 4): a board born on the new canvas is not
+    // this build's to open. Its sync refuses a file it can read as one; this also covers a board whose
+    // file does not exist yet, which R0's sync would otherwise start as a new, empty tldraw board.
+    if (access?.board.new_canvas) throw new ApiError(409, NEW_CANVAS_ERROR, NEW_CANVAS_BOARD_MESSAGE)
     // Wave 3: a name-only guest's long name is shortened so the cursor label keeps "(guest)".
     // A3 (Excalidraw engine): a name-only guest's ticket carries `guest: true`, read from the users
     // row (never from the request); sync enforces the guest limits from it. Everyone else's has none.

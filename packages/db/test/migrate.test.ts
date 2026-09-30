@@ -232,6 +232,7 @@ describe('shipped migrations', () => {
       '0019_checkpoint_reasons',
       '0020_comment_visibility',
       '0021_domain_access',
+      '0022_engine_migration',
     ])
   })
 
@@ -259,6 +260,7 @@ describe('shipped migrations', () => {
       '0019_checkpoint_reasons',
       '0020_comment_visibility',
       '0021_domain_access',
+      '0022_engine_migration',
     ])
     expect(await migrate(db)).toEqual({ applied: [], newer: [] })
     expect(await tableNames()).toEqual([
@@ -349,6 +351,7 @@ describe('shipped migrations', () => {
       '0019_checkpoint_reasons',
       '0020_comment_visibility',
       '0021_domain_access',
+      '0022_engine_migration',
     ])
     expect(await recorded()).toEqual(shipped.map((m) => m.name))
     const inv = await db.one<{ multi_use: boolean; use_count: number }>(

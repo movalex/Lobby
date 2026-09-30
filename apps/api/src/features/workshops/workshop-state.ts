@@ -8,6 +8,8 @@
 //   after the change commits (a slow or down sync never fails or delays the vote request; sync's next
 //   room open pulls the truth again). A vote with an end time ends without any request (effectiveStatus),
 //   so the pusher also arms a timer at `ends_at` that re-reads the state and pushes it.
+// Bridge release R0 (on main) ships only the reader behind the GET; the push ships with the Excalidraw
+// build's api (a tldraw sync has no such route: the pusher logs its 404 at debug level).
 //
 // `anonymous`: Lobby's dot votes have no named-ballot mode (PRF-07): every ballot stays secret until the
 // reveal, so an open vote is always anonymous. The field exists so a later named mode needs no contract

@@ -11,6 +11,7 @@ import {
   checkpointTime,
   checkpointTitle,
   deletedCheckpointSummary,
+  newCanvasNote,
   previewCounts,
   previewStoreSnapshot,
   splitCheckpoints,
@@ -145,5 +146,20 @@ describe('the preview', () => {
     const snap = previewStoreSnapshot({ records, schema: { schemaVersion: 2, sequences: {} } })
     expect(Object.keys(snap.store)).toEqual(records.map((r) => r.id))
     expect(snap.schema).toEqual({ schemaVersion: 2, sequences: {} })
+  })
+})
+
+describe('bridge release R0: checkpoints made on the new canvas', () => {
+  it('title the engine_migration reason, and give a v2 checkpoint its note instead of Preview and Restore', () => {
+    const migrated = { ...auto('engine_migration', 'Moved to the new canvas'), newCanvas: true as const }
+    expect(checkpointTitle(migrated)).toBe('Moved to the new canvas')
+    expect(newCanvasNote(migrated)).toBe(
+      'Made on the new canvas. Preview and restore it when Lobby is back on the new canvas.',
+    )
+    expect(newCanvasNote({ ...base, newCanvas: true })).toBe(
+      'Made on the new canvas. Preview and restore it when Lobby is back on the new canvas.',
+    )
+    expect(newCanvasNote(base)).toBeNull()
+    expect(newCanvasNote(auto('hourly'))).toBeNull()
   })
 })

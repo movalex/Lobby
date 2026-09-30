@@ -1,5 +1,7 @@
 // The api side of the Excalidraw engine's internal contracts (docs/EXCALIDRAW-MIGRATION.md §1 A1, A2,
-// §2.10.2; the contract is @draftroom/contracts sync-internal.ts, frozen at spike B's C0):
+// §2.10.2; the contract is @draftroom/contracts sync-internal.ts, frozen at spike B's C0). Shipped in the
+// bridge release R0 (§5.10, §7.5 step 5), reviewed from the spike branch: the tldraw sync never calls
+// these routes; the Excalidraw sync does, including while a roll-forward runs against R0's api.
 //
 //   A1  GET /internal/boards/:bid/file-refs?ids=ver_a,ver_b,…  → 200 FileRefsResponse
 //   A2  GET /internal/boards/:bid/workshop-state               → 200 WorkshopStateBody

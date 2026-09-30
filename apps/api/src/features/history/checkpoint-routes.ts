@@ -28,6 +28,8 @@ import { ApiError, forbidden, gone, notFound, parse } from '../../errors.ts'
 import type { FeatureContext } from '../context.ts'
 import type { CheckpointService } from './checkpoints.ts'
 import {
+  isNewCanvasRow,
+  newCanvasCheckpoint,
   readCheckpointBody,
   SNAPSHOT_COLUMNS,
   SNAPSHOT_FROM,
@@ -121,6 +123,9 @@ export function registerCheckpointRoutes(
     const user = await ctx.requireUser(req)
     const { row, access } = await visibleCheckpoint(req, user)
     if (!(await isWorkspacePerson(access, user.id))) throw forbidden(GUEST_PREVIEW)
+    // Bridge release R0: a row marked as made on the new canvas (body_version 2; never written on this
+    // branch yet, snapshot-rows.ts); previewed after the switch.
+    if (isNewCanvasRow(row)) throw newCanvasCheckpoint()
     const raw = await bodies.read(row.storage_key)
     if (raw === null) throw gone("This checkpoint's saved content is no longer available.")
     const body = readCheckpointBody(raw)

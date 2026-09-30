@@ -11,6 +11,11 @@ export interface TicketUriOptions {
   /** 401: the session ended. */
   onSignedOut(): void
   /**
+   * 409 NEW_CANVAS (bridge release R0): the board was made on the new canvas and this build cannot open
+   * it; nothing is retried. Absent: treated like any other failure (retried).
+   */
+  onNewCanvas?(): void
+  /**
    * Where the page is served from. By default the socket goes to the same origin (the Vite proxy in dev,
    * or a single-origin edge that proxies /connect).
    */
@@ -130,6 +135,10 @@ export function createTicketUri(opts: TicketUriOptions) {
         }
         if (isApiError(e) && e.kind === 'unauthorized') {
           opts.onSignedOut()
+          return never()
+        }
+        if (isApiError(e) && e.code === 'NEW_CANVAS' && opts.onNewCanvas) {
+          opts.onNewCanvas()
           return never()
         }
         await sleep(backoff[Math.min(i, backoff.length - 1)] ?? 5000)

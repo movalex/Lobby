@@ -22,6 +22,7 @@ import { badRequest, toErrorResponse, unauthenticated } from './errors.ts'
 import { EventHub } from './events/hub.ts'
 import { registerEventRoutes } from './events/routes.ts'
 import type { FeatureContext } from './features/context.ts'
+import { CHECKPOINT_ALL_ROUTE } from './features/history/checkpoint-all.ts'
 import { registerFeatures } from './features/index.ts'
 import type { BlobStore } from './files/blobs.ts'
 import { filesPlugin } from './files/plugin.ts'
@@ -37,7 +38,7 @@ import { registerMemberRoutes } from './routes/members.ts'
 import { registerTicketRoutes } from './routes/tickets.ts'
 import { registerWorkspaceRoutes } from './routes/workspaces.ts'
 import { sessionUserToUser } from './serialize.ts'
-import { createHttpSyncInternalClient, type SyncInternalClient } from './sync-internal.ts'
+import { checkedSnapshots, createHttpSyncInternalClient, type SyncInternalClient } from './sync-internal.ts'
 import type { VersionChange } from './worker/jobs.ts'
 import { WORKER_PREFIX, type WorkerDeps, workerPlugin } from './worker/routes.ts'
 
@@ -240,10 +241,13 @@ async function buildServer(
 
   // CSRF (§4): every mutation must come from the web origin. Answered here directly, not thrown, so no
   // route scope's error handler can reshape the refusal. The worker protocol (M3 §4) is exempt: it is
-  // not a browser route (Bearer token, cookies refused). Decided by the MATCHED route pattern, never by
-  // the raw URL, so no path spelling can borrow the exemption for another route.
+  // not a browser route (Bearer token, cookies refused), and neither is the cut-over's checkpoint run
+  // (bridge release R0, features/history/checkpoint-all.ts: the internal secret, checked first; no
+  // cookie is read). Decided by the MATCHED route pattern, never by the raw URL, so no path spelling can
+  // borrow the exemption for another route.
   app.addHook('onRequest', async (req, reply) => {
     if (req.routeOptions.url?.startsWith(WORKER_PREFIX)) return
+    if (req.method === 'POST' && req.routeOptions.url === CHECKPOINT_ALL_ROUTE) return
     if (MUTATING.has(req.method) && req.headers.origin !== config.publicOrigin) {
       return reply.code(403).send({ error: { code: 'FORBIDDEN', message: 'Cross-origin request refused.' } })
     }
@@ -322,7 +326,8 @@ async function buildServer(
   registerMemberRoutes(app, ctx)
   registerInvitationRoutes(app, ctx)
   registerTicketRoutes(app, ctx)
-  // Excalidraw engine, A1 file-refs and A2 workshop-state (sync pulls; docs/EXCALIDRAW-MIGRATION.md §1).
+  // Excalidraw engine, A1 file-refs and A2 workshop-state (sync pulls; docs/EXCALIDRAW-MIGRATION.md §1);
+  // bridge release R0 ships the same two routes (§5.10).
   registerEngineInternalRoutes(app, ctx)
   await app.register(filesPlugin, {
     db,
@@ -375,9 +380,11 @@ async function buildServer(
     ...ctx,
     blobs,
     events,
-    sync:
+    // Bridge release R0: a snapshot that is not a tldraw one is refused, never read as an empty board.
+    sync: checkedSnapshots(
       deps.syncInternal ??
-      createHttpSyncInternalClient({ baseUrl: config.syncInternalUrl, secret: config.internalSecret }),
+        createHttpSyncInternalClient({ baseUrl: config.syncInternalUrl, secret: config.internalSecret }),
+    ),
     layout,
   }
   registerEventRoutes(app, features)

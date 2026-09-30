@@ -14,6 +14,9 @@ import { randomBytes } from 'node:crypto'
 import { copyFileSync, existsSync, mkdirSync, renameSync, rmSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
+import { isLbTable, tableNames } from '../r0/born-after.ts'
+import { carryLbTables } from '../r0/lb-carry.ts'
+import { lbFileFacts } from '../r0/lb-files.ts'
 import { boardDbPath } from '../rooms.ts'
 
 export interface RestoreBackupOptions {
@@ -26,15 +29,60 @@ export interface RestoreBackupOptions {
   overwrite?: boolean
   /** Raise the clock by this much (0 = keep it; the drill keeps it to compare exactly). */
   bumpClockBy?: number
+  /**
+   * Bridge release R0: a consistent copy of the live board (a CONVERTED board, with lb_* tables) whose
+   * new-canvas tables replace the restored copy's before it is put in place (r0/lb-carry.ts), so a
+   * tldraw restore during a rollback keeps the Excalidraw-era edits. Absent: the backup as it is.
+   */
+  carryLbFrom?: string
+}
+
+/**
+ * Whether a backup file holds only the new engine's lb_* tables (a board born on the new canvas), read
+ * with one read-only connection. Its clock is `lb_meta.clock`. null for anything else, an unreadable
+ * file included (the tldraw path below then fails on it exactly as before).
+ */
+export function newCanvasBackup(file: string): { documentClock: number } | null {
+  let db: DatabaseSync
+  try {
+    db = new DatabaseSync(file, { readOnly: true })
+  } catch {
+    return null
+  }
+  try {
+    const tables = tableNames(db)
+    if (tables.has('metadata') || tables.has('documents') || ![...tables].some(isLbTable)) return null
+    return { documentClock: lbFileFacts(db).documentClock }
+  } catch {
+    return null
+  } finally {
+    db.close()
+  }
 }
 
 export function restoreBackupFile(opts: RestoreBackupOptions): { path: string; documentClock: number } {
   const path = boardDbPath(opts.roomsDir, opts.boardId)
   if (existsSync(path) && !opts.overwrite)
     throw new Error(`board ${opts.boardId} already has a database there`)
+  // Bridge release R0 (open item 9): a board born on the new canvas is copied whole and never opened for
+  // writing (R0 never writes an lb_* table), so its clock cannot be raised here: the new build restores
+  // it (with a new epoch) after the switch. The drill restores it with bumpClockBy 0 to check it.
+  const lb = newCanvasBackup(opts.file)
+  if (lb && Math.max(0, Math.floor(opts.bumpClockBy ?? 0)) > 0)
+    throw new Error('this backup is of a board made on the new canvas; restore it after the switch')
   mkdirSync(dirname(path), { recursive: true })
   const tmp = `${path}.${randomBytes(4).toString('hex')}.restore-tmp`
   let documentClock: number
+  if (lb) {
+    try {
+      copyFileSync(opts.file, tmp)
+      for (const f of [`${path}-wal`, `${path}-shm`, `${path}-journal`]) rmSync(f, { force: true })
+      renameSync(tmp, path)
+    } finally {
+      rmSync(tmp, { force: true })
+    }
+    return { path, documentClock: lb.documentClock }
+  }
   try {
     copyFileSync(opts.file, tmp)
     const db = new DatabaseSync(tmp)
@@ -55,6 +103,7 @@ export function restoreBackupFile(opts: RestoreBackupOptions): { path: string; d
       }
       const row = db.prepare('SELECT documentClock FROM metadata LIMIT 1').get() as { documentClock: number }
       documentClock = Number(row.documentClock)
+      if (opts.carryLbFrom) carryLbTables(db, opts.carryLbFrom)
     } finally {
       db.close() // the last connection: checkpoints and removes the copy's own -wal/-shm
     }

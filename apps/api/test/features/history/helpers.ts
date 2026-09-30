@@ -72,7 +72,9 @@ export function createFakeSync(): FakeSync {
       }
       if (fake.boards.has(boardId)) throw new SyncSeedConflict()
       fake.boards.set(boardId, { ...structuredClone(snapshot), documentClock: 0 })
-      return { records: snapshot.documents.length }
+      // a LobbySeed (the Excalidraw engine's elements) counts its elements
+      const { documents, elements } = snapshot as { documents?: unknown[]; elements?: unknown[] }
+      return { records: (documents ?? elements ?? []).length }
     },
     async listDeleted(boardId) {
       if (fake.unavailable) throw new SyncUnavailable('sync unreachable: test')

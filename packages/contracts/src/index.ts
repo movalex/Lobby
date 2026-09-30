@@ -58,6 +58,12 @@ export const Board = z.object({
   createdAt: IsoDate,
   updatedAt: IsoDate,
   lastOpenedAt: IsoDate.nullable(),
+  /**
+   * Bridge release R0 (docs/EXCALIDRAW-MIGRATION.md §5.10): the board was made on the new canvas
+   * (Excalidraw), so this build shows it with a "new canvas" badge and cannot open, duplicate or export
+   * it (NEW_CANVAS_BOARD_MESSAGE). Absent on every other board.
+   */
+  newCanvas: z.literal(true).optional(),
 })
 export type Board = z.infer<typeof Board>
 

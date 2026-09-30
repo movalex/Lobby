@@ -743,3 +743,24 @@
 .dr-dash__title:focus {
   outline: none;
 }
+
+/* ---- Bridge release R0: a board made on the new canvas (this build cannot open it) --------------- */
+.dr-bcard__canvas {
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--dr-chip);
+  color: var(--dr-ink-2);
+  font-size: 11.5px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+/* The badge's meaning in words, under the meta line (wraps; the list view gives it the rest of the row). */
+.dr-bcard__canvas-note {
+  color: var(--dr-ink-2);
+  font-size: 12px;
+  line-height: 1.35;
+}
+.dr-bcard--row .dr-bcard__canvas-note {
+  flex: 1 1 14em;
+  min-width: 0;
+}

@@ -3,6 +3,10 @@
 // CONTRACTS.md). Used by O1 (the sync clients `apps/sync/src/file-refs.ts` and `workshop-state.ts`, and
 // the room's snapshot route), O5 (the api routes) and O3 (the fake api). Browser-safe (zod only).
 //
+// Bridge release R0 (§5.10) ships this file unchanged from the spike: its api serves A1 and the A2 GET
+// (apps/api/src/routes/engine-internal.ts); the tldraw sync uses none of it. The Excalidraw build uses all
+// of it.
+//
 // Do not import values from ./index.ts here: index.ts re-exports this module.
 //
 // Every route requires the internal secret in the `x-draftroom-internal` header (INTERNAL_SECRET_HEADER

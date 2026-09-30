@@ -3,7 +3,7 @@
 
 import { INTERNAL_SECRET_HEADER } from '@draftroom/auth-tickets'
 import {
-  type LobbyElementsSnapshot,
+  LobbyElementsSnapshot,
   SYNC_INTERNAL_TIMEOUT_MS,
   type WorkshopStateBody,
   workshopStatePath,
@@ -86,6 +86,57 @@ export class SyncUnavailable extends Error {
   }
 }
 
+/**
+ * Bridge release R0 (docs/EXCALIDRAW-MIGRATION.md §5.9 step 4): the sync server refused the board
+ * because it was made on the new canvas (409 `new-canvas`). A SyncUnavailable, so every existing
+ * caller keeps treating the board as unreadable (retry later, keep its files); the history routes say
+ * why (new-board.ts viaSync).
+ */
+export class SyncNewCanvasBoard extends SyncUnavailable {
+  constructor() {
+    super('the board was made on the new canvas', 409)
+  }
+}
+
+/**
+ * A snapshot answer as this build reads it: a tldraw RoomSnapshot, which always has a `documents` array
+ * (a board without storage answers an empty board's records), or (sync on the Excalidraw engine) the
+ * `lobby-elements` envelope (docs/EXCALIDRAW-MIGRATION.md §3.7). Anything else would read as an EMPTY
+ * board: an empty checkpoint that lists and restores as a real one, an empty duplicate or export. So it
+ * is refused as SyncUnavailable (the callers retry later or answer 503). Bridge release R0 (the tldraw
+ * build, on main) refuses the `lobby-elements` envelope too; this branch reads it.
+ */
+export function boardSnapshotOf(value: unknown): BoardSnapshotJson {
+  const v = value as { documents?: unknown } | null
+  if (v && typeof v === 'object' && Array.isArray(v.documents)) return value as RoomSnapshotJson
+  if (LobbyElementsSnapshot.safeParse(value).success) return value as LobbyElementsSnapshot
+  throw new SyncUnavailable('the sync server answered with a snapshot of neither canvas format')
+}
+
+/**
+ * The client with every snapshot answer checked (boardSnapshotOf), whichever client it is (the HTTP
+ * one, or a test's): what app.ts hands to the features. Every other member is the client's own.
+ */
+export function checkedSnapshots(client: SyncInternalClient): SyncInternalClient {
+  const snapshot = async (boardId: string) => boardSnapshotOf(await client.snapshot(boardId))
+  return new Proxy(client, {
+    get(target, prop) {
+      if (prop === 'snapshot') return snapshot
+      const value = Reflect.get(target, prop, target)
+      return typeof value === 'function' ? value.bind(target) : value
+    },
+  })
+}
+
+/** A failed answer: SyncNewCanvasBoard for sync's 409 `new-canvas`, else SyncUnavailable. */
+async function failure(res: Response, what: string): Promise<SyncUnavailable> {
+  if (res.status === 409) {
+    const body = (await res.json().catch(() => null)) as { error?: { code?: unknown } } | null
+    if (body?.error?.code === 'new-canvas') return new SyncNewCanvasBoard()
+  } else await res.body?.cancel().catch(() => {})
+  return new SyncUnavailable(`${what} failed with ${res.status}`, res.status)
+}
+
 export function createHttpSyncInternalClient(opts: {
   baseUrl: string
   secret: string
@@ -109,8 +160,8 @@ export function createHttpSyncInternalClient(opts: {
   return {
     async snapshot(boardId) {
       const res = await call(`/internal/boards/${encodeURIComponent(boardId)}/snapshot`)
-      if (!res.ok) throw new SyncUnavailable(`snapshot failed with ${res.status}`)
-      return (await res.json()) as BoardSnapshotJson
+      if (!res.ok) throw await failure(res, 'snapshot')
+      return boardSnapshotOf(await res.json())
     },
     async seed(boardId, snapshot) {
       const res = await call(`/internal/boards/${encodeURIComponent(boardId)}/seed`, {
@@ -129,12 +180,12 @@ export function createHttpSyncInternalClient(opts: {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(body),
       })
-      if (!res.ok) throw new SyncUnavailable(`place-notes failed with ${res.status}`)
+      if (!res.ok) throw await failure(res, 'place-notes')
       return (await res.json()) as unknown
     },
     async assetRefs(boardId) {
       const res = await call(`/internal/boards/${encodeURIComponent(boardId)}/asset-refs`)
-      if (!res.ok) throw new SyncUnavailable(`asset-refs failed with ${res.status}`)
+      if (!res.ok) throw await failure(res, 'asset-refs')
       return (await res.json()) as unknown
     },
     async boardText(boardId, opts = {}) {
@@ -143,7 +194,7 @@ export function createHttpSyncInternalClient(opts: {
       if (opts.maxBytes !== undefined) params.set('maxBytes', String(opts.maxBytes))
       const qs = params.size ? `?${params}` : ''
       const res = await call(`/internal/boards/${encodeURIComponent(boardId)}/text${qs}`)
-      if (!res.ok) throw new SyncUnavailable(`board text failed with ${res.status}`)
+      if (!res.ok) throw await failure(res, 'board text')
       return (await res.json()) as unknown
     },
     async workshopState(boardId, body) {

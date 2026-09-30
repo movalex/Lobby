@@ -29,6 +29,7 @@ import { basename, join } from 'node:path'
 import { backup, DatabaseSync } from 'node:sqlite'
 import { dataLayout } from '@draftroom/dev-assets'
 import type { TLSchema } from '@tldraw/tlschema'
+import { type BoardFileKind, classifyBoardFile, isServable } from '../r0/born-after.ts'
 import { BOARD_ID_RE, boardDbPath } from '../rooms.ts'
 import { inspectBoardDb, sha256File } from './backup.ts'
 import { type BackupSource, DrillProblem, verifyRestorable } from './drill.ts'
@@ -58,6 +59,22 @@ export interface RestoreRequest {
   /** The backup's signature could not be verified and was accepted with --allow-unsigned. */
   unsignedAccepted?: true
 }
+
+/**
+ * What the board file at `path` is, as R0 sees it (bridge release R0, r0/born-after.ts); `unreadable`
+ * when it cannot be read (a damaged database is often why a restore is made; it is then handled as
+ * before, and its files are kept as they are).
+ */
+function liveKind(path: string): BoardFileKind | 'unreadable' {
+  try {
+    return classifyBoardFile(path)
+  } catch {
+    return 'unreadable'
+  }
+}
+
+/** Made on the new canvas: never replaced by this build. */
+const madeOnNewCanvas = (kind: BoardFileKind | 'unreadable') => kind !== 'unreadable' && !isServable(kind)
 
 const restoreDir = (dataDir: string) => join(dataLayout(dataDir).root, RESTORE_DIR_NAME)
 const stagedFile = (dataDir: string, boardId: string) => join(restoreDir(dataDir), `board-${boardId}.sqlite`)
@@ -109,6 +126,24 @@ export async function stageRestore(opts: {
       workRooms: join(scratch, 'rooms'),
       schema: opts.schema,
     })
+    // Bridge release R0: a board made on the new canvas is restored by the new build (it gives the
+    // board a new epoch); this build copies such files whole but never puts one in place. And it never
+    // replaces a live board that was made on the new canvas.
+    if (verified.format)
+      throw new DrillProblem(
+        'this backup is of a board made on the new canvas: it can be restored after the switch, by the new build',
+      )
+    const kind = liveKind(boardDbPath(dataLayout(opts.dataDir).rooms, boardId))
+    if (madeOnNewCanvas(kind))
+      throw new DrillProblem('the live board was made on the new canvas: this build does not replace it')
+    // A converted board (a rollback): its new-canvas tables go into the restored file unchanged, when it
+    // is applied (applyStagedRestores), so the Excalidraw-era edits are not lost with the old file.
+    const carry =
+      kind === 'converted'
+        ? [
+            'the live board was converted to the new canvas: its new-canvas (lb_*) tables are carried over unchanged when the restore is applied',
+          ]
+        : []
     const staged = stagedFile(opts.dataDir, boardId)
     const tmp = `${staged}.${randomBytes(4).toString('hex')}.tmp`
     copyFileSync(got.path, tmp)
@@ -130,7 +165,11 @@ export async function stageRestore(opts: {
     }
     writeJsonAtomic(requestFile(opts.dataDir, boardId), request)
     giveToDataDirOwner(opts.dataDir, [dir, staged, requestFile(opts.dataDir, boardId)])
-    return { request, checks: [...(entry.trust?.checks ?? []), ...got.checks, ...verified.checks], warnings }
+    return {
+      request,
+      checks: [...(entry.trust?.checks ?? []), ...got.checks, ...verified.checks, ...carry],
+      warnings,
+    }
   } finally {
     rmSync(scratch, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
   }
@@ -213,6 +252,11 @@ export async function applyStagedRestores(opts: {
       if ((await sha256File(staged)) !== request.sha256)
         throw new Error('the staged backup file does not match its request (sha256)')
       const live = boardDbPath(rooms, boardId)
+      // Bridge release R0: never replace (or even open for writing) a board made on the new canvas; a
+      // converted board keeps its new-canvas tables (carried into the restored file, r0/lb-carry.ts).
+      const kind = liveKind(live)
+      if (madeOnNewCanvas(kind))
+        throw new Error('the live board was made on the new canvas: this build does not replace it')
       const stamp = (opts.now ?? (() => new Date()))().toISOString().replace(/[:.]/g, '-')
       let liveClock: number | null = null
       let kept: string | null = null
@@ -242,12 +286,23 @@ export async function applyStagedRestores(opts: {
       }
       const bump =
         liveClock === null ? UNKNOWN_LIVE_BUMP : Math.max(0, liveClock - request.documentClock) + BUMP_MARGIN
+      let carried: string | null = null
+      if (kind === 'converted') {
+        // The kept copy is the consistent source of the new-canvas tables (a damaged file cannot be one).
+        if (!kept || liveClock === null)
+          throw new Error(
+            'the live board was converted to the new canvas, but it could not be read to keep its new-canvas tables; nothing was changed',
+          )
+        carried = kept
+      }
+      // Throws before anything is put in place when the carried tables do not match (the live board stays).
       const result = restoreBackupFile({
         file: staged,
         roomsDir: rooms,
         boardId,
         overwrite: true,
         bumpClockBy: bump,
+        ...(carried ? { carryLbFrom: carried } : {}),
       })
       writeJsonAtomic(join(dataLayout(opts.dataDir).root, APPLIED_LOG), {
         applied: [...applied, request.id].slice(-200),
@@ -261,6 +316,10 @@ export async function applyStagedRestores(opts: {
         `restored from ${request.source} backup ${request.file} (${request.recordCount} records)` +
           (request.unsignedAccepted === true ? ' (unsigned backup, accepted with --allow-unsigned)' : '') +
           `; clock ${result.documentClock}` +
+          (carried ? '; its new-canvas tables were carried over unchanged' : '') +
+          (kind === 'unreadable'
+            ? '; the previous database could not be read: any new-canvas tables it had are only in the kept copy'
+            : '') +
           (kept ? `; previous database kept as ${basename(kept)}` : ''),
       )
     } catch (e) {

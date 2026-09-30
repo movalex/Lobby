@@ -82,6 +82,15 @@ export class JoinQueue {
     this.ready.length = 0
   }
 
+  /**
+   * Delivers every socket whose connect is complete now, with everything queued behind it, in arrival
+   * order (maintenance mode, bridge release R0: the pushes that reached the server commit before every
+   * socket is closed). A connect still missing chunks stays held until its socket closes.
+   */
+  flush(): void {
+    while (this.ready.length) this.runOne()
+  }
+
   /** Sockets with queued frames (tests, metrics). */
   get size(): number {
     return this.held.size

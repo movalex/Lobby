@@ -1,7 +1,8 @@
 // Spike B, O5: the api half of the Excalidraw engine's internal contracts (docs/EXCALIDRAW-MIGRATION.md
 // §1 A1-A3, §2.10.2; @draftroom/contracts sync-internal.ts): A1 file-refs, A2 workshop-state (the sync
 // pull), and A3 the ticket's `guest` claim. Every error body is the contract's, and every failure is
-// one sync treats as "unavailable" or a refusal, never as an answer.
+// one sync treats as "unavailable" or a refusal, never as an answer. Bridge release R0 (§5.10) ships A1
+// and the A2 GET, reviewed from the spike; A3 ships with the Excalidraw build.
 
 import { verifyTicket } from '@draftroom/auth-tickets'
 import {
@@ -172,6 +173,22 @@ describe('A1 GET /internal/boards/:bid/file-refs', () => {
     const v = await addVersion(boardId)
     expectError(await get(fileRefsPath('b-0000000000', [v.versionId])), 404, 'board-not-found')
     expectError(await get(fileRefsPath('NOT A BOARD', [v.versionId])), 404, 'board-not-found')
+  })
+
+  it('still answers for a trashed board (sync asks for boards whose rooms are open)', async () => {
+    const v = await addVersion(boardId)
+    await api.db.query("UPDATE boards SET status = 'trashed', trashed_at = now() WHERE id = $1", [boardId])
+    const res = await get(fileRefsPath(boardId, [v.versionId]))
+    expect(res.statusCode, res.body).toBe(200)
+    expect(FileRefsResponse.parse(res.json()).ok.map((r) => r.versionId)).toEqual([v.versionId])
+  })
+
+  it('does not leak one board’s versions to another board of another workspace, whatever the query order', async () => {
+    const elsewhere = await createBoard(alice, alice.personalWorkspaceId, 'Private')
+    const own = await addVersion(boardId)
+    const res = await get(fileRefsPath(elsewhere, [own.versionId]))
+    expect(res.statusCode, res.body).toBe(200)
+    expect(FileRefsResponse.parse(res.json())).toEqual({ ok: [], foreign: [own.versionId], missing: [] })
   })
 
   it('503 unavailable when the database fails (sync fails closed on it)', async () => {

@@ -43,6 +43,7 @@ import { originalKey } from './blobs.ts'
 import {
   type CheckpointVersionRef,
   parseBoardRefs,
+  UnreadableCheckpointBody,
   type VersionRef,
   versionsInCheckpoint,
 } from './gc-refs.ts'
@@ -109,12 +110,6 @@ const errInfo = (err: unknown) => {
 const FOREIGN_KEY_VIOLATION = '23503'
 
 /**
- * Reads every checkpoint of the workspace that was never read, and records the versions its body
- * names (bodies never change). A body that is gone, or that is not JSON, can restore nothing: it is
- * recorded with no references. A read that fails (the blob store is unreachable) is counted and
- * retried by the next pass.
- */
-/**
  * The refs of a checkpoint with every asset id known: a v2 element may name only its version, whose
  * asset is read from asset_versions (in the workspace). A version that no longer exists needs no keeping.
  */
@@ -139,9 +134,21 @@ async function withAssetIds(
   return out
 }
 
+/**
+ * Reads every checkpoint of the workspace that was never read, and records the versions its body
+ * names (bodies never change). A body that is gone, or that is not JSON, can restore nothing: it is
+ * recorded with no references. A read that fails (the blob store is unreachable) is counted and
+ * retried by the next pass.
+ *
+ * v1 (tldraw) and v2 (the Excalidraw engine) bodies are both read (gc-refs.ts versionsInCheckpoint).
+ * Bridge release R0: a checkpoint this build cannot read (a row marked body_version 2, which this
+ * branch's writer does not set yet, or a body of neither format) can show files the pass cannot see. It
+ * is counted as unread (the pass is incomplete: nothing new is marked or deleted) and NOT recorded,
+ * because a recorded scan is never repeated and "no references" would then outlive the roll-forward.
+ */
 async function scanCheckpoints(deps: AssetGcDeps, workspaceId: string): Promise<number> {
-  const pending = await deps.db.query<{ id: string; storage_key: string }>(
-    `SELECT s.id, s.storage_key FROM board_snapshots s
+  const pending = await deps.db.query<{ id: string; storage_key: string; body_version: number }>(
+    `SELECT s.id, s.storage_key, s.body_version FROM board_snapshots s
       WHERE s.workspace_id = $1
         AND NOT EXISTS (SELECT 1 FROM asset_gc_snapshot_scans c WHERE c.snapshot_id = s.id)
       ORDER BY s.created_at, s.id`,
@@ -149,8 +156,19 @@ async function scanCheckpoints(deps: AssetGcDeps, workspaceId: string): Promise<
   )
   const bodies = snapshotBodies(deps.blobs, deps.dataRoot)
   let failed = 0
+  const newCanvas = () => {
+    failed++
+    deps.log.warn(
+      { workspaceId },
+      'asset gc: a checkpoint made on the new canvas cannot be read by this build (the pass is incomplete)',
+    )
+  }
   for (const s of pending.rows) {
     if (deps.shouldStop?.()) return failed + 1
+    if (Number(s.body_version) !== 1) {
+      newCanvas()
+      continue
+    }
     let raw: string | null
     try {
       raw = await bodies.read(s.storage_key)
@@ -163,7 +181,11 @@ async function scanCheckpoints(deps: AssetGcDeps, workspaceId: string): Promise<
     if (raw !== null) {
       try {
         named = versionsInCheckpoint(raw)
-      } catch {
+      } catch (err) {
+        if (err instanceof UnreadableCheckpointBody) {
+          newCanvas()
+          continue
+        }
         deps.log.warn(
           { snapshotId: s.id },
           'asset gc: checkpoint body is not valid JSON (it restores nothing)',
@@ -255,6 +277,17 @@ async function gatherReferences(deps: AssetGcDeps, workspaceId: string): Promise
       for (const r of refs.canvas) versions.add(r.versionId)
       for (const r of refs.deleted) versions.add(r.versionId)
       for (const v of refs.versions) versions.add(v)
+      // Bridge release R0: a converted board's new-canvas elements were not read (a tldraw sync's
+      // `newCanvasTables: true`). Its refs count (they clear marks), but the board was not read whole, so
+      // the pass is incomplete. The Excalidraw sync reads the elements and never says so.
+      if (refs.partial) {
+        boardsFailed++
+        deps.log.warn(
+          { boardId: b.id },
+          'asset gc: the board also holds new-canvas elements this build does not read (the pass is incomplete)',
+        )
+        continue
+      }
       boardsScanned++
     } catch (err) {
       boardsFailed++

@@ -23,6 +23,7 @@ import type { BlobStore } from '@draftroom/blob-store'
 import { draftroomSchema } from '@draftroom/canvas-schema'
 import { dataLayout } from '@draftroom/dev-assets'
 import type { TLSchema } from '@tldraw/tlschema'
+import { type BackupFormat, LB_BACKUP_FORMAT } from '../r0/lb-files.ts'
 import { BOARD_ID_RE, boardDbPath, RoomRegistry } from '../rooms.ts'
 import { backedUpBoards, describeBoardDb, inspectBoardDb, readManifest, sha256File } from './backup.ts'
 import { MAX_MANIFEST_BYTES, offsiteKeys, parseIndex, parseManifest } from './offsite-manifest.ts'
@@ -64,6 +65,11 @@ export interface DrillEntry {
   sha256: string
   sizeBytes: number
   schema: unknown
+  /**
+   * `lobby-elements`: a board made on the new canvas (backup.ts BackupEntry.format); absent = tldraw.
+   * Any other name is a newer build's format (offsite-manifest.ts OffsiteEntry.format): never restored here.
+   */
+  format?: BackupFormat | (string & {})
   /** What the source verified about the manifest and this entry, and what it accepted unverified. */
   trust?: { checks: string[]; warnings: string[] }
 }
@@ -114,6 +120,7 @@ export function fileBackupSource(path: string): BackupSource {
         sha256: await sha256File(path),
         sizeBytes: statSync(path).size,
         schema: facts.schema,
+        ...(facts.format ? { format: facts.format } : {}),
       }
     })()
     return described
@@ -333,9 +340,15 @@ export async function verifyRestorable(opts: {
   path: string
   workRooms: string
   schema?: TLSchema
-}): Promise<{ checks: string[]; restoredPath: string; recordsSha256: string }> {
+}): Promise<{ checks: string[]; restoredPath: string; recordsSha256: string; format?: BackupFormat }> {
   const { boardId, entry } = opts
   const checks: string[] = []
+  // A format this build does not know (a newer build's, listed in the same manifest): it stays in the
+  // manifest and under retention, but is neither checked nor restored here.
+  if (entry.format !== undefined && entry.format !== LB_BACKUP_FORMAT)
+    throw new DrillProblem(
+      `backup ${entry.file} is in format "${entry.format}", written by a newer build: this build cannot check or restore it`,
+    )
   let restoredPath: string
   try {
     restoredPath = restoreBackupFile({
@@ -356,6 +369,12 @@ export async function verifyRestorable(opts: {
     throw new DrillProblem(`restored database unreadable: ${(e as Error).message}`)
   }
   const problems: string[] = []
+  if ((restored.format ?? null) !== (entry.format ?? null))
+    problems.push(
+      restored.format
+        ? 'the backup holds a board made on the new canvas, but its manifest entry says otherwise'
+        : 'the manifest entry says the board was made on the new canvas, but the backup is a tldraw board',
+    )
   if (restored.recordCount !== entry.recordCount)
     problems.push(`record count ${restored.recordCount} differs from the manifest's ${entry.recordCount}`)
   if (restored.recordsSha256 !== entry.recordsSha256)
@@ -364,6 +383,16 @@ export async function verifyRestorable(opts: {
     problems.push('restored document clock differs from the manifest')
   if (problems.length) throw new DrillProblem(...problems)
   checks.push(`${restored.recordCount} records, clock ${restored.documentClock}, digest matches`)
+
+  // Bridge release R0 (open item 9): a board made on the new canvas is checked as far as this build can
+  // (size and sha256 of the file, integrity, its lb_* tables' digest and clock); the tldraw room never
+  // opens it (the born-after check would refuse it, and must never create tldraw tables in it).
+  if (restored.format) {
+    checks.push(
+      'made on the new canvas: integrity and every lb_* table checked; not opened (this build serves tldraw boards only)',
+    )
+    return { checks, restoredPath, recordsSha256: restored.recordsSha256, format: restored.format }
+  }
 
   // The server's own open path: a room over the restored file must open and serve the same records.
   const registry = new RoomRegistry({

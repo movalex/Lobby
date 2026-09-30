@@ -11,9 +11,10 @@
 // written before signing existed have none: parsing reports each one's status and leaves the decision
 // (drop, carry forward, refuse, or accept with --allow-unsigned) to the uploader and the restore tools.
 
+import type { BackupFormat } from '../r0/lb-files.ts'
 import { BOARD_ID_RE } from '../rooms.ts'
 import { type AssetRef, cleanAssetRefs } from './asset-refs.ts'
-import { BACKUP_FILE_RE } from './backup.ts'
+import { BACKUP_FILE_RE, isHeld } from './backup.ts'
 import {
   type BackupSigningKey,
   checkDocument,
@@ -49,9 +50,22 @@ export interface OffsiteEntry {
   sizeBytes: number
   /** Asset versions the board references (asset-refs.ts). */
   assets: AssetRef[]
+  /**
+   * What the entry's facts describe (the contract both builds follow; DEPLOY.md "Bridge release R0"):
+   * absent = a file R0 reads through its tldraw tables (a tldraw board, or a converted board with its
+   * lb_* tables copied along); `lobby-elements` = a file with only lb_* tables, described from them
+   * (backup.ts BackupEntry.format). Any other name (KNOWN_FORMAT_RE) is a newer build's format: R0 keeps
+   * such an entry listed, signed and under retention, and refuses to drill or restore it (drill.ts).
+   */
+  format?: BackupFormat | (string & {})
+  /** Kept outside retention until then (backup.ts BackupEntry.holdUntil: run-all's final set). */
+  holdUntil?: string
   /** Over every other field and the board id (signing.ts). Absent in entries written before signing. */
   signature?: Signature
 }
+
+/** A backup format name as a manifest may carry it (this build's own, or a newer build's). */
+export const FORMAT_NAME_RE = /^[a-z][a-z0-9.+-]{0,63}$/
 
 /** In memory, a manifest has no signature: it is signed when it is written (signDocument). */
 export interface OffsiteManifest {
@@ -158,6 +172,10 @@ export function parseManifest(
       typeof e.recordsSha256 === 'string' &&
       SHA_RE.test(e.recordsSha256) &&
       assets !== undefined &&
+      // Any format name is kept (a newer build's too): dropping the entry here would make the next
+      // manifest write forget the object, which stays in the store unlisted (drill.ts refuses unknown ones).
+      (e.format === undefined || (typeof e.format === 'string' && FORMAT_NAME_RE.test(e.format))) &&
+      (e.holdUntil === undefined || isoTime(e.holdUntil)) &&
       !backups.some((b) => b.file === e.file)
     if (!ok) {
       ignored++
@@ -225,15 +243,18 @@ export function sortOldestFirst<T extends { file: string; createdAt: string }>(e
 
 /**
  * The retention rule: keep the `newest` most recent backups, plus the most recent backup of each UTC
- * day among the last `dailyDays` days (today included); drop the rest. Returns both lists oldest first.
+ * day among the last `dailyDays` days (today included); drop the rest. A held backup (`holdUntil` still
+ * ahead: run-all's final set, kept 90 days) is kept outside that count, and counts toward neither rule.
+ * Returns both lists oldest first.
  */
-export function applyRetention<T extends { file: string; createdAt: string }>(
+export function applyRetention<T extends { file: string; createdAt: string; holdUntil?: string }>(
   entries: T[],
   now: Date,
   policy: { newest: number; dailyDays: number } = OFFSITE_RETENTION,
 ): { keep: T[]; drop: T[] } {
-  const newestFirst = sortOldestFirst(entries).reverse()
-  const kept = new Set<T>(newestFirst.slice(0, Math.max(1, policy.newest)))
+  const held = new Set(entries.filter((e) => isHeld(e, now.getTime())))
+  const newestFirst = sortOldestFirst(entries.filter((e) => !held.has(e))).reverse()
+  const kept = new Set<T>([...held, ...newestFirst.slice(0, Math.max(1, policy.newest))])
   const today = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())
   const firstDay = today - (Math.max(0, policy.dailyDays) - 1) * 86_400_000
   const seenDays = new Set<number>()
@@ -244,6 +265,6 @@ export function applyRetention<T extends { file: string; createdAt: string }>(
     seenDays.add(day) // newest first: the first one seen is that day's latest
     kept.add(e)
   }
-  const oldestFirst = [...newestFirst].reverse()
+  const oldestFirst = sortOldestFirst(entries)
   return { keep: oldestFirst.filter((e) => kept.has(e)), drop: oldestFirst.filter((e) => !kept.has(e)) }
 }

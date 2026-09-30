@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs'
 import { basename, dirname, join, resolve } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { NodeSqliteWrapper, type RoomSnapshot, SQLiteSyncStorage, TLSocketRoom } from '@tldraw/sync-core'
@@ -10,9 +10,9 @@ import { withDeleteCapture } from './deleted/capture.ts'
 import { type RestoreSummary, restoreDeleted } from './deleted/restore.ts'
 import { hookedSqlWrapper } from './deleted/sql.ts'
 import { type DeletedEntry, type DeletedLimits, DeletedStore, ensureDeletedTables } from './deleted/store.ts'
-import { runPreOpenChecks } from './engine-switch.ts'
 import { createTextLease, type TextLease } from './lease.ts'
 import type { BoardRole } from './permissions.ts'
+import { runPreOpenChecks } from './r0/pre-open.ts'
 import { authorizeUserRecord } from './user-records.ts'
 
 /** Per-session data taken from the verified ticket (docs/M1-CONTRACTS.md §6). */
@@ -48,6 +48,9 @@ interface RoomEntry {
  * 'board' would otherwise be two TLSocketRoom instances on ONE sqlite file (split room).
  */
 export const BOARD_ID_RE = /^[a-z0-9][a-z0-9_-]{2,63}$/
+
+/** A board database file name in the data dir (boardDbPath); the capture is the board id. */
+const BOARD_FILE_RE = /^board-([a-z0-9][a-z0-9_-]{2,63})\.sqlite$/
 
 export function boardDbPath(dataDir: string, boardId: string): string {
   if (!BOARD_ID_RE.test(boardId)) throw new Error('invalid board id')
@@ -204,6 +207,24 @@ export class RoomRegistry {
     return true
   }
 
+  /**
+   * Whether the OPEN board's file also holds the new canvas's lb_* tables (a board converted at the
+   * cut-over, served here from its tldraw tables during a rollback): what this build reads of such a
+   * board is not all of it (http/asset-refs.ts). One read of the file's schema through the room's own
+   * connection; no lb_* table is read. false when the board is not open.
+   */
+  hasNewCanvasTables(boardId: string): boolean {
+    const entry = this.live(boardId)
+    if (!entry) return false
+    return (
+      entry.db
+        .prepare(
+          "SELECT 1 AS x FROM sqlite_master WHERE type = 'table' AND substr(name, 1, 3) = 'lb_' LIMIT 1",
+        )
+        .get() !== undefined
+    )
+  }
+
   /** Puts captured shapes back (validated; see deleted/restore.ts). */
   restoreDeleted(boardId: string, ids: readonly string[]): RestoreSummary {
     const entry = this.existing(boardId)
@@ -241,6 +262,54 @@ export class RoomRegistry {
   backupNow(boardId: string): Promise<BackupEntry | null> {
     const entry = this.live(boardId)
     return entry ? this.backupEntry(entry) : Promise.resolve(null)
+  }
+
+  /** Ids of every board that has a database file in this registry's data dir, sorted. */
+  boardFileIds(): string[] {
+    let names: string[]
+    try {
+      names = readdirSync(this.opts.dataDir)
+    } catch {
+      return []
+    }
+    return names
+      .map((n) => BOARD_FILE_RE.exec(n)?.[1])
+      .filter((id): id is string => id !== undefined && BOARD_ID_RE.test(id))
+      .sort()
+  }
+
+  /**
+   * A fresh backup of one board, whether or not it changed (POST /internal/backups/run-all, bridge
+   * release R0): an open board through its room's own connection, after any backup in progress; any
+   * other board file through a READ-ONLY connection, so no room is opened and nothing is written to the
+   * file (a board born on the new canvas is copied whole: backup.ts). `holdUntil`: kept outside the
+   * count-based retention until then (backup.ts BackupEntry.holdUntil). Throws when backups are off or
+   * the copy fails. The backup is always one started after this call (never one already in progress).
+   */
+  async backupFresh(boardId: string, opts: { holdUntil?: Date } = {}): Promise<BackupEntry> {
+    const b = this.backup
+    if (!b) throw new Error('backups are off')
+    let entry = this.live(boardId)
+    while (entry?.backingUp) {
+      await entry.backingUp
+      entry = this.live(boardId)
+    }
+    if (entry) {
+      const made = await this.backupEntry(entry, opts.holdUntil)
+      if (!made) throw new Error('the backup failed (see the log)')
+      return made
+    }
+    const path = boardDbPath(this.opts.dataDir, boardId)
+    if (!existsSync(path)) throw new Error('the board has no database file')
+    const db = new DatabaseSync(path, { readOnly: true })
+    try {
+      db.exec('PRAGMA busy_timeout = 5000')
+      const made = await backupBoard({ db, boardId, root: b.dir, keep: b.keep, holdUntil: opts.holdUntil })
+      if (!made.format) this.lastBackupClock.set(boardId, made.documentClock)
+      return made
+    } finally {
+      db.close()
+    }
   }
 
   /** One pass of the periodic backup: every open board that changed since its last backup, one at a time. */
@@ -297,8 +366,9 @@ export class RoomRegistry {
 
   private open(boardId: string, seed?: RoomSnapshot): RoomEntry | 'exists' {
     const path = boardDbPath(this.opts.dataDir, boardId)
-    // Spike B (engine-switch.ts): registered pre-open checks run before any writable handle exists, and
-    // throw BoardOpenRefused (O4's R0 born-after check). None are registered unless loadEngine() ran.
+    // Bridge release R0 (r0/pre-open.ts, on spike B's engine-switch.ts registry): before any writable
+    // handle exists, a board born on the new canvas is refused (BoardOpenRefused), so no TLSocketRoom or
+    // tldraw table is ever created in it. The born-after check is registered whenever this module loads.
     runPreOpenChecks({ boardId, path, exists: existsSync(path) })
     // A seed that fails leaves the board as it found it: no data, and no file it created itself.
     let removeOnFailure = seed !== undefined && !existsSync(path)
@@ -449,13 +519,20 @@ export class RoomRegistry {
     return last === null || last === undefined || last !== entry.storage.getClock()
   }
 
-  private backupEntry(entry: RoomEntry): Promise<BackupEntry | null> {
+  /** One backup of an open board at a time; `holdUntil` (backupFresh) is only asked for when none runs. */
+  private backupEntry(entry: RoomEntry, holdUntil?: Date): Promise<BackupEntry | null> {
     const b = this.backup
     if (!b) return Promise.resolve(null)
     if (entry.backingUp) return entry.backingUp
     const run = (async () => {
       try {
-        const made = await backupBoard({ db: entry.db, boardId: entry.roomId, root: b.dir, keep: b.keep })
+        const made = await backupBoard({
+          db: entry.db,
+          boardId: entry.roomId,
+          root: b.dir,
+          keep: b.keep,
+          holdUntil,
+        })
         this.lastBackupClock.set(entry.roomId, made.documentClock)
         return made
       } catch (e) {

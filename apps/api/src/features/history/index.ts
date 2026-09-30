@@ -32,6 +32,7 @@ import { copyExportPolicy, requireExportAllowed } from '../export-control/policy
 import { DELETED_GUESTS, guestRefused } from '../guests/guard.ts'
 import { exportLobbyArchive, importLobbyArchive, isLobbyArchive } from './archive-v2.ts'
 import { ArchiveError, exportBoardArchive, importBoardArchive, type SerializedSchema } from './board-ops.ts'
+import { registerCheckpointAllRoutes } from './checkpoint-all.ts'
 import { registerCheckpointRoutes } from './checkpoint-routes.ts'
 import {
   type CheckpointService,
@@ -46,9 +47,11 @@ import {
   referencedElementFiles,
   referencedFiles,
 } from './files.ts'
-import { type BoardContent, createBoardFrom, viaSync } from './new-board.ts'
+import { type BoardContent, createBoardFrom, newCanvasBoard, viaSync } from './new-board.ts'
 import {
   checkpointBodyOf,
+  isNewCanvasRow,
+  newCanvasCheckpoint,
   readCheckpointBody,
   SNAPSHOT_COLUMNS,
   SNAPSHOT_FROM,
@@ -90,6 +93,8 @@ export async function registerHistory(app: FastifyInstance, ctx: FeatureContext)
   checkpointServices.set(app, checkpoints)
   startCheckpointTimers(app, checkpoints, settings)
   registerCheckpointRoutes(app, ctx, checkpoints, bodies)
+  // Bridge release R0: a manual checkpoint of every board, for the cut-over (checkpoint-all.ts).
+  registerCheckpointAllRoutes(app, ctx, checkpoints)
 
   /**
    * The caller may create boards in the workspace: members and above (guests may not), and a creator
@@ -132,6 +137,7 @@ export async function registerHistory(app: FastifyInstance, ctx: FeatureContext)
     const input = parse(CreateSnapshotInput, req.body)
     const access = await requireBoardAction(db, bid, user.id, 'edit')
     await refuseGuests(user.id)
+    if (access.board.new_canvas) throw newCanvasBoard() // bridge release R0: saved on the new canvas only
     const workspaceId = access.board.workspace_id
     // Only manual checkpoints count: automatic ones are bounded by retention (checkpoints.ts).
     const { n } = await db.one<{ n: number }>(
@@ -196,16 +202,20 @@ export async function registerHistory(app: FastifyInstance, ctx: FeatureContext)
     await requireBoardCreator(workspaceId, user.id, req.routeOptions.url ?? '')
     // A new board of your own is a full copy (export-control, docs/WAVE3-CONTRACTS.md).
     await requireExportAllowed(db, access, user.id)
+    // Bridge release R0: a row marked as made on the new canvas (body_version 2; never written on this
+    // branch yet, snapshot-rows.ts) is restored after the switch. Refused before anything else happens.
+    if (isNewCanvasRow(snapshot)) throw newCanvasCheckpoint()
     const raw = await bodies.read(snapshot.storage_key)
     if (raw === null) throw gone("This checkpoint's saved content is no longer available.")
+    // v1 bodies are tldraw records (a sync on the Excalidraw engine converts them at the seed, §5.5);
+    // v2 bodies are elements (docs/EXCALIDRAW-MIGRATION.md §3.7). Read before the capture below, as R0
+    // does, so an unreadable body stops the restore before anything happens.
+    const body = readCheckpointBody(raw)
     // The board as it is right now gets an automatic checkpoint first (unless an equal one exists), so
     // going back to an older version never loses track of where the board was. Best effort: a failure
     // is logged and the restore goes on (it never changes this board). After the read above, so
     // retention running with it can never take the content being restored.
     await checkpoints.captureQuietly(snapshot.board_id, 'before_restore', { restoredName: snapshot.name })
-    // v1 bodies are tldraw records (a sync on the Excalidraw engine converts them at the seed, §5.5);
-    // v2 bodies are elements (docs/EXCALIDRAW-MIGRATION.md §3.7)
-    const body = readCheckpointBody(raw)
     const content: BoardContent =
       body.version === 2
         ? { format: 'lobby-elements', elements: body.elements, doc: body.doc }
@@ -242,6 +252,7 @@ export async function registerHistory(app: FastifyInstance, ctx: FeatureContext)
     const workspaceId = access.board.workspace_id
     await requireBoardCreator(workspaceId, user.id, req.routeOptions.url ?? '')
     await requireExportAllowed(db, access, user.id) // a duplicate is a full copy (export-control)
+    if (access.board.new_canvas) throw newCanvasBoard() // bridge release R0: duplicated after the switch
     if (input.keepSharing && !can(access.role, 'manage_access', access.board.status))
       throw forbidden('Only the board owner can copy its sharing settings.')
     const snap = await viaSync(() => ctx.sync.snapshot(bid))
@@ -281,6 +292,7 @@ export async function registerHistory(app: FastifyInstance, ctx: FeatureContext)
     const { bid = '' } = req.params as Params
     const access = await requireBoardAction(db, bid, user.id, 'view')
     await requireExportAllowed(db, access, user.id) // export-control: 403 EXPORT_DISABLED for limited viewers
+    if (access.board.new_canvas) throw newCanvasBoard() // bridge release R0: exported after the switch
     const snap = await viaSync(() => ctx.sync.snapshot(bid))
     const lobby = lobbySnapshotOf(snap)
     const records = recordsOf(snap)

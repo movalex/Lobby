@@ -14,6 +14,22 @@ export interface InternalDeps {
   monitor: AccessMonitor
   isClosing(): boolean
   log: (...a: unknown[]) => void
+  /** Maintenance mode (bridge release R0, router.ts). Absent: never on. */
+  maintenance?: { on(): boolean }
+}
+
+/** While maintenance is on, the internal routes that WRITE a board answer this (reads keep working). */
+export const inMaintenance = () =>
+  new HttpError(503, 'MAINTENANCE', 'Lobby is updating. Board changes are paused for a few minutes.')
+
+/**
+ * Refuses a board write while maintenance is on (bridge release R0). The router checks on entry; every
+ * board-writing handler calls this AGAIN once its body has been read, synchronously before the write:
+ * a body still arriving when maintenance goes on (a seed can be 64 MB) must not land after it, nor after
+ * the final run-all backup that follows it (docs/EXCALIDRAW-MIGRATION.md §7.5 steps 3 and 4).
+ */
+export function refuseInMaintenance(deps: { maintenance?: { on(): boolean } }): void {
+  if (deps.maintenance?.on()) throw inMaintenance()
 }
 
 const ACCESS_CHANGED_LIMIT = 16 * 1024
@@ -61,6 +77,7 @@ export async function handleSeed(
   if (!prepared.ok) throw new HttpError(400, 'INVALID_SNAPSHOT', `Invalid snapshot: ${prepared.message}`)
   // From here on everything is synchronous: nothing can open this board between check and write.
   if (deps.isClosing()) throw unavailable()
+  refuseInMaintenance(deps)
   const result = deps.registry.seed(boardId, prepared.snapshot)
   if (result === 'exists')
     throw new HttpError(
@@ -113,5 +130,6 @@ export async function handleRestoreDeleted(
   for (const id of ids)
     if (typeof id !== 'string' || !SHAPE_ID_RE.test(id)) throw badRequest('ids must be shape ids.')
   if (deps.isClosing()) throw unavailable()
+  refuseInMaintenance(deps) // synchronous from here to the write
   sendJson(res, 200, deps.registry.restoreDeleted(boardId, ids as string[]))
 }
