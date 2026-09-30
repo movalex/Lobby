@@ -2,7 +2,13 @@
 // start-view-runtime's fitContent/showFrame, SearchPanel's goToShape): Lobby's own camera through
 // `LobbyCanvas.viewport` (3b's part, canvas/api/parts/navigation.ts), so a whole board fits below
 // Excalidraw's 0.1 floor. The pure rules stay the tldraw build's (placement.ts frameCamera, start-view.ts).
-import { type Bounds, geometry, items, type LobbyCanvas } from '../../../../canvas/api/index.ts'
+import {
+  type Bounds,
+  type CanvasElement,
+  geometry,
+  items,
+  type LobbyCanvas,
+} from '../../../../canvas/api/index.ts'
 import { frameCamera, type Insets } from '../../placement.ts'
 import {
   PHONE_CANVAS_MAX_W,
@@ -27,13 +33,29 @@ export function screenSize(canvas: LobbyCanvas): { w: number; h: number } {
   return { w: v.width * v.zoom, h: v.height * v.zoom }
 }
 
+/**
+ * An element's axis-aligned scene box from its own fields (canvas/api/parts/navigation.ts `elementBox`'s
+ * rule: the box rotated by `angle` about its centre; a linear element's box of its points). For loops over
+ * the whole board: `canvas.bounds(id)` builds a map of the whole scene per call (the port's; a request to
+ * spike B), so a union over every item with it was quadratic (seconds on the heavy board).
+ */
+export function boxOf(el: CanvasElement): Bounds {
+  const points = (el as { points?: readonly (readonly [number, number])[] }).points
+  let box: Bounds = { x: el.x, y: el.y, width: el.width, height: el.height }
+  if (Array.isArray(points) && points.length) {
+    const b = geometry.fromPoints(points.map(([px, py]) => ({ x: el.x + px, y: el.y + py })))
+    if (b) box = b
+  }
+  return el.angle ? (geometry.fromPoints(geometry.corners(box, el.angle)) ?? box) : box
+}
+
 /** Every live item's bounds (bound labels and hidden, collapsed items left out), or null for an empty board. */
 export function contentBounds(canvas: LobbyCanvas): Bounds | null {
   return geometry.union(
     items
       .contentItems(canvas.items())
       .filter((e) => !canvas.isHidden(e.id))
-      .map((e) => canvas.bounds(e.id)),
+      .map(boxOf),
   )
 }
 
@@ -45,8 +67,7 @@ export function contentBounds(canvas: LobbyCanvas): Bounds | null {
 export function viewportHasContent(canvas: LobbyCanvas, view: Bounds = viewOf(canvas)): boolean {
   for (const e of items.contentItems(canvas.items())) {
     if (canvas.isHidden(e.id)) continue
-    const b = canvas.bounds(e.id)
-    if (b && geometry.intersects(view, b)) return true
+    if (geometry.intersects(view, boxOf(e))) return true
   }
   return false
 }

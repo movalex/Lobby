@@ -5,6 +5,7 @@
 import { type PointerEvent, useEffect, useRef } from 'react'
 import { type Bounds, geometry, items, type LobbyCanvas } from '../../../../canvas/api/index.ts'
 import { react } from '../../../../lib/signals.ts'
+import { boxOf } from './camera.ts'
 
 export const MINIMAP_W = 200
 export const MINIMAP_H = 120
@@ -46,7 +47,7 @@ function draw(canvasEl: HTMLCanvasElement, canvas: LobbyCanvas): Mapping {
   const v = canvas.viewport.get()
   const view = { x: v.x, y: v.y, width: v.width, height: v.height }
   const content = items.contentItems(canvas.items()).filter((e) => !canvas.isHidden(e.id))
-  const boxes = content.map((e) => ({ e, b: canvas.bounds(e.id) }))
+  const boxes = content.map((e) => ({ e, b: boxOf(e) }))
   const m = minimapMapping(geometry.union(boxes.map((x) => x.b)), view)
   if (!g) return m
   g.setTransform(dpr, 0, 0, dpr, 0, 0)

@@ -152,6 +152,69 @@ test('a board wider than Excalidraw’s 0.1 floor allows fits whole on Lobby’s
   expect(Math.abs((await zoom(a.page)) - fit)).toBeLessThan(0.001)
 })
 
+test('A11Y2-02: the camera keys and board search act from the chrome (Ctrl+=/-, Shift+=/-, Alt+1, Ctrl+F); M and Delete do not; on the canvas Shift+= zooms in at the pointer', async ({
+  canvasSession,
+}) => {
+  const a = await canvasSession('alice')
+  await waitForNavigation(a.page)
+  const [N1, N2] = (await seed(a.page, [
+    () => createNote(a.page, { x: 0, y: 0, text: 'One' }),
+    () => createNote(a.page, { x: 2400, y: 1600, text: 'Two' }),
+  ])) as [string, string]
+  const share = a.page.getByTestId('share-button')
+
+  await test.step('from the top bar: Ctrl+= / Ctrl+- step the zoom, Shift+= / Shift+- too, Alt+1 fits', async () => {
+    await setView(a.page, { x: -200, y: -200, zoom: 1 })
+    await share.focus()
+    await a.page.keyboard.press('Control+Equal')
+    await expect.poll(() => zoom(a.page)).toBeCloseTo(2, 5)
+    await a.page.keyboard.press('Control+Minus')
+    await expect.poll(() => zoom(a.page)).toBeCloseTo(1, 5)
+    await a.page.keyboard.press('Shift+Equal')
+    await expect.poll(() => zoom(a.page)).toBeCloseTo(2, 5)
+    await a.page.keyboard.press('Shift+Minus')
+    await expect.poll(() => zoom(a.page)).toBeCloseTo(1, 5)
+    await a.page.keyboard.press('Alt+1')
+    await expect.poll(() => inView(a.page, [N1, N2])).toBe(true)
+    await expect(share).toBeFocused()
+    expect(await a.page.evaluate(() => window.devicePixelRatio)).toBe(1)
+  })
+
+  await test.step('from the top bar: Ctrl+F opens board search; M and Delete leave the board alone', async () => {
+    await share.focus()
+    await a.page.keyboard.press('ControlOrMeta+f')
+    await expect(a.page.getByTestId('search-input')).toBeFocused()
+    await a.page.keyboard.press('Escape')
+    await select(a.page, [N1])
+    await share.focus()
+    await a.page.keyboard.press('m')
+    await a.page.keyboard.press('Delete')
+    await a.page.waitForTimeout(300)
+    await expect(a.page.getByTestId('minimap.canvas')).toHaveCount(0)
+    expect(await boundsOf(a.page, [N1])).not.toBeNull()
+  })
+
+  await test.step('on the canvas: Shift+= zooms in around the pointer (tldraw’s zoom-in-on-cursor)', async () => {
+    await select(a.page, [])
+    await setView(a.page, { x: -200, y: -200, zoom: 1 })
+    await focusCanvas(a.page)
+    const box = await a.page.locator('canvas.excalidraw__canvas.interactive').boundingBox()
+    if (!box) throw new Error('no canvas')
+    const at = { x: box.x + box.width * 0.25, y: box.y + box.height * 0.7 }
+    await a.page.mouse.move(at.x, at.y)
+    const before = await viewport(a.page)
+    await a.page.keyboard.press('Shift+Equal')
+    await expect.poll(() => zoom(a.page)).toBeCloseTo(2, 5)
+    const after = await viewport(a.page)
+    const sceneAt = (v: { x: number; y: number; zoom: number }) => ({
+      x: v.x + (at.x - box.x) / v.zoom,
+      y: v.y + (at.y - box.y) / v.zoom,
+    })
+    const [p, q] = [sceneAt(before), sceneAt(after)]
+    expect(Math.hypot(p.x - q.x, p.y - q.y) * after.zoom).toBeLessThan(1.5)
+  })
+})
+
 test('PRI-13: at phone width the navigation panel is one Zoom to fit button, and it fits the board', async ({
   canvasSession,
 }) => {

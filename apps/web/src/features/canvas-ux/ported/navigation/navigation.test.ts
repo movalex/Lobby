@@ -14,12 +14,15 @@ import type {
 } from '../../../../canvas/api/index.ts'
 import { arrangeSelectionAsGrid, hasArrangeable } from './arrange-grid.ts'
 import { analyzeBulkPaste, BULK_PASTE_HANDLER, pasteAsNotes, pasteGrid } from './bulk-paste.tsx'
+import { boxOf } from './camera.ts'
+import { chromeMayZoom } from './chrome-keys.ts'
 import { linkToElements } from './copy-link.ts'
 import { autoOrderWrites, presentOrderWrites } from './FramesPanel.tsx'
 import { frameAt, frameRows, legacyTypeOf, lockedInCanvas, searchCanvas } from './model.ts'
 import { keepOnlyCategory, selectAllOfCategory, selectionKeepOnlyChoices } from './select-by-type.ts'
 import { navigateToDeepLink, parseStoredView, readBoardStartView, readStoredView } from './start-view.ts'
 import { pendingPaste } from './state.ts'
+import { wheelZoom, zoomAroundPoint } from './zoom.ts'
 
 installServerTextMetrics()
 
@@ -560,5 +563,46 @@ describe('the stored view and the deep links', () => {
       'https://x.example/b/brd1?el=a,b.t',
     )
     expect(linkToElements([], 'https://x.example/b/brd1?el=a')).toBe('https://x.example/b/brd1')
+  })
+})
+
+describe('wave 3b: the zoom wheel below 0.1, the camera keys from the chrome, one-pass boxes', () => {
+  const limits = { min: 0.02, max: 8 }
+
+  it('the wheel below 0.1: 10% per notch around the floor, the engine’s own wheel from 0.1 up', () => {
+    // zooming out at the engine's floor: Lobby's, down to the whole-board fit
+    expect(wheelZoom(0.1, { deltaY: 100, deltaMode: 0 }, limits)).toBeCloseTo(0.09)
+    expect(wheelZoom(0.05, { deltaY: 3, deltaMode: 0 }, limits)).toBeCloseTo(0.0485)
+    expect(wheelZoom(0.021, { deltaY: 100, deltaMode: 0 }, limits)).toBe(0.02)
+    expect(wheelZoom(0.02, { deltaY: 100, deltaMode: 0 }, limits)).toBe(0.02)
+    // lines (Firefox): 16 px each, still one step at most
+    expect(wheelZoom(0.1, { deltaY: 3, deltaMode: 1 }, limits)).toBeCloseTo(0.09)
+    // zooming in from below 0.1 is Lobby's; from 0.1 it is the engine's
+    expect(wheelZoom(0.05, { deltaY: -100, deltaMode: 0 }, limits)).toBeCloseTo(0.055)
+    expect(wheelZoom(0.1, { deltaY: -100, deltaMode: 0 }, limits)).toBeNull()
+    expect(wheelZoom(0.5, { deltaY: 100, deltaMode: 0 }, limits)).toBeNull()
+    // a board that fits at 0.1 has no floor below it: the engine's wheel everywhere
+    expect(wheelZoom(0.1, { deltaY: 100, deltaMode: 0 }, { min: 0.1, max: 8 })).toBeNull()
+    expect(wheelZoom(0.1, { deltaY: 0, deltaMode: 0 }, limits)).toBeNull()
+  })
+
+  it('a zoom around a point keeps that point where it is', () => {
+    const to = zoomAroundPoint({ x: 0, y: 0, zoom: 0.1 }, { x: 5000, y: 3000 }, 0.05)
+    expect((5000 - to.x) * 0.05).toBeCloseTo(5000 * 0.1)
+    expect((3000 - to.y) * 0.05).toBeCloseTo(3000 * 0.1)
+  })
+
+  it('the camera keys act from the chrome, never from a field, a menu, a dialog or the canvas', () => {
+    const spot = { textEntry: false, ownsKeys: false, modalOpen: false, onCanvas: false }
+    expect(chromeMayZoom(spot)).toBe(true)
+    expect(chromeMayZoom({ ...spot, textEntry: true })).toBe(false)
+    expect(chromeMayZoom({ ...spot, ownsKeys: true })).toBe(false)
+    expect(chromeMayZoom({ ...spot, modalOpen: true })).toBe(false)
+    expect(chromeMayZoom({ ...spot, onCanvas: true })).toBe(false)
+  })
+
+  it('an element box from its fields (the whole-board loops no longer call the port’s per-id bounds)', () => {
+    const [n] = note('n1', 100, 50, 'x')
+    expect(boxOf(n as unknown as CanvasElement)).toEqual({ x: 100, y: 50, width: 200, height: 200 })
   })
 })

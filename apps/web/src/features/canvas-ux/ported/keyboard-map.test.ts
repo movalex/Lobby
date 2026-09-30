@@ -63,6 +63,8 @@ const ENGINE_KEYS = [
   'mod+]',
   'mod+=',
   'mod+-',
+  'mod+shift++',
+  'mod+shift+_',
   'escape',
   'space',
   'mod+shift+l',
@@ -75,6 +77,11 @@ const TAKES_ENGINE_KEY: Readonly<Record<string, string>> = {
     'navigation.zoom-in: MAK-10, Lobby’s zoom steps and limits (below the engine’s 0.1, down to the whole-board fit)',
   [canonical('mod+-')]:
     'navigation.zoom-out: MAK-10, Lobby’s zoom steps and limits (below the engine’s 0.1, down to the whole-board fit)',
+  // 3b at wave 3b: tldraw's zoom-in/out-on-cursor (Ctrl/Cmd+Shift+= and -), on Lobby's steps and limits
+  [canonical('mod+shift++')]:
+    'navigation.zoom-cursor-keys: tldraw’s zoom-in-on-cursor, on Lobby’s zoom steps and limits',
+  [canonical('mod+shift+_')]:
+    'navigation.zoom-cursor-keys: tldraw’s zoom-out-on-cursor, on Lobby’s zoom steps and limits',
 }
 
 /**
