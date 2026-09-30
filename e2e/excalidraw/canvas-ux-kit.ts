@@ -38,9 +38,9 @@ export const toolbarIds = (page: Page) =>
 /** A note's label text (the bound text's words), or null. */
 export async function labelText(page: Page, id: string): Promise<string | null> {
   const note = await item(page, id)
-  const labelId = ((note as { boundElements?: { id: string; type: string }[] } | null)?.boundElements ?? []).find(
-    (e) => e.type === 'text',
-  )?.id
+  const labelId = (
+    (note as { boundElements?: { id: string; type: string }[] } | null)?.boundElements ?? []
+  ).find((e) => e.type === 'text')?.id
   const label = (await items(page)).find((e) => e.id === labelId) as { originalText?: string } | undefined
   return label?.originalText ?? null
 }
@@ -64,7 +64,11 @@ export async function notes(page: Page) {
 }
 
 /** A click on the canvas at a scene point (the real pointer). */
-export async function clickScene(page: Page, p: { x: number; y: number }, opts: { button?: 'left' | 'right' } = {}) {
+export async function clickScene(
+  page: Page,
+  p: { x: number; y: number },
+  opts: { button?: 'left' | 'right' } = {},
+) {
   const s = await sceneToScreen(page, p)
   await page.mouse.click(s.x, s.y, { button: opts.button ?? 'left' })
 }

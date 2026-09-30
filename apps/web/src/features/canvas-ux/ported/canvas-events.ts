@@ -59,8 +59,14 @@ export function installCanvasEvents(ctx: CanvasFeatureContext): () => void {
   const { canvas } = ctx
   const state = uxState(canvas)
   const offs: (() => void)[] = []
+  /** the editor Escape closed (the note it leaves stays selected, as on the tldraw page) */
+  let escaped: string | null = null
   offs.push(
     canvas.on('input', (e: CanvasInputEvent) => {
+      if (e.type === 'key-down') {
+        if (e.key === 'Escape' && canvas.editingId() !== null) escaped = canvas.editingId()
+        return
+      }
       if (e.type === 'pointer-down') {
         state.leftEditing.set(null)
         return
@@ -89,7 +95,17 @@ export function installCanvasEvents(ctx: CanvasFeatureContext): () => void {
         return
       }
       const el = prev ? canvas.get(prev) : undefined
-      state.leftEditing.set(el?.type === 'stickynote' ? el.id : null)
+      const byEscape = escaped !== null && escaped === prev
+      escaped = null
+      if (el?.type !== 'stickynote') {
+        state.leftEditing.set(null)
+        return
+      }
+      // Escape leaves the note selected (the engine may clear the selection when an editor it opened
+      // for a new note closes): the next key is a command for it, Enter edits it again
+      if (byEscape && canvas.selection.length === 0 && !(el as { isDeleted?: boolean }).isDeleted)
+        canvas.select([el.id])
+      state.leftEditing.set(el.id)
     }),
   )
   offs.push(

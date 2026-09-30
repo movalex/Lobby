@@ -69,7 +69,13 @@ test('toolbar: the main tools keep their order, an overflow tool takes the one e
     await waitForCanvasUx(b.page)
     const ids = await toolbarIds(b.page)
     expect(ids[0]).toBe('tools.select')
-    for (const id of ['tools.note', 'tools.rectangle', 'tools.asset', 'tools.dr-templates', 'tools.more-button'])
+    for (const id of [
+      'tools.note',
+      'tools.rectangle',
+      'tools.asset',
+      'tools.dr-templates',
+      'tools.more-button',
+    ])
       expect(ids).not.toContain(id)
     await expect(b.page.getByTestId('dock-tab-templates')).toHaveCount(0)
     await expect(b.page.getByTestId('style.panel')).toHaveCount(0)
@@ -119,8 +125,14 @@ test('RETRO-20 / R16: the style panel shows for a selection or a creation tool, 
   const a = await canvasSession('alice')
   await waitForCanvasUx(a.page)
   const panel = a.page.getByTestId('style.panel')
-  const rect = await settled(a.page, createItem(a.page, 'rectangle', { x: 100, y: 100, width: 200, height: 120 }))
-  const frame = await settled(a.page, createItem(a.page, 'frame', { x: 500, y: 100, width: 300, height: 200, name: 'F' }))
+  const rect = await settled(
+    a.page,
+    createItem(a.page, 'rectangle', { x: 100, y: 100, width: 200, height: 120 }),
+  )
+  const frame = await settled(
+    a.page,
+    createItem(a.page, 'frame', { x: 500, y: 100, width: 300, height: 200, name: 'F' }),
+  )
   await expect(panel).toHaveCount(0)
   await select(a.page, [rect])
   await expect(panel).toBeVisible()
@@ -170,7 +182,10 @@ test('style: colour, fill, dash and size on a shape are one undo step each, map 
   const a = await canvasSession('alice')
   const b = await canvasSession('bob')
   await waitForCanvasUx(a.page)
-  const rect = await settled(a.page, createItem(a.page, 'rectangle', { x: 100, y: 100, width: 200, height: 120 }))
+  const rect = await settled(
+    a.page,
+    createItem(a.page, 'rectangle', { x: 100, y: 100, width: 200, height: 120 }),
+  )
   await waitForItem(b.page, rect)
   await select(a.page, [rect])
   await a.page.getByTestId('style.color.blue').click()
@@ -207,7 +222,9 @@ test('style: colour, fill, dash and size on a shape are one undo step each, map 
   expect(next.strokeColor).toBe('#e03131')
 })
 
-test('style: a font and a size on a note lay its label out again in one undo step', async ({ canvasSession }) => {
+test('style: a font and a size on a note lay its label out again in one undo step', async ({
+  canvasSession,
+}) => {
   const a = await canvasSession('alice')
   const b = await canvasSession('bob')
   await waitForCanvasUx(a.page)

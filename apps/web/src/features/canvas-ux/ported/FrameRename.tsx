@@ -3,7 +3,7 @@
 // keeps the name, Escape keeps the old one. A frame's name has no lease (docs/EXCALIDRAW-CONTRACTS.md §2.1
 // `text.edit`: "a frame's name is `meta`, renamed with `tx.update(id, {name})` from Lobby's input"), so the
 // rename is one plain write, one undo step. Renaming replaces the name (the field opens with it selected).
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef } from 'react'
 import type { CanvasFeatureContext } from '../../../canvas/api/index.ts'
 import { useValue } from '../../../lib/signals.ts'
 import { uxState } from './state.ts'
@@ -26,25 +26,23 @@ export function FrameRename({ ctx }: { ctx: CanvasFeatureContext }) {
   }, [canvas, state])
   const frame = id ? canvas.get(id) : undefined
   const initial = String((frame as { name?: string | null } | undefined)?.name ?? '')
-  const [value, setValue] = useState(initial)
   const input = useRef<HTMLInputElement>(null)
   const done = useRef(false)
+  // the field opens with the name selected (typing replaces it); once per frame
   useEffect(() => {
     if (!id) return
     done.current = false
-    setValue(initial)
     const el = input.current
     if (!el) return
     el.focus({ preventScroll: true })
     el.select()
-    // a frame name is set once: re-open only for another frame
-  }, [id]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [id])
   if (!id || !at || frame?.type !== 'frame') return null
   const finish = (keep: boolean) => {
     if (done.current) return
     done.current = true
     state.renamingFrame.set(null)
-    const name = value.trim()
+    const name = (input.current?.value ?? '').trim()
     const f = canvas.get(id)
     if (keep && f && !canvas.readOnly() && name !== String((f as { name?: string | null }).name ?? ''))
       canvas.transact('rename frame', (tx) => tx.update(id, { name: name || null }))
@@ -57,9 +55,9 @@ export function FrameRename({ ctx }: { ctx: CanvasFeatureContext }) {
       data-testid="frame-rename"
       data-frame-id={id}
       aria-label="Frame name"
-      value={value}
+      key={id}
+      defaultValue={initial}
       style={{ left: at.x, top: at.y - FRAME_NAME_BAND_PX, width: at.width }}
-      onChange={(e) => setValue(e.currentTarget.value)}
       onKeyDown={(e) => {
         if (e.key === 'Enter') {
           e.preventDefault()
