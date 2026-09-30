@@ -99,6 +99,9 @@ export function ShortcutsDialog({ ctx }: { ctx: CanvasFeatureContext }) {
   if (!open) return null
   const platform = currentPlatform()
   const close = () => {
+    // The modal <dialog> closes first: while it is open the page is inert, so a focus() on the canvas can
+    // be dropped and the keyboard end on <body> once React removes the dialog (3b's finding, a11y-3).
+    if (ref.current?.open) ref.current.close()
     state.shortcutsOpen.set(false)
     canvas.focus({ preventScroll: true })
   }
