@@ -204,7 +204,9 @@ export function offerUndo(canvas: LobbyCanvas, text: string, written: ReadonlyMa
     })
   const off = canvas.on('change', (change) => {
     if (!live || change.source === 'remote') return
-    if (change.source === 'local' && isEcho([...change.created, ...change.updated, ...change.deleted])) return
+    // the result's own batch (reported as local, or as history when an earlier undo or redo marked the same
+    // ids): exactly the versions it wrote. An undo of it, or any other edit, writes new ones.
+    if (isEcho([...change.created, ...change.updated, ...change.deleted])) return
     stop()
     ctx.dismiss(NOTICE_KEY)
   })
