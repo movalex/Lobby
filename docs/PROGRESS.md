@@ -511,3 +511,9 @@ Checks: lint 0 errors / 0 warnings (581 files); typecheck 14 projects; vitest 1,
     - `viewport.set` is not read back at once.
   - **Requested:** CR 3b-2 (wheel and pinch deltas on the input stream, for the wheel below 0.1), CR 3b-3 (`startView` editor-writable), CR 3b-4 (`present` writable on locked frames).
   - **Not ported:** the wheel below 0.1, the level-of-detail pass, the UI clicks on 3a's shells (the specs run the same entries through the page's dev-only registry hook), search by tag (3d), and F15's upload e2e (3g).
+  - **Gate** (`E2E_PORT_BASE` 6440 and 6450; the machine was shared with other agents' runs):
+    - lint, typecheck (15 projects), engine-probe, e2e and Node-safety tsc;
+    - `pnpm test` 4,609 passed / 36 skipped (36 new);
+    - the ported specs `e2e/excalidraw/navigation-*.spec.ts` **22/22 three runs in a row** (3 of them `test.fail`: the 2 inserts blocked by CR-2D-2, and the stale-doc defect);
+    - the default-build specs of these features (`canvas-ux`, `canvas-ux-2`, `canvas-ux.fix`, `search`) **36/36 once**;
+    - the normal build and the engine-flag build without the guard carry no ported navigation code.

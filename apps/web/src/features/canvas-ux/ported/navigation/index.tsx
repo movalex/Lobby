@@ -1,5 +1,5 @@
 // OWNER: 3b (docs/EXCALIDRAW-CONTRACTS.md §7.2). The ported 'navigation' feature on the Excalidraw board page:
-// navigation: minimap, board search, frames panel, start view, copy link and deep links, arrange as grid, select by type, bulk paste, templates, Lobby’s fit camera, level of detail.
+// navigation: minimap, board search, frames panel, start view, copy link and deep links, arrange as grid, select by type, bulk paste, templates, Lobby’s fit camera, level of detail (not built yet: the wheel below 0.1 and the level-of-detail pass, docs/research/excalidraw/wave3/3B.md §6).
 //
 // What it contributes (docs/EXCALIDRAW-MIGRATION.md §4.2, §3.6; the tldraw build's canvas-ux feature):
 //  - dock panels: Search board (Ctrl/Cmd+F, MAK-12), Frames (MAK-13), Templates (PRE-02/03; the insert is
