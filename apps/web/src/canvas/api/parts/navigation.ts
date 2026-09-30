@@ -8,15 +8,20 @@
  * zoom, and every move is one `viewport.set` (animated by the board page when `animate` is given). The
  * camera math is the pure functions below (Node-tested).
  *
- * The zoom Lobby moves to is its own: `zoomTo` may go below Excalidraw's 0.1 floor down to the zoom a
- * whole-board fit needs (`limits().min`), as spike A's A14 showed a 9,220-element board needs 0.054 in a
- * 1536 × 864 view. `updateScene` accepts such a zoom; only Excalidraw's own wheel and keys clamp to 0.1.
+ * The zoom Lobby moves to is its own: `zoomTo` and `fit` may go below Excalidraw's 0.1 floor down to the
+ * zoom a whole-board fit needs (`limits().min`), as spike A's A14 showed a 9,220-element board needs 0.054
+ * in a 1536 × 864 view. `updateScene` accepts such a zoom; only Excalidraw's own wheel and keys clamp to
+ * 0.1 (the navigation feature takes the zoom wheel below it, `wheelZoom`).
+ *
+ * The whole board's bounds come from the elements' own fields (`elementBox`), in one pass: the port's
+ * `bounds(id)` builds a map of the whole scene per call, so a union over every item was quadratic (on the
+ * heavy board, seconds per fit, per zoom step and at the first view).
  */
-import { union } from '../geometry.ts'
-import { contentItems } from '../items.ts'
+import { corners, fromPoints, union } from '../geometry.ts'
 import type {
   Bounds,
   CameraMove,
+  CanvasElement,
   LobbyViewport,
   ScenePoint,
   ScreenPoint,
@@ -28,7 +33,7 @@ import type { PartDeps } from './types.ts'
 
 export type NavigationPart = Pick<
   LobbyViewport,
-  'zoomTo' | 'centerOn' | 'ensureVisible' | 'zoomStep' | 'limits'
+  'zoomTo' | 'centerOn' | 'ensureVisible' | 'zoomStep' | 'limits' | 'fit'
 >
 
 // ---- the numbers ------------------------------------------------------------------------------------------
@@ -98,6 +103,61 @@ export function zoomToCamera(
     opts.zoom ?? Math.min(fitZoom(bounds, screen, opts.inset ?? DEFAULT_INSET), opts.maxZoom ?? 1)
   const zoom = clamp(wanted, limits.min, limits.max)
   return centeredOn({ x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 }, zoom, screen)
+}
+
+/** Share of the canvas a `viewport.fit` fills (the board page's fit, a margin for the chrome). */
+export const FIT_FILL = 0.8
+
+/**
+ * The camera of `viewport.fit` (the board page's rule: `FIT_FILL` of the canvas, never above 100%), with
+ * Lobby's floor instead of Excalidraw's 0.1: `limits.min`, the whole-board fit when that is lower.
+ */
+export function fitCamera(bounds: Bounds, screen: ScreenSize, limits: Pick<ZoomLimits, 'min'>): CameraTarget {
+  const w = Math.max(1, bounds.width)
+  const h = Math.max(1, bounds.height)
+  const zoom = clamp(Math.min(screen.width / w, screen.height / h) * FIT_FILL, limits.min, 1)
+  return centeredOn({ x: bounds.x + w / 2, y: bounds.y + h / 2 }, zoom, screen)
+}
+
+type Pt = readonly [number, number]
+
+/**
+ * An element's axis-aligned scene box from its own fields: `x`, `y`, `width`, `height` rotated by `angle`
+ * about the centre, as Excalidraw rotates elements; a linear element's (arrow, line, freedraw) box of its
+ * points, rotated the same way. A superset of the engine's bounds for a curved line (its bulge is inside
+ * the points' box only for most curves), and it needs no scene map: one pass over the board is O(n).
+ */
+export function elementBox(el: CanvasElement): Bounds {
+  const points = (el as { points?: readonly Pt[] }).points
+  let box: Bounds = { x: el.x, y: el.y, width: el.width, height: el.height }
+  if (Array.isArray(points) && points.length) {
+    const b = fromPoints(points.map(([px, py]) => ({ x: el.x + px, y: el.y + py })))
+    if (b) box = b
+  }
+  if (!el.angle) return box
+  return fromPoints(corners(box, el.angle)) ?? box
+}
+
+/** Every live content item's box (bound labels, deleted and `hidden` items left out); null when none. */
+export function contentBox(
+  elements: readonly CanvasElement[],
+  hidden: (id: string) => boolean = () => false,
+): Bounds | null {
+  let x1 = Number.POSITIVE_INFINITY
+  let y1 = Number.POSITIVE_INFINITY
+  let x2 = Number.NEGATIVE_INFINITY
+  let y2 = Number.NEGATIVE_INFINITY
+  for (const e of elements) {
+    if (e.isDeleted || (e.type === 'text' && e.containerId)) continue
+    if (hidden(e.id)) continue
+    const b = elementBox(e)
+    if (!Number.isFinite(b.x) || !Number.isFinite(b.y)) continue
+    x1 = Math.min(x1, b.x)
+    y1 = Math.min(y1, b.y)
+    x2 = Math.max(x2, b.x + b.width)
+    y2 = Math.max(y2, b.y + b.height)
+  }
+  return Number.isFinite(x1) ? { x: x1, y: y1, width: x2 - x1, height: y2 - y1 } : null
 }
 
 /** The next zoom step in or out from `zoom` (tldraw's zoomIn / zoomOut: a step past the halfway point is skipped). */
@@ -171,14 +231,10 @@ export function createNavigationPart(deps: PartDeps): NavigationPart {
   const move = (to: CameraTarget, opts?: CameraMove) =>
     canvas().viewport.set({ x: to.x, y: to.y, zoom: to.zoom }, opts)
 
-  /** Every live item's bounds, hidden (collapsed) ones and bound labels left out; null for an empty board. */
+  /** Every live item's box, hidden (collapsed) ones and bound labels left out; null for an empty board. */
   const contentBounds = (): Bounds | null => {
     const c = canvas()
-    return union(
-      contentItems(c.items())
-        .filter((e) => !c.isHidden(e.id))
-        .map((e) => c.bounds(e.id)),
-    )
+    return contentBox(c.items(), (id) => c.isHidden(id))
   }
 
   const limits = (): ZoomLimits => {
@@ -187,13 +243,24 @@ export function createNavigationPart(deps: PartDeps): NavigationPart {
     return limitsFor(b ? fitZoom(b, screenOf(v)) : null)
   }
 
-  const targetBounds = (target: Bounds | readonly string[]): Bounds | null => {
-    if (!Array.isArray(target)) return target as Bounds
+  /** The boxes of `ids` (a few: the engine's own bounds; many: the elements' own fields, in one pass). */
+  const boundsOfIds = (ids: readonly string[]): Bounds | null => {
     const c = canvas()
-    return union((target as readonly string[]).map((id) => c.bounds(id)))
+    if (ids.length <= 16) return union(ids.map((id) => c.bounds(id)))
+    const byId = new Map(c.items().map((e) => [e.id, e]))
+    return union(ids.map((id) => byId.get(id)).map((e) => (e && !e.isDeleted ? elementBox(e) : null)))
   }
 
+  const targetBounds = (target: Bounds | readonly string[]): Bounds | null =>
+    Array.isArray(target) ? boundsOfIds(target as readonly string[]) : (target as Bounds)
+
   return {
+    fit(ids, opts) {
+      const b = ids?.length ? boundsOfIds(ids) : contentBounds()
+      if (!b) return
+      const v = canvas().viewport.get()
+      move(fitCamera(b, screenOf(v), limits()), opts)
+    },
     zoomTo(bounds, opts) {
       const v = canvas().viewport.get()
       move(zoomToCamera(bounds, screenOf(v), limits(), opts), opts)
