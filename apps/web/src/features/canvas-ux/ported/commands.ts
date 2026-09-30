@@ -17,6 +17,8 @@
 //    untouched"); the button and the menus still have it.
 //  - A11Y2-07: "?" and Ctrl/Cmd+/ open the keyboard shortcuts (Ctrl/Cmd+Alt+/ too); nothing flips the theme.
 //  - Ctrl/Cmd+U opens the file picker (Insert file).
+//  - Ctrl/Cmd+X cuts (the allowlist blocks the chord itself; ./export-gate.ts and the input layer apply the
+//    export policy to the cut event).
 import type {
   CanvasElement,
   CanvasFeatureContext,
@@ -224,8 +226,12 @@ export const COMMANDS: readonly CommandSpec[] = [
     },
   },
   {
+    // A11Y2-02: Ctrl/Cmd+X on the canvas cuts. The allowlist blocks the chord (Excalidraw's own actionCut
+    // keydown test, canvas/input/keymap.ts), so it is Lobby's key: the browser's cut command on the focused
+    // canvas, where the engine's cut listener copies and deletes, after the export gate
     id: CMD.cut,
     label: 'Cut',
+    kbd: ['mod+x'],
     enabled: (ctx) => editable(ctx) && selectionAtLeast(1)(ctx),
     run: (ctx) => clipboard(ctx, 'cut'),
   },

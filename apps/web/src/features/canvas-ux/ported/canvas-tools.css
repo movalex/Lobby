@@ -30,15 +30,98 @@
   flex-wrap: wrap;
   max-width: 240px;
 }
-/* On a phone the toolbar is wider than the canvas: it scrolls sideways inside itself instead of overflowing
-   the canvas region (a focused or clicked tool off the edge scrolled the whole region, and everything placed
-   against it, sideways; found at the wave-3 integration). 3i's "Board actions" sheet holds every tool too. */
-@media (max-width: 599px) {
-  .cux-toolbar {
-    max-width: calc(100vw - 24px);
-    overflow-x: auto;
-    scrollbar-width: none;
-  }
+/* The toolbar shows only the tools that fit (./toolbar-layout.ts); should it still be wider than the canvas,
+   it scrolls inside itself rather than scroll the canvas region (the wave-3 integration). */
+.cux-toolbar {
+  max-width: calc(100vw - 24px);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.cux-toolbar-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+/* the style panel opened from the Styles button (a canvas of 640 px or less), above the toolbar */
+.cux-toolbar-styles {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  right: 0;
+  z-index: 2;
+}
+.cux-style-toggle__swatch {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1px rgb(0 0 0 / 18%);
+}
+.cux-style-toggle:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+/* ---- quick actions (tldraw's quick actions and actions menu) -------------------------------------------- */
+.cux-quick {
+  position: relative;
+  pointer-events: auto;
+}
+.cux-quick--toolbar {
+  align-self: flex-start;
+  margin-left: 8px;
+}
+.cux-quick__bar,
+.cux-quick__menu {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--dr-line);
+  border-radius: 10px;
+  background: var(--dr-surface);
+  box-shadow: var(--dr-shadow);
+}
+.cux-quick__menu {
+  position: absolute;
+  z-index: 3;
+  bottom: calc(100% + 6px);
+  left: 0;
+  display: grid;
+  grid-template-columns: repeat(4, 34px);
+}
+.cux-quick__btn {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--dr-ink-2);
+  cursor: pointer;
+}
+.cux-quick__btn:hover:not(:disabled) {
+  background: var(--dr-hover);
+  color: var(--dr-ink);
+}
+.cux-quick__btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.cux-quick__btn[aria-pressed="true"],
+.cux-quick__btn[aria-expanded="true"] {
+  background: var(--dr-navy);
+  color: var(--dr-on-navy);
+}
+.cux-quick__btn:focus-visible {
+  outline: 2px solid var(--dr-focus);
+  outline-offset: 1px;
+}
+/* the workshop cards (vote join, voting bar, results, brainstorm prompt) stand above the toolbar's two rows,
+   as workshops.css's rule for tldraw's mobile layout does on the tldraw page */
+[data-lobby-board-canvas]:has(.cux-toolbar-wrap[data-quick="toolbar"]) .dr-wk-stack {
+  bottom: 112px;
+  max-width: calc(100% - 16px);
 }
 .cux-tool {
   display: grid;
@@ -79,12 +162,8 @@
   font: 12.5px / 1.3 var(--dr-font);
   pointer-events: auto;
 }
-.cux-style-phone {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 6px;
-  pointer-events: auto;
+.cux-toolbar-styles .cux-style {
+  max-height: min(60vh, calc(100vh - 220px));
 }
 .cux-style-toggle {
   display: grid;

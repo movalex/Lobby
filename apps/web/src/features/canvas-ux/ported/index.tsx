@@ -4,6 +4,9 @@
 //  - the toolbar (./Toolbar.tsx), the style panel (./StylePanel.tsx), the context and board menus
 //    (./ContextMenu.tsx, ./MainMenu.tsx: every feature's entries), the keyboard shortcuts dialog
 //    (./ShortcutsDialog.tsx) and the selection bar (./SelectionBar.tsx: every feature's items);
+//  - the quick actions (./QuickActions.tsx: Undo, Redo, Delete, Duplicate, the actions menu) on the toolbar
+//    of a canvas of 840 px or less, and the toolbar's layout by canvas width (./toolbar-layout.ts);
+//  - the history keys from Lobby's chrome (./chrome-keys.ts, A11Y2-02);
 //  - the Miro keys, keyboard safety and Ctrl+U as commands and keys (./commands.ts, ./keys.ts): the key
 //    registry dispatches them before the allowlist (canvas/input/keymap.ts), which keeps type-to-edit,
 //    Enter on a text and the tool letters;
@@ -22,6 +25,7 @@ import './canvas-tools.css'
 import { useEffect } from 'react'
 import { CONTEXT_MENU_ENTRIES, ContextMenu } from './ContextMenu.tsx'
 import { installCanvasEvents } from './canvas-events.ts'
+import { installChromeHistoryKeys } from './chrome-keys.ts'
 import { COMMANDS } from './commands.ts'
 import { applyFontDefault, applySnapDefault, startToolFor } from './defaults.ts'
 import { exportGate, installCopyGuard, syncExportGate } from './export-gate.ts'
@@ -78,6 +82,7 @@ function mount(ctx: CanvasFeatureContext): () => void {
     }),
   )
   cleanups.push(installCanvasEvents(ctx))
+  cleanups.push(installChromeHistoryKeys(ctx))
   cleanups.push(installLockedHint(ctx))
   cleanups.push(installCopyGuard(ctx))
   cleanups.push(syncExportGate(ctx))

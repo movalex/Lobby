@@ -178,6 +178,8 @@ describe('canvas-ux’s own keys (a change here is a change of docs/PROGRESS.md�
     expect(own).toEqual(
       [
         'canvas mod+shift+l → canvas-ux.toggle-lock',
+        // A11Y2-02 (wave 3b): Ctrl/Cmd+X cuts on the canvas (the allowlist blocks the chord itself)
+        'canvas mod+x → canvas-ux.cut',
         'canvas pageup → canvas-ux.bring-to-front',
         'canvas ] → canvas-ux.bring-to-front',
         'canvas pagedown → canvas-ux.send-to-back',

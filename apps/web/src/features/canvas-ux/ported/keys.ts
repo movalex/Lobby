@@ -16,6 +16,10 @@
 //    locked element never goes; MAK-05 keeps it selected after locking).
 //  - export control: while exporting is off for this person, Ctrl/Cmd+C and +X on a selection say why (the
 //    allowlist keeps the key from read-only roles, so no copy event ever reaches ./export-gate.ts's guard).
+//  - CR-3A-6 (wave 3b): Shift+D picks the highlighter (tldraw's key; a key on one selected note types into
+//    it instead), P while highlighting goes back to the pen, and H / V pick the read-only Hand and Select
+//    for people who cannot edit. These tools are the canvas API's (canvas/api/parts/tools.ts), which the
+//    allowlist's own tool letters do not reach.
 //
 // Keys that act only in a narrow state DEFER: when another feature's key takes the same event (a mind
 // map's Enter or Tab, a feature's letter), theirs runs instead (`othersTake`). The keyboard-map test
@@ -54,7 +58,16 @@ export const DEFERRING_KEYS: ReadonlySet<string> = new Set([
   'canvas-ux.next-note',
   'canvas-ux.locked-delete',
   'canvas-ux.export-off-copy',
+  'canvas-ux.tool-highlight',
+  'canvas-ux.tool-pen-after-highlight',
+  'canvas-ux.readonly-tools',
 ])
+
+/** One selected sticky note: the allowlist's type-to-edit takes printable keys (canvas/input/keymap.ts). */
+const typeToEditTarget = (ctx: CanvasFeatureContext) => {
+  const sel = ctx.canvas.selection
+  return sel.length === 1 && ctx.canvas.get(sel[0] as string)?.type === 'stickynote'
+}
 
 const plain = (e: KeyEventLike) => !e.ctrlKey && !e.metaKey && !e.altKey
 
@@ -191,5 +204,33 @@ export const KEYS: readonly FeatureKeySpec[] = [
       }
       return true
     },
+  },
+  {
+    // CR-3A-6: tldraw's highlighter key. A printable key on the one selected note types into it instead
+    // (the allowlist's type-to-edit), as it does on the tldraw page.
+    id: 'canvas-ux.tool-highlight',
+    scope: 'canvas',
+    chords: ['shift+d'],
+    match: (e, ctx) => !ctx.canvas.readOnly() && !typeToEditTarget(ctx) && !othersTake(e, ctx, 'canvas'),
+    handle: (_e, ctx) => ctx.canvas.setTool('highlight'),
+  },
+  {
+    // P while the highlighter is on picks the pen (the allowlist's own P would keep the engine's pen, which
+    // the highlighter already is)
+    id: 'canvas-ux.tool-pen-after-highlight',
+    scope: 'canvas',
+    chords: ['p'],
+    match: (e, ctx) =>
+      plain(e) && !e.shiftKey && ctx.canvas.tool() === 'highlight' && !othersTake(e, ctx, 'canvas'),
+    handle: (_e, ctx) => ctx.canvas.setTool('freedraw'),
+  },
+  {
+    // CR-3A-6: H and V for read-only roles pick the read-only Hand and Select (canvas/api/parts/tools.ts);
+    // the allowlist's own H is the engine's Hand, which read-only roles cannot have
+    id: 'canvas-ux.readonly-tools',
+    scope: 'canvas',
+    chords: ['h', 'v'],
+    match: (e, ctx) => plain(e) && !e.shiftKey && ctx.canvas.readOnly() && !othersTake(e, ctx, 'canvas'),
+    handle: (e, ctx) => ctx.canvas.setTool(e.code === 'KeyH' ? 'hand' : 'select'),
   },
 ]

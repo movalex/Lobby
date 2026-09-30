@@ -109,6 +109,34 @@ export function colorNameOf(stroke: unknown): ColorName | null {
   return COLOR_NAMES.find((n) => SHADES[n].solid === s) ?? null
 }
 
+/**
+ * The highlighter's shade of each colour (tldraw 5.4.2's light `highlightSrgb`, the converter's
+ * packages/tldraw-import/src/palette.ts; canvas/api/parts/tools.ts keys the same shades by stroke). Black
+ * and yellow share tldraw's yellow; the grey is tldraw's.
+ */
+export const HIGHLIGHT_SHADES: Readonly<Record<ColorName, string>> = {
+  black: '#fddd00',
+  grey: '#cbe7f1',
+  'light-violet': '#ff88ff',
+  violet: '#c77cff',
+  blue: '#10acff',
+  'light-blue': '#00f4ff',
+  yellow: '#fddd00',
+  orange: '#ffa500',
+  green: '#00ffc8',
+  'light-green': '#65f641',
+  'light-red': '#ff7fa3',
+  red: '#ff636e',
+  white: '#ffffff',
+}
+
+/** The colour name of a highlight stroke (the first name with that shade: black for tldraw's yellow). */
+export function highlightNameOf(stroke: unknown): ColorName | null {
+  if (typeof stroke !== 'string') return null
+  const s = stroke.toLowerCase()
+  return COLOR_NAMES.find((n) => HIGHLIGHT_SHADES[n] === s) ?? null
+}
+
 /** The fill name of a (background, fillStyle) pair, or null when it is none of the four. */
 export function fillNameOf(background: unknown, fillStyle: unknown): FillName | null {
   if (typeof background !== 'string') return null

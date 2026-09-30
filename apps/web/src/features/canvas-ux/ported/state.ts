@@ -29,6 +29,10 @@ export interface CanvasUxState {
   readonly shortcutsOpen: Atom<boolean>
   /** the toolbar's "More" popover */
   readonly moreOpen: Atom<boolean>
+  /** the quick actions' "⋮" actions menu (./QuickActions.tsx) */
+  readonly actionsMenuOpen: Atom<boolean>
+  /** the style panel opened from the toolbar's Styles button (a canvas of 640 px or less) */
+  readonly stylesOpen: Atom<boolean>
   /** the overflow tool used last: it takes the one extra toolbar slot (PRF-09) */
   readonly lastOverflowTool: Atom<string | null>
   readonly lockedHint: Atom<LockedHint | null>
@@ -53,6 +57,8 @@ export function uxState(canvas: LobbyCanvas): CanvasUxState {
       mainMenuOpen: atom('cux-main-menu', false),
       shortcutsOpen: atom('cux-shortcuts', false),
       moreOpen: atom('cux-more', false),
+      actionsMenuOpen: atom('cux-actions-menu', false),
+      stylesOpen: atom('cux-styles-open', false),
       lastOverflowTool: atom<string | null>('cux-last-overflow', null),
       lockedHint: atom<LockedHint | null>('cux-locked-hint', null),
       renamingFrame: atom<string | null>('cux-renaming-frame', null),
@@ -66,7 +72,14 @@ export function uxState(canvas: LobbyCanvas): CanvasUxState {
 
 /** Whether one of canvas-ux's menus or popovers is open (registries.menusOpen). */
 export function anyMenuOpen(s: CanvasUxState): boolean {
-  return s.contextMenu.get() !== null || s.mainMenuOpen.get() || s.shortcutsOpen.get() || s.moreOpen.get()
+  return (
+    s.contextMenu.get() !== null ||
+    s.mainMenuOpen.get() ||
+    s.shortcutsOpen.get() ||
+    s.moreOpen.get() ||
+    s.actionsMenuOpen.get() ||
+    s.stylesOpen.get()
+  )
 }
 
 /** Closes every canvas-ux menu and popover. */
@@ -75,4 +88,6 @@ export function closeMenus(s: CanvasUxState): void {
   s.mainMenuOpen.set(false)
   s.shortcutsOpen.set(false)
   s.moreOpen.set(false)
+  s.actionsMenuOpen.set(false)
+  s.stylesOpen.set(false)
 }

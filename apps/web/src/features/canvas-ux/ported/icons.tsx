@@ -79,6 +79,12 @@ export const FrameIcon = () => (
     <path d="M7 3v18M17 3v18M3 7h18M3 17h18" />
   </Svg>
 )
+export const HighlightIcon = () => (
+  <Svg>
+    <path d="M14.5 4.5l5 5-7.5 7.5H7v-5z" />
+    <path d="M7 17l-3 3h6M11 8l5 5" />
+  </Svg>
+)
 export const EraserIcon = () => (
   <Svg>
     <path d="M8 20h12M5.5 14.5l7.8-7.8a2 2 0 0 1 2.8 0l2.2 2.2a2 2 0 0 1 0 2.8L11 19H8.5z" />
@@ -137,6 +143,7 @@ export const TOOL_ICONS: Readonly<Record<string, ComponentType>> = {
   freedraw: PenIcon,
   arrow: ConnectorIcon,
   line: LineIcon,
+  highlight: HighlightIcon,
   frame: FrameIcon,
   eraser: EraserIcon,
   laser: LaserIcon,

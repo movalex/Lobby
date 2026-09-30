@@ -56,6 +56,7 @@ import { createFilesPart } from './parts/files.ts'
 import { createFollowPart } from './parts/follow.ts'
 import { createNavigationPart } from './parts/navigation.ts'
 import { createStylesPart } from './parts/styles.ts'
+import { createToolsPart } from './parts/tools.ts'
 import type { PartDeps } from './parts/types.ts'
 import type { FeatureRegistries } from './registries.ts'
 
@@ -497,6 +498,8 @@ export function createLobbyCanvas(deps: LobbyCanvasDeps): LobbyCanvasHandle {
   const followPart = createFollowPart(partDeps)
   const exportPart = createExportPart(partDeps)
   const filesPart = createFilesPart(partDeps)
+  // CR-3A-6 (3a): the highlighter and a read-only Hand around the port's setTool / tool (parts/tools.ts)
+  const toolsPart = createToolsPart(partDeps)
 
   const newId = () => board?.newId() ?? fallbackId()
   const lobbyTx = (tx: CanvasTx): LobbyTx => {
@@ -584,10 +587,10 @@ export function createLobbyCanvas(deps: LobbyCanvasDeps): LobbyCanvasHandle {
       if (!board) throw new NotImplementedError(ownerOf('transact.joinPrevious'), 'transact.joinPrevious')
       return board.history.joinPrevious(run)
     },
-    setTool: (tool) => port.setTool(tool),
+    setTool: (tool) => toolsPart.setTool(tool),
     tool() {
       sources.tool.track()
-      return port.tool()
+      return toolsPart.tool()
     },
     on<E extends keyof LobbyCanvasEventMap>(event: E, listener: LobbyCanvasEventMap[E]) {
       if (CORE_EVENTS.has(event)) {
