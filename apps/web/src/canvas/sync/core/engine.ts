@@ -23,7 +23,22 @@
  *  - text and layout of a text element are pushed only while this tab holds its lease, or when nobody
  *    holds it and this tab asked for nothing (programmatic writes); while this tab's request is pending
  *    they wait (the New element rule, the guard's step 3); held by someone else they are reset at once;
- *  - Saved (§2.5.7): nothing dirty, nothing in flight, nothing queued offline, and every push acked.
+ *  - Saved (§2.5.7): nothing dirty, nothing in flight, nothing queued offline, and every push acked;
+ *    and nothing in the live scene the core has not scanned yet (see below);
+ *  - the core never installs, pushes or persists over a scene it has not scanned (spike B part 3):
+ *    Excalidraw holds a write at once (`updateScene`, `mutateElement`) but reports it through `onChange`
+ *    only after React commits, so every entry point that acts on the scene (a server message, a flush, a
+ *    persist, an offline adoption) first scans the live scene when it holds versions the core has not
+ *    seen (`syncLive`). Before this, a `changes` or `ack` frame handled in that window rebuilt the scene
+ *    from the last scan and dropped the write: lost with Saved showing (M3's B7 mood board, B9, wave 2's
+ *    burst);
+ *  - a remote change a gesture holds back (§2.5.4) is not a local change: a group the server changed
+ *    while held (`heldRemote`) counts as local only if the user changed it too, so the gesture's end
+ *    pushes only what the user changed (wave 2's drag-recolour overwrite);
+ *  - the offline queue is written as soon as a change is known (outside a gesture), and `persistNow()`
+ *    (the page's pagehide) writes it at once: no 100 ms window in which a reload loses a change;
+ *  - `message` events are emitted after the core applied the message (its roster, lease table, document
+ *    and confirmed copies are the new ones when a listener reads them).
  *
  * NODE-SAFE (CONTRACTS.md): explicit `.ts` extensions, no DOM, injectable timers and clock.
  */
@@ -56,7 +71,8 @@ import {
   type SnapshotFrame,
   type Welcome,
 } from '@draftroom/canvas-schema/protocol'
-import { compareIndexThenId, indexPrePass } from '../index-keys.ts'
+import { generateNKeysBetween } from '@excalidraw/fractional-indexing'
+import { compareIndexThenId, indexPrePass, isValidKey } from '../index-keys.ts'
 import type {
   EngineCore,
   EngineCoreOptions,
@@ -101,6 +117,11 @@ interface Tracked {
   since: number
   /** a replay from the offline queue or of a push lost with a socket: its ops carry `off` */
   replay: boolean
+  /**
+   * The server clock at which this tab had the element's copy (an adopted offline entry's `base`): a
+   * change to an element a reset snapshot older than that lacks waits for the catch-up behind it
+   */
+  knownAt?: number
   /** the element was a leased free text's own fit (its `fit` carries x, y only) */
   freeTextFit?: boolean
   /**
@@ -146,6 +167,11 @@ interface Held {
 
 /** What the core reports besides the frozen interface (the adapter, presence, the board page use it). */
 export type CoreEvent =
+  /**
+   * a server message, AFTER the core applied it: `roster()`, `leaseHolders()`, `doc()`, `confirmed()` and
+   * the scene already hold its effect (the events the apply caused, `applied`, `reject`, `refit`, came
+   * first). A reset welcome is reported before its snapshot frame arrives
+   */
   | { kind: 'message'; message: ServerMessage }
   | { kind: 'push'; record: PushRecord; ids: readonly string[] }
   /** the server dropped a conditional fit of this container (or free text): the holder re-fits (§2.9.4 rule 4) */
@@ -164,6 +190,8 @@ export type CoreEvent =
   | { kind: 'echo_suspect'; ids: readonly string[] }
 
 const now0 = () => Date.now()
+/** How long changes to elements a stale reset snapshot lacked wait for its catch-up (see awaitingCatchUp). */
+export const CATCH_UP_WAIT_MS = 3000
 const nowMs = () => (typeof performance !== 'undefined' ? performance.now() : Date.now())
 /** A `lobby.*` performance measure (§8.4's client numbers; O3's facade reads and clears them). */
 function measure(name: string, start: number): void {
@@ -242,6 +270,18 @@ export class LobbyEngineCore implements EngineCore {
   private readonly vanish = new Set<string>()
   /** remote changes waiting for the gesture that holds their element (§2.5.4) */
   private readonly heldBack = new Set<string>()
+  /**
+   * Per element a gesture holds back (§2.5.4): `before`, the base (`base(id)`) its scene copy was built
+   * from when the first held server change arrived, and `groups`, the groups the server changed since.
+   * Until the gesture ends such a group is a local change only if the scene copy differs from `before`
+   * in it (the user changed it too), so the remote values the scene does not show yet are never pushed
+   * back as local ones (wave 2: a drag's pointer-up pushed the old colour over B's recolour).
+   */
+  private readonly heldRemote = new Map<string, { before: SceneElement; groups: Set<GroupKey> }>()
+  /** a scan is running (the live-scene sync never re-enters it) */
+  private scanning = false
+  /** what the last offline-queue write held (ids, versions, groups), to skip identical writes */
+  private persistedSig: string | null = null
   private gesture: GestureState = IDLE_GESTURE
   private editingLabel: string | null = null
   private current = new Map<string, SceneElement>()
@@ -267,6 +307,21 @@ export class LobbyEngineCore implements EngineCore {
    */
   private pendingAdopt: OfflineEntry[] | null = null
   private persistTimer: unknown = null
+  /**
+   * Changes (not creates) to elements a reset snapshot lacked although this tab knew them at a later
+   * clock: the room serves a cached snapshot (5 s) and sends the rows since it right after as `changes`,
+   * so they wait for that frame instead of being dropped (spike B part 3, D7: a reload within 5 s of a
+   * create lost the queued edits of that element). Resolved at the next `changes` frame, or dropped
+   * after `CATCH_UP_WAIT_MS` when none comes.
+   */
+  private readonly awaitingCatchUp = new Set<string>()
+  private catchUpTimer: unknown = null
+  /** the last welcome changed the epoch (a restore): nothing from before it waits for a catch-up */
+  private epochReset = false
+  /** the queue the previous page left is loaded (or there is none): writes may replace it now */
+  private offlineLoaded = false
+  /** a write was asked for before that */
+  private persistAfterLoad = false
 
   // ---- lease
   private leaseListener: ((m: LeaseServerMessage) => void) | null = null
@@ -320,9 +375,15 @@ export class LobbyEngineCore implements EngineCore {
   stop(): void {
     this.stopped = true
     for (const u of this.unsubscribe.splice(0)) u()
-    for (const t of [this.flushTimer, this.retryTimer, this.presenceTimer, this.persistTimer])
+    for (const t of [
+      this.flushTimer,
+      this.retryTimer,
+      this.presenceTimer,
+      this.persistTimer,
+      this.catchUpTimer,
+    ])
       if (t !== null) this.clearTimer(t)
-    this.flushTimer = this.retryTimer = this.presenceTimer = this.persistTimer = null
+    this.flushTimer = this.retryTimer = this.presenceTimer = this.persistTimer = this.catchUpTimer = null
   }
 
   private onTransportState(state: TransportState, close?: TransportClose): void {
@@ -386,8 +447,22 @@ export class LobbyEngineCore implements EngineCore {
     return this.held.has(id)
   }
 
+  /**
+   * Saved as the core computes it, and never "saved" while the live scene holds a write the core has not
+   * scanned yet (Excalidraw's `onChange` comes after React's commit): read-only, it reports that write as
+   * pending (the scan that follows counts it properly). Listeners get the change at that scan.
+   */
   get saveStatus(): SaveStatus {
-    return this.lastSave
+    if (this.scanning || this.stopped) return this.lastSave
+    if (!this.unseen(this.scene.read().elements)) return this.lastSave
+    const pending = this.lastSave.pending + 1
+    const online = this.lastSave.state !== 'offline'
+    return {
+      ...this.lastSave,
+      state: online ? (this.lastSave.state === 'retrying' ? 'retrying' : 'saving') : 'offline',
+      pending,
+      offlineChanges: online ? this.lastSave.offlineChanges : this.lastSave.offlineChanges + 1,
+    }
   }
 
   onSaveStatus(listener: (status: SaveStatus) => void): () => void {
@@ -452,6 +527,74 @@ export class LobbyEngineCore implements EngineCore {
     this.updateSaved()
   }
 
+  /**
+   * CR-2D-2 (wave 2D: template scenes, paste as notes; the canvas API's `LobbyTx.insert`): prepared
+   * elements as new elements of this tab, exactly as given. Returns the copies to install; the caller
+   * installs them with its own scene write (CanvasPort.transact's `tx.insert` does, so the insert is one
+   * undo step with the rest of its transaction). `insert()` below does both through the core's scene.
+   *
+   *  - Every field is kept as given (nothing is rebuilt through the note or text tools: `frameId`, colours,
+   *    a label's size, ink and position stay), except `index`: the copies get fresh keys above `above`
+   *    (default: the top of the scene) in the given order, so each label stays above its container. The
+   *    server assigns the final keys (§2.4.3 step 11 keeps these unless they collide, e.g. with another
+   *    tab's insert at the same moment, and puts labels after their containers); its `changes` copy and
+   *    the ack's `fix` bring them back.
+   *  - `version` and `versionNonce` are kept when given (the server sets a create's version anyway);
+   *    missing ones become 1 and a fresh nonce.
+   *  - Ids are kept. The batch is refused whole (an Error, nothing to install) when this session is
+   *    read-only, or an element has no string `id` or `type`, is deleted, repeats an id of the batch, or
+   *    has an id the scene or the server already has, live or deleted (re-id a template to insert it
+   *    twice).
+   *  - Once installed, the next scan finds them as local creates: each is pushed whole (`{k: 'c'}`) and
+   *    validated by the server as any create (schema, invariants, caps, locks, leases); a refused one
+   *    leaves the scene with "Change not saved", as any refused create.
+   */
+  prepareInsert(
+    elements: readonly Readonly<Record<string, unknown>>[],
+    above?: string | null,
+  ): SceneElement[] {
+    if (this.readonly) throw new Error('insert: read-only session, no writes')
+    const live = this.scene.read().elements
+    const inScene = new Set(live.map((e) => e.id))
+    const seen = new Set<string>()
+    for (const [i, el] of elements.entries()) {
+      const id = el.id
+      if (typeof id !== 'string' || !id || typeof el.type !== 'string')
+        throw new Error(`insert: element ${i} has no id or type`)
+      if (el.isDeleted === true) throw new Error(`insert: ${id} is deleted`)
+      if (seen.has(id)) throw new Error(`insert: ${id} twice in the batch`)
+      if (inScene.has(id) || this.confirmedMap.has(id) || this.current.has(id))
+        throw new Error(`insert: ${id} exists on this board`)
+      seen.add(id)
+    }
+    let lo: string | null = above === undefined ? null : above
+    if (above === undefined)
+      for (const el of live)
+        if (isValidKey(el.index) && (lo === null || (el.index as string) > lo)) lo = el.index
+    const keys = elements.length ? generateNKeysBetween(lo, null, elements.length) : []
+    return elements.map((el, i) => {
+      const out: Record<string, unknown> = clone(el as SceneElement) as Record<string, unknown>
+      out.index = keys[i]
+      out.isDeleted = false
+      if (typeof out.version !== 'number' || out.version < 1) out.version = 1
+      if (typeof out.versionNonce !== 'number') out.versionNonce = Math.floor(Math.random() * 2 ** 31)
+      return out as SceneElement
+    })
+  }
+
+  /**
+   * `prepareInsert` installed through the core's scene and scanned at once (outside any transaction: the
+   * history records it as its own step at the next boundary). Returns the ids, in order.
+   */
+  insert(elements: readonly Readonly<Record<string, unknown>>[]): string[] {
+    const copies = this.prepareInsert(elements)
+    if (!copies.length) return []
+    this.syncLive()
+    this.scene.apply([...this.scene.read().elements, ...copies])
+    this.syncLive()
+    return copies.map((c) => c.id)
+  }
+
   /** The ids this tab asked a lease for and has no answer for yet (O3's facade `leaseState().pending`). */
   pendingLeases(): readonly string[] {
     return [...this.leasePending]
@@ -510,7 +653,56 @@ export class LobbyEngineCore implements EngineCore {
     }
   }
 
+  /**
+   * Scans the live scene now if it holds a write the core has not seen: the call for a writer that
+   * installed elements with `updateScene` and should not wait for Excalidraw's `onChange` (CanvasPort's
+   * `transact`, undo's install), so Saved and the offline queue know of the write at once. The core
+   * also does this itself before it acts on the scene (see the header). Returns whether it scanned.
+   */
+  syncScene(): boolean {
+    return this.syncLive()
+  }
+
+  /** Scans the live scene when it differs from what the core last saw (never inside a scan). */
+  private syncLive(): boolean {
+    if (this.scanning || this.stopped) return false
+    const snapshot = this.scene.read()
+    if (!this.unseen(snapshot.elements)) return false
+    const t0 = nowMs()
+    try {
+      this.scan(snapshot)
+    } finally {
+      measure('lobby.onChange', t0)
+    }
+    return true
+  }
+
+  /**
+   * The live scene holds an element version the core has not scanned or applied (a write Excalidraw has
+   * not reported yet). An empty scene while the core knows elements is a detached host (the page between
+   * two mounts), never a write.
+   */
+  private unseen(elements: readonly SceneElement[]): boolean {
+    if (elements.length === 0) return false
+    if (elements.length !== this.last.size) return true
+    for (const el of elements) {
+      const k = this.known.get(el.id)
+      if (!k || k.v !== el.version || k.vn !== el.versionNonce) return true
+    }
+    return false
+  }
+
   private scan(snapshot: SceneSnapshot): void {
+    if (this.scanning) return
+    this.scanning = true
+    try {
+      this.scanNow(snapshot)
+    } finally {
+      this.scanning = false
+    }
+  }
+
+  private scanNow(snapshot: SceneSnapshot): void {
     const wasGesture = gestureActive(this.gesture)
     const prevEditing = this.gesture.editingTextElementId
     this.gesture = snapshot.gesture
@@ -553,6 +745,9 @@ export class LobbyEngineCore implements EngineCore {
     if (wasGesture && !gestureNow) {
       for (const id of this.heldBack) reset.add(id)
       this.heldBack.clear()
+      // classify (above) diffed the gesture's elements against the base they were built from; the
+      // rebuild below takes the held remote values from the server's copy
+      this.heldRemote.clear()
     }
     const editorClosed = prevEditing !== null && snapshot.gesture.editingTextElementId === null
     // while the editor was open, rebuild() kept the edited label's local copy (its text and layout are
@@ -645,8 +840,16 @@ export class LobbyEngineCore implements EngineCore {
         this.track(el.id, new Set(diffGroups(el, undefined).groups), isNew)
         continue
       }
+      // an element a gesture holds back shows the base it was built from, not the remote values that
+      // arrived since: those groups are not local changes unless the user changed them too (wave 2: a
+      // drag's pointer-up pushed the old colour over B's recolour)
       const diff = diffGroups(el, ref)
       const groups = new Set(diff.groups)
+      const held = this.heldRemote.get(el.id)
+      if (held) {
+        const mine = diffGroups(el, held.before).groups
+        for (const g of held.groups) if (!mine.has(g)) groups.delete(g)
+      }
       // an arrow whose change moved only its bound ends is DERIVED (§2.5.2, E10): held, never pushed
       if (el.type === 'arrow' && groups.has('path')) {
         localMap ??= this.current
@@ -849,7 +1052,7 @@ export class LobbyEngineCore implements EngineCore {
     const local = this.current.get(id)
     if (!local) return conf ? clone(conf) : undefined
     const t = this.tracked.get(id)
-    if (!conf) return t?.isNew || this.inflightHas(id) ? local : undefined
+    if (!conf) return t?.isNew || this.inflightHas(id) || this.awaitingCatchUp.has(id) ? local : undefined
     const groups = new Set<GroupKey>([...(t?.dirty ?? []), ...this.inflightGroups(id)])
     // the open editor: only the edited label's text and layout are held back (§2.5.4), while this tab
     // holds or asks for its lease; a deny or a lost lease puts the server's back
@@ -900,13 +1103,22 @@ export class LobbyEngineCore implements EngineCore {
           put(el.id, el)
           continue
         }
+        // rebuilt from the current base: nothing held back for it any more
+        this.heldRemote.delete(el.id)
         const next = this.rebuild(el.id)
-        if (next !== el) {
-          before.set(el.id, el)
+        if (next !== el || !this.known.has(el.id)) {
+          before.set(el.id, this.known.has(el.id) ? el : this.last.get(el.id))
           touched.push(el.id)
         }
         put(el.id, next)
         continue
+      }
+      // an adopted offline copy (adoptOffline) is not in the scene yet: installed, whatever else changed.
+      // Before this was explicit, the install waited for the next apply that touched anything, and a
+      // flush that read the live scene first took the old copy for the truth (spike B part 3)
+      if (!this.known.has(el.id)) {
+        before.set(el.id, this.last.get(el.id))
+        touched.push(el.id)
       }
       put(el.id, el)
     }
@@ -981,43 +1193,89 @@ export class LobbyEngineCore implements EngineCore {
 
   private receive(m: ServerInbound): void {
     if (this.stopped) return
+    // a message that rebuilds or re-classifies the scene first takes in any write Excalidraw holds and has
+    // not reported yet (see the header): otherwise the apply below drops it
+    if (
+      m.type === 'snapshot' ||
+      m.type === 'welcome' ||
+      m.type === 'changes' ||
+      m.type === 'ack' ||
+      m.type === 'lease.grant' ||
+      m.type === 'lease.deny' ||
+      m.type === 'lease'
+    )
+      this.syncLive()
     if (m.type === 'snapshot') {
       this.onSnapshot(m)
       return
     }
-    this.emit({ kind: 'message', message: m })
     switch (m.type) {
       case 'welcome':
         this.onWelcome(m)
-        return
+        break
       case 'changes':
         this.onChanges(m)
-        return
+        break
       case 'ack':
         this.onAckMessage(m)
-        return
+        break
       case 'lease.grant':
       case 'lease.deny':
       case 'lease':
         this.onLease(m)
-        return
+        break
       case 'roster':
         for (const ev of m.events) {
           if (ev.k === 'leave') this.rosterMap.delete(ev.sid)
           else this.rosterMap.set(ev.p.sid, ev.p)
         }
-        return
+        break
       case 'notice':
         if (m.code === 'RESYNC') this.resync()
         if (m.code === 'SLOW_DOWN') this.retryDelay = Math.max(this.retryDelay, 1000)
-        return
+        break
       default:
-        return
+        break
+    }
+    // reported once applied (2C's request): a listener reads the new roster, leases, doc and copies
+    if (!this.stopped) this.emit({ kind: 'message', message: m })
+  }
+
+  /**
+   * Before the server's copies change (`ids`, or every held id): the elements an active gesture holds
+   * get their `heldRemote` entry (the base their scene copy was built from, the first time), and their
+   * server copies before the change, for `holdRecord`. Null when no gesture runs.
+   */
+  private holdMark(ids: Iterable<string> | null): Map<string, SceneElement | undefined> | null {
+    if (!gestureActive(this.gesture)) return null
+    const hold = this.gestureIds()
+    const out = new Map<string, SceneElement | undefined>()
+    for (const id of ids ?? hold) {
+      if (!hold.has(id) || out.has(id)) continue
+      if (!this.heldRemote.has(id)) {
+        const b = this.base(id)
+        if (!b) continue
+        this.heldRemote.set(id, { before: clone(b), groups: new Set() })
+      }
+      out.set(id, this.confirmedMap.get(id))
+    }
+    return out
+  }
+
+  /** After the change: the groups the server changed in each marked element (see heldRemote). */
+  private holdRecord(mark: Map<string, SceneElement | undefined> | null): void {
+    if (!mark) return
+    for (const [id, was] of mark) {
+      const now = this.confirmedMap.get(id)
+      const held = this.heldRemote.get(id)
+      if (!now || !held || now === was) continue
+      for (const g of diffGroups(now, was).groups) held.groups.add(g)
     }
   }
 
   private onWelcome(w: Welcome): void {
     const epochChanged = this.epoch !== null && this.epoch !== w.epoch
+    this.epochReset = epochChanged
     this.welcome = w
     this.epoch = w.epoch
     this.horizon = w.horizon
@@ -1049,9 +1307,11 @@ export class LobbyEngineCore implements EngineCore {
       if (epochChanged) this.log('epoch_reset', { epoch: w.epoch })
       return
     }
+    const mark = this.holdMark((w.catchUp ?? []).map((op) => (op.k === 'c' ? op.el.id : op.id)))
     for (const op of w.catchUp ?? []) this.applyServerOp(op, new Set())
+    this.holdRecord(mark)
     this.clock = w.clock
-    this.afterWelcome()
+    this.afterWelcome(null)
     this.emit({ kind: 'welcome', welcome: w })
   }
 
@@ -1061,18 +1321,25 @@ export class LobbyEngineCore implements EngineCore {
       return
     }
     this.awaitingSnapshot = false
+    const mark = this.holdMark(null)
     this.confirmedMap.clear()
     for (const el of frame.elements) this.confirmedMap.set(el.id, el as unknown as SceneElement)
+    this.holdRecord(mark)
+    const before = this.clock
     this.clock = frame.clock
     this.epoch = frame.epoch
     this.horizon = frame.horizon
     this.serverDoc = { ...frame.doc }
-    this.afterWelcome()
+    this.afterWelcome(this.epochReset ? null : { snapshotClock: frame.clock, before })
     if (this.welcome) this.emit({ kind: 'welcome', welcome: this.welcome })
   }
 
-  /** After a welcome (catch-up or reset): rebase every local change on the new server state, then push. */
-  private afterWelcome(): void {
+  /**
+   * After a welcome (catch-up or reset): rebase every local change on the new server state, then push.
+   * `reset`: the reset snapshot's clock and this tab's clock before it (null: a catch-up welcome, or an
+   * epoch change), for changes to elements the snapshot lacks (see awaitingCatchUp).
+   */
+  private afterWelcome(reset: { snapshotClock: number; before: number } | null): void {
     this.resyncing = false
     if (this.pendingAdopt) {
       for (const e of this.pendingAdopt) this.adoptOffline(e)
@@ -1100,10 +1367,17 @@ export class LobbyEngineCore implements EngineCore {
     for (const set of this.inflightDoc.values())
       for (const [k, v] of Object.entries(set)) if (!(k in this.pendingDoc)) this.pendingDoc[k] = v
     this.inflightDoc.clear()
+    this.awaitingCatchUp.clear()
     for (const [id, t] of [...this.tracked]) {
       if (this.confirmedMap.has(id)) t.isNew = false
-      else if (!t.isNew) this.tracked.delete(id)
+      else if (!t.isNew) {
+        // the snapshot is older than what this tab knew of the element: its catch-up follows
+        const at = t.knownAt ?? reset?.before ?? 0
+        if (reset && at > reset.snapshotClock) this.awaitingCatchUp.add(id)
+        else this.tracked.delete(id)
+      }
     }
+    this.armCatchUp()
     // dirty groups equal to the new server copy are not changes any more (a push lost with the socket
     // that had committed): decided BEFORE the rebuild, so those elements become the server copy exactly
     for (const [id, t] of [...this.tracked]) this.settleDirty(id, t)
@@ -1157,13 +1431,19 @@ export class LobbyEngineCore implements EngineCore {
     if (this.resyncing || this.awaitingSnapshot || !this.welcome) return
     const affected = new Set<string>()
     const refits: CoreEvent[] = []
+    const mark = this.holdMark(m.ops.map((op) => (op.k === 'c' ? op.el.id : op.id)))
     for (const op of m.ops) {
       if (op.k === 'p') this.placedByOther(op, refits)
       if (!this.applyServerOp(op, affected)) {
+        this.holdRecord(mark)
         this.resync()
         return
       }
     }
+    this.holdRecord(mark)
+    // the catch-up behind a stale reset snapshot (see awaitingCatchUp): the changes waiting for it
+    // become ordinary edits, or go when it does not have their element either
+    if (this.awaitingCatchUp.size) this.resolveCatchUp(affected)
     if (m.doc)
       for (const [k, v] of Object.entries(m.doc.set)) {
         if (v === null) delete this.serverDoc[k]
@@ -1188,7 +1468,51 @@ export class LobbyEngineCore implements EngineCore {
     // elements that are now equal to the server's copy in their dirty groups are clean
     this.applyScene(affected)
     for (const e of refits) this.emit(e)
+    // an edit that could not go out before this frame (a change waiting for its element) goes now
+    if (this.hasPushable()) this.scheduleFlush(false)
     this.updateSaved()
+  }
+
+  /** Starts (or stops) the fallback that drops changes still waiting for a catch-up (awaitingCatchUp). */
+  private armCatchUp(): void {
+    if (this.catchUpTimer !== null) {
+      this.clearTimer(this.catchUpTimer)
+      this.catchUpTimer = null
+    }
+    if (!this.awaitingCatchUp.size) return
+    this.log('catch_up_wait', { ids: [...this.awaitingCatchUp].slice(0, 20) })
+    this.catchUpTimer = this.setTimer(() => {
+      this.catchUpTimer = null
+      if (this.stopped || !this.awaitingCatchUp.size) return
+      this.syncLive()
+      const affected = new Set<string>()
+      this.resolveCatchUp(affected)
+      this.applyScene(affected)
+      this.schedulePersist()
+      this.updateSaved()
+    }, CATCH_UP_WAIT_MS)
+  }
+
+  /** Each change waiting for a catch-up: an ordinary edit now that its element is here, else dropped. */
+  private resolveCatchUp(affected: Set<string>): void {
+    for (const id of this.awaitingCatchUp) {
+      const t = this.tracked.get(id)
+      affected.add(id)
+      if (!t) continue
+      if (this.confirmedMap.has(id)) {
+        this.settleDirty(id, t)
+        this.log('catch_up_settled', { id })
+      } else {
+        this.tracked.delete(id)
+        this.vanish.add(id)
+        this.log('catch_up_gone', { id })
+      }
+    }
+    this.awaitingCatchUp.clear()
+    if (this.catchUpTimer !== null) {
+      this.clearTimer(this.catchUpTimer)
+      this.catchUpTimer = null
+    }
   }
 
   /**
@@ -1281,6 +1605,8 @@ export class LobbyEngineCore implements EngineCore {
       return
     }
     const push = this.inflight[i] as Inflight
+    // a refusal below replaces the server copy of an element a gesture may hold (see heldRemote)
+    const mark = this.holdMark([...push.sent.keys()])
     this.inflight.splice(i, 1)
     const affected = new Set<string>()
     let retry = false
@@ -1312,6 +1638,9 @@ export class LobbyEngineCore implements EngineCore {
           allOk = false
           this.lastReject = { id, code: r.denied.code }
           this.emit({ kind: 'reject', id, code: r.denied.code })
+          // refused groups of an element a gesture holds: the server's values, not ours to push again
+          const held = mark?.has(id) ? this.heldRemote.get(id) : undefined
+          if (held) for (const g of r.denied.groups) held.groups.add(g as GroupKey)
         }
         if (sent?.fitSuperseded) {
           // given up at another user's write (placedByOther): dropped as expected, already redone. Applied
@@ -1361,6 +1690,8 @@ export class LobbyEngineCore implements EngineCore {
       allOk = false
       this.lastReject = { id, code: r.code }
       this.emit({ kind: 'reject', id, code: r.code })
+      const held = mark?.has(id) ? this.heldRemote.get(id) : undefined
+      if (held && sent) for (const g of sent.groups) held.groups.add(g)
       if (stored) {
         this.confirmedMap.set(id, stored)
         // a refused create goes back to the server's copy: it is no create of ours any more (it stayed
@@ -1377,6 +1708,7 @@ export class LobbyEngineCore implements EngineCore {
       this.retryDelay = 0
     }
     if (allOk && !retry && !docRejected) this.lastReject = null
+    this.holdRecord(mark)
     for (const d of ack.derived ?? []) affected.add(d.id)
     for (const l of [...this.ackListeners]) l(ack)
     this.releaseHeld(affected)
@@ -1385,7 +1717,7 @@ export class LobbyEngineCore implements EngineCore {
     else this.scheduleFlush(false)
     // the offline queue drops what this ack settled now, not on the next scan's 100 ms tick: a reload
     // right after "Saved" found the in-flight create still queued and replayed it (B4 D1)
-    this.schedulePersist(true)
+    this.schedulePersist()
     this.updateSaved()
   }
 
@@ -1457,6 +1789,8 @@ export class LobbyEngineCore implements EngineCore {
     if (!el) return null
     if (gestureActive(this.gesture) && this.gestureIds().has(id)) return null
     const create = t.isNew && !this.confirmedMap.has(id)
+    // a change to an element the server copy of which has not arrived (awaitingCatchUp): nothing to patch yet
+    if (!create && !this.confirmedMap.has(id)) return null
     if (create && this.inflight.some((p) => p.sent.get(id)?.create)) return null // the create is out: wait
     if (create && el.isDeleted) return null // created and deleted before it was pushed: nothing to say
     const groups = new Set(t.dirty)
@@ -1506,6 +1840,8 @@ export class LobbyEngineCore implements EngineCore {
 
   /** Builds and sends pushes for everything pushable. `forced`: a lease message follows (no cap). */
   private flushNow(forced: boolean): void {
+    // a push carries the scene as it is: a write Excalidraw has not reported yet is scanned first
+    this.syncLive()
     if (this.flushTimer !== null) {
       this.clearTimer(this.flushTimer)
       this.flushTimer = null
@@ -1728,7 +2064,7 @@ export class LobbyEngineCore implements EngineCore {
     if (!this.store) return
     try {
       const entries = await this.store.load()
-      if (!entries.length) return
+      if (this.stopped || !entries.length) return
       this.log('offline_adopted', { entries: entries.length })
       if (this.connected && this.welcome && !this.awaitingSnapshot && !this.resyncing) this.adoptNow(entries)
       else {
@@ -1739,11 +2075,18 @@ export class LobbyEngineCore implements EngineCore {
       this.updateSaved()
     } catch (err) {
       this.log('offline_load_failed', { error: String(err) })
+    } finally {
+      this.offlineLoaded = true
+      if (this.persistAfterLoad && !this.stopped) {
+        this.persistAfterLoad = false
+        void this.persist()
+      }
     }
   }
 
   /** Adopts queued entries while connected: rebased on the server's copies, put in the scene, pushed. */
   private adoptNow(entries: readonly OfflineEntry[]): void {
+    this.syncLive()
     const ids = new Set<string>()
     for (const e of entries) {
       this.adoptOffline(e)
@@ -1767,7 +2110,7 @@ export class LobbyEngineCore implements EngineCore {
     const id = e.element.id
     const isNew = e.groups.includes('create')
     const groups = new Set<GroupKey>(e.groups.filter((g) => g !== 'create') as GroupKey[])
-    this.tracked.set(id, { dirty: groups, isNew, since: e.queuedAt, replay: true })
+    this.tracked.set(id, { dirty: groups, isNew, since: e.queuedAt, replay: true, knownAt: e.base })
     // the queued element becomes the local copy (its dirty groups are rebased on the server's at welcome)
     const next = [...this.currentOrder.filter((el) => el.id !== id), e.element]
     this.readScene(next)
@@ -1801,30 +2144,63 @@ export class LobbyEngineCore implements EngineCore {
     return out
   }
 
-  /** Writes the offline queue 100 ms after a change (`immediate`: on the next tick, e.g. after an ack). */
-  private schedulePersist(immediate = false): void {
+  /**
+   * Writes the offline queue after a change: at once (the store's write starts in this call), so a reload
+   * or a closed tab right after an edit finds it (wave 2 lost offline-9 in the old 100 ms window); while a
+   * gesture runs, once per 100 ms at most (its end writes at once). Nothing is written before the
+   * queue left by the previous page is loaded (a write then would replace it unread).
+   */
+  private schedulePersist(): void {
     if (!this.store) return
-    if (this.persistTimer !== null) {
-      if (!immediate) return
-      this.clearTimer(this.persistTimer)
+    if (gestureActive(this.gesture)) {
+      if (this.persistTimer === null)
+        this.persistTimer = this.setTimer(() => {
+          this.persistTimer = null
+          void this.persist()
+        }, 100)
+      return
     }
-    this.persistTimer = this.setTimer(
-      () => {
-        this.persistTimer = null
-        void this.persist()
-      },
-      immediate ? 0 : 100,
-    )
+    if (this.persistTimer !== null) {
+      this.clearTimer(this.persistTimer)
+      this.persistTimer = null
+    }
+    void this.persist()
+  }
+
+  /**
+   * Writes the offline queue now, with any write Excalidraw holds and has not reported yet: the page
+   * calls it on `pagehide` and when it is hidden (a reload, a closed tab, a phone switching apps).
+   */
+  persistNow(): void {
+    if (this.stopped || !this.store) return
+    this.syncLive()
+    if (this.persistTimer !== null) {
+      this.clearTimer(this.persistTimer)
+      this.persistTimer = null
+    }
+    void this.persist()
   }
 
   private async persist(): Promise<void> {
     if (!this.store) return
+    if (!this.offlineLoaded) {
+      this.persistAfterLoad = true
+      return
+    }
+    this.syncLive()
     const entries = this.offlineEntries()
     this.offlineQueued = this.connected && this.welcome ? 0 : entries.length
+    // the same queue as the last write (a scan that found nothing, the core's own apply): no write
+    const sig = entries
+      .map((e) => `${e.element.id}:${e.element.version}:${e.element.versionNonce}:${e.groups.join(',')}`)
+      .join('|')
+    if (sig === this.persistedSig) return
+    this.persistedSig = sig
     try {
       if (entries.length) await this.store.save(entries)
       else await this.store.clear()
     } catch (err) {
+      this.persistedSig = null
       this.log('offline_save_failed', { error: String(err) })
     }
     this.updateSaved()

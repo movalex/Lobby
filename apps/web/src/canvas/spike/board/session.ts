@@ -172,6 +172,9 @@ export class BoardSession {
     })
     this.detach.push(
       this.core.onSaveStatus((s) => this.set({ save: s })),
+      // an ack is logged when it arrives, before its effects (Saved among them): the core reports
+      // `message` events only after applying them (spike B part 3), and D2 checks acks against Saved
+      this.core.onAck((a) => this.logEvent({ kind: 'ack', id: String(a.seq), detail: String(a.clock) })),
       this.core.on((e) => {
         if (e.kind === 'welcome') {
           this.logEvent({ kind: 'welcome', id: e.welcome.sid, detail: String(e.welcome.clock) })
@@ -197,8 +200,6 @@ export class BoardSession {
           } else if (e.state === 'closed' && this.snap.phase === 'ready') this.set({ phase: 'offline' })
         } else if (e.kind === 'message' && e.message.type === 'roster')
           this.set({ people: this.core.roster().size })
-        else if (e.kind === 'message' && e.message.type === 'ack')
-          this.logEvent({ kind: 'ack', id: String(e.message.seq), detail: String(e.message.clock) })
         else if (e.kind === 'reject') {
           this.logEvent({ kind: 'reject', id: e.id, detail: e.code })
           this.toast(rejectText(e.code, e.id, this.core))
@@ -321,8 +322,11 @@ export class BoardSession {
       core: this.core,
       scene: this.sceneAdapter(),
       bump: (el, patch) => bump(el, patch),
-      install: (elements) =>
-        api.updateScene({ elements: elements as never, captureUpdate: CaptureUpdateAction.NEVER }),
+      install: (elements) => {
+        api.updateScene({ elements: elements as never, captureUpdate: CaptureUpdateAction.NEVER })
+        // scanned now, not at the onChange after React's commit (spike B part 3)
+        this.core.syncScene()
+      },
     })
     this.presence = new PresenceHub({
       core: this.core,
@@ -427,10 +431,23 @@ export class BoardSession {
       helpers: createSpecHelpers(port),
       monitor,
     }
-    // 7. connect
+    // 7. the offline queue is written when the page goes away or is hidden (a reload, a closed tab, a
+    // phone switching apps), with any write Excalidraw has not reported yet (spike B part 3)
+    const persist = () => this.core.persistNow()
+    const onHidden = () => {
+      if (document.visibilityState === 'hidden') persist()
+    }
+    window.addEventListener('pagehide', persist)
+    document.addEventListener('visibilitychange', onHidden)
+    offs.push(() => {
+      window.removeEventListener('pagehide', persist)
+      document.removeEventListener('visibilitychange', onHidden)
+    })
+    // 8. connect
     this.core.start()
     this.transport.connect()
     return () => {
+      this.core.persistNow()
       for (const f of offs.reverse()) f()
       this.presence?.dispose()
       this.undo?.dispose()
@@ -550,6 +567,7 @@ export class BoardSession {
   }
 
   dispose(): void {
+    this.core.persistNow()
     for (const f of this.detach.splice(0)) f()
     this.core.stop()
     this.transport.close(1000, 'page closed')

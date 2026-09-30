@@ -80,6 +80,13 @@ export class FakeRoom {
   horizon = 0
   /** next pushes answered UNAVAILABLE (a COMMIT failure) */
   failNext = 0
+  /**
+   * The room's cached reset snapshot (element-room.ts `snapshotFor`, 5 s there): while set, a reset
+   * welcome serves the snapshot taken up to this many ms ago, then the rows since it as one `changes`
+   * frame. 0 (the default): a fresh snapshot every time.
+   */
+  snapshotCacheMs = 0
+  private snapCache: { at: number; clock: number; elements: El[] } | null = null
   private readonly c: ManualClock
   private readonly strict: boolean
 
@@ -300,21 +307,40 @@ export class FakeRoom {
       limits: { ...WIRE_LIMITS },
     }
     if (reset) {
+      let els = [...this.elements.values()]
+      let clock = this.clock
+      if (this.snapshotCacheMs > 0) {
+        const now = this.c.now()
+        if (!this.snapCache || now - this.snapCache.at >= this.snapshotCacheMs)
+          this.snapCache = { at: now, clock: this.clock, elements: structuredClone(els) }
+        els = this.snapCache.elements
+        clock = this.snapCache.clock
+      }
       this.send(s, {
         ...base,
+        clock,
         reset: true,
         catchUp: null,
-        snapshot: { elements: this.elements.size, bytes: 0 },
+        snapshot: { elements: els.length, bytes: 0 },
       })
       const frame: SnapshotFrame = {
         type: 'snapshot',
         epoch: this.epoch,
-        clock: this.clock,
+        clock,
         horizon: this.horizon,
-        elements: [...this.elements.values()].sort(byIndex) as never,
+        elements: [...els].sort(byIndex) as never,
         doc: { ...this.doc },
       }
       this.send(s, frame)
+      // the rows since a cached snapshot, right behind it (element-room.ts hello)
+      if (clock < this.clock) {
+        const rows = [...this.elements.values()].filter((e) => (this.rowClock.get(e.id) ?? 0) > clock)
+        this.send(s, {
+          type: 'changes',
+          clock: this.clock,
+          ops: rows.sort(byIndex).map((el) => ({ k: 'c' as const, el: el as never })),
+        })
+      }
       return
     }
     const rows = [...this.elements.values()].filter((e) => (this.rowClock.get(e.id) ?? 0) > m.since)

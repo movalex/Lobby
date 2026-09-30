@@ -12,7 +12,15 @@
  * unacknowledged elements, and server repairs or remote changes (`absorb`).
  */
 import { type ApplyContext, type ApplyResult, applyChanges, type Direction } from './apply.ts'
-import { diffElement, type ElementChange, type HistEl, isEmptyChange, type Scene, type Side } from './diff.ts'
+import {
+  diffElement,
+  type ElementChange,
+  type FieldChange,
+  type HistEl,
+  isEmptyChange,
+  type Scene,
+  type Side,
+} from './diff.ts'
 import { clone, deepEqual, fieldGroup, type GroupName } from './fields.ts'
 
 export interface TrackedChange extends ElementChange {
@@ -26,6 +34,56 @@ export interface Entry {
   id: number
   label?: string
   changes: Map<string, TrackedChange>
+}
+
+/** `LobbyHistory.mark()`: the stack before a write that should join the previous step (`mergeTop`). */
+export interface HistoryMark {
+  readonly size: number
+  readonly top: Entry | null
+  readonly redo: number
+}
+
+function mergeFields(into: Record<string, FieldChange>, from: Record<string, FieldChange>): void {
+  for (const [k, fc] of Object.entries(from)) {
+    const had = into[k]
+    if (had) had.after = fc.after
+    else into[k] = { before: fc.before, after: fc.after }
+    const now = into[k] as FieldChange
+    if (deepEqual(now.before, now.after)) delete into[k]
+  }
+}
+
+/** `c` (recorded later) folded into `p` (see `LobbyHistory.mergeTop`). */
+function mergeChange(p: TrackedChange, c: TrackedChange): void {
+  p.created = p.created || c.created
+  mergeFields(p.fields, c.fields)
+  mergeFields(p.lobby, c.lobby)
+  if (c.groupIds) {
+    const before = p.groupIds?.before ?? c.groupIds.before
+    const after = c.groupIds.after
+    const added = after.filter((g) => !before.includes(g))
+    const removed = before.filter((g) => !after.includes(g))
+    p.groupIds =
+      added.length || removed.length ? { added, removed, before: [...before], after: [...after] } : undefined
+  }
+  if (c.bound) {
+    const added = [...(p.bound?.added ?? [])]
+    const removed = [...(p.bound?.removed ?? [])]
+    for (const r of c.bound.added) {
+      const i = removed.findIndex((x) => x.id === r.id)
+      if (i >= 0) removed.splice(i, 1)
+      else if (!added.some((x) => x.id === r.id)) added.push(r)
+    }
+    for (const r of c.bound.removed) {
+      const i = added.findIndex((x) => x.id === r.id)
+      if (i >= 0) added.splice(i, 1)
+      else if (!removed.some((x) => x.id === r.id)) removed.push(r)
+    }
+    p.bound = added.length || removed.length ? { added, removed } : undefined
+  }
+  p.pending.push(...c.pending)
+  p.unsent = c.unsent ?? p.unsent
+  p.lifeAt = undefined
 }
 
 export type AckResult =
@@ -235,6 +293,51 @@ export class LobbyHistory {
       next.versionNonce = after.versionNonce
     }
     this.lastLocal.set(after.id, next as HistEl)
+  }
+
+  /** The stack as it is now, for `mergeTop(since)`: taken before a write that should join the previous step. */
+  mark(): HistoryMark {
+    return {
+      size: this.undos.length,
+      top: this.undos[this.undos.length - 1] ?? null,
+      redo: this.redos.length,
+    }
+  }
+
+  /**
+   * Merges the top entry into the entry below it, so one undo undoes both and one redo redoes both
+   * (2C's `transact(label, fn, {joinPrevious: true})`: a derived write, the mind map's re-layout after a
+   * text change, joins the user's own step; plan §10 item 4, CONTRACTS §10). With `since` (a `mark()`
+   * taken before the write) it merges only when exactly one entry was recorded on top of that mark's top
+   * since, and the redo stack was empty at the mark (after an undo or a redo the previous step is not the
+   * user's last change); without it, whenever the stack holds two entries and nothing can be redone.
+   * Returns whether it merged.
+   *
+   *  - A field changed in both keeps the earlier `before` and the later `after` (a field whose two sides
+   *    end up equal is no change any more); a field only the later entry changed is added as it is (its
+   *    `before` is the state after the earlier step, which the merged step undoes to).
+   *  - `groupIds` and `boundElements` are re-derived from the earlier `before` and the later `after`.
+   *  - Pushes pending for either stay pending (acks keep folding their `fix` rows into the merged change),
+   *    and a side still to be sent stays to be sent. Remote changes absorbed between the two writes never
+   *    touched either entry.
+   */
+  mergeTop(since?: HistoryMark): boolean {
+    const n = this.undos.length
+    if (since) {
+      if (!since.top || since.redo > 0) return false
+      if (n !== since.size + 1 || this.undos[since.size - 1] !== since.top) return false
+    } else if (n < 2 || this.redos.length > 0) return false
+    const top = this.undos[n - 1] as Entry
+    const into = this.undos[n - 2] as Entry
+    for (const c of top.changes.values()) {
+      const p = into.changes.get(c.id)
+      if (p) mergeChange(p, c)
+      else into.changes.set(c.id, c)
+    }
+    this.undos.pop()
+    for (const [id, c] of into.changes) if (isEmptyChange(c)) into.changes.delete(id)
+    if (into.changes.size === 0) this.undos.pop()
+    return true
   }
 
   /** Ctrl+Z: the top entry, compare-and-set against `scene`. */

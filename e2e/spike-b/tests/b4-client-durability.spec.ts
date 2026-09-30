@@ -338,6 +338,96 @@ test('D6: tab 1 edits offline and is closed; tab 2 adopts its queue and replays 
   expect(stored).toBe(ids.length)
 })
 
+// ---- D7 (spike B part 3): no window in which a reload loses a change -----------------------------------
+
+/**
+ * Edits through the facade, then `location.reload()` in the SAME task: no timer, no React commit, no
+ * onChange comes between them. Returns the values written (the page is gone when this resolves).
+ */
+async function editThenReload(p: Page, edits: { id: string | null; x: number }[]): Promise<string[]> {
+  const ids = await p
+    .evaluate((list) => {
+      const f = (
+        window as unknown as {
+          lobbyCanvas: { create(k: string, o: object): string; update(id: string, o: object): void }
+        }
+      ).lobbyCanvas
+      const out: string[] = []
+      for (const e of list) {
+        if (e.id) {
+          f.update(e.id, { x: e.x })
+          out.push(e.id)
+        } else out.push(f.create('rectangle', { x: e.x, y: 1600, width: 30, height: 30 }))
+      }
+      // the create returns its id synchronously; the reload follows at once
+      ;(window as unknown as { __d7?: string[] }).__d7 = out
+      sessionStorage.setItem('d7-ids', JSON.stringify(out))
+      location.reload()
+      return out
+    }, edits)
+    .catch(() => null)
+  // the reloaded page is up (its engine core exists; offline it gets no welcome)
+  await p.waitForFunction(
+    () => {
+      const w = window as unknown as {
+        lobbyCanvas?: unknown
+        __lobbyBoard?: { core?: unknown }
+        __d7?: unknown
+      }
+      return !!w.lobbyCanvas && !!w.__lobbyBoard?.core && w.__d7 === undefined
+    },
+    undefined,
+    { timeout: 60_000, polling: 50 },
+  )
+  return ids ?? (JSON.parse((await p.evaluate(() => sessionStorage.getItem('d7-ids'))) ?? '[]') as string[])
+}
+
+test('D7: edits followed by a reload in the same task survive it, online and offline (the old 100 ms queue window)', async () => {
+  const hooks = harness.testHooks(r.stack)
+  const rows: Record<string, unknown>[] = []
+  for (let i = 0; i < N; i++) {
+    for (const mode of ['online', 'offline'] as const) {
+      const base = 3000 + i * 400 + (mode === 'offline' ? 200 : 0)
+      const x0 = await lc(A()).create('rectangle', { x: base, y: 1500, width: 30, height: 30 })
+      await waitSaved(A())
+      if (mode === 'offline') {
+        await hooks.cutSocket(A())
+        await expect.poll(async () => (await lc(A()).saveState()).state).toBe('offline')
+      }
+      const ids = await editThenReload(A(), [
+        { id: x0, x: base + 77 },
+        { id: null, x: base + 111 },
+      ])
+      const [, created] = ids
+      let queued: number | null = null
+      if (mode === 'offline') {
+        // the reloaded page is still cut off: its queue came back from IndexedDB
+        await expect
+          .poll(async () => (await lc(A()).saveState()).offlineChanges, { timeout: 15_000 })
+          .toBeGreaterThan(0)
+        queued = (await lc(A()).saveState()).offlineChanges
+        await hooks.restoreSocket(A())
+      }
+      await waitSaved(A(), 60_000)
+      const snap = await harness.readSnapshot(r.stack, r.boardId)
+      const byId = (id: string | undefined) =>
+        snap.elements.find((e) => e.id === id) as { x?: number; isDeleted?: boolean } | undefined
+      const row = {
+        i,
+        mode,
+        queued,
+        moved: byId(x0)?.x === base + 77,
+        created: !!created && byId(created)?.x === base + 111 && !byId(created)?.isDeleted,
+        local: (await lc(A()).get(x0))?.x === base + 77,
+      }
+      rows.push(row)
+    }
+  }
+  await converge(r)
+  console.log('B4-D7', JSON.stringify({ n: rows.length, rows }))
+  expect(rows.filter((x) => !x.moved || !x.created || !x.local)).toEqual([])
+})
+
 // ---- D2 -------------------------------------------------------------------------------------------
 
 /** Starts a 5 edits/s loop in the page (creates through the facade); stop() returns the edits. */

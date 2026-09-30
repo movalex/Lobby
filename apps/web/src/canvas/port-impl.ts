@@ -3,9 +3,9 @@
  * MIGRATION.md §2.3.1). Features (O5), the test facade (O3) and the installers only see the interface.
  *
  * Every write goes through `transact`: the writes of one call become new element versions installed with
- * one `updateScene` (captureUpdate NEVER), which the engine core then finds in its next scan and pushes as
- * ordinary edits; the call is one undo step. Nothing here calls `updateScene` with elements for any other
- * reason.
+ * one `updateScene` (captureUpdate NEVER), which the engine core scans at once (`syncScene`: Saved and
+ * the offline queue know of the write before Excalidraw's onChange) and pushes as ordinary edits; the
+ * call is one undo step. Nothing here calls `updateScene` with elements for any other reason.
  *
  * Browser only.
  */
@@ -51,7 +51,22 @@ export interface PortDeps {
   readonly editingLease: () => string | null
 }
 
+/**
+ * The port's transaction: C0's `CanvasTx` plus `insert` (CR-2D-2, the canvas API's `LobbyTx.insert`).
+ */
+export interface LobbyCanvasTx extends CanvasTx {
+  /**
+   * Installs prepared elements (a template scene, pasted notes: `WireElement`-shaped) as new elements,
+   * exactly as given, in this transaction (one undo step with its other writes). Ids are kept; `index`
+   * is replaced by keys on top of the scene in the given order, and the server assigns the final ones.
+   * Throws, writing nothing of the batch, on a missing id or type, a deleted element, a repeated id, or
+   * an id the board already has. See `LobbyEngineCore.prepareInsert` for the rules. Returns the ids.
+   */
+  insert(elements: readonly Readonly<Record<string, unknown>>[]): string[]
+}
+
 export interface LobbyCanvasPort extends CanvasPort {
+  transact<T>(label: string, fn: (tx: LobbyCanvasTx) => T): T
   /** feeds the port's `pointer` event (the presence pointer listener) */
   emitPointer(point: ScenePoint | null): void
   /** the adapter's hook after every scene change: `changed` and `selectionChanged` events, the hidden-ids post-filter */
@@ -243,7 +258,7 @@ export function createCanvasPort(deps: PortDeps): LobbyCanvasPort {
       const s = viewportCoordsToSceneCoords({ clientX: p.x, clientY: p.y }, api.getAppState())
       return { x: s.x, y: s.y }
     },
-    transact<T>(label: string, fn: (tx: CanvasTx) => T): T {
+    transact<T>(label: string, fn: (tx: LobbyCanvasTx) => T): T {
       const current = new Map(all().map((e) => [e.id, e as ExcalidrawElement]))
       const order = [...current.keys()]
       let lo = topIndex()
@@ -252,7 +267,7 @@ export function createCanvasPort(deps: PortDeps): LobbyCanvasPort {
         return lo
       }
       const created: ExcalidrawElement[] = []
-      const tx: CanvasTx = {
+      const tx: LobbyCanvasTx = {
         create(kind, props) {
           if (deps.readOnly()) throw new Error('read-only: no writes')
           const els = create(kind, props, index)
@@ -291,10 +306,30 @@ export function createCanvasPort(deps: PortDeps): LobbyCanvasPort {
               current.set(b.id, X.newElementWith(label, { isDeleted: true }))
           }
         },
+        insert(elements) {
+          if (deps.readOnly()) throw new Error('read-only: no writes')
+          for (const e of elements)
+            if (typeof e.id === 'string' && current.has(e.id))
+              throw new Error(`insert: ${e.id} exists on this board`)
+          const copies = (deps.core
+            ? deps.core.prepareInsert(elements, lo)
+            : elements.map((e) => ({
+                ...structuredClone(e),
+                index: index(),
+              }))) as unknown as ExcalidrawElement[]
+          for (const e of copies) {
+            current.set(e.id, e)
+            created.push(e)
+            if (e.index) lo = e.index
+          }
+          return copies.map((e) => e.id)
+        },
       }
       const result = fn(tx)
       const next = [...order.map((id) => current.get(id) as ExcalidrawElement), ...created]
       api.updateScene({ elements: next, captureUpdate: CaptureUpdateAction.NEVER })
+      // the core scans the write now, not at Excalidraw's onChange after React's commit (spike B part 3)
+      deps.core?.syncScene()
       deps.undo?.boundary(label)
       return result
     },
