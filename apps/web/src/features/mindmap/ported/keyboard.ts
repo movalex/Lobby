@@ -206,6 +206,12 @@ export class MindmapKeyboard {
    * queue ends open that topic's editor after all.
    */
   private async replayWithoutEditor(id: string, mode: EditorMode, base: string, queue: Queued[]) {
+    // the cancelled open first closes the editor the engine may have begun (its clean-up runs a moment
+    // later and selects the topic it was for): act once that is over
+    const frame = () => new Promise<void>((r) => requestAnimationFrame(() => r()))
+    await frame()
+    await frame()
+    for (let i = 0; i < 60 && this.canvas.gesture() === 'editing-text'; i++) await frame()
     let cur = id
     let curMode = mode
     let curBase = base
@@ -215,7 +221,7 @@ export class MindmapKeyboard {
       let i = 0
       for (; i < q.length && q[i]?.kind === 'text'; i++) words += (q[i] as { text: string }).text
       const text = textAfter(curBase, curMode, words)
-      if (text !== curBase) await this.rt.setTopicText(cur, text)
+      if (text !== curBase) this.rt.setTopicText(cur, text)
       const key = q[i]
       q = q.slice(i + 1)
       if (key?.kind !== 'key') {
@@ -224,7 +230,7 @@ export class MindmapKeyboard {
       }
       if (key.intent === 'escape') {
         // as after typing: the topic stays selected, not being edited (an empty new one goes back)
-        this.rt.editorNeverOpened(cur)
+        this.rt.editorNeverOpened(cur, { selectParent: true })
         if (this.rt.isTopic(cur)) this.canvas.select([cur])
         return
       }

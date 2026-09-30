@@ -459,17 +459,19 @@ export class MindmapRuntime {
         this.scheduleRemote()
         return
       }
-      const roots = [...this.dirtyRemote]
+      // Only a tab that changed the same map a moment ago fixes it up (two people changed it at once):
+      // the fix-up joins that tab's own change, so one undo still takes back what it did, and nobody
+      // else's undo stack gets a step they never made. Not right after an undo or a redo either: a new
+      // step would clear the redo stack and take the next Ctrl+Z.
+      const now = Date.now()
+      const roots = [...this.dirtyRemote].filter((r) => now - (this.lastLocal.get(r) ?? 0) < RECENT_LOCAL_MS)
       this.dirtyRemote.clear()
+      if (!roots.length || untracked(() => this.canvas.history.canRedo())) return
       const d = new Draft(this.canvas)
       untracked(() => {
         for (const rootId of roots) this.layoutNow(d, rootId, { edges: true })
       })
-      // Two people changed the map at once: this tab's fix-up belongs to its own change of a moment ago
-      // (one undo still takes back that change); otherwise it is a step of its own.
-      const now = Date.now()
-      const recent = roots.some((r) => now - (this.lastLocal.get(r) ?? 0) < RECENT_LOCAL_MS)
-      this.commit(d, 'mindmap: layout', recent)
+      this.commit(d, 'mindmap: layout', true)
     }, REMOTE_SETTLE_MS)
   }
 
@@ -583,12 +585,30 @@ export class MindmapRuntime {
     }
   }
 
-  /** The geometry of every line of the map, where its ends are now (after a move). */
+  /**
+   * Whether this draft moves or resizes `id` (or makes it). A line's geometry is written only when one of
+   * its ends moved here: the server re-routes a bound elbow arrow when its ends move (and so may draw it a
+   * little differently from `elbowLine`), so a line is never "repaired" to this client's own drawing, or
+   * two writers would take turns redrawing it.
+   */
+  private movesHere(d: Draft, id: string): boolean {
+    const now = this.canvas.get(id)
+    const next = d.get(id)
+    if (!now || !next) return !!next
+    return (
+      !near(now.x, next.x) ||
+      !near(now.y, next.y) ||
+      !near(now.width, next.width) ||
+      !near(now.height, next.height)
+    )
+  }
+
+  /** The geometry of every line of the map whose ends this draft moved. */
   private refreshLines(d: Draft, tree: MindmapTree) {
     for (const n of tree.nodes.values()) {
       if (n.parentId === null) continue
       const parent = tree.nodes.get(n.parentId)
-      if (!parent) continue
+      if (!parent || !(this.movesHere(d, n.id) || this.movesHere(d, parent.id))) continue
       for (const e of this.edgesOf(d, n.id)) {
         const g = elbowLine(parent.box, n.box, n.side)
         const el = d.get(e)
@@ -659,8 +679,10 @@ export class MindmapRuntime {
           !near(got[1] ?? -1, fp[1])
         )
       })
-      // the geometry goes first: a new binding's fixed point is where its end is
-      if (rebind.length || !sameLine(el as never, g)) Object.assign(fix, g)
+      // the geometry goes first (a new binding's fixed point is where its end is); otherwise only when an
+      // end moved here (see movesHere)
+      const endsMoved = this.movesHere(d, n.id) || this.movesHere(d, parent.id)
+      if ((rebind.length || endsMoved) && !sameLine(el as never, g)) Object.assign(fix, g)
       if (Object.keys(fix).length) d.update(keep, fix)
       for (const { end, target } of rebind) d.bind(keep, end, target)
     }
@@ -877,11 +899,17 @@ export class MindmapRuntime {
     }
   }
 
-  /** A label for a new topic `containerId` (centred, the level's size), when it has text. */
+  /**
+   * A label for a topic `containerId` (centred, the level's size). A new topic gets its (empty) label in
+   * the write that makes it, so the editor that opens on it edits that label: the words typed are then a
+   * change of the label alone, and undoing the topic's creation takes the label with it (a label the
+   * engine's editor made on open would belong to no step, and keep the topic from being undone).
+   */
   private addLabel(d: Draft, containerId: string, text: string, fontSize: number) {
     const c = d.get(containerId)
-    if (!c || !text) return
-    const m = this.measure(text, fontSize)
+    if (!c) return
+    // an empty label has the height of one line (as Excalidraw measures it)
+    const m = text ? this.measure(text, fontSize) : { width: 0, height: this.measure(' ', fontSize).height }
     const cx = c.x + c.width / 2
     const cy = c.y + c.height / 2
     const id = d.create(
@@ -936,10 +964,8 @@ export class MindmapRuntime {
       frameId: opts.frameId ?? null,
     })
     d.update(id, topicPatch({ ...meta, rootId: meta.rootId ?? id } as TopicMeta))
-    if (text) {
-      this.addLabel(d, id, text, st.fontSize)
-      this.fit(d, id, depth, st.fontSize)
-    }
+    this.addLabel(d, id, text, st.fontSize)
+    if (text) this.fit(d, id, depth, st.fontSize)
     return id
   }
 
@@ -1236,24 +1262,34 @@ export class MindmapRuntime {
    * lease (`text.replace`) when it has a label; a topic that is still empty gets its label in one write.
    * The topic's size and the map's layout follow, in the same undo step.
    */
-  async setTopicText(id: string, text: string): Promise<boolean> {
+  setTopicText(id: string, text: string): boolean {
     const meta = this.index.topics.get(id)
     if (!meta || !this.canEdit()) return false
-    const depth = this.depthFromMeta(meta)
-    const label = new Draft(this.canvas).labelOf(id)
-    if (label) {
-      if (!(await this.canvas.text.replace(id, text, 'mindmap: topic text'))) return false
-      const d = new Draft(this.canvas)
-      this.fit(d, id, depth)
-      this.layoutNow(d, meta.rootId, { edges: true })
-      this.commit(d, 'mindmap: layout', true)
-      return true
-    }
+    // somebody else is typing in it: the words are theirs (the text lease; the server refuses the write
+    // anyway). Nobody, or this tab: the words and their layout can be written directly.
     const holder = this.canvas.leaseHolder(id)
     if (holder && holder.sid !== (this.canvas.engine?.welcome?.sid ?? null)) return false
+    if (this.canvas.editingId() === id) return false
+    const depth = this.depthFromMeta(meta)
     const d = new Draft(this.canvas)
-    if (text) {
-      const el = d.get(id)
+    const el = d.get(id)
+    const label = d.labelOf(id)
+    if (label) {
+      d.update(label.id, { text, originalText: text })
+      if (el?.type === 'rectangle') this.fit(d, id, depth)
+      else {
+        // a note, an ellipse, a diamond or a text keeps its own sizing: the words, unwrapped
+        const m = this.measure(text, Number((label as { fontSize?: number }).fontSize ?? 20))
+        if (el?.type !== 'text' && el)
+          d.update(label.id, {
+            width: m.width,
+            height: m.height,
+            x: el.x + (el.width - m.width) / 2,
+            y: el.y + (el.height - m.height) / 2,
+          })
+      }
+    } else if (el?.type === 'text') d.update(id, { text, originalText: text })
+    else if (text) {
       const size = el?.type === 'stickynote' ? 20 : levelStyle(depth).fontSize
       this.addLabel(d, id, text, size)
       this.fit(d, id, depth, size)
@@ -1326,17 +1362,22 @@ export class MindmapRuntime {
   }
 
   /** The editor of `id` never opened (the lease went to someone else, or Esc while it was pending). */
-  editorNeverOpened(id: string) {
+  editorNeverOpened(id: string, opts: { selectParent?: boolean } = {}) {
     const meta = this.index.topics.get(id)
     if (!meta || !this.canEdit() || this.fresh?.id !== id) return
     this.fresh = null
     const empty = this.textOf(id).trim() === '' && (this.index.children.get(id)?.size ?? 0) === 0
-    if (empty && meta.parentId !== null) this.takeBack(id, meta)
+    if (empty && meta.parentId !== null) this.takeBack(id, meta, opts.selectParent === true)
   }
 
-  private takeBack(id: string, meta: TopicMeta) {
+  /**
+   * Takes back an empty new topic. What the person selected since (a click elsewhere ended the typing)
+   * survives; `selectParent` (the keys' own replay, whose selections the engine has not applied yet)
+   * selects the parent again.
+   */
+  private takeBack(id: string, meta: TopicMeta, selectParent = false) {
     const parentId = meta.parentId as string
-    const selection = this.canvas.selection.filter((s) => s !== id)
+    const selection = selectParent ? [] : this.canvas.selection.filter((s) => s !== id)
     const d = new Draft(this.canvas)
     for (const e of this.index.edgesByChild.get(id) ?? []) this.deleteLine(d, e)
     d.delete(id)
