@@ -1,8 +1,8 @@
 // Bridge release R0 (docs/EXCALIDRAW-MIGRATION.md §5.5, §5.9 step 4, §5.10): the api understands what
 // the Excalidraw build leaves behind, and says so instead of failing.
 //   - a v2 checkpoint row (migration 0022 body_version 2) is listed with `newCanvas` ("Made on the new
-//     canvas — preview and restore after the switch"); previewing or restoring it answers 409 NEW_CANVAS
-//     with that message, before anything is read or saved; a v2 body behind a row that says v1 is refused
+//     canvas. Preview and restore it when Lobby is back on the new canvas."); previewing or restoring
+//     it answers 409 NEW_CANVAS with that message, before anything is read or saved; a v2 body behind a row that says v1 is refused
 //     the same way (never restored as an empty board);
 //   - the `engine_migration` reason is accepted, listed and kept by retention like a safety checkpoint;
 //   - a board born on the new canvas (boards.new_canvas) carries `newCanvas` in every board answer and
@@ -120,7 +120,7 @@ describe('checkpoints made on the new canvas (v2)', () => {
     )
     expect(rows.find((r) => r.id === v1.json().id)).not.toHaveProperty('newCanvas')
     expect(NEW_CANVAS_CHECKPOINT_MESSAGE).toBe(
-      'Made on the new canvas — preview and restore after the switch',
+      'Made on the new canvas. Preview and restore it when Lobby is back on the new canvas.',
     )
   })
 
@@ -191,7 +191,7 @@ describe('boards born on the new canvas', () => {
     expect(boards.find((b) => b.id === boardId)?.newCanvas).toBe(true)
     expect(boards.find((b) => b.id === other)).not.toHaveProperty('newCanvas')
     expect(NEW_CANVAS_BOARD_MESSAGE).toBe(
-      'This board was made on the new canvas. It opens again after the switch.',
+      'This board was made on the new canvas. It opens again when Lobby is back on the new canvas.',
     )
   })
 

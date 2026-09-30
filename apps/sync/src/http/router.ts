@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { checkInternalSecret, INTERNAL_SECRET_HEADER } from '@draftroom/auth-tickets'
-import type { RunAllReport } from '../backup/run-all.ts'
+import { RUN_ALL_ID_RE, type RunAll } from '../backup/run-all.ts'
 import { type BackupService, handleBackupStatus } from '../backup/service.ts'
 import { BoardOpenRefused, NEW_CANVAS_ERROR_CODE } from '../r0/pre-open.ts'
 import { handleAssetRefs } from './asset-refs.ts'
@@ -27,8 +27,11 @@ export interface RouterDeps extends InternalDeps {
    * commit, closes every socket with 4099 MAINTENANCE and refuses new ones. Absent: the routes answer 404.
    */
   maintenance?: MaintenanceControl
-  /** POST /internal/backups/run-all (backup/run-all.ts). Absent: 404. */
-  runAll?: () => Promise<RunAllReport>
+  /**
+   * POST /internal/backups/run-all starts a run (202 with its id), GET …/run-all/<runId> reads it, with
+   * its report once done, and GET …/run-all lists the runs (backup/run-all.ts). Absent: 404.
+   */
+  runAll?: Pick<RunAll, 'request' | 'get' | 'list'>
 }
 
 export interface MaintenanceControl {
@@ -62,11 +65,37 @@ async function handleMaintenance(req: IncomingMessage, res: ServerResponse, deps
   sendJson(res, 200, control.set(body.on))
 }
 
-async function handleRunAll(res: ServerResponse, deps: RouterDeps) {
+/** Where a run is read (the POST's Location). */
+export const runAllPath = (runId: string) => `/internal/backups/run-all/${runId}`
+
+/**
+ * POST: starts a run, or joins the one that will answer this call (backup/run-all.ts), and answers at
+ * once with 202 and the run's id. The run goes on in the server; GET …/run-all/<runId> has its report
+ * once it is done. No client waits on one request for a run that can take many minutes.
+ */
+function handleRunAllStart(res: ServerResponse, deps: RouterDeps) {
   if (!deps.runAll) throw notFound()
   if (!deps.registry.backupsDir())
     throw new HttpError(409, 'BACKUPS_OFF', 'Local backups are off on this server.')
-  sendJson(res, 200, await deps.runAll())
+  const run = deps.runAll.request()
+  sendJson(res, 202, run, { Location: runAllPath(run.runId) })
+}
+
+function handleRunAllList(res: ServerResponse, deps: RouterDeps) {
+  if (!deps.runAll) throw notFound()
+  sendJson(res, 200, { runs: deps.runAll.list() })
+}
+
+function handleRunAllGet(res: ServerResponse, deps: RouterDeps, rawRunId: string) {
+  if (!deps.runAll) throw notFound()
+  const run = RUN_ALL_ID_RE.test(rawRunId) ? deps.runAll.get(rawRunId) : null
+  if (!run)
+    throw new HttpError(
+      404,
+      'RUN_NOT_FOUND',
+      'This server has no run-all run with that id. Runs are kept until the sync server restarts, which also turns maintenance off.',
+    )
+  sendJson(res, 200, run)
 }
 
 // Captures are raw (still percent-encoded) path segments; board ids are checked against a strict
@@ -83,11 +112,18 @@ const INTERNAL_ROUTES: Array<{ re: RegExp; methods: string[]; handle: Handler }>
     methods: ['GET'],
     handle: (_req, res, deps) => handleBackupStatus(res, deps.backups),
   },
-  // Bridge release R0: a fresh local + offsite backup of every board, for the cut-over runbook
+  // Bridge release R0: a fresh local + offsite backup of every board, for the cut-over runbook. POST
+  // starts a run (202), GET lists the runs, GET …/<runId> answers with the report once it is done.
   {
     re: /^\/internal\/backups\/run-all$/,
-    methods: ['POST'],
-    handle: (_req, res, deps) => handleRunAll(res, deps),
+    methods: ['GET', 'POST'],
+    handle: (req, res, deps) =>
+      req.method === 'POST' ? handleRunAllStart(res, deps) : handleRunAllList(res, deps),
+  },
+  {
+    re: /^\/internal\/backups\/run-all\/([^/]+)$/,
+    methods: ['GET'],
+    handle: (_req, res, deps, [runId = '']) => handleRunAllGet(res, deps, runId),
   },
   // Bridge release R0: maintenance mode (sockets closed and refused; internal reads keep working)
   {

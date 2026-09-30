@@ -2,7 +2,8 @@
 // /internal/backups/run-all writes a fresh local and offsite backup of EVERY board file (open or not,
 // changed or not, tldraw, converted or born on the new canvas) and returns, per board, the object key
 // and the recordsSha256 the runbook stores. Its digests equal the board files' own; the files it read
-// are unchanged (no room is opened for a board that is not open).
+// are unchanged (no room is opened for a board that is not open). The POST answers at once (202 and the
+// run's id); the report is read by id once the run is done, as the runbook command does (run-all-cli.ts).
 import { join } from 'node:path'
 import { createFsBlobStore } from '@draftroom/blob-store'
 import type { TLRecord } from '@tldraw/tlschema'
@@ -15,6 +16,7 @@ import { boardDbPath } from '../../src/rooms.ts'
 import { useProtocolHarness } from '../harness/fixture.ts'
 import { geoShape, noteShape } from '../harness/records.ts'
 import { callInternal } from '../harness/tickets.ts'
+import { runAllOverHttp, runCli, startRunAll, waitForRun } from './run-all-http.ts'
 import {
   fileSha256,
   lbState,
@@ -52,15 +54,13 @@ describe('POST /internal/backups/run-all in the real sync process', () => {
     a.put(geoShape('live1'))
     await a.waitForAcked()
 
-    const [res, second] = await Promise.all([
-      callInternal(server.url, 'POST', '/internal/backups/run-all'),
-      callInternal(server.url, 'POST', '/internal/backups/run-all'),
-    ])
-    expect(res.status).toBe(200)
-    const report = (await res.json()) as RunAllReport
+    // Both answered at once (202); the reports are read by run id once the runs are done.
+    const [first, second] = await Promise.all([startRunAll(server.url), startRunAll(server.url)])
+    const report = (await waitForRun(server.url, first.runId)).report as RunAllReport
     // a second call while one runs waits for it and gets a run of its own, started after it
     // (run-all-fresh.test.ts): never a report older than the call
-    const later = (await second.json()) as RunAllReport
+    expect(second.runId).not.toBe(first.runId)
+    const later = (await waitForRun(server.url, second.runId)).report as RunAllReport
     expect(later.ok).toBe(true)
     expect(Date.parse(later.startedAt)).toBeGreaterThanOrEqual(Date.parse(report.finishedAt))
     expect(later.boards.map((b) => b.boardId)).toEqual(report.boards.map((b) => b.boardId))
@@ -116,13 +116,58 @@ describe('POST /internal/backups/run-all in the real sync process', () => {
     seedTldrawBoard(rooms, CLOSED)
     makeBornAfterFile(boardDbPath(rooms, BORN))
     const server = await h.server({ dataDir })
-    const res = await callInternal(server.url, 'POST', '/internal/backups/run-all')
-    const report = (await res.json()) as RunAllReport
+    const report = await runAllOverHttp(server.url)
     expect(report).toMatchObject({ ok: true, offsite: 'off' })
     expect(report.boards.map((b) => [b.boardId, b.ok, b.offsiteKey, typeof b.file])).toEqual([
       [BORN, true, null, 'string'],
       [CLOSED, true, null, 'string'],
     ])
+  })
+
+  it('the runbook command (run-all-cli.ts) waits for the report and prints it; the run stays readable', async () => {
+    const dataDir = h.dataDir()
+    const rooms = join(dataDir, 'rooms')
+    const closed = seedTldrawBoard(rooms, CLOSED, [noteShape('n1', 'x') as unknown as TLRecord])
+    const server = await h.server({ dataDir, env: { DRAFTROOM_BACKUP_STORE: 'fs' } })
+    await callInternal(server.url, 'POST', '/internal/maintenance', { body: { on: true } })
+
+    const cli = await runCli(['--url', server.url, '--interval-ms', '20', '--expect-maintenance'])
+    expect(cli.code, cli.stderr).toBe(0)
+    const report = JSON.parse(cli.stdout) as RunAllReport
+    expect(report).toMatchObject({ ok: true, offsite: 'fs', inMaintenance: true })
+    expect(report.boards.map((b) => [b.boardId, b.ok])).toEqual([[CLOSED, true]])
+    expect(report.boards[0]?.recordsSha256).toBe(inspectBoardDb(closed).recordsSha256)
+    const runId = /run-all (run_[0-9a-f]{16}): /.exec(cli.stderr)?.[1] as string
+    expect(cli.stderr).toContain(`--run ${runId}`)
+    expect(cli.stderr).toContain('ok: 1 of 1 boards backed up; offsite fs; maintenance on from start to end')
+
+    // the same report stays readable by id, and in the list, until the process ends
+    const again = await waitForRun(server.url, runId)
+    expect(again.report).toEqual(report)
+    const listed = (await (await callInternal(server.url, 'GET', '/internal/backups/run-all')).json()) as {
+      runs: Array<Record<string, unknown>>
+    }
+    expect(listed.runs.map((r) => [r.runId, r.status, r.ok, r.inMaintenance, 'report' in r])).toEqual([
+      [runId, 'done', true, true, false],
+    ])
+    // following it again prints the same report
+    const follow = await runCli(['--url', server.url, '--run', runId, '--expect-maintenance'])
+    expect(follow.code, follow.stderr).toBe(0)
+    expect(JSON.parse(follow.stdout)).toEqual(report)
+
+    // outside maintenance, --expect-maintenance fails (the report is still printed)
+    await callInternal(server.url, 'POST', '/internal/maintenance', { body: { on: false } })
+    const outside = await runCli(['--url', server.url, '--interval-ms', '20', '--expect-maintenance'])
+    expect(outside.code).toBe(1)
+    expect((JSON.parse(outside.stdout) as RunAllReport).inMaintenance).toBe(false)
+    expect(outside.stderr).toContain('this is not the final backup set')
+
+    // after a restart the runs are gone (and maintenance is off): the CLI says so and fails
+    await server.kill('SIGINT')
+    await server.restart()
+    const gone = await runCli(['--url', server.url, '--run', runId])
+    expect(gone.code).toBe(1)
+    expect(gone.stderr).toContain('does not know this run')
   })
 })
 

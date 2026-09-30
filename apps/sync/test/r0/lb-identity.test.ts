@@ -16,6 +16,7 @@ import { geo, note, RoomClient, until } from '../deleted/fixtures.ts'
 import { useProtocolHarness } from '../harness/fixture.ts'
 import { geoShape, noteShape } from '../harness/records.ts'
 import { callInternal } from '../harness/tickets.ts'
+import { runAllOverHttp } from './run-all-http.ts'
 import {
   ALL_LB_TABLES,
   lbState,
@@ -147,9 +148,7 @@ describe('a converted board in the real sync process', () => {
 
     const on = await callInternal(server.url, 'POST', '/internal/maintenance', { body: { on: true } })
     expect(await on.json()).toEqual({ maintenance: true, closedSockets: 1 })
-    const runAll = await callInternal(server.url, 'POST', '/internal/backups/run-all')
-    expect(runAll.status).toBe(200)
-    expect(((await runAll.json()) as { ok: boolean }).ok).toBe(true)
+    expect((await runAllOverHttp(server.url)).ok).toBe(true)
     await callInternal(server.url, 'POST', '/internal/maintenance', { body: { on: false } })
 
     // a second session edits, the process crashes with the room open, restarts and serves again

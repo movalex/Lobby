@@ -25,12 +25,12 @@ const TITLES: Record<string, string> = {
 }
 
 /**
- * What "the switch" means, for a board made on the new canvas: this build only meets one during a
- * rollback to the previous canvas (bridge release R0), after its users have already seen one switch.
+ * Why a board made on the new canvas does not open: this build only meets one during a rollback to the
+ * previous canvas (bridge release R0), after its users have already worked on the new one.
  */
 const NOTES: Record<string, string> = {
   NEW_CANVAS_BOARD:
-    'Lobby is back on its previous canvas for now. Boards made on the new canvas are kept as they are and open again when it returns.',
+    'Lobby is back on its previous canvas for now. Boards made on the new canvas are kept as they are.',
 }
 
 export function describeSyncError(reason: string): string {
@@ -48,7 +48,7 @@ export function syncErrorNote(reason: string): string | null {
 type SyncErrorAction = 'retry' | 'reload' | 'boards'
 
 /**
- * The screen's buttons. A board made on the new canvas cannot open until the switch, so Retry (it would
+ * The screen's buttons. A board made on the new canvas cannot open on this canvas, so Retry (it would
  * meet the same refusal) and Reload give way to the way back to the boards.
  */
 export function syncErrorActions(reason: string): { primary: SyncErrorAction; secondary: SyncErrorAction[] } {

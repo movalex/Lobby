@@ -29,7 +29,7 @@ export class BoardOpenRefused extends Error {
   readonly boardId: string
   readonly reason: 'new-canvas'
   constructor(boardId: string, reason: 'new-canvas') {
-    super('This board was made on the new canvas. It opens again after the switch.')
+    super('This board was made on the new canvas. It opens again when Lobby is back on the new canvas.')
     this.name = 'BoardOpenRefused'
     this.boardId = boardId
     this.reason = reason

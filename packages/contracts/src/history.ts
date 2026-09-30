@@ -196,16 +196,22 @@ export type BoardCheckpoint = z.infer<typeof BoardCheckpoint>
 // ---- the new canvas (bridge release R0, docs/EXCALIDRAW-MIGRATION.md §5.9 step 4, §5.10) --------------
 //
 // Lobby's canvas moves from tldraw to Excalidraw. R0 is the last tldraw build: it stays the rollback
-// target, so it understands what the new canvas leaves behind and says so instead of failing.
+// target, so it understands what the new canvas leaves behind and says so instead of failing. These
+// words only ever reach people during such a rollback, when Lobby is back on its previous canvas for a
+// while: so they say in plain words when the thing opens again (once Lobby is back on the new canvas),
+// never "after the switch", which nobody on the page can decode.
 
 /** Shown on a checkpoint made on the new canvas; the answer to previewing or restoring one (409 NEW_CANVAS). */
-export const NEW_CANVAS_CHECKPOINT_MESSAGE = 'Made on the new canvas — preview and restore after the switch'
+export const NEW_CANVAS_CHECKPOINT_MESSAGE =
+  'Made on the new canvas. Preview and restore it when Lobby is back on the new canvas.'
 /** Shown for a board made on the new canvas; the answer to opening, duplicating or exporting it (409 NEW_CANVAS). */
 export const NEW_CANVAS_BOARD_MESSAGE =
-  'This board was made on the new canvas. It opens again after the switch.'
+  'This board was made on the new canvas. It opens again when Lobby is back on the new canvas.'
+/** The dashboard card's line under the "New canvas" badge (on screen, not a tooltip). */
+export const NEW_CANVAS_CARD_NOTE = 'Opens again when Lobby is back on the new canvas.'
 /** The answer to importing a board archive exported from the new canvas (400 NEW_CANVAS_ARCHIVE). */
 export const NEW_CANVAS_ARCHIVE_MESSAGE =
-  'This file was exported from the new canvas. It can be imported after the switch.'
+  'This file was exported from the new canvas. It can be imported when Lobby is back on the new canvas.'
 /** The error code of those refusals. */
 export const NEW_CANVAS_ERROR = 'NEW_CANVAS'
 

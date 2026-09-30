@@ -144,6 +144,8 @@ describe('maintenance mode in the real sync process', () => {
         ['GET', '/internal/maintenance'],
         ['POST', '/internal/maintenance'],
         ['POST', '/internal/backups/run-all'],
+        ['GET', '/internal/backups/run-all'],
+        ['GET', '/internal/backups/run-all/run_0123456789abcdef'],
       ] as const) {
         const res = await callInternal(
           server.url,
@@ -160,8 +162,14 @@ describe('maintenance mode in the real sync process', () => {
     }
     const put = await callInternal(server.url, 'PUT', '/internal/maintenance', { body: { on: true } })
     expect(put.status).toBe(405)
-    const getRunAll = await callInternal(server.url, 'GET', '/internal/backups/run-all')
-    expect(getRunAll.status).toBe(405)
+    // run-all: POST starts a run, GET lists them, GET …/<runId> reads one; nothing else
+    const putRunAll = await callInternal(server.url, 'PUT', '/internal/backups/run-all')
+    expect(putRunAll.status).toBe(405)
+    const postRun = await callInternal(server.url, 'POST', '/internal/backups/run-all/run_0123456789abcdef')
+    expect(postRun.status).toBe(405)
+    expect(await (await callInternal(server.url, 'GET', '/internal/backups/run-all')).json()).toEqual({
+      runs: [],
+    })
     // nothing above switched it on
     expect(await (await callInternal(server.url, 'GET', '/internal/maintenance')).json()).toEqual({
       maintenance: false,

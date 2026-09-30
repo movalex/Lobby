@@ -4,8 +4,10 @@
 //     the page says "Lobby is updating"; a new tab is refused the same way; off again, Retry opens the
 //     board with everything that was saved before;
 //   - a board born on the new canvas (a board file with only lb_* tables) is refused by the sync server
-//     before any room opens: the page says "This board was made on the new canvas. It opens again after
-//     the switch." and the file is left byte-identical.
+//     before any room opens: the page says "This board was made on the new canvas. It opens again when
+//     Lobby is back on the new canvas." and the file is left byte-identical;
+//   - the History line of a checkpoint made on the new canvas and the dashboard card of a board made on
+//     it say in words, on screen, when they open again (no "after the switch", no tooltip-only meaning).
 import { createHash } from 'node:crypto'
 import { readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
@@ -14,6 +16,7 @@ import type { Page } from '@playwright/test'
 import { signInContext } from './support/api.ts'
 import { edit, expectConn, getShape, waitForBoard } from './support/board.ts'
 import { expect, test } from './support/fixtures.ts'
+import { checkpointRow, openHistory } from './support/history.ts'
 import { SYNC_URL } from './support/ports.ts'
 
 const maintenance = async (secret: string, on: boolean) => {
@@ -107,12 +110,13 @@ test('a board born on the new canvas is refused with its message and left untouc
         page,
         'NEW_CANVAS_BOARD',
         'Made on the new canvas',
-        'This board was made on the new canvas. It opens again after the switch.',
+        'This board was made on the new canvas. It opens again when Lobby is back on the new canvas.',
       )
-      // it says what "the switch" is, and offers the way back instead of a Retry that meets the same refusal
+      // it says why in words, and offers the way back instead of a Retry that meets the same refusal
       await expect(page.getByTestId('sync-error-note')).toHaveText(
-        'Lobby is back on its previous canvas for now. Boards made on the new canvas are kept as they are and open again when it returns.',
+        'Lobby is back on its previous canvas for now. Boards made on the new canvas are kept as they are.',
       )
+      await expect(page.getByTestId('sync-error')).not.toContainText(/switch/i)
       await expect(page.getByTestId('sync-retry')).toHaveCount(0)
       const back = page.getByTestId('sync-boards')
       await expect(back).toHaveText('Go to your boards')
@@ -139,5 +143,75 @@ test('a board born on the new canvas is refused with its message and left untouc
     // pass over Dev Studio would stay incomplete, storage-2.spec.ts), so the file goes with the test.
     // Sync never opened it, so nothing holds it.
     for (const suffix of ['', '-wal', '-shm']) rmSync(path + suffix, { force: true })
+  }
+})
+
+test('the History line and the dashboard card say in words when new-canvas content opens again', async ({
+  session,
+  board,
+}) => {
+  // What the Excalidraw build leaves behind, as R0's api answers it (apps/api new-canvas.test.ts): a
+  // checkpoint with `newCanvas` in the board's list, and a board with `newCanvas`. The answers are the
+  // real api's, with that one field or row added by page.route: this stack cannot make either.
+  const a = await session('alice')
+  const page = a.page
+  const v2 = {
+    id: 'snp_e2enewcanvas0001',
+    boardId: board,
+    name: 'Moodboard pass',
+    kind: 'manual',
+    reason: null,
+    createdBy: null,
+    createdAt: new Date().toISOString(),
+    documentClock: 3,
+    recordCount: 1,
+    sizeBytes: 100,
+    newCanvas: true,
+  }
+  await page.route(`**/api/boards/${board}/snapshots`, async (route) => {
+    if (route.request().method() !== 'GET') return route.fallback()
+    const res = await route.fetch()
+    const body = (await res.json()) as { snapshots: unknown[] }
+    await route.fulfill({ response: res, json: { snapshots: [v2, ...body.snapshots] } })
+  })
+  const panel = await openHistory(page)
+  const row = checkpointRow(page, v2.id)
+  await expect(row).toBeVisible()
+  await expect(row.getByTestId('checkpoint-new-canvas')).toHaveText(
+    'Made on the new canvas. Preview and restore it when Lobby is back on the new canvas.',
+  )
+  await expect(row.getByTestId('checkpoint-new-canvas')).toBeVisible()
+  await expect(row.getByTestId('checkpoint-preview')).toHaveCount(0)
+  await expect(row.getByTestId('checkpoint-restore')).toHaveCount(0)
+  await expect(panel).not.toContainText(/switch/i)
+
+  const opened = (await (await page.request.get(`/api/boards/${board}`)).json()) as {
+    board: { workspaceId: string }
+  }
+  // the dashboard's board list (GET /api/workspaces/:wid/boards?…), not starred or other routes
+  await page.route(/\/api\/workspaces\/[^/]+\/boards(\?.*)?$/, async (route) => {
+    const res = await route.fetch()
+    const body = (await res.json()) as { boards: Array<{ id: string }> }
+    const boards = body.boards.map((b) => (b.id === board ? { ...b, newCanvas: true } : b))
+    await route.fulfill({ response: res, json: { ...body, boards } })
+  })
+  for (const width of [1280, 390]) {
+    await page.setViewportSize({ width, height: 860 })
+    await page.goto(`/w/${opened.board.workspaceId}`)
+    const card = page.locator(`[data-testid="board-card"][data-board-id="${board}"]`)
+    await expect(card.getByTestId('board-card-new-canvas')).toHaveText('New canvas')
+    const note = card.getByTestId('board-card-new-canvas-note')
+    await expect(note).toHaveText('Opens again when Lobby is back on the new canvas.')
+    await expect(note).toBeVisible()
+    await note.scrollIntoViewIfNeeded()
+    // on the card itself, not cut off: the whole line is inside the card
+    const cardBox = await card.boundingBox()
+    const noteBox = await note.boundingBox()
+    expect(cardBox && noteBox).toBeTruthy()
+    if (cardBox && noteBox) {
+      expect(noteBox.x).toBeGreaterThanOrEqual(cardBox.x)
+      expect(noteBox.x + noteBox.width).toBeLessThanOrEqual(cardBox.x + cardBox.width + 1)
+    }
+    await expect(card).not.toContainText(/switch/i)
   }
 })

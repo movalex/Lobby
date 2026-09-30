@@ -148,7 +148,8 @@ function CheckpointRow({
   }
   const title = checkpointTitle(c)
   const { busy } = actions
-  // Bridge release R0: made on the new canvas: listed, but previewed and restored after the switch.
+  // Bridge release R0: made on the new canvas: listed, with a line that says when it can be previewed and
+  // restored (once Lobby is back on the new canvas), instead of Preview and Restore.
   const newCanvas = newCanvasNote(c)
   const canPreview = perms.canPreview && !newCanvas
   const canRestoreThis = canRestore && !newCanvas

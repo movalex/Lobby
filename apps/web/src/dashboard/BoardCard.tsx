@@ -1,4 +1,4 @@
-import { type BoardWithRole, NEW_CANVAS_BOARD_MESSAGE, thumbnailPath } from '@draftroom/contracts'
+import { type BoardWithRole, NEW_CANVAS_CARD_NOTE, thumbnailPath } from '@draftroom/contracts'
 import { type CSSProperties, useEffect, useId, useState } from 'react'
 import { onThumbnailUpdated } from '../features/thumbnails/card-events.ts'
 import { formatRelativeTime } from '../lib/format.ts'
@@ -392,13 +392,9 @@ export function BoardCard<B extends BoardWithRole & { starred?: boolean; thumbna
               </span>
             )}
             <span>{when}</span>
-            {/* Bridge release R0: made on the new canvas (this build cannot open it; the title says why). */}
+            {/* Bridge release R0: made on the new canvas (this build cannot open it; the line below says when). */}
             {board.newCanvas && (
-              <span
-                className="dr-bcard__canvas"
-                data-testid="board-card-new-canvas"
-                title={NEW_CANVAS_BOARD_MESSAGE}
-              >
+              <span className="dr-bcard__canvas" data-testid="board-card-new-canvas">
                 New canvas
               </span>
             )}
@@ -407,6 +403,12 @@ export function BoardCard<B extends BoardWithRole & { starred?: boolean; thumbna
               {ROLE_LABEL[board.role]}
             </span>
           </span>
+          {/* What the badge means, in words on the card (never only a tooltip). */}
+          {board.newCanvas && (
+            <span className="dr-bcard__canvas-note" data-testid="board-card-new-canvas-note">
+              {NEW_CANVAS_CARD_NOTE}
+            </span>
+          )}
         </div>
         {star}
         <MenuButton

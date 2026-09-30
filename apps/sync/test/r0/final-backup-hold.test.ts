@@ -20,6 +20,7 @@ import { readJsonObject, type TempData, tempData } from '../backup/offsite-fixtu
 import { useProtocolHarness } from '../harness/fixture.ts'
 import { geoShape, noteShape } from '../harness/records.ts'
 import { callInternal, TEST_INTERNAL_SECRET } from '../harness/tickets.ts'
+import { runAllOverHttp } from './run-all-http.ts'
 import { markConverted, seedTldrawBoard } from './support.ts'
 
 const DAY = 86_400_000
@@ -139,8 +140,7 @@ describe('in the real sync process', () => {
       dataDir,
       env: { DRAFTROOM_BACKUP_STORE: 'fs', DRAFTROOM_BACKUP_INTERVAL_MS: '1000' },
     })
-    const res = await callInternal(server.url, 'POST', '/internal/backups/run-all')
-    const report = (await res.json()) as RunAllReport
+    const report = await runAllOverHttp(server.url)
     const key = report.boards[0]?.offsiteKey as string
     expect(key).toMatch(new RegExp(`^backups/sync/${BOARD}/`))
     const store = createFsBlobStore(join(dataDir, 'blobs'))

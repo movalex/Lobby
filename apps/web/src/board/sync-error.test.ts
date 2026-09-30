@@ -12,7 +12,7 @@ describe('sync error messages', () => {
   it('a board made on the new canvas', () => {
     expect(syncErrorTitle('NEW_CANVAS_BOARD')).toBe('Made on the new canvas')
     expect(describeSyncError('NEW_CANVAS_BOARD')).toBe(
-      'This board was made on the new canvas. It opens again after the switch.',
+      'This board was made on the new canvas. It opens again when Lobby is back on the new canvas.',
     )
   })
 
@@ -26,11 +26,11 @@ describe('sync error messages', () => {
 })
 
 describe('what the screen offers', () => {
-  it('a board made on the new canvas: the way back to the boards, no Retry (it cannot open until the switch)', () => {
+  it('a board made on the new canvas: the way back to the boards, no Retry (it cannot open on this canvas)', () => {
     expect(syncErrorActions('NEW_CANVAS_BOARD')).toEqual({ primary: 'boards', secondary: [] })
-    // and it says what "the switch" is: users only see this during a rollback
+    // and it says why in plain words: users only see this during a rollback
     expect(syncErrorNote('NEW_CANVAS_BOARD')).toBe(
-      'Lobby is back on its previous canvas for now. Boards made on the new canvas are kept as they are and open again when it returns.',
+      'Lobby is back on its previous canvas for now. Boards made on the new canvas are kept as they are.',
     )
   })
 

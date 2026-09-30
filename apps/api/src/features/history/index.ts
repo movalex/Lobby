@@ -30,6 +30,7 @@ import { keepDownloadableFiles } from '../export-control/import-files.ts'
 import { copyExportPolicy, requireExportAllowed } from '../export-control/policy.ts'
 import { DELETED_GUESTS, guestRefused } from '../guests/guard.ts'
 import { ArchiveError, exportBoardArchive, importBoardArchive, type SerializedSchema } from './board-ops.ts'
+import { registerCheckpointAllRoutes } from './checkpoint-all.ts'
 import { registerCheckpointRoutes } from './checkpoint-routes.ts'
 import {
   type CheckpointService,
@@ -87,6 +88,8 @@ export async function registerHistory(app: FastifyInstance, ctx: FeatureContext)
   checkpointServices.set(app, checkpoints)
   startCheckpointTimers(app, checkpoints, settings)
   registerCheckpointRoutes(app, ctx, checkpoints, bodies)
+  // Bridge release R0: a manual checkpoint of every board, for the cut-over (checkpoint-all.ts).
+  registerCheckpointAllRoutes(app, ctx, checkpoints)
 
   /**
    * The caller may create boards in the workspace: members and above (guests may not), and a creator

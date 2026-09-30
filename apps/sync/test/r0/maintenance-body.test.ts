@@ -9,11 +9,11 @@ import { join } from 'node:path'
 import { INTERNAL_SECRET_HEADER } from '@draftroom/auth-tickets'
 import { draftroomSchema } from '@draftroom/canvas-schema'
 import { describe, expect, it } from 'vitest'
-import type { RunAllReport } from '../../src/backup/run-all.ts'
 import { boardDbPath } from '../../src/rooms.ts'
 import { newBoardId, useProtocolHarness } from '../harness/fixture.ts'
 import { geoShape } from '../harness/records.ts'
 import { callInternal, TEST_INTERNAL_SECRET } from '../harness/tickets.ts'
+import { runAllOverHttp } from './run-all-http.ts'
 
 /** A POST whose first half is sent now; finish() sends the rest and resolves with the answer. */
 function halfSent(baseUrl: string, path: string, body: unknown) {
@@ -81,8 +81,7 @@ describe('maintenance goes on while a board-writing body is still arriving', () 
 
     const on = await callInternal(server.url, 'POST', '/internal/maintenance', { body: { on: true } })
     expect(on.status).toBe(200)
-    const runAll = await callInternal(server.url, 'POST', '/internal/backups/run-all')
-    const report = (await runAll.json()) as RunAllReport
+    const report = await runAllOverHttp(server.url)
     expect(report.boards.map((b) => b.boardId)).toEqual([board])
 
     for (const [what, pending] of [

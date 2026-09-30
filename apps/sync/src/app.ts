@@ -143,7 +143,7 @@ export function createSyncServer(config: SyncConfig, opts: SyncServerOptions = {
     isClosing: () => closing !== null,
     log,
     maintenance: maintenanceControl,
-    runAll: () => runAll.run(),
+    runAll,
   })
   const http = createServer((req, res) => {
     const p = handle(req, res)
@@ -324,7 +324,8 @@ export function createSyncServer(config: SyncConfig, opts: SyncServerOptions = {
         for (const ws of wss.clients) ws.terminate()
         liveSockets.clear()
         http.closeAllConnections() // aborts in-flight requests (e.g. a half-sent seed body)
-        await Promise.allSettled([...inflight])
+        // A run-all in progress stops after its current board and ends failed (its report is never made).
+        await Promise.allSettled([...inflight, runAll.stop()])
         // The last edits' "Edited" times: best effort, never more than a second of shutdown.
         await Promise.race([
           Promise.all([touches.flush(), sessionEnds.flush()]),
