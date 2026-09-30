@@ -5,18 +5,20 @@
 //
 //  1. convert (the sync's migration service: the capped worker, one job at a time);
 //  2. edit on Excalidraw (A): move a frame's child, recolour an element, create one, delete one;
-//     `--excalidraw room` makes them through the Excalidraw build's sync (O1's room, from M1: not yet
-//     available), `store` writes them as the room's store does (a data change, version + 1, the written
-//     groups' gclock slots and the row clock above every other) — the spike's stand-in until M1;
+//     `room` (the b8-drill specs) makes them in a browser on the Excalidraw build (O1's room, which also
+//     converts and rolls forward on open), one edit at a time until Saved, each checked in the room's test
+//     snapshot; `store` (this CLI's default, superseded) writes them as the room's store does;
 //  3. run the R0 stand-in (the spike branch's tldraw sync with the born-after check, port 7900) on the
 //     same file and edit (B) through today's tldraw client: an add, a delete (captured into dr_deleted_*),
 //     a z-order change, an edit on page 2, a move of the frame whose child A moved, and a planted
 //     same-group conflict (both recolour one element); it serves, backs up (a 1.5 s pass) and trims;
 //     R0 never writes lb_*: every lb_* table has the same schema SQL and digest before and after, and
-//     dr_deleted_* changed only by R0's own new rows; a board born on the new canvas, in the same data
-//     folder, is refused through a socket (4099 NEW_CANVAS_BOARD) and every internal route (409
-//     new-canvas), is byte-identical afterwards, gets no WAL frame, and never appears in the backups;
-//  4. roll forward (the room-open path: `prepare`), and check §8.3's pass list;
+//     dr_deleted_* changed only by R0's own new rows; a board born on the new canvas (`room`: created on
+//     the Excalidraw build), in the same data folder, is refused through a socket (4099 NEW_CANVAS_BOARD)
+//     and every internal route (409 new-canvas), is byte-identical afterwards, gets no WAL frame, and never
+//     appears in the backups, while a backup pass after the refusal backs the converted board up;
+//  4. roll forward (the room-open path: `prepare`), and check §8.3's pass list (`room`: plus the rolled-
+//     forward keys as a client sees them, and A's tab converging with the snapshot with 0 pushes);
 //  5. once more (the second cycle): the merge runs against the refreshed lb_source.
 //
 // --staging (a restored staging copy, §8.6.7): SPIKE_B8_DIR must be set and --work inside it; the
@@ -28,6 +30,7 @@ import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, write
 import { basename, dirname, join, relative, resolve } from 'node:path'
 import type { DatabaseSync } from 'node:sqlite'
 import { parseArgs } from 'node:util'
+import type { ConvertReport } from '../../../apps/sync/src/room/migrate/convert-board.ts'
 import { lbDigests, tableDigest } from '../../../apps/sync/src/room/migrate/digest.ts'
 import type { RollForwardReport } from '../../../apps/sync/src/room/migrate/rollforward.ts'
 import { MigrationService } from '../../../apps/sync/src/room/migrate/service.ts'
@@ -39,6 +42,7 @@ import {
   excalidrawCreate,
   excalidrawEdit,
   fileSha256,
+  type LbRow,
   lbRows,
   makeBornAfterFile,
   readDb,
@@ -65,6 +69,18 @@ export interface DrillReport {
   readonly boardId: string
   readonly ok: boolean
   readonly excalidraw: 'store' | 'room'
+  /** the conversion (counts and timings only) */
+  readonly conversion: {
+    readonly ok: boolean
+    readonly recordsIn: number
+    readonly elementsOut: number
+    readonly ms: number
+    readonly wallMs: number
+    readonly invariants: string | null
+    readonly violations: number | null
+    readonly peakHeapTotalMb: number
+  } | null
+  readonly setup: readonly Check[]
   readonly cycles: readonly {
     readonly cycle: number
     readonly checks: readonly Check[]
@@ -72,8 +88,25 @@ export interface DrillReport {
     readonly counts: RollForwardReport['counts'] | null
     readonly resnap: string | null
     readonly invariants: string | null
+    readonly violations: number | null
     readonly ms: number | null
+    /** wall times: A's edits, the stand-in (start, B, born-after, stop), the roll-forward on open */
+    readonly wallMs: { readonly a: number | null; readonly standIn: number; readonly rollForward: number }
+    readonly aPushes: number | null
+    readonly aClock: { readonly at: number; readonly quiet: number } | null
+    /** the WAL the stand-in left beside the board file (bytes; null: none) */
+    readonly walAfterStandIn: number | null
+    readonly afterRollForward: {
+      readonly trigger: string
+      readonly elements: number
+      readonly snapshotHash: string
+      readonly mergedHash: string | null
+      readonly snapshotEqualsMerged: boolean
+    } | null
   }[]
+  /** the board the born-after refusal used (a board created on the Excalidraw build with `room`) */
+  readonly bornAfterBoard: string
+  /** both cycles' born-after checks, prefixed `cycle <n>: ` */
   readonly bornAfter: readonly Check[]
   readonly applicable: Readonly<Record<string, boolean>>
 }
@@ -103,9 +136,17 @@ const cfOf = (path: string) =>
       ) as ConvertedFrom,
   )
 
+/** tldraw geos the converter maps to one native element (the others become a container plus an outline line). */
+const NATIVE_GEOS = new Set(['rectangle', 'ellipse', 'diamond'])
+
 /**
- * Picks the drill's targets by structure only (ids, types, parents): never by content. Each role takes a
- * different shape; a role with no candidate is reported as not applicable for that board and cycle.
+ * Picks the drill's targets by structure only (ids, types, parents, the lock flag, the geo kind): never by
+ * content. Each role takes a different shape; a role with no candidate is reported as not applicable for
+ * that board and cycle. Locked shapes are never picked (the room refuses A's edits of them, LOCKED, as the
+ * product does; a user unlocks first). The planted conflict takes a shape whose colour lives on the element
+ * A recolours (a note, or a geo the converter maps to one native element: a polygon geo's colour is on its
+ * outline line, so A's recolour of the container and B's recolour of the outline are different elements).
+ * No other role takes a descendant of the moved frame (B's frame move moves them all).
  */
 function pickTargets(records: readonly Rec[], used: ReadonlySet<string>) {
   const shapes = records.filter((r) => r.typeName === 'shape').sort((a, b) => (a.id < b.id ? -1 : 1))
@@ -113,8 +154,26 @@ function pickTargets(records: readonly Rec[], used: ReadonlySet<string>) {
     .filter((r) => r.typeName === 'page')
     .sort((a, b) => (String(a.index) < String(b.index) ? -1 : 1))
   const pageIds = new Set(pages.map((p) => p.id))
-  const box = (s: Rec) => ['note', 'geo', 'text'].includes(String(s.type))
-  const coloured = (s: Rec) => ['note', 'geo'].includes(String(s.type))
+  const open = (s: Rec) => s.isLocked !== true
+  const box = (s: Rec) => ['note', 'geo', 'text'].includes(String(s.type)) && open(s)
+  const coloured = (s: Rec) =>
+    open(s) &&
+    (s.type === 'note' ||
+      (s.type === 'geo' && NATIVE_GEOS.has(String((s.props as Record<string, unknown> | undefined)?.geo))))
+  const descendantsOf = (id: string): Set<string> => {
+    const out = new Set<string>()
+    let frontier = [id]
+    while (frontier.length) {
+      const next: string[] = []
+      for (const s of shapes)
+        if (frontier.includes(String(s.parentId)) && !out.has(s.id)) {
+          out.add(s.id)
+          next.push(s.id)
+        }
+      frontier = next
+    }
+    return out
+  }
   const pageOf = (s: Rec): string | undefined => {
     let cur: Rec | undefined = s
     for (let i = 0; cur && i < 64; i++) {
@@ -127,18 +186,20 @@ function pickTargets(records: readonly Rec[], used: ReadonlySet<string>) {
   const frame = shapes.find(
     (f) =>
       f.type === 'frame' &&
+      open(f) &&
       !used.has(f.id) &&
       shapes.some((c) => c.parentId === f.id && box(c) && !used.has(c.id)),
   )
   const child = frame ? shapes.find((c) => c.parentId === frame.id && box(c) && !used.has(c.id)) : undefined
+  const frameDescendants = frame ? descendantsOf(frame.id) : new Set<string>()
   const taken = new Set([...used, frame?.id, child?.id].filter(Boolean) as string[])
   const next = (pred: (s: Rec) => boolean) => {
-    const s = shapes.find((r) => !taken.has(r.id) && r.parentId !== frame?.id && pred(r))
+    const s = shapes.find((r) => !taken.has(r.id) && !frameDescendants.has(r.id) && pred(r))
     if (s) taken.add(s.id)
     return s
   }
   const page2 = pages[1] ? next((s) => box(s) && pageOf(s) === pages[1]?.id) : undefined
-  const bReorder = next((s) => (box(s) || s.type === 'frame') && pageIds.has(String(s.parentId)))
+  const bReorder = next((s) => (box(s) || (s.type === 'frame' && open(s))) && pageIds.has(String(s.parentId)))
   const conflict = next(coloured)
   const aDelete = next(box)
   const bDelete = next(box)
@@ -152,6 +213,7 @@ function pickTargets(records: readonly Rec[], used: ReadonlySet<string>) {
   return {
     frame,
     child,
+    frameDescendants: [...frameDescendants].sort(),
     conflict,
     aDelete,
     bDelete,
@@ -163,6 +225,15 @@ function pickTargets(records: readonly Rec[], used: ReadonlySet<string>) {
   }
 }
 
+/** The WAL beside a board file: its size and digest (0 and null without one). */
+function walState(path: string): { bytes: number; sha: string | null } {
+  const wal = `${path}-wal`
+  return existsSync(wal) ? { bytes: walBytes(path), sha: fileSha256(wal) } : { bytes: 0, sha: null }
+}
+
+const backupNames = (dir: string): Set<string> =>
+  new Set(existsSync(dir) ? readdirSync(dir).filter((f) => f.endsWith('.sqlite')) : [])
+
 async function standInEdits(
   work: string,
   dataDir: string,
@@ -170,11 +241,13 @@ async function standInEdits(
   t: ReturnType<typeof pickTargets>,
   cycle: number,
   staging: boolean,
-): Promise<{ added: string; bornAfter: Check[] }> {
-  const bornId = 'b8-born-after'
+  bornId: string,
+): Promise<{ added: string; bornAfter: Check[]; ms: number }> {
+  const t0 = Date.now()
   const bornPath = join(dataDir, 'rooms', `board-${bornId}.sqlite`)
   if (!existsSync(bornPath)) makeBornAfterFile(bornPath)
-  const bornBefore = { sha: fileSha256(bornPath), tables: tablesOf(bornPath) }
+  const bornBefore = { sha: fileSha256(bornPath), tables: tablesOf(bornPath), wal: walState(bornPath) }
+  const backups = join(dataDir, 'backups')
   const sync = await startSync({
     port: STAND_IN_PORT,
     dataDir,
@@ -185,6 +258,7 @@ async function standInEdits(
   })
   const added = `shape:drill-b-add-${cycle}`
   const bornAfter: Check[] = []
+  let addedMade = false
   try {
     const c = new NodeSyncClient({ wsUrl: sync.wsUrl, boardId, user: USER, name: 'B', autoReconnect: false })
     try {
@@ -192,6 +266,7 @@ async function standInEdits(
       const get = (id: string) => c.get(id) as unknown as Rec | undefined
       const put = (r: Rec) => c.put(r as unknown as ShapeRecord)
       const template = t.template ? get(t.template.id) : undefined
+      addedMade = !!(template && t.firstPage)
       if (template && t.firstPage)
         put({
           ...template,
@@ -216,7 +291,7 @@ async function standInEdits(
     } finally {
       c.dispose()
     }
-    // a backup pass runs while the board is open (every 1.5 s)
+    // a backup pass runs while the board is open (every 1.5 s; the room stays open for IDLE_EVICT_MS)
     await new Promise((r) => setTimeout(r, 2_500))
     // born after the cut-over: refused through a socket and every internal route
     // Node's own WebSocket client (the page's socket, as a browser opens it)
@@ -259,26 +334,64 @@ async function standInEdits(
         detail: String(res.status),
       })
     }
+    // The backup timer after the refusal (§8.3 B8 "That covers the periodic backup timer"): B changes its
+    // added shape once more, so the next pass has a changed open board to back up; a new backup of the
+    // converted board must appear (the timer ran after the refusal) while the refused board gets none.
+    const namesBefore = backupNames(join(backups, boardId))
+    let passAfter = false
+    if (addedMade) {
+      const c2 = new NodeSyncClient({
+        wsUrl: sync.wsUrl,
+        boardId,
+        user: USER,
+        name: 'B',
+        autoReconnect: false,
+      })
+      try {
+        await c2.waitForSynced(30_000)
+        const cur = c2.get(added) as unknown as Rec | undefined
+        if (cur) c2.put({ ...cur, x: Number(cur.x) + 10 } as unknown as ShapeRecord)
+        await c2.waitForAcked(30_000)
+      } finally {
+        c2.dispose()
+      }
+      const deadline = Date.now() + 15_000
+      while (!passAfter && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 250))
+        passAfter = [...backupNames(join(backups, boardId))].some((f) => !namesBefore.has(f))
+      }
+    }
+    bornAfter.push({
+      name: 'the backup timer ran after the refusal (a new backup of the converted board)',
+      pass: passAfter,
+      ...(addedMade ? {} : { detail: 'no shape to change' }),
+    })
   } finally {
     await sync.stop('SIGINT')
   }
-  const backups = join(dataDir, 'backups')
+  const walAfter = walState(bornPath)
   bornAfter.push(
     { name: 'born-after file byte-identical (sha256)', pass: fileSha256(bornPath) === bornBefore.sha },
     {
       name: 'born-after tables unchanged (no documents, metadata, dr_deleted_*)',
       pass: JSON.stringify(tablesOf(bornPath)) === JSON.stringify(bornBefore.tables),
     },
-    { name: 'born-after: no WAL frames', pass: walBytes(bornPath) === 0 },
+    {
+      // an empty WAL (a read-only open may leave one, with its -shm) holds no frames; a non-empty one must
+      // be the one that was there before, untouched
+      name: 'born-after: no WAL frames written',
+      pass:
+        walAfter.bytes === 0 ||
+        (walAfter.bytes === bornBefore.wal.bytes && walAfter.sha === bornBefore.wal.sha),
+      detail: `${bornBefore.wal.bytes} -> ${walAfter.bytes} bytes`,
+    },
     { name: 'born-after: never in the stand-in backups', pass: !existsSync(join(backups, bornId)) },
     {
       name: 'the stand-in backed the converted board up while serving it',
-      pass:
-        existsSync(join(backups, boardId)) &&
-        readdirSync(join(backups, boardId)).some((f) => f.endsWith('.sqlite')),
+      pass: backupNames(join(backups, boardId)).size > 0,
     },
   )
-  return { added, bornAfter }
+  return { added, bornAfter, ms: Date.now() - t0 }
 }
 
 /** A's edits of one cycle (element ids; the drill checks their effects). */
@@ -294,21 +407,58 @@ export interface AEdits {
   readonly create: { readonly id: string; readonly templateId: string }
 }
 
+/** What A's edits of one cycle did. */
+export interface AResult {
+  /** the id of the element A created */
+  readonly createdId: string
+  /** per edit (move, recolor, remove, create): whether the room stored it (`room`: its test snapshot) */
+  readonly stored?: Readonly<Record<string, boolean>>
+  /** edits whose tab never showed Saved: what it showed instead (state, pending, reject code) */
+  readonly notSaved?: Readonly<Record<string, string>>
+  readonly ms?: number
+  /** pushes of A's tab since it opened the board (`room`) */
+  readonly pushes?: number | null
+  /** the tab's server clock at its welcome and when the board went quiet, before A's first edit */
+  readonly clock?: { readonly at: number; readonly quiet: number }
+}
+
+/** A's tab on the rolled-forward board (`room`). */
+export interface AfterRollForward {
+  readonly converged: boolean
+  readonly pushes: number
+  /** the pushed ops: ids, kinds, group and field names only */
+  readonly ops: readonly string[]
+  /** what ran the roll-forward: the test snapshot route before any tab, or A's tab as the joiner */
+  readonly trigger: 'snapshot-route' | 'joiner'
+  /** the rolled-forward board's z-order key problems as the room serves it (ids and reasons) */
+  readonly indexProblems: readonly string[]
+  readonly snapshotHash: string
+  readonly elements: number
+}
+
 /**
- * How the Excalidraw side runs. `store` (the default until M1): A's edits written as the room's store
- * writes them, conversion and roll-forward through the migration service in this process. `room` (from
- * M1): the spec passes these hooks, which make A's edits through the Excalidraw build (its browsers and
- * the facade) and run the conversion and roll-forward by opening the board in the Excalidraw stack.
+ * How the Excalidraw side runs. `room` (the evidence since conversion on open, B8 phase 3): the spec
+ * passes these hooks (e2e/spike-b/b8/excalidraw-side.ts), which make A's edits through the Excalidraw
+ * build (its browser and the facade) and run the conversion and the roll-forward by opening the board on
+ * the Excalidraw stack (O1's room calling the migration service). `store` (before M1, superseded): A's
+ * edits written as the room's store writes them, conversion and roll-forward through the migration
+ * service in this process; its delete does not cascade to a container's label as the room does.
  */
 export interface ExcalidrawSide {
   /** the board file is in place and nothing holds it: convert it (open the board) */
   convert(boardId: string): Promise<void>
-  /** returns the id of the element A created */
-  applyA(boardId: string, edits: AEdits): Promise<{ createdId: string }>
+  /**
+   * A board created on the Excalidraw build, for the born-after refusal (`room`); without it the drill
+   * writes a born-after file itself (an lb_* file with no converted_from).
+   */
+  bornAfter?(): Promise<string>
+  applyA(boardId: string, edits: AEdits): Promise<AResult>
   /** stop everything that holds the board file on the Excalidraw side (before the stand-in opens it) */
   release(boardId: string): Promise<void>
   /** roll forward (open the board on the Excalidraw side again) */
   rollForward(boardId: string): Promise<void>
+  /** after `rollForward`: A's tab against the room's test snapshot */
+  afterRollForward?(boardId: string): Promise<AfterRollForward>
 }
 
 export async function runDrill(opts: {
@@ -358,7 +508,7 @@ export async function runDrill(opts: {
       if (!conv.ready || conv.did !== 'converted')
         throw new Error(`conversion failed (${conv.ready ? conv.did : conv.reason})`)
     },
-    applyA: async (_id, e): Promise<{ createdId: string }> => {
+    applyA: async (_id, e): Promise<AResult> => {
       if (e.move)
         excalidrawEdit(path, e.move, ['pos'], (x) => {
           x.x = Number(x.x) + 60
@@ -398,8 +548,31 @@ export async function runDrill(opts: {
         throw new Error(`roll-forward failed (${rf.ready ? rf.did : rf.reason})`)
     },
   }
+  const setup: Check[] = []
+  let conversion: DrillReport['conversion'] = null
+  let bornId = 'b8-born-after'
   try {
+    const tc = Date.now()
     await side.convert(boardId)
+    const convertWallMs = Date.now() - tc
+    const conv = readConvertReport(reportDir, boardId)
+    conversion = conv
+      ? {
+          ok: conv.ok,
+          recordsIn: conv.recordsIn,
+          elementsOut: conv.elementsOut,
+          ms: conv.ms,
+          wallMs: convertWallMs,
+          invariants: conv.invariants ?? null,
+          violations: conv.violations?.length ?? null,
+          peakHeapTotalMb: conv.peakHeapTotalMb,
+        }
+      : null
+    setup.push({
+      name: 'converted on open: report ok, the invariant checker ran, 0 violations',
+      pass: !!conv?.ok && conv.invariants === 'ran' && (conv.violations?.length ?? 0) === 0,
+    })
+    if (side.bornAfter) bornId = await side.bornAfter()
     await side.release(boardId)
     for (let cycle = 1; cycle <= (opts.cycles ?? 2); cycle++) {
       const checks: Check[] = []
@@ -423,7 +596,7 @@ export async function runDrill(opts: {
       const templateId =
         [...before0.values()].find((r) => !r.deleted && (r.type === 'rectangle' || r.type === 'stickynote'))
           ?.id ?? ''
-      const { createdId: aNew } = await side.applyA(boardId, {
+      const aRes = await side.applyA(boardId, {
         cycle,
         move: t.child ? el(t.child.id) : null,
         recolor: t.conflict ? el(t.conflict.id) : null,
@@ -431,6 +604,16 @@ export async function runDrill(opts: {
         remove: t.aDelete ? el(t.aDelete.id) : null,
         create: { id: wantNew, templateId },
       })
+      const aNew = aRes.createdId
+      if (aRes.stored)
+        checks.push({
+          name: "A's edits stored before R0 (the room's test snapshot)",
+          pass: Object.values(aRes.stored).every(Boolean),
+          detail: [
+            ...Object.entries(aRes.stored).map(([k, v]) => `${k} ${v}`),
+            ...Object.entries(aRes.notSaved ?? {}).map(([k, v]) => `${k} not saved: ${v}`),
+          ].join(', '),
+        })
       await side.release(boardId)
       const beforeR0 = lbRows(path)
       const lbBefore = readDb(path, lbDigests)
@@ -441,15 +624,13 @@ export async function runDrill(opts: {
       }))
       const drOld = readDb(path, (db) => tableDigestUpTo(db, drBefore.max))
       // ---- B (R0 stand-in)
-      const { added, bornAfter: born } = await standInEdits(
-        opts.work,
-        dataDir,
-        boardId,
-        t,
-        cycle,
-        !!opts.staging,
-      )
-      if (cycle === 1) bornAfter = born
+      const {
+        added,
+        bornAfter: born,
+        ms: standInMs,
+      } = await standInEdits(opts.work, dataDir, boardId, t, cycle, !!opts.staging, bornId)
+      bornAfter = [...bornAfter, ...born.map((c) => ({ ...c, name: `cycle ${cycle}: ${c.name}` }))]
+      const walAfterStandIn = existsSync(`${path}-wal`) ? walBytes(path) : null
       checks.push({
         name: 'R0 never wrote lb_* (schema SQL and digest of every lb_* table)',
         pass: JSON.stringify(readDb(path, lbDigests)) === JSON.stringify(lbBefore),
@@ -460,17 +641,45 @@ export async function runDrill(opts: {
       })
       // ---- roll forward (the room-open path)
       let rfError: string | null = null
+      const tr = Date.now()
       try {
         await side.rollForward(boardId)
       } catch (e) {
         rfError = (e as Error).message.replace(/[^a-z0-9 ():_-]/gi, '').slice(0, 80)
       }
+      const rollForwardWallMs = Date.now() - tr
       const report = JSON.parse(readReport(reportDir, boardId)) as RollForwardReport
       checks.push({
         name: 'roll-forward ran',
         pass: rfError === null && report.ok === true && report.cycle === cycle,
-        ...(rfError ? { detail: rfError } : {}),
+        ...(rfError || report.reason
+          ? {
+              detail: [rfError, report.reason, report.failures?.map((f) => `${f.id} ${f.code}`).join(' ')]
+                .filter(Boolean)
+                .join('; '),
+            }
+          : {}),
       })
+      let afterRf: AfterRollForward | null = null
+      if (side.afterRollForward && rfError === null) {
+        afterRf = await side.afterRollForward(boardId)
+        checks.push(
+          {
+            name: 'after the roll-forward: every z-order key valid and unique (live and tombstones), labels after their containers',
+            pass: afterRf.indexProblems.length === 0,
+            detail: afterRf.indexProblems.slice(0, 10).join('; '),
+          },
+          {
+            name: "after the roll-forward: A's tab converges with the room's test snapshot",
+            pass: afterRf.converged,
+          },
+          {
+            name: 'after the roll-forward: A pushed 0 ops on opening the board',
+            pass: afterRf.pushes === 0,
+            detail: [String(afterRf.pushes), ...afterRf.ops].join('; '),
+          },
+        )
+      }
       await side.release(boardId)
       const after = lbRows(path)
       const data = (id: string) => JSON.parse(after.get(id)?.data ?? 'null') as Record<string, unknown> | null
@@ -486,8 +695,10 @@ export async function runDrill(opts: {
           pass: after.get(el(t.aDelete.id))?.deleted === 1,
         })
       checks.push({
-        name: 'A created an element: byte-identical',
-        pass: JSON.stringify(after.get(aNew)) === JSON.stringify(beforeR0.get(aNew)),
+        name: 'A created an element: present and byte-identical',
+        pass:
+          beforeR0.get(aNew)?.deleted === 0 &&
+          JSON.stringify(after.get(aNew)) === JSON.stringify(beforeR0.get(aNew)),
       })
       // B's edits
       checks.push({ name: 'B added a shape: present', pass: after.get(el(added))?.deleted === 0 })
@@ -498,11 +709,26 @@ export async function runDrill(opts: {
           name: 'B edited page 2: moved +40',
           pass: near(Number(data(el(t.page2.id))?.x), x0(t.page2.id) + 40),
         })
-      if (t.frame)
+      if (t.frame) {
         checks.push({
           name: 'B moved the frame: +120',
           pass: near(Number(data(el(t.frame.id))?.x), x0(t.frame.id) + 120),
         })
+        // every other descendant (children of nested frames and groups included) moved with it; arrows
+        // are re-snapped to their targets, so they are left out
+        const moved = t.frameDescendants
+          .filter((id) => id !== t.child?.id)
+          .map((id) => el(id))
+          .filter((id) => beforeR0.get(id)?.deleted === 0 && beforeR0.get(id)?.type !== 'arrow')
+        const off = moved.filter(
+          (id) => !near(Number(data(id)?.x), Number(JSON.parse(beforeR0.get(id)?.data ?? '{}').x) + 120),
+        )
+        checks.push({
+          name: 'B moved the frame: every other descendant moved with it (+120)',
+          pass: off.length === 0,
+          detail: `${moved.length} descendants, ${off.length} off${off.length ? `: ${off.slice(0, 10).join(', ')}` : ''}`,
+        })
+      }
       if (t.bReorder && t.lowest) {
         // below every sibling it had in tldraw (the same parent), in ours' order
         const me = el(t.bReorder.id)
@@ -517,6 +743,7 @@ export async function runDrill(opts: {
         checks.push({
           name: 'B re-ordered a shape to the bottom of its page',
           pass: others.every((r) => (after.get(me)?.idx ?? '') < r.idx),
+          detail: me,
         })
       }
       if (t.conflict) {
@@ -524,13 +751,16 @@ export async function runDrill(opts: {
         checks.push({
           name: 'the planted conflict is listed (element, style)',
           pass: report.conflicts.some((c) => c.elementId === id && c.group === 'style'),
+          detail: `${id} (${beforeR0.get(id)?.type ?? 'missing'})`,
         })
         const prev = readDb(
           path,
           (db) =>
-            db.prepare(`SELECT data FROM lb_prev_${report.cycle}_elements WHERE id = ?`).get(id) as
-              | { data: string }
-              | undefined,
+            (db
+              .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?")
+              .get(`lb_prev_${report.cycle}_elements`)
+              ? db.prepare(`SELECT data FROM lb_prev_${report.cycle}_elements WHERE id = ?`).get(id)
+              : undefined) as { data: string } | undefined,
         )
         checks.push({
           name: "ours' value of the conflict is kept in lb_prev_<cycle>_elements",
@@ -545,15 +775,33 @@ export async function runDrill(opts: {
           .filter(Boolean)
           .map((s) => el((s as Rec).id)),
       ])
-      const frameKids = t.frame
-        ? [...beforeR0.values()]
-            .filter((r) => JSON.parse(r.data).frameId === el(t.frame?.id ?? ''))
-            .map((r) => r.id)
-        : []
-      const isTouched = (id: string) =>
+      // the moved frame's members (its elements' frameId) and every tldraw descendant (nested frames and
+      // groups included): B's frame move moves them all
+      const frameKids = new Set(
+        t.frame
+          ? [...beforeR0.values()]
+              .filter((r) => JSON.parse(r.data).frameId === el(t.frame?.id ?? ''))
+              .map((r) => r.id)
+          : [],
+      )
+      const frameDesc = new Set(t.frameDescendants.map((id) => el(id)))
+      const touchedShape = (id: string) =>
         touchedOwners.has(id.split('.')[0] as string) ||
-        frameKids.includes(id) ||
-        beforeR0.get(id)?.type === 'arrow'
+        frameDesc.has(id.split('.')[0] as string) ||
+        frameKids.has(id)
+      // an arrow is touched only when an end is bound to a touched element (the room re-snaps it, and its
+      // label follows); every other arrow must be byte-identical too (V3: every arrow was left out)
+      const arrowTouched = (id: string) => {
+        const r = beforeR0.get(id)
+        if (r?.type !== 'arrow') return false
+        const d = JSON.parse(r.data) as {
+          startBinding?: { elementId?: string } | null
+          endBinding?: { elementId?: string } | null
+        }
+        return [d.startBinding?.elementId, d.endBinding?.elementId].some((e) => !!e && touchedShape(e))
+      }
+      const isTouched = (id: string) =>
+        touchedShape(id) || arrowTouched(id) || arrowTouched(id.split('.')[0] as string)
       const untouched = [...beforeR0.keys()].filter((id) => !isTouched(id))
       const changed = untouched.filter(
         (id) => JSON.stringify(after.get(id)) !== JSON.stringify(beforeR0.get(id)),
@@ -561,7 +809,14 @@ export async function runDrill(opts: {
       checks.push({
         name: 'untouched elements byte-identical',
         pass: changed.length === 0,
-        detail: `${untouched.length} untouched, ${changed.length} changed`,
+        detail: `${untouched.length} untouched, ${changed.length} changed${
+          changed.length
+            ? `: ${changed
+                .slice(0, 10)
+                .map((id) => `${id} [${changedKeys(beforeR0.get(id), after.get(id)).join(' ')}]`)
+                .join(', ')}`
+            : ''
+        }`,
       })
       const kept = [...beforeR0.keys()].filter(
         (id) => !(t.bReorder && id.split('.')[0] === el(t.bReorder.id)),
@@ -584,17 +839,61 @@ export async function runDrill(opts: {
         counts: report.counts,
         resnap: report.resnap,
         invariants: report.invariants,
+        violations: report.violations?.length ?? null,
         ms: report.ms,
+        wallMs: { a: aRes.ms ?? null, standIn: standInMs, rollForward: rollForwardWallMs },
+        aPushes: aRes.pushes ?? null,
+        aClock: aRes.clock ?? null,
+        walAfterStandIn,
+        afterRollForward: afterRf
+          ? {
+              trigger: afterRf.trigger,
+              elements: afterRf.elements,
+              snapshotHash: afterRf.snapshotHash.slice(0, 16),
+              mergedHash: report.mergedHash ? report.mergedHash.slice(0, 16) : null,
+              snapshotEqualsMerged: report.mergedHash === afterRf.snapshotHash,
+            }
+          : null,
       })
     }
   } finally {
     await svc.close()
   }
-  const ok = cycles.every((c) => c.checks.every((k) => k.pass)) && bornAfter.every((k) => k.pass)
-  return { boardId, ok, excalidraw: opts.excalidraw, cycles, bornAfter, applicable }
+  const ok =
+    setup.every((k) => k.pass) &&
+    cycles.every((c) => c.checks.every((k) => k.pass)) &&
+    bornAfter.every((k) => k.pass)
+  return {
+    boardId,
+    ok,
+    excalidraw: opts.excalidraw,
+    conversion,
+    setup,
+    cycles,
+    bornAfterBoard: bornId,
+    bornAfter,
+    applicable,
+  }
 }
 
 const near = (a: number, b: number) => Number.isFinite(a) && Math.abs(a - b) < 0.01
+/** The row columns and top-level element keys that differ (names only, never values). */
+function changedKeys(a: LbRow | undefined, b: LbRow | undefined): string[] {
+  if (!a || !b) return [a ? 'removed' : 'added']
+  const cols = (['clock', 'idx', 'deleted', 'type', 'version', 'gclock'] as const).filter(
+    (k) => a[k] !== b[k],
+  )
+  const da = JSON.parse(a.data) as Record<string, unknown>
+  const db = JSON.parse(b.data) as Record<string, unknown>
+  const keys = [...new Set([...Object.keys(da), ...Object.keys(db)])].filter(
+    (k) => JSON.stringify(da[k]) !== JSON.stringify(db[k]),
+  )
+  return [...cols.map((c) => `col:${c}`), ...keys]
+}
+function readConvertReport(dir: string, boardId: string): ConvertReport | null {
+  const p = join(dir, `${boardId}.json`)
+  return existsSync(p) ? (JSON.parse(readFileSync(p, 'utf8')) as ConvertReport) : null
+}
 function readReport(dir: string, boardId: string): string {
   const p = join(dir, `${boardId}.rollforward.json`)
   return existsSync(p) ? readFileSync(p, 'utf8') : '{}'
@@ -636,7 +935,7 @@ if (import.meta.main) {
   })
   mkdirSync(dirname(resolve(values.out)), { recursive: true })
   writeFileSync(resolve(values.out), `${JSON.stringify(report, null, 1)}\n`)
-  const all = [...report.cycles.flatMap((c) => c.checks), ...report.bornAfter]
+  const all = [...report.setup, ...report.cycles.flatMap((c) => c.checks), ...report.bornAfter]
   console.log(
     `drill ${report.boardId}: ${report.ok ? 'PASS' : 'FAIL'} (${all.filter((c) => c.pass).length}/${all.length} checks)`,
   )

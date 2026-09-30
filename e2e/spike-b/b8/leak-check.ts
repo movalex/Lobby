@@ -14,10 +14,16 @@
 // the values of structural keys (ids and tldraw schema enums: typeName, type, color, …), numbers and
 // short strings are not searched (they would match everywhere and are not
 // board content); the report says how many were skipped.
+//
+// How a string is found (leak-match.ts, since V3's part-3 check): verbatim, JSON- or HTML-escaped,
+// wrapped (line breaks inserted), or in part (word windows); a string under 8 characters only as a whole
+// token, counted apart and never gating; a string also in the repo's own sources (templates, converter
+// fixtures) counted apart as repo-shared.
 
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
+import { countMatches, needlesOf, normalizeText } from './leak-match.ts'
 
 const REPO = resolve(import.meta.dirname, '../../..')
 const B8 = process.env.SPIKE_B8_DIR
@@ -269,8 +275,34 @@ const collect = (p: string, depth = 0) => {
 }
 for (const p of [...(noDefaults ? [] : defaults), ...extraScans]) collect(p)
 
+// the repo's own sources a board made from a template shares text with (public, not board content)
+const repoFiles: string[] = []
+const collectRepo = (p: string, depth = 0) => {
+  if (!existsSync(p) || depth > 12) return
+  const st = statSync(p)
+  if (st.isFile()) {
+    if (/.(ts|json)$/.test(p) && st.size <= MAX_BYTES) repoFiles.push(p)
+    return
+  }
+  if (!st.isDirectory()) return
+  for (const n of readdirSync(p)) if (n !== 'node_modules') collectRepo(join(p, n), depth + 1)
+}
+collectRepo(join(REPO, 'packages/templates/src'))
+collectRepo(join(REPO, 'packages/tldraw-import/test/fixtures'))
+const repoText = normalizeText(repoFiles.map((f) => readFileSync(f, 'utf8')).join(' '))
+const sharedMemo = new Map<string, boolean>()
+const isRepoShared = (needle: string) => {
+  const known = sharedMemo.get(needle)
+  if (known !== undefined) return known
+  const v = repoText.includes(needle)
+  sharedMemo.set(needle, v)
+  return v
+}
+
+const needles = needlesOf(strings)
 let matches = 0
-const list = [...strings]
+let shortMatches = 0
+let repoShared = 0
 for (const f of files) {
   let text = ''
   try {
@@ -278,10 +310,13 @@ for (const f of files) {
   } catch {
     continue
   }
-  for (const s of list) if (text.includes(s)) matches++
+  const m = countMatches(text, needles, isRepoShared)
+  matches += m.strings
+  shortMatches += m.short
+  repoShared += m.repoShared
 }
 
 console.log(
-  `leak-check: ${matches} matches (boards read: ${boards}, strings searched: ${list.length}, short/id/enum values not searched: ${skipped}, files scanned: ${files.length})`,
+  `leak-check: ${matches} matches (boards read: ${boards}, strings searched: ${needles.long.length} and ${needles.windows.length} word windows, short/id/enum values not searched: ${skipped}, files scanned: ${files.length}; not gating: ${shortMatches} whole-token matches of ${needles.short.length} short strings, ${repoShared} repo-shared)`,
 )
 process.exit(matches === 0 ? 0 : 1)

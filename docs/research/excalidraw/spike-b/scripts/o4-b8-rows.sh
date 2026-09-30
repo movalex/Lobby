@@ -8,7 +8,7 @@
 #   staging    (with --staging) the same conversion rows and fixed point on copies of the restored staging
 #              boards, every data dir, TEMP/TMP, log, report and Playwright output inside SPIKE_B8_DIR
 #              (project b8-staging: traces, videos and screenshots off), then the leak check (a count only).
-# NOT here: the "open in two browsers" row and the drill (they need conversion on open).
+# NOT here: the "open in two browsers" row and the drill (they need conversion on open): o4-b8-open.sh.
 #
 #   bash docs/research/excalidraw/spike-b/scripts/o4-b8-rows.sh <repo-root> <out-dir> [--staging]
 #
