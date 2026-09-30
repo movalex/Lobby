@@ -12,6 +12,7 @@ import {
   expect,
   items,
   sceneToScreen,
+  selectNone,
   setTool,
   setViewport,
   test,
@@ -65,7 +66,14 @@ test('the feature host renders the registries: dock, top bar, overlays, the tool
 
   // a pinned top-bar item and the toolbar host slot
   await expect(a.page.getByTestId('topbar').getByTestId('probe-topbar')).toBeVisible()
-  await expect(a.page.locator('[data-lobby-slot="toolbar"] [data-testid="probe-toolbar"]')).toBeVisible()
+  // a host slot takes ONE provider: once canvas-ux (3a) provides the toolbar, the probe's is refused
+  // (CR-3A-2), so the slot renders whichever feature holds it
+  const toolbarSlot = a.page.locator('[data-lobby-slot="toolbar"]')
+  await expect(toolbarSlot).toBeVisible()
+  const toolbarFeature = await toolbarSlot.getAttribute('data-feature')
+  await expect(
+    toolbarSlot.getByTestId(toolbarFeature === 'probe' ? 'probe-toolbar' : 'main-toolbar'),
+  ).toBeVisible()
 
   // a scene overlay sits on its element and follows the camera
   await expectPinAt(a.page, { x: 200, y: 200 })
@@ -149,7 +157,10 @@ test('the feature host renders the registries: dock, top bar, overlays, the tool
   await a.page.waitForTimeout(300)
   expect((await items(a.page)).length).toBe(before)
 
-  // focus mode: the chrome and the layers go, a layer that says `show` stays
+  // focus mode: the chrome and the layers go, a layer that says `show` stays. Nothing selected first: a
+  // selection brings canvas-ux's style panel (3a) into the top-right corner, over the probe's button
+  // (CR-3A-2)
+  await selectNone(a.page)
   await a.page.getByTestId('probe-screen').click()
   await expect(a.page.getByTestId('lobby-board')).toHaveAttribute('data-focus-mode', 'true')
   await expect(a.page.getByTestId('topbar')).toHaveCount(0)

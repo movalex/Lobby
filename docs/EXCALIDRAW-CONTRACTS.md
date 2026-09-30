@@ -139,8 +139,8 @@ The board page (2C) builds the canvas with `createLobbyCanvas({port, registries,
 | `text.replace` | 2C | board page (real with the board handles) |
 | `styles.next` | 2C | board page (real with the board handles) |
 | `styles.setNext` | 2C | board page (real with the board handles) |
-| `styles.of` | 3a | stub |
-| `styles.apply` | 3a | stub |
+| `styles.of` | 3a | part (real) |
+| `styles.apply` | 3a | part (real) |
 | `presence.peers` | 2C | board page (real with the board handles) |
 | `presence.peer` | 2C | board page (real with the board handles) |
 | `follow.current` | 3c | stub |
@@ -173,7 +173,7 @@ The board page (2C) builds the canvas with `createLobbyCanvas({port, registries,
 | `on:docChanged` | 2C | board page (real with the board handles) |
 | `on:followChanged` | 3c | stub |
 
-99 members: 26 C0 port, 17 composed, 39 board page, 17 stubs (3b 5, 3a 2, 3c 4, 3e 4, 3g 2).
+99 members: 26 C0 port, 17 composed, 39 board page, 2 landed parts, 15 stubs (3b 5, 3c 4, 3e 4, 3g 2).
 
 ### 2.3 Parts: no owner edits another owner's file
 

@@ -125,10 +125,17 @@ export interface BoardHandles {
 
 /**
  * How each member is provided today: the C0 port; composed here from port members; the board page's
- * (real when createLobbyCanvas gets the board handles, a stub naming 2C on a bare port); or a stub for
- * its owner.
+ * (real when createLobbyCanvas gets the board handles, a stub naming 2C on a bare port); a wave-3
+ * owner's landed part (real everywhere); or a stub for its owner.
  */
-export type MemberStatus = 'core' | 'composed' | 'board' | 'stub'
+export type MemberStatus = 'core' | 'composed' | 'board' | 'part' | 'stub'
+
+/**
+ * Members a wave-3 owner has landed in its part (./parts/*.ts): real on a bare port and on the board page
+ * (status `part`). CR-3A-1 (docs/EXCALIDRAW-CONTRACTS.md §12): each owner adds its paths here when its
+ * part lands, instead of editing the rows below.
+ */
+const LANDED_PARTS: ReadonlySet<string> = new Set(['styles.of', 'styles.apply'])
 
 /** 2C's members composed from port members alone (the rest of 2C's are the board page's). */
 const COMPOSED_BY_2C: ReadonlySet<string> = new Set([
@@ -267,7 +274,14 @@ export const LOBBY_CANVAS_MEMBERS: readonly MemberInfo[] = [
     ([path, owner]): MemberInfo => ({
       path,
       owner,
-      status: owner !== '2C' ? 'stub' : COMPOSED_BY_2C.has(path) ? 'composed' : 'board',
+      status:
+        owner !== '2C'
+          ? LANDED_PARTS.has(path)
+            ? 'part'
+            : 'stub'
+          : COMPOSED_BY_2C.has(path)
+            ? 'composed'
+            : 'board',
     }),
   ),
 ]
