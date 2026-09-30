@@ -40,7 +40,7 @@ import { type Db, pgErrorCode, type Queryable } from '@draftroom/db'
 import { snapshotBodies } from '../features/history/snapshot-store.ts'
 import type { BlobStore } from './blobs.ts'
 import { originalKey } from './blobs.ts'
-import { parseBoardRefs, type VersionRef, versionsInCheckpoint } from './gc-refs.ts'
+import { parseBoardRefs, UnreadableCheckpointBody, type VersionRef, versionsInCheckpoint } from './gc-refs.ts'
 
 const DAY = 86_400_000
 
@@ -108,10 +108,15 @@ const FOREIGN_KEY_VIOLATION = '23503'
  * names (bodies never change). A body that is gone, or that is not JSON, can restore nothing: it is
  * recorded with no references. A read that fails (the blob store is unreachable) is counted and
  * retried by the next pass.
+ *
+ * Bridge release R0: a checkpoint made on the new canvas (row body_version 2, or a body that is not the
+ * tldraw one) can show files this build cannot see. It is counted as unread (the pass is incomplete:
+ * nothing new is marked or deleted) and NOT recorded, because a recorded scan is never repeated and
+ * "no references" would then outlive the roll-forward; the new build reads it.
  */
 async function scanCheckpoints(deps: AssetGcDeps, workspaceId: string): Promise<number> {
-  const pending = await deps.db.query<{ id: string; storage_key: string }>(
-    `SELECT s.id, s.storage_key FROM board_snapshots s
+  const pending = await deps.db.query<{ id: string; storage_key: string; body_version: number }>(
+    `SELECT s.id, s.storage_key, s.body_version FROM board_snapshots s
       WHERE s.workspace_id = $1
         AND NOT EXISTS (SELECT 1 FROM asset_gc_snapshot_scans c WHERE c.snapshot_id = s.id)
       ORDER BY s.created_at, s.id`,
@@ -119,8 +124,19 @@ async function scanCheckpoints(deps: AssetGcDeps, workspaceId: string): Promise<
   )
   const bodies = snapshotBodies(deps.blobs, deps.dataRoot)
   let failed = 0
+  const newCanvas = () => {
+    failed++
+    deps.log.warn(
+      { workspaceId },
+      'asset gc: a checkpoint made on the new canvas cannot be read by this build (the pass is incomplete)',
+    )
+  }
   for (const s of pending.rows) {
     if (deps.shouldStop?.()) return failed + 1
+    if (Number(s.body_version) !== 1) {
+      newCanvas()
+      continue
+    }
     let raw: string | null
     try {
       raw = await bodies.read(s.storage_key)
@@ -133,7 +149,11 @@ async function scanCheckpoints(deps: AssetGcDeps, workspaceId: string): Promise<
     if (raw !== null) {
       try {
         refs = versionsInCheckpoint(raw)
-      } catch {
+      } catch (err) {
+        if (err instanceof UnreadableCheckpointBody) {
+          newCanvas()
+          continue
+        }
         deps.log.warn(
           { snapshotId: s.id },
           'asset gc: checkpoint body is not valid JSON (it restores nothing)',
@@ -216,6 +236,16 @@ async function gatherReferences(deps: AssetGcDeps, workspaceId: string): Promise
       if (!refs) throw new Error('unexpected asset-refs answer')
       for (const r of refs.canvas) versions.add(r.versionId)
       for (const r of refs.deleted) versions.add(r.versionId)
+      // Bridge release R0: a converted board's new-canvas elements were not read. Its refs count (they
+      // clear marks), but the board was not read whole, so the pass is incomplete.
+      if (refs.partial) {
+        boardsFailed++
+        deps.log.warn(
+          { boardId: b.id },
+          'asset gc: the board also holds new-canvas elements this build does not read (the pass is incomplete)',
+        )
+        continue
+      }
       boardsScanned++
     } catch (err) {
       boardsFailed++

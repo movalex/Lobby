@@ -41,16 +41,38 @@ export function versionsInRecords(records: Iterable<unknown>): VersionRef[] {
   return [...out.values()]
 }
 
-/** A checkpoint body (history's `draftroom-checkpoint` JSON): the versions its records reference. */
+/**
+ * Bridge release R0: a checkpoint body this build cannot read (not `draftroom-checkpoint` v1: the new
+ * canvas's `lobby-checkpoint` v2 above all). It may show files, so it is never taken as showing none:
+ * the collector counts it as unread (an incomplete pass) and records no scan for it.
+ */
+export class UnreadableCheckpointBody extends Error {
+  constructor() {
+    super('checkpoint body in a format this build does not read')
+    this.name = 'UnreadableCheckpointBody'
+  }
+}
+
+/**
+ * A checkpoint body (history's `draftroom-checkpoint` JSON, v1): the versions its records reference.
+ * Throws SyntaxError when it is not JSON, UnreadableCheckpointBody when it is JSON of another format.
+ */
 export function versionsInCheckpoint(raw: string): VersionRef[] {
-  const body = JSON.parse(raw) as { documents?: unknown }
-  const docs = Array.isArray(body?.documents) ? body.documents : []
+  const body = JSON.parse(raw) as { format?: unknown; version?: unknown; documents?: unknown } | null
+  if (!isObject(body) || body.format !== 'draftroom-checkpoint' || body.version !== 1)
+    throw new UnreadableCheckpointBody()
+  const docs = Array.isArray(body.documents) ? body.documents : []
   return versionsInRecords(docs.map((d) => (isObject(d) ? d.state : null)))
 }
 
 export interface BoardRefs {
   canvas: VersionRef[]
   deleted: VersionRef[]
+  /**
+   * Bridge release R0: sync read only part of the board (a converted board's new-canvas elements are
+   * not read by this build; sync's `newCanvasTables: true`). Its refs count, the pass is incomplete.
+   */
+  partial: boolean
 }
 
 const isRef = (v: unknown): v is VersionRef =>
@@ -65,5 +87,5 @@ export function parseBoardRefs(value: unknown, boardId: string): BoardRefs | nul
   const { canvas, deleted } = value
   if (!Array.isArray(canvas) || !Array.isArray(deleted)) return null
   if (!canvas.every(isRef) || !deleted.every(isRef)) return null
-  return { canvas, deleted }
+  return { canvas, deleted, partial: value.newCanvasTables === true }
 }

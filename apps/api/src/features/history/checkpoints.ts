@@ -14,8 +14,8 @@
 //                   through before-change.ts (R10).
 //
 // Every one is read from the sync server's snapshot (a read of the room's storage: editing never
-// waits for it) and is skipped when its content equals the board's newest checkpoint of any kind
-// (content hash, snapshot-rows.ts). Work on one board is serialized in this process; a claim column
+// waits for it) and is skipped when its content equals the board's newest tldraw (v1) checkpoint of
+// any kind (content hash, snapshot-rows.ts). Work on one board is serialized in this process; a claim column
 // keeps two api instances apart. A sync server that cannot be reached is retried with a backoff.
 //
 // Retention (retention.ts) runs after every automatic checkpoint of a board and over all boards every
@@ -276,9 +276,11 @@ export function createCheckpointService(
       throw e
     }
     const made = checkpointBodyOf(boardId, snap)
+    // Compared with the newest tldraw checkpoint only (bridge release R0): a checkpoint made on the new
+    // canvas (body_version 2) holds other content, and its clock is not a tldraw documentClock.
     const newest = await db.maybeOne<{ content_hash: string | null; document_clock: number }>(
       `SELECT content_hash, document_clock::float8 AS document_clock FROM board_snapshots
-        WHERE board_id = $1 ORDER BY created_at DESC, id DESC LIMIT 1`,
+        WHERE board_id = $1 AND body_version = 1 ORDER BY created_at DESC, id DESC LIMIT 1`,
       [boardId],
     )
     const unchanged =

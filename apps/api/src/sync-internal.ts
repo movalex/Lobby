@@ -62,6 +62,36 @@ export class SyncNewCanvasBoard extends SyncUnavailable {
   }
 }
 
+/**
+ * A snapshot answer as this build reads it: a tldraw RoomSnapshot, which always has a `documents` array
+ * (a board without storage answers an empty board's records). Anything else, the Excalidraw sync's
+ * `lobby-elements` snapshot above all (docs/EXCALIDRAW-MIGRATION.md §3.7), would read as an EMPTY
+ * board: an empty checkpoint that lists and restores as a real one, an empty duplicate or export. So it
+ * is refused as SyncUnavailable (the callers retry later or answer 503), e.g. while the api and sync
+ * deploys of a rollback to R0 overlap (bridge release R0).
+ */
+export function tldrawSnapshotOf(value: unknown): RoomSnapshotJson {
+  const v = value as { documents?: unknown } | null
+  if (!v || typeof v !== 'object' || !Array.isArray(v.documents))
+    throw new SyncUnavailable('the sync server answered with a snapshot that is not a tldraw one')
+  return value as RoomSnapshotJson
+}
+
+/**
+ * The client with every snapshot answer checked (tldrawSnapshotOf), whichever client it is (the HTTP
+ * one, or a test's): what app.ts hands to the features. Every other member is the client's own.
+ */
+export function checkedSnapshots(client: SyncInternalClient): SyncInternalClient {
+  const snapshot = async (boardId: string) => tldrawSnapshotOf(await client.snapshot(boardId))
+  return new Proxy(client, {
+    get(target, prop) {
+      if (prop === 'snapshot') return snapshot
+      const value = Reflect.get(target, prop, target)
+      return typeof value === 'function' ? value.bind(target) : value
+    },
+  })
+}
+
 /** A failed answer: SyncNewCanvasBoard for sync's 409 `new-canvas`, else SyncUnavailable. */
 async function failure(res: Response, what: string): Promise<SyncUnavailable> {
   if (res.status === 409) {
@@ -95,7 +125,7 @@ export function createHttpSyncInternalClient(opts: {
     async snapshot(boardId) {
       const res = await call(`/internal/boards/${encodeURIComponent(boardId)}/snapshot`)
       if (!res.ok) throw await failure(res, 'snapshot')
-      return (await res.json()) as RoomSnapshotJson
+      return tldrawSnapshotOf(await res.json())
     },
     async seed(boardId, snapshot) {
       const res = await call(`/internal/boards/${encodeURIComponent(boardId)}/seed`, {

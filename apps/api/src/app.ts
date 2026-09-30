@@ -37,7 +37,7 @@ import { registerMemberRoutes } from './routes/members.ts'
 import { registerTicketRoutes } from './routes/tickets.ts'
 import { registerWorkspaceRoutes } from './routes/workspaces.ts'
 import { sessionUserToUser } from './serialize.ts'
-import { createHttpSyncInternalClient, type SyncInternalClient } from './sync-internal.ts'
+import { checkedSnapshots, createHttpSyncInternalClient, type SyncInternalClient } from './sync-internal.ts'
 import type { VersionChange } from './worker/jobs.ts'
 import { WORKER_PREFIX, type WorkerDeps, workerPlugin } from './worker/routes.ts'
 
@@ -375,9 +375,11 @@ async function buildServer(
     ...ctx,
     blobs,
     events,
-    sync:
+    // Bridge release R0: a snapshot that is not a tldraw one is refused, never read as an empty board.
+    sync: checkedSnapshots(
       deps.syncInternal ??
-      createHttpSyncInternalClient({ baseUrl: config.syncInternalUrl, secret: config.internalSecret }),
+        createHttpSyncInternalClient({ baseUrl: config.syncInternalUrl, secret: config.internalSecret }),
+    ),
     layout,
   }
   registerEventRoutes(app, features)

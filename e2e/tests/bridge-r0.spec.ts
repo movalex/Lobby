@@ -109,6 +109,16 @@ test('a board born on the new canvas is refused with its message and left untouc
         'Made on the new canvas',
         'This board was made on the new canvas. It opens again after the switch.',
       )
+      // it says what "the switch" is, and offers the way back instead of a Retry that meets the same refusal
+      await expect(page.getByTestId('sync-error-note')).toHaveText(
+        'Lobby is back on its previous canvas for now. Boards made on the new canvas are kept as they are and open again when it returns.',
+      )
+      await expect(page.getByTestId('sync-retry')).toHaveCount(0)
+      const back = page.getByTestId('sync-boards')
+      await expect(back).toHaveText('Go to your boards')
+      await back.click()
+      await expect(page).not.toHaveURL(new RegExp(`/b/${board}`))
+      await expect(page.getByTestId('sync-error')).toHaveCount(0)
     } finally {
       await context.close()
     }

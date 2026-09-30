@@ -104,6 +104,20 @@ describe('sync uri: a fresh ticket on every (re)connect', () => {
     }
   })
 
+  it('409 NEW_CANVAS (a board made on the new canvas, bridge release R0): tell the page, never retry', async () => {
+    const fetchTicket = vi.fn(async () => {
+      throw new ApiError('conflict', 409, 'NEW_CANVAS', 'This board was made on the new canvas.')
+    })
+    const onNewCanvas = vi.fn()
+    const { t, onAccessLost, onSignedOut, sleeps } = setup(fetchTicket, { onNewCanvas })
+    expect(await settles(t.uri())).toBe(false)
+    expect(onNewCanvas).toHaveBeenCalledTimes(1)
+    expect(onAccessLost).not.toHaveBeenCalled()
+    expect(onSignedOut).not.toHaveBeenCalled()
+    expect(fetchTicket).toHaveBeenCalledTimes(1)
+    expect(sleeps).toEqual([])
+  })
+
   it('401 means the session ended: sign out, do not retry', async () => {
     const fetchTicket = vi.fn(async () => {
       throw new ApiError('unauthorized', 401, 'X', 'no')
