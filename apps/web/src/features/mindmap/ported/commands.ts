@@ -4,9 +4,9 @@
 
 import { downloadBlob } from '../../present-export/download.ts'
 import { exportFilename } from '../../present-export/filename.ts'
-import { outlineCsv, outlineMarkdown } from '../outline.ts'
 import type { ExportGate } from './export-gate.ts'
 import { type MindmapKeyboard, selectedTopic } from './keyboard.ts'
+import { outlineCsv, outlineMarkdown } from './outline.ts'
 import type { MindmapRuntime } from './runtime.ts'
 
 /** What the commands need: the runtime, its key queue, the export gate and the feature context's notices. */

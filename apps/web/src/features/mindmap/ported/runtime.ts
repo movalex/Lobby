@@ -14,11 +14,11 @@
 //    as tldraw's side-effect writes ran inside the user's own step. It waits while this tab drags, resizes
 //    or types (a write in the middle would cut the gesture or the typing into two steps), and runs when
 //    the gesture ends or the editor closes.
-//  - Changes from other people are checked 400 ms after they settle. Their own client lays out its
-//    changes, so normally there is nothing to do; when two people changed the same map at once, every
-//    client computes the same layout from the same stored boxes and writes the same positions (a step of
-//    its own). Undo and redo are never followed by a layout write (each step carries its layout; a write
-//    there would clear the redo stack).
+//  - Changes from other people are checked 400 ms after they settle, and only for a map this tab changed in
+//    the last 5 s (when two people changed the same map at once). Their own client lays out its changes,
+//    so normally there is nothing to do; the fix-up joins this tab's last step (never a step of its own)
+//    and is skipped while this tab can redo. Undo and redo are never followed by a layout write (each step
+//    carries its layout; a write there would clear the redo stack).
 //  - Read-only people never write (the server refuses their pushes anyway).
 //
 // The collapse (decided in spike B, B12): only `collapsed` is stored, on the parent's `mindmap` value;
@@ -28,7 +28,8 @@
 // laid out as if expanded), so nothing visible ever lies over a hidden topic and collapsing or expanding
 // moves nothing.
 //
-// Copies (Ctrl+D, paste) become maps of their own through the `customData` duplicate handlers (./copies.ts).
+// Copies (Ctrl+D, paste) keep their originals' values (the `customData` duplicate handlers in ./index.tsx)
+// and become maps of their own right after the copy, in the same undo step (`normalizeCopies`).
 
 import { MINDMAP_MAX_DEPTH, type MindmapSide } from '@draftroom/contracts'
 import type { CanvasChange, CanvasElement, LobbyCanvas } from '../../../canvas/api/index.ts'

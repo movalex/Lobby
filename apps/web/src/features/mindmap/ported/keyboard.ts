@@ -12,12 +12,16 @@
 //
 // Never losing a keystroke. A new topic's editor opens through the text lease: between the Tab (or Enter)
 // and the grant, the editor is "pending" and the board page keeps printable keys, Enter and Backspace in
-// the lease's buffer (replayed into the editor on the grant) and stops the rest. So this listens to the
-// input stream's key-downs while its own new topic is pending (a passive observer: `on('input')`), keeps
-// them in order, and when the editor opens it puts the words typed before the first Tab, Enter, Shift+Tab
-// or Esc into the topic (replacing what the replay typed, which turned an Enter into a new line) and runs
-// the key itself; the keys after it wait for the next topic's editor. "Idea<Tab>Detail<Enter>Other" typed
-// at full speed builds the same map as typed slowly, as it does on the tldraw page.
+// the lease's buffer (replayed into the editor on the grant) and stops the rest, feature keys included. So
+// while its own new topic is pending this observes the TRUSTED key-downs on the board (a passive
+// document-capture listener filtered to the board's container: the input stream's `on('input')` also
+// reports the lease's own synthetic Enter, CR-3D-2), keeps them in order, and when the editor opens it puts
+// the words typed before the first Tab, Enter, Shift+Tab or Esc into the topic (replacing what the replay
+// typed, which turned an Enter into a new line) and runs the key itself; the keys after it wait for the next
+// topic's editor. Esc before the grant cancels the lease: the queued words are then written without an
+// editor (the runtime's `setTopicText`) and an empty new topic is taken back. Keys are held at most
+// HOLD_LIMIT_MS. "Idea<Tab>Detail<Enter>Other" typed at full speed builds the same map as typed slowly, as
+// it does on the tldraw page.
 //
 // A new map's central topic says "Central topic" as a placeholder: it opens with all of its text selected,
 // so the first character typed replaces it.
