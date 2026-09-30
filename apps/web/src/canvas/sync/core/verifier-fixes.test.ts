@@ -60,6 +60,27 @@ describe('V1 N3: a push whose ack was lost is not replayed over what landed afte
     expect(await a.hash()).toBe(await h.roomHash())
   })
 
+  it('behind a reset snapshot (cached, older than the commit) the decision waits for its catch-up: B’s later write stays', async () => {
+    const h = createHarness({ seed: [stored(rect('r1', 'a0', { x: 0 }))] })
+    h.room.snapshotCacheMs = 5_000
+    const a = h.client('alice', { latencyMs: 100 })
+    const b = h.client('bob')
+    const c = h.client('carol') // her join caches the reset snapshot before A's write
+    h.settle()
+    lostAck(h, a, () => a.change('r1', { x: 111 }))
+    b.change('r1', { x: 222 })
+    h.settle()
+    h.room.horizon = h.room.clock // A's `since` is below it: a reset, served from the stale cache
+    reopen(a)
+    h.settle()
+    expect(a.logs.some((l) => l.event === 'lost_held')).toBe(true)
+    expect(h.room.elements.get('r1')?.x).toBe(222)
+    expect(a.get('r1')?.x).toBe(222)
+    expect(a.core.saveStatus.state).toBe('saved')
+    expect(await a.hash()).toBe(await h.roomHash())
+    expect(c.core.pushLog()).toHaveLength(0)
+  })
+
   it('a push lost BEFORE it reached the room is replayed (the control): its value lands', async () => {
     const h = createHarness({ seed: [stored(rect('r1', 'a0', { x: 0 }))] })
     const a = h.client('alice', { latencyMs: 100 })
