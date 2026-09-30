@@ -17,6 +17,7 @@ import { ELEMENT_SCHEMA_VERSION, PROTO } from '@draftroom/canvas-schema/protocol
 import { describe, expect, it } from 'vitest'
 import { HELLO_LIMIT, MAX_LEASES_PER_SESSION } from '../../src/room/element-room.ts'
 import { DRAG_TTL_MS } from '../../src/room/presence.ts'
+import { callInternal } from '../harness/tickets.ts'
 import type { RawClient } from './support/client.ts'
 import {
   arrow,
@@ -455,6 +456,39 @@ describe('V2 lows', () => {
       await obs.until(() => drags().some((d) => 'end' in d && d.end), 'drag end', DRAG_TTL_MS + 5000)
       const late2 = await st.client({ boardId: b, user: 'late2' })
       expect(late2.welcome?.drags).toEqual([])
+    },
+    T,
+  )
+})
+
+describe('V2: a server write keeps the invariants and the lease (CR 2F-2)', () => {
+  it(
+    'a label of a missing container, a frameId on a rectangle, and text someone is typing are refused; the holder’s next push lands',
+    async () => {
+      const st = await h.stack()
+      const b = newBoardId()
+      const a = await st.client({ boardId: b, user: 'alice' })
+      const t = label('n.t', 'n', { text: 'alice', originalText: 'alice' })
+      await a.create([withLabel(note('n'), t), t, rect('r', { x: 500 })])
+      expect((await a.acquire('n')).type).toBe('lease.grant')
+      const sw = (body: unknown) =>
+        callInternal(st.server.url, 'POST', `/internal/test/boards/${b}/server-write`, { body })
+      expect((await sw({ put: [label('o.t', 'nope', { index: 'a8', x: 900 })] })).status).toBe(500)
+      expect((await sw({ put: [rect('rf', { frameId: 'r', index: 'a9', x: 1200 })] })).status).toBe(500)
+      expect(
+        (await sw({ put: [{ ...a.confirmed.get('n.t'), text: 'server', originalText: 'server' }] })).status,
+      ).toBe(409)
+      const els = await stored(st, b)
+      expect(els.has('o.t')).toBe(false)
+      expect(els.has('rf')).toBe(false)
+      expect(els.get('n.t')?.originalText).toBe('alice')
+      const mine = r0(
+        await a.push([
+          patch(a, 'n.t', { g: { text: { originalText: 'alice more' }, layout: { text: 'alice more' } } }),
+        ]),
+      )
+      expect(mine.ok && !mine.denied).toBe(true)
+      expect(await violations(st, b)).toEqual([])
     },
     T,
   )
