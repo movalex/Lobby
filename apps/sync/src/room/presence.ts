@@ -25,7 +25,16 @@ interface DragState {
   startSent: boolean
   dirty: boolean
   ended: boolean
+  /** the last frame of this drag (the relay ends a drag that has been quiet for DRAG_TTL_MS) */
+  at: number
 }
+
+/**
+ * A relayed drag with no frame for this long ends (V2: a drag never expired, so one editor could keep a
+ * preview up on up to 500 ids for everyone, late joiners included, and B12's hit guard swallowed clicks on
+ * them). A dragging client sends a frame on every pointer move.
+ */
+export const DRAG_TTL_MS = 15_000
 
 interface Peer {
   readonly sid: string
@@ -135,6 +144,7 @@ export class PresenceHub {
         active.dx = round1(drag.dx)
         active.dy = round1(drag.dy)
         active.dirty = true
+        active.at = this.now()
         return
       }
       p.drag = {
@@ -145,6 +155,7 @@ export class PresenceHub {
         startSent: false,
         dirty: true,
         ended: false,
+        at: this.now(),
       }
       return
     }
@@ -155,13 +166,15 @@ export class PresenceHub {
     active.dx = round1(drag.dx)
     active.dy = round1(drag.dy)
     active.dirty = true
+    active.at = this.now()
   }
 
   /** The active drags with their ids (welcome). */
   activeDrags(): DragOut[] {
     const out: DragOut[] = []
+    const now = this.now()
     for (const p of this.peers.values())
-      if (p.drag && !p.drag.ended)
+      if (p.drag && !p.drag.ended && now - p.drag.at <= DRAG_TTL_MS)
         out.push({ sid: p.sid, d: p.drag.d, ids: [...p.drag.ids], dx: p.drag.dx, dy: p.drag.dy })
     return out
   }
@@ -193,8 +206,13 @@ export class PresenceHub {
       }
     const drags: DragOut[] = [...this.pendingDragEnds]
     this.pendingDragEnds.length = 0
+    const now = this.now()
     for (const p of this.peers.values()) {
       const dr = p.drag
+      if (dr && !dr.ended && now - dr.at > DRAG_TTL_MS) {
+        dr.ended = true
+        dr.dirty = true
+      }
       if (!dr?.dirty) continue
       dr.dirty = false
       if (dr.ended) {

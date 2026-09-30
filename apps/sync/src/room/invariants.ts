@@ -71,8 +71,18 @@ function rejectPass(p: PushApplier): boolean {
           revert(w.id, 'LOCKED')
           continue
         }
-        const others = (x.boundElements ?? []).filter(
-          (r: Ref) => r.type === 'text' && r.id !== el.id && p.live(r.id)?.containerId === x.id,
+        // the container's list as stored AND as this push left it: a `b.rm` of its label in the same push
+        // does not make room for a second one (the repairs put the first one back, V2)
+        const refs = [
+          ...((p.get(x.id).before?.boundElements ?? []) as Ref[]),
+          ...((x.boundElements ?? []) as Ref[]),
+        ]
+        const others = refs.filter(
+          (r: Ref, i: number) =>
+            r.type === 'text' &&
+            r.id !== el.id &&
+            refs.findIndex((q) => q.id === r.id) === i &&
+            p.live(r.id)?.containerId === x.id,
         )
         const sameBatch = labelsOf.get(x.id) ?? []
         if (others.length || sameBatch.length) {
@@ -232,14 +242,17 @@ function repairPass(p: PushApplier): void {
         repair(p, cw, 'bound', (c) => {
           c.boundElements = withRef(c.boundElements, { id: el.id, type: 'text' })
         })
-      const old = w.before?.containerId
-      if (old && old !== el.containerId) {
-        const ow = p.get(old)
-        if (ow.el && !ow.el.isDeleted)
-          repair(p, ow, 'bound', (c) => {
-            c.boundElements = withoutRef(c.boundElements, el.id)
-          })
-      }
+    }
+    // a text that stopped being this container's label (moved to another one, or detached: containerId
+    // null) leaves the old container's list; before, only a move did, and a detach left the old
+    // container still listing it (V2)
+    const old = isLabel(w.before) ? (w.before?.containerId as string) : null
+    if (old && old !== (isLabel(el) ? el.containerId : null)) {
+      const ow = p.get(old)
+      if (ow.el && !ow.el.isDeleted)
+        repair(p, ow, 'bound', (c) => {
+          c.boundElements = withoutRef(c.boundElements, el.id)
+        })
     }
     // a frame deleted concurrently: clear the reference
     if (el.frameId) {
@@ -267,6 +280,26 @@ function repairPass(p: PushApplier): void {
     repair(p, w, 'bound', (t) => {
       const out = (t.boundElements as Ref[]).filter(keep)
       t.boundElements = out.length ? out : null
+    })
+  }
+
+  // 4. a container's list never loses a live label that still names it (V2): a `b.rm` of the label (the
+  //    `bound` group is allowed under a lease and a lock) would break the one-to-one rule, and the label
+  //    count of the rejections (which reads the container's list) would then accept a second label. The
+  //    label is put back, a server repair in the same clock
+  for (const w of [...p.worked()]) {
+    if (!w.el || w.el.isDeleted || !w.before) continue
+    const now = (w.el.boundElements ?? []) as Ref[]
+    const lost = ((w.before.boundElements ?? []) as Ref[]).filter(
+      (r) => r.type === 'text' && !now.some((x) => x.id === r.id && x.type === 'text'),
+    )
+    const back = lost.filter((r) => {
+      const t = p.live(r.id)
+      return !!t && t.type === 'text' && t.containerId === w.id
+    })
+    if (!back.length) continue
+    repair(p, w, 'bound', (t) => {
+      for (const r of back) t.boundElements = withRef(t.boundElements, { id: r.id, type: 'text' })
     })
   }
 }
