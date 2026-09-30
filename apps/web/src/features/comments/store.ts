@@ -1,7 +1,8 @@
 // Client state for one open board's comments: threads (from GET + board events), the caller's read
 // marks, UI state (open thread, new-comment composer, hover, filters, Shift+C), per-thread drafts and
-// the notification inbox. Reactive through tldraw atoms (useValue in components). No React, no DOM:
-// unit-tested in Node with a fake API.
+// the notification inbox. Reactive through the cells of the board page's SignalsKit (./cells.ts: tldraw's
+// atoms on the tldraw page, lib/signals on the Excalidraw page; components read them with the kit's
+// useValue). No React, no DOM, no engine: unit-tested in Node with a fake API.
 
 import {
   type CommentAnchor,
@@ -13,8 +14,8 @@ import {
   type CommentThreadVisibility,
   type ListNotificationsResponse,
 } from '@draftroom/contracts'
-import { type Atom, atom } from 'tldraw'
 import type { CommentsApi } from './api.ts'
+import type { Cell, SignalsKit } from './cells.ts'
 import { bodyFromDraft, type Draft, EMPTY_DRAFT, type Mentionable, pruneMentions } from './mentions.ts'
 import { isUnread, type ThreadFilter } from './model.ts'
 import {
@@ -59,6 +60,8 @@ export interface CommentsStoreOptions {
   canComment: boolean
   api: CommentsApi
   storage: KeyValueStorage | null
+  /** The board page's reactive cells (./cells.ts: TLDRAW_SIGNALS or LOBBY_SIGNALS). */
+  signals: SignalsKit
   /** User-facing failures (a toast). */
   onError?(message: string): void
   /** Someone else mentioned me in a comment that just arrived through a board event. */
@@ -75,39 +78,38 @@ const newer = (a: CommentThread, b: CommentThread | undefined) =>
 export class CommentsStore {
   readonly boardId: string
   readonly meId: string
+  /** The board page's cells: components read this store's state with `signals.useValue(cell)`. */
+  readonly signals: SignalsKit
   private readonly api: CommentsApi
   private readonly storage: KeyValueStorage | null
   private readonly opts: CommentsStoreOptions
 
-  readonly threads = atom<Readonly<Record<string, CommentThread>>>('dr-comments.threads', {})
-  readonly reads = atom<Readonly<Record<string, string>>>('dr-comments.reads', {})
-  readonly status = atom<'loading' | 'ready' | 'error'>('dr-comments.status', 'loading')
+  readonly threads: Cell<Readonly<Record<string, CommentThread>>>
+  readonly reads: Cell<Readonly<Record<string, string>>>
+  readonly status: Cell<'loading' | 'ready' | 'error'>
   /** The thread whose popover is open. */
-  readonly openThreadId = atom<string | null>('dr-comments.open', null)
+  readonly openThreadId: Cell<string | null>
   /** A new comment being written at this anchor (the composer is open). */
-  readonly pending = atom<{ anchor: CommentAnchor } | null>('dr-comments.pending', null)
-  readonly hoverThreadId = atom<string | null>('dr-comments.hover', null)
-  readonly pinsHidden: Atom<boolean>
-  readonly showResolved: Atom<boolean>
-  readonly filter = atom<ThreadFilter>('dr-comments.filter', 'open')
-  readonly canComment: Atom<boolean>
-  readonly notifications = atom<ListNotificationsResponse>('dr-comments.notifications', {
-    notifications: [],
-    unreadCount: 0,
-  })
-  readonly mentionables = atom<Mentionable[] | null>('dr-comments.mentionables', null)
+  readonly pending: Cell<{ anchor: CommentAnchor } | null>
+  readonly hoverThreadId: Cell<string | null>
+  readonly pinsHidden: Cell<boolean>
+  readonly showResolved: Cell<boolean>
+  readonly filter: Cell<ThreadFilter>
+  readonly canComment: Cell<boolean>
+  readonly notifications: Cell<ListNotificationsResponse>
+  readonly mentionables: Cell<Mentionable[] | null>
   /**
    * F10: from the server's list. `teamOnly`: I am on the team (the composer offers "Team only");
    * `teamOnlyDefault`: people outside the team can open this board, so it starts on.
    */
-  readonly privacy = atom<CommentPrivacy>('dr-comments.privacy', { teamOnly: false, teamOnlyDefault: false })
+  readonly privacy: Cell<CommentPrivacy>
   /**
    * F10: the new-comment composer's "Team only" choice for the comment being written (reset once it
    * is posted); null follows privacy.teamOnlyDefault.
    */
-  readonly teamOnlyChoice = atom<boolean | null>('dr-comments.team-only-choice', null)
+  readonly teamOnlyChoice: Cell<boolean | null>
   /** Bumped when drafts change, so composers re-read them. */
-  readonly draftsVersion = atom('dr-comments.drafts-version', 0)
+  readonly draftsVersion: Cell<number>
 
   private drafts: Map<string, Draft>
   /** Comments deleted during this session: a list fetched before the delete must not revive them. */
@@ -128,6 +130,23 @@ export class CommentsStore {
     this.meId = opts.meId
     this.api = opts.api
     this.storage = opts.storage
+    const { atom } = opts.signals
+    this.signals = opts.signals
+    this.threads = atom<Readonly<Record<string, CommentThread>>>('dr-comments.threads', {})
+    this.reads = atom<Readonly<Record<string, string>>>('dr-comments.reads', {})
+    this.status = atom<'loading' | 'ready' | 'error'>('dr-comments.status', 'loading')
+    this.openThreadId = atom<string | null>('dr-comments.open', null)
+    this.pending = atom<{ anchor: CommentAnchor } | null>('dr-comments.pending', null)
+    this.hoverThreadId = atom<string | null>('dr-comments.hover', null)
+    this.filter = atom<ThreadFilter>('dr-comments.filter', 'open')
+    this.notifications = atom<ListNotificationsResponse>('dr-comments.notifications', {
+      notifications: [],
+      unreadCount: 0,
+    })
+    this.mentionables = atom<Mentionable[] | null>('dr-comments.mentionables', null)
+    this.privacy = atom<CommentPrivacy>('dr-comments.privacy', { teamOnly: false, teamOnlyDefault: false })
+    this.teamOnlyChoice = atom<boolean | null>('dr-comments.team-only-choice', null)
+    this.draftsVersion = atom('dr-comments.drafts-version', 0)
     this.pinsHidden = atom('dr-comments.pins-hidden', readFlag(opts.storage, pinsHiddenKey(opts.meId)))
     this.showResolved = atom('dr-comments.show-resolved', readFlag(opts.storage, showResolvedKey(opts.meId)))
     this.canComment = atom('dr-comments.can-comment', opts.canComment)

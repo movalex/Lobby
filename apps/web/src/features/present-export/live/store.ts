@@ -4,7 +4,8 @@
 // sends the presenter's slide changes (coalesced: one request in flight, the latest slide wins) and
 // remembers this person's choice per presentation ("following" or "not now") for the tab's lifetime.
 //
-// Plain tldraw atoms, no React: live/controller.ts reacts to them and the UI reads them with useValue.
+// The cells of the board page's SignalsKit (comments/cells.ts: tldraw's atoms on the tldraw page, lib/signals
+// on the Excalidraw page), no React, no engine: the controller reacts to them and the UI reads them.
 
 import {
   isNewerLive,
@@ -16,8 +17,8 @@ import {
   type PresentLiveVersion,
   type PresentSlide,
 } from '@draftroom/contracts'
-import { type Atom, atom, transact } from 'tldraw'
 import type { z } from 'zod'
+import type { Cell, SignalsKit } from '../../comments/cells.ts'
 
 type Method = 'GET' | 'POST'
 /** The subset of ApiClient['request'] the store needs (tests pass a fake). */
@@ -59,6 +60,8 @@ export interface LiveStoreDeps {
   request: LiveRequest
   events: LiveEvents
   storage?: LiveStorage | null
+  /** The board page's reactive cells (comments/cells.ts). */
+  signals: SignalsKit
   setTimeout?: (fn: () => void, ms: number) => unknown
   clearTimeout?: (handle: unknown) => void
 }
@@ -77,18 +80,18 @@ const sameSlide = (p: LivePresentation, s: PresentSlide) =>
 
 export class LiveStore {
   /** The board's live presentation as the api last said (null: nobody presents). */
-  readonly presentation: Atom<LivePresentation | null>
+  readonly presentation: Cell<LivePresentation | null>
   /** What the last applied state changed (for the words shown when a presentation ends). */
-  readonly lastChange: Atom<PresentChange | null>
+  readonly lastChange: Cell<PresentChange | null>
   /** This person's choice for one presentation id (following, or "Not now"). */
-  readonly intent: Atom<{ id: string; intent: LiveIntent } | null>
+  readonly intent: Cell<{ id: string; intent: LiveIntent } | null>
   /**
    * The presentation this browser had when the api restarted (its state is gone): the presenter's tab
    * puts it back with the same id, and followers keep following meanwhile, for RESTART_WAIT_MS.
    */
-  readonly restartLost: Atom<LivePresentation | null>
+  readonly restartLost: Cell<LivePresentation | null>
   /** The first state arrived. */
-  readonly loaded: Atom<boolean>
+  readonly loaded: Cell<boolean>
 
   private readonly deps: LiveStoreDeps
   private version: PresentLiveVersion | null = null
@@ -105,6 +108,7 @@ export class LiveStore {
 
   constructor(deps: LiveStoreDeps) {
     this.deps = deps
+    const { atom } = deps.signals
     this.presentation = atom('dr-live-presentation', null)
     this.lastChange = atom('dr-live-last-change', null)
     this.restartLost = atom('dr-live-restart-lost', null)
@@ -143,7 +147,7 @@ export class LiveStore {
     const before = this.presentation.get()
     const restarted = !!this.version && this.version.epoch !== state.version.epoch
     this.version = state.version
-    transact(() => {
+    this.deps.signals.transact(() => {
       const lost = this.restartLost.get()
       if (state.presentation) {
         if (lost) this.clearRestart()

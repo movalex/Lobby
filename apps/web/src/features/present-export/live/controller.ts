@@ -17,6 +17,7 @@
 import type { LivePresentation, PresentSlide } from '@draftroom/contracts'
 import { type Atom, atom, type Editor, react, type TLShapeId } from 'tldraw'
 import { type BoardRole, can } from '../../../lib/permissions.ts'
+import { TLDRAW_SIGNALS } from '../../comments/tldraw-cells.ts'
 import type { FeatureContext } from '../../types.ts'
 import type { Presenter, PresentLeader } from '../present-session.ts'
 import { type LiveResult, LiveStore } from './store.ts'
@@ -102,6 +103,7 @@ export function mountLive(ctx: FeatureContext, presenter: Presenter): () => void
   const me = { id: ctx.me.user.id, name: ctx.me.user.name }
   const tab = presenterTabId()
   const store = new LiveStore({
+    signals: TLDRAW_SIGNALS,
     boardId: ctx.board.id,
     userId: me.id,
     tab,

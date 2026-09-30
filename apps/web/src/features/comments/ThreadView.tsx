@@ -3,7 +3,6 @@
 
 import type { CommentThread, ThreadComment } from '@draftroom/contracts'
 import { useState } from 'react'
-import { useValue } from 'tldraw'
 import { ownName } from '../../invite/model.ts'
 import { formatDateTime, formatRelativeTime } from '../../lib/format.ts'
 import { initialsFor, safeColor } from '../../lib/identity.ts'
@@ -173,8 +172,8 @@ export function ThreadView({
   onClose(): void
   autoFocusReply: boolean
 }) {
-  const canComment = useValue('dr-comments.can-comment', () => store.canComment.get(), [store])
-  const privacy = useValue('dr-comments.privacy', () => store.privacy.get(), [store])
+  const canComment = store.signals.useValue(store.canComment)
+  const privacy = store.signals.useValue(store.privacy)
   const resolved = thread.status === 'resolved'
   const replies = thread.comments.length - 1
   const teamOnly = thread.visibility === 'team'

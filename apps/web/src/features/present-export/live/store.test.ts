@@ -1,6 +1,15 @@
 import type { LivePresentation, PresentLiveState, PresentLiveVersion } from '@draftroom/contracts'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { LOBBY_SIGNALS, type SignalsKit } from '../../comments/cells.ts'
+import { TLDRAW_SIGNALS } from '../../comments/tldraw-cells.ts'
 import { type LiveRequest, LiveStore, RESTART_WAIT_MS, SLIDE_RETRY_MS } from './store.ts'
+
+// The store runs on either board page's cells (comments/cells.ts): every case runs on both kits.
+const KITS = [
+  ['lib/signals', LOBBY_SIGNALS],
+  ['tldraw atoms', TLDRAW_SIGNALS],
+] as const
+let SIGNALS: SignalsKit = LOBBY_SIGNALS
 
 const ME = 'usr_meeeeeeeeeeee'
 const ANN = 'usr_annnnnnnnnnnn'
@@ -60,7 +69,15 @@ function harness(opts: { storage?: Map<string, string> } = {}) {
     setItem: (k: string, val: string) => void map.set(k, val),
     removeItem: (k: string) => void map.delete(k),
   }
-  const store = new LiveStore({ boardId: BOARD, userId: ME, tab: TAB, request, events, storage })
+  const store = new LiveStore({
+    signals: SIGNALS,
+    boardId: BOARD,
+    userId: ME,
+    tab: TAB,
+    request,
+    events,
+    storage,
+  })
   const emit = (data: unknown) => {
     for (const fn of listeners.get('present.live') ?? []) fn(data)
   }
@@ -88,7 +105,10 @@ const tick = async () => {
   for (let i = 0; i < 5; i++) await Promise.resolve()
 }
 
-describe('LiveStore: applying the api’s states', () => {
+describe.each(KITS)('%s: LiveStore: applying the api’s states', (_, kit) => {
+  beforeEach(() => {
+    SIGNALS = kit
+  })
   it('applies states in version order; another api process (epoch) always wins', () => {
     const { store } = harness()
     expect(store.apply(state(pres({ index: 2 }), 5))).toBe(true)
@@ -134,7 +154,10 @@ describe('LiveStore: applying the api’s states', () => {
   })
 })
 
-describe('LiveStore: the presenter’s slides', () => {
+describe.each(KITS)('%s: LiveStore: the presenter’s slides', (_, kit) => {
+  beforeEach(() => {
+    SIGNALS = kit
+  })
   it('sends only from the presenting tab, skips what the api has, keeps one request in flight', async () => {
     const { store, calls } = harness()
     store.sendSlide({ slideId: 'shape:f1', index: 1, count: 3 })
@@ -177,7 +200,10 @@ describe('LiveStore: the presenter’s slides', () => {
   })
 })
 
-describe('LiveStore: following', () => {
+describe.each(KITS)('%s: LiveStore: following', (_, kit) => {
+  beforeEach(() => {
+    SIGNALS = kit
+  })
   it('remembers the choice per presentation for the tab (sessionStorage)', () => {
     const storage = new Map<string, string>()
     const a = harness({ storage })
