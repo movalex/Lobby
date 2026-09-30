@@ -1300,7 +1300,7 @@ export class MindmapRuntime {
     const depth = this.depthFromMeta(meta)
     const d = new Draft(this.canvas)
     const el = d.get(id)
-    const label = d.labelOf(id)
+    const label = d.labelOf(id) ?? (text ? this.reviveLabel(d, id) : undefined)
     if (label) {
       d.update(label.id, { text, originalText: text })
       if (el?.type === 'rectangle') this.fit(d, id, depth)
@@ -1324,6 +1324,24 @@ export class MindmapRuntime {
     this.layoutNow(d, meta.rootId, { edges: true })
     this.commit(d, 'mindmap: topic text', false)
     return true
+  }
+
+  /**
+   * The topic's own label, deleted a moment ago (the engine drops an empty label when an editor that was
+   * never typed in closes), brought back: a second label would leave the container with two, and the
+   * engine re-binds the first one when it is restored.
+   */
+  private reviveLabel(d: Draft, id: string): CanvasElement | undefined {
+    const c = d.get(id) as unknown as { boundElements?: { id: string; type: string }[] | null } | undefined
+    for (const b of c?.boundElements ?? []) {
+      if (b.type !== 'text') continue
+      const old = d.get(b.id)
+      if (old && old.type === 'text' && old.containerId === id) {
+        d.update(b.id, { isDeleted: false })
+        return d.get(b.id)
+      }
+    }
+    return undefined
   }
 
   /** Arrow keys: select the next topic in that direction (or open a collapsed one). */

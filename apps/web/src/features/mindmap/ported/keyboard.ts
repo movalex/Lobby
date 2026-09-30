@@ -49,6 +49,8 @@ interface Pending {
   mode: EditorMode
   queue: Queued[]
   done: boolean
+  /** the keys are this queue's alone: nothing else sees them (no lease is keeping them) */
+  hold?: boolean
 }
 
 /** How long keys are held for a topic whose editor is on its way before they are let go. */
@@ -172,7 +174,7 @@ export class MindmapKeyboard {
     // Between a topic's editor closing and the next topic's lease request (no lease is pending yet, so
     // the board would take a letter for a tool key and the closing editor would take the rest), the key
     // is the next topic's alone: nothing else sees it. Once the request is out, the lease keeps the keys.
-    if (p.id === null) {
+    if (p.id === null || p.hold) {
       e.preventDefault()
       e.stopImmediatePropagation()
     }
@@ -207,12 +209,16 @@ export class MindmapKeyboard {
       this.drain(id, p.mode, base, p.queue)
       return
     }
-    // The editor never opened. An Esc while it was on its way cancels the open (the board's own rule),
-    // but the keys before it still count: typed that fast, they go in without an editor. Otherwise
-    // (someone else is typing in it) a new topic that stays empty goes back.
-    if (p.queue.some((q) => q.kind === 'key' && q.intent === 'escape'))
-      void this.replayWithoutEditor(id, p.mode, base, p.queue)
-    else this.rt.editorNeverOpened(id)
+    // The editor never opened: an Esc while it was on its way cancelled the open (the board's own rule),
+    // or the lease let it go (the engine's own selection change as it began the editor cancels a pending
+    // open). The keys typed for it still count: typed that fast, they go in without an editor. With none
+    // (someone else is typing in it), a new topic that stays empty goes back.
+    if (p.queue.length) {
+      // keys typed while the replay waits for the engine join its queue, so none acts before it
+      const rp: Pending = { id, mode: p.mode, queue: p.queue, done: false, hold: true }
+      this.pending = rp
+      void this.replayWithoutEditor(rp, base)
+    } else this.rt.editorNeverOpened(id)
   }
 
   /**
@@ -220,7 +226,9 @@ export class MindmapKeyboard {
    * a new label), and Tab, Enter and Shift+Tab act as they would in the editor. Keys still typing when the
    * queue ends open that topic's editor after all.
    */
-  private async replayWithoutEditor(id: string, mode: EditorMode, base: string, queue: Queued[]) {
+  private async replayWithoutEditor(rp: Pending, base: string) {
+    const id = rp.id as string
+    const mode = rp.mode
     // the cancelled open first closes the editor the engine may have begun (its clean-up runs a moment
     // later, selects the topic it was for and may drop the empty label it had open): act once that is over
     const frame = () => new Promise<void>((r) => requestAnimationFrame(() => r()))
@@ -233,35 +241,48 @@ export class MindmapKeyboard {
       i++
     )
       await frame()
-    // Writes the words and checks they stayed: a clean-up that lands after the write (the engine's
-    // submit of the closed editor) is followed by the write again. Never in the middle of a press or a
-    // drag the person has started meanwhile (a write there would end it).
+    // The whole queue is run at once (so a key typed after it never acts before it), and each topic's
+    // words are then checked in the background: a clean-up that lands after the write (the engine's
+    // submit of the editor the cancelled open had begun) is followed by the write again, never in the
+    // middle of a press or a drag the person has started meanwhile (a write there would end it).
     const busy = () => {
       const g = this.canvas.gesture()
       return g !== 'idle' && g !== 'tool' && g !== 'editing-text'
     }
-    const write = async (topic: string, text: string) => {
-      for (let i = 0; i < 20 && !this.disposed; i++) {
+    // checked a few times over five seconds: the clean-up may land late, and more than once
+    const keep = async (topic: string, text: string) => {
+      let at = 0
+      for (const t of [60, 250, 600, 1200, 2000, 3500, 5000]) {
+        await frame()
+        await wait(t - at)
+        at = t
+        if (this.disposed || !this.rt.isTopic(topic)) return
+        if (this.rt.textOf(topic) === text) continue
         for (let j = 0; j < 600 && busy(); j++) await frame()
-        if (this.rt.setTopicText(topic, text)) {
-          await frame()
-          await wait(60)
-          if (this.rt.textOf(topic) === text) return
-        } else await wait(60)
+        this.rt.setTopicText(topic, text)
       }
+    }
+    const write = (topic: string, text: string) => {
+      this.rt.setTopicText(topic, text)
+      // it has words now (even while the write waits for its retry): an Esc does not take it back
+      if (text.trim() && this.rt.fresh?.id === topic) this.rt.fresh = null
+      void keep(topic, text)
     }
     // the selection this replay leaves (a click or a drag since then is the person's, and wins)
     let sel = this.canvas.selection.join()
     let cur = id
     let curMode = mode
     let curBase = base
-    let q = [...queue]
+    // from here on the keys are the board's again (the queue is run at once, below)
+    rp.done = true
+    if (this.pending === rp) this.pending = null
+    let q = [...rp.queue]
     for (let guard = 0; guard < 500; guard++) {
       let words = ''
       let i = 0
       for (; i < q.length && q[i]?.kind === 'text'; i++) words += (q[i] as { text: string }).text
       const text = textAfter(curBase, curMode, words)
-      if (text !== curBase) await write(cur, text)
+      if (text !== curBase) write(cur, text)
       const key = q[i]
       q = q.slice(i + 1)
       if (key?.kind !== 'key') {
