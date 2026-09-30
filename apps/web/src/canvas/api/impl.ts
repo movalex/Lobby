@@ -14,7 +14,8 @@
  *  - members that need the board page's engine (the Excalidraw host, the input layer, the lease, undo,
  *    presence): real when the board page passes its `board` handles (canvas/board/handles.ts), a stub
  *    naming 2C otherwise (a canvas built on a bare port, as in the unit tests);
- *  - every member owned by a wave-3 owner is its part's.
+ *  - every member owned by a wave-3 owner is its part's (a stub naming the owner until the part lands;
+ *    a landed part composed from the canvas's own members is `composed`, CR 3b-1).
  *
  * NODE-SAFE: no engine and no DOM imports here (the board handles bring the engine).
  */
@@ -129,6 +130,18 @@ export interface BoardHandles {
  * its owner.
  */
 export type MemberStatus = 'core' | 'composed' | 'board' | 'stub'
+
+/**
+ * Members of wave-3 owners whose part (./parts/*.ts) has landed and is composed from the canvas's other
+ * members alone, so it is real on any canvas (CR 3b-1: 3b's camera members, ./parts/navigation.ts).
+ */
+const COMPOSED_BY_PARTS: ReadonlySet<string> = new Set([
+  'viewport.zoomTo',
+  'viewport.centerOn',
+  'viewport.ensureVisible',
+  'viewport.zoomStep',
+  'viewport.limits',
+])
 
 /** 2C's members composed from port members alone (the rest of 2C's are the board page's). */
 const COMPOSED_BY_2C: ReadonlySet<string> = new Set([
@@ -267,7 +280,14 @@ export const LOBBY_CANVAS_MEMBERS: readonly MemberInfo[] = [
     ([path, owner]): MemberInfo => ({
       path,
       owner,
-      status: owner !== '2C' ? 'stub' : COMPOSED_BY_2C.has(path) ? 'composed' : 'board',
+      status:
+        owner !== '2C'
+          ? COMPOSED_BY_PARTS.has(path)
+            ? 'composed'
+            : 'stub'
+          : COMPOSED_BY_2C.has(path)
+            ? 'composed'
+            : 'board',
     }),
   ),
 ]
