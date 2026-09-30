@@ -166,11 +166,3 @@ html[data-dr-presenting] .dr-mm-badge {
     height: 36px;
   }
 }
-
-/* The Excalidraw board page (the wave-3 integration): 3a's selection bar is a host slot drawn above every
-   overlay layer, right under the selection, so the topic bar's menu opens upwards there instead of into
-   it. The tldraw page has no [data-lobby-board-canvas] and is unchanged. */
-[data-lobby-board-canvas] .dr-mm-menu {
-  top: auto;
-  bottom: calc(100% + 6px);
-}

@@ -12,6 +12,7 @@
 // every rule and every cost limit; the client only follows its answer.
 import type { CanvasFeature } from '../../../canvas/api/index.ts'
 import '../ai.css'
+import './ai-ported.css'
 import { AiEntryFallback, CONTEXT_MENU, MAIN_MENU, SELECTION_BAR } from './menus.tsx'
 import { AiOverlay } from './Overlay.tsx'
 import { aiJob, aiMenu, aiPanel, setAiCtx } from './runtime.ts'

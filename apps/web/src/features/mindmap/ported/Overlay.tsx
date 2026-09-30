@@ -24,6 +24,7 @@ import {
   TidyIcon,
 } from '../icons.tsx'
 import '../mindmap.css'
+import './mindmap-ported.css'
 import { mindmapOf } from './bridge.ts'
 import {
   addChildTopic,
