@@ -9,6 +9,7 @@ import { revealAnchor } from './geometry.ts'
 import { panelBlocksPopover } from './layout.ts'
 import { browserStorage } from './prefs.ts'
 import { CommentsStore } from './store.ts'
+import { TLDRAW_SIGNALS } from './tldraw-cells.ts'
 import { COMMENT_TOOL_ID, registerCommentTool } from './tool.ts'
 
 /** A short message with one action (tldraw's toasts, bottom right; registered by the overlay). */
@@ -44,6 +45,7 @@ export function controllerFor(ctx: FeatureContext): CommentsController {
     const created: CommentsController = {
       ctx,
       store: new CommentsStore({
+        signals: TLDRAW_SIGNALS,
         boardId: ctx.board.id,
         meId: ctx.me.user.id,
         canComment: canCommentIn(ctx),

@@ -126,16 +126,26 @@ export interface BoardHandles {
 /**
  * How each member is provided today: the C0 port; composed here from port members; the board page's
  * (real when createLobbyCanvas gets the board handles, a stub naming 2C on a bare port); a wave-3
- * owner's landed part (real everywhere); or a stub for its owner.
+ * owner's landed part (./parts/*.ts, real everywhere); or a stub for its owner.
  */
 export type MemberStatus = 'core' | 'composed' | 'board' | 'part' | 'stub'
 
 /**
  * Members a wave-3 owner has landed in its part (./parts/*.ts): real on a bare port and on the board page
- * (status `part`). CR-3A-1 (docs/EXCALIDRAW-CONTRACTS.md §12): each owner adds its paths here when its
- * part lands, instead of editing the rows below.
+ * (status `part`). CR-3A-1, CR 3G-1 and 3c's CR, merged into one set at the wave-3 integration
+ * (docs/EXCALIDRAW-CONTRACTS.md §12, W3-1): each owner adds its paths here when its part lands, instead of
+ * editing the rows below.
  */
-const LANDED_PARTS: ReadonlySet<string> = new Set(['styles.of', 'styles.apply'])
+const LANDED_PARTS: ReadonlySet<string> = new Set([
+  // 3a: parts/styles.ts
+  'styles.of',
+  'styles.apply',
+  // 3c: parts/follow.ts
+  'follow.current',
+  'follow.start',
+  'follow.stop',
+  'on:followChanged',
+])
 
 /** 2C's members composed from port members alone (the rest of 2C's are the board page's). */
 const COMPOSED_BY_2C: ReadonlySet<string> = new Set([

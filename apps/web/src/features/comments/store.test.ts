@@ -1,6 +1,7 @@
 import type { CommentAnchor, CommentThread, ListThreadsResponse } from '@draftroom/contracts'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { CommentsApi } from './api.ts'
+import { LOBBY_SIGNALS, type SignalsKit } from './cells.ts'
 import type { Mentionable } from './mentions.ts'
 import { draftsKey, type KeyValueStorage, pinsHiddenKey } from './prefs.ts'
 import {
@@ -9,6 +10,14 @@ import {
   mayChangeWhoHasAccess,
   NEW_THREAD_DRAFT,
 } from './store.ts'
+import { TLDRAW_SIGNALS } from './tldraw-cells.ts'
+
+// The store runs on either board page's cells (./cells.ts): every case runs on both kits.
+const KITS = [
+  ['lib/signals', LOBBY_SIGNALS],
+  ['tldraw atoms', TLDRAW_SIGNALS],
+] as const
+let SIGNALS: SignalsKit = LOBBY_SIGNALS
 
 const BOARD = 'b-0123456789'
 const ME = 'usr_me0000000000000000'
@@ -88,11 +97,22 @@ afterEach(() => {
 })
 
 function make(api: CommentsApi, storage = memoryStorage(), extra: { onMentioned?: () => void } = {}) {
-  store = new CommentsStore({ boardId: BOARD, meId: ME, canComment: true, api, storage, ...extra })
+  store = new CommentsStore({
+    signals: SIGNALS,
+    boardId: BOARD,
+    meId: ME,
+    canComment: true,
+    api,
+    storage,
+    ...extra,
+  })
   return store
 }
 
-describe('CommentsStore', () => {
+describe.each(KITS)('%s: CommentsStore', (_, kit) => {
+  beforeEach(() => {
+    SIGNALS = kit
+  })
   it('loads threads and read marks', async () => {
     const t = makeThread()
     const s = make(fakeApi({ threads: [t], reads: { [t.id]: t.updatedAt } }))
@@ -164,7 +184,14 @@ describe('CommentsStore', () => {
     expect(s.pending.get()).toBeNull()
     expect(s.draft(NEW_THREAD_DRAFT).text).toBe('half a thought')
     // A new store (page reload) reads it back from storage.
-    const again = new CommentsStore({ boardId: BOARD, meId: ME, canComment: true, api, storage })
+    const again = new CommentsStore({
+      signals: SIGNALS,
+      boardId: BOARD,
+      meId: ME,
+      canComment: true,
+      api,
+      storage,
+    })
     expect(again.draft(NEW_THREAD_DRAFT).text).toBe('half a thought')
     const posted = await again.createThread({ kind: 'point', x: 5, y: 6 }, again.draft(NEW_THREAD_DRAFT))
     expect(posted?.comments[0]?.body).toBe('half a thought')
@@ -180,6 +207,7 @@ describe('CommentsStore', () => {
     })
     const onError = vi.fn()
     const s = new CommentsStore({
+      signals: SIGNALS,
       boardId: BOARD,
       meId: ME,
       canComment: true,
@@ -202,6 +230,7 @@ describe('CommentsStore', () => {
     expect(storage.data.get(pinsHiddenKey(ME))).toBe('1')
     expect(
       new CommentsStore({
+        signals: SIGNALS,
         boardId: 'b-another01',
         meId: ME,
         canComment: true,
@@ -211,6 +240,7 @@ describe('CommentsStore', () => {
     ).toBe(true)
     expect(
       new CommentsStore({
+        signals: SIGNALS,
         boardId: BOARD,
         meId: 'usr_someoneelse000000',
         canComment: true,
@@ -254,7 +284,10 @@ describe('CommentsStore', () => {
   })
 })
 
-describe('live bell and resolve feedback', () => {
+describe.each(KITS)('%s: live bell and resolve feedback', (_, kit) => {
+  beforeEach(() => {
+    SIGNALS = kit
+  })
   it('refreshes the bell right away when someone asks for access (and not for other sharing changes)', async () => {
     vi.useFakeTimers()
     try {
@@ -289,6 +322,7 @@ describe('live bell and resolve feedback', () => {
     })
     const onResolved = vi.fn()
     store = new CommentsStore({
+      signals: SIGNALS,
       boardId: BOARD,
       meId: ME,
       canComment: true,
@@ -307,7 +341,10 @@ describe('live bell and resolve feedback', () => {
   })
 })
 
-describe('who can be @mentioned follows sharing changes (F4)', () => {
+describe.each(KITS)('%s: who can be @mentioned follows sharing changes (F4)', (_, kit) => {
+  beforeEach(() => {
+    SIGNALS = kit
+  })
   const lena: Mentionable = { userId: 'usr_lena000000000000000', name: 'Lena Ortiz', handle: 'lena' }
 
   it('a sharing change refetches a loaded list once per burst, so someone just added is mentionable', async () => {

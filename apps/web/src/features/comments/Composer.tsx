@@ -3,7 +3,6 @@
 // (or 'new' for a new comment) until it is posted, even when the composer is closed.
 
 import { type KeyboardEvent, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { useValue } from 'tldraw'
 import {
   activeMentionQuery,
   applyMention,
@@ -49,7 +48,7 @@ export function Composer({
   const ref = useRef<HTMLTextAreaElement>(null)
   const listId = useId()
   const hintId = useId()
-  const people = useValue('dr-comments.mentionables', () => store.mentionables.get(), [store])
+  const people = store.signals.useValue(store.mentionables)
   /** Caret to restore right after the next render (a picked mention changes the text under it). */
   const caretAfterRender = useRef<number | null>(null)
   useLayoutEffect(() => {
@@ -65,7 +64,7 @@ export function Composer({
     if (!autoFocus) return
     const el = ref.current
     if (!el) return
-    // After the click that opened us has finished (tldraw refocuses its container on pointerup).
+    // After the click that opened us has finished (the board refocuses its canvas on pointerup).
     const id = requestAnimationFrame(() => {
       el.focus()
       el.setSelectionRange(el.value.length, el.value.length)
