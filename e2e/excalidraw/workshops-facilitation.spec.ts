@@ -10,12 +10,15 @@
 //    read-only flag) and is refused `READ_ONLY`.
 //  - "A +1 is not an undo step" is its own test, expected to fail until transact can skip the undo stack
 //    (change request CR-3F-1); on this page a +1 is a `transact`, one undo step.
-//  - Steps that present the board are their own tests, expected to fail until 3e's present mode is on
-//    this page. The note-author label is the workshops feature's overlay (CR-3F-4, wave 3b), not the
-//    tldraw note face (`.tl-note__attribution`): the test id `note-author`.
+//  - The note-author label is the workshops feature's overlay (CR-3F-4, wave 3b), not the tldraw note face
+//    (`.tl-note__attribution`): the test id `note-author`. Overlays are never exported, so RETRO-03a's
+//    Present and export steps (3e) check that no slide, PNG or SVG names alice although the canvas holds
+//    her attribution (the tldraw page stripped its drawn label from the SVG it rasterized; this page's
+//    PNG is not made from an SVG).
 import type { Locator, Page } from '@playwright/test'
 import { item, itemBounds, select, updateItem, viewport } from '../tests/support/canvas.ts'
 import { forgeSession, storedElement } from '../tests/support/excalidraw.ts'
+import { downloadFrom } from '../tests/support/present-export.ts'
 import { capture } from '../tests/support/screenshots.ts'
 import { closeWorkshopPopover, openWorkshopPopover } from '../tests/support/workshops.ts'
 import {
@@ -451,7 +454,7 @@ test('after an api restart: raised hands were in memory, so every page drops the
 
 // ---- RETRO-03a + RETRO-07a: hide note authors and cursors (facilitation-review.fix, the board part) ------------
 
-test('RETRO-03a + RETRO-07a: a facilitator hides note authors and cursors for everyone; the others are told what is in effect', async ({
+test('RETRO-03a + RETRO-07a: a facilitator hides note authors and cursors for everyone, on the board, in Present and in exports; the others are told what is in effect', async ({
   join,
 }) => {
   const a = await join('alice')
@@ -511,6 +514,57 @@ test('RETRO-03a + RETRO-07a: a facilitator hides note authors and cursors for ev
     await expect(cpop.getByTestId('session-settings')).toContainText('hidden everyone’s cursors')
     await expect(cpop.getByTestId('session-hide-authors')).toHaveCount(0)
     await closeWorkshopPopover(c.page)
+  })
+
+  await test.step('bob presents: no author label and no cursor on the slide; after Esc the session still hides them', async () => {
+    await b.page.getByTestId('present-button').click()
+    await expect(b.page.getByTestId('present-overlay')).toBeVisible()
+    await expect(b.page.getByTestId('present-counter')).toHaveText('1 / 1')
+    await expect(b.page.getByTestId('note-author')).toHaveCount(0)
+    await a.page.mouse.move(380, 320)
+    await a.page.mouse.move(400, 350, { steps: 3 })
+    await b.page.waitForTimeout(1_000) // a cursor would have arrived by now
+    await expect(cursors(b.page)).toHaveCount(0)
+    await b.page.keyboard.press('Escape')
+    await expect(b.page.getByTestId('present-overlay')).toHaveCount(0)
+    // Present mode's cursor filter gave way; the session's setting still hides alice's cursor (W3-4).
+    await expect(b.page.locator('html')).toHaveAttribute('data-dr-hide-authors', 'true')
+    await a.page.mouse.move(300, 300)
+    await a.page.mouse.move(330, 330, { steps: 3 })
+    await b.page.waitForTimeout(1_000)
+    await expect(cursors(b.page)).toHaveCount(0)
+  })
+
+  await test.step('bob exports: the PNG and the SVG name nobody (the canvas knows who made the note)', async () => {
+    // The board holds the server's attribution of alice's note (customData.lobbyServer, from her ticket)…
+    const attribution = await b.page.evaluate(
+      () =>
+        (
+          window as unknown as {
+            lobbyCanvas: {
+              get(id: string): { customData?: { lobbyServer?: { createdBy?: { uid?: string } } } } | undefined
+            }
+          }
+        ).lobbyCanvas.get('fr-authored')?.customData?.lobbyServer?.createdBy?.uid ?? null,
+    )
+    expect(attribution).toBe(a.id)
+    // …and no export carries it: the note-author label is an overlay, which exports never draw, and the
+    // exports embed no scene data (the tldraw page stripped its drawn label from the SVG instead).
+    const dialog = b.page.getByTestId('export-dialog')
+    await b.page.getByTestId('export-button').click()
+    await expect(dialog).toBeVisible()
+    await dialog.getByTestId('export-area-board').check()
+    const png = await downloadFrom(b.page, () => dialog.getByTestId('export-png').click())
+    expect(png.bytes.subarray(1, 4).toString('latin1')).toBe('PNG')
+    const svg = await downloadFrom(b.page, () => dialog.getByTestId('export-svg').click())
+    const text = svg.bytes.toString('utf8')
+    expect(text).toContain('Anonymous')
+    for (const who of [a.name, a.id]) {
+      expect(png.bytes.includes(Buffer.from(who, 'utf8')), `PNG names ${who}`).toBe(false)
+      expect(text, `SVG names ${who}`).not.toContain(who)
+    }
+    await b.page.keyboard.press('Escape')
+    await expect(dialog).toHaveCount(0)
   })
 
   await test.step('alice switches cursors back on: they come back for everyone', async () => {

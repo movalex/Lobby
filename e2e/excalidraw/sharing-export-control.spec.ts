@@ -4,14 +4,23 @@
 // export, copy and download files" in the Share dialog; the viewer's entries follow live (no reload),
 // and the api refuses the viewer's board archive and originals with 403 EXPORT_DISABLED.
 //
-// Not here (other owners' features, ported with them): file-card downloads (3g), Ctrl/Cmd+C and the
-// context menu's Copy / Copy as / Export as (3a), the PDF viewer and video playback (3g).
+// The context menu's Export as (present-export's entry in 3a's menu) follows the policy too, and so do
+// 3g's file cards (the second test: Download goes, previews, PDF pages, the page viewer and video playback
+// stay). Not here: Ctrl/Cmd+C and the context menu's Copy and its export-off line (3a's,
+// canvas-ux-menus.spec.ts).
+import { join } from 'node:path'
 import type { Locator, Page } from '@playwright/test'
-import { clickItem, expect, test } from '../tests/support/canvas.ts'
+import { clickItem, expect, test, waitForCanvas, zoomToFit } from '../tests/support/canvas.ts'
 import { WEB_URL } from '../tests/support/ports.ts'
+import { downloadFrom, readPng } from '../tests/support/present-export.ts'
+import { FIXTURES_DIR } from '../tests/support/stack.ts'
+import { fileCard, insertFiles } from './media-kit.ts'
 import { expectItems, placeUploadedImage, seedDeck } from './present-kit.ts'
 
 const OFF_TEXT = 'The board owner turned off exporting for viewers.'
+const fixture = (name: string) => join(FIXTURES_DIR, name)
+const FILES = ['document.pdf', 'notes.zip', 'video.mp4'] as const
+const ORIGINAL = /\/files\/ast_\w+\/ver_\w+\/original\?board=/
 const FRAME = { id: 'ec-frame', name: 'Moodboard', x: 0, y: 0, w: 800, h: 600 }
 
 /** Opens the Share dialog the way the board page does (works at every width) and returns the setting. */
@@ -23,12 +32,25 @@ async function openShare(page: Page): Promise<Locator> {
   return section
 }
 
+/** Right-clicks `id` (it is selected and the context menu opens). */
+async function contextMenuOn(page: Page, id: string): Promise<Locator> {
+  await clickItem(page, id, { button: 'right' })
+  const menu = page.getByTestId('context-menu')
+  await expect(menu).toBeVisible()
+  return menu
+}
+
+async function closeMenu(page: Page) {
+  await page.keyboard.press('Escape')
+  await expect(page.getByTestId('context-menu')).toHaveCount(0)
+}
+
 async function closeShare(page: Page) {
   await page.keyboard.press('Escape')
   await expect(page.getByTestId('share-dialog')).toHaveCount(0)
 }
 
-test('export control: the owner turns it off in Share and the viewer loses Export, the PDF shortcut and Copy as PNG live; originals and the archive are refused (403)', async ({
+test('export control: the owner turns it off in Share and the viewer loses Export, the PDF shortcut, Copy as PNG and the context menu’s Export as live; originals and the archive are refused (403)', async ({
   canvasSession,
   users,
   board,
@@ -65,6 +87,10 @@ test('export control: the owner turns it off in Share and the viewer loses Expor
     await clickItem(b.page, 'ec-note')
     await b.page.keyboard.press('Control+Shift+C')
     await expect(b.page.getByTestId('copy-png-toast')).toBeVisible()
+    await contextMenuOn(b.page, imageId)
+    await expect(b.page.getByTestId('context-menu-sub.export-as-button')).toBeVisible()
+    await expect(b.page.getByTestId('context-menu.dr-export-off')).toHaveCount(0)
+    await closeMenu(b.page)
   })
 
   await test.step('an open Export dialog closes the moment the owner turns exporting off', async () => {
@@ -102,6 +128,11 @@ test('export control: the owner turns it off in Share and the viewer loses Expor
     await expect(b.page.getByTestId('export-off-notice')).toHaveText(OFF_TEXT)
     await b.page.waitForTimeout(500)
     expect(await b.page.evaluate(() => navigator.clipboard.readText())).toBe('clipboard sentinel')
+    // The context menu: no Export as, the one line saying why instead.
+    await contextMenuOn(b.page, imageId)
+    await expect(b.page.getByTestId('context-menu.dr-export-off')).toHaveText(OFF_TEXT.replace(/\.$/, ''))
+    await expect(b.page.getByTestId('context-menu-sub.export-as-button')).toHaveCount(0)
+    await closeMenu(b.page)
   })
 
   await test.step('the api refuses the viewer: the original and the archive', async () => {
@@ -138,5 +169,95 @@ test('export control: the owner turns it off in Share and the viewer loses Expor
     expect((await b.page.request.get(href)).status()).toBe(200)
     await b.page.getByTestId('export-button').click()
     await expect(b.page.getByTestId('export-dialog')).toBeVisible()
+    await b.page.keyboard.press('Escape')
+    await expect(b.page.getByTestId('export-dialog')).toHaveCount(0)
+    // …and the context menu's Export as, which draws the image from its original (a 2× PNG of it).
+    await contextMenuOn(b.page, imageId)
+    await b.page.getByTestId('context-menu-sub.export-as-button').click()
+    const png = await downloadFrom(b.page, () => b.page.getByTestId('context-menu.export-as-png').click())
+    expect(png.name).toMatch(/ - selection\.png$/)
+    expect(readPng(png.bytes)).toMatchObject({ width: 640, height: 360 })
+  })
+})
+
+test('export control on file cards: the viewer’s Download goes and comes back live; previews, PDF pages, the page viewer (Download shown off) and video playback keep working', async ({
+  canvasSession,
+}) => {
+  test.setTimeout(180_000)
+  const a = await canvasSession('alice')
+  const b = await canvasSession('bob', { role: 'viewer' })
+  await insertFiles(a.page, FILES.map(fixture))
+  for (const s of [a, b]) {
+    for (const name of FILES)
+      await expect(fileCard(s.page, name)).toHaveAttribute('data-status', 'ready', { timeout: 60_000 })
+    await zoomToFit(s.page)
+  }
+  const downloads = (page: Page) => page.getByTestId('file-card-download')
+  const href =
+    (await fileCard(b.page, 'notes.zip').getByTestId('file-card-download').getAttribute('href')) ?? ''
+  expect(href).toMatch(ORIGINAL)
+
+  await test.step('before: the viewer has every card’s Download (the default)', async () => {
+    await expect(downloads(b.page)).toHaveCount(FILES.length)
+    expect((await b.page.request.get(href)).status()).toBe(200)
+  })
+
+  await test.step('the owner turns it off: the viewer’s Downloads go, live; the owner keeps hers', async () => {
+    const section = await openShare(a.page)
+    await section.getByTestId('share-export-policy-toggle').uncheck()
+    await expect(section).toHaveAttribute('data-policy', 'editors')
+    await closeShare(a.page)
+    await expect(downloads(b.page)).toHaveCount(0)
+    await expect(downloads(a.page)).toHaveCount(FILES.length)
+    expect((await b.page.request.get(href)).status()).toBe(403)
+  })
+
+  await test.step('previews, PDF pages, the page viewer and video playback keep working for the viewer (fresh load too)', async () => {
+    await b.page.reload()
+    await waitForCanvas(b.page)
+    await expect(b.page.getByTestId('conn-status')).toHaveAttribute('data-state', 'online', {
+      timeout: 30_000,
+    })
+    const pdf = fileCard(b.page, 'document.pdf')
+    await expect(pdf).toHaveAttribute('data-status', 'ready', { timeout: 30_000 })
+    await zoomToFit(b.page)
+    await expect(downloads(b.page)).toHaveCount(0)
+    const cover = pdf.getByTestId('file-card-preview')
+    await expect.poll(() => cover.evaluate((el) => (el as HTMLImageElement).naturalWidth)).toBeGreaterThan(0)
+    const pageSrc =
+      (await pdf.locator('[data-testid="file-card-strip"] img').first().getAttribute('src')) ?? ''
+    expect((await b.page.request.get(pageSrc)).status()).toBe(200)
+
+    // The page viewer shows its pages; "Download original" is shown turned off.
+    await pdf.getByTestId('file-card-view-pages').click()
+    const viewer = b.page.getByTestId('pdf-viewer')
+    await expect(viewer).toBeVisible()
+    await expect(viewer.getByTestId('pdf-viewer-download')).toHaveCount(0)
+    await expect(viewer.getByTestId('pdf-viewer-download-off')).toHaveAttribute('aria-disabled', 'true')
+    await expect
+      .poll(() =>
+        viewer.getByTestId('pdf-viewer-page').evaluate((el) => (el as HTMLImageElement).naturalWidth),
+      )
+      .toBeGreaterThan(0)
+    await viewer.getByTestId('pdf-viewer-close').click()
+    await expect(viewer).toHaveCount(0)
+
+    // The video card still plays: its <video> loads the original as a media element, without a download.
+    const video = fileCard(b.page, 'video.mp4')
+    const media = b.page.waitForResponse(
+      (r) => ORIGINAL.test(r.url()) && r.request().resourceType() === 'media',
+    )
+    await video.getByTestId('file-card-play').click()
+    expect([200, 206]).toContain((await media).status())
+    await expect(video.getByTestId('file-card-video')).toHaveAttribute('controlslist', 'nodownload')
+  })
+
+  await test.step('the owner switches it back on: the viewer’s Downloads come back, live', async () => {
+    const section = await openShare(a.page)
+    await section.getByTestId('share-export-policy-toggle').check()
+    await expect(section).toHaveAttribute('data-policy', 'everyone')
+    await closeShare(a.page)
+    await expect(downloads(b.page)).toHaveCount(FILES.length)
+    expect((await b.page.request.get(href)).status()).toBe(200)
   })
 })

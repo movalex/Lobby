@@ -13,6 +13,7 @@ import type {
 } from '../../../canvas/api/index.ts'
 import { useValue } from '../../../lib/signals.ts'
 import { EXPORT_OFF_TEXT } from '../../sharing/ported/export-policy.ts'
+import { workshopSettingsOf } from '../../workshops/ported/session-settings.ts'
 import { getController } from './controller.ts'
 import { ExportDialog } from './ExportDialog.tsx'
 import { PresentOverlay } from './PresentOverlay.tsx'
@@ -161,14 +162,19 @@ const sub = (id: string, command: string, order: number): MenuEntrySpec => ({
   command,
 })
 
-/** The context menu's "Export as" (on a selection) and the board menu's "Export as" / "Export all as". */
+/**
+ * The context menu's "Export as" (on a selection) and the board menu's "Export as" / "Export all as".
+ * "Export as" exports the selection as it is when chosen (`exportTarget`), so it shows while there is one:
+ * the live selection, not the menu target's ids, which a right-click on an element that was not selected
+ * reads before that element's selection lands (the engine applies it a render later; CR 3E-4).
+ */
 const CONTEXT_MENU: readonly MenuEntrySpec[] = [
   {
     id: 'export-as',
     group: 'export',
     order: 20,
     label: 'Export as',
-    visible: (ctx, t) => t.ids.length > 0 && exportAllowed(ctx),
+    visible: (ctx) => ctx.canvas.selection.length > 0 && exportAllowed(ctx),
     submenu: [
       sub('export-as-png', 'present-export.export-as-png', 1),
       sub('export-as-svg', 'present-export.export-as-svg', 2),
@@ -227,13 +233,13 @@ export const feature: CanvasFeature = {
   onMount(ctx) {
     const controller = controllerOf(ctx)
     // Other people's cursors: nothing while presenting, and nothing on anyone's screen while a
-    // facilitator hides cursors for the session (workshops' "Hide everyone's cursors", RETRO-07a,
-    // lb_doc `workshop`). Each person's own pointer and laser are not drawn by this filter and stay.
-    const offCursors = ctx.registries.cursorVisible.provide(() => {
-      if (controller.presenter.isPresenting()) return false
-      const w = ctx.canvas.doc.get('workshop') as { hideCursors?: unknown } | undefined
-      return w?.hideCursors !== true
-    })
+    // facilitator hides cursors for the session (workshops' "Hide everyone's cursors", RETRO-07a, read
+    // with 3f's `workshopSettingsOf`; workshops provides the same rule, and the filter draws a cursor only
+    // when every provider says yes, W3-4). Each person's own pointer and laser are not drawn by this
+    // filter and stay.
+    const offCursors = ctx.registries.cursorVisible.provide(
+      () => !controller.presenter.isPresenting() && !workshopSettingsOf(ctx.canvas).hideCursors,
+    )
     return () => {
       offCursors()
       controller.presenter.stop({ reason: 'unmount' })

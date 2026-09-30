@@ -8,7 +8,7 @@
 // Differences from the tldraw spec (docs/research/excalidraw/wave3/3E.md):
 //  - a whole-board PNG is the content plus the 32 px margin in width; in height it also holds the frame
 //    names the engine draws above frames (the tldraw export drew them inside the margin);
-//  - the context menu's "Export as" waits for 3a's context-menu shell (test.fixme below);
+//  - the context menu is 3a's Lobby menu (the same test ids as tldraw's), on the ported entries;
 //  - ids are element ids (no `shape:` prefix), and the CSV's note colours come from the stored fill.
 import type { Page } from '@playwright/test'
 import { waitForValue } from '../tests/support/board.ts'
@@ -43,6 +43,7 @@ import {
   writeClipboardText,
 } from '../tests/support/present-export.ts'
 import type { Users } from '../tests/support/users.ts'
+import { emptyCanvasPoint } from './board-kit.ts'
 import { type DeckSpec, expectItems, NOTE_FILL, placeUploadedImage, seedDeck } from './present-kit.ts'
 
 const F = { intro: 'pe-intro', backstage: 'pe-backstage', plan: 'pe-plan' }
@@ -200,10 +201,61 @@ test.describe('image exports', () => {
   })
 
   // 3a renders the context menu (host slot `contextMenu`) from the registry entries this feature adds
-  // ('export-as' → 'export-as-png' / 'export-as-svg'); until that shell lands there is no menu to open.
-  // 3a's context-menu shell is on the page since the wave-3 integration; this test's body is still to be
-  // ported from the tldraw spec (3e)
-  test.fixme('context menu: Export as PNG and SVG go through the same pipeline (board-titled files, 2×, from the original upload)', async () => {})
+  // ('export-as' → 'export-as-png' / 'export-as-svg'), with tldraw's test ids.
+  test('context menu: Export as PNG and SVG go through the same pipeline (board-titled files, 2×, from the original upload)', async ({
+    canvasSession,
+    users,
+    board,
+  }) => {
+    const a = await canvasSession('alice')
+    const title = await boardTitle(users, board)
+    await seedDeck(a.page, DECK)
+    const imageId = await placeUploadedImage(a.page, users, board, INTRO, { x: 40, y: 330, w: 400, h: 225 })
+    await zoomToFit(a.page)
+    await selectNone(a.page)
+    const files = trackRequests(a.page, isFileRequest)
+    const menu = a.page.getByTestId('context-menu')
+
+    // Right-click the image (selects it and opens the context menu), then Export as → PNG.
+    const openExportAs = async () => {
+      await clickItem(a.page, imageId, { button: 'right' })
+      await expect(menu).toBeVisible()
+      await a.page.getByTestId('context-menu-sub.export-as-button').click()
+      await expect(a.page.getByTestId('context-menu-sub.export-as-content')).toBeVisible()
+    }
+    await openExportAs()
+    expect(await selection(a.page)).toEqual([imageId])
+    const png = await downloadFrom(a.page, () => a.page.getByTestId('context-menu.export-as-png').click())
+    await expect(menu).toHaveCount(0)
+    expect(png.name).toBe(`${title} - selection.png`)
+    const info = readPng(png.bytes)
+    // An image is its own export bounds (no padding): exactly 2× its 400×225 board size.
+    expect({ w: info.width, h: info.height }).toEqual({ w: 800, h: 450 })
+    expect(info.pixelsPerMetre).toEqual([ppm(2)])
+    expect(files.paths()).toContainEqual(expect.stringMatching(ORIGINAL_PATH))
+    expect(files.paths().filter((p) => !ORIGINAL_PATH.test(p))).toEqual([])
+    files.clear()
+
+    await openExportAs()
+    const svg = await downloadFrom(a.page, () => a.page.getByTestId('context-menu.export-as-svg').click())
+    expect(svg.name).toBe(`${title} - selection.svg`)
+    const text = svg.bytes.toString('utf8')
+    expect(svgRootName(text)).toBe('svg')
+    // F15: the menu's Export as SVG embeds the board preview (the dialog offers the originals).
+    expect(svgEmbeddedImages(text).map((e) => e.mime)).toEqual(['image/webp'])
+    expect(files.paths().filter((p) => ORIGINAL_PATH.test(p))).toEqual([])
+
+    // Nothing selected: the context menu on empty board has no Export as (the board menu's Export all
+    // as covers the board), as on the tldraw page.
+    await a.page.keyboard.press('Escape')
+    await selectNone(a.page)
+    const empty = await emptyCanvasPoint(a.page)
+    await a.page.mouse.click(empty.x, empty.y, { button: 'right' })
+    await expect(menu).toBeVisible()
+    await expect(a.page.getByTestId('context-menu-sub.export-as-button')).toHaveCount(0)
+    await a.page.keyboard.press('Escape')
+    await expect(menu).toHaveCount(0)
+  })
 
   test('copy as PNG: Ctrl+Shift+C and the dialog button put an image/png of the selection on the clipboard', async ({
     canvasSession,
