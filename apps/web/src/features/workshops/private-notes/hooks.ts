@@ -1,8 +1,8 @@
 import { useSyncExternalStore } from 'react'
-import type { FeatureContext } from '../../types.ts'
+import type { WorkshopContext } from '../workshop-context.ts'
 import { PrivateNotesStore, privateNotesStoreFor } from './store.ts'
 
-export function privateStoreFor(ctx: FeatureContext): PrivateNotesStore {
+export function privateStoreFor(ctx: WorkshopContext): PrivateNotesStore {
   return privateNotesStoreFor(
     ctx.events,
     () =>
@@ -15,7 +15,7 @@ export function privateStoreFor(ctx: FeatureContext): PrivateNotesStore {
   )
 }
 
-export function usePrivateNotes(ctx: FeatureContext) {
+export function usePrivateNotes(ctx: WorkshopContext) {
   const store = privateStoreFor(ctx)
   const snap = useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot)
   return { store, snap }
