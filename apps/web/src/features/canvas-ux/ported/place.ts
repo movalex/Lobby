@@ -6,7 +6,7 @@
 import type { CanvasFeatureContext, ItemKind, LobbyCanvas, StyleValues } from '../../../canvas/api/index.ts'
 import { geometry, NotImplementedError } from '../../../canvas/api/index.ts'
 import { findEmptySpot, type Rect } from '../placement.ts'
-import { frameAt, NOTE_SIZE } from './notes.ts'
+import { frameAt, NOTE_SIZE, putInFrame } from './notes.ts'
 
 export type PlaceableTool = 'note' | 'rectangle' | 'ellipse' | 'diamond' | 'text'
 
@@ -89,10 +89,9 @@ export function placeAtCenter(ctx: CanvasFeatureContext, tool: PlaceableTool): s
     if (tool === 'note') props.size = NOTE_SIZE
     else if (tool === 'text') props.text = ''
     else Object.assign(props, { width: size.w, height: size.h })
-    const nid = tx.create(kind, props)
-    if (frame) tx.setFrame([nid], frame.id)
-    return nid
+    return tx.create(kind, props)
   })
+  putInFrame(canvas, id, frame?.id)
   canvas.select([id])
   // a crowded view pushes it to the nearest free spot, which can be off screen: bring it into view
   const placed = { x: spot.x, y: spot.y, width: size.w, height: size.h }

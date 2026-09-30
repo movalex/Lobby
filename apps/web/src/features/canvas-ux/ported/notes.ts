@@ -43,6 +43,15 @@ export function frameAt(
 }
 
 /**
+ * Puts a just-created element (with its label) into a frame, inside the step that created it: a
+ * transaction's own reads do not see what it created, so this is a second write folded into that step.
+ */
+export function putInFrame(canvas: LobbyCanvas, id: string, frameId: string | null | undefined) {
+  if (!frameId) return
+  canvas.transact('into frame', (tx) => tx.setFrame([id], frameId), { joinPrevious: true })
+}
+
+/**
  * Creates a note with its top-left at `topLeft` (inside `frameId` when given), selects it and opens its
  * editor. Returns its id, or null on a read-only board.
  */
@@ -60,16 +69,15 @@ export function createNote(
   const { canvas } = ctx
   if (canvas.readOnly()) return null
   const size = opts.size ?? NOTE_SIZE
-  const id = canvas.transact(opts.label ?? 'create note', (tx) => {
-    const nid = tx.create('note', {
+  const id = canvas.transact(opts.label ?? 'create note', (tx) =>
+    tx.create('note', {
       x: opts.topLeft.x,
       y: opts.topLeft.y,
       size,
       ...(opts.backgroundColor ? { backgroundColor: opts.backgroundColor } : {}),
-    })
-    if (opts.frameId) tx.setFrame([nid], opts.frameId)
-    return nid
-  })
+    }),
+  )
+  putInFrame(canvas, id, opts.frameId)
   canvas.select([id])
   void canvas.text.edit(id, { via: opts.via, caret: 'end' })
   return id
@@ -149,16 +157,15 @@ export function editAdjacentNote(ctx: CanvasFeatureContext, dir: NoteDirection):
       })
       return
     }
-    const id = canvas.transact('create note', (tx) => {
-      const nid = tx.create('note', {
+    const id = canvas.transact('create note', (tx) =>
+      tx.create('note', {
         x: spot.x,
         y: spot.y,
         size,
         backgroundColor: (from as { backgroundColor?: string }).backgroundColor,
-      })
-      if (from.frameId) tx.setFrame([nid], from.frameId)
-      return nid
-    })
+      }),
+    )
+    putInFrame(canvas, id, from.frameId)
     canvas.select([id])
     void canvas.text.edit(id, { via: 'api', caret: 'end', ...(initialText ? { initialText } : {}) })
   }
