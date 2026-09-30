@@ -250,6 +250,8 @@ export class MindmapKeyboard {
         } else await wait(60)
       }
     }
+    // the selection this replay leaves (a click or a drag since then is the person's, and wins)
+    let sel = this.canvas.selection.join()
     let cur = id
     let curMode = mode
     let curBase = base
@@ -268,8 +270,9 @@ export class MindmapKeyboard {
       }
       if (key.intent === 'escape') {
         // as after typing: the topic stays selected, not being edited (an empty new one goes back)
-        this.rt.editorNeverOpened(cur, { selectParent: true })
-        if (this.rt.isTopic(cur)) this.canvas.select([cur])
+        const untouched = !busy() && this.canvas.selection.join() === sel
+        this.rt.editorNeverOpened(cur, { selectParent: untouched })
+        if (untouched && this.rt.isTopic(cur)) this.canvas.select([cur])
         return
       }
       if (key.intent === 'promote') {
@@ -281,6 +284,7 @@ export class MindmapKeyboard {
       if (this.rt.fresh?.id === cur) this.rt.fresh = null
       const made = key.intent === 'child' ? this.rt.addChild(cur) : this.rt.addSibling(cur)
       if (!made) return
+      sel = this.canvas.selection.join()
       cur = made
       curMode = 'fresh'
       curBase = ''
