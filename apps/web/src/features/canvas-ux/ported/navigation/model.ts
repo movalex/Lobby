@@ -3,7 +3,13 @@
 // the searchable elements, the frames in presentation order, locks and frame membership. Pure over
 // `LobbyCanvas` reads (reactive inside useValue) and plain elements (Node-tested).
 
-import { type Box, frameOutlineOf, presentationOrderOf, searchElements } from '@draftroom/board-ops/elements'
+import {
+  type Box,
+  type ElementSearchHit,
+  frameOutlineOf,
+  presentationOrderOf,
+  searchElements,
+} from '@draftroom/board-ops/elements'
 import { FILE_CARD_TYPE } from '@draftroom/canvas-schema'
 import { type CanvasElement, items, type LobbyCanvas } from '../../../../canvas/api/index.ts'
 import { matchesFilter, type SearchFilter } from '../../search-filter.ts'
@@ -113,13 +119,29 @@ export interface NavSearchHit {
 export function searchCanvas(
   elements: readonly CanvasElement[],
   query: string,
-  opts: { limit: number; filter: SearchFilter; isHidden(id: string): boolean },
+  opts: {
+    limit: number
+    filter: SearchFilter
+    isHidden(id: string): boolean
+    /**
+     * The search itself (default board-ops `searchElements`): the panel passes the tags feature's search,
+     * where words also match tag names, `#word` matches tags only and `tag` narrows to one tag.
+     */
+    search?: (
+      elements: readonly CanvasElement[],
+      query: string,
+      o: { limit: number },
+    ) => readonly ElementSearchHit[]
+    /** a tag filter is set: an empty query then lists that tag's carriers */
+    tag?: string | null
+  },
 ): NavSearchHit[] {
-  if (!query.trim()) return []
+  if (!query.trim() && !opts.tag) return []
   const byId = new Map(elements.map((e) => [e.id, e]))
   const out: NavSearchHit[] = []
   // ask for more than the limit: hidden and filtered-out hits come off afterwards
-  for (const h of searchElements(elements, query, { limit: Math.min(1000, opts.limit * 4) })) {
+  const search = opts.search ?? searchElements
+  for (const h of search(elements, query, { limit: Math.min(1000, opts.limit * 4) })) {
     if (opts.isHidden(h.id)) continue
     const el = byId.get(h.id)
     const type = el ? legacyTypeOf(el) : null

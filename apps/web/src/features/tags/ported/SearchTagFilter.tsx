@@ -21,6 +21,18 @@ export function useSearchTag(rt: TagsRuntime): string | null {
 }
 
 /**
+ * The tag filter of the board search on `canvas` (null when the tags feature is not mounted, when none is
+ * set, or when its tag has gone from the board): for 3b's panel, which has no tags runtime of its own
+ * (wave-3 integration).
+ */
+export function useCanvasSearchTag(canvas: LobbyCanvas): string | null {
+  const t = useValue('tags.bridge', () => tagsOf(canvas), [canvas])
+  const key = useValue('tags.search-tag-key', () => t?.rt.searchTag.get() ?? null, [t])
+  const rows = useValue('tags.search-tag-rows', () => (t && key !== null ? t.rt.rows.get() : null), [t, key])
+  return key !== null && rows?.some((r) => r.key === key) ? key : null
+}
+
+/**
  * The board search with tags for `canvas` (plain searchElements' results when the tags feature is not
  * mounted). `elements`: what the panel searches (live, visible).
  */

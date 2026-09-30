@@ -9,6 +9,12 @@ import type { CanvasFeatureContext, LobbyCanvas } from '../../../../canvas/api/i
 import { useValue } from '../../../../lib/signals.ts'
 import { isTextEntry } from '../../../../ui/focus.ts'
 import {
+  SearchTagFilter,
+  searchWithTags,
+  textOfQuery,
+  useCanvasSearchTag,
+} from '../../../tags/ported/SearchTagFilter.tsx'
+import {
   highlightParts,
   SEARCH_FILTERS,
   type SearchFilter,
@@ -83,15 +89,21 @@ export function SearchPanel({ ctx, close }: { ctx: CanvasFeatureContext; close()
     }
   }, [focusTick, canvas])
 
+  // Tags (3d, wired at the wave-3 integration): words also match tag names, `#word` matches tags only,
+  // and the tag filter below the type chips narrows to one tag (tags/ported/search.ts), as on the tldraw
+  // board.
+  const tag = useCanvasSearchTag(canvas)
   const hits: NavSearchHit[] = useMemo(() => {
     void version
-    if (!query.trim()) return []
+    if (!query.trim() && !tag) return []
     return searchCanvas(canvas.items(), query, {
       limit: RESULT_LIMIT,
       filter,
       isHidden: (id) => canvas.isHidden(id),
+      tag,
+      search: (elements, q, o) => searchWithTags(canvas, elements, q, { limit: o.limit, tag }),
     })
-  }, [canvas, query, filter, version])
+  }, [canvas, query, filter, version, tag])
 
   useEffect(() => {
     searchMatches(canvas).set(hits.map((h) => h.id))
@@ -136,6 +148,7 @@ export function SearchPanel({ ctx, close }: { ctx: CanvasFeatureContext; close()
   }
 
   const trimmed = query.trim()
+  const marked = textOfQuery(trimmed)
   return (
     // biome-ignore lint/a11y/noStaticElementInteractions: keyboard handling for the whole panel (Esc, Enter, arrows)
     <div className="dr-cux-search" data-testid="board-search" onKeyDown={onKeyDown}>
@@ -146,7 +159,7 @@ export function SearchPanel({ ctx, close }: { ctx: CanvasFeatureContext; close()
           type="search"
           className="dr-input dr-input--block"
           data-testid="search-input"
-          placeholder="Search notes, text, frames, files…"
+          placeholder="Search notes, text, frames, files, #tags…"
           value={query}
           aria-controls={resultsId}
           aria-describedby={statusId}
@@ -169,8 +182,9 @@ export function SearchPanel({ ctx, close }: { ctx: CanvasFeatureContext; close()
           </button>
         ))}
       </fieldset>
+      <SearchTagFilter canvas={canvas} onChange={() => set({ activeId: null })} />
       <p id={statusId} className="dr-cux-muted" role="status" data-testid="search-status">
-        {!trimmed
+        {!trimmed && !tag
           ? 'Type to search. Enter goes to the next match.'
           : hits.length === 0
             ? 'No matches.'
@@ -191,7 +205,7 @@ export function SearchPanel({ ctx, close }: { ctx: CanvasFeatureContext; close()
             >
               <span className="dr-cux-result__type">{typeLabel(hit.type)}</span>
               <span className="dr-cux-result__snippet">
-                {highlightParts(hit.snippet, trimmed).map((p, i) =>
+                {highlightParts(hit.snippet, marked).map((p, i) =>
                   p.match ? <mark key={i}>{p.text}</mark> : <span key={i}>{p.text}</span>,
                 )}
               </span>
