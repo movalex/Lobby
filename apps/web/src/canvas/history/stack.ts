@@ -276,6 +276,12 @@ export class LobbyHistory {
       return
     }
     const last = this.lastLocal.get(after.id)
+    // an element the scene held before this apply but no step recorded yet is a local create waiting for
+    // its boundary (a label the text editor made, re-keyed by the index pre-pass or answered by the server
+    // before the editor closed): it stays unrecorded, so the boundary records it as created. Taking it into
+    // `lastLocal` here made its creation part of no step: after typing into a note created empty, undo
+    // left an empty label and never removed it (wave 2E, V1 P6)
+    if (!last && before) return
     if (!last || !before) {
       this.lastLocal.set(after.id, clone(after))
       return
