@@ -226,7 +226,8 @@ describe('the LobbyCanvas member table', () => {
     )
     expect(() => canvas.on('change', () => {})).toThrow(/not implemented \(2C\): on:change/)
     expect(() => canvas.transact('x', () => 1, { joinPrevious: true })).toThrow(/transact.joinPrevious/)
-    expect(() => canvas.on('followChanged', () => {})).toThrow(/not implemented \(3c\): on:followChanged/)
+    // 3c's follow part has landed (impl.ts LANDED_PARTS): its event subscribes on a bare port too
+    expect(typeof canvas.on('followChanged', () => {})).toBe('function')
     expect(canvas.transact('x', (tx) => tx.createMany([{ kind: 'note', props: {} }]))).toEqual(['new'])
     const off = canvas.on('changed', () => {})
     expect(typeof off).toBe('function')
