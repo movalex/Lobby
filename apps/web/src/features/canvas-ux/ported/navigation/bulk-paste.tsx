@@ -20,6 +20,7 @@ import {
 import { useValue } from '../../../../lib/signals.ts'
 import { placeBulkGrid, reflowLine, truncationMessage } from '../../bulk-paste.ts'
 import { containingFrame, type Rect, rectContains, unionRects } from '../../placement.ts'
+import { boxOf } from './camera.ts'
 import { frameAt } from './model.ts'
 import { pendingPaste } from './state.ts'
 
@@ -103,7 +104,11 @@ export function pasteAsNotes(ctx: CanvasFeatureContext, text: string, center: Sc
   // obstacles: the target frame's children, or the board's top-level items (frames included)
   const target = frameAt(canvas, center)
   const targetBounds = target ? boundsOf(ctx, target.id) : null
-  const rectsOf = (list: readonly CanvasElement[]) => list.flatMap((e) => boundsOf(ctx, e.id) ?? [])
+  const rectsOf = (list: readonly CanvasElement[]) =>
+    list.map((e) => {
+      const b = boxOf(e)
+      return { x: b.x, y: b.y, w: b.width, h: b.height }
+    })
   const placement = placeBulkGrid({
     size: { w: grid.w, h: grid.h },
     center,

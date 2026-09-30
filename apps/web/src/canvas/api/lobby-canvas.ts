@@ -148,6 +148,14 @@ export type CanvasInputEvent =
   | ({
       readonly type: 'wheel' | 'pinch'
       readonly screen: ScreenPoint
+      /**
+       * The wheel's deltas and their unit (WheelEvent.deltaX/deltaY/deltaMode: 0 pixels, 1 lines, 2 pages;
+       * a trackpad pinch is a `pinch` with Ctrl): what the engine zooms or pans by (CR 3b-2).
+       * Optional: a synthetic event may leave them out.
+       */
+      readonly deltaX?: number
+      readonly deltaY?: number
+      readonly deltaMode?: number
       handled(): void
     } & InputModifiers)
   | ({ readonly type: 'key-down'; readonly key: string; readonly code: string } & InputModifiers)

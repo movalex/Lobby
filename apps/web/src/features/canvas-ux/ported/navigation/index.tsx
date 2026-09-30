@@ -1,13 +1,15 @@
 // OWNER: 3b (docs/EXCALIDRAW-CONTRACTS.md §7.2). The ported 'navigation' feature on the Excalidraw board page:
-// navigation: minimap, board search, frames panel, start view, copy link and deep links, arrange as grid, select by type, bulk paste, templates, Lobby’s fit camera, level of detail (not built yet: the wheel below 0.1 and the level-of-detail pass, docs/research/excalidraw/wave3/3B.md §6).
+// navigation: minimap, board search, frames panel, start view, copy link and deep links, arrange as grid, select by type, bulk paste, templates, Lobby’s fit camera and zoom wheel below 0.1, the camera keys from the chrome; the level-of-detail pass is the board page's (canvas/lod, docs/research/excalidraw/wave3/3B-2.md).
 //
 // What it contributes (docs/EXCALIDRAW-MIGRATION.md §4.2, §3.6; the tldraw build's canvas-ux feature):
 //  - dock panels: Search board (Ctrl/Cmd+F, MAK-12), Frames (MAK-13), Templates (PRE-02/03; the insert is
 //    blocked by CR-2D-2 until LobbyTx.insert lands);
 //  - the navigation host slot: the zoom menu, zoom buttons and the minimap (MAK-10/11, PERF-03);
 //  - the zoom keys (Alt+1 / Shift+1 fit, Alt+2 / Shift+2 selection, Ctrl/Cmd+0 / Shift+0 100%, Ctrl/Cmd+=
-//    and =, Ctrl/Cmd+- and -), M for the minimap, Alt+Shift+G arrange as grid; a key that types a character
-//    leaves a lone selected note to type-to-edit (COL-04), as on the tldraw board;
+//    and =, Ctrl/Cmd+- and -, Shift+= / Shift+- and Ctrl/Cmd+Shift+= / - at the pointer), M for the minimap,
+//    Alt+Shift+G arrange as grid; a key that types a character leaves a lone selected note to type-to-edit
+//    (COL-04), as on the tldraw board; the camera keys and board search also from the chrome (A11Y2-02);
+//  - the zoom wheel and the trackpad pinch below Excalidraw's 0.1, down to the whole-board fit (CR 3b-2);
 //  - the context menu's Arrange as grid (MAK-18), Set this frame as start view (PRE-08), Select all on
 //    this page › and Keep only › (MAK-17); the board menu's start-view entries (PRE-08);
 //  - the selection bar's Copy link and Arrange as grid with its columns stepper;
@@ -31,6 +33,7 @@ import { FramesIcon, SearchIcon, TemplatesIcon } from '../../icons.tsx'
 import { categoryLabel, TYPE_CATEGORIES, type TypeCategory } from '../../select-by-type.ts'
 import { canArrangeAsGrid, runArrangeAsGrid } from './arrange-grid.ts'
 import { BULK_PASTE_HANDLER, BulkPastePrompt } from './bulk-paste.tsx'
+import { type ChromeKey, installChromeKeys } from './chrome-keys.ts'
 import { copySelectionLink } from './copy-link.ts'
 import { installNavigationDevHook } from './dev-hook.ts'
 import { FramesPanel } from './FramesPanel.tsx'
@@ -55,7 +58,16 @@ import {
 } from './start-view.ts'
 import { minimapOpen, searchState, setMinimapOpen, startViewResult } from './state.ts'
 import { TemplatesPanel } from './TemplatesPanel.tsx'
-import { typeToEditTarget, zoomIn, zoomOut, zoomTo100, zoomToFit, zoomToSelection } from './zoom.ts'
+import {
+  installWheelZoom,
+  typeToEditTarget,
+  zoomAtPointer,
+  zoomIn,
+  zoomOut,
+  zoomTo100,
+  zoomToFit,
+  zoomToSelection,
+} from './zoom.ts'
 import '../../canvas-ux.css'
 import './navigation.css'
 
@@ -205,8 +217,38 @@ const TYPING_ZOOM_KEYS: readonly { chord: string; run: (ctx: CanvasFeatureContex
   { chord: 'shift+2', run: (ctx) => zoomToSelection(ctx.canvas) },
   { chord: 'shift+0', run: (ctx) => zoomTo100(ctx.canvas) },
 ]
+/**
+ * tldraw's zoom-in/out-on-cursor (Shift+= and Shift+-, with or without Ctrl/Cmd): a step around the
+ * pointer. On a US layout Shift+= is the '+' key and Shift+- the '_' key. The Shift-only ones type a
+ * character, so they leave a lone selected note to type-to-edit too.
+ */
+const CURSOR_ZOOM_KEYS: readonly {
+  chord: string
+  types: boolean
+  run: (ctx: CanvasFeatureContext) => void
+}[] = [
+  { chord: 'shift++', types: true, run: (ctx) => zoomAtPointer(ctx.canvas, 'in') },
+  { chord: 'shift+_', types: true, run: (ctx) => zoomAtPointer(ctx.canvas, 'out') },
+  { chord: 'mod+shift++', types: false, run: (ctx) => zoomAtPointer(ctx.canvas, 'in') },
+  { chord: 'mod+shift+_', types: false, run: (ctx) => zoomAtPointer(ctx.canvas, 'out') },
+]
 const PLATFORM = currentPlatform()
 const PARSED_TYPING_KEYS = TYPING_ZOOM_KEYS.map((k) => ({ ...k, parsed: parseChord(k.chord) }))
+const PARSED_CURSOR_KEYS = CURSOR_ZOOM_KEYS.map((k) => ({ ...k, parsed: parseChord(k.chord) }))
+
+/**
+ * The keys that still act from the chrome (A11Y2-02, the tldraw page's CHROME_SAFE_ACTIONS): the camera
+ * keys and board search. Nothing that changes the board.
+ */
+const CHROME_KEYS: readonly ChromeKey[] = [
+  ...['mod+=', 'mod+-', 'mod+0', 'alt+1', 'alt+2'].map((chord) => ({
+    chord,
+    run: (ctx: CanvasFeatureContext) => COMMANDS.find((c) => c.kbd?.includes(chord))?.run(ctx, 'kbd'),
+  })),
+  ...TYPING_ZOOM_KEYS,
+  ...CURSOR_ZOOM_KEYS,
+  { chord: 'mod+f', run: (ctx) => openBoardSearch(ctx) },
+]
 
 const KEYS: readonly FeatureKeySpec[] = [
   {
@@ -217,6 +259,17 @@ const KEYS: readonly FeatureKeySpec[] = [
     handle: (e, ctx) => {
       const k = PARSED_TYPING_KEYS.find((x) => matchChord(x.parsed, e, PLATFORM))
       if (!k) return false
+      k.run(ctx)
+      return true
+    },
+  },
+  {
+    id: 'navigation.zoom-cursor-keys',
+    scope: 'canvas',
+    chords: CURSOR_ZOOM_KEYS.map((k) => k.chord),
+    handle: (e, ctx) => {
+      const k = PARSED_CURSOR_KEYS.find((x) => matchChord(x.parsed, e, PLATFORM))
+      if (!k || (k.types && typeToEditTarget(ctx.canvas))) return false
       k.run(ctx)
       return true
     },
@@ -349,6 +402,8 @@ function mount(ctx: CanvasFeatureContext): () => void {
       if (live) cleanups.push(persistView(canvas, ctx.board.id, ctx.me.user.id))
     })
   cleanups.push(installNavigationDevHook(ctx))
+  // the zoom wheel below Excalidraw's 0.1 (CR 3b-2) and the camera keys from the chrome (A11Y2-02)
+  cleanups.push(installWheelZoom(canvas), installChromeKeys(ctx, CHROME_KEYS))
   return () => {
     live = false
     for (const c of cleanups.reverse()) c()

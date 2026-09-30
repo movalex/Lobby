@@ -21,6 +21,7 @@ import {
   NotImplementedError,
 } from '../../../../canvas/api/index.ts'
 import { findEmptySpot, type Point, type Rect } from '../../placement.ts'
+import { boxOf } from './camera.ts'
 
 export type InsertTemplateResult =
   | { ok: true; ids: string[]; bounds: Bounds }
@@ -41,8 +42,8 @@ function topLevelObstacles(canvas: LobbyCanvas): Rect[] {
   const out: Rect[] = []
   for (const e of items.contentItems(canvas.items())) {
     if (e.frameId) continue
-    const b = canvas.bounds(e.id)
-    if (b) out.push({ x: b.x, y: b.y, w: b.width, h: b.height })
+    const b = boxOf(e)
+    out.push({ x: b.x, y: b.y, w: b.width, h: b.height })
   }
   return out
 }

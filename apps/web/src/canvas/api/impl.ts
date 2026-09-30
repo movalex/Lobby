@@ -556,7 +556,8 @@ export function createLobbyCanvas(deps: LobbyCanvasDeps): LobbyCanvasHandle {
     viewport: {
       get: viewportNow,
       set: (v, opts) => (board ? board.viewport.set(v, opts) : port.viewport.set(v)),
-      fit: (ids, opts) => (board ? board.viewport.fit(ids, opts) : port.viewport.fit(ids)),
+      // `fit` is 3b's part too (CR 3b-6): Lobby's own fit camera, below Excalidraw's 0.1 when the board
+      // needs it (lobby-canvas.ts "Lobby's own fit below 0.1 is 3b"); the port's fit clamps at 0.1
       ...navigation,
       stop: onBoard('viewport.stop', (b) => () => b.viewport.stop()),
       moving: onBoard('viewport.moving', (b) => () => {

@@ -5,8 +5,12 @@ import { createLobbyCanvas } from '../impl.ts'
 import { createFeatureRegistries } from '../registries.ts'
 import {
   centeredOn,
+  contentBox,
   ENGINE_MIN_ZOOM,
+  elementBox,
   ensureVisibleCamera,
+  FIT_FILL,
+  fitCamera,
   fitZoom,
   limitsFor,
   MAX_ZOOM,
@@ -168,5 +172,119 @@ describe('the members on a bare port (composed from C0 members alone)', () => {
     const n = sets.length
     canvas.viewport.ensureVisible(['a'])
     expect(sets.length).toBe(n + 1)
+  })
+})
+
+describe('the whole board in one pass, and Lobby’s own fit (wave 3b)', () => {
+  const base = {
+    angle: 0,
+    groupIds: [],
+    frameId: null,
+    locked: false,
+    isDeleted: false,
+    version: 1,
+    versionNonce: 1,
+    index: 'a0',
+  }
+  const box = (e: Record<string, unknown>) => elementBox({ ...base, ...e } as unknown as CanvasElement)
+
+  it('an element’s box from its own fields: rotated about its centre; a line’s box of its points', () => {
+    expect(box({ id: 'r', type: 'rectangle', x: 10, y: 20, width: 100, height: 50 })).toEqual({
+      x: 10,
+      y: 20,
+      width: 100,
+      height: 50,
+    })
+    const turned = box({ id: 'r', type: 'rectangle', x: 0, y: 0, width: 100, height: 50, angle: Math.PI / 2 })
+    expect(turned.x).toBeCloseTo(25)
+    expect(turned.y).toBeCloseTo(-25)
+    expect(turned.width).toBeCloseTo(50)
+    expect(turned.height).toBeCloseTo(100)
+    const arrow = box({
+      id: 'a',
+      type: 'arrow',
+      x: 100,
+      y: 100,
+      width: 50,
+      height: 80,
+      points: [
+        [0, 0],
+        [-20, 30],
+        [50, 80],
+      ],
+    })
+    expect(arrow).toEqual({ x: 80, y: 100, width: 70, height: 80 })
+  })
+
+  it('the content box skips bound labels, deleted and hidden items', () => {
+    const els = [
+      { ...base, id: 'a', type: 'stickynote', x: 0, y: 0, width: 200, height: 200 },
+      { ...base, id: 'l', type: 'text', containerId: 'a', x: -500, y: -500, width: 10, height: 10 },
+      { ...base, id: 'gone', type: 'rectangle', x: 9000, y: 0, width: 10, height: 10, isDeleted: true },
+      { ...base, id: 'hid', type: 'rectangle', x: -9000, y: 0, width: 10, height: 10 },
+      { ...base, id: 'b', type: 'frame', x: 1000, y: 500, width: 400, height: 300 },
+    ] as unknown as CanvasElement[]
+    expect(contentBox(els, (id) => id === 'hid')).toEqual({ x: 0, y: 0, width: 1400, height: 800 })
+    expect(contentBox([])).toBeNull()
+  })
+
+  it('fit: 80% of the canvas, never above 100%, down to Lobby’s floor instead of Excalidraw’s 0.1', () => {
+    const screen = { width: 1000, height: 600 }
+    const small = fitCamera({ x: 0, y: 0, width: 100, height: 100 }, screen, { min: 0.1 })
+    expect(small.zoom).toBe(1)
+    const wide = fitCamera({ x: -30_000, y: 0, width: 60_000, height: 200 }, screen, { min: 0.01 })
+    expect(wide.zoom).toBeCloseTo((1000 / 60_000) * FIT_FILL)
+    expect(wide.x + screen.width / wide.zoom / 2).toBeCloseTo(0)
+    expect(fitCamera({ x: 0, y: 0, width: 60_000, height: 10 }, screen, { min: 0.1 }).zoom).toBe(0.1)
+  })
+
+  it('viewport.fit on a canvas goes below 0.1 for a wide board, and fits given ids', () => {
+    const els = [
+      { ...base, id: 'w', type: 'stickynote', x: -30_000, y: 0, width: 200, height: 200 },
+      { ...base, id: 'e', type: 'stickynote', x: 30_000, y: 0, width: 200, height: 200 },
+    ] as unknown as CanvasElement[]
+    let v: Viewport = { x: 0, y: 0, width: 1000, height: 600, zoom: 1 }
+    const set = (next: Partial<Viewport>) => {
+      const zoom = next.zoom ?? v.zoom
+      v = {
+        x: next.x ?? v.x,
+        y: next.y ?? v.y,
+        width: (v.width * v.zoom) / zoom,
+        height: (v.height * v.zoom) / zoom,
+        zoom,
+      }
+    }
+    const p = {
+      items: () => els,
+      get: (id: string) => els.find((e) => e.id === id),
+      bounds: (id: string) => {
+        const e = els.find((x) => x.id === id)
+        return e ? { x: e.x, y: e.y, width: e.width, height: e.height } : null
+      },
+      selection: [],
+      select: () => {},
+      viewport: { get: () => v, set, fit: () => set({ zoom: 0.1 }) },
+      sceneToScreen: (q: { x: number; y: number }) => q,
+      screenToScene: (q: { x: number; y: number }) => q,
+      transact: () => undefined,
+      setTool: () => true,
+      tool: () => 'select',
+      on: () => () => {},
+      editingId: () => null,
+      leaseHolder: () => null,
+      collaborators: () => [],
+      saveStatus: () => ({ state: 'saved', pending: 0, offlineChanges: 0, lastReject: null }),
+      engine: null,
+    } as unknown as CanvasPort
+    const { canvas } = createLobbyCanvas({ port: p, registries: createFeatureRegistries() })
+    canvas.viewport.fit()
+    expect(v.zoom).toBeLessThan(ENGINE_MIN_ZOOM)
+    // 80% of the canvas would be below the floor (the whole-board fit with its 64 px inset): the floor
+    expect(v.zoom).toBeCloseTo((1000 - 128) / 60_200)
+    expect(v.x).toBeLessThanOrEqual(-30_000)
+    expect(v.x + v.width).toBeGreaterThanOrEqual(30_200)
+    canvas.viewport.fit(['e'])
+    expect(v.zoom).toBe(1)
+    expect(v.x + v.width / 2).toBeCloseTo(30_100)
   })
 })

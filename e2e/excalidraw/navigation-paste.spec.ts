@@ -144,7 +144,22 @@ test('bulk paste: "Text" makes one text element; a single line pastes as usual, 
     await expect(prompt).toHaveCount(0)
     await pasteAt(a.page)
     await expect(prompt).toBeVisible()
-    await clickCanvasAt(a.page, 0.3, 0.3)
+    // the prompt opens at the pointer when the pointer counts as over the canvas, else in the middle of the
+    // view: a click on the board clear of it (the same point as the paste could land on its Text button,
+    // which pastes; seen in wave 3b as a run-order-dependent failure)
+    const box = await prompt.boundingBox()
+    const canvasBox = await a.page.locator('[data-lobby-board-canvas]').boundingBox()
+    if (!box || !canvasBox) throw new Error('no prompt or canvas')
+    const clear = [
+      [0.3, 0.3],
+      [0.15, 0.8],
+      [0.6, 0.15],
+    ].find(([fx, fy]) => {
+      const x = canvasBox.x + canvasBox.width * (fx as number)
+      const y = canvasBox.y + canvasBox.height * (fy as number)
+      return x < box.x - 20 || x > box.x + box.width + 20 || y < box.y - 20 || y > box.y + box.height + 20
+    }) as [number, number]
+    await clickCanvasAt(a.page, clear[0], clear[1])
     await expect(prompt).toHaveCount(0)
     expect(await countOf(a.page)).toBe(2)
   })
