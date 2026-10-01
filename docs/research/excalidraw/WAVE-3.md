@@ -167,6 +167,15 @@ means absent from the new page. Every deviation below is listed in full in the o
 - **Ported:** the live region, keyboard traversal (F6, Alt+arrows, into and out of frames), the Contents panel, the phone sheet, palette contrast, the named canvas, the skip link; 12 of 3i's cross-feature tests **now pass against the other owners' features**.
 - **Partial:** undo does not restore the selection (spike B history, `test.fail`); axe is not a dependency (CR-3I-1, the audit spec stands in). Ctrl/Cmd+Z, Shift+= and the zoom keys from the chrome and Ctrl+X on the canvas pass since wave 3b (3a, 3b).
 - **Finding:** the red note's ink is 3.43:1 through Excalidraw's dark filter (below AA).
+- **Since the early wave-5 review** (3i's fixes on `engine/w5f-3i`; `REVIEW-W5-EARLY.md`):
+  - Board actions (≡) steps aside while a workshop card or a docked comment sheet is up (W5-07).
+  - Every phone control can be tapped where it is drawn at 390 and 412 px, checked with `elementFromPoint` (W5-06). The wave-3b corner chrome (2C) and quick-actions strip (3a) had already fixed it.
+  - The a11y feature's camera moves honour reduced motion (W5-21: Alt+Arrow, F6, the phone sheet's Zoom to fit).
+  - The live region says a tool change politely and says the selection again when an edit ends (W5-43). A selection that comes and goes at once is not heard (W5-58: "6 shapes selected" on a template board).
+  - The board shows a focus ring when the keyboard arrives (W5-45).
+  - The engine's text editor is named ("Sticky note text"), and a heading is read before the line under it (W5-59).
+  - The application's name comes from the board's title, so 2C can rename the region (W5-57).
+  - Contrast is now checked on the rendered pixels as well (`a11y-contrast`: frame names, outlines, the canvas colour, dark-mode notes). Those 5 tests are expected failures until 2C's theme lands (W5-10, W5-15). They measure the reviewers' numbers on this tree: frame name 2.85:1 light and 4.36:1 dark, outline 1.92:1 and 2.18:1, red note 3.55:1 in dark mode.
 
 ### 4.10 The board page and guests (2C) — ported
 
@@ -222,8 +231,10 @@ builds share it.
 | Mind maps (wave 4, DEMO "more to show") | ported | 3d | `mindmap-keyboard`, `mindmap-structure` | new topic + words are two undo steps (W1-9) |
 | Tags, Show only, tag panel (wave 4, DEMO "more to show") | ported | 3d | `tags-picker`, `tags-panel` | a name-only guest cannot create a tag (CR-3D-5) |
 | Name-only guests on a board, on a phone (wave 3, DEMO "more to show") | ported (wave 3b) | 2C, 3c, 3f, sharing | `guests-join`, `guests-sharing`, `sharing-share-dialog`, `workshops-phone`, `present-live` | a name-only guest cannot create a tag (CR-3D-5, `test.fail`) |
-| Accessibility: skip link, live region, keyboard traversal, contrast (review rounds) | ported | 3i, 3a, 3b | `a11y-*` | the chrome keys and Ctrl+X pass since wave 3b; undo restoring the selection (spike B history, `test.fail`); red note ink in dark mode 3.43:1 |
-| Phone layout (review rounds) | ported | 3i, 3a, 2C | `a11y-phone`, `a11y-phone-overlays`, `workshops-phone`, `board-phone`, `canvas-ux-tools` | tldraw's phone toolbar, quick actions and Styles button since wave 3b (3a), the corner chrome (2C); fewer tools at 390 px than tldraw's, so the bar stays on screen |
+| Accessibility: skip link, live region, keyboard traversal, contrast (review rounds) | ported, partial (early wave-5 review) | 3i, 3a, 3b, 2C | `a11y-*` | **Fixed by 3i (wave 5):** tool changes and edit ends are announced (W5-43); a stale selection is not (W5-58); a focus ring on the board (W5-45); the editor's name and a heading before its subtitle (W5-59). **Still open:** a keyboard placement leaves the tool armed (W5-20, 3a); the More popover can't be used from the keyboard (W5-22, 3a); 44 Tab stops (W5-42, 3a); frame names at 2.65:1 and dark-mode note ink (W5-10, W5-15: 2C's theme; 5 `a11y-contrast` `test.fail`); "Back online. All changes saved." said on every board open (CR-3I-6, 2C, A11Y-14 `test.fail`); undo restoring the selection (`test.fail`) |
+| Phone layout (review rounds) | ported, partial (early wave-5 review) | 3i, 3a, 2C, 3c | `a11y-phone`, `a11y-phone-reach`, `a11y-phone-overlays`, `workshops-phone`, `board-phone`, `canvas-ux-tools` | tldraw's phone toolbar, quick actions and Styles button since wave 3b (3a), the corner chrome (2C); fewer tools at 390 px than tldraw's. **W5-06** (Zoom to fit over Select, board menu under the fold button) was already fixed at wave 3b; `a11y-phone-reach` checks every control with `elementFromPoint` at 390 and 412 px. **W5-07:** Board actions steps aside for workshop cards and docked comment sheets (3i); the comment sheet over the tool dock is 3c's. **Still open:** Share is 7 px past the edge at 390 px (W5-31) and the "⋯" menu shows an empty "On this board" (W5-50), both 2C's top bar (2 `test.fail`, CR-3I-2, CR-3I-3); 38 px tools (W5-31, 3a) |
+| Reduced motion (early wave-5 review W5-21) | partial | 3i, 3b, 3e | `a11y-traversal` (W5-21), `present-export-present` | present mode honours `prefers-reduced-motion`. 3i's moves now jump under reduce: Alt+Arrow, F6 and the phone sheet's Zoom to fit. Zoom keys, zoom to fit and Go to frame (3b) still animate |
+| Dark-mode colours (early wave-5 review W5-15) | not at parity | 2C, 3i | `a11y-contrast` (2 `test.fail`), `canvas/a11y/palette-contrast.test.ts` | Excalidraw's invert filter recolours brand swatches and muddies notes; red note ink is 3.55:1 rendered. Waits for 2C's hand-picked dark variants. 3i's pixel checks lose their marks when it lands |
 | Dashboard, template gallery, sharing dialog, links, access requests, invitations (Miro phase) | outside the canvas | — | default suite | the dashboard's content-search hits open `?el=` links in the engine build (3b) |
 | Search across boards (wave 4) | outside the canvas | — | default suite | the api reads elements (2F) |
 | Email sending, Kanban, DBC Ops (not built) | not built on either page | — | — | — |
@@ -263,6 +274,19 @@ around seeding writes (the O2 race's workaround); they can drop the waits.
 - 2C, from O2's part 3: call `core.syncScene()` after the undo install, `core.persistNow()` on `pagehide`, when hidden and on unmount, drop the `message` microtask deferral, and let `history-join.ts` use `undo.joinPrevious()` / `mergeTop()` (the core covers the loss either way; these make Saved and the queue exact at once).
 - CR-3F-1 (`transact` that skips the undo stack: +1s, `test.fail`); CR 3G-2 (`LobbyFiles.track`); a tool qualifier on key claims (3c; the keyboard-map test's `TOOL_SCOPED_KEYS` stands in); a "caught up" signal for features (3b F3).
 - 2C: a window resize does not bump the viewport signal (CR-3A-10); the note and text tools ignore the next style (CR-3A-7); the element-paste hook for the cross-workspace image check, a client-drawn face for cards without a preview, and a revoked blob URL seen once in the loader (3g); `viewport.get()` lags a `set` by a render and a tween can end a hair off (3b F4, F5).
+- 2C, from 3i's wave-5 fixes (requests, not applied; each has a `test.fail` naming it):
+  - **CR-3I-2 (W5-31):** top-bar fit rules for the Excalidraw page's pinned items. At 390 px Share ends at 397 px.
+  - **CR-3I-3 (W5-50):** the "⋯" menu's "On this board" caption has nothing under it while the people feature has its own chip (`LobbyBoardPage` `people()` returns null). Drop the caption, or move 3c's chip there on phones.
+  - **CR-3I-4 (W5-57):** the region can be renamed freely. 3i's application name now comes from the board's title (`boardRegionName(ctx.board.title)`), and a rename still re-labels it through the region's `aria-label` change.
+  - **CR-3I-5 (W5-10, W5-15):** the engine theme. 5 tests in `a11y-contrast` read the rendered pixels and lose their marks when it lands:
+    - frame names at 4.5:1 and outlines at 3:1, in light and in dark;
+    - a #f9fafb light canvas;
+    - dark-mode note ink at 4.5:1;
+    - non-palette colours drawn unchanged.
+  - **CR-3I-6 (found by 3i, not in the review):** on f336ae4, with or without 3i's changes, every board open says "Back online. All changes saved." to a screen reader.
+    - While the board opens, the save view goes connecting → offline-pending → connecting → saved. Offline-pending lasts about 8 ms, before the welcome, on a brand-new board.
+    - Cause: `sync-quality/engineSave.ts` `engineDisplayState` returns offline-pending before the welcome whenever the core reports `offlineChanges > 0`.
+    - `a11y-2` A11Y-14 (all three of 3i's runs) is now a `test.fail` naming it. It passed at the wave-3b gate (`a5e16da`), so the spike B merge `b0ec20f` (the persisted offline queue) is the likely start.
 
 **Feature owners (follow-ups after wave 3b)**
 - 3a: a toolbar action hook for tools that are buttons, the board's Delete calling `mindmap.delete` and type-to-edit on a selected topic (3d, CR-3D-3); the shortcuts key from the chrome (tldraw's CHROME_SAFE_ACTIONS); the highlighter's sizes; the Laser in the viewer toolbar once CR-3A-8 lands.
@@ -271,7 +295,9 @@ around seeding writes (the O2 race's workaround); they can drop the waits.
 - 3c / 3b: `present-live` "late joiner and reloads" leaves the late joiner on the first frame now and then (1 in 5 on 1809cf3 too; likely the first view against the live follow).
 - 2F with 2B, before the cut-over: the Excalidraw build writes `board_snapshots.body_version` 2 for v2 bodies and `boards.new_canvas` true for boards born on the new canvas (bridge release R0's contract, `docs/DEPLOY.md`; converted boards keep false), and drops R0's refusals of them from this branch's api at the same time (W3-15, W3-16).
 - The api: the private-brainstorm start limit (10 a minute per person) makes long spec files order-dependent; 3CF's spec fix starts its brainstorms as another host.
-- 3i and the palette owners: the red note's ink in dark mode (3.43:1).
+- 3i and the palette owners: the red note's ink in dark mode (3.43:1 through the filter, 3.55:1 rendered). It waits on 2C's dark variants (CR-3I-5).
+- 3b (W5-21): the zoom keys, zoom to fit and Go to frame still animate under reduced motion. 3i's own moves jump (`features/a11y/ported/motion.ts` `animateCamera()` can be reused).
+- 3c (W5-31, W5-07): the people chip in the phone top bar (CR-3I-3). The docked comment sheet over the tool dock is 3c's `comments-stacking`. Board actions already steps aside for it.
 - 2B: backups (and the restore drill) on `lb_*` files. 2E: the wave-1 facade verbs (specs still use the dev handle `window.__lobbyBoard`), and moving `e2e/spike-b/support` into `e2e/tests/support`.
 - Lockfile owner: CR-3I-1 (`@axe-core/playwright`), and the importer edges of W1-9.
 - AGENTS.md (plan §10): unchanged; it needs the owner's approval.
@@ -378,6 +404,7 @@ CR-3F-4, Ctrl+Z from the chrome, Ctrl+X on the canvas, Shift+= from the chrome; 
 | spike B history: undo does not restore the selection (3i F11) | 1 (`a11y-keyboard-safety`) |
 | DEF-W3-2 (O2 / 2C): undoing a template insert removes it for the inserting tab only | 1 (`navigation-templates`) |
 | one each | CR-3A-3 (`canvas-ux-keys` MAK-06), CR-3C-1 (`people-list`), CR-3D-5 (`tags-panel`), CR-3F-1 (`workshops-facilitation`), CR-3H-2 (`ai-actions` R9) |
+| added by 3i's wave-5 fixes (`engine/w5f-3i`), all waiting on 2C | 8:<br>• `a11y-contrast` 5 (W5-10 ×3, W5-15 ×2; CR-3I-5)<br>• `a11y-phone-reach` 2 (W5-31, CR-3I-2; W5-50, CR-3I-3)<br>• `a11y-2` A11Y-14 (CR-3I-6: a regression already on f336ae4, found by 3i's runs) |
 
 Skipped: the opt-in measurements `navigation-lod-fps` (LOBBY_MEASURE_FPS=1) and `present-export-heavy`.
 Not run here: the spike B suite (spike B's own verification is running), a quiet-window or laptop fps
