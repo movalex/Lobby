@@ -18,10 +18,31 @@
  * - numbers as `JSON.stringify` writes them (shortest round-trip form, the same in every engine; `-0` is `0`);
  * - arrays in their own order.
  * The result is the lowercase hex SHA-256.
+ *
+ * Tombstones (CONTRACTS_REV 7, W5-02): a deleted element is hashed as its `TOMBSTONE_KEYS` only. No client
+ * is ever sent a tombstone's content (text, authors, customData, links, file ids, geometry): the wire form
+ * of a tombstone is elements.ts `redactTombstone`, and the server keeps the full row for "Recently deleted"
+ * and restores. A client that saw the element live and then its delete still holds the content locally, a
+ * joiner holds the redacted form; both hash the same, and so does the test snapshot's full row.
  */
 
 /** Keys dropped from every element before hashing: local-only state (§3.2). */
 export const HASH_DROPPED_KEYS: readonly string[] = ['status']
+
+/**
+ * The fields a tombstone keeps on the wire and in the hash (W5-02): what keeps a deleted element from being
+ * resurrected or re-keyed by a stale client (its id and type, the deletion, the server's version and nonce,
+ * its z-order key) and when it was deleted (`updated`). Everything else of a deleted element is local.
+ */
+export const TOMBSTONE_KEYS: readonly string[] = [
+  'id',
+  'type',
+  'isDeleted',
+  'version',
+  'versionNonce',
+  'index',
+  'updated',
+]
 
 /** `JSON.stringify` with object keys sorted (see the file comment). Throws on non-finite numbers. */
 export function canonicalJson(value: unknown): string {
@@ -47,11 +68,16 @@ export function canonicalJson(value: unknown): string {
   }
 }
 
-/** One element as it is hashed: without `status`, and with `fileId`'s local derivative suffix stripped. */
+/**
+ * One element as it is hashed: without `status`, and with `fileId`'s local derivative suffix stripped; a
+ * tombstone (`isDeleted: true`) as its `TOMBSTONE_KEYS` only.
+ */
 export function canonicalElement(el: Readonly<Record<string, unknown>>): Record<string, unknown> {
   const out: Record<string, unknown> = {}
+  const tombstone = el.isDeleted === true
   for (const [k, v] of Object.entries(el)) {
     if (HASH_DROPPED_KEYS.includes(k)) continue
+    if (tombstone && !TOMBSTONE_KEYS.includes(k)) continue
     out[k] = k === 'fileId' && typeof v === 'string' ? v.replace(/@(thumb|display)$/, '') : v
   }
   return out

@@ -13,6 +13,7 @@
  */
 import { z } from 'zod'
 import { CustomData, checkLobbyData } from './custom-data.ts'
+import { TOMBSTONE_KEYS } from './hash.ts'
 import {
   COORD_LIMIT,
   ELEMENT_ID_PATTERN,
@@ -150,7 +151,8 @@ export const TextElement = z.strictObject({
   ...base,
   type: z.literal('text'),
   fontSize: z.number().finite().positive().lte(10_000),
-  fontFamily: z.union([z.literal(5), z.literal(6), z.literal(8)]),
+  /** limits.ts LOBBY_FONT_FAMILIES: 5 Excalifont, 6 Nunito, 7 Lilita One (headings, D3), 8 Comic Shanns */
+  fontFamily: z.union([z.literal(5), z.literal(6), z.literal(7), z.literal(8)]),
   baseFontSize: z.number().finite().positive().lte(10_000).nullable(),
   text: z.string().max(MAX_TEXT_CHARS),
   textAlign: z.enum(['left', 'center', 'right']),
@@ -239,6 +241,116 @@ export type TextWireElement = z.infer<typeof TextElement>
 
 /** UTF-8 bytes of an element's JSON. */
 export const elementBytes = (el: unknown): number => jsonByteLength(el)
+
+// ---- tombstones on the wire (CONTRACTS_REV 7, W5-02) ----------------------------------------------------
+
+export { TOMBSTONE_KEYS }
+
+/** Every field of a tombstone outside TOMBSTONE_KEYS, the same for every type: no content, no geometry. */
+const NEUTRAL_BASE = {
+  x: 0,
+  y: 0,
+  width: 0,
+  height: 0,
+  angle: 0,
+  strokeColor: '#1e1e1e',
+  backgroundColor: 'transparent',
+  fillStyle: 'solid',
+  strokeWidth: 1,
+  strokeStyle: 'solid',
+  roundness: null,
+  roughness: 0,
+  opacity: 100,
+  seed: 1,
+  groupIds: [],
+  frameId: null,
+  boundElements: null,
+  created: null,
+  link: null,
+  locked: false,
+} as const
+const NEUTRAL_LINEAR = {
+  points: [
+    [0, 0],
+    [0, 0],
+  ],
+  startBinding: null,
+  endBinding: null,
+  startArrowhead: null,
+  endArrowhead: null,
+} as const
+/** The `fileId` of a redacted image tombstone: a valid version id no upload ever has (all zeros). */
+export const REDACTED_FILE_ID = 'ver_0000000000'
+const NEUTRAL_BY_TYPE: Readonly<Record<ElementType, Readonly<Record<string, unknown>>>> = {
+  stickynote: { baseHeight: 1 },
+  rectangle: {},
+  ellipse: {},
+  diamond: {},
+  text: {
+    fontSize: 20,
+    fontFamily: 6,
+    baseFontSize: null,
+    text: '',
+    textAlign: 'left',
+    verticalAlign: 'top',
+    containerId: null,
+    originalText: '',
+    autoResize: true,
+    lineHeight: 1.25,
+  },
+  arrow: { ...NEUTRAL_LINEAR, elbowed: false },
+  line: { ...NEUTRAL_LINEAR, polygon: false },
+  freedraw: {
+    points: [[0, 0]],
+    pressures: [],
+    simulatePressure: true,
+    strokeOptions: { variability: 'constant', streamline: 0.5 },
+  },
+  image: { fileId: REDACTED_FILE_ID, status: 'saved', scale: [1, 1], crop: null },
+  frame: { name: null },
+}
+
+/**
+ * The wire form of a stored tombstone (§2.4.2, revised for W5-02): its TOMBSTONE_KEYS (id, type, the
+ * deletion, version, versionNonce, index, updated) over its type's neutral values, so it is a valid
+ * `WireElement` every client and Excalidraw's scene accept, and it carries none of the deleted element's
+ * content: no text, no author (`customData` is gone), no link, no file id, no geometry, no membership. The
+ * reset snapshot, catch-ups, every server op that stores or keeps an element deleted, and the stored copy in
+ * a reject's `el` use it. The server keeps the full row (`lb_elements`, `lb_deleted`) for "Recently
+ * deleted" and its restores; an undelete reaches clients as the full live element. hash.ts hashes a
+ * tombstone by the same keys, so a client that still holds the content it saw live converges with one that
+ * holds this form.
+ */
+export function redactTombstone(
+  el: Readonly<Record<string, unknown>> & { readonly type: string },
+): WireElement {
+  const type = (isElementType(el.type) ? el.type : 'rectangle') as ElementType
+  const neutral = JSON.parse(JSON.stringify({ ...NEUTRAL_BASE, ...NEUTRAL_BY_TYPE[type] })) as Record<
+    string,
+    unknown
+  >
+  return {
+    ...neutral,
+    id: el.id,
+    type,
+    isDeleted: true,
+    version: el.version,
+    versionNonce: el.versionNonce,
+    index: el.index ?? null,
+    updated: el.updated,
+  } as WireElement
+}
+
+/** Whether `el` is in the redacted form (every non-tombstone field neutral), e.g. for tests and clients. */
+export function isRedactedTombstone(
+  el: Readonly<Record<string, unknown>> & { readonly type: string },
+): boolean {
+  if (el.isDeleted !== true) return false
+  const r = redactTombstone(el) as unknown as Record<string, unknown>
+  const keys = new Set([...Object.keys(el), ...Object.keys(r)])
+  for (const k of keys) if (JSON.stringify(el[k]) !== JSON.stringify(r[k])) return false
+  return true
+}
 
 export type ElementCheck =
   | { ok: true; element: WireElement }

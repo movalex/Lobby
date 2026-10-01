@@ -52,9 +52,11 @@ export const CLASS_SAMPLES: Record<string, string[]> = {
   other: Array.from('абвгдежзийклмнопрстуфхцчшщыэюяΑΒΓΔΕΖΗΘΙΚΛΜαβγδεζηθικλμνξοπρστυφχψω'),
 }
 
-const FAMILIES = [
+/** Lobby's families (canvas-schema LOBBY_FONT_FAMILIES); 7 Lilita One since CONTRACTS_REV 7 (D3). */
+export const FAMILIES = [
   { id: 5, name: 'Excalifont' },
   { id: 6, name: 'Nunito' },
+  { id: 7, name: 'Lilita One' },
   { id: 8, name: 'Comic Shanns' },
 ]
 
@@ -78,7 +80,11 @@ export interface CalibrationResult {
   linearity: { family: number; size: number; text: string; measured: number; scaled: number }[]
 }
 
-export const calibrate = async (heldOut: Set<string>): Promise<CalibrationResult> => {
+/** `only`: measure just these family ids (the runner merges them into the existing table). */
+export const calibrate = async (
+  heldOut: Set<string>,
+  only?: readonly number[],
+): Promise<CalibrationResult> => {
   const samples: Record<string, string[]> = {}
   const excludedSamples: Record<string, number> = {}
   for (const [cls, list] of Object.entries(CLASS_SAMPLES)) {
@@ -93,7 +99,7 @@ export const calibrate = async (heldOut: Set<string>): Promise<CalibrationResult
   const families: Record<string, unknown> = {}
   const spread: CalibrationResult['spread'] = {}
   const linearity: CalibrationResult['linearity'] = []
-  for (const fam of FAMILIES) {
+  for (const fam of FAMILIES.filter((f) => !only || only.includes(f.id))) {
     const font = getFontString({ fontFamily: fam.id, fontSize: SIZE } as never)
     const w = (s: string) => getLineWidth(s, font as never) / SIZE
     const adv: Record<string, number> = {}
