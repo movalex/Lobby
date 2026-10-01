@@ -1,14 +1,14 @@
 // The Share dialog's "Export and download" setting (docs/WAVE3-CONTRACTS.md "export-control"). Board
 // owners switch it; everyone else sees its state, disabled. The api decides who may change it
-// (manage_access) and enforces it; this only shows and asks.
+// (manage_access) and enforces it; this only shows and asks. It reads and writes the board's export store
+// (./export-policy.ts), the same one every feature on the board page reads.
 
 import type { ExportPolicy } from '@draftroom/contracts'
 import { useEffect, useId, useState } from 'react'
-import { useValue } from 'tldraw'
-import { api, isApiError } from '../../api/client.ts'
-import type { BoardRole } from '../../lib/permissions.ts'
+import { api, isApiError } from '../../../api/client.ts'
+import type { BoardRole } from '../../../lib/permissions.ts'
+import { useValue } from '../../../lib/signals.ts'
 import {
-  boardExportState,
   clientExportAllowed,
   clientGuestsLimited,
   clientLinkWillLimit,
@@ -17,10 +17,9 @@ import {
   guestsMayExport,
   policyWithGuests,
   policyWithViewers,
-  refreshExportPolicy,
-  saveExportPolicy,
   viewersMayExport,
-} from './export-policy.ts'
+} from '../export-rules.ts'
+import { exportStateOf, refreshExportPolicy, saveExportPolicy } from './export-policy.ts'
 
 export const EXPORT_POLICY_LABEL = 'Viewers and commenters can export, copy and download files'
 export const EXPORT_POLICY_HELP =
@@ -46,7 +45,7 @@ const TOGGLE_SELECTOR = '[data-testid="share-export-policy-toggle"]'
  * the owner to the Export and download setting further down the dialog.
  */
 export function ClientExportLine({ boardId }: { boardId: string }) {
-  const state = boardExportState(boardId)
+  const state = exportStateOf(boardId)
   const allowed = useValue(
     'dr-share-client-export',
     () => clientExportAllowed(state.policy.get(), state.stored.get()),
@@ -106,7 +105,7 @@ export function ExportPolicySection({
   canCreateLinks?: boolean
 }) {
   const id = useId()
-  const state = boardExportState(boardId)
+  const state = exportStateOf(boardId)
   const policy = useValue('dr-share-export-policy', () => state.policy.get(), [state])
   const guest = useValue('dr-share-export-guest', () => state.guest.get(), [state])
   const stored = useValue('dr-share-export-stored', () => state.stored.get(), [state])
@@ -115,8 +114,8 @@ export function ExportPolicySection({
   const [error, setError] = useState<string | null>(null)
   const [loadFailed, setLoadFailed] = useState(false)
 
-  // The board page keeps the store current; ask anyway, so the dialog never shows a guess. The answer
-  // never overwrites a policy event that arrived after it was asked for (export-policy.ts).
+  // The board page keeps the store current; ask anyway (the dashboard has no board page), so the dialog
+  // never shows a guess. The answer never overwrites a policy event that arrived after it was asked for.
   useEffect(() => {
     const controller = new AbortController()
     refreshExportPolicy(api, boardId, controller.signal).catch(() => {

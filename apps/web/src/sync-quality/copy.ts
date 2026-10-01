@@ -1,9 +1,7 @@
-// User-facing words for the save indicator (WRK-03) and the per-property undo notices (WRK-05).
-// Pure functions: unit tested in copy.test.ts, rendered by SaveStatus.tsx and BoardPage.
+// User-facing words for the save indicator (WRK-03). Pure functions: unit tested in copy.test.ts, rendered
+// by SaveStatus.tsx and the board page.
 
-import type { UndoReplayReport } from './perPropUndo.ts'
-import type { Rejection } from './saveTracker.ts'
-import type { DisplayState } from './useSaveStatus.ts'
+import type { DisplayState, Rejection } from './save-state.ts'
 
 export const SAVE_LABEL: Record<DisplayState, string> = {
   connecting: 'Connecting…',
@@ -106,19 +104,6 @@ export function rejectionNotice(rejection: Rejection, readonly: boolean): string
     case 'refused':
       return 'The board did not accept your last change, so it was undone.'
   }
-}
-
-/** The notice after an undo/redo that left something alone (docs/research/undo-per-prop.md §4.2). */
-export function undoNotice(r: UndoReplayReport): string | null {
-  const gone = r.skipped.filter((s) => s.reason === 'deleted' || s.reason === 'orphan').length
-  if (gone)
-    return gone === 1
-      ? 'Someone deleted that object, so it was not restored.'
-      : `Someone deleted ${gone} of those objects, so they were not restored.`
-  if (r.skipped.some((s) => s.reason === 'locked'))
-    return 'Someone is editing that text, so it was left as is.'
-  if (r.noop) return 'Someone changed this since, so there was nothing left to undo.'
-  return null // partial skips of fields someone else changed are silent
 }
 
 // ---- the Excalidraw engine's indicator (docs/EXCALIDRAW-MIGRATION.md §2.5.7) --------------------------------

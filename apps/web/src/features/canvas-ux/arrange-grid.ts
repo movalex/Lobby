@@ -19,7 +19,7 @@
 //  - Inside a frame the grid must stay inside it: it is shifted to fit, an automatic column count that
 //    fits is preferred, and only when nothing fits does the frame grow (never shrink).
 
-import { DEFAULT_NOTE_GAP } from './deps.ts'
+import { DEFAULT_NOTE_GAP } from '@draftroom/board-ops/elements'
 import type { Rect } from './placement.ts'
 
 export interface GridItem {

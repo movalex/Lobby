@@ -1,8 +1,8 @@
 /**
  * Lobby's board page on the Excalidraw engine (docs/EXCALIDRAW-MIGRATION.md §2.3, §7.2 wave 2C;
- * docs/EXCALIDRAW-CONTRACTS.md). /b/:boardId with VITE_LOBBY_ENGINE=excalidraw (every such build since wave
- * 4, the production build included), inside the app's session: the same load, access and error screens as the tldraw page
- * (board/BoardPage.tsx), the same top bar, dock and notices, and the canvas: the Excalidraw host with
+ * docs/EXCALIDRAW-CONTRACTS.md). /b/:boardId in every build (the one board page since wave 4 part 2),
+ * inside the app's session: the same load, access and error screens the tldraw page had, the same top
+ * bar, dock and notices, and the canvas: the Excalidraw host with
  * the board session (./session.ts), the overlay root and host slots (./chrome.tsx), and CANVAS_FEATURES
  * installed on the feature-facing canvas after the first welcome.
  *

@@ -1,6 +1,6 @@
 // `window.lobbySpikeFeatures`: the spike B specs' handle on O5's features (b5-r2-*, b7-*, b12-*), next to
 // O3's `window.lobbyCanvas` facade and behind the same dev-auth guard (the spike board page exists only
-// with VITE_LOBBY_ENGINE=excalidraw and the guard; the check is repeated here). Every write goes through
+// behind the guard; the check is repeated here). Every write goes through
 // the features' own paths (CanvasPort.transact, the engine core's setDoc, the api), never straight into
 // the engine, so specs test what the UI does. Return values are JSON-serializable.
 import { DEV_AUTH_ENABLED } from '../../../lib/identity.ts'
@@ -16,9 +16,7 @@ import type { FeatureSet } from './wiring.ts'
 export type { LobbySpikeFeatures }
 
 const guardOn = () =>
-  import.meta.env.VITE_LOBBY_ENGINE === 'excalidraw' &&
-  (import.meta.env.DEV || import.meta.env.VITE_DRAFTROOM_DEV_AUTH === '1') &&
-  DEV_AUTH_ENABLED
+  (import.meta.env.DEV || import.meta.env.VITE_DRAFTROOM_DEV_AUTH === '1') && DEV_AUTH_ENABLED
 
 export function installFeatureHooks(set: FeatureSet): () => void {
   if (typeof window === 'undefined' || !guardOn()) return () => {}

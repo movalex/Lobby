@@ -1,14 +1,10 @@
 import type { LivePresentation, PresentLiveState, PresentLiveVersion } from '@draftroom/contracts'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { LOBBY_SIGNALS, type SignalsKit } from '../../comments/cells.ts'
-import { TLDRAW_SIGNALS } from '../../comments/tldraw-cells.ts'
 import { type LiveRequest, LiveStore, RESTART_WAIT_MS, SLIDE_RETRY_MS } from './store.ts'
 
-// The store runs on either board page's cells (comments/cells.ts): every case runs on both kits.
-const KITS = [
-  ['lib/signals', LOBBY_SIGNALS],
-  ['tldraw atoms', TLDRAW_SIGNALS],
-] as const
+// The store runs on the board page's cells (comments/cells.ts; until wave 4 part 2 every case also ran on tldraw's atoms).
+const KITS = [['lib/signals', LOBBY_SIGNALS]] as const
 let SIGNALS: SignalsKit = LOBBY_SIGNALS
 
 const ME = 'usr_meeeeeeeeeeee'

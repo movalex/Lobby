@@ -11,25 +11,18 @@ import { matchRoute, navigate, signInPath, useLocationKey, workspacePath } from 
 import { readLastWorkspace } from './lib/storage.ts'
 import { LoadingScreen, MessageScreen, UnreachableScreen } from './ui/screens.tsx'
 
-// The board pulls in tldraw (~2 MB); the dashboard and sign-in should not have to download it.
-const BoardPage = lazy(() => import('./board/BoardPage.tsx').then((m) => ({ default: m.BoardPage })))
 // Spike A (docs/EXCALIDRAW-MIGRATION.md §8): dev-only /spike/:name engine pages, outside the session.
 // The dev-auth test is inlined (same as DEV_AUTH_ENABLED) so it folds at build time: the imported const
-// alone does not, and the engine chunks would ship, unreachable, in a VITE_LOBBY_ENGINE-only build.
+// alone does not, and the spike chunks would ship, unreachable, in the production build.
 const SpikeRoute =
-  import.meta.env.VITE_LOBBY_ENGINE === 'excalidraw' &&
-  (import.meta.env.DEV || import.meta.env.VITE_DRAFTROOM_DEV_AUTH === '1') &&
-  DEV_AUTH_ENABLED
+  (import.meta.env.DEV || import.meta.env.VITE_DRAFTROOM_DEV_AUTH === '1') && DEV_AUTH_ENABLED
     ? lazy(() => import('./canvas/spike/SpikeRoute.tsx'))
     : null
-// Wave 2C (docs/EXCALIDRAW-MIGRATION.md §7.2): /b/:boardId opens Lobby's board page on the Excalidraw
-// engine instead of the tldraw BoardPage (canvas/board/route.tsx). Since wave 4 (docs/EXCALIDRAW-CUTOVER.md
-// G2) the engine flag alone decides, so the production build made with VITE_LOBBY_ENGINE=excalidraw
-// ships it (Clerk sign-in, real tickets; no debug handle: those keep the dev-auth guard). The test is
-// inlined so the engine chunks fold out of the normal (tldraw) build. Spike B's board page behind
-// ?page=spike stays under the guard (route.tsx).
-const ExcalidrawBoardRoute =
-  import.meta.env.VITE_LOBBY_ENGINE === 'excalidraw' ? lazy(() => import('./canvas/board/route.tsx')) : null
+// /b/:boardId is Lobby's board page on the Excalidraw engine (canvas/board/route.tsx; docs/EXCALIDRAW-
+// MIGRATION.md §7.2; since wave 4 part 2 the only board page: docs/EXCALIDRAW-CUTOVER.md G2, G10). The
+// board pulls in the engine (about 1 MB), which the dashboard and sign-in should not have to download.
+// Spike B's board page behind ?page=spike stays under the dev-auth guard (route.tsx).
+const BoardRoute = lazy(() => import('./canvas/board/route.tsx'))
 
 export function App() {
   if (SpikeRoute && location.pathname.startsWith('/spike/')) {
@@ -73,11 +66,7 @@ function Routes() {
       return (
         <RequireSession>
           <Suspense fallback={<LoadingScreen label="Opening board…" testId="board-loading" />}>
-            {ExcalidrawBoardRoute ? (
-              <ExcalidrawBoardRoute boardId={route.boardId} />
-            ) : (
-              <BoardPage boardId={route.boardId} />
-            )}
+            <BoardRoute boardId={route.boardId} />
           </Suspense>
         </RequireSession>
       )

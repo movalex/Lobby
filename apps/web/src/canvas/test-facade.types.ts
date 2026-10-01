@@ -2,7 +2,7 @@
  * `window.lobbyCanvas`: the e2e test facade (docs/EXCALIDRAW-MIGRATION.md §6.3), frozen at the spike B
  * contracts step C0 (docs/research/excalidraw/spike-b/CONTRACTS.md). Lead-owned; O3 implements it in
  * `canvas/test-facade.ts` on `CanvasPort`, installed only behind the dev-auth guard (the spike board page
- * is reachable only with VITE_LOBBY_ENGINE=excalidraw and the guard).
+ * is reachable only behind it).
  *
  * Every write goes through `CanvasPort.transact` and then the sync engine, never straight into
  * `updateScene`, so specs test the real path. Every return value is JSON-serializable (specs call these

@@ -1,5 +1,5 @@
-// The Excalidraw board page's save indicator state (./engineSave.ts), with the tldraw page's display rules
-// (./useSaveStatus.ts): "Saving…" is never delayed on the way in, and once shown it stays at least
+// The Excalidraw board page's save indicator state (./engineSave.ts), with the display rules the tldraw
+// page had: "Saving…" is never delayed on the way in, and once shown it stays at least
 // `minVisibleMs` and `settleMs` after the last change was acknowledged, so a burst of edits does not
 // flicker. Leaving the page while only this tab holds the changes (a guest's memory queue, an upload in
 // flight) asks first. No tldraw, no engine.
@@ -7,7 +7,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { type EngineSaveInput, engineDisplayState, engineSaveView, engineUnloadRisk } from './engineSave.ts'
 import type { SaveStatusView } from './SaveStatus.tsx'
-import type { DisplayState } from './useSaveStatus.ts'
+import type { DisplayState } from './save-state.ts'
 
 export interface EngineSaveOptions {
   settleMs?: number

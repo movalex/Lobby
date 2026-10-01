@@ -1,8 +1,6 @@
 // Pure slide logic for present mode and PDF export (no editor, no DOM): which frames are slides, where a
 // presentation starts, how the current slide survives live edits, and which frames become PDF pages.
 // Generic over the id (wave 3e): tldraw shape ids here, element ids on the Excalidraw page (ported/).
-import type { TLShapeId } from 'tldraw'
-import type { FrameEntry } from './board-ops.ts'
 
 export interface SlideBox {
   x: number
@@ -11,7 +9,7 @@ export interface SlideBox {
   h: number
 }
 
-export interface Slide<Id extends string = TLShapeId> {
+export interface Slide<Id extends string = string> {
   id: Id
   /** The frame's name as typed ('' when unnamed); use `slideTitle` for display. */
   name: string
@@ -35,13 +33,13 @@ export function isSkipped(shape: MetaCarrier | undefined): boolean {
  * frames marked "skip in presentation". Frames with an empty area are left out (nothing to fit to).
  */
 /** What a frame entry needs for the slide logic (board-ops FrameEntry and ElementFrameEntry both fit). */
-export interface SlideSource<Id extends string = TLShapeId> {
+export interface SlideSource<Id extends string = string> {
   id: Id
   name: string
   bounds: SlideBox
 }
 
-export function buildSlides<Id extends string = TLShapeId>(
+export function buildSlides<Id extends string = string>(
   order: readonly SlideSource<Id>[],
   shapeOf: (id: Id) => MetaCarrier | undefined,
 ): Slide<Id>[] {
@@ -67,7 +65,7 @@ export function slideTitle(name: string, index: number): string {
  * `ancestorsOf(id)` lists the shape's ancestors nearest first (tldraw `getShapeAncestors`, reversed).
  * Returns -1 when there are no slides.
  */
-export function findStartIndex<Id extends string = TLShapeId>(
+export function findStartIndex<Id extends string = string>(
   slides: readonly Slide<Id>[],
   order: readonly { id: Id }[],
   selectedIds: readonly Id[],
@@ -135,7 +133,7 @@ export function stepIndex(index: number, delta: number, count: number): number {
  * reordered, skipped or deleted frames): the same frame if it is still a slide, otherwise the slide that
  * now sits where it was (clamped), or -1 when no slides are left.
  */
-export function reconcileIndex<Id extends string = TLShapeId>(
+export function reconcileIndex<Id extends string = string>(
   previousIndex: number,
   currentId: Id | null,
   next: readonly Slide<Id>[],
@@ -146,6 +144,12 @@ export function reconcileIndex<Id extends string = TLShapeId>(
     if (same >= 0) return same
   }
   return Math.max(0, Math.min(next.length - 1, previousIndex))
+}
+
+/** What a frame pick needs of an entry: its id and name (board-ops' FrameEntry and ElementFrameEntry both fit). */
+export interface FrameEntry {
+  id: string
+  name: string
 }
 
 export interface PdfFramePick<E = FrameEntry> {
@@ -161,7 +165,7 @@ export interface PdfFramePick<E = FrameEntry> {
  * outline order for nested ones; an explicit selection includes skipped frames. Without a frame selection
  * it is every top-level frame in presentation order, minus skipped ones unless `includeSkipped`.
  */
-export function pickPdfFrames<Id extends string = TLShapeId, E extends { id: Id } = FrameEntry & { id: Id }>(
+export function pickPdfFrames<Id extends string = string, E extends { id: Id } = FrameEntry & { id: Id }>(
   order: readonly E[],
   outline: readonly E[],
   selectedIds: readonly Id[],

@@ -5,8 +5,7 @@
 // The first paint is already right: the inline script in apps/web/index.html resolves the same stored
 // value before any stylesheet or bundle loads and sets html[data-theme] (styles.css switches every
 // --dr-* token on it). This module takes over afterwards: it reacts to the OS setting and to other tabs,
-// and applies a new choice at once. The tldraw canvas starts from the same choice (tldraw-storage.ts,
-// run by boot.ts) and follows changes live (tldraw-sync.ts, while a board is open).
+// and applies a new choice at once. The canvas follows the same choice (canvas/engine/theme.ts).
 //
 // No tldraw import here: this module is part of the dashboard/sign-in bundle, and tldraw (~2 MB) must
 // stay in the lazily loaded board chunk.

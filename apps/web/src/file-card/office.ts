@@ -3,7 +3,7 @@
 // the version's meta when the worker has confirmed the type by content, else from the upload's own
 // type and name: the kind word ("Word document", never "PDF"), and the note that the pages are a
 // converted preview, not the document itself (AGENTS.md: never claim a flattened preview is the file).
-import type { FileCardShape } from '@draftroom/canvas-schema'
+import type { FileCardShapeProps } from '@draftroom/canvas-schema'
 import {
   type AssetVersionMeta,
   isOfficeUpload,
@@ -12,7 +12,7 @@ import {
   officeFormatByMime,
 } from '../assets/contract.ts'
 
-type CardProps = Pick<FileCardShape['props'], 'kind' | 'mimeType' | 'name'>
+type CardProps = Pick<FileCardShapeProps, 'kind' | 'mimeType' | 'name'>
 
 /** Shown on a card (and in the page viewer) whose pages come from an Office document's PDF conversion. */
 export const CONVERSION_NOTE = 'Preview made from a PDF conversion'

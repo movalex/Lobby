@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { saveLabel, saveTitle } from './copy.ts'
-import type { Rejection } from './saveTracker.ts'
-import type { DisplayState } from './useSaveStatus.ts'
+import type { DisplayState, Rejection } from './save-state.ts'
 import './sync-quality.css'
 
 export interface SaveStatusView {

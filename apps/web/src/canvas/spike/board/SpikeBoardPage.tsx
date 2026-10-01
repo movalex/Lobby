@@ -1,7 +1,7 @@
 /**
  * O2's spike board page at /b/:boardId (docs/EXCALIDRAW-MIGRATION.md §8.1 "Web", §8.6.3): the Excalidraw
- * host with real dev sign-in (the app's session; App.tsx mounts this page only with
- * VITE_LOBBY_ENGINE=excalidraw and the dev-auth guard, inside RequireSession) and real tickets, Lobby's top
+ * host with real dev sign-in (the app's session; canvas/board/route.tsx mounts this page only behind
+ * the dev-auth guard, inside RequireSession) and real tickets, Lobby's top
  * bar and Saved indicator, "X is typing", cursors, the UI slots of `registries.ts` (`toolbar`, `sheet`,
  * `timer`, filled by O5), and one `installAll` call (./session.ts).
  *

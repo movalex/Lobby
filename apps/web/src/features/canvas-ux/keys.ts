@@ -63,9 +63,9 @@ export interface SelectionLike {
 
 export interface TypeToEditState {
   selected: readonly SelectionLike[]
-  /** editor.isIn('select.idle') */
+  /** the select tool is idle (tldraw: isIn('select.idle')) */
   isIdle: boolean
-  /** editor.getEditingShapeId() !== null */
+  /** a text editor is open (tldraw: getEditingShapeId() !== null) */
   isEditing: boolean
   isReadonly: boolean
   menusOpen: boolean

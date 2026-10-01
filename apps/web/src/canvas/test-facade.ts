@@ -1,8 +1,8 @@
 /**
  * O3's e2e test facade, `window.lobbyCanvas` (docs/EXCALIDRAW-MIGRATION.md §6.3; types frozen at C0 in
  * ./test-facade.types.ts). `canvas/spike/installers.ts` calls `install` on the spike board page, which is
- * reachable only with VITE_LOBBY_ENGINE=excalidraw and the dev-auth guard; nothing else imports this file,
- * so the normal build carries none of it.
+ * reachable only behind the dev-auth guard; nothing else imports this file, so the production build
+ * carries none of it.
  *
  * Every write goes through `CanvasPort.transact` (one undo step each) and from there through the sync
  * engine, never straight into `updateScene`, so specs that write through the facade test the real path.

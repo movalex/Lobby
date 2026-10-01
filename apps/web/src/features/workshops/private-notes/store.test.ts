@@ -1,7 +1,5 @@
-import { type PrivateBrainstorm, type PrivateBrainstormState, PrivateTarget } from '@draftroom/contracts'
+import type { PrivateBrainstorm, PrivateBrainstormState } from '@draftroom/contracts'
 import { describe, expect, it } from 'vitest'
-import { NEW_FRAME_H, NEW_FRAME_W, newFrameBounds, targetForFrame } from './canvas.ts'
-import { chipCounts, describeCounts } from './hooks.ts'
 import { type EventSource, PrivateNotesStore, type RequestFn, type SessionEnded } from './store.ts'
 
 const SID = 'pbs_0123456789abcdefghij'
@@ -270,71 +268,5 @@ describe('asking people to write when a brainstorm starts (final review R2/R4)',
     const { store } = withMe(() => state())
     await store.refresh()
     expect(store.getSnapshot().startNews).toEqual({ sessionId: SID })
-  })
-})
-
-describe('helpers', () => {
-  it('describes counts', () => {
-    expect(describeCounts({ notes: 0, people: 0 })).toBe('No notes yet')
-    expect(describeCounts({ notes: 1, people: 1 })).toBe('1 note from 1 person')
-    expect(describeCounts({ notes: 7, people: 4 })).toBe('7 notes from 4 people')
-  })
-
-  it('words the top-bar chip in full (round-2 F17: not "0 from 0" or "3 from 2")', () => {
-    expect(chipCounts('open', { notes: 0, people: 0 })).toBe('Waiting for notes')
-    expect(chipCounts('open', { notes: 3, people: 2 })).toBe('3 notes from 2 people')
-    expect(chipCounts('revealed', { notes: 3, people: 2 })).toBe('Revealing…')
-    // R4: someone who can write and has not yet is asked to, whatever the counts
-    expect(chipCounts('open', { notes: 0, people: 0 }, true)).toBe('Add your notes')
-    expect(chipCounts('open', { notes: 3, people: 2 }, true)).toBe('Add your notes')
-    expect(chipCounts('revealed', { notes: 3, people: 2 }, true)).toBe('Revealing…')
-  })
-
-  it('centres a new frame in the viewport, sized for twelve notes', () => {
-    const b = newFrameBounds({ x: 1000, y: 500, w: 1600, h: 900 })
-    expect(b).toEqual({
-      x: 1000 + 800 - NEW_FRAME_W / 2,
-      y: 500 + 450 - NEW_FRAME_H / 2,
-      w: NEW_FRAME_W,
-      h: NEW_FRAME_H,
-    })
-    // 4 columns and 3 rows of 200 px notes fit (the sync server's grid: 40 px padding, 24 px gaps)
-    expect(Math.floor((NEW_FRAME_W - 80 + 24) / 224)).toBe(4)
-    expect(NEW_FRAME_H).toBe(80 + 3 * 200 + 2 * 24)
-  })
-
-  it('puts a new frame in free space beside the frame in view, never over it (DANA2-02, R2-01)', () => {
-    const viewport = { x: -900, y: 100, w: 1800, h: 1100 }
-    // The frame in view ('2 · What went well', 800 × 960) sits where a centred frame would go.
-    const inView = { x: -560, y: 216, w: 800, h: 960 }
-    const neighbour = { x: 400, y: 216, w: 800, h: 960 }
-    const b = newFrameBounds(viewport, [inView, neighbour])
-    expect(b).toMatchObject({ w: NEW_FRAME_W, h: NEW_FRAME_H })
-    const overlaps = (r: typeof inView) =>
-      b.x < r.x + r.w && r.x < b.x + b.w && b.y < r.y + r.h && r.y < b.y + b.h
-    expect(overlaps(inView)).toBe(false)
-    expect(overlaps(neighbour)).toBe(false)
-    // …and still near the view (not somewhere off past everything).
-    const cx = b.x + b.w / 2
-    const cy = b.y + b.h / 2
-    expect(Math.hypot(cx - 0, cy - 650)).toBeLessThan(2_500)
-  })
-})
-
-describe('targets (adversarial review)', () => {
-  it('a selected frame of any size gives a target the API accepts', () => {
-    const fakeEditor = (b: { x: number; y: number; w: number; h: number }) =>
-      ({
-        getShapePageBounds: () => b,
-        getAncestorPageId: () => 'page:page',
-      }) as unknown as Parameters<typeof targetForFrame>[0]
-    const frame = { id: 'shape:huge', type: 'frame' } as unknown as Parameters<typeof targetForFrame>[1]
-    for (const b of [
-      { x: -50, y: 20, w: 250_000, h: 0.2 },
-      { x: 0, y: 0, w: 640, h: 480 },
-    ]) {
-      const t = targetForFrame(fakeEditor(b), frame)
-      expect(PrivateTarget.safeParse(t).success, JSON.stringify(b)).toBe(true)
-    }
   })
 })

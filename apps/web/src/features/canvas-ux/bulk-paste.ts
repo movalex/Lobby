@@ -1,5 +1,5 @@
 // Bulk paste (COL-05): multi-line / TSV / CSV text asks "Paste as sticky notes or as text?".
-// Pure decision + layout; the editor wiring is bulk-paste-handler.ts (handler) + Overlay.tsx (prompt).
+// Pure decision + layout; the canvas wiring is ported/navigation/bulk-paste.tsx (handler + prompt).
 //
 // RETRO-01 layout: a spreadsheet COLUMN (or row) of more than 3 cells becomes a compact grid of
 // ceil(sqrt(n)) columns in source order instead of one tall strip; true 2-D selections keep their
@@ -7,16 +7,8 @@
 // empty spot: inside the frame under the paste point when it fits there (clear of that frame's
 // children), else on the page (clear of the page's shapes).
 
-import type { TLPageId, TLShape } from 'tldraw'
-import { DEFAULT_MAX_NOTES, DEFAULT_NOTE_GAP, NOTE_SIZE, notesFromText, parseBulkText } from './deps.ts'
-import {
-  findEmptySpot,
-  findEmptySpotWithin,
-  offsetToCenter,
-  type Point,
-  type Rect,
-  unionRects,
-} from './placement.ts'
+import { DEFAULT_MAX_NOTES, DEFAULT_NOTE_GAP, NOTE_SIZE, parseBulkText } from '@draftroom/board-ops/elements'
+import { findEmptySpot, findEmptySpotWithin, type Point, type Rect } from './placement.ts'
 
 export interface PasteSourceLike {
   type: string
@@ -25,8 +17,8 @@ export interface PasteSourceLike {
 }
 
 /**
- * The plain text to split. Spreadsheet copies carry HTML (a table) plus text/plain (TSV); tldraw's
- * paste pipeline hands the handler `text` = the HTML stripped of tags (no tabs), so prefer the plain
+ * The plain text to split. Spreadsheet copies carry HTML (a table) plus text/plain (TSV); a paste
+ * pipeline may hand the handler `text` = the HTML stripped of tags (no tabs), so prefer the plain
  * text source when there is one.
  */
 export function pickPlainText(content: { text: string; sources?: readonly PasteSourceLike[] }): string {
@@ -42,23 +34,13 @@ export interface BulkPasteAnalysis {
 
 /**
  * Null when this paste is not a bulk paste (one cell or less: single-line text, a URL, a sentence
- * with commas): the caller then leaves the paste to tldraw's default text/URL handling.
+ * with commas): the caller then leaves the paste to the canvas's default text/URL handling.
  */
 export function analyzeBulkPaste(text: string): BulkPasteAnalysis | null {
   if (typeof text !== 'string' || !text.trim()) return null
   const rows = parseBulkText(text)
   const cells = rows.reduce((n, r) => n + r.length, 0)
   return cells >= 2 ? { cells, rows: rows.length } : null
-}
-
-export interface BulkNotesResult {
-  /** Note shapes (page children, no index: the editor stacks them on top). */
-  shapes: TLShape[]
-  /** Page-space bounds of the grid (note height grows with long text after render). */
-  bounds: Rect
-  /** Cells left out by the cap (plus a flag when long cells were shortened). */
-  omitted: number
-  textShortened: boolean
 }
 
 /** Distance between neighbouring notes' origins in a pasted grid. */
@@ -77,44 +59,6 @@ export function reflowLine(positions: readonly Point[]): Point[] | null {
   if (xs.size !== 1 && ys.size !== 1) return null
   const cols = Math.ceil(Math.sqrt(n))
   return positions.map((_, i) => ({ x: (i % cols) * NOTE_STEP, y: Math.floor(i / cols) * NOTE_STEP }))
-}
-
-export function buildBulkNotes(
-  text: string,
-  opts: { center: Point; pageId: string; color?: string; font?: string; maxNotes?: number },
-): BulkNotesResult {
-  const maxNotes = opts.maxNotes ?? DEFAULT_MAX_NOTES
-  const { shapes: built, truncated } = notesFromText(text, {
-    origin: { x: 0, y: 0 },
-    pageId: opts.pageId as TLPageId,
-    color: opts.color,
-    maxNotes,
-  })
-  const reflowed = reflowLine(built)
-  const shapes = built.map((s, i) => {
-    const at = reflowed?.[i]
-    const props = opts.font ? { ...(s.props as object), font: opts.font } : s.props
-    return { ...s, x: at ? at.x : s.x, y: at ? at.y : s.y, props } as TLShape
-  })
-  const grid = unionRects(shapes.map((s) => ({ x: s.x, y: s.y, w: NOTE_SIZE, h: NOTE_SIZE }))) ?? {
-    x: 0,
-    y: 0,
-    w: 0,
-    h: 0,
-  }
-  const d = offsetToCenter(grid, opts.center)
-  const moved = shapes.map((s) => {
-    const { index: _index, ...rest } = s
-    return { ...rest, x: s.x + d.x, y: s.y + d.y } as TLShape
-  })
-  const total = analyzeBulkPaste(text)?.cells ?? shapes.length
-  const omitted = Math.max(0, total - shapes.length)
-  return {
-    shapes: moved,
-    bounds: { x: grid.x + d.x, y: grid.y + d.y, w: grid.w, h: grid.h },
-    omitted,
-    textShortened: truncated && omitted === 0,
-  }
 }
 
 /** Clearance between a pasted grid and a frame's edges / the content already in that frame. */

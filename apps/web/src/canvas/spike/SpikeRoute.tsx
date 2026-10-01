@@ -1,8 +1,7 @@
 import { type ComponentType, type LazyExoticComponent, lazy, Suspense } from 'react'
 
 // Spike A (docs/EXCALIDRAW-MIGRATION.md §8): /spike/:name loads ./pages/<name>.tsx. App.tsx mounts this
-// only when VITE_LOBBY_ENGINE=excalidraw AND the dev-auth guard is on, outside the session provider (no
-// sign-in, no API calls). Add a page by adding a NEW file under ./pages with a default-exported component;
+// only when the dev-auth guard is on, outside the session provider (no sign-in, no API calls). Add a page by adding a NEW file under ./pages with a default-exported component;
 // nothing shared needs editing.
 const pages = import.meta.glob<{ default: ComponentType }>('./pages/*.tsx')
 

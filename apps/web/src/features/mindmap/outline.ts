@@ -2,7 +2,7 @@
 // (one row per topic: level, topic, parent, path). The rules are ./outline-core.ts (shared with the
 // ported feature); this module adds the board CSV's cell rules.
 
-import { csvTextCell } from '@draftroom/board-ops'
+import { csvTextCell } from '@draftroom/board-ops/elements'
 import type { MindmapTree } from './model.ts'
 import { outlineCsvWith } from './outline-core.ts'
 

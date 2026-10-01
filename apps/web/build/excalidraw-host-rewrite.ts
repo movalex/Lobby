@@ -28,7 +28,7 @@ import { EXCALIDRAW_ASSET_BASE } from './excalidraw-assets.ts'
 // host not listed) fails the build, so an Excalidraw bump that adds one breaks the build until it is added
 // to REWRITTEN_HOSTS.
 //
-// Active when VITE_LOBBY_ENGINE=excalidraw (the engine is only bundled then). LOBBY_HOST_REWRITE=off
+// Active in every build (the engine is always bundled since wave 4 part 2). LOBBY_HOST_REWRITE=off
 // disables it (the "before" inventory of A12). LOBBY_HOST_REWRITE_VERIFY=report records leftovers
 // instead of failing. LOBBY_HOST_REWRITE_REPORT=<file> writes the per-module counts as JSON.
 
@@ -400,7 +400,7 @@ export function excalidrawHostRewrite(): Plugin {
     name: 'lobby:excalidraw-host-rewrite',
     enforce: 'pre',
     configResolved(config: ResolvedConfig) {
-      enabled = config.env.VITE_LOBBY_ENGINE === 'excalidraw' && process.env.LOBBY_HOST_REWRITE !== 'off'
+      enabled = process.env.LOBBY_HOST_REWRITE !== 'off'
       isBuild = config.command === 'build'
       if (enabled) tree = engineDependencyTree('@excalidraw/excalidraw', config.root)
       report.tree = [...tree].sort()

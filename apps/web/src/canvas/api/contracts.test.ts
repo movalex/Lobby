@@ -386,17 +386,20 @@ describe('the LobbyCanvas member table', () => {
 })
 
 describe('the tldraw map (apps/web/src outside canvas/)', () => {
-  it('maps every editor.* member in use', () => {
-    const used = new Set<string>()
-    for (const f of FILES) for (const m of editorMembers(readFileSync(f, 'utf8'))) used.add(m)
-    const missing = [...used].filter((m) => !(m in EDITOR_MEMBERS)).sort()
-    expect(missing, 'editor members with no mapping in tldraw-map.ts').toEqual([])
-    expect(used.size).toBeGreaterThanOrEqual(137)
+  // Wave 4 part 2 (docs/EXCALIDRAW-CUTOVER.md G10): the tldraw board page and every file that used
+  // `editor.*` or a tldraw symbol are gone; the map stays as the record of the port (§6 of the contracts).
+  it('nothing outside canvas/ imports tldraw or uses an editor.* member any more', () => {
+    const left: string[] = []
+    for (const f of FILES) {
+      const src = readFileSync(f, 'utf8')
+      const symbols = importedSymbols(src)
+      const members = editorMembers(src)
+      if (symbols.length || members.length) left.push(`${rel(f)}: ${[...symbols, ...members].join(', ')}`)
+    }
+    expect(left).toEqual([])
   })
 
-  it('maps every imported tldraw symbol exactly once', () => {
-    const used = new Set<string>()
-    for (const f of FILES) for (const s of importedSymbols(readFileSync(f, 'utf8'))) used.add(s)
+  it('names every tldraw symbol group once', () => {
     const groupOf = new Map<string, string>()
     for (const g of TLDRAW_SYMBOLS) {
       for (const s of g.symbols) {
@@ -404,7 +407,6 @@ describe('the tldraw map (apps/web/src outside canvas/)', () => {
         groupOf.set(s, g.id)
       }
     }
-    expect([...used].filter((s) => !groupOf.has(s)).sort(), 'tldraw symbols with no group').toEqual([])
   })
 
   it('every target exists (and a dropped member says why)', () => {
@@ -426,12 +428,12 @@ describe('the tldraw map (apps/web/src outside canvas/)', () => {
     expect(problems).toEqual([])
   })
 
-  it('every file that uses tldraw has a porting owner', () => {
-    const orphans = FILES.filter((f) => {
-      const src = readFileSync(f, 'utf8')
-      return (importedSymbols(src).length > 0 || editorMembers(src).length > 0) && fileOwner(rel(f)) === null
-    }).map(rel)
-    expect(orphans).toEqual([])
+  it('no file in the tree imports a tldraw package (the licence check’s source-level twin)', () => {
+    const bad = sourceFiles(SRC, () => false)
+      .filter((f) => /from\s+'(tldraw|@tldraw\/)/.test(readFileSync(f, 'utf8')))
+      .map(rel)
+    expect(bad).toEqual([])
+    expect(fileOwner('board/BoardPage.tsx')).not.toBeNull() // the map still names the ported files
   })
 
   it('ported code (features/**/ported/**) imports no tldraw, no engine and only canvas/api from the canvas', () => {

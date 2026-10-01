@@ -540,13 +540,6 @@ button.dr-wk-badge--group:focus-visible {
   }
 }
 
-/* ---- session settings ----------------------------------------------------------------------------
-   "Hide note authors" (session-settings.ts): tldraw's note attribution disappears on the canvas and
-   therefore in Present (the same canvas); exports strip it in present-export. */
-html[data-dr-hide-authors] .tl-note__attribution {
-  display: none;
-}
-
 /* ---- dock panel ---------------------------------------------------------------------------------- */
 
 .dr-wk-panel {
@@ -1050,13 +1043,6 @@ html[data-dr-hide-authors] .tl-note__attribution {
   white-space: normal;
 }
 
-/* Phones and small tablets (final review R6): tldraw's mobile layout (under 640 px of canvas) puts two
-   rows at the bottom, the undo/redo row above the tools, about 96 px in all; the message stack (vote
-   join card, voting bar, results card, brainstorm prompt) sits above both. */
-.tl-container:has(.tlui-layout__mobile) .dr-wk-stack {
-  bottom: 112px;
-  max-width: calc(100% - 16px);
-}
 .dr-wk-hint--coarse {
   display: none;
 }

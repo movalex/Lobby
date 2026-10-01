@@ -1,6 +1,6 @@
 /**
- * /b/:boardId on the Excalidraw engine (VITE_LOBBY_ENGINE=excalidraw; App.tsx loads this module only
- * then, in every such build since wave 4: docs/EXCALIDRAW-CUTOVER.md G2). Opens Lobby's board page
+ * /b/:boardId on the Excalidraw engine (App.tsx loads this module for every board; since wave 4 part 2 it
+ * is the only board page: docs/EXCALIDRAW-CUTOVER.md G2, G10). Opens Lobby's board page
  * (./LobbyBoardPage.tsx), or spike B's board page (canvas/spike/board/SpikeBoardPage.tsx) while spike B
  * still runs its acceptance specs against it:
  *
@@ -11,7 +11,7 @@
  * The spike page stays behind the local-dev guard (the Vite dev server, or a build with
  * VITE_DRAFTROOM_DEV_AUTH=1; src/lib/identity.ts): the production engine build carries only Lobby's page,
  * and `?page=spike` opens Lobby's page there. The test is inlined so the spike chunk folds out of that
- * build (an imported const does not fold). The normal (tldraw) build contains neither page.
+ * build (an imported const does not fold).
  */
 import { lazy, Suspense } from 'react'
 import { LoadingScreen } from '../../ui/screens.tsx'

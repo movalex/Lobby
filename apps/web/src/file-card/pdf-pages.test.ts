@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'vitest'
-import { PDF_PAGE_META_KEY, parseFileRef, pdfPageOf } from '../assets/asset-store.ts'
 import { derivative, makeMeta } from '../assets/test-fixtures.ts'
 import {
   documentPageCount,
@@ -17,7 +16,6 @@ import {
   zoomLabel,
   zoomStep,
 } from './pdf-pages.ts'
-import { pageAssetRecord } from './place-pages.ts'
 
 /** A ready PDF the way the worker writes it: pages 1..rendered (1024 wide), plus a 512 thumb of page 1. */
 function readyPdf(pageCount: number, rendered = Math.min(pageCount, 8)) {
@@ -150,28 +148,5 @@ describe('placing pages', () => {
     expect(pageAssetName('Q3 brief.pdf', 2, 'image/webp')).toBe('Q3 brief — page 2.webp')
     expect(pageAssetName('.PDF', 1, 'image/png')).toBe('document — page 1.png')
     expect(pageAltText('Q3 brief.pdf', 4)).toBe('Page 4 of Q3 brief.pdf')
-  })
-
-  it('the asset keeps the stable, host-less ref of the PDF version and names the page in meta', () => {
-    const { meta } = readyPdf(4)
-    const [, second] = previewPages(meta)
-    if (!second) throw new Error('no page 2')
-    const record = pageAssetRecord(
-      { assetId: meta.assetId, versionId: meta.versionId, name: meta.name },
-      second,
-      'asset:page2' as never,
-    )
-    expect(record.props.src).toBe(`/files/${meta.assetId}/${meta.versionId}/original`)
-    expect(parseFileRef(record.props.src)).toEqual({ assetId: meta.assetId, versionId: meta.versionId })
-    expect(record.props.src).not.toMatch(/^[a-z]+:|\/\/|base64|\?/i) // no host, no scheme, no query, no data
-    expect(record.meta).toEqual({ [PDF_PAGE_META_KEY]: 2 })
-    expect(pdfPageOf(record)).toBe(2)
-    expect(record.props).toMatchObject({
-      w: 1024,
-      h: 1325,
-      mimeType: 'image/webp',
-      isAnimated: false,
-      name: 'Q3 brief — page 2.webp',
-    })
   })
 })

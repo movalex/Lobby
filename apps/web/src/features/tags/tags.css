@@ -61,27 +61,6 @@
 .dr-tag-chip[data-overflow] {
   display: none;
 }
-/* Zoomed out: a colour dot per tag, then nothing (index.tsx sets the level on the editor container). */
-.tl-container[data-dr-tags-lod="dots"] .dr-tag-chips {
-  flex-wrap: wrap;
-  gap: calc(4px * var(--dr-tag-s));
-}
-.tl-container[data-dr-tags-lod="dots"] .dr-tag-chip[data-overflow] {
-  display: block;
-}
-.tl-container[data-dr-tags-lod="dots"] .dr-tag-chip {
-  flex: none;
-  width: calc(22px * var(--dr-tag-s));
-  min-width: 0;
-  height: calc(22px * var(--dr-tag-s));
-  padding: 0;
-  border-radius: 50%;
-  font-size: 0;
-}
-.tl-container[data-dr-tags-lod="dots"] .dr-tag-chip--more,
-.tl-container[data-dr-tags-lod="off"] .dr-tag-chips {
-  display: none;
-}
 
 /* ---- dots and pills in the UI ---------------------------------------------------------------------- */
 .dr-tag-dot {

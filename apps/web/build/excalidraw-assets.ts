@@ -15,9 +15,9 @@ import type { Plugin, ResolvedConfig } from 'vite'
 // Liberation/ is left out: Liberation Sans 1.05 is not OFL or MIT, and the engine only needs it for
 // server-side export (plan §2.12).
 //
-// Active exactly when the engine route ships (apps/web/src/App.tsx): VITE_LOBBY_ENGINE=excalidraw, the
-// production build included (wave 4, docs/EXCALIDRAW-CUTOVER.md G2: the static site needs
-// dist/excalidraw-assets/ without the dev-auth guard). The normal (tldraw) build carries no engine file.
+// Active in every build since wave 4 part 2 (the Excalidraw board page is the only one; until then the
+// gate was the engine flag): the production build included (wave 4, docs/EXCALIDRAW-CUTOVER.md G2: the
+// static site needs dist/excalidraw-assets/ without the dev-auth guard).
 
 export const EXCALIDRAW_ASSET_BASE = '/excalidraw-assets/'
 const EXCLUDED_FAMILIES = new Set(['Liberation'])
@@ -43,11 +43,11 @@ function listFonts(dir: string): Map<string, string> {
 }
 
 /**
- * Whether the fonts are served and emitted: the same gate as the engine route in App.tsx
- * (`VITE_LOBBY_ENGINE === 'excalidraw'`, dev server or any build). `env` is Vite's resolved `config.env`.
+ * Whether the fonts are served and emitted: always, since wave 4 part 2 (every build ships the Excalidraw
+ * board page; until then the gate was the engine flag). `_env` is Vite's resolved `config.env`.
  */
-export function excalidrawAssetsEnabled(env: Record<string, unknown>): boolean {
-  return env.VITE_LOBBY_ENGINE === 'excalidraw'
+export function excalidrawAssetsEnabled(_env: Record<string, unknown>): boolean {
+  return true
 }
 
 const enabledFor = (config: ResolvedConfig) => excalidrawAssetsEnabled(config.env)

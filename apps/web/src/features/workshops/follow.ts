@@ -1,5 +1,5 @@
 // "Gather everyone": who should follow whom when a summon event arrives. tldraw's follow API
-// (`editor.startFollowingUser(TLUserId)`) follows a collaborator's PRESENCE, whose `userId` is the
+// (its startFollowingUser(TLUserId)) follows a collaborator's PRESENCE, whose `userId` is the
 // tldraw user id (`user:<draftroom id>`, see BoardPage's users store), so the summoner has to be
 // found among the live collaborators first.
 

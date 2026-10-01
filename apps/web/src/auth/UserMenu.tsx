@@ -1,10 +1,8 @@
 import { useEffect, useId, useRef, useState } from 'react'
-import { useBoard } from '../board/board-context.ts'
 import { useIsGuest } from '../invite/guest.tsx'
 import '../invite/invite.css'
 import { initialsFor, safeColor } from '../lib/identity.ts'
 import { ThemePicker } from '../theme/ThemePicker.tsx'
-import { useTldrawThemeSync } from '../theme/useTheme.ts'
 import { type SignOutOptions, useMe, useSession } from './session.tsx'
 
 type SignOutButton = 'switch' | 'out' | 'everywhere'
@@ -20,7 +18,7 @@ export function useIsDevAuth(): boolean {
 /**
  * The signed-in user's button. With development sign-in it is the "dev identity" badge the e2e
  * suite looks for, and it says plainly that the identity is not verified. Its menu holds the theme
- * choice (System / Light / Dark); on a board it also keeps tldraw's canvas theme in step with it.
+ * choice (System / Light / Dark); the canvas follows the app theme (canvas/engine/theme.ts).
  * Switch user, Sign out and Sign out everywhere (SCA-4) all end the Clerk session too (SCA-1).
  * A name-only guest (wave 3) sees a "Guest" tag, that signing out means needing the link again,
  * "Sign in with an account" and "Sign out" (they have no other devices or account to end).
@@ -39,11 +37,6 @@ export function UserMenu({ compact = false }: { compact?: boolean }) {
   const button = useRef<HTMLButtonElement>(null)
   const user = me.user
   const color = safeColor(user.color, user.id)
-  // Every board page renders this menu (in the top bar, or in the "⋯" menu on phones): while it is
-  // mounted there, the live canvas follows a theme change and tldraw's own Ctrl/Cmd+/ moves the app.
-  // (The canvas opens in the right theme anyway: theme/boot.ts keeps tldraw's stored scheme in step.)
-  useTldrawThemeSync(useBoard() !== null)
-
   useEffect(() => {
     if (!open) return
     const onDown = (e: PointerEvent) => {

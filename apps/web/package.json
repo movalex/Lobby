@@ -22,12 +22,9 @@
     "@excalidraw/excalidraw": "catalog:",
     "@excalidraw/fractional-indexing": "catalog:",
     "@excalidraw/math": "catalog:",
-    "@tldraw/assets": "catalog:",
-    "@tldraw/sync": "catalog:",
     "pdf-lib": "catalog:",
     "react": "catalog:",
     "react-dom": "catalog:",
-    "tldraw": "catalog:",
     "zod": "catalog:"
   },
   "devDependencies": {

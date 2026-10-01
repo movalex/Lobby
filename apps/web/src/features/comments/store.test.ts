@@ -10,13 +10,9 @@ import {
   mayChangeWhoHasAccess,
   NEW_THREAD_DRAFT,
 } from './store.ts'
-import { TLDRAW_SIGNALS } from './tldraw-cells.ts'
 
-// The store runs on either board page's cells (./cells.ts): every case runs on both kits.
-const KITS = [
-  ['lib/signals', LOBBY_SIGNALS],
-  ['tldraw atoms', TLDRAW_SIGNALS],
-] as const
+// The store runs on the board page's cells (./cells.ts; until wave 4 part 2 every case also ran on tldraw's atoms).
+const KITS = [['lib/signals', LOBBY_SIGNALS]] as const
 let SIGNALS: SignalsKit = LOBBY_SIGNALS
 
 const BOARD = 'b-0123456789'

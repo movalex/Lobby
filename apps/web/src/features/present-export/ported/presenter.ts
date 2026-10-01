@@ -29,7 +29,7 @@ import type {
   StartResult,
   StopInfo,
   StopOptions,
-} from '../present-session.ts'
+} from '../present-types.ts'
 import { findStartIndex, reconcileIndex, type Slide, stepIndex } from '../slides.ts'
 import { containersOf, type ElementFrameEntry, presentationOrder, slidesOf } from './frames.ts'
 

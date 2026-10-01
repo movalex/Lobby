@@ -1,7 +1,7 @@
 // Pure logic behind the PDF page viewer and "Place on board" (FIL-04): which pages have previews,
 // page navigation, the page selection, zoom steps and the row the placed pages form. No editor, no
 // DOM: unit-tested in pdf-pages.test.ts.
-import type { FileCardShape } from '@draftroom/canvas-schema'
+import type { FileCardShapeProps } from '@draftroom/canvas-schema'
 import { type AssetVersionMeta, type DerivativeRecord, pageRenderings } from '../assets/contract.ts'
 import type { Block, Size } from '../assets/drop-layout.ts'
 
@@ -34,7 +34,7 @@ export function previewPages(meta: AssetVersionMeta | null): PreviewPage[] {
 /** How many pages the document has: the worker's count, else the card's hint, never fewer than the previews. */
 export function documentPageCount(
   meta: AssetVersionMeta | null,
-  props: Pick<FileCardShape['props'], 'pageCount'>,
+  props: Pick<FileCardShapeProps, 'pageCount'>,
   previewed: number,
 ): number {
   const probe = meta?.probe?.pageCount

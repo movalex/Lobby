@@ -7,8 +7,7 @@
 // "following Ann" come only from a live presentation's followers here (CR-3C-1).
 
 import type { RemoteCursor, RosterEntry } from '../../../canvas/api/index.ts'
-import type { FrameBox, PresenceLike } from '../model.ts'
-import type { RosterMap } from '../roster.ts'
+import type { FrameBox, PresenceLike, RosterMap } from '../model.ts'
 
 export interface PresenceUser {
   userId: string

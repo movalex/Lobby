@@ -11,11 +11,16 @@
 // `exportAllowedOn` / `guardExportOn` from here.
 //
 // Until the first answer arrives the policy counts as 'everyone' (the default and by far the common
-// case), so boards that never limit anyone do not flash disabled entries on open. The Share dialog keeps
-// the tldraw page's store for its own section (board/ShareDialog.tsx, shared by both pages); a change an
-// owner makes there reaches this store through the board event.
+// case), so boards that never limit anyone do not flash disabled entries on open. The Share dialog's
+// "Export and download" section (./ExportPolicySection.tsx; board/ShareDialog.tsx opens from the board
+// page and the dashboard) reads and writes this same store (`refreshExportPolicy`, `saveExportPolicy`).
 
-import { EXPORT_CONTROL_EVENTS, type ExportPolicy, ExportPolicyEvent } from '@draftroom/contracts'
+import {
+  EXPORT_CONTROL_EVENTS,
+  type ExportPolicy,
+  ExportPolicyEvent,
+  type ExportPolicyState,
+} from '@draftroom/contracts'
 import type { ApiClient } from '../../../api/client.ts'
 import type { NoticeInput } from '../../../board/board-context.ts'
 import type { BoardRole } from '../../../lib/permissions.ts'
@@ -84,6 +89,33 @@ export function guardExportOn(boardId: string, notify: (n: NoticeInput) => void)
   if (exportAllowedOn(boardId)) return true
   notifyExportOff(notify)
   return false
+}
+
+/** The Share dialog asking on open: the answer lands in the store unless something newer did first. */
+export async function refreshExportPolicy(api: ApiClient, boardId: string, signal?: AbortSignal) {
+  const { state, order } = entry(boardId)
+  const may = order.begin()
+  const s = await exportPolicyApi(api).get(boardId, signal)
+  if (signal?.aborted || !may()) return
+  state.policy.set(s.exportPolicy)
+  if (s.policySet !== undefined) state.stored.set(s.policySet)
+}
+
+/** An owner's change (the server checks manage_access); its answer lands like a refresh's. */
+export async function saveExportPolicy(
+  api: ApiClient,
+  boardId: string,
+  exportPolicy: ExportPolicy,
+): Promise<ExportPolicyState> {
+  const { state, order } = entry(boardId)
+  const may = order.begin()
+  const saved = await exportPolicyApi(api).put(boardId, exportPolicy)
+  // this tab at once when the event stream is down; otherwise the event did (and newer ones win)
+  if (may()) {
+    state.policy.set(saved.exportPolicy)
+    state.stored.set(saved.policySet ?? true) // an older server leaves it out
+  }
+  return saved
 }
 
 /**

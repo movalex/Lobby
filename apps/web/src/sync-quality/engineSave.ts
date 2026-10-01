@@ -17,7 +17,7 @@
 import type { SaveStatus as EngineSaveStatus } from '../canvas/sync/types.ts'
 import { engineOfflineLabel, engineOfflineTitle, engineRejectTitle } from './copy.ts'
 import type { SaveStatusView } from './SaveStatus.tsx'
-import type { DisplayState } from './useSaveStatus.ts'
+import type { DisplayState } from './save-state.ts'
 
 export interface EngineSaveInput {
   readonly status: EngineSaveStatus
