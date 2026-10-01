@@ -59,6 +59,18 @@ export function describeElement(el: CanvasElement, get: items.Lookup): string {
   return words ? `${kindLabel(el)}: ${words}` : kindLabel(el)
 }
 
+/**
+ * The accessible name of the text editor open on `el` (W5-59: the engine's editor had none): "Sticky note
+ * text", "Rectangle text", "Frame name"; a plain text element's editor is "Text".
+ */
+export function editorLabel(el: CanvasElement | undefined, get: items.Lookup): string {
+  if (!el) return 'Text'
+  const owner = items.containerOf(el, get)
+  if (owner.type === 'frame') return 'Frame name'
+  const kind = kindLabel(owner)
+  return kind === 'Text' ? 'Text' : `${kind} text`
+}
+
 export interface SelectionContext {
   get: items.Lookup
   /** the selection's level, in reading order */

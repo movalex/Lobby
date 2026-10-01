@@ -629,6 +629,33 @@ Checks: lint 0 errors / 0 warnings (581 files); typecheck 14 projects; vitest 1,
   - **Tests** (each fails on f336ae4): e2e `ai-actions` runs DEMO 1:00 → 1:20 → 2:45 → 3:30 (N in the Story row, Group into themes with the regroup question, "The frame grew to fit.", every note in the frame, the labels on one line, Present's slide 2 and the PDF's page 2 with the ideas) and the summary's keyboard return; 12 unit tests. A spec race fixed in the same file (the viewer's step shows the frame before selecting).
   - **Gate** (`E2E_PORT_BASE` 6840 / 6860; machine shared): lint (1,936 files); `pnpm -r typecheck` (15); `pnpm test` **5,098 passed / 36 skipped**; my Excalidraw specs (`ai-actions`, `history-*`) **three runs, 28/28 each** (3 expected failures: CR-3H-2, DEF-W3-1 ×2); the default build's `ai-assist`, `history`, `checkpoints` **26/26** once.
 
+- **Excalidraw migration, wave-5 review fixes, owner 3i (accessibility and phones)** on `engine/w5f-3i`, from `engine/excalidraw` f336ae4. The findings are in `docs/research/excalidraw/REVIEW-W5-EARLY.md`. Only 3i's files changed: `features/a11y/ported/**`, `canvas/a11y/palette-contrast.test.ts` (its header), 3i's `e2e/excalidraw/a11y-*` specs and the docs. No engine, 2A/2B/2C, other-owner, lockfile or workspace file changed.
+  - **Fixed:**
+    - **W5-07:** Board actions (≡) steps aside while a workshop card or a docked comment sheet is up.
+    - **W5-21:** Alt+Arrow, F6 and the sheet's Zoom to fit jump under reduced motion.
+    - **W5-43:** a polite "Note tool" line; the selection is said again when an edit ends.
+    - **W5-58:** a selection is said only once it has settled, so a template board says nothing.
+    - **W5-45:** a focus ring on the board when the keyboard brought the focus there.
+    - **W5-59:** the editor is named ("Sticky note text"), and a heading is read before the stacked line under it. tldraw's row rule is changed for stacked boxes.
+    - **W5-57:** the application's name now comes from the board's title, so 2C can rename the region.
+  - **Already fixed at wave 3b, now covered:** W5-06. `a11y-phone-reach` checks every phone control with `elementFromPoint` at 390 and 412 px, for an owner and a viewer.
+  - **Checks for 2C** (expected failures that lose their marks when 2C lands):
+    - `a11y-contrast` (5) reads the rendered pixels: frame names, outlines and the #f9fafb canvas (W5-10), and dark-mode note ink and non-palette colours (W5-15). On this tree it measures frame name 2.85:1 light and 4.36:1 dark, and the red note 3.55:1.
+    - `a11y-phone-reach` (2): Share 7 px past the edge at 390 px (W5-31), and the empty "On this board" row (W5-50).
+  - **Found:** every board open says "Back online. All changes saved." to a screen reader (CR-3I-6, 2C). It happens on f336ae4 with or without these changes: the save view passes through offline-pending for about 8 ms before the welcome. `a11y-2` A11Y-14 is now a `test.fail` naming it.
+  - **Requests** (`WAVE-3.md` §6):
+    - to 2C: CR-3I-2 (top-bar fit), CR-3I-3 (the empty overflow row), CR-3I-4 (rename the region freely), CR-3I-5 (the theme) and CR-3I-6 (above);
+    - to 3b: the zoom keys and Go to frame under reduced motion;
+    - to 3c: the phone people chip.
+    - W5-20, W5-22, W5-42, W5-46 and W5-31's 38 px tools stay 3a's.
+  - **Gate** (E2E_PORT_BASE 6880 and 6905; the machine was shared with other workflows):
+    - lint (biome, 1,941 files) and `pnpm -r typecheck` (15 projects) pass;
+    - `pnpm test`: 5,090 passed, 36 skipped;
+    - every 3i Excalidraw spec (`a11y-*`, 12 files, 65 tests), three runs in a row: 56 passed and 8 expected failures each run, plus A11Y-14, which failed all 3 runs. A11Y-14 fails on the baseline too; it has been marked since, and its file then passed 8/8;
+    - the 8 new regression tests fail on the unfixed app code and pass with it. W5-06's 3 tests pass on both (wave 3b had already fixed it);
+    - the default (tldraw) build's `a11y-2`, `a11y-3`, `a11y-polish`, `keyboard-safety`, `phone-overlays` and the two skip-link specs, once: 41/41;
+    - the normal build has none of the new markers (`canvas-announcer-tool`, `canvas-focus-ring`, `dr-a11y-focus-ring`), and the engine build has them.
+
 - **Excalidraw migration, wave 3b integrated on `engine/excalidraw`** (integrator; `docs/research/excalidraw/WAVE-3.md` §7, §4-§6 updated). Merged `--no-ff`: `engine/w3b-3b` `aaf2583`, `-3a` `d32b18d`, `-3cf` `21bf296`, `-3e` `219a500`, `-2c` `c804c6c`, then `main` `2a4e5a6` (bridge release R0); `spike/excalidraw` had not moved (`37bdfa9`).
   - **Change requests** (`docs/EXCALIDRAW-CONTRACTS.md` §12 W3-10 to W3-16): accepted CR-3F-3 (the follow camera hook, with `SummonScreen`), CR 3b-2 (wheel deltas), CR 3b-6 (Lobby's fit), CR-3A-6 (the highlighter and the viewers' Hand; the stamp outside `transact` as a reviewed exception), and 3b's level-of-detail cull through a Proxy in 2C's `session.ts` as temporary until CR 3b-5. Recorded, not applied: CR 3b-5, 3b-7, 3b-8, 3b-9, CR-3A-8, CR-3A-9, CR-3CF-1 (spike B), CR-3A-10 (2C).
   - **The `main` merge:** the sync keeps spike B's `engine-switch.ts` pre-open seam as the one list of checks; R0's `r0/pre-open.ts` re-exports it and registers R0's born-after check at load, with R0's classification. Maintenance refuses sockets on both engines; run-all and maintenance are engine-neutral routes. The api is the Excalidraw build's: it reads v1/v2 bodies, `lobby-elements` snapshots and `lobby-board` archives where R0 refuses them; R0's row-driven refusals (`body_version` 2, `boards.new_canvas`) are kept and dormant (nothing here writes them yet). Five R0 api tests now assert this branch's reading of v2 content. Before the cut-over, the Excalidraw build must write `body_version` 2 / `new_canvas` true and drop those refusals in the same change (2F with 2B).

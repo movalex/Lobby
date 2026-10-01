@@ -94,9 +94,26 @@ export function levelEntries(input: LevelInput, frame: string | null): OrderEntr
 }
 
 /**
+ * `below` sits under `above` in the same column: their boxes share some width and none of their height.
+ * A heading and its subtitle (two text boxes as wide as the frame, one under the other) are stacked; two
+ * notes side by side, or scattered items, are not.
+ */
+export function isStacked(above: Bounds, below: Bounds): boolean {
+  const shareWidth = above.x < below.x + below.width && below.x < above.x + above.width
+  const shareHeight = above.y < below.y + below.height && below.y < above.y + above.height
+  return shareWidth && !shareHeight
+}
+
+/**
  * Tldraw 5.4.2's reading order (Editor._getShapesInReadingOrder), on entry centres: sorted top to bottom,
  * grouped into rows (a centre within 100 px of the row's last one joins it), each row left to right, then
  * within a row a nearer entry two places on (at a shallow angle) swaps forward.
+ *
+ * One change (the early wave-5 review W5-59: a frame's subtitle was read before its title): an entry that
+ * is stacked under the row's last one (./isStacked: the same column, no shared height) starts a new row
+ * even when their centres are less than 100 px apart, so a heading is read before the line under it
+ * whatever their widths. tldraw sorted the two by their centres' x, which put a full-width subtitle first
+ * whenever it was a little narrower than its heading.
  */
 export function inReadingOrder<T extends { readonly bounds: Bounds }>(entries: readonly T[]): T[] {
   if (entries.length <= 1) return [...entries]
@@ -108,7 +125,7 @@ export function inReadingOrder<T extends { readonly bounds: Bounds }>(entries: r
     for (let i = rows.length - 1; i >= 0; i--) {
       const last = rows[i]?.[(rows[i]?.length ?? 1) - 1]
       if (last && Math.abs(w.c.y - last.c.y) < ROW_THRESHOLD) {
-        row = i
+        if (!isStacked(last.entry.bounds, w.entry.bounds)) row = i
         break
       }
     }

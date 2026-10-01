@@ -6,6 +6,7 @@
 // Every move is a selection change only (no undo step, nothing pushed) followed by "bring it into view", as
 // tldraw's `_selectShapesAndZoom` did.
 import { type Bounds, type LobbyCanvas, NotImplementedError } from '../../../canvas/api/index.ts'
+import { animateCamera } from './motion.ts'
 import {
   adjacentEntry,
   elementBounds,
@@ -41,13 +42,15 @@ export const VIEW_MARGIN = 64
 
 /**
  * Moves the camera so `ids` are on screen when they are not (tldraw's `zoomToSelectionIfOffscreen`), through
- * 3b's `viewport.ensureVisible`. Until 3b lands it (a stub throws NotImplementedError), a plain re-centre
- * through `viewport.set` at the current zoom stands in: no engine call either way.
+ * 3b's `viewport.ensureVisible` (it pans the least and keeps the zoom; it zooms out only when the item does
+ * not fit). Until 3b lands it (a stub throws NotImplementedError), a plain re-centre through `viewport.set`
+ * at the current zoom stands in: no engine call either way. The move glides, or jumps when the person
+ * prefers reduced motion (W5-21).
  */
 export function bringIntoView(canvas: LobbyCanvas, ids: readonly string[]): void {
   if (!ids.length) return
   try {
-    canvas.viewport.ensureVisible(ids, { animate: true, margin: VIEW_MARGIN })
+    canvas.viewport.ensureVisible(ids, { animate: animateCamera(), margin: VIEW_MARGIN })
     return
   } catch (e) {
     if (!(e instanceof NotImplementedError)) throw e
@@ -58,7 +61,7 @@ export function bringIntoView(canvas: LobbyCanvas, ids: readonly string[]): void
   if (isOnScreen(b, v, VIEW_MARGIN / v.zoom)) return
   canvas.viewport.set(
     { x: b.x + b.width / 2 - v.width / 2, y: b.y + b.height / 2 - v.height / 2 },
-    { animate: true },
+    { animate: animateCamera() },
   )
 }
 

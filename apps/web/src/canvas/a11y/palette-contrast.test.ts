@@ -8,6 +8,12 @@
 // Finding (wave 3i): the RED note's ink is 3.43:1 in dark mode, below AA's 4.5:1 (3:1 is enough only for
 // large text); every other note meets AA in both modes. Pinned below so a palette change shows up here; the
 // fix belongs to the palette's owners (board-ops/elements/palette.ts and the converter's copy).
+//
+// The early wave-5 review (W5-10, W5-15) asks for the check to go through the dark path the board really
+// draws and to require 4.5:1, and to cover frame names and outlines too. That path is 2C's engine theme
+// (hand-picked dark variants instead of this filter), so those checks read the rendered pixels instead:
+// e2e/excalidraw/a11y-contrast.spec.ts (expected failures until the theme lands; it measures 3.55:1 for the
+// red note, 2.85:1 for a frame name on white). The filter's numbers here stay as the engine's baseline.
 import {
   LOBBY_COLOR_NAMES,
   LOBBY_INK,
