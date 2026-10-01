@@ -46,6 +46,7 @@ import {
   voteClickAt,
 } from './voting-canvas.ts'
 import { StopwatchIcon } from './WorkshopBar.tsx'
+import './workshops-ported.css'
 
 type Ctx = CanvasFeatureContext
 

@@ -1,0 +1,12 @@
+/* OWNER: 3f. Workshops rules for the Excalidraw page only, a ported-only file (the normal build never
+   loads it; ./WorkshopOverlay.tsx imports it). */
+
+/* W5-07: on a phone, the "Board actions" button (3i's phone sheet: 48 px, 12 px from the right, 76 px from
+   the bottom) floats above the toolbar, where the bottom card of the message stack sat (the voting bar and
+   its Details, the brainstorm prompt, the join card, the results card): part of the card could not be
+   tapped. While that button is there, the stack stands above it (76 + 48 + 8 px). This beats 3a's rule
+   that lifts the stack above the phone toolbar's two rows (canvas-tools.css, 112 px) on specificity, whatever
+   order the two files load in. */
+[data-lobby-board-canvas]:has(.dr-a11y-sheet-root > .dr-a11y-sheet__toggle) .dr-wk-layer > .dr-wk-stack {
+  bottom: 132px;
+}
