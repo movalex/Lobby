@@ -18,8 +18,9 @@ Sources: plan §2.12, §5.3-§5.10, §7.5, §10, Appendix B, and the "Contracts 
   deploy to staging, every Render setting change, the go/no-go calls, a rollback and drop-legacy still
   need his OK at the time.
 - **[BUILD]** marks something this runbook needs that the branch does not have yet. §1 lists the
-  cut-over's (G1-G11): the cut-over cannot start while one is open, except where §1 gives a workaround.
-  R4 and R8 name two more that only the rehearsal needs.
+  cut-over's (G1-G11) with each one's status at the wave-4a integration (2026-10-01): the cut-over cannot
+  start while one is open, except where §1 gives a workaround. R4 and R8 name two more that only the
+  rehearsal needs.
 - **UNVERIFIED** marks a Render behaviour or an assumption no one has checked.
 - **Stop** means: do not go on; keep maintenance on; decide with the owner between fixing forward and
   the rollback (§7).
@@ -44,24 +45,28 @@ Sources: plan §2.12, §5.3-§5.10, §7.5, §10, Appendix B, and the "Contracts 
   deploys are manual. So `render.yaml` is changed only at C19, after the Blueprint is on Manual Sync
   (P8). Until then every setting is changed by hand, one service at a time, in the order below.
 
-## 1. What the branch still lacks (2026-09-30)
+## 1. What the branch still lacks (found 2026-09-30; status at the wave-4a integration, 2026-10-01)
 
 Found while writing this runbook (read-only checks of `engine/excalidraw` at 1a85d5c). Each is a wave 4
-or wave 5 item; the workstream column names who writes the code (plan §7.2).
+or wave 5 item; the workstream column names who writes the code (plan §7.2). The **Status** column was
+filled when `engine/w4-prep`, `engine/w4a-web`, `engine/w4a-sync` and `engine/w4a-api` were merged
+into `engine/excalidraw` (PROGRESS.md's wave-4 entries; contracts §12 W4-WEB-1 and W4-API-1): **open:
+G10 and G11**; the other nine are closed, each with the test or document that pins it. The "Missing"
+column keeps the 2026-09-30 wording as the record of what was found.
 
-| # | Missing | Why the runbook needs it | Workstream | Closed when |
-|---|---|---|---|---|
-| G1 | **No boot-in-maintenance flag.** Maintenance is a runtime switch that starts off on every start (`apps/sync/src/app.ts:140-144`); `DRAFTROOM_BOOT_MAINTENANCE` is read nowhere (plan open item 11) | C9 and F6: the new sync must come up with every socket refused, so no one edits a board before it is converted and checked | 2B | sync reads `DRAFTROOM_BOOT_MAINTENANCE=1` at start (any other value or unset: off), logs it, and a test starts a server with it and sees sockets refused and internal routes working |
-| G2 | **The production build has no Excalidraw board.** The engine route and the font assets need the dev-auth guard (`apps/web/build/excalidraw-assets.ts:51-53`, `App.tsx`); with `VITE_LOBBY_ENGINE=excalidraw` and no dev auth the build ships no engine and no `/excalidraw-assets/` | C14: the web Render builds | 2C + wave 4 | a build with `VITE_LOBBY_ENGINE=excalidraw`, `NODE_ENV=production` and no dev auth opens `/b/<id>` on Excalidraw and emits `dist/excalidraw-assets/` (without `Liberation/`) |
-| G3 | **`index.html` still has the inline theme script** (`apps/web/index.html:19-39`), and `z.config({ jitless: true })` exists nowhere | the CSP in the patch has no hash and no `unsafe-eval`; without these two fixes every page logs violations, and the theme script is blocked (a flash of the wrong theme) | wave 4 | `index.html` has no inline script (a test asserts it); zod is jitless before any schema runs; A12's CSP run gives 0 violations on the cut-over commit |
-| G4 | **The conversion does not get the final backup's digest.** `MigrationService`'s `backupOf` is wired nowhere, so `converted_from.backupKey` is null and each report's `sourceMatchesBackup` is null (`apps/sync/src/room/migrate/service.ts:112-121`) | C11: §5.3 requires `lb_source`'s digest to equal the final backup's `recordsSha256` | 2B | `backupOf` reads the board's newest held manifest entry (`holdUntil` in the future). Until then, C11's script makes the comparison from the saved run-all report |
-| G5 | **No `engine_migration` checkpoint after conversion** (plan §5.5): the reason exists (migration 0022, labels) but nothing takes it | C12: the per-board restore point | 2F with 2B | the conversion (or a route C12 calls) saves one `engine_migration` checkpoint per converted board, `body_version` 2 |
-| G6 | **R0's row contracts are dormant:** nothing writes `board_snapshots.body_version = 2` or `boards.new_canvas = true`, and the api still carries R0's refusals of them (`EXCALIDRAW-CONTRACTS.md` W3-15, W3-16) | the rollback (§7): R0 must recognise checkpoints and boards made on the new canvas by these columns | 2F with 2B | the Excalidraw build writes both (converted boards keep `new_canvas = false`) and drops R0's refusals in the same change |
-| G7 | **No rollback export** (`rollback-exports/<board>/<time>.json`, plan §5.9 step 2) | B4 | 2B | a route or CLI writes every board's lb_* state to R2. **Workaround until then:** B4 takes a run-all held backup of every board file, which copies the file whole, lb_* included (DEPLOY.md "R0 at the cut-over") |
-| G8 | **No `drop-legacy`** (plan §5.9 step 5) | D7 | 2B | a reviewed command that removes the tldraw tables, `dr_deleted_*`, `lb_source` and `lb_prev_*` and runs `VACUUM`, with a test |
-| G9 | **R0 contracts to re-check on the cut-over commit:** retention keeps `holdUntil` entries (Contracts R0 fixed item 3); the build reads `format: "lobby-elements"` entries (item 4); the roll-forward mirrors R0's restores and trims into `lb_deleted` (open item 10); a converted file's backup is described from its tldraw tables or a format of its own, never `lobby-elements` (DEPLOY.md "backup formats") | the rollback and the roll-forward | 2B | each has a gate test on the cut-over commit |
-| G10 | **tldraw still in the build** (lockfile PR #2 not done): `scripts/licence-check.mjs` passes only with `--before-cutover` | P2: the licence check must pass in strict mode | wave 4 | `pnpm licence:check` (strict) passes and CI drops `--before-cutover` |
-| G11 | **Cut-over blockers from the waves** (`WAVE-3.md` §6, `REVIEW-W5-EARLY.md`): B9's edit visibility on the heavy board (1.5 s p95 against 250 ms) and its NAS capacity half (never run); B11's one unexplained divergence; the open review blockers (for example W5-02, deleted notes' text sent to every role) | P2 | the owners named there | each is closed or accepted by the owner |
+| # | Missing | Why the runbook needs it | Workstream | Closed when | Status (2026-10-01) |
+|---|---|---|---|---|---|
+| G1 | **No boot-in-maintenance flag.** Maintenance is a runtime switch that starts off on every start (`apps/sync/src/app.ts:140-144`); `DRAFTROOM_BOOT_MAINTENANCE` is read nowhere (plan open item 11) | C9 and F6: the new sync must come up with every socket refused, so no one edits a board before it is converted and checked | 2B | sync reads `DRAFTROOM_BOOT_MAINTENANCE=1` at start (any other value or unset: off), logs it, and a test starts a server with it and sees sockets refused and internal routes working | **Closed** before wave 4a, on `engine/excalidraw` (wave 5, 2B): `apps/sync/src/config.ts` reads `DRAFTROOM_BOOT_MAINTENANCE=1` (any other value or unset: off), `app.ts` logs "[maintenance] on at start"; test `apps/sync/test/r0/boot-maintenance.test.ts`. C9 and F6 use it. |
+| G2 | **The production build has no Excalidraw board.** The engine route and the font assets need the dev-auth guard (`apps/web/build/excalidraw-assets.ts:51-53`, `App.tsx`); with `VITE_LOBBY_ENGINE=excalidraw` and no dev auth the build ships no engine and no `/excalidraw-assets/` | C14: the web Render builds | 2C + wave 4 | a build with `VITE_LOBBY_ENGINE=excalidraw`, `NODE_ENV=production` and no dev auth opens `/b/<id>` on Excalidraw and emits `dist/excalidraw-assets/` (without `Liberation/`) | **Closed** (W4-WEB-1): `apps/web/src/App.tsx`, `src/lib/board-engine.ts`, `build/excalidraw-assets.ts`. Gates: `pnpm --filter @draftroom/e2e excalidraw:prod` (`e2e/excalidraw-builds/prod-build.spec.ts`: the production build, no dev auth, opens `/b/<id>` on Excalidraw, fonts from this origin, `Liberation/` 404) and the default-suite spec `e2e/tests/build-engine-markers.spec.ts` (the default build: 0 engine markers, no `excalidraw-assets/`). |
+| G3 | **`index.html` still has the inline theme script** (`apps/web/index.html:19-39`), and `z.config({ jitless: true })` exists nowhere | the CSP in the patch has no hash and no `unsafe-eval`; without these two fixes every page logs violations, and the theme script is blocked (a flash of the wrong theme) | wave 4 | `index.html` has no inline script (a test asserts it); zod is jitless before any schema runs; A12's CSP run gives 0 violations on the cut-over commit | **Closed** (W4-WEB-1): `index.html` has no inline script; the theme boot is `apps/web/public/theme-boot.js` (`theme.test.ts` asserts it), zod is jitless through `public/zod-jitless.js`, a classic head script (`src/lib/zod-jitless.test.ts`; a module placement ran after the shared zod chunk). A12 on the production build: `pnpm --filter @draftroom/e2e csp:cutover` (`e2e/spike/csp/run-cutover.ts`, the patch's header), 0 violations, 3 runs in a row. Clerk's real origins in the header stay UNVERIFIED (P5): the harness signs in with the dev provider. |
+| G4 | **The conversion does not get the final backup's digest.** `MigrationService`'s `backupOf` is wired nowhere, so `converted_from.backupKey` is null and each report's `sourceMatchesBackup` is null (`apps/sync/src/room/migrate/service.ts:112-121`) | C11: §5.3 requires `lb_source`'s digest to equal the final backup's `recordsSha256` | 2B | `backupOf` reads the board's newest held manifest entry (`holdUntil` in the future). Until then, C11's script makes the comparison from the saved run-all report | **Closed** (W4-SYNC): `convert-all` reads the board's newest held, tldraw-described entry of the local manifest on the sync disk (`apps/sync/src/room/migrate/final-backup.ts`); the conversion refuses a board whose records differ (`backup-digest`, nothing written; the report carries `backupKey` and `expectedSourceSha256`) and records the key as `converted_from.backupKey`. Test `apps/sync/test/migrate/final-backup.test.ts`. Lazy conversions on open get no backup (plan §5.3 "Lazy"). C11's script stays as the independent check against the saved run-all report. |
+| G5 | **No `engine_migration` checkpoint after conversion** (plan §5.5): the reason exists (migration 0022, labels) but nothing takes it | C12: the per-board restore point | 2F with 2B | the conversion (or a route C12 calls) saves one `engine_migration` checkpoint per converted board, `body_version` 2 | **Closed** (W4-API-1): `POST /internal/checkpoints/engine-migration` and `node apps/api/src/features/history/checkpoint-all-cli.ts --engine-migration` save one automatic `engine_migration` checkpoint per converted board (`body_version` 2), idempotent (`apps/api/src/features/history/checkpoint-all.ts`, `checkpoints.ts`). Tests `apps/api/test/features/history/engine-migration.test.ts`, `e2e/excalidraw/cutover-api.spec.ts`. C12 has the command. |
+| G6 | **R0's row contracts are dormant:** nothing writes `board_snapshots.body_version = 2` or `boards.new_canvas = true`, and the api still carries R0's refusals of them (`EXCALIDRAW-CONTRACTS.md` W3-15, W3-16) | the rollback (§7): R0 must recognise checkpoints and boards made on the new canvas by these columns | 2F with 2B | the Excalidraw build writes both (converted boards keep `new_canvas = false`) and drops R0's refusals in the same change | **Closed** before wave 4a, on `engine/excalidraw` (wave 5, 2A), checked by W4-API with nothing to change: `apps/api/src/canvas-engine.ts` writes `boards.new_canvas = true` for every board the api creates on the new canvas (create, duplicate, restore-as-new, import), `body_version` 2 for v2 bodies, keeps converted boards `false`, and turns R0's refusals off when `GET /internal/canvas` says excalidraw; test `apps/api/test/features/history/new-canvas-build.test.ts`. |
+| G7 | **No rollback export** (`rollback-exports/<board>/<time>.json`, plan §5.9 step 2) | B4 | 2B | a route or CLI writes every board's lb_* state to R2. **Workaround until then:** B4 takes a run-all held backup of every board file, which copies the file whole, lb_* included (DEPLOY.md "R0 at the cut-over") | **Closed by documentation** (W4-SYNC): no second format is written. The held run-all backup on the Excalidraw build in maintenance IS the lb_* export: whole files, every `lb_*` table incl. `lb_prev_*` and `lb_source`, described from `lb_*` as `lobby-elements-converted`, signed, held 90 days, drilled and restorable (`apps/sync/src/backup/run-all.ts` header; gate `apps/sync/test/r0/rollback-safety-copy.test.ts`). B4 records the report's `offsiteKeys` as the export keys; the `rollback-exports/<board>/<time>.json` layout is dropped. |
+| G8 | **No `drop-legacy`** (plan §5.9 step 5) | D7 | 2B | a reviewed command that removes the tldraw tables, `dr_deleted_*`, `lb_source` and `lb_prev_*` and runs `VACUUM`, with a test | **Closed** (W4-SYNC): `POST /internal/migrate/drop-legacy` with `{"confirm":"drop-legacy", force?, dryRun?, boards?}` (`apps/sync/src/room/migrate/drop-legacy.ts`; tests `apps/sync/test/migrate/drop-legacy.test.ts`, `drop-legacy-process.test.ts`). D7 has the command and the guards. |
+| G9 | **R0 contracts to re-check on the cut-over commit:** retention keeps `holdUntil` entries (Contracts R0 fixed item 3); the build reads `format: "lobby-elements"` entries (item 4); the roll-forward mirrors R0's restores and trims into `lb_deleted` (open item 10); a converted file's backup is described from its tldraw tables or a format of its own, never `lobby-elements` (DEPLOY.md "backup formats") | the rollback and the roll-forward | 2B | each has a gate test on the cut-over commit | **Closed** (2B's wave-5 gate tests, green again at the integration): `apps/sync/test/r0/final-backup-hold.test.ts` (item 3), `apps/sync/test/r0/manifest-format.test.ts` (item 4), `apps/sync/test/migrate/rollforward-deleted.test.ts` (open item 10), `apps/sync/test/backup/excalidraw-backups.test.ts` (a converted file is described as `lobby-elements-converted`, never `lobby-elements`), and W4-SYNC's `apps/sync/test/r0/rollback-safety-copy.test.ts` (the whole lb_* state in the copy after Excalidraw-era edits and a roll-forward). |
+| G10 | **tldraw still in the build** (lockfile PR #2 not done): `scripts/licence-check.mjs` passes only with `--before-cutover` | P2: the licence check must pass in strict mode | wave 4 | `pnpm licence:check` (strict) passes and CI drops `--before-cutover` | **Open** (wave 4 part 2, the tldraw removal). On the integration commit `pnpm licence:check --before-cutover` passes and strict mode fails with 12 findings, all tldraw packages. Closes when tldraw leaves the lockfile and CI drops the flag (also SMK-1 in the lead's wave-4b queue: `packages/tldraw-import` must stay out of the web bundle). |
+| G11 | **Cut-over blockers from the waves** (`WAVE-3.md` §6, `REVIEW-W5-EARLY.md`): B9's edit visibility on the heavy board (1.5 s p95 against 250 ms) and its NAS capacity half (never run); B11's one unexplained divergence; the open review blockers (for example W5-02, deleted notes' text sent to every role) | P2 | the owners named there | each is closed or accepted by the owner | **Open**: as listed, with the owners named there. The lead's wave-4b queue (pending findings, 2026-10-01) adds L1 as a must-fix before the switch (maintenance does not refuse the engine's room-internal write routes), with M3 (a dedicated backup signing secret), L6 (run-all / convert-all guards) and SMK-2 (close reasons through the Render edge) to decide with the owner. |
 
 ## 2. Preconditions (plan §7.5 step 0)
 
@@ -219,8 +224,10 @@ staging, on the NAS, with nothing exposed. It produces the window's timings and 
   real Clerk sign-in (R1 (d)); the DevTools network log of the sign-in and of a board gives the exact
   Clerk origins: correct the patch's CSP line to them (P5). The console shows 0 CSP violations on the
   sign-in page, the dashboard and a board. The full e2e ×3 with the header enforced (the e2e stack runs
-  on the workstation; its web server must send the patch's header: [BUILD] if the e2e harness has no
-  such option). The e2e network assertion (no request leaves Lobby's origins and Clerk's) passes.
+  on the workstation; its web server must send the patch's header: `pnpm --filter @draftroom/e2e
+  csp:cutover` (`e2e/spike/csp/run-cutover.ts`) serves the production build under the patch's header and
+  drives sign-in, dashboard and a board by hand (G3); the full suite under the header is still [BUILD]:
+  the suites' preview server has no header option). The e2e network assertion (no request leaves Lobby's origins and Clerk's) passes.
 - **R9. The owner's comparison [OWNER].** The owner opens 10 boards on the rehearsal and on staging side
   by side and signs off the lossy counts (plan §5.3). Screenshots go to the owner only, never into a
   report or the repository.
@@ -321,7 +328,8 @@ staging, on the NAS, with nothing exposed. It produces the window's timings and 
   save option that does not deploy (its label is UNVERIFIED; if only "Save and deploy" is offered, that
   deploy is C9, so pick the cut-over commit first). R0 ignores both variables, so a restart of R0 now
   changes nothing but turning its maintenance off (C4's warning).
-- **C9. Deploy the new sync [OWNER], booting in maintenance** (plan §7.5 step 6; open item 11; needs G1).
+- **C9. Deploy the new sync [OWNER], booting in maintenance** (plan §7.5 step 6; open item 11; G1 built:
+  `DRAFTROOM_BOOT_MAINTENANCE=1`, `apps/sync/src/config.ts`).
   Dashboard → `draftroom-staging-sync` → Manual Deploy → Deploy a specific commit → the cut-over commit.
   Render stops R0's sync before it starts the new one (DEPLOY.md "What users see during a deploy").
   Checks, as soon as it is live:
@@ -344,7 +352,10 @@ staging, on the NAS, with nothing exposed. It produces the window's timings and 
   One board at a time, in a worker with a 256 MB heap cap. The poll ends when nothing runs or waits.
   Any `FAILED` line: that board stays on its tldraw tables, unconverted and closed; **stop** (decide:
   fix forward and convert it again with another `convert-all`, which skips converted boards, or roll
-  back).
+  back). `backup-digest` = that board's records are not the final backup's (an edit landed after C5, or
+  C5's run is not the board's newest held set): **stop**. The conversion read the board's newest held,
+  tldraw-described entry of the local manifest (`/var/data/backups/<board>/manifest.json`, G4); its
+  report carries `backupKey` and `expectedSourceSha256`.
 - **C11. Check the conversion** (plan §7.5 step 6, §5.3's table). Sync Shell; it reads only the run-all
   report from C5 and the conversion reports in `/var/data/migration/`:
 
@@ -363,10 +374,25 @@ staging, on the NAS, with nothing exposed. It produces the window's timings and 
   Pass: every board `ok`, the last line "all … boards converted and checked", and the lossy counts as
   rehearsed (R7; the owner signed them off in R9). Copy the output into the log. Anything else: **stop**.
   A board in `final-backups.json` with `"format":"lobby-elements"` (born on the new canvas) cannot occur
-  at a first cut-over.
-- **C12. The restore point per board** (plan §5.5; needs G5). One `engine_migration` checkpoint per
-  converted board. Until G5 is built there is no command for it: record "not taken" in the log; C6's
-  checkpoints and C5's backups are the restore points.
+  at a first cut-over. With G4 built every converted board's report also says `"sourceMatchesBackup":
+  true` and names C5's object in `backupKey`; the script's own digest comparison stays as the independent
+  check.
+- **C12. The restore point per board** (plan §5.5; G5 built, W4-API-1). One automatic `engine_migration`
+  checkpoint ("Moved to the new canvas", `body_version` 2, no author) per converted board, read from the
+  new sync's snapshot route (it answers in maintenance). api Shell (UNVERIFIED, §0):
+
+  ```sh
+  node apps/api/src/features/history/checkpoint-all-cli.ts --engine-migration > /tmp/engine-migration.json; echo "exit $?"
+  ```
+
+  It runs like C6, against `POST /internal/checkpoints/engine-migration` (`GET …/engine-migration/<runId>`
+  has the report; `--run <runId> --engine-migration` follows a run). 409 `WRONG_CANVAS` (nothing started)
+  means the api's sync still runs tldraw: **stop**. Pass: `"ok": true`, `"failed": 0`, and `saved` equal
+  to C11's converted count. A `skipped` row says why: `new-canvas` (born on the new canvas; none at a
+  first cut-over), `not-converted` (the board never had a file: nothing to restore), `tldraw` (its
+  snapshot is still a tldraw body: the new sync is not serving it; **stop**). Repeating the command saves
+  nothing twice (`unchanged`). Copy the report into the log (DEPLOY.md "R0 at the cut-over" step 6 is
+  the same command).
 - **C13. The static site's settings [OWNER: a Render setting].** Dashboard → `draftroom-staging-web`:
   - Headers: add the patch's `Content-Security-Policy` for `/*` (the value as corrected in P5, on one
     line). Users are in maintenance, so R0's web, still live for a few minutes, running under it does not
@@ -375,7 +401,8 @@ staging, on the NAS, with nothing exposed. It produces the window's timings and 
   - Environment: add `VITE_LOBBY_ENGINE=excalidraw` without deploying (as in C8). **Keep
     `VITE_TLDRAW_LICENSE_KEY`'s value** until D7: the new build ignores it, and a rollback may rebuild
     R0's web.
-- **C14. Deploy the new web [OWNER]** (plan §7.5 step 7; needs G2 and G3). Manual Deploy → Deploy a
+- **C14. Deploy the new web [OWNER]** (plan §7.5 step 7; G2 and G3 built, W4-WEB-1: the build is gated
+  by `pnpm --filter @draftroom/e2e excalidraw:prod` and `csp:cutover`). Manual Deploy → Deploy a
   specific commit → the cut-over commit (the build takes a few minutes). Checks from the workstation:
 
   ```sh
@@ -450,15 +477,18 @@ canvas as an empty tldraw board and writes tldraw tables into it (DEPLOY.md "Rol
   boards created on it do not open (Appendix B 5).
 - **B3. Maintenance on, on the Excalidraw build.** Sync Shell:
   `int POST /internal/maintenance '{"on":true}'`, then `int GET /internal/maintenance`.
-- **B4. The safety copy, before any build changes** (needs G7, or the workaround). Until the lb_* export
-  exists, take a held backup of every file, lb_* tables included:
+- **B4. The safety copy, before any build changes** (plan §5.9 step 2's export; G7 closed by
+  documentation, W4-SYNC). Sync Shell:
 
   ```sh
   node apps/sync/src/backup/run-all-cli.ts --expect-maintenance > /var/data/cutover/rollback-$(date -u +%Y%m%dT%H%M%SZ).json; echo "exit $?"
   ```
 
-  Exit 0, then copy it into the log. These backups are held 90 days too. With G7 built, also run the
-  export and record its keys.
+  Exit 0, then copy it into the log. The held run-all backup on the Excalidraw build in maintenance IS
+  the lb_* export: whole files, every `lb_*` table incl. `lb_prev_*` and `lb_source`, described from
+  `lb_*` as `lobby-elements-converted`, signed, held 90 days outside retention, drilled and restorable
+  (`apps/sync/src/backup/run-all.ts`'s header says why no second format is written; gate
+  `apps/sync/test/r0/rollback-safety-copy.test.ts`). Record the report's `offsiteKeys` as the export keys.
 - **B5. The static site [OWNER: a Render setting].** Remove the `Content-Security-Policy` header (R0's
   web is not built for it: its inline theme script, its zod probe and tldraw's `data:` fetch break under
   it, spike A12). Static-site settings are not rolled back by a Rollback (DEPLOY.md "Rollback"). The
@@ -479,7 +509,7 @@ canvas as an empty tldraw board and writes tldraw tables into it (DEPLOY.md "Rol
   the built artifact, the tldraw key inlined). Load a board for more than 6 s: no tldraw licence blank
   (DEPLOY.md "tldraw license key").
 - **B9. Checks.** DEPLOY.md "Checking it after the deploy" items 1, 2 and 5; a converted board opens and
-  edits on tldraw; the board created in C17 shows "This board was made on the new canvas…"; the dashboard shows its "New canvas" badge (needs G6).
+  edits on tldraw; the board created in C17 shows "This board was made on the new canvas…"; the dashboard shows its "New canvas" badge (G6: 2A's wave-5 `apps/api/src/canvas-engine.ts` writes both columns; W4-API checked it).
 - **B10. Announce [OWNER sends].** Lobby is back on its previous canvas. Edits made on the new canvas
   since the cut-over come back with the roll-forward.
 
@@ -507,8 +537,10 @@ canvas as an empty tldraw board and writes tldraw tables into it (DEPLOY.md "Rol
   A board whose `lb_source` digest no longer matches stays closed (`base-digest`, plan §5.9 step 3):
   **stop**, the owner is told. The listed conflicts (element ids and group names, never content) go into
   the log; the Excalidraw side's values are kept in `lb_prev_<cycle>_*`. Boards created on R0 and
-  converted now have a `<board>.json` report but no final backup, so C11's script does not list them:
-  check each by eye (`ok`, `diff.ok`, `invariants` "ran", no violations).
+  converted now have a `<board>.json` report; F4's run-all (R0's, no `format`, held) is their newest
+  held entry, so the conversion checked their digest against it and set `backupKey` (G4), but C11's
+  script, which reads C5's list, does not list them: check each by eye (`ok`, `sourceMatchesBackup`
+  true, `diff.ok`, `invariants` "ran", no violations).
 - **F8. The web**: the CSP header back (C13), then deploy the new web (C14 with its checks).
 - **F9. Maintenance off, the flag deleted, the smoke**: C15, C16, C17.
 - **F10. Announce [OWNER sends].** The owner decides whether the 48 h window starts again. A second
@@ -517,9 +549,26 @@ canvas as an empty tldraw board and writes tldraw tables into it (DEPLOY.md "Rol
 
 ## 9. Clean-up
 
-- **D7. drop-legacy [OWNER]** (day 7 after C18, plan §5.9 step 5; needs G8). Only after the window has
-  closed and the owner says so: remove the tldraw tables, `dr_deleted_*`, `lb_source` and `lb_prev_*` from
-  every board file, then `VACUUM`. After it, a rollback to R0 is no longer possible. Then remove
+- **D7. drop-legacy [OWNER]** (day 7 after C18, plan §5.9 step 5; G8 built, W4-SYNC). Only after the
+  window has closed and the owner says so. Maintenance on (C4's commands; the room's writes would wait
+  on `VACUUM` otherwise), then Sync Shell, a dry run first:
+
+  ```sh
+  int POST /internal/migrate/drop-legacy '{"confirm":"drop-legacy","dryRun":true}'   # 202 {"started":true,...}
+  int GET /internal/migrate/status                                                   # poll until "dropLegacy" is idle
+  ```
+
+  Read each board's state and reason in the status (kind `drop-legacy`) and in
+  `/var/data/migration/<board>.drop-legacy.json` (table names, bytes, times; no content), then run the
+  same command without `dryRun`. It removes, one board at a time through the migration worker, the
+  tldraw tables, `dr_deleted_*`, `lb_source` and every `lb_prev_<cycle>_*`, then `VACUUM` and a WAL
+  checkpoint; unknown tables are listed and left alone. Guards: `window` = less than 7 days since that
+  board's conversion or its newest roll-forward (wait, or `"force":true` with the owner's OK; the report
+  then says `forced`); `window-unknown` = no import row dates the conversion (force overrides);
+  `not-converted` and `rollforward-pending` are never dropped, force or not: **stop** and look;
+  `nothing-to-drop` for boards born on the new canvas or already stripped; 409 `BUSY` while a
+  `convert-all` runs; 400 without `"confirm":"drop-legacy"`. After it, a rollback to R0 is no longer
+  possible (R0 classifies the files converted-without-tldraw and refuses them). Then remove
   `VITE_TLDRAW_LICENSE_KEY` from the static site and the tldraw key is no longer needed (plan §7.5 step
   10). Delete `/var/data/cutover/` once its reports are in the log.
 - **D30. The asset collector may leave report mode [OWNER]** (plan §5.8).
