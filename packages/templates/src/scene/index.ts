@@ -23,7 +23,7 @@ import {
   unionRects,
 } from '../common.ts'
 import { getTemplateSource, planOf } from '../source.ts'
-import { planToScene } from './emit.ts'
+import { FONT_FACE_NAME, FONT_FAMILY, planToScene } from './emit.ts'
 
 export {
   IMAGE_SLOT_META,
@@ -40,6 +40,9 @@ export {
   type TemplatePoint,
 } from '../plan.ts'
 export {
+  DISPLAY_FACE_AVAILABLE,
+  DISPLAY_FONT_FAMILY_ID,
+  FONT_FACE_NAME,
   FONT_FAMILY,
   LABEL_FONT_SIZE,
   LINE_HEIGHT,
@@ -49,6 +52,16 @@ export {
   STROKE_WIDTH,
   TEXT_FONT_SIZE,
 } from './emit.ts'
+
+/**
+ * The faces the scenes are set in, as `document.fonts.load()` specs (`20px "Lilita One"`). A browser caller
+ * loads them before building a scene: `document.fonts.ready` only waits for faces something already asked
+ * for, and a title card measured before its face has loaded is laid out in the fallback face.
+ */
+export function sceneFontLoads(): string[] {
+  const families = [...new Set([FONT_FAMILY.sans, FONT_FAMILY.display])]
+  return families.map((f) => `20px "${FONT_FACE_NAME[f] ?? 'Nunito'}"`)
+}
 
 /**
  * Largest accepted |origin| coordinate on the new canvas: every element must stay within ±1e6 (canvas-schema

@@ -357,6 +357,8 @@ describe('Lobby tour: the frames', () => {
   it('6 · Tips and shortcuts lists real bindings, the key in bold over what it does', () => {
     // Each key is bound in Lobby: tldraw 5.4.2 defaults (N T F P, Space, Ctrl+Z), canvas-ux (L, M,
     // Alt+1, Ctrl+F), comments (C), present-export (Ctrl+Alt+Enter); docs/FEATURES-M2-CONTRACTS.md §1.
+    // W5-59: the keyboard's way round the board too (tldraw's SelectTool Idle: Tab / Shift+Tab select the
+    // next / previous shape in reading order, Ctrl+Shift+Down / Up go into a frame and back out).
     const expected: Record<string, string> = {
       N: 'Sticky note',
       T: 'Text',
@@ -370,12 +372,21 @@ describe('Lobby tour: the frames', () => {
       'Ctrl + Alt + Enter': 'Present',
       'Ctrl + Z': 'Undo',
       M: 'Minimap',
+      Tab: 'Next item',
+      'Shift + Tab': 'Previous item',
+      'Ctrl + Shift + Down': 'Into a frame',
+      'Ctrl + Shift + Up': 'Out of a frame',
     }
     const cards = kids(frame('6 · Tips and shortcuts'), 'geo')
     expect(Object.fromEntries(cards.map((c) => textOf(c).split('\n') as [string, string]))).toEqual(expected)
     for (const c of cards) expect(firstLineBold(c)).toBe(true)
     const texts = kids(frame('6 · Tips and shortcuts'), 'text').map(textOf).join(' ')
     expect(texts).toMatch(/On a Mac, Ctrl is Cmd and Alt is Option/)
+    // W5-59: the way to every other shortcut works on both pages ("?" and the menu at the top left: the
+    // tldraw page's main menu, the new canvas's Board menu); "the main menu" named only tldraw's
+    expect(texts).toMatch(/Press \? for every other shortcut/)
+    expect(texts).toMatch(/Keyboard shortcuts from the menu at the top left/)
+    expect(texts).not.toMatch(/main menu/i)
   })
 })
 

@@ -16,8 +16,11 @@
  *
  * Style names map as the converter maps stored tldraw boards (packages/tldraw-import convert.ts), with the
  * palette of `@draftroom/board-ops/elements`, so a template on the new canvas looks like a converted one.
- * Differences from the tldraw build, by design: plain text only (a card's bold title is its plain first
- * line), and no serif face (the tour's serif sample uses its `scene` override).
+ * Differences from the tldraw build, by design (decision D3: no bold, no new fonts): plain text only (a
+ * card's bold title is its plain first line); headings and title cards in Excalidraw's display face, Lilita
+ * One (fontFamily 7), once the server accepts it (`DISPLAY_FACE_AVAILABLE`), with size and colour for the
+ * rest of the hierarchy; and words that name something only this canvas has (the tour's type samples and
+ * key bindings) from the plan's `scene` overrides.
  *
  * Paint order is tldraw's (each frame, then its children in creation order; each container, then its
  * label); indices are fresh keys above `indexAbove`. Every element passes the server's `checkElement` and
@@ -70,11 +73,84 @@ export const STROKE_WIDTH: Record<LobbySize, number> = { s: 2, m: 3.5, l: 5, xl:
 export const TEXT_FONT_SIZE: Record<LobbySize, number> = { s: 18, m: 24, l: 36, xl: 44 }
 /** Note and shape label font sizes per size (tldraw LABEL_FONT_SIZES × 16). */
 export const LABEL_FONT_SIZE: Record<LobbySize, number> = { s: 18, m: 22, l: 26, xl: 32 }
-/** Excalifont 5, Nunito 6, Comic Shanns 8 (§2.12); the engine has no serif, so serif reads as Nunito. */
-export const FONT_FAMILY: Record<LobbyFont, LobbyFontFamily> = { draw: 5, sans: 6, serif: 6, mono: 8 }
 /** Excalidraw's line height for every family Lobby serves (`getLineHeight`). */
 export const LINE_HEIGHT = 1.25
 const H_ALIGN = { start: 'left', middle: 'center', end: 'right' } as const
+
+/** Lilita One: Excalidraw's display face, Lobby's template headings (decision D3: no bold, no new fonts). */
+export const DISPLAY_FONT_FAMILY_ID = 7
+/** The families' names, as a type sample names its face. */
+export const FONT_FACE_NAME: Readonly<Record<number, string>> = {
+  5: 'Excalifont',
+  6: 'Nunito',
+  7: 'Lilita One',
+  8: 'Comic Shanns',
+}
+
+/** A free text in `fontFamily` with every field a template's text has (the display-face probe). */
+function probeText(fontFamily: number): El {
+  return {
+    id: 'lobby-display-face-probe',
+    type: 'text',
+    x: 0,
+    y: 0,
+    width: 40,
+    height: 25,
+    angle: 0,
+    strokeColor: '#1e1e1e',
+    backgroundColor: 'transparent',
+    fillStyle: 'solid',
+    strokeWidth: 2,
+    strokeStyle: 'solid',
+    roundness: null,
+    roughness: 0,
+    opacity: 100,
+    seed: 1,
+    version: 1,
+    versionNonce: 1,
+    index: 'a0',
+    isDeleted: false,
+    groupIds: [],
+    frameId: null,
+    boundElements: null,
+    updated: 1,
+    created: null,
+    link: null,
+    locked: false,
+    text: 'Aa',
+    fontSize: 20,
+    fontFamily,
+    textAlign: 'left',
+    verticalAlign: 'top',
+    containerId: null,
+    originalText: 'Aa',
+    autoResize: false,
+    lineHeight: LINE_HEIGHT,
+    baseFontSize: null,
+    labelPosition: null,
+  }
+}
+
+/**
+ * Whether the server stores the display face: its own element check accepts a text in fontFamily 7 (the
+ * font allowlist, 2A with the contracts owner, and the server's text metrics for Lilita One). Until it does,
+ * the scene sets headings in Nunito and a label that names the face uses its fallback words, so a template
+ * is always one the server accepts as authored.
+ */
+export const DISPLAY_FACE_AVAILABLE: boolean = checkElement(probeText(DISPLAY_FONT_FAMILY_ID)).ok
+
+/**
+ * Excalifont 5, Nunito 6, Lilita One 7 (once the server accepts it), Comic Shanns 8 (§2.12). The engine has
+ * no serif, so serif reads as Nunito (the converter's mapping); 'display' is the headings' face.
+ */
+export const FONT_FAMILY: Readonly<Record<LobbyFont, LobbyFontFamily>> = {
+  draw: 5,
+  sans: 6,
+  serif: 6,
+  mono: 8,
+  // (a cast until canvas-schema's LobbyFontFamily lists 7: the element check above is the real gate)
+  display: (DISPLAY_FACE_AVAILABLE ? DISPLAY_FONT_FAMILY_ID : 6) as LobbyFontFamily,
+}
 
 export interface SceneEmitOptions {
   /** Fresh indices above this key (the board's top index). */
@@ -186,7 +262,7 @@ export function planToScene(plan: BoardPlan, opts: SceneEmitOptions = {}): Scene
       case 'text': {
         const fam = FONT_FAMILY[node.scene.font]
         const size = TEXT_FONT_SIZE[node.size]
-        const words = node.scene.text
+        const words = (DISPLAY_FACE_AVAILABLE ? node.scene.displayText : null) ?? node.scene.text
         const text = wrapLabelText(words, fam, size, node.w)
         const lines = text.split('\n').length
         put(node, [
@@ -249,7 +325,8 @@ export function planToScene(plan: BoardPlan, opts: SceneEmitOptions = {}): Scene
         }
         const custom = markersOf(node)
         if (custom) container.customData = custom
-        if (!node.text) {
+        const words = node.scene.text
+        if (!words) {
           put(node, [container])
           break
         }
@@ -258,13 +335,14 @@ export function planToScene(plan: BoardPlan, opts: SceneEmitOptions = {}): Scene
         const label: El = {
           ...common(labelId, 'text', node, { x: node.page.x, y: node.page.y, w: 0, h: 0 }),
           strokeColor: lobbyColor(node.labelColor).solid,
-          text: node.text,
+          text: words,
           fontSize: LABEL_FONT_SIZE[node.size],
-          fontFamily: FONT_FAMILY.sans,
+          // a title card (a theme, a column header, a key) in the display face; every other label in Nunito
+          fontFamily: node.heading ? FONT_FAMILY.display : FONT_FAMILY.sans,
           textAlign: 'center',
           verticalAlign: 'middle',
           containerId: id,
-          originalText: node.text,
+          originalText: words,
           autoResize: true,
           lineHeight: LINE_HEIGHT,
           baseFontSize: null,

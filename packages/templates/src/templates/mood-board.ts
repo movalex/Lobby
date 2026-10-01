@@ -122,26 +122,30 @@ export const moodBoard: TemplateSource = {
       intro: "Sharpen the direction by naming what it isn't.",
     })
     const colX = [60, contrastW - 60 - 200] as const
-    // Column headings: locked like every other heading (PRE-07).
+    // Column headings: locked like every other heading (PRE-07), and a reading-order row below the intro
+    // (W5-59: at y 160 they shared the heading's row and "This" was read before the frame's heading).
+    const colY = 192
     b.text(contrast, {
       x: colX[0],
-      y: 160,
+      y: colY,
       w: 200,
       text: 'This',
       size: 'm',
       color: 'green',
       align: 'middle',
       locked: true,
+      heading: true,
     })
     b.text(contrast, {
       x: colX[1],
-      y: 160,
+      y: colY,
       w: 200,
       text: 'Not that',
       size: 'm',
       color: 'red',
       align: 'middle',
       locked: true,
+      heading: true,
     })
     const pairs: ReadonlyArray<[string, string]> = [
       ['e.g. warm and hand-made', 'e.g. rustic or twee'],
@@ -149,7 +153,7 @@ export const moodBoard: TemplateSource = {
       ['This…', 'Not that…'],
     ]
     pairs.forEach(([yes, no], i) => {
-      const y = 216 + i * (200 + NOTE_GAP)
+      const y = colY + 44 + i * (200 + NOTE_GAP)
       b.note(contrast, { x: colX[0], y, text: yes, color: 'light-green' })
       b.note(contrast, { x: colX[1], y, text: no, color: 'light-red' })
     })
