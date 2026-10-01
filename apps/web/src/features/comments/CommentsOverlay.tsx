@@ -19,6 +19,7 @@ import { anchorPointOnCurrentPage, describeAnchor, keepAnchorAboveSheet } from '
 import { CheckIcon, CloseIcon } from './icons.tsx'
 import { PIN_SIZE as PIN, type PopoverLayout, popoverLayout } from './layout.ts'
 import { type PinState, pinState, snippet, unreadComments } from './model.ts'
+import { pinFaceStyle } from './pin-face.ts'
 import { NEW_THREAD_DRAFT } from './store.ts'
 import { ThreadView } from './ThreadView.tsx'
 import { COMMENT_TOOL_ID } from './tool.ts'
@@ -216,7 +217,7 @@ export function CommentsOverlay({ ctx }: { ctx: FeatureContext }) {
             >
               <span
                 className="dr-cpin__face"
-                style={{ ['--dr-cpin-color' as string]: safeColor(p.color, p.authorId) }}
+                style={pinFaceStyle(safeColor(p.color, p.authorId), p.state) as CSSProperties}
               >
                 {p.state === 'resolved' ? <CheckIcon size={13} /> : initialsFor(p.name)}
               </span>
@@ -349,7 +350,7 @@ function NewThreadComposer({ ctx }: { ctx: FeatureContext }) {
         >
           <span
             className="dr-cpin__face"
-            style={{ background: safeColor(ctx.me.user.color, ctx.me.user.id) }}
+            style={pinFaceStyle(safeColor(ctx.me.user.color, ctx.me.user.id), 'unread') as CSSProperties}
           >
             {initialsFor(ctx.me.user.name)}
           </span>

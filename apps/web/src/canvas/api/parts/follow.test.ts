@@ -52,6 +52,14 @@ function fakeCanvas() {
       screen = { x: 0, y: 0, width: w, height: h }
       fire('resize', screen)
     },
+    /** The board's resize event, sent before the engine has the new size (which it gets a task later). */
+    resizeLate(w: number, h: number) {
+      const old = screen
+      fire('resize', old)
+      setTimeout(() => {
+        screen = { x: 0, y: 0, width: w, height: h }
+      })
+    },
   }
 }
 
@@ -60,6 +68,8 @@ const part = (canvas: LobbyCanvas) =>
 
 const input = (type: CanvasInputEvent['type']) => ({ type }) as CanvasInputEvent
 const tick = () => new Promise((r) => setTimeout(r, 0))
+/** Past the follow part's re-fits after a resize. */
+const settled = () => new Promise((r) => setTimeout(r, 200))
 
 describe('followCamera', () => {
   it('fits the whole followed view, centred', () => {
@@ -91,6 +101,25 @@ describe('the follow part', () => {
     expect(changed).toHaveBeenLastCalledWith(null)
     f.peers.set([peer('bob', { x: 50, y: 50, width: 100, height: 100 })])
     expect(f.set).toHaveBeenCalledTimes(3)
+  })
+
+  it('W5-25: re-fits once the engine has the new size when the resize event comes before it', async () => {
+    const f = fakeCanvas()
+    const { follow } = part(f.canvas)
+    f.peers.set([peer('bob', { x: 0, y: 0, width: 400, height: 400 })])
+    follow.start('bob')
+    expect(f.set).toHaveBeenLastCalledWith({ x: 0, y: 0, zoom: 1 }, { force: true })
+    // a dock panel closed on this tab: 400 px wide becomes 800, but the event comes before the new size
+    f.resizeLate(800, 400)
+    expect(f.set).toHaveBeenLastCalledWith({ x: 0, y: 0, zoom: 1 }, { force: true })
+    await settled()
+    expect(f.set).toHaveBeenLastCalledWith({ x: -200, y: 0, zoom: 1 }, { force: true })
+    // stopped before the late re-fit: nothing more
+    f.resizeLate(400, 400)
+    follow.stop()
+    const calls = f.set.mock.calls.length
+    await settled()
+    expect(f.set).toHaveBeenCalledTimes(calls)
   })
 
   it('never follows this tab itself', () => {

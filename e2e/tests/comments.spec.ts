@@ -58,6 +58,38 @@ const composerIn = (page: Page, scope: 'new' | string) =>
   (scope === 'new' ? newCommentPopover(page) : threadPopover(page, scope)).getByTestId('comment-composer')
 const shapeAnchor = (u = 0.5, v = 0.5) => ({ kind: 'shape' as const, shapeId: NOTE, u, v })
 
+/**
+ * W5-49: the contrast of each open thread's marker initials on its face as the page draws them (the face's
+ * opacity over the marker's white included).
+ */
+const pinInkContrasts = (page: Page) =>
+  page.evaluate(() => {
+    const rgb = (s: string) => (s.match(/[\d.]+/g) ?? []).map(Number)
+    const lum = (c: number[]) => {
+      const f = (v: number) => {
+        const x = v / 255
+        return x <= 0.04045 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4
+      }
+      return 0.2126 * f(c[0] ?? 0) + 0.7152 * f(c[1] ?? 0) + 0.0722 * f(c[2] ?? 0)
+    }
+    const over = (c: number[], a: number, under: number[]) =>
+      [0, 1, 2].map((i) => (c[i] ?? 0) * a + (under[i] ?? 0) * (1 - a))
+    const white = [255, 255, 255]
+    return [...document.querySelectorAll('[data-testid="comment-pin"]')]
+      .filter((p) => p.getAttribute('data-state') !== 'resolved')
+      .map((p) => {
+        const s = getComputedStyle(p.querySelector('.dr-cpin__face') as Element)
+        const op = Number(s.opacity)
+        const bg = rgb(s.backgroundColor)
+        const face = over(bg, bg[3] ?? 1, white)
+        const ink = over(rgb(s.color), 1, face)
+        const a = lum(over(face, op, white))
+        const b = lum(over(ink, op, white))
+        const ratio = (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05)
+        return `${p.getAttribute('data-state')} ${Math.round(ratio * 100) / 100}`
+      })
+  })
+
 test('commenter on a read-only canvas: C, click a note, Enter posts; the owner sees the pin live and the server stored it', async ({
   board,
   users,
@@ -933,3 +965,35 @@ test('after posting, Esc leaves the thread with focus on the canvas, the next Es
 function xy(p: { x: number; y: number }): [number, number] {
   return [p.x, p.y]
 }
+
+test('W5-49: every marker’s initials are 4.5:1 or more on its face, read or unread', async ({
+  board,
+  users,
+  session,
+}) => {
+  const a = await session('alice')
+  await createNote(a.page, NOTE, 0, 0, 'Palette')
+  await waitForSaved(a.page)
+  await centerOn(a.page, NOTE, 1)
+  const ids: string[] = []
+  for (const [who, u] of [
+    ['alice', 0.2],
+    ['bob', 0.5],
+    ['carol', 0.8],
+  ] as const) {
+    if (who !== 'alice') await users.grant(board, who, 'editor')
+    const thread = await commentsApi(await users.api(who)).createThread(board, shapeAnchor(u, 0.5), who)
+    ids.push(thread.id)
+  }
+  await expect(pins(a.page)).toHaveCount(3)
+  // alice's own thread is read; bob's turns read once she opens it; carol's stays unread
+  await expect(pin(a.page, ids[0] ?? '')).toHaveAttribute('data-state', 'read')
+  await pin(a.page, ids[1] ?? '').click()
+  await expect(pin(a.page, ids[1] ?? '')).toHaveAttribute('data-state', 'read')
+  await a.page.keyboard.press('Escape')
+  await expect(threadPopover(a.page)).toHaveCount(0)
+  await expect(pin(a.page, ids[2] ?? '')).toHaveAttribute('data-state', 'unread')
+  const ratios = await pinInkContrasts(a.page)
+  expect(ratios).toHaveLength(3)
+  for (const r of ratios) expect(Number(r.split(' ')[1]), r).toBeGreaterThanOrEqual(4.5)
+})
