@@ -70,6 +70,9 @@ const writing =
 
 const MAINTENANCE_LIMIT_BYTES = 1024
 
+/** The engine POSTs maintenance does not refuse: the cut-over's conversion runs inside the window (§7.5 step 6). */
+const MAINTENANCE_EXEMPT_ENGINE_POSTS = /^\/internal\/migrate\/convert-all(?:\?|$)/
+
 async function handleMaintenance(req: IncomingMessage, res: ServerResponse, deps: RouterDeps) {
   const control = deps.maintenance
   if (!control) throw notFound()
@@ -207,10 +210,20 @@ async function route(req: IncomingMessage, res: ServerResponse, url: URL, deps: 
     // Before routing: without the secret, the internal surface is indistinguishable from a wall.
     if (!checkInternalSecret(req.headers[INTERNAL_SECRET_HEADER], deps.internalSecret))
       throw new HttpError(401, 'UNAUTHORIZED', 'Missing or invalid internal credentials.')
+    // The Excalidraw engine's routes: every POST writes a board (the room's workshop-state, the api's seed,
+    // place-notes and deleted/restore, the test server-write and prepare) and is refused in maintenance
+    // like the tldraw board routes above (DEPLOY.md: "no edit can reach a board file"), except the
+    // cut-over's own `convert-all`, which the runbook runs INSIDE the maintenance window (§7.5 step 6).
+    // Before, only TLDRAW_BOARD_ROUTES were wrapped, so on DRAFTROOM_ENGINE=excalidraw a restore, a seed
+    // or an AI placement wrote the board file while files were being copied or converted (V2 P-M2, P-M4).
     const engine: Route[] = (deps.engineRoutes ?? []).map((r) => ({
       re: r.path,
       methods: [r.method],
-      handle: (req, res, _deps, seg) => r.handle(req, res, seg),
+      handle: (req, res, routerDeps, seg) => {
+        if (r.method === 'POST' && !MAINTENANCE_EXEMPT_ENGINE_POSTS.test(req.url ?? ''))
+          refuseInMaintenance(routerDeps)
+        return r.handle(req, res, seg)
+      },
     }))
     const routes = [
       ...engine,

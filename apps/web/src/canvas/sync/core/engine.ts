@@ -149,6 +149,12 @@ interface Sent {
   ref?: SceneElement
   /** a patch's `pv`: the server version it was built on (the lost-push decision counts writes since) */
   pv?: number
+  /**
+   * a patch's: the seqs of this tab's pushes carrying the element that were still in flight when it was
+   * built (`ref` holds their values; `pv` does not hold their version bumps). The lost-push decision reads
+   * their acks (`ackedVersion`), so this tab's own landed pushes are never counted as other users' writes
+   */
+  ahead?: readonly number[]
   /** a create's: the server copy it was made over (a tombstone it undeletes), or none (a new id) */
   prior?: SceneElement
   /**
@@ -202,6 +208,11 @@ export type CoreEvent =
   | { kind: 'refit'; id: string; dx?: number; dy?: number }
   /** a non-retryable reject (Change not saved, with the reason) */
   | { kind: 'reject'; id: string; code: RejectCode }
+  /**
+   * groups of a push lost with the socket (or the page) whose fate the server copy cannot tell, so the
+   * server's copy stands (replayLost): the user is told (Change not saved), the change is not dropped silently
+   */
+  | { kind: 'superseded'; id: string; groups: readonly GroupKey[] }
   /** elements the core just installed in the scene (changed ids), with the copies before */
   | { kind: 'applied'; ids: readonly string[]; before: ReadonlyMap<string, SceneElement | undefined> }
   | { kind: 'transport'; state: TransportState; close?: TransportClose }
@@ -425,6 +436,13 @@ export class LobbyEngineCore implements EngineCore {
   // ---- local state
   private readonly tracked = new Map<string, Tracked>()
   private inflight: Inflight[] = []
+  /**
+   * Per acked push (seq): the server version of each element it wrote (`AckResult.v`), kept while a push
+   * in flight was built behind it (`Sent.ahead`). A lost push's `pv` lags the acks of this tab's own
+   * earlier pushes, and the lost-push decision counted their bumps as other users' writes: a push lost
+   * behind two acked nudges read as "superseded" and was dropped (V1 re-check round 3, L0-L5).
+   */
+  private readonly ackedVersion = new Map<number, Map<string, number>>()
   private readonly held = new Map<string, Held>()
   private readonly known = new Map<string, { v: number; vn: number }>()
   private last = new Map<string, SceneElement>()
@@ -1671,8 +1689,16 @@ export class LobbyEngineCore implements EngineCore {
     for (const [id, list] of byId) {
       const conf = this.confirmedMap.get(id)
       const t = this.tracked.get(id)
-      const { again, recreate, superseded } = decideLostElement(list, conf, t?.dirty ?? new Set())
-      if (superseded.length) this.log('lost_superseded', { id, groups: superseded })
+      // the version each part counts from: past this tab's own pushes acked before the cut (effectivePv)
+      const parts: LostPart[] = list.map(({ p, s }) => ({ p, s: { ...s, pv: this.effectivePv(id, s) } }))
+      const { again, recreate, superseded } = decideLostElement(parts, conf, t?.dirty ?? new Set())
+      if (superseded.length) {
+        // the server's copy stands and the user is told (the board page's notice): never a silent drop.
+        // Not a reject: in the common case the push landed and someone wrote after it, so nothing of this
+        // tab's is unsaved, and Saved stays true
+        this.log('lost_superseded', { id, groups: superseded })
+        this.emit({ kind: 'superseded', id, groups: superseded })
+      }
       if (!again.size && !recreate) continue
       const at = (list[0] as { p: Inflight }).p
       const tt: Tracked = t ?? { dirty: new Set<GroupKey>(), isNew: false, since: at.record.at, replay: true }
@@ -1998,6 +2024,42 @@ export class LobbyEngineCore implements EngineCore {
     this.sendHello()
   }
 
+  /**
+   * Keeps the server versions an ack reports (`r.v` of each op applied, the stored copy of a create that
+   * had landed: `create_exists`) while a push still in flight was built behind this one (Sent.ahead), and
+   * forgets the rest. Read by `effectivePv` when those later pushes are lost.
+   */
+  private recordAckedVersions(push: Inflight, ack: Ack): void {
+    const byId = new Map<string, number>()
+    ack.r.forEach((r, n) => {
+      const op = push.ops[n]
+      const id = op ? opId(op) : r.id
+      if (r.ok) byId.set(id, r.v)
+      else if (r.code === 'INVALID' && r.el && !r.el.isDeleted && push.sent.get(id)?.create)
+        byId.set(id, r.el.version)
+    })
+    if (byId.size) this.ackedVersion.set(ack.seq, byId)
+    const referenced = new Set<number>()
+    for (const p of this.flying())
+      for (const s of p.sent.values()) for (const seq of s.ahead ?? []) referenced.add(seq)
+    for (const seq of [...this.ackedVersion.keys()]) if (!referenced.has(seq)) this.ackedVersion.delete(seq)
+  }
+
+  /**
+   * The server version a lost push's decision counts other writes from: its `pv`, or the version the last
+   * of this tab's own pushes it was built behind (`ahead`) left on the server, when that push was acked.
+   * Those pushes landed before the lost one (one socket is one FIFO), so their bumps are this tab's, not
+   * other users' writes.
+   */
+  private effectivePv(id: string, s: Sent): number | undefined {
+    let pv = s.pv
+    for (const seq of s.ahead ?? []) {
+      const v = this.ackedVersion.get(seq)?.get(id)
+      if (v !== undefined && (pv === undefined || v > pv)) pv = v
+    }
+    return pv
+  }
+
   private onAckMessage(ack: Ack): void {
     const i = this.inflight.findIndex((p) => p.seq === ack.seq)
     if (i < 0) {
@@ -2008,6 +2070,7 @@ export class LobbyEngineCore implements EngineCore {
     // a refusal below replaces the server copy of an element a gesture may hold (see heldRemote)
     const mark = this.holdMark([...push.sent.keys()])
     this.inflight.splice(i, 1)
+    this.recordAckedVersions(push, ack)
     const affected = new Set<string>()
     let retry = false
     let docRejected = false
@@ -2349,7 +2412,13 @@ export class LobbyEngineCore implements EngineCore {
           create: p.create,
           ...(p.create
             ? { prior: this.confirmedMap.has(id) ? clone(this.confirmedMap.get(id)) : undefined }
-            : { ref: this.base(id), pv: (this.confirmedMap.get(id) as SceneElement).version }),
+            : {
+                ref: this.base(id),
+                pv: (this.confirmedMap.get(id) as SceneElement).version,
+                ahead: this.flying()
+                  .filter((q) => q.sent.has(id))
+                  .map((q) => q.seq),
+              }),
         })
         if (!forced && this.inflight.length >= MAX_IN_FLIGHT_PUSHES) {
           full = true
@@ -2691,7 +2760,8 @@ export class LobbyEngineCore implements EngineCore {
           groups: [...s.groups],
           el: clone(s.el),
           ...(s.ref ? { ref: clone(s.ref) } : {}),
-          ...(s.pv !== undefined ? { pv: s.pv } : {}),
+          // past this tab's own pushes acked so far: the page that adopts the queue sees no more acks
+          ...(this.effectivePv(id, s) !== undefined ? { pv: this.effectivePv(id, s) } : {}),
           ...(s.prior ? { prior: clone(s.prior) } : {}),
         })
         a.since = Math.min(a.since, p.record.at)

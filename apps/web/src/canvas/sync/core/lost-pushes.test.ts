@@ -434,3 +434,82 @@ describe('the queue follows a push out (no pagehide: a crash, a killed tab)', ()
     expect(h.room.elements.get('x')?.x).toBe(222)
   })
 })
+
+describe("V1 re-check round 3: this tab's own pushes acked before the cut are not other users' writes", () => {
+  it('a nudge lost behind two own nudges that landed goes again when nobody else wrote (L0, L1)', () => {
+    const h = createHarness({ seed: [stored(rect('x', 'a0', { x: 0 }))] })
+    const a = h.client('alice', { latencyMs: 100 })
+    h.settle()
+    a.change('x', { x: 10 })
+    h.clock.advance(60) // p1 out at 60 (the room reads it at 110, its ack arrives at 160)
+    a.change('x', { x: 20 })
+    a.core.flush() // p2 out at 60 too, behind p1
+    h.clock.advance(60)
+    a.change('x', { x: 30 })
+    a.core.flush() // p3 out at 120: built behind p1 and p2 (pv lags their two bumps), on the wire until 170
+    h.clock.advance(45) // 165: both acks arrived, p3 not yet at the room
+    expect(h.room.elements.get('x')?.x).toBe(20)
+    expect(a.core.saveStatus.state).toBe('saving')
+    h.room.cut(a.transport) // p3 is lost with the socket
+    h.settle()
+    reopen(a)
+    h.settle()
+    // before: n = 2 writes since pv, k = 1 lost push: "ours landed" was possible, the move was superseded
+    expect(a.logs.filter((l) => l.event === 'lost_superseded')).toEqual([])
+    expect(h.room.elements.get('x')?.x).toBe(30)
+    expect(a.get('x')?.x).toBe(30)
+    expect(a.core.saveStatus.state).toBe('saved')
+  })
+
+  it('a lost recolour behind an own landed move, with one other write to another group (L3): the recolour goes again', () => {
+    const h = createHarness({ seed: [stored(rect('x', 'a0', { x: 0, strokeColor: '#1e1e1e' }))] })
+    const a = h.client('alice', { latencyMs: 100 })
+    const b = h.client('bob')
+    h.settle()
+    a.change('x', { x: 10 })
+    h.clock.advance(60) // p1 (the move) out at 60
+    a.change('x', { strokeColor: '#e03131' })
+    a.core.flush() // p2 (a first recolour) out behind p1
+    h.clock.advance(60)
+    a.change('x', { strokeColor: '#2f9e44' })
+    a.core.flush() // p3 (the recolour that matters) out at 120, built behind p1 and p2
+    h.clock.advance(45) // 165: p1 and p2 acked, p3 still on the wire
+    expect(h.room.elements.get('x')?.strokeColor).toBe('#e03131')
+    h.room.cut(a.transport) // p3 never arrives
+    h.settle()
+    b.change('x', { width: 250 }) // one other write, to another group
+    h.settle()
+    reopen(a)
+    h.settle()
+    // before: the two own bumps plus B's made three "other writes"; "ours landed" was possible, the colour
+    // was superseded and lost. Now only B's write counts, and it did not touch the colour
+    expect(a.logs.filter((l) => l.event === 'lost_superseded')).toEqual([])
+    expect(h.room.elements.get('x')?.strokeColor).toBe('#2f9e44')
+    expect(h.room.elements.get('x')?.width).toBe(250)
+    expect(a.core.saveStatus.state).toBe('saved')
+  })
+
+  it('a lost push the server copy cannot decide (two other writes meanwhile) is reported, not dropped silently', () => {
+    const h = createHarness({ seed: [stored(rect('x', 'a0', { x: 0 }))] })
+    const a = h.client('alice', { latencyMs: 100 })
+    const b = h.client('bob')
+    h.settle()
+    const events: unknown[] = []
+    a.core.on((e) => {
+      if (e.kind === 'superseded') events.push(e)
+    })
+    a.change('x', { x: 111 })
+    h.clock.advance(60)
+    h.room.cut(a.transport) // never arrives
+    h.settle()
+    b.change('x', { x: 222 })
+    h.settle()
+    b.change('x', { x: 333 })
+    h.settle()
+    reopen(a)
+    h.settle()
+    expect(h.room.elements.get('x')?.x).toBe(333)
+    expect(events).toEqual([{ kind: 'superseded', id: 'x', groups: ['pos'] }])
+    expect(a.core.saveStatus.state).toBe('saved')
+  })
+})

@@ -480,6 +480,7 @@ font allowlist, D5, DEF-3F-1, DEF-W3-2, CR-3A-3 and more) still reads as waiting
 |---|---|---|
 | W5-3G-1 | CR-W5-3G-1 (3g, `96af757`): `LobbyFiles.crop?(id): boolean`, member row `files.crop` (a landed part) | **Accepted.** Optional and additive: no implementor or test canvas changes. |
 | W5-F1 | the integration's decisions in owners' files (§8.2) | Recorded. No member, signature or registry change. |
+| — | the engine fixer's requests after the verifiers' third re-check (`W5-ENGINE.md` §5a): **CR-W5-FIX-1** (the lead, `engine-switch.ts`): a maintenance getter on `ElementRoomDeps`, so the room's write path (serverWrite, seed, restore, place-notes) refuses a write whose body arrived after maintenance went on, as `internal.ts` does for the tldraw routes; **CR-W5-FIX-2** (contracts): push receipts, or a per-key clock in the welcome's `doc`, for the doc-key ABA (open item 16); **CR-W5-FIX-3** (api, domain access): one guest uid per redeemed editor guest link, not one per cookie-less join, so D5's 500-item cap is per person | Recorded, not applied (requests, not commits). |
 | — | the owners' requests to 2A, 2B and 2C (CR-W5-3A-1 to -4, CR 3b-10 to 3b-12, CR-3C-W5-1, CR 3E-5 to 3E-7, CR-W5-3G-2 to -5, CR-3I-2 to -6, 2D's font and loading requests, 3f's W5-01 and CR-3F-1) | **Recorded, not applied** (§6). CR-W5-3G-5 is answered by 3e's export part (§8.2). |
 
 ### 8.2 Integration fixes

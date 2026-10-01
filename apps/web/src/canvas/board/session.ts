@@ -393,6 +393,15 @@ export class LobbyBoardSession {
       const text = engineRejectNotice(e.code, holder)
       if (text)
         this.o.notices.notify({ key: 'save-rejected', text, tone: 'error', testId: 'save-rejected-toast' })
+    } else if (e.kind === 'superseded') {
+      // a change lost with the connection whose fate the server copy cannot tell: the server's stands,
+      // and the person is told instead of the page returning to Saved as if nothing happened
+      this.o.notices.notify({
+        key: 'save-superseded',
+        text: 'Someone else changed an object you edited while you were reconnecting — their version is kept.',
+        tone: 'error',
+        testId: 'save-superseded-toast',
+      })
     } else if (e.kind === 'refit') {
       this.refit(e.id, e.dx, e.dy)
     } else if (e.kind === 'applied') {

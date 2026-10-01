@@ -125,6 +125,40 @@ export const leaseIdOf = (el: El): string => (isLabel(el) ? (el.containerId as s
 
 /** Server-owned and bookkeeping fields: never compared as "the user's change". */
 const NOT_CONTENT = new Set(['version', 'versionNonce', 'updated'])
+/** The element's axis-aligned box meets the frame's (Excalidraw's membership rule; rotation ignored). */
+const overlapsFrame = (el: El, frame: El): boolean => {
+  const box = (e: El) => {
+    const w = Math.abs(Number(e.width ?? 0))
+    const h = Math.abs(Number(e.height ?? 0))
+    const x = Math.min(Number(e.x), Number(e.x) + Number(e.width ?? 0))
+    const y = Math.min(Number(e.y), Number(e.y) + Number(e.height ?? 0))
+    return { x1: x, y1: y, x2: x + w, y2: y + h }
+  }
+  const a = box(el)
+  const f = box(frame)
+  return a.x1 <= f.x2 && a.x2 >= f.x1 && a.y1 <= f.y2 && a.y2 >= f.y1
+}
+
+/** What a create over a tombstone may differ in and still be that tombstone's content coming back. */
+const NOT_REVIVED_CONTENT = new Set([
+  ...NOT_CONTENT,
+  'isDeleted',
+  'customData',
+  'index',
+  'created',
+  'status',
+  'locked',
+  'boundElements',
+])
+const sameRevivedContent = (tombstone: El, pushed: El): boolean => {
+  const keys = (e: El) => Object.keys(e).filter((k) => !NOT_REVIVED_CONTENT.has(k) && e[k] !== undefined)
+  const ka = keys(tombstone)
+  const kb = keys(pushed)
+  if (ka.length !== kb.length) return false
+  for (const k of ka) if (!equal(tombstone[k], pushed[k])) return false
+  return true
+}
+
 const sameContent = (a: El, b: El): boolean => {
   const ka = Object.keys(a).filter((k) => !NOT_CONTENT.has(k) && a[k] !== undefined)
   const kb = Object.keys(b).filter((k) => !NOT_CONTENT.has(k) && b[k] !== undefined)
@@ -328,6 +362,22 @@ export class PushApplier {
       ? 'GUEST_LIMIT'
       : null
   }
+  /** The element's stored author is this session's user. */
+  private createdByWriter(el: El): boolean {
+    return (el.customData?.lobbyServer?.createdBy?.uid as string | undefined) === this.s.uid
+  }
+  /**
+   * Whether this session may bring a tombstone back (a create over its id, a `life` patch). Accounts may;
+   * a name-only guest only its own: an element it created, or one it deleted itself (its undo). The api
+   * refuses guests "Recently deleted" and restore (DANA-05), and the redacted snapshot carries no
+   * tombstone content, so a guest reviving other people's tombstones read every deleted word, link, file
+   * id and author of the board through the room (V2 P-W6); now that is GONE, as for a purged element.
+   */
+  private mayRevive(tombstone: El): boolean {
+    if (!this.s.guest) return true
+    if (this.createdByWriter(tombstone)) return true
+    return this.env.store.deletedBy(tombstone.id) === this.s.uid
+  }
   private countAdded(el: El, newId: boolean): void {
     if (!el.isDeleted) {
       this.addedElements++
@@ -345,6 +395,7 @@ export class PushApplier {
     if (prev && prev.type !== pushed.type) return this.reject(i, 'TYPE_CHANGE')
     if (prev && !prev.isDeleted) return this.reject(i, 'INVALID')
     if (prev && this.leasedByOther(leaseIdOf(prev))) return this.reject(i, 'LEASED')
+    if (prev && !this.mayRevive(prev)) return this.reject(i, 'GONE')
     if (!pushed.isDeleted) {
       const cap = this.capProblem(pushed)
       if (cap) return this.reject(i, cap)
@@ -367,7 +418,22 @@ export class PushApplier {
     // tombstone) is stored unlocked, and the ack's `fix` says so (V2: a guest could lock by creating)
     if (this.s.guest && next.locked) next.locked = false
     const text = next.type === 'text' && typeof next.originalText === 'string' && next.originalText.length > 0
-    const lobbyServer = prev?.customData?.lobbyServer ?? freshLobbyServer(this.writer, this.env.now, text)
+    // authorship is the session's (§3.3): a create over a tombstone keeps the tombstone's createdBy only
+    // when this writer is its creator or the create brings the tombstone's own content back (an undo of
+    // a delete, a restore). Other content under another user's deleted id is this writer's element, with
+    // this writer as its author and last editor: before, the tombstone's lobbyServer was reused as it
+    // was, so a name-only guest published words every client attributed to a staff member (V2 P-W7, P-W8)
+    const prevLs = prev?.customData?.lobbyServer
+    const keepPrev =
+      !!prevLs &&
+      ((prevLs.createdBy?.uid ?? null) === this.writer.uid || (!!prev && sameRevivedContent(prev, next)))
+    let lobbyServer = keepPrev ? prevLs : freshLobbyServer(this.writer, this.env.now, text)
+    if (keepPrev && text && prev && next.originalText !== prev.originalText)
+      lobbyServer = {
+        ...lobbyServer,
+        lastEditedBy: { uid: this.writer.uid, name: this.writer.name, guest: this.writer.guest },
+        lastEditedAt: this.env.now,
+      }
     const canon = canonicalizeFile(next.type, next.fileId as string | undefined, lobby.value)
     if (!canon.ok) return this.reject(i, canon.code)
     next.customData = {
@@ -382,6 +448,14 @@ export class PushApplier {
     if (next.type === 'image') next.status = 'saved'
     next = roundGeometry(next as never) as El
     if (next.link && !isAllowedLink(next.link, { guest: this.s.guest })) return this.reject(i, 'INVALID')
+    // W5-01 under a concurrent frame move (V1 re-check round 3, W2): a member created where its frame no
+    // longer is (the frame moved while the create was on the wire) is a free element, as Excalidraw's own
+    // membership rule (an element overlaps its frame) reads it against the frame as stored; the ack's
+    // `fix` says so. A label's frameId follows its container (its container is checked instead)
+    if (typeof next.frameId === 'string' && !isLabel(next)) {
+      const f = this.live(next.frameId)
+      if (f?.type === 'frame' && !overlapsFrame(next, f)) next.frameId = null
+    }
     const check = checkElement(next)
     if (!check.ok) return this.reject(i, check.code)
 
@@ -580,7 +654,15 @@ export class PushApplier {
     // an undelete by patch (life false) counts toward the caps like a create
     const revived = cur.isDeleted && !next.isDeleted
     if (revived) {
+      if (!this.mayRevive(cur)) return this.reject(i, 'GONE')
       const cap = this.capProblem(next)
+      if (cap) return this.reject(i, cap)
+    }
+    // a guest's label detached into a free text is one more item of the guest's (D5): before, a label was
+    // never counted and its detach made an uncounted item, so the 500-item cap did not hold (V2 P-G2)
+    const detached = isLabel(cur) && !isLabel(next) && !next.isDeleted
+    if (detached && this.s.guest) {
+      const cap = this.guestCapProblem(next)
       if (cap) return this.reject(i, cap)
     }
 
@@ -600,6 +682,7 @@ export class PushApplier {
     this.writerOk(w, i, next)
     st.ok = true
     if (revived) this.countAdded(next, false)
+    if (detached && this.s.guest && this.createdByWriter(next)) this.addedGuestItems++
     if (follows) this.followers.set(op.id, follows.frame)
     st.applied = { groups, c: cApplied }
     if (denied) st.denied = denied
@@ -939,8 +1022,14 @@ export class PushApplier {
           this.env.counts.items += itemOf(after as El)
           this.env.groups.add(after.groupIds)
         }
-        // D5: a guest's item under a new id counts, live or deleted (V2: tombstones were never counted)
-        if (this.s.guest && !before && !isLabel(after as El))
+        // D5: a guest's item under a new id counts, live or deleted (V2: tombstones were never counted),
+        // and so does a label of the guest's detached into a free text (the rebuild counts it by its
+        // createdBy, caches.ts)
+        if (
+          this.s.guest &&
+          ((!before && !isLabel(after as El)) ||
+            (!!before && isLabel(before) && !isLabel(after as El) && this.createdByWriter(after as El)))
+        )
           this.env.guestCreated.set(this.s.uid, (this.env.guestCreated.get(this.s.uid) ?? 0) + 1)
       }
       for (const [key, value] of Object.entries(this.docWrites)) store.docSet(key, this.clock, value)
