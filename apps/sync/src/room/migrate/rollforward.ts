@@ -31,6 +31,17 @@
 //    never rewritten, so they stay byte-identical), R0's new `dr_deleted` rows appended to `lb_deleted`, a
 //    new epoch and a clock above both sides, `lb_source` replaced by theirs, `converted_from` refreshed;
 // i. report `<data>/migration/<board>.rollforward.json`: conflicts by element id and group (no content).
+//
+// Binding records (open item 12, pinned by test/migrate/rollforward-bindings.test.ts): tldraw keeps an
+// arrow's ends in `binding` records (fromId = the arrow, toId = the target, props.terminal), Excalidraw on
+// both elements: the arrow's `startBinding` / `endBinding` (group `bind`) and the target's `boundElements`
+// (group `bound`). A binding record created, deleted or changed in theirs touches both of its ends, in
+// base and in theirs (a re-targeted binding touches its old target too), so each end is converted in local
+// mode on both sides; the arrow's `bind` group (and its `path` unit when its ends moved) merges like any
+// other group. A target's `boundElements` is never taken from either conversion: step g derives it from
+// the merged arrows and labels, so it lists exactly the arrows bound to it after the merge, ours'
+// Excalidraw-era ones included; a binding to a deleted target is nulled (the end stays) and a deleted arrow
+// leaves its targets' lists. Then the re-snap, and the invariants check both directions.
 
 import { createHash } from 'node:crypto'
 import { DatabaseSync } from 'node:sqlite'
