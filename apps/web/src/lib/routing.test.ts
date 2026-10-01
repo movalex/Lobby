@@ -94,9 +94,21 @@ describe('safeReturnTo', () => {
       '/signin',
       '/signin?returnTo=/b/x',
       `/${'x'.repeat(3000)}`,
+      // XSS-F2: protocol-relative only after normalising
+      '/..//evil.example',
+      '/..//evil.example/b/x?returnTo=1',
+      '/a/..//evil.example',
+      '/a/../..//evil.example',
+      '/a\\..\\..//evil.example',
+      '/.//evil.example',
     ]) {
       expect(safeReturnTo(bad), String(bad)).toBeNull()
     }
+  })
+
+  it('keeps a path that only looks like a dot segment', () => {
+    expect(safeReturnTo('/b/..x/y')).toBe('/b/..x/y')
+    expect(safeReturnTo('/w/ws_1/../all')).toBe('/w/all')
   })
 
   it('signInPath only carries a safe, non-root return path', () => {
