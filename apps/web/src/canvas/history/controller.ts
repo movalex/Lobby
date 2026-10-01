@@ -4,8 +4,9 @@
  * edits.
  *
  *  - Recording: `boundary()` at a step boundary (the end of a gesture, a text-editor close, one keyboard
- *    action, one `CanvasPort.transact`) diffs the scene against `lastLocal`. An arrow whose change is only
- *    derived (E10, held by the core) is recorded at its server copy, so it never becomes a step.
+ *    action, one `CanvasPort.transact`) diffs the scene against `lastLocal`. The `path` of an arrow whose
+ *    change the core holds as derived (E10) is recorded at the stack's own last copy of it (`sceneMap`),
+ *    so the held geometry never becomes a step; the arrow's other groups are recorded as they are.
  *  - A reconnect (a welcome of the same epoch) keeps both stacks; the first welcome and an epoch change
  *    (a restore) start them afresh.
  *  - Remote changes and the core's own resets (a deny, a reject, a held derived change released) arrive
@@ -22,7 +23,7 @@ import type { LobbyEngineCore } from '../sync/core/engine.ts'
 import type { SceneAdapter, SceneElement } from '../sync/types.ts'
 import type { ApplyContext, ApplyResult } from './apply.ts'
 import type { HistEl, Scene } from './diff.ts'
-import { fieldGroup } from './fields.ts'
+import { fieldGroup, type GroupName } from './fields.ts'
 import { type Entry, LobbyHistory } from './stack.ts'
 
 export interface UndoControllerOptions {
@@ -55,9 +56,9 @@ export class UndoController {
 
   constructor(o: UndoControllerOptions) {
     this.o = o
-    const sceneMap = () => this.sceneMap(false)
+    const sceneMap = () => this.sceneMap('live')
     // attached after the welcome: start from the scene as it is (nothing before this is undoable)
-    if (o.core.welcome) this.history.reset(this.sceneMap(true))
+    if (o.core.welcome) this.history.reset(this.sceneMap('reset'))
     let epoch = o.core.welcome?.epoch ?? null
     this.off.push(
       o.core.on((e) => {
@@ -65,7 +66,7 @@ export class UndoController {
           // the first welcome, or a board restored to another epoch: nothing before is undoable. A
           // reconnect to the same epoch keeps the stacks (B3 L6 3f: an edit made offline is undone after
           // its replay); what changed meanwhile arrived as the core's 'applied' event and was absorbed like any remote edit
-          if (epoch === null || e.welcome.epoch !== epoch) this.history.reset(this.sceneMap(true))
+          if (epoch === null || e.welcome.epoch !== epoch) this.history.reset(this.sceneMap('reset'))
           epoch = e.welcome.epoch
         } else if (e.kind === 'applied') {
           const now = sceneMap()
@@ -81,21 +82,42 @@ export class UndoController {
   }
 
   /**
-   * The scene as undo sees it. `forRecord`: a held derived arrow change counts as its server copy, and so
-   * do the `text` and `layout` fields of a text whose lease another session holds (this tab cannot write
-   * them: the core puts them back, §2.9.2), so neither is ever part of a step. B3 L6 (4): B's frame drag
-   * moves N's label locally while A types in it; recording that move made B's undo of the drag report
-   * "1 change kept" for a label position B never wrote.
+   * The scene as undo sees it. `live`: the scene as it is (the compare-and-set of an undo, `absorb`).
+   * `record` and `reset` hide what this tab cannot write, so it is never part of a step:
+   *
+   *  - the `path` of an arrow whose change the core holds as derived (E10, §2.5.2: its bound ends follow
+   *    their targets; the server re-snaps it and the core installs that), and the `layout` of its label
+   *    when it moved with it (held the same way). At a boundary (`record`) that group is the stack's own
+   *    last copy of it (`lastLocal`: as of the previous boundary, or as the last undo or redo wrote it),
+   *    whatever the scene shows now; the server's re-snap arrives as the core's `applied` event and is
+   *    absorbed. At a `reset` (a welcome) it is the server copy's. Only the held group is replaced: the
+   *    element's other groups are the user's own (an arrow's life, bindings and style), and they may be
+   *    changed, unsent or in flight at that moment. Before (wave 4d, 2A): the WHOLE server copy
+   *    stood in for a held arrow, so an undo that revived a bound arrow (its life and bindings pushed, its
+   *    before-side path held as derived), followed by a boundary before that push's ack, recorded the
+   *    server's post-delete copy as a new step and dropped the redo stack (collab-conflicts.spec.ts
+   *    "undo … step by step": the third Ctrl+Z brought the arrow back in its deleted-end form). The
+   *    record's version fast path hid it while the ack came before the next press; the room's commit
+   *    pacing (ac72d87, 40 ms) and any real network make that order unreliable;
+   *  - the `text` and `layout` fields of a text whose lease another session holds (this tab cannot write
+   *    them: the core puts them back, §2.9.2). B3 L6 (4): B's frame drag moves N's label locally while A
+   *    types in it; recording that move made B's undo of the drag report "1 change kept" for a label
+   *    position B never wrote.
    */
-  private sceneMap(forRecord: boolean): Scene {
+  private sceneMap(mode: 'live' | 'record' | 'reset'): Scene {
     const m = new Map<string, HistEl>()
-    const holders = forRecord ? this.o.core.leaseHolders() : null
+    const hide = mode !== 'live'
+    const holders = hide ? this.o.core.leaseHolders() : null
     const me = this.o.core.sid
     for (const el of this.o.scene.read().elements) {
-      if (forRecord && this.o.core.isDerivedHeld(el.id)) {
+      if (hide && this.o.core.isDerivedHeld(el.id)) {
         const conf = this.o.core.confirmed(el.id)
-        if (conf) {
-          m.set(el.id, conf as unknown as HistEl)
+        const base = (mode === 'record' ? this.history.lastLocalOf(el.id) : undefined) ?? conf
+        if (base) {
+          m.set(
+            el.id,
+            withGroupsFrom(el, base as unknown as SceneElement, heldGroups(el)) as unknown as HistEl,
+          )
           continue
         }
       }
@@ -104,7 +126,7 @@ export class UndoController {
         const h = holders.get(leaseId)
         const conf = h && h.sid !== me ? this.o.core.confirmed(el.id) : undefined
         if (conf) {
-          m.set(el.id, withLeasedFrom(el, conf) as unknown as HistEl)
+          m.set(el.id, withGroupsFrom(el, conf, LEASED_GROUPS) as unknown as HistEl)
           continue
         }
       }
@@ -115,7 +137,7 @@ export class UndoController {
 
   /** A step boundary: one entry for everything the user changed since the previous one (or null). */
   boundary(label?: string): Entry | null {
-    return this.history.record(this.sceneMap(true), label)
+    return this.history.record(this.sceneMap('record'), label)
   }
 
   /**
@@ -143,7 +165,7 @@ export class UndoController {
   private step(dir: 'undo' | 'redo'): UndoOutcome | null {
     // anything not recorded yet is its own step first (a Ctrl+Z never undoes more than one real change)
     this.boundary()
-    const scene = this.sceneMap(false)
+    const scene = this.sceneMap('live')
     const holders = this.o.core.leaseHolders()
     const me = this.o.core.sid
     const ctx: ApplyContext = {
@@ -180,14 +202,22 @@ function keptBy(result: ApplyResult, holders: ReadonlyMap<string, LeaseHolder>):
   return null
 }
 
-/** `el` with its `text` and `layout` fields (the lease-gated ones of a text) taken from `conf`. */
-function withLeasedFrom(el: SceneElement, conf: SceneElement): SceneElement {
+/** The lease-gated groups of a text (§2.9.2). */
+const LEASED_GROUPS: ReadonlySet<GroupName> = new Set<GroupName>(['text', 'layout'])
+/** The group the core holds for a derived change (E10, engine.ts `rebuild`): an arrow's geometry (one unit), or the layout of an arrow's label that moved with it. */
+const HELD_ARROW: ReadonlySet<GroupName> = new Set<GroupName>(['path'])
+const HELD_LABEL: ReadonlySet<GroupName> = new Set<GroupName>(['layout'])
+const heldGroups = (el: SceneElement): ReadonlySet<GroupName> =>
+  el.type === 'arrow' ? HELD_ARROW : HELD_LABEL
+
+/** `el` with every field of `groups` taken from `src` (a field `src` lacks is removed). */
+function withGroupsFrom(el: SceneElement, src: SceneElement, groups: ReadonlySet<GroupName>): SceneElement {
   const out: Record<string, unknown> = { ...(el as unknown as Record<string, unknown>) }
-  const src = conf as unknown as Record<string, unknown>
-  for (const k of new Set([...Object.keys(out), ...Object.keys(src)])) {
+  const from = src as unknown as Record<string, unknown>
+  for (const k of new Set([...Object.keys(out), ...Object.keys(from)])) {
     const g = fieldGroup(el, k)
-    if (g !== 'text' && g !== 'layout') continue
-    if (k in src) out[k] = src[k]
+    if (g === null || !groups.has(g)) continue
+    if (k in from) out[k] = from[k]
     else delete out[k]
   }
   return out as unknown as SceneElement

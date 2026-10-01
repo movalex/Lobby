@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { bump } from '../sync/headless/scene.ts'
-import { note, rect, text } from '../sync/testing/elements.ts'
+import { arrow, binding, note, rect, text } from '../sync/testing/elements.ts'
 import { stored } from '../sync/testing/fakeRoom.ts'
 import { createHarness, type TestClient } from '../sync/testing/harness.ts'
 import { UndoController } from './controller.ts'
@@ -182,6 +182,198 @@ describe('undo on the engine (§2.8)', () => {
     h.settle()
     expect(h.room.elements.get('N')?.x).toBe(0)
     expect(h.room.elements.get('N')?.strokeColor).toBe('#ff0000')
+    expect(await a.hash()).toBe(await h.roomHash())
+  })
+})
+
+// Wave 4d (2A): collab-conflicts.spec.ts "undo: alice's own drag, resize, note, text, arrow, delete undo and
+// redo step by step" failed at its third Ctrl+Z once the room paced its commits (ac72d87: an ack comes up to
+// 40 ms later, so the next press lands while the previous undo's push is in flight). The undo of a step that
+// revives a bound arrow writes its before-side geometry, which the core holds as derived (E10, both ends
+// bound); the boundary after it recorded the arrow at its WHOLE server copy (post-delete: unbound end, old
+// geometry) as a new step and dropped the redo stack, because the arrow's scene version (an unacked local
+// bump) no longer matched the server copy's. Only the held `path` is hidden now (controller.ts sceneMap).
+describe('a held derived arrow path at a boundary, with a push of the arrow in flight (wave 4d, 2A)', () => {
+  const P0 = {
+    x: 50,
+    y: 100,
+    width: 0,
+    height: 300,
+    points: [
+      [0, 0],
+      [0, 300],
+    ] as [number, number][],
+  }
+  const P1 = {
+    x: 50,
+    y: 100,
+    width: 120,
+    height: 320,
+    points: [
+      [0, 0],
+      [120, 320],
+    ] as [number, number][],
+  }
+  const seed = () => [
+    stored(rect('g1', 'a0', { boundElements: [{ id: 'A', type: 'arrow' }] })),
+    stored(rect('g3', 'a1', { y: 400, boundElements: [{ id: 'A', type: 'arrow' }] })),
+    stored(
+      arrow('A', 'a2', {
+        ...P0,
+        startBinding: binding('g1', [0.5, 1]),
+        endBinding: binding('g3', [0.5, 0]),
+      }),
+    ),
+  ]
+  /** Deletes g3 and, as Excalidraw does, frees the arrow's end; the free end is then dragged (one step). */
+  const deleteAndDrag = (a: TestClient) =>
+    a.edit((m) => {
+      m.set('g3', bump(m.get('g3') as never, { isDeleted: true }))
+      m.set('A', bump(m.get('A') as never, { endBinding: null, ...P1 }))
+    })
+
+  it('the boundary after the second undo records no step and keeps both redo entries; the redos land', async () => {
+    const h = createHarness({ seed: seed() })
+    const a = h.client('alice', { latencyMs: 300 })
+    h.settle()
+    const ua = undoFor(a)
+    deleteAndDrag(a)
+    ua.ctl.boundary()
+    h.settle()
+    ua.act('A', { strokeColor: '#ff0000' })
+    h.settle()
+    expect(ua.ctl.history.undoSize).toBe(2)
+    expect(h.room.elements.get('A')?.endBinding).toBeNull()
+
+    // the first press: its push (the arrow's style) is out, not acked for 300 ms
+    expect(ua.ctl.undo()?.kept).toBe(0)
+    ua.ctl.boundary()
+    expect(a.core.saveStatus.state).not.toBe('saved')
+    // the second press before that ack: the arrow is revived bound again, its before-side geometry
+    // differs from the scene's only at the bound end (derived: held, never pushed)
+    expect(ua.ctl.undo()?.kept).toBe(0)
+    expect(a.core.isDerivedHeld('A')).toBe(true)
+    ua.ctl.boundary() // the board page's boundary on the engine's onChange
+    expect(ua.ctl.history.undoSize).toBe(0)
+    expect(ua.ctl.history.redoSize).toBe(2)
+    expect(a.get('g3')?.isDeleted).toBe(false)
+    expect((a.get('A')?.endBinding as { elementId: string } | null)?.elementId).toBe('g3')
+    expect(a.get('A')?.strokeColor).toBe('#1e1e1e')
+
+    h.settle()
+    ua.ctl.boundary()
+    expect(ua.ctl.history.undoSize).toBe(0)
+    expect(ua.ctl.history.redoSize).toBe(2)
+    expect(h.room.elements.get('g3')?.isDeleted).toBe(false)
+    expect((h.room.elements.get('A')?.endBinding as { elementId: string } | null)?.elementId).toBe('g3')
+    expect(await a.hash()).toBe(await h.roomHash())
+
+    // both redos, one press each, back to the state after the two steps
+    expect(ua.ctl.redo()?.kept).toBe(0)
+    ua.ctl.boundary()
+    expect(ua.ctl.redo()?.kept).toBe(0)
+    ua.ctl.boundary()
+    expect(ua.ctl.history.redoSize).toBe(0)
+    expect(ua.ctl.history.undoSize).toBe(2)
+    h.settle()
+    expect(h.room.elements.get('g3')?.isDeleted).toBe(true)
+    expect(h.room.elements.get('A')?.endBinding).toBeNull()
+    expect(h.room.elements.get('A')?.strokeColor).toBe('#ff0000')
+    expect(await a.hash()).toBe(await h.roomHash())
+  })
+
+  it('the same two presses with every ack in: the stacks are the same (the fast path hid the defect)', () => {
+    const h = createHarness({ seed: seed() })
+    const a = h.client('alice')
+    h.settle()
+    const ua = undoFor(a)
+    deleteAndDrag(a)
+    ua.ctl.boundary()
+    h.settle()
+    ua.act('A', { strokeColor: '#ff0000' })
+    h.settle()
+    expect(ua.ctl.undo()?.kept).toBe(0)
+    ua.ctl.boundary()
+    h.settle()
+    expect(ua.ctl.undo()?.kept).toBe(0)
+    ua.ctl.boundary()
+    h.settle()
+    ua.ctl.boundary()
+    expect(ua.ctl.history.undoSize).toBe(0)
+    expect(ua.ctl.history.redoSize).toBe(2)
+  })
+})
+
+// The other derived hold (engine.ts classify: an arrow's label that moved with a derived arrow change is
+// derived too, held by its `layout`): hidden from the step like the arrow's geometry, and only that group.
+describe('a derived arrow follow with its label, at the boundary of the gesture that caused it', () => {
+  const seed = () => [
+    stored(
+      rect('x', 'a0', { x: 0, y: 0, width: 100, height: 100, boundElements: [{ id: 'ar', type: 'arrow' }] }),
+    ),
+    stored(
+      arrow('ar', 'a1', {
+        x: 100,
+        y: 50,
+        points: [
+          [0, 0],
+          [200, 0],
+        ],
+        startBinding: binding('x', [1, 0.5]),
+        boundElements: [{ id: 'ar.t', type: 'text' }],
+      }),
+    ),
+    stored(text('ar.t', 'a2', { containerId: 'ar', x: 170, y: 37, text: 'why', originalText: 'why' })),
+  ]
+
+  it('records the resize only; the arrow and its label are no part of the step, and the undo keeps nothing', async () => {
+    const h = createHarness({ seed: seed() })
+    const a = h.client('alice')
+    h.settle()
+    const ua = undoFor(a)
+    const resize = { resizing: true, resizingElementId: 'x', selectedElementIds: ['x'] }
+    a.edit((m) => {
+      m.set('x', bump(m.get('x') as never, { width: 140 }))
+      // Excalidraw's updateBoundElements: the bound start moves, the free end stays, the label re-centres
+      m.set(
+        'ar',
+        bump(m.get('ar') as never, {
+          x: 140,
+          points: [
+            [0, 0],
+            [160, 0],
+          ],
+          width: 160,
+        }),
+      )
+      m.set('ar.t', bump(m.get('ar.t') as never, { x: 190 }))
+    }, resize)
+    expect(a.core.isDerivedHeld('ar')).toBe(true)
+    expect(a.core.isDerivedHeld('ar.t')).toBe(true)
+    a.gesture()
+    const entry = ua.ctl.boundary()
+    expect([...(entry?.changes.keys() ?? [])]).toEqual(['x'])
+    expect(entry?.changes.get('x')?.fields).toEqual({ width: { before: 100, after: 140 } })
+    h.settle()
+    // the server's re-snap of the arrow and its label arrives as its own write: absorbed, no step
+    h.room.serverWrite('ar', {
+      x: 140,
+      points: [
+        [0, 0],
+        [160, 0],
+      ],
+      width: 160,
+    })
+    h.room.serverWrite('ar.t', { x: 190 })
+    h.settle()
+    expect(ua.ctl.boundary()).toBeNull()
+    expect(ua.ctl.history.undoSize).toBe(1)
+    expect(ua.ctl.undo()?.kept).toBe(0)
+    ua.ctl.boundary()
+    h.settle()
+    expect(h.room.elements.get('x')?.width).toBe(100)
+    expect(ua.ctl.history.undoSize).toBe(0)
+    expect(ua.ctl.history.redoSize).toBe(1)
     expect(await a.hash()).toBe(await h.roomHash())
   })
 })
