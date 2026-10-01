@@ -1,7 +1,7 @@
 /**
  * Lobby's board page on the Excalidraw engine (docs/EXCALIDRAW-MIGRATION.md §2.3, §7.2 wave 2C;
- * docs/EXCALIDRAW-CONTRACTS.md). /b/:boardId with VITE_LOBBY_ENGINE=excalidraw (behind the dev-auth guard
- * until wave 4), inside the app's session: the same load, access and error screens as the tldraw page
+ * docs/EXCALIDRAW-CONTRACTS.md). /b/:boardId with VITE_LOBBY_ENGINE=excalidraw (every such build since wave
+ * 4, the production build included), inside the app's session: the same load, access and error screens as the tldraw page
  * (board/BoardPage.tsx), the same top bar, dock and notices, and the canvas: the Excalidraw host with
  * the board session (./session.ts), the overlay root and host slots (./chrome.tsx), and CANVAS_FEATURES
  * installed on the feature-facing canvas after the first welcome.
@@ -193,6 +193,61 @@ const connOf = (s: LobbyBoardSnapshot): ConnState =>
 const RANK: Record<BoardRole, number> = { viewer: 1, commenter: 2, editor: 3, owner: 4 }
 
 function LobbyBoardView({
+  board,
+  first,
+  onRole,
+  onAccessLost,
+  ...rest
+}: SessionProps & { first: TicketResponse }) {
+  const boardId = board.id
+  const { refresh } = useSession()
+  const noticeState = useNotices()
+  const { notify, dismiss } = noticeState
+  const handlers = useRef({ onRole, onAccessLost, refresh })
+  handlers.current = { onRole, onAccessLost, refresh }
+  const archived = useRef(board.status === 'archived')
+  archived.current = board.status === 'archived'
+
+  // The session (its socket, engine core, lease, offline queue) is made by the effect that disposes it, not
+  // in render. React StrictMode (`vite dev`) runs every effect's cleanup once right after mount and then the
+  // effect again on the same component: a session made in render was disposed for good by that cleanup
+  // (its transport closed with 0 attempts, the board stuck at "Connecting to board…"; LEAD-1), and
+  // StrictMode's second call of a render-time initializer left a second, never-disposed session holding the
+  // tab's offline-queue lock. Each effect run owns exactly one session, so a remount reconnects.
+  const [session, setSession] = useState<LobbyBoardSession | null>(null)
+  useEffect(() => {
+    const s = new LobbyBoardSession({
+      boardId,
+      first,
+      archived: archived.current,
+      notices: { notify, dismiss },
+      onTicket: (t) => handlers.current.onRole(t.role),
+      onAccessLost: () => handlers.current.onAccessLost(),
+      onSignedOut: () => void handlers.current.refresh(),
+    })
+    setSession(s)
+    return () => {
+      s.dispose()
+      setSession((current) => (current === s ? null : current))
+    }
+  }, [boardId, first, notify, dismiss])
+
+  if (!session) return <LoadingScreen label="Opening board…" testId="board-loading" />
+  return (
+    <LobbyBoardScreen
+      {...rest}
+      board={board}
+      first={first}
+      onRole={onRole}
+      onAccessLost={onAccessLost}
+      session={session}
+      noticeState={noticeState}
+    />
+  )
+}
+
+/** The board page proper, on one live session (the page's state, the canvas, the chrome). */
+function LobbyBoardScreen({
   me,
   board,
   role,
@@ -201,29 +256,21 @@ function LobbyBoardView({
   onRole,
   onAccessLost,
   onRetry,
-  first,
-}: SessionProps & { first: TicketResponse }) {
+  session,
+  noticeState,
+}: SessionProps & {
+  first: TicketResponse
+  session: LobbyBoardSession
+  noticeState: ReturnType<typeof useNotices>
+}) {
   const boardId = board.id
   const { refresh } = useSession()
-  const { notices, notify, dismiss } = useNotices()
+  const { notices, notify, dismiss } = noticeState
   const [sharing, setSharing] = useState<false | 'default' | 'request'>(false)
   const [activePanel, setActivePanel] = useState<string | null>(null)
   const handlers = useRef({ onRole, onAccessLost, refresh })
   handlers.current = { onRole, onAccessLost, refresh }
 
-  const [session] = useState(
-    () =>
-      new LobbyBoardSession({
-        boardId,
-        first,
-        archived: board.status === 'archived',
-        notices: { notify, dismiss },
-        onTicket: (t) => handlers.current.onRole(t.role),
-        onAccessLost: () => handlers.current.onAccessLost(),
-        onSignedOut: () => void handlers.current.refresh(),
-      }),
-  )
-  useEffect(() => () => session.dispose(), [session])
   const snap = useSyncExternalStore(
     (l) => session.subscribe(l),
     () => session.snapshot,

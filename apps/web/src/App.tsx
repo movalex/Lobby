@@ -23,15 +23,13 @@ const SpikeRoute =
     ? lazy(() => import('./canvas/spike/SpikeRoute.tsx'))
     : null
 // Wave 2C (docs/EXCALIDRAW-MIGRATION.md §7.2): /b/:boardId opens Lobby's board page on the Excalidraw
-// engine instead of the tldraw BoardPage (or spike B's board page, canvas/board/route.tsx), under the same
-// inlined guard (engine flag AND dev auth), so the normal build and an engine-flag build without the
-// guard carry none of it.
+// engine instead of the tldraw BoardPage (canvas/board/route.tsx). Since wave 4 (docs/EXCALIDRAW-CUTOVER.md
+// G2) the engine flag alone decides, so the production build made with VITE_LOBBY_ENGINE=excalidraw
+// ships it (Clerk sign-in, real tickets; no debug handle: those keep the dev-auth guard). The test is
+// inlined so the engine chunks fold out of the normal (tldraw) build. Spike B's board page behind
+// ?page=spike stays under the guard (route.tsx).
 const ExcalidrawBoardRoute =
-  import.meta.env.VITE_LOBBY_ENGINE === 'excalidraw' &&
-  (import.meta.env.DEV || import.meta.env.VITE_DRAFTROOM_DEV_AUTH === '1') &&
-  DEV_AUTH_ENABLED
-    ? lazy(() => import('./canvas/board/route.tsx'))
-    : null
+  import.meta.env.VITE_LOBBY_ENGINE === 'excalidraw' ? lazy(() => import('./canvas/board/route.tsx')) : null
 
 export function App() {
   if (SpikeRoute && location.pathname.startsWith('/spike/')) {

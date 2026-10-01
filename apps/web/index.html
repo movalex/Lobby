@@ -13,30 +13,13 @@
     <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
     <link rel="manifest" href="/site.webmanifest" />
     <title>Lobby</title>
-    <!-- Theme before the first paint (no light flash in dark mode): the same rules as
-         src/theme/theme.ts (THEME_STORAGE_KEY, resolveColorMode, applyToDocument); theme.test.ts runs
-         this script against them. Keep it tiny, classic (not a module) and dependency-free. -->
-    <script>
-      (() => {
-        let pref = 'system'
-        try {
-          const stored = localStorage.getItem('draftroom:theme')
-          if (stored === 'light' || stored === 'dark' || stored === 'system') pref = stored
-        } catch {
-          // storage blocked: the default (System)
-        }
-        const dark =
-          pref === 'dark' ||
-          (pref === 'system' && !!window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches)
-        const mode = dark ? 'dark' : 'light'
-        const root = document.documentElement
-        root.setAttribute('data-theme', mode)
-        root.setAttribute('data-theme-pref', pref)
-        root.style.colorScheme = mode
-        const meta = document.querySelector('meta[name="theme-color"]')
-        if (meta) meta.setAttribute('content', dark ? '#14161b' : '#1f3a5f')
-      })()
-    </script>
+    <!-- Theme before the first paint (no light flash in dark mode): /public/theme-boot.js, the same rules
+         as src/theme/theme.ts. A blocking classic script, same-origin: never inline (the Content-Security-Policy
+         has no inline-script hash, docs/EXCALIDRAW-MIGRATION.md §2.12; theme.test.ts asserts it). -->
+    <script src="/theme-boot.js"></script>
+    <!-- zod jitless before any bundle (docs/EXCALIDRAW-MIGRATION.md §2.12: no unsafe-eval): a blocking classic
+         script too, since a module script runs after the shared chunk that holds zod; zod-jitless.test.ts asserts it. -->
+    <script src="/zod-jitless.js"></script>
   </head>
   <body>
     <div id="root"></div>

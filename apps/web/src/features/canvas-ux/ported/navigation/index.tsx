@@ -425,11 +425,14 @@ function mount(ctx: CanvasFeatureContext): () => void {
     userId: ctx.me.user.id,
     canEdit: !readonly,
     hold: (dispose) => (live ? cleanups.push(dispose) : dispose()),
-    onTemplateFailed: () =>
+    // LEAD-2: the param stays in the address bar until the template is in, so a reload retries; so does this
+    onTemplateFailed: (retry) =>
       ctx.notify({
         key: 'template-insert',
         tone: 'error',
         text: 'The template could not be added to this board.',
+        testId: 'template-insert-failed',
+        action: { label: 'Try again', testId: 'template-insert-retry', onClick: () => void retry() },
       }),
   })
     .then(
