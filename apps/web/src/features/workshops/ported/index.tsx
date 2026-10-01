@@ -303,9 +303,12 @@ function mountWorkshops(ctx: Ctx) {
 
 export const feature: CanvasFeature = {
   id: 'workshops',
-  topBar: [{ id: 'workshops', order: 200, overflowCaption: 'Timer and voting', component: WorkshopBar }],
+  // tldraw's BOARD_FEATURES order (W5-50, ./chrome-order.test.ts): the workshop items before Present and
+  // export (30) and Sharing (50); the Voting and Private notes panels after Comments and the navigation
+  // panels, before History (70)
+  topBar: [{ id: 'workshops', order: 25, overflowCaption: 'Timer and voting', component: WorkshopBar }],
   panels: [
-    { id: 'voting', label: 'Voting', icon: BallotIcon, order: 200, component: VotingPanel },
+    { id: 'voting', label: 'Voting', icon: BallotIcon, order: 40, component: VotingPanel },
     privateNotesPanel,
   ],
   overlays: [
