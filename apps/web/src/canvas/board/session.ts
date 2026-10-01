@@ -419,6 +419,9 @@ export class LobbyBoardSession {
 
   private onEditState(s: EditState): void {
     this.set({ edit: s })
+    // keys typed into an editor that waits for its lease are unsent text: no Saved meanwhile (§2.5.7,
+    // V1 P1; the spike page had this, the board page did not)
+    this.core.holdSaved('editor-buffer', s.phase !== 'idle' && s.phase !== 'open' && s.buffered > 0)
     this.handlesExtra?.editStateChanged(s.phase, s.leaseId)
     const editing = s.phase === 'open' ? s.leaseId : null
     if (editing !== this.lastEditing) {

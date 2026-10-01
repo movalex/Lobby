@@ -42,7 +42,9 @@
  *
  * NODE-SAFE (CONTRACTS.md): explicit `.ts` extensions, no DOM, injectable timers and clock.
  */
+import { isRedactedTombstone } from '@draftroom/canvas-schema/elements'
 import { compareArrowChange } from '@draftroom/canvas-schema/groups'
+import { TOMBSTONE_KEYS } from '@draftroom/canvas-schema/hash'
 import {
   COALESCE_MS,
   MAX_IN_FLIGHT_PUSHES,
@@ -78,6 +80,8 @@ import type {
   EngineCoreOptions,
   GestureState,
   LeaseConnect,
+  LostDocRecord,
+  LostPushRecord,
   OfflineEntry,
   OfflineQueueStore,
   PushRecord,
@@ -143,6 +147,8 @@ interface Sent {
   el: SceneElement
   create: boolean
   ref?: SceneElement
+  /** a patch's `pv`: the server version it was built on (the lost-push decision counts writes since) */
+  pv?: number
   /** a create's: the server copy it was made over (a tombstone it undeletes), or none (a new id) */
   prior?: SceneElement
   /**
@@ -164,6 +170,11 @@ interface Inflight {
    */
   readonly sent: Map<string, Sent>
   readonly forced: boolean
+  /**
+   * The socket it went out on (`<tab>:<welcome count>`). One socket is one FIFO: the room received a
+   * prefix of its pushes, which the lost-push decision relies on (replayLost)
+   */
+  readonly src: string
 }
 
 interface Held {
@@ -262,6 +273,113 @@ const bound = (el: SceneElement): boolean =>
 /** Lease-gated groups of a text element (§2.9.4: what the lease protects). */
 const LEASED_GROUPS: ReadonlySet<GroupKey> = new Set<GroupKey>(['text', 'layout', 'life'])
 
+/** One lost push's part for one element, as `decideLostElement` reads it. */
+export interface LostPart {
+  readonly p: { readonly src: string }
+  readonly s: {
+    readonly groups: ReadonlySet<GroupKey>
+    readonly el: SceneElement
+    readonly create: boolean
+    readonly ref?: SceneElement
+    readonly pv?: number
+    readonly prior?: SceneElement
+  }
+}
+
+/**
+ * A tombstone as the server sends it since CONTRACTS_REV 7 (W5-02: `redactTombstone`, no content) over
+ * the copy this client already holds: only its TOMBSTONE_KEYS are authoritative (hash.ts), so the content
+ * this client saw live stays under it. An undo of this tab's own delete then revives the element where it
+ * was, with its words, at once (the server's full `c` op of the undelete follows one round trip later).
+ */
+export function keepTombstoneContent(had: SceneElement | undefined, next: SceneElement): SceneElement {
+  if (!had || next.isDeleted !== true || had.type !== next.type) return next
+  if (!isRedactedTombstone(next as never)) return next
+  const out: Record<string, unknown> = clone(had) as Record<string, unknown>
+  for (const k of TOMBSTONE_KEYS) out[k] = (next as Record<string, unknown>)[k]
+  return out as SceneElement
+}
+
+const sameGroup = (a: SceneElement, b: SceneElement, g: GroupKey): boolean =>
+  g === 'fit' ? FIT_FIELDS.every((f) => deepEqual(a[f], b[f])) : !diffGroups(a, b).groups.has(g)
+
+/**
+ * The lost-push decision for one element (LobbyEngineCore.replayLost has the rule): `list` is every lost
+ * push carrying it, in send order; `conf` the server copy now; `dirty` the groups changed again since.
+ * Returns the groups that go again, whether its create goes again, and the groups whose fate cannot be told
+ * (the server's copy stands; the user is told). Pure.
+ */
+export function decideLostElement(
+  list: readonly LostPart[],
+  conf: SceneElement | undefined,
+  dirty: ReadonlySet<GroupKey>,
+): { again: Set<GroupKey>; recreate: boolean; superseded: GroupKey[] } {
+  const again = new Set<GroupKey>()
+  const superseded: GroupKey[] = []
+  const lastOf = (g: GroupKey, from: readonly LostPart[]) =>
+    [...from].reverse().find((x) => x.s.groups.has(g))
+  const createAt = list.findIndex((x) => x.s.create)
+  if (createAt >= 0) {
+    const prior = list[createAt]?.s.prior
+    // a new id: landed if the server has it; an undelete: landed unless the tombstone is untouched
+    const landed = !!conf && (!prior || !conf.isDeleted || conf.version !== prior.version)
+    if (!landed) {
+      if (!conf) return { again, recreate: true, superseded }
+      for (const g of list[createAt]?.s.groups ?? []) again.add(g)
+      return { again, recreate: false, superseded }
+    }
+    // the create landed (the server sets a create's version, so no counting after it): what came after it
+    // stands where the server does not hold it
+    const after = list.slice(createAt + 1)
+    const groups = new Set<GroupKey>()
+    for (const x of after) for (const g of x.s.groups) groups.add(g)
+    for (const g of groups) {
+      if (dirty.has(g)) continue
+      const last = lastOf(g, after)
+      if (last && !sameGroup(conf as SceneElement, last.s.el, g)) superseded.push(g)
+    }
+    return { again, recreate: false, superseded }
+  }
+  if (!conf) return { again, recreate: false, superseded } // gone from the server (purged): nothing to say
+  // groups the server does not hold at their last lost value
+  const all = new Set<GroupKey>()
+  for (const x of list) for (const g of x.s.groups) all.add(g)
+  const open = [...all].filter((g) => {
+    if (dirty.has(g)) return false
+    const last = lastOf(g, list)
+    return !!last && !sameGroup(conf, last.s.el, g)
+  })
+  if (!open.length) return { again, recreate: false, superseded }
+  const first = list[0] as LostPart
+  const P = first.s.pv ?? first.s.ref?.version
+  if (new Set(list.map((x) => x.p.src)).size > 1 || P === undefined || !first.s.ref) {
+    // pushes of several sockets (two tabs' queues), or no version to count from: not decidable
+    return { again, recreate: false, superseded: open }
+  }
+  const n = conf.version - P
+  const k = list.length
+  // the server copy after the first j lost pushes of this element and no other write
+  const after = (j: number): SceneElement => {
+    let el = first.s.ref as SceneElement
+    for (const x of list.slice(0, j)) el = copyGroups(el, x.s.el, x.s.groups)
+    return el
+  }
+  const possible: number[] = []
+  for (let j = 0; j <= k; j++) {
+    const others = n - j
+    if (others < 0) continue
+    if (others === 0 && diffGroups(conf, after(j)).groups.size > 0) continue
+    possible.push(j)
+  }
+  if (!possible.length) return { again, recreate: false, superseded: open }
+  for (const g of open) {
+    const unlanded = possible.every((j) => list.slice(j).some((x) => x.s.groups.has(g)))
+    if (unlanded) again.add(g)
+    else superseded.push(g)
+  }
+  return { again, recreate: false, superseded }
+}
+
 export class LobbyEngineCore implements EngineCore {
   // ---- options
   private readonly transport: Transport
@@ -283,6 +401,20 @@ export class LobbyEngineCore implements EngineCore {
   /** doc writes of this client not sent yet (setDoc), and sent but not acked: overlaid on the server copy */
   private pendingDoc: Record<string, unknown> = {}
   private readonly inflightDoc = new Map<number, Record<string, unknown>>()
+  /** per doc write in flight: the values its keys replaced (what the server had or would have), null for none */
+  private readonly inflightDocBase = new Map<number, Record<string, unknown>>()
+  /**
+   * Doc writes lost with a socket (or a closed page: the offline queue's `lostDoc`) whose fate is not
+   * decided yet: decided with the lost pushes (decideLostDoc), overlaid on the server copy until then
+   */
+  private lostDoc: LostDocRecord[] = []
+  /** the welcomes so far: the socket generation pushes record as their `src` */
+  private welcomes = 0
+  /** pushes of another page's queue (OfflineEntry.lost), by `<src>#<seq>`: decided like this page's lost pushes */
+  private readonly adoptedLost = new Map<string, Inflight>()
+  private adoptedSeq = 0
+  /** when the last reset snapshot was processed, until its catch-up (`changes`) arrives */
+  private resetAt: number | null = null
   private readonly holders = new Map<string, LeaseHolder>()
   private readonly rosterMap = new Map<string, RosterEntry>()
   private awaitingSnapshot = false
@@ -561,6 +693,7 @@ export class LobbyEngineCore implements EngineCore {
         else out.set(k, v)
       }
     }
+    for (const r of this.lostDoc) overlay(r.set)
     for (const set of this.inflightDoc.values()) overlay(set)
     overlay(this.pendingDoc)
     return out
@@ -1362,6 +1495,7 @@ export class LobbyEngineCore implements EngineCore {
     const epochChanged = this.epoch !== null && this.epoch !== w.epoch
     this.epochReset = epochChanged
     this.welcome = w
+    this.welcomes++
     this.epoch = w.epoch
     this.horizon = w.horizon
     this.serverDoc = { ...w.doc }
@@ -1407,14 +1541,21 @@ export class LobbyEngineCore implements EngineCore {
     }
     this.awaitingSnapshot = false
     const mark = this.holdMark(null)
+    const had = new Map(this.confirmedMap)
     this.confirmedMap.clear()
-    for (const el of frame.elements) this.confirmedMap.set(el.id, el as unknown as SceneElement)
+    for (const el of frame.elements)
+      this.confirmedMap.set(el.id, keepTombstoneContent(had.get(el.id), el as unknown as SceneElement))
     this.holdRecord(mark)
     const before = this.clock
     this.clock = frame.clock
     this.epoch = frame.epoch
     this.horizon = frame.horizon
-    this.serverDoc = { ...frame.doc }
+    // the welcome's board document, not the frame's: the room caches a reset snapshot for 5 s (with the
+    // document as it was then) and sends only the element rows since it as `changes`, while the welcome's
+    // `doc` is read at the hello. Taking the frame's put a document write of the last 5 s back to its old
+    // value for a joiner (DEF-3F-1 = 3b F2: session settings, tags, start view)
+    this.serverDoc = { ...(this.welcome?.doc ?? frame.doc) }
+    this.resetAt = this.epochReset ? null : this.now()
     this.afterWelcome(this.epochReset ? null : { snapshotClock: frame.clock, before })
     if (this.welcome) this.emit({ kind: 'welcome', welcome: this.welcome })
   }
@@ -1430,26 +1571,31 @@ export class LobbyEngineCore implements EngineCore {
       for (const e of this.pendingAdopt) this.adoptOffline(e)
       this.pendingAdopt = null
     }
-    // pushes with no ack were lost with the old socket: each group goes again only if it did not land
-    // (replayLost); behind a reset snapshot that may predate their commit, that waits for its catch-up
-    const lost = [...this.lostHeld, ...this.inflight]
+    // pushes with no ack were lost with the old socket, and an adopted queue's pushes with their page:
+    // each group goes again only if it did not land (replayLost); behind a reset snapshot that may
+    // predate their commit, that waits for its catch-up
+    const lost = [...this.lostHeld, ...this.takeAdopted(), ...this.inflight]
     this.lostHeld = []
     if (this.lostTimer !== null) {
       this.clearTimer(this.lostTimer)
       this.lostTimer = null
     }
     this.inflight = []
-    if (lost.length) {
-      if (this.epochReset) this.replayAll(lost)
-      else if (reset) this.holdLost(lost)
-      else this.replayLost(lost)
-    }
-    // doc writes lost with the socket go again (a newer write of the same key wins), unless the server
-    // already holds the value (it landed)
-    for (const set of this.inflightDoc.values())
-      for (const [k, v] of Object.entries(set))
-        if (!(k in this.pendingDoc) && !deepEqual(this.serverDoc[k] ?? null, v)) this.pendingDoc[k] = v
+    // doc writes lost with the socket: decided with the pushes (decideLostDoc)
+    for (const [seq, set] of this.inflightDoc)
+      this.lostDoc.push({ set, base: this.inflightDocBase.get(seq) ?? {} })
     this.inflightDoc.clear()
+    this.inflightDocBase.clear()
+    if (lost.length || this.lostDoc.length) {
+      if (this.epochReset) {
+        this.replayAll(lost)
+        this.replayAllDoc()
+      } else if (reset) this.holdLost(lost)
+      else {
+        this.replayLost(lost)
+        this.decideLostDoc()
+      }
+    }
     this.awaitingCatchUp.clear()
     for (const [id, t] of [...this.tracked]) {
       if (this.confirmedMap.has(id)) t.isNew = false
@@ -1469,8 +1615,9 @@ export class LobbyEngineCore implements EngineCore {
     this.heldBack.clear()
     // the whole scene is rebuilt from the new server state and the local changes
     const all = new Set<string>([...this.current.keys(), ...this.confirmedMap.keys()])
+    // (an element only a held lost push carries, e.g. an adopted queue's create, waits for its decision)
     for (const id of this.current.keys())
-      if (!this.confirmedMap.has(id) && !this.tracked.has(id)) this.vanish.add(id)
+      if (!this.confirmedMap.has(id) && !this.tracked.has(id) && !this.inflightHas(id)) this.vanish.add(id)
     this.applyScene(all)
     // lease messages asked for while disconnected go out now, behind any push
     this.flushNow(true)
@@ -1487,20 +1634,31 @@ export class LobbyEngineCore implements EngineCore {
   }
 
   /**
-   * Pushes lost with a socket (no ack: a network drop, a 4000, a SIGKILL after the COMMIT): each group goes
-   * out again only if the server copy shows it did not land. Before, every lost group was replayed unless
-   * the server held exactly its value, so a push that HAD committed overwrote another user's later Saved
-   * write, and a replayed create brought back an element another user had deleted (V1 N3a, N3b, P4). Per
-   * element and group, over the lost pushes that carried it, in order (their values v1..vk, and v0 the
-   * server's copy the first was built on):
-   *  - the server holds vk: it landed; nothing to send;
-   *  - the server holds v0..vk-1: the later pushes did not land; the local value goes again;
-   *  - anything else: another user wrote the group after this tab's write reached the server, or instead of
-   *    it; the server's copy stands (as if this tab's write had come first: the order a lost ack cannot
-   *    tell apart is resolved for the write every other screen already shows).
+   * Pushes lost with a socket (no ack: a network drop, a 4000, a SIGKILL after the COMMIT), or with a page
+   * (a reload or a closed tab: the offline queue's `lost` records, adopted): each group goes out again
+   * only if it did not land. The room processes one socket's frames in order, so what landed of a socket's
+   * lost pushes is a PREFIX of them; and it bumps an element's version once per push that changes it. Per
+   * element, with k lost pushes of one socket carrying it (in order), built on server version P, and the
+   * server copy now at version P + n:
+   *  - a group the server holds at the value the last lost push sent: landed (or written so); nothing to do;
+   *  - otherwise each interpretation "the first j of the k landed, and n - j other writes happened" that is
+   *    possible (n - j >= 0; with no other write, the server copy must be exactly what those j pushes made)
+   *    decides the group: it goes again (it did not land: an offline change, the later arrival wins below
+   *    10 minutes, STALE above) when every possible interpretation has a push after the landed prefix that
+   *    carries it; when they disagree, the server's copy stands (as before: the write every other screen
+   *    already shows; the common case is a push that landed and was edited after).
+   * So a push that landed and was overwritten after (V1 N3a, N3b, P4), or set back to the value it replaced
+   * (V1's ABA), never overwrites the later write; a push that never reached the server is replayed over a
+   * write another user made meanwhile once, as an offline change is (V1's R8). What stays undecidable from
+   * the server copy alone (a push that never arrived, then two or more writes by others in the same window)
+   * keeps the server's copy; the socket's heartbeat (transport/socket.ts) keeps that window short, and a
+   * push id the room deduplicates would close it (a change request to the contracts owner, wave 5).
    * A lost create goes again only when the server has no copy (it never landed), or, for an undelete, still
-   * holds the tombstone it was made over (same version). A group the user changed again since it was sent
-   * is a new change and goes as usual (it is dirty). The replays carry `off` and their push's base.
+   * holds the tombstone it was made over (same version); one that landed leaves the rest of its element's
+   * lost groups to the server's copy when it does not hold their value. A group the user changed
+   * again since it was sent is a new change and goes as usual (it is dirty). Replays carry `off` and their
+   * push's base. Before wave 5 the rule was by value only, which the ABA defeated, and it dropped every
+   * unlanded push another user had written over (V1 re-check of beff59d).
    */
   private replayLost(lost: readonly Inflight[]): void {
     const byId = new Map<string, { p: Inflight; s: Sent }[]>()
@@ -1510,34 +1668,11 @@ export class LobbyEngineCore implements EngineCore {
         list.push({ p, s })
         byId.set(id, list)
       }
-    const sameGroup = (a: SceneElement, b: SceneElement, g: GroupKey): boolean =>
-      g === 'fit' ? FIT_FIELDS.every((f) => deepEqual(a[f], b[f])) : !diffGroups(a, b).groups.has(g)
     for (const [id, list] of byId) {
       const conf = this.confirmedMap.get(id)
       const t = this.tracked.get(id)
-      const again = new Set<GroupKey>()
-      let recreate = false
-      const created = list.find((x) => x.s.create)
-      if (created) {
-        const prior = created.s.prior
-        if (!conf) recreate = true
-        else if (prior && conf.isDeleted && conf.version === prior.version)
-          for (const g of created.s.groups) again.add(g)
-      }
-      if (conf) {
-        const patches = list.filter((x) => !x.s.create)
-        const groups = new Set<GroupKey>()
-        for (const x of patches) for (const g of x.s.groups) groups.add(g)
-        for (const g of groups) {
-          if (t?.dirty.has(g)) continue
-          const chain = patches.filter((x) => x.s.groups.has(g))
-          const last = chain[chain.length - 1]
-          if (!last || sameGroup(conf, last.s.el, g)) continue
-          const earlier = [chain[0]?.s.ref, ...chain.slice(0, -1).map((x) => x.s.el)]
-          if (earlier.some((x) => !!x && sameGroup(conf, x, g))) again.add(g)
-          else this.log('lost_superseded', { id, group: g })
-        }
-      }
+      const { again, recreate, superseded } = decideLostElement(list, conf, t?.dirty ?? new Set())
+      if (superseded.length) this.log('lost_superseded', { id, groups: superseded })
       if (!again.size && !recreate) continue
       const at = (list[0] as { p: Inflight }).p
       const tt: Tracked = t ?? { dirty: new Set<GroupKey>(), isNew: false, since: at.record.at, replay: true }
@@ -1570,17 +1705,57 @@ export class LobbyEngineCore implements EngineCore {
   }
 
   /**
-   * Behind a reset snapshot (cached up to 5 s, its catch-up following as `changes`), lost pushes are held
-   * as in flight until that frame or CATCH_UP_WAIT_MS: a snapshot older than their commit would read as
-   * "did not land" and replay a write another user has since overwritten.
+   * Lost board-document writes (a socket's, or a closed page's `lostDoc`), per key over the writes that set
+   * it (values v1..vk, v0 what the first replaced): the server holds vk, it landed; it holds v0..vk-1, the
+   * later writes did not land and the latest local value goes again (unless the key was written again
+   * since); anything else is another user's later write, which stands. Before, every lost key went again
+   * unless the server held exactly its value, and a queued key went again whatever the server held (V1 R3,
+   * R7: a tag definition another user wrote after was overwritten). Keys have no version, so a value set
+   * back to v0 by someone else reads as "did not land" (accepted: a tag definition, a setting).
+   */
+  private decideLostDoc(): void {
+    const records = this.lostDoc
+    this.lostDoc = []
+    const keys = new Set<string>()
+    for (const r of records) for (const k of Object.keys(r.set)) keys.add(k)
+    for (const k of keys) {
+      if (k in this.pendingDoc) continue // written again since: that write goes
+      const chain = records.filter((r) => k in r.set)
+      const last = chain[chain.length - 1] as LostDocRecord
+      const now = this.serverDoc[k] ?? null
+      const sent = last.set[k] ?? null
+      if (deepEqual(now, sent)) continue
+      const earlier = [chain[0]?.base[k] ?? null, ...chain.slice(0, -1).map((r) => r.set[k] ?? null)]
+      if (earlier.some((v) => deepEqual(now, v))) this.pendingDoc[k] = clone(sent)
+      else this.log('lost_doc_superseded', { key: k })
+    }
+  }
+
+  /** An epoch change: every lost doc write goes again (a newer write of the key wins). */
+  private replayAllDoc(): void {
+    for (const r of this.lostDoc)
+      for (const [k, v] of Object.entries(r.set)) if (!(k in this.pendingDoc)) this.pendingDoc[k] = clone(v)
+    this.lostDoc = []
+  }
+
+  /**
+   * Behind a reset snapshot (cached up to 5 s, its catch-up following as `changes`), lost pushes and doc
+   * writes are held as in flight until that frame or CATCH_UP_WAIT_MS: a snapshot older than their commit
+   * would read as "did not land" and replay a write another user has since overwritten.
    */
   private holdLost(lost: readonly Inflight[]): void {
-    this.lostHeld = [...lost]
-    this.log('lost_held', { pushes: lost.map((p) => p.seq) })
+    this.lostHeld = [...this.lostHeld, ...lost]
+    this.log('lost_held', { pushes: lost.map((p) => p.seq), doc: this.lostDoc.length })
+    if (this.lostTimer !== null) return
     this.lostTimer = this.setTimer(() => {
       this.lostTimer = null
       if (!this.stopped) this.resolveLost()
     }, CATCH_UP_WAIT_MS)
+  }
+
+  /** Whether lost pushes or doc writes wait for a reset snapshot's catch-up (holdLost). */
+  private get lostWaiting(): boolean {
+    return this.lostHeld.length > 0 || (this.lostTimer !== null && this.lostDoc.length > 0)
   }
 
   private resolveLost(): void {
@@ -1589,10 +1764,11 @@ export class LobbyEngineCore implements EngineCore {
       this.lostTimer = null
     }
     const lost = this.lostHeld
-    if (!lost.length) return
+    if (!lost.length && !this.lostDoc.length) return
     this.syncLive()
     this.lostHeld = []
     this.replayLost(lost)
+    this.decideLostDoc()
     const ids = new Set<string>()
     for (const p of lost) for (const id of p.sent.keys()) ids.add(id)
     for (const id of ids) {
@@ -1624,7 +1800,10 @@ export class LobbyEngineCore implements EngineCore {
 
   private applyServerOp(op: ServerOp, affected: Set<string>): boolean {
     if (op.k === 'c') {
-      this.confirmedMap.set(op.el.id, op.el as unknown as SceneElement)
+      this.confirmedMap.set(
+        op.el.id,
+        keepTombstoneContent(this.confirmedMap.get(op.el.id), op.el as unknown as SceneElement),
+      )
       affected.add(op.el.id)
       return true
     }
@@ -1640,6 +1819,7 @@ export class LobbyEngineCore implements EngineCore {
 
   private onChanges(m: Changes): void {
     if (this.resyncing || this.awaitingSnapshot || !this.welcome) return
+    this.resetAt = null
     const affected = new Set<string>()
     const refits: CoreEvent[] = []
     const mark = this.holdMark(m.ops.map((op) => (op.k === 'c' ? op.el.id : op.id)))
@@ -1684,8 +1864,8 @@ export class LobbyEngineCore implements EngineCore {
       const t = this.tracked.get(id)
       if (t && !t.isNew && t.dirty.size) this.settleDirty(id, t)
     }
-    // the catch-up behind a reset snapshot: the lost pushes held for it are decided now
-    if (this.lostHeld.length) this.resolveLost()
+    // the catch-up behind a reset snapshot: the lost pushes (and doc writes) held for it are decided now
+    if (this.lostWaiting) this.resolveLost()
     this.applyScene(affected)
     for (const e of refits) this.emit(e)
     // an edit that could not go out before this frame (a change waiting for its element) goes now
@@ -1834,6 +2014,7 @@ export class LobbyEngineCore implements EngineCore {
     // the push's doc write: accepted (the batch's changes carried it), retried, or not saved
     const doc = this.inflightDoc.get(ack.seq)
     this.inflightDoc.delete(ack.seq)
+    this.inflightDocBase.delete(ack.seq)
     if (doc && ack.docDenied) {
       if (REJECT_CODE_INFO[ack.docDenied.code].retryable) {
         retry = true
@@ -1903,7 +2084,7 @@ export class LobbyEngineCore implements EngineCore {
         // a create of an id the server has, live: this client's own create landed before (element ids are
         // random), its ack lost with a socket, or a queued offline entry replayed after a reload (B4 D1).
         // Not a refusal: the server's copy is the element, and whatever is still dirty goes out as patches
-        this.confirmedMap.set(id, stored)
+        this.confirmedMap.set(id, keepTombstoneContent(this.confirmedMap.get(id), stored))
         const t = this.tracked.get(id)
         if (t) {
           t.isNew = false
@@ -1918,7 +2099,7 @@ export class LobbyEngineCore implements EngineCore {
       const held = mark?.has(id) ? this.heldRemote.get(id) : undefined
       if (held && sent) for (const g of sent.groups) held.groups.add(g)
       if (stored) {
-        this.confirmedMap.set(id, stored)
+        this.confirmedMap.set(id, keepTombstoneContent(this.confirmedMap.get(id), stored))
         // a refused create goes back to the server's copy: it is no create of ours any more (it stayed
         // "new" and Saved never came)
         if (sent?.create) this.tracked.delete(id)
@@ -2167,7 +2348,7 @@ export class LobbyEngineCore implements EngineCore {
           create: p.create,
           ...(p.create
             ? { prior: this.confirmedMap.has(id) ? clone(this.confirmedMap.get(id)) : undefined }
-            : { ref: this.base(id) }),
+            : { ref: this.base(id), pv: (this.confirmedMap.get(id) as SceneElement).version }),
         })
         if (!forced && this.inflight.length >= MAX_IN_FLIGHT_PUSHES) {
           full = true
@@ -2195,7 +2376,14 @@ export class LobbyEngineCore implements EngineCore {
   ): void {
     const seq = ++this.seq
     const record: PushRecord = { seq, base, at: this.now(), ops, ...(doc ? { doc: { set: doc } } : {}) }
-    this.inflight.push({ seq, base, ops, record, sent, forced })
+    if (doc) {
+      // what each key replaces: the server copy overlaid with this tab's earlier writes not acked yet
+      const was = this.doc()
+      const replaced: Record<string, unknown> = {}
+      for (const k of Object.keys(doc)) replaced[k] = was.has(k) ? clone(was.get(k)) : null
+      this.inflightDocBase.set(seq, replaced)
+    }
+    this.inflight.push({ seq, base, ops, record, sent, forced, src: `${this.tab}:${this.welcomes}` })
     if (doc) this.inflightDoc.set(seq, doc)
     this.pushes.push(record)
     this.transport.send({ type: 'push', seq, base, ops, ...(doc ? { doc: { set: doc } } : {}) })
@@ -2382,6 +2570,17 @@ export class LobbyEngineCore implements EngineCore {
       this.adoptOffline(e)
       ids.add(e.element.id)
     }
+    // the previous page's lost pushes and doc writes: decided as a reconnect decides its own (behind a
+    // reset snapshot whose catch-up has not come yet, they wait for it)
+    const adopted = this.takeAdopted()
+    if (adopted.length || this.lostDoc.length) {
+      const fresh = this.resetAt !== null && this.now() - this.resetAt < CATCH_UP_WAIT_MS
+      if (this.lostTimer !== null || fresh) this.holdLost(adopted)
+      else {
+        this.replayLost(adopted)
+        this.decideLostDoc()
+      }
+    }
     for (const id of ids) {
       const t = this.tracked.get(id)
       if (!t) continue
@@ -2397,53 +2596,125 @@ export class LobbyEngineCore implements EngineCore {
   }
 
   private adoptOffline(e: OfflineEntry): void {
-    // the board-document writes the queue kept (docEntry): sent again in the next push, before its
-    // element edits, unless this tab wrote the key again since
+    // the board-document writes the queue kept (docEntry): the unsent ones go in the next push, before its
+    // element edits, unless this tab wrote the key again since; the ones that were out (`lostDoc`) are
+    // decided like lost doc writes (decideLostDoc)
     if (e.element.id === DOC_ENTRY_ID) {
       const set = (e.element as unknown as { set?: Record<string, unknown> }).set ?? {}
       for (const [k, v] of Object.entries(set)) if (!(k in this.pendingDoc)) this.pendingDoc[k] = clone(v)
+      for (const r of e.lostDoc ?? []) this.lostDoc.push({ set: clone(r.set), base: clone(r.base) })
       return
     }
     const id = e.element.id
     const isNew = e.groups.includes('create')
     const groups = new Set<GroupKey>(e.groups.filter((g) => g !== 'create') as GroupKey[])
-    this.tracked.set(id, { dirty: groups, isNew, since: e.queuedAt, replay: true, knownAt: e.base })
+    if (groups.size || isNew || !e.lost?.length)
+      this.tracked.set(id, { dirty: groups, isNew, since: e.queuedAt, replay: true, knownAt: e.base })
+    // its pushes that were out when the page closed: one lost push per (socket, seq), in send order
+    for (const r of e.lost ?? []) {
+      const key = `${r.src}#${r.seq}`
+      let p = this.adoptedLost.get(key)
+      if (!p) {
+        const seq = --this.adoptedSeq
+        p = {
+          seq,
+          base: r.base,
+          ops: [],
+          record: { seq: r.seq, base: r.base, at: r.at, ops: [] },
+          sent: new Map(),
+          forced: false,
+          src: r.src,
+        }
+        this.adoptedLost.set(key, p)
+      }
+      p.sent.set(id, {
+        groups: new Set(r.groups as GroupKey[]),
+        el: clone(r.el),
+        create: r.create,
+        ...(r.ref ? { ref: clone(r.ref) } : {}),
+        ...(r.pv !== undefined ? { pv: r.pv } : {}),
+        ...(r.prior ? { prior: clone(r.prior) } : {}),
+      })
+    }
     // the queued element becomes the local copy (its dirty groups are rebased on the server's at welcome)
     const next = [...this.currentOrder.filter((el) => el.id !== id), e.element]
     this.readScene(next)
     this.known.delete(id)
   }
 
+  /** The adopted queues' lost pushes, in send order per socket, and forgets them. */
+  private takeAdopted(): Inflight[] {
+    const out = [...this.adoptedLost.values()].sort((a, b) =>
+      a.src === b.src ? a.record.seq - b.record.seq : a.src < b.src ? -1 : 1,
+    )
+    this.adoptedLost.clear()
+    return out
+  }
+
   private offlineEntries(): OfflineEntry[] {
     const out: OfflineEntry[] = []
-    const add = (id: string, groups: Iterable<GroupKey>, create: boolean, since: number) => {
-      const el = this.current.get(id)
-      if (!el) return
-      const g = new Set<string>(groups)
-      if (create) g.add('create')
-      out.push({ element: clone(el), groups: [...g], base: this.clock, queuedAt: since })
+    type Acc = { groups: Set<string>; since: number; lost: LostPushRecord[] }
+    const byId = new Map<string, Acc>()
+    const acc = (id: string): Acc => {
+      let a = byId.get(id)
+      if (!a) {
+        a = { groups: new Set(), since: Number.POSITIVE_INFINITY, lost: [] }
+        byId.set(id, a)
+      }
+      return a
     }
-    const seen = new Set<string>()
+    const flying = this.flying()
     for (const [id, t] of this.tracked) {
       if (t.dirty.size === 0 && !t.isNew) continue
-      const groups = new Set<GroupKey>([...t.dirty, ...this.inflightGroups(id)])
-      add(id, groups, t.isNew && !this.confirmedMap.has(id), t.since)
-      seen.add(id)
+      const a = acc(id)
+      for (const g of t.dirty) a.groups.add(g)
+      // a create not sent yet (one out is a lost record below)
+      if (t.isNew && !this.confirmedMap.has(id) && !flying.some((p) => p.sent.get(id)?.create))
+        a.groups.add('create')
+      a.since = Math.min(a.since, t.since)
     }
-    for (const p of this.flying())
+    // pushes out without an ack: a reload or a closed tab loses their acks, so the page that adopts the
+    // queue decides them as lost pushes (replayLost), not as unsent changes (V1's reload replay)
+    for (const p of flying)
       for (const [id, s] of p.sent) {
-        if (seen.has(id)) continue
-        seen.add(id)
-        add(id, s.groups, s.create, p.record.at)
+        const a = acc(id)
+        a.lost.push({
+          src: p.src,
+          seq: p.record.seq,
+          base: p.base,
+          at: p.record.at,
+          create: s.create,
+          groups: [...s.groups],
+          el: clone(s.el),
+          ...(s.ref ? { ref: clone(s.ref) } : {}),
+          ...(s.pv !== undefined ? { pv: s.pv } : {}),
+          ...(s.prior ? { prior: clone(s.prior) } : {}),
+        })
+        a.since = Math.min(a.since, p.record.at)
       }
+    for (const [id, a] of byId) {
+      const el = this.current.get(id)
+      if (!el) continue
+      out.push({
+        element: clone(el),
+        groups: [...a.groups],
+        base: this.clock,
+        queuedAt: Number.isFinite(a.since) ? a.since : this.now(),
+        ...(a.lost.length ? { lost: a.lost } : {}),
+      })
+    }
     // loaded but not adopted yet (no welcome so far): kept in the store as they were
-    for (const e of this.pendingAdopt ?? []) if (!seen.has(e.element.id)) out.push(e)
-    // board-document writes not acked (setDoc: a new tag's tagDef): kept too, or a reload lost them and
-    // the element's tag, queued, was then refused INVALID (V1 N8)
-    const doc: Record<string, unknown> = {}
-    for (const set of this.inflightDoc.values()) Object.assign(doc, set)
-    Object.assign(doc, this.pendingDoc)
-    if (Object.keys(doc).length && !seen.has(DOC_ENTRY_ID)) out.unshift(docEntry(doc, this.clock, this.now()))
+    for (const e of this.pendingAdopt ?? []) if (!byId.has(e.element.id)) out.push(e)
+    // board-document writes: the unsent ones (setDoc: a new tag's tagDef) and the ones out without an ack,
+    // with what they replaced; kept, or a reload lost them and the element's tag, queued, was then refused
+    // INVALID (V1 N8)
+    const lostDoc: LostDocRecord[] = [...this.lostDoc]
+    for (const [seq, set] of this.inflightDoc)
+      lostDoc.push({ set, base: this.inflightDocBase.get(seq) ?? {} })
+    if (Object.keys(this.pendingDoc).length || lostDoc.length) {
+      const e = docEntry(this.pendingDoc, this.clock, this.now())
+      out.unshift(lostDoc.length ? { ...e, lostDoc: clone(lostDoc) } : e)
+    }
     return out
   }
 
@@ -2497,8 +2768,8 @@ export class LobbyEngineCore implements EngineCore {
     const sig = entries
       .map((e) =>
         e.element.id === DOC_ENTRY_ID
-          ? `${DOC_ENTRY_ID}:${JSON.stringify((e.element as unknown as { set?: unknown }).set)}`
-          : `${e.element.id}:${e.element.version}:${e.element.versionNonce}:${e.groups.join(',')}`,
+          ? `${DOC_ENTRY_ID}:${JSON.stringify((e.element as unknown as { set?: unknown }).set)}:${JSON.stringify(e.lostDoc ?? [])}`
+          : `${e.element.id}:${e.element.version}:${e.element.versionNonce}:${e.groups.join(',')}:${(e.lost ?? []).map((l) => `${l.src}#${l.seq}`).join(',')}`,
       )
       .join('|')
     if (sig === this.persistedSig) return
@@ -2521,7 +2792,7 @@ export class LobbyEngineCore implements EngineCore {
     let dirty = 0
     for (const t of this.tracked.values()) if (t.dirty.size > 0 || t.isNew) dirty++
     // a doc write not sent or not acked keeps the board unsaved too
-    dirty += (Object.keys(this.pendingDoc).length ? 1 : 0) + this.inflightDoc.size
+    dirty += (Object.keys(this.pendingDoc).length ? 1 : 0) + this.inflightDoc.size + this.lostDoc.length
     // unsent text outside the scene (an editor's buffered keys, holdSaved)
     dirty += this.outside.size
     // the previous page's offline queue not read yet, or read and not adopted yet: its edits are not on
@@ -2531,7 +2802,8 @@ export class LobbyEngineCore implements EngineCore {
     const inputs: SaveInputs = {
       connected: this.connected && !!this.welcome && !this.awaitingSnapshot,
       dirty,
-      inflightOps: this.flying().reduce((n, p) => n + p.ops.length, 0),
+      // an adopted queue's lost push carries no ops, only its elements (OfflineEntry.lost)
+      inflightOps: this.flying().reduce((n, p) => n + (p.ops.length || p.sent.size), 0),
       offlineQueued: this.connected && this.welcome ? 0 : Math.max(this.offlineQueued, dirty),
       unavailableSince: this.unavailableSince,
       lastReject: this.lastReject,

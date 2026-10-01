@@ -11,6 +11,12 @@
  * Closes: 4099 is terminal (no reconnect: NOT_AUTHENTICATED, FORBIDDEN, INVALID_MESSAGE, …); anything
  * else reconnects with a fresh URL (a fresh ticket in the browser). `close()` stops for good.
  *
+ * Heartbeat (wave 5): a socket that received nothing for `heartbeatMs` gets a `ping` (the room answers
+ * `pong` at once); one that then stays silent for another `heartbeatMs` is dead (a half-open connection:
+ * the server or the network went away without a close) and is dropped as a close 4000 `heartbeat`, so
+ * the page reconnects. Before, a silent socket stayed open, and every push made on it was "in flight"
+ * until the browser gave up on it, which widened the lost-push window (V1 re-check, R8).
+ *
  * NODE-SAFE (CONTRACTS.md): no DOM types; the socket is a structural `WebSocketLike`.
  */
 import {
@@ -45,6 +51,9 @@ export interface SocketTransportOptions {
   readonly clearTimer?: (h: unknown) => void
   /** every inbound frame, decoded (the headless client's `received()`), before validation drops anything */
   readonly onRaw?: (message: ServerInbound) => void
+  /** silence before a `ping`, and again before the socket counts as dead (default 15 s; 0: no heartbeat) */
+  readonly heartbeatMs?: number
+  readonly now?: () => number
   readonly log?: (event: string, detail: Readonly<Record<string, unknown>>) => void
 }
 
@@ -58,6 +67,9 @@ export interface SocketTransport extends Transport {
 }
 
 const DEFAULT_BACKOFF = [250, 500, 1000, 2000, 4000, 5000] as const
+/** The close a dead (silent) socket is reported with. */
+export const HEARTBEAT_CLOSE = { code: 4000, reason: 'heartbeat' } as const
+export const HEARTBEAT_MS = 15_000
 const OPEN = 1
 
 async function bytesOf(data: unknown): Promise<Uint8Array | null> {
@@ -83,6 +95,13 @@ export function createSocketTransport(opts: SocketTransportOptions): SocketTrans
   let timer: unknown = null
   let chain: Promise<void> = Promise.resolve()
   let generation = 0
+  const heartbeatMs = opts.heartbeatMs ?? HEARTBEAT_MS
+  const now = opts.now ?? (() => Date.now())
+  let beat: unknown = null
+  const stopBeat = () => {
+    if (beat !== null) clearTimer(beat)
+    beat = null
+  }
 
   const setState = (s: TransportState, c?: TransportClose) => {
     state = s
@@ -93,6 +112,8 @@ export function createSocketTransport(opts: SocketTransportOptions): SocketTrans
   }
 
   const onFrame = (data: unknown, gen: number) => {
+    lastFrameAt = now()
+    pinged = false
     chain = chain.then(async () => {
       if (gen !== generation) return
       if (typeof data === 'string') {
@@ -128,6 +149,44 @@ export function createSocketTransport(opts: SocketTransportOptions): SocketTrans
     })
   }
 
+  let lastFrameAt = 0
+  let pinged = false
+  /** Every heartbeatMs on an open socket: a ping after silence, then a drop if the silence goes on. */
+  const startBeat = (sock: WebSocketLike, gen: number) => {
+    stopBeat()
+    if (heartbeatMs <= 0) return
+    lastFrameAt = now()
+    pinged = false
+    const tick = () => {
+      beat = null
+      if (gen !== generation || stopped) return
+      if (now() - lastFrameAt >= heartbeatMs) {
+        if (pinged) {
+          // a half-open socket: no close will come, so it is dropped here and the page reconnects
+          opts.log?.('socket_heartbeat_dead', { silentMs: now() - lastFrameAt })
+          generation++
+          ws = null
+          try {
+            sock.close(HEARTBEAT_CLOSE.code, HEARTBEAT_CLOSE.reason)
+          } catch {
+            // closing a dead socket may throw: it is gone either way
+          }
+          chain = chain.then(() => {
+            if (stopped) return
+            setState('closed', { ...HEARTBEAT_CLOSE })
+            scheduleReconnect()
+          })
+          return
+        }
+        pinged = true
+        lastFrameAt = now()
+        if (sock.readyState === OPEN) sock.send(JSON.stringify({ type: 'ping' }))
+      }
+      beat = setTimer(tick, heartbeatMs)
+    }
+    beat = setTimer(tick, heartbeatMs)
+  }
+
   const open = async () => {
     if (stopped) return
     const gen = ++generation
@@ -148,6 +207,7 @@ export function createSocketTransport(opts: SocketTransportOptions): SocketTrans
     sock.onopen = () => {
       if (gen !== generation) return
       failures = 0
+      startBeat(sock, gen)
       setState('open')
     }
     sock.onmessage = (ev) => onFrame(ev.data, gen)
@@ -155,6 +215,7 @@ export function createSocketTransport(opts: SocketTransportOptions): SocketTrans
     sock.onclose = (ev) => {
       if (gen !== generation) return
       ws = null
+      stopBeat()
       const close = { code: ev.code, reason: ev.reason }
       // frames already received are processed before the close is reported
       chain = chain.then(() => {
@@ -206,6 +267,7 @@ export function createSocketTransport(opts: SocketTransportOptions): SocketTrans
       stopped = true
       if (timer !== null) clearTimer(timer)
       timer = null
+      stopBeat()
       const sock = ws
       ws = null
       generation++

@@ -12,6 +12,7 @@
  *
  * NODE-SAFE (CONTRACTS.md).
  */
+import { redactTombstone } from '@draftroom/canvas-schema/elements'
 import { overlayPatch, stripEngineArtifacts } from '@draftroom/canvas-schema/groups'
 import { WIRE_LIMITS } from '@draftroom/canvas-schema/limits'
 import {
@@ -86,7 +87,12 @@ export class FakeRoom {
    * frame. 0 (the default): a fresh snapshot every time.
    */
   snapshotCacheMs = 0
-  private snapCache: { at: number; clock: number; elements: El[] } | null = null
+  /**
+   * Send every tombstone redacted (CONTRACTS_REV 7, W5-02: elements.ts `redactTombstone`), as the room
+   * does since wave 5: in snapshots, catch-ups, `c` ops and a reject's stored element.
+   */
+  redactTombstones = false
+  private snapCache: { at: number; clock: number; elements: El[]; doc: Record<string, unknown> } | null = null
   private readonly c: ManualClock
   private readonly strict: boolean
 
@@ -215,7 +221,7 @@ export class FakeRoom {
       if (m.type === 'snapshot') SnapshotFrameSchema.parse(m)
       else ServerMessageSchema.parse(m)
     }
-    const copy = JSON.parse(JSON.stringify(m)) as ServerInbound
+    const copy = (this.redactTombstones ? redactFrame(m) : JSON.parse(JSON.stringify(m))) as ServerInbound
     s.sent.push(copy)
     this.c.setTimer(() => {
       if (s.open) s.deliver?.(copy)
@@ -309,12 +315,21 @@ export class FakeRoom {
     if (reset) {
       let els = [...this.elements.values()]
       let clock = this.clock
+      let doc = { ...this.doc }
       if (this.snapshotCacheMs > 0) {
         const now = this.c.now()
         if (!this.snapCache || now - this.snapCache.at >= this.snapshotCacheMs)
-          this.snapCache = { at: now, clock: this.clock, elements: structuredClone(els) }
+          this.snapCache = {
+            at: now,
+            clock: this.clock,
+            elements: structuredClone(els),
+            doc: { ...this.doc },
+          }
         els = this.snapCache.elements
         clock = this.snapCache.clock
+        // the cached frame carries the document as it was then (element-room.ts snapshotFor); the welcome's
+        // is read at the hello
+        doc = { ...this.snapCache.doc }
       }
       this.send(s, {
         ...base,
@@ -329,7 +344,7 @@ export class FakeRoom {
         clock,
         horizon: this.horizon,
         elements: [...els].sort(byIndex) as never,
-        doc: { ...this.doc },
+        doc,
       }
       this.send(s, frame)
       // the rows since a cached snapshot, right behind it (element-room.ts hello)
@@ -561,6 +576,21 @@ const byIndex = (a: El, b: El) => {
 }
 
 /** The stored form of an element as tests seed it: every server-owned field set. */
+/** A frame with every tombstone redacted (FakeRoom.redactTombstones). */
+function redactFrame(m: ServerInbound): ServerInbound {
+  const f = JSON.parse(JSON.stringify(m)) as Record<string, unknown>
+  const red = (el: El) => (el?.isDeleted ? (redactTombstone(el) as unknown as El) : el)
+  const ops = (list: unknown) =>
+    Array.isArray(list)
+      ? list.map((op: { k: string; el?: El }) => (op.k === 'c' && op.el ? { ...op, el: red(op.el) } : op))
+      : list
+  if (f.type === 'snapshot') f.elements = (f.elements as El[]).map(red)
+  if (f.type === 'welcome' && f.catchUp) f.catchUp = ops(f.catchUp)
+  if (f.type === 'changes') f.ops = ops(f.ops)
+  if (f.type === 'ack') f.r = (f.r as { el?: El | null }[]).map((r) => (r.el ? { ...r, el: red(r.el) } : r))
+  return f as unknown as ServerInbound
+}
+
 export function stored<T extends Record<string, unknown>>(el: T, version = 1): T & SceneElement {
   return { ...el, version, versionNonce: nextNonce(), updated: 1_700_000_000_000 } as unknown as T &
     SceneElement
