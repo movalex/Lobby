@@ -465,7 +465,7 @@ async function openElementBoard(path: string, entry: DrillEntry): Promise<string
       throw new DrillProblem('the opened board holds a different number of elements than the manifest')
     if (store.meta.clock !== entry.documentClock)
       throw new DrillProblem('the opened board has another clock than the manifest')
-    for (const row of store.snapshotJson()) JSON.parse(row)
+    for (const row of store.snapshotRows()) JSON.parse(row.data)
     return [
       `opened through the element room's store: ${live} live elements and ${dead} tombstones, every row readable, clock ${store.meta.clock}` +
         (state === 'rollforward-needed'
