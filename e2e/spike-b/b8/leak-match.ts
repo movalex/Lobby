@@ -87,18 +87,47 @@ export function percentDecoded(text: string, plus: boolean): string {
   })
 }
 
-/** The decoded text of every base64 run (standard or URL alphabet) that decodes to readable UTF-8. */
+/** A character of the standard or URL base64 alphabet (`=` padding is read apart). */
+const isBase64Char = (c: number) =>
+  (c >= 48 && c <= 57) || // 0-9
+  (c >= 65 && c <= 90) || // A-Z
+  (c >= 97 && c <= 122) || // a-z
+  c === 43 || // +
+  c === 47 || // /
+  c === 95 || // _
+  c === 45 // -
+
+/**
+ * The decoded text of every base64 run (standard or URL alphabet) that decodes to readable UTF-8. The runs
+ * are found by one pass over the text, not by a regular expression: `[A-Za-z0-9+/_-]{16,}` over a run of
+ * 8 MB or more (a report on one line, a file of base64 chunks) overflowed V8's backtracking stack
+ * (RangeError), and leak-check.ts counted the whole file unreadable (V3's wave-5 re-check).
+ */
 export function base64Decoded(text: string): string[] {
   const out: string[] = []
-  const re = new RegExp(`[A-Za-z0-9+/_-]{${BASE64_MIN},}={0,2}`, 'g')
-  for (const m of text.matchAll(re)) {
-    const run = m[0].replace(/-/g, '+').replace(/_/g, '/')
-    const bytes = Buffer.from(run, 'base64')
-    if (bytes.length < 8) continue
-    const s = bytes.toString('utf8')
-    // mostly printable: a real encoded text, not a hash or an id read as base64
-    const printable = [...s].filter((c) => c >= ' ' && c !== '�').length
-    if (printable >= s.length * 0.9) out.push(s)
+  const n = text.length
+  let i = 0
+  while (i < n) {
+    if (!isBase64Char(text.charCodeAt(i))) {
+      i++
+      continue
+    }
+    let j = i + 1
+    while (j < n && isBase64Char(text.charCodeAt(j))) j++
+    let k = j
+    while (k < n && k < j + 2 && text.charCodeAt(k) === 61) k++ // up to two '=' of padding
+    if (j - i >= BASE64_MIN) {
+      const run = text.slice(i, k).replace(/-/g, '+').replace(/_/g, '/')
+      const bytes = Buffer.from(run, 'base64')
+      if (bytes.length >= 8) {
+        const s = bytes.toString('utf8')
+        // mostly printable: a real encoded text, not a hash or an id read as base64
+        let printable = 0
+        for (const c of s) if (c >= ' ' && c !== '�') printable++
+        if (printable >= s.length * 0.9) out.push(s)
+      }
+    }
+    i = k
   }
   return out
 }
