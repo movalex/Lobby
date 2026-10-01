@@ -81,7 +81,8 @@ export function planToRecords(plan: BoardPlan, ctx: TemplateContext): TLRecord[]
           props: {
             color: node.color,
             size: node.size,
-            font: node.font,
+            // tldraw has no display face (the new canvas's Lilita One): headings stay in its sans
+            font: node.font === 'display' ? 'sans' : node.font,
             textAlign: node.align,
             w: node.w,
             richText: toRichText(node.text),

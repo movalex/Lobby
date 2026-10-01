@@ -17,7 +17,7 @@ import { describe, expect, it } from 'vitest'
 import { NOTE_SIZE } from '../common.ts'
 import { BRAINSTORM_MAP_RIGHT, TOUR_FRAME_H, TOUR_FRAME_W } from '../templates/lobby-tour.ts'
 import { must, rectContains, rectGap, rectsOverlap } from '../test-utils.ts'
-import { instantiateSceneTemplate } from './index.ts'
+import { DISPLAY_FACE_AVAILABLE, FONT_FACE_NAME, FONT_FAMILY, instantiateSceneTemplate } from './index.ts'
 import { labelOf, metrics, wordsOf } from './test-kit.ts'
 
 void metrics
@@ -178,7 +178,7 @@ describe('Lobby tour on the new canvas: the frames', () => {
     }
   })
 
-  it('4 · Mood board: two captioned reference slots, a named palette, three type samples in three faces', () => {
+  it('4 · Mood board: two captioned reference slots, a named palette, three type samples named after their faces', () => {
     const f = frame('4 · Mood board')
     const boxes = kidsOf(f, 'rectangle')
     const slots = boxes.filter((b) => b.customData?.lobby?.slot === 'image')
@@ -204,10 +204,30 @@ describe('Lobby tour on the new canvas: the frames', () => {
       )
       expect(name.length).toBeGreaterThanOrEqual(1)
     }
-    // the new canvas has no serif: its hand-drawn face stands in, and the role says so
-    expect(new Set(texts.map((t) => (t.type === 'text' ? t.fontFamily : 0)))).toEqual(new Set([5, 6, 8]))
-    const roles = texts.map(words).filter((t) => /^(Display|Body|HUD) · /.test(t))
-    expect(roles).toEqual(['Display · hand-drawn', 'Body · sans', 'HUD · mono'])
+    // W5-17 / D3: no new fonts, so the samples pair the display face (Lilita One) with Nunito, each role
+    // names the face its sample is set in, and nothing calls Comic Shanns "mono" or Excalifont a display
+    // face. Until the server accepts Lilita One every sample is Nunito, and the roles say "sans".
+    const family = (t: WireElement) => (t.type === 'text' ? t.fontFamily : 0)
+    expect(new Set(texts.map(family))).toEqual(new Set([6, FONT_FAMILY.display]))
+    const roleTexts = texts.filter((t) => /^(Display|Body|HUD) · /.test(words(t)))
+    expect(roleTexts.map(words)).toEqual(
+      DISPLAY_FACE_AVAILABLE
+        ? ['Display · Lilita One', 'Body · Nunito', 'HUD · Lilita One']
+        : ['Display · sans', 'Body · sans', 'HUD · sans'],
+    )
+    for (const role of roleTexts) {
+      // the sample is the text right of its role, on the same line
+      const sample = must(
+        texts.find(
+          (t) => t.x > role.x + role.width && Math.abs(t.y + t.height / 2 - (role.y + role.height / 2)) < 40,
+        ),
+        words(role),
+      )
+      const face = words(role).split(' · ')[1]
+      const named = family(sample) === 6 ? ['sans', 'Nunito'] : [FONT_FACE_NAME[family(sample)]]
+      expect(named, `${words(role)} over "${words(sample)}"`).toContain(face)
+    }
+    expect(texts.map(words).join(' ')).not.toMatch(/mono|hand-drawn|serif/i)
   })
 
   it('5 · Retro has Went well, To improve and Actions, left to right, each with its own notes', () => {
@@ -224,6 +244,9 @@ describe('Lobby tour on the new canvas: the frames', () => {
   })
 
   it('6 · Tips and shortcuts lists the real bindings, the key over what it does', () => {
+    // W5-59: with this page's way round the board: F6 (the keyboard to the board), Alt + arrows (next or
+    // previous item) and Ctrl/Cmd + Shift + Down / Up (into a frame and back out), the bindings of
+    // apps/web/src/features/a11y/ported/index.tsx
     const cards = kidsOf(frame('6 · Tips and shortcuts'), 'rectangle')
     expect(Object.fromEntries(cards.map((c) => words(c).split('\n') as [string, string]))).toEqual({
       N: 'Sticky note',
@@ -238,7 +261,16 @@ describe('Lobby tour on the new canvas: the frames', () => {
       'Ctrl + Alt + Enter': 'Present',
       'Ctrl + Z': 'Undo',
       M: 'Minimap',
+      F6: 'Keyboard to the board',
+      'Alt + arrows': 'Next or previous item',
+      'Ctrl + Shift + Down': 'Into a frame',
+      'Ctrl + Shift + Up': 'Out of a frame',
     })
+    const texts = kidsOf(frame('6 · Tips and shortcuts'), 'text').map(words).join(' ')
+    expect(texts).toMatch(
+      /Press \? for every other shortcut, or open Keyboard shortcuts from the menu at the top left/,
+    )
+    expect(texts).not.toMatch(/main menu/i)
   })
 })
 

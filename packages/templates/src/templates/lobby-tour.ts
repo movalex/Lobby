@@ -54,7 +54,18 @@ function tourFrame(b: BoardBuilder, index: number, heading: string, intro: strin
   })
   // Headings and instructions arrive locked (PRE-07), like every template's.
   // DBC orange: #e16919 on the white frame is 3.4:1 (AA for large text; this is 44 px), and brighter in dark.
-  b.text(frame, { x: M, y: HEADING_Y, w: INNER_W, text: heading, size: 'xl', color: 'orange', locked: true })
+  // As wide as the intro under it (W5-59): they share a reading-order row, read by their centres, so a
+  // heading wider than its intro was read after it. The new canvas sets it in its display face (D3).
+  b.text(frame, {
+    x: M,
+    y: HEADING_Y,
+    w: introW,
+    text: heading,
+    size: 'xl',
+    color: 'orange',
+    locked: true,
+    heading: true,
+  })
   b.text(frame, { x: M, y: INTRO_Y, w: introW, text: intro, size: 'm', color: 'grey', locked: true })
   return frame
 }
@@ -62,11 +73,16 @@ function tourFrame(b: BoardBuilder, index: number, heading: string, intro: strin
 /**
  * A tinted card with a black label: readable in light and dark mode. `titled`: the first line is the card's
  * title or key (bold on tldraw; the plain first line on the new canvas, which has plain text only).
+ * `heading`: the whole label is a title (a theme, a column header, a key), set in the new canvas's display
+ * face (D3).
  */
 function card(
   b: BoardBuilder,
   frame: PlanFrame,
-  spec: Pick<GeoSpec, 'x' | 'y' | 'w' | 'h' | 'titled'> & { text: string; color: LobbyColor },
+  spec: Pick<GeoSpec, 'x' | 'y' | 'w' | 'h' | 'titled' | 'heading' | 'scene'> & {
+    text: string
+    color: LobbyColor
+  },
 ) {
   return b.geo(frame, { ...spec, fill: 'solid', labelColor: 'black', size: 'm' })
 }
@@ -87,7 +103,16 @@ function welcome(b: BoardBuilder) {
   pillars.forEach(([text, color], i) => {
     card(b, f, { x: col3(i), y: TOP, w: COL3_W, h: 190, text, color, titled: true })
   })
-  b.text(f, { x: M, y: 510, w: 600, text: 'Try this', size: 'l', color: 'black', locked: true })
+  b.text(f, {
+    x: M,
+    y: 510,
+    w: 600,
+    text: 'Try this',
+    size: 'l',
+    color: 'black',
+    locked: true,
+    heading: true,
+  })
   const tries: ReadonlyArray<[string, LobbyColor]> = [
     // DANA-11: a client who can only comment reads this board too, so no editor-only promises.
     ["Can edit? Press N, click anywhere and type. That's a sticky note.", 'yellow'],
@@ -186,6 +211,7 @@ function brainstorm(b: BoardBuilder) {
       text: c.label,
       color: c.color,
       titled: true,
+      heading: true,
     })
     b.noteGrid(
       f,
@@ -317,7 +343,7 @@ function moodBoard(b: BoardBuilder) {
   const px = col3(2)
   // Section labels first, in reading order (search and the CSV export list shapes in creation order).
   const section = (x: number, y: number, text: string) =>
-    b.text(f, { x, y, w: COL3_W, text, size: 'm', color: 'black', locked: true })
+    b.text(f, { x, y, w: COL3_W, text, size: 'm', color: 'black', locked: true, heading: true })
   section(M, labelY, 'References')
   section(px, labelY, 'Palette')
   section(M, typeY, 'Type')
@@ -331,8 +357,11 @@ function moodBoard(b: BoardBuilder) {
     b.text(f, { x, y: bodyY + slotH + 14, w: COL3_W, text: caption, size: 's', color: 'black' })
   })
 
-  // Type: three samples in three of the canvas's fonts, each with its role on the left: tldraw's serif,
-  // sans and mono; on the new canvas (no serif) its hand-drawn Excalifont, Nunito and Comic Shanns.
+  // Type: three samples, each with its role on the left, named after the face it is set in. tldraw: its
+  // serif, sans and mono. The new canvas has none of those but sans (decision D3: no new fonts), so it pairs
+  // its display face, Lilita One, with Nunito, and never calls a face what it is not (W5-17: its Comic
+  // Shanns is no "mono", and Excalifont no display serif). Until the server accepts Lilita One the display
+  // samples are Nunito too, and their roles say "sans" (`displayText`: the words once it does).
   const roleW = 200
   const sampleX = M + roleW + 24
   const sampleW = col3(2) - COL_GAP - sampleX
@@ -343,8 +372,8 @@ function moodBoard(b: BoardBuilder) {
     size: 's' | 'm' | 'l' | 'xl'
     color: LobbyColor
     y: number
-    /** the new canvas's own words and font for this sample, where they differ */
-    scene?: { role: string; font: 'draw' }
+    /** the new canvas's face for this sample, and its role (in Nunito, and in the display face) */
+    scene: { font: 'sans' | 'display'; role: string; displayRole: string }
   }> = [
     {
       role: 'Display · serif',
@@ -353,7 +382,7 @@ function moodBoard(b: BoardBuilder) {
       size: 'xl',
       color: 'black',
       y: 0,
-      scene: { role: 'Display · hand-drawn', font: 'draw' },
+      scene: { font: 'display', role: 'Display · sans', displayRole: 'Display · Lilita One' },
     },
     {
       role: 'Body · sans',
@@ -362,6 +391,7 @@ function moodBoard(b: BoardBuilder) {
       size: 'm',
       color: 'black',
       y: 84,
+      scene: { font: 'sans', role: 'Body · sans', displayRole: 'Body · Nunito' },
     },
     {
       role: 'HUD · mono',
@@ -370,6 +400,7 @@ function moodBoard(b: BoardBuilder) {
       size: 'm',
       color: 'orange',
       y: 140,
+      scene: { font: 'display', role: 'HUD · sans', displayRole: 'HUD · Lilita One' },
     },
   ]
   for (const s of samples) {
@@ -381,7 +412,7 @@ function moodBoard(b: BoardBuilder) {
       text: s.role,
       size: 's',
       color: 'grey',
-      ...(s.scene ? { scene: { text: s.scene.role } } : {}),
+      scene: { text: s.scene.role, displayText: s.scene.displayRole },
     })
     b.text(f, {
       x: sampleX,
@@ -391,7 +422,7 @@ function moodBoard(b: BoardBuilder) {
       size: s.size,
       color: s.color,
       font: s.font,
-      ...(s.scene ? { scene: { font: s.scene.font } } : {}),
+      scene: { font: s.scene.font },
     })
   }
 
@@ -452,7 +483,7 @@ function retro(b: BoardBuilder) {
   const noteW = NOTE_SIZE * scale
   columns.forEach((c, i) => {
     const x = col3(i)
-    card(b, f, { x, y: TOP, w: COL3_W, h: 72, text: c.title, color: c.color, titled: true })
+    card(b, f, { x, y: TOP, w: COL3_W, h: 72, text: c.title, color: c.color, titled: true, heading: true })
     b.noteGrid(
       f,
       { x, y: TOP + 72 + 28, cols: 2, gap: COL3_W - noteW * 2, gapY: 20, scale },
@@ -468,7 +499,10 @@ function tips(b: BoardBuilder) {
     'Tips and shortcuts',
     'The keys worth learning first. On a Mac, Ctrl is Cmd and Alt is Option.',
   )
-  const keys: ReadonlyArray<[string, string]> = [
+  // [key, what it does] on both pages, or with the new canvas's own binding where its keys differ (the
+  // keyboard's way round the board, W5-59: Tab on tldraw's page; F6 and Alt + arrows on the new canvas's,
+  // apps/web/src/features/a11y/ported/index.tsx).
+  const keys: ReadonlyArray<[string, string, { scene: [string, string] }?]> = [
     ['N', 'Sticky note'],
     ['T', 'Text'],
     ['F', 'Frame'],
@@ -481,12 +515,16 @@ function tips(b: BoardBuilder) {
     ['Ctrl + Alt + Enter', 'Present'],
     ['Ctrl + Z', 'Undo'],
     ['M', 'Minimap'],
+    ['Tab', 'Next item', { scene: ['F6', 'Keyboard to the board'] }],
+    ['Shift + Tab', 'Previous item', { scene: ['Alt + arrows', 'Next or previous item'] }],
+    ['Ctrl + Shift + Down', 'Into a frame'],
+    ['Ctrl + Shift + Up', 'Out of a frame'],
   ]
   const cols = 4
   const gap = 24
   const w = (INNER_W - gap * (cols - 1)) / cols
-  const h = 150
-  keys.forEach(([key, what], i) => {
+  const h = 106
+  keys.forEach(([key, what, own], i) => {
     card(b, f, {
       x: M + (i % cols) * (w + gap),
       y: TOP + Math.floor(i / cols) * (h + gap),
@@ -496,15 +534,19 @@ function tips(b: BoardBuilder) {
       // The first row (the making tools) in DBC orange, the rest in the neutral dark tone.
       color: i < cols ? 'orange' : 'black',
       titled: true,
+      heading: true,
+      ...(own ? { scene: { text: own.scene.join('\n') } } : {}),
     })
   })
   b.text(f, {
     x: M,
     y: 820,
     w: INNER_W,
+    // W5-59: "?" opens Keyboard shortcuts on both pages, and the menu is the one at the top left (the
+    // tldraw page's main menu, the new canvas's Board menu).
     text:
       'Edits sync live for everyone on the board. Before a big clean-up, save a checkpoint in History. ' +
-      'Every other shortcut is in the main menu, under Keyboard shortcuts.',
+      'Press ? for every other shortcut, or open Keyboard shortcuts from the menu at the top left.',
     size: 'm',
     color: 'grey',
     locked: true,

@@ -170,6 +170,49 @@ export function readingOrder(
   return order(pageId)
 }
 
+/**
+ * The keyboard's reading order over boxes: tldraw 5.4.2's `Editor._getShapesInReadingOrder` (Tab, Ctrl+Arrow,
+ * Ctrl+Shift+Down into a frame), which the new canvas's traversal copies with the same constants
+ * (apps/web/src/features/a11y/ported/reading-order.ts `inReadingOrder`): centres sorted top to bottom, rows of
+ * centres within 100 px of the row's last one, each row left to right (a stable sort), then a nearer entry
+ * two places on at a shallow angle swaps forward.
+ */
+export function keyboardReadingOrder<T extends { readonly rect: Rect }>(entries: readonly T[]): T[] {
+  if (entries.length <= 1) return [...entries]
+  const centre = (r: Rect) => ({ x: r.x + r.w / 2, y: r.y + r.h / 2 })
+  const items = entries.map((entry) => ({ entry, c: centre(entry.rect) }))
+  items.sort((a, b) => a.c.y - b.c.y)
+  const rows: (typeof items)[] = []
+  for (const it of items) {
+    let row = -1
+    for (let i = rows.length - 1; i >= 0; i--) {
+      const last = rows[i]?.[(rows[i]?.length ?? 1) - 1]
+      if (last && Math.abs(it.c.y - last.c.y) < 100) {
+        row = i
+        break
+      }
+    }
+    if (row === -1) rows.push([it])
+    else rows[row]?.push(it)
+  }
+  for (const row of rows) row.sort((a, b) => a.c.x - b.c.x)
+  const d2 = (a: { x: number; y: number }, b: { x: number; y: number }) => (a.x - b.x) ** 2 + (a.y - b.y) ** 2
+  for (const row of rows) {
+    for (let i = 0; i + 2 < row.length; i++) {
+      const [cur, next, after] = [row[i], row[i + 1], row[i + 2]]
+      if (!cur || !next || !after) continue
+      if (d2(cur.c, after.c) < d2(cur.c, next.c) * 0.9) {
+        const angle = Math.abs((Math.atan2(after.c.y - cur.c.y, after.c.x - cur.c.x) * 180) / Math.PI)
+        if (angle <= 20) {
+          row[i + 1] = after
+          row[i + 2] = next
+        }
+      }
+    }
+  }
+  return rows.flat().map((it) => it.entry)
+}
+
 export function must<T>(value: T | null | undefined, what = 'value'): T {
   if (value === null || value === undefined) throw new Error(`expected ${what}`)
   return value
