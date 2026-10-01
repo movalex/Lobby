@@ -67,7 +67,12 @@ export async function restoreFixedPoint(
           }
         }
       ).__lobbySpike
-      const NAMES: Record<number, string> = { 5: 'Excalifont', 6: 'Nunito', 8: 'Comic Shanns' }
+      const NAMES: Record<number, string> = {
+        5: 'Excalifont',
+        6: 'Nunito',
+        7: 'Lilita One',
+        8: 'Comic Shanns',
+      }
       const need = new Map<string, string>()
       for (const e of els)
         if (e.type === 'text') {
@@ -175,7 +180,12 @@ export async function screenshotBoard(
     async (els) => {
       const spike = (window as unknown as { __lobbySpike: { api: { updateScene(s: unknown): void } } })
         .__lobbySpike
-      const NAMES: Record<number, string> = { 5: 'Excalifont', 6: 'Nunito', 8: 'Comic Shanns' }
+      const NAMES: Record<number, string> = {
+        5: 'Excalifont',
+        6: 'Nunito',
+        7: 'Lilita One',
+        8: 'Comic Shanns',
+      }
       for (const e of els)
         if (e.type === 'text')
           await document.fonts.load(
