@@ -39,8 +39,15 @@ export const SNAPSHOT_COLUMNS = `s.id, s.workspace_id, s.board_id, s.name, s.kin
 
 export const SNAPSHOT_FROM = 'board_snapshots s LEFT JOIN users u ON u.id = s.created_by'
 
-/** The API shape (a BoardSnapshot plus `reason`; older clients ignore the extra field). */
-export const toCheckpoint = (r: SnapshotRow): BoardCheckpoint => ({
+/**
+ * The API shape (a BoardSnapshot plus `reason`; older clients ignore the extra field). `marks.newCanvas`
+ * false (this api serves the new canvas, canvas-engine.ts): a v2 checkpoint is this build's own and carries
+ * no `newCanvas` mark. Default true (R0's behaviour).
+ */
+export const toCheckpoint = (
+  r: SnapshotRow,
+  marks: { readonly newCanvas?: boolean } = {},
+): BoardCheckpoint => ({
   id: r.id,
   boardId: r.board_id,
   name: r.name,
@@ -52,15 +59,15 @@ export const toCheckpoint = (r: SnapshotRow): BoardCheckpoint => ({
   recordCount: Number(r.record_count),
   sizeBytes: Number(r.size_bytes),
   // Bridge release R0: made on the new canvas (a v2 body): listed, never previewed or restored here.
-  ...(isNewCanvasRow(r) ? { newCanvas: true as const } : {}),
+  ...(isNewCanvasRow(r) && marks.newCanvas !== false ? { newCanvas: true as const } : {}),
 })
 
 /**
  * Bridge release R0: a checkpoint whose row says its body is not the tldraw build's (v2, the new canvas).
  * On main (R0, the tldraw build) such a row is listed and never previewed or restored. On this branch the
- * readers below read v1 and v2 bodies alike, and this branch's writer does not yet set `body_version`
- * (every row is 1), so the row check is dormant here; the Excalidraw build's switch to writing 2 must drop
- * these refusals for its own api (docs/research/excalidraw/WAVE-3.md §6, 2F).
+ * readers below read v1 and v2 bodies alike, and the writers set `body_version` from the body they store
+ * (wave 5, 2A: 2 for a v2 body). The refusals of such rows apply only while this api's sync is a tldraw one
+ * (canvas-engine.ts `onNewCanvas`): on the new canvas they are this build's own checkpoints.
  */
 export const isNewCanvasRow = (r: Pick<SnapshotRow, 'body_version'>) =>
   r.body_version !== undefined && r.body_version !== null && Number(r.body_version) !== 1

@@ -120,6 +120,13 @@ export class LeaseTable {
     return n
   }
 
+  /** How many live leases the sessions of `uid` hold together (the per-user cap). */
+  heldByUser(uid: string, now: number): number {
+    let n = 0
+    for (const l of this.leases.values()) if (l.holder.uid === uid && l.expiresAt > now) n++
+    return n
+  }
+
   /** Every live lease (welcome.leases). */
   live(now: number): { id: string; holder: LeaseHolderInfo }[] {
     const out: { id: string; holder: LeaseHolderInfo }[] = []

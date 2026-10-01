@@ -26,10 +26,11 @@ import {
   roleOf,
 } from '../access.ts'
 import { audit } from '../audit.ts'
+import { onNewCanvas } from '../canvas-engine.ts'
 import type { AppContext, Params } from '../context.ts'
 import { ApiError, conflict, forbidden, notFound, parse } from '../errors.ts'
 import { assertBoardRoom } from '../files/usage.ts'
-import { toBoard, toBoardWithRole } from '../serialize.ts'
+import { type BoardMarks, toBoard, toBoardWithRole } from '../serialize.ts'
 
 const MAX_LISTED = 500
 /** `at`: epoch ms of the board's latest accepted canvas write (sync's clock; clamped to ours). */
@@ -45,6 +46,8 @@ const TRANSITIONS = { archive: 'archived', trash: 'trashed', restore: 'active' }
 >
 
 export function registerBoardRoutes(app: FastifyInstance, ctx: AppContext): void {
+  /** R0's `newCanvas` marks: shown unless this api serves the new canvas (canvas-engine.ts). */
+  const boardMarks = async (): Promise<BoardMarks> => ({ newCanvas: !(await onNewCanvas(ctx)) })
   const { db, notifier, now } = ctx
 
   app.get('/api/workspaces/:wid/boards', async (req) => {
@@ -76,11 +79,12 @@ export function registerBoardRoutes(app: FastifyInstance, ctx: AppContext): void
       ],
     )
     const boards = []
+    const marks = await boardMarks()
     for (const { board_grant, ...board } of rows.rows) {
       const role = resolveBoardRole({ workspaceRole, boardGrant: board_grant, visibility: board.visibility })
       // Trash lists what the caller could restore; nobody can open a trashed board.
       const listed = status === 'trashed' ? can(role, 'restore', status) : can(role, 'view', status)
-      if (role && listed) boards.push(toBoardWithRole(board, role))
+      if (role && listed) boards.push(toBoardWithRole(board, role, marks))
     }
     return { boards }
   })
@@ -89,6 +93,8 @@ export function registerBoardRoutes(app: FastifyInstance, ctx: AppContext): void
     const user = await ctx.requireUser(req)
     const { wid = '' } = req.params as Params
     const input = parse(CreateBoardInput, req.body)
+    // Bridge release R0's contract: a board created on the new canvas is marked so (canvas-engine.ts)
+    const newCanvas = await onNewCanvas(ctx)
     const row = await db.transaction(async (tx) => {
       const workspaceRole = await requireWorkspaceRole(tx, wid, user.id)
       if (!canCreateInWorkspace(workspaceRole)) throw forbidden()
@@ -103,9 +109,9 @@ export function registerBoardRoutes(app: FastifyInstance, ctx: AppContext): void
       const at = now()
       for (let attempt = 0; attempt < 5; attempt++) {
         const created = await tx.maybeOne<BoardRow>(
-          `INSERT INTO boards (id, workspace_id, project_id, title, created_by, created_at, updated_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $6) ON CONFLICT (id) DO NOTHING RETURNING ${BOARD_RETURNING}`,
-          [newBoardId(), wid, projectId, input.title, user.id, at],
+          `INSERT INTO boards (id, workspace_id, project_id, title, created_by, created_at, updated_at, new_canvas)
+           VALUES ($1, $2, $3, $4, $5, $6, $6, $7) ON CONFLICT (id) DO NOTHING RETURNING ${BOARD_RETURNING}`,
+          [newBoardId(), wid, projectId, input.title, user.id, at, newCanvas],
         )
         if (!created) continue // id collision (36^10 space): draw another
         await tx.query(
@@ -124,7 +130,7 @@ export function registerBoardRoutes(app: FastifyInstance, ctx: AppContext): void
       throw new Error('could not allocate a board id')
     })
     reply.code(201)
-    return toBoardWithRole(row, 'owner')
+    return toBoardWithRole(row, 'owner', await boardMarks())
   })
 
   app.get('/api/boards/:bid', async (req) => {
@@ -137,7 +143,7 @@ export function registerBoardRoutes(app: FastifyInstance, ctx: AppContext): void
       [bid, now()],
     )
     return {
-      board: toBoard(row),
+      board: toBoard(row, await boardMarks()),
       role: roleOf(access),
       workspace: { id: access.board.workspace_id, name: access.workspaceName },
     }
@@ -194,7 +200,7 @@ export function registerBoardRoutes(app: FastifyInstance, ctx: AppContext): void
       return { row, role: roleOf(access), visibilityChanged }
     })
     if (result.visibilityChanged) notifier.accessChanged({ boardId: bid })
-    return toBoardWithRole(result.row, result.role)
+    return toBoardWithRole(result.row, result.role, await boardMarks())
   })
 
   // Server-to-server only (the web proxy never forwards /internal): the sync server reports the time
@@ -252,7 +258,7 @@ export function registerBoardRoutes(app: FastifyInstance, ctx: AppContext): void
         return { row, role, changed: true }
       })
       if (result.changed) notifier.accessChanged({ boardId: bid })
-      return toBoardWithRole(result.row, result.role)
+      return toBoardWithRole(result.row, result.role, await boardMarks())
     })
   }
 }

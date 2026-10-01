@@ -224,9 +224,15 @@ export class BoardStore {
     return (this.st.countSince.get(clock) as { n: number }).n
   }
 
-  /** Every element (tombstones included) as stored JSON, in `(idx, id)` order: the reset snapshot. */
-  snapshotJson(): string[] {
-    return (this.st.snapshotData.all() as { data: string }[]).map((r) => r.data)
+  /**
+   * Every element (tombstones included) as stored JSON with its deleted flag, in `(idx, id)` order: the
+   * reset snapshot (element-room.ts redacts the tombstones before they leave, W5-02).
+   */
+  snapshotRows(): { data: string; deleted: boolean }[] {
+    return (this.st.snapshotData.all() as { data: string; deleted: number }[]).map((r) => ({
+      data: r.data,
+      deleted: r.deleted === 1,
+    }))
   }
   /** Live elements only, in `(idx, id)` order (the internal snapshot route). */
   liveJson(): string[] {
@@ -239,6 +245,21 @@ export class BoardStore {
   /** Live `(idx, id)` pairs in order, with what the room's caches need. */
   liveIndexRows(): { idx: string; id: string; type: string; data: string }[] {
     return this.st.liveIndex.all() as { idx: string; id: string; type: string; data: string }[]
+  }
+  /**
+   * Every tombstone's `(idx, id)`, whether it is a bound label, and who created it (the room's caches: the
+   * z-order keys a live element may not take, V3; the guest cap's deleted items, D5). Read in SQL, so a
+   * board's 10,000 tombstones are not parsed at room open.
+   */
+  tombstoneIndexRows(): { idx: string; id: string; label: boolean; byGuest: string | null }[] {
+    return (
+      this.st.deadIndex.all() as { idx: string; id: string; cid: unknown; guest: unknown; by: unknown }[]
+    ).map((r) => ({
+      idx: r.idx,
+      id: r.id,
+      label: typeof r.cid === 'string' && r.cid.length > 0,
+      byGuest: (r.guest === 1 || r.guest === true) && typeof r.by === 'string' ? r.by : null,
+    }))
   }
   counts(): { live: number; dead: number } {
     const r = this.st.counts.get() as { live: number | null; dead: number | null }
@@ -392,10 +413,16 @@ function prepareStatements(db: DatabaseSync) {
     ),
     since: p(`SELECT ${COLS} FROM lb_elements WHERE clock > ? ORDER BY idx, id`),
     countSince: p('SELECT count(*) AS n FROM lb_elements WHERE clock > ?'),
-    snapshotData: p('SELECT data FROM lb_elements ORDER BY idx, id'),
+    snapshotData: p('SELECT data, deleted FROM lb_elements ORDER BY idx, id'),
     liveData: p('SELECT data FROM lb_elements WHERE deleted = 0 ORDER BY idx, id'),
     allById: p('SELECT data FROM lb_elements ORDER BY id'),
     liveIndex: p('SELECT idx, id, type, data FROM lb_elements WHERE deleted = 0 ORDER BY idx, id'),
+    deadIndex: p(
+      `SELECT idx, id, json_extract(data, '$.containerId') AS cid,
+         json_extract(data, '$.customData.lobbyServer.createdBy.guest') AS guest,
+         json_extract(data, '$.customData.lobbyServer.createdBy.uid') AS by
+         FROM lb_elements WHERE deleted = 1 ORDER BY idx, id`,
+    ),
     counts: p(
       'SELECT sum(CASE WHEN deleted = 0 THEN 1 ELSE 0 END) AS live, sum(deleted) AS dead FROM lb_elements',
     ),

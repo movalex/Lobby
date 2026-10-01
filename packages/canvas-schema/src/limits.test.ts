@@ -12,7 +12,9 @@ import {
   FILE_ID_PATTERN,
   GEOMETRY_TOLERANCE_PX,
   isAllowedLink,
+  isLobbyFontFamily,
   jsonByteLength,
+  LOBBY_FONT_FAMILIES,
   MAX_ELEMENT_BYTES,
   MAX_FREEDRAW_POINTS,
   MAX_LINEAR_POINTS,
@@ -50,9 +52,11 @@ describe('element schemas (§3.1, §3.5)', () => {
     for (const t of REFUSED_ELEMENT_TYPES) expect(code({ ...E.rectangle, type: t }), t).toBe('INVALID')
   })
 
-  it('fonts are 5, 6 or 8 (F15)', () => {
-    for (const f of [5, 6, 8]) expect(code({ ...E.text, fontFamily: f })).toBe('ok')
-    for (const f of [1, 2, 3, 4, 7, 9, 10])
+  it('fonts are 5, 6, 7 or 8 (F15; 7 Lilita One since CONTRACTS_REV 7, D3)', () => {
+    for (const f of [5, 6, 7, 8]) expect(code({ ...E.text, fontFamily: f })).toBe('ok')
+    expect([...LOBBY_FONT_FAMILIES]).toEqual([5, 6, 7, 8])
+    for (const f of [5, 6, 7, 8]) expect(isLobbyFontFamily(f)).toBe(true)
+    for (const f of [1, 2, 3, 4, 9, 10])
       expect(code({ ...E.text, fontFamily: f }), `family ${f}`).toBe('INVALID')
   })
 
@@ -121,6 +125,32 @@ describe('element schemas (§3.1, §3.5)', () => {
     expect(isAllowedLink('https://example.com', { guest: true })).toBe(false)
     expect(isAllowedLink('/b/board-1', { guest: true })).toBe(true)
     expect(code({ ...E.rectangle, link: 'javascript:alert(1)' })).toBe('INVALID')
+  })
+
+  it('signed URLs fail closed: a malformed escape no longer hides an encoded name; GCS V4 names (V2 re-check, CONTRACTS_REV 7)', () => {
+    // V2's re-check (P-N5): each of these was stored at rev 6, because decodeURIComponent threw
+    for (const l of [
+      'https://x.example/k?X%2DAmz%2DSignature=abc&z=%',
+      'https://x.example/k?z=%E0%A4%A&X%2DAmz%2DSignature=abc',
+      'https://x.example/k?X%2DAmz%2DCredential=abc&q=100%',
+      'https://x.example/k?%58-Amz-Signature=abc&z=%zz',
+      '/k?X%2DAmz%2DSignature=abc&z=%',
+      'https://x.example/k?X-Goog-Signature=abc&X-Goog-Credential=c',
+      'https://x.example/k?x-goog-credential=c',
+      'https://x.example/k?X%2DGoog%2DSignature=abc&z=%',
+      'https://x.example/k?X-Amz-Algorithm=AWS4-HMAC-SHA256',
+      // still changing after four rounds of decoding: refused
+      'https://x.example/k?a=%2525252525252541',
+    ])
+      expect(isAllowedLink(l), l).toBe(false)
+    // ordinary links with percents, malformed or not, stay allowed
+    for (const l of [
+      'https://example.com/sale?off=100%',
+      'https://example.com/a?q=caf%C3%A9&n=%zz',
+      'https://example.com/a%20b?c=%25',
+      '/b/board-1?el=a,b&q=%',
+    ])
+      expect(isAllowedLink(l), l).toBe(true)
   })
 
   it('fileId: a Lobby version id, or a placed PDF page (F9, §3.1)', () => {

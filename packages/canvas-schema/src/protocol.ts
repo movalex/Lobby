@@ -32,8 +32,14 @@ import {
 
 /** The wire protocol version (`hello.proto`, `welcome.proto`). */
 export const PROTO = 1 as const
-/** Bumped by the lead on every change request applied after C0 (CONTRACTS.md). C0 is revision 1. */
-export const CONTRACTS_REV = 6
+/**
+ * Bumped by the contracts owner on every change request applied after C0 (CONTRACTS.md; since wave 5,
+ * docs/EXCALIDRAW-CONTRACTS.md §0a). C0 is revision 1. Revision 7 (wave 5, owner 2A as contracts owner):
+ * tombstones travel redacted (elements.ts `redactTombstone`, hash.ts `TOMBSTONE_KEYS`; W5-02), font family
+ * 7 is allowed (D3), the signed-URL check fails closed and knows GCS (V2), the guest cap is per uid (D5).
+ * Revision 8: a delete's broadcast is the exact patch again (only `c` ops of tombstones are redacted).
+ */
+export const CONTRACTS_REV = 8
 /**
  * The element schema version (`hello.schema`, `welcome.schema`, `lb_meta.schemaVersion`). A client one
  * version older is served; a newer one gets 4099 `SERVER_TOO_OLD`, an older one `CLIENT_TOO_OLD` (§6.2 `schema`).
@@ -494,6 +500,13 @@ export type NoticeCode = (typeof NOTICE_CODES)[number]
 /**
  * A server op in `changes` (and `welcome.catchUp`). `c`: the full element as stored at its version
  * `el.version` (a create, an undelete, a catch-up row, a server repair); the receiver replaces its copy.
+ * A tombstone is never sent in full (CONTRACTS_REV 7, W5-02): a `c` op of a deleted element carries
+ * elements.ts `redactTombstone(stored)`; a delete reaches the sessions that held the element live as the
+ * `p` op of what the deleting push changed (CONTRACTS_REV 8: exactly, so their copy stays the server's;
+ * rev 7 sent `life` alone, and an arrow whose bindings the same delete nulled was revived unbound by its
+ * undo); an undelete is always a `c` op of the full live element (a receiver may hold only the redacted
+ * form). A receiver that holds the element's content may keep it under a tombstone; only the
+ * TOMBSTONE_KEYS of a deleted element are authoritative (hash.ts).
  * `p`: the stored values of the groups that changed (the whole unit for `path`), the new version `v` and
  * `versionNonce` `vn` (C0: the plan named `v`, `pv` and `updated` only, but the convergence hash includes
  * `versionNonce`, and the server owns it, so every receiver must learn it), the previous `pv`, `updated`,
@@ -554,7 +567,7 @@ export type WireLimits = z.infer<typeof WireLimitsSchema>
 
 /**
  * `welcome`: the answer to `hello`. Either a catch-up (`reset: false`, `catchUp` = the rows changed since
- * `since`, tombstones included, as `c` ops) or a reset (`reset: true`, `catchUp: null`, `snapshot`
+ * `since`, tombstones included as redacted `c` ops, CONTRACTS_REV 7) or a reset (`reset: true`, `catchUp: null`, `snapshot`
  * announcing the binary `SnapshotFrame` that is the very next frame). After processing it the client is
  * at `clock` of `epoch`. `leases` are the live leases, `drags` the active drags with their ids.
  */
@@ -608,7 +621,8 @@ export type FixFields = z.infer<typeof FixFields>
  * rounded points and, for an unrotated linear element, rounded `x`, `y`, re-snapped bound endpoints of an
  * arrow this push wrote), `fitDropped` when a conditional fit was not applied, and `denied` for a partial
  * accept (the groups not applied, e.g. `text`/`layout`/`life` under someone else's lease). `ok: false`
- * with the code and the stored element (null when there is none), so the client can reset.
+ * with the code and the stored element (null when there is none; a tombstone redacted, CONTRACTS_REV 7),
+ * so the client can reset.
  */
 export const AckResult = z.discriminatedUnion('ok', [
   z.strictObject({
@@ -734,7 +748,10 @@ export { LEASE_TTL_MS }
  * The frame after a `welcome` with `reset: true`: gzip of the UTF-8 JSON of this object. It carries the
  * live elements AND the tombstones the server holds (rows with `deleted = 1` within the horizon), in
  * `(index, id)` order, so every client's element map holds every tombstone the server holds and
- * convergence is checked including deleted elements (hash.ts). Compressed once per cached snapshot.
+ * convergence is checked including deleted elements (hash.ts). Since CONTRACTS_REV 7 (W5-02) every
+ * tombstone is `redactTombstone(stored)`: no role, the owner's included, receives a deleted element's
+ * text, authors or other content over the canvas socket ("Recently deleted" is the api's, owner/editor
+ * only). Compressed once per cached snapshot.
  */
 export const SnapshotFrame = z.strictObject({
   type: z.literal('snapshot'),
@@ -767,7 +784,8 @@ export async function decodeSnapshotFrame(bytes: Uint8Array): Promise<SnapshotFr
 
 /**
  * `GET /internal/test/boards/:bid/snapshot`: the live elements and EVERY tombstone (`lb_elements` rows
- * with `deleted = 1`), in `(id)` order, hashed exactly by hash.ts. `horizon` (revision 3.4) lets the
+ * with `deleted = 1`, as stored: in full, test-only behind the secret), in `(id)` order, hashed exactly by
+ * hash.ts (a tombstone by its TOMBSTONE_KEYS). `horizon` (revision 3.4) lets the
  * harness see a compaction purge inside a check window (§8.1): a check whose horizon moved is re-run.
  */
 export const TestSnapshot = z.strictObject({

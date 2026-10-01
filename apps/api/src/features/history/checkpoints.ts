@@ -33,6 +33,7 @@ import {
 import { newId, type Queryable } from '@draftroom/db'
 import type { FastifyInstance } from 'fastify'
 import { audit } from '../../audit.ts'
+import { onNewCanvas } from '../../canvas-engine.ts'
 import { SyncNewCanvasBoard } from '../../sync-internal.ts'
 import type { FeatureContext } from '../context.ts'
 import { planRetention, type RetentionPolicy, SAFETY_REASONS } from './retention.ts'
@@ -290,8 +291,10 @@ export function createCheckpointService(
       await forget(boardId)
       return { status: 'skipped', why: 'trashed' }
     }
-    // Bridge release R0: a board made on the new canvas is not this build's to read (its sync refuses it).
-    if (board.new_canvas) return { status: 'skipped', why: 'new-canvas' }
+    // Bridge release R0: a board made on the new canvas is not this build's to read (its sync refuses it),
+    // unless this api's sync runs the new canvas (canvas-engine.ts)
+    const newBuild = await onNewCanvas(ctx)
+    if (board.new_canvas && !newBuild) return { status: 'skipped', why: 'new-canvas' }
     const startedAt = now()
     let snap: Awaited<ReturnType<typeof ctx.sync.snapshot>>
     try {
@@ -301,12 +304,12 @@ export function createCheckpointService(
       throw e
     }
     const made = checkpointBodyOf(boardId, snap)
-    // Compared with the newest tldraw checkpoint only (bridge release R0): a checkpoint made on the new
-    // canvas (body_version 2) holds other content, and its clock is not a tldraw documentClock.
+    // Compared with the newest checkpoint of the same body version only (bridge release R0): one made on
+    // the other canvas holds other content, and its clock is not this one's (2 on the new canvas).
     const newest = await db.maybeOne<{ content_hash: string | null; document_clock: number }>(
       `SELECT content_hash, document_clock::float8 AS document_clock FROM board_snapshots
-        WHERE board_id = $1 AND body_version = 1 ORDER BY created_at DESC, id DESC LIMIT 1`,
-      [boardId],
+        WHERE board_id = $1 AND body_version = $2 ORDER BY created_at DESC, id DESC LIMIT 1`,
+      [boardId, made.body.version],
     )
     const unchanged =
       newest !== null &&
@@ -344,8 +347,9 @@ export function createCheckpointService(
       row = await db.one<SnapshotRow>(
         `WITH ins AS (
            INSERT INTO board_snapshots (id, workspace_id, board_id, name, kind, reason, created_by, created_at,
-                                        document_clock, record_count, size_bytes, storage_key, content_hash)
-           VALUES ($1, $2, $3, $4, 'auto', $5, NULL, $6, $7, $8, $9, $10, $11) RETURNING *)
+                                        document_clock, record_count, size_bytes, storage_key, content_hash,
+                                        body_version)
+           VALUES ($1, $2, $3, $4, 'auto', $5, NULL, $6, $7, $8, $9, $10, $11, $12) RETURNING *)
          SELECT ${SNAPSHOT_COLUMNS} FROM ins s LEFT JOIN users u ON u.id = s.created_by`,
         [
           id,
@@ -359,6 +363,7 @@ export function createCheckpointService(
           made.sizeBytes,
           key,
           made.contentHash,
+          made.body.version, // R0's contract: 2 for a body made on the new canvas
         ],
       )
     } catch (e) {
@@ -368,7 +373,7 @@ export function createCheckpointService(
     await covered(boardId, board.workspace_id, startedAt, true)
     ctx.events.publish(boardId, { type: HISTORY_EVENTS.snapshot, data: { snapshotId: id } })
     await prune(boardId).catch((e: unknown) => warnErr('checkpoint retention failed', e))
-    return { status: 'saved', checkpoint: toCheckpoint(row) }
+    return { status: 'saved', checkpoint: toCheckpoint(row, { newCanvas: !newBuild }) }
   }
 
   async function captureNamedNow(boardId: string, name: string): Promise<NamedCaptureOutcome> {
@@ -377,7 +382,8 @@ export function createCheckpointService(
       [boardId],
     )
     if (!board) return { status: 'skipped', why: 'missing' }
-    if (board.new_canvas) return { status: 'skipped', why: 'new-canvas' }
+    const newBuild = await onNewCanvas(ctx)
+    if (board.new_canvas && !newBuild) return { status: 'skipped', why: 'new-canvas' }
     let snap: Awaited<ReturnType<typeof ctx.sync.snapshot>>
     try {
       snap = await ctx.sync.snapshot(boardId)
@@ -388,8 +394,8 @@ export function createCheckpointService(
     const made = checkpointBodyOf(boardId, snap)
     const newest = await db.maybeOne<SnapshotRow>(
       `SELECT ${SNAPSHOT_COLUMNS} FROM ${SNAPSHOT_FROM}
-        WHERE s.board_id = $1 AND s.body_version = 1 ORDER BY s.created_at DESC, s.id DESC LIMIT 1`,
-      [boardId],
+        WHERE s.board_id = $1 AND s.body_version = $2 ORDER BY s.created_at DESC, s.id DESC LIMIT 1`,
+      [boardId, made.body.version],
     )
     if (
       newest?.kind === 'manual' &&
@@ -398,7 +404,7 @@ export function createCheckpointService(
       newest.content_hash === made.contentHash &&
       Number(newest.document_clock) === made.documentClock
     )
-      return { status: 'unchanged', checkpoint: toCheckpoint(newest) }
+      return { status: 'unchanged', checkpoint: toCheckpoint(newest, { newCanvas: !newBuild }) }
     const id = newId('snp')
     const key = snapshotStorageKey(boardId, id)
     await bodies.write(key, made.json)
@@ -407,8 +413,9 @@ export function createCheckpointService(
       row = await db.one<SnapshotRow>(
         `WITH ins AS (
            INSERT INTO board_snapshots (id, workspace_id, board_id, name, kind, created_by, created_at,
-                                        document_clock, record_count, size_bytes, storage_key, content_hash)
-           VALUES ($1, $2, $3, $4, 'manual', NULL, $5, $6, $7, $8, $9, $10) RETURNING *)
+                                        document_clock, record_count, size_bytes, storage_key, content_hash,
+                                        body_version)
+           VALUES ($1, $2, $3, $4, 'manual', NULL, $5, $6, $7, $8, $9, $10, $11) RETURNING *)
          SELECT ${SNAPSHOT_COLUMNS} FROM ins s LEFT JOIN users u ON u.id = s.created_by`,
         [
           id,
@@ -421,6 +428,7 @@ export function createCheckpointService(
           made.sizeBytes,
           key,
           made.contentHash,
+          made.body.version, // R0's contract: 2 for a body made on the new canvas
         ],
       )
     } catch (e) {
@@ -428,7 +436,7 @@ export function createCheckpointService(
       throw e
     }
     ctx.events.publish(boardId, { type: HISTORY_EVENTS.snapshot, data: { snapshotId: id } })
-    return { status: 'saved', checkpoint: toCheckpoint(row) }
+    return { status: 'saved', checkpoint: toCheckpoint(row, { newCanvas: !newBuild }) }
   }
 
   const warnErr = (message: string, e: unknown) =>

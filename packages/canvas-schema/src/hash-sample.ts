@@ -79,5 +79,8 @@ export const HASH_SAMPLE: readonly Readonly<Record<string, unknown>>[] = [
   },
 ]
 
-/** The lowercase hex SHA-256 of `HASH_SAMPLE` (pinned; both runtimes must give it). */
-export const HASH_SAMPLE_DIGEST = 'f2fc3760b9b838e9e5e2d60fae3970a956e1524b432a9633ed01ff8aa7131bd7'
+/**
+ * The lowercase hex SHA-256 of `HASH_SAMPLE` (pinned; both runtimes must give it). CONTRACTS_REV 7: the
+ * two tombstones are hashed by their TOMBSTONE_KEYS only (W5-02).
+ */
+export const HASH_SAMPLE_DIGEST = '526c966eac705939be6ef9bc9c730e240aa5f6103e27e7a3ff7b13fb12fee85c'

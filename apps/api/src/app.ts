@@ -16,6 +16,7 @@ import { createIdentityService, type IdentityService } from './auth/identity.ts'
 import type { AuthProvider, RouteRateLimit, SignInContext } from './auth/provider.ts'
 import { createSessionStore } from './auth/session.ts'
 import { listUserWorkspaces } from './auth/users.ts'
+import { type CanvasEngine, createCanvasEngineProbe } from './canvas-engine.ts'
 import type { ApiConfig } from './config.ts'
 import { type ApiLimits, type AppContext, DEFAULT_LIMITS, type InvitationRateLimits } from './context.ts'
 import { badRequest, toErrorResponse, unauthenticated } from './errors.ts'
@@ -177,6 +178,18 @@ async function buildServer(
     ...deps.limits,
     invitations: { ...DEFAULT_LIMITS.invitations, ...deps.limits?.invitations },
   }
+  // Bridge release R0: a snapshot that is not a tldraw one is refused, never read as an empty board.
+  const sync = checkedSnapshots(
+    deps.syncInternal ??
+      createHttpSyncInternalClient({ baseUrl: config.syncInternalUrl, secret: config.internalSecret }),
+  )
+  // R0's contracts (canvas-engine.ts): which canvas the sync runs decides what the api marks and refuses
+  const canvas = createCanvasEngineProbe(
+    sync.engine ? () => (sync.engine as () => Promise<CanvasEngine>)() : undefined,
+    {
+      log: (m) => app.log.info(m),
+    },
+  )
   const ctx: AppContext = {
     config,
     db,
@@ -186,6 +199,7 @@ async function buildServer(
     authRateLimit,
     limits,
     identity,
+    canvas,
     async requireUser(req) {
       const user = await sessions.user(req)
       if (!user) throw unauthenticated()
@@ -380,11 +394,7 @@ async function buildServer(
     ...ctx,
     blobs,
     events,
-    // Bridge release R0: a snapshot that is not a tldraw one is refused, never read as an empty board.
-    sync: checkedSnapshots(
-      deps.syncInternal ??
-        createHttpSyncInternalClient({ baseUrl: config.syncInternalUrl, secret: config.internalSecret }),
-    ),
+    sync,
     layout,
   }
   registerEventRoutes(app, features)

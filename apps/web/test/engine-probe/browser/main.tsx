@@ -21,7 +21,7 @@ declare global {
       ready: boolean
       error?: string
       api?: Api
-      calibrate?: (heldOut: string[]) => ReturnType<typeof calibrate>
+      calibrate?: (heldOut: string[], only?: number[]) => ReturnType<typeof calibrate>
       layout?: (labels: CorpusLabel[]) => ReturnType<typeof layoutCorpusInBrowser>
       a8?: () => ReturnType<typeof runA8InBrowser>
     }
@@ -41,7 +41,7 @@ const onApi = (api: Api) => {
   const started = performance.now()
   const wait = () => {
     if (fontsRegistered()) {
-      window.__probe.calibrate = (heldOut) => calibrate(new Set(heldOut))
+      window.__probe.calibrate = (heldOut, only) => calibrate(new Set(heldOut), only)
       window.__probe.layout = (labels) => layoutCorpusInBrowser(labels)
       window.__probe.a8 = () => runA8InBrowser(api)
       window.__probe.ready = true

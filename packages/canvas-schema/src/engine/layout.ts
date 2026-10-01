@@ -158,7 +158,7 @@ export const fontString = (fontFamily: LobbyFontFamily, fontSizePx: number) =>
   rawCommon.getFontString({ fontFamily, fontSize: fontSizePx })
 
 export const fontFamilyName = (family: LobbyFontFamily) =>
-  family === 5 ? 'Excalifont' : family === 8 ? 'Comic Shanns' : 'Nunito'
+  family === 5 ? 'Excalifont' : family === 7 ? 'Lilita One' : family === 8 ? 'Comic Shanns' : 'Nunito'
 
 /** Whether Excalidraw would draw the creation-date footer on this note (`getStickyNoteFooter`). */
 export const stickyNoteHasFooter = (
