@@ -6,7 +6,13 @@
 // and "Group into themes" leaves a template's prompt notes where they are (contracts splitThemeNotes).
 
 import { AI_MAX_REQUEST_SHAPES, splitThemeNotes } from '@draftroom/contracts'
-import { type Bounds, type CanvasElement, items, type LobbyCanvas } from '../../../canvas/api/index.ts'
+import {
+  type Bounds,
+  type CanvasElement,
+  geometry,
+  items,
+  type LobbyCanvas,
+} from '../../../canvas/api/index.ts'
 import { plural } from '../copy.ts'
 
 export interface AiTarget {
@@ -116,8 +122,11 @@ function describe(els: readonly CanvasElement[], notes: number): string {
 }
 
 // ---- which frame things are in (W5-04) ---------------------------------------------------------------
+//
+// Read from the elements' own fields, never `canvas.bounds` (the port's is a scan of the board per call,
+// CR 3b-7): these run over every loose element of the board, and in the context menu's predicates.
 
-/** The live, shown frames of the board with their scene bounds (smallest first: frames never nest here). */
+/** The live, shown frames of the board with their boxes (smallest first: frames never nest here). */
 export interface FrameIndex {
   frames: { el: CanvasElement; b: Bounds }[]
   byId: Map<string, CanvasElement>
@@ -129,11 +138,26 @@ export function frameIndex(canvas: LobbyCanvas): FrameIndex {
   for (const el of canvas.items()) {
     if (!isFrame(el) || !isLive(el) || canvas.isHidden(el.id)) continue
     byId.set(el.id, el)
-    const b = canvas.bounds(el.id)
-    if (b) frames.push({ el, b })
+    frames.push({ el, b: { x: el.x, y: el.y, width: el.width, height: el.height } })
   }
   frames.sort((p, q) => p.b.width * p.b.height - q.b.width * q.b.height)
   return { frames, byId }
+}
+
+/**
+ * An element's unrotated box from its own fields (a line's from its points). The engine rotates an
+ * element about this box's centre, so the centre is exact for rotated elements too.
+ */
+function boxOf(el: CanvasElement): Bounds {
+  const points = (el as { points?: readonly (readonly [number, number])[] }).points
+  if (Array.isArray(points) && points.length) {
+    const xs = points.map((q) => q[0])
+    const ys = points.map((q) => q[1])
+    const x0 = Math.min(...xs)
+    const y0 = Math.min(...ys)
+    return { x: el.x + x0, y: el.y + y0, width: Math.max(...xs) - x0, height: Math.max(...ys) - y0 }
+  }
+  return { x: el.x, y: el.y, width: el.width, height: el.height }
 }
 
 const centreOf = (b: Bounds) => ({ x: b.x + b.width / 2, y: b.y + b.height / 2 })
@@ -152,9 +176,7 @@ export function frameOfElement(
 ): CanvasElement | null {
   if (isFrame(el)) return null
   if (el.frameId) return index.byId.get(el.frameId) ?? null
-  const b = canvas.bounds(el.id)
-  if (!b) return null
-  const c = centreOf(b)
+  const c = centreOf(boxOf(el))
   return index.frames.find((f) => !f.el.locked && holds(f.b, c))?.el ?? null
 }
 
@@ -179,7 +201,7 @@ export function homeFrameOf(
   const most = Math.max(...counts.values())
   const tied = [...counts].filter(([, n]) => n === most).map(([k]) => k)
   if (tied.length === 1) return tied[0] ? (index.byId.get(tied[0]) ?? null) : null
-  const b = canvas.boundsOf(els.map((e) => e.id))
+  const b = geometry.union(els.map(boxOf))
   const under = b ? index.frames.find((f) => tied.includes(f.el.id) && holds(f.b, centreOf(b))) : undefined
   if (under) return under.el
   if (tied.includes(null)) return null

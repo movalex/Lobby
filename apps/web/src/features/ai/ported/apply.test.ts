@@ -499,6 +499,37 @@ describe('W5-04: frame membership read from where notes lie when it is mixed or 
     for (const id of ids) expect(els.get(id)?.frameId).toBe('f')
   })
 
+  it('reads where loose elements lie from their own fields, not the port’s per-call bounds scan (CR 3b-7)', () => {
+    const seed: El[] = [frame('f', 0, 0, 4000, 4000)]
+    for (let i = 0; i < 150; i++)
+      seed.push(...note(`n${i}`, (i % 15) * 250, Math.floor(i / 15) * 250, `Idea ${i}`))
+    // a loose line whose points reach left of its origin: its middle is inside the frame
+    seed.push({
+      id: 'line',
+      type: 'line',
+      x: 4100,
+      y: 100,
+      width: 400,
+      height: 0,
+      points: [
+        [0, 0],
+        [-400, 0],
+      ],
+    })
+    const { canvas } = fakeCanvas(seed)
+    let calls = 0
+    const bounds = canvas.bounds.bind(canvas)
+    ;(canvas as { bounds: typeof bounds }).bounds = (id) => {
+      calls++
+      return bounds(id)
+    }
+    const t = targetAt(canvas, { x: 10, y: 10 })
+    expect(t.ids).toHaveLength(152)
+    expect(t.ids).toContain('line')
+    expect(t.notes).toBe(150)
+    expect(calls).toBeLessThanOrEqual(2)
+  })
+
   it('the regroup question still sees the frame’s groups with a note made with N among the notes', () => {
     const { canvas } = fakeCanvas([
       frame('f', 0, 0, 1600, 1000),
