@@ -69,8 +69,10 @@ if [[ "$DRY_RUN" == "0" ]]; then
   [[ -z "$left" ]] || { log "STOP: containers of an earlier run are still there: $left (nas-cleanup.sh)"; exit 1; }
 fi
 
-# 1. fresh boards: the data folder is emptied (this exact path only) and regenerated in a --network none container
-nas "rm -rf -- $S/data && mkdir -p $S/data $S/reports"
+# 1. fresh boards: the data folder is emptied (this exact path only) and regenerated in a --network none container;
+#    a re-run of the same tag also starts with fresh report files (the sampler APPENDS to the host file, so an
+#    earlier attempt's samples would otherwise land in the new report as samples before t0)
+nas "rm -rf -- $S/data && mkdir -p $S/data $S/reports && rm -f -- $S/reports/host-$P-$TAG.jsonl $S/reports/kill-$P-$TAG.txt $S/reports/t0-$P-$TAG.txt $S/reports/$P-$TAG.json $S/reports/$P-$TAG.md"
 nas "docker run --rm --name $C_GEN --user $U --network none -v $S/src:/app:ro -v $S/data:/var/data -w /app '$IMG' node e2e/load/gen-boards.ts --data-dir /var/data --profile $P ${CUL:+--cul --overcap-notes $OVERCAP --overcap-chars $OVERCAP_CHARS}" | tee -a "$LOG"
 check_cap
 
