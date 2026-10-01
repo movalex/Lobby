@@ -83,8 +83,12 @@ describe('routing', () => {
       ws.onclose = resolve
     })
     await waitFor(() => t.logs.length >= 3)
-    expect(t.logs[0]).toMatch(/^GET \/internal\/boards\/board-a\/snapshot 404 \d+(\.\d+)?ms$/) // no such board
-    expect(t.logs[1]).toMatch(/^GET \/files\/x\/y\/original 404 \d+(\.\d+)?ms$/)
+    // a board without a file is opened as an empty one by the snapshot route (W4d 2A; before: 404). The
+    // room it opens pulls the workshop state from an api this stack does not have, and logs that failure
+    // on its own line (never with a query string or a ticket: the loop below reads every line)
+    const requests = t.logs.filter((l) => /^(GET|POST) /.test(l))
+    expect(requests[0]).toMatch(/^GET \/internal\/boards\/board-a\/snapshot 200 \d+(\.\d+)?ms$/)
+    expect(requests[1]).toMatch(/^GET \/files\/x\/y\/original 404 \d+(\.\d+)?ms$/)
     expect(t.logs).toContainEqual(expect.stringMatching(/refused on board board-a: wrong_board/))
     for (const line of t.logs) {
       expect(line).not.toContain('?')

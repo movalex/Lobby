@@ -123,7 +123,7 @@ describe('room lifecycle', () => {
 })
 
 describe('internal routes', () => {
-  it('the snapshot route serves live elements and the doc; 404 for a board without a file', async () => {
+  it('the snapshot route serves live elements and the doc; a board without a file is opened, empty (W4d 2A)', async () => {
     const st = await h.stack()
     const b = newBoardId()
     const a = await st.client({ boardId: b, user: 'alice' })
@@ -139,9 +139,10 @@ describe('internal routes', () => {
     const snap = LobbyElementsSnapshot.parse(await res.json())
     expect(snap.elements.map((e) => e.id)).toEqual(['r1'])
     expect(snap.doc).toEqual({ 'tagDef:x': { name: 'x', color: 'red' } })
-    expect(
-      (await callInternal(st.server.url, 'GET', `/internal/boards/${newBoardId()}/snapshot`)).status,
-    ).toBe(404)
+    // a board nobody has opened: opened now as an empty board (before: 404, and the api answered 503)
+    const fresh = await callInternal(st.server.url, 'GET', `/internal/boards/${newBoardId()}/snapshot`)
+    expect(fresh.status).toBe(200)
+    expect(LobbyElementsSnapshot.parse(await fresh.json())).toMatchObject({ clock: 0, elements: [], doc: {} })
     expect(
       (await callInternal(st.server.url, 'GET', `/internal/boards/${b}/snapshot`, { secret: null })).status,
     ).toBe(401)

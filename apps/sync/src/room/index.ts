@@ -64,6 +64,7 @@ import {
   type MigrationServiceOptions,
   type PrepareResult,
 } from './migrate/index.ts'
+import { maintenanceState } from './migrate/maintenance.ts'
 import { OUTBOUND } from './outbound.ts'
 import { testRoomRoutes } from './test-routes.ts'
 
@@ -405,11 +406,26 @@ export function createElementRoomServiceWith(
     return { message() {}, closed: () => dropWaiter(w) }
   }
 
-  /** The board's room for an internal route: opened (after its preparation) or null when it has no file. */
-  const existing = async (boardId: string): Promise<ElementRoom | null> => {
+  /**
+   * The board's room for an internal route: opened (after its preparation), or null when it has no file.
+   * `create`: a board without a file is opened as a new, empty board instead (its file made, as a session's
+   * first join makes it): what the api's readers expect of a board nobody has opened yet (W4d, 2A: the
+   * checkpoint of such a board answered 503 "the board server is not reachable", the tldraw registry
+   * made an empty room on demand). The room is evicted like any other when it stays idle.
+   */
+  const existing = async (boardId: string, opts: { create?: boolean } = {}): Promise<ElementRoom | null> => {
     const cur = rooms.get(boardId)
     if (cur) return cur
-    if (!BOARD_ID_RE.test(boardId) || !existsSync(boardDbPath(deps.dataDir, boardId))) return null
+    if (!BOARD_ID_RE.test(boardId)) return null
+    if (!existsSync(boardDbPath(deps.dataDir, boardId))) {
+      // nothing is made while maintenance is on (the cut-over window: no write reaches the rooms folder;
+      // the snapshot route answers the empty board itself, room/http.ts)
+      if (!opts.create || maintenanceState() === true) return null
+      if (closed) throw new HttpError(503, 'unavailable', 'Closing.')
+      const room = open(boardId)
+      onIdle(room)
+      return room
+    }
     const plan: OpenPlan = preparing.has(boardId) ? { kind: 'prepare' } : planOpen(boardId)
     if (plan.kind === 'refuse')
       throw new HttpError(503, 'unavailable', 'This board is not ready on the new canvas.')

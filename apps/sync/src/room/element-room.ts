@@ -1465,3 +1465,15 @@ const storedRows = (c: { live: number; dead: number }) => c.live + c.dead
 
 /** The ack result of an op the room could not even parse (stage 0). */
 export const invalidResult = (id: string): AckResult => ({ id, ok: false, code: 'INVALID', el: null })
+
+/**
+ * `liveSnapshot()` of a board that has no file yet, read while maintenance is on (room/http.ts, W4d 2A):
+ * the empty board at clock 0, the same answer its room gives once it is made.
+ */
+export const emptyLiveSnapshot = (): ReturnType<ElementRoom['liveSnapshot']> => ({
+  format: 'lobby-elements',
+  schema: ELEMENT_SCHEMA_VERSION,
+  clock: 0,
+  elements: [],
+  doc: {},
+})

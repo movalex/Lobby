@@ -700,3 +700,33 @@ test('sync SIGKILL and restart: a checkpoint saved during the outage fails with 
     'Survives a crash',
   )
 })
+
+// Wave 4d (2A): on the Excalidraw engine a board has no file until someone opens it, and the api's snapshot
+// read of such a board answered 503 "the board server is not reachable" (sync: 404 board-not-found): the
+// checkpoint, the export, the AI's sources and a workshop's shapes of a board nobody had opened yet all
+// failed (the ported domain-access spec's set-up had to open its board first). The sync's snapshot route
+// now opens the board as an empty one; the api's readers see an empty board, as they did on tldraw.
+test('a board nobody has opened yet: the api saves an empty checkpoint (201) and exports it; the board then opens as that board', async ({
+  board,
+  users,
+  canvasSession,
+}) => {
+  // `board` is made through the api and never opened: no file on the sync server yet
+  const api = await users.api('alice')
+  const saved = await api.fetch('POST', `/api/boards/${board}/snapshots`, { name: 'Empty start' })
+  expect(saved.status(), await saved.text()).toBe(201)
+  expect((await listSnapshots(api, board)).map((s) => [s.name, s.recordCount])).toEqual([['Empty start', 0]])
+  const exported = await api.fetch('GET', `/api/boards/${board}/export`)
+  expect(exported.status(), await exported.text()).toBe(200)
+
+  // the board the api read is the board people open: empty, and it saves
+  const a = await canvasSession('alice')
+  expect(await items(a.page)).toEqual([])
+  await putNote(a.page, 'first', 'first idea')
+  await expectSaved(a.page)
+  const again = await api.fetch('POST', `/api/boards/${board}/snapshots`, { name: 'With a note' })
+  expect(again.status(), await again.text()).toBe(201)
+  const rows = await listSnapshots(api, board)
+  expect(rows.map((s) => s.name).sort()).toEqual(['Empty start', 'With a note'])
+  expect(rows.find((s) => s.name === 'With a note')?.recordCount).toBeGreaterThan(0)
+})

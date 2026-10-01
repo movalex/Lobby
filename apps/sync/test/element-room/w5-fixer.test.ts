@@ -6,8 +6,11 @@
 //   V2 P-W6       a name-only guest revives only its own tombstones (merge.ts mayRevive)
 //   V2 P-G2       a guest's label detached into a free text counts toward the 500-item cap (merge.ts)
 //   V1 W2         a member created where its frame no longer is becomes a free element (merge.ts)
+import { existsSync } from 'node:fs'
+import { join } from 'node:path'
 import { decodeSnapshotFrame } from '@draftroom/canvas-schema/protocol'
 import { describe, expect, it } from 'vitest'
+import { boardDbPath } from '../../src/rooms.ts'
 import { callInternal } from '../harness/tickets.ts'
 import { type ClientOptions, RawClient } from './support/client.ts'
 import { type El, frame, label, note, rect, text, withLabel } from './support/elements.ts'
@@ -60,7 +63,8 @@ describe('maintenance on the Excalidraw engine (V2 P-M2, P-M4)', () => {
   it(
     'refuses every board-writing internal route 503 MAINTENANCE, lets convert-all and the reads through',
     async () => {
-      const st = await h.stack({ env: { DRAFTROOM_BOOT_MAINTENANCE: '1' } })
+      const dataDir = h.dataDir()
+      const st = await h.stack({ env: { DRAFTROOM_BOOT_MAINTENANCE: '1' }, dataDir })
       const b = newBoardId()
       const call = async (method: string, path: string, body?: unknown) => {
         const res = await callInternal(st.server.url, method, path, body === undefined ? {} : { body })
@@ -82,7 +86,10 @@ describe('maintenance on the Excalidraw engine (V2 P-M2, P-M4)', () => {
       // the cut-over's own conversion runs inside the window (§7.5 step 6)
       expect(await call('POST', '/internal/migrate/convert-all', {})).toBe('202')
       expect(await call('GET', '/internal/migrate/status')).toBe('200')
-      expect(await call('GET', `/internal/boards/${b}/snapshot`)).toBe('404')
+      // a board without a file: the empty board, read without making one (W4d 2A; outside maintenance the
+      // snapshot route opens it: room-internal/unopened-board.test.ts)
+      expect(await call('GET', `/internal/boards/${b}/snapshot`)).toBe('200')
+      expect(existsSync(boardDbPath(join(dataDir, 'rooms'), b))).toBe(false)
       expect(await call('GET', '/internal/maintenance')).toBe('200')
       // off again: the same seed lands
       expect(await call('POST', '/internal/maintenance', { on: false })).toBe('200')
