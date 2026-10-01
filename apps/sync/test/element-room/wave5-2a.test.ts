@@ -384,14 +384,14 @@ async function floodSocket(st: ElementStack, boardId: string, user: string, tab:
 
 describe('V2: one user cannot crowd out everyone else', () => {
   it(
-    'one user’s element sockets are capped on the process: the 21st is closed 4099 RATE_LIMITED',
+    'one user’s element sockets on a board are capped: the 13th is closed 4099 RATE_LIMITED',
     async () => {
       const st = await h.stack()
       const b = newBoardId()
       const socks: RawClient[] = []
-      for (let i = 0; i < 20; i++)
+      for (let i = 0; i < 12; i++)
         socks.push(await st.client({ boardId: b, user: 'mallory', role: 'viewer', tab: `m-${i}` }))
-      const extra = await st.socket({ boardId: b, user: 'mallory', role: 'viewer', tab: 'm-20' })
+      const extra = await st.socket({ boardId: b, user: 'mallory', role: 'viewer', tab: 'm-12' })
       expect(await extra.untilClosed()).toEqual({ code: 4099, reason: 'RATE_LIMITED' })
       // another user is not affected, and a freed slot is usable again
       const carol = await st.client({ boardId: b, user: 'carol', role: 'viewer' })
@@ -409,26 +409,26 @@ describe('V2: one user cannot crowd out everyone else', () => {
     'a viewer flooding large catch-ups on one board delays no join on another (fair, budgeted welcomes)',
     async () => {
       const st = await h.stack()
-      const { b, a } = await bigBoard(st, 3_000)
+      const { b, a } = await bigBoard(st, 4_500)
       const epoch = a.epoch
       // raw sockets: the test process does not parse what the flood gets (that would starve carol's client)
       const mal: Flood[] = []
-      for (let i = 0; i < 20; i++) mal.push(await floodSocket(st, b, 'mallory', `m-${i}`))
+      for (let i = 0; i < 12; i++) mal.push(await floodSocket(st, b, 'mallory', `m-${i}`))
       const hello = { type: 'hello', proto: PROTO, schema: ELEMENT_SCHEMA_VERSION, since: 0, epoch }
       for (const m of mal) for (let k = 0; k < 5; k++) m.ws.send(JSON.stringify({ ...hello, tab: m.tab }))
-      // carol joins another board while 100 catch-ups of 3,000 rows are queued
+      // carol joins another board while 60 catch-ups of 4,500 rows are queued (12 sockets, the board's cap)
       const t0 = performance.now()
       const carol = await st.client({ boardId: newBoardId(), user: 'carol' })
       const joinMs = performance.now() - t0
       expect(carol.welcome).not.toBeNull()
       expect(joinMs).toBeLessThan(1_000)
-      // the flood is budgeted: not every one of the 100 catch-ups was built
+      // the flood is budgeted: not every one of the 60 catch-ups was built
       await sleep(3_000)
       const closed = mal.filter((m) => m.closed?.code === 4099 && m.closed.reason === 'RATE_LIMITED').length
       const welcomes = mal.reduce((n, m) => n + m.welcomes, 0)
       for (const m of mal) m.ws.terminate()
       expect(closed).toBeGreaterThan(0)
-      expect(welcomes).toBeLessThan(100)
+      expect(welcomes).toBeLessThan(60)
     },
     T,
   )
@@ -466,14 +466,14 @@ describe('V2: one user cannot crowd out everyone else', () => {
   )
 
   it(
-    'one editor with 13 tabs holds at most the per-user lease cap; others can still type',
+    'one editor with 12 tabs holds at most the per-user lease cap; others can still type',
     async () => {
       const st = await h.stack()
       const b = newBoardId()
       const a = await st.client({ boardId: b, user: 'alice' })
       await a.create(Array.from({ length: 53 }, (_, i) => text(`n${i}`, { x: i * 80 })))
       let granted = 0
-      for (let t = 0; t < 13; t++) {
+      for (let t = 0; t < 12; t++) {
         const m = await st.client({ boardId: b, user: 'mallory', tab: `m-${t}` })
         for (let k = 0; k < 4; k++) if ((await m.acquire(`n${t * 4 + k}`)).type === 'lease.grant') granted++
       }
