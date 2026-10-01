@@ -40,6 +40,16 @@ Sources: plan §2.12, §5.3-§5.10, §7.5, §10, Appendix B, and the "Contracts 
   Then `int GET /internal/maintenance`, `int POST /internal/maintenance '{"on":true}'`, and so on. The
   snippets below avoid a bare `!` (an interactive bash would treat it as a history expansion inside
   double quotes); keep it that way when editing them, or run `set +H` first.
+- **Copying or restoring a board file by hand.** Never `cp` a `board-<id>.sqlite` alone: every board
+  database runs in WAL mode, and a board born on the Excalidraw build whose sync was killed before its
+  first checkpoint keeps its whole `lb_*` schema in the `-wal` next to it (a copy of the `.sqlite` is an
+  empty file). Before any copy or restore of a board file by hand (a staging copy for the rehearsal, a
+  `--from=file` restore, the B8 drill's inputs), with the sync stopped or in maintenance and the board's
+  room closed: `node apps/sync/src/backup/checkpoint-board.ts --board <id>` (or `--path <file>`); it
+  answers `checkpointed`, `nothing to do` or `busy` (exit 1: wait for the room to close and run it again).
+  Otherwise copy the `-wal` and `-shm` along. The sync's own backups and run-all never copy raw, and
+  `restore-board --from=file` and the B8 scripts copy a file with its WAL (DEPLOY.md "Copying or restoring
+  a board file by hand"; `apps/sync/src/backup/checkpoint.ts`).
 - **Render.** Staging's Blueprint has auto-synced on pushes to `main` that change `render.yaml`, and an
   env change applied by a Blueprint sync has deployed the service (observed 2026-09-28). Service code
   deploys are manual. So `render.yaml` is changed only at C19, after the Blueprint is on Manual Sync
@@ -66,7 +76,7 @@ column keeps the 2026-09-30 wording as the record of what was found.
 | G8 | **No `drop-legacy`** (plan §5.9 step 5) | D7 | 2B | a reviewed command that removes the tldraw tables, `dr_deleted_*`, `lb_source` and `lb_prev_*` and runs `VACUUM`, with a test | **Closed** (W4-SYNC): `POST /internal/migrate/drop-legacy` with `{"confirm":"drop-legacy", force?, dryRun?, boards?}` (`apps/sync/src/room/migrate/drop-legacy.ts`; tests `apps/sync/test/migrate/drop-legacy.test.ts`, `drop-legacy-process.test.ts`). D7 has the command and the guards. |
 | G9 | **R0 contracts to re-check on the cut-over commit:** retention keeps `holdUntil` entries (Contracts R0 fixed item 3); the build reads `format: "lobby-elements"` entries (item 4); the roll-forward mirrors R0's restores and trims into `lb_deleted` (open item 10); a converted file's backup is described from its tldraw tables or a format of its own, never `lobby-elements` (DEPLOY.md "backup formats") | the rollback and the roll-forward | 2B | each has a gate test on the cut-over commit | **Closed** (2B's wave-5 gate tests, green again at the integration): `apps/sync/test/r0/final-backup-hold.test.ts` (item 3), `apps/sync/test/r0/manifest-format.test.ts` (item 4), `apps/sync/test/migrate/rollforward-deleted.test.ts` (open item 10), `apps/sync/test/backup/excalidraw-backups.test.ts` (a converted file is described as `lobby-elements-converted`, never `lobby-elements`), and W4-SYNC's `apps/sync/test/r0/rollback-safety-copy.test.ts` (the whole lb_* state in the copy after Excalidraw-era edits and a roll-forward). |
 | G10 | **tldraw still in the build** (lockfile PR #2 not done): `scripts/licence-check.mjs` passes only with `--before-cutover` | P2: the licence check must pass in strict mode | wave 4 | `pnpm licence:check` (strict) passes and CI drops `--before-cutover` | **Open** (wave 4 part 2, the tldraw removal). On the integration commit `pnpm licence:check --before-cutover` passes and strict mode fails with 12 findings, all tldraw packages. Closes when tldraw leaves the lockfile and CI drops the flag (also SMK-1 in the lead's wave-4b queue: `packages/tldraw-import` must stay out of the web bundle). |
-| G11 | **Cut-over blockers from the waves** (`WAVE-3.md` §6, `REVIEW-W5-EARLY.md`): B9's edit visibility on the heavy board (1.5 s p95 against 250 ms) and its NAS capacity half (never run); B11's one unexplained divergence; the open review blockers (for example W5-02, deleted notes' text sent to every role) | P2 | the owners named there | each is closed or accepted by the owner | **Open**: as listed, with the owners named there. The lead's wave-4b queue (pending findings, 2026-10-01) adds L1 as a must-fix before the switch (maintenance does not refuse the engine's room-internal write routes), with M3 (a dedicated backup signing secret), L6 (run-all / convert-all guards) and SMK-2 (close reasons through the Render edge) to decide with the owner. |
+| G11 | **Cut-over blockers from the waves** (`WAVE-3.md` §6, `REVIEW-W5-EARLY.md`): B9's edit visibility on the heavy board (1.5 s p95 against 250 ms) and its NAS capacity half (never run); B11's one unexplained divergence; the open review blockers (for example W5-02, deleted notes' text sent to every role) | P2 | the owners named there | each is closed or accepted by the owner | **Open**: as listed, with the owners named there. The lead's wave-4b queue (pending findings, 2026-10-01) adds L1 as a must-fix before the switch (maintenance does not refuse the engine's room-internal write routes; closed by the engine fixer), and SMK-2 (close reasons through the Render edge) to decide with the owner. **Closed in wave 4b (2B):** M3 (a dedicated `DRAFTROOM_BACKUP_SIGNING_SECRET`; the derived key only verifies older manifests; a Render env var at C8; `apps/sync/test/backup/signing-secret.test.ts`) and L6 (run-all refuses a new run while a held set of every board from the last 30 minutes exists unless forced, 409 `RECENT_HELD_SET` / `--force`; convert-all needs maintenance on or `{"confirm": true}`, 409 `MAINTENANCE_REQUIRED`; `apps/sync/test/r0/run-all.test.ts`, `apps/sync/test/migrate/convert-all-guard.test.ts`). |
 
 ## 2. Preconditions (plan §7.5 step 0)
 
@@ -145,6 +155,13 @@ All must hold on the day. Record each check in the log.
   or frozen in C2 (plan §5.8).
 - **P14. People.** The operator (runs the Shells), one helper for C17's two-user smoke, and the owner
   reachable for the stop decisions.
+- **P15. The backup signing secret [OWNER: a Render setting].** A value for `DRAFTROOM_BACKUP_SIGNING_SECRET`
+  (`openssl rand -base64 32` on the workstation: 44 characters, different from the two secrets in the
+  env group), ready to set on the sync service in C8 and kept nowhere else (never in the log, in chat or
+  in git). The Excalidraw sync signs the offsite backups with it and **refuses to start in production
+  with `DRAFTROOM_BACKUP_STORE=r2` and without it** (security audit M3; DEPLOY.md "Signed backups"). R0's
+  backups, signed with the key derived from `DRAFTROOM_INTERNAL_SECRET`, still verify on the new build
+  (the drill says "signed under the older key").
 
 ## 3. Rehearsal on the NAS (plan §7.5 step 1, wave 6)
 
@@ -298,7 +315,10 @@ staging, on the NAS, with nothing exposed. It produces the window's timings and 
   ```
 
   It must exit 0 (`"ok": true` and `"inMaintenance": true`). Any other exit: **stop** (the stderr lines
-  name each failed board). Copy the JSON into the log. Every board has an `offsiteKey`, a
+  name each failed board). `refused (HTTP 409, RECENT_HELD_SET …)`: every board has a held backup from
+  the last 30 minutes already (this step repeated after a sync restart in the window, C4's warning): add
+  `--force`, because the restart may have let edits land (audit L6; a run-all adds a 90-day copy of every
+  board to the 1 GB disk, so repeated calls are refused). Copy the JSON into the log. Every board has an `offsiteKey`, a
   `recordsSha256`, a `documentClock` and a `holdUntil` 90 days ahead: this set is the disaster copy,
   held 90 days outside retention (approved with the plan, Appendix B 6).
 - **C6. A checkpoint of every board** (plan §7.5 step 4; DEPLOY.md step 4). api Shell, after C5:
@@ -322,12 +342,15 @@ staging, on the NAS, with nothing exposed. It produces the window's timings and 
   the log has no error; `schema_migrations` lists nothing the cut-over commit does not know. R0's sync is
   still in maintenance; the new api reads its snapshots as before.
 - **C8. The sync's environment, without deploying [OWNER: a Render setting].** On
-  `draftroom-staging-sync`, add `DRAFTROOM_ENGINE=excalidraw` and `DRAFTROOM_BOOT_MAINTENANCE=1`
+  `draftroom-staging-sync`, add `DRAFTROOM_ENGINE=excalidraw`, `DRAFTROOM_BOOT_MAINTENANCE=1` and
+  `DRAFTROOM_BACKUP_SIGNING_SECRET=<P15's value>` (the sync service's own variable, never the env group)
   without a deploy: either the Render API (`PUT /v1/services/<sync>/env-vars/<key>`, as DEPLOY.md
   describes; on 2026-09-28 an env PUT did not trigger a deploy), or Dashboard → Environment with the
   save option that does not deploy (its label is UNVERIFIED; if only "Save and deploy" is offered, that
-  deploy is C9, so pick the cut-over commit first). R0 ignores both variables, so a restart of R0 now
-  changes nothing but turning its maintenance off (C4's warning).
+  deploy is C9, so pick the cut-over commit first). R0 ignores all three variables, so a restart of R0 now
+  changes nothing but turning its maintenance off (C4's warning). Without the signing secret the new sync
+  refuses to start (`DRAFTROOM_BACKUP_SIGNING_SECRET is required when DRAFTROOM_BACKUP_STORE is on in
+  production`), and Render keeps R0 running: set it, then deploy again.
 - **C9. Deploy the new sync [OWNER], booting in maintenance** (plan §7.5 step 6; open item 11; G1 built:
   `DRAFTROOM_BOOT_MAINTENANCE=1`, `apps/sync/src/config.ts`).
   Dashboard → `draftroom-staging-sync` → Manual Deploy → Deploy a specific commit → the cut-over commit.
@@ -339,7 +362,11 @@ staging, on the NAS, with nothing exposed. It produces the window's timings and 
   int GET /internal/migrate/status  # 200 {...,"convertAll":"idle"}: the Excalidraw engine is loaded
   ```
 
-  and the startup log names the engine and the boot maintenance. Maintenance is **not** on: `int POST
+  and the startup log names the engine, the boot maintenance and the signing key: `[backup] offsite
+  backups signed with DRAFTROOM_BACKUP_SIGNING_SECRET (key id …); the key derived from
+  DRAFTROOM_INTERNAL_SECRET (key id …) only verifies older backups` (key ids are hashes, not secrets; a
+  line saying `set DRAFTROOM_BACKUP_SIGNING_SECRET` cannot occur in production: the server would not
+  have started). Maintenance is **not** on: `int POST
   /internal/maintenance '{"on":true}'` at once, then **stop** (the build or the flag is wrong). The
   migrate route answers 404: the engine flag did not reach the process; **stop**.
 - **C10. Convert every board** (plan §5.3 "convert-all"). Sync Shell:
@@ -350,6 +377,9 @@ staging, on the NAS, with nothing exposed. It produces the window's timings and 
   ```
 
   One board at a time, in a worker with a 256 MB heap cap. The poll ends when nothing runs or waits.
+  `409 MAINTENANCE_REQUIRED` means maintenance is off (audit L6: `convert-all` rewrites every board
+  file and runs only inside the window; it takes `{"confirm":true}` to run with boards open, which this
+  runbook never does): **stop**, C9's boot maintenance did not hold.
   Any `FAILED` line: that board stays on its tldraw tables, unconverted and closed; **stop** (decide:
   fix forward and convert it again with another `convert-all`, which skips converted boards, or roll
   back). `backup-digest` = that board's records are not the final backup's (an edit landed after C5, or
@@ -484,7 +514,9 @@ canvas as an empty tldraw board and writes tldraw tables into it (DEPLOY.md "Rol
   node apps/sync/src/backup/run-all-cli.ts --expect-maintenance > /var/data/cutover/rollback-$(date -u +%Y%m%dT%H%M%SZ).json; echo "exit $?"
   ```
 
-  Exit 0, then copy it into the log. The held run-all backup on the Excalidraw build in maintenance IS
+  Exit 0, then copy it into the log. `409 RECENT_HELD_SET` (every board has a held backup from the last
+  30 minutes: a rollback within half an hour of C5): add `--force`; C5's set describes the tldraw side,
+  this one the lb_* side. The held run-all backup on the Excalidraw build in maintenance IS
   the lb_* export: whole files, every `lb_*` table incl. `lb_prev_*` and `lb_source`, described from
   `lb_*` as `lobby-elements-converted`, signed, held 90 days outside retention, drilled and restorable
   (`apps/sync/src/backup/run-all.ts`'s header says why no second format is written; gate
@@ -501,7 +533,9 @@ canvas as an empty tldraw board and writes tldraw tables into it (DEPLOY.md "Rol
   so no empty checkpoint, duplicate or export is saved.
 - **B7. R0's sync [OWNER].** Dashboard → `draftroom-staging-sync` → Rollback to the R0 deploy recorded in
   §4 (Render reuses that deploy's build and its environment, which has no `DRAFTROOM_ENGINE`; R0 ignores
-  it anyway). Never roll back by unsetting `DRAFTROOM_ENGINE` on the new build. **R0's sync starts with
+  it anyway, as it ignores `DRAFTROOM_BACKUP_SIGNING_SECRET`: R0 signs its backups with the key derived
+  from `DRAFTROOM_INTERNAL_SECRET`, which the new build verifies after the roll-forward). Never roll back
+  by unsetting `DRAFTROOM_ENGINE` on the new build. **R0's sync starts with
   maintenance off: boards open on R0 as soon as it is live.** Converted boards are served from their
   tldraw tables, which hold the state of C5; R0 never writes any lb_* table; boards born on the new canvas
   are refused.
@@ -524,8 +558,8 @@ canvas as an empty tldraw board and writes tldraw tables into it (DEPLOY.md "Rol
 - **F5. The new api [OWNER]**: as C7. Remove `DRAFTROOM_ALLOW_NEWER_SCHEMA` if B6 set it, in the same
   step.
 - **F6. The sync, booting in maintenance [OWNER]**: set `DRAFTROOM_BOOT_MAINTENANCE=1` (and
-  `DRAFTROOM_ENGINE=excalidraw` if it is gone) as in C8, then deploy the new sync as in C9, with C9's
-  checks.
+  `DRAFTROOM_ENGINE=excalidraw` and `DRAFTROOM_BACKUP_SIGNING_SECRET` if they are gone) as in C8, then
+  deploy the new sync as in C9, with C9's checks.
 - **F7. Merge both sides**: `int POST /internal/migrate/convert-all` and C10's poll. It rolls forward
   every converted board whose tldraw side moved during the rollback, and converts the boards created on
   R0 (plan §5.3 "Lazy", §5.9 step 4). Then check the reports:
