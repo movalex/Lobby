@@ -23,6 +23,7 @@ import {
   itemCenterOnScreen,
   items,
   openCanvasSession,
+  saveState,
   select,
   selectNone,
   setTool,
@@ -36,6 +37,7 @@ import {
   waitForItem,
 } from '../tests/support/canvas.ts'
 import {
+  expectSaveState,
   expectServerConverged,
   focusCanvas,
   goOffline,
@@ -44,6 +46,7 @@ import {
   openRelayedCanvasSession,
   pressRedo,
   pressUndo,
+  saveIndicator,
   storedElement,
   toastTexts,
   typingBadge,
@@ -156,7 +159,9 @@ test('edit vs delete: the delete wins in either order', async ({
     await expect.poll(() => exists(a.page, EDIT_FIRST)).toBe(false)
 
     // 2. Bob deletes while alice's edit is still on her device (she is offline): her late edit does not
-    //    bring the element back.
+    //    bring the element back. Since wave 4b (2A, plan §2.4.3 step 3, V2 P-X1) a tombstone takes no patch
+    //    but its undelete: her patch is refused GONE, her tab resets to the tombstone and tells her
+    //    "Change not saved" (before: the patch was dropped silently and the pill read Saved).
     await goOffline(a)
     await updateItem(a.page, DELETE_FIRST, { x: 500, strokeColor: '#9c36b5' })
     await deleteItem(b.page, DELETE_FIRST)
@@ -164,7 +169,9 @@ test('edit vs delete: the delete wins in either order', async ({
     expect(await exists(a.page, DELETE_FIRST)).toBe(true)
     await goOnline(a)
     await expect.poll(() => exists(a.page, DELETE_FIRST)).toBe(false)
-    await expectSaved(a.page)
+    await expectSaveState(a.page, 'not-saved', 30_000)
+    expect((await saveState(a.page)).lastReject).toMatchObject({ id: DELETE_FIRST, code: 'GONE' })
+    await expect(saveIndicator(a.page)).toContainText('Change not saved')
     expect(await exists(b.page, DELETE_FIRST)).toBe(false)
     expect(
       ((await storedElement(stack, board, DELETE_FIRST)) as { isDeleted?: boolean } | null)?.isDeleted,

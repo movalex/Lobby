@@ -1,6 +1,12 @@
 import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { backupSigningSecret, isAllowedOrigin, isLoopbackHost, loadConfig, parseTestHooks } from './config.ts'
+import {
+  backupSigningSecrets,
+  isAllowedOrigin,
+  isLoopbackHost,
+  loadConfig,
+  parseTestHooks,
+} from './config.ts'
 
 const TICKET = 'test-ticket-secret-0123456789-0123456789'
 const INTERNAL = 'test-internal-secret-0123456789-0123456789'
@@ -72,7 +78,7 @@ describe('loadConfig', () => {
     expect(loadConfig(prod).nodeEnv).toBe('production')
     // the CLI entry points check it too
     expect(() => parseTestHooks({ NODE_ENV: 'staging', DRAFTROOM_TEST_HOOKS: '1' })).toThrow(/NODE_ENV must/)
-    expect(() => backupSigningSecret({ NODE_ENV: 'staging', DRAFTROOM_INTERNAL_SECRET: INTERNAL })).toThrow(
+    expect(() => backupSigningSecrets({ NODE_ENV: 'staging', DRAFTROOM_INTERNAL_SECRET: INTERNAL })).toThrow(
       /NODE_ENV must/,
     )
   })
