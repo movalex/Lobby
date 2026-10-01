@@ -27,6 +27,8 @@ interface DragState {
   ended: boolean
   /** the last frame of this drag (the relay ends a drag that has been quiet for DRAG_TTL_MS) */
   at: number
+  /** when this drag started (the relay ends any drag DRAG_MAX_MS after its start) */
+  readonly startedAt: number
 }
 
 /**
@@ -35,6 +37,13 @@ interface DragState {
  * them). A dragging client sends a frame on every pointer move.
  */
 export const DRAG_TTL_MS = 15_000
+/**
+ * A relayed drag ends this long after it started, frames or not (V2's re-check: one frame every 10 s kept
+ * a drag, and its preview of up to 500 ids, up for everyone indefinitely). A real drag is over in seconds;
+ * a longer one only loses its live preview, and its result still syncs at pointer-up. An expired drag
+ * (its `d`) cannot start again by re-sending its ids.
+ */
+export const DRAG_MAX_MS = 60_000
 
 interface Peer {
   readonly sid: string
@@ -43,6 +52,8 @@ interface Peer {
   tokens: number
   last: number
   drag: DragState | null
+  /** the drag the relay ended because it expired: that drag (`d`) cannot start again */
+  expiredD: number | null
   readonly: boolean
 }
 
@@ -55,6 +66,8 @@ export interface PresenceRecipient {
 }
 
 const round1 = (v: number) => Math.round(v * 10) / 10
+/** A drag quiet for DRAG_TTL_MS, or started more than DRAG_MAX_MS ago, is over. */
+const expired = (d: DragState, now: number) => now - d.at > DRAG_TTL_MS || now - d.startedAt > DRAG_MAX_MS
 
 export class PresenceHub {
   private readonly peers = new Map<string, Peer>()
@@ -88,6 +101,7 @@ export class PresenceHub {
         tokens: PRESENCE_IN_HZ,
         last: this.now(),
         drag: null,
+        expiredD: null,
         readonly,
       }
       this.peers.set(sid, p)
@@ -136,7 +150,11 @@ export class PresenceHub {
     }
     const active = p.drag && !p.drag.ended ? p.drag : null
     if (drag.ids) {
-      if (drag.ids.length > MAX_DRAG_IDS || (active && active.d !== drag.d)) {
+      if (
+        drag.ids.length > MAX_DRAG_IDS ||
+        (active && active.d !== drag.d) ||
+        (!active && drag.d === p.expiredD)
+      ) {
         this.droppedDrags++
         return
       }
@@ -156,6 +174,7 @@ export class PresenceHub {
         dirty: true,
         ended: false,
         at: this.now(),
+        startedAt: this.now(),
       }
       return
     }
@@ -174,7 +193,7 @@ export class PresenceHub {
     const out: DragOut[] = []
     const now = this.now()
     for (const p of this.peers.values())
-      if (p.drag && !p.drag.ended && now - p.drag.at <= DRAG_TTL_MS)
+      if (p.drag && !p.drag.ended && !expired(p.drag, now))
         out.push({ sid: p.sid, d: p.drag.d, ids: [...p.drag.ids], dx: p.drag.dx, dy: p.drag.dy })
     return out
   }
@@ -209,9 +228,10 @@ export class PresenceHub {
     const now = this.now()
     for (const p of this.peers.values()) {
       const dr = p.drag
-      if (dr && !dr.ended && now - dr.at > DRAG_TTL_MS) {
+      if (dr && !dr.ended && expired(dr, now)) {
         dr.ended = true
         dr.dirty = true
+        p.expiredD = dr.d
       }
       if (!dr?.dirty) continue
       dr.dirty = false

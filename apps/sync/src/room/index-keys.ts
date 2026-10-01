@@ -1,26 +1,43 @@
 // The room's index cache and step 11 of the accept algorithm (docs/EXCALIDRAW-MIGRATION.md §2.4.3,
-// §2.11 "Ordering"): `index` is kept valid and unique among live elements with
-// `@excalidraw/fractional-indexing` at the pinned version (through canvas-schema's engine wrappers), and
-// a bound label sorts after its container. A null or invalid key gets a key at the top; a key another live
-// element uses gets a key right above it; a label at or below its container gets a key right above the
-// container. Each rewrite comes back to the writer as `fix` (or reaches everyone as a repair).
+// §2.11 "Ordering"): `index` is kept valid and unique with `@excalidraw/fractional-indexing` at the pinned
+// version (through canvas-schema's engine wrappers), and a bound label sorts after its container. A null or
+// invalid key gets a key at the top; a key another element uses gets a key right above it; a label at or
+// below its container gets a key right above the container. Each rewrite comes back to the writer as `fix`
+// (or reaches everyone as a repair).
+//
+// "Another element" includes the tombstones (V3, wave 5): a live element never takes a deleted element's
+// key. Before, the cache held live elements only, so a raw push could store a live element at a tombstone's
+// key; the next browser to open the board re-keyed the tombstone (an echo, §2.5.5), and a roll-forward that
+// edited that element failed INDEX_DUPLICATE (§5.9 step g). Tombstones keep their keys; new keys are made
+// between the keys of live elements AND tombstones.
 
 import { compareByIndex, indexKeyBetween, isValidIndexKey } from '@draftroom/canvas-schema/engine'
 
 interface Entry {
   idx: string
   id: string
+  /** a tombstone's key: no live element may take it, and new keys are made around it */
+  dead?: true
 }
 
 const cmp = (a: Entry, b: Entry) => compareByIndex({ index: a.idx, id: a.id }, { index: b.idx, id: b.id })
 
-/** Live elements' `(idx, id)` in Excalidraw's order (SQLite's `ORDER BY idx, id`). */
+/** Every element's `(idx, id)`, tombstones marked, in Excalidraw's order (SQLite's `ORDER BY idx, id`). */
 export class IndexCache {
   private list: Entry[] = []
   private byId = new Map<string, string>()
 
-  reset(rows: readonly { idx: string; id: string }[]): void {
-    this.list = rows.map((r) => ({ idx: r.idx, id: r.id }))
+  /** `rows`: the live elements; `dead`: the tombstones (their keys are taken too). */
+  reset(
+    rows: readonly { idx: string; id: string }[],
+    dead: readonly { idx: string; id: string }[] = [],
+  ): void {
+    this.list = [
+      ...rows.map((r) => ({ idx: r.idx, id: r.id })),
+      ...dead
+        .filter((r) => isValidIndexKey(r.idx))
+        .map((r) => ({ idx: r.idx, id: r.id, dead: true as const })),
+    ]
     this.list.sort(cmp)
     this.byId = new Map(this.list.map((e) => [e.id, e.idx]))
   }
@@ -56,7 +73,16 @@ export class IndexCache {
     this.byId.set(id, idx)
   }
 
-  /** Another live element (not `id`) uses `idx`. */
+  /** `id` is a tombstone at `idx` (deleted now, or a tombstone re-keyed): its key stays taken. */
+  setDead(id: string, idx: string | null | undefined): void {
+    this.remove(id)
+    if (!isValidIndexKey(idx)) return
+    const e: Entry = { idx, id, dead: true }
+    this.list.splice(this.lowerBound(e), 0, e)
+    this.byId.set(id, idx)
+  }
+
+  /** Another element (not `id`), live or a tombstone, uses `idx`. */
   usedByOther(idx: string, id: string): boolean {
     let i = this.lowerBound({ idx, id: '' })
     while (i < this.list.length && (this.list[i] as Entry).idx === idx) {

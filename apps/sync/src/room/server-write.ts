@@ -17,7 +17,12 @@
 //    above the stored one; no row is stored at `tx.clock` that is not reported; every reported doc key
 //    is stored at `tx.clock` with a value its key allows (canvas-schema doc.ts), and no other; a live element has a valid index no other live element uses,
 //    and a label sorts after its container. The board caps (§3.5): a write that adds elements beyond
-//    them is refused 409 `element-limit`.
+//    them is refused 409 `element-limit`. The write leaves no NEW invariant violation (§2.4.4) among what it
+//    wrote and what is around it (wave 5, V2's re-check: a violation reported on an unchanged neighbour,
+//    or on a group id, was let through); a violation that was there before the write is not its fault.
+//  - RE-KEYED: a tombstone whose z-order key the write gives a live element moves right above it (wave
+//    5, V3: a live element never shares a tombstone's key; the routes pick keys among the live elements).
+//    The write's own elements stay exactly as reported; the tombstone's new key reaches everyone redacted.
 //  - STAMPED: `before` is the stored row as the write found it (read by `tx.store.upsert` before it
 //    writes, so a wrong `before` in the report cannot mislead the patch ops). Group clocks never go
 //    back (the stored ones are kept) and every group whose fields changed is at `tx.clock`, so a stale
@@ -41,7 +46,7 @@ import { MAX_ITEMS, MAX_LIVE_ELEMENTS } from '@draftroom/canvas-schema/limits'
 import type { ServerWriteApply, ServerWriteTx } from '../engine-switch.ts'
 import { HttpError } from '../http/respond.ts'
 import type { GroupMap, LiveCounts, WriterLedger } from './caches.ts'
-import { type IndexCache, isValidIndexKey } from './index-keys.ts'
+import { type IndexCache, isValidIndexKey, keyAbove } from './index-keys.ts'
 import { type El, type MergeEnv, PushApplier } from './merge.ts'
 import type { BoardStore, DeletedRowWrite, ElementRow, RowWrite } from './store.ts'
 import type { SessionIdentity } from './types.ts'
@@ -223,27 +228,54 @@ export function runServerWrite(
     if ([...ids].some((id) => leases.holderOf(id, now) !== null))
       throw new HttpError(409, 'leased', 'Someone is typing in this text. Try again in a moment.')
   }
-  const around = new Map<string, El>()
-  const take = (id: string | null | undefined) => {
-    if (!id || around.has(id)) return
+  // The neighbourhood of the write, before and after it: every written element (its old and its new
+  // state), what either state names (container, frame, binding targets, bound elements), and what those
+  // list in turn. Both sides see the same ids, so a rule that reads past the neighbourhood reports the same
+  // on both, and only what the write CHANGED counts: a new violation anywhere in it, whichever element
+  // or group id it is reported on, refuses the write (V2's re-check: four writes stored a violation on an
+  // unchanged neighbour or on a group, because only violations on written ids were kept).
+  const aroundIds = new Set<string>()
+  const refsOf = (el: El | null | undefined): string[] => {
+    if (!el) return []
+    const out = [el.containerId, el.frameId, el.startBinding?.elementId, el.endBinding?.elementId]
+    for (const r of (el.boundElements ?? []) as { id: string }[]) out.push(r.id)
+    return out.filter((x): x is string => typeof x === 'string' && x.length > 0)
+  }
+  const afterOf = (id: string): El | null => {
     const c = changes.get(id)
-    const el = c ? c.after : (store.get(id)?.el as El | undefined)
-    if (el) around.set(id, el)
+    return c ? c.after : ((store.get(id)?.el as El | undefined) ?? null)
   }
-  for (const { after } of changes.values()) {
-    take(after.id)
-    take(after.containerId)
-    take(after.frameId)
-    take(after.startBinding?.elementId)
-    take(after.endBinding?.elementId)
-    for (const r of (after.boundElements ?? []) as { id: string }[]) take(r.id)
+  const beforeOf = (id: string): El | null => {
+    const c = changes.get(id)
+    return c ? c.before : ((store.get(id)?.el as El | undefined) ?? null)
   }
-  for (const id of [...around.keys()])
-    for (const r of (around.get(id)?.boundElements ?? []) as { id: string }[]) take(r.id)
-  const broken = checkInvariantsOf([...around.values()] as never).filter((v) => changes.has(v.id))
+  for (const [id, c] of changes) {
+    aroundIds.add(id)
+    for (const r of [...refsOf(c.before), ...refsOf(c.after)]) aroundIds.add(r)
+  }
+  for (const id of [...aroundIds])
+    for (const r of [...refsOf(beforeOf(id)), ...refsOf(afterOf(id))]) aroundIds.add(r)
+  const side = (of: (id: string) => El | null) =>
+    [...aroundIds].map(of).filter((e): e is El => e !== null) as never
+  const key = (v: { code: string; id: string }) => `${v.code}:${v.id}`
+  const was = new Set(checkInvariantsOf(side(beforeOf)).map(key))
+  const broken = checkInvariantsOf(side(afterOf)).filter(
+    (v) => v.code !== 'GROUP_NESTING' && v.code !== 'INDEX_DUPLICATE' && !was.has(key(v)),
+  )
+  // group nesting is board-wide (the room's group map), and index sharing is checked below on the cache
+  const groupsRemoved: string[][] = []
+  const groupsAdded: string[][] = []
+  for (const { before, after } of changes.values()) {
+    if (before && !before.isDeleted) groupsRemoved.push((before.groupIds ?? []) as string[])
+    if (!after.isDeleted) groupsAdded.push((after.groupIds ?? []) as string[])
+  }
+  const touchedGroups = [...groupsRemoved, ...groupsAdded]
+  const nestedBefore = ctx.groups.conflicts(touchedGroups, touchedGroups)
+  for (const g of ctx.groups.conflicts(groupsRemoved, groupsAdded))
+    if (!nestedBefore.has(g)) broken.push({ code: 'GROUP_NESTING', id: g })
   if (broken.length)
     throw new ServerWriteContractError(
-      `the write breaks an invariant (${broken.map((v) => v.code).join(', ')})`,
+      `the write breaks an invariant (${[...new Set(broken.map((v) => v.code))].join(', ')})`,
     )
 
   // 2. stamped as the server's: group clocks, tombstones, "Recently deleted"
@@ -288,8 +320,9 @@ export function runServerWrite(
       ctx.groups.remove((before as El).groupIds)
       addedElements--
       addedItems -= itemOf(before as El)
-      if (!isLive) ctx.index.remove(id)
     }
+    // a tombstone's key stays taken (V3)
+    if (!isLive) ctx.index.setDead(id, after.index)
     if (isLive) {
       ctx.counts.elements++
       ctx.counts.items += itemOf(after)
@@ -301,10 +334,37 @@ export function runServerWrite(
       ctx.index.set(id, after.index as string)
     }
   }
+  // a tombstone at a key the write gave a live element moves right above it (V3), a stamped server repair
+  const rekeyed = new Map<string, { before: WireElement; after: WireElement }>()
+  const liveIdx = new Map<string, string>()
+  for (const [id, { after }] of changes) if (!after.isDeleted) liveIdx.set(after.index as string, id)
+  for (const r of store.tombstoneIndexRows()) {
+    const owner = liveIdx.get(r.idx)
+    if (!owner || owner === r.id || changes.has(r.id)) continue
+    const row = store.get(r.id)
+    if (!row?.deleted) continue
+    const next = keyAbove(ctx.index, r.idx, r.id)
+    const el = {
+      ...row.el,
+      index: next,
+      version: row.el.version + 1,
+      versionNonce: ctx.env().nonce(),
+      updated: now,
+    } as WireElement
+    store.upsert({
+      el,
+      clock,
+      gclock: { ...row.gclock, z: clock },
+      deletedClock: row.deletedClock,
+      deletedAt: row.deletedAt,
+    })
+    ctx.index.setDead(r.id, next)
+    rekeyed.set(r.id, { before: row.el, after: el })
+  }
   for (const [id, { after }] of changes) {
     if (after.isDeleted) continue
     if (ctx.index.usedByOther(after.index as string, id))
-      throw new ServerWriteContractError("a written element's index is used by another live element")
+      throw new ServerWriteContractError("a written element's index is used by another element")
     const label = isLabel(after) ? after : null
     const container = label
       ? (changes.get(label.containerId)?.after ?? (store.get(label.containerId)?.el as El))
@@ -349,6 +409,7 @@ export function runServerWrite(
   }
   const changed = new Map<string, { before: WireElement | null; after: WireElement }>()
   for (const [id, c] of changes) changed.set(id, { before: c.before, after: c.after })
+  for (const [id, c] of rekeyed) changed.set(id, c)
   if (moved.length || arrows.length) {
     const derived = new PushApplier(
       ctx.env(),

@@ -74,6 +74,12 @@ const TLDRAW_DEFAULT_TEXT_LEASE_MS = 5_000
 /** A joiner held while its board is prepared: at most this many messages (presence is dropped, as before hello). */
 export const PENDING_MAX_MESSAGES = 64
 export const PENDING_MAX_BYTES = 1024 * 1024
+/**
+ * Element sockets one user (uid) may have open on this process, every board together (V2's re-check: with
+ * no cap, one viewer ticket opened 40 or 100 sockets, and one editor held 4 leases per tab in 13 tabs).
+ * One more is closed at once, 4099 RATE_LIMITED. A person has a tab or two per board.
+ */
+export const MAX_SOCKETS_PER_USER = 20
 /** A transient conversion failure (time budget, a worker crash) is retried by a joiner after this long (§5.3). */
 export const FAILED_RETRY_MS = 5 * 60_000
 /** Failures a joiner never retries at runtime: only a maintenance run converts these boards (§5.3, §2.13). */
@@ -463,29 +469,75 @@ export function createElementRoomServiceWith(
   const waitersOf = (boardId: string): Waiter[] =>
     [...(preparing.get(boardId)?.waiters ?? [])].filter((w) => !w.gone && !w.target)
 
+  /** open element sockets per uid (MAX_SOCKETS_PER_USER) */
+  const socketsOf = new Map<string, number>()
+  const capped = (
+    session: ElementSessionInfo,
+    socket: ElementSocket,
+    open: () => ElementSessionHandle,
+  ): ElementSessionHandle => {
+    const uid = session.uid
+    const n = socketsOf.get(uid) ?? 0
+    if (n >= MAX_SOCKETS_PER_USER) {
+      metrics.inc('lobby_closes_total', { code: String(CLOSE_TERMINAL), reason: 'RATE_LIMITED' })
+      try {
+        socket.close(CLOSE_TERMINAL, 'RATE_LIMITED')
+      } catch {
+        // already closed
+      }
+      const meta = { userId: uid, role: session.role, name: session.name, color: session.color }
+      return { message() {}, closed: () => deps.onSessionRemoved(session.boardId, session.sid, meta) }
+    }
+    socketsOf.set(uid, n + 1)
+    let inner: ElementSessionHandle
+    try {
+      inner = open()
+    } catch (e) {
+      socketsOf.set(uid, n)
+      throw e
+    }
+    let done = false
+    return {
+      message: (text: string) => inner.message(text),
+      closed() {
+        if (!done) {
+          done = true
+          const left = (socketsOf.get(uid) ?? 1) - 1
+          if (left > 0) socketsOf.set(uid, left)
+          else socketsOf.delete(uid)
+        }
+        inner.closed()
+      },
+    }
+  }
+
+  function connectOne(session: ElementSessionInfo, socket: ElementSocket): ElementSessionHandle {
+    const boardId = session.boardId
+    let room = rooms.get(boardId)
+    if (!room) {
+      const pending = preparing.get(boardId)
+      if (pending) return hold(session, socket, pending)
+      const plan = planOpen(boardId)
+      if (plan.kind === 'refuse') return refuse(session, socket)
+      if (plan.kind === 'prepare') return hold(session, socket, prepare(boardId))
+      room = open(boardId)
+    } else open(boardId) // clears a pending eviction
+    const r = room
+    const s = r.connect(session, socket)
+    return {
+      message(text: string) {
+        deliver(r, s, boardId, text)
+      },
+      closed() {
+        r.closed_(s)
+      },
+    }
+  }
+
   const service: ElementRoomService = {
     connect(session, socket) {
       if (closed) throw new Error('closing')
-      const boardId = session.boardId
-      let room = rooms.get(boardId)
-      if (!room) {
-        const pending = preparing.get(boardId)
-        if (pending) return hold(session, socket, pending)
-        const plan = planOpen(boardId)
-        if (plan.kind === 'refuse') return refuse(session, socket)
-        if (plan.kind === 'prepare') return hold(session, socket, prepare(boardId))
-        room = open(boardId)
-      } else open(boardId) // clears a pending eviction
-      const r = room
-      const s = r.connect(session, socket)
-      return {
-        message(text: string) {
-          deliver(r, s, boardId, text)
-        },
-        closed() {
-          r.closed_(s)
-        },
-      }
+      return capped(session, socket, () => connectOne(session, socket))
     },
     routes: () => [
       ...roomRoutes({
