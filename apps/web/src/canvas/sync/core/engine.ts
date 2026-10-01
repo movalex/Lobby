@@ -150,9 +150,12 @@ interface Sent {
   /** a patch's `pv`: the server version it was built on (the lost-push decision counts writes since) */
   pv?: number
   /**
-   * a patch's: the seqs of this tab's pushes carrying the element that were still in flight when it was
-   * built (`ref` holds their values; `pv` does not hold their version bumps). The lost-push decision reads
-   * their acks (`ackedVersion`), so this tab's own landed pushes are never counted as other users' writes
+   * a patch's: the seqs of every push of this tab still in flight when it was built (`ref` holds the values
+   * of those carrying the element; `pv` does not hold their version bumps). The lost-push decision reads
+   * their acks (`ackedVersion`), so this tab's own landed pushes are never counted as other users' writes.
+   * Every flying push, not only those carrying the element: a push that moves a box re-snaps the arrow
+   * bound to it on the server (a derived write, `ack.derived`), which bumps the arrow's version with no op
+   * of ours for it (V1 re-check round 4, L7)
    */
   ahead?: readonly number[]
   /** a create's: the server copy it was made over (a tombstone it undeletes), or none (a new id) */
@@ -163,6 +166,12 @@ interface Sent {
    * new position, so its `fitDropped` asks for nothing more
    */
   fitSuperseded?: boolean
+}
+
+/** What an acked push left on the server for one element: its version, and the fields the server rewrote. */
+interface AckedVersion {
+  readonly v: number
+  readonly fix?: Readonly<Record<string, unknown>>
 }
 
 interface Inflight {
@@ -220,6 +229,47 @@ export type CoreEvent =
   | { kind: 'echo_suspect'; ids: readonly string[] }
 
 const now0 = () => Date.now()
+
+/**
+ * The per-key board-document clock of a welcome or a snapshot frame (CONTRACTS_REV 9, W4B-1, the contracts
+ * owner's half of CR-W5-FIX-2: `docClocks`, per key the clock of the write that last set or removed it,
+ * `lb_doc.clock`). Read loosely, so this core builds with a `protocol.ts` before or after rev 9: a frame
+ * without it gives null, and the lost-doc decision then counts values alone, as before.
+ */
+export function docClockOf(frame: Welcome | SnapshotFrame): Record<string, number> | null {
+  const raw = (frame as unknown as { docClocks?: unknown }).docClocks
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const out: Record<string, number> = {}
+  for (const [k, v] of Object.entries(raw as Record<string, unknown>))
+    if (typeof v === 'number' && Number.isFinite(v)) out[k] = v
+  return out
+}
+
+/**
+ * Whether the latest lost write of one board-document key goes again (LobbyEngineCore.decideLostDoc has
+ * the rule): `chain` is every lost write that set the key, in send order; `docClock` the server's per-key
+ * clock as of the welcome (null: not known); `now` the server's value (null: none). Called when the
+ * server does not hold the value sent last. Pure.
+ */
+export function decideLostDocKey(
+  chain: readonly LostDocRecord[],
+  docClock: Readonly<Record<string, number>> | null,
+  now: unknown,
+): boolean {
+  const key = Object.keys(chain[chain.length - 1]?.set ?? {})[0]
+  if (docClock && chain.every((r) => r.clock !== undefined)) {
+    const k = key as string
+    const since = docClock[k]
+    // a write of ours that lands gets a clock above everything the room had given out when it was sent,
+    // so a key whose clock is not past a lost write's base was written by nobody from that write on
+    return chain.some((r) => since === undefined || since <= (r.clock as number))
+  }
+  // no per-key clock: the server at a value this chain started from or passed through means the later
+  // writes did not land (a value set back by someone else reads the same way: V1 R9, accepted here)
+  const k = key as string
+  const earlier = [chain[0]?.base[k] ?? null, ...chain.slice(0, -1).map((r) => r.set[k] ?? null)]
+  return earlier.some((v) => deepEqual(now, v))
+}
 
 /**
  * The offline queue's entry for board-document writes (`setDoc`) not acked yet: `OfflineEntry` is an
@@ -409,11 +459,23 @@ export class LobbyEngineCore implements EngineCore {
   private horizon = 0
   private readonly confirmedMap = new Map<string, SceneElement>()
   private serverDoc: Record<string, unknown> = {}
+  /**
+   * Per board-document key, the clock of the write that last set or removed it on the server: the
+   * welcome's `docClocks` (CONTRACTS_REV 9, W4B-1; a room without it leaves this null and the lost-doc
+   * decision falls back to values alone), advanced by every `changes` batch that carries the key. Read by
+   * `decideLostDoc`: a key whose clock is not past a lost write's base was not written by anyone since, so
+   * that write did not land and goes again; otherwise the server's value stands unless it is the one we
+   * sent (V1 R9, the doc-key ABA: a value set back by someone else read as "did not land" and was
+   * overwritten).
+   */
+  private serverDocClock: Record<string, number> | null = null
   /** doc writes of this client not sent yet (setDoc), and sent but not acked: overlaid on the server copy */
   private pendingDoc: Record<string, unknown> = {}
   private readonly inflightDoc = new Map<number, Record<string, unknown>>()
   /** per doc write in flight: the values its keys replaced (what the server had or would have), null for none */
   private readonly inflightDocBase = new Map<number, Record<string, unknown>>()
+  /** per doc write in flight: the push's base clock (what this tab had seen of the server when it was built) */
+  private readonly inflightDocClock = new Map<number, number>()
   /**
    * Doc writes lost with a socket (or a closed page: the offline queue's `lostDoc`) whose fate is not
    * decided yet: decided with the lost pushes (decideLostDoc), overlaid on the server copy until then
@@ -437,12 +499,17 @@ export class LobbyEngineCore implements EngineCore {
   private readonly tracked = new Map<string, Tracked>()
   private inflight: Inflight[] = []
   /**
-   * Per acked push (seq): the server version of each element it wrote (`AckResult.v`), kept while a push
-   * in flight was built behind it (`Sent.ahead`). A lost push's `pv` lags the acks of this tab's own
-   * earlier pushes, and the lost-push decision counted their bumps as other users' writes: a push lost
-   * behind two acked nudges read as "superseded" and was dropped (V1 re-check round 3, L0-L5).
+   * Per acked push (seq): the server version of each element it wrote (`AckResult.v`) or made the server
+   * re-snap (`ack.derived`: a bound arrow following its moved target, a label following its arrow, a
+   * frame follower), kept while a push in flight was built behind it (`Sent.ahead`). A lost push's `pv`
+   * lags the acks of this tab's own earlier pushes, and the lost-push decision counted their bumps as other
+   * users' writes: a push lost behind two acked nudges read as "superseded" and was dropped (V1 re-check
+   * round 3, L0-L5); a recolour of a bound arrow lost behind two moves of its box read the same way, and
+   * told the user someone else had changed it (round 4, L7). With the version, the fields the server
+   * rewrote (`fix`): a lost push's `ref` plus those is the server copy after this tab's pushes ahead, which
+   * the decision compares the server copy against ("ours landed and nobody wrote after").
    */
-  private readonly ackedVersion = new Map<number, Map<string, number>>()
+  private readonly ackedVersion = new Map<number, Map<string, AckedVersion>>()
   private readonly held = new Map<string, Held>()
   private readonly known = new Map<string, { v: number; vn: number }>()
   private last = new Map<string, SceneElement>()
@@ -1517,6 +1584,7 @@ export class LobbyEngineCore implements EngineCore {
     this.epoch = w.epoch
     this.horizon = w.horizon
     this.serverDoc = { ...w.doc }
+    this.serverDocClock = docClockOf(w)
     const before = new Map(this.holders)
     this.holders.clear()
     for (const l of w.leases) this.holders.set(l.id, l.holder)
@@ -1571,8 +1639,10 @@ export class LobbyEngineCore implements EngineCore {
     // the welcome's board document, not the frame's: the room caches a reset snapshot for 5 s (with the
     // document as it was then) and sends only the element rows since it as `changes`, while the welcome's
     // `doc` is read at the hello. Taking the frame's put a document write of the last 5 s back to its old
-    // value for a joiner (DEF-3F-1 = 3b F2: session settings, tags, start view)
+    // value for a joiner (DEF-3F-1 = 3b F2: session settings, tags, start view). The same for the per-key
+    // clocks: the frame's only when the welcome had none
     this.serverDoc = { ...(this.welcome?.doc ?? frame.doc) }
+    if (!this.serverDocClock) this.serverDocClock = docClockOf(frame)
     this.resetAt = this.epochReset ? null : this.now()
     this.afterWelcome(this.epochReset ? null : { snapshotClock: frame.clock, before })
     if (this.welcome) this.emit({ kind: 'welcome', welcome: this.welcome })
@@ -1599,10 +1669,16 @@ export class LobbyEngineCore implements EngineCore {
       this.lostTimer = null
     }
     this.inflight = []
-    // doc writes lost with the socket: decided with the pushes (decideLostDoc)
+    // doc writes lost with the socket: decided with the pushes (decideLostDoc), from the clock their push
+    // was built at
     for (const [seq, set] of this.inflightDoc)
-      this.lostDoc.push({ set, base: this.inflightDocBase.get(seq) ?? {} })
+      this.lostDoc.push({
+        set,
+        base: this.inflightDocBase.get(seq) ?? {},
+        ...(this.inflightDocClock.has(seq) ? { clock: this.inflightDocClock.get(seq) as number } : {}),
+      })
     this.inflightDoc.clear()
+    this.inflightDocClock.clear()
     this.inflightDocBase.clear()
     if (lost.length || this.lostDoc.length) {
       if (this.epochReset) {
@@ -1689,8 +1765,9 @@ export class LobbyEngineCore implements EngineCore {
     for (const [id, list] of byId) {
       const conf = this.confirmedMap.get(id)
       const t = this.tracked.get(id)
-      // the version each part counts from: past this tab's own pushes acked before the cut (effectivePv)
-      const parts: LostPart[] = list.map(({ p, s }) => ({ p, s: { ...s, pv: this.effectivePv(id, s) } }))
+      // the version each part counts from, and the copy it compares against: past this tab's own pushes
+      // acked before the cut (effectivePv, effectiveRef)
+      const parts: LostPart[] = list.map(({ p, s }) => ({ p, s: this.settledSent(id, s) }))
       const { again, recreate, superseded } = decideLostElement(parts, conf, t?.dirty ?? new Set())
       if (superseded.length) {
         // the server's copy stands and the user is told (the board page's notice): never a silent drop.
@@ -1732,12 +1809,16 @@ export class LobbyEngineCore implements EngineCore {
 
   /**
    * Lost board-document writes (a socket's, or a closed page's `lostDoc`), per key over the writes that set
-   * it (values v1..vk, v0 what the first replaced): the server holds vk, it landed; it holds v0..vk-1, the
-   * later writes did not land and the latest local value goes again (unless the key was written again
-   * since); anything else is another user's later write, which stands. Before, every lost key went again
-   * unless the server held exactly its value, and a queued key went again whatever the server held (V1 R3,
-   * R7: a tag definition another user wrote after was overwritten). Keys have no version, so a value set
-   * back to v0 by someone else reads as "did not land" (accepted: a tag definition, a setting).
+   * it (values v1..vk, v0 what the first replaced). The server holds vk: it landed. With the server's
+   * per-key clock (`serverDocClock`, the welcome's `docClocks`): a key not written since the base clock of
+   * one of the lost writes was written by nobody after that write was built, so it and the later ones did
+   * not land and the latest local value goes again (unless the key was written again since); any other
+   * value under a later clock is a write that may be another user's (it is, when ours landed and theirs
+   * came after: the ABA of V1 R9), so the server's stands and the user is told (`superseded`). Without the
+   * clock (an older server): the server holds v0..vk-1, the later writes did not land and the latest local
+   * value goes again; anything else is another user's later write, which stands. Before wave 5, every lost
+   * key went again unless the server held exactly its value, and a queued key went again whatever the
+   * server held (V1 R3, R7: a tag definition another user wrote after was overwritten).
    */
   private decideLostDoc(): void {
     const records = this.lostDoc
@@ -1751,9 +1832,12 @@ export class LobbyEngineCore implements EngineCore {
       const now = this.serverDoc[k] ?? null
       const sent = last.set[k] ?? null
       if (deepEqual(now, sent)) continue
-      const earlier = [chain[0]?.base[k] ?? null, ...chain.slice(0, -1).map((r) => r.set[k] ?? null)]
-      if (earlier.some((v) => deepEqual(now, v))) this.pendingDoc[k] = clone(sent)
-      else this.log('lost_doc_superseded', { key: k })
+      const again = decideLostDocKey(chain, this.serverDocClock, now)
+      if (again) this.pendingDoc[k] = clone(sent)
+      else {
+        this.log('lost_doc_superseded', { key: k })
+        this.emit({ kind: 'superseded', id: `doc:${k}`, groups: [] })
+      }
     }
   }
 
@@ -1865,6 +1949,9 @@ export class LobbyEngineCore implements EngineCore {
       for (const [k, v] of Object.entries(m.doc.set)) {
         if (v === null) delete this.serverDoc[k]
         else this.serverDoc[k] = v
+        // the batch's clock bounds the write's own from above: a lost write built before this batch has a
+        // base below it either way
+        if (this.serverDocClock) this.serverDocClock[k] = m.clock
       }
     this.clock = m.clock
     // an element this client still counts as its own create, now on the server though no create of ours is
@@ -2026,18 +2113,31 @@ export class LobbyEngineCore implements EngineCore {
 
   /**
    * Keeps the server versions an ack reports (`r.v` of each op applied, the stored copy of a create that
-   * had landed: `create_exists`) while a push still in flight was built behind this one (Sent.ahead), and
+   * had landed: `create_exists`, and `derived` rows: elements the server re-snapped because of this push
+   * without an op of ours) while a push still in flight was built behind this one (Sent.ahead), and
    * forgets the rest. Read by `effectivePv` when those later pushes are lost.
    */
   private recordAckedVersions(push: Inflight, ack: Ack): void {
-    const byId = new Map<string, number>()
+    const byId = new Map<string, AckedVersion>()
+    const fixOf = (fix: Record<string, unknown> | undefined): Record<string, unknown> | undefined => {
+      if (!fix) return undefined
+      // top-level fields only (`c:<key>` names a canonicalized customData.lobby key)
+      const out = Object.fromEntries(Object.entries(fix).filter(([k]) => !k.startsWith('c:')))
+      return Object.keys(out).length ? out : undefined
+    }
+    const record = (id: string, v: number, fix: Record<string, unknown> | undefined) => {
+      const had = byId.get(id)
+      const merged = had?.fix || fix ? { ...(had?.fix ?? {}), ...(fix ?? {}) } : undefined
+      byId.set(id, { v: Math.max(had?.v ?? 0, v), ...(merged ? { fix: merged } : {}) })
+    }
     ack.r.forEach((r, n) => {
       const op = push.ops[n]
       const id = op ? opId(op) : r.id
-      if (r.ok) byId.set(id, r.v)
+      if (r.ok) record(id, r.v, fixOf(r.fix))
       else if (r.code === 'INVALID' && r.el && !r.el.isDeleted && push.sent.get(id)?.create)
-        byId.set(id, r.el.version)
+        record(id, r.el.version, undefined)
     })
+    for (const d of ack.derived ?? []) record(d.id, d.v, fixOf(d.fix))
     if (byId.size) this.ackedVersion.set(ack.seq, byId)
     const referenced = new Set<number>()
     for (const p of this.flying())
@@ -2047,17 +2147,41 @@ export class LobbyEngineCore implements EngineCore {
 
   /**
    * The server version a lost push's decision counts other writes from: its `pv`, or the version the last
-   * of this tab's own pushes it was built behind (`ahead`) left on the server, when that push was acked.
-   * Those pushes landed before the lost one (one socket is one FIFO), so their bumps are this tab's, not
-   * other users' writes.
+   * of this tab's own pushes it was built behind (`ahead`) left on the server, when that push was acked
+   * (an op of ours, or a derived write the server made for it). Those pushes landed before the lost one
+   * (one socket is one FIFO), so their bumps are this tab's, not other users' writes.
    */
   private effectivePv(id: string, s: Sent): number | undefined {
     let pv = s.pv
     for (const seq of s.ahead ?? []) {
-      const v = this.ackedVersion.get(seq)?.get(id)
+      const v = this.ackedVersion.get(seq)?.get(id)?.v
       if (v !== undefined && (pv === undefined || v > pv)) pv = v
     }
     return pv
+  }
+
+  /**
+   * The copy a lost push's decision compares the server copy against: its `ref` (the server copy plus this
+   * tab's pushes ahead, as built) with the fields the server rewrote for those pushes once they were acked
+   * (an arrow re-snapped behind a move of its box: `ack.derived`; a rounded point: `fix`). Without them the
+   * server copy never equals "ours landed and nobody wrote after", and a lost push behind a derived write
+   * is superseded or replayed for nothing.
+   */
+  private effectiveRef(id: string, s: Sent): SceneElement | undefined {
+    let ref = s.ref
+    if (!ref) return ref
+    for (const seq of [...(s.ahead ?? [])].sort((a, b) => a - b)) {
+      const fix = this.ackedVersion.get(seq)?.get(id)?.fix
+      if (fix) ref = { ...ref, ...clone(fix) } as SceneElement
+    }
+    return ref
+  }
+
+  /** A lost push's part with the versions and fields this tab's acked pushes ahead left on the server. */
+  private settledSent(id: string, s: Sent): Sent {
+    const pv = this.effectivePv(id, s)
+    const ref = this.effectiveRef(id, s)
+    return { ...s, ...(pv !== undefined ? { pv } : {}), ...(ref ? { ref } : {}) }
   }
 
   private onAckMessage(ack: Ack): void {
@@ -2078,6 +2202,7 @@ export class LobbyEngineCore implements EngineCore {
     const doc = this.inflightDoc.get(ack.seq)
     this.inflightDoc.delete(ack.seq)
     this.inflightDocBase.delete(ack.seq)
+    this.inflightDocClock.delete(ack.seq)
     if (doc && ack.docDenied) {
       if (REJECT_CODE_INFO[ack.docDenied.code].retryable) {
         retry = true
@@ -2415,9 +2540,9 @@ export class LobbyEngineCore implements EngineCore {
             : {
                 ref: this.base(id),
                 pv: (this.confirmedMap.get(id) as SceneElement).version,
-                ahead: this.flying()
-                  .filter((q) => q.sent.has(id))
-                  .map((q) => q.seq),
+                // every push out, not only those carrying `id`: one of another element may make the
+                // server re-snap this one (a bound arrow, a label, a frame follower: ack.derived)
+                ahead: this.flying().map((q) => q.seq),
               }),
         })
         if (!forced && this.inflight.length >= MAX_IN_FLIGHT_PUSHES) {
@@ -2457,7 +2582,10 @@ export class LobbyEngineCore implements EngineCore {
       this.inflightDocBase.set(seq, replaced)
     }
     this.inflight.push({ seq, base, ops, record, sent, forced, src: `${this.tab}:${this.welcomes}` })
-    if (doc) this.inflightDoc.set(seq, doc)
+    if (doc) {
+      this.inflightDoc.set(seq, doc)
+      this.inflightDocClock.set(seq, base)
+    }
     this.pushes.push(record)
     this.transport.send({ type: 'push', seq, base, ops, ...(doc ? { doc: { set: doc } } : {}) })
     for (const t of this.tracked.values())
@@ -2675,7 +2803,12 @@ export class LobbyEngineCore implements EngineCore {
     if (e.element.id === DOC_ENTRY_ID) {
       const set = (e.element as unknown as { set?: Record<string, unknown> }).set ?? {}
       for (const [k, v] of Object.entries(set)) if (!(k in this.pendingDoc)) this.pendingDoc[k] = clone(v)
-      for (const r of e.lostDoc ?? []) this.lostDoc.push({ set: clone(r.set), base: clone(r.base) })
+      for (const r of e.lostDoc ?? [])
+        this.lostDoc.push({
+          set: clone(r.set),
+          base: clone(r.base),
+          ...(r.clock !== undefined ? { clock: r.clock } : {}),
+        })
       return
     }
     const id = e.element.id
@@ -2749,8 +2882,10 @@ export class LobbyEngineCore implements EngineCore {
     // pushes out without an ack: a reload or a closed tab loses their acks, so the page that adopts the
     // queue decides them as lost pushes (replayLost), not as unsent changes (V1's reload replay)
     for (const p of flying)
-      for (const [id, s] of p.sent) {
+      for (const [id, raw] of p.sent) {
         const a = acc(id)
+        // past this tab's own pushes acked so far: the page that adopts the queue sees no more acks
+        const s = this.settledSent(id, raw)
         a.lost.push({
           src: p.src,
           seq: p.record.seq,
@@ -2760,8 +2895,7 @@ export class LobbyEngineCore implements EngineCore {
           groups: [...s.groups],
           el: clone(s.el),
           ...(s.ref ? { ref: clone(s.ref) } : {}),
-          // past this tab's own pushes acked so far: the page that adopts the queue sees no more acks
-          ...(this.effectivePv(id, s) !== undefined ? { pv: this.effectivePv(id, s) } : {}),
+          ...(s.pv !== undefined ? { pv: s.pv } : {}),
           ...(s.prior ? { prior: clone(s.prior) } : {}),
         })
         a.since = Math.min(a.since, p.record.at)
@@ -2784,7 +2918,11 @@ export class LobbyEngineCore implements EngineCore {
     // INVALID (V1 N8)
     const lostDoc: LostDocRecord[] = [...this.lostDoc]
     for (const [seq, set] of this.inflightDoc)
-      lostDoc.push({ set, base: this.inflightDocBase.get(seq) ?? {} })
+      lostDoc.push({
+        set,
+        base: this.inflightDocBase.get(seq) ?? {},
+        ...(this.inflightDocClock.has(seq) ? { clock: this.inflightDocClock.get(seq) as number } : {}),
+      })
     if (Object.keys(this.pendingDoc).length || lostDoc.length) {
       const e = docEntry(this.pendingDoc, this.clock, this.now())
       out.unshift(lostDoc.length ? { ...e, lostDoc: clone(lostDoc) } : e)

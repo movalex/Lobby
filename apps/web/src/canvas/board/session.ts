@@ -395,10 +395,13 @@ export class LobbyBoardSession {
         this.o.notices.notify({ key: 'save-rejected', text, tone: 'error', testId: 'save-rejected-toast' })
     } else if (e.kind === 'superseded') {
       // a change lost with the connection whose fate the server copy cannot tell: the server's stands,
-      // and the person is told instead of the page returning to Saved as if nothing happened
+      // and the person is told instead of the page returning to Saved as if nothing happened. A board
+      // setting (a tag definition, the start view: `doc:<key>`) is told apart from an object
       this.o.notices.notify({
         key: 'save-superseded',
-        text: 'Someone else changed an object you edited while you were reconnecting — their version is kept.',
+        text: e.id.startsWith('doc:')
+          ? 'Someone else changed a board setting you edited while you were reconnecting — their version is kept.'
+          : 'Someone else changed an object you edited while you were reconnecting — their version is kept.',
         tone: 'error',
         testId: 'save-superseded-toast',
       })
