@@ -13,13 +13,14 @@
  * NODE-SAFE (CONTRACTS.md).
  */
 import { redactTombstone } from '@draftroom/canvas-schema/elements'
-import { overlayPatch, stripEngineArtifacts } from '@draftroom/canvas-schema/groups'
+import { overlayPatch, pathUnitOf, stripEngineArtifacts } from '@draftroom/canvas-schema/groups'
 import { WIRE_LIMITS } from '@draftroom/canvas-schema/limits'
 import {
   type AckResult,
   CLOSE_TERMINAL,
   type ClientMessage,
   ClientMessage as ClientMessageSchema,
+  type DerivedRow,
   type LeaseHolder,
   Op as OpSchema,
   PushEnvelope,
@@ -92,6 +93,21 @@ export class FakeRoom {
    * does since wave 5: in snapshots, catch-ups, `c` ops and a reject's stored element.
    */
   redactTombstones = false
+  /**
+   * Send the welcome and the snapshot frame with `docClocks` (per board-document key, the clock of the
+   * write that last set or removed it: `lb_doc.clock`), as the room does since CONTRACTS_REV 9 (W4B-1, the
+   * doc-key ABA). The strict check parses the frames without the field, so the fake builds with a
+   * `protocol.ts` before or after rev 9.
+   */
+  sendDocClocks = false
+  /** per board-document key, the clock of its last write (what `docClocks` carries) */
+  readonly docClocks = new Map<string, number>()
+  /**
+   * Server-derived writes (room/fit.ts, §2.9.4 rule 7), scripted per target: when a push moves `target`
+   * (a `pos` write), each arrow listed follows by the same delta as a derived `path` write in the same
+   * batch, with a `derived` row in the push's ack (its version bumps with no op of the client's).
+   */
+  readonly derive = new Map<string, string[]>()
   private snapCache: { at: number; clock: number; elements: El[]; doc: Record<string, unknown> } | null = null
   private readonly c: ManualClock
   private readonly strict: boolean
@@ -218,8 +234,10 @@ export class FakeRoom {
 
   private send(s: Session, m: ServerInbound): void {
     if (this.strict) {
-      if (m.type === 'snapshot') SnapshotFrameSchema.parse(m)
-      else ServerMessageSchema.parse(m)
+      // `docClocks` (CONTRACTS_REV 9) is parsed out, so the fake builds with a schema before or after rev 9
+      const { docClocks: _omit, ...rest } = m as ServerInbound & { docClocks?: unknown }
+      if (m.type === 'snapshot') SnapshotFrameSchema.parse(rest)
+      else ServerMessageSchema.parse(rest)
     }
     const copy = (this.redactTombstones ? redactFrame(m) : JSON.parse(JSON.stringify(m))) as ServerInbound
     s.sent.push(copy)
@@ -311,6 +329,7 @@ export class FakeRoom {
       workshop: { voteOpen: false, anonymous: false },
       drags: [],
       limits: { ...WIRE_LIMITS },
+      ...(this.sendDocClocks ? { docClocks: Object.fromEntries(this.docClocks) } : {}),
     }
     if (reset) {
       let els = [...this.elements.values()]
@@ -345,6 +364,7 @@ export class FakeRoom {
         horizon: this.horizon,
         elements: [...els].sort(byIndex) as never,
         doc,
+        ...(this.sendDocClocks ? { docClocks: Object.fromEntries(this.docClocks) } : {}),
       }
       this.send(s, frame)
       // the rows since a cached snapshot, right behind it (element-room.ts hello)
@@ -371,6 +391,7 @@ export class FakeRoom {
     const clock = this.clock + 1
     const results: AckResult[] = []
     const out: ServerOp[] = []
+    const derivedRows: DerivedRow[] = []
     const reject = (id: string, code: RejectCode, el: El | null = null) =>
       results.push({ id, ok: false, code, el: el as never })
     if (this.failNext > 0) {
@@ -508,6 +529,7 @@ export class FakeRoom {
         ...(fitDropped ? { fitDropped: true as const } : {}),
         ...(denied.length ? { denied: { groups: denied, code: 'LEASED' as const } } : {}),
       })
+      if (g.pos && this.derive.has(op.id)) this.deriveFollow(op.id, stored, next, clock, out, derivedRows)
     }
     // the board document (doc.ts keys; the fake accepts every key a client may write)
     const docSet = (push.doc as { set?: Record<string, unknown> } | undefined)?.set
@@ -515,6 +537,7 @@ export class FakeRoom {
       for (const [k, v] of Object.entries(docSet)) {
         if (v === null) delete this.doc[k]
         else this.doc[k] = v
+        this.docClocks.set(k, clock)
       }
     const wrote = out.length > 0 || (!!docSet && !s.readonly)
     if (wrote) {
@@ -531,10 +554,52 @@ export class FakeRoom {
       seq: push.seq,
       clock: wrote ? clock : this.clock,
       r: results,
+      ...(derivedRows.length ? { derived: derivedRows } : {}),
       ...(docSet && s.readonly
         ? { docDenied: { keys: Object.keys(docSet), code: 'READ_ONLY' as const } }
         : {}),
     })
+  }
+
+  /** The arrows scripted on `target` (`derive`) follow its move: a derived `path` write each, in the same batch. */
+  private deriveFollow(
+    target: string,
+    before: El,
+    after: El,
+    clock: number,
+    out: ServerOp[],
+    rows: DerivedRow[],
+  ): void {
+    const dx = (after.x as number) - (before.x as number)
+    const dy = (after.y as number) - (before.y as number)
+    for (const id of this.derive.get(target) ?? []) {
+      const st = this.elements.get(id)
+      if (!st || st.isDeleted) continue
+      // the whole path unit, as a `path` patch carries it
+      const fix = pathUnitOf({ ...st, x: (st.x as number) + dx, y: (st.y as number) + dy }) as Record<
+        string,
+        unknown
+      >
+      const next: El = {
+        ...st,
+        ...fix,
+        version: st.version + 1,
+        versionNonce: nextNonce(),
+        updated: this.c.now(),
+      }
+      this.elements.set(id, next)
+      this.rowClock.set(id, clock)
+      out.push({
+        k: 'p',
+        id,
+        v: next.version,
+        vn: next.versionNonce,
+        pv: st.version,
+        updated: next.updated as number,
+        g: { path: fix } as never,
+      })
+      rows.push({ id, v: next.version, fix })
+    }
   }
 
   private leasedByOther(s: Session, id: string): boolean {

@@ -40,6 +40,7 @@ import {
   planExport,
   reparentToBounds,
 } from './plan.ts'
+import { withoutLinks } from './select.ts'
 import { fontFaceRules } from './svg.ts'
 
 /** Which bytes an export draws for an uploaded image (see the header). */
@@ -228,10 +229,11 @@ function prepare(ctx: SceneExportContext, opts: SceneExportOptions): PreparedExp
     exportWithDarkMode: opts.theme === 'dark',
     exportEmbedScene: false,
   }
+  // no `link` reaches the exporter (select.ts withoutLinks, XSS-F1): the export's own copies
   if (plan.kind === 'frame')
     return {
       plan,
-      elements: plan.elements as NonDeletedExcalidrawElement[],
+      elements: withoutLinks(plan.elements) as NonDeletedExcalidrawElement[],
       exportingFrame: plan.frame as NonDeletedExcalidrawElement,
       padding: 0,
       appState,
@@ -244,7 +246,7 @@ function prepare(ctx: SceneExportContext, opts: SceneExportOptions): PreparedExp
     } as ExcalidrawElement
     return {
       plan,
-      elements: reparentToBounds(plan.elements, frame) as NonDeletedExcalidrawElement[],
+      elements: withoutLinks(reparentToBounds(plan.elements, frame)) as NonDeletedExcalidrawElement[],
       exportingFrame: frame as NonDeletedExcalidrawElement,
       padding: 0,
       appState,
@@ -252,7 +254,7 @@ function prepare(ctx: SceneExportContext, opts: SceneExportOptions): PreparedExp
   }
   return {
     plan,
-    elements: plan.elements as NonDeletedExcalidrawElement[],
+    elements: withoutLinks(plan.elements) as NonDeletedExcalidrawElement[],
     exportingFrame: null,
     padding: plan.padding,
     appState,
