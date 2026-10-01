@@ -75,11 +75,13 @@ const TLDRAW_DEFAULT_TEXT_LEASE_MS = 5_000
 export const PENDING_MAX_MESSAGES = 64
 export const PENDING_MAX_BYTES = 1024 * 1024
 /**
- * Element sockets one user (uid) may have open on this process, every board together (V2's re-check: with
- * no cap, one viewer ticket opened 40 or 100 sockets, and one editor held 4 leases per tab in 13 tabs).
- * One more is closed at once, 4099 RATE_LIMITED. A person has a tab or two per board.
+ * Element sockets one user (uid) may have open on one board (V2's re-check: with no cap, one viewer
+ * ticket opened 40 or 100 sockets on a board, and one editor held 4 leases per tab in 13 tabs). One more
+ * is closed at once, 4099 RATE_LIMITED. A person has a tab or two per board.
  */
-export const MAX_SOCKETS_PER_USER = 20
+export const MAX_SOCKETS_PER_USER_PER_BOARD = 12
+/** ... and on the whole process, every board together (a ticket is per board; this bounds the rest). */
+export const MAX_SOCKETS_PER_USER = 128
 /** A transient conversion failure (time budget, a worker crash) is retried by a joiner after this long (§5.3). */
 export const FAILED_RETRY_MS = 5 * 60_000
 /** Failures a joiner never retries at runtime: only a maintenance run converts these boards (§5.3, §2.13). */
@@ -469,16 +471,24 @@ export function createElementRoomServiceWith(
   const waitersOf = (boardId: string): Waiter[] =>
     [...(preparing.get(boardId)?.waiters ?? [])].filter((w) => !w.gone && !w.target)
 
-  /** open element sockets per uid (MAX_SOCKETS_PER_USER) */
+  /** open element sockets per uid and per uid and board (MAX_SOCKETS_PER_USER, …_PER_BOARD) */
   const socketsOf = new Map<string, number>()
+  const count = (key: string, by: number) => {
+    const n = (socketsOf.get(key) ?? 0) + by
+    if (n > 0) socketsOf.set(key, n)
+    else socketsOf.delete(key)
+  }
   const capped = (
     session: ElementSessionInfo,
     socket: ElementSocket,
     open: () => ElementSessionHandle,
   ): ElementSessionHandle => {
     const uid = session.uid
-    const n = socketsOf.get(uid) ?? 0
-    if (n >= MAX_SOCKETS_PER_USER) {
+    const onBoard = `${uid} ${session.boardId}`
+    if (
+      (socketsOf.get(uid) ?? 0) >= MAX_SOCKETS_PER_USER ||
+      (socketsOf.get(onBoard) ?? 0) >= MAX_SOCKETS_PER_USER_PER_BOARD
+    ) {
       metrics.inc('lobby_closes_total', { code: String(CLOSE_TERMINAL), reason: 'RATE_LIMITED' })
       try {
         socket.close(CLOSE_TERMINAL, 'RATE_LIMITED')
@@ -488,12 +498,14 @@ export function createElementRoomServiceWith(
       const meta = { userId: uid, role: session.role, name: session.name, color: session.color }
       return { message() {}, closed: () => deps.onSessionRemoved(session.boardId, session.sid, meta) }
     }
-    socketsOf.set(uid, n + 1)
+    count(uid, 1)
+    count(onBoard, 1)
     let inner: ElementSessionHandle
     try {
       inner = open()
     } catch (e) {
-      socketsOf.set(uid, n)
+      count(uid, -1)
+      count(onBoard, -1)
       throw e
     }
     let done = false
@@ -502,9 +514,8 @@ export function createElementRoomServiceWith(
       closed() {
         if (!done) {
           done = true
-          const left = (socketsOf.get(uid) ?? 1) - 1
-          if (left > 0) socketsOf.set(uid, left)
-          else socketsOf.delete(uid)
+          count(uid, -1)
+          count(onBoard, -1)
         }
         inner.closed()
       },

@@ -19,11 +19,11 @@ import {
   item,
   itemText,
   test,
-  undo,
   waitForItem,
 } from '../tests/support/canvas.ts'
 import { forgeSession, serverSnapshot } from '../tests/support/excalidraw.ts'
 import { WEB_URL } from '../tests/support/ports.ts'
+import { undoKey } from './navigation-kit.ts'
 
 const WORDS = 'internal margin note for the team only'
 const FREE = 'confidential plan before the client sees it'
@@ -67,18 +67,24 @@ test('a viewer, a commenter and an editor who open the board never get a deleted
     expect(
       JSON.parse(scene).filter((e: { isDeleted: boolean }) => e.isDeleted).length,
     ).toBeGreaterThanOrEqual(3)
-    // what the socket gets: the raw welcome and the reset snapshot
+    // what the socket gets: the raw welcome, the reset snapshot (a cached one may be older than the
+    // deletes) and the catch-up `changes` behind it
     const { socket, welcome } = await forgeSession(s.page, board)
     try {
       expect(welcome.reset).toBe(true)
-      // the binary snapshot frame follows the welcome
-      await expect.poll(async () => (await socket.snapshots()).length).toBeGreaterThan(0)
-      const snaps = await socket.snapshots()
-      const raw = JSON.stringify([welcome, snaps])
+      const got = async () => {
+        const snaps = await socket.snapshots()
+        const changes = (await socket.messages()).filter((m) => m.type === 'changes')
+        const els = [
+          ...snaps.flatMap((f) => f.elements),
+          ...changes.flatMap((m) => m.ops.flatMap((o) => (o.k === 'c' ? [o.el] : []))),
+        ]
+        return { raw: JSON.stringify([welcome, snaps, changes]), dead: els.filter((e) => e.isDeleted) }
+      }
+      await expect.poll(async () => (await got()).dead.length).toBeGreaterThanOrEqual(3)
+      const { raw, dead } = await got()
       expect(raw).not.toContain(WORDS)
       expect(raw).not.toContain(FREE)
-      const dead = snaps.flatMap((f) => f.elements).filter((e) => e.isDeleted)
-      expect(dead.length).toBeGreaterThanOrEqual(3)
       for (const e of dead) expect(e.customData, `${e.id} carries no customData`).toBeUndefined()
     } finally {
       await socket.close()
@@ -89,7 +95,7 @@ test('a viewer, a commenter and an editor who open the board never get a deleted
 
   // alice's undo of her own delete restores the free text whole, for everyone
   const v = await canvasSession('victor', { role: 'viewer' })
-  await undo(a.page)
+  await undoKey(a.page)
   await expectSaved(a.page)
   await waitForItem(v.page, 'free-words')
   await expect.poll(() => itemText(v.page, 'free-words')).toBe(FREE)
