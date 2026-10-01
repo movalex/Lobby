@@ -79,7 +79,28 @@ export interface WorkerJob {
 }
 
 /**
- * Splits the plans round-robin over `threads` workers (worker.ts) and merges their results. Only the
+ * Splits the plans over `threads` workers: the thin sessions (thin.ts; the measuring sessions among them
+ * read A→B visibility and the probe's cursor at the socket) all go to worker 0, whose event loop then has
+ * no engine core to run, so the time a frame waits before the meter sees it is the network's, not a
+ * neighbour core's scene rebuild (seen in the NAS smoke run: one worker at a 677 ms loop p99 on the heavy
+ * board). The full-core sessions go round-robin over the other workers. With one worker, or no thin
+ * session, everything is round-robin over all of them.
+ */
+export function partitionPlans(plans: readonly SessionPlan[], threads: number): SessionPlan[][] {
+  const parts: SessionPlan[][] = Array.from({ length: Math.max(1, threads) }, () => [])
+  const thin = plans.filter((p) => p.thin)
+  if (threads < 2 || thin.length === 0) {
+    for (const [i, p] of plans.entries()) parts[i % parts.length]?.push(p)
+    return parts
+  }
+  parts[0] = [...thin]
+  const full = plans.filter((p) => !p.thin)
+  for (const [i, p] of full.entries()) parts[1 + (i % (threads - 1))]?.push(p)
+  return parts
+}
+
+/**
+ * Runs the plans over `threads` workers (worker.ts, partitionPlans) and merges their results. Only the
  * WorkerJob fields cross into a worker (a function or a board map would not clone, or clone for nothing);
  * `stopped` is polled here and sent to the workers as a stop message.
  */
@@ -87,8 +108,7 @@ export async function runInWorkers(
   job: WorkerJob & { readonly stopped?: () => boolean },
   threads: number,
 ): Promise<ThreadResult[]> {
-  const parts: SessionPlan[][] = Array.from({ length: threads }, () => [])
-  for (const [i, p] of job.plans.entries()) parts[i % threads]?.push(p)
+  const parts = partitionPlans(job.plans, threads)
   const base: Omit<WorkerJob, 'plans'> = {
     profileName: job.profileName,
     syncHttpUrl: job.syncHttpUrl,

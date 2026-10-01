@@ -15,7 +15,9 @@
 #                      --env NODE_OPTIONS=--import=/app/e2e/load/presence-shared-hook.ts
 #                    - the owner's pre-approved fsync fallback (§2.13 step 3), only if the targets are missed:
 #                      --env NODE_OPTIONS=--import=/app/e2e/load/sqlite-normal-hook.ts
-#   --worker-heap-mb each load worker's old-generation cap (default 360: 4 workers under the 2 GB limit)
+#   --worker-heap-mb each load worker's old-generation cap (default 360). The generator runs 5 workers on the
+#                    container's 4 CPUs: worker 0 holds every thin session (no engine core, so the socket-side
+#                    measurements do not queue behind a scene rebuild) and 1-4 the full cores (runner.ts)
 #
 # The SIGKILL at minute 8 (L1, no --duration-s) counts from the load generator's own start (its t0 file),
 # by nas-killer.sh on the NAS; the kill file it writes (kill command, docker start returned) goes into the
@@ -78,7 +80,7 @@ nas "docker run --rm --name $C_SECRETS --user $U --network none -v $S/src:/app:r
 # 3. the internal network, sync under the Render-sized limits, the load generator
 nas "docker network inspect $NET >/dev/null 2>&1 || docker network create --internal $NET"
 nas "docker run -d --init --name $C_SYNC --user $U --network $NET --cpus=0.5 --memory=512m --memory-swap=512m -v $S/src:/app:ro -v $S/data:/var/data -w /app --env-file $S/run.env -e HOST=0.0.0.0 -e PORT=5858 -e DRAFTROOM_DATA_DIR=/var/data -e DRAFTROOM_ENGINE=excalidraw -e DRAFTROOM_BACKUP_STORE=off -e DRAFTROOM_TEST_HOOKS=1 $PRESENCE_ENV '$IMG' node apps/sync/src/server.ts"
-nas "docker run -d --init --name $C_LOAD --user $U --network $NET --cpus=4 --memory=2g -v $S/src:/app:ro -v $S/reports:/reports -w /app --env-file $S/run.env '$IMG' node e2e/load/run.ts --profile $P --sync http://$C_SYNC:5858 --api-listen 0.0.0.0:7899 --out /reports --tag $TAG --threads 4 --worker-heap-mb $WORKER_HEAP --host-samples $HOSTFILE --t0-file /reports/t0-$P-$TAG.txt --kill-file /reports/kill-$P-$TAG.txt $CUL $DURATION"
+nas "docker run -d --init --name $C_LOAD --user $U --network $NET --cpus=4 --memory=2g -v $S/src:/app:ro -v $S/reports:/reports -w /app --env-file $S/run.env '$IMG' node e2e/load/run.ts --profile $P --sync http://$C_SYNC:5858 --api-listen 0.0.0.0:7899 --out /reports --tag $TAG --threads 5 --worker-heap-mb $WORKER_HEAP --host-samples $HOSTFILE --t0-file /reports/t0-$P-$TAG.txt --kill-file /reports/kill-$P-$TAG.txt $CUL $DURATION"
 
 # 4. the host sampler (docker stats every 10 s, du every 30 s, the 2,048 MB stop) and, for L1, the kill at minute 8
 nas_stdin "cat > $S/sampler.sh" <"$(dirname "$0")/nas-sampler.sh"

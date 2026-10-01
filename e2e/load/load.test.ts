@@ -15,6 +15,7 @@ import { parsePrometheus } from './metrics.ts'
 import { boardsOf, buildPlans, membersOf, probeSids, signedTickets } from './plan.ts'
 import { DRY, L1, L2, plannedWritesPerSecond, sessionCount } from './profiles.ts'
 import { ackedButMissing, counterTotals, histogramOver, phasesOf, visibilitySamples } from './report.ts'
+import { partitionPlans } from './runner.ts'
 import { chunkCreates, SEED_MAX_BYTES } from './seed.ts'
 import type { SessionReport } from './session.ts'
 import { percentile, Recorder } from './stats.ts'
@@ -114,6 +115,34 @@ describe('profiles and plans', () => {
     const members = membersOf(plans)
     expect([...members.keys()].sort()).toEqual([...boards.keys()].sort())
     expect(probeSids(plans).size).toBe(1)
+  })
+  it('thin sessions: the last ones of a marked group, measuring first in the ramp, all on worker 0', () => {
+    const s = newRunSecrets()
+    const plans = buildPlans(L1, boardsOf(L1), signedTickets(s.ticketSecret))
+    const thin = plans.filter((p) => p.thin)
+    // L1: 50 of the 60 editor-role watchers, 4 of the 5 measuring viewers (never the probe), all 95 viewers
+    expect(thin.length).toBe(50 + 4 + 95)
+    expect(thin.every((p) => p.group.kind === 'watcher')).toBe(true)
+    const probe = [...probeSids(plans).values()][0] // a sid: `<uid>:<tab>`
+    const sid = (p: (typeof plans)[number]) => `${p.user.uid}:${p.key}`
+    expect(plans.find((p) => sid(p) === probe)?.thin).toBeUndefined()
+    expect(sid(plans[0] as (typeof plans)[number])).toBe(probe) // the probe joins first, the other measuring sessions next
+    expect(plans.slice(1, 5).every((p) => p.group.measureVisibility)).toBe(true)
+    const parts = partitionPlans(plans, 5)
+    expect(parts.length).toBe(5)
+    expect(parts[0]?.length).toBe(thin.length)
+    expect(parts[0]?.every((p) => p.thin)).toBe(true)
+    expect(
+      parts
+        .slice(1)
+        .flat()
+        .some((p) => p.thin),
+    ).toBe(false)
+    expect(parts.slice(1).map((p) => p.length)).toEqual([28, 28, 28, 27])
+    // one thread, or no thin session: plain round-robin
+    expect(partitionPlans(plans, 1).map((p) => p.length)).toEqual([260])
+    const full = plans.filter((p) => !p.thin)
+    expect(partitionPlans(full, 3).map((p) => p.length)).toEqual([37, 37, 37])
   })
 })
 
