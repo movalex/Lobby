@@ -1,5 +1,5 @@
-// The harness against a real stack on O3's branch before M1: the launcher runs sync with
-// DRAFTROOM_ENGINE=tldraw (O1's ElementRoom is a stub until M1), so this checks the plumbing only:
+// The harness against a real stack (written on O3's branch before M1 against the tldraw sync; since wave 4
+// part 2 the stack is the Excalidraw one). It checks the plumbing only:
 // processes, sign-in, sharing, separate browser processes, forge sockets with the page's own ticket, the
 // relay's latency, cut (held reconnects) and restore, and the test routes' 404 path. The board sockets
 // here speak tldraw's protocol; the relay and the forge socket never look inside a frame beyond its type.
@@ -12,7 +12,7 @@ import type { O3Stack } from '../stack.ts'
 let stack: O3Stack
 
 test.beforeAll(async () => {
-  stack = await harness.startStack({ engine: 'tldraw' })
+  stack = await harness.startStack()
 })
 test.afterAll(async () => {
   await closeAllBrowsers()

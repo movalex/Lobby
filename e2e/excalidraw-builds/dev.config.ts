@@ -3,7 +3,7 @@ import { API_URL, RUN_TAG, SYNC_URL, WEB_PORT, WEB_URL } from '../tests/support/
 import type { StackEngine } from '../tests/support/stack.ts'
 
 // The Excalidraw board page under the Vite DEV server (`vite dev`: React StrictMode, no production build),
-// against the same api + sync + worker stack as e2e/excalidraw (sync on DRAFTROOM_ENGINE=excalidraw). Every
+// against the same api + sync + worker stack as the default suite. Every
 // other suite serves a production build (`vite build` + `vite preview`), so StrictMode's double-mount of
 // effects was never under test: LEAD-1 (docs/EXCALIDRAW-CUTOVER.md, the lead's wave-4 findings) was a board
 // that never connected there.
@@ -39,7 +39,6 @@ export default defineConfig<Record<never, never>, { engine: StackEngine }>({
         DRAFTROOM_API_ORIGIN: API_URL,
         DRAFTROOM_SYNC_ORIGIN: SYNC_URL,
         WEB_PORT: String(WEB_PORT),
-        VITE_LOBBY_ENGINE: 'excalidraw',
       },
       reuseExistingServer: false,
       timeout: 180_000,

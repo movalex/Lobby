@@ -26,8 +26,8 @@ import type { StackPorts } from './ports.ts'
 export interface StackOptions {
   /** the stack's port base (ports.ts STACKS); default SPIKE_B_PORT_BASE or the lead's 7850 */
   readonly base?: number
-  /** default `excalidraw`; `tldraw` for the R0 stand-in (O4) */
-  readonly engine?: 'excalidraw' | 'tldraw'
+  /** the one engine since wave 4 part 2 (the R0 stand-in, `tldraw`, left with B8) */
+  readonly engine?: 'excalidraw'
   /** default true: sync runs with DRAFTROOM_TEST_HOOKS=1 */
   readonly testHooks?: boolean
   /** a data dir to use (B8's staging runs: inside spike-b8/); default a fresh temp dir */

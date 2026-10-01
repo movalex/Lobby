@@ -4,10 +4,9 @@
 // is an HTTP client of the api (docs/M3-STORAGE-CONTRACTS.md §4-§5) and only gets the api's URL and a
 // per-stack worker token. Tests can kill (SIGKILL / TerminateProcess) and restart any of them on demand.
 //
-// Engine: tldraw by default (today's app). `engine: 'excalidraw'` (the ported specs' config,
-// e2e/excalidraw/playwright.config.ts, through the fixture's `engine` option) starts sync with
-// DRAFTROOM_ENGINE=excalidraw, its test hooks and backups off (EXCALIDRAW_SYNC_ENV), under any per-spec
-// `syncEnv`, so a spec that sets TEXT_LEASE_MS never drops the engine.
+// Engine: Excalidraw, the one engine since wave 4 part 2. Sync starts with DRAFTROOM_ENGINE=excalidraw,
+// its test hooks and backups off (EXCALIDRAW_SYNC_ENV), under any per-spec `syncEnv`, so a spec that sets
+// TEXT_LEASE_MS never drops the engine (and sync refuses DRAFTROOM_ENGINE=tldraw outright).
 //
 // Blob store: fs by default. E2E_BLOB_STORE=r2 (opt-in, never in CI) points the api at a real R2 bucket
 // using R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET (and optional R2_ENDPOINT)
@@ -226,8 +225,8 @@ export function blobStoreEnv(): Record<string, string> {
   return env
 }
 
-/** Which canvas engine the stack's sync server runs (docs/EXCALIDRAW-CONTRACTS.md §9.3). */
-export type StackEngine = 'tldraw' | 'excalidraw'
+/** The canvas engine the stack's sync server runs (docs/EXCALIDRAW-CONTRACTS.md §9.3): the one engine. */
+export type StackEngine = 'excalidraw'
 
 /**
  * The sync env an Excalidraw-engine stack always starts with (a spec's `syncEnv` goes on top, but never
@@ -241,23 +240,18 @@ export const EXCALIDRAW_SYNC_ENV: Readonly<Record<string, string>> = {
   DRAFTROOM_BACKUP_STORE: 'off',
 }
 
-/** The sync env of a stack on `engine`, with the spec's extra env. The tldraw engine adds nothing. */
+/** The sync env of a stack, with the spec's extra env on top (never another engine). */
 export function engineSyncEnv(
-  engine: StackEngine,
+  _engine: StackEngine,
   extra: Record<string, string> = {},
 ): Record<string, string> {
-  if (engine === 'tldraw') return { ...extra }
   if (extra.DRAFTROOM_ENGINE !== undefined && extra.DRAFTROOM_ENGINE !== 'excalidraw')
     throw new Error(`an Excalidraw stack cannot run sync with DRAFTROOM_ENGINE=${extra.DRAFTROOM_ENGINE}`)
   return { ...EXCALIDRAW_SYNC_ENV, ...extra, DRAFTROOM_ENGINE: 'excalidraw' }
 }
 
 export interface StackOptions {
-  /**
-   * The canvas engine (default tldraw: today's app, unchanged). `excalidraw` starts sync with
-   * EXCALIDRAW_SYNC_ENV under `syncEnv`; the web build must be the VITE_LOBBY_ENGINE=excalidraw one
-   * (e2e/excalidraw/playwright.config.ts builds it).
-   */
+  /** The canvas engine (excalidraw, the only one): sync starts with EXCALIDRAW_SYNC_ENV under `syncEnv`. */
   engine?: StackEngine
   /** Extra sync server env, e.g. { TEXT_LEASE_MS: '3000' }. */
   syncEnv?: Record<string, string>
@@ -269,10 +263,7 @@ export interface StackOptions {
 
 export interface Stack {
   readonly dataDir: string
-  /**
-   * The canvas engine sync runs: from `engine`, or from a `syncEnv` that sets DRAFTROOM_ENGINE itself
-   * (spike B's launcher does); the default suite's stacks say `tldraw`.
-   */
+  /** The canvas engine sync runs (excalidraw). */
   readonly engine: StackEngine
   readonly syncEnv: Readonly<Record<string, string>>
   /**
@@ -289,8 +280,8 @@ export interface Stack {
 }
 
 export async function startStack(opts: StackOptions = {}): Promise<Stack> {
-  const syncEnv = engineSyncEnv(opts.engine ?? 'tldraw', opts.syncEnv)
-  const engine: StackEngine = syncEnv.DRAFTROOM_ENGINE === 'excalidraw' ? 'excalidraw' : 'tldraw'
+  const syncEnv = engineSyncEnv(opts.engine ?? 'excalidraw', opts.syncEnv)
+  const engine: StackEngine = 'excalidraw'
   const dataDir = mkdtempSync(join(tmpdir(), 'dr-e2e-'))
   // Fresh secrets per stack, shared by exactly these two processes: a ticket minted by any other api
   // (a developer's `pnpm dev`, an earlier run) cannot open a board here.

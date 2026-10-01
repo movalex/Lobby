@@ -1,5 +1,5 @@
 // The cut-over's CSP check (docs/EXCALIDRAW-CUTOVER.md G3; spike A12's harness, run.ts, on the production
-// build): the PRODUCTION Excalidraw web build (VITE_LOBBY_ENGINE=excalidraw, NO dev auth, the host-rewrite
+// build): the PRODUCTION web build (NO dev auth, the host-rewrite
 // plugin on) served by ./server.ts with the Content-Security-Policy of
 // docs/research/excalidraw/render.cutover.yaml.patch, against the REAL api + sync + preview worker (sync on
 // the Excalidraw engine), in headless Chromium.
@@ -94,10 +94,8 @@ const policySource = fromFile
   : 'embedded copy (2026-09-30)'
 
 if (!args['reuse-build']) {
-  log(
-    `building apps/web (VITE_LOBBY_ENGINE=excalidraw, NO dev auth: the production build) into apps/web/${DIST}`,
-  )
-  const env: NodeJS.ProcessEnv = { ...process.env, VITE_LOBBY_ENGINE: 'excalidraw' }
+  log(`building apps/web (NO dev auth: the production build) into apps/web/${DIST}`)
+  const env: NodeJS.ProcessEnv = { ...process.env }
   delete env.VITE_DRAFTROOM_SYNC_ORIGIN
   delete env.VITE_DRAFTROOM_DEV_AUTH
   delete env.VITE_LOBBY_BOARD_PAGE
@@ -412,7 +410,7 @@ const pass =
 const report = {
   at: new Date().toISOString(),
   run: args.run,
-  build: 'VITE_LOBBY_ENGINE=excalidraw, no dev auth (production), host rewrite on',
+  build: 'no dev auth (production), host rewrite on',
   policySource,
   policy: POLICY,
   inlineScriptsInIndexHtml: inlineScripts,

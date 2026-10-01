@@ -2,11 +2,10 @@ import { defineConfig, devices } from '@playwright/test'
 import { API_URL, RUN_TAG, SYNC_URL, WEB_PORT, WEB_URL } from '../tests/support/ports.ts'
 import type { StackEngine } from '../tests/support/stack.ts'
 
-// The PRODUCTION Excalidraw web build (docs/EXCALIDRAW-CUTOVER.md G2): `vite build` with
-// VITE_LOBBY_ENGINE=excalidraw and WITHOUT the dev-auth guard (no VITE_DRAFTROOM_DEV_AUTH), as the static
-// site is built at the cut-over, served by `vite preview`, against the api + sync + worker stack (sync on
-// DRAFTROOM_ENGINE=excalidraw). No facade, no debug handle: the specs drive the page as a person does and
-// read the DOM, the network and the build output.
+// The PRODUCTION web build (docs/EXCALIDRAW-CUTOVER.md G2, G10): `vite build` WITHOUT the dev-auth guard
+// (no VITE_DRAFTROOM_DEV_AUTH), as the static site is built at the cut-over, served by `vite preview`,
+// against the api + sync + worker stack. No facade, no debug handle: the specs drive the page as a person
+// does and read the DOM, the network and the build output (no tldraw, no foreign host but Clerk's).
 //
 //   E2E_PORT_BASE=<base> pnpm --filter @draftroom/e2e excalidraw:prod
 //
@@ -37,7 +36,6 @@ export default defineConfig<Record<never, never>, { engine: StackEngine }>({
       env: {
         DRAFTROOM_API_ORIGIN: API_URL,
         DRAFTROOM_SYNC_ORIGIN: SYNC_URL,
-        VITE_LOBBY_ENGINE: 'excalidraw',
         // the production build: no dev auth (set empty so a developer's shell cannot turn it on)
         VITE_DRAFTROOM_DEV_AUTH: '',
         VITE_LOBBY_BOARD_PAGE: '',

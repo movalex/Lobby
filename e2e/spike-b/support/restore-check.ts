@@ -1,3 +1,5 @@
+// (Moved from e2e/spike-b/b8/ at wave 4 part 2: the rest of B8 left with the tldraw engine; the default
+// suite's templates-scenes spec still uses this engine-side check.)
 // B8's "restoreElements fixed point in the browser" row (docs/EXCALIDRAW-MIGRATION.md §8.3 B8, §5.3):
 // the converted elements go through Excalidraw's own `restoreElements(elements, null, { repairBindings,
 // refreshDimensions })` in a real Chromium page with Lobby's fonts loaded (the spike A `/spike/engine`

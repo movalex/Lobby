@@ -4,13 +4,13 @@
 //
 // Builds apps/web three times with --manifest (folders keyed on --port, default 7723, so parallel runs
 // never share one):
-//   normal   today's production build (tldraw; no VITE_LOBBY_ENGINE, no dev auth)
-//   engine   VITE_LOBBY_ENGINE=excalidraw + VITE_DRAFTROOM_DEV_AUTH=1, host-rewrite plugin on
+//   normal   the production build (no dev auth)
+//   engine   VITE_DRAFTROOM_DEV_AUTH=1 (the spike pages), host-rewrite plugin on
 //   before   the same with LOBBY_HOST_REWRITE=off (the "before" inventory of A12)
 // A13: the static-import closure (JS + CSS) of each route from the manifest, gzip (zlib default level),
-//      gzip -9 and brotli -11. Routes: tldraw board (index.html + src/board/BoardPage.tsx), Excalidraw
-//      engine route (index.html + SpikeRoute + pages/engine.tsx: ExcalidrawHost alone) and the render-lab
-//      page (the engine plus Lobby's loader, overrides and guard).
+//      gzip -9 and brotli -11. Routes: the app shell, the Excalidraw engine route (index.html + SpikeRoute +
+//      pages/engine.tsx: ExcalidrawHost alone) and the render-lab page (the engine plus Lobby's loader,
+//      overrides and guard). (The tldraw board route left at wave 4 part 2.)
 // A12: foreign hosts (literal text outside license comments) before and after the rewrite, in the
 //      engine route's files (static and dynamic imports) and in the whole dist. Exit 1 when a host the
 //      plugin lists remains in a chunk of the engine route.
@@ -43,17 +43,17 @@ const builds = {
   normal: { dir: `dist/a13-normal-${args.port}`, env: {} },
   engine: {
     dir: `dist/a13-engine-${args.port}`,
-    env: { VITE_LOBBY_ENGINE: 'excalidraw', VITE_DRAFTROOM_DEV_AUTH: '1' },
+    env: { VITE_DRAFTROOM_DEV_AUTH: '1' },
   },
   before: {
     dir: `dist/a12-before-${args.port}`,
-    env: { VITE_LOBBY_ENGINE: 'excalidraw', VITE_DRAFTROOM_DEV_AUTH: '1', LOBBY_HOST_REWRITE: 'off' },
+    env: { VITE_DRAFTROOM_DEV_AUTH: '1', LOBBY_HOST_REWRITE: 'off' },
   },
   // the same two builds with source maps, only for the per-package attribution (sizes come from above)
   normalMaps: { dir: `dist/a13-normal-maps-${args.port}`, env: {}, maps: true },
   engineMaps: {
     dir: `dist/a13-engine-maps-${args.port}`,
-    env: { VITE_LOBBY_ENGINE: 'excalidraw', VITE_DRAFTROOM_DEV_AUTH: '1' },
+    env: { VITE_DRAFTROOM_DEV_AUTH: '1' },
     maps: true,
   },
 } as const
@@ -61,7 +61,6 @@ const builds = {
 function build(name: keyof typeof builds) {
   const b = builds[name]
   const env: NodeJS.ProcessEnv = { ...process.env, ...b.env }
-  if (!('VITE_LOBBY_ENGINE' in b.env)) delete env.VITE_LOBBY_ENGINE
   if (!('VITE_DRAFTROOM_DEV_AUTH' in b.env)) delete env.VITE_DRAFTROOM_DEV_AUTH
   if (!('LOBBY_HOST_REWRITE' in b.env)) delete env.LOBBY_HOST_REWRITE
   const t0 = Date.now()
@@ -106,8 +105,7 @@ const summary = (r: ReturnType<typeof route>) => ({
 })
 const ENTRY = 'index.html'
 const a13 = {
-  tldrawBoardRoute: summary(route('normal', [ENTRY, 'src/board/BoardPage.tsx'])),
-  tldrawBoardRouteInEngineBuild: summary(route('engine', [ENTRY, 'src/board/BoardPage.tsx'])),
+  boardRoute: summary(route('normal', [ENTRY, 'src/canvas/board/LobbyBoardPage.tsx'])),
   appShell: summary(route('normal', [ENTRY])),
   excalidrawEngineRoute: summary(
     route('engine', [ENTRY, 'src/canvas/spike/SpikeRoute.tsx', 'src/canvas/spike/pages/engine.tsx']),
@@ -155,35 +153,19 @@ const attributionOf = (name: 'normalMaps' | 'engineMaps', sources: string[]) => 
     packages: pk,
   }
 }
-const tldrawAttr = attributionOf('normalMaps', [ENTRY, 'src/board/BoardPage.tsx'])
+const boardAttr = attributionOf('normalMaps', [ENTRY, 'src/canvas/board/LobbyBoardPage.tsx'])
 const shellAttr = attributionOf('normalMaps', [ENTRY])
 const engineAttr = attributionOf('engineMaps', [
   ENTRY,
   'src/canvas/spike/SpikeRoute.tsx',
   'src/canvas/spike/pages/engine.tsx',
 ])
+// since wave 4 part 2 the tldraw family must be 0 KiB everywhere (docs/EXCALIDRAW-CUTOVER.md G10)
 const shellTldraw = shellAttr.tldrawFamilyKiB
-const boardLobbyKiB = kib(
-  Object.entries(tldrawAttr.packages)
-    .filter(([p]) => p.startsWith('lobby'))
-    .reduce((a, [, v]) => a + v.gzip, 0) -
-    Object.entries(shellAttr.packages)
-      .filter(([p]) => p.startsWith('lobby'))
-      .reduce((a, [, v]) => a + v.gzip, 0),
-)
-const projection = {
-  note: 'Estimate: the Excalidraw engine route of this build, minus the tldraw family the app shell still carries, plus the Lobby board code the tldraw BoardPage chunk carries today (it moves to the Excalidraw board page). CSS added from the measured route.',
-  shellTldrawKiB: shellTldraw,
-  boardLobbyCodeKiB: boardLobbyKiB,
-  projectedExcalidrawBoardRouteGzipKiB: kib(
-    (a13.excalidrawEngineRoute.totalGzipKiB - shellTldraw + boardLobbyKiB) * 1024,
-  ),
-}
 const attribution = {
-  tldrawRoute: { ...tldrawAttr, packages: undefined },
+  boardRoute: { ...boardAttr, packages: undefined },
   appShell: { ...shellAttr, packages: undefined },
   excalidrawEngineRoute: { ...engineAttr, packages: undefined },
-  projection,
 }
 
 // ---- A12 ----------------------------------------------------------------------------------------
@@ -266,12 +248,12 @@ const report = {
 }
 const file = join(OUT, `run-${args.run}.json`)
 writeFileSync(file, JSON.stringify(report, null, 2))
-const t = a13.tldrawBoardRoute
+const t = a13.boardRoute
 const e = a13.excalidrawEngineRoute
 console.log(
-  `A13 run ${args.run}: tldraw board route ${t.totalGzipKiB} KiB gzip (${t.jsGzipKiB} JS + ${t.cssGzipKiB} CSS, ${t.jsFiles}+${t.cssFiles} files); ` +
+  `A13 run ${args.run}: board route ${t.totalGzipKiB} KiB gzip (${t.jsGzipKiB} JS + ${t.cssGzipKiB} CSS, ${t.jsFiles}+${t.cssFiles} files); ` +
     `Excalidraw engine route ${e.totalGzipKiB} KiB gzip (${e.jsGzipKiB} JS + ${e.cssGzipKiB} CSS, ${e.jsFiles}+${e.cssFiles} files); ` +
-    `app shell ${a13.appShell.totalGzipKiB} KiB (tldraw family in it ~${shellTldraw} KiB); render-lab ${a13.excalidrawRenderLabRoute.totalGzipKiB} KiB; projected Excalidraw board route ~${projection.projectedExcalidrawBoardRouteGzipKiB} KiB`,
+    `app shell ${a13.appShell.totalGzipKiB} KiB (tldraw family in it ~${shellTldraw} KiB); render-lab ${a13.excalidrawRenderLabRoute.totalGzipKiB} KiB`,
 )
 console.log(
   `A12 run ${args.run}: listed hosts left in the engine route: eager [${leftEager.join(', ')}], with lazy chunks [${leftLazy.join(', ')}]; ` +

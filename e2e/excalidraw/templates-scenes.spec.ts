@@ -19,8 +19,13 @@ import { GEOMETRY_TOLERANCE_PX } from '../../packages/canvas-schema/src/limits.t
 import type { Ack, Welcome } from '../../packages/canvas-schema/src/protocol.ts'
 import { TEMPLATE_INFOS } from '../../packages/templates/src/plan.ts'
 import { instantiateSceneTemplate } from '../../packages/templates/src/scene/index.ts'
-import { openEnginePage, restoreFixedPoint, screenshotBoard, summarize } from '../spike-b/b8/restore-check.ts'
 import { forgeSession } from '../spike-b/support/forge.ts'
+import {
+  openEnginePage,
+  restoreFixedPoint,
+  screenshotBoard,
+  summarize,
+} from '../spike-b/support/restore-check.ts'
 import { expect, expectConverged, items, test, waitForCanvas } from '../tests/support/canvas.ts'
 
 installServerTextMetrics()

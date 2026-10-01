@@ -76,8 +76,8 @@ test.describe('stack guards (§8.6.5, §8.6.7)', () => {
       DRAFTROOM_TEST_HOOKS: '1',
       DRAFTROOM_BACKUP_STORE: 'off',
     })
-    expect(spikeSyncEnv({ engine: 'tldraw', testHooks: false })).toEqual({
-      DRAFTROOM_ENGINE: 'tldraw',
+    expect(spikeSyncEnv({ testHooks: false })).toEqual({
+      DRAFTROOM_ENGINE: 'excalidraw',
       DRAFTROOM_BACKUP_STORE: 'off',
     })
     expect(() => spikeSyncEnv({ syncEnv: { R2_BUCKET: 'x' } })).toThrow(/never pass R2_BUCKET/)

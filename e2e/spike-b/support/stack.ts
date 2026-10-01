@@ -2,7 +2,7 @@
 // and preview worker, started by e2e/tests/support/stack.ts (reused by import, unchanged) on the spike B
 // port base, with the engine flags in sync's environment:
 //
-//  - DRAFTROOM_ENGINE=excalidraw (O1's ElementRoom) or tldraw (the R0 stand-in, O4);
+//  - DRAFTROOM_ENGINE=excalidraw (O1's ElementRoom; the R0 stand-in left with B8 at wave 4 part 2);
 //  - DRAFTROOM_TEST_HOOKS=1 unless `testHooks: false` (the test snapshot, lease and COMMIT hooks);
 //  - DRAFTROOM_BACKUP_STORE=off, always: no stack of spike B ever uploads a backup. The launcher strips
 //    every DRAFTROOM_*/R2_* variable of this process from the children, and this module refuses any R2

@@ -5,9 +5,9 @@
 //    LB_PRAGMAS), one row per element at clock 0 (as a seed writes them, §2.4.6), tombstones as rows with
 //    `deleted = 1`, and lb_meta clock/horizon 0, a fresh epoch and schemaVersion. O1's store reads these
 //    rows as its own; run.ts checks that sync serves every element before a run (`--seed file`).
-//  - Unconverted tldraw boards (the conversion-under-load run): today's tldraw storage, written through
-//    today's RoomRegistry.seed with records validated against the shared tldraw schema, so O4's lazy
-//    conversion meets a real tldraw board file. Notes only (no frames or images: the generator has no
+//  - Unconverted tldraw boards (the conversion-under-load run): the tldraw era's storage tables, written
+//    as the tldraw sync wrote them (apps/sync/test/harness/tldraw-file.ts) with records validated against
+//    the era's schema, so the lazy conversion meets a real tldraw board file. Notes only (no frames or images: the generator has no
 //    validated factories for them), in the heavy board's grid; the planted over-cap board is the same with
 //    many notes and long texts.
 import { randomBytes } from 'node:crypto'
@@ -20,11 +20,14 @@ import {
   LB_SCHEMA_VERSION,
   serializeGclock,
 } from '../../apps/sync/src/room/schema.ts'
-import { BOARD_ID_RE, boardDbPath, RoomRegistry } from '../../apps/sync/src/rooms.ts'
-import { emptyBoardSnapshot } from '../../apps/sync/src/snapshot.ts'
+import { BOARD_ID_RE, boardDbPath } from '../../apps/sync/src/rooms.ts'
 import { noteShape } from '../../apps/sync/test/harness/records.ts'
+import {
+  DOCUMENT_RECORD,
+  PAGE_RECORD,
+  writeTldrawBoardFile,
+} from '../../apps/sync/test/harness/tldraw-file.ts'
 import type { WireElement } from '../../packages/canvas-schema/src/elements.ts'
-import { draftroomSchema } from '../../packages/canvas-schema/src/index.ts'
 import { GEN_UPDATED } from './boards.ts'
 
 /** sync's rooms folder under its data dir (@draftroom/dev-assets dataLayout: `<data>/rooms`). */
@@ -100,7 +103,6 @@ export function writeTldrawBoard(
   const t0 = Date.now()
   const dir = roomsDir(dataDir)
   if (existsSync(boardDbPath(dir, boardId))) throw new Error(`board file exists already: ${boardId}`)
-  const base = emptyBoardSnapshot(draftroomSchema)
   const filler = 'lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor '
   const text = (i: number) => {
     const n = opts.textChars ?? 60
@@ -111,17 +113,8 @@ export function writeTldrawBoard(
   const records = []
   for (let i = 0; i < opts.notes; i++)
     records.push(noteShape(`${boardId}-n${i}`, text(i), { x: (i % 15) * 224, y: Math.floor(i / 15) * 224 }))
-  const snapshot = {
-    ...base,
-    documents: [...base.documents, ...records.map((state) => ({ state, lastChangedClock: 0 }))],
-  }
-  const registry = new RoomRegistry({ dataDir: dir, schema: draftroomSchema })
-  try {
-    const r = registry.seed(boardId, snapshot as never)
-    if (r !== 'created') throw new Error(`tldraw board ${boardId}: ${r}`)
-  } finally {
-    registry.closeAll()
-  }
+  mkdirSync(dir, { recursive: true })
   const path = boardDbPath(dir, boardId)
+  writeTldrawBoardFile(path, [DOCUMENT_RECORD, PAGE_RECORD, ...records])
   return { boardId, path, rows: records.length, bytes: statSync(path).size, ms: Date.now() - t0 }
 }

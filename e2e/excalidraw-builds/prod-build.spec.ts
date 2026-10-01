@@ -27,6 +27,38 @@ const DEBUG_HANDLES = [
 ]
 /** Strings only the dev-only pages and handles carry (route.tsx's spike page, session.ts's handle). */
 const DEV_ONLY_MARKERS = ['spike-board', 'spike-missing', '__lobbySpike', '__lobbyBoard']
+/**
+ * tldraw's marks (wave 4 part 2, docs/EXCALIDRAW-CUTOVER.md G10; SMK-1): its packages, its CSS classes, and
+ * the embed allowlist of @tldraw/tlschema that reached the bundle through packages/tldraw-import. On
+ * 32859b1 the board chunk carried '@tldraw/tlschema' (through canvas-schema's root) and those hosts.
+ */
+const TLDRAW_MARKERS = [
+  '@tldraw/',
+  'tl-container',
+  'tlui-',
+  'tldraw.css',
+  'tldraw-import',
+  'codepen.io',
+  'youtube.com',
+  'vimeo.com',
+  'scratch.mit.edu',
+  'val.town',
+  'codesandbox.io',
+]
+/**
+ * Hosts a literal in the build may name: the auth provider's, and URLs that are never requested (the SVG
+ * namespace, JSON-schema ids, the comments React and the bundler leave). Lobby's own placeholders end in
+ * `.invalid`. Anything else is a foreign host (plan §2.12: no request leaves Lobby's origins and Clerk's).
+ */
+const ALLOWED_HOSTS = new Set([
+  'clerk.com',
+  'dashboard.clerk.com',
+  'www.w3.org',
+  'react.dev',
+  'github.com',
+  'json-schema.org',
+  'rolldown.rs',
+])
 
 function* walk(dir: string): Generator<string> {
   for (const name of readdirSync(dir)) {
@@ -134,6 +166,18 @@ test("the dev-only spike pages are not in this build: ?page=spike opens Lobby's 
   for (const marker of DEV_ONLY_MARKERS) expect(builtFilesWith(marker), marker).toEqual([])
   // positive control: the engine page is in
   expect(builtFilesWith('data-engine').length).toBeGreaterThan(0)
+})
+
+test('the build carries no tldraw (packages, classes, the embed allowlist) and names no host but Clerk’s and the no-request URLs', () => {
+  for (const marker of TLDRAW_MARKERS) expect(builtFilesWith(marker), marker).toEqual([])
+  const hosts = new Set<string>()
+  for (const f of walk(PROD_DIST)) {
+    if (!/\.(m?js|css|html)$/.test(f)) continue
+    for (const m of readFileSync(f, 'utf8').matchAll(/https?:\/\/([a-z0-9.-]+\.[a-z]{2,})/g))
+      hosts.add(m[1] as string)
+  }
+  expect([...hosts].filter((h) => !h.endsWith('.invalid') && !ALLOWED_HOSTS.has(h)).sort()).toEqual([])
+  expect(hosts.has('clerk.com')).toBe(true) // positive control: the scan read the chunks
 })
 
 test('the static files: self-hosted fonts under /excalidraw-assets/ (200 woff2; 404 for a miss and for Liberation), index.html with no inline script, /theme-boot.js', async ({

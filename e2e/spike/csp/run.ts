@@ -14,7 +14,6 @@
 //      (Xiaolai), an image uploaded through the real api and loaded by Lobby's loader from its real
 //      /files/<ast>/<ver>/d/<drv> route, the text editor (double-click, type, Escape), render overrides,
 //      exportToCanvas / exportToSvg (font inlining), wheel zoom and pan
-//   3. (informational) today's tldraw board /b/<id> under the same policy
 // Collected: securitypolicyviolation events, console messages about CSP, report-uri bodies, requests to
 // any non-local host (aborted before they leave), page errors. Writes
 // e2e/test-results/spike-csp-<web port>/run-<N>.json. Exit 0 when the final policy has 0 violations and 0
@@ -48,10 +47,9 @@ const DIST = `dist/csp-${WEB_PORT}`
 const distDir = join(REPO_ROOT, 'apps/web', DIST)
 
 if (!args['reuse-build']) {
-  log(`building apps/web (VITE_LOBBY_ENGINE=excalidraw, dev auth) into apps/web/${DIST}`)
+  log(`building apps/web (dev auth) into apps/web/${DIST}`)
   const env: NodeJS.ProcessEnv = {
     ...process.env,
-    VITE_LOBBY_ENGINE: 'excalidraw',
     VITE_DRAFTROOM_DEV_AUTH: '1',
   }
   delete env.VITE_DRAFTROOM_SYNC_ORIGIN
@@ -459,17 +457,6 @@ async function svgInliningFlow(page: Page, notes: Record<string, unknown>) {
   await page.waitForTimeout(500)
 }
 
-async function tldrawFlow(page: Page, notes: Record<string, unknown>, boardId: string) {
-  await page.goto(`/b/${boardId}`)
-  await page.waitForFunction(() => !!(window as unknown as { editor?: unknown }).editor, null, {
-    timeout: 60_000,
-  })
-  await page.waitForTimeout(3000)
-  notes.conn = await page.evaluate(
-    () => document.querySelector('[data-testid="conn-status"]')?.getAttribute('data-state') ?? null,
-  )
-}
-
 const results: Record<string, FlowResult[]> = {}
 let image: { boardId: string; versionId: string; url: string } | null = null
 try {
@@ -484,7 +471,6 @@ try {
     const img = image
     flows.push(await flow('spike-board', page, (n) => boardFlow(page, n, img)))
     flows.push(await flow('svg font inlining (informational)', page, (n) => svgInliningFlow(page, n)))
-    flows.push(await flow('tldraw-board (informational)', page, (n) => tldrawFlow(page, n, img.boardId)))
     await context.close()
     results[name] = flows.map((f) => f)
     const reports = server.reports.slice(reportsBefore)

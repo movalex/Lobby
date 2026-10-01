@@ -6,9 +6,8 @@ import { createUsers, type Users } from './users.ts'
 
 interface WorkerFixtures {
   /**
-   * The canvas engine of this worker's stack: tldraw (default, today's app) or excalidraw (set by
-   * e2e/excalidraw/playwright.config.ts for the ported specs; sync then runs EXCALIDRAW_SYNC_ENV under
-   * any `syncEnv`). The web build must match: each config builds its own.
+   * The canvas engine of this worker's stack: excalidraw, the one engine since wave 4 part 2 (sync runs
+   * EXCALIDRAW_SYNC_ENV under any `syncEnv`). The option stays so a config says what it builds.
    */
   engine: StackEngine
   /** Extra sync server env for this worker's stack. Override per file with test.use({ syncEnv }). */
@@ -35,7 +34,7 @@ interface TestFixtures {
 }
 
 export const test = base.extend<TestFixtures, WorkerFixtures>({
-  engine: ['tldraw', { option: true, scope: 'worker' }],
+  engine: ['excalidraw', { option: true, scope: 'worker' }],
   syncEnv: [{}, { option: true, scope: 'worker' }],
   workerEnv: [{}, { option: true, scope: 'worker' }],
   apiEnv: [{}, { option: true, scope: 'worker' }],
