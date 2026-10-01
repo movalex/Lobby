@@ -646,3 +646,24 @@ is merged; D4 is built in the tools (3a; the converter's polygons are 2B's, `eng
 | W5-57 | polish | An empty `contentinfo` footer sits inside `main`, so axe fails in every state; the… | 2C | waiting on 2C | the footer's role and the region's name; 3i's groundwork lets the region be renamed (CR-3I-4) |
 | W5-58 | polish | Opening a template board announces "6 shapes selected" when nothing is selected | 3b, 3i | fixed | 3b (insert without selecting) and 3i (a selection is said only if it stands): `navigation-templates`, `a11y-live-region` W5-58 |
 | W5-59 | polish | The note editor has no name; the Tips frame still says "main menu" and lists no… | 3a, 2D, 3i | fixed | 3a (the editor's name), 2D (headings first, the Tips frame), 3i (reading order): `canvas-ux-review` W5-59, `templates-frames` W5-59, `a11y-traversal` W5-59, `reading-order.test.ts` |
+
+## 11. Status after the engine merge (2026-09-30)
+
+The engine owners' branches (`engine/w5-2a`, `-2b`, `-2c`) are merged on `engine/excalidraw` and met the
+feature integration there (`docs/research/excalidraw/W5-ENGINE.md`). §10's rows that waited on them, now:
+
+| ID | §10 status | Now | Evidence on the merged tree |
+|---|---|---|---|
+| W5-01 | waiting on 2C | **fixed** (2C) | `board-frames`; `workshops-voting` W5-01 passes, its mark is off |
+| W5-02 | waiting on 2A | **fixed** (2A, with 2C's consumer side; `CONTRACTS_REV` 7 and 8) | `apps/sync/test/element-room/wave5-2a.test.ts`, `sync-room-tombstones` |
+| W5-05 | client half fixed; waiting on 2A | **fixed** (2A's lock rule, 3a's push) | `sync-room-frames`; `canvas-ux-review` W5-05 and `templates-frames` W5-05 pass, marks off |
+| W5-08 | waiting on 2C (D1) | **fixed** (2C, drawing only) | `board-drag-arrows`; DEMO 1:00 holds on the Excalidraw build |
+| W5-10 | waiting on 2C | **fixed** (2C's engine theme) | `a11y-contrast` W5-10 ×3 pass, marks off |
+| W5-15 | waiting on 2C | **fixed** (2C), one deviation: a Paper note is dark paper with light ink in dark mode | `a11y-contrast` W5-15 ×2 pass, marks off; `canvas/engine/theme.test.ts` |
+| W5-16, W5-17 | fixed; Lilita One waits on 2A | **fixed**: 2A's allowlist takes family 7, so the templates' headings are Lilita One | `present-export-files` D3 passes (mark off); 2D's `hierarchy.test.ts` `it.fails` now fails and must lose `.fails` (a request to 2D) |
+| W5-35 | waiting on 2A | **fixed** (D5: per guest uid, tombstones counted) | `wave5-2a.test.ts` |
+
+Still waiting on 2C (or 2C with 2A): W5-25's leader side (CR-3C-W5-1), W5-26 (CR-3F-1), W5-28, W5-31's top
+bar (CR-3I-2), W5-32, W5-37's canvas look (CR 3E-7), W5-38, W5-39's handles (CR 3b-11), W5-50's phone row
+(CR-3I-3), W5-51's frame names, W5-52, W5-53, W5-55, W5-57, and W5-21's other camera moves (CR 3b-12).
+Counts after the merge: **43 fixed, 7 partly fixed, 8 waiting on 2A / 2C, 1 not fixed (W5-34, 2E)**.
