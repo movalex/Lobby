@@ -59,24 +59,37 @@ import type {
 import { type FileRefAnswer, FileRefsCache } from '../file-refs.ts'
 import { HttpError } from '../http/respond.ts'
 import { GroupMap, type LiveCounts, WriterLedger } from './caches.ts'
+import { CatchUpCache, catchUpChangesJson, catchUpWelcomeJson } from './catch-up.ts'
 import { closeTerminal } from './closing.ts'
 import { IndexCache } from './index-keys.ts'
 import { type LeaseHolderInfo, LeaseTable } from './lease.ts'
 import { type El, type MergeEnv, PushApplier } from './merge.ts'
 import type { RoomMetrics } from './metrics.ts'
 import { Outbound } from './outbound.ts'
+import { CommitPacer } from './pacing.ts'
 import { PresenceHub, rosterEntry } from './presence.ts'
 import { type SessionBudgets, sessionBudgets } from './rates.ts'
+import { RosterBatch } from './roster-batch.ts'
 import { runServerWrite, type ServerWriteEntry } from './server-write.ts'
 import { BoardStore, LB_DELETED_LIMITS } from './store.ts'
 import type { PreOp, PreparedPush, PushOutcome, SessionIdentity } from './types.ts'
 
-/** The drain's limits (§2.4.3 stage 1). */
+/** The drain's limits (§2.4.3 stage 1); a busy room's hold is pacing.ts DRAIN_PACING. */
 export const DRAIN = { maxPushes: 64, maxWorkMs: 8, minCommitIntervalMs: 25 } as const
 /** A catch-up larger than this is a reset instead. */
 const CATCH_UP_MAX_ROWS = 5_000
-/** A cached reset snapshot serves joiners for this long (plus a catch-up since its clock). */
-export const SNAPSHOT_CACHE_MS = 5_000
+/**
+ * A cached reset snapshot (gzip, built once) serves every joiner while the board moved on from its clock
+ * by at most `maxRowsBehind` rows and it is at most `maxAgeMs` old; each joiner gets the rows since its
+ * clock as a catch-up `changes` frame right after it (§2.4.5), so what a joiner holds is the same. Before,
+ * the cache lived 5 s whatever the board did: a join ramp of 200 sessions in 60 s on a board edited 20
+ * times a second rebuilt and re-gzipped the 3 MB snapshot 12 times (B9, the join storm's event-loop tail).
+ * A snapshot whose clock is the board's clock is reused as long as it lives: the bytes would be the same.
+ * A delete still drops the cache at once (W5-02: a joiner must not get a deleted element's words).
+ */
+export const SNAPSHOT_REUSE = { maxAgeMs: 60_000, maxRowsBehind: 500 } as const
+/** The old name of the cache's life, kept for callers that read it: the longest a snapshot may be reused. */
+export const SNAPSHOT_CACHE_MS = SNAPSHOT_REUSE.maxAgeMs
 const PRESENCE_TICK_MS = 100
 const LEASE_TICK_MS = 250
 const DISK_LOW_FRACTION = 0.05
@@ -339,6 +352,12 @@ export class ElementRoom {
   private drainTimer: ReturnType<typeof setTimeout> | ReturnType<typeof setImmediate> | null = null
   private draining = false
   private lastCommitAt = 0
+  /** a busy room holds its first queued push for company (pacing.ts) */
+  readonly pacer = new CommitPacer()
+  /** the catch-up ops of recent `since` values, valid for one clock (catch-up.ts) */
+  readonly catchUps = new CatchUpCache()
+  /** join and leave events, one `roster` frame per macrotask (roster-batch.ts) */
+  readonly rosterBatch = new RosterBatch(() => this.rosterRecipients())
   private readonly timers: ReturnType<typeof setInterval>[] = []
   private closed = false
   /** the dot-vote state: null until the api pull answers */
@@ -393,13 +412,12 @@ export class ElementRoom {
     this.guestCreated.clear()
     const guestItem = (uid: string) => this.guestCreated.set(uid, (this.guestCreated.get(uid) ?? 0) + 1)
     for (const r of rows) {
-      const el = JSON.parse(r.data) as El
-      this.groups.add(el.groupIds)
-      if (!(el.type === 'text' && el.containerId)) {
+      // the columns come from SQL (store.ts liveIndexRows): no row is parsed in JS here
+      if (r.groupIds && r.groupIds !== '[]') this.groups.add(JSON.parse(r.groupIds) as string[])
+      if (!r.label) {
         this.counts.items++
         // the guest cap survives a room eviction: a guest's live items count against it (V2)
-        const by = el.customData?.lobbyServer?.createdBy
-        if (by?.guest) guestItem(by.uid)
+        if (r.byGuest) guestItem(r.byGuest)
       }
     }
     // ... and so do its deleted ones (D5, V2's re-check: tombstones made or revived reset nothing)
@@ -637,7 +655,7 @@ export class ElementRoom {
       const stillThere = [...this.sessions].some((o) => o.welcomed && o.identity.sid === sid)
       if (!stillThere) {
         this.presence.remove(sid)
-        this.broadcast(JSON.stringify({ type: 'roster', events: [{ k: 'leave', sid }] }))
+        this.rosterBatch.push({ k: 'leave', sid })
       }
     }
     this.deps.onSessionRemoved(this.boardId, s.identity.sid, {
@@ -691,6 +709,12 @@ export class ElementRoom {
     return out
   }
 
+  /** Who gets a batched `roster` frame: every welcomed session (roster-batch.ts). */
+  private *rosterRecipients() {
+    for (const s of this.sessions)
+      if (s.welcomed && !s.closed) yield { sid: s.identity.sid, send: (f: string) => s.out.send(f) }
+  }
+
   private hello(s: Session, since: number, epoch: string | null): void {
     const first = !s.welcomed
     const now = this.deps.now()
@@ -713,11 +737,8 @@ export class ElementRoom {
       )
       s.welcomed = true
       this.deps.metrics.inc('lobby_joins_total')
-      if (!already)
-        this.broadcast(
-          JSON.stringify({ type: 'roster', events: [{ k: 'join', p: rosterEntry(s.identity) }] }),
-          s,
-        )
+      // one `roster` frame per hello slice for everyone (the joiner's welcome names it already)
+      if (!already) this.rosterBatch.push({ k: 'join', p: rosterEntry(s.identity) })
     }
     const meta = this.store.meta
     const base = {
@@ -745,9 +766,13 @@ export class ElementRoom {
       limits: { ...WIRE_LIMITS, leaseTtlMs: this.leases.ttlMs },
     }
     const catchUp = catchUpRows !== null && catchUpRows <= CATCH_UP_MAX_ROWS
+    // the rows since a clock as catch-up ops: the stored strings as they are, cached per `since` for this
+    // clock (catch-up.ts: a reconnect storm after a restart asks for the same rows hundreds of times)
+    const opsSince = (clock: number) => this.catchUps.get(clock, meta.clock, () => this.store.sinceRaw(clock))
     if (catchUp) {
-      const ops: ServerOp[] = this.store.since(since).map(catchUpOp)
-      s.out.send(JSON.stringify({ ...base, clock: meta.clock, reset: false, catchUp: ops, snapshot: null }))
+      s.out.send(
+        catchUpWelcomeJson({ ...base, clock: meta.clock, reset: false, snapshot: null }, opsSince(since)),
+      )
     } else {
       this.deps.metrics.inc('lobby_resets_total')
       const snap = this.snapshotFor(now)
@@ -763,13 +788,11 @@ export class ElementRoom {
       s.out.send(welcome)
       s.out.send(snap.bytes)
       if (snap.clock < meta.clock) {
-        const ops: ServerOp[] = this.store.since(snap.clock).map(catchUpOp)
-        // DEF-3F-1 (3b F2): the cached snapshot's document is up to 5 s old too, so the frame that brings
+        // DEF-3F-1 (3b F2): the cached snapshot's document is as old as the snapshot, so the frame that brings
         // the rows since it also brings the doc keys written since it (null: removed); a joiner that took
         // the snapshot's document reaches the welcome's from the frames alone
         const doc = this.store.docSince(snap.clock)
-        const docSet = Object.keys(doc).length ? { doc: { set: doc } } : {}
-        s.out.send(JSON.stringify({ type: 'changes', clock: meta.clock, ops, ...docSet }))
+        s.out.send(catchUpChangesJson(meta.clock, opsSince(snap.clock), Object.keys(doc).length ? doc : null))
       }
     }
     // everyone's current cursors, so a late joiner does not wait for the next move
@@ -778,13 +801,14 @@ export class ElementRoom {
   }
 
   /**
-   * The reset snapshot (tombstones included, redacted: W5-02), compressed once and cached for 5 s. One
-   * snapshot serves every role: no tombstone in it carries content, so a viewer's is the owner's.
+   * The reset snapshot (tombstones included, redacted: W5-02), compressed once and reused by every joiner
+   * while SNAPSHOT_REUSE allows (the rows since its clock follow it as a catch-up). One snapshot serves
+   * every role: no tombstone in it carries content, so a viewer's is the owner's.
    */
   private snapshotFor(now: number): { clock: number; elements: number; bytes: Promise<Uint8Array> } {
     const meta = this.store.meta
     const c = this.snapshotCache
-    if (c && c.epoch === meta.epoch && now - c.at <= SNAPSHOT_CACHE_MS) return c
+    if (c && c.epoch === meta.epoch && this.snapshotReusable(c, meta.clock, now)) return c
     const rows = this.store
       .snapshotRows()
       .map((r) => (r.deleted ? JSON.stringify(redactTombstone(JSON.parse(r.data) as El)) : r.data))
@@ -809,6 +833,13 @@ export class ElementRoom {
     return entry
   }
 
+  /** SNAPSHOT_REUSE: the same clock, or at most maxRowsBehind rows and maxAgeMs behind the board. */
+  private snapshotReusable(c: { clock: number; at: number }, clock: number, now: number): boolean {
+    if (c.clock === clock) return true
+    if (now - c.at > SNAPSHOT_REUSE.maxAgeMs) return false
+    return this.store.countSince(c.clock) <= SNAPSHOT_REUSE.maxRowsBehind
+  }
+
   dropSnapshotCache(): void {
     this.snapshotCache = null
   }
@@ -821,6 +852,8 @@ export class ElementRoom {
   // ---- presence and lease ticks -------------------------------------------------------------------
 
   private presenceTick(): void {
+    // a peer's join reaches everyone before its first cursor does
+    this.rosterBatch.flush()
     const recipients = [...this.sessions]
       .filter((s) => s.welcomed && !s.closed)
       .map((s) => ({
@@ -848,13 +881,15 @@ export class ElementRoom {
   // ---- the room queue and the drain ---------------------------------------------------------------
 
   private enqueue(e: QueueEntry): void {
+    const fresh = this.queue.length === 0
     this.queue.push(e)
-    this.schedule()
+    this.schedule(fresh)
   }
 
-  private schedule(): void {
+  /** `fresh`: the entry just queued opened a new batch (pacing.ts holds it when the room is busy). */
+  private schedule(fresh = false): void {
     if (this.drainTimer || this.draining || this.closed || !this.queue.length) return
-    const wait = this.lastCommitAt + DRAIN.minCommitIntervalMs - this.deps.now()
+    const wait = this.pacer.delay(this.deps.now(), this.lastCommitAt, DRAIN.minCommitIntervalMs, fresh)
     if (wait > 0)
       this.drainTimer = setTimeout(() => {
         this.drainTimer = null
@@ -1079,6 +1114,8 @@ export class ElementRoom {
     this.deps.metrics.commitMs.observe(t1 - t0)
     if (pushes) this.deps.metrics.pushesPerCommit.observe(pushes)
     this.lastCommitAt = this.deps.now()
+    this.pacer.noteCommit(this.lastCommitAt)
+    if (clock !== startClock) this.catchUps.clear()
     store.meta.clock = clock
     // the cached reset snapshot stays valid for its 5 s: a joiner gets it plus a catch-up since its clock
     // (§2.4.5), so a join storm on a busy board compresses one snapshot, not one per write
@@ -1157,6 +1194,7 @@ export class ElementRoom {
     this.store = new BoardStore(this.deps.path)
     this.rebuildCaches()
     this.snapshotCache = null
+    this.catchUps.clear()
     for (const s of [...this.sessions]) {
       s.closeWith(CLOSE_RECONNECT, 'RECONNECT')
       this.metricsClose(CLOSE_RECONNECT, 'RECONNECT')
@@ -1313,6 +1351,7 @@ export class ElementRoom {
   close(): void {
     if (this.closed) return
     this.closed = true
+    this.rosterBatch.close()
     for (const t of this.timers) clearInterval(t)
     if (this.drainTimer) {
       clearTimeout(this.drainTimer as ReturnType<typeof setTimeout>)
@@ -1423,12 +1462,6 @@ export function serverOp(before: WireElement | null, after: WireElement): Server
 }
 
 const storedRows = (c: { live: number; dead: number }) => c.live + c.dead
-
-/** A catch-up row as it travels: the stored element, a tombstone redacted (W5-02). */
-const catchUpOp = (r: { el: WireElement; deleted: boolean }): ServerOp => ({
-  k: 'c',
-  el: r.deleted || r.el.isDeleted ? redactTombstone(r.el as El) : r.el,
-})
 
 /** The ack result of an op the room could not even parse (stage 0). */
 export const invalidResult = (id: string): AckResult => ({ id, ok: false, code: 'INVALID', el: null })

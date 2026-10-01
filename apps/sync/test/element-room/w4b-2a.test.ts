@@ -1,7 +1,7 @@
 // Wave 4b, owner 2A (the sync room and the contracts), against the REAL sync server process
 // (DRAFTROOM_ENGINE=excalidraw). Each case failed on 747d41d (the wave-4a integration) and passes with the
 // fix it names:
-//   DEF-3F-1      a join within 5 s of a board-document write: the `changes` frame after the cached reset
+//   DEF-3F-1      a join while the reset snapshot is cached after a board-document write: the `changes` frame after the cached reset
 //                 snapshot carries the doc keys written since (and the welcome their clocks, rev 9)
 //   V1 low        doc-key clocks in the welcome and the snapshot (CONTRACTS_REV 9, the client's ABA rule)
 //   V2 low P-X1   a tombstone takes no patch but its undelete: a re-delete is a no-op, the rest is GONE
@@ -108,8 +108,11 @@ describe('DEF-3F-1 and the doc-key clocks (CONTRACTS_REV 9)', () => {
       expect(ch2?.doc?.set[TAG]).toBeNull()
       expect(dave.c.schemaErrors).toEqual([])
 
-      // a fresh snapshot (the cache aged out) carries the clocks too
-      await new Promise((r) => setTimeout(r, 5_200))
+      // a fresh snapshot carries the clocks too. The cache no longer ages out in 5 s (element-room.ts
+      // SNAPSHOT_REUSE: reused while the board is within 500 rows and 60 s of its clock, the performance round
+      // after B9); a delete still drops it at once (W5-02), so one makes the next joiner's snapshot fresh
+      const n1 = alice.confirmed.get('n1')
+      await alice.push([{ k: 'p', id: 'n1', pv: n1?.version, g: { life: { isDeleted: true } } }])
       const erin = await spy(st, { boardId: b, user: 'erin', role: 'viewer' })
       const snap3 = erin.frames.find((f) => f.type === 'snapshot') as
         | { docClocks?: Record<string, number> }

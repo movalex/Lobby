@@ -14,10 +14,11 @@ import { Meter, messageType, probePointer, probeSentAt } from './meter.ts'
 import { parsePrometheus } from './metrics.ts'
 import { boardsOf, buildPlans, membersOf, probeSids, signedTickets } from './plan.ts'
 import { DRY, L1, L2, plannedWritesPerSecond, sessionCount } from './profiles.ts'
-import { ackedButMissing, histogramOver, visibilitySamples } from './report.ts'
+import { ackedButMissing, counterTotals, histogramOver, phasesOf, visibilitySamples } from './report.ts'
+import { partitionPlans } from './runner.ts'
 import { chunkCreates, SEED_MAX_BYTES } from './seed.ts'
 import type { SessionReport } from './session.ts'
-import { percentile, Recorder } from './stats.ts'
+import { percentile, Recorder, summarize } from './stats.ts'
 import { loadUser, mintTicket, newRunSecrets, runEnvText, secretsFromEnv } from './tickets.ts'
 
 const dirs: string[] = []
@@ -115,6 +116,37 @@ describe('profiles and plans', () => {
     expect([...members.keys()].sort()).toEqual([...boards.keys()].sort())
     expect(probeSids(plans).size).toBe(1)
   })
+  it('thin sessions: the last ones of a marked group, measuring first in the ramp, all on worker 0', () => {
+    const s = newRunSecrets()
+    const plans = buildPlans(L1, boardsOf(L1), signedTickets(s.ticketSecret))
+    const thin = plans.filter((p) => p.thin)
+    // L1: 50 of the 60 editor-role watchers, 4 of the 5 measuring viewers plus the probe, all 95 viewers
+    expect(thin.length).toBe(50 + 5 + 95)
+    expect(thin.every((p) => p.group.kind === 'watcher')).toBe(true)
+    const probe = [...probeSids(plans).values()][0] // a sid: `<uid>:<tab>`
+    const sid = (p: (typeof plans)[number]) => `${p.user.uid}:${p.key}`
+    expect(plans.find((p) => sid(p) === probe)?.thin).toBe(true)
+    // a measuring group without thin sessions keeps its probe on the full core (the DRY profile)
+    const dry = buildPlans(DRY, boardsOf(DRY), signedTickets(s.ticketSecret))
+    expect(dry.some((p) => p.thin)).toBe(false)
+    expect(sid(plans[0] as (typeof plans)[number])).toBe(probe) // the probe joins first, the other measuring sessions next
+    expect(plans.slice(1, 5).every((p) => p.group.measureVisibility)).toBe(true)
+    const parts = partitionPlans(plans, 5)
+    expect(parts.length).toBe(5)
+    expect(parts[0]?.length).toBe(thin.length)
+    expect(parts[0]?.every((p) => p.thin)).toBe(true)
+    expect(
+      parts
+        .slice(1)
+        .flat()
+        .some((p) => p.thin),
+    ).toBe(false)
+    expect(parts.slice(1).map((p) => p.length)).toEqual([28, 28, 27, 27])
+    // one thread, or no thin session: plain round-robin
+    expect(partitionPlans(plans, 1).map((p) => p.length)).toEqual([260])
+    const full = plans.filter((p) => !p.thin)
+    expect(partitionPlans(full, 3).map((p) => p.length)).toEqual([37, 37, 36])
+  })
 })
 
 describe('meter', () => {
@@ -167,6 +199,45 @@ describe('seeding, stats and the report joins', () => {
     )
     expect(h).toEqual({ n: 100, p50: 5, p95: 25, p99: Number.POSITIVE_INFINITY, mean: 8 })
     expect(histogramOver([], 'lobby_receive_to_ack_ms')).toBeNull()
+    // sync restarted between scrape 2 and 3 (the SIGKILL): its counters start from 0 again
+    const r = histogramOver(
+      [
+        scrape(0, text(10, 10, 10, 20, 3)),
+        scrape(1, text(60, 105, 110, 820, 7)),
+        scrape(2, text(4, 5, 6, 60, 2)),
+        scrape(3, text(8, 10, 12, 120, 2)),
+      ],
+      'lobby_receive_to_ack_ms',
+    )
+    expect(r?.n).toBe(112)
+    expect(r?.mean).toBe(Math.round((920 / 112) * 10) / 10)
+  })
+  it('sums counters across a restart, per label set', () => {
+    const t = (a: number, b: number) =>
+      [`lobby_closes_total{code="4000",reason="x"} ${a}`, `lobby_outbound_bytes_total ${b}`].join('\n')
+    const scrape = (at: number, x: string) => ({ at, ok: true, status: 200, samples: parsePrometheus(x) })
+    const s = [scrape(0, t(1, 100)), scrape(1, t(3, 500)), scrape(2, t(0, 50)), scrape(3, t(2, 80))]
+    expect(counterTotals(s, 'lobby_outbound_bytes_total')).toEqual({ lobby_outbound_bytes_total: 480 })
+    expect(counterTotals(s, 'lobby_closes_total')).toEqual({ 'code=4000,reason=x': 4 })
+    const ph = phasesOf(
+      [
+        { t: 5_000, cpuPct: 40, memMB: 100 },
+        { t: 70_000, cpuPct: 60, memMB: 120, anonMB: 110 },
+        { t: 490_000, cpuPct: 90, memMB: 90 },
+      ],
+      { joinRampMs: 60_000, killAtMs: 480_000, endMs: 600_000 },
+    )
+    expect(ph.map((p) => [p.name, p.cpuMaxPct, p.anonMaxMB])).toEqual([
+      ['join storm', 40, null],
+      ['steady state', 60, 110],
+      ['reconnect storm (60 s after the kill)', 90, null],
+      ['after', null, null],
+    ])
+  })
+  it('summarizes 300,000 samples (L2 visibility: 10 measuring sessions x 12,000 edits) without a spread', () => {
+    const big = Array.from({ length: 300_000 }, (_, i) => (i * 7919) % 1_000)
+    // 7919 and 1000 are coprime: every residue 0..999 appears 300 times (nearest rank: 499, 949, 989)
+    expect(summarize(big)).toEqual({ n: 300_000, p50: 499, p95: 949, p99: 989, max: 999, mean: 499.5 })
   })
   it('chunks creates within 500 ops and 500 KiB, a label with its note', () => {
     const b = l1Board('seed-x')
@@ -209,7 +280,22 @@ describe('seeding, stats and the report joins', () => {
     expect(ackedButMissing([s], { stored, method: 't' })).toMatchObject({
       checked: 2,
       missing: 1,
+      unresolved: 0,
       ids: ['n2'],
+    })
+    // the same difference while a push of n2 was still out without an ack at the end: unresolved, not missing
+    const pending = { ...s, pendingAtEnd: ['n2'] } as SessionReport
+    expect(ackedButMissing([pending], { stored, method: 't' })).toMatchObject({
+      checked: 2,
+      missing: 0,
+      unresolved: 1,
+      ids: ['n2 (pending)'],
+      samples: [{ id: 'n2', acked: { x: 1 }, stored: { x: 2 }, pending: true }],
+    })
+    // a stored element that is gone is missing even with a pending push
+    expect(ackedButMissing([pending], { stored: new Map([['n1', { x: 5 }]]), method: 't' })).toMatchObject({
+      missing: 1,
+      unresolved: 0,
     })
     expect(ackedButMissing([s], { stored: null, method: 't' }).method).toMatch(/UNVERIFIED/)
   })

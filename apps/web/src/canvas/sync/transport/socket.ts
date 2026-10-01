@@ -54,6 +54,8 @@ export interface SocketTransportOptions {
   /** reconnect after a non-terminal close (default true) */
   readonly reconnect?: boolean
   readonly backoffMs?: readonly number[]
+  /** the source of the reconnect jitter (tests); default Math.random */
+  readonly random?: () => number
   readonly setTimer?: (fn: () => void, ms: number) => unknown
   readonly clearTimer?: (h: unknown) => void
   /** every inbound frame, decoded (the headless client's `received()`), before validation drops anything */
@@ -74,6 +76,18 @@ export interface SocketTransport extends Transport {
 }
 
 const DEFAULT_BACKOFF = [250, 500, 1000, 2000, 4000, 5000] as const
+/**
+ * Each reconnect delay is drawn from [delay × (1 − JITTER), delay × (1 + JITTER)]: when the server goes
+ * away, every open tab loses its socket in the same instant, and without jitter they all come back in
+ * the same few milliseconds (B9: 260 sessions, one burst of 260 hellos and 260 welcomes in the restart's
+ * first second on a 0.5 CPU container). Spread by ±30 %, the fourth attempt (2 s) lands over about 1.2 s
+ * and the storm is a ramp. The longest wait stays under 7 s (5 s × 1.3), well inside §2.13's 30 s.
+ */
+export const RECONNECT_JITTER = 0.3
+/** `delay` with the jitter applied (`random` in [0, 1); Math.random by default). */
+export function jitteredDelay(delay: number, random: () => number = Math.random): number {
+  return Math.round(delay * (1 - RECONNECT_JITTER + random() * 2 * RECONNECT_JITTER))
+}
 /** The close a dead (silent) socket is reported with. */
 export const HEARTBEAT_CLOSE = { code: 4000, reason: 'heartbeat' } as const
 export const HEARTBEAT_MS = 15_000
@@ -250,7 +264,7 @@ export function createSocketTransport(opts: SocketTransportOptions): SocketTrans
 
   const scheduleReconnect = () => {
     if (stopped || timer !== null) return
-    const ms = backoff[Math.min(failures, backoff.length - 1)] ?? 5000
+    const ms = jitteredDelay(backoff[Math.min(failures, backoff.length - 1)] ?? 5000, opts.random)
     failures++
     timer = setTimer(() => {
       timer = null

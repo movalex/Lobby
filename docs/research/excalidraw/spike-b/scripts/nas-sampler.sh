@@ -4,31 +4,55 @@
 # every 30 s `du -sm` of the run folder; one JSON line per sample into the run's host file, which the load
 # generator reads into its report. Above the 2,048 MB cap it stops the run (load, then sync) and writes a
 # STOP marker. It ends when the load container is no longer running. POSIX sh; names only draftroom-spike-*.
+# Besides, every 1 s, the sync container's anonymous memory from its cgroup (memory.stat `anon`: the
+# process's heap and stacks, without the page cache that `docker stats` also leaves out), so a short peak
+# (the conversion worker's heap) between two 10 s samples is seen. Read-only, from /sys/fs/cgroup.
 # Usage (by nas-run.sh): nohup sh sampler.sh <folder> <host-jsonl> <cap-mb> >/dev/null 2>&1 &
 S="$1"
 OUT="$2"
 CAP="$3"
+running() { docker ps --filter name=^draftroom-spike-load$ --filter status=running -q | grep -q .; }
+(
+  id=""
+  while running; do
+    [ -n "$id" ] || id=$(docker inspect --format '{{.Id}}' draftroom-spike-sync 2>/dev/null)
+    f="/sys/fs/cgroup/system.slice/docker-$id.scope/memory.stat"
+    if [ -n "$id" ] && [ -r "$f" ]; then
+      a=$(awk '$1 == "anon" {printf "%.1f", $2 / 1048576}' "$f")
+      [ -n "$a" ] && echo "{\"at\":$(($(date +%s%N) / 1000000)),\"anonMB\":$a}" >>"$OUT"
+    fi
+    sleep 1
+  done
+) &
 i=0
-while docker ps --filter name=^draftroom-spike-load$ --filter status=running -q | grep -q .; do
+while running; do
   t=$(($(date +%s%N) / 1000000))
   line=$(docker stats --no-stream --format '{{.CPUPerc}} {{.MemUsage}}' draftroom-spike-sync 2>/dev/null)
   cpu=$(echo "$line" | awk '{gsub("%","",$1); printf "%.1f", $1 / 0.5}')
   mem=$(echo "$line" | awk '{m=$2; v=m+0; if (m ~ /GiB/) v=v*1024; else if (m ~ /KiB/) v=v/1024; else if (m ~ /^[0-9.]+B$/) v=v/1048576; printf "%.1f", v}')
+  # the load generator too (CPU as % of its 4 CPUs, memory MB): a client-bound run shows here, next to the
+  # workers' own event-loop delay in the report
+  lline=$(docker stats --no-stream --format '{{.CPUPerc}} {{.MemUsage}}' draftroom-spike-load 2>/dev/null)
+  lcpu=$(echo "$lline" | awk '{gsub("%","",$1); printf "%.1f", $1 / 4}')
+  lmem=$(echo "$lline" | awk '{m=$2; v=m+0; if (m ~ /GiB/) v=v*1024; else if (m ~ /KiB/) v=v/1024; else if (m ~ /^[0-9.]+B$/) v=v/1048576; printf "%.1f", v}')
+  load=""
+  [ -n "$lline" ] && load=",\"loadCpuPct\":${lcpu:-0},\"loadMemMB\":${lmem:-0}"
   folder=""
   if [ $((i % 3)) -eq 0 ]; then
     mb=$(du -sm "$S" 2>/dev/null | cut -f1)
     folder=",\"folderMB\":${mb:-0}"
     if [ "${mb:-0}" -gt "$CAP" ]; then
-      echo "{\"at\":$t,\"stop\":\"folder over ${CAP} MB\"}" >> "$OUT"
+      echo "{\"at\":$t,\"stop\":\"folder over ${CAP} MB\"}" >>"$OUT"
       docker stop draftroom-spike-load >/dev/null 2>&1
       docker stop draftroom-spike-sync >/dev/null 2>&1
-      echo "STOP folder ${mb} MB > ${CAP} MB" > "$S/reports/STOP"
+      echo "STOP folder ${mb} MB > ${CAP} MB" >"$S/reports/STOP"
       break
     fi
   fi
   if [ -n "$line" ]; then
-    echo "{\"at\":$t,\"cpuPct\":${cpu:-0},\"memMB\":${mem:-0}${folder}}" >> "$OUT"
+    echo "{\"at\":$t,\"cpuPct\":${cpu:-0},\"memMB\":${mem:-0}${load}${folder}}" >>"$OUT"
   fi
   i=$((i + 1))
   sleep 10
 done
+wait
