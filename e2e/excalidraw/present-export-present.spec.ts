@@ -23,6 +23,7 @@ import {
   expect,
   expectSaved,
   item,
+  itemBounds,
   items,
   select,
   selection,
@@ -50,6 +51,7 @@ import {
   expectSlideOnScreen,
   focusMode,
   NOTE_FILL,
+  pngPixels,
   presentUi,
   roundView,
   seedDeck,
@@ -156,6 +158,86 @@ test.describe('present mode', () => {
     await nextFrames(a.page)
     expect(roundView(await viewport(a.page))).toEqual(roundView(before))
     expect(await a.page.evaluate(() => document.fullscreenElement === null)).toBe(true)
+  })
+
+  test("W5-24: a slide shows no frame outline: the engine's grey rounded frame border stays under the surround", async ({
+    canvasSession,
+  }) => {
+    const a = await canvasSession('alice')
+    await seedDeck(a.page, DECK)
+    await zoomToFit(a.page)
+    const ui = presentUi(a.page)
+    await ui.button.click()
+    await expect(ui.counter).toHaveText('1 / 2')
+    await expectSlideOnScreen(a.page, F.intro)
+    await nextFrames(a.page)
+    // The frame's edges on screen (the slide fills the height, so its sides are inside the window).
+    const f = await itemBounds(a.page, F.intro)
+    if (!f) throw new Error('no frame')
+    const tl = await canvasCall(a.page, 'sceneToScreen', { x: f.x, y: f.y })
+    const br = await canvasCall(a.page, 'sceneToScreen', { x: f.x + f.width, y: f.y + f.height })
+    const midY = Math.round((tl.y + br.y) / 2)
+    const points: { x: number; y: number }[] = []
+    for (let d = -3; d <= 5; d++) {
+      points.push({ x: Math.round(tl.x) + d, y: midY }) // across the left edge
+      points.push({ x: Math.round(br.x) - 1 - d, y: midY }) // across the right edge
+    }
+    // the corner, where the engine rounds its outline (8 px)
+    points.push(
+      { x: Math.round(tl.x) + 2, y: Math.round(tl.y) + 2 },
+      { x: Math.round(tl.x) + 1, y: Math.round(tl.y) + 3 },
+    )
+    const shot = await a.page.screenshot()
+    const px = await pngPixels(a.page, shot, points)
+    // Every pixel is the surround (dark) or the slide's white: none is the outline's grey (#bbb).
+    const grey = px.filter(([r, g, b]) => {
+      const lum = 0.2126 * r + 0.7152 * g + 0.0722 * b
+      return lum > 120 && lum < 235 && Math.max(r, g, b) - Math.min(r, g, b) < 24
+    })
+    expect(grey, `outline-grey pixels at the slide's edges: ${JSON.stringify(px)}`).toEqual([])
+    await a.page.keyboard.press('Escape')
+    await expect(ui.overlay).toHaveCount(0)
+  })
+
+  test('W5-47: leaving the presentation gives the keyboard back to the Present button it was opened from, and the presentation shows a focus ring', async ({
+    canvasSession,
+  }) => {
+    const a = await canvasSession('alice')
+    await seedDeck(a.page, DECK)
+    await zoomToFit(a.page)
+    const ui = presentUi(a.page)
+    const ring = () =>
+      ui.overlay.evaluate((el) => {
+        const s = getComputedStyle(el)
+        return {
+          focused: document.activeElement === el,
+          style: s.outlineStyle,
+          width: Number.parseFloat(s.outlineWidth),
+        }
+      })
+
+    // Keyboard: focus the Present button, Enter; the presentation takes the focus and shows it.
+    await ui.button.focus()
+    await a.page.keyboard.press('Enter')
+    await expect(ui.overlay).toBeVisible()
+    await expect.poll(ring).toEqual({ focused: true, style: 'solid', width: 2 })
+    await a.page.keyboard.press('Escape')
+    await expect(ui.overlay).toHaveCount(0)
+    // The top bar (and its Present button) is rendered again after focus mode: the focus lands on it,
+    // not on the canvas, and stays there.
+    await expect(ui.button).toBeFocused()
+    await nextFrames(a.page)
+    await nextFrames(a.page)
+    await expect(ui.button).toBeFocused()
+
+    // With the mouse: click Present, then Exit; the focus goes back to Present too.
+    await ui.button.click()
+    await expect(ui.overlay).toBeVisible()
+    await ui.exit.click()
+    await expect(ui.overlay).toHaveCount(0)
+    await expect(ui.button).toBeFocused()
+    await nextFrames(a.page)
+    await expect(ui.button).toBeFocused()
   })
 
   test("present: a collaborator's cursor disappears from the presenter's slides and comes back after present-exit", async ({

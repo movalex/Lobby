@@ -9,6 +9,13 @@
  * canvas is created (the board page attaches it first: canvas/board/session.ts `attach`), and a stub
  * naming 3e on a bare port (the contracts test's canvas), which has no engine to export from.
  *
+ * File cards (W5-14): every export that fetches bytes (`files` other than `canvas`) draws each card's
+ * whole face (./export-faces.ts) instead of its bare cover: the export's resolver answers a card's
+ * version with a bitmap of the face, made for this export only and released after it.
+ *
+ * Notes in an SVG (W5-37) get tldraw's soft export shadow instead of the engine's hard offset one
+ * (./export-svg-notes.ts).
+ *
  * `copy` does not read the board's export policy: the canvas has no policy store, so every caller checks
  * it first (present-export's commands and dialog, through features/sharing/ported/export-policy.ts), and
  * the api refuses originals to people the policy limits whatever the client does.
@@ -32,6 +39,9 @@ function writeClipboard(type: 'image/png' | 'text/plain', data: Promise<Blob>): 
   return clip.write([new Item({ [type]: data })])
 }
 
+/** Device pixels per card unit of a face in an SVG (sharp when the SVG is viewed at 2×). */
+const SVG_FACE_RATIO = 2
+
 export function createExportPart(deps: PartDeps): LobbyExport {
   const engine = boardEngineOf(deps.registries)
   if (!engine)
@@ -53,12 +63,56 @@ export function createExportPart(deps: PartDeps): LobbyExport {
   // the exporters load with the first export: the engine's export code stays out of the board's first
   // load, and out of Node (the contracts test builds this part on a bare port)
   const scene = () => import('../../export/scene.ts')
-  const png = async (opts: ExportOptions = {}) => (await scene()).exportScenePng(ctx(), opts)
-  const svg = async (opts: ExportOptions = {}) => (await (await scene()).exportSceneSvg(ctx(), opts)).text
+
+  /** Runs one export with the file cards' faces in its files map (see the header). */
+  const withFaces = async <T>(
+    opts: ExportOptions,
+    as: 'bitmap' | 'svg',
+    run: (c: SceneExportContext) => Promise<T>,
+  ): Promise<T> => {
+    const base = ctx()
+    const source = opts.files ?? (as === 'svg' ? 'display' : 'original')
+    if (!base.boardId || source === 'canvas') return run(base)
+    const [faces, { mediaMetaStore }] = await Promise.all([
+      import('./export-faces.ts'),
+      import('../../../file-card/ported/meta.ts'),
+    ])
+    const cards = faces.cardsByVersion(base.api.getSceneElements() as never)
+    if (cards.size === 0) return run(base)
+    const session = faces.faceSession(
+      base.resolver,
+      cards,
+      {
+        boardId: base.boardId,
+        meta: mediaMetaStore,
+        ...(base.fetchImpl ? { fetchImpl: base.fetchImpl } : {}),
+      },
+      as === 'svg'
+        ? { pixelRatio: SVG_FACE_RATIO, type: 'image/webp' }
+        : { pixelRatio: Math.max(1, Math.min(4, opts.scale ?? 1)), type: 'image/png' },
+    )
+    try {
+      return await run({ ...base, resolver: session.resolver })
+    } finally {
+      session.release()
+    }
+  }
+
+  const png = (opts: ExportOptions = {}) =>
+    withFaces(opts, 'bitmap', async (c) => (await scene()).exportScenePng(c, opts))
+  const svg = (opts: ExportOptions = {}) =>
+    withFaces(opts, 'svg', async (c) => {
+      const [{ exportSceneSvg }, { softenNoteShadows }] = await Promise.all([
+        scene(),
+        import('./export-svg-notes.ts'),
+      ])
+      return softenNoteShadows((await exportSceneSvg(c, opts)).text)
+    })
   return {
     svg,
     png,
-    canvas: async (opts = {}) => (await (await scene()).exportSceneCanvas(ctx(), opts)).canvas,
+    canvas: (opts = {}) =>
+      withFaces(opts, 'bitmap', async (c) => (await (await scene()).exportSceneCanvas(c, opts)).canvas),
     copy(format, opts = {}) {
       if (format === 'png') return writeClipboard('image/png', png(opts))
       return writeClipboard(
