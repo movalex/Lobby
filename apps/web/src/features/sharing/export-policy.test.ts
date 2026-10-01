@@ -17,6 +17,7 @@ import { getController } from '../present-export/controller.ts'
 import {
   boardExportState,
   clientExportAllowed,
+  clientGuestsLimited,
   clientLinkWillLimit,
   EXPORT_OFF_TEXT,
   exportAllowed,
@@ -26,9 +27,13 @@ import {
   exportPolicyOf,
   exportPolicySentence,
   guardExport,
+  guestsMayExport,
+  policyWithGuests,
+  policyWithViewers,
   refreshExportPolicy,
   saveExportPolicy,
   syncExportPolicy,
+  viewersMayExport,
 } from './export-policy.ts'
 
 let n = 0
@@ -105,7 +110,12 @@ function mount(opts: { role?: 'owner' | 'editor' | 'commenter' | 'viewer'; conne
 
 describe('the Export dialog sentence follows the policy (F9)', () => {
   it('says who may export for each policy, and nothing while it is unknown', () => {
-    expect(exportPolicySentence('everyone')).toBe('Everyone who can view the board can export it.')
+    expect(exportPolicySentence('everyone')).toBe(
+      'Everyone who can view the board with an account can export it; guests who joined with just a name can’t.',
+    )
+    expect(exportPolicySentence('everyone-including-guests')).toBe(
+      'Everyone who can view the board can export it, guests included.',
+    )
     expect(exportPolicySentence('editors')).toBe(
       'Only editors can export this board: viewers, commenters and guests can’t.',
     )
@@ -133,6 +143,38 @@ describe("the Share dialog's client card line (DANA2-01)", () => {
     expect(clientExportAllowed('everyone', false)).toBe(false)
     expect(clientExportAllowed('everyone', true)).toBe(true)
     expect(clientExportAllowed('everyone', null)).toBeNull()
+    expect(clientExportAllowed('everyone-including-guests', false)).toBe(true)
+    expect(clientExportAllowed('everyone-including-guests', null)).toBe(true)
+  })
+
+  it("audit L3: the card's line about name-only clients shows only under a stored 'everyone'", () => {
+    expect(clientGuestsLimited('everyone', true)).toBe(true)
+    expect(clientGuestsLimited('everyone', false)).toBe(false) // the first client link turns it off anyway
+    expect(clientGuestsLimited('everyone', null)).toBe(false)
+    expect(clientGuestsLimited('editors', true)).toBe(false)
+    expect(clientGuestsLimited('everyone-including-guests', true)).toBe(false)
+    expect(clientGuestsLimited(null, true)).toBe(false)
+  })
+})
+
+describe("the Share dialog's two checkboxes (audit L3)", () => {
+  it('viewers: on unless editors-only; guests: on only under everyone-including-guests', () => {
+    expect(viewersMayExport('everyone')).toBe(true)
+    expect(viewersMayExport('everyone-including-guests')).toBe(true)
+    expect(viewersMayExport('editors')).toBe(false)
+    expect(guestsMayExport('everyone')).toBe(false)
+    expect(guestsMayExport('editors')).toBe(false)
+    expect(guestsMayExport('everyone-including-guests')).toBe(true)
+  })
+
+  it('turning viewers off is editors-only; turning them back on never brings guests along; guests are a separate choice', () => {
+    expect(policyWithViewers('everyone', false)).toBe('editors')
+    expect(policyWithViewers('everyone-including-guests', false)).toBe('editors')
+    expect(policyWithViewers('editors', true)).toBe('everyone')
+    expect(policyWithViewers('everyone', true)).toBe('everyone')
+    expect(policyWithViewers('everyone-including-guests', true)).toBe('everyone-including-guests')
+    expect(policyWithGuests(true)).toBe('everyone-including-guests')
+    expect(policyWithGuests(false)).toBe('everyone')
   })
 
   it('the store learns whether the policy is stored from answers, and every event means it is', async () => {
@@ -170,7 +212,12 @@ describe('exportAllowedWith', () => {
     expect(exportAllowedWith('owner', 'editors', true)).toBe(false)
     expect(exportAllowedWith('editor', 'editors', false)).toBe(true)
     expect(exportAllowedWith('editor', 'editors', null)).toBe(true)
-    expect(exportAllowedWith('editor', 'everyone', true)).toBe(true)
+    // Audit L3: under 'everyone' too; only the owner's explicit 'everyone-including-guests' lets them.
+    expect(exportAllowedWith('editor', 'everyone', true)).toBe(false)
+    expect(exportAllowedWith('viewer', 'everyone', true)).toBe(false)
+    expect(exportAllowedWith('viewer', 'everyone', false)).toBe(true)
+    expect(exportAllowedWith('viewer', 'everyone-including-guests', true)).toBe(true)
+    expect(exportAllowedWith('editor', 'everyone-including-guests', true)).toBe(true)
     // The board store follows the kind too.
     const boardId = newBoardId()
     const s = boardExportState(boardId)
@@ -183,14 +230,23 @@ describe('exportAllowedWith', () => {
 })
 
 describe('what the canvas may load from originals (SEAM-10)', () => {
-  it('only when exporting is certainly allowed: the policy is known, and it is open or the person is an editor with an account', () => {
+  it('only when exporting is certainly allowed: the policy is known, and it includes guests or the role and kind are known and allow it', () => {
     const boardId = newBoardId()
     const s = boardExportState(boardId)
     expect(exportCertainOnBoard(boardId)).toBe(false) // nothing known yet
+    s.policy.set('everyone-including-guests')
+    expect(exportCertainOnBoard(boardId)).toBe(true) // whoever asks
     s.policy.set('everyone')
-    expect(exportCertainOnBoard(boardId)).toBe(true)
+    expect(exportCertainOnBoard(boardId)).toBe(false) // role and kind unknown: a name-only guest is limited (L3)
+    s.role.set('viewer')
+    expect(exportCertainOnBoard(boardId)).toBe(false) // kind unknown
+    s.guest.set(false)
+    expect(exportCertainOnBoard(boardId)).toBe(true) // a viewer with an account
+    s.guest.set(true)
+    expect(exportCertainOnBoard(boardId)).toBe(false)
+    s.guest.set(null)
     s.policy.set('editors')
-    expect(exportCertainOnBoard(boardId)).toBe(false) // role unknown
+    expect(exportCertainOnBoard(boardId)).toBe(false) // kind unknown
     s.role.set('editor')
     expect(exportCertainOnBoard(boardId)).toBe(false) // kind unknown
     s.guest.set(false)

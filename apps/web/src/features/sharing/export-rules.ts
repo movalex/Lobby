@@ -8,6 +8,7 @@ import {
   type ExportPolicy,
   ExportPolicyState,
   exportAllowedFor,
+  policyIncludesGuests,
 } from '@draftroom/contracts'
 import type { ApiClient } from '../../api/client.ts'
 import type { NoticeInput } from '../../board/board-context.ts'
@@ -30,8 +31,9 @@ export function exportAllowedWith(
 }
 
 /**
- * Whether this person CERTAINLY may export: the policy is known, and it is 'everyone' or they are an
- * editor or owner with an account. Unlike exportAllowedWith, anything unknown counts as no.
+ * Whether this person CERTAINLY may export: the policy is known, and it includes guests, or the role and
+ * the kind are known and allow it (under 'everyone', anyone with an account; under 'editors', an editor
+ * or owner with an account). Unlike exportAllowedWith, anything unknown counts as no.
  */
 export function exportCertainWith(
   role: BoardRole | null,
@@ -39,21 +41,50 @@ export function exportCertainWith(
   guest: boolean | null,
 ): boolean {
   if (policy === null) return false
-  if (policy === 'everyone') return true
+  if (policyIncludesGuests(policy)) return true
   if (role === null || guest === null) return false
   return exportAllowedFor(role, policy, { nameOnlyGuest: guest })
 }
 
 /**
- * DANA2-01, the Share dialog's client card: whether people who join through a client link (viewers,
- * commenters, name-only guests) may download files and export. A board that still uses the default
- * counts as off, since the first client link turns it off. null while that is unknown.
+ * DANA2-01, the Share dialog's client card: whether people who join through a client link may download
+ * files and export. A board that still uses the default counts as off, since the first client link
+ * turns it off. null while that is unknown. Under 'everyone' this is about clients with an account:
+ * clientGuestsLimited says whether the card needs its line about name-only guests.
  */
 export function clientExportAllowed(policy: ExportPolicy | null, stored: boolean | null): boolean | null {
   if (policy === null) return null
   if (policy === 'editors') return false
+  if (policyIncludesGuests(policy)) return true
   return stored
 }
+
+/**
+ * Audit L3: the client card says On under a stored 'everyone', yet a client who joined with just a name
+ * is still limited until the owner includes guests. True when that line is due.
+ */
+export const clientGuestsLimited = (policy: ExportPolicy | null, stored: boolean | null): boolean =>
+  policy === 'everyone' && stored === true
+
+// ---- the Share dialog's two checkboxes (ExportPolicySection) ---------------------------------------
+
+/** The first checkbox: viewers and commenters with an account may export, copy and download. */
+export const viewersMayExport = (policy: ExportPolicy): boolean => policy !== 'editors'
+
+/** The second checkbox: name-only guests may too (only the owner's explicit 'everyone-including-guests'). */
+export const guestsMayExport = (policy: ExportPolicy): boolean => policyIncludesGuests(policy)
+
+/**
+ * The policy after the first checkbox changes: off is 'editors'; on is 'everyone', with guests out until
+ * the owner includes them (turning it back on never brings guests along).
+ */
+export function policyWithViewers(current: ExportPolicy, on: boolean): ExportPolicy {
+  if (!on) return 'editors'
+  return current === 'editors' ? 'everyone' : current
+}
+
+/** The policy after the guests checkbox changes (offered only while viewers may export). */
+export const policyWithGuests = (on: boolean): ExportPolicy => (on ? 'everyone-including-guests' : 'everyone')
 
 /**
  * DANA2-01: the Share dialog's "Creating a client link turns this off…" line, for a board nobody chose
@@ -74,7 +105,10 @@ export function clientLinkWillLimit(opts: {
  * policy is unknown, rather than a guess.
  */
 export function exportPolicySentence(policy: ExportPolicy | null): string {
-  if (policy === 'everyone') return 'Everyone who can view the board can export it.'
+  if (policy === 'everyone-including-guests')
+    return 'Everyone who can view the board can export it, guests included.'
+  if (policy === 'everyone')
+    return 'Everyone who can view the board with an account can export it; guests who joined with just a name can’t.'
   if (policy === 'editors') return 'Only editors can export this board: viewers, commenters and guests can’t.'
   return ''
 }

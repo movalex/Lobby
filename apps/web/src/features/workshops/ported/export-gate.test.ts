@@ -12,5 +12,7 @@ describe('the vote CSV export gate', () => {
     expect(exportAllowedWith('editor', 'editors', false)).toBe(true)
     expect(exportAllowedWith('editor', 'editors', true)).toBe(false) // a name-only guest is limited
     expect(exportAllowedWith('owner', 'editors', null)).toBe(true)
+    expect(exportAllowedWith('editor', 'everyone', true)).toBe(false) // under 'everyone' too (audit L3)
+    expect(exportAllowedWith('editor', 'everyone-including-guests', true)).toBe(true) // the owner's explicit choice
   })
 })

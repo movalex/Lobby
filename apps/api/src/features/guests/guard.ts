@@ -8,9 +8,13 @@
 // creating boards, projects, invitations and links; managing people and links; requesting access;
 // moving a board between projects or changing its workspace access (PATCH /api/boards/:bid with
 // `projectId` or `visibility`: a guest editor may still rename it). HEAD requests count as the GET
-// they mirror.
-// Invitations and links are also refused inside their own routes (routes/invitations.ts,
-// features/dashboard/review-links.ts), so a renamed route cannot slip past this list.
+// they mirror. Also link previews (security audit L2): the api fetches public pages on behalf of people
+// with an account only, since a guest identity costs nothing but a name and every per-person budget
+// multiplies by the guests one person can create (the canvas never asks for a guest anyway: their links
+// must be Lobby-relative, canvas-schema isAllowedLink).
+// Invitations, links and link previews are also refused inside their own routes (routes/invitations.ts,
+// features/dashboard/review-links.ts, features/link-preview), so a renamed route cannot slip past this
+// list.
 //
 // It also keeps guests confined from the other side: nobody can add a guest to a board they did not
 // join through a guest link, or make a guest an owner. (Changing a guest's role on their board, or
@@ -39,6 +43,9 @@ const PEOPLE = 'Guests see the people on their own boards only.'
  */
 export const DELETED_GUESTS =
   'Recently deleted is for editors with an account. Sign in with an account to use it.'
+/** POST /api/boards/:bid/link-preview (features/link-preview, which refuses it itself too). */
+export const LINK_PREVIEW_GUESTS =
+  'Link previews are for people with an account. Sign in with an account to add link cards.'
 
 /** `METHOD route-pattern` → the message a signed-in guest gets (403 GUEST_ACCOUNT_REQUIRED). */
 export const GUEST_REFUSED_ROUTES: Readonly<Record<string, string>> = {
@@ -69,6 +76,8 @@ export const GUEST_REFUSED_ROUTES: Readonly<Record<string, string>> = {
   'POST /api/access-requests/:id/approve': MANAGE,
   'POST /api/access-requests/:id/deny': MANAGE,
   'POST /api/boards/:bid/access-requests': REQUEST,
+  // outbound fetches on the caller's behalf (audit L2)
+  'POST /api/boards/:bid/link-preview': LINK_PREVIEW_GUESTS,
 }
 
 export const guestRefused = (message: string) => new ApiError(403, 'GUEST_ACCOUNT_REQUIRED', message)

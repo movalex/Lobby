@@ -233,6 +233,7 @@ describe('shipped migrations', () => {
       '0020_comment_visibility',
       '0021_domain_access',
       '0022_engine_migration',
+      '0023_export_policy_guests',
     ])
   })
 
@@ -261,6 +262,7 @@ describe('shipped migrations', () => {
       '0020_comment_visibility',
       '0021_domain_access',
       '0022_engine_migration',
+      '0023_export_policy_guests',
     ])
     expect(await migrate(db)).toEqual({ applied: [], newer: [] })
     expect(await tableNames()).toEqual([
@@ -352,6 +354,7 @@ describe('shipped migrations', () => {
       '0020_comment_visibility',
       '0021_domain_access',
       '0022_engine_migration',
+      '0023_export_policy_guests',
     ])
     expect(await recorded()).toEqual(shipped.map((m) => m.name))
     const inv = await db.one<{ multi_use: boolean; use_count: number }>(

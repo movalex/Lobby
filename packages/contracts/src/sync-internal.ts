@@ -86,7 +86,13 @@ export const FileRef = z.strictObject({
   pageCount: z.number().int().nonnegative().nullable(),
 })
 export type FileRef = z.infer<typeof FileRef>
-/** Every asked id appears in exactly one list: `ok` (in this board's workspace), `foreign` (another workspace), `missing`. */
+/**
+ * Every asked id appears in exactly one list: `ok` (a version the board shows), `missing` (no such
+ * version, or one the board cannot show: another workspace, or an unlinked board of the same one). The
+ * api once told the second case apart as `foreign`; since the wave-4b security fixes (audit L4) it
+ * answers both as `missing` and leaves `foreign` empty, kept here for the shape. Readers treat the two
+ * lists alike (sync: `INVALID`).
+ */
 export const FileRefsResponse = z.strictObject({
   ok: z.array(FileRef),
   foreign: z.array(FileRefVersionId),

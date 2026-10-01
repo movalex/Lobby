@@ -94,6 +94,9 @@ describe('export gate', () => {
     expect(exportAllowedWith('editor', 'editors', false)).toBe(true)
     expect(exportAllowedWith('editor', 'editors', true)).toBe(false)
     expect(exportAllowedWith('viewer', 'everyone', false)).toBe(true)
+    // audit L3: a name-only guest is limited under 'everyone' too; only 'everyone-including-guests' lets them
+    expect(exportAllowedWith('editor', 'everyone', true)).toBe(false)
+    expect(exportAllowedWith('editor', 'everyone-including-guests', true)).toBe(true)
   })
   it('stops a copy of the selection only, never text in a field', () => {
     const base = { allowed: false, onBoard: true, editing: false, selected: 1, inEditable: false }
