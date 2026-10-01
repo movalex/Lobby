@@ -10,6 +10,7 @@
 //  - the Miro keys, keyboard safety and Ctrl+U as commands and keys (./commands.ts, ./keys.ts): the key
 //    registry dispatches them before the allowlist (canvas/input/keymap.ts), which keeps type-to-edit,
 //    Enter on a text and the tool letters;
+//  - the polygon tools of D4 (./polygons.ts, ./PolygonPreview.tsx), in the toolbar's More;
 //  - defaults (snapping on, sans text; ./defaults.ts), double-click empty canvas for a note, the context
 //    menu on right-click and RETRO-02 (./canvas-events.ts), Tab for the next note (./notes.ts), Enter to
 //    place a shape or rename a frame (./place.ts, ./FrameRename.tsx), the locked hint and locked frames
@@ -33,6 +34,8 @@ import { FrameRename } from './FrameRename.tsx'
 import { KEYS } from './keys.ts'
 import { installLockedHint, LockedFrameBadges, LockedHintBar } from './LockedHint.tsx'
 import { MAIN_MENU_ENTRIES, MainMenu } from './MainMenu.tsx'
+import { PolygonPreview } from './PolygonPreview.tsx'
+import { polygonTools } from './polygons.ts'
 import { SELECTION_BAR_ITEMS, SelectionBar } from './SelectionBar.tsx'
 import { ShortcutsDialog } from './ShortcutsDialog.tsx'
 import { StylePanel } from './StylePanel.tsx'
@@ -101,12 +104,21 @@ export const feature: CanvasFeature = {
   id: 'canvas-ux',
   commands: COMMANDS,
   keys: KEYS,
+  // D4: the polygon tools (triangle, hexagon, rhombus, star, cloud, heart, block arrows; ./polygons.ts)
+  tools: polygonTools(),
   contextMenu: CONTEXT_MENU_ENTRIES,
   mainMenu: MAIN_MENU_ENTRIES,
   selectionBar: SELECTION_BAR_ITEMS,
   overlays: [
     { id: 'canvas-ux.locked-frames', layer: 'scene', order: 5, component: LockedFrameBadges },
     { id: 'canvas-ux.frame-rename', layer: 'scene', order: 40, pointer: 'auto', component: FrameRename },
+    {
+      id: 'canvas-ux.polygon-preview',
+      layer: 'scene',
+      order: 45,
+      pointer: 'none',
+      component: PolygonPreview,
+    },
     { id: 'canvas-ux.locked-hint', layer: 'screen', order: 30, pointer: 'auto', component: LockedHintBar },
     {
       id: 'canvas-ux.export-guest',

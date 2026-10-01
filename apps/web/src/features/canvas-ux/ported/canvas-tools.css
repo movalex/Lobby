@@ -260,18 +260,6 @@
 .cux-style__opacity input {
   width: 100%;
 }
-.cux-style__heads {
-  display: flex;
-  gap: 6px;
-}
-.cux-style__head {
-  flex: 1;
-  min-width: 0;
-}
-.cux-style__head select {
-  width: 100%;
-  height: 26px;
-}
 .cux-style__opt:focus-visible,
 .cux-style__swatch:focus-visible {
   outline: 2px solid var(--dr-focus);
@@ -473,4 +461,84 @@
   color: var(--dr-ink);
   font: 14px / 20px var(--dr-font);
   pointer-events: auto;
+}
+
+/* ---- D4: the polygon being dragged out (./PolygonPreview.tsx) ------------------------------------------ */
+.cux-polygon-preview {
+  position: absolute;
+  overflow: visible;
+  pointer-events: none;
+}
+.cux-polygon-preview path {
+  fill: none;
+  stroke: var(--dr-focus);
+  stroke-width: 1.5;
+  stroke-dasharray: 5 4;
+  vector-effect: non-scaling-stroke;
+}
+
+/* ---- W5-33: Undo and Redo left of the tools on a wider canvas (./QuickActions.tsx HistoryBar) --------- */
+.cux-history {
+  position: absolute;
+  right: calc(100% + 6px);
+  bottom: 0;
+  padding: 4px;
+  border-radius: 12px;
+}
+.cux-history .cux-quick__btn {
+  width: 34px;
+  height: 38px;
+}
+
+/* ---- W5-31: 44 px tool buttons on a phone-width canvas (./toolbar-layout.ts PHONE_SLOT_PX) ------------ */
+.cux-toolbar-wrap[data-tool-size="44"] .cux-tool {
+  width: 44px;
+  height: 44px;
+}
+.cux-toolbar-wrap[data-tool-size="44"] .cux-quick__btn {
+  width: 36px;
+  height: 36px;
+}
+[data-lobby-board-canvas]:has(.cux-toolbar-wrap[data-quick="toolbar"][data-tool-size="44"]) .dr-wk-stack {
+  bottom: 122px;
+}
+
+/* ---- W5-41: the note palette's legend in Lobby's muted ink (the shared rule falls back to tldraw's dark
+   text, 1.03:1 on the dark panel) --------------------------------------------------------------------- */
+.cux-style .dr-note-palette__legend {
+  color: var(--dr-ink-2);
+}
+
+/* ---- W5-40: a more compact panel; icon pickers; the opacity label with its value ----------------------- */
+.cux-style .cux-style__row {
+  margin-bottom: 4px;
+}
+.cux-style .cux-style__legend {
+  padding: 1px 2px 3px;
+}
+.cux-style .cux-style__opt {
+  height: 24px;
+}
+.cux-style__options--icons {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(28px, 1fr));
+}
+.cux-style__opt--icon {
+  display: grid;
+  place-items: center;
+  min-width: 0;
+  height: 28px;
+  padding: 0;
+}
+.cux-style__opacity-label {
+  display: flex;
+  justify-content: space-between;
+}
+.cux-style__value {
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+.cux-style__opt--icon:focus-visible {
+  outline: 2px solid var(--dr-focus);
+  outline-offset: 1px;
 }

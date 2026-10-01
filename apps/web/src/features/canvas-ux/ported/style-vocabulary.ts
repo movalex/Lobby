@@ -11,6 +11,7 @@
 // with a filter in dark mode, so only light values are stored (THEME_FILTER shows a swatch as drawn).
 //
 // Pure.
+import { LOBBY_FONT_FAMILIES } from '@draftroom/canvas-schema/limits'
 import type { MixedStyles, StyleValues } from '../../../canvas/api/index.ts'
 import { NOTE_PALETTE, type NoteColorName } from '../palette.ts'
 
@@ -224,13 +225,32 @@ export function sizeNameOf(value: unknown, scale: Readonly<Record<SizeName, numb
   return gap <= 0.01 ? best : null
 }
 
-export const FONTS = ['draw', 'sans', 'mono'] as const
-export type FontName = (typeof FONTS)[number]
-export const FONT_LABELS: Readonly<Record<FontName, string>> = { draw: 'Draw', sans: 'Sans', mono: 'Mono' }
-/** Excalifont 5, Nunito 6, Comic Shanns 8 (canvas-schema LOBBY_FONT_FAMILIES); tldraw's serif has none. */
-export const FONT_FAMILY: Readonly<Record<FontName, number>> = { draw: 5, sans: 6, mono: 8 }
+const ALL_FONTS = ['draw', 'sans', 'display', 'mono'] as const
+export type FontName = (typeof ALL_FONTS)[number]
+export const FONT_LABELS: Readonly<Record<FontName, string>> = {
+  draw: 'Draw',
+  sans: 'Sans',
+  display: 'Display',
+  mono: 'Mono',
+}
+/**
+ * Excalifont 5, Nunito 6, Lilita One 7 (D3: the templates' headings), Comic Shanns 8; tldraw's serif has
+ * none. canvas-schema's LOBBY_FONT_FAMILIES is the server's allowlist.
+ */
+export const FONT_FAMILY: Readonly<Record<FontName, number>> = { draw: 5, sans: 6, display: 7, mono: 8 }
+/** W5-40: the face each font button is drawn in (the engine's own font faces). */
+export const FONT_FACE: Readonly<Record<FontName, string>> = {
+  draw: 'Excalifont',
+  sans: 'Nunito',
+  display: 'Lilita One',
+  mono: 'Comic Shanns',
+}
+/** The fonts the style panel offers: those the server's allowlist takes (Display once it takes 7, D3). */
+export const FONTS: readonly FontName[] = ALL_FONTS.filter((f) =>
+  (LOBBY_FONT_FAMILIES as readonly number[]).includes(FONT_FAMILY[f]),
+)
 export const fontNameOf = (family: unknown): FontName | null =>
-  FONTS.find((f) => FONT_FAMILY[f] === family) ?? null
+  ALL_FONTS.find((f) => FONT_FAMILY[f] === family) ?? null
 
 export const ALIGNS = ['left', 'center', 'right'] as const
 export type AlignName = (typeof ALIGNS)[number]

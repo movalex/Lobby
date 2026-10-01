@@ -4,15 +4,19 @@
 //   Board ▸   the `board` entries, then the `ai` ones (the start view, "Hide note authors", AI on this board)
 //   Edit ▸    the `clipboard`, `edit`, `arrange` and `select` entries (undo, redo, cut, copy, duplicate,
 //             delete, group, lock, select all…)
-//   View ▸    the `view` entries (zoom, minimap…)
+//   View ▸    the `view` entries: zoom in and out, 100%, fit, selection and the minimap (W5-33: canvas-ux
+//             lists navigation's camera commands there; a row whose command is missing does not show)
 //   Export ▸  the `export` entries (or, while exporting is off for this person, the line saying so)
-//   the other groups' entries, then Preferences ▸ (Always snap, Show grid) and Keyboard shortcuts.
+//   the other groups' entries, then Preferences ▸ (Always snap, Show grid, Theme ▸ System / Light /
+//   Dark: W5-33, the app's theme as the top bar's picker sets it) and Keyboard shortcuts. Edit ▸ has
+//   Paste (W5-33).
 // tldraw's Language submenu stays out (DANA-13), and so does its debug mode. "Hide note authors" (FAC-07
 // partial / RETRO-03a) is the same synced setting as the workshop popover's checkbox; read-only people see
 // its state, disabled.
 import { useEffect, useRef } from 'react'
 import type { CanvasFeatureContext, MenuEntrySpec, MenuGroup, MenuTarget } from '../../../canvas/api/index.ts'
 import { useValue } from '../../../lib/signals.ts'
+import { getTheme, THEME_PREFERENCES, type ThemePreference } from '../../../theme/theme.ts'
 import { EXPORT_OFF_ENTRY, gatedEntries } from './ContextMenu.tsx'
 import { CMD } from './commands.ts'
 import { MenuIcon } from './icons.tsx'
@@ -37,6 +41,7 @@ export const MAIN_MENU_ENTRIES: readonly MenuEntrySpec[] = [
   { id: 'redo', group: 'edit', order: 20, label: '', command: CMD.redo, kbdHint: 'mod+shift+z' },
   { id: 'cut', group: 'clipboard', order: 10, label: '', command: CMD.cut, kbdHint: 'mod+x' },
   { id: 'copy', group: 'clipboard', order: 20, label: '', command: CMD.copy, kbdHint: 'mod+c' },
+  { id: 'paste', group: 'clipboard', order: 25, label: '', command: CMD.paste, kbdHint: 'mod+v' },
   { id: 'duplicate', group: 'clipboard', order: 30, label: '', command: CMD.duplicate, kbdHint: 'mod+d' },
   { id: 'delete', group: 'clipboard', order: 40, label: '', command: CMD.delete, kbdHint: 'delete' },
   { id: 'group', group: 'arrange', order: 10, label: '', command: CMD.group, kbdHint: 'mod+g' },
@@ -46,7 +51,36 @@ export const MAIN_MENU_ENTRIES: readonly MenuEntrySpec[] = [
   { id: 'select-all', group: 'select', order: 10, label: '', command: CMD.selectAll, kbdHint: 'mod+a' },
   { id: 'select-none', group: 'select', order: 20, label: '', command: CMD.selectNone },
   EXPORT_OFF_ENTRY,
+  // W5-33: View ▸ (navigation's commands; the entry ids are the commands', so navigation's own entry of
+  // the same id, should it add one, is the same row)
+  ...(
+    [
+      ['navigation.zoom-in', 10],
+      ['navigation.zoom-out', 20],
+      ['navigation.zoom-to-100', 30],
+      ['navigation.zoom-to-fit', 40],
+      ['navigation.zoom-to-selection', 50],
+      ['navigation.toggle-minimap', 60],
+    ] as const
+  ).map(
+    ([command, order]): MenuEntrySpec => ({
+      id: command,
+      group: 'view',
+      order,
+      label: '',
+      command,
+      ...(command === 'navigation.zoom-to-selection'
+        ? { visible: (ctx: CanvasFeatureContext) => ctx.canvas.selection.length > 0 }
+        : {}),
+    }),
+  ),
 ]
+
+const THEME_LABELS: Readonly<Record<ThemePreference, string>> = {
+  system: 'System',
+  light: 'Light',
+  dark: 'Dark',
+}
 
 const EDIT_GROUPS: readonly MenuGroup[] = ['clipboard', 'edit', 'arrange', 'select']
 const TOP_GROUPS: readonly MenuGroup[] = ['frame', 'collaborate', 'workshop', 'organize', 'danger']
@@ -60,6 +94,8 @@ export function mainMenuRows(ctx: CanvasFeatureContext): MenuRow[][] {
   const target: MenuTarget = { ids: ctx.canvas.selection, point: null, hit: null }
   const rows = (groups: readonly MenuGroup[]) => groupRows(entries, ctx, target, 'menu', groups)
   const settings = ctx.canvas.settings.get()
+  // the app's theme controller (none without a document: the unit tests)
+  const theme = typeof document === 'undefined' ? null : getTheme()
   const top: MenuRow[] = [
     sub('dr-board', 'Board', rows(['board', 'ai'])),
     sub('edit', 'Edit', rows(EDIT_GROUPS)),
@@ -88,6 +124,28 @@ export function mainMenuRows(ctx: CanvasFeatureContext): MenuRow[][] {
           run: () => ctx.canvas.settings.set({ grid: !ctx.canvas.settings.get().grid }),
         },
       ],
+      ...(theme
+        ? [
+            [
+              {
+                id: 'theme',
+                label: 'Theme',
+                disabled: false,
+                submenu: [
+                  THEME_PREFERENCES.map(
+                    (pref): MenuRow => ({
+                      id: `theme-${pref}`,
+                      label: THEME_LABELS[pref],
+                      disabled: false,
+                      checked: theme.getPreference() === pref,
+                      run: () => theme.setPreference(pref),
+                    }),
+                  ),
+                ],
+              },
+            ],
+          ]
+        : []),
     ],
   }
   const help: MenuRow = {

@@ -2,7 +2,7 @@
 // ../ContextMenu.tsx over tldraw's DefaultContextMenu): Lobby's own menu, from every feature's
 // `contextMenu` entries (./Menu.tsx), opened by a right-click (the engine's own menu never opens) or by
 // Shift+F10 / the menu key for the selection (A11Y-04). canvas-ux's own entries, in tldraw's words:
-// Cut / Copy / Duplicate, Group / Ungroup / Toggle locked / Delete, Arrange (align, distribute) and
+// Cut / Copy / Paste (W5-33) / Duplicate, Group / Ungroup / Toggle locked / Delete, Arrange (align, distribute) and
 // Reorder, Select all, and MAK-05 "Unlock all" while the board has locked elements (a locked element
 // cannot be selected by a click, so this is where people look). Other features add theirs (Comment, AI,
 // mind map, tags, arrange as grid, select by type, the start view, the exports). While exporting is off
@@ -10,7 +10,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { CanvasFeatureContext, MenuEntrySpec, MenuTarget } from '../../../canvas/api/index.ts'
 import { useValue } from '../../../lib/signals.ts'
-import { CMD, hasLocked, selectedRoots } from './commands.ts'
+import { CMD, hasLocked, pasteFromMenu, selectedRoots } from './commands.ts'
 import { EXPORT_OFF_MENU_LABEL, exportAllowed, notifyExportOff } from './export-gate.ts'
 import { EXPORTING_ENTRIES, groupRows, MenuList } from './Menu.tsx'
 import { uxState } from './state.ts'
@@ -47,6 +47,17 @@ export const CONTEXT_MENU_ENTRIES: readonly MenuEntrySpec[] = [
     label: '',
     command: CMD.copy,
     visible: (c) => editable(c) && atLeast(1)(c),
+  },
+  {
+    // W5-33: Paste where the menu opened (tldraw's context menu has it)
+    id: 'paste',
+    group: 'clipboard',
+    order: 25,
+    label: '',
+    command: CMD.paste,
+    visible: editable,
+    run: (ctx, target) =>
+      void pasteFromMenu(ctx, target.point ? ctx.canvas.sceneToScreen(target.point) : undefined),
   },
   {
     id: 'duplicate',
