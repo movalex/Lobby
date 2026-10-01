@@ -8,6 +8,7 @@ import {
   type FamilyInfo,
   fontFaceRule,
   inRanges,
+  LOBBY_FONT_FAMILIES,
   parseUnicodeRange,
   selectFaces,
   selfContainedProblems,
@@ -43,6 +44,12 @@ describe('exportElements', () => {
     expect(
       exportElements(els, { only: new Set(['F']), isHidden: (id) => hidden.has(id) }).map((e) => e.id),
     ).toEqual(['F'])
+  })
+})
+
+describe('the families an export may embed', () => {
+  it('are the server allowlist, Lilita One (7, decision D3) included', () => {
+    expect([...LOBBY_FONT_FAMILIES]).toEqual([5, 6, 7, 8])
   })
 })
 

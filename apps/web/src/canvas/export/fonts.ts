@@ -9,8 +9,11 @@
 // `Fonts.registered`: the same faces Excalidraw registers, with their same-origin URLs after the host
 // rewrite) and handed in here as plain data, so this file is unit-tested in Node.
 
-/** Lobby's families (§3.5: the server refuses any other `fontFamily`). */
-export const LOBBY_FONT_FAMILIES = [5, 6, 8] as const
+/**
+ * Lobby's families (§3.5: the server refuses any other `fontFamily`): the server's own allowlist, so this list
+ * cannot fall behind it (it said [5, 6, 8] after D3 added Lilita One, 7, at wave 5).
+ */
+export { LOBBY_FONT_FAMILIES } from '@draftroom/canvas-schema/limits'
 
 /** One registered face as the exporter needs it. */
 export interface FaceInfo {
