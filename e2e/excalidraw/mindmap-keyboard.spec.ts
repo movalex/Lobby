@@ -226,3 +226,51 @@ test('mind map: fast typing never loses a key; Shift+Tab moves up a level; an em
     await expect.poll(() => selection(a.page)).toEqual([byText(v, 'Idea').id])
   })
 })
+
+test('W5-44: Esc after typing into a topic, at a person’s pace, leaves it selected; the arrows go on moving through the map', async ({
+  canvasSession,
+}) => {
+  // the accessibility review typed with pauses (each editor open and settled before the next key):
+  // Esc then left nothing selected, so ArrowUp did nothing
+  const a = await canvasSession('alice')
+  await ready(a.page)
+  await focusBoard(a.page)
+  await setTool(a.page, 'mindmap')
+  await waitForTyping(a.page)
+  await a.page.keyboard.type('Root')
+  await a.page.keyboard.press('Tab')
+  await waitForTyping(a.page)
+  await expect.poll(() => editingText(a.page)).toBe('')
+  await a.page.keyboard.type('Child one')
+  await a.page.keyboard.press('Enter')
+  await waitForTyping(a.page)
+  await expect.poll(() => editingText(a.page)).toBe('')
+  await a.page.keyboard.type('Child two')
+  await a.page.waitForTimeout(800)
+  await a.page.keyboard.press('Escape')
+  await expect.poll(() => editingId(a.page)).toBeNull()
+  await expect
+    .poll(async () => structure(await mapView(a.page)))
+    .toEqual(['(root) Root', 'Root > Child one', 'Root > Child two'])
+  const v = await mapView(a.page)
+  await expect.poll(() => selection(a.page)).toEqual([byText(v, 'Child two').id])
+  // still selected once the layout after the edit has run
+  await a.page.waitForTimeout(600)
+  expect(await selection(a.page)).toEqual([byText(v, 'Child two').id])
+  await a.page.keyboard.press('ArrowUp')
+  await expect.poll(() => selection(a.page)).toEqual([byText(v, 'Child one').id])
+
+  await test.step('F2 on an existing topic, words, a pause, Esc: the topic stays selected', async () => {
+    await a.page.keyboard.press('F2')
+    await waitForTyping(a.page)
+    await a.page.keyboard.type(' edited')
+    await a.page.waitForTimeout(800)
+    await a.page.keyboard.press('Escape')
+    await expect.poll(() => editingId(a.page)).toBeNull()
+    await expect.poll(() => selection(a.page)).toEqual([byText(v, 'Child one').id])
+    await a.page.waitForTimeout(600)
+    expect(await selection(a.page)).toEqual([byText(v, 'Child one').id])
+    await a.page.keyboard.press('ArrowDown')
+    await expect.poll(() => selection(a.page)).toEqual([byText(v, 'Child two').id])
+  })
+})

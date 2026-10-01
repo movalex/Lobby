@@ -376,3 +376,13 @@ describe('runtime writes (a fake canvas)', () => {
     off()
   })
 })
+
+describe('W5-29: who may create a tag', () => {
+  it('editors only; never a name-only guest (the room refuses their tagDef writes, CR-3D-5)', async () => {
+    const { mayCreateTag, GUEST_CREATE_HINT } = await import('./TagPicker.tsx')
+    expect(mayCreateTag(false, false)).toBe(true)
+    expect(mayCreateTag(false, true)).toBe(false)
+    expect(mayCreateTag(true, false)).toBe(false)
+    expect(GUEST_CREATE_HINT).not.toMatch(/Created/)
+  })
+})

@@ -398,6 +398,10 @@ test('name-only guests follow their link’s role: a workshop (editor) guest tag
 }) => {
   const a = await canvasSession('alice')
   await taggedNotes([a.page], { [N1]: [RESEARCH] }, [RESEARCH, IDEA])
+  // DEF-3F-1 (2C): a join within 5 s of a board-document write gets the cached snapshot's old document, so
+  // the guest would not know the board's Idea tag yet (and, since W5-29, a guest cannot create it). This test
+  // is about roles: the guests join once the cache has moved on.
+  await a.page.waitForTimeout(5_500)
 
   const workshop = await createGuestLink(a.page, 'workshop')
   const editorGuest = await joinAsGuest(browser, workshop, 'Wes Guest')
@@ -411,6 +415,7 @@ test('name-only guests follow their link’s role: a workshop (editor) guest tag
       await selectIds(g, [N3])
       const picker = await openPicker(g)
       await picker.getByTestId('tag-picker-input').fill('Idea')
+      await expect(picker.locator('[data-tag-key="idea"]')).toBeVisible()
       await g.keyboard.press('Enter')
       await expect(chips(a.page, N3)).toHaveText(['Idea'], { timeout: 3_000 })
     })
@@ -440,7 +445,7 @@ test('a workshop (editor) guest creates a new tag from the picker: alice sees it
   // CR-3D-5: the room refuses every guest's lb_doc write (apps/sync/src/room/merge.ts applyDoc: `this.s.guest`),
   // so the new tag's definition never lands and the server refuses the note's `tag:<key>` with it. The
   // tldraw page let an editor guest create tags. Expected to fail until the room lets editor guests write
-  // `tagDef:` keys.
+  // `tagDef:` keys; then the picker's guest guard (W5-29, TagPicker.tsx mayCreateTag) comes off with this mark.
   test.fail()
   const a = await canvasSession('alice')
   await taggedNotes([a.page], { [N1]: [RESEARCH] }, [RESEARCH])
@@ -455,6 +460,38 @@ test('a workshop (editor) guest creates a new tag from the picker: alice sees it
     await picker.getByTestId('tag-picker-input').fill('From the workshop')
     await g.keyboard.press('Enter')
     await expect(chips(a.page, N3)).toHaveText(['From the workshop'], { timeout: 5_000 })
+  } finally {
+    await guest.context.close()
+  }
+})
+
+test('W5-29: a name-only guest is offered the board’s tags, never a Create that the room then refuses', async ({
+  browser,
+  canvasSession,
+}) => {
+  const a = await canvasSession('alice')
+  await taggedNotes([a.page], { [N1]: [RESEARCH] }, [RESEARCH])
+  const workshop = await createGuestLink(a.page, 'workshop')
+  const guest = await joinAsGuest(browser, workshop, 'Wes Guest')
+  try {
+    const g = guest.page
+    await tagsReady(g)
+    await cameraAt(g, { x: 360, y: 100 }, 1)
+    await selectIds(g, [N3])
+    const picker = await openPicker(g)
+    await expect(picker.getByTestId('tag-picker-input')).toHaveAttribute('placeholder', 'Find a tag')
+    await picker.getByTestId('tag-picker-input').fill('fans')
+    // no Create; the picker says why instead
+    await expect(picker.getByTestId('tag-create')).toHaveCount(0)
+    await expect(picker.getByTestId('tag-guest-hint')).toHaveText(/existing tags/)
+    await g.keyboard.press('Enter')
+    await expect(picker.getByTestId('tag-picker-status')).toHaveText(/existing tags/)
+    await expect(picker.getByTestId('tag-picker-status')).not.toHaveText(/Created/)
+    await expect(g.getByText('Change not saved')).toHaveCount(0)
+    // the board's own tag still goes on
+    await picker.getByTestId('tag-picker-input').fill('Research')
+    await g.keyboard.press('Enter')
+    await expect(chips(a.page, N3)).toHaveText(['Research'], { timeout: 10_000 })
   } finally {
     await guest.context.close()
   }
