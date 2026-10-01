@@ -31,6 +31,16 @@ export interface PhaseSummary {
   readonly anonMaxMB: number | null
 }
 
+export interface ClientThreadInfo {
+  readonly loopP99Ms: number
+  readonly loopMaxMs?: number
+  readonly rssMB?: number
+  readonly heapUsedMB?: number
+  readonly heapTotalMB?: number
+  readonly sessions: number
+  readonly fullCores: number
+}
+
 export interface RunMeta {
   readonly profile: string
   readonly startedAt: number
@@ -52,6 +62,8 @@ export interface RunMeta {
   readonly notes?: readonly string[]
   /** the client side's own event-loop delay per worker (a client-bound run makes the numbers suspect) */
   readonly clientLoopDelayP99Ms?: readonly number[]
+  /** per load worker: its loop delay, memory at the end, and how many sessions (full cores) it ran */
+  readonly clientThreads?: readonly ClientThreadInfo[]
 }
 
 export type Verdict = 'met' | 'missed' | 'not measured'
@@ -65,7 +77,14 @@ export interface Target {
 
 export interface RunReport {
   readonly meta: RunMeta
-  readonly latency: { readonly ack: Summary; readonly visibility: Summary; readonly presence: Summary }
+  readonly latency: {
+    readonly ack: Summary
+    readonly visibility: Summary
+    /** the probe cursor's delay at every session that parses presence (full cores included) */
+    readonly presence: Summary
+    /** the same at the thin measuring sessions only (worker 0, no engine core: no client-side queueing) */
+    readonly presenceThin: Summary
+  }
   readonly protocol: {
     readonly pushes: number
     readonly ops: number
@@ -113,6 +132,12 @@ export interface RunReport {
   readonly ackedButMissing: {
     readonly checked: number
     readonly missing: number
+    /**
+     * ids whose stored value differs from the last acked one while the session still had a push of that
+     * id out without an ack when the run ended (SessionReport.pendingAtEnd): the stored value may be that
+     * later push's; not a loss, not counted as missing, listed
+     */
+    readonly unresolved: number
     readonly method: string
     /** the first missing ids, and for up to 5 of them the last acked fields next to what is stored */
     readonly ids?: readonly string[]
@@ -120,6 +145,7 @@ export interface RunReport {
       id: string
       acked: Record<string, unknown>
       stored: Record<string, unknown> | null
+      pending?: boolean
     }[]
   }
   readonly echo: {
@@ -196,27 +222,45 @@ export interface FinalCheck {
 export function ackedButMissing(sessions: readonly SessionReport[], final: FinalCheck) {
   let checked = 0
   let missing = 0
+  let unresolved = 0
   const ids: string[] = []
-  const samples: { id: string; acked: Record<string, unknown>; stored: Record<string, unknown> | null }[] = []
+  const samples: {
+    id: string
+    acked: Record<string, unknown>
+    stored: Record<string, unknown> | null
+    pending?: boolean
+  }[] = []
   if (!final.stored)
-    return { checked, missing, method: `${final.method} (no readback: UNVERIFIED)`, ids, samples }
+    return {
+      checked,
+      missing,
+      unresolved,
+      method: `${final.method} (no readback: UNVERIFIED)`,
+      ids,
+      samples,
+    }
   for (const s of sessions)
     for (const [id, fields] of Object.entries(s.acked)) {
       const el = final.stored.get(id)
       checked++
       const same = el && Object.entries(fields).every(([k, v]) => JSON.stringify(el[k]) === JSON.stringify(v))
       if (!same) {
-        missing++
-        if (ids.length < 20) ids.push(id)
+        // a push of this id was still out without an ack when the session stopped: the stored value may
+        // be that push's (newer than the last acked one). Not a loss; listed, never hidden.
+        const pending = !!el && (s.pendingAtEnd ?? []).includes(id)
+        if (pending) unresolved++
+        else missing++
+        if (ids.length < 20) ids.push(pending ? `${id} (pending)` : id)
         if (samples.length < 5)
           samples.push({
             id,
             acked: fields,
             stored: el ? Object.fromEntries(Object.keys(fields).map((k) => [k, el[k]])) : null,
+            ...(pending ? { pending: true } : {}),
           })
       }
     }
-  return { checked, missing, method: final.method, ids, samples }
+  return { checked, missing, unresolved, method: final.method, ids, samples }
 }
 
 /** A metric by name and exact labels (O1's names, apps/sync/src/room/metrics.ts, first). */
@@ -374,6 +418,14 @@ export function buildReport(
   const ack = summarize(sessions.flatMap((s) => s.ackSamples))
   const visibility = summarize(visibilitySamples(sessions))
   const presence = summarize(sessions.flatMap((s) => s.presenceDelaySamples))
+  const presenceThin = summarize(sessions.filter((s) => s.thin).flatMap((s) => s.presenceDelaySamples))
+  // the §2.13 presence target is a server number: measured where no engine core shares the event loop
+  // (the thin measuring sessions, worker 0) when there are such sessions; else at every parsing session
+  const presenceGate = presenceThin.n > 0 ? presenceThin : presence
+  const presenceGateName =
+    presenceThin.n > 0
+      ? 'presence delay p95 (thin measuring sessions: no engine core on their worker)'
+      : 'presence delay p95'
   const rejects: Record<string, number> = {}
   const denied: Record<string, number> = {}
   const notices: Record<string, number> = {}
@@ -427,6 +479,7 @@ export function buildReport(
   const receivers = sessions.filter((s) => s.kind === 'watcher' && !s.thin)
   const abm = ackedButMissing(sessions, final)
   const eventLoopP99 = lastOf(scrapes, SERVER_METRICS.eventLoopP99, meta.startedAt)
+  const serverAck = histogramOver(scrapes, 'lobby_receive_to_ack_ms')
   const rssMax = host.some((h) => h.memMB !== undefined) ? Math.max(...host.map((h) => h.memMB ?? 0)) : null
   const anonMax = host.some((h) => h.anonMB !== undefined)
     ? Math.max(...host.map((h) => h.anonMB ?? 0))
@@ -450,6 +503,20 @@ export function buildReport(
   const targets: Target[] = [
     { name: 'ack p95', limit: '≤ 150 ms', value: ack.p95, verdict: verdict(ack.p95, (v) => v <= 150) },
     { name: 'ack p99', limit: '≤ 400 ms', value: ack.p99, verdict: verdict(ack.p99, (v) => v <= 400) },
+    // the same two limits against the server's own histogram (push received → ack sent; the value is the
+    // upper bound of the bucket that reaches the quantile), which has no client-side queueing in it
+    {
+      name: 'ack p95, server side (receive → ack, bucket upper bound)',
+      limit: '≤ 150 ms',
+      value: serverAck?.p95 ?? null,
+      verdict: verdict(serverAck?.p95 ?? null, (v) => v <= 150),
+    },
+    {
+      name: 'ack p99, server side (receive → ack, bucket upper bound)',
+      limit: '≤ 400 ms',
+      value: serverAck?.p99 ?? null,
+      verdict: verdict(serverAck?.p99 ?? null, (v) => v <= 400),
+    },
     {
       name: 'event-loop delay p99 (server)',
       limit: '≤ 50 ms',
@@ -469,10 +536,10 @@ export function buildReport(
       verdict: verdict(cpuMax, (v) => v <= 80),
     },
     {
-      name: 'presence delay p95',
+      name: presenceGateName,
       limit: '≤ 200 ms',
-      value: presence.p95,
-      verdict: verdict(presence.p95, (v) => v <= 200),
+      value: presenceGate.p95,
+      verdict: verdict(presenceGate.p95, (v) => v <= 200),
     },
     {
       name: 'backpressure closes at steady state',
@@ -503,7 +570,7 @@ export function buildReport(
   ]
   return {
     meta,
-    latency: { ack, visibility, presence },
+    latency: { ack, visibility, presence, presenceThin },
     protocol: {
       pushes: sessions.reduce((n, s) => n + s.pushes, 0),
       ops: sessions.reduce((n, s) => n + s.ops, 0),
@@ -568,6 +635,7 @@ export function buildReport(
     ackedButMissing: {
       checked: abm.checked,
       missing: abm.missing,
+      unresolved: abm.unresolved,
       method: abm.method,
       ids: abm.ids,
       samples: abm.samples,
@@ -581,7 +649,7 @@ export function buildReport(
       scrapes: scrapes.length,
       okScrapes: scrapes.filter((s) => s.ok).length,
       names: [...new Set(scrapes.flatMap((s) => s.samples.map((m) => m.name)))].sort(),
-      receiveToAckMs: histogramOver(scrapes, 'lobby_receive_to_ack_ms'),
+      receiveToAckMs: serverAck,
       commitMs: histogramOver(scrapes, 'lobby_commit_ms'),
       pushesPerCommit: histogramOver(scrapes, 'lobby_pushes_per_commit'),
       eventLoopP99Ms: eventLoopP99,
@@ -636,7 +704,7 @@ export function reportMarkdown(r: RunReport): string {
     '|---|---|',
     `| ack (ms) | ${s(r.latency.ack)} |`,
     `| A→B visibility through the server (ms) | ${s(r.latency.visibility)} |`,
-    `| presence delay (ms) | ${s(r.latency.presence)} |`,
+    `| presence delay (ms): every parsing session; thin measuring sessions only | ${s(r.latency.presence)}; ${s(r.latency.presenceThin)} |`,
     `| pushes/s, ops/s | ${fmt(r.protocol.pushesPerSec)} / ${fmt(r.protocol.opsPerSec)} |`,
     `| rejects by code | ${JSON.stringify(r.protocol.rejects)} |`,
     `| notices | ${JSON.stringify(r.protocol.notices)} |`,
@@ -650,7 +718,7 @@ export function reportMarkdown(r: RunReport): string {
     `| welcome JSON / snapshot bytes | ${s(r.welcome.jsonBytes)}; ${s(r.welcome.snapshotBytes)} |`,
     `| joins | ${r.joins.joined} joined, ${r.joins.failed} failed; ${s(r.joins.joinMs)} |`,
     `| restart | ${r.restart.sessionsBack}/${r.restart.sessionsAffected} back of ${r.restart.joinedBeforeKill} joined before the kill; all back ${fmt(r.restart.allBackFromKillMs, ' ms')} after the kill command (docker start returned after ${fmt(r.restart.restartCmdMs, ' ms')}), ${fmt(r.restart.allBackMs, ' ms')} after the first close seen; per session ${s(r.restart.backMs)}; harness reconnects ${r.restart.harnessReconnects} |`,
-    `| acked-but-missing | ${r.ackedButMissing.missing} of ${r.ackedButMissing.checked} (${r.ackedButMissing.method}) |`,
+    `| acked-but-missing | ${r.ackedButMissing.missing} of ${r.ackedButMissing.checked} (${r.ackedButMissing.method}); unresolved ${r.ackedButMissing.unresolved} (a push of the id still without an ack at the end)${r.ackedButMissing.ids?.length ? `; ids ${r.ackedButMissing.ids.join(', ')}` : ''} |`,
     `| echo (B10) | ${r.echo.receiversThatPushed} of ${r.echo.receivers} receivers pushed (${r.echo.receiverOps} ops) |`,
     `| server scrapes | ${r.server.okScrapes}/${r.server.scrapes} |`,
     `| server: push received → ack (ms, bucket bounds) | ${h(r.server.receiveToAckMs)} |`,
@@ -689,6 +757,16 @@ export function reportMarkdown(r: RunReport): string {
       `| every room keeps serving (acks in each 10 s window overlapping ${c.servingWindow ? `${Math.round(c.servingWindow.from / 1000)}-${Math.round(c.servingWindow.to / 1000)} s` : '—'}) | ${c.servingBoards} boards with editors x ${c.servingWindows} windows; boards with an idle window: ${c.boardsWithIdleWindows.length ? JSON.stringify(c.boardsWithIdleWindows) : 'none'} |`,
     )
   }
+  if (r.meta.clientThreads?.length)
+    lines.push(
+      '',
+      '| Load worker | loop p99 / max (ms) | rss / heap used / heap total (MB) | sessions (full cores) |',
+      '|---|---|---|---|',
+      ...r.meta.clientThreads.map(
+        (t, i) =>
+          `| ${i}${i === 0 && t.fullCores === 0 && t.sessions > 0 ? ' (thin)' : ''} | ${fmt(t.loopP99Ms)} / ${fmt(t.loopMaxMs ?? null)} | ${fmt(t.rssMB ?? null)} / ${fmt(t.heapUsedMB ?? null)} / ${fmt(t.heapTotalMB ?? null)} | ${t.sessions} (${t.fullCores}) |`,
+      ),
+    )
   if (r.meta.clientLoopDelayP99Ms?.length)
     lines.push(
       '',

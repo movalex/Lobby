@@ -30,6 +30,13 @@ while running; do
   line=$(docker stats --no-stream --format '{{.CPUPerc}} {{.MemUsage}}' draftroom-spike-sync 2>/dev/null)
   cpu=$(echo "$line" | awk '{gsub("%","",$1); printf "%.1f", $1 / 0.5}')
   mem=$(echo "$line" | awk '{m=$2; v=m+0; if (m ~ /GiB/) v=v*1024; else if (m ~ /KiB/) v=v/1024; else if (m ~ /^[0-9.]+B$/) v=v/1048576; printf "%.1f", v}')
+  # the load generator too (CPU as % of its 4 CPUs, memory MB): a client-bound run shows here, next to the
+  # workers' own event-loop delay in the report
+  lline=$(docker stats --no-stream --format '{{.CPUPerc}} {{.MemUsage}}' draftroom-spike-load 2>/dev/null)
+  lcpu=$(echo "$lline" | awk '{gsub("%","",$1); printf "%.1f", $1 / 4}')
+  lmem=$(echo "$lline" | awk '{m=$2; v=m+0; if (m ~ /GiB/) v=v*1024; else if (m ~ /KiB/) v=v/1024; else if (m ~ /^[0-9.]+B$/) v=v/1048576; printf "%.1f", v}')
+  load=""
+  [ -n "$lline" ] && load=",\"loadCpuPct\":${lcpu:-0},\"loadMemMB\":${lmem:-0}"
   folder=""
   if [ $((i % 3)) -eq 0 ]; then
     mb=$(du -sm "$S" 2>/dev/null | cut -f1)
@@ -43,7 +50,7 @@ while running; do
     fi
   fi
   if [ -n "$line" ]; then
-    echo "{\"at\":$t,\"cpuPct\":${cpu:-0},\"memMB\":${mem:-0}${folder}}" >>"$OUT"
+    echo "{\"at\":$t,\"cpuPct\":${cpu:-0},\"memMB\":${mem:-0}${load}${folder}}" >>"$OUT"
   fi
   i=$((i + 1))
   sleep 10

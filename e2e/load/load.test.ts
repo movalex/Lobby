@@ -272,7 +272,22 @@ describe('seeding, stats and the report joins', () => {
     expect(ackedButMissing([s], { stored, method: 't' })).toMatchObject({
       checked: 2,
       missing: 1,
+      unresolved: 0,
       ids: ['n2'],
+    })
+    // the same difference while a push of n2 was still out without an ack at the end: unresolved, not missing
+    const pending = { ...s, pendingAtEnd: ['n2'] } as SessionReport
+    expect(ackedButMissing([pending], { stored, method: 't' })).toMatchObject({
+      checked: 2,
+      missing: 0,
+      unresolved: 1,
+      ids: ['n2 (pending)'],
+      samples: [{ id: 'n2', acked: { x: 1 }, stored: { x: 2 }, pending: true }],
+    })
+    // a stored element that is gone is missing even with a pending push
+    expect(ackedButMissing([pending], { stored: new Map([['n1', { x: 5 }]]), method: 't' })).toMatchObject({
+      missing: 1,
+      unresolved: 0,
     })
     expect(ackedButMissing([s], { stored: null, method: 't' }).method).toMatch(/UNVERIFIED/)
   })

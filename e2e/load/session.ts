@@ -94,6 +94,11 @@ export interface SessionReport {
   readonly welcomeTimes?: readonly number[]
   /** acks received per 10 s window since the run start (window index → count): "every room keeps serving" */
   readonly ackWindows?: Readonly<Record<number, number>>
+  /**
+   * ids with a push sent but not acked when the session stopped (after waiting up to 10 s for Saved): the
+   * readback may hold a NEWER value than the last acked one for them, which is not a loss (report.ts)
+   */
+  readonly pendingAtEnd?: readonly string[]
 }
 
 export interface SessionContext {
@@ -164,6 +169,7 @@ export class LoadSession {
     reconnectsByHarness: 0,
     errors: [] as string[],
     ackWindows: {} as Record<number, number>,
+    pendingAtEnd: [] as string[],
   }
   private lastPushLogLen = 0
   private killSeenAt: number | null = null
@@ -616,6 +622,8 @@ export class LoadSession {
         this.note(e)
       }
     this.collectPushes()
+    // what is still out without an ack (the readback compares against the last ACKED value)
+    this.r.pendingAtEnd = [...new Set([...this.pushSentAt.values()].flatMap((p) => p.ids))]
     try {
       await this.client?.close()
     } catch {}

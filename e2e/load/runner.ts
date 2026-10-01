@@ -16,6 +16,11 @@ export function boardsFromSpecs(specs: readonly BoardSpec[]): Map<string, Genera
 export interface ThreadResult {
   readonly reports: SessionReport[]
   readonly loopDelayP99Ms: number
+  readonly loopDelayMaxMs?: number
+  /** the thread's memory when its sessions had stopped (MB) */
+  readonly memory?: { readonly rssMB: number; readonly heapUsedMB: number; readonly heapTotalMB: number }
+  readonly sessions?: number
+  readonly fullCores?: number
 }
 
 export interface RunOptions {
@@ -56,7 +61,16 @@ export async function runInThread(opts: RunOptions, createClient: ClientFactory)
   await Promise.all(sessions.map((s) => s.run()))
   await Promise.all(sessions.map((s) => s.stop()))
   loop.disable()
-  return { reports: sessions.map((s) => s.report()), loopDelayP99Ms: loop.percentile(99) / 1e6 }
+  const mu = process.memoryUsage()
+  const mb = (b: number) => Math.round(b / 1048576)
+  return {
+    reports: sessions.map((s) => s.report()),
+    loopDelayP99Ms: loop.percentile(99) / 1e6,
+    loopDelayMaxMs: loop.max / 1e6,
+    memory: { rssMB: mb(mu.rss), heapUsedMB: mb(mu.heapUsed), heapTotalMB: mb(mu.heapTotal) },
+    sessions: sessions.length,
+    fullCores: sessions.filter((s) => !(s.plan.thin && opts.createThinClient)).length,
+  }
 }
 
 /** What a worker thread gets (everything serializable; boards are regenerated from the profile). */
