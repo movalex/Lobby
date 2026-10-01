@@ -536,15 +536,9 @@ test('undo goes back at least 100 steps', async ({ canvasSession }) => {
 test('undo: typing into an empty note is one undo step (the note comes back empty, then goes)', async ({
   canvasSession,
 }) => {
-  // KNOWN DEFECT of the web engine's undo (spike-owned canvas/history and the editor lease, reported by
-  // 2E at wave 2): after typing "own words" into a note created empty, one undo leaves "o" (the first
-  // character is not in the text step) and further undos change nothing, so the note's create is never
-  // undone. A note created with text undoes correctly (the step-by-step test above). Acceptance test of
-  // the fix: expected to fail until then; delete the next line when it passes.
-  test.fail(
-    true,
-    'known defect: the first character typed into an empty note is not part of the text undo step',
-  )
+  // Was a known defect of the web engine's undo (wave 2: one undo left "o", the create was never undone);
+  // fixed by spike B's P6 fix (96f0676, history: a create absorbed before its step boundary is recorded as
+  // created), the mark removed at wave 5 (2C).
   const a = await canvasSession('alice')
   const n = await createNote(a.page, { x: 100, y: 100 })
   await expectSaved(a.page)

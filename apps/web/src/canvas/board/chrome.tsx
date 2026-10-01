@@ -264,7 +264,6 @@ function DragArrows({ canvas, session }: { canvas: LobbyCanvas; session: LobbyBo
           >
             {paths.map((p, i) => (
               <path
-                // biome-ignore lint/suspicious/noArrayIndexKey: the generator's paths of one shape, in order
                 key={i}
                 d={p.d}
                 stroke={p.stroke}
