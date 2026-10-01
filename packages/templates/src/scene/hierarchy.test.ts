@@ -92,10 +92,9 @@ describe('the display face (Lilita One, fontFamily 7)', () => {
     )
   })
 
-  // BLOCKED BY 2A (decision D3): canvas-schema's element check refuses fontFamily 7 until the font allowlist
-  // gains it (with the server's text metrics for Lilita One). Expected to fail until then; remove `.fails`
-  // when 2A's allowlist lands (the headings then switch to Lilita One by themselves).
-  it.fails("the server's element check accepts the display face (2A's font allowlist, D3)", () => {
+  // Decision D3: canvas-schema's element check accepts fontFamily 7 (Lilita One) since 2A's wave-5 allowlist
+  // change, with the server's text metrics for it; the template headings use it.
+  it("the server's element check accepts the display face (2A's font allowlist, D3)", () => {
     expect(DISPLAY_FACE_AVAILABLE).toBe(true)
   })
 
