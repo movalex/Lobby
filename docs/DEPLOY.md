@@ -665,6 +665,41 @@ The usual order: api (migration 0022 runs at start), then sync, then the web. No
 - **Roll-forward**: the Excalidraw build merges what R0's users changed (§5.9 step 3). It must read R0's `format: "lobby-elements"` backup entries, keep honouring `holdUntil`, and mirror R0's "Recently deleted" restores and trims into `lb_deleted` (open item 10).
 - **Drop-legacy (day 7 after the cut-over, owner OK; §5.9 step 5, §7.5 step 10).** After the 48 h window has closed and the owner says so, the Excalidraw sync removes the tldraw side of every converted board file: in the sync service's Shell, with the `int` helper of the cut-over runbook, `int POST /internal/migrate/drop-legacy '{"confirm":"drop-legacy","dryRun":true}'` first (202; the plan per board in `GET /internal/migrate/status`, kind `drop-legacy`, and in `/var/data/migration/<board>.drop-legacy.json`), then the same without `dryRun`. It drops `documents`, `metadata`, `objects`, `tombstones`, `dr_deleted_records`, `dr_deleted_schemas`, `lb_source` and every `lb_prev_*`, then `VACUUM`s, one board at a time in the migration worker; the tables the room serves are untouched. It refuses, per board, a board converted or rolled forward less than 7 days ago (`window`; `"force": true` overrides it and the report says `forced`), and **never** an unconverted board (`not-converted`) or one whose roll-forward is pending (`rollforward-pending`), forced or not. Without `{"confirm":"drop-legacy"}` it answers 400; while a convert-all runs, 409. After it, R0 refuses the files (`converted-without-tldraw`): a rollback to R0 is no longer possible. Then remove `VITE_TLDRAW_LICENSE_KEY` from the static site. Code and tests: `apps/sync/src/room/migrate/drop-legacy.ts`, `apps/sync/test/migrate/drop-legacy*.test.ts`.
 
+## The Excalidraw cut-over on staging (2026-10-01): what the Render API applied
+
+The cut-over ran on 2026-10-01 20:43–20:56Z (`docs/CUTOVER-LOG.md` has every step, id and count). `render.yaml` on `main` was
+**not** changed, on purpose (a Blueprint sync deploys on `render.yaml` changes), so every setting below was applied through the
+Render API and must be mirrored into `render.yaml` at C19 (`docs/EXCALIDRAW-CUTOVER.md`), after the Blueprint is on Manual
+Sync. Until then the Dashboard and the API are the truth, not the file.
+
+| Service | What was applied | How | When (UTC) |
+|---|---|---|---|
+| api | deploy of `main` `bbe1b48` (deploy `dep-davccotg1s2s739vbmn0`) | `POST /v1/services/<api>/deploys {commitId, clearCache: do_not_clear}` | 20:45:23, live 20:46:25 |
+| sync | env `DRAFTROOM_BACKUP_SIGNING_SECRET` (44 random characters, generated on the workstation, sent to Render only), `DRAFTROOM_ENGINE=excalidraw`, `DRAFTROOM_BOOT_MAINTENANCE=1` | `PUT /v1/services/<sync>/env-vars/<key>`; **none of the three PUTs triggered a deploy** (the live deploy was unchanged 30 s later) | 20:46:28–20:46:30 |
+| sync | deploy of `bbe1b48` (deploy `dep-davcdqegekts73dgut70`), booting in maintenance | `POST …/deploys` | 20:47:36, live 20:48:28 |
+| sync | env `DRAFTROOM_BOOT_MAINTENANCE` **deleted** (maintenance off at 20:54:51; a later restart starts open) | `DELETE /v1/services/<sync>/env-vars/DRAFTROOM_BOOT_MAINTENANCE`; no deploy triggered | 20:54:52 |
+| web | route rule `/excalidraw-assets/*` → `https://draftroom-staging-api.onrender.com/excalidraw-assets/*`, **before** the `/*` → `/index.html` fallback (priorities: `/api/*` 0, `/files/*` 1, `/excalidraw-assets/*` 2, `/*` 3) | `PUT /v1/services/<web>/routes` (replaces all rules; the array order sets the priorities) | 20:38:30 (first form), 20:42:45 (this form) |
+| web | header `Content-Security-Policy-Report-Only` for `/*` with the patch's value (one line): `default-src 'self'; script-src 'self' https://splendid-flamingo-3744.clerk.accounts.dev https://challenges.cloudflare.com; connect-src 'self' https://draftroom-staging-sync.onrender.com wss://draftroom-staging-sync.onrender.com https://splendid-flamingo-3744.clerk.accounts.dev https://clerk-telemetry.com; img-src 'self' blob: data: https://img.clerk.com; font-src 'self'; style-src 'self' 'unsafe-inline'; worker-src 'self' blob:; frame-src https://challenges.cloudflare.com; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'`; the four existing headers (`X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy` for `/*`, `Cache-Control` for `/assets/*`) kept | `PUT /v1/services/<web>/headers` (replaces all headers, so the existing ones were sent again; they got new ids) | 20:48:37 |
+| web | deploy of `bbe1b48` (deploy `dep-davcfnvpn0mc73cgibj0`); env unchanged: `VITE_DRAFTROOM_SYNC_ORIGIN` as before, **`VITE_TLDRAW_LICENSE_KEY` kept until drop-legacy (day 7)**, no `VITE_LOBBY_ENGINE` (gone since the tldraw removal) | `POST …/deploys` | 20:51:42, live 20:52:13 |
+
+Two findings for `render.yaml` and the runbook:
+
+- **A rewrite to a path that does not exist answers `200` with an empty body on Render** (`Content-Length: 0`, no content type),
+  not a 404 and not `index.html`. The patch's `/excalidraw-assets/__not-found__` destination therefore does not give the 404 the
+  build needs for a missing font (plan §2.12). Proxying the prefix to the api does: the static host still serves every real file
+  itself (a rule is skipped when the file exists), and a miss gets the api's `404 application/json`. Correct the patch's first
+  hunk to the api destination before C19.
+- **The CSP is report-only for now** (the lead's decision: a completed real Clerk sign-in under the enforced header is not verified
+  yet). Browsers log a report-only violation as `[Report Only]` in the console and fire `securitypolicyviolation` events, so a
+  sign-in and a board with 0 such lines is the evidence to switch the header's name to `Content-Security-Policy` (an edit in the
+  Dashboard or a `PUT …/headers`, no rebuild). The smoke script (`scripts/smoke/live-smoke.mjs` on `engine/smoke`) looks for the
+  enforced name and prints one `FAIL content-security-policy: missing` until then; everything else in it passed (24 checks).
+
+Rollback within 48 h: the runbook's §7 with tag `lobby-r0` (= 38d3833; the api needs `DRAFTROOM_ALLOW_NEWER_SCHEMA=1` and
+*Deploy a specific commit*, never *Rollback*, because of migration 0023) and R0's deploys api `dep-dau9lag93c1s73db0310`, sync
+`dep-dau9ll7avr4c7389qe8g`, web `dep-dau9m4hsrm7s73bc9oug`. Static-site rules are not rolled back by a Rollback: remove the
+report-only header by hand if R0's web is to run without it (it blocks nothing either way).
+
 ## Rollback
 
 - **How.** Dashboard → service → Deploys → *Rollback*. Render reuses the earlier build artifact (no rebuild) and that deploy's environment variables. Disks, plan and static-site settings are *not* rolled back. A Dashboard rollback also disables autodeploy, which is already off.

@@ -1,6 +1,18 @@
 render.yaml at the Excalidraw cut-over: the prepared change, NOT applied
 =========================================================================
 
+APPLIED BY HAND ON 2026-10-01 (the cut-over on staging, docs/CUTOVER-LOG.md, docs/DEPLOY.md "The Excalidraw
+cut-over on staging"): every value below is live on the services through the Render API, with TWO
+DIFFERENCES that this patch must take before C19 commits it:
+  1. The route rule's destination. Render answers a rewrite to a path that does not exist with 200 and an
+     empty body (Content-Length 0, no content type), not 404. Live destination:
+         https://draftroom-staging-api.onrender.com/excalidraw-assets/*
+     (a real font file is still served by the static host; a miss gets the api's 404 application/json).
+  2. The header's name. Live as Content-Security-Policy-Report-Only (the lead's decision until a completed
+     real Clerk sign-in under the enforced header shows 0 reports); the value is this patch's line, unchanged.
+Also: VITE_LOBBY_ENGINE is NOT set on the web (gone since the tldraw removal, runbook G10) and this hunk 3
+must not add it; VITE_TLDRAW_LICENSE_KEY stays on the service until drop-legacy (day 7).
+
 Prepared 2026-09-30 on engine/w4-prep against render.yaml as it is on main and engine/excalidraw (the two
 are identical). It is kept here, and not in render.yaml, on purpose: staging's Blueprint has synced
 render.yaml on pushes to main and deployed the services whose environment changed, so editing render.yaml

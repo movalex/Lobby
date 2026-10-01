@@ -1,6 +1,9 @@
 # Lobby: cut-over to the Excalidraw canvas, rollback and roll-forward (runbook)
 
-Status: **prepared 2026-09-30 on `engine/w4-prep`, not yet rehearsed.** This is the Excalidraw side's
+Status: **CUT OVER ON STAGING 2026-10-01 20:43–20:56Z (`docs/CUTOVER-LOG.md`: C4–C17 passed as adapted there; the
+48 h watch §6 runs to about 2026-10-03 20:55Z; C19 and D7 are open).** Before that: **prepared 2026-09-30 on `engine/w4-prep`; rehearsed 2026-10-01 on the NAS against a39a1c5 with
+staging's real data (`docs/research/excalidraw/REHEARSAL.md`): C4–C17, §7 and §8 passed; the corrections
+below come from it; the owner's parts (R8's real sign-in, R9, P3's sign-off) are open.** This is the Excalidraw side's
 runbook for plan §7.5 (`docs/EXCALIDRAW-MIGRATION.md`). It takes the tldraw side's steps from
 `docs/DEPLOY.md` "Bridge release R0" on `main` (R0 runs cut-over steps C4 to C6). R0 is live on staging
 since 2026-09-30 (`main` 38d3833, `docs/PROGRESS.md`), so **the cut-over starts no earlier than
@@ -93,7 +96,8 @@ All must hold on the day. Record each check in the log.
   (`apps/web/test/engine-probe`, part of `pnpm test`). The NAS load re-run (wave 4) meets plan §2.13's
   targets, or the owner accepts the numbers **[OWNER]**.
 - **P3. The rehearsal (§3) passed, and the owner signed it off [OWNER]**, including the lossy counts
-  and the side-by-side comparison of 10 boards.
+  and the side-by-side comparison of 10 boards. The rehearsal ran on 2026-10-01 (`REHEARSAL.md`: every
+  step passed; lossy codes on one board: `geo-approximated` 1, `geo-polygon` 1); the sign-off and R9 are open.
 - **P4. Disk.** In the sync Shell:
 
   ```sh
@@ -110,7 +114,10 @@ All must hold on the day. Record each check in the log.
   CSP line in `render.cutover.yaml.patch` corrected to them. Today's line has the frontend-API host
   decoded from staging's publishable key (`splendid-flamingo-3744.clerk.accounts.dev`, a development
   instance), plus `img.clerk.com`, `clerk-telemetry.com` and `challenges.cloudflare.com` from code and
-  Clerk's documentation (UNVERIFIED).
+  Clerk's documentation (UNVERIFIED). At the rehearsal the sign-in page under the enforced header
+  (Clerk's widget rendered) requested only the frontend-API host and `img.clerk.com`, with 0 violations;
+  `challenges.cloudflare.com` and `clerk-telemetry.com` were not requested. A completed sign-in is still
+  needed before the line is final (`REHEARSAL.md` §8 D7).
 - **P6. A missing file under `/excalidraw-assets/` gets a 404 on the static host, not `index.html`
   [OWNER: a staging setting change].** Render's answer to the rule is UNVERIFIED, so it is tried before
   the cut-over, on its own: Dashboard → `draftroom-staging-web` → Redirects/Rewrites → add, **above**
@@ -141,7 +148,8 @@ All must hold on the day. Record each check in the log.
   (Appendix B 11) **[OWNER]**.
 - **P11. Free memory for conversion.** Nothing to do on Render (the maintenance run uses a 256 MB heap
   cap with no room open, plan §5.3), but the rehearsal's report must show every board's peak heap below
-  the cap.
+  the cap. Measured 2026-10-01: 29.1–33.3 MB per conversion and 31.4 MB for the roll-forward merge, against
+  `capMb` 256 (the status also shows `runtimeCapMb: 98`, the cap of a lazy conversion on open).
 - **P12. The cut-over commit [OWNER].**
   - `engine/excalidraw` (wave 4 and 5 merged, gate green) is merged into `main`, with **AGENTS.md
     replaced by `docs/research/excalidraw/AGENTS.next.md`** (the approved §10 rewrite; delete the
@@ -200,8 +208,9 @@ staging, on the NAS, with nothing exposed. It produces the window's timings and 
   ```
 
   Nothing of `theaitre` or `draftroom-worker` is touched, listed beyond `docker ps`, stopped or rebuilt.
-  SQLite runs on the NAS's own volume, never over SMB (`V:\`). No port is published except on the NAS's
-  `127.0.0.1`, reached from the workstation through `ssh -L` (so the pages run at `localhost`).
+  SQLite runs on the NAS's own volume, never over SMB (`V:\`). Ports are published on the NAS's LAN
+  address only (`192.168.10.1:8443` web, `:8444` sync; the owner's instruction, `REHEARSAL-PREP.md` §1),
+  never `0.0.0.0`; the NAS has no route from outside. (An earlier draft wanted `127.0.0.1` through `ssh -L`.)
 - **R3. Source.** From the workstation, the cut-over candidate and R0, as `git archive` (never `.env*`,
   `.data`, `node_modules`):
 
@@ -209,16 +218,20 @@ staging, on the NAS, with nothing exposed. It produces the window's timings and 
   git archive --format=tar <candidate sha> | ssh <nas> 'mkdir -p /volume3/Apps/draftroom-rehearsal/src-x && tar -x -C /volume3/Apps/draftroom-rehearsal/src-x'
   git archive --format=tar lobby-r0 | ssh <nas> 'mkdir -p /volume3/Apps/draftroom-rehearsal/src-r0 && tar -x -C /volume3/Apps/draftroom-rehearsal/src-r0'
   ```
-- **R4. Images and the stack [BUILD: wave 6 writes `deploy/rehearsal/`].** The api and sync images from
+- **R4. Images and the stack** (built: `docs/research/excalidraw/rehearsal/` on `engine/rehearsal-prep`:
+  `stack.sh`, `edge.mjs`, `build-x.sh`; `REHEARSAL-PREP.md` §1–§2). The api and sync images from
   `docker/api.Dockerfile` and `docker/sync.Dockerfile` of each source, tagged
-  `draftroom-rehearsal-{api,sync}:{x,r0}` (as `deploy/nas/deploy-worker.sh` builds the worker there); the
-  web built in the pinned Node image with `VITE_LOBBY_ENGINE=excalidraw` (and R0's web without it); a
-  `postgres:18` container `draftroom-rehearsal-db`; and a static server that does what Render's does:
+  `draftroom-rehearsal-{api,sync}:{excalidraw,r0}` (as `deploy/nas/deploy-worker.sh` builds the worker there); the
+  web built in the pinned Node image (since G10 no `VITE_LOBBY_ENGINE` and no licence key: `web-build-x.env`
+  holds `VITE_DRAFTROOM_SYNC_ORIGIN` only; R0's web keeps its key); a
+  `postgres:18` container `draftroom-rehearsal-pg`; and a static server that does what Render's does:
   the SPA fallback, a 404 under `/excalidraw-assets/`, the `/api/*` and `/files/*` rewrites, and the
   patch's headers including the CSP, with the sync origin replaced by the rehearsal's
-  (`e2e/spike/csp/server.ts` already does all but TLS). Production mode needs https origins
-  (`PUBLIC_ORIGIN`, `ALLOWED_ORIGINS`), so the static server and the sync socket sit behind TLS on
-  `localhost` (a self-signed certificate made in a container). Everything runs with
+  (`rehearsal/edge.mjs`: the CSP behind `EDGE_CSP` from `env/edge.env`, present on the Excalidraw build and
+  absent on R0; the `/excalidraw-assets/` 404 always on). Production mode needs https origins
+  (`PUBLIC_ORIGIN`, `ALLOWED_ORIGINS`), so the static server and the sync socket sit behind TLS
+  (a self-signed certificate, `edge/tls/`; Playwright runs with `ignoreHTTPSErrors`, Node with
+  `NODE_EXTRA_CA_CERTS=edge.crt`). Everything runs with
   `DRAFTROOM_BACKUP_STORE=fs` inside the folder: **nothing in the rehearsal may ever write to R2**; a
   container with any `R2_*` variable in its environment must refuse to start. The api's blob store is
   `fs` too. The network is a plain bridge (the api must reach Clerk's API); only `127.0.0.1` ports.
@@ -234,9 +247,16 @@ staging, on the NAS, with nothing exposed. It produces the window's timings and 
     UNVERIFIED), copies it to `pg/` over SSH, and it is restored into `draftroom-rehearsal-db`.
 - **R6. The cut-over, timed.** On the copies, run §5's steps C4 to C17 against the rehearsal stack, with
   the same commands (the Shell is `docker exec -it draftroom-rehearsal-sync sh`, with `PORT` and
-  `DRAFTROOM_INTERNAL_SECRET` from its environment). R0 first (maintenance on, run-all
+  `DRAFTROOM_INTERNAL_SECRET` from its environment; `tools/int.sh sync|api METHOD PATH [BODY]` on the NAS
+  runs the `int` helper through `docker exec`). R0 first (maintenance on, run-all
   `--expect-maintenance`, the checkpoint of every board), then the new api, the new sync booting in
   maintenance, `convert-all` and C11's check, the web, maintenance off. Time each step into the log.
+  The rehearsal's stand-in for a Render deploy is `docker rm -f draftroom-rehearsal-api draftroom-rehearsal-sync
+  && ./stack.sh start excalidraw` after editing `env/*.env` (C7–C9, 3.8 s on 2026-10-01), `mv web/dist
+  web/dist-r0 && mv web/dist-x web/dist` plus `env/edge.env` and a recreated edge for C13–C14, and the same
+  with `r0` and the folders swapped back for §7. A container's environment is fixed at creation: an env
+  change (C8, C16's deletion of the boot flag) reaches the process only through a recreate, never a
+  `docker restart`, so "delete the flag, then a restart starts open" cannot be rehearsed in Docker.
 - **R7. The conversion's results.** C11's script on every board: 0 failures, every diff check passing
   (100% of boards), every digest equal to the board's backup, the invariant checker run with 0
   violations. Keep every `<board>.json` report's counts, lossy codes, `ms` and `peakHeapUsedMb` (ids and
@@ -266,9 +286,20 @@ staging, on the NAS, with nothing exposed. It produces the window's timings and 
   - the born-after board refused by R0 (4099 `NEW_CANVAS_BOARD`, internal routes 409 `new-canvas`) and
     byte-identical afterwards;
   - `dr_deleted_*` byte-identical to the pre-cut-over file apart from R0's own rows.
+
+  Run once on 2026-10-01 (`REHEARSAL.md` §5–§6, one cycle, one board edited on each side): ours added two
+  notes, moved a frame with its 34 children, moved a child of a second frame and moved a third note; R0
+  moved the second frame, moved the same third note and added two notes. The merge kept every edit but
+  the one same-element move (listed as the single `pos` conflict, ours in `lb_prev_1_*`); the child whose
+  frame R0 moved ended at ours' position plus the frame's delta (`parentMoved`, no conflict); the
+  born-after board was refused by R0 three ways and byte-identical afterwards. Still to run: a delete, a
+  z-order change, a page-2 edit, a board created on R0, the second cycle, the `dr_deleted_*` check.
 - **R11. The window.** From R6's and R10's timings: how long C4 → C17 takes (conversion was 27-314 ms per
   staging board in spike B8, so the deploys dominate), how long a rollback and a roll-forward take. The
-  owner resizes the window (P9) from them.
+  owner resizes the window (P9) from them. Measured 2026-10-01 (`REHEARSAL.md` §2): C4 → C16 4 min 43 s
+  wall-clock with the operator's pauses, about 30 s of commands (conversions 104–146 ms per board; three
+  CLIs poll for 5 s each); rollback B3 → B8 23.5 s; roll-forward F3 → F9 19.6 s; the Docker stand-ins for
+  the deploys took 2–4 s each, so Render's deploys are the unknown that sizes the window.
 - **R12. Clean-up, always** (also after a failed run):
 
   ```sh
@@ -324,7 +355,8 @@ staging, on the NAS, with nothing exposed. It produces the window's timings and 
   name each failed board). `refused (HTTP 409, RECENT_HELD_SET …)`: every board has a held backup from
   the last 30 minutes already (this step repeated after a sync restart in the window, C4's warning): add
   `--force`, because the restart may have let edits land (audit L6; a run-all adds a 90-day copy of every
-  board to the 1 GB disk, so repeated calls are refused). Copy the JSON into the log. Every board has an `offsiteKey`, a
+  board to the 1 GB disk, so repeated calls are refused). The CLI polls every 5 s, so a run of under a
+  second still takes 5 s (`--interval-ms 1000` shortens it; the same for C6 and C12). Copy the JSON into the log. Every board has an `offsiteKey`, a
   `recordsSha256`, a `documentClock` and a `holdUntil` 90 days ahead: this set is the disaster copy,
   held 90 days outside retention (approved with the plan, Appendix B 6).
 - **C6. A checkpoint of every board** (plan §7.5 step 4; DEPLOY.md step 4). api Shell, after C5:
@@ -368,11 +400,13 @@ staging, on the NAS, with nothing exposed. It produces the window's timings and 
   int GET /internal/migrate/status  # 200 {...,"convertAll":"idle"}: the Excalidraw engine is loaded
   ```
 
-  and the startup log names the engine, the boot maintenance and the signing key: `[backup] offsite
+  and the startup log names the boot maintenance and the signing key: `[maintenance] on at start
+  (DRAFTROOM_BOOT_MAINTENANCE=1)` and `[backup] offsite
   backups signed with DRAFTROOM_BACKUP_SIGNING_SECRET (key id …); the key derived from
   DRAFTROOM_INTERNAL_SECRET (key id …) only verifies older backups` (key ids are hashes, not secrets; a
   line saying `set DRAFTROOM_BACKUP_SIGNING_SECRET` cannot occur in production: the server would not
-  have started). Maintenance is **not** on: `int POST
+  have started). The log does not name the engine: the migrate route answering 200 is what attests it
+  (rehearsed). Its status shows `runtimeCapMb: 98` (a lazy conversion's cap) and, on each job, `capMb: 256`. Maintenance is **not** on: `int POST
   /internal/maintenance '{"on":true}'` at once, then **stop** (the build or the flag is wrong). The
   migrate route answers 404: the engine flag did not reach the process; **stop**.
 - **C10. Convert every board** (plan §5.3 "convert-all"). Sync Shell:
@@ -471,7 +505,11 @@ staging, on the NAS, with nothing exposed. It produces the window's timings and 
   "Saved" after the edits; a reload keeps them); a phone guest by a name-only link; three more converted
   boards open and look as in the rehearsal; a board created now opens (keep it: B9 checks that R0
   refuses it); the console shows 0 CSP
-  violations. Sync Shell: `int GET /internal/metrics` shows sessions and commits. Within 15 minutes,
+  violations. From the workstation, `node scripts/smoke/live-smoke.mjs --base <web origin> --expect
+  excalidraw` (`engine/smoke`) covers C14's checks, the bundle's hosts, the sign-in page under the header
+  and the socket refusal (34 checks on the rehearsal; against a self-signed single-origin edge it needs
+  `--api`/`--sync`, an insecure-TLS switch and `NODE_EXTRA_CA_CERTS`, `REHEARSAL.md` §8 D13). Sync Shell:
+  `int GET /internal/metrics` shows sessions and commits. Within 15 minutes,
   `int GET /internal/backups/status` shows offsite successes after the cut-over. Anything wrong:
   maintenance on again (`int POST /internal/maintenance '{"on":true}'`) and **stop**.
 - **C18. Announce that Lobby is back [OWNER sends].** Write the time in the log: the 24 h go/no-go and the
@@ -521,8 +559,10 @@ canvas as an empty tldraw board and writes tldraw tables into it (DEPLOY.md "Rol
   ```
 
   Exit 0, then copy it into the log. `409 RECENT_HELD_SET` (every board has a held backup from the last
-  30 minutes: a rollback within half an hour of C5): add `--force`; C5's set describes the tldraw side,
-  this one the lb_* side. The held run-all backup on the Excalidraw build in maintenance IS
+  30 minutes: a rollback within half an hour of C5 **with no board created since**; the board C17 creates
+  has no held backup, so the guard does not fire and the first run writes the set, as rehearsed): only
+  then add `--force`; C5's set describes the tldraw side,
+  this one the lb_* side (`format: lobby-elements-converted`; a board born on the new canvas `lobby-elements`). The held run-all backup on the Excalidraw build in maintenance IS
   the lb_* export: whole files, every `lb_*` table incl. `lb_prev_*` and `lb_source`, described from
   `lb_*` as `lobby-elements-converted`, signed, held 90 days outside retention, drilled and restorable
   (`apps/sync/src/backup/run-all.ts`'s header says why no second format is written; gate
@@ -536,12 +576,20 @@ canvas as an empty tldraw board and writes tldraw tables into it (DEPLOY.md "Rol
   (`0023_export_policy_guests`, additive), so this is the "otherwise" case.** Otherwise set
   `DRAFTROOM_ALLOW_NEWER_SCHEMA=1` on the api and Manual Deploy → Deploy a specific commit → `lobby-r0`
   (DEPLOY.md "Rolling the api back past a migration": never Rollback in that case). Check `/healthz` and
-  the log. While R0's api talks to the Excalidraw sync, it refuses its snapshots (503 `SYNC_UNAVAILABLE`),
-  so no empty checkpoint, duplicate or export is saved.
+  the log (rehearsed: `DRAFTROOM_ALLOW_NEWER_SCHEMA=1 … newerMigrations: ["0023_export_policy_guests"]`).
+  While R0's api talks to the Excalidraw sync, it refuses its snapshots, so no empty checkpoint, duplicate
+  or export is saved: rehearsed with R0's checkpoint-all against the Excalidraw sync in maintenance, every
+  converted board failed with "the sync server answered with a snapshot that is not a tldraw one", the
+  born-after board was skipped `new-canvas`, 0 saved, `board_snapshots` unchanged (the api's own routes
+  answer 503 `SYNC_UNAVAILABLE` for the same reason).
 - **B7. R0's sync [OWNER].** Dashboard → `draftroom-staging-sync` → Rollback to the R0 deploy recorded in
   §4 (Render reuses that deploy's build and its environment, which has no `DRAFTROOM_ENGINE`; R0 ignores
   it anyway, as it ignores `DRAFTROOM_BACKUP_SIGNING_SECRET`: R0 signs its backups with the key derived
-  from `DRAFTROOM_INTERNAL_SECRET`, which the new build verifies after the roll-forward). Never roll back
+  from `DRAFTROOM_INTERNAL_SECRET`, which the new build verifies after the roll-forward). Expect at R0's
+  start one line per board and one for the index: `[backup] offsite manifest of board … is signed with
+  another key (DRAFTROOM_INTERNAL_SECRET changed?); signing it with the current key, its older entries stay
+  as they are`: the Excalidraw build signed them with the dedicated secret, R0 re-signs with its derived
+  key; the new build read them again without complaint after the roll-forward (rehearsed). Never roll back
   by unsetting `DRAFTROOM_ENGINE` on the new build. **R0's sync starts with
   maintenance off: boards open on R0 as soon as it is live.** Converted boards are served from their
   tldraw tables, which hold the state of C5; R0 never writes any lb_* table; boards born on the new canvas
@@ -550,7 +598,13 @@ canvas as an empty tldraw board and writes tldraw tables into it (DEPLOY.md "Rol
   the built artifact, the tldraw key inlined). Load a board for more than 6 s: no tldraw licence blank
   (DEPLOY.md "tldraw license key").
 - **B9. Checks.** DEPLOY.md "Checking it after the deploy" items 1, 2 and 5; a converted board opens and
-  edits on tldraw; the board created in C17 shows "This board was made on the new canvas…"; the dashboard shows its "New canvas" badge (G6: 2A's wave-5 `apps/api/src/canvas-engine.ts` writes both columns; W4-API checked it).
+  edits on tldraw (rehearsed: R0 served the converted boards from their tldraw tables at C5's state, the
+  Excalidraw edits hidden, not lost); the board created in C17 shows "This board was made on the new canvas…"
+  (R0's web shows it as its own page, `data-testid="new-canvas-board"`, before any socket; its ticket
+  route answers 409 `NEW_CANVAS`; the sync's internal snapshot 409 `new-canvas`; its file byte-identical
+  afterwards); the dashboard shows its "New canvas" badge (G6: 2A's wave-5 `apps/api/src/canvas-engine.ts` writes both columns; W4-API checked it).
+  Editing on tldraw through its UI: drag in one pointer gesture (a click then a drag within a double-click
+  reads as text editing) and press Escape before a tool key (R0's COL-04 types a key into the one selected note).
 - **B10. Announce [OWNER sends].** Lobby is back on its previous canvas. Edits made on the new canvas
   since the cut-over come back with the roll-forward.
 
@@ -575,6 +629,11 @@ canvas as an empty tldraw board and writes tldraw tables into it (DEPLOY.md "Rol
   node -e "const fs=require('fs');let bad=0;for(const f of fs.readdirSync('/var/data/migration').filter(f=>f.endsWith('.rollforward.json'))){const r=JSON.parse(fs.readFileSync('/var/data/migration/'+f,'utf8'));const v=(r.violations||[]).length;console.log(r.ok&&v===0?'ok  ':'FAIL',f,r.ok?'':r.reason,'cycle',r.cycle,'conflicts',(r.conflicts||[]).length,'violations',v,'resnap',r.resnap);if(r.ok!==true||v>0)bad++}console.log(bad?'STOP':'roll-forward reports ok')"
   ```
 
+  Rehearsed on one board: a frame moved on R0 while the Excalidraw side moved one of its children left
+  the child at the Excalidraw position plus the frame's delta (`parentMoved`, no conflict); the same note
+  moved on both sides was listed as the one `pos` conflict, R0's position kept and the Excalidraw one in
+  `lb_prev_1_elements`; both sides' new notes were present; `converted_from.sourceSha256` equalled F4's
+  `recordsSha256` and `cycle` 1. Boards untouched on R0 need no job and are not listed.
   A board whose `lb_source` digest no longer matches stays closed (`base-digest`, plan §5.9 step 3):
   **stop**, the owner is told. The listed conflicts (element ids and group names, never content) go into
   the log; the Excalidraw side's values are kept in `lb_prev_<cycle>_*`. Boards created on R0 and
