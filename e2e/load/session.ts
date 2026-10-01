@@ -25,6 +25,14 @@ import type { LoadUser } from './tickets.ts'
 
 export type ClientFactory = (opts: HeadlessClientOptions & { meter: Meter }) => HeadlessClient
 
+/**
+ * How long a session may stay without a welcome after a close before the harness replaces its client (a
+ * client that does not reconnect by itself). Above the transport's longest jittered backoff (5 s × 1.3,
+ * socket.ts RECONNECT_JITTER) plus a slow welcome, so the harness never races a client that is coming
+ * back on its own; B9 ran with 5 s and saw 9 such replacements in one run whose restart took 7.6 s.
+ */
+export const HARNESS_RECONNECT_AFTER_MS = 12_000
+
 /** The real factory: O2's headless client with a metered WebSocket. */
 export function realClientFactory(create: (opts: HeadlessClientOptions) => HeadlessClient): ClientFactory {
   return ({ meter, ...opts }) => create({ ...opts, WebSocketImpl: meteredWebSocket(meter) })

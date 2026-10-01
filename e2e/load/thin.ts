@@ -13,6 +13,8 @@
 //
 // Measurement is the meter's, at the socket, as for full sessions: bytes by channel, closes, welcomes,
 // `changes` arrivals (A→B visibility) and the probe's cursor (presence delay).
+
+import { jitteredDelay } from '../../apps/web/src/canvas/sync/transport/socket.ts'
 import type { HeadlessClient, HeadlessClientOptions } from '../../apps/web/src/canvas/sync/types.ts'
 import {
   ELEMENT_SCHEMA_VERSION,
@@ -22,7 +24,7 @@ import {
 import { type Meter, meteredWebSocket } from './meter.ts'
 import type { ClientFactory } from './session.ts'
 
-/** O2's transport backoff (apps/web/src/canvas/sync/transport/socket.ts DEFAULT_BACKOFF). */
+/** O2's transport backoff (apps/web/src/canvas/sync/transport/socket.ts DEFAULT_BACKOFF), jittered as there. */
 const BACKOFF = [250, 500, 1000, 2000, 4000, 5000] as const
 
 export const thinClientFactory: ClientFactory = (o) => createThinClient(o)
@@ -89,7 +91,7 @@ export function createThinClient(o: HeadlessClientOptions & { meter: Meter }): H
         return
       }
       if (closedByUs) return
-      const ms = BACKOFF[Math.min(failures, BACKOFF.length - 1)] ?? 5000
+      const ms = jitteredDelay(BACKOFF[Math.min(failures, BACKOFF.length - 1)] ?? 5000)
       failures++
       timer = setTimeout(open, ms)
     })

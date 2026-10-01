@@ -15,7 +15,7 @@ import { type Profile, sessionCount } from './profiles.ts'
 import { buildReport, type FinalCheck, type HostSample, type RunReport, reportMarkdown } from './report.ts'
 import { runInThread, runInWorkers, type ThreadResult } from './runner.ts'
 import { openNodeSocket, seedElements } from './seed.ts'
-import type { ClientFactory, SessionReport } from './session.ts'
+import { type ClientFactory, HARNESS_RECONNECT_AFTER_MS, type SessionReport } from './session.ts'
 import { thinClientFactory } from './thin.ts'
 import { loadUser, mintTicket, type RunSecrets } from './tickets.ts'
 
@@ -345,7 +345,7 @@ export async function runLoad(o: LoadRunOptions): Promise<RunReport> {
     t0,
     durationMs: profile.durationMs,
     probeSids: probes,
-    reconnectAfterMs: 5_000,
+    reconnectAfterMs: HARNESS_RECONNECT_AFTER_MS,
     stopped: o.stopped,
     ...(o.fake ? {} : { createThinClient: thinClientFactory }),
   }
@@ -359,7 +359,7 @@ export async function runLoad(o: LoadRunOptions): Promise<RunReport> {
         t0,
         durationMs: profile.durationMs,
         probeSids: [...probes.entries()],
-        reconnectAfterMs: 5_000,
+        reconnectAfterMs: HARNESS_RECONNECT_AFTER_MS,
         stopped: o.stopped,
         workerHeapMb: o.workerHeapMb,
       },

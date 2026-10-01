@@ -246,13 +246,27 @@ export class PresenceHub {
     if (!changed.length && !drags.length) return
     const capped = this.peers.size > CURSORS_PER_RECIPIENT + 1
     const shared = new Map<string, string>()
-    const frameFor = (peers: PeerPresence[], ds: DragOut[], off?: string[]) =>
-      JSON.stringify({
-        type: 'presence',
-        peers,
-        ...(off?.length ? { off } : {}),
-        ...(ds.length ? { drags: ds } : {}),
-      })
+    // each changed peer is serialized once per tick; a recipient's frame joins the entries it gets (the
+    // same JSON as stringifying the object: `{type, peers, off?, drags?}` in that key order). On a
+    // 200-session board the per-view frames (40 cursors each, 200 recipients, 10 Hz) were about a third
+    // of sync's CPU in B9's steady state, most of it this serialization
+    const peerJson = new Map<string, string>()
+    const entry = (p: PeerPresence): string => {
+      let j = peerJson.get(p.sid)
+      if (j === undefined) {
+        j = JSON.stringify(p)
+        peerJson.set(p.sid, j)
+      }
+      return j
+    }
+    const frameFor = (peers: PeerPresence[], ds: DragOut[], off?: string[]) => {
+      let s = '{"type":"presence","peers":['
+      for (let i = 0; i < peers.length; i++) s += (i ? ',' : '') + entry(peers[i] as PeerPresence)
+      s += ']'
+      if (off?.length) s += `,"off":${JSON.stringify(off)}`
+      if (ds.length) s += `,"drags":${JSON.stringify(ds)}`
+      return `${s}}`
+    }
     for (const r of recipients) {
       const ds = drags.filter((d) => d.sid !== r.sid)
       if (!capped) {

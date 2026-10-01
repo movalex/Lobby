@@ -220,6 +220,16 @@ export class BoardStore {
   since(clock: number): ElementRow[] {
     return (this.st.since.all(clock) as unknown as RawRow[]).map(parseRow)
   }
+  /**
+   * The same rows as stored JSON with the deleted flag, unparsed: a catch-up concatenates them
+   * (catch-up.ts), as the reset snapshot concatenates `snapshotRows()`.
+   */
+  sinceRaw(clock: number): { data: string; deleted: boolean }[] {
+    return (this.st.sinceData.all(clock) as { data: string; deleted: number }[]).map((r) => ({
+      data: r.data,
+      deleted: r.deleted === 1,
+    }))
+  }
   countSince(clock: number): number {
     return (this.st.countSince.get(clock) as { n: number }).n
   }
@@ -406,57 +416,66 @@ export class BoardStore {
 
 const COLS = 'id, clock, idx, deleted, deleted_clock, deleted_at, type, version, gclock, data'
 
-/** Every statement the store runs, prepared once per open file. */
+/**
+ * Every statement the store runs, prepared on its first use and kept for the life of the open file. The
+ * room open prepared all of them at once (about 40 statements, about 2 ms per board on the workstation,
+ * several times that on the NAS): after a SIGKILL every open board's room reopens inside the restart
+ * window B9 measured, and a reconnect storm uses a handful of them.
+ */
 function prepareStatements(db: DatabaseSync) {
-  const p = (sql: string): StatementSync => db.prepare(sql)
-  return {
-    get: p(`SELECT ${COLS} FROM lb_elements WHERE id = ?`),
-    upsert: p(
-      `INSERT INTO lb_elements (${COLS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  const prepared = new Map<string, StatementSync>()
+  const p = (sql: string): StatementSync => {
+    let st = prepared.get(sql)
+    if (!st) {
+      st = db.prepare(sql)
+      prepared.set(sql, st)
+    }
+    return st
+  }
+  const lazy = <T extends Record<string, string>>(sql: T): { readonly [K in keyof T]: StatementSync } => {
+    const out = {} as Record<string, StatementSync>
+    for (const k of Object.keys(sql))
+      Object.defineProperty(out, k, { enumerable: true, get: () => p(sql[k] as string) })
+    return out as { readonly [K in keyof T]: StatementSync }
+  }
+  return lazy({
+    get: `SELECT ${COLS} FROM lb_elements WHERE id = ?`,
+    upsert: `INSERT INTO lb_elements (${COLS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET clock = excluded.clock, idx = excluded.idx, deleted = excluded.deleted,
          deleted_clock = excluded.deleted_clock, deleted_at = excluded.deleted_at, type = excluded.type,
          version = excluded.version, gclock = excluded.gclock, data = excluded.data`,
-    ),
-    since: p(`SELECT ${COLS} FROM lb_elements WHERE clock > ? ORDER BY idx, id`),
-    countSince: p('SELECT count(*) AS n FROM lb_elements WHERE clock > ?'),
-    snapshotData: p('SELECT data, deleted FROM lb_elements ORDER BY idx, id'),
-    liveData: p('SELECT data FROM lb_elements WHERE deleted = 0 ORDER BY idx, id'),
-    allById: p('SELECT data FROM lb_elements ORDER BY id'),
-    liveIndex: p('SELECT idx, id, type, data FROM lb_elements WHERE deleted = 0 ORDER BY idx, id'),
-    deadIndex: p(
-      `SELECT idx, id, json_extract(data, '$.containerId') AS cid,
+    since: `SELECT ${COLS} FROM lb_elements WHERE clock > ? ORDER BY idx, id`,
+    sinceData: 'SELECT data, deleted FROM lb_elements WHERE clock > ? ORDER BY idx, id',
+    countSince: 'SELECT count(*) AS n FROM lb_elements WHERE clock > ?',
+    snapshotData: 'SELECT data, deleted FROM lb_elements ORDER BY idx, id',
+    liveData: 'SELECT data FROM lb_elements WHERE deleted = 0 ORDER BY idx, id',
+    allById: 'SELECT data FROM lb_elements ORDER BY id',
+    liveIndex: 'SELECT idx, id, type, data FROM lb_elements WHERE deleted = 0 ORDER BY idx, id',
+    deadIndex: `SELECT idx, id, json_extract(data, '$.containerId') AS cid,
          json_extract(data, '$.customData.lobbyServer.createdBy.guest') AS guest,
          json_extract(data, '$.customData.lobbyServer.createdBy.uid') AS by
          FROM lb_elements WHERE deleted = 1 ORDER BY idx, id`,
-    ),
-    counts: p(
+    counts:
       'SELECT sum(CASE WHEN deleted = 0 THEN 1 ELSE 0 END) AS live, sum(deleted) AS dead FROM lb_elements',
-    ),
-    childrenOfFrame: p(
-      "SELECT id FROM lb_elements WHERE deleted = 0 AND json_extract(data, '$.frameId') = ?",
-    ),
-    setMeta: p('INSERT OR REPLACE INTO lb_meta (key, value) VALUES (?, ?)'),
-    docAll: p('SELECT key, clock, value FROM lb_doc'),
-    docGet: p('SELECT key, clock, value FROM lb_doc WHERE key = ?'),
-    docSet: p('INSERT OR REPLACE INTO lb_doc (key, clock, value) VALUES (?, ?, ?)'),
-    docCountPrefix: p('SELECT count(*) AS n FROM lb_doc WHERE value IS NOT NULL AND substr(key, 1, ?) = ?'),
-    deletedInsert: p(
-      `INSERT INTO lb_deleted (batch, element_id, type, container_id, frame_id, data, deleted_by,
+    childrenOfFrame: "SELECT id FROM lb_elements WHERE deleted = 0 AND json_extract(data, '$.frameId') = ?",
+    setMeta: 'INSERT OR REPLACE INTO lb_meta (key, value) VALUES (?, ?)',
+    docAll: 'SELECT key, clock, value FROM lb_doc',
+    docGet: 'SELECT key, clock, value FROM lb_doc WHERE key = ?',
+    docSet: 'INSERT OR REPLACE INTO lb_doc (key, clock, value) VALUES (?, ?, ?)',
+    docCountPrefix: 'SELECT count(*) AS n FROM lb_doc WHERE value IS NOT NULL AND substr(key, 1, ?) = ?',
+    deletedInsert: `INSERT INTO lb_deleted (batch, element_id, type, container_id, frame_id, data, deleted_by,
          deleted_by_name, deleted_at, epoch, origin) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'live')`,
-    ),
-    deletedCount: p('SELECT count(*) AS n FROM lb_deleted'),
-    deletedBy: p('SELECT deleted_by FROM lb_deleted WHERE element_id = ? ORDER BY seq DESC LIMIT 1'),
-    deletedNth: p('SELECT batch FROM lb_deleted ORDER BY seq DESC LIMIT 1 OFFSET ?'),
-    deletedBatchFloor: p('SELECT min(seq) AS s FROM lb_deleted WHERE batch = ?'),
-    deletedTrimOld: p('DELETE FROM lb_deleted WHERE seq < ? AND epoch <> ?'),
-    deletedTrimAll: p('DELETE FROM lb_deleted WHERE seq < ?'),
-    docCountAt: p('SELECT count(*) AS n FROM lb_doc WHERE clock = ?'),
-    tombstonesOlder: p(
+    deletedCount: 'SELECT count(*) AS n FROM lb_deleted',
+    deletedBy: 'SELECT deleted_by FROM lb_deleted WHERE element_id = ? ORDER BY seq DESC LIMIT 1',
+    deletedNth: 'SELECT batch FROM lb_deleted ORDER BY seq DESC LIMIT 1 OFFSET ?',
+    deletedBatchFloor: 'SELECT min(seq) AS s FROM lb_deleted WHERE batch = ?',
+    deletedTrimOld: 'DELETE FROM lb_deleted WHERE seq < ? AND epoch <> ?',
+    deletedTrimAll: 'DELETE FROM lb_deleted WHERE seq < ?',
+    docCountAt: 'SELECT count(*) AS n FROM lb_doc WHERE clock = ?',
+    tombstonesOlder:
       'SELECT id, deleted_clock FROM lb_elements WHERE deleted = 1 AND deleted_at IS NOT NULL AND deleted_at < ?',
-    ),
-    tombstonesByAge: p(
+    tombstonesByAge:
       'SELECT id, deleted_clock FROM lb_elements WHERE deleted = 1 ORDER BY deleted_clock DESC, id LIMIT -1 OFFSET ?',
-    ),
-    purge: p('DELETE FROM lb_elements WHERE id = ?'),
-  }
+    purge: 'DELETE FROM lb_elements WHERE id = ?',
+  })
 }

@@ -17,7 +17,7 @@ import { startScraper } from './metrics.ts'
 import { PROFILES } from './profiles.ts'
 import { buildReport, type FinalCheck, reportMarkdown } from './report.ts'
 import { boardsFromSpecs, runInThread, runInWorkers, type ThreadResult } from './runner.ts'
-import type { SessionPlan } from './session.ts'
+import { HARNESS_RECONNECT_AFTER_MS, type SessionPlan } from './session.ts'
 
 export interface PlansJob {
   readonly profileName: string
@@ -50,7 +50,7 @@ const run = {
   t0,
   durationMs: job.durationMs,
   probeSids: new Map(job.probeSids),
-  reconnectAfterMs: 5_000,
+  reconnectAfterMs: HARNESS_RECONNECT_AFTER_MS,
 }
 let results: ThreadResult[]
 if (threads > 0)
@@ -62,7 +62,7 @@ if (threads > 0)
       t0,
       durationMs: job.durationMs,
       probeSids: job.probeSids,
-      reconnectAfterMs: 5_000,
+      reconnectAfterMs: HARNESS_RECONNECT_AFTER_MS,
       boardSpecs: job.boardSpecs,
     },
     threads,
