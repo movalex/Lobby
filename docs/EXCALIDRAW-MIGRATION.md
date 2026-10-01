@@ -143,14 +143,14 @@ The recheck of revision 3 (2026-09-28) found all 3 open musts and all 11 new pro
    - Appendix B 13 and the restore: answered on 2026-09-28: restore, verify signatures, and delete the copies when the spike ends. Four staging boards are restored (§8.6.7).
 
 **Before the migration waves (R0, 2B, runbook): stay open for the waves:**
-9. R0's backup, drill and `readBoardDb` (backup.ts:139-147) throw on a file that has only `lb_*` tables. They need a code path and a gate test. (The B8 drill keeps the born-after file out of the stand-in's backup pass until R0 has this path; §8.3 B8.)
-10. Roll-forward must mirror R0's `removeRestored` and trims (store.ts:508-521) into `lb_deleted`, so an element restored during a rollback is not still listed as deleted.
+9. R0's backup, drill and `readBoardDb` (backup.ts:139-147) throw on a file that has only `lb_*` tables. They need a code path and a gate test. (The B8 drill keeps the born-after file out of the stand-in's backup pass until R0 has this path; §8.3 B8.) **Closed by R0** (DEPLOY.md "files with only `lb_*` tables", `apps/sync/test/r0/backup-lb-only.test.ts`); on the Excalidraw build its element boards get their own read-only local backups, and converted boards the format `lobby-elements-converted`, which R0 refuses by name (wave 5, 2B: `apps/sync/src/backup/element-backups.ts`, `excalidraw-backups.test.ts`).
+10. Roll-forward must mirror R0's `removeRestored` and trims (store.ts:508-521) into `lb_deleted`, so an element restored during a rollback is not still listed as deleted. **Closed in wave 5 (2B):** the roll-forward drops, in its transaction, every converted `lb_deleted` row whose `dr_deleted_records` source row R0 removed (`removeRestored` or `trimNow`), never a row of origin `live`; a record R0 restores after an earlier roll-forward deleted it is revived, theirs winning (a `life` conflict if ours deleted it since the last cycle). `apps/sync/test/migrate/rollforward-deleted.test.ts`.
 11. The new sync build must boot in maintenance (an env flag) for cut-over step 6 and rollback step 2. R0's maintenance is a runtime POST and does not survive a redeploy. **Closed in wave 5 (2A):** `DRAFTROOM_BOOT_MAINTENANCE=1` starts either engine's sync in maintenance (sockets refused 4099 `MAINTENANCE`, internal reads working); the same `POST /internal/maintenance {on}` switches it (`apps/sync/test/r0/boot-maintenance.test.ts`).
-12. Define how binding-record diffs map to the arrow's binding and the target's `boundElements` in local mode.
+12. Define how binding-record diffs map to the arrow's binding and the target's `boundElements` in local mode. **Closed in wave 5 (2B):** defined in `apps/sync/src/room/migrate/rollforward.ts`'s header and pinned by 8 cases in `rollforward-bindings.test.ts`. A binding record created, deleted or re-targeted in theirs touches both of its ends (a re-target its old target too), each end is converted in local mode on both sides and the arrow's `bind` group merges like any other; a target's `boundElements` is never taken from either side but derived from the merged arrows and labels (ours' Excalidraw-era bindings kept, a binding to a deleted target nulled, a deleted arrow leaving its targets' lists), then the re-snap and the invariants.
 
 **Minor (fix in the wave that owns the code):**
 - A normal-concurrency violation uses a code that does not count toward the abuse close.
-- Index collisions with deleted elements.
+- Index collisions with deleted elements. **Closed in wave 5:** the room's index cache holds the tombstones' keys, so a push never stores a live element at a tombstone's key (2A), and the roll-forward repairs a share an older room left (2B, `rollforward-keys*.test.ts`).
 - `resourceLimits` caps only the V8 heap, not `node:sqlite` native memory in the worker. A roll-forward storm after a redeploy queues serially behind the RSS gate; that is intended.
 - Keys with `keyCode` 229 (Android soft keyboards, IME "Process" or "Unidentified") cannot be buffered, so A2's "no key lost" covers desktop keydown only [verify-A]. Before a grant no text input has focus, so a soft keyboard does not type into the canvas; the guard's `readOnly` blocks input with no keydown. Checked on the real device (Appendix B 11) and in B12 under emulation.
 - A build with `VITE_LOBBY_ENGINE=excalidraw` but no dev auth still emits `dist/excalidraw-assets` (233 files, 14 MB), because the asset plugin checks only the engine flag [verify-A]. No engine code ships. **Being fixed in the fix round:** its working tree makes `apps/web/build/excalidraw-assets.ts` follow the engine route's gate, with a new test [r33-check]. Closed when that lands in B0; otherwise wave 4 fixes it.
@@ -1418,12 +1418,12 @@ Legend: **Keep** (no canvas change, or config only), **Rewrite** (same behaviour
 | tldraw | Excalidraw | Port to `next` |
 |---|---|---|
 | `note` | rectangle + bound text | → `stickynote` + label (`baseHeight`, `baseFontSize`, `created: null`) |
-| `geo` rectangle/ellipse/diamond/oval/check-box/x-box | native, + label | same |
-| `geo` other kinds | grouped `line` polygon + holder rectangle + label | outline with `polygon: true` |
+| `geo` rectangle/ellipse/diamond/oval/check-box/x-box | native, + label | same; since wave 5 (2B, D4, `packages/tldraw-import/src/geo-shapes.ts`, `CONVERTER_VERSION` 2): `oval` is an ellipse (`geo-approximated`), check-box and x-box keep their marks as grouped open lines |
+| `geo` other kinds | grouped `line` polygon + holder rectangle + label | outline with `polygon: true`; since wave 5 all 14 polygon kinds come from tldraw 5.4.2's own geometry (exact vertices; heart and cloud sampled from its curves, `geo-approximated`), compared with `getGeoShapePath` in `test/geo-shapes.test.ts`; a geo built from parts conflicts as one shape for style in the roll-forward |
 | `text` (rich) | plain lines, lists as "• " and "1. "; first link → `link` | same |
 | `frame` | `frame`; children get `frameId`; nested frames lifted | same |
 | `group` | `groupIds` | same |
-| `arrow` + bindings | `startBinding`/`endBinding` `{focus, gap}`; label as bound text | → `FixedPointBinding {elementId, fixedPoint, mode}`: `isPrecise` → `'inside'` at the anchor, else `'orbit'`. Checked visually in spike B8. |
+| `arrow` + bindings | `startBinding`/`endBinding` `{focus, gap}`; label as bound text | → `FixedPointBinding {elementId, fixedPoint, mode}`: `isPrecise` → `'inside'` at the anchor, else `'orbit'`. Checked visually in spike B8. **As built** (wave 5, 2B's note): `isExact` → `'inside'`; `isPrecise` (or an elbow) → `'orbit'` at the anchor; neither → `'orbit'` at the centre. |
 | `draw`, `highlight` | `freedraw` (points via `b64Vecs`), highlight at opacity 50 | + `strokeOptions`; points rounded and capped (§3.5) |
 | `line` | `line`; spline → `roundness {type: 2}` | + `polygon: false` |
 | `image` (+ asset) | `image`, `fileId` = version id; crop and flips | same |
@@ -1456,7 +1456,7 @@ So the converter, `place-notes` and any server-made note build elements directly
 |---|---|---|
 | `rich-text-formatting` | bold, italic, headings, code, more than one link | 22 (21 in the Lobby tour) |
 | `serif-font` | serif becomes Nunito | 1 |
-| `geo-polygon`, `geo-approximated` | polygon, or approximated | 3 |
+| `geo-polygon`, `geo-approximated` | polygon, or approximated (since wave 5 the codes name the approximated kinds: oval, heart, cloud) | 3 |
 | `nested-frame` | inner frame lifted to the top | 1 |
 | `page-flattened` | page laid out to the right | 1 |
 | `arrow-binding-dropped` | binding to a non-bindable target | 1 |
