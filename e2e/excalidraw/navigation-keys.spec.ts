@@ -254,10 +254,10 @@ test('PRI-13: at phone width the navigation panel is one Zoom to fit button, and
       if (!(await a.page.getByTestId(id).isVisible())) continue
       expect(await centreHitsItself(a.page, id), id).toBe(true)
     }
-    const [f, sel] = [
-      await a.page.getByTestId('navigation.zoom-to-fit').boundingBox(),
-      await a.page.getByTestId('tools.select').boundingBox(),
-    ]
+    // (a box only for what is on the page: boundingBox waits for a missing element)
+    const box = async (id: string) =>
+      (await a.page.getByTestId(id).count()) ? a.page.getByTestId(id).boundingBox() : null
+    const [f, sel] = [await box('navigation.zoom-to-fit'), await box('tools.select')]
     if (f && sel) expect(overlaps(f, sel)).toBe(false)
   }
   await clear()
