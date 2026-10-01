@@ -18,7 +18,7 @@ import { ackedButMissing, counterTotals, histogramOver, phasesOf, visibilitySamp
 import { partitionPlans } from './runner.ts'
 import { chunkCreates, SEED_MAX_BYTES } from './seed.ts'
 import type { SessionReport } from './session.ts'
-import { percentile, Recorder } from './stats.ts'
+import { percentile, Recorder, summarize } from './stats.ts'
 import { loadUser, mintTicket, newRunSecrets, runEnvText, secretsFromEnv } from './tickets.ts'
 
 const dirs: string[] = []
@@ -230,6 +230,11 @@ describe('seeding, stats and the report joins', () => {
       ['reconnect storm (60 s after the kill)', 90, null],
       ['after', null, null],
     ])
+  })
+  it('summarizes 300,000 samples (L2 visibility: 10 measuring sessions x 12,000 edits) without a spread', () => {
+    const big = Array.from({ length: 300_000 }, (_, i) => (i * 7919) % 1_000)
+    // 7919 and 1000 are coprime: every residue 0..999 appears 300 times (nearest rank: 499, 949, 989)
+    expect(summarize(big)).toEqual({ n: 300_000, p50: 499, p95: 949, p99: 989, max: 999, mean: 499.5 })
   })
   it('chunks creates within 500 ops and 500 KiB, a label with its note', () => {
     const b = l1Board('seed-x')
