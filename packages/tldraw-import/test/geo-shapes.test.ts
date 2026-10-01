@@ -183,12 +183,13 @@ describe('D4: the converter mapping of every tldraw geo kind', () => {
       expect(check).toHaveLength(1)
       const [mark] = geoMarks('check-box', w, h)
       expect(mark?.length).toBe(3)
-      mark?.forEach((p, i) => expect(near(p, check[0]?.[i] as Cmd, 1e-9)).toBe(true))
+      for (const [i, p] of (mark ?? []).entries()) expect(near(p, check[0]?.[i] as Cmd, 1e-9)).toBe(true)
       for (const dash of ['draw', 'solid']) {
         const cross = subpaths(tlPath('x-box', w, h, { dash })).slice(1)
         const marks = geoMarks('x-box', w, h, { dash, strokeWidth: 3.5 })
         expect(marks).toHaveLength(cross.length)
-        marks.forEach((m, j) => m.forEach((p, i) => expect(near(p, cross[j]?.[i] as Cmd, 1e-9)).toBe(true)))
+        for (const [j, m] of marks.entries())
+          for (const [i, p] of m.entries()) expect(near(p, cross[j]?.[i] as Cmd, 1e-9)).toBe(true)
       }
     }
   })
@@ -199,7 +200,7 @@ describe('D4: the converter mapping of every tldraw geo kind', () => {
       { id: 'document:document', typeName: 'document', gridSize: 10, name: '', meta: {} },
       { id: 'page:page', typeName: 'page', name: 'Page 1', index: 'a1', meta: {} },
     ] as unknown as TlRecord[]
-    TL_GEO_KINDS.forEach((kind, i) =>
+    for (const [i, kind] of TL_GEO_KINDS.entries())
       records.push({
         id: `shape:g${i}`,
         typeName: 'shape',
@@ -231,8 +232,7 @@ describe('D4: the converter mapping of every tldraw geo kind', () => {
           verticalAlign: 'middle',
           richText: toRichText(i % 2 ? 'Label' : ''),
         },
-      } as unknown as TlRecord),
-    )
+      } as unknown as TlRecord)
     const conv = convertBoard(records, { updatedAt: 1, metrics })
     expect(conv.failures).toEqual([])
     TL_GEO_KINDS.forEach((kind, i) => {
