@@ -11,11 +11,14 @@
  * Closes: 4099 is terminal (no reconnect: NOT_AUTHENTICATED, FORBIDDEN, INVALID_MESSAGE, …); anything
  * else reconnects with a fresh URL (a fresh ticket in the browser). `close()` stops for good.
  *
- * Heartbeat (wave 5): a socket that received nothing for `heartbeatMs` gets a `ping` (the room answers
- * `pong` at once); one that then stays silent for another `heartbeatMs` is dead (a half-open connection:
- * the server or the network went away without a close) and is dropped as a close 4000 `heartbeat`, so
- * the page reconnects. Before, a silent socket stayed open, and every push made on it was "in flight"
- * until the browser gave up on it, which widened the lost-push window (V1 re-check, R8).
+ * Heartbeat (wave 5): every `heartbeatMs` an open socket sends a `ping` (the room answers `pong` at
+ * once); a ping whose pong has not arrived when the next one is due means the socket is dead (a half-open
+ * connection: the server or the network went away without a close, or only this socket's upstream is
+ * gone while the server's frames still arrive) and it is dropped as a close 4000 `heartbeat`, so the page
+ * reconnects. Before, a silent socket stayed open, and every push made on it was "in flight" until the
+ * browser gave up on it, which widened the lost-push window (V1 re-check, R8); and the ping went out only
+ * after silence, so a socket whose upstream was dead while other users' changes kept arriving was never
+ * found: a push stayed in flight on it for as long as the others kept working (V1 re-check round 3, H2).
  *
  * NODE-SAFE (CONTRACTS.md): no DOM types; the socket is a structural `WebSocketLike`.
  */
@@ -51,7 +54,7 @@ export interface SocketTransportOptions {
   readonly clearTimer?: (h: unknown) => void
   /** every inbound frame, decoded (the headless client's `received()`), before validation drops anything */
   readonly onRaw?: (message: ServerInbound) => void
-  /** silence before a `ping`, and again before the socket counts as dead (default 15 s; 0: no heartbeat) */
+  /** the ping cadence, and how long a ping may stay unanswered before the socket counts as dead (default 15 s; 0: no heartbeat) */
   readonly heartbeatMs?: number
   readonly now?: () => number
   readonly log?: (event: string, detail: Readonly<Record<string, unknown>>) => void
@@ -113,7 +116,6 @@ export function createSocketTransport(opts: SocketTransportOptions): SocketTrans
 
   const onFrame = (data: unknown, gen: number) => {
     lastFrameAt = now()
-    pinged = false
     chain = chain.then(async () => {
       if (gen !== generation) return
       if (typeof data === 'string') {
@@ -132,6 +134,8 @@ export function createSocketTransport(opts: SocketTransportOptions): SocketTrans
           })
           return
         }
+        // only the room's answer to this socket's ping proves the upstream path (other frames do not)
+        if (r.data.type === 'pong' && gen === generation) awaitingPong = false
         opts.onRaw?.(r.data)
         deliver(r.data)
         return
@@ -150,38 +154,37 @@ export function createSocketTransport(opts: SocketTransportOptions): SocketTrans
   }
 
   let lastFrameAt = 0
-  let pinged = false
-  /** Every heartbeatMs on an open socket: a ping after silence, then a drop if the silence goes on. */
+  /** a ping is out and its pong has not come back */
+  let awaitingPong = false
+  /** Every heartbeatMs on an open socket: a ping; a drop when the previous ping got no pong in time. */
   const startBeat = (sock: WebSocketLike, gen: number) => {
     stopBeat()
     if (heartbeatMs <= 0) return
     lastFrameAt = now()
-    pinged = false
+    awaitingPong = false
     const tick = () => {
       beat = null
       if (gen !== generation || stopped) return
-      if (now() - lastFrameAt >= heartbeatMs) {
-        if (pinged) {
-          // a half-open socket: no close will come, so it is dropped here and the page reconnects
-          opts.log?.('socket_heartbeat_dead', { silentMs: now() - lastFrameAt })
-          generation++
-          ws = null
-          try {
-            sock.close(HEARTBEAT_CLOSE.code, HEARTBEAT_CLOSE.reason)
-          } catch {
-            // closing a dead socket may throw: it is gone either way
-          }
-          chain = chain.then(() => {
-            if (stopped) return
-            setState('closed', { ...HEARTBEAT_CLOSE })
-            scheduleReconnect()
-          })
-          return
+      if (awaitingPong) {
+        // a half-open socket (or one whose upstream is gone): no close will come, so it is dropped here
+        // and the page reconnects
+        opts.log?.('socket_heartbeat_dead', { silentMs: now() - lastFrameAt, unansweredMs: heartbeatMs })
+        generation++
+        ws = null
+        try {
+          sock.close(HEARTBEAT_CLOSE.code, HEARTBEAT_CLOSE.reason)
+        } catch {
+          // closing a dead socket may throw: it is gone either way
         }
-        pinged = true
-        lastFrameAt = now()
-        if (sock.readyState === OPEN) sock.send(JSON.stringify({ type: 'ping' }))
+        chain = chain.then(() => {
+          if (stopped) return
+          setState('closed', { ...HEARTBEAT_CLOSE })
+          scheduleReconnect()
+        })
+        return
       }
+      awaitingPong = true
+      if (sock.readyState === OPEN) sock.send(JSON.stringify({ type: 'ping' }))
       beat = setTimer(tick, heartbeatMs)
     }
     beat = setTimer(tick, heartbeatMs)

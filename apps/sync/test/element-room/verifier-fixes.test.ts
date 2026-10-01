@@ -357,11 +357,20 @@ describe('V2 lows', () => {
       await e.create([rect('t1', { x: 400 })])
       await e.push([patch(e, 't1', { g: { life: { isDeleted: true } } })])
       await g.untilClock(e.clock)
-      const u = r0(await g.create([rect('t1', { x: 400, locked: true, version: 5 })]))
+      // another user's tombstone: a name-only guest may not bring it back at all (V2 P-W6, wave 5)
+      const other = r0(await g.create([rect('t1', { x: 400, locked: true, version: 5 })]))
+      expect(other.ok).toBe(false)
+      expect(other.code).toBe('GONE')
+      // its own tombstone: undeleted, but never locked
+      await g.create([rect('t2', { x: 800 })])
+      await g.push([patch(g, 't2', { g: { life: { isDeleted: true } } })])
+      const u = r0(await g.create([rect('t2', { x: 800, locked: true, version: 5 })]))
       expect(u.ok).toBe(true)
       const els = await stored(st, b)
       expect(els.get('g-locked')?.locked).toBe(false)
-      expect(els.get('t1')?.locked).toBe(false)
+      expect(els.get('t1')?.isDeleted).toBe(true)
+      expect(els.get('t2')?.locked).toBe(false)
+      expect(els.get('t2')?.isDeleted).toBe(false)
     },
     T,
   )

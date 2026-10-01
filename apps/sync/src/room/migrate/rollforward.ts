@@ -46,7 +46,13 @@
 import { createHash } from 'node:crypto'
 import { DatabaseSync } from 'node:sqlite'
 import { checkElement, type WireElement } from '@draftroom/canvas-schema/elements'
-import { indexKeyBetween, resnapArrow, type ServerTextMetrics } from '@draftroom/canvas-schema/engine'
+import {
+  indexKeyBetween,
+  isBindable,
+  isTextContainer,
+  resnapArrow,
+  type ServerTextMetrics,
+} from '@draftroom/canvas-schema/engine'
 import { fieldGroupOf, type GroupName, kindOf } from '@draftroom/canvas-schema/groups'
 import { canonicalElementList } from '@draftroom/canvas-schema/hash'
 import { checkInvariants } from '@draftroom/canvas-schema/invariants'
@@ -54,6 +60,7 @@ import { roundGeometry } from '@draftroom/canvas-schema/limits'
 import {
   approxResnap,
   CONVERTER_VERSION,
+  clampToLimits,
   convertDeleted,
   convertRecords,
   elementIdOf,
@@ -701,11 +708,25 @@ export function rollForwardBoardFile(job: RollForwardJob, metrics: ServerTextMet
       placed.add(shapeId)
     }
     // a new label of an existing container goes right after its container
+    const view0 = (id: string): Record<string, unknown> | undefined => written.get(id) ?? ours.get(id)
     for (const id of inserted) {
       const e = written.get(id) as Record<string, unknown>
       if (e.index !== null && e.index !== undefined && idx.has(id)) continue
       const container = typeof e.containerId === 'string' ? e.containerId : null
-      const lo = container ? (idx.get(container) ?? null) : (liveKeys.at(-1) ?? null)
+      // a part of a geo built from parts (`.o`, `.m<n>`: a kind changed on R0, D4) goes right after the
+      // parts its holder already has, not on top of the board (§5.9 f: between its neighbours)
+      const holder = /\.(o|m\d+)$/.test(id) ? (id.split('.')[0] as string) : null
+      const holderKeys = holder
+        ? (owners.get(holder) ?? [])
+            .filter((p) => p !== id && idx.has(p) && isLive(p) && view0(p)?.type !== 'text')
+            .map((p) => idx.get(p) as string)
+            .sort()
+        : []
+      const lo = container
+        ? (idx.get(container) ?? null)
+        : holderKeys.length
+          ? (holderKeys.at(-1) as string)
+          : (liveKeys.at(-1) ?? null)
       const key = indexKeyBetween(lo, successor(lo))
       idx.set(id, key)
       insertKey(key)
@@ -724,6 +745,57 @@ export function rollForwardBoardFile(job: RollForwardJob, metrics: ServerTextMet
     const view = new Map<string, WireElement>()
     for (const [id, e] of ours) if (!written.has(id)) view.set(id, e as unknown as WireElement)
     for (const [id, e] of written) view.set(id, e as unknown as WireElement)
+    // g0. the room's repairs (room/invariants.ts), never refusals: a reference the merge leaves to an
+    // element the other side deleted is repaired the way the room repairs the same push, so ordinary edits
+    // on both sides of a rollback never leave a board that cannot open (V3's wave-5 re-check: a frame
+    // deleted on R0 while Excalidraw added a child, a container deleted on R0 after Excalidraw added a
+    // label, a note R0 created in a frame Excalidraw deleted, an arrow R0 drew or a label R0 typed into a
+    // shape Excalidraw deleted, all ended in `validation` and a board closed 4099 CONVERSION_FAILED).
+    const liveOf = (id: string | null | undefined): WireElement | undefined => {
+      const e = id ? view.get(id) : undefined
+      return e && !e.isDeleted ? e : undefined
+    }
+    const repairWrite = (id: string, next: WireElement, g: string, code: string) => {
+      const w = work(id) ?? written.get(id)
+      if (!w) return
+      Object.assign(w, next)
+      view.set(id, next)
+      mark(id, g)
+      repaired.push({ id, code })
+    }
+    // a member of a frame that is deleted, missing or not a frame, and a frame inside a frame: frameId null
+    for (const e of [...view.values()]) {
+      if (e.isDeleted || !e.frameId) continue
+      if (liveOf(e.frameId)?.type !== 'frame' || e.type === 'frame')
+        repairWrite(e.id, { ...e, frameId: null } as WireElement, 'membership', 'frame-cleared')
+    }
+    // a label whose container is deleted or missing goes with it (the room cascades the delete)
+    for (const e of [...view.values()]) {
+      if (e.isDeleted || e.type !== 'text' || !e.containerId) continue
+      const c = liveOf(e.containerId)
+      if (c && isTextContainer(c as never)) continue
+      newDeleted.add(e.id)
+      repairWrite(e.id, { ...e, isDeleted: true } as WireElement, 'life', 'label-orphaned')
+    }
+    // an arrow bound to a deleted, missing or unbindable target (itself included): that end nulled, where
+    // it is (§2.4.4). Every live arrow, not only the ones the re-snap below visits: a new arrow R0 drew to
+    // a shape Excalidraw deleted is inserted without a changed group (open item 12's random case)
+    type ArrowLike = WireElement & {
+      startBinding?: { elementId: string } | null
+      endBinding?: { elementId: string } | null
+    }
+    for (const e of [...view.values()]) {
+      if (e.isDeleted || e.type !== 'arrow') continue
+      const was = e as ArrowLike
+      let arrow = was
+      for (const end of ['startBinding', 'endBinding'] as const) {
+        const b = arrow[end]
+        if (!b) continue
+        const t = liveOf(b.elementId)
+        if (!t || !isBindable(t as never) || t.id === arrow.id) arrow = { ...arrow, [end]: null } as ArrowLike
+      }
+      if (arrow !== was) repairWrite(e.id, arrow, 'bind', 'binding-cleared')
+    }
     const geometryChanged = new Set<string>()
     for (const [id, gs] of writtenGroups)
       if ([...gs].some((g) => ['pos', 'shape', 'path', 'layout', 'text', 'textStyle', 'life'].includes(g)))
@@ -808,6 +880,34 @@ export function rollForwardBoardFile(job: RollForwardJob, metrics: ServerTextMet
       view.set(e.id, { ...e, boundElements: w.boundElements } as WireElement)
       mark(e.id, 'bound')
     }
+    // a label that sorts before its container (R0 brought the container to the front while Excalidraw typed
+    // its label, or the other way round) is re-keyed right after the container's last part, as the room
+    // re-keys such a push (§2.4.3 step 11); a key between two keys in use never collides
+    for (const e of [...view.values()]) {
+      if (e.isDeleted || e.type !== 'text' || !e.containerId) continue
+      const c = liveOf(e.containerId)
+      if (!c) continue
+      const lk = idx.get(e.id) ?? (e.index as string | null)
+      const ck = idx.get(c.id) ?? (c.index as string | null)
+      if (lk === null || ck === null || lk > ck || (lk === ck && e.id > c.id)) continue
+      const parts = (owners.get(c.id.split('.')[0] as string) ?? [])
+        .filter((id) => id !== e.id && liveOf(id)?.type !== 'text')
+        .map((id) => idx.get(id) ?? (view.get(id)?.index as string | null))
+        .filter((k): k is string => typeof k === 'string')
+      const lo = [ck, ...parts].sort().at(-1) as string
+      const key = indexKeyBetween(lo, successor(lo))
+      const old = idx.get(e.id)
+      if (old !== undefined) removeKey(old)
+      idx.set(e.id, key)
+      insertKey(key)
+      const w = work(e.id) ?? written.get(e.id)
+      if (!w) continue
+      w.index = key
+      view.set(e.id, { ...e, index: key } as WireElement)
+      mark(e.id, 'z')
+      assigned.add(e.id)
+      repaired.push({ id: e.id, code: 'label-order' })
+    }
     // f'. a key share the merge did not make is repaired, never refused (2B, V3's re-check): the room's
     // index cache holds live elements only, so a raw push can leave a live element on a tombstone's key;
     // when the merge writes that element (R0 recoloured, moved or deleted it), it gets a key of its own
@@ -864,8 +964,13 @@ export function rollForwardBoardFile(job: RollForwardJob, metrics: ServerTextMet
       if (newDeleted.has(id)) w.isDeleted = true
       view.set(id, w as unknown as WireElement)
     }
-    // checks
+    // checks; a re-fit or a parent move that put a written element beyond the coordinate limits (its
+    // container clamped at the edge by the converter) is clamped like the converter clamps a record
     for (const [id, w] of written) {
+      if (clampToLimits(w)) {
+        view.set(id, w as unknown as WireElement)
+        repaired.push({ id, code: 'coords-clamped' })
+      }
       const c = checkElement(w)
       if (!c.ok) failures.push({ id, code: c.code })
     }

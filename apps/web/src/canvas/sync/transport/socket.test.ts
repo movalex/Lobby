@@ -1,5 +1,6 @@
 // The board socket's heartbeat (wave 5, 2C; V1 re-check R8: a silent, half-open socket kept every push
-// "in flight" until the browser gave up on it). A fake WebSocket on the manual clock.
+// "in flight" until the browser gave up on it; V1 re-check round 3, H2: a socket whose upstream was dead
+// while other users' frames kept arriving was never found). A fake WebSocket on the manual clock.
 import { describe, expect, it } from 'vitest'
 import { createManualClock } from '../testing/manualClock.ts'
 import type { TransportState } from '../types.ts'
@@ -40,44 +41,57 @@ const flush = async () => {
   for (let i = 0; i < 5; i++) await Promise.resolve()
 }
 
+const pings = (s: FakeSocket) => s.sent.filter((m) => m.includes('"ping"')).length
+
+function start(heartbeatMs: number) {
+  FakeSocket.all = []
+  const clock = createManualClock()
+  const states: TransportState[] = []
+  const closes: { code: number; reason: string }[] = []
+  const t = createSocketTransport({
+    url: () => 'ws://x/connect/b',
+    WebSocketImpl: FakeSocket,
+    heartbeatMs,
+    now: clock.now,
+    setTimer: clock.setTimer,
+    clearTimer: clock.clearTimer,
+    backoffMs: [100],
+  })
+  t.onState((s, c) => {
+    states.push(s)
+    if (c) closes.push(c)
+  })
+  t.connect()
+  return { clock, states, closes, t }
+}
+
 describe('the board socket heartbeat', () => {
-  it('pings after silence, and drops a socket that stays silent: the page reconnects', async () => {
-    FakeSocket.all = []
-    const clock = createManualClock()
-    const states: TransportState[] = []
-    const closes: { code: number; reason: string }[] = []
-    const t = createSocketTransport({
-      url: () => 'ws://x/connect/b',
-      WebSocketImpl: FakeSocket,
-      heartbeatMs: 15_000,
-      now: clock.now,
-      setTimer: clock.setTimer,
-      clearTimer: clock.clearTimer,
-      backoffMs: [100],
-    })
-    t.onState((s, c) => {
-      states.push(s)
-      if (c) closes.push(c)
-    })
-    t.connect()
+  it('pings on a fixed cadence, keeps a socket whose pongs come back, and drops one whose ping stays unanswered', async () => {
+    const { clock, states, closes, t } = start(15_000)
     await flush()
     const s1 = FakeSocket.all[0] as FakeSocket
     s1.open()
-    // frames keep it alive: no ping
+    // before the first beat: no ping, and an unsolicited frame changes nothing
     clock.advance(10_000)
-    s1.receive({ type: 'pong' })
+    s1.receive({ type: 'changes', clock: 1, ops: [] })
     await flush()
-    clock.advance(10_000)
-    expect(s1.sent.filter((m) => m.includes('"ping"'))).toEqual([])
-    // 15 s of silence: one ping
-    clock.advance(10_000)
-    expect(s1.sent.filter((m) => m.includes('"ping"'))).toHaveLength(1)
+    expect(pings(s1)).toBe(0)
+    // 15 s: one ping, whether or not frames arrived
+    clock.advance(5_000)
+    expect(pings(s1)).toBe(1)
     // a pong in time keeps it
+    clock.advance(10_000)
     s1.receive({ type: 'pong' })
     await flush()
-    clock.advance(20_000)
+    clock.advance(5_000)
     expect(s1.closed).toBeNull()
-    // then nothing at all: a ping, then the drop
+    expect(pings(s1)).toBe(2)
+    // a pong keeps it again; then nothing comes back for the next ping: the drop, 15 s after it
+    s1.receive({ type: 'pong' })
+    await flush()
+    clock.advance(15_000)
+    expect(pings(s1)).toBe(3)
+    expect(s1.closed).toBeNull()
     clock.advance(15_000)
     expect(s1.closed).toEqual({ code: HEARTBEAT_CLOSE.code, reason: HEARTBEAT_CLOSE.reason })
     await flush()
@@ -91,6 +105,28 @@ describe('the board socket heartbeat', () => {
     s1.onclose?.({ code: 1006, reason: '' })
     await flush()
     expect(states.at(-1)).toBe('connecting')
+    t.close()
+  })
+
+  it("other users' frames do not keep a socket alive: a ping without a pong drops it (H2, a dead upstream)", async () => {
+    const { clock, closes, t } = start(15_000)
+    await flush()
+    const s1 = FakeSocket.all[0] as FakeSocket
+    s1.open()
+    const t0 = clock.now()
+    // the server's frames keep arriving (B works on the board) while this socket's upstream is gone
+    for (let i = 0; i < 20; i++) {
+      clock.advance(2_000)
+      s1.receive({ type: 'changes', clock: i + 1, ops: [] })
+      await flush()
+      if (s1.closed) break
+    }
+    // the first ping at 15 s got no pong: dropped at 30 s, not after a minute of "saving"
+    expect(pings(s1)).toBe(1)
+    expect(s1.closed).toEqual({ code: HEARTBEAT_CLOSE.code, reason: HEARTBEAT_CLOSE.reason })
+    expect(clock.now() - t0).toBeLessThanOrEqual(32_000)
+    await flush()
+    expect(closes.at(-1)).toEqual({ ...HEARTBEAT_CLOSE })
     t.close()
   })
 

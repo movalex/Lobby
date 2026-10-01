@@ -320,6 +320,12 @@ export class BoardStore {
     )
   }
 
+  /** Who deleted the element last ("Recently deleted"'s row), or null when no row is kept (trimmed, or converted without one). */
+  deletedBy(id: string): string | null {
+    const r = this.st.deletedBy.get(id) as { deleted_by: string | null } | undefined
+    return r?.deleted_by ?? null
+  }
+
   /**
    * The retention of LB_DELETED_LIMITS (outside a push): rows of other room sessions older than the
    * batch of the `retainRecent`-th newest row go, then every row older than the batch of the
@@ -439,6 +445,7 @@ function prepareStatements(db: DatabaseSync) {
          deleted_by_name, deleted_at, epoch, origin) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'live')`,
     ),
     deletedCount: p('SELECT count(*) AS n FROM lb_deleted'),
+    deletedBy: p('SELECT deleted_by FROM lb_deleted WHERE element_id = ? ORDER BY seq DESC LIMIT 1'),
     deletedNth: p('SELECT batch FROM lb_deleted ORDER BY seq DESC LIMIT 1 OFFSET ?'),
     deletedBatchFloor: p('SELECT min(seq) AS s FROM lb_deleted WHERE batch = ?'),
     deletedTrimOld: p('DELETE FROM lb_deleted WHERE seq < ? AND epoch <> ?'),

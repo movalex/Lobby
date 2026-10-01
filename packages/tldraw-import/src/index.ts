@@ -16,6 +16,7 @@
  */
 export {
   type ConvertResult,
+  clampToLimits,
   computeLegacyPages,
   convertBoard,
   convertRecords,

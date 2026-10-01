@@ -32,6 +32,7 @@ import {
   type TextElement,
 } from '@draftroom/canvas-schema/engine'
 import {
+  COORD_LIMIT,
   FILE_ID_PATTERN,
   FREEDRAW_SIMPLIFY_EPSILON_PX,
   isAllowedLink,
@@ -336,6 +337,8 @@ export function pageBounds(
       [sz.w, sz.h],
     ] as const) {
       const q = apply(n.m, x, y)
+      // a corner beyond the limits (a raw R0 record) does not push the later pages out of range
+      if (beyondLimits(q.x, q.y)) continue
       minX = Math.min(minX, q.x)
       maxX = Math.max(maxX, q.x)
       minY = Math.min(minY, q.y)
@@ -384,6 +387,7 @@ export function computeLegacyPages(snap: Snapshot, pageGap = 800): LegacyPages {
         [sz.w, sz.h],
       ] as const) {
         const q = apply(n.m, x, y)
+        if (beyondLimits(q.x, q.y)) continue
         minX = Math.min(minX, q.x)
         maxX = Math.max(maxX, q.x)
         minY = Math.min(minY, q.y)
@@ -1435,7 +1439,49 @@ export function paintOrder(snap: Snapshot): string[] {
   return out
 }
 
-function finish(el: El, failures: ConvertFailure[]): WireElement | null {
+/** A corner of a shape is beyond the Excalidraw build's coordinate limits (a raw R0 client, a far pan). */
+const beyondLimits = (x: number, y: number) => Math.abs(x) > COORD_LIMIT || Math.abs(y) > COORD_LIMIT
+
+/**
+ * Clamps a converted element into the server's limits (`COORD_LIMIT`, limits.ts): position, size and
+ * points. tldraw's schema takes any finite number, so a record R0 stored at x = 2e6 (a raw client, a far
+ * pan) is schema-valid there and INVALID here; before, one such record closed the whole board (the
+ * roll-forward refused it, the lazy conversion too). Now the element lands at the edge, lossy
+ * `coords-clamped`. Returns whether anything changed.
+ */
+export function clampToLimits(el: Record<string, unknown>): boolean {
+  let changed = false
+  const clamp = (v: number) => Math.min(COORD_LIMIT, Math.max(-COORD_LIMIT, v))
+  for (const f of ['x', 'y'] as const) {
+    const v = el[f]
+    if (typeof v === 'number' && Math.abs(v) > COORD_LIMIT) {
+      el[f] = clamp(v)
+      changed = true
+    }
+  }
+  for (const f of ['width', 'height'] as const) {
+    const v = el[f]
+    if (typeof v === 'number' && v > COORD_LIMIT) {
+      el[f] = COORD_LIMIT
+      changed = true
+    }
+  }
+  if (Array.isArray(el.points)) {
+    const pts = el.points as unknown[]
+    const next = pts.map((p) => {
+      if (!Array.isArray(p)) return p
+      const [x, y] = p as [number, number]
+      if (Math.abs(x) <= COORD_LIMIT && Math.abs(y) <= COORD_LIMIT) return p
+      changed = true
+      return [clamp(x), clamp(y)]
+    })
+    if (changed) el.points = next
+  }
+  return changed
+}
+
+function finish(el: El, failures: ConvertFailure[], onClamped?: () => void): WireElement | null {
+  if (clampToLimits(el)) onClamped?.()
   const check = checkElement(el)
   if (check.ok) return check.element
   failures.push({ id: String(el.id), code: check.code, detail: check.detail })
@@ -1475,11 +1521,15 @@ export function convertBoard(records: readonly TlRecord[], opts: ConvertOptions)
       lossy.push({ code: 'empty-group', id: s.id })
   const keys = indexKeysBetween(null, null, ordered.length)
   const elements: WireElement[] = []
+  const recordOf = new Map<string, string>()
+  for (const [rid, ids] of Object.entries(mapping)) for (const id of ids) recordOf.set(id, rid)
+  const clamped = new Set<string>()
   ordered.forEach((e, i) => {
     e.index = keys[i]
-    const w = finish(e, core.failures)
+    const w = finish(e, core.failures, () => clamped.add(recordOf.get(e.id as string) ?? String(e.id)))
     if (w) elements.push(w)
   })
+  for (const id of clamped) lossy.push({ code: 'coords-clamped', id })
   const doc = docValues(snap, legacyPages, lossy, (id) => core.idOf(id))
   return {
     elements,
@@ -1522,12 +1572,16 @@ export function convertRecords(
     const res = core.convert(id)
     if (!res) continue
     const els: WireElement[] = []
+    let clamped = false
     for (const e of res.elements) {
-      const w = finish({ ...e, index: null }, core.failures)
+      const w = finish({ ...e, index: null }, core.failures, () => {
+        clamped = true
+      })
       if (w) els.push(w)
     }
     out.set(id, els)
     for (const code of new Set(res.lossy)) lossy.push({ code, id })
+    if (clamped) lossy.push({ code: 'coords-clamped', id })
     for (const f of res.files) files.set(f.fileId, f)
   }
   return {

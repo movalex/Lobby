@@ -71,10 +71,17 @@ export async function startSync(opts: {
   // O4's range, the lead's (its integration pass runs B8's generated rows, §8.6.8), or 2B's (O4's code's
   // owner since docs/EXCALIDRAW-CONTRACTS.md §0a; wave 5 runs it in 6440-6479), or the wave-5 engine
   // integrator's (6520-6559)
+  // integrator's (6520-6559), or V3's (7940-7949, §8.6.7: the conversion verifier's own stack)
   const inRange = (lo: number, hi: number) => opts.port >= lo && opts.port <= hi
-  if (!inRange(7900, 7909) && !inRange(7850, 7859) && !inRange(6440, 6479) && !inRange(6520, 6559))
+  if (
+    !inRange(7900, 7909) &&
+    !inRange(7850, 7859) &&
+    !inRange(6440, 6479) &&
+    !inRange(6520, 6559) &&
+    !inRange(7940, 7949)
+  )
     throw new Error(
-      'B8 stacks use ports 7900-7909 (O4), 7850-7859 (the lead), 6440-6479 (2B) or 6520-6559 (the engine integrator) only (§8.6.5)',
+      'B8 stacks use ports 7900-7909 (O4), 7850-7859 (the lead), 6440-6479 (2B), 6520-6559 (the engine integrator) or 7940-7949 (V3) only (§8.6.5, §8.6.7)',
     )
   if (await healthy(opts.port)) throw new Error(`port ${opts.port} already serves something`)
   const env: NodeJS.ProcessEnv = {}

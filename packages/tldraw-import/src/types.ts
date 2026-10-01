@@ -38,6 +38,9 @@ export const LOSSY_CODES = [
   'ai-marker',
   'private-frame-marker',
   'empty-group',
+  // a shape beyond the Excalidraw build's coordinate limits (±1,000,000; reachable on R0 from a raw client
+  // or by panning far): its position and size are clamped to the limits instead of closing the board
+  'coords-clamped',
 ] as const
 export type LossyCode = (typeof LOSSY_CODES)[number]
 

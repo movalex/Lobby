@@ -1030,7 +1030,14 @@ export class ElementRoom {
         for (const [id, ch] of outcome.changed) {
           if (!before.has(id)) before.set(id, ch.before)
           after.set(id, ch.after)
-          if (ch.after.isDeleted && !ch.before?.isDeleted) this.deletedSinceTrim++
+          if (ch.after.isDeleted && !ch.before?.isDeleted) {
+            this.deletedSinceTrim++
+            // W5-02: the cached reset snapshot holds this element live, with its content; a join in the
+            // next 5 s would get the words of an element now deleted (its catch-up redacts the tombstone,
+            // but a client keeps what it saw). Dropped on a delete only: a storm of reconnects replaying
+            // their queues keeps the cache for every other write (V2 re-check, P-W3c)
+            this.snapshotCache = null
+          }
         }
         Object.assign(doc, outcome.doc)
       }
