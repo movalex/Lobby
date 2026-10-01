@@ -956,10 +956,7 @@ test('W5-03: a click on a note the vote does not take, lying over one it takes, 
 test('W5-01: a note made with N inside the vote’s frame joins the frame and takes votes', async ({
   join,
 }) => {
-  test.fail(
-    true,
-    'W5-01 (2C, canvas/board/session.ts onToolClick): a note made with N and a click inside a frame gets frameId null, so a frame-scoped vote does not take it',
-  )
+  // W5-01 (2C): a note made with N and a click inside a frame joins it (merged at the wave-5 engine integration)
   const a = await join('alice')
   const b = await join('bob', 'editor')
   await seed(a.page, { frames: [{ id: OV.frame, x: 0, y: 0, w: 900, h: 600, name: 'Ideas' }] })

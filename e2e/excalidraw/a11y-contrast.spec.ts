@@ -7,8 +7,8 @@
 //    light canvas is #f9fafb (tldraw's), so a frame (white) stands out from it;
 //  - W5-15: in dark mode the ink of every one of the 13 note colours meets 4.5:1 on its fill, and an explicit
 //    colour that is not Lobby's palette is drawn as it is (not inverted).
-// Each test waits for 2C's theme (`needs('2C', …)`): Playwright counts it as passing while it fails, and its
-// mark must come off when the theme lands (an unexpected pass fails the run).
+// Each test waited for 2C's theme as an expected failure; the theme (canvas/engine/theme.ts) was merged at the
+// wave-5 engine integration, and the marks are off.
 //
 // How a ratio is read: a screenshot of a small box at device scale 2 (text strokes cover whole pixels),
 // decoded in the page; the background is the box's most common colour, the ink the pixel with the most
@@ -23,7 +23,7 @@ import {
   setViewport,
   test,
 } from '../tests/support/canvas.ts'
-import { needs, waitForA11y, withCanvas } from './a11y-kit.ts'
+import { waitForA11y, withCanvas } from './a11y-kit.ts'
 
 test.use({ viewport: { width: 1280, height: 800 }, deviceScaleFactor: 2 })
 
@@ -110,7 +110,6 @@ for (const scheme of ['light', 'dark'] as const) {
   test(`W5-10 (${scheme}): a frame's name reads at 4.5:1 and its outline at 3:1 against the canvas`, async ({
     canvasSession,
   }, testInfo) => {
-    needs('2C', 'W5-10: frame names in an ink token and a 3:1 frame outline in the engine theme')
     const a = await canvasSession('alice')
     await waitForA11y(a.page)
     await setTheme(a.page, scheme)
@@ -131,7 +130,6 @@ for (const scheme of ['light', 'dark'] as const) {
 test('W5-10: the light canvas is #f9fafb, so a white frame or card stands out from it', async ({
   canvasSession,
 }) => {
-  needs('2C', 'W5-10: the off-white #f9fafb canvas in the engine theme')
   const a = await canvasSession('alice')
   await waitForA11y(a.page)
   await setTheme(a.page, 'light')
@@ -151,7 +149,6 @@ test('W5-10: the light canvas is #f9fafb, so a white frame or card stands out fr
 test('W5-15: in dark mode the ink of every note colour reads at 4.5:1 on its fill', async ({
   canvasSession,
 }, testInfo) => {
-  needs('2C', "W5-15: hand-picked dark variants for Lobby's palette in the engine theme")
   const a = await canvasSession('alice')
   await waitForA11y(a.page)
   // the 13 note colours (board-ops elements/palette.ts NOTE_FILL), one note each, two rows
@@ -203,7 +200,6 @@ test('W5-15: in dark mode the ink of every note colour reads at 4.5:1 on its fil
 test('W5-15: in dark mode a colour that is not Lobby’s palette is drawn as it is', async ({
   canvasSession,
 }) => {
-  needs('2C', 'W5-15: explicit (non-palette) colours drawn unchanged in dark mode')
   const a = await canvasSession('alice')
   await waitForA11y(a.page)
   const teal = '#127a8a'

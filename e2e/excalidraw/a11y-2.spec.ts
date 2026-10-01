@@ -32,7 +32,6 @@ import {
   focusOf,
   inside,
   MISSING_FEATURE_MS,
-  needs,
   note,
   waitForA11y,
 } from './a11y-kit.ts'
@@ -212,8 +211,8 @@ test('A11Y-14: the save pill is not a live region; the announcer stays quiet whi
   // Found at wave 5 (3i, on f336ae4 with or without 3i's changes): while the board opens, the save view goes
   // connecting → offline-pending (a few ms, before the welcome: the engine counts offline changes on a new
   // board) → connecting → saved, so the hidden save announcer says "Back online. All changes saved." on
-  // every open (sync-quality/engineSave.ts engineDisplayState and the engine core's offlineChanges; CR-3I-6)
-  needs('2C', 'CR-3I-6: the save view passes through offline-pending while the board opens')
+  // every open (sync-quality/engineSave.ts engineDisplayState and the engine core's offlineChanges; CR-3I-6).
+  // Fixed at the wave-5 engine integration: the unread offline queue is no offline change (sync/core/saved.ts).
   const a = await canvasSession('alice')
   await waitForA11y(a.page)
   const pill = a.page.getByTestId('save-status')

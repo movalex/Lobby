@@ -706,9 +706,8 @@ test('W5-05: the server keeps a frame move that carries its locked heading by th
 }) => {
   // The server's lock rule (apps/sync/src/room/merge.ts step 5, 2A's) refuses every position change of a
   // locked element, a translation that matches its frame's move in the same push included (REVIEW-W5-EARLY
-  // W5-05: "Change not saved — that object is locked", and the split is saved). 2A fixes the rule; this
-  // mark comes off when that lands.
-  test.fail(true, 'W5-05: the room refuses the locked heading’s move with its frame (2A, merge.ts)')
+  // W5-05: "Change not saved — that object is locked", and the split is saved). 2A's rule (wave 5, merged at
+  // the engine integration) lets a locked element move by exactly its frame's move in the same push.
   const a = await canvasSession('alice')
   const b = await canvasSession('bob')
   await waitForCanvasUx(a.page)

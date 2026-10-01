@@ -166,11 +166,8 @@ test('W5-05: moving each frame of every template takes its locked heading and in
   board,
   users,
 }) => {
-  test.fail(
-    true,
-    "W5-05 (2A's lock rule, apps/sync/src/room/merge.ts): the room refuses the locked heading's move that " +
-      'follows its frame ("Change not saved — that object is locked"), so the heading stays behind',
-  )
+  // W5-05: 2A's lock rule (apps/sync/src/room/merge.ts, wave 5) lets a locked heading move with its frame;
+  // the mark came off at the wave-5 engine integration.
   test.setTimeout(300_000)
   const a = await canvasSession('alice')
   for (const t of TEMPLATE_INFOS) {
@@ -198,6 +195,10 @@ test('W5-05: moving each frame of every template takes its locked heading and in
           const now = moved.find((e) => e.id === k.id) as El
           expect(now.y - k.y, `${f.name}: "${String(k.originalText ?? k.type)}"`).toBeCloseTo(dy, 0)
         }
+        // back where it was, so the next frame's name is not under this one: the storyboard's Brief, moved
+        // down, covers its panels' names, and a drag there grabs one of the Brief's notes instead
+        await dragFrameByName(a.page, f.id, { x: 0, y: -60 })
+        await expectSaved(a.page)
       }
       await bob.context.close()
     })

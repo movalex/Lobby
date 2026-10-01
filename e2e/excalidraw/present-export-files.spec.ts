@@ -321,13 +321,13 @@ test.describe('image exports', () => {
 // D3 (REVIEW-W5-EARLY.md §9): template headings get Excalidraw's Lilita One (fontFamily 7), no new fonts
 // and no bold. The SVG export embeds the self-hosted face of every family its text uses (Lilita's woff2
 // is self-hosted with the others), so nothing in 3e's export changes for it; this check turns green once
-// the server's font allowlist takes 7 (2A and the contracts owner: canvas-schema elements.ts).
+// the server's font allowlist takes 7 (2A and the contracts owner: canvas-schema elements.ts; merged at the
+// wave-5 engine integration, so the mark is off).
 test('D3: an SVG export embeds Lilita One for a heading in fontFamily 7', async ({
   canvasSession,
   stack,
   board,
 }) => {
-  test.fail(true, 'D3 / 2A: the server refuses fontFamily 7 until the font allowlist takes it')
   const a = await canvasSession('alice')
   const id = await createItem(a.page, 'text', { x: 0, y: 0, text: 'Plan', fontFamily: 7, fontSize: 48 })
   await expect
