@@ -107,7 +107,9 @@ its test: lint, typecheck and the element-room suites (118/118) pass there.
   and once more at `b1ad9dc` (the final code, `38af6d6`; 20/20 each); P11 20/20 at both; B6 cross-workspace
   20/20 once; `b4-client-durability` D2 with `SPIKE_B4_D2_ROUNDS=6` (V1's N16 repro) 3/3.
 - **B8 as O4**, O4's own scripts (`o4-b8-open.sh`, `o4-b8-rows.sh` with the fixer's copy excluding the
-  untracked V3 probes from its unit run), 3 runs each. Generated: converter and migrate units 407/407, the
+  untracked V3 probes from its unit run), 3 runs each. Generated: converter and migrate units 407/407 (V3's
+  re-check: 127 of them were O4's; the other 280 were V3's untracked probes, v3-probe-rf 160 and v3-probe-arrows
+  120, because `--exclude` has no effect in this vitest workspace; O4's own count is 127/127), the
   11 boards' conversions, the restore fixed point (0 beyond tolerance), two browsers 11/11 and the drill
   11/11 (runs 1-2 at `5f9d5b1`, run 3 across the merge of `38af6d6`). Staging (inside `spike-b8/`, TEMP
   and TMP there, traces off, at `38af6d6`): conversions 4/4, restore fixed point 158 elements (0 beyond
