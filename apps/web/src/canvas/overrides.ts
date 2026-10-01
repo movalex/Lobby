@@ -49,6 +49,7 @@ import type {
 } from '@excalidraw/excalidraw/types'
 import { pointFrom } from '@excalidraw/math'
 import type { GlobalPoint } from '@excalidraw/math/types'
+import type { LodTarget } from './lod/cull.ts'
 import type { ScenePoint } from './port.ts'
 import type { CanvasRegistries, HitBlock } from './registries.ts'
 
@@ -72,7 +73,20 @@ export interface OverridesInput {
   readonly drags: ReadonlyMap<string, ReadonlyMap<string, Offset>>
   /** Hidden element ids per source (a collapsed mind-map parent), already expanded. */
   readonly hidden: ReadonlySet<string>
+  /**
+   * Render-only invisible ids: a bound arrow a peer's drag re-routes, which Lobby's drag preview draws
+   * re-routed (presence/drag-arrows.ts; D1, W5-08). Hit tests treat them as moving, never as hidden.
+   */
+  readonly previewHidden?: ReadonlySet<string>
+  /**
+   * Render-only culled ids (CR 3b-5: the level-of-detail pass, canvas/lod): moved far out of view, so the
+   * engine's renderer leaves them out. An id another entry names keeps that entry.
+   */
+  readonly culled?: ReadonlySet<string>
 }
+
+/** A render offset far outside any view: the engine's renderer leaves an element moved by it out. */
+export const CULL_OFFSET: Offset = Object.freeze({ x: 1e9, y: 1e9 })
 
 /**
  * Pure merge: one snapshot for the engine. For an element dragged by several sources the most recently
@@ -95,6 +109,12 @@ export function mergeRenderOverrides(input: OverridesInput): Map<string, Element
     entry.opacity = 0
     out.set(id, entry)
   }
+  for (const id of input.previewHidden ?? []) {
+    const entry = out.get(id) ?? {}
+    entry.opacity = 0
+    out.set(id, entry)
+  }
+  for (const id of input.culled ?? []) if (!out.has(id)) out.set(id, { offset: CULL_OFFSET })
   return out as Map<string, ElementRenderOverride>
 }
 
@@ -161,6 +181,9 @@ export type BlockReason = { kind: 'hidden' } | { kind: 'moving'; source: string 
 export class RenderOverrides {
   private readonly drags = new Map<string, Map<string, Offset>>()
   private readonly hiddenBySource = new Map<string, Set<string>>()
+  private readonly previewHiddenBySource = new Map<string, Set<string>>()
+  private readonly culledBySource = new Map<string, Set<string>>()
+  private readonly submitListeners = new Set<(snapshot: ElementRenderOverrides) => void>()
   private hiddenExpanded = new Set<string>()
   private applied: ElementRenderOverrides = new Map()
   private scheduled = false
@@ -195,6 +218,48 @@ export class RenderOverrides {
     if (changed) this.invalidate()
   }
 
+  /**
+   * A peer's drag preview re-routes these bound arrows (Lobby draws them, presence/drag-arrows.ts): the
+   * engine draws them invisible meanwhile. Render-only; a press on one is a press on a moving element.
+   */
+  setPreviewHidden(source: string, ids: Iterable<string> | null): void {
+    const list = ids ? new Set(ids) : null
+    const had = this.previewHiddenBySource.get(source)
+    if (!list?.size && !had) return
+    if (list && had && list.size === had.size && [...list].every((id) => had.has(id))) return
+    if (list?.size) this.previewHiddenBySource.set(source, list)
+    else this.previewHiddenBySource.delete(source)
+    this.invalidate()
+  }
+
+  /**
+   * Render-only culling (CR 3b-5): `source`'s ids are left out of the engine's render (the level-of-detail
+   * pass draws them as a frame bitmap). Hit tests, selection, editing, exports and `isHidden` never see
+   * them. An id a drag preview or a collapse names keeps that entry.
+   */
+  setCulled(source: string, ids: ReadonlySet<string> | null): void {
+    const had = this.culledBySource.get(source)
+    if (!ids?.size && !had) return
+    if (ids && had && ids.size === had.size && [...ids].every((id) => had.has(id))) return
+    if (ids?.size) this.culledBySource.set(source, new Set(ids))
+    else this.culledBySource.delete(source)
+    this.invalidate()
+  }
+
+  /** Ids a peer's drag preview moves right now (a non-zero offset). */
+  movedIds(): ReadonlySet<string> {
+    const out = new Set<string>()
+    for (const offsets of this.drags.values())
+      for (const [id, o] of offsets) if (o.x !== 0 || o.y !== 0) out.add(id)
+    return out
+  }
+
+  /** Called after every snapshot submitted to the engine. */
+  onSubmit(listener: (snapshot: ElementRenderOverrides) => void): () => void {
+    this.submitListeners.add(listener)
+    return () => this.submitListeners.delete(listener)
+  }
+
   /** A collapse source (e.g. the collapsed parent's id) hides these ids; null shows them again. */
   setHidden(source: string, ids: Iterable<string> | null): void {
     const list = ids ? new Set(ids) : null
@@ -215,13 +280,15 @@ export class RenderOverrides {
 
   /** Whether any peer's drag preview is active. */
   hasDrags(): boolean {
-    return this.drags.size > 0
+    return this.drags.size > 0 || this.previewHiddenBySource.size > 0
   }
 
   /** The peer whose drag preview currently moves this element, if any. */
   movingSource(id: string): string | null {
     let found: string | null = null
     for (const [source, offsets] of this.drags) if (offsets.has(id)) found = source
+    if (found) return found
+    for (const [source, ids] of this.previewHiddenBySource) if (ids.has(id)) found = source
     return found
   }
 
@@ -247,7 +314,16 @@ export class RenderOverrides {
     this.scheduled = false
     if (this.disposed) return
     this.expand()
-    const next = mergeRenderOverrides({ drags: this.drags, hidden: this.hiddenExpanded })
+    const previewHidden = new Set<string>()
+    for (const ids of this.previewHiddenBySource.values()) for (const id of ids) previewHidden.add(id)
+    const culled = new Set<string>()
+    for (const ids of this.culledBySource.values()) for (const id of ids) culled.add(id)
+    const next = mergeRenderOverrides({
+      drags: this.drags,
+      hidden: this.hiddenExpanded,
+      previewHidden,
+      culled,
+    })
     if (sameOverrides(next, this.applied)) {
       this.stats.skipped++
       return
@@ -255,12 +331,16 @@ export class RenderOverrides {
     this.applied = next
     this.stats.submits++
     this.target.setElementRenderOverrides(next.size ? next : null)
+    for (const l of [...this.submitListeners]) l(next)
   }
 
   dispose(): void {
     this.disposed = true
     this.drags.clear()
     this.hiddenBySource.clear()
+    this.previewHiddenBySource.clear()
+    this.culledBySource.clear()
+    this.submitListeners.clear()
     this.hiddenExpanded.clear()
   }
 
@@ -841,6 +921,37 @@ export function installBoardOverrides(opts: BoardOverridesOptions): BoardOverrid
       overrides.dispose()
       api.setElementRenderOverrides(null)
     },
+  }
+}
+
+/**
+ * The level-of-detail pass's render seam on RenderOverrides (CR 3b-5, replacing lod/cull.ts's Proxy of the
+ * engine API, W3-14): its culled ids are a render-only source of the one snapshot, its `moved` ids are the
+ * drag previews', and it hears every submitted snapshot (the ids whose opacity changed).
+ */
+export function overridesLodTarget(overrides: RenderOverrides, api: ExcalidrawImperativeAPI): LodTarget {
+  const stats = { submits: 0 }
+  let opacity = new Map<string, number>()
+  const listeners = new Set<(changed: ReadonlySet<string>) => void>()
+  overrides.onSubmit((snapshot) => {
+    stats.submits++
+    const next = new Map<string, number>()
+    for (const [id, o] of snapshot) if (o.opacity !== undefined) next.set(id, o.opacity)
+    const changed = new Set<string>()
+    for (const [id, o] of next) if (opacity.get(id) !== o) changed.add(id)
+    for (const id of opacity.keys()) if (!next.has(id)) changed.add(id)
+    opacity = next
+    for (const l of [...listeners]) l(changed)
+  })
+  return {
+    api,
+    setCulled: (ids) => overrides.setCulled('lod', ids),
+    moved: () => overrides.movedIds(),
+    onSnapshot(listener) {
+      listeners.add(listener)
+      return () => listeners.delete(listener)
+    },
+    stats,
   }
 }
 

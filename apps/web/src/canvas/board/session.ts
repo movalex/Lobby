@@ -686,6 +686,7 @@ export class LobbyBoardSession {
         lease: this.lease,
         input: this.input,
         undo,
+        overrides: board.overrides,
       }
     }
     this.set({ attached: true })

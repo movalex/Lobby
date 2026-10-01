@@ -8,7 +8,7 @@
  * Every feature component is rendered inside `CanvasFeatureContextProvider` and gets the context.
  */
 import type { RosterEntry } from '@draftroom/canvas-schema/protocol'
-import { type CSSProperties, type ReactNode, useMemo, useSyncExternalStore } from 'react'
+import { type CSSProperties, type ReactNode, useCallback, useMemo, useSyncExternalStore } from 'react'
 import { frameAt } from '../../features/canvas-ux/ported/notes.ts'
 import { FeatureDockView, TopBarOverflowRow } from '../../features/FeatureHostCore.tsx'
 import { initialsFor, safeColor } from '../../lib/identity.ts'
@@ -19,6 +19,7 @@ import { currentPlatform, formatChord } from '../api/keys.ts'
 import type { LobbyCanvas } from '../api/lobby-canvas.ts'
 import type { FeatureOverlaySpec, FeatureRegistries, HostSlotName } from '../api/registries.ts'
 import type { EditNotice, EditState } from '../lease/editorLease.ts'
+import { arrowPaths } from '../presence/drag-arrows.ts'
 import type { LobbyBoardSession } from './session.ts'
 
 // ---- the dock ---------------------------------------------------------------------------------------------
@@ -218,6 +219,7 @@ export function OverlayRoot({
             <FeatureLayer key={o.id} spec={o} ctx={ctx} />
           ))}
         {port && !focusMode ? c0.map((l) => <l.component key={l.id} port={port} />) : null}
+        <DragArrows canvas={ctx.canvas} session={session} />
         <Cursors canvas={ctx.canvas} registries={r} />
       </div>
       <div data-lobby-layer="screen" style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
@@ -228,6 +230,54 @@ export function OverlayRoot({
           ))}
       </div>
     </div>
+  )
+}
+
+/**
+ * D1 (W5-08): the bound arrows another person's drag re-routes, drawn where they go now (copies made with
+ * Excalidraw's own binding code and drawn with its shape generator, ../presence/drag-arrows.ts), while the
+ * engine draws the real ones invisible. Nothing here is ever written.
+ */
+function DragArrows({ canvas, session }: { canvas: LobbyCanvas; session: LobbyBoardSession }) {
+  const hub = session.presenceHub
+  const subscribe = useCallback((l: () => void) => hub?.subscribe(l) ?? (() => {}), [hub])
+  useSyncExternalStore(subscribe, () => hub?.revision ?? 0)
+  const view = useValue('lobby-drag-arrows-view', () => canvas.viewport.get(), [canvas])
+  const theme = useValue('lobby-drag-arrows-theme', () => canvas.theme(), [canvas])
+  const copies = hub?.arrowPreviews() ?? []
+  if (!copies.length) return null
+  return (
+    <svg
+      data-testid="drag-arrow-previews"
+      aria-hidden="true"
+      style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', overflow: 'visible' }}
+    >
+      {copies.map((el) => {
+        const at = canvas.sceneToOverlay({ x: el.x as number, y: el.y as number })
+        const paths = arrowPaths(el, theme)
+        return (
+          <g
+            key={el.id}
+            data-arrow-id={el.id}
+            opacity={((el as { opacity?: number }).opacity ?? 100) / 100}
+            transform={`translate(${at.x} ${at.y}) scale(${view.zoom})`}
+          >
+            {paths.map((p, i) => (
+              <path
+                // biome-ignore lint/suspicious/noArrayIndexKey: the generator's paths of one shape, in order
+                key={i}
+                d={p.d}
+                stroke={p.stroke}
+                strokeWidth={p.strokeWidth}
+                fill={p.fill}
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            ))}
+          </g>
+        )
+      })}
+    </svg>
   )
 }
 
