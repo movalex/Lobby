@@ -15,6 +15,8 @@
  */
 import { hashElements } from '@draftroom/canvas-schema/hash'
 import type { LeaseHolder } from '@draftroom/canvas-schema/protocol'
+import type { LobbyCanvasFacadeV1 } from './api/facade.types.ts'
+import { childrenOf } from './api/items.ts'
 import type { CanvasElement, CanvasPort, ItemKind, ScenePoint, Viewport } from './port.ts'
 import type { CanvasRegistries } from './registries.ts'
 import type { SceneElement } from './sync/types.ts'
@@ -80,7 +82,7 @@ export interface LobbyHarnessHooks {
 }
 
 type FacadeGlobal = typeof globalThis & {
-  lobbyCanvas?: LobbyCanvasFacade
+  lobbyCanvas?: InstalledFacade
   __lobbyHarness?: LobbyHarnessHooks
 }
 
@@ -112,10 +114,17 @@ type PendingSource = { pendingLeases?: () => readonly string[] }
 const CHANGE_LOG_CAP = 20_000
 
 /**
+ * The facade the page installs: C0's verbs plus the wave-1 verbs (facade.types.ts §9.2) landed here so far.
+ * `children(frameId)` is tldraw's `getSortedChildIdsForParent(frame)` (GAP-1, wave 4b): a frame's live
+ * children in paint order, the frame's own labels excluded, as `canvas/api/items.ts` reads them.
+ */
+export type InstalledFacade = LobbyCanvasFacade & Pick<LobbyCanvasFacadeV1, 'children'>
+
+/**
  * Builds the facade on a port. Exported for the unit test; `install` is what the board page runs.
  */
 export function createFacade(port: CanvasPort): {
-  facade: LobbyCanvasFacade
+  facade: InstalledFacade
   hooks: LobbyHarnessHooks
   dispose(): void
 } {
@@ -173,8 +182,9 @@ export function createFacade(port: CanvasPort): {
     return { held, pending, holders }
   }
 
-  const facade: LobbyCanvasFacade = {
+  const facade: InstalledFacade = {
     items: () => port.items().map(copy) as CanvasElement[],
+    children: (frameId) => childrenOf(frameId, port.items()),
     get: (id) => {
       const el = port.get(id)
       return el ? copy(el) : null
