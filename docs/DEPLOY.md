@@ -241,7 +241,6 @@ Every variable is documented with a safe placeholder in `.env.example`. Where ea
 | `ALLOWED_ORIGINS` | sync | `https://draftroom-staging-web.onrender.com` (the same web origin). Required and https in production. |
 | `TRUST_PROXY` | api | `"3"` ([client IPs](#client-ips-and-trust_proxy)) |
 | `VITE_DRAFTROOM_SYNC_ORIGIN` | web (build time) | `https://draftroom-staging-sync.onrender.com`. Confirm the hostname; a change needs a rebuild. |
-| `VITE_TLDRAW_LICENSE_KEY` | web (build time) | `sync: false` |
 | `DRAFTROOM_DATA_DIR` | api, sync | api: `/tmp/draftroom-api` (scratch); sync: `/var/data` (its disk) |
 | `NODE_ENV=production`, `AUTH_PROVIDER=clerk`, `ACCESS_RECHECK_MS=10000`, `WORKER_CONCURRENCY=1`, `WORKER_PDF_HEAP_MB=256` | as listed | plain values |
 | `HOST=0.0.0.0` | api, sync | image default (Render needs the public server on `0.0.0.0`) |
@@ -331,7 +330,11 @@ Rolling the api back to a build from before domain access needs `DRAFTROOM_ALLOW
 - Remove their memberships by hand: losing creator status removes nothing.
 - Clerk webhooks (`user.updated`, `user.deleted`) remain future work.
 
-## tldraw license key
+## tldraw license key (bridge release R0 only)
+
+Since wave 4 part 2 (the tldraw removal, `docs/EXCALIDRAW-CUTOVER.md` G10) the web build has no tldraw and
+needs no key: `VITE_TLDRAW_LICENSE_KEY` is gone from `render.yaml` and from the build. What follows applies
+to bridge release R0 alone (a rollback reuses R0's built artifact, which has its key inlined).
 
 The editor runs free only on `http:` or loopback hosts. On **any HTTPS host without a key whose hosts include that hostname, the editor goes blank 5 s after load**, and a beacon goes to `cdn.tldraw.com` (probed in `docs/research/license.md` §4).
 
@@ -371,7 +374,6 @@ Steps:
 2. Dashboard → **New → Blueprint** → **Connect** the repository. Name it `draftroom-staging`, pick the branch, and leave the Blueprint path at `render.yaml`.
 3. Review the plan: 1 database, 3 services (web, api, sync) and 2 environment groups, or 4 services if you enabled the worker.
 4. Enter the prompted `sync: false` values:
-   - `VITE_TLDRAW_LICENSE_KEY` (web);
    - `CLERK_SECRET_KEY` and `CLERK_PUBLISHABLE_KEY` (api);
    - `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` and `R2_BUCKET` = `draftroom-staging` (api).
 

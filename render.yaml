@@ -91,10 +91,8 @@ services:
         name: Cache-Control
         value: public, max-age=31536000, immutable
     envVars:
-      # Without a key whose hosts include this site's hostname, the editor goes BLANK 5 s after load on
-      # any HTTPS host (docs/research/license.md). Keys are public by design; kept out of git anyway.
-      - key: VITE_TLDRAW_LICENSE_KEY
-        sync: false
+      # (No canvas licence key since wave 4 part 2: the Excalidraw engine is MIT, docs/EXCALIDRAW-CUTOVER.md
+      # G10. A rollback to bridge release R0 reuses R0's built artifact, with its own key inlined.)
       # Static-site rewrites do not proxy WebSockets, so the board socket goes straight to the sync
       # service's public URL (apps/web/src/board/ticket.ts; the ticket authenticates, no cookie needed).
       # Inlined at build time: a hostname change needs a static-site REBUILD. Must match the sync

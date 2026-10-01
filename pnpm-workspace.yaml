@@ -5,16 +5,13 @@ packages:
 
 # Single source of truth for shared versions. Reference with "catalog:" in package.json.
 catalog:
-  # tldraw: keep every @tldraw/* package in lockstep (they pin each other exactly)
-  tldraw: 5.4.2
-  '@tldraw/sync': 5.4.2
-  '@tldraw/sync-core': 5.4.2
-  # packages/tldraw-import keeps exactly five MIT tldraw packages (D13): tlschema, utils, store, state, validate
+  # tldraw: only the five MIT packages packages/tldraw-import keeps (D13; docs/EXCALIDRAW-CUTOVER.md G10),
+  # in lockstep (they pin each other exactly). tldraw, @tldraw/editor, sync, sync-core and assets left
+  # with the tldraw board page (wave 4 part 2, lockfile PR #2) and must not come back.
   '@tldraw/state': 5.4.2
   '@tldraw/store': 5.4.2
   '@tldraw/tlschema': 5.4.2
   '@tldraw/validate': 5.4.2
-  '@tldraw/assets': 5.4.2
   '@tldraw/utils': 5.4.2
   # excalidraw (MIT; fractional-indexing CC0): keep all five @excalidraw/* packages at the same exact nightly.
   # Bump only in a dedicated PR that runs the engine probe suite (docs/EXCALIDRAW-MIGRATION.md §6.5).
@@ -80,5 +77,5 @@ overrides:
   # @types/ws depends on "@types/node": "*", which would pull the newest @types/node (26.x)
   # next to our Node-24 typings. Force one copy everywhere.
   '@types/node': 'catalog:'
-  # @tldraw/sync-core depends on ws ^8.18.0; keep a single ws copy (tldraw's own repo pins ws too).
+  # keep a single ws copy whatever a dependency asks for
   ws: 'catalog:'

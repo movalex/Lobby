@@ -4,8 +4,8 @@
 // `pnpm licenses list --prod --json --filter <workspace package>`, run once per workspace package.
 //
 // Usage:
-//   node scripts/licence-check.mjs [--before-cutover] [--json <file>]
-//   pnpm licence:check [-- --before-cutover]
+//   node scripts/licence-check.mjs [--json <file>]
+//   pnpm licence:check
 //
 // Rules (a finding fails the check unless the allowlist below covers it):
 // - Every licence must be permissive (PERMISSIVE). SPDX expressions are evaluated: `A OR B` passes when one
@@ -17,14 +17,9 @@
 // - A licence that needs payment, forbids commercial use or is not stated fails: `SEE LICENSE IN …`,
 //   UNLICENSED, BUSL, Elastic, PolyForm, CC-BY-NC, Commons Clause, and anything pnpm reports as Unknown or
 //   this script does not recognise.
-// - tldraw (D13): the only tldraw packages allowed after the cut-over are @tldraw/tlschema, utils, store,
-//   state and validate (MIT), and only as dependencies of packages/tldraw-import.
-//
-// --before-cutover: until wave 4 removes them (lockfile PR #2), the tldraw packages that need a paid
-// licence, and the five MIT ones reached from a workspace package other than packages/tldraw-import, are
-// reported as "removed at cut-over" instead of failing. Only the packages and importers known today
-// (REMOVED_AT_CUTOVER, TLDRAW_IMPORTERS_UNTIL_CUTOVER) get that grace; a new one fails in both modes.
-// Drop the flag from CI at the cut-over.
+// - tldraw (D13): the only tldraw packages allowed are @tldraw/tlschema, utils, store, state and validate
+//   (MIT), and only as dependencies of packages/tldraw-import. (The cut-over grace, --before-cutover, left
+//   with the tldraw board page at wave 4 part 2: docs/EXCALIDRAW-CUTOVER.md G10.)
 //
 // The listing covers the packages pnpm installed on this machine: platform-specific optional packages
 // (sharp's libvips binaries) are checked for the platform that ran the install. CI (Linux x64) checks the
@@ -73,24 +68,6 @@ const TLDRAW_MIT = new Set([
   '@tldraw/validate',
 ])
 const TLDRAW_IMPORT = '@draftroom/tldraw-import'
-/** tldraw packages that need a paid production licence and leave every package at the cut-over (§1 goal 4). */
-const REMOVED_AT_CUTOVER = new Set([
-  'tldraw',
-  '@tldraw/assets',
-  '@tldraw/driver',
-  '@tldraw/editor',
-  '@tldraw/state-react',
-  '@tldraw/sync',
-  '@tldraw/sync-core',
-])
-/** Workspace packages that still depend on tldraw packages directly before the cut-over. */
-const TLDRAW_IMPORTERS_UNTIL_CUTOVER = new Set([
-  '@draftroom/board-ops',
-  '@draftroom/canvas-schema',
-  '@draftroom/sync',
-  '@draftroom/templates',
-  '@draftroom/web',
-])
 
 /**
  * Explicit exceptions. Each names the packages, the exact versions, the exact licence string pnpm reports,
@@ -136,15 +113,14 @@ const ALLOWLIST = [
 ]
 
 function parseArgs(argv) {
-  const opts = { beforeCutover: false, json: null }
+  const opts = { json: null }
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
     if (a === '--') continue
-    if (a === '--before-cutover') opts.beforeCutover = true
-    else if (a === '--json') opts.json = argv[++i]
+    if (a === '--json') opts.json = argv[++i]
     else if (a.startsWith('--json=')) opts.json = a.slice('--json='.length)
     else if (a === '--help' || a === '-h') {
-      console.log('Usage: node scripts/licence-check.mjs [--before-cutover] [--json <file>]')
+      console.log('Usage: node scripts/licence-check.mjs [--json <file>]')
       process.exit(0)
     } else {
       console.error(`licence-check: unknown argument ${a}`)
@@ -386,7 +362,6 @@ async function main() {
   }
 
   const fail = []
-  const removedAtCutover = []
   const allowed = []
   const usedAllowlist = new Set()
 
@@ -396,25 +371,16 @@ async function main() {
     rec.class = classifyLicence(rec.licence)
     const isTldraw = rec.name === 'tldraw' || rec.name.startsWith('@tldraw/')
 
-    // Grace before the cut-over: only for the tldraw packages and importers known today, never through
-    // packages/tldraw-import itself.
-    const graced =
-      opts.beforeCutover &&
-      !rec.importers.includes(TLDRAW_IMPORT) &&
-      rec.importers.every((i) => TLDRAW_IMPORTERS_UNTIL_CUTOVER.has(i))
-
     if (isTldraw && !TLDRAW_MIT.has(rec.name)) {
       const field = rawLicenceField(rec.path)
-      const finding = {
+      fail.push({
         ...rec,
         rule: 'tldraw',
         why:
           rec.class === 'permissive'
             ? `tldraw package outside the five packages/tldraw-import keeps (D13); licence "${field}"`
             : `tldraw package outside the five packages/tldraw-import keeps (D13); licence "${field}": needs a paid production licence key`,
-      }
-      if (graced && REMOVED_AT_CUTOVER.has(rec.name)) removedAtCutover.push(finding)
-      else fail.push(finding)
+      })
       continue
     }
 
@@ -436,14 +402,11 @@ async function main() {
     if (isTldraw && TLDRAW_MIT.has(rec.name)) {
       const outside = rec.importers.filter((i) => i !== TLDRAW_IMPORT)
       if (outside.length) {
-        const finding = {
+        fail.push({
           ...rec,
           rule: 'tldraw-outside-import',
-          why: `MIT tldraw package reached from ${outside.join(', ')}; after the cut-over only ${TLDRAW_IMPORT} may depend on it (D13)`,
-        }
-        const knownImporters = outside.every((i) => TLDRAW_IMPORTERS_UNTIL_CUTOVER.has(i))
-        if (opts.beforeCutover && knownImporters) removedAtCutover.push(finding)
-        else fail.push(finding)
+          why: `MIT tldraw package reached from ${outside.join(', ')}; only ${TLDRAW_IMPORT} may depend on it (D13)`,
+        })
       }
     }
   }
@@ -454,7 +417,7 @@ async function main() {
   const line = (s = '') => console.log(s)
   const where = (r) => `apps: ${r.apps.join(', ')}; via ${r.importers.join(', ')}`
   line(
-    `Licence check: production dependencies of ${apps.join(', ')} (pnpm ${pnpmVersion} licence listing; ${opts.beforeCutover ? 'mode --before-cutover' : 'strict mode'})`,
+    `Licence check: production dependencies of ${apps.join(', ')} (pnpm ${pnpmVersion} licence listing; strict mode)`,
   )
   line()
   for (const app of apps) {
@@ -468,11 +431,6 @@ async function main() {
   line()
   line(`FAIL (${fail.length})`)
   for (const r of fail) line(`  - ${r.name}@${r.version}: ${r.why} [${where(r)}]`)
-  if (opts.beforeCutover || removedAtCutover.length) {
-    line()
-    line(`Removed at cut-over (${removedAtCutover.length}; reported, not failing, until wave 4 removes them)`)
-    for (const r of removedAtCutover) line(`  - ${r.name}@${r.version}: ${r.why} [${where(r)}]`)
-  }
   line()
   line(`Allowed by the allowlist (${allowed.length})`)
   for (const r of allowed) line(`  - ${r.name}@${r.version} "${r.licence}": ${r.why} [${where(r)}]`)
@@ -488,12 +446,11 @@ async function main() {
   if (opts.json) {
     const report = {
       ok: fail.length === 0,
-      mode: opts.beforeCutover ? 'before-cutover' : 'strict',
+      mode: 'strict',
       pnpm: pnpmVersion,
       apps: Object.fromEntries([...appClosures].map(([a, c]) => [a, c])),
       packages: pkgs.size,
       fail,
-      removedAtCutover,
       allowed,
       unusedAllowlist,
     }
