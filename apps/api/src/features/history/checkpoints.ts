@@ -12,6 +12,8 @@
 //   before_reveal   a private brainstorm's notes are about to be put on the board, and
 //   before_ai_themes  AI "Group into themes" is about to rearrange notes: other features ask for these
 //                   through before-change.ts (R10).
+//   engine_migration  the cut-over's restore point of a board converted to the new canvas, once per board
+//                   (captureEngineMigration; the run in checkpoint-all.ts; plan §5.5, migration 0022).
 //
 // Every one is read from the sync server's snapshot (a read of the room's storage: editing never
 // waits for it) and is skipped when its content equals the board's newest tldraw (v1) checkpoint of
@@ -33,6 +35,7 @@ import {
 import { newId, type Queryable } from '@draftroom/db'
 import type { FastifyInstance } from 'fastify'
 import { audit } from '../../audit.ts'
+import { isObject } from '../../canvas/lobby-elements.ts'
 import { onNewCanvas } from '../../canvas-engine.ts'
 import { SyncNewCanvasBoard } from '../../sync-internal.ts'
 import type { FeatureContext } from '../context.ts'
@@ -109,6 +112,21 @@ export type NamedCaptureOutcome =
   | { status: 'unchanged'; checkpoint: BoardCheckpoint }
   | { status: 'skipped'; why: 'missing' | 'new-canvas' }
 
+/**
+ * captureEngineMigration (the cut-over's restore point per converted board, docs/EXCALIDRAW-MIGRATION.md
+ * §5.5, migration 0022; checkpoint-all.ts): one automatic `engine_migration` checkpoint of the board as
+ * its conversion left it (a v2 body). `unchanged`: the board already has one, which is returned (a run
+ * repeated, even after an edit, saves nothing: the restore point is the board's first state on the new
+ * canvas). Skipped: `new-canvas`, a board born on the new canvas (nothing of it was converted);
+ * `tldraw`, a board whose snapshot is still a tldraw one (this api's sync is not the Excalidraw build);
+ * `not-converted`, a v2 board whose document carries no conversion record (`lb_doc.import`: a board
+ * that had no file before the move, so nothing was converted); `limit`, as capture(); `missing`.
+ */
+export type MigrationCaptureOutcome =
+  | { status: 'saved'; checkpoint: BoardCheckpoint }
+  | { status: 'unchanged'; checkpoint: BoardCheckpoint }
+  | { status: 'skipped'; why: 'missing' | 'new-canvas' | 'tldraw' | 'not-converted' | 'limit' }
+
 /** What an automatic checkpoint was made before, in its name (R2-09: two of the same reason can be told apart). */
 export interface CheckpointAbout {
   /** before_restore: the name of the checkpoint that was restored. */
@@ -169,6 +187,12 @@ export interface CheckpointService {
    * SyncUnavailable.
    */
   captureNamed(boardId: string, name: string): Promise<NamedCaptureOutcome>
+  /**
+   * The cut-over's restore point (docs/EXCALIDRAW-MIGRATION.md §5.5, runbook step C12; checkpoint-all.ts):
+   * one automatic `engine_migration` checkpoint of a converted board, body_version 2, saved once per
+   * board (MigrationCaptureOutcome). Read from the sync snapshot like any checkpoint. Throws SyncUnavailable.
+   */
+  captureEngineMigration(boardId: string): Promise<MigrationCaptureOutcome>
   /** capture() that logs instead of throwing (before risky operations: they must not fail because of it). */
   captureQuietly(
     boardId: string,
@@ -320,6 +344,23 @@ export function createCheckpointService(
       await covered(boardId, board.workspace_id, startedAt, false)
       return { status: 'unchanged' }
     }
+    return saveAuto(boardId, board.workspace_id, reason, opts, made, startedAt, newBuild)
+  }
+
+  /**
+   * Writes an automatic checkpoint of `made` (its body, its row, the bookkeeping, the event, retention),
+   * once the caller decided it is worth saving: capture()'s content check, or the one restore point of
+   * captureEngineMigration().
+   */
+  async function saveAuto(
+    boardId: string,
+    workspaceId: string,
+    reason: CheckpointReason,
+    opts: CheckpointAbout,
+    made: ReturnType<typeof checkpointBodyOf>,
+    startedAt: Date,
+    newBuild: boolean,
+  ): Promise<{ status: 'saved'; checkpoint: BoardCheckpoint } | { status: 'skipped'; why: 'limit' }> {
     const count = async () =>
       (
         await db.one<{ n: number }>(
@@ -353,7 +394,7 @@ export function createCheckpointService(
          SELECT ${SNAPSHOT_COLUMNS} FROM ins s LEFT JOIN users u ON u.id = s.created_by`,
         [
           id,
-          board.workspace_id,
+          workspaceId,
           boardId,
           autoCheckpointName(reason, opts),
           reason,
@@ -370,10 +411,44 @@ export function createCheckpointService(
       await bodies.remove(key).catch(() => warnErr('checkpoint body cleanup failed', e))
       throw e
     }
-    await covered(boardId, board.workspace_id, startedAt, true)
+    await covered(boardId, workspaceId, startedAt, true)
     ctx.events.publish(boardId, { type: HISTORY_EVENTS.snapshot, data: { snapshotId: id } })
     await prune(boardId).catch((e: unknown) => warnErr('checkpoint retention failed', e))
     return { status: 'saved', checkpoint: toCheckpoint(row, { newCanvas: !newBuild }) }
+  }
+
+  async function captureEngineMigrationNow(boardId: string): Promise<MigrationCaptureOutcome> {
+    const board = await db.maybeOne<{ workspace_id: string; new_canvas: boolean }>(
+      'SELECT workspace_id, new_canvas FROM boards WHERE id = $1',
+      [boardId],
+    )
+    if (!board) return { status: 'skipped', why: 'missing' }
+    // Born on the new canvas (R0's contract, canvas-engine.ts): nothing of it was converted.
+    if (board.new_canvas) return { status: 'skipped', why: 'new-canvas' }
+    const newBuild = await onNewCanvas(ctx)
+    // One restore point per board: the first state on the new canvas. A repeated run (step C12 run
+    // again, a roll-forward) finds it and saves nothing, whatever the board looks like now.
+    const existing = await db.maybeOne<SnapshotRow>(
+      `SELECT ${SNAPSHOT_COLUMNS} FROM ${SNAPSHOT_FROM}
+        WHERE s.board_id = $1 AND s.reason = 'engine_migration' ORDER BY s.created_at DESC, s.id DESC LIMIT 1`,
+      [boardId],
+    )
+    if (existing) return { status: 'unchanged', checkpoint: toCheckpoint(existing, { newCanvas: !newBuild }) }
+    const startedAt = now()
+    let snap: Awaited<ReturnType<typeof ctx.sync.snapshot>>
+    try {
+      snap = await ctx.sync.snapshot(boardId)
+    } catch (e) {
+      if (e instanceof SyncNewCanvasBoard) return { status: 'skipped', why: 'new-canvas' }
+      throw e
+    }
+    const made = checkpointBodyOf(boardId, snap)
+    // A tldraw body is not a state on the new canvas: this api's sync is not the Excalidraw build.
+    if (made.body.version !== 2) return { status: 'skipped', why: 'tldraw' }
+    // The converter records itself in the board document (`lb_doc.import`, plan §5.3 step 3); a board
+    // without it was born empty on the new canvas (it had no file to convert).
+    if (!isConversionRecord(made.body.doc.import)) return { status: 'skipped', why: 'not-converted' }
+    return saveAuto(boardId, board.workspace_id, 'engine_migration', {}, made, startedAt, newBuild)
   }
 
   async function captureNamedNow(boardId: string, name: string): Promise<NamedCaptureOutcome> {
@@ -657,6 +732,7 @@ export function createCheckpointService(
   return {
     capture,
     captureNamed: (boardId, name) => withBoard(boardId, () => captureNamedNow(boardId, name)),
+    captureEngineMigration: (boardId) => withBoard(boardId, () => captureEngineMigrationNow(boardId)),
     captureQuietly,
     changed,
     sessionEnded,
@@ -669,6 +745,14 @@ export function createCheckpointService(
     idle,
   }
 }
+
+/**
+ * Whether a board document's `import` value is the converter's record (canvas-schema doc.ts
+ * ImportDocValue, written by the board conversion and by a seed of tldraw records): read loosely, the
+ * sync validated it when it was written.
+ */
+export const isConversionRecord = (value: unknown): boolean =>
+  isObject(value) && typeof value.from === 'string' && typeof value.converterVersion === 'string'
 
 /** Queues a deleted row's body for deletion (inside the transaction that deletes the row). */
 async function queueBlobDeletion(tx: Queryable, r: SnapshotRow, at: Date) {

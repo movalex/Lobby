@@ -3,12 +3,17 @@
 // the api service's Shell:
 //
 //   node apps/api/src/features/history/checkpoint-all-cli.ts [--run <runId>] [--url <api url>]
-//     [--interval-ms <ms>]
+//     [--interval-ms <ms>] [--engine-migration]
 //
 // Starts a run, or with --run follows one already started (the id is on the first line this prints;
 // GET /internal/checkpoints/run-all lists the recent ones). Progress goes to stderr; the finished report
 // is printed as JSON on stdout. Exit 0 only when no board failed; 1 otherwise (a board failed, the run
 // failed, or the api no longer knows the run: it restarted); 2 on bad arguments or no secret.
+//
+// --engine-migration (the Excalidraw build, cut-over step C12, after convert-all and its checks): the
+// restore point per converted board instead, POST /internal/checkpoints/engine-migration (one automatic
+// `engine_migration` checkpoint per board, body_version 2; a repeated run saves nothing twice). Refused
+// (exit 1, 409 WRONG_CANVAS) while the board server still runs the tldraw canvas.
 //
 // Every request is short: the api answers the POST at once (202 and the run's id) and this polls
 // GET /internal/checkpoints/run-all/<runId>, each request with its own 30 s timeout, so Node's fetch limit
@@ -24,6 +29,7 @@ import {
   CHECKPOINT_ALL_ROUTE,
   type CheckpointAllReport,
   type CheckpointAllRunView,
+  ENGINE_MIGRATION_ROUTE,
 } from './checkpoint-all.ts'
 
 const REQUEST_TIMEOUT_MS = 30_000
@@ -34,12 +40,19 @@ interface Args {
   url: string
   runId: string | null
   intervalMs: number
+  /** The run's routes: run-all (default) or the restore point after the move (--engine-migration). */
+  route: string
 }
 
 class UsageError extends Error {}
 
 function parseArgs(argv: string[], env: NodeJS.ProcessEnv): Args {
-  const out: Args = { url: `http://127.0.0.1:${env.PORT || '5859'}`, runId: null, intervalMs: 5_000 }
+  const out: Args = {
+    url: `http://127.0.0.1:${env.PORT || '5859'}`,
+    runId: null,
+    intervalMs: 5_000,
+    route: CHECKPOINT_ALL_ROUTE,
+  }
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i] ?? ''
     const eq = /^(--[a-z-]+)=(.*)$/.exec(a)
@@ -48,6 +61,7 @@ function parseArgs(argv: string[], env: NodeJS.ProcessEnv): Args {
     if (flag === '--url') out.url = value()
     else if (flag === '--run') out.runId = value()
     else if (flag === '--interval-ms') out.intervalMs = Number(value())
+    else if (flag === '--engine-migration' && !eq) out.route = ENGINE_MIGRATION_ROUTE
     else throw new UsageError(`unknown argument ${a.slice(0, 40)}`)
   }
   if (!/^https?:\/\/[^/]+\/?$/.test(out.url)) throw new UsageError('--url must be http(s)://host:port')
@@ -105,7 +119,7 @@ async function main(): Promise<{ code: number; out?: string }> {
   }
   let runId = args.runId
   if (!runId) {
-    const started = await call(args, secret, 'POST', CHECKPOINT_ALL_ROUTE)
+    const started = await call(args, secret, 'POST', args.route)
     const view = started.body as CheckpointAllRunView | null
     if (started.status !== 202 || !view || !CHECKPOINT_ALL_ID_RE.test(view.runId)) {
       say(`checkpoints: refused (HTTP ${started.status}, ${errorText(started.body)})`)
@@ -120,7 +134,7 @@ async function main(): Promise<{ code: number; out?: string }> {
   for (;;) {
     let view: CheckpointAllRunView | null = null
     try {
-      const got = await call(args, secret, 'GET', `${CHECKPOINT_ALL_ROUTE}/${runId}`)
+      const got = await call(args, secret, 'GET', `${args.route}/${runId}`)
       if (got.status === 404) {
         say(`checkpoints ${runId}: the api does not know this run (it restarted, or the id is wrong)`)
         return { code: 1 }
