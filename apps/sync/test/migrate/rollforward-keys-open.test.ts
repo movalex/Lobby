@@ -1,7 +1,9 @@
 // The key share of rollforward-keys.test.ts through the real processes (V3's re-check repro, adopted by
 // 2B): the Excalidraw sync converts a tldraw board on open; A creates T at the key above the top and
-// deletes it; a stale client (it never saw T) moves `rect` onto that key, and the room stores it (its index
-// cache holds live elements only); R0 (today's registry, in-process) recolours or moves `rect`; the sync
+// deletes it; a stale client (it never saw T) moves `rect` onto that key. Until wave 5 the room stored that
+// share (its index cache held live elements only); since 2A's fix it re-keys the push, so the share a board
+// kept from an older room is written into the file with the sync stopped (wave-5 engine integration). R0
+// (today's registry, in-process) recolours or moves `rect`; the sync
 // opens the board again. On beff59d the roll-forward failed (`rollforward:failed:validation`), the joiner
 // got PREPARING then 4099 CONVERSION_FAILED and the snapshot route answered 503. Now the merge repairs the
 // share: the board opens, every key is unique, and the paint order is the one the room served.
@@ -11,7 +13,7 @@ import { describe, expect, it } from 'vitest'
 import { rect } from '../element-room/support/elements.ts'
 import { newBoardId, useElementHarness } from '../element-room/support/stack.ts'
 import { callInternal } from '../harness/tickets.ts'
-import { fixtureRecords, lbRows, seedBoardRecords } from './board-files.ts'
+import { excalidrawEdit, fixtureRecords, lbRows, seedBoardRecords } from './board-files.ts'
 import { r0Edit } from './support.ts'
 
 const h = useElementHarness()
@@ -40,6 +42,21 @@ describe('roll-forward on open after a key share the room admitted', () => {
       const rv = (b.confirmed.get('rect') as { version: number }).version
       await b.push([{ k: 'p', id: 'rect', pv: rv, g: { z: { index: tIdx } } }])
       await sleep(200)
+      // Since wave 5 the room no longer stores the share (2A: its index cache holds the tombstones' keys,
+      // so the stale push is re-keyed and told by `fix`) ...
+      expect(lbRows(path).get('rect')?.idx).not.toBe(tIdx)
+      a.close()
+      b.close()
+      await st.server.kill('SIGTERM')
+      // ... but a board an older room wrote can still hold one: put it in the file as that room stored it
+      // (the label stays after its container), with the sync stopped.
+      excalidrawEdit(path, 'rect', ['z'], (e) => {
+        e.index = tIdx
+      })
+      if (lbRows(path).has('rect.t'))
+        excalidrawEdit(path, 'rect.t', ['z'], (e) => {
+          e.index = indexKeyBetween(tIdx, null)
+        })
       const shared = lbRows(path)
       // the precondition: a live element and a tombstone on one key
       expect(shared.get('rect')?.idx).toBe(tIdx)
@@ -48,9 +65,6 @@ describe('roll-forward on open after a key share the room admitted', () => {
         .filter((r) => r.deleted === 0)
         .sort((x, y) => (x.idx < y.idx ? -1 : x.idx > y.idx ? 1 : x.id < y.id ? -1 : 1))
         .map((r) => r.id)
-      a.close()
-      b.close()
-      await st.server.kill('SIGTERM')
       r0Edit(rooms, boardId, (txn) => {
         const r = txn.get('shape:rect') as TLRecord & { x: number; props: Record<string, unknown> }
         if (variant === 'recolour')
