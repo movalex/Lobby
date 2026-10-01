@@ -89,7 +89,16 @@ export function buildPlans(
             ticket: tickets.ticket(boardId, user),
             joinAtMs: 0,
             ownNotes: own,
-            ...(group.kind === 'watcher' && i >= group.count - (group.thin ?? 0) ? { thin: true } : {}),
+            // the last `thin` of a marked watcher group are thin; so is its presence probe (index 0 of a
+            // measuring group) once the group has any thin session: the probe's cursor carries its send
+            // time, and on a full core the send is coalesced on the core's timer, so a saturated worker's
+            // event-loop stall ages the stamp before the frame leaves (NAS L2 r3: thin-measured presence
+            // p50 161 ms against 55-81 in r1/r2 with the same server load); the thin client sends at once
+            ...(group.kind === 'watcher' &&
+            (i >= group.count - (group.thin ?? 0) ||
+              (i === 0 && group.measureVisibility && (group.thin ?? 0) > 0))
+              ? { thin: true }
+              : {}),
           })
           n++
         }

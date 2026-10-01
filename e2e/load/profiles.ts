@@ -23,8 +23,9 @@
 // Thin receivers (NAS part, thin.ts): a full engine core per session costs about 9 MB and 380 KB per
 // remote change on L1's board, too much for 260 sessions in the 4-CPU / 2 GB load container, so most
 // receive-only watchers are thin (the same socket traffic, no core; the meter measures at the socket, so
-// a thin measuring session loses nothing): L1 keeps 51 full cores on its big board (40 editors, 10
-// editor-role watchers for B10's echo check, the presence probe), L2 keeps 12 (10 editors, 2 measuring).
+// a thin measuring session loses nothing, and the presence probe sends at once instead of on a core's
+// timer): L1 keeps 50 full cores on its big board (40 editors, 10 editor-role watchers for B10's echo
+// check), L2 keeps 11 (10 editors, 1 measuring viewer for the echo check).
 import { HEAVY_SPEC, L1_SPEC, SMALL_SPEC } from './boards.ts'
 
 export type SessionKind = 'gesture' | 'typist' | 'frame-dragger' | 'oneshot' | 'watcher' | 'light'
@@ -92,8 +93,8 @@ export const L1: Profile = {
         { kind: 'typist', count: 10, role: 'editor', burstMs: 8_000, pauseMs: 4_000, typeEveryMs: 500 },
         // 10 of the 60 keep the full core (B10's echo check on editor-role receivers), 50 are thin
         { kind: 'watcher', count: 60, role: 'editor', moveMs: 5_000, stillMs: 5_000, thin: 50 },
-        // 5 viewers measure (the first is the presence probe, on the full core; the other 4 read its cursor
-        // and every change at the socket, so they are thin)
+        // 5 viewers measure (the first is the presence probe; the other 4 read its cursor and every change
+        // at the socket): all thin (plan.ts marks the probe thin too)
         {
           kind: 'watcher',
           count: 5,
@@ -134,7 +135,7 @@ export const L2: Profile = {
           moveMs: 5_000,
           stillMs: 5_000,
           measureVisibility: true,
-          // the probe and one more keep the full core (B10's echo check on this board), 8 are thin
+          // the last 8 and the probe are thin; one measuring viewer keeps the full core (B10's echo check)
           thin: 8,
         },
         { kind: 'watcher', count: 10, role: 'viewer', moveMs: 5_000, stillMs: 5_000, thin: 10 },
