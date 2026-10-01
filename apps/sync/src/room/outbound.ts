@@ -6,6 +6,16 @@
 //  - above 8 MiB queued (socket buffer plus this queue) it is closed with 4000 RECONNECT and resyncs;
 //  - the service enforces a global budget of 64 MiB across sessions (index.ts), closing the largest
 //    buffer first.
+//
+// Large frames are written in slices (B9's event-loop tail): a frame of DEFER_ABOVE_BYTES or more (a
+// welcome with a 200-entry roster or a catch-up, the gzip snapshot, the `changes` of a 100-note frame drag:
+// 101 moves and 180 re-snapped arrows, about 110 KB) is not written inside the task that queued it but by
+// the flusher, which writes dirty sessions for at most FLUSH_SLICE_MS per macrotask and then lets the loop
+// run. A 110 KB frame to 200 sessions is about 22 MB of socket writes; done in one task on 0.5 CPU it
+// blocked the loop for 150-300 ms (the largest stalls of B9's steady state), and under a CPU quota a long
+// task is stretched further by the throttle. Per session nothing changes: its queue keeps the order, a
+// small frame queued behind a deferred one waits for it, and a writer still gets its `changes` before its
+// ack. Small frames (acks, cursors, ordinary `changes`) are still written at once.
 
 import { CLOSE_RECONNECT } from '@draftroom/canvas-schema/protocol'
 import type { ElementSocket } from '../engine-switch.ts'
@@ -16,15 +26,52 @@ export const OUTBOUND = {
   globalBudget: 64 * 1024 * 1024,
 } as const
 
+/** A frame of at least this size (or a frame whose size is not known yet: a promise) is written by the flusher. */
+export const DEFER_ABOVE_BYTES = 8 * 1024
+/** Socket writes per macrotask of the flusher, at most (plus the frame that crosses the line). */
+export const FLUSH_SLICE_MS = 5
+
 type Frame = string | Uint8Array
 type Entry = Frame | Promise<Frame | null>
 
 const sizeOf = (f: Frame) => (typeof f === 'string' ? f.length : f.byteLength)
 
+/** The process-wide flusher of deferred sessions: dirty sessions written in slices, in the order they were marked. */
+class Flusher {
+  private readonly dirty = new Set<Outbound>()
+  private timer: ReturnType<typeof setImmediate> | null = null
+  /** slices run (tests, metrics) */
+  slices = 0
+
+  add(o: Outbound): void {
+    this.dirty.add(o)
+    if (!this.timer) this.timer = setImmediate(() => this.run())
+  }
+
+  private run(): void {
+    this.timer = null
+    this.slices++
+    const t0 = performance.now()
+    for (const o of this.dirty) {
+      this.dirty.delete(o)
+      o.flushDeferred()
+      if (performance.now() - t0 >= FLUSH_SLICE_MS) break
+    }
+    if (this.dirty.size) this.timer = setImmediate(() => this.run())
+  }
+
+  get size(): number {
+    return this.dirty.size
+  }
+}
+export const flusher = new Flusher()
+
 export class Outbound {
   private readonly queue: Entry[] = []
   private queuedBytes = 0
   private flushing = false
+  /** a large frame is queued and the flusher will write this session's queue */
+  private deferred = false
   closed = false
   /** bytes handed to the socket (metrics) */
   sentBytes = 0
@@ -50,8 +97,21 @@ export class Outbound {
 
   send(entry: Entry): void {
     if (this.closed) return
-    if (typeof entry === 'string' || entry instanceof Uint8Array) this.queuedBytes += sizeOf(entry)
+    const known = typeof entry === 'string' || entry instanceof Uint8Array
+    if (known) this.queuedBytes += sizeOf(entry)
     this.queue.push(entry)
+    if (this.deferred) return
+    if (!known || sizeOf(entry) >= DEFER_ABOVE_BYTES) {
+      this.deferred = true
+      flusher.add(this)
+      return
+    }
+    this.flush()
+  }
+
+  /** The flusher's turn: writes what is queued (the deferred frame and everything behind it). */
+  flushDeferred(): void {
+    this.deferred = false
     this.flush()
   }
 

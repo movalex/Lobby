@@ -406,13 +406,12 @@ export class ElementRoom {
     this.guestCreated.clear()
     const guestItem = (uid: string) => this.guestCreated.set(uid, (this.guestCreated.get(uid) ?? 0) + 1)
     for (const r of rows) {
-      const el = JSON.parse(r.data) as El
-      this.groups.add(el.groupIds)
-      if (!(el.type === 'text' && el.containerId)) {
+      // the columns come from SQL (store.ts liveIndexRows): no row is parsed in JS here
+      if (r.groupIds && r.groupIds !== '[]') this.groups.add(JSON.parse(r.groupIds) as string[])
+      if (!r.label) {
         this.counts.items++
         // the guest cap survives a room eviction: a guest's live items count against it (V2)
-        const by = el.customData?.lobbyServer?.createdBy
-        if (by?.guest) guestItem(by.uid)
+        if (r.byGuest) guestItem(r.byGuest)
       }
     }
     // ... and so do its deleted ones (D5, V2's re-check: tombstones made or revived reset nothing)

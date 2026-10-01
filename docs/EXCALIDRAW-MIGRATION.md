@@ -574,7 +574,7 @@ Outbound:
 - one ordered queue per session;
 - per session: above 256 KiB `bufferedAmount`, skip cursor frames; above 8 MiB, close with 4000 so the client resyncs;
 - **global budget 64 MiB** across all sessions: when exceeded, the session with the largest buffer is closed with 4000 first;
-- the reset snapshot is cached per board for up to 5 s (one entry per board, 64 MiB total LRU). A joiner gets the cached snapshot plus a catch-up since its clock.
+- the reset snapshot is cached per board (one entry per board, 64 MiB total LRU) and reused by every joiner while the board is at most 500 rows and 60 s past its clock, or unchanged (B9 performance round: the 5 s life rebuilt it 12 times in L1's join ramp; element-room.ts `SNAPSHOT_REUSE`); a delete drops it (W5-02). A joiner gets the cached snapshot plus a catch-up since its clock.
 
 #### 2.4.6 Internal endpoints
 
@@ -1110,7 +1110,7 @@ Staging sync runs on Render's **0.5 CPU / 512 MB** plan with a 1 GB disk (`rende
 | Pushes: ~20/s on the big board (after gesture coalescing) + 12/s elsewhere | ~10 ms CPU/s for validate + merge | Patches, not full elements |
 | Commits: ≤ 40/s process-wide | ~12 ms CPU/s, plus **fsync time with the event loop blocked** (node:sqlite is synchronous) | Group commit; a busy room commits at most every 25 ms |
 | `changes` fan-out: ~20 frames/s × 200 sessions = 4,000 sends/s | ~60 ms CPU/s; ~3 MB/s out | One serialization per batch, same bytes for all |
-| Join storm: 200 welcomes in 60 s | one snapshot (≈4.5 MB JSON, est. ≈0.6 MB gzip) compressed once per 5 s | Cached gzip snapshot + catch-up; `JoinQueue` kept |
+| Join storm: 200 welcomes in 60 s | one snapshot (≈4.5 MB JSON, est. ≈0.6 MB gzip) compressed once per 500 rows or 60 s of change (was: once per 5 s; B9 performance round) | Cached gzip snapshot + catch-up; `JoinQueue` kept |
 | Bound-arrow re-snaps (§2.9.4 rule 7, revision 3.3): every bound arrow of every applied `pos`/`shape`/`fit` write to its target, and every arrow geometry write. About 30 writes/s (20 pushes/s plus 10 typists' fits at ≤ 2/s), with about one bound arrow each on average | **< 5 ms CPU/s** for straight arrows (estimate); elbow routes cost more per call and are measured in B9 | Pure helpers per bound arrow; no `Scene`; a re-snap equal after rounding writes nothing |
 | **CPU total** | **≈ 205–275 ms/s of 500 ms/s** | Target ≤ 80% of quota in any 10 s window |
 
@@ -1119,7 +1119,7 @@ Staging sync runs on Render's **0.5 CPU / 512 MB** plan with a 1 GB disk (`rende
 | Node, code, `@excalidraw/element` | ~80 MB | — |
 | Per open board | SQLite page cache ≤ 4 MB + group-parent map and lease table (~150 B per element; 20k elements ≈ 3 MB) + attribution ledger ≤ 1 MB → ≤ 8 MB | No parsed element cache (§2.6); idle rooms evicted as today |
 | 21 open boards | ≤ 170 MB | — |
-| Snapshot cache | ≤ 64 MB | LRU, one entry per board, 5 s life |
+| Snapshot cache | ≤ 64 MB | LRU, one entry per board, reused while ≤ 500 rows and ≤ 60 s behind (B9 performance round) |
 | Outbound buffers | ≤ 64 MB | Global budget (§2.4.5) |
 | **RSS total, steady state** | **≤ 380 MB** | Target ≤ 400 MB in a 512 MB container |
 | Conversion worker (lazy conversion or roll-forward at runtime) | Heap cap from spike B8: 1.5 × the measured peak of the largest board, at most 128 MB, plus about 10 MB of worker overhead | **At most one conversion process-wide.** A runtime conversion starts only when RSS + the cap ≤ 440 MB, after flushing the snapshot cache. If that still does not fit, it waits and its joiners see "Preparing this board…". A worker that hits its cap is terminated by Node (`ERR_WORKER_OUT_OF_MEMORY`); the main process and every room keep running (§5.3). |

@@ -252,9 +252,39 @@ export class BoardStore {
   allJsonById(): string[] {
     return (this.st.allById.all() as { data: string }[]).map((r) => r.data)
   }
-  /** Live `(idx, id)` pairs in order, with what the room's caches need. */
-  liveIndexRows(): { idx: string; id: string; type: string; data: string }[] {
-    return this.st.liveIndex.all() as { idx: string; id: string; type: string; data: string }[]
+  /**
+   * Live `(idx, id)` pairs in order, with what the room's caches need, read in SQL (json_extract) so a
+   * board's thousands of rows are not parsed in JS at room open: the group ids (JSON text, null or '[]'
+   * when none), whether the element is a bound label, and the guest uid that created it, if any. After a
+   * SIGKILL every open board reopens at once (B9's restart window); the 3,798-row board's open was
+   * one of the restart's longest tasks.
+   */
+  liveIndexRows(): {
+    idx: string
+    id: string
+    type: string
+    groupIds: string | null
+    label: boolean
+    byGuest: string | null
+  }[] {
+    return (
+      this.st.liveIndex.all() as {
+        idx: string
+        id: string
+        type: string
+        groups: string | null
+        cid: unknown
+        guest: unknown
+        by: unknown
+      }[]
+    ).map((r) => ({
+      idx: r.idx,
+      id: r.id,
+      type: r.type,
+      groupIds: r.groups,
+      label: r.type === 'text' && typeof r.cid === 'string' && r.cid.length > 0,
+      byGuest: (r.guest === 1 || r.guest === true) && typeof r.by === 'string' ? r.by : null,
+    }))
   }
   /**
    * Every tombstone's `(idx, id)`, whether it is a bound label, and who created it (the room's caches: the
@@ -450,7 +480,11 @@ function prepareStatements(db: DatabaseSync) {
     snapshotData: 'SELECT data, deleted FROM lb_elements ORDER BY idx, id',
     liveData: 'SELECT data FROM lb_elements WHERE deleted = 0 ORDER BY idx, id',
     allById: 'SELECT data FROM lb_elements ORDER BY id',
-    liveIndex: 'SELECT idx, id, type, data FROM lb_elements WHERE deleted = 0 ORDER BY idx, id',
+    liveIndex: `SELECT idx, id, type, json_extract(data, '$.groupIds') AS groups,
+         json_extract(data, '$.containerId') AS cid,
+         json_extract(data, '$.customData.lobbyServer.createdBy.guest') AS guest,
+         json_extract(data, '$.customData.lobbyServer.createdBy.uid') AS by
+         FROM lb_elements WHERE deleted = 0 ORDER BY idx, id`,
     deadIndex: `SELECT idx, id, json_extract(data, '$.containerId') AS cid,
          json_extract(data, '$.customData.lobbyServer.createdBy.guest') AS guest,
          json_extract(data, '$.customData.lobbyServer.createdBy.uid') AS by
