@@ -25,12 +25,16 @@ import {
   createNote,
   expect,
   expectSaved,
+  itemBounds,
   items,
   selectNone,
+  TEXT_EDITOR,
+  viewport,
   waitForCanvas,
 } from '../tests/support/canvas.ts'
 import { pressRedo, pressUndo } from '../tests/support/excalidraw.ts'
 import { WEB_URL } from '../tests/support/ports.ts'
+import { downloadFrom, pdfPageTexts } from '../tests/support/present-export.ts'
 import {
   AI_API_ENV_3H,
   aiButton,
@@ -265,6 +269,126 @@ test('Group into themes on the Lobby tour Brainstorm: notice once, busy state, t
   })
 })
 
+test('DEMO 1:00 → 1:20 → 2:45 → 3:30 (W5-04): a note added with N joins the grouping inside the Brainstorm frame; the frame grows, the labels share a line, and the ideas are on its slide and its PDF page', async ({
+  canvasSession,
+  board,
+  openai,
+}) => {
+  const a = await canvasSession('alice')
+  await openTour(a.page, board)
+  await showFrame(a.page, BRAINSTORM)
+  const before = await frameContents(a.page, BRAINSTORM)
+  if (!before) throw new Error('no frame')
+  const tourNotes = before.kids.filter((k) => k.type === 'stickynote')
+  const IDEA = 'Let the villain narrate the ending'
+  let added = ''
+
+  await test.step('1:00: N, then a click in the free place at the end of the Story row, and an idea typed', async () => {
+    const story = tourNotes.filter((n) => /villain|rewind/.test(n.text)).sort((p, q) => p.b.x - q.b.x)
+    const last = story.at(-1)
+    if (!last) throw new Error('no Story row')
+    const gap = (story[1]?.b.x ?? 0) - ((story[0]?.b.x ?? 0) + (story[0]?.b.w ?? 0))
+    const at = (await canvasCall(a.page, 'sceneToScreen', {
+      x: last.b.x + last.b.w + gap + last.b.w / 2,
+      y: last.b.y + last.b.h / 2,
+    })) as { x: number; y: number }
+    const ids = new Set((await items(a.page)).map((e) => e.id))
+    await a.page.keyboard.press('n')
+    await a.page.mouse.click(at.x, at.y)
+    await expect
+      .poll(async () => (await items(a.page)).filter((e) => !ids.has(e.id)).length)
+      .toBeGreaterThan(0)
+    const made = (await items(a.page)).find((e) => !ids.has(e.id) && e.type === 'stickynote')
+    if (!made) throw new Error('no note made with N')
+    added = made.id
+    await expect(a.page.locator(TEXT_EDITOR)).toBeVisible()
+    await a.page.keyboard.type(IDEA)
+    await a.page.keyboard.press('Escape')
+    await expect(a.page.locator(TEXT_EDITOR)).toHaveCount(0)
+    await expectSaved(a.page)
+    // The note sits inside the frame's area, whether or not the tool made it a frame member (W5-01, 2C).
+    const nb = await itemBounds(a.page, added)
+    if (!nb) throw new Error('no bounds')
+    expect(inside(before.b, { x: nb.x, y: nb.y, w: nb.width, h: nb.height })).toBe(true)
+  })
+
+  const all = [...tourNotes.map((n) => n.id), added]
+  await test.step('1:20: the idea notes selected, AI › Group into themes asks first (they sit under the theme cards), then groups them', async () => {
+    await selectIds(a.page, all)
+    const menu = await openAiMenu(a.page)
+    await expect(menu).toContainText('9 sticky notes')
+    await menu.getByTestId('ai-themes').click()
+    // the regroup guard holds when one note is not (yet) a member of the frame
+    await expect(aiMenu(a.page)).toHaveAttribute('data-view', 'regroup')
+    await expect(aiMenu(a.page)).toContainText('“Gameplay”, “Story” and “Community”')
+    await continueIfAsked(a.page)
+    await expect(a.page.getByTestId('ai-done')).toContainText('Grouped 9 notes into 3 themes.', {
+      timeout: 20_000,
+    })
+    await expect(a.page.getByTestId('ai-done')).toContainText('The frame grew to fit.')
+    const sent = itemsOf(openai.requests.at(-1) as never).map((i) => i.text)
+    expect(sent).toContain(IDEA)
+  })
+
+  await expectSaved(a.page)
+  const after = await frameContents(a.page, BRAINSTORM)
+  if (!after) throw new Error('no frame')
+  await test.step('the result stays in the frame: every note a member, inside it, the frame grown, the labels on one line', async () => {
+    const notes = after.kids.filter((k) => k.type === 'stickynote')
+    expect(notes.map((n) => n.id).sort()).toEqual([...all].sort())
+    for (const n of notes) {
+      expect(n.frameId, `${n.text} in the frame`).toBe(after.id)
+      expect(inside(after.b, n.b), `${n.text} inside the frame`).toBe(true)
+    }
+    expect(after.w).toBe(before.w)
+    expect(after.h).toBeGreaterThan(before.h)
+    const labels = after.kids.filter((k) => k.ai === 'theme-label')
+    expect(labels).toHaveLength(3)
+    for (const l of labels) expect(inside(after.b, l.b), `${l.text} inside the frame`).toBe(true)
+    // one row of clusters: one baseline for the labels
+    expect(new Set(labels.map((l) => Math.round(l.b.y))).size, 'labels on one line').toBe(1)
+    // the camera followed the grown frame
+    await expect
+      .poll(async () => {
+        const v = await viewport(a.page)
+        return inside({ x: v.x, y: v.y, w: v.width, h: v.height }, after.b)
+      })
+      .toBe(true)
+  })
+
+  await test.step('2:45: the Brainstorm slide shows the ideas', async () => {
+    await selectNone(a.page)
+    await a.page.getByTestId('present-button').click()
+    const counter = a.page.getByTestId('present-counter')
+    await expect(counter).toHaveText(/^1 \//)
+    await a.page.keyboard.press('ArrowRight')
+    await expect(counter).toHaveText(/^2 \//)
+    await expect(a.page.locator('.dr-present__title')).toContainText('Brainstorm')
+    await expect
+      .poll(async () => {
+        const v = await viewport(a.page)
+        const view = { x: v.x, y: v.y, w: v.width, h: v.height }
+        const f = await frameContents(a.page, BRAINSTORM)
+        return (f?.kids ?? []).filter((k) => k.type === 'stickynote' && inside(view, k.b)).length
+      })
+      .toBe(9)
+    await a.page.getByTestId('present-exit').click()
+    await expect(a.page.getByTestId('present-overlay')).toHaveCount(0)
+  })
+
+  await test.step('3:30: PDF page 2 (Brainstorm) holds the theme labels and the ideas', async () => {
+    await a.page.getByTestId('export-button').click()
+    const dialog = a.page.getByTestId('export-dialog')
+    const pdf = await downloadFrom(a.page, () => dialog.getByTestId('export-pdf').click())
+    const texts = await pdfPageTexts(pdf.bytes)
+    const page2 = (texts[1] ?? '').replace(/\s+/g, ' ')
+    expect(page2.startsWith('2 · Brainstorm') || page2.startsWith('Brainstorm')).toBe(true)
+    for (const name of ['Big Gameplay Moments', 'Story Twists', 'Made With Players'])
+      expect(page2.replace(/\s+/g, ''), name).toContain(name.replace(/\s+/g, ''))
+    expect(page2.replace(/\s+/g, '')).toContain('villain'.replace(/\s+/g, ''))
+  })
+})
+
 test('Summarize: private first for everyone; an editor adds it as a card in the frame; a viewer writes nothing', async ({
   canvasSession,
   board,
@@ -377,6 +501,51 @@ test('Summarize: private first for everyone; an editor adds it as a card in the 
     }
   })
   expect(openai.requests.length).toBe(3)
+})
+
+test('W5-47: leaving the summary from the keyboard gives the keyboard back to the AI button that opened it', async ({
+  canvasSession,
+  board,
+  openai: _openai,
+}) => {
+  const a = await canvasSession('alice')
+  await openTour(a.page, board)
+  await showFrame(a.page, BRAINSTORM)
+  const notes = await frameNotes(a.page, BRAINSTORM)
+  const panel = a.page.getByTestId('ai-summary-panel')
+  const summarizeFromKeyboard = async () => {
+    await selectIds(
+      a.page,
+      notes.slice(0, 3).map((n) => n.id),
+    )
+    await aiButton(a.page).focus()
+    await a.page.keyboard.press('Enter')
+    await expect(a.page.getByTestId('ai-summarize')).toBeFocused()
+    await a.page.keyboard.press('Enter')
+    const cont = a.page.getByTestId('ai-notice-continue')
+    await expect(cont.or(panel).first()).toBeVisible()
+    if (await cont.isVisible()) {
+      await expect(cont).toBeFocused()
+      await a.page.keyboard.press('Enter')
+    }
+    await expect(panel.getByTestId('ai-summary-text')).toContainText('launch trailer')
+    await expect(panel.getByTestId('ai-summary-add')).toBeFocused()
+  }
+
+  await test.step('Escape', async () => {
+    await summarizeFromKeyboard()
+    await a.page.keyboard.press('Escape')
+    await expect(panel).toHaveCount(0)
+    await expect(aiButton(a.page)).toBeFocused()
+  })
+
+  await test.step('the × button, from the keyboard', async () => {
+    await summarizeFromKeyboard()
+    await panel.getByRole('button', { name: 'Close summary' }).focus()
+    await a.page.keyboard.press('Enter')
+    await expect(panel).toHaveCount(0)
+    await expect(aiButton(a.page)).toBeFocused()
+  })
 })
 
 test('Action items and Generate ideas: new sticky notes beside the target, one undo step each; the frame stands for its contents', async ({

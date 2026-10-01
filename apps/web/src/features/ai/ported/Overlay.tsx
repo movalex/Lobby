@@ -25,6 +25,7 @@ import {
   type AiRequest,
   aiJob,
   aiMenu,
+  aiOpener,
   aiPanel,
   aiStatus,
   BUSY_LABELS,
@@ -85,16 +86,9 @@ function usePlacement(canvas: LobbyCanvas, at: AiMenuState['at'], ref: React.Ref
   return pos
 }
 
-/**
- * A11Y-15: what had the keyboard when the popover opened (the selection bar's AI button, or the board),
- * per canvas: the popover remounts for each of its views, so this outlives any one of them.
- */
-const openers = new WeakMap<LobbyCanvas, HTMLElement>()
-
 /** The popover closed from the keyboard (Escape, ×, Cancel): the focus goes back where it came from. */
-function returnFocus(canvas: LobbyCanvas) {
-  const opener = openers.get(canvas)
-  openers.delete(canvas)
+function returnFocus(canvas: LobbyCanvas, opener: HTMLElement | null = aiOpener.get(canvas)) {
+  aiOpener.clear(canvas)
   if (tryFocus(opener)) return
   canvas.focus({ preventScroll: true })
 }
@@ -105,7 +99,7 @@ function AiPopover({ menu }: { menu: AiMenuState }) {
   const close = (refocus: boolean) => {
     closeAiMenu(canvas, false)
     if (refocus) returnFocus(canvas)
-    else openers.delete(canvas)
+    else aiOpener.clear(canvas)
   }
   const ref = useIsolated<HTMLDivElement>((e) => {
     if (e.key === 'Escape') {
@@ -566,11 +560,14 @@ function SummaryView({ panel, onAnnounce }: { panel: AiPanelState; onAnnounce(te
     [canvas],
   )
   const ref = useIsolated<HTMLElement>()
-  /** Closes it; when the keyboard was in it, the keyboard goes back to the AI button (or the board). */
+  /**
+   * Closes it; when the keyboard was in it, the keyboard goes back to the AI button that asked for the
+   * summary (W5-47: the popover that recorded it closed long before), or the board.
+   */
   const close = () => {
     const hadFocus = !!ref.current?.contains(docOf(canvas).activeElement)
     aiPanel(canvas).set(null)
-    if (hadFocus) returnFocus(canvas)
+    if (hadFocus) returnFocus(canvas, panel.opener)
   }
   const closeRef = useRef(close)
   closeRef.current = close
@@ -705,8 +702,8 @@ export function AiOverlay({ ctx }: { ctx: CanvasFeatureContext }) {
     if (!open) return
     const a = docOf(canvas).activeElement
     if (a instanceof HTMLElement && a !== a.ownerDocument.body && !a.closest('.dr-ai-pop'))
-      openers.set(canvas, a)
-    else openers.delete(canvas)
+      aiOpener.set(canvas, a)
+    else aiOpener.clear(canvas)
   }, [canvas, open])
   if (!enabled) return null
   return (
