@@ -56,6 +56,9 @@ function start(heartbeatMs: number) {
     setTimer: clock.setTimer,
     clearTimer: clock.clearTimer,
     backoffMs: [100],
+    // the reconnect delay is jittered by ±30 % (RECONNECT_JITTER); 0.5 draws the table value exactly, so
+    // `clock.advance(100)` below reopens the socket every run instead of on one draw in two
+    random: () => 0.5,
   })
   t.onState((s, c) => {
     states.push(s)
