@@ -10,22 +10,45 @@
 // - Order: by name (case- and accent-insensitive, numbers in numeric order), then key.
 // - Every change is planned here as whole next `meta` objects, so the editor side can write each record
 //   once, in one undo step (and remove keys, which a partial update cannot do).
+// - The engine-neutral rules (order, chips, colours, typed names) are ./tag-core.ts, shared with the
+//   ported feature; they are re-exported here unchanged.
 
 import { FILE_CARD_TYPE } from '@draftroom/canvas-schema'
 import {
   boardTagMetaKey,
   isTagColor,
-  MAX_TAGS_PER_BOARD,
   MAX_TAGS_PER_SHAPE,
   normalizeTagName,
   parseShapeTags,
   shapeTagMetaKey,
-  TAG_COLOR_ROTATION,
   type TagColor,
   type TagDef,
   tagKey,
   tagNameError,
 } from '@draftroom/contracts'
+import {
+  type BoardTagMap,
+  type BoardTagRow,
+  compareTags,
+  type Planned,
+  type SelectionTagState,
+  tagRowsOf,
+} from './tag-core.ts'
+
+export {
+  type BoardTagMap,
+  type BoardTagRow,
+  boardTagMap,
+  chipLayout,
+  colorForName,
+  compareTags,
+  isShortTagName,
+  nextTagColor,
+  type Planned,
+  resolveTypedTag,
+  type SelectionTagState,
+  sameBoardTags,
+} from './tag-core.ts'
 
 export type Meta = Readonly<Record<string, unknown>>
 
@@ -70,46 +93,12 @@ export function shapeTags(meta: Meta): readonly TagDef[] {
   return tags
 }
 
-const collator = new Intl.Collator(undefined, { sensitivity: 'base', numeric: true })
-export function compareTags(a: TagDef, b: TagDef): number {
-  return collator.compare(a.name, b.name) || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0)
-}
-
-export type BoardTagMap = ReadonlyMap<string, TagDef>
-
-export function boardTagMap(list: readonly TagDef[]): BoardTagMap {
-  return new Map(list.map((t) => [t.key, t]))
-}
-
-/** Same entries (key, name, colour), in any order. */
-export function sameBoardTags(a: BoardTagMap, b: BoardTagMap): boolean {
-  if (a === b) return true
-  if (a.size !== b.size) return false
-  for (const [key, t] of a) {
-    const o = b.get(key)
-    if (!o || o.name !== t.name || o.color !== t.color) return false
-  }
-  return true
-}
-
 /** A shape's tags as people see them: the board's name and colour where it lists the tag; sorted. */
 export function displayTags(meta: Meta, board: BoardTagMap): TagDef[] {
   const own = shapeTags(meta)
   if (!own.length) return []
   return own.map((t) => board.get(t.key) ?? t).sort(compareTags)
 }
-
-/**
- * Which chips a shape shows: all of up to three; with more, the first two and "+N" (three names and a
- * counter on a 200 px note leave every name a few letters).
- */
-export function chipLayout(tags: readonly TagDef[]): { shown: readonly TagDef[]; more: number } {
-  if (tags.length <= 3) return { shown: tags, more: 0 }
-  return { shown: tags.slice(0, 2), more: tags.length - 2 }
-}
-
-/** A name short enough to always show whole on a chip (8 characters). */
-export const isShortTagName = (name: string) => [...name].length <= 8
 
 /** Space-separated tag keys of a shape (keys contain no whitespace), '' without tags. */
 export function tagTokens(meta: Meta): string {
@@ -118,77 +107,11 @@ export function tagTokens(meta: Meta): string {
   return out
 }
 
-export interface BoardTagRow extends TagDef {
-  /** Taggable shapes carrying it (all pages). */
-  count: number
-  /** In the board's list (false: only shapes carry it). */
-  listed: boolean
-}
-
 /** Every tag on the board: the listed ones and the ones shapes carry, with counts; sorted by name. */
 export function boardTagRows(board: BoardTagMap, shapes: Iterable<ShapeLike>): BoardTagRow[] {
-  const rows = new Map<string, BoardTagRow>()
-  for (const t of board.values()) rows.set(t.key, { ...t, count: 0, listed: true })
-  for (const s of shapes) {
-    if (!isTaggable(s)) continue
-    for (const t of shapeTags(s.meta)) {
-      const row = rows.get(t.key)
-      if (row) row.count++
-      else rows.set(t.key, { ...t, count: 1, listed: false })
-    }
-  }
-  return [...rows.values()].sort(compareTags)
-}
-
-/**
- * F15: names that say a colour get it ("warm" is not lavender). Whole words of the name, lower case.
- */
-const NAMED_COLORS: Readonly<Record<string, TagColor>> = {
-  warm: 'orange',
-  hot: 'orange',
-  sunny: 'orange',
-  autumn: 'orange',
-  orange: 'orange',
-  red: 'red',
-  urgent: 'red',
-  blocker: 'red',
-  risk: 'red',
-  cool: 'blue',
-  cold: 'blue',
-  calm: 'blue',
-  winter: 'blue',
-  blue: 'blue',
-  green: 'green',
-  done: 'green',
-  fresh: 'green',
-  approved: 'green',
-  yellow: 'yellow',
-  violet: 'violet',
-  purple: 'violet',
-  grey: 'grey',
-  gray: 'grey',
-  neutral: 'grey',
-}
-
-/** The colour a tag's name asks for (its first word that names one), if any. */
-export function colorForName(name: string): TagColor | null {
-  for (const word of name.toLowerCase().split(/[^\p{L}\p{N}]+/u)) {
-    const color = NAMED_COLORS[word]
-    if (color) return color
-  }
-  return null
-}
-
-/**
- * The colour a new tag gets: the one its name asks for (colorForName), else the first of the rotation
- * no tag uses yet, else round-robin.
- */
-export function nextTagColor(existing: readonly { color: TagColor }[], name = ''): TagColor {
-  const named = colorForName(name)
-  if (named) return named
-  const used = new Set(existing.map((t) => t.color))
-  const free = TAG_COLOR_ROTATION.find((c) => !used.has(c))
-  return free ?? (TAG_COLOR_ROTATION[existing.length % TAG_COLOR_ROTATION.length] as TagColor)
+  const carried: (readonly TagDef[])[] = []
+  for (const s of shapes) if (isTaggable(s)) carried.push(shapeTags(s.meta))
+  return tagRowsOf(board, carried)
 }
 
 // ---- planning ------------------------------------------------------------------------------------
@@ -232,8 +155,6 @@ const withTag = (meta: Meta, t: TagDef, remove?: string) => {
   next[shapeTagMetaKey(t.key)] = { name: t.name, color: t.color }
   return next
 }
-
-export type SelectionTagState = 'all' | 'some' | 'none'
 
 /** Whether all, some or none of the taggable shapes carry `key`. */
 export function selectionTagState(shapes: readonly ShapeLike[], key: string): SelectionTagState {
@@ -283,29 +204,6 @@ export function planSetTag(
   const board = on && !listed && out.length > 0 ? { set: [tag], remove: [] } : EMPTY_BOARD_CHANGE
   return { shapes: out, board, full }
 }
-
-export type Planned<T> = { ok: true; value: T } | { ok: false; error: string }
-
-/**
- * The tag a typed name means: the existing one with that key (listed or carried), or a new one with the
- * next free colour. `created` says which.
- */
-export function resolveTypedTag(
-  rows: readonly BoardTagRow[],
-  typed: string,
-): Planned<{ tag: TagDef; created: boolean }> {
-  const name = normalizeTagName(typed)
-  const error = tagNameError(name)
-  if (error) return { ok: false, error }
-  const key = tagKey(name)
-  const existing = rows.find((r) => r.key === key)
-  if (existing) return { ok: true, value: { tag: toDef(existing), created: false } }
-  if (rows.length >= MAX_TAGS_PER_BOARD)
-    return { ok: false, error: `A board holds up to ${MAX_TAGS_PER_BOARD} tags. Delete one first.` }
-  return { ok: true, value: { tag: { key, name, color: nextTagColor(rows, name) }, created: true } }
-}
-
-const toDef = (r: TagDef): TagDef => ({ key: r.key, name: r.name, color: r.color })
 
 /**
  * Renames a tag on the board and on every shape carrying it. A name that differs only in case keeps the

@@ -1,9 +1,8 @@
 // Live-session access re-validation (docs/M1-CONTRACTS.md §7). Tickets only gate admission; this
 // module notices revocations and role changes while sockets stay open.
 import { INTERNAL_SECRET_HEADER } from '@draftroom/auth-tickets'
-import { TLSyncErrorCloseEventReason } from '@tldraw/sync-core'
+import type { SessionDirectory } from './engine-switch.ts'
 import { BOARD_ROLES, type BoardRole } from './permissions.ts'
-import type { RoomRegistry } from './rooms.ts'
 
 export interface AccessClient {
   /** The user's current role on the board, or null for no access. Throws when the API cannot answer. */
@@ -60,7 +59,8 @@ export function createApiAccessClient(opts: ApiAccessClientOptions): AccessClien
 }
 
 export interface AccessMonitorOptions {
-  registry: RoomRegistry
+  /** The ElementRoom service (a SessionDirectory). */
+  registry: SessionDirectory
   client: AccessClient
   intervalMs: number
   log: (...a: unknown[]) => void
@@ -125,7 +125,7 @@ export function createAccessMonitor(opts: AccessMonitorOptions): AccessMonitor {
       if (seq !== undefined && seq > askedAt) continue
       if (role === null) {
         log(`[access] revoked: closing a session on board ${boardId}`)
-        room.closeSession(s.sessionId, TLSyncErrorCloseEventReason.FORBIDDEN)
+        room.closeSession(s.sessionId, 'FORBIDDEN')
       } else if (role !== s.meta.role) {
         // Not fatal: the client reconnects and its new ticket carries the new role.
         log(`[access] role changed (${s.meta.role} -> ${role}): closing a session on board ${boardId}`)

@@ -243,6 +243,14 @@ export const CheckpointContent = z.object({
   /** The serialized tldraw schema the records are in (the preview's store migrates them on load). */
   schema: z.unknown(),
   records: z.array(z.looseObject({ id: z.string(), typeName: z.string() })),
+  /**
+   * Excalidraw engine (docs/EXCALIDRAW-MIGRATION.md §3.7, §5.5; CR 2F-3): a v2 checkpoint's content is
+   * elements, not records. Then `format` is `lobby-elements`, `records` is empty, `schema` is the element
+   * schema version, and `elements` / `doc` hold the board. Absent for a v1 (tldraw) checkpoint.
+   */
+  format: z.literal('lobby-elements').optional(),
+  elements: z.array(z.looseObject({ id: z.string(), type: z.string() })).optional(),
+  doc: z.record(z.string(), z.unknown()).optional(),
 })
 export type CheckpointContent = z.infer<typeof CheckpointContent>
 

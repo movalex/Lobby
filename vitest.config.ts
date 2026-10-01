@@ -1,5 +1,12 @@
 import { defineConfig } from 'vitest/config'
 
+/**
+ * Spike B (docs/EXCALIDRAW-MIGRATION.md §8.6.2): the C0 arrow acceptance tests run against O1's real room.
+ * They stayed out of the default run until M1; since the M1 integration their project
+ * `sync-arrows-acceptance` is in this list and in every gate. `pnpm test:arrows` still runs them alone.
+ */
+export const ARROWS_ACCEPTANCE = 'apps/sync/test/room/arrows/**'
+
 export default defineConfig({
   test: {
     projects: [
@@ -18,6 +25,7 @@ export default defineConfig({
           name: 'sync',
           environment: 'node',
           include: ['apps/sync/src/**/*.test.ts', 'apps/sync/test/**/*.test.ts'],
+          exclude: [ARROWS_ACCEPTANCE, '**/node_modules/**'],
           testTimeout: 60_000,
           hookTimeout: 60_000,
         },
@@ -31,7 +39,26 @@ export default defineConfig({
           hookTimeout: 120_000,
         },
       },
+      // spike B, from M1: the C0 arrow acceptance tests against O1's room (as in vitest.arrows.config.ts)
+      {
+        test: {
+          name: 'sync-arrows-acceptance',
+          environment: 'node',
+          include: [`${ARROWS_ACCEPTANCE}/*.test.ts`],
+          testTimeout: 180_000,
+          hookTimeout: 60_000,
+        },
+      },
       { test: { name: 'web', environment: 'node', include: ['apps/web/src/**/*.test.ts'] } },
+      // Excalidraw engine probe suite, Node part (docs/EXCALIDRAW-MIGRATION.md §6.5); the browser part runs from its own runner
+      {
+        test: {
+          name: 'engine-probe',
+          environment: 'node',
+          include: ['apps/web/test/engine-probe/**/*.test.ts'],
+          testTimeout: 60_000,
+        },
+      },
       {
         test: {
           name: 'packages',
@@ -46,10 +73,15 @@ export default defineConfig({
             'packages/templates/src/**/*.test.ts',
             'packages/blob-store/src/**/*.test.ts',
             'packages/blob-store/test/**/*.test.ts',
+            // spike B: O4's converter package
+            'packages/tldraw-import/src/**/*.test.ts',
+            'packages/tldraw-import/test/**/*.test.ts',
           ],
           testTimeout: 60_000,
         },
       },
+      // spike B: O3's load generator's own unit tests (e2e/load/**; the runs themselves are Node scripts)
+      { test: { name: 'e2e-load', environment: 'node', include: ['e2e/load/**/*.test.ts'] } },
       {
         test: {
           name: 'api',

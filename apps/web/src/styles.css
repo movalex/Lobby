@@ -143,17 +143,7 @@ body {
   outline: 2px solid var(--dr-focus);
   outline-offset: 2px;
 }
-/* A11Y-03: tldraw.css resets every outline inside the editor (`.tl-container *`, the same specificity as
-   the rule above, loaded later), so Lobby's controls in canvas overlays (AI popover, its notice, the tag
-   picker, prompts) showed no focus at all. They get the ring back; tldraw's own UI (tl-* / tlui-*
-   classes) and the text being edited keep tldraw's focus styling. */
-.tl-container
-:where(button, a, input, select, textarea, [tabindex]):not(
-  :where([class^="tl"], [class*=" tl"], [contenteditable], .ProseMirror)
-):focus-visible {
-  outline: 2px solid var(--dr-focus);
-  outline-offset: 2px;
-}
+
 code {
   font-family: var(--dr-mono);
   font-size: 0.92em;
@@ -792,19 +782,6 @@ code {
   box-shadow: 0 1px 3px rgb(0 0 0 / 18%);
 }
 
-/* ---- file card (inside tldraw's HTML layer: page units, scaled by the camera) ------------------- */
-
-.tl-html-container.dr-fc {
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  border: 1px solid var(--tl-color-divider, var(--dr-line));
-  border-radius: 10px;
-  background: var(--tl-color-panel, #fff);
-  color: var(--tl-color-text-1, var(--dr-ink));
-  font-family: var(--dr-font);
-  box-shadow: 0 1px 2px rgb(0 0 0 / 6%);
-}
 .dr-fc__preview {
   position: relative;
   flex: 1;
@@ -2028,9 +2005,6 @@ code {
   .dr-board__body > .dr-dock[data-open="true"] {
     right: 0;
   }
-  .dr-board__body .tlui-layout__top__left {
-    padding-left: 48px;
-  }
   .dr-dock__rail {
     align-self: flex-start;
     width: auto;
@@ -2314,21 +2288,6 @@ html[data-dr-presenting] .dr-board__account {
 }
 
 /* ---- dark theme: what the tokens cannot reach ------------------------------------------------------ */
-
-/* tldraw 5.4.2 renders its container as `tl-theme__light` and switches it in a passive effect
-   (useDarkMode, which runs after a paint) when, as on our board, it gets a ready store: one light frame
-   of canvas on a dark page, even with its preference already dark. Until tldraw has set its
-   data-color-mode attribute the container stays invisible, for 400 ms at most (an editor that never
-   gets there is shown anyway). */
-:root[data-theme="dark"] .dr-board__editor .tl-container:not([data-color-mode]) {
-  animation: dr-tl-theme-pending 400ms step-end;
-}
-@keyframes dr-tl-theme-pending {
-  from,
-  to {
-    visibility: hidden;
-  }
-}
 
 /* Data-URI icons cannot read custom properties: the same icons, stroked in the dark --dr-ink-2 and
    --dr-live. */

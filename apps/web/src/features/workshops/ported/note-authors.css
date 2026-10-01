@@ -1,0 +1,35 @@
+/* OWNER: 3f. The note-author label on the Excalidraw page (./NoteAuthors.tsx), a ported-only file (the
+   normal build never loads it). Sizes are scene units: the layer's box is scaled by the zoom, as tldraw's
+   note face scaled `.tl-note__attribution` (11 px, 4 px from the bottom, 8 px from the right, 60 % wide,
+   at 0.6 of the label's ink). */
+.dr-note-authors {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 0;
+  height: 0;
+  transform-origin: 0 0;
+  pointer-events: none;
+}
+.dr-note-author__box {
+  position: absolute;
+  transform-origin: center;
+}
+.dr-note-author {
+  position: absolute;
+  bottom: 4px;
+  right: 8px;
+  max-width: 60%;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-family: var(--dr-font);
+  font-size: 11px;
+  line-height: 14px;
+  opacity: 0.6;
+}
+/* "Hide note authors" (workshops' session setting): the layer also stops drawing; this covers the frame
+   in between */
+html[data-dr-hide-authors] .dr-note-author {
+  display: none;
+}

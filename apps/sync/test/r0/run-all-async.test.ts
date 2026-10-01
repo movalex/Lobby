@@ -7,7 +7,6 @@
 // (backup/run-all-cli.ts) polls it with short requests.
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { draftroomSchema } from '@draftroom/canvas-schema'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { AccessMonitor } from '../../src/access.ts'
 import type { BackupEntry } from '../../src/backup/backup.ts'
@@ -19,7 +18,6 @@ import {
   type RunAllRunView,
 } from '../../src/backup/run-all.ts'
 import { createRequestHandler } from '../../src/http/router.ts'
-import type { RoomRegistry } from '../../src/rooms.ts'
 import { callInternal, TEST_INTERNAL_SECRET } from '../harness/tickets.ts'
 import { runCli } from './run-all-http.ts'
 
@@ -179,8 +177,7 @@ describe('over HTTP, with a run longer than the client waits', () => {
   async function serve(runAll: ReturnType<typeof gated>['runAll'], backupsDir: string | null = '/backups') {
     const handle = createRequestHandler({
       internalSecret: TEST_INTERNAL_SECRET,
-      registry: { backupsDir: () => backupsDir } as unknown as RoomRegistry,
-      schema: draftroomSchema,
+      backupsDir: () => backupsDir,
       monitor: {} as unknown as AccessMonitor,
       isClosing: () => false,
       log: () => {},

@@ -1,17 +1,16 @@
-// Board files for the bridge release R0 gate tests (docs/EXCALIDRAW-MIGRATION.md §5.10): tldraw boards
-// written by today's registry, the new engine's lb_* tables as the Excalidraw build writes them (the
-// frozen §2.6 DDL, copied here from the spike's apps/sync/src/room/schema.ts: R0 itself has no code that
-// creates an lb_* table), and read-only helpers that compare files before and after R0 touched them.
+// Board files for the tests that still meet boards of the tldraw era (docs/EXCALIDRAW-MIGRATION.md §5.10):
+// tldraw boards written as the tldraw sync wrote them (../harness/tldraw-file.ts), the lb_* tables as the
+// Excalidraw build writes them (the frozen §2.6 DDL), and read-only helpers that compare files.
 import { createHash } from 'node:crypto'
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
-import { draftroomSchema } from '@draftroom/canvas-schema'
-import type { TLRecord } from '@tldraw/tlschema'
 import { afterEach } from 'vitest'
 import { lbDigests, type TableDigest, tableDigest } from '../../src/r0/lb-files.ts'
-import { boardDbPath, RoomRegistry } from '../../src/rooms.ts'
+import { seedTldrawBoard } from '../harness/tldraw-file.ts'
+
+export { seedTldrawBoard }
 
 const dirs: string[] = []
 afterEach(() => {
@@ -162,34 +161,6 @@ export function markConverted(path: string): void {
   } finally {
     db.close()
   }
-}
-
-/** A tldraw board written by today's RoomRegistry (document, page and `records`), then closed. */
-export function seedTldrawBoard(dataDir: string, boardId: string, records: readonly TLRecord[] = []): string {
-  const reg = new RoomRegistry({ dataDir, schema: draftroomSchema, backup: false })
-  try {
-    const result = reg.seed(boardId, {
-      documentClock: 0,
-      tombstoneHistoryStartsAtClock: 0,
-      tombstones: {},
-      schema: draftroomSchema.serialize(),
-      documents: [
-        {
-          state: { id: 'document:document', typeName: 'document', gridSize: 10, name: '', meta: {} } as never,
-          lastChangedClock: 0,
-        },
-        {
-          state: { id: 'page:page', typeName: 'page', name: 'Page 1', index: 'a1', meta: {} } as never,
-          lastChangedClock: 0,
-        },
-        ...records.map((state) => ({ state, lastChangedClock: 0 })),
-      ],
-    })
-    if (result !== 'created') throw new Error(`seed of ${boardId}: ${result}`)
-  } finally {
-    reg.closeAll()
-  }
-  return boardDbPath(dataDir, boardId)
 }
 
 /** Every table name of a board file (read-only). */

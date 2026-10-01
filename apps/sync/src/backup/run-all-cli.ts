@@ -1,8 +1,8 @@
 // Starts POST /internal/backups/run-all and waits for its report (bridge release R0; docs/DEPLOY.md
 // "R0 at the cut-over and in a rollback"). From the sync service's Shell:
 //
-//   node apps/sync/src/backup/run-all-cli.ts [--expect-maintenance] [--run <runId>] [--url <sync url>]
-//     [--interval-ms <ms>]
+//   node apps/sync/src/backup/run-all-cli.ts [--expect-maintenance] [--force] [--run <runId>]
+//     [--url <sync url>] [--interval-ms <ms>]
 //   (dev: pnpm --filter @draftroom/sync backup:run-all …)
 //
 // Starts a run, or with --run follows one already started (the id is on the first line this prints;
@@ -10,6 +10,10 @@
 // printed as JSON on stdout. Exit 0 only when the report says ok, and with --expect-maintenance also
 // `inMaintenance`. Exit 1 otherwise: a board failed, the run failed, or the server no longer knows the
 // run (it restarted, which also turned maintenance off). Exit 2: bad arguments or no secret.
+//
+// A run is refused (HTTP 409 RECENT_HELD_SET, exit 1) while every board has a held backup from the last
+// 30 minutes: each run adds a 90-day copy of every board to the sync disk (run-all.ts). --force writes
+// another set anyway: after a sync restart inside the window, or when boards changed since.
 //
 // Every request is short: the server answers the POST at once (202 and the run's id) and the CLI polls
 // GET /internal/backups/run-all/<runId>, each request with its own 30 s timeout. No request waits for the
@@ -31,6 +35,7 @@ interface Args {
   url: string
   runId: string | null
   expectMaintenance: boolean
+  force: boolean
   intervalMs: number
 }
 
@@ -41,6 +46,7 @@ function parseArgs(argv: string[], env: NodeJS.ProcessEnv): Args {
     url: `http://127.0.0.1:${env.PORT || '5858'}`,
     runId: null,
     expectMaintenance: false,
+    force: false,
     intervalMs: 5_000,
   }
   for (let i = 0; i < argv.length; i++) {
@@ -52,11 +58,13 @@ function parseArgs(argv: string[], env: NodeJS.ProcessEnv): Args {
     else if (flag === '--run') out.runId = value()
     else if (flag === '--interval-ms') out.intervalMs = Number(value())
     else if (a === '--expect-maintenance') out.expectMaintenance = true
+    else if (a === '--force') out.force = true
     else throw new UsageError(`unknown argument ${a.slice(0, 40)}`)
   }
   if (!/^https?:\/\/[^/]+\/?$/.test(out.url)) throw new UsageError('--url must be http(s)://host:port')
   if (out.runId !== null && !RUN_ALL_ID_RE.test(out.runId))
     throw new UsageError('--run must be a run id (run_ and 16 hex digits)')
+  if (out.force && out.runId !== null) throw new UsageError('--force starts a run; it does not go with --run')
   if (!Number.isInteger(out.intervalMs) || out.intervalMs < 10 || out.intervalMs > 600_000)
     throw new UsageError('--interval-ms must be 10 to 600000')
   return out
@@ -65,10 +73,14 @@ function parseArgs(argv: string[], env: NodeJS.ProcessEnv): Args {
 const say = (line: string) => process.stderr.write(`${line}\n`)
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
-async function call(args: Args, secret: string, method: 'GET' | 'POST', path: string) {
+async function call(args: Args, secret: string, method: 'GET' | 'POST', path: string, send?: unknown) {
   const res = await fetch(new URL(path, args.url), {
     method,
-    headers: { [INTERNAL_SECRET_HEADER]: secret },
+    headers: {
+      [INTERNAL_SECRET_HEADER]: secret,
+      ...(send === undefined ? {} : { 'content-type': 'application/json' }),
+    },
+    ...(send === undefined ? {} : { body: JSON.stringify(send) }),
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   })
   const text = await res.text()
@@ -109,7 +121,13 @@ async function main(): Promise<{ code: number; out?: string }> {
   }
   let runId = args.runId
   if (!runId) {
-    const started = await call(args, secret, 'POST', '/internal/backups/run-all')
+    const started = await call(
+      args,
+      secret,
+      'POST',
+      '/internal/backups/run-all',
+      args.force ? { force: true } : undefined,
+    )
     const view = started.body as RunAllRunView | null
     if (started.status !== 202 || !view || !RUN_ALL_ID_RE.test(view.runId)) {
       say(`run-all: refused (HTTP ${started.status}, ${errorText(started.body)})`)

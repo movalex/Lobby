@@ -98,6 +98,8 @@ export function safeReturnTo(raw: string | null | undefined): string | null {
     return null
   }
   if (url.origin !== 'http://draftroom.invalid' || url.pathname === '/signin') return null
+  // after normalising: `/..//evil.example` resolves to the protocol-relative `//evil.example` (XSS-F2)
+  if (url.pathname.startsWith('//')) return null
   return `${url.pathname}${url.search}${url.hash}`
 }
 

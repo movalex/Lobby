@@ -9,8 +9,9 @@ import {
   NEW_CANVAS_ERROR,
   type SnapshotKind,
 } from '@draftroom/contracts'
+import { liveElements, lobbySnapshotOf } from '../../canvas/lobby-elements.ts'
 import { ApiError } from '../../errors.ts'
-import type { RoomSnapshotJson } from '../../sync-internal.ts'
+import type { BoardSnapshotJson, RoomSnapshotJson } from '../../sync-internal.ts'
 
 export interface SnapshotRow {
   id: string
@@ -38,8 +39,15 @@ export const SNAPSHOT_COLUMNS = `s.id, s.workspace_id, s.board_id, s.name, s.kin
 
 export const SNAPSHOT_FROM = 'board_snapshots s LEFT JOIN users u ON u.id = s.created_by'
 
-/** The API shape (a BoardSnapshot plus `reason`; older clients ignore the extra field). */
-export const toCheckpoint = (r: SnapshotRow): BoardCheckpoint => ({
+/**
+ * The API shape (a BoardSnapshot plus `reason`; older clients ignore the extra field). `marks.newCanvas`
+ * false (this api serves the new canvas, canvas-engine.ts): a v2 checkpoint is this build's own and carries
+ * no `newCanvas` mark. Default true (R0's behaviour).
+ */
+export const toCheckpoint = (
+  r: SnapshotRow,
+  marks: { readonly newCanvas?: boolean } = {},
+): BoardCheckpoint => ({
   id: r.id,
   boardId: r.board_id,
   name: r.name,
@@ -51,29 +59,24 @@ export const toCheckpoint = (r: SnapshotRow): BoardCheckpoint => ({
   recordCount: Number(r.record_count),
   sizeBytes: Number(r.size_bytes),
   // Bridge release R0: made on the new canvas (a v2 body): listed, never previewed or restored here.
-  ...(isNewCanvasRow(r) ? { newCanvas: true as const } : {}),
+  ...(isNewCanvasRow(r) && marks.newCanvas !== false ? { newCanvas: true as const } : {}),
 })
 
-/** Bridge release R0: a checkpoint whose row says its body is not this build's (v2, the new canvas). */
+/**
+ * Bridge release R0: a checkpoint whose row says its body is not the tldraw build's (v2, the new canvas).
+ * On main (R0, the tldraw build) such a row is listed and never previewed or restored. On this branch the
+ * readers below read v1 and v2 bodies alike, and the writers set `body_version` from the body they store
+ * (wave 5, 2A: 2 for a v2 body). The refusals of such rows apply only while this api's sync is a tldraw one
+ * (canvas-engine.ts `onNewCanvas`): on the new canvas they are this build's own checkpoints.
+ */
 export const isNewCanvasRow = (r: Pick<SnapshotRow, 'body_version'>) =>
   r.body_version !== undefined && r.body_version !== null && Number(r.body_version) !== 1
 
 /** 409 NEW_CANVAS: a checkpoint made on the new canvas cannot be previewed or restored by this build. */
 export const newCanvasCheckpoint = () => new ApiError(409, NEW_CANVAS_ERROR, NEW_CANVAS_CHECKPOINT_MESSAGE)
 
-/**
- * A stored body as this build reads it: only the tldraw body (`draftroom-checkpoint` v1). Anything else,
- * the new canvas's `lobby-checkpoint` v2 above all, is refused with 409 NEW_CANVAS, whatever its row
- * says: read as v1, a v2 body would have no records and restore as an empty board.
- */
-export function parseV1Body(raw: string): CheckpointBody {
-  const body = JSON.parse(raw) as Partial<CheckpointBody> | null
-  if (body?.format !== 'draftroom-checkpoint' || body.version !== 1) throw newCanvasCheckpoint()
-  return body as CheckpointBody
-}
-
-/** The stored checkpoint body (object store). */
-export interface CheckpointBody {
+/** The stored checkpoint body (object store), v1: tldraw records. */
+export interface CheckpointBodyV1 {
   format: 'draftroom-checkpoint'
   version: 1
   boardId: string
@@ -82,19 +85,83 @@ export interface CheckpointBody {
   documents: { state: Record<string, unknown>; lastChangedClock: number }[]
 }
 
+/**
+ * v2 (docs/EXCALIDRAW-MIGRATION.md §3.7, §5.5): a board of the Excalidraw engine, as its sync snapshot
+ * gave it: the live elements and the board document at the lb `clock`.
+ */
+export interface CheckpointBodyV2 {
+  format: 'lobby-checkpoint'
+  version: 2
+  boardId: string
+  clock: number
+  /** the element schema version (canvas-schema protocol.ts ELEMENT_SCHEMA_VERSION) */
+  schema: number
+  elements: Record<string, unknown>[]
+  doc: Record<string, unknown>
+}
+
+export type CheckpointBody = CheckpointBodyV1 | CheckpointBodyV2
+
+/** A stored body as the readers use it: v1 is never rewritten (§5.5), both are read. */
+export type CheckpointContentOf =
+  | { version: 1; schema: unknown; records: Record<string, unknown>[] }
+  | { version: 2; schema: number; elements: Record<string, unknown>[]; doc: Record<string, unknown> }
+
+/** Reads a stored body (JSON). Throws on a body of neither format. */
+export function readCheckpointBody(raw: string): CheckpointContentOf {
+  const body = JSON.parse(raw) as Partial<CheckpointBodyV1> & Partial<CheckpointBodyV2> & { format?: unknown }
+  if (body.format === 'lobby-checkpoint' && body.version === 2)
+    return {
+      version: 2,
+      schema: Number(body.schema) || 1,
+      elements: Array.isArray(body.elements) ? body.elements : [],
+      doc: body.doc && typeof body.doc === 'object' && !Array.isArray(body.doc) ? body.doc : {},
+    }
+  if (body.format === 'draftroom-checkpoint' || body.format === undefined)
+    return {
+      version: 1,
+      schema: body.schema,
+      records: (Array.isArray(body.documents) ? body.documents : []).map((d) => d.state),
+    }
+  throw new Error('unknown checkpoint body format')
+}
+
 /** A sync snapshot as the body stores it, with its document clock and the hash of its content. */
-export function checkpointBodyOf(boardId: string, snap: RoomSnapshotJson) {
-  const documents = (Array.isArray(snap.documents) ? snap.documents : []).map((d) => ({
+export function checkpointBodyOf(boardId: string, snap: BoardSnapshotJson) {
+  const lobby = lobbySnapshotOf(snap)
+  if (lobby) {
+    const elements = liveElements(lobby.elements)
+    const body: CheckpointBodyV2 = {
+      format: 'lobby-checkpoint',
+      version: 2,
+      boardId,
+      clock: lobby.clock,
+      schema: lobby.schema,
+      elements,
+      doc: lobby.doc,
+    }
+    const json = JSON.stringify(body)
+    return {
+      body,
+      json,
+      documentClock: lobby.clock,
+      recordCount: elements.length,
+      sizeBytes: Buffer.byteLength(json),
+      contentHash: elementsContentHash(elements, lobby.doc),
+    }
+  }
+  const tl = snap as RoomSnapshotJson
+  const documents = (Array.isArray(tl.documents) ? tl.documents : []).map((d) => ({
     state: d.state,
     lastChangedClock: Number(d.lastChangedClock ?? 0),
   }))
-  const documentClock = Math.max(0, Math.floor(Number(snap.documentClock ?? 0)) || 0)
-  const body: CheckpointBody = {
+  const documentClock = Math.max(0, Math.floor(Number(tl.documentClock ?? 0)) || 0)
+  const body: CheckpointBodyV1 = {
     format: 'draftroom-checkpoint',
     version: 1,
     boardId,
     documentClock,
-    schema: snap.schema,
+    schema: tl.schema,
     documents,
   }
   const json = JSON.stringify(body)
@@ -134,5 +201,23 @@ export function contentHash(records: readonly Record<string, unknown>[]): string
     .sort((a, b) => (id(a) < id(b) ? -1 : id(a) > id(b) ? 1 : 0))
   const hash = createHash('sha256')
   for (const r of content) hash.update(`${stableJson(r)}\n`)
+  return hash.digest('hex')
+}
+
+/**
+ * sha256 of a v2 body's content: the live elements in id order, then the board document (a tag
+ * definition or the start view is content too). Prefixed so it never equals a v1 hash: the first
+ * checkpoint after a board's conversion is always saved (§5.5).
+ */
+export function elementsContentHash(
+  elements: readonly Record<string, unknown>[],
+  doc: Readonly<Record<string, unknown>>,
+): string {
+  const id = (r: Record<string, unknown>) => String(r.id ?? '')
+  const sorted = [...elements].sort((a, b) => (id(a) < id(b) ? -1 : id(a) > id(b) ? 1 : 0))
+  const hash = createHash('sha256')
+  hash.update('lobby-checkpoint 2\n')
+  for (const el of sorted) hash.update(`${stableJson(el)}\n`)
+  hash.update(`doc ${stableJson(doc)}\n`)
   return hash.digest('hex')
 }

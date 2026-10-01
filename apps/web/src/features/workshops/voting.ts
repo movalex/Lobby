@@ -198,6 +198,33 @@ export function optimisticBallot(
 }
 
 /**
+ * What a plain click while voting does (W5-03). The topmost object under the pointer (the one a click
+ * would select) decides: the vote takes it, so it gets the vote; or the vote does not take it, so nothing
+ * is cast, even when an object the vote takes lies hidden under it (a click never votes for something the
+ * person cannot see); or there is nothing there.
+ */
+export type VoteClick<T> = { kind: 'vote'; target: T } | { kind: 'not-in-vote'; target: T } | { kind: 'none' }
+
+export function voteClick<T>(top: T | null | undefined, inVote: (target: T) => boolean): VoteClick<T> {
+  if (top === null || top === undefined) return { kind: 'none' }
+  return inVote(top) ? { kind: 'vote', target: top } : { kind: 'not-in-vote', target: top }
+}
+
+/**
+ * The notice for a click on an object the open vote does not take (W5-03): "Not part of this vote: only
+ * sticky notes in “Ideas” take votes." `frameName` names the vote's frame (frame scope).
+ */
+export function notInVoteText(
+  rule: { scope: 'board' | 'frame'; shapeTypes: readonly string[] | null },
+  frameName: string | null,
+): string {
+  const notesOnly = rule.shapeTypes?.length === 1 && rule.shapeTypes[0] === 'note'
+  const where = rule.scope === 'frame' ? ` in “${frameName?.trim() || 'the frame'}”` : ''
+  if (!notesOnly && !where) return 'Not part of this vote.'
+  return `Not part of this vote: only ${notesOnly ? 'sticky notes' : 'objects'}${where} take votes.`
+}
+
+/**
  * Whether a +1/-1 can be offered locally (the server decides; this avoids sending requests that are
  * certain to fail, like a 6th vote of 5 or a second dot where one per object is allowed).
  */

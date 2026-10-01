@@ -1,6 +1,5 @@
-import type { TLFrameShape } from '@tldraw/tlschema'
-import { CONTENT_Y, createBoardBuilder, NOTE_GAP, PAD } from '../builder.ts'
-import type { TemplateDefinition } from '../types.ts'
+import { CONTENT_Y, NOTE_GAP, PAD, type PlanFrame } from '../builder.ts'
+import type { TemplateSource } from '../source.ts'
 
 const COL_W = 500
 const COL_GAP = 80
@@ -58,14 +57,13 @@ const OVERVIEW = 'Project overview'
 const RISKS = 'Risks & dependencies'
 const SECTIONS = [OVERVIEW, ...PHASES.map((p) => p.name), RISKS]
 
-export const productionPlan: TemplateDefinition = {
+export const productionPlan: TemplateSource = {
   id: 'production-plan',
   name: 'Production plan',
   description: 'Map a production from brief to delivery, with owners, dates, deliverables and risks.',
   category: 'plan',
   sections: SECTIONS,
-  build(ctx) {
-    const b = createBoardBuilder(ctx)
+  plan(b) {
     const totalW = PHASES.length * COL_W + (PHASES.length - 1) * COL_GAP
 
     const overview = b.section({
@@ -87,7 +85,7 @@ export const productionPlan: TemplateDefinition = {
       { text: 'Deliverables and formats', color: 'light-green' },
     ])
 
-    const phases: TLFrameShape[] = []
+    const phases: PlanFrame[] = []
     PHASES.forEach((phase, i) => {
       const col = b.section({
         x: i * (COL_W + COL_GAP),
@@ -125,7 +123,5 @@ export const productionPlan: TemplateDefinition = {
       { text: 'Plan B: weather, location, people', color: 'yellow' },
       { text: "Key dates we can't move", color: 'light-violet' },
     ])
-
-    return { records: b.finish() }
   },
 }

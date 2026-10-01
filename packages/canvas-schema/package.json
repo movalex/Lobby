@@ -4,13 +4,27 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./engine": "./src/engine/index.ts",
+    "./protocol": "./src/protocol.ts",
+    "./groups": "./src/groups.ts",
+    "./custom-data": "./src/custom-data.ts",
+    "./limits": "./src/limits.ts",
+    "./elements": "./src/elements.ts",
+    "./doc": "./src/doc.ts",
+    "./refs": "./src/refs.ts",
+    "./hash": "./src/hash.ts",
+    "./invariants": "./src/invariants.ts"
   },
   "scripts": {
     "typecheck": "tsc -p ."
   },
   "dependencies": {
-    "@tldraw/tlschema": "catalog:",
-    "@tldraw/validate": "catalog:"
+    "@draftroom/contracts": "workspace:*",
+    "@excalidraw/common": "catalog:",
+    "@excalidraw/element": "catalog:",
+    "@excalidraw/fractional-indexing": "catalog:",
+    "@excalidraw/math": "catalog:",
+    "zod": "catalog:"
   }
 }

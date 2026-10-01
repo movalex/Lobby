@@ -1,21 +1,9 @@
-// React-free: imported by BOTH apps/sync (server schema) and apps/web (ShapeUtil).
-import {
-  createShapePropsMigrationIds,
-  createShapePropsMigrationSequence,
-  type RecordProps,
-  type TLShape,
-} from '@tldraw/tlschema'
-import { T } from '@tldraw/validate'
-
+// Lobby's file card as the tldraw era stored it: its shape type, read wherever a tldraw-era record is
+// still read (the converter, the api's v1 readers, the sync's asset-ref scan over `lb_source`). The
+// tldraw schema of the shape (props validators, migrations) is packages/tldraw-import/src/schema.ts.
 export const FILE_CARD_TYPE = 'dr-file-card' as const
 
-const appId = (prefix: string) => {
-  const re = new RegExp(`^${prefix}_[0-9A-Za-z]{10,40}$`)
-  return T.string.check((v) => {
-    if (!re.test(v)) throw new Error(`expected ${prefix}_... id`)
-  })
-}
-
+/** The tldraw-era file card's props, as stored (the converter maps them to an image element's facts). */
 export interface FileCardShapeProps {
   w: number
   h: number
@@ -30,45 +18,3 @@ export interface FileCardShapeProps {
   durationMs: number | null
   posterDerivativeId: string | null // drv_... (added by migration 1)
 }
-
-declare module '@tldraw/tlschema' {
-  interface TLGlobalShapePropsMap {
-    [FILE_CARD_TYPE]: FileCardShapeProps
-  }
-}
-
-export type FileCardShape = TLShape<typeof FILE_CARD_TYPE>
-
-export const fileCardShapeProps: RecordProps<FileCardShape> = {
-  w: T.nonZeroNumber,
-  h: T.nonZeroNumber,
-  assetId: appId('ast'),
-  versionId: appId('ver'),
-  kind: T.literalEnum('image', 'pdf', 'video', 'other'),
-  name: T.string,
-  mimeType: T.string,
-  sizeBytes: T.positiveInteger,
-  status: T.literalEnum('queued', 'processing', 'ready', 'failed'),
-  pageCount: T.nullable(T.positiveInteger),
-  durationMs: T.nullable(T.positiveInteger),
-  posterDerivativeId: T.nullable(appId('drv')),
-}
-
-export const fileCardVersions = createShapePropsMigrationIds(FILE_CARD_TYPE, {
-  AddPosterDerivativeId: 1,
-})
-
-// Append-only. Never edit or remove a shipped entry; always give record-scoped `down`.
-export const fileCardShapeMigrations = createShapePropsMigrationSequence({
-  sequence: [
-    {
-      id: fileCardVersions.AddPosterDerivativeId,
-      up(props: Record<string, unknown>) {
-        props.posterDerivativeId = null
-      },
-      down(props: Record<string, unknown>) {
-        delete props.posterDerivativeId
-      },
-    },
-  ],
-})

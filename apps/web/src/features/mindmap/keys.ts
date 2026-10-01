@@ -30,7 +30,7 @@ export interface TopicKeyState {
   topicSelected: boolean
   /** The shape being edited is a topic, and the key comes from its text editor. */
   editingTopic: boolean
-  /** editor.isIn('select.idle') */
+  /** the select tool is idle (tldraw: isIn('select.idle')) */
   isIdle: boolean
   isReadonly: boolean
   menusOpen: boolean

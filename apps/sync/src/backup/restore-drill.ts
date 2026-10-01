@@ -10,8 +10,9 @@
 //   --from=local (default) drills <DATA>/backups.
 //   --from=store downloads from the offsite store configured by DRAFTROOM_BACKUP_STORE (fs: under
 //     <DATA>/blobs; r2: DRAFTROOM_BACKUP_R2_* or the R2_* values). First it verifies the signatures of
-//     the index, the manifest and the entry with the key derived from DRAFTROOM_INTERNAL_SECRET (the
-//     sync server's), then checks size and sha256 against the offsite manifest. Without --board it
+//     the index, the manifest and the entry with the keys derived from DRAFTROOM_BACKUP_SIGNING_SECRET and,
+//     for older backups, DRAFTROOM_INTERNAL_SECRET (the sync server's), then checks size and sha256 against
+//     the offsite manifest. Without --board it
 //     drills every board listed in the store's index. Read-only on the store.
 //   --allow-unsigned (store only) also accepts what has no signature (written before backups were
 //     signed) or was signed with another key, and prints a WARN line for each. A signature that is
@@ -24,7 +25,7 @@ import { existsSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { dataLayout, resolveDataDir } from '@draftroom/dev-assets'
-import { backupSigningSecret, parseBackupStore } from '../config.ts'
+import { backupSigningSecrets, parseBackupStore } from '../config.ts'
 import { BOARD_ID_RE } from '../rooms.ts'
 import { backupBoard } from './backup.ts'
 import { runRestoreDrill, storeBackupSource } from './drill.ts'
@@ -76,7 +77,7 @@ async function main() {
         'DRAFTROOM_BACKUP_STORE is off: set it to fs or r2 (with R2_*) to drill the offsite store',
       )
     source = storeBackupSource(store, {
-      signingKey: backupSigningKey(backupSigningSecret(process.env)),
+      signingKey: backupSigningKey(backupSigningSecrets(process.env)),
       allowUnsigned: args.allowUnsigned,
     })
   }

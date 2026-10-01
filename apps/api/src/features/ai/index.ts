@@ -43,7 +43,7 @@ import { userKind } from '../../auth/users.ts'
 import type { Params } from '../../context.ts'
 import { ApiError, conflict, forbidden, parse } from '../../errors.ts'
 import { keyedLimit } from '../../rate-limit.ts'
-import type { RoomSnapshotJson } from '../../sync-internal.ts'
+import type { BoardSnapshotJson } from '../../sync-internal.ts'
 import type { FeatureContext } from '../context.ts'
 import { mayExport } from '../export-control/policy.ts'
 import { guestRefused } from '../guests/guard.ts'
@@ -234,7 +234,7 @@ export async function registerAi(app: FastifyInstance, ctx: FeatureContext): Pro
     userId: string,
     reply: FastifyReply,
   ): Promise<AiResult> {
-    let snapshot: RoomSnapshotJson
+    let snapshot: BoardSnapshotJson
     try {
       snapshot = await ctx.sync.snapshot(access.board.id)
     } catch {

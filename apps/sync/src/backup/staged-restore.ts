@@ -3,7 +3,8 @@
 //
 //  1. stage (server running): restore-board.ts takes the backup (the offsite store or the local
 //     folder), verifies it exactly like the drill (size, sha256, restore into a clean dir, open through
-//     the room registry, records against the manifest), and leaves the verified file plus a request
+//     the element room's store or the converter's reader, records against the manifest), and leaves the
+//     verified file plus a request
 //     under ${DATA}/restore/. Nothing live is touched.
 //  2. apply (the next server start, before it listens, so no room can be open): the current database
 //     is kept as rooms/board-<id>.sqlite.pre-restore-<stamp>, the backup is put in place with its clock
@@ -28,8 +29,7 @@ import {
 import { basename, join } from 'node:path'
 import { backup, DatabaseSync } from 'node:sqlite'
 import { dataLayout } from '@draftroom/dev-assets'
-import type { TLSchema } from '@tldraw/tlschema'
-import { type BoardFileKind, classifyBoardFile, isServable } from '../r0/born-after.ts'
+import { type BoardFileKind, classifyBoardFile } from '../r0/born-after.ts'
 import { BOARD_ID_RE, boardDbPath } from '../rooms.ts'
 import { inspectBoardDb, sha256File } from './backup.ts'
 import { type BackupSource, DrillProblem, verifyRestorable } from './drill.ts'
@@ -73,9 +73,6 @@ function liveKind(path: string): BoardFileKind | 'unreadable' {
   }
 }
 
-/** Made on the new canvas: never replaced by this build. */
-const madeOnNewCanvas = (kind: BoardFileKind | 'unreadable') => kind !== 'unreadable' && !isServable(kind)
-
 const restoreDir = (dataDir: string) => join(dataLayout(dataDir).root, RESTORE_DIR_NAME)
 const stagedFile = (dataDir: string, boardId: string) => join(restoreDir(dataDir), `board-${boardId}.sqlite`)
 const requestFile = (dataDir: string, boardId: string) => join(restoreDir(dataDir), `board-${boardId}.json`)
@@ -108,7 +105,6 @@ export async function stageRestore(opts: {
   boardId: string
   /** A backup file name from the manifest; default the newest. */
   file?: string
-  schema?: TLSchema
   now?: () => Date
 }): Promise<{ request: RestoreRequest; checks: string[]; warnings: string[] }> {
   const { boardId, source } = opts
@@ -124,26 +120,15 @@ export async function stageRestore(opts: {
       entry,
       path: got.path,
       workRooms: join(scratch, 'rooms'),
-      schema: opts.schema,
     })
-    // Bridge release R0: a board made on the new canvas is restored by the new build (it gives the
-    // board a new epoch); this build copies such files whole but never puts one in place. And it never
-    // replaces a live board that was made on the new canvas.
-    if (verified.format)
-      throw new DrillProblem(
-        'this backup is of a board made on the new canvas: it can be restored after the switch, by the new build',
-      )
-    const kind = liveKind(boardDbPath(dataLayout(opts.dataDir).rooms, boardId))
-    if (madeOnNewCanvas(kind))
-      throw new DrillProblem('the live board was made on the new canvas: this build does not replace it')
-    // A converted board (a rollback): its new-canvas tables go into the restored file unchanged, when it
-    // is applied (applyStagedRestores), so the Excalidraw-era edits are not lost with the old file.
-    const carry =
-      kind === 'converted'
-        ? [
-            'the live board was converted to the new canvas: its new-canvas (lb_*) tables are carried over unchanged when the restore is applied',
-          ]
-        : []
+    const _kind = liveKind(boardDbPath(dataLayout(opts.dataDir).rooms, boardId))
+    // The backup goes back as it is when the restore is applied: an lb backup with a new epoch, a tldraw
+    // backup (from before the cut-over) to be converted when its room opens (§5.6).
+    const carry = [
+      verified.format
+        ? 'it goes back with a new epoch when the restore is applied: every open tab of the board resets to it'
+        : 'a tldraw backup: it goes back as it is when the restore is applied, and is converted to the new canvas when its room opens',
+    ]
     const staged = stagedFile(opts.dataDir, boardId)
     const tmp = `${staged}.${randomBytes(4).toString('hex')}.tmp`
     copyFileSync(got.path, tmp)
@@ -252,11 +237,9 @@ export async function applyStagedRestores(opts: {
       if ((await sha256File(staged)) !== request.sha256)
         throw new Error('the staged backup file does not match its request (sha256)')
       const live = boardDbPath(rooms, boardId)
-      // Bridge release R0: never replace (or even open for writing) a board made on the new canvas; a
-      // converted board keeps its new-canvas tables (carried into the restored file, r0/lb-carry.ts).
+      // The backup replaces the live board as it is (restore.ts gives an lb backup a new epoch; a tldraw
+      // backup from before the cut-over is converted when its room opens).
       const kind = liveKind(live)
-      if (madeOnNewCanvas(kind))
-        throw new Error('the live board was made on the new canvas: this build does not replace it')
       const stamp = (opts.now ?? (() => new Date()))().toISOString().replace(/[:.]/g, '-')
       let liveClock: number | null = null
       let kept: string | null = null
@@ -286,23 +269,12 @@ export async function applyStagedRestores(opts: {
       }
       const bump =
         liveClock === null ? UNKNOWN_LIVE_BUMP : Math.max(0, liveClock - request.documentClock) + BUMP_MARGIN
-      let carried: string | null = null
-      if (kind === 'converted') {
-        // The kept copy is the consistent source of the new-canvas tables (a damaged file cannot be one).
-        if (!kept || liveClock === null)
-          throw new Error(
-            'the live board was converted to the new canvas, but it could not be read to keep its new-canvas tables; nothing was changed',
-          )
-        carried = kept
-      }
-      // Throws before anything is put in place when the carried tables do not match (the live board stays).
       const result = restoreBackupFile({
         file: staged,
         roomsDir: rooms,
         boardId,
         overwrite: true,
         bumpClockBy: bump,
-        ...(carried ? { carryLbFrom: carried } : {}),
       })
       writeJsonAtomic(join(dataLayout(opts.dataDir).root, APPLIED_LOG), {
         applied: [...applied, request.id].slice(-200),
@@ -316,7 +288,6 @@ export async function applyStagedRestores(opts: {
         `restored from ${request.source} backup ${request.file} (${request.recordCount} records)` +
           (request.unsignedAccepted === true ? ' (unsigned backup, accepted with --allow-unsigned)' : '') +
           `; clock ${result.documentClock}` +
-          (carried ? '; its new-canvas tables were carried over unchanged' : '') +
           (kind === 'unreadable'
             ? '; the previous database could not be read: any new-canvas tables it had are only in the kept copy'
             : '') +

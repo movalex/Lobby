@@ -1,0 +1,615 @@
+# Excalidraw migration, wave 1: the feature-facing canvas contracts
+
+The wave-1 document of `docs/EXCALIDRAW-MIGRATION.md` (§7.1 "Before any parallel wave", §7.2 row 1). It freezes the API that the nine wave-3 owners port `apps/web/src/features/**` onto, so they can work in parallel without tldraw and without editing each other's files. Spike B's C0 contracts (`docs/research/excalidraw/spike-b/CONTRACTS.md`: canvas-schema, the wire protocol, `CanvasPort`, the C0 registries, the C0 facade) stay as they are; this document adds to them.
+
+| | |
+|---|---|
+| Branch | `engine/excalidraw` (from `origin/spike/excalidraw` 92b1098, with `origin/main` 79f0125 merged as 6210fc5) |
+| Freeze commit | the commit that adds this file (see `git log -- docs/EXCALIDRAW-CONTRACTS.md`) |
+| Plan | revision 3.5 (`docs/EXCALIDRAW-MIGRATION.md`); spike B `CONTRACTS_REV` 4 |
+| Engine | `@excalidraw/*` `0.18.0-1118751` (catalog, unchanged) |
+| Lockfile | unchanged: every dependency waves 2–3 need is already in it (spike B's C0 added the engine and `tldraw-import` edges). "Lockfile PR #1" (§7.1) is therefore empty. |
+| Gate | §11 |
+
+## 0. What is frozen, and how to change it
+
+After this commit the files below change only through a **change request to the contracts owner**: write what, why, and which owners it touches; the contracts owner applies it on `engine/excalidraw`, adds a line to §12 (change log) and every owner merges `engine/excalidraw`. Additive changes (a new optional field, a new registry entry type) are the normal case; a breaking change needs the OK of every owner that uses the member.
+
+| File | Freezes | Owner after the freeze |
+|---|---|---|
+| `apps/web/src/canvas/api/lobby-canvas.ts` | `LobbyCanvas` (the C0 `CanvasPort` plus the members features need), `LobbyTx`, the namespaces, the event map, the value types | contracts |
+| `apps/web/src/canvas/api/registries.ts` | `FeatureRegistries` (the C0 registries plus commands, keys, tools, menus, selection bar, panels, top bar, overlays, host slots, content handlers, cursor filter, menu state), `HOST_SLOTS` and their owners, `MENU_GROUPS` | contracts |
+| `apps/web/src/canvas/api/feature.ts` | `CanvasFeature`, `CanvasFeatureContext`, `installCanvasFeatures`, `collectKeyClaims` / `keyConflicts`, `useCanvasFeatureContext` | contracts |
+| `apps/web/src/canvas/api/{keys,geometry,items}.ts`, `apps/web/src/lib/signals.ts` | chords; plain geometry; element readers; the signals library | contracts |
+| `apps/web/src/canvas/api/owners.ts` | the owner ids, `NotImplementedError`, `notImplemented` | contracts |
+| `apps/web/src/canvas/api/tldraw-map.ts` | the map of every tldraw use (§6) and the file owners (§7) | contracts |
+| `apps/web/src/canvas/api/facade.types.ts` | the wave-1 facade verbs (§9.2) | contracts (2E implements them) |
+| `apps/web/src/canvas/api/index.ts` | the one import path of ported code | contracts |
+| `apps/web/src/canvas/api/impl.ts` | only its **member table** `LOBBY_CANVAS_MEMBERS`; the body and `LobbyCanvasDeps` are 2C's | 2C |
+| `apps/web/src/canvas/api/parts/*.ts` | the part signatures (`PartDeps`, each `create…Part`); the bodies are their owners' | 3a, 3b, 3c, 3e, 3g |
+| `apps/web/src/features/canvas-registry.ts` | `CANVAS_FEATURES` (15 entries, one file per owner) | contracts |
+| `e2e/tests/support/canvas.ts` | the helper signatures and types (§9.1) | 2E (bodies) |
+| `e2e/excalidraw/playwright.config.ts` | how ported specs run (§9.3) | 2E |
+| `biome.json` (the `**/ported/**` override) | ported code imports no tldraw, no engine, and only `canvas/api/index.ts` from the canvas | contracts |
+
+**While spike B runs** (it is fixing the O2 lost-edit race in `canvas/sync/core`), spike B's owners still own `apps/sync/src/room/**`, `apps/sync/src/room/migrate/**`, `apps/web/src/canvas/{sync,lease,history,input,engine,presence,tools,overlay}/**`, `packages/tldraw-import/**` and `e2e/spike-b/**`; the lead merges their later fixes into `engine/excalidraw`. Nothing in this freeze edits those folders: the new API wraps the C0 port (`canvas/port.ts`, unchanged) instead of changing it.
+
+## 0a. Spike B code ownership moves to the wave owners (2026-09-30, lead)
+
+Spike B's code-ownership freeze **ends now**. Spike B's remaining work is B9 (the NAS load test and the workstation half), the quiet-window measurements and the report. It runs on `engine/excalidraw`, not on `spike/excalidraw`. Every fix from now on is made on `engine/excalidraw` by the owner below. `spike/excalidraw` stays as history at beff59d, merged here as 7b528a9. `spike/b-harness-wip-b9` holds O3's unverified B9 script changes, for 2E to finish.
+
+| Former spike owner | Files | New owner |
+|---|---|---|
+| O1 room | `apps/sync/src/room/**` except `room/migrate/**`; `apps/sync/src/{file-refs,workshop-state}.ts`; `packages/canvas-schema/src/{invariants.ts,engine/**}` | **2A** (sync room) |
+| O4 conversion | `packages/tldraw-import/**`, `apps/sync/src/room/migrate/**`, `apps/sync/src/r0/**`, `e2e/spike-b/b8/**`; also the backup, retention and maintenance code the Excalidraw build needs for R0's contracts | **2B** (sync edges) |
+| O2 web engine | `apps/web/src/canvas/{sync,lease,history,input,engine,presence,tools,overlay}/**`, `canvas/port-impl.ts` | **2C** (web engine) |
+| O5 canvas parts | `apps/web/src/canvas/overrides.ts`, `canvas/files/**`, `canvas/export/**` | **2C** (web engine); 3g and 3e own the features on top |
+| O3 harness | `canvas/test-facade.ts`, `e2e/spike-b/support/**`, `e2e/load/**`, `docs/research/excalidraw/spike-b/scripts/nas-*` | **2E** (harness) |
+| lead | `packages/canvas-schema/src/{protocol,groups,custom-data,limits,elements,doc,refs,hash}.ts`, `apps/sync/src/{engine-switch,test-hooks}.ts`, `room/schema.ts` | **contracts owner** (the lead). A change request still needs both ends, and bumps `CONTRACTS_REV` |
+
+The frozen parts of §0 still apply to feature owners: they reach these files through the canvas API or a change request.
+
+## 1. Rules for porting a feature (wave 3)
+
+1. **Both engines keep working until wave 4.** The default build (no `VITE_LOBBY_ENGINE`) is today's tldraw app and keeps passing its e2e suite. So a feature is ported **beside** its tldraw code, not over it:
+   - ported code lives in `…/<feature>/ported/**` (the folders of §7.2, created at wave 1 with an empty `CanvasFeature`);
+   - the tldraw files stay as they are. A shared pure module (a model, an api client, a formatter) may be edited by its feature's owner only if both builds and both suites still pass; a type-only tldraw import in it (`TLShapeId`) may become `string`;
+   - wave 4 deletes the tldraw files and moves `ported/**` up.
+2. **Imports.** Ported code reaches the canvas only through `apps/web/src/canvas/api/index.ts` and uses `lib/signals.ts` for reactive state. It never imports `tldraw`, `@tldraw/*` or `@excalidraw/*`, and never another `canvas/**` module. Biome enforces it (`biome.json`, override `apps/web/src/**/ported/**`), and so does `canvas/api/contracts.test.ts`.
+3. **`ctx.editor` becomes `ctx.canvas`.** A feature exports a `CanvasFeature` (§4) from its `ported/index.tsx`; `features/canvas-registry.ts` already imports it. tldraw's `overrides`, `components`, `options` and `Overlay` become registry declarations (§3).
+4. **Writes** go through `ctx.canvas.transact(label, fn)`: one undo step, pushed by the sync engine. A `transact` whose callback throws applies nothing (tldraw's `bailToMark`). Board settings go through `canvas.doc.set` (lb_doc). Nothing else writes the canvas.
+5. **Reads are reactive.** Every `LobbyCanvas` read called inside `useValue`, `computed` or `react` re-runs when it may have changed (the implementation tracks a signal source per concern). Port `useValue('x', () => editor.getSelectedShapeIds(), [editor])` to `useValue('x', () => canvas.selection, [canvas])`.
+6. **One page, scene coordinates, element ids.** tldraw pages, parent spaces and `shape:` ids are gone from canvas code: every element's `x`, `y` are scene coordinates; frames hold children through `frameId`; groups through `groupIds`; a note's text is its bound label. api object refs stay `shape:<id>` (canvas-schema `refs.ts`); `SINGLE_PAGE_ID` fills a contract that still carries a page id.
+7. **Plain text through the lease.** `canvas.text.edit` opens the editor only after the server grants the lease; programmatic words go through `canvas.text.replace` (existing elements) or `create` props `text` (new ones). No rich text.
+8. **Keys, menus, tools** are declared (commands with `kbd`, `FeatureKeySpec`, `FeatureToolSpec`, menu entries); the keyboard-map test (3a) reads `collectKeyClaims(CANVAS_FEATURES)` and fails on `keyConflicts`. Only the key allowlist (2C, `canvas/input/`) dispatches keys.
+9. **Identity and permissions stay server-side.** `readOnly()` and role checks are UI hints; the server refuses writes. Identity-bearing `customData` keys (`plusOne:<uid>`, `ai`, `privateFrame`) are stamped or checked by the server (canvas-schema `custom-data.ts`). A new `customData.lobby` key or `lb_doc` key is a change request to canvas-schema.
+10. **Stubs throw.** A member whose owner has not landed it throws `NotImplementedError(owner, member)`. Call it anyway where the feature needs it (the feature is then done when the owner lands the member), or ask the owner for an early version; never work around a stub by reaching into the engine.
+11. **Specs** are ported to `e2e/excalidraw/<feature>-<topic>.spec.ts` with the helpers of §9; the tldraw specs stay until wave 4. Overlays carry `data-lobby-*` or `data-testid` attributes.
+
+## 2. `LobbyCanvas` (`canvas/api/lobby-canvas.ts`)
+
+### 2.1 What it adds to the C0 port
+
+`LobbyCanvas extends CanvasPort` (C0): the C0 members keep their meaning (`items`, `get`, `bounds`, `selection`, `select`, `viewport.get/set/fit`, `sceneToScreen`, `screenToScene`, `transact`, `setTool`, `tool`, `on`, `editingId`, `leaseHolder`, `collaborators`, `saveStatus`, `engine`). Added:
+
+- **Mode, DOM, keyboard:** `readOnly`, `container`, `focus`, `hasKeyboard`, `setCursor`, `theme`.
+- **Pointer and hit testing:** `pointer` (scene and screen point, modifiers, over-canvas, button down), `gesture` (`idle`, `dragging`, `editing-text`, …), `hitTest(point, {margin, hitInside, selectedFirst, skipLocked, filter})`, `hovered`.
+- **Reads:** `boundsOf(ids?)`, `visibleBounds(id)` (clipped by its frame), `isLocked`, `isHidden`, `hide(owner, ids)` (the render side of a mind-map collapse), `sceneToOverlay` / `overlayToScene` (overlay-root pixels).
+- **`viewport`** (widened): `zoomTo`, `centerOn`, `ensureVisible`, `zoomStep`, `stop`, `moving`, `limits`, `screenRect`, `remeasure`; `set` and `fit` take `{animate, force}`.
+- **`transact(label, fn, {joinPrevious})`** with **`LobbyTx`**: `createMany`, `reorder`, `setFrame`, `group`, `ungroup`, `bind`, `duplicate` and (since W3-9) `insert` besides C0's `create`, `update`, `delete`.
+- **Namespaces:** `text` (`of`, `canEdit`, `edit`, `stop`, `editorElement`, `measure`, `replace`), `styles` (`next`, `setNext`, `of`, `apply`; values in the engine's field names), `presence` (`peers`, `peer`), `follow` (`current`, `start` with its optional camera rule since W3-10, `stop`), `history` (`undo`, `redo`, `canUndo`, `canRedo`), `doc` (`get`, `entries`, `set`), `export` (`svg`, `png`, `canvas`, `copy`), `files` (`urlOf`, `status`, `insert`), `settings` (`get`, `set`).
+- **Events** (`on`): `change` (created/updated/deleted with source `local`, `history` or `remote`), `input` (capture-phase pointer/wheel/key events with `handled()`), `toolChanged`, `editingChanged`, `resize`, `docChanged`, `followChanged`, besides C0's `changed`, `selectionChanged`, `viewportChanged`, `pointer`.
+
+### 2.2 Who implements what
+
+The board page (2C) builds the canvas with `createLobbyCanvas({port, registries, board})` (`canvas/api/impl.ts`; `board` is the page's engine handles, `canvas/board/handles.ts`). The C0 members delegate to the port, the reads are reactive (a signal source per concern), and 17 members are composed from port members alone (wave 1's seven plus 2C's `text.of`, `visibleBounds`, `sceneToOverlay`, `overlayToScene` and the six structural `tx` writes of `canvas/board/tx.ts`). 2C's other members are the board page's (status `board`): real when the page passes its `board` handles, a stub naming 2C on a bare port (as in the unit tests). Every member of a wave-3 owner was a stub naming its owner until the owner landed its part (W1-2). Since the wave-3 integration (W3-1) a landed part is listed in `LANDED_PARTS` (status `part`: real on any canvas, 3a's styles, 3b's camera members, 3c's follow, 3g's files) or, when it needs the board page's engine, in `LANDED_BOARD_PARTS` (status `board-part`: real on the board page, a stub naming its owner on a bare port, 3e's exports). The table is generated from `LOBBY_CANVAS_MEMBERS`; the contracts test fails when the object, the table and the `@owner` annotations in `lobby-canvas.ts` disagree.
+
+#### The member table (generated from `LOBBY_CANVAS_MEMBERS`)
+
+| Member | Owner | Today |
+|---|---|---|
+| `items` | 2C | C0 port (real) |
+| `get` | 2C | C0 port (real) |
+| `bounds` | 2C | C0 port (real) |
+| `selection` | 2C | C0 port (real) |
+| `select` | 2C | C0 port (real) |
+| `viewport.get` | 2C | C0 port (real) |
+| `viewport.set` | 2C | C0 port (real) |
+| `viewport.fit` | 2C | C0 port (real) |
+| `sceneToScreen` | 2C | C0 port (real) |
+| `screenToScene` | 2C | C0 port (real) |
+| `transact` | 2C | C0 port (real) |
+| `setTool` | 2C | C0 port (real) |
+| `tool` | 2C | C0 port (real) |
+| `on` | 2C | C0 port (real) |
+| `editingId` | 2C | C0 port (real) |
+| `leaseHolder` | 2C | C0 port (real) |
+| `collaborators` | 2C | C0 port (real) |
+| `saveStatus` | 2C | C0 port (real) |
+| `engine` | 2C | C0 port (real) |
+| `tx.create` | 2C | C0 port (real) |
+| `tx.update` | 2C | C0 port (real) |
+| `tx.delete` | 2C | C0 port (real) |
+| `on:changed` | 2C | C0 port (real) |
+| `on:selectionChanged` | 2C | C0 port (real) |
+| `on:viewportChanged` | 2C | C0 port (real) |
+| `on:pointer` | 2C | C0 port (real) |
+| `boundsOf` | 2C | composed (real) |
+| `isHidden` | 2C | composed (real) |
+| `isLocked` | 2C | composed (real) |
+| `doc.get` | 2C | composed (real) |
+| `doc.entries` | 2C | composed (real) |
+| `doc.set` | 2C | composed (real) |
+| `tx.createMany` | 2C | composed (real) |
+| `transact.joinPrevious` | 2C | board page (real with the board handles) |
+| `viewport.zoomTo` | 3b | part (real) |
+| `viewport.centerOn` | 3b | part (real) |
+| `viewport.ensureVisible` | 3b | part (real) |
+| `viewport.zoomStep` | 3b | part (real) |
+| `viewport.stop` | 2C | board page (real with the board handles) |
+| `viewport.moving` | 2C | board page (real with the board handles) |
+| `viewport.limits` | 3b | part (real) |
+| `viewport.screenRect` | 2C | board page (real with the board handles) |
+| `viewport.remeasure` | 2C | board page (real with the board handles) |
+| `readOnly` | 2C | board page (real with the board handles) |
+| `container` | 2C | board page (real with the board handles) |
+| `focus` | 2C | board page (real with the board handles) |
+| `hasKeyboard` | 2C | board page (real with the board handles) |
+| `setCursor` | 2C | board page (real with the board handles) |
+| `pointer` | 2C | board page (real with the board handles) |
+| `gesture` | 2C | board page (real with the board handles) |
+| `hitTest` | 2C | board page (real with the board handles) |
+| `hovered` | 2C | board page (real with the board handles) |
+| `visibleBounds` | 2C | composed (real) |
+| `hide` | 2C | board page (real with the board handles) |
+| `sceneToOverlay` | 2C | composed (real) |
+| `overlayToScene` | 2C | composed (real) |
+| `theme` | 2C | board page (real with the board handles) |
+| `text.of` | 2C | composed (real) |
+| `text.canEdit` | 2C | board page (real with the board handles) |
+| `text.edit` | 2C | board page (real with the board handles) |
+| `text.stop` | 2C | board page (real with the board handles) |
+| `text.editorElement` | 2C | board page (real with the board handles) |
+| `text.measure` | 2C | board page (real with the board handles) |
+| `text.replace` | 2C | board page (real with the board handles) |
+| `styles.next` | 2C | board page (real with the board handles) |
+| `styles.setNext` | 2C | board page (real with the board handles) |
+| `styles.of` | 3a | part (real) |
+| `styles.apply` | 3a | part (real) |
+| `presence.peers` | 2C | board page (real with the board handles) |
+| `presence.peer` | 2C | board page (real with the board handles) |
+| `follow.current` | 3c | part (real) |
+| `follow.start` | 3c | part (real) |
+| `follow.stop` | 3c | part (real) |
+| `history.undo` | 2C | board page (real with the board handles) |
+| `history.redo` | 2C | board page (real with the board handles) |
+| `history.canUndo` | 2C | board page (real with the board handles) |
+| `history.canRedo` | 2C | board page (real with the board handles) |
+| `export.svg` | 3e | part (real with the board engine; a stub on a bare port) |
+| `export.png` | 3e | part (real with the board engine; a stub on a bare port) |
+| `export.canvas` | 3e | part (real with the board engine; a stub on a bare port) |
+| `export.copy` | 3e | part (real with the board engine; a stub on a bare port) |
+| `files.urlOf` | 3g | part (real) |
+| `files.status` | 2C | board page (real with the board handles) |
+| `files.insert` | 3g | part (real) |
+| `files.crop` | 3g | part (real) |
+| `settings.get` | 2C | board page (real with the board handles) |
+| `settings.set` | 2C | board page (real with the board handles) |
+| `tx.reorder` | 2C | composed (real) |
+| `tx.setFrame` | 2C | composed (real) |
+| `tx.group` | 2C | composed (real) |
+| `tx.ungroup` | 2C | composed (real) |
+| `tx.bind` | 2C | composed (real) |
+| `tx.duplicate` | 2C | composed (real) |
+| `tx.insert` | 2C | board page (real with the board handles) |
+| `on:change` | 2C | board page (real with the board handles) |
+| `on:input` | 2C | board page (real with the board handles) |
+| `on:toolChanged` | 2C | board page (real with the board handles) |
+| `on:editingChanged` | 2C | board page (real with the board handles) |
+| `on:resize` | 2C | board page (real with the board handles) |
+| `on:docChanged` | 2C | board page (real with the board handles) |
+| `on:followChanged` | 3c | part (real) |
+
+100 members: 26 C0 port, 17 composed, 40 board page, 13 landed parts, 4 landed board-engine parts, 0 stubs.
+
+### 2.3 Parts: no owner edits another owner's file
+
+The members owned by wave-3 owners are built in their own module under `canvas/api/parts/` and spread into the canvas by `impl.ts`: `navigation.ts` (3b: `viewport.zoomTo`, `centerOn`, `ensureVisible`, `zoomStep`, `limits`), `styles.ts` (3a: `styles.of`, `styles.apply`), `follow.ts` (3c: `follow.*`, `on('followChanged')`), `export.ts` (3e: `export.*`), `files.ts` (3g: `files.urlOf`, `files.insert`). A part gets `PartDeps` (`port`, `registries`, `self()` for the whole canvas); one that needs the engine reads the board page's handles through `canvas/overrides.ts` `boardEngineOf(registries)` and writes only through `self().transact`. Parts live in `canvas/**`, so they may import `@excalidraw/*`.
+
+## 3. Registries (`canvas/api/registries.ts`)
+
+`FeatureRegistries extends CanvasRegistries` (C0). `createFeatureRegistries()` makes one set per board page; a change to any registry notifies `subscribe` listeners (the board page re-renders its chrome).
+
+| Registry | Entry | Replaces (tldraw) | Rendered or dispatched by | Contributed by |
+|---|---|---|---|---|
+| `keys` (C0) | `KeyHandlerSpec` | `overrides.actions[].kbd`, `editor.on('event')` key handling | 2C's capture-phase allowlist (`canvas/input/`) | through `commands` and `featureKeys` (the installer adapts them) |
+| `commands` | `CommandSpec` (`id`, `label`, `kbd`, `scope`, `readOnlyAllowed`, `enabled`, `run`) | `overrides.actions` | menus, toolbar, shortcuts dialog (3a); keys (2C) | every feature |
+| `featureKeys` | `FeatureKeySpec` (chords, `match`, `handle` with the context) | stateful key handlers (type-to-edit, mind-map Tab/Enter) | 2C (via `keys`) | 3a, 3d, 3i |
+| `tools` / `pointerTools` (C0) | `FeatureToolSpec` (label, kbd, `readOnlyAllowed`, cursor, toolbar slot, pointer callbacks) | `overrides.tools`, `StateNode` tools (`root.addChild`) | 2C's custom-tool dispatch; 3a's toolbar | 3c (comment), 3f (vote), 3g (open-card) |
+| `contextMenu`, `mainMenu` | `MenuEntrySpec` (group, order, label, command or `run`, `visible`, `disabled`, `checked`, submenu, custom row) | `DefaultContextMenu`, `DefaultMainMenu`, `TldrawUiMenu*` | 3a's menu shells (host slots) | every feature |
+| `selectionBar` | `SelectionBarItemSpec` | canvas-ux `SelectionBar` and the buttons AI and tags add | 3a's selection-bar shell | 3a, 3d, 3h |
+| `panels` | `CanvasPanelSpec` | `BoardFeature.panels` | 2C's dock (the ported `FeatureDock`) | as today |
+| `topBar` | `TopBarItemSpec` (pinned, overflow caption) | `BoardFeature.TopBarItem`, `PINNED_TOP_BAR_FEATURES`, `OVERFLOW_CAPTION` | 2C's top bar | as today |
+| `featureOverlays` | `FeatureOverlaySpec` (`scene` or `screen` layer, order, pointer, `focusMode: show/hide`) | `BoardFeature.Overlay`, `InFrontOfTheCanvas`, `ShapeWrapper`, `CollaboratorCursor` | 2C's overlay root | 3c, 3d, 3e, 3f, 3g, 3h |
+| `hostSlots` | one component per `HostSlotName` | `components.Toolbar`, `StylePanel`, `ContextMenu`, `MainMenu`, `KeyboardShortcutsDialog`, `NavigationPanel` | 2C's board page | the slot's owner (below) |
+| `contentHandlers` | `ContentHandlerSpec` (kinds, priority, `handle`) | `registerExternalContentHandler`, `putExternalContent` | 2C's paste/drop listeners, `files.insert` | 3b (paste as notes), 3g (files) |
+| `customData` (C0) | `CustomDataHandlerSpec` (`onDuplicate`) | `onDuplicate` of meta keys | 2C's `onDuplicate` | 3d (mind-map relink), 3e (`present.index`) |
+| `cursorVisible` | provider `(sid) => boolean`, combined: a cursor shows only when every provider says yes (W3-4) | `components.CollaboratorCursor` (present-aware cursor), "hide cursors" | 2C's cursor layer | 3e (present), 3f (hide cursors) |
+| `menusOpen` | provider `() => boolean` | `editor.menus.hasAnyOpenMenus()` | anyone | 3a |
+| `hitGuard`, `hidden`, `dragger`, `slots`, `overlays` (C0) | as C0 | — | as C0 | as C0 (`hidden` through `canvas.hide`) |
+
+**Focus mode** (`canvas.settings` `focusMode`, set by present mode): the board page hides its chrome (dock, top bar, host slots) and every overlay layer except those with `focusMode: 'show'`.
+
+**Host slots** (one provider each; a second is refused and logged): `toolbar`, `stylePanel`, `contextMenu`, `mainMenu`, `shortcutsDialog`, `selectionBar` (3a), `navigation` (3b), `phoneSheet`, `liveRegion` (3i).
+
+## 4. `CanvasFeature` and `CanvasFeatureContext` (`canvas/api/feature.ts`)
+
+`CanvasFeatureContext` is today's `FeatureContext` (`features/types.ts`) with `editor` replaced by `canvas: LobbyCanvas` and `registries: FeatureRegistries` added; `board`, `role`, `me`, `workspace`, `api`, `events`, `notify`, `dismiss`, `openPanel`, `activePanel` are unchanged. Components the board page renders get it from `useCanvasFeatureContext()` (panels and top-bar items also get it as `ctx`).
+
+| `BoardFeature` (tldraw page) | `CanvasFeature` (Excalidraw page) |
+|---|---|
+| `id` | `id` |
+| `panels: FeaturePanel[]` | `panels: CanvasPanelSpec[]` (same fields plus `order`; `Component` → `component`, `icon` is a component) |
+| `TopBarItem` | `topBar: TopBarItemSpec[]` (`pinned`, `overflowCaption` move from FeatureHost into the entry) |
+| `Overlay` (child of `<Tldraw>`) | `overlays: FeatureOverlaySpec[]` |
+| `overrides.actions` | `commands: CommandSpec[]` (with `kbd`) |
+| `overrides.tools` | `tools: FeatureToolSpec[]` |
+| `overrides.translations` | the feature's own strings (`langCode` is `'en'`) |
+| `components.Toolbar` / `StylePanel` / `ContextMenu` / `MainMenu` / `KeyboardShortcutsDialog` / `NavigationPanel` | `slots` (host slots, §3) |
+| `components.ShapeWrapper` / `CollaboratorCursor` | `overlays` / `registries.cursorVisible` |
+| context-menu content added inside `DefaultContextMenu` | `contextMenu: MenuEntrySpec[]` |
+| selection-bar buttons | `selectionBar: SelectionBarItemSpec[]` |
+| `registerExternalContentHandler` in `onMount` | `contentHandlers: ContentHandlerSpec[]` |
+| `options.maxShapesPerPage`, `cameraMovingTimeoutMs` | canvas-schema `limits.ts` (server-enforced); 2C's engine config |
+| `onMount(ctx)` | `onMount(ctx)` (after the first `welcome`) |
+
+`installCanvasFeatures(CANVAS_FEATURES, ctx)` (the board page calls it once per canvas) registers every static declaration in feature order, adapts commands with `kbd`, feature keys and tools to the C0 `keys` and `pointerTools` registries, runs each `onMount` (a throw is logged, the others still mount), and returns one cleanup that undoes everything in reverse.
+
+## 5. Signals and helpers
+
+- **`lib/signals.ts`** replaces tldraw's `atom`, `computed`, `react`, `transact`, `useValue` and `unsafe__withoutCapture` (→ `untracked`) with the same shapes, plus `source` (a value-less signal adapters track and bump) and `subscribeValue`. Computeds are lazy and cached; effects run once per batch and not when a computed keeps its value; an effect that writes what it read re-runs, and a runaway loop throws after 1,000 rounds; an unobserved computed holds no reference from its dependencies. 9 unit tests.
+- **`canvas/api/geometry.ts`** replaces `Box`, `Vec`, `Mat`: `rect`, `center`, `union`, `fromPoints`, `expand`, `translate`, `containsPoint`, `containsRect`, `intersects`, `intersection`, `distance`, `sameRect`, `corners` (rotated like Excalidraw).
+- **`canvas/api/items.ts`** replaces shape types and parent chains: `itemKindOf` (note, text, label, shape, arrow, line, draw, highlight, image, file-card, frame), `labelOf`, `containerOf`, `textOf`, `arrowsOf`, `arrowEnds`, `childrenOf`, `outerGroupOf`, `groupMembers`, `contentItems`, `lobbyValue`, `lobbyEntries`.
+- **`canvas/api/keys.ts`**: chords (`'mod+shift+f'`, `'alt+1'`, `'shift+f10'`), `matchChord` (letters and digits on `code`, so Alt+1 on a Mac and non-Latin layouts match; exact modifier sets), `formatChord` per platform.
+
+## 6. The tldraw map
+
+The tables below are generated by `docs/research/excalidraw/wave1/gen-contract-tables.ts` from the frozen sources. `canvas/api/tldraw-map.ts` maps every `editor.*` member and every imported tldraw symbol used in `apps/web/src` outside `canvas/` (168 files: 137 distinct members, 201 distinct symbols) to its replacement. Target notation: `canvas:<member>` (a LobbyCanvas member; `on:<event>` an event), `registry:<key>`, `context:<key>`, `helper:<module>.<fn>`, `schema:<module>.<export>`, `type:<Name>`, `feature:<owner>` (the owner computes it over `items()`), `dropped` (with the reason). The test scans the tree: a new member, a new symbol or a new file with tldraw and no owner fails it, and so does a target the API does not have.
+
+### 6.1 `editor.*` members → replacement (generated)
+
+| `editor.` member | Uses (files) | Replacement | Implemented by | Note |
+|---|---|---|---|---|
+| `getShape` | 149 (39) | `canvas:get` | 2C |  |
+| `getShapePageBounds` | 58 (22) | `canvas:bounds` | 2C | axis-aligned, rotation included |
+| `getCurrentPageId` | 56 (23) | `dropped` | — | one page; send SINGLE_PAGE_ID where a contract still carries a page id (C1) |
+| `getContainer` | 53 (29) | `canvas:container` | 2C |  |
+| `getIsReadonly` | 45 (28) | `canvas:readOnly` | 2C |  |
+| `getSelectedShapeIds` | 35 (22) | `canvas:selection` | 2C | hidden (collapsed) ids already filtered out |
+| `run` | 34 (13) | `canvas:transact` | 2C | `run(fn, {history: 'ignore'})` around selection or camera changes needs no transact |
+| `getEditingShapeId` | 28 (15) | `canvas:editingId` | 2C |  |
+| `focus` | 27 (14) | `canvas:focus` | 2C |  |
+| `markHistoryStoppingPoint` | 26 (14) | `canvas:transact` | 2C | the transact label is the undo step |
+| `getViewportPageBounds` | 25 (17) | `canvas:viewport.get` | 2C |  |
+| `getInstanceState` | 24 (16) | `canvas:readOnly`, `canvas:hasKeyboard`, `canvas:pointer`, `canvas:follow.current`, `canvas:styles.next`, `canvas:settings.get` | 2C, 3c | isReadonly → readOnly, isFocused → hasKeyboard, isHoveringCanvas → pointer().overCanvas, followingUserId → follow.current, stylesForNextShape → styles.next, isFocusMode → settings.get().focusMode, exportBackground → ExportOptions.background |
+| `getSortedChildIdsForParent` | 23 (11) | `helper:items.childrenOf`, `canvas:items` | contracts, 2C | a frame’s children; the page’s children are items() in paint order |
+| `getViewportScreenBounds` | 22 (12) | `canvas:viewport.screenRect` | 2C |  |
+| `isShapeOrAncestorLocked` | 20 (14) | `canvas:isLocked` | 2C |  |
+| `select` | 20 (14) | `canvas:select` | 2C |  |
+| `getAncestorPageId` | 19 (13) | `dropped` | — | one page |
+| `pageToViewport` | 19 (9) | `canvas:sceneToOverlay` | 2C |  |
+| `zoomToBounds` | 18 (14) | `canvas:viewport.zoomTo` | 3b |  |
+| `getZoomLevel` | 17 (13) | `canvas:viewport.get` | 2C | viewport.get().zoom |
+| `isShapeHidden` | 17 (10) | `canvas:isHidden` | 2C |  |
+| `store` | 17 (13) | `canvas:on:change`, `canvas:items`, `canvas:doc.set` | 2C | listen → on("change") (source local/history/remote); allRecords/query → items(); put of document meta → doc.set; _flushHistory → dropped (changes are reported per batch) |
+| `updateShapes` | 16 (6) | `canvas:tx.update` | 2C |  |
+| `getCamera` | 14 (6) | `canvas:viewport.get` | 2C | camera {x, y, z} → viewport {x, y, width, height, zoom} (scene rectangle) |
+| `getCurrentPageShapeIds` | 14 (8) | `canvas:items` | 2C |  |
+| `getCurrentPageShapes` | 14 (11) | `canvas:items` | 2C |  |
+| `getCurrentToolId` | 14 (11) | `canvas:tool` | 2C |  |
+| `inputs` | 14 (8) | `canvas:pointer`, `canvas:gesture` | 2C | getCurrentPagePoint → pointer().scene, getCurrentScreenPoint → pointer().screen, getShiftKey → pointer().shift, getIsDragging → gesture(), keys → the key event |
+| `markEventAsHandled` | 14 (6) | `canvas:on:input`, `registry:keys` | 2C, registry | event.handled(); a key handler that returns true is stopped and prevented |
+| `isIn` | 13 (11) | `canvas:gesture` | 2C | isIn('select.idle') → gesture() === 'idle' |
+| `off` | 13 (11) | `canvas:on` | 2C | on() returns the unsubscribe |
+| `on` | 13 (11) | `canvas:on` | 2C | 'event' → input, 'resize' → resize, 'stop-following' → followChanged, 'unmount' → the feature cleanup |
+| `updateShape` | 13 (6) | `canvas:tx.update` | 2C |  |
+| `createShape` | 12 (5) | `canvas:tx.create` | 2C |  |
+| `getSelectedShapes` | 11 (10) | `canvas:selection`, `canvas:get` | 2C |  |
+| `setCurrentPage` | 11 (7) | `dropped` | — | one page |
+| `getOnlySelectedShape` | 10 (9) | `canvas:selection` | 2C | selection.length === 1 |
+| `getShapeAtPoint` | 10 (7) | `canvas:hitTest` | 2C |  |
+| `options` | 10 (7) | `dropped` | — | animationMediumMs → CAMERA_ANIMATION_MS; maxShapesPerPage → canvas-schema limits (MAX_ITEMS); maxPages → one page |
+| `timers` | 10 (5) | `dropped` | — | plain setTimeout/requestAnimationFrame, cleared in the feature cleanup |
+| `createShapes` | 9 (6) | `canvas:tx.createMany` | 2C |  |
+| `getDocumentSettings` | 9 (4) | `canvas:doc.get` | 2C | meta.drStartView → startView, drWorkshop → workshop, drTagList:<k> → tagDef:<k> |
+| `menus` | 9 (6) | `registry:menusOpen` | registry | hasAnyOpenMenus/hasOpenMenus → registries.menusOpen.call() |
+| `getCollaborators` | 8 (5) | `canvas:collaborators`, `canvas:presence.peers` | 2C | roster (uncapped) vs streamed cursors |
+| `getShapePageTransform` | 8 (3) | `canvas:get`, `helper:geometry.corners` | 2C, contracts | no parent transforms: x, y are scene coordinates; rotation = angle |
+| `reparentShapes` | 8 (4) | `canvas:tx.setFrame`, `canvas:tx.reorder` | 2C |  |
+| `setCamera` | 8 (7) | `canvas:viewport.set` | 2C |  |
+| `setCurrentTool` | 8 (6) | `canvas:setTool`, `canvas:text.edit` | 2C | 'select.editing_shape' → text.edit (through the lease); tool ids per BUILT_IN_TOOLS ('draw' → 'freedraw', 'geo' → 'rectangle'/'ellipse'/'diamond') |
+| `undo` | 8 (2) | `canvas:history.undo` | 2C |  |
+| `getAsset` | 7 (5) | `helper:items.lobbyValue`, `canvas:files.urlOf` | contracts, 3g | file facts are customData.lobby.file on the element; no asset records |
+| `getBindingsFromShape` | 7 (4) | `helper:items.arrowEnds` | contracts |  |
+| `getPointInShapeSpace` | 7 (5) | `canvas:get`, `helper:geometry.translate` | 2C, contracts | subtract the element’s x, y |
+| `getSelectionPageBounds` | 7 (6) | `canvas:boundsOf` | 2C |  |
+| `getShapeAndDescendantIds` | 7 (5) | `helper:items.childrenOf`, `helper:items.groupMembers`, `helper:items.labelOf` | contracts |  |
+| `stopFollowingUser` | 6 (4) | `canvas:follow.stop` | 3c |  |
+| `updateDocumentSettings` | 6 (3) | `canvas:doc.set` | 2C |  |
+| `deleteShapes` | 5 (2) | `canvas:tx.delete` | 2C |  |
+| `getPage` | 5 (4) | `dropped` | — | one page; legacy page names come from lb_doc.import.legacyPages |
+| `setEditingShape` | 5 (2) | `canvas:text.edit`, `canvas:text.stop` | 2C |  |
+| `setSelectedShapes` | 5 (5) | `canvas:select` | 2C |  |
+| `canEditShape` | 4 (2) | `canvas:text.canEdit` | 2C |  |
+| `getCurrentPageBounds` | 4 (3) | `canvas:boundsOf` | 2C | boundsOf([]) is empty; boundsOf() with no selection is every item |
+| `getPointInParentSpace` | 4 (1) | `canvas:get` | 2C | scene coordinates everywhere |
+| `getShapeAncestors` | 4 (4) | `helper:items.containerOf`, `helper:items.outerGroupOf`, `canvas:get` | contracts, 2C | frameId for the frame |
+| `getShapeGeometry` | 4 (4) | `canvas:bounds`, `helper:geometry.corners` | 2C, contracts |  |
+| `getShapeMaskedPageBounds` | 4 (2) | `canvas:visibleBounds` | 2C |  |
+| `getShapeUtil` | 4 (2) | `canvas:text.of`, `helper:items.itemKindOf` | 2C, contracts |  |
+| `registerExternalContentHandler` | 4 (2) | `registry:contentHandlers` | registry |  |
+| `selectNone` | 4 (4) | `canvas:select` | 2C | select([]) |
+| `startFollowingUser` | 4 (3) | `canvas:follow.start` | 3c | by session id (RosterEntry.sid) |
+| `createBindings` | 3 (2) | `canvas:tx.bind` | 2C |  |
+| `findShapeAncestor` | 3 (3) | `helper:items.containerOf`, `canvas:get` | contracts, 2C |  |
+| `getCameraOptions` | 3 (3) | `canvas:viewport.limits` | 3b |  |
+| `getCurrentTheme` | 3 (3) | `canvas:theme` | 2C |  |
+| `getPages` | 3 (2) | `dropped` | — | one page |
+| `getStyleForNextShape` | 3 (2) | `canvas:styles.next` | 2C |  |
+| `getSvgString` | 3 (2) | `canvas:export.svg` | 3e |  |
+| `root` | 3 (1) | `registry:tools` | registry | root.addChild(StateNode) → a FeatureToolSpec |
+| `setCursor` | 3 (1) | `canvas:setCursor`, `registry:tools` | 2C, registry | a tool’s cursor is FeatureToolSpec.cursor |
+| `stopCameraAnimation` | 3 (3) | `canvas:viewport.stop` | 2C |  |
+| `updateViewportScreenBounds` | 3 (3) | `canvas:viewport.remeasure` | 2C |  |
+| `zoomToSelectionIfOffscreen` | 3 (3) | `canvas:viewport.ensureVisible` | 3b |  |
+| `canCreateShapes` | 2 (2) | `schema:limits.MAX_ITEMS` | contracts | the server cap counts items (a note and its label = 1) |
+| `deleteShape` | 2 (2) | `canvas:tx.delete` | 2C |  |
+| `findCommonAncestor` | 2 (2) | `helper:items.outerGroupOf`, `canvas:get` | contracts, 2C |  |
+| `getAssets` | 2 (2) | `canvas:items` | 2C | file facts live on the elements (customData.lobby.file) |
+| `getCameraState` | 2 (2) | `canvas:viewport.moving` | 2C |  |
+| `getCanUndo` | 2 (1) | `canvas:history.canUndo` | 2C |  |
+| `getCollaboratorsOnCurrentPage` | 2 (2) | `canvas:presence.peers` | 2C |  |
+| `getColorMode` | 2 (2) | `canvas:theme` | 2C |  |
+| `getCurrentPage` | 2 (2) | `dropped` | — | one page |
+| `getCurrentPageShapesSorted` | 2 (2) | `canvas:items` | 2C | paint order |
+| `getHitTestMargin` | 2 (2) | `canvas:hitTest` | 2C | HitTestOptions.margin |
+| `getPath` | 2 (1) | `canvas:gesture`, `canvas:tool` | 2C |  |
+| `getRichTextEditor` | 2 (2) | `canvas:text.editorElement` | 2C |  |
+| `getShapeLocalTransform` | 2 (2) | `canvas:get` | 2C |  |
+| `getShapeParent` | 2 (1) | `helper:items.containerOf`, `helper:items.outerGroupOf` | contracts |  |
+| `isShapeOfType` | 2 (1) | `helper:items.itemKindOf` | contracts |  |
+| `resolveAssetUrl` | 2 (2) | `canvas:files.urlOf` | 3g |  |
+| `textMeasure` | 2 (2) | `canvas:text.measure` | 2C |  |
+| `updateTheme` | 2 (2) | `dropped` | — | the note palette is 3a’s StyleValues mapping (canvas-ux/palette.ts); dark mode is the engine’s filter |
+| `user` | 2 (2) | `canvas:settings.set`, `canvas:theme` | 2C | updateUserPreferences → settings.set; getIsDarkMode → theme() |
+| `bailToMark` | 1 (1) | `canvas:transact` | 2C | throw inside the transact callback: nothing is applied |
+| `cancel` | 1 (1) | `canvas:text.stop` | 2C | {cancel: true} |
+| `complete` | 1 (1) | `canvas:text.stop` | 2C |  |
+| `createAssets` | 1 (1) | `dropped` | — | no asset records: an image element carries fileId and customData.lobby.file (3g) |
+| `deleteBindings` | 1 (1) | `canvas:tx.bind` | 2C | bind(arrow, end, null) |
+| `dispatch` | 1 (1) | `dropped` | — | synthetic tldraw events; text.edit({initialText}) replays the first key |
+| `disposables` | 1 (1) | `dropped` | — | the feature cleanup |
+| `getBaseZoom` | 1 (1) | `canvas:viewport.limits` | 3b |  |
+| `getBindingsToShape` | 1 (1) | `helper:items.arrowsOf` | contracts |  |
+| `getCurrentPageShapesInReadingOrder` | 1 (1) | `feature:3i` | 3i | reading order over items() (§4.8) |
+| `getEfficientZoomLevel` | 1 (1) | `canvas:viewport.get` | 2C | the level-of-detail zoom is viewport.get().zoom |
+| `getHoveredShape` | 1 (1) | `canvas:hovered`, `canvas:get` | 2C |  |
+| `getHoveredShapeId` | 1 (1) | `canvas:hovered` | 2C |  |
+| `getOnlySelectedShapeId` | 1 (1) | `canvas:selection` | 2C |  |
+| `getPageShapeIds` | 1 (1) | `canvas:items` | 2C |  |
+| `getResizeScaleFactor` | 1 (1) | `dropped` | — | tldraw’s dynamic size mode |
+| `getSelectedShapeAtPoint` | 1 (1) | `canvas:hitTest` | 2C | HitTestOptions.selectedFirst |
+| `isDisposed` | 1 (1) | `dropped` | — | the feature cleanup runs before the canvas goes away |
+| `isPointInShape` | 1 (1) | `canvas:hitTest` | 2C | HitTestOptions.filter |
+| `isReplayingHistory` | 1 (1) | `canvas:on:change` | 2C | change.source === 'history' |
+| `navigateToDeepLink` | 1 (1) | `feature:3b` | 3b | copy-link parser (?el=, ?view=, legacy ?d=) then select / viewport.zoomTo |
+| `overlays` | 1 (1) | `dropped` | — | tldraw canvas overlays; Lobby overlays are DOM layers that take their own events |
+| `pageToScreen` | 1 (1) | `canvas:sceneToScreen` | 2C |  |
+| `putExternalContent` | 1 (1) | `canvas:files.insert` | 3g |  |
+| `redo` | 1 (1) | `canvas:history.redo` | 2C |  |
+| `screenToPage` | 1 (1) | `canvas:screenToScene` | 2C |  |
+| `selectAdjacentShape` | 1 (1) | `feature:3i` | 3i | keyboard traversal (§4.8) |
+| `selectFirstChildShape` | 1 (1) | `feature:3i` | 3i | keyboard traversal (§4.8) |
+| `selectParentShape` | 1 (1) | `feature:3i` | 3i | keyboard traversal (§4.8), with helper items.containerOf |
+| `setStyleForNextShapes` | 1 (1) | `canvas:styles.setNext` | 2C |  |
+| `sideEffects` | 1 (1) | `canvas:on:change`, `canvas:transact.joinPrevious` | 2C | after-change handlers → on("change"); a derived write inside the user’s step → transact(…, {joinPrevious: true}) |
+| `toggleLock` | 1 (1) | `canvas:tx.update` | 2C | {locked} |
+| `toImage` | 1 (1) | `canvas:export.png` | 3e |  |
+| `updateAssets` | 1 (1) | `canvas:tx.update` | 2C | customData.lobby.file.name (the only client-writable file field) |
+| `updateInstanceState` | 1 (1) | `dropped` | — | read-only is the role’s interaction config (2C); e2e forges writes through a raw socket (§6.3) |
+
+137 members mapped; 137 in use today.
+
+### 6.2 Imported tldraw symbols → replacement (generated)
+
+| Group | Owner | Symbols | Replacement | Note |
+|---|---|---|---|---|
+| editor | contracts | `Editor`, `useEditor` | `context:canvas`, `helper:feature.useCanvasFeatureContext` | Editor → LobbyCanvas (ctx.canvas); useEditor() → useCanvasFeatureContext().canvas |
+| signals | contracts | `atom`, `Atom`, `computed`, `Computed`, `react`, `transact`, `useValue`, `unsafe__withoutCapture`, `isEqual` | `helper:signals.atom`, `helper:signals.computed`, `helper:signals.react`, `helper:signals.transact`, `helper:signals.useValue`, `helper:signals.untracked` | lib/signals.ts (same shapes); unsafe__withoutCapture → untracked; isEqual → the `isEqual` option or the feature’s own compare |
+| records | contracts | `TLShape`, `TLShapeId`, `TLRecord`, `TLPageId`, `TLParentId`, `TLNoteShape`, `TLGeoShape`, `TLImageShape`, `TLArrowShape`, `TLShapePartial`, `TLArrowBinding`, `TLBindingCreate`, `TLInstancePageState`, `IndexKey`, `JsonObject`, `TLRichText`, `TLStoreSnapshot`, `RecordsDiff` | `type:CanvasElement`, `type:LobbyItemKind`, `type:CanvasChange` | elements are CanvasElement with string ids; kinds via items.itemKindOf; diffs are CanvasChange |
+| ids | contracts | `createShapeId`, `isShapeId`, `createUserId` | `canvas:tx.create`, `schema:refs.toShapeRef`, `schema:refs.fromShapeRef` | tx.create returns the new id (props.id may choose one); api object refs stay shape:<id>; user ids are RosterEntry.uid |
+| geometry | contracts | `Box`, `Vec`, `Mat`, `VecLike` | `helper:geometry.union`, `helper:geometry.center`, `helper:geometry.corners`, `type:Bounds`, `type:ScenePoint` | canvas/api/geometry.ts (plain rectangles and points; no parent spaces) |
+| rich-text | 2C | `toRichText`, `renderPlaintextFromRichText`, `renderHtmlFromRichTextForMeasurement`, `startEditingShapeWithRichText` | `canvas:text.of`, `canvas:text.edit`, `canvas:text.measure`, `canvas:tx.create` | plain text only (§1 non-goals): create with props.text, read text.of, measure text.measure, edit text.edit |
+| ui-kit | 3a | `TldrawUiMenuGroup`, `TldrawUiMenuItem`, `TldrawUiMenuSubmenu`, `TldrawUiMenuActionItem`, `TldrawUiMenuCheckboxItem`, `TldrawUiMenuToolItem`, `TldrawUiToolbar`, `TldrawUiToolbarButton`, `TldrawUiButtonIcon`, `DefaultContextMenu`, `DefaultContextMenuContent`, `DefaultMainMenu`, `DefaultToolbar`, `DefaultStylePanel`, `DefaultKeyboardShortcutsDialog`, `DefaultKeyboardShortcutsDialogContent`, `ArrangeMenuSubmenu`, `EditMenuSubmenu`, `EditSubmenu`, `ExportFileContentSubMenu`, `ReorderMenuSubmenu`, `MoveToPageMenu`, `ViewSubmenu`, `AccessibilityMenu`, `ColorSchemeMenu`, `InputModeMenu`, `ExtrasGroup`, `LockGroup`, `MiscMenuGroup`, `UndoRedoGroup`, `KeyboardShortcutsMenuItem`, `SelectAllMenuItem`, `UnlockAllMenuItem`, `CursorChatItem`, `ToggleDebugModeItem`, `ToggleDynamicSizeModeItem`, `ToggleEdgeScrollingItem`, `ToggleFocusModeItem`, `ToggleGridItem`, `TogglePasteAtCursorItem`, `ToggleSnapModeItem`, `ToggleToolLockItem`, `ToggleWrapModeItem`, `ToolbarItem`, `StylePanelSection`, `StylePanelSubheading`, `StylePanelColorPicker`, `StylePanelDashPicker`, `StylePanelFillPicker`, `StylePanelFontPicker`, `StylePanelGeoShapePicker`, `StylePanelLabelAlignPicker`, `StylePanelOpacityPicker`, `StylePanelSizePicker`, `StylePanelSplinePicker`, `StylePanelTextAlignPicker`, `StylePanelArrowKindPicker`, `StylePanelArrowheadPicker`, `useStylePanelContext`, `useTldrawUiComponents`, `useActions`, `useTools`, `useToasts`, `useTranslation`, `useBreakpoint`, `usePassThroughWheelEvents`, `useShowCollaborationUi`, `PORTRAIT_BREAKPOINT`, `EditorPortal`, `TLComponents`, `TLUiOverrides`, `TLUiOverrideHelpers`, `TLUiActionItem`, `TLUiActionsContextType`, `TLUiToolItem`, `TLUiToolsContextType`, `TLUiEventSource`, `TLUiContextMenuProps`, `TLUiMainMenuProps`, `TLUiStylePanelProps`, `TLUiKeyboardShortcutsDialogProps` | `registry:contextMenu`, `registry:mainMenu`, `registry:commands`, `registry:tools`, `registry:hostSlots`, `registry:selectionBar`, `context:notify` | Lobby’s own UI: 3a owns the menu, toolbar, style-panel and shortcuts shells (host slots) that render the registries; overrides.actions → commands, overrides.tools → tools, translations → the feature’s own strings, useToasts → ctx.notify, the breakpoint → CSS and matchMedia |
+| shape-utils | 2C | `defaultShapeUtils`, `defaultBindingUtils`, `createTLSchemaFromUtils`, `GeoShapeUtil`, `NoteShapeUtil`, `FrameShapeUtil`, `BaseBoxShapeUtil`, `HTMLContainer`, `Group2d`, `Geometry2d`, `DefaultShapeWrapper`, `TLShapeWrapperProps`, `TLIndicatorPath`, `getDisplayValues`, `NoteShapeUtilDisplayValues`, `getArrowInfo`, `GeoShapeGeoStyle`, `StateNode` | `registry:featureOverlays`, `registry:tools`, `schema:groups.kindOf` | element types are Excalidraw’s (canvas-schema elements.ts); custom faces (file cards, tag chips) are overlays; StateNode tools are FeatureToolSpecs; converted tldraw data is 2D’s tldraw-import |
+| store-sync | 2C | `createTLStore`, `TLStore`, `DocumentRecordType`, `PageRecordType`, `InstancePageStateRecordType`, `CameraRecordType`, `PointerRecordType`, `UserRecordType`, `AssetRecordType`, `TLDOCUMENT_ID`, `TLINSTANCE_ID`, `TLPOINTER_ID`, `HistoryManager`, `squashRecordDiffs`, `useSync`, `UseSyncOptions`, `UseSyncConnectFn`, `TLPersistentClientSocket`, `TLRemoteSyncError`, `TLSocketStatusChangeEvent`, `RemoteTLStoreWithStatus`, `* as tlsync`, `Tldraw`, `TldrawOptions`, `TLOnMountHandler` | `canvas:engine`, `canvas:saveStatus`, `canvas:history.undo`, `canvas:doc.get` | the sync engine core (canvas/sync), the Excalidraw host and Lobby’s undo replace the store, useSync and <Tldraw>; lb_doc replaces the document record |
+| assets | 3g | `TLAsset`, `TLAssetId`, `TLImageAsset`, `TLAssetStore`, `TLAssetContext` | `canvas:files.urlOf`, `canvas:files.insert`, `canvas:files.status`, `helper:items.lobbyValue` | fileId = the Lobby version id; facts in customData.lobby.file; the loader is canvas/files (2C core, 3g placement) |
+| styles-theme | 3a | `DefaultColorStyle`, `DefaultFontStyle`, `TLDefaultColorStyle`, `TLDefaultFillStyle`, `TLDefaultFontStyle`, `TLDefaultSizeStyle`, `getColorValue`, `getFontFamily`, `TLTheme`, `TLThemeColors`, `getUserPreferences`, `setUserPreferences`, `TLUser`, `TLUserStore` | `canvas:styles.next`, `canvas:styles.setNext`, `canvas:theme`, `canvas:settings.get`, `type:StyleValues` | StyleValues use the engine’s field names; the palette names are 3a’s; preferences are settings (local only) |
+| input-events | 2C | `TLEventInfo`, `TLPointerEventInfo`, `TLKeyboardEventInfo` | `canvas:on:input`, `type:CanvasInputEvent`, `type:KeyEventLike` | capture-phase input stream and the key registry |
+| presence | 2C | `TLInstancePresence`, `TLPresenceStateInfo`, `getDefaultUserPresence`, `createCachedUserResolve`, `TLCursorProps`, `DefaultCursor` | `canvas:presence.peers`, `canvas:collaborators`, `registry:cursorVisible` | identity comes from the ticket (roster); cursors are drawn by 2C’s overlay; features filter them through cursorVisible |
+| export | 3e | `copyAs`, `getSvgAsImage`, `useSvgExportContext`, `useDelaySvgExport` | `canvas:export.svg`, `canvas:export.png`, `canvas:export.copy` | canvas/export (Excalidraw exportToSvg/Blob with Lobby’s font embedding) |
+| deep-links | 3b | `createDeepLinkString`, `parseDeepLinkString` | `feature:3b` | new ?el= and ?view= links plus the legacy ?d= parser (§3.6, C2) |
+| external-content | 3g | `defaultHandleExternalFileContent`, `defaultHandleExternalTextContent`, `TLDefaultExternalContentHandlerOpts` | `registry:contentHandlers`, `canvas:files.insert` | paste and drop go through contentHandlers (priority order); files through files.insert |
+
+201 symbols in 16 groups.
+
+## 7. Files and ported folders per owner
+
+### 7.1 Files that use tldraw → porting owner (generated)
+
+| Owner | Files (tests) | Files |
+|---|---|---|
+| 2C | 23 (8) | `board/BoardPage.tsx`, `board/EditingBadges.tsx`, `board/TopBar.tsx`, `board/note-label-cache.test.ts`, `board/note-label-cache.ts`, `board/pan-layer.test.ts`, `board/pan-layer.ts`, `board/presence.test.ts`, `board/presence.ts`, `board/touch-guard.ts`, `features/FeatureHost.tsx`, `features/types.ts`, `sync-quality/perPropUndo.test.ts`, `sync-quality/perPropUndo.ts`, `sync-quality/rebaseGuard.test.ts`, `sync-quality/rebaseGuard.ts`, `sync-quality/saveTracker.test.ts`, `sync-quality/saveTracker.ts`, `sync-quality/undoSteps.test.ts`, `sync-quality/uploads.test.ts`, `sync-quality/uploads.ts`, `sync-quality/useSaveStatus.ts`, `theme/tldraw-sync.ts` |
+| 3a | 21 (4) | `features/canvas-ux/ContextMenu.tsx`, `features/canvas-ux/MainMenu.tsx`, `features/canvas-ux/Overlay.tsx`, `features/canvas-ux/ShortcutsDialog.tsx`, `features/canvas-ux/StylePanel.tsx`, `features/canvas-ux/Toolbar.tsx`, `features/canvas-ux/bridge.ts`, `features/canvas-ux/dblclick-note.ts`, `features/canvas-ux/export-gate.tsx`, `features/canvas-ux/index.tsx`, `features/canvas-ux/keyboard-scope.test.ts`, `features/canvas-ux/keyboard-scope.ts`, `features/canvas-ux/keyboard.ts`, `features/canvas-ux/keys.ts`, `features/canvas-ux/locked-hint-runtime.ts`, `features/canvas-ux/overrides.tsx`, `features/canvas-ux/palette.test.ts`, `features/canvas-ux/palette.ts`, `features/canvas-ux/ui-defaults.test.ts`, `features/keyboard-map.test.ts`, `ui/place-at-center.ts` |
+| 3b | 15 (3) | `dashboard/search/content-search.test.ts`, `features/canvas-ux/FramesPanel.tsx`, `features/canvas-ux/NavigationPanel.tsx`, `features/canvas-ux/SearchPanel.tsx`, `features/canvas-ux/TemplatesPanel.tsx`, `features/canvas-ux/arrange-grid-runtime.ts`, `features/canvas-ux/board-start-view.ts`, `features/canvas-ux/bulk-paste-handler.ts`, `features/canvas-ux/bulk-paste.ts`, `features/canvas-ux/copy-link.ts`, `features/canvas-ux/frame-order.test.ts`, `features/canvas-ux/search-filter.test.ts`, `features/canvas-ux/select-by-type-runtime.ts`, `features/canvas-ux/start-view-runtime.ts`, `features/canvas-ux/template-insert.ts` |
+| 3c | 19 (4) | `features/comments/CommentsOverlay.tsx`, `features/comments/CommentsPanel.tsx`, `features/comments/CommentsTopBar.tsx`, `features/comments/ContextMenuItem.tsx`, `features/comments/controller.test.ts`, `features/comments/controller.ts`, `features/comments/geometry.ts`, `features/comments/index.tsx`, `features/comments/model.test.ts`, `features/comments/tldraw-cells.ts`, `features/comments/tool.ts`, `features/people/PeopleBar.tsx`, `features/people/frames.test.ts`, `features/people/frames.ts`, `features/people/index.tsx`, `features/people/roster.ts`, `features/present-export/live/LiveUi.tsx`, `features/present-export/live/controller.test.ts`, `features/present-export/live/controller.ts` |
+| 3d | 26 (4) | `features/mindmap/ContextMenuGroup.tsx`, `features/mindmap/Overlay.tsx`, `features/mindmap/bridge.ts`, `features/mindmap/commands.ts`, `features/mindmap/keyboard.ts`, `features/mindmap/keys.ts`, `features/mindmap/overrides.tsx`, `features/mindmap/runtime.ts`, `features/mindmap/style.ts`, `features/mindmap/tree-index.test.ts`, `features/mindmap/tree-index.ts`, `features/mindmap/visibility.test.ts`, `features/mindmap/visibility.ts`, `features/tags/ContextMenu.tsx`, `features/tags/Overlay.tsx`, `features/tags/SearchTagFilter.tsx`, `features/tags/ShapeWrapper.tsx`, `features/tags/TagPicker.tsx`, `features/tags/TagsPanel.tsx`, `features/tags/csv.test.ts`, `features/tags/csv.ts`, `features/tags/hooks.ts`, `features/tags/index.tsx`, `features/tags/runtime.ts`, `features/tags/search.test.ts`, `features/tags/search.ts` |
+| 3e | 21 (5) | `features/present-export/ExportDialog.tsx`, `features/present-export/PresentOverlay.tsx`, `features/present-export/controller.ts`, `features/present-export/csv-export.test.ts`, `features/present-export/csv-export.ts`, `features/present-export/export-render.ts`, `features/present-export/index.tsx`, `features/present-export/present-session.ts`, `features/present-export/slides.test.ts`, `features/present-export/slides.ts`, `features/present-export/text-layer.test.ts`, `features/present-export/text-layer.ts`, `features/sharing/ExportPolicySection.tsx`, `features/sharing/export-policy.test.ts`, `features/sharing/export-policy.ts`, `features/sharing/index.tsx`, `features/thumbnails/capture.ts`, `features/thumbnails/changes.test.ts`, `features/thumbnails/changes.ts`, `features/thumbnails/render.ts`, `features/thumbnails/schematic.ts` |
+| 3f | 15 (1) | `features/workshops/PlusOnes.tsx`, `features/workshops/Reactions.tsx`, `features/workshops/VoteSetupDialog.tsx`, `features/workshops/VotingPanel.tsx`, `features/workshops/WorkshopBar.tsx`, `features/workshops/WorkshopOverlay.tsx`, `features/workshops/follow.ts`, `features/workshops/hooks.ts`, `features/workshops/index.tsx`, `features/workshops/plus-ones.test.ts`, `features/workshops/plus-ones.ts`, `features/workshops/private-notes/PrivateNotesPanel.tsx`, `features/workshops/private-notes/SetupDialog.tsx`, `features/workshops/private-notes/canvas.ts`, `features/workshops/session-settings.ts` |
+| 3g | 12 (1) | `assets/PendingImageNames.tsx`, `assets/asset-store.test.ts`, `assets/asset-store.ts`, `assets/pending-images.ts`, `board/ExternalContent.tsx`, `features/canvas-ux/download-originals.ts`, `file-card/FileCardShapeUtil.tsx`, `file-card/FileCardView.tsx`, `file-card/PdfViewer.tsx`, `file-card/open-original.ts`, `file-card/place-pages.ts`, `file-card/viewer-state.ts` |
+| 3h | 9 (1) | `features/ai/Overlay.tsx`, `features/ai/actions.test.ts`, `features/ai/actions.ts`, `features/ai/apply.ts`, `features/ai/menus.tsx`, `features/ai/runtime.ts`, `features/ai/target.ts`, `features/history/CheckpointPreview.tsx`, `features/history/HistoryPanel.tsx` |
+| 3i | 1 (0) | `ui/SkipLink.tsx` |
+| W4 | 2 (1) | `negative-types.ts`, `schema.test.ts` |
+
+164 files (32 tests); 0 without an owner.
+
+### 7.2 Where each owner's ported code goes
+
+| Owner | Feature id(s) in `CANVAS_FEATURES` | Ported folder(s) (created at wave 1) | Also owns |
+|---|---|---|---|
+| 3a | `canvas-ux` | `features/canvas-ux/ported/**` except `navigation/` | `canvas/api/parts/styles.ts`; host slots `toolbar`, `stylePanel`, `contextMenu`, `mainMenu`, `shortcutsDialog`, `selectionBar`; the keyboard-map test |
+| 3b | `navigation` | `features/canvas-ux/ported/navigation/**` | `canvas/api/parts/navigation.ts`; host slot `navigation` |
+| 3c | `comments`, `people`, `present-live` | `features/comments/ported/**`, `features/people/ported/**`, `features/present-export/live/ported/**` | `canvas/api/parts/follow.ts` |
+| 3d | `mindmap`, `tags` | `features/mindmap/ported/**`, `features/tags/ported/**` | — |
+| 3e | `present-export`, `thumbnails`, `sharing` | `features/present-export/ported/**`, `features/thumbnails/ported/**`, `features/sharing/ported/**` | `canvas/api/parts/export.ts`, `canvas/export/**` |
+| 3f | `workshops` | `features/workshops/ported/**` | — |
+| 3g | `media` | `file-card/ported/**` (file cards, assets, external content) | `canvas/api/parts/files.ts`, `canvas/files/place.ts` |
+| 3h | `history`, `ai` | `features/history/ported/**`, `features/ai/ported/**` | `canvas/preview/**` |
+| 3i | `a11y` | `features/a11y/ported/**` | host slots `phoneSheet`, `liveRegion` |
+| 2C | — | the Excalidraw board page, the ported `FeatureHost` (dock, top bar), `canvas/api/impl.ts` | every 2C stub of §2.1 |
+
+## 8. The freeze tests (`apps/web/src/canvas/api/contracts.test.ts`, 13 tests)
+
+1. `LOBBY_CANVAS_MEMBERS` lists each member once with a known owner; the built canvas matches it (C0 and composed members are real, every stub names the table's owner); every non-core member carries the same `@owner` in `lobby-canvas.ts`.
+2. Stubs throw `NotImplementedError` with the owner (members, `LobbyTx` members, events, `joinPrevious`).
+3. The tldraw map covers every `editor.*` member and every imported tldraw symbol in the tree (each symbol in one group), and every target resolves.
+4. Every file that uses tldraw has a porting owner.
+5. Ported code imports no tldraw, no engine, and only `canvas/api/index.ts` from the canvas.
+6. `CANVAS_FEATURES` has unique ids, and each ported file names a known owner.
+7. Host slots take one provider; `installCanvasFeatures` registers in feature order, wires `kbd` commands into the C0 key registry, survives a throwing `onMount` and undoes everything; `keyConflicts` finds a chord claimed twice in one scope.
+
+Besides: `geometry.test.ts` (4), `items.test.ts` (4), `keys.test.ts` (4), `lib/signals.test.ts` (9), and two compile-time checks (`CANVAS_FEATURE_CONTEXT_KEYS` and `FACADE_V1_VERBS` are complete).
+
+## 9. e2e: helpers for ported specs
+
+### 9.1 `e2e/tests/support/canvas.ts` (frozen signatures)
+
+Every canvas write goes through `window.lobbyCanvas` (the facade, so through `transact` and the sync engine); clicks go to `sceneToScreen` coordinates of an element; convergence is the facade's convergence hash; forged writes use a raw WebSocket (`e2e/spike-b/support/forge.ts`). Exports:
+
+- **Calling the facade:** `canvasCall(page, verb, ...args)` (typed over `CanvasFacade` = the C0 facade plus the wave-1 verbs). Until 2E lands a wave-1 verb, it falls back to spike B's `window.__lobbyHarness` where that has the verb (`ready`, `me`, `viewport`, `setViewport`, `screenToScene`), else fails with "facade verb <name> not implemented (2E)".
+- **Sessions:** `waitForCanvas(page)`, `openCanvasSession(browser, board, user)` (checks the `welcome` names the user), and `test` = fixtures.ts `test` plus `canvasSession(user, {role})`; `expect`.
+- **Reads:** `items`, `item`, `itemText`, `itemBounds`, `selection`, `tool`, `editingId`, `saveState`, `viewport`, `readOnly`, `hash`, `pushedOps`, `collaborators`, `leaseHolder`, `waitForItem(page, id, predicate)`.
+- **Writes:** `createItem`, `createNote({x, y, text, color, size})`, `updateItem`, `deleteItem`, `select`, `selectNone`, `setTool`, `zoomToFit`, `setViewport`, `undo`, `redo`.
+- **UI:** `sceneToScreen`, `screenToScene`, `itemCenterOnScreen`, `clickItem(page, id, {button, modifiers})`, `dblclickItem`, `dragItem(page, id, delta)`.
+- **Text:** `TEXT_EDITOR` (`textarea.excalidraw-wysiwyg`), `waitForTextEditor(page, id)` (editing id, focused and writable: the lease is granted), `startTextEditing` (double-click), `startTextEditingWithKeyboard` (select + Enter), `stopTextEditing` (Escape), `typeText`.
+- **Sync:** `expectSaved(page)`, `expectConverged(reference, others)`.
+
+| Today's spec call (`window.editor` / board.ts) | Ported spec |
+|---|---|
+| `openSession`, `session(user)`, `waitForBoard` | `openCanvasSession`, `canvasSession(user)`, `waitForCanvas` |
+| `createShape`, `createShapes` | `createItem`, `createNote` (one per element; the facade writes one transact each) |
+| `getShape`, `getCurrentPageShapes`, `getCurrentPageShapeIds` | `item`, `items` |
+| `shapeText` (`plainText(props.richText)`) | `itemText` |
+| `getShapePageBounds`, `shapeBounds` | `itemBounds` (`width`/`height`, not `w`/`h`) |
+| `updateShape(s)`, `deleteShapes`, `toggleLock`, `reparentShapes` | `updateItem` (`{locked}`, `{frameId}`), `deleteItem` |
+| `select`, `selectNone`, `getSelectedShapeIds`, `getOnlySelectedShape` | `select`, `selectNone`, `selection` |
+| `setCurrentTool`, `getCurrentToolId` | `setTool`, `tool` (Lobby tool names, `BUILT_IN_TOOLS`) |
+| `getEditingShapeId`, `getRichTextEditor`, `setEditingShape` | `editingId`, `waitForTextEditor`, `startTextEditing…` |
+| `pageToScreen`, `shapeCenterOnScreen`, `toScreen`, `screenToPage`, `pageToViewport` | `sceneToScreen`, `itemCenterOnScreen`, `screenToScene` |
+| `zoomToFit`, `zoomToBounds`, `zoomToSelection`, `setCamera`, `getCamera`, `getZoomLevel`, `getViewportPageBounds`, `getViewportScreenBounds` | `zoomToFit`, `canvasCall(page, 'zoomTo', b)`, `setViewport`, `viewport` (scene rect + zoom); the canvas rectangle is the page's own layout |
+| `getCameraState`, `stopCameraAnimation` | `canvasCall(page, 'cameraMoving')` |
+| `markHistoryStoppingPoint`, `undo`, `redo`, `getCanUndo` | nothing (each facade verb is one step), `undo`, `redo`, `canvasCall(page, 'canUndo')`; the real key is `ControlOrMeta+z` |
+| `getDocumentSettings`, `updateDocumentSettings` | `canvasCall(page, 'doc', key)`, `canvasCall(page, 'setDoc', entries)` |
+| `getBindingsFromShape`, `createBindings` | `canvasCall(page, 'arrowEnds', id)`; bind by `updateItem(arrow, {startBinding})` (the server keeps `boundElements` symmetric) |
+| `getSortedChildIdsForParent`, `isShapeHidden`, `getShapeAtPoint`, `getShapesAtPoint` | `canvasCall(page, 'children' / 'isHidden' / 'hitTest', …)` |
+| `getSvgString`, `toImage` | `canvasCall(page, 'exportSvg', ids)`; PNG through the export UI (download) |
+| `getAsset`, `getAssets`, `resolveAssetUrl` | `item(page, id).customData.lobby.file`; the file routes through `page.request` |
+| `getCollaborators`, `getInstanceState().followingUserId` | `collaborators`, `canvasCall(page, 'following')` |
+| `getIsReadonly`, `updateInstanceState({isReadonly: false})` (forging) | `readOnly`; forging through a raw socket |
+| `expectConverged` (record-by-record) | `expectConverged` (convergence hash, tombstones included) |
+| `duplicateShapes`, `putContentOntoCurrentPage`, `getContentFromCurrentPage` | the real keys (`ControlOrMeta+d`, `+c`, `+v`) |
+| `.tl-*` selectors, `[data-shape-id]` | `data-lobby-*` / `data-testid` on overlays; `TEXT_EDITOR` |
+
+### 9.2 Wave-1 facade verbs (`apps/web/src/canvas/api/facade.types.ts`)
+
+`ready`, `me`, `readOnly`, `text`, `viewport`, `setViewport`, `zoomTo`, `screenToScene`, `hitTest`, `isHidden`, `gesture`, `cameraMoving`, `undo`, `redo`, `canUndo`, `doc`, `setDoc`, `editText`, `stopEditing`, `arrowEnds`, `children`, `following`, `exportSvg`, on top of C0's `items`, `get`, `create`, `update`, `delete`, `select`, `selection`, `tool`, `setTool`, `sceneToScreen`, `bounds`, `zoomToFit`, `editingId`, `leaseHolder`, `collaborators`, `saveState`, `hash`, `pushedOps`, `leaseState`. 2E implements them in `canvas/test-facade.ts` on `LobbyCanvas`, behind the same dev-auth guard; every write still goes through `transact`.
+
+### 9.3 Running ported specs
+
+`E2E_PORT_BASE=<base> pnpm --filter @draftroom/e2e excalidraw` runs `e2e/excalidraw/*.spec.ts` with the default suite's stack fixture (api + sync + worker, dev sign-in), the fixture's worker option `engine: 'excalidraw'` (W1-3: the stack launcher starts sync with `EXCALIDRAW_SYNC_ENV`, that is `DRAFTROOM_ENGINE=excalidraw`, `DRAFTROOM_TEST_HOOKS=1` and `DRAFTROOM_BACKUP_STORE=off` until 2B ports backups to `lb_*` files, **under** any per-spec `syncEnv`), and the web app built with `VITE_LOBBY_ENGINE=excalidraw` and the dev-auth guard into `apps/web/dist/lc-web-<port>`. Since wave 2 that build's `/b/:boardId` is Lobby's board page (2C, `canvas/board/**`); spike B's page is at `?page=spike`, or the default of a build with `VITE_LOBBY_BOARD_PAGE=spike` (W1-8). `e2e/excalidraw/canvas-helpers.spec.ts` checks the helpers against the board page (§11; wave 2's run: `docs/research/excalidraw/WAVE-2.md`).
+
+Wave 4 (W4-WEB-1) adds two builds of the same stack under `e2e/excalidraw-builds/`: `pnpm --filter @draftroom/e2e excalidraw:prod` builds the **production** engine build (`VITE_LOBBY_ENGINE=excalidraw`, no dev auth: no facade, no debug handle, no spike page; `apps/web/dist/lp-web-<port>`) and drives it as a person does; `excalidraw:dev` serves the Vite **dev server** (React StrictMode) on the web port. `csp:cutover` (`e2e/spike/csp/run-cutover.ts`) runs the A12 CSP harness on the production build with the cut-over header.
+
+## 10. Contract requests and what is not frozen
+
+Not frozen by this step, with the reason (each is also in the workflow result):
+
+1. **AGENTS.md (plan §10) is unchanged.** Repository rules are the owner's; the plan makes the change "with the owner's approval", and a workflow instruction is not that approval. The proposed text is plan §10; the owner applies or approves it.
+2. **canvas-schema is not re-reviewed or re-frozen here.** It stays spike B's C0 contract (`CONTRACTS_REV` 4, the spike lead's change-request rule) while spike B runs and may still change it (the O2 lost-edit fix, the deferred `EngineCore.pendingLeases()` and idempotent offline-queue CRs). The wave-1 review of `packages/canvas-schema/src/**` (plan §7.2 row 1) happens when spike B closes; until then this API only reads canvas-schema.
+3. **The wave-1 facade verbs are types only.** Their implementation is `apps/web/src/canvas/test-facade.ts`, spike B's O3 file; 2E implements them after spike B closes (the helpers fall back to the spike harness for five of them meanwhile).
+4. **`transact(…, {joinPrevious})` is frozen as an option, but its feasibility is 2C's to confirm**: the history controller (`canvas/history/**`, spike-owned) must fold a derived write into the tab's previous step with remote changes interleaved. If it cannot, the mind map's re-layout becomes its own step and this option is withdrawn by a change request.
+5. **`text.replace` needs the lease from code** (acquire, write, release) on spike A's lease client (`canvas/lease/**`, spike-owned); 2C confirms the client supports a programmatic acquire without an open editor.
+6. **`presence.peers` and `follow`** read the presence hub (`canvas/presence/hub.ts` `PeerView`, spike-owned), which uses `LobbyEngineCore` events beyond the frozen `EngineCore`. If 2C moves presence onto the frozen interface, that is a change request to spike B's `sync/types.ts` (the spike lead's file).
+7. **Not built (other owners or later steps):** the Excalidraw board page that calls `createLobbyCanvas` and `installCanvasFeatures` and renders the host slots, dock, top bar and overlay layers (2C; until it lands, ported features cannot be seen in a browser: the spike board page does not render `CANVAS_FEATURES`); the four missing engine probes of plan §6.5 (`NEVER` off Excalidraw's own stack, `addFiles` first entry, embeddable z-order, `restoreElements` on templates); the e2e map from `window.editor` calls is guidance (§9.1), not machine-checked.
+8. **Lockfile PR #1 is empty**: no dependency is missing for waves 2–3 (the five `@excalidraw/*` packages and `tldraw-import`'s five MIT tldraw packages were added at spike B's C0).
+
+**Status after the wave-2 integration** (`docs/research/excalidraw/WAVE-2.md`): item 4 is confirmed feasible by 2C (on a second tab one undo reverts both steps and redo restores both; `canvas/board/history-join.ts` folds the entries through the controller's live undo list until spike B's history owner adds `LobbyHistory.mergeTop()`, W1-9); item 5 is confirmed (`text.replace` acquires and releases the lease from code with no editor open, and waits for the push before releasing); item 6 needs no change request now (the board page reads a board-side peer store on `LobbyEngineCore.on` and `roster()`, as the spike's hub does); item 7's board page is built (2C). Items 1, 2 and 3 are unchanged. Item 8: two importer edges are now requested (`apps/api` → `@draftroom/tldraw-import`, `apps/sync` → `@draftroom/board-ops`) and not applied (W1-9).
+
+**Status after the wave-3 integration** (`docs/research/excalidraw/WAVE-3.md`): every `LobbyCanvas` member is real on the board page (W3-1: no stubs left). Items 1, 2, 3 and 8 are unchanged: AGENTS.md still needs the owner's approval, canvas-schema is still spike B's C0 contract, the wave-1 facade verbs are still types (ported specs use the dev-only `window.__lobbyBoard.canvas`), and the lockfile is untouched (CR-3I-1 asks for `@axe-core/playwright`). The one contract-level change of wave 3 beyond additive members is `cursorVisible` becoming a combined filter (W3-4).
+
+## 11. Gate
+
+Windows 11 workstation, Node 24.19.0, pnpm 10.34.5; the machine was shared with other agents' runs. One run each unless stated; logs in the contracts owner's scratchpad (`gate-merge/`, `gate-w1/`, `lc-smoke-*.log`).
+
+**Step 1, on the merge commit 6210fc5** (a detached worktree, so the run saw none of the wave-1 edits):
+
+| Check | Result |
+|---|---|
+| lint (`biome check .`) | PASS, 1,458 files |
+| typecheck (`pnpm -r typecheck`) + engine-probe tsc | PASS |
+| Node-safety tsc (`apps/sync/tsconfig.node-safe.json`) | PASS |
+| `pnpm test` | PASS: 4,208 passed, 36 skipped (374 files, 9 skipped) |
+| `pnpm test:arrows` | PASS: 85/85 |
+| asset and host-rewrite plugin tests | PASS 9/9 |
+| hash check in Chromium (spike B contracts) | PASS |
+| the default (tldraw) build's whole e2e suite, `E2E_PORT_BASE=6400` | **PASS: 341/341** (25.5 min; 340 chromium + 1 branded-Chrome) |
+| spike A suite, `SPIKE_WEB_PORT=6450` | PASS: 99 passed, 2 skipped (opt-in) (19.7 min) |
+| A8 browser probe (port 6453) | PASS |
+| normal build, engine markers | PASS, **0** marker hits, no `excalidraw-assets/` |
+| engine flag without the dev-auth guard | PASS, 0 marker files |
+
+**On the wave-1 working tree** (the freeze commit's content):
+
+| Check | Result |
+|---|---|
+| lint | PASS, 1,500 files |
+| typecheck (15 projects) + engine-probe tsc + Node-safety tsc | PASS |
+| `pnpm test` | PASS: 4,242 passed, 36 skipped (379 files); the 34 new tests are §8's |
+| `pnpm test:arrows`, plugin tests, hash check in Chromium | PASS (85/85, 9/9, 1/1) |
+| normal build, engine markers (the spike's plus `EXCALIDRAW-CONTRACTS`, `canvas.docKeys`, `useCanvasFeatureContext outside`, `CANVAS_FEATURES`) | PASS, 0 hits |
+| engine flag without the dev-auth guard | PASS, 0 marker files |
+| `e2e/excalidraw/canvas-helpers.spec.ts` (`E2E_PORT_BASE=6410`, the Excalidraw page on the spike board page) | PASS 5/5 (three runs: 1 + 2 + 2) |
+
+Not re-run on the working tree: the default e2e suite and the spike A suite (the wave-1 changes add no import to the default build, which the marker check confirms, and touch no spike A page).
+
+## 12. Change log
+
+| Rev | Date | Change | By |
+|---|---|---|---|
+| W1-1 | 2026-09-29 | The wave-1 freeze (this document) | contracts |
+| W1-2 | 2026-09-29 | CR by 2C (wave 2, commit `e010263`; **accepted** at the wave-2 integration): `MemberStatus` gains `board` (2C's members that need the board page's engine: real with the `board` handles of `createLobbyCanvas`, a stub naming 2C on a bare port); 2C's 49 stubs become 10 composed and 39 board-page members; the contracts test checks `board` members as stubs on a bare port and as real members with fake board handles, and runs the composed `tx` writes on a bare port. The list of members, their owners and every signature are unchanged. | 2C |
+| W1-3 | 2026-09-29 | CR W1-2E-1 by 2E (commit `080d536`), **accepted**: `e2e/excalidraw/playwright.config.ts` sets the fixture's worker option `engine: 'excalidraw'` instead of `use.syncEnv`. Before, a spec's own `test.use({syncEnv})` (the conflicts spec's `TEXT_LEASE_MS`) replaced the config's object and ran sync on the tldraw engine against the Excalidraw build. The launcher (`e2e/tests/support/stack.ts` `engineSyncEnv`, 2E's) now puts `EXCALIDRAW_SYNC_ENV` (engine, test hooks, backups off) under any spec `syncEnv` and refuses a `syncEnv` naming another engine. Additive: no spec used the config's `syncEnv`, and the default suite's stacks are unchanged (`engine` defaults to `tldraw`). | 2E |
+| W1-4 | 2026-09-29 | CR W1-2E-2 by 2E (commit `c729546`), **accepted**: `e2e/tests/support/canvas.ts`, bodies only (no signature or type change). `startTextEditingWithKeyboard` focuses the canvas before Enter; `canvasCall` derives `readOnly` (the harness session's welcome flag) and `text` (a text's own text, a frame's name, else its bound label's) until the page has those verbs; the page's own verb always wins. | 2E |
+| W1-5 | 2026-09-29 | CR 2F-1 by 2F (commit `8a7e7af`), **accepted on `engine/excalidraw`**: the room extension mount point in spike B's C0 seam files. `apps/sync/src/engine-switch.ts` gains `registerRoomExtension(ext)` and `extendElementRoom(service, deps)` (an extension's `InternalRoute`s are mounted after the room's own, behind the same secret check; with none registered the service is returned unchanged), and `loadEngine('excalidraw')` also imports `./room-internal/index.ts`; `app.ts` wraps the factory's service in one line. These are spike B lead files (C0 table, `apps/sync`), so the spike B lead is asked to adopt the change in spike B's `CONTRACTS.md` change log; merges of `spike/excalidraw` into this branch keep it. Review notes: `extendElementRoom` builds a new object that forwards the service's members by name, so a member later added to `ElementRoomService` must be forwarded there too (a required one fails the typecheck; an optional one would be dropped silently); `engine-switch.ts` now type-imports `BoardStore` from `./room/store.ts` (erased at run time). | 2F (CR), integration |
+| W1-6 | 2026-09-29 | CR 2F-2 by 2F (same commit), **accepted as an optional interface**: `ElementRoomService.prepareBoard?(boardId)` and `serverWrite?(boardId, apply)`, with `ServerWriteTx`, `ServerWriteChange`, `ServerWriteOutcome` and `ServerWriteApply`. Nothing implements them yet. O1 implements them in `apps/sync/src/room/**` and may amend the semantics, with 2F's OK, through a change request. Until then 2F's restore and place-notes answer 503 on a board whose room is open. | 2F (CR), O1 (implements) |
+| W1-7 | 2026-09-29 | CR 2F-3 by 2F (commit `e19c6da`), **accepted**: `packages/contracts/src/history.ts` `CheckpointContent` gains optional `format: 'lobby-elements'`, `elements` and `doc` for v2 checkpoints; a v1 answer is unchanged. Compatible with the bridge release's edits of the same file on `r0/bridge` (checkpoint reasons, `BoardCheckpoint.newCanvas`, the new-canvas messages), which change other declarations. Readers: 3h (the Excalidraw preview) and R0. | 2F |
+| W1-8 | 2026-09-29 | Integration decision on a file outside the wave-1 freeze: 2C's edit of `apps/web/src/App.tsx` (a spike B C0 file, lead-owned) is **accepted**. In a build with the engine flag and the dev-auth guard, `/b/:boardId` lazy-loads `canvas/board/route.tsx`, which opens Lobby's board page, or spike B's page for `?page=spike` or in a build with `VITE_LOBBY_BOARD_PAGE=spike`. The guard is still inlined (0 engine markers in the normal build and in the engine-flag build without the guard). Consequence: spike B's suite run on this branch needs `VITE_LOBBY_BOARD_PAGE: 'spike'` in `e2e/spike-b/playwright.config.ts` (spike-owned; a request to spike B). Also regenerated here: §7.1 (`dashboard/template-catalog.ts` no longer imports tldraw after 2D; 167 files). | 2C, integration |
+| W1-9 | 2026-09-29 | Requests recorded and **not applied** (details in `docs/research/excalidraw/WAVE-2.md`): CR-2D-1 (room, O1: a label created in the same push as its new locked container is refused `LOCKED`); CR-2D-2 (`LobbyTx.insert(elements)` for prepared elements, contracts and 2C; 3b's template insert and paste-as-notes need it); the importer edges `apps/api` → `@draftroom/tldraw-import` and `apps/sync` → `@draftroom/board-ops` (the lockfile owner); `LobbyHistory.mergeTop()` (spike B's history owner); plan §3.3 says `ai.by` is stamped if absent, but canvas-schema's `AiValue` requires it (the contracts owner decides which changes). | integration |
+| W3-1 | 2026-09-29 | Wave-3 integration (`docs/research/excalidraw/WAVE-3.md`), the member table. Four CRs added the same idea four ways: CR-3A-1 (3a, `bc5d734`), 3c's CR (`956d9ea`) and CR 3G-1 (3g, `58c78eb`) each added `MemberStatus` `part` with its own `LANDED_PARTS` set; CR 3b-1 (3b, `0780539`) added `COMPOSED_BY_PARTS` with status `composed`. All four are **accepted and merged into one** `LANDED_PARTS` set in `canvas/api/impl.ts` (status `part`: real on any canvas; 3a `styles.of`/`apply`, 3b's five camera members, 3c `follow.*` and `on:followChanged`, 3g `files.urlOf`/`insert`). 3b's contracts-test changes are kept (every member still `stub` in the table throws naming its owner; the camera members are real on a bare port), and so is 3c's (`followChanged` subscribes on a bare port). CR 3E-2 (3e, proposed) is **accepted** as a new status `board-part` (`LANDED_BOARD_PARTS`: 3e's `export.*`, real when the board engine is attached, a stub naming 3e on a bare port; the contracts test checks it like `board`). The generator prints both statuses; §2.2 is regenerated (99 members: 26 C0, 17 composed, 39 board page, 13 landed parts, 4 landed board-engine parts, **0 stubs**) and so is §7.1 (164 files: 3c's SignalsKit stores no longer import tldraw). Integration commit `612ad43` (`CR:`). | 3a, 3b, 3c, 3e, 3g; integration |
+| W3-2 | 2026-09-29 | CR 3E-1 by 3e (commit `737e463`), **accepted**: `ExportOptions.files?: 'original' \| 'display' \| 'canvas'` in `canvas/api/lobby-canvas.ts` (which bytes an uploaded image is drawn from). Additive and optional; 3h's checkpoint preview does not need it (it draws with its own exporter, W3-3). | 3e |
+| W3-3 | 2026-09-29 | CR-3H-1 by 3h (commit `054b720`), **accepted**: `canvas/api/index.ts` exports `loadCheckpointPreview()` (a lazy import of `canvas/preview/index.ts`, 3h's folder) and the types `CheckpointPreviewHandle`, `CheckpointPreviewInput`. A checkpoint is not the live scene, so `export.canvas` cannot draw it; the lazy import keeps the preview in a chunk of its own (0 markers in the normal build). | 3h |
+| W3-4 | 2026-09-29 | CR-3F-5 (3f) and CR 3E-3 (3e), the same request, **applied by the integration** (`612ad43`, `CR:`): `registries.cursorVisible` combines its providers (a remote cursor is drawn only when every provider says yes; each `provide` returns its own removal). With one provider slot, 3f's "Hide everyone's cursors" displaced 3e's present-mode filter for good once it was switched off. The `Provider` type is unchanged; one contracts test pins the combination. `menusOpen` keeps its single provider. | 3e, 3f; integration |
+| W3-5 | 2026-09-29 | CR-3A-2 by 3a (commit `d721ff4`), **accepted**: 2C's `e2e/excalidraw/board-features.spec.ts` checks the toolbar slot through whichever feature holds it (canvas-ux once 3a provides it) and selects nothing before the focus-mode step. | 3a |
+| W3-6 | 2026-09-29 | 3c's CR on 2C's `canvas/board/session.ts` (commit `418e36b`), **accepted**: Excalidraw's `onScrollChange` re-sends this tab's presence (the last pointer sample, or a null-pointer sample), so followers read a current `view` after a pan or zoom with no pointer move; the core keeps its 20 Hz cap. Review note: the re-sent sample keeps its scene point from before the scroll, so a still cursor stays where it was in the scene until the pointer moves (as before the change). | 3c |
+| W3-7 | 2026-09-29 | Integration decisions in owners' files, not frozen (`WAVE-3.md` §2): Ctrl/Cmd+U belongs to media (3g), canvas-ux's command keeps no `kbd`; the keyboard-map test (3a) gains `TOOL_SCOPED_KEYS` (comments' Enter, Escape, Tab, Shift+Tab, Ctrl/Cmd+Shift+↑/↓ act only with the comment tool, and comments come first in `CANVAS_FEATURES`; this stands in for 3c's requested tool qualifier on `KeyClaim`), `TAKES_ENGINE_KEY` for navigation's Ctrl/Cmd+= and Ctrl/Cmd+- and `TAKES_BROWSER_CHORD` for present-export's Ctrl/Cmd+Shift+C (the tldraw page's Copy as PNG); present-live mounts on present mode through `features/present-export/live/ported/present-mode.ts` (CR-3C-2); 3b's first view keeps a camera moved before it is decided; 3b's search panel searches by tag with 3d's helpers; and the fixes of `07e6a77` (among them 2C's overlay root and canvas region clip their overflow). | integration |
+| W3-8 | 2026-09-29 | Requests recorded and **not applied** (owners and details in `WAVE-3.md` §6): CR-2D-2 and CR 2F-2 were open here and are resolved by spike B's part 3 and W3-9; the transact defect reported four times (3b F1, CR-3D-1, CR-3H-3, CR-3F-6: an update to an element created in the same `transact` is dropped, `canvas/port-impl.ts`); DEF-3F-1 = 3b F2 (a join within 5 s of a doc write gets the cached snapshot's old `lb_doc`); CR-3A-3 to CR-3A-7; CR 3b-2 to 3b-4; CR-3C-1; CR-3D-2 to CR-3D-5; CR-3F-1 to CR-3F-4; CR 3G-2 and 3g's requests to O2, 2C/O5 and the paste hook; CR-3H-2; CR-3I-1; `LobbyHistory.mergeTop()` (W1-9). | integration |
+| W3-9 | 2026-09-30 | CR-2D-2 (2D, wave 2; W1-9), **applied by the integration** after merging spike B's part 3 (`37bdfa9`), whose O2 added `LobbyCanvasTx.insert` / `LobbyEngineCore.prepareInsert` on the port: `LobbyTx.insert(elements)` in `canvas/api/lobby-canvas.ts` (`@owner 2C`), delegated by `impl.ts` to the board page's port transaction (a stub naming 2C on a bare C0 port), member row `tx.insert` (status `board`; §2.2 regenerated: 100 members, 40 board page), a contracts test for both cases, and `insert` in 3b's and 3f's in-memory test canvases. Additive for callers; an implementor of `LobbyTx` must add it. 3b's template insert (`template-insert.ts` `insertElements`) already called it when present. | integration (contracts), 2C |
+| W3-10 | 2026-09-30 | CR-3F-3 (3f, wave 3; W3-8), **applied by owner 3CF at wave 3b** (commit `CR: follow camera hook`, for the contracts owner's review): `LobbyFollow.start(sid, options?)` with `FollowOptions.camera?: (input: FollowCameraInput) => FollowCamera | null` in `canvas/api/lobby-canvas.ts` (the rule gets the followed `view`, this canvas's size and the default fit; null keeps the fit), the three types exported from `canvas/api/index.ts`; 3c's `parts/follow.ts` calls the rule on every `view` and resize, falls back to the fit when it returns null, a non-finite camera or throws, and replaces the options when the session already followed is started again (no second `followChanged`). Additive: the member table, its owners and statuses are unchanged (§2.2 needs no regeneration), and a `start(sid)` implementor still type-checks. Its first user is 3f's "Gather everyone" (R2-04). The rule needs the leader's zoom, which presence does not carry (a `view` is a scene rectangle), so the summon also carries the summoner's canvas size (`@draftroom/contracts` `SummonScreen`, optional in `SummonInput` and `WorkshopSummonEvent`; the api relays it); a zoom in presence (`view.z`, spike B's canvas-schema and room) would make that unnecessary and is recorded as a request. **Accepted at the wave-3b integration** (`docs/research/excalidraw/WAVE-3.md` §7), with `SummonScreen` (additive in `@draftroom/contracts`, relayed by the api only when sent). | 3CF (3c, 3f) |
+| W3-11 | 2026-09-30 | CR 3b-2 (3b, wave 3; W3-8), **applied by owner 3b at wave 3b** (commit `9f78782`, `CR:`) and **accepted**: `CanvasInputEvent`'s `wheel` and `pinch` events carry `deltaX`, `deltaY` and `deltaMode` (`canvas/api/lobby-canvas.ts`, additive), filled by 2C's `canvas/board/input.ts`. 3b's `installWheelZoom` uses them for Ctrl/Cmd+wheel and trackpad pinch below Excalidraw's 0.1, down to the whole-board fit. Touch two-finger pinch is Excalidraw's own gesture and still stops at 0.1. | 3b, 2C |
+| W3-12 | 2026-09-30 | CR 3b-6 (3b, wave 3b; commit `254aca9`, `CR:`), **accepted**: `LobbyCanvas.viewport.fit` is Lobby's own fit, from 3b's navigation part (`canvas/api/parts/navigation.ts`; one line in `impl.ts`): 80% of the canvas, never above 100%, with the whole-board fit as its floor instead of 0.1. The part's whole-board bounds are one pass over the elements. The member table is unchanged (the row still reads 2C / C0 port; the part composes it), so §2.2 needs no regeneration. | 3b |
+| W3-13 | 2026-09-30 | CR-3A-6 (3a, wave 3; W3-8), **applied by owner 3a at wave 3b** (commit `a61408c`, `CR:`) and **accepted**: 3a's part `canvas/api/parts/tools.ts`, wired into `setTool` / `tool` in `impl.ts` (the member table is unchanged). `setTool('highlight')` is the engine's pen with the highlight shade at opacity 50 as the next style (restored afterwards) and each stroke stamped as it starts (width 9, `customData.lobby.kind = 'highlight'`); `setTool('hand')` for read-only roles is the neutral state, reported as `hand`. **Review note, accepted as an exception:** the stamp is an in-place `mutateElement` on `appState.newElement` from `api.onChange`, outside `transact`, because `kind` is create-only and must be on the element before its first push (the core holds a stroke being drawn and pushes it once at gesture end; the e2e checks that bob receives `kind: 'highlight'` and that one undo removes the stroke). The strict alternative, a port hook that decorates a new gesture element before its first push, is recorded as a request to spike B O2 with CR-3A-9 (W3-16). | 3a |
+| W3-14 | 2026-09-30 | 3b's level-of-detail pass (plan §8.5, wave 3b, commit `69310ec`) on 2C's `canvas/board/session.ts` (two calls), **accepted as temporary**: `installBoardOverrides` is handed a Proxy of the engine API (`canvas/lod/cull.ts`) that merges a render-only far offset (1e9) for the culled members of cached frames into the render-override snapshot. `RenderOverrides`' own state (hidden, moving, the hit guard, the selection filter) never sees the culled ids, and no `RenderOverrides` entry is replaced, but it bypasses the one-owner rule of `canvas/overrides.ts` in spirit. It goes away with CR 3b-5 (a render-only cull source in `RenderOverrides`, spike B O5; W3-16): `session.ts` then passes `api` again. | 3b, 2C |
+| W3-15 | 2026-09-30 | Wave-3b integration decisions (`WAVE-3.md` §7), not frozen files: CR 3E-4 (3e's request to 3a) **applied by the integration** in 3a's `features/canvas-ux/ported/context-menu-open.ts` (the menu's `target.ids` is what the right-click selected, since `select()` lands a render later); 3a's `ShortcutsDialog.tsx` closes its modal `<dialog>` before focusing the canvas (3b's finding). The merge of `main` (bridge release R0, `2a4e5a6`): the sync keeps spike B's `engine-switch.ts` pre-open seam as the one list of checks (R0's `r0/pre-open.ts` re-exports it and registers R0's born-after check at load, with R0's reviewed classification); the api reads v1 and v2 bodies, `lobby-elements` snapshots and `lobby-board` archives where R0 refuses them, and keeps R0's row-driven refusals (`body_version` 2, `boards.new_canvas`), dormant because nothing on this branch writes them yet. | integration |
+| W3-16 | 2026-09-30 | Requests recorded and **not applied** (`WAVE-3.md` §6, §7): to spike B, CR 3b-5 (a render-only cull source in `RenderOverrides`, O5), CR 3b-7 (O(1) `get` / `bounds` in `port-impl.ts`, O2), CR 3b-8 (no element scan on a camera-only `onChange`, O2), CR 3b-9 (`shouldCacheIgnoreZoom` during Lobby's continuous zooms, O2 with 2C's `CameraTween`), CR-3A-8 (the laser for read-only roles: `engine/interaction.ts`, `tools/tools.ts`), CR-3A-9 (the e2e facade's `tool` / `setTool` through `LobbyCanvas`: 2C's `session.ts` and `test-facade.ts`; longer term `highlight` and the read-only `hand` as port tool names, and the gesture-element hook of W3-13), CR-3CF-1 (an optional sender zoom `view.z` in presence: the lead's canvas-schema protocol, O1, O2/O3, then 2C and `RemoteCursor.zoom`); to 2C, CR-3A-10 (a resize bumps the viewport signal, so `viewport.screenRect()` reads are reactive); still open from W3-8: CR-3A-3, CR-3A-4, CR-3A-5, CR-3A-7. For the Excalidraw build's cut-over (2F with 2B): write `board_snapshots.body_version` 2 for v2 bodies and `boards.new_canvas` true for boards born on the new canvas (DEPLOY.md "Bridge release R0"; converted boards keep false), and at the same time drop R0's refusals of them from this api. | integration |
+| W5-1 | 2026-09-30 | CR by 2A as contracts owner (§0a), **`CONTRACTS_REV` 7**, commit `CR: tombstones redacted, font 7, signed URLs fail closed (rev 7)`. (1) **W5-02, tombstones carry no content:** `hash.ts` gains `TOMBSTONE_KEYS` (`id`, `type`, `isDeleted`, `version`, `versionNonce`, `index`, `updated`) and hashes a deleted element by them only (`HASH_SAMPLE_DIGEST` re-pinned; the Chromium half reads it from `hash-sample.ts`); `elements.ts` gains `redactTombstone(el)` (those keys over the type's neutral values: a valid `WireElement` with no text, author, customData, link, file id (`REDACTED_FILE_ID`), geometry or membership) and `isRedactedTombstone`. `protocol.ts` documents it: every tombstone a client receives (snapshot, catch-up, a `c` op, a reject's `el`) is redacted; a delete reaches sessions that held the element as the exact patch of what the deleting push changed (corrected in W5-2); an undelete is always a `c` op of the full live element; a receiver may keep content it already holds under a tombstone (only `TOMBSTONE_KEYS` are authoritative). The test snapshot route keeps full rows (secret + test hooks only). Plan §2.4.2 revised. Consumers: **2C** (the engine core and the board page get redacted tombstones from joins and catch-ups: no parse change, they are `WireElement`s; an undo of a delete whose local copy was replaced by the redacted form comes back complete with the server's full `c` op one round trip later; keeping the local copy's content when a redacted `c` arrives for an element it holds is allowed and avoids that), **2B** (the roll-forward's digests and the B8 drill hash tombstones by the same keys; nothing else changes), **2E** (`e2e/spike-b/support/snapshot.ts` `divergence` already compares through `canonicalElement`). (2) **D3:** `fontFamily` 7 (Lilita One) is allowed (`LOBBY_FONT_FAMILIES` [5, 6, 7, 8], `TextElement`, engine `LobbyFontFamily`), and the server's text-metrics table has its metrics (measured in Chromium with `CALIBRATE_FAMILIES=7`, merged; 5, 6 and 8 unchanged). Consumers: 2D (template headings), 2C/3e (`canvas/export/fonts.ts` still lists [5, 6, 8] for SVG font embedding, and the paste mapping of other families), 2B (`tldraw-import` `lineHeightOf` answers 1.25 for every family; Lilita One's is 1.15 if the converter ever emits 7). (3) **V2 re-check, signed URLs:** `isAllowedLink` decodes ASCII escapes leniently (a malformed escape no longer makes the check give up), fails closed on a query that still decodes after four rounds, and knows `X-Goog-*` and `X-Amz-Algorithm`. (4) **D5:** `GUEST_ITEM_CAP` is per guest uid, live and deleted items counted (the room's change, §0a 2A). Additive for every reader; the one behavioural change for clients is (1). | 2A (contracts owner) |
+| W5-2 | 2026-09-30 | CR by 2A as contracts owner, **`CONTRACTS_REV` 8**, commit `CR: a delete's broadcast is the exact patch (rev 8)`: rev 7 sent a delete to the sessions that held the element as a `life` patch alone. The e2e run of the Excalidraw suite showed why that is wrong: the client diffs its pushes against its copy of the server's element, so an arrow whose bindings the deleting push nulled (a mind map's lines, deleted with their branch) kept its old bindings in every copy, and its undo never sent them back ("the line is not bound"). A delete is again the patch of what the push changed (a session that held the element live may see words written in the deleting op itself); only `c` ops of tombstones are redacted, and joiners, catch-ups and refusals still get the redacted form. Doc comments in `protocol.ts`, plan §2.4.2. | 2A (contracts owner) |
+| W5-3G-1 | 2026-09-30 | CR-W5-3G-1 by 3g (wave 5, W5-13; `CR:` commit on `engine/w5f-3g`), **accepted at the wave-5 feature integration** (additive and optional; `docs/research/excalidraw/WAVE-3.md` §8): `LobbyFiles.crop?(id): boolean` in `canvas/api/lobby-canvas.ts` (`@owner 3g`, optional, so no implementor or test canvas changes), member row `files.crop` (status `part`, in `LANDED_PARTS`; §2.2 updated by hand: 101 members, 14 landed parts). It opens Excalidraw's crop editor on an image or placed page (selecting it), after putting it back on its thumb, and refuses cards, read-only sessions and locked images. The files part (3g's `canvas/api/parts/files.ts`) also keeps every cropped image, and the one being cropped, on its thumb: a crop is in the pixels of the file the engine loaded, and every tab loads the thumb first. Requests to 2C, **not applied**: CR-W5-3G-2 (the same rule inside `canvas/files/swap.ts`, so the part can drop its filtered view), CR-W5-3G-3 (the derivative swap does not reliably stick on the board page: in an isolated run a local `@display` fileId was put back to the wire id within a few frames of `updateScene`, then `retainOnly` dropped the display entry and the swap stalled; in a whole-folder run the upgrade held; `media-edit`'s crop-after-upgrade test skips itself when it does not), CR-W5-3G-4 (`canvas/input/keymap.ts` blocks Enter, so only Escape or a click ends a crop; and `CanvasInput`'s dblclick runs the lease flow even when a feature's `input` listener called `handled()`), CR-W5-3G-5 (2C and 3e, W5-14: the export-only files map hands 3g's `cardFaceBlob` (`file-card/ported/card-face.ts`) to the engine for a card's fileId instead of the bare cover). | 3g |
+| W5-F1 | 2026-09-30 | Wave-5 feature integration decisions (`docs/research/excalidraw/WAVE-3.md` §8), in owners' files that are not frozen: the board menu's View group is the navigation feature's (3b's `VIEW_MENU`); 3a's copies of the same six rows are removed, and `review-w5.test.ts` checks that no two board-menu or context-menu entries of one group run the same command across `CANVAS_FEATURES`. The engine's text editor is named by canvas-ux alone (3a's `editorName`); 3i's second writer is removed. 3e's `canvas/api/parts/export-faces.ts` is the one file-card face in exports; 3g's unwired `file-card/ported/card-face.ts` is removed (CR-W5-3G-5 is answered by 3e's part). 2C's `board-features` probe drops a URL no feature takes, since 3g's link cards take a lone http(s) URL at priority 100 (D2). No member, signature or registry change. | integration |
+| W5-ENG-1 | 2026-09-30 | **Wave-5 engine integration** (`docs/research/excalidraw/W5-ENGINE.md`): `engine/w5-2a` `11a6e6c`, `engine/w5-2b` `4d8ecf8` and `engine/w5-2c` `564f595` merged `--no-ff`. The CR commits reviewed with both ends: **W5-1 and W5-2 (`CONTRACTS_REV` 7 and 8) accepted.** Producer (2A, `room/element-room.ts`, `room/merge.ts`): every tombstone that leaves the room is `redactTombstone(row)` (the reset snapshot, catch-ups, `c` ops of tombstones, a refusal's `el`); a delete reaches the sessions that held the element live as its exact patch; an undelete is a full `c` op; the rows stay full (Recently deleted, the test snapshot). Consumers: 2C merged 2A through `8bbac32` (rev 8, not rev 7) and needs no parse change; `canvas/sync/core/engine.ts` `keepTombstoneContent` keeps the content a tab holds and takes exactly `TOMBSTONE_KEYS` from a redacted `c` op, the keys `hash.ts` makes authoritative, so a tab with content, a joiner with the redacted form and the test snapshot's full row hash alike (the facade's convergence hash is `hash.ts`, and spike B's `divergence` compares through `canonicalElement`). 2B's roll-forward hashes its merged view through `canonicalElementList` (report digests only) and its backups digest the `lb_*` tables' stored bytes, which rev 7 does not change; its restore drill opens the element store, and the integration moved it to 2A's renamed `BoardStore.snapshotRows()` (the merged tree did not typecheck; 2 of 7 `excalidraw-backups` tests threw). The `fontFamily` 7 allowance (D3) is server-side (limits, the text-metrics table) and in the engine type; its readers (2D's templates, 3e's SVG font list) are the feature workflow's. **CR-2B-1** (tombstone keys in the room's index cache) is answered by 2A's own V3 fix, the same rule; 2B's real-process test `rollforward-keys-open` made its key share through the room, which now re-keys it, so the integration writes the share into the file as an older room left it (the test still fails with `rollforward.ts` at `f336ae4`). **CR-2B-3** (`'2B'` range in 2E's `e2e/spike-b/support/ports.ts`) accepted; the integration adds `'engine-int'` [6520, 6559] the same way (and to the B8 stand-in), with a harness self-test. Not frozen, **accepted as built**: 2A's `GET /internal/canvas` (both engines; R0's 404 = tldraw), the api's canvas probe and `newCanvas` marks, `DRAFTROOM_BOOT_MAINTENANCE`, the room limits (sockets per user and board 12, per process 128, welcome row budget, leases per user 8, `DRAG_MAX_MS`); 2B's backup format `lobby-elements-converted` (DEPLOY.md's format contract now names it), `CONVERTER_VERSION` 2 and the additive `RollForwardReport` fields; 2C's additive interfaces (`OfflineEntry.lost` / `lostDoc`, `LobbyCanvasTx.read`, `RenderOverrides.setCulled` / `setPreviewHidden`, `overridesLodTarget`, the socket heartbeat: the room answers the protocol's existing `ping` with `pong`). CR 3b-5 retires W3-14's temporary Proxy (`session.ts` passes the engine API again). One integration fix in 2C's core: `SaveInputs.unknown` (optional, additive), a queue not read yet keeps Saved away without counting as an offline change (A11Y-14, CR-3I-6). `CONTRACTS_REV` stays 8. | integration |
+| W5-ENG-2 | 2026-09-30 | Requests recorded and **not applied** (`W5-ENGINE.md` §6), all to the contracts owner (2A) unless named: push receipts (2C: a push id recorded with its COMMIT, the lost ids named in `hello` and answered in `welcome`; it decides the one lost-push case 2C's write counting cannot, and doc-key ABA); an optional `view.z` in presence `SceneRect` (CR-3CF-1, then 2C's `RemoteCursor.zoom`); a skip-undo option in `TransactOptions` (CR-3F-1, the +1 undo step); CR-2B-2 (the polygon outlines exposed to 3a's tools through canvas-schema or `canvas/api`; the style panel should not give a polygon's holder a stroke); CR-3A-9's longer-term part (`highlight` and the read-only `hand` as port tool names, the gesture-element hook of W3-13). | integration |
+| W4-WEB-1 | 2026-10-01 | **Wave 4 part 1, the web production path and the CSP** (owner W4-WEB, `engine/w4a-web`; `docs/EXCALIDRAW-CUTOVER.md` G2 and G3, the lead's LEAD-1 and LEAD-2). Files outside the wave freeze, by the task: (1) `App.tsx`, `lib/board-engine.ts` and `build/excalidraw-assets.ts` gate the Excalidraw board route and `/excalidraw-assets/` on **`VITE_LOBBY_ENGINE=excalidraw` alone**, so the production build (Clerk sign-in, real tickets) ships them; the dev-auth guard still gates the spike pages, spike B's board page (`canvas/board/route.tsx`: `?page=spike` and `VITE_LOBBY_BOARD_PAGE=spike`, inlined so the chunk folds), the facade and the debug handles. The default build is unchanged (0 of 16 engine markers, no `excalidraw-assets/`: `e2e/tests/build-engine-markers.spec.ts`). (2) `index.html` has no inline script: the theme boot is `public/theme-boot.js`, and zod is jitless through `public/zod-jitless.js`, both blocking classic head scripts (a module cannot set zod's config in time: Vite merges a page's module scripts into one entry whose shared chunk, zod with the api's schemas, runs first). (3) LEAD-1: `canvas/board/LobbyBoardPage.tsx` makes the session in the effect that disposes it (StrictMode's cleanup-and-rerun gets a fresh session), and 2C's `canvas/sync/adapter/offline-idb.ts` gives up a lock whose `release()` came before the grant (one-line fix with a test; 2C told through this row). (4) LEAD-2: `ported/navigation/start-view.ts` consumes `?template=` (the address bar, the tab's marker) only once the insert is confirmed; a failure keeps both and offers Try again (`onTemplateFailed(retry)`). Suites: §9.3's `excalidraw:prod`, `excalidraw:dev` and `csp:cutover`. | W4-WEB |
+| W4-API-1 | 2026-09-30 | **Wave 4, owner W4-API (api cut-over gaps, branch `engine/w4a-api`)**, not frozen files. **G5 built:** the restore point per converted board (plan §5.5, runbook step C12) is the api's `POST /internal/checkpoints/engine-migration` (+ `GET …`, `GET …/:runId`; `checkpoint-all-cli.ts --engine-migration`), the same run machinery as R0's run-all: one automatic `engine_migration` checkpoint ("Moved to the new canvas", `body_version` 2, no author) per board whose row is not `new_canvas` and whose v2 snapshot carries the converter's `lb_doc.import` record; idempotent (a board with its restore point is `unchanged`, whatever it looks like now; a repeat reads nothing from sync); `skipped` with `new-canvas`, `not-converted` (no file before the move) or `tldraw` (a v1 snapshot); 409 `WRONG_CANVAS` while the api's sync runs tldraw (nothing starts). The Origin-check exemption in `app.ts` names exactly the two internal POSTs (`INTERNAL_CHECKPOINT_POSTS`). **G6 verified, no change needed:** W3-16's request was applied by 2A at wave 5 (`canvas-engine.ts`): on the new canvas the api writes `boards.new_canvas = true` for every board it creates and `body_version` 2 for every v2 body, converted boards keep false, and R0's refusals (tickets, duplicate, export, checkpoints, previews, restores) are off (`new-canvas-build.test.ts`); `e2e/excalidraw/cutover-api.spec.ts` checks on the real stack that a board born on the Excalidraw build opens and saves, carries no `newCanvas` mark, and is what the restore-point run reports as born here. Runbook C12 (DEPLOY.md "R0 at the cut-over" step 6). | W4-API |
+| W4B-1 | 2026-10-01 | CR by 2A as contracts owner (§0a), **`CONTRACTS_REV` 9**, commit `CR: doc-key clocks, CLOSING notice, links normalised (rev 9)`. (1) **Doc-key ABA (V1 low, CR-W5-FIX-2): `welcome.docClocks` and `snapshot.docClocks`**, optional `record<key, Clock>`: the clock every `lb_doc` key was last written at, removed keys included (`lb_doc` already keeps it); the room always sends it, read with `doc` at the hello. **Consumer 2C (the client side, `canvas/sync/core/engine.ts` `decideLostDoc`):** for a doc write lost with the socket compare `docClocks[key]` with the lost push's `base`: at or below it nothing landed since and the write goes again; above it a write landed after the push was built: this tab's own when `welcome.doc[key]` equals the value it wrote (done), else someone else's, which stands (superseded, the person told as for elements). That closes R9 (A's lost-but-landed red, B's blue back, A's reconnect: blue stays). (2) **DEF-3F-1's server side:** the `changes` frame after a cached reset snapshot now carries `doc: {set}` with the keys written since the cache's clock (null for a removed key), so snapshot + changes equal the board at `clock` for the document too; the schema was already `doc?: DocSet` (no parse change; 2C's core already takes the welcome's document and applies `changes.doc`). (3) **SMK-2: the `CLOSING` notice** (`NOTICE_CODES` + `CLOSING`, `detail` = the terminal reason, `MAINTENANCE` included), sent right before every 4099 close of an upgraded socket on the Excalidraw engine (the room's `Session.closeWith`, the service's refusals, app.ts's ticket and maintenance refusals). **Consumer: the web transport** (`canvas/sync/transport/socket.ts`, done by 2A in this round with 2C's file: a close that follows the notice on the same socket is reported as `{code: 4099, reason: detail}` whatever the close frame carries, so the board page's reason screens work through an edge that strips close codes). A tldraw-protocol client never receives it (the tldraw engine path is unchanged). (4) **XSS-F3: `isAllowedLink`** reads a relative link normalised (`new URL(link, base)`: `/..//evil.com`, `/a/..//evil.com` → path `//evil.com`, refused; any backslash refused) and requires an absolute link to spell its authority (`https:evil.com`, `https:/evil.com`, a leading space: refused), one function for the server, the web's link cards and the converter. Additive for every reader except (4), which turns a few never-legitimate links `INVALID`. | 2A (contracts owner) |
+| W4B-2F-1 | 2026-10-01 | **Wave 4b, owner 2F (api), branch `engine/w4b-2f`: security audit L2, L3, L4.** Not frozen files; no `CONTRACTS_REV` change of its own (no canvas-schema change; merged after 2A's rev 9, W4B-1, so the integration is at rev 9). **L2:** `POST /api/boards/:bid/link-preview` refuses name-only guests, 403 `GUEST_ACCOUNT_REQUIRED`, both through the guests root guard (`GUEST_REFUSED_ROUTES`) and in the route after the board check (the canvas never asks for a guest: their links are Lobby-relative). **L3 (lead decision):** name-only guests export and download originals only under the new export policy value `everyone-including-guests` (`@draftroom/contracts` `EXPORT_POLICIES`, `policyIncludesGuests`; migration `0023_export_policy_guests` widens the CHECK, additive for R0); under `everyone` (the default) and `editors` they are limited whatever their role, people with an account keep their role's rights. The Share dialog's Export and download section gained the checkbox "Guests who joined with just a name can export and download too" (`share-export-policy-guests`, off until an owner turns it on), its help text says so, the client card gets a line about name-only clients (`share-client-export-guests`), and the Export dialog's sentence names guests. Consumers: every web gate already passes `nameOnlyGuest` and needs no change; `exportCertainWith` is certain under `everyone` only once role and kind are known. **L4:** `GET /internal/boards/:bid/file-refs` answers every version the board cannot show as `missing` (the contract's `foreign` list stays for the shape and is always empty; sync treats both as `INVALID`), and a trashed board is 404 `board-not-found` like `/files` (an archived one still answers; `workshop-state` unchanged). Tests: `apps/api/test/{engine-internal,features/link-preview/link-preview,features/guests/refusals,features/export-control/{export-control,guests-media}}.test.ts`, `packages/db/test/migrate.test.ts`, the web rule tests, `e2e/tests/client-defaults.spec.ts` (its last test now chooses `everyone-including-guests`). | 2F |
+| W4-REMOVAL-1 | 2026-10-01 | **Wave 4 part 2, the tldraw removal (branch `engine/w4b-int` → `engine/excalidraw`; docs/EXCALIDRAW-CUTOVER.md G10, plan §7.1 lockfile PR #2).** No wire change: `CONTRACTS_REV` stays 9. Frozen-package changes, recorded here as the contracts owner's rule asks: (1) `@draftroom/canvas-schema`'s **root** is tldraw-free: it exports `FILE_CARD_TYPE` and the plain `FileCardShapeProps` only; `draftroomSchema`, `customShapeSchemas`, `fileCardShapeProps`/`fileCardShapeMigrations`/`fileCardVersions` and the `FileCardShape` type moved to `@draftroom/tldraw-import/schema` (the subpath exports `./protocol` … `./engine` are unchanged). (2) `@draftroom/tldraw-import` gains `./schema`, `./tldraw` (the tldraw symbols Lobby's tests may use: nothing else imports `@tldraw/*`), `./archive-v1` (the v1 board archive, moved from board-ops with its remap and board index; the api imports it), `./templates` (the tldraw template records, moved from `@draftroom/templates`: the parity tests' and fixtures' reference) and `./test-fixtures`; it depends on `@draftroom/board-ops` and `@draftroom/templates`. (3) `@draftroom/board-ops`' root exports `plainTextOf` only (the tldraw record logic left; `./elements` unchanged, plus `importElements`; new `./common` and `./archive-common`). (4) `@draftroom/templates`' root re-exports `./plan` (its tldraw emitter moved); new `./builder`, `./common`, `./source`. (5) sync: `DRAFTROOM_ENGINE` may be unset or `excalidraw`; `tldraw` is refused naming the rollback (R0's deploy); `GET /internal/canvas` always answers `excalidraw`; the TLSocketRoom path, R0's born-after pre-open check and the tldraw board routes are gone (the ElementRoom's routes stand). (6) web: `VITE_LOBBY_ENGINE` and `VITE_TLDRAW_LICENSE_KEY` are gone; the spike pages keep the dev-auth guard alone. |
+| W4C-2C-1 | 2026-10-01 | **Wave 4c, owner 2C (web engine), branch `engine/w4c-2c`: the consumer half of W4B-1 (1) refined, no wire change (`CONTRACTS_REV` stays 9).** The V1 verifier's round-6 medium: two OWN writes of one board-document key within one round trip go out as two pushes on the same base clock (the client clock moves only on `changes`/welcome/snapshot); with the first landed and acked before the socket dropped and the second lost, `docClocks[key]` (the first write's own landing) was above the second's base, so the client rule read it as another user's write, dropped the second as superseded and told the person someone else had changed the setting with nobody else on the board. **The consumer rule now reads:** for a doc write lost with the socket (or a closed page), compare `docClocks[key]` with the lost push's base **lifted to the `ack.clock` of the last of this tab's own doc writes of the key that the push was built behind and that was acked before the cut** (`inflightDocAhead` / `ackedDocClock` in `canvas/sync/core/engine.ts`, the doc counterpart of `Sent.ahead`; `LostDocRecord.clocks`, per key, carries it through the offline queue, additive and optional): at or below it nothing of anyone else's landed since and the write goes again; above it the server's value stands unless it is the one this tab wrote, and the person is told. Relies on the room's ack `clock` being the batch clock it writes to `lb_doc.clock` (`merge.ts` `docSet(key, this.clock, …)`, `element-room.ts` `ackDelivery`), already the case; a key in `ack.docDenied` does not count. Residual (design limit, DB2): the first write landed with its ack lost too and the second never arrived reads as superseded (push receipts, W5-ENG-2). Tests: `apps/web/src/canvas/sync/core/w4c-fixes.test.ts`; the verifier's real-room probes DB1/DB1c/DB1q 20/20. | 2C |

@@ -1,6 +1,5 @@
-import type { TLFrameShape } from '@tldraw/tlschema'
-import { CONTENT_Y, createBoardBuilder, PAD } from '../builder.ts'
-import type { TemplateDefinition } from '../types.ts'
+import { CONTENT_Y, PAD, type PlanFrame } from '../builder.ts'
+import type { TemplateSource } from '../source.ts'
 
 const PANEL_W = 400
 const PANEL_H = 540
@@ -23,14 +22,13 @@ const BRIEF = 'Brief'
 const panelName = (i: number) => `Panel ${i + 1}`
 const SECTIONS = [BRIEF, ...BEATS.map((_, i) => panelName(i))]
 
-export const storyboard: TemplateDefinition = {
+export const storyboard: TemplateSource = {
   id: 'storyboard',
   name: 'Storyboard',
   description: 'Plan a short film or ad beat by beat: six panels with image slots, shot notes and timings.',
   category: 'visual',
   sections: SECTIONS,
-  build(ctx) {
-    const b = createBoardBuilder(ctx)
+  plan(b) {
     const totalW = PANEL_COUNT * PANEL_W + (PANEL_COUNT - 1) * PANEL_GAP
 
     const brief = b.section({
@@ -62,7 +60,7 @@ export const storyboard: TemplateDefinition = {
       label: 'Reference frames: films, ads or photos that set the look',
     })
 
-    const panels: TLFrameShape[] = []
+    const panels: PlanFrame[] = []
     BEATS.forEach((beat, i) => {
       const panel = b.section({
         x: i * (PANEL_W + PANEL_GAP),
@@ -99,7 +97,5 @@ export const storyboard: TemplateDefinition = {
     })
 
     b.chain(panels, { size: 'l' })
-
-    return { records: b.finish() }
   },
 }

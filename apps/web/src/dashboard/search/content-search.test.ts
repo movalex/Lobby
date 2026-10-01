@@ -1,7 +1,8 @@
-import { createDeepLinkString, parseDeepLinkString, type TLShapeId } from 'tldraw'
 import { describe, expect, it } from 'vitest'
+import { parseLegacyDeepLink, readDeepLink } from '../../lib/deep-link.ts'
 import {
   contentSearchApplies,
+  HIT_LINK_FORMAT,
   hitHref,
   isSearchable,
   kindLabel,
@@ -33,33 +34,63 @@ describe('content search helpers', () => {
     expect(isSearchable('z'.repeat(201))).toBe(false)
   })
 
-  it('builds the same deep link as tldraw, and it round-trips', () => {
-    for (const ids of [
-      ['shape:abc123'],
-      ['shape:with.dots'],
-      ['shape:ünï cødé/?&#'],
-      ['shape:a', 'shape:b'],
-    ]) {
+  it('builds the legacy deep link as tldraw 5.4.2 did (checked against its strings on 2026-09-30), and it round-trips', () => {
+    // createDeepLinkString({ type: 'shapes', shapeIds }) of tldraw 5.4.2: 's' + the ids without 'shape:',
+    // URI-encoded with '.' as %2E, joined by '.'
+    const cases: [string[], string][] = [
+      [['shape:abc123'], 'sabc123'],
+      [['shape:with.dots'], 'swith%2Edots'],
+      [['shape:ünï cødé/?&#'], 's%C3%BCn%C3%AF%20c%C3%B8d%C3%A9%2F%3F%26%23'],
+      [['shape:a', 'shape:b'], 'sa.b'],
+    ]
+    for (const [ids, theirs] of cases) {
       const ours = shapesDeepLink(ids)
-      expect(ours).toBe(createDeepLinkString({ type: 'shapes', shapeIds: ids as TLShapeId[] }))
-      expect(parseDeepLinkString(ours)).toEqual({ type: 'shapes', shapeIds: ids })
+      expect(ours).toBe(theirs)
+      expect(parseLegacyDeepLink(ours)).toEqual({
+        kind: 'legacy-shapes',
+        parts: ids.map((id) => id.replace(/^shape:/, '')),
+      })
     }
   })
 
-  it('opens shapes zoomed with ?d= and comments with ?thread=', () => {
-    expect(hitHref('b-board1', { kind: 'note', objectId: 'shape:n1' })).toBe('/b/b-board1?d=sn1')
-    expect(hitHref('b-board1', { kind: 'frame', objectId: 'shape:a.b' })).toBe('/b/b-board1?d=sa%252Eb')
-    const url = new URL(hitHref('b-board1', { kind: 'frame', objectId: 'shape:a.b' }), 'http://x')
-    expect(parseDeepLinkString(url.searchParams.get('d') ?? '')).toEqual({
-      type: 'shapes',
-      shapeIds: ['shape:a.b'],
-    })
+  it('opens shapes with ?el= (the one board page since wave 4 part 2) and comments with ?thread=', () => {
+    expect(HIT_LINK_FORMAT).toBe('el')
+    expect(hitHref('b-board1', { kind: 'note', objectId: 'shape:n1' })).toBe('/b/b-board1?el=n1')
+    expect(hitHref('b-board1', { kind: 'frame', objectId: 'shape:a.b' })).toBe('/b/b-board1?el=a.b')
     expect(hitHref('b-board1', { kind: 'comment', objectId: 'thr_AAAAAAAAAAAA' })).toBe(
       '/b/b-board1?thread=thr_AAAAAAAAAAAA',
     )
     expect(hitHref('b-board1', { kind: 'resolved-comment', objectId: 'thr_AAAAAAAAAAAA' })).toBe(
       '/b/b-board1?thread=thr_AAAAAAAAAAAA',
     )
+    // the legacy format is still built on request (dots encoded, then URL-encoded again in the query)
+    expect(hitHref('b-board1', { kind: 'frame', objectId: 'shape:a.b' }, 'd')).toBe('/b/b-board1?d=sa%252Eb')
+    const url = new URL(hitHref('b-board1', { kind: 'frame', objectId: 'shape:a.b' }, 'd'), 'http://x')
+    expect(parseLegacyDeepLink(url.searchParams.get('d') ?? '')).toEqual({
+      kind: 'legacy-shapes',
+      parts: ['a.b'],
+    })
+  })
+
+  it('on the new canvas: ?el=<element id> (dots kept, the board page also reads the legacy ?d=)', () => {
+    expect(hitHref('b-board1', { kind: 'note', objectId: 'shape:n1' }, 'el')).toBe('/b/b-board1?el=n1')
+    const href = hitHref('b-board1', { kind: 'frame', objectId: 'shape:a.b' }, 'el')
+    expect(href).toBe('/b/b-board1?el=a.b')
+    expect(readDeepLink(new URL(href, 'http://x').toString())).toEqual({ kind: 'elements', ids: ['a.b'] })
+    expect(hitHref('b-board1', { kind: 'note', objectId: 'shape:bad id' }, 'el')).toBe('/b/b-board1')
+    expect(hitHref('b-board1', { kind: 'comment', objectId: 'thr_AAAAAAAAAAAA' }, 'el')).toBe(
+      '/b/b-board1?thread=thr_AAAAAAAAAAAA',
+    )
+  })
+
+  it('the legacy link reader agrees with tldraw 5.4.2’s own deep-link strings (recorded 2026-09-30)', () => {
+    // viewport: 'v' + x.y.w.h rounded + the page id without 'page:'; page: 'p' + the page id without 'page:'
+    expect(parseLegacyDeepLink('v-10.20.300.200.two')).toEqual({
+      kind: 'legacy-view',
+      bounds: { x: -10, y: 20, w: 300, h: 200 },
+      pageId: 'page:two',
+    })
+    expect(parseLegacyDeepLink('pthree')).toEqual({ kind: 'legacy-page', pageId: 'page:three' })
   })
 
   it('says what was found in plain words', () => {

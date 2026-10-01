@@ -1,14 +1,5 @@
-import { createTLSchema, defaultBindingSchemas, defaultShapeSchemas } from '@tldraw/tlschema'
-import { FILE_CARD_TYPE, fileCardShapeMigrations, fileCardShapeProps } from './file-card.ts'
-
+// The package root: tldraw-free since wave 4 part 2 (the tldraw schema of the file card and the one
+// tldraw server schema are packages/tldraw-import/src/schema.ts). The Excalidraw contracts are subpath
+// exports: `./protocol`, `./groups`, `./custom-data`, `./limits`, `./elements`, `./doc`, `./refs`,
+// `./hash`, `./invariants` and `./engine`.
 export * from './file-card.ts'
-
-export const customShapeSchemas = {
-  [FILE_CARD_TYPE]: { props: fileCardShapeProps, migrations: fileCardShapeMigrations },
-}
-
-/** The ONE server schema. The client builds the identical schema from [...defaultShapeUtils, FileCardShapeUtil]. */
-export const draftroomSchema = createTLSchema({
-  shapes: { ...defaultShapeSchemas, ...customShapeSchemas },
-  bindings: defaultBindingSchemas,
-})

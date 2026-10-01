@@ -26,7 +26,7 @@ describe('createSyncServer lifecycle', () => {
     const wsClosed = new Promise<void>((resolve) => {
       ws.onclose = () => resolve()
     })
-    expect(t.server.registry.has('board-life')).toBe(true)
+    expect(t.server.elementRooms.roomIfOpen('board-life')).not.toBeNull()
 
     // A seed whose body never finishes arriving is still being read when close() runs.
     const seed = rawExchange(t.port, (s) => {
@@ -41,7 +41,7 @@ describe('createSyncServer lifecycle', () => {
     await t.server.close()
     await wsClosed
     await seed // the server hung up on the half-sent body
-    expect(t.server.registry.has('board-life')).toBe(false)
+    expect(t.server.elementRooms.roomIfOpen('board-life')).toBeNull()
     expect(listFiles(t.roomsDir).filter((f) => f.includes('board-half'))).toEqual([])
     expect(await portIsFree(t.port)).toBe(true)
     await t.stop() // idempotent
@@ -63,7 +63,7 @@ describe('createSyncServer lifecycle', () => {
       },
       20_000,
     )
-    await waitFor(() => upgraded && t.server.registry.has('board-life'))
+    await waitFor(() => upgraded && t.server.elementRooms.roomIfOpen('board-life') !== null)
     const started = Date.now()
     await t.server.close()
     expect(Date.now() - started).toBeLessThan(3_000)
@@ -79,7 +79,7 @@ describe('createSyncServer lifecycle', () => {
         ws.onclose = resolve
       })
       expect([ev.code, ev.reason]).toEqual([4099, 'NOT_AUTHENTICATED'])
-      expect(t.server.registry.has('board-life')).toBe(false)
+      expect(t.server.elementRooms.roomIfOpen('board-life')).toBeNull()
       expect(listFiles(t.roomsDir)).toEqual([])
 
       const raw = await rawExchange(t.port, (s) =>
@@ -88,7 +88,7 @@ describe('createSyncServer lifecycle', () => {
         ),
       )
       expect(raw).toMatch(/^HTTP\/1\.1 400 Bad Request/)
-      expect(t.server.registry.has('Board-Life')).toBe(false)
+      expect(t.server.elementRooms.roomIfOpen('Board-Life')).toBeNull()
     } finally {
       await t.stop()
     }

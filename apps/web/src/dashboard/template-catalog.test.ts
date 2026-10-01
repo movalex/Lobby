@@ -1,6 +1,7 @@
+import { createBoardBuilder, planTemplate } from '@draftroom/templates/plan'
 import { describe, expect, it } from 'vitest'
 import { createSampleBoard, SAMPLE_BOARD } from './sample-board.ts'
-import { CATEGORIES, filterTemplates, previewFromRecords, templateCatalog } from './template-catalog.ts'
+import { CATEGORIES, filterTemplates, previewFromPlan, templateCatalog } from './template-catalog.ts'
 import { newBoardPath, TEMPLATE_IDS } from './template-paths.ts'
 
 describe('template picker catalog (PRE-01)', () => {
@@ -73,60 +74,35 @@ describe('template picker catalog (PRE-01)', () => {
   })
 
   it('resolves frame-relative child positions to page space', () => {
-    const p = previewFromRecords(
-      [
-        {
-          typeName: 'shape',
-          id: 'shape:f',
-          type: 'frame',
-          parentId: 'page:p',
-          x: 100,
-          y: 50,
-          props: { w: 400, h: 300, name: 'A' },
-        },
-        {
-          typeName: 'shape',
-          id: 'shape:n',
-          type: 'note',
-          parentId: 'shape:f',
-          x: 10,
-          y: 20,
-          props: { color: 'yellow', scale: 1 },
-        },
-        { typeName: 'binding', id: 'binding:x' },
-      ],
-      'page:p',
-      { x: 100, y: 50, w: 400, h: 300 },
-    )
+    const b = createBoardBuilder({ x: 100, y: 50 })
+    const f = b.frame({ x: 0, y: 0, w: 400, h: 300, name: 'A' })
+    b.note(f, { x: 10, y: 20, text: 'n', color: 'yellow' })
+    const p = previewFromPlan(b.finish())
     expect(p.frames).toEqual([{ x: 100, y: 50, w: 400, h: 300, name: 'A' }])
     expect(p.items).toEqual([{ kind: 'note', x: 110, y: 70, w: 200, h: 200, color: '#ffe066' }])
+    expect(p.bounds).toEqual({ x: 100, y: 50, w: 400, h: 300 })
   })
 
   it('draws full-colour fills (palette swatches) in their colour; other shapes stay neutral boxes', () => {
-    const geo = (id: string, fill: string, color: string) => ({
-      typeName: 'shape',
-      id,
-      type: 'geo',
-      parentId: 'page:p',
-      x: 0,
-      y: 0,
-      props: { w: 100, h: 80, fill, color },
-    })
-    const p = previewFromRecords(
-      [geo('shape:a', 'fill', 'orange'), geo('shape:b', 'solid', 'orange')],
-      'page:p',
-      {
-        x: 0,
-        y: 0,
-        w: 100,
-        h: 80,
-      },
-    )
+    const b = createBoardBuilder({ x: 0, y: 0 })
+    b.geo(null, { x: 0, y: 0, w: 100, h: 80, fill: 'fill', color: 'orange' })
+    b.geo(null, { x: 0, y: 0, w: 100, h: 80, fill: 'solid', color: 'orange' })
+    const p = previewFromPlan(b.finish())
     expect(p.items.map((i) => i.kind)).toEqual(['swatch', 'box'])
     expect(p.items[0]?.color).toBe('#ffb66e')
     // The tour's Mood board shows its palette in the gallery strip.
     const tour = catalog.find((e) => e.id === 'lobby-tour')
     expect(tour?.preview.items.filter((i) => i.kind === 'swatch').length).toBeGreaterThanOrEqual(4)
+  })
+
+  it('previews exactly what each template builds on either canvas (its plan)', () => {
+    for (const e of catalog) {
+      const plan = planTemplate(e.id)
+      expect(e.preview.frames).toHaveLength(plan.nodes.filter((n) => n.kind === 'frame').length)
+      expect(e.preview.items).toHaveLength(
+        plan.nodes.filter((n) => n.kind !== 'frame' && n.kind !== 'arrow').length,
+      )
+    }
   })
 
   it('searches names, descriptions, categories and section names, within a category', () => {

@@ -8,7 +8,7 @@ import type { AddressInfo } from 'node:net'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { createFsBlobStore, createR2BlobStore } from '@draftroom/blob-store'
-import { draftroomSchema } from '@draftroom/canvas-schema'
+import { currentSchema } from '@draftroom/tldraw-import'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { backupBoard, onBackupCreated, readManifest } from '../../src/backup/backup.ts'
 import { OffsiteBackups } from '../../src/backup/offsite.ts'
@@ -19,9 +19,10 @@ import {
   offsiteKeys,
 } from '../../src/backup/offsite-manifest.ts'
 import { backupSigningKey } from '../../src/backup/signing.ts'
-import { boardDbPath, RoomRegistry } from '../../src/rooms.ts'
-import { indexFor, note, RoomClient } from '../deleted/fixtures.ts'
+import { boardDbPath } from '../../src/rooms.ts'
 import { TEST_INTERNAL_SECRET } from '../harness/tickets.ts'
+import { indexFor, note } from '../harness/tl-fixtures.ts'
+import { tldrawBoard } from '../harness/tldraw-file.ts'
 import { listFiles } from '../http/helpers.ts'
 import {
   AST_A,
@@ -40,16 +41,12 @@ import {
 const BOARD = 'offsite-board'
 const PREFIX = 'backups/sync'
 let data: TempData
-let registries: RoomRegistry[] = []
 let services: OffsiteBackups[] = []
 let logs: string[] = []
 const log = (...a: unknown[]) => logs.push(a.map(String).join(' '))
 
-function registry() {
-  const r = new RoomRegistry({ dataDir: data.rooms, schema: draftroomSchema, idleEvictMs: 60_000 })
-  registries.push(r)
-  return r
-}
+/** A tldraw board of this data dir (as every board before the cut-over), edited and backed up by the test. */
+const board = (boardId = BOARD) => tldrawBoard(data.rooms, boardId, data.backups)
 function offsite(opts: Partial<ConstructorParameters<typeof OffsiteBackups>[0]> = {}) {
   const s = new OffsiteBackups({
     store: createFsBlobStore(data.blobs),
@@ -60,11 +57,6 @@ function offsite(opts: Partial<ConstructorParameters<typeof OffsiteBackups>[0]> 
   })
   services.push(s)
   return s
-}
-async function editor(reg: RoomRegistry, boardId = BOARD) {
-  const c = new RoomClient(reg.getOrCreate(boardId), 'usr_a')
-  await c.connect()
-  return c
 }
 const manifestOf = (store = createFsBlobStore(data.blobs), board = BOARD) =>
   readJsonObject<OffsiteManifest>(store, offsiteKeys.manifest(PREFIX, board))
@@ -77,15 +69,12 @@ beforeEach(() => {
 afterEach(async () => {
   for (const s of services) await s.stop()
   services = []
-  for (const r of registries) r.closeAll()
-  registries = []
   data.cleanup()
 })
 
 describe('upload after each local backup', () => {
   it('stores the file byte for byte, with a manifest entry and an index row', async () => {
-    const reg = registry()
-    const a = await editor(reg)
+    const a = board()
     await a.put(
       note('n1', 'hello'),
       fileCard('card', AST_A, VER_A),
@@ -96,7 +85,7 @@ describe('upload after each local backup', () => {
     const s = offsite()
     s.start()
     await s.idle()
-    const entry = await reg.backupNow(BOARD)
+    const entry = await a.backupNow()
     if (!entry) throw new Error('no local backup')
     await s.idle()
 
@@ -119,7 +108,7 @@ describe('upload after each local backup', () => {
       recordsSha256: entry.recordsSha256,
       sha256: entry.sha256,
       sizeBytes: local.byteLength,
-      schema: draftroomSchema.serialize(),
+      schema: currentSchema(),
       // the build plan's "asset versions": both kinds of file references, sorted and distinct
       assets: [
         { assetId: AST_A, versionId: VER_A },
@@ -157,12 +146,11 @@ describe('upload after each local backup', () => {
   })
 
   it('catches up at start on local backups made while it was not running, without duplicates', async () => {
-    const reg = registry()
-    const a = await editor(reg)
+    const a = board()
     await a.put(note('n1', 'v1'))
-    const first = await reg.backupNow(BOARD)
+    const first = await a.backupNow()
     await a.put(note('n2', 'v2', { index: indexFor(2) }))
-    const second = await reg.backupNow(BOARD)
+    const second = await a.backupNow()
     const store = flakyStore(data.blobs)
     const s = offsite({ store })
     s.start()
@@ -196,15 +184,14 @@ describe('upload after each local backup', () => {
 
 describe('failures never break the local backup and are retried', () => {
   it('a failed upload is counted, logged without detail beyond its code, and retried on the next pass', async () => {
-    const reg = registry()
-    const a = await editor(reg)
+    const a = board()
     await a.put(note('n1', 'keep me'))
     const store = flakyStore(data.blobs)
     let down = true
     store.failPut = () => down
     const s = offsite({ store })
     s.start()
-    const entry = await reg.backupNow(BOARD)
+    const entry = await a.backupNow()
     // the local backup is complete and listed regardless
     expect(entry).not.toBeNull()
     expect(readManifest(data.backups, BOARD)?.backups.map((b) => b.file)).toEqual([entry?.file])
@@ -225,7 +212,7 @@ describe('failures never break the local backup and are retried', () => {
 
     // still down: the next backup's own upload fails too, and the room keeps working
     await a.put(note('n2', 'more', { index: indexFor(2) }))
-    const second = await reg.backupNow(BOARD)
+    const second = await a.backupNow()
     await s.idle()
     expect(s.status().boards[0]).toMatchObject({ failures: 2, pending: 2 })
 
@@ -241,15 +228,14 @@ describe('failures never break the local backup and are retried', () => {
   })
 
   it('an object stored without its manifest is uploaded again and listed once', async () => {
-    const reg = registry()
-    const a = await editor(reg)
+    const a = board()
     await a.put(note('n1', 'x'))
     const store = flakyStore(data.blobs)
     let manifestDown = true
     store.failPut = (key) => manifestDown && key.endsWith('/manifest.json')
     const s = offsite({ store })
     s.start()
-    const entry = await reg.backupNow(BOARD)
+    const entry = await a.backupNow()
     await s.idle()
     expect(s.status().boards[0]?.failures).toBe(1)
     expect(await manifestOf()).toBeNull()
@@ -260,14 +246,13 @@ describe('failures never break the local backup and are retried', () => {
   })
 
   it('a local file that does not match its manifest is never uploaded, and not retried', async () => {
-    const reg = registry()
-    const a = await editor(reg)
+    const a = board()
     await a.put(note('n1', 'x'))
     const store = flakyStore(data.blobs)
     store.failPut = () => true
     const s = offsite({ store })
     s.start()
-    const entry = await reg.backupNow(BOARD)
+    const entry = await a.backupNow()
     await s.idle()
     if (!entry) throw new Error('no backup')
     const file = join(data.backups, BOARD, entry.file)
@@ -287,14 +272,13 @@ describe('failures never break the local backup and are retried', () => {
   })
 
   it('a listener that throws cannot fail a local backup', async () => {
-    const reg = registry()
-    const a = await editor(reg)
+    const a = board()
     await a.put(note('n1', 'x'))
     const off = onBackupCreated(data.backups, () => {
       throw new Error('boom')
     })
     try {
-      expect(await reg.backupNow(BOARD)).not.toBeNull()
+      expect(await a.backupNow()).not.toBeNull()
     } finally {
       off()
     }
@@ -327,12 +311,11 @@ describe('logs and status carry no credentials', () => {
       timeoutMs: 5_000,
       ...creds,
     })
-    const reg = registry()
-    const a = await editor(reg)
+    const a = board()
     await a.put(note('n1', 'x'))
     const s = offsite({ store })
     s.start()
-    await reg.backupNow(BOARD)
+    await a.backupNow()
     await s.idle()
     const status = s.status()
     expect(status.store).toBe('r2')
@@ -373,10 +356,8 @@ describe('offsite retention: the newest 12, plus one per day for 14 days', () =>
   })
 
   it('applies it to the store: dropped objects are deleted and the manifest lists exactly what is kept', async () => {
-    const reg = registry()
-    const a = await editor(reg)
+    const a = board()
     await a.put(note('n1', 'x'))
-    reg.closeAll()
     let now = day(1, 9)
     const store = flakyStore(data.blobs)
     const s = offsite({ store, now: () => now })
@@ -409,10 +390,8 @@ describe('offsite retention: the newest 12, plus one per day for 14 days', () =>
   })
 
   it('a failed delete stays pending in the manifest and is retried', async () => {
-    const reg = registry()
-    const a = await editor(reg)
+    const a = board()
     await a.put(note('n1', 'x'))
-    reg.closeAll()
     let now = day(1, 9)
     const store = flakyStore(data.blobs)
     let deletesDown = true
@@ -480,12 +459,11 @@ describe('the store cannot steer the uploader', () => {
       contentType: 'application/json',
       contentLength: json.byteLength,
     })
-    const reg = registry()
-    const a = await editor(reg)
+    const a = board()
     await a.put(note('n1', 'x'))
     const s = offsite({ retention: { newest: 1, dailyDays: 0 } })
     s.start()
-    await reg.backupNow(BOARD)
+    await a.backupNow()
     await s.idle()
     expect((await readObject(store, victim))?.toString()).toBe('precious')
     expect(logs.join('\n')).toContain('1 malformed entries ignored')

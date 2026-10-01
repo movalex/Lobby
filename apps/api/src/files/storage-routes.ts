@@ -34,7 +34,15 @@ export function registerStorage(app: FastifyInstance, ctx: AppContext, deps: Sto
   const { db, now } = ctx
   const cfg = ctx.config.storage
   const gc = createAssetGc(
-    { db, blobs: deps.blobs, sync: deps.sync, dataRoot: deps.dataRoot, now, log: app.log },
+    {
+      db,
+      blobs: deps.blobs,
+      sync: deps.sync,
+      dataRoot: deps.dataRoot,
+      now,
+      log: app.log,
+      canvas: ctx.canvas,
+    },
     cfg.assetGc,
   )
   app.addHook('onReady', async () => gc.start())

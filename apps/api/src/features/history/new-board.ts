@@ -17,21 +17,35 @@ import { newBoardId, type Queryable } from '@draftroom/db'
 import { type BoardVisibility, canCreateInWorkspace } from '@draftroom/permissions'
 import { BOARD_RETURNING, type BoardRow, requireWorkspaceRole } from '../../access.ts'
 import { audit } from '../../audit.ts'
+import { onNewCanvas } from '../../canvas-engine.ts'
 import { ApiError, forbidden } from '../../errors.ts'
 import { assertBoardRoom } from '../../files/usage.ts'
-import { SyncNewCanvasBoard, SyncSeedConflict, SyncUnavailable } from '../../sync-internal.ts'
+import {
+  type LobbySeed,
+  type RoomSnapshotJson,
+  SyncNewCanvasBoard,
+  SyncSeedConflict,
+  SyncUnavailable,
+} from '../../sync-internal.ts'
 import type { FeatureContext } from '../context.ts'
 import type { FileRef } from './files.ts'
+
+/**
+ * What the new board starts with (validated again by the sync server's seed): tldraw records with the
+ * serialized schema they are in (a v1 checkpoint or archive, a tldraw board; a sync on the Excalidraw
+ * engine converts them), or elements of the Excalidraw engine with its board document (a v2 checkpoint or
+ * archive, a board on the new canvas).
+ */
+export type BoardContent =
+  | { format: 'tldraw'; records: unknown[]; schema: unknown }
+  | { format: 'lobby-elements'; elements: unknown[]; doc: Record<string, unknown> }
 
 export interface NewBoardPlan {
   userId: string
   workspaceId: string
   projectId: string | null
   title: string
-  /** Document records (validated again by the sync server's seed). */
-  records: unknown[]
-  /** Serialized tldraw schema the records are in. */
-  schema: unknown
+  content: BoardContent
   /** File versions the new board may show. */
   files: readonly FileRef[]
   /** keepSharing duplicate only. */
@@ -90,13 +104,17 @@ export async function createBoardFrom(
   plan: NewBoardPlan,
   log?: (message: string) => void,
 ): Promise<BoardRow> {
-  const snapshot = {
-    schema: plan.schema,
-    documents: plan.records.map((state) => ({
-      state: state as Record<string, unknown>,
-      lastChangedClock: 0,
-    })),
-  }
+  const content = plan.content
+  const snapshot: RoomSnapshotJson | LobbySeed =
+    content.format === 'lobby-elements'
+      ? { format: 'lobby-elements', elements: content.elements, doc: content.doc }
+      : {
+          schema: content.schema,
+          documents: content.records.map((state) => ({
+            state: state as Record<string, unknown>,
+            lastChangedClock: 0,
+          })),
+        }
   // SEAM-11: before the seed, so a full workspace never leaves an orphan canvas behind (and again below).
   await assertBoardRoom(ctx.db, plan.workspaceId, ctx.config.storage.maxBoardsPerWorkspace)
   let boardId: string | null = null
@@ -112,6 +130,10 @@ export async function createBoardFrom(
     }
   }
   if (!boardId) throw new ApiError(503, 'SYNC_CONFLICT', 'Could not create the board. Try again.')
+  // Bridge release R0's contract: every board this api makes on the new canvas (restore as new,
+  // duplicate, import) has `new_canvas = true`, so a rollback's R0 refuses it instead of opening it
+  // empty. Converted boards (made before the cut-over) keep false.
+  const newCanvas = await onNewCanvas(ctx)
 
   const newId = boardId
   try {
@@ -134,8 +156,8 @@ export async function createBoardFrom(
       }
       const at = ctx.now()
       const row = await tx.maybeOne<BoardRow>(
-        `INSERT INTO boards (id, workspace_id, project_id, title, visibility, created_by, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $7) ON CONFLICT (id) DO NOTHING RETURNING ${BOARD_RETURNING}`,
+        `INSERT INTO boards (id, workspace_id, project_id, title, visibility, created_by, created_at, updated_at, new_canvas)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $7, $8) ON CONFLICT (id) DO NOTHING RETURNING ${BOARD_RETURNING}`,
         [
           newId,
           plan.workspaceId,
@@ -144,6 +166,7 @@ export async function createBoardFrom(
           plan.shareLike?.visibility ?? 'private',
           plan.userId,
           at,
+          newCanvas,
         ],
       )
       if (!row) throw new Error('board id already taken after seeding')

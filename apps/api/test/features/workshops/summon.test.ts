@@ -37,6 +37,26 @@ describe('gather everyone (summon)', () => {
     expect(w.events[0]?.data).toMatchObject({ userId: w.owner.userId, targetUserId: w.viewer.userId })
   })
 
+  it('relays the summoner’s canvas size when sent (R2-04), and refuses a malformed one', async () => {
+    w = await setupWorld()
+    for (const screen of [{ w: 0, h: 800 }, { w: 1440 }, { w: 'wide', h: 800 }, { w: 1e9, h: 800 }])
+      expectStatus(await w.owner.req('POST', `/api/boards/${w.boardId}/summon`, { screen }), 400)
+    expect(w.events).toHaveLength(0)
+    expectStatus(
+      await w.owner.req('POST', `/api/boards/${w.boardId}/summon`, {
+        screen: { w: 1396, h: 844.5, extra: 'dropped' },
+      }),
+      202,
+    )
+    expect(WorkshopSummonEvent.parse(w.events[0]?.data)).toEqual({
+      userId: w.owner.userId,
+      name: expect.any(String),
+      targetUserId: null,
+      screen: { w: 1396, h: 844.5 },
+    })
+    expect(w.events[0]?.data).toEqual(WorkshopSummonEvent.parse(w.events[0]?.data))
+  })
+
   it('is rate limited per person and board (no summon storms)', async () => {
     w = await setupWorld()
     expectStatus(await w.owner.req('POST', `/api/boards/${w.boardId}/summon`), 202)

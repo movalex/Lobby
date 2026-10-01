@@ -131,11 +131,13 @@ describe('theme controller', () => {
   })
 })
 
-// The inline script in index.html runs before any bundle: it must reach the same result as the
-// controller for every stored value and OS setting, and never throw (storage may be blocked).
+// The first-paint script (public/theme-boot.js, a blocking classic <script src> in index.html's head) runs
+// before any bundle: it must reach the same result as the controller for every stored value and OS
+// setting, and never throw (storage may be blocked). It is a file, never an inline script: the
+// Content-Security-Policy has no inline-script hash (docs/EXCALIDRAW-MIGRATION.md §2.12; cut-over G3).
 describe('index.html first-paint script', () => {
   const html = readFileSync(new URL('../../index.html', import.meta.url), 'utf8')
-  const script = /<script>([\s\S]*?)<\/script>/.exec(html)?.[1]
+  const script = readFileSync(new URL('../../public/theme-boot.js', import.meta.url), 'utf8')
 
   function run(stored: string | null | 'throws', systemDark: boolean | 'no-matchMedia') {
     const attrs: Record<string, string> = {}
@@ -161,9 +163,15 @@ describe('index.html first-paint script', () => {
     return { attrs, colorScheme: style.colorScheme, themeColor: meta.content }
   }
 
-  it('is present, classic, in <head>, before the app bundle', () => {
+  it('is a same-origin classic script in <head>, before the app bundle; index.html has no inline script', () => {
     expect(script).toBeTruthy()
-    expect(html.indexOf('<script>')).toBeLessThan(html.indexOf('</head>'))
+    // classic (a module is deferred and would run after the first paint), dependency-free
+    expect(script).not.toMatch(/^\s*(import|export)\b/m)
+    // no inline script anywhere: the CSP's script-src is 'self' with no hash
+    expect(html.match(/<script(?![^>]*\bsrc=)[^>]*>/g)).toBeNull()
+    const tag = html.indexOf('<script src="/theme-boot.js"></script>')
+    expect(tag).toBeGreaterThan(-1)
+    expect(tag).toBeLessThan(html.indexOf('</head>'))
     expect(html.indexOf('/src/theme/boot.ts')).toBeGreaterThan(html.indexOf('</head>'))
     expect(html.indexOf('/src/theme/boot.ts')).toBeLessThan(html.indexOf('/src/main.tsx'))
   })

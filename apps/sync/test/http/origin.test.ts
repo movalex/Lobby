@@ -64,7 +64,7 @@ describe('with ALLOWED_ORIGINS', () => {
         kind: 'http',
         status: 403,
       })
-    expect(t.server.registry.openBoards()).not.toContain('board-b')
+    expect(t.server.elementRooms.openBoards()).not.toContain('board-b')
     expect(listFiles(t.roomsDir).filter((f) => f.includes('board-b'))).toEqual([])
     expect(t.logs).toContainEqual(
       expect.stringMatching(/refused: Origin "https:\/\/evil\.example" is not in/),

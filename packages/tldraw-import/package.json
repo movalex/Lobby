@@ -1,0 +1,29 @@
+{
+  "name": "@draftroom/tldraw-import",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./board-file": "./src/board-file.ts",
+    "./diff": "./src/diff.ts",
+    "./schema": "./src/schema.ts",
+    "./tldraw": "./src/tldraw.ts",
+    "./archive-v1": "./src/archive-v1.ts",
+    "./templates": "./src/templates/registry.ts",
+    "./test-fixtures": "./src/test-fixtures.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p ."
+  },
+  "dependencies": {
+    "@draftroom/board-ops": "workspace:*",
+    "@draftroom/canvas-schema": "workspace:*",
+    "@draftroom/templates": "workspace:*",
+    "@tldraw/state": "catalog:",
+    "@tldraw/store": "catalog:",
+    "@tldraw/tlschema": "catalog:",
+    "@tldraw/utils": "catalog:",
+    "@tldraw/validate": "catalog:"
+  }
+}

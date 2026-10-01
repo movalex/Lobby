@@ -1,9 +1,20 @@
 // The template picker's catalog (PRE-01): the @draftroom/templates definitions with a section preview
-// drawn from the records each template really produces (frames, notes, boxes, text). The "Lobby tour"
-// sample board comes first; it has no category chip of its own, so it is listed under "All" only.
+// drawn from the plan each template really builds (frames, notes, boxes, text; the same plan both canvases
+// emit their records or elements from). The "Lobby tour" sample board comes first; it has no category chip
+// of its own, so it is listed under "All" only.
+//
+// It reads `@draftroom/templates/plan`, which loads neither canvas engine, so the gallery's lazily loaded
+// chunk is the same in the tldraw build and the Excalidraw build (docs/EXCALIDRAW-MIGRATION.md §4.9: the
+// dashboard is unchanged by the migration).
 
-import { instantiateTemplate, TEMPLATES, type TemplateCategory, type TemplateId } from '@draftroom/templates'
-import type { TLPageId } from 'tldraw'
+import {
+  type BoardPlan,
+  planBounds,
+  planTemplate,
+  TEMPLATE_INFOS,
+  type TemplateCategory,
+  type TemplateId,
+} from '@draftroom/templates/plan'
 
 export type { TemplateCategory, TemplateId }
 
@@ -45,7 +56,7 @@ export const CATEGORIES: readonly TemplateCategory[] = ['ideate', 'visual', 'pla
 /** The "Lobby tour" sample board (packages/templates lobby-tour.ts). */
 export const isSample = (entry: Pick<CatalogEntry, 'category'>) => entry.category === 'sample'
 
-/** tldraw colour names -> preview fills (approximate; thumbnails only). */
+/** Lobby colour names -> preview fills (approximate; thumbnails only). */
 const FILL: Record<string, string> = {
   black: '#3a3f47',
   grey: '#adb5bd',
@@ -63,83 +74,41 @@ const FILL: Record<string, string> = {
 }
 const fill = (color: unknown) => (typeof color === 'string' && FILL[color]) || FILL.yellow || '#ffe066'
 
-interface ShapeLike {
-  typeName: string
-  id?: string
-  type?: string
-  parentId?: string
-  x?: number
-  y?: number
-  props?: Record<string, unknown>
-}
-
-const num = (v: unknown, fallback: number) => (typeof v === 'number' && Number.isFinite(v) ? v : fallback)
-
-/** Builds the preview from the template's records (frames are top-level; children are frame-relative). */
-export function previewFromRecords(
-  records: readonly ShapeLike[],
-  pageId: string,
-  bounds: PreviewRect,
-): TemplatePreview {
-  const shapes = records.filter((r) => r.typeName === 'shape')
-  const byId = new Map(shapes.map((s) => [s.id, s]))
-  const origin = (s: ShapeLike): { x: number; y: number } => {
-    const x = num(s.x, 0)
-    const y = num(s.y, 0)
-    const parent = s.parentId && s.parentId !== pageId ? byId.get(s.parentId) : undefined
-    if (!parent) return { x, y }
-    const p = origin(parent)
-    return { x: p.x + x, y: p.y + y }
-  }
+/** The preview of a plan: its frames, and its notes, boxes (swatches in their colour) and texts in page space. */
+export function previewFromPlan(plan: BoardPlan): TemplatePreview {
   const frames: TemplatePreview['frames'] = []
   const items: PreviewItem[] = []
-  for (const s of shapes) {
-    const { x, y } = origin(s)
-    const props = s.props ?? {}
-    const scale = num(props.scale, 1)
-    if (s.type === 'frame') {
-      frames.push({ x, y, w: num(props.w, 0), h: num(props.h, 0), name: String(props.name ?? '') })
-    } else if (s.type === 'note') {
-      items.push({ kind: 'note', x, y, w: 200 * scale, h: 200 * scale, color: fill(props.color) })
-    } else if (s.type === 'geo') {
+  for (const node of plan.nodes) {
+    const { x, y, w, h } = node.page
+    if (node.kind === 'frame') frames.push({ x, y, w, h, name: node.name })
+    else if (node.kind === 'note') items.push({ kind: 'note', x, y, w, h, color: fill(node.color) })
+    else if (node.kind === 'geo')
       // A full-colour fill (a palette swatch) shows its colour; other shapes read as neutral boxes.
-      const kind = props.fill === 'fill' ? 'swatch' : 'box'
-      items.push({ kind, x, y, w: num(props.w, 100), h: num(props.h, 100), color: fill(props.color) })
-    } else if (s.type === 'text') {
-      items.push({
-        kind: 'text',
-        x,
-        y,
-        w: Math.min(num(props.w, 300), 600) * scale,
-        h: 18 * scale,
-        color: fill(props.color),
-      })
-    }
+      items.push({ kind: node.fill === 'fill' ? 'swatch' : 'box', x, y, w, h, color: fill(node.color) })
+    else if (node.kind === 'text')
+      items.push({ kind: 'text', x, y, w: Math.min(node.w, 600), h: 18, color: fill(node.color) })
   }
-  return { bounds, frames, items }
+  const b = planBounds(plan)
+  return { bounds: { x: b.x, y: b.y, w: b.w, h: b.h }, frames, items }
 }
 
 let cache: readonly CatalogEntry[] | null = null
 
-/** The catalog, the sample first (built once; instantiating the templates takes a few milliseconds). */
+/** The catalog, the sample first (built once; planning the templates takes a few milliseconds). */
 export function templateCatalog(): readonly CatalogEntry[] {
   if (cache) return cache
-  const pageId = 'page:preview'
-  const ordered = [...TEMPLATES.filter((t) => isSample(t)), ...TEMPLATES.filter((t) => !isSample(t))]
-  cache = ordered.map((t) => {
-    const { records, bounds } = instantiateTemplate(t.id, {
-      pageId: pageId as TLPageId,
-      origin: { x: 0, y: 0 },
-    })
-    return {
-      id: t.id,
-      name: t.name,
-      description: t.description,
-      category: t.category,
-      sections: t.sections,
-      preview: previewFromRecords(records as unknown as ShapeLike[], pageId, bounds),
-    }
-  })
+  const ordered = [
+    ...TEMPLATE_INFOS.filter((t) => isSample(t)),
+    ...TEMPLATE_INFOS.filter((t) => !isSample(t)),
+  ]
+  cache = ordered.map((t) => ({
+    id: t.id,
+    name: t.name,
+    description: t.description,
+    category: t.category,
+    sections: t.sections,
+    preview: previewFromPlan(planTemplate(t.id, { x: 0, y: 0 })),
+  }))
   return cache
 }
 

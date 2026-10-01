@@ -341,11 +341,6 @@
   background: var(--dr-inset);
 }
 
-.dr-cp-preview__canvas .tl-container {
-  position: absolute;
-  inset: 0;
-}
-
 .dr-cp-preview__note {
   display: flex;
   align-items: center;

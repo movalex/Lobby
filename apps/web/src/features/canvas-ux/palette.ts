@@ -1,5 +1,5 @@
 // Draftroom's own sticky-note palette (COL-06): 13 fixed colours with names of our own, applied to
-// tldraw 5.4.2's theme (`editor.updateTheme`, TLTheme.colors.{light,dark}[colorName].noteFill/noteText,
+// tldraw 5.4.2's theme (its updateTheme, TLTheme.colors.{light,dark}[colorName].noteFill/noteText,
 // read by NoteShapeUtil when the note's labelColor is the default 'black'). The stored colour names
 // stay tldraw's (the schema validates them), so boards remain portable; only the rendered values change.
 // Every fill has AA contrast (>= 4.5:1) with its text colour in both modes (see palette.test.ts).
@@ -7,8 +7,6 @@
 // templates' instruction lines) is ~2.3:1 on the light canvas; GREY_INK replaces it with a grey that
 // reads at >= 4.5:1 on the canvas, frames and semi fills in both modes. Being a theme value, it also
 // fixes every board already made from a template.
-
-import type { TLTheme } from 'tldraw'
 
 export type NoteColorName =
   | 'black'
@@ -139,43 +137,4 @@ export function contrastRatio(a: string, b: string): number {
   const la = relativeLuminance(a)
   const lb = relativeLuminance(b)
   return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05)
-}
-
-/**
- * The theme with Draftroom's note fills/texts and the readable grey ink. Only noteFill/noteText of the
- * 13 named colours and grey's solid change; everything else (other shape colours, UI colours, fonts)
- * is kept. Returns a new object; never mutates.
- */
-export function withNotePalette(theme: TLTheme): TLTheme {
-  const patch = (mode: 'light' | 'dark') => {
-    const colors = { ...theme.colors[mode] } as Record<string, unknown>
-    for (const swatch of NOTE_PALETTE) {
-      const current = colors[swatch.name]
-      if (typeof current !== 'object' || current === null) continue
-      colors[swatch.name] = { ...current, noteFill: swatch[mode].fill, noteText: swatch[mode].text }
-    }
-    const grey = colors.grey
-    if (typeof grey === 'object' && grey !== null) colors.grey = { ...grey, solid: GREY_INK[mode] }
-    return colors as unknown as TLTheme['colors'][typeof mode]
-  }
-  return { ...theme, colors: { light: patch('light'), dark: patch('dark') } }
-}
-
-/** True when the theme already carries this palette (so re-applying is a no-op). */
-export function hasNotePalette(theme: TLTheme): boolean {
-  const greyOk = (['light', 'dark'] as const).every((mode) => {
-    const grey = (theme.colors[mode] as unknown as Record<string, { solid?: string }>).grey
-    return grey === undefined || grey.solid === GREY_INK[mode]
-  })
-  return (
-    greyOk &&
-    NOTE_PALETTE.every((s) =>
-      (['light', 'dark'] as const).every((mode) => {
-        const c = (theme.colors[mode] as unknown as Record<string, { noteFill?: string; noteText?: string }>)[
-          s.name
-        ]
-        return c?.noteFill === s[mode].fill && c?.noteText === s[mode].text
-      }),
-    )
-  )
 }

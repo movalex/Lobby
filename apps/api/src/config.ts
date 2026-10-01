@@ -39,6 +39,8 @@ export type BlobStoreConfig =
 
 export interface ApiConfig {
   production: boolean
+  /** NODE_ENV as checked by `parseNodeEnv` (M2): production, development or test, nothing else boots. */
+  nodeEnv: NodeEnv
   host: string
   port: number
   /** Absolute DRAFTROOM_DATA_DIR (shared with sync + worker: rooms/, assets/, jobs/, pg/). */
@@ -87,6 +89,12 @@ export interface ApiConfig {
    * trailerparkgroup.com) and DRAFTROOM_CREATOR_EMAILS (the exceptions; default none). Always on.
    */
   creators: CreatorPolicy
+  /**
+   * DRAFTROOM_LINK_PREVIEW_TEST_ORIGINS (comma-separated exact origins): the e2e fixture server on
+   * loopback that link previews (features/link-preview) may fetch from, which their network rules
+   * refuse otherwise. Local development only: it requires DRAFTROOM_DEV_AUTH=1 (refused in production).
+   */
+  linkPreviewTestOrigins: readonly string[]
 }
 
 export interface UploadLimitsConfig {
@@ -112,6 +120,21 @@ type Env = Record<string, string | undefined>
 const read = (env: Env, name: string): string | undefined => {
   const v = env[name]?.trim()
   return v ? v : undefined
+}
+
+export type NodeEnv = 'production' | 'development' | 'test'
+/**
+ * NODE_ENV, checked (security audit M2). Every guard of the unsafe features (dev sign-in, the `dev-only-`
+ * placeholder secrets, loopback defaults, an http OPENAI_BASE_URL) keys on the exact string `production`,
+ * so any other value (`staging` typed into the Render dashboard) turned them all off together, silently.
+ * Only Node's three conventions are accepted; unset or empty reads as development.
+ */
+export function parseNodeEnv(env: Env): NodeEnv {
+  const raw = read(env, 'NODE_ENV') ?? 'development'
+  if (raw === 'production' || raw === 'development' || raw === 'test') return raw
+  throw new Error(
+    `NODE_ENV must be production, development or test, not ${JSON.stringify(raw.slice(0, 32))}: every production guard keys on NODE_ENV=production, so an unknown value would turn them all off`,
+  )
 }
 
 function int(env: Env, name: string, fallback: number, min: number, max: number): number {
@@ -294,9 +317,32 @@ export function parseBlobStore(env: Env, dataDir: string, production: boolean): 
   return { kind: 'r2', accountId, accessKeyId, secretAccessKey, bucket, endpoint }
 }
 
+/** DRAFTROOM_LINK_PREVIEW_TEST_ORIGINS: exact http(s) origins, behind the local-dev guard only. */
+export function parseLinkPreviewTestOrigins(env: Env, devAuth: boolean): string[] {
+  const raw = read(env, 'DRAFTROOM_LINK_PREVIEW_TEST_ORIGINS')
+  if (raw === undefined) return []
+  if (!devAuth) throw new Error('DRAFTROOM_LINK_PREVIEW_TEST_ORIGINS requires DRAFTROOM_DEV_AUTH=1')
+  const out: string[] = []
+  for (const part of raw.split(',')) {
+    const v = part.trim()
+    if (!v) continue
+    let url: URL
+    try {
+      url = new URL(v)
+    } catch {
+      throw new Error('DRAFTROOM_LINK_PREVIEW_TEST_ORIGINS must list http(s) origins (scheme://host:port)')
+    }
+    if ((url.protocol !== 'http:' && url.protocol !== 'https:') || url.origin !== v.replace(/\/$/, ''))
+      throw new Error('DRAFTROOM_LINK_PREVIEW_TEST_ORIGINS must list http(s) origins (scheme://host:port)')
+    out.push(url.origin)
+  }
+  return out
+}
+
 /** Parses and validates the API environment. Throws an operator-facing message on bad input. */
 export function loadConfig(env: Env = process.env): ApiConfig {
-  const production = env.NODE_ENV === 'production'
+  const nodeEnv = parseNodeEnv(env)
+  const production = nodeEnv === 'production'
 
   const devFlag = read(env, 'DRAFTROOM_DEV_AUTH')
   if (devFlag !== undefined && devFlag !== '1' && devFlag !== '0')
@@ -364,6 +410,7 @@ export function loadConfig(env: Env = process.env): ApiConfig {
   const dataDir = resolveDataDir(env)
   return {
     production,
+    nodeEnv,
     host: read(env, 'HOST') ?? '127.0.0.1',
     port: int(env, 'PORT', 5859, 0, 65_535),
     dataDir,
@@ -407,5 +454,6 @@ export function loadConfig(env: Env = process.env): ApiConfig {
     storage: parseStorageConfig(env),
     ai: parseAiConfig(env, production),
     creators: parseCreatorPolicy(env),
+    linkPreviewTestOrigins: parseLinkPreviewTestOrigins(env, devAuth),
   }
 }

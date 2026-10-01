@@ -1,81 +1,98 @@
-// Record factories for template content. Produces plain tldraw 5.4.2 records with full
-// default props (from the tldraw ShapeUtil getDefaultProps / ArrowBindingUtil defaults),
-// fresh ids, and fractional index keys per parent.
+// The engine-neutral template builder. Template content (./templates/*.ts) is written once against this
+// builder and becomes a `BoardPlan`: frames, texts, notes, boxes and arrows with their page-space geometry,
+// in creation order. Two emitters turn a plan into a board:
+//   - ./tldraw.ts: tldraw 5.4.2 shape + binding records (the default build, until wave 4);
+//   - ./scene/emit.ts: Excalidraw elements built through @draftroom/canvas-schema/engine (the new canvas).
+// Style values are Lobby's names (the 13 colour names, the four sizes, tldraw's font and fill names): both
+// emitters map them, and the converter (packages/tldraw-import) maps stored boards the same way.
+//
+// No tldraw and no Excalidraw import here, so the dashboard's template gallery can read a plan with neither
+// engine in its bundle (./plan.ts, apps/web/src/dashboard/template-catalog.ts).
 
-import {
-  createBindingId,
-  createShapeId,
-  type TLArrowBinding,
-  type TLArrowShape,
-  type TLArrowShapeArrowheadStyle,
-  type TLDefaultColorStyle,
-  type TLDefaultDashStyle,
-  type TLDefaultFillStyle,
-  type TLDefaultFontStyle,
-  type TLDefaultSizeStyle,
-  type TLDefaultTextAlignStyle,
-  type TLFrameShape,
-  type TLGeoShape,
-  type TLGeoShapeGeoStyle,
-  type TLNoteShape,
-  type TLParentId,
-  type TLRecord,
-  type TLShape,
-  type TLShapeId,
-  type TLTextShape,
-  toRichText,
-} from '@tldraw/tlschema'
-import { getIndexAbove, type IndexKey } from '@tldraw/utils'
-import { NOTE_SIZE, type Rect } from './layout.ts'
-import type { TemplateContext } from './types.ts'
+import { NOTE_SIZE, type Rect, type TemplatePoint } from './common.ts'
 
 /** Inner padding of a section frame. */
 export const PAD = 40
 /** Gap between neighbouring sticky notes. */
 export const NOTE_GAP = 20
 
-type Outline = 'rect' | 'ellipse'
-
-interface Placed {
-  shape: TLShape
-  /** Page-space bounds. */
-  page: Rect
-  outline: Outline
-}
-
-export interface TextSpec {
-  x: number
-  y: number
-  w: number
-  text: string
-  size?: TLDefaultSizeStyle
-  color?: TLDefaultColorStyle
-  align?: TLDefaultTextAlignStyle
-  /** tldraw's font style (default sans); the Lobby tour's type samples use serif and mono too. */
-  font?: TLDefaultFontStyle
-  /** Headings and instructions arrive locked (PRE-07); starter values people fill in do not. */
-  locked?: boolean
-}
+/** Lobby's colour names: the note palette's 13 (tldraw's colour-style names, kept by the converter). */
+export type LobbyColor =
+  | 'black'
+  | 'grey'
+  | 'light-violet'
+  | 'violet'
+  | 'blue'
+  | 'light-blue'
+  | 'yellow'
+  | 'orange'
+  | 'green'
+  | 'light-green'
+  | 'light-red'
+  | 'red'
+  | 'white'
+export type LobbySize = 's' | 'm' | 'l' | 'xl'
+/**
+ * tldraw's font names, plus 'display': the new canvas has Excalifont ('draw'), Nunito ('sans', 'serif'),
+ * Comic Shanns ('mono') and Lilita One ('display', fontFamily 7: its headings, decision D3). tldraw has no
+ * display face, so it sets 'display' in sans.
+ */
+export type LobbyFont = 'draw' | 'sans' | 'serif' | 'mono' | 'display'
+export type LobbyTextAlign = 'start' | 'middle' | 'end'
+/** 'solid' is a pale tint (tldraw's name), 'fill' the full colour, 'semi' the near-white card fill. */
+export type LobbyFill = 'none' | 'semi' | 'solid' | 'fill'
+export type LobbyDash = 'solid' | 'dashed' | 'dotted' | 'draw'
+export type LobbyGeo = 'rectangle' | 'ellipse' | 'diamond'
+export type LobbyArrowhead = 'arrow' | 'none'
 
 /**
  * Meta marker on template image slots. The web app's file drop fits an image dropped onto a marked
- * slot into it (apps/web/src/board/ExternalContent.tsx); older boards have no marker.
+ * slot into it (apps/web/src/board/ExternalContent.tsx); older boards have no marker. On the new canvas
+ * it is `customData.lobby.slot = 'image'` (canvas-schema custom-data.ts, the converter's mapping).
  */
 export const IMAGE_SLOT_META = { draftroomSlot: 'image' } as const
 
 /**
  * Meta marker on colour swatches: a full-colour block with no label (its name is a text shape next
  * to it, because tldraw has no label colour that reads on every full fill in both themes). The
- * template tests allow a geo shape without text only when it carries this marker.
+ * template tests allow a geo shape without text only when it carries this marker. On the new canvas it
+ * is `customData.lobby.swatch = 'color'`.
  */
 export const SWATCH_META = { draftroomSwatch: 'color' } as const
+
+export interface TextSpec {
+  x: number
+  y: number
+  w: number
+  text: string
+  size?: LobbySize
+  color?: LobbyColor
+  align?: LobbyTextAlign
+  /** tldraw's font style (default sans); the Lobby tour's type samples use serif and mono too. */
+  font?: LobbyFont
+  /** Headings and instructions arrive locked (PRE-07); starter values people fill in do not. */
+  locked?: boolean
+  /**
+   * A heading (a section's or frame's title, a column's or a group's name). The new canvas has no bold
+   * (decision D3), so it sets headings in its display face (Lilita One) unless `scene.font` says otherwise;
+   * tldraw keeps `font`. Size and colour carry the rest of the hierarchy on both.
+   */
+  heading?: boolean
+  /**
+   * What the new canvas shows instead, where the words name something only one engine has (the tour's
+   * type samples name their faces). `displayText`: the words when the display face is available (it needs
+   * the server's font allowlist to accept fontFamily 7); `text` otherwise, so a label never names a face the
+   * canvas is not showing.
+   */
+  scene?: { text?: string; font?: LobbyFont; displayText?: string }
+}
 
 export interface NoteSpec {
   x: number
   y: number
   text: string
-  color: TLDefaultColorStyle
-  size?: TLDefaultSizeStyle
+  color: LobbyColor
+  size?: LobbySize
   scale?: number
 }
 
@@ -85,14 +102,27 @@ export interface GeoSpec {
   w: number
   h: number
   text?: string
-  geo?: TLGeoShapeGeoStyle
-  color?: TLDefaultColorStyle
-  labelColor?: TLDefaultColorStyle
-  fill?: TLDefaultFillStyle
-  dash?: TLDefaultDashStyle
-  size?: TLDefaultSizeStyle
+  geo?: LobbyGeo
+  color?: LobbyColor
+  labelColor?: LobbyColor
+  fill?: LobbyFill
+  dash?: LobbyDash
+  size?: LobbySize
   locked?: boolean
   meta?: Readonly<Record<string, string>>
+  /**
+   * The first line is a title (a card's name, a key). tldraw sets it in bold; the new canvas has plain
+   * text only (docs/EXCALIDRAW-MIGRATION.md §1 non-goals), so there it is the plain first line.
+   */
+  titled?: boolean
+  /**
+   * The whole label is a title (a theme, a column header, a shortcut key over what it does): the new canvas
+   * sets it in its display face (Lilita One, decision D3), because one label holds one face. tldraw is
+   * unchanged (`titled` gives it a bold first line).
+   */
+  heading?: boolean
+  /** The new canvas's own words, where a label names something only one page has (a key binding). */
+  scene?: { text?: string }
 }
 
 export interface ArrowSpec {
@@ -100,10 +130,12 @@ export interface ArrowSpec {
   startAnchor?: { x: number; y: number }
   /** Normalized anchor on the end shape; omitted = shape centre (non-precise binding). */
   endAnchor?: { x: number; y: number }
-  color?: TLDefaultColorStyle
-  size?: TLDefaultSizeStyle
-  dash?: TLDefaultDashStyle
-  arrowheadEnd?: TLArrowShapeArrowheadStyle
+  color?: LobbyColor
+  size?: LobbySize
+  dash?: LobbyDash
+  arrowheadEnd?: LobbyArrowhead
+  /** Routed with right angles (tldraw arrow kind 'elbow', Excalidraw `elbowed`). */
+  elbow?: boolean
 }
 
 export interface SectionSpec {
@@ -114,37 +146,123 @@ export interface SectionSpec {
   name: string
   heading: string
   intro?: string
-  headingSize?: TLDefaultSizeStyle
+  headingSize?: LobbySize
+}
+
+type Outline = 'rect' | 'ellipse'
+
+interface NodeBase {
+  /** Creation order (0-based): the paint order of siblings on both engines. */
+  readonly seq: number
+  /** The frame this node sits in, or null for the page. */
+  readonly parent: PlanFrame | null
+  /** Position in the parent's space (as given; a frame's is relative to the template origin's page). */
+  readonly x: number
+  readonly y: number
+  /** Page-space bounds (text: a nominal one-line box; the engines measure the real height). */
+  readonly page: Rect
+  readonly outline: Outline
+}
+
+export interface PlanFrame extends NodeBase {
+  readonly kind: 'frame'
+  readonly w: number
+  readonly h: number
+  readonly name: string
+}
+
+export interface PlanText extends NodeBase {
+  readonly kind: 'text'
+  readonly w: number
+  readonly text: string
+  readonly size: LobbySize
+  readonly color: LobbyColor
+  readonly align: LobbyTextAlign
+  readonly font: LobbyFont
+  readonly locked: boolean
+  readonly heading: boolean
+  readonly scene: { readonly text: string; readonly font: LobbyFont; readonly displayText: string | null }
+}
+
+export interface PlanNote extends NodeBase {
+  readonly kind: 'note'
+  readonly text: string
+  readonly color: LobbyColor
+  readonly size: LobbySize
+  readonly scale: number
+}
+
+export interface PlanGeo extends NodeBase {
+  readonly kind: 'geo'
+  readonly w: number
+  readonly h: number
+  readonly text: string
+  readonly geo: LobbyGeo
+  readonly color: LobbyColor
+  readonly labelColor: LobbyColor
+  readonly fill: LobbyFill
+  readonly dash: LobbyDash
+  readonly size: LobbySize
+  readonly locked: boolean
+  readonly meta: Readonly<Record<string, string>>
+  readonly titled: boolean
+  readonly heading: boolean
+  readonly scene: { readonly text: string }
+}
+
+export interface PlanArrow extends NodeBase {
+  readonly kind: 'arrow'
+  readonly from: PlanShape
+  readonly to: PlanShape
+  readonly startAnchor: { readonly x: number; readonly y: number } | null
+  readonly endAnchor: { readonly x: number; readonly y: number } | null
+  readonly color: LobbyColor
+  readonly size: LobbySize
+  readonly dash: LobbyDash
+  readonly arrowheadEnd: LobbyArrowhead
+  readonly elbow: boolean
+  /** Page-space start and end points (on the outlines of the bound shapes). */
+  readonly start: TemplatePoint
+  readonly end: TemplatePoint
+}
+
+export type PlanShape = PlanFrame | PlanText | PlanNote | PlanGeo | PlanArrow
+export type PlanNode = PlanShape
+
+/** A template as built: every node in creation order, and where it was built. */
+export interface BoardPlan {
+  readonly origin: TemplatePoint
+  readonly nodes: readonly PlanNode[]
 }
 
 export interface BoardBuilder {
-  frame(spec: { x: number; y: number; w: number; h: number; name: string }): TLFrameShape
+  frame(spec: { x: number; y: number; w: number; h: number; name: string }): PlanFrame
   /** A frame with a heading text and an optional grey instruction line (both locked, PRE-07). */
-  section(spec: SectionSpec): TLFrameShape
-  text(parent: TLFrameShape | null, spec: TextSpec): TLTextShape
-  note(parent: TLFrameShape | null, spec: NoteSpec): TLNoteShape
-  geo(parent: TLFrameShape | null, spec: GeoSpec): TLGeoShape
+  section(spec: SectionSpec): PlanFrame
+  text(parent: PlanFrame | null, spec: TextSpec): PlanText
+  note(parent: PlanFrame | null, spec: NoteSpec): PlanNote
+  geo(parent: PlanFrame | null, spec: GeoSpec): PlanGeo
   /** Dashed grey box that marks where an image goes (locked, with the IMAGE_SLOT_META marker). */
   imageSlot(
-    parent: TLFrameShape | null,
-    spec: { x: number; y: number; w: number; h: number; label: string; size?: TLDefaultSizeStyle },
-  ): TLGeoShape
+    parent: PlanFrame | null,
+    spec: { x: number; y: number; w: number; h: number; label: string; size?: LobbySize },
+  ): PlanGeo
   /** A full-colour, unlabelled block (SWATCH_META): name it with a text shape beside it. */
   swatch(
-    parent: TLFrameShape | null,
-    spec: { x: number; y: number; w: number; h: number; color: TLDefaultColorStyle },
-  ): TLGeoShape
+    parent: PlanFrame | null,
+    spec: { x: number; y: number; w: number; h: number; color: LobbyColor },
+  ): PlanGeo
   /** Notes in a grid, filled row by row. */
   noteGrid(
-    parent: TLFrameShape,
+    parent: PlanFrame,
     spec: { x: number; y: number; cols: number; gap?: number; gapY?: number; scale?: number },
-    notes: ReadonlyArray<{ text: string; color: TLDefaultColorStyle }>,
-  ): TLNoteShape[]
+    notes: ReadonlyArray<{ text: string; color: LobbyColor }>,
+  ): PlanNote[]
   /** An arrow bound at both ends (arrow -> shape bindings). */
-  arrow(from: TLShape, to: TLShape, spec?: ArrowSpec): TLArrowShape
+  arrow(from: PlanShape, to: PlanShape, spec?: ArrowSpec): PlanArrow
   /** Arrows from each shape to the next one, in order. */
-  chain(steps: readonly TLShape[], spec?: ArrowSpec): TLArrowShape[]
-  finish(): TLRecord[]
+  chain(steps: readonly PlanShape[], spec?: ArrowSpec): PlanArrow[]
+  finish(): BoardPlan
 }
 
 export const HEADING_Y = 32
@@ -152,92 +270,70 @@ export const INTRO_Y = 92
 /** Where section content starts below the heading and a (max three-line) intro. */
 export const CONTENT_Y = 190
 
-export function createBoardBuilder(ctx: TemplateContext): BoardBuilder {
-  const shapes: TLShape[] = []
-  const bindings: TLArrowBinding[] = []
-  const placed = new Map<TLShapeId, Placed>()
-  const lastIndex = new Map<TLParentId, IndexKey | null>()
-  lastIndex.set(ctx.pageId, ctx.indexAbove ?? null)
+/**
+ * A builder at page-space `origin` (the template's top-left corner). The geometry is computed here, once,
+ * exactly as the tldraw builder always did (so the tldraw records are unchanged), and both emitters read it.
+ */
+export function createBoardBuilder(origin: TemplatePoint): BoardBuilder {
+  const nodes: PlanNode[] = []
   let finished = false
 
-  function nextIndex(parentId: TLParentId): IndexKey {
-    const next = getIndexAbove(lastIndex.get(parentId) ?? null)
-    lastIndex.set(parentId, next)
-    return next
+  function offsetOf(parent: PlanFrame | null): { x: number; y: number } {
+    if (!parent) return { x: 0, y: 0 }
+    if (!nodes.includes(parent)) throw new Error('template builder: unknown parent')
+    return { x: parent.page.x, y: parent.page.y }
   }
 
-  function parentInfo(parent: TLFrameShape | null): {
-    parentId: TLParentId
-    offset: { x: number; y: number }
-  } {
-    if (!parent) return { parentId: ctx.pageId, offset: { x: 0, y: 0 } }
-    const p = placed.get(parent.id)
-    if (!p) throw new Error(`template builder: unknown parent ${parent.id}`)
-    return { parentId: parent.id, offset: { x: p.page.x, y: p.page.y } }
-  }
-
-  function common(
-    parent: TLFrameShape | null,
-    x: number,
-    y: number,
-    opts: { locked?: boolean; meta?: Readonly<Record<string, string>> } = {},
-  ) {
-    const { parentId } = parentInfo(parent)
-    return {
-      id: createShapeId(),
-      typeName: 'shape' as const,
-      x,
-      y,
-      rotation: 0,
-      index: nextIndex(parentId),
-      parentId,
-      isLocked: opts.locked ?? false,
-      opacity: 1,
-      meta: { ...opts.meta },
-    }
-  }
-
-  function register(shape: TLShape, parent: TLFrameShape | null, local: Rect, outline: Outline = 'rect') {
+  function add<T extends PlanNode>(node: T): T {
     if (finished) throw new Error('template builder: already finished')
-    const { offset } = parentInfo(parent)
-    placed.set(shape.id, {
-      shape,
-      page: { x: offset.x + local.x, y: offset.y + local.y, w: local.w, h: local.h },
-      outline,
-    })
-    shapes.push(shape)
+    nodes.push(node)
+    return node
+  }
+
+  function place(parent: PlanFrame | null, local: Rect): Rect {
+    const offset = offsetOf(parent)
+    return { x: offset.x + local.x, y: offset.y + local.y, w: local.w, h: local.h }
   }
 
   const builder: BoardBuilder = {
     frame(spec) {
-      const x = ctx.origin.x + spec.x
-      const y = ctx.origin.y + spec.y
-      const shape: TLFrameShape = {
-        ...common(null, x, y),
-        type: 'frame',
-        props: { w: spec.w, h: spec.h, name: spec.name, color: 'black' },
-      }
-      register(shape, null, { x, y, w: spec.w, h: spec.h })
-      return shape
+      const x = origin.x + spec.x
+      const y = origin.y + spec.y
+      return add<PlanFrame>({
+        kind: 'frame',
+        seq: nodes.length,
+        parent: null,
+        x,
+        y,
+        page: { x, y, w: spec.w, h: spec.h },
+        outline: 'rect',
+        w: spec.w,
+        h: spec.h,
+        name: spec.name,
+      })
     },
 
     section(spec) {
       const frame = builder.frame(spec)
       const headingSize = spec.headingSize ?? 'l'
+      const introW = Math.min(spec.w - PAD * 2, 1000)
       builder.text(frame, {
         x: PAD,
         y: HEADING_Y,
-        w: spec.w - PAD * 2,
+        // As wide as the intro under it (W5-59): the two share a reading-order row, read by their centres,
+        // so a heading wider than its intro was read after it.
+        w: spec.intro ? introW : spec.w - PAD * 2,
         text: spec.heading,
         size: headingSize,
         color: 'black',
         locked: true,
+        heading: true,
       })
       if (spec.intro) {
         builder.text(frame, {
           x: PAD,
           y: INTRO_Y,
-          w: Math.min(spec.w - PAD * 2, 1000),
+          w: introW,
           text: spec.intro,
           size: 's',
           color: 'grey',
@@ -248,81 +344,75 @@ export function createBoardBuilder(ctx: TemplateContext): BoardBuilder {
     },
 
     text(parent, spec) {
-      const shape: TLTextShape = {
-        ...common(parent, spec.x, spec.y, { locked: spec.locked }),
-        type: 'text',
-        props: {
-          color: spec.color ?? 'black',
-          size: spec.size ?? 's',
-          font: spec.font ?? 'sans',
-          textAlign: spec.align ?? 'start',
-          w: spec.w,
-          richText: toRichText(spec.text),
-          scale: 1,
-          autoSize: false,
+      const font = spec.font ?? 'sans'
+      const heading = spec.heading ?? false
+      return add<PlanText>({
+        kind: 'text',
+        seq: nodes.length,
+        parent,
+        x: spec.x,
+        y: spec.y,
+        // Height is measured by the editor; a nominal one-line box for arrow maths.
+        page: place(parent, { x: spec.x, y: spec.y, w: spec.w, h: 1 }),
+        outline: 'rect',
+        w: spec.w,
+        text: spec.text,
+        size: spec.size ?? 's',
+        color: spec.color ?? 'black',
+        align: spec.align ?? 'start',
+        font,
+        locked: spec.locked ?? false,
+        heading,
+        scene: {
+          text: spec.scene?.text ?? spec.text,
+          font: spec.scene?.font ?? (heading ? 'display' : font),
+          displayText: spec.scene?.displayText ?? null,
         },
-      }
-      // Height is measured by the editor; register a nominal one-line box for arrow maths.
-      register(shape, parent, { x: spec.x, y: spec.y, w: spec.w, h: 1 })
-      return shape
+      })
     },
 
     note(parent, spec) {
       const scale = spec.scale ?? 1
-      const shape: TLNoteShape = {
-        ...common(parent, spec.x, spec.y),
-        type: 'note',
-        props: {
-          color: spec.color,
-          labelColor: 'black',
-          size: spec.size ?? 's',
-          font: 'sans',
-          fontSizeAdjustment: 1,
-          align: 'middle',
-          verticalAlign: 'middle',
-          growY: 0,
-          url: '',
-          richText: toRichText(spec.text),
-          scale,
-          textLastEditedBy: null,
-        },
-      }
-      register(shape, parent, { x: spec.x, y: spec.y, w: NOTE_SIZE * scale, h: NOTE_SIZE * scale })
-      return shape
+      return add<PlanNote>({
+        kind: 'note',
+        seq: nodes.length,
+        parent,
+        x: spec.x,
+        y: spec.y,
+        page: place(parent, { x: spec.x, y: spec.y, w: NOTE_SIZE * scale, h: NOTE_SIZE * scale }),
+        outline: 'rect',
+        text: spec.text,
+        color: spec.color,
+        size: spec.size ?? 's',
+        scale,
+      })
     },
 
     geo(parent, spec) {
       const geo = spec.geo ?? 'rectangle'
-      const shape: TLGeoShape = {
-        ...common(parent, spec.x, spec.y, { locked: spec.locked, meta: spec.meta }),
-        type: 'geo',
-        props: {
-          w: spec.w,
-          h: spec.h,
-          geo,
-          dash: spec.dash ?? 'solid',
-          growY: 0,
-          url: '',
-          scale: 1,
-          flipX: false,
-          flipY: false,
-          color: spec.color ?? 'black',
-          labelColor: spec.labelColor ?? 'black',
-          fill: spec.fill ?? 'none',
-          size: spec.size ?? 's',
-          font: 'sans',
-          align: 'middle',
-          verticalAlign: 'middle',
-          richText: toRichText(spec.text ?? ''),
-        },
-      }
-      register(
-        shape,
+      return add<PlanGeo>({
+        kind: 'geo',
+        seq: nodes.length,
         parent,
-        { x: spec.x, y: spec.y, w: spec.w, h: spec.h },
-        geo === 'ellipse' || geo === 'oval' ? 'ellipse' : 'rect',
-      )
-      return shape
+        x: spec.x,
+        y: spec.y,
+        page: place(parent, { x: spec.x, y: spec.y, w: spec.w, h: spec.h }),
+        outline: geo === 'ellipse' ? 'ellipse' : 'rect',
+        w: spec.w,
+        h: spec.h,
+        text: spec.text ?? '',
+        geo,
+        color: spec.color ?? 'black',
+        labelColor: spec.labelColor ?? 'black',
+        fill: spec.fill ?? 'none',
+        dash: spec.dash ?? 'solid',
+        size: spec.size ?? 's',
+        locked: spec.locked ?? false,
+        meta: { ...spec.meta },
+        titled: spec.titled ?? false,
+        heading: spec.heading ?? false,
+        scene: { text: spec.scene?.text ?? spec.text ?? '' },
+      })
     },
 
     imageSlot(parent, spec) {
@@ -373,69 +463,49 @@ export function createBoardBuilder(ctx: TemplateContext): BoardBuilder {
     },
 
     arrow(from, to, spec = {}) {
-      const a = placed.get(from.id)
-      const b = placed.get(to.id)
-      if (!a || !b) throw new Error('template builder: arrow endpoints must be built first')
-      const frameId = commonFrameAncestor(a.shape, b.shape, placed)
-      const parent = frameId ? placed.get(frameId) : undefined
-      const parentFrame = parent?.shape.type === 'frame' ? parent.shape : null
-      const parentId: TLParentId = parentFrame ? parentFrame.id : ctx.pageId
-      const offset = parent && parentFrame ? { x: parent.page.x, y: parent.page.y } : { x: 0, y: 0 }
-
+      if (!nodes.includes(from) || !nodes.includes(to)) {
+        throw new Error('template builder: arrow endpoints must be built first')
+      }
+      const parentFrame = commonFrame(from, to)
+      const offset = parentFrame ? { x: parentFrame.page.x, y: parentFrame.page.y } : { x: 0, y: 0 }
       const startAnchor = spec.startAnchor ?? null
       const endAnchor = spec.endAnchor ?? null
-      const pa = anchorPoint(a.page, startAnchor)
-      const pb = anchorPoint(b.page, endAnchor)
-      const s = exitPoint(a, startAnchor, pa, pb)
-      const e = exitPoint(b, endAnchor, pb, pa)
-
+      const pa = anchorPoint(from.page, startAnchor)
+      const pb = anchorPoint(to.page, endAnchor)
+      const s = exitPoint(from, startAnchor, pa, pb)
+      const e = exitPoint(to, endAnchor, pb, pa)
       const x = s.x - offset.x
       const y = s.y - offset.y
-      const shape: TLArrowShape = {
-        id: createShapeId(),
-        typeName: 'shape',
-        type: 'arrow',
+      return add<PlanArrow>({
+        kind: 'arrow',
+        seq: nodes.length,
+        parent: parentFrame,
         x,
         y,
-        rotation: 0,
-        index: nextIndex(parentId),
-        parentId,
-        isLocked: false,
-        opacity: 1,
-        meta: {},
-        props: {
-          kind: 'arc',
-          elbowMidPoint: 0.5,
-          dash: spec.dash ?? 'solid',
-          size: spec.size ?? 'm',
-          fill: 'none',
-          color: spec.color ?? 'grey',
-          labelColor: 'black',
-          bend: 0,
-          start: { x: 0, y: 0 },
-          end: { x: e.x - s.x, y: e.y - s.y },
-          arrowheadStart: 'none',
-          arrowheadEnd: spec.arrowheadEnd ?? 'arrow',
-          richText: toRichText(''),
-          labelPosition: 0.5,
-          font: 'sans',
-          scale: 1,
+        page: {
+          x: offset.x + x + Math.min(0, e.x - s.x),
+          y: offset.y + y + Math.min(0, e.y - s.y),
+          w: Math.abs(e.x - s.x),
+          h: Math.abs(e.y - s.y),
         },
-      }
-      register(shape, parentFrame, {
-        x: x + Math.min(0, e.x - s.x),
-        y: y + Math.min(0, e.y - s.y),
-        w: Math.abs(e.x - s.x),
-        h: Math.abs(e.y - s.y),
+        outline: 'rect',
+        from,
+        to,
+        startAnchor,
+        endAnchor,
+        color: spec.color ?? 'grey',
+        size: spec.size ?? 'm',
+        dash: spec.dash ?? 'solid',
+        arrowheadEnd: spec.arrowheadEnd ?? 'arrow',
+        elbow: spec.elbow ?? false,
+        start: s,
+        end: e,
       })
-      bindings.push(arrowBinding(shape.id, from.id, 'start', startAnchor))
-      bindings.push(arrowBinding(shape.id, to.id, 'end', endAnchor))
-      return shape
     },
 
     chain(steps, spec) {
-      const arrows: TLArrowShape[] = []
-      let prev: TLShape | undefined
+      const arrows: PlanArrow[] = []
+      let prev: PlanShape | undefined
       for (const step of steps) {
         if (prev) arrows.push(builder.arrow(prev, step, spec))
         prev = step
@@ -445,53 +515,24 @@ export function createBoardBuilder(ctx: TemplateContext): BoardBuilder {
 
     finish() {
       finished = true
-      return [...shapes, ...bindings]
+      return { origin: { x: origin.x, y: origin.y }, nodes: [...nodes] }
     },
   }
   return builder
 }
 
-function arrowBinding(
-  arrowId: TLShapeId,
-  targetId: TLShapeId,
-  terminal: 'start' | 'end',
-  anchor: { x: number; y: number } | null,
-): TLArrowBinding {
-  return {
-    id: createBindingId(),
-    typeName: 'binding',
-    type: 'arrow',
-    fromId: arrowId,
-    toId: targetId,
-    props: {
-      terminal,
-      normalizedAnchor: anchor ? { x: anchor.x, y: anchor.y } : { x: 0.5, y: 0.5 },
-      isExact: false,
-      isPrecise: anchor !== null,
-      snap: 'none',
-    },
-    meta: {},
-  }
-}
-
 /**
- * Mirrors tldraw's arrow reparenting: the closest common frame, where a bound frame
- * counts as its own ancestor; null means the page.
+ * Mirrors tldraw's arrow reparenting: the closest common frame, where a bound frame counts as its own
+ * ancestor; null means the page. (Template frames never nest.)
  */
-function commonFrameAncestor(a: TLShape, b: TLShape, placed: Map<TLShapeId, Placed>): TLShapeId | null {
-  const chain = (shape: TLShape): TLShapeId[] => {
-    const ids: TLShapeId[] = shape.type === 'frame' ? [shape.id] : []
-    let parentId: TLParentId = shape.parentId
-    for (let depth = 0; depth < 64 && parentId.startsWith('shape:'); depth++) {
-      const parent = placed.get(parentId as TLShapeId)
-      if (!parent) break
-      ids.push(parent.shape.id)
-      parentId = parent.shape.parentId
-    }
-    return ids
+function commonFrame(a: PlanShape, b: PlanShape): PlanFrame | null {
+  const chain = (shape: PlanShape): PlanFrame[] => {
+    const out: PlanFrame[] = shape.kind === 'frame' ? [shape] : []
+    for (let p = shape.parent, depth = 0; p && depth < 64; p = p.parent, depth++) out.push(p)
+    return out
   }
   const bChain = new Set(chain(b))
-  for (const id of chain(a)) if (bChain.has(id)) return id
+  for (const f of chain(a)) if (bChain.has(f)) return f
   return null
 }
 
@@ -503,7 +544,7 @@ function anchorPoint(rect: Rect, anchor: { x: number; y: number } | null): { x: 
 
 /** Where the straight line from `inside` towards `toward` leaves the shape's outline. */
 function exitPoint(
-  target: Placed,
+  target: PlanShape,
   anchor: { x: number; y: number } | null,
   inside: { x: number; y: number },
   toward: { x: number; y: number },

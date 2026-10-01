@@ -6,6 +6,7 @@
 // record would keep every image and video ever placed, forever.
 
 import { isId } from '@draftroom/dev-assets'
+import { filesOfElements } from '../canvas/lobby-elements.ts'
 
 export interface VersionRef {
   assetId: string
@@ -41,10 +42,16 @@ export function versionsInRecords(records: Iterable<unknown>): VersionRef[] {
   return [...out.values()]
 }
 
+/** A version a checkpoint names; `assetId` null when a v2 element names only its version (`fileId`). */
+export interface CheckpointVersionRef {
+  assetId: string | null
+  versionId: string
+}
+
 /**
- * Bridge release R0: a checkpoint body this build cannot read (not `draftroom-checkpoint` v1: the new
- * canvas's `lobby-checkpoint` v2 above all). It may show files, so it is never taken as showing none:
- * the collector counts it as unread (an incomplete pass) and records no scan for it.
+ * Bridge release R0: a checkpoint body this build cannot read (neither `draftroom-checkpoint` v1 nor, on
+ * this branch, the new canvas's `lobby-checkpoint` v2). It may show files, so it is never taken as showing
+ * none: the collector counts it as unread (an incomplete pass) and records no scan for it.
  */
 export class UnreadableCheckpointBody extends Error {
   constructor() {
@@ -54,11 +61,23 @@ export class UnreadableCheckpointBody extends Error {
 }
 
 /**
- * A checkpoint body (history's `draftroom-checkpoint` JSON, v1): the versions its records reference.
- * Throws SyntaxError when it is not JSON, UnreadableCheckpointBody when it is JSON of another format.
+ * A checkpoint body (history's snapshot-rows.ts): the versions it references. v1 (`draftroom-checkpoint`)
+ * holds tldraw records; v2 (`lobby-checkpoint`, the Excalidraw engine, docs/EXCALIDRAW-MIGRATION.md
+ * §3.7) holds elements, whose images name their version by `fileId` (D7). The collector finds the asset
+ * of a version named without one (scanCheckpoints). Throws SyntaxError when it is not JSON,
+ * UnreadableCheckpointBody when it is JSON of another format (bridge release R0).
  */
-export function versionsInCheckpoint(raw: string): VersionRef[] {
-  const body = JSON.parse(raw) as { format?: unknown; version?: unknown; documents?: unknown } | null
+export function versionsInCheckpoint(raw: string): CheckpointVersionRef[] {
+  const body = JSON.parse(raw) as {
+    format?: unknown
+    version?: unknown
+    documents?: unknown
+    elements?: unknown
+  } | null
+  if (isObject(body) && body.format === 'lobby-checkpoint' && body.version === 2) {
+    const elements = Array.isArray(body.elements) ? body.elements : []
+    return filesOfElements(elements)
+  }
   if (!isObject(body) || body.format !== 'draftroom-checkpoint' || body.version !== 1)
     throw new UnreadableCheckpointBody()
   const docs = Array.isArray(body.documents) ? body.documents : []
@@ -69,8 +88,13 @@ export interface BoardRefs {
   canvas: VersionRef[]
   deleted: VersionRef[]
   /**
+   * Excalidraw engine (apps/sync/src/room-internal/asset-refs.ts `versionsOnly`): versions an image
+   * names by `fileId` with no file facts, on the canvas or in what could come back. Kept like the others.
+   */
+  versions: string[]
+  /**
    * Bridge release R0: sync read only part of the board (a converted board's new-canvas elements are
-   * not read by this build; sync's `newCanvasTables: true`). Its refs count, the pass is incomplete.
+   * not read by a tldraw sync; its `newCanvasTables: true`). Its refs count, the pass is incomplete.
    */
   partial: boolean
 }
@@ -87,5 +111,11 @@ export function parseBoardRefs(value: unknown, boardId: string): BoardRefs | nul
   const { canvas, deleted } = value
   if (!Array.isArray(canvas) || !Array.isArray(deleted)) return null
   if (!canvas.every(isRef) || !deleted.every(isRef)) return null
-  return { canvas, deleted, partial: value.newCanvasTables === true }
+  const partial = value.newCanvasTables === true
+  const only = value.versionsOnly
+  if (only === undefined) return { canvas, deleted, versions: [], partial }
+  if (!isObject(only) || !Array.isArray(only.canvas) || !Array.isArray(only.deleted)) return null
+  const versions = [...only.canvas, ...only.deleted]
+  if (!versions.every((v) => isId('ver', v))) return null
+  return { canvas, deleted, versions: versions as string[], partial }
 }

@@ -24,25 +24,39 @@ export interface BackupService {
 }
 
 export function createBackupService(opts: {
-  /** `internalSecret` is what the offsite copies are signed with (signing.ts). */
-  config: Pick<SyncConfig, 'dataDir' | 'backupStore' | 'backupIntervalMs' | 'internalSecret'>
+  /** The offsite copies are signed with `backupSigningSecret`; the derived key of `internalSecret` verifies older ones (signing.ts). */
+  config: Pick<
+    SyncConfig,
+    'dataDir' | 'backupStore' | 'backupIntervalMs' | 'internalSecret' | 'backupSigningSecret'
+  >
   /** The registry's local backups root; null when local backups are off (then nothing goes offsite). */
   backupsDir: string | null
   log: (...a: unknown[]) => void
 }): BackupService {
   const { config, backupsDir, log } = opts
   const store = backupsDir ? openBackupStore(config.backupStore) : null
+  const signingKey = store
+    ? backupSigningKey({ backup: config.backupSigningSecret ?? null, internal: config.internalSecret })
+    : null
   const offsite =
-    store && backupsDir
+    store && backupsDir && signingKey
       ? new OffsiteBackups({
           store,
           localRoot: backupsDir,
-          signingKey: backupSigningKey(config.internalSecret),
+          signingKey,
           intervalMs: config.backupIntervalMs,
           log,
         })
       : null
   log(`[backup] offsite backups: ${offsite ? describeBackupStore(config.backupStore) : 'off'}`)
+  // Key ids are hashes, never secrets (signing.ts). The derived key signing in production is refused by
+  // loadConfig; outside it, the line says what to set.
+  if (offsite && signingKey)
+    log(
+      signingKey.source === 'dedicated'
+        ? `[backup] offsite backups signed with DRAFTROOM_BACKUP_SIGNING_SECRET (key id ${signingKey.id}); the key derived from DRAFTROOM_INTERNAL_SECRET (key id ${signingKey.verifyOnlyIds.join(', ')}) only verifies older backups`
+        : `[backup] offsite backups signed with the key derived from DRAFTROOM_INTERNAL_SECRET (key id ${signingKey.id}): set DRAFTROOM_BACKUP_SIGNING_SECRET (docs/DEPLOY.md "Signed backups")`,
+    )
   return {
     async start() {
       await applyStagedRestores({ dataDir: config.dataDir, log })

@@ -7,10 +7,9 @@
 import { HAND_AUTO_LOWER_MS, type RaisedHand } from '@draftroom/contracts'
 import { type Ref, useEffect, useRef, useState } from 'react'
 import { ownName, ownNameParts, splitGuestMarker } from '../../invite/model.ts'
-import type { FeatureContext } from '../types.ts'
 import { handNotice, waitedFor } from './hand-notices.ts'
-import { useIsFacilitator, useNow } from './hooks.ts'
 import type { WorkshopSnapshot, WorkshopStore } from './store.ts'
+import { useIsFacilitator, useNow, type WorkshopContext } from './workshop-context.ts'
 
 export function HandIcon({ size = 15 }: { size?: number }) {
   return (
@@ -118,7 +117,7 @@ export function HandsSection({
   snap,
   sectionRef,
 }: {
-  ctx: FeatureContext
+  ctx: WorkshopContext
   store: WorkshopStore
   snap: WorkshopSnapshot
   sectionRef?: Ref<HTMLElement>
@@ -213,7 +212,7 @@ export function HandsSection({
  * Toasts for hand changes (rendered in the overlay, which is always mounted, with the live ctx: the
  * role can change during a session).
  */
-export function HandToasts({ ctx, store }: { ctx: FeatureContext; store: WorkshopStore }) {
+export function HandToasts({ ctx, store }: { ctx: WorkshopContext; store: WorkshopStore }) {
   const live = useRef(ctx)
   live.current = ctx
   const facilitating = useRef(false)

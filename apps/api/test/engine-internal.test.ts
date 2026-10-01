@@ -1,14 +1,18 @@
-// Bridge release R0 (docs/EXCALIDRAW-MIGRATION.md §5.10): the api half of the Excalidraw engine's
-// internal contracts (§1 A1, A2, §2.10.2; @draftroom/contracts sync-internal.ts), reviewed from the spike
-// (O5): A1 file-refs and A2 workshop-state (the sync pull). Every error body is the contract's, and every
-// failure is one sync treats as "unavailable" or a refusal (it fails closed), never as an answer.
-// (A3, the ticket's guest claim, ships with the Excalidraw build: R0's tickets are unchanged.)
+// Spike B, O5: the api half of the Excalidraw engine's internal contracts (docs/EXCALIDRAW-MIGRATION.md
+// §1 A1-A3, §2.10.2; @draftroom/contracts sync-internal.ts): A1 file-refs, A2 workshop-state (the sync
+// pull), and A3 the ticket's `guest` claim. Every error body is the contract's, and every failure is
+// one sync treats as "unavailable" or a refusal, never as an answer. Bridge release R0 (§5.10) ships A1
+// and the A2 GET, reviewed from the spike; A3 ships with the Excalidraw build.
 
+import { verifyTicket } from '@draftroom/auth-tickets'
 import {
   FILE_REFS_MAX_IDS,
   FileRefsResponse,
   fileRefsPath,
+  GuestJoined,
+  ReviewLinkCreated,
   SyncInternalErrorBody,
+  TicketResponse,
   WorkshopStateBody,
   workshopStatePath,
 } from '@draftroom/contracts'
@@ -101,7 +105,7 @@ describe('A1 GET /internal/boards/:bid/file-refs', () => {
     expectError(await get(`/internal/boards/nope/file-refs?ids=x`, null), 401, 'bad-secret')
   })
 
-  it('answers ok / foreign / missing, each asked id exactly once, in the contract shape', async () => {
+  it('answers ok / missing, each asked id exactly once, in the contract shape; `foreign` stays empty (audit L4)', async () => {
     const own = await addVersion(boardId, { name: 'photo.png' })
     const pdf = await addVersion(boardId, { kind: 'pdf', pages: 12, name: 'deck.pdf' })
     // Another board of the same workspace: not servable here without a history link.
@@ -131,8 +135,10 @@ describe('A1 GET /internal/boards/:bid/file-refs', () => {
     expect(body.ok.map((r) => r.versionId).sort()).toEqual(
       [own.versionId, pdf.versionId, linked.versionId].sort(),
     )
-    expect(body.foreign.sort()).toEqual([unlinked.versionId, foreign.versionId].sort())
-    expect(body.missing).toEqual([missing])
+    // A version the board cannot show is not told apart from one that does not exist: an existing
+    // version of another board or workspace is `missing` to this board, and `foreign` is always empty.
+    expect(body.foreign).toEqual([])
+    expect(body.missing.sort()).toEqual([unlinked.versionId, foreign.versionId, missing].sort())
     const byId = new Map(body.ok.map((r) => [r.versionId, r]))
     expect(byId.get(own.versionId)).toEqual({
       versionId: own.versionId,
@@ -171,12 +177,17 @@ describe('A1 GET /internal/boards/:bid/file-refs', () => {
     expectError(await get(fileRefsPath('NOT A BOARD', [v.versionId])), 404, 'board-not-found')
   })
 
-  it('still answers for a trashed board (sync asks for boards whose rooms are open)', async () => {
+  it('a trashed board is 404 board-not-found, as the /files routes answer (audit L4); an archived one still answers', async () => {
     const v = await addVersion(boardId)
+    await api.db.query("UPDATE boards SET status = 'archived' WHERE id = $1", [boardId])
+    const archived = await get(fileRefsPath(boardId, [v.versionId]))
+    expect(archived.statusCode, archived.body).toBe(200)
+    expect(FileRefsResponse.parse(archived.json()).ok.map((r) => r.versionId)).toEqual([v.versionId])
     await api.db.query("UPDATE boards SET status = 'trashed', trashed_at = now() WHERE id = $1", [boardId])
-    const res = await get(fileRefsPath(boardId, [v.versionId]))
-    expect(res.statusCode, res.body).toBe(200)
-    expect(FileRefsResponse.parse(res.json()).ok.map((r) => r.versionId)).toEqual([v.versionId])
+    expectError(await get(fileRefsPath(boardId, [v.versionId])), 404, 'board-not-found')
+    // The other engine route is about the room's own state and still answers for the open room.
+    const state = await get(workshopStatePath(boardId))
+    expect(state.statusCode, state.body).toBe(200)
   })
 
   it('does not leak one board’s versions to another board of another workspace, whatever the query order', async () => {
@@ -184,7 +195,7 @@ describe('A1 GET /internal/boards/:bid/file-refs', () => {
     const own = await addVersion(boardId)
     const res = await get(fileRefsPath(elsewhere, [own.versionId]))
     expect(res.statusCode, res.body).toBe(200)
-    expect(FileRefsResponse.parse(res.json())).toEqual({ ok: [], foreign: [own.versionId], missing: [] })
+    expect(FileRefsResponse.parse(res.json())).toEqual({ ok: [], foreign: [], missing: [own.versionId] })
   })
 
   it('503 unavailable when the database fails (sync fails closed on it)', async () => {
@@ -243,5 +254,64 @@ describe('A2 GET /internal/boards/:bid/workshop-state', () => {
     expectError(await get(workshopStatePath(boardId), TICKET_SECRET), 401, 'bad-secret')
     expectError(await get(workshopStatePath('b-0000000000')), 404, 'board-not-found')
     expectError(await get(workshopStatePath('../x')), 404, 'board-not-found')
+  })
+})
+
+describe('A3 the ticket guest claim', () => {
+  async function ticketOf(c: { req: Client['req'] }, bid = boardId, body?: unknown) {
+    const res = await c.req('POST', `/api/boards/${bid}/ticket`, body)
+    expect(res.statusCode, res.body).toBe(200)
+    const t = TicketResponse.parse(res.json())
+    const v = verifyTicket(TICKET_SECRET, t.ticket, { boardId: bid })
+    if (!v.ok) throw new Error(`ticket does not verify: ${v.reason}`)
+    return v.claims
+  }
+
+  it('an account never gets the claim, and cannot ask for it', async () => {
+    const claims = await ticketOf(bob)
+    expect(claims.guest).toBeUndefined()
+    expect('guest' in claims).toBe(false)
+    const asked = await ticketOf(bob, boardId, { guest: true, role: 'viewer' })
+    expect(asked.guest).toBeUndefined()
+    expect(asked.role).toBe('owner')
+  })
+
+  it('a name-only guest always gets `guest: true`, with the role its link grants and nothing more', async () => {
+    const link = await bob.req('POST', `/api/boards/${boardId}/review-links`, {
+      role: 'editor',
+      allowGuests: true,
+    })
+    expect(link.statusCode, link.body).toBe(201)
+    const url = ReviewLinkCreated.parse(link.json()).url
+    const token = url.slice(url.lastIndexOf('/') + 1)
+    const joined = await api.app.inject({
+      method: 'POST',
+      url: `/api/invitations/${token}/guest`,
+      payload: { name: 'Sam' },
+      headers: { origin: ORIGIN },
+      remoteAddress: '10.77.0.1',
+    })
+    expect(joined.statusCode, joined.body).toBe(201)
+    const cookie = joined.cookies.find((c) => c.name === 'dr_session')
+    if (!cookie) throw new Error('no session cookie')
+    const guestUser = GuestJoined.parse(joined.json()).user
+    const guest = {
+      req: (method: 'POST', url: string, body?: unknown) =>
+        api.app.inject({
+          method,
+          url,
+          ...(body === undefined ? {} : { payload: body as object }),
+          headers: { origin: ORIGIN, cookie: `dr_session=${cookie.value}` },
+        }),
+    }
+    const claims = await ticketOf(guest as unknown as Client)
+    expect(claims.guest).toBe(true)
+    expect(claims.uid).toBe(guestUser.id)
+    expect(claims.role).toBe('editor') // a workshop link's role; the claim adds sync's guest limits
+    expect(claims.name).toContain('(guest)')
+    // The same guest asking for "no claim" or an owner's role still gets the claim and its own role.
+    const forged = await ticketOf(guest as unknown as Client, boardId, { guest: false, role: 'owner' })
+    expect(forged.guest).toBe(true)
+    expect(forged.role).toBe('editor')
   })
 })

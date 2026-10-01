@@ -1,0 +1,60 @@
+/* The ported tags feature on the new canvas (features/tags/ported): the chip layer over the canvas and
+   its zoom levels. The chips themselves, pills, the picker, the panel and the filter bar are ../tags.css. */
+
+/* The chip layer: scene coordinates, moved and scaled with the camera by one transform (Chips.tsx). */
+.dr-tags-scene {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 0;
+  height: 0;
+  transform-origin: 0 0;
+  pointer-events: none;
+}
+/* One element's box: the chips sit in it as they sat in the tldraw shape (../tags.css .dr-tag-chips). */
+.dr-tags-box {
+  position: absolute;
+  pointer-events: none;
+}
+/* Zoomed out: a colour dot per tag, then nothing (the layer carries the level). */
+.dr-tags-scene[data-dr-tags-lod="dots"] .dr-tag-chips {
+  flex-wrap: wrap;
+  gap: calc(4px * var(--dr-tag-s));
+}
+.dr-tags-scene[data-dr-tags-lod="dots"] .dr-tag-chip[data-overflow] {
+  display: block;
+}
+.dr-tags-scene[data-dr-tags-lod="dots"] .dr-tag-chip {
+  flex: none;
+  width: calc(22px * var(--dr-tag-s));
+  min-width: 0;
+  height: calc(22px * var(--dr-tag-s));
+  padding: 0;
+  border-radius: 50%;
+  font-size: 0;
+}
+.dr-tags-scene[data-dr-tags-lod="dots"] .dr-tag-chip--more,
+.dr-tags-scene[data-dr-tags-lod="off"] .dr-tag-chips {
+  display: none;
+}
+/* "Show only": the veil over everything else (Filter.tsx). */
+.dr-tags-veil {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+/* The picker when it opens over the canvas (TagPicker.tsx): placed by its own anchor. */
+.dr-tag-picker--floating {
+  position: absolute;
+  top: 0;
+  left: 0;
+  transform: none;
+  pointer-events: auto;
+}
+/* Placed above its anchor, it still sets only `top`: the tldraw bar's rule for the picker above
+   (../tags.css, `bottom: calc(100% + 10px)`) would pin its bottom too and collapse its height, so the
+   placement flipped between above and below on every render (React's update limit; found at the wave-3
+   integration, where 3a's toolbar leaves too little room below a selection near it). */
+.dr-tag-picker--floating[data-side="above"] {
+  bottom: auto;
+}

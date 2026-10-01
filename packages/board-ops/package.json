@@ -5,14 +5,14 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./test-fixtures": "./src/test-fixtures.ts"
+    "./elements": "./src/elements/index.ts",
+    "./common": "./src/common.ts",
+    "./archive-common": "./src/archive-common.ts"
   },
   "scripts": {
     "typecheck": "tsc -p ."
   },
   "dependencies": {
-    "@draftroom/canvas-schema": "workspace:*",
-    "@tldraw/tlschema": "catalog:",
-    "@tldraw/utils": "catalog:"
+    "@draftroom/canvas-schema": "workspace:*"
   }
 }

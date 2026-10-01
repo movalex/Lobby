@@ -26,6 +26,8 @@ everything on screen says Lobby).
 
 ### The script
 
+> **On the Excalidraw build** (`engine/excalidraw`, not on staging yet): at 1:00, B sees the connector follow A's drag, drawn only (2C's re-route in the drag preview, decision D1, `docs/research/excalidraw/REVIEW-W5-EARLY.md` W5-08, merged at the wave-5 engine integration, `docs/research/excalidraw/W5-ENGINE.md`); the saved route arrives when A lets go. The other two steps the early wave-5 review found false there hold since wave 5: 1:20 → 2:45 → 3:30 (W5-04) and 3:30's searchable PDF text (W5-30).
+
 | Time | What you do | What they see |
 |---|---|---|
 | 0:00 | **Dashboard.** "Every DBC project gets a lobby: its boards, files and feedback." Click **New board**, pick **Lobby tour**, then **Create from Lobby tour** at the bottom of the dialog. | A private board with six frames in a row: Welcome, Brainstorm, Plan, Mood board, Retro, Tips and shortcuts. |

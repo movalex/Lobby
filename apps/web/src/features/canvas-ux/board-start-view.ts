@@ -1,7 +1,7 @@
 // Owner-set start view (PRE-08): an editor or owner saves the current view (or a frame) as the board's
 // start view. It lives in the tldraw document record's `meta` (key `drStartView`), so the board's own
 // sync carries it to everyone, it persists with the board, and it never enters anyone's undo history
-// (`editor.updateDocumentSettings` writes with history: 'ignore'). Read-only roles cannot write the
+// (the tldraw page's updateDocumentSettings wrote with history: 'ignore'). Read-only roles cannot write the
 // document (the sync server marks their session read-only), so only editors and owners can set it.
 //
 // Who uses it: people opening the board with no saved camera of their own (a first visit, a new

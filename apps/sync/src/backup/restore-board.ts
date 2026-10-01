@@ -10,7 +10,8 @@
 //   Also --data-dir <DATA> (default DRAFTROOM_DATA_DIR).
 //
 // --from=store reads the offsite store configured by DRAFTROOM_BACKUP_STORE (+ DRAFTROOM_BACKUP_R2_*
-// or R2_*) and needs the sync server's DRAFTROOM_INTERNAL_SECRET: the manifest and the entry must carry
+// or R2_*) and needs the sync server's DRAFTROOM_BACKUP_SIGNING_SECRET and DRAFTROOM_INTERNAL_SECRET (the
+// older backups' key): the manifest and the entry must carry
 // signatures that verify (signing.ts), or, with --allow-unsigned, be unsigned (written before backups
 // were signed) and are then staged with a WARN line; a signature that is present and wrong always
 // refuses. --from=local reads <DATA>/backups; --from=file takes one board database file (for example the
@@ -20,7 +21,7 @@
 
 import { join } from 'node:path'
 import { dataLayout, resolveDataDir } from '@draftroom/dev-assets'
-import { backupSigningSecret, parseBackupStore } from '../config.ts'
+import { backupSigningSecrets, parseBackupStore } from '../config.ts'
 import { BOARD_ID_RE } from '../rooms.ts'
 import { BACKUP_FILE_RE } from './backup.ts'
 import {
@@ -103,7 +104,7 @@ async function main() {
         'DRAFTROOM_BACKUP_STORE is off: set it to fs or r2 (with R2_*) to restore from the store',
       )
     source = storeBackupSource(store, {
-      signingKey: backupSigningKey(backupSigningSecret(process.env)),
+      signingKey: backupSigningKey(backupSigningSecrets(process.env)),
       allowUnsigned: args.allowUnsigned,
     })
   } else if (args.from === 'file') source = fileBackupSource(args.path ?? '')

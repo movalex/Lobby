@@ -1,6 +1,5 @@
-import type { TLDefaultColorStyle } from '@tldraw/tlschema'
-import { CONTENT_Y, createBoardBuilder, PAD } from '../builder.ts'
-import type { TemplateDefinition } from '../types.ts'
+import { CONTENT_Y, type LobbyColor, PAD } from '../builder.ts'
+import type { TemplateSource } from '../source.ts'
 
 const COL_W = 800
 const COL_GAP = 80
@@ -11,7 +10,7 @@ interface Column {
   name: string
   heading: string
   intro: string
-  color: TLDefaultColorStyle
+  color: LobbyColor
   prompts: string[]
 }
 
@@ -42,14 +41,13 @@ const COLUMNS: Column[] = [
 const CHECK_IN = '1 · Check-in'
 const SECTIONS = [CHECK_IN, ...COLUMNS.map((c) => c.name)]
 
-export const retrospective: TemplateDefinition = {
+export const retrospective: TemplateSource = {
   id: 'retrospective',
   name: 'Retrospective',
   description: "Look back as a team: what went well, what to improve, and the actions you'll take next.",
   category: 'review',
   sections: SECTIONS,
-  build(ctx) {
-    const b = createBoardBuilder(ctx)
+  plan(b) {
     const totalW = COLUMNS.length * COL_W + (COLUMNS.length - 1) * COL_GAP
 
     const checkIn = b.section({
@@ -87,7 +85,5 @@ export const retrospective: TemplateDefinition = {
         c.prompts.map((text) => ({ text, color: c.color })),
       )
     })
-
-    return { records: b.finish() }
   },
 }

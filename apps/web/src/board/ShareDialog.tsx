@@ -27,8 +27,6 @@ import { type ReactNode, useCallback, useEffect, useId, useMemo, useRef, useStat
 import { api, isApiError } from '../api/client.ts'
 import { useSession } from '../auth/session.tsx'
 import { announceShareChanged, SHARE_REMOTE_EVENT, sharingApi } from '../features/sharing/api.ts'
-import { ClientExportLine, ExportPolicySection } from '../features/sharing/ExportPolicySection.tsx'
-import { refreshExportPolicy } from '../features/sharing/export-policy.ts'
 import {
   canExtend,
   createdSaying,
@@ -41,6 +39,8 @@ import {
   WORKSHOP_LINK_DEFAULT_HOURS,
   WORKSHOP_LINK_HOUR_OPTIONS,
 } from '../features/sharing/model.ts'
+import { ClientExportLine, ExportPolicySection } from '../features/sharing/ported/ExportPolicySection.tsx'
+import { refreshExportPolicy } from '../features/sharing/ported/export-policy.ts'
 import { RequestAccess } from '../features/sharing/RequestAccess.tsx'
 import '../features/sharing/sharing.css'
 import { fetchBoardGuests, useIsGuest } from '../invite/guest.tsx'

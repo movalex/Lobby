@@ -2,6 +2,7 @@ import type { Db } from '@draftroom/db'
 import type { FastifyRequest } from 'fastify'
 import type { IdentityService } from './auth/identity.ts'
 import type { SessionStore, SessionUser } from './auth/session.ts'
+import type { CanvasEngineProbe } from './canvas-engine.ts'
 import type { ApiConfig } from './config.ts'
 import type { SyncNotifier } from './notifier.ts'
 import type { RouteRateLimit } from './rate-limit.ts'
@@ -59,6 +60,11 @@ export interface AppContext {
    * the one creator check (requireCreator).
    */
   identity: IdentityService
+  /**
+   * Which canvas the sync server runs (canvas-engine.ts): on the new canvas the api marks what it makes
+   * (`boards.new_canvas`, `body_version` 2) and R0's refusals of it do not apply. Absent = tldraw.
+   */
+  canvas?: CanvasEngineProbe
 }
 
 /** Route params arrive untyped; every route validates them (a malformed id is a 404, like a missing one). */

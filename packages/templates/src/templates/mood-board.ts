@@ -1,6 +1,5 @@
-import type { TLDefaultColorStyle } from '@tldraw/tlschema'
-import { CONTENT_Y, createBoardBuilder, NOTE_GAP, PAD } from '../builder.ts'
-import type { TemplateDefinition } from '../types.ts'
+import { CONTENT_Y, type LobbyColor, NOTE_GAP, PAD } from '../builder.ts'
+import type { TemplateSource } from '../source.ts'
 
 const SECTIONS = ['1 · Direction', '2 · Palette', '3 · Imagery', '4 · This, not that'] as const
 
@@ -10,8 +9,8 @@ const BOTTOM_H = 900
 
 const SWATCHES: ReadonlyArray<{
   label: string
-  color: TLDefaultColorStyle
-  labelColor: TLDefaultColorStyle
+  color: LobbyColor
+  labelColor: LobbyColor
 }> = [
   { label: 'Primary', color: 'violet', labelColor: 'white' },
   { label: 'Secondary', color: 'light-violet', labelColor: 'black' },
@@ -30,15 +29,13 @@ const IMAGE_SLOTS = [
   'Wild card from another world',
 ]
 
-export const moodBoard: TemplateDefinition = {
+export const moodBoard: TemplateSource = {
   id: 'mood-board',
   name: 'Mood board',
   description: 'Set a visual direction with keywords, a color palette, image slots and a this-not-that list.',
   category: 'visual',
   sections: SECTIONS,
-  build(ctx) {
-    const b = createBoardBuilder(ctx)
-
+  plan(b) {
     const direction = b.section({
       x: 0,
       y: 0,
@@ -125,26 +122,30 @@ export const moodBoard: TemplateDefinition = {
       intro: "Sharpen the direction by naming what it isn't.",
     })
     const colX = [60, contrastW - 60 - 200] as const
-    // Column headings: locked like every other heading (PRE-07).
+    // Column headings: locked like every other heading (PRE-07), and a reading-order row below the intro
+    // (W5-59: at y 160 they shared the heading's row and "This" was read before the frame's heading).
+    const colY = 192
     b.text(contrast, {
       x: colX[0],
-      y: 160,
+      y: colY,
       w: 200,
       text: 'This',
       size: 'm',
       color: 'green',
       align: 'middle',
       locked: true,
+      heading: true,
     })
     b.text(contrast, {
       x: colX[1],
-      y: 160,
+      y: colY,
       w: 200,
       text: 'Not that',
       size: 'm',
       color: 'red',
       align: 'middle',
       locked: true,
+      heading: true,
     })
     const pairs: ReadonlyArray<[string, string]> = [
       ['e.g. warm and hand-made', 'e.g. rustic or twee'],
@@ -152,11 +153,9 @@ export const moodBoard: TemplateDefinition = {
       ['This…', 'Not that…'],
     ]
     pairs.forEach(([yes, no], i) => {
-      const y = 216 + i * (200 + NOTE_GAP)
+      const y = colY + 44 + i * (200 + NOTE_GAP)
       b.note(contrast, { x: colX[0], y, text: yes, color: 'light-green' })
       b.note(contrast, { x: colX[1], y, text: no, color: 'light-red' })
     })
-
-    return { records: b.finish() }
   },
 }

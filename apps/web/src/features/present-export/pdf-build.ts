@@ -20,6 +20,7 @@ import {
   pushGraphicsState,
   rgb,
   StandardFonts,
+  setCharacterSqueeze,
   setTextRenderingMode,
   TextRenderingMode,
 } from 'pdf-lib'
@@ -38,6 +39,15 @@ export interface PdfTextItem {
   verticalAlign?: 'start' | 'middle' | 'end'
   /** Padding inside the box, board px. */
   inset?: number
+  /**
+   * `text` is already laid out in lines (the canvas's own wrapping, `\n` between lines): each line is
+   * drawn as it is, never re-wrapped, so a word is never split where the canvas did not split it (W5-30:
+   * Helvetica is wider than the canvas's font, and re-wrapping in the box broke "Story" into "Stor"/"y").
+   * A line wider than the box in the PDF's font is squeezed horizontally to fit. Default: wrapped here.
+   */
+  lines?: boolean
+  /** Line height as a multiple of the font size (default LINE_HEIGHT), so lines sit over the visible ones. */
+  lineHeight?: number
 }
 
 export const LINE_HEIGHT = 1.35
@@ -180,8 +190,9 @@ function drawHiddenText(
   const boxTop = origin.y + item.y * k + inset
   const boxH = Math.max(size, item.h * k - inset * 2)
   const width = (s: string) => font.widthOfTextAtSize(s, size)
-  const lines = wrapLines(text, boxW, width)
-  const lineHeight = size * LINE_HEIGHT
+  const lines = item.lines ? text.split('\n') : wrapLines(text, boxW, width)
+  const lineHeight =
+    size * (typeof item.lineHeight === 'number' && item.lineHeight > 0 ? item.lineHeight : LINE_HEIGHT)
   const blockH = lines.length * lineHeight
   const valign = item.verticalAlign ?? 'start'
   const top =
@@ -192,10 +203,15 @@ function drawHiddenText(
   try {
     lines.forEach((line, i) => {
       if (!line) return
-      const w = width(line)
+      const natural = width(line)
+      // A kept line wider than the box: squeezed (Tz) instead of split, so its words stay whole.
+      const squeeze = item.lines && natural > boxW ? Math.max(1, (boxW / natural) * 100) : 100
+      const w = (natural * squeeze) / 100
       const align = item.align ?? 'start'
       const x = align === 'middle' ? boxX + (boxW - w) / 2 : align === 'end' ? boxX + boxW - w : boxX
+      if (squeeze < 100) page.pushOperators(setCharacterSqueeze(squeeze))
       page.drawText(line, { x, y: firstBaseline - i * lineHeight, size, font, color: rgb(0, 0, 0) })
+      if (squeeze < 100) page.pushOperators(setCharacterSqueeze(100))
     })
   } finally {
     page.pushOperators(popGraphicsState())

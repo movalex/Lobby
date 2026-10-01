@@ -1,5 +1,4 @@
-import { type TLRichText, toRichText } from '@tldraw/tlschema'
-import { truncateText } from './board-index.ts'
+import { truncateText } from './common.ts'
 
 /** Nesting deeper than this is ignored (TipTap lists nest a few levels; garbage can nest arbitrarily). */
 const MAX_DEPTH = 64
@@ -77,7 +76,7 @@ function collectLines(node: Record<string, unknown>, depth: number, lines: strin
 }
 
 /**
- * TipTap/ProseMirror JSON (tldraw `TLRichText`) to plain text.
+ * TipTap/ProseMirror JSON (the tldraw era’s rich text) to plain text.
  *
  * Every textblock (paragraph, heading, list-item paragraph, ...) becomes one line and lines are joined
  * with `\n`; `hardBreak` nodes become `\n`; marks (bold, links, highlight, ...) are dropped. List
@@ -98,14 +97,4 @@ export function plainTextOf(richText: unknown): string {
     // Throwing getters / proxies in untrusted input.
     return ''
   }
-}
-
-/**
- * Plain text to a TipTap doc: one paragraph per line (CRLF / CR are normalized to LF first), empty
- * lines become empty paragraphs, no empty text nodes. `plainTextOf(richTextFrom(s))` returns `s` with
- * normalized line endings.
- */
-export function richTextFrom(text: string): TLRichText {
-  const value = typeof text === 'string' ? text : ''
-  return toRichText(value.replace(/\r\n?/g, '\n'))
 }

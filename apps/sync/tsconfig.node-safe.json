@@ -1,0 +1,22 @@
+{
+  // Spike B Node-safety check (docs/EXCALIDRAW-MIGRATION.md §8.6.2; docs/research/excalidraw/spike-b/
+  // CONTRACTS.md "Node-safety rules"). O1's sync tests and O3's load image import these web files across
+  // apps, so they must compile with apps/sync's settings: nodenext, es2023, Node types, NO DOM lib.
+  // Run: pnpm exec tsc -p apps/sync/tsconfig.node-safe.json --noEmit
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "lib": ["es2023"],
+    "types": ["node"],
+    "noEmit": true
+  },
+  "include": [
+    "../web/src/canvas/sync/types.ts",
+    "../web/src/canvas/sync/core/**/*.ts",
+    "../web/src/canvas/sync/headless/**/*.ts",
+    "../web/src/canvas/history/**/*.ts",
+    "../web/src/canvas/lease/client.ts"
+  ],
+  "exclude": ["../web/src/**/*.test.ts"]
+}

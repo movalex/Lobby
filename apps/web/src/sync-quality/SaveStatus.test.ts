@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { saveAnnouncement } from './SaveStatus.tsx'
-import type { DisplayState } from './useSaveStatus.ts'
+import type { DisplayState } from './save-state.ts'
 
 /** Runs a sequence of states through the announcer and collects what it would say. */
 function spoken(states: DisplayState[], role?: string): string[] {

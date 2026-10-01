@@ -7,12 +7,14 @@ import {
   csvCell,
   describeProgress,
   localCastCheck,
+  notInVoteText,
   optimisticBallot,
   plainTextFromRichText,
   readingOrder,
   resultsCsv,
   shapeLabel,
   topResults,
+  voteClick,
 } from './voting.ts'
 
 const rt = (...lines: string[]) => ({
@@ -144,6 +146,32 @@ describe('results', () => {
       label: '-2 ideas',
     }))
     expect(csv).toBe("Rank,Votes,Object type,Text,Object id\r\n1,3,Sticky note,'-2 ideas,shape:a\r\n")
+  })
+})
+
+describe('what a click while voting does (W5-03)', () => {
+  it('the topmost object decides: it gets the vote, or nothing is cast', () => {
+    const inVote = (id: string) => id.startsWith('shape:in')
+    expect(voteClick('shape:in1', inVote)).toEqual({ kind: 'vote', target: 'shape:in1' })
+    expect(voteClick('shape:out', inVote)).toEqual({ kind: 'not-in-vote', target: 'shape:out' })
+    expect(voteClick(undefined, inVote)).toEqual({ kind: 'none' })
+    expect(voteClick(null, inVote)).toEqual({ kind: 'none' })
+  })
+
+  it('says what the vote takes', () => {
+    const notes = ['note']
+    expect(notInVoteText({ scope: 'frame', shapeTypes: notes }, 'Ideas')).toBe(
+      'Not part of this vote: only sticky notes in “Ideas” take votes.',
+    )
+    expect(notInVoteText({ scope: 'frame', shapeTypes: null }, '  ')).toBe(
+      'Not part of this vote: only objects in “the frame” take votes.',
+    )
+    expect(notInVoteText({ scope: 'board', shapeTypes: notes }, null)).toBe(
+      'Not part of this vote: only sticky notes take votes.',
+    )
+    expect(notInVoteText({ scope: 'board', shapeTypes: ['note', 'geo'] }, null)).toBe(
+      'Not part of this vote.',
+    )
   })
 })
 

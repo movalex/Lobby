@@ -1,4 +1,4 @@
-import type { FileCardShape } from '@draftroom/canvas-schema'
+import type { FileCardShapeProps } from '@draftroom/canvas-schema'
 import {
   type AssetKind,
   type AssetVersionMeta,
@@ -7,7 +7,7 @@ import {
   usableDerivatives,
 } from '../assets/contract.ts'
 
-type Props = FileCardShape['props']
+type Props = FileCardShapeProps
 export type HintProps = Pick<Props, 'status' | 'pageCount' | 'durationMs' | 'posterDerivativeId'>
 
 /** Card size on creation. The preview area is letterboxed, so the exact aspect ratio of the file does not matter. */

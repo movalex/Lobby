@@ -1,6 +1,8 @@
 node_modules/
 dist/
 build/
+# apps/web/build holds Vite plugins (source), not build output
+!/apps/web/build/
 coverage/
 *.tsbuildinfo
 .vite/

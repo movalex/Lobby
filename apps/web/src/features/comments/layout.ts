@@ -14,6 +14,10 @@ const MARGIN = 12
 const SHEET_MARGIN = 8
 const SHEET_MAX_HEIGHT = 420
 const SHEET_MAX_SHARE = 0.55
+/** The tallest a popover beside its marker gets (comments.css `.dr-cpopover`). */
+const MAX_POPOVER_HEIGHT = 520
+/** What a popover beside its marker is assumed to need below its top (it grows up to MAX_POPOVER_HEIGHT). */
+const POPOVER_ROOM = 320
 
 export interface Size {
   w: number
@@ -29,8 +33,20 @@ export interface PopoverLayout {
   width: number
   /** Bottom sheet (phones). */
   docked: boolean
-  /** Bottom sheets: the tallest the sheet may get (px), so the marker above it stays visible. */
+  /**
+   * Bottom sheets: the tallest the sheet may get (px), so the marker above it stays visible. Popovers
+   * beside a marker, when the board keeps a band at its bottom (`bottomInset`): the tallest that ends
+   * above it.
+   */
   maxHeight: number | null
+}
+
+export interface PopoverOptions {
+  /**
+   * Pixels at the bottom of the viewport the board's own chrome keeps (the Excalidraw board page's
+   * toolbar row, W5-07): a popover beside its marker ends above them. 0 (the default): the whole viewport.
+   */
+  readonly bottomInset?: number
 }
 
 export const isPhoneViewport = (vp: Size) => vp.w < PHONE_MAX_WIDTH
@@ -57,7 +73,11 @@ export function revealTarget(vp: Size): { x: number; y: number } {
  * The popover for a marker whose anchor is at `anchor` (viewport coordinates; null when the thread
  * has no place on this page, e.g. its object was deleted).
  */
-export function popoverLayout(vp: Size, anchor: { x: number; y: number } | null): PopoverLayout {
+export function popoverLayout(
+  vp: Size,
+  anchor: { x: number; y: number } | null,
+  options: PopoverOptions = {},
+): PopoverLayout {
   if (isPhoneViewport(vp)) {
     const width = Math.max(0, Math.round(vp.w - SHEET_MARGIN * 2))
     return {
@@ -70,17 +90,25 @@ export function popoverLayout(vp: Size, anchor: { x: number; y: number } | null)
     }
   }
   const width = Math.max(0, Math.min(MAX_POPOVER_WIDTH, vp.w - MARGIN * 2))
-  if (!anchor) return { left: MARGIN, top: MARGIN, bottom: null, width, docked: false, maxHeight: null }
+  const inset = Math.max(0, options.bottomInset ?? 0)
+  // with a band kept at the bottom, the popover ends above it (and so is never cut off by the edge)
+  const room = vp.h - inset
+  const tallest = (top: number) =>
+    inset > 0 ? Math.max(0, Math.round(Math.min(MAX_POPOVER_HEIGHT, room - top))) : null
+  if (!anchor)
+    return { left: MARGIN, top: MARGIN, bottom: null, width, docked: false, maxHeight: tallest(MARGIN) }
   let left = anchor.x + PIN_SIZE + 10
   if (left + width > vp.w - MARGIN) left = Math.max(MARGIN, anchor.x - width - 10)
-  const top = Math.min(Math.max(MARGIN, anchor.y - PIN_SIZE - 8), Math.max(MARGIN, vp.h - 320))
+  const top = Math.round(
+    Math.min(Math.max(MARGIN, anchor.y - PIN_SIZE - 8), Math.max(MARGIN, room - POPOVER_ROOM)),
+  )
   return {
     left: Math.round(left),
-    top: Math.round(top),
+    top,
     bottom: null,
     width,
     docked: false,
-    maxHeight: null,
+    maxHeight: tallest(top),
   }
 }
 

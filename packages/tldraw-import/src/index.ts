@@ -1,0 +1,56 @@
+/**
+ * The tldraw 5.4.2 → Excalidraw 0.18.0-1118751 converter (docs/EXCALIDRAW-MIGRATION.md §5, D13), used
+ * by apps/sync (conversion, roll-forward) and apps/api (checkpoint and archive v1). It keeps only the
+ * five MIT tldraw packages (`@tldraw/tlschema`, `utils`, `store`, `state`, `validate`) and nothing else
+ * from tldraw, and builds elements through `@draftroom/canvas-schema` (the engine wrappers and the
+ * server's own element check) only.
+ *
+ * - `convertBoard`: the whole-board conversion (fresh indices, page offsets computed once, then frozen);
+ * - `convertRecords`: local mode (frozen offsets, no index; §5.1), used by the roll-forward and deleted rows;
+ * - `migrateRecords`: stored records up to the current tldraw schema;
+ * - `convertDeleted`: `dr_deleted_*` → `lb_deleted` rows;
+ * - `semanticDiff`: the §5.3 verification (`./diff`);
+ * - `./board-file`: reading a board file's tldraw tables with node:sqlite (Node only);
+ * - `./schema`: the tldraw era's server schema (Lobby's file card included), `./archive-v1`: the v1 board
+ *   archive (what the api still imports), `./templates`: the templates as tldraw records (the parity
+ *   tests' reference), `./tldraw`: the tldraw symbols Lobby's tests may use (nothing else imports `@tldraw/*`).
+ *
+ * Nothing in this package logs; reports carry ids, counts and codes only.
+ */
+export {
+  type ConvertResult,
+  clampToLimits,
+  computeLegacyPages,
+  convertBoard,
+  convertRecords,
+  type DocValues,
+  elementIdOf,
+  hash31,
+  indexSnapshot,
+  isBindableShape,
+  type LocalResult,
+  lossyCounts,
+  normalizeFixedPoint,
+  offsetForNewPage,
+  pageBounds,
+  paintOrder,
+  type Snapshot,
+} from './convert.ts'
+export { convertDeleted, type DeletedConversion, type LbDeletedRow } from './deleted.ts'
+export {
+  GEO_SHAPES,
+  type GeoBuild,
+  type GeoOutlineOptions,
+  geoBuildOf,
+  geoLossyCodes,
+  geoMarks,
+  geoOutline,
+  TL_GEO_KINDS,
+  type TlGeoKind,
+} from './geo-shapes.ts'
+export { currentSchema, type MigrateResult, migrateRecords } from './migrate.ts'
+export { approxResnap, refitLabel } from './relayout.ts'
+export { plainLines } from './rich-text.ts'
+export * from './types.ts'
+
+export const TLDRAW_IMPORT_SOURCE = 'tldraw-5.4.2' as const

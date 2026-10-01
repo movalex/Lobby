@@ -1,0 +1,155 @@
+/* The navigation host slot on the new canvas (NavigationPanel.tsx, Minimap.tsx) and the navigation overlay.
+   The panels, the paste prompt and the search dim reuse canvas-ux.css's dr-cux-* rules. */
+
+.dr-cnav {
+  display: flex;
+  flex-direction: column-reverse;
+  align-items: flex-start;
+  gap: 6px;
+  pointer-events: auto;
+}
+
+.dr-cnav__bar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--dr-line);
+  border-radius: var(--dr-radius);
+  background: var(--dr-surface);
+  box-shadow: var(--dr-shadow);
+}
+
+.dr-cnav--compact {
+  padding: 3px;
+  border: 1px solid var(--dr-line);
+  border-radius: var(--dr-radius);
+  background: var(--dr-surface);
+  box-shadow: var(--dr-shadow);
+}
+
+.dr-cnav__btn {
+  display: inline-grid;
+  place-items: center;
+  min-width: 32px;
+  height: 32px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--dr-ink-2);
+  font: 600 12px / 1 var(--dr-font);
+  cursor: pointer;
+}
+.dr-cnav__btn:hover,
+.dr-cnav__btn[aria-pressed="true"],
+.dr-cnav__btn[aria-expanded="true"] {
+  background: var(--dr-hover);
+  color: var(--dr-ink);
+}
+.dr-cnav__btn:focus-visible,
+.dr-cnav__item:focus-visible {
+  outline: 2px solid var(--dr-focus);
+  outline-offset: 1px;
+}
+
+.dr-cnav__zoom {
+  position: relative;
+}
+.dr-cnav__zoombtn {
+  min-width: 52px;
+}
+
+.dr-cnav__menu {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  z-index: 30;
+  display: grid;
+  min-width: 200px;
+  padding: 4px;
+  border: 1px solid var(--dr-line);
+  border-radius: var(--dr-radius);
+  background: var(--dr-surface);
+  box-shadow: var(--dr-shadow-pop);
+}
+
+.dr-cnav__item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--dr-ink);
+  font: 13px / 1.2 var(--dr-font);
+  text-align: left;
+  cursor: pointer;
+}
+.dr-cnav__item:hover:not(:disabled) {
+  background: var(--dr-hover);
+}
+.dr-cnav__item:disabled {
+  color: var(--dr-placeholder);
+  cursor: default;
+}
+.dr-cnav__kbd {
+  color: var(--dr-ink-2);
+  font: 12px / 1 var(--dr-font);
+}
+
+.dr-cnav-minimap {
+  display: block;
+  border: 1px solid var(--dr-line);
+  border-radius: var(--dr-radius);
+  background: var(--dr-surface);
+  box-shadow: var(--dr-shadow);
+  cursor: pointer;
+  touch-action: none;
+}
+
+.dr-cnav-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+/* W5-54: "Back to content" (tldraw's helper button, top left under the board menu) when nothing is in view */
+.dr-cnav-back {
+  position: absolute;
+  top: 64px;
+  left: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--dr-line);
+  border-radius: var(--dr-radius);
+  background: var(--dr-surface);
+  box-shadow: var(--dr-shadow);
+  color: var(--dr-ink);
+  font: 600 13px / 1 var(--dr-font);
+  cursor: pointer;
+}
+.dr-cnav-back:hover {
+  background: var(--dr-hover);
+}
+.dr-cnav-back:focus-visible {
+  outline: 2px solid var(--dr-focus);
+  outline-offset: 1px;
+}
+@media (max-width: 600px) {
+  .dr-cnav-back {
+    min-height: 44px;
+  }
+}
+
+/* W5-39: the outline of a connector selected by a deep link or a search result (the engine draws none) */
+.dr-cnav-linked__box {
+  fill: none;
+  stroke: var(--dr-focus);
+  stroke-width: 1.5;
+}

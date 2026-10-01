@@ -36,6 +36,29 @@ describe('popoverLayout', () => {
     expect(popoverLayout(DESKTOP, { x: 200, y: 660 }).top).toBe(DESKTOP.h - 320)
   })
 
+  it('W5-07: with a band kept at the bottom (the toolbar row), a popover low on the board ends above it', () => {
+    const inset = 76
+    const low = popoverLayout(DESKTOP, { x: 200, y: 600 }, { bottomInset: inset })
+    expect(low.top).toBe(DESKTOP.h - inset - 320)
+    expect(low.maxHeight).toBe(320)
+    expect((low.top ?? 0) + (low.maxHeight ?? 0)).toBe(DESKTOP.h - inset)
+    // high on the board it may grow to its own maximum, and never past the band
+    const high = popoverLayout(DESKTOP, { x: 200, y: 100 }, { bottomInset: inset })
+    expect(high.top).toBe(100 - PIN_SIZE - 8)
+    expect(high.maxHeight).toBe(Math.min(520, DESKTOP.h - inset - (100 - PIN_SIZE - 8)))
+    expect(popoverLayout(DESKTOP, null, { bottomInset: inset })).toMatchObject({
+      top: 12,
+      maxHeight: Math.min(520, DESKTOP.h - inset - 12),
+    })
+    // without a band (the tldraw page) nothing changes
+    expect(popoverLayout(DESKTOP, { x: 200, y: 600 })).toEqual(popoverLayout(DESKTOP, { x: 200, y: 600 }, {}))
+    expect(popoverLayout(DESKTOP, { x: 200, y: 600 }).maxHeight).toBeNull()
+    // a phone sheet keeps its own height
+    expect(popoverLayout(PHONE, { x: 20, y: 700 }, { bottomInset: inset })).toEqual(
+      popoverLayout(PHONE, { x: 20, y: 700 }),
+    )
+  })
+
   it('on a phone is a bottom sheet across the canvas, at least 300 px wide, whatever the anchor', () => {
     for (const anchor of [{ x: 20, y: 700 }, { x: 330, y: 40 }, null]) {
       const l = popoverLayout(PHONE, anchor)

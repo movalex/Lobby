@@ -172,23 +172,6 @@ html[data-dr-presenting] .dr-board__editor {
   inset: 0;
   z-index: 1000;
 }
-/* tldraw chrome: the UI layer (toolbar, menus, style panel, minimap), the overlay canvas (selection,
-   collaborators' brushes, selections and off-screen hints), in-front widgets and frame titles. */
-html[data-dr-presenting] .tl-container .tlui-layout,
-html[data-dr-presenting] .tl-container .tl-canvas-overlays,
-html[data-dr-presenting] .tl-container .tl-canvas__in-front,
-html[data-dr-presenting] .tl-container .tl-collaborators,
-html[data-dr-presenting] .tl-container .tl-frame-heading {
-  display: none;
-}
-html[data-dr-presenting] .tl-container {
-  outline: none;
-}
-/* tldraw's license watermark (dev / watermarked licences) must stay visible, unobscured and clickable
-   (docs/research/license.md): its z-index is this variable, lifted above the presentation surround. */
-html[data-dr-presenting] .tl-container {
-  --tl-layer-watermark: 10001;
-}
 
 /* ---- presentation overlay ------------------------------------------------------------------------ */
 
@@ -202,6 +185,15 @@ html[data-dr-presenting] .tl-container {
   overflow: hidden;
   outline: none;
   font-family: var(--dr-font);
+}
+/* W5-47: the presentation holds the focus when it opens (its keys work anywhere; assistive technology
+   lands on it): keyboard users see the ring while the controls show, and it fades with them. */
+.dr-present:focus-visible {
+  outline: 2px solid #8ab4ff;
+  outline-offset: -4px;
+}
+.dr-present[data-idle="true"]:focus-visible {
+  outline-color: transparent;
 }
 .dr-present__mask {
   position: absolute;

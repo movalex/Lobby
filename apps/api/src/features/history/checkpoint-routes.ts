@@ -23,6 +23,7 @@ import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { z } from 'zod'
 import { type BoardAccess, isBoardId, requireBoardAction } from '../../access.ts'
 import { userKind } from '../../auth/users.ts'
+import { onNewCanvas } from '../../canvas-engine.ts'
 import type { Params } from '../../context.ts'
 import { ApiError, forbidden, gone, notFound, parse } from '../../errors.ts'
 import type { FeatureContext } from '../context.ts'
@@ -30,7 +31,7 @@ import type { CheckpointService } from './checkpoints.ts'
 import {
   isNewCanvasRow,
   newCanvasCheckpoint,
-  parseV1Body,
+  readCheckpointBody,
   SNAPSHOT_COLUMNS,
   SNAPSHOT_FROM,
   type SnapshotRow,
@@ -123,16 +124,27 @@ export function registerCheckpointRoutes(
     const user = await ctx.requireUser(req)
     const { row, access } = await visibleCheckpoint(req, user)
     if (!(await isWorkspacePerson(access, user.id))) throw forbidden(GUEST_PREVIEW)
-    // Bridge release R0: made on the new canvas (a v2 body); previewed after the switch.
-    if (isNewCanvasRow(row)) throw newCanvasCheckpoint()
+    // Bridge release R0: a row marked as made on the new canvas (body_version 2; never written on this
+    // branch yet, snapshot-rows.ts); previewed after the switch.
+    if (isNewCanvasRow(row) && !(await onNewCanvas(ctx))) throw newCanvasCheckpoint()
     const raw = await bodies.read(row.storage_key)
     if (raw === null) throw gone("This checkpoint's saved content is no longer available.")
-    const body = parseV1Body(raw)
+    const body = readCheckpointBody(raw)
     reply.header('cache-control', 'private, no-store')
+    // v2 (Excalidraw engine): elements and the board document; v1: the tldraw records, as before
+    if (body.version === 2)
+      return {
+        snapshot: toCheckpoint(row, { newCanvas: !(await onNewCanvas(ctx)) }),
+        schema: body.schema,
+        records: [],
+        format: 'lobby-elements',
+        elements: body.elements as NonNullable<CheckpointContent['elements']>,
+        doc: body.doc,
+      }
     return {
-      snapshot: toCheckpoint(row),
+      snapshot: toCheckpoint(row, { newCanvas: !(await onNewCanvas(ctx)) }),
       schema: body.schema,
-      records: (body.documents ?? []).map((d) => d.state) as CheckpointContent['records'],
+      records: body.records as CheckpointContent['records'],
     }
   })
 

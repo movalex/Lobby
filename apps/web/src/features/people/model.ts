@@ -3,7 +3,14 @@
 
 import type { LivePresentation } from '@draftroom/contracts'
 import type { BoardRole } from '../../lib/permissions.ts'
-import type { RosterMap } from './roster.ts'
+
+/** One person's role on the board and whether they are a name-only guest (the api's roster). */
+export interface RosterEntry {
+  role: BoardRole
+  guest: boolean
+}
+
+export type RosterMap = ReadonlyMap<string, RosterEntry>
 
 /** A person counts as idle after this long without moving their pointer (tldraw's own "inactive"). */
 export const IDLE_AFTER_MS = 60_000

@@ -1,11 +1,16 @@
-// How topics and their lines look (pure constants). Every colour is a tldraw palette name, so the
+// How topics and their lines look (pure constants). Every colour is one of Lobby's 13 palette names
+// (board-ops/elements LOBBY_COLOR_NAMES, tldraw's colour-style names kept on the new canvas), so the
 // board's light and dark themes (and exports in either) resolve them; nothing here is a raw colour.
 //  - Central topic: orange (Dark Burn Creative's colour), tinted fill, large.
 //  - First-level branches: one palette colour each (never orange), tinted fill, medium.
 //  - Deeper topics: their branch's colour as the outline on a plain fill, small.
-// Labels stay tldraw's 'black', which is dark on light boards and light on dark boards.
+// Labels stay 'black', which is dark on light boards and light on dark boards.
 
-import type { TLDefaultColorStyle, TLDefaultFillStyle, TLDefaultSizeStyle } from 'tldraw'
+import type { LobbyColorName } from '@draftroom/board-ops/elements'
+
+type TLDefaultColorStyle = LobbyColorName
+type TLDefaultSizeStyle = 's' | 'm' | 'l' | 'xl'
+type TLDefaultFillStyle = 'none' | 'semi' | 'solid' | 'pattern' | 'fill'
 
 export const ROOT_COLOR: TLDefaultColorStyle = 'orange'
 

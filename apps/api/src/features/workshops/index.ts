@@ -60,6 +60,7 @@ import {
   voteEvent,
   voteState,
 } from './votes.ts'
+import { createWorkshopStatePusher, type WorkshopStatePusher } from './workshop-state.ts'
 
 export interface WorkshopOptions {
   /** Injected in tests (fake clock for the snapshot cache). */
@@ -70,6 +71,8 @@ export interface WorkshopOptions {
   handSweepMs?: number
   /** Reactions relayed per board per window (default REACTIONS_PER_BOARD_MAX). */
   reactionsPerBoardMax?: number
+  /** A2 (Excalidraw engine): tells sync whether a dot vote is open (injected in tests). */
+  workshopState?: WorkshopStatePusher
 }
 
 /** The board event stream route (apps/api/src/events/routes.ts): raised hands follow its lifetime. */
@@ -133,6 +136,13 @@ export function registerWorkshopRoutes(
     opts.reactionsPerBoardMax ?? REACTIONS_PER_BOARD_MAX,
     REACTION_RATE_WINDOW_MS,
   )
+  // A2: every change of "is a dot vote open" reaches sync after it commits (workshop-state.ts).
+  const workshopState =
+    opts.workshopState ?? createWorkshopStatePusher({ db, sync: ctx.sync, now, log: app.log })
+  app.addHook('onClose', async () => {
+    workshopState.close()
+    await workshopState.drain()
+  })
   const hands = new HandRegistry({
     now,
     publish: (boardId, data) => events.publish(boardId, { type: WORKSHOP_EVENTS.hand, data }),
@@ -314,6 +324,7 @@ export function registerWorkshopRoutes(
       type: WORKSHOP_EVENTS.vote,
       data: voteEvent(row, await aggregates(db, row.id), at),
     })
+    workshopState.changed(row.board_id)
     return reply.code(201).send(state)
   })
 
@@ -370,7 +381,10 @@ export function registerWorkshopRoutes(
       ])
       return true
     })
-    if (changed) events.publish(row.board_id, { type: WORKSHOP_EVENTS.vote, data: voteEvent(row, agg, at) })
+    if (changed) {
+      events.publish(row.board_id, { type: WORKSHOP_EVENTS.vote, data: voteEvent(row, agg, at) })
+      workshopState.changed(row.board_id)
+    }
     return voteState(db, row, user.id, at)
   })
 
@@ -386,6 +400,7 @@ export function registerWorkshopRoutes(
       return true
     })
     if (changed) {
+      workshopState.changed(row.board_id)
       const results = await revealedResults(db, row.id)
       events.publish(row.board_id, { type: WORKSHOP_EVENTS.vote, data: voteEvent(row, agg, at) })
       events.publish(row.board_id, {
@@ -414,7 +429,10 @@ export function registerWorkshopRoutes(
       await tx.query('UPDATE vote_sessions SET ends_at = $2 WHERE id = $1', [r.id, next])
       return true
     })
-    if (changed) events.publish(row.board_id, { type: WORKSHOP_EVENTS.vote, data: voteEvent(row, agg, at) })
+    if (changed) {
+      events.publish(row.board_id, { type: WORKSHOP_EVENTS.vote, data: voteEvent(row, agg, at) })
+      workshopState.changed(row.board_id) // re-arms the end timer
+    }
     return voteState(db, row, user.id, at)
   })
 
@@ -485,6 +503,8 @@ export function registerWorkshopRoutes(
       userId: user.id,
       name: user.name,
       targetUserId: input?.targetUserId ?? null,
+      // the summoner's canvas size, as their client reports it: it only shapes followers' cameras (R2-04)
+      ...(input?.screen ? { screen: { w: input.screen.w, h: input.screen.h } } : {}),
     }
     events.publish(access.board.id, { type: WORKSHOP_EVENTS.summon, data })
     return reply.code(202).send({ ok: true })

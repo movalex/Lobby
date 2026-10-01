@@ -37,10 +37,17 @@ import type {
 } from '@draftroom/contracts'
 import { ASSET_GC_GRACE_DAYS, ASSET_GC_IN_FLIGHT_DAYS, ASSET_GC_REPORT_LIMIT } from '@draftroom/contracts'
 import { type Db, pgErrorCode, type Queryable } from '@draftroom/db'
+import { type CanvasEngineProbe, TLDRAW_ONLY } from '../canvas-engine.ts'
 import { snapshotBodies } from '../features/history/snapshot-store.ts'
 import type { BlobStore } from './blobs.ts'
 import { originalKey } from './blobs.ts'
-import { parseBoardRefs, UnreadableCheckpointBody, type VersionRef, versionsInCheckpoint } from './gc-refs.ts'
+import {
+  type CheckpointVersionRef,
+  parseBoardRefs,
+  UnreadableCheckpointBody,
+  type VersionRef,
+  versionsInCheckpoint,
+} from './gc-refs.ts'
 
 const DAY = 86_400_000
 
@@ -56,6 +63,11 @@ export interface AssetGcDeps {
   blobs: BlobStore
   /** The sync server's asset-refs endpoint (sync-internal.ts). Absent = no board can be read. */
   sync: { assetRefs?(boardId: string): Promise<unknown> }
+  /**
+   * Which canvas the sync runs (canvas-engine.ts): on the new canvas a checkpoint marked `body_version` 2
+   * is this build's own and is read (its v2 body); otherwise it is R0's "unread". Absent = tldraw.
+   */
+  canvas?: CanvasEngineProbe
   /** Root of history's pre-milestone-3 checkpoint folder (snapshot-store.ts): the api's data dir. */
   dataRoot: string
   now: () => Date
@@ -104,15 +116,41 @@ const errInfo = (err: unknown) => {
 const FOREIGN_KEY_VIOLATION = '23503'
 
 /**
+ * The refs of a checkpoint with every asset id known: a v2 element may name only its version, whose
+ * asset is read from asset_versions (in the workspace). A version that no longer exists needs no keeping.
+ */
+async function withAssetIds(
+  deps: AssetGcDeps,
+  workspaceId: string,
+  named: readonly CheckpointVersionRef[],
+): Promise<VersionRef[]> {
+  const out: VersionRef[] = []
+  const bare: string[] = []
+  for (const r of named) {
+    if (r.assetId) out.push({ assetId: r.assetId, versionId: r.versionId })
+    else bare.push(r.versionId)
+  }
+  for (let i = 0; i < bare.length; i += 500) {
+    const rows = await deps.db.query<{ id: string; asset_id: string }>(
+      'SELECT id, asset_id FROM asset_versions WHERE workspace_id = $1 AND id = ANY($2::text[])',
+      [workspaceId, bare.slice(i, i + 500)],
+    )
+    for (const r of rows.rows) out.push({ assetId: r.asset_id, versionId: r.id })
+  }
+  return out
+}
+
+/**
  * Reads every checkpoint of the workspace that was never read, and records the versions its body
  * names (bodies never change). A body that is gone, or that is not JSON, can restore nothing: it is
  * recorded with no references. A read that fails (the blob store is unreachable) is counted and
  * retried by the next pass.
  *
- * Bridge release R0: a checkpoint made on the new canvas (row body_version 2, or a body that is not the
- * tldraw one) can show files this build cannot see. It is counted as unread (the pass is incomplete:
- * nothing new is marked or deleted) and NOT recorded, because a recorded scan is never repeated and
- * "no references" would then outlive the roll-forward; the new build reads it.
+ * v1 (tldraw) and v2 (the Excalidraw engine) bodies are both read (gc-refs.ts versionsInCheckpoint).
+ * Bridge release R0: a checkpoint this build cannot read (a row marked body_version 2 while the sync is a
+ * tldraw one, canvas-engine.ts; or a body of neither format) can show files the pass cannot see. It
+ * is counted as unread (the pass is incomplete: nothing new is marked or deleted) and NOT recorded,
+ * because a recorded scan is never repeated and "no references" would then outlive the roll-forward.
  */
 async function scanCheckpoints(deps: AssetGcDeps, workspaceId: string): Promise<number> {
   const pending = await deps.db.query<{ id: string; storage_key: string; body_version: number }>(
@@ -131,9 +169,10 @@ async function scanCheckpoints(deps: AssetGcDeps, workspaceId: string): Promise<
       'asset gc: a checkpoint made on the new canvas cannot be read by this build (the pass is incomplete)',
     )
   }
+  const v2Readable = (await (deps.canvas ?? TLDRAW_ONLY).current()) === 'excalidraw'
   for (const s of pending.rows) {
     if (deps.shouldStop?.()) return failed + 1
-    if (Number(s.body_version) !== 1) {
+    if (Number(s.body_version) !== 1 && !(v2Readable && Number(s.body_version) === 2)) {
       newCanvas()
       continue
     }
@@ -145,10 +184,10 @@ async function scanCheckpoints(deps: AssetGcDeps, workspaceId: string): Promise<
       deps.log.warn({ err: errInfo(err), snapshotId: s.id }, 'asset gc: checkpoint body unreadable')
       continue
     }
-    let refs: VersionRef[] = []
+    let named: CheckpointVersionRef[] = []
     if (raw !== null) {
       try {
-        refs = versionsInCheckpoint(raw)
+        named = versionsInCheckpoint(raw)
       } catch (err) {
         if (err instanceof UnreadableCheckpointBody) {
           newCanvas()
@@ -159,6 +198,14 @@ async function scanCheckpoints(deps: AssetGcDeps, workspaceId: string): Promise<
           'asset gc: checkpoint body is not valid JSON (it restores nothing)',
         )
       }
+    }
+    let refs: VersionRef[]
+    try {
+      refs = await withAssetIds(deps, workspaceId, named)
+    } catch (err) {
+      failed++
+      deps.log.warn({ err: errInfo(err), snapshotId: s.id }, 'asset gc: checkpoint refs not resolved')
+      continue
     }
     try {
       await deps.db.transaction(async (tx) => {
@@ -236,8 +283,10 @@ async function gatherReferences(deps: AssetGcDeps, workspaceId: string): Promise
       if (!refs) throw new Error('unexpected asset-refs answer')
       for (const r of refs.canvas) versions.add(r.versionId)
       for (const r of refs.deleted) versions.add(r.versionId)
-      // Bridge release R0: a converted board's new-canvas elements were not read. Its refs count (they
-      // clear marks), but the board was not read whole, so the pass is incomplete.
+      for (const v of refs.versions) versions.add(v)
+      // Bridge release R0: a converted board's new-canvas elements were not read (a tldraw sync's
+      // `newCanvasTables: true`). Its refs count (they clear marks), but the board was not read whole, so
+      // the pass is incomplete. The Excalidraw sync reads the elements and never says so.
       if (refs.partial) {
         boardsFailed++
         deps.log.warn(

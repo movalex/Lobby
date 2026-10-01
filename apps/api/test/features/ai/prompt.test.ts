@@ -3,8 +3,8 @@
 // comments, private-brainstorm drafts, file names or who wrote a note. The request is a strict
 // JSON-schema completion with the output cap, and the input stays under its cap.
 
-import { note, sid } from '@draftroom/board-ops/test-fixtures'
 import { AiResult } from '@draftroom/contracts'
+import { note, sid } from '@draftroom/tldraw-import/test-fixtures'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createBoard, DEV_STUDIO } from '../../helpers.ts'
 import { itemsOf } from './fake-openai.ts'

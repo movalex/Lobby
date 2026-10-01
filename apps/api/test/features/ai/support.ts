@@ -2,7 +2,7 @@
 // serves each board's records as its snapshot; OpenAI is a local fake (fake-openai.ts) reached through
 // OPENAI_BASE_URL, so no test ever calls the real API.
 
-import { draftroomSchema } from '@draftroom/canvas-schema'
+import { draftroomSchema } from '@draftroom/tldraw-import/schema'
 import type { LightMyRequestResponse } from 'fastify'
 import { expect } from 'vitest'
 import { aiSettings } from '../../../src/features/ai/index.ts'

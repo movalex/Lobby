@@ -14,6 +14,64 @@
   },
   "formatter": { "enabled": true, "indentStyle": "space", "indentWidth": 2, "lineWidth": 110 },
   "javascript": { "formatter": { "quoteStyle": "single", "semicolons": "asNeeded" } },
-  "linter": { "enabled": true, "rules": { "preset": "recommended" } },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "preset": "recommended",
+      "style": {
+        "noRestrictedImports": {
+          "level": "error",
+          "options": {
+            "patterns": [
+              {
+                "group": ["@excalidraw/*", "@excalidraw/**"],
+                "message": "Only apps/web/src/canvas/**, apps/web/test/engine-probe/** and packages/canvas-schema/src/engine/** may import @excalidraw/* (docs/EXCALIDRAW-MIGRATION.md §2.3.1); tests that build engine samples (packages/canvas-schema/src/**/*.test.ts, the C0 arrow acceptance tests) too. Go through the canvas port or the canvas-schema engine wrappers."
+              }
+            ]
+          }
+        }
+      }
+    }
+  },
+  "overrides": [
+    {
+      "includes": [
+        "apps/web/src/canvas/**",
+        "apps/web/test/engine-probe/**",
+        "packages/canvas-schema/src/engine/**",
+        "packages/canvas-schema/src/**/*.test.ts",
+        "apps/sync/test/room/arrows/**"
+      ],
+      "linter": { "rules": { "style": { "noRestrictedImports": "off" } } }
+    },
+    {
+      "includes": ["apps/web/src/**/ported/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  {
+                    "group": ["@excalidraw/*", "@excalidraw/**"],
+                    "message": "Ported feature code (apps/web/src/**/ported/**) must not import @excalidraw/*: go through the canvas API (apps/web/src/canvas/api/index.ts; docs/EXCALIDRAW-CONTRACTS.md §1)."
+                  },
+                  {
+                    "group": ["tldraw", "@tldraw/*", "@tldraw/**"],
+                    "message": "Ported feature code (apps/web/src/**/ported/**) must not import tldraw: use the canvas API (apps/web/src/canvas/api/index.ts) and lib/signals.ts (docs/EXCALIDRAW-CONTRACTS.md §1)."
+                  },
+                  {
+                    "group": ["**/canvas/*", "**/canvas/**", "!**/canvas/api", "!**/canvas/api/index.ts"],
+                    "message": "Ported feature code reaches the canvas only through apps/web/src/canvas/api/index.ts (docs/EXCALIDRAW-CONTRACTS.md §1)."
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
   "assist": { "enabled": true, "actions": { "source": { "organizeImports": "on" } } }
 }

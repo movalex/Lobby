@@ -1,0 +1,544 @@
+/* canvas-ux's chrome on the Excalidraw canvas: the toolbar, style panel, menus, shortcuts dialog, selection
+   bar, locked frames and the frame name field. Tokens from styles.css (--dr-*), which follow Lobby's light
+   and dark themes. The selection bar, locked hint and note palette reuse ../canvas-ux.css. Host slots and
+   scene layers take no pointer events themselves: each piece of chrome turns them back on. */
+
+/* ---- toolbar ------------------------------------------------------------------------------------- */
+.cux-toolbar-wrap {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  pointer-events: auto;
+}
+.cux-toolbar,
+.cux-toolbar-more {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px;
+  border: 1px solid var(--dr-line);
+  border-radius: 12px;
+  background: var(--dr-surface);
+  box-shadow: var(--dr-shadow);
+}
+.cux-toolbar-more {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  right: 0;
+  flex-wrap: wrap;
+  max-width: 240px;
+}
+/* The toolbar shows only the tools that fit (./toolbar-layout.ts); should it still be wider than the canvas,
+   it scrolls inside itself rather than scroll the canvas region (the wave-3 integration). */
+.cux-toolbar {
+  max-width: calc(100vw - 24px);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.cux-toolbar-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+/* the style panel opened from the Styles button (a canvas of 640 px or less), above the toolbar */
+.cux-toolbar-styles {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  right: 0;
+  z-index: 2;
+}
+.cux-style-toggle__swatch {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1px rgb(0 0 0 / 18%);
+}
+.cux-style-toggle:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+/* ---- quick actions (tldraw's quick actions and actions menu) -------------------------------------------- */
+.cux-quick {
+  position: relative;
+  pointer-events: auto;
+}
+.cux-quick--toolbar {
+  align-self: flex-start;
+  margin-left: 8px;
+}
+.cux-quick__bar,
+.cux-quick__menu {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--dr-line);
+  border-radius: 10px;
+  background: var(--dr-surface);
+  box-shadow: var(--dr-shadow);
+}
+.cux-quick__menu {
+  position: absolute;
+  z-index: 3;
+  bottom: calc(100% + 6px);
+  left: 0;
+  display: grid;
+  grid-template-columns: repeat(4, 34px);
+}
+.cux-quick__btn {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--dr-ink-2);
+  cursor: pointer;
+}
+.cux-quick__btn:hover:not(:disabled) {
+  background: var(--dr-hover);
+  color: var(--dr-ink);
+}
+.cux-quick__btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.cux-quick__btn[aria-pressed="true"],
+.cux-quick__btn[aria-expanded="true"] {
+  background: var(--dr-navy);
+  color: var(--dr-on-navy);
+}
+.cux-quick__btn:focus-visible {
+  outline: 2px solid var(--dr-focus);
+  outline-offset: 1px;
+}
+/* the workshop cards (vote join, voting bar, results, brainstorm prompt) stand above the toolbar's two rows,
+   as workshops.css's rule for tldraw's mobile layout does on the tldraw page */
+[data-lobby-board-canvas]:has(.cux-toolbar-wrap[data-quick="toolbar"]) .dr-wk-stack {
+  bottom: 112px;
+  max-width: calc(100% - 16px);
+}
+.cux-tool {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--dr-ink-2);
+  cursor: pointer;
+}
+.cux-tool:hover {
+  background: var(--dr-hover);
+  color: var(--dr-ink);
+}
+.cux-tool[data-state="selected"] {
+  background: var(--dr-navy);
+  color: var(--dr-on-navy);
+}
+.cux-tool:focus-visible {
+  outline: 2px solid var(--dr-focus);
+  outline-offset: 1px;
+}
+
+/* ---- style panel ---------------------------------------------------------------------------------- */
+.cux-style {
+  width: 216px;
+  max-height: calc(100vh - 180px);
+  overflow: auto;
+  padding: 6px;
+  border: 1px solid var(--dr-line);
+  border-radius: 12px;
+  background: var(--dr-surface);
+  box-shadow: var(--dr-shadow);
+  color: var(--dr-ink);
+  font: 12.5px / 1.3 var(--dr-font);
+  pointer-events: auto;
+}
+.cux-toolbar-styles .cux-style {
+  max-height: min(60vh, calc(100vh - 220px));
+}
+.cux-style-toggle {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border: 1px solid var(--dr-line);
+  border-radius: 12px;
+  background: var(--dr-surface);
+  box-shadow: var(--dr-shadow);
+  color: var(--dr-ink);
+  cursor: pointer;
+}
+.cux-style-toggle[aria-expanded="true"] {
+  background: var(--dr-navy);
+  color: var(--dr-on-navy);
+}
+.cux-style-toggle:focus-visible {
+  outline: 2px solid var(--dr-focus);
+  outline-offset: 1px;
+}
+.cux-style__section + .cux-style__section {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--dr-line);
+}
+.cux-style__row {
+  min-width: 0;
+  margin: 0 0 6px;
+  padding: 0;
+  border: 0;
+}
+.cux-style__legend,
+.cux-style__sublegend {
+  display: block;
+  padding: 2px 2px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--dr-ink-2);
+}
+.cux-style__options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+}
+.cux-style__opt {
+  flex: 1 1 auto;
+  min-width: 40px;
+  height: 26px;
+  padding: 0 6px;
+  border: 1px solid var(--dr-line);
+  border-radius: 6px;
+  background: var(--dr-surface);
+  color: var(--dr-ink);
+  font: 500 11.5px / 1 var(--dr-font);
+  cursor: pointer;
+}
+.cux-style__opt:hover {
+  background: var(--dr-hover);
+}
+.cux-style__opt[aria-pressed="true"] {
+  border-color: var(--dr-navy);
+  background: var(--dr-navy);
+  color: var(--dr-on-navy);
+}
+.cux-style__swatches {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 3px;
+}
+.cux-style__swatch {
+  display: grid;
+  place-items: center;
+  height: 26px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+}
+.cux-style__swatch:hover {
+  background: var(--dr-hover);
+}
+.cux-style__swatch[aria-pressed="true"] {
+  border-color: var(--dr-navy);
+}
+.cux-style__swatch-dot {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1px rgb(0 0 0 / 18%);
+}
+.cux-style__opacity input {
+  width: 100%;
+}
+.cux-style__opt:focus-visible,
+.cux-style__swatch:focus-visible {
+  outline: 2px solid var(--dr-focus);
+  outline-offset: 1px;
+}
+
+/* ---- menus ---------------------------------------------------------------------------------------- */
+.cux-menu {
+  position: absolute;
+  z-index: 40;
+  min-width: 210px;
+  padding: 5px;
+  border: 1px solid var(--dr-line);
+  border-radius: 10px;
+  background: var(--dr-surface);
+  box-shadow: var(--dr-shadow-pop);
+  color: var(--dr-ink);
+  pointer-events: auto;
+}
+.cux-menu--main {
+  top: calc(100% + 6px);
+  left: 0;
+}
+.cux-menu--sub {
+  top: -6px;
+  left: calc(100% - 4px);
+}
+/* near the canvas's right edge the submenu opens to the left of its item (Menu.tsx) */
+.cux-menu--sub[data-side="left"] {
+  left: auto;
+  right: calc(100% - 4px);
+}
+.cux-menu__list,
+.cux-menu__group {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.cux-menu__list:focus {
+  outline: none;
+}
+.cux-menu__sep {
+  height: 1px;
+  margin: 4px 2px;
+  border: 0;
+  background: var(--dr-line);
+}
+.cux-menu__subwrap {
+  position: relative;
+}
+.cux-menu__item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--dr-ink);
+  font: 500 13px var(--dr-font);
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.cux-menu__item:hover,
+.cux-menu__item:focus-visible,
+.cux-menu__item[aria-expanded="true"] {
+  background: var(--dr-hover);
+  outline: none;
+}
+.cux-menu__item:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--dr-focus);
+}
+.cux-menu__item[aria-disabled="true"] {
+  color: var(--dr-ink-2);
+  opacity: 0.6;
+  cursor: default;
+}
+.cux-menu__check {
+  display: grid;
+  place-items: center;
+  width: 14px;
+  flex: none;
+}
+.cux-menu__label {
+  flex: 1;
+  min-width: 0;
+}
+.cux-menu__kbd {
+  flex: none;
+  color: var(--dr-ink-2);
+  font: 11.5px var(--dr-font);
+}
+.cux-mainmenu {
+  position: relative;
+  pointer-events: auto;
+}
+.cux-mainmenu__button {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border: 1px solid var(--dr-line);
+  border-radius: 10px;
+  background: var(--dr-surface);
+  color: var(--dr-ink);
+  box-shadow: var(--dr-shadow);
+  cursor: pointer;
+}
+.cux-mainmenu__button:hover,
+.cux-mainmenu__button[aria-expanded="true"] {
+  background: var(--dr-hover);
+}
+.cux-mainmenu__button:focus-visible {
+  outline: 2px solid var(--dr-focus);
+  outline-offset: 2px;
+}
+
+/* ---- keyboard shortcuts -------------------------------------------------------------------------- */
+.cux-shortcuts {
+  width: min(720px, calc(100vw - 32px));
+  pointer-events: auto;
+}
+.cux-shortcuts__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px 6px;
+}
+.cux-shortcuts__head h2 {
+  margin: 0;
+  font-size: 16px;
+}
+.cux-shortcuts__body {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 4px 20px;
+  max-height: calc(100vh - 140px);
+  overflow: auto;
+  padding: 0 16px 16px;
+}
+.cux-shortcuts__section h3 {
+  margin: 10px 0 4px;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--dr-ink-2);
+}
+.cux-shortcuts__section ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.cux-shortcuts__row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 3px 0;
+  font-size: 13px;
+}
+.cux-shortcuts__keys {
+  display: flex;
+  flex: none;
+  gap: 4px;
+}
+.cux-shortcuts__kbd {
+  padding: 1px 5px;
+  border: 1px solid var(--dr-line-strong);
+  border-radius: 4px;
+  background: var(--dr-paper);
+  font: 11.5px var(--dr-mono);
+}
+
+/* ---- selection bar, locked frames, frame names ------------------------------------------------------ */
+.cux-selbar {
+  pointer-events: auto;
+}
+.cux-frame-lock {
+  position: absolute;
+  display: grid;
+  place-items: center;
+  width: 14px;
+  height: 14px;
+  color: var(--dr-ink-2);
+}
+.cux-frame-lock svg {
+  width: 12px;
+  height: 12px;
+}
+.cux-frame-rename {
+  position: absolute;
+  height: 22px;
+  padding: 0 4px;
+  border: 1px solid var(--dr-focus);
+  border-radius: 4px;
+  background: var(--dr-surface);
+  color: var(--dr-ink);
+  font: 14px / 20px var(--dr-font);
+  pointer-events: auto;
+}
+
+/* ---- D4: the polygon being dragged out (./PolygonPreview.tsx) ------------------------------------------ */
+.cux-polygon-preview {
+  position: absolute;
+  overflow: visible;
+  pointer-events: none;
+}
+.cux-polygon-preview path {
+  fill: none;
+  stroke: var(--dr-focus);
+  stroke-width: 1.5;
+  stroke-dasharray: 5 4;
+  vector-effect: non-scaling-stroke;
+}
+
+/* ---- W5-33: Undo and Redo left of the tools on a wider canvas (./QuickActions.tsx HistoryBar) --------- */
+.cux-history {
+  position: absolute;
+  right: calc(100% + 6px);
+  bottom: 0;
+  padding: 4px;
+  border-radius: 12px;
+}
+.cux-history .cux-quick__btn {
+  width: 34px;
+  height: 38px;
+}
+
+/* ---- W5-31: 44 px tool buttons on a phone-width canvas (./toolbar-layout.ts PHONE_SLOT_PX) ------------ */
+.cux-toolbar-wrap[data-tool-size="44"] .cux-tool {
+  width: 44px;
+  height: 44px;
+}
+.cux-toolbar-wrap[data-tool-size="44"] .cux-quick__btn {
+  width: 36px;
+  height: 36px;
+}
+[data-lobby-board-canvas]:has(.cux-toolbar-wrap[data-quick="toolbar"][data-tool-size="44"]) .dr-wk-stack {
+  bottom: 122px;
+}
+
+/* ---- W5-41: the note palette's legend in Lobby's muted ink (the shared rule falls back to tldraw's dark
+   text, 1.03:1 on the dark panel) --------------------------------------------------------------------- */
+.cux-style .dr-note-palette__legend {
+  color: var(--dr-ink-2);
+}
+
+/* ---- W5-40: a more compact panel; icon pickers; the opacity label with its value ----------------------- */
+.cux-style .cux-style__row {
+  margin-bottom: 4px;
+}
+.cux-style .cux-style__legend {
+  padding: 1px 2px 3px;
+}
+.cux-style .cux-style__opt {
+  height: 24px;
+}
+.cux-style__options--icons {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(28px, 1fr));
+}
+.cux-style__opt--icon {
+  display: grid;
+  place-items: center;
+  min-width: 0;
+  height: 28px;
+  padding: 0;
+}
+.cux-style__opacity-label {
+  display: flex;
+  justify-content: space-between;
+}
+.cux-style__value {
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+.cux-style__opt--icon:focus-visible {
+  outline: 2px solid var(--dr-focus);
+  outline-offset: 1px;
+}

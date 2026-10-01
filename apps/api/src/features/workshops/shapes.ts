@@ -4,9 +4,16 @@
 // "not eligible" answer from a cache entry that is not brand new is re-checked against a fresh one
 // (a note created a second ago can be voted on right away).
 
-import type { VoteShapeInfo } from '@draftroom/contracts'
+import { LobbyElementsSnapshot, type VoteShapeInfo } from '@draftroom/contracts'
+import {
+  type Element,
+  liveElements,
+  objectTypeOf,
+  refOf,
+  SINGLE_PAGE_ID,
+} from '../../canvas/lobby-elements.ts'
 import { ApiError } from '../../errors.ts'
-import type { RoomSnapshotJson, SyncInternalClient } from '../../sync-internal.ts'
+import type { BoardSnapshotJson, RoomSnapshotJson, SyncInternalClient } from '../../sync-internal.ts'
 
 export type ShapeMap = ReadonlyMap<string, VoteShapeInfo>
 
@@ -19,9 +26,39 @@ export interface ShapeIndex {
 
 const MAX_BOARDS = 200
 
-export function shapesFromSnapshot(snapshot: RoomSnapshotJson): Map<string, VoteShapeInfo> {
+/**
+ * The vote vocabulary (tldraw's shape types, which `VoteSession.shapeTypes` and VOTE_INELIGIBLE_TYPES
+ * use) for an element of the Excalidraw engine's `lobby-elements` snapshot (docs/EXCALIDRAW-MIGRATION.md
+ * §2.4.6 "vote eligibility", §3.1): null for an element that is not an object of its own (a bound label).
+ * The api's one object vocabulary (canvas/lobby-elements.ts): a file card is `dr-file-card` (a video
+ * `video`), as on the tldraw board, so a vote limited to file cards keeps working.
+ */
+export const voteTypeOfElement = (el: Readonly<Record<string, unknown>>): string | null =>
+  typeof el.id === 'string' && typeof el.type === 'string' ? objectTypeOf(el as Element) : null
+
+/**
+ * The shapes of an Excalidraw engine snapshot (`LobbyElementsSnapshot`, @draftroom/contracts
+ * sync-internal.ts): live elements only, as `shape:<elementId>` refs (canvas-schema refs.ts), parented
+ * to their frame or to the one page.
+ */
+function shapesFromElements(elements: readonly Readonly<Record<string, unknown>>[]) {
   const out = new Map<string, VoteShapeInfo>()
-  for (const doc of snapshot.documents ?? []) {
+  for (const el of liveElements(elements)) {
+    const ref = refOf(el.id)
+    const type = voteTypeOfElement(el)
+    if (!ref || !type) continue
+    const frameRef = typeof el.frameId === 'string' ? refOf(el.frameId) : null
+    out.set(ref, { id: ref, type, parentId: frameRef ?? SINGLE_PAGE_ID })
+  }
+  return out
+}
+
+export function shapesFromSnapshot(snapshot: BoardSnapshotJson): Map<string, VoteShapeInfo> {
+  // The Excalidraw engine's sync answers the `lobby-elements` envelope (the api asks the same route).
+  const lobby = LobbyElementsSnapshot.safeParse(snapshot)
+  if (lobby.success) return shapesFromElements(lobby.data.elements)
+  const out = new Map<string, VoteShapeInfo>()
+  for (const doc of (snapshot as RoomSnapshotJson).documents ?? []) {
     const r = doc?.state as Record<string, unknown> | undefined
     if (r?.typeName !== 'shape') continue
     const { id, type, parentId } = r

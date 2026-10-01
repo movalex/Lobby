@@ -17,12 +17,14 @@
     "@draftroom/dev-assets": "workspace:*",
     "@draftroom/permissions": "workspace:*",
     "@draftroom/templates": "workspace:*",
-    "@tldraw/assets": "catalog:",
-    "@tldraw/sync": "catalog:",
+    "@excalidraw/common": "catalog:",
+    "@excalidraw/element": "catalog:",
+    "@excalidraw/excalidraw": "catalog:",
+    "@excalidraw/fractional-indexing": "catalog:",
+    "@excalidraw/math": "catalog:",
     "pdf-lib": "catalog:",
     "react": "catalog:",
     "react-dom": "catalog:",
-    "tldraw": "catalog:",
     "zod": "catalog:"
   },
   "devDependencies": {

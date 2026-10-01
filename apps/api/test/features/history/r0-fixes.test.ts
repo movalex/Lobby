@@ -4,7 +4,9 @@
 //     a real checkpoint of edits made during the rollback (verifier, dedupe);
 //   - a sync answer that is not a tldraw snapshot (the Excalidraw sync's `lobby-elements` one, while the
 //     api and sync deploys of a rollback overlap) is refused as SYNC_UNAVAILABLE, never read as an
-//     empty board: no empty checkpoint, duplicate or export (verifier, mixed);
+//     empty board: no empty checkpoint, duplicate or export (verifier, mixed). On the Excalidraw branch the
+//     api reads the `lobby-elements` answer too (sync-internal.ts boardSnapshotOf), so these tests use an
+//     answer of neither format, and check that the `lobby-elements` one is read;
 //   - a board born on the new canvas gets no connection ticket (409 NEW_CANVAS), so R0's sync never
 //     creates tldraw tables for one that has no sync file yet (verifier, born-after without a file).
 import { createServer } from 'node:http'
@@ -23,9 +25,12 @@ let api: TestApi
 let sync: FakeSync
 let bob: Client
 let boardId: string
-/** Boards for which the fake sync answers the way the Excalidraw sync does. */
+/** Boards for which the fake sync answers in a format of neither canvas (never read as an empty board). */
 const newFormat = new Set<string>()
 const saved = { ...checkpointSettings }
+
+/** An answer of neither canvas format (a newer engine's, say). */
+const OTHER_SNAPSHOT = { format: 'lobby-elements-v9', clock: 7, items: [{ id: 'r1' }] }
 
 const LOBBY_SNAPSHOT = {
   format: 'lobby-elements',
@@ -40,7 +45,7 @@ beforeEach(async () => {
   sync = createFakeSync()
   const snapshot = sync.snapshot
   sync.snapshot = async (id) => {
-    if (newFormat.has(id)) return structuredClone(LOBBY_SNAPSHOT) as never
+    if (newFormat.has(id)) return structuredClone(OTHER_SNAPSHOT) as never
     return snapshot(id)
   }
   newFormat.clear()
@@ -94,7 +99,7 @@ describe('the unchanged check of an automatic checkpoint', () => {
   })
 })
 
-describe('a snapshot answer that is not a tldraw one (the Excalidraw sync)', () => {
+describe('a snapshot answer of neither canvas format', () => {
   it('is refused as SYNC_UNAVAILABLE: no empty checkpoint, duplicate or export', async () => {
     newFormat.add(boardId)
     const before = await snapshotCount()
@@ -114,10 +119,11 @@ describe('a snapshot answer that is not a tldraw one (the Excalidraw sync)', () 
     expect((await bob.req('POST', `/api/boards/${boardId}/snapshots`, { name: 'x' })).statusCode).toBe(201)
   })
 
-  it('the HTTP client refuses a 200 answer without a documents array', async () => {
+  it('the HTTP client refuses a 200 answer of neither format, and reads the lobby-elements one', async () => {
+    let answer: unknown = OTHER_SNAPSHOT
     const server = createServer((_req, res) => {
       res.writeHead(200, { 'content-type': 'application/json' })
-      res.end(JSON.stringify(LOBBY_SNAPSHOT))
+      res.end(JSON.stringify(answer))
     })
     await new Promise<void>((r) => server.listen(0, '127.0.0.1', r))
     try {
@@ -126,6 +132,8 @@ describe('a snapshot answer that is not a tldraw one (the Excalidraw sync)', () 
         secret: 's'.repeat(40),
       })
       await expect(client.snapshot('b-lobby0001')).rejects.toBeInstanceOf(SyncUnavailable)
+      answer = LOBBY_SNAPSHOT
+      await expect(client.snapshot('b-lobby0001')).resolves.toEqual(LOBBY_SNAPSHOT)
     } finally {
       await new Promise((r) => server.close(r))
     }

@@ -9,19 +9,22 @@
     "backup:restore-drill": "node --env-file-if-exists=dev.env src/backup/restore-drill.ts",
     "backup:restore-board": "node --env-file-if-exists=dev.env src/backup/restore-board.ts",
     "backup:run-all": "node --env-file-if-exists=dev.env src/backup/run-all-cli.ts",
+    "backup:checkpoint": "node --env-file-if-exists=dev.env src/backup/checkpoint-board.ts",
     "typecheck": "tsc -p ."
   },
   "dependencies": {
     "@draftroom/auth-tickets": "workspace:*",
     "@draftroom/blob-store": "workspace:*",
     "@draftroom/canvas-schema": "workspace:*",
+    "@draftroom/contracts": "workspace:*",
     "@draftroom/dev-assets": "workspace:*",
     "@draftroom/permissions": "workspace:*",
-    "@tldraw/sync-core": "catalog:",
-    "@tldraw/tlschema": "catalog:",
-    "ws": "catalog:"
+    "@draftroom/tldraw-import": "workspace:*",
+    "ws": "catalog:",
+    "zod": "catalog:"
   },
   "devDependencies": {
+    "@excalidraw/element": "catalog:",
     "@types/ws": "catalog:"
   }
 }

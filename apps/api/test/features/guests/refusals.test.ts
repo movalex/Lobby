@@ -91,6 +91,8 @@ function refusedCalls(board: string, other: string, userId: string): [string, Me
     ['GET /api/boards/:bid/access-requests', 'GET', `${b}/access-requests`, undefined],
     ['POST /api/access-requests/:id/approve', 'POST', `/api/access-requests/${REQUEST}/approve`, {}],
     ['POST /api/access-requests/:id/deny', 'POST', `/api/access-requests/${REQUEST}/deny`, {}],
+    // Link previews (audit L2): the api fetches public pages for people with an account only.
+    ['POST /api/boards/:bid/link-preview', 'POST', `${b}/link-preview`, { url: 'https://example.com/' }],
     // Requesting access: to their own board and to any other.
     ['POST /api/boards/:bid/access-requests', 'POST', `${b}/access-requests`, { role: 'editor' }],
     [

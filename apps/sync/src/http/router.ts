@@ -1,27 +1,22 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { checkInternalSecret, INTERNAL_SECRET_HEADER } from '@draftroom/auth-tickets'
-import { RUN_ALL_ID_RE, type RunAll } from '../backup/run-all.ts'
+import { RecentHeldSetError, RUN_ALL_ID_RE, type RunAll } from '../backup/run-all.ts'
 import { type BackupService, handleBackupStatus } from '../backup/service.ts'
-import { BoardOpenRefused, NEW_CANVAS_ERROR_CODE } from '../r0/pre-open.ts'
-import { handleAssetRefs } from './asset-refs.ts'
-import { handleBoardText } from './board-text.ts'
+import type { InternalRoute } from '../engine-switch.ts'
+import { errorSummary } from '../log-error.ts'
 import { readJson } from './body.ts'
-import {
-  handleAccessChanged,
-  handleListDeleted,
-  handleRestoreDeleted,
-  handleSeed,
-  handleSnapshot,
-  type InternalDeps,
-  refuseInMaintenance,
-} from './internal.ts'
-import { handlePlaceNotes } from './place-notes.ts'
+import { handleAccessChanged, type InternalDeps, refuseInMaintenance } from './internal.ts'
 import { HttpError, notFound, sendError, sendJson } from './respond.ts'
 
 export interface RouterDeps extends InternalDeps {
   internalSecret: string
   /** Offsite backup status (absent = off). */
   backups?: Pick<BackupService, 'status'>
+  /**
+   * The engine's routes (the ElementRoom's board routes and its extensions', /internal/metrics, the test
+   * hooks), matched first. Behind the same secret check.
+   */
+  engineRoutes?: readonly InternalRoute[]
   /**
    * Maintenance mode (bridge release R0, app.ts): `set(true)` lets the pushes that reached the server
    * commit, closes every socket with 4099 MAINTENANCE and refuses new ones. Absent: the routes answer 404.
@@ -32,6 +27,8 @@ export interface RouterDeps extends InternalDeps {
    * its report once done, and GET …/run-all lists the runs (backup/run-all.ts). Absent: 404.
    */
   runAll?: Pick<RunAll, 'request' | 'get' | 'list'>
+  /** The local backups root (null: local backups are off, so run-all answers 409 BACKUPS_OFF). Absent: off. */
+  backupsDir?: () => string | null
 }
 
 export interface MaintenanceControl {
@@ -40,20 +37,12 @@ export interface MaintenanceControl {
 }
 
 type Handler = (req: IncomingMessage, res: ServerResponse, deps: RouterDeps, seg: string[]) => unknown
-
-/**
- * Wraps a board-writing handler: refused while maintenance is on, so no edit reaches a board file. This
- * is the check on entry, before the body is read; each handler checks again after reading it
- * (refuseInMaintenance, internal.ts), because maintenance can go on while a body is still arriving.
- */
-const writing =
-  (handle: Handler): Handler =>
-  (req, res, deps, seg) => {
-    refuseInMaintenance(deps)
-    return handle(req, res, deps, seg)
-  }
+type Route = { re: RegExp; methods: string[]; handle: Handler }
 
 const MAINTENANCE_LIMIT_BYTES = 1024
+
+/** The engine POSTs maintenance does not refuse: the cut-over's conversion runs inside the window (§7.5 step 6). */
+const MAINTENANCE_EXEMPT_ENGINE_POSTS = /^\/internal\/migrate\/convert-all(?:\?|$)/
 
 async function handleMaintenance(req: IncomingMessage, res: ServerResponse, deps: RouterDeps) {
   const control = deps.maintenance
@@ -68,16 +57,44 @@ async function handleMaintenance(req: IncomingMessage, res: ServerResponse, deps
 /** Where a run is read (the POST's Location). */
 export const runAllPath = (runId: string) => `/internal/backups/run-all/${runId}`
 
+const RUN_ALL_BODY_LIMIT_BYTES = 1024
+
+/**
+ * Whether the request carries a body at all: the runbook command sends none without --force, and the
+ * runbook's `int` helper sends a JSON content-type with an empty body, which is no body either.
+ */
+const hasBody = (req: IncomingMessage) =>
+  Number(req.headers['content-length']) > 0 || req.headers['transfer-encoding'] !== undefined
+
 /**
  * POST: starts a run, or joins the one that will answer this call (backup/run-all.ts), and answers at
  * once with 202 and the run's id. The run goes on in the server; GET …/run-all/<runId> has its report
- * once it is done. No client waits on one request for a run that can take many minutes.
+ * once it is done. No client waits on one request for a run that can take many minutes. The body is
+ * optional: `{"force": true}` writes a set although a recent held set exists (409 RECENT_HELD_SET
+ * otherwise; security audit L6, the header of run-all.ts).
  */
-function handleRunAllStart(res: ServerResponse, deps: RouterDeps) {
+async function handleRunAllStart(req: IncomingMessage, res: ServerResponse, deps: RouterDeps) {
   if (!deps.runAll) throw notFound()
-  if (!deps.registry.backupsDir())
-    throw new HttpError(409, 'BACKUPS_OFF', 'Local backups are off on this server.')
-  const run = deps.runAll.request()
+  if (!deps.backupsDir?.()) throw new HttpError(409, 'BACKUPS_OFF', 'Local backups are off on this server.')
+  let force = false
+  if (hasBody(req)) {
+    const body = (await readJson(req, RUN_ALL_BODY_LIMIT_BYTES)) as Record<string, unknown> | null
+    if (body !== null && (typeof body !== 'object' || Array.isArray(body)))
+      throw new HttpError(400, 'BAD_REQUEST', 'The body must be {"force": true}, or empty.')
+    for (const k of Object.keys(body ?? {}))
+      if (k !== 'force')
+        throw new HttpError(400, 'BAD_REQUEST', 'The body must be {"force": true}, or empty.')
+    if (body?.force !== undefined && typeof body.force !== 'boolean')
+      throw new HttpError(400, 'BAD_REQUEST', 'force must be a boolean.')
+    force = body?.force === true
+  }
+  let run: ReturnType<RunAll['request']>
+  try {
+    run = deps.runAll.request({ force })
+  } catch (e) {
+    if (e instanceof RecentHeldSetError) throw new HttpError(409, 'RECENT_HELD_SET', e.message)
+    throw e
+  }
   sendJson(res, 202, run, { Location: runAllPath(run.runId) })
 }
 
@@ -100,7 +117,8 @@ function handleRunAllGet(res: ServerResponse, deps: RouterDeps, rawRunId: string
 
 // Captures are raw (still percent-encoded) path segments; board ids are checked against a strict
 // pattern before use, so an encoded '/' or '..' can only ever fail that check.
-const INTERNAL_ROUTES: Array<{ re: RegExp; methods: string[]; handle: Handler }> = [
+// The server's own routes; the board routes are the engine's (engineRoutes).
+const NEUTRAL_ROUTES: Route[] = [
   {
     re: /^\/internal\/access-changed$/,
     methods: ['POST'],
@@ -118,57 +136,25 @@ const INTERNAL_ROUTES: Array<{ re: RegExp; methods: string[]; handle: Handler }>
     re: /^\/internal\/backups\/run-all$/,
     methods: ['GET', 'POST'],
     handle: (req, res, deps) =>
-      req.method === 'POST' ? handleRunAllStart(res, deps) : handleRunAllList(res, deps),
+      req.method === 'POST' ? handleRunAllStart(req, res, deps) : handleRunAllList(res, deps),
   },
   {
     re: /^\/internal\/backups\/run-all\/([^/]+)$/,
     methods: ['GET'],
     handle: (_req, res, deps, [runId = '']) => handleRunAllGet(res, deps, runId),
   },
+  // Which canvas this server runs (R0's contracts: the api marks what it makes on the new canvas; since
+  // wave 4 part 2 this build has one answer, and R0's sync has no such route)
+  {
+    re: /^\/internal\/canvas$/,
+    methods: ['GET'],
+    handle: (_req, res) => sendJson(res, 200, { engine: 'excalidraw' }),
+  },
   // Bridge release R0: maintenance mode (sockets closed and refused; internal reads keep working)
   {
     re: /^\/internal\/maintenance$/,
     methods: ['GET', 'POST'],
     handle: (req, res, deps) => handleMaintenance(req, res, deps),
-  },
-  {
-    re: /^\/internal\/boards\/([^/]+)\/snapshot$/,
-    methods: ['GET'],
-    handle: (_req, res, deps, [board = '']) => handleSnapshot(res, deps, board),
-  },
-  {
-    re: /^\/internal\/boards\/([^/]+)\/seed$/,
-    methods: ['POST'],
-    handle: writing((req, res, deps, [board = '']) => handleSeed(req, res, deps, board)),
-  },
-  // "Recently deleted" (history feature; handlers in internal.ts)
-  {
-    re: /^\/internal\/boards\/([^/]+)\/deleted$/,
-    methods: ['GET'],
-    handle: (req, res, deps, [board = '']) => handleListDeleted(req, res, deps, board),
-  },
-  {
-    re: /^\/internal\/boards\/([^/]+)\/deleted\/restore$/,
-    methods: ['POST'],
-    handle: writing((req, res, deps, [board = '']) => handleRestoreDeleted(req, res, deps, board)),
-  },
-  // The api's asset collector: files the canvas and "Recently deleted" still reference (asset-refs.ts)
-  {
-    re: /^\/internal\/boards\/([^/]+)\/asset-refs$/,
-    methods: ['GET'],
-    handle: (_req, res, deps, [board = '']) => handleAssetRefs(res, deps, board),
-  },
-  // Private brainstorming: revealed drafts become notes (workshops private-notes; place-notes.ts)
-  {
-    re: /^\/internal\/boards\/([^/]+)\/place-notes$/,
-    methods: ['POST'],
-    handle: writing((req, res, deps, [board = '']) => handlePlaceNotes(req, res, deps, board)),
-  },
-  // Search across boards: a board's searchable text for the API's index (search; board-text.ts)
-  {
-    re: /^\/internal\/boards\/([^/]+)\/text$/,
-    methods: ['GET'],
-    handle: (req, res, deps, [board = '']) => handleBoardText(req, res, deps, board),
   },
 ]
 
@@ -182,7 +168,21 @@ async function route(req: IncomingMessage, res: ServerResponse, url: URL, deps: 
     // Before routing: without the secret, the internal surface is indistinguishable from a wall.
     if (!checkInternalSecret(req.headers[INTERNAL_SECRET_HEADER], deps.internalSecret))
       throw new HttpError(401, 'UNAUTHORIZED', 'Missing or invalid internal credentials.')
-    for (const r of INTERNAL_ROUTES) {
+    // The engine's routes: every POST writes a board (the room's workshop-state, the api's seed,
+    // place-notes and deleted/restore, the test server-write and prepare) and is refused in maintenance
+    // (DEPLOY.md: "no edit can reach a board file"), except the cut-over's own `convert-all`, which the
+    // runbook runs INSIDE the maintenance window (§7.5 step 6). (V2 P-M2, P-M4.)
+    const engine: Route[] = (deps.engineRoutes ?? []).map((r) => ({
+      re: r.path,
+      methods: [r.method],
+      handle: (req, res, routerDeps, seg) => {
+        if (r.method === 'POST' && !MAINTENANCE_EXEMPT_ENGINE_POSTS.test(req.url ?? ''))
+          refuseInMaintenance(routerDeps)
+        return r.handle(req, res, seg)
+      },
+    }))
+    const routes = [...engine, ...NEUTRAL_ROUTES]
+    for (const r of routes) {
       const m = r.re.exec(p)
       if (!m) continue
       if (!r.methods.includes(req.method ?? '')) {
@@ -218,10 +218,8 @@ export function createRequestHandler(deps: RouterDeps) {
     return handled.catch((e: unknown) => {
       let err: HttpError
       if (e instanceof HttpError) err = e
-      // Bridge release R0: a board born on the new canvas (r0/pre-open.ts), refused before any room opened.
-      else if (e instanceof BoardOpenRefused) err = new HttpError(409, NEW_CANVAS_ERROR_CODE, e.message)
       else {
-        deps.log('[http error]', req.method, path, e)
+        deps.log('[http error]', req.method, path, errorSummary(e))
         err = new HttpError(500, 'INTERNAL', 'Something went wrong. Please try again.')
       }
       if (res.headersSent) return void res.destroy()

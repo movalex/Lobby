@@ -7,11 +7,10 @@ import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { DatabaseSync } from 'node:sqlite'
 import { fileURLToPath } from 'node:url'
-import { draftroomSchema } from '@draftroom/canvas-schema'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { type BackupEntry, backupBoard } from '../../src/backup/backup.ts'
-import { boardDbPath, RoomRegistry } from '../../src/rooms.ts'
-import { indexFor, note } from '../deleted/fixtures.ts'
+import { indexFor, note } from '../harness/tl-fixtures.ts'
+import { seedTldrawBoard } from '../harness/tldraw-file.ts'
 import { type TempData, tempData } from './offsite-fixtures.ts'
 
 const BOARD = 'big-board'
@@ -74,10 +73,7 @@ beforeAll(async () => {
     req.on('end', () => res.writeHead(200).end())
   })
   await new Promise<void>((r) => s3.listen(0, '127.0.0.1', () => r()))
-  const reg = new RoomRegistry({ dataDir: data.rooms, schema: draftroomSchema, backup: false })
-  reg.getOrCreate(BOARD) // initializes the board database
-  reg.closeAll()
-  const db = new DatabaseSync(boardDbPath(data.rooms, BOARD))
+  const db = new DatabaseSync(seedTldrawBoard(data.rooms, BOARD)) // a tldraw board file with its tables
   try {
     // ~53 MB of real, valid note records (random text: SQLite stores it as is)
     const insert = db.prepare('INSERT INTO documents (id, state, lastChangedClock) VALUES (?, ?, 1)')

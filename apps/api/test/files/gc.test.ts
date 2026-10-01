@@ -10,6 +10,7 @@ import { newId as newDbId } from '@draftroom/db'
 import type { AssetVersionMeta } from '@draftroom/dev-assets'
 import { newId } from '@draftroom/dev-assets'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { createCanvasEngineProbe } from '../../src/canvas-engine.ts'
 import { snapshotStorageKey } from '../../src/features/history/snapshot-store.ts'
 import { derivativeKey, originalKey } from '../../src/files/blobs.ts'
 import { type AssetGcDeps, collectWorkspace, createAssetGc, type GcPassMode } from '../../src/files/gc.ts'
@@ -542,23 +543,57 @@ describe('what the new canvas left behind (bridge release R0)', () => {
   }
   const scans = (w: World) => w.api.db.query('SELECT snapshot_id, ref_count FROM asset_gc_snapshot_scans')
 
-  for (const bodyVersion of [2, 1] as const)
-    it(`a v2 checkpoint (row body_version ${bodyVersion}) makes the pass incomplete and is never recorded`, async () => {
-      const w = await world()
-      const m = await upload(w.api, w.alice, w.board, 'excalidraw-era.png')
-      w.sync.setBoard(w.board, baseRecords()) // the canvas no longer shows it
-      await v2Checkpoint(w, m, bodyVersion)
-      w.api.clock.advance(8 * DAY)
-      const r = await w.collect()
-      expect(r).toMatchObject({ complete: false, checkpointsFailed: 1, marked: 0 })
-      expect((await scans(w)).rows).toEqual([])
-      expect((await w.marks())[m.versionId]).toBeNull()
-      w.api.clock.advance(31 * DAY)
-      const d = await w.collect('delete')
-      expect(d).toMatchObject({ complete: false, deleted: { versions: 0 } })
-      expect(await exists(w, originalKey(m.assetId, m.versionId))).toBe(true)
-      expect((await scans(w)).rows).toEqual([])
+  it('a v2 checkpoint (row body_version 2) makes the pass incomplete and is never recorded', async () => {
+    const w = await world()
+    const m = await upload(w.api, w.alice, w.board, 'excalidraw-era.png')
+    w.sync.setBoard(w.board, baseRecords()) // the canvas no longer shows it
+    await v2Checkpoint(w, m, 2)
+    w.api.clock.advance(8 * DAY)
+    const r = await w.collect()
+    expect(r).toMatchObject({ complete: false, checkpointsFailed: 1, marked: 0 })
+    expect((await scans(w)).rows).toEqual([])
+    expect((await w.marks())[m.versionId]).toBeNull()
+    w.api.clock.advance(31 * DAY)
+    const d = await w.collect('delete')
+    expect(d).toMatchObject({ complete: false, deleted: { versions: 0 } })
+    expect(await exists(w, originalKey(m.assetId, m.versionId))).toBe(true)
+    expect((await scans(w)).rows).toEqual([])
+  })
+
+  // The Excalidraw branch's collector reads v2 bodies (gc-refs.ts versionsInCheckpoint): a v2 body behind a
+  // row that says v1 shows its image and is recorded. R0 (the tldraw build, on main) counts it as unread.
+  it('a v2 checkpoint behind a row that says v1 is read on this branch: its image is kept, the scan recorded', async () => {
+    const w = await world()
+    const m = await upload(w.api, w.alice, w.board, 'excalidraw-era.png')
+    w.sync.setBoard(w.board, baseRecords()) // the canvas no longer shows it
+    const id = await v2Checkpoint(w, m, 1)
+    w.api.clock.advance(8 * DAY)
+    expect(await w.collect()).toMatchObject({ complete: true, checkpointsFailed: 0, marked: 0 })
+    expect((await scans(w)).rows).toEqual([{ snapshot_id: id, ref_count: 1 }])
+    expect((await w.marks())[m.versionId]).toBeNull()
+    w.api.clock.advance(31 * DAY)
+    await w.collect('delete')
+    expect(await exists(w, originalKey(m.assetId, m.versionId))).toBe(true)
+  })
+
+  // Wave 5, 2A (R0's contracts on the new canvas): when the sync runs the new canvas, a v2 row is this
+  // build's own checkpoint and is read like any other (it was counted unread on f336ae4, so every
+  // workspace's pass stayed incomplete once the new build wrote body_version 2).
+  it('on the new canvas a v2 checkpoint (row body_version 2) is read: its image is kept, the scan recorded', async () => {
+    const w = await world()
+    const m = await upload(w.api, w.alice, w.board, 'excalidraw-era.png')
+    w.sync.setBoard(w.board, baseRecords()) // the canvas no longer shows it
+    const id = await v2Checkpoint(w, m, 2)
+    const deps: AssetGcDeps = { ...w.deps, canvas: createCanvasEngineProbe(async () => 'excalidraw') }
+    w.api.clock.advance(8 * DAY)
+    expect(await collectWorkspace(deps, DEV_STUDIO, 'report')).toMatchObject({
+      complete: true,
+      checkpointsFailed: 0,
+      marked: 0,
     })
+    expect((await scans(w)).rows).toEqual([{ snapshot_id: id, ref_count: 1 }])
+    expect((await w.marks())[m.versionId]).toBeNull()
+  })
 
   it('a body that is not JSON still counts as restoring nothing (as before)', async () => {
     const w = await world()

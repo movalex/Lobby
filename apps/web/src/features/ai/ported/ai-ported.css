@@ -1,0 +1,10 @@
+/* The Excalidraw board page (the wave-3 integration): the style panel there is a host slot at the top right,
+   drawn above every overlay layer, so it covered the summary's buttons whenever the selection stayed. The
+   summary opens at the top left of the canvas instead, under the board menu. Loaded by the ported feature only, so the
+   tldraw page and the normal build never see it. */
+@media (min-width: 481px) {
+  [data-lobby-board-canvas] .dr-ai-panel {
+    right: auto;
+    left: 12px;
+  }
+}

@@ -2,21 +2,19 @@
 // the Excalidraw build leaves behind, and says so instead of failing.
 //   - a v2 checkpoint row (migration 0022 body_version 2) is listed with `newCanvas` ("Made on the new
 //     canvas. Preview and restore it when Lobby is back on the new canvas."); previewing or restoring
-//     it answers 409 NEW_CANVAS with that message, before anything is read or saved; a v2 body behind a row that says v1 is refused
-//     the same way (never restored as an empty board);
+//     it answers 409 NEW_CANVAS with that message, before anything is read or saved. On main (R0) a v2 body
+//     behind a row that says v1 is refused the same way; on the Excalidraw branch the api reads v2 bodies,
+//     so it previews and restores as elements (never as an empty board);
 //   - the `engine_migration` reason is accepted, listed and kept by retention like a safety checkpoint;
 //   - a board born on the new canvas (boards.new_canvas) carries `newCanvas` in every board answer and
 //     cannot be duplicated, exported or checkpointed (409 NEW_CANVAS); the automatic checkpoints skip it
 //     without asking sync; sync's own 409 `new-canvas` gives the same answer;
-//   - an archive exported from the new canvas is refused on import with a clear message;
+//   - an archive exported from the new canvas: on main (R0) refused on import with a clear message; on the
+//     Excalidraw branch imported as elements;
 //   - tldraw boards and v1 checkpoints answer exactly as before (no new field).
 import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
-import {
-  NEW_CANVAS_ARCHIVE_MESSAGE,
-  NEW_CANVAS_BOARD_MESSAGE,
-  NEW_CANVAS_CHECKPOINT_MESSAGE,
-} from '@draftroom/contracts'
+import { NEW_CANVAS_BOARD_MESSAGE, NEW_CANVAS_CHECKPOINT_MESSAGE } from '@draftroom/contracts'
 import { newId } from '@draftroom/db'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { checkpointSettings } from '../../../src/features/history/checkpoints.ts'
@@ -141,14 +139,19 @@ describe('checkpoints made on the new canvas (v2)', () => {
     expect(sync.seeds).toEqual([])
   })
 
-  it('refuse a v2 body even behind a row that says v1 (never restored as an empty board)', async () => {
+  // The Excalidraw branch reads v2 bodies (snapshot-rows.ts readCheckpointBody); R0 on main refuses them.
+  it('a v2 body behind a row that says v1 previews and restores as elements (never as an empty board)', async () => {
     const hidden = await v2Checkpoint({ reason: null, bodyVersion: 1 })
     expect((await list()).find((r) => r.id === hidden)).not.toHaveProperty('newCanvas')
     const preview = await bob.req('GET', `/api/snapshots/${hidden}/content`)
-    expect([preview.statusCode, code(preview)]).toEqual([409, 'NEW_CANVAS'])
+    expect(preview.statusCode, preview.body).toBe(200)
+    expect(preview.json()).toMatchObject({
+      format: 'lobby-elements',
+      elements: [{ id: 'r1', type: 'rectangle' }],
+    })
     const restore = await bob.req('POST', `/api/snapshots/${hidden}/restore-as-new`, {})
-    expect([restore.statusCode, code(restore)]).toEqual([409, 'NEW_CANVAS'])
-    expect(sync.seeds).toEqual([])
+    expect(restore.statusCode, restore.body).toBe(201)
+    expect(sync.seeds.map((s) => (s.snapshot as { format?: unknown }).format)).toEqual(['lobby-elements'])
   })
 
   it('can still be deleted by an owner, and a v1 checkpoint still previews and restores', async () => {
@@ -252,8 +255,9 @@ describe('boards born on the new canvas', () => {
   })
 })
 
+// The Excalidraw branch imports v2 archives (archive-v2.ts); R0 on main refuses them (NEW_CANVAS_ARCHIVE).
 describe('archives exported from the new canvas', () => {
-  it('are refused on import with a clear message; a v1 archive still imports', async () => {
+  it('import as elements on this branch; a v1 archive still imports', async () => {
     const res = await bob.req('POST', `/api/workspaces/${DEV_STUDIO}/boards/import`, {
       format: 'lobby-board',
       version: 2,
@@ -265,9 +269,8 @@ describe('archives exported from the new canvas', () => {
       doc: {},
       assets: [],
     })
-    expect(res.statusCode).toBe(400)
-    expect(code(res)).toBe('NEW_CANVAS_ARCHIVE')
-    expect(message(res)).toBe(NEW_CANVAS_ARCHIVE_MESSAGE)
+    expect(res.statusCode, res.body).toBe(201)
+    expect(sync.seeds.map((s) => (s.snapshot as { format?: unknown }).format)).toEqual(['lobby-elements'])
     const exported = await bob.req('GET', `/api/boards/${boardId}/export`)
     expect(exported.statusCode, exported.body).toBe(200)
     const imported = await bob.req('POST', `/api/workspaces/${DEV_STUDIO}/boards/import`, exported.json())

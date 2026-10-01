@@ -11,16 +11,16 @@ import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { fileURLToPath } from 'node:url'
 import { createFsBlobStore } from '@draftroom/blob-store'
-import { draftroomSchema } from '@draftroom/canvas-schema'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { type BackupEntry, backupBoard, describeBoardDb, inspectBoardDb } from '../../src/backup/backup.ts'
 import { DrillProblem, runRestoreDrill, storeBackupSource } from '../../src/backup/drill.ts'
 import { OffsiteBackups } from '../../src/backup/offsite.ts'
 import { backupSigningKey, canonicalJson } from '../../src/backup/signing.ts'
 import { listStagedRestores, stageRestore } from '../../src/backup/staged-restore.ts'
-import { boardDbPath, RoomRegistry } from '../../src/rooms.ts'
-import { indexFor, note, RoomClient } from '../deleted/fixtures.ts'
+import { boardDbPath } from '../../src/rooms.ts'
 import { TEST_INTERNAL_SECRET } from '../harness/tickets.ts'
+import { indexFor, note } from '../harness/tl-fixtures.ts'
+import { tldrawBoard } from '../harness/tldraw-file.ts'
 import { flakyStore, type TempData, tempData } from './offsite-fixtures.ts'
 
 const BOARD = 'signed-board'
@@ -54,24 +54,22 @@ const source = (opts: { allowUnsigned?: boolean; key?: typeof KEY } = {}) =>
 
 /** Boards edited, backed up and copied offsite through the real path (registry -> listener -> upload). */
 async function offsiteBoard(key = KEY, extra = 0): Promise<BackupEntry[]> {
-  const reg = new RoomRegistry({ dataDir: data.rooms, schema: draftroomSchema, idleEvictMs: 60_000 })
+  const b = tldrawBoard(data.rooms, BOARD, data.backups)
   const offsite = new OffsiteBackups({ store: store(), localRoot: data.backups, signingKey: key, log })
   offsite.start()
   const out: BackupEntry[] = []
   try {
-    const c = new RoomClient(reg.getOrCreate(BOARD), 'usr_a')
-    await c.connect()
+    const c = b
     await c.put(note('n1', 'Q3 plan: approved'), note('n2', 'two', { index: indexFor(2) }))
     for (let i = 0; i <= extra; i++) {
       if (i > 0) await c.put(note(`e${i}`, `edit ${i}`, { index: indexFor(10 + i) }))
-      const entry = await reg.backupNow(BOARD)
+      const entry = await b.backupNow()
       if (!entry) throw new Error('no backup')
       out.push(entry)
       await offsite.idle()
     }
   } finally {
     await offsite.stop()
-    reg.closeAll()
   }
   return out
 }
@@ -302,7 +300,7 @@ describe('manifests written before signing: only with --allow-unsigned, and it s
     stripSignatures()
     stripSignatures(indexPath())
     // the next server start (code with signing) makes a new backup of the same board
-    const reg = new RoomRegistry({ dataDir: data.rooms, schema: draftroomSchema, idleEvictMs: 60_000 })
+    const b = tldrawBoard(data.rooms, BOARD, data.backups)
     const counting = flakyStore(data.blobs)
     const offsite = new OffsiteBackups({ store: counting, localRoot: data.backups, signingKey: KEY, log })
     offsite.start()
@@ -320,14 +318,12 @@ describe('manifests written before signing: only with --allow-unsigned, and it s
     )
     let second: BackupEntry | null = null
     try {
-      const c = new RoomClient(reg.getOrCreate(BOARD), 'usr_a')
-      await c.connect()
+      const c = b
       await c.put(note('n3', 'after the upgrade', { index: indexFor(3) }))
-      second = await reg.backupNow(BOARD)
+      second = await b.backupNow()
       await offsite.idle()
     } finally {
       await offsite.stop()
-      reg.closeAll()
     }
     const manifest = readJson(manifestPath())
     expect(manifest.backups.map((b) => [b.file, !!b.signature])).toEqual([

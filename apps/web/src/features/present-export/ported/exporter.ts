@@ -1,0 +1,442 @@
+// Exports on the Excalidraw page (docs/EXCALIDRAW-MIGRATION.md §4.5): the port of ../export-render.ts onto
+// `LobbyCanvas.export` (canvas/api/parts/export.ts: Excalidraw's exporters with export-only files maps and
+// Lobby's own font embedding). Same rules as the tldraw page:
+//  - PNG, the clipboard and PDF pages draw uploaded images from their ORIGINAL uploads; SVG embeds the
+//    2,048 px previews unless the person asks for the originals (F15);
+//  - a PNG exported at N× says so (one pHYs chunk: N × 72 dpi, ../png-density.ts);
+//  - a board or a selection gets a 32 px margin (F15); a single frame or a single image is its own export
+//    bounds, unpadded;
+//  - revealed vote results are drawn as on the board (./badges.ts).
+// Hide note authors (RETRO-03a; 3f's `workshopSettingsOf(canvas).hideNoteAuthors`) needs nothing here:
+// notes on the new canvas draw no author name (CR-3F-4), exports never include overlays, and the engine's
+// exports embed no scene data (canvas/export/scene.ts `exportEmbedScene: false`), so the server's
+// attribution (`customData.lobbyServer`) never reaches a PNG, SVG, PDF or the clipboard, whatever the
+// setting. workshops-facilitation.spec.ts RETRO-03a checks the files.
+import type { Bounds, CanvasElement, ExportOptions, LobbyCanvas } from '../../../canvas/api/index.ts'
+import type { PdfTextItem } from '../pdf-build.ts'
+import { PDF_RASTER, type PdfPageFormat, pdfRasterScale, planPdfPage } from '../pdf-layout.ts'
+import { setPngDensity } from '../png-density.ts'
+import {
+  drawBadges,
+  exportBadges,
+  exportOrigin,
+  exportResults,
+  shiftBadges,
+  svgWithBadges,
+} from './badges.ts'
+import type { ElementFrameEntry } from './frames.ts'
+
+export type ImageScale = 1 | 2 | 4
+export const IMAGE_SCALES: readonly ImageScale[] = [1, 2, 4]
+/** Board units of margin around a PNG/SVG/copied selection or whole board (F15). */
+export const EXPORT_PADDING = 32
+const BOARD_PAGE_PADDING = 32
+
+export class ExportCancelled extends Error {
+  constructor() {
+    super('Export cancelled')
+    this.name = 'ExportCancelled'
+  }
+}
+
+/** What an image export covers: the ids (empty: the whole board) and how to frame them. */
+export interface ImageTarget {
+  readonly ids: readonly string[]
+  /** export this frame as the engine's frame export */
+  readonly frameId?: string
+  /** file-name qualifier: the frame's name, 'frame' or 'selection' (none for the whole board) */
+  readonly qualifier?: string
+}
+
+const frameName = (el: CanvasElement | undefined) => {
+  const name = (el as { name?: unknown } | undefined)?.name
+  return typeof name === 'string' && name.trim() ? name : 'frame'
+}
+
+/** The selection (or the board) as an export target; one selected frame is that frame (F15). */
+export function exportTarget(canvas: LobbyCanvas, scope: 'selection-or-board' | 'board'): ImageTarget {
+  const selected = scope === 'board' ? [] : [...canvas.selection]
+  if (selected.length === 0) return { ids: [] }
+  if (selected.length === 1) {
+    const el = canvas.get(selected[0] as string)
+    if (el?.type === 'frame') return { ids: selected, frameId: el.id, qualifier: frameName(el) }
+  }
+  return { ids: selected, qualifier: 'selection' }
+}
+
+/** A frame as an export target. */
+export const frameTarget = (canvas: LobbyCanvas, frameId: string): ImageTarget => ({
+  ids: [frameId],
+  frameId,
+  qualifier: frameName(canvas.get(frameId)),
+})
+
+/** The export options of a target: a frame alone, one image unpadded, anything else with the margin. */
+export function targetOptions(canvas: LobbyCanvas, t: ImageTarget): ExportOptions {
+  if (t.frameId) return { frameId: t.frameId }
+  if (t.ids.length === 0) return { padding: EXPORT_PADDING }
+  const only = t.ids.length === 1 ? canvas.get(t.ids[0] as string) : undefined
+  return { ids: t.ids, padding: only?.type === 'image' ? 0 : EXPORT_PADDING }
+}
+
+/**
+ * The elements an export of `t` draws (with bound labels and frame children), for badges, the origin
+ * and the originals' size.
+ */
+export function targetElements(canvas: LobbyCanvas, t: ImageTarget): CanvasElement[] {
+  const live = canvas.items().filter((e) => !canvas.isHidden(e.id))
+  if (t.ids.length === 0 && !t.frameId) return [...live]
+  const keep = new Set(t.frameId ? [t.frameId] : t.ids)
+  for (let grew = true; grew; ) {
+    grew = false
+    for (const e of live) {
+      if (keep.has(e.id)) continue
+      if (
+        (e.type === 'text' && e.containerId && keep.has(e.containerId)) ||
+        (e.frameId && keep.has(e.frameId))
+      ) {
+        keep.add(e.id)
+        grew = true
+      }
+    }
+  }
+  return live.filter((e) => keep.has(e.id))
+}
+
+/** The bytes of the original uploads of the images in `t` (for the SVG option's label). */
+export function originalBytes(canvas: LobbyCanvas, t: ImageTarget): number {
+  const seen = new Set<string>()
+  let total = 0
+  for (const e of targetElements(canvas, t)) {
+    if (e.type !== 'image') continue
+    const f = e.customData?.lobby?.file as
+      | { versionId?: unknown; kind?: unknown; sizeBytes?: unknown }
+      | undefined
+    if (f?.kind !== 'image' || typeof f.versionId !== 'string' || seen.has(f.versionId)) continue
+    seen.add(f.versionId)
+    if (typeof f.sizeBytes === 'number' && f.sizeBytes > 0) total += f.sizeBytes
+  }
+  return total
+}
+
+/** Where an export of `t` starts in scene coordinates, from its drawn size (./badges.ts exportOrigin). */
+function originOf(
+  canvas: LobbyCanvas,
+  t: ImageTarget,
+  opts: ExportOptions,
+  size: { width: number; height: number },
+) {
+  if (t.frameId) {
+    const b = canvas.bounds(t.frameId)
+    return b ? { x: b.x, y: b.y } : { x: 0, y: 0 }
+  }
+  if (opts.bounds) return { x: opts.bounds.x, y: opts.bounds.y }
+  const boxes = targetElements(canvas, t)
+    .map((e) => canvas.bounds(e.id))
+    .filter((b): b is Bounds => !!b)
+  return exportOrigin(boxes, size, opts.padding ?? 0)
+}
+
+/** The export as a bitmap with the vote badges drawn on it. */
+async function bitmap(canvas: LobbyCanvas, t: ImageTarget, opts: ExportOptions): Promise<HTMLCanvasElement> {
+  const c = await canvas.export.canvas(opts)
+  const results = exportResults(canvas)
+  if (results) {
+    const scale = opts.scale ?? 1
+    const origin = originOf(canvas, t, opts, { width: c.width / scale, height: c.height / scale })
+    const badges = exportBadges(canvas, new Set(targetElements(canvas, t).map((e) => e.id)), results)
+    await drawBadges(c, shiftBadges(badges, origin), scale)
+  }
+  return c
+}
+
+const blobOf = (c: HTMLCanvasElement, type: string, quality?: number) =>
+  new Promise<Blob>((resolve, reject) =>
+    c.toBlob((b) => (b ? resolve(b) : reject(new Error('the canvas gave no image'))), type, quality),
+  )
+
+async function pngFrom(c: HTMLCanvasElement, scale: number): Promise<Blob> {
+  const bytes = setPngDensity(new Uint8Array(await (await blobOf(c, 'image/png')).arrayBuffer()), scale)
+  return new Blob([bytes as BlobPart], { type: 'image/png' })
+}
+
+export async function renderPng(
+  canvas: LobbyCanvas,
+  t: ImageTarget,
+  opts: { scale: ImageScale; transparent: boolean },
+): Promise<Blob> {
+  const o: ExportOptions = {
+    ...targetOptions(canvas, t),
+    scale: opts.scale,
+    background: !opts.transparent,
+    theme: 'light',
+    files: 'original',
+  }
+  return pngFrom(await bitmap(canvas, t, o), opts.scale)
+}
+
+export async function renderSvg(
+  canvas: LobbyCanvas,
+  t: ImageTarget,
+  opts: { transparent: boolean; originals?: boolean },
+): Promise<Blob> {
+  const o: ExportOptions = {
+    ...targetOptions(canvas, t),
+    background: !opts.transparent,
+    theme: 'light',
+    files: opts.originals === true ? 'original' : 'display',
+  }
+  let svg = await canvas.export.svg(o)
+  const results = exportResults(canvas)
+  if (results) {
+    const m = /viewBox="\s*[\d.e+-]+[\s,]+[\d.e+-]+[\s,]+([\d.e+-]+)[\s,]+([\d.e+-]+)/.exec(svg)
+    const size = { width: Number(m?.[1] ?? 0), height: Number(m?.[2] ?? 0) }
+    const origin = originOf(canvas, t, o, size)
+    const badges = exportBadges(canvas, new Set(targetElements(canvas, t).map((e) => e.id)), results)
+    svg = svgWithBadges(svg, shiftBadges(badges, origin))
+  }
+  return new Blob([svg], { type: 'image/svg+xml' })
+}
+
+/**
+ * Copies the target as a PNG (2×, originals). The clipboard write starts inside the click or key press
+ * (Safari requires it); the bytes follow.
+ */
+export function copyPng(
+  canvas: LobbyCanvas,
+  t: ImageTarget,
+  opts: { transparent?: boolean } = {},
+): Promise<void> {
+  const clip = navigator.clipboard
+  if (!clip?.write || typeof ClipboardItem === 'undefined')
+    return Promise.reject(new Error('the clipboard cannot take images here'))
+  const png = renderPng(canvas, t, { scale: 2, transparent: opts.transparent === true })
+  return clip.write([new ClipboardItem({ 'image/png': png })])
+}
+
+// ---- PDF -------------------------------------------------------------------------------------------------
+
+export type PdfPageSpec =
+  | { kind: 'frame'; frame: ElementFrameEntry; title: string }
+  | { kind: 'board'; title: string }
+
+export interface PdfProgress {
+  done: number
+  total: number
+}
+
+const nextTask = () => new Promise<void>((resolve) => setTimeout(resolve, 16))
+
+type Align = 'start' | 'middle' | 'end'
+const alignOf = (v: unknown): Align => (v === 'center' ? 'middle' : v === 'right' ? 'end' : 'start')
+
+/** Elements that hide what is under them on a page (photos, file-card faces). */
+const OCCLUDING_TYPES = new Set(['image'])
+/** A file card face's footer height and where its name starts (file-card's CSS: 10 + 34 + 10 px). */
+const CARD_FOOTER_PX = 56
+const CARD_NAME_LEFT_PX = 54
+
+/**
+ * The hidden text layer of one PDF page: every text element (free text and labels: their own box,
+ * size and alignment) and each file card's name at its top-left, relative to `origin`, clipped by its
+ * frame, leaving out text an image drawn later covers whole. Frame names are left out (the page's header
+ * band has the title).
+ */
+export function pageTexts(
+  canvas: LobbyCanvas,
+  members: readonly CanvasElement[],
+  origin: Bounds,
+): PdfTextItem[] {
+  const order = new Map(canvas.items().map((e, i) => [e.id, i]))
+  const boxes: { el: CanvasElement; b: Bounds; order: number }[] = []
+  for (const el of members) {
+    const b = canvas.visibleBounds(el.id)
+    if (!b || b.width <= 0 || b.height <= 0) continue
+    boxes.push({ el, b, order: order.get(el.id) ?? -1 })
+  }
+  const images = boxes.filter((x) => OCCLUDING_TYPES.has(x.el.type))
+  const covered = (x: { b: Bounds; order: number }) =>
+    images.some(
+      (i) =>
+        i.order > x.order &&
+        i.b.x <= x.b.x &&
+        i.b.y <= x.b.y &&
+        i.b.x + i.b.width >= x.b.x + x.b.width &&
+        i.b.y + i.b.height >= x.b.y + x.b.height,
+    )
+  const items: PdfTextItem[] = []
+  for (const x of boxes) {
+    if (covered(x)) continue
+    const base = { x: x.b.x - origin.x, y: x.b.y - origin.y, w: x.b.width, h: x.b.height }
+    if (x.el.type === 'text') {
+      const t = x.el as CanvasElement & {
+        originalText?: string
+        text?: string
+        fontSize?: number
+        textAlign?: string
+        lineHeight?: number
+      }
+      // W5-30: the engine's own lines (`text` is `originalText` wrapped to the element's width), drawn
+      // line by line: the PDF's Helvetica is wider than the canvas's fonts, so wrapping again in the box
+      // split words ("Stor" / "y") and a search for them found nothing.
+      const wrapped = typeof t.text === 'string' && t.text.trim() ? t.text : (t.originalText ?? '')
+      const text = wrapped.trimEnd()
+      if (!text.trim()) continue
+      items.push({
+        ...base,
+        text,
+        fontSizePx: typeof t.fontSize === 'number' && t.fontSize > 0 ? t.fontSize : 16,
+        align: alignOf(t.textAlign),
+        verticalAlign: 'start',
+        inset: 0,
+        lines: true,
+        ...(typeof t.lineHeight === 'number' && t.lineHeight > 0 ? { lineHeight: t.lineHeight } : {}),
+      })
+    } else if (x.el.type === 'image') {
+      const f = x.el.customData?.lobby?.file as { kind?: unknown; name?: unknown } | undefined
+      if (!f || f.kind === 'image' || typeof f.name !== 'string' || !f.name.trim()) continue
+      // The name sits in the card face's footer (the export draws the face: canvas/api/parts/export-faces.ts):
+      // the bottom 56 px, right of the 34 px kind badge; an attachment's footer is the whole card.
+      const footer = f.kind === 'other' ? base.h : Math.min(base.h, CARD_FOOTER_PX)
+      items.push({
+        x: base.x + CARD_NAME_LEFT_PX,
+        y: base.y + base.h - footer,
+        w: Math.max(1, base.w - CARD_NAME_LEFT_PX - 10),
+        h: footer,
+        text: f.name.trim(),
+        fontSizePx: 13.5,
+        align: 'start',
+        verticalAlign: 'middle',
+        inset: 0,
+      })
+    }
+  }
+  return items
+}
+
+const TITLE_FONT =
+  'ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif'
+/** Pixels per PDF point for a browser-drawn page title (sharp when printed). */
+const TITLE_PX_PER_PT = 4
+
+/**
+ * A page title the PDF's standard font cannot show (emoji, CJK…), drawn by the browser with the app's
+ * font as a PNG for the page's header band (as ../export-render.ts does).
+ */
+async function titleImage(
+  title: string,
+  plan: ReturnType<typeof planPdfPage>,
+): Promise<{ bytes: Uint8Array; widthPt: number; heightPt: number } | null> {
+  const canvas = document.createElement('canvas')
+  const ctx = canvas.getContext('2d')
+  if (!ctx) return null
+  const px = plan.header.fontSize * TITLE_PX_PER_PT
+  const font = `600 ${px}px ${TITLE_FONT}`
+  const maxWidth = (plan.header.width - plan.header.padX * 2) * TITLE_PX_PER_PT
+  ctx.font = font
+  let text = title
+  if (ctx.measureText(text).width > maxWidth) {
+    const chars = Array.from(text)
+    while (chars.length > 1 && ctx.measureText(`${chars.join('')}…`).width > maxWidth) chars.pop()
+    text = `${chars.join('').trimEnd()}…`
+  }
+  canvas.width = Math.max(1, Math.ceil(Math.min(maxWidth, ctx.measureText(text).width) + 2))
+  canvas.height = Math.max(1, Math.ceil(px * 1.35))
+  ctx.font = font
+  ctx.fillStyle = '#1b2330'
+  ctx.textBaseline = 'middle'
+  ctx.fillText(text, 0, canvas.height / 2, maxWidth)
+  const blob = await blobOf(canvas, 'image/png').catch(() => null)
+  if (!blob) return null
+  return {
+    bytes: new Uint8Array(await blob.arrayBuffer()),
+    widthPt: canvas.width / TITLE_PX_PER_PT,
+    heightPt: canvas.height / TITLE_PX_PER_PT,
+  }
+}
+
+/**
+ * One PDF page per spec (as ../export-render.ts `renderPdf`): a header band with the frame's title and
+ * the frame's content (the engine's frame export: no title or outline) rendered at `pdfRasterScale` for
+ * the size it is printed at, on frame-sized pages or the same 16:9 / A4 landscape page for every frame,
+ * plus a hidden text layer. pdf-lib loads with the first PDF (§2.2: a lazy import, in a worker when it
+ * can). Yields between pages and checks `signal`.
+ */
+export async function renderPdf(
+  canvas: LobbyCanvas,
+  pages: readonly PdfPageSpec[],
+  opts: {
+    title: string
+    lossless: boolean
+    pageFormat?: PdfPageFormat
+    signal?: AbortSignal
+    onProgress?(p: PdfProgress): void
+  },
+): Promise<Blob> {
+  const pageFormat = opts.pageFormat ?? 'fit'
+  const [{ createPdfBuilderOffThread }, { bookmarkTitle, isWinAnsi }] = await Promise.all([
+    import('../pdf-client.ts'),
+    import('../pdf-build.ts'),
+  ])
+  const builder = await createPdfBuilderOffThread({ title: opts.title })
+  try {
+    const total = pages.length
+    for (let i = 0; i < total; i++) {
+      opts.onProgress?.({ done: i, total })
+      await nextTask()
+      if (opts.signal?.aborted) throw new ExportCancelled()
+      const spec = pages[i] as PdfPageSpec
+      let target: ImageTarget
+      let bounds: Bounds | null
+      let o: ExportOptions
+      if (spec.kind === 'frame') {
+        target = { ids: [spec.frame.id], frameId: spec.frame.id }
+        bounds = canvas.bounds(spec.frame.id)
+        o = { frameId: spec.frame.id }
+      } else {
+        target = { ids: [] }
+        const all = canvas.boundsOf()
+        bounds = all
+          ? {
+              x: all.x - BOARD_PAGE_PADDING,
+              y: all.y - BOARD_PAGE_PADDING,
+              width: all.width + BOARD_PAGE_PADDING * 2,
+              height: all.height + BOARD_PAGE_PADDING * 2,
+            }
+          : null
+        o = bounds ? { bounds } : {}
+      }
+      if (!bounds || bounds.width <= 0 || bounds.height <= 0) continue // deleted meanwhile
+      const plan = planPdfPage(bounds.width, bounds.height, pageFormat)
+      const raster = pdfRasterScale(bounds.width, bounds.height, PDF_RASTER, plan.ptPerPx)
+      const format = opts.lossless ? 'png' : 'jpeg'
+      const c = await bitmap(canvas, target, {
+        ...o,
+        scale: raster,
+        background: true,
+        theme: 'light',
+        files: 'original',
+      })
+      if (opts.signal?.aborted) throw new ExportCancelled()
+      const blob = await blobOf(c, format === 'png' ? 'image/png' : 'image/jpeg', 0.92)
+      const title = bookmarkTitle(spec.title, builder.pageCount)
+      const headerImage = isWinAnsi(title) ? null : await titleImage(title, plan)
+      await builder.addPage({
+        title,
+        format: pageFormat,
+        widthPx: bounds.width,
+        heightPx: bounds.height,
+        image: { bytes: new Uint8Array(await blob.arrayBuffer()), type: format },
+        ...(headerImage ? { headerImage } : {}),
+        texts: pageTexts(canvas, targetElements(canvas, target), bounds),
+      })
+    }
+    if (builder.pageCount === 0) throw new Error('Nothing to export: the frames were removed.')
+    opts.onProgress?.({ done: total, total })
+    await nextTask()
+    const bytes = await builder.finish()
+    return new Blob([bytes as BlobPart], { type: 'application/pdf' })
+  } finally {
+    builder.dispose()
+  }
+}

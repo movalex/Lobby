@@ -1,0 +1,994 @@
+[
+  {
+    "id": "document:document",
+    "typeName": "document",
+    "gridSize": 10,
+    "name": "",
+    "meta": {}
+  },
+  {
+    "id": "page:page",
+    "typeName": "page",
+    "name": "Page 1",
+    "index": "a1",
+    "meta": {}
+  },
+  {
+    "id": "shape:JTYa13T8ComDJq7yKLrc3",
+    "typeName": "shape",
+    "x": 0,
+    "y": 0,
+    "rotation": 0,
+    "index": "a0Rn6",
+    "parentId": "page:page",
+    "isLocked": false,
+    "opacity": 1,
+    "meta": {},
+    "type": "frame",
+    "props": {
+      "w": 2560,
+      "h": 420,
+      "name": "1 · Check-in",
+      "color": "black"
+    }
+  },
+  {
+    "id": "shape:GwKhHHrUUG__ZIyyuVcSW",
+    "typeName": "shape",
+    "x": 40,
+    "y": 32,
+    "rotation": 0,
+    "index": "a0TVf",
+    "parentId": "shape:JTYa13T8ComDJq7yKLrc3",
+    "isLocked": true,
+    "opacity": 1,
+    "meta": {},
+    "type": "text",
+    "props": {
+      "color": "black",
+      "size": "l",
+      "font": "sans",
+      "textAlign": "start",
+      "w": 2480,
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Retrospective: team, sprint or project"
+              }
+            ]
+          }
+        ]
+      },
+      "scale": 1,
+      "autoSize": false
+    }
+  },
+  {
+    "id": "shape:AxgZtlEHd2B1QGcqzjWML",
+    "typeName": "shape",
+    "x": 40,
+    "y": 92,
+    "rotation": 0,
+    "index": "a1bn2",
+    "parentId": "shape:JTYa13T8ComDJq7yKLrc3",
+    "isLocked": true,
+    "opacity": 1,
+    "meta": {},
+    "type": "text",
+    "props": {
+      "color": "grey",
+      "size": "s",
+      "font": "sans",
+      "textAlign": "start",
+      "w": 1000,
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Agree the goal, check the mood and review last time's actions. Then spend about 10 minutes per column, and dot-vote (3 each) on what to discuss first."
+              }
+            ]
+          }
+        ]
+      },
+      "scale": 1,
+      "autoSize": false
+    }
+  },
+  {
+    "id": "shape:PtwMMmMAJR21LfiB9g-rL",
+    "typeName": "shape",
+    "x": 40,
+    "y": 180,
+    "rotation": 0,
+    "index": "a2K0j",
+    "parentId": "shape:JTYa13T8ComDJq7yKLrc3",
+    "isLocked": false,
+    "opacity": 1,
+    "meta": {},
+    "type": "note",
+    "props": {
+      "color": "light-violet",
+      "labelColor": "black",
+      "size": "s",
+      "font": "sans",
+      "fontSizeAdjustment": 1,
+      "align": "middle",
+      "verticalAlign": "middle",
+      "growY": 0,
+      "url": "",
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Goal of this retro"
+              }
+            ]
+          }
+        ]
+      },
+      "scale": 1,
+      "textLastEditedBy": null
+    }
+  },
+  {
+    "id": "shape:vK87sGTnDfaLjZ7zKJ9Bw",
+    "typeName": "shape",
+    "x": 260,
+    "y": 180,
+    "rotation": 0,
+    "index": "a3zZ7",
+    "parentId": "shape:JTYa13T8ComDJq7yKLrc3",
+    "isLocked": false,
+    "opacity": 1,
+    "meta": {},
+    "type": "note",
+    "props": {
+      "color": "yellow",
+      "labelColor": "black",
+      "size": "s",
+      "font": "sans",
+      "fontSizeAdjustment": 1,
+      "align": "middle",
+      "verticalAlign": "middle",
+      "growY": 0,
+      "url": "",
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Mood check: one word each"
+              }
+            ]
+          }
+        ]
+      },
+      "scale": 1,
+      "textLastEditedBy": null
+    }
+  },
+  {
+    "id": "shape:yuHnIbErf_8F67JtSVJa7",
+    "typeName": "shape",
+    "x": 480,
+    "y": 180,
+    "rotation": 0,
+    "index": "a4qNI",
+    "parentId": "shape:JTYa13T8ComDJq7yKLrc3",
+    "isLocked": false,
+    "opacity": 1,
+    "meta": {},
+    "type": "note",
+    "props": {
+      "color": "light-blue",
+      "labelColor": "black",
+      "size": "s",
+      "font": "sans",
+      "fontSizeAdjustment": 1,
+      "align": "middle",
+      "verticalAlign": "middle",
+      "growY": 0,
+      "url": "",
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Last time's actions: done, doing or dropped?"
+              }
+            ]
+          }
+        ]
+      },
+      "scale": 1,
+      "textLastEditedBy": null
+    }
+  },
+  {
+    "id": "shape:Rbz4jh2e49MKMhVlNf-hU",
+    "typeName": "shape",
+    "x": 700,
+    "y": 180,
+    "rotation": 0,
+    "index": "a5JR6",
+    "parentId": "shape:JTYa13T8ComDJq7yKLrc3",
+    "isLocked": false,
+    "opacity": 1,
+    "meta": {},
+    "type": "note",
+    "props": {
+      "color": "orange",
+      "labelColor": "black",
+      "size": "s",
+      "font": "sans",
+      "fontSizeAdjustment": 1,
+      "align": "middle",
+      "verticalAlign": "middle",
+      "growY": 0,
+      "url": "",
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Timebox: about 10 min per column"
+              }
+            ]
+          }
+        ]
+      },
+      "scale": 1,
+      "textLastEditedBy": null
+    }
+  },
+  {
+    "id": "shape:rPBy_6Hk6V0bIeENhNR6e",
+    "typeName": "shape",
+    "x": 920,
+    "y": 180,
+    "rotation": 0,
+    "index": "a6kwQ",
+    "parentId": "shape:JTYa13T8ComDJq7yKLrc3",
+    "isLocked": false,
+    "opacity": 1,
+    "meta": {},
+    "type": "note",
+    "props": {
+      "color": "light-green",
+      "labelColor": "black",
+      "size": "s",
+      "font": "sans",
+      "fontSizeAdjustment": 1,
+      "align": "middle",
+      "verticalAlign": "middle",
+      "growY": 0,
+      "url": "",
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Focus on the work, not the person"
+              }
+            ]
+          }
+        ]
+      },
+      "scale": 1,
+      "textLastEditedBy": null
+    }
+  },
+  {
+    "id": "shape:gkc2goRO6EbaKo1yYxsLe",
+    "typeName": "shape",
+    "x": 0,
+    "y": 540,
+    "rotation": 0,
+    "index": "a1PEA",
+    "parentId": "page:page",
+    "isLocked": false,
+    "opacity": 1,
+    "meta": {},
+    "type": "frame",
+    "props": {
+      "w": 800,
+      "h": 960,
+      "name": "2 · What went well",
+      "color": "black"
+    }
+  },
+  {
+    "id": "shape:6EOuksEgwYzgA3ghNDph9",
+    "typeName": "shape",
+    "x": 40,
+    "y": 32,
+    "rotation": 0,
+    "index": "a0BUo",
+    "parentId": "shape:gkc2goRO6EbaKo1yYxsLe",
+    "isLocked": true,
+    "opacity": 1,
+    "meta": {},
+    "type": "text",
+    "props": {
+      "color": "black",
+      "size": "l",
+      "font": "sans",
+      "textAlign": "start",
+      "w": 720,
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "What went well"
+              }
+            ]
+          }
+        ]
+      },
+      "scale": 1,
+      "autoSize": false
+    }
+  },
+  {
+    "id": "shape:jlF5YrE53ur2DL2_xtDvk",
+    "typeName": "shape",
+    "x": 40,
+    "y": 92,
+    "rotation": 0,
+    "index": "a1Pdv",
+    "parentId": "shape:gkc2goRO6EbaKo1yYxsLe",
+    "isLocked": true,
+    "opacity": 1,
+    "meta": {},
+    "type": "text",
+    "props": {
+      "color": "grey",
+      "size": "s",
+      "font": "sans",
+      "textAlign": "start",
+      "w": 720,
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Wins, good habits and moments we're proud of."
+              }
+            ]
+          }
+        ]
+      },
+      "scale": 1,
+      "autoSize": false
+    }
+  },
+  {
+    "id": "shape:yi3zq7rqyFEWdu1nP6yIN",
+    "typeName": "shape",
+    "x": 40,
+    "y": 190,
+    "rotation": 0,
+    "index": "a22tj",
+    "parentId": "shape:gkc2goRO6EbaKo1yYxsLe",
+    "isLocked": false,
+    "opacity": 1,
+    "meta": {},
+    "type": "note",
+    "props": {
+      "color": "light-green",
+      "labelColor": "black",
+      "size": "s",
+      "font": "sans",
+      "fontSizeAdjustment": 1,
+      "align": "middle",
+      "verticalAlign": "middle",
+      "growY": 0,
+      "url": "",
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "What helped us most?"
+              }
+            ]
+          }
+        ]
+      },
+      "scale": 1,
+      "textLastEditedBy": null
+    }
+  },
+  {
+    "id": "shape:YYpnVOGVj2CvYV3Lcdz0C",
+    "typeName": "shape",
+    "x": 260,
+    "y": 190,
+    "rotation": 0,
+    "index": "a3iC6",
+    "parentId": "shape:gkc2goRO6EbaKo1yYxsLe",
+    "isLocked": false,
+    "opacity": 1,
+    "meta": {},
+    "type": "note",
+    "props": {
+      "color": "light-green",
+      "labelColor": "black",
+      "size": "s",
+      "font": "sans",
+      "fontSizeAdjustment": 1,
+      "align": "middle",
+      "verticalAlign": "middle",
+      "growY": 0,
+      "url": "",
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "A moment we're proud of"
+              }
+            ]
+          }
+        ]
+      },
+      "scale": 1,
+      "textLastEditedBy": null
+    }
+  },
+  {
+    "id": "shape:pbeAotntzfSs-Vsjv7_0d",
+    "typeName": "shape",
+    "x": 480,
+    "y": 190,
+    "rotation": 0,
+    "index": "a4grA",
+    "parentId": "shape:gkc2goRO6EbaKo1yYxsLe",
+    "isLocked": false,
+    "opacity": 1,
+    "meta": {},
+    "type": "note",
+    "props": {
+      "color": "light-green",
+      "labelColor": "black",
+      "size": "s",
+      "font": "sans",
+      "fontSizeAdjustment": 1,
+      "align": "middle",
+      "verticalAlign": "middle",
+      "growY": 0,
+      "url": "",
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Who do we want to thank?"
+              }
+            ]
+          }
+        ]
+      },
+      "scale": 1,
+      "textLastEditedBy": null
+    }
+  },
+  {
+    "id": "shape:yh_a5kwvZtjq43c2vJgky",
+    "typeName": "shape",
+    "x": 880,
+    "y": 540,
+    "rotation": 0,
+    "index": "a2DsM",
+    "parentId": "page:page",
+    "isLocked": false,
+    "opacity": 1,
+    "meta": {},
+    "type": "frame",
+    "props": {
+      "w": 800,
+      "h": 960,
+      "name": "3 · What to improve",
+      "color": "black"
+    }
+  },
+  {
+    "id": "shape:k-RX-dlpvPcC_ZrR7DmFZ",
+    "typeName": "shape",
+    "x": 40,
+    "y": 32,
+    "rotation": 0,
+    "index": "a0xrb",
+    "parentId": "shape:yh_a5kwvZtjq43c2vJgky",
+    "isLocked": true,
+    "opacity": 1,
+    "meta": {},
+    "type": "text",
+    "props": {
+      "color": "black",
+      "size": "l",
+      "font": "sans",
+      "textAlign": "start",
+      "w": 720,
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "What to improve"
+              }
+            ]
+          }
+        ]
+      },
+      "scale": 1,
+      "autoSize": false
+    }
+  },
+  {
+    "id": "shape:zwLH7A5LhO1xf66yCBjfU",
+    "typeName": "shape",
+    "x": 40,
+    "y": 92,
+    "rotation": 0,
+    "index": "a1A8I",
+    "parentId": "shape:yh_a5kwvZtjq43c2vJgky",
+    "isLocked": true,
+    "opacity": 1,
+    "meta": {},
+    "type": "text",
+    "props": {
+      "color": "grey",
+      "size": "s",
+      "font": "sans",
+      "textAlign": "start",
+      "w": 720,
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Friction, surprises and anything that slowed us down."
+              }
+            ]
+          }
+        ]
+      },
+      "scale": 1,
+      "autoSize": false
+    }
+  },
+  {
+    "id": "shape:dXZxy0p-V7HRc_2HwxPWX",
+    "typeName": "shape",
+    "x": 40,
+    "y": 190,
+    "rotation": 0,
+    "index": "a2Obv",
+    "parentId": "shape:yh_a5kwvZtjq43c2vJgky",
+    "isLocked": false,
+    "opacity": 1,
+    "meta": {},
+    "type": "note",
+    "props": {
+      "color": "orange",
+      "labelColor": "black",
+      "size": "s",
+      "font": "sans",
+      "fontSizeAdjustment": 1,
+      "align": "middle",
+      "verticalAlign": "middle",
+      "growY": 0,
+      "url": "",
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "What slowed us down?"
+              }
+            ]
+          }
+        ]
+      },
+      "scale": 1,
+      "textLastEditedBy": null
+    }
+  },
+  {
+    "id": "shape:4hMlwtmN3iHuA6OY8UAQ4",
+    "typeName": "shape",
+    "x": 260,
+    "y": 190,
+    "rotation": 0,
+    "index": "a3LrE",
+    "parentId": "shape:yh_a5kwvZtjq43c2vJgky",
+    "isLocked": false,
+    "opacity": 1,
+    "meta": {},
+    "type": "note",
+    "props": {
+      "color": "orange",
+      "labelColor": "black",
+      "size": "s",
+      "font": "sans",
+      "fontSizeAdjustment": 1,
+      "align": "middle",
+      "verticalAlign": "middle",
+      "growY": 0,
+      "url": "",
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "What surprised us?"
+              }
+            ]
+          }
+        ]
+      },
+      "scale": 1,
+      "textLastEditedBy": null
+    }
+  },
+  {
+    "id": "shape:pGXOkUbEMa0CWnNOgcJXv",
+    "typeName": "shape",
+    "x": 480,
+    "y": 190,
+    "rotation": 0,
+    "index": "a4SvE",
+    "parentId": "shape:yh_a5kwvZtjq43c2vJgky",
+    "isLocked": false,
+    "opacity": 1,
+    "meta": {},
+    "type": "note",
+    "props": {
+      "color": "orange",
+      "labelColor": "black",
+      "size": "s",
+      "font": "sans",
+      "fontSizeAdjustment": 1,
+      "align": "middle",
+      "verticalAlign": "middle",
+      "growY": 0,
+      "url": "",
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "What would we do differently next time?"
+              }
+            ]
+          }
+        ]
+      },
+      "scale": 1,
+      "textLastEditedBy": null
+    }
+  },
+  {
+    "id": "shape:dPH7Mc8v7dlbSvP0S_0zZ",
+    "typeName": "shape",
+    "x": 1760,
+    "y": 540,
+    "rotation": 0,
+    "index": "a3NnQ",
+    "parentId": "page:page",
+    "isLocked": false,
+    "opacity": 1,
+    "meta": {},
+    "type": "frame",
+    "props": {
+      "w": 800,
+      "h": 960,
+      "name": "4 · Actions",
+      "color": "black"
+    }
+  },
+  {
+    "id": "shape:cISNoteg_SwJKAD7ht0l6",
+    "typeName": "shape",
+    "x": 40,
+    "y": 32,
+    "rotation": 0,
+    "index": "a0cFU",
+    "parentId": "shape:dPH7Mc8v7dlbSvP0S_0zZ",
+    "isLocked": true,
+    "opacity": 1,
+    "meta": {},
+    "type": "text",
+    "props": {
+      "color": "black",
+      "size": "l",
+      "font": "sans",
+      "textAlign": "start",
+      "w": 720,
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Actions"
+              }
+            ]
+          }
+        ]
+      },
+      "scale": 1,
+      "autoSize": false
+    }
+  },
+  {
+    "id": "shape:kq87FbVg68EToIrQi9pPH",
+    "typeName": "shape",
+    "x": 40,
+    "y": 92,
+    "rotation": 0,
+    "index": "a1BUY",
+    "parentId": "shape:dPH7Mc8v7dlbSvP0S_0zZ",
+    "isLocked": true,
+    "opacity": 1,
+    "meta": {},
+    "type": "text",
+    "props": {
+      "color": "grey",
+      "size": "s",
+      "font": "sans",
+      "textAlign": "start",
+      "w": 720,
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Turn the top themes into a few concrete steps. Each one needs an owner and a date."
+              }
+            ]
+          }
+        ]
+      },
+      "scale": 1,
+      "autoSize": false
+    }
+  },
+  {
+    "id": "shape:SaXY_zjTNqkLoZxdsbIIW",
+    "typeName": "shape",
+    "x": 40,
+    "y": 190,
+    "rotation": 0,
+    "index": "a2T2z",
+    "parentId": "shape:dPH7Mc8v7dlbSvP0S_0zZ",
+    "isLocked": false,
+    "opacity": 1,
+    "meta": {},
+    "type": "note",
+    "props": {
+      "color": "light-blue",
+      "labelColor": "black",
+      "size": "s",
+      "font": "sans",
+      "fontSizeAdjustment": 1,
+      "align": "middle",
+      "verticalAlign": "middle",
+      "growY": 0,
+      "url": "",
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Action: …"
+              }
+            ]
+          },
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Owner: …"
+              }
+            ]
+          },
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Due: …"
+              }
+            ]
+          }
+        ]
+      },
+      "scale": 1,
+      "textLastEditedBy": null
+    }
+  },
+  {
+    "id": "shape:w3JxJd1lKAUiku5mfNxdC",
+    "typeName": "shape",
+    "x": 260,
+    "y": 190,
+    "rotation": 0,
+    "index": "a3UPF",
+    "parentId": "shape:dPH7Mc8v7dlbSvP0S_0zZ",
+    "isLocked": false,
+    "opacity": 1,
+    "meta": {},
+    "type": "note",
+    "props": {
+      "color": "light-blue",
+      "labelColor": "black",
+      "size": "s",
+      "font": "sans",
+      "fontSizeAdjustment": 1,
+      "align": "middle",
+      "verticalAlign": "middle",
+      "growY": 0,
+      "url": "",
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Action: …"
+              }
+            ]
+          },
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Owner: …"
+              }
+            ]
+          },
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Due: …"
+              }
+            ]
+          }
+        ]
+      },
+      "scale": 1,
+      "textLastEditedBy": null
+    }
+  },
+  {
+    "id": "shape:4NFazGvzXnxrgOoK1LbAN",
+    "typeName": "shape",
+    "x": 480,
+    "y": 190,
+    "rotation": 0,
+    "index": "a44p6",
+    "parentId": "shape:dPH7Mc8v7dlbSvP0S_0zZ",
+    "isLocked": false,
+    "opacity": 1,
+    "meta": {},
+    "type": "note",
+    "props": {
+      "color": "light-blue",
+      "labelColor": "black",
+      "size": "s",
+      "font": "sans",
+      "fontSizeAdjustment": 1,
+      "align": "middle",
+      "verticalAlign": "middle",
+      "growY": 0,
+      "url": "",
+      "richText": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Action: …"
+              }
+            ]
+          },
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Owner: …"
+              }
+            ]
+          },
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Due: …"
+              }
+            ]
+          }
+        ]
+      },
+      "scale": 1,
+      "textLastEditedBy": null
+    }
+  }
+]

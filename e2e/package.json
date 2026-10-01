@@ -5,10 +5,16 @@
   "type": "module",
   "scripts": {
     "test": "playwright test",
-    "demo:video": "node demo/run.ts",
+    "spike": "playwright test -c spike/playwright.config.ts",
     "perf": "node perf/run.ts --budget",
     "install-browsers": "playwright install --only-shell chromium",
-    "typecheck": "tsc -p ."
+    "typecheck": "tsc -p .",
+    "spike-b": "playwright test -c spike-b/playwright.config.ts",
+    "spike-b:contracts": "playwright test -c spike-b/contracts/playwright.config.ts",
+    "excalidraw": "playwright test",
+    "excalidraw:dev": "playwright test -c excalidraw-builds/dev.config.ts",
+    "excalidraw:prod": "playwright test -c excalidraw-builds/prod.config.ts",
+    "csp:cutover": "node spike/csp/run-cutover.ts"
   },
   "devDependencies": {
     "@playwright/test": "catalog:",

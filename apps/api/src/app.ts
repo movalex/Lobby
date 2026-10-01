@@ -16,13 +16,14 @@ import { createIdentityService, type IdentityService } from './auth/identity.ts'
 import type { AuthProvider, RouteRateLimit, SignInContext } from './auth/provider.ts'
 import { createSessionStore } from './auth/session.ts'
 import { listUserWorkspaces } from './auth/users.ts'
+import { type CanvasEngine, createCanvasEngineProbe } from './canvas-engine.ts'
 import type { ApiConfig } from './config.ts'
 import { type ApiLimits, type AppContext, DEFAULT_LIMITS, type InvitationRateLimits } from './context.ts'
 import { badRequest, toErrorResponse, unauthenticated } from './errors.ts'
 import { EventHub } from './events/hub.ts'
 import { registerEventRoutes } from './events/routes.ts'
 import type { FeatureContext } from './features/context.ts'
-import { CHECKPOINT_ALL_ROUTE } from './features/history/checkpoint-all.ts'
+import { INTERNAL_CHECKPOINT_POSTS } from './features/history/checkpoint-all.ts'
 import { registerFeatures } from './features/index.ts'
 import type { BlobStore } from './files/blobs.ts'
 import { filesPlugin } from './files/plugin.ts'
@@ -177,6 +178,18 @@ async function buildServer(
     ...deps.limits,
     invitations: { ...DEFAULT_LIMITS.invitations, ...deps.limits?.invitations },
   }
+  // Bridge release R0: a snapshot that is not a tldraw one is refused, never read as an empty board.
+  const sync = checkedSnapshots(
+    deps.syncInternal ??
+      createHttpSyncInternalClient({ baseUrl: config.syncInternalUrl, secret: config.internalSecret }),
+  )
+  // R0's contracts (canvas-engine.ts): which canvas the sync runs decides what the api marks and refuses
+  const canvas = createCanvasEngineProbe(
+    sync.engine ? () => (sync.engine as () => Promise<CanvasEngine>)() : undefined,
+    {
+      log: (m) => app.log.info(m),
+    },
+  )
   const ctx: AppContext = {
     config,
     db,
@@ -186,6 +199,7 @@ async function buildServer(
     authRateLimit,
     limits,
     identity,
+    canvas,
     async requireUser(req) {
       const user = await sessions.user(req)
       if (!user) throw unauthenticated()
@@ -241,13 +255,13 @@ async function buildServer(
 
   // CSRF (§4): every mutation must come from the web origin. Answered here directly, not thrown, so no
   // route scope's error handler can reshape the refusal. The worker protocol (M3 §4) is exempt: it is
-  // not a browser route (Bearer token, cookies refused), and neither is the cut-over's checkpoint run
-  // (bridge release R0, features/history/checkpoint-all.ts: the internal secret, checked first; no
-  // cookie is read). Decided by the MATCHED route pattern, never by the raw URL, so no path spelling can
-  // borrow the exemption for another route.
+  // not a browser route (Bearer token, cookies refused), and neither are the cut-over's checkpoint runs
+  // (bridge release R0's run-all and the Excalidraw build's restore point, features/history/
+  // checkpoint-all.ts: the internal secret, checked first; no cookie is read). Decided by the MATCHED
+  // route pattern, never by the raw URL, so no path spelling can borrow the exemption for another route.
   app.addHook('onRequest', async (req, reply) => {
     if (req.routeOptions.url?.startsWith(WORKER_PREFIX)) return
-    if (req.method === 'POST' && req.routeOptions.url === CHECKPOINT_ALL_ROUTE) return
+    if (req.method === 'POST' && INTERNAL_CHECKPOINT_POSTS.has(req.routeOptions.url ?? '')) return
     if (MUTATING.has(req.method) && req.headers.origin !== config.publicOrigin) {
       return reply.code(403).send({ error: { code: 'FORBIDDEN', message: 'Cross-origin request refused.' } })
     }
@@ -326,7 +340,8 @@ async function buildServer(
   registerMemberRoutes(app, ctx)
   registerInvitationRoutes(app, ctx)
   registerTicketRoutes(app, ctx)
-  // Bridge release R0: A1 file-refs and A2 workshop-state, for the Excalidraw sync (docs/EXCALIDRAW-MIGRATION.md §5.10).
+  // Excalidraw engine, A1 file-refs and A2 workshop-state (sync pulls; docs/EXCALIDRAW-MIGRATION.md §1);
+  // bridge release R0 ships the same two routes (§5.10).
   registerEngineInternalRoutes(app, ctx)
   await app.register(filesPlugin, {
     db,
@@ -379,11 +394,7 @@ async function buildServer(
     ...ctx,
     blobs,
     events,
-    // Bridge release R0: a snapshot that is not a tldraw one is refused, never read as an empty board.
-    sync: checkedSnapshots(
-      deps.syncInternal ??
-        createHttpSyncInternalClient({ baseUrl: config.syncInternalUrl, secret: config.internalSecret }),
-    ),
+    sync,
     layout,
   }
   registerEventRoutes(app, features)

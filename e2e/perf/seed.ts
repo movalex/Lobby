@@ -332,3 +332,169 @@ export async function seedHeavyBoard(
     },
   }
 }
+
+// ---- the heavy board on the Excalidraw engine (docs/EXCALIDRAW-MIGRATION.md §6.4) ------------------------
+//
+// The same board (20 frames of 15-column note grids, 4,500 notes each with its bound label, a column of 200
+// uploaded images, tags on every 8th note, 40 comment threads), laid out exactly like the tldraw seed above
+// (e2e/load/boards.ts `generateBoard` kind 'heavy'), made through the real protocol: images uploaded by the
+// page like a drop (the same `uploadImages`), then every element pushed as creates on a raw socket that
+// carries the page's own ticket (≤ 500 ops and 512 KiB per push, each acked: e2e/load/seed.ts), so the room
+// stores exactly what a user's pushes would (schema, limits, invariants, file-refs against the real api,
+// index keys). The tag definitions go in first as one doc write. The page must be the Excalidraw board page
+// (VITE_LOBBY_ENGINE=excalidraw) on an Excalidraw stack; the tldraw seed above is unchanged.
+//
+// The engine code (canvas-schema's engine wrappers, which the generator lays notes out with) is loaded only
+// when this function runs, so the tldraw perf suite that imports this file loads none of it.
+
+export interface HeavyExcalidrawBoard {
+  boardId: string
+  spec: HeavySpec
+  /** elements stored (a note and its label are two) */
+  elements: number
+  /** items (a note with its label is one): frames + notes + images */
+  items: number
+  /** note ids in frame 0 (the 100% view), in creation order */
+  frame0Notes: string[]
+  seedMs: { images: number; previews: number; elements: number; comments: number }
+}
+
+/** The heavy board's tags (as the tldraw seed's), as `tagDef:<key>` doc entries. */
+const HEAVY_TAGS = [
+  { key: 'research', name: 'Research', color: 'violet' },
+  { key: 'client', name: 'Client', color: 'orange' },
+  { key: 'blocker', name: 'Blocker', color: 'red' },
+  { key: 'idea', name: 'Idea', color: 'light-green' },
+  { key: 'shoot-day', name: 'Shoot day', color: 'light-blue' },
+  { key: 'copy', name: 'Copy', color: 'grey' },
+] as const
+
+/** Fills `boardId` (open in `page` on the Excalidraw board page, signed in as an editor) with the heavy board. */
+export async function seedHeavyExcalidrawBoard(
+  page: Page,
+  boardId: string,
+  spec: HeavySpec,
+  log: (s: string) => void,
+): Promise<HeavyExcalidrawBoard> {
+  const [{ generateBoard }, { seedElements }, { forgeSession }] = await Promise.all([
+    import('../load/boards.ts'),
+    import('../load/seed.ts'),
+    import('../tests/support/excalidraw.ts'),
+  ])
+  const t0 = Date.now()
+  const up = await uploadImages(page, boardId, spec.images)
+  log(
+    `uploaded ${up.uploaded.length} images in ${Math.round(up.uploadedMs)} ms, previews ready ${Math.round(up.previewsMs)} ms later`,
+  )
+  const board = generateBoard({
+    id: boardId,
+    kind: 'heavy',
+    frames: spec.frames,
+    notes: spec.notes,
+    images: spec.images,
+    arrows: 0,
+    fileIds: up.uploaded.map((u) => u.versionId),
+  })
+  // tags on every 8th note (two on every 16th), as the tldraw seed does, on the note (not its label)
+  const perFrame = Math.ceil(spec.notes / spec.frames)
+  const tagged = new Map<string, Record<string, { name: string; color: string }>>()
+  board.noteIds.forEach((id, n) => {
+    const f = Math.floor(n / perFrame)
+    const k = n % perFrame
+    if (k % 8 !== 3) return
+    const a = HEAVY_TAGS[(f + k) % HEAVY_TAGS.length]
+    const b = HEAVY_TAGS[(f + k + 2) % HEAVY_TAGS.length]
+    const tags: Record<string, { name: string; color: string }> = {}
+    for (const t of k % 16 === 3 && b ? [a, b] : [a])
+      if (t) tags[`tag:${t.key}`] = { name: t.name, color: t.color }
+    tagged.set(id, tags)
+  })
+  const elements = board.elements.map((el) => {
+    const tags = tagged.get(el.id)
+    if (!tags) return el
+    const lobby = {
+      ...((el.customData as { lobby?: Record<string, unknown> } | undefined)?.lobby ?? {}),
+      ...tags,
+    }
+    return { ...el, customData: { ...(el.customData ?? {}), lobby } } as typeof el
+  })
+
+  const t1 = Date.now()
+  // the tag definitions first, on a socket of their own (a tag needs its tagDef in lb_doc, §3.3)
+  const docs = await forgeSession(page, boardId)
+  try {
+    await docs.socket.send({
+      type: 'push',
+      seq: 1,
+      base: docs.welcome.clock,
+      ops: [],
+      doc: {
+        set: Object.fromEntries(HEAVY_TAGS.map((t) => [`tagDef:${t.key}`, { name: t.name, color: t.color }])),
+      },
+    })
+    const docAck = await docs.socket.next('ack', 60_000)
+    if (docAck.docDenied)
+      throw new Error(`the tag definitions were refused: ${JSON.stringify(docAck.docDenied)}`)
+  } finally {
+    await docs.socket.close()
+  }
+  const { socket, welcome } = await forgeSession(page, boardId)
+  let pushed: Awaited<ReturnType<typeof seedElements>>
+  try {
+    pushed = await seedElements(socket, elements, welcome.clock)
+  } finally {
+    await socket.close()
+  }
+  if (pushed.ok !== pushed.ops)
+    throw new Error(
+      `seeding ${boardId}: ${pushed.ops - pushed.ok} of ${pushed.ops} creates refused ${JSON.stringify(pushed.rejected)} (${pushed.rejectedIds.join(', ')})`,
+    )
+  // the page has the whole board and nothing of its own waits
+  await page.waitForFunction(
+    (n) => {
+      const f = (
+        window as unknown as { lobbyCanvas?: { items(): unknown[]; saveState(): { state: string } } }
+      ).lobbyCanvas
+      return !!f && f.items().length >= n && f.saveState().state === 'saved'
+    },
+    elements.length,
+    { timeout: 180_000, polling: 250 },
+  )
+  const elementsMs = Date.now() - t1
+  log(`pushed ${elements.length} elements in ${pushed.pushes} pushes, ${elementsMs} ms (on the page, saved)`)
+
+  const t2 = Date.now()
+  await page.evaluate(
+    async ({ boardId, notes, comments }) => {
+      for (let t = 0; t < comments; t++) {
+        const id = notes[(t * 37) % notes.length]
+        const res = await fetch(`/api/boards/${encodeURIComponent(boardId)}/threads`, {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            anchor: { kind: 'shape', shapeId: `shape:${id}`, u: 0.85, v: 0.15 },
+            body: `Perf thread ${t + 1}: can we tighten this crop before the client review?`,
+          }),
+        })
+        if (!res.ok) throw new Error(`thread ${t}: ${res.status} ${await res.text()}`)
+      }
+    },
+    { boardId, notes: board.noteIds, comments: spec.comments },
+  )
+  const commentsMs = Date.now() - t2
+  log(`created ${spec.comments} comment threads in ${commentsMs} ms; seeding took ${Date.now() - t0} ms`)
+  return {
+    boardId,
+    spec,
+    elements: elements.length,
+    items: board.frameIds.length + board.noteIds.length + board.files.length,
+    frame0Notes: board.frame0Notes,
+    seedMs: {
+      images: Math.round(up.uploadedMs),
+      previews: Math.round(up.previewsMs),
+      elements: elementsMs,
+      comments: commentsMs,
+    },
+  }
+}

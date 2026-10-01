@@ -1,0 +1,53 @@
+/* The people feature on the Excalidraw board page (./index.tsx): what tldraw drew around a follower's
+   canvas on the tldraw page, the frame in the followed person's colour and "Stop following". */
+.dr-people-following-frame {
+  position: absolute;
+  z-index: 248;
+  inset: 0;
+  border: 3px solid;
+  pointer-events: none;
+}
+.dr-people-following--ported {
+  align-items: center;
+  gap: 10px;
+}
+/* W5-23: while someone's "is presenting" invitation shows, the label stays, under it (index.tsx sets its
+   top): a follower keeps their way out until they join, say Not now or stop (people.css gives the
+   invitation the spot on the tldraw page, where tldraw draws its own "Stop following"). */
+.dr-board:has(.dr-live-invite) .dr-people-following.dr-people-following--ported {
+  display: inline-flex;
+}
+/* W5-51: "Stop following" is one flat button, never an outlined pill inside the coloured pill. */
+.dr-people-following__stop {
+  margin: 0;
+  padding: 0 2px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: 700;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+  pointer-events: auto;
+}
+.dr-people-following__stop:hover {
+  text-decoration-thickness: 2px;
+}
+.dr-people-following__stop:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 2px;
+}
+/* After "Gather everyone" the label is the button alone: the coloured pill is the button. */
+.dr-people-following--ported[data-summoned="true"] {
+  padding: 0;
+}
+.dr-people-following--ported[data-summoned="true"] .dr-people-following__stop {
+  padding: 5px 14px;
+  border-radius: inherit;
+  text-decoration: none;
+}
+.dr-people-following--ported[data-summoned="true"] .dr-people-following__stop:hover {
+  background: rgb(255 255 255 / 18%);
+}

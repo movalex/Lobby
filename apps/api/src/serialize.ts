@@ -8,7 +8,15 @@ import type { SessionUser } from './auth/session.ts'
 const iso = (d: Date) => d.toISOString()
 const isoOrNull = (d: Date | null) => (d ? d.toISOString() : null)
 
-export function toBoard(r: BoardRow): Board {
+/**
+ * `marks`: whether `newCanvas` marks are shown (bridge release R0's badge). False on the new canvas
+ * (canvas-engine.ts): a board made there is this build's own. Default true (R0's behaviour).
+ */
+export interface BoardMarks {
+  readonly newCanvas?: boolean
+}
+
+export function toBoard(r: BoardRow, marks: BoardMarks = {}): Board {
   return {
     id: r.id,
     workspaceId: r.workspace_id,
@@ -22,11 +30,14 @@ export function toBoard(r: BoardRow): Board {
     updatedAt: iso(r.updated_at),
     lastOpenedAt: isoOrNull(r.last_opened_at),
     // Bridge release R0: only boards born on the new canvas carry the field (the "new canvas" badge).
-    ...(r.new_canvas === true ? { newCanvas: true as const } : {}),
+    ...(r.new_canvas === true && marks.newCanvas !== false ? { newCanvas: true as const } : {}),
   }
 }
 
-export const toBoardWithRole = (r: BoardRow, role: BoardRole): BoardWithRole => ({ ...toBoard(r), role })
+export const toBoardWithRole = (r: BoardRow, role: BoardRole, marks: BoardMarks = {}): BoardWithRole => ({
+  ...toBoard(r, marks),
+  role,
+})
 
 export interface UserRow {
   id: string
