@@ -59,6 +59,7 @@ import type {
 import { type FileRefAnswer, FileRefsCache } from '../file-refs.ts'
 import { HttpError } from '../http/respond.ts'
 import { GroupMap, type LiveCounts, WriterLedger } from './caches.ts'
+import { closeTerminal } from './closing.ts'
 import { IndexCache } from './index-keys.ts'
 import { type LeaseHolderInfo, LeaseTable } from './lease.ts'
 import { type El, type MergeEnv, PushApplier } from './merge.ts'
@@ -283,8 +284,13 @@ export class Session {
     return this.hellos.length <= HELLO_LIMIT.burst
   }
 
+  /** 4099: the CLOSING notice goes first (SMK-2, closing.ts); 4000 RECONNECT closes as is. */
   closeWith(code: number, reason: string): void {
     if (this.closed) return
+    if (code === CLOSE_TERMINAL) {
+      closeTerminal(this.socket, reason)
+      return
+    }
     try {
       this.socket.close(code, reason)
     } catch {
@@ -730,6 +736,8 @@ export class ElementRoom {
       epoch: meta.epoch,
       horizon: meta.horizon,
       doc: this.store.docAll(),
+      // CONTRACTS_REV 9: the clock each key was last written at, read with `doc` (doc-key ABA)
+      docClocks: this.store.docClocks(),
       leases: this.leases.live(now),
       roster: this.roster(),
       workshop: this.workshop ?? { voteOpen: false, anonymous: false },
@@ -756,7 +764,12 @@ export class ElementRoom {
       s.out.send(snap.bytes)
       if (snap.clock < meta.clock) {
         const ops: ServerOp[] = this.store.since(snap.clock).map(catchUpOp)
-        s.out.send(JSON.stringify({ type: 'changes', clock: meta.clock, ops }))
+        // DEF-3F-1 (3b F2): the cached snapshot's document is up to 5 s old too, so the frame that brings
+        // the rows since it also brings the doc keys written since it (null: removed); a joiner that took
+        // the snapshot's document reaches the welcome's from the frames alone
+        const doc = this.store.docSince(snap.clock)
+        const docSet = Object.keys(doc).length ? { doc: { set: doc } } : {}
+        s.out.send(JSON.stringify({ type: 'changes', clock: meta.clock, ops, ...docSet }))
       }
     }
     // everyone's current cursors, so a late joiner does not wait for the next move
@@ -776,7 +789,8 @@ export class ElementRoom {
       .snapshotRows()
       .map((r) => (r.deleted ? JSON.stringify(redactTombstone(JSON.parse(r.data) as El)) : r.data))
     const doc = this.store.docAll()
-    const json = `{"type":"snapshot","epoch":${JSON.stringify(meta.epoch)},"clock":${meta.clock},"horizon":${meta.horizon},"elements":[${rows.join(',')}],"doc":${JSON.stringify(doc)}}`
+    const docClocks = this.store.docClocks()
+    const json = `{"type":"snapshot","epoch":${JSON.stringify(meta.epoch)},"clock":${meta.clock},"horizon":${meta.horizon},"elements":[${rows.join(',')}],"doc":${JSON.stringify(doc)},"docClocks":${JSON.stringify(docClocks)}}`
     const bytes = new Promise<Uint8Array>((resolve, reject) =>
       gzip(json, (err, out) =>
         err ? reject(err) : resolve(new Uint8Array(out.buffer, out.byteOffset, out.byteLength)),

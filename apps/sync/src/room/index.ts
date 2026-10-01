@@ -53,6 +53,7 @@ import { HttpError } from '../http/respond.ts'
 import { BOARD_ID_RE, boardDbPath } from '../rooms.ts'
 import { registerTestHooks } from '../test-hooks.ts'
 import { createWorkshopStateClient } from '../workshop-state.ts'
+import { closeTerminal } from './closing.ts'
 import { ElementRoom, type Session } from './element-room.ts'
 import { roomRoutes } from './http.ts'
 import { RoomMetrics } from './metrics.ts'
@@ -267,11 +268,13 @@ export function createElementRoomServiceWith(
   const closeWaiter = (w: Waiter, code: number, reason: string) => {
     if (w.gone || w.target) return
     metrics.inc('lobby_closes_total', { code: String(code), reason })
-    try {
-      w.socket.close(code, reason)
-    } catch {
-      // already closed
-    }
+    if (code === CLOSE_TERMINAL) closeTerminal(w.socket, reason)
+    else
+      try {
+        w.socket.close(code, reason)
+      } catch {
+        // already closed
+      }
     dropWaiter(w)
   }
 
@@ -398,11 +401,7 @@ export function createElementRoomServiceWith(
   function refuse(info: ElementSessionInfo, socket: ElementSocket): ElementSessionHandle {
     const w: Waiter = { info, socket, buffer: [], bytes: 0, target: null, gone: false }
     metrics.inc('lobby_closes_total', { code: String(CLOSE_TERMINAL), reason: CONVERSION_FAILED })
-    try {
-      socket.close(CLOSE_TERMINAL, CONVERSION_FAILED)
-    } catch {
-      // already closed
-    }
+    closeTerminal(socket, CONVERSION_FAILED)
     return { message() {}, closed: () => dropWaiter(w) }
   }
 
@@ -490,11 +489,7 @@ export function createElementRoomServiceWith(
       (socketsOf.get(onBoard) ?? 0) >= MAX_SOCKETS_PER_USER_PER_BOARD
     ) {
       metrics.inc('lobby_closes_total', { code: String(CLOSE_TERMINAL), reason: 'RATE_LIMITED' })
-      try {
-        socket.close(CLOSE_TERMINAL, 'RATE_LIMITED')
-      } catch {
-        // already closed
-      }
+      closeTerminal(socket, 'RATE_LIMITED')
       const meta = { userId: uid, role: session.role, name: session.name, color: session.color }
       return { message() {}, closed: () => deps.onSessionRemoved(session.boardId, session.sid, meta) }
     }
