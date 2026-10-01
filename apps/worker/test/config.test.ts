@@ -39,6 +39,19 @@ describe('loadWorkerEnv', () => {
     })
   })
 
+  it('refuses an unknown NODE_ENV (security audit M2): staging accepted the dev-only token placeholder', () => {
+    for (const v of ['staging', 'prod', 'Production', 'dev'])
+      expect(refusal({ ...base, NODE_ENV: v, DRAFTROOM_WORKER_TOKEN: `dev-only-${'x'.repeat(40)}` })).toMatch(
+        /NODE_ENV must be production, development or test/,
+      )
+    expect(refusal({ ...base, NODE_ENV: 'staging' })).toContain('"staging"')
+    expect(loadWorkerEnv({ ...base, NODE_ENV: '' }).nodeEnv).toBe('development')
+    expect(loadWorkerEnv({ ...base, NODE_ENV: 'test' }).nodeEnv).toBe('test')
+    expect(
+      loadWorkerEnv({ ...base, NODE_ENV: 'production', DRAFTROOM_API_URL: 'https://api.test' }).nodeEnv,
+    ).toBe('production')
+  })
+
   it('reads every knob', () => {
     const c = loadWorkerEnv({
       ...base,

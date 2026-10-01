@@ -10,6 +10,11 @@ try {
   console.error(`sync: ${(e as Error).message}`)
   process.exit(1)
 }
+// Security audit M2: said out loud at every start that is not production (an unknown value never gets here).
+if (config.nodeEnv !== 'production')
+  console.warn(
+    `sync: NODE_ENV=${config.nodeEnv} (not production): the production refusals are off, so dev-only placeholder secrets, test hooks, a missing Origin check and loopback internal URLs are allowed when their own flags say so`,
+  )
 
 // Spike B (engine-switch.ts): the engine's own modules register themselves before the server is built.
 let server: ReturnType<typeof createSyncServer>

@@ -6,6 +6,8 @@ import { BACKUP_DEFAULTS } from './backup/backup.ts'
 import { parseEngine, type SyncEngine } from './engine-switch.ts'
 
 export interface SyncConfig {
+  /** NODE_ENV as checked by `parseNodeEnv` (M2): production, development or test, nothing else boots. */
+  nodeEnv: NodeEnv
   host: string
   port: number
   /** Absolute path of DRAFTROOM_DATA_DIR (rooms/ lives under it). */
@@ -91,6 +93,21 @@ type Env = Record<string, string | undefined>
 const read = (env: Env, name: string): string | undefined => {
   const v = env[name]?.trim()
   return v ? v : undefined
+}
+
+export type NodeEnv = 'production' | 'development' | 'test'
+/**
+ * NODE_ENV, checked (security audit M2). Every guard of the unsafe features (the `dev-only-` placeholder
+ * secrets, test hooks, an optional Origin check, loopback internal URLs) keys on the exact string
+ * `production`, so any other value (`staging` typed into the Render dashboard) turned them all off together,
+ * silently. Only Node's three conventions are accepted; unset or empty reads as development.
+ */
+export function parseNodeEnv(env: Env): NodeEnv {
+  const raw = read(env, 'NODE_ENV') ?? 'development'
+  if (raw === 'production' || raw === 'development' || raw === 'test') return raw
+  throw new Error(
+    `NODE_ENV must be production, development or test, not ${JSON.stringify(raw.slice(0, 32))}: every production guard keys on NODE_ENV=production, so an unknown value would turn them all off`,
+  )
 }
 
 function int(env: Env, name: string, fallback: number, min: number, max: number): number {
@@ -325,7 +342,7 @@ export function backupSigningSecret(env: Env): string {
     throw new Error(
       'DRAFTROOM_INTERNAL_SECRET is required to verify offsite backups (the sync server signs them with it)',
     )
-  return checkSecret('DRAFTROOM_INTERNAL_SECRET', value, env.NODE_ENV === 'production')
+  return checkSecret('DRAFTROOM_INTERNAL_SECRET', value, parseNodeEnv(env) === 'production')
 }
 
 /** DRAFTROOM_TEST_HOOKS: `1` on, unset/`0` off; never with NODE_ENV=production (like DRAFTROOM_DEV_AUTH in the api). */
@@ -333,14 +350,15 @@ export function parseTestHooks(env: Env): boolean {
   const raw = read(env, 'DRAFTROOM_TEST_HOOKS')
   if (raw === undefined || raw === '0') return false
   if (raw !== '1') throw new Error('DRAFTROOM_TEST_HOOKS must be 1 or 0')
-  if (env.NODE_ENV === 'production')
+  if (parseNodeEnv(env) === 'production')
     throw new Error('DRAFTROOM_TEST_HOOKS is refused when NODE_ENV=production')
   return true
 }
 
 /** Parses and validates the sync server environment. Throws with an operator-facing message on bad input. */
 export function loadConfig(env: Env = process.env): SyncConfig {
-  const production = env.NODE_ENV === 'production'
+  const nodeEnv = parseNodeEnv(env)
+  const production = nodeEnv === 'production'
   // checkSecret messages name the variable, never its value.
   const ticketSecret = checkSecret(
     'DRAFTROOM_TICKET_SECRET',
@@ -357,6 +375,7 @@ export function loadConfig(env: Env = process.env): SyncConfig {
     throw new Error('DRAFTROOM_TICKET_SECRET and DRAFTROOM_INTERNAL_SECRET must differ')
   const dataDir = resolveDataDir(env)
   return {
+    nodeEnv,
     host: read(env, 'HOST') ?? '127.0.0.1',
     port: int(env, 'PORT', 5858, 0, 65_535),
     dataDir,

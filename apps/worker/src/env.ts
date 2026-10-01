@@ -9,8 +9,25 @@ import { PREVIEW, WORKER } from './config.ts'
 
 type Env = Record<string, string | undefined>
 
+export type NodeEnv = 'production' | 'development' | 'test'
+/**
+ * NODE_ENV, checked (security audit M2). The worker's guards (the `dev-only-` token placeholder, a local
+ * soffice, http blob URLs) key on the exact string `production`, so any other value (`staging` typed into
+ * the Render dashboard) turned them all off together, silently. Only Node's three conventions are accepted;
+ * unset or empty reads as development.
+ */
+export function parseNodeEnv(env: Env): NodeEnv {
+  const raw = env.NODE_ENV?.trim() || 'development'
+  if (raw === 'production' || raw === 'development' || raw === 'test') return raw
+  throw new Error(
+    `NODE_ENV must be production, development or test, not ${JSON.stringify(raw.slice(0, 32))}: every production guard keys on NODE_ENV=production, so an unknown value would turn them all off`,
+  )
+}
+
 export interface WorkerEnv {
   production: boolean
+  /** NODE_ENV as checked by `parseNodeEnv` (M2): production, development or test, nothing else boots. */
+  nodeEnv: NodeEnv
   /** API origin without a trailing slash, e.g. `https://draftroom-api.onrender.com`. Safe to log. */
   apiUrl: string
   token: string
@@ -154,7 +171,8 @@ export function loadOfficeEnv(env: Env, production: boolean): OfficeEnv {
 }
 
 export function loadWorkerEnv(env: Env = process.env): WorkerEnv {
-  const production = env.NODE_ENV === 'production'
+  const nodeEnv = parseNodeEnv(env)
+  const production = nodeEnv === 'production'
   const apiUrl = parseApiUrl(read(env, 'DRAFTROOM_API_URL'), production)
 
   const token = env.DRAFTROOM_WORKER_TOKEN ?? ''
@@ -177,6 +195,7 @@ export function loadWorkerEnv(env: Env = process.env): WorkerEnv {
 
   return {
     production,
+    nodeEnv,
     apiUrl,
     token,
     workerId,

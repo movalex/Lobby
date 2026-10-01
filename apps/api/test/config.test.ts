@@ -45,6 +45,17 @@ describe('loadConfig', () => {
     expect(c.pgliteDir.endsWith('pg')).toBe(true)
   })
 
+  it('refuses an unknown NODE_ENV (security audit M2): staging with dev auth booted and served dev sign-in', () => {
+    for (const v of ['staging', 'prod', 'Production', 'dev'])
+      expect(() =>
+        loadConfig({ ...base, NODE_ENV: v, DRAFTROOM_DEV_AUTH: '1', AUTH_PROVIDER: 'dev' }),
+      ).toThrow(/NODE_ENV must be production, development or test/)
+    expect(() => loadConfig({ ...base, NODE_ENV: 'staging' })).toThrow(/"staging"/)
+    expect(loadConfig({ ...base, NODE_ENV: '' }).nodeEnv).toBe('development')
+    expect(loadConfig({ ...base, NODE_ENV: 'test' }).nodeEnv).toBe('test')
+    expect(loadConfig(prod).nodeEnv).toBe('production')
+  })
+
   it('accepts a production config with real secrets and Clerk', () => {
     const c = loadConfig(prod)
     expect(c).toMatchObject({ production: true, devAuth: false, authProvider: 'clerk', trustProxy: false })

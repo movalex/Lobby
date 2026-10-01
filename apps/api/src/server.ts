@@ -9,6 +9,11 @@ try {
   console.error(`api: ${(e as Error).message}`)
   process.exit(1)
 }
+// Security audit M2: said out loud at every start that is not production (an unknown value never gets here).
+if (config.nodeEnv !== 'production')
+  console.warn(
+    `api: NODE_ENV=${config.nodeEnv} (not production): the production refusals are off, so dev sign-in, dev-only placeholder secrets and loopback defaults are allowed when their own flags say so`,
+  )
 
 let server: Awaited<ReturnType<typeof createApiServer>>
 try {
