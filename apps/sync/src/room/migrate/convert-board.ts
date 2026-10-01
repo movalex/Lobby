@@ -104,8 +104,12 @@ export interface ConvertReport {
   readonly kind: 'convert'
   readonly boardId: string
   readonly ok: boolean
-  /** why it stopped (no content): disk, already-converted, not-a-tldraw-board, migration, limits, diff, deleted, source-digest, error */
+  /** why it stopped (no content): disk, already-converted, not-a-tldraw-board, backup-digest, migration, limits, diff, deleted, source-digest, error */
   readonly reason?: string
+  /** the final backup compared against (§5.6; the job's `backupKey`), null when none */
+  readonly backupKey: string | null
+  /** that backup's recordsSha256 (the job's `expectedSourceSha256`), null when none */
+  readonly expectedSourceSha256: string | null
   readonly recordsIn: number
   readonly shapesIn: number
   readonly elementsOut: number
@@ -180,6 +184,8 @@ export function convertBoardFile(job: ConvertJob, metrics: ServerTextMetrics): C
   const base = {
     kind: 'convert' as const,
     boardId: job.boardId,
+    backupKey: job.backupKey,
+    expectedSourceSha256: job.expectedSourceSha256 ?? null,
     recordsIn: 0,
     shapesIn: 0,
     elementsOut: 0,
@@ -223,6 +229,17 @@ export function convertBoardFile(job: ConvertJob, metrics: ServerTextMetrics): C
     // 2. read, migrate, convert, verify (nothing written yet)
     const tl = readTldrawTables(db)
     heap.sample('read')
+    // §5.3's table, §5.6: the records converted must be the ones the final backup holds (`lb_source` is a
+    // copy of them, so its digest is this one). An edit after the backup, or a backup that is not the final
+    // one, refuses the board here, before anything is written: the operator decides (the runbook's C10).
+    if (job.expectedSourceSha256 && tl.recordsSha256 !== job.expectedSourceSha256)
+      return done({
+        ok: false,
+        reason: 'backup-digest',
+        recordsIn: tl.rows.length,
+        sourceSha256: tl.recordsSha256,
+        sourceMatchesBackup: false,
+      })
     const migrated = migrateRecords(parseRows(tl.rows), tl.schema)
     if (!migrated.ok) return done({ ok: false, reason: 'migration', recordsIn: tl.rows.length })
     const records = migrated.records as TlRecord[]
