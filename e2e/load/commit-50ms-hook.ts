@@ -14,7 +14,8 @@ registerHooks({
     if (!url.endsWith('/apps/sync/src/room/element-room.ts')) return r
     const src = typeof r.source === 'string' ? r.source : new TextDecoder().decode(r.source as Uint8Array)
     const next = src.replace(/minCommitIntervalMs: 25\b/, 'minCommitIntervalMs: 50')
-    if (next === src) throw new Error('commit-50ms-hook: `minCommitIntervalMs: 25` not found in element-room.ts')
+    if (next === src)
+      throw new Error('commit-50ms-hook: `minCommitIntervalMs: 25` not found in element-room.ts')
     process.stderr.write('[commit-50ms-hook] DRAIN.minCommitIntervalMs = 50 (the §2.13 step-1 comparison)\n')
     return { ...r, source: next }
   },
