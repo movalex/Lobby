@@ -141,9 +141,11 @@ test('the feature host renders the registries: dock, top bar, overlays, the tool
   await expect
     .poll(async () => (await probe(a.page))?.contents.find((c) => c.source === 'paste'))
     .toEqual({ kind: 'text', source: 'paste', text: 'probe: pasted words', at: true, took: true })
+  // a URL no feature takes: since wave 5 a lone http(s) URL becomes the media feature's link card (D2,
+  // priority 100, before this probe); one with a user name in it never does
   await a.page.evaluate(() => {
     const dt = new DataTransfer()
-    dt.setData('text/plain', 'https://example.com/dropped')
+    dt.setData('text/plain', 'https://probe@example.com/dropped')
     const canvas =
       document.querySelector('.excalidraw canvas.interactive') ?? document.querySelector('.excalidraw')
     const r = (canvas as HTMLElement).getBoundingClientRect()
@@ -153,7 +155,13 @@ test('the feature host renders the registries: dock, top bar, overlays, the tool
   })
   await expect
     .poll(async () => (await probe(a.page))?.contents.find((c) => c.source === 'drop'))
-    .toEqual({ kind: 'url', source: 'drop', text: 'https://example.com/dropped', at: true, took: false })
+    .toEqual({
+      kind: 'url',
+      source: 'drop',
+      text: 'https://probe@example.com/dropped',
+      at: true,
+      took: false,
+    })
   await a.page.waitForTimeout(300)
   expect((await items(a.page)).length).toBe(before)
 

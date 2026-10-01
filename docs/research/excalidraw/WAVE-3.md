@@ -8,8 +8,10 @@ The owners' reports are the evidence for their own slices: `docs/research/excali
 are **single runs** (plus reruns of what failed), on a machine shared with other agents' runs.
 
 **Wave 3b** (the second pass: owners 3b, 3a, 3CF, 3e and 2C, then `main` with bridge release R0) is
-integrated in §7. §4, §5 and §6 below describe the page **after wave 3b**; §1 to §3 are the wave-3 record,
-and §7.4 has the expected failures that are left.
+integrated in §7. **Wave 5** (the feature owners' fixes of the early wave-5 review, `REVIEW-W5-EARLY.md`) is
+integrated in §8. §4, §5 and §6 below describe the page **after the wave-5 feature integration** (the engine
+owners' wave-5 branches are not merged yet); §1 to §3 are the wave-3 record, §7 the wave-3b record, and
+§8.4 has the expected failures that are left.
 
 | | |
 |---|---|
@@ -200,15 +202,18 @@ means absent from the new page. Every deviation below is listed in full in the o
 ## 5. Parity with today's tldraw app
 
 Every feature in `docs/PROGRESS.md` and `docs/DEMO.md`, as it stands on the Excalidraw page after the
-wave-3b integration (§7). "Outside the canvas" means the feature is not part of the board page and both
+wave-5 feature integration (§8; the owners' fixes of `REVIEW-W5-EARLY.md`, whose §10 has every finding's
+status). The engine owners' wave-5 branches (`engine/w5-2a`, `-2b`, `-2c`) are not merged yet, so what
+they fixed still reads as waiting on them. "Outside the canvas" means the feature is not part of the board page and both
 builds share it.
 
 | Feature (source) | On the Excalidraw page | Owner | Evidence (e2e/excalidraw) | What is missing, and the blocker |
 |---|---|---|---|---|
-| Two people on a board: cursors, avatars, live edits, reload, restart, offline (M0, DEMO 0:30-1:00) | ported (wave 2; spike B's part-3 fixes merged) | 2C, spike B | `board-*`, `collab-*`, `sync-durability` | the lost-edit race and the drag overwrite are fixed (spike B part 3). Heavy boards: 3b's level-of-detail pass takes fit from 9.8 to 28 fps (wave 3b), but B9's visibility (1.5 s p95) and the port's per-camera-move scans (CR 3b-7, CR 3b-8) are spike B's (O2 with O5) |
-| Same-note typing: the lease (M0, DEMO checklist 7) | ported (wave 2) | 2C, spike A/B | `collab-conflicts` | typing into an empty note is two undo steps (spike B history) |
+| Two people on a board: cursors, avatars, live edits, reload, restart, offline (M0, DEMO 0:30-1:00) | ported, partial | 2C, spike B | `board-*`, `collab-*`, `sync-durability` | the lost-edit race and the drag overwrite are fixed (spike B part 3). A connector bound to a shape another person drags catches up when the drag ends, not during it (W5-08: DEMO 1:00; D1's drawing-only re-route is 2C's, on `engine/w5-2c`); other people's selections are not drawn (W5-28, 2C); no edge marker points to collaborators off screen (W5-32, 2C). Heavy boards: 3b's level-of-detail pass takes fit from 9.8 to 28 fps (wave 3b), but B9's visibility (1.5 s p95) and the port's per-camera-move scans (CR 3b-7, CR 3b-8) are 2C's, and the heavy seed's images never load (W5-34, 2E), so no heavy-board number here is measured with images |
+| Other people's selections (plan §2.7, §4.3; review W5-28) | not ported | 2C | — | presence carries each peer's selection, but it is not drawn: `board/peers.ts` should feed `collaborators[].selectedElementIds`, honouring Hide cursors and a vote's dropped selections |
+| Same-note typing: the lease (M0, DEMO checklist 7) | ported (wave 2) | 2C, spike A/B | `collab-conflicts` | — (typing into an empty note is one undo step since spike B's P6 fix; its mark came off at wave 5, as on `engine/w5-2c`) |
 | Saved indicator, per-property undo, leave guard (validation phase) | ported (wave 2) | 2C | `board-saved`, `sync-durability` | the offline window is fixed (spike B part 3); the per-item "Offline — N changes" count (O2/2C) |
-| Server-enforced roles, forged writes refused, revocation (M1) | ported (wave 2) | O1, 2E | `permissions-canvas`, `security-negative` | — |
+| Server-enforced roles, forged writes refused, revocation (M1) | ported, partial (**B**) | 2A (O1), contracts, 2E | `permissions-canvas`, `security-negative` | every role, guests included, receives the text and authors of deleted notes in the welcome and the catch-up (W5-02, the review's security blocker: 2A's redacted tombstones and `CONTRACTS_REV` 7/8, on `engine/w5-2a`); the 500-item guest cap is counted per socket session (W5-35, D5: per uid, on `engine/w5-2a`) |
 | Toolbar, tools, style panel, 13-colour note palette (Miro phase) | ported (the review's W5-11, W5-40 to W5-42, W5-46 and D4 since wave 5) | 3a | `canvas-ux-toolbar`, `canvas-ux-tools`, `canvas-ux-review` | the highlighter and the viewers' Hand since wave 3b (CR-3A-6), with one highlighter width; no laser for viewers (CR-3A-8); next note/text style (CR-3A-7); stroke widths are the engine's; at 1809cf3 connectors ran centre to centre (W5-11) and More held 5 shapes, not 13 (D4): both fixed in wave 5; the next connector's Line pick (CR-W5-3A-1) and the arrowheads' size (W5-53, CR-W5-3A-2) are 2C's |
 | Miro shortcuts: L, P, Alt+1/2, Ctrl+0, Ctrl+Shift+L, M, Ctrl+F (Miro phase) | ported | 3a, 3b | `canvas-ux-keys`, `navigation-keys` | — |
 | PgUp/PgDn z-order (Miro phase) | **partial** | 3a | `canvas-ux-keys` MAK-06 (`test.fail`) | the keys and menu run, but the paint order does not change: CR-3A-3 (the port's `transact`, spike B / 2C) |
@@ -247,8 +252,8 @@ builds share it.
 | Recently deleted and its restore (Miro phase, DEMO 4:00) | ported, partial | 3h | `history-deleted` (2 `test.fail`) | restores through the open room since the spike merge (CR 2F-2); a live connector is not re-bound to what comes back (DEF-W3-1) |
 | Backups and the restore drill (Miro phase, wave 3) | not on this stack | 2B | — | backups are off on the Excalidraw stack until 2B writes `lb_*` files. The tldraw sync on this branch has R0's backups of `lb_*`-only files, run-all and maintenance since the `main` merge (§7.2) |
 | AI: themes, summarize, action items, ideas, budgets, owner switch (wave 4, DEMO 1:20) | ported | 3h | `ai-actions` | R9: template prompt notes count as typed (CR-3H-2, `test.fail`); output is plain text. The early wave-5 review's W5-04 (themes pulled ideas out of the frame when one was made with N) is fixed at wave 5 (3h), with the DEMO 1:20 → 2:45 → 3:30 chain as a spec |
-| Mind maps (wave 4, DEMO "more to show") | ported | 3d | `mindmap-keyboard`, `mindmap-structure` | new topic + words are two undo steps (W1-9) |
-| Tags, Show only, tag panel (wave 4, DEMO "more to show") | ported | 3d | `tags-picker`, `tags-panel` | a name-only guest cannot create a tag (CR-3D-5) |
+| Mind maps (wave 4, DEMO "more to show") | ported | 3d | `mindmap-keyboard`, `mindmap-structure` | new topic + words are two undo steps (W1-9). Since wave 5 (the integration, no 3d fixer ran): Escape after typing at a person's pace leaves the topic selected, so the arrows go on (W5-44) |
+| Tags, Show only, tag panel (wave 4, DEMO "more to show") | ported, partial | 3d | `tags-picker`, `tags-panel` (1 `test.fail`) | a name-only guest cannot create a tag (CR-3D-5, 2A: the room refuses every guest's `lb_doc` write). Since wave 5 (the integration) the picker offers a guest the board's tags only and says why, instead of "Created" and then "Change not saved" (W5-29) |
 | Name-only guests on a board, on a phone (wave 3, DEMO "more to show") | ported (wave 3b) | 2C, 3c, 3f, sharing | `guests-join`, `guests-sharing`, `sharing-share-dialog`, `workshops-phone`, `present-live` | a name-only guest cannot create a tag (CR-3D-5, `test.fail`) |
 | Accessibility: skip link, live region, keyboard traversal, contrast (review rounds) | ported, partial | 3i, 3a, 3b, 2C | `a11y-*`, `canvas-ux-review` | **Fixed at wave 5:** 3a: Esc after a keyboard placement returns to Select and Enter edits the placed shape again (W5-20), More from the keyboard (W5-22), one Tab stop per toolbar, strip, selection bar and style control (W5-42), the dark-mode note-colour legend (W5-41), `aria-keyshortcuts` (W5-50), the editor named for what it edits (W5-59); 3i: tool changes and edit ends are announced (W5-43), a stale selection is not (W5-58), a focus ring on the board (W5-45), a heading read before its subtitle (W5-59). The chrome keys and Ctrl+X pass since wave 3b. **Still open:** frame names at 2.65:1 and dark-mode note ink (W5-10, W5-15: 2C's theme; 5 `a11y-contrast` `test.fail`); "Back online. All changes saved." said on every board open (CR-3I-6, 2C; A11Y-14 `test.fail`); undo restoring the selection (`test.fail`). Reduced motion and dark-mode colours have their own rows |
 | Reduced motion for camera moves (review W5-21) | ported (wave 5), partial | 3b, 3i, 3e | `navigation-keys` W5-21, `navigation-frames` W5-21, `a11y-traversal` W5-21, `present-export-present` | under `prefers-reduced-motion: reduce` 3b's camera members and the navigation feature's own moves (zoom keys and menu, fit, Go to frame, search results, the minimap) and 3i's (Alt+Arrow, F6, the phone sheet's Zoom to fit) jump, keeping the zoom unless the item does not fit; present mode honoured it already. The other features' animated `viewport.set` calls (follow, present to everyone, comments) need CR 3b-12 (2C: the board page's camera tween) |
@@ -272,6 +277,13 @@ restore on an open board); CR-2D-2 (`LobbyTx.insert`: the template insert and th
 around seeding writes (the O2 race's workaround); they can drop the waits.
 
 **Resolved at wave 3b** (§7): CR-3F-3 (the follow camera hook, W3-10) and R2-04; CR-3F-4 (the note-author label); CR-3A-6 (the highlighter and the viewers' Hand, W3-13); CR 3b-2 (wheel deltas, W3-11); 3i's chrome keys (Ctrl/Cmd+Z, Shift+= and the zoom keys from the chrome, Ctrl+X on the canvas); the level-of-detail pass (plan §8.5); a phone toolbar like tldraw's; the guest flow's specs; the context menu's Export as; CR 3E-4 (the integration).
+
+**From the early wave-5 review** (`REVIEW-W5-EARLY.md` §10 has every finding; the engine owners' fixes are on `engine/w5-2a`, `-2b` and `-2c`, not merged here):
+- **B · W5-01 (2C):** a note made with N or T, the phone Note tool or the rail's button gets `frameId` null inside a frame (votes, frame moves, comments and AI grouping see it outside). Fixed on `engine/w5-2c`; `workshops-voting` W5-01 is its `test.fail`.
+- **B · W5-02 (2A with the contracts owner):** deleted notes' text and authors reach every role in the welcome and the catch-up. Redacted tombstones (`CONTRACTS_REV` 7, 8) on `engine/w5-2a`, 2C's consumer side on `engine/w5-2c`.
+- **B · W5-05 (2A):** the lock rule refuses a locked heading's move that follows its frame (client half done by 3a). On `engine/w5-2a`; `canvas-ux-review` and `templates-frames` W5-05 are its `test.fail`s.
+- **B · W5-08 / D1 (2C):** bound connectors follow a remote drag only at its end (DEMO 1:00). On `engine/w5-2c`.
+- **W5-34 (2E):** the heavy seed's 60 images never load, so B9's and the designer's pan numbers on this build are without images; no 2E fixer ran in wave 5.
 
 **Spike B (O2 web engine, O5, the lead)**
 - **B · performance on heavy boards** (O2 with O5, `CanvasPort.bounds` and the per-change `updateScene`): B9's visibility is 1.5 s p95 against 250 ms (`M3-part3.md`). At wave 3b, 3b's level-of-detail pass took fit on the heavy board from 9.8 to 28 fps and made its open 3× faster, but three port costs stay spike B's: CR 3b-7 (`get` and `bounds` are O(n) per call in `port-impl.ts`: every per-element caller is quadratic), CR 3b-8 (the core's and the port's element scans on an `onChange` that only moved the camera: 15-20% of the main thread at every zoom, the reason 0.25 is at 27-32 fps against the ≥ 30 gate) and CR 3b-9 (`shouldCacheIgnoreZoom` during Lobby's continuous zooms, with 2C's `CameraTween`; found in the code, not measured). B8's rollback drill waits for O4's `spike/b-convert` merge. M3 is not reached on these.
@@ -325,8 +337,8 @@ around seeding writes (the O2 race's workaround); they can drop the waits.
 - 2F with 2B, before the cut-over: the Excalidraw build writes `board_snapshots.body_version` 2 for v2 bodies and `boards.new_canvas` true for boards born on the new canvas (bridge release R0's contract, `docs/DEPLOY.md`; converted boards keep false), and drops R0's refusals of them from this branch's api at the same time (W3-15, W3-16).
 - The api: the private-brainstorm start limit (10 a minute per person) makes long spec files order-dependent; 3CF's spec fix starts its brainstorms as another host.
 - 3i and the palette owners: the red note's ink in dark mode (3.43:1 through the filter, 3.55:1 rendered). It waits on 2C's dark variants (CR-3I-5).
-- 3b (W5-21): the zoom keys, zoom to fit and Go to frame still animate under reduced motion. 3i's own moves jump (`features/a11y/ported/motion.ts` `animateCamera()` can be reused).
-- 3c (W5-31, W5-07): the people chip in the phone top bar (CR-3I-3). The docked comment sheet over the tool dock is 3c's `comments-stacking`. Board actions already steps aside for it.
+- ~~3b (W5-21): the zoom keys, zoom to fit and Go to frame still animate under reduced motion.~~ Resolved by 3b at wave 5 (merged in §8). 3i's own moves jump (`features/a11y/ported/motion.ts` `animateCamera()` can be reused).
+- 3c (W5-31, W5-07): the people chip in the phone top bar (CR-3I-3). The docked comment sheet over the tool dock was 3c's `comments-stacking`, resolved at wave 5 (§8). Board actions already steps aside for it.
 - 2B: backups (and the restore drill) on `lb_*` files. 2E: the wave-1 facade verbs (specs still use the dev handle `window.__lobbyBoard`), and moving `e2e/spike-b/support` into `e2e/tests/support`.
 - Lockfile owner: CR-3I-1 (`@axe-core/playwright`), and the importer edges of W1-9.
 - AGENTS.md (plan §10): unchanged; it needs the owner's approval.
@@ -439,3 +451,94 @@ CR-3F-4, Ctrl+Z from the chrome, Ctrl+X on the canvas, Shift+= from the chrome; 
 Skipped: the opt-in measurements `navigation-lod-fps` (LOBBY_MEASURE_FPS=1) and `present-export-heavy`.
 Not run here: the spike B suite (spike B's own verification is running), a quiet-window or laptop fps
 run, and three runs in a row of the whole folder (each owner ran three of its own specs on its branch).
+
+## 8. Wave 5: the review's feature fixes, integrated
+
+The early wave-5 review (`REVIEW-W5-EARLY.md`, 59 findings on `1809cf3`) gave each finding an owner. The
+nine feature owners fixed theirs on `engine/w5f-*` from `f336ae4`, each with a regression test that
+fails on `f336ae4`, and applied the review's §5 corrections to this report for their own area. This
+section is the feature integration: the merges, the overlaps the merge produced, 3d's two findings (no
+3d fixer ran), the gate and the expected failures left. The review's §10 has every finding's status.
+The engine owners (2A, 2B, 2C) work in a parallel workflow on `engine/w5-2a`, `-2b` and `-2c`. Those
+branches are **not merged** here, so what they fixed (W5-01, W5-02, W5-05, W5-08, W5-10, W5-15, D3's
+font allowlist, D5, DEF-3F-1, DEF-W3-2, CR-3A-3 and more) still reads as waiting on them, and their
+`test.fail` marks stay.
+
+| | |
+|---|---|
+| Branch | `engine/excalidraw`, from `f336ae4` |
+| Merged (`--no-ff`, in this order) | `engine/w5f-3a` `70a2206` (`15cbf68`), `engine/w5f-3b` `d66f0a7` (`b25e29a`), `engine/w5f-3c` `2d99a09` (`cdb18e6`), `engine/w5f-3e` `031b7bf` (`2bb3ecb`), `engine/w5f-3f` `772c857` (`2739a5a`), `engine/w5f-3g` `b4aa230` (`6d7cf49`), `engine/w5f-3h` `9dcfaf1` (`e5cb8f8`), `engine/w5f-3i` `ed7499a` (`0ffaffb`), `engine/w5f-2d` `b0315bd` (`eaa0e47`) |
+| Conflicts | `docs/PROGRESS.md` (every entry kept) and this report's §4.1, §4.7 and §5 rows (Accessibility, Phone layout, Reduced motion, Template picker, Comments, People, Present mode; each row now carries every owner's part) and §6. No code conflict. |
+| Integration commits | `2bc751f`, `df64bfe`, and the docs commit with this section |
+| Not edited | 2A's, 2B's and 2C's engine code (contracts §0a), `pnpm-workspace.yaml`, `pnpm-lock.yaml`, the catalog. Two of 2C's specs changed by a test line each (§8.2). |
+| Ports | `E2E_PORT_BASE` 6960 and 6964 (the two halves, with their fake OpenAI and fixture site at +10, +23 and +30), 6976 (the default suite), 6995 (single specs); 6960-6999 only, nothing left listening |
+| Logs | the integrator's scratchpad `w5i/` (`ex-h1.log`, `ex-h2.log`, `default1.log`, `unit*.log`, `rerun*.log`, the before-fix runs); never committed |
+
+### 8.1 Change requests
+
+| Rev (contracts §12) | CR | Decision |
+|---|---|---|
+| W5-3G-1 | CR-W5-3G-1 (3g, `96af757`): `LobbyFiles.crop?(id): boolean`, member row `files.crop` (a landed part) | **Accepted.** Optional and additive: no implementor or test canvas changes. |
+| W5-F1 | the integration's decisions in owners' files (§8.2) | Recorded. No member, signature or registry change. |
+| — | the owners' requests to 2A, 2B and 2C (CR-W5-3A-1 to -4, CR 3b-10 to 3b-12, CR-3C-W5-1, CR 3E-5 to 3E-7, CR-W5-3G-2 to -5, CR-3I-2 to -6, 2D's font and loading requests, 3f's W5-01 and CR-3F-1) | **Recorded, not applied** (§6). CR-W5-3G-5 is answered by 3e's export part (§8.2). |
+
+### 8.2 Integration fixes
+
+| Commit | Where (owner) | What was wrong | Fix |
+|---|---|---|---|
+| `2bc751f` | `canvas-ux/ported/MainMenu.tsx` (3a), `navigation/index.tsx` (3b) | both owners fixed W5-33 by registering Board ▸ View's six rows, with different ids: the submenu listed 11 rows (12 with a selection) | the View group is navigation's; 3a's copies go. `review-w5.test.ts` checks every feature's View rows and that no two board-menu or context-menu entries of one group run the same command across `CANVAS_FEATURES` (both failed before); `canvas-ux-review` W5-33 counts six rows (11 before) |
+| `2bc751f` | `a11y/ported/index.tsx`, `describe.ts` (3i); `canvas-ux/ported/canvas-events.ts` (3a) | both owners fixed W5-59 by naming the engine's text editor, with different words ("Rectangle text" then "Shape label" on one editor) | canvas-ux (3a, the review's owner of the editor's name) names it; the a11y feature's writer and `editorLabel` go. `canvas-ux-review` W5-59 records every name the editor gets for a note and a rectangle and expects one (two before) |
+| `2bc751f` | `file-card/ported/card-face.ts` (3g) | W5-14 was fixed twice: 3e's `canvas/api/parts/export-faces.ts` is wired into every export; 3g's `card-face.ts` (for CR-W5-3G-5) was never called | 3g's file and its unit test removed; 3e's part is the one face in exports |
+| (docs commit) | 2C's `e2e/excalidraw/board-features.spec.ts` | its probe dropped `https://example.com/dropped` expecting no feature to take it; 3g's link cards (D2) now take a lone http(s) URL at priority 100, before the probe | the probe drops a URL with a user name in it, which no feature takes (failed in the gate's first half, passes) |
+| (docs commit) | 2C's `e2e/excalidraw/collab-conflicts.spec.ts` | "typing into an empty note is one undo step" passes since spike B's P6 fix, so its `test.fail` failed the gate (on `f336ae4` too) | the mark is off, with 2C's own words from `engine/w5-2c` (`e869e67`), so that merge is clean |
+| `df64bfe` | `mindmap/ported/runtime.ts` (3d) | W5-44: Escape out of a topic's editor at a person's pace left nothing selected, so the arrows stopped (the keys' own replay kept the selection, so the fast-typing spec passed) | an Escape while a topic is edited selects that topic when its editor closes with nothing selected. `mindmap-keyboard` W5-44 (pauses before Escape, ArrowUp, F2 on an existing topic) failed before |
+| `df64bfe` | `tags/ported/TagPicker.tsx` (3d), `tags-panel.spec.ts` | W5-29: a name-only guest's new tag said "Created", then the room refused it (CR-3D-5) | a guest is offered the board's tags only ("Find a tag", no Create, a line saying a board member can create new ones). `tags-panel` W5-29 failed before. The guest-roles test now joins 5.5 s after the tag writes: within 5 s the guest got the old document (DEF-3F-1) and had only "created" `Idea` by accident |
+
+### 8.3 Gate
+
+Code under test: `df64bfe` plus the two spec lines of §8.2 (the e2e halves ran on `2bc751f`; what
+`df64bfe` and the spec lines touch ran again on the final tree).
+
+| Check | Result |
+|---|---|
+| lint (`biome check .`) | PASS, 1,980 files |
+| `pnpm -r typecheck` (15 projects) + engine-probe tsc + Node-safety tsc | PASS |
+| `pnpm test` | PASS: **5,235 passed, 1 expected failure, 37 skipped** (491 files, 9 skipped). The expected failure is 2D's `hierarchy.test.ts` `it.fails` (fontFamily 7 waits on 2A's allowlist). The first run, on the merged tree, failed one sync test, `presence.test.ts` "a forged display name…" (a timestamp 1 ms off; no sync file changed), which passed 3/3 alone. |
+| `pnpm test:arrows` | PASS 85/85 |
+| **every Excalidraw spec** (`e2e/excalidraw`, 83 files, 422 tests; two halves in parallel) | **392 passed, 25 expected failures, 3 skipped, 2 failed.** The two failures were the gate's own findings of §8.2: `board-features` (the probe's URL) and the `collab-conflicts` mark that passes. After the fixes, a rerun of `collab-conflicts`, `board-features`, `canvas-ux-review`, `a11y-traversal`, `a11y-live-region` and `a11y-audit` passed **40/40**, and `mindmap-keyboard` + `mindmap-structure` 7/7 and `tags-panel` + `tags-picker` 11/11 (their expected failure included) on the final code. Skipped: the opt-in `navigation-lod-fps` and `present-export-heavy`, and `media-edit`'s crop after a derivative upgrade, which skips itself while the swap does not stick (CR-W5-3G-3). |
+| **the default (tldraw) suite**, whole | **PASS: 346/346** on `2bc751f` (25.6 min, `E2E_PORT_BASE=6976`; chromium and the one branded-Chrome test). What came after it (`df64bfe`, two spec lines) is in ported files and Excalidraw specs only, which the default build does not contain. The shared modules the owners changed for both builds (3c's `comments.css`, `layout.ts` and `pin-face.ts`, 3e's `pdf-build.ts` and `present-export.css`, 3f's `voting.ts`, `workshops.css` and the tldraw `WorkshopOverlay.tsx`, 2D's templates) are all under this run. |
+| normal web build, engine markers | PASS: **0** hits for 64 markers (wave 3's and 3b's, and wave 5's: `cux-polygon-preview`, `history-bar`, `cux-toolbar-more`, `dr-cnav`, `navigation.back-to-content`, `navigation.code-selection`, `dr-a11y-focus-ring`, `canvas-announcer-tool`, `lobby-link__title`, `link-preview`, `lobby-ghost__chip`, `media-replace`, `media-crop`, `tag-guest-hint`, "Sticky note text", "Shape label", …). No `excalidraw-assets/`, 0 source maps. Two first candidates were dropped from the list because the normal build has them for its own reasons: tldraw's own "Back to content" and the tldraw style panel's `style-opacity-label`. |
+| engine flag without the dev-auth guard | PASS: 0 of the 64. Positive control: the guarded engine build contains 62 of them (the other two are a function name the minifier renames and an id no longer used). |
+
+Not run here: the spike A and spike B suites, a quiet-window fps run, and three runs in a row of the
+whole folder (each owner ran three of its own specs on its branch).
+
+### 8.4 Expected failures left
+
+25 (`test.fail`, each naming its blocker). Since wave 3b one mark came off (`collab-conflicts`
+"typing into an empty note") and 13 were added by the wave-5 fixers, for blockers the engine owners'
+branches fix or still have to fix.
+
+| Blocker | Owner | Tests |
+|---|---|---|
+| W5-10, W5-15: the engine theme (CR-3I-5) | 2C (on `engine/w5-2c`) | 5 (`a11y-contrast`) |
+| W5-05: the room's lock rule | 2A (on `engine/w5-2a`) | 2 (`canvas-ux-review`, `templates-frames`) |
+| W5-01: N and T notes join their frame | 2C (on `engine/w5-2c`) | 1 (`workshops-voting`) |
+| DEF-3F-1: a join within 5 s of a doc write gets the old `lb_doc` | 2C (on `engine/w5-2c`) | 2 (`workshops-facilitation` RETRO-03a, `navigation-start-view`) |
+| DEF-W3-2: undoing a template insert removes it for the inserting tab only | 2C (on `engine/w5-2c`) | 1 (`navigation-templates`) |
+| CR-3A-3: `transact` index writes change no paint order | 2C (on `engine/w5-2c`) | 1 (`canvas-ux-keys` MAK-06) |
+| D3: SVG exports embed Lilita One | 2A (allowlist, on `engine/w5-2a`), 2C (`canvas/export/fonts.ts`) | 1 (`present-export-files`) |
+| CR-3I-6: "Back online. All changes saved." on every board open | 2C | 1 (`a11y-2` A11Y-14) |
+| CR-3I-2, CR-3I-3: the phone top bar and the empty "On this board" | 2C | 2 (`a11y-phone-reach` W5-31, W5-50) |
+| CR-3C-W5-1: presence re-sent on the leader's resize | 2C | 1 (`people-follow` W5-25) |
+| CR-3F-1 = W5-26: a write that skips the undo stack | 2C with 2A | 1 (`workshops-facilitation`) |
+| history: undo restores the selection (3i F11); redo of Ctrl+G in a long sequence | 2C | 2 (`a11y-keyboard-safety`, `collab-conflicts`) |
+| DEF-W3-1: a Recently-deleted restore does not re-bind a live connector | 2A with 2F | 2 (`history-deleted`) |
+| CR-3D-5: an editor guest writing `tagDef:` (then the picker's W5-29 guard comes off) | 2A | 1 (`tags-panel`) |
+| CR-3H-2: what counts as "typed" (R9) | 2A with 2F | 1 (`ai-actions`) |
+| CR-3C-1: a follow target in presence | contracts, 2A, 2C | 1 (`people-list`) |
+
+When `engine/w5-2a`, `-2b` and `-2c` are merged, about ten of these are expected to pass (Playwright
+then reports them as unexpected passes) and must lose their marks; 2D's `hierarchy.test.ts` `.fails`
+and 3a's polygon pin (`polygons.test.ts`, against 2B's `CONVERTER_VERSION` 2 geometry) must be checked
+at the same time.
