@@ -52,6 +52,14 @@ export interface SyncConfig {
    * Refused at start-up with NODE_ENV=production. Absent = off.
    */
   testHooks?: boolean
+  /**
+   * DRAFTROOM_BOOT_MAINTENANCE=1 (docs/EXCALIDRAW-MIGRATION.md open item 11, §7.5 steps 6 and rollback 2):
+   * the server starts with maintenance ON, so a build deployed into the cut-over's (or a rollback's)
+   * maintenance window refuses every socket from its first second. `POST /internal/maintenance {on}`
+   * switches it as before (off ends the window). R0's switch alone is a runtime POST: a redeploy started
+   * with it off. Absent or 0 = off.
+   */
+  bootMaintenance?: boolean
 }
 
 /**
@@ -370,5 +378,14 @@ export function loadConfig(env: Env = process.env): SyncConfig {
     ),
     engine: parseEngine(read(env, 'DRAFTROOM_ENGINE')),
     testHooks: parseTestHooks(env),
+    bootMaintenance: parseBootMaintenance(env),
   }
+}
+
+/** DRAFTROOM_BOOT_MAINTENANCE: 1 = start in maintenance, 0 or absent = start serving. */
+export function parseBootMaintenance(env: Env): boolean {
+  const raw = read(env, 'DRAFTROOM_BOOT_MAINTENANCE')
+  if (raw === undefined || raw === '0') return false
+  if (raw !== '1') throw new Error('DRAFTROOM_BOOT_MAINTENANCE must be 1 or 0')
+  return true
 }

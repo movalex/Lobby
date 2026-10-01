@@ -23,6 +23,10 @@ type Seed = { boardId: string; body: RoomSnapshotJson | LobbySeed }
 class LobbySync implements SyncInternalClient {
   boards = new Map<string, LobbyElementsSnapshot | RoomSnapshotJson>()
   seeds: Seed[] = []
+  /** GET /internal/canvas: this sync runs the new canvas (R0's contracts, canvas-engine.ts; wave 5) */
+  async engine() {
+    return 'excalidraw' as const
+  }
   setBoard(boardId: string, elements: El[], doc: Record<string, unknown> = {}, clock = 7) {
     this.boards.set(boardId, { format: 'lobby-elements', schema: 1, clock, elements, doc })
   }

@@ -12,6 +12,7 @@ import {
 import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import { connectionRole, loadBoardAccess } from '../access.ts'
+import { onNewCanvas } from '../canvas-engine.ts'
 import type { AppContext, Params } from '../context.ts'
 import { ApiError, notFound, parse } from '../errors.ts'
 import { ticketIdentity } from '../features/guests/label.ts'
@@ -30,8 +31,10 @@ export function registerTicketRoutes(app: FastifyInstance, ctx: AppContext): voi
     if (!role) throw notFound()
     // Bridge release R0 (docs/EXCALIDRAW-MIGRATION.md §5.9 step 4): a board born on the new canvas is not
     // this build's to open. Its sync refuses a file it can read as one; this also covers a board whose
-    // file does not exist yet, which R0's sync would otherwise start as a new, empty tldraw board.
-    if (access?.board.new_canvas) throw new ApiError(409, NEW_CANVAS_ERROR, NEW_CANVAS_BOARD_MESSAGE)
+    // file does not exist yet, which R0's sync would otherwise start as a new, empty tldraw board. On the
+    // new canvas (canvas-engine.ts) it is this build's own board.
+    if (access?.board.new_canvas && !(await onNewCanvas(ctx)))
+      throw new ApiError(409, NEW_CANVAS_ERROR, NEW_CANVAS_BOARD_MESSAGE)
     // Wave 3: a name-only guest's long name is shortened so the cursor label keeps "(guest)".
     // A3 (Excalidraw engine): a name-only guest's ticket carries `guest: true`, read from the users
     // row (never from the request); sync enforces the guest limits from it. Everyone else's has none.

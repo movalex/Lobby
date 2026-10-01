@@ -10,6 +10,7 @@ import { newId as newDbId } from '@draftroom/db'
 import type { AssetVersionMeta } from '@draftroom/dev-assets'
 import { newId } from '@draftroom/dev-assets'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { createCanvasEngineProbe } from '../../src/canvas-engine.ts'
 import { snapshotStorageKey } from '../../src/features/history/snapshot-store.ts'
 import { derivativeKey, originalKey } from '../../src/files/blobs.ts'
 import { type AssetGcDeps, collectWorkspace, createAssetGc, type GcPassMode } from '../../src/files/gc.ts'
@@ -573,6 +574,25 @@ describe('what the new canvas left behind (bridge release R0)', () => {
     w.api.clock.advance(31 * DAY)
     await w.collect('delete')
     expect(await exists(w, originalKey(m.assetId, m.versionId))).toBe(true)
+  })
+
+  // Wave 5, 2A (R0's contracts on the new canvas): when the sync runs the new canvas, a v2 row is this
+  // build's own checkpoint and is read like any other (it was counted unread on f336ae4, so every
+  // workspace's pass stayed incomplete once the new build wrote body_version 2).
+  it('on the new canvas a v2 checkpoint (row body_version 2) is read: its image is kept, the scan recorded', async () => {
+    const w = await world()
+    const m = await upload(w.api, w.alice, w.board, 'excalidraw-era.png')
+    w.sync.setBoard(w.board, baseRecords()) // the canvas no longer shows it
+    const id = await v2Checkpoint(w, m, 2)
+    const deps: AssetGcDeps = { ...w.deps, canvas: createCanvasEngineProbe(async () => 'excalidraw') }
+    w.api.clock.advance(8 * DAY)
+    expect(await collectWorkspace(deps, DEV_STUDIO, 'report')).toMatchObject({
+      complete: true,
+      checkpointsFailed: 0,
+      marked: 0,
+    })
+    expect((await scans(w)).rows).toEqual([{ snapshot_id: id, ref_count: 1 }])
+    expect((await w.marks())[m.versionId]).toBeNull()
   })
 
   it('a body that is not JSON still counts as restoring nothing (as before)', async () => {

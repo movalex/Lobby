@@ -62,7 +62,12 @@ const contentFree = (e: El): boolean =>
   (e.fileId === undefined || e.fileId === 'ver_0000000000')
 
 /** Words that are on the board only while the elements live (and in the server's full rows). */
-const SECRET = ['internal margin note', 'confidential plan', 'Hidden roadmap', 'https://intranet.example/doc']
+const SECRET = [
+  'internal margin note',
+  'confidential plan',
+  'Hidden roadmap',
+  'https://intranet.example/doc',
+] as const
 
 /** alice (owner) makes a labelled note, a free text, a named frame and a linked rectangle, then deletes them. */
 async function deletedContent(st: ElementStack) {

@@ -17,6 +17,7 @@ import { newBoardId, type Queryable } from '@draftroom/db'
 import { type BoardVisibility, canCreateInWorkspace } from '@draftroom/permissions'
 import { BOARD_RETURNING, type BoardRow, requireWorkspaceRole } from '../../access.ts'
 import { audit } from '../../audit.ts'
+import { onNewCanvas } from '../../canvas-engine.ts'
 import { ApiError, forbidden } from '../../errors.ts'
 import { assertBoardRoom } from '../../files/usage.ts'
 import {
@@ -129,6 +130,10 @@ export async function createBoardFrom(
     }
   }
   if (!boardId) throw new ApiError(503, 'SYNC_CONFLICT', 'Could not create the board. Try again.')
+  // Bridge release R0's contract: every board this api makes on the new canvas (restore as new,
+  // duplicate, import) has `new_canvas = true`, so a rollback's R0 refuses it instead of opening it
+  // empty. Converted boards (made before the cut-over) keep false.
+  const newCanvas = await onNewCanvas(ctx)
 
   const newId = boardId
   try {
@@ -151,8 +156,8 @@ export async function createBoardFrom(
       }
       const at = ctx.now()
       const row = await tx.maybeOne<BoardRow>(
-        `INSERT INTO boards (id, workspace_id, project_id, title, visibility, created_by, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $7) ON CONFLICT (id) DO NOTHING RETURNING ${BOARD_RETURNING}`,
+        `INSERT INTO boards (id, workspace_id, project_id, title, visibility, created_by, created_at, updated_at, new_canvas)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $7, $8) ON CONFLICT (id) DO NOTHING RETURNING ${BOARD_RETURNING}`,
         [
           newId,
           plan.workspaceId,
@@ -161,6 +166,7 @@ export async function createBoardFrom(
           plan.shareLike?.visibility ?? 'private',
           plan.userId,
           at,
+          newCanvas,
         ],
       )
       if (!row) throw new Error('board id already taken after seeding')

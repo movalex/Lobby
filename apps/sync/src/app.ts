@@ -140,8 +140,11 @@ export function createSyncServer(config: SyncConfig, opts: SyncServerOptions = {
   // MAINTENANCE (terminal on the client: the web shows "Lobby is updating"), and new ones are refused
   // the same way, after the ticket check and before any room is touched. Internal reads keep working
   // (snapshot for the final checkpoints, backups, run-all); the internal routes that write a board are
-  // refused (router.ts). A runtime switch: a restart or a redeploy starts with it off.
-  let maintenance = false
+  // refused (router.ts). A runtime switch: a restart or a redeploy starts with it off, unless the server
+  // was started with DRAFTROOM_BOOT_MAINTENANCE=1 (open item 11: the build deployed into the cut-over's
+  // maintenance window starts in it; the same POST turns it off).
+  let maintenance = config.bootMaintenance === true
+  if (maintenance) log('[maintenance] on at start (DRAFTROOM_BOOT_MAINTENANCE=1)')
   const setMaintenance = (on: boolean) => {
     const was = maintenance
     maintenance = on
@@ -177,6 +180,7 @@ export function createSyncServer(config: SyncConfig, opts: SyncServerOptions = {
     tldrawBoardRoutes: !elementRooms,
     maintenance: maintenanceControl,
     runAll,
+    engine: config.engine ?? 'tldraw',
   })
   const http = createServer((req, res) => {
     const p = handle(req, res)
