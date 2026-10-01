@@ -261,8 +261,10 @@ export function decideLostDocKey(
     const k = key as string
     const since = docClock[k]
     // a write of ours that lands gets a clock above everything the room had given out when it was sent,
-    // so a key whose clock is not past a lost write's base was written by nobody from that write on
-    return chain.some((r) => since === undefined || since <= (r.clock as number))
+    // so a key whose clock is not past a lost write's base was written by nobody from that write on. The
+    // base counts from past this tab's own earlier writes of the key that landed before the cut (`clocks`):
+    // the first of two writes within one round trip landing is ours, not another user's (V1 round 6, DB1)
+    return chain.some((r) => since === undefined || since <= Math.max(r.clock as number, r.clocks?.[k] ?? 0))
   }
   // no per-key clock: the server at a value this chain started from or passed through means the later
   // writes did not land (a value set back by someone else reads the same way: V1 R9, accepted here)
@@ -476,6 +478,21 @@ export class LobbyEngineCore implements EngineCore {
   private readonly inflightDocBase = new Map<number, Record<string, unknown>>()
   /** per doc write in flight: the push's base clock (what this tab had seen of the server when it was built) */
   private readonly inflightDocClock = new Map<number, number>()
+  /**
+   * per doc write in flight: the seqs of this tab's pushes in flight when it was built (`Sent.ahead`'s
+   * counterpart for the board document). Two writes of one key within one round trip go out on the same
+   * base clock; the first one's landing bumps the key's clock with no other user involved, and the lost-doc
+   * decision read it as another user's write (V1 round 6, DB1): the second write was dropped as superseded
+   * and the page told the user someone else had changed the setting
+   */
+  private readonly inflightDocAhead = new Map<number, readonly number[]>()
+  /**
+   * Per acked push that wrote board-document keys: the clock the room gave it (`ack.clock`, the batch's: the
+   * `lb_doc.clock` of the keys it wrote) and those keys, kept while a doc write still in flight was built
+   * behind it (`inflightDocAhead`). Read by `ownDocClockAhead` when that later write is lost: its base is
+   * lifted to the own write's landing, so only a write past it counts as another user's.
+   */
+  private readonly ackedDocClock = new Map<number, { clock: number; keys: readonly string[] }>()
   /**
    * Doc writes lost with a socket (or a closed page: the offline queue's `lostDoc`) whose fate is not
    * decided yet: decided with the lost pushes (decideLostDoc), overlaid on the server copy until then
@@ -1670,16 +1687,13 @@ export class LobbyEngineCore implements EngineCore {
     }
     this.inflight = []
     // doc writes lost with the socket: decided with the pushes (decideLostDoc), from the clock their push
-    // was built at
-    for (const [seq, set] of this.inflightDoc)
-      this.lostDoc.push({
-        set,
-        base: this.inflightDocBase.get(seq) ?? {},
-        ...(this.inflightDocClock.has(seq) ? { clock: this.inflightDocClock.get(seq) as number } : {}),
-      })
+    // was built at, past this tab's own writes of their keys acked before the cut
+    for (const seq of this.inflightDoc.keys()) this.lostDoc.push(this.lostDocRecordOf(seq))
     this.inflightDoc.clear()
     this.inflightDocClock.clear()
     this.inflightDocBase.clear()
+    this.inflightDocAhead.clear()
+    this.ackedDocClock.clear()
     if (lost.length || this.lostDoc.length) {
       if (this.epochReset) {
         this.replayAll(lost)
@@ -1814,11 +1828,17 @@ export class LobbyEngineCore implements EngineCore {
    * one of the lost writes was written by nobody after that write was built, so it and the later ones did
    * not land and the latest local value goes again (unless the key was written again since); any other
    * value under a later clock is a write that may be another user's (it is, when ours landed and theirs
-   * came after: the ABA of V1 R9), so the server's stands and the user is told (`superseded`). Without the
-   * clock (an older server): the server holds v0..vk-1, the later writes did not land and the latest local
-   * value goes again; anything else is another user's later write, which stands. Before wave 5, every lost
-   * key went again unless the server held exactly its value, and a queued key went again whatever the
-   * server held (V1 R3, R7: a tag definition another user wrote after was overwritten).
+   * came after: the ABA of V1 R9), so the server's stands and the user is told (`superseded`). A lost
+   * write's base counts from past this tab's own earlier writes of the key that were acked before the cut
+   * (`LostDocRecord.clocks`, from `inflightDocAhead` / `ackedDocClock`): the first of two writes within one
+   * round trip landing is not another user's write (V1 round 6, DB1: the second was dropped as superseded
+   * and the user told nobody's lie). Without the clock (an older server): the server holds v0..vk-1, the
+   * later writes did not land and the latest local value goes again; anything else is another user's later
+   * write, which stands. Before wave 5, every lost key went again unless the server held exactly its value,
+   * and a queued key went again whatever the server held (V1 R3, R7: a tag definition another user wrote
+   * after was overwritten). Residual (design limit): two writes of one key where the first landed with its
+   * ack lost too and the second never arrived (DB2) read as superseded; push receipts (W5-ENG-2) would tell
+   * them apart.
    */
   private decideLostDoc(): void {
     const records = this.lostDoc
@@ -2184,6 +2204,58 @@ export class LobbyEngineCore implements EngineCore {
     return { ...s, ...(pv !== undefined ? { pv } : {}), ...(ref ? { ref } : {}) }
   }
 
+  /**
+   * Keeps the clock the room gave this tab's doc write (`ack.clock`: the batch's, the `lb_doc.clock` of the
+   * keys it wrote; a denied key did not land) while a doc write still in flight was built behind it
+   * (`inflightDocAhead`), and forgets the rest. Read by `ownDocClockAhead` when that later write is lost.
+   */
+  private recordAckedDocClock(ack: Ack, doc: Record<string, unknown> | undefined): void {
+    if (doc) {
+      const denied = new Set(ack.docDenied?.keys ?? [])
+      const keys = Object.keys(doc).filter((k) => !denied.has(k))
+      if (keys.length) this.ackedDocClock.set(ack.seq, { clock: ack.clock, keys })
+    }
+    const referenced = new Set<number>()
+    for (const ahead of this.inflightDocAhead.values()) for (const seq of ahead) referenced.add(seq)
+    for (const seq of [...this.ackedDocClock.keys()]) if (!referenced.has(seq)) this.ackedDocClock.delete(seq)
+  }
+
+  /**
+   * The clock the last of this tab's own writes of `key` that the doc write `seq` was built behind
+   * (`inflightDocAhead`) landed at, when that push was acked (undefined: none). Those writes landed before
+   * the lost one (one socket is one FIFO), so the key's clock at theirs is this tab's, not another user's.
+   */
+  private ownDocClockAhead(seq: number, key: string): number | undefined {
+    let clock: number | undefined
+    for (const s of this.inflightDocAhead.get(seq) ?? []) {
+      const a = this.ackedDocClock.get(s)
+      if (a?.keys.includes(key) && (clock === undefined || a.clock > clock)) clock = a.clock
+    }
+    return clock
+  }
+
+  /**
+   * The lost record of the doc write in flight `seq` (a socket lost, or the offline queue's `lostDoc`): its
+   * keys, what they replaced, the push's base clock and, per key, the clock of this tab's own earlier write
+   * of the key acked before the cut when that is above the base (`LostDocRecord.clocks`).
+   */
+  private lostDocRecordOf(seq: number): LostDocRecord {
+    const set = this.inflightDoc.get(seq) ?? {}
+    const clock = this.inflightDocClock.get(seq)
+    const clocks: Record<string, number> = {}
+    if (clock !== undefined)
+      for (const k of Object.keys(set)) {
+        const own = this.ownDocClockAhead(seq, k)
+        if (own !== undefined && own > clock) clocks[k] = own
+      }
+    return {
+      set,
+      base: this.inflightDocBase.get(seq) ?? {},
+      ...(clock !== undefined ? { clock } : {}),
+      ...(Object.keys(clocks).length ? { clocks } : {}),
+    }
+  }
+
   private onAckMessage(ack: Ack): void {
     const i = this.inflight.findIndex((p) => p.seq === ack.seq)
     if (i < 0) {
@@ -2203,6 +2275,8 @@ export class LobbyEngineCore implements EngineCore {
     this.inflightDoc.delete(ack.seq)
     this.inflightDocBase.delete(ack.seq)
     this.inflightDocClock.delete(ack.seq)
+    this.inflightDocAhead.delete(ack.seq)
+    this.recordAckedDocClock(ack, doc)
     if (doc && ack.docDenied) {
       if (REJECT_CODE_INFO[ack.docDenied.code].retryable) {
         retry = true
@@ -2580,6 +2654,11 @@ export class LobbyEngineCore implements EngineCore {
       const replaced: Record<string, unknown> = {}
       for (const k of Object.keys(doc)) replaced[k] = was.has(k) ? clone(was.get(k)) : null
       this.inflightDocBase.set(seq, replaced)
+      // the pushes out before it: one of ours writing the same key lands before it (one socket is one FIFO)
+      this.inflightDocAhead.set(
+        seq,
+        this.flying().map((q) => q.seq),
+      )
     }
     this.inflight.push({ seq, base, ops, record, sent, forced, src: `${this.tab}:${this.welcomes}` })
     if (doc) {
@@ -2808,6 +2887,7 @@ export class LobbyEngineCore implements EngineCore {
           set: clone(r.set),
           base: clone(r.base),
           ...(r.clock !== undefined ? { clock: r.clock } : {}),
+          ...(r.clocks ? { clocks: clone(r.clocks) } : {}),
         })
       return
     }
@@ -2916,13 +2996,9 @@ export class LobbyEngineCore implements EngineCore {
     // board-document writes: the unsent ones (setDoc: a new tag's tagDef) and the ones out without an ack,
     // with what they replaced; kept, or a reload lost them and the element's tag, queued, was then refused
     // INVALID (V1 N8)
+    // (past this tab's own doc writes acked so far: the page that adopts the queue sees no more acks)
     const lostDoc: LostDocRecord[] = [...this.lostDoc]
-    for (const [seq, set] of this.inflightDoc)
-      lostDoc.push({
-        set,
-        base: this.inflightDocBase.get(seq) ?? {},
-        ...(this.inflightDocClock.has(seq) ? { clock: this.inflightDocClock.get(seq) as number } : {}),
-      })
+    for (const seq of this.inflightDoc.keys()) lostDoc.push(this.lostDocRecordOf(seq))
     if (Object.keys(this.pendingDoc).length || lostDoc.length) {
       const e = docEntry(this.pendingDoc, this.clock, this.now())
       out.unshift(lostDoc.length ? { ...e, lostDoc: clone(lostDoc) } : e)

@@ -48,6 +48,11 @@ interface Session {
   readonly name: string
   readonly readonly: boolean
   latencyMs: number
+  /**
+   * The client → room half alone, when set (a slow uplink: the V1 verifier's proxy `delayUpMs`, so a second
+   * push can still be on its way up while the first one's ack is already back); null: `latencyMs / 2`
+   */
+  upLatencyMs: number | null
   deliver: ((m: ServerInbound) => void) | null
   open: boolean
   /** frames this session sent, parsed */
@@ -151,6 +156,7 @@ export class FakeRoom {
       name: o.name ?? o.uid,
       readonly: o.readonly ?? false,
       latencyMs: o.latencyMs ?? 0,
+      upLatencyMs: null,
       deliver: null,
       open: false,
       received: [],
@@ -181,7 +187,7 @@ export class FakeRoom {
         }
         if (state !== 'open') return
         const copy = JSON.parse(JSON.stringify(message))
-        room.c.setTimer(() => room.receive(session, copy), session.latencyMs / 2)
+        room.c.setTimer(() => room.receive(session, copy), session.upLatencyMs ?? session.latencyMs / 2)
       },
       onMessage(l: (m: ServerInbound) => void) {
         msgListeners.add(l)

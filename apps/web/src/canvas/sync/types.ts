@@ -215,6 +215,14 @@ export interface LostDocRecord {
    * anyone since (wave 4b, 2C: the doc-key ABA). Absent in queues written before it existed.
    */
   readonly clock?: number
+  /**
+   * per key, when above `clock`: the clock the room gave the last of this tab's own earlier writes of the key
+   * that this push was built behind and that was acked before the cut (`ack.clock`, the key's `lb_doc.clock`
+   * after it). The decision counts other users' writes from it: two writes of one key within one round trip
+   * go out on the same base, and the first one's landing is not another user's write (wave 4c, 2C: V1 round
+   * 6, DB1). Keys with no such write, and queues written before it existed, have none.
+   */
+  readonly clocks?: Readonly<Record<string, number>>
 }
 
 /**
