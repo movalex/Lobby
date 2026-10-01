@@ -258,3 +258,22 @@ export function keepAnchorAboveSheet(canvas: LobbyCanvas, anchor: CommentAnchor)
   const point = anchorPoint(canvas, anchor)
   if (point && markerCovered(vp, canvas.sceneToOverlay(point))) revealAnchor(canvas, anchor)
 }
+
+/** Space kept between a popover and the board's toolbar row (px). */
+const TOOLBAR_GAP = 8
+
+/**
+ * The band at the bottom of the canvas the board's toolbar row keeps (W5-07): from the top of the
+ * `toolbar` host slot (3a's toolbar, with its quick actions on a narrow canvas) to the canvas's bottom edge,
+ * plus a gap; 0 when the page shows no toolbar (focus mode, a bare port). Popovers beside their marker end
+ * above it (layout.ts `bottomInset`).
+ */
+export function toolbarBand(canvas: LobbyCanvas): number {
+  const root = canvas.container()
+  const bar = root?.querySelector('[data-lobby-slot="toolbar"]')
+  if (!root || !bar) return 0
+  const r = root.getBoundingClientRect()
+  const b = bar.getBoundingClientRect()
+  if (!(b.height > 0) || b.top >= r.bottom || b.bottom <= r.top) return 0
+  return Math.max(0, Math.round(r.bottom - b.top + TOOLBAR_GAP))
+}
