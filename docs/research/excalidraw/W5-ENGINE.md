@@ -101,7 +101,7 @@ Each with the test that fails before it and passes after.
 |---|---|
 | lint | PASS, 2,016 files |
 | typecheck (all three) | PASS (the merge commit failed in `apps/web`: `polygonOf`, `c419ed2`) |
-| `pnpm test` | **5,388 passed, 1 failed, 36 skipped** (523 files). The failure is 2D's `packages/templates/src/scene/hierarchy.test.ts` `it.fails("the server's element check accepts the display face")`: an expected failure that now passes, because 2A's allowlist takes family 7. Its own comment says to remove `.fails` when the allowlist lands; the file is in the feature workflow's folder, so it is a request (§7), not an edit here |
+| `pnpm test` | **5,389 passed, 1 failed, 36 skipped** (523 files; at the push head `fd4f9ab`, with `ca9c192`'s test). The failure is 2D's `packages/templates/src/scene/hierarchy.test.ts` `it.fails("the server's element check accepts the display face")`: an expected failure that now passes, because 2A's allowlist takes family 7. Its own comment says to remove `.fails` when the allowlist lands; the file is in the feature workflow's folder, so it is a request (§7), not an edit here |
 | `pnpm test:arrows` | PASS 85/85 |
 | `e2e/excalidraw`, whole folder once (two shards) | 430 passed (12 of them expected failures, `templates-frames` W5-05 among them), 3 skipped, 10 failed: 9 expected failures that now pass and `templates-scenes` (§3). After `f3d30b9` and `27622e6`: the six specs concerned 49/49, `templates-frames` 6/6 (two runs) |
 | default suite, the specs the merge touches (`comments`, `workshops`, `bridge-r0`, `dashboard`, `checkpoints`, `history`, `link*`) | PASS 83/83 |
