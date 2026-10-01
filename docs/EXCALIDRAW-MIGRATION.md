@@ -483,7 +483,7 @@ type Op =
 | | `roster` | Uncapped join, leave and update events (§2.7). |
 | | `presence` | 10 Hz, capped cursors (§2.7). |
 | | `workshop` | `{voteOpen, anonymous}` |
-| | `notice` | `SLOW_DOWN`, `LIMIT_NEAR`, `RESYNC`, `DISK` |
+| | `notice` | `SLOW_DOWN`, `LIMIT_NEAR`, `RESYNC`, `DISK`, `PREPARING`; `CLOSING` with `detail` = the reason, right before every terminal close (`CONTRACTS_REV` 9, SMK-2: an edge may strip the close frame's code and reason) |
 | | `pong` | |
 
 A client that receives a patch whose `pv` is not the version it holds asks for `RESYNC` (a `hello` with its `since`). That cannot happen while the prefix invariant holds, so it is a cheap safety net and a metric.
@@ -499,7 +499,7 @@ A client that receives a patch whose `pv` is not the version it holds asks for `
 
 More than 50 abuse-counting rejects in a minute close the session with 4099 `INVALID_MESSAGE`.
 
-**Terminal closes** (4099): `NOT_AUTHENTICATED`, `FORBIDDEN`, `INVALID_MESSAGE`, `CLIENT_TOO_OLD`, `SERVER_TOO_OLD`, `RATE_LIMITED`, `UNKNOWN_ERROR`. **Non-terminal**: 4000 `RECONNECT` (role change, backpressure). **Maintenance**: 4099 `MAINTENANCE` with a "Lobby is updating" reason. **Old tabs**: a tldraw `connect` message gets 4099 `CLIENT_TOO_OLD`; a new client that gets a tldraw-protocol reply shows "Reload" (§7.5).
+**Terminal closes** (4099): `NOT_AUTHENTICATED`, `FORBIDDEN`, `INVALID_MESSAGE`, `CLIENT_TOO_OLD`, `SERVER_TOO_OLD`, `RATE_LIMITED`, `UNKNOWN_ERROR`. **Non-terminal**: 4000 `RECONNECT` (role change, backpressure). **Maintenance**: 4099 `MAINTENANCE` with a "Lobby is updating" reason. **In band first (`CONTRACTS_REV` 9, SMK-2):** every terminal close of an upgraded socket is preceded by a `notice` `CLOSING` whose `detail` is the reason; the client treats the close that follows it as terminal with that reason, whatever the close frame carries (the Render edge delivered an empty close frame for a refused ticket). **Old tabs**: a tldraw `connect` message gets 4099 `CLIENT_TOO_OLD`; a new client that gets a tldraw-protocol reply shows "Reload" (§7.5).
 
 #### 2.4.3 Accept algorithm
 
@@ -1229,6 +1229,8 @@ Per-key last writer wins, under the same clock, validated per key:
 | `workshop` | `{hideNoteAuthors, hideCursors}` | `drWorkshop` | facilitators (owner/editor) |
 | `tagDef:<id>` | `{name, color}` | `drTagList:<id>` (≤ 200, `MAX_TAGS_PER_BOARD`) | editors |
 | `import` | `{from:'tldraw-5.4.2', converterVersion, at, legacyPages, legacyIds, lossy}` | new | the server only |
+
+**Per-key clocks (`CONTRACTS_REV` 9, V1's doc-key ABA).** `lb_doc` keeps the clock each key was last written at, removed keys included, and the `welcome` (and the snapshot frame) carry it as `docClocks`, read with `doc`. A client deciding a doc write lost with its socket compares the key's clock with the lost push's `base`: at or below it nothing landed since and the write goes again; above it a write landed after the push was built: this tab's own when `doc[key]` is the value it wrote, else someone else's, which stands (the write is superseded and the person is told, as for elements). Before, a key had no version, so A's lost-but-landed `tagDef` write, B's write back, and A's reconnect replayed A's over B's. The `changes` frame after a cached reset snapshot carries the keys written since the cache (DEF-3F-1), so a joiner within the cache's 5 s has the current document from the frames alone.
 
 ### 3.5 Server validation and limits
 

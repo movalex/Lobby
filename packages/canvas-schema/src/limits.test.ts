@@ -127,6 +127,38 @@ describe('element schemas (§3.1, §3.5)', () => {
     expect(code({ ...E.rectangle, link: 'javascript:alert(1)' })).toBe('INVALID')
   })
 
+  it('relative links are read normalised, absolute ones must spell their authority (XSS-F3, CONTRACTS_REV 9)', () => {
+    // each of these was allowed at rev 8: a consumer that normalises the path first (a router,
+    // safeReturnTo) lands on //evil.com, and the browser reads `https:evil.com` as https://evil.com/
+    for (const l of [
+      '/..//evil.com',
+      '/a/..//evil.com',
+      '/a\\..\\..//evil.com',
+      '/\\evil.com',
+      '/b/..\\..//evil.com',
+      '/b/board-1\\x',
+      'https:evil.com',
+      'https:/evil.com',
+      'HTTPS:\\\\evil.com',
+      'http:evil.com/a',
+      ' https://evil.com',
+    ])
+      expect(isAllowedLink(l), l).toBe(false)
+    for (const l of [
+      '/',
+      '/b/board-1',
+      '/b/board-1/../board-2',
+      '/b/board-1//el',
+      '/b/board-1?el=a,b#x',
+      'https://example.com/a/..//b',
+      'HTTPS://example.com',
+    ])
+      expect(isAllowedLink(l), l).toBe(true)
+    expect(isAllowedLink('/..//evil.com', { guest: true })).toBe(false)
+    expect(code({ ...E.rectangle, link: '/..//evil.com' })).toBe('INVALID')
+    expect(code({ ...E.rectangle, link: 'https:evil.com' })).toBe('INVALID')
+  })
+
   it('signed URLs fail closed: a malformed escape no longer hides an encoded name; GCS V4 names (V2 re-check, CONTRACTS_REV 7)', () => {
     // V2's re-check (P-N5): each of these was stored at rev 6, because decodeURIComponent threw
     for (const l of [

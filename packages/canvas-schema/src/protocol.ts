@@ -38,8 +38,14 @@ export const PROTO = 1 as const
  * tombstones travel redacted (elements.ts `redactTombstone`, hash.ts `TOMBSTONE_KEYS`; W5-02), font family
  * 7 is allowed (D3), the signed-URL check fails closed and knows GCS (V2), the guest cap is per uid (D5).
  * Revision 8: a delete's broadcast is the exact patch again (only `c` ops of tombstones are redacted).
+ * Revision 9 (wave 4b, 2A): `welcome.docClocks` and `snapshot.docClocks`, the clock each board-document
+ * key was last written at (doc-key ABA, CR-W5-FIX-2: a lost doc write whose key the server wrote after
+ * the push's base is superseded, never replayed over the later write); the `changes` frame that follows a
+ * cached reset snapshot carries the doc keys written since the cache (DEF-3F-1); the `CLOSING` notice
+ * names a terminal close's reason in band, before the close frame (SMK-2: an edge may strip close
+ * codes and reasons); `isAllowedLink` normalises relative links and requires `http(s)://` (XSS-F3).
  */
-export const CONTRACTS_REV = 8
+export const CONTRACTS_REV = 9
 /**
  * The element schema version (`hello.schema`, `welcome.schema`, `lb_meta.schemaVersion`). A client one
  * version older is served; a newer one gets 4099 `SERVER_TOO_OLD`, an older one `CLIENT_TOO_OLD` (§6.2 `schema`).
@@ -491,8 +497,14 @@ export type ReconnectCloseReason = (typeof RECONNECT_CLOSE_REASONS)[number]
  * `PREPARING` (CR, O1): the board is being converted or rolled forward on room open (§5.3, §5.9, §2.13). Sent
  * once, right after the socket opens, to a joiner the server holds; its `welcome` follows when the board is
  * ready (or the socket closes 4099 CONVERSION_FAILED). The client shows "Preparing this board…".
+ *
+ * `CLOSING` (CONTRACTS_REV 9, SMK-2): sent on the Excalidraw engine right before every terminal close
+ * (4099) of an upgraded socket, `detail` = the close's reason (a `TerminalCloseReason`, `MAINTENANCE`
+ * included). Through an edge that strips close codes and reasons (the Render edge delivered an empty
+ * close frame), the client still learns why: a close that follows this notice on the same socket is
+ * terminal with `detail` as its reason, whatever the close frame says.
  */
-export const NOTICE_CODES = ['SLOW_DOWN', 'LIMIT_NEAR', 'RESYNC', 'DISK', 'PREPARING'] as const
+export const NOTICE_CODES = ['SLOW_DOWN', 'LIMIT_NEAR', 'RESYNC', 'DISK', 'PREPARING', 'CLOSING'] as const
 export type NoticeCode = (typeof NOTICE_CODES)[number]
 
 // ---- server → client ---------------------------------------------------------------------------------
@@ -593,6 +605,16 @@ export const Welcome = z
     catchUp: z.array(ServerOp).nullable(),
     snapshot: z.strictObject({ elements: NonNegInt, bytes: NonNegInt }).nullable(),
     doc: z.record(z.string(), z.unknown()),
+    /**
+     * CONTRACTS_REV 9: the clock each `lb_doc` key was last written at, removed keys included (a key in
+     * `docClocks` and not in `doc` was removed at that clock). Read with `doc` at the hello, so the two
+     * agree. A client deciding a doc write lost with its socket compares the key's clock with the lost
+     * push's `base`: at or below it, nothing landed since and the write goes again; above it, a write
+     * landed after the push was built (this tab's own when `doc[key]` is the value it wrote, else someone
+     * else's, which stands: the write is superseded and the person is told). Optional on the wire for the
+     * test doubles; the room always sends it.
+     */
+    docClocks: z.record(z.string(), Clock).optional(),
     leases: z.array(LeaseState),
     roster: z.array(RosterEntry),
     workshop: WorkshopState,
@@ -605,7 +627,12 @@ export const Welcome = z
       message: 'a reset carries a snapshot, a catch-up carries catchUp',
     },
   )
-/** `changes`: one commit batch, serialized once and sent to every session, the writer included. */
+/**
+ * `changes`: one commit batch, serialized once and sent to every session, the writer included. Also the
+ * frame after a cached reset snapshot (the room keeps one for 5 s): the rows changed since the cache's
+ * clock and, since CONTRACTS_REV 9 (DEF-3F-1), `doc` with the document keys written since it (null: a
+ * key removed), so snapshot + changes equal the board at `clock` for the document too.
+ */
 export const Changes = z.strictObject({
   type: z.literal('changes'),
   /** the batch's last clock: after it the receiver is at this clock */
@@ -760,6 +787,8 @@ export const SnapshotFrame = z.strictObject({
   horizon: Clock,
   elements: z.array(WireElement),
   doc: z.record(z.string(), z.unknown()),
+  /** CONTRACTS_REV 9: as `welcome.docClocks`, for the document as the snapshot has it. */
+  docClocks: z.record(z.string(), Clock).optional(),
 })
 export type SnapshotFrame = z.infer<typeof SnapshotFrame>
 
