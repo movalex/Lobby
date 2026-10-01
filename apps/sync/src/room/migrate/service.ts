@@ -20,7 +20,10 @@
 //  - `dropLegacyAll()`: day 7 after the cut-over (§5.9 step 5): removes the tldraw side of every converted
 //    board file through the same queue (drop-legacy.ts has the guards: the 7-day window unless forced, never
 //    an unconverted or a roll-forward-pending board). Each board's outcome is logged (ids and counts only).
-//  - `routes()`: `POST /internal/migrate/convert-all` (202, runs in the background),
+//  - `routes()`: `POST /internal/migrate/convert-all` (202, runs in the background; 409 MAINTENANCE_REQUIRED
+//    while maintenance is off unless the body says {"confirm": true}: it rewrites every tldraw board file,
+//    and the runbook runs it inside the maintenance window, where no room is open and no lazy conversion
+//    competes with it; security audit L6),
 //    `POST /internal/migrate/drop-legacy` ({confirm: "drop-legacy", force?, dryRun?, boards?}; 202, in the
 //    background; 409 while a convert-all or a drop-legacy runs) and `GET /internal/migrate/status`, mounted
 //    behind the internal secret like every internal route.
@@ -36,6 +39,7 @@ import { BOARD_ID_RE, boardDbPath } from '../../rooms.ts'
 import { boardFileState } from './board-state.ts'
 import type { DropLegacyJob, DropLegacyReport } from './drop-legacy.ts'
 import { finalBackupOf } from './final-backup.ts'
+import { maintenanceState } from './maintenance.ts'
 import { type JobMode, type JobOutcome, MigrationQueue, type MigrationQueueOptions } from './queue.ts'
 
 export { type BoardFileState, boardFileState } from './board-state.ts'
@@ -60,6 +64,11 @@ export interface MigrationServiceOptions extends MigrationQueueOptions {
   readonly verifyLocalMode?: boolean
   /** a queue to share (default: a new one with these options) */
   readonly queue?: MigrationQueue
+  /**
+   * Whether maintenance mode is on (app.ts). Set: `POST /internal/migrate/convert-all` is refused while it
+   * is off unless the body says {"confirm": true}. Absent (tests, the B8 scripts' direct calls): no check.
+   */
+  readonly maintenance?: () => boolean
 }
 
 export interface DropLegacyOptions {
@@ -75,6 +84,15 @@ export type DropLegacyOutcome =
 
 /** The POST body's limit (a list of board ids at most). */
 const DROP_LEGACY_BODY_LIMIT = 1024 * 1024
+const CONVERT_ALL_BODY_LIMIT = 1024
+
+/**
+ * Whether a request carries a body: the runbook's `int POST … convert-all` sends a JSON content-type with
+ * an empty body, which is no body (queue.test.ts calls the handler with a bare object).
+ */
+const hasBody = (req: { headers?: Record<string, unknown> }) =>
+  req.headers !== undefined &&
+  (Number(req.headers['content-length']) > 0 || req.headers['transfer-encoding'] !== undefined)
 const DROP_LEGACY_MAX_BOARDS = 10_000
 
 export class MigrationService {
@@ -217,7 +235,27 @@ export class MigrationService {
       {
         method: 'POST',
         path: /^\/internal\/migrate\/convert-all$/,
-        handle: (_req, res) => {
+        handle: async (req, res) => {
+          let confirm = false
+          if (hasBody(req)) {
+            const body = (await readJson(req, CONVERT_ALL_BODY_LIMIT)) as Record<string, unknown> | null
+            if (body !== null && (typeof body !== 'object' || Array.isArray(body)))
+              throw new HttpError(400, 'BAD_REQUEST', 'The body must be {"confirm": true}, or empty.')
+            for (const k of Object.keys(body ?? {}))
+              if (k !== 'confirm')
+                throw new HttpError(400, 'BAD_REQUEST', 'The body must be {"confirm": true}, or empty.')
+            if (body?.confirm !== undefined && typeof body.confirm !== 'boolean')
+              throw new HttpError(400, 'BAD_REQUEST', 'confirm must be a boolean.')
+            confirm = body?.confirm === true
+          }
+          // synchronous from here: the checks and the start happen in one turn of the event loop
+          const on = this.opts.maintenance ? this.opts.maintenance() : maintenanceState()
+          if (on === false && !confirm)
+            throw new HttpError(
+              409,
+              'MAINTENANCE_REQUIRED',
+              'convert-all rewrites every tldraw board file. Turn maintenance on first (POST /internal/maintenance {"on": true}: the cut-over runs it inside the window), or send {"confirm": true} to run it while boards are open.',
+            )
           if (this.dropRun) throw new HttpError(409, 'BUSY', 'A drop-legacy run is in progress.')
           if (!this.allRun)
             this.allRun = this.convertAll().finally(() => {

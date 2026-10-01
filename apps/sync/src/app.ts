@@ -32,6 +32,7 @@ import { type BoardRole, canEditCanvas } from './permissions.ts'
 import { InboundFrames, presenceIdentity } from './presence.ts'
 import { BoardOpenRefused, NEW_CANVAS_CLOSE_REASON } from './r0/pre-open.ts'
 import { closeTerminal } from './room/closing.ts'
+import { registerMaintenanceState } from './room/migrate/maintenance.ts'
 import { BOARD_ID_RE, RoomRegistry } from './rooms.ts'
 import { createApiSessionEndClient, createSessionEndReporter, type SessionEndClient } from './session-end.ts'
 import { testHookRoutes } from './test-hooks.ts'
@@ -191,11 +192,15 @@ export function createSyncServer(config: SyncConfig, opts: SyncServerOptions = {
     return { maintenance, closedSockets }
   }
   const maintenanceControl: MaintenanceControl = { on: () => maintenance, set: setMaintenance }
+  // convert-all is refused while maintenance is off unless confirmed (room/migrate/maintenance.ts; audit L6)
+  registerMaintenanceState(() => maintenance)
   const runAll = createRunAll({
     registry: elementBackups ?? registry,
     backups,
     log,
     maintenance: () => maintenance,
+    // a run while a recent held set exists is refused unless forced (run-all.ts; audit L6)
+    backupsDir: () => registry.backupsDir(),
   })
 
   const handle = createRequestHandler({
@@ -468,6 +473,7 @@ export function createSyncServer(config: SyncConfig, opts: SyncServerOptions = {
         joins.clear()
         registry.closeAll() // closes rooms (and their sessions' sockets), flushes the prune, closes DBs
         await elementRooms?.closeAll()
+        registerMaintenanceState(null)
         // Upgraded sockets are no longer HTTP connections, so closeAllConnections() does not see them.
         for (const ws of wss.clients) ws.terminate()
         liveSockets.clear()

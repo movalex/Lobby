@@ -170,7 +170,7 @@ export function localBackupSource(backupsRoot: string): BackupSource {
 }
 
 export interface StoreSourceOptions {
-  /** backupSigningKey(DRAFTROOM_INTERNAL_SECRET): the key the sync server signed the store with. */
+  /** backupSigningKey(backupSigningSecrets(env)): the key the sync server signs the store with, and its older verify-only key. */
   signingKey: BackupSigningKey
   /**
    * Accept an index, manifest or entry that has no signature, or one made with another key, and
@@ -199,13 +199,19 @@ function judge(
       : `the offsite ${what.kind === 'index' ? 'index' : 'manifest'}`
   const retry = what.kind === 'index' ? 'rerun with --allow-unsigned, or name the boards with --board' : null
   switch (sig?.status ?? 'invalid') {
-    case 'valid':
+    case 'valid': {
+      // the older key, derived from DRAFTROOM_INTERNAL_SECRET, verifies what was written before the dedicated secret
+      const older =
+        sig?.via === 'derived' && key.source === 'dedicated'
+          ? ' (signed under the older key, derived from DRAFTROOM_INTERNAL_SECRET)'
+          : ''
       return {
         check:
           what.kind === 'entry'
-            ? 'manifest entry signature verified'
-            : `offsite ${what.kind} signature verified`,
+            ? `manifest entry signature verified${older}`
+            : `offsite ${what.kind} signature verified${older}`,
       }
+    }
     case 'missing':
       if (!allowUnsigned)
         throw new DrillProblem(
@@ -217,7 +223,7 @@ function judge(
     case 'unknown-key':
       if (!allowUnsigned)
         throw new DrillProblem(
-          `${name} is signed with another key (key id ${sig?.keyId}; this server's is ${key.id}): DRAFTROOM_INTERNAL_SECRET differs from the one that wrote it; ${retry ?? 'rerun with --allow-unsigned to accept it unverified'}`,
+          `${name} is signed with another key (key id ${sig?.keyId}; this server's is ${key.id}): ${key.secretNames} differs from the one that wrote it; ${retry ?? 'rerun with --allow-unsigned to accept it unverified'}`,
         )
       return {
         warning: `UNVERIFIED: ${name} is signed with another key (key id ${sig?.keyId}); accepted because of --allow-unsigned`,

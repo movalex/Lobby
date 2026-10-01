@@ -48,8 +48,11 @@ describe('POST /internal/migrate/drop-legacy', () => {
     const st = await h.stack({ dataDir })
     const url = st.server.url
 
-    // the cut-over's conversion, then the board's lb_* state
-    expect((await callInternal(url, 'POST', '/internal/migrate/convert-all')).status).toBe(202)
+    // the cut-over's conversion (confirmed: this stack is not in maintenance; audit L6), then the board's
+    // lb_* state
+    expect(
+      (await callInternal(url, 'POST', '/internal/migrate/convert-all', { body: { confirm: true } })).status,
+    ).toBe(202)
     await waitIdle(url, 'convertAll')
     expect(tablesOf(path)).toContain('documents')
     const rows = lbRows(path)

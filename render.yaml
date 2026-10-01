@@ -224,8 +224,9 @@ services:
       - key: ACCESS_RECHECK_MS
         value: "10000"
       # Offsite board backups (docs/DEPLOY.md "Backups"): each local backup is also copied to R2 under
-      # backups/sync/<board>/, with a manifest, signed with a key derived from DRAFTROOM_INTERNAL_SECRET
-      # (the env group below). All five are `sync: false` ON PURPOSE, the store too:
+      # backups/sync/<board>/, with a manifest, signed with a key derived from
+      # DRAFTROOM_BACKUP_SIGNING_SECRET (below; the sync's own, never in the shared env group: the api must
+      # not be able to forge a backup, security audit M3). All six are `sync: false` ON PURPOSE, the store too:
       # a Blueprint sync that set DRAFTROOM_BACKUP_STORE=r2 on the existing service without the R2_*
       # values (sync: false values are only prompted at Blueprint creation) would make sync refuse to
       # start, and a sync deploy stops the old instance first. Set all five together in the Dashboard
@@ -241,6 +242,12 @@ services:
       # are deliberately not listed as `sync: false` entries: a new Blueprint would prompt for them.
       - key: DRAFTROOM_BACKUP_STORE
         sync: false # r2
+      - key: DRAFTROOM_BACKUP_SIGNING_SECRET
+        # 32+ random characters (openssl rand -base64 32), set by hand on this service before the Excalidraw
+        # build is deployed (docs/EXCALIDRAW-CUTOVER.md C8). Required in production when the store is on:
+        # the sync build that reads it refuses to start without it. Backups signed before it existed verify
+        # through the key derived from DRAFTROOM_INTERNAL_SECRET (docs/DEPLOY.md "Signed backups").
+        sync: false
       - key: R2_ACCOUNT_ID
         sync: false # the Cloudflare account ID (32 hex characters), as on the api
       - key: R2_ACCESS_KEY_ID

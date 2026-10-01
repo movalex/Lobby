@@ -14,7 +14,7 @@
 // - Signed (signing.ts): every entry it lists, every manifest and the index it writes. What it reads
 //   back is checked too: an entry whose own signature does not match is dropped (and its backup
 //   uploaded again if it is still on the local disk); entries without a signature (listed before
-//   signing existed) or signed under another key (a rotated DRAFTROOM_INTERNAL_SECRET) are carried
+//   signing existed) or signed under another key (a rotated secret) are carried
 //   forward as they are, never re-signed, so the restore tools keep treating them as unverified. A
 //   manifest or index not signed by the current key is signed again once.
 
@@ -55,7 +55,7 @@ export interface OffsiteOptions {
   store: BlobStore
   /** The local backups root (${DATA}/backups) whose boards are copied. */
   localRoot: string
-  /** Signs every entry, manifest and index written (backupSigningKey(DRAFTROOM_INTERNAL_SECRET)). */
+  /** Signs every entry, manifest and index written (backupSigningKey(backupSigningSecrets(env))). */
   signingKey: BackupSigningKey
   /** Key prefix without a trailing slash. Default `backups/sync`. */
   prefix?: string
@@ -116,10 +116,13 @@ interface Known {
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms).unref?.())
 
 /** Why a manifest or the index read from the store is signed again (nothing when it verified). */
-const RESIGN_REASON: Record<Exclude<SignatureStatus, 'valid'>, (what: string) => string> = {
+const RESIGN_REASON: Record<
+  Exclude<SignatureStatus, 'valid'>,
+  (what: string, key: BackupSigningKey) => string
+> = {
   missing: (what) => `${what} is not signed (written before backups were signed); signing it`,
-  'unknown-key': (what) =>
-    `${what} is signed with another key (DRAFTROOM_INTERNAL_SECRET changed?); signing it with the current key`,
+  'unknown-key': (what, key) =>
+    `${what} is signed with another key (${key.secretNames} changed?); signing it with the current key`,
   invalid: (what) => `${what} does not match its signature (changed outside this server?); signing it again`,
 }
 const MANIFEST_RESIGN_DETAIL: Record<Exclude<SignatureStatus, 'valid'>, string> = {
@@ -407,7 +410,7 @@ export class OffsiteBackups {
     const status = parsed.signature.status
     if (status !== 'valid')
       this.log(
-        `[backup] ${RESIGN_REASON[status](`offsite manifest of board ${boardId}`)}${MANIFEST_RESIGN_DETAIL[status]}`,
+        `[backup] ${RESIGN_REASON[status](`offsite manifest of board ${boardId}`, this.signingKey)}${MANIFEST_RESIGN_DETAIL[status]}`,
       )
     // A listed entry whose signature does not match was changed outside this server: never trust it
     // (for retention either). Its object is left alone; a local copy of that backup goes up again.
@@ -558,7 +561,7 @@ export class OffsiteBackups {
           // Its rows are hints (board ids); what matters is that the index is signed from now on.
           if (parsed.signature.status !== 'valid') {
             this.indexNeedsSigning = true
-            this.log(`[backup] ${RESIGN_REASON[parsed.signature.status]('offsite index')}`)
+            this.log(`[backup] ${RESIGN_REASON[parsed.signature.status]('offsite index', this.signingKey)}`)
           }
         } catch (e) {
           this.log(`[backup] offsite index is unreadable (${describeFailure(e)}); starting a new one`)

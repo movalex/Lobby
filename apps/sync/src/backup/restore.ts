@@ -8,16 +8,20 @@
 // whose clock is below the new start is sent a full reset (wipe_all) on its next connect.
 //
 // The copy is prepared next to the target and renamed over it only once it is complete, so a failure
-// part-way leaves the existing database as it was.
+// part-way leaves the existing database as it was. The backup file is copied with the `-wal` and `-shm`
+// next to it, when there are any, folded into the copy (checkpoint.ts): a `--from=file` restore of an
+// operator's raw copy of a live board, or of a board whose sync was killed before a checkpoint, would
+// otherwise put back an older board, or an empty file (V3's R0 runbook note).
 
 import { randomBytes } from 'node:crypto'
-import { copyFileSync, existsSync, mkdirSync, renameSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, renameSync, rmSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { isLbTable, tableNames } from '../r0/born-after.ts'
 import { carryLbTables } from '../r0/lb-carry.ts'
 import { lbFileFacts } from '../r0/lb-files.ts'
 import { boardDbPath } from '../rooms.ts'
+import { copyBoardFileSelfContained } from './checkpoint.ts'
 import { backupEngine } from './engine.ts'
 
 export interface RestoreBackupOptions {
@@ -104,7 +108,7 @@ export function restoreBackupFile(opts: RestoreBackupOptions): { path: string; d
     // saw the board resets to it (the element room's reset rule, §2.6), and a clock raised past what
     // any client saw. Offline operator action on the restored copy, as the tldraw path below.
     try {
-      copyFileSync(opts.file, tmp)
+      copyBoardFileSelfContained(opts.file, tmp)
       const db = new DatabaseSync(tmp)
       try {
         db.exec('PRAGMA journal_mode = WAL')
@@ -133,7 +137,7 @@ export function restoreBackupFile(opts: RestoreBackupOptions): { path: string; d
   }
   if (lb) {
     try {
-      copyFileSync(opts.file, tmp)
+      copyBoardFileSelfContained(opts.file, tmp)
       for (const f of [`${path}-wal`, `${path}-shm`, `${path}-journal`]) rmSync(f, { force: true })
       renameSync(tmp, path)
     } finally {
@@ -142,7 +146,7 @@ export function restoreBackupFile(opts: RestoreBackupOptions): { path: string; d
     return { path, documentClock: lb.documentClock }
   }
   try {
-    copyFileSync(opts.file, tmp)
+    copyBoardFileSelfContained(opts.file, tmp)
     const db = new DatabaseSync(tmp)
     try {
       db.exec('PRAGMA journal_mode = WAL')

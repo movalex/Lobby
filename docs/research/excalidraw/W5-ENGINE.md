@@ -138,7 +138,7 @@ DEF-3F-1 ×2, DEF-W3-2, CR-3A-3, D3, CR-3I-6).
 | V3 | leak-check blind spots | low | fixed | 2B |
 | V3 | evidence wording (407/407, a run across a merge) | low | fixed | 2B |
 | V3 (earlier round) | a both-sides recolour of a polygon lists no conflict | low | fixed (a geo from parts conflicts as one shape) | 2B |
-| V3 (earlier round) | R0 runbook: checkpoint a board file before any copy | low | **open**: a sentence in `B8.md`, not in DEPLOY.md's runbook | lead |
+| V3 (earlier round) | R0 runbook: checkpoint a board file before any copy | low | **fixed** (wave 4b, 2B): DEPLOY.md "Copying or restoring a board file by hand" and the cut-over runbook's §0 rule; `node apps/sync/src/backup/checkpoint-board.ts`; `restore-board --from=file` and the B8 scripts copy a board file with its WAL and checkpoint the copy (`backup/checkpoint.ts`, `checkpoint.test.ts`) | 2B |
 
 No verifier has re-checked these fixes yet; the owners' runs and this gate are the evidence.
 
@@ -164,9 +164,9 @@ One fixer acted for 2A, 2B and 2C on `engine/excalidraw`; every fix has a test t
 | V3 | ordinary edits on both sides of a rollback brick the board (A, A2, B, C, D, F, H) | high | **fixed**: the roll-forward repairs (`frame-cleared`, `label-orphaned`, `label-order`, `binding-cleared`); brick 10/10 variants, the real room opens the board | 2B |
 | V3 | a binding record R0 created to a shape Excalidraw deleted fails the merge (open item 12's random case) | medium | **fixed** (the binding pass runs on every live arrow); bind 40/40 seeds | 2B |
 | V3 | one R0 record beyond ±1,000,000 closes the board (huge-size, far-x-2e6, wide-2e6, moved-existing-far) | medium | **fixed**: clamped to the limits, lossy `coords-clamped`, in the converter and the merge; page bounds ignore such a corner; raw 18/18 | 2B |
-| V3 | a geo kind change's new outline keyed above the whole board | low | **fixed** (the part goes after its holder's parts); rect→star, rect→cloud, rect→check-box, star→x-box pass. cloud→ellipse and diamond→heart still differ: the holder's type does not change across the merge (D4, pre-existing, open) | 2B |
+| V3 | a geo kind change's new outline keyed above the whole board | low | **fixed** (the part goes after its holder's parts); rect→star, rect→cloud, rect→check-box, star→x-box pass. cloud→ellipse and diamond→heart (the holder's type did not change across the merge): **fixed in wave 4b** (`rollforward.ts` `retype`: the holder takes theirs' type, in its data and in the row's `type` column; `rollforward-repairs.test.ts`) | 2B |
 | V3 | B8's stand-in refuses V3's ports 7940-7949 | low | **fixed** | 2B |
-| V3 | leak-check counts an 8 MB single-line file unreadable | low | **open** (it fails safe; no such file in the outputs) | 2B |
+| V3 | leak-check counts an 8 MB single-line file unreadable | low | **fixed in wave 4b**: the base64 regex overflowed V8's backtracking stack on a run of 8 MB or more; `leak-match.ts` finds base64 runs in one pass (`leak-check.test.ts`: a 9 MB single line, plain and base64, is searched) | 2B |
 | V3 | §3 wording: pentagon and octagon differ too | low | **fixed** | 2B |
 
 Pre-existing, not from this round: V2's P-W5 (an account editor's revive of a tombstone with a stale `pv` lands and shows that editor the content: the room has no `pv` check on a patch) fails the same way on the unmodified head.
