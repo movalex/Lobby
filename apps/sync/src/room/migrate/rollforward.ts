@@ -18,11 +18,15 @@
 //    (delete wins); Excalidraw-era creations and deletions are kept;
 // f. z-order by relative position: ours' order is never regenerated; a created element (or a record whose
 //    tldraw index or parent changed, unless ours re-ordered it) gets a key between its nearest neighbours in
-//    theirs' paint order that exist in ours; labels stay after their containers;
+//    theirs' paint order that exist in ours; labels stay after their containers; an element the merge
+//    writes that kept a key another element holds too (a share the room admitted through a raw push: its
+//    index cache holds live elements only) gets a key of its own next to it, in the room's `(idx, id)`
+//    order (f', 2B: repaired, not refused, so a rollback never leaves a board that cannot open);
 // g. validation: text containers whose layout inputs changed are re-fitted, arrows bound to changed targets
 //    re-snapped (O1's `resnapArrow` when implemented, else the converter's approximation), `boundElements`
-//    made symmetric, then the §2.4.4 invariants (O1's `checkInvariants` when implemented), live index
-//    uniqueness and the server's element check; anything unrepaired → nothing is written;
+//    made symmetric, then the §2.4.4 invariants (O1's `checkInvariants` when implemented), the uniqueness
+//    of every key the merge wrote (tombstones included) and the server's element check; anything
+//    unrepaired → nothing is written and the board stays closed with the report (the owner decides);
 // h. one transaction: pre-merge lb_* copied to `lb_prev_<cycle>_*`, merged rows written (untouched rows are
 //    never rewritten, so they stay byte-identical), R0's new `dr_deleted` rows appended to `lb_deleted`, a
 //    new epoch and a clock above both sides, `lb_source` replaced by theirs, `converted_from` refreshed;
@@ -104,6 +108,8 @@ export interface RollForwardReport {
     readonly elementsWritten: number
     readonly elementsUntouched: number
     readonly deletedRowsAppended: number
+    /** converted lb_deleted rows dropped because R0 removed their source row (a restore or a trim, open item 10) */
+    readonly deletedRowsRemoved: number
     readonly pagesAppended: number
     readonly docKeysWritten: number
   }
@@ -113,6 +119,14 @@ export interface RollForwardReport {
   readonly invariants: 'ran' | 'not-implemented'
   readonly violations: readonly { code: string; id: string }[]
   readonly failures: readonly { id: string; code: string }[]
+  /**
+   * What the merge repaired instead of refusing (ids and codes only): `index-shared`, an element it wrote
+   * kept a key that another element (a tombstone, through a raw push the room admitted) holds too, and got
+   * a key of its own next to it (step f')
+   */
+  readonly repaired: readonly { id: string; code: string }[]
+  /** keys shared by rows this merge does not write: left as the room stores them */
+  readonly indexSharesKept: number
   /** hash.ts digest of the merged element list (live and tombstones) */
   readonly mergedHash: string | null
   readonly ms: number
@@ -250,11 +264,14 @@ export function rollForwardBoardFile(job: RollForwardJob, metrics: ServerTextMet
     elementsWritten: 0,
     elementsUntouched: 0,
     deletedRowsAppended: 0,
+    deletedRowsRemoved: 0,
     pagesAppended: 0,
     docKeysWritten: 0,
   }
   const conflicts: Conflict[] = []
   const failures: { id: string; code: string }[] = []
+  const repaired: { id: string; code: string }[] = []
+  let sharesKept = 0
   let resnapMode: RollForwardReport['resnap'] = 'none'
   let invariants: RollForwardReport['invariants'] = 'not-implemented'
   let violations: { code: string; id: string }[] = []
@@ -278,6 +295,8 @@ export function rollForwardBoardFile(job: RollForwardJob, metrics: ServerTextMet
       invariants,
       violations,
       failures,
+      repaired: [...repaired].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)),
+      indexSharesKept: sharesKept,
       mergedHash,
       ms: Math.round(performance.now() - t0),
       peakHeapUsedMb: heap.peakUsedMb,
@@ -475,9 +494,17 @@ export function rollForwardBoardFile(job: RollForwardJob, metrics: ServerTextMet
     // e. creations and deletions
     for (const shapeId of [...createdShapes].sort())
       for (const t of theirsConv.elements.get(shapeId) ?? []) {
-        if (oursRows.has(t.id)) {
+        const row = oursRows.get(t.id)
+        if (row && !row.deleted) {
           conflicts.push({ elementId: t.id, group: 'id-exists' })
           continue
+        }
+        if (row) {
+          // ours holds only its tombstone: theirs brought the record back (R0 restored it from "Recently
+          // deleted" after an earlier roll-forward deleted it, open item 10, or an undo). Theirs wins, as
+          // for any group both sides changed; a deletion ours made since the last cycle is listed.
+          if ((gclocks.get(t.id)?.life ?? 0) > cf.lbClock) conflicts.push({ elementId: t.id, group: 'life' })
+          mark(t.id, 'life')
         }
         written.set(t.id, structuredClone(t) as unknown as Record<string, unknown>)
         inserted.add(t.id)
@@ -586,6 +613,19 @@ export function rollForwardBoardFile(job: RollForwardJob, metrics: ServerTextMet
       const i = liveKeys.indexOf(k)
       if (i >= 0) liveKeys.splice(i, 1)
     }
+    /** elements whose key this merge assigned (placed, or a new element's) */
+    const placedIds = new Set<string>()
+    const assigned = new Set<string>()
+    /** a written element's kept key is replaced (step f'): the old key stays in use by its other holders */
+    const rekey = (id: string, key: string) => {
+      idx.set(id, key)
+      insertKey(key)
+      const w = work(id) ?? (written.get(id) as Record<string, unknown>)
+      w.index = key
+      mark(id, 'z')
+      assigned.add(id)
+      repaired.push({ id, code: 'index-shared' })
+    }
     const placed = new Set<string>()
     for (const shapeId of [...toPlace].sort((a, b) => (positionOf.get(a) ?? 0) - (positionOf.get(b) ?? 0))) {
       const els = (theirsConv.elements.get(shapeId) ?? [])
@@ -615,6 +655,7 @@ export function rollForwardBoardFile(job: RollForwardJob, metrics: ServerTextMet
         const w = work(id) ?? (written.get(id) as Record<string, unknown>)
         w.index = key
         mark(id, 'z')
+        placedIds.add(id)
         lo = key
       }
       placed.add(shapeId)
@@ -630,7 +671,9 @@ export function rollForwardBoardFile(job: RollForwardJob, metrics: ServerTextMet
       insertKey(key)
       e.index = key
       mark(id, 'z')
+      assigned.add(id)
     }
+    for (const id of placedIds) assigned.add(id)
     heap.sample('merge')
 
     // g. validation: re-fit, re-snap, symmetric bound, invariants, indices, limits
@@ -725,6 +768,53 @@ export function rollForwardBoardFile(job: RollForwardJob, metrics: ServerTextMet
       view.set(e.id, { ...e, boundElements: w.boundElements } as WireElement)
       mark(e.id, 'bound')
     }
+    // f'. a key share the merge did not make is repaired, never refused (2B, V3's re-check): the room's
+    // index cache holds live elements only, so a raw push can leave a live element on a tombstone's key;
+    // when the merge writes that element (R0 recoloured, moved or deleted it), it gets a key of its own
+    // right next to the shared one, on the side the room's `(idx, id)` order draws it, so the paint order
+    // is unchanged and no row the merge does not write is touched. A share between rows it does not write
+    // stays as the room stores it (counted in the report). Run here, once every write is known (a re-fit,
+    // a re-snap or a symmetric bound above can write an element that kept a shared key too).
+    const holders = new Map<string, string[]>()
+    for (const [id, k] of idx) holders.set(k, [...(holders.get(k) ?? []), id])
+    const predecessor = (hi: string): string | null => {
+      let a = 0
+      let b = liveKeys.length
+      while (a < b) {
+        const m = (a + b) >> 1
+        if ((liveKeys[m] as string) < hi) a = m + 1
+        else b = m
+      }
+      return a > 0 ? (liveKeys[a - 1] as string) : null
+    }
+    for (const [k, ids] of [...holders].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) {
+      if (ids.length < 2) continue
+      const group = [...ids].sort()
+      // keys the merge assigned are unique by construction (successor over every key in use)
+      const mine = group.filter((id) => written.has(id) && !assigned.has(id))
+      const kept = group.filter((id) => !written.has(id))
+      if (!mine.length) {
+        sharesKept++
+        continue
+      }
+      if (kept.length > 1) sharesKept++
+      // the first holder in the room's order keeps the key when the merge writes every holder
+      const anchor = kept[0] ?? (mine.shift() as string)
+      const below = mine.filter((id) => id < anchor)
+      const above = mine.filter((id) => id > anchor)
+      let lo = predecessor(k)
+      for (const id of below) {
+        const key = indexKeyBetween(lo, k)
+        rekey(id, key)
+        lo = key
+      }
+      lo = k
+      for (const id of above) {
+        const key = indexKeyBetween(lo, successor(lo))
+        rekey(id, key)
+        lo = key
+      }
+    }
     // versions: every written element gets version + 1 and a fresh nonce
     for (const [id, w] of written) {
       const prev = oursRows.get(id)
@@ -739,22 +829,17 @@ export function rollForwardBoardFile(job: RollForwardJob, metrics: ServerTextMet
       const c = checkElement(w)
       if (!c.ok) failures.push({ id, code: c.code })
     }
-    const liveIdx = new Map<string, string>()
     const allIdx = new Map<string, string[]>()
     for (const e of view.values()) {
       const k = idx.get(e.id) ?? (e.index as string)
       allIdx.set(k, [...(allIdx.get(k) ?? []), e.id])
-      if (e.isDeleted) continue
-      const other = liveIdx.get(k)
-      if (other) failures.push({ id: e.id, code: 'INDEX_DUPLICATE' })
-      liveIdx.set(k, e.id)
     }
-    // a key this merge wrote is unique among every element, tombstones included (keys it did not write
-    // are ours' and stay as they are)
+    // every key this merge wrote is unique among every element, tombstones included (step f' repaired the
+    // shares it inherited; keys it does not write are ours' and stay as the room stores them). Anything
+    // left is a merge fault: refused, nothing written, the board stays closed with this report.
     for (const [id, w] of written) {
       const k = idx.get(id) ?? (w.index as string)
-      if ((allIdx.get(k)?.length ?? 0) > 1 && !failures.some((f) => f.id === id))
-        failures.push({ id, code: 'INDEX_DUPLICATE' })
+      if ((allIdx.get(k)?.length ?? 0) > 1) failures.push({ id, code: 'INDEX_DUPLICATE' })
     }
     if (invariantsAvailable()) {
       invariants = 'ran'
@@ -834,6 +919,8 @@ export function rollForwardBoardFile(job: RollForwardJob, metrics: ServerTextMet
           r.epoch,
         )
       counts.deletedRowsAppended = del.rows.length
+      // R0's removeRestored and trims, mirrored (open item 10)
+      counts.deletedRowsRemoved = mirrorDeletedRemovals(db)
       // the board document: theirs' document meta per key, unless ours wrote the key since the last cycle
       counts.docKeysWritten = mergeDoc(db, base, theirs, pages, cf.lbClock, newClock, conflicts)
       if (counts.pagesAppended && importDoc) {
@@ -876,6 +963,39 @@ export function rollForwardBoardFile(job: RollForwardJob, metrics: ServerTextMet
   } finally {
     db.close()
   }
+}
+
+/**
+ * R0's own removals from "Recently deleted", mirrored into lb_deleted (open item 10, §5.4). During a
+ * rollback R0 keeps managing dr_deleted_* as today: a restore takes the restored shapes' rows out
+ * (deleted/store.ts removeRestored) and its trims drop whole old batches (trimNow). Every converted
+ * lb_deleted row came from one dr_deleted_records shape row (tldraw-import deleted.ts: the same batch, its
+ * elements' ids derived from the record id), so a converted row whose source row is gone goes too: an
+ * element restored during the rollback is not still listed as deleted, and a batch R0 trimmed is not
+ * offered again. dr_deleted_* is only read (§5.4); rows the Excalidraw build wrote (origin `live`) are
+ * never touched, whatever their batch number. Runs inside the roll-forward's transaction, after the rows
+ * R0 added were appended. Returns how many rows were dropped.
+ */
+export function mirrorDeletedRemovals(db: DatabaseSync): number {
+  const hasDr = db
+    .prepare("SELECT 1 AS x FROM sqlite_master WHERE type = 'table' AND name = 'dr_deleted_records'")
+    .get()
+  const present = new Set<string>()
+  if (hasDr)
+    for (const r of db
+      .prepare("SELECT batch, record_id FROM dr_deleted_records WHERE kind = 'shape'")
+      .iterate() as Iterable<{ batch: number; record_id: string }>)
+      present.add(`${Number(r.batch)}\n${elementIdOf(r.record_id)}`)
+  const gone = (
+    db.prepare("SELECT seq, batch, element_id FROM lb_deleted WHERE origin = 'converted'").all() as Array<{
+      seq: number
+      batch: number
+      element_id: string
+    }>
+  ).filter((r) => !present.has(`${Number(r.batch)}\n${r.element_id.split('.')[0]}`))
+  const del = db.prepare('DELETE FROM lb_deleted WHERE seq = ?')
+  for (const r of gone) del.run(r.seq)
+  return gone.length
 }
 
 /** The right edge of a page once offset (null when empty). */
