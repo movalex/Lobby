@@ -14,7 +14,7 @@ import { geometry, NotImplementedError } from '../../../canvas/api/index.ts'
 import { announcerFor } from '../../a11y/ported/announcer.ts'
 import { findEmptySpot, type Rect } from '../placement.ts'
 import { frameAt, NOTE_SIZE, putInFrame } from './notes.ts'
-import { createPolygon, isPolygonTool, type PolygonKind } from './polygons.ts'
+import { createPolygon, editPolygonLabel, isPolygonTool, type PolygonKind } from './polygons.ts'
 
 /** What the live region says when an empty placed note is taken off the board (W5-20). */
 export const EMPTY_NOTE_REMOVED = 'Empty sticky note removed'
@@ -130,9 +130,7 @@ export function placeAtCenter(ctx: CanvasFeatureContext, tool: PlaceableTool): s
     )
     if (!made) return null
     if (canvas.tool() !== 'select') canvas.setTool('select')
-    // the label's editor opens on the holder alone (the lease asks for the one selected element)
-    canvas.select([made.holder])
-    void canvas.text.edit(made.holder, { via: 'enter', caret: 'end' })
+    editPolygonLabel(canvas, made.holder, 'enter')
     return made.holder
   }
   const kind: ItemKind = tool

@@ -365,3 +365,29 @@ export function polygonHolderAt(
   }
   return null
 }
+
+/**
+ * Opens the label editor of a polygon's holder (D4): the polygon (its outline and holder) is selected first,
+ * and the editor is asked for once that selection has landed (the engine applies a selection a render
+ * later, and keeps a group's members selected together; the lease cancels an open when the selection
+ * changes under it to something it did not start with).
+ */
+export function editPolygonLabel(canvas: LobbyCanvas, holderId: string, via: 'enter' | 'double-click'): void {
+  const holder = canvas.get(holderId)
+  const g = holder?.groupIds[0]
+  const ids = canvas
+    .items()
+    .filter((e) => e.id === holderId || (g && e.groupIds[0] === g && isPolygonLine(e)))
+    .map((e) => e.id)
+  canvas.select(ids)
+  let tries = 20
+  const open = () => {
+    const sel = new Set(canvas.selection)
+    if (ids.every((id) => sel.has(id)) || tries-- <= 0) {
+      void canvas.text.edit(holderId, { via, caret: 'end' })
+      return
+    }
+    requestAnimationFrame(open)
+  }
+  requestAnimationFrame(open)
+}

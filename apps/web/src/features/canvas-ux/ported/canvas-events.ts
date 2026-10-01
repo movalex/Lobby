@@ -20,7 +20,7 @@ import type {
 import { openContextMenu } from './context-menu-open.ts'
 import { FRAME_NAME_BAND_PX } from './FrameRename.tsx'
 import { createNoteAt, frameAt } from './notes.ts'
-import { polygonHolderAt } from './polygons.ts'
+import { editPolygonLabel, polygonHolderAt } from './polygons.ts'
 import { uxState } from './state.ts'
 
 /** W5-59: the accessible name of the text editor open on `el` (the element whose words it edits). Pure. */
@@ -111,10 +111,7 @@ export function installCanvasEvents(ctx: CanvasFeatureContext): () => void {
       e.handled()
       if (action.kind === 'rename') state.renamingFrame.set(action.frameId)
       else if (action.kind === 'note') createNoteAt(ctx, e.scene)
-      else if (action.kind === 'label') {
-        canvas.select([action.id])
-        void canvas.text.edit(action.id, { via: 'double-click', caret: 'end' })
-      }
+      else if (action.kind === 'label') editPolygonLabel(canvas, action.id, 'double-click')
     }),
   )
   let editing = canvas.editingId()

@@ -342,6 +342,7 @@ test('D4: the polygon tools: in More in tldraw’s order; a drag draws the shape
 
   await test.step('a click puts a 200 px hexagon centred on the click', async () => {
     await setTool(page, 'hexagon')
+    await expect.poll(() => lobbyTool(page)).toBe('hexagon')
     const at = await sceneToScreen(page, { x: 600, y: 300 })
     await page.mouse.click(at.x, at.y)
     await expect.poll(async () => (await live(page)).filter((e) => e.type === 'rectangle').length).toBe(1)
@@ -357,6 +358,8 @@ test('D4: the polygon tools: in More in tldraw’s order; a drag draws the shape
   await test.step('with the keyboard: the tool, then Enter, places a triangle ready to type its label', async () => {
     await focusBoard(page)
     await setTool(page, 'triangle')
+    // the engine applies a tool a render later
+    await expect.poll(() => lobbyTool(page)).toBe('triangle')
     await page.keyboard.press('Enter')
     const label = await waitForTextEditor(page)
     await expectSaved(page)
