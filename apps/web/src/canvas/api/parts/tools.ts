@@ -16,6 +16,11 @@
  *    neutral state reported as `hand` (tldraw's viewer toolbar has Select and Hand), with the grab cursor;
  *    any other tool ends it. Editors get the engine's own Hand.
  *
+ * W5-11 (the wave-5 review), the connector tool: a connector drawn, re-ended or pasted with an end held
+ * inside a shape (Excalidraw's `inside` binding, centre to centre through both shapes) ends on the shape's
+ * outline once the gesture is over, with the same anchor (./connector-outline.ts), folded into the step that
+ * made it.
+ *
  * `tool()` reads the mode reactively (lib/signals), on top of the port's own tracked read in ../impl.ts.
  * Keys the allowlist routes straight to the engine (canvas/input) bypass this part: canvas-ux's feature
  * keys route P while highlighting, and H and V for read-only roles, through `setTool`.
@@ -23,9 +28,11 @@
 
 import { mutateElement } from '@excalidraw/element'
 import type { ElementsMap, ExcalidrawElement } from '@excalidraw/element/types'
+import type { AppState } from '@excalidraw/excalidraw/types'
 import { atom } from '../../../lib/signals.ts'
 import { onBoardEngine } from '../../overrides.ts'
 import type { StyleValues } from '../lobby-canvas.ts'
+import { connectorOutlinePatch, type OutlinePatch } from './connector-outline.ts'
 import type { PartDeps } from './types.ts'
 
 export interface ToolsPart {
@@ -68,6 +75,50 @@ export const highlightOf = (stroke: string | undefined): string => {
 }
 
 type Saved = Pick<StyleValues, 'strokeColor' | 'opacity'>
+
+/** A pointer gesture still holds the scene's linear elements (a connector being drawn or re-ended). */
+function gestureHolds(s: AppState): boolean {
+  return (
+    s.newElement !== null ||
+    s.multiElement !== null ||
+    s.cursorButton === 'down' ||
+    !!s.selectedLinearElement?.isDragging
+  )
+}
+
+/**
+ * W5-11 (./connector-outline.ts): the `inside` ends of the connectors `ids` move onto their shapes'
+ * outlines, folded into the step that drew them (one undo removes the connector whole).
+ */
+function outlineConnectors(deps: PartDeps, elements: readonly ExcalidrawElement[], ids: readonly string[]) {
+  let canvas: ReturnType<PartDeps['self']>
+  try {
+    canvas = deps.self()
+  } catch {
+    return
+  }
+  if (canvas.readOnly()) return
+  const byId = new Map(elements.map((e) => [e.id, e]))
+  const patches = new Map<string, OutlinePatch>()
+  for (const id of ids) {
+    const el = byId.get(id)
+    if (!el || el.locked) continue
+    const p = connectorOutlinePatch(el, elements)
+    if (p) patches.set(id, p)
+  }
+  if (!patches.size) return
+  try {
+    canvas.transact(
+      'connector outline',
+      (tx) => {
+        for (const [id, p] of patches) tx.update(id, { ...p })
+      },
+      { joinPrevious: true },
+    )
+  } catch {
+    // a write the canvas refuses (a role change meanwhile) leaves the connector as drawn
+  }
+}
 
 export function createToolsPart(deps: PartDeps): ToolsPart {
   const { port, registries } = deps
@@ -112,7 +163,53 @@ export function createToolsPart(deps: PartDeps): ToolsPart {
   // the engine's tool moved on by itself (a tool letter, Escape, a stroke that ended the tool): the modes
   // end with it. New strokes of the highlighter are stamped as they start.
   onBoardEngine(registries, ({ api }) => {
+    // W5-40: new connectors are straight, as tldraw's are (Excalidraw's own default is curved). A next-style
+    // default of the engine's app state, never a document write; CR-W5-3A-1 asks 2C's next-style mapping
+    // (canvas/board/handles.ts) to carry the connector's straight / curved kind, so the style panel's Line
+    // pick for the next connector reaches it too.
+    if (api.getAppState().currentItemArrowType === 'round')
+      api.updateScene({ appState: { currentItemArrowType: 'sharp' } })
+    // W5-11: connectors this tab drew, re-ended or pasted, outlined once no gesture holds them
+    const pending = new Set<string>()
+    let flushing = false
+    const flush = () => {
+      flushing = false
+      if (!pending.size) return
+      const state = api.getAppState()
+      if (gestureHolds(state)) return
+      const ids = [...pending]
+      pending.clear()
+      outlineConnectors(deps, api.getSceneElements() as readonly ExcalidrawElement[], ids)
+    }
+    const schedule = () => {
+      if (flushing) return
+      flushing = true
+      setTimeout(flush, 0)
+    }
+    // pasted (and any other locally created) connectors; `self()` is ready once createLobbyCanvas returned
+    const listen = () =>
+      deps.self().on('change', (c) => {
+        if (c.source !== 'local') return
+        for (const id of c.created) pending.add(id)
+        if (pending.size) schedule()
+      })
+    try {
+      listen()
+    } catch {
+      queueMicrotask(() => {
+        try {
+          listen()
+        } catch {
+          // a bare port (unit tests): no change events
+        }
+      })
+    }
     api.onChange((elements, appState) => {
+      const drawn = appState.newElement as ExcalidrawElement | null
+      if (drawn?.type === 'arrow') pending.add(drawn.id)
+      const linear = appState.selectedLinearElement
+      if (linear?.isDragging && linear.selectedPointsIndices?.length) pending.add(linear.elementId)
+      if (pending.size && !gestureHolds(appState)) schedule()
       const type = appState.activeTool.type
       if (highlighting.get() && type !== 'freedraw') endHighlight()
       if (viewerHand.get() && type !== 'selection') endViewerHand()
