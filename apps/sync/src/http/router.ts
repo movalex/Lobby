@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { checkInternalSecret, INTERNAL_SECRET_HEADER } from '@draftroom/auth-tickets'
-import { RUN_ALL_ID_RE, type RunAll } from '../backup/run-all.ts'
+import { RecentHeldSetError, RUN_ALL_ID_RE, type RunAll } from '../backup/run-all.ts'
 import { type BackupService, handleBackupStatus } from '../backup/service.ts'
 import type { InternalRoute } from '../engine-switch.ts'
 import { BoardOpenRefused, NEW_CANVAS_ERROR_CODE } from '../r0/pre-open.ts'
@@ -86,16 +86,45 @@ async function handleMaintenance(req: IncomingMessage, res: ServerResponse, deps
 /** Where a run is read (the POST's Location). */
 export const runAllPath = (runId: string) => `/internal/backups/run-all/${runId}`
 
+const RUN_ALL_BODY_LIMIT_BYTES = 1024
+
+/**
+ * Whether the request carries a body at all: the runbook command sends none without --force, and the
+ * runbook's `int` helper sends a JSON content-type with an empty body, which is no body either.
+ */
+const hasBody = (req: IncomingMessage) =>
+  Number(req.headers['content-length']) > 0 || req.headers['transfer-encoding'] !== undefined
+
 /**
  * POST: starts a run, or joins the one that will answer this call (backup/run-all.ts), and answers at
  * once with 202 and the run's id. The run goes on in the server; GET …/run-all/<runId> has its report
- * once it is done. No client waits on one request for a run that can take many minutes.
+ * once it is done. No client waits on one request for a run that can take many minutes. The body is
+ * optional: `{"force": true}` writes a set although a recent held set exists (409 RECENT_HELD_SET
+ * otherwise; security audit L6, the header of run-all.ts).
  */
-function handleRunAllStart(res: ServerResponse, deps: RouterDeps) {
+async function handleRunAllStart(req: IncomingMessage, res: ServerResponse, deps: RouterDeps) {
   if (!deps.runAll) throw notFound()
   if (!deps.registry.backupsDir())
     throw new HttpError(409, 'BACKUPS_OFF', 'Local backups are off on this server.')
-  const run = deps.runAll.request()
+  let force = false
+  if (hasBody(req)) {
+    const body = (await readJson(req, RUN_ALL_BODY_LIMIT_BYTES)) as Record<string, unknown> | null
+    if (body !== null && (typeof body !== 'object' || Array.isArray(body)))
+      throw new HttpError(400, 'BAD_REQUEST', 'The body must be {"force": true}, or empty.')
+    for (const k of Object.keys(body ?? {}))
+      if (k !== 'force')
+        throw new HttpError(400, 'BAD_REQUEST', 'The body must be {"force": true}, or empty.')
+    if (body?.force !== undefined && typeof body.force !== 'boolean')
+      throw new HttpError(400, 'BAD_REQUEST', 'force must be a boolean.')
+    force = body?.force === true
+  }
+  let run: ReturnType<RunAll['request']>
+  try {
+    run = deps.runAll.request({ force })
+  } catch (e) {
+    if (e instanceof RecentHeldSetError) throw new HttpError(409, 'RECENT_HELD_SET', e.message)
+    throw e
+  }
   sendJson(res, 202, run, { Location: runAllPath(run.runId) })
 }
 
@@ -137,7 +166,7 @@ const NEUTRAL_ROUTES: Route[] = [
     re: /^\/internal\/backups\/run-all$/,
     methods: ['GET', 'POST'],
     handle: (req, res, deps) =>
-      req.method === 'POST' ? handleRunAllStart(res, deps) : handleRunAllList(res, deps),
+      req.method === 'POST' ? handleRunAllStart(req, res, deps) : handleRunAllList(res, deps),
   },
   {
     re: /^\/internal\/backups\/run-all\/([^/]+)$/,

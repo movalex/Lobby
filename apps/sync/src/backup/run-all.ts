@@ -20,6 +20,13 @@
 // - Every backup it writes is held for RUN_ALL_HOLD_DAYS (90) outside the count-based retention, locally
 //   and offsite (backup.ts BackupEntry.holdUntil): the final set before a cut-over is kept 90 days
 //   (§5.6, §7.5 step 4), however many backups the board gets after it.
+// - So a run is refused (409 RECENT_HELD_SET) while a RECENT held set exists: every board file has a held
+//   local entry made in the last RUN_ALL_RECENT_MS (30 min), read from the local manifests on disk, so a
+//   restart forgets nothing. Each run adds one 90-day copy of every board to the rooms' own disk (1 GB on
+//   Render), and repeated calls, by hand or from a script, would fill it and stall every SQLite write
+//   (security audit L6). `{"force": true}` (the command's --force) runs anyway: after a sync restart in the
+//   window, or when boards changed since. A call made while a run is in progress still joins the next run
+//   (above): that set is not written yet.
 // - Open boards are copied through their room's connection; the others through a read-only connection,
 //   so no room is opened and no board file is written (RoomRegistry.backupFresh). A board born on the new
 //   canvas is copied whole (backup.ts, format `lobby-elements`).
@@ -48,6 +55,7 @@
 import { randomBytes } from 'node:crypto'
 import type { BackupFormat } from '../r0/lb-files.ts'
 import type { RoomRegistry } from '../rooms.ts'
+import { isHeld, readManifest } from './backup.ts'
 import type { BackupService } from './service.ts'
 
 export interface RunAllBoard {
@@ -88,6 +96,59 @@ export const RUN_ALL_HOLD_DAYS = 90
 export const RUN_ALL_KEEP_RUNS = 20
 /** A run's id: `run_` and 16 hex digits. */
 export const RUN_ALL_ID_RE = /^run_[0-9a-f]{16}$/
+/** A held set made within this long before a call is "recent": the call is refused unless forced (audit L6). */
+export const RUN_ALL_RECENT_MS = 30 * 60_000
+
+/** A held backup of every board file, made recently (findRecentHeldSet). */
+export interface RecentHeldSet {
+  /** When the newest backup of the set was made (ISO). */
+  at: string
+  /** Board files it covers (every one there is). */
+  boards: number
+}
+
+/** POST /internal/backups/run-all refused: a recent held set exists and the call did not say `force`. */
+export class RecentHeldSetError extends Error {
+  readonly set: RecentHeldSet
+  constructor(set: RecentHeldSet) {
+    super(
+      `a held backup set of every board (${set.boards} boards) was made at ${set.at}, less than ${Math.round(RUN_ALL_RECENT_MS / 60_000)} minutes ago; each run-all adds one 90-day copy of every board to the sync disk. Pass {"force": true} (the command's --force) to write another set: after a sync restart in the window, or when boards changed since.`,
+    )
+    this.name = 'RecentHeldSetError'
+    this.set = set
+  }
+}
+
+/**
+ * The recent held set, when every board file in `boardIds` has a held local manifest entry made within
+ * `windowMs` before `now`; null when any board lacks one (a new board, a failed board: the set is not
+ * complete, so a run is wanted) or there are no boards. Read-only; a manifest that cannot be read counts
+ * as no entry.
+ */
+export function findRecentHeldSet(
+  backupsDir: string,
+  boardIds: readonly string[],
+  now: Date,
+  windowMs = RUN_ALL_RECENT_MS,
+): RecentHeldSet | null {
+  if (!boardIds.length) return null
+  let newest = Number.NEGATIVE_INFINITY
+  for (const boardId of boardIds) {
+    let found = false
+    try {
+      for (const e of readManifest(backupsDir, boardId)?.backups ?? []) {
+        const made = Date.parse(e.createdAt)
+        if (!isHeld(e, now.getTime()) || !Number.isFinite(made) || now.getTime() - made > windowMs) continue
+        found = true
+        if (made > newest) newest = made
+      }
+    } catch {
+      return null
+    }
+    if (!found) return null
+  }
+  return { at: new Date(newest).toISOString(), boards: boardIds.length }
+}
 
 /** queued: waits for the run in progress (it answers a call made after that run started). */
 export type RunAllStatus = 'queued' | 'running' | 'done' | 'failed'
@@ -117,17 +178,32 @@ export interface RunAllDeps {
   backups: Pick<BackupService, 'copyOffsite' | 'status'>
   /** Whether maintenance mode is on (app.ts). Absent: never. */
   maintenance?: () => boolean
+  /**
+   * The local backups root (RoomRegistry.backupsDir), read for the recent held set (findRecentHeldSet).
+   * Absent or null: no run is ever refused for one (tests with registry stand-ins; backups off).
+   */
+  backupsDir?: () => string | null
+  /** The recent window (default RUN_ALL_RECENT_MS). */
+  recentWindowMs?: number
   now?: () => Date
   log?: (...a: unknown[]) => void
   /** Run ids (tests); default `run_` + 16 random hex digits. */
   newRunId?: () => string
 }
 
+/** `force`: write a set although a recent held set exists (the header). */
+export interface RunAllCall {
+  force?: boolean
+}
+
 export interface RunAll {
-  /** Resolves with the report of a run that starts after this call (see the header). */
-  run(): Promise<RunAllReport>
-  /** The same run, for the HTTP route: answered at once, queued or running. */
-  request(): RunAllRunView
+  /**
+   * Resolves with the report of a run that starts after this call (see the header). Throws
+   * RecentHeldSetError (before any run) when a recent held set exists and `force` is not set.
+   */
+  run(opts?: RunAllCall): Promise<RunAllReport>
+  /** The same run, for the HTTP route: answered at once, queued or running. Throws like run(). */
+  request(opts?: RunAllCall): RunAllRunView
   /** A run by id, with its report once done; null when unknown (or no longer kept). */
   get(runId: string): RunAllRunView | null
   /** The runs this process knows, newest first, without reports. */
@@ -303,9 +379,20 @@ export function createRunAll(deps: RunAllDeps): RunAll {
     )
   }
 
+  /** The recent held set on disk (the header), or null; never consulted while a run is in progress. */
+  function recentHeldSet(): RecentHeldSet | null {
+    const dir = deps.backupsDir?.()
+    if (!dir) return null
+    return findRecentHeldSet(dir, deps.registry.boardFileIds(), now(), deps.recentWindowMs)
+  }
+
   /** The run that answers a call made now (see the header). */
-  function enqueue(): Run {
+  function enqueue(opts?: RunAllCall): Run {
     if (queued) return queued
+    if (!current && !opts?.force) {
+      const set = recentHeldSet()
+      if (set) throw new RecentHeldSetError(set)
+    }
     let run: Run
     if (!current) {
       run = make()
@@ -341,8 +428,14 @@ export function createRunAll(deps: RunAllDeps): RunAll {
   }
 
   return {
-    run: () => enqueue().promise,
-    request: () => view(enqueue(), false),
+    run: (opts) => {
+      try {
+        return enqueue(opts).promise
+      } catch (e) {
+        return Promise.reject(e)
+      }
+    },
+    request: (opts) => view(enqueue(opts), false),
     get(runId) {
       const run = runs.get(runId)
       return run ? view(run, true) : null
