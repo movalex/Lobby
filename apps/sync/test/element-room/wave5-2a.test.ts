@@ -10,7 +10,6 @@
 //     server write may not leave a new invariant violation on a neighbour;
 //   - V3's low: a live element never takes a tombstone's z-order key (pushes and server writes).
 
-import { isRedactedTombstone } from '@draftroom/canvas-schema/elements'
 import { hashElements } from '@draftroom/canvas-schema/hash'
 import { checkInvariants } from '@draftroom/canvas-schema/invariants'
 import { ELEMENT_SCHEMA_VERSION, PROTO } from '@draftroom/canvas-schema/protocol'
@@ -42,6 +41,25 @@ async function violations(st: ElementStack, b: string): Promise<string[]> {
 }
 
 // ---- W5-02 ---------------------------------------------------------------------------------------------
+
+/**
+ * A tombstone that carries nothing of the deleted element: no customData (authors), text, link, name,
+ * membership or geometry (the wire form of W5-02, checked field by field, independent of canvas-schema).
+ */
+const contentFree = (e: El): boolean =>
+  e.isDeleted === true &&
+  e.customData === undefined &&
+  !e.text &&
+  !e.originalText &&
+  !e.link &&
+  !e.name &&
+  (e.groupIds ?? []).length === 0 &&
+  (e.frameId ?? null) === null &&
+  (e.containerId ?? null) === null &&
+  (e.boundElements ?? null) === null &&
+  e.x === 0 &&
+  e.y === 0 &&
+  (e.fileId === undefined || e.fileId === 'ver_0000000000')
 
 /** Words that are on the board only while the elements live (and in the server's full rows). */
 const SECRET = ['internal margin note', 'confidential plan', 'Hidden roadmap', 'https://intranet.example/doc']
@@ -101,7 +119,7 @@ describe('W5-02: tombstones carry no content to any role', () => {
         expect(leaks(c), who.user).toEqual([])
         const dead = [...c.confirmed.values()].filter((e) => e.isDeleted)
         expect(dead.length).toBe(5) // n1, its label, t1, f1, r1
-        for (const e of dead) expect(isRedactedTombstone(e as never), `${who.user}: ${e.id}`).toBe(true)
+        for (const e of dead) expect(contentFree(e as never), `${who.user}: ${e.id}`).toBe(true)
         expect(await c.hash()).toBe(await hashElements(server.elements))
         expect(c.schemaErrors).toEqual([])
         c.close()
@@ -152,7 +170,7 @@ describe('W5-02: tombstones carry no content to any role', () => {
       })
       expect(v2.welcome?.reset).toBe(false)
       const row = v2.welcome?.catchUp?.find((o) => o.k === 'c' && o.el.id === 't3')
-      expect(row?.k === 'c' && isRedactedTombstone(row.el as never)).toBe(true)
+      expect(row?.k === 'c' && contentFree(row.el as never)).toBe(true)
       // t3 was made and deleted while the viewer was away: its words never reached it
       expect(everything(v2).includes(SECRET[1])).toBe(false)
       expect(await v2.hash()).toBe(await hashElements((await st.snapshot(b)).elements))
@@ -171,7 +189,7 @@ describe('W5-02: tombstones carry no content to any role', () => {
         const r = r0(ack)
         expect(r.ok).toBe(false)
         expect(r.code).toBe('READ_ONLY')
-        expect(r.el && isRedactedTombstone(r.el as never), id).toBe(true)
+        expect(r.el && contentFree(r.el as never), id).toBe(true)
       }
       expect(leaks(v)).toEqual([])
     },
@@ -589,7 +607,7 @@ describe('V3: a live element never takes a tombstone’s z-order key', () => {
       await v.until(() => v.confirmed.get('P') !== undefined, 'P')
       await v.untilClock((await st.snapshot(b)).clock)
       expect(v.confirmed.get('T')?.index).toBe(els.get('T')?.index)
-      expect(isRedactedTombstone(v.confirmed.get('T') as never)).toBe(true)
+      expect(contentFree(v.confirmed.get('T') as never)).toBe(true)
       expect(await v.hash()).toBe(await hashElements((await st.snapshot(b)).elements))
     },
     T,
