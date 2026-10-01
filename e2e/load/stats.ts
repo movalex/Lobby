@@ -22,13 +22,21 @@ export interface Summary {
 export function summarize(values: readonly number[]): Summary {
   const n = values.length
   const round = (x: number) => (Number.isFinite(x) ? Math.round(x * 10) / 10 : x)
+  // a loop, not Math.max(...values): a spread of 120,000 visibility samples (L2, 10 measuring sessions,
+  // 10 minutes) overflows the call stack ("Maximum call stack size exceeded", NAS L2 r1 lost its report)
+  let max = Number.NEGATIVE_INFINITY
+  let sum = 0
+  for (const v of values) {
+    if (v > max) max = v
+    sum += v
+  }
   return {
     n,
     p50: round(percentile(values, 50)),
     p95: round(percentile(values, 95)),
     p99: round(percentile(values, 99)),
-    max: round(n ? Math.max(...values) : Number.NaN),
-    mean: round(n ? values.reduce((a, b) => a + b, 0) / n : Number.NaN),
+    max: round(n ? max : Number.NaN),
+    mean: round(n ? sum / n : Number.NaN),
   }
 }
 

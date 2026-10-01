@@ -42,6 +42,8 @@ export interface SessionPlan {
   readonly joinAtMs: number
   /** the notes this session edits (editors), disjoint across editors */
   readonly ownNotes: readonly string[]
+  /** a receive-only session on the thin client (thin.ts) instead of O2's full core */
+  readonly thin?: boolean
 }
 
 export interface EditRecord {
@@ -55,6 +57,8 @@ export interface SessionReport {
   readonly key: string
   readonly boardId: string
   readonly kind: SessionGroup['kind']
+  /** ran the thin client (thin.ts) */
+  readonly thin?: boolean
   readonly role: string
   readonly joinedAt: number | null
   readonly joinMs: number | null
@@ -86,6 +90,15 @@ export interface SessionReport {
   /** the probe cursor's delay to this session (measuring sessions), ms */
   readonly presenceDelayMs: ReturnType<Recorder['summary']>
   readonly presenceDelaySamples: readonly number[]
+  /** every welcome this session received (the meter's socket-event times), for the restart numbers */
+  readonly welcomeTimes?: readonly number[]
+  /** acks received per 10 s window since the run start (window index → count): "every room keeps serving" */
+  readonly ackWindows?: Readonly<Record<number, number>>
+  /**
+   * ids with a push sent but not acked when the session stopped (after waiting up to 10 s for Saved): the
+   * readback may hold a NEWER value than the last acked one for them, which is not a loss (report.ts)
+   */
+  readonly pendingAtEnd?: readonly string[]
 }
 
 export interface SessionContext {
@@ -101,6 +114,8 @@ export interface SessionContext {
   readonly probeSid?: (boardId: string) => string | null
   /** harness-side reconnect when the client stays without a welcome this long after a close (ms) */
   readonly reconnectAfterMs?: number
+  /** the thin client for plans marked thin (a real sync only; absent: every session gets createClient) */
+  readonly createThinClient?: ClientFactory
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, Math.max(0, ms)))
@@ -153,6 +168,8 @@ export class LoadSession {
     acked: {} as Record<string, Record<string, unknown>>,
     reconnectsByHarness: 0,
     errors: [] as string[],
+    ackWindows: {} as Record<number, number>,
+    pendingAtEnd: [] as string[],
   }
   private lastPushLogLen = 0
   private killSeenAt: number | null = null
@@ -177,7 +194,9 @@ export class LoadSession {
   }
 
   private newClient(): HeadlessClient {
-    const c = this.ctx.createClient({
+    const create =
+      this.plan.thin && this.ctx.createThinClient ? this.ctx.createThinClient : this.ctx.createClient
+    const c = create({
       syncUrl: this.ctx.syncWsUrl,
       boardId: this.plan.boardId,
       tab: this.plan.key,
@@ -235,6 +254,15 @@ export class LoadSession {
       if (c) {
         const got = c.received()
         for (; seen < got.length; seen++) this.onServer(got[seen] as ServerMessage)
+        // O2's headless client keeps EVERY decoded server frame in this array (its reset snapshot, every
+        // `changes` and `presence` frame) for protocol tests. A 10-minute run of 260 sessions would hold
+        // gigabytes (the local L1 rehearsal passed 3.3 GB in 2 minutes; the load container has 2 GB), so the
+        // load generator empties it once read. The array is the client's own (received() returns it), and
+        // nothing else in the client reads it.
+        if (seen > 0) {
+          ;(got as unknown[]).length = 0
+          seen = 0
+        }
         this.collectPushes()
       }
       const closes = this.meter.closes
@@ -292,6 +320,8 @@ export class LoadSession {
 
   private onAck(ack: Ack): void {
     const now = Date.now()
+    const w = Math.floor((now - this.ctx.t0) / 10_000)
+    this.r.ackWindows[w] = (this.r.ackWindows[w] ?? 0) + 1
     this.collectPushes()
     const sent = this.pushSentAt.get(ack.seq)
     if (sent) {
@@ -582,6 +612,18 @@ export class LoadSession {
 
   async stop(): Promise<void> {
     this.stopped = true
+    // an editor's last pushes are still in flight when the run ends: wait (up to 10 s) until they are
+    // acked, so the acked-but-missing readback compares the last acked value with what is stored, not a
+    // stored newer value whose ack the session never waited for
+    if (this.client && this.r.pushes > 0)
+      try {
+        await this.client.saved(10_000)
+      } catch (e) {
+        this.note(e)
+      }
+    this.collectPushes()
+    // what is still out without an ack (the readback compares against the last ACKED value)
+    this.r.pendingAtEnd = [...new Set([...this.pushSentAt.values()].flatMap((p) => p.ids))]
     try {
       await this.client?.close()
     } catch {}
@@ -593,6 +635,7 @@ export class LoadSession {
       key: this.plan.key,
       boardId: this.plan.boardId,
       kind: this.plan.group.kind,
+      ...(this.plan.thin && this.ctx.createThinClient ? { thin: true } : {}),
       role: this.plan.user.role,
       ...this.r,
       ackMs: this.ackRec.summary(),
@@ -604,6 +647,7 @@ export class LoadSession {
         jsonBytes: w.jsonBytes,
         snapshotBytes: w.snapshotBytes,
       })),
+      welcomeTimes: this.meter.welcomes.map((w) => w.at),
     }
   }
 

@@ -1,7 +1,9 @@
 // Which tables a board file has, and whether it is converted (docs/EXCALIDRAW-MIGRATION.md §8.3 B9, the
 // conversion-under-load pass: "the planted board is reported as failed and stays on its tldraw tables").
-// Opens the file read-only and prints table names and `lb_meta.converted_from` presence, never content:
+// Opens the file read-only and prints table names, `lb_meta.converted_from` presence and the file's size (bytes
+// after the conversion, next to gen-boards' bytes before), never content:
 //   node e2e/load/board-tables.ts <board file> [...]
+import { existsSync, statSync } from 'node:fs'
 import { DatabaseSync } from 'node:sqlite'
 
 for (const file of process.argv.slice(2)) {
@@ -22,6 +24,8 @@ for (const file of process.argv.slice(2)) {
         tldraw: tables.includes('documents'),
         lb: tables.filter((t) => t.startsWith('lb_')),
         converted,
+        bytes: statSync(file).size,
+        walBytes: existsSync(`${file}-wal`) ? statSync(`${file}-wal`).size : 0,
         tables,
       }),
     )

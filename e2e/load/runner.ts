@@ -16,6 +16,11 @@ export function boardsFromSpecs(specs: readonly BoardSpec[]): Map<string, Genera
 export interface ThreadResult {
   readonly reports: SessionReport[]
   readonly loopDelayP99Ms: number
+  readonly loopDelayMaxMs?: number
+  /** the thread's memory when its sessions had stopped (MB) */
+  readonly memory?: { readonly rssMB: number; readonly heapUsedMB: number; readonly heapTotalMB: number }
+  readonly sessions?: number
+  readonly fullCores?: number
 }
 
 export interface RunOptions {
@@ -29,6 +34,8 @@ export interface RunOptions {
   readonly reconnectAfterMs?: number
   /** a stop signal checked by every session (SIGTERM, a folder over its cap) */
   readonly stopped?: () => boolean
+  /** the thin client for plans marked thin (real sync runs) */
+  readonly createThinClient?: ClientFactory
 }
 
 export async function runInThread(opts: RunOptions, createClient: ClientFactory): Promise<ThreadResult> {
@@ -48,12 +55,22 @@ export async function runInThread(opts: RunOptions, createClient: ClientFactory)
         stopping,
         reconnectAfterMs: opts.reconnectAfterMs,
         probeSid: (b) => opts.probeSids.get(b) ?? null,
+        createThinClient: opts.createThinClient,
       }),
   )
   await Promise.all(sessions.map((s) => s.run()))
   await Promise.all(sessions.map((s) => s.stop()))
   loop.disable()
-  return { reports: sessions.map((s) => s.report()), loopDelayP99Ms: loop.percentile(99) / 1e6 }
+  const mu = process.memoryUsage()
+  const mb = (b: number) => Math.round(b / 1048576)
+  return {
+    reports: sessions.map((s) => s.report()),
+    loopDelayP99Ms: loop.percentile(99) / 1e6,
+    loopDelayMaxMs: loop.max / 1e6,
+    memory: { rssMB: mb(mu.rss), heapUsedMB: mb(mu.heapUsed), heapTotalMB: mb(mu.heapTotal) },
+    sessions: sessions.length,
+    fullCores: sessions.filter((s) => !(s.plan.thin && opts.createThinClient)).length,
+  }
 }
 
 /** What a worker thread gets (everything serializable; boards are regenerated from the profile). */
@@ -68,10 +85,36 @@ export interface WorkerJob {
   readonly fileIds?: readonly string[]
   /** explicit boards (a real stack's ids) instead of the profile's fixed ones */
   readonly boardSpecs?: readonly BoardSpec[]
+  /**
+   * each worker's old-generation cap (MB): a container with a memory limit (the NAS's 2 GB) needs it, or
+   * each worker's V8 heap grows lazily towards its own default limit and together they pass the limit
+   */
+  readonly workerHeapMb?: number
 }
 
 /**
- * Splits the plans round-robin over `threads` workers (worker.ts) and merges their results. Only the
+ * Splits the plans over `threads` workers: the thin sessions (thin.ts; the measuring sessions among them
+ * read A→B visibility and the probe's cursor at the socket) all go to worker 0, whose event loop then has
+ * no engine core to run, so the time a frame waits before the meter sees it is the network's, not a
+ * neighbour core's scene rebuild (seen in the NAS smoke run: one worker at a 677 ms loop p99 on the heavy
+ * board). The full-core sessions go round-robin over the other workers. With one worker, or no thin
+ * session, everything is round-robin over all of them.
+ */
+export function partitionPlans(plans: readonly SessionPlan[], threads: number): SessionPlan[][] {
+  const parts: SessionPlan[][] = Array.from({ length: Math.max(1, threads) }, () => [])
+  const thin = plans.filter((p) => p.thin)
+  if (threads < 2 || thin.length === 0) {
+    for (const [i, p] of plans.entries()) parts[i % parts.length]?.push(p)
+    return parts
+  }
+  parts[0] = [...thin]
+  const full = plans.filter((p) => !p.thin)
+  for (const [i, p] of full.entries()) parts[1 + (i % (threads - 1))]?.push(p)
+  return parts
+}
+
+/**
+ * Runs the plans over `threads` workers (worker.ts, partitionPlans) and merges their results. Only the
  * WorkerJob fields cross into a worker (a function or a board map would not clone, or clone for nothing);
  * `stopped` is polled here and sent to the workers as a stop message.
  */
@@ -79,8 +122,7 @@ export async function runInWorkers(
   job: WorkerJob & { readonly stopped?: () => boolean },
   threads: number,
 ): Promise<ThreadResult[]> {
-  const parts: SessionPlan[][] = Array.from({ length: threads }, () => [])
-  for (const [i, p] of job.plans.entries()) parts[i % threads]?.push(p)
+  const parts = partitionPlans(job.plans, threads)
   const base: Omit<WorkerJob, 'plans'> = {
     profileName: job.profileName,
     syncHttpUrl: job.syncHttpUrl,
@@ -100,7 +142,10 @@ export async function runInWorkers(
       parts.map(
         (plans) =>
           new Promise<ThreadResult>((resolve, reject) => {
-            const w = new Worker(new URL('./worker.ts', import.meta.url), { workerData: { ...base, plans } })
+            const w = new Worker(new URL('./worker.ts', import.meta.url), {
+              workerData: { ...base, plans },
+              ...(job.workerHeapMb ? { resourceLimits: { maxOldGenerationSizeMb: job.workerHeapMb } } : {}),
+            })
             workers.push(w)
             w.once('message', (m: ThreadResult | { error: string }) =>
               'error' in m ? reject(new Error(m.error)) : resolve(m),
