@@ -3,9 +3,12 @@ import { join } from 'node:path'
 import { checkSecret } from '@draftroom/auth-tickets'
 import { resolveDataDir } from '@draftroom/dev-assets'
 import { BACKUP_DEFAULTS } from './backup/backup.ts'
+import type { BackupSigningSecrets } from './backup/signing.ts'
 import { parseEngine, type SyncEngine } from './engine-switch.ts'
 
 export interface SyncConfig {
+  /** NODE_ENV as checked by `parseNodeEnv` (M2): production, development or test, nothing else boots. */
+  nodeEnv: NodeEnv
   host: string
   port: number
   /** Absolute path of DRAFTROOM_DATA_DIR (rooms/ lives under it). */
@@ -33,10 +36,17 @@ export interface SyncConfig {
   touchIntervalMs?: number
   /**
    * DRAFTROOM_BACKUP_STORE (+ DRAFTROOM_BACKUP_R2_*, falling back to R2_*): where each local board
-   * backup is copied offsite (backup/offsite.ts), signed with a key derived from `internalSecret`
+   * backup is copied offsite (backup/offsite.ts), signed with the key derived from `backupSigningSecret`
    * (backup/signing.ts). Absent = off.
    */
   backupStore?: BackupStoreConfig
+  /**
+   * DRAFTROOM_BACKUP_SIGNING_SECRET (security audit M3): the sync service's own secret the offsite backups
+   * are signed with. null (development, tests; in production only while the store is off): the key derived
+   * from `internalSecret` signs, as before wave 4b. With it set, that derived key only verifies the
+   * backups written before.
+   */
+  backupSigningSecret?: string | null
   /**
    * DRAFTROOM_BACKUP_INTERVAL_MS: how often open boards that changed are backed up, and how often the
    * offsite copy retries what is still missing. Default 15 minutes.
@@ -91,6 +101,21 @@ type Env = Record<string, string | undefined>
 const read = (env: Env, name: string): string | undefined => {
   const v = env[name]?.trim()
   return v ? v : undefined
+}
+
+export type NodeEnv = 'production' | 'development' | 'test'
+/**
+ * NODE_ENV, checked (security audit M2). Every guard of the unsafe features (the `dev-only-` placeholder
+ * secrets, test hooks, an optional Origin check, loopback internal URLs) keys on the exact string
+ * `production`, so any other value (`staging` typed into the Render dashboard) turned them all off together,
+ * silently. Only Node's three conventions are accepted; unset or empty reads as development.
+ */
+export function parseNodeEnv(env: Env): NodeEnv {
+  const raw = read(env, 'NODE_ENV') ?? 'development'
+  if (raw === 'production' || raw === 'development' || raw === 'test') return raw
+  throw new Error(
+    `NODE_ENV must be production, development or test, not ${JSON.stringify(raw.slice(0, 32))}: every production guard keys on NODE_ENV=production, so an unknown value would turn them all off`,
+  )
 }
 
 function int(env: Env, name: string, fallback: number, min: number, max: number): number {
@@ -315,17 +340,49 @@ export function parseBackupStore(env: Env, dataDir: string): BackupStoreConfig {
 }
 
 /**
- * The secret offsite backups are signed with (backup/signing.ts), for the restore tools: the sync
- * server's own DRAFTROOM_INTERNAL_SECRET (a Render Shell of the sync service has it; `pnpm` scripts
- * read apps/sync/dev.env). Same rules as loadConfig; messages name the variable, never its value.
+ * The secrets offsite backups are signed and verified with (backup/signing.ts), for the restore tools, as
+ * the sync service's Shell has them (`pnpm` scripts read apps/sync/dev.env): DRAFTROOM_BACKUP_SIGNING_SECRET
+ * (the signing key; security audit M3) when it is set, and DRAFTROOM_INTERNAL_SECRET, always required,
+ * whose derived key verifies the backups written before the dedicated secret existed (and signs when no
+ * dedicated secret is set). Same rules as loadConfig; messages name the variable, never its value.
  */
-export function backupSigningSecret(env: Env): string {
-  const value = read(env, 'DRAFTROOM_INTERNAL_SECRET')
-  if (value === undefined)
+export function backupSigningSecrets(env: Env): BackupSigningSecrets {
+  const internal = read(env, 'DRAFTROOM_INTERNAL_SECRET')
+  if (internal === undefined)
     throw new Error(
       'DRAFTROOM_INTERNAL_SECRET is required to verify offsite backups (the sync server signs them with it)',
     )
-  return checkSecret('DRAFTROOM_INTERNAL_SECRET', value, env.NODE_ENV === 'production')
+  const production = parseNodeEnv(env) === 'production'
+  return {
+    backup: parseBackupSigningSecret(env, production, {
+      internal,
+      ticket: read(env, 'DRAFTROOM_TICKET_SECRET'),
+    }),
+    internal: checkSecret('DRAFTROOM_INTERNAL_SECRET', internal, production),
+  }
+}
+
+/**
+ * DRAFTROOM_BACKUP_SIGNING_SECRET (security audit M3): the sync service's own secret that signs the offsite
+ * backups, so that holding the shared DRAFTROOM_INTERNAL_SECRET (the api has it too) no longer forges a
+ * backup the restore tools accept. At least 32 characters, never a dev placeholder in production, and
+ * different from both other secrets (one leaked value must not open two doors). Absent = null: the key
+ * derived from DRAFTROOM_INTERNAL_SECRET signs, as every build before wave 4b did, which loadConfig
+ * allows outside production, or in production while offsite backups are off (nothing is signed then).
+ */
+export function parseBackupSigningSecret(
+  env: Env,
+  production: boolean,
+  others: { internal: string | undefined; ticket: string | undefined },
+): string | null {
+  const value = read(env, 'DRAFTROOM_BACKUP_SIGNING_SECRET')
+  if (value === undefined) return null
+  const checked = checkSecret('DRAFTROOM_BACKUP_SIGNING_SECRET', value, production)
+  if (checked === others.internal)
+    throw new Error('DRAFTROOM_BACKUP_SIGNING_SECRET and DRAFTROOM_INTERNAL_SECRET must differ')
+  if (checked === others.ticket)
+    throw new Error('DRAFTROOM_BACKUP_SIGNING_SECRET and DRAFTROOM_TICKET_SECRET must differ')
+  return checked
 }
 
 /** DRAFTROOM_TEST_HOOKS: `1` on, unset/`0` off; never with NODE_ENV=production (like DRAFTROOM_DEV_AUTH in the api). */
@@ -333,14 +390,15 @@ export function parseTestHooks(env: Env): boolean {
   const raw = read(env, 'DRAFTROOM_TEST_HOOKS')
   if (raw === undefined || raw === '0') return false
   if (raw !== '1') throw new Error('DRAFTROOM_TEST_HOOKS must be 1 or 0')
-  if (env.NODE_ENV === 'production')
+  if (parseNodeEnv(env) === 'production')
     throw new Error('DRAFTROOM_TEST_HOOKS is refused when NODE_ENV=production')
   return true
 }
 
 /** Parses and validates the sync server environment. Throws with an operator-facing message on bad input. */
 export function loadConfig(env: Env = process.env): SyncConfig {
-  const production = env.NODE_ENV === 'production'
+  const nodeEnv = parseNodeEnv(env)
+  const production = nodeEnv === 'production'
   // checkSecret messages name the variable, never its value.
   const ticketSecret = checkSecret(
     'DRAFTROOM_TICKET_SECRET',
@@ -356,7 +414,20 @@ export function loadConfig(env: Env = process.env): SyncConfig {
   if (ticketSecret === internalSecret)
     throw new Error('DRAFTROOM_TICKET_SECRET and DRAFTROOM_INTERNAL_SECRET must differ')
   const dataDir = resolveDataDir(env)
+  const backupStore = parseBackupStore(env, dataDir)
+  const backupSigningSecret = parseBackupSigningSecret(env, production, {
+    internal: internalSecret,
+    ticket: ticketSecret,
+  })
+  // In production an offsite store means signed backups, and a key the api can derive too is not a
+  // signature (security audit M3): the dedicated secret is set on the sync service before the build that
+  // reads it is deployed (docs/DEPLOY.md "Signed backups", the cut-over runbook's C8).
+  if (production && backupStore.kind !== 'off' && backupSigningSecret === null)
+    throw new Error(
+      'DRAFTROOM_BACKUP_SIGNING_SECRET is required when DRAFTROOM_BACKUP_STORE is on in production: offsite backups are signed with it (docs/DEPLOY.md "Signed backups")',
+    )
   return {
+    nodeEnv,
     host: read(env, 'HOST') ?? '127.0.0.1',
     port: int(env, 'PORT', 5858, 0, 65_535),
     dataDir,
@@ -368,7 +439,8 @@ export function loadConfig(env: Env = process.env): SyncConfig {
     accessRecheckMs: int(env, 'ACCESS_RECHECK_MS', 10_000, 50, 60 * 60_000),
     allowedOrigins: allowedOrigins(env, production),
     touchIntervalMs: int(env, 'TOUCH_INTERVAL_MS', 60_000, 0, 60 * 60_000),
-    backupStore: parseBackupStore(env, dataDir),
+    backupStore,
+    backupSigningSecret,
     backupIntervalMs: int(
       env,
       'DRAFTROOM_BACKUP_INTERVAL_MS',

@@ -27,9 +27,12 @@ import {
 } from './engine-switch.ts'
 import { createRequestHandler, type MaintenanceControl } from './http/router.ts'
 import { JoinQueue } from './join-queue.ts'
+import { errorSummary } from './log-error.ts'
 import { type BoardRole, canEditCanvas } from './permissions.ts'
 import { InboundFrames, presenceIdentity } from './presence.ts'
 import { BoardOpenRefused, NEW_CANVAS_CLOSE_REASON } from './r0/pre-open.ts'
+import { closeTerminal } from './room/closing.ts'
+import { registerMaintenanceState } from './room/migrate/maintenance.ts'
 import { BOARD_ID_RE, RoomRegistry } from './rooms.ts'
 import { createApiSessionEndClient, createSessionEndReporter, type SessionEndClient } from './session-end.ts'
 import { testHookRoutes } from './test-hooks.ts'
@@ -119,6 +122,13 @@ export function createSyncServer(config: SyncConfig, opts: SyncServerOptions = {
           },
         })
       : null
+  /**
+   * A terminal close before any room (a refused ticket, maintenance at the upgrade). On the Excalidraw
+   * engine the CLOSING notice goes first (CONTRACTS_REV 9, SMK-2: the edge delivered an empty close frame);
+   * a tldraw-protocol client gets the bare close it understands.
+   */
+  const refuseTerminal = (ws: WebSocket, reason: string) =>
+    elementRooms ? closeTerminal(ws, reason) : ws.close(TLSyncErrorCloseEventCode, reason)
   const directory: SessionDirectory = elementRooms ?? registry
   const backups = createBackupService({ config, backupsDir: registry.backupsDir(), log })
   // The Excalidraw build's local backups of its boards (2B, backup/element-backups.ts): the tldraw
@@ -174,7 +184,7 @@ export function createSyncServer(config: SyncConfig, opts: SyncServerOptions = {
         const room = registry.roomIfOpen(boardId)
         if (room?.getSessions().some((s) => s.sessionId === sid)) room.closeSession(sid, MAINTENANCE_REASON)
         // Not in the room (or the room did not close it): closed here. 0 CONNECTING, 1 OPEN.
-        if (ws.readyState < 2) ws.close(TLSyncErrorCloseEventCode, MAINTENANCE_REASON)
+        if (ws.readyState < 2) refuseTerminal(ws, MAINTENANCE_REASON)
         closedSockets++
       }
     }
@@ -182,11 +192,15 @@ export function createSyncServer(config: SyncConfig, opts: SyncServerOptions = {
     return { maintenance, closedSockets }
   }
   const maintenanceControl: MaintenanceControl = { on: () => maintenance, set: setMaintenance }
+  // convert-all is refused while maintenance is off unless confirmed (room/migrate/maintenance.ts; audit L6)
+  registerMaintenanceState(() => maintenance)
   const runAll = createRunAll({
     registry: elementBackups ?? registry,
     backups,
     log,
     maintenance: () => maintenance,
+    // a run while a recent held set exists is refused unless forced (run-all.ts; audit L6)
+    backupsDir: () => registry.backupsDir(),
   })
 
   const handle = createRequestHandler({
@@ -251,11 +265,11 @@ export function createSyncServer(config: SyncConfig, opts: SyncServerOptions = {
             : TLSyncErrorCloseEventReason.NOT_AUTHENTICATED
         log(`[connect] refused on board ${boardId}: ${verdict.reason}`) // never the ticket itself
         // 4099 = terminal on the client (an HTTP 401 before the upgrade would retry forever)
-        return ws.close(TLSyncErrorCloseEventCode, reason)
+        return refuseTerminal(ws, reason)
       }
       // Maintenance (bridge release R0): refused before any room is touched, on either engine; terminal
       // on the client. setMaintenance closes the element sockets too (they are in liveSockets).
-      if (maintenance) return ws.close(TLSyncErrorCloseEventCode, MAINTENANCE_REASON)
+      if (maintenance) return refuseTerminal(ws, MAINTENANCE_REASON)
       if (elementRooms) return connectElement(elementRooms, ws, boardId, clientSessionId, verdict.claims)
       const { uid, role, name, color, iat } = verdict.claims
       let room: ReturnType<RoomRegistry['getOrCreate']>
@@ -267,7 +281,7 @@ export function createSyncServer(config: SyncConfig, opts: SyncServerOptions = {
           log(`[connect] refused on board ${boardId}: made on the new canvas`)
           return ws.close(TLSyncErrorCloseEventCode, NEW_CANVAS_CLOSE_REASON)
         }
-        log('room open failed', boardId, e)
+        log('room open failed', boardId, errorSummary(e))
         return ws.close(TLSyncErrorCloseEventCode, TLSyncErrorCloseEventReason.UNKNOWN_ERROR)
       }
       const sid = `${uid}:${clientSessionId}` // namespace the client-chosen id by user
@@ -459,6 +473,7 @@ export function createSyncServer(config: SyncConfig, opts: SyncServerOptions = {
         joins.clear()
         registry.closeAll() // closes rooms (and their sessions' sockets), flushes the prune, closes DBs
         await elementRooms?.closeAll()
+        registerMaintenanceState(null)
         // Upgraded sockets are no longer HTTP connections, so closeAllConnections() does not see them.
         for (const ws of wss.clients) ws.terminate()
         liveSockets.clear()

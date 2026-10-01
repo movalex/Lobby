@@ -13,6 +13,8 @@
 // c. field-group merge per element: theirs changed a group when its base and theirs conversions differ;
 //    ours changed it when `gclock[g] > converted_from.lbClock`; theirs only → theirs; both → theirs wins,
 //    ours' value stays in `lb_prev_<cycle>_*` and the conflict is listed; every other group keeps ours;
+//    a record whose conversion changes TYPE under the same id (a geo kind changed on R0 between holders
+//    of different types, D4: cloud → ellipse, diamond → heart) takes theirs' type (`retype`);
 // d. a frame or group moved in theirs: its untouched descendants get (theirs − base) ADDED to ours' position;
 // e. records created in theirs are inserted with kept ids; records deleted in theirs delete their elements
 //    (delete wins); Excalidraw-era creations and deletions are kept;
@@ -239,6 +241,39 @@ function applyGroup(to: Record<string, unknown>, from: WireElement, g: string): 
     if (v === undefined) delete to[f]
     else to[f] = structuredClone(v)
   }
+}
+
+/** The generic element types: every field means the same on each (groups.ts COMMON), so a holder changes type in place. */
+const GENERIC_TYPES: ReadonlySet<string> = new Set(['rectangle', 'ellipse', 'diamond'])
+
+/**
+ * Theirs converted a record to another element type under the same id: a geo kind changed on R0 between
+ * holders of different types (D4; cloud → ellipse, diamond → heart). Between the generic types ours' row
+ * keeps every field and takes theirs' type (the caller applies the groups theirs changed, lists ours'
+ * conflicting writes, and the row's `type` column follows in the write). Between any other pair (none
+ * the converter makes today) the element becomes theirs' conversion whole, keeping ours' key and bound
+ * list (steps f and g own them) and ours' writes since the last cycle to the groups every type shares,
+ * where theirs left them alone.
+ */
+function retype(
+  w: Record<string, unknown>,
+  b: WireElement,
+  t: WireElement,
+  gc: Gclock,
+  lbClock: number,
+  theirsGroups: readonly string[],
+): void {
+  if (GENERIC_TYPES.has(b.type) && GENERIC_TYPES.has(t.type)) {
+    w.type = t.type
+    return
+  }
+  const ours = structuredClone(w) as unknown as WireElement
+  for (const k of Object.keys(w)) delete w[k]
+  Object.assign(w, structuredClone(t) as unknown as Record<string, unknown>)
+  w.index = ours.index
+  w.boundElements = ours.boundElements
+  const shared = ['pos', 'style', 'membership', 'meta', ...Object.keys(lobbyOf(ours)).map((k) => `c:${k}`)]
+  for (const g of shared) if (!theirsGroups.includes(g) && oursChanged(gc, g, lbClock)) applyGroup(w, ours, g)
 }
 
 /** Whether ours wrote group `g` after the last conversion or roll-forward. */
@@ -487,12 +522,18 @@ export function rollForwardBoardFile(job: RollForwardJob, metrics: ServerTextMet
         const t = tEls.get(id)
         if (b && t) {
           const groups = changedGroups(b, t)
-          if (!groups.length) continue
+          // A geo kind changed on R0 between holders of different types (D4; V3's wave-5 re-check): cloud →
+          // ellipse turns the polygon's transparent rectangle into a native ellipse, diamond → heart a native
+          // diamond into the polygon's rectangle. `type` is server-owned and in no group, so the merge kept
+          // ours' type and the board showed the old holder under the new style.
+          const typeChanged = b.type !== t.type
+          if (!groups.length && !typeChanged) continue
           const row = oursRows.get(id)
           if (!row) {
             written.set(id, structuredClone(t) as unknown as Record<string, unknown>)
             inserted.add(id)
             for (const g of groups) mark(id, g)
+            if (typeChanged) mark(id, 'shape')
             continue
           }
           if (row.deleted) {
@@ -501,11 +542,13 @@ export function rollForwardBoardFile(job: RollForwardJob, metrics: ServerTextMet
           }
           const w = work(id) as Record<string, unknown>
           const gc = gclocks.get(id) ?? {}
+          if (typeChanged) retype(w, b, t, gc, cf.lbClock, groups)
           for (const g of groups) {
             if (oursChanged(gc, g, cf.lbClock)) conflicts.push({ elementId: id, group: g })
             applyGroup(w, t, g)
             mark(id, g)
           }
+          if (typeChanged) mark(id, 'shape')
         } else if (t && !b) {
           // theirs made a new element for an existing record (a label typed into an empty note)
           if (isLive(id)) conflicts.push({ elementId: id, group: 'id-exists' })
@@ -1004,8 +1047,10 @@ export function rollForwardBoardFile(job: RollForwardJob, metrics: ServerTextMet
     db.exec('BEGIN IMMEDIATE')
     try {
       for (const t of LB_TABLES) db.exec(`CREATE TABLE ${lbPrevTable(cycle, t)} AS SELECT * FROM ${t}`)
+      // `type` too: the room's index cache reads the row's column (store.ts liveIndex), and a geo kind
+      // change on R0 can give the holder another type (retype)
       const upd = db.prepare(
-        'UPDATE lb_elements SET clock = ?, idx = ?, deleted = ?, deleted_clock = ?, deleted_at = ?, version = ?, gclock = ?, data = ? WHERE id = ?',
+        'UPDATE lb_elements SET clock = ?, idx = ?, deleted = ?, deleted_clock = ?, deleted_at = ?, type = ?, version = ?, gclock = ?, data = ? WHERE id = ?',
       )
       const ins = db.prepare(
         'INSERT INTO lb_elements (id, clock, idx, deleted, deleted_clock, deleted_at, type, version, gclock, data) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
@@ -1025,6 +1070,7 @@ export function rollForwardBoardFile(job: RollForwardJob, metrics: ServerTextMet
             isDel ? 1 : 0,
             isDel ? (prev.deleted ? prev.deleted_clock : newClock) : null,
             isDel ? (prev.deleted ? prev.deleted_at : at) : null,
+            String(w.type),
             Number(w.version),
             serializeGclock(gc),
             data,

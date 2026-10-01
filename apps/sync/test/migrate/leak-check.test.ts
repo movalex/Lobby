@@ -8,7 +8,13 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { afterAll, describe, expect, it } from 'vitest'
-import { countMatches, hasToken, needlesOf, normalizeText } from '../../../../e2e/spike-b/b8/leak-match.ts'
+import {
+  base64Decoded,
+  countMatches,
+  hasToken,
+  needlesOf,
+  normalizeText,
+} from '../../../../e2e/spike-b/b8/leak-match.ts'
 
 const REPO = resolve(import.meta.dirname, '../../../..')
 const LINE = 'Zephyr "Q9" roadmap review with Quillfeather & Brambleton partners'
@@ -48,6 +54,18 @@ describe('leak-match: the forms a board line takes in an output', () => {
     const m = countMatches('... Brainstorm your ideas here together ...', shared, () => true)
     expect(m.strings).toBe(0)
     expect(m.repoShared).toBeGreaterThan(0)
+  })
+
+  // V3's wave-5 re-check: a single line of 8 MB or more threw RangeError (the base64 regex's backtracking
+  // stack) and the file was counted unreadable. Failed on 747d41d.
+  it('a single line of 9 MB is searched, in every form, without throwing', () => {
+    const big = 'x'.repeat(9 * 1024 * 1024)
+    expect(() => base64Decoded(big)).not.toThrow()
+    expect(count(`${big} ${LINE}`)).toBeGreaterThan(0)
+    // the canary base64-encoded after 8 MB of base64 (one run, decoded as one)
+    const encoded = `${'QUJD'.repeat(2 * 1024 * 1024)}${Buffer.from(LINE).toString('base64')}`
+    expect(count(encoded)).toBeGreaterThan(0)
+    expect(count(`${big} nothing here`)).toBe(0)
   })
 })
 
@@ -133,6 +151,7 @@ describe('leak-check.ts: the forms and files V3 found unsearched', () => {
       apart: Number(/not gating: (\d+) in binary files/.exec(r.stdout)?.[1] ?? -1),
       scanned: Number(/files scanned: (\d+)/.exec(r.stdout)?.[1] ?? -1),
       chunked: Number(/(\d+) read in chunks/.exec(r.stdout)?.[1] ?? -1),
+      unreadable: Number(/unreadable: (\d+)/.exec(r.stdout)?.[1] ?? -1),
     }
   }
   const write = (root: string, name: string, file: string, body: string | Buffer) => {
@@ -169,6 +188,26 @@ describe('leak-check.ts: the forms and files V3 found unsearched', () => {
     const r = scan(write(dir, name.replace(/\W+/g, '-'), file, body))
     expect(r.matches).toBeGreaterThan(0)
     expect(r.status).toBe(1)
+  })
+
+  // V3's wave-5 re-check: a file with one line of 8 MB or more was counted unreadable (RangeError in the
+  // base64 regex) and failed the check without being searched. Failed on 747d41d (unreadable: 1, scanned 0).
+  it('a single line of 9 MB is read and searched, not counted unreadable', () => {
+    const r = scan(write(dir, 'longline', 'r.json', `${'x'.repeat(9 * 1024 * 1024)} ${LINE}`))
+    expect(r).toMatchObject({ status: 1, scanned: 1, unreadable: 0 })
+    expect(r.matches).toBeGreaterThan(0)
+    const b64 = scan(
+      write(
+        dir,
+        'longb64',
+        'b.log',
+        `${'QUJD'.repeat(2 * 1024 * 1024)}${Buffer.from(LINE).toString('base64')}`,
+      ),
+    )
+    expect(b64).toMatchObject({ status: 1, scanned: 1, unreadable: 0 })
+    expect(b64.matches).toBeGreaterThan(0)
+    const clean = scan(write(dir, 'longclean', 'c.log', 'y'.repeat(9 * 1024 * 1024)))
+    expect(clean).toMatchObject({ status: 0, matches: 0, scanned: 1, unreadable: 0 })
   })
 
   it('a file over the chunk size is read in chunks, never skipped', () => {

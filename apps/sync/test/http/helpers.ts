@@ -23,6 +23,7 @@ export interface TestServer {
 
 export function testConfig(dataDir: string, over: Partial<SyncConfig> = {}): SyncConfig {
   return {
+    nodeEnv: 'test',
     host: '127.0.0.1',
     port: 0,
     dataDir,

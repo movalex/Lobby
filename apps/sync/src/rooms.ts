@@ -11,6 +11,7 @@ import { type RestoreSummary, restoreDeleted } from './deleted/restore.ts'
 import { hookedSqlWrapper } from './deleted/sql.ts'
 import { type DeletedEntry, type DeletedLimits, DeletedStore, ensureDeletedTables } from './deleted/store.ts'
 import { createTextLease, type TextLease } from './lease.ts'
+import { logSafe } from './log-error.ts'
 import type { BoardRole } from './permissions.ts'
 import { runPreOpenChecks } from './r0/pre-open.ts'
 import { authorizeUserRecord } from './user-records.ts'
@@ -458,8 +459,9 @@ export class RoomRegistry {
         // A client push committed a document change (read-only discards and presence never do).
         onCommittedChanges: () => this.documentChanged(boardId),
         log: {
-          warn: (...a: unknown[]) => this.opts.log?.('[room warn]', boardId, ...a),
-          error: (...a: unknown[]) => this.opts.log?.('[room error]', boardId, ...a),
+          // sync-core forwards whatever threw: summarised (L5), never the error object
+          warn: (...a: unknown[]) => this.opts.log?.('[room warn]', boardId, ...a.map(logSafe)),
+          error: (...a: unknown[]) => this.opts.log?.('[room error]', boardId, ...a.map(logSafe)),
         },
         onSessionRemoved: (room, { meta, numSessionsRemaining, sessionId }) => {
           // The removed session is already gone from getSessions(); the user's other tabs keep the lease.

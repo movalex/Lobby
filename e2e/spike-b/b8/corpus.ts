@@ -16,17 +16,10 @@
 // Each board also gets two deletes through the client, so "Recently deleted" holds real captured rows.
 // These boards hold no real data; nothing here reads a staging copy.
 
-import {
-  copyFileSync,
-  existsSync,
-  mkdirSync,
-  readdirSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from 'node:fs'
+import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { parseArgs } from 'node:util'
+import { copyBoardFileSelfContained } from '../../../apps/sync/src/backup/checkpoint.ts'
 import type { ShapeRecord } from '../../../apps/sync/test/harness/records.ts'
 import { NodeSyncClient } from '../../../apps/sync/test/harness/sync-client.ts'
 import type { TLRecord } from '../../../apps/sync/test/migrate/tl-records.ts'
@@ -235,8 +228,7 @@ export async function makeCorpus(outDir: string, only?: readonly string[]): Prom
   }
   for (const b of made) {
     const from = join(work, 'rooms', b.file)
-    copyFileSync(from, join(outDir, b.file))
-    if (existsSync(`${from}-wal`)) copyFileSync(`${from}-wal`, join(outDir, `${b.file}-wal`))
+    copyBoardFileSelfContained(from, join(outDir, b.file)) // the WAL folded into the copy
   }
   writeFileSync(join(outDir, 'corpus.json'), `${JSON.stringify(made, null, 1)}\n`)
   rmSync(work, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })

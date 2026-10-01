@@ -152,19 +152,51 @@ describe('SEAM-04: name-only guests are limited like viewers under "editors", wh
     sync.setBoard(board, records)
     const workshop = await link('editor')
     const eddie = await joinAsGuest(workshop, 'Eddie')
-    const val = await joinAsGuest(await link('viewer'), 'Val')
-    expect((await accountGuest.req('POST', `/api/invitations/${workshop}/accept`)).statusCode).toBe(200)
     const role = await eddie.req('GET', `/api/boards/${board}`)
     expect((role.json() as { role: string }).role).toBe('editor')
 
     const state = async (c: { req(method: 'GET', url: string): Promise<LightMyRequestResponse> }) =>
       ExportPolicyState.parse((await c.req('GET', `/api/boards/${board}/export-policy`)).json())
+    const limited = async (who: string, c: Guest, policy: ExportPolicy, policySet: boolean) => {
+      expect(await state(c), who).toEqual({ exportPolicy: policy, canExport: false, policySet })
+      for (const method of ['GET', 'HEAD'] as const) {
+        const res = await c.req(method, originalUrl(zip))
+        expect(res.statusCode, `${who} ${method} original`).toBe(403)
+        if (method === 'GET') expect(code(res), who).toBe(EXPORT_DISABLED_CODE)
+      }
+      const archive = await c.req('GET', `/api/boards/${board}/export`)
+      expect(archive.statusCode, `${who} archive`).toBe(403)
+      expect(code(archive)).toBe(EXPORT_DISABLED_CODE)
+      // What the board renders from an original keeps playing for them, as for viewers.
+      const played = await c.req('GET', originalUrl(video), undefined, { 'sec-fetch-dest': 'video' })
+      expect(played.statusCode, `${who} <video>`).toBe(200)
+    }
 
-    // The viewer link turned exporting off (DANA2-01); the owner turns it back on: nobody is limited.
+    // Audit L3: a workshop link leaves the default policy alone, and the default never lets a name-only
+    // guest export or download originals (the owner never allowed it; the owner's own state is unchanged).
+    expect(await state(alice)).toEqual({ exportPolicy: 'everyone', canExport: true, policySet: false })
+    await limited('guest editor, default policy', eddie, 'everyone', false)
+
+    const val = await joinAsGuest(await link('viewer'), 'Val')
+    expect((await accountGuest.req('POST', `/api/invitations/${workshop}/accept`)).statusCode).toBe(200)
+
+    // The viewer link turned exporting off (DANA2-01); the owner turns it back on for people with an
+    // account ('everyone'): name-only guests stay limited until the owner includes them explicitly.
     expect(await state(val)).toMatchObject({ exportPolicy: 'editors', canExport: false })
     expect((await setPolicy('everyone')).statusCode).toBe(200)
+    await limited('guest editor', eddie, 'everyone', true)
+    await limited('guest viewer', val, 'everyone', true)
+    for (const c of [accountGuest, editor, viewer])
+      expect((await state(c)).canExport, c.me.user.name).toBe(true)
+
+    // "Everyone including guests": the owner's explicit choice lets them export and download.
+    expect((await setPolicy('everyone-including-guests')).statusCode).toBe(200)
     for (const c of [eddie, val]) {
-      expect(await state(c)).toEqual({ exportPolicy: 'everyone', canExport: true, policySet: true })
+      expect(await state(c)).toEqual({
+        exportPolicy: 'everyone-including-guests',
+        canExport: true,
+        policySet: true,
+      })
       expect((await c.req('GET', originalUrl(zip))).statusCode).toBe(200)
       expect((await c.req('GET', `/api/boards/${board}/export`)).statusCode).toBe(200)
     }
@@ -366,15 +398,29 @@ describe('DANA2-01: a client link turns exporting off unless the board owner cho
     expect(seen).toEqual([{ exportPolicy: 'editors' }])
   })
 
-  it("an owner who chose 'everyone' keeps it: the client downloads and exports", async () => {
+  it("an owner who chose 'everyone' keeps it (no event), but a name-only client exports only under 'everyone-including-guests'", async () => {
     const zip = await upload('key-art.zip', 'application/zip', Buffer.from('PK\x03\x04art'))
     expect((await setPolicy('everyone')).statusCode).toBe(200)
     const seen = policyEvents()
     const mara = await joinAsGuest(await link('commenter'), 'Mara (Halden)')
-    expect(await state(mara)).toEqual({ exportPolicy: 'everyone', canExport: true, policySet: true })
+    // The link did not change the owner's choice; the choice does not include name-only guests (L3).
+    expect(await state(alice)).toEqual({ exportPolicy: 'everyone', canExport: true, policySet: true })
+    expect(await state(mara)).toEqual({ exportPolicy: 'everyone', canExport: false, policySet: true })
+    const refused = await mara.req('GET', originalUrl(zip))
+    expect(refused.statusCode).toBe(403)
+    expect(code(refused)).toBe(EXPORT_DISABLED_CODE)
+    expect((await mara.req('GET', `/api/boards/${board}/export`)).statusCode).toBe(403)
+    expect(seen).toEqual([])
+    // The owner includes guests: the client downloads and exports.
+    expect((await setPolicy('everyone-including-guests')).statusCode).toBe(200)
+    expect(await state(mara)).toEqual({
+      exportPolicy: 'everyone-including-guests',
+      canExport: true,
+      policySet: true,
+    })
     expect((await mara.req('GET', originalUrl(zip))).statusCode).toBe(200)
     expect((await mara.req('GET', `/api/boards/${board}/export`)).statusCode).toBe(200)
-    expect(seen).toEqual([])
+    expect(seen).toEqual([{ exportPolicy: 'everyone-including-guests' }])
   })
 
   it("an owner who chose 'editors' keeps it, and a workshop (edit) link leaves the default alone", async () => {

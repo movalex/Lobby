@@ -16,9 +16,14 @@
 // A1's answer is the same check the `/files/…` routes use to serve a version to a board
 // (files/serve.ts loadBoardVersion): a version is `ok` for a board when it was uploaded to that board,
 // or when the board holds a history link to it inside its own workspace (board_asset_links, as
-// files-auth.ts isAssetLinked checks). Any other existing version is `foreign` (another workspace, or a
-// board of the same workspace that holds no link: the board could not show its bytes either). An id
-// with no version row is `missing`. Every asked id appears in exactly one list, once.
+// files-auth.ts isAssetLinked checks). Every other asked id is `missing`: an id with no version row,
+// and an existing version the board cannot show (another workspace, or a board of the same workspace
+// that holds no link), which `/files` answers with the same 404 so that access to one board can never
+// probe for versions elsewhere (security audit L4: the answer was once split into `foreign` and
+// `missing`; the contract keeps the `foreign` list for its shape, and it is always empty from this
+// build on; sync treats both alike, as `INVALID`). Every asked id appears in exactly one list, once.
+// Like `/files`, A1 answers only for a board that can be opened: a trashed board is 404
+// `board-not-found` (sync fails closed: the op gets `UNAVAILABLE`), an archived one still answers.
 
 import { checkInternalSecret, INTERNAL_SECRET_HEADER } from '@draftroom/auth-tickets'
 import {
@@ -30,6 +35,7 @@ import {
   type WorkshopStateBody,
 } from '@draftroom/contracts'
 import type { Queryable } from '@draftroom/db'
+import { type BoardStatus, can } from '@draftroom/permissions'
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { isBoardId } from '../access.ts'
 import type { AppContext, Params } from '../context.ts'
@@ -62,15 +68,21 @@ function rawParams(req: FastifyRequest, name: string): string[] {
 interface BoardRef {
   id: string
   workspace_id: string
+  status: BoardStatus
 }
 
-/** The board (any status: sync asks for boards whose rooms are open), or 404 `board-not-found`. */
-async function loadBoard(db: Queryable, bid: string): Promise<BoardRef> {
+/**
+ * The board, or 404 `board-not-found`. Any status by default (sync asks for boards whose rooms are
+ * open); with `openable`, only a board someone could still open (the `/files` routes' own status check:
+ * a trashed board is nobody's to view until it is restored, so its files are a 404 for everyone).
+ */
+async function loadBoard(db: Queryable, bid: string, opts: { openable?: boolean } = {}): Promise<BoardRef> {
   if (!isBoardId(bid)) throw fail('board-not-found')
   const row = await guarded(() =>
-    db.maybeOne<BoardRef>('SELECT id, workspace_id FROM boards WHERE id = $1', [bid]),
+    db.maybeOne<BoardRef>('SELECT id, workspace_id, status FROM boards WHERE id = $1', [bid]),
   )
   if (!row) throw fail('board-not-found')
+  if (opts.openable && !can('viewer', 'view', row.status)) throw fail('board-not-found')
   return row
 }
 
@@ -96,7 +108,7 @@ interface VersionRefRow {
   probe: unknown
 }
 
-/** A1: the versions `ids` of `board`, split into ok / foreign / missing (see the header). */
+/** A1: the versions `ids` of `board`, split into ok / missing (`foreign` stays empty; see the header). */
 export async function fileRefsFor(
   db: Queryable,
   board: BoardRef,
@@ -126,15 +138,13 @@ export async function fileRefsFor(
   const out: FileRefsResponse = { ok: [], foreign: [], missing: [] }
   for (const id of unique) {
     const r = byId.get(id)
-    if (!r) {
-      out.missing.push(id)
-      continue
-    }
+    // No row, or a version this board cannot show: the same `missing` (audit L4, no existence oracle).
     const servable =
+      r !== undefined &&
       r.workspace_id === board.workspace_id &&
       (r.board_id === board.id || linked.has(`${r.asset_id}/${r.id}`))
     if (!servable) {
-      out.foreign.push(id)
+      out.missing.push(id)
       continue
     }
     const pages = r.kind === 'pdf' ? probeFacts(r.probe).pageCount : null
@@ -160,7 +170,7 @@ export function registerEngineInternalRoutes(app: FastifyInstance, ctx: AppConte
     const ids = raw.length === 1 ? parseFileRefsIds(raw[0]) : null
     if (!ids) throw fail('bad-request', 'ids: 1-100 comma-separated version ids (ver_…).')
     const { bid = '' } = req.params as Params
-    const board = await loadBoard(db, bid)
+    const board = await loadBoard(db, bid, { openable: true })
     return guarded(() => fileRefsFor(db, board, ids))
   })
 

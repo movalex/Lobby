@@ -26,10 +26,11 @@
 // hashes only; nothing is printed but counts.
 
 import { createHash } from 'node:crypto'
-import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { basename, dirname, join, relative, resolve } from 'node:path'
 import type { DatabaseSync } from 'node:sqlite'
 import { parseArgs } from 'node:util'
+import { copyBoardFileSelfContained } from '../../../apps/sync/src/backup/checkpoint.ts'
 import type { ConvertReport } from '../../../apps/sync/src/room/migrate/convert-board.ts'
 import { lbDigests, tableDigest } from '../../../apps/sync/src/room/migrate/digest.ts'
 import type { RollForwardReport } from '../../../apps/sync/src/room/migrate/rollforward.ts'
@@ -494,8 +495,9 @@ export async function runDrill(opts: {
   const rooms = join(dataDir, 'rooms')
   mkdirSync(rooms, { recursive: true })
   const path = join(rooms, `board-${boardId}.sqlite`)
-  cpSync(opts.board, path)
-  if (existsSync(`${opts.board}-wal`)) cpSync(`${opts.board}-wal`, `${path}-wal`)
+  // the WAL and the shm come along and the COPY is checkpointed (the input file is only read): a board whose
+  // sync was killed before a checkpoint keeps its last writes, or its whole lb_* schema, in the WAL
+  copyBoardFileSelfContained(opts.board, path)
   const reportDir = join(dataDir, 'migration')
   const svc = new MigrationService({ roomsDir: rooms, reportDir, verifyLocalMode: true })
   const cycles: DrillReport['cycles'][number][] = []

@@ -29,12 +29,17 @@ import { exportAllowedWith, exportCertainWith, exportPolicyApi, notifyExportOff 
 // The engine-neutral rules live in ./export-rules.ts (wave 3e: the Excalidraw page's store uses them too).
 export {
   clientExportAllowed,
+  clientGuestsLimited,
   clientLinkWillLimit,
   EXPORT_OFF_TEXT,
   exportAllowedWith,
   exportPolicyApi,
   exportPolicySentence,
+  guestsMayExport,
   notifyExportOff,
+  policyWithGuests,
+  policyWithViewers,
+  viewersMayExport,
 } from './export-rules.ts'
 
 export interface BoardExportState {

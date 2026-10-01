@@ -10,21 +10,33 @@ import type { BoardRole } from '../../lib/permissions.ts'
 import {
   boardExportState,
   clientExportAllowed,
+  clientGuestsLimited,
   clientLinkWillLimit,
   EXPORT_OFF_TEXT,
   exportAllowedWith,
+  guestsMayExport,
+  policyWithGuests,
+  policyWithViewers,
   refreshExportPolicy,
   saveExportPolicy,
+  viewersMayExport,
 } from './export-policy.ts'
 
 export const EXPORT_POLICY_LABEL = 'Viewers and commenters can export, copy and download files'
 export const EXPORT_POLICY_HELP =
-  'When this is off, viewers, commenters and guests who joined with just a name (even on a workshop link) can’t export the board, copy from it, duplicate it or download its files. Previews keep showing. This is not a data-protection feature: anyone who can see the board can still take screenshots.'
+  'When this is off, viewers and commenters can’t export the board, copy from it, duplicate it or download its files. Guests who joined with just a name (even on a workshop link) can’t do any of that unless you also allow it for guests below. Previews keep showing. This is not a data-protection feature: anyone who can see the board can still take screenshots.'
+/** Audit L3: name-only guests export only when a board owner turns this on explicitly. */
+export const EXPORT_POLICY_GUESTS_LABEL = 'Guests who joined with just a name can export and download too'
+export const EXPORT_POLICY_GUESTS_HELP =
+  'Off until you turn it on. Guests are anonymous: anyone with a guest link joins by name alone.'
 
 export const EXPORT_POLICY_DEFAULT_NOTE =
   'Creating a client link turns this off, so clients can’t download originals until you turn it back on.'
 /** DANA2-01: the client card's line, and its one word. */
 export const CLIENT_EXPORT_LINE = 'Clients can download files and export:'
+/** Audit L3: the client card's second line while 'everyone' is stored (clients with an account only). */
+export const CLIENT_GUESTS_LIMITED_NOTE =
+  'Clients who join with just a name can’t download or export until you allow it for guests under Export and download.'
 /** Where the client card's "Change" goes: the Export and download checkbox below. */
 const TOGGLE_SELECTOR = '[data-testid="share-export-policy-toggle"]'
 
@@ -40,30 +52,42 @@ export function ClientExportLine({ boardId }: { boardId: string }) {
     () => clientExportAllowed(state.policy.get(), state.stored.get()),
     [state],
   )
+  const guestsLimited = useValue(
+    'dr-share-client-export-guests',
+    () => clientGuestsLimited(state.policy.get(), state.stored.get()),
+    [state],
+  )
   if (allowed === null) return null
   return (
-    <p
-      className="dr-share__hint dr-sharing__client-export"
-      data-testid="share-client-export"
-      data-allowed={allowed}
-    >
-      {CLIENT_EXPORT_LINE} <strong>{allowed ? 'On' : 'Off'}</strong>{' '}
-      <button
-        type="button"
-        className="dr-linkbtn"
-        data-testid="share-client-export-change"
-        aria-label="Change whether clients can download files and export"
-        onClick={(e) => {
-          const root = e.currentTarget.closest('[role="dialog"]') ?? document
-          const toggle = root.querySelector<HTMLInputElement>(TOGGLE_SELECTOR)
-          if (!toggle) return
-          toggle.scrollIntoView({ block: 'center', behavior: 'smooth' })
-          toggle.focus({ preventScroll: true })
-        }}
+    <>
+      <p
+        className="dr-share__hint dr-sharing__client-export"
+        data-testid="share-client-export"
+        data-allowed={allowed}
       >
-        Change
-      </button>
-    </p>
+        {CLIENT_EXPORT_LINE} <strong>{allowed ? 'On' : 'Off'}</strong>{' '}
+        <button
+          type="button"
+          className="dr-linkbtn"
+          data-testid="share-client-export-change"
+          aria-label="Change whether clients can download files and export"
+          onClick={(e) => {
+            const root = e.currentTarget.closest('[role="dialog"]') ?? document
+            const toggle = root.querySelector<HTMLInputElement>(TOGGLE_SELECTOR)
+            if (!toggle) return
+            toggle.scrollIntoView({ block: 'center', behavior: 'smooth' })
+            toggle.focus({ preventScroll: true })
+          }}
+        >
+          Change
+        </button>
+      </p>
+      {guestsLimited && (
+        <p className="dr-share__hint" data-testid="share-client-export-guests">
+          {CLIENT_GUESTS_LIMITED_NOTE}
+        </p>
+      )}
+    </>
   )
 }
 
@@ -118,6 +142,8 @@ export function ExportPolicySection({
   const pending = saving !== null
   const shown = saving ?? policy
   const known = policy !== null
+  const viewersOn = shown === null || viewersMayExport(shown)
+  const guestsOn = shown !== null && guestsMayExport(shown)
   const limitedHere = known && !exportAllowedWith(role, policy, guest)
   // DANA2-01: nobody chose yet, so the first client link will turn this off.
   const linkWillLimit = clientLinkWillLimit({ canManage, canCreateLinks, policy, stored })
@@ -141,16 +167,32 @@ export function ExportPolicySection({
           id={id}
           type="checkbox"
           data-testid="share-export-policy-toggle"
-          checked={shown !== 'editors'}
+          checked={viewersOn}
           disabled={!canManage || !known || pending}
           aria-describedby={`${id}-help`}
           aria-busy={pending || undefined}
-          onChange={(e) => void change(e.target.checked ? 'everyone' : 'editors')}
+          onChange={(e) => void change(policyWithViewers(shown ?? 'everyone', e.target.checked))}
         />
         <span>{EXPORT_POLICY_LABEL}</span>
       </label>
       <p id={`${id}-help`} className="dr-share__hint dr-sharing__policy-help">
         {EXPORT_POLICY_HELP}
+      </p>
+      <label className="dr-sharing__policy dr-sharing__policy-guests" htmlFor={`${id}-guests`}>
+        <input
+          id={`${id}-guests`}
+          type="checkbox"
+          data-testid="share-export-policy-guests"
+          checked={guestsOn}
+          disabled={!canManage || !known || pending || !viewersOn}
+          aria-describedby={`${id}-guests-help`}
+          aria-busy={pending || undefined}
+          onChange={(e) => void change(policyWithGuests(e.target.checked))}
+        />
+        <span>{EXPORT_POLICY_GUESTS_LABEL}</span>
+      </label>
+      <p id={`${id}-guests-help`} className="dr-share__hint dr-sharing__policy-help">
+        {EXPORT_POLICY_GUESTS_HELP}
       </p>
       {linkWillLimit && (
         <p className="dr-share__hint" data-testid="share-export-policy-default">

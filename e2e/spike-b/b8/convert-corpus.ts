@@ -33,6 +33,7 @@ import {
 import { dirname, join, relative, resolve } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { parseArgs } from 'node:util'
+import { copyBoardFileSelfContained } from '../../../apps/sync/src/backup/checkpoint.ts'
 import type { ConvertReport } from '../../../apps/sync/src/room/migrate/convert-board.ts'
 import { drDeletedDigests, recordsSha256, tableDigest } from '../../../apps/sync/src/room/migrate/digest.ts'
 import { MigrationService } from '../../../apps/sync/src/room/migrate/service.ts'
@@ -96,9 +97,7 @@ export async function convertCorpus(opts: {
     .filter((f) => /^board-.+\.sqlite$/.test(f))
     .sort()
   for (const f of files) {
-    cpSync(join(opts.corpus, f), join(rooms, f))
-    for (const ext of ['-wal'])
-      if (existsSync(join(opts.corpus, f + ext))) cpSync(join(opts.corpus, f + ext), join(rooms, f + ext))
+    copyBoardFileSelfContained(join(opts.corpus, f), join(rooms, f)) // the WAL folded into the copy
   }
   // the restored backup objects are read from copies too
   let backups: string | null = null

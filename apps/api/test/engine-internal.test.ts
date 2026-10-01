@@ -105,7 +105,7 @@ describe('A1 GET /internal/boards/:bid/file-refs', () => {
     expectError(await get(`/internal/boards/nope/file-refs?ids=x`, null), 401, 'bad-secret')
   })
 
-  it('answers ok / foreign / missing, each asked id exactly once, in the contract shape', async () => {
+  it('answers ok / missing, each asked id exactly once, in the contract shape; `foreign` stays empty (audit L4)', async () => {
     const own = await addVersion(boardId, { name: 'photo.png' })
     const pdf = await addVersion(boardId, { kind: 'pdf', pages: 12, name: 'deck.pdf' })
     // Another board of the same workspace: not servable here without a history link.
@@ -135,8 +135,10 @@ describe('A1 GET /internal/boards/:bid/file-refs', () => {
     expect(body.ok.map((r) => r.versionId).sort()).toEqual(
       [own.versionId, pdf.versionId, linked.versionId].sort(),
     )
-    expect(body.foreign.sort()).toEqual([unlinked.versionId, foreign.versionId].sort())
-    expect(body.missing).toEqual([missing])
+    // A version the board cannot show is not told apart from one that does not exist: an existing
+    // version of another board or workspace is `missing` to this board, and `foreign` is always empty.
+    expect(body.foreign).toEqual([])
+    expect(body.missing.sort()).toEqual([unlinked.versionId, foreign.versionId, missing].sort())
     const byId = new Map(body.ok.map((r) => [r.versionId, r]))
     expect(byId.get(own.versionId)).toEqual({
       versionId: own.versionId,
@@ -175,12 +177,17 @@ describe('A1 GET /internal/boards/:bid/file-refs', () => {
     expectError(await get(fileRefsPath('NOT A BOARD', [v.versionId])), 404, 'board-not-found')
   })
 
-  it('still answers for a trashed board (sync asks for boards whose rooms are open)', async () => {
+  it('a trashed board is 404 board-not-found, as the /files routes answer (audit L4); an archived one still answers', async () => {
     const v = await addVersion(boardId)
+    await api.db.query("UPDATE boards SET status = 'archived' WHERE id = $1", [boardId])
+    const archived = await get(fileRefsPath(boardId, [v.versionId]))
+    expect(archived.statusCode, archived.body).toBe(200)
+    expect(FileRefsResponse.parse(archived.json()).ok.map((r) => r.versionId)).toEqual([v.versionId])
     await api.db.query("UPDATE boards SET status = 'trashed', trashed_at = now() WHERE id = $1", [boardId])
-    const res = await get(fileRefsPath(boardId, [v.versionId]))
-    expect(res.statusCode, res.body).toBe(200)
-    expect(FileRefsResponse.parse(res.json()).ok.map((r) => r.versionId)).toEqual([v.versionId])
+    expectError(await get(fileRefsPath(boardId, [v.versionId])), 404, 'board-not-found')
+    // The other engine route is about the room's own state and still answers for the open room.
+    const state = await get(workshopStatePath(boardId))
+    expect(state.statusCode, state.body).toBe(200)
   })
 
   it('does not leak one board’s versions to another board of another workspace, whatever the query order', async () => {
@@ -188,7 +195,7 @@ describe('A1 GET /internal/boards/:bid/file-refs', () => {
     const own = await addVersion(boardId)
     const res = await get(fileRefsPath(elsewhere, [own.versionId]))
     expect(res.statusCode, res.body).toBe(200)
-    expect(FileRefsResponse.parse(res.json())).toEqual({ ok: [], foreign: [own.versionId], missing: [] })
+    expect(FileRefsResponse.parse(res.json())).toEqual({ ok: [], foreign: [], missing: [own.versionId] })
   })
 
   it('503 unavailable when the database fails (sync fails closed on it)', async () => {

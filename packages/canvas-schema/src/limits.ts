@@ -212,10 +212,36 @@ function signedQuery(query: string): boolean {
   return SIGNED_URL.test(cur) || decodeAsciiEscapes(cur) !== cur
 }
 
+/** A base no link ever names: a relative link resolved against it must stay on it. */
+const RELATIVE_BASE = 'http://lobby-relative.invalid'
+
 /**
- * Whether `link` may be stored (§3.5 "Links"): `http:`/`https:` URLs, `mailto:`, or a Lobby-relative
- * path (`/…`, never `//…`); at most 2 KiB; never a signed or expiring URL. Guests may only store
- * Lobby-relative links (§3.5 "Guests"; `guest: true`).
+ * A Lobby-relative link (`/…`) as a browser or a path normaliser would read it (XSS-F3, CONTRACTS_REV 9):
+ * no backslash anywhere (a special-scheme URL parser treats `\` as `/`), and the normalised path is not
+ * protocol-relative. `/..//evil.com` and `/a\..\..//evil.com` both normalise to `//evil.com`, which a
+ * consumer that normalises first (`safeReturnTo`, a router) would take to another host.
+ */
+function relativeLinkAllowed(link: string): boolean {
+  if (link.startsWith('//') || link.includes('\\')) return false
+  let url: URL
+  try {
+    url = new URL(link, RELATIVE_BASE)
+  } catch {
+    return false
+  }
+  if (url.origin !== RELATIVE_BASE || url.pathname.startsWith('//')) return false
+  return !signedQuery(link)
+}
+
+/** An absolute link must spell its authority: `https:evil.com` and `https:/evil.com` parse as `https://evil.com/`. */
+const HTTP_AUTHORITY = /^https?:\/\//i
+
+/**
+ * Whether `link` may be stored (§3.5 "Links"): `http://`/`https://` URLs (the authority spelled out),
+ * `mailto:`, or a Lobby-relative path (`/…`, never `//…`, never one that normalises to `//…`, no `\`);
+ * at most 2 KiB; never a signed or expiring URL. Guests may only store Lobby-relative links (§3.5
+ * "Guests"; `guest: true`). One function for the server (merge, the element schema), the web (link
+ * cards) and the converter, so every end reads a link the same way.
  */
 export function isAllowedLink(link: string, opts: { guest?: boolean } = {}): boolean {
   if (utf8Length(link) > MAX_LINK_BYTES) return false
@@ -223,7 +249,7 @@ export function isAllowedLink(link: string, opts: { guest?: boolean } = {}): boo
     const c = link.charCodeAt(i)
     if (c < 0x20 || c === 0x7f) return false
   }
-  if (link.startsWith('/') && !link.startsWith('//') && !link.startsWith('/\\')) return !signedQuery(link)
+  if (link.startsWith('/')) return relativeLinkAllowed(link)
   if (opts.guest) return false
   let url: URL
   try {
@@ -233,6 +259,7 @@ export function isAllowedLink(link: string, opts: { guest?: boolean } = {}): boo
   }
   if (url.protocol === 'mailto:') return true
   if (url.protocol !== 'http:' && url.protocol !== 'https:') return false
+  if (!HTTP_AUTHORITY.test(link)) return false
   if (url.username || url.password) return false
   return !signedQuery(url.search)
 }

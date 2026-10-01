@@ -3,6 +3,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { TLSchema } from '@tldraw/tlschema'
 import type { AccessMonitor } from '../access.ts'
+import { errorSummary } from '../log-error.ts'
 import { BOARD_ID_RE, type RoomRegistry } from '../rooms.ts'
 import { emptyBoardSnapshot, prepareSeedSnapshot } from '../snapshot.ts'
 import { readJson } from './body.ts'
@@ -54,7 +55,7 @@ export async function handleAccessChanged(req: IncomingMessage, res: ServerRespo
   // Answer at once: the re-check calls back into the API, which is waiting on this response.
   void deps.monitor
     .accessChanged(boardId, userId)
-    .catch((e: unknown) => deps.log('[access] re-check error', e))
+    .catch((e: unknown) => deps.log('[access] re-check error', errorSummary(e)))
   res.writeHead(204, { 'Cache-Control': 'no-store' }).end()
 }
 

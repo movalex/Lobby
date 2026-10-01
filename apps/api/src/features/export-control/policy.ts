@@ -3,9 +3,11 @@
 // (features/history). One place decides, so the routes cannot drift apart.
 //
 // Rule (packages/contracts exportAllowedFor): with policy 'editors', a caller whose board role is below
-// editor (viewers, commenters, guests on review links) is refused, and so is a name-only guest whatever
-// their role (a workshop link makes them editors: SEAM-04). Owners and editors with an account never
-// are, and neither is anyone on a board with policy 'everyone' (the default: no row).
+// editor (viewers, commenters, guests on review links) is refused. A name-only guest is refused under
+// 'editors' AND under 'everyone' (the default: no row), whatever their role (a workshop link makes them
+// editors: SEAM-04; audit L3): only 'everyone-including-guests', a board owner's explicit choice, lets
+// them export and download originals. Owners and editors with an account never are refused, and neither
+// is anyone with an account on a board with policy 'everyone'.
 
 import {
   CANVAS_ORIGINAL_LIMITS,
@@ -14,6 +16,7 @@ import {
   EXPORT_DISABLED_MESSAGE,
   type ExportPolicy,
   exportAllowedFor,
+  policyIncludesGuests,
 } from '@draftroom/contracts'
 import type { Queryable } from '@draftroom/db'
 import type { AssetKind, AssetStatus } from '@draftroom/dev-assets'
@@ -69,8 +72,9 @@ export async function limitExportForClientLink(
 
 /**
  * Whether `userId` (the caller behind `access`) may export, copy and download on that board under
- * `policy`. A name-only guest is looked up only when it can matter: policy 'editors', a role that
- * would otherwise be allowed, and the workspace role every name-only guest has ('guest').
+ * `policy`. A name-only guest is looked up only when it can matter: a policy that does not include
+ * guests, a role that would otherwise be allowed, and the workspace role every name-only guest has
+ * ('guest').
  */
 export async function exportAllowedForCaller(
   q: Queryable,
@@ -79,7 +83,7 @@ export async function exportAllowedForCaller(
   policy: ExportPolicy,
 ): Promise<boolean> {
   if (!exportAllowedFor(access.role, policy)) return false
-  if (policy === 'everyone' || access.workspaceRole !== 'guest') return true
+  if (policyIncludesGuests(policy) || access.workspaceRole !== 'guest') return true
   return exportAllowedFor(access.role, policy, { nameOnlyGuest: (await userKind(q, userId)) === 'guest' })
 }
 

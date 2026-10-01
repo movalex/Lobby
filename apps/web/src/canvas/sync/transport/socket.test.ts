@@ -151,3 +151,85 @@ describe('the board socket heartbeat', () => {
     t.close()
   })
 })
+
+// Wave 4b, SMK-2 (2A with 2C's file): through the Render edge a refused socket got an EMPTY close frame (no
+// 4099, no reason), so the page had no reason to show and the transport would have reconnected. The room now
+// announces every terminal close in band (`notice` CLOSING, CONTRACTS_REV 9); the close that follows it is
+// terminal with that reason, whatever the frame says.
+describe('a CLOSING notice makes the close that follows terminal (SMK-2, CONTRACTS_REV 9)', () => {
+  const closing = (detail: string) => ({ type: 'notice', code: 'CLOSING', detail })
+
+  it('an empty close frame after the notice is reported as 4099 with the announced reason, and no reconnect follows', async () => {
+    const { clock, closes, t } = start(0)
+    await flush()
+    const s1 = FakeSocket.all[0] as FakeSocket
+    s1.open()
+    s1.receive(closing('MAINTENANCE'))
+    s1.onclose?.({ code: 1005, reason: '' }) // what the edge delivered
+    await flush()
+    expect(closes.at(-1)).toEqual({ code: 4099, reason: 'MAINTENANCE' })
+    expect(t.state).toBe('closed')
+    clock.advance(5_000)
+    await flush()
+    expect(FakeSocket.all.length).toBe(1) // terminal: nothing reopened
+    expect(t.attempts).toBe(1)
+  })
+
+  it('a 4099 close that kept its reason is reported as is; one that lost only the reason gets the announced one', async () => {
+    const a = start(0)
+    await flush()
+    const s1 = FakeSocket.all[0] as FakeSocket
+    s1.open()
+    s1.receive(closing('NOT_AUTHENTICATED'))
+    s1.onclose?.({ code: 4099, reason: 'NOT_AUTHENTICATED' })
+    await flush()
+    expect(a.closes.at(-1)).toEqual({ code: 4099, reason: 'NOT_AUTHENTICATED' })
+    const b = start(0)
+    await flush()
+    const s2 = FakeSocket.all[0] as FakeSocket
+    s2.open()
+    s2.receive(closing('FORBIDDEN'))
+    s2.onclose?.({ code: 4099, reason: '' })
+    await flush()
+    expect(b.closes.at(-1)).toEqual({ code: 4099, reason: 'FORBIDDEN' })
+  })
+
+  it('without the notice an empty close still reconnects (a dropped link is not a refusal), and a notice does not outlive its socket', async () => {
+    const { clock, closes, t } = start(0)
+    await flush()
+    const s1 = FakeSocket.all[0] as FakeSocket
+    s1.open()
+    s1.onclose?.({ code: 1006, reason: '' })
+    await flush()
+    expect(closes.at(-1)).toEqual({ code: 1006, reason: '' })
+    clock.advance(100)
+    await flush()
+    expect(FakeSocket.all.length).toBe(2)
+    // a notice on the first socket (late, after its close) never colours the second socket's close
+    s1.receive(closing('MAINTENANCE'))
+    const s2 = FakeSocket.all[1] as FakeSocket
+    s2.open()
+    s2.onclose?.({ code: 1006, reason: '' })
+    await flush()
+    expect(closes.at(-1)).toEqual({ code: 1006, reason: '' })
+    expect(t.state).toBe('closed')
+    t.close()
+  })
+
+  it('a socket the room said it was closing, and that never closed, is dropped by the heartbeat as terminal', async () => {
+    const { clock, closes, t } = start(1_000)
+    await flush()
+    const s1 = FakeSocket.all[0] as FakeSocket
+    s1.open()
+    s1.receive(closing('MAINTENANCE'))
+    await flush()
+    clock.advance(1_000) // ping out
+    clock.advance(1_000) // no pong: dropped
+    await flush()
+    expect(closes.at(-1)).toEqual({ code: 4099, reason: 'MAINTENANCE' })
+    clock.advance(5_000)
+    await flush()
+    expect(FakeSocket.all.length).toBe(1)
+    expect(t.attempts).toBe(1)
+  })
+})

@@ -181,13 +181,16 @@ test('F4: someone given access while the board is open can be @mentioned at once
   })
 })
 
+// Since wave 4b (2F, security audit L3) the default policy's sentence says name-only guests may not export.
 test('F9: the Export dialog says who may export under the current policy', async ({ canvasSession }) => {
   const a = await canvasSession('alice')
   const page = a.page
   const exportDialog = page.getByTestId('export-dialog')
 
   await page.getByTestId('export-button').click()
-  await expect(exportDialog).toContainText('Everyone who can view the board can export it.')
+  await expect(exportDialog).toContainText(
+    'Everyone who can view the board with an account can export it; guests who joined with just a name can’t.',
+  )
   await page.keyboard.press('Escape')
   await expect(exportDialog).toHaveCount(0)
 
@@ -200,7 +203,9 @@ test('F9: the Export dialog says who may export under the current policy', async
   await expect(exportDialog).toContainText(
     'Only editors can export this board: viewers, commenters and guests can’t.',
   )
-  await expect(exportDialog).not.toContainText('Everyone who can view the board can export it.')
+  await expect(exportDialog).not.toContainText(
+    'Everyone who can view the board with an account can export it; guests who joined with just a name can’t.',
+  )
 })
 
 // PORTED from e2e/tests/workshop-copy.spec.ts (its first test, the sharing half): the Share dialog's retro path

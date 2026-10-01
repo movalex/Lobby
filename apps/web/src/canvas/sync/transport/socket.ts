@@ -9,7 +9,11 @@
  * the schema is logged by type only and dropped (never shown, never applied).
  *
  * Closes: 4099 is terminal (no reconnect: NOT_AUTHENTICATED, FORBIDDEN, INVALID_MESSAGE, …); anything
- * else reconnects with a fresh URL (a fresh ticket in the browser). `close()` stops for good.
+ * else reconnects with a fresh URL (a fresh ticket in the browser). `close()` stops for good. The room
+ * announces every terminal close in band first (`notice` CLOSING, `detail` = the reason; CONTRACTS_REV 9,
+ * SMK-2): through the Render edge a refused socket got an EMPTY close frame (no 4099, no reason), so the
+ * close that follows the notice on the same socket is reported as 4099 with the announced reason whatever
+ * the frame carries, and the board page's reason screens ("Lobby is updating", a refused ticket) work.
  *
  * Heartbeat (wave 5): every `heartbeatMs` an open socket sends a `ping` (the room answers `pong` at
  * once); a ping whose pong has not arrived when the next one is due means the socket is dead (a half-open
@@ -150,6 +154,9 @@ export function createSocketTransport(opts: SocketTransportOptions): SocketTrans
         }
         // only the room's answer to this socket's ping proves the upstream path (other frames do not)
         if (r.data.type === 'pong' && gen === generation) awaitingPong = false
+        // the close that follows is terminal with this reason, whatever its frame says (SMK-2)
+        if (r.data.type === 'notice' && r.data.code === 'CLOSING' && gen === generation)
+          announced = r.data.detail || 'UNKNOWN_ERROR'
         opts.onRaw?.(r.data)
         deliver(r.data)
         return
@@ -170,6 +177,14 @@ export function createSocketTransport(opts: SocketTransportOptions): SocketTrans
   let lastFrameAt = 0
   /** a ping is out and its pong has not come back */
   let awaitingPong = false
+  /** the reason a `notice` CLOSING announced on the current socket, or null */
+  let announced: string | null = null
+  /** The close to report: the announced terminal one when the frame lost its code or reason on the way. */
+  const closeOf = (code: number, reason: string): TransportClose => {
+    if (announced === null || (code === CLOSE_TERMINAL && reason)) return { code, reason }
+    opts.log?.('socket_close_announced', { code, reason: announced })
+    return { code: CLOSE_TERMINAL, reason: announced }
+  }
   /** Every heartbeatMs on an open socket: a ping; a drop when the previous ping got no pong in time. */
   const startBeat = (sock: WebSocketLike, gen: number) => {
     stopBeat()
@@ -192,8 +207,10 @@ export function createSocketTransport(opts: SocketTransportOptions): SocketTrans
         }
         chain = chain.then(() => {
           if (stopped) return
-          setState('closed', { ...HEARTBEAT_CLOSE })
-          scheduleReconnect()
+          // a socket the room said it was closing and that never closed: terminal all the same
+          const close = closeOf(HEARTBEAT_CLOSE.code, HEARTBEAT_CLOSE.reason)
+          setState('closed', close)
+          if (close.code !== CLOSE_TERMINAL) scheduleReconnect()
         })
         return
       }
@@ -220,6 +237,7 @@ export function createSocketTransport(opts: SocketTransportOptions): SocketTrans
     attempts++
     const sock = new opts.WebSocketImpl(url)
     ws = sock
+    announced = null
     sock.binaryType = 'arraybuffer'
     sock.onopen = () => {
       if (gen !== generation) return
@@ -233,12 +251,12 @@ export function createSocketTransport(opts: SocketTransportOptions): SocketTrans
       if (gen !== generation) return
       ws = null
       stopBeat()
-      const close = { code: ev.code, reason: ev.reason }
-      // frames already received are processed before the close is reported
+      // frames already received are processed before the close is reported (a CLOSING notice among them)
       chain = chain.then(() => {
         if (gen !== generation) return
+        const close = closeOf(ev.code, ev.reason)
         setState('closed', close)
-        if (ev.code === CLOSE_TERMINAL || stopped || opts.reconnect === false) return
+        if (close.code === CLOSE_TERMINAL || stopped || opts.reconnect === false) return
         scheduleReconnect()
       })
     }

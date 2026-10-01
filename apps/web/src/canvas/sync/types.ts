@@ -209,6 +209,12 @@ export interface LostPushRecord {
 export interface LostDocRecord {
   readonly set: Readonly<Record<string, unknown>>
   readonly base: Readonly<Record<string, unknown>>
+  /**
+   * the base clock of the push that carried it (what the writer had seen of the server): with the server's
+   * per-key clock (the welcome's `docClocks`, CONTRACTS_REV 9), a key not written past it was not written by
+   * anyone since (wave 4b, 2C: the doc-key ABA). Absent in queues written before it existed.
+   */
+  readonly clock?: number
 }
 
 /**

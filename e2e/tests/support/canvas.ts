@@ -222,6 +222,10 @@ export const setTool = (page: Page, name: string): Promise<boolean> => canvasCal
 export const zoomToFit = (page: Page): Promise<void> => canvasCall(page, 'zoomToFit')
 export const setViewport = (page: Page, v: Partial<Pick<Viewport, 'x' | 'y' | 'zoom'>>): Promise<void> =>
   canvasCall(page, 'setViewport', v)
+/** A frame's live children in paint order (tldraw's `getSortedChildIdsForParent`; GAP-1). */
+export const children = (page: Page, frameId: string): Promise<string[]> =>
+  canvasCall(page, 'children', frameId)
+
 /** Lobby's undo (as Ctrl+Z on the board would). */
 export const undo = (page: Page): Promise<void> => canvasCall(page, 'undo')
 export const redo = (page: Page): Promise<void> => canvasCall(page, 'redo')

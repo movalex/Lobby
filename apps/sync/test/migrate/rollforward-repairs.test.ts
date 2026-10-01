@@ -357,4 +357,84 @@ describe('a geo kind changed on R0: the new outline sits next to its holder, not
     expect((parts.at(-1) as number) - (parts[0] as number)).toBe(parts.length - 1)
     expect(parts.at(-1)).not.toBe(order.length - 1)
   })
+
+  // V3's wave-5 re-check (open after the engine fixer's round): between holders of different types the
+  // holder kept ours' type, so a cloud turned into an ellipse on R0 stayed a transparent rectangle with the
+  // ellipse's style, and a diamond turned into a heart stayed a diamond under the heart's outline. Both
+  // failed on 747d41d (type 'rectangle' / 'diamond' after the merge).
+  const live = (path: string) => [...lbRows(path).values()].filter((x) => !x.deleted)
+  const paintOrder = (path: string) =>
+    live(path)
+      .sort((a, c) => (a.idx < c.idx ? -1 : a.idx > c.idx ? 1 : a.id < c.id ? -1 : 1))
+      .map((x) => x.id)
+  const elementOf = (path: string, id: string) =>
+    JSON.parse(lbRows(path).get(id)?.data ?? 'null') as Record<string, unknown> | null
+
+  it('cloud -> ellipse: the holder becomes a native ellipse (row and data), its outline is deleted', () => {
+    const b = board('geo-cloud', ['shape:cloud'])
+    expect(elementOf(b.path, 'cloud')?.type).toBe('rectangle')
+    expect(lbRows(b.path).get('cloud.o')?.deleted).toBe(0)
+    b.theirs((txn) => {
+      const s = txn.get('shape:cloud') as R
+      txn.set('shape:cloud', { ...s, props: { ...s.props, geo: 'ellipse' } } as TLRecord)
+    })
+    const rep = b.rollForward()
+    expect(
+      rep.ok,
+      `${rep.reason ?? ''} ${JSON.stringify(rep.failures)} ${JSON.stringify(rep.violations)}`,
+    ).toBe(true)
+    const holder = elementOf(b.path, 'cloud')
+    expect(holder?.type).toBe('ellipse')
+    expect(holder?.strokeColor).not.toBe('transparent')
+    expect(lbRows(b.path).get('cloud')?.type).toBe('ellipse')
+    expect(lbRows(b.path).get('cloud.o')?.deleted).toBe(1)
+    expect(checkInvariants(els(b.path) as never)).toEqual([])
+    expect(rep.conflicts).toEqual([])
+  })
+
+  it('diamond -> heart: the holder becomes the polygon’s transparent rectangle, the outline sits next to it', () => {
+    const b = board('geo-diamond', ['shape:diamond'])
+    expect(elementOf(b.path, 'diamond')?.type).toBe('diamond')
+    expect(lbRows(b.path).has('diamond.o')).toBe(false)
+    b.theirs((txn) => {
+      const s = txn.get('shape:diamond') as R
+      txn.set('shape:diamond', { ...s, props: { ...s.props, geo: 'heart' } } as TLRecord)
+    })
+    const rep = b.rollForward()
+    expect(
+      rep.ok,
+      `${rep.reason ?? ''} ${JSON.stringify(rep.failures)} ${JSON.stringify(rep.violations)}`,
+    ).toBe(true)
+    const holder = elementOf(b.path, 'diamond')
+    expect(holder?.type).toBe('rectangle')
+    expect(holder?.strokeColor).toBe('transparent')
+    expect(lbRows(b.path).get('diamond')?.type).toBe('rectangle')
+    const outline = elementOf(b.path, 'diamond.o')
+    expect(outline?.type).toBe('line')
+    expect(outline?.polygon).toBe(true)
+    expect(lbRows(b.path).get('diamond.o')?.deleted).toBe(0)
+    const order = paintOrder(b.path)
+    expect(Math.abs(order.indexOf('diamond.o') - order.indexOf('diamond'))).toBe(1)
+    expect(checkInvariants(els(b.path) as never)).toEqual([])
+  })
+
+  it('ours moved the cloud on Excalidraw, R0 made it an ellipse: the type changes and the move stays, no conflict', () => {
+    const b = board('geo-cloud-move', ['shape:cloud'])
+    const before = elementOf(b.path, 'cloud') as Record<string, unknown>
+    excalidrawEdit(b.path, 'cloud', ['pos'], (e) => {
+      e.x = Number(e.x) + 40
+      e.y = Number(e.y) + 25
+    })
+    b.theirs((txn) => {
+      const s = txn.get('shape:cloud') as R
+      txn.set('shape:cloud', { ...s, props: { ...s.props, geo: 'ellipse' } } as TLRecord)
+    })
+    const rep = b.rollForward()
+    expect(rep.ok).toBe(true)
+    const holder = elementOf(b.path, 'cloud') as Record<string, unknown>
+    expect(holder.type).toBe('ellipse')
+    expect([holder.x, holder.y]).toEqual([Number(before.x) + 40, Number(before.y) + 25])
+    expect(rep.conflicts.filter((c) => c.elementId === 'cloud')).toEqual([])
+    expect(checkInvariants(els(b.path) as never)).toEqual([])
+  })
 })

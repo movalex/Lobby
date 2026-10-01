@@ -85,7 +85,15 @@ export function catchUpWelcomeJson(head: Record<string, unknown>, opsJson: strin
   return `${h.slice(0, -1)},"catchUp":${opsJson}}`
 }
 
-/** A `changes` frame carrying catch-up rows (the rows since a cached snapshot's clock, §2.4.5). */
-export function catchUpChangesJson(clock: number, opsJson: string): string {
-  return `{"type":"changes","clock":${clock},"ops":${opsJson}}`
+/**
+ * A `changes` frame carrying catch-up rows (the rows since a cached snapshot's clock, §2.4.5) and, when
+ * given, the doc keys written since that clock as `doc.set` (DEF-3F-1; null = a removed key).
+ */
+export function catchUpChangesJson(
+  clock: number,
+  opsJson: string,
+  docSet: Record<string, unknown> | null = null,
+): string {
+  const doc = docSet ? `,"doc":{"set":${JSON.stringify(docSet)}}` : ''
+  return `{"type":"changes","clock":${clock},"ops":${opsJson}${doc}}`
 }

@@ -334,6 +334,19 @@ export class BoardStore {
   docSet(key: string, clock: number, value: unknown): void {
     this.st.docSet.run(key, clock, value === null ? null : JSON.stringify(value))
   }
+  /** The clock every doc key was last written at, removed keys included (`welcome.docClocks`, CONTRACTS_REV 9). */
+  docClocks(): Record<string, number> {
+    const out: Record<string, number> = {}
+    for (const r of this.st.docClocks.all() as { key: string; clock: number }[]) out[r.key] = r.clock
+    return out
+  }
+  /** The doc keys written after `clock`, null for a removed one (the `changes` after a cached snapshot, DEF-3F-1). */
+  docSince(clock: number): Record<string, unknown> {
+    const out: Record<string, unknown> = {}
+    for (const r of this.st.docSince.all(clock) as { key: string; value: string | null }[])
+      out[r.key] = r.value === null ? null : JSON.parse(r.value)
+    return out
+  }
   docCountPrefix(prefix: string): number {
     return (this.st.docCountPrefix.get(prefix.length, prefix) as { n: number }).n
   }
@@ -496,6 +509,8 @@ function prepareStatements(db: DatabaseSync) {
     docAll: 'SELECT key, clock, value FROM lb_doc',
     docGet: 'SELECT key, clock, value FROM lb_doc WHERE key = ?',
     docSet: 'INSERT OR REPLACE INTO lb_doc (key, clock, value) VALUES (?, ?, ?)',
+    docClocks: 'SELECT key, clock FROM lb_doc',
+    docSince: 'SELECT key, value FROM lb_doc WHERE clock > ?',
     docCountPrefix: 'SELECT count(*) AS n FROM lb_doc WHERE value IS NOT NULL AND substr(key, 1, ?) = ?',
     deletedInsert: `INSERT INTO lb_deleted (batch, element_id, type, container_id, frame_id, data, deleted_by,
          deleted_by_name, deleted_at, epoch, origin) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'live')`,

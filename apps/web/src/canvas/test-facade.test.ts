@@ -240,6 +240,22 @@ describe('test facade', () => {
     expect(hooks.allElements().map((e) => e.id)).toEqual(['r1', 'gone'])
   })
 
+  it("children(frameId) lists a frame's live children in paint order (GAP-1: the wave-1 verb on the page)", () => {
+    const f = fakePort()
+    f.scene.set('F', el('F', { type: 'frame', index: 'a2' }))
+    f.scene.set('c2', el('c2', { frameId: 'F', index: 'a4' }))
+    f.scene.set('c1', el('c1', { frameId: 'F', index: 'a3' }))
+    f.scene.set('c1.t', el('c1.t', { type: 'text', containerId: 'c1', frameId: 'F', index: 'a5' }))
+    f.scene.set('c3', el('c3', { frameId: 'F', index: 'a6', isDeleted: true }))
+    f.scene.set('loose', el('loose', { index: 'a7' }))
+    const { facade } = createFacade(f.port)
+    // the fake port's items() is its scene in insertion order (the real one is the engine's paint order)
+    expect(facade.children('F')).toEqual(['c2', 'c1', 'c1.t'])
+    expect(facade.children('r1')).toEqual([])
+    expect(facade.children('nope')).toEqual([])
+    expect(f.txLog).toEqual([])
+  })
+
   it('works without a sync engine (spike A pages): live items only, no pushes', async () => {
     const f = fakePort({ withEngine: false })
     const { facade, hooks } = createFacade(f.port)

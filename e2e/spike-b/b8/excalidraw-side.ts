@@ -7,9 +7,10 @@
 // the board file is copied to that id's board path BEFORE the room opens; referenced files have no asset
 // rows there, so images show Lobby's placeholder and still push nothing (E1).
 
-import { copyFileSync, existsSync, mkdirSync, statSync } from 'node:fs'
+import { existsSync, mkdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Page } from '@playwright/test'
+import { copyBoardFileSelfContained } from '../../../apps/sync/src/backup/checkpoint.ts'
 import { compareIndexThenId, isValidKey } from '../../../apps/web/src/canvas/sync/index-keys.ts'
 import type { O3BrowserProcess } from '../support/browsers.ts'
 import { canvasOf, harness, waitSaved } from '../support/harness.ts'
@@ -31,16 +32,16 @@ export const boardFile = (stack: SpikeBStack, boardId: string) =>
   join(stack.dataDir, 'rooms', `board-${boardId}.sqlite`)
 
 /**
- * Copies a board file (and its WAL) to `boardId`'s path in the stack's data dir, before its room opens.
- * Refuses when a file is already there (the room would have opened it as a new board).
+ * Copies a board file (with its WAL, checkpointed into the copy) to `boardId`'s path in the stack's data
+ * dir, before its room opens. Refuses when a file is already there (the room would have opened it as a new
+ * board).
  */
 export function placeBoardFile(stack: SpikeBStack, source: string, boardId: string): string {
   const rooms = join(stack.dataDir, 'rooms')
   mkdirSync(rooms, { recursive: true })
   const target = boardFile(stack, boardId)
   if (existsSync(target)) throw new Error(`a board file already exists for ${boardId}`)
-  copyFileSync(source, target)
-  if (existsSync(`${source}-wal`)) copyFileSync(`${source}-wal`, `${target}-wal`)
+  copyBoardFileSelfContained(source, target)
   return target
 }
 
