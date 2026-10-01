@@ -142,7 +142,8 @@ means absent from the new page. Every deviation below is listed in full in the o
 
 - **Ported:** present mode (slides in presentation order, skips, fullscreen with the in-window fallback, slide keys and list, the modal key trap, view restore, collaborators' edits followed, cursors hidden), the Export dialog (PNG 1×/2×/4×, SVG, copy as PNG, PDF with bookmarks and a text layer, CSV with tags and votes), the export policy store and share badge, thumbnails, and `export.*`.
 - **Ported at wave 3b:** the context menu's Export as (PNG at 2× from the original, SVG with the preview; the test body was the last `test.fixme`); RETRO-03a's Present and export steps (no author label or cursor on a slide; no PNG or SVG names the author); "presentation is clean" with comment pins and the selection bar; the event stream surviving an api restart; export control on file cards (Download off and back for viewers, 403 from the api).
-- **Deviations:** the fullscreen element is the canvas region; engine-drawn frame names add height to whole-board PNGs; the thumbnail schematic's images are grey tiles only where `files.urlOf` has no preview.
+- **Fixed at wave 5** (`engine/w5f-3e`, `wave3/3E.md` "Wave 5 fixes"; REVIEW-W5-EARLY.md W5-14, W5-24, W5-30, W5-47, 3e's parts of W5-37 and D3): exports draw every file card's whole face (cover, chips, play button, page strip, conversion note, error, the footer's kind badge, name, size and status) in PNG, SVG, PDF pages and copy, where they drew a bare cover or the engine's grey placeholder; slides show no frame outline; the PDF text layer keeps the canvas's own lines, so no word is split and a search finds it (DEMO 3:30 holds); leaving present mode gives the keyboard back to the Present button, and the presentation shows a focus ring; an SVG's notes have tldraw's soft export shadow and no edge.
+- **Deviations:** the fullscreen element is the canvas region; engine-drawn frame names add height to whole-board PNGs; the thumbnail schematic's images are grey tiles only where `files.urlOf` has no preview; slides have 6 px rounded corners and 2 px of each edge under the surround (until CR 3E-6); a card's face in an export is a bitmap, also in an SVG; notes in a PNG or PDF page keep the engine's hard shadow until 2C's note rendering (CR 3E-7).
 
 ### 4.6 Workshops (3f) — ported
 
@@ -153,7 +154,7 @@ means absent from the new page. Every deviation below is listed in full in the o
 ### 4.7 Media (3g) — ported
 
 - **Ported:** file cards (cover, pages, status, Office note, video player, Download), image and page placeholders, paste/drop/Ctrl+U with today's drop layout (grids, frames, template slots, F12), the PDF viewer and Place on board, open original, download originals, `files.urlOf`/`insert`, the derivative swap.
-- **Partial:** the cross-workspace image paste check (plan §2.10.4) needs a paste hook from 2C; exports see the engine's placeholder for cards without a preview (2C's loader); a viewer's drop is silent (spike B's input).
+- **Partial:** the cross-workspace image paste check (plan §2.10.4) needs a paste hook from 2C; exports saw the engine's placeholder for cards without a preview (fixed at wave 5: every export draws the card's whole face, §4.5); a viewer's drop is silent (spike B's input).
 - **Deviations:** the card face is a DOM overlay (only opaque elements above it cut holes); no local preview while uploading; slotted images land on top (no insert-at-index).
 
 ### 4.8 History and AI (3h) — ported, partial for connector re-binds
@@ -202,9 +203,10 @@ builds share it.
 | 20k shape cap (Miro phase) | ported (server) | O1 | canvas-schema `limits.ts` | — |
 | Comments: tool, pins, threads, replies, resolve, mentions, panel, bell, orphans, Shift+C (Miro phase, DEMO 1:40) | ported | 3c | `comments-core`, `comments-review`, `comments-privacy`, `comments-notify` | — (the orphan's restore works since the spike merge) |
 | People list, follow, "who follows me" (wave 4) | ported, partial | 3c | `people-list` | "N following you" by camera needs CR-3C-1 |
-| Present mode: frame by frame, chrome/cursors/pins hidden (Miro phase) | ported | 3e | `present-export-present` | — (pins and the selection bar hidden, and the event stream across an api restart, tested since wave 3b) |
+| Present mode: frame by frame, chrome/cursors/pins hidden (Miro phase) | ported | 3e | `present-export-present` | — (pins and the selection bar hidden, and the event stream across an api restart, tested since wave 3b). Since wave 5: no frame outline on a slide (W5-24; under the surround until CR 3E-6), focus back on the Present button after a presentation and a focus ring on it (W5-47) |
 | Present to everyone: invite, join, hand-off, follow in step (wave 4, DEMO 2:45) | ported | 3c, 3e | `present-live` (6 tests, all passing since the integration) | — |
-| Export PNG / SVG / PDF / CSV, copy as PNG, Export as from the context menu (Miro phase, DEMO 3:30) | ported | 3e | `present-export-files` | — (the context menu's Export as since wave 3b, with CR 3E-4) |
+| Export PNG / SVG / PDF / CSV, copy as PNG, Export as from the context menu (Miro phase, DEMO 3:30) | ported | 3e, 3g | `present-export-files` | the review's W5-14 and W5-30 are fixed at wave 5: file cards are drawn in full in every export, and the PDF text layer keeps whole words. Left: Lilita One headings (D3) wait for the server's font allowlist (2A; a `test.fail` is ready); note shadows in bitmaps follow 2C's note rendering (CR 3E-7) |
+| Note look in exports: shadow and edge (review W5-37) | partial | 2C, 3e | `present-export-files` (SVG) | SVG: tldraw's soft export shadow, no edge (wave 5, 3e). PNG, PDF pages and copy: the engine's hard offset shadow and 1 px edge, as on the canvas, until 2C's note rendering (CR 3E-7) |
 | Export policy: viewers and commenters cannot export (wave 3, DEMO safety) | ported | 3e, 3a, 3g | `sharing-export-control` | copy for viewers when exporting is allowed (CR-3A-4); the context menu and file cards' Download tested since wave 3b |
 | Thumbnails (wave 3) | ported | 3e | `thumbnails-capture` | — |
 | Timer (Miro phase) | ported | 3f | `workshops-timer` | — |
@@ -262,6 +264,7 @@ around seeding writes (the O2 race's workaround); they can drop the waits.
 **Contracts owner and 2C (the board page)**
 - 2C, from O2's part 3: call `core.syncScene()` after the undo install, `core.persistNow()` on `pagehide`, when hidden and on unmount, drop the `message` microtask deferral, and let `history-join.ts` use `undo.joinPrevious()` / `mergeTop()` (the core covers the loss either way; these make Saved and the queue exact at once).
 - CR-3F-1 (`transact` that skips the undo stack: +1s, `test.fail`); CR 3G-2 (`LobbyFiles.track`); a tool qualifier on key claims (3c; the keyboard-map test's `TOOL_SCOPED_KEYS` stands in); a "caught up" signal for features (3b F3).
+- 2C, from 3e at wave 5 (`wave3/3E.md`): CR 3E-5 (a face hook on `SceneExportContext` instead of 3e's resolver wrapper), CR 3E-6 (no frame outline or name in focus mode: present mode's surround inset can go), CR 3E-7 (the note look of W5-37 in `exportToCanvas` too, matching the SVG's).
 - 2C: a window resize does not bump the viewport signal (CR-3A-10); the note and text tools ignore the next style (CR-3A-7); the element-paste hook for the cross-workspace image check, a client-drawn face for cards without a preview, and a revoked blob URL seen once in the loader (3g); `viewport.get()` lags a `set` by a render and a tween can end a hair off (3b F4, F5).
 
 **Feature owners (follow-ups after wave 3b)**
