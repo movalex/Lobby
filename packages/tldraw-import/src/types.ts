@@ -4,7 +4,7 @@
 import type { ServerTextMetrics } from '@draftroom/canvas-schema/engine'
 
 /** The converter's version, recorded in `lb_meta.converted_from.converterVersion` and `lb_doc.import`. */
-export const CONVERTER_VERSION = '1'
+export const CONVERTER_VERSION = '2'
 /** What the converter reads (`lb_doc.import.from`). */
 export const CONVERTED_FROM = 'tldraw-5.4.2' as const
 

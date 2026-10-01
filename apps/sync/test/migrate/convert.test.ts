@@ -6,6 +6,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { ImportDocValue } from '@draftroom/canvas-schema/doc'
 import { createTableTextMetrics, installServerTextMetrics } from '@draftroom/canvas-schema/engine'
+import { CONVERTER_VERSION } from '@draftroom/tldraw-import'
 import { describe, expect, it } from 'vitest'
 import { inspectBoardDb } from '../../src/backup/backup.ts'
 import { convertBoardFile } from '../../src/room/migrate/convert-board.ts'
@@ -90,7 +91,7 @@ describe('convertBoardFile', () => {
       deletedSeq: 3,
       lbClock: 1,
       cycle: 0,
-      converterVersion: '1',
+      converterVersion: CONVERTER_VERSION,
     })
     expect(after.lbSource).toBe(backup.recordsSha256)
     expect(after.meta.clock).toBe('1')

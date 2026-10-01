@@ -459,6 +459,17 @@ export function rollForwardBoardFile(job: RollForwardJob, metrics: ServerTextMet
       const r = oursRows.get(id)
       return (r && !r.deleted && !newDeleted.has(id)) || inserted.has(id)
     }
+    // A geo built from parts (tldraw-import geo-shapes.ts: the holder plus its outline `.o`, or a native
+    // rectangle plus its marks `.m<n>`) is one shape to the people who styled it: tldraw's one `color`
+    // lands on the outline, an Excalidraw style write may land on the holder. So a style group theirs
+    // changed on one part conflicts with a style write ours made to any other part (D4; V3's part-3 low).
+    const PART = /^[^.]+(?:\.o|\.m\d+)?$/
+    const partsOf = (id: string): string[] => {
+      if (!PART.test(id)) return []
+      const owner = id.split('.')[0] as string
+      if (!oursRows.has(`${owner}.o`) && !oursRows.has(`${owner}.m1`)) return []
+      return [owner, `${owner}.o`, `${owner}.m1`, `${owner}.m2`].filter((s) => s !== id && oursRows.has(s))
+    }
 
     // c + e (changed records): per element, per group
     for (const shapeId of [...changedShapes].sort()) {
@@ -499,6 +510,24 @@ export function rollForwardBoardFile(job: RollForwardJob, metrics: ServerTextMet
         } else if (b && !t && isLive(id)) {
           newDeleted.add(id)
           mark(id, 'life')
+        }
+      }
+      // a geo built from parts: theirs restyled one part, ours restyled another → theirs wins for the
+      // whole shape (the other part gets theirs' style too) and the part ours styled is listed
+      for (const id of tEls.keys()) {
+        const b = bEls.get(id)
+        const t = tEls.get(id)
+        if (!b || !t || !changedGroups(b, t).includes('style')) continue
+        for (const q of partsOf(id)) {
+          const tq = tEls.get(q)
+          const bq = bEls.get(q)
+          const row = oursRows.get(q)
+          if (!tq || !bq || !row || row.deleted || changedGroups(bq, tq).includes('style')) continue
+          if (!oursChanged(gclocks.get(q) ?? {}, 'style', cf.lbClock)) continue
+          if (!conflicts.some((c) => c.elementId === q && c.group === 'style'))
+            conflicts.push({ elementId: q, group: 'style' })
+          applyGroup(work(q) as Record<string, unknown>, tq, 'style')
+          mark(q, 'style')
         }
       }
     }

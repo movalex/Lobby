@@ -281,3 +281,45 @@ describe('roll-forward: binding records map to the arrow and its targets (open i
     expectSymmetric(els)
   })
 })
+
+describe('roll-forward: a geo built from parts conflicts as one shape (D4)', () => {
+  // V3 (part-3 round, low, open until now): a both-sides recolour of a polygon geo listed no conflict.
+  // tldraw's one `color` lands on the outline (`cloud.o`), while Excalidraw's style write may land on the
+  // holder (`cloud`) the record maps to; the merge compared each element alone. Failed on f336ae4.
+  for (const id of ['cloud', 'cloud.o'])
+    it(`ours recoloured ${id}, theirs the cloud: the conflict is listed and theirs wins`, () => {
+      const { rep, els } = scenario({
+        ours: (path) =>
+          excalidrawEdit(path, id, ['style'], (e) => {
+            e.backgroundColor = '#ffc9c9'
+          }),
+        theirs: (txn) => {
+          const c = txn.get('shape:cloud') as TLRecord & { props: Record<string, unknown> }
+          txn.set('shape:cloud', {
+            ...c,
+            props: { ...c.props, color: c.props.color === 'red' ? 'green' : 'red' },
+          } as TLRecord)
+        },
+      })
+      expect(rep).toMatchObject({ ok: true, violations: [] })
+      // listed on the part whose value ours lost (kept in lb_prev_1_*), and theirs wins for the whole shape
+      expect(rep.conflicts).toContainEqual({ elementId: id, group: 'style' })
+      expect(els.get(id)?.backgroundColor).not.toBe('#ffc9c9')
+      expect(els.get('cloud')?.strokeColor).toBe('transparent')
+    })
+
+  it('a change of another group on a part is not a conflict', () => {
+    const { rep } = scenario({
+      ours: (path) =>
+        excalidrawEdit(path, 'cloud', ['pos'], (e) => {
+          e.x = Number(e.x) + 10
+        }),
+      theirs: (txn) => {
+        const c = txn.get('shape:cloud') as TLRecord & { props: Record<string, unknown> }
+        txn.set('shape:cloud', { ...c, props: { ...c.props, color: 'red' } } as TLRecord)
+      },
+    })
+    expect(rep).toMatchObject({ ok: true })
+    expect(rep.conflicts.filter((c) => c.elementId.startsWith('cloud'))).toEqual([])
+  })
+})

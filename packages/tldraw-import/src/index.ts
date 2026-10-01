@@ -33,6 +33,17 @@ export {
   type Snapshot,
 } from './convert.ts'
 export { convertDeleted, type DeletedConversion, type LbDeletedRow } from './deleted.ts'
+export {
+  GEO_SHAPES,
+  type GeoBuild,
+  type GeoOutlineOptions,
+  geoBuildOf,
+  geoLossyCodes,
+  geoMarks,
+  geoOutline,
+  TL_GEO_KINDS,
+  type TlGeoKind,
+} from './geo-shapes.ts'
 export { currentSchema, type MigrateResult, migrateRecords } from './migrate.ts'
 export { approxResnap, refitLabel } from './relayout.ts'
 export { plainLines } from './rich-text.ts'

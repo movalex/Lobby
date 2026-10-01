@@ -33,6 +33,8 @@ const EXPECTED_LOSSY: Record<string, Record<string, number>> = {
     'arrowhead-approximated': 1,
     'bookmark-as-link': 1,
     'embed-as-link': 1,
+    // D4: the cloud is tldraw's curve sampled (geo-polygon for star, triangle and cloud)
+    'geo-approximated': 1,
     'geo-polygon': 3,
     'nested-frame': 1,
     'page-flattened': 1,
