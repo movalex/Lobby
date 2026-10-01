@@ -37,10 +37,11 @@ import { isPresentingHere } from './presenting.ts'
 import { mountPrivateNotes, privateNotesPanel } from './private-notes/index.tsx'
 import { HIDE_AUTHORS_ATTR, workshopSettingsOf } from './session-settings.ts'
 import { VotingPanel } from './VotingPanel.tsx'
-import { eligibleAt, selectEligible, selectedEligible } from './voting-canvas.ts'
+import { selectEligible, selectedEligible, voteClickAt } from './voting-canvas.ts'
 import { WorkshopBar } from './WorkshopBar.tsx'
 import {
   castVote,
+  notInVote,
   stepperTarget,
   WorkshopLayer,
   WorkshopMarksLayer,
@@ -153,8 +154,10 @@ export const VOTE_TOOL: FeatureToolSpec = {
     if (!p.screen || !now || Math.hypot(now.x - p.screen.x, now.y - p.screen.y) > CLICK_SLOP_PX) return
     const rule = ruleNow(ctx)
     if (!rule || !votingNow(ctx)) return
-    const el = eligibleAt(ctx.canvas, p.point, rule)
-    if (el) void castVote(ctx, storeFor(ctx), `shape:${el.id}`, 1)
+    // The topmost object decides (W5-03): one the vote does not take casts nothing, whatever is under it.
+    const click = voteClickAt(ctx.canvas, p.point, rule)
+    if (click.kind === 'vote') void castVote(ctx, storeFor(ctx), `shape:${click.target.id}`, 1)
+    else if (click.kind === 'not-in-vote') notInVote(ctx, rule)
   },
   onExit() {
     toolPress = null

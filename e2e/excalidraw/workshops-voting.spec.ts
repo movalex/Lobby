@@ -13,6 +13,10 @@
 import { readFileSync } from 'node:fs'
 import type { Page } from '@playwright/test'
 import {
+  item,
+  itemBounds,
+  items,
+  sceneToScreen,
   select,
   selection,
   selectNone,
@@ -834,6 +838,149 @@ test('the vote tool: for a viewer too, a click on an object casts a dot and sele
   await expect(remaining(c)).toHaveAttribute('data-remaining', '1')
   expect(await selection(c.page)).toEqual([])
   expect(await setTool(c.page, 'select')).toBe(true)
+})
+
+// ---- W5-03: the topmost object decides what a click votes on -------------------------------------------------
+
+const OV = { frame: 'wk-ov-frame', inside: 'wk-ov-in', under: 'wk-ov-under', loose: 'wk-ov-loose' }
+
+/** The screen point of a scene point, checked to reach the canvas (no overlay or bar on top). */
+async function canvasPoint(page: Page, p: { x: number; y: number }) {
+  const at = await sceneToScreen(page, p)
+  const hit = await page.evaluate(({ x, y }) => {
+    const el = document.elementFromPoint(x, y)
+    return el?.tagName === 'CANVAS' && !!el.closest('.excalidraw')
+  }, at)
+  expect(hit, `the canvas is under ${JSON.stringify(at)}`).toBe(true)
+  return at
+}
+
+test('W5-03: a click on a note the vote does not take, lying over one it takes, casts nothing and says so (select and hand tools, the vote tool); only clicked notes are ranked', async ({
+  join,
+  board,
+}) => {
+  const a = await join('alice')
+  const b = await join('bob', 'editor')
+  await seed(a.page, {
+    frames: [{ id: OV.frame, x: 0, y: 0, w: 900, h: 600, name: 'Ideas' }],
+    notes: [
+      { id: OV.inside, x: 40, y: 80, text: 'Nice trailer music', frameId: OV.frame },
+      { id: OV.under, x: 340, y: 80, text: 'Pairing on the boss fight', frameId: OV.frame },
+      // on top of the right half of OV.under, outside the vote's frame (a note made with N stays out of
+      // its frame until W5-01 lands; any note outside the frame lying over one inside does the same)
+      { id: OV.loose, x: 460, y: 140, text: 'Daily build was green' },
+    ],
+  })
+  await expectItemsEverywhere([a, b], Object.values(OV))
+  const under = await itemBounds(b.page, OV.under)
+  const loose = await itemBounds(b.page, OV.loose)
+  if (!under || !loose) throw new Error('no bounds')
+  // the setup: the loose note paints above the frame's note, and only the frame's note is in the frame
+  const order = (await items(b.page)).map((e) => e.id)
+  expect(order.indexOf(OV.loose)).toBeGreaterThan(order.indexOf(OV.under))
+  expect((await item(b.page, OV.under))?.frameId).toBe(OV.frame)
+  expect((await item(b.page, OV.loose))?.frameId ?? null).toBeNull()
+  const overlap = { x: (loose.x + under.x + under.width) / 2, y: (loose.y + under.y + under.height) / 2 }
+  expect(overlap.x).toBeGreaterThan(loose.x)
+  expect(overlap.x).toBeLessThan(under.x + under.width)
+  expect(overlap.y).toBeGreaterThan(loose.y)
+  expect(overlap.y).toBeLessThan(under.y + under.height)
+  const underOnly = { x: under.x + 30, y: under.y + under.height / 2 }
+  expect(underOnly.x).toBeLessThan(loose.x)
+
+  await startVoteFromTopBar(a, { perPerson: 3, frameId: OV.frame, notesOnly: true })
+  await joinVote(b, 3)
+  await showAll(b.page)
+  const toast = b.page.getByTestId('vote-toast')
+  const NOT_IN = 'Not part of this vote: only sticky notes in “Ideas” take votes.'
+  const noVotesYet = async () => {
+    await expect(remaining(b)).toHaveAttribute('data-remaining', '3')
+    expect((await workshopState(b.api, board)).vote?.myVotes).toEqual({})
+    await expect(dot(b.page, OV.under)).toHaveCount(0)
+    await expect(dot(b.page, OV.loose)).toHaveCount(0)
+  }
+  const dismiss = async () => {
+    await toast.getByRole('button', { name: 'Dismiss' }).click()
+    await expect(toast).toHaveCount(0)
+  }
+
+  await test.step('select tool: a click on the loose note over the frame’s note casts nothing, and says why', async () => {
+    const at = await canvasPoint(b.page, overlap)
+    await b.page.mouse.click(at.x, at.y)
+    await expect(toast).toHaveText(NOT_IN)
+    await noVotesYet()
+    await dismiss()
+  })
+
+  await test.step('hand tool and the vote tool: the same click casts nothing either', async () => {
+    for (const name of ['hand', 'vote']) {
+      expect(await setTool(b.page, name)).toBe(true)
+      const at = await canvasPoint(b.page, overlap)
+      await b.page.mouse.click(at.x, at.y)
+      await expect(toast, name).toHaveText(NOT_IN)
+      await noVotesYet()
+      await dismiss()
+    }
+    expect(await setTool(b.page, 'select')).toBe(true)
+    await selectNone(b.page)
+  })
+
+  await test.step('the part of the frame’s note nobody covers takes the vote, and so does the other note', async () => {
+    const at = await canvasPoint(b.page, underOnly)
+    await b.page.mouse.click(at.x, at.y)
+    await expect(dot(b.page, OV.under)).toHaveAttribute('data-count', '1')
+    await clickElement(b.page, OV.inside)
+    await expect(dot(b.page, OV.inside)).toHaveAttribute('data-count', '1')
+    await expect(remaining(b)).toHaveAttribute('data-remaining', '1')
+    expect((await workshopState(b.api, board)).vote?.myVotes).toEqual({
+      [`shape:${OV.under}`]: 1,
+      [`shape:${OV.inside}`]: 1,
+    })
+  })
+
+  await test.step('the results rank exactly the notes bob clicked', async () => {
+    const sid = (await workshopState(a.api, board)).vote?.session.id ?? ''
+    const res = await post(a, `/api/votes/${sid}/reveal`)
+    expect(res.status(), await res.text()).toBe(200)
+    const clicked = [`shape:${OV.inside}`, `shape:${OV.under}`].sort()
+    for (const id of [OV.inside, OV.under]) await expect(badge(b.page, id), id).toHaveCount(1)
+    await expect(badge(b.page, OV.loose)).toHaveCount(0)
+    const results = (await workshopState(a.api, board)).vote?.results ?? []
+    expect(results.map((r) => r.shapeId).sort()).toEqual(clicked)
+  })
+})
+
+test('W5-01: a note made with N inside the vote’s frame joins the frame and takes votes', async ({
+  join,
+}) => {
+  test.fail(
+    true,
+    'W5-01 (2C, canvas/board/session.ts onToolClick): a note made with N and a click inside a frame gets frameId null, so a frame-scoped vote does not take it',
+  )
+  const a = await join('alice')
+  const b = await join('bob', 'editor')
+  await seed(a.page, { frames: [{ id: OV.frame, x: 0, y: 0, w: 900, h: 600, name: 'Ideas' }] })
+  await expectItemsEverywhere([b], [OV.frame])
+  await showAll(b.page)
+  const before = new Set((await items(b.page)).map((e) => e.id))
+  await focusCanvas(b.page)
+  await b.page.keyboard.press('n')
+  const at = await canvasPoint(b.page, { x: 450, y: 300 })
+  await b.page.mouse.click(at.x, at.y)
+  let made = ''
+  await expect
+    .poll(async () => {
+      made = (await items(b.page)).find((e) => e.type === 'stickynote' && !before.has(e.id))?.id ?? ''
+      return made
+    })
+    .not.toBe('')
+  await b.page.keyboard.press('Escape')
+  await expect.poll(async () => (await item(b.page, made))?.frameId ?? null).toBe(OV.frame)
+  await startVoteFromTopBar(a, { perPerson: 3, frameId: OV.frame, notesOnly: true })
+  await joinVote(b, 3)
+  await selectNone(b.page)
+  await clickElement(b.page, made)
+  await expect(dot(b.page, made)).toHaveAttribute('data-count', '1')
 })
 
 // ---- R2-05: no +1 while a dot vote is open (workshops-3.fix) ----------------------------------------------------

@@ -2,29 +2,44 @@
 // order of the objects a vote accepts, and where the markers go. Reads the canvas through the API only.
 import type { VoteEligibilityRule } from '@draftroom/contracts'
 import type { CanvasElement, LobbyCanvas, ScenePoint } from '../../../canvas/api/index.ts'
-import { readingOrder } from '../voting.ts'
+import { notInVoteText, readingOrder, type VoteClick, voteClick } from '../voting.ts'
 import { ensureVisible } from './camera.ts'
-import { elementIdOf, isEligibleElement, refOf } from './elements.ts'
+import { elementIdOf, isEligibleElement, labelOfRef, refOf } from './elements.ts'
 
 /** A plain press: no modifier (Shift+drag still moves a note while voting). */
 export const plainPress = (e: { shift: boolean; ctrl: boolean; meta: boolean; alt: boolean }) =>
   !e.shift && !e.ctrl && !e.meta && !e.alt
 
 /**
- * The topmost element under `point` that the vote accepts (locked ones included: tldraw's `hitLocked`),
- * or null. A bound label is never returned: its container is (the hit test counts a label's area as its
- * container's).
+ * What a plain click at `point` does while voting (W5-03): the topmost element there decides, as a click
+ * would pick it (locked ones included: tldraw's `hitLocked`; a bound label counts as its container). The
+ * hit test takes no filter: a click on an object the vote does not take never passes through it to one
+ * the vote takes underneath, which is hidden and which nobody clicked.
  */
+export function voteClickAt(
+  canvas: LobbyCanvas,
+  point: ScenePoint,
+  rule: VoteEligibilityRule,
+): VoteClick<CanvasElement> {
+  const get = (id: string) => canvas.get(id)
+  return voteClick(canvas.hitTest(point, { hitInside: true }), (el) => isEligibleElement(el.id, get, rule))
+}
+
+/** The element a plain click at `point` votes on (the topmost one, when the vote takes it), or null. */
 export function eligibleAt(
   canvas: LobbyCanvas,
   point: ScenePoint,
   rule: VoteEligibilityRule,
 ): CanvasElement | null {
-  const get = (id: string) => canvas.get(id)
-  return canvas.hitTest(point, {
-    hitInside: true,
-    filter: (el) => isEligibleElement(el.id, get, rule),
-  })
+  const click = voteClickAt(canvas, point, rule)
+  return click.kind === 'vote' ? click.target : null
+}
+
+/** What a click on an object the vote does not take says (W5-03): "Not part of this vote: only …". */
+export function notInVoteNotice(canvas: LobbyCanvas, rule: VoteEligibilityRule): string {
+  const frame =
+    rule.scope === 'frame' && rule.frameId ? labelOfRef(rule.frameId, (id) => canvas.get(id)) : null
+  return notInVoteText(rule, frame)
 }
 
 /** The element ids this vote accepts, in reading order (keyboard voting), hidden ones left out. */

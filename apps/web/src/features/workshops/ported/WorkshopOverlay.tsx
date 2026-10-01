@@ -18,7 +18,8 @@
 // primary press on an object the vote accepts is claimed with `handled()`, so Excalidraw never selects
 // it (a selection is presence everyone sees, PRF-07), and votes on release when it did not move. The hand
 // tool's clicks vote too. A press with a modifier, on empty canvas or on an object the vote does not
-// accept goes to the engine as usual.
+// accept goes to the engine as usual. The topmost object under the press decides (W5-03): a click on an
+// object the vote does not take casts nothing, even over one it takes, and says so.
 import type { VoteEligibilityRule } from '@draftroom/contracts'
 import { type KeyboardEvent as ReactKeyboardEvent, useEffect, useMemo, useRef, useState } from 'react'
 import { type CanvasFeatureContext, geometry } from '../../../canvas/api/index.ts'
@@ -35,7 +36,15 @@ import { PlusOnes } from './PlusOnes.tsx'
 import { usePresentingHere } from './presenting.ts'
 import { PrivateNotesReminder, PrivateNotesStartPrompt } from './private-notes/PrivateNotesBar.tsx'
 import { ReactionBursts } from './Reactions.tsx'
-import { cornersOf, eligibleAt, plainPress, selectEligible, selectedEligible } from './voting-canvas.ts'
+import {
+  cornersOf,
+  eligibleAt,
+  notInVoteNotice,
+  plainPress,
+  selectEligible,
+  selectedEligible,
+  voteClickAt,
+} from './voting-canvas.ts'
 import { StopwatchIcon } from './WorkshopBar.tsx'
 
 type Ctx = CanvasFeatureContext
@@ -95,6 +104,16 @@ export async function castVote(ctx: Ctx, store: WorkshopStore, shapeId: string, 
 
 function useCast(ctx: Ctx, store: WorkshopStore) {
   return (shapeId: string, delta: 1 | -1) => castVote(ctx, store, shapeId, delta)
+}
+
+/** A click on an object the vote does not take (W5-03): nothing is cast, and the toast says why. */
+export function notInVote(ctx: Ctx, rule: VoteEligibilityRule) {
+  ctx.notify({
+    key: 'vote-cast',
+    text: notInVoteNotice(ctx.canvas, rule),
+    testId: 'vote-toast',
+    timeoutMs: 3500,
+  })
 }
 
 /** The board's keyboard back (after Escape in the stepper, or a click on a +1). */
@@ -231,6 +250,11 @@ function MyDots({
  * as usual, and its clicks without a drag vote. Presses with modifiers (Shift+drag still moves a note), on
  * empty canvas or on objects the vote does not accept go to the engine as usual; plain clicks select,
  * move and edit again after "I'm done", "Skip" or once voting ends.
+ *
+ * The object a click lands on is the topmost one under it (W5-03). When the vote does not take it (a note
+ * outside the vote's frame on top of one inside, a shape over a note in a notes-only vote), the click
+ * casts nothing, never a vote for the object hidden underneath, and a click without a drag says "Not part
+ * of this vote".
  */
 function ClickToVote({ ctx, store }: { ctx: Ctx; store: WorkshopStore }) {
   const rule = useRule(store)
@@ -251,11 +275,13 @@ function ClickToVote({ ctx, store }: { ctx: Ctx; store: WorkshopStore }) {
       void castRef.current(ref, 1)
     }
     let pressed: { x: number; y: number; id: string } | null = null
+    let other: { x: number; y: number } | null = null
     let handDown: { x: number; y: number } | null = null
     return canvas.on('input', (e) => {
       if (e.type === 'key-down' || e.type === 'wheel' || e.type === 'pinch') return
       if (e.type === 'pointer-down') {
         pressed = null
+        other = null
         handDown = null
         if (e.button !== 0 || !plainPress(e)) return
         const tool = canvas.tool()
@@ -264,19 +290,30 @@ function ClickToVote({ ctx, store }: { ctx: Ctx; store: WorkshopStore }) {
           return
         }
         if (tool !== 'select' || canvas.editingId()) return
-        const el = eligibleAt(canvas, e.scene, rule)
-        if (!el) return
+        const click = voteClickAt(canvas, e.scene, rule)
+        if (click.kind === 'none') return
+        if (click.kind === 'not-in-vote') {
+          // The engine selects or moves it as usual; a click without a drag says why nothing was cast.
+          other = { x: e.screen.x, y: e.screen.y }
+          return
+        }
         e.handled()
-        pressed = { x: e.screen.x, y: e.screen.y, id: el.id }
+        pressed = { x: e.screen.x, y: e.screen.y, id: click.target.id }
         // Voting is "moving" too: it ends following someone (FAC-02), as any canvas click does.
         stopFollowing(canvas)
         return
       }
       if (e.type === 'pointer-up') {
         const p = pressed
+        const o = other
         const h = handDown
         pressed = null
+        other = null
         handDown = null
+        if (o) {
+          if (Math.hypot(e.screen.x - o.x, e.screen.y - o.y) <= CLICK_SLOP_PX) notInVote(ctx, rule)
+          return
+        }
         if (p) {
           e.handled()
           if (Math.hypot(e.screen.x - p.x, e.screen.y - p.y) > CLICK_SLOP_PX) return
@@ -285,8 +322,9 @@ function ClickToVote({ ctx, store }: { ctx: Ctx; store: WorkshopStore }) {
         }
         if (!h || e.button !== 0 || !plainPress(e) || canvas.tool() !== 'hand') return
         if (Math.hypot(e.screen.x - h.x, e.screen.y - h.y) > CLICK_SLOP_PX) return
-        const el = eligibleAt(canvas, e.scene, rule)
-        if (el) vote(el.id)
+        const click = voteClickAt(canvas, e.scene, rule)
+        if (click.kind === 'vote') vote(click.target.id)
+        else if (click.kind === 'not-in-vote') notInVote(ctx, rule)
         return
       }
       // A double-click on an object the vote takes (the second click of it already voted, or was one
