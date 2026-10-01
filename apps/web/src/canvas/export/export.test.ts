@@ -14,7 +14,7 @@ import {
   selfContainedProblems,
   woff2DataUrl,
 } from './fonts.ts'
-import { exportElements } from './select.ts'
+import { exportElements, withoutLinks } from './select.ts'
 
 describe('exportElements', () => {
   const els = [
@@ -44,6 +44,26 @@ describe('exportElements', () => {
     expect(
       exportElements(els, { only: new Set(['F']), isHidden: (id) => hidden.has(id) }).map((e) => e.id),
     ).toEqual(['F'])
+  })
+})
+
+describe('withoutLinks (XSS-F1): no element reaches the exporter with a link', () => {
+  it('copies linked elements with link null and returns the others as they are; the input is untouched', () => {
+    const card = { id: 'card', type: 'rectangle', link: 'https://example.com/brief' }
+    const plain = { id: 'r', type: 'rectangle', link: null }
+    const bare = { id: 'n', type: 'stickynote' }
+    const out = withoutLinks([card, plain, bare])
+    expect(out.map((e) => e.id)).toEqual(['card', 'r', 'n'])
+    expect(out[0]).toEqual({ id: 'card', type: 'rectangle', link: null })
+    expect(out[0]).not.toBe(card)
+    expect(card.link).toBe('https://example.com/brief')
+    expect(out[1]).toBe(plain)
+    expect(out[2]).toBe(bare)
+  })
+  it('the reason: an <a href> around a linked element is a reference outside the file', () => {
+    const wrapped =
+      '<svg xmlns="http://www.w3.org/2000/svg"><a href="https://example.com/brief" target="_blank"><g><rect/></g></a></svg>'
+    expect(selfContainedProblems(wrapped)).toEqual(['https://example.com/brief'])
   })
 })
 

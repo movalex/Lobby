@@ -1,7 +1,7 @@
 // What an export draws (docs/EXCALIDRAW-MIGRATION.md §4.5, §4.7): live elements, never a hidden one (a
 // collapsed mind-map branch: render overrides do not change exports, so the exporter filters them), and,
-// for a partial export, the chosen elements with their bound labels and a chosen frame's children.
-// Pure: unit-tested in Node.
+// for a partial export, the chosen elements with their bound labels and a chosen frame's children; none
+// of them with a `link` (XSS-F1, below). Pure: unit-tested in Node.
 
 export interface ExportableElement {
   readonly id: string
@@ -39,4 +39,15 @@ export function exportElements<T extends ExportableElement>(
     }
   }
   return live.filter((e) => keep.has(e.id))
+}
+
+/**
+ * The export's copies of `elements` with no `link` (XSS-F1, the wave-4b security sweep): Excalidraw's
+ * `exportToSvg` wraps a linked element in `<a href="…">`, a reference outside the file, so one link card
+ * (3g's D2: a rectangle whose `link` is the URL) made `selfContainedProblems` refuse the SVG export of the
+ * board or frame for everyone, and a link in a picture meant to stand alone is a navigation nobody asked
+ * for. The scene is never written: unlinked elements are returned as they are.
+ */
+export function withoutLinks<T extends object>(elements: readonly T[]): T[] {
+  return elements.map((e) => ((e as { link?: unknown }).link ? ({ ...e, link: null } as T) : e))
 }

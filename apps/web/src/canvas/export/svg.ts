@@ -28,7 +28,7 @@ import {
   woff2DataUrl,
 } from './fonts.ts'
 
-import { exportElements as selectForExport } from './select.ts'
+import { exportElements as selectForExport, withoutLinks } from './select.ts'
 
 export { selfContainedProblems }
 
@@ -61,9 +61,12 @@ export interface SvgExportResult {
   readonly bytes: number
 }
 
-/** The elements an export draws (select.ts): live, not hidden, and (with `only`) the chosen ones. */
+/**
+ * The elements an export draws (select.ts): live, not hidden, (with `only`) the chosen ones, and none with
+ * a `link` (XSS-F1: `exportToSvg` would wrap it in `<a href>`, a reference outside the file).
+ */
 export const exportElements = (src: ExportSource): NonDeletedExcalidrawElement[] =>
-  selectForExport(src.elements, src) as NonDeletedExcalidrawElement[]
+  withoutLinks(selectForExport(src.elements, src)) as NonDeletedExcalidrawElement[]
 
 const pageOrigin = () => (globalThis as { location?: { origin?: string } }).location?.origin ?? ''
 
