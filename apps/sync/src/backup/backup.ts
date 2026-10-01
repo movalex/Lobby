@@ -25,7 +25,6 @@ import { backup, DatabaseSync } from 'node:sqlite'
 import { isLbTable, tableNames } from '../r0/born-after.ts'
 import { type BackupFormat, LB_CONVERTED_FORMAT, lbAssetRefs, lbFileFacts } from '../r0/lb-files.ts'
 import { type AssetRef, AssetRefCollector } from './asset-refs.ts'
-import { backupEngine } from './engine.ts'
 
 export const BACKUP_DEFAULTS = Object.freeze({
   /** Periodic pass over open boards (a board is copied only if it changed since its last backup). */
@@ -167,16 +166,19 @@ function readBoardDb(
     const verdict = check.map((r) => Object.values(r)[0]).join('; ')
     if (verdict !== 'ok') throw new Error(`integrity check failed: ${verdict.slice(0, 200)}`)
     const tables = tableNames(db)
-    const excalidraw = backupEngine() === 'excalidraw'
     if (!tables.has('metadata') && !tables.has('documents') && [...tables].some(isLbTable)) {
-      // Born on the new canvas: copied whole, described from its lb_* tables (read-only). The Excalidraw
-      // build also lists the files its elements reference (R0 does not read Excalidraw elements).
-      const assets = excalidraw ? lbAssetRefs(db) : []
-      return { ...lbFileFacts(db), assets, records: records ?? new Map(), format: 'lobby-elements' }
+      // Born on the new canvas: copied whole, described from its lb_* tables (read-only), with the files
+      // its elements reference.
+      return {
+        ...lbFileFacts(db),
+        assets: lbAssetRefs(db),
+        records: records ?? new Map(),
+        format: 'lobby-elements',
+      }
     }
-    if (excalidraw && tables.has('lb_meta') && hasConvertedFrom(db)) {
-      // A converted board in the Excalidraw build (backup/engine.ts): what it serves is its lb_* tables, so
-      // that is what the entry describes (`lobby-elements-converted`); its tldraw tables are copied too.
+    if (tables.has('lb_meta') && hasConvertedFrom(db)) {
+      // A converted board: what the room serves is its lb_* tables, so that is what the entry describes
+      // (`lobby-elements-converted`); its tldraw tables are copied too (a rollback to R0 reads them).
       const facts = lbFileFacts(db)
       return {
         ...facts,

@@ -8,16 +8,15 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createFsBlobStore } from '@draftroom/blob-store'
-import { draftroomSchema } from '@draftroom/canvas-schema'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type { BackupEntry } from '../../src/backup/backup.ts'
 import { runRestoreDrill, storeBackupSource } from '../../src/backup/drill.ts'
 import { OffsiteBackups } from '../../src/backup/offsite.ts'
 import { offsiteKeys } from '../../src/backup/offsite-manifest.ts'
 import { backupSigningKey } from '../../src/backup/signing.ts'
-import { RoomRegistry } from '../../src/rooms.ts'
-import { indexFor, note, RoomClient } from '../deleted/fixtures.ts'
 import { TEST_INTERNAL_SECRET } from '../harness/tickets.ts'
+import { indexFor, note } from '../harness/tl-fixtures.ts'
+import { tldrawBoard } from '../harness/tldraw-file.ts'
 import { AST_A, fileCard, type TempData, tempData, VER_A } from './offsite-fixtures.ts'
 
 const A = 'drill-board-a'
@@ -35,7 +34,6 @@ afterEach(() => data.cleanup())
 
 /** Two boards backed up and copied offsite through the real path (registry backup -> listener -> upload). */
 async function boardsOffsite(): Promise<Record<string, BackupEntry>> {
-  const reg = new RoomRegistry({ dataDir: data.rooms, schema: draftroomSchema, idleEvictMs: 60_000 })
   const offsite = new OffsiteBackups({
     store: createFsBlobStore(data.blobs),
     localRoot: data.backups,
@@ -45,21 +43,19 @@ async function boardsOffsite(): Promise<Record<string, BackupEntry>> {
   const out: Record<string, BackupEntry> = {}
   try {
     for (const board of [A, B]) {
-      const c = new RoomClient(reg.getOrCreate(board), 'usr_a')
-      await c.connect()
+      const c = tldrawBoard(data.rooms, board, data.backups)
       await c.put(
         note('n1', `${board} one`),
         note('n2', 'two', { index: indexFor(2) }),
         fileCard('f', AST_A, VER_A),
       )
-      const entry = await reg.backupNow(board)
+      const entry = await c.backupNow()
       if (!entry) throw new Error('no backup')
       out[board] = entry
     }
     await offsite.idle()
   } finally {
     await offsite.stop()
-    reg.closeAll()
   }
   return out
 }
@@ -88,7 +84,7 @@ describe('restore drill from the store', () => {
         'file sha256 matches the manifest',
         'restored into a clean data dir',
         `${entry?.recordCount} records, clock ${entry?.documentClock}, digest matches`,
-        'opened through the sync room registry; every record identical',
+        expect.stringMatching(/^read through the converter's board-file reader/),
         'identical to the live board (unchanged since the backup)',
       ])
     }

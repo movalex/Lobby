@@ -8,7 +8,7 @@
 // got PREPARING then 4099 CONVERSION_FAILED and the snapshot route answered 503. Now the merge repairs the
 // share: the board opens, every key is unique, and the paint order is the one the room served.
 import { indexKeyBetween } from '@draftroom/canvas-schema/engine'
-import type { TLRecord } from '@tldraw/tlschema'
+import type { TLRecord } from '@draftroom/tldraw-import/tldraw'
 import { describe, expect, it } from 'vitest'
 import { rect } from '../element-room/support/elements.ts'
 import { newBoardId, useElementHarness } from '../element-room/support/stack.ts'

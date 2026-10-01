@@ -2,9 +2,10 @@
 // a client that saw the board after the backup gets a reset on reconnect instead of keeping ghost
 // elements. The horizon half ("a since below the horizon gets a reset") is baseline.test.ts's. Here: a
 // staged restore of a CONVERTED board (the backup code's restoreBackupFile, as staged-restore.ts applies
-// it, raising the tldraw clock) makes the board's next open a roll-forward (O4's, room/migrate/**), which
-// writes a new epoch. The room takes no epoch of its own: conversion, roll-forward and this restore path
-// are every restore an element board has today (see O1-room.md, "Epochs on restore").
+// it) puts the backup's lb_* state back with a NEW epoch and a clock raised past what any client saw
+// (2B; until wave 4 part 2 this test ran R0's restore path, which raised the tldraw clock and made the
+// next open a roll-forward instead). The room takes no epoch of its own: conversion, roll-forward and
+// this restore path are every restore an element board has today (see O1-room.md, "Epochs on restore").
 
 import { join } from 'node:path'
 import { backup, DatabaseSync } from 'node:sqlite'
@@ -50,7 +51,7 @@ describe('epochs on restore', () => {
     restoreBackupFile({ file: backupFile, roomsDir: rooms, boardId, overwrite: true, bumpClockBy: 1_000 })
     await st.server.restart()
     const b2 = await st.client({ boardId, user: 'bob', tab: 'bob-2', since, epoch, confirmed: held })
-    expect(b2.received[0]).toEqual({ type: 'notice', code: 'PREPARING' }) // the roll-forward
+    expect(b2.received[0]).toMatchObject({ type: 'welcome' }) // no roll-forward: the lb side went back as it was
     expect(b2.welcome?.reset).toBe(true)
     expect(b2.epoch).not.toBe(epoch)
     expect(b2.confirmed.has('ghost')).toBe(false)
@@ -59,9 +60,7 @@ describe('epochs on restore', () => {
     const status = (await (await callInternal(st.server.url, 'GET', '/internal/migrate/status')).json()) as {
       boards: { boardId: string; kind: string; state: string }[]
     }
-    expect(status.boards.filter((x) => x.boardId === boardId).map((x) => [x.kind, x.state])).toEqual([
-      ['rollforward', 'done'],
-    ])
+    expect(status.boards.filter((x) => x.boardId === boardId).map((x) => [x.kind, x.state])).toEqual([])
     // a second stale client (the pre-backup epoch) resets too
     const a2 = await st.client({ boardId, user: 'alice', tab: 'alice-2', since: 1, epoch })
     expect(a2.welcome?.reset).toBe(true)

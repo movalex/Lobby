@@ -5,8 +5,9 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { loadConfig, parseBackupStore } from '../../src/config.ts'
-import { note, RoomClient } from '../deleted/fixtures.ts'
 import { callInternal, errorCode, TEST_INTERNAL_SECRET, TEST_TICKET_SECRET } from '../harness/tickets.ts'
+import { note } from '../harness/tl-fixtures.ts'
+import { backupTldrawBoard, seedTldrawBoard } from '../harness/tldraw-file.ts'
 import { startServer, type TestServer, waitFor } from '../http/helpers.ts'
 
 const BOARD = 'status-board'
@@ -60,11 +61,11 @@ describe('GET /internal/backups/status', () => {
   it('shows the last offsite success per board after the server backed a board up', async () => {
     const s = await serverWithFsStore()
     expect(s.logs.some((l) => l.startsWith('[backup] offsite backups: fs ('))).toBe(true)
-    const c = new RoomClient(s.server.registry.getOrCreate(BOARD), 'usr_a')
-    await c.connect()
-    await c.put(note('n1', 'status'))
-    const entry = await s.server.registry.backupNow(BOARD)
-    if (!entry) throw new Error('no backup')
+    // a board file (from before the cut-over) backed up into this server's backups root: its offsite
+    // copy picks the new backup up like one the server made itself
+    const path = seedTldrawBoard(s.roomsDir, BOARD, [note('n1', 'status')])
+    if (!s.server.backupsDir) throw new Error('backups off')
+    const entry = await backupTldrawBoard(path, BOARD, s.server.backupsDir)
     type Body = {
       store: string
       prefix: string

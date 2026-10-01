@@ -11,7 +11,6 @@ import { DatabaseSync } from 'node:sqlite'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { checkpointBoardFile, copyBoardFileSelfContained } from '../../src/backup/checkpoint.ts'
-import { setBackupEngine } from '../../src/backup/engine.ts'
 import { restoreBackupFile } from '../../src/backup/restore.ts'
 import { boardDbPath } from '../../src/rooms.ts'
 import { fileSha256, LB_DDL, tablesOf, walBytes } from '../r0/support.ts'
@@ -110,16 +109,11 @@ describe('a board file whose schema is only in its WAL', () => {
 
   it('restoreBackupFile puts back a backup file with the WAL next to it (a --from=file restore of a raw copy)', () => {
     const path = walOnlyBoard()
-    setBackupEngine('excalidraw')
-    try {
-      const target = join(dir, 'target-rooms')
-      const result = restoreBackupFile({ file: path, roomsDir: target, boardId: BOARD, bumpClockBy: 0 })
-      expect(result.documentClock).toBe(7)
-      expect(tablesOf(result.path)).toEqual(expect.arrayContaining(['lb_elements', 'lb_meta']))
-      expect(walBytes(result.path)).toBe(0)
-    } finally {
-      setBackupEngine('tldraw')
-    }
+    const target = join(dir, 'target-rooms')
+    const result = restoreBackupFile({ file: path, roomsDir: target, boardId: BOARD, bumpClockBy: 0 })
+    expect(result.documentClock).toBe(7)
+    expect(tablesOf(result.path)).toEqual(expect.arrayContaining(['lb_elements', 'lb_meta']))
+    expect(walBytes(result.path)).toBe(0)
   })
 
   it('the runbook command checkpoints by --path or --board, and says when there is nothing to do', () => {

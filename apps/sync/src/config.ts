@@ -4,7 +4,6 @@ import { checkSecret } from '@draftroom/auth-tickets'
 import { resolveDataDir } from '@draftroom/dev-assets'
 import { BACKUP_DEFAULTS } from './backup/backup.ts'
 import type { BackupSigningSecrets } from './backup/signing.ts'
-import { parseEngine, type SyncEngine } from './engine-switch.ts'
 
 export interface SyncConfig {
   /** NODE_ENV as checked by `parseNodeEnv` (M2): production, development or test, nothing else boots. */
@@ -52,11 +51,6 @@ export interface SyncConfig {
    * offsite copy retries what is still missing. Default 15 minutes.
    */
   backupIntervalMs?: number
-  /**
-   * DRAFTROOM_ENGINE (spike B, engine-switch.ts): `tldraw` (default: TLSocketRoom) or `excalidraw` (the
-   * ElementRoom). Absent in configs built by hand = tldraw.
-   */
-  engine?: SyncEngine
   /**
    * DRAFTROOM_TEST_HOOKS=1 (spike B, test-hooks.ts): serve the test-only routes behind the internal secret.
    * Refused at start-up with NODE_ENV=production. Absent = off.
@@ -426,6 +420,7 @@ export function loadConfig(env: Env = process.env): SyncConfig {
     throw new Error(
       'DRAFTROOM_BACKUP_SIGNING_SECRET is required when DRAFTROOM_BACKUP_STORE is on in production: offsite backups are signed with it (docs/DEPLOY.md "Signed backups")',
     )
+  checkEngineFlag(read(env, 'DRAFTROOM_ENGINE'))
   return {
     nodeEnv,
     host: read(env, 'HOST') ?? '127.0.0.1',
@@ -448,10 +443,25 @@ export function loadConfig(env: Env = process.env): SyncConfig {
       1_000,
       24 * 60 * 60_000,
     ),
-    engine: parseEngine(read(env, 'DRAFTROOM_ENGINE')),
     testHooks: parseTestHooks(env),
     bootMaintenance: parseBootMaintenance(env),
   }
+}
+
+/**
+ * DRAFTROOM_ENGINE: this build runs the Excalidraw engine only (wave 4 part 2, docs/EXCALIDRAW-CUTOVER.md
+ * G10), so the variable may be unset or `excalidraw` (deploy environments and the e2e stacks still set
+ * it). `tldraw` is refused with the way back named: a rollback is a deploy of bridge release R0 (§7 of
+ * the runbook), never a flag on this build. Anything else is refused as before.
+ */
+export function checkEngineFlag(raw: string | undefined): void {
+  const v = raw?.trim()
+  if (!v || v === 'excalidraw') return
+  if (v === 'tldraw')
+    throw new Error(
+      'DRAFTROOM_ENGINE=tldraw is not available: this build runs the Excalidraw engine only. To serve boards on tldraw again, deploy bridge release R0 (docs/EXCALIDRAW-CUTOVER.md, Rollback).',
+    )
+  throw new Error('DRAFTROOM_ENGINE must be excalidraw or unset')
 }
 
 /** DRAFTROOM_BOOT_MAINTENANCE: 1 = start in maintenance, 0 or absent = start serving. */

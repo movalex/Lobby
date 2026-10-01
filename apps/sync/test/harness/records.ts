@@ -5,7 +5,7 @@ import {
   FILE_CARD_TYPE,
   fileCardShapeMigrations,
   fileCardShapeProps,
-} from '@draftroom/canvas-schema'
+} from '@draftroom/tldraw-import/schema'
 import {
   createShapeId,
   createShapePropsMigrationIds,
@@ -17,7 +17,7 @@ import {
   type TLSchema,
   type TLShapeId,
   toRichText,
-} from '@tldraw/tlschema'
+} from '@draftroom/tldraw-import/tldraw'
 
 export const PAGE_ID = 'page:page'
 

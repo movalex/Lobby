@@ -6,10 +6,9 @@
 // lb_* digest as recordsSha256), held 90 days, and the run says maintenance was on from start to end.
 import { join } from 'node:path'
 import { createTableTextMetrics, installServerTextMetrics } from '@draftroom/canvas-schema/engine'
-import type { TLRecord } from '@tldraw/tlschema'
-import { afterEach, describe, expect, it } from 'vitest'
+import type { TLRecord } from '@draftroom/tldraw-import/tldraw'
+import { describe, expect, it } from 'vitest'
 import { ElementBackups } from '../../src/backup/element-backups.ts'
-import { setBackupEngine } from '../../src/backup/engine.ts'
 import { createRunAll } from '../../src/backup/run-all.ts'
 import { lbFileFacts } from '../../src/r0/lb-files.ts'
 import { convertBoardFile } from '../../src/room/migrate/convert-board.ts'
@@ -33,11 +32,8 @@ const t0 = Date.UTC(2026, 9, 4, 9, 0)
 const CONVERTED = 'b-rsc-conv001'
 const BORN = 'b-rsc-born001'
 
-afterEach(() => setBackupEngine('tldraw'))
-
 describe('run-all in maintenance on the Excalidraw build is the rollback’s lb_* safety copy', () => {
   it('every lb_* table of the held copy has the live file’s digest, after edits and a roll-forward', async () => {
-    setBackupEngine('excalidraw')
     const data = tempData('dr-rsc-')
     try {
       const path = seedBoardRecords(data.rooms, CONVERTED, fixtureRecords('kitchen-sink'))

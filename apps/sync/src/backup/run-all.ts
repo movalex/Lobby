@@ -54,8 +54,7 @@
 
 import { randomBytes } from 'node:crypto'
 import type { BackupFormat } from '../r0/lb-files.ts'
-import type { RoomRegistry } from '../rooms.ts'
-import { isHeld, readManifest } from './backup.ts'
+import { type BackupEntry, isHeld, readManifest } from './backup.ts'
 import type { BackupService } from './service.ts'
 
 export interface RunAllBoard {
@@ -174,12 +173,16 @@ export interface RunAllRunView {
 }
 
 export interface RunAllDeps {
-  registry: Pick<RoomRegistry, 'boardFileIds' | 'backupFresh'>
+  /** The board files and a fresh backup of one (backup/element-backups.ts ElementBackups fits). */
+  registry: {
+    boardFileIds(): string[]
+    backupFresh(boardId: string, opts?: { holdUntil?: Date }): Promise<BackupEntry>
+  }
   backups: Pick<BackupService, 'copyOffsite' | 'status'>
   /** Whether maintenance mode is on (app.ts). Absent: never. */
   maintenance?: () => boolean
   /**
-   * The local backups root (RoomRegistry.backupsDir), read for the recent held set (findRecentHeldSet).
+   * The local backups root (rooms.ts backupsDirFor), read for the recent held set (findRecentHeldSet).
    * Absent or null: no run is ever refused for one (tests with registry stand-ins; backups off).
    */
   backupsDir?: () => string | null

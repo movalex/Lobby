@@ -18,21 +18,18 @@ import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { createFsBlobStore } from '@draftroom/blob-store'
 import { createTableTextMetrics, installServerTextMetrics } from '@draftroom/canvas-schema/engine'
-import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { backupBoard, inspectBoardDb, readManifest } from '../../src/backup/backup.ts'
 import { localBackupSource, runRestoreDrill, storeBackupSource } from '../../src/backup/drill.ts'
 import { ElementBackups } from '../../src/backup/element-backups.ts'
-import { setBackupEngine } from '../../src/backup/engine.ts'
 import { OffsiteBackups } from '../../src/backup/offsite.ts'
 import { MAX_MANIFEST_BYTES, offsiteKeys, parseManifest } from '../../src/backup/offsite-manifest.ts'
 import { createRunAll } from '../../src/backup/run-all.ts'
 import { backupSigningKey, checkEntry } from '../../src/backup/signing.ts'
 import { applyStagedRestores, stageRestore } from '../../src/backup/staged-restore.ts'
 import { getJson } from '../../src/backup/store.ts'
-import { unregisterBornAfterCheck } from '../../src/r0/index.ts'
 import { lbFileFacts } from '../../src/r0/lb-files.ts'
 import { convertBoardFile } from '../../src/room/migrate/convert-board.ts'
-import { recordsSha256 } from '../../src/room/migrate/digest.ts'
 import { boardFileState } from '../../src/room/migrate/service.ts'
 import { boardDbPath } from '../../src/rooms.ts'
 import { TEST_INTERNAL_SECRET } from '../harness/tickets.ts'
@@ -56,15 +53,12 @@ const DAY = 86_400_000
 const t0 = Date.UTC(2026, 9, 10, 9, 0)
 const key = backupSigningKey(TEST_INTERNAL_SECRET)
 
-afterAll(() => unregisterBornAfterCheck())
-
 let data: TempData
 beforeEach(() => {
   data = tempData('dr-xbk-')
   mkdirSync(data.rooms, { recursive: true })
 })
 afterEach(() => {
-  setBackupEngine('tldraw')
   data.cleanup()
 })
 
@@ -111,11 +105,6 @@ const firstElement = (path: string) => [...lbRows(path).values()].find((r) => r.
 describe('the Excalidraw build describes its board files from their lb_* tables', () => {
   it('a converted board is lobby-elements-converted; born on the new canvas is lobby-elements with its files', () => {
     const { conv, born } = boards()
-    // the tldraw build (R0): unchanged
-    expect(inspectBoardDb(conv).format).toBeUndefined()
-    expect(inspectBoardDb(conv).recordsSha256).toBe(readDb(conv, (db) => recordsSha256(db, 'documents')))
-    expect(inspectBoardDb(born)).toMatchObject({ format: 'lobby-elements', assets: [] })
-    setBackupEngine('excalidraw')
     const c = inspectBoardDb(conv)
     const lb = readDb(conv, (db) => lbFileFacts(db))
     expect(c).toMatchObject({
@@ -134,7 +123,6 @@ describe('the Excalidraw build describes its board files from their lb_* tables'
 
 describe('the periodic pass of the Excalidraw build', () => {
   it('backs up the boards whose lb_* state moved, never a tldraw-only one, and never writes a board file', async () => {
-    setBackupEngine('excalidraw')
     const { conv, born, tl } = boards()
     const sha = (p: string) => readDb(p, (db) => lbFileFacts(db).recordsSha256)
     const before = [sha(conv), sha(born)]
@@ -165,7 +153,6 @@ describe('the periodic pass of the Excalidraw build', () => {
 
 describe('retention keeps a held backup outside its count, locally and offsite', () => {
   it('a run-all backup survives 14 newer ones for 90 days, with format and holdUntil signed offsite', async () => {
-    setBackupEngine('excalidraw')
     const { conv } = boards()
     let now = t0
     const clock = () => new Date(now)
@@ -206,7 +193,6 @@ describe('retention keeps a held backup outside its count, locally and offsite',
 
 describe('the restore drill of the Excalidraw build', () => {
   it('opens lb backups through the element room’s store, from the local folder and from the offsite store', async () => {
-    setBackupEngine('excalidraw')
     boards()
     const eb = new ElementBackups({ roomsDir: data.rooms, backupsDir: data.backups })
     await eb.runPass()
@@ -226,17 +212,11 @@ describe('the restore drill of the Excalidraw build', () => {
     })
     expect(remote.ok).toBe(true)
     expect(remote.boards.map((b) => b.boardId).sort()).toEqual([BORN, CONVERTED].sort())
-    // the tldraw build (R0) keeps refusing the converted format by name, and checks lobby-elements only
-    setBackupEngine('tldraw')
-    const r0 = await runRestoreDrill({ dataDir: data.root, boardIds: [CONVERTED, BORN] })
-    expect(r0.boards[0]?.problems.join(' ')).toMatch(/written by a newer build/)
-    expect(r0.boards[1]?.checks.join(' ')).toMatch(/not opened \(this build serves tldraw boards only\)/)
   })
 })
 
 describe('a staged restore on the Excalidraw build', () => {
   it('puts an lb backup back with a new epoch and a clock past the live one', async () => {
-    setBackupEngine('excalidraw')
     const { conv } = boards()
     const eb = new ElementBackups({ roomsDir: data.rooms, backupsDir: data.backups, now: () => new Date(t0) })
     const old = await eb.backupFresh(CONVERTED)
@@ -287,7 +267,6 @@ describe('a staged restore on the Excalidraw build', () => {
         metrics,
       ).ok,
     ).toBe(true)
-    setBackupEngine('excalidraw')
     expect(boardFileState(live)).toBe('converted')
     await stageRestore({
       dataDir: data.root,
@@ -305,7 +284,6 @@ describe('a staged restore on the Excalidraw build', () => {
 
 describe('run-all on the Excalidraw build', () => {
   it('backs up every board file with a hold, and a pass meeting it on one board loses no manifest entry', async () => {
-    setBackupEngine('excalidraw')
     boards()
     let n = 0
     const eb = new ElementBackups({

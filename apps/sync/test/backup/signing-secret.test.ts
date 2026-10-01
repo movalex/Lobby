@@ -9,7 +9,6 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createFsBlobStore } from '@draftroom/blob-store'
-import { draftroomSchema } from '@draftroom/canvas-schema'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type { BackupEntry } from '../../src/backup/backup.ts'
 import { DrillProblem, runRestoreDrill, storeBackupSource } from '../../src/backup/drill.ts'
@@ -25,9 +24,9 @@ import {
 } from '../../src/backup/signing.ts'
 import { stageRestore } from '../../src/backup/staged-restore.ts'
 import { backupSigningSecrets, loadConfig } from '../../src/config.ts'
-import { RoomRegistry } from '../../src/rooms.ts'
-import { indexFor, note, RoomClient } from '../deleted/fixtures.ts'
 import { TEST_INTERNAL_SECRET } from '../harness/tickets.ts'
+import { indexFor, note } from '../harness/tl-fixtures.ts'
+import { tldrawBoard } from '../harness/tldraw-file.ts'
 import { type TempData, tempData } from './offsite-fixtures.ts'
 
 const BOARD = 'dedicated-board'
@@ -62,24 +61,22 @@ const store = () => createFsBlobStore(data.blobs)
 
 /** A board edited, backed up and copied offsite by a server signing with `key`; `extra` more edits + backups. */
 async function offsiteBoard(key: BackupSigningKey, extra = 0): Promise<BackupEntry[]> {
-  const reg = new RoomRegistry({ dataDir: data.rooms, schema: draftroomSchema, idleEvictMs: 60_000 })
+  const b = tldrawBoard(data.rooms, BOARD, data.backups)
   const offsite = new OffsiteBackups({ store: store(), localRoot: data.backups, signingKey: key, log })
   offsite.start()
   const out: BackupEntry[] = []
   try {
-    const c = new RoomClient(reg.getOrCreate(BOARD), 'usr_a')
-    await c.connect()
+    const c = b
     await c.put(note('n1', 'Q3 plan: approved'), note('n2', 'two', { index: indexFor(2) }))
     for (let i = 0; i <= extra; i++) {
       if (i > 0) await c.put(note(`e${i}`, `edit ${i}`, { index: indexFor(10 + i) }))
-      const entry = await reg.backupNow(BOARD)
+      const entry = await b.backupNow()
       if (!entry) throw new Error('no backup')
       out.push(entry)
       await offsite.idle()
     }
   } finally {
     await offsite.stop()
-    reg.closeAll()
   }
   return out
 }

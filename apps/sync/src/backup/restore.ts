@@ -18,11 +18,9 @@ import { existsSync, mkdirSync, renameSync, rmSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { isLbTable, tableNames } from '../r0/born-after.ts'
-import { carryLbTables } from '../r0/lb-carry.ts'
 import { lbFileFacts } from '../r0/lb-files.ts'
 import { boardDbPath } from '../rooms.ts'
 import { copyBoardFileSelfContained } from './checkpoint.ts'
-import { backupEngine } from './engine.ts'
 
 export interface RestoreBackupOptions {
   /** The backup file (backups/<boardId>/<file>.sqlite). */
@@ -34,18 +32,12 @@ export interface RestoreBackupOptions {
   overwrite?: boolean
   /** Raise the clock by this much (0 = keep it; the drill keeps it to compare exactly). */
   bumpClockBy?: number
-  /**
-   * Bridge release R0: a consistent copy of the live board (a CONVERTED board, with lb_* tables) whose
-   * new-canvas tables replace the restored copy's before it is put in place (r0/lb-carry.ts), so a
-   * tldraw restore during a rollback keeps the Excalidraw-era edits. Absent: the backup as it is.
-   */
-  carryLbFrom?: string
 }
 
 /**
  * Whether a backup file holds only the new engine's lb_* tables (a board born on the new canvas), read
  * with one read-only connection. Its clock is `lb_meta.clock`. null for anything else, an unreadable
- * file included (the tldraw path below then fails on it exactly as before).
+ * file included (the tldraw path below then fails on it).
  */
 export function newCanvasBackup(file: string): { documentClock: number } | null {
   let db: DatabaseSync
@@ -92,21 +84,17 @@ export function restoreBackupFile(opts: RestoreBackupOptions): { path: string; d
   const path = boardDbPath(opts.roomsDir, opts.boardId)
   if (existsSync(path) && !opts.overwrite)
     throw new Error(`board ${opts.boardId} already has a database there`)
-  // Bridge release R0 (open item 9): a board born on the new canvas is copied whole and never opened for
-  // writing (R0 never writes an lb_* table), so its clock cannot be raised here: the new build restores
-  // it (with a new epoch) after the switch. The drill restores it with bumpClockBy 0 to check it.
+  // A board of the new canvas (born there, or converted): its lb_* state goes back; the drill restores
+  // it with bumpClockBy 0 to check it.
   const bump = Math.max(0, Math.floor(opts.bumpClockBy ?? 0))
-  const lb =
-    newCanvasBackup(opts.file) ?? (backupEngine() === 'excalidraw' ? convertedBackup(opts.file) : null)
-  if (lb && bump > 0 && backupEngine() !== 'excalidraw')
-    throw new Error('this backup is of a board made on the new canvas; restore it after the switch')
+  const lb = newCanvasBackup(opts.file) ?? convertedBackup(opts.file)
   mkdirSync(dirname(path), { recursive: true })
   const tmp = `${path}.${randomBytes(4).toString('hex')}.restore-tmp`
   let documentClock: number
   if (lb && bump > 0) {
-    // The Excalidraw build (2B): the backup's lb_* state goes back with a NEW epoch, so every client that
-    // saw the board resets to it (the element room's reset rule, §2.6), and a clock raised past what
-    // any client saw. Offline operator action on the restored copy, as the tldraw path below.
+    // The backup's lb_* state goes back with a NEW epoch, so every client that saw the board resets to it
+    // (the element room's reset rule, §2.6), and a clock raised past what any client saw. Offline
+    // operator action on the restored copy, as the tldraw path below.
     try {
       copyBoardFileSelfContained(opts.file, tmp)
       const db = new DatabaseSync(tmp)
@@ -165,7 +153,6 @@ export function restoreBackupFile(opts: RestoreBackupOptions): { path: string; d
       }
       const row = db.prepare('SELECT documentClock FROM metadata LIMIT 1').get() as { documentClock: number }
       documentClock = Number(row.documentClock)
-      if (opts.carryLbFrom) carryLbTables(db, opts.carryLbFrom)
     } finally {
       db.close() // the last connection: checkpoints and removes the copy's own -wal/-shm
     }

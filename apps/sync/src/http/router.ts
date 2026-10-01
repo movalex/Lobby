@@ -4,20 +4,8 @@ import { RecentHeldSetError, RUN_ALL_ID_RE, type RunAll } from '../backup/run-al
 import { type BackupService, handleBackupStatus } from '../backup/service.ts'
 import type { InternalRoute } from '../engine-switch.ts'
 import { errorSummary } from '../log-error.ts'
-import { BoardOpenRefused, NEW_CANVAS_ERROR_CODE } from '../r0/pre-open.ts'
-import { handleAssetRefs } from './asset-refs.ts'
-import { handleBoardText } from './board-text.ts'
 import { readJson } from './body.ts'
-import {
-  handleAccessChanged,
-  handleListDeleted,
-  handleRestoreDeleted,
-  handleSeed,
-  handleSnapshot,
-  type InternalDeps,
-  refuseInMaintenance,
-} from './internal.ts'
-import { handlePlaceNotes } from './place-notes.ts'
+import { handleAccessChanged, type InternalDeps, refuseInMaintenance } from './internal.ts'
 import { HttpError, notFound, sendError, sendJson } from './respond.ts'
 
 export interface RouterDeps extends InternalDeps {
@@ -25,12 +13,10 @@ export interface RouterDeps extends InternalDeps {
   /** Offsite backup status (absent = off). */
   backups?: Pick<BackupService, 'status'>
   /**
-   * Spike B (engine-switch.ts): routes of the running engine (the ElementRoom's board routes,
-   * /internal/metrics, the test hooks), matched first. Behind the same secret check.
+   * The engine's routes (the ElementRoom's board routes and its extensions', /internal/metrics, the test
+   * hooks), matched first. Behind the same secret check.
    */
   engineRoutes?: readonly InternalRoute[]
-  /** false: the tldraw board routes are not mounted (DRAFTROOM_ENGINE=excalidraw). Default true. */
-  tldrawBoardRoutes?: boolean
   /**
    * Maintenance mode (bridge release R0, app.ts): `set(true)` lets the pushes that reached the server
    * commit, closes every socket with 4099 MAINTENANCE and refuses new ones. Absent: the routes answer 404.
@@ -41,12 +27,8 @@ export interface RouterDeps extends InternalDeps {
    * its report once done, and GET …/run-all lists the runs (backup/run-all.ts). Absent: 404.
    */
   runAll?: Pick<RunAll, 'request' | 'get' | 'list'>
-  /**
-   * The canvas engine this server runs (DRAFTROOM_ENGINE), for GET /internal/canvas: the api reads it to
-   * know whether the boards and checkpoints it makes are on the new canvas (bridge release R0's
-   * `boards.new_canvas` and `board_snapshots.body_version`). Absent = tldraw.
-   */
-  engine?: 'tldraw' | 'excalidraw'
+  /** The local backups root (null: local backups are off, so run-all answers 409 BACKUPS_OFF). Absent: off. */
+  backupsDir?: () => string | null
 }
 
 export interface MaintenanceControl {
@@ -56,18 +38,6 @@ export interface MaintenanceControl {
 
 type Handler = (req: IncomingMessage, res: ServerResponse, deps: RouterDeps, seg: string[]) => unknown
 type Route = { re: RegExp; methods: string[]; handle: Handler }
-
-/**
- * Wraps a board-writing handler: refused while maintenance is on, so no edit reaches a board file. This
- * is the check on entry, before the body is read; each handler checks again after reading it
- * (refuseInMaintenance, internal.ts), because maintenance can go on while a body is still arriving.
- */
-const writing =
-  (handle: Handler): Handler =>
-  (req, res, deps, seg) => {
-    refuseInMaintenance(deps)
-    return handle(req, res, deps, seg)
-  }
 
 const MAINTENANCE_LIMIT_BYTES = 1024
 
@@ -105,8 +75,7 @@ const hasBody = (req: IncomingMessage) =>
  */
 async function handleRunAllStart(req: IncomingMessage, res: ServerResponse, deps: RouterDeps) {
   if (!deps.runAll) throw notFound()
-  if (!deps.registry.backupsDir())
-    throw new HttpError(409, 'BACKUPS_OFF', 'Local backups are off on this server.')
+  if (!deps.backupsDir?.()) throw new HttpError(409, 'BACKUPS_OFF', 'Local backups are off on this server.')
   let force = false
   if (hasBody(req)) {
     const body = (await readJson(req, RUN_ALL_BODY_LIMIT_BYTES)) as Record<string, unknown> | null
@@ -148,7 +117,7 @@ function handleRunAllGet(res: ServerResponse, deps: RouterDeps, rawRunId: string
 
 // Captures are raw (still percent-encoded) path segments; board ids are checked against a strict
 // pattern before use, so an encoded '/' or '..' can only ever fail that check.
-// Engine-neutral routes: served whatever DRAFTROOM_ENGINE is.
+// The server's own routes; the board routes are the engine's (engineRoutes).
 const NEUTRAL_ROUTES: Route[] = [
   {
     re: /^\/internal\/access-changed$/,
@@ -174,59 +143,18 @@ const NEUTRAL_ROUTES: Route[] = [
     methods: ['GET'],
     handle: (_req, res, deps, [runId = '']) => handleRunAllGet(res, deps, runId),
   },
-  // Which canvas this server runs (R0's contracts: the api marks what it makes on the new canvas)
+  // Which canvas this server runs (R0's contracts: the api marks what it makes on the new canvas; since
+  // wave 4 part 2 this build has one answer, and R0's sync has no such route)
   {
     re: /^\/internal\/canvas$/,
     methods: ['GET'],
-    handle: (_req, res, deps) => sendJson(res, 200, { engine: deps.engine ?? 'tldraw' }),
+    handle: (_req, res) => sendJson(res, 200, { engine: 'excalidraw' }),
   },
   // Bridge release R0: maintenance mode (sockets closed and refused; internal reads keep working)
   {
     re: /^\/internal\/maintenance$/,
     methods: ['GET', 'POST'],
     handle: (req, res, deps) => handleMaintenance(req, res, deps),
-  },
-]
-// The tldraw board routes open tldraw storage on the board file: only with the tldraw engine.
-const TLDRAW_BOARD_ROUTES: Route[] = [
-  {
-    re: /^\/internal\/boards\/([^/]+)\/snapshot$/,
-    methods: ['GET'],
-    handle: (_req, res, deps, [board = '']) => handleSnapshot(res, deps, board),
-  },
-  {
-    re: /^\/internal\/boards\/([^/]+)\/seed$/,
-    methods: ['POST'],
-    handle: writing((req, res, deps, [board = '']) => handleSeed(req, res, deps, board)),
-  },
-  // "Recently deleted" (history feature; handlers in internal.ts)
-  {
-    re: /^\/internal\/boards\/([^/]+)\/deleted$/,
-    methods: ['GET'],
-    handle: (req, res, deps, [board = '']) => handleListDeleted(req, res, deps, board),
-  },
-  {
-    re: /^\/internal\/boards\/([^/]+)\/deleted\/restore$/,
-    methods: ['POST'],
-    handle: writing((req, res, deps, [board = '']) => handleRestoreDeleted(req, res, deps, board)),
-  },
-  // The api's asset collector: files the canvas and "Recently deleted" still reference (asset-refs.ts)
-  {
-    re: /^\/internal\/boards\/([^/]+)\/asset-refs$/,
-    methods: ['GET'],
-    handle: (_req, res, deps, [board = '']) => handleAssetRefs(res, deps, board),
-  },
-  // Private brainstorming: revealed drafts become notes (workshops private-notes; place-notes.ts)
-  {
-    re: /^\/internal\/boards\/([^/]+)\/place-notes$/,
-    methods: ['POST'],
-    handle: writing((req, res, deps, [board = '']) => handlePlaceNotes(req, res, deps, board)),
-  },
-  // Search across boards: a board's searchable text for the API's index (search; board-text.ts)
-  {
-    re: /^\/internal\/boards\/([^/]+)\/text$/,
-    methods: ['GET'],
-    handle: (req, res, deps, [board = '']) => handleBoardText(req, res, deps, board),
   },
 ]
 
@@ -240,12 +168,10 @@ async function route(req: IncomingMessage, res: ServerResponse, url: URL, deps: 
     // Before routing: without the secret, the internal surface is indistinguishable from a wall.
     if (!checkInternalSecret(req.headers[INTERNAL_SECRET_HEADER], deps.internalSecret))
       throw new HttpError(401, 'UNAUTHORIZED', 'Missing or invalid internal credentials.')
-    // The Excalidraw engine's routes: every POST writes a board (the room's workshop-state, the api's seed,
+    // The engine's routes: every POST writes a board (the room's workshop-state, the api's seed,
     // place-notes and deleted/restore, the test server-write and prepare) and is refused in maintenance
-    // like the tldraw board routes above (DEPLOY.md: "no edit can reach a board file"), except the
-    // cut-over's own `convert-all`, which the runbook runs INSIDE the maintenance window (§7.5 step 6).
-    // Before, only TLDRAW_BOARD_ROUTES were wrapped, so on DRAFTROOM_ENGINE=excalidraw a restore, a seed
-    // or an AI placement wrote the board file while files were being copied or converted (V2 P-M2, P-M4).
+    // (DEPLOY.md: "no edit can reach a board file"), except the cut-over's own `convert-all`, which the
+    // runbook runs INSIDE the maintenance window (§7.5 step 6). (V2 P-M2, P-M4.)
     const engine: Route[] = (deps.engineRoutes ?? []).map((r) => ({
       re: r.path,
       methods: [r.method],
@@ -255,11 +181,7 @@ async function route(req: IncomingMessage, res: ServerResponse, url: URL, deps: 
         return r.handle(req, res, seg)
       },
     }))
-    const routes = [
-      ...engine,
-      ...NEUTRAL_ROUTES,
-      ...(deps.tldrawBoardRoutes === false ? [] : TLDRAW_BOARD_ROUTES),
-    ]
+    const routes = [...engine, ...NEUTRAL_ROUTES]
     for (const r of routes) {
       const m = r.re.exec(p)
       if (!m) continue
@@ -296,8 +218,6 @@ export function createRequestHandler(deps: RouterDeps) {
     return handled.catch((e: unknown) => {
       let err: HttpError
       if (e instanceof HttpError) err = e
-      // Bridge release R0: a board born on the new canvas (r0/pre-open.ts), refused before any room opened.
-      else if (e instanceof BoardOpenRefused) err = new HttpError(409, NEW_CANVAS_ERROR_CODE, e.message)
       else {
         deps.log('[http error]', req.method, path, errorSummary(e))
         err = new HttpError(500, 'INTERNAL', 'Something went wrong. Please try again.')

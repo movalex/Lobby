@@ -83,7 +83,7 @@ describe('routing', () => {
       ws.onclose = resolve
     })
     await waitFor(() => t.logs.length >= 3)
-    expect(t.logs[0]).toMatch(/^GET \/internal\/boards\/board-a\/snapshot 200 \d+(\.\d+)?ms$/)
+    expect(t.logs[0]).toMatch(/^GET \/internal\/boards\/board-a\/snapshot 404 \d+(\.\d+)?ms$/) // no such board
     expect(t.logs[1]).toMatch(/^GET \/files\/x\/y\/original 404 \d+(\.\d+)?ms$/)
     expect(t.logs).toContainEqual(expect.stringMatching(/refused on board board-a: wrong_board/))
     for (const line of t.logs) {

@@ -8,9 +8,17 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { DELETED_LIMITS } from '../../src/deleted/store.ts'
 import { BoardStore, LB_DELETED_LIMITS } from '../../src/room/store.ts'
 import { rect } from './support/elements.ts'
+
+/** The tldraw era's "Recently deleted" limits (apps/sync/src/deleted/store.ts DELETED_LIMITS, before wave 4 part 2). */
+const DELETED_LIMITS = {
+  retainRecent: 1_000,
+  hardCap: 10_000,
+  perPush: 10_000,
+  trimEvery: 100,
+  listLimit: 2_000,
+}
 
 let dirs: string[] = []
 let stores: BoardStore[] = []

@@ -10,8 +10,7 @@ import { loadConfig } from '../../src/config.ts'
 import { ticketFor } from '../element-room/support/client.ts'
 import { note } from '../element-room/support/elements.ts'
 import { newBoardId, useElementHarness } from '../element-room/support/stack.ts'
-import { useProtocolHarness } from '../harness/fixture.ts'
-import { callInternal, mintTicket } from '../harness/tickets.ts'
+import { callInternal } from '../harness/tickets.ts'
 
 const T = 120_000
 
@@ -63,30 +62,6 @@ describe('DRAFTROOM_BOOT_MAINTENANCE', () => {
       expect(await json(off)).toEqual({ maintenance: false, closedSockets: 0 })
       const a = await st.client({ boardId: b, user: 'alice' })
       expect((await a.create([note('n1')])).r[0]).toMatchObject({ ok: true })
-    },
-    T,
-  )
-
-  const ph = useProtocolHarness()
-  it(
-    'the tldraw build too; without the flag both start serving',
-    async () => {
-      const server = await ph.server({ env: { DRAFTROOM_BOOT_MAINTENANCE: '1' } })
-      expect(await json(await callInternal(server.url, 'GET', '/internal/maintenance'))).toEqual({
-        maintenance: true,
-      })
-      expect(await json(await callInternal(server.url, 'GET', '/internal/canvas'))).toEqual({
-        engine: 'tldraw',
-      })
-      const b = newBoardId()
-      const url = `/connect/${b}?sessionId=t1&ticket=${encodeURIComponent(mintTicket(b, 'usr_zed'))}`
-      expect(await tryConnect(server.wsUrl, url)).toEqual({ code: 4099, reason: 'MAINTENANCE' })
-      await callInternal(server.url, 'POST', '/internal/maintenance', { body: { on: false } })
-      expect(await tryConnect(server.wsUrl, url)).toBe('open')
-      const plain = await ph.server()
-      expect(await json(await callInternal(plain.url, 'GET', '/internal/maintenance'))).toEqual({
-        maintenance: false,
-      })
     },
     T,
   )

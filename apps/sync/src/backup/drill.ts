@@ -2,9 +2,10 @@
 // For every board with backups: take the newest one from the source (the local backups folder, or the
 // offsite store: downloaded, streamed to disk), check its size and sha256 against its manifest,
 // restore it into a CLEAN data dir, check the restored records against the manifest (count + digest +
-// clock), open it through the real RoomRegistry (the server's code path: SQLiteSyncStorage, schema
-// check, tldraw migrations) and compare the room's records with the backup's, and, when the live board
-// has not changed since, compare with the live board too.
+// clock), open it the way the server would (an lb backup through the element room's store; a tldraw
+// backup from before the cut-over through the converter's board-file reader, which the room's conversion
+// reads at the board's first open) and compare what is read with the backup's records, and, when the
+// live board has not changed since, compare with the live board too.
 //
 // From the offsite store, the manifest's checksums are only worth something if the manifest is the
 // sync server's: the index, the manifest and the entry must each carry a signature that verifies
@@ -16,17 +17,15 @@ import { createHash } from 'node:crypto'
 import { createWriteStream, mkdirSync, mkdtempSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 import { Transform } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
-import { isDeepStrictEqual } from 'node:util'
 import type { BlobStore } from '@draftroom/blob-store'
-import { draftroomSchema } from '@draftroom/canvas-schema'
 import { dataLayout } from '@draftroom/dev-assets'
-import type { TLSchema } from '@tldraw/tlschema'
+import { readTldrawTables } from '@draftroom/tldraw-import/board-file'
 import { type BackupFormat, LB_BACKUP_FORMAT, LB_CONVERTED_FORMAT } from '../r0/lb-files.ts'
-import { BOARD_ID_RE, boardDbPath, RoomRegistry } from '../rooms.ts'
+import { BOARD_ID_RE, boardDbPath } from '../rooms.ts'
 import { backedUpBoards, describeBoardDb, inspectBoardDb, readManifest, sha256File } from './backup.ts'
-import { backupEngine } from './engine.ts'
 import { MAX_MANIFEST_BYTES, offsiteKeys, parseIndex, parseManifest } from './offsite-manifest.ts'
 import { restoreBackupFile } from './restore.ts'
 import type { BackupSigningKey, SignatureCheck } from './signing.ts'
@@ -339,22 +338,19 @@ export function storeBackupSource(store: BlobStore, opts: StoreSourceOptions): B
 
 /**
  * Restores `path` (the entry's bytes) into `workRooms`, checks the records against the entry, and
- * opens the result through the room registry. Returns what was verified; throws DrillProblem.
+ * opens the result the way the server would. Returns what was verified; throws DrillProblem.
  */
 export async function verifyRestorable(opts: {
   boardId: string
   entry: DrillEntry
   path: string
   workRooms: string
-  schema?: TLSchema
 }): Promise<{ checks: string[]; restoredPath: string; recordsSha256: string; format?: BackupFormat }> {
   const { boardId, entry } = opts
   const checks: string[] = []
-  const excalidraw = backupEngine() === 'excalidraw'
   // A format this build does not know (a newer build's, listed in the same manifest): it stays in the
-  // manifest and under retention, but is neither checked nor restored here. The Excalidraw build also
-  // knows its own `lobby-elements-converted` (backup/engine.ts); R0 refuses it here, by name.
-  const known: readonly string[] = excalidraw ? [LB_BACKUP_FORMAT, LB_CONVERTED_FORMAT] : [LB_BACKUP_FORMAT]
+  // manifest and under retention, but is neither checked nor restored here.
+  const known: readonly string[] = [LB_BACKUP_FORMAT, LB_CONVERTED_FORMAT]
   if (entry.format !== undefined && !known.includes(entry.format))
     throw new DrillProblem(
       `backup ${entry.file} is in format "${entry.format}", written by a newer build: this build cannot check or restore it`,
@@ -396,53 +392,48 @@ export async function verifyRestorable(opts: {
   if (problems.length) throw new DrillProblem(...problems)
   checks.push(`${restored.recordCount} records, clock ${restored.documentClock}, digest matches`)
 
-  // Bridge release R0 (open item 9): a board made on the new canvas is checked as far as this build can
-  // (size and sha256 of the file, integrity, its lb_* tables' digest and clock); the tldraw room never
-  // opens it (the born-after check would refuse it, and must never create tldraw tables in it).
-  if (restored.format && !excalidraw) {
-    checks.push(
-      'made on the new canvas: integrity and every lb_* table checked; not opened (this build serves tldraw boards only)',
-    )
-    return { checks, restoredPath, recordsSha256: restored.recordsSha256, format: restored.format }
-  }
-  // The Excalidraw build (2B): the element room's own store opens the restored file, as a room would.
+  // A board of the new canvas: the element room's own store opens the restored file, as a room would.
   if (restored.format) {
     checks.push(...(await openElementBoard(restoredPath, entry)))
     return { checks, restoredPath, recordsSha256: restored.recordsSha256, format: restored.format }
   }
+  // A tldraw backup from before the cut-over: the converter reads it at the room's first open (the
+  // conversion, room/migrate/convert-board.ts); its reader must find every record, byte for byte.
+  checks.push(...readTldrawBackup(restoredPath, restored))
+  return { checks, restoredPath, recordsSha256: restored.recordsSha256 }
+}
 
-  // The server's own open path: a room over the restored file must open and serve the same records.
-  const registry = new RoomRegistry({
-    dataDir: opts.workRooms,
-    schema: opts.schema ?? draftroomSchema,
-    backup: false,
-    idleEvictMs: 60_000,
-  })
+/** The converter's board-file reader over a restored tldraw backup: every described record, identical. */
+function readTldrawBackup(path: string, restored: ReturnType<typeof describeBoardDb>): string[] {
+  let db: DatabaseSync
   try {
-    const snap = registry.snapshot(boardId)
-    if (!snap) throw new DrillProblem('the restored board did not open')
-    const sameSchema = isDeepStrictEqual(snap.schema, entry.schema)
-    const served = new Map(snap.documents.map((d) => [d.state.id as string, d.state]))
-    if (served.size !== restored.records.size)
-      throw new DrillProblem('the opened room serves a different number of records')
-    for (const [id, raw] of restored.records) {
-      const got = served.get(id)
-      if (!got) throw new DrillProblem(`record ${id.slice(0, 80)} missing from the opened room`)
-      if (sameSchema && !isDeepStrictEqual(got, JSON.parse(raw)))
-        throw new DrillProblem(`record ${id.slice(0, 80)} differs in the opened room`)
+    db = new DatabaseSync(path, { readOnly: true })
+  } catch (e) {
+    throw new DrillProblem(`the restored tldraw board could not be opened: ${(e as Error).message}`)
+  }
+  try {
+    const tables = readTldrawTables(db)
+    if (tables.rows.length !== restored.records.size)
+      throw new DrillProblem('the converter reads a different number of records than the backup holds')
+    for (const row of tables.rows) {
+      const raw = restored.records.get(row.id)
+      if (raw === undefined)
+        throw new DrillProblem(`record ${row.id.slice(0, 80)} missing from the converter's read`)
+      if (Buffer.from(row.state).toString('utf8') !== raw)
+        throw new DrillProblem(`record ${row.id.slice(0, 80)} differs in the converter's read`)
+      JSON.parse(raw)
     }
-    checks.push(
-      sameSchema
-        ? 'opened through the sync room registry; every record identical'
-        : 'opened through the sync room registry (migrated from an older schema); every record present',
-    )
+    if (tables.documentClock !== restored.documentClock)
+      throw new DrillProblem('the converter reads another document clock than the backup holds')
+    return [
+      `read through the converter's board-file reader (what the room converts at its first open): ${tables.rows.length} records, every one identical and well-formed, clock ${tables.documentClock}`,
+    ]
   } catch (e) {
     if (e instanceof DrillProblem) throw e
-    throw new DrillProblem(`the restored board could not be opened: ${(e as Error).message}`)
+    throw new DrillProblem(`the restored tldraw board could not be read: ${(e as Error).message}`)
   } finally {
-    registry.closeAll()
+    db.close()
   }
-  return { checks, restoredPath, recordsSha256: restored.recordsSha256 }
 }
 
 /**
@@ -450,7 +441,6 @@ export async function verifyRestorable(opts: {
  * serves a file. The migration service's classification first (a converted board whose tldraw side moved
  * rolls forward when it opens: reported), then the room's own store (room/store.ts) opens the copy: its
  * clock must be the entry's, every element row (live and tombstones) counted, and every row readable.
- * Imported here only, so the tldraw build never loads the element room's code.
  */
 async function openElementBoard(path: string, entry: DrillEntry): Promise<string[]> {
   const { boardFileState } = await import('../room/migrate/service.ts')
@@ -492,7 +482,6 @@ export async function runRestoreDrill(opts: {
   /** Clean data dir to restore into (default: a new temp dir). Must not be `dataDir`. */
   workDir?: string
   keepWorkDir?: boolean
-  schema?: TLSchema
 }): Promise<DrillReport> {
   const layout = dataLayout(opts.dataDir)
   const source = opts.source ?? localBackupSource(join(layout.root, 'backups'))
@@ -505,7 +494,7 @@ export async function runRestoreDrill(opts: {
     const listed = opts.boardIds?.length ? { boardIds: opts.boardIds, warnings: [] } : await source.boards()
     warnings = listed.warnings
     for (const boardId of listed.boardIds)
-      boards.push(await drillBoard(boardId, source, layout.rooms, workDir, opts.schema ?? draftroomSchema))
+      boards.push(await drillBoard(boardId, source, layout.rooms, workDir))
   } finally {
     if (!opts.keepWorkDir) rmSync(workDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
   }
@@ -523,7 +512,6 @@ async function drillBoard(
   source: BackupSource,
   liveRooms: string,
   workDir: string,
-  schema: TLSchema,
 ): Promise<DrillBoardResult> {
   const result: DrillBoardResult = {
     boardId,
@@ -551,7 +539,6 @@ async function drillBoard(
       entry,
       path: got.path,
       workRooms: dataLayout(workDir).rooms,
-      schema,
     })
     result.checks.push(...verified.checks)
     const live = compareWithLive(boardId, entry, liveRooms)

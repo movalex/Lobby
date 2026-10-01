@@ -1,4 +1,4 @@
-// B8's content-leak search (e2e/spike-b/b8/leak-check.ts, leak-match.ts; §8.6.7), on a SYNTHETIC canary
+// B8's content-leak search (e2e/spike-b/support/leak-check.ts, leak-match.ts; §8.6.7), on a SYNTHETIC canary
 // board (no staging data): V3 (part-3 round) found the search saw only a verbatim, whole copy of a board
 // line. These cases failed on de3dc40 (the escaped, wrapped and partial copies gave 0 matches; a 4-character
 // string matched inside any word) and pass with leak-match.ts.
@@ -14,7 +14,7 @@ import {
   hasToken,
   needlesOf,
   normalizeText,
-} from '../../../../e2e/spike-b/b8/leak-match.ts'
+} from '../../../../e2e/spike-b/support/leak-match.ts'
 
 const REPO = resolve(import.meta.dirname, '../../../..')
 const LINE = 'Zephyr "Q9" roadmap review with Quillfeather & Brambleton partners'
@@ -87,7 +87,7 @@ describe('leak-check.ts on a synthetic restored board', () => {
     writeFileSync(join(out, 'r.json'), text)
     const r = spawnSync(
       process.execPath,
-      [join(REPO, 'e2e/spike-b/b8/leak-check.ts'), '--no-defaults', '--scan', out],
+      [join(REPO, 'e2e/spike-b/support/leak-check.ts'), '--no-defaults', '--scan', out],
       {
         env: { ...process.env, SPIKE_B8_DIR: dir },
         encoding: 'utf8',
@@ -140,7 +140,7 @@ describe('leak-check.ts: the forms and files V3 found unsearched', () => {
   const scan = (target: string, env: Record<string, string> = {}) => {
     const r = spawnSync(
       process.execPath,
-      [join(REPO, 'e2e/spike-b/b8/leak-check.ts'), '--no-defaults', '--scan', target],
+      [join(REPO, 'e2e/spike-b/support/leak-check.ts'), '--no-defaults', '--scan', target],
       { env: { ...process.env, SPIKE_B8_DIR: dir, ...env }, encoding: 'utf8' },
     )
     expect(r.stdout.includes('Quillfeather')).toBe(false)

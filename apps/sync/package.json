@@ -20,8 +20,6 @@
     "@draftroom/dev-assets": "workspace:*",
     "@draftroom/permissions": "workspace:*",
     "@draftroom/tldraw-import": "workspace:*",
-    "@tldraw/sync-core": "catalog:",
-    "@tldraw/tlschema": "catalog:",
     "ws": "catalog:",
     "zod": "catalog:"
   },

@@ -1,17 +1,15 @@
-// The engine dispatch of the sync server for spike B (docs/EXCALIDRAW-MIGRATION.md §8.6.2), frozen at
-// the contracts step C0 (docs/research/excalidraw/spike-b/CONTRACTS.md). Lead-owned.
+// The seam between the sync server's shell (app.ts: sockets, tickets, access, backups, maintenance) and
+// the ElementRoom (apps/sync/src/room/**), frozen at spike B's contracts step C0
+// (docs/research/excalidraw/spike-b/CONTRACTS.md). Since wave 4 part 2 the ElementRoom is the only engine
+// (the TLSocketRoom path and R0's born-after check left with it; DRAFTROOM_ENGINE=tldraw is refused by
+// config.ts, and a rollback is a deploy of bridge release R0: docs/EXCALIDRAW-CUTOVER.md §7).
 //
-//  - DRAFTROOM_ENGINE: unset or `tldraw` (today's TLSocketRoom, and in spike B the R0 stand-in) or
-//    `excalidraw` (O1's ElementRoom). Parsed by config.ts, dispatched by app.ts.
-//  - registerElementRoom(factory): O1's `apps/sync/src/room/index.ts` calls it when it is imported;
-//    `loadEngine('excalidraw')` imports it (server.ts does, before createSyncServer).
-//  - registerPreOpenCheck(fn): O4's R0 born-after check (`apps/sync/src/r0/`), run by
-//    RoomRegistry.open() before any writable handle to a board file exists (§8.3 B8);
-//    `loadEngine('tldraw')` imports `./r0/index.ts`.
+//  - registerElementRoom(factory): `apps/sync/src/room/index.ts` calls it when it is imported;
+//    `loadEngine()` imports it (server.ts does, before createSyncServer).
 //  - InternalRoute: how the room's internal routes (and /internal/metrics, the test hooks) are mounted by
 //    the HTTP router, behind the internal secret.
 //
-// Nothing here imports engine code: the ElementRoom is loaded only when DRAFTROOM_ENGINE=excalidraw.
+// Nothing here imports engine code statically: loadEngine() does.
 
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { WireElement } from '@draftroom/canvas-schema/elements'
@@ -20,27 +18,13 @@ import type { SyncConfig } from './config.ts'
 import type { BoardRole } from './permissions.ts'
 import type { BoardStore } from './room/store.ts'
 
-export const SYNC_ENGINES = ['tldraw', 'excalidraw'] as const
-export type SyncEngine = (typeof SYNC_ENGINES)[number]
-
-/** DRAFTROOM_ENGINE: unset or empty = tldraw. Throws on anything else (the message names the variable only). */
-export function parseEngine(raw: string | undefined): SyncEngine {
-  const v = raw?.trim()
-  if (!v || v === 'tldraw') return 'tldraw'
-  if (v === 'excalidraw') return 'excalidraw'
-  throw new Error('DRAFTROOM_ENGINE must be tldraw or excalidraw')
-}
-
 /**
- * Loads the engine's own modules, which register themselves here: O1's ElementRoom for `excalidraw`, O4's
- * R0 stand-in pre-open checks for `tldraw`. Idempotent (modules load once).
+ * Loads the engine's own modules, which register themselves here: the ElementRoom (`registerElementRoom`)
+ * and the internal routes built outside it (`registerRoomExtension`, CR 2F-1). Idempotent (modules load once).
  */
-export async function loadEngine(engine: SyncEngine): Promise<void> {
-  if (engine === 'excalidraw') {
-    await import('./room/index.ts')
-    // CR 2F-1: the internal routes built outside the room register themselves (registerRoomExtension)
-    await import('./room-internal/index.ts')
-  } else await import('./r0/index.ts')
+export async function loadEngine(): Promise<void> {
+  await import('./room/index.ts')
+  await import('./room-internal/index.ts')
 }
 
 // ---- internal routes ------------------------------------------------------------------------------
@@ -110,8 +94,7 @@ export interface LiveElementSession {
 /**
  * The session directory the access monitor, the session-end reporter and app.ts use in either engine.
  * `closeSession(sid, 'FORBIDDEN')` ends a session for good (4099 FORBIDDEN); `closeSession(sid)` with no
- * reason makes it reconnect (4000 RECONNECT; a role change). TLSocketRoom's `closeSession` has the same
- * signature, so today's RoomRegistry satisfies this interface unchanged.
+ * reason makes it reconnect (4000 RECONNECT; a role change).
  */
 export interface SessionDirectory {
   roomIfOpen(boardId: string): { closeSession(sessionId: string, reason?: string): void } | null
@@ -143,8 +126,8 @@ export interface ElementRoomDeps {
 
 /**
  * The ElementRoom service: every open board's room in this process. One per sync server. Created by the
- * registered factory when DRAFTROOM_ENGINE=excalidraw; with DRAFTROOM_TEST_HOOKS=1 it also calls
- * `registerTestHooks` (test-hooks.ts) and unregisters on `closeAll`.
+ * registered factory (app.ts); with DRAFTROOM_TEST_HOOKS=1 it also calls `registerTestHooks`
+ * (test-hooks.ts) and unregisters on `closeAll`.
  */
 export interface ElementRoomService extends SessionDirectory {
   /**
@@ -211,7 +194,7 @@ export function registerElementRoom(factory: ElementRoomFactory): void {
   elementRoomFactory = factory
 }
 
-/** The registered factory, or null when `./room/index.ts` was not loaded (loadEngine('excalidraw')). */
+/** The registered factory, or null when `./room/index.ts` was not loaded (loadEngine()). */
 export function registeredElementRoom(): ElementRoomFactory | null {
   return elementRoomFactory
 }
@@ -235,7 +218,7 @@ export type RoomExtension = (ctx: RoomExtensionContext) => readonly InternalRout
 
 const roomExtensions: RoomExtension[] = []
 
-/** Called by `./room-internal/index.ts` at import (loadEngine('excalidraw')). Returns the unregister function. */
+/** Called by `./room-internal/index.ts` at import (loadEngine()). Returns the unregister function. */
 export function registerRoomExtension(ext: RoomExtension): () => void {
   roomExtensions.push(ext)
   return () => {
@@ -273,47 +256,4 @@ export function extendElementRoom(service: ElementRoomService, deps: ElementRoom
     Object.assign(extended, { serverWrite: write })
   }
   return extended
-}
-
-// ---- pre-open checks (O4, the R0 stand-in's born-after check) ----------------------------------------
-
-export interface PreOpenContext {
-  readonly boardId: string
-  /** the board file's absolute path */
-  readonly path: string
-  /** whether the file exists (a new board has none; the check must never create it) */
-  readonly exists: boolean
-}
-export type PreOpenVerdict = { readonly ok: true } | { readonly ok: false; readonly reason: 'new-canvas' }
-export type PreOpenCheck = (ctx: PreOpenContext) => PreOpenVerdict
-
-/** A board the pre-open check refused: sockets get 4099 NEW_CANVAS_BOARD, internal routes 409 `new-canvas`. */
-export class BoardOpenRefused extends Error {
-  readonly boardId: string
-  readonly reason: 'new-canvas'
-  constructor(boardId: string, reason: 'new-canvas') {
-    super('This board was made on the new canvas and cannot be opened by this server.')
-    this.name = 'BoardOpenRefused'
-    this.boardId = boardId
-    this.reason = reason
-  }
-}
-
-const preOpenChecks: PreOpenCheck[] = []
-
-/** Adds a check RoomRegistry.open() runs before `new DatabaseSync(path)`. Returns the unregister function. */
-export function registerPreOpenCheck(check: PreOpenCheck): () => void {
-  preOpenChecks.push(check)
-  return () => {
-    const i = preOpenChecks.indexOf(check)
-    if (i >= 0) preOpenChecks.splice(i, 1)
-  }
-}
-
-/** Runs every registered check; throws BoardOpenRefused on the first refusal. Synchronous (open() is). */
-export function runPreOpenChecks(ctx: PreOpenContext): void {
-  for (const check of preOpenChecks) {
-    const verdict = check(ctx)
-    if (!verdict.ok) throw new BoardOpenRefused(ctx.boardId, verdict.reason)
-  }
 }

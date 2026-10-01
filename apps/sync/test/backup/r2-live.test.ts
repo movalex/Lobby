@@ -14,14 +14,13 @@ import { existsSync, readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { parseEnv } from 'node:util'
 import { type BlobStore, createR2BlobStore } from '@draftroom/blob-store'
-import { draftroomSchema } from '@draftroom/canvas-schema'
 import { afterAll, describe, expect, it } from 'vitest'
 import { runRestoreDrill, storeBackupSource } from '../../src/backup/drill.ts'
 import { OffsiteBackups } from '../../src/backup/offsite.ts'
 import { type OffsiteManifest, offsiteKeys } from '../../src/backup/offsite-manifest.ts'
 import { backupSigningKey } from '../../src/backup/signing.ts'
-import { RoomRegistry } from '../../src/rooms.ts'
-import { note, RoomClient } from '../deleted/fixtures.ts'
+import { note } from '../harness/tl-fixtures.ts'
+import { tldrawBoard } from '../harness/tldraw-file.ts'
 import { AST_A, fileCard, readJsonObject, tempData, VER_A } from './offsite-fixtures.ts'
 
 interface LiveCreds {
@@ -90,7 +89,7 @@ if ('skip' in live) {
 
   describe('live R2 offsite backups', () => {
     it('uploads a backup with its manifest and index, and the drill restores it from R2', async () => {
-      const reg = new RoomRegistry({ dataDir: data.rooms, schema: draftroomSchema, idleEvictMs: 60_000 })
+      const b = tldrawBoard(data.rooms, BOARD, data.backups)
       const offsite = new OffsiteBackups({
         store,
         localRoot: data.backups,
@@ -100,10 +99,9 @@ if ('skip' in live) {
       })
       offsite.start()
       try {
-        const c = new RoomClient(reg.getOrCreate(BOARD), 'usr_a')
-        await c.connect()
+        const c = b
         await c.put(note('n1', 'live'), fileCard('f', AST_A, VER_A))
-        const entry = await reg.backupNow(BOARD)
+        const entry = await b.backupNow()
         if (!entry) throw new Error('no backup')
         await offsite.idle()
         expect(offsite.status().boards[0]).toMatchObject({ lastSuccessFile: entry.file, failures: 0 })
@@ -121,7 +119,6 @@ if ('skip' in live) {
         expect(report.boards[0]?.checks).toContain('manifest entry signature verified')
       } finally {
         await offsite.stop()
-        reg.closeAll()
       }
       const printed = logs.join('\n')
       for (const secret of [creds.accessKeyId, creds.secretAccessKey, creds.accountId])

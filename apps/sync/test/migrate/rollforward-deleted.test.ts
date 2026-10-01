@@ -11,21 +11,19 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
-import { draftroomSchema } from '@draftroom/canvas-schema'
 import { createTableTextMetrics, installServerTextMetrics } from '@draftroom/canvas-schema/engine'
-import type { TLRecord } from '@tldraw/tlschema'
+import type { TLRecord } from '@draftroom/tldraw-import/tldraw'
 import { afterAll, describe, expect, it } from 'vitest'
-import { DeletedStore } from '../../src/deleted/store.ts'
-import { unregisterBornAfterCheck } from '../../src/r0/index.ts'
 import { convertBoardFile } from '../../src/room/migrate/convert-board.ts'
 import { rollForwardBoardFile } from '../../src/room/migrate/rollforward.ts'
-import { RoomRegistry } from '../../src/rooms.ts'
 import {
   addDeletedRows,
   excalidrawEdit,
   fixtureRecords,
   lbRows,
   r0Edit,
+  r0Restore,
+  r0Trim,
   readDb,
   seedBoardRecords,
 } from './support.ts'
@@ -33,7 +31,6 @@ import {
 const metrics = installServerTextMetrics(createTableTextMetrics())
 const suiteDir = mkdtempSync(join(tmpdir(), 'dr-rfdel-'))
 afterAll(() => {
-  unregisterBornAfterCheck()
   rmSync(suiteDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
 })
 
@@ -98,22 +95,8 @@ describe('roll-forward: R0 restores and trims in "Recently deleted"', () => {
     const live = lbDeleted(path).filter((r) => r.origin === 'live')
 
     // the rollback: R0 restores the cloud (its own restore), trims to the newest batch, deletes tri
-    const reg = new RoomRegistry({ dataDir: rooms, schema: draftroomSchema, backup: false })
-    try {
-      reg.getOrCreate(boardId)
-      expect(reg.restoreDeleted(boardId, ['shape:cloud']).restored).toContain('shape:cloud')
-    } finally {
-      reg.closeAll()
-    }
-    const tdb = new DatabaseSync(path)
-    try {
-      const schemaId = (
-        tdb.prepare('SELECT id FROM dr_deleted_schemas ORDER BY id LIMIT 1').get() as { id: number }
-      ).id
-      new DeletedStore({ db: tdb, schemaId, limits: { retainRecent: 1, hardCap: 1 } }).trimNow()
-    } finally {
-      tdb.close()
-    }
+    expect(r0Restore(path, ['shape:cloud'])).toContain('shape:cloud')
+    r0Trim(path, 1)
     r0Delete(rooms, boardId, path, 'shape:tri')
     expect(drShapeIds(path)).toEqual(['shape:autotext', 'shape:tri'])
 
@@ -151,13 +134,7 @@ describe('roll-forward: R0 restores and trims in "Recently deleted"', () => {
     )
     expect(lbDeleted(path).map((r) => owner(r.element_id))).toContain('tri')
     // rollback 2: R0 restores tri
-    const reg = new RoomRegistry({ dataDir: rooms, schema: draftroomSchema, backup: false })
-    try {
-      reg.getOrCreate(boardId)
-      expect(reg.restoreDeleted(boardId, ['shape:tri']).restored).toContain('shape:tri')
-    } finally {
-      reg.closeAll()
-    }
+    expect(r0Restore(path, ['shape:tri'])).toContain('shape:tri')
     const rep = rollForwardBoardFile({ kind: 'rollforward', boardId, path, reportDir, at: 3 }, metrics)
     expect(rep).toMatchObject({ ok: true, cycle: 2 })
     expect(lbDeleted(path).map((r) => owner(r.element_id))).not.toContain('tri')

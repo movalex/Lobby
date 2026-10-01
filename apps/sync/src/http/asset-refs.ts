@@ -1,6 +1,7 @@
 // GET /internal/boards/:bid/asset-refs (the api's asset collector, apps/api/src/files/gc.ts): which
 // uploaded file versions a board still references, on its canvas and in its "Recently deleted" capture.
-// Read-only: nothing on the board changes, and a board without storage is answered without creating one.
+// The route is room-internal/asset-refs.ts (the Excalidraw engine's); this module keeps the scan over
+// tldraw-era records, which that route runs over a converted board's `lb_source` and `dr_deleted_*`.
 //
 // Two record kinds point at files (the same ones backup/asset-refs.ts records in the backup manifest):
 // dr-file-card shapes (props.assetId + props.versionId) and tldraw image/video asset records whose
@@ -11,12 +12,8 @@
 // canvas ("canvas") or a shape the "Recently deleted" capture can still put back ("deleted"). Asset
 // records no shape uses are listed apart ("unusedAssetRecords"), for the report, and keep nothing.
 
-import type { ServerResponse } from 'node:http'
 import { FILE_CARD_TYPE } from '@draftroom/canvas-schema'
 import type { AssetRef } from '../backup/asset-refs.ts'
-import { BOARD_ID_RE } from '../rooms.ts'
-import type { InternalDeps } from './internal.ts'
-import { HttpError, sendJson } from './respond.ts'
 
 export type { AssetRef }
 
@@ -123,20 +120,4 @@ export class AssetRefScan {
       unusedAssetRecords: sorted(unused),
     }
   }
-}
-
-/** GET /internal/boards/:bid/asset-refs -> BoardAssetRefs. */
-export function handleAssetRefs(res: ServerResponse, deps: InternalDeps, rawBoardId: string) {
-  if (!BOARD_ID_RE.test(rawBoardId)) throw new HttpError(400, 'INVALID_BOARD_ID', 'Invalid board id.')
-  if (deps.isClosing()) throw new HttpError(503, 'SHUTTING_DOWN', 'The sync server is shutting down.')
-  const scan = new AssetRefScan()
-  const exists = deps.registry.scanRecords(
-    rawBoardId,
-    (record) => scan.addCanvas(record),
-    (state) => scan.addDeleted(state),
-  )
-  // Bridge release R0: a converted board also holds the new canvas's elements (lb_*), which this build
-  // never reads; files only they show are not in this answer, so the collector must not call it complete.
-  const partial = exists && deps.registry.hasNewCanvasTables(rawBoardId)
-  sendJson(res, 200, { ...scan.result(rawBoardId, exists), ...(partial ? { newCanvasTables: true } : {}) })
 }

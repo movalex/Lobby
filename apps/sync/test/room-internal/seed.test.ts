@@ -4,9 +4,9 @@
 
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
-import { draftroomSchema } from '@draftroom/canvas-schema'
 import { isValidIndexKey } from '@draftroom/canvas-schema/engine'
 import { checkInvariants } from '@draftroom/canvas-schema/invariants'
+import { draftroomSchema } from '@draftroom/tldraw-import/schema'
 import { describe, expect, it } from 'vitest'
 import { label, note, rect } from '../element-room/support/elements.ts'
 import { newBoardId, useElementHarness } from '../element-room/support/stack.ts'

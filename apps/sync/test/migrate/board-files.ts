@@ -2,10 +2,13 @@
 import { createHash } from 'node:crypto'
 import { existsSync, readFileSync, statSync } from 'node:fs'
 import { DatabaseSync } from 'node:sqlite'
-import { draftroomSchema } from '@draftroom/canvas-schema'
-import type { TLRecord } from '@tldraw/tlschema'
+import { draftroomSchema } from '@draftroom/tldraw-import/schema'
+import type { TLRecord } from '@draftroom/tldraw-import/tldraw'
 import { ensureLbSchema, LB_PRAGMAS, serializeGclock } from '../../src/room/schema.ts'
-import { boardDbPath, RoomRegistry } from '../../src/rooms.ts'
+import { boardDbPath } from '../../src/rooms.ts'
+import { seedBoardRecords, seedTldrawBoard } from '../harness/tldraw-file.ts'
+
+export { seedBoardRecords, seedTldrawBoard }
 
 export const fileSha256 = (path: string) => createHash('sha256').update(readFileSync(path)).digest('hex')
 
@@ -37,45 +40,6 @@ export function makeBornAfterFile(path: string): void {
   }
 }
 
-/** A tldraw board written by today's RoomRegistry (the current build's code), then closed. */
-export function seedTldrawBoard(dataDir: string, boardId: string, records: readonly TLRecord[] = []): string {
-  const reg = new RoomRegistry({ dataDir, schema: draftroomSchema, backup: false })
-  try {
-    reg.seed(boardId, {
-      documentClock: 0,
-      tombstoneHistoryStartsAtClock: 0,
-      tombstones: {},
-      schema: draftroomSchema.serialize(),
-      documents: [
-        {
-          state: {
-            id: 'document:document',
-            typeName: 'document',
-            gridSize: 10,
-            name: '',
-            meta: {},
-          } as unknown as TLRecord,
-          lastChangedClock: 0,
-        },
-        {
-          state: {
-            id: 'page:page',
-            typeName: 'page',
-            name: 'Page 1',
-            index: 'a1',
-            meta: {},
-          } as unknown as TLRecord,
-          lastChangedClock: 0,
-        },
-        ...records.map((state) => ({ state, lastChangedClock: 0 })),
-      ],
-    })
-  } finally {
-    reg.closeAll()
-  }
-  return boardDbPath(dataDir, boardId)
-}
-
 /** Every table name of a board file (read-only). */
 export function tablesOf(path: string): string[] {
   const db = new DatabaseSync(path, { readOnly: true })
@@ -97,23 +61,6 @@ const FIXTURES = new URL('../../../../packages/tldraw-import/test/fixtures/', im
 /** A converter fixture's records (templates regenerated from this tree, [DATA]'s kitchen sink). */
 export function fixtureRecords(name: string): TLRecord[] {
   return JSON.parse(readFileSync(new URL(`tl-${name}.json`, FIXTURES), 'utf8')) as TLRecord[]
-}
-
-/** A tldraw board written by today's RoomRegistry from a whole record set (document and pages included). */
-export function seedBoardRecords(dataDir: string, boardId: string, records: readonly TLRecord[]): string {
-  const reg = new RoomRegistry({ dataDir, schema: draftroomSchema, backup: false })
-  try {
-    reg.seed(boardId, {
-      documentClock: 0,
-      tombstoneHistoryStartsAtClock: 0,
-      tombstones: {},
-      schema: draftroomSchema.serialize(),
-      documents: records.map((state) => ({ state, lastChangedClock: 0 })),
-    })
-  } finally {
-    reg.closeAll()
-  }
-  return boardDbPath(dataDir, boardId)
 }
 
 /** Appends captured deletes to a board's "Recently deleted" as one batch (what a client's delete push leaves). */
@@ -257,7 +204,11 @@ export function excalidrawCreate(path: string, el: Record<string, unknown>) {
   }
 }
 
-/** A tldraw-side (R0) edit: today's registry opens the board and runs `fn` in one storage transaction. */
+/**
+ * A tldraw-side (R0) edit: what R0's room wrote into the tldraw tables for one push (records set or
+ * deleted at the next document clock; a delete leaves a tombstone), as SQL on the file (R0's code is not
+ * on this branch). Records set are validated against the era's schema.
+ */
 export function r0Edit(
   dataDir: string,
   boardId: string,
@@ -267,20 +218,86 @@ export function r0Edit(
     delete(id: string): void
   }) => void,
 ) {
-  const reg = new RoomRegistry({ dataDir, schema: draftroomSchema, backup: false })
+  const db = new DatabaseSync(boardDbPath(dataDir, boardId))
   try {
-    const room = reg.getOrCreate(boardId)
-    room.storage.transaction((txn) => {
-      fn({
-        get: (id) => txn.get(id as TLRecord['id']) as TLRecord | undefined,
-        set: (id, r) => {
-          draftroomSchema.types[r.typeName as 'shape'].validate(r)
-          txn.set(id as TLRecord['id'], r)
-        },
-        delete: (id) => txn.delete(id as TLRecord['id']),
-      })
+    db.exec('BEGIN IMMEDIATE')
+    const meta = db.prepare('SELECT documentClock FROM metadata LIMIT 1').get() as { documentClock: number }
+    const clock = Number(meta.documentClock) + 1
+    const read = db.prepare('SELECT state FROM documents WHERE id = ?')
+    const upsert = db.prepare(
+      'INSERT INTO documents (id, state, lastChangedClock) VALUES (?, ?, ?) ON CONFLICT(id) DO UPDATE SET state = excluded.state, lastChangedClock = excluded.lastChangedClock',
+    )
+    const remove = db.prepare('DELETE FROM documents WHERE id = ?')
+    const tombstone = db.prepare(
+      'INSERT INTO tombstones (id, clock) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET clock = excluded.clock',
+    )
+    fn({
+      get: (id) => {
+        const row = read.get(id) as { state: Uint8Array } | undefined
+        return row ? (JSON.parse(Buffer.from(row.state).toString('utf8')) as TLRecord) : undefined
+      },
+      set: (id, r) => {
+        ;(draftroomSchema.types as Record<string, { validate(x: unknown): unknown }>)[r.typeName]?.validate(r)
+        upsert.run(id, Buffer.from(JSON.stringify(r), 'utf8'), clock)
+        db.prepare('DELETE FROM tombstones WHERE id = ?').run(id)
+      },
+      delete: (id) => {
+        remove.run(id)
+        tombstone.run(id, clock)
+      },
     })
+    db.prepare('UPDATE metadata SET documentClock = ?').run(clock)
+    db.exec('COMMIT')
+    db.exec('PRAGMA wal_checkpoint(TRUNCATE)')
   } finally {
-    reg.closeAll()
+    db.close()
+  }
+}
+
+/**
+ * R0 restoring shapes from its "Recently deleted" (deleted/restore.ts of the tldraw era): the newest
+ * captured state of each id goes back into `documents` at the next clock, and the capture's rows for
+ * that id are removed (removeRestored). Ids with no captured row are skipped.
+ */
+export function r0Restore(path: string, ids: readonly string[]): string[] {
+  const db = new DatabaseSync(path)
+  const restored: string[] = []
+  try {
+    db.exec('BEGIN IMMEDIATE')
+    const meta = db.prepare('SELECT documentClock FROM metadata LIMIT 1').get() as { documentClock: number }
+    const clock = Number(meta.documentClock) + 1
+    for (const id of ids) {
+      const row = db
+        .prepare('SELECT state FROM dr_deleted_records WHERE record_id = ? ORDER BY seq DESC LIMIT 1')
+        .get(id) as { state: string } | undefined
+      if (!row) continue
+      db.prepare(
+        'INSERT INTO documents (id, state, lastChangedClock) VALUES (?, ?, ?) ON CONFLICT(id) DO UPDATE SET state = excluded.state, lastChangedClock = excluded.lastChangedClock',
+      ).run(id, Buffer.from(row.state, 'utf8'), clock)
+      db.prepare('DELETE FROM tombstones WHERE id = ?').run(id)
+      db.prepare('DELETE FROM dr_deleted_records WHERE record_id = ?').run(id)
+      restored.push(id)
+    }
+    if (restored.length) db.prepare('UPDATE metadata SET documentClock = ?').run(clock)
+    db.exec('COMMIT')
+    db.exec('PRAGMA wal_checkpoint(TRUNCATE)')
+  } finally {
+    db.close()
+  }
+  return restored
+}
+
+/** R0's trim of its capture (deleted/store.ts trimNow): whole batches, oldest first, down to the newest `keepBatches`. */
+export function r0Trim(path: string, keepBatches = 1): void {
+  const db = new DatabaseSync(path)
+  try {
+    db.exec('BEGIN IMMEDIATE')
+    db.prepare(
+      'DELETE FROM dr_deleted_records WHERE batch NOT IN (SELECT DISTINCT batch FROM dr_deleted_records ORDER BY batch DESC LIMIT ?)',
+    ).run(keepBatches)
+    db.exec('COMMIT')
+    db.exec('PRAGMA wal_checkpoint(TRUNCATE)')
+  } finally {
+    db.close()
   }
 }

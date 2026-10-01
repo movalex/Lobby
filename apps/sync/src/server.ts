@@ -16,10 +16,11 @@ if (config.nodeEnv !== 'production')
     `sync: NODE_ENV=${config.nodeEnv} (not production): the production refusals are off, so dev-only placeholder secrets, test hooks, a missing Origin check and loopback internal URLs are allowed when their own flags say so`,
   )
 
-// Spike B (engine-switch.ts): the engine's own modules register themselves before the server is built.
+// The engine's own modules (the ElementRoom and its internal routes) register themselves before the
+// server is built (engine-switch.ts).
 let server: ReturnType<typeof createSyncServer>
 try {
-  await loadEngine(config.engine ?? 'tldraw')
+  await loadEngine()
   server = createSyncServer(config)
 } catch (e) {
   console.error(`sync: cannot start: ${(e as Error).message}`)

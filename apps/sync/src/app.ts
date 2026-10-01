@@ -1,10 +1,10 @@
+import { mkdirSync } from 'node:fs'
 import { createServer, type IncomingMessage, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import type { Duplex } from 'node:stream'
 import { type TicketClaims, verifyTicket } from '@draftroom/auth-tickets'
-import { draftroomSchema } from '@draftroom/canvas-schema'
+import { CLOSE_TERMINAL } from '@draftroom/canvas-schema/protocol'
 import { dataLayout } from '@draftroom/dev-assets'
-import { TLSyncErrorCloseEventCode, TLSyncErrorCloseEventReason } from '@tldraw/sync-core'
 import { type WebSocket, WebSocketServer } from 'ws'
 import {
   type AccessClient,
@@ -12,8 +12,8 @@ import {
   createAccessMonitor,
   createApiAccessClient,
 } from './access.ts'
+import type { BackupEntry } from './backup/backup.ts'
 import { ElementBackups } from './backup/element-backups.ts'
-import { setBackupEngine } from './backup/engine.ts'
 import { createRunAll } from './backup/run-all.ts'
 import { type BackupService, createBackupService } from './backup/service.ts'
 import { isAllowedOrigin, type SyncConfig } from './config.ts'
@@ -23,17 +23,15 @@ import {
   extendElementRoom,
   type InternalRoute,
   registeredElementRoom,
-  type SessionDirectory,
 } from './engine-switch.ts'
 import { createRequestHandler, type MaintenanceControl } from './http/router.ts'
 import { JoinQueue } from './join-queue.ts'
 import { errorSummary } from './log-error.ts'
 import { type BoardRole, canEditCanvas } from './permissions.ts'
-import { InboundFrames, presenceIdentity } from './presence.ts'
-import { BoardOpenRefused, NEW_CANVAS_CLOSE_REASON } from './r0/pre-open.ts'
+import { presenceIdentity } from './presence.ts'
 import { closeTerminal } from './room/closing.ts'
 import { registerMaintenanceState } from './room/migrate/maintenance.ts'
-import { BOARD_ID_RE, RoomRegistry } from './rooms.ts'
+import { BOARD_ID_RE, backupsDirFor } from './rooms.ts'
 import { createApiSessionEndClient, createSessionEndReporter, type SessionEndClient } from './session-end.ts'
 import { testHookRoutes } from './test-hooks.ts'
 import { createApiTouchClient, createTouchReporter, type TouchClient, type TouchReporter } from './touch.ts'
@@ -54,14 +52,15 @@ export interface SyncServerOptions {
 
 export interface SyncServer {
   http: Server
-  registry: RoomRegistry
-  /** Spike B: the ElementRoom service when DRAFTROOM_ENGINE=excalidraw (engine-switch.ts), else null. */
-  elementRooms: ElementRoomService | null
+  /** The ElementRoom service: every open board's room (engine-switch.ts). */
+  elementRooms: ElementRoomService
   monitor: AccessMonitor
   /** Reports canvas edits to the API (dashboard "Edited …"; touch.ts). */
   touches: TouchReporter
   /** Offsite copies of the backups, staged restores, the backup status (backup/service.ts). */
   backups: BackupService
+  /** The local backups root (null when the data dir is not the server's layout: a bare folder in a test). */
+  backupsDir: string | null
   /** Maintenance mode (bridge release R0; POST /internal/maintenance drives the same switch). */
   maintenance: MaintenanceControl
   /** Resolves with the bound port (useful with `port: 0`). */
@@ -72,8 +71,8 @@ export interface SyncServer {
 
 export function createSyncServer(config: SyncConfig, opts: SyncServerOptions = {}): SyncServer {
   const log = opts.log ?? ((...a: unknown[]) => console.log(...a))
-  // One engine per process: what the backups, the restore drill and staged restores describe (2B).
-  setBackupEngine(config.engine ?? 'tldraw')
+  const roomsDir = dataLayout(config.dataDir).rooms
+  mkdirSync(roomsDir, { recursive: true })
   // The registry reports removals to the monitor, which is created from the registry.
   let monitor: AccessMonitor | null = null
   const touches = createTouchReporter({
@@ -88,63 +87,34 @@ export function createSyncServer(config: SyncConfig, opts: SyncServerOptions = {
     client:
       opts.sessionEndClient ??
       createApiSessionEndClient({ baseUrl: config.apiInternalUrl, internalSecret: config.internalSecret }),
-    hasEditors: (boardId) => directory.sessionsOf(boardId).some((s) => canEditCanvas(s.meta.role)),
+    hasEditors: (boardId) => elementRooms.sessionsOf(boardId).some((s) => canEditCanvas(s.meta.role)),
     log,
   })
-  const registry = new RoomRegistry({
-    dataDir: dataLayout(config.dataDir).rooms,
-    schema: draftroomSchema,
-    idleEvictMs: config.idleEvictMs,
-    textLeaseMs: config.textLeaseMs,
-    log,
-    onSessionRemoved: (boardId, sessionId, meta) => {
+  // The ElementRoom (engine-switch.ts): sockets and the board routes go to it.
+  const elementRooms: ElementRoomService = createElementRooms(config, log, {
+    removed: (boardId, sessionId, meta) => {
       monitor?.removed(boardId, sessionId)
       sessionEnds.removed(boardId, meta)
     },
-    onDocumentChange: (boardId) => {
+    changed: (boardId) => {
       touches.touched(boardId)
       sessionEnds.changed(boardId)
     },
-    backup: config.backupIntervalMs ? { intervalMs: config.backupIntervalMs } : undefined,
   })
-  // Spike B (engine-switch.ts): with DRAFTROOM_ENGINE=excalidraw, sockets and board routes go to O1's
-  // ElementRoom; the tldraw registry above stays idle (nothing opens a board file through it).
-  const elementRooms: ElementRoomService | null =
-    config.engine === 'excalidraw'
-      ? createElementRooms(config, log, {
-          removed: (boardId, sessionId, meta) => {
-            monitor?.removed(boardId, sessionId)
-            sessionEnds.removed(boardId, meta)
-          },
-          changed: (boardId) => {
-            touches.touched(boardId)
-            sessionEnds.changed(boardId)
-          },
-        })
-      : null
-  /**
-   * A terminal close before any room (a refused ticket, maintenance at the upgrade). On the Excalidraw
-   * engine the CLOSING notice goes first (CONTRACTS_REV 9, SMK-2: the edge delivered an empty close frame);
-   * a tldraw-protocol client gets the bare close it understands.
-   */
-  const refuseTerminal = (ws: WebSocket, reason: string) =>
-    elementRooms ? closeTerminal(ws, reason) : ws.close(TLSyncErrorCloseEventCode, reason)
-  const directory: SessionDirectory = elementRooms ?? registry
-  const backups = createBackupService({ config, backupsDir: registry.backupsDir(), log })
-  // The Excalidraw build's local backups of its boards (2B, backup/element-backups.ts): the tldraw
-  // registry above backs up only the rooms it has open, and with this engine it opens none.
-  const backupsDir = registry.backupsDir()
-  const elementBackups =
-    elementRooms && backupsDir
-      ? new ElementBackups({
-          roomsDir: dataLayout(config.dataDir).rooms,
-          backupsDir,
-          ...(config.backupIntervalMs ? { intervalMs: config.backupIntervalMs } : {}),
-          log,
-        })
-      : null
+  // Local backups of the board files (backup/element-backups.ts): on when the data dir is the server's
+  // layout (<DATA>/rooms -> <DATA>/backups), off for a bare folder (tests).
+  const backupsDir = backupsDirFor(roomsDir)
+  const backups = createBackupService({ config, backupsDir, log })
+  const elementBackups = backupsDir
+    ? new ElementBackups({
+        roomsDir,
+        backupsDir,
+        ...(config.backupIntervalMs ? { intervalMs: config.backupIntervalMs } : {}),
+        log,
+      })
+    : null
   const access: AccessMonitor = createAccessMonitor({
-    registry: directory,
+    registry: elementRooms,
     client:
       opts.accessClient ??
       createApiAccessClient({ baseUrl: config.apiInternalUrl, internalSecret: config.internalSecret }),
@@ -156,19 +126,21 @@ export function createSyncServer(config: SyncConfig, opts: SyncServerOptions = {
   let closing: Promise<void> | null = null
   const inflight = new Set<Promise<void>>()
   const engineRoutes: InternalRoute[] = [
-    ...(elementRooms ? [...elementRooms.routes(), metricsRoute(elementRooms)] : []),
+    ...elementRooms.routes(),
+    metricsRoute(elementRooms),
     ...(config.testHooks ? testHookRoutes() : []),
   ]
 
   // ---- maintenance mode (bridge release R0, docs/EXCALIDRAW-MIGRATION.md §5.10, §7.5 step 3) --------
   // POST /internal/maintenance {on}. On: the pushes that already reached the server (held behind a
   // queued connect, join-queue.ts) are delivered and commit, then every socket is closed with 4099
-  // MAINTENANCE (terminal on the client: the web shows "Lobby is updating"), and new ones are refused
-  // the same way, after the ticket check and before any room is touched. Internal reads keep working
-  // (snapshot for the final checkpoints, backups, run-all); the internal routes that write a board are
-  // refused (router.ts). A runtime switch: a restart or a redeploy starts with it off, unless the server
-  // was started with DRAFTROOM_BOOT_MAINTENANCE=1 (open item 11: the build deployed into the cut-over's
-  // maintenance window starts in it; the same POST turns it off).
+  // MAINTENANCE (terminal on the client: the web shows "Lobby is updating"; the CLOSING notice goes
+  // first, room/closing.ts), and new ones are refused the same way, after the ticket check and before
+  // any room is touched. Internal reads keep working (snapshot for the final checkpoints, backups,
+  // run-all); the internal routes that write a board are refused (router.ts). A runtime switch: a
+  // restart or a redeploy starts with it off, unless the server was started with
+  // DRAFTROOM_BOOT_MAINTENANCE=1 (open item 11: the build deployed into the cut-over's maintenance
+  // window starts in it; the same POST turns it off).
   let maintenance = config.bootMaintenance === true
   if (maintenance) log('[maintenance] on at start (DRAFTROOM_BOOT_MAINTENANCE=1)')
   const setMaintenance = (on: boolean) => {
@@ -177,14 +149,9 @@ export function createSyncServer(config: SyncConfig, opts: SyncServerOptions = {
     let closedSockets = 0
     if (on) {
       joins.flush()
-      for (const [key, ws] of [...liveSockets]) {
-        const slash = key.indexOf('/')
-        const boardId = key.slice(0, slash)
-        const sid = key.slice(slash + 1)
-        const room = registry.roomIfOpen(boardId)
-        if (room?.getSessions().some((s) => s.sessionId === sid)) room.closeSession(sid, MAINTENANCE_REASON)
-        // Not in the room (or the room did not close it): closed here. 0 CONNECTING, 1 OPEN.
-        if (ws.readyState < 2) refuseTerminal(ws, MAINTENANCE_REASON)
+      for (const ws of [...liveSockets.values()]) {
+        // 0 CONNECTING, 1 OPEN. The room's session handler cleans up on the close.
+        if (ws.readyState < 2) closeTerminal(ws, MAINTENANCE_REASON)
         closedSockets++
       }
     }
@@ -195,27 +162,24 @@ export function createSyncServer(config: SyncConfig, opts: SyncServerOptions = {
   // convert-all is refused while maintenance is off unless confirmed (room/migrate/maintenance.ts; audit L6)
   registerMaintenanceState(() => maintenance)
   const runAll = createRunAll({
-    registry: elementBackups ?? registry,
+    registry: elementBackups ?? BACKUPS_OFF,
     backups,
     log,
     maintenance: () => maintenance,
     // a run while a recent held set exists is refused unless forced (run-all.ts; audit L6)
-    backupsDir: () => registry.backupsDir(),
+    backupsDir: () => backupsDir,
   })
 
   const handle = createRequestHandler({
     internalSecret: config.internalSecret,
-    registry,
-    schema: draftroomSchema,
     monitor: access,
     backups,
     isClosing: () => closing !== null,
     log,
     engineRoutes,
-    tldrawBoardRoutes: !elementRooms,
     maintenance: maintenanceControl,
     runAll,
-    engine: config.engine ?? 'tldraw',
+    backupsDir: () => backupsDir,
   })
   const http = createServer((req, res) => {
     const p = handle(req, res)
@@ -225,8 +189,8 @@ export function createSyncServer(config: SyncConfig, opts: SyncServerOptions = {
 
   const wss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 })
   const liveSockets = new Map<string, WebSocket>() // `${boardId}/${sid}` -> current ws
-  // One expensive TLSync connect per macrotask (PERF-05, join-queue.ts): a crowd joining at once no
-  // longer blocks everyone else's edits. Keyed per socket, not per session id (a replaced socket).
+  // One expensive connect per macrotask (PERF-05, join-queue.ts): a crowd joining at once no longer
+  // blocks everyone else's edits. Keyed per socket, not per session id (a replaced socket).
   const joins = new JoinQueue()
   let socketSeq = 0
 
@@ -247,7 +211,7 @@ export function createSyncServer(config: SyncConfig, opts: SyncServerOptions = {
     } catch {}
     const m = url && /^\/connect\/([^/]+)$/.exec(url.pathname)
     const boardId = m?.[1]
-    const clientSessionId = url?.searchParams.get('sessionId') // appended by useSync (TAB_ID)
+    const clientSessionId = url?.searchParams.get('sessionId') // appended by the client (TAB_ID)
     if (!url || !boardId || !BOARD_ID_RE.test(boardId) || !clientSessionId || clientSessionId.length > 128) {
       socket.write('HTTP/1.1 400 Bad Request\r\n\r\n')
       return void socket.destroy()
@@ -259,108 +223,20 @@ export function createSyncServer(config: SyncConfig, opts: SyncServerOptions = {
     wss.handleUpgrade(req, socket, head, (ws) => {
       if (!verdict.ok) {
         // A valid signature for another board is an authorization failure, not an authentication one.
-        const reason =
-          verdict.reason === 'wrong_board'
-            ? TLSyncErrorCloseEventReason.FORBIDDEN
-            : TLSyncErrorCloseEventReason.NOT_AUTHENTICATED
+        const reason = verdict.reason === 'wrong_board' ? 'FORBIDDEN' : 'NOT_AUTHENTICATED'
         log(`[connect] refused on board ${boardId}: ${verdict.reason}`) // never the ticket itself
-        // 4099 = terminal on the client (an HTTP 401 before the upgrade would retry forever)
-        return refuseTerminal(ws, reason)
+        // 4099 = terminal on the client (an HTTP 401 before the upgrade would retry forever); the
+        // CLOSING notice goes first (CONTRACTS_REV 9, SMK-2: the edge delivered an empty close frame)
+        return closeTerminal(ws, reason)
       }
-      // Maintenance (bridge release R0): refused before any room is touched, on either engine; terminal
-      // on the client. setMaintenance closes the element sockets too (they are in liveSockets).
-      if (maintenance) return refuseTerminal(ws, MAINTENANCE_REASON)
-      if (elementRooms) return connectElement(elementRooms, ws, boardId, clientSessionId, verdict.claims)
-      const { uid, role, name, color, iat } = verdict.claims
-      let room: ReturnType<RoomRegistry['getOrCreate']>
-      try {
-        room = registry.getOrCreate(boardId) // synchronous from here on
-      } catch (e) {
-        // Bridge release R0: a board born on the new canvas; refused without touching the file.
-        if (e instanceof BoardOpenRefused) {
-          log(`[connect] refused on board ${boardId}: made on the new canvas`)
-          return ws.close(TLSyncErrorCloseEventCode, NEW_CANVAS_CLOSE_REASON)
-        }
-        log('room open failed', boardId, errorSummary(e))
-        return ws.close(TLSyncErrorCloseEventCode, TLSyncErrorCloseEventReason.UNKNOWN_ERROR)
-      }
-      const sid = `${uid}:${clientSessionId}` // namespace the client-chosen id by user
-      const liveKey = `${boardId}/${sid}`
-      const prev = liveSockets.get(liveKey)
-      liveSockets.set(liveKey, ws)
-      if (prev && prev !== ws) prev.close(1000, 'replaced')
-      // Who the TICKET is, never who the client claims to be: presence and the session's own tldraw
-      // user record carry exactly this (presence.ts, user-records.ts).
-      const who = presenceIdentity({ uid, name, color })
-      room.handleSocketConnect({
-        sessionId: sid,
-        // wrapper WITHOUT addEventListener: the room must not bind listeners to the raw ws, or a late
-        // 'close' from a replaced socket kills the new session that has the same sessionId
-        socket: {
-          send: (d: string) => ws.send(d),
-          close: (c?: number, r?: string) => ws.close(c, r),
-          get readyState() {
-            return ws.readyState
-          },
-        },
-        // The server is the enforcement: viewers and commenters get their writes discarded.
-        isReadonly: !canEditCanvas(role),
-        meta: { userId: uid, role, name, color: who.color },
-      })
-      access.admitted(boardId, sid, uid, iat)
-      const isCurrent = () => liveSockets.get(liveKey) === ws
-      const socketKey = ++socketSeq
-      // Binds presence and the session's own user record to `who`. This also reassembles chunked
-      // frames, so the room only ever receives whole, checked messages.
-      const inbound = new InboundFrames(who)
-      let refused = false // nothing more from a socket caught forging, while its close goes out
-      // Checked again at delivery: the socket may have been replaced while its frames were queued.
-      const deliver = (frame: string) => {
-        if (!isCurrent() || refused) return
-        const r = inbound.accept(frame)
-        if (r.kind === 'deliver') room.handleSocketMessage(sid, r.text)
-        else if (r.kind === 'forged' || r.kind === 'forged-user') {
-          refused = true
-          log(
-            r.kind === 'forged'
-              ? `[presence] refused a presence claiming another user on board ${boardId}`
-              : `[user-record] refused a user record unlike the ticket on board ${boardId}`,
-          )
-          // 4099: terminal on the client, so a stale tab stops here instead of retrying in a loop.
-          room.closeSession(sid, TLSyncErrorCloseEventReason.INVALID_RECORD)
-        } else if (r.kind === 'malformed') room.handleSocketError(sid) // what the room's assembler does
-      }
-      let tokens = 400
-      let last = Date.now()
-      ws.on('message', (data, isBinary) => {
-        if (!isCurrent()) return
-        const now = Date.now()
-        tokens = Math.min(400, tokens + ((now - last) / 1000) * 200)
-        last = now
-        if (--tokens < 0) return room.closeSession(sid, TLSyncErrorCloseEventReason.RATE_LIMITED)
-        const text = isBinary ? Buffer.from(data as Buffer).toString('utf8') : data.toString()
-        const chunkHead = /^(\d+)_/.exec(text) // chunk frames: "<remaining>_<payload>"
-        if (chunkHead && Number(chunkHead[1]) > 40)
-          return room.closeSession(sid, TLSyncErrorCloseEventReason.INVALID_RECORD)
-        joins.push(socketKey, text, deliver)
-      })
-      ws.on('close', () => {
-        joins.drop(socketKey)
-        if (!isCurrent()) return
-        liveSockets.delete(liveKey)
-        room.handleSocketClose(sid)
-      })
-      ws.on('error', () => {
-        joins.drop(socketKey)
-        if (!isCurrent()) return
-        liveSockets.delete(liveKey)
-        room.handleSocketError(sid)
-      })
+      // Maintenance (bridge release R0): refused before any room is touched; terminal on the client.
+      if (maintenance) return closeTerminal(ws, MAINTENANCE_REASON)
+      connectElement(elementRooms, ws, boardId, clientSessionId, verdict.claims)
     })
   }
-  // Spike B: a verified socket on the ElementRoom, with the same guards as the tldraw path: the
-  // replaced-socket guard keyed by boardId/sid, the message token bucket (4099 RATE_LIMITED), the join
-  // queue and the access monitor's admission. The room parses and answers every message (protocol.ts).
+  // A verified socket on the ElementRoom: the replaced-socket guard keyed by boardId/sid, the message
+  // token bucket (4099 RATE_LIMITED), the join queue and the access monitor's admission. The room parses
+  // and answers every message (protocol.ts).
   const connectElement = (
     rooms: ElementRoomService,
     ws: WebSocket,
@@ -371,6 +247,7 @@ export function createSyncServer(config: SyncConfig, opts: SyncServerOptions = {
     const { uid, role, name, color, iat } = claims
     const sid = `${uid}:${clientSessionId}`
     const liveKey = `${boardId}/${sid}`
+    // Who the TICKET is, never who the client claims to be (presence.ts).
     const who = presenceIdentity({ uid, name, color })
     let session: ReturnType<ElementRoomService['connect']>
     try {
@@ -398,8 +275,8 @@ export function createSyncServer(config: SyncConfig, opts: SyncServerOptions = {
         },
       )
     } catch (e) {
-      log('room open failed', boardId, (e as Error)?.message ?? 'unknown') // the message only
-      return ws.close(TLSyncErrorCloseEventCode, 'UNKNOWN_ERROR')
+      log('room open failed', boardId, errorSummary(e)) // never the error object (L5)
+      return ws.close(CLOSE_TERMINAL, 'UNKNOWN_ERROR')
     }
     const prev = liveSockets.get(liveKey)
     liveSockets.set(liveKey, ws)
@@ -426,7 +303,7 @@ export function createSyncServer(config: SyncConfig, opts: SyncServerOptions = {
       const now = Date.now()
       tokens = Math.min(400, tokens + ((now - last) / 1000) * 200)
       last = now
-      if (--tokens < 0) return ws.close(TLSyncErrorCloseEventCode, 'RATE_LIMITED')
+      if (--tokens < 0) return ws.close(CLOSE_TERMINAL, 'RATE_LIMITED')
       const text = isBinary ? Buffer.from(data as Buffer).toString('utf8') : data.toString()
       joins.push(socketKey, text, deliver)
     })
@@ -445,11 +322,11 @@ export function createSyncServer(config: SyncConfig, opts: SyncServerOptions = {
 
   return {
     http,
-    registry,
     elementRooms,
     monitor: access,
     touches,
     backups,
+    backupsDir,
     maintenance: maintenanceControl,
     async listen() {
       await backups.start() // staged restores first: no room can be open yet
@@ -471,8 +348,7 @@ export function createSyncServer(config: SyncConfig, opts: SyncServerOptions = {
           ? new Promise<void>((resolve) => http.close(() => resolve()))
           : Promise.resolve()
         joins.clear()
-        registry.closeAll() // closes rooms (and their sessions' sockets), flushes the prune, closes DBs
-        await elementRooms?.closeAll()
+        await elementRooms.closeAll() // closes rooms (and their sessions' sockets) and board files
         registerMaintenanceState(null)
         // Upgraded sockets are no longer HTTP connections, so closeAllConnections() does not see them.
         for (const ws of wss.clients) ws.terminate()
@@ -497,7 +373,13 @@ export function createSyncServer(config: SyncConfig, opts: SyncServerOptions = {
   }
 }
 
-/** Spike B: creates O1's ElementRoom service (engine-switch.ts) with the server's reporters. */
+/** What run-all sees when local backups are off (the route answers 409 BACKUPS_OFF before any run). */
+const BACKUPS_OFF = {
+  boardFileIds: (): string[] => [],
+  backupFresh: (): Promise<BackupEntry> => Promise.reject(new Error('backups are off')),
+}
+
+/** Creates the ElementRoom service (engine-switch.ts) with the server's reporters. */
 function createElementRooms(
   config: SyncConfig,
   log: (...a: unknown[]) => void,
@@ -512,9 +394,7 @@ function createElementRooms(
 ): ElementRoomService {
   const factory = registeredElementRoom()
   if (!factory)
-    throw new Error(
-      'DRAFTROOM_ENGINE=excalidraw but no ElementRoom is registered (loadEngine() imports apps/sync/src/room/index.ts)',
-    )
+    throw new Error('no ElementRoom is registered (loadEngine() imports apps/sync/src/room/index.ts)')
   const deps: ElementRoomDeps = {
     dataDir: dataLayout(config.dataDir).rooms,
     config,

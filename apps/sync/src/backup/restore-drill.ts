@@ -26,11 +26,9 @@ import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { dataLayout, resolveDataDir } from '@draftroom/dev-assets'
 import { backupSigningSecrets, parseBackupStore } from '../config.ts'
-import { parseEngine } from '../engine-switch.ts'
 import { BOARD_ID_RE } from '../rooms.ts'
 import { backupBoard } from './backup.ts'
 import { runRestoreDrill, storeBackupSource } from './drill.ts'
-import { setBackupEngine } from './engine.ts'
 import { backupSigningKey } from './signing.ts'
 import { openBackupStore } from './store.ts'
 
@@ -69,8 +67,6 @@ function parseArgs(argv: string[]) {
 
 async function main() {
   const args = parseArgs(process.argv.slice(2))
-  // the engine the service runs (its DRAFTROOM_ENGINE, in the same shell): what its board files hold
-  setBackupEngine(parseEngine(process.env.DRAFTROOM_ENGINE))
   const dataDir = args.dataDir ?? resolveDataDir(process.env)
   const layout = dataLayout(dataDir)
   let source: ReturnType<typeof storeBackupSource> | undefined

@@ -2,8 +2,8 @@
 // generated boards (e2e/spike-b/b8/corpus.ts) and O4's sync tests. Every record is validated with the one
 // server schema. The heavy board is a port of e2e/perf/seed.ts `HEAVY` (same ids, text, positions,
 // colours and tags; images reference stable fake file ids instead of uploads).
-import { draftroomSchema } from '@draftroom/canvas-schema'
-import { b64Vecs, type TLRecord, toRichText } from '@tldraw/tlschema'
+import { draftroomSchema } from '@draftroom/tldraw-import/schema'
+import { b64Vecs, type TLRecord, toRichText } from '@draftroom/tldraw-import/tldraw'
 
 export type { TLRecord }
 

@@ -12,9 +12,8 @@ import {
   installServerTextMetrics,
 } from '@draftroom/canvas-schema/engine'
 import { checkInvariants } from '@draftroom/canvas-schema/invariants'
-import type { TLRecord } from '@tldraw/tlschema'
+import type { TLRecord } from '@draftroom/tldraw-import/tldraw'
 import { afterAll, describe, expect, it } from 'vitest'
-import { unregisterBornAfterCheck } from '../../src/r0/index.ts'
 import { convertBoardFile } from '../../src/room/migrate/convert-board.ts'
 import { type RollForwardReport, rollForwardBoardFile } from '../../src/room/migrate/rollforward.ts'
 import {
@@ -29,7 +28,6 @@ import {
 const metrics = installServerTextMetrics(createTableTextMetrics())
 const suiteDir = mkdtempSync(join(tmpdir(), 'dr-rf-repairs-'))
 afterAll(() => {
-  unregisterBornAfterCheck()
   rmSync(suiteDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
 })
 
