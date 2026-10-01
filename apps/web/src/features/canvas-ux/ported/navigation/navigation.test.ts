@@ -18,10 +18,12 @@ import { boxOf } from './camera.ts'
 import { chromeMayZoom } from './chrome-keys.ts'
 import { linkToElements } from './copy-link.ts'
 import { autoOrderWrites, presentOrderWrites } from './FramesPanel.tsx'
+import { feature } from './index.tsx'
 import { frameAt, frameRows, legacyTypeOf, lockedInCanvas, searchCanvas } from './model.ts'
 import { keepOnlyCategory, selectAllOfCategory, selectionKeepOnlyChoices } from './select-by-type.ts'
 import { navigateToDeepLink, parseStoredView, readBoardStartView, readStoredView } from './start-view.ts'
 import { pendingPaste } from './state.ts'
+import { codeSelectionBoxes, selectByCode, viewIsEmpty } from './view-helpers.ts'
 import { wheelZoom, zoomAroundPoint } from './zoom.ts'
 
 installServerTextMetrics()
@@ -604,5 +606,64 @@ describe('wave 3b: the zoom wheel below 0.1, the camera keys from the chrome, on
   it('an element box from its fields (the whole-board loops no longer call the port’s per-id bounds)', () => {
     const [n] = note('n1', 100, 50, 'x')
     expect(boxOf(n as unknown as CanvasElement)).toEqual({ x: 100, y: 50, width: 200, height: 200 })
+  })
+})
+
+describe('wave 5 review (W5-19, W5-33, W5-39, W5-54)', () => {
+  it('W5-19: the wheel below 0.1 never zooms in on an out gesture and steps in proportion', () => {
+    // below the floor (the board grew back smaller after a fit, a follow put the camera there): out stays
+    expect(wheelZoom(0.03, { deltaY: 100, deltaMode: 0 }, { min: 0.05, max: 8 })).toBe(0.03)
+    // below 0.1 on a board that fits at 0.1: the engine's wheel would snap out to 0.1 and step in by +0.1
+    expect(wheelZoom(0.069, { deltaY: 100, deltaMode: 0 }, { min: 0.1, max: 8 })).toBe(0.069)
+    expect(wheelZoom(0.069, { deltaY: -100, deltaMode: 0 }, { min: 0.1, max: 8 })).toBeCloseTo(0.0759)
+    // a trackpad pinch's small deltas: a small proportional step either way
+    expect(wheelZoom(0.069, { deltaY: -2, deltaMode: 0 }, { min: 0.1, max: 8 })).toBeCloseTo(0.069 * 1.02)
+  })
+
+  it('W5-33: the board menu has a View submenu with the zoom commands and the minimap', () => {
+    const view = (feature.mainMenu ?? []).filter((e) => e.group === 'view')
+    expect(view.map((e) => e.command ?? e.id)).toEqual([
+      'navigation.zoom-in',
+      'navigation.zoom-out',
+      'navigation.zoom-to-100',
+      'navigation.zoom-to-fit',
+      'navigation.zoom-to-selection',
+      'navigation.view.minimap',
+    ])
+    const commands = new Set((feature.commands ?? []).map((c) => c.id))
+    for (const e of view) if (e.command) expect(commands.has(e.command), e.command).toBe(true)
+    const f = fake(note('n1', 0, 0, 'x'))
+    const sel = view.find((e) => e.command === 'navigation.zoom-to-selection')
+    const target = { ids: [], point: null, hit: null }
+    expect(sel?.disabled?.(f.ctx, target)).toBe(true)
+    f.canvas.select(['n1'])
+    expect(sel?.disabled?.(f.ctx, target)).toBe(false)
+  })
+
+  it('W5-39: a connector selected by a link or a search result gets an outline while that selection stands', () => {
+    const f = fake([
+      el('a1', 'arrow', 100, 100, 200, 0, {
+        points: [
+          [0, 0],
+          [200, 0],
+        ],
+      }),
+      ...note('n1', 500, 0, 'x'),
+    ])
+    Object.assign(f.canvas, { sceneToOverlay: (p: { x: number; y: number }) => ({ x: p.x, y: p.y }) })
+    selectByCode(f.canvas, ['a1', 'n1'])
+    expect(f.canvas.selection).toEqual(['a1', 'n1'])
+    // only the connector: the engine draws the note's own selection box
+    expect(codeSelectionBoxes(f.canvas)).toEqual([{ id: 'a1', x: 92, y: 92, w: 216, h: 16 }])
+    f.canvas.select(['a1'])
+    expect(codeSelectionBoxes(f.canvas)).toEqual([])
+  })
+
+  it('W5-54: "Back to content" shows only when the board has content and none of it is in view', () => {
+    const f = fake(note('n1', 0, 0, 'x'))
+    expect(viewIsEmpty(f.canvas)).toBe(false)
+    f.canvas.viewport.set({ x: 50_000, y: 50_000 })
+    expect(viewIsEmpty(f.canvas)).toBe(true)
+    expect(viewIsEmpty(fake([]).canvas)).toBe(false)
   })
 })

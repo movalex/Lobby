@@ -26,6 +26,7 @@ import {
 } from '../../start-view.ts'
 import { contentBounds, fitContent, screenSize, showFrame, viewportHasContent } from './camera.ts'
 import { insertTemplate } from './template-insert.ts'
+import { selectByCode } from './view-helpers.ts'
 
 function storageGet(storage: 'local' | 'session', key: string): string | null {
   try {
@@ -213,7 +214,8 @@ function showElements(canvas: LobbyCanvas, ids: readonly string[]): Bounds | nul
     fitAllAt100(canvas)
     return null
   }
-  canvas.select(live)
+  // W5-39: a linked connector gets Lobby's outline (the engine draws none for a code selection)
+  selectByCode(canvas, live)
   const b = canvas.boundsOf(live)
   if (b) canvas.viewport.zoomTo(b, { maxZoom: 1 })
   return b
@@ -417,9 +419,11 @@ export async function applyStartView(ctx: CanvasFeatureContext, opts: StartViewO
   switch (plan.kind) {
     case 'template': {
       storageSet('session', templateInsertedKey(opts.boardId), '1')
-      const result = await insertTemplate(canvas, plan.templateId, { animate: false })
+      // W5-58: inserted without selecting it, so the live region never says "6 shapes selected" on a
+      // board where nothing is selected
+      const result = await insertTemplate(canvas, plan.templateId, { animate: false, select: false })
       if (result.ok) {
-        canvas.select([])
+        if (canvas.selection.length) canvas.select([])
         // DANA-06: the new board opens like a first visit, on its first frame when the whole template
         // would not be readable, and keeps that view while the layout settles
         if (fitContent(canvas) !== 'none') opts.hold?.(holdThroughLayout(canvas, () => fitContent(canvas)))

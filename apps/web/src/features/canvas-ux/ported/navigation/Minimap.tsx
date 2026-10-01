@@ -133,7 +133,7 @@ export function Minimap({ canvas }: { canvas: LobbyCanvas }) {
   return (
     <canvas
       ref={ref}
-      className="dr-nav-minimap"
+      className="dr-cnav-minimap"
       data-testid="minimap.canvas"
       aria-label="Minimap: press or drag to move the view"
       role="img"
