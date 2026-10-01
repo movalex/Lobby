@@ -82,6 +82,7 @@ function childEnv(port: number, opts: SyncServerOptions): NodeJS.ProcessEnv {
     'DRAFTROOM_API_INTERNAL_URL',
     'DRAFTROOM_TICKET_SECRET',
     'DRAFTROOM_INTERNAL_SECRET',
+    'DRAFTROOM_BACKUP_SIGNING_SECRET',
     'DRAFTROOM_DEV_AUTH',
   ])
     delete env[key]
