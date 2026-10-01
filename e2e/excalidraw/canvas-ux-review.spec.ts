@@ -399,9 +399,13 @@ test('W5-33: Board ▸ View has the zoom entries and the minimap, Edit ▸ and t
   await test.step('View ▸ the camera entries; Zoom to 100% zooms to 100%', async () => {
     await setViewport(page, { zoom: 0.5 })
     await openSub('view')
-    for (const id of ['zoom-in', 'zoom-out', 'zoom-to-100', 'zoom-to-fit', 'toggle-minimap'])
-      await expect(page.getByTestId(`main-menu.navigation.${id}`)).toBeVisible()
-    await page.getByTestId('main-menu.navigation.zoom-to-100').click()
+    // the View rows are the navigation feature's, each once (the wave-5 integration found them twice)
+    for (const id of ['zoom-in', 'zoom-out', 'zoom-to-100', 'zoom-to-fit', 'minimap'])
+      await expect(page.getByTestId(`main-menu.navigation.view.${id}`)).toBeVisible()
+    await expect(
+      page.getByTestId('main-menu-sub.view-content').locator('[data-testid^="main-menu."]'),
+    ).toHaveCount(6)
+    await page.getByTestId('main-menu.navigation.view.zoom-to-100').click()
     await expect.poll(async () => (await viewport(page)).zoom).toBeCloseTo(1, 2)
   })
 
@@ -569,12 +573,39 @@ test('W5-50 and W5-59: the tools say their keys (aria-keyshortcuts and the toolt
   await expect(page.getByTestId('tools.note')).toHaveAttribute('title', /Note — N/)
   await expect(page.getByTestId('tools.asset')).toHaveAttribute('aria-keyshortcuts', 'Control+U')
   const n = await settled(page, createNote(page, { x: 100, y: 100, text: 'x' }))
-  await focusBoard(page)
-  await select(page, [n])
-  await page.keyboard.press('Enter')
-  await waitForTextEditor(page, n)
-  await expect(page.locator('textarea.excalidraw-wysiwyg')).toHaveAttribute('aria-label', 'Sticky note text')
-  await page.keyboard.press('Escape')
+  const r = await settled(
+    page,
+    createItem(page, 'rectangle', { x: 500, y: 100, width: 200, height: 120, backgroundColor: '#ffc9c9' }),
+  )
+  // every name the editor is given while it opens: one writer, one name (the wave-5 integration found
+  // canvas-ux and a11y both naming it, "Rectangle text" then "Shape label")
+  await page.evaluate(() => {
+    const w = window as unknown as { __editorNames: string[] }
+    w.__editorNames = []
+    new MutationObserver((records) => {
+      for (const m of records) {
+        const t = m.target as HTMLElement
+        if (t.tagName === 'TEXTAREA') w.__editorNames.push(t.getAttribute('aria-label') ?? '')
+      }
+    }).observe(document.body, { attributes: true, attributeFilter: ['aria-label'], subtree: true })
+  })
+  const names = () => page.evaluate(() => (window as unknown as { __editorNames: string[] }).__editorNames)
+  for (const [id, name] of [
+    [n, 'Sticky note text'],
+    [r, 'Shape label'],
+  ] as const) {
+    await focusBoard(page)
+    await select(page, [id])
+    await page.evaluate(() => {
+      ;(window as unknown as { __editorNames: string[] }).__editorNames = []
+    })
+    await page.keyboard.press('Enter')
+    await waitForTextEditor(page, id)
+    await expect(page.locator('textarea.excalidraw-wysiwyg')).toHaveAttribute('aria-label', name)
+    await page.waitForTimeout(300)
+    expect(new Set(await names())).toEqual(new Set([name]))
+    await page.keyboard.press('Escape')
+  }
 })
 
 for (const vp of [

@@ -3,6 +3,7 @@
 // the context menu's Paste (W5-33).
 import { describe, expect, it } from 'vitest'
 import type { CanvasElement } from '../../../canvas/api/index.ts'
+import { CANVAS_FEATURES } from '../../canvas-registry.ts'
 import { CONTEXT_MENU_ENTRIES } from './ContextMenu.tsx'
 import { editorName } from './canvas-events.ts'
 import { CMD, COMMANDS } from './commands.ts'
@@ -42,17 +43,34 @@ describe('W5-59: the text editor is named for what it edits', () => {
 })
 
 describe('W5-33: the menus', () => {
-  it('Board ▸ View lists navigation’s camera commands, by their own ids', () => {
-    const view = MAIN_MENU_ENTRIES.filter((e) => e.group === 'view')
-    expect(view.map((e) => e.command)).toEqual([
-      'navigation.zoom-in',
-      'navigation.zoom-out',
-      'navigation.zoom-to-100',
-      'navigation.zoom-to-fit',
-      'navigation.zoom-to-selection',
-      'navigation.toggle-minimap',
+  it('Board ▸ View holds navigation’s camera rows, each once across every feature', () => {
+    // wave-5 integration: 3a and 3b each registered the six View rows (with different ids), so the
+    // submenu listed twelve. The View group is the navigation feature's; canvas-ux adds none.
+    expect(MAIN_MENU_ENTRIES.filter((e) => e.group === 'view')).toEqual([])
+    const view = CANVAS_FEATURES.flatMap((f) =>
+      (f.mainMenu ?? []).filter((e) => e.group === 'view').map((e) => `${f.id}:${e.command ?? e.id}`),
+    )
+    expect(view).toEqual([
+      'navigation:navigation.zoom-in',
+      'navigation:navigation.zoom-out',
+      'navigation:navigation.zoom-to-100',
+      'navigation:navigation.zoom-to-fit',
+      'navigation:navigation.zoom-to-selection',
+      'navigation:navigation.view.minimap',
     ])
-    for (const e of view) expect(e.id).toBe(e.command)
+  })
+
+  it('no two board-menu or context-menu entries of one group run the same command, across every feature', () => {
+    for (const list of ['mainMenu', 'contextMenu'] as const) {
+      const seen = new Map<string, string>()
+      for (const f of CANVAS_FEATURES)
+        for (const e of f[list] ?? []) {
+          if (!e.command) continue
+          const key = `${e.group}:${e.command}`
+          expect(seen.get(key), `${list} ${key} from ${f.id} and ${seen.get(key)}`).toBeUndefined()
+          seen.set(key, f.id)
+        }
+    }
   })
 
   it('Paste in Edit ▸ and in the context menu, through the Paste command', () => {

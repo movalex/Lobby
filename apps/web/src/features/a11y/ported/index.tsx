@@ -17,12 +17,10 @@
 //    ./FocusRing.tsx); the engine's text editor is named after what it edits (W5-59); camera moves honour
 //    reduced motion (W5-21, ./motion.ts).
 import type { CanvasFeature, CanvasFeatureContext } from '../../../canvas/api/index.ts'
-import { react, untracked } from '../../../lib/signals.ts'
 import { isTextEntry } from '../../../ui/focus.ts'
 import { boardRegionName, SKIP_TO_CANVAS_EVENT } from '../../../ui/SkipLink.tsx'
 import { announcerFor, releaseAnnouncer } from './announcer.ts'
 import { ContentsPanel } from './ContentsPanel.tsx'
-import { editorLabel } from './describe.ts'
 import { FocusRing, keyboardFocus } from './FocusRing.tsx'
 import { CANVAS_HINT_ID, LiveRegion } from './LiveRegion.tsx'
 import { PhoneSheet } from './PhoneSheet.tsx'
@@ -147,8 +145,9 @@ export const feature: CanvasFeature = {
  *  - W5-45: the keyboard arriving there (Tab, F6, "Skip to canvas", Escape out of an editor) turns the
  *    board's focus ring on (./FocusRing.tsx); a press of the pointer, or the focus leaving the board, turns
  *    it off. A focus that follows a click or the page opening shows no ring, as `:focus-visible` would not.
- *  - W5-59: the engine's text editor (a textarea inside the board) is named after what it edits ("Sticky
- *    note text"), as it opens.
+ *  - W5-59: the engine's text editor (a textarea inside the board) is NOT named here: canvas-ux names it
+ *    as it opens (../../canvas-ux/ported/canvas-events.ts editorName), and two writers gave it two names in
+ *    turn (the wave-5 integration).
  */
 function nameTheCanvas(ctx: CanvasFeatureContext): () => void {
   const canvas = ctx.canvas
@@ -163,21 +162,6 @@ function nameTheCanvas(ctx: CanvasFeatureContext): () => void {
       el.setAttribute('aria-describedby', CANVAS_HINT_ID)
     named.add(el)
   }
-  const labelEditor = (el: HTMLElement, id: string | null) => {
-    if (el.tagName !== 'TEXTAREA' || el.hasAttribute('aria-labelledby') || !el.isConnected) return
-    const label = editorLabel(id ? canvas.get(id) : undefined, (x) => canvas.get(x))
-    if (el.getAttribute('aria-label') !== label) el.setAttribute('aria-label', label)
-  }
-  // the editor takes the focus as it opens; the board reports what it edits once the lease is granted
-  const nameEditor = (el: HTMLElement) => labelEditor(el, canvas.editingId())
-  const editing = react('a11y.name-editor', () => {
-    const id = canvas.editingId()
-    if (!id) return
-    untracked(() => {
-      const el = canvas.text.editorElement()
-      if (el) labelEditor(el, id)
-    })
-  })
   // the last kind of input: the ring shows only for a focus the keyboard brought
   let viaKeyboard = false
   const onKeyDown = (e: KeyboardEvent) => {
@@ -190,10 +174,7 @@ function nameTheCanvas(ctx: CanvasFeatureContext): () => void {
   }
   const consider = (target: EventTarget | null) => {
     if (!(target instanceof HTMLElement) || target === root || !root.contains(target)) return false
-    if (isTextEntry(target)) {
-      nameEditor(target)
-      return false
-    }
+    if (isTextEntry(target)) return false
     if (!target.querySelector('canvas')) return false
     apply(target)
     return true
@@ -221,7 +202,6 @@ function nameTheCanvas(ctx: CanvasFeatureContext): () => void {
     document.removeEventListener('focusin', onFocusIn, true)
     document.removeEventListener('focusout', onFocusOut, true)
     watch.disconnect()
-    editing()
     keyboardFocus.set(false)
   }
 }

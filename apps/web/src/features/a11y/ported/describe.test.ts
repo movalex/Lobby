@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { boardContents, contentsSummary, flatten } from './contents.ts'
-import { clip, describeElement, describeSelection, editorLabel, kindLabel } from './describe.ts'
+import { clip, describeElement, describeSelection, kindLabel } from './describe.ts'
 import { readingOrder } from './reading-order.ts'
 import { el, frame, input, note, text } from './test-kit.ts'
 
@@ -65,15 +65,6 @@ describe('what the live region says', () => {
     expect(say(['r', 'e'])).toBe('2 shapes selected')
     expect(say([])).toBe('')
     expect(say(['nope'])).toBe('')
-  })
-
-  it('W5-59: the open text editor is named after what it edits (a label as its container)', () => {
-    expect(editorLabel(get('loose'), get)).toBe('Sticky note text')
-    expect(editorLabel(get('loose-label'), get)).toBe('Sticky note text')
-    expect(editorLabel(get('in-2'), get)).toBe('Text')
-    expect(editorLabel(get('r'), get)).toBe('Rectangle text')
-    expect(editorLabel(get('f'), get)).toBe('Frame name')
-    expect(editorLabel(undefined, get)).toBe('Text')
   })
 
   it('long words are clipped', () => {

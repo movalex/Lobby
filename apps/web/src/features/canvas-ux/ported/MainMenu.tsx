@@ -4,8 +4,8 @@
 //   Board ▸   the `board` entries, then the `ai` ones (the start view, "Hide note authors", AI on this board)
 //   Edit ▸    the `clipboard`, `edit`, `arrange` and `select` entries (undo, redo, cut, copy, duplicate,
 //             delete, group, lock, select all…)
-//   View ▸    the `view` entries: zoom in and out, 100%, fit, selection and the minimap (W5-33: canvas-ux
-//             lists navigation's camera commands there; a row whose command is missing does not show)
+//   View ▸    the `view` entries: navigation's zoom in and out, 100%, fit, selection and the minimap
+//             (W5-33; canvas-ux registers none of its own)
 //   Export ▸  the `export` entries (or, while exporting is off for this person, the line saying so)
 //   the other groups' entries, then Preferences ▸ (Always snap, Show grid, Theme ▸ System / Light /
 //   Dark: W5-33, the app's theme as the top bar's picker sets it) and Keyboard shortcuts. Edit ▸ has
@@ -51,29 +51,8 @@ export const MAIN_MENU_ENTRIES: readonly MenuEntrySpec[] = [
   { id: 'select-all', group: 'select', order: 10, label: '', command: CMD.selectAll, kbdHint: 'mod+a' },
   { id: 'select-none', group: 'select', order: 20, label: '', command: CMD.selectNone },
   EXPORT_OFF_ENTRY,
-  // W5-33: View ▸ (navigation's commands; the entry ids are the commands', so navigation's own entry of
-  // the same id, should it add one, is the same row)
-  ...(
-    [
-      ['navigation.zoom-in', 10],
-      ['navigation.zoom-out', 20],
-      ['navigation.zoom-to-100', 30],
-      ['navigation.zoom-to-fit', 40],
-      ['navigation.zoom-to-selection', 50],
-      ['navigation.toggle-minimap', 60],
-    ] as const
-  ).map(
-    ([command, order]): MenuEntrySpec => ({
-      id: command,
-      group: 'view',
-      order,
-      label: '',
-      command,
-      ...(command === 'navigation.zoom-to-selection'
-        ? { visible: (ctx: CanvasFeatureContext) => ctx.canvas.selection.length > 0 }
-        : {}),
-    }),
-  ),
+  // W5-33: View ▸ is the navigation feature's (./navigation/index.tsx VIEW_MENU: zoom in and out, 100%,
+  // fit, selection, the minimap). canvas-ux adds no `view` entry of its own, so each row shows once.
 ]
 
 const THEME_LABELS: Readonly<Record<ThemePreference, string>> = {
