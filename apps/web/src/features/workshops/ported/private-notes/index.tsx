@@ -18,7 +18,8 @@ export const privateNotesPanel: CanvasPanelSpec = {
   id: PRIVATE_PANEL_ID,
   label: 'Private notes',
   icon: PrivateNotesIcon,
-  order: 210,
+  // right after Voting (../index.tsx, W5-50)
+  order: 45,
   component: PrivateNotesPanel,
 }
 

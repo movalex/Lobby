@@ -985,6 +985,8 @@ html[data-dr-hide-authors] .tl-note__attribution {
 
 /* ---- +1 on notes ------------------------------------------------------------------------------------ */
 
+/* Theme tokens, not raw colours (W5-49: the dark theme's ink on the old near-white fill was 1.03:1);
+   plus-ones-contrast.test.ts checks every state in both themes. */
 .dr-wk-plusone {
   position: absolute;
   top: 0;
@@ -994,9 +996,9 @@ html[data-dr-hide-authors] .tl-note__attribution {
   gap: 4px;
   height: 24px;
   padding: 0 8px;
-  border: 1px solid rgb(27 35 48 / 18%);
+  border: 1px solid var(--dr-line-strong);
   border-radius: 999px;
-  background: rgb(255 255 255 / 92%);
+  background: var(--dr-surface);
   color: var(--dr-ink);
   font: 700 12px / 1 var(--dr-font);
   font-variant-numeric: tabular-nums;
@@ -1010,12 +1012,12 @@ html[data-dr-hide-authors] .tl-note__attribution {
 .dr-wk-plusone[aria-pressed="true"] {
   border-color: var(--dr-navy);
   background: var(--dr-navy);
-  color: #fff;
+  color: var(--dr-on-navy);
 }
 .dr-wk-plusone__n {
   min-width: 1ch;
   padding-left: 5px;
-  border-left: 1px solid rgb(27 35 48 / 20%);
+  border-left: 1px solid var(--dr-line-strong);
   text-align: center;
 }
 .dr-wk-plusone[aria-pressed="true"] .dr-wk-plusone__n {

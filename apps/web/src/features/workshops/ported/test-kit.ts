@@ -56,6 +56,27 @@ export function note(id: string, text: string, patch: Record<string, unknown> = 
   ]
 }
 
+/** The engine's hit threshold at zoom 1, in scene units (about Excalidraw's collision threshold). */
+const HIT_SLACK = 8
+
+/**
+ * Whether a point hits an element, roughly as the board page's hit test does (canvas/board/hit.ts): a
+ * connector, line or drawing near its stroke (here the segment from its top-left to its bottom-right
+ * corner), a frame near its outline (not inside: frames have no fill), anything else inside its bounds.
+ */
+function hitsElement(e: CanvasElement, p: { x: number; y: number }): boolean {
+  if (e.type === 'arrow' || e.type === 'line' || e.type === 'freedraw') {
+    const [dx, dy] = [e.width, e.height]
+    const len2 = dx * dx + dy * dy
+    const t = len2 ? Math.max(0, Math.min(1, ((p.x - e.x) * dx + (p.y - e.y) * dy) / len2)) : 0
+    return Math.hypot(p.x - (e.x + t * dx), p.y - (e.y + t * dy)) <= HIT_SLACK
+  }
+  const inside = (m: number) =>
+    p.x >= e.x - m && p.y >= e.y - m && p.x <= e.x + e.width + m && p.y <= e.y + e.height + m
+  if (e.type === 'frame') return inside(HIT_SLACK) && !inside(-HIT_SLACK)
+  return inside(0)
+}
+
 const stub = (member: string) => () => {
   throw new NotImplementedError('2C', member)
 }
@@ -191,10 +212,7 @@ export function fakeCanvas(elements: CanvasElement[] = []): FakeCanvas {
         (e) =>
           !(e as { isDeleted?: boolean }).isDeleted &&
           !(e.type === 'text' && e.containerId) &&
-          p.x >= e.x &&
-          p.y >= e.y &&
-          p.x <= e.x + e.width &&
-          p.y <= e.y + e.height &&
+          hitsElement(e, p) &&
           (!opts.filter || opts.filter(e)),
       )
       return hits[hits.length - 1] ?? null

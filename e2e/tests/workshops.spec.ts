@@ -5,7 +5,7 @@
 // asserted through the API as that person. Ballot privacy is checked on the wire: every /api
 // response body and every server-sent event each browser received (DevTools Network domain).
 import type { Page } from '@playwright/test'
-import { edit, getShape, read } from './support/board.ts'
+import { edit, getShape, read, shapeBounds, toScreen } from './support/board.ts'
 import { richText } from './support/editor.ts'
 import { capture } from './support/screenshots.ts'
 import {
@@ -853,6 +853,135 @@ test('end without results: casting stops, results stay hidden and the vote is li
     await expect(row).toContainText('Not revealed')
     // Everyone is asked to join the new vote.
     await expect(c.page.getByTestId('vote-join-prompt')).toContainText('1 vote')
+  })
+})
+
+// ---- W5-03: the topmost object decides what a click votes on ---------------------------------------------
+
+const OV = {
+  frame: 'shape:wk-ov-frame',
+  inside: 'shape:wk-ov-in',
+  under: 'shape:wk-ov-under',
+  cover: 'shape:wk-ov-cover',
+}
+
+/**
+ * The screen point of a page point where a click lands on shape `id`: the canvas is there (no panel or
+ * bar on top), and `id` is the topmost shape a click there picks.
+ */
+async function pointOn(page: Page, p: { x: number; y: number }, id: string) {
+  const at = await toScreen(page, p)
+  const top = await page.evaluate(
+    ({ at, p }) => {
+      const el = document.elementFromPoint(at.x, at.y)
+      if (!el?.closest('.tl-canvas')) return `not the canvas: ${el?.tagName}.${el?.className}`
+      // tldraw's own hit test, as ClickToVote calls it (EditorLike leaves it out)
+      const ed = window.editor as unknown as {
+        getShapeAtPoint(p: unknown, o: Record<string, boolean>): { id: string } | undefined
+      }
+      return ed.getShapeAtPoint(p, { hitInside: true, hitLabels: true, hitLocked: true })?.id
+    },
+    { at, p },
+  )
+  expect(top, `the shape on top at ${JSON.stringify(at)}`).toBe(id)
+  return at
+}
+
+test('W5-03: a click on a shape the vote does not take, lying over a note it takes, casts nothing and says so (select and hand tools); only clicked notes are ranked', async ({
+  join,
+  board,
+}) => {
+  const a = await join('alice')
+  const b = await join('bob', 'editor')
+  await edit(
+    a.page,
+    (ed, frame) => {
+      ed.createShape({ id: frame, type: 'frame', x: 0, y: 0, props: { w: 900, h: 600, name: 'Ideas' } })
+    },
+    OV.frame,
+  )
+  await addNotes(a.page, [
+    { id: OV.inside, x: 40, y: 80, text: 'Nice trailer music', parentId: OV.frame },
+    { id: OV.under, x: 340, y: 80, text: 'Pairing on the boss fight', parentId: OV.frame },
+  ])
+  // A filled shape in the frame on top of the right half of OV.under: a notes-only vote does not take it.
+  // (A page-level note over a frame note is the Excalidraw page's case: here a note made over a frame
+  // joins it.)
+  await edit(
+    a.page,
+    (ed, ids) => {
+      ed.createShape({
+        id: ids.cover,
+        type: 'geo',
+        parentId: ids.frame,
+        x: 460,
+        y: 140,
+        props: { w: 200, h: 200, fill: 'solid' },
+      })
+    },
+    { cover: OV.cover, frame: OV.frame },
+  )
+  await expectShapesEverywhere([a, b], Object.values(OV))
+  expect((await getShape(b.page, OV.under))?.parentId).toBe(OV.frame)
+  const under = await shapeBounds(b.page, OV.under)
+  const cover = await shapeBounds(b.page, OV.cover)
+  if (!under || !cover) throw new Error('no bounds')
+  const overlap = { x: (cover.x + under.x + under.w) / 2, y: (cover.y + under.y + under.h) / 2 }
+  const underOnly = { x: under.x + 30, y: under.y + under.h / 2 }
+
+  await startVoteFromTopBar(a, { perPerson: 3, frameId: OV.frame, notesOnly: true })
+  await joinVote(b, 3)
+  await showAll(b.page)
+  const toast = b.page.getByTestId('vote-toast')
+  const NOT_IN = 'Not part of this vote: only sticky notes in “Ideas” take votes.'
+  const noVotesYet = async () => {
+    await expect(remaining(b)).toHaveAttribute('data-remaining', '3')
+    expect((await workshopState(b.api, board)).vote?.myVotes).toEqual({})
+    await expect(dot(b.page, OV.under)).toHaveCount(0)
+    await expect(dot(b.page, OV.cover)).toHaveCount(0)
+  }
+  const dismiss = async () => {
+    await toast.getByRole('button', { name: 'Dismiss' }).click()
+    await expect(toast).toHaveCount(0)
+  }
+
+  await test.step('select tool: a click on the shape over the frame’s note casts nothing, and says why', async () => {
+    const at = await pointOn(b.page, overlap, OV.cover)
+    await b.page.mouse.click(at.x, at.y)
+    await expect(toast).toHaveText(NOT_IN)
+    await noVotesYet()
+    await dismiss()
+    await edit(b.page, (ed) => ed.selectNone())
+  })
+
+  await test.step('hand tool: the same click casts nothing either', async () => {
+    await edit(b.page, (ed) => ed.setCurrentTool('hand'))
+    const at = await pointOn(b.page, overlap, OV.cover)
+    await b.page.mouse.click(at.x, at.y)
+    await expect(toast).toHaveText(NOT_IN)
+    await noVotesYet()
+    await dismiss()
+    await edit(b.page, (ed) => ed.setCurrentTool('select'))
+  })
+
+  await test.step('the part of the frame’s note nobody covers takes the vote, and so does the other note', async () => {
+    const at = await pointOn(b.page, underOnly, OV.under)
+    await b.page.mouse.click(at.x, at.y)
+    await expect(dot(b.page, OV.under)).toHaveAttribute('data-count', '1')
+    await clickShape(b.page, OV.inside)
+    await expect(dot(b.page, OV.inside)).toHaveAttribute('data-count', '1')
+    await expect(remaining(b)).toHaveAttribute('data-remaining', '1')
+    expect((await workshopState(b.api, board)).vote?.myVotes).toEqual({ [OV.under]: 1, [OV.inside]: 1 })
+  })
+
+  await test.step('the results rank exactly the notes bob clicked', async () => {
+    const sid = (await workshopState(a.api, board)).vote?.session.id ?? ''
+    const res = await post(a, `/api/votes/${sid}/reveal`)
+    expect(res.status(), await res.text()).toBe(200)
+    for (const id of [OV.inside, OV.under]) await expect(badge(b.page, id), id).toHaveCount(1)
+    await expect(badge(b.page, OV.cover)).toHaveCount(0)
+    const results = (await workshopState(a.api, board)).vote?.results ?? []
+    expect(results.map((r) => r.shapeId).sort()).toEqual([OV.inside, OV.under].sort())
   })
 })
 
