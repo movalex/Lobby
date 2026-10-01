@@ -85,6 +85,10 @@ export interface IdbOfflineStore extends OfflineQueueStore {
 export function createIdbOfflineStore(o: { boardId: string; uid: string; tab: string }): IdbOfflineStore {
   const key = `${o.boardId}|${o.uid}|${o.tab}`
   let adopted = 0
+  // `release()` may come before the lock is granted (React StrictMode disposes a page's first session in
+  // the same task that made it; LEAD-1): the grant then gives the lock up at once, instead of a disposed
+  // store holding it for good and the live store's `load()` waiting on it forever (the page never Saved).
+  let released = false
   let releaseLock: () => void = () => {}
   const held = new Promise<void>((resolveHeld) => {
     if (!('locks' in navigator)) {
@@ -93,6 +97,7 @@ export function createIdbOfflineStore(o: { boardId: string; uid: string; tab: st
     }
     void navigator.locks.request(lockName(o.boardId, o.tab), { mode: 'exclusive' }, () => {
       resolveHeld()
+      if (released) return
       return new Promise<void>((r) => {
         releaseLock = r
       })
@@ -169,6 +174,7 @@ export function createIdbOfflineStore(o: { boardId: string; uid: string; tab: st
         if (r.boardId === o.boardId && r.uid === o.uid) await tx(db, 'readwrite', (s) => s.delete(r.key))
     },
     release() {
+      released = true
       releaseLock()
     },
   }
