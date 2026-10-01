@@ -13,6 +13,7 @@
 import { useEffect, useState } from 'react'
 import type { CanvasFeatureContext } from '../../../../canvas/api/index.ts'
 import { react, untracked, useValue } from '../../../../lib/signals.ts'
+import { startViewResult } from './state.ts'
 import { BACK_TO_CONTENT_DELAY_MS, backToContent, codeSelectionBoxes, viewIsEmpty } from './view-helpers.ts'
 
 /** The check runs once the camera is at rest this long (not on every frame of a pan: it reads every item). */
@@ -43,10 +44,17 @@ export function BackToContent({ ctx }: { ctx: CanvasFeatureContext }) {
       }, BACK_TO_CONTENT_DELAY_MS - SETTLE_MS)
     }
     const stop = react('nav-back-to-content', () => {
-      // re-check when the camera or the content changes (the reads themselves are untracked)
+      // re-check when the camera or the content changes (the reads themselves are untracked); nothing
+      // until the first view is decided (the camera the board opens with is not the person's)
       canvas.viewport.get()
       canvas.items()
+      const decided = startViewResult(canvas).get() !== null
       untracked(() => {
+        if (!decided) {
+          clear()
+          setShow(false)
+          return
+        }
         if (settle) clearTimeout(settle)
         settle = setTimeout(check, SETTLE_MS)
       })
