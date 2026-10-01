@@ -3,6 +3,7 @@ import { checkInternalSecret, INTERNAL_SECRET_HEADER } from '@draftroom/auth-tic
 import { RUN_ALL_ID_RE, type RunAll } from '../backup/run-all.ts'
 import { type BackupService, handleBackupStatus } from '../backup/service.ts'
 import type { InternalRoute } from '../engine-switch.ts'
+import { errorSummary } from '../log-error.ts'
 import { BoardOpenRefused, NEW_CANVAS_ERROR_CODE } from '../r0/pre-open.ts'
 import { handleAssetRefs } from './asset-refs.ts'
 import { handleBoardText } from './board-text.ts'
@@ -269,7 +270,7 @@ export function createRequestHandler(deps: RouterDeps) {
       // Bridge release R0: a board born on the new canvas (r0/pre-open.ts), refused before any room opened.
       else if (e instanceof BoardOpenRefused) err = new HttpError(409, NEW_CANVAS_ERROR_CODE, e.message)
       else {
-        deps.log('[http error]', req.method, path, e)
+        deps.log('[http error]', req.method, path, errorSummary(e))
         err = new HttpError(500, 'INTERNAL', 'Something went wrong. Please try again.')
       }
       if (res.headersSent) return void res.destroy()

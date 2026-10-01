@@ -151,13 +151,15 @@ One fixer acted for 2A, 2B and 2C on `engine/excalidraw`; every fix has a test t
 | V1 | own pushes in flight counted as other users' writes: a push lost behind two acked nudges dropped silently (L0-L5, P20-P22) | high | **fixed**: the core keeps each ack's server versions and decides from the version the last acked predecessor left (`Sent.ahead`, `effectivePv`); the offline queue stores the corrected `pv`; a superseded group is reported (`superseded` event, the page's notice). L1, L1c, L1r, L2, L3, L5 pass; L0's pure call models the old inputs | 2C |
 | V1 | the heartbeat only pings after silence: a dead upstream behind other users' frames is never found (H2) | medium | **fixed**: a ping every 15 s, the socket dropped when a ping stays unanswered (30 s); H1 and H2 pass | 2C |
 | V1 | a note created inside a frame another user is dragging ends a member outside its frame (W2) | low | **fixed**: the room clears `frameId` when the created element does not overlap its frame as stored (the ack's `fix`) | 2A |
-| V1 | doc-key ABA | low | **open** (push receipts, or a per-key clock in the welcome: contracts) | contracts |
+| V1 | doc-key ABA | low | **server side done** at wave 4b (`CONTRACTS_REV` 9, W4B-1): `welcome.docClocks` / `snapshot.docClocks`, the clock each key was last written at; the client's rule (compare with the lost push's `base`) is 2C's consumer change | 2A (contracts), 2C |
 | V2 | maintenance refuses sockets but not the engine's board-writing internal routes (P-M2, P-M4) | medium | **fixed**: every engine POST but `convert-all` answers 503 MAINTENANCE (the runbook runs `convert-all` inside the window, §7.5 step 6; P-M4 expects 503 there too, which would break the cut-over). The second check after the body is read needs a maintenance getter in `ElementRoomDeps` (a request to the lead) | 2A |
 | V2 | the reset-snapshot cache keeps a deleted element's content for a join within 5 s of a client delete (P-W3c) | medium | **fixed**: the cache is dropped when a push deletes (not on every write: a reconnect storm keeps it) | 2A |
 | V2 | a create over another user's tombstone id keeps that user's createdBy and lastEditedBy (P-W7, P-W8) | medium | **fixed**: new content under another user's deleted id is the writer's element; a same-content revive keeps the author. For a name-only guest the create is refused outright (below), so P-W8's guest rows now read GONE | 2A |
 | V2 | a name-only guest editor reads every tombstone's content by reviving it (P-W6) | low | **fixed**: a guest revives only a tombstone it created or deleted itself (`lb_deleted.deleted_by`), GONE otherwise; P-W6 passes | 2A |
 | V2 | the guest cap bypassed through labels detached into free texts (P-G2); a guest uid per cookie-less join (D5-uids) | low | **fixed** for the labels (the detach counts, and is refused at the cap); the probe's 12 flooding rounds now trip the room's abuse guard (4099) once the cap holds, so it ends before its own count. The per-join uid is the api's: **open** | 2A, api |
-| V2 | the W5-05 lock rule is one-way (frame out with the heading, back alone) (P-K8) | low | **open**, a design limit: the client moves members with their frame; a raw client can leave a locked member behind | 2A |
+| V2 | the detach count keyed on the detacher, so a second guest uid grew the first one's items past the cap (P-G4, re-check) | low | **fixed** at wave 4b: a detached label counts against its creator whoever detaches; a guest detaching at that creator's cap gets GUEST_LIMIT, an account editor's detach is never refused (`w4b-2a.test.ts`) | 2A |
+| V2 | a tombstone takes content patches and detaches (P-X1, P-X1b, re-check) | low | **fixed** at wave 4b: a patch of a tombstone is its undelete or nothing (a re-delete is a no-op, the rest GONE with the redacted tombstone) (`w4b-2a.test.ts`) | 2A |
+| V2 | the W5-05 lock rule is one-way (frame out with the heading, back alone) (P-K8) | low | **accepted** at wave 4b as a design limit, stated in the plan (§2.4.3 step 5): the client moves members with their frame; a raw client can leave a locked member behind, visible, still locked, for an owner to put back | 2A |
 | V2 | a 60 s drag restarted under a new drag id (P-DR) | low | **open**, a design limit (editors may drag) | 2A |
 | V3 | ordinary edits on both sides of a rollback brick the board (A, A2, B, C, D, F, H) | high | **fixed**: the roll-forward repairs (`frame-cleared`, `label-orphaned`, `label-order`, `binding-cleared`); brick 10/10 variants, the real room opens the board | 2B |
 | V3 | a binding record R0 created to a shape Excalidraw deleted fails the merge (open item 12's random case) | medium | **fixed** (the binding pass runs on every live arrow); bind 40/40 seeds | 2B |
@@ -171,8 +173,8 @@ Pre-existing, not from this round: V2's P-W5 (an account editor's revive of a to
 
 ## 6. Open after the engine integration
 
-- **Requests to the contracts owner (2A), not applied:** push receipts (the residual lost-push case and
-  doc-key ABA); `view.z` in presence (CR-3CF-1, then `RemoteCursor.zoom`); a skip-undo `TransactOptions`
+- **Requests to the contracts owner (2A), not applied:** push receipts (the residual lost-push case; the
+  doc-key ABA half is answered by `CONTRACTS_REV` 9's per-key clocks, W4B-1); `view.z` in presence (CR-3CF-1, then `RemoteCursor.zoom`); a skip-undo `TransactOptions`
   (CR-3F-1); **CR-2B-2** (the converter's polygon outlines through canvas-schema or `canvas/api`, so 3a's
   tools draw what the converter draws and the v1 `polygonOf` of `c419ed2` can go; the style panel should not
   give a polygon's holder a stroke); CR-3A-9's port tool names and gesture-element hook.
@@ -189,8 +191,9 @@ Pre-existing, not from this round: V2's P-W5 (an account editor's revive of a to
   run needs that spec split, or its evidence written out as it goes.
 - **Not yet confirmed by a verifier:** B8's staging rows on the wave-5 code (2B ran them 3 times; the gate
   excludes them), and every fix in §5.
-- **DEF-3F-1's server side:** the client now takes the welcome's document, so nothing waits on it; the
-  cached snapshot still carries an old `lb_doc` for up to 5 s.
+- **DEF-3F-1's server side:** done at wave 4b (2A): the `changes` frame after a cached reset snapshot carries
+  the doc keys written since the cache, so snapshot + changes equal the board for the document too
+  (`w4b-2a.test.ts`); the client had already taken the welcome's document.
 
 ## 7. The feature merge
 

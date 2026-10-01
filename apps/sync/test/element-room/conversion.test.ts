@@ -162,7 +162,11 @@ describe('conversion on room open', () => {
     const a = await st.socket({ boardId, user: 'alice' })
     a.send({ type: 'hello', proto: 1, schema: 1, since: 0, epoch: null, tab: a.tab })
     expect(await a.untilClosed(60_000)).toEqual({ code: 4099, reason: 'CONVERSION_FAILED' })
-    expect(a.received).toEqual([{ type: 'notice', code: 'PREPARING' }])
+    // the CLOSING notice names the reason in band before the 4099 (SMK-2, CONTRACTS_REV 9)
+    expect(a.received).toEqual([
+      { type: 'notice', code: 'PREPARING' },
+      { type: 'notice', code: 'CLOSING', detail: 'CONVERSION_FAILED' },
+    ])
     const s1 = await status(st.server.url)
     expect(s1.boards.filter((x) => x.boardId === boardId)).toEqual([
       expect.objectContaining({ state: 'failed', reason: 'out-of-memory' }),
@@ -170,7 +174,7 @@ describe('conversion on room open', () => {
     // a later joiner is refused at once: no PREPARING, no second job
     const b = await st.socket({ boardId, user: 'bob', tab: 'tab-bob' })
     expect(await b.untilClosed()).toEqual({ code: 4099, reason: 'CONVERSION_FAILED' })
-    expect(b.received).toEqual([])
+    expect(b.received).toEqual([{ type: 'notice', code: 'CLOSING', detail: 'CONVERSION_FAILED' }])
     expect((await status(st.server.url)).boards.filter((x) => x.boardId === boardId)).toEqual(
       s1.boards.filter((x) => x.boardId === boardId),
     )

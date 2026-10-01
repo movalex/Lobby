@@ -165,6 +165,8 @@ const SERVER: Record<string, unknown[]> = {
       catchUp: null,
       snapshot: { elements: 12, bytes: 2048 },
       doc: { startView: { x: 0, y: 0, w: 800, h: 600 } },
+      // CONTRACTS_REV 9: the clock of every key ever written, a removed key's included (tagDef:old)
+      docClocks: { startView: 37, 'tagDef:old': 12 },
       leases: [{ id: 'note-1', holder }],
       roster: [roster],
       workshop: { voteOpen: false, anonymous: false },
@@ -314,6 +316,7 @@ const SERVER: Record<string, unknown[]> = {
     { type: 'notice', code: 'SLOW_DOWN' },
     { type: 'notice', code: 'DISK', detail: 'free space below 5%' },
     { type: 'notice', code: 'PREPARING' },
+    { type: 'notice', code: 'CLOSING', detail: 'MAINTENANCE' },
   ],
   pong: [{ type: 'pong' }, { type: 'pong', n: 7 }],
 }
@@ -451,6 +454,28 @@ describe('what the wire refuses', () => {
     const w = SERVER.welcome?.[0] as Record<string, unknown>
     bad(Welcome, { ...w, catchUp: [] })
     bad(Welcome, { ...w, reset: false })
+  })
+
+  it('docClocks (CONTRACTS_REV 9): optional on the welcome and the snapshot, a clock per key, never a bad clock', async () => {
+    const w = SERVER.welcome?.[0] as Record<string, unknown>
+    const { docClocks: _, ...without } = w
+    ok(Welcome, without)
+    ok(Welcome, { ...w, docClocks: {} })
+    bad(Welcome, { ...w, docClocks: { startView: -1 } })
+    bad(Welcome, { ...w, docClocks: { startView: 1.5 } })
+    bad(Welcome, { ...w, docClocks: { startView: '3' } })
+    const frame = {
+      type: 'snapshot',
+      epoch: 'e1_abc',
+      clock: 40,
+      horizon: 0,
+      elements: [E.rectangle],
+      doc: { workshop: { hideNoteAuthors: false, hideCursors: true } },
+      docClocks: { workshop: 40, 'tagDef:gone': 3 },
+    }
+    roundTrip(SnapshotFrame, frame)
+    expect(await decodeSnapshotFrame(await encodeSnapshotFrame(SnapshotFrame.parse(frame)))).toEqual(frame)
+    bad(SnapshotFrame, { ...frame, docClocks: { workshop: 0.5 } })
   })
 
   it('rejections are per op: a push with one bad op passes the envelope, not the full schema', () => {

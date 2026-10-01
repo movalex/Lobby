@@ -18,6 +18,11 @@ try {
   console.error(`[worker] refusing to start: ${(e as Error).message}`)
   process.exit(1)
 }
+// Security audit M2: said out loud at every start that is not production (an unknown value never gets here).
+if (cfg.nodeEnv !== 'production')
+  log(
+    `NODE_ENV=${cfg.nodeEnv} (not production): the production refusals are off, so a dev-only token placeholder, a local soffice and http blob URLs are allowed when their own flags say so`,
+  )
 const office =
   cfg.office.mode === 'socket'
     ? socketOfficeConverter({ socketPath: cfg.office.socketPath, jobsDir: cfg.office.jobsDir })

@@ -181,8 +181,13 @@ export class PushApplier {
   /** live elements and items this push added so far (the caps count them before Phase F) */
   private addedElements = 0
   private addedItems = 0
-  /** items with a new id this guest created in this push, live or deleted (D5) */
-  private addedGuestItems = 0
+  /**
+   * Items this push adds to a guest's count, by guest uid (D5): items with a new id this guest created, live
+   * or deleted, and labels detached into free texts, counted against the label's CREATOR, whoever
+   * detaches (V2 re-check P-G4: counted against the detacher, a second guest uid grew the first one's items
+   * past the cap).
+   */
+  private readonly addedGuestItems = new Map<string, number>()
   /** frames this push moves (a `pos` patch on a live, unlocked frame): id → the move (W5-05) */
   private readonly frameMoves = new Map<string, { dx: number; dy: number }>()
   /** locked elements whose position this push moved with their frame (W5-05): id → the frame */
@@ -356,15 +361,23 @@ export class PushApplier {
    * live one, and a revival (a create over a tombstone, a `life` patch) creates nothing new, so minting
    * tombstones and reviving them no longer gets past the cap (V2's re-check: 650 live items against 500).
    */
-  private guestCapProblem(el: El): RejectCode | null {
-    if (!this.s.guest || isLabel(el)) return null
-    return (this.env.guestCreated.get(this.s.uid) ?? 0) + this.addedGuestItems + 1 > GUEST_ITEM_CAP
+  private guestCapProblem(el: El, uid = this.s.uid): RejectCode | null {
+    if (isLabel(el)) return null
+    return (this.env.guestCreated.get(uid) ?? 0) + (this.addedGuestItems.get(uid) ?? 0) + 1 > GUEST_ITEM_CAP
       ? 'GUEST_LIMIT'
       : null
+  }
+  private addGuestItem(uid: string): void {
+    this.addedGuestItems.set(uid, (this.addedGuestItems.get(uid) ?? 0) + 1)
   }
   /** The element's stored author is this session's user. */
   private createdByWriter(el: El): boolean {
     return (el.customData?.lobbyServer?.createdBy?.uid as string | undefined) === this.s.uid
+  }
+  /** The guest uid that created the element (its stored author), or null when an account did. */
+  private guestCreator(el: El): string | null {
+    const by = el.customData?.lobbyServer?.createdBy as { uid?: string; guest?: boolean } | undefined
+    return by?.guest && typeof by.uid === 'string' ? by.uid : null
   }
   /**
    * Whether this session may bring a tombstone back (a create over its id, a `life` patch). Accounts may;
@@ -383,7 +396,7 @@ export class PushApplier {
       this.addedElements++
       if (!isLabel(el)) this.addedItems++
     }
-    if (newId && this.s.guest && !isLabel(el)) this.addedGuestItems++
+    if (newId && this.s.guest && !isLabel(el)) this.addGuestItem(this.s.uid)
   }
 
   private applyCreate(i: number, op: CreateOp) {
@@ -474,6 +487,21 @@ export class PushApplier {
     const w = this.get(op.id)
     const cur = w.el
     if (!cur) return this.reject(i, 'GONE')
+    // V2 re-check (P-X1, P-X1b): a tombstone takes no patch but its undelete (`life` false, the revive flow
+    // below). A re-delete (`life` true: two people deleting the same element, a cascaded label's own op) is
+    // acked ok and writes nothing, so the deleter of record stays; anything else is GONE with the redacted
+    // tombstone, as for an unknown id. Before, a guest's text patch or detach of a deleted label rewrote the
+    // stored tombstone (its text, `lastEditedBy` the guest), a clock-moving write nobody could see.
+    if (cur.isDeleted) {
+      const life = (op.g?.life as { isDeleted?: unknown } | undefined)?.isDeleted
+      if (life === true) {
+        this.writerOk(w, i, cur)
+        st.ok = true
+        st.applied = { groups: {}, c: {} }
+        return
+      }
+      if (life !== false) return this.reject(i, 'GONE')
+    }
 
     // every field in the group its element kind puts it in (a label's x is layout, a free text's x is pos)
     const bindG = op.g?.bind as Record<string, unknown> | undefined
@@ -658,11 +686,17 @@ export class PushApplier {
       const cap = this.capProblem(next)
       if (cap) return this.reject(i, cap)
     }
-    // a guest's label detached into a free text is one more item of the guest's (D5): before, a label was
-    // never counted and its detach made an uncounted item, so the 500-item cap did not hold (V2 P-G2)
+    // a guest's label detached into a free text is one more item of the guest who CREATED it (D5): before
+    // wave 5 a label was never counted and its detach made an uncounted item, so the 500-item cap did not
+    // hold (V2 P-G2); then the detach counted against the detacher, so a second guest uid detaching the
+    // first one's labels grew its items past the cap (V2 re-check P-G4). Now the creator's count takes it
+    // (as the rebuild counts, caches.ts), and a guest detaching at that creator's cap gets GUEST_LIMIT. An
+    // account editor's detach is never refused (the creator's count may then stand above the cap, which
+    // only stops that guest from creating more).
     const detached = isLabel(cur) && !isLabel(next) && !next.isDeleted
-    if (detached && this.s.guest) {
-      const cap = this.guestCapProblem(next)
+    const detachedCreator = detached ? this.guestCreator(next) : null
+    if (detachedCreator && this.s.guest) {
+      const cap = this.guestCapProblem(next, detachedCreator)
       if (cap) return this.reject(i, cap)
     }
 
@@ -682,7 +716,7 @@ export class PushApplier {
     this.writerOk(w, i, next)
     st.ok = true
     if (revived) this.countAdded(next, false)
-    if (detached && this.s.guest && this.createdByWriter(next)) this.addedGuestItems++
+    if (detachedCreator) this.addGuestItem(detachedCreator)
     if (follows) this.followers.set(op.id, follows.frame)
     st.applied = { groups, c: cApplied }
     if (denied) st.denied = denied
@@ -1023,14 +1057,15 @@ export class PushApplier {
           this.env.groups.add(after.groupIds)
         }
         // D5: a guest's item under a new id counts, live or deleted (V2: tombstones were never counted),
-        // and so does a label of the guest's detached into a free text (the rebuild counts it by its
-        // createdBy, caches.ts)
-        if (
-          this.s.guest &&
-          ((!before && !isLabel(after as El)) ||
-            (!!before && isLabel(before) && !isLabel(after as El) && this.createdByWriter(after as El)))
-        )
-          this.env.guestCreated.set(this.s.uid, (this.env.guestCreated.get(this.s.uid) ?? 0) + 1)
+        // and so does a guest's label detached into a free text, against its creator whoever detached it
+        // (the rebuild counts it by its createdBy, caches.ts; V2 re-check P-G4)
+        const counted =
+          !before && !isLabel(after as El) && this.s.guest
+            ? this.s.uid
+            : before && isLabel(before) && !isLabel(after as El)
+              ? this.guestCreator(after as El)
+              : null
+        if (counted) this.env.guestCreated.set(counted, (this.env.guestCreated.get(counted) ?? 0) + 1)
       }
       for (const [key, value] of Object.entries(this.docWrites)) store.docSet(key, this.clock, value)
       this.env.ledger.set(this.clock, this.s.uid)

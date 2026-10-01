@@ -1,6 +1,6 @@
 import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { isAllowedOrigin, isLoopbackHost, loadConfig } from './config.ts'
+import { backupSigningSecret, isAllowedOrigin, isLoopbackHost, loadConfig, parseTestHooks } from './config.ts'
 
 const TICKET = 'test-ticket-secret-0123456789-0123456789'
 const INTERNAL = 'test-internal-secret-0123456789-0123456789'
@@ -57,6 +57,24 @@ describe('loadConfig', () => {
       /DRAFTROOM_INTERNAL_SECRET.*placeholder/,
     )
     expect(loadConfig({ ...base, ...prodExtras, NODE_ENV: 'production' }).ticketSecret).toBe(TICKET)
+  })
+
+  it('refuses an unknown NODE_ENV (security audit M2): any value but production turned every guard off', () => {
+    // before: NODE_ENV=staging booted with test hooks on and no Origin check, as if it were development
+    for (const v of ['staging', 'prod', 'Production', 'dev'])
+      expect(() => loadConfig({ ...base, NODE_ENV: v, DRAFTROOM_TEST_HOOKS: '1' })).toThrow(
+        /NODE_ENV must be production, development or test/,
+      )
+    expect(() => loadConfig({ ...base, NODE_ENV: 'staging' })).toThrow(/"staging"/)
+    expect(loadConfig(base).nodeEnv).toBe('development')
+    expect(loadConfig({ ...base, NODE_ENV: '' }).nodeEnv).toBe('development')
+    expect(loadConfig({ ...base, NODE_ENV: 'test' }).nodeEnv).toBe('test')
+    expect(loadConfig(prod).nodeEnv).toBe('production')
+    // the CLI entry points check it too
+    expect(() => parseTestHooks({ NODE_ENV: 'staging', DRAFTROOM_TEST_HOOKS: '1' })).toThrow(/NODE_ENV must/)
+    expect(() => backupSigningSecret({ NODE_ENV: 'staging', DRAFTROOM_INTERNAL_SECRET: INTERNAL })).toThrow(
+      /NODE_ENV must/,
+    )
   })
 
   it('no longer reads DRAFTROOM_DEV_AUTH: identities come only from tickets', () => {
