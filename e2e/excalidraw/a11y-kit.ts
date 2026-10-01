@@ -122,8 +122,14 @@ export async function frame(page: Page, x: number, y: number, width: number, hei
   return id
 }
 
-export async function textItem(page: Page, x: number, y: number, text: string) {
-  const id = await createItem(page, 'text', { x, y, text })
+export async function textItem(
+  page: Page,
+  x: number,
+  y: number,
+  text: string,
+  props: Record<string, unknown> = {},
+) {
+  const id = await createItem(page, 'text', { x, y, text, ...props })
   await expectSaved(page)
   return id
 }
@@ -141,10 +147,11 @@ export async function openPhoneSession(
   users: Users,
   handle: string,
   role: 'owner' | 'editor' | 'commenter' | 'viewer' = 'editor',
+  viewport: { width: number; height: number } = PHONE,
 ): Promise<CanvasSession> {
   const who = handle === 'alice' ? await users.get(handle) : await users.grant(board, handle, role)
   const context = await browser.newContext({
-    viewport: PHONE,
+    viewport,
     hasTouch: true,
     isMobile: true,
     deviceScaleFactor: 2,
@@ -159,3 +166,102 @@ export async function openPhoneSession(
 /** The page scrolls sideways (a phone layout must not). */
 export const scrollsSideways = (page: Page) =>
   page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 1)
+
+/** A Pixel 7's CSS viewport (the reviewers' second phone, W5-06). */
+export const PIXEL_7 = { width: 412, height: 915 }
+
+/**
+ * Where a tap on a control would land somewhere else (W5-06 / W5-07: "elementFromPoint at each control's
+ * centre returns that control"). Every visible button, menu item and text box under `roots` is probed at
+ * its centre and at four points inside its edges (20 % in, so a corner under a floating button counts);
+ * a point is fine when the element on top there is the control or inside it. A control scrolled out of
+ * its own clipping box (the phone toolbar scrolls sideways) or wholly off screen is not probed. Returns one
+ * line per covered point: "<control> (u, v) under <what is on top>".
+ */
+export async function coveredControls(page: Page, roots: readonly string[]): Promise<string[]> {
+  return page.evaluate((selectors) => {
+    const POINTS: readonly (readonly [number, number])[] = [
+      [0.5, 0.5],
+      [0.2, 0.5],
+      [0.8, 0.5],
+      [0.5, 0.2],
+      [0.5, 0.8],
+    ]
+    const name = (el: Element) =>
+      el.getAttribute('data-testid') ??
+      el.getAttribute('aria-label') ??
+      (el.textContent ?? '').trim().slice(0, 24) ??
+      el.tagName.toLowerCase()
+    const what = (el: Element | null) => {
+      if (!el) return 'nothing'
+      const tagged = el.closest('[data-testid]')
+      return tagged ? `[${tagged.getAttribute('data-testid')}]` : el.tagName.toLowerCase()
+    }
+    const out: string[] = []
+    const seen = new Set<Element>()
+    for (const sel of selectors) {
+      for (const root of document.querySelectorAll(sel)) {
+        const controls = [
+          ...(root.matches('button, textarea, [role="menuitem"]') ? [root] : []),
+          ...root.querySelectorAll('button, textarea, [role="menuitem"]'),
+        ]
+        for (const c of controls) {
+          if (seen.has(c)) continue
+          seen.add(c)
+          const r = c.getBoundingClientRect()
+          if (r.width === 0 || r.height === 0 || getComputedStyle(c).visibility === 'hidden') continue
+          if (r.right <= 0 || r.bottom <= 0 || r.left >= innerWidth || r.top >= innerHeight) continue
+          const cx = r.x + r.width / 2
+          const cy = r.y + r.height / 2
+          let clipped = false
+          for (let p = c.parentElement; p && p !== document.body; p = p.parentElement) {
+            const s = getComputedStyle(p)
+            if (s.overflowX === 'visible' && s.overflowY === 'visible') continue
+            const b = p.getBoundingClientRect()
+            if (cx < b.left || cx > b.right || cy < b.top || cy > b.bottom) clipped = true
+          }
+          if (clipped) continue
+          for (const [u, v] of POINTS) {
+            const x = r.left + u * r.width
+            const y = r.top + v * r.height
+            if (x < 0 || y < 0 || x >= innerWidth || y >= innerHeight) continue
+            const top = document.elementFromPoint(x, y)
+            if (top && (top === c || c.contains(top))) continue
+            out.push(`${name(c)} (${u}, ${v}) under ${what(top)}`)
+          }
+        }
+      }
+    }
+    return out
+  }, roots)
+}
+
+/**
+ * Points across a card (a grid over its whole box, every ~1/12 of its width and 1/4 of its height, 4 px in
+ * from its edges: a round button over a corner is found) where something else is on top, as
+ * "(i/12, j/4) under <what>" (W5-07: the phone's floating buttons must never sit on a card).
+ */
+export async function coveredAcross(page: Page, testId: string): Promise<string[]> {
+  return page.getByTestId(testId).evaluate((card) => {
+    const r = card.getBoundingClientRect()
+    const out: string[] = []
+    const inset = 4
+    for (let i = 0; i <= 12; i++) {
+      for (let j = 0; j <= 4; j++) {
+        const x = r.left + inset + ((r.width - 2 * inset) * i) / 12
+        const y = r.top + inset + ((r.height - 2 * inset) * j) / 4
+        if (x < 0 || y < 0 || x >= innerWidth || y >= innerHeight) continue
+        const top = document.elementFromPoint(x, y)
+        if (top && (top === card || card.contains(top))) continue
+        const tagged = top?.closest('[data-testid]')
+        out.push(
+          `(${i}/12, ${j}/4) under ${tagged ? `[${tagged.getAttribute('data-testid')}]` : (top?.tagName ?? 'nothing')}`,
+        )
+      }
+    }
+    return out
+  })
+}
+
+/** The tool the board page reports (LobbyCanvas.tool(): `hand` under a viewer's Hand, CR-3A-9). */
+export const lobbyTool = (page: Page) => withCanvas(page, (c) => c.tool(), null)

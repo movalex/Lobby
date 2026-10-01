@@ -4,6 +4,7 @@ import {
   elementBounds,
   entryOfSelection,
   inReadingOrder,
+  isStacked,
   levelEntries,
   levelOfSelection,
   readingOrder,
@@ -25,6 +26,33 @@ describe('reading order (tldraw 5.4.2 _getShapesInReadingOrder)', () => {
   it('starts a new row once a centre is 100 px or more below the row', () => {
     expect(keys(inReadingOrder([box('low', 0, 100), box('high', 50, 0)]))).toEqual(['high', 'low'])
     expect(keys(inReadingOrder([box('right', 50, 99), box('left', 0, 0)]))).toEqual(['left', 'right'])
+  })
+
+  it('W5-59: a heading is read before the line under it, whatever their widths (stacked boxes start a new row)', () => {
+    const wide = (key: string, x: number, y: number, width: number, height: number) => ({
+      key,
+      bounds: { x, y, width, height },
+    })
+    // the Lobby tour's "1 · Welcome": a heading as wide as the frame, a slightly narrower subtitle under it,
+    // then three cards side by side
+    const order = inReadingOrder([
+      wide('subtitle', 40, 95, 600, 40),
+      wide('card-2', 260, 160, 200, 90),
+      wide('heading', 40, 40, 640, 50),
+      wide('card-1', 40, 160, 200, 90),
+      wide('card-3', 480, 160, 200, 90),
+    ])
+    expect(keys(order)).toEqual(['heading', 'subtitle', 'card-1', 'card-2', 'card-3'])
+    // side by side (sharing height) and scattered (sharing no width) still make one row
+    expect(isStacked({ x: 0, y: 0, width: 100, height: 50 }, { x: 0, y: 60, width: 80, height: 20 })).toBe(
+      true,
+    )
+    expect(isStacked({ x: 0, y: 0, width: 100, height: 50 }, { x: 0, y: 30, width: 80, height: 50 })).toBe(
+      false,
+    )
+    expect(isStacked({ x: 0, y: 0, width: 10, height: 10 }, { x: 250, y: 40, width: 10, height: 10 })).toBe(
+      false,
+    )
   })
 
   it('swaps a nearer entry two places on forward when it is at a shallow angle', () => {
