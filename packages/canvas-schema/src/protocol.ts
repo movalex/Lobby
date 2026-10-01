@@ -37,8 +37,9 @@ export const PROTO = 1 as const
  * docs/EXCALIDRAW-CONTRACTS.md §0a). C0 is revision 1. Revision 7 (wave 5, owner 2A as contracts owner):
  * tombstones travel redacted (elements.ts `redactTombstone`, hash.ts `TOMBSTONE_KEYS`; W5-02), font family
  * 7 is allowed (D3), the signed-URL check fails closed and knows GCS (V2), the guest cap is per uid (D5).
+ * Revision 8: a delete's broadcast is the exact patch again (only `c` ops of tombstones are redacted).
  */
-export const CONTRACTS_REV = 7
+export const CONTRACTS_REV = 8
 /**
  * The element schema version (`hello.schema`, `welcome.schema`, `lb_meta.schemaVersion`). A client one
  * version older is served; a newer one gets 4099 `SERVER_TOO_OLD`, an older one `CLIENT_TOO_OLD` (§6.2 `schema`).
@@ -500,10 +501,11 @@ export type NoticeCode = (typeof NOTICE_CODES)[number]
  * A server op in `changes` (and `welcome.catchUp`). `c`: the full element as stored at its version
  * `el.version` (a create, an undelete, a catch-up row, a server repair); the receiver replaces its copy.
  * A tombstone is never sent in full (CONTRACTS_REV 7, W5-02): a `c` op of a deleted element carries
- * elements.ts `redactTombstone(stored)`, a delete reaches the sessions that held the element live as a `p`
- * op of `life` (and `z` when its key moved) with nothing of the content groups the deleting op may have
- * changed, and an undelete is always a `c` op of the full live element (a receiver may hold only the
- * redacted form). A receiver that holds the element's content may keep it under a tombstone; only the
+ * elements.ts `redactTombstone(stored)`; a delete reaches the sessions that held the element live as the
+ * `p` op of what the deleting push changed (CONTRACTS_REV 8: exactly, so their copy stays the server's;
+ * rev 7 sent `life` alone, and an arrow whose bindings the same delete nulled was revived unbound by its
+ * undo); an undelete is always a `c` op of the full live element (a receiver may hold only the redacted
+ * form). A receiver that holds the element's content may keep it under a tombstone; only the
  * TOMBSTONE_KEYS of a deleted element are authoritative (hash.ts).
  * `p`: the stored values of the groups that changed (the whole unit for `path`), the new version `v` and
  * `versionNonce` `vn` (C0: the plan named `v`, `pv` and `updated` only, but the convergence hash includes

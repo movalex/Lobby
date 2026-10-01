@@ -1326,27 +1326,17 @@ type Ref = { id: string; type: 'arrow' | 'text' }
  * for `path`), the customData.lobby keys, boundElements by id and lobbyServer, with the new `v`, `vn`,
  * the previous `pv` and `updated`; or the full element (`c`) for a create, or whenever a patch could not
  * reproduce the stored element exactly (checked by overlaying it).
+ *
+ * Tombstones (W5-02, canvas-schema elements.ts `redactTombstone`): a `c` op of a deleted element is
+ * always the redacted tombstone (a create of a deleted element, a write to a tombstone, a delete whose
+ * patch could not reproduce the row). A delete is the patch of what the deleting push changed, sent to the
+ * sessions that held the element live: their copy must stay the server's exactly (the client diffs its
+ * pushes against it; a delete that also nulled an arrow's bindings must say so, or the arrow's undo never
+ * sends them back). An undelete is always the full live element: a joiner holds only the redacted form.
  */
 export function serverOp(before: WireElement | null, after: WireElement): ServerOp {
-  // W5-02: a tombstone never travels in full (canvas-schema elements.ts redactTombstone, hash.ts)
-  if (after.isDeleted) {
-    if (!before || before.isDeleted) return { k: 'c', el: redactTombstone(after as El) }
-    // a delete: the sessions held the element live, so the deletion (and a moved key) is all they get;
-    // content groups the deleting op changed never leave the server
-    const g: Record<string, Record<string, unknown>> = { life: { isDeleted: true } }
-    if (!eqJson(before.index, after.index)) g.z = { index: after.index }
-    return {
-      k: 'p',
-      id: after.id,
-      v: after.version,
-      vn: after.versionNonce,
-      pv: before.version,
-      updated: after.updated,
-      g,
-    } as ServerOp
-  }
-  const full: ServerOp = { k: 'c', el: after }
-  // a create, or an undelete: the receivers may hold only the redacted tombstone, so the full element
+  const full: ServerOp = { k: 'c', el: after.isDeleted ? redactTombstone(after as El) : after }
+  // a create, a write to a tombstone, or an undelete
   if (!before || before.isDeleted) return full
   const b = before as El
   const a = after as El
@@ -1391,14 +1381,17 @@ export function serverOp(before: WireElement | null, after: WireElement): Server
     if (a.customData?.lobbyServer === undefined) return full
     op.lobbyServer = a.customData.lobbyServer
   }
-  // the patch must reproduce the stored element exactly
+  // the patch must reproduce the stored element exactly, every field (a delete's too: hash.ts compares a
+  // tombstone by its TOMBSTONE_KEYS only, so both sides are compared as if live)
   const rebuilt = {
     ...overlayPatch(b, op as never),
     version: a.version,
     versionNonce: a.versionNonce,
     updated: a.updated,
   }
-  if (canonicalJson(canonicalElement(rebuilt)) !== canonicalJson(canonicalElement(a))) return full
+  const whole = (el: Readonly<Record<string, unknown>>) =>
+    canonicalJson(canonicalElement({ ...el, isDeleted: false }))
+  if (rebuilt.isDeleted !== a.isDeleted || whole(rebuilt) !== whole(a)) return full
   if (
     Object.values(g).some((fields) =>
       Object.values(fields).some((v) => typeof v === 'number' && Math.abs(v) > COORD_LIMIT * 10),

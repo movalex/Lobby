@@ -134,31 +134,26 @@ describe('W5-02: tombstones carry no content to any role', () => {
   )
 
   it(
-    'a catch-up carries the redacted tombstone; a delete reaches live sessions without the content it wrote',
+    'a catch-up carries the redacted tombstone; a delete reaches live sessions as the exact patch of what it changed',
     async () => {
       const st = await h.stack()
       const b = newBoardId()
       const a = await st.client({ boardId: b, user: 'alice', role: 'owner' })
       const v = await st.client({ boardId: b, user: 'vic', role: 'viewer' })
-      // a delete that also rewrites the text: the viewer never sees the new words
+      // a delete that also moves the text: the sessions that held it live get the exact patch (their copy
+      // stays the server's: a client diffs its pushes against it, e.g. an arrow's bindings nulled by the
+      // same delete must reach it, or its undo never sends them back)
       await a.create([text('t2', { text: 'before', originalText: 'before' })])
       await v.untilClock(a.clock)
-      await a.push([
-        patch(a, 't2', {
-          g: {
-            text: { originalText: 'rewritten secret' },
-            layout: { text: 'rewritten secret' },
-            life: { isDeleted: true },
-          },
-        }),
-      ])
+      await a.push([patch(a, 't2', { g: { pos: { x: 77, y: 0 }, life: { isDeleted: true } } })])
       await v.untilClock(a.clock)
-      expect(everything(v).includes('rewritten secret')).toBe(false)
       const delOp = v
         .of('changes')
         .flatMap((m) => m.ops)
         .find((o) => o.k === 'p' && o.id === 't2')
-      expect(delOp?.k === 'p' && Object.keys(delOp.g ?? {})).toEqual(['life'])
+      expect(delOp?.k === 'p' && Object.keys(delOp.g ?? {}).sort()).toEqual(['life', 'pos'])
+      expect(await v.hash()).toBe(await hashElements((await st.snapshot(b)).elements))
+      expect(v.confirmed.get('t2')).toEqual((await stored(st, b)).get('t2'))
       // a reconnect with `since` gets the tombstone as a redacted catch-up row
       const since = v.clock
       const epoch = v.epoch
