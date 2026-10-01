@@ -1,8 +1,10 @@
 // OWNER: 3g (docs/EXCALIDRAW-CONTRACTS.md §7.2). The ported 'media' feature on the Excalidraw board page:
 // file cards and image placeholders (./CardLayer.tsx), the PDF page viewer and "Place on board"
 // (./PdfViewer.tsx, ./place-pages.ts), paste, drop and "Insert file" (./insert.ts: upload, then place),
-// opening a card's original on double-click, "Download original" (./downloads.ts). The canvas side is
-// canvas/api/parts/files.ts (files.urlOf, files.insert, the upload tracker, the derivative swap).
+// opening a card's original on double-click, "Download original" (./downloads.ts), Replace media, Crop and
+// Alternative text (./edit-media.tsx, W5-13), the uploading tab's local previews (./local-previews.ts,
+// W5-56) and link cards for pasted URLs (./link-cards.tsx, D2). The canvas side is
+// canvas/api/parts/files.ts (files.urlOf, files.insert, files.crop, the upload tracker, the derivative swap).
 //
 // Plan: docs/EXCALIDRAW-MIGRATION.md §2.10, §4.1; what differs from the tldraw page:
 // docs/research/excalidraw/wave3/3G.md.
@@ -12,7 +14,19 @@ import type { CanvasFeature, CanvasFeatureContext, SelectionBarItemSpec } from '
 import { knownUserKind } from '../../invite/guest.tsx'
 import { MediaSceneLayer } from './CardLayer.tsx'
 import { downloadOriginals, openOriginal, selectedDownloads, syncExportPolicy } from './downloads.ts'
+import {
+  AltTextHost,
+  canEditPicture,
+  canReplace,
+  editMenu,
+  editSelectionBar,
+  startAltText,
+  startCrop,
+  startReplace,
+} from './edit-media.tsx'
 import { insertFiles } from './insert.ts'
+import { linkContentHandler } from './link-cards.tsx'
+import { disposeLocalPreviews } from './local-previews.ts'
 import { fileItemKind } from './model.ts'
 import { PdfViewerHost } from './PdfViewer.tsx'
 
@@ -90,6 +104,24 @@ export const feature: CanvasFeature = {
       enabled: (ctx) => selectedDownloads(ctx).length > 0,
       run: (ctx) => downloadOriginals(ctx, guestOf(ctx)),
     },
+    {
+      id: 'media.replace',
+      label: 'Replace media',
+      enabled: (ctx) => !!canReplace(ctx, ctx.canvas.selection),
+      run: (ctx) => startReplace(ctx),
+    },
+    {
+      id: 'media.crop',
+      label: 'Crop',
+      enabled: (ctx) => !!canEditPicture(ctx, ctx.canvas.selection) && !!ctx.canvas.files.crop,
+      run: (ctx) => void startCrop(ctx),
+    },
+    {
+      id: 'media.alt-text',
+      label: 'Alternative text',
+      enabled: (ctx) => !!canEditPicture(ctx, ctx.canvas.selection),
+      run: (ctx) => startAltText(ctx),
+    },
   ],
   contextMenu: [
     {
@@ -100,8 +132,9 @@ export const feature: CanvasFeature = {
       command: 'media.download-original',
       visible: (ctx, target) => selectedDownloads(ctx, target.ids).length > 0,
     },
+    ...editMenu,
   ],
-  selectionBar: [downloadButton],
+  selectionBar: [...editSelectionBar, downloadButton],
   contentHandlers: [
     {
       id: 'media.files',
@@ -114,10 +147,13 @@ export const feature: CanvasFeature = {
         return true
       },
     },
+    // D2: a lone pasted (or dropped) URL becomes a link card
+    linkContentHandler,
   ],
   overlays: [
     { id: 'media.faces', layer: 'scene', order: 10, pointer: 'none', component: MediaSceneLayer },
     { id: 'media.viewer', layer: 'screen', order: 95, pointer: 'none', component: PdfViewerHost },
+    { id: 'media.alt-text', layer: 'screen', order: 96, pointer: 'none', component: AltTextHost },
   ],
   onMount(ctx) {
     const offs = [
@@ -133,6 +169,7 @@ export const feature: CanvasFeature = {
     ]
     return () => {
       for (const off of offs.reverse()) off()
+      disposeLocalPreviews(ctx.registries)
     }
   },
 }

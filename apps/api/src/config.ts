@@ -87,6 +87,12 @@ export interface ApiConfig {
    * trailerparkgroup.com) and DRAFTROOM_CREATOR_EMAILS (the exceptions; default none). Always on.
    */
   creators: CreatorPolicy
+  /**
+   * DRAFTROOM_LINK_PREVIEW_TEST_ORIGINS (comma-separated exact origins): the e2e fixture server on
+   * loopback that link previews (features/link-preview) may fetch from, which their network rules
+   * refuse otherwise. Local development only: it requires DRAFTROOM_DEV_AUTH=1 (refused in production).
+   */
+  linkPreviewTestOrigins: readonly string[]
 }
 
 export interface UploadLimitsConfig {
@@ -294,6 +300,28 @@ export function parseBlobStore(env: Env, dataDir: string, production: boolean): 
   return { kind: 'r2', accountId, accessKeyId, secretAccessKey, bucket, endpoint }
 }
 
+/** DRAFTROOM_LINK_PREVIEW_TEST_ORIGINS: exact http(s) origins, behind the local-dev guard only. */
+export function parseLinkPreviewTestOrigins(env: Env, devAuth: boolean): string[] {
+  const raw = read(env, 'DRAFTROOM_LINK_PREVIEW_TEST_ORIGINS')
+  if (raw === undefined) return []
+  if (!devAuth) throw new Error('DRAFTROOM_LINK_PREVIEW_TEST_ORIGINS requires DRAFTROOM_DEV_AUTH=1')
+  const out: string[] = []
+  for (const part of raw.split(',')) {
+    const v = part.trim()
+    if (!v) continue
+    let url: URL
+    try {
+      url = new URL(v)
+    } catch {
+      throw new Error('DRAFTROOM_LINK_PREVIEW_TEST_ORIGINS must list http(s) origins (scheme://host:port)')
+    }
+    if ((url.protocol !== 'http:' && url.protocol !== 'https:') || url.origin !== v.replace(/\/$/, ''))
+      throw new Error('DRAFTROOM_LINK_PREVIEW_TEST_ORIGINS must list http(s) origins (scheme://host:port)')
+    out.push(url.origin)
+  }
+  return out
+}
+
 /** Parses and validates the API environment. Throws an operator-facing message on bad input. */
 export function loadConfig(env: Env = process.env): ApiConfig {
   const production = env.NODE_ENV === 'production'
@@ -407,5 +435,6 @@ export function loadConfig(env: Env = process.env): ApiConfig {
     storage: parseStorageConfig(env),
     ai: parseAiConfig(env, production),
     creators: parseCreatorPolicy(env),
+    linkPreviewTestOrigins: parseLinkPreviewTestOrigins(env, devAuth),
   }
 }

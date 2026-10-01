@@ -182,6 +182,121 @@ function sane(w: number, h: number): PixelSize | null {
   return Number.isFinite(w) && Number.isFinite(h) && w > 0 && h > 0 ? { w, h } : null
 }
 
+/** The EXIF Orientation (1-8) in a TIFF block (`II*\0` or `MM\0*`), optionally after `Exif\0\0`. */
+function tiffOrientation(b: Uint8Array, start: number, end: number): number | null {
+  let o = start
+  if (end - o >= 6 && ascii(b, o, 4) === 'Exif' && b[o + 4] === 0 && b[o + 5] === 0) o += 6
+  if (end - o < 8) return null
+  const order = ascii(b, o, 2)
+  const le = order === 'II'
+  if (!le && order !== 'MM') return null
+  const r16 = (p: number) => (le ? u16le(b, p) : u16be(b, p))
+  const r32 = (p: number) => (le ? u16le(b, p) + u16le(b, p + 2) * 65536 : u32be(b, p))
+  if (r16(o + 2) !== 42) return null
+  const ifd = o + r32(o + 4)
+  if (ifd + 2 > end) return null
+  const count = r16(ifd)
+  for (let i = 0; i < count; i++) {
+    const entry = ifd + 2 + i * 12
+    if (entry + 12 > end) return null
+    // tag 0x0112 Orientation, type SHORT (3), one value, stored in the entry itself
+    if (r16(entry) !== 0x0112) continue
+    if (r16(entry + 2) !== 3) return null
+    const v = r16(entry + 8)
+    return v >= 1 && v <= 8 ? v : null
+  }
+  return null
+}
+
+/**
+ * The EXIF Orientation of a JPEG (APP1), WebP (the `EXIF` chunk) or PNG (`eXIf`, before the image data)
+ * header, or null when it has none (1, "as stored", is returned as is). Phone photos are often stored
+ * landscape with Orientation 6 or 8: the worker's derivatives are auto-oriented (sharp `autoOrient`,
+ * apps/worker/src/image.ts), and so must be the box the canvas draws them in (W5-12).
+ */
+export function exifOrientation(b: Uint8Array): number | null {
+  if (b.length >= 4 && b[0] === 0xff && b[1] === 0xd8) {
+    let o = 2
+    while (o + 4 <= b.length) {
+      if (b[o] !== 0xff) return null
+      const marker = b[o + 1] ?? 0
+      if (marker === 0xd8 || (marker >= 0xd0 && marker <= 0xd7) || marker === 0x01) {
+        o += 2
+        continue
+      }
+      // start of scan: no metadata after it that a browser would honour
+      if (marker === 0xda) return null
+      const len = u16be(b, o + 2)
+      if (len < 2) return null
+      if (marker === 0xe1) {
+        const found = tiffOrientation(b, o + 4, Math.min(b.length, o + 2 + len))
+        if (found !== null) return found
+      }
+      o += 2 + len
+    }
+    return null
+  }
+  if (b.length >= 12 && ascii(b, 0, 4) === 'RIFF' && ascii(b, 8, 4) === 'WEBP') {
+    let o = 12
+    while (o + 8 <= b.length) {
+      const fourcc = ascii(b, o, 4)
+      const size = u16le(b, o + 4) + u16le(b, o + 6) * 65536
+      if (fourcc === 'EXIF') return tiffOrientation(b, o + 8, Math.min(b.length, o + 8 + size))
+      o += 8 + size + (size % 2)
+    }
+    return null
+  }
+  if (b.length >= 16 && u32be(b, 0) === 0x89504e47) {
+    let o = 8
+    while (o + 8 <= b.length) {
+      const len = u32be(b, o)
+      const type = ascii(b, o + 4, 4)
+      if (type === 'IDAT' || type === 'IEND') return null
+      if (type === 'eXIf') return tiffOrientation(b, o + 8, Math.min(b.length, o + 8 + len))
+      o += 12 + len
+    }
+  }
+  return null
+}
+
+/**
+ * The size an image is shown at: its header's pixel size with the EXIF orientation applied (a quarter
+ * turn, Orientation 5 to 8, swaps width and height), as the worker's derivatives and the browser show
+ * it. Null when the header says nothing.
+ */
+export function displaySizeFromHeader(b: Uint8Array): PixelSize | null {
+  const size = imageSizeFromHeader(b)
+  if (!size) return null
+  const o = exifOrientation(b)
+  return o !== null && o >= 5 ? { w: size.h, h: size.w } : size
+}
+
+/** A new card's corner radius in scene units (today's card face: `border-radius: 10px`). */
+export const CARD_RADIUS = 10
+/** A new card's `roundness`: Excalidraw's adaptive radius, fixed at CARD_RADIUS (W5-36). */
+export const CARD_ROUNDNESS = { type: 3, value: CARD_RADIUS } as const
+
+/**
+ * The corner radius Excalidraw clips an element's bitmap to (`getCornerRadius` of @excalidraw/element:
+ * legacy and proportional roundness are a quarter of the shorter side; adaptive is its fixed value, or a
+ * quarter of the shorter side when that is smaller), so a card face drawn over it can follow it.
+ */
+export function cornerRadiusOf(el: {
+  readonly width: number
+  readonly height: number
+  readonly roundness?: { readonly type?: number; readonly value?: number } | null
+}): number {
+  const side = Math.max(0, Math.min(el.width, el.height))
+  const r = el.roundness
+  if (!r) return 0
+  if (r.type === 1 || r.type === 2) return side * 0.25
+  if (r.type === 3) {
+    const fixed = typeof r.value === 'number' && Number.isFinite(r.value) ? Math.max(0, r.value) : 32
+    return side <= fixed / 0.25 ? side * 0.25 : fixed
+  }
+  return 0
+}
+
 /** The worker's preview edges (apps/worker/src/config.ts): fit inside, never enlarged. */
 export const THUMB_EDGE = 512
 

@@ -43,6 +43,7 @@ import {
   fileItems,
   frameByName,
   imageItems,
+  imageState,
   insertFiles,
   newItems,
   ORIGINAL_HREF,
@@ -513,4 +514,134 @@ test('F7a double-clicking a PDF or video card opens the original in a new tab (n
     return { focusVisible: el.matches(':focus-visible'), style: cs.outlineStyle, width: cs.outlineWidth }
   })
   expect(ring).toEqual({ focusVisible: true, style: 'solid', width: '2px' })
+})
+
+test('W5-12 a phone photo stored landscape with EXIF Orientation 6 lands portrait, like its derivatives (not squashed)', async ({
+  canvasSession,
+  board,
+}) => {
+  test.setTimeout(120_000)
+  const a = await canvasSession('alice')
+  // image-exif6.jpg: 1920 × 1080 pixels stored, EXIF Orientation 6: shown 1080 × 1920
+  await insertFiles(a.page, [fixture('image-exif6.jpg')])
+  const [photo] = await newItems(a.page, imageItems, new Set(), 1)
+  if (!photo) throw new Error('no image')
+  expect(photo.height).toBeGreaterThan(photo.width)
+  expect(photo.height / photo.width).toBeCloseTo(1920 / 1080, 2)
+  await expectLoadedImage(a.page, photo.id, board)
+  // the worker's thumb is auto-oriented: the box has its proportions, so nothing is stretched
+  const shown = await imageState(a.page, photo.id)
+  const natural = shown.natural as { w: number; h: number }
+  expect(natural.h).toBeGreaterThan(natural.w)
+  expect(photo.height / photo.width).toBeCloseTo(natural.h / natural.w, 1)
+})
+
+test('W5-56 the uploading tab sees its own images at once (at their places while uploading, then under "Processing…"); others see the placeholder; nothing local is stored', async ({
+  canvasSession,
+  stack,
+  board,
+}) => {
+  test.setTimeout(180_000)
+  const a = await canvasSession('alice')
+  const b = await canvasSession('bob')
+  await stack.worker.kill() // no derivative until the worker is back
+  let release!: () => void
+  const gate = new Promise<void>((r) => {
+    release = r
+  })
+  // hold the uploads, so the time they take can be seen
+  await a.page.route('**/api/boards/*/assets', async (route) => {
+    if (route.request().method() === 'POST') await gate
+    await route.continue()
+  })
+  const files = await makeImages(a.page, [
+    { name: 'shot-1.jpg', w: 1200, h: 800 },
+    { name: 'shot-2.jpg', w: 800, h: 1200 },
+    { name: 'shot-3.png', w: 900, h: 900, type: 'image/png' },
+  ])
+  await insertFiles(a.page, files)
+
+  await test.step('while uploading: a local copy of each image at its planned place, nothing on the board yet', async () => {
+    const ghosts = a.page.getByTestId('upload-ghost')
+    await expect(ghosts).toHaveCount(3)
+    for (const img of await ghosts.locator('img').all()) {
+      await expect(img).toHaveAttribute('src', /^blob:/)
+      await expect.poll(() => img.evaluate((el) => (el as HTMLImageElement).naturalWidth)).toBeGreaterThan(0)
+    }
+    await expect(ghosts.first()).toContainText('Uploading…')
+    expect(await imageItems(a.page)).toHaveLength(0)
+  })
+
+  release()
+  const placed = await newItems(a.page, imageItems, new Set(), 3)
+  await expect(a.page.getByTestId('upload-ghost')).toHaveCount(0)
+  await a.page.unroute('**/api/boards/*/assets')
+
+  await test.step('uploaded, not processed: this tab shows its copy under "Processing…", bob the placeholder', async () => {
+    for (const p of placed) {
+      const mine = placeholder(a.page, p.id)
+      await expect(mine).toHaveAttribute('data-local-preview', '')
+      await expect(mine.locator('img')).toHaveAttribute('src', /^blob:/)
+      await expect(mine).toContainText('Processing…')
+      await expect(mine).toContainText(p.facts.name)
+      const theirs = placeholder(b.page, p.id)
+      await expect(theirs).toContainText('Processing…', { timeout: 30_000 })
+      await expect(theirs).not.toHaveAttribute('data-local-preview')
+      await expect(theirs.locator('img')).toHaveCount(0)
+    }
+    // the preview is this tab's only: no element holds a blob: or data: URL
+    expect(JSON.stringify(await items(a.page))).not.toMatch(/blob:|data:image/)
+  })
+
+  await stack.worker.start()
+  await test.step('once the derivatives exist, both tabs show them; the local copies are gone', async () => {
+    for (const p of placed) {
+      await expectLoadedImage(a.page, p.id, board, 90_000)
+      await expectLoadedImage(b.page, p.id, board, 90_000)
+      await expect(placeholder(a.page, p.id)).toHaveCount(0)
+    }
+  })
+})
+
+/** WCAG contrast of two `rgb(…)` colours. */
+function contrast(fg: string, bg: string): number {
+  const lum = (c: string) => {
+    const [r, g, b] = (c.match(/[\d.]+/g) ?? []).slice(0, 3).map((v) => {
+      const s = Number(v) / 255
+      return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4
+    }) as [number, number, number]
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b
+  }
+  const [l1, l2] = [lum(fg), lum(bg)].sort((x, y) => y - x) as [number, number]
+  return (l1 + 0.05) / (l2 + 0.05)
+}
+
+test('W5-36 a card’s corners and colours: new cards are rounded on the canvas as on screen; in dark mode the card body is dark and its error text readable', async ({
+  canvasSession,
+}) => {
+  test.setTimeout(180_000)
+  const a = await canvasSession('alice')
+  await a.page.emulateMedia({ colorScheme: 'dark' })
+  await expect(a.page.locator('html')).toHaveAttribute('data-theme', 'dark')
+  await insertFiles(a.page, [fixture('document.pdf'), fixture('encrypted.pdf')])
+  const cards = await newItems(a.page, cardItems, new Set(), 2)
+  for (const c of cards) {
+    const el = (await items(a.page)).find((e) => e.id === c.id) as unknown as { roundness: unknown }
+    // the canvas face (the cover the engine draws, and exports) is clipped to the face's 10-unit corners
+    expect(el.roundness).toEqual({ type: 3, value: 10 })
+  }
+  const ready = fileCard(a.page, 'document.pdf')
+  await expect(ready).toHaveAttribute('data-status', 'ready', { timeout: 60_000 })
+  await expect.poll(() => ready.evaluate((el) => getComputedStyle(el).borderTopLeftRadius)).toBe('10px')
+
+  const failed = fileCard(a.page, 'encrypted.pdf')
+  await expect(failed).toHaveAttribute('data-status', 'failed', { timeout: 60_000 })
+  const colours = await failed.evaluate((el) => {
+    const preview = el.querySelector('.dr-fc__preview') as HTMLElement
+    const error = el.querySelector('[data-testid="file-card-error"]') as HTMLElement
+    return { body: getComputedStyle(preview).backgroundColor, text: getComputedStyle(error).color }
+  })
+  // not the light theme's beige (#f3f1ea) under the dark theme's red
+  expect(colours.body).not.toBe('rgb(243, 241, 234)')
+  expect(contrast(colours.text, colours.body)).toBeGreaterThanOrEqual(4.5)
 })
