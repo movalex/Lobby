@@ -243,7 +243,10 @@ export class RenderOverrides {
     if (ids && had && ids.size === had.size && [...ids].every((id) => had.has(id))) return
     if (ids?.size) this.culledBySource.set(source, new Set(ids))
     else this.culledBySource.delete(source)
-    this.invalidate()
+    // at once, as the level-of-detail pass's own seam did: a frame that turns live must be drawn by the
+    // engine in the same frame its bitmap stops covering it
+    this.dirtyExpansion = true
+    if (!this.disposed) this.flush()
   }
 
   /** Ids a peer's drag preview moves right now (a non-zero offset). */
