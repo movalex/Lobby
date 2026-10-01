@@ -23,6 +23,7 @@ import { CaptureUpdateAction } from '@excalidraw/excalidraw'
 import type { ExcalidrawImperativeAPI } from '@excalidraw/excalidraw/types'
 import { api as apiClient } from '../../api/client.ts'
 import { createTicketUri } from '../../board/ticket.ts'
+import { frameAt } from '../../features/canvas-ux/ported/notes.ts'
 import { DEV_AUTH_ENABLED } from '../../lib/identity.ts'
 import { engineRejectNotice } from '../../sync-quality/copy.ts'
 import { type BoardConcern, type BoardEvent, createLobbyCanvas, type LobbyCanvasHandle } from '../api/impl.ts'
@@ -31,6 +32,7 @@ import type {
   CanvasInputEvent,
   LobbyCanvas,
   LobbyCanvasEventMap,
+  LobbyTx,
   ScenePoint,
 } from '../api/lobby-canvas.ts'
 import { createFeatureRegistries, type ExternalContent, type FeatureRegistries } from '../api/registries.ts'
@@ -40,8 +42,8 @@ import { UndoController } from '../history/controller.ts'
 import { CanvasInput } from '../input/CanvasInput.ts'
 import { LeaseClient } from '../lease/client.ts'
 import type { EditNotice, EditState } from '../lease/editorLease.ts'
-import { createLodTarget, installLod } from '../lod/index.ts'
-import { installBoardOverrides } from '../overrides.ts'
+import { installLod } from '../lod/index.ts'
+import { installBoardOverrides, overridesLodTarget } from '../overrides.ts'
 import { createCanvasPort, type LobbyCanvasPort } from '../port-impl.ts'
 import { PresenceHub } from '../presence/hub.ts'
 import { attachPresencePointer, type PresenceSample } from '../presence/pointer.ts'
@@ -417,6 +419,9 @@ export class LobbyBoardSession {
 
   private onEditState(s: EditState): void {
     this.set({ edit: s })
+    // keys typed into an editor that waits for its lease are unsent text: no Saved meanwhile (§2.5.7,
+    // V1 P1; the spike page had this, the board page did not)
+    this.core.holdSaved('editor-buffer', s.phase !== 'idle' && s.phase !== 'open' && s.buffered > 0)
     this.handlesExtra?.editStateChanged(s.phase, s.leaseId)
     const editing = s.phase === 'open' ? s.leaseId : null
     if (editing !== this.lastEditing) {
@@ -453,11 +458,8 @@ export class LobbyBoardSession {
     this.api = api
     const offs: (() => void)[] = []
     const root = this.rootEl ?? (wrapper.parentElement as HTMLElement)
-    // 3b's level-of-detail pass adds its culled ids to the render-override snapshot the board's overrides
-    // submit (canvas/lod/cull.ts; CR 3b-5 moves that merge into RenderOverrides)
-    const lodTarget = createLodTarget(api)
     const board = installBoardOverrides({
-      api: lodTarget.api,
+      api,
       wrapper,
       registries: this.registries,
       boardId: this.o.boardId,
@@ -478,6 +480,8 @@ export class LobbyBoardSession {
       core: this.core,
       overrides: board.overrides,
       elements: () => api.getSceneElementsIncludingDeleted() as unknown as readonly SceneElement[],
+      elementMap: () =>
+        api.getSceneElementsMapIncludingDeleted() as unknown as ReadonlyMap<string, SceneElement>,
       view: () => {
         const s = api.getAppState()
         const z = s.zoom.value
@@ -513,9 +517,12 @@ export class LobbyBoardSession {
     offs.push(attachBoardFiles(this.registries, files), () => files.dispose())
     this.classifier.seed(api.getSceneElementsIncludingDeleted() as never)
 
+    // the canvas's size and place as the engine last measured them (CR-3A-10: a window resize changes
+    // `viewport.screenRect()` and the scene rectangle without a scroll, so readers were never told)
+    let lastBox = ''
     // 1. the engine's feed, then undo's step boundary, the port's events, presence
     offs.push(
-      attachEngine(api, this.core, (g) => {
+      attachEngine(api, this.core, (g, changed) => {
         const idle =
           !g.dragging &&
           !g.resizing &&
@@ -524,8 +531,16 @@ export class LobbyBoardSession {
           !g.editingLinear &&
           !g.newElementId &&
           !g.multiElementId
-        if (idle && !g.editingTextElementId) undo.boundary()
-        port.afterSceneChange()
+        // a camera move changes no element and no gesture: no step to record, no element scan (CR 3b-8)
+        if ((changed.elements || changed.gesture) && idle && !g.editingTextElementId) undo.boundary()
+        port.afterSceneChange(changed.elements)
+        const s = api.getAppState()
+        const box = `${s.width}x${s.height}@${s.offsetLeft},${s.offsetTop}`
+        if (box !== lastBox) {
+          const first = lastBox === ''
+          lastBox = box
+          if (!first) port.notifyViewport()
+        }
         presence.onGesture(g)
         const el = this.input.editorLease
         presence.setEditing(el && el.phase !== 'idle' ? el.leaseId : null)
@@ -626,6 +641,9 @@ export class LobbyBoardSession {
     ro.observe(container)
     offs.push(() => ro.disconnect())
     // 7. the feature-facing canvas on the board handles
+    // 3b's level-of-detail pass culls through RenderOverrides' render-only source (CR 3b-5; no Proxy of
+    // the engine API any more, W3-14)
+    const lodTarget = overridesLodTarget(board.overrides, api)
     const handles = createBoardHandles({
       api,
       port,
@@ -666,7 +684,14 @@ export class LobbyBoardSession {
     })
     offs.push(() => lod.dispose())
     // the test facade and the debug handle (dev-auth builds only: the facade checks the guard itself)
-    const uninstallFacade = installFacade(port, this.registries)
+    // CR-3A-9: the facade's `tool` / `setTool` go through the LobbyCanvas (3a's tools part: the
+    // highlighter and the read-only Hand), not the raw port, which reports `freedraw` and `select` for them
+    const lobbyCanvas = this.handle.canvas
+    const facadePort = Object.create(port, {
+      tool: { value: () => lobbyCanvas.tool() },
+      setTool: { value: (t: string) => lobbyCanvas.setTool(t) },
+    }) as LobbyCanvasPort
+    const uninstallFacade = installFacade(facadePort, this.registries)
     if (uninstallFacade) offs.push(uninstallFacade)
     if (DEV_AUTH_ENABLED) {
       ;(window as unknown as { __lobbyBoard?: unknown }).__lobbyBoard = {
@@ -679,13 +704,28 @@ export class LobbyBoardSession {
         lease: this.lease,
         input: this.input,
         undo,
+        overrides: board.overrides,
       }
     }
     this.set({ attached: true })
+    // the offline queue is written when the page goes away or is hidden (a reload, a closed tab, a phone
+    // switching apps), with any write Excalidraw has not reported yet (spike B part 3; WAVE-3 §6 asked the
+    // board page for it): its pushes in flight then reach the next page as lost pushes, not as unsent edits
+    const persist = () => this.core.persistNow()
+    const onHidden = () => {
+      if (document.visibilityState === 'hidden') persist()
+    }
+    window.addEventListener('pagehide', persist)
+    document.addEventListener('visibilitychange', onHidden)
+    offs.push(() => {
+      window.removeEventListener('pagehide', persist)
+      document.removeEventListener('visibilitychange', onHidden)
+    })
     // 8. connect
     this.core.start()
     this.transport.connect()
     return () => {
+      this.core.persistNow()
       for (const f of offs.reverse()) f()
       this.handle?.dispose()
       this.handle = null
@@ -737,7 +777,8 @@ export class LobbyBoardSession {
     if (this.snap.readonly || !this.port || !this.api) return
     if (c.tool === 'note') {
       const size = 200
-      const id = this.port.transact('note', (tx) =>
+      // W5-01: a note made inside a frame is its child (tldraw's), in the same step as its create
+      const id = this.createInFrame('note', { x: c.x, y: c.y }, (tx) =>
         tx.create('note', { x: c.x - size / 2, y: c.y - size / 2, size }),
       )
       this.lease.markCreated(id)
@@ -752,9 +793,29 @@ export class LobbyBoardSession {
 
   private createFreeText(x: number, y: number): void {
     if (this.snap.readonly || !this.port) return
-    const id = this.port.transact('text', (tx) => tx.create('text', { x, y, text: '' }))
+    const id = this.createInFrame('text', { x, y }, (tx) => tx.create('text', { x, y, text: '' }))
     this.lease.markCreated(id)
     this.input.editorLease?.requestEdit(id, { reason: 'new-text', caretEnd: true })
+  }
+
+  /**
+   * Creates an element at `at` with `make` and, in the same step, puts it (and its label) into the
+   * innermost unlocked frame under `at` (W5-01: notes and text made inside a frame are its children, as
+   * on the tldraw board; frame-scoped votes, frame moves and comments depend on it). One undo step.
+   */
+  private createInFrame(
+    label: string,
+    at: ScenePoint,
+    make: (tx: Pick<LobbyTx, 'create'>) => string,
+  ): string {
+    const canvas = this.canvas
+    if (!canvas) return (this.port as LobbyCanvasPort).transact(label, (tx) => make(tx))
+    const frame = frameAt(canvas, at, { unlockedOnly: true })
+    return canvas.transact(label, (tx) => {
+      const id = make(tx)
+      if (frame) tx.setFrame([id], frame.id)
+      return id
+    })
   }
 
   // ---- undo ------------------------------------------------------------------------------------------------
@@ -824,6 +885,7 @@ export class LobbyBoardSession {
   }
 
   dispose(): void {
+    this.core.persistNow()
     for (const f of this.detach.splice(0)) f()
     this.peers.dispose()
     this.core.stop()

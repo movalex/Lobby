@@ -12,6 +12,10 @@ import type {
 import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react'
 import { stampNoteDuplicates } from '../tools/notes.ts'
 import { interactionForRole, type LobbyRole } from './interaction.ts'
+import { CANVAS_LIGHT, installLobbyEngineTheme } from './theme.ts'
+
+// Lobby's frame names and outlines, and its dark-mode colours, before anything is drawn (W5-10, W5-15)
+installLobbyEngineTheme()
 
 /**
  * Mounts <Excalidraw> with Lobby's fixed props (docs/EXCALIDRAW-MIGRATION.md §2.3.2). Every name was
@@ -68,10 +72,12 @@ const UI_OPTIONS: Partial<UIOptions> = Object.freeze({
 
 /**
  * No scene: it arrives from the sync server. Only defaults for new elements: Nunito (FONT_FAMILY.Nunito
- * = 6) and roughness 0 (architect). Not frozen: the engine owns the object once it is passed in.
+ * = 6) and roughness 0 (architect), and Lobby's canvas colour. Not frozen: the engine owns the object once
+ * it is passed in.
  */
 const INITIAL_DATA: ExcalidrawInitialDataState = {
-  appState: { currentItemFontFamily: 6, currentItemRoughness: 0 },
+  // the canvas is tldraw's off-white, so white frames and notes stand out (W5-10; exports keep white)
+  appState: { currentItemFontFamily: 6, currentItemRoughness: 0, viewBackgroundColor: CANVAS_LIGHT },
 }
 
 const neverEmbed = () => false

@@ -580,10 +580,6 @@ test('RETRO-03a + RETRO-07a: a facilitator hides note authors and cursors for ev
 test('RETRO-03a: someone who joins right after a facilitator changed the session settings gets them (DEF-3F-1)', async ({
   join,
 }) => {
-  test.fail(
-    true,
-    'DEF-3F-1: a joiner within 5 s of the last reset snapshot gets that snapshot’s older board document (room element-room.ts snapshotFor; engine.ts applies frame.doc over the welcome’s doc)',
-  )
   const a = await join('alice')
   const b = await join('bob', 'editor')
   const pop = await openWorkshopPopover(a.page)

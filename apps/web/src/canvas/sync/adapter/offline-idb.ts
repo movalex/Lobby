@@ -14,6 +14,7 @@
  *
  * Browser only (not node-safe).
  */
+import { mergeOfflineQueues } from '../core/offline-merge.ts'
 import type { OfflineEntry, OfflineQueueStore } from '../types.ts'
 
 const DB = 'lobby-offline'
@@ -138,21 +139,8 @@ export function createIdbOfflineStore(o: { boardId: string; uid: string; tab: st
       const db = await dbp
       const own = ((await tx(db, 'readonly', (s) => s.get(key))) as QueueRecord | undefined)?.entries ?? []
       const others = await adoptOthers(db)
-      const byId = new Map<string, OfflineEntry>()
-      for (const e of [...others, ...own]) {
-        const prev = byId.get(e.element.id)
-        byId.set(
-          e.element.id,
-          prev
-            ? {
-                ...e,
-                groups: [...new Set([...prev.groups, ...e.groups])],
-                queuedAt: Math.min(prev.queuedAt, e.queuedAt),
-              }
-            : e,
-        )
-      }
-      const entries = [...byId.values()]
+      // one entry per element (and one `#doc` entry with every tab's keys): core/offline-merge.ts
+      const entries = mergeOfflineQueues([others, own])
       if (others.length)
         await tx(db, 'readwrite', (s) =>
           s.put({ key, boardId: o.boardId, uid: o.uid, tab: o.tab, entries, savedAt: Date.now() }),

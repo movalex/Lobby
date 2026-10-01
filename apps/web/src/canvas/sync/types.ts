@@ -174,6 +174,41 @@ export interface OfflineEntry {
   readonly groups: readonly string[]
   readonly base: number
   readonly queuedAt: number
+  /**
+   * Pushes of this element that were out without an ack when the queue was written (wave 5, V1): a
+   * reload or a closed tab loses their acks, so the page that adopts the queue decides them exactly as a
+   * reconnect does (the core's `replayLost`), not as unsent changes. Absent in queues written before.
+   */
+  readonly lost?: readonly LostPushRecord[]
+  /** the `#doc` entry's board-document writes that were out without an ack, with what they replaced */
+  readonly lostDoc?: readonly LostDocRecord[]
+}
+
+/** One lost push's part for one element, as the offline queue keeps it (OfflineEntry.lost). */
+export interface LostPushRecord {
+  /** the socket the push went out on (`<tab>:<socket generation>`): one FIFO, delivered as a prefix */
+  readonly src: string
+  readonly seq: number
+  /** the push's base clock */
+  readonly base: number
+  /** when the change was made (the push's time) */
+  readonly at: number
+  readonly create: boolean
+  readonly groups: readonly string[]
+  /** the copy the groups were taken from */
+  readonly el: SceneElement
+  /** a patch's: what it was built on (the server copy plus earlier pushes in flight) */
+  readonly ref?: SceneElement
+  /** a patch's `pv`: the server version it was built on */
+  readonly pv?: number
+  /** a create's: the server copy it was made over (a tombstone it undeletes), if any */
+  readonly prior?: SceneElement
+}
+
+/** A lost board-document write: the keys it set and the server's values it replaced (null: none). */
+export interface LostDocRecord {
+  readonly set: Readonly<Record<string, unknown>>
+  readonly base: Readonly<Record<string, unknown>>
 }
 
 /**

@@ -34,6 +34,7 @@ import type {
 } from './port.ts'
 import type { CanvasRegistries } from './registries.ts'
 import type { LobbyEngineCore } from './sync/core/engine.ts'
+import { compareIndexThenId } from './sync/index-keys.ts'
 import type { SaveStatus } from './sync/types.ts'
 import { buildNote } from './tools/notes.ts'
 import { activeLobbyTool, CUSTOM_TOOLS, setTool as setLobbyTool } from './tools/tools.ts'
@@ -63,14 +64,25 @@ export interface LobbyCanvasTx extends CanvasTx {
    * an id the board already has. See `LobbyEngineCore.prepareInsert` for the rules. Returns the ids.
    */
   insert(elements: readonly Readonly<Record<string, unknown>>[]): string[]
+  /**
+   * An element as this transaction sees it: the scene with this step's writes on top, the elements it
+   * created included (live or deleted). The canvas API's structural writes read through it (impl.ts
+   * `txView`), so a `setFrame` or `group` of a note created in the same step sees the note and its label.
+   */
+  read(id: string): CanvasElement | undefined
 }
 
 export interface LobbyCanvasPort extends CanvasPort {
   transact<T>(label: string, fn: (tx: LobbyCanvasTx) => T): T
   /** feeds the port's `pointer` event (the presence pointer listener) */
   emitPointer(point: ScenePoint | null): void
-  /** the adapter's hook after every scene change: `changed` and `selectionChanged` events, the hidden-ids post-filter */
-  afterSceneChange(): void
+  /** the canvas changed size or place (CR-3A-10): `viewportChanged` for readers of the view and its rect */
+  notifyViewport(): void
+  /**
+   * the adapter's hook after every scene change: `changed` and `selectionChanged` events, the hidden-ids
+   * post-filter. `elementsChanged: false` (a camera move, CR 3b-8) skips the element scan
+   */
+  afterSceneChange(elementsChanged?: boolean): void
   dispose(): void
 }
 
@@ -93,7 +105,11 @@ export function createCanvasPort(deps: PortDeps): LobbyCanvasPort {
   let lastSelection = ''
 
   const all = () => api.getSceneElementsIncludingDeleted()
-  const byId = (id: string) => all().find((e) => e.id === id)
+  // CR 3b-7: one lookup in the engine's own map (a scan of every element per call made every per-element
+  // caller quadratic on a heavy board)
+  const elementMap = () =>
+    api.getSceneElementsMapIncludingDeleted() as unknown as ReadonlyMap<string, ExcalidrawElement>
+  const byId = (id: string) => elementMap().get(id)
   const selectedIds = (): string[] => {
     const s = api.getAppState().selectedElementIds
     return Object.keys(s).filter((k) => s[k] && !registries.hidden.isHidden(k))
@@ -197,9 +213,9 @@ export function createCanvasPort(deps: PortDeps): LobbyCanvasPort {
     items: () => api.getSceneElements() as unknown as readonly CanvasElement[],
     get: (id) => byId(id) as unknown as CanvasElement | undefined,
     bounds(id): Bounds | null {
-      const e = byId(id)
+      const map = elementMap()
+      const e = map.get(id)
       if (!e) return null
-      const map = new Map(all().map((x) => [x.id, x]))
       const [x1, y1, x2, y2] = X.getCommonBounds([e], map) as [number, number, number, number]
       return { x: x1, y: y1, width: x2 - x1, height: y2 - y1 }
     },
@@ -233,8 +249,7 @@ export function createCanvasPort(deps: PortDeps): LobbyCanvasPort {
           ids?.length ? ids.map(byId).filter(Boolean) : api.getSceneElements()
         ) as ExcalidrawElement[]
         if (!els.length) return
-        const map = new Map(all().map((x) => [x.id, x]))
-        const [x1, y1, x2, y2] = X.getCommonBounds(els, map) as [number, number, number, number]
+        const [x1, y1, x2, y2] = X.getCommonBounds(els, elementMap()) as [number, number, number, number]
         const s = api.getAppState()
         const w = Math.max(1, x2 - x1)
         const h = Math.max(1, y2 - y1)
@@ -266,14 +281,20 @@ export function createCanvasPort(deps: PortDeps): LobbyCanvasPort {
         lo = nextIndex(lo)
         return lo
       }
-      const created: ExcalidrawElement[] = []
+      // the ids this step created, in order: the scene gets their LAST copies (an update or a delete of an
+      // element created in the same step was dropped when the first copies went in: the transact defect,
+      // 3b F1, CR-3D-1, CR-3H-3, CR-3F-6)
+      const created: string[] = []
+      // an `index` write moves the element in the scene array too (Excalidraw keeps the array in paint
+      // order and re-keys what is out of place, so a bare index write changed no paint order: CR-3A-3)
+      let reindexed = false
       const tx: LobbyCanvasTx = {
         create(kind, props) {
           if (deps.readOnly()) throw new Error('read-only: no writes')
           const els = create(kind, props, index)
           for (const e of els) {
             current.set(e.id, e)
-            created.push(e)
+            created.push(e.id)
           }
           return (els.find((e) => e.type !== 'text' || kind === 'text') ?? els[0])?.id as string
         },
@@ -282,6 +303,7 @@ export function createCanvasPort(deps: PortDeps): LobbyCanvasPort {
           const e = current.get(id)
           if (!e) throw new Error(`update: no element ${id}`)
           const next: Record<string, unknown> = { ...patch }
+          if ('index' in patch && patch.index !== e.index) reindexed = true
           if (patch.customData && typeof patch.customData === 'object') {
             const given = (patch.customData as { lobby?: Record<string, unknown> }).lobby ?? {}
             const lobby = {
@@ -319,14 +341,19 @@ export function createCanvasPort(deps: PortDeps): LobbyCanvasPort {
               }))) as unknown as ExcalidrawElement[]
           for (const e of copies) {
             current.set(e.id, e)
-            created.push(e)
+            created.push(e.id)
             if (e.index) lo = e.index
           }
           return copies.map((e) => e.id)
         },
+        read: (id) => current.get(id) as unknown as CanvasElement | undefined,
       }
       const result = fn(tx)
-      const next = [...order.map((id) => current.get(id) as ExcalidrawElement), ...created]
+      const written = [
+        ...order.map((id) => current.get(id) as ExcalidrawElement),
+        ...created.map((id) => current.get(id) as ExcalidrawElement),
+      ]
+      const next = reindexed ? [...written].sort(compareIndexThenId) : written
       api.updateScene({ elements: next, captureUpdate: CaptureUpdateAction.NEVER })
       // the core scans the write now, not at Excalidraw's onChange after React's commit (spike B part 3)
       deps.core?.syncScene()
@@ -364,14 +391,19 @@ export function createCanvasPort(deps: PortDeps): LobbyCanvasPort {
     emitPointer(p) {
       emit('pointer', p)
     },
-    afterSceneChange() {
-      const changed: string[] = []
-      for (const e of all()) {
-        if (versions.get(e.id) === e.version) continue
-        versions.set(e.id, e.version)
-        changed.push(e.id)
+    notifyViewport() {
+      emit('viewportChanged', viewport())
+    },
+    afterSceneChange(elementsChanged = true) {
+      if (elementsChanged) {
+        const changed: string[] = []
+        for (const e of all()) {
+          if (versions.get(e.id) === e.version) continue
+          versions.set(e.id, e.version)
+          changed.push(e.id)
+        }
+        if (changed.length) emit('changed', changed)
       }
-      if (changed.length) emit('changed', changed)
       // the box/lasso post-filter (§2.3.3, B12): hidden ids never stay selected
       const s = api.getAppState().selectedElementIds
       const hidden = Object.keys(s).filter((k) => s[k] && registries.hidden.isHidden(k))

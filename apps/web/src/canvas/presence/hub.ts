@@ -22,12 +22,15 @@ import { MAX_DRAG_IDS } from '@draftroom/canvas-schema/limits'
 import type { DragOut, PeerPresence, RosterEntry } from '@draftroom/canvas-schema/protocol'
 import type { LobbyEngineCore } from '../sync/core/engine.ts'
 import type { GestureState, SceneElement } from '../sync/types.ts'
+import { planDragArrows } from './drag-arrows.ts'
 import type { PresenceSample } from './pointer.ts'
 
 /** What O5's overrides.ts `RenderOverrides` offers for drag previews (its existing API). */
 export interface DragOverrides {
   setDrag(source: string, offsets: ReadonlyMap<string, { x: number; y: number }> | null): void
   clearDragFor(ids: Iterable<string>): void
+  /** the engine draws these invisible while Lobby draws them re-routed (D1: bound arrows, ./drag-arrows.ts) */
+  setPreviewHidden?(source: string, ids: Iterable<string> | null): void
 }
 
 export interface PeerView {
@@ -48,6 +51,8 @@ export interface PresenceHubOptions {
   readonly overrides: DragOverrides | null
   /** the current scene (drag ids: frame children and labels) */
   readonly elements: () => readonly SceneElement[]
+  /** the scene by id (the bound arrows of a peer's drag, D1); built from `elements` when absent */
+  readonly elementMap?: () => ReadonlyMap<string, SceneElement>
   /** the visible scene rectangle */
   readonly view: () => { x: number; y: number; w: number; h: number } | null
   readonly readOnly: () => boolean
@@ -63,6 +68,8 @@ export class PresenceHub {
   private readonly o: PresenceHubOptions
   private readonly peersBySid = new Map<string, PeerPresence>()
   private readonly remoteDrags = new Map<string, { d: number; ids: readonly string[] }>()
+  /** per dragging peer: copies of the bound arrows its drag re-routes (D1; drawn, never written) */
+  private readonly arrowCopies = new Map<string, SceneElement[]>()
   private readonly listeners = new Set<() => void>()
   private pointer: { x: number; y: number } | null = null
   private button: 'up' | 'down' = 'up'
@@ -107,6 +114,14 @@ export class PresenceHub {
           for (const d of this.remoteDrags.values()) for (const id of d.ids) dragged.add(id)
           const done = e.ids.filter((id) => dragged.has(id))
           if (done.length) this.o.overrides?.clearDragFor(done)
+          // a re-routed arrow's committed (re-snapped) copy arrived: its drawn copy goes
+          const applied = new Set(e.ids)
+          for (const [sid, copies] of this.arrowCopies) {
+            const keep = copies.filter((c) => !applied.has(c.id))
+            if (keep.length === copies.length) continue
+            this.setArrowCopies(sid, keep)
+            this.changed()
+          }
         }
       }),
     )
@@ -152,6 +167,13 @@ export class PresenceHub {
     return out
   }
 
+  /** The bound arrows peers' drags re-route right now (copies, D1): the drag-preview layer draws them. */
+  arrowPreviews(): readonly SceneElement[] {
+    const out: SceneElement[] = []
+    for (const copies of this.arrowCopies.values()) out.push(...copies)
+    return out
+  }
+
   /** Who is dragging `id` right now (O5's "Bob is moving this"), or null. */
   draggerOf(id: string): { sid: string; name: string } | null {
     for (const [sid, d] of this.remoteDrags) {
@@ -184,7 +206,12 @@ export class PresenceHub {
       const known = this.remoteDrags.get(d.sid)
       // a delta for a drag whose start this client missed is ignored (it sees the move at commit)
       if (!known || known.d !== d.d) continue
-      this.o.overrides?.setDrag(d.sid, new Map(known.ids.map((id) => [id, { x: d.dx, y: d.dy }])))
+      const offsets = new Map(known.ids.map((id) => [id, { x: d.dx, y: d.dy }]))
+      // D1: the arrows bound to what moves follow it, drawn only (./drag-arrows.ts)
+      const plan = this.planArrows(offsets)
+      for (const [id, o] of plan?.moveWith ?? []) offsets.set(id, o)
+      this.o.overrides?.setDrag(d.sid, offsets)
+      this.setArrowCopies(d.sid, plan?.reroute ?? [])
     }
     this.changed()
   }
@@ -192,6 +219,19 @@ export class PresenceHub {
   private endRemoteDrag(sid: string): void {
     if (!this.remoteDrags.delete(sid)) return
     this.o.overrides?.setDrag(sid, null)
+    this.setArrowCopies(sid, [])
+  }
+
+  private planArrows(offsets: ReadonlyMap<string, { x: number; y: number }>) {
+    if (!this.o.overrides?.setPreviewHidden) return null
+    const map = this.o.elementMap?.() ?? new Map(this.o.elements().map((e) => [e.id, e]))
+    return planDragArrows(map, offsets)
+  }
+
+  private setArrowCopies(sid: string, copies: SceneElement[]): void {
+    if (copies.length) this.arrowCopies.set(sid, copies)
+    else if (!this.arrowCopies.delete(sid)) return
+    this.o.overrides?.setPreviewHidden?.(sid, copies.length ? copies.map((c) => c.id) : null)
   }
 
   // ---- out ---------------------------------------------------------------------------------------

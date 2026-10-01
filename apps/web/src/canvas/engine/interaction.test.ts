@@ -6,10 +6,10 @@ describe('interactionForRole (plan §2.3.2)', () => {
     expect(interactionForRole('editor')).toBeUndefined()
   })
 
-  it('gives every read-only role navigation, links and custom tools, with tools inside enabled', () => {
+  it('gives every read-only role navigation, links, custom tools and the laser (CR-3A-8), with tools inside enabled', () => {
     for (const role of ['commenter', 'viewer', 'guest'] as const) {
       expect(interactionForRole(role)).toEqual({
-        enabled: { navigation: true, links: true, tools: { custom: true } },
+        enabled: { navigation: true, links: true, tools: { custom: true, laser: true } },
       })
     }
     expect(Object.isFrozen(READ_ONLY_INTERACTION.enabled)).toBe(true)

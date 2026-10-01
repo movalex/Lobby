@@ -70,8 +70,9 @@ async function settled(page: Page, frames: number) {
     .toBe(true)
 }
 
-const WHITE = [255, 255, 255, 255]
-const isBackground = (px: number[] | null) => !!px && px.every((v, i) => Math.abs(v - (WHITE[i] ?? 0)) <= 2)
+// the canvas colour: tldraw's #f9fafb since wave 5 (W5-10, canvas/engine/theme.ts CANVAS_LIGHT)
+const CANVAS = [249, 250, 251, 255]
+const isBackground = (px: number[] | null) => !!px && px.every((v, i) => Math.abs(v - (CANVAS[i] ?? 0)) <= 2)
 const inked = (px: number[] | null) => !!px && (px[3] ?? 0) > 0 && !isBackground(px)
 
 test('below zoom 0.2 a frame is one bitmap and its notes leave the engine’s render; a change (own or another tab’s) draws the frame live until its bitmap is current again; clicks still select; at 0.5 the pass is off', async ({

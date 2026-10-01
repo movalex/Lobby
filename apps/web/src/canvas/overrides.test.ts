@@ -197,3 +197,72 @@ describe('elementAtScenePoint (the guard sees what Excalidraw would pick)', () =
     expect(elementAtScenePoint([c, t], appState, 20, 45)?.id).toBe('c')
   })
 })
+
+describe('render-only sources (wave 5, 2C): CR 3b-5 culling and D1 preview arrows', () => {
+  const setup = () => {
+    const submitted: (ElementRenderOverrides | null)[] = []
+    let pending: (() => void) | null = null
+    const o = new RenderOverrides(
+      { setElementRenderOverrides: (x) => submitted.push(x) },
+      { elements: () => [el('a'), el('b'), el('c')], schedule: (f) => (pending = f) },
+    )
+    const run = () => {
+      const f = pending
+      pending = null
+      f?.()
+    }
+    return { o, submitted, run }
+  }
+
+  it('culled ids are moved far out of view, render-only: never hidden, never blocked; a drag or a collapse keeps its entry', () => {
+    const { o, submitted, run } = setup()
+    o.setCulled('lod', new Set(['a', 'b', 'c']))
+    o.setDrag('bob', new Map([['b', { x: 10, y: 0 }]]))
+    o.setHidden('mindmap', ['c'])
+    run()
+    const snap = submitted.at(-1) as ElementRenderOverrides
+    expect(snap.get('a')).toEqual({ offset: { x: 1e9, y: 1e9 } })
+    expect(snap.get('b')).toEqual({ offset: { x: 10, y: 0 } })
+    expect(snap.get('c')).toEqual({ opacity: 0 })
+    expect(o.isHidden('a')).toBe(false)
+    expect(o.blockReason('a')).toBeNull()
+    expect([...o.movedIds()]).toEqual(['b'])
+    o.setCulled('lod', null)
+    run()
+    expect((submitted.at(-1) as ElementRenderOverrides).has('a')).toBe(false)
+  })
+
+  it('an unchanged cull set submits nothing', () => {
+    const { o, submitted, run } = setup()
+    o.setCulled('lod', new Set(['a']))
+    run()
+    const n = submitted.length
+    o.setCulled('lod', new Set(['a']))
+    run()
+    expect(submitted.length).toBe(n)
+  })
+
+  it('a preview-hidden arrow draws invisible and counts as moving (by its source), not as hidden', () => {
+    const { o, submitted, run } = setup()
+    o.setPreviewHidden('bob:t', ['a'])
+    run()
+    expect((submitted.at(-1) as ElementRenderOverrides).get('a')).toEqual({ opacity: 0 })
+    expect(o.isHidden('a')).toBe(false)
+    expect(o.blockReason('a')).toEqual({ kind: 'moving', source: 'bob:t' })
+    expect(o.hasDrags()).toBe(true)
+    o.setPreviewHidden('bob:t', null)
+    run()
+    expect(submitted.at(-1)).toBeNull()
+  })
+
+  it('submit listeners hear every snapshot', () => {
+    const { o, run } = setup()
+    const heard: number[] = []
+    o.onSubmit((s) => heard.push(s.size))
+    o.setCulled('lod', new Set(['a', 'b']))
+    run()
+    o.setHidden('x', ['c'])
+    run()
+    expect(heard).toEqual([2, 3])
+  })
+})

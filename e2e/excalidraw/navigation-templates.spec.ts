@@ -66,10 +66,6 @@ test('?template= is ignored for a viewer on an empty board, and the parameter is
 test('templates in a board: storyboard lands selected, in view, clear of existing content; one undo removes it; twice gives unique ids (CR-2D-2: LobbyTx.insert)', async ({
   canvasSession,
 }) => {
-  test.fail(
-    true,
-    'DEF-W3-2: since CR-2D-2 landed the insert works, but its undo removes the template for the inserting tab only',
-  )
   test.setTimeout(180_000)
   const a = await canvasSession('alice')
   const b = await canvasSession('bob')

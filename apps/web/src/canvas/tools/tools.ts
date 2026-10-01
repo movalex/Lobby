@@ -129,6 +129,11 @@ export function setEngineTool(api: ToolApi, type: string, opts: ToolOptions = {}
     api.updateScene({ appState: { activeTool: { ...SELECTION_TOOL } } })
     return true
   }
+  // the laser writes nothing: read-only roles may point (CR-3A-8; READ_ONLY_INTERACTION enables it)
+  if (type === 'laser') {
+    api.setActiveTool({ type })
+    return true
+  }
   return false
 }
 

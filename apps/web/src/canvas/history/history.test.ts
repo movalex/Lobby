@@ -551,6 +551,30 @@ describe('A15: create, delete, children, orphans, leases', () => {
     ])
   })
 
+  it('DEF-W3-2: undo of my create of a locked element unlocks it in the same patch (the room refuses a locked delete); redo locks it again', () => {
+    const { scene, h } = start()
+    // a template insert: a locked heading, a locked note with its label, an unlocked rectangle
+    localCreate(scene, rect('H', { locked: true }))
+    localCreate(scene, note('N', { locked: true, boundElements: [{ id: 'L', type: 'text' }] }))
+    localCreate(scene, text('L', 'N'))
+    localCreate(scene, rect('R'))
+    h.record(scene)
+    const res = h.undo(scene)
+    expect(res?.patches.get('H')).toEqual({ isDeleted: true, locked: false })
+    expect(res?.patches.get('N')).toEqual({ isDeleted: true, locked: false })
+    // a label follows its container's lock; an unlocked element keeps its patch as before
+    expect(res?.patches.get('L')).toEqual({ isDeleted: true })
+    expect(res?.patches.get('R')).toEqual({ isDeleted: true })
+    install(scene, res)
+    expect(scene.get('H')).toMatchObject({ isDeleted: true, locked: false })
+    const back = h.redo(scene)
+    expect(back?.patches.get('H')).toEqual({ isDeleted: false, locked: true })
+    expect(back?.patches.get('R')).toEqual({ isDeleted: false })
+    install(scene, back)
+    expect(scene.get('H')).toMatchObject({ isDeleted: false, locked: true })
+    expect(scene.get('N')).toMatchObject({ isDeleted: false, locked: true })
+  })
+
   it('redo mirrors undo, and redo of my create after my own undo revives it', () => {
     const { scene, h } = start()
     localCreate(scene, rect('N'))
