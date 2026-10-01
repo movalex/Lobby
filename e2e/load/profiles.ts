@@ -20,6 +20,11 @@
 // L2 "heavy board": 30 sessions on the heavy perf board (about 9,220 elements), 10 editors making 20
 // remote edits/s in total (one-shot edits, 2/s each), 20 watchers; one watcher per editor measures A→B
 // visibility through the server.
+// Thin receivers (NAS part, thin.ts): a full engine core per session costs about 9 MB and 380 KB per
+// remote change on L1's board, too much for 260 sessions in the 4-CPU / 2 GB load container, so most
+// receive-only watchers are thin (the same socket traffic, no core; the meter measures at the socket, so
+// a thin measuring session loses nothing): L1 keeps 51 full cores on its big board (40 editors, 10
+// editor-role watchers for B10's echo check, the presence probe), L2 keeps 12 (10 editors, 2 measuring).
 import { HEAVY_SPEC, L1_SPEC, SMALL_SPEC } from './boards.ts'
 
 export type SessionKind = 'gesture' | 'typist' | 'frame-dragger' | 'oneshot' | 'watcher' | 'light'
@@ -42,6 +47,11 @@ export interface SessionGroup {
   readonly typeEveryMs?: number
   /** this group measures A→B visibility (its `changes` frames are parsed) */
   readonly measureVisibility?: boolean
+  /**
+   * receive-only groups: how many of the group (the last ones) run the thin client (thin.ts: the same
+   * socket, hello, reconnects and presence, no scene and no engine core); the rest keep O2's full core
+   */
+  readonly thin?: number
 }
 
 export interface BoardLoad {
@@ -80,10 +90,20 @@ export const L1: Profile = {
         { kind: 'gesture', count: 29, role: 'editor', periodMs: 3_000, dragShare: 0.5, dragMs: 800 },
         { kind: 'frame-dragger', count: 1, role: 'editor', periodMs: 30_000, dragMs: 800 },
         { kind: 'typist', count: 10, role: 'editor', burstMs: 8_000, pauseMs: 4_000, typeEveryMs: 500 },
-        { kind: 'watcher', count: 60, role: 'editor', moveMs: 5_000, stillMs: 5_000 },
-        // 5 viewers measure (the first is the presence probe; the others read its cursor and every change)
-        { kind: 'watcher', count: 5, role: 'viewer', moveMs: 5_000, stillMs: 5_000, measureVisibility: true },
-        { kind: 'watcher', count: 95, role: 'viewer', moveMs: 5_000, stillMs: 5_000 },
+        // 10 of the 60 keep the full core (B10's echo check on editor-role receivers), 50 are thin
+        { kind: 'watcher', count: 60, role: 'editor', moveMs: 5_000, stillMs: 5_000, thin: 50 },
+        // 5 viewers measure (the first is the presence probe, on the full core; the other 4 read its cursor
+        // and every change at the socket, so they are thin)
+        {
+          kind: 'watcher',
+          count: 5,
+          role: 'viewer',
+          moveMs: 5_000,
+          stillMs: 5_000,
+          measureVisibility: true,
+          thin: 4,
+        },
+        { kind: 'watcher', count: 95, role: 'viewer', moveMs: 5_000, stillMs: 5_000, thin: 95 },
       ],
     },
     {
@@ -114,8 +134,10 @@ export const L2: Profile = {
           moveMs: 5_000,
           stillMs: 5_000,
           measureVisibility: true,
+          // the probe and one more keep the full core (B10's echo check on this board), 8 are thin
+          thin: 8,
         },
-        { kind: 'watcher', count: 10, role: 'viewer', moveMs: 5_000, stillMs: 5_000 },
+        { kind: 'watcher', count: 10, role: 'viewer', moveMs: 5_000, stillMs: 5_000, thin: 10 },
       ],
     },
   ],

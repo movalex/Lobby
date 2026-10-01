@@ -89,6 +89,7 @@ export function buildPlans(
             ticket: tickets.ticket(boardId, user),
             joinAtMs: 0,
             ownNotes: own,
+            ...(group.kind === 'watcher' && i >= group.count - (group.thin ?? 0) ? { thin: true } : {}),
           })
           n++
         }
@@ -96,8 +97,16 @@ export function buildPlans(
       boardIndex++
     }
   }
-  // the join ramp: every session of the profile, evenly spread over joinRampMs, boards interleaved
-  const order = [...plans.keys()].sort((a, b) => ((a * 7919) % plans.length) - ((b * 7919) % plans.length))
+  // the join ramp: every session of the profile, evenly spread over joinRampMs, boards interleaved. The
+  // measuring sessions join first (the probe first): O1's 40-cursor cap is sticky (a shown peer stays until
+  // it leaves), so a probe that joined after a measuring session had filled its 40 slots would never be
+  // shown to it, whatever its view (seen in a local rehearsal: presence delay n 0)
+  const measuring = (s: SessionPlan) => (s.group.measureVisibility ? (s.index === 0 ? 0 : 1) : 2)
+  const order = [...plans.keys()].sort(
+    (a, b) =>
+      measuring(plans[a] as SessionPlan) - measuring(plans[b] as SessionPlan) ||
+      ((a * 7919) % plans.length) - ((b * 7919) % plans.length),
+  )
   const step = plans.length > 1 ? p.joinRampMs / (plans.length - 1) : 0
   return order.map((idx, k) => ({ ...(plans[idx] as SessionPlan), joinAtMs: Math.round(k * step) }))
 }

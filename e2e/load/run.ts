@@ -2,6 +2,7 @@
 //
 //   node e2e/load/run.ts --profile L1 --sync http://draftroom-spike-sync:5858 --api-listen 0.0.0.0:7899 \
 //     --out /reports --threads 4 [--seed file|push|none] [--tag r1] [--duration-s 600] [--host-samples f.jsonl]
+//     [--cul] [--t0-file /reports/t0.txt] [--kill-file /reports/kill.txt] [--worker-heap-mb 320]
 //   node e2e/load/run.ts --profile dry --fake --out <dir>          (plumbing only: an in-memory room)
 //
 // It runs the fake api sync talks to (fake-api.ts, on the per-run internal secret), headless clients on
@@ -35,6 +36,9 @@ async function main() {
       'host-samples': { type: 'string' },
       fake: { type: 'boolean', default: false },
       cul: { type: 'boolean', default: false },
+      't0-file': { type: 'string' },
+      'worker-heap-mb': { type: 'string' },
+      'kill-file': { type: 'string' },
     },
   })
   const profile = PROFILES[values.profile as string]
@@ -54,12 +58,15 @@ async function main() {
     apiListen: listen ? { host: listen[0] as string, port: Number(listen[1]) } : undefined,
     seed,
     threads: values.threads !== undefined ? Number(values.threads) : Math.min(4, availableParallelism()),
+    workerHeapMb: values['worker-heap-mb'] ? Number(values['worker-heap-mb']) : undefined,
     durationMs: values['duration-s'] ? Number(values['duration-s']) * 1000 : undefined,
     tag: values.tag as string,
     out: values.out ?? null,
     hostSamples: values['host-samples'],
     fake: values.fake,
     cul: values.cul ? {} : undefined,
+    t0File: values['t0-file'],
+    killFile: values['kill-file'],
     stopped: () => stop,
   })
   process.stdout.write(reportMarkdown(report))

@@ -5,6 +5,7 @@ import { loadHeadlessFactory } from './headless.ts'
 import { boardsOf } from './plan.ts'
 import { PROFILES } from './profiles.ts'
 import { boardsFromSpecs, runInThread, type WorkerJob } from './runner.ts'
+import { thinClientFactory } from './thin.ts'
 
 const job = workerData as WorkerJob
 let stop = false
@@ -29,6 +30,7 @@ try {
       probeSids: new Map(job.probeSids),
       reconnectAfterMs: job.reconnectAfterMs,
       stopped: () => stop,
+      createThinClient: thinClientFactory,
     },
     createClient,
   )

@@ -3,6 +3,7 @@
 // fsync and du from the NAS script), and each target marked met, missed or not measured. Never a
 // target argued away: a number that is missing is `null` and its verdict "not measured".
 
+import type { ConversionReport } from './load.ts'
 import { type Scrape, series } from './metrics.ts'
 import type { SessionReport } from './session.ts'
 import { percentile, type Summary, summarize } from './stats.ts'
@@ -13,6 +14,21 @@ export interface HostSample {
   readonly cpuPct?: number
   readonly memMB?: number
   readonly folderMB?: number
+  /** the sync container's anonymous memory (cgroup memory.stat `anon`), sampled every second, MB */
+  readonly anonMB?: number
+}
+
+/** One phase of a run (join storm, steady state, reconnect storm, after), from the host samples. */
+export interface PhaseSummary {
+  readonly name: string
+  /** ms since the run start */
+  readonly from: number
+  readonly to: number
+  readonly cpuSamples: number
+  readonly cpuMeanPct: number | null
+  readonly cpuMaxPct: number | null
+  readonly memMaxMB: number | null
+  readonly anonMaxMB: number | null
 }
 
 export interface RunMeta {
@@ -25,7 +41,14 @@ export interface RunMeta {
   readonly cpus: number
   readonly threads: number
   readonly commit?: string
+  /** the kill: the NAS script's own time of `docker kill` when known (kill file), else the planned time */
   readonly killAt?: number | null
+  /** true when `killAt` is the kill command's measured time (the kill file), not the plan */
+  readonly killMeasured?: boolean
+  /** when `docker start` returned after the kill (the kill file's second line) */
+  readonly restartedAt?: number | null
+  /** the profile's join ramp (the join-storm phase), ms */
+  readonly joinRampMs?: number
   readonly notes?: readonly string[]
   /** the client side's own event-loop delay per worker (a client-bound run makes the numbers suspect) */
   readonly clientLoopDelayP99Ms?: readonly number[]
@@ -75,11 +98,30 @@ export interface RunReport {
     readonly killSeenAt: number | null
     readonly sessionsAffected: number
     readonly sessionsBack: number
+    /** from the first close the clients saw to the last session's new welcome */
     readonly allBackMs: number | null
     readonly backMs: Summary
+    /** from the kill command (the kill file) to the last session's new welcome; null without the file */
+    readonly allBackFromKillMs: number | null
+    /** from the kill command to `docker start` returning */
+    readonly restartCmdMs: number | null
+    /** sessions that had joined before the kill */
+    readonly joinedBeforeKill: number
     readonly harnessReconnects: number
   }
-  readonly ackedButMissing: { readonly checked: number; readonly missing: number; readonly method: string }
+  readonly phases: readonly PhaseSummary[]
+  readonly ackedButMissing: {
+    readonly checked: number
+    readonly missing: number
+    readonly method: string
+    /** the first missing ids, and for up to 5 of them the last acked fields next to what is stored */
+    readonly ids?: readonly string[]
+    readonly samples?: readonly {
+      id: string
+      acked: Record<string, unknown>
+      stored: Record<string, unknown> | null
+    }[]
+  }
   readonly echo: {
     readonly receivers: number
     readonly receiversThatPushed: number
@@ -97,10 +139,29 @@ export interface RunReport {
     readonly pushesPerCommit?: HistogramSummary | null
     /** the largest scraped event-loop delay p99 (O1's gauge: since sync started), ms */
     readonly eventLoopP99Ms?: number | null
+    /** the largest scraped p50 and max of the same gauge (since sync started; reset by the restart), ms */
+    readonly eventLoopP50Ms?: number | null
+    readonly eventLoopMaxMs?: number | null
+    /** ms of the COMMIT statement (fsync with synchronous=FULL) */
+    readonly fsyncMs?: HistogramSummary | null
+    /** group commits per second over the run */
+    readonly commitsPerSec?: number | null
+    /** sync's own count of bytes written to sockets (lobby_outbound_bytes_total), per second */
+    readonly outboundBytesPerSec?: number | null
+    readonly presenceInPerSec?: number | null
+    readonly presenceOutPerSec?: number | null
+    /** RESYNC resets sent (lobby_resets_total) */
+    readonly resets?: number | null
+    /** closes by `code/reason` (lobby_closes_total) */
+    readonly closes?: Record<string, number>
+    /** ops by result (lobby_ops_total) */
+    readonly ops?: Record<string, number>
   }
   readonly host: readonly HostSample[]
   readonly targets: readonly Target[]
   readonly errors: readonly string[]
+  /** the conversion-under-load run only (load.ts) */
+  readonly conversion?: ConversionReport
 }
 
 const add = (a: Record<string, number>, b: Record<string, number>) => {
@@ -136,7 +197,9 @@ export function ackedButMissing(sessions: readonly SessionReport[], final: Final
   let checked = 0
   let missing = 0
   const ids: string[] = []
-  if (!final.stored) return { checked, missing, method: `${final.method} (no readback: UNVERIFIED)`, ids }
+  const samples: { id: string; acked: Record<string, unknown>; stored: Record<string, unknown> | null }[] = []
+  if (!final.stored)
+    return { checked, missing, method: `${final.method} (no readback: UNVERIFIED)`, ids, samples }
   for (const s of sessions)
     for (const [id, fields] of Object.entries(s.acked)) {
       const el = final.stored.get(id)
@@ -145,9 +208,15 @@ export function ackedButMissing(sessions: readonly SessionReport[], final: Final
       if (!same) {
         missing++
         if (ids.length < 20) ids.push(id)
+        if (samples.length < 5)
+          samples.push({
+            id,
+            acked: fields,
+            stored: el ? Object.fromEntries(Object.keys(fields).map((k) => [k, el[k]])) : null,
+          })
       }
     }
-  return { checked, missing, method: final.method, ids }
+  return { checked, missing, method: final.method, ids, samples }
 }
 
 /** A metric by name and exact labels (O1's names, apps/sync/src/room/metrics.ts, first). */
@@ -185,8 +254,10 @@ export interface HistogramSummary {
 }
 
 /**
- * A Prometheus histogram over the run: the last ok scrape's cumulative buckets minus the first's, and the
- * quantiles as the upper bound of the bucket that reaches them (the resolution is the bucket layout).
+ * A Prometheus histogram over the run: the cumulative buckets' increments from the first ok scrape to the
+ * last, and the quantiles as the upper bound of the bucket that reaches them (the resolution is the
+ * bucket layout). A restart of sync (the SIGKILL at minute 8) resets every counter to 0: a scrape whose
+ * count is below the previous one starts a new segment, which counts from 0.
  */
 export function histogramOver(scrapes: readonly Scrape[], name: string): HistogramSummary | null {
   const ok = scrapes.filter((s) => s.ok && s.samples.some((m) => m.name === `${name}_bucket`))
@@ -199,20 +270,94 @@ export function histogramOver(scrapes: readonly Scrape[], name: string): Histogr
         .filter((m) => m.name === `${name}_bucket` && m.labels.le !== undefined)
         .map((m) => [m.labels.le as string, m.value] as const),
     )
-  const a = buckets(first)
-  const b = buckets(last)
-  const les = [...b.keys()].sort((x, y) => (x === '+Inf' ? 1 : y === '+Inf' ? -1 : Number(x) - Number(y)))
-  const cum = les.map((le) => [le, (b.get(le) ?? 0) - (ok.length > 1 ? (a.get(le) ?? 0) : 0)] as const)
-  const n = cum.at(-1)?.[1] ?? 0
   const one = (sc: Scrape, suffix: string) =>
     sc.samples.find((m) => m.name === `${name}_${suffix}`)?.value ?? 0
-  const sum = one(last, 'sum') - (ok.length > 1 ? one(first, 'sum') : 0)
+  const les = [...buckets(last).keys()].sort((x, y) =>
+    x === '+Inf' ? 1 : y === '+Inf' ? -1 : Number(x) - Number(y),
+  )
+  const acc = new Map<string, number>(les.map((le) => [le, 0]))
+  let sum = 0
+  if (ok.length === 1) {
+    const b = buckets(first)
+    for (const le of les) acc.set(le, b.get(le) ?? 0)
+    sum = one(first, 'sum')
+  }
+  for (let i = 1; i < ok.length; i++) {
+    const prev = ok[i - 1] as Scrape
+    const cur = ok[i] as Scrape
+    const a = buckets(prev)
+    const b = buckets(cur)
+    const reset = one(cur, 'count') < one(prev, 'count')
+    for (const le of les) acc.set(le, (acc.get(le) ?? 0) + (b.get(le) ?? 0) - (reset ? 0 : (a.get(le) ?? 0)))
+    sum += one(cur, 'sum') - (reset ? 0 : one(prev, 'sum'))
+  }
+  const cum = les.map((le) => [le, acc.get(le) ?? 0] as const)
+  const n = cum.at(-1)?.[1] ?? 0
   const q = (p: number) => {
     if (!n) return null
     const hit = cum.find(([, c]) => c >= p * n)
     return hit ? (hit[0] === '+Inf' ? Number.POSITIVE_INFINITY : Number(hit[0])) : null
   }
   return { n, p50: q(0.5), p95: q(0.95), p99: q(0.99), mean: n ? Math.round((sum / n) * 10) / 10 : null }
+}
+
+/**
+ * A counter's increase over the run, per exact label set (`name{a="x"}` keys; `name` alone without
+ * labels): increments between consecutive ok scrapes, a decrease being a restart (the counter counts from
+ * 0 again, so the new value is all increase).
+ */
+export function counterTotals(scrapes: readonly Scrape[], name: string): Record<string, number> {
+  const ok = scrapes.filter((s) => s.ok)
+  const key = (labels: Readonly<Record<string, string>>) => {
+    const ks = Object.keys(labels).sort()
+    return ks.length ? ks.map((k) => `${k}=${labels[k]}`).join(',') : name
+  }
+  const out: Record<string, number> = {}
+  let prev = new Map<string, number>()
+  ok.forEach((s, i) => {
+    const cur = new Map<string, number>()
+    for (const m of s.samples) if (m.name === name) cur.set(key(m.labels), m.value)
+    if (i > 0)
+      for (const [k, v] of cur) {
+        const p = prev.get(k) ?? 0
+        out[k] = (out[k] ?? 0) + (v >= p ? v - p : v)
+      }
+    else for (const k of cur.keys()) out[k] = 0
+    prev = cur
+  })
+  return out
+}
+
+const sumOf = (r: Record<string, number>) => Object.values(r).reduce((a, b) => a + b, 0)
+
+/** The run's phases (§8.3 B9 "CPU … per phase: join storm, steady state, reconnect storm") from the host samples. */
+export function phasesOf(
+  host: readonly HostSample[],
+  o: { joinRampMs: number; killAtMs: number | null; endMs: number },
+): PhaseSummary[] {
+  const cuts: [string, number, number][] = [['join storm', 0, o.joinRampMs]]
+  if (o.killAtMs !== null) {
+    cuts.push(['steady state', o.joinRampMs, o.killAtMs])
+    cuts.push(['reconnect storm (60 s after the kill)', o.killAtMs, o.killAtMs + 60_000])
+    cuts.push(['after', o.killAtMs + 60_000, o.endMs])
+  } else cuts.push(['steady state', o.joinRampMs, o.endMs])
+  return cuts.map(([name, from, to]) => {
+    const inside = host.filter((h) => h.t >= from && h.t < to)
+    const cpu = inside.flatMap((h) => (h.cpuPct === undefined ? [] : [h.cpuPct]))
+    const mem = inside.flatMap((h) => (h.memMB === undefined ? [] : [h.memMB]))
+    const anon = inside.flatMap((h) => (h.anonMB === undefined ? [] : [h.anonMB]))
+    const r1 = (x: number) => Math.round(x * 10) / 10
+    return {
+      name,
+      from,
+      to,
+      cpuSamples: cpu.length,
+      cpuMeanPct: cpu.length ? r1(cpu.reduce((a, b) => a + b, 0) / cpu.length) : null,
+      cpuMaxPct: cpu.length ? Math.max(...cpu) : null,
+      memMaxMB: mem.length ? Math.max(...mem) : null,
+      anonMaxMB: anon.length ? Math.max(...anon) : null,
+    }
+  })
 }
 
 const verdict = (value: number | null, ok: (v: number) => boolean): Verdict =>
@@ -254,27 +399,54 @@ export function buildReport(
   )
   const perSampled = (f: (s: SessionReport) => number) =>
     sampled.length ? sampled.reduce((n, s) => n + f(s), 0) / sampled.length / secs : 0
-  const killSeenAt = Math.min(
-    ...sessions.flatMap((s) =>
-      (meta.killAt ? s.closes.filter((c) => c.at >= (meta.killAt as number) - 5_000) : s.closes).map(
-        (c) => c.at,
-      ),
-    ),
-  )
-  const affected = sessions.filter((s) => s.closes.length > 0)
-  const back = affected.filter((s) => s.backAt !== null)
-  const backMs = back.map((s) => (s.backAt as number) - (Number.isFinite(killSeenAt) ? killSeenAt : 0))
-  const receivers = sessions.filter((s) => s.kind === 'watcher')
+  // the restart (§2.13: "after the SIGKILL, all 260 sessions back within 30 s"): per session that had
+  // joined before the kill, its first close at or after the kill and its first welcome after that close
+  const killRef = meta.killAt ?? null
+  const joinedBeforeKill = killRef === null ? [] : joined.filter((s) => (s.joinedAt as number) < killRef)
+  const killClose = new Map<SessionReport, number>()
+  const killBack = new Map<SessionReport, number>()
+  for (const s of joinedBeforeKill) {
+    const c = s.closes.find((x) => x.at >= (killRef as number) - 2_000)
+    if (!c) continue
+    killClose.set(s, c.at)
+    const w =
+      (s.welcomeTimes ?? []).find((t) => t > c.at) ??
+      (s.backAt !== null && s.backAt > c.at ? s.backAt : undefined)
+    if (w !== undefined) killBack.set(s, w)
+  }
+  const killSeenAt = killClose.size ? Math.min(...killClose.values()) : Number.NaN
+  const affected = [...killClose.keys()]
+  const back = [...killBack.keys()]
+  const backMs = back.map((s) => (killBack.get(s) as number) - killSeenAt)
+  const everyoneBack =
+    affected.length > 0 && back.length === affected.length && affected.length === joinedBeforeKill.length
+  const allBackMs = everyoneBack ? Math.max(...backMs) : null
+  const allBackFromKillMs =
+    everyoneBack && meta.killMeasured && killRef !== null ? Math.max(...killBack.values()) - killRef : null
+  // B10: receive-only sessions on O2's full core (a thin one has no core and cannot push)
+  const receivers = sessions.filter((s) => s.kind === 'watcher' && !s.thin)
   const abm = ackedButMissing(sessions, final)
   const eventLoopP99 = lastOf(scrapes, SERVER_METRICS.eventLoopP99, meta.startedAt)
   const rssMax = host.some((h) => h.memMB !== undefined) ? Math.max(...host.map((h) => h.memMB ?? 0)) : null
+  const anonMax = host.some((h) => h.anonMB !== undefined)
+    ? Math.max(...host.map((h) => h.anonMB ?? 0))
+    : null
+  const rssGate = rssMax === null && anonMax === null ? null : Math.max(rssMax ?? 0, anonMax ?? 0)
   const cpuMax = host.some((h) => h.cpuPct !== undefined) ? Math.max(...host.map((h) => h.cpuPct ?? 0)) : null
-  const allBackMs = affected.length && back.length === affected.length ? Math.max(...backMs) : null
   const steadyBackpressure = sessions.reduce(
     (n, s) =>
-      n + s.closes.filter((c) => c.code === 4000 && (!meta.killAt || c.at < meta.killAt - 5_000)).length,
+      n + s.closes.filter((c) => c.code === 4000 && (killRef === null || c.at < killRef - 2_000)).length,
     0,
   )
+  const restartValue = meta.killMeasured ? allBackFromKillMs : allBackMs
+  const restartVerdict: Verdict =
+    killRef === null
+      ? 'not measured'
+      : !everyoneBack
+        ? affected.length
+          ? 'missed'
+          : 'not measured'
+        : verdict(restartValue, (v) => v <= 30_000)
   const targets: Target[] = [
     { name: 'ack p95', limit: '≤ 150 ms', value: ack.p95, verdict: verdict(ack.p95, (v) => v <= 150) },
     { name: 'ack p99', limit: '≤ 400 ms', value: ack.p99, verdict: verdict(ack.p99, (v) => v <= 400) },
@@ -285,10 +457,10 @@ export function buildReport(
       verdict: verdict(eventLoopP99, (v) => v <= 50),
     },
     {
-      name: 'RSS peak (docker stats)',
+      name: 'RSS peak (docker stats every 10 s, and cgroup anon every 1 s: the larger)',
       limit: '≤ 400 MB',
-      value: rssMax,
-      verdict: verdict(rssMax, (v) => v <= 400),
+      value: rssGate,
+      verdict: verdict(rssGate, (v) => v <= 400),
     },
     {
       name: 'CPU peak, % of the 0.5 CPU quota (10 s windows)',
@@ -309,10 +481,12 @@ export function buildReport(
       verdict: verdict(steadyBackpressure, (v) => v === 0),
     },
     {
-      name: 'all sessions back after the SIGKILL',
-      limit: '≤ 30 s',
-      value: meta.killAt ? allBackMs : null,
-      verdict: meta.killAt ? verdict(allBackMs, (v) => v <= 30_000) : 'not measured',
+      name: meta.killMeasured
+        ? 'all sessions back after the SIGKILL (from the kill command)'
+        : 'all sessions back after the SIGKILL (from the first close seen)',
+      limit: '≤ 30 s, every session that had joined',
+      value: killRef === null ? null : restartValue,
+      verdict: restartVerdict,
     },
     {
       name: 'acked-but-missing',
@@ -381,9 +555,23 @@ export function buildReport(
       sessionsBack: back.length,
       allBackMs,
       backMs: summarize(backMs),
+      allBackFromKillMs,
+      restartCmdMs: killRef !== null && meta.restartedAt ? meta.restartedAt - killRef : null,
+      joinedBeforeKill: joinedBeforeKill.length,
       harnessReconnects: sessions.reduce((n, s) => n + s.reconnectsByHarness, 0),
     },
-    ackedButMissing: { checked: abm.checked, missing: abm.missing, method: abm.method },
+    phases: phasesOf(host, {
+      joinRampMs: meta.joinRampMs ?? 60_000,
+      killAtMs: killRef === null ? null : killRef - meta.startedAt,
+      endMs: meta.endedAt - meta.startedAt,
+    }),
+    ackedButMissing: {
+      checked: abm.checked,
+      missing: abm.missing,
+      method: abm.method,
+      ids: abm.ids,
+      samples: abm.samples,
+    },
     echo: {
       receivers: receivers.length,
       receiversThatPushed: receivers.filter((s) => s.ops > 0).length,
@@ -397,6 +585,33 @@ export function buildReport(
       commitMs: histogramOver(scrapes, 'lobby_commit_ms'),
       pushesPerCommit: histogramOver(scrapes, 'lobby_pushes_per_commit'),
       eventLoopP99Ms: eventLoopP99,
+      eventLoopP50Ms: lastOf(
+        scrapes,
+        [{ name: 'lobby_event_loop_delay_ms', labels: { quantile: '0.5' } }],
+        meta.startedAt,
+      ),
+      eventLoopMaxMs: lastOf(
+        scrapes,
+        [{ name: 'lobby_event_loop_delay_ms', labels: { quantile: '1' } }],
+        meta.startedAt,
+      ),
+      fsyncMs: histogramOver(scrapes, 'lobby_fsync_ms'),
+      commitsPerSec: (() => {
+        const c = histogramOver(scrapes, 'lobby_commit_ms')
+        return c ? c.n / secs : null
+      })(),
+      outboundBytesPerSec: scrapes.some((x) => x.ok)
+        ? sumOf(counterTotals(scrapes, 'lobby_outbound_bytes_total')) / secs
+        : null,
+      presenceInPerSec: scrapes.some((x) => x.ok)
+        ? sumOf(counterTotals(scrapes, 'lobby_presence_in_total')) / secs
+        : null,
+      presenceOutPerSec: scrapes.some((x) => x.ok)
+        ? sumOf(counterTotals(scrapes, 'lobby_presence_out_total')) / secs
+        : null,
+      resets: scrapes.some((x) => x.ok) ? sumOf(counterTotals(scrapes, 'lobby_resets_total')) : null,
+      closes: counterTotals(scrapes, 'lobby_closes_total'),
+      ops: counterTotals(scrapes, 'lobby_ops_total'),
     },
     host,
     targets,
@@ -434,19 +649,46 @@ export function reportMarkdown(r: RunReport): string {
     `| drag starts/s, ids per start | ${fmt(r.drag.startsPerSec)}; ${s(r.drag.idsPerStart)} |`,
     `| welcome JSON / snapshot bytes | ${s(r.welcome.jsonBytes)}; ${s(r.welcome.snapshotBytes)} |`,
     `| joins | ${r.joins.joined} joined, ${r.joins.failed} failed; ${s(r.joins.joinMs)} |`,
-    `| restart | ${r.restart.sessionsBack}/${r.restart.sessionsAffected} back, all back in ${fmt(r.restart.allBackMs, ' ms')}; harness reconnects ${r.restart.harnessReconnects} |`,
+    `| restart | ${r.restart.sessionsBack}/${r.restart.sessionsAffected} back of ${r.restart.joinedBeforeKill} joined before the kill; all back ${fmt(r.restart.allBackFromKillMs, ' ms')} after the kill command (docker start returned after ${fmt(r.restart.restartCmdMs, ' ms')}), ${fmt(r.restart.allBackMs, ' ms')} after the first close seen; per session ${s(r.restart.backMs)}; harness reconnects ${r.restart.harnessReconnects} |`,
     `| acked-but-missing | ${r.ackedButMissing.missing} of ${r.ackedButMissing.checked} (${r.ackedButMissing.method}) |`,
     `| echo (B10) | ${r.echo.receiversThatPushed} of ${r.echo.receivers} receivers pushed (${r.echo.receiverOps} ops) |`,
     `| server scrapes | ${r.server.okScrapes}/${r.server.scrapes} |`,
     `| server: push received → ack (ms, bucket bounds) | ${h(r.server.receiveToAckMs)} |`,
     `| server: group commit (ms, bucket bounds) | ${h(r.server.commitMs)} |`,
     `| server: pushes per commit | ${h(r.server.pushesPerCommit)} |`,
-    `| server: event-loop delay p99 (ms, since start) | ${fmt(r.server.eventLoopP99Ms)} |`,
+    `| server: event-loop delay p50 / p99 / max (ms, largest scraped; since sync started) | ${fmt(r.server.eventLoopP50Ms)} / ${fmt(r.server.eventLoopP99Ms)} / ${fmt(r.server.eventLoopMaxMs)} |`,
+    `| server: COMMIT statement (fsync, ms, bucket bounds) | ${h(r.server.fsyncMs)} |`,
+    `| server: commits/s; outbound bytes/s; presence in/s, out/s | ${fmt(r.server.commitsPerSec)}; ${fmt(r.server.outboundBytesPerSec)}; ${fmt(r.server.presenceInPerSec)}, ${fmt(r.server.presenceOutPerSec)} |`,
+    `| server: RESYNC resets; closes (code, reason); ops by result | ${fmt(r.server.resets)}; ${JSON.stringify(r.server.closes ?? {})}; ${JSON.stringify(r.server.ops ?? {})} |`,
+    ...(r.phases ?? []).map(
+      (p) =>
+        `| phase ${p.name} (${Math.round(p.from / 1000)}-${Math.round(p.to / 1000)} s): CPU % of quota mean / max; memory max (docker stats / anon) MB | ${fmt(p.cpuMeanPct)} / ${fmt(p.cpuMaxPct)} (${p.cpuSamples} samples); ${fmt(p.memMaxMB)} / ${fmt(p.anonMaxMB)} |`,
+    ),
+    ...(r.host.some((x) => x.folderMB !== undefined)
+      ? [`| data folder peak (du -sm) | ${Math.max(...r.host.map((x) => x.folderMB ?? 0))} MB |`]
+      : []),
     '',
     '| Target (§2.13) | Limit | Value | Verdict |',
     '|---|---|---|---|',
     ...r.targets.map((t) => `| ${t.name} | ${t.limit} | ${fmt(t.value)} | ${t.verdict} |`),
   ]
+  const c = r.conversion
+  if (c) {
+    const fin = (id: string) => c.final?.boards.find((b) => b.boardId === id)
+    lines.push(
+      '',
+      '| Conversion under load | Number |',
+      '|---|---|',
+      `| runtime heap cap (MB) | ${fmt(c.runtimeCapMb)} |`,
+      ...c.joins.map((j) => {
+        const b = fin(j.boardId)
+        return `| ${j.boardId} | ${j.welcomedAt ? `served ${j.elements} elements after ${j.welcomedAt - j.startedAt} ms` : `not served: ${j.error}`}; status ${b ? `${b.state}${b.reason ? ` (${b.reason})` : ''}, ${fmt(b.ms, ' ms')} in the worker, peak heap used ${fmt(b.peakHeapUsedMb, ' MB')}, cap ${fmt(b.capMb, ' MB')}` : '—'} |`
+      }),
+      `| second job queued behind the first | ${c.secondQueuedBehindFirst ? 'yes' : 'no'}; queue wait ${fmt(c.secondQueueWaitMs, ' ms')} |`,
+      `| status polls (changes) | ${c.timeline.map((p) => `${Math.round(p.t / 100) / 10}s run=${p.running ?? '-'} q=[${p.queued.join(',')}]`).join('; ')} |`,
+      `| every room keeps serving (acks in each 10 s window overlapping ${c.servingWindow ? `${Math.round(c.servingWindow.from / 1000)}-${Math.round(c.servingWindow.to / 1000)} s` : '—'}) | ${c.servingBoards} boards with editors x ${c.servingWindows} windows; boards with an idle window: ${c.boardsWithIdleWindows.length ? JSON.stringify(c.boardsWithIdleWindows) : 'none'} |`,
+    )
+  }
   if (r.meta.clientLoopDelayP99Ms?.length)
     lines.push(
       '',

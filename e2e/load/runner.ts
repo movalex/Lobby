@@ -29,6 +29,8 @@ export interface RunOptions {
   readonly reconnectAfterMs?: number
   /** a stop signal checked by every session (SIGTERM, a folder over its cap) */
   readonly stopped?: () => boolean
+  /** the thin client for plans marked thin (real sync runs) */
+  readonly createThinClient?: ClientFactory
 }
 
 export async function runInThread(opts: RunOptions, createClient: ClientFactory): Promise<ThreadResult> {
@@ -48,6 +50,7 @@ export async function runInThread(opts: RunOptions, createClient: ClientFactory)
         stopping,
         reconnectAfterMs: opts.reconnectAfterMs,
         probeSid: (b) => opts.probeSids.get(b) ?? null,
+        createThinClient: opts.createThinClient,
       }),
   )
   await Promise.all(sessions.map((s) => s.run()))
@@ -68,6 +71,11 @@ export interface WorkerJob {
   readonly fileIds?: readonly string[]
   /** explicit boards (a real stack's ids) instead of the profile's fixed ones */
   readonly boardSpecs?: readonly BoardSpec[]
+  /**
+   * each worker's old-generation cap (MB): a container with a memory limit (the NAS's 2 GB) needs it, or
+   * each worker's V8 heap grows lazily towards its own default limit and together they pass the limit
+   */
+  readonly workerHeapMb?: number
 }
 
 /**
@@ -100,7 +108,10 @@ export async function runInWorkers(
       parts.map(
         (plans) =>
           new Promise<ThreadResult>((resolve, reject) => {
-            const w = new Worker(new URL('./worker.ts', import.meta.url), { workerData: { ...base, plans } })
+            const w = new Worker(new URL('./worker.ts', import.meta.url), {
+              workerData: { ...base, plans },
+              ...(job.workerHeapMb ? { resourceLimits: { maxOldGenerationSizeMb: job.workerHeapMb } } : {}),
+            })
             workers.push(w)
             w.once('message', (m: ThreadResult | { error: string }) =>
               'error' in m ? reject(new Error(m.error)) : resolve(m),

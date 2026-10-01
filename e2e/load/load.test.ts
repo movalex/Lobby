@@ -14,7 +14,7 @@ import { Meter, messageType, probePointer, probeSentAt } from './meter.ts'
 import { parsePrometheus } from './metrics.ts'
 import { boardsOf, buildPlans, membersOf, probeSids, signedTickets } from './plan.ts'
 import { DRY, L1, L2, plannedWritesPerSecond, sessionCount } from './profiles.ts'
-import { ackedButMissing, histogramOver, visibilitySamples } from './report.ts'
+import { ackedButMissing, counterTotals, histogramOver, phasesOf, visibilitySamples } from './report.ts'
 import { chunkCreates, SEED_MAX_BYTES } from './seed.ts'
 import type { SessionReport } from './session.ts'
 import { percentile, Recorder } from './stats.ts'
@@ -167,6 +167,40 @@ describe('seeding, stats and the report joins', () => {
     )
     expect(h).toEqual({ n: 100, p50: 5, p95: 25, p99: Number.POSITIVE_INFINITY, mean: 8 })
     expect(histogramOver([], 'lobby_receive_to_ack_ms')).toBeNull()
+    // sync restarted between scrape 2 and 3 (the SIGKILL): its counters start from 0 again
+    const r = histogramOver(
+      [
+        scrape(0, text(10, 10, 10, 20, 3)),
+        scrape(1, text(60, 105, 110, 820, 7)),
+        scrape(2, text(4, 5, 6, 60, 2)),
+        scrape(3, text(8, 10, 12, 120, 2)),
+      ],
+      'lobby_receive_to_ack_ms',
+    )
+    expect(r?.n).toBe(112)
+    expect(r?.mean).toBe(Math.round((920 / 112) * 10) / 10)
+  })
+  it('sums counters across a restart, per label set', () => {
+    const t = (a: number, b: number) =>
+      [`lobby_closes_total{code="4000",reason="x"} ${a}`, `lobby_outbound_bytes_total ${b}`].join('\n')
+    const scrape = (at: number, x: string) => ({ at, ok: true, status: 200, samples: parsePrometheus(x) })
+    const s = [scrape(0, t(1, 100)), scrape(1, t(3, 500)), scrape(2, t(0, 50)), scrape(3, t(2, 80))]
+    expect(counterTotals(s, 'lobby_outbound_bytes_total')).toEqual({ lobby_outbound_bytes_total: 480 })
+    expect(counterTotals(s, 'lobby_closes_total')).toEqual({ 'code=4000,reason=x': 4 })
+    const ph = phasesOf(
+      [
+        { t: 5_000, cpuPct: 40, memMB: 100 },
+        { t: 70_000, cpuPct: 60, memMB: 120, anonMB: 110 },
+        { t: 490_000, cpuPct: 90, memMB: 90 },
+      ],
+      { joinRampMs: 60_000, killAtMs: 480_000, endMs: 600_000 },
+    )
+    expect(ph.map((p) => [p.name, p.cpuMaxPct, p.anonMaxMB])).toEqual([
+      ['join storm', 40, null],
+      ['steady state', 60, 110],
+      ['reconnect storm (60 s after the kill)', 90, null],
+      ['after', null, null],
+    ])
   })
   it('chunks creates within 500 ops and 500 KiB, a label with its note', () => {
     const b = l1Board('seed-x')
