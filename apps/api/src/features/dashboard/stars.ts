@@ -5,6 +5,7 @@ import { type BoardWithStar, ListBoardsQuery } from '@draftroom/contracts'
 import { type BoardRole, can, resolveBoardRole } from '@draftroom/permissions'
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { BOARD_COLUMNS, type BoardRow, requireBoardAction, requireWorkspaceRole } from '../../access.ts'
+import { onNewCanvas } from '../../canvas-engine.ts'
 import type { Params } from '../../context.ts'
 import { parse } from '../../errors.ts'
 import { toBoardWithRole } from '../../serialize.ts'
@@ -55,10 +56,11 @@ export function registerStarRoutes(app: FastifyInstance, ctx: FeatureContext): v
       [wid, user.id, status],
     )
     const boards: BoardWithStar[] = []
+    const marks = { newCanvas: !(await onNewCanvas(ctx)) } // R0's badge only off the new canvas
     for (const { board_grant, ...board } of rows.rows) {
       const role = resolveBoardRole({ workspaceRole, boardGrant: board_grant, visibility: board.visibility })
       const listed = status === 'trashed' ? can(role, 'restore', status) : can(role, 'view', status)
-      if (role && listed) boards.push({ ...toBoardWithRole(board, role), starred: true })
+      if (role && listed) boards.push({ ...toBoardWithRole(board, role, marks), starred: true })
     }
     return { boards }
   })

@@ -37,6 +37,7 @@ import type {
 } from '@draftroom/contracts'
 import { ASSET_GC_GRACE_DAYS, ASSET_GC_IN_FLIGHT_DAYS, ASSET_GC_REPORT_LIMIT } from '@draftroom/contracts'
 import { type Db, pgErrorCode, type Queryable } from '@draftroom/db'
+import { type CanvasEngineProbe, TLDRAW_ONLY } from '../canvas-engine.ts'
 import { snapshotBodies } from '../features/history/snapshot-store.ts'
 import type { BlobStore } from './blobs.ts'
 import { originalKey } from './blobs.ts'
@@ -62,6 +63,11 @@ export interface AssetGcDeps {
   blobs: BlobStore
   /** The sync server's asset-refs endpoint (sync-internal.ts). Absent = no board can be read. */
   sync: { assetRefs?(boardId: string): Promise<unknown> }
+  /**
+   * Which canvas the sync runs (canvas-engine.ts): on the new canvas a checkpoint marked `body_version` 2
+   * is this build's own and is read (its v2 body); otherwise it is R0's "unread". Absent = tldraw.
+   */
+  canvas?: CanvasEngineProbe
   /** Root of history's pre-milestone-3 checkpoint folder (snapshot-store.ts): the api's data dir. */
   dataRoot: string
   now: () => Date
@@ -141,8 +147,8 @@ async function withAssetIds(
  * retried by the next pass.
  *
  * v1 (tldraw) and v2 (the Excalidraw engine) bodies are both read (gc-refs.ts versionsInCheckpoint).
- * Bridge release R0: a checkpoint this build cannot read (a row marked body_version 2, which this
- * branch's writer does not set yet, or a body of neither format) can show files the pass cannot see. It
+ * Bridge release R0: a checkpoint this build cannot read (a row marked body_version 2 while the sync is a
+ * tldraw one, canvas-engine.ts; or a body of neither format) can show files the pass cannot see. It
  * is counted as unread (the pass is incomplete: nothing new is marked or deleted) and NOT recorded,
  * because a recorded scan is never repeated and "no references" would then outlive the roll-forward.
  */
@@ -163,9 +169,10 @@ async function scanCheckpoints(deps: AssetGcDeps, workspaceId: string): Promise<
       'asset gc: a checkpoint made on the new canvas cannot be read by this build (the pass is incomplete)',
     )
   }
+  const v2Readable = (await (deps.canvas ?? TLDRAW_ONLY).current()) === 'excalidraw'
   for (const s of pending.rows) {
     if (deps.shouldStop?.()) return failed + 1
-    if (Number(s.body_version) !== 1) {
+    if (Number(s.body_version) !== 1 && !(v2Readable && Number(s.body_version) === 2)) {
       newCanvas()
       continue
     }

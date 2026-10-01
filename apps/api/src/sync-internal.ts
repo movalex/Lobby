@@ -8,6 +8,7 @@ import {
   type WorkshopStateBody,
   workshopStatePath,
 } from '@draftroom/contracts'
+import type { CanvasEngine } from './canvas-engine.ts'
 
 /** A tldraw RoomSnapshot as JSON (documents + schema + clocks). Treated as opaque data here. */
 export type RoomSnapshotJson = {
@@ -69,6 +70,12 @@ export interface SyncInternalClient {
    * SyncUnavailable on anything but 2xx; a tldraw sync answers 404 (it has no such route).
    */
   workshopState?(boardId: string, body: WorkshopStateBody): Promise<void>
+  /**
+   * The canvas the sync server runs (GET /internal/canvas; canvas-engine.ts): `excalidraw` on the new
+   * canvas, else `tldraw` (R0's sync has no such route: 404). Throws SyncUnavailable when sync cannot be
+   * asked. Optional like placeNotes; a client without it is a tldraw sync.
+   */
+  engine?(): Promise<CanvasEngine>
 }
 
 export class SyncSeedConflict extends Error {
@@ -196,6 +203,28 @@ export function createHttpSyncInternalClient(opts: {
       const res = await call(`/internal/boards/${encodeURIComponent(boardId)}/text${qs}`)
       if (!res.ok) throw await failure(res, 'board text')
       return (await res.json()) as unknown
+    },
+    async engine() {
+      let res: Response
+      try {
+        res = await fetch(`${base}/internal/canvas`, {
+          headers: { [INTERNAL_SECRET_HEADER]: opts.secret },
+          signal: AbortSignal.timeout(Math.min(timeout, 2_000)),
+          redirect: 'error', // never forward the secret anywhere else
+        })
+      } catch (e) {
+        throw new SyncUnavailable(`sync unreachable: ${(e as Error).name}`)
+      }
+      if (res.status === 404) {
+        await res.body?.cancel().catch(() => {})
+        return 'tldraw'
+      }
+      if (!res.ok) {
+        await res.body?.cancel().catch(() => {})
+        throw new SyncUnavailable(`canvas failed with ${res.status}`, res.status)
+      }
+      const body = (await res.json().catch(() => null)) as { engine?: unknown } | null
+      return body?.engine === 'excalidraw' ? 'excalidraw' : 'tldraw'
     },
     async workshopState(boardId, body) {
       let res: Response

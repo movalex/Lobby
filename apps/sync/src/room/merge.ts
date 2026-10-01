@@ -12,7 +12,7 @@
 //   F. upsert with this clock, `lb_deleted` rows for isDeleted false→true, lb_doc writes.
 
 import { canWriteDocKey, DocSet, docValueProblem, TAG_DEF_KEY_PREFIX } from '@draftroom/canvas-schema/doc'
-import { checkElement, type WireElement } from '@draftroom/canvas-schema/elements'
+import { checkElement, redactTombstone, type WireElement } from '@draftroom/canvas-schema/elements'
 import { isBindable, layoutBoundText, layoutStickyNote } from '@draftroom/canvas-schema/engine'
 import {
   fieldGroupOf,
@@ -23,6 +23,7 @@ import {
   stripEngineArtifacts,
 } from '@draftroom/canvas-schema/groups'
 import {
+  GEOMETRY_TOLERANCE_PX,
   GUEST_ITEM_CAP,
   isAllowedLink,
   MAX_ITEMS,
@@ -146,7 +147,12 @@ export class PushApplier {
   /** live elements and items this push added so far (the caps count them before Phase F) */
   private addedElements = 0
   private addedItems = 0
+  /** items with a new id this guest created in this push, live or deleted (D5) */
   private addedGuestItems = 0
+  /** frames this push moves (a `pos` patch on a live, unlocked frame): id → the move (W5-05) */
+  private readonly frameMoves = new Map<string, { dx: number; dy: number }>()
+  /** locked elements whose position this push moved with their frame (W5-05): id → the frame */
+  private readonly followers = new Map<string, string>()
 
   private readonly env: MergeEnv
   private readonly s: SessionIdentity
@@ -248,6 +254,7 @@ export class PushApplier {
   run(): PushOutcome {
     if (this.push.relayout) this.serverRelayout(this.push.relayout)
     this.applyDoc()
+    if (!this.s.readonly) this.planFrameMoves()
     this.push.ops.forEach((pre, i) => {
       this.ops[i] = { id: pre.id, kind: pre.op?.k ?? 'p', ok: false, applied: { groups: {}, c: {} } }
       if (pre.reject) this.reject(i, pre.reject)
@@ -255,7 +262,10 @@ export class PushApplier {
       else if (pre.op.k === 'c') this.applyCreate(i, pre.op)
       else this.applyPatch(i, pre.op)
     })
+    this.settleFollowers()
     enforceInvariants(this) // B
+    // a frame the invariants put back takes its locked members' moves back with it (never half a move)
+    if (this.settleFollowers()) enforceInvariants(this)
     resnapDerived(this) // C
     this.assignIndexes() // D
     return this.finish() // E, F
@@ -299,26 +309,31 @@ export class PushApplier {
     return null
   }
 
-  /** ELEMENT_LIMIT / GUEST_LIMIT for one more live element (§3.5), counting this push's earlier ones. */
-  private capProblem(el: El, create: boolean): RejectCode | null {
+  /** ELEMENT_LIMIT for one more live element (§3.5), counting this push's earlier ones. */
+  private capProblem(el: El): RejectCode | null {
     const label = isLabel(el)
     if (this.env.counts.elements + this.addedElements + 1 > MAX_LIVE_ELEMENTS) return 'ELEMENT_LIMIT'
     if (!label && this.env.counts.items + this.addedItems + 1 > MAX_ITEMS) return 'ELEMENT_LIMIT'
-    if (
-      create &&
-      this.s.guest &&
-      !label &&
-      (this.env.guestCreated.get(this.s.uid) ?? 0) + this.addedGuestItems + 1 > GUEST_ITEM_CAP
-    )
-      return 'GUEST_LIMIT'
     return null
   }
-  private countAdded(el: El, create: boolean): void {
-    this.addedElements++
-    if (!isLabel(el)) {
-      this.addedItems++
-      if (create && this.s.guest) this.addedGuestItems++
+  /**
+   * GUEST_LIMIT for one more item a guest creates under a new id (§3.5, D5): counted per guest uid over
+   * every item the board holds that the guest created, live AND deleted. A tombstone create counts like a
+   * live one, and a revival (a create over a tombstone, a `life` patch) creates nothing new, so minting
+   * tombstones and reviving them no longer gets past the cap (V2's re-check: 650 live items against 500).
+   */
+  private guestCapProblem(el: El): RejectCode | null {
+    if (!this.s.guest || isLabel(el)) return null
+    return (this.env.guestCreated.get(this.s.uid) ?? 0) + this.addedGuestItems + 1 > GUEST_ITEM_CAP
+      ? 'GUEST_LIMIT'
+      : null
+  }
+  private countAdded(el: El, newId: boolean): void {
+    if (!el.isDeleted) {
+      this.addedElements++
+      if (!isLabel(el)) this.addedItems++
     }
+    if (newId && this.s.guest && !isLabel(el)) this.addedGuestItems++
   }
 
   private applyCreate(i: number, op: CreateOp) {
@@ -331,7 +346,11 @@ export class PushApplier {
     if (prev && !prev.isDeleted) return this.reject(i, 'INVALID')
     if (prev && this.leasedByOther(leaseIdOf(prev))) return this.reject(i, 'LEASED')
     if (!pushed.isDeleted) {
-      const cap = this.capProblem(pushed, true)
+      const cap = this.capProblem(pushed)
+      if (cap) return this.reject(i, cap)
+    }
+    if (!prev) {
+      const cap = this.guestCapProblem(pushed)
       if (cap) return this.reject(i, cap)
     }
     const lobby = checkCreateLobby(
@@ -369,7 +388,7 @@ export class PushApplier {
     if (prev) for (const g of GROUP_NAMES) w.gclock[g] = this.clock
     this.writerOk(w, i, next)
     st.ok = true
-    if (!next.isDeleted) this.countAdded(next, true)
+    this.countAdded(next, !prev)
     if (next.type === 'arrow') this.resnapArrows.add(next.id)
     if ((next.boundElements ?? []).some((r: { type: string }) => r.type === 'arrow'))
       this.movedTargets.add(next.id)
@@ -424,11 +443,16 @@ export class PushApplier {
     const container = isLabel(cur) ? this.live(cur.containerId) : null
     const locked = !!cur.locked || !!container?.locked
     const unlocking = groups.meta?.locked === false && !isLabel(cur)
+    // W5-05: a locked element moved by exactly its frame's move in this push moves with the frame (a
+    // template's locked heading and description); any other change of it stays refused
+    let follows: { group: string; frame: string } | null = null
     if (locked && !unlocking) {
+      follows = this.followsFrame(cur, container, groups)
       const kept: Record<string, Record<string, unknown>> = {}
       const names: string[] = []
       for (const [g, fields] of Object.entries(groups)) {
         if (g === 'z' || (g === 'meta' && Object.keys(fields).every((k) => k === 'locked'))) kept[g] = fields
+        else if (follows && g === follows.group) kept[g] = fields
         else names.push(g)
       }
       for (const g of Object.keys(groups)) delete groups[g]
@@ -556,7 +580,7 @@ export class PushApplier {
     // an undelete by patch (life false) counts toward the caps like a create
     const revived = cur.isDeleted && !next.isDeleted
     if (revived) {
-      const cap = this.capProblem(next, false)
+      const cap = this.capProblem(next)
       if (cap) return this.reject(i, cap)
     }
 
@@ -576,6 +600,7 @@ export class PushApplier {
     this.writerOk(w, i, next)
     st.ok = true
     if (revived) this.countAdded(next, false)
+    if (follows) this.followers.set(op.id, follows.frame)
     st.applied = { groups, c: cApplied }
     if (denied) st.denied = denied
     this.env.leases.renew(leaseIdOf(cur), this.s.sid, this.env.now)
@@ -585,6 +610,76 @@ export class PushApplier {
       this.resnapArrows.add(next.id)
     if (isBindable(next as never) && RESNAP_TRIGGER_FIELDS.some((f) => !equal(cur[f], next[f])))
       this.movedTargets.add(next.id)
+  }
+
+  // ---- W5-05: locked members move with their frame -------------------------------------------------
+
+  /** The frames this push moves, with the move: a `pos` patch on a live, unlocked frame. */
+  private planFrameMoves(): void {
+    for (const pre of this.push.ops) {
+      const op = pre.op
+      if (op?.k !== 'p' || !op.g?.pos) continue
+      const f = this.get(op.id).before
+      if (!f || f.isDeleted || f.type !== 'frame' || f.locked) continue
+      const pos = op.g.pos as { x?: unknown; y?: unknown }
+      const dx = (typeof pos.x === 'number' ? pos.x : f.x) - f.x
+      const dy = (typeof pos.y === 'number' ? pos.y : f.y) - f.y
+      if (Number.isFinite(dx) && Number.isFinite(dy) && (dx !== 0 || dy !== 0))
+        this.frameMoves.set(op.id, { dx, dy })
+    }
+  }
+
+  /**
+   * Whether this patch of a locked element is only its frame's move (W5-05, the review's server option):
+   * the element (or, for a label, its container) is a member of a frame this push moves, and the group
+   * that carries its `x`, `y` (`pos`; a label's `layout`; a linear element's `path`) changes `x` and `y`
+   * by the frame's delta (within GEOMETRY_TOLERANCE_PX) and nothing else. Returns that group and the frame.
+   */
+  private followsFrame(
+    cur: El,
+    container: El | null,
+    groups: Record<string, Record<string, unknown>>,
+  ): { group: string; frame: string } | null {
+    const frame = (cur.frameId ?? container?.frameId ?? null) as string | null
+    const move = frame ? this.frameMoves.get(frame) : undefined
+    if (!frame || !move) return null
+    const group = fieldGroupOf(cur, 'x')
+    const fields = group ? groups[group] : undefined
+    if (!group || !fields) return null
+    for (const [f, v] of Object.entries(fields)) if (f !== 'x' && f !== 'y' && !equal(v, cur[f])) return null
+    const nx = 'x' in fields ? fields.x : cur.x
+    const ny = 'y' in fields ? fields.y : cur.y
+    if (typeof nx !== 'number' || typeof ny !== 'number') return null
+    if (Math.abs(nx - cur.x - move.dx) > GEOMETRY_TOLERANCE_PX) return null
+    if (Math.abs(ny - cur.y - move.dy) > GEOMETRY_TOLERANCE_PX) return null
+    return { group, frame }
+  }
+
+  /**
+   * A locked member moved only because its frame moved: when the frame's move did not land (refused,
+   * reverted, or landed elsewhere), the member's move is taken back too, so a push never saves half a
+   * frame move (W5-05). True when something was reverted.
+   */
+  private settleFollowers(): boolean {
+    let reverted = false
+    for (const [id, frame] of [...this.followers]) {
+      const fw = this.get(frame)
+      const move = this.frameMoves.get(frame)
+      const el = fw.el
+      const landed =
+        !!el &&
+        !el.isDeleted &&
+        !!fw.before &&
+        !!move &&
+        fw.writers.length > 0 &&
+        Math.abs(el.x - fw.before.x - move.dx) <= GEOMETRY_TOLERANCE_PX &&
+        Math.abs(el.y - fw.before.y - move.dy) <= GEOMETRY_TOLERANCE_PX
+      if (landed) continue
+      this.followers.delete(id)
+      this.revert(id, 'LOCKED')
+      reverted = true
+    }
+    return reverted
   }
 
   // ---- rule 6: the server re-fits a container whose lease expired --------------------------------
@@ -672,8 +767,9 @@ export class PushApplier {
   private assignIndexes(): void {
     const index = this.env.index
     const touched = [...this.work.values()].filter((w) => w.el && !equal(w.el, w.before))
-    // the cache follows the working state: deletions leave it, live elements (re)enter it
-    for (const w of touched) if (w.el?.isDeleted) index.remove(w.id)
+    // the cache follows the working state: a deletion's key stays taken (a tombstone's, V3), live elements
+    // (re)enter it
+    for (const w of touched) if (w.el?.isDeleted) index.setDead(w.id, w.el.index)
     const order = (w: Work) => (isLabel(w.el) ? 1 : 0)
     const live = touched.filter((w) => w.el && !w.el.isDeleted).sort((a, b) => order(a) - order(b))
     for (const w of live) {
@@ -765,7 +861,10 @@ export class PushApplier {
         const code = st.code ?? 'INVALID'
         codes.push(code)
         const stored = w?.before ?? (st.id ? (this.env.store.get(st.id)?.el ?? null) : null)
-        results.push({ id: st.id.slice(0, 200), ok: false, code, el: stored ? clone(stored) : null })
+        // the stored copy the client resets to; a tombstone redacted (W5-02: a viewer probing a deleted id
+        // by a refused patch got its text and authors)
+        const el = stored ? (stored.isDeleted ? redactTombstone(stored as El) : clone(stored)) : null
+        results.push({ id: st.id.slice(0, 200), ok: false, code, el })
         return
       }
       codes.push('ok')
@@ -840,7 +939,8 @@ export class PushApplier {
           this.env.counts.items += itemOf(after as El)
           this.env.groups.add(after.groupIds)
         }
-        if (this.s.guest && !before && isLive && !isLabel(after as El))
+        // D5: a guest's item under a new id counts, live or deleted (V2: tombstones were never counted)
+        if (this.s.guest && !before && !isLabel(after as El))
           this.env.guestCreated.set(this.s.uid, (this.env.guestCreated.get(this.s.uid) ?? 0) + 1)
       }
       for (const [key, value] of Object.entries(this.docWrites)) store.docSet(key, this.clock, value)

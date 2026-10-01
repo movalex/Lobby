@@ -1,5 +1,6 @@
 // Feature module: history (docs/FEATURES-M2-CONTRACTS.md "history"; checklist REV-07, REV-08, DSH-02,
 // DSH-03, PRS-06 export archive). Named checkpoints, restore-as-new / duplicate / import (new private
+
 // boards), board export, and the "Recently deleted" proxy to the sync server. Every decision goes
 // through access.ts (packages/permissions); 404 whenever the caller cannot see the board.
 
@@ -21,6 +22,7 @@ import type { FastifyInstance } from 'fastify'
 import { requireBoardAction, requireProjectInWorkspace, requireWorkspaceRole } from '../../access.ts'
 import { userKind } from '../../auth/users.ts'
 import { liveElements, lobbySnapshotOf } from '../../canvas/lobby-elements.ts'
+import { onNewCanvas } from '../../canvas-engine.ts'
 import type { Params } from '../../context.ts'
 import { ApiError, conflict, forbidden, gone, notFound, parse } from '../../errors.ts'
 import { contentDisposition } from '../../files/disposition.ts'
@@ -128,7 +130,8 @@ export async function registerHistory(app: FastifyInstance, ctx: FeatureContext)
         ORDER BY s.created_at DESC, s.id DESC LIMIT ${MAX_LISTED}`,
       [bid, access.board.workspace_id],
     )
-    return { snapshots: rows.rows.map(toCheckpoint) }
+    const marks = { newCanvas: !(await onNewCanvas(ctx)) }
+    return { snapshots: rows.rows.map((r) => toCheckpoint(r, marks)) }
   })
 
   app.post('/api/boards/:bid/snapshots', HEAVY, async (req, reply) => {
@@ -137,7 +140,8 @@ export async function registerHistory(app: FastifyInstance, ctx: FeatureContext)
     const input = parse(CreateSnapshotInput, req.body)
     const access = await requireBoardAction(db, bid, user.id, 'edit')
     await refuseGuests(user.id)
-    if (access.board.new_canvas) throw newCanvasBoard() // bridge release R0: saved on the new canvas only
+    // bridge release R0: saved on the new canvas only (refused while this api's sync is a tldraw one)
+    if (access.board.new_canvas && !(await onNewCanvas(ctx))) throw newCanvasBoard()
     const workspaceId = access.board.workspace_id
     // Only manual checkpoints count: automatic ones are bounded by retention (checkpoints.ts).
     const { n } = await db.one<{ n: number }>(
@@ -155,8 +159,8 @@ export async function registerHistory(app: FastifyInstance, ctx: FeatureContext)
     let row: SnapshotRow
     try {
       const inserted = await db.one<{ id: string }>(
-        `INSERT INTO board_snapshots (id, workspace_id, board_id, name, kind, created_by, created_at, document_clock, record_count, size_bytes, storage_key, content_hash)
-         VALUES ($1, $2, $3, $4, 'manual', $5, $6, $7, $8, $9, $10, $11) RETURNING id`,
+        `INSERT INTO board_snapshots (id, workspace_id, board_id, name, kind, created_by, created_at, document_clock, record_count, size_bytes, storage_key, content_hash, body_version)
+         VALUES ($1, $2, $3, $4, 'manual', $5, $6, $7, $8, $9, $10, $11, $12) RETURNING id`,
         [
           id,
           workspaceId,
@@ -169,6 +173,7 @@ export async function registerHistory(app: FastifyInstance, ctx: FeatureContext)
           made.sizeBytes,
           key,
           made.contentHash,
+          made.body.version, // R0's contract: 2 for a body made on the new canvas
         ],
       )
       row = await db.one<SnapshotRow>(`SELECT ${SNAPSHOT_COLUMNS} FROM ${SNAPSHOT_FROM} WHERE s.id = $1`, [
@@ -182,7 +187,7 @@ export async function registerHistory(app: FastifyInstance, ctx: FeatureContext)
     }
     ctx.events.publish(bid, { type: HISTORY_EVENTS.snapshot, data: { snapshotId: id } })
     reply.code(201)
-    return toCheckpoint(row)
+    return toCheckpoint(row, { newCanvas: !(await onNewCanvas(ctx)) })
   })
 
   app.post('/api/snapshots/:sid/restore-as-new', HEAVY, async (req, reply) => {
@@ -204,7 +209,7 @@ export async function registerHistory(app: FastifyInstance, ctx: FeatureContext)
     await requireExportAllowed(db, access, user.id)
     // Bridge release R0: a row marked as made on the new canvas (body_version 2; never written on this
     // branch yet, snapshot-rows.ts) is restored after the switch. Refused before anything else happens.
-    if (isNewCanvasRow(snapshot)) throw newCanvasCheckpoint()
+    if (isNewCanvasRow(snapshot) && !(await onNewCanvas(ctx))) throw newCanvasCheckpoint()
     const raw = await bodies.read(snapshot.storage_key)
     if (raw === null) throw gone("This checkpoint's saved content is no longer available.")
     // v1 bodies are tldraw records (a sync on the Excalidraw engine converts them at the seed, §5.5);
@@ -241,7 +246,7 @@ export async function registerHistory(app: FastifyInstance, ctx: FeatureContext)
       warn,
     )
     reply.code(201)
-    return created(board, shown.length, notShown)
+    return created(board, shown.length, notShown, await onNewCanvas(ctx))
   })
 
   app.post('/api/boards/:bid/duplicate', HEAVY, async (req, reply) => {
@@ -252,7 +257,8 @@ export async function registerHistory(app: FastifyInstance, ctx: FeatureContext)
     const workspaceId = access.board.workspace_id
     await requireBoardCreator(workspaceId, user.id, req.routeOptions.url ?? '')
     await requireExportAllowed(db, access, user.id) // a duplicate is a full copy (export-control)
-    if (access.board.new_canvas) throw newCanvasBoard() // bridge release R0: duplicated after the switch
+    // bridge release R0: duplicated after the switch (refused while this api's sync is a tldraw one)
+    if (access.board.new_canvas && !(await onNewCanvas(ctx))) throw newCanvasBoard()
     if (input.keepSharing && !can(access.role, 'manage_access', access.board.status))
       throw forbidden('Only the board owner can copy its sharing settings.')
     const snap = await viaSync(() => ctx.sync.snapshot(bid))
@@ -282,7 +288,7 @@ export async function registerHistory(app: FastifyInstance, ctx: FeatureContext)
     // export-control: the same people on the copy stay under the same export policy.
     if (input.keepSharing) await copyExportPolicy(db, bid, board, user.id, ctx.now())
     reply.code(201)
-    return created(board, shown.length, notShown)
+    return created(board, shown.length, notShown, await onNewCanvas(ctx))
   })
 
   // ---- portable archive (PRS-06 export part, PRS-11) --------------------------------------------
@@ -292,7 +298,8 @@ export async function registerHistory(app: FastifyInstance, ctx: FeatureContext)
     const { bid = '' } = req.params as Params
     const access = await requireBoardAction(db, bid, user.id, 'view')
     await requireExportAllowed(db, access, user.id) // export-control: 403 EXPORT_DISABLED for limited viewers
-    if (access.board.new_canvas) throw newCanvasBoard() // bridge release R0: exported after the switch
+    // bridge release R0: exported after the switch (refused while this api's sync is a tldraw one)
+    if (access.board.new_canvas && !(await onNewCanvas(ctx))) throw newCanvasBoard()
     const snap = await viaSync(() => ctx.sync.snapshot(bid))
     const lobby = lobbySnapshotOf(snap)
     const records = recordsOf(snap)
@@ -397,7 +404,7 @@ export async function registerHistory(app: FastifyInstance, ctx: FeatureContext)
       // The board as imported, before anyone edits it (automatic; best effort).
       await checkpoints.captureQuietly(board.id, 'import')
       reply.code(201)
-      return { ...created(board, allowed.length, dropped.length), warnings }
+      return { ...created(board, allowed.length, dropped.length, await onNewCanvas(ctx)), warnings }
     },
   )
 
@@ -449,11 +456,22 @@ function contentOf(snap: BoardSnapshotJson): BoardContent {
   return { format: 'tldraw', records: recordsOf(snap), schema: (snap as RoomSnapshotJson).schema }
 }
 
-function created(board: Parameters<typeof toBoardWithRole>[0], linked: number, dropped: number) {
+function created(
+  board: Parameters<typeof toBoardWithRole>[0],
+  linked: number,
+  dropped: number,
+  /** this api serves the new canvas (canvas-engine.ts): the board carries no R0 `newCanvas` mark */
+  newCanvas = false,
+) {
   const warnings: string[] = []
   if (dropped > 0)
     warnings.push(
       `${dropped} referenced file(s) could not be carried over to the new board and show as missing.`,
     )
-  return { board: toBoardWithRole(board, 'owner'), warnings, linkedFiles: linked, droppedFiles: dropped }
+  return {
+    board: toBoardWithRole(board, 'owner', { newCanvas: !newCanvas }),
+    warnings,
+    linkedFiles: linked,
+    droppedFiles: dropped,
+  }
 }

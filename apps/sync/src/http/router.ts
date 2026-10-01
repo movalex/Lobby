@@ -40,6 +40,12 @@ export interface RouterDeps extends InternalDeps {
    * its report once done, and GET …/run-all lists the runs (backup/run-all.ts). Absent: 404.
    */
   runAll?: Pick<RunAll, 'request' | 'get' | 'list'>
+  /**
+   * The canvas engine this server runs (DRAFTROOM_ENGINE), for GET /internal/canvas: the api reads it to
+   * know whether the boards and checkpoints it makes are on the new canvas (bridge release R0's
+   * `boards.new_canvas` and `board_snapshots.body_version`). Absent = tldraw.
+   */
+  engine?: 'tldraw' | 'excalidraw'
 }
 
 export interface MaintenanceControl {
@@ -134,6 +140,12 @@ const NEUTRAL_ROUTES: Route[] = [
     re: /^\/internal\/backups\/run-all\/([^/]+)$/,
     methods: ['GET'],
     handle: (_req, res, deps, [runId = '']) => handleRunAllGet(res, deps, runId),
+  },
+  // Which canvas this server runs (R0's contracts: the api marks what it makes on the new canvas)
+  {
+    re: /^\/internal\/canvas$/,
+    methods: ['GET'],
+    handle: (_req, res, deps) => sendJson(res, 200, { engine: deps.engine ?? 'tldraw' }),
   },
   // Bridge release R0: maintenance mode (sockets closed and refused; internal reads keep working)
   {

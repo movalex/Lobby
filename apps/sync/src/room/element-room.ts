@@ -23,7 +23,7 @@ import { randomUUID } from 'node:crypto'
 import { statfsSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { gzip } from 'node:zlib'
-import type { WireElement } from '@draftroom/canvas-schema/elements'
+import { redactTombstone, type WireElement } from '@draftroom/canvas-schema/elements'
 import { fieldGroupOf, kindOf, overlayPatch, pathUnitOf } from '@draftroom/canvas-schema/groups'
 import { canonicalElement, canonicalJson } from '@draftroom/canvas-schema/hash'
 import {
@@ -135,34 +135,73 @@ let handleSeq = 0
  */
 export const HELLO_LIMIT = { burst: 5, windowMs: 10_000 } as const
 /**
- * The welcomes of every room of the process are built in arrival order, a slice at a time (at most
- * `sliceMs` of work, then the event loop runs other boards' pushes and frames): a join storm, or one
- * board's large catch-ups, no longer block every other board (PERF-05's join queue, for the new engine).
+ * The welcome work one USER (uid) may cause across all its sockets and boards of the process, in rows (a
+ * catch-up's rows, a reset's elements; at least `minCost` a welcome): a token bucket of `burst` rows that
+ * refills `perSecond`. A hello past it closes its socket 4099 RATE_LIMITED before any work (V2's
+ * re-check: HELLO_LIMIT counted per socket, so one viewer with 40 sockets had 200 catch-ups of 5,000 rows
+ * built, 4-5 s of every join on the process). A person opening a few of the largest boards at once stays
+ * well inside it; the fair queue below bounds what one user's welcomes cost everyone else.
+ */
+export const WELCOME_BUDGET_PER_USER = { burst: 200_000, perSecond: 20_000, minCost: 50 } as const
+const userBudgets = new Map<string, { tokens: number; at: number }>()
+/** Takes the cost of one welcome of `rows` rows from `uid`'s budget; false when it has not enough left. */
+export function userWelcomeAllowed(uid: string, rows: number, now: number): boolean {
+  const { burst, perSecond, minCost } = WELCOME_BUDGET_PER_USER
+  const cost = Math.max(minCost, rows)
+  const b = userBudgets.get(uid) ?? { tokens: burst, at: now }
+  b.tokens = Math.min(burst, b.tokens + (Math.max(0, now - b.at) / 1000) * perSecond)
+  b.at = now
+  userBudgets.set(uid, b)
+  if (userBudgets.size > 10_000)
+    for (const [k, v] of userBudgets)
+      if (v.tokens + ((now - v.at) / 1000) * perSecond >= burst) userBudgets.delete(k)
+  if (b.tokens < cost) return false
+  b.tokens -= cost
+  return true
+}
+
+/**
+ * The welcomes of every room of the process are built a slice at a time (at most `sliceMs` of work, then
+ * the event loop runs other boards' pushes and frames): a join storm, or one board's large catch-ups, no
+ * longer block every other board (PERF-05's join queue, for the new engine). Fair by user (V2's re-check):
+ * each user (uid) has its own queue and the slices take one hello per user in turn, so a user with many
+ * sockets and large catch-ups delays another user's join by at most one of its welcomes, not all of them.
  */
 export const HELLO_SLICE_MS = 20
-const helloQueue: (() => void)[] = []
+const helloQueues = new Map<string, (() => void)[]>()
 let helloTimer: ReturnType<typeof setImmediate> | null = null
-function queueHello(run: () => void): void {
-  helloQueue.push(run)
+function queueHello(user: string, run: () => void): void {
+  const q = helloQueues.get(user)
+  if (q) q.push(run)
+  else helloQueues.set(user, [run])
   if (!helloTimer) helloTimer = setImmediate(drainHellos)
 }
 function drainHellos(): void {
   helloTimer = null
   const t0 = performance.now()
-  while (helloQueue.length) {
-    const run = helloQueue.shift() as () => void
+  while (helloQueues.size) {
+    // the user first in line runs one hello and goes to the back of the line
+    const [user, q] = helloQueues.entries().next().value as [string, (() => void)[]]
+    const run = q.shift()
+    helloQueues.delete(user)
+    if (q.length) helloQueues.set(user, q)
     try {
-      run()
+      run?.()
     } catch {
       // a failed welcome closes nothing else; the session's socket error path handles it
     }
     if (performance.now() - t0 >= HELLO_SLICE_MS) break
   }
-  if (helloQueue.length) helloTimer = setImmediate(drainHellos)
+  if (helloQueues.size) helloTimer = setImmediate(drainHellos)
 }
 
 /** Live leases one session may hold at once; a further new one is denied (V2: lease squatting). */
 export const MAX_LEASES_PER_SESSION = 4
+/**
+ * Live leases one USER may hold in a room across its tabs (V2's re-check: the per-session cap let one
+ * editor with 13 tabs hold 52 leases). Two tabs' worth: a person types in one text at a time per tab.
+ */
+export const MAX_LEASES_PER_USER = 8
 
 /** Rejects when `p` takes longer than `ms` (the api's 3 s timeout, enforced here too: fail closed). */
 function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
@@ -339,11 +378,14 @@ export class ElementRoom {
 
   private rebuildCaches(): void {
     const rows = this.store.liveIndexRows()
-    this.index.reset(rows)
+    const dead = this.store.tombstoneIndexRows()
+    // the tombstones' keys are taken too: a live element never takes one (V3, index-keys.ts)
+    this.index.reset(rows, dead)
     this.groups.reset()
     this.counts.elements = rows.length
     this.counts.items = 0
     this.guestCreated.clear()
+    const guestItem = (uid: string) => this.guestCreated.set(uid, (this.guestCreated.get(uid) ?? 0) + 1)
     for (const r of rows) {
       const el = JSON.parse(r.data) as El
       this.groups.add(el.groupIds)
@@ -351,9 +393,11 @@ export class ElementRoom {
         this.counts.items++
         // the guest cap survives a room eviction: a guest's live items count against it (V2)
         const by = el.customData?.lobbyServer?.createdBy
-        if (by?.guest) this.guestCreated.set(by.uid, (this.guestCreated.get(by.uid) ?? 0) + 1)
+        if (by?.guest) guestItem(by.uid)
       }
     }
+    // ... and so do its deleted ones (D5, V2's re-check: tombstones made or revived reset nothing)
+    for (const r of dead) if (r.byGuest && !r.label) guestItem(r.byGuest)
   }
 
   private pullWorkshop(): void {
@@ -419,7 +463,7 @@ export class ElementRoom {
     if (msg.type === 'hello') {
       if (!s.helloAllowed(this.deps.now())) return this.terminal(s, 'RATE_LIMITED')
       const { since, epoch } = msg
-      return queueHello(() => {
+      return queueHello(s.identity.uid, () => {
         if (!s.closed && !this.closed) this.hello(s, since, epoch)
       })
     }
@@ -644,6 +688,19 @@ export class ElementRoom {
   private hello(s: Session, since: number, epoch: string | null): void {
     const first = !s.welcomed
     const now = this.deps.now()
+    const meta0 = this.store.meta
+    const catchUpRows =
+      epoch === meta0.epoch && since >= meta0.horizon && since <= meta0.clock
+        ? this.store.countSince(since)
+        : null
+    const rows =
+      catchUpRows !== null && catchUpRows <= CATCH_UP_MAX_ROWS
+        ? catchUpRows
+        : (this.snapshotCache?.elements ?? storedRows(this.store.counts()))
+    if (!userWelcomeAllowed(s.identity.uid, rows, now)) {
+      this.terminal(s, 'RATE_LIMITED')
+      return
+    }
     if (first) {
       const already = [...this.sessions].some(
         (o) => o !== s && o.welcomed && o.identity.sid === s.identity.sid,
@@ -679,13 +736,9 @@ export class ElementRoom {
       drags: this.presence.activeDrags(),
       limits: { ...WIRE_LIMITS, leaseTtlMs: this.leases.ttlMs },
     }
-    const catchUp =
-      epoch === meta.epoch &&
-      since >= meta.horizon &&
-      since <= meta.clock &&
-      this.store.countSince(since) <= CATCH_UP_MAX_ROWS
+    const catchUp = catchUpRows !== null && catchUpRows <= CATCH_UP_MAX_ROWS
     if (catchUp) {
-      const ops: ServerOp[] = this.store.since(since).map((r) => ({ k: 'c', el: r.el }))
+      const ops: ServerOp[] = this.store.since(since).map(catchUpOp)
       s.out.send(JSON.stringify({ ...base, clock: meta.clock, reset: false, catchUp: ops, snapshot: null }))
     } else {
       this.deps.metrics.inc('lobby_resets_total')
@@ -702,7 +755,7 @@ export class ElementRoom {
       s.out.send(welcome)
       s.out.send(snap.bytes)
       if (snap.clock < meta.clock) {
-        const ops: ServerOp[] = this.store.since(snap.clock).map((r) => ({ k: 'c', el: r.el }))
+        const ops: ServerOp[] = this.store.since(snap.clock).map(catchUpOp)
         s.out.send(JSON.stringify({ type: 'changes', clock: meta.clock, ops }))
       }
     }
@@ -711,12 +764,17 @@ export class ElementRoom {
     if (peers.length) s.out.send(JSON.stringify({ type: 'presence', peers }))
   }
 
-  /** The reset snapshot (tombstones included), compressed once and cached for 5 s. */
+  /**
+   * The reset snapshot (tombstones included, redacted: W5-02), compressed once and cached for 5 s. One
+   * snapshot serves every role: no tombstone in it carries content, so a viewer's is the owner's.
+   */
   private snapshotFor(now: number): { clock: number; elements: number; bytes: Promise<Uint8Array> } {
     const meta = this.store.meta
     const c = this.snapshotCache
     if (c && c.epoch === meta.epoch && now - c.at <= SNAPSHOT_CACHE_MS) return c
-    const rows = this.store.snapshotJson()
+    const rows = this.store
+      .snapshotRows()
+      .map((r) => (r.deleted ? JSON.stringify(redactTombstone(JSON.parse(r.data) as El)) : r.data))
     const doc = this.store.docAll()
     const json = `{"type":"snapshot","epoch":${JSON.stringify(meta.epoch)},"clock":${meta.clock},"horizon":${meta.horizon},"elements":[${rows.join(',')}],"doc":${JSON.stringify(doc)}}`
     const bytes = new Promise<Uint8Array>((resolve, reject) =>
@@ -1140,9 +1198,11 @@ export class ElementRoom {
     // one session holds at most MAX_LEASES_PER_SESSION leases (V2: one editor could hold every note's lease
     // and deny everyone else's text; a tab edits one text at a time): beyond it a NEW lease is denied, the
     // requester named as the holder (every request is answered; a renewal of one it holds is not new)
+    // ... and one user at most MAX_LEASES_PER_USER across its tabs (V2's re-check)
     if (
       !this.leases.holds(id, s.identity.sid, now) &&
-      this.leases.heldBy(s.identity.sid, now) >= MAX_LEASES_PER_SESSION
+      (this.leases.heldBy(s.identity.sid, now) >= MAX_LEASES_PER_SESSION ||
+        this.leases.heldByUser(s.identity.uid, now) >= MAX_LEASES_PER_USER)
     ) {
       this.deps.metrics.inc('lobby_lease_total', { result: 'deny' })
       const self = this.holderOf(s)
@@ -1268,8 +1328,26 @@ type Ref = { id: string; type: 'arrow' | 'text' }
  * reproduce the stored element exactly (checked by overlaying it).
  */
 export function serverOp(before: WireElement | null, after: WireElement): ServerOp {
+  // W5-02: a tombstone never travels in full (canvas-schema elements.ts redactTombstone, hash.ts)
+  if (after.isDeleted) {
+    if (!before || before.isDeleted) return { k: 'c', el: redactTombstone(after as El) }
+    // a delete: the sessions held the element live, so the deletion (and a moved key) is all they get;
+    // content groups the deleting op changed never leave the server
+    const g: Record<string, Record<string, unknown>> = { life: { isDeleted: true } }
+    if (!eqJson(before.index, after.index)) g.z = { index: after.index }
+    return {
+      k: 'p',
+      id: after.id,
+      v: after.version,
+      vn: after.versionNonce,
+      pv: before.version,
+      updated: after.updated,
+      g,
+    } as ServerOp
+  }
   const full: ServerOp = { k: 'c', el: after }
-  if (!before) return full
+  // a create, or an undelete: the receivers may hold only the redacted tombstone, so the full element
+  if (!before || before.isDeleted) return full
   const b = before as El
   const a = after as El
   if (kindOf(b) !== kindOf(a) || b.type !== a.type) return full
@@ -1329,6 +1407,14 @@ export function serverOp(before: WireElement | null, after: WireElement): Server
     return full
   return op as ServerOp
 }
+
+const storedRows = (c: { live: number; dead: number }) => c.live + c.dead
+
+/** A catch-up row as it travels: the stored element, a tombstone redacted (W5-02). */
+const catchUpOp = (r: { el: WireElement; deleted: boolean }): ServerOp => ({
+  k: 'c',
+  el: r.deleted || r.el.isDeleted ? redactTombstone(r.el as El) : r.el,
+})
 
 /** The ack result of an op the room could not even parse (stage 0). */
 export const invalidResult = (id: string): AckResult => ({ id, ok: false, code: 'INVALID', el: null })
