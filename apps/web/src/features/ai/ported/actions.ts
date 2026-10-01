@@ -14,7 +14,16 @@ import { isApiError } from '../../../api/client.ts'
 import type { LobbyCanvas } from '../../../canvas/api/index.ts'
 import { actionItemText, ideasHeading, plural, themesDone } from '../copy.ts'
 import { applyNotes, applySummary, applyThemes } from './apply.ts'
-import { type AiMenuState, type AiRequest, aiJob, aiMenu, aiPanel, aiStatus, getAiCtx } from './runtime.ts'
+import {
+  type AiMenuState,
+  type AiRequest,
+  aiJob,
+  aiMenu,
+  aiOpener,
+  aiPanel,
+  aiStatus,
+  getAiCtx,
+} from './runtime.ts'
 import { type AiTarget, refOf } from './target.ts'
 
 const enc = encodeURIComponent
@@ -123,7 +132,10 @@ export async function runAi(
     ...(req.action === 'ideas' ? { prompt: req.prompt ?? '', count: req.count ?? 6 } : {}),
     ...(opts.acknowledged ? { acknowledged: true } : {}),
   }
-  const job = { id: ++jobSeq, action: req.action, label: target.label, abort: new AbortController() }
+  // W5-47: asked from the popover, the keyboard goes back to what opened it (taken before the popover
+  // closes, which forgets it); asked from a menu, to the board.
+  const opener = aiMenu(canvas).get() ? aiOpener.get(canvas) : null
+  const job = { id: ++jobSeq, action: req.action, label: target.label, abort: new AbortController(), opener }
   aiJob(canvas).set(job)
   aiMenu(canvas).set(null)
   // Back to the board, so Ctrl+Z, Delete and the arrows work on the result straight away.
@@ -168,7 +180,7 @@ export async function runAi(
   aiJob(canvas).set(null)
   const now = aiStatus(canvas).get() ?? status
   aiStatus(canvas).set({ ...now, noticeAccepted: true, budget: result.budget ?? now.budget })
-  applyResult(canvas, result, target, req)
+  applyResult(canvas, result, target, req, job.opener)
 }
 
 /** How long the "Undo" toast after an AI result stays up. */
@@ -317,7 +329,13 @@ export async function setWorkspaceAiDefault(canvas: LobbyCanvas, enabled: boolea
   await refreshAiStatus(canvas)
 }
 
-function applyResult(canvas: LobbyCanvas, result: AiResult, target: AiTarget, req: AiRequest) {
+function applyResult(
+  canvas: LobbyCanvas,
+  result: AiResult,
+  target: AiTarget,
+  req: AiRequest,
+  opener: HTMLElement | null,
+) {
   const ctx = getAiCtx(canvas)
   if (!ctx) return
   const by = ctx.me.user.id
@@ -333,6 +351,7 @@ function applyResult(canvas: LobbyCanvas, result: AiResult, target: AiTarget, re
         about: target.label,
         truncated: result.truncated,
         target,
+        opener,
       })
       return
     }

@@ -354,3 +354,243 @@ describe('the ported AI helpers', () => {
     expect(at()).toEqual(first)
   })
 })
+
+describe('W5-04: frame membership read from where notes lie when it is mixed or missing', () => {
+  const frame = (id: string, x: number, y: number, width: number, height: number, extra = {}): El => ({
+    id,
+    type: 'frame',
+    name: id.toUpperCase(),
+    x,
+    y,
+    width,
+    height,
+    ...extra,
+  })
+  const box = (id: string, x: number, y: number, text: string, frameId: string): El[] => [
+    {
+      id,
+      type: 'rectangle',
+      x,
+      y,
+      width: 200,
+      height: 60,
+      frameId,
+      boundElements: [{ id: `${id}.t`, type: 'text' }],
+    },
+    {
+      id: `${id}.t`,
+      type: 'text',
+      containerId: id,
+      originalText: text,
+      x: x + 10,
+      y: y + 20,
+      width: 80,
+      height: 20,
+      frameId,
+    },
+  ]
+  const labelsOf = (els: Map<string, El>) =>
+    [...els.values()].filter((e) => !e.isDeleted && aiKindOf(e as unknown as CanvasElement) === 'theme-label')
+  const within = (outer: El, e: El) =>
+    e.x >= outer.x &&
+    e.y >= outer.y &&
+    e.x + e.width <= outer.x + outer.width &&
+    e.y + e.height <= outer.y + outer.height
+
+  it('a note made with N inside the frame (no frameId) joins the others there: nobody leaves the frame, and the frame grows to fit', () => {
+    const { canvas, els } = fakeCanvas([
+      frame('f', 0, 0, 900, 400),
+      ...note('a', 60, 100, 'One', { frameId: 'f' }),
+      ...note('b', 300, 100, 'Two', { frameId: 'f' }),
+      ...note('c', 540, 100, 'Three', { frameId: 'f' }),
+      // the note N made: inside the frame's area, not its member (W5-01)
+      ...note('d', 640, 160, 'Four'),
+    ])
+    const out = applyThemes(
+      canvas,
+      [
+        { name: 'Odd', noteIds: ['shape:a', 'shape:c'] },
+        { name: 'Even', noteIds: ['shape:b', 'shape:d'] },
+      ],
+      'usr_1',
+    )
+    expect(out).toMatchObject({ moved: 4, themes: 2, grew: true })
+    const f = els.get('f') as El
+    expect(f.height).toBeGreaterThan(400)
+    for (const id of ['a', 'b', 'c', 'd']) {
+      expect(els.get(id)?.frameId, id).toBe('f')
+      expect(els.get(`${id}.t`)?.frameId, `${id}'s label`).toBe('f')
+      expect(within(f, els.get(id) as El), `${id} inside the frame`).toBe(true)
+    }
+    const labels = labelsOf(els)
+    expect(labels).toHaveLength(2)
+    for (const l of labels) {
+      expect(l.frameId).toBe('f')
+      expect(within(f, l)).toBe(true)
+    }
+  })
+
+  it('a note on the open canvas joins the frame most of the notes are in', () => {
+    const { canvas, els } = fakeCanvas([
+      frame('f', 0, 0, 1600, 1000),
+      ...note('a', 60, 100, 'One', { frameId: 'f' }),
+      ...note('b', 300, 100, 'Two', { frameId: 'f' }),
+      ...note('c', 540, 100, 'Three', { frameId: 'f' }),
+      ...note('d', 1800, 100, 'Four'),
+    ])
+    applyThemes(canvas, [{ name: 'All', noteIds: ['shape:a', 'shape:b', 'shape:c', 'shape:d'] }], 'usr_1')
+    for (const id of ['a', 'b', 'c', 'd']) {
+      expect(els.get(id)?.frameId, id).toBe('f')
+      expect(within(els.get('f') as El, els.get(id) as El), `${id} inside the frame`).toBe(true)
+    }
+  })
+
+  it('notes of two frames are grouped each in its own frame', () => {
+    const { canvas, els } = fakeCanvas([
+      frame('f', 0, 0, 1600, 1000),
+      frame('g', 2000, 0, 1600, 1000),
+      ...note('a', 60, 100, 'One', { frameId: 'f' }),
+      ...note('b', 300, 100, 'Two', { frameId: 'f' }),
+      ...note('c', 2060, 100, 'Three', { frameId: 'g' }),
+    ])
+    const out = applyThemes(
+      canvas,
+      [
+        { name: 'X', noteIds: ['shape:a', 'shape:c'] },
+        { name: 'Y', noteIds: ['shape:b'] },
+      ],
+      'usr_1',
+    )
+    expect(out).toMatchObject({ moved: 3, themes: 2 })
+    expect([els.get('a')?.frameId, els.get('b')?.frameId, els.get('c')?.frameId]).toEqual(['f', 'f', 'g'])
+    for (const id of ['a', 'b']) expect(within(els.get('f') as El, els.get(id) as El), id).toBe(true)
+    expect(within(els.get('g') as El, els.get('c') as El)).toBe(true)
+    const labels = labelsOf(els)
+    expect(
+      labels
+        .filter((l) => l.frameId === 'f')
+        .map((l) => l.originalText)
+        .sort(),
+    ).toEqual(['X', 'Y'])
+    expect(labels.filter((l) => l.frameId === 'g').map((l) => l.originalText)).toEqual(['X'])
+  })
+
+  it('a frame as the target names the notes made with N in it, so they are counted, sent and grouped there', () => {
+    const { canvas, els } = fakeCanvas([
+      frame('f', 0, 0, 1600, 1000),
+      ...note('a', 60, 100, 'One', { frameId: 'f' }),
+      ...note('d', 300, 100, 'Two'),
+      // outside the frame: not part of it
+      ...note('x', 1800, 100, 'Three'),
+    ])
+    const t = targetAt(canvas, { x: 800, y: 900 })
+    expect(t.kind).toBe('frame')
+    expect(t.ids).toEqual(['f', 'd'])
+    expect(t.notes).toBe(2)
+    expect(t.label).toBe('the frame “F”')
+    applyThemes(canvas, [{ name: 'Both', noteIds: ['shape:a', 'shape:d'] }], 'usr_1')
+    expect([els.get('a')?.frameId, els.get('d')?.frameId]).toEqual(['f', 'f'])
+    const ids = applyNotes(
+      canvas,
+      t,
+      { heading: 'Action items', texts: ['p'], color: 'light-green', kind: 'action-item' },
+      'usr_1',
+    )
+    for (const id of ids) expect(els.get(id)?.frameId).toBe('f')
+  })
+
+  it('reads where loose elements lie from their own fields, not the port’s per-call bounds scan (CR 3b-7)', () => {
+    const seed: El[] = [frame('f', 0, 0, 4000, 4000)]
+    for (let i = 0; i < 150; i++)
+      seed.push(...note(`n${i}`, (i % 15) * 250, Math.floor(i / 15) * 250, `Idea ${i}`))
+    // a loose line whose points reach left of its origin: its middle is inside the frame
+    seed.push({
+      id: 'line',
+      type: 'line',
+      x: 4100,
+      y: 100,
+      width: 400,
+      height: 0,
+      points: [
+        [0, 0],
+        [-400, 0],
+      ],
+    })
+    const { canvas } = fakeCanvas(seed)
+    let calls = 0
+    const bounds = canvas.bounds.bind(canvas)
+    ;(canvas as { bounds: typeof bounds }).bounds = (id) => {
+      calls++
+      return bounds(id)
+    }
+    const t = targetAt(canvas, { x: 10, y: 10 })
+    expect(t.ids).toHaveLength(152)
+    expect(t.ids).toContain('line')
+    expect(t.notes).toBe(150)
+    expect(calls).toBeLessThanOrEqual(2)
+  })
+
+  it('the regroup question still sees the frame’s groups with a note made with N among the notes', () => {
+    const { canvas } = fakeCanvas([
+      frame('f', 0, 0, 1600, 1000),
+      ...box('g1', 600, 100, 'Gameplay', 'f'),
+      ...box('g2', 600, 300, 'Story', 'f'),
+      ...note('a', 60, 100, 'One', { frameId: 'f' }),
+      ...note('b', 300, 100, 'Two', { frameId: 'f' }),
+      ...note('d', 60, 400, 'Three'),
+    ])
+    canvas.select(['a', 'b', 'd'])
+    expect(selectionTarget(canvas)?.groups).toEqual(['Gameplay', 'Story'])
+  })
+
+  it('ideas for notes with a note made with N among them land in the frame, clear of that note', () => {
+    const { canvas, els } = fakeCanvas([
+      frame('f', 1000, 0, 1200, 800),
+      ...note('a', 1040, 100, 'One', { frameId: 'f' }),
+      ...note('d', 1280, 100, 'Two'),
+      // a loose note in the frame, not selected: in the way
+      ...note('e', 1520, 100, 'Three'),
+    ])
+    canvas.select(['a', 'd'])
+    const target = selectionTarget(canvas)
+    if (!target) throw new Error('no target')
+    const ids = applyNotes(
+      canvas,
+      target,
+      { heading: 'Ideas: x', texts: ['p', 'q'], color: 'yellow', kind: 'idea' },
+      'usr_1',
+    )
+    for (const id of ids) {
+      const e = els.get(id) as El
+      expect(e.frameId, id).toBe('f')
+      expect(within(els.get('f') as El, e)).toBe(true)
+      for (const o of ['a', 'd', 'e']) expect(overlap(e, els.get(o) as El), `${id} over ${o}`).toBe(false)
+    }
+  })
+})
+
+describe('W5-04: the theme labels on one line', () => {
+  it('a card hanging into the row does not hold one cluster lower than its neighbours', () => {
+    const seed: El[] = [{ id: 'card', type: 'rectangle', x: 630, y: -251, width: 375, height: 270 }]
+    const ids = 'abcdefghi'.split('')
+    ids.forEach((id, i) => {
+      seed.push(...note(id, i * 216, 0, `Idea ${id}`))
+    })
+    const { canvas, els } = fakeCanvas(seed)
+    applyThemes(
+      canvas,
+      [
+        { name: 'Big Gameplay Moments', noteIds: ['shape:a', 'shape:b', 'shape:c'] },
+        { name: 'Story Twists', noteIds: ['shape:d', 'shape:e', 'shape:f'] },
+        { name: 'Made With Players', noteIds: ['shape:g', 'shape:h', 'shape:i'] },
+      ],
+      'usr_1',
+    )
+    const labels = [...els.values()].filter(
+      (e) => !e.isDeleted && aiKindOf(e as unknown as CanvasElement) === 'theme-label',
+    )
+    expect(labels).toHaveLength(3)
+    expect(new Set(labels.map((l) => l.y)).size).toBe(1)
+    for (const l of labels) expect(overlap(l, els.get('card') as El)).toBe(false)
+  })
+})

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  alignRows,
   appendInFrame,
   BESIDE_GAP,
   CLEARANCE,
@@ -14,6 +15,7 @@ import {
   placeAround,
   placeBeside,
   type Rect,
+  ROW_SNAP,
   union,
 } from './layout.ts'
 
@@ -240,6 +242,113 @@ describe('layoutThemes', () => {
       [10, 264],
       [206, 264],
     ])
+  })
+})
+
+describe('alignRows (W5-04: the theme labels on one line)', () => {
+  const NAMES = ['Big Gameplay Moments', 'Story Twists', 'Made With Players']
+  const nine = () =>
+    clusters(
+      [
+        ['a', 'b', 'c'],
+        ['d', 'e', 'f'],
+        ['g', 'h', 'i'],
+      ],
+      NAMES,
+    )
+  // Something hanging into the row's top-left corner (a frame's edge, a card) holds the cluster packed
+  // there a little lower than its neighbours.
+  const HANGING: Rect = { x: 73, y: -200, w: 354, h: 194 }
+  const open = (obstacles: Rect[]) => ({
+    clusters: nine(),
+    anchor: { x: 0, y: 0 },
+    region: { minX: 0, maxX: 1500, maxY: null },
+    obstacles,
+  })
+
+  it('packing alone leaves one cluster of the row lower; aligned, every label of the row shares its line', () => {
+    const input = open([HANGING])
+    const packed = layoutThemes(input)
+    const tops = packed.clusters.map((c) => c.label.y)
+    expect(new Set(tops).size).toBeGreaterThan(1)
+    expect(Math.max(...tops) - Math.min(...tops)).toBeLessThanOrEqual(ROW_SNAP)
+    const aligned = alignRows(packed, input)
+    expect(new Set(aligned.clusters.map((c) => c.label.y)).size).toBe(1)
+    expect(aligned.clusters[0]?.label.y).toBe(Math.max(...tops))
+    // the notes moved with their labels, and still clear of everything
+    aligned.clusters.forEach((c, i) => {
+      const was = packed.clusters[i]
+      const dy = c.label.y - (was?.label.y ?? 0)
+      expect(c.notes.map((n) => n.y)).toEqual(was?.notes.map((n) => n.y + dy))
+      expect(collides(c.box, HANGING, CLEARANCE - 0.01)).toBe(false)
+      for (const o of aligned.clusters)
+        if (o !== c) expect(collides(c.box, o.box, aligned.gap - 0.01)).toBe(false)
+    })
+    expect(aligned.bounds.y).toBe(Math.max(...tops))
+  })
+
+  it('a row is left as packed when lining it up would land a cluster on something', () => {
+    const input = open([HANGING])
+    const packed = layoutThemes(input)
+    const low = packed.clusters.reduce((p, c) => (c.box.y > p.box.y ? c : p))
+    const other = packed.clusters.find((c) => c.box.y < low.box.y)
+    if (!other) throw new Error('no higher cluster')
+    // right under the higher cluster: moving it down would touch this
+    const under: Rect = {
+      x: other.box.x,
+      y: other.box.y + other.box.h + CLEARANCE + 1,
+      w: other.box.w,
+      h: 40,
+    }
+    const blocked = { ...input, obstacles: [HANGING, under] }
+    expect(alignRows(packed, blocked)).toBe(packed)
+  })
+
+  it('inside a frame it never reaches further past the floor', () => {
+    // a tall cluster on the left, a short one beside it held 22 lower: lining up would push the tall
+    // one 22 past the frame's floor
+    const cluster = (key: string, x: number, y: number, h: number) => ({
+      key,
+      label: { x, y, w: 180, h: 34 },
+      notes: [{ id: key, x, y: y + 48 }],
+      box: { x, y, w: 180, h },
+      cols: 1,
+    })
+    const packed = {
+      clusters: [cluster('tall', 0, 0, 400), cluster('short', 244, 22, 200)],
+      bounds: { x: 0, y: 0, w: 424, h: 400 },
+      overflow: { right: 0, bottom: 0 },
+      gap: 64,
+    }
+    const input = (maxY: number) => ({
+      clusters: [],
+      anchor: { x: 0, y: 0 },
+      region: { minX: 0, maxX: 1000, maxY },
+      obstacles: [],
+    })
+    expect(alignRows(packed, input(400))).toBe(packed)
+    const roomy = alignRows(packed, input(500))
+    expect(roomy.clusters.map((c) => c.label.y)).toEqual([22, 22])
+    expect(roomy.overflow.bottom).toBe(0)
+    expect(roomy.bounds).toEqual({ x: 0, y: 22, w: 424, h: 400 })
+  })
+
+  it('changes nothing on a layout already on one line (the tour Brainstorm in its frame)', () => {
+    const input = {
+      clusters: clusters(
+        [
+          ['n0', 'n1', 'n2'],
+          ['n3', 'n4'],
+          ['n5', 'n6', 'n7'],
+        ],
+        NAMES,
+      ),
+      anchor: { x: 850, y: 260 },
+      region: frameRegion(FRAME, { x: 850, y: 260 }, 180),
+      obstacles: TOUR_OBSTACLES,
+    }
+    const packed = layoutThemes(input)
+    expect(alignRows(packed, input)).toBe(packed)
   })
 })
 

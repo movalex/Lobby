@@ -13,7 +13,11 @@
 //   one pass places them. A frame grows only when the clusters cannot fit. Labels a previous run made
 //   above these notes are replaced, so grouping twice never stacks labels. Notes beside a map in their
 //   frame (connectors and the cards they join, as on the Lobby tour's Brainstorm) are grouped under the
-//   map instead, the frame growing downward (DANA-10). A note moves with its label.
+//   map instead, the frame growing downward (DANA-10). A note moves with its label. The labels of
+//   clusters side by side share one line (W5-04). Frame membership is read from where notes lie when it
+//   is missing (W5-04: a note made with N inside a frame may not be its member, W5-01): the clusters go
+//   to the frame most of the notes are in, which a loose note joins, and a note of another frame is
+//   grouped in its own frame; no note leaves its frame.
 // - Summarize, when an editor adds it from the summary panel: a pale card (a rectangle with its words
 //   as the bound label, "Summary" on the first line).
 // - Action items / Generate ideas: a heading and a grid of new sticky notes.
@@ -31,6 +35,7 @@ import { LOBBY_INK, LOBBY_PALETTE, type LobbyColorName } from '@draftroom/board-
 import type { AiTheme } from '@draftroom/contracts'
 import { type CanvasElement, items, type LobbyCanvas, type LobbyTx } from '../../../canvas/api/index.ts'
 import {
+  alignRows,
   appendInFrame,
   BESIDE_GAP,
   bottom,
@@ -53,7 +58,16 @@ import {
   type ThemesLayoutInput,
   union,
 } from '../layout.ts'
-import { type AiTarget, idOfRef, isLive, isNote } from './target.ts'
+import {
+  type AiTarget,
+  type FrameIndex,
+  frameIndex,
+  frameOfElement,
+  homeFrameOf,
+  idOfRef,
+  isLive,
+  isNote,
+} from './target.ts'
 
 /** Lobby's sans (Nunito), the note font on the new canvas. */
 const FONT_FAMILY = 6
@@ -92,8 +106,18 @@ interface Space {
   frame: CanvasElement | null
   ox: number
   oy: number
+  /**
+   * W5-04: in a frame's space, loose elements lying in the frame (no `frameId`, as a note made with N)
+   * count as in it: they are in the way, and grouping them brings them in.
+   */
+  index?: FrameIndex
 }
-const spaceOf = (frame: CanvasElement | null): Space => ({ frame, ox: frame?.x ?? 0, oy: frame?.y ?? 0 })
+const spaceOf = (frame: CanvasElement | null, index?: FrameIndex): Space => ({
+  frame,
+  ox: frame?.x ?? 0,
+  oy: frame?.y ?? 0,
+  index,
+})
 
 /** Axis-aligned scene bounds of an element (rotation included) in `space`. */
 function rectIn(canvas: LobbyCanvas, id: string, space: Space): Rect | null {
@@ -101,13 +125,22 @@ function rectIn(canvas: LobbyCanvas, id: string, space: Space): Rect | null {
   return b ? { x: b.x - space.ox, y: b.y - space.oy, w: b.width, h: b.height } : null
 }
 
-/** The objects directly in `space` (a frame's children, or everything outside frames), labels left out. */
+/**
+ * The objects directly in `space` (a frame's children, or everything outside frames), labels left out.
+ * A frame's space with an index also holds the loose elements lying in it (`frameOfElement`).
+ */
 function objectsIn(canvas: LobbyCanvas, space: Space): CanvasElement[] {
   const frameId = space.frame?.id ?? null
+  const { index } = space
   return canvas
     .items()
     .filter(
-      (e) => !isLabel(e) && (e.frameId ?? null) === frameId && e.id !== frameId && !canvas.isHidden(e.id),
+      (e) =>
+        !isLabel(e) &&
+        e.id !== frameId &&
+        !canvas.isHidden(e.id) &&
+        ((e.frameId ?? null) === frameId ||
+          (!!frameId && !!index && !e.frameId && frameOfElement(canvas, e, index)?.id === frameId)),
     )
 }
 
@@ -198,14 +231,22 @@ function moveBy(canvas: LobbyCanvas, tx: LobbyTx, el: CanvasElement, dx: number,
   if (label) tx.update(label.id, { x: label.x + dx, y: label.y + dy })
 }
 
-/** A frame grown to `h` would not run into anything beside or below it on the page. */
-function mayGrow(canvas: LobbyCanvas, frame: CanvasElement, h: number): boolean {
+/**
+ * A frame grown to `h` would not run into anything beside or below it on the page (`moving`: what goes
+ * into it in the same step, so no obstacle).
+ */
+function mayGrow(
+  canvas: LobbyCanvas,
+  frame: CanvasElement,
+  h: number,
+  moving: ReadonlySet<string> = new Set(),
+): boolean {
   const page = spaceOf(null)
   const now = rectIn(canvas, frame.id, page)
   if (!now) return false
   const grown = { x: now.x, y: now.y, w: now.w, h: now.h + (h - frame.height) }
   const extra = { x: grown.x, y: now.y + now.h, w: grown.w, h: grown.h - now.h }
-  return obstaclesIn(canvas, page, new Set([frame.id]), grown).every(
+  return obstaclesIn(canvas, page, new Set([frame.id, ...moving]), grown).every(
     (o) => !(collides(extra, o, BESIDE_GAP / 2) && !collides(now, o)),
   )
 }
@@ -301,7 +342,8 @@ export function applyThemes(
 ): ThemesOutcome | null {
   const seen = new Set<string>()
   const groups = themes
-    .map((t) => ({
+    .map((t, theme) => ({
+      theme,
       name: t.name,
       notes: t.noteIds
         .map((ref) => canvas.get(idOfRef(ref)))
@@ -316,20 +358,126 @@ export function applyThemes(
   const all = groups.flatMap((g) => g.notes)
   if (!all.length) return null
 
-  // Frames never nest on this canvas: the notes' own frame when they share one, else the page.
-  const firstFrame = all[0]?.frameId ?? null
-  const frameId = all.every((n) => (n.frameId ?? null) === firstFrame) ? firstFrame : null
-  const frame = frameId ? (canvas.get(frameId) ?? null) : null
-  const space = spaceOf(isLive(frame ?? undefined) ? frame : null)
+  // W5-04: where the clusters go. Frames never nest on this canvas, and a note made with N inside a frame
+  // may not be its member (W5-01). Each note is in its own frame or, a loose note, in the frame it lies
+  // in (frameOfElement); the clusters go to the frame most of them are in (homeFrameOf). A loose note, or
+  // one on the open canvas, joins that frame; a note of another frame is grouped in its own frame:
+  // grouping never takes a note out of its frame.
+  const index = frameIndex(canvas)
+  const home = homeFrameOf(canvas, all, index)
+  const keyOf = (n: CanvasElement) => frameOfElement(canvas, n, index)?.id ?? home?.id ?? null
+  const keys = [...new Set([home?.id ?? null, ...all.map(keyOf)])]
+  const plans = keys
+    .map((key) => {
+      const frame = key ? (index.byId.get(key) ?? null) : null
+      const mine = groups
+        .map((g) => ({ ...g, notes: g.notes.filter((n) => keyOf(n) === key) }))
+        .filter((g) => g.notes.length > 0)
+      return mine.length ? planThemes(canvas, spaceOf(frame, index), mine) : null
+    })
+    .filter((p): p is ThemesPlan => p !== null)
+
+  let outcome: ThemesOutcome | null = null
+  const written: string[] = []
+  canvas.transact('ai: group into themes', (tx) => {
+    let moved = 0
+    let grew = false
+    for (const plan of plans) {
+      const { space } = plan
+      const frameId = space.frame?.id ?? null
+      const outside = plan.notes.filter((n) => (n.frameId ?? null) !== frameId).map((n) => n.id)
+      if (outside.length) tx.setFrame(outside, frameId)
+      for (const s of plan.stale) {
+        tx.delete(s.id)
+        written.push(s.id)
+      }
+      for (const l of plan.labels) {
+        const id = tx.create('text', {
+          id: newId(),
+          x: space.ox + l.x,
+          y: space.oy + l.y,
+          text: l.block.text,
+          originalText: l.name,
+          fontFamily: FONT_FAMILY,
+          fontSize: LABEL_FONT_SIZE,
+          textAlign: 'left',
+          verticalAlign: 'top',
+          strokeColor: LOBBY_INK,
+          frameId,
+          // wrapped at the cluster's width: it keeps its lines when someone edits it
+          autoResize: l.block.text === l.name,
+          customData: aiCustomData(by, 'theme-label'),
+        })
+        written.push(id)
+      }
+      for (const m of plan.moves) {
+        moveBy(canvas, tx, m.el, m.dx, m.dy)
+        written.push(m.el.id)
+        moved++
+      }
+      if (space.frame && plan.grow) {
+        tx.update(space.frame.id, plan.grow)
+        written.push(space.frame.id)
+        grew = true
+      }
+    }
+    outcome = {
+      moved,
+      themes: new Set(plans.flatMap((p) => p.labels.map((l) => l.theme))).size,
+      grew,
+      skipped: Math.max(0, wanted - all.length),
+      written,
+    }
+  })
+  // Nothing stays selected: the clusters read cleanly, and Ctrl+Z or the notice's Undo still takes the
+  // whole step back.
+  canvas.select([])
+  // A frame that grew (or whose clusters went under its map), whole, so the result is on screen (never
+  // zoomed past 100%).
+  const show = plans.flatMap((p) => (p.space.frame && (p.show || p.grow) ? [p.space.frame.id] : []))
+  if (show.length) bringIntoView(canvas, show, { inset: 96 })
+  return outcome
+}
+
+/** What "Group into themes" writes in one space (a frame, or the open canvas). */
+interface ThemesPlan {
+  space: Space
+  /** the notes grouped here */
+  notes: CanvasElement[]
+  /** labels an earlier run made for these notes: replaced */
+  stale: CanvasElement[]
+  /** the theme labels, in `space` (`theme`: the theme's index in the plan) */
+  labels: { x: number; y: number; theme: number; name: string; block: TextBlock }[]
+  moves: { el: CanvasElement; dx: number; dy: number }[]
+  /** the frame's new size when the clusters do not fit in it */
+  grow: { width: number; height: number } | null
+  /** the clusters went under the frame's map (DANA-10) */
+  show: boolean
+}
+
+/** Lays out `groups` (the themes, with the notes of this space) in `space`: see the header. */
+function planThemes(
+  canvas: LobbyCanvas,
+  space: Space,
+  groups: readonly { theme: number; name: string; notes: CanvasElement[] }[],
+): ThemesPlan {
+  const all = groups.flatMap((g) => g.notes)
   const moving = new Set(all.map((n) => n.id))
   const rects = new Map(all.map((n) => [n.id, rectIn(canvas, n.id, space) as Rect]))
   const stale = staleThemeLabels(canvas, space, moving, rects)
   // Their place counts as the notes' own: grouping the same notes again gives the same result.
   const staleRects = stale.map((s) => rectIn(canvas, s.id, space)).filter((r): r is Rect => !!r)
   const notesBounds = union([...rects.values(), ...staleRects]) as Rect
-  const anchor = { x: notesBounds.x, y: notesBounds.y }
+  // In a frame the clusters start inside its margins (a note joining it may lie over its edge).
+  const anchor = space.frame
+    ? {
+        x: Math.max(FRAME_MARGIN, notesBounds.x),
+        y: Math.max(FRAME_MARGIN, Math.min(notesBounds.y, space.frame.height - FRAME_MARGIN)),
+      }
+    : { x: notesBounds.x, y: notesBounds.y }
   // Reading order inside each theme: where the notes were.
   const ordered = groups.map((g) => ({
+    theme: g.theme,
     name: g.name,
     notes: [...g.notes].sort((a, b) => {
       const ra = rects.get(a.id) as Rect
@@ -372,7 +520,7 @@ export function applyThemes(
   })
   let region = regionAt(anchor)
   let layout = layoutThemes(firstInput(anchor))
-  let show: string | null = null
+  let show = false
   // DANA-10: notes beside a map in the frame are grouped in clear space under that map.
   const map = space.frame ? mapBesideNotes(canvas, space, moving, notesBounds) : null
   if (space.frame && map) {
@@ -382,12 +530,12 @@ export function applyThemes(
       ordered.map((g) => g.notes.length),
     )
     const h = space.frame.height + Math.ceil(under?.overflow.bottom ?? 0)
-    if (under && mayGrow(canvas, space.frame, h)) {
+    if (under && mayGrow(canvas, space.frame, h, moving)) {
       anchor.x = below.x
       anchor.y = below.y
       region = regionAt(below)
       layout = under
-      show = space.frame.id
+      show = true
     }
   }
   // The labels as they will be (measured at their cluster's width), then the arrangement again with
@@ -396,74 +544,34 @@ export function applyThemes(
     layoutText(canvas, ordered[Number(c.key)]?.name ?? '', LABEL_FONT_SIZE, Math.max(40, c.label.w - 4)),
   )
   const labelBand = Math.max(1, ...labelBlocks.map((b) => b.height + 4))
-  layout = layoutThemes(
-    { clusters: clusters(() => () => labelBand), anchor, region, obstacles },
-    { cols: layout.clusters.map((c) => c.cols), gap: layout.gap },
+  const final = { clusters: clusters(() => () => labelBand), anchor, region, obstacles }
+  // One line for the labels of clusters side by side (W5-04).
+  layout = alignRows(
+    layoutThemes(final, { cols: layout.clusters.map((c) => c.cols), gap: layout.gap }),
+    final,
   )
-
-  let outcome: ThemesOutcome | null = null
-  const written: string[] = []
-  canvas.transact('ai: group into themes', (tx) => {
-    const outside = all.filter((n) => (n.frameId ?? null) !== (space.frame?.id ?? null)).map((n) => n.id)
-    if (outside.length) tx.setFrame(outside, space.frame?.id ?? null)
-    for (const s of stale) {
-      tx.delete(s.id)
-      written.push(s.id)
+  const labels = layout.clusters.map((c, i) => ({
+    x: c.label.x,
+    y: c.label.y,
+    theme: ordered[Number(c.key)]?.theme ?? -1,
+    name: ordered[Number(c.key)]?.name ?? '',
+    block: labelBlocks[i] ?? layoutText(canvas, '', LABEL_FONT_SIZE, null),
+  }))
+  const moves: ThemesPlan['moves'] = []
+  for (const c of layout.clusters)
+    for (const n of c.notes) {
+      const el = canvas.get(n.id)
+      const from = rects.get(n.id)
+      if (el && from) moves.push({ el, dx: n.x - from.x, dy: n.y - from.y })
     }
-    layout.clusters.forEach((c, i) => {
-      const block = labelBlocks[i] ?? layoutText(canvas, '', LABEL_FONT_SIZE, null)
-      const name = ordered[Number(c.key)]?.name ?? ''
-      const id = tx.create('text', {
-        id: newId(),
-        x: space.ox + c.label.x,
-        y: space.oy + c.label.y,
-        text: block.text,
-        originalText: name,
-        fontFamily: FONT_FAMILY,
-        fontSize: LABEL_FONT_SIZE,
-        textAlign: 'left',
-        verticalAlign: 'top',
-        strokeColor: LOBBY_INK,
-        frameId: space.frame?.id ?? null,
-        // wrapped at the cluster's width: it keeps its lines when someone edits it
-        autoResize: block.text === name,
-        customData: aiCustomData(by, 'theme-label'),
-      })
-      written.push(id)
-    })
-    let moved = 0
-    for (const c of layout.clusters) {
-      for (const n of c.notes) {
-        const el = canvas.get(n.id)
-        const from = rects.get(n.id)
-        if (!el || !from) continue
-        moveBy(canvas, tx, el, n.x - from.x, n.y - from.y)
-        written.push(el.id)
-        moved++
-      }
-    }
-    let grew = false
-    if (space.frame && (layout.overflow.bottom > 0 || layout.overflow.right > 0)) {
-      tx.update(space.frame.id, {
-        width: space.frame.width + Math.ceil(layout.overflow.right),
-        height: space.frame.height + Math.ceil(layout.overflow.bottom),
-      })
-      grew = true
-    }
-    outcome = {
-      moved,
-      themes: layout.clusters.length,
-      grew,
-      skipped: Math.max(0, wanted - all.length),
-      written,
-    }
-  })
-  // Nothing stays selected: the clusters read cleanly, and Ctrl+Z or the notice's Undo still takes the
-  // whole step back.
-  canvas.select([])
-  // The grown frame, whole, so the clusters under the map are on screen (never zoomed past 100%).
-  if (show) bringIntoView(canvas, [show], { inset: 96 })
-  return outcome
+  const grow =
+    space.frame && (layout.overflow.bottom > 0 || layout.overflow.right > 0)
+      ? {
+          width: space.frame.width + Math.ceil(layout.overflow.right),
+          height: space.frame.height + Math.ceil(layout.overflow.bottom),
+        }
+      : null
+  return { space, notes: all, stale, labels, moves, grow, show }
 }
 
 /** Moves the camera to show `ids` when they are not wholly on screen (3b's camera members). */
@@ -494,18 +602,21 @@ interface Spot {
 
 /**
  * The frame results belong in (reviewer finding DANA-07): the target itself when it is one frame, else
- * the frame every one of the target's objects sits in; null on the open canvas.
+ * the frame the target's objects are in (homeFrameOf: most of them, a note made with N inside a frame
+ * counting as in it, W5-04); null on the open canvas.
  */
 function homeFrame(
   canvas: LobbyCanvas,
   target: AiTarget,
-): { frame: CanvasElement; isTarget: boolean } | null {
+): { frame: CanvasElement; isTarget: boolean; index: FrameIndex } | null {
   const els = target.ids.map((id) => canvas.get(id)).filter(isLive)
-  const only = els.length === 1 ? els[0] : undefined
-  if (only?.type === 'frame') return { frame: only, isTarget: true }
-  const frameId = els[0]?.frameId
-  const frame = frameId && els.every((e) => e.frameId === frameId) ? canvas.get(frameId) : undefined
-  return isLive(frame) && frame.type === 'frame' ? { frame, isTarget: false } : null
+  const index = frameIndex(canvas)
+  // a frame target names the loose elements lying in it beside the frame (target.ts frameTarget)
+  const asked = target.kind === 'frame' ? els[0] : undefined
+  if (asked?.type === 'frame') return { frame: asked, isTarget: true, index }
+  const frame = homeFrameOf(canvas, els, index)
+  if (!frame) return null
+  return { frame, isTarget: els.length === 1 && els[0]?.id === frame.id, index }
 }
 
 /** The inner width a block may take in its home frame (null: no limit on the open canvas). */
@@ -533,7 +644,7 @@ function spotFor(
   }
   if (home) {
     const { frame } = home
-    const space = spaceOf(frame)
+    const space = spaceOf(frame, home.index)
     const inFrame = obstaclesIn(canvas, space, new Set())
     if (!home.isTarget) {
       const anchor = union(els.map((e) => rectIn(canvas, e.id, space)).filter((r): r is Rect => !!r)) as Rect
@@ -552,8 +663,9 @@ function spotFor(
     if (mayGrow(canvas, frame, end.h)) return { space, x: end.x, y: end.y, growTo: end.h }
   }
   // Outside: beside the frames around the target (or the target itself), on the page.
+  const index = home?.index ?? frameIndex(canvas)
   const outer = els
-    .map((e) => (e.frameId ? (canvas.get(e.frameId) ?? e) : e))
+    .map((e) => frameOfElement(canvas, e, index) ?? e)
     .map((e) => {
       const b = rectIn(canvas, e.id, page)
       // A frame's name label sits over its top edge: keep clear of it too.

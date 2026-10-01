@@ -248,6 +248,81 @@ export function layoutThemes(
   )
 }
 
+/** Clusters side by side whose tops are this close count as one row (`alignRows`). */
+export const ROW_SNAP = CLUSTER_GAPS[0]
+
+/**
+ * One line for the labels of each row of clusters (W5-04): packing puts each cluster at the highest free
+ * spot, so an obstacle hanging into the row holds one cluster a little lower than its neighbours and
+ * their labels end up off one line. Clusters side by side whose tops are within ROW_SNAP of the row's
+ * highest move down to its lowest top, all of the row or none: only when nothing is in the way there
+ * and, inside a frame, without reaching further past its floor. Bounds and overflow are recomputed.
+ */
+export function alignRows(layout: ThemesLayout, input: ThemesLayoutInput): ThemesLayout {
+  const placed = layout.clusters.map((c) => ({ ...c, box: { ...c.box } }))
+  const order = [...placed.keys()].sort((a, b) => (placed[a]?.box.y ?? 0) - (placed[b]?.box.y ?? 0))
+  const taken = new Set<number>()
+  const floor = (boxes: readonly Rect[]) => Math.max(...boxes.map(bottom))
+  const before = floor(placed.map((c) => c.box))
+  const shift = new Map<number, number>()
+  for (const i of order) {
+    if (taken.has(i)) continue
+    const first = placed[i] as ClusterPlacement
+    const row = [i]
+    taken.add(i)
+    for (const j of order) {
+      const c = placed[j] as ClusterPlacement
+      if (taken.has(j) || c.box.y - first.box.y > ROW_SNAP) continue
+      const beside = row.every((k) => {
+        const o = (placed[k] as ClusterPlacement).box
+        return right(o) <= c.box.x || right(c.box) <= o.x
+      })
+      if (!beside) continue
+      row.push(j)
+      taken.add(j)
+    }
+    if (row.length < 2) continue
+    const line = Math.max(...row.map((k) => (placed[k] as ClusterPlacement).box.y))
+    const moved = placed.map((c, k) => (row.includes(k) ? { ...c.box, y: line } : c.box))
+    const free = row.every((k) => {
+      const r = moved[k] as Rect
+      return (
+        moved.every((o, m) => m === k || !collides(r, o, layout.gap - 0.01)) &&
+        input.obstacles.every((o) => !collides(r, o, CLEARANCE - 0.01))
+      )
+    })
+    const deeper = input.region.maxY !== null && floor(moved) > Math.max(before, input.region.maxY)
+    if (!free || deeper) continue
+    for (const k of row) {
+      const c = placed[k] as ClusterPlacement
+      const dy = line - c.box.y
+      if (dy) shift.set(k, dy)
+      c.box.y = line
+    }
+  }
+  if (!shift.size) return layout
+  const clusters = layout.clusters.map((c, k) => {
+    const dy = shift.get(k) ?? 0
+    if (!dy) return c
+    return {
+      ...c,
+      box: { ...c.box, y: c.box.y + dy },
+      label: { ...c.label, y: c.label.y + dy },
+      notes: c.notes.map((n) => ({ ...n, y: n.y + dy })),
+    }
+  })
+  const bounds = union(clusters.map((c) => c.box)) ?? layout.bounds
+  return {
+    ...layout,
+    clusters,
+    bounds,
+    overflow: {
+      right: Math.max(0, right(bounds) - input.region.maxX),
+      bottom: input.region.maxY === null ? 0 : Math.max(0, bottom(bounds) - input.region.maxY),
+    },
+  }
+}
+
 /**
  * The room "Group into themes" gets inside a frame of `frame` size: to the right of and below the
  * notes' old top-left, inside the frame's margins. A region too narrow for the widest cluster reaches
