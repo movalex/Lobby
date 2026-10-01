@@ -408,3 +408,29 @@ describe('W5-02 (CONTRACTS_REV 7): tombstones arrive redacted', () => {
     expect(await c.hash()).toBe(await h.roomHash())
   })
 })
+
+describe('the queue follows a push out (no pagehide: a crash, a killed tab)', () => {
+  it('a push sent and committed, the page gone with no pagehide: the queue holds it as lost, B’s later write stays', async () => {
+    const h = createHarness({ seed: [stored(rect('x', 'a0', { x: 0 }))] })
+    const store = createMemoryOfflineStore()
+    const a = h.client('alice', { latencyMs: 100, offline: store })
+    const b = h.client('bob')
+    h.settle()
+    await flushMicro()
+    a.change('x', { x: 111 })
+    h.clock.advance(60) // out
+    h.clock.advance(60) // committed; ack on the wire
+    await flushMicro()
+    // no persistNow: what the queue holds is what the core wrote on its own
+    const entries = structuredClone(store.entries()) as OfflineEntry[]
+    expect(entries.find((e) => e.element.id === 'x')?.lost?.length).toBe(1)
+    a.core.stop()
+    h.room.cut(a.transport)
+    h.settle()
+    b.change('x', { x: 222 })
+    h.settle()
+    const a2 = await reload(h, entries)
+    expect(patchesOf(a2, 'x')).toEqual([])
+    expect(h.room.elements.get('x')?.x).toBe(222)
+  })
+})

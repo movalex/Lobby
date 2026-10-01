@@ -42,8 +42,8 @@ import { UndoController } from '../history/controller.ts'
 import { CanvasInput } from '../input/CanvasInput.ts'
 import { LeaseClient } from '../lease/client.ts'
 import type { EditNotice, EditState } from '../lease/editorLease.ts'
-import { createLodTarget, installLod } from '../lod/index.ts'
-import { installBoardOverrides } from '../overrides.ts'
+import { installLod } from '../lod/index.ts'
+import { installBoardOverrides, overridesLodTarget } from '../overrides.ts'
 import { createCanvasPort, type LobbyCanvasPort } from '../port-impl.ts'
 import { PresenceHub } from '../presence/hub.ts'
 import { attachPresencePointer, type PresenceSample } from '../presence/pointer.ts'
@@ -458,11 +458,8 @@ export class LobbyBoardSession {
     this.api = api
     const offs: (() => void)[] = []
     const root = this.rootEl ?? (wrapper.parentElement as HTMLElement)
-    // 3b's level-of-detail pass adds its culled ids to the render-override snapshot the board's overrides
-    // submit (canvas/lod/cull.ts; CR 3b-5 moves that merge into RenderOverrides)
-    const lodTarget = createLodTarget(api)
     const board = installBoardOverrides({
-      api: lodTarget.api,
+      api,
       wrapper,
       registries: this.registries,
       boardId: this.o.boardId,
@@ -483,6 +480,8 @@ export class LobbyBoardSession {
       core: this.core,
       overrides: board.overrides,
       elements: () => api.getSceneElementsIncludingDeleted() as unknown as readonly SceneElement[],
+      elementMap: () =>
+        api.getSceneElementsMapIncludingDeleted() as unknown as ReadonlyMap<string, SceneElement>,
       view: () => {
         const s = api.getAppState()
         const z = s.zoom.value
@@ -631,6 +630,9 @@ export class LobbyBoardSession {
     ro.observe(container)
     offs.push(() => ro.disconnect())
     // 7. the feature-facing canvas on the board handles
+    // 3b's level-of-detail pass culls through RenderOverrides' render-only source (CR 3b-5; no Proxy of
+    // the engine API any more, W3-14)
+    const lodTarget = overridesLodTarget(board.overrides, api)
     const handles = createBoardHandles({
       api,
       port,
@@ -687,10 +689,24 @@ export class LobbyBoardSession {
       }
     }
     this.set({ attached: true })
+    // the offline queue is written when the page goes away or is hidden (a reload, a closed tab, a phone
+    // switching apps), with any write Excalidraw has not reported yet (spike B part 3; WAVE-3 §6 asked the
+    // board page for it): its pushes in flight then reach the next page as lost pushes, not as unsent edits
+    const persist = () => this.core.persistNow()
+    const onHidden = () => {
+      if (document.visibilityState === 'hidden') persist()
+    }
+    window.addEventListener('pagehide', persist)
+    document.addEventListener('visibilitychange', onHidden)
+    offs.push(() => {
+      window.removeEventListener('pagehide', persist)
+      document.removeEventListener('visibilitychange', onHidden)
+    })
     // 8. connect
     this.core.start()
     this.transport.connect()
     return () => {
+      this.core.persistNow()
       for (const f of offs.reverse()) f()
       this.handle?.dispose()
       this.handle = null
@@ -850,6 +866,7 @@ export class LobbyBoardSession {
   }
 
   dispose(): void {
+    this.core.persistNow()
     for (const f of this.detach.splice(0)) f()
     this.peers.dispose()
     this.core.stop()

@@ -2262,6 +2262,7 @@ export class LobbyEngineCore implements EngineCore {
       return
     }
     if (!forced && this.inflight.length >= MAX_IN_FLIGHT_PUSHES) return
+    const seqBefore = this.seq
     let ops: Op[] = []
     let sent = new Map<string, Sent>()
     let bytes = 0
@@ -2357,6 +2358,9 @@ export class LobbyEngineCore implements EngineCore {
       }
     }
     flushOne()
+    // what was dirty is in flight now: the offline queue keeps it as a lost push from here on (a reload
+    // before its ack decides it as one, not as an unsent edit: V1 re-check, R4/R5 in the browser)
+    if (this.seq !== seqBefore) this.schedulePersist()
     // nothing was left to send for them: with nothing dirty, in flight or held, the scene goes back to the
     // server's copy exactly (its version and versionNonce; V1 N18)
     if (cleaned.length) {

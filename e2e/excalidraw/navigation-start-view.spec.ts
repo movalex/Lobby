@@ -262,10 +262,6 @@ test('a first visit right after the owner sets the start view lands on it (the r
   board,
   users,
 }) => {
-  test.fail(
-    true,
-    'defect (O1/O2): a fresh session within 5 s of a doc write gets lb_doc from the cached reset snapshot (room/element-room.ts snapshotFor; sync/core/engine.ts onSnapshot overwrites welcome.doc) and no catch-up of it',
-  )
   const a = await canvasSession('alice')
   await waitForNavigation(a.page)
   await seed(a.page, [
@@ -276,11 +272,12 @@ test('a first visit right after the owner sets the start view lands on it (the r
   // a fresh session right now makes the room cache its reset snapshot (without a start view)
   const c = await canvasSession('carol', { role: 'viewer' })
   await waitForNavigation(c.page)
-  const cam = { x: 2300, y: -80, zoom: 0.9 }
+  // a start view with content in it (one without content falls back to fit: 'start-view+fit')
+  const cam = { x: 2300, y: 1600, zoom: 0.9 }
   await setView(a.page, cam)
   expect(await navMenu(a.page, 'mainMenu', 'navigation.set-start-view')).toBe(true)
   await expectSaved(a.page)
-  // bob's first visit within the cache's 5 s
+  // bob's first visit within the cache's 5 s (DEF-3F-1: it got the cached snapshot's document)
   const b = await openPath(browser, await users.get('bob'), `/b/${board}`)
   try {
     expect(await docValue(b.page, 'startView')).not.toBeNull()

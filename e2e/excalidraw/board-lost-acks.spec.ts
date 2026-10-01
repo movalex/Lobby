@@ -11,13 +11,14 @@
 import { setLatency } from '../spike-b/support/relay.ts'
 import {
   createItem,
+  createNote,
+  dblclickItem,
   expect,
   expectSaved,
   item,
   itemText,
   saveState,
   test,
-  tool,
   updateItem,
   waitForCanvas,
   waitForItem,
@@ -25,7 +26,7 @@ import {
 } from '../tests/support/canvas.ts'
 import { leaseHook, openRelayedCanvasSession, storedElement } from '../tests/support/excalidraw.ts'
 import { focusBoard, settled } from './board-kit.ts'
-import { clickScene, waitForCanvasUx } from './canvas-ux-kit.ts'
+import { waitForCanvasUx } from './canvas-ux-kit.ts'
 
 test('P1: keys typed while the note’s lease is still pending keep Saved away; they land once it is granted', async ({
   canvasSession,
@@ -34,14 +35,13 @@ test('P1: keys typed while the note’s lease is still pending keep Saved away; 
 }) => {
   const a = await canvasSession('alice')
   await waitForCanvasUx(a.page)
-  await expectSaved(a.page)
+  // a note on the server (a new note's own editor opens at once: the New element rule)
+  const note = await settled(a.page, createNote(a.page, { x: 200, y: 200, text: '' }))
   await leaseHook(stack, board, { mode: 'hold' })
   try {
     await focusBoard(a.page)
-    await a.page.keyboard.press('n')
-    await expect.poll(() => tool(a.page)).toBe('note')
-    await clickScene(a.page, { x: 300, y: 300 })
-    // the note is created (and pushed); its editor waits for the held grant
+    await dblclickItem(a.page, note)
+    // the editor waits for the held grant
     await expect
       .poll(() =>
         a.page.evaluate(
@@ -62,8 +62,8 @@ test('P1: keys typed while the note’s lease is still pending keep Saved away; 
     await leaseHook(stack, board, { mode: 'release' })
     await leaseHook(stack, board, { mode: 'off' })
   }
-  const id = await waitForTextEditor(a.page)
-  await expect.poll(() => itemText(a.page, id)).toBe('abc')
+  await waitForTextEditor(a.page, note)
+  await expect.poll(() => itemText(a.page, note)).toBe('abc')
   await a.page.keyboard.press('Escape')
   await expectSaved(a.page)
 })
