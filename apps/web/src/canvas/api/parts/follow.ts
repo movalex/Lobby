@@ -52,6 +52,9 @@ export function followCamera(
   return { x: cx - screen.width / zoom / 2, y: cy - screen.height / zoom / 2, zoom }
 }
 
+/** When a resize re-fits again (ms after the board's `resize`): the engine applies the new size a task later. */
+const SETTLE_MS = [0, 120] as const
+
 const usable = (c: FollowCamera | null | undefined): c is FollowCamera =>
   !!c && Number.isFinite(c.x) && Number.isFinite(c.y) && Number.isFinite(c.zoom) && c.zoom > 0
 
@@ -129,6 +132,23 @@ export function createFollowPart(deps: PartDeps): FollowPart {
       if (to) canvas.viewport.set(to, { force: true })
     }
     reapply = () => untracked(apply)
+    // `apply` again a task later and once more a moment after (a resize the engine has not applied yet)
+    const settleTimers = new Set<ReturnType<typeof setTimeout>>()
+    const settle = () => {
+      for (const t of settleTimers) clearTimeout(t)
+      settleTimers.clear()
+      for (const ms of SETTLE_MS) {
+        const t = setTimeout(() => {
+          settleTimers.delete(t)
+          if (followed.get() === sid) untracked(apply)
+        }, ms)
+        settleTimers.add(t)
+      }
+    }
+    teardown.push(() => {
+      for (const t of settleTimers) clearTimeout(t)
+      settleTimers.clear()
+    })
     // the followed session's view, as its presence frames bring it; gone from the roster: stop
     teardown.push(
       react('canvas.follow.view', () => {
@@ -154,7 +174,16 @@ export function createFollowPart(deps: PartDeps): FollowPart {
         untracked(apply)
       }),
     )
-    teardown.push(canvas.on('resize', () => apply()))
+    // this canvas resized (a dock panel of this tab opened or closed, the window): re-fit, also once the
+    // engine has the new size. The board's `resize` comes from a ResizeObserver that runs before the
+    // engine's own, so the size it and `viewport.screenRect()` give in that callback can still be the old
+    // one; the engine has the new one a task later (W5-25: a follower who opened a panel sat off-centre)
+    teardown.push(
+      canvas.on('resize', () => {
+        apply()
+        settle()
+      }),
+    )
     // this person moving the camera themselves ends it
     teardown.push(
       canvas.on('input', (e) => {
