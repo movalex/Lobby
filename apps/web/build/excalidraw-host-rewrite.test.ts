@@ -68,6 +68,25 @@ test('a bare hostname literal that is not listed is reported as left over', () =
   assert.deepEqual(hostsInLiteral('"index.js"'), [])
 })
 
+test("the embed allowlist's bare Set entries val.town and *.simplepdf.eu are rewritten; .town and .eu count as hosts", () => {
+  // the removal's prod-build spec found `val.town` in the board chunk: neither host was listed, and the
+  // bare-host check knew neither TLD, so the build did not report them either
+  assert.equal(rewriteLiteral('"val.town"'), `"${BLOCKED_HOST}"`)
+  assert.equal(rewriteLiteral('"*.simplepdf.eu"'), `"${BLOCKED_HOST}"`)
+  assert.equal(rewriteLiteral('`*.simplepdf.eu`'), `\`${BLOCKED_HOST}\``)
+  assert.deepEqual(hostsInLiteral(rewriteLiteral('["val.town","*.simplepdf.eu"]')), [])
+  // a wildcard entry whose host is not rewritten is not rewritten by a shorter listed host (`x.com`)
+  assert.equal(rewriteLiteral('"*.example-x.com"'), '"*.example-x.com"')
+  assert.deepEqual(
+    hostsInLiteral('"cdn.somewhere.town"').map((h) => h.host),
+    ['cdn.somewhere.town'],
+  )
+  assert.deepEqual(
+    hostsInLiteral('"*.somewhere.eu"').map((h) => [h.host, h.kind]),
+    [['somewhere.eu', 'bare']],
+  )
+})
+
 test('package of a module id (pnpm and plain layouts)', () => {
   assert.equal(
     packageOfId(

@@ -78,6 +78,10 @@ export const REWRITTEN_HOSTS: readonly string[] = [
   'giphy.com',
   'vimeo.com',
   'youtu.be',
+  // the embed allowlist's two entries whose TLDs the bare-host check did not know (the removal's
+  // prod-build spec found `val.town` in the board chunk); `*.` before a host is part of the match
+  '*.simplepdf.eu',
+  'val.town',
 ]
   .slice()
   .sort((a, b) => b.length - a.length)
@@ -91,15 +95,20 @@ const DOT = '\\\\?\\.'
 /** `//` raw, or `\/\/` as in a regex source. */
 const SLASHES = '(?:\\\\?\\/){2}'
 /** Top-level domains a bare (non-URL) hostname must end with to count as one. */
-const TLDS = 'com|org|net|io|sh|gg|dev|app|be|tv|ly|me|co|so|ai|cloud|page|us|uk|de|fr|jp|cn|edu|gov|js'
+const TLDS =
+  'com|org|net|io|sh|gg|dev|app|be|tv|ly|me|co|so|ai|cloud|page|us|uk|de|fr|jp|cn|edu|gov|js|eu|town'
 
 const URL_HOST_RE = new RegExp(`(${SLASHES})(${LABEL}(?:${DOT}${LABEL})+)`, 'g')
 const HOST_END = `(?![A-Za-z0-9_-])(?!${DOT}[A-Za-z0-9])`
-const listedRe = (host: string) =>
-  new RegExp(`(?<![A-Za-z0-9_.\\\\-])${host.split('.').join(DOT)}${HOST_END}`, 'g')
+/** A listed host anywhere in a literal; a `*.` wildcard entry matches with its wildcard (`*.simplepdf.eu`). */
+const listedRe = (host: string) => {
+  const wild = host.startsWith('*.')
+  const body = (wild ? host.slice(2) : host).split('.').join(DOT)
+  return new RegExp(`(?<![A-Za-z0-9_.\\\\-])${wild ? `\\*${DOT}` : ''}${body}${HOST_END}`, 'g')
+}
 const LISTED_RES: readonly [string, RegExp][] = REWRITTEN_HOSTS.map((h) => [h, listedRe(h)])
-/** A whole literal that is just a hostname: "player.vimeo.com", 'excalidraw.com'. */
-const BARE_HOST_RE = new RegExp(`^((?:${LABEL}${DOT})+(?:${TLDS}))$`, 'i')
+/** A whole literal that is just a hostname: "player.vimeo.com", 'excalidraw.com', "*.simplepdf.eu". */
+const BARE_HOST_RE = new RegExp(`^(?:\\*${DOT})?((?:${LABEL}${DOT})+(?:${TLDS}))$`, 'i')
 
 const plain = (host: string) => host.replace(/\\/g, '').toLowerCase()
 /** Not a remote host: localhost, an IPv4 literal, or a file name (`.//index.js` in an import path). */
