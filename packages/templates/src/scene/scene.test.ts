@@ -15,6 +15,8 @@ import { instantiateTemplate } from '../index.ts'
 import { planBounds, planTemplate, TEMPLATE_INFOS } from '../plan.ts'
 import { collectObjects, rectContains, rectsOverlap, walkStrings } from '../test-utils.ts'
 import {
+  DISPLAY_FACE_AVAILABLE,
+  FONT_FAMILY,
   instantiateSceneTemplate,
   parseSceneTemplateContext,
   SCENE_MAX_ORIGIN,
@@ -247,7 +249,7 @@ describe.each(TEMPLATE_INFOS.map((t) => [t.id, t] as const))('%s on the new canv
     ).toBeGreaterThan(0)
     const labelIn = (m: Map<string, Any>, containerId: string) =>
       [...m.values()].find((e) => e.type === 'text' && e.containerId === containerId)
-    const found: Record<string, string[]> = {}
+    const found = new Map<string, string[]>()
     let compared = 0
     for (const [key, want] of cmap) {
       if (want.type === 'text' && want.containerId) continue
@@ -260,22 +262,53 @@ describe.each(TEMPLATE_INFOS.map((t) => [t.id, t] as const))('%s on the new canv
       const gl = labelIn(mine, key)
       expect(!!gl, `label of ${key}`).toBe(!!wl)
       if (wl && gl) d.push(...differences(wl, gl).map((x) => `label.${x}`))
-      if (d.length) found[String(wordsOf(aligned.elements, got as unknown as WireElement))] = d
+      if (d.length) found.set(key, d)
     }
     expect(compared).toBe(aligned.plan.nodes.length)
     expect(mine.size).toBe(cmap.size)
-    // the one deliberate difference: the tour's serif sample (the new canvas has no serif; see lobby-tour.ts)
-    const expected: Record<string, string[]> =
-      id === 'lobby-tour'
-        ? {
-            'Display · hand-drawn': [
-              'text "Display · serif" vs "Display · hand-drawn"',
-              'originalText "Display · serif" vs "Display · hand-drawn"',
-            ],
-            'Rise from the ashes': ['fontFamily 6 vs 5'],
-          }
-        : {}
-    expect(found).toEqual(expected)
+    // the deliberate differences, from the plan: the words the new canvas says its own way (the tour's
+    // type samples name their faces; its key bindings), and the display face of headings and title cards
+    // (decision D3). The measured layout of such a text or label follows its words and face; nothing else
+    // may differ.
+    const deliberate = new Map<string, { must: string[]; may: Set<string> }>()
+    for (const node of aligned.plan.nodes) {
+      const elId = aligned.idOf.get(node) ?? ''
+      if (node.kind === 'text') {
+        const words = (DISPLAY_FACE_AVAILABLE ? node.scene.displayText : null) ?? node.scene.text
+        const fontDiffers =
+          FONT_FAMILY[node.scene.font] !== FONT_FAMILY[node.font === 'display' ? 'sans' : node.font]
+        const must = [
+          ...(words !== node.text ? ['text', 'originalText'] : []),
+          ...(fontDiffers ? ['fontFamily'] : []),
+        ]
+        if (must.length) deliberate.set(elId, { must, may: new Set([...must, 'text', 'height']) })
+      }
+      if (node.kind === 'geo') {
+        const wordsDiffer = node.scene.text !== node.text
+        const fontDiffers = node.heading && FONT_FAMILY.display !== FONT_FAMILY.sans
+        const must = [
+          ...(wordsDiffer ? ['label.text', 'label.originalText'] : []),
+          ...(fontDiffers ? ['label.fontFamily'] : []),
+        ]
+        const layout = ['label.x', 'label.y', 'label.width', 'label.height', 'label.text']
+        if (must.length) deliberate.set(elId, { must, may: new Set([...must, ...layout]) })
+      }
+    }
+    const field = (d: string) => d.split(' ')[0] ?? d
+    const unexpected: Record<string, string[]> = {}
+    for (const [key, d] of found) {
+      const ok = deliberate.get(key)
+      const extra = d.filter((x) => !ok?.may.has(field(x)))
+      if (extra.length)
+        unexpected[String(wordsOf(aligned.elements, mine.get(key) as unknown as WireElement))] = extra
+    }
+    expect(unexpected).toEqual({})
+    for (const [key, { must }] of deliberate)
+      expect(found.get(key)?.map(field) ?? [], key).toEqual(expect.arrayContaining(must))
+    // the templates' deliberate differences are the tour's (its type samples and key bindings) and, once the
+    // server accepts the display face, every template's headings
+    if (id === 'lobby-tour') expect(deliberate.size).toBeGreaterThanOrEqual(5)
+    else if (!DISPLAY_FACE_AVAILABLE) expect(deliberate.size).toBe(0)
   })
 
   it("passes the converter's semantic diff against the tldraw build (mapping, frames, bounds, limits, anchors)", () => {
@@ -297,7 +330,14 @@ describe.each(TEMPLATE_INFOS.map((t) => [t.id, t] as const))('%s on the new canv
       if (!el) continue
       const want = aligned.plan.nodes.find((n) => aligned.idOf.get(n) === el.id)
       if (!want || want.kind === 'arrow') continue
-      const words = want.kind === 'frame' ? want.name : want.kind === 'text' ? want.scene.text : want.text
+      const words =
+        want.kind === 'frame'
+          ? want.name
+          : want.kind === 'text'
+            ? ((DISPLAY_FACE_AVAILABLE ? want.scene.displayText : null) ?? want.scene.text)
+            : want.kind === 'geo'
+              ? want.scene.text
+              : want.text
       expect(wordsOf(aligned.elements, el)).toBe(words)
     }
   })

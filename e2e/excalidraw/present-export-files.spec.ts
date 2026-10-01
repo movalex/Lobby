@@ -10,19 +10,24 @@
 //    names the engine draws above frames (the tldraw export drew them inside the margin);
 //  - the context menu is 3a's Lobby menu (the same test ids as tldraw's), on the ported entries;
 //  - ids are element ids (no `shape:` prefix), and the CSV's note colours come from the stored fill.
+import { join } from 'node:path'
 import type { Page } from '@playwright/test'
 import { waitForValue } from '../tests/support/board.ts'
 import {
   canvasCall,
   clickItem,
+  createItem,
   expect,
+  expectSaved,
   itemBounds,
   select,
   selection,
   selectNone,
   test,
+  waitForCanvas,
   zoomToFit,
 } from '../tests/support/canvas.ts'
+import { storedElement } from '../tests/support/excalidraw.ts'
 import { WEB_URL } from '../tests/support/ports.ts'
 import {
   collectDownloads,
@@ -42,9 +47,19 @@ import {
   watchTestId,
   writeClipboardText,
 } from '../tests/support/present-export.ts'
+import { FIXTURES_DIR } from '../tests/support/stack.ts'
 import type { Users } from '../tests/support/users.ts'
 import { emptyCanvasPoint } from './board-kit.ts'
-import { type DeckSpec, expectItems, NOTE_FILL, placeUploadedImage, seedDeck } from './present-kit.ts'
+import { cardItems, fileCard, insertFiles } from './media-kit.ts'
+import {
+  type DeckSpec,
+  expectItems,
+  NOTE_FILL,
+  placeUploadedImage,
+  pngRegionStats,
+  type Rgb,
+  seedDeck,
+} from './present-kit.ts'
 
 const F = { intro: 'pe-intro', backstage: 'pe-backstage', plan: 'pe-plan' }
 const N = { intro: 'pe-note-intro', plan: 'pe-note-plan' }
@@ -128,6 +143,11 @@ test.describe('image exports', () => {
       expect(svgRootName(text)).toBe('svg')
       const embedded = svgEmbeddedImages(text)
       expect(embedded.map((e) => e.mime)).toEqual(['image/webp']) // the preview derivative, not the PNG
+      // W5-37: the frame's note has tldraw's soft export shadow, not the engine's hard offset copy
+      // (fill-opacity 0.16) and 1 px edge (stroke-opacity 0.08)
+      expect(text).toMatch(/<path filter="url\(#lobby-note-shadow\)"[^>]* fill="#f6c453"/)
+      expect(text).toContain('<filter id="lobby-note-shadow"')
+      expect(text).not.toMatch(/fill-opacity="0\.16"|stroke-opacity="0\.08"/)
       expect(files.paths()).toContainEqual(expect.stringMatching(DERIVATIVE_PATH))
       files.clear()
     })
@@ -298,15 +318,137 @@ test.describe('image exports', () => {
   })
 })
 
+// D3 (REVIEW-W5-EARLY.md §9): template headings get Excalidraw's Lilita One (fontFamily 7), no new fonts
+// and no bold. The SVG export embeds the self-hosted face of every family its text uses (Lilita's woff2
+// is self-hosted with the others), so nothing in 3e's export changes for it; this check turns green once
+// the server's font allowlist takes 7 (2A and the contracts owner: canvas-schema elements.ts).
+test('D3: an SVG export embeds Lilita One for a heading in fontFamily 7', async ({
+  canvasSession,
+  stack,
+  board,
+}) => {
+  test.fail(true, 'D3 / 2A: the server refuses fontFamily 7 until the font allowlist takes it')
+  const a = await canvasSession('alice')
+  const id = await createItem(a.page, 'text', { x: 0, y: 0, text: 'Plan', fontFamily: 7, fontSize: 48 })
+  await expect
+    .poll(
+      async () => ((await storedElement(stack, board, id)) as { fontFamily?: number } | null)?.fontFamily,
+      {
+        timeout: 10_000,
+      },
+    )
+    .toBe(7)
+  await zoomToFit(a.page)
+  await a.page.getByTestId('export-button').click()
+  const dialog = a.page.getByTestId('export-dialog')
+  const svg = await downloadFrom(a.page, () => dialog.getByTestId('export-svg').click())
+  expect(svg.bytes.toString('utf8')).toMatch(
+    /@font-face \{ font-family: "Lilita One"; src: url\("data:font\/woff2;base64,/,
+  )
+})
+
+test.describe('file cards in exports', () => {
+  const FILES = ['document.pdf', 'video.mp4', 'notes.zip', 'encrypted.pdf'] as const
+  /** The footer's kind badge colours (file-card's CSS `.dr-fc__icon--*`). */
+  const BADGE: Record<string, Rgb> = { pdf: [179, 38, 30], video: [91, 60, 196], other: [31, 58, 95] }
+  const DANGER: Rgb = [163, 33, 26]
+
+  test('W5-14: a board PNG and SVG draw every file card in full: kind badge, name, size and status, the play button and the error, as on the board', async ({
+    canvasSession,
+  }) => {
+    test.setTimeout(240_000)
+    const a = await canvasSession('alice')
+    await insertFiles(
+      a.page,
+      FILES.map((f) => join(FIXTURES_DIR, f)),
+    )
+    for (const name of FILES)
+      await expect(fileCard(a.page, name)).toHaveAttribute(
+        'data-status',
+        name === 'encrypted.pdf' ? 'failed' : 'ready',
+        { timeout: 90_000 },
+      )
+    await zoomToFit(a.page)
+    await selectNone(a.page)
+    const cards = await cardItems(a.page)
+    expect(cards.map((c) => c.facts.name).sort()).toEqual([...FILES].sort())
+
+    const dialog = a.page.getByTestId('export-dialog')
+    await a.page.getByTestId('export-button').click()
+    await expect(dialog).toBeVisible()
+    await dialog.getByTestId('export-area-board').check()
+    await dialog.getByTestId('export-scale').selectOption('2')
+    const png = await downloadFrom(a.page, () => dialog.getByTestId('export-png').click())
+    const info = readPng(png.bytes)
+
+    // The board's export starts 32 px (the margin) above and left of the cards, at 2×.
+    const S = 2
+    const M = 32
+    const minX = Math.min(...cards.map((c) => c.x))
+    const minY = Math.min(...cards.map((c) => c.y))
+    const maxX = Math.max(...cards.map((c) => c.x + c.width))
+    expect(Math.abs(info.width - (maxX - minX + 2 * M) * S)).toBeLessThanOrEqual(2)
+    const at = (c: (typeof cards)[number], dx: number, dy: number, w: number, h: number) => ({
+      x: (c.x - minX + M + dx) * S,
+      y: (c.y - minY + M + dy) * S,
+      w: w * S,
+      h: h * S,
+    })
+
+    for (const c of cards) {
+      const kind = c.facts.kind
+      // the footer: the whole card for an attachment, else its bottom 56 px
+      const footerTop = kind === 'other' ? 0 : c.height - 56
+      const footerH = kind === 'other' ? c.height : 56
+      const badgeTop = footerTop + (footerH - 38) / 2
+      const [badge, text, status] = await pngRegionStats(a.page, png.bytes, [
+        { ...at(c, 13, badgeTop + 3, 28, 32), color: BADGE[kind] ?? BADGE.other },
+        at(c, 54, footerTop + 4, c.width - 64, footerH - 8),
+        { ...at(c, 54, footerTop + 4, c.width - 64, footerH - 8), color: DANGER },
+      ])
+      const name = c.facts.name
+      // the kind badge in its colour (the bare cover or the engine's grey placeholder before)
+      expect(badge?.near ?? 0, `${name}: kind badge`).toBeGreaterThan((badge?.total ?? 0) * 0.6)
+      // the name and the size · status line: ink on the card's white
+      expect(text?.ink ?? 0, `${name}: name and status`).toBeGreaterThan(40)
+      expect(text?.white ?? 0, `${name}: the footer's white`).toBeGreaterThan((text?.total ?? 0) * 0.4)
+      // "Preview failed" in the danger colour on the encrypted PDF only
+      if (name === 'encrypted.pdf') expect(status?.near ?? 0, `${name}: failed status`).toBeGreaterThan(20)
+      if (kind === 'video') {
+        // the play button: a dark disc (radius 26) in the middle of the poster, left of its white triangle
+        const [play] = await pngRegionStats(a.page, png.bytes, [
+          at(c, c.width / 2 - 20, (c.height - 56) / 2 - 6, 12, 12),
+        ])
+        expect(play?.ink ?? 0, 'video: play button').toBeGreaterThan((play?.total ?? 0) * 0.6)
+      }
+    }
+
+    // The SVG embeds one face per card (the zip and the encrypted PDF had none before: the engine drew
+    // its placeholder), and stays self-contained.
+    const svg = await downloadFrom(a.page, () => dialog.getByTestId('export-svg').click())
+    const text = svg.bytes.toString('utf8')
+    expect(svgRootName(text)).toBe('svg')
+    expect(svgEmbeddedImages(text)).toHaveLength(FILES.length)
+  })
+})
+
 test.describe('PDF export', () => {
   /** Presentation order set explicitly (Plan first), unlike the frames' left-to-right layout. */
+  // W5-30: one-word labels (the label is exactly the word's width in the canvas's font, so the PDF's
+  // wider Helvetica split it when it wrapped again) and a sentence the engine wraps over several lines.
+  const SENTENCE = 'Storyboard review with the client before delivery of the final cut'
   const PDF_DECK: DeckSpec = {
     frames: [
       { ...INTRO, index: 1 },
       { id: F.backstage, name: 'Backstage', x: 1000, y: 0, w: 720, h: 540, skip: true },
       { id: F.plan, name: 'Plan', x: 2000, y: 0, w: 640, h: 480, index: 0 },
     ],
-    notes: DECK.notes ?? [],
+    notes: [
+      ...(DECK.notes ?? []),
+      { id: 'pe-note-story', frame: F.intro, x: 540, y: 40, text: 'Story' },
+      { id: 'pe-note-delivery', frame: F.intro, x: 540, y: 260, text: 'Delivery' },
+      { id: 'pe-note-sentence', frame: F.intro, x: 40, y: 40, text: SENTENCE },
+    ],
   }
   const ORIGINAL_ROUTE = /\/files\/ast_[0-9A-Za-z]+\/ver_[0-9A-Za-z]+\/original/
 
@@ -389,6 +531,11 @@ test.describe('PDF export', () => {
       expect(texts[0]).toContain('Launch checklist')
       expect(texts[0]).not.toContain('Kickoff agenda')
       expect(texts[1]).toContain('Kickoff agenda')
+      // W5-30: every word of the page is whole in its text layer (a search for it finds it): the layer
+      // keeps the canvas's own lines instead of wrapping them again in the PDF's font.
+      const words = new Set(texts[1]?.split(/\s+/))
+      for (const word of ['Story', 'Delivery', ...SENTENCE.split(' ')])
+        expect(words, `"${word}" whole in the text layer: ${texts[1]}`).toContain(word)
       // Each page starts with its frame's title (the header band).
       expect(texts[0]?.startsWith('Plan')).toBe(true)
       expect(texts[1]?.startsWith('Intro')).toBe(true)
@@ -425,6 +572,39 @@ test.describe('PDF export', () => {
       expect(info.outline).toEqual([{ title: 'Backstage', page: 0 }])
     })
     expect(downloads).toEqual([`${title}.pdf`, `${title}.pdf`, `${title} - selected frames.pdf`])
+  })
+
+  test('W5-30: the Lobby tour as a PDF (DEMO 3:30): every label word is whole in the searchable text layer', async ({
+    canvasSession,
+    board,
+  }) => {
+    const a = await canvasSession('alice')
+    await a.page.goto(`/b/${board}?template=lobby-tour`)
+    await waitForCanvas(a.page)
+    await expect
+      .poll(async () => (await canvasCall(a.page, 'items')).filter((e) => e.type === 'frame').length, {
+        timeout: 30_000,
+      })
+      .toBeGreaterThanOrEqual(6)
+    await expectSaved(a.page)
+    await selectNone(a.page)
+    const dialog = a.page.getByTestId('export-dialog')
+    await a.page.getByTestId('export-button').click()
+    await expect(dialog).toBeVisible()
+    const pdf = await downloadFrom(a.page, () => dialog.getByTestId('export-pdf').click())
+    const words = new Set((await pdfPageTexts(pdf.bytes)).flatMap((t) => t.split(/\s+/)))
+    // the reviewers' searches ("Stor/y", "Brie/f", "Deliver/y" before), and the other one-word labels
+    for (const word of [
+      'Story',
+      'Brief',
+      'Delivery',
+      'Concepts',
+      'Production',
+      'Gameplay',
+      'Community',
+      'Changes',
+    ])
+      expect(words, `"${word}" whole in the PDF's text layer`).toContain(word)
   })
 
   test('Ctrl+P opens the PDF export focused on Download PDF, Delete inside the dialog keeps the selected note, and a viewer can download CSV and PDF', async ({

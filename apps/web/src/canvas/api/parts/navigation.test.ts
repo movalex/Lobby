@@ -1,11 +1,14 @@
 // 3b's camera members (./navigation.ts): the pure camera math, and the members on a bare port.
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { CanvasElement, CanvasPort, Viewport } from '../../port.ts'
 import { createLobbyCanvas } from '../impl.ts'
+import type { CameraMove, LobbyCanvas } from '../lobby-canvas.ts'
 import { createFeatureRegistries } from '../registries.ts'
 import {
+  cameraMove,
   centeredOn,
   contentBox,
+  createNavigationPart,
   ENGINE_MIN_ZOOM,
   elementBox,
   ensureVisibleCamera,
@@ -15,6 +18,8 @@ import {
   limitsFor,
   MAX_ZOOM,
   nextZoomStep,
+  prefersReducedMotion,
+  stepZoom,
   ZOOM_STEPS,
   zoomAround,
   zoomToCamera,
@@ -286,5 +291,115 @@ describe('the whole board in one pass, and Lobby’s own fit (wave 3b)', () => {
     canvas.viewport.fit(['e'])
     expect(v.zoom).toBe(1)
     expect(v.x + v.width / 2).toBeCloseTo(30_100)
+  })
+})
+
+describe('wave 5 review: steps never go the wrong way, ensure-visible keeps the zoom, reduced motion', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('W5-19: a step from below the floor: in goes to the floor, out stays put (never in)', () => {
+    const limits = { min: 0.069, max: MAX_ZOOM, steps: [0.069, ...ZOOM_STEPS] }
+    // tldraw's loop skips the first step from below it
+    expect(nextZoomStep(0.03, limits.steps, 'in')).toBe(0.069)
+    expect(stepZoom(0.03, limits, 'in')).toBe(0.069)
+    expect(stepZoom(0.03, limits, 'out')).toBe(0.03)
+    // a camera below 0.1 on a board whose floor is 0.1 (it shrank after a fit): out stays, in goes to 0.1
+    const small = { min: 0.1, max: MAX_ZOOM, steps: ZOOM_STEPS }
+    expect(stepZoom(0.069, small, 'out')).toBe(0.069)
+    expect(stepZoom(0.069, small, 'in')).toBe(0.1)
+    // above the top step (the engine's own wheel goes to 30): in stays, out comes down
+    expect(stepZoom(20, small, 'in')).toBe(20)
+    expect(stepZoom(20, small, 'out')).toBe(4)
+    expect(stepZoom(1, small, 'in')).toBe(2)
+    expect(stepZoom(1, small, 'out')).toBe(0.5)
+  })
+
+  it('W5-21: ensure visible keeps the zoom for a target that fits the view (the margin gives way), zooms out only for a larger one', () => {
+    const v: Viewport = { x: 0, y: 0, width: 1000, height: 600, zoom: 1 }
+    const limits = { min: 0.05, max: 8 }
+    // 960 wide: fits, but not with 64 px on each side: centred at the same zoom
+    const wide = ensureVisibleCamera(v, { x: 1500, y: 100, width: 960, height: 100 }, 64, limits)
+    expect(wide?.zoom).toBe(1)
+    expect(wide && wide.x + v.width / 2).toBeCloseTo(1500 + 480)
+    // and once centred it stays (no second move from float noise)
+    expect(
+      ensureVisibleCamera({ ...v, x: 1980 - 500 }, { x: 1500, y: 100, width: 960, height: 100 }, 64, limits),
+    ).toBeNull()
+    // larger than the view: zoomed out, never in
+    expect(ensureVisibleCamera(v, { x: 0, y: 0, width: 1200, height: 100 }, 64, limits)?.zoom).toBeLessThan(1)
+    // a camera below the floor is not zoomed in to the floor by a large target
+    const deep: Viewport = { x: 0, y: 0, width: 1000 / 0.02, height: 600 / 0.02, zoom: 0.02 }
+    const huge = ensureVisibleCamera(deep, { x: 0, y: 0, width: 200_000, height: 10 }, 16, limits)
+    expect(huge?.zoom).toBeLessThanOrEqual(0.02)
+  })
+
+  it('W5-21: reduced motion makes every animated move immediate, the other options kept', () => {
+    expect(cameraMove({ animate: true, force: true }, true)).toEqual({ animate: false, force: true })
+    expect(cameraMove({ animate: { durationMs: 280 } }, true)).toEqual({ animate: false })
+    expect(cameraMove({ animate: true }, false)).toEqual({ animate: true })
+    expect(cameraMove(undefined, true)).toBeUndefined()
+    expect(prefersReducedMotion()).toBe(false) // no matchMedia in Node
+    vi.stubGlobal('matchMedia', (q: string) => ({ matches: q === '(prefers-reduced-motion: reduce)' }))
+    expect(prefersReducedMotion()).toBe(true)
+  })
+
+  it('W5-21: the members never animate under reduced motion (zoomStep, zoomTo, centerOn, ensureVisible, fit)', () => {
+    const els = [
+      { id: 'a', type: 'rectangle', x: 0, y: 0, width: 100, height: 100 },
+      { id: 'far', type: 'rectangle', x: 5000, y: 0, width: 100, height: 100 },
+    ].map((e) => ({
+      angle: 0,
+      groupIds: [],
+      frameId: null,
+      isDeleted: false,
+      ...e,
+    })) as unknown as CanvasElement[]
+    let v: Viewport = { x: 0, y: 0, width: 1000, height: 600, zoom: 1 }
+    const moves: (CameraMove | undefined)[] = []
+    // the part on a canvas whose viewport.set keeps the options (the board page's does; a bare port drops them)
+    const self = {
+      items: () => els,
+      isHidden: () => false,
+      bounds: (id: string) => {
+        const e = els.find((x) => x.id === id)
+        return e ? { x: e.x, y: e.y, width: e.width, height: e.height } : null
+      },
+      screenToScene: (q: { x: number; y: number }) => ({ x: q.x / v.zoom + v.x, y: q.y / v.zoom + v.y }),
+      viewport: {
+        get: () => v,
+        set: (next: Partial<Viewport>, opts?: CameraMove) => {
+          moves.push(opts)
+          const zoom = next.zoom ?? v.zoom
+          v = {
+            x: next.x ?? v.x,
+            y: next.y ?? v.y,
+            width: (v.width * v.zoom) / zoom,
+            height: (v.height * v.zoom) / zoom,
+            zoom,
+          }
+        },
+      },
+    } as unknown as LobbyCanvas
+    const part = createNavigationPart({
+      port: {} as CanvasPort,
+      registries: createFeatureRegistries(),
+      self: () => self,
+    })
+    const run = () => {
+      v = { x: 0, y: 0, width: 1000, height: 600, zoom: 1 }
+      part.zoomStep('in', undefined, { animate: true })
+      part.zoomTo({ x: 0, y: 0, width: 100, height: 100 }, { animate: { durationMs: 260 } })
+      part.centerOn({ x: 50, y: 50 }, { animate: true })
+      part.ensureVisible(['far'], { animate: true })
+      part.fit(undefined, { animate: true })
+    }
+    run()
+    expect(moves.map((o) => !!o?.animate)).toEqual([true, true, true, true, true])
+    moves.length = 0
+    vi.stubGlobal('matchMedia', (q: string) => ({ matches: q === '(prefers-reduced-motion: reduce)' }))
+    run()
+    expect(moves.map((o) => o?.animate)).toEqual([false, false, false, false, false])
   })
 })

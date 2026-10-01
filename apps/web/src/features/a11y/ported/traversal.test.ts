@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { type Bounds, type LobbyCanvas, NotImplementedError } from '../../../canvas/api/index.ts'
 import { sheetTools } from './PhoneSheet.tsx'
 import { frame, input, note } from './test-kit.ts'
@@ -20,6 +20,8 @@ function fakeCanvas(elements = board(), opts: { ensureVisible?: boolean } = {}) 
     focused: 0,
     sets: [] as { x?: number; y?: number }[],
     ensured: [] as string[][],
+    /** the animate option of every camera move, in order */
+    animated: [] as (boolean | undefined)[],
   }
   const canvas = {
     items: () => elements.filter((e) => !(e as { isDeleted?: boolean }).isDeleted),
@@ -49,12 +51,14 @@ function fakeCanvas(elements = board(), opts: { ensureVisible?: boolean } = {}) 
     },
     viewport: {
       get: () => state.view,
-      set: (v: { x?: number; y?: number }) => {
+      set: (v: { x?: number; y?: number }, o?: { animate?: boolean }) => {
+        state.animated.push(o?.animate)
         state.sets.push(v)
         state.view = { ...state.view, ...v }
       },
-      ensureVisible: (ids: readonly string[]) => {
+      ensureVisible: (ids: readonly string[], o?: { animate?: boolean }) => {
         if (!opts.ensureVisible) throw new NotImplementedError('3b', 'viewport.ensureVisible')
+        state.animated.push(o?.animate)
         state.ensured.push([...ids])
       },
     },
@@ -126,6 +130,42 @@ describe('keyboard traversal', () => {
     bringIntoView(real.canvas, ['far'])
     expect(real.state.ensured).toEqual([['far']])
     expect(real.state.sets).toEqual([])
+  })
+
+  describe('reduced motion (W5-21)', () => {
+    afterEach(() => vi.unstubAllGlobals())
+    const prefers = (reduce: boolean) =>
+      vi.stubGlobal('matchMedia', (q: string) => ({
+        matches: reduce && q.includes('prefers-reduced-motion: reduce'),
+        media: q,
+      }))
+
+    it('a move into view glides normally and jumps when the person prefers reduced motion', () => {
+      prefers(false)
+      const glide = fakeCanvas(board(), { ensureVisible: true })
+      bringIntoView(glide.canvas, ['far'])
+      selectAdjacent(glide.canvas, 'next')
+      expect(glide.state.animated).toEqual([true, true])
+
+      prefers(true)
+      const jump = fakeCanvas(board(), { ensureVisible: true })
+      bringIntoView(jump.canvas, ['far'])
+      selectAdjacent(jump.canvas, 'next')
+      enterCanvas(fakeCanvas(board(), { ensureVisible: true }).canvas)
+      expect(jump.state.animated).toEqual([false, false])
+      // the stand-in re-centre while 3b's member is a stub jumps too
+      const stub = fakeCanvas()
+      bringIntoView(stub.canvas, ['far'])
+      expect(stub.state.animated).toEqual([false])
+    })
+
+    it('entering the board (F6) brings the first item into view without motion', () => {
+      prefers(true)
+      const far = fakeCanvas([...note('only', 5000, 3000, 'Far away')], { ensureVisible: true })
+      expect(enterCanvas(far.canvas)).toBe(true)
+      expect(far.state.ensured).toEqual([['only']])
+      expect(far.state.animated).toEqual([false])
+    })
   })
 
   it('on screen means inside the view, a margin in (or filling it)', () => {

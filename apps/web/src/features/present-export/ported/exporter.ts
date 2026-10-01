@@ -232,6 +232,9 @@ const alignOf = (v: unknown): Align => (v === 'center' ? 'middle' : v === 'right
 
 /** Elements that hide what is under them on a page (photos, file-card faces). */
 const OCCLUDING_TYPES = new Set(['image'])
+/** A file card face's footer height and where its name starts (file-card's CSS: 10 + 34 + 10 px). */
+const CARD_FOOTER_PX = 56
+const CARD_NAME_LEFT_PX = 54
 
 /**
  * The hidden text layer of one PDF page: every text element (free text and labels: their own box,
@@ -271,9 +274,14 @@ export function pageTexts(
         text?: string
         fontSize?: number
         textAlign?: string
+        lineHeight?: number
       }
-      const text = (t.originalText ?? t.text ?? '').trim()
-      if (!text) continue
+      // W5-30: the engine's own lines (`text` is `originalText` wrapped to the element's width), drawn
+      // line by line: the PDF's Helvetica is wider than the canvas's fonts, so wrapping again in the box
+      // split words ("Stor" / "y") and a search for them found nothing.
+      const wrapped = typeof t.text === 'string' && t.text.trim() ? t.text : (t.originalText ?? '')
+      const text = wrapped.trimEnd()
+      if (!text.trim()) continue
       items.push({
         ...base,
         text,
@@ -281,17 +289,25 @@ export function pageTexts(
         align: alignOf(t.textAlign),
         verticalAlign: 'start',
         inset: 0,
+        lines: true,
+        ...(typeof t.lineHeight === 'number' && t.lineHeight > 0 ? { lineHeight: t.lineHeight } : {}),
       })
     } else if (x.el.type === 'image') {
       const f = x.el.customData?.lobby?.file as { kind?: unknown; name?: unknown } | undefined
       if (!f || f.kind === 'image' || typeof f.name !== 'string' || !f.name.trim()) continue
+      // The name sits in the card face's footer (the export draws the face: canvas/api/parts/export-faces.ts):
+      // the bottom 56 px, right of the 34 px kind badge; an attachment's footer is the whole card.
+      const footer = f.kind === 'other' ? base.h : Math.min(base.h, CARD_FOOTER_PX)
       items.push({
-        ...base,
+        x: base.x + CARD_NAME_LEFT_PX,
+        y: base.y + base.h - footer,
+        w: Math.max(1, base.w - CARD_NAME_LEFT_PX - 10),
+        h: footer,
         text: f.name.trim(),
-        fontSizePx: 14,
+        fontSizePx: 13.5,
         align: 'start',
-        verticalAlign: 'start',
-        inset: 12,
+        verticalAlign: 'middle',
+        inset: 0,
       })
     }
   }

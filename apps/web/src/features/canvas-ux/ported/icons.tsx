@@ -2,6 +2,7 @@
 // icons on a 24px grid in currentColor, like ../icons.tsx (which keeps the dock, selection bar and lock
 // icons, reused here).
 import type { ComponentType, ReactNode } from 'react'
+import { POLYGON_TOOLS, type PolygonKind, polygonPoints } from './polygons.ts'
 
 function Svg({ children, size = 18 }: { children: ReactNode; size?: number }) {
   return (
@@ -131,6 +132,30 @@ export const ChevronRightIcon = () => (
   </Svg>
 )
 
+/** D4: a polygon tool's icon, its own outline in the icon box (3 to 21; block arrows less tall). */
+function polygonIcon(kind: PolygonKind): ComponentType {
+  const flat = kind === 'arrow-left' || kind === 'arrow-right'
+  const tall = kind === 'arrow-up' || kind === 'arrow-down'
+  const w = tall ? 12 : 18
+  const h = flat ? 12 : 18
+  const x0 = (24 - w) / 2
+  const y0 = (24 - h) / 2
+  const d = `M${polygonPoints(kind, w, h)
+    .map(([x, y]) => `${(x0 + x).toFixed(2)} ${(y0 + y).toFixed(2)}`)
+    .join('L')}Z`
+  const Icon = () => (
+    <Svg>
+      <path d={d} />
+    </Svg>
+  )
+  Icon.displayName = `PolygonIcon(${kind})`
+  return Icon
+}
+
+export const POLYGON_ICONS: Readonly<Record<string, ComponentType>> = Object.fromEntries(
+  POLYGON_TOOLS.map((t) => [t.id, polygonIcon(t.id)]),
+)
+
 /** Built-in tool → its icon. */
 export const TOOL_ICONS: Readonly<Record<string, ComponentType>> = {
   select: SelectIcon,
@@ -148,4 +173,5 @@ export const TOOL_ICONS: Readonly<Record<string, ComponentType>> = {
   eraser: EraserIcon,
   laser: LaserIcon,
   lasso: LassoIcon,
+  ...POLYGON_ICONS,
 }

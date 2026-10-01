@@ -490,6 +490,12 @@ export interface LobbyFiles {
   status(id: string): 'loading' | 'loaded' | 'failed' | null
   /** @owner 3g · putExternalContent({type: 'files'}): uploads and places files like a drop (Ctrl+U) */
   insert(files: readonly File[], at?: ScenePoint): Promise<readonly string[]>
+  /**
+   * @owner 3g · tldraw's crop mode (setCroppingShape, select.crop): opens the engine's crop editor on an
+   * image or placed page (selecting it), on its thumb, so the crop is written in the pixels every tab
+   * loads; false when it cannot (no such image, a file card, read-only, locked). Optional: CR-W5-3G-1.
+   */
+  crop?(id: string): boolean
 }
 
 export interface LobbySettings {

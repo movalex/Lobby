@@ -238,3 +238,145 @@ test('collapsed (hidden) items are skipped by Alt+Arrow and left out of the live
     )
     .toEqual(['Sticky note: One', 'Sticky note: Three'])
 })
+
+// ---- the early wave-5 review (docs/research/excalidraw/REVIEW-W5-EARLY.md) ------------------------------------
+
+test('W5-45: the board shows a focus ring when the keyboard arrives (Tab, F6, Escape out of a note), and none after a click', async ({
+  canvasSession,
+}, testInfo) => {
+  const a = await canvasSession('alice')
+  await waitForA11y(a.page)
+  const id = await note(a.page, 0, 0, 'Ring me')
+  await zoomToFit(a.page)
+  const ring = a.page.getByTestId('canvas-focus-ring')
+  // opening the board puts the keyboard on it without a ring (no key was pressed)
+  await expect.poll(() => boardHasFocus(a.page)).toBe(true)
+  await expect(ring).toHaveCount(0)
+
+  await test.step('Tab from the dock reaches the board: the ring is drawn on top of the drawing', async () => {
+    await a.page.getByTestId('dock-add-note').focus()
+    for (let i = 0; i < 6 && !(await boardHasFocus(a.page)); i++) await a.page.keyboard.press('Tab')
+    await expect.poll(() => boardHasFocus(a.page)).toBe(true)
+    await expect(ring).toBeVisible()
+    const shadow = await ring.evaluate((el) => getComputedStyle(el).boxShadow)
+    expect(shadow).toContain('inset')
+    // it covers the canvas region and lets every click through
+    const [r, c] = await Promise.all([
+      ring.boundingBox(),
+      a.page.locator('[data-lobby-board-canvas]').boundingBox(),
+    ])
+    expect(r && c && Math.abs(r.width - c.width) < 2 && Math.abs(r.height - c.height) < 2).toBe(true)
+    expect(await ring.evaluate((el) => getComputedStyle(el).pointerEvents)).toBe('none')
+    await a.page.screenshot({ path: testInfo.outputPath('w5-45-focus-ring.png') })
+  })
+
+  await test.step('a click on the board takes the ring away; F6 from the top bar brings it back', async () => {
+    const c = await a.page.locator('[data-lobby-board-canvas]').boundingBox()
+    if (!c) throw new Error('no canvas')
+    await a.page.mouse.click(c.x + c.width - 60, c.y + 60)
+    await expect(ring).toHaveCount(0)
+    await a.page.getByTestId('share-button').focus()
+    await expect(ring).toHaveCount(0)
+    await a.page.keyboard.press('F6')
+    await expect.poll(() => boardHasFocus(a.page)).toBe(true)
+    await expect(ring).toBeVisible()
+  })
+
+  await test.step('W5-59: the note editor is named after what it edits; Escape out of it shows the ring again', async () => {
+    await select(a.page, [id])
+    await a.page.keyboard.press('Enter')
+    await waitForTextEditor(a.page, id)
+    await expect(ring).toHaveCount(0)
+    await expect(a.page.locator('textarea.excalidraw-wysiwyg')).toHaveAttribute(
+      'aria-label',
+      'Sticky note text',
+    )
+    await a.page.keyboard.press('Escape')
+    await expect.poll(() => boardHasFocus(a.page)).toBe(true)
+    await expect(ring).toBeVisible()
+  })
+})
+
+test('W5-21: with reduced motion, Alt+Arrow and F6 bring an item into view in one jump, at the same zoom', async ({
+  canvasSession,
+}) => {
+  const a = await canvasSession('alice')
+  await a.page.emulateMedia({ reducedMotion: 'reduce' })
+  await waitForA11y(a.page)
+  const near = await note(a.page, 0, 0, 'Near')
+  const far = await note(a.page, 6000, 3000, 'Far away')
+  await setViewport(a.page, { x: -200, y: -200, zoom: 1 })
+  await select(a.page, [near])
+  await focusCanvas(a.page)
+  // every camera position the board shows, frame by frame, for the next 700 ms
+  const cameras = () =>
+    withCanvas(
+      a.page,
+      (c) =>
+        new Promise<string[]>((done) => {
+          const seen: string[] = []
+          const t0 = performance.now()
+          const tick = () => {
+            const v = c.viewport.get()
+            const k = `${Math.round(v.x)},${Math.round(v.y)},${v.zoom.toFixed(3)}`
+            if (seen[seen.length - 1] !== k) seen.push(k)
+            if (performance.now() - t0 < 700) requestAnimationFrame(tick)
+            else done(seen)
+          }
+          tick()
+        }),
+      null,
+    )
+  const sampled = cameras()
+  await a.page.keyboard.press('Alt+ArrowRight')
+  const seen = await sampled
+  expect(await selected(a.page)).toEqual([far])
+  // the start and where it lands: no frames in between
+  expect(seen.length, seen.join(' → ')).toBeLessThanOrEqual(2)
+  expect(seen.at(-1)?.endsWith(',1.000')).toBe(true)
+  const v = await viewport(a.page)
+  expect(v.zoom).toBe(1)
+  expect(6000 >= v.x && 6200 <= v.x + v.width).toBe(true)
+
+  // F6 with nothing selected: the first item, brought into view the same way
+  await withCanvas(a.page, (c) => c.select([]), null)
+  await a.page.getByTestId('share-button').focus()
+  const again = cameras()
+  await a.page.keyboard.press('F6')
+  const seen2 = await again
+  expect(await selected(a.page)).toEqual([near])
+  expect(seen2.length, seen2.join(' → ')).toBeLessThanOrEqual(2)
+  expect((await viewport(a.page)).zoom).toBe(1)
+})
+
+test('W5-59: inside a frame a heading is read before the shorter line under it', async ({
+  canvasSession,
+}) => {
+  const a = await canvasSession('alice')
+  await waitForA11y(a.page)
+  const retro = await frame(a.page, 0, 0, 900, 500, 'Retro')
+  // a wide heading and, under it, a short subtitle: their centres are less than 100 px apart, and the
+  // subtitle's centre is left of the heading's (tldraw's row rule read the subtitle first)
+  const heading = await textItem(a.page, 40, 30, 'What went well this sprint', { fontSize: 40 })
+  const subtitle = await textItem(a.page, 40, 90, 'Wins and habits')
+  const card = await note(a.page, 40, 200, 'First win')
+  await intoFrame(a.page, [heading, subtitle, card], retro)
+  await zoomToFit(a.page)
+  const [h, s] = await Promise.all([
+    withCanvas(a.page, (c, id) => c.bounds(id), heading),
+    withCanvas(a.page, (c, id) => c.bounds(id), subtitle),
+  ])
+  if (!h || !s) throw new Error('no bounds')
+  expect(Math.abs(h.y + h.height / 2 - (s.y + s.height / 2))).toBeLessThan(100)
+  expect(s.x + s.width / 2).toBeLessThan(h.x + h.width / 2)
+
+  await select(a.page, [retro])
+  await focusCanvas(a.page)
+  await a.page.keyboard.press('ControlOrMeta+Shift+ArrowDown')
+  expect(await selected(a.page)).toEqual([heading])
+  await expect(announcer(a.page)).toHaveText('Text: What went well this sprint. 1 of 3 in Retro')
+  await a.page.keyboard.press('Alt+ArrowRight')
+  expect(await selected(a.page)).toEqual([subtitle])
+  await a.page.keyboard.press('Alt+ArrowRight')
+  expect(await selected(a.page)).toEqual([card])
+})

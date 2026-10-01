@@ -175,6 +175,8 @@ export class MindmapRuntime {
   private remoteTimer: ReturnType<typeof setTimeout> | null = null
   private flushQueued = false
   private lastEditing: string | null = null
+  /** W5-44: the topic whose editor Escape is closing (it stays selected, as on the tldraw page) */
+  private escaped: string | null = null
   private unhide: (() => void) | null = null
   private hiddenKey = ''
   private disposers: (() => void)[] = []
@@ -200,6 +202,9 @@ export class MindmapRuntime {
     this.disposers.push(
       canvas.on('change', (c) => this.onChange(c)),
       canvas.on('editingChanged', (id) => this.onEditingChanged(id)),
+      canvas.on('input', (e) => {
+        if (e.type === 'key-down' && e.key === 'Escape') this.escaped = canvas.editingId()
+      }),
       // the keeper's gate: a flush waiting for a gesture or an editor runs once they are over
       react('mindmap.keeper-gate', () => {
         const blocked = this.blocked()
@@ -1371,8 +1376,10 @@ export class MindmapRuntime {
     const prev = this.lastEditing
     this.lastEditing = id
     if (id !== null || this.disposed) return
+    const byEscape = prev !== null && this.escaped === prev
+    this.escaped = null
     untracked(() => {
-      if (prev && this.isTopic(prev)) this.editorClosed(prev)
+      if (prev && this.isTopic(prev)) this.editorClosed(prev, byEscape)
     })
     const waiters = [...this.closeWaiters]
     this.closeWaiters.clear()
@@ -1390,9 +1397,14 @@ export class MindmapRuntime {
    * back as if it never was, and its parent is selected again. Otherwise its size follows its text and the
    * map is laid out again, inside the typing's undo step.
    */
-  private editorClosed(id: string) {
+  private editorClosed(id: string, byEscape = false) {
     const meta = this.index.topics.get(id)
     if (!meta || !this.canEdit()) return
+    // W5-44: Escape leaves the topic selected, so the arrow keys go on from it. The engine clears the
+    // selection when an editor it did not open from a click closes (a person's pace: the keys' own replay
+    // kept it); a selection made meanwhile (a click elsewhere ends the typing too) is left alone.
+    if (byEscape && this.canvas.selection.length === 0 && isLive(this.canvas.get(id)))
+      this.canvas.select([id])
     const fresh = this.fresh
     if (fresh && fresh.id === id) this.fresh = null
     const empty = this.textOf(id).trim() === '' && (this.index.children.get(id)?.size ?? 0) === 0

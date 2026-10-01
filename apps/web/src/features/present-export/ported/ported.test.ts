@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest'
 import type { CanvasElement, LobbyCanvas } from '../../../canvas/api/index.ts'
 import { exportBadges, exportOrigin, shiftBadges, svgWithBadges } from './badges.ts'
 import { boardCsv, csvRowCount } from './csv.ts'
+import { pageTexts } from './exporter.ts'
 import { containersOf, frameOutline, presentationOrder, slidesOf } from './frames.ts'
 import { viewportFor } from './presenter.ts'
 
@@ -145,6 +146,67 @@ describe('badges in an export', () => {
       badges,
     )
     expect(svg).toMatch(/<g data-dr-vote-results="">.*<\/g><\/svg>$/)
+  })
+})
+
+describe('the PDF text layer on elements', () => {
+  it("W5-30: a label's lines are the engine's wrapped lines, kept whole; a file card's name sits in its footer", () => {
+    const items = [
+      el({
+        id: 'n',
+        type: 'stickynote',
+        x: 0,
+        y: 0,
+        width: 200,
+        height: 200,
+        boundElements: [{ id: 'n.t', type: 'text' }],
+      }),
+      el({
+        id: 'n.t',
+        type: 'text',
+        x: 20,
+        y: 60,
+        width: 160,
+        height: 75,
+        containerId: 'n',
+        // the engine wrapped `originalText` to the label's width; a PDF re-wrap split these words
+        text: 'Story Brief\nDelivery plan',
+        originalText: 'Story Brief Delivery plan',
+        fontSize: 20,
+        lineHeight: 1.25,
+        textAlign: 'center',
+      }),
+      el({
+        id: 'card',
+        type: 'image',
+        x: 300,
+        y: 0,
+        width: 260,
+        height: 356,
+        fileId: 'ver_0123456789abcdefghij',
+        customData: { lobby: { file: { kind: 'pdf', name: 'Brief.pdf' } } },
+      }),
+    ]
+    const byId = new Map(items.map((e) => [e.id, e]))
+    const canvas = {
+      items: () => items,
+      visibleBounds: (id: string) => {
+        const e = byId.get(id)
+        return e ? { x: e.x, y: e.y, width: e.width, height: e.height } : null
+      },
+    } as unknown as LobbyCanvas
+    const texts = pageTexts(canvas, items, { x: 0, y: 0, width: 1000, height: 1000 })
+    expect(texts).toHaveLength(2)
+    expect(texts[0]).toMatchObject({
+      text: 'Story Brief\nDelivery plan',
+      lines: true,
+      lineHeight: 1.25,
+      align: 'middle',
+      x: 20,
+      y: 60,
+      w: 160,
+    })
+    expect(texts[1]).toMatchObject({ text: 'Brief.pdf', x: 354, y: 300, h: 56, verticalAlign: 'middle' })
   })
 })
 

@@ -96,3 +96,8 @@ export const gridSession = perCanvas<GridSession | null>('nav-grid-session', () 
 // ---- frames panel (DANA2-03): the frame a row click last went to (a second click selects it)
 
 export const lastFrameJump = perCanvas<string | null>('nav-frame-jump', () => null)
+
+// ---- the selection this feature made by code (W5-39): a deep link's or a search result's elements, while
+// they are still exactly the selection (./ViewHelpers.tsx outlines the connectors among them)
+
+export const codeSelection = perCanvas<readonly string[]>('nav-code-selection', () => [])

@@ -17,7 +17,15 @@ import { usePresenting } from './presenting.ts'
 import { PrivateNotesReminder, PrivateNotesStartPrompt } from './private-notes/PrivateNotesBar.tsx'
 import { ReactionBursts } from './Reactions.tsx'
 import type { WorkshopStore } from './store.ts'
-import { badgeScale, clusterBadges, readingOrder, shapeLabel, topResults } from './voting.ts'
+import {
+  badgeScale,
+  clusterBadges,
+  notInVoteText,
+  readingOrder,
+  shapeLabel,
+  topResults,
+  voteClick,
+} from './voting.ts'
 import { StopwatchIcon } from './WorkshopBar.tsx'
 
 interface Placed {
@@ -204,12 +212,19 @@ const INTERACTIVE = 'a, button, input, textarea, select, iframe, [contenteditabl
  * or on non-eligible objects go to tldraw as usual; plain clicks select, move and edit again after
  * "I'm done", "Skip" or once voting ends.
  * The hand tool never selects, so its clicks are read from the editor's own events.
+ *
+ * The object a click lands on is the topmost one under it (W5-03): the hit test takes no filter. When
+ * the vote does not take it (a note outside the vote's frame on top of one inside, a shape over a note in
+ * a notes-only vote), the click casts nothing, never a vote for the object hidden underneath, and a click
+ * without a drag says "Not part of this vote".
  */
 function ClickToVote({ ctx, store }: { ctx: FeatureContext; store: WorkshopStore }) {
   const rule = useRule(store)
   const cast = useCast(ctx, store)
   const castRef = useRef(cast)
   castRef.current = cast
+  const notifyRef = useRef(ctx.notify)
+  notifyRef.current = ctx.notify
   useEffect(() => {
     if (!rule) return
     const editor = ctx.editor
@@ -217,13 +232,25 @@ function ClickToVote({ ctx, store }: { ctx: FeatureContext; store: WorkshopStore
     const win = container.ownerDocument.defaultView ?? window
     const lookup = editorLookup(editor)
     const last = { id: '', at: 0 }
-    const eligibleAt = (screen: { x: number; y: number }) =>
-      editor.getShapeAtPoint(editor.screenToPage(screen), {
-        hitInside: true,
-        hitLabels: true,
-        hitLocked: true,
-        filter: (s) => isVoteEligible(s.id, lookup, rule),
+    const clickAt = (screen: { x: number; y: number }) =>
+      voteClick(
+        editor.getShapeAtPoint(editor.screenToPage(screen), {
+          hitInside: true,
+          hitLabels: true,
+          hitLocked: true,
+        }),
+        (s) => isVoteEligible(s.id, lookup, rule),
+      )
+    const notInVote = () => {
+      const frame =
+        rule.scope === 'frame' && rule.frameId ? shapeLabel(editor.getShape(rule.frameId as TLShapeId)) : null
+      notifyRef.current({
+        key: 'vote-cast',
+        text: notInVoteText(rule, frame),
+        testId: 'vote-toast',
+        timeoutMs: 3500,
       })
+    }
     const vote = (shapeId: string) => {
       const t = performance.now()
       if (last.id === shapeId && t - last.at < SAME_SHAPE_DEBOUNCE_MS) return // a double-click is one vote
@@ -236,20 +263,33 @@ function ClickToVote({ ctx, store }: { ctx: FeatureContext; store: WorkshopStore
 
     // select tool: claim the press before tldraw sees it
     let pressed: { pointerId: number; x: number; y: number; shapeId: string } | null = null
+    let other: { pointerId: number; x: number; y: number } | null = null
     const onDown = (e: PointerEvent) => {
       pressed = null
+      other = null
       if (e.button !== 0 || !e.isPrimary || !plain(e)) return
       if (editor.getCurrentToolId() !== 'select' || editor.getEditingShapeId()) return
       const target = e.target instanceof Element ? e.target : null
       if (!target?.closest('.tl-canvas') || target.closest(INTERACTIVE)) return
-      const shape = eligibleAt({ x: e.clientX, y: e.clientY })
-      if (!shape) return
+      const click = clickAt({ x: e.clientX, y: e.clientY })
+      if (click.kind === 'none') return
+      if (click.kind === 'not-in-vote') {
+        // tldraw selects or moves it as usual; a click without a drag says why nothing was cast.
+        other = { pointerId: e.pointerId, x: e.clientX, y: e.clientY }
+        return
+      }
       editor.markEventAsHandled(e)
-      pressed = { pointerId: e.pointerId, x: e.clientX, y: e.clientY, shapeId: shape.id }
+      pressed = { pointerId: e.pointerId, x: e.clientX, y: e.clientY, shapeId: click.target.id }
       // Voting is "moving" too: it ends following someone (FAC-02), as any canvas click does.
       if (editor.getInstanceState().followingUserId) editor.stopFollowingUser()
     }
     const onUp = (e: PointerEvent) => {
+      const o = other
+      if (o && e.pointerId === o.pointerId) {
+        other = null
+        if (Math.hypot(e.clientX - o.x, e.clientY - o.y) <= CLICK_SLOP_PX) notInVote()
+        return
+      }
       const p = pressed
       if (!p || e.pointerId !== p.pointerId) return
       pressed = null
@@ -259,6 +299,7 @@ function ClickToVote({ ctx, store }: { ctx: FeatureContext; store: WorkshopStore
     }
     const onCancel = (e: PointerEvent) => {
       if (pressed?.pointerId === e.pointerId) pressed = null
+      if (other?.pointerId === e.pointerId) other = null
     }
     container.addEventListener('pointerdown', onDown, true)
     win.addEventListener('pointerup', onUp, true)
@@ -276,8 +317,9 @@ function ClickToVote({ ctx, store }: { ctx: FeatureContext; store: WorkshopStore
       const moved = Math.hypot(info.point.x - handDown.x, info.point.y - handDown.y)
       handDown = null
       if (moved > CLICK_SLOP_PX || !plain(info) || editor.getCurrentToolId() !== 'hand') return
-      const shape = eligibleAt(info.point)
-      if (shape) vote(shape.id)
+      const click = clickAt(info.point)
+      if (click.kind === 'vote') vote(click.target.id)
+      else if (click.kind === 'not-in-vote') notInVote()
     }
     editor.on('event', onEvent)
     return () => {

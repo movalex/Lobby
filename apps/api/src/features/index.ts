@@ -8,6 +8,7 @@ import { registerDomainAccess } from './domain-access/index.ts'
 import { registerExportControl } from './export-control/index.ts'
 import { registerGuests } from './guests/index.ts'
 import { registerHistory } from './history/index.ts'
+import { registerLinkPreview } from './link-preview/index.ts'
 import { registerSearch } from './search/index.ts'
 import { registerThumbnails } from './thumbnails/index.ts'
 import { registerWorkshops } from './workshops/index.ts'
@@ -29,4 +30,6 @@ export async function registerFeatures(
   await registerExportControl(app, ctx)
   await registerSearch(app, ctx)
   await registerAi(app, ctx)
+  // D2 link cards (3g, the Excalidraw board's media feature): the page title and icon of a pasted URL
+  await registerLinkPreview(app, ctx)
 }

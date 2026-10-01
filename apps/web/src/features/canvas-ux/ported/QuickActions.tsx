@@ -8,18 +8,19 @@
 //
 // Placement (./toolbar-layout.ts): a strip on top of the toolbar on a canvas of 840 px or less, as on the
 // tldraw page's phone and tablet toolbar. On a wider canvas tldraw put the same buttons in its top-left menu
-// zone; this canvas does not (a deviation: the other owners' ported specs click the board's top-left, where
-// the strip would sit; the board menu's Edit ▸ and the keys have every action there). A click never takes
+// zone; this canvas has only Undo and Redo there, left of the tools (W5-33: ./HistoryBar below; the other
+// owners' ported specs click the board's top-left, where a strip would sit; the board menu's Edit ▸ and the
+// keys have every action). Each bar is one Tab stop (W5-42). A click never takes
 // the keyboard from the board; arrow keys, Home and End move along the strip (ARIA toolbar); the actions
 // menu closes on Escape, a pick or a press elsewhere.
-import { type ComponentType, type ReactNode, useEffect, useRef } from 'react'
+import { type ComponentType, type ReactNode, useEffect, useLayoutEffect, useRef } from 'react'
 import type { CanvasFeatureContext } from '../../../canvas/api/index.ts'
 import { currentPlatform, formatChord } from '../../../canvas/api/index.ts'
 import { useValue } from '../../../lib/signals.ts'
 import { AlignIcons } from '../icons.tsx'
 import { CMD, runCommand } from './commands.ts'
 import { uxState } from './state.ts'
-import { moveInToolbar } from './toolbar-keys.ts'
+import { moveInToolbar, rove } from './toolbar-keys.ts'
 import { QUICK_MARGIN_PX } from './toolbar-layout.ts'
 
 function Svg({ children }: { children: ReactNode }) {
@@ -274,6 +275,11 @@ export function QuickActions({
   const tool = useValue('cux-quick-tool', () => canvas.tool(), [canvas])
   const barRef = useRef<HTMLDivElement>(null)
   const menuRef = useRef<HTMLDivElement>(null)
+  // W5-42: one Tab stop for the strip, one for the actions menu
+  useLayoutEffect(() => {
+    rove(barRef.current)
+    rove(menuRef.current)
+  })
 
   useEffect(() => {
     if (!open) return
@@ -306,6 +312,7 @@ export function QuickActions({
         aria-label="Actions"
         data-testid="quick-actions"
         onKeyDown={(e) => moveInToolbar(e.nativeEvent, barRef.current)}
+        onFocus={(e) => rove(barRef.current, e.target)}
       >
         {QUICK.map((a) => (
           <ActionButton
@@ -377,6 +384,59 @@ export function QuickActions({
           ))}
         </div>
       )}
+    </div>
+  )
+}
+
+/**
+ * W5-33 (the wave-5 review): Undo and Redo on a wider canvas (where the quick actions are not on the
+ * toolbar), in a small bar left of the tools: the Lobby tour tells people to press Ctrl+Z, and tldraw's
+ * wider canvas had both buttons in its top-left menu zone. Editors only; the same commands as the keys.
+ */
+export function HistoryBar({ ctx }: { ctx: CanvasFeatureContext }) {
+  const { canvas } = ctx
+  const readOnly = useValue('cux-history-readonly', () => canvas.readOnly(), [canvas])
+  const ready = useValue(
+    'cux-history-ready',
+    () => `${commandReady(ctx, CMD.undo)}|${commandReady(ctx, CMD.redo)}`,
+    [ctx],
+  )
+  const barRef = useRef<HTMLDivElement>(null)
+  useLayoutEffect(() => rove(barRef.current))
+  if (readOnly) return null
+  const [undo, redo] = ready.split('|').map((v) => v === 'true')
+  const run = (command: string) => {
+    runCommand(ctx, command, 'toolbar')
+    canvas.focus({ preventScroll: true })
+  }
+  return (
+    <div
+      ref={barRef}
+      className="cux-quick__bar cux-history"
+      role="toolbar"
+      aria-label="History"
+      data-testid="history-bar"
+      onKeyDown={(e) => moveInToolbar(e.nativeEvent, barRef.current)}
+      onFocus={(e) => rove(barRef.current, e.target)}
+    >
+      <ActionButton
+        testId="history-bar.undo"
+        label="Undo"
+        kbd="mod+z"
+        disabled={!undo}
+        onClick={() => run(CMD.undo)}
+      >
+        <UndoIcon />
+      </ActionButton>
+      <ActionButton
+        testId="history-bar.redo"
+        label="Redo"
+        kbd="mod+shift+z"
+        disabled={!redo}
+        onClick={() => run(CMD.redo)}
+      >
+        <RedoIcon />
+      </ActionButton>
     </div>
   )
 }

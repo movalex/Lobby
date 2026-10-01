@@ -4,15 +4,19 @@
 //   Board ▸   the `board` entries, then the `ai` ones (the start view, "Hide note authors", AI on this board)
 //   Edit ▸    the `clipboard`, `edit`, `arrange` and `select` entries (undo, redo, cut, copy, duplicate,
 //             delete, group, lock, select all…)
-//   View ▸    the `view` entries (zoom, minimap…)
+//   View ▸    the `view` entries: navigation's zoom in and out, 100%, fit, selection and the minimap
+//             (W5-33; canvas-ux registers none of its own)
 //   Export ▸  the `export` entries (or, while exporting is off for this person, the line saying so)
-//   the other groups' entries, then Preferences ▸ (Always snap, Show grid) and Keyboard shortcuts.
+//   the other groups' entries, then Preferences ▸ (Always snap, Show grid, Theme ▸ System / Light /
+//   Dark: W5-33, the app's theme as the top bar's picker sets it) and Keyboard shortcuts. Edit ▸ has
+//   Paste (W5-33).
 // tldraw's Language submenu stays out (DANA-13), and so does its debug mode. "Hide note authors" (FAC-07
 // partial / RETRO-03a) is the same synced setting as the workshop popover's checkbox; read-only people see
 // its state, disabled.
 import { useEffect, useRef } from 'react'
 import type { CanvasFeatureContext, MenuEntrySpec, MenuGroup, MenuTarget } from '../../../canvas/api/index.ts'
 import { useValue } from '../../../lib/signals.ts'
+import { getTheme, THEME_PREFERENCES, type ThemePreference } from '../../../theme/theme.ts'
 import { EXPORT_OFF_ENTRY, gatedEntries } from './ContextMenu.tsx'
 import { CMD } from './commands.ts'
 import { MenuIcon } from './icons.tsx'
@@ -37,6 +41,7 @@ export const MAIN_MENU_ENTRIES: readonly MenuEntrySpec[] = [
   { id: 'redo', group: 'edit', order: 20, label: '', command: CMD.redo, kbdHint: 'mod+shift+z' },
   { id: 'cut', group: 'clipboard', order: 10, label: '', command: CMD.cut, kbdHint: 'mod+x' },
   { id: 'copy', group: 'clipboard', order: 20, label: '', command: CMD.copy, kbdHint: 'mod+c' },
+  { id: 'paste', group: 'clipboard', order: 25, label: '', command: CMD.paste, kbdHint: 'mod+v' },
   { id: 'duplicate', group: 'clipboard', order: 30, label: '', command: CMD.duplicate, kbdHint: 'mod+d' },
   { id: 'delete', group: 'clipboard', order: 40, label: '', command: CMD.delete, kbdHint: 'delete' },
   { id: 'group', group: 'arrange', order: 10, label: '', command: CMD.group, kbdHint: 'mod+g' },
@@ -46,7 +51,15 @@ export const MAIN_MENU_ENTRIES: readonly MenuEntrySpec[] = [
   { id: 'select-all', group: 'select', order: 10, label: '', command: CMD.selectAll, kbdHint: 'mod+a' },
   { id: 'select-none', group: 'select', order: 20, label: '', command: CMD.selectNone },
   EXPORT_OFF_ENTRY,
+  // W5-33: View ▸ is the navigation feature's (./navigation/index.tsx VIEW_MENU: zoom in and out, 100%,
+  // fit, selection, the minimap). canvas-ux adds no `view` entry of its own, so each row shows once.
 ]
+
+const THEME_LABELS: Readonly<Record<ThemePreference, string>> = {
+  system: 'System',
+  light: 'Light',
+  dark: 'Dark',
+}
 
 const EDIT_GROUPS: readonly MenuGroup[] = ['clipboard', 'edit', 'arrange', 'select']
 const TOP_GROUPS: readonly MenuGroup[] = ['frame', 'collaborate', 'workshop', 'organize', 'danger']
@@ -60,6 +73,8 @@ export function mainMenuRows(ctx: CanvasFeatureContext): MenuRow[][] {
   const target: MenuTarget = { ids: ctx.canvas.selection, point: null, hit: null }
   const rows = (groups: readonly MenuGroup[]) => groupRows(entries, ctx, target, 'menu', groups)
   const settings = ctx.canvas.settings.get()
+  // the app's theme controller (none without a document: the unit tests)
+  const theme = typeof document === 'undefined' ? null : getTheme()
   const top: MenuRow[] = [
     sub('dr-board', 'Board', rows(['board', 'ai'])),
     sub('edit', 'Edit', rows(EDIT_GROUPS)),
@@ -88,6 +103,28 @@ export function mainMenuRows(ctx: CanvasFeatureContext): MenuRow[][] {
           run: () => ctx.canvas.settings.set({ grid: !ctx.canvas.settings.get().grid }),
         },
       ],
+      ...(theme
+        ? [
+            [
+              {
+                id: 'theme',
+                label: 'Theme',
+                disabled: false,
+                submenu: [
+                  THEME_PREFERENCES.map(
+                    (pref): MenuRow => ({
+                      id: `theme-${pref}`,
+                      label: THEME_LABELS[pref],
+                      disabled: false,
+                      checked: theme.getPreference() === pref,
+                      run: () => theme.setPreference(pref),
+                    }),
+                  ),
+                ],
+              },
+            ],
+          ]
+        : []),
     ],
   }
   const help: MenuRow = {

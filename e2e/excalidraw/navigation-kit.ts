@@ -336,3 +336,56 @@ export async function clickCanvasAt(page: Page, fx: number, fy: number): Promise
   await page.mouse.click(box.x + box.width * fx, box.y + box.height * fy)
   await expect.poll(() => page.evaluate(() => !!document.activeElement?.closest('.excalidraw'))).toBe(true)
 }
+
+// ---- camera motion (W5-21) ------------------------------------------------------------------------------------
+
+/** Starts recording the camera on every animation frame (each change once), to count a move's positions. */
+export async function recordCamera(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    type V = { x: number; y: number; zoom: number }
+    const w = window as unknown as {
+      __navCams?: string[]
+      __navCamsOn?: boolean
+      __lobbyBoard: { canvas: { viewport: { get(): V } } }
+    }
+    const cams: string[] = []
+    w.__navCams = cams
+    w.__navCamsOn = true
+    const tick = () => {
+      if (!w.__navCamsOn) return
+      const v = w.__lobbyBoard.canvas.viewport.get()
+      const k = `${v.x.toFixed(2)},${v.y.toFixed(2)},${v.zoom.toFixed(5)}`
+      if (cams[cams.length - 1] !== k) cams.push(k)
+      requestAnimationFrame(tick)
+    }
+    tick()
+  })
+}
+
+/** Stops recording; the cameras seen, in order (the first is where the move started). */
+export async function recordedCameras(page: Page): Promise<string[]> {
+  return page.evaluate(() => {
+    const w = window as unknown as { __navCams?: string[]; __navCamsOn?: boolean }
+    w.__navCamsOn = false
+    return w.__navCams ?? []
+  })
+}
+
+/** Runs `action` and returns how many camera positions it went through (1 + the in-between ones). */
+export async function cameraSteps(page: Page, action: () => Promise<void>, settleMs = 700): Promise<number> {
+  await recordCamera(page)
+  await action()
+  await page.waitForTimeout(settleMs)
+  return (await recordedCameras(page)).length - 1
+}
+
+/** Whether the element at the centre of `testId`'s box is that control (nothing covers it). */
+export async function centreHitsItself(page: Page, testId: string): Promise<boolean> {
+  return page.evaluate((id) => {
+    const el = document.querySelector(`[data-testid="${id}"]`)
+    if (!el) return false
+    const r = el.getBoundingClientRect()
+    const at = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2)
+    return !!at && (at === el || el.contains(at))
+  }, testId)
+}

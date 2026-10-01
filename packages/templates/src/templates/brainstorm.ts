@@ -103,6 +103,8 @@ export const brainstorm: TemplateSource = {
         color: c.color,
         fill: 'solid',
         size: 'm',
+        // a theme's name: the new canvas's display face (D3)
+        heading: true,
       })
       b.noteGrid(map, { x: c.x, y: c.y + LABEL_H + 24, cols: 2, gap: LABEL_W - 400 }, [
         { text: c.prompts[0], color: c.color },
@@ -131,23 +133,18 @@ export const brainstorm: TemplateSource = {
       { text: 'Next step: who explores it, and by when?', color: 'light-green' },
     ])
 
+    // The instruction is the section's intro, under its heading, and the note under both (W5-59: an
+    // instruction beside the note, left of the heading's centre, was read before the heading).
+    const parkingY = 720
     const parking = b.section({
       x: SIDE_X,
-      y: 760,
+      y: parkingY,
       w: SIDE_W,
-      h: MAP_H - 760,
+      h: MAP_H - parkingY,
       name: SECTIONS[2],
       heading: 'Parking lot',
+      intro: 'Good ideas for another day. Revisit them before you wrap up.',
     })
-    b.text(parking, {
-      x: PAD,
-      y: 100,
-      w: 220,
-      text: 'Good ideas for another day. Revisit them before you wrap up.',
-      size: 's',
-      color: 'grey',
-      locked: true, // an instruction (PRE-07)
-    })
-    b.note(parking, { x: SIDE_W - PAD - 200, y: 100, text: 'Idea for later', color: 'orange' })
+    b.note(parking, { x: PAD, y: 160, text: 'Idea for later', color: 'orange', scale: 0.9 })
   },
 }

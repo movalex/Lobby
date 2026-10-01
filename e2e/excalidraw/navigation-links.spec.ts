@@ -7,7 +7,15 @@
 //   E2E_PORT_BASE=<base> pnpm --filter @draftroom/e2e excalidraw -- navigation-links
 import { randomBytes } from 'node:crypto'
 import type { Page } from '@playwright/test'
-import { createItem, createNote, expect, expectSaved, select, test } from '../tests/support/canvas.ts'
+import {
+  createItem,
+  createNote,
+  expect,
+  expectSaved,
+  itemCenterOnScreen,
+  select,
+  test,
+} from '../tests/support/canvas.ts'
 import { WEB_URL } from '../tests/support/ports.ts'
 import {
   grantClipboard,
@@ -178,4 +186,51 @@ test('content search: a dashboard hit opens the new board page on the object (?e
     await expect.poll(() => inView(a.page, [FRAME])).toBe(true)
     expect(await inView(a.page, [NOTE as string])).toBe(false)
   })
+})
+
+test('W5-39: a ?el= link to a connector selects it and Lobby outlines it (the engine draws no box for a code selection); another selection drops the outline', async ({
+  canvasSession,
+  browser,
+  board,
+  users,
+}) => {
+  const a = await canvasSession('alice')
+  await waitForNavigation(a.page)
+  const [ARROW, NOTE] = (await seed(a.page, [
+    () =>
+      createItem(a.page, 'arrow', {
+        x: 200,
+        y: 140,
+        points: [
+          [0, 0],
+          [320, 0],
+        ],
+      }),
+    () => createNote(a.page, { x: 900, y: 0, text: 'Elsewhere' }),
+  ])) as [string, string]
+  await users.grant(board, 'bob', 'editor')
+  const b = await openPath(browser, await users.get('bob'), `/b/${board}?el=${ARROW}`)
+  try {
+    expect(await startView(b.page)).toBe('deep-link')
+    expect(await sortedSelection(b.page)).toEqual([ARROW])
+    const outline = b.page.locator(`[data-testid="navigation.code-selection"] rect[data-shape-id="${ARROW}"]`)
+    await expect(outline).toBeVisible()
+    // around the connector on screen
+    const [box, c] = [await outline.boundingBox(), await itemCenterOnScreen(b.page, ARROW)]
+    if (!box) throw new Error('no outline box')
+    expect(c.x).toBeGreaterThan(box.x)
+    expect(c.x).toBeLessThan(box.x + box.width)
+    expect(c.y).toBeGreaterThan(box.y)
+    expect(c.y).toBeLessThan(box.y + box.height)
+    expect(box.width).toBeGreaterThan(300 * (await viewport(b.page)).zoom)
+    // the person selects something else: the engine draws that selection, Lobby's outline goes
+    await select(b.page, [NOTE])
+    await expect(b.page.getByTestId('navigation.code-selection')).toHaveCount(0)
+    // the outline is the link's: selecting the connector again another way does not bring it back
+    await select(b.page, [ARROW])
+    await b.page.waitForTimeout(200)
+    await expect(b.page.getByTestId('navigation.code-selection')).toHaveCount(0)
+  } finally {
+    await b.context.close()
+  }
 })

@@ -2,8 +2,13 @@ import { describe, expect, it } from 'vitest'
 import type { AssetVersionMeta } from '../../assets/contract.ts'
 import type { CanvasElement } from '../../canvas/api/index.ts'
 import {
+  CARD_RADIUS,
+  CARD_ROUNDNESS,
   cardViewOf,
+  cornerRadiusOf,
+  displaySizeFromHeader,
   excalidrawCrop,
+  exifOrientation,
   factsOf,
   fileItemKind,
   imageSizeFromHeader,
@@ -153,6 +158,101 @@ describe('image sizes from headers (never decoded)', () => {
     expect(imageSizeFromHeader(bytes('<svg xmlns="http://www.w3.org/2000/svg"/>'))).toBeNull()
     expect(imageSizeFromHeader(new Uint8Array(0))).toBeNull()
   })
+
+  // W5-12: a phone photo stored 1920 × 1080 with EXIF Orientation 6 is shown 1080 × 1920.
+  const be16 = (n: number) => [(n >>> 8) & 255, n & 255]
+  /** A TIFF block with IFD0 = [Make (ignored), Orientation `o`], little- or big-endian. */
+  const tiff = (o: number, le: boolean) => {
+    const s = (n: number) => (le ? le16(n) : be16(n))
+    const l = (n: number) => (le ? [...le16(n & 0xffff), ...le16(n >>> 16)] : be32(n))
+    return [
+      ...(le ? [0x49, 0x49] : [0x4d, 0x4d]),
+      ...s(42),
+      ...l(8),
+      ...s(2),
+      ...[...s(0x010f), ...s(2), ...l(4), 0x41, 0x42, 0x43, 0],
+      ...[...s(0x0112), ...s(3), ...l(1), ...s(o), 0, 0],
+      ...l(0),
+    ]
+  }
+  const jpegWith = (o: number | null, le = false) => {
+    const exif = o === null ? [] : [...bytes('Exif'), 0, 0, ...tiff(o, le)]
+    return bytes(
+      [0xff, 0xd8],
+      exif.length ? [0xff, 0xe1, ...be16(exif.length + 2), ...exif] : [],
+      [0xff, 0xc0, 0x00, 0x11, 0x08],
+      be16(1080), // height
+      be16(1920), // width
+      new Array(12).fill(0),
+    )
+  }
+  it('JPEG: EXIF Orientation 5-8 swaps the shown width and height; 1-4 keep them', () => {
+    for (const le of [false, true]) {
+      expect(exifOrientation(jpegWith(6, le))).toBe(6)
+      expect(imageSizeFromHeader(jpegWith(6, le))).toEqual({ w: 1920, h: 1080 })
+      expect(displaySizeFromHeader(jpegWith(6, le))).toEqual({ w: 1080, h: 1920 })
+      expect(displaySizeFromHeader(jpegWith(8, le))).toEqual({ w: 1080, h: 1920 })
+      expect(displaySizeFromHeader(jpegWith(5, le))).toEqual({ w: 1080, h: 1920 })
+      expect(displaySizeFromHeader(jpegWith(3, le))).toEqual({ w: 1920, h: 1080 })
+    }
+    expect(exifOrientation(jpegWith(null))).toBeNull()
+    expect(displaySizeFromHeader(jpegWith(null))).toEqual({ w: 1920, h: 1080 })
+    // out of range: ignored
+    expect(exifOrientation(jpegWith(9))).toBeNull()
+  })
+  it('WebP and PNG carry the orientation in their EXIF chunks', () => {
+    const exif = tiff(6, true)
+    const webp = bytes(
+      'RIFF',
+      [0, 0, 0, 0],
+      'WEBP',
+      'VP8X',
+      [10, 0, 0, 0],
+      [0x08, 0, 0, 0],
+      le24(1919),
+      le24(1079),
+      'EXIF',
+      [...le16(exif.length), 0, 0],
+      exif,
+    )
+    expect(displaySizeFromHeader(webp)).toEqual({ w: 1080, h: 1920 })
+    const png = bytes(
+      [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a],
+      be32(13),
+      'IHDR',
+      be32(1920),
+      be32(1080),
+      [8, 6, 0, 0, 0],
+      [0, 0, 0, 0],
+      be32(exif.length),
+      'eXIf',
+      exif,
+      [0, 0, 0, 0],
+    )
+    expect(displaySizeFromHeader(png)).toEqual({ w: 1080, h: 1920 })
+    // an eXIf after the image data is not read
+    const late = bytes(
+      [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a],
+      be32(13),
+      'IHDR',
+      be32(1920),
+      be32(1080),
+      [8, 6, 0, 0, 0],
+      [0, 0, 0, 0],
+      be32(0),
+      'IDAT',
+      [0, 0, 0, 0],
+      be32(exif.length),
+      'eXIf',
+      exif,
+    )
+    expect(displaySizeFromHeader(late)).toEqual({ w: 1920, h: 1080 })
+  })
+  it('a truncated or malformed EXIF block is ignored', () => {
+    const j = jpegWith(6)
+    expect(exifOrientation(j.subarray(0, 20))).toBeNull()
+    expect(exifOrientation(bytes([0xff, 0xd8], [0xff, 0xe1, 0x00, 0x08], 'Exif', [0, 0]))).toBeNull()
+  })
 })
 
 describe('the centre crop of a slot, in the thumb’s pixels', () => {
@@ -166,5 +266,19 @@ describe('the centre crop of a slot, in the thumb’s pixels', () => {
       { w: 1080, h: 1920 },
     )
     expect(crop).toEqual({ x: 0, y: 128, width: 288, height: 256, naturalWidth: 288, naturalHeight: 512 })
+  })
+})
+
+describe('W5-36: a card face follows its element’s corners', () => {
+  it('new cards get a fixed 10-unit radius; the face reads it the way Excalidraw clips the bitmap', () => {
+    expect(CARD_ROUNDNESS).toEqual({ type: 3, value: CARD_RADIUS })
+    expect(cornerRadiusOf({ width: 320, height: 240, roundness: CARD_ROUNDNESS })).toBe(10)
+    // shorter than the cut-off (4 × the radius): a quarter of the shorter side
+    expect(cornerRadiusOf({ width: 30, height: 200, roundness: CARD_ROUNDNESS })).toBe(7.5)
+    expect(cornerRadiusOf({ width: 320, height: 240, roundness: { type: 3 } })).toBe(32)
+    expect(cornerRadiusOf({ width: 320, height: 240, roundness: { type: 2 } })).toBe(60)
+    // cards made before W5-36 are square, so their face is square too
+    expect(cornerRadiusOf({ width: 320, height: 240, roundness: null })).toBe(0)
+    expect(cornerRadiusOf({ width: 320, height: 240 })).toBe(0)
   })
 })

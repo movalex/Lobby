@@ -71,3 +71,102 @@ describe('the files part (3g)', () => {
     expect(changes).toBe(2)
   })
 })
+
+// W5-13 / CR-W5-3G-1: a crop is written in the pixels of the thumb every tab loads, so a cropped image
+// (or the one being cropped) is never shown from its 2,048 px rendering on this page.
+describe('the crop editor and the thumb (3g)', () => {
+  const image = (id: string, fileId: string, extra: Record<string, unknown> = {}) => ({
+    id,
+    type: 'image',
+    fileId,
+    version: 1,
+    versionNonce: 1,
+    isDeleted: false,
+    x: 0,
+    y: 0,
+    width: 400,
+    height: 225,
+    customData: {
+      lobby: {
+        file: {
+          assetId: AST,
+          versionId: VER,
+          kind: 'image',
+          name: 'a.jpg',
+          mimeType: 'image/jpeg',
+          sizeBytes: 1,
+        },
+      },
+    },
+    ...extra,
+  })
+
+  function engine(elements: Record<string, unknown>[], opts: { readOnly?: boolean; locked?: boolean } = {}) {
+    let scene = elements
+    let appState: Record<string, unknown> = { croppingElementId: null }
+    const listeners = new Set<() => void>()
+    const updates: { elements?: unknown[]; appState?: Record<string, unknown> }[] = []
+    const api = {
+      getSceneElements: () => scene.filter((e) => !e.isDeleted),
+      getSceneElementsIncludingDeleted: () => scene,
+      getAppState: () => ({
+        ...appState,
+        scrollX: 0,
+        scrollY: 0,
+        width: 1000,
+        height: 800,
+        zoom: { value: 1 },
+      }),
+      onChange: (fn: () => void) => {
+        listeners.add(fn)
+        return () => listeners.delete(fn)
+      },
+      updateScene: (u: { elements?: Record<string, unknown>[]; appState?: Record<string, unknown> }) => {
+        updates.push(u)
+        if (u.elements) scene = u.elements
+        if (u.appState) appState = { ...appState, ...u.appState }
+        for (const l of listeners) l()
+      },
+    }
+    const registries = createFeatureRegistries()
+    const port = {
+      get: (id: string) => scene.find((e) => e.id === id),
+      select: () => {},
+    } as unknown as CanvasPort
+    const self = { readOnly: () => !!opts.readOnly, isLocked: () => !!opts.locked }
+    const files = createFilesPart({ port, registries, self: () => self as never })
+    attachBoardEngine(registries, { api: api as never, wrapper: {} as never, boardId: 'b-1' })
+    const fileIdOf = (id: string) => scene.find((e) => e.id === id)?.fileId
+    const change = async () => {
+      for (const l of listeners) l()
+      await Promise.resolve()
+      await Promise.resolve()
+    }
+    return { files, updates, fileIdOf, change, appState: () => appState }
+  }
+
+  it('files.crop opens the engine’s crop editor on the image, put back on its thumb first', () => {
+    const e = engine([image('i1', `${VER}@display`)])
+    expect(e.files.crop?.('i1')).toBe(true)
+    expect(e.fileIdOf('i1')).toBe(VER)
+    expect(e.appState().croppingElementId).toBe('i1')
+  })
+
+  it('a cropped image shown from its display rendering goes back to its thumb (local only)', async () => {
+    const e = engine([image('i1', `${VER}@display`, { crop: { x: 0, y: 0, width: 100, height: 100 } })])
+    await e.change()
+    expect(e.fileIdOf('i1')).toBe(VER)
+    // an uncropped one is left to the swap
+    const f = engine([image('i2', `${VER}@display`)])
+    await f.change()
+    expect(f.fileIdOf('i2')).toBe(`${VER}@display`)
+  })
+
+  it('no crop for a card, a missing element, a read-only person or a locked image', () => {
+    const pdfCard = { ...image('c1', VER), customData: card.customData }
+    expect(engine([pdfCard]).files.crop?.('c1')).toBe(false)
+    expect(engine([]).files.crop?.('nope')).toBe(false)
+    expect(engine([image('i1', VER)], { readOnly: true }).files.crop?.('i1')).toBe(false)
+    expect(engine([image('i1', VER)], { locked: true }).files.crop?.('i1')).toBe(false)
+  })
+})

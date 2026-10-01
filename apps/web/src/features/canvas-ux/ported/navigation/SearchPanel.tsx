@@ -23,6 +23,7 @@ import {
 } from '../../search-filter.ts'
 import { type NavSearchHit, searchCanvas } from './model.ts'
 import { searchMatches, searchState } from './state.ts'
+import { selectByCode } from './view-helpers.ts'
 
 export const RESULT_LIMIT = 200
 
@@ -30,7 +31,7 @@ export const RESULT_LIMIT = 200
 export function goToElement(canvas: LobbyCanvas, id: string) {
   const b = canvas.bounds(id)
   if (!b) return
-  canvas.select([id])
+  selectByCode(canvas, [id])
   canvas.viewport.zoomTo(b, { maxZoom: 1, inset: 60, animate: { durationMs: 260 } })
 }
 

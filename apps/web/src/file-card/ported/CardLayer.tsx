@@ -12,7 +12,7 @@
 // scaled with the zoom, so it moves and resizes with its element. Opaque elements painted above a card
 // (a note, a filled shape, an image) cut a hole in its face, so they stay visible over it.
 // Live facts come from the api's meta (./meta.ts), never from the element.
-import { type CSSProperties, type PointerEvent, useRef, useState } from 'react'
+import { type CSSProperties, type PointerEvent, useEffect, useRef, useState } from 'react'
 import { derivativeUrl, originalUrl } from '../../assets/contract.ts'
 import { useAssetMeta } from '../../assets/meta-store.ts'
 import {
@@ -29,9 +29,19 @@ import '../file-card.css'
 import { CONVERSION_DETAIL, CONVERSION_NOTE, cardOfficeFormat, isConvertedPreview } from '../office.ts'
 import { previewPages } from '../pdf-pages.ts'
 import { downloadsAllowed } from './downloads.ts'
+import { LinkFace, linkOf, titleOf } from './link-cards.tsx'
+import { localPreviewsOf, PREVIEW_GRACE_MS } from './local-previews.ts'
 import './media.css'
 import { mediaMetaStore } from './meta.ts'
-import { type CardView, cardDescriptor, cardViewOf, type FileFacts, factsOf, fileItemKind } from './model.ts'
+import {
+  type CardView,
+  cardDescriptor,
+  cardViewOf,
+  cornerRadiusOf,
+  type FileFacts,
+  factsOf,
+  fileItemKind,
+} from './model.ts'
 import { openPdfViewer } from './viewer-state.ts'
 
 const STRIP_MAX = 4
@@ -56,8 +66,11 @@ interface Box {
 
 interface Entry {
   readonly id: string
-  readonly kind: 'card' | 'pending'
+  readonly kind: 'card' | 'pending' | 'link'
+  /** a file element's facts (a link card has none) */
   readonly facts: FileFacts
+  /** a link card's URL and title (D2) */
+  readonly link?: { readonly url: string; readonly title: string }
   /** the element box in scene units, and its rotation */
   readonly box: Box
   readonly angle: number
@@ -65,7 +78,21 @@ interface Entry {
   readonly holes: readonly Box[]
   /** the loader's state (placeholders) */
   readonly state: 'loading' | 'failed' | null
+  /**
+   * W5-36: the face's corner radius (scene units): the element's own once the engine draws its bitmap
+   * (Excalidraw clips a loaded image to its roundness), else 0 (its pending placeholder is square)
+   */
+  readonly radius: number
 }
+
+const NO_FACTS = {
+  assetId: '',
+  versionId: '',
+  kind: 'other',
+  name: '',
+  mimeType: '',
+  sizeBytes: 0,
+} as const satisfies FileFacts
 
 const overlap = (a: Box, b: Box) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h
 
@@ -101,14 +128,41 @@ function holesAbove(canvas: LobbyCanvas, items: readonly CanvasElement[], index:
 function entriesOf(canvas: LobbyCanvas): Entry[] {
   const items = canvas.items()
   const out: Entry[] = []
+  const editing = canvas.editingId()
   items.forEach((el, index) => {
+    const url = linkOf(el as never)
+    // a link card whose words are being edited shows its plain canvas face (and the editor) meanwhile
+    const edited =
+      !!editing &&
+      (editing === el.id ||
+        ((el as { boundElements?: readonly { id: string }[] | null }).boundElements ?? []).some(
+          (b) => b.id === editing,
+        ))
+    if (url && !edited && !canvas.isHidden(el.id)) {
+      const box = { x: el.x, y: el.y, w: el.width, h: el.height }
+      out.push({
+        id: el.id,
+        kind: 'link',
+        facts: NO_FACTS,
+        link: { url, title: titleOf(canvas.text.of(el.id), url) },
+        box,
+        angle: el.angle ?? 0,
+        holes: el.angle ? [] : holesAbove(canvas, items, index, box),
+        state: null,
+        // the rectangle under it is drawn with its own rounded corners
+        radius: cornerRadiusOf(el as never),
+      })
+      return
+    }
+    if (url) return
     const kind = fileItemKind(el)
     if (!kind || canvas.isHidden(el.id)) return
     const facts = factsOf(el) as FileFacts
     const box = { x: el.x, y: el.y, w: el.width, h: el.height }
     if (kind === 'card') {
       const holes = el.angle ? [] : holesAbove(canvas, items, index, box)
-      out.push({ id: el.id, kind: 'card', facts, box, angle: el.angle ?? 0, holes, state: null })
+      const radius = canvas.files.status(el.id) === 'loaded' ? cornerRadiusOf(el as never) : 0
+      out.push({ id: el.id, kind: 'card', facts, box, angle: el.angle ?? 0, holes, state: null, radius })
       return
     }
     const st = canvas.files.status(el.id)
@@ -122,6 +176,7 @@ function entriesOf(canvas: LobbyCanvas): Entry[] {
       angle: el.angle ?? 0,
       holes,
       state: st === 'failed' ? 'failed' : 'loading',
+      radius: 0,
     })
   })
   return out
@@ -141,8 +196,43 @@ export function MediaSceneLayer({ ctx }: { ctx: CanvasFeatureContext }) {
   const entries = useValue('media-faces', () => entriesOf(canvas), [canvas])
   const zoom = useValue('media-faces-zoom', () => canvas.viewport.get().zoom, [canvas])
   useValue('media-faces-view', () => canvas.viewport.get(), [canvas])
+  const previews = localPreviewsOf(ctx.registries)
+  const ghosts = useValue(previews.ghosts)
+  // W5-56: a local preview is kept while an element of its version still waits for the loader
+  const waiting = entries.filter((e) => e.kind === 'pending' && e.state === 'loading')
+  const needed = waiting.map((e) => e.facts.versionId).join(' ')
+  useEffect(() => {
+    const keep = new Set(needed ? needed.split(' ') : [])
+    previews.sweep(keep)
+    const t = setInterval(() => previews.sweep(keep), PREVIEW_GRACE_MS)
+    return () => clearInterval(t)
+  }, [previews, needed])
   return (
     <>
+      {ghosts.map((g) => {
+        const c = canvas.sceneToOverlay({ x: g.rect.x + g.rect.w / 2, y: g.rect.y + g.rect.h / 2 })
+        return (
+          <div
+            key={g.key}
+            className="lobby-ghost"
+            data-testid="upload-ghost"
+            data-lobby-upload-ghost={g.key}
+            style={{
+              position: 'absolute',
+              left: c.x - g.rect.w / 2,
+              top: c.y - g.rect.h / 2,
+              width: g.rect.w,
+              height: g.rect.h,
+              transform: `scale(${zoom})`,
+              transformOrigin: 'center',
+            }}
+          >
+            <img src={g.url} alt="" decoding="async" draggable={false} />
+            <span className="lobby-ghost__chip">Uploading…</span>
+            <span className="dr-sr-only">{g.name}</span>
+          </div>
+        )
+      })}
       {entries.map((e) => {
         const c = canvas.sceneToOverlay({ x: e.box.x + e.box.w / 2, y: e.box.y + e.box.h / 2 })
         const style = {
@@ -154,7 +244,12 @@ export function MediaSceneLayer({ ctx }: { ctx: CanvasFeatureContext }) {
           transform: `scale(${zoom})${e.angle ? ` rotate(${e.angle}rad)` : ''}`,
           transformOrigin: 'center',
           clipPath: clipPath(e),
-        }
+          ['--lobby-face-radius' as string]: `${e.radius}px`,
+        } as CSSProperties
+        if (e.kind === 'link' && e.link)
+          return (
+            <LinkFace key={e.id} ctx={ctx} id={e.id} url={e.link.url} title={e.link.title} style={style} />
+          )
         return e.kind === 'card' ? (
           <CardFace key={e.id} ctx={ctx} id={e.id} facts={e.facts} style={style} />
         ) : (
@@ -185,14 +280,25 @@ function PendingTile({
   const snap = useAssetMeta(mediaMetaStore, ctx.board.id, facts.assetId, facts.versionId)
   // the worker refused it (or the version is gone): the loader will never get a preview
   const unavailable = state === 'failed' || snap.missing || snap.meta?.status === 'failed'
+  // W5-56: the tab that uploaded it shows its own copy meanwhile (never stored, never synced)
+  const previews = localPreviewsOf(ctx.registries)
+  const local = useValue('media-local-preview', () => previews.urlOf(facts.versionId), [
+    previews,
+    facts.versionId,
+  ])
+  const preview = !unavailable && local ? local : null
   return (
     <div
       className="lobby-pending"
       data-testid="image-placeholder"
       data-lobby-image-placeholder={id}
       data-state={unavailable ? 'unavailable' : 'processing'}
+      data-local-preview={preview ? '' : undefined}
       style={style}
     >
+      {preview && (
+        <img className="lobby-pending__local" src={preview} alt="" decoding="async" draggable={false} />
+      )}
       {unavailable ? (
         <>
           <strong>Couldn't process this image</strong>

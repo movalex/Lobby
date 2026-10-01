@@ -59,6 +59,8 @@ export interface AiJob {
   action: AiAction
   label: string
   abort: AbortController
+  /** What had the keyboard when the popover that asked for it opened (W5-47); null from a menu. */
+  opener: HTMLElement | null
 }
 
 export interface AiPanelState {
@@ -67,6 +69,8 @@ export interface AiPanelState {
   truncated: boolean
   /** What was summarized: "Add to board" puts the card there (DANA-04: nothing lands unasked). */
   target: AiTarget
+  /** Where the keyboard goes back to when the panel closes from it (W5-47): the AI button, else the board. */
+  opener: HTMLElement | null
 }
 
 /** Null until the api answered (the feature stays hidden until then). */
@@ -78,6 +82,18 @@ export const aiJob = perCanvas<Atom<AiJob | null>>(() => atom<AiJob | null>('lob
 export const aiPanel = perCanvas<Atom<AiPanelState | null>>(() =>
   atom<AiPanelState | null>('lobby-ai-panel', null),
 )
+
+/**
+ * A11Y-15, W5-47: what had the keyboard as the AI popover opened (the selection bar's AI button, or the
+ * board), per canvas. The popover remounts for each of its views and closes as a request starts, so this
+ * outlives any one of them; a request takes it along (AiJob.opener) to the summary panel it opens.
+ */
+const openers = new WeakMap<LobbyCanvas, HTMLElement>()
+export const aiOpener = {
+  get: (canvas: LobbyCanvas): HTMLElement | null => openers.get(canvas) ?? null,
+  set: (canvas: LobbyCanvas, el: HTMLElement) => void openers.set(canvas, el),
+  clear: (canvas: LobbyCanvas) => void openers.delete(canvas),
+}
 
 /** The latest feature context, for code that only has the canvas. */
 const contexts = new WeakMap<LobbyCanvas, CanvasFeatureContext>()

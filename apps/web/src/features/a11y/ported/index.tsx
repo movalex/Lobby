@@ -11,14 +11,20 @@
 //    application role, as tldraw's container did, and a short description of those keys;
 //  - "Skip to canvas" (ui/SkipLink.tsx) enters the canvas the same way F6 does;
 //  - the accessible content list (dock panel "Contents", ./ContentsPanel.tsx);
-//  - the phone sheet (`phoneSheet` slot, ./PhoneSheet.tsx).
-import type { CanvasFeature, CanvasFeatureContext, LobbyCanvas } from '../../../canvas/api/index.ts'
+//  - the phone sheet (`phoneSheet` slot, ./PhoneSheet.tsx);
+//  - since the early wave-5 review: a tool change is said politely and a text edit that ends says the
+//    selection again (W5-43); the board shows a focus ring while the keyboard is on it (W5-45,
+//    ./FocusRing.tsx); the engine's text editor is named after what it edits (W5-59); camera moves honour
+//    reduced motion (W5-21, ./motion.ts).
+import type { CanvasFeature, CanvasFeatureContext } from '../../../canvas/api/index.ts'
 import { isTextEntry } from '../../../ui/focus.ts'
-import { SKIP_TO_CANVAS_EVENT } from '../../../ui/SkipLink.tsx'
+import { boardRegionName, SKIP_TO_CANVAS_EVENT } from '../../../ui/SkipLink.tsx'
 import { announcerFor, releaseAnnouncer } from './announcer.ts'
 import { ContentsPanel } from './ContentsPanel.tsx'
+import { FocusRing, keyboardFocus } from './FocusRing.tsx'
 import { CANVAS_HINT_ID, LiveRegion } from './LiveRegion.tsx'
 import { PhoneSheet } from './PhoneSheet.tsx'
+import { toolWords } from './tools.ts'
 import { enterCanvas, selectAdjacent, selectFirstChild, selectionLevel, selectParent } from './traversal.ts'
 import './a11y.css'
 
@@ -111,10 +117,12 @@ export const feature: CanvasFeature = {
     liveRegion: LiveRegion,
     phoneSheet: PhoneSheet,
   },
+  // W5-45: the ring is drawn above the engine's canvases (an outline on the engine's container is not)
+  overlays: [{ id: 'a11y-focus-ring', layer: 'screen', order: 1, pointer: 'none', component: FocusRing }],
   onMount(ctx) {
     const canvas = ctx.canvas
     announcerFor(canvas)
-    const offs = [nameTheCanvas(canvas), enterFromAnywhere(ctx)]
+    const offs = [nameTheCanvas(ctx), enterFromAnywhere(ctx), announceTools(ctx)]
     const onSkip = () => enter(ctx)
     document.addEventListener(SKIP_TO_CANVAS_EVENT, onSkip)
     return () => {
@@ -127,38 +135,108 @@ export const feature: CanvasFeature = {
 
 /**
  * A11Y2-09: the element that takes the keyboard on the board (the engine's focusable container, the one
- * holding the drawing surface) is named after the board and has the application role, as tldraw's
- * container had; the board page names the canvas region, and this copies that name onto the focus target
- * and keeps it in step with a rename. Found when it takes the keyboard, so no engine class is assumed.
+ * holding the drawing surface) is named after the board ("<title> board") and has the application role, as
+ * tldraw's container had, and keeps the name through a rename (the board page re-labels its canvas region
+ * on a rename; that is the cue). The name comes from the board's title, not from the region's label, so the
+ * region may be named differently (W5-57: the two shared one name). Found when it takes the keyboard, so no
+ * engine class is assumed.
+ *
+ * Two more things happen on that focus:
+ *  - W5-45: the keyboard arriving there (Tab, F6, "Skip to canvas", Escape out of an editor) turns the
+ *    board's focus ring on (./FocusRing.tsx); a press of the pointer, or the focus leaving the board, turns
+ *    it off. A focus that follows a click or the page opening shows no ring, as `:focus-visible` would not.
+ *  - W5-59: the engine's text editor (a textarea inside the board) is NOT named here: canvas-ux names it
+ *    as it opens (../../canvas-ux/ported/canvas-events.ts editorName), and two writers gave it two names in
+ *    turn (the wave-5 integration).
  */
-function nameTheCanvas(canvas: LobbyCanvas): () => void {
+function nameTheCanvas(ctx: CanvasFeatureContext): () => void {
+  const canvas = ctx.canvas
   const root = canvas.container()
   if (!root) return () => {}
   const named = new Set<HTMLElement>()
   const apply = (el: HTMLElement) => {
-    const name = root.getAttribute('aria-label')
-    if (name && el.getAttribute('aria-label') !== name) el.setAttribute('aria-label', name)
+    const name = boardRegionName(ctx.board.title)
+    if (el.getAttribute('aria-label') !== name) el.setAttribute('aria-label', name)
     if (el.getAttribute('role') !== 'application') el.setAttribute('role', 'application')
     if (el.getAttribute('aria-describedby') !== CANVAS_HINT_ID)
       el.setAttribute('aria-describedby', CANVAS_HINT_ID)
     named.add(el)
   }
-  const consider = (target: EventTarget | null) => {
-    if (!(target instanceof HTMLElement) || target === root || !root.contains(target)) return
-    if (isTextEntry(target) || !target.querySelector('canvas')) return
-    apply(target)
+  // the last kind of input: the ring shows only for a focus the keyboard brought
+  let viaKeyboard = false
+  const onKeyDown = (e: KeyboardEvent) => {
+    if (!e.isTrusted) return
+    viaKeyboard = true
   }
-  const onFocusIn = (e: FocusEvent) => consider(e.target)
+  const onPointerDown = () => {
+    viaKeyboard = false
+    keyboardFocus.set(false)
+  }
+  const consider = (target: EventTarget | null) => {
+    if (!(target instanceof HTMLElement) || target === root || !root.contains(target)) return false
+    if (isTextEntry(target)) return false
+    if (!target.querySelector('canvas')) return false
+    apply(target)
+    return true
+  }
+  const onFocusIn = (e: FocusEvent) => {
+    const onBoard = consider(e.target)
+    keyboardFocus.set(onBoard && viaKeyboard)
+  }
+  const onFocusOut = (e: FocusEvent) => {
+    if (e.target instanceof HTMLElement && named.has(e.target)) keyboardFocus.set(false)
+  }
+  document.addEventListener('keydown', onKeyDown, true)
+  document.addEventListener('pointerdown', onPointerDown, true)
   document.addEventListener('focusin', onFocusIn, true)
+  document.addEventListener('focusout', onFocusOut, true)
   consider(document.activeElement)
-  // a rename: the page updates the region's name, the focus target follows
+  // a rename: the page updates the region's name, the focus target follows the board's title
   const watch = new MutationObserver(() => {
     for (const el of named) if (el.isConnected) apply(el)
   })
   watch.observe(root, { attributes: true, attributeFilter: ['aria-label'] })
   return () => {
+    document.removeEventListener('keydown', onKeyDown, true)
+    document.removeEventListener('pointerdown', onPointerDown, true)
     document.removeEventListener('focusin', onFocusIn, true)
+    document.removeEventListener('focusout', onFocusOut, true)
     watch.disconnect()
+    keyboardFocus.set(false)
+  }
+}
+
+/** How long a new tool must stay before it is said (ms): placing a note returns to Select as its editor opens. */
+export const TOOL_SETTLE_MS = 400
+
+/**
+ * W5-43: a tool change is said in the polite region ("Note tool", "Comment tool"), from a key, the toolbar,
+ * the phone sheet or code, once it has stayed for TOOL_SETTLE_MS. Nothing is said when a text editor is open
+ * by then (placing a note returns the board to Select while the note's editor waits for its lease: that
+ * return is not news), for a tool the board does not name, or for the same tool again.
+ */
+function announceTools(ctx: CanvasFeatureContext): () => void {
+  const canvas = ctx.canvas
+  // the board's own name for it (`hand` under a viewer's Hand, `highlight` for the highlighter)
+  const current = (raw?: string | null) => canvas.tool() ?? raw ?? null
+  let said = current()
+  let due: ReturnType<typeof setTimeout> | null = null
+  const off = canvas.on('toolChanged', (raw) => {
+    const tool = current(raw)
+    if (due !== null) clearTimeout(due)
+    due = setTimeout(() => {
+      due = null
+      if (current() !== tool || tool === said) return
+      // the tool the board is on now, said or not (a later pick of the previous tool is news again)
+      said = tool
+      if (canvas.editingId() !== null) return
+      const words = toolWords(tool, ctx.registries.tools.list())
+      if (words) announcerFor(canvas).sayPolitely(words)
+    }, TOOL_SETTLE_MS)
+  })
+  return () => {
+    off()
+    if (due !== null) clearTimeout(due)
   }
 }
 

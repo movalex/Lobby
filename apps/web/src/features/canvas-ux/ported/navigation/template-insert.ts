@@ -67,7 +67,7 @@ async function fontsReady(): Promise<void> {
 export async function insertTemplate(
   canvas: LobbyCanvas,
   templateId: string,
-  opts: { near?: Point; animate?: boolean } = {},
+  opts: { near?: Point; animate?: boolean; select?: boolean } = {},
 ): Promise<InsertTemplateResult> {
   if (canvas.readOnly()) return { ok: false, reason: 'readonly' }
   if (!isTemplateId(templateId)) return { ok: false, reason: 'unknown' }
@@ -113,7 +113,7 @@ export async function insertTemplate(
       return !!el && !el.isDeleted
     })
     if (present.length !== scene.topLevelIds.length) return { ok: false, reason: 'failed' }
-    canvas.select(scene.topLevelIds)
+    if (opts.select !== false) canvas.select(scene.topLevelIds)
     const bounds = { x: scene.bounds.x, y: scene.bounds.y, width: scene.bounds.w, height: scene.bounds.h }
     canvas.viewport.zoomTo(bounds, { maxZoom: 1, ...(opts.animate === false ? {} : { animate: true }) })
     return { ok: true, ids: scene.topLevelIds, bounds }

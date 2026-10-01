@@ -9,7 +9,12 @@
 //    alignment, label alignment, arrowheads, line kind), mapped to the engine's fields by
 //    ./style-vocabulary.ts. Every pick is one undo step and sets the style of the next shapes too.
 // People who cannot edit get no style panel.
-import { useId } from 'react'
+// The wave-5 review: one Tab stop per control, arrows inside (W5-42); the font buttons drawn in their own
+// faces, icon arrowhead pickers, a visible opacity label with its value (W5-40); the note palette's legend in
+// Lobby's muted ink in dark mode (W5-41, canvas-tools.css); D4's polygons styled on their outline, their
+// see-through holder taking only the label's text styles (./polygons.ts); the folded panel on a low canvas
+// (W5-46, ./toolbar-layout.ts stylesFold).
+import { type ComponentType, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, useId } from 'react'
 import type {
   CanvasElement,
   CanvasFeatureContext,
@@ -20,6 +25,8 @@ import { items } from '../../../canvas/api/index.ts'
 import { useValue } from '../../../lib/signals.ts'
 import { NOTE_PALETTE, type NoteColorName } from '../palette.ts'
 import { selectedRoots } from './commands.ts'
+import { TOOL_ICONS } from './icons.tsx'
+import { isPolygonHolder, isPolygonLine, POLYGON_TOOLS } from './polygons.ts'
 import {
   ALIGN_LABELS,
   ALIGNS,
@@ -40,6 +47,7 @@ import {
   FILL_LABELS,
   FILLS,
   type FillName,
+  FONT_FACE,
   FONT_FAMILY,
   FONT_LABELS,
   FONTS,
@@ -67,7 +75,17 @@ import {
   VALIGNS,
   type VAlignName,
 } from './style-vocabulary.ts'
-import { STYLES_BUTTON_MAX, useCanvasRoom } from './toolbar-layout.ts'
+import { moveInToolbar } from './toolbar-keys.ts'
+import { stylesFold, useCanvasRoom } from './toolbar-layout.ts'
+
+/** The next shape's shape picker (the shape tools): the engine's three, then D4's polygons. */
+const GEO_OPTIONS: readonly string[] = ['rectangle', 'ellipse', 'diamond', ...POLYGON_TOOLS.map((t) => t.id)]
+const GEO_LABELS: Readonly<Record<string, string>> = {
+  rectangle: 'Rectangle',
+  ellipse: 'Ellipse',
+  diamond: 'Diamond',
+  ...Object.fromEntries(POLYGON_TOOLS.map((t) => [t.id, t.label])),
+}
 
 /** What the panel styles: an element kind, or the kind the picked tool makes. */
 export type StyleKind =
@@ -97,9 +115,13 @@ export const STYLED_TOOLS: Readonly<Record<string, StyleKind>> = {
   freedraw: 'draw',
   // the highlighter's next stroke takes a colour only (its width and opacity are the highlighter's)
   highlight: 'highlight',
+  // D4: the polygon tools' shapes take the shapes' style
+  ...Object.fromEntries(POLYGON_TOOLS.map((t) => [t.id, 'shape' as const])),
 }
 
 export function kindOf(el: CanvasElement): StyleKind {
+  // D4: a polygon's outline is a shape (colour, fill, dash, size); its holder is set apart in targetOf
+  if (isPolygonLine(el)) return 'shape'
   switch (items.itemKindOf(el)) {
     case 'note':
       return 'note'
@@ -132,19 +154,23 @@ export function showStylePanel(kinds: readonly StyleKind[], toolId: string | nul
 
 interface Target {
   readonly els: readonly CanvasElement[]
+  /** D4: selected polygons' see-through holders: only their labels take text styles (./polygons.ts) */
+  readonly holders: readonly CanvasElement[]
   readonly kinds: ReadonlySet<StyleKind>
   /** no selection: the picked tool's next shape */
   readonly next: boolean
 }
 
 function targetOf(canvas: LobbyCanvas): Target | null {
-  const els = selectedRoots(canvas).filter((e) => kindOf(e) !== 'frame')
-  const selectedKinds = selectedRoots(canvas).map(kindOf)
+  const roots = selectedRoots(canvas)
+  const holders = roots.filter((e) => isPolygonHolder(e, canvas))
+  const els = roots.filter((e) => kindOf(e) !== 'frame' && !holders.includes(e))
+  const selectedKinds = roots.filter((e) => !holders.includes(e)).map(kindOf)
   const tool = canvas.tool()
   if (!showStylePanel(selectedKinds, tool)) return null
-  if (els.length) return { els, kinds: new Set(els.map(kindOf)), next: false }
+  if (els.length) return { els, holders, kinds: new Set(els.map(kindOf)), next: false }
   const k = tool ? STYLED_TOOLS[tool] : undefined
-  return k ? { els: [], kinds: new Set([k]), next: true } : null
+  return k ? { els: [], holders: [], kinds: new Set([k]), next: true } : null
 }
 
 const has = (t: Target, ...k: StyleKind[]) => k.some((x) => t.kinds.has(x))
@@ -287,7 +313,10 @@ function applyJoined(canvas: LobbyCanvas, patch: StyleValues, ids: readonly stri
 }
 
 function textTargets(t: Target) {
-  return t.els.filter((e) => ['text', 'note', 'shape', 'arrow'].includes(kindOf(e))).map((e) => e.id)
+  return [
+    ...t.els.filter((e) => ['text', 'note', 'shape', 'arrow'].includes(kindOf(e)) && !isPolygonLine(e)),
+    ...t.holders,
+  ].map((e) => e.id)
 }
 
 /**
@@ -301,6 +330,20 @@ export function sharedOf<T>(values: readonly (T | null)[]): T | 'mixed' | null |
 }
 
 // ---- controls ------------------------------------------------------------------------------------------
+//
+// W5-42 (the wave-5 review): each control is ONE Tab stop (a roving tab index: the picked option, else the
+// first), and the arrow keys, Home and End move inside it (./toolbar-keys.ts), as tldraw's style panel does.
+// W5-40: the font buttons are drawn in their own face, the arrowheads are icon buttons (not native selects),
+// and the opacity slider always says what it is and its value.
+
+/** The roving tab index of option `i` of `options` whose picked value is `value`. Pure. */
+export function rovingTab<T>(options: readonly T[], value: unknown, i: number): 0 | -1 {
+  const at = options.indexOf(value as T)
+  return i === (at < 0 ? 0 : at) ? 0 : -1
+}
+
+/** The keyboard inside one control: arrows, Home and End move between its buttons. */
+const onGroupKey = (e: ReactKeyboardEvent<HTMLElement>) => moveInToolbar(e.nativeEvent, e.currentTarget)
 
 function Segmented<T extends string>(props: {
   legend: string
@@ -310,27 +353,45 @@ function Segmented<T extends string>(props: {
   /** 'mixed': the selection differs (the legend says so); null: none of the options (nothing pressed) */
   value: T | 'mixed' | null | undefined
   onPick(v: T): void
+  /** icon buttons (the label is the button's name and tooltip) */
+  icons?: Partial<Record<T, ComponentType>>
+  /** each option's own font face (W5-40: the font buttons) */
+  faces?: Partial<Record<T, string>>
 }) {
+  const icons = props.icons
   return (
     <fieldset className="cux-style__row" data-testid={`${props.testPrefix}`}>
       <legend className="cux-style__legend">
         {props.legend}
         {props.value === 'mixed' ? ' (mixed)' : ''}
       </legend>
-      <div className="cux-style__options">
-        {props.options.map((o) => (
-          <button
-            key={o}
-            type="button"
-            className="cux-style__opt"
-            data-testid={`${props.testPrefix}.${o}`}
-            aria-pressed={props.value === o}
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={() => props.onPick(o)}
-          >
-            {props.labels[o]}
-          </button>
-        ))}
+      <div
+        className={icons ? 'cux-style__options cux-style__options--icons' : 'cux-style__options'}
+        role="toolbar"
+        aria-label={props.legend}
+        onKeyDown={onGroupKey}
+      >
+        {props.options.map((o, i) => {
+          const Icon: ComponentType | undefined = icons?.[o]
+          const face = props.faces?.[o]
+          return (
+            <button
+              key={o}
+              type="button"
+              className={Icon ? 'cux-style__opt cux-style__opt--icon' : 'cux-style__opt'}
+              data-testid={`${props.testPrefix}.${o}`}
+              aria-pressed={props.value === o}
+              aria-label={Icon ? props.labels[o] : undefined}
+              title={Icon ? props.labels[o] : undefined}
+              tabIndex={rovingTab(props.options, props.value, i)}
+              style={face ? { fontFamily: `"${face}", var(--dr-font)` } : undefined}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => props.onPick(o)}
+            >
+              {Icon ? <Icon /> : props.labels[o]}
+            </button>
+          )
+        })}
       </div>
     </fieldset>
   )
@@ -343,11 +404,12 @@ function NoteColorPicker({ canvas, t }: { canvas: LobbyCanvas; t: Target }) {
     () => sharedOf(t.els.map((e) => noteColorOf((e as { backgroundColor?: string }).backgroundColor))),
     [t],
   )
+  const names = NOTE_PALETTE.map((s) => s.name)
   return (
     <fieldset className="dr-note-palette" data-testid="note-palette">
       <legend className="dr-note-palette__legend">Note color{current === 'mixed' ? ' (mixed)' : ''}</legend>
-      <div className="dr-note-palette__grid">
-        {NOTE_PALETTE.map((s) => (
+      <div className="dr-note-palette__grid" role="toolbar" aria-label="Note color" onKeyDown={onGroupKey}>
+        {NOTE_PALETTE.map((s, i) => (
           <button
             key={s.name}
             type="button"
@@ -357,6 +419,7 @@ function NoteColorPicker({ canvas, t }: { canvas: LobbyCanvas; t: Target }) {
             aria-pressed={current === s.name}
             aria-label={`${s.label}${current === s.name ? ' (selected)' : ''}`}
             title={s.label}
+            tabIndex={rovingTab(names, current, i)}
             // as the canvas draws it: the light values, through Excalidraw's dark filter in dark mode
             style={{
               background: s.light.fill,
@@ -393,8 +456,8 @@ function ColorPicker({
   return (
     <fieldset className="cux-style__row" data-testid="style.color">
       <legend className="cux-style__legend">Color{value === 'mixed' ? ' (mixed)' : ''}</legend>
-      <div className="cux-style__swatches">
-        {COLOR_NAMES.map((n) => (
+      <div className="cux-style__swatches" role="toolbar" aria-label="Color" onKeyDown={onGroupKey}>
+        {COLOR_NAMES.map((n, i) => (
           <button
             key={n}
             type="button"
@@ -403,6 +466,7 @@ function ColorPicker({
             aria-pressed={value === n}
             aria-label={COLOR_LABELS[n]}
             title={COLOR_LABELS[n]}
+            tabIndex={rovingTab(COLOR_NAMES, value, i)}
             onMouseDown={(e) => e.preventDefault()}
             onClick={() => pickColor(canvas, t, n)}
           >
@@ -424,26 +488,27 @@ function OpacityPicker({
   canvas,
   t,
   value,
-  alone,
 }: {
   canvas: LobbyCanvas
   t: Target
   value: number | 'mixed' | undefined
-  alone: boolean
 }) {
   const id = useId()
   const step =
     typeof value === 'number'
       ? OPACITY_STEPS.indexOf(opacityStepOf(value) as (typeof OPACITY_STEPS)[number])
       : OPACITY_STEPS.length - 1
+  const shown = OPACITY_STEPS[Math.max(0, step)]
   return (
     <div className="cux-style__row cux-style__opacity">
+      {/* W5-40 and R16: a visible label (with the value) whatever else the panel shows */}
       <label
         htmlFor={id}
-        className={alone ? 'cux-style__legend' : 'dr-sr-only'}
-        data-testid={alone ? 'style-opacity-label' : undefined}
+        className="cux-style__legend cux-style__opacity-label"
+        data-testid="style-opacity-label"
       >
-        Opacity
+        <span>Opacity</span>
+        <span className="cux-style__value">{value === 'mixed' ? 'Mixed' : `${shown}%`}</span>
       </label>
       <input
         id={id}
@@ -453,7 +518,7 @@ function OpacityPicker({
         step={1}
         value={Math.max(0, step)}
         data-testid="style.opacity"
-        aria-valuetext={`${OPACITY_STEPS[Math.max(0, step)]}%`}
+        aria-valuetext={`${shown}%`}
         onChange={(e) => {
           const v = OPACITY_STEPS[Number(e.currentTarget.value)] ?? 100
           pickPlain(
@@ -470,7 +535,41 @@ function OpacityPicker({
   )
 }
 
-function ArrowheadSelect({
+/** W5-40: an arrowhead's icon (a short line with the head at its right end; the start end mirrors it). */
+function headIcon(name: ArrowheadName, end: 'start' | 'end'): ComponentType {
+  const head: Record<ArrowheadName, ReactNode> = {
+    none: null,
+    arrow: <path d="M14 7l5 5-5 5" />,
+    triangle: <path d="M13 7l7 5-7 5z" fill="currentColor" />,
+    bar: <path d="M19 6v12" />,
+    dot: <circle cx="17" cy="12" r="3" fill="currentColor" />,
+    diamond: <path d="M16 8l4 4-4 4-4-4z" fill="currentColor" />,
+  }
+  const Icon = () => (
+    <svg
+      viewBox="0 0 24 24"
+      width={18}
+      height={18}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      focusable="false"
+      style={end === 'start' ? { transform: 'scaleX(-1)' } : undefined}
+    >
+      <path d={name === 'none' || name === 'bar' ? 'M4 12h15' : 'M4 12h12'} />
+      {head[name]}
+    </svg>
+  )
+  return Icon
+}
+const headIcons = (end: 'start' | 'end') =>
+  Object.fromEntries(ARROWHEADS.map((a) => [a, headIcon(a, end)])) as Record<ArrowheadName, ComponentType>
+const HEAD_ICONS = { start: headIcons('start'), end: headIcons('end') }
+
+function ArrowheadPicker({
   canvas,
   t,
   end,
@@ -481,30 +580,19 @@ function ArrowheadSelect({
   end: 'start' | 'end'
   value: ArrowheadName | 'mixed' | undefined
 }) {
-  const id = useId()
   const field = end === 'start' ? 'startArrowhead' : 'endArrowhead'
   return (
-    <div className="cux-style__head">
-      <label htmlFor={id} className="cux-style__sublegend">
-        {end === 'start' ? 'Start' : 'End'}
-      </label>
-      <select
-        id={id}
-        data-testid={`style.arrowhead-${end}`}
-        value={value === undefined || value === 'mixed' ? '' : value}
-        onChange={(e) => {
-          const name = e.currentTarget.value as ArrowheadName
-          pickPlain(canvas, t, 'arrowheads', { [field]: arrowheadField(name) } as StyleValues, ['arrow'])
-        }}
-      >
-        {value === 'mixed' && <option value="">Mixed</option>}
-        {ARROWHEADS.map((a) => (
-          <option key={a} value={a}>
-            {ARROWHEAD_LABELS[a]}
-          </option>
-        ))}
-      </select>
-    </div>
+    <Segmented
+      legend={end === 'start' ? 'Start arrowhead' : 'End arrowhead'}
+      testPrefix={`style.arrowhead-${end}`}
+      options={ARROWHEADS}
+      labels={ARROWHEAD_LABELS}
+      icons={HEAD_ICONS[end]}
+      value={value}
+      onPick={(name) =>
+        pickPlain(canvas, t, 'arrowheads', { [field]: arrowheadField(name) } as StyleValues, ['arrow'])
+      }
+    />
   )
 }
 
@@ -514,8 +602,8 @@ function ArrowheadSelect({
  * does (MobileStylePanel), so here the slot shows nothing.
  */
 export function StylePanel({ ctx }: { ctx: CanvasFeatureContext }) {
-  const { width } = useCanvasRoom(ctx.canvas)
-  if (width <= STYLES_BUTTON_MAX) return null
+  const room = useCanvasRoom(ctx.canvas)
+  if (stylesFold(room)) return null
   return <StylePanelBody ctx={ctx} />
 }
 
@@ -646,7 +734,6 @@ export function StylePanelBody({ ctx }: { ctx: CanvasFeatureContext }) {
           ? 'curved'
           : 'straight'
     : undefined
-  const onlyOpacity = !t.next && [...t.kinds].every((k) => k === 'image' || k === 'other')
   const tool = canvas.tool()
 
   return (
@@ -657,7 +744,7 @@ export function StylePanelBody({ ctx }: { ctx: CanvasFeatureContext }) {
         ) : strokeKinds || has(t, 'note') ? (
           <ColorPicker canvas={canvas} t={t} value={color} />
         ) : null}
-        {!textTool && <OpacityPicker canvas={canvas} t={t} value={opacity} alone={onlyOpacity} />}
+        {!textTool && <OpacityPicker canvas={canvas} t={t} value={opacity} />}
       </div>
       {(fill !== undefined || dash !== undefined || size !== undefined) && (
         <div className="cux-style__section">
@@ -700,6 +787,7 @@ export function StylePanelBody({ ctx }: { ctx: CanvasFeatureContext }) {
             testPrefix="style.font"
             options={FONTS}
             labels={FONT_LABELS}
+            faces={FONT_FACE}
             value={font}
             onPick={(f) => {
               const ids = textTargets(t)
@@ -727,7 +815,10 @@ export function StylePanelBody({ ctx }: { ctx: CanvasFeatureContext }) {
               labels={VALIGN_LABELS}
               value={valign}
               onPick={(v) => {
-                const ids = t.els.filter((e) => ['note', 'shape'].includes(kindOf(e))).map((e) => e.id)
+                const ids = [
+                  ...t.els.filter((e) => ['note', 'shape'].includes(kindOf(e)) && !isPolygonLine(e)),
+                  ...t.holders,
+                ].map((e) => e.id)
                 if (ids.length) canvas.styles.apply({ verticalAlign: v }, ids)
               }}
             />
@@ -739,22 +830,20 @@ export function StylePanelBody({ ctx }: { ctx: CanvasFeatureContext }) {
           <Segmented
             legend="Shape"
             testPrefix="style.geo"
-            options={['rectangle', 'ellipse', 'diamond'] as const}
-            labels={{ rectangle: 'Rectangle', ellipse: 'Ellipse', diamond: 'Diamond' }}
-            value={tool === 'rectangle' || tool === 'ellipse' || tool === 'diamond' ? tool : undefined}
+            options={GEO_OPTIONS}
+            labels={GEO_LABELS}
+            icons={TOOL_ICONS}
+            value={tool && (GEO_OPTIONS as readonly string[]).includes(tool) ? tool : undefined}
             onPick={(g) => canvas.setTool(g)}
           />
         </div>
       )}
       {arrows && (
         <div className="cux-style__section">
-          <fieldset className="cux-style__row" data-testid="style.arrowheads">
-            <legend className="cux-style__legend">Arrows</legend>
-            <div className="cux-style__heads">
-              <ArrowheadSelect canvas={canvas} t={t} end="start" value={startHead} />
-              <ArrowheadSelect canvas={canvas} t={t} end="end" value={endHead} />
-            </div>
-          </fieldset>
+          <div className="cux-style__heads" data-testid="style.arrowheads">
+            <ArrowheadPicker canvas={canvas} t={t} end="start" value={startHead} />
+            <ArrowheadPicker canvas={canvas} t={t} end="end" value={endHead} />
+          </div>
           <Segmented
             legend="Line"
             testPrefix="style.arrow-kind"

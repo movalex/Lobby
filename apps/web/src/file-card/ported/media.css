@@ -3,6 +3,19 @@
    is the shape's HTML container, here a box in the overlay's scene layer, in scene units, scaled with the
    zoom. The layer takes no pointer events; the card's buttons, links and video do (.dr-interactive). */
 
+/* W5-36: the card's inner parts read tldraw's colour variables (styles.css), which do not exist on this
+   page: they are mapped to Lobby's theme tokens here, so a card follows the light and dark themes (the
+   fallbacks were light beige, with the dark theme's error red on it at 2.2:1). */
+.lobby-fc.dr-fc,
+.lobby-link {
+  --tl-color-background: var(--dr-surface);
+  --tl-color-panel: var(--dr-surface);
+  --tl-color-low: var(--dr-inset);
+  --tl-color-divider: var(--dr-line);
+  --tl-color-text-1: var(--dr-ink);
+  --tl-color-text-3: var(--dr-ink-2);
+  --tl-color-muted-2: var(--dr-hover);
+}
 .lobby-fc.dr-fc {
   margin: 0;
   display: flex;
@@ -10,7 +23,10 @@
   box-sizing: border-box;
   overflow: hidden;
   border: 1px solid var(--dr-line, #dcd8cc);
-  border-radius: 10px;
+  /* W5-36: the element's own corner radius (CardLayer.tsx): the canvas face under the card is clipped to
+     it once its bitmap is drawn, so nothing shows past the corners; square while the engine draws its
+     (square) placeholder */
+  border-radius: var(--lobby-face-radius, 0);
   background: var(--dr-surface, #fff);
   color: var(--dr-ink, #1b2330);
   font-family: var(--dr-font);
@@ -31,12 +47,14 @@
   gap: 2cqh;
   box-sizing: border-box;
   overflow: hidden;
-  background-color: #eeebe3;
-  background-image: linear-gradient(105deg, transparent 35%, rgb(255 255 255 / 60%) 50%, transparent 65%);
+  /* W5-36: theme tokens (a light beige tile with light text in the dark theme before) */
+  --lobby-shimmer: rgb(255 255 255 / 60%);
+  background-color: var(--dr-chip, #eeebe3);
+  background-image: linear-gradient(105deg, transparent 35%, var(--lobby-shimmer) 50%, transparent 65%);
   background-repeat: no-repeat;
   background-size: 250% 100%;
-  box-shadow: inset 0 0 0 1px #dcd8cc;
-  color: #4a5566;
+  box-shadow: inset 0 0 0 1px var(--dr-line, #dcd8cc);
+  color: var(--dr-ink-2, #4a5566);
   font-family: var(--dr-font, system-ui, sans-serif);
   pointer-events: none;
   animation: lobby-pending-shimmer 1.8s ease-in-out infinite;
@@ -50,12 +68,15 @@
   line-height: 1.3;
 }
 .lobby-pending strong {
-  color: #1b2330;
+  color: var(--dr-ink, #1b2330);
   font-weight: 650;
+}
+:root[data-theme="dark"] .lobby-pending {
+  --lobby-shimmer: rgb(255 255 255 / 7%);
 }
 .lobby-pending[data-state="unavailable"] {
   background-image: none;
-  background-color: #f3f1ea;
+  background-color: var(--dr-hover, #f3f1ea);
   animation: none;
 }
 @keyframes lobby-pending-shimmer {
@@ -70,4 +91,148 @@
   .lobby-pending {
     animation: none;
   }
+}
+
+/* W5-56: the uploading tab's own copy of an image (local-previews.ts): under a placeholder until the
+   worker's derivative is on the canvas, and as a ghost at its planned place while it uploads. The
+   status stays readable as a chip; the file name stays in the text for screen readers. */
+.lobby-pending[data-local-preview] {
+  position: relative;
+  justify-content: flex-end;
+  padding-bottom: 4%;
+  background-image: none;
+  animation: none;
+}
+.lobby-pending__local,
+.lobby-ghost img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  pointer-events: none;
+}
+.lobby-pending[data-local-preview] > :not(img) {
+  position: relative;
+  padding: 0.2em 0.6em;
+  border-radius: 999px;
+  background: rgb(20 24 32 / 72%);
+  color: #fff;
+  font-size: min(7cqw, 10cqh, 14px);
+}
+.lobby-pending[data-local-preview] > strong {
+  color: #fff;
+}
+.lobby-pending[data-local-preview] > .lobby-pending__name {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  padding: 0;
+}
+.lobby-ghost {
+  container-type: size;
+  box-sizing: border-box;
+  overflow: hidden;
+  opacity: 0.72;
+  box-shadow: inset 0 0 0 1px var(--dr-line, #dcd8cc);
+  background: var(--dr-chip, #eeebe3);
+  pointer-events: none;
+}
+.lobby-ghost__chip {
+  position: absolute;
+  left: 50%;
+  bottom: 4%;
+  transform: translateX(-50%);
+  padding: 0.2em 0.6em;
+  border-radius: 999px;
+  background: rgb(20 24 32 / 72%);
+  color: #fff;
+  font: 600 min(7cqw, 10cqh, 14px) / 1.3 var(--dr-font, system-ui, sans-serif);
+  white-space: nowrap;
+}
+
+/* D2: a link card's face (link-cards.tsx), in scene units over its rounded rectangle. Plain text from
+   the api's reading of the page, the site's icon (a data: image, this view only), and an "open" link. */
+.lobby-link {
+  margin: 0;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  box-sizing: border-box;
+  padding: 12px 12px 12px 14px;
+  overflow: hidden;
+  border: 1px solid var(--dr-line, #dcd8cc);
+  border-radius: var(--lobby-face-radius, 10px);
+  background: var(--dr-surface, #fff);
+  color: var(--dr-ink, #1b2330);
+  font-family: var(--dr-font);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 6%);
+  pointer-events: none;
+}
+.lobby-link__icon {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  overflow: hidden;
+  border-radius: 8px;
+  background: var(--dr-chip, #eeece6);
+  color: var(--dr-ink-2, #4a5566);
+  font-weight: 700;
+  font-size: 15px;
+}
+.lobby-link__icon img {
+  width: 24px;
+  height: 24px;
+  object-fit: contain;
+}
+.lobby-link__text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.lobby-link__title {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.25;
+}
+.lobby-link__host {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--dr-ink-2, #4a5566);
+  font-size: 12px;
+}
+.lobby-link__open {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  margin: -4px -4px 0 0;
+  border-radius: 8px;
+  color: var(--dr-accent-ink, #1f3a5f);
+  pointer-events: auto;
+}
+.lobby-link__open:hover {
+  background: var(--dr-hover, #f1efe8);
+}
+.lobby-link__open:focus-visible {
+  outline: 2px solid var(--dr-focus, #2563eb);
+  outline-offset: 2px;
+}
+.dr-media-alt span {
+  font: 750 10px / 1 var(--dr-font);
+  letter-spacing: 0.04em;
 }

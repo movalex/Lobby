@@ -32,8 +32,12 @@ export type LobbyColor =
   | 'red'
   | 'white'
 export type LobbySize = 's' | 'm' | 'l' | 'xl'
-/** tldraw's font names; the new canvas has Excalifont ('draw'), Nunito ('sans', 'serif') and Comic Shanns ('mono'). */
-export type LobbyFont = 'draw' | 'sans' | 'serif' | 'mono'
+/**
+ * tldraw's font names, plus 'display': the new canvas has Excalifont ('draw'), Nunito ('sans', 'serif'),
+ * Comic Shanns ('mono') and Lilita One ('display', fontFamily 7: its headings, decision D3). tldraw has no
+ * display face, so it sets 'display' in sans.
+ */
+export type LobbyFont = 'draw' | 'sans' | 'serif' | 'mono' | 'display'
 export type LobbyTextAlign = 'start' | 'middle' | 'end'
 /** 'solid' is a pale tint (tldraw's name), 'fill' the full colour, 'semi' the near-white card fill. */
 export type LobbyFill = 'none' | 'semi' | 'solid' | 'fill'
@@ -69,10 +73,18 @@ export interface TextSpec {
   /** Headings and instructions arrive locked (PRE-07); starter values people fill in do not. */
   locked?: boolean
   /**
-   * What the new canvas shows instead, where the words name something only tldraw has (the tour's
-   * "Display · serif" sample: the new canvas has no serif, so it shows its hand-drawn face and says so).
+   * A heading (a section's or frame's title, a column's or a group's name). The new canvas has no bold
+   * (decision D3), so it sets headings in its display face (Lilita One) unless `scene.font` says otherwise;
+   * tldraw keeps `font`. Size and colour carry the rest of the hierarchy on both.
    */
-  scene?: { text?: string; font?: LobbyFont }
+  heading?: boolean
+  /**
+   * What the new canvas shows instead, where the words name something only one engine has (the tour's
+   * type samples name their faces). `displayText`: the words when the display face is available (it needs
+   * the server's font allowlist to accept fontFamily 7); `text` otherwise, so a label never names a face the
+   * canvas is not showing.
+   */
+  scene?: { text?: string; font?: LobbyFont; displayText?: string }
 }
 
 export interface NoteSpec {
@@ -103,6 +115,14 @@ export interface GeoSpec {
    * text only (docs/EXCALIDRAW-MIGRATION.md §1 non-goals), so there it is the plain first line.
    */
   titled?: boolean
+  /**
+   * The whole label is a title (a theme, a column header, a shortcut key over what it does): the new canvas
+   * sets it in its display face (Lilita One, decision D3), because one label holds one face. tldraw is
+   * unchanged (`titled` gives it a bold first line).
+   */
+  heading?: boolean
+  /** The new canvas's own words, where a label names something only one page has (a key binding). */
+  scene?: { text?: string }
 }
 
 export interface ArrowSpec {
@@ -160,7 +180,8 @@ export interface PlanText extends NodeBase {
   readonly align: LobbyTextAlign
   readonly font: LobbyFont
   readonly locked: boolean
-  readonly scene: { readonly text: string; readonly font: LobbyFont }
+  readonly heading: boolean
+  readonly scene: { readonly text: string; readonly font: LobbyFont; readonly displayText: string | null }
 }
 
 export interface PlanNote extends NodeBase {
@@ -185,6 +206,8 @@ export interface PlanGeo extends NodeBase {
   readonly locked: boolean
   readonly meta: Readonly<Record<string, string>>
   readonly titled: boolean
+  readonly heading: boolean
+  readonly scene: { readonly text: string }
 }
 
 export interface PlanArrow extends NodeBase {
@@ -293,20 +316,24 @@ export function createBoardBuilder(origin: TemplatePoint): BoardBuilder {
     section(spec) {
       const frame = builder.frame(spec)
       const headingSize = spec.headingSize ?? 'l'
+      const introW = Math.min(spec.w - PAD * 2, 1000)
       builder.text(frame, {
         x: PAD,
         y: HEADING_Y,
-        w: spec.w - PAD * 2,
+        // As wide as the intro under it (W5-59): the two share a reading-order row, read by their centres,
+        // so a heading wider than its intro was read after it.
+        w: spec.intro ? introW : spec.w - PAD * 2,
         text: spec.heading,
         size: headingSize,
         color: 'black',
         locked: true,
+        heading: true,
       })
       if (spec.intro) {
         builder.text(frame, {
           x: PAD,
           y: INTRO_Y,
-          w: Math.min(spec.w - PAD * 2, 1000),
+          w: introW,
           text: spec.intro,
           size: 's',
           color: 'grey',
@@ -318,6 +345,7 @@ export function createBoardBuilder(origin: TemplatePoint): BoardBuilder {
 
     text(parent, spec) {
       const font = spec.font ?? 'sans'
+      const heading = spec.heading ?? false
       return add<PlanText>({
         kind: 'text',
         seq: nodes.length,
@@ -334,7 +362,12 @@ export function createBoardBuilder(origin: TemplatePoint): BoardBuilder {
         align: spec.align ?? 'start',
         font,
         locked: spec.locked ?? false,
-        scene: { text: spec.scene?.text ?? spec.text, font: spec.scene?.font ?? font },
+        heading,
+        scene: {
+          text: spec.scene?.text ?? spec.text,
+          font: spec.scene?.font ?? (heading ? 'display' : font),
+          displayText: spec.scene?.displayText ?? null,
+        },
       })
     },
 
@@ -377,6 +410,8 @@ export function createBoardBuilder(origin: TemplatePoint): BoardBuilder {
         locked: spec.locked ?? false,
         meta: { ...spec.meta },
         titled: spec.titled ?? false,
+        heading: spec.heading ?? false,
+        scene: { text: spec.scene?.text ?? spec.text ?? '' },
       })
     },
 

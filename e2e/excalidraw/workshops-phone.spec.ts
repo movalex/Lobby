@@ -82,12 +82,53 @@ async function expectOnScreenAboveToolbars(page: Page, loc: Locator) {
   expect(b.y + b.height).toBeLessThanOrEqual((await toolbarTop(page)) - 4)
 }
 
+/**
+ * W5-07: nothing lies over a card (the phone sheet's "Board actions" button, the tool dock, a bar): a tap
+ * anywhere on it reaches it. Probes a grid over the card (its top, middle and bottom rows, inside the
+ * border and clear of the rounded corners) and each of its buttons (left, middle and right). Lists what is
+ * in the way instead.
+ */
+async function expectNothingOver(loc: Locator) {
+  await expect(loc).toBeVisible()
+  const covered = await loc.evaluate((card) => {
+    const out: string[] = []
+    const probe = (x: number, y: number, what: string) => {
+      const el = document.elementFromPoint(x, y)
+      if (el && card.contains(el)) return
+      const name = el ? `${el.tagName.toLowerCase()}.${String(el.className).slice(0, 40)}` : 'nothing'
+      out.push(`${what} (${Math.round(x)}, ${Math.round(y)}): ${name}`)
+    }
+    const r = card.getBoundingClientRect()
+    const side = 12 // clear of the card's rounded corners
+    const edge = 4 // inside its border
+    for (const [y, row] of [
+      [r.top + edge, 'top'],
+      [(r.top + r.bottom) / 2, 'middle'],
+      [r.bottom - edge, 'bottom'],
+    ] as const)
+      for (let i = 0; i <= 6; i++) probe(r.left + side + ((r.width - 2 * side) * i) / 6, y, `${row} ${i}/6`)
+    for (const b of card.querySelectorAll<HTMLElement>('button, a[href], input, select, textarea')) {
+      const q = b.getBoundingClientRect()
+      if (!q.width || !q.height) continue
+      const label = (b.textContent?.trim() || b.getAttribute('aria-label') || b.tagName).slice(0, 30)
+      for (const [f, side] of [
+        [0.15, 'left'],
+        [0.5, 'middle'],
+        [0.85, 'right'],
+      ] as const)
+        probe(q.left + q.width * f, q.top + q.height / 2, `"${label}" ${side}`)
+    }
+    return out
+  })
+  expect(covered, 'taps that miss the card').toEqual([])
+}
+
 async function sessionId(s: WorkshopCanvasSession, board: string): Promise<string> {
   const r = await s.api.fetch('GET', `/api/boards/${board}/private-brainstorm`)
   return ((await r.json()) as { session: { id: string } }).session.id
 }
 
-test('R2 R3 R4 R5 R6: guests take part but never facilitate; a brainstorm asks everyone to write; phones keep the timer, the menu and the vote cards on screen', async ({
+test('R2 R3 R4 R5 R6 W5-07: guests take part but never facilitate; a brainstorm asks everyone to write; phones keep the timer, the menu and the vote cards on screen, with nothing over the cards', async ({
   browser,
   board,
   join,
@@ -155,6 +196,7 @@ test('R2 R3 R4 R5 R6: guests take part but never facilitate; a brainstorm asks e
 
       const phoneCard = guest.getByTestId('pn-start-prompt')
       await expectOnScreenAboveToolbars(guest, phoneCard)
+      await expectNothingOver(phoneCard)
       await expect(phoneCard.getByTestId('pn-start-prompt-text')).toHaveText(PROMPT)
       const timer = guest.getByTestId('timer-floating')
       await expect(timer).toBeVisible()
@@ -198,6 +240,7 @@ test('R2 R3 R4 R5 R6: guests take part but never facilitate; a brainstorm asks e
       const vid = ((await started.json()) as { session: { id: string } }).session.id
       const joinCard = guest.getByTestId('vote-join-prompt')
       await expectOnScreenAboveToolbars(guest, joinCard)
+      await expectNothingOver(joinCard)
       await expect(joinCard.getByTestId('vote-touch-hint')).toBeVisible()
       await expect(joinCard.getByTestId('vote-keys-hint')).toBeHidden()
       await shot(guest, 'lc-r6-guest-phone-vote-join.png', testInfo)
@@ -205,6 +248,7 @@ test('R2 R3 R4 R5 R6: guests take part but never facilitate; a brainstorm asks e
       const bar = guest.getByTestId('vote-bar')
       await expectOnScreenAboveToolbars(guest, bar)
       await expectOnScreenAboveToolbars(guest, bar.getByTestId('vote-done'))
+      await expectNothingOver(bar)
       // A tap on a note votes (touch), and selects nothing.
       await showAll(guest)
       const tapAt = await reachableCenter(guest, 'fp-n0')
@@ -220,6 +264,7 @@ test('R2 R3 R4 R5 R6: guests take part but never facilitate; a brainstorm asks e
       const results = guest.getByTestId('vote-results-card')
       await expectOnScreenAboveToolbars(guest, results)
       await expectOnScreenAboveToolbars(guest, results.getByTestId('vote-results-card-all'))
+      await expectNothingOver(results)
       await shot(guest, 'lc-r6-guest-phone-results.png', testInfo)
     })
   } finally {

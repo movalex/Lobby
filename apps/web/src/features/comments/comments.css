@@ -62,13 +62,11 @@ html[data-dr-presenting] .dr-comments-layer {
   width: 100%;
   height: 100%;
   border-radius: 13px 13px 13px 2px;
+  /* pin-face.ts: the author's colour (faded for a read thread) and initials picked by contrast (W5-49) */
   background: var(--dr-cpin-color, var(--dr-navy));
-  color: #fff;
+  color: var(--dr-cpin-ink, #fff);
   font: 700 10.5px / 1 var(--dr-font);
   letter-spacing: 0.02em;
-}
-.dr-cpin[data-state="read"] .dr-cpin__face {
-  opacity: 0.78;
 }
 .dr-cpin[data-state="unread"] {
   border-color: var(--dr-navy);

@@ -112,7 +112,7 @@ test('templates in a board: storyboard lands selected, in view, clear of existin
   expect(third.filter((e) => ids2.has(e.id))).toEqual([])
 })
 
-test('?template= on first open: an empty board gets the template once (param removed); reloads and other people get no second copy (CR-2D-2: LobbyTx.insert)', async ({
+test('?template= on first open: an empty board gets the template once (param removed), with nothing selected and nothing announced (W5-58); reloads and other people get no second copy (CR-2D-2: LobbyTx.insert)', async ({
   canvasSession,
   browser,
   board,
@@ -128,6 +128,9 @@ test('?template= on first open: an empty board gets the template once (param rem
   await expect.poll(() => countOf(a.page, 'frame')).toBe(4)
   // it opens on the template (not an empty spot) and nothing is left selected
   expect(await sortedSelection(a.page)).toEqual([])
+  // W5-58: nothing was selected on the way either, so the live region never said "6 shapes selected"
+  await a.page.waitForTimeout(300)
+  await expect(a.page.getByTestId('canvas-announcer')).not.toContainText('selected')
   const frames = (await contentOf(a.page, 'frame')).map((e) => e.id)
   const [v, fb] = [await viewport(a.page), await boundsOf(a.page, frames)]
   expect(fb && overlaps(v, fb)).toBe(true)

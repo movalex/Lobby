@@ -2,14 +2,17 @@
 // "phone sheet"; spike B's `sheet` slot, B12): on a phone-width board (600 px and less, the dock's own phone
 // breakpoint) one "Board actions" button opens a bottom sheet with the tools this role may use (Lobby's
 // built-in ones and every feature tool with a toolbar entry: comment, vote, …), Undo / Redo and Zoom to fit.
-// It stands in for tldraw's own phone toolbar, which Lobby does not have on the new canvas (`ui={false}`).
+// Beside 3a's phone toolbar (38 px tools, the rest under More) it lists every tool at once, at touch size.
 //
 // Keyboard and touch: the button and every row are at least 44 px; Escape or Close shuts the sheet and gives
 // the keyboard back to the button; a press outside it shuts it too; picking a tool shuts it and hands the
-// keyboard to the board. Nothing renders on wider screens.
+// keyboard to the board. Nothing renders on wider screens. While a workshop card or a docked comment sheet
+// is up the button steps aside (a11y.css, W5-07); Zoom to fit honours reduced motion (W5-21).
 import { useEffect, useId, useRef, useState, useSyncExternalStore } from 'react'
 import type { CanvasFeatureContext, FeatureToolSpec } from '../../../canvas/api/index.ts'
 import { useValue } from '../../../lib/signals.ts'
+import { animateCamera } from './motion.ts'
+import { EDIT_TOOLS, READONLY_TOOLS, type ToolRow } from './tools.ts'
 
 /** The phone breakpoint (styles.css: the dock rail folds and panels become sheets below it). */
 export const PHONE_QUERY = '(max-width: 600px)'
@@ -25,35 +28,6 @@ function usePhone(): boolean {
     () => false,
   )
 }
-
-interface ToolRow {
-  readonly id: string
-  readonly label: string
-}
-
-/** Lobby's built-in tools in toolbar order (COL-07's main tools, then the ones in "More"). */
-const EDIT_TOOLS: readonly ToolRow[] = [
-  { id: 'select', label: 'Select' },
-  { id: 'hand', label: 'Hand' },
-  { id: 'note', label: 'Note' },
-  { id: 'text', label: 'Text' },
-  { id: 'rectangle', label: 'Rectangle' },
-  { id: 'freedraw', label: 'Pen' },
-  { id: 'arrow', label: 'Connector' },
-  { id: 'frame', label: 'Frame' },
-  { id: 'ellipse', label: 'Ellipse' },
-  { id: 'diamond', label: 'Diamond' },
-  { id: 'line', label: 'Line' },
-  { id: 'highlight', label: 'Highlight' },
-  { id: 'eraser', label: 'Eraser' },
-  { id: 'laser', label: 'Laser' },
-]
-/** What a read-only role (commenter, viewer, a limited guest) may pick. */
-const READONLY_TOOLS: readonly ToolRow[] = [
-  { id: 'select', label: 'Select' },
-  { id: 'hand', label: 'Hand' },
-  { id: 'laser', label: 'Laser' },
-]
 
 /** The rows of the Tools section for this role: built-in tools, then the features' toolbar tools. */
 export function sheetTools(readOnly: boolean, featureTools: readonly FeatureToolSpec[]): ToolRow[] {
@@ -216,7 +190,7 @@ function Sheet({
                 data-sheet-row=""
                 data-testid="phone-sheet-fit"
                 onClick={() => {
-                  canvas.viewport.fit(undefined, { animate: true })
+                  canvas.viewport.fit(undefined, { animate: animateCamera() })
                   shut('board')
                 }}
               >
