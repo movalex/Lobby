@@ -276,7 +276,7 @@ A creator has a **verified** sign-in address (primary or secondary) whose domain
 
 ### Clerk settings for domain access (the lead, before the deploy)
 
-1. Clerk Dashboard → the **staging instance** → Instance Settings → turn **Test mode off**, and record here that it is off (date, who). Test mode verifies any `+clerk_test` address with the fixed code 424242 and sends no email; Lobby ignores such addresses anyway, and turning it off also stops the fixed code from verifying anything. Status: **not yet recorded**.
+1. Clerk Dashboard → the **staging instance** → Instance Settings → turn **Test mode off**, and record here that it is off (date, who). Test mode verifies any `+clerk_test` address with the fixed code 424242 and sends no email; Lobby ignores such addresses anyway, and turning it off also stops the fixed code from verifying anything. Status: **off since 2026-10-01 04:25Z**, set through the Clerk Backend API (`PATCH /v1/instance {test_mode:false}`, 204) with the owner's approval.
 2. Confirm and record the enabled sign-in methods. Company addresses should sign in through email code or Google. Do not enable a Microsoft/Entra connection: its email claims are not proof of mailbox control (`docs/DOMAIN-ACCESS-CONTRACTS.md` §15).
 3. Do **not** switch Clerk instances (development → production) as part of this deploy. A switch changes every Clerk user id: sign-in would create new Lobby users with none of their memberships, and the identity refresh would treat the old ids as gone and sign them out. An instance switch needs its own plan that remaps `identities` first.
 4. Development Clerk instances are capped at 100 users (confirm against the plan). Outside accounts now sign in too and count toward the cap.
