@@ -267,7 +267,11 @@ export interface StartViewOptions {
   readonly boardId: string
   readonly userId: string
   readonly canEdit: boolean
-  onTemplateFailed?(): void
+  /**
+   * the dashboard's `?template=` could not be inserted: the param and the tab's marker are kept, so a
+   * reload inserts it again; `retry` inserts it again now (resolves with whether it went in)
+   */
+  onTemplateFailed?(retry: () => Promise<boolean>): void
   /** receives the cleanup of anything the first view keeps running for a moment (holdThroughLayout) */
   hold?(dispose: () => void): void
 }
@@ -296,6 +300,15 @@ export function whenSettled(canvas: LobbyCanvas, quietMs = 150, maxMs = 2500): P
     off = canvas.on('changed', arm)
     arm()
   })
+}
+
+/** Removes `names` from the address bar (history.replaceState); a blocked history API is no error. */
+function dropParams(names: readonly string[]): void {
+  try {
+    window.history.replaceState(window.history.state, '', withoutParams(window.location.href, names))
+  } catch {
+    // keep going; worst case the link replays on reload
+  }
 }
 
 /** How long after opening the first view is re-applied while the board's layout settles. */
@@ -395,18 +408,12 @@ export async function applyStartView(ctx: CanvasFeatureContext, opts: StartViewO
     pageExists: () => true,
   })
 
-  // handled once: drop our params so a reload lands on the user's last camera instead
-  if (templateId || DEEP_LINK_PARAMS.some((p) => url.searchParams.has(p))) {
-    try {
-      window.history.replaceState(
-        window.history.state,
-        '',
-        withoutParams(href, [TEMPLATE_PARAM, ...DEEP_LINK_PARAMS]),
-      )
-    } catch {
-      // keep going; worst case the link replays on reload
-    }
-  }
+  // handled once: drop our params so a reload lands on the user's last camera instead. The deep-link params
+  // go now; `?template=` goes now only when the plan is not to insert it (a viewer, a board with content,
+  // an unknown template, one this tab inserted already), else once its insert is confirmed (below): a first
+  // open whose insert failed used to consume it, which left the board empty with no way back (LEAD-2)
+  if (DEEP_LINK_PARAMS.some((p) => url.searchParams.has(p))) dropParams(DEEP_LINK_PARAMS)
+  if (templateId && plan.kind !== 'template') dropParams([TEMPLATE_PARAM])
 
   // whether the rectangle the first view went to shows nothing while the board has content (PRE-06);
   // the rectangle, not the camera: a camera just set is read back only after the engine renders it
@@ -418,16 +425,25 @@ export async function applyStartView(ctx: CanvasFeatureContext, opts: StartViewO
     return 'kept'
   switch (plan.kind) {
     case 'template': {
-      storageSet('session', templateInsertedKey(opts.boardId), '1')
-      // W5-58: inserted without selecting it, so the live region never says "6 shapes selected" on a
-      // board where nothing is selected
-      const result = await insertTemplate(canvas, plan.templateId, { animate: false, select: false })
-      if (result.ok) {
+      const insert = async (): Promise<boolean> => {
+        // W5-58: inserted without selecting it, so the live region never says "6 shapes selected" on a
+        // board where nothing is selected
+        const result = await insertTemplate(canvas, plan.templateId, { animate: false, select: false })
+        if (!result.ok) {
+          // the param and the tab's marker are left alone: a retry, or the next open, inserts it (LEAD-2)
+          opts.onTemplateFailed?.(insert)
+          return false
+        }
+        // confirmed: this tab never inserts it again, and a reload lands on the camera, not the template
+        storageSet('session', templateInsertedKey(opts.boardId), '1')
+        dropParams([TEMPLATE_PARAM])
         if (canvas.selection.length) canvas.select([])
         // DANA-06: the new board opens like a first visit, on its first frame when the whole template
         // would not be readable, and keeps that view while the layout settles
         if (fitContent(canvas) !== 'none') opts.hold?.(holdThroughLayout(canvas, () => fitContent(canvas)))
-      } else opts.onTemplateFailed?.()
+        return true
+      }
+      await insert()
       return `template:${plan.templateId}`
     }
     case 'deep-link': {
