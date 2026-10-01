@@ -45,7 +45,15 @@ import type { CanvasElement, CanvasFeatureContext, LobbyCanvas, ScenePoint } fro
 import { unionRects } from '../../features/canvas-ux/placement.ts'
 import { formatBytes, pluralize } from '../../lib/format.ts'
 import { CARD_SIZE } from '../card-model.ts'
-import { excalidrawCrop, type FileFacts, factsOf, imageSizeFromHeader, type PixelSize } from './model.ts'
+import { localPreviewsOf } from './local-previews.ts'
+import {
+  CARD_ROUNDNESS,
+  displaySizeFromHeader,
+  excalidrawCrop,
+  type FileFacts,
+  factsOf,
+  type PixelSize,
+} from './model.ts'
 
 const CARD_GAP = 24
 /** A dropped image whose header says nothing (an SVG): laid out as a square. */
@@ -393,10 +401,14 @@ export function bringIntoView(canvas: LobbyCanvas, content: Rect | null): void {
 
 // ---- the flow --------------------------------------------------------------------------------------------
 
-async function nativeSize(file: File): Promise<PixelSize> {
+/**
+ * The size an image file is shown at (its EXIF orientation applied, W5-12: a phone photo stored
+ * landscape with Orientation 6 lands portrait, as its derivatives are), read from the header only.
+ */
+export async function nativeSize(file: File): Promise<PixelSize> {
   try {
     const head = new Uint8Array(await file.slice(0, 256 * 1024).arrayBuffer())
-    return imageSizeFromHeader(head) ?? UNKNOWN_SIZE
+    return displaySizeFromHeader(head) ?? UNKNOWN_SIZE
   } catch {
     return UNKNOWN_SIZE
   }
@@ -411,7 +423,12 @@ function slotNow(canvas: LobbyCanvas, slot: Slot | null): Rect | null {
   return b ? rectOf(b) : null
 }
 
-function imageProps(meta: AssetVersionMeta, rect: Rect, frameId: string | null, crop: ImagePlan['crop']) {
+export function imageProps(
+  meta: AssetVersionMeta,
+  rect: Rect,
+  frameId: string | null,
+  crop: ImagePlan['crop'],
+) {
   return {
     x: Math.round(rect.x * 100) / 100,
     y: Math.round(rect.y * 100) / 100,
@@ -420,6 +437,8 @@ function imageProps(meta: AssetVersionMeta, rect: Rect, frameId: string | null, 
     fileId: meta.versionId,
     status: 'saved',
     scale: [1, 1],
+    // W5-36: a card's canvas face (its cover or poster) is clipped to the card's rounded corners
+    ...(meta.kind !== 'image' ? { roundness: CARD_ROUNDNESS } : {}),
     ...(frameId ? { frameId } : {}),
     ...(crop ? { crop } : {}),
     customData: { lobby: { file: factsFromMeta(meta) } },
@@ -484,8 +503,35 @@ export async function insertFiles(
     canvas.select([...chosen])
   }
 
+  // W5-56: this tab sees its images at once, at their planned places (a local preview, never stored)
+  const previews = localPreviewsOf(ctx.registries)
+  const previewUrls = images.map((f, i) => {
+    const size = sizes[i]
+    return size && size !== UNKNOWN_SIZE ? previews.make(f, size) : null
+  })
+  const ghostKeys: string[] = []
+  previews.addGhosts(
+    images.flatMap((f, i) => {
+      const url = previewUrls[i]
+      const rect = plan.images[i]?.rect
+      if (!url || !rect) return []
+      const ghostKey = `${seq}:${i}`
+      ghostKeys.push(ghostKey)
+      return [{ key: ghostKey, url, name: f.name, rect }]
+    }),
+  )
+
   const imagesDone = (async () => {
     if (!images.length) return
+    try {
+      await addImages()
+    } finally {
+      previews.removeGhosts(ghostKeys)
+      for (const url of previewUrls) if (url) previews.drop(url)
+    }
+  })()
+
+  async function addImages() {
     const key = `upload:images:${seq}`
     ctx.notify({
       key,
@@ -510,6 +556,11 @@ export async function insertFiles(
       }
     })
     const ok = results.flatMap((r, i) => (r.status === 'fulfilled' ? [{ meta: r.value, i }] : []))
+    // each uploaded image keeps its local preview until the loader shows the worker's derivative
+    for (const { meta, i } of ok) {
+      const url = previewUrls[i]
+      if (url) previews.keep(meta.versionId, url)
+    }
     if (!ok.length) return
     if (canvas.readOnly()) {
       ctx.notify({ key: `upload:${seq}`, text: 'This board is read-only.', tone: 'error' })
@@ -533,7 +584,7 @@ export async function insertFiles(
       chosen.add(id)
     }
     choose()
-  })()
+  }
 
   const cardsDone = Promise.all(
     cards.map(async ({ file }, i) => {
