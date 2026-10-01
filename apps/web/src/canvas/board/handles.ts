@@ -113,15 +113,32 @@ function nextStylePatch(p: StyleValues): Record<string, unknown> {
   return a
 }
 
-/** Lobby's own camera animation (Excalidraw's `updateScene` moves at once). */
-class CameraTween {
+/**
+ * Lobby's own camera animation (Excalidraw's `updateScene` moves at once). CR 3b-9: while a tween changes
+ * the zoom, the engine reuses its cached element bitmaps at the old zoom (`shouldCacheIgnoreZoom`, as its own
+ * wheel zoom does) instead of re-rendering every element on every frame; the last frame draws them sharp.
+ */
+export class CameraTween {
   private frame: number | null = null
   private lastUserMove = 0
+  private cacheIgnoring = false
   private readonly set: (v: Partial<Pick<Viewport, 'x' | 'y' | 'zoom'>>) => void
   private readonly get: () => Viewport
-  constructor(set: (v: Partial<Pick<Viewport, 'x' | 'y' | 'zoom'>>) => void, get: () => Viewport) {
+  private readonly ignoreZoomCache: (on: boolean) => void
+  constructor(
+    set: (v: Partial<Pick<Viewport, 'x' | 'y' | 'zoom'>>) => void,
+    get: () => Viewport,
+    ignoreZoomCache: (on: boolean) => void = () => {},
+  ) {
     this.set = set
     this.get = get
+    this.ignoreZoomCache = ignoreZoomCache
+  }
+
+  private cache(on: boolean): void {
+    if (this.cacheIgnoring === on) return
+    this.cacheIgnoring = on
+    this.ignoreZoomCache(on)
   }
 
   userMoved(): void {
@@ -139,6 +156,7 @@ class CameraTween {
   stop(): void {
     if (this.frame !== null) cancelAnimationFrame(this.frame)
     this.frame = null
+    this.cache(false)
   }
 
   /** Moves to `to` (a scene rectangle's top-left and a zoom), animated over `ms`. */
@@ -151,6 +169,7 @@ class CameraTween {
     const w = (from.width * from.zoom) / to.zoom
     const h = (from.height * from.zoom) / to.zoom
     const cTo = { x: to.x + w / 2, y: to.y + h / 2 }
+    if (to.zoom !== from.zoom) this.cache(true)
     const step = () => {
       const t = Math.min(1, (performance.now() - start) / ms)
       const e = t < 0.5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 2
@@ -160,6 +179,7 @@ class CameraTween {
       const cur = this.get()
       const vw = (cur.width * cur.zoom) / zoom
       const vh = (cur.height * cur.zoom) / zoom
+      if (t >= 1) this.cache(false)
       this.set({ x: cx - vw / 2, y: cy - vh / 2, zoom })
       if (t < 1) this.frame = requestAnimationFrame(step)
       else this.frame = null
@@ -184,6 +204,7 @@ export function createBoardHandles(d: HandleDeps): BoardHandles & {
   const tween = new CameraTween(
     (v) => port.viewport.set(v),
     () => port.viewport.get(),
+    (on) => api.updateScene({ appState: { shouldCacheIgnoreZoom: on } }),
   )
   const editWaiters = new Set<(phase: string, leaseId: string | null) => void>()
   const pendingNext: Record<string, unknown> = {}

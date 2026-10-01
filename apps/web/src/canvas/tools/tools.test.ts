@@ -97,6 +97,11 @@ describe('setTool (CanvasPort-style, §2.3.4)', () => {
     ])
     expect(setTool(api, 'hand', { readOnly: true })).toBe(false)
     expect(setTool(api, 'rectangle', { readOnly: true })).toBe(false)
-    expect(api.calls).toEqual([{ type: 'custom', customType: 'lobby-comment', locked: true }])
+    // CR-3A-8: the laser writes nothing; read-only roles may point
+    expect(setTool(api, 'laser', { readOnly: true })).toBe(true)
+    expect(api.calls).toEqual([
+      { type: 'custom', customType: 'lobby-comment', locked: true },
+      { type: 'laser' },
+    ])
   })
 })

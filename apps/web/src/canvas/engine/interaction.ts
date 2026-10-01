@@ -12,12 +12,17 @@ export const isLobbyRole = (v: unknown): v is LobbyRole =>
   typeof v === 'string' && (LOBBY_ROLES as readonly string[]).includes(v)
 
 /**
- * Read-only roles keep panning, zooming, links and Lobby's custom tools (comment, vote, open card); the
- * keyboard, clipboard and drag-and-drop inside Excalidraw are off. `tools` sits INSIDE `enabled`
- * (dist/types/excalidraw/types.d.ts:549-633). Plan §2.3.2.
+ * Read-only roles keep panning, zooming, links, Lobby's custom tools (comment, vote, open card) and the
+ * laser pointer (CR-3A-8: a viewer points at things in a review, as on the tldraw board; it writes
+ * nothing); the keyboard, clipboard and drag-and-drop inside Excalidraw are off. `tools` sits INSIDE
+ * `enabled` (dist/types/excalidraw/types.d.ts:549-633). Plan §2.3.2.
  */
 export const READ_ONLY_INTERACTION: InteractionConfig = Object.freeze({
-  enabled: Object.freeze({ navigation: true, links: true, tools: Object.freeze({ custom: true }) }),
+  enabled: Object.freeze({
+    navigation: true,
+    links: true,
+    tools: Object.freeze({ custom: true, laser: true }),
+  }),
 })
 
 /** The `interaction` prop for a role: omitted (Excalidraw's default `true`) for editors. */

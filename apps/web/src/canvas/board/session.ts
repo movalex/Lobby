@@ -517,9 +517,12 @@ export class LobbyBoardSession {
     offs.push(attachBoardFiles(this.registries, files), () => files.dispose())
     this.classifier.seed(api.getSceneElementsIncludingDeleted() as never)
 
+    // the canvas's size and place as the engine last measured them (CR-3A-10: a window resize changes
+    // `viewport.screenRect()` and the scene rectangle without a scroll, so readers were never told)
+    let lastBox = ''
     // 1. the engine's feed, then undo's step boundary, the port's events, presence
     offs.push(
-      attachEngine(api, this.core, (g) => {
+      attachEngine(api, this.core, (g, changed) => {
         const idle =
           !g.dragging &&
           !g.resizing &&
@@ -528,8 +531,16 @@ export class LobbyBoardSession {
           !g.editingLinear &&
           !g.newElementId &&
           !g.multiElementId
-        if (idle && !g.editingTextElementId) undo.boundary()
-        port.afterSceneChange()
+        // a camera move changes no element and no gesture: no step to record, no element scan (CR 3b-8)
+        if ((changed.elements || changed.gesture) && idle && !g.editingTextElementId) undo.boundary()
+        port.afterSceneChange(changed.elements)
+        const s = api.getAppState()
+        const box = `${s.width}x${s.height}@${s.offsetLeft},${s.offsetTop}`
+        if (box !== lastBox) {
+          const first = lastBox === ''
+          lastBox = box
+          if (!first) port.notifyViewport()
+        }
         presence.onGesture(g)
         const el = this.input.editorLease
         presence.setEditing(el && el.phase !== 'idle' ? el.leaseId : null)
@@ -673,7 +684,14 @@ export class LobbyBoardSession {
     })
     offs.push(() => lod.dispose())
     // the test facade and the debug handle (dev-auth builds only: the facade checks the guard itself)
-    const uninstallFacade = installFacade(port, this.registries)
+    // CR-3A-9: the facade's `tool` / `setTool` go through the LobbyCanvas (3a's tools part: the
+    // highlighter and the read-only Hand), not the raw port, which reports `freedraw` and `select` for them
+    const lobbyCanvas = this.handle.canvas
+    const facadePort = Object.create(port, {
+      tool: { value: () => lobbyCanvas.tool() },
+      setTool: { value: (t: string) => lobbyCanvas.setTool(t) },
+    }) as LobbyCanvasPort
+    const uninstallFacade = installFacade(facadePort, this.registries)
     if (uninstallFacade) offs.push(uninstallFacade)
     if (DEV_AUTH_ENABLED) {
       ;(window as unknown as { __lobbyBoard?: unknown }).__lobbyBoard = {

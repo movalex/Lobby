@@ -76,8 +76,13 @@ export interface LobbyCanvasPort extends CanvasPort {
   transact<T>(label: string, fn: (tx: LobbyCanvasTx) => T): T
   /** feeds the port's `pointer` event (the presence pointer listener) */
   emitPointer(point: ScenePoint | null): void
-  /** the adapter's hook after every scene change: `changed` and `selectionChanged` events, the hidden-ids post-filter */
-  afterSceneChange(): void
+  /** the canvas changed size or place (CR-3A-10): `viewportChanged` for readers of the view and its rect */
+  notifyViewport(): void
+  /**
+   * the adapter's hook after every scene change: `changed` and `selectionChanged` events, the hidden-ids
+   * post-filter. `elementsChanged: false` (a camera move, CR 3b-8) skips the element scan
+   */
+  afterSceneChange(elementsChanged?: boolean): void
   dispose(): void
 }
 
@@ -386,14 +391,19 @@ export function createCanvasPort(deps: PortDeps): LobbyCanvasPort {
     emitPointer(p) {
       emit('pointer', p)
     },
-    afterSceneChange() {
-      const changed: string[] = []
-      for (const e of all()) {
-        if (versions.get(e.id) === e.version) continue
-        versions.set(e.id, e.version)
-        changed.push(e.id)
+    notifyViewport() {
+      emit('viewportChanged', viewport())
+    },
+    afterSceneChange(elementsChanged = true) {
+      if (elementsChanged) {
+        const changed: string[] = []
+        for (const e of all()) {
+          if (versions.get(e.id) === e.version) continue
+          versions.set(e.id, e.version)
+          changed.push(e.id)
+        }
+        if (changed.length) emit('changed', changed)
       }
-      if (changed.length) emit('changed', changed)
       // the box/lasso post-filter (§2.3.3, B12): hidden ids never stay selected
       const s = api.getAppState().selectedElementIds
       const hidden = Object.keys(s).filter((k) => s[k] && registries.hidden.isHidden(k))

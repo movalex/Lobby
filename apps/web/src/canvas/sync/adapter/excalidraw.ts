@@ -76,22 +76,57 @@ export function createExcalidrawScene(api: ExcalidrawImperativeAPI): ExcalidrawS
   }
 }
 
+/** What a scene change's elements were, cheaply: the array, its length, and its versions and nonces. */
+export interface SceneFingerprint {
+  readonly ref: readonly unknown[]
+  readonly length: number
+  readonly versions: number
+  readonly nonces: number
+}
+
+export function fingerprintOf(elements: readonly SceneElement[]): SceneFingerprint {
+  let versions = 0
+  let nonces = 0
+  for (const e of elements) {
+    versions += e.version
+    nonces = (nonces ^ e.versionNonce) | 0
+  }
+  return { ref: elements, length: elements.length, versions, nonces }
+}
+
+const sameFingerprint = (a: SceneFingerprint | null, b: SceneFingerprint): boolean =>
+  !!a && a.ref === b.ref && a.length === b.length && a.versions === b.versions && a.nonces === b.nonces
+
+/** The gesture state the core reads, as a comparable key. */
+const gestureKey = (g: GestureState): string => JSON.stringify(g)
+
 /**
- * Feeds every scene change to the core, then `after` (the undo boundary, the port's events). Returns the
- * detach. The core scans only what changed since its last look (versions), so this runs on every
- * `onChange`, the core's own applies included (they find nothing).
+ * Feeds every scene change to the core, then `after` (the undo boundary, the port's events) with whether
+ * any element changed. Returns the detach.
+ *
+ * CR 3b-8: an `onChange` that only moved the camera (a pan, a zoom: most of them while someone navigates)
+ * changes no element and no gesture state, so the core's scan is skipped and `after` hears neither
+ * changed (the port then skips its element scan, undo its step boundary). Any element write bumps a version and a
+ * nonce (Excalidraw's `mutateElement`, `newElementWith`) or replaces the array, which the fingerprint sees;
+ * one tight loop over the versions replaces two scans with map lookups per camera frame.
  */
 export function attachEngine(
   api: ExcalidrawImperativeAPI,
   core: LobbyEngineCore,
-  after?: (gesture: GestureState) => void,
+  after?: (gesture: GestureState, changed: { elements: boolean; gesture: boolean }) => void,
 ): () => void {
+  let last: SceneFingerprint | null = null
+  let lastGesture = ''
   return api.onChange((_elements, appState) => {
-    const snapshot = {
-      elements: api.getSceneElementsIncludingDeleted() as unknown as readonly SceneElement[],
-      gesture: gestureOf(appState),
-    }
-    core.onSceneChange(snapshot)
-    after?.(snapshot.gesture)
+    const elements = api.getSceneElementsIncludingDeleted() as unknown as readonly SceneElement[]
+    const gesture = gestureOf(appState)
+    const fp = fingerprintOf(elements)
+    const changed = !sameFingerprint(last, fp)
+    last = fp
+    const g = gestureKey(gesture)
+    const gestureChanged = g !== lastGesture
+    lastGesture = g
+    if (changed || gestureChanged) core.onSceneChange({ elements, gesture })
+    after?.(gesture, { elements: changed, gesture: gestureChanged })
   })
 }
