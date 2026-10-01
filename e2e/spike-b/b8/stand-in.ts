@@ -69,11 +69,12 @@ export async function startSync(opts: {
 }): Promise<SyncProcess> {
   assertNoR2()
   // O4's range, the lead's (its integration pass runs B8's generated rows, §8.6.8), or 2B's (O4's code's
-  // owner since docs/EXCALIDRAW-CONTRACTS.md §0a; wave 5 runs it in 6440-6479)
+  // owner since docs/EXCALIDRAW-CONTRACTS.md §0a; wave 5 runs it in 6440-6479), or the wave-5 engine
+  // integrator's (6520-6559)
   const inRange = (lo: number, hi: number) => opts.port >= lo && opts.port <= hi
-  if (!inRange(7900, 7909) && !inRange(7850, 7859) && !inRange(6440, 6479))
+  if (!inRange(7900, 7909) && !inRange(7850, 7859) && !inRange(6440, 6479) && !inRange(6520, 6559))
     throw new Error(
-      'B8 stacks use ports 7900-7909 (O4), 7850-7859 (the lead) or 6440-6479 (2B) only (§8.6.5)',
+      'B8 stacks use ports 7900-7909 (O4), 7850-7859 (the lead), 6440-6479 (2B) or 6520-6559 (the engine integrator) only (§8.6.5)',
     )
   if (await healthy(opts.port)) throw new Error(`port ${opts.port} already serves something`)
   const env: NodeJS.ProcessEnv = {}

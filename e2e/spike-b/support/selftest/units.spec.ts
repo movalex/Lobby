@@ -5,6 +5,7 @@ import { hashElements } from '../../../../packages/canvas-schema/src/hash.ts'
 import { HASH_SAMPLE } from '../../../../packages/canvas-schema/src/hash-sample.ts'
 import { createBarrier, releaseTogether } from '../barrier.ts'
 import { leaseHookBody } from '../hooks.ts'
+import { ownerOf, stackPorts } from '../ports.ts'
 import { recordPushes } from '../pushes.ts'
 import { converged, divergence } from '../snapshot.ts'
 import { resolveStackPorts, spikeSyncEnv } from '../stack.ts'
@@ -83,6 +84,18 @@ test.describe('stack guards (§8.6.5, §8.6.7)', () => {
     expect(() => spikeSyncEnv({ syncEnv: { DRAFTROOM_BACKUP_R2_BUCKET: 'x' } })).toThrow(/never pass/)
     expect(() => spikeSyncEnv({ syncEnv: { DRAFTROOM_BACKUP_STORE: 'fs' } })).toThrow(/BACKUP_STORE=off/)
     expect(spikeSyncEnv({ syncEnv: { TEXT_LEASE_MS: '3000' } }).TEXT_LEASE_MS).toBe('3000')
+  })
+
+  test("the wave-5 owners' ranges are stack bases; a stack leaving its range is refused", () => {
+    // 2B (6440-6479) and the engine integrator (6520-6559): base, api and web inside one owner's range
+    expect(stackPorts(6440).web).toBe(6442)
+    expect(stackPorts(6520).api).toBe(6521)
+    expect(stackPorts(6557).web).toBe(6559)
+    expect(ownerOf(6544)).toBe('engine-int')
+    // the web port would land outside the range, or the base is in no range
+    expect(() => stackPorts(6558)).toThrow(/one owner's range/)
+    expect(() => stackPorts(6500)).toThrow(/one owner's range/)
+    expect(() => stackPorts(6480)).toThrow(/one owner's range/)
   })
 
   test('a stack on another base than the web build is refused', () => {

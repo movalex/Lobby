@@ -14,7 +14,19 @@ export const HOST = '127.0.0.1'
 export const SPIKE_B_PORT_MIN = 7850
 export const SPIKE_B_PORT_MAX = 7999
 
-export type SpikeBOwner = 'lead' | 'O1' | 'O2' | 'O3' | 'O4' | 'O5' | 'V1' | 'V2' | 'V3' | 'spare' | '2B'
+export type SpikeBOwner =
+  | 'lead'
+  | 'O1'
+  | 'O2'
+  | 'O3'
+  | 'O4'
+  | 'O5'
+  | 'V1'
+  | 'V2'
+  | 'V3'
+  | 'spare'
+  | '2B'
+  | 'engine-int'
 
 /** §8.6.5: each owner's range. */
 export const PORT_RANGES: Readonly<Record<SpikeBOwner, readonly [number, number]>> = {
@@ -30,6 +42,8 @@ export const PORT_RANGES: Readonly<Record<SpikeBOwner, readonly [number, number]
   spare: [7950, 7999],
   /** wave 5: the sync edges owner (B8's specs and drills on engine/w5-2b), docs/EXCALIDRAW-CONTRACTS.md §0a */
   '2B': [6440, 6479],
+  /** wave 5: the engine integrator (the spike-b suite and B8's generated rows on the merged engine/excalidraw) */
+  'engine-int': [6520, 6559],
 }
 
 /** §8.6.5: the named stacks (the base of each; sync = base, api = base + 1, web = base + 2). */
