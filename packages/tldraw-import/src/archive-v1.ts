@@ -1,14 +1,3 @@
-import { customShapeSchemas, draftroomSchema, FILE_CARD_TYPE } from '@draftroom/canvas-schema'
-import {
-  defaultAssetSchemas,
-  defaultBindingSchemas,
-  defaultShapeSchemas,
-  type TLArrowBinding,
-  type TLPageId,
-  type TLRecord,
-  type TLSchema,
-} from '@tldraw/tlschema'
-import { structuredClone } from '@tldraw/utils'
 import {
   type ArchiveAssetRef,
   ArchiveError,
@@ -20,8 +9,20 @@ import {
   resolveLimits,
   sanitizeJson,
   shortId,
-} from './archive-common.ts'
-import { remapIds } from './remap.ts'
+} from '@draftroom/board-ops/archive-common'
+import { FILE_CARD_TYPE } from '@draftroom/canvas-schema'
+import {
+  defaultAssetSchemas,
+  defaultBindingSchemas,
+  defaultShapeSchemas,
+  type TLArrowBinding,
+  type TLPageId,
+  type TLRecord,
+  type TLSchema,
+} from '@tldraw/tlschema'
+import { structuredClone } from '@tldraw/utils'
+import { remapIds } from './archive-remap.ts'
+import { customShapeSchemas, draftroomSchema } from './schema.ts'
 
 export {
   ARCHIVE_LIMITS,
@@ -29,7 +30,8 @@ export {
   ArchiveError,
   type ArchiveErrorCode,
   type ArchiveLimits,
-} from './archive-common.ts'
+} from '@draftroom/board-ops/archive-common'
+export { type RemapOptions, type RemapResult, remapIds } from './archive-remap.ts'
 
 /** `@tldraw/store`'s `SerializedSchema` (V1 | V2), derived so board-ops needs no direct store dependency. */
 export type SerializedSchema = Parameters<TLSchema['migratePersistedRecord']>[1]
@@ -506,3 +508,6 @@ function importUnchecked(
     warnings,
   }
 }
+
+// the v1 archive read as elements of the new canvas (through the injected converter)
+export * from './archive-v1-elements.ts'

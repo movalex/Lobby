@@ -5,8 +5,9 @@
  * (`draftroomSchema`, which carries the file-card shape's migrations). A record the schema cannot migrate
  * fails the whole set; nothing is guessed.
  */
-import { draftroomSchema } from '@draftroom/canvas-schema'
+
 import type { TLRecord, TLSchema } from '@tldraw/tlschema'
+import { draftroomSchema } from './schema.ts'
 import type { TlRecord } from './types.ts'
 
 type SerializedSchema = Parameters<TLSchema['migrateStoreSnapshot']>[0]['schema']

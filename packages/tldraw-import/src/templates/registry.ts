@@ -1,13 +1,13 @@
 // The tldraw registry (default build, until wave 4): the engine-neutral sources (./source.ts) emitted as
 // tldraw records (./tldraw.ts) and validated against draftroomSchema.
 
-import { draftroomSchema } from '@draftroom/canvas-schema'
+import { guardContext, ownProp, readOrigin, TemplateError, unionRects } from '@draftroom/templates/common'
+import { getTemplateSource, planOf, TEMPLATE_SOURCES, type TemplateSource } from '@draftroom/templates/source'
 import type { TLPageId, TLRecord } from '@tldraw/tlschema'
 import { getIndexAbove, type IndexKey } from '@tldraw/utils'
-import { guardContext, ownProp, readOrigin, TemplateError, unionRects } from './common.ts'
+import { draftroomSchema } from '../schema.ts'
 import { estimateShapeRect } from './layout.ts'
-import { getTemplateSource, planOf, TEMPLATE_SOURCES, type TemplateSource } from './source.ts'
-import { planToRecords } from './tldraw.ts'
+import { planToRecords } from './records.ts'
 import type {
   TemplateBuildResult,
   TemplateContext,
@@ -16,7 +16,7 @@ import type {
   TemplateInstance,
 } from './types.ts'
 
-export { isTemplateId } from './source.ts'
+export { isTemplateId } from '@draftroom/templates/source'
 
 /** Largest accepted |origin| coordinate; keeps every produced coordinate finite and precise. */
 export const MAX_TEMPLATE_ORIGIN = 1e9

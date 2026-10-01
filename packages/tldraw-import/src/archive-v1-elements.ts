@@ -13,16 +13,16 @@
  * (`importElements`: server element check, doc keys, tags, remap with fresh ids, invariants). A v2 archive
  * goes to `importElementArchive`.
  */
-import { TAG_DEF_KEY_PREFIX } from '@draftroom/canvas-schema/doc'
-import { ARCHIVE_FORMAT, ARCHIVE_VERSION, importBoardArchive } from '../archive.ts'
-import { ArchiveError, isPlainObject, own, sanitizeJson } from '../archive-common.ts'
+import { ArchiveError, isPlainObject, own, sanitizeJson } from '@draftroom/board-ops/archive-common'
 import {
   ELEMENT_ARCHIVE_LIMITS,
   type ImportElementArchiveOptions,
   type ImportedElementArchive,
   importElementArchive,
   importElements,
-} from './archive.ts'
+} from '@draftroom/board-ops/elements'
+import { TAG_DEF_KEY_PREFIX } from '@draftroom/canvas-schema/doc'
+import { ARCHIVE_FORMAT, ARCHIVE_VERSION, importBoardArchive } from './archive-v1.ts'
 
 /** What a v1 archive's records become: the shape of packages/tldraw-import `convertBoard`'s result. */
 export interface V1Conversion {

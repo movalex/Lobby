@@ -6,11 +6,8 @@
 
 import type { WireElement } from '@draftroom/canvas-schema/elements'
 import { describe, expect, it } from 'vitest'
-import type { PlanFrame, PlanNode } from './builder.ts'
-import { instantiateTemplate } from './index.ts'
-import type { Rect } from './layout.ts'
-import { planTemplate, TEMPLATE_INFOS } from './plan.ts'
-import { alignedTemplate } from './scene/test-kit.ts'
+import type { Rect } from '../../tldraw-import/src/templates/layout.ts'
+import { instantiateTemplate } from '../../tldraw-import/src/templates/registry.ts'
 import {
   byId,
   childrenOf,
@@ -20,7 +17,10 @@ import {
   PAGE,
   pageRect,
   textOf,
-} from './test-utils.ts'
+} from '../../tldraw-import/src/templates/test-utils.ts'
+import type { PlanFrame, PlanNode } from './builder.ts'
+import { planTemplate, TEMPLATE_INFOS } from './plan.ts'
+import { alignedTemplate } from './scene/test-kit.ts'
 
 const ORIGIN = { x: 0, y: 0 }
 

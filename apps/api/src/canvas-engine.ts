@@ -1,18 +1,19 @@
 // Which canvas the sync server runs, as the api needs it for bridge release R0's contracts
 // (docs/DEPLOY.md "Bridge release R0", migration 0022; docs/EXCALIDRAW-MIGRATION.md §5.10; wave 5, 2A).
 //
-// On the new canvas (sync with DRAFTROOM_ENGINE=excalidraw) this api writes `boards.new_canvas = true` on
+// On the new canvas (this build's sync, the Excalidraw engine) this api writes `boards.new_canvas = true` on
 // every board it creates (new, template, duplicate, restore as new, import; converted boards keep false)
 // and `board_snapshots.body_version = 2` on every checkpoint body made on it; R0's refusals of such boards
 // and checkpoints (tickets, duplicate, export, checkpoints, previews, restores, the asset collector's
 // "unread") do not apply, and the answers carry no `newCanvas` marks: they are this build's own content.
-// With the tldraw sync (this branch's default build, and what R0 is during a rollback) nothing changes:
-// nothing is marked, and R0's refusals stand for whatever another build marked.
+// With the tldraw sync (bridge release R0: the deploy window of the cut-over, and what a rollback is)
+// nothing changes: nothing is marked, and R0's refusals stand for whatever another build marked.
 //
 // The engine comes from the sync server itself (GET /internal/canvas), not from a setting, so the api
-// follows the sync it talks to through the cut-over and a rollback. It is asked at most every `ttlMs`;
-// while sync cannot be asked, the last answer stands (tldraw before the first one). R0's sync has no such
-// route (404): tldraw.
+// follows the sync it talks to through the cut-over and a rollback: this build's sync always answers
+// `excalidraw` (wave 4 part 2: it runs no other engine), R0's sync has no such route (404) and reads as
+// `tldraw`. It is asked at most every `ttlMs`; while sync cannot be asked, the last answer stands (tldraw
+// before the first one: the conservative default, R0's refusals).
 
 export type CanvasEngine = 'tldraw' | 'excalidraw'
 

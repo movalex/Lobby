@@ -4,7 +4,6 @@
 // boards), board export, and the "Recently deleted" proxy to the sync server. Every decision goes
 // through access.ts (packages/permissions); 404 whenever the caller cannot see the board.
 
-import { draftroomSchema } from '@draftroom/canvas-schema'
 import {
   CreateSnapshotInput,
   DuplicateBoardInput,
@@ -18,6 +17,7 @@ import {
 } from '@draftroom/contracts'
 import { newId } from '@draftroom/db'
 import { can, canCreateInWorkspace } from '@draftroom/permissions'
+import { currentSchema } from '@draftroom/tldraw-import'
 import type { FastifyInstance } from 'fastify'
 import { requireBoardAction, requireProjectInWorkspace, requireWorkspaceRole } from '../../access.ts'
 import { userKind } from '../../auth/users.ts'
@@ -355,7 +355,7 @@ export async function registerHistory(app: FastifyInstance, ctx: FeatureContext)
         } else {
           const v1 = importBoardArchive(req.body, { targetPageId: 'page:page' as never })
           imported = {
-            content: { format: 'tldraw', records: v1.records, schema: draftroomSchema.serialize() },
+            content: { format: 'tldraw', records: v1.records, schema: currentSchema() },
             assets: v1.assets,
             warnings: v1.warnings,
             files: referencedFiles(v1.records),

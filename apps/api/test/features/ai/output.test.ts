@@ -3,7 +3,6 @@
 // plan must still name only notes this call sent, hold the contract's counts and lengths, and a broken
 // answer must fail cleanly (and still be paid for).
 
-import { note, sid } from '@draftroom/board-ops/test-fixtures'
 import {
   AI_ACTION_ITEMS_MAX,
   AI_ITEM_MAX_CHARS,
@@ -13,6 +12,7 @@ import {
   AI_THEMES_MAX,
   AiResult,
 } from '@draftroom/contracts'
+import { note, sid } from '@draftroom/tldraw-import/test-fixtures'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { itemsOf } from './fake-openai.ts'
 import { brainstormShapes, FRAME, LOCKED, LOOSE, NOTES } from './fixtures.ts'

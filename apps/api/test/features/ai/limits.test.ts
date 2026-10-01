@@ -3,8 +3,8 @@
 // Lobby, under concurrent requests, across restarts, and they must fail closed.
 
 import { Writable } from 'node:stream'
-import { note } from '@draftroom/board-ops/test-fixtures'
 import { AiResult, AiStatus } from '@draftroom/contracts'
+import { note } from '@draftroom/tldraw-import/test-fixtures'
 import { afterEach, describe, expect, it } from 'vitest'
 import { createApiServer } from '../../../src/app.ts'
 import { createBoard, DEV_STUDIO } from '../../helpers.ts'

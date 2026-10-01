@@ -5,9 +5,9 @@ import { readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
-import { instantiateTemplate, TEMPLATES } from './index.ts'
+import { instantiateTemplate, TEMPLATES } from '../../tldraw-import/src/templates/registry.ts'
+import { PAGE } from '../../tldraw-import/src/templates/test-utils.ts'
 import { planBounds, planTemplate, TEMPLATE_INFOS } from './plan.ts'
-import { PAGE } from './test-utils.ts'
 
 const SRC = dirname(fileURLToPath(import.meta.url))
 

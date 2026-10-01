@@ -38,6 +38,7 @@ export {
   type ImportElementArchiveOptions,
   type ImportedElementArchive,
   importElementArchive,
+  importElements,
   portableDoc,
   portableElement,
 } from './archive.ts'

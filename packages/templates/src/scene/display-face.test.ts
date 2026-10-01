@@ -19,7 +19,7 @@ const { DISPLAY_FACE_AVAILABLE, FONT_FAMILY, instantiateSceneTemplate, sceneFont
   './index.ts'
 )
 const { labelOf, wordsOf } = await import('./test-kit.ts')
-const { rectContains, rectsOverlap } = await import('../test-utils.ts')
+const { rectContains, rectsOverlap } = await import('../../../tldraw-import/src/templates/test-utils.ts')
 
 const ORIGIN = { x: 0, y: 0 }
 

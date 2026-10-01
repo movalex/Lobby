@@ -18,6 +18,7 @@
     "@draftroom/db": "workspace:*",
     "@draftroom/dev-assets": "workspace:*",
     "@draftroom/permissions": "workspace:*",
+    "@draftroom/tldraw-import": "workspace:*",
     "@fastify/cookie": "catalog:",
     "@fastify/rate-limit": "catalog:",
     "fastify": "catalog:",

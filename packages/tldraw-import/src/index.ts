@@ -10,7 +10,10 @@
  * - `migrateRecords`: stored records up to the current tldraw schema;
  * - `convertDeleted`: `dr_deleted_*` → `lb_deleted` rows;
  * - `semanticDiff`: the §5.3 verification (`./diff`);
- * - `./board-file`: reading a board file's tldraw tables with node:sqlite (Node only).
+ * - `./board-file`: reading a board file's tldraw tables with node:sqlite (Node only);
+ * - `./schema`: the tldraw era's server schema (Lobby's file card included), `./archive-v1`: the v1 board
+ *   archive (what the api still imports), `./templates`: the templates as tldraw records (the parity
+ *   tests' reference), `./tldraw`: the tldraw symbols Lobby's tests may use (nothing else imports `@tldraw/*`).
  *
  * Nothing in this package logs; reports carry ids, counts and codes only.
  */

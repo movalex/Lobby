@@ -3,11 +3,11 @@
 // NoteShapeUtil display values, TLTheme fontSize 16 / lineHeight 1.35). Text is measured
 // by the editor at render time, so heights here are deliberately conservative estimates.
 
+import { NOTE_SIZE, type Rect } from '@draftroom/templates/common'
 import type { TLDefaultSizeStyle, TLShape } from '@tldraw/tlschema'
-import { NOTE_SIZE, type Rect } from './common.ts'
 
 /** tldraw note shapes are 200 x 200 (times `scale`), plus `growY`. */
-export { NOTE_SIZE, type Rect, unionRects } from './common.ts'
+export { NOTE_SIZE, type Rect, unionRects } from '@draftroom/templates/common'
 /** Padding around note and geo labels (LABEL_PADDING). */
 export const LABEL_PADDING = 16
 const BASE_FONT_SIZE = 16

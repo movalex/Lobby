@@ -4,11 +4,11 @@
 
 import type { WireElement } from '@draftroom/canvas-schema/elements'
 import { installServerTextMetrics } from '@draftroom/canvas-schema/engine'
-import type { TLPageId, TLRecord } from '@tldraw/tlschema'
+import { planToRecords } from '../../../tldraw-import/src/templates/records.ts'
+import type { TLPageId, TLRecord } from '../../../tldraw-import/src/tldraw.ts'
 import type { BoardPlan, PlanNode } from '../builder.ts'
 import type { TemplateId, TemplatePoint } from '../common.ts'
 import { getTemplateSource, planOf } from '../source.ts'
-import { planToRecords } from '../tldraw.ts'
 import { planToScene } from './emit.ts'
 
 /** The Node side of the engine's text layout (the server table), as apps/sync installs it. */

@@ -1,6 +1,7 @@
 // Test-only builders for real tldraw 5.4.2 records (default props from the tldraw ShapeUtils'
 // getDefaultProps). Not exported from the package index.
-import { draftroomSchema, FILE_CARD_TYPE } from '@draftroom/canvas-schema'
+import { FILE_CARD_TYPE } from '@draftroom/canvas-schema'
+import { draftroomSchema } from './schema.ts'
 import type {
   TLArrowBinding,
   TLAsset,
@@ -12,9 +13,8 @@ import type {
   TLRichText,
   TLShape,
   TLShapeId,
-} from '@tldraw/tlschema'
-import { toRichText } from '@tldraw/tlschema'
-import type { IndexKey, JsonObject } from '@tldraw/utils'
+} from './tldraw.ts'
+import { type IndexKey, type JsonObject, toRichText } from './tldraw.ts'
 
 export const PAGE: TLPageId = 'page:main' as TLPageId
 export const PAGE_2: TLPageId = 'page:second' as TLPageId

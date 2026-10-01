@@ -1,6 +1,6 @@
-import { createShapeId, type TLRecord } from '@tldraw/tlschema'
 import { describe, expect, it } from 'vitest'
-import { draftroomSchema, FILE_CARD_TYPE } from './index.ts'
+import { draftroomSchema, FILE_CARD_TYPE } from '../src/schema.ts'
+import { createShapeId, type TLRecord } from '../src/tldraw.ts'
 
 const base = {
   id: createShapeId('fc1'),

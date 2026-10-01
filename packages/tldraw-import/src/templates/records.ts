@@ -1,9 +1,11 @@
-// The tldraw emitter (default build, until wave 4): a `BoardPlan` as plain tldraw 5.4.2 shape + binding
+// The tldraw emitter (the tldraw board page's, until wave 4 part 2; kept here as the reference the
+// converter's parity tests and fixtures are made from): a `BoardPlan` as plain tldraw 5.4.2 shape + binding
 // records with full default props (from the tldraw ShapeUtil getDefaultProps / ArrowBindingUtil defaults),
 // fresh ids, and fractional index keys per parent. The output is what the template builder produced before
 // the engine-neutral plan existed (same records, same key order, same index order), because the geometry
 // comes from the plan unchanged and the records are made in the plan's creation order.
 
+import type { BoardPlan, PlanNode } from '@draftroom/templates/builder'
 import {
   createBindingId,
   createShapeId,
@@ -21,7 +23,6 @@ import {
   toRichText,
 } from '@tldraw/tlschema'
 import { getIndexAbove, type IndexKey } from '@tldraw/utils'
-import type { BoardPlan, PlanNode } from './builder.ts'
 import type { TemplateContext } from './types.ts'
 
 /** Records for `plan` on `ctx.pageId`, top-level shapes above `ctx.indexAbove`. */

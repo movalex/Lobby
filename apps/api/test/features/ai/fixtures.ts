@@ -1,7 +1,7 @@
 // Canvas records for the ai-assist API tests: a "Brainstorm" frame with sticky notes, a heading, a
 // connector label and a file card, plus loose notes, a locked note and an empty one.
 
-import { arrow, fileCard, frame, geo, note, sid, text } from '@draftroom/board-ops/test-fixtures'
+import { arrow, fileCard, frame, geo, note, sid, text } from '@draftroom/tldraw-import/test-fixtures'
 
 export const FRAME = sid('brainstorm')
 export const NOTES = ['n-boss', 'n-shot', 'n-coop', 'n-villain', 'n-rewind', 'n-clips'].map(sid)

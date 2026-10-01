@@ -1,8 +1,9 @@
 // Internal: read-only index over a set of records (shapes by id, pages, parent chains, page transforms).
 // Every accessor tolerates malformed data (missing parents, parent cycles, non-finite numbers).
+
+import { type Box, finiteOr, isRecordObject } from '@draftroom/board-ops/common'
 import type { TLPage, TLPageId, TLRecord, TLShape } from '@tldraw/tlschema'
 import { getIndexAbove, type IndexKey } from '@tldraw/utils'
-import { type Box, finiteOr, isRecordObject } from './common.ts'
 
 export {
   type Box,
@@ -11,7 +12,7 @@ export {
   isRecordObject,
   readingOrder,
   truncateText,
-} from './common.ts'
+} from '@draftroom/board-ops/common'
 
 /** Parent chains longer than this are treated as broken (real boards nest a handful of levels). */
 const MAX_PARENT_DEPTH = 256

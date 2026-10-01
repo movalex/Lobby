@@ -14,9 +14,9 @@ import {
 } from '@draftroom/board-ops/elements'
 import type { WireElement } from '@draftroom/canvas-schema/elements'
 import { describe, expect, it } from 'vitest'
+import { must, rectContains, rectGap, rectsOverlap } from '../../../tldraw-import/src/templates/test-utils.ts'
 import { NOTE_SIZE } from '../common.ts'
 import { BRAINSTORM_MAP_RIGHT, TOUR_FRAME_H, TOUR_FRAME_W } from '../templates/lobby-tour.ts'
-import { must, rectContains, rectGap, rectsOverlap } from '../test-utils.ts'
 import { DISPLAY_FACE_AVAILABLE, FONT_FACE_NAME, FONT_FAMILY, instantiateSceneTemplate } from './index.ts'
 import { labelOf, metrics, wordsOf } from './test-kit.ts'
 

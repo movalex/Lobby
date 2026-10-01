@@ -1,46 +1,10 @@
-import { toRichText } from '@tldraw/tlschema'
 import { describe, expect, it } from 'vitest'
-import { plainTextOf, richTextFrom } from './index.ts'
-import { note, validate } from './test-fixtures.ts'
+import { plainTextOf } from './index.ts'
 
 const p = (...content: unknown[]) => ({ type: 'paragraph', content })
 const t = (text: string, marks?: unknown[]) =>
   marks ? { type: 'text', text, marks } : { type: 'text', text }
 const doc = (...content: unknown[]) => ({ type: 'doc', content })
-
-describe('richTextFrom / plainTextOf round trip', () => {
-  const samples = [
-    '',
-    'hello',
-    'first line\nsecond line',
-    'para one\n\npara three',
-    '\n',
-    '\n\n\n',
-    '  leading and trailing  ',
-    'emoji 👩🏽‍💻 and café',
-    'tab\tinside',
-  ]
-
-  it.each(samples)('round-trips %j and produces a valid note richText', (sample) => {
-    const rich = richTextFrom(sample)
-    expect(plainTextOf(rich)).toBe(sample)
-    // The produced doc is accepted by the real schema as note content.
-    expect(() => validate(note('rt', rich))).not.toThrow()
-  })
-
-  it('normalizes CRLF and CR line endings', () => {
-    expect(plainTextOf(richTextFrom('a\r\nb\rc'))).toBe('a\nb\nc')
-  })
-
-  it('emits one paragraph per line and never an empty text node', () => {
-    expect(richTextFrom('a\n\nb')).toEqual(doc(p(t('a')), { type: 'paragraph' }, p(t('b'))))
-    expect(richTextFrom('')).toEqual(toRichText(''))
-  })
-
-  it('treats non-string input to richTextFrom as empty', () => {
-    expect(plainTextOf(richTextFrom(42 as unknown as string))).toBe('')
-  })
-})
 
 describe('plainTextOf over TipTap documents', () => {
   it('drops marks (bold, italic, link, highlight, code)', () => {
@@ -53,7 +17,6 @@ describe('plainTextOf over TipTap documents', () => {
       ),
     )
     expect(plainTextOf(rich)).toBe('Hello brave new world')
-    expect(() => validate(note('marks', rich as never))).not.toThrow()
   })
 
   it('joins paragraphs and headings with newlines and turns hard breaks into newlines', () => {
@@ -83,11 +46,6 @@ describe('plainTextOf over TipTap documents', () => {
     expect(plainTextOf(doc())).toBe('')
     expect(plainTextOf(doc({ type: 'paragraph' }))).toBe('')
     expect(plainTextOf(doc(p()))).toBe('')
-    expect(plainTextOf(toRichText(''))).toBe('')
-  })
-
-  it('agrees with tldraw toRichText for multi-line text', () => {
-    expect(plainTextOf(toRichText('x\n\ny\nz'))).toBe('x\n\ny\nz')
   })
 
   it('returns legacy plain strings unchanged', () => {
@@ -152,10 +110,5 @@ describe('plainTextOf adversarial review', () => {
     expect(plainTextOf(wide)).toBe('')
     expect(plainTextOf(fanOut)).toBe('')
     expect(Date.now() - start).toBeLessThan(1000)
-  })
-
-  it('still reads a large legitimate document', () => {
-    const lines = Array.from({ length: 20_000 }, (_, i) => `line ${i}`)
-    expect(plainTextOf(richTextFrom(lines.join('\n')))).toBe(lines.join('\n'))
   })
 })

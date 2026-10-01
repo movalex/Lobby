@@ -25,8 +25,6 @@
     "@excalidraw/element": "catalog:",
     "@excalidraw/fractional-indexing": "catalog:",
     "@excalidraw/math": "catalog:",
-    "@tldraw/tlschema": "catalog:",
-    "@tldraw/validate": "catalog:",
     "zod": "catalog:"
   }
 }

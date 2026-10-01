@@ -6,15 +6,16 @@
   "exports": {
     ".": "./src/index.ts",
     "./plan": "./src/plan.ts",
-    "./scene": "./src/scene/index.ts"
+    "./scene": "./src/scene/index.ts",
+    "./builder": "./src/builder.ts",
+    "./common": "./src/common.ts",
+    "./source": "./src/source.ts"
   },
   "scripts": {
     "typecheck": "tsc -p ."
   },
   "dependencies": {
     "@draftroom/board-ops": "workspace:*",
-    "@draftroom/canvas-schema": "workspace:*",
-    "@tldraw/tlschema": "catalog:",
-    "@tldraw/utils": "catalog:"
+    "@draftroom/canvas-schema": "workspace:*"
   }
 }

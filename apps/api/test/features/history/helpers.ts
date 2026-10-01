@@ -1,7 +1,8 @@
 // Shared pieces of the history API tests: a controllable in-memory stand-in for the sync server
 // (snapshot / seed / recently deleted), plain tldraw records, and real file uploads.
-import { draftroomSchema } from '@draftroom/canvas-schema'
+
 import type { AssetVersionMeta } from '@draftroom/dev-assets'
+import { draftroomSchema } from '@draftroom/tldraw-import/schema'
 import type { EventHub } from '../../../src/events/hub.ts'
 import { type RoomSnapshotJson, SyncSeedConflict, SyncUnavailable } from '../../../src/sync-internal.ts'
 import type { Client, TestApi } from '../../helpers.ts'

@@ -1,24 +1,4 @@
-// Six editable board templates for a creative team (docs/FEATURES-CONTRACTS.md, packages/templates).
-// Pure logic: returns plain tldraw 5.4.2 shape + binding records, validated by draftroomSchema.
-
-export { IMAGE_SLOT_META, SWATCH_META } from './builder.ts'
-export {
-  getTemplate,
-  instantiateTemplate,
-  isTemplateId,
-  MAX_TEMPLATE_ORIGIN,
-  parseTemplateContext,
-  TEMPLATES,
-} from './registry.ts'
-export {
-  type TemplateBounds,
-  type TemplateBuildResult,
-  type TemplateCategory,
-  type TemplateContext,
-  type TemplateDefinition,
-  TemplateError,
-  type TemplateErrorCode,
-  type TemplateId,
-  type TemplateInstance,
-  type TemplatePoint,
-} from './types.ts'
+// Lobby's board templates (docs/FEATURES-CONTRACTS.md, packages/templates): the engine-neutral plans
+// (`./plan`) and their Excalidraw scenes (`./scene`). The tldraw records of the same plans, which the
+// converter's parity tests compare against, are packages/tldraw-import/src/templates/ since wave 4 part 2.
+export * from './plan.ts'

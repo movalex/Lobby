@@ -1,7 +1,7 @@
+import type { TemplateBounds, TemplatePoint } from '@draftroom/templates/common'
+import type { TemplateInfo } from '@draftroom/templates/source'
 import type { TLPageId, TLRecord } from '@tldraw/tlschema'
 import type { IndexKey } from '@tldraw/utils'
-import type { TemplateBounds, TemplatePoint } from './common.ts'
-import type { TemplateInfo } from './source.ts'
 
 export {
   type TemplateBounds,
@@ -10,7 +10,7 @@ export {
   type TemplateErrorCode,
   type TemplateId,
   type TemplatePoint,
-} from './common.ts'
+} from '@draftroom/templates/common'
 
 /** The tldraw build's context (the Excalidraw scene's is `SceneTemplateContext`, ./scene/index.ts). */
 export interface TemplateContext {

@@ -4,14 +4,17 @@
 import { readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { draftroomSchema } from '@draftroom/canvas-schema'
 import { checkElement } from '@draftroom/canvas-schema/elements'
 import { checkInvariants } from '@draftroom/canvas-schema/invariants'
 import { ELEMENT_SCHEMA_VERSION } from '@draftroom/canvas-schema/protocol'
-import type { TLRecord } from '@tldraw/tlschema'
 import { describe, expect, it } from 'vitest'
+import {
+  exportBoardArchive,
+  importAnyBoardArchive,
+  type V1Converter,
+} from '../../../tldraw-import/src/archive-v1.ts'
 import { convertBoard } from '../../../tldraw-import/src/index.ts'
-import { exportBoardArchive } from '../archive.ts'
+import { draftroomSchema } from '../../../tldraw-import/src/schema.ts'
 import {
   arrow,
   arrowBinding,
@@ -24,8 +27,8 @@ import {
   page,
   sid,
   text,
-} from '../test-fixtures.ts'
-import { importAnyBoardArchive, type V1Converter } from './archive-v1.ts'
+} from '../../../tldraw-import/src/test-fixtures.ts'
+import type { TLRecord } from '../../../tldraw-import/src/tldraw.ts'
 import {
   ARCHIVE_ENGINE_VERSION,
   ArchiveError,

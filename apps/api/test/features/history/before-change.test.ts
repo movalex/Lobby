@@ -3,8 +3,9 @@
 //   before_reveal     a private brainstorm's notes are put on the board (workshops/private-notes.ts)
 //   before_ai_themes  AI "Group into themes" returns a plan that rearranges notes (features/ai)
 // Both are best effort: a sync server that cannot be read never fails the change itself.
-import { note as boardNote } from '@draftroom/board-ops/test-fixtures'
+
 import type { PrivateBrainstormState } from '@draftroom/contracts'
+import { note as boardNote } from '@draftroom/tldraw-import/test-fixtures'
 import { afterEach, describe, expect, it } from 'vitest'
 import { autoCheckpointName } from '../../../src/features/history/checkpoints.ts'
 import { planRetention } from '../../../src/features/history/retention.ts'

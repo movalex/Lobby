@@ -11,9 +11,14 @@ import { COORD_LIMIT, GEOMETRY_TOLERANCE_PX } from '@draftroom/canvas-schema/lim
 import { describe, expect, it } from 'vitest'
 import { semanticDiff } from '../../../tldraw-import/src/diff.ts'
 import { convertBoard } from '../../../tldraw-import/src/index.ts'
-import { instantiateTemplate } from '../index.ts'
+import { instantiateTemplate } from '../../../tldraw-import/src/templates/registry.ts'
+import {
+  collectObjects,
+  rectContains,
+  rectsOverlap,
+  walkStrings,
+} from '../../../tldraw-import/src/templates/test-utils.ts'
 import { planBounds, planTemplate, TEMPLATE_INFOS } from '../plan.ts'
-import { collectObjects, rectContains, rectsOverlap, walkStrings } from '../test-utils.ts'
 import {
   DISPLAY_FACE_AVAILABLE,
   FONT_FAMILY,

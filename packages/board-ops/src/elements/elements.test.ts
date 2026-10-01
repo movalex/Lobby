@@ -1,14 +1,14 @@
 // board-ops on the new canvas (@draftroom/board-ops/elements): readers (text, search, CSV, frames) and
 // writers (remap, archive v2, pasted notes) over Excalidraw elements as Lobby stores them.
 
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { checkElement, type WireElement } from '@draftroom/canvas-schema/elements'
 import { checkInvariants } from '@draftroom/canvas-schema/invariants'
 import { describe, expect, it } from 'vitest'
 import { PALETTE as CONVERTER_PALETTE, TL_COLOR_NAMES } from '../../../tldraw-import/src/palette.ts'
-import { parseBulkText } from '../bulk-notes.ts'
+import { parseBulkText } from '../bulk-parse.ts'
 import {
   colorCellOf,
   elementBounds,
@@ -371,9 +371,10 @@ describe('entry points', () => {
       expect(files).not.toContain(tl)
   })
 
-  it('the v1 reader is its own entry point (it carries the tldraw schema)', () => {
-    expect(graph('elements/index.ts').files).not.toContain('elements/archive-v1.ts')
-    expect(graph('elements/archive-v1.ts').files).toContain('archive.ts')
+  it('the v1 reader (it carries the tldraw schema) is packages/tldraw-import’s, not an entry point here', () => {
+    expect(existsSync(resolve(SRC, 'elements/archive-v1.ts'))).toBe(false)
+    const { bare } = graph('elements/index.ts')
+    expect(bare.some((b) => b.startsWith('@draftroom/tldraw-import') || b.startsWith('@tldraw/'))).toBe(false)
   })
 })
 
