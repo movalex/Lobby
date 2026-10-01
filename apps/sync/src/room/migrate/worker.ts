@@ -8,6 +8,7 @@
 import { parentPort, workerData } from 'node:worker_threads'
 import { createTableTextMetrics, installServerTextMetrics } from '@draftroom/canvas-schema/engine'
 import { type ConvertJob, convertBoardFile } from './convert-board.ts'
+import { type DropLegacyJob, dropLegacyBoardFile } from './drop-legacy.ts'
 import { type RollForwardJob, rollForwardBoardFile } from './rollforward.ts'
 
 /** Test-only jobs (the queue's own tests; refused unless the queue allows them): exhaust the heap, spin, succeed. */
@@ -16,7 +17,7 @@ export interface TestJob {
   readonly boardId: string
 }
 
-export type MigrateJob = ConvertJob | RollForwardJob | TestJob
+export type MigrateJob = ConvertJob | RollForwardJob | DropLegacyJob | TestJob
 
 export interface WorkerInput {
   readonly job: MigrateJob
@@ -34,6 +35,7 @@ function run({ job, allowTestJobs }: WorkerInput): unknown {
   if (job.kind === 'convert') return convertBoardFile(job, installServerTextMetrics(createTableTextMetrics()))
   if (job.kind === 'rollforward')
     return rollForwardBoardFile(job, installServerTextMetrics(createTableTextMetrics()))
+  if (job.kind === 'drop-legacy') return dropLegacyBoardFile(job)
   if (!allowTestJobs) throw new Error('test jobs are not allowed')
   return runTest(job)
 }

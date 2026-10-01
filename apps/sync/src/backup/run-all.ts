@@ -26,6 +26,23 @@
 // - The offsite copy is awaited per board: `offsiteKey` is set only once the store holds the file.
 //   `ok` is true when every board has a local backup and, unless offsite backups are off, an offsite one.
 //
+// The rollback's safety copy (plan §5.9 step 2 "every board's lb_* state is exported to R2", the runbook's
+// B4 and gap G7) IS this run on the Excalidraw build, in maintenance, and not a separate
+// `rollback-exports/<board>/<time>.json`. Why the held backup replaces the export:
+// - it is the whole SQLite file: every lb_* table byte for byte (lb_elements, lb_doc, lb_meta, lb_deleted,
+//   lb_source, every lb_prev_<cycle>_*), their indexes and AUTOINCREMENT counters, and the tldraw tables
+//   R0 serves. An export would be a second format of the same rows with no reader: no reverse converter
+//   is planned (§5.9 "If the rollback becomes permanent"), and a recovery from an export would open the
+//   file anyway;
+// - its manifest entry describes the lb_* state (`lobby-elements-converted` / `lobby-elements`:
+//   `recordsSha256` is the lb_* digest, r0/lb-files.ts), is signed with the entry's format and
+//   `holdUntil`, and is held 90 days outside every retention rule, locally and offsite;
+// - the restore drill opens it through the element room's store and a staged restore puts it back
+//   (backup/drill.ts, staged-restore.ts): it is checked and restorable, which an export would not be.
+// The "export keys" the runbook records are the report's `offsiteKey`s. apps/sync/test/r0/
+// rollback-safety-copy.test.ts holds the Excalidraw build to it: after Excalidraw-era edits and a
+// roll-forward, every lb_* table of the copy has the live file's digest.
+//
 // Messages carry no credentials; they may name a board id and a file name.
 
 import { randomBytes } from 'node:crypto'

@@ -15,6 +15,16 @@ export {
 } from './convert-board.ts'
 export { drDeletedDigests, lbDigests, recordsSha256, tableDigest, tableNames } from './digest.ts'
 export {
+  DROP_LEGACY_WINDOW_MS,
+  type DropLegacyJob,
+  type DropLegacyReason,
+  type DropLegacyReport,
+  dropLegacyBoardFile,
+  LEGACY_DELETED_TABLES,
+  LEGACY_TLDRAW_TABLES,
+} from './drop-legacy.ts'
+export { type FinalBackup, finalBackupOf } from './final-backup.ts'
+export {
   type BoardStatus,
   DEFAULT_RUNTIME_CAP_MB,
   type JobMode,
@@ -36,6 +46,8 @@ export {
 export {
   type BoardFileState,
   boardFileState,
+  type DropLegacyOptions,
+  type DropLegacyOutcome,
   MigrationService,
   type MigrationServiceOptions,
   type PrepareResult,
