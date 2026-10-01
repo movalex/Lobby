@@ -193,6 +193,51 @@ describe('createPdfBuilder', () => {
     expect((lines[0]?.[1] ?? 0) - (lines[1]?.[1] ?? 0)).toBeCloseTo(16.5 * LINE_HEIGHT, 3)
   })
 
+  it("W5-30: keeps a text's own lines whole (no word split by the PDF font's wider metrics), squeezing a line that does not fit", async () => {
+    // A text element 60 px wide whose canvas font wrapped "Story Brief" onto two lines; in Helvetica at
+    // 20 px "Story" alone is about 49 px and "Delivery" about 73 px: re-wrapping in the box split them.
+    const item = {
+      text: 'Story\nBrief\nDelivery',
+      x: 0,
+      y: 0,
+      w: 60,
+      h: 75,
+      fontSizePx: 20,
+      lineHeight: 1.25,
+    }
+    const strings = async (lines: boolean) => {
+      const builder = await createPdfBuilder({ title: 'Board' })
+      await builder.addPage({
+        title: 'P',
+        widthPx: 400,
+        heightPx: 400,
+        image: { bytes: PNG, type: 'png' },
+        texts: [{ ...item, lines }],
+      })
+      const content = await decodedStreams(await PDFDocument.load(await builder.finish()))
+      const hex = [...content.matchAll(/<([0-9A-F]+)> Tj/g)].map((m) =>
+        Buffer.from(m[1] ?? '', 'hex').toString('latin1'),
+      )
+      return { hex, content }
+    }
+    // The old behaviour (re-wrapped in the box) splits "Delivery" by character.
+    const wrapped = await strings(false)
+    expect(wrapped.hex.filter((s) => s !== 'P')).not.toContain('Delivery')
+    // Kept lines: exactly the canvas's lines, whole words, the overlong one squeezed (Tz below 100,
+    // then back to 100), and baselines one line height (20 px × 1.25 at 0.75 pt/px) apart.
+    const kept = await strings(true)
+    expect(kept.hex.filter((s) => s !== 'P')).toEqual(['Story', 'Brief', 'Delivery'])
+    const squeezes = [...kept.content.matchAll(/([\d.]+) Tz/g)].map((m) => Number(m[1]))
+    expect(squeezes.length).toBeGreaterThanOrEqual(2)
+    expect(Math.min(...squeezes)).toBeLessThan(100)
+    expect(squeezes.at(-1)).toBe(100)
+    const ys = [...kept.content.matchAll(/1 0 0 1 [\d.]+ ([\d.]+) Tm/g)]
+      .map((m) => Number(m[1]))
+      .filter((y) => y < 290)
+    expect(ys).toHaveLength(3)
+    expect((ys[0] ?? 0) - (ys[1] ?? 0)).toBeCloseTo(15 * 1.25, 3)
+  })
+
   it('titles every page in a header band as real text, and 16:9 pages all have one size', async () => {
     const builder = await createPdfBuilder({ title: 'Deck' })
     const frames = [

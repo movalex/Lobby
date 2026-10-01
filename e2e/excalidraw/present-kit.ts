@@ -279,3 +279,83 @@ export async function createMany(
   await expectSaved(page)
   return ids
 }
+
+// ---- pixels of an exported PNG or a screenshot (decoded in the page: no PNG decoder in the test process) ----
+
+export type Rgb = readonly [number, number, number]
+
+/** The RGBA of `points` (image pixels) of a PNG. */
+export async function pngPixels(
+  page: Page,
+  png: Buffer,
+  points: readonly { x: number; y: number }[],
+): Promise<[number, number, number, number][]> {
+  return page.evaluate(
+    async (a) => {
+      const blob = await (await fetch(`data:image/png;base64,${a.b64}`)).blob()
+      const img = await createImageBitmap(blob)
+      const c = document.createElement('canvas')
+      c.width = img.width
+      c.height = img.height
+      const ctx = c.getContext('2d', { willReadFrequently: true })
+      if (!ctx) throw new Error('no 2d context')
+      ctx.drawImage(img, 0, 0)
+      return a.points.map((p) => {
+        const d = ctx.getImageData(Math.floor(p.x), Math.floor(p.y), 1, 1).data
+        return [d[0] ?? 0, d[1] ?? 0, d[2] ?? 0, d[3] ?? 0] as [number, number, number, number]
+      })
+    },
+    { b64: png.toString('base64'), points },
+  )
+}
+
+export interface RegionStats {
+  /** pixels in the region */
+  total: number
+  /** near-white pixels (each channel 245 or more) */
+  white: number
+  /** dark "ink" pixels (luminance below 110) */
+  ink: number
+  /** pixels within 40 of `color` on every channel */
+  near: number
+}
+
+/** Pixel statistics of rectangles (image pixels) of a PNG. */
+export async function pngRegionStats(
+  page: Page,
+  png: Buffer,
+  regions: readonly { x: number; y: number; w: number; h: number; color?: Rgb }[],
+): Promise<RegionStats[]> {
+  return page.evaluate(
+    async (a) => {
+      const blob = await (await fetch(`data:image/png;base64,${a.b64}`)).blob()
+      const img = await createImageBitmap(blob)
+      const c = document.createElement('canvas')
+      c.width = img.width
+      c.height = img.height
+      const ctx = c.getContext('2d', { willReadFrequently: true })
+      if (!ctx) throw new Error('no 2d context')
+      ctx.drawImage(img, 0, 0)
+      return a.regions.map((r) => {
+        const x = Math.max(0, Math.floor(r.x))
+        const y = Math.max(0, Math.floor(r.y))
+        const w = Math.max(1, Math.min(img.width - x, Math.floor(r.w)))
+        const h = Math.max(1, Math.min(img.height - y, Math.floor(r.h)))
+        const d = ctx.getImageData(x, y, w, h).data
+        const out = { total: w * h, white: 0, ink: 0, near: 0 }
+        for (let i = 0; i < d.length; i += 4) {
+          const R = d[i] ?? 0
+          const G = d[i + 1] ?? 0
+          const B = d[i + 2] ?? 0
+          if (R >= 245 && G >= 245 && B >= 245) out.white++
+          if (0.2126 * R + 0.7152 * G + 0.0722 * B < 110) out.ink++
+          const k = r.color
+          if (k && Math.abs(R - k[0]) <= 40 && Math.abs(G - k[1]) <= 40 && Math.abs(B - k[2]) <= 40)
+            out.near++
+        }
+        return out
+      })
+    },
+    { b64: png.toString('base64'), regions },
+  )
+}

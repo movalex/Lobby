@@ -69,6 +69,11 @@ interface SavedView {
   center: { x: number; y: number }
   selectedIds: string[]
   focus: HTMLElement | null
+  /**
+   * The opener's test id: the board page drops its top bar in focus mode, so the Present button that
+   * started the presentation is a new element afterwards (W5-47); the focus goes to its successor.
+   */
+  focusTestId: string | null
 }
 
 export interface PresentState {
@@ -119,11 +124,22 @@ export interface Presenter {
 const NEXT_KEYS = new Set(['ArrowRight', 'ArrowDown', 'PageDown', ' ', 'Spacebar'])
 const PREV_KEYS = new Set(['ArrowLeft', 'ArrowUp', 'PageUp'])
 
-/** What gets the focus after a presentation: what had it before, else the Present button. */
-export function focusTarget(before: HTMLElement | null): HTMLElement | null {
+/**
+ * What gets the focus after a presentation: what had it before; else, when that element was replaced
+ * meanwhile (the top bar is not rendered in focus mode), the element with its test id; else the Present
+ * button.
+ */
+export function focusTarget(before: HTMLElement | null, testId: string | null = null): HTMLElement | null {
   if (before?.isConnected && before !== document.body) return before
-  return document.querySelector<HTMLElement>('[data-testid="present-button"]')
+  const byId = (id: string) =>
+    Array.from(document.querySelectorAll<HTMLElement>('[data-testid]')).find(
+      (el) => el.getAttribute('data-testid') === id,
+    ) ?? null
+  return (testId ? byId(testId) : null) ?? byId('present-button')
 }
+
+/** How long after a presentation the focus is put back on its opener if the board page parks it (ms). */
+const FOCUS_RESTORE_MS = 1000
 
 function focusables(root: HTMLElement): HTMLElement[] {
   return Array.from(
@@ -393,6 +409,7 @@ export function createPresenter(canvas: LobbyCanvas): Presenter {
       center: { x: vp.x + vp.width / 2, y: vp.y + vp.height / 2 },
       selectedIds,
       focus: active instanceof HTMLElement ? active : null,
+      focusTestId: active instanceof HTMLElement ? active.getAttribute('data-testid') : null,
     }
     const live = opts.slideId !== undefined
     const slides = slides$.get()
@@ -550,13 +567,36 @@ export function createPresenter(canvas: LobbyCanvas): Presenter {
     canvas.settings.set({ focusMode: false })
     // Focus goes back where it was when the presentation started (the Present button after a click,
     // the board after Ctrl/Cmd+Alt+Enter), or to the Present button when that is gone (RETRO-22b).
-    const restoreFocus = () => {
-      if (state.get()) return
-      const active = document.activeElement
+    // W5-47: the Present button is a new element once the top bar is back (focus mode does not render
+    // it), a render or two after the presentation ends, and meanwhile the board page parks the focus on
+    // the canvas. So for a moment after the end, a focus left on the page, the canvas region or the
+    // gone overlay is put on the opener (or its successor) as soon as it is there; anything the person
+    // focuses or does themselves meanwhile wins.
+    const opener = s.saved
+    const openerInCanvas = !!opener.focus && !!container()?.contains(opener.focus)
+    const until = performance.now() + FOCUS_RESTORE_MS
+    let userActed = false
+    const onUser = () => {
+      userActed = true
+    }
+    window.addEventListener('pointerdown', onUser, true)
+    const parkedFocus = (active: Element | null) => {
+      if (!active || active === document.body) return true
+      if (overlay?.contains(active) || !active.isConnected) return true
       const root = container()
-      const parked = !!root && active === root
-      if (active && active !== document.body && !parked && !overlay?.contains(active)) return
-      focusTarget(s.saved.focus)?.focus({ preventScroll: true })
+      if (!root) return false
+      // the canvas region holds the focus the board page gave it, unless the opener was on the board
+      return active === root || (!openerInCanvas && root.contains(active))
+    }
+    const restoreFocus = () => {
+      if (state.get() || userActed || performance.now() > until) {
+        window.removeEventListener('pointerdown', onUser, true)
+        return
+      }
+      const target = focusTarget(opener.focus, opener.focusTestId)
+      const active = document.activeElement
+      if (target && active !== target && parkedFocus(active)) target.focus({ preventScroll: true })
+      requestAnimationFrame(restoreFocus)
     }
     // The engine measures its container after the layout changed: until it does, points on screen map
     // to the scene through the full-screen size. Measure now, once the layout is back.
@@ -567,13 +607,8 @@ export function createPresenter(canvas: LobbyCanvas): Presenter {
     }
     const root = container()
     if (document.fullscreenElement && document.fullscreenElement === root) {
-      document.exitFullscreen().then(
-        () => {
-          measure()
-          restoreFocus()
-        },
-        () => {},
-      )
+      // (the focus loop below covers the frames after the exit too)
+      document.exitFullscreen().then(measure, () => {})
     }
     const { saved } = s
     const place = here
@@ -593,8 +628,8 @@ export function createPresenter(canvas: LobbyCanvas): Presenter {
     // The container returns to its board size over the next frames (fullscreen exit is async): set the
     // view again once it has, so the board view is exactly where it was.
     requestAnimationFrame(() => requestAnimationFrame(measure))
-    focusTarget(saved.focus)?.focus({ preventScroll: true })
-    requestAnimationFrame(() => requestAnimationFrame(restoreFocus))
+    focusTarget(saved.focus, saved.focusTestId)?.focus({ preventScroll: true })
+    requestAnimationFrame(restoreFocus)
     const info: StopInfo = { role: s.role, reason: opts.reason ?? 'local' }
     for (const l of [...stopListeners]) {
       try {
