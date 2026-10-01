@@ -46,7 +46,7 @@ function NavButton(props: {
   return (
     <button
       type="button"
-      className="dr-nav__btn"
+      className="dr-cnav__btn"
       data-testid={props.testId}
       title={props.label}
       aria-label={props.label}
@@ -117,7 +117,7 @@ function ZoomMenu({ canvas, showValue }: { canvas: LobbyCanvas; showValue: boole
     <button
       type="button"
       role="menuitem"
-      className="dr-nav__item"
+      className="dr-cnav__item"
       data-testid={`zoom-menu.${id}`}
       disabled={opts.disabled}
       onClick={() => {
@@ -129,16 +129,16 @@ function ZoomMenu({ canvas, showValue }: { canvas: LobbyCanvas; showValue: boole
       }}
     >
       <span>{label}</span>
-      {opts.chord ? <kbd className="dr-nav__kbd">{formatChord(opts.chord, PLATFORM)}</kbd> : null}
+      {opts.chord ? <kbd className="dr-cnav__kbd">{formatChord(opts.chord, PLATFORM)}</kbd> : null}
     </button>
   )
 
   return (
-    <div className="dr-nav__zoom">
+    <div className="dr-cnav__zoom">
       <button
         ref={buttonRef}
         type="button"
-        className="dr-nav__btn dr-nav__zoombtn"
+        className="dr-cnav__btn dr-cnav__zoombtn"
         data-testid="minimap.zoom-menu-button"
         aria-label={`Zoom — ${value}`}
         title={`Zoom — ${value}`}
@@ -155,7 +155,7 @@ function ZoomMenu({ canvas, showValue }: { canvas: LobbyCanvas; showValue: boole
           ref={menuRef}
           id={menuId}
           role="menu"
-          className="dr-nav__menu"
+          className="dr-cnav__menu"
           data-testid="zoom-menu"
           onKeyDown={(e) => {
             if (e.key !== 'Escape') return
@@ -186,7 +186,7 @@ export function NavigationPanel({ ctx }: { ctx: CanvasFeatureContext }) {
 
   if (width < MOBILE_MIN_W) {
     return (
-      <div className="dr-nav dr-nav--compact" data-testid="navigation-panel">
+      <div className="dr-cnav dr-cnav--compact" data-testid="navigation-panel">
         <NavButton
           canvas={canvas}
           testId="navigation.zoom-to-fit"
@@ -200,8 +200,8 @@ export function NavigationPanel({ ctx }: { ctx: CanvasFeatureContext }) {
   }
   const tablet = width >= TABLET_MIN_W
   return (
-    <div className="dr-nav" data-testid="navigation-panel">
-      <div className="dr-nav__bar" role="toolbar" aria-label="Navigation">
+    <div className="dr-cnav" data-testid="navigation-panel">
+      <div className="dr-cnav__bar" role="toolbar" aria-label="Navigation">
         {tablet && open && (
           <NavButton
             canvas={canvas}

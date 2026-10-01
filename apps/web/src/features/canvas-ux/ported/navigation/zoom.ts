@@ -33,10 +33,13 @@ export interface WheelZoomInput {
 
 /**
  * The zoom after one zoom-wheel event (Ctrl/Cmd + wheel, a trackpad pinch) when Lobby takes it: zooming
- * out at or below Excalidraw's 0.1, or zooming in from below it, where the engine's handler would snap to
- * 0.1. Excalidraw's delta rule (at most ±10 per event, a positive delta zooms out) applied as a ratio, so a
- * step is 10% of the zoom at any zoom; the floor is `limits.min` (the whole-board fit). Null when the
- * engine's own wheel should run: from 0.1 up, a board that fits at 0.1 (no floor below it), no delta.
+ * out at or below Excalidraw's 0.1 on a board whose floor is below it, and any zoom-wheel event while the
+ * camera is below 0.1, where the engine's handler would snap to 0.1 or step by +0.1 (6.9% → 16.9%, W5-19).
+ * Excalidraw's delta rule (at most ±10 per event, a positive delta zooms out) applied as a ratio, so a step
+ * is 10% of the zoom at any zoom. Out never goes below `limits.min` (the whole-board fit) and never zooms in:
+ * below the floor (the board shrank, a follow or a stored view put the camera there) it stays put. Null
+ * when the engine's own wheel should run: from 0.1 up (zooming in at 0.1 too), at 0.1 on a board that fits
+ * at 0.1, no delta.
  */
 export function wheelZoom(
   zoom: number,
@@ -45,12 +48,16 @@ export function wheelZoom(
 ): number | null {
   const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 100 : 1
   const raw = e.deltaY * unit
-  if (!raw || !Number.isFinite(raw) || limits.min >= ENGINE_MIN_ZOOM) return null
+  if (!raw || !Number.isFinite(raw) || !(zoom > 0)) return null
   const EPS = 1e-6
+  const below = zoom < ENGINE_MIN_ZOOM - EPS
   if (raw > 0 && zoom > ENGINE_MIN_ZOOM + EPS) return null
-  if (raw < 0 && zoom >= ENGINE_MIN_ZOOM - EPS) return null
+  if (raw > 0 && !below && limits.min >= ENGINE_MIN_ZOOM) return null
+  if (raw < 0 && !below) return null
   const delta = Math.min(WHEEL_MAX_DELTA, Math.max(-WHEEL_MAX_DELTA, raw))
-  return Math.min(limits.max, Math.max(limits.min, zoom * (1 - delta / 100)))
+  const next = zoom * (1 - delta / 100)
+  if (raw > 0) return Math.max(Math.min(limits.min, zoom), next)
+  return Math.min(limits.max, Math.max(zoom, next))
 }
 
 /** The camera at `zoom` that keeps scene point `at` where it is on screen. */

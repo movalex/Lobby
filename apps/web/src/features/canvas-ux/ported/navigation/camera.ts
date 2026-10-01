@@ -4,6 +4,7 @@
 // Excalidraw's 0.1 floor. The pure rules stay the tldraw build's (placement.ts frameCamera, start-view.ts).
 import {
   type Bounds,
+  type CameraMove,
   type CanvasElement,
   geometry,
   items,
@@ -105,6 +106,27 @@ export function uiInsets(canvas: LobbyCanvas): Insets {
 
 const onPhone = (canvas: LobbyCanvas) => screenSize(canvas).w <= PHONE_CANVAS_MAX_W
 
+/** Whether the person asked for less motion (the `prefers-reduced-motion: reduce` media query). */
+export function reducedMotion(): boolean {
+  try {
+    return (
+      typeof globalThis.matchMedia === 'function' &&
+      globalThis.matchMedia('(prefers-reduced-motion: reduce)').matches
+    )
+  } catch {
+    return false
+  }
+}
+
+/**
+ * W5-21: the options of a camera move this feature sets itself (`viewport.set`, the board page's member):
+ * animated as asked, or at once under reduced motion. The 3b part's own moves (zoomTo, zoomStep, centerOn,
+ * ensureVisible) apply the same rule.
+ */
+export function motion(animate: CameraMove['animate']): CameraMove {
+  return animate && !reducedMotion() ? { animate } : {}
+}
+
 /**
  * PRI-10: a frame and its heading across the part of the canvas the chrome leaves free, never above
  * 100%, animated (the Frames panel's "go to frame").
@@ -119,7 +141,7 @@ export function goToFrameCamera(canvas: LobbyCanvas, id: string, animate = true)
     uiInsets(canvas),
     { minZoom: limits.min, maxZoom: Math.min(1, limits.max) },
   )
-  const move = animate ? { animate: { durationMs: 280 } } : {}
+  const move = motion(animate ? { durationMs: 280 } : false)
   if (camera) canvas.viewport.set(fromTldrawCamera(camera), move)
   else canvas.viewport.zoomTo(b, { inset: 24, maxZoom: 1, ...move })
   return true
@@ -129,7 +151,7 @@ export function goToFrameCamera(canvas: LobbyCanvas, id: string, animate = true)
 export function showFrame(canvas: LobbyCanvas, id: string, animate: boolean): boolean {
   const b = canvas.bounds(id)
   if (!b) return false
-  const move = animate ? { animate: true } : {}
+  const move = motion(animate)
   if (onPhone(canvas)) {
     // R13: a frame far wider than the phone opens at its left end, readable, not as a thin strip
     const s = screenSize(canvas)

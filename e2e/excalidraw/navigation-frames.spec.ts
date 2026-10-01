@@ -10,6 +10,7 @@ import { focusBoard } from './board-kit.ts'
 import {
   boundsOf,
   cameraIdle,
+  cameraSteps,
   inView,
   redoKey,
   seed,
@@ -195,4 +196,36 @@ test('Frames panel: no doubled numbers (F20); "go to frame" shows its heading an
       .click({ modifiers: ['Control'] })
     expect(await sortedSelection(a.page)).toEqual([frames[0], frames[2]].sort())
   })
+})
+
+test('W5-21: with reduced motion “go to frame” and a search result move the camera at once (they animate otherwise)', async ({
+  canvasSession,
+}) => {
+  const a = await canvasSession('alice')
+  await waitForNavigation(a.page)
+  const [F1, F2] = (await seed(a.page, [
+    () => createItem(a.page, 'frame', { x: 0, y: 0, width: 800, height: 600, name: 'One' }),
+    () => createItem(a.page, 'frame', { x: 9000, y: 4000, width: 800, height: 600, name: 'Two' }),
+  ])) as [string, string]
+  const far = await createNote(a.page, { x: -9000, y: 6000, text: 'Hidden treasure' })
+  await expectSaved(a.page)
+  await a.page.getByTestId('dock-tab-frames').click()
+  const rows = frameRows(a.page)
+  await expect(rows).toHaveCount(2)
+  const go = (i: number) => () => rows.nth(i).locator('.dr-cux-frame__name').click()
+  await setView(a.page, { x: -20_000, y: -20_000, zoom: 1 })
+  expect(await cameraSteps(a.page, go(1))).toBeGreaterThan(3)
+  expect(await inView(a.page, [F2])).toBe(true)
+
+  await a.page.emulateMedia({ reducedMotion: 'reduce' })
+  await setView(a.page, { x: -20_000, y: -20_000, zoom: 1 })
+  expect(await cameraSteps(a.page, go(0))).toBe(1)
+  expect(await inView(a.page, [F1])).toBe(true)
+  // a board search result (3b's zoomTo): one step too
+  await a.page.getByTestId('dock-tab-search').click()
+  await a.page.getByTestId('search-input').fill('treasure')
+  const hit = a.page.getByTestId('search-result').first()
+  await expect(hit).toBeVisible()
+  expect(await cameraSteps(a.page, () => hit.click())).toBe(1)
+  expect(await inView(a.page, [far])).toBe(true)
 })

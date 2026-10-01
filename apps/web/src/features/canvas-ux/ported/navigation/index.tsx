@@ -58,6 +58,8 @@ import {
 } from './start-view.ts'
 import { minimapOpen, searchState, setMinimapOpen, startViewResult } from './state.ts'
 import { TemplatesPanel } from './TemplatesPanel.tsx'
+import { BackToContent, CodeSelectionOutline } from './ViewHelpers.tsx'
+import { installCodeSelectionReset } from './view-helpers.ts'
 import {
   installWheelZoom,
   typeToEditTarget,
@@ -334,7 +336,48 @@ const CONTEXT_MENU: readonly MenuEntrySpec[] = [
   },
 ]
 
+/**
+ * The board menu's View submenu (W5-33; tldraw's DefaultMainMenu View group: zoom in, zoom out, 100%, fit,
+ * selection), with the minimap toggle.
+ */
+const VIEW_MENU: readonly MenuEntrySpec[] = [
+  { id: 'navigation.view.zoom-in', group: 'view', order: 10, label: '', command: 'navigation.zoom-in' },
+  { id: 'navigation.view.zoom-out', group: 'view', order: 20, label: '', command: 'navigation.zoom-out' },
+  {
+    id: 'navigation.view.zoom-to-100',
+    group: 'view',
+    order: 30,
+    label: '',
+    command: 'navigation.zoom-to-100',
+  },
+  {
+    id: 'navigation.view.zoom-to-fit',
+    group: 'view',
+    order: 40,
+    label: '',
+    command: 'navigation.zoom-to-fit',
+  },
+  {
+    id: 'navigation.view.zoom-to-selection',
+    group: 'view',
+    order: 50,
+    label: '',
+    command: 'navigation.zoom-to-selection',
+    disabled: (ctx) => ctx.canvas.selection.length === 0,
+  },
+  {
+    id: 'navigation.view.minimap',
+    group: 'view',
+    order: 60,
+    label: 'Show minimap',
+    kbdHint: 'm',
+    checked: () => minimapOpen.get(),
+    run: () => setMinimapOpen(!minimapOpen.get()),
+  },
+]
+
 const MAIN_MENU: readonly MenuEntrySpec[] = [
+  ...VIEW_MENU,
   {
     id: 'navigation.go-to-start-view',
     group: 'board',
@@ -367,6 +410,7 @@ function NavigationOverlay({ ctx }: { ctx: CanvasFeatureContext }) {
     <>
       <span data-testid="navigation-overlay" data-start-view={startView ?? undefined} hidden />
       <BulkPastePrompt ctx={ctx} />
+      <BackToContent ctx={ctx} />
     </>
   )
 }
@@ -404,6 +448,8 @@ function mount(ctx: CanvasFeatureContext): () => void {
   cleanups.push(installNavigationDevHook(ctx))
   // the zoom wheel below Excalidraw's 0.1 (CR 3b-2) and the camera keys from the chrome (A11Y2-02)
   cleanups.push(installWheelZoom(canvas), installChromeKeys(ctx, CHROME_KEYS))
+  // W5-39: the outline of a connector selected by a deep link or a search result lasts as long as that selection
+  cleanups.push(installCodeSelectionReset(canvas))
   return () => {
     live = false
     for (const c of cleanups.reverse()) c()
@@ -439,6 +485,13 @@ export const feature: CanvasFeature = {
   selectionBar: SELECTION_BAR_ITEMS,
   overlays: [
     { id: 'navigation.search-dim', layer: 'scene', order: 5, pointer: 'none', component: SearchHighlights },
+    {
+      id: 'navigation.code-selection',
+      layer: 'scene',
+      order: 6,
+      pointer: 'none',
+      component: CodeSelectionOutline,
+    },
     { id: 'navigation.overlay', layer: 'screen', order: 30, pointer: 'auto', component: NavigationOverlay },
   ],
   slots: { navigation: NavigationPanel },
