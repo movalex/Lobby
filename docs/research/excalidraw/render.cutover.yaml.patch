@@ -1,0 +1,135 @@
+render.yaml at the Excalidraw cut-over: the prepared change, NOT applied
+=========================================================================
+
+Prepared 2026-09-30 on engine/w4-prep against render.yaml as it is on main and engine/excalidraw (the two
+are identical). It is kept here, and not in render.yaml, on purpose: staging's Blueprint has synced
+render.yaml on pushes to main and deployed the services whose environment changed, so editing render.yaml
+early could switch staging before the cut-over, in an order no one controls.
+
+When and how (docs/EXCALIDRAW-CUTOVER.md):
+- The /excalidraw-assets/* rewrite is tried alone on the static site first, by hand (step P6), because
+  Render's answer to it is UNVERIFIED.
+- At the cut-over every value is set by hand, one service at a time, in the runbook's order: sync's
+  DRAFTROOM_ENGINE and DRAFTROOM_BOOT_MAINTENANCE=1 (C8), then the web's CSP header and VITE_LOBBY_ENGINE
+  (C13). DRAFTROOM_BOOT_MAINTENANCE is deleted again once maintenance is off (C16).
+- Only after that, with the Blueprint on Manual Sync (P8), this patch is committed (C19):
+      git apply docs/research/excalidraw/render.cutover.yaml.patch
+  with the CSP line corrected to the Clerk origins the rehearsal records (P5, R8). The Blueprint's sync
+  preview must then show nothing to apply.
+
+What it changes:
+1. web routes: a rewrite of /excalidraw-assets/* to a path that does not exist, BEFORE the SPA fallback,
+   so a missing font file is a 404 and never index.html (plan §2.12; spike A12 finding 3).
+2. web headers: the Content-Security-Policy of plan §2.12 / spike A12 (staging form): no 'unsafe-eval', no
+   inline-script hash (index.html's theme script moves to a file, wave 4), font-src 'self' (the font
+   fallback is same-origin through the host-rewrite plugin), the sync origin for the board socket, and
+   Clerk's origins (the frontend-API host decoded from staging's public publishable key on 2026-09-30:
+   splendid-flamingo-3744.clerk.accounts.dev, a development instance; img.clerk.com and
+   clerk-telemetry.com from @clerk/shared's code; challenges.cloudflare.com from Clerk's documentation:
+   all UNVERIFIED until a real sign-in with the header enforced, at the rehearsal).
+3. web env: VITE_LOBBY_ENGINE=excalidraw added; VITE_TLDRAW_LICENSE_KEY removed from the file. Its value
+   stays on the service until drop-legacy (day 7), so that a rollback can still rebuild R0's web.
+4. sync env: DRAFTROOM_ENGINE=excalidraw; DRAFTROOM_BOOT_MAINTENANCE declared `sync: false`, so a Blueprint
+   sync never sets it (a value of "1" left in place would start every later deploy and restart with every
+   board closed). The flag is not implemented yet (plan open item 11; runbook §1 G1).
+5. The sync service's comment no longer says "tldraw rooms".
+
+Checked 2026-09-30: `git apply --check` against render.yaml at engine/excalidraw 1a85d5c; the patched file
+parses as YAML (yaml 2) with the same three services, the routes in this order (/api/*, /files/*,
+/excalidraw-assets/*, /*) and the CSP value on one line; and both the current and the patched file
+validate against Render's published schema (https://render.com/schema/render.yaml.json, fetched that
+day, ajv 8). The schema cannot tell whether Render answers the rewrite with a 404 (step P6).
+
+diff --git a/render.yaml b/render.yaml
+--- a/render.yaml
++++ b/render.yaml
+@@ -73,11 +73,41 @@ services:
+       - type: rewrite
+         source: /files/*
+         destination: https://draftroom-staging-api.onrender.com/files/*
++      # Excalidraw's self-hosted fonts (docs/EXCALIDRAW-MIGRATION.md §2.12). A missing file under this
++      # prefix must answer 404, never the SPA's index.html: a 200 HTML answer makes the browser take the
++      # font as broken and try its next source. Render skips a rule when a file exists at the path, so the
++      # real font files are served as-is, and anything else is rewritten to a path that does not exist.
++      # Must stay BEFORE the SPA fallback (first matching rule wins). That Render answers this rewrite with
++      # a 404 is UNVERIFIED: docs/EXCALIDRAW-CUTOVER.md step P6 checks it before the cut-over.
++      - type: rewrite
++        source: /excalidraw-assets/*
++        destination: /excalidraw-assets/__not-found__
+       # SPA fallback. Render skips rules for paths where a file exists, so hashed assets are served as-is.
+       - type: rewrite
+         source: /*
+         destination: /index.html
+     headers:
++      # The CSP Lobby ships with the Excalidraw canvas (docs/EXCALIDRAW-MIGRATION.md §2.12, spike A12): no
++      # 'unsafe-eval', no inline script (index.html's theme script moves to a file), fonts same-origin
++      # (the host-rewrite plugin), the sync socket's origin, and Clerk's. The Clerk frontend API host is
++      # decoded from staging's publishable key (a development instance); every Clerk origin is recorded
++      # from a real sign-in at the rehearsal and this line is corrected then (UNVERIFIED until then).
++      # Drop https://clerk-telemetry.com once the app passes telemetry={false} to Clerk, and
++      # https://challenges.cloudflare.com if the rehearsal shows no bot-protection request.
++      # Changing it needs no rebuild; a static-site Rollback does NOT roll it back (docs/DEPLOY.md).
++      - path: /*
++        name: Content-Security-Policy
++        value: >-
++          default-src 'self';
++          script-src 'self' https://splendid-flamingo-3744.clerk.accounts.dev https://challenges.cloudflare.com;
++          connect-src 'self' https://draftroom-staging-sync.onrender.com wss://draftroom-staging-sync.onrender.com
++          https://splendid-flamingo-3744.clerk.accounts.dev https://clerk-telemetry.com;
++          img-src 'self' blob: data: https://img.clerk.com;
++          font-src 'self';
++          style-src 'self' 'unsafe-inline';
++          worker-src 'self' blob:;
++          frame-src https://challenges.cloudflare.com;
++          object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'
+       - path: /*
+         name: X-Content-Type-Options
+         value: nosniff
+@@ -91,10 +121,11 @@ services:
+         name: Cache-Control
+         value: public, max-age=31536000, immutable
+     envVars:
+-      # Without a key whose hosts include this site's hostname, the editor goes BLANK 5 s after load on
+-      # any HTTPS host (docs/research/license.md). Keys are public by design; kept out of git anyway.
+-      - key: VITE_TLDRAW_LICENSE_KEY
+-        sync: false
++      # The canvas engine: Excalidraw (docs/EXCALIDRAW-MIGRATION.md). Inlined at build time, so a change
++      # needs a static-site REBUILD. VITE_TLDRAW_LICENSE_KEY is gone with tldraw; its Dashboard value is
++      # kept until drop-legacy (day 7), so that a rollback can still rebuild the bridge release R0.
++      - key: VITE_LOBBY_ENGINE
++        value: excalidraw
+       # Static-site rewrites do not proxy WebSockets, so the board socket goes straight to the sync
+       # service's public URL (apps/web/src/board/ticket.ts; the ticket authenticates, no cookie needed).
+       # Inlined at build time: a hostname change needs a static-site REBUILD. Must match the sync
+@@ -188,9 +219,9 @@ services:
+       - fromGroup: draftroom-staging-worker-token
+ 
+   # ---------------------------------------------------------------------------------------------
+-  # sync: tldraw rooms. EXACTLY ONE instance (one authoritative room per board) with its own disk
+-  # for the per-board SQLite files. No autoscaling, ever: a second instance would open a second
+-  # room on a different disk and split the board. Unchanged by milestone 3.
++  # sync: Lobby's element rooms (Excalidraw canvas). EXACTLY ONE instance (one authoritative room per
++  # board) with its own disk for the per-board SQLite files. No autoscaling, ever: a second instance
++  # would open a second room on a different disk and split the board. Unchanged by milestone 3.
+   - type: web
+     runtime: docker
+     name: draftroom-staging-sync
+@@ -223,6 +254,18 @@ services:
+         value: https://draftroom-staging-web.onrender.com
+       - key: ACCESS_RECHECK_MS
+         value: "10000"
++      # The canvas engine: Lobby's element sync (apps/sync/src/engine-switch.ts; unset = tldraw). Never
++      # roll back by changing this value: a rollback deploys the bridge release R0, which ignores it
++      # (docs/EXCALIDRAW-CUTOVER.md "Rollback to R0").
++      - key: DRAFTROOM_ENGINE
++        value: excalidraw
++      # "1" = the server starts with maintenance ON (every board socket refused with MAINTENANCE, internal
++      # routes working), for the cut-over's first boot and for a roll-forward (plan open item 11). Set it
++      # in the Dashboard right before that deploy and delete it once maintenance is off
++      # (docs/EXCALIDRAW-CUTOVER.md steps C8, C16 and F6). `sync: false` ON PURPOSE: a Blueprint sync must
++      # never set it, or every later deploy and restart would start with every board closed.
++      - key: DRAFTROOM_BOOT_MAINTENANCE
++        sync: false
+       # Offsite board backups (docs/DEPLOY.md "Backups"): each local backup is also copied to R2 under
+       # backups/sync/<board>/, with a manifest, signed with a key derived from DRAFTROOM_INTERNAL_SECRET
+       # (the env group below). All five are `sync: false` ON PURPOSE, the store too:

@@ -1,4 +1,4 @@
-# Draftroom CI: the same gate as `pnpm verify` (lint, typecheck, unit/protocol tests, browser e2e).
+# Draftroom CI: the same gate as `pnpm verify` (lint, typecheck, unit/protocol tests, browser e2e), plus the licence check.
 # It cannot run until the repository is published to GitHub; it has never run (docs/DEPLOY.md, "CI").
 # Actions are pinned to full commit SHAs (tag in the comment) so a moved tag cannot change the build.
 name: CI
@@ -43,6 +43,14 @@ jobs:
 
       - name: Lint
         run: pnpm lint
+
+      # Production dependency licences of every app (scripts/licence-check.mjs; docs/EXCALIDRAW-MIGRATION.md
+      # §1 goal 1, §2.12, D13): no paid or copyleft licence, tldraw only as the five MIT packages inside
+      # packages/tldraw-import. Linux, so sharp's libvips binaries are the ones the worker images use.
+      # --before-cutover reports the tldraw packages as "removed at cut-over" until wave 4 removes them
+      # (lockfile PR #2); drop the flag in that change.
+      - name: Licence check
+        run: pnpm licence:check --before-cutover
 
       - name: Typecheck
         run: pnpm typecheck
