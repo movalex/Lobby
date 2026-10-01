@@ -33,6 +33,7 @@ import { type BoardFileKind, classifyBoardFile, isServable } from '../r0/born-af
 import { BOARD_ID_RE, boardDbPath } from '../rooms.ts'
 import { inspectBoardDb, sha256File } from './backup.ts'
 import { type BackupSource, DrillProblem, verifyRestorable } from './drill.ts'
+import { backupEngine } from './engine.ts'
 import { restoreBackupFile } from './restore.ts'
 import { describeFailure } from './store.ts'
 
@@ -126,20 +127,28 @@ export async function stageRestore(opts: {
       workRooms: join(scratch, 'rooms'),
       schema: opts.schema,
     })
+    const kind = liveKind(boardDbPath(dataLayout(opts.dataDir).rooms, boardId))
+    const excalidraw = backupEngine() === 'excalidraw'
     // Bridge release R0: a board made on the new canvas is restored by the new build (it gives the
     // board a new epoch); this build copies such files whole but never puts one in place. And it never
     // replaces a live board that was made on the new canvas.
-    if (verified.format)
+    if (verified.format && !excalidraw)
       throw new DrillProblem(
         'this backup is of a board made on the new canvas: it can be restored after the switch, by the new build',
       )
-    const kind = liveKind(boardDbPath(dataLayout(opts.dataDir).rooms, boardId))
-    if (madeOnNewCanvas(kind))
+    if (madeOnNewCanvas(kind) && !excalidraw)
       throw new DrillProblem('the live board was made on the new canvas: this build does not replace it')
     // A converted board (a rollback): its new-canvas tables go into the restored file unchanged, when it
-    // is applied (applyStagedRestores), so the Excalidraw-era edits are not lost with the old file.
-    const carry =
-      kind === 'converted'
+    // is applied (applyStagedRestores), so the Excalidraw-era edits are not lost with the old file. The
+    // Excalidraw build (2B) puts the backup back as it is instead: an lb backup with a new epoch, a tldraw
+    // backup (from before the cut-over) to be converted when its room opens (§5.6).
+    const carry = excalidraw
+      ? [
+          verified.format
+            ? 'it goes back with a new epoch when the restore is applied: every open tab of the board resets to it'
+            : 'a tldraw backup: it goes back as it is when the restore is applied, and is converted to the new canvas when its room opens',
+        ]
+      : kind === 'converted'
         ? [
             'the live board was converted to the new canvas: its new-canvas (lb_*) tables are carried over unchanged when the restore is applied',
           ]
@@ -253,9 +262,12 @@ export async function applyStagedRestores(opts: {
         throw new Error('the staged backup file does not match its request (sha256)')
       const live = boardDbPath(rooms, boardId)
       // Bridge release R0: never replace (or even open for writing) a board made on the new canvas; a
-      // converted board keeps its new-canvas tables (carried into the restored file, r0/lb-carry.ts).
+      // converted board keeps its new-canvas tables (carried into the restored file, r0/lb-carry.ts). The
+      // Excalidraw build (2B) replaces either with the backup as it is (restore.ts gives an lb backup a
+      // new epoch; a tldraw one is converted when its room opens).
+      const excalidraw = backupEngine() === 'excalidraw'
       const kind = liveKind(live)
-      if (madeOnNewCanvas(kind))
+      if (madeOnNewCanvas(kind) && !excalidraw)
         throw new Error('the live board was made on the new canvas: this build does not replace it')
       const stamp = (opts.now ?? (() => new Date()))().toISOString().replace(/[:.]/g, '-')
       let liveClock: number | null = null
@@ -287,7 +299,7 @@ export async function applyStagedRestores(opts: {
       const bump =
         liveClock === null ? UNKNOWN_LIVE_BUMP : Math.max(0, liveClock - request.documentClock) + BUMP_MARGIN
       let carried: string | null = null
-      if (kind === 'converted') {
+      if (kind === 'converted' && !excalidraw) {
         // The kept copy is the consistent source of the new-canvas tables (a damaged file cannot be one).
         if (!kept || liveClock === null)
           throw new Error(

@@ -20,8 +20,19 @@
 // token, counted apart and never gating; a string also in the repo's own sources (templates, converter
 // fixtures) counted apart as repo-shared.
 
-import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs'
-import { join, resolve } from 'node:path'
+import {
+  closeSync,
+  cpSync,
+  existsSync,
+  mkdirSync,
+  openSync,
+  readdirSync,
+  readFileSync,
+  readSync,
+  rmSync,
+  statSync,
+} from 'node:fs'
+import { extname, isAbsolute, join, relative, resolve } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { countMatches, needlesOf, normalizeText } from './leak-match.ts'
 
@@ -256,15 +267,39 @@ const defaults = [
   join(B8, 'test-results'),
   join(B8, 'work'),
   join(B8, 'reports'),
+  // the wave-5 evidence of the sync edges owner (2B)
+  join(REPO, 'docs/research/excalidraw/wave5'),
 ]
-const TEXT = /\.(md|json|txt|log|html|ts|js|mjs|csv|ya?ml|xml|svg)$/i
-const MAX_BYTES = 64 * 1024 * 1024
+// Every file in the scope is looked at (V3's re-check, wave 5): none is skipped by its name or its size.
+//  - a file whose first 64 KB hold no NUL byte is text, whatever its extension (.jsonl, an extensionless
+//    stdout capture, an .excalidraw export) and is searched in every form of leak-match.ts;
+//  - any other file is binary (a SQLite copy, an image, an archive) and is searched too, its bytes read
+//    as UTF-8 (a board string stored in a SQLite page is found); a binary file INSIDE SPIKE_B8_DIR is a
+//    data dir or copy §8.6.7 allows there, so its matches are counted apart, never gating; anywhere else
+//    they gate. Compressed files cannot be searched: the report counts them by extension;
+//  - a file over CHUNK_BYTES is read in chunks that overlap by CHUNK_OVERLAP, never skipped;
+//  - a file that cannot be read is counted, and fails the check (what was not read was not checked).
+const CHUNK_BYTES = Number(process.env.LEAK_CHECK_CHUNK_BYTES ?? 64 * 1024 * 1024)
+const CHUNK_OVERLAP = 64 * 1024
+const COMPRESSED = new Set([
+  '.zip',
+  '.gz',
+  '.br',
+  '.webm',
+  '.mp4',
+  '.png',
+  '.jpg',
+  '.jpeg',
+  '.webp',
+  '.gif',
+  '.pdf',
+])
 const files: string[] = []
 const collect = (p: string, depth = 0) => {
   if (!existsSync(p) || depth > 20) return
   const st = statSync(p)
   if (st.isFile()) {
-    if (TEXT.test(p) && st.size <= MAX_BYTES) files.push(p)
+    files.push(p)
     return
   }
   if (!st.isDirectory()) return
@@ -281,7 +316,7 @@ const collectRepo = (p: string, depth = 0) => {
   if (!existsSync(p) || depth > 12) return
   const st = statSync(p)
   if (st.isFile()) {
-    if (/.(ts|json)$/.test(p) && st.size <= MAX_BYTES) repoFiles.push(p)
+    if (/.(ts|json)$/.test(p)) repoFiles.push(p)
     return
   }
   if (!st.isDirectory()) return
@@ -299,24 +334,76 @@ const isRepoShared = (needle: string) => {
   return v
 }
 
-const needles = needlesOf(strings)
-let matches = 0
-let shortMatches = 0
-let repoShared = 0
-for (const f of files) {
-  let text = ''
+/** The file's text in chunks (one chunk when it is small), and whether it is binary. */
+function* chunksOf(path: string, size: number): Generator<{ text: string; binary: boolean }> {
+  const fd = openSync(path, 'r')
   try {
-    text = readFileSync(f, 'utf8')
-  } catch {
-    continue
+    const head = Buffer.alloc(Math.max(1, Math.min(size, 64 * 1024)))
+    const n = readSync(fd, head, 0, head.length, 0)
+    const binary = head.subarray(0, n).includes(0)
+    let pos = 0
+    const buf = Buffer.alloc(Math.max(1, Math.min(size, CHUNK_BYTES + CHUNK_OVERLAP)))
+    while (pos < size) {
+      const got = readSync(fd, buf, 0, Math.min(buf.length, size - pos), pos)
+      if (got <= 0) break
+      yield { text: buf.subarray(0, got).toString('utf8'), binary }
+      if (pos + got >= size) break
+      pos += Math.max(1, got - CHUNK_OVERLAP)
+    }
+  } finally {
+    closeSync(fd)
   }
-  const m = countMatches(text, needles, isRepoShared)
-  matches += m.strings
-  shortMatches += m.short
-  repoShared += m.repoShared
 }
 
+const b8Root = resolve(B8)
+const insideB8 = (p: string) => {
+  const r = relative(b8Root, p)
+  return r !== '' && !r.startsWith('..') && !isAbsolute(r)
+}
+const needles = needlesOf(strings)
+let matches = 0
+let binaryApart = 0
+let shortMatches = 0
+let repoShared = 0
+let textFiles = 0
+let binaryFiles = 0
+let chunked = 0
+let unreadable = 0
+const compressed = new Map<string, number>()
+for (const f of files) {
+  try {
+    const size = statSync(f).size
+    if (size > CHUNK_BYTES) chunked++
+    const ext = extname(f).toLowerCase()
+    if (COMPRESSED.has(ext)) compressed.set(ext, (compressed.get(ext) ?? 0) + 1)
+    // a needle counts once per file, whichever chunk holds it
+    const seen = new Set<string>()
+    let isBinary = false
+    let fileStrings = 0
+    for (const { text, binary } of chunksOf(f, size)) {
+      isBinary = binary
+      const m = countMatches(text, needles, isRepoShared, seen)
+      fileStrings += m.strings
+      shortMatches += m.short
+      repoShared += m.repoShared
+    }
+    if (isBinary) {
+      binaryFiles++
+      if (insideB8(resolve(f))) binaryApart += fileStrings
+      else matches += fileStrings
+    } else {
+      textFiles++
+      matches += fileStrings
+    }
+  } catch {
+    unreadable++
+  }
+}
+
+const compressedNote = compressed.size
+  ? `, compressed files that cannot be searched: ${[...compressed].map(([e, c]) => `${e} ${c}`).join(', ')}`
+  : ''
 console.log(
-  `leak-check: ${matches} matches (boards read: ${boards}, strings searched: ${needles.long.length} and ${needles.windows.length} word windows, short/id/enum values not searched: ${skipped}, files scanned: ${files.length}; not gating: ${shortMatches} whole-token matches of ${needles.short.length} short strings, ${repoShared} repo-shared)`,
+  `leak-check: ${matches} matches (boards read: ${boards}, strings searched: ${needles.long.length}, ${needles.windows.length} word windows and ${needles.cuts.length} cuts, short/id/enum values not searched: ${skipped}, files scanned: ${files.length - unreadable} (${textFiles} text, ${binaryFiles} binary, ${chunked} read in chunks), unreadable: ${unreadable}${compressedNote}; not gating: ${binaryApart} in binary files inside SPIKE_B8_DIR (its data dirs and copies), ${shortMatches} whole-token matches of ${needles.short.length} short strings, ${repoShared} repo-shared)`,
 )
-process.exit(matches === 0 ? 0 : 1)
+process.exit(matches === 0 && unreadable === 0 ? 0 : 1)

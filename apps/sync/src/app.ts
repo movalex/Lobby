@@ -12,6 +12,8 @@ import {
   createAccessMonitor,
   createApiAccessClient,
 } from './access.ts'
+import { ElementBackups } from './backup/element-backups.ts'
+import { setBackupEngine } from './backup/engine.ts'
 import { createRunAll } from './backup/run-all.ts'
 import { type BackupService, createBackupService } from './backup/service.ts'
 import { isAllowedOrigin, type SyncConfig } from './config.ts'
@@ -67,6 +69,8 @@ export interface SyncServer {
 
 export function createSyncServer(config: SyncConfig, opts: SyncServerOptions = {}): SyncServer {
   const log = opts.log ?? ((...a: unknown[]) => console.log(...a))
+  // One engine per process: what the backups, the restore drill and staged restores describe (2B).
+  setBackupEngine(config.engine ?? 'tldraw')
   // The registry reports removals to the monitor, which is created from the registry.
   let monitor: AccessMonitor | null = null
   const touches = createTouchReporter({
@@ -117,6 +121,18 @@ export function createSyncServer(config: SyncConfig, opts: SyncServerOptions = {
       : null
   const directory: SessionDirectory = elementRooms ?? registry
   const backups = createBackupService({ config, backupsDir: registry.backupsDir(), log })
+  // The Excalidraw build's local backups of its boards (2B, backup/element-backups.ts): the tldraw
+  // registry above backs up only the rooms it has open, and with this engine it opens none.
+  const backupsDir = registry.backupsDir()
+  const elementBackups =
+    elementRooms && backupsDir
+      ? new ElementBackups({
+          roomsDir: dataLayout(config.dataDir).rooms,
+          backupsDir,
+          ...(config.backupIntervalMs ? { intervalMs: config.backupIntervalMs } : {}),
+          log,
+        })
+      : null
   const access: AccessMonitor = createAccessMonitor({
     registry: directory,
     client:
@@ -166,7 +182,12 @@ export function createSyncServer(config: SyncConfig, opts: SyncServerOptions = {
     return { maintenance, closedSockets }
   }
   const maintenanceControl: MaintenanceControl = { on: () => maintenance, set: setMaintenance }
-  const runAll = createRunAll({ registry, backups, log, maintenance: () => maintenance })
+  const runAll = createRunAll({
+    registry: elementBackups ?? registry,
+    backups,
+    log,
+    maintenance: () => maintenance,
+  })
 
   const handle = createRequestHandler({
     internalSecret: config.internalSecret,
@@ -418,6 +439,7 @@ export function createSyncServer(config: SyncConfig, opts: SyncServerOptions = {
     maintenance: maintenanceControl,
     async listen() {
       await backups.start() // staged restores first: no room can be open yet
+      elementBackups?.start()
       return new Promise((resolve, reject) => {
         const onError = (e: Error) => reject(e)
         http.once('error', onError)
@@ -450,6 +472,7 @@ export function createSyncServer(config: SyncConfig, opts: SyncServerOptions = {
         ])
         touches.stop()
         sessionEnds.stop()
+        await elementBackups?.stop()
         await backups.stop()
         await stopped
         await new Promise<void>((resolve) => wss.close(() => resolve()))

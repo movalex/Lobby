@@ -19,7 +19,14 @@ import { isLbTable } from './born-after.ts'
 
 /** `format` of a backup manifest entry whose file holds only the new engine's tables (absent = tldraw). */
 export const LB_BACKUP_FORMAT = 'lobby-elements'
-export type BackupFormat = typeof LB_BACKUP_FORMAT
+/**
+ * `format` the Excalidraw build gives a CONVERTED board file (lb_* with `converted_from`, plus tldraw's
+ * tables, which a rollback still serves): described from its lb_* tables like `lobby-elements` (2B,
+ * backup/engine.ts). R0 does not know it: it keeps such an entry listed, signed and under retention, and
+ * refuses to drill or restore it by name (offsite-manifest.ts, drill.ts), as for any newer build's format.
+ */
+export const LB_CONVERTED_FORMAT = 'lobby-elements-converted'
+export type BackupFormat = typeof LB_BACKUP_FORMAT | typeof LB_CONVERTED_FORMAT
 
 export interface TableDigest {
   readonly table: string
@@ -111,6 +118,37 @@ export interface LbFileFacts {
 const count = (v: unknown): number | null => {
   const n = typeof v === 'string' && /^\d{1,15}$/.test(v) ? Number(v) : typeof v === 'number' ? v : Number.NaN
   return Number.isSafeInteger(n) && n >= 0 ? n : null
+}
+
+/**
+ * The uploaded files a board's live lb elements reference (`customData.lobby.file`, the card's stable
+ * asset and version ids; §2.10.4), sorted and unique, read-only: the Excalidraw build's backups list them
+ * as the tldraw build's list its asset records (backup/asset-refs.ts). Unreadable rows are skipped.
+ */
+export function lbAssetRefs(db: DatabaseSync): { assetId: string; versionId: string }[] {
+  const has = db
+    .prepare("SELECT 1 AS x FROM sqlite_master WHERE type = 'table' AND name = 'lb_elements'")
+    .get()
+  if (!has) return []
+  const AST = /^ast_[0-9A-Za-z]{10,40}$/
+  const VER = /^ver_[0-9A-Za-z]{10,40}$/
+  const out = new Map<string, { assetId: string; versionId: string }>()
+  for (const r of db
+    .prepare("SELECT data FROM lb_elements WHERE deleted = 0 AND data LIKE '%ast\\_%' ESCAPE '\\'")
+    .iterate() as Iterable<{ data: string }>) {
+    try {
+      const file = (JSON.parse(r.data) as { customData?: { lobby?: { file?: unknown } } }).customData?.lobby
+        ?.file as { assetId?: unknown; versionId?: unknown } | undefined
+      if (typeof file?.assetId === 'string' && typeof file.versionId === 'string')
+        if (AST.test(file.assetId) && VER.test(file.versionId))
+          out.set(`${file.assetId}/${file.versionId}`, { assetId: file.assetId, versionId: file.versionId })
+    } catch {
+      // an unreadable row references nothing we can name
+    }
+  }
+  return [...out.values()].sort((a, b) =>
+    a.assetId === b.assetId ? (a.versionId < b.versionId ? -1 : 1) : a.assetId < b.assetId ? -1 : 1,
+  )
 }
 
 /** Facts of a file described by its lb_* tables (read-only). */

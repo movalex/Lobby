@@ -23,8 +23,9 @@ import {
 import { join, resolve } from 'node:path'
 import { backup, DatabaseSync } from 'node:sqlite'
 import { isLbTable, tableNames } from '../r0/born-after.ts'
-import { type BackupFormat, lbFileFacts } from '../r0/lb-files.ts'
+import { type BackupFormat, LB_CONVERTED_FORMAT, lbAssetRefs, lbFileFacts } from '../r0/lb-files.ts'
 import { type AssetRef, AssetRefCollector } from './asset-refs.ts'
+import { backupEngine } from './engine.ts'
 
 export const BACKUP_DEFAULTS = Object.freeze({
   /** Periodic pass over open boards (a board is copied only if it changed since its last backup). */
@@ -166,9 +167,24 @@ function readBoardDb(
     const verdict = check.map((r) => Object.values(r)[0]).join('; ')
     if (verdict !== 'ok') throw new Error(`integrity check failed: ${verdict.slice(0, 200)}`)
     const tables = tableNames(db)
+    const excalidraw = backupEngine() === 'excalidraw'
     if (!tables.has('metadata') && !tables.has('documents') && [...tables].some(isLbTable)) {
-      // Born on the new canvas: copied whole, described from its lb_* tables (read-only).
-      return { ...lbFileFacts(db), assets: [], records: records ?? new Map(), format: 'lobby-elements' }
+      // Born on the new canvas: copied whole, described from its lb_* tables (read-only). The Excalidraw
+      // build also lists the files its elements reference (R0 does not read Excalidraw elements).
+      const assets = excalidraw ? lbAssetRefs(db) : []
+      return { ...lbFileFacts(db), assets, records: records ?? new Map(), format: 'lobby-elements' }
+    }
+    if (excalidraw && tables.has('lb_meta') && hasConvertedFrom(db)) {
+      // A converted board in the Excalidraw build (backup/engine.ts): what it serves is its lb_* tables, so
+      // that is what the entry describes (`lobby-elements-converted`); its tldraw tables are copied too.
+      const facts = lbFileFacts(db)
+      return {
+        ...facts,
+        schema: { ...facts.schema, format: LB_CONVERTED_FORMAT },
+        assets: lbAssetRefs(db),
+        records: records ?? new Map(),
+        format: LB_CONVERTED_FORMAT,
+      }
     }
     const meta = db.prepare('SELECT documentClock, schema FROM metadata LIMIT 1').get() as
       | { documentClock: number; schema: string }
@@ -202,11 +218,26 @@ function readBoardDb(
   }
 }
 
-/**
- * Backs up one open board database. `db` is the room's own connection (see the header for why).
- * The copy is switched to a rollback journal so it is one self-contained file.
- */
-export async function backupBoard(opts: {
+const hasConvertedFrom = (db: DatabaseSync) =>
+  db.prepare("SELECT 1 AS x FROM lb_meta WHERE key = 'converted_from'").get() !== undefined
+
+/** One backup per board at a time, process-wide (a manifest is read, changed and written by one writer). */
+const inFlight = new Map<string, Promise<unknown>>()
+function oneAtATime<T>(key: string, run: () => Promise<T>): Promise<T> {
+  const prev = inFlight.get(key) ?? Promise.resolve()
+  const next = prev.then(run, run)
+  const tail = next.then(
+    () => undefined,
+    () => undefined,
+  )
+  inFlight.set(key, tail)
+  void tail.then(() => {
+    if (inFlight.get(key) === tail) inFlight.delete(key)
+  })
+  return next
+}
+
+export interface BackupBoardOptions {
   db: DatabaseSync
   boardId: string
   root: string
@@ -214,14 +245,29 @@ export async function backupBoard(opts: {
   now?: () => Date
   /** Keep this backup until then, outside the count (BackupEntry.holdUntil; run-all). */
   holdUntil?: Date
-}): Promise<BackupEntry> {
+  /** Pages copied per step of node:sqlite backup() (default 100; the element backups copy in one step). */
+  rate?: number
+}
+
+/**
+ * Backs up one open board database. `db` is the room's own connection (see the header for why), or a
+ * read-only one (run-all on a board no room has open; the Excalidraw build's element backups, which pass
+ * `rate` so the copy is one step of one read transaction). The copy is switched to a rollback journal so
+ * it is one self-contained file. Backups of one board run one at a time, whoever asks (run-all and the
+ * periodic pass can meet on one board).
+ */
+export function backupBoard(opts: BackupBoardOptions): Promise<BackupEntry> {
+  return oneAtATime(`${resolve(opts.root)}\n${opts.boardId}`, () => backupBoardNow(opts))
+}
+
+async function backupBoardNow(opts: BackupBoardOptions): Promise<BackupEntry> {
   const dir = boardBackupDir(opts.root, opts.boardId)
   mkdirSync(dir, { recursive: true })
   const at = (opts.now ?? (() => new Date()))()
   const stamp = at.toISOString().replace(/[:.]/g, '-')
   const tmp = join(dir, `.${stamp}-${randomBytes(4).toString('hex')}.tmp`)
   try {
-    await backup(opts.db, tmp)
+    await backup(opts.db, tmp, opts.rate ? { rate: opts.rate } : {})
     const copy = new DatabaseSync(tmp)
     try {
       copy.exec('PRAGMA journal_mode = DELETE')

@@ -42,6 +42,7 @@ import {
   round2,
 } from '@draftroom/canvas-schema/limits'
 import { b64Vecs } from '@tldraw/tlschema'
+import { geoBuildOf, geoLossyCodes, geoMarks, geoOutline } from './geo-shapes.ts'
 import {
   angleOf,
   apply,
@@ -57,7 +58,6 @@ import {
   type Outline,
   orbitPoint,
   type Pt,
-  polygonOf,
   rotateAbout,
   simplifyRdp,
   type TargetShape,
@@ -157,14 +157,6 @@ const ARROWHEAD: Record<string, string | null> = {
   none: null,
   square: 'diamond',
   inverted: 'triangle_outline',
-}
-const NATIVE_GEO: Record<string, 'rectangle' | 'ellipse' | 'diamond'> = {
-  rectangle: 'rectangle',
-  ellipse: 'ellipse',
-  diamond: 'diamond',
-  oval: 'ellipse',
-  'check-box': 'rectangle',
-  'x-box': 'rectangle',
 }
 const NOTE_SIZE = 200
 const STICKY_NOTE_MIN_SIZE = 75
@@ -790,43 +782,71 @@ class Core {
     const size = round2((LABEL[str(p.size)] ?? 22) * scale)
     const ink = colorOf(p.labelColor).solid
     const kind = str(p.geo, 'rectangle')
-    const native = NATIVE_GEO[kind]
+    // D4 (geo-shapes.ts): every tldraw kind has a build; none is dropped
+    const build = geoBuildOf(kind)
     const t = plainLines(p.richText)
     if (t.formatted) lossy.push('rich-text-formatting')
     if (p.font === 'serif' && hasText(t)) lossy.push('serif-font')
     const align = H_ALIGN[str(p.align)] ?? 'center'
     const valign = V_ALIGN[str(p.verticalAlign)] ?? 'middle'
     const lines = clipLines(t.lines, lossy)
-    if (native) {
-      const el = this.common(id, native, n, b)
-      Object.assign(el, { strokeColor: c.solid, strokeWidth: (STROKE[str(p.size)] ?? 3.5) * scale })
+    lossy.push(...geoLossyCodes(kind))
+    const strokeWidth = (STROKE[str(p.size)] ?? 3.5) * scale
+    const gid = `${id}.g`
+    const flipX = p.flipX === true
+    const flipY = p.flipY === true
+    const place = (pts: readonly [number, number][]) =>
+      pts.map(([x, y]) => apply(m, flipX ? w - x : x, flipY ? h - y : y))
+    if (build.build !== 'polygon') {
+      const native = build.type
+      // check-box and x-box: tldraw's mark as open lines, grouped with the native rectangle
+      const marks = geoMarks(kind, w, h, { dash: str(p.dash), strokeWidth })
+      const node = marks.length ? { ...n, groups: [gid, ...n.groups] } : n
+      const el = this.common(id, native, node, b)
+      Object.assign(el, { strokeColor: c.solid, strokeWidth })
       this.styleFromTl(el, p)
       el.link = this.link(p.url, lossy) ?? (t.link ? this.link(t.link, lossy) : null)
-      if (native !== kind) lossy.push('geo-approximated')
+      const markEls = marks.map((pts, i) => {
+        const mark = this.common(`${id}.m${i + 1}`, 'line', node, { x: 0, y: 0, w: 0, h: 0, angle: 0 })
+        Object.assign(mark, linearGeometry(place(pts)), {
+          strokeColor: c.solid,
+          strokeWidth,
+          roundness: null,
+          startBinding: null,
+          endBinding: null,
+          startArrowhead: null,
+          endArrowhead: null,
+          polygon: false,
+        })
+        this.styleFromTl(mark, p)
+        Object.assign(mark, { backgroundColor: 'transparent', fillStyle: 'solid' })
+        return mark
+      })
       const label = hasText(t) ? this.boxLabel(el, native, lines, fam, size, align, valign, ink) : null
       this.custom(el, n, lossy)
       this.setBound(el, label, n.s.id)
       return {
-        elements: label ? [el, label] : [el],
+        elements: [el, ...markEls, ...(label ? [label] : [])],
         main: el,
         outline: native === 'rectangle' ? 'rect' : native,
         lossy,
         files: [],
       }
     }
-    // No Excalidraw type: a closed polygon line for the outline plus a transparent rectangle that holds the
-    // label and the arrow bindings, grouped together (§5.1 "geo other kinds").
-    lossy.push('geo-polygon')
-    const gid = `${id}.g`
-    const flipX = p.flipX === true
-    const flipY = p.flipY === true
-    const pts = polygonOf(kind, w, h).map(([x, y]) => apply(m, flipX ? w - x : x, flipY ? h - y : y))
+    // No Excalidraw type: a closed polygon line for the outline (tldraw's own geometry) plus a transparent
+    // rectangle that holds the label and the arrow bindings, grouped together (§5.1 "geo other kinds").
+    const pts = place(
+      geoOutline(kind, w, h, { seed: n.s.id, size: str(p.size), scale, dash: str(p.dash), strokeWidth }),
+    )
     const polyNode = { ...n, groups: [gid, ...n.groups] }
     const poly = this.common(`${id}.o`, 'line', polyNode, { x: 0, y: 0, w: 0, h: 0, angle: 0 })
-    Object.assign(poly, linearGeometry(pts), {
+    const outline = linearGeometry(pts)
+    // closed exactly: the last point is the first (rounding against the rounded origin left it 0.01 off)
+    outline.points[outline.points.length - 1] = [0, 0]
+    Object.assign(poly, outline, {
       strokeColor: c.solid,
-      strokeWidth: (STROKE[str(p.size)] ?? 3.5) * scale,
-      roundness: kind === 'cloud' || kind === 'heart' ? { type: 2 } : null,
+      strokeWidth,
+      roundness: build.curve ? { type: 2 } : null,
       startBinding: null,
       endBinding: null,
       startArrowhead: null,
