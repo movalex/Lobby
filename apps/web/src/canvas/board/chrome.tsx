@@ -9,6 +9,7 @@
  */
 import type { RosterEntry } from '@draftroom/canvas-schema/protocol'
 import { type CSSProperties, type ReactNode, useMemo, useSyncExternalStore } from 'react'
+import { frameAt } from '../../features/canvas-ux/ported/notes.ts'
 import { FeatureDockView, TopBarOverflowRow } from '../../features/FeatureHostCore.tsx'
 import { initialsFor, safeColor } from '../../lib/identity.ts'
 import { can } from '../../lib/permissions.ts'
@@ -66,9 +67,14 @@ function AddNoteButton({ ctx, onPress }: { ctx: CanvasFeatureContext; onPress():
         canvas.focus({ preventScroll: true })
         const v = canvas.viewport.get()
         const size = 200
-        const id = canvas.transact('add note', (tx) =>
-          tx.create('note', { x: v.x + v.width / 2 - size / 2, y: v.y + v.height / 2 - size / 2, size }),
-        )
+        const centre = { x: v.x + v.width / 2, y: v.y + v.height / 2 }
+        // W5-01: inside the unlocked frame at the view's centre, in the same step
+        const frame = frameAt(canvas, centre, { unlockedOnly: true })
+        const id = canvas.transact('add note', (tx) => {
+          const n = tx.create('note', { x: centre.x - size / 2, y: centre.y - size / 2, size })
+          if (frame) tx.setFrame([n], frame.id)
+          return n
+        })
         void canvas.text.edit(id, { via: 'api', caret: 'end' })
       }}
     >

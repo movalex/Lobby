@@ -248,6 +248,23 @@ export const applyChanges = (
     if (target !== undefined) {
       patch.isDeleted = target
       done.fields.isDeleted = c.fields.isDeleted as FieldChange
+      // the undo of a create of a LOCKED element (a template's locked heading, inserted locked): the
+      // element did not exist before the step, so its lock goes with it. The room refuses a delete of a
+      // locked element unless the same op unlocks it (merge.ts step 5), so without this one undo of a
+      // template insert left its locked parts on the board for everyone (DEF-W3-2). The redo locks it again.
+      // (A label is never unlocked here: it follows its container's lock.)
+      const isLabel = cur.type === 'text' && !!cur.containerId
+      if (
+        target === true &&
+        dir === 'undo' &&
+        c.created &&
+        cur.locked === true &&
+        !c.fields.locked &&
+        !isLabel
+      ) {
+        patch.locked = false
+        done.fields.locked = { before: false, after: true }
+      }
     }
     // Coupled geometry (x with y, width with height and points, a label's layout) is one unit: the
     // fields of such a group that this entry recorded go back together or not at all. Other groups are

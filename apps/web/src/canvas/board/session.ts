@@ -23,6 +23,7 @@ import { CaptureUpdateAction } from '@excalidraw/excalidraw'
 import type { ExcalidrawImperativeAPI } from '@excalidraw/excalidraw/types'
 import { api as apiClient } from '../../api/client.ts'
 import { createTicketUri } from '../../board/ticket.ts'
+import { frameAt } from '../../features/canvas-ux/ported/notes.ts'
 import { DEV_AUTH_ENABLED } from '../../lib/identity.ts'
 import { engineRejectNotice } from '../../sync-quality/copy.ts'
 import { type BoardConcern, type BoardEvent, createLobbyCanvas, type LobbyCanvasHandle } from '../api/impl.ts'
@@ -31,6 +32,7 @@ import type {
   CanvasInputEvent,
   LobbyCanvas,
   LobbyCanvasEventMap,
+  LobbyTx,
   ScenePoint,
 } from '../api/lobby-canvas.ts'
 import { createFeatureRegistries, type ExternalContent, type FeatureRegistries } from '../api/registries.ts'
@@ -737,7 +739,8 @@ export class LobbyBoardSession {
     if (this.snap.readonly || !this.port || !this.api) return
     if (c.tool === 'note') {
       const size = 200
-      const id = this.port.transact('note', (tx) =>
+      // W5-01: a note made inside a frame is its child (tldraw's), in the same step as its create
+      const id = this.createInFrame('note', { x: c.x, y: c.y }, (tx) =>
         tx.create('note', { x: c.x - size / 2, y: c.y - size / 2, size }),
       )
       this.lease.markCreated(id)
@@ -752,9 +755,29 @@ export class LobbyBoardSession {
 
   private createFreeText(x: number, y: number): void {
     if (this.snap.readonly || !this.port) return
-    const id = this.port.transact('text', (tx) => tx.create('text', { x, y, text: '' }))
+    const id = this.createInFrame('text', { x, y }, (tx) => tx.create('text', { x, y, text: '' }))
     this.lease.markCreated(id)
     this.input.editorLease?.requestEdit(id, { reason: 'new-text', caretEnd: true })
+  }
+
+  /**
+   * Creates an element at `at` with `make` and, in the same step, puts it (and its label) into the
+   * innermost unlocked frame under `at` (W5-01: notes and text made inside a frame are its children, as
+   * on the tldraw board; frame-scoped votes, frame moves and comments depend on it). One undo step.
+   */
+  private createInFrame(
+    label: string,
+    at: ScenePoint,
+    make: (tx: Pick<LobbyTx, 'create'>) => string,
+  ): string {
+    const canvas = this.canvas
+    if (!canvas) return (this.port as LobbyCanvasPort).transact(label, (tx) => make(tx))
+    const frame = frameAt(canvas, at, { unlockedOnly: true })
+    return canvas.transact(label, (tx) => {
+      const id = make(tx)
+      if (frame) tx.setFrame([id], frame.id)
+      return id
+    })
   }
 
   // ---- undo ------------------------------------------------------------------------------------------------

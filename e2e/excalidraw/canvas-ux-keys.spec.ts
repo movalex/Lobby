@@ -43,10 +43,6 @@ async function threeRects(page: Page) {
 test('MAK-06: PageUp / PageDown bring to front / send to back, Shift one step, ] and [ too (bob sees the order)', async ({
   canvasSession,
 }) => {
-  // CR-3A-3 (canvas/port-impl.ts, spike B / 2C): a transact's `index` writes never move the element in the
-  // scene array, and Excalidraw's updateScene renumbers every index in array order (syncInvalidIndices), so
-  // `tx.reorder` changes no paint order, locally or on the server. Remove this mark when it is fixed.
-  test.fail(true, 'CR-3A-3: tx.reorder does not change the paint order')
   const a = await canvasSession('alice')
   const b = await canvasSession('bob')
   await waitForCanvasUx(a.page)
