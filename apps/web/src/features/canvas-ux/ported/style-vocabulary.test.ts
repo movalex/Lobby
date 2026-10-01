@@ -1,5 +1,6 @@
 // The style panel's vocabulary (./style-vocabulary.ts): the values are the converter's (a converted board
 // and a new one speak the same colours), and every mapping reads back what it writes.
+import { LOBBY_FONT_FAMILIES } from '@draftroom/canvas-schema/limits'
 import { describe, expect, it } from 'vitest'
 import {
   PALETTE,
@@ -85,7 +86,15 @@ describe('every mapping reads back what it writes', () => {
     }
     expect(sizeNameOf(20, LABEL_SIZE), 'a size of no step').toBeNull()
     for (const f of FONTS) expect(fontNameOf(FONT_FAMILY[f])).toBe(f)
-    expect(Object.values(FONT_FAMILY).sort()).toEqual([5, 6, 8])
+    // D3: every font offered is one the server's allowlist takes (Display, Lilita One 7, once it does)
+    for (const f of FONTS) expect(LOBBY_FONT_FAMILIES as readonly number[]).toContain(FONT_FAMILY[f])
+    expect(FONTS).toEqual(
+      (['draw', 'sans', 'display', 'mono'] as const).filter((f) =>
+        (LOBBY_FONT_FAMILIES as readonly number[]).includes(FONT_FAMILY[f]),
+      ),
+    )
+    expect(FONT_FAMILY).toEqual({ draw: 5, sans: 6, display: 7, mono: 8 })
+    expect(fontNameOf(7)).toBe('display')
     for (const h of ARROWHEADS) expect(arrowheadNameOf(arrowheadField(h))).toBe(h)
     expect(opacityStepOf(60)).toBe(50)
     expect(opacityStepOf(100)).toBe(100)

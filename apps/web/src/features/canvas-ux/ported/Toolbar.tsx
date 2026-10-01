@@ -12,16 +12,24 @@
 // panel above it (tldraw's MobileStylePanel). The bar never covers the navigation slot at the bottom left.
 //
 // A click never takes the keyboard from the board (the button's mousedown is prevented), so T or Delete
-// right after clicking a tool still reach the board; the toolbar is still one Tab stop, and arrow keys,
-// Home and End move along it (ARIA toolbar).
-import { type ComponentType, type RefObject, useEffect, useRef } from 'react'
+// right after clicking a tool still reach the board; the toolbar is one Tab stop (a roving tab index, W5-42),
+// and arrow keys, Home and End move along it (ARIA toolbar). Each tool says its key (`aria-keyshortcuts`
+// and its tooltip, W5-50).
+//
+// The wave-5 review: More works from the keyboard (W5-22): Enter, Space or ArrowUp on it opens a menu of
+// tool picks right after the tools in the DOM, on its first tool (or the one in use); arrows move, Enter
+// picks, Esc closes it and gives More the keyboard back, Tab leaves it closed; a canvas press or another
+// tool closes it. It holds D4's polygon tools (./polygons.ts) in tldraw's order. On a canvas wider than
+// 840 px Undo and Redo hang left of the tools (W5-33, ./QuickActions.tsx HistoryBar).
+import { type ComponentType, type RefObject, useEffect, useId, useRef } from 'react'
 import type { CanvasFeatureContext, FeatureToolSpec } from '../../../canvas/api/index.ts'
 import { currentPlatform, formatChord } from '../../../canvas/api/index.ts'
 import { useValue } from '../../../lib/signals.ts'
 import { TemplatesIcon } from '../icons.tsx'
 import { MediaIcon, MoreIcon, TOOL_ICONS } from './icons.tsx'
 import { pickFiles } from './insert-file.ts'
-import { QuickActions } from './QuickActions.tsx'
+import { POLYGON_TOOLS } from './polygons.ts'
+import { HistoryBar, QuickActions } from './QuickActions.tsx'
 import { hasStyleTarget, StylePanelBody, styleSwatchOf } from './StylePanel.tsx'
 import { uxState } from './state.ts'
 import { moveInToolbar } from './toolbar-keys.ts'
@@ -46,11 +54,29 @@ export const MAIN_TOOLS: readonly BuiltInToolInfo[] = [
   { id: 'frame', label: 'Frame', key: 'f' },
 ]
 
-/** One level down, in "More" (tldraw's order: …, line, highlight, laser). */
+const polygon = (id: string): BuiltInToolInfo => {
+  const t = POLYGON_TOOLS.find((p) => p.id === id)
+  return { id, label: t?.label ?? id }
+}
+
+/**
+ * One level down, in "More" (tldraw's order: eraser, the geo shapes, line, highlight, laser). D4: the geo
+ * shapes Excalidraw has no type for are canvas-ux's polygon tools (./polygons.ts).
+ */
 export const OVERFLOW_TOOLS: readonly BuiltInToolInfo[] = [
   { id: 'eraser', label: 'Eraser', key: 'e' },
   { id: 'ellipse', label: 'Ellipse', key: 'o' },
+  polygon('triangle'),
   { id: 'diamond', label: 'Diamond' },
+  polygon('hexagon'),
+  polygon('rhombus'),
+  polygon('star'),
+  polygon('cloud'),
+  polygon('heart'),
+  polygon('arrow-left'),
+  polygon('arrow-up'),
+  polygon('arrow-down'),
+  polygon('arrow-right'),
   { id: 'line', label: 'Line' },
   { id: 'highlight', label: 'Highlight', key: 'shift+d' },
   { id: 'laser', label: 'Laser', key: 'k' },
@@ -74,32 +100,76 @@ interface Slot {
   readonly icon: ComponentType
   readonly active: boolean
   readonly expanded?: boolean
-  onSelect(): void
+  /** the More button: the id of the popover it opens */
+  readonly controls?: string
+  onSelect(e?: { readonly detail: number }): void
 }
 
 const title = (label: string, key?: string) =>
   key ? `${label} — ${formatChord(key, currentPlatform())}` : label
 
-function ToolButton({ slot }: { slot: Slot }) {
+/** The `aria-keyshortcuts` value of a Lobby chord (W5-50: the tools say their keys again). */
+export function ariaKeys(key: string | undefined): string | undefined {
+  if (!key) return undefined
+  return key
+    .split('+')
+    .map((p) => (p === 'mod' ? (currentPlatform() === 'mac' ? 'Meta' : 'Control') : p))
+    .map((p) => (p.length === 1 ? p.toUpperCase() : p[0]?.toUpperCase() + p.slice(1)))
+    .join('+')
+}
+
+function ToolButton({
+  slot,
+  menuItem = false,
+  tabIndex,
+}: {
+  slot: Slot
+  /** an item of the More popover (role menuitemradio) */
+  menuItem?: boolean
+  /** roving tab index (W5-42): one Tab stop per bar */
+  tabIndex?: number
+}) {
   const Icon = slot.icon
+  const common = {
+    type: 'button' as const,
+    className: 'cux-tool',
+    'data-testid': slot.testId,
+    'data-tool': slot.id,
+    'aria-label': slot.label,
+    'aria-keyshortcuts': ariaKeys(slot.key),
+    title: title(slot.label, slot.key),
+    'data-state': slot.active ? 'selected' : undefined,
+    tabIndex,
+    // the board keeps the keyboard: a click on a tool is not a move of the focus
+    onMouseDown: (e: { preventDefault(): void }) => e.preventDefault(),
+    onClick: (e: { detail: number }) => slot.onSelect({ detail: e.detail }),
+  }
+  if (menuItem)
+    return (
+      <button {...common} role="menuitemradio" aria-checked={slot.active}>
+        <Icon />
+      </button>
+    )
   return (
     <button
-      type="button"
-      className="cux-tool"
-      data-testid={slot.testId}
-      data-tool={slot.id}
-      aria-label={slot.label}
-      title={title(slot.label, slot.key)}
+      {...common}
       aria-pressed={slot.expanded === undefined ? slot.active : undefined}
       aria-expanded={slot.expanded}
-      data-state={slot.active ? 'selected' : undefined}
-      // the board keeps the keyboard: a click on a tool is not a move of the focus
-      onMouseDown={(e) => e.preventDefault()}
-      onClick={slot.onSelect}
+      aria-haspopup={slot.controls ? 'menu' : undefined}
+      aria-controls={slot.controls && slot.expanded ? slot.controls : undefined}
     >
       <Icon />
     </button>
   )
+}
+
+/**
+ * W5-42: a bar's roving tab stop: the pressed button, else the first. The bar is one Tab stop and the
+ * arrow keys move inside it (./toolbar-keys.ts).
+ */
+export function rovingIndex(slots: readonly { readonly active: boolean }[]): number {
+  const i = slots.findIndex((s) => s.active)
+  return i < 0 ? 0 : i
 }
 
 /** The tools a feature registered for the toolbar, sorted, that this role may use. */
@@ -146,6 +216,7 @@ export function Toolbar({ ctx }: { ctx: CanvasFeatureContext }) {
   const moreRef = useRef<HTMLDivElement>(null)
   const stylesRef = useRef<HTMLDivElement>(null)
   const stylesButtonRef = useRef<HTMLButtonElement>(null)
+  const moreId = useId()
 
   // the folded style panel folds again when the selection changes (the wave-3 integration's rule)
   useEffect(() => {
@@ -252,38 +323,53 @@ export function Toolbar({ ctx }: { ctx: CanvasFeatureContext }) {
   useEffect(() => {
     if (!plan.stylesButton && stylesOpen) state.stylesOpen.set(false)
   }, [plan.stylesButton, stylesOpen, state])
+  // W5-22: a tool picked any other way (a key, the canvas) closes More too
+  useEffect(() => {
+    void tool
+    state.moreOpen.set(false)
+  }, [tool, state])
+  // W5-22: opened from the keyboard, More gives its first tool (or the one in use) the keyboard
+  const focusMore = useRef(false)
+  useEffect(() => {
+    if (!moreOpen || !focusMore.current) return
+    focusMore.current = false
+    const items = [...(moreRef.current?.querySelectorAll<HTMLButtonElement>('button') ?? [])]
+    ;(items.find((b) => b.getAttribute('aria-checked') === 'true') ?? items[0])?.focus()
+  }, [moreOpen])
+  // W5-22: Escape closes More wherever the keyboard is (the board, the More button), and the keyboard goes
+  // back to More when it was inside the popover
+  useEffect(() => {
+    if (!moreOpen) return
+    const doc = wrapRef.current?.ownerDocument ?? document
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      const inside = !!moreRef.current?.contains(doc.activeElement)
+      const onMore = doc.activeElement === moreButton()
+      state.moreOpen.set(false)
+      if (inside || onMore) {
+        e.preventDefault()
+        e.stopPropagation()
+        moreButton()?.focus()
+      }
+    }
+    doc.addEventListener('keydown', onKey, true)
+    return () => doc.removeEventListener('keydown', onKey, true)
+  }, [moreOpen, state])
+  const moreButton = () =>
+    barRef.current?.querySelector<HTMLButtonElement>('[data-testid="tools.more-button"]') ?? null
 
   const phone = room.width <= STYLES_BUTTON_MAX
+  const shownTab = rovingIndex(plan.shown)
+  const moreTab = rovingIndex(moreSlots)
   return (
     <div
       ref={wrapRef}
       className="cux-toolbar-wrap"
       data-quick={plan.quickOnToolbar ? 'toolbar' : undefined}
       data-phone={phone ? 'true' : undefined}
+      data-tool-size={plan.toolPx}
       style={plan.shift ? { transform: `translateX(${Math.round(plan.shift)}px)` } : undefined}
     >
-      {moreOpen && moreSlots.length > 0 && (
-        <div
-          ref={moreRef}
-          className="cux-toolbar-more"
-          role="toolbar"
-          aria-label="More tools"
-          data-testid="tools.more-content"
-          onKeyDown={(e) => {
-            if (e.key === 'Escape') {
-              e.preventDefault()
-              state.moreOpen.set(false)
-              barRef.current?.querySelector<HTMLButtonElement>('[data-testid="tools.more-button"]')?.focus()
-              return
-            }
-            moveInToolbar(e.nativeEvent, moreRef.current)
-          }}
-        >
-          {moreSlots.map((s) => (
-            <ToolButton key={s.id} slot={s} />
-          ))}
-        </div>
-      )}
       {stylesOpen && plan.stylesButton && (
         <div
           ref={stylesRef}
@@ -304,19 +390,36 @@ export function Toolbar({ ctx }: { ctx: CanvasFeatureContext }) {
       )}
       {plan.quickOnToolbar && <QuickActions ctx={ctx} phone={phone} indent={plan.quickIndent} />}
       <div className="cux-toolbar-row">
+        {plan.historyBar && <HistoryBar ctx={ctx} />}
         <div
           ref={barRef}
           className="cux-toolbar"
           role="toolbar"
           aria-label="Tools"
           data-testid="main-toolbar"
-          onKeyDown={(e) => moveInToolbar(e.nativeEvent, barRef.current)}
+          onKeyDown={(e) => {
+            // W5-22: ArrowUp on More opens it from the keyboard
+            if (e.key === 'ArrowUp' && e.target === moreButton() && !moreOpen) {
+              e.preventDefault()
+              state.stylesOpen.set(false)
+              focusMore.current = true
+              state.moreOpen.set(true)
+              return
+            }
+            moveInToolbar(e.nativeEvent, barRef.current)
+          }}
+          onFocus={(e) => {
+            // W5-42: the button that has the keyboard is the bar's one Tab stop until the bar re-renders
+            for (const b of barRef.current?.querySelectorAll<HTMLButtonElement>(':scope > button') ?? [])
+              b.tabIndex = b === (e.target as Element) ? 0 : -1
+          }}
         >
-          {plan.shown.map((s) => (
-            <ToolButton key={s.id} slot={s} />
+          {plan.shown.map((s, i) => (
+            <ToolButton key={s.id} slot={s} tabIndex={i === shownTab ? 0 : -1} />
           ))}
           {hiddenIds.size > 0 && (
             <ToolButton
+              tabIndex={-1}
               slot={{
                 id: 'more',
                 testId: 'tools.more-button',
@@ -324,14 +427,46 @@ export function Toolbar({ ctx }: { ctx: CanvasFeatureContext }) {
                 icon: MoreIcon,
                 active: moreOpen,
                 expanded: moreOpen,
-                onSelect: () => {
+                controls: moreId,
+                onSelect: (e) => {
                   state.stylesOpen.set(false)
+                  // a keyboard activation (Enter, Space: a click of detail 0) moves into the popover
+                  focusMore.current = !moreOpen && (e?.detail ?? 1) === 0
                   state.moreOpen.set(!moreOpen)
                 },
               }}
             />
           )}
         </div>
+        {moreOpen && moreSlots.length > 0 && (
+          // W5-22: right after More in the DOM (and the Tab order), a menu of tool picks
+          <div
+            ref={moreRef}
+            id={moreId}
+            className="cux-toolbar-more"
+            role="menu"
+            aria-label="More tools"
+            aria-orientation="horizontal"
+            data-testid="tools.more-content"
+            onKeyDown={(e) => {
+              if (e.key === 'Tab') {
+                // leaving the menu closes it; the keyboard goes on from More
+                state.moreOpen.set(false)
+                return
+              }
+              moveInToolbar(e.nativeEvent, moreRef.current)
+            }}
+            onBlur={(e) => {
+              const to = e.relatedTarget as Node | null
+              if (to && !moreRef.current?.contains(to) && !barRef.current?.contains(to))
+                state.moreOpen.set(false)
+            }}
+          >
+            {moreSlots.map((s, i) => (
+              <ToolButton key={s.id} slot={s} menuItem tabIndex={i === moreTab ? 0 : -1} />
+            ))}
+          </div>
+        )}
         {plan.stylesButton && (
           <button
             ref={stylesButtonRef}

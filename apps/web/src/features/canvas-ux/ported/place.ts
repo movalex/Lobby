@@ -3,12 +3,23 @@
 // places that shape in the middle of the view, clear of what is already there (inside the unlocked frame
 // under it), selects it and opens its text editor through the lease. One undo step. The shape takes the
 // style of the next shapes (colour, fill, font), as a click would.
+//
+// W5-20 (the wave-5 review): as after a click with a creation tool (tldraw's rule, and the board page's
+// N + click), the tool goes back to Select, so Esc then Enter edits the placed shape again instead of
+// placing a blank one. A sticky note whose editor closes with no words in it is taken off the board in the
+// same undo step (a keyboard user who changed their mind leaves nothing behind), and the live region says
+// so (the a11y feature's announcer).
 import type { CanvasFeatureContext, ItemKind, LobbyCanvas, StyleValues } from '../../../canvas/api/index.ts'
 import { geometry, NotImplementedError } from '../../../canvas/api/index.ts'
+import { announcerFor } from '../../a11y/ported/announcer.ts'
 import { findEmptySpot, type Rect } from '../placement.ts'
 import { frameAt, NOTE_SIZE, putInFrame } from './notes.ts'
+import { createPolygon, isPolygonTool, type PolygonKind } from './polygons.ts'
 
-export type PlaceableTool = 'note' | 'rectangle' | 'ellipse' | 'diamond' | 'text'
+/** What the live region says when an empty placed note is taken off the board (W5-20). */
+export const EMPTY_NOTE_REMOVED = 'Empty sticky note removed'
+
+export type PlaceableTool = 'note' | 'rectangle' | 'ellipse' | 'diamond' | 'text' | PolygonKind
 
 /** A new shape keeps this much space (scene units) from what is already on the board. */
 export const PLACE_GAP = 24
@@ -25,7 +36,8 @@ const SHAPES: ReadonlySet<string> = new Set(['rectangle', 'ellipse', 'diamond'])
 export function placeableTool(ctx: Pick<CanvasFeatureContext, 'canvas'>): PlaceableTool | null {
   const { canvas } = ctx
   const tool = canvas.tool()
-  if (!tool || !PLACEABLE.has(tool) || canvas.editingId() !== null) return null
+  // D4: the polygon tools place their shape too
+  if (!tool || !(PLACEABLE.has(tool) || isPolygonTool(tool)) || canvas.editingId() !== null) return null
   if (SHAPES.has(tool) && canvas.selection.length === 1) {
     const only = canvas.get(canvas.selection[0] as string)
     if (only && SHAPES.has(only.type)) return null
@@ -75,6 +87,31 @@ function nextStyle(canvas: LobbyCanvas, tool: PlaceableTool): Record<string, unk
   return out
 }
 
+/**
+ * W5-20: once the editor that opens on the placed note `id` closes, a note left with no words goes, in the
+ * placing undo step (so one Ctrl+Z never brings back a blank note), and the live region says so.
+ */
+export function removeIfLeftEmpty(canvas: LobbyCanvas, id: string): void {
+  let opened = false
+  const off = canvas.on('editingChanged', (editing) => {
+    if (editing === id) {
+      opened = true
+      return
+    }
+    off()
+    if (!opened) return
+    // after the editor's own close (its last words and the lease release) has run
+    setTimeout(() => {
+      const el = canvas.get(id)
+      if (!el || (el as { isDeleted?: boolean }).isDeleted || canvas.isLocked(id) || canvas.readOnly()) return
+      if (canvas.editingId() === id || canvas.text.of(id).trim() !== '') return
+      canvas.transact('remove empty note', (tx) => tx.delete(id), { joinPrevious: true })
+      if (canvas.selection.includes(id)) canvas.select(canvas.selection.filter((s) => s !== id))
+      announcerFor(canvas).say(EMPTY_NOTE_REMOVED)
+    }, 0)
+  })
+}
+
 /** Places the tool's shape; returns its id, or null on a read-only board. */
 export function placeAtCenter(ctx: CanvasFeatureContext, tool: PlaceableTool): string | null {
   const { canvas } = ctx
@@ -83,6 +120,21 @@ export function placeAtCenter(ctx: CanvasFeatureContext, tool: PlaceableTool): s
   const view = canvas.viewport.get()
   const spot = findEmptySpot(size, geometry.center(view), obstacles(canvas), { gap: PLACE_GAP })
   const frame = frameAt(canvas, { x: spot.x + size.w / 2, y: spot.y + size.h / 2 }, { unlockedOnly: true })
+  if (isPolygonTool(tool)) {
+    // D4: the polygon, ready to type its label in (its holder's)
+    const made = createPolygon(
+      canvas,
+      tool,
+      { x: spot.x, y: spot.y, width: size.w, height: size.h },
+      `place ${tool}`,
+    )
+    if (!made) return null
+    if (canvas.tool() !== 'select') canvas.setTool('select')
+    // the label's editor opens on the holder alone (the lease asks for the one selected element)
+    canvas.select([made.holder])
+    void canvas.text.edit(made.holder, { via: 'enter', caret: 'end' })
+    return made.holder
+  }
   const kind: ItemKind = tool
   const id = canvas.transact(`place ${tool}`, (tx) => {
     const props: Record<string, unknown> = { x: spot.x, y: spot.y, ...nextStyle(canvas, tool) }
@@ -92,7 +144,10 @@ export function placeAtCenter(ctx: CanvasFeatureContext, tool: PlaceableTool): s
     return tx.create(kind, props)
   })
   putInFrame(canvas, id, frame?.id)
+  // W5-20: back to Select before the selection (switching tools keeps a selection only into Select)
+  if (canvas.tool() !== 'select') canvas.setTool('select')
   canvas.select([id])
+  if (tool === 'note') removeIfLeftEmpty(canvas, id)
   // a crowded view pushes it to the nearest free spot, which can be off screen: bring it into view
   const placed = { x: spot.x, y: spot.y, width: size.w, height: size.h }
   if (!geometry.containsRect(view, placed)) {

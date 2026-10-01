@@ -15,7 +15,7 @@ import { AlignIcons, LockIcon } from '../icons.tsx'
 import { unitsOf } from './align.ts'
 import { CMD, runCommand, selectedRoots } from './commands.ts'
 import { uxState } from './state.ts'
-import { moveInToolbar } from './toolbar-keys.ts'
+import { moveInToolbar, rove } from './toolbar-keys.ts'
 
 /** A11Y2-06: below this canvas width, the arrange row folds into the bar's "More" button. */
 export const SELBAR_COMPACT_BELOW = 600
@@ -189,6 +189,8 @@ export function SelectionBar({ ctx }: { ctx: CanvasFeatureContext }) {
   const moreId = useId()
   const sel = view?.sel ?? ''
   useEffect(() => setMoreOpen(false), [sel])
+  // W5-42: the bar is one Tab stop (a roving tab index over its own buttons; a popover's are left alone)
+  useLayoutEffect(() => rove(ref.current))
   // Alt+F10: the first button takes the keyboard (with a ring, even after a mouse selection)
   const focusTick = useValue(state.selectionBarFocus)
   useEffect(() => {
@@ -227,6 +229,7 @@ export function SelectionBar({ ctx }: { ctx: CanvasFeatureContext }) {
         }
         moveInToolbar(e.nativeEvent, ref.current)
       }}
+      onFocus={(e) => rove(ref.current, e.target)}
     >
       {render(main)}
       {arrange.length > 0 && !compact && (

@@ -7,7 +7,10 @@
 //    one on a frame's name renames the frame (RETRO-14). Nothing is made on something locked, or inside a
 //    locked frame: F8's hint explains why;
 //  - RETRO-02: the note left selected by finishing an edit is remembered until the selection changes or
-//    the board is pressed again (./keys.ts reads it).
+//    the board is pressed again (./keys.ts reads it);
+//  - D4: a double-click on a polygon (./polygons.ts) edits its label, on the polygon's holder;
+//  - W5-59 (the wave-5 review): the open text editor is named for what it edits ("Sticky note text",
+//    "Text", "Shape label", "Connector label"), so a screen reader says where the typing goes.
 import type {
   CanvasElement,
   CanvasFeatureContext,
@@ -17,7 +20,24 @@ import type {
 import { openContextMenu } from './context-menu-open.ts'
 import { FRAME_NAME_BAND_PX } from './FrameRename.tsx'
 import { createNoteAt, frameAt } from './notes.ts'
+import { polygonHolderAt } from './polygons.ts'
 import { uxState } from './state.ts'
+
+/** W5-59: the accessible name of the text editor open on `el` (the element whose words it edits). Pure. */
+export function editorName(el: CanvasElement | undefined): string {
+  switch (el?.type) {
+    case 'stickynote':
+      return 'Sticky note text'
+    case 'text':
+      return 'Text'
+    case 'arrow':
+      return 'Connector label'
+    case undefined:
+      return 'Text'
+    default:
+      return 'Shape label'
+  }
+}
 
 /** The frame whose name (drawn above its top edge) is at `point`, or null. */
 export function frameNameAt(ctx: CanvasFeatureContext, point: ScenePoint): CanvasElement | null {
@@ -41,13 +61,21 @@ export function doubleClickAction(
     meta: boolean
     alt: boolean
   },
-): { kind: 'note' } | { kind: 'rename'; frameId: string } | { kind: 'swallow' } | null {
+):
+  | { kind: 'note' }
+  | { kind: 'rename'; frameId: string }
+  | { kind: 'label'; id: string }
+  | { kind: 'swallow' }
+  | null {
   const { canvas } = ctx
   if (e.shift || e.ctrl || e.meta || e.alt) return null
   if (canvas.readOnly() || canvas.tool() !== 'select' || canvas.editingId() !== null) return null
   const named = frameNameAt(ctx, e.scene)
   if (named) return named.locked ? { kind: 'swallow' } : { kind: 'rename', frameId: named.id }
   const hit = e.hit
+  // D4: a polygon (its outline, its holder, or inside an unfilled one) edits its holder's label
+  const holder = polygonHolderAt(canvas, e.scene, hit)
+  if (holder) return canvas.isLocked(holder.id) ? { kind: 'swallow' } : { kind: 'label', id: holder.id }
   // an element (not a frame's empty inside) edits as usual
   if (hit && hit.type !== 'frame') return null
   const frame = hit ?? frameAt(canvas, e.scene)
@@ -83,15 +111,27 @@ export function installCanvasEvents(ctx: CanvasFeatureContext): () => void {
       e.handled()
       if (action.kind === 'rename') state.renamingFrame.set(action.frameId)
       else if (action.kind === 'note') createNoteAt(ctx, e.scene)
+      else if (action.kind === 'label') {
+        canvas.select([action.id])
+        void canvas.text.edit(action.id, { via: 'double-click', caret: 'end' })
+      }
     }),
   )
   let editing = canvas.editingId()
+  // the engine mounts its textarea a frame after the editing state: name it once it is there
+  const nameEditor = (id: string, tries = 10) => {
+    const area = canvas.text.editorElement()
+    if (area) area.setAttribute('aria-label', editorName(canvas.get(id)))
+    else if (tries > 0) requestAnimationFrame(() => nameEditor(id, tries - 1))
+  }
+  if (editing) nameEditor(editing)
   offs.push(
     canvas.on('editingChanged', (id) => {
       const prev = editing
       editing = id
       if (id !== null) {
         state.leftEditing.set(null)
+        nameEditor(id)
         return
       }
       const el = prev ? canvas.get(prev) : undefined

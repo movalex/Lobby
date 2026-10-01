@@ -47,6 +47,7 @@ export const CMD = {
   redo: 'canvas-ux.redo',
   cut: 'canvas-ux.cut',
   copy: 'canvas-ux.copy',
+  paste: 'canvas-ux.paste',
   duplicate: 'canvas-ux.duplicate',
   delete: 'canvas-ux.delete',
   selectAll: 'canvas-ux.select-all',
@@ -203,6 +204,69 @@ function clipboard(ctx: CanvasFeatureContext, kind: 'copy' | 'cut') {
   doc.execCommand(kind)
 }
 
+/** What the menus' Paste says when the browser will not hand the clipboard over (W5-33). */
+export const PASTE_BLOCKED_COPY =
+  'Your browser did not let Lobby read the clipboard. Press Ctrl+V (⌘V on a Mac) to paste.'
+
+/**
+ * W5-33: Paste from the menus (tldraw's Edit ▸ Paste and the context menu's): the clipboard's contents,
+ * read with the browser's permission, go through the board's own paste path as a paste event on the
+ * canvas, at `at` (screen pixels; default the middle of the canvas), so every paste rule applies (Lobby's
+ * paste handlers, the upload path for files, the engine's own clipboard, paste as notes).
+ */
+export async function pasteFromMenu(
+  ctx: CanvasFeatureContext,
+  at?: { x: number; y: number },
+): Promise<boolean> {
+  const { canvas } = ctx
+  if (canvas.readOnly()) return false
+  const nav = globalThis.navigator as Navigator | undefined
+  const data = new DataTransfer()
+  try {
+    const items = (await nav?.clipboard?.read?.()) ?? []
+    for (const item of items)
+      for (const type of item.types) {
+        const blob = await item.getType(type)
+        if (type.startsWith('text/')) data.setData(type, await blob.text())
+        else data.items.add(new File([blob], `pasted.${type.split('/')[1] ?? 'bin'}`, { type }))
+      }
+  } catch {
+    try {
+      const text = (await nav?.clipboard?.readText?.()) ?? ''
+      if (text) data.setData('text/plain', text)
+    } catch {
+      // no permission: say how to paste instead
+    }
+  }
+  if (!data.types.length && !data.files.length) {
+    ctx.notify({
+      key: 'paste-blocked',
+      text: PASTE_BLOCKED_COPY,
+      testId: 'paste-blocked-notice',
+      timeoutMs: 6000,
+    })
+    return false
+  }
+  const root = canvas.container()
+  const doc = root?.ownerDocument ?? document
+  const view = canvas.viewport.screenRect()
+  const point = at ?? { x: view.x + view.width / 2, y: view.y + view.height / 2 }
+  canvas.focus({ preventScroll: true })
+  // the engine pastes where the pointer last was, over its canvas: put the pointer there first
+  const under = doc.elementFromPoint(point.x, point.y) ?? root ?? doc.body
+  under.dispatchEvent(
+    new PointerEvent('pointermove', {
+      clientX: point.x,
+      clientY: point.y,
+      bubbles: true,
+      pointerType: 'mouse',
+    }),
+  )
+  const target = doc.activeElement ?? root ?? doc.body
+  target.dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }))
+  return true
+}
+
 const selectionAtLeast = (n: number) => (ctx: CanvasFeatureContext) => selectedRoots(ctx.canvas).length >= n
 const editable = (ctx: CanvasFeatureContext) => !ctx.canvas.readOnly()
 
@@ -242,6 +306,13 @@ export const COMMANDS: readonly CommandSpec[] = [
     label: 'Copy',
     enabled: selectionAtLeast(1),
     run: (ctx) => clipboard(ctx, 'copy'),
+  },
+  {
+    // W5-33: the menus' Paste (Ctrl/Cmd+V stays the browser's paste event, through the allowlist)
+    id: CMD.paste,
+    label: 'Paste',
+    enabled: editable,
+    run: (ctx) => void pasteFromMenu(ctx),
   },
   {
     id: CMD.duplicate,
