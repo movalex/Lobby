@@ -8,7 +8,9 @@
 // with a clear message, and guests never see or trigger AI. Reviewer fixes: owners turn AI off per board
 // and summaries open privately first (DANA-04), results stay in their frame (DANA-07), the toast's Undo
 // never undoes anything else (DANA-09), already-grouped notes ask first (DANA-10), a template's prompt
-// notes stay put (R9).
+// notes stay put (R9). Early wave-5 review: a note made with N among the ideas leaves them in their frame,
+// in the DEMO's order through Present and the PDF (W5-04), and the summary gives the keyboard back to the AI
+// button (W5-47).
 //
 //   E2E_PORT_BASE=<base> pnpm --filter @draftroom/e2e excalidraw ai-actions
 //
@@ -450,6 +452,9 @@ test('Summarize: private first for everyone; an editor adds it as a card in the 
   await test.step('carol (viewer): only Summarize, into a panel; nothing is written to the board', async () => {
     await expect.poll(async () => (await aiObjects(v.page)).length).toBe(0)
     const before = await objectCount(v.page)
+    // 3a's selection bar shows only while the selection is on screen, and carol's camera can move after
+    // the showFrame above (1 run in 3 found it back on the Welcome frame: likely the board's first view)
+    await showFrame(v.page, BRAINSTORM)
     await selectIds(
       v.page,
       notes.map((n) => n.id),
