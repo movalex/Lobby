@@ -229,6 +229,32 @@ describe('GET/PUT /api/boards/:bid/export-policy', () => {
     ])
   })
 
+  it("'everyone-including-guests' (audit L3: the owner's explicit choice) is stored, read back and announced like the others", async () => {
+    const res = await setPolicy(alice, 'everyone-including-guests')
+    expect(res.statusCode, res.body).toBe(200)
+    expect(ExportPolicyState.parse(res.json())).toEqual({
+      exportPolicy: 'everyone-including-guests',
+      canExport: true,
+      policySet: true,
+    })
+    const row = await api.db.one<{ policy: string }>(
+      'SELECT policy FROM board_export_policies WHERE board_id = $1',
+      [board],
+    )
+    expect(row).toEqual({ policy: 'everyone-including-guests' })
+    for (const c of [alice, editor, commenter, viewer, guestViewer, guestCommenter]) {
+      const got = await c.req('GET', `/api/boards/${board}/export-policy`)
+      expect(ExportPolicyState.parse(got.json()), c.me.user.name).toEqual({
+        exportPolicy: 'everyone-including-guests',
+        canExport: true,
+        policySet: true,
+      })
+    }
+    expect(published).toEqual([
+      { type: EXPORT_CONTROL_EVENTS.policy, data: { exportPolicy: 'everyone-including-guests' } },
+    ])
+  })
+
   it('archived boards: the owner can still change it and still export; viewers stay limited', async () => {
     expect((await alice.req('POST', `/api/boards/${board}/archive`)).statusCode).toBe(200)
     expect((await setPolicy(alice, 'editors')).statusCode).toBe(200)

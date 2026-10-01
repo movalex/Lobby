@@ -7,6 +7,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { AddressInfo } from 'node:net'
 import { PassThrough } from 'node:stream'
 import { gzipSync } from 'node:zlib'
+import { GuestJoined, ReviewLinkCreated } from '@draftroom/contracts'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { parseLinkPreviewTestOrigins } from '../../../src/config.ts'
 import { FetchRefused, guardedFetch } from '../../../src/features/link-preview/fetch.ts'
@@ -23,7 +24,7 @@ import {
   type Lookup,
   vetAddress,
 } from '../../../src/features/link-preview/ssrf.ts'
-import { type Client, createBoard, createTestApi, DEV_STUDIO, type TestApi } from '../../helpers.ts'
+import { type Client, createBoard, createTestApi, DEV_STUDIO, ORIGIN, type TestApi } from '../../helpers.ts'
 
 const NONE = { allowOrigins: new Set<string>() }
 const PNG = Buffer.from(
@@ -403,6 +404,54 @@ describe('POST /api/boards/:bid/link-preview', () => {
     expect(bad.statusCode).toBe(400)
     expect(bad.json().error.code).toBe('INVALID_LINK')
     expect((await ask(alice, 42)).statusCode).toBe(400)
+  })
+
+  it('a name-only guest is refused (403 GUEST_ACCOUNT_REQUIRED), whatever their role, and nothing is fetched for them', async () => {
+    // Audit L2: a guest identity costs a name, so a per-person fetch budget would multiply by the guests
+    // one person can create; the api fetches public pages for people with an account only.
+    const made = await alice.req('POST', `/api/boards/${board}/review-links`, {
+      role: 'editor',
+      allowGuests: true,
+    })
+    expect(made.statusCode, made.body).toBe(201)
+    const url = ReviewLinkCreated.parse(made.json()).url
+    const token = url.slice(url.lastIndexOf('/') + 1)
+    const joined = await api.app.inject({
+      method: 'POST',
+      url: `/api/invitations/${token}/guest`,
+      payload: { name: 'Sam' },
+      headers: { origin: ORIGIN },
+      remoteAddress: '10.66.0.1',
+    })
+    expect(joined.statusCode, joined.body).toBe(201)
+    const cookie = joined.cookies.find((c) => c.name === 'dr_session')
+    if (!cookie) throw new Error('no session cookie')
+    const guest = GuestJoined.parse(joined.json()).user
+    const asGuest = (path: string, body?: unknown) =>
+      api.app.inject({
+        method: 'POST',
+        url: path,
+        ...(body === undefined ? {} : { payload: body as object }),
+        headers: { origin: ORIGIN, cookie: `dr_session=${cookie.value}` },
+      })
+    // The guest can edit the board (a workshop link), so this is about the kind of account, not access.
+    const me = await api.app.inject({
+      method: 'GET',
+      url: `/api/boards/${board}`,
+      headers: { origin: ORIGIN, cookie: `dr_session=${cookie.value}` },
+    })
+    expect((me.json() as { role: string }).role).toBe('editor')
+    hits.length = 0
+    const res = await asGuest(`/api/boards/${board}/link-preview`, { url: `${origin}/page` })
+    expect(res.statusCode, res.body).toBe(403)
+    expect(res.json().error.code).toBe('GUEST_ACCOUNT_REQUIRED')
+    expect(hits).toEqual([])
+    // A cached answer is not handed out either (alice fetched it; the guest still gets the refusal).
+    expect((await ask(alice, `${origin}/page`)).statusCode).toBe(200)
+    expect((await asGuest(`/api/boards/${board}/link-preview`, { url: `${origin}/page` })).statusCode).toBe(
+      403,
+    )
+    expect(guest.id).toMatch(/^usr_/)
   })
 
   it('a blocked address answers like an unreachable page, and nothing is fetched', async () => {

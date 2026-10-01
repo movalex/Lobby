@@ -3,19 +3,22 @@
 //
 // Do not import values from ./index.ts here: index.ts re-exports this module.
 //
-// `exportPolicy`: 'everyone' (the default, and the behaviour before wave 3) or 'editors'. With
-// 'editors', viewers and commenters (review-link guests included), and name-only guests whatever their
-// role (a workshop link makes them editors), cannot export the board (PNG, SVG, PDF, CSV, the
-// .lobby.json archive), copy it (Ctrl/Cmd+C, Copy as PNG/SVG), duplicate it or restore a checkpoint as
-// a new board, or download original files. File previews and the PDF page images that render on the
-// board keep working for everyone, and so do the originals the canvas itself renders from
+// `exportPolicy`: 'everyone' (the default, and the behaviour before wave 3 for people with an account),
+// 'editors', or 'everyone-including-guests'. With 'editors', viewers and commenters (review-link guests
+// included) cannot export the board (PNG, SVG, PDF, CSV, the .lobby.json archive), copy it (Ctrl/Cmd+C,
+// Copy as PNG/SVG), duplicate it or restore a checkpoint as a new board, or download original files.
+// Name-only guests (no account; wave 3 guests) are limited that way under 'everyone' AND 'editors',
+// whatever their role (a workshop link makes them editors, but they are anonymous outsiders): they
+// export and download only under 'everyone-including-guests', which a board owner chooses explicitly
+// (security audit L3, 2026-10-01; the lead's decision). File previews and the PDF page images that
+// render on the board keep working for everyone, and so do the originals the canvas itself renders from
 // (CANVAS_ORIGINAL_LIMITS). This is not a data-protection feature: anyone who can see the board can
 // still take screenshots.
 
 import { type BoardRole, roleAtLeast } from '@draftroom/permissions'
 import { z } from 'zod'
 
-export const EXPORT_POLICIES = ['everyone', 'editors'] as const
+export const EXPORT_POLICIES = ['everyone', 'editors', 'everyone-including-guests'] as const
 export const ExportPolicy = z.enum(EXPORT_POLICIES)
 export type ExportPolicy = z.infer<typeof ExportPolicy>
 
@@ -25,16 +28,20 @@ export const DEFAULT_EXPORT_POLICY: ExportPolicy = 'everyone'
 /** Who is asking, beyond their board role. */
 export interface ExportCaller {
   /**
-   * A name-only guest (no account; wave 3 guests). Limited like a viewer under 'editors' whatever
-   * their board role: a workshop link makes them editors, but they are anonymous outsiders.
+   * A name-only guest (no account; wave 3 guests). Limited like a viewer under 'editors', and limited
+   * under 'everyone' too, whatever their board role: a workshop link makes them editors, but they are
+   * anonymous outsiders. Only 'everyone-including-guests' lets them export.
    */
   nameOnlyGuest?: boolean
 }
 
+/** Whether `policy` lets name-only guests export: only the owner's explicit choice does. */
+export const policyIncludesGuests = (policy: ExportPolicy): boolean => policy === 'everyone-including-guests'
+
 /**
  * Whether someone with `role` may export, copy and download on a board with `policy`. The board role
- * decides, never the board status: an owner of an archived board can still export it. Under
- * 'editors', name-only guests are limited whatever their role.
+ * decides, never the board status: an owner of an archived board can still export it. Name-only guests
+ * are limited whatever their role unless the policy includes them (policyIncludesGuests).
  */
 export function exportAllowedFor(
   role: BoardRole | null | undefined,
@@ -42,8 +49,10 @@ export function exportAllowedFor(
   caller: ExportCaller = {},
 ): boolean {
   if (!role) return false
+  if (policyIncludesGuests(policy)) return true
+  if (caller.nameOnlyGuest) return false
   if (policy === 'everyone') return true
-  return roleAtLeast(role, 'editor') && !caller.nameOnlyGuest
+  return roleAtLeast(role, 'editor')
 }
 
 /** `GET /api/boards/:bid/export-policy` (view) and the answer to `PUT` (board owners). */

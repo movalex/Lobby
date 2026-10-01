@@ -164,15 +164,21 @@ test('client link defaults: the first client link turns downloads and export off
   }
 })
 
-test("client link defaults: an owner who chose 'everyone' keeps it, and the card says On", async ({
+test("client link defaults: an owner who chose 'everyone-including-guests' keeps it, and the card says On", async ({
   session,
   browser,
   users,
   board,
 }) => {
+  // Audit L3: under 'everyone' a client who joins with just a name is still limited (the api's own tests
+  // cover that); the owner's explicit 'everyone-including-guests' is what the first client link must keep.
   const alice = await users.api('alice')
   expect(
-    (await alice.fetch('PUT', `/api/boards/${board}/export-policy`, { exportPolicy: 'everyone' })).status(),
+    (
+      await alice.fetch('PUT', `/api/boards/${board}/export-policy`, {
+        exportPolicy: 'everyone-including-guests',
+      })
+    ).status(),
   ).toBe(200)
   const a = await session('alice')
   await insertFiles(a.page, [join(FIXTURES_DIR, 'notes.zip')])
@@ -182,8 +188,13 @@ test("client link defaults: an owner who chose 'everyone' keeps it, and the card
   const line = dialog.getByTestId('share-client-export')
   await expect(line).toHaveText('Clients can download files and export: On Change')
   await expect(dialog.getByTestId('share-export-policy-default')).toHaveCount(0)
+  await expect(dialog.getByTestId('share-client-export-guests')).toHaveCount(0)
+  await expect(dialog.getByTestId('share-export-policy-guests')).toBeChecked()
   const link = await createClientLink(a.page)
-  await expect(dialog.getByTestId('share-export-policy')).toHaveAttribute('data-policy', 'everyone')
+  await expect(dialog.getByTestId('share-export-policy')).toHaveAttribute(
+    'data-policy',
+    'everyone-including-guests',
+  )
   await expect(line).toHaveAttribute('data-allowed', 'true')
   await closeShare(a.page)
 

@@ -7,11 +7,16 @@
 //
 //   POST /api/boards/:bid/link-preview  {url}  ->  {title, siteName, icon}
 //
-// Who: anyone who can view the board (its link cards show to every viewer). Limits: 30 fresh fetches a
-// minute per person (answers from the cache are free), 6 fetches at once for the whole api, results
-// cached for an hour (10 minutes when nothing could be read). A refused or unreachable page answers
-// like a page with no title (all null), so the answer says nothing about the api's own network.
-// Nothing here logs a URL (a link can be private content).
+// Who: anyone with an account who can view the board (its link cards show to every viewer). Name-only
+// guests are refused (403 GUEST_ACCOUNT_REQUIRED, security audit L2): a guest identity costs nothing but
+// a name, so the per-person budget below would multiply by the guests one person can create, and the
+// canvas never asks for them anyway (a guest's links must be Lobby-relative). The guests feature's root
+// guard (features/guests/guard.ts GUEST_REFUSED_ROUTES) refuses them first; this route checks again, so a
+// renamed route cannot slip past that list. Limits: 30 fresh fetches a minute per person (answers from
+// the cache are free), 6 fetches at once for the whole api, results cached for an hour (10 minutes when
+// nothing could be read). A refused or unreachable page answers like a page with no title (all null),
+// so the answer says nothing about the api's own network. Nothing here logs a URL (a link can be
+// private content).
 import { lookup as dnsLookup } from 'node:dns/promises'
 import {
   LINK_PREVIEW_ICON_MAX_BYTES,
@@ -21,10 +26,12 @@ import {
 } from '@draftroom/contracts'
 import type { FastifyInstance } from 'fastify'
 import { requireBoardAction } from '../../access.ts'
+import { userKind } from '../../auth/users.ts'
 import type { Params } from '../../context.ts'
 import { ApiError, parse } from '../../errors.ts'
 import { keyedLimit } from '../../rate-limit.ts'
 import type { FeatureContext } from '../context.ts'
+import { guestRefused, LINK_PREVIEW_GUESTS } from '../guests/guard.ts'
 import { type FetchDeps, FetchRefused, guardedFetch } from './fetch.ts'
 import { decodeHtml, iconCandidates, iconType, parseHead } from './parse.ts'
 import { checkUrl, type Lookup, type Policy } from './ssrf.ts'
@@ -163,6 +170,8 @@ export async function registerLinkPreview(
     const user = await ctx.requireUser(req)
     const { bid = '' } = req.params as Params
     await requireBoardAction(ctx.db, bid, user.id, 'view')
+    // Audit L2: after the board check (an outsider still gets the board's 404, not a guest refusal).
+    if ((await userKind(ctx.db, user.id)) === 'guest') throw guestRefused(LINK_PREVIEW_GUESTS)
     const { url } = parse(LinkPreviewInput, req.body)
     const target = checkUrl(url, policy)
     if (target === 'invalid') throw invalidLink()

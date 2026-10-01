@@ -141,6 +141,11 @@ All must hold on the day. Record each check in the log.
     lobby-r0`. Rollbacks and R0 hotfixes start from that tag.
   - The api has no migration after 0022 on the cut-over commit, or each one is additive for R0
     (DEPLOY.md "Rolling the api back past a migration" step 1). Checked on 2026-09-30: none after 0022.
+    **Changed on 2026-10-01 (wave 4b, audit L3): `0023_export_policy_guests` widens the export policy's
+    CHECK to allow `everyone-including-guests`.** Additive for R0 (no row changes meaning; R0 never writes
+    the value and reads it as "not everyone", so it limits like `editors`: fail closed). Consequence for
+    a rollback: R0's api needs `DRAFTROOM_ALLOW_NEWER_SCHEMA=1` and *Deploy a specific commit* →
+    `lobby-r0`, never *Rollback* (B6 below; DEPLOY.md "Rolling the api back past a migration").
 - **P13. Private brainstorms.** The day before, list the open private-brainstorm sessions; they are closed
   or frozen in C2 (plan §5.8).
 - **P14. People.** The operator (runs the Shells), one helper for C17's two-user smoke, and the owner
@@ -494,7 +499,8 @@ canvas as an empty tldraw board and writes tldraw tables into it (DEPLOY.md "Rol
   it, spike A12). Static-site settings are not rolled back by a Rollback (DEPLOY.md "Rollback"). The
   `/excalidraw-assets/*` rewrite can stay.
 - **B6. R0's api [OWNER].** If the live api has no migration after 0022 (P12): Dashboard →
-  `draftroom-staging-api` → Rollback to the R0 deploy recorded in §4. Otherwise set
+  `draftroom-staging-api` → Rollback to the R0 deploy recorded in §4. **The cut-over build has one
+  (`0023_export_policy_guests`, additive), so this is the "otherwise" case.** Otherwise set
   `DRAFTROOM_ALLOW_NEWER_SCHEMA=1` on the api and Manual Deploy → Deploy a specific commit → `lobby-r0`
   (DEPLOY.md "Rolling the api back past a migration": never Rollback in that case). Check `/healthz` and
   the log. While R0's api talks to the Excalidraw sync, it refuses its snapshots (503 `SYNC_UNAVAILABLE`),

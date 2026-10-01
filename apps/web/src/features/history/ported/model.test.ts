@@ -117,6 +117,9 @@ describe('history on elements', () => {
     expect(exportAllowedHere('viewer', 'editors', false)).toBe(false)
     expect(exportAllowedHere('editor', 'editors', false)).toBe(true)
     expect(exportAllowedHere('editor', 'editors', true)).toBe(false)
-    expect(exportAllowedHere('viewer', 'everyone', true)).toBe(true)
+    // audit L3: a name-only guest is limited under 'everyone' too; only the owner's explicit choice lets them
+    expect(exportAllowedHere('viewer', 'everyone', true)).toBe(false)
+    expect(exportAllowedHere('viewer', 'everyone', false)).toBe(true)
+    expect(exportAllowedHere('viewer', 'everyone-including-guests', true)).toBe(true)
   })
 })
