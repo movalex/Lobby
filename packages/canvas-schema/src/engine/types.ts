@@ -9,8 +9,8 @@
  * Field names were checked against `@excalidraw/element@0.18.0-1118751` `dist/types/element/src/types.d.ts`.
  */
 
-/** Excalidraw font family ids Lobby uses: 5 Excalifont, 6 Nunito, 8 Comic Shanns. */
-export type LobbyFontFamily = 5 | 6 | 8
+/** Excalidraw font family ids Lobby uses: 5 Excalifont, 6 Nunito, 7 Lilita One (D3), 8 Comic Shanns. */
+export type LobbyFontFamily = 5 | 6 | 7 | 8
 
 export interface BoundElementRef {
   readonly id: string

@@ -40,10 +40,14 @@ export const MAX_UID_CHARS = 60
 
 // ---- fonts and coordinates -------------------------------------------------------------------------
 
-/** The families Lobby serves and measures: 5 Excalifont, 6 Nunito, 8 Comic Shanns (§2.12). 9 and 10 are INVALID. */
-export const LOBBY_FONT_FAMILIES = [5, 6, 8] as const
+/**
+ * The families Lobby serves and measures (§2.12): 5 Excalifont, 6 Nunito, 7 Lilita One (the display face
+ * for template headings, lead decision D3, CONTRACTS_REV 7), 8 Comic Shanns. 1-4, 9 and 10 are INVALID.
+ */
+export const LOBBY_FONT_FAMILIES = [5, 6, 7, 8] as const
 export type LobbyFontFamilyId = (typeof LOBBY_FONT_FAMILIES)[number]
-export const isLobbyFontFamily = (v: unknown): v is LobbyFontFamilyId => v === 5 || v === 6 || v === 8
+export const isLobbyFontFamily = (v: unknown): v is LobbyFontFamilyId =>
+  v === 5 || v === 6 || v === 7 || v === 8
 
 /** `x`, `y`, `width` and `height` of every element, and every coordinate in scene units (E 16334-16343). */
 export const COORD_LIMIT = 1_000_000
@@ -173,27 +177,39 @@ export const byteLength = utf8Length
 /** UTF-8 bytes of `JSON.stringify(value)`. */
 export const jsonByteLength = (value: unknown): number => utf8Length(JSON.stringify(value) ?? '')
 
+/**
+ * Signed or expiring URL parameters: S3/R2 SigV4 (`X-Amz-*`), GCS V4 (`X-Goog-*`), CloudFront
+ * (`Signature`, `Expires`, `Key-Pair-Id`) and Azure SAS (`sig`).
+ */
 const SIGNED_URL =
-  /(?:[?&](?:X-Amz-(?:Signature|Credential|Security-Token)|Signature|Expires|Key-Pair-Id|sig)=)/i
+  /(?:[?&;](?:X-(?:Amz|Goog)-(?:Signature|Credential|Security-Token|Algorithm)|Signature|Expires|Key-Pair-Id|sig)=)/i
+
+/** Rounds of percent-decoding a query is checked through; a query still changing after them is refused. */
+const SIGNED_DECODE_ROUNDS = 4
 
 /**
- * A signed-URL parameter in `query`, as written or percent-encoded (`X%2DAmz%2DSignature=`, decoded up to
- * three times; V2, part-3 round: an encoded name passed the check and was stored).
+ * One round of percent-decoding that never throws: every `%XX` of an ASCII byte becomes its character, and
+ * anything else (a malformed escape, a stray `%`, a byte of a multi-byte sequence) stays as written. A
+ * malformed escape anywhere used to make `decodeURIComponent` throw, and the check gave up (V2 re-check,
+ * fail open: `?X%2DAmz%2DSignature=abc&z=%` was stored).
+ */
+const decodeAsciiEscapes = (s: string): string =>
+  s.replace(/%([0-7][0-9A-Fa-f])/g, (_, hex: string) => String.fromCharCode(Number.parseInt(hex, 16)))
+
+/**
+ * A signed-URL parameter in `query`, as written or percent-encoded (`X%2DAmz%2DSignature=`, `%58-Amz-…`),
+ * decoded up to SIGNED_DECODE_ROUNDS times. Fails closed: a query that still decodes to something new after
+ * the last round counts as signed (V2, part-3 round and its re-check).
  */
 function signedQuery(query: string): boolean {
   let cur = query
-  for (let i = 0; i < 4; i++) {
+  for (let i = 0; i < SIGNED_DECODE_ROUNDS; i++) {
     if (SIGNED_URL.test(cur)) return true
-    let next: string
-    try {
-      next = decodeURIComponent(cur)
-    } catch {
-      return false
-    }
+    const next = decodeAsciiEscapes(cur)
     if (next === cur) return false
     cur = next
   }
-  return SIGNED_URL.test(cur)
+  return SIGNED_URL.test(cur) || decodeAsciiEscapes(cur) !== cur
 }
 
 /**
@@ -229,7 +245,11 @@ export const MAX_ITEMS = 20_000
 export const MAX_LIVE_ELEMENTS = 40_000
 /** Archive import (`maxElements`). */
 export const ARCHIVE_MAX_ELEMENTS = MAX_LIVE_ELEMENTS
-/** Items one guest session may create (§3.5 "Guests"). */
+/**
+ * Items one name-only guest may create on a board (§3.5 "Guests"), counted per guest uid (lead decision D5,
+ * CONTRACTS_REV 7), never per tab: every item the board still holds that this guest created counts, live or
+ * deleted (a tombstone created or revived does not reset the count; V2's re-check).
+ */
 export const GUEST_ITEM_CAP = 500
 /** Tombstones kept per board, and for how long (§2.6); a client below `horizon` gets a reset. */
 export const TOMBSTONE_MAX = 10_000

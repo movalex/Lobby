@@ -72,13 +72,13 @@ describe('§3.5 files: fileId must resolve through file-refs to the board’s wo
 })
 
 describe('§3.5 fonts, coordinates and sizes', () => {
-  it('fontFamily outside {5, 6, 8} is INVALID (1 Virgil, 9 Liberation Sans, 10 unregistered); 5, 6 and 8 are kept', async () => {
+  it('fontFamily outside {5, 6, 7, 8} is INVALID (1 Virgil, 9 Liberation Sans, 10 unregistered); 5, 6, 7 (Lilita One, D3) and 8 are kept', async () => {
     const st = shared.get()
     const b = newBoardId()
     const a = await st.client({ boardId: b, user: 'alice' })
-    for (const fontFamily of [1, 2, 3, 4, 7, 9, 10])
+    for (const fontFamily of [1, 2, 3, 4, 9, 10])
       expectRefused(await a.createOne(text(`t${fontFamily}`, { fontFamily })), 'INVALID', a)
-    for (const fontFamily of [5, 6, 8])
+    for (const fontFamily of [5, 6, 7, 8])
       expectAccepted(await a.createOne(text(`ok${fontFamily}`, { fontFamily })))
     await a.create([text('t')])
     expectRefused(await a.patch('t', { g: { textStyle: { fontFamily: 9 } } }), 'INVALID', a)

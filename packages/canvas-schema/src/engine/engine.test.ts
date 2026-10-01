@@ -27,8 +27,9 @@ beforeAll(() => {
 })
 
 describe('text metrics table', () => {
-  it('covers families 5, 6 and 8, measured in Chromium at 100 px', () => {
-    expect(Object.keys(textMetricsTable.families).sort()).toEqual(['5', '6', '8'])
+  it('covers families 5, 6, 7 and 8, measured in Chromium at 100 px (7 Lilita One since CONTRACTS_REV 7, D3)', () => {
+    expect(Object.keys(textMetricsTable.families).sort()).toEqual(['5', '6', '7', '8'])
+    expect(textMetricsTable.families['7']?.name).toBe('Lilita One')
     expect(textMetricsTable.sizePx).toBe(100)
     expect(textMetricsTable.measuredWith).toMatch(/Chrome/)
     for (const f of Object.values(textMetricsTable.families)) {
@@ -73,8 +74,18 @@ describe('text metrics table', () => {
 
   it('an unknown family is measured as Nunito and counted', () => {
     const m = createTableTextMetrics()
-    m.getLineWidth('abc', '20px Lilita One, sans-serif')
+    m.getLineWidth('abc', '20px Liberation Sans, sans-serif')
     expect(m.stats.unknownFamilies).toBe(1)
+    expect(m.getLineWidth('abc', '20px Liberation Sans, sans-serif')).toBeCloseTo(m.width('abc', 6, 20), 6)
+  })
+
+  it('Lilita One (7) is measured from its own table, not as Nunito (D3: server-made headings)', () => {
+    const m = createTableTextMetrics()
+    const lilita = m.getLineWidth('Retro board', fontString(7, 36))
+    expect(m.stats.unknownFamilies).toBe(0)
+    expect(parseFontString(fontString(7, 36)).familyName).toBe('Lilita One')
+    expect(lilita).toBeCloseTo(m.width('Retro board', 7, 36), 6)
+    expect(Math.abs(lilita - m.width('Retro board', 6, 36))).toBeGreaterThan(1)
   })
 })
 
