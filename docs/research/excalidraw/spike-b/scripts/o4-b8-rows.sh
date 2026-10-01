@@ -16,6 +16,11 @@
 # RUNS (default 3). Prints exit codes, pass counts and the summaries of e2e/spike-b/b8/summarize.ts (ids,
 # counts, codes, timings, bytes, hashes); staging logs stay inside SPIKE_B8_DIR and are never printed.
 set -u
+# Ports: B8_BASE (default 7900, O4's range): the R0 stand-in on B8_BASE, the Excalidraw stack on B8_BASE + 5
+# (sync), + 6 (api) and + 7 (web). 2B runs it with B8_BASE=6470 (its range 6440-6479, wave 5).
+b8base="${B8_BASE:-7900}"
+export SPIKE_B8_STANDIN_PORT="$b8base"
+xbase=$((b8base + 5))
 export PATH="/c/Program Files/nodejs:/c/Users/Chase/AppData/Roaming/npm:$PATH"
 root="${1:?repo root}"
 out="${2:?out dir}"
@@ -27,8 +32,8 @@ if env | grep -qE '^(R2_|DRAFTROOM_BACKUP_R2_)'; then
   exit 2
 fi
 export DRAFTROOM_BACKUP_STORE=off
-listeners() { netstat -ano | grep LISTENING | grep -cE ':790[0-9] '; }
-echo "commit $(git rev-parse --short HEAD) dirty $(git status --porcelain | wc -l) listeners 7900-7909 before: $(listeners)"
+listeners() { netstat -ano | grep LISTENING | grep -cE ":($(seq -s "|" "$b8base" $((b8base + 9)))) "; }
+echo "commit $(git rev-parse --short HEAD) dirty $(git status --porcelain | wc -l) listeners $b8base-$((b8base + 9)) before: $(listeners)"
 fail=0
 mkdir -p "$out"
 
@@ -50,12 +55,12 @@ for i in $(seq 1 "$runs"); do
 done
 node e2e/spike-b/b8/summarize.ts convert "$out"/results-run*.json || fail=1
 for i in $(seq 1 "$runs"); do
-  (unset SPIKE_B8_DIR; SPIKE_B_PORT_BASE=7905 pnpm --filter @draftroom/e2e spike-b --project=chromium b8-restore \
+  (unset SPIKE_B8_DIR; SPIKE_B_PORT_BASE=$xbase pnpm --filter @draftroom/e2e spike-b --project=chromium b8-restore \
     >"$out/restore-run$i.log" 2>&1)
   c=$?
   [ $c -eq 0 ] || fail=1
   # Playwright wipes its output folder per invocation: keep each run's report
-  cp e2e/test-results/spike-b-7907/b8-restore-*/b8-restore.json "$out/restore-run$i.json" 2>/dev/null
+  cp e2e/test-results/spike-b-$((b8base + 7))/b8-restore-*/b8-restore.json "$out/restore-run$i.json" 2>/dev/null
   echo "generated restore run$i exit=$c $(grep -oE '[0-9]+ (passed|failed|flaky|skipped)' "$out/restore-run$i.log" | tr '\n' ' ')"
 done
 node e2e/spike-b/b8/summarize.ts restore "$out"/restore-run*.json || fail=1
@@ -79,7 +84,7 @@ if [ "$staging" = "--staging" ]; then
   done
   node e2e/spike-b/b8/summarize.ts convert "$B8"/reports/b8-staging-$tag-convert-run*.json || fail=1
   for i in $(seq 1 "$runs"); do
-    SPIKE_B_PORT_BASE=7905 B8_STAGING_ROOMS="$B8/work/$tag-convert-run$i/rooms" \
+    SPIKE_B_PORT_BASE=$xbase B8_STAGING_ROOMS="$B8/work/$tag-convert-run$i/rooms" \
       B8_STAGING_REPORT="$B8/reports/b8-staging-$tag-restore-run$i.json" \
       pnpm --filter @draftroom/e2e spike-b --project=b8-staging b8-staging-restore >"$logs/restore-run$i.log" 2>&1
     c=$?
@@ -90,6 +95,6 @@ if [ "$staging" = "--staging" ]; then
   node e2e/spike-b/b8/leak-check.ts --scan "$logs" --scan "$B8/tmp-$tag" --scan "$out" || fail=1
   echo "staging outputs: work/$tag-*, reports/b8-staging-$tag-*, logs-$tag, tmp-$tag (inside SPIKE_B8_DIR)"
 fi
-echo "listeners 7900-7909 after: $(listeners)"
+echo "listeners $b8base-$((b8base + 9)) after: $(listeners)"
 echo "result: $([ $fail -eq 0 ] && echo PASS || echo FAIL)"
 exit $fail

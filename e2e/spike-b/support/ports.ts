@@ -1,6 +1,6 @@
 // Spike B ports (docs/EXCALIDRAW-MIGRATION.md §8.6.5), frozen at the contracts step C0. Lead-owned.
 //
-// Spike B uses 7850–7999 only. Everything else stays free: today's e2e defaults (sync 5881, api 5882,
+// Spike B uses 7850–7999, and the wave-5 owners who run its specs their own ranges (below). Everything else stays free: today's e2e defaults (sync 5881, api 5882,
 // web 4191) and earlier bases such as E2E_PORT_BASE=6500, and spike A's ranges 7700–7849.
 //
 // Each stack uses one base: sync on base, api on base + 1, web on base + 2, with the web build in
@@ -14,7 +14,7 @@ export const HOST = '127.0.0.1'
 export const SPIKE_B_PORT_MIN = 7850
 export const SPIKE_B_PORT_MAX = 7999
 
-export type SpikeBOwner = 'lead' | 'O1' | 'O2' | 'O3' | 'O4' | 'O5' | 'V1' | 'V2' | 'V3' | 'spare'
+export type SpikeBOwner = 'lead' | 'O1' | 'O2' | 'O3' | 'O4' | 'O5' | 'V1' | 'V2' | 'V3' | 'spare' | '2B'
 
 /** §8.6.5: each owner's range. */
 export const PORT_RANGES: Readonly<Record<SpikeBOwner, readonly [number, number]>> = {
@@ -28,6 +28,8 @@ export const PORT_RANGES: Readonly<Record<SpikeBOwner, readonly [number, number]
   V2: [7930, 7939],
   V3: [7940, 7949],
   spare: [7950, 7999],
+  /** wave 5: the sync edges owner (B8's specs and drills on engine/w5-2b), docs/EXCALIDRAW-CONTRACTS.md §0a */
+  '2B': [6440, 6479],
 }
 
 /** §8.6.5: the named stacks (the base of each; sync = base, api = base + 1, web = base + 2). */
@@ -69,11 +71,13 @@ export interface StackPorts {
   readonly runTag: string
 }
 
-/** The ports of the stack at `base` (checked to lie in 7850–7999 with its two neighbours). */
+/** The ports of the stack at `base` (checked to lie, with its two neighbours, in one owner's range). */
 export function stackPorts(base: number): StackPorts {
-  if (!Number.isInteger(base) || base < SPIKE_B_PORT_MIN || base + 2 > SPIKE_B_PORT_MAX)
+  const owner = Number.isInteger(base) ? ownerOf(base) : null
+  const inSpike = base >= SPIKE_B_PORT_MIN && base + 2 <= SPIKE_B_PORT_MAX
+  if (!owner || (!inSpike && ownerOf(base + 2) !== owner))
     throw new Error(
-      `a spike B stack base must be in ${SPIKE_B_PORT_MIN}-${SPIKE_B_PORT_MAX - 2} (got ${base})`,
+      `a spike B stack base must be in ${SPIKE_B_PORT_MIN}-${SPIKE_B_PORT_MAX - 2} or one owner's range (got ${base})`,
     )
   const web = base + 2
   return {
@@ -89,7 +93,7 @@ export function stackPorts(base: number): StackPorts {
   }
 }
 
-/** The owner whose range holds `port`, or null outside 7850–7999. */
+/** The owner whose range holds `port`, or null outside every range. */
 export function ownerOf(port: number): SpikeBOwner | null {
   for (const [owner, [lo, hi]] of Object.entries(PORT_RANGES) as [SpikeBOwner, readonly [number, number]][])
     if (port >= lo && port <= hi) return owner

@@ -19,6 +19,11 @@
 # RUNS (default 3), SKIP_GENERATED=1 (the staging runs only). Prints exit codes, pass counts and the summaries of e2e/spike-b/b8/summarize.ts (ids,
 # counts, codes, timings, bytes, hashes); staging logs stay inside SPIKE_B8_DIR and are never printed.
 set -u
+# Ports: B8_BASE (default 7900, O4's range): the R0 stand-in on B8_BASE, the Excalidraw stack on B8_BASE + 5
+# (sync), + 6 (api) and + 7 (web). 2B runs it with B8_BASE=6470 (its range 6440-6479, wave 5).
+b8base="${B8_BASE:-7900}"
+export SPIKE_B8_STANDIN_PORT="$b8base"
+xbase=$((b8base + 5))
 export PATH="/c/Program Files/nodejs:/c/Users/Chase/AppData/Roaming/npm:$PATH"
 root="${1:?repo root}"
 out="${2:?out dir}"
@@ -30,13 +35,13 @@ if env | grep -qE '^(R2_|DRAFTROOM_BACKUP_R2_)'; then
   exit 2
 fi
 export DRAFTROOM_BACKUP_STORE=off
-listeners() { netstat -ano | grep LISTENING | grep -cE ':790[0-9] '; }
+listeners() { netstat -ano | grep LISTENING | grep -cE ":($(seq -s "|" "$b8base" $((b8base + 9)))) "; }
 counts() { grep -oE '^ +[0-9]+ (passed|failed|flaky|skipped)' "$1" | tr -s ' ' | tr '\n' ' '; }
-echo "commit $(git rev-parse --short HEAD) dirty $(git status --porcelain | wc -l) listeners 7900-7909 before: $(listeners)"
+echo "commit $(git rev-parse --short HEAD) dirty $(git status --porcelain | wc -l) listeners $b8base-$((b8base + 9)) before: $(listeners)"
 echo "start $(date -u +%H:%M:%SZ)"
 fail=0
 mkdir -p "$out"
-pw="e2e/test-results/spike-b-7907"
+pw="e2e/test-results/spike-b-$((b8base + 7))"
 
 # ---- generated ----
 [ "${SKIP_GENERATED:-}" = "1" ] && runs_g=0 || runs_g="$runs"
@@ -44,7 +49,7 @@ for i in $(seq 1 "$runs_g"); do
   r="$out/run$i"
   mkdir -p "$r"
   node e2e/spike-b/b8/corpus.ts --out "$r/corpus" >"$r/corpus.log" 2>&1 || { echo "corpus run$i failed"; fail=1; continue; }
-  (unset SPIKE_B8_DIR; SPIKE_B_PORT_BASE=7905 B8_CORPUS="$r/corpus" \
+  (unset SPIKE_B8_DIR; SPIKE_B_PORT_BASE=$xbase B8_CORPUS="$r/corpus" \
     pnpm --filter @draftroom/e2e spike-b --project=chromium b8-two-browsers b8-drill >"$r/pw.log" 2>&1)
   c=$?
   [ $c -eq 0 ] || fail=1
@@ -66,7 +71,7 @@ if [ "$staging" = "--staging" ]; then
   mkdir -p "$logs" "$B8/t3" "$B8/w3"
   for i in $(seq 1 "$runs"); do
     (export TEMP="$B8/t3" TMP="$B8/t3" TMPDIR="$B8/t3"
-     SPIKE_B_PORT_BASE=7905 B8_RUN="${tag}r$i" \
+     SPIKE_B_PORT_BASE=$xbase B8_RUN="${tag}r$i" \
        pnpm --filter @draftroom/e2e spike-b --project=b8-staging b8-staging-two-browsers b8-staging-drill \
        >"$logs/run$i.log" 2>&1)
     c=$?
@@ -89,6 +94,6 @@ if [ "$staging" = "--staging" ]; then
   echo "generated outputs: $(node e2e/spike-b/b8/leak-check.ts --no-defaults --scan "$out" | grep -oE '^leak-check: [0-9]+ matches')"
   echo "staging outputs: w3/2b-${tag}r*, w3/dr-${tag}r*, w3/pw-${tag}r*, reports/b8-staging-{two-browsers,drill-room}-${tag}r*, logs-$tag, t3 (inside SPIKE_B8_DIR)"
 fi
-echo "end $(date -u +%H:%M:%SZ) listeners 7900-7909 after: $(listeners)"
+echo "end $(date -u +%H:%M:%SZ) listeners $b8base-$((b8base + 9)) after: $(listeners)"
 echo "result: $([ $fail -eq 0 ] && echo PASS || echo FAIL)"
 exit $fail
