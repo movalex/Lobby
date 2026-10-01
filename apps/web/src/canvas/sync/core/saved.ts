@@ -19,6 +19,12 @@ export interface SaveInputs {
   readonly inflightOps: number
   /** changes queued on this device while offline */
   readonly offlineQueued: number
+  /**
+   * Changes that may exist but are not known yet (the previous page's offline queue, not read yet): they
+   * keep Saved away (V1 N20) but are not offline changes, so a page opening with an empty queue reads as
+   * connecting, not as "Offline — 1 change" (A11Y-14, CR-3I-6).
+   */
+  readonly unknown?: number
   /** since when pushes come back UNAVAILABLE (null: they do not) */
   readonly unavailableSince: number | null
   /** the last non-retryable reject, until a later push is accepted whole */
@@ -27,7 +33,7 @@ export interface SaveInputs {
 }
 
 export function computeSaveStatus(i: SaveInputs): SaveStatus {
-  const pending = i.dirty + i.inflightOps + (i.connected ? 0 : i.offlineQueued)
+  const pending = i.dirty + i.inflightOps + (i.unknown ?? 0) + (i.connected ? 0 : i.offlineQueued)
   const base = {
     pending,
     offlineChanges: i.connected ? 0 : Math.max(i.offlineQueued, i.dirty + i.inflightOps),

@@ -217,6 +217,34 @@ describe('V1 N20 and P1: Saved waits for what is not on the server yet', () => {
     expect(a.core.saveStatus.state).toBe('saved')
   })
 
+  it('a queue not read yet keeps Saved away but is no offline change (A11Y-14, CR-3I-6)', async () => {
+    let release: () => void = () => {}
+    const gate = new Promise<void>((r) => {
+      release = r
+    })
+    const inner = createMemoryOfflineStore()
+    const slow = {
+      ...inner,
+      load: async () => {
+        await gate
+        return inner.load()
+      },
+    }
+    const h = createHarness({ seed: [stored(rect('r1', 'a0'))] })
+    const a = h.client('alice', { offline: slow })
+    // before the welcome: offline, but nothing of this tab is known to be waiting (the page shows
+    // "Connecting…", not "Offline — 1 change", so its announcer has no recovery to speak afterwards)
+    expect(a.core.saveStatus.state).toBe('offline')
+    expect(a.core.saveStatus.offlineChanges).toBe(0)
+    h.settle()
+    expect(a.core.saveStatus.state).not.toBe('saved')
+    expect(a.core.saveStatus.offlineChanges).toBe(0)
+    release()
+    for (let i = 0; i < 10; i++) await Promise.resolve()
+    h.settle()
+    expect(a.core.saveStatus.state).toBe('saved')
+  })
+
   it('keys buffered in an editor that waits for its lease keep Saved away (holdSaved)', () => {
     const h = createHarness({ seed: [stored(rect('r1', 'a0'))] })
     const a = h.client('alice')

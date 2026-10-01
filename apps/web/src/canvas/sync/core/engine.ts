@@ -2800,8 +2800,11 @@ export class LobbyEngineCore implements EngineCore {
     // unsent text outside the scene (an editor's buffered keys, holdSaved)
     dirty += this.outside.size
     // the previous page's offline queue not read yet, or read and not adopted yet: its edits are not on
-    // the server (V1 N20: a reloaded page showed Saved at the welcome, before the queue was loaded)
-    if (this.store && !this.offlineLoaded) dirty++
+    // the server (V1 N20: a reloaded page showed Saved at the welcome, before the queue was loaded). A
+    // queue not read yet is `unknown`, not an offline change: a page opening with an empty queue is not
+    // "Offline — 1 change" for its first milliseconds (A11Y-14, CR-3I-6: the announcer then said "Back
+    // online. All changes saved." on every board open).
+    const unknown = this.store && !this.offlineLoaded ? 1 : 0
     dirty += this.pendingAdopt?.length ?? 0
     const inputs: SaveInputs = {
       connected: this.connected && !!this.welcome && !this.awaitingSnapshot,
@@ -2809,6 +2812,7 @@ export class LobbyEngineCore implements EngineCore {
       // an adopted queue's lost push carries no ops, only its elements (OfflineEntry.lost)
       inflightOps: this.flying().reduce((n, p) => n + (p.ops.length || p.sent.size), 0),
       offlineQueued: this.connected && this.welcome ? 0 : Math.max(this.offlineQueued, dirty),
+      unknown,
       unavailableSince: this.unavailableSince,
       lastReject: this.lastReject,
       now: this.now(),
