@@ -22,8 +22,11 @@ import {
   selectNone,
   setTool,
   setViewport,
+  stopTextEditing,
   tool,
+  typeText,
   viewport,
+  waitForTextEditor,
 } from '../tests/support/canvas.ts'
 import { capture } from '../tests/support/screenshots.ts'
 import {
@@ -974,7 +977,10 @@ test('W5-01: a note made with N inside the vote’s frame joins the frame and ta
       return made
     })
     .not.toBe('')
-  await b.page.keyboard.press('Escape')
+  // words in it, so no clean-up of an empty note can take it away (W5-20)
+  await waitForTextEditor(b.page, made)
+  await typeText(b.page, 'Made with N')
+  await stopTextEditing(b.page)
   await expect.poll(async () => (await item(b.page, made))?.frameId ?? null).toBe(OV.frame)
   await startVoteFromTopBar(a, { perPerson: 3, frameId: OV.frame, notesOnly: true })
   await joinVote(b, 3)
