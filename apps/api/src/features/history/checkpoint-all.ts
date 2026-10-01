@@ -6,6 +6,22 @@
 //   GET  /internal/checkpoints/run-all          → 200 { runs: CheckpointAllRunView[] } (newest first)
 //   GET  /internal/checkpoints/run-all/:runId   → 200 CheckpointAllRunView, with `report` once done
 //
+// and, the same run machinery, the Excalidraw build's restore point after the move (plan §5.5, runbook
+// step C12; the cut-over's gap G5):
+//
+//   POST /internal/checkpoints/engine-migration        → 202 (409 WRONG_CANVAS while sync runs tldraw)
+//   GET  /internal/checkpoints/engine-migration        → 200 { runs }
+//   GET  /internal/checkpoints/engine-migration/:runId → 200 CheckpointAllRunView, with `report` once done
+//
+// - Run after `convert-all` and its checks, with the new sync still in maintenance: every board gets ONE
+//   automatic `engine_migration` checkpoint ("Moved to the new canvas", body_version 2) of the state its
+//   conversion left, read from the Excalidraw sync's snapshot route. A board born on the new canvas
+//   (`new_canvas`), one whose document has no conversion record (it had no file before the move) and one
+//   whose snapshot is still a tldraw body are `skipped` (`why`); a board that already has its restore
+//   point is `unchanged`, whatever it looks like now, so the run is idempotent; a board sync cannot read
+//   is `failed` (the report's `ok` is false) and the others go on. checkpoint-all-cli.ts
+//   --engine-migration is the runbook command.
+//
 // - Made after sync's maintenance is on and its final run-all backup (§7.5 steps 3 and 4): each board is
 //   read from sync's snapshot route, which works in maintenance, so every checkpoint holds what the
 //   final backup holds (the report's `documentClock` per board equals run-all's).
@@ -28,15 +44,36 @@
 import { randomBytes } from 'node:crypto'
 import { checkInternalSecret, INTERNAL_SECRET_HEADER } from '@draftroom/auth-tickets'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
+import { onNewCanvas } from '../../canvas-engine.ts'
 import type { Params } from '../../context.ts'
 import { ApiError } from '../../errors.ts'
 import type { FeatureContext } from '../context.ts'
-import type { CheckpointService } from './checkpoints.ts'
+import {
+  autoCheckpointName,
+  type CheckpointService,
+  type MigrationCaptureOutcome,
+  type NamedCaptureOutcome,
+} from './checkpoints.ts'
 
 export const CHECKPOINT_ALL_ROUTE = '/internal/checkpoints/run-all'
 export const CHECKPOINT_ALL_RUN_ROUTE = '/internal/checkpoints/run-all/:runId'
 /** The checkpoints' name (plain words: what the board looked like before it moved). */
 export const CHECKPOINT_ALL_NAME = 'Before the move to the new canvas'
+/** The restore point after the move (the Excalidraw build, step C12): an `engine_migration` run per board. */
+export const ENGINE_MIGRATION_ROUTE = '/internal/checkpoints/engine-migration'
+export const ENGINE_MIGRATION_RUN_ROUTE = '/internal/checkpoints/engine-migration/:runId'
+/**
+ * The api's internal POSTs (app.ts exempts exactly these route patterns from the web-Origin check;
+ * the internal secret is still checked before anything else).
+ */
+export const INTERNAL_CHECKPOINT_POSTS: ReadonlySet<string> = new Set([
+  CHECKPOINT_ALL_ROUTE,
+  ENGINE_MIGRATION_ROUTE,
+])
+/** 409: the restore point after the move is the Excalidraw build's; this api's sync runs the tldraw canvas. */
+export const WRONG_CANVAS_ERROR = 'WRONG_CANVAS'
+export const WRONG_CANVAS_MESSAGE =
+  'The board server runs the tldraw canvas. The restore point after the move is saved by the Excalidraw build: deploy the new board server first (cut-over step C9), then run this again.'
 export const CHECKPOINT_ALL_KEEP_RUNS = 20
 /** A run's id: `run_` and 16 hex digits. */
 export const CHECKPOINT_ALL_ID_RE = /^run_[0-9a-f]{16}$/
@@ -51,8 +88,13 @@ export interface CheckpointAllBoard {
   snapshotId: string | null
   documentClock: number | null
   recordCount: number | null
-  /** skipped: gone meanwhile, or made on the new canvas (this build cannot read it). */
-  why?: 'missing' | 'new-canvas'
+  /**
+   * skipped: gone meanwhile; made on the new canvas (run-all: this build cannot read it; the restore
+   * point: nothing of it was converted); the restore point's `tldraw` (the snapshot is still a tldraw
+   * body), `not-converted` (no conversion record: the board had no file before the move) and `limit`
+   * (checkpoints.ts MigrationCaptureOutcome).
+   */
+  why?: 'missing' | 'new-canvas' | 'tldraw' | 'not-converted' | 'limit'
   error?: string
 }
 
@@ -119,12 +161,18 @@ const noop = () => undefined
 export function createCheckpointAllRuns(deps: {
   /** Every board id with its workspace, in a stable order. */
   boards(): Promise<Array<{ id: string; workspace_id: string }>>
-  checkpoints: Pick<CheckpointService, 'captureNamed'>
+  /** One board's checkpoint: captureNamed (run-all) or captureEngineMigration (the restore point). */
+  capture(boardId: string): Promise<NamedCaptureOutcome | MigrationCaptureOutcome>
+  /** The report's `name`: what the checkpoints are called. */
+  name: string
+  /** Names the run in the log (`run-all`, `engine-migration`). */
+  label?: string
   now: () => Date
   log?: (message: string) => void
   newRunId?: () => string
 }): CheckpointAllRuns {
   const log = deps.log ?? (() => {})
+  const label = deps.label ?? 'run-all'
   const newRunId = deps.newRunId ?? (() => `run_${randomBytes(8).toString('hex')}`)
   const runs = new Map<string, Run>()
   let current: Run | null = null
@@ -142,7 +190,7 @@ export function createCheckpointAllRuns(deps: {
       recordCount: null,
     }
     try {
-      const got = await deps.checkpoints.captureNamed(board.id, CHECKPOINT_ALL_NAME)
+      const got = await deps.capture(board.id)
       if (got.status === 'skipped') return { ...row, ok: true, outcome: 'skipped', why: got.why }
       return {
         ...row,
@@ -154,7 +202,7 @@ export function createCheckpointAllRuns(deps: {
       }
     } catch (e) {
       row.error = why(e)
-      log(`checkpoint run-all: board ${board.id}: ${row.error}`)
+      log(`checkpoint ${label}: board ${board.id}: ${row.error}`)
       return row
     }
   }
@@ -175,7 +223,7 @@ export function createCheckpointAllRuns(deps: {
     const count = (o: CheckpointAllBoard['outcome']) => boards.filter((b) => b.outcome === o).length
     const report: CheckpointAllReport = {
       ok: boards.every((b) => b.ok),
-      name: CHECKPOINT_ALL_NAME,
+      name: deps.name,
       startedAt,
       finishedAt: deps.now().toISOString(),
       saved: count('saved'),
@@ -185,7 +233,7 @@ export function createCheckpointAllRuns(deps: {
       boards,
     }
     log(
-      `checkpoint run-all ${run.id}: ${report.saved} saved, ${report.unchanged} unchanged, ${report.skipped} skipped, ${report.failed} failed`,
+      `checkpoint ${label} ${run.id}: ${report.saved} saved, ${report.unchanged} unchanged, ${report.skipped} skipped, ${report.failed} failed`,
     )
     return report
   }
@@ -237,7 +285,7 @@ export function createCheckpointAllRuns(deps: {
         run.status = 'failed'
         run.error = `the run stopped (${why(e)})`
         run.finishedAt = deps.now().toISOString()
-        log(`checkpoint run-all ${run.id}: ${run.error}`)
+        log(`checkpoint ${label} ${run.id}: ${run.error}`)
         settle()
         throw e
       },
@@ -291,46 +339,81 @@ export function createCheckpointAllRuns(deps: {
   }
 }
 
-/** The runs of an app (tests). */
+/** The run-all runs of an app (tests). */
 export const checkpointAllRuns = new WeakMap<FastifyInstance, CheckpointAllRuns>()
+/** The engine-migration (restore point) runs of an app (tests). */
+export const engineMigrationRuns = new WeakMap<FastifyInstance, CheckpointAllRuns>()
 
 export function registerCheckpointAllRoutes(
   app: FastifyInstance,
   ctx: FeatureContext,
   checkpoints: CheckpointService,
 ): void {
-  const runs = createCheckpointAllRuns({
-    boards: async () =>
-      (
-        await ctx.db.query<{ id: string; workspace_id: string }>(
-          'SELECT id, workspace_id FROM boards ORDER BY workspace_id, id',
-        )
-      ).rows,
-    checkpoints,
+  const boards = async () =>
+    (
+      await ctx.db.query<{ id: string; workspace_id: string }>(
+        'SELECT id, workspace_id FROM boards ORDER BY workspace_id, id',
+      )
+    ).rows
+  const log = (message: string) => app.log.warn({ feature: 'history' }, message)
+  const runAll = createCheckpointAllRuns({
+    boards,
+    capture: (boardId) => checkpoints.captureNamed(boardId, CHECKPOINT_ALL_NAME),
+    name: CHECKPOINT_ALL_NAME,
+    label: 'run-all',
     now: ctx.now,
-    log: (message) => app.log.warn({ feature: 'history' }, message),
+    log,
   })
-  checkpointAllRuns.set(app, runs)
+  const migration = createCheckpointAllRuns({
+    boards,
+    capture: (boardId) => checkpoints.captureEngineMigration(boardId),
+    name: autoCheckpointName('engine_migration'),
+    label: 'engine-migration',
+    now: ctx.now,
+    log,
+  })
+  checkpointAllRuns.set(app, runAll)
+  engineMigrationRuns.set(app, migration)
   // Before the database closes: a run in progress stops after its current board.
-  app.addHook('onClose', () => runs.stop())
+  app.addHook('onClose', async () => {
+    await Promise.all([runAll.stop(), migration.stop()])
+  })
 
   const requireSecret = (req: FastifyRequest) => {
     if (!checkInternalSecret(req.headers[INTERNAL_SECRET_HEADER], ctx.config.internalSecret))
       throw new ApiError(401, 'NOT_AUTHENTICATED', 'Internal credentials required.')
   }
 
-  app.post(CHECKPOINT_ALL_ROUTE, async (req, reply: FastifyReply) => {
+  mount(app, runAll, CHECKPOINT_ALL_ROUTE, CHECKPOINT_ALL_RUN_ROUTE, requireSecret)
+  // The restore point is a state on the new canvas: refused (nothing started) while this api's sync is
+  // a tldraw one (canvas-engine.ts), so a run before step C9 cannot save tldraw bodies as restore points.
+  mount(app, migration, ENGINE_MIGRATION_ROUTE, ENGINE_MIGRATION_RUN_ROUTE, requireSecret, async () => {
+    if (!(await onNewCanvas(ctx))) throw new ApiError(409, WRONG_CANVAS_ERROR, WRONG_CANVAS_MESSAGE)
+  })
+}
+
+/** The three routes of one run set: POST starts (or joins the queued run), GET lists, GET by id reports. */
+function mount(
+  app: FastifyInstance,
+  runs: CheckpointAllRuns,
+  route: string,
+  runRoute: string,
+  requireSecret: (req: FastifyRequest) => void,
+  beforeStart?: () => Promise<void>,
+): void {
+  app.post(route, async (req, reply: FastifyReply) => {
     requireSecret(req)
+    await beforeStart?.()
     const run = runs.request()
-    return reply.code(202).header('location', `${CHECKPOINT_ALL_ROUTE}/${run.runId}`).send(run)
+    return reply.code(202).header('location', `${route}/${run.runId}`).send(run)
   })
 
-  app.get(CHECKPOINT_ALL_ROUTE, async (req) => {
+  app.get(route, async (req) => {
     requireSecret(req)
     return { runs: runs.list() }
   })
 
-  app.get(CHECKPOINT_ALL_RUN_ROUTE, async (req) => {
+  app.get(runRoute, async (req) => {
     requireSecret(req)
     const { runId = '' } = req.params as Params
     const run = CHECKPOINT_ALL_ID_RE.test(runId) ? runs.get(runId) : null
