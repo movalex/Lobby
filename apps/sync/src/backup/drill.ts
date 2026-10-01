@@ -23,9 +23,10 @@ import type { BlobStore } from '@draftroom/blob-store'
 import { draftroomSchema } from '@draftroom/canvas-schema'
 import { dataLayout } from '@draftroom/dev-assets'
 import type { TLSchema } from '@tldraw/tlschema'
-import { type BackupFormat, LB_BACKUP_FORMAT } from '../r0/lb-files.ts'
+import { type BackupFormat, LB_BACKUP_FORMAT, LB_CONVERTED_FORMAT } from '../r0/lb-files.ts'
 import { BOARD_ID_RE, boardDbPath, RoomRegistry } from '../rooms.ts'
 import { backedUpBoards, describeBoardDb, inspectBoardDb, readManifest, sha256File } from './backup.ts'
+import { backupEngine } from './engine.ts'
 import { MAX_MANIFEST_BYTES, offsiteKeys, parseIndex, parseManifest } from './offsite-manifest.ts'
 import { restoreBackupFile } from './restore.ts'
 import type { BackupSigningKey, SignatureCheck } from './signing.ts'
@@ -343,9 +344,12 @@ export async function verifyRestorable(opts: {
 }): Promise<{ checks: string[]; restoredPath: string; recordsSha256: string; format?: BackupFormat }> {
   const { boardId, entry } = opts
   const checks: string[] = []
+  const excalidraw = backupEngine() === 'excalidraw'
   // A format this build does not know (a newer build's, listed in the same manifest): it stays in the
-  // manifest and under retention, but is neither checked nor restored here.
-  if (entry.format !== undefined && entry.format !== LB_BACKUP_FORMAT)
+  // manifest and under retention, but is neither checked nor restored here. The Excalidraw build also
+  // knows its own `lobby-elements-converted` (backup/engine.ts); R0 refuses it here, by name.
+  const known: readonly string[] = excalidraw ? [LB_BACKUP_FORMAT, LB_CONVERTED_FORMAT] : [LB_BACKUP_FORMAT]
+  if (entry.format !== undefined && !known.includes(entry.format))
     throw new DrillProblem(
       `backup ${entry.file} is in format "${entry.format}", written by a newer build: this build cannot check or restore it`,
     )
@@ -371,9 +375,11 @@ export async function verifyRestorable(opts: {
   const problems: string[] = []
   if ((restored.format ?? null) !== (entry.format ?? null))
     problems.push(
-      restored.format
-        ? 'the backup holds a board made on the new canvas, but its manifest entry says otherwise'
-        : 'the manifest entry says the board was made on the new canvas, but the backup is a tldraw board',
+      restored.format === LB_CONVERTED_FORMAT || entry.format === LB_CONVERTED_FORMAT
+        ? 'the backup and its manifest entry disagree on whether the board was converted to the new canvas'
+        : restored.format
+          ? 'the backup holds a board made on the new canvas, but its manifest entry says otherwise'
+          : 'the manifest entry says the board was made on the new canvas, but the backup is a tldraw board',
     )
   if (restored.recordCount !== entry.recordCount)
     problems.push(`record count ${restored.recordCount} differs from the manifest's ${entry.recordCount}`)
@@ -387,10 +393,15 @@ export async function verifyRestorable(opts: {
   // Bridge release R0 (open item 9): a board made on the new canvas is checked as far as this build can
   // (size and sha256 of the file, integrity, its lb_* tables' digest and clock); the tldraw room never
   // opens it (the born-after check would refuse it, and must never create tldraw tables in it).
-  if (restored.format) {
+  if (restored.format && !excalidraw) {
     checks.push(
       'made on the new canvas: integrity and every lb_* table checked; not opened (this build serves tldraw boards only)',
     )
+    return { checks, restoredPath, recordsSha256: restored.recordsSha256, format: restored.format }
+  }
+  // The Excalidraw build (2B): the element room's own store opens the restored file, as a room would.
+  if (restored.format) {
+    checks.push(...(await openElementBoard(restoredPath, entry)))
     return { checks, restoredPath, recordsSha256: restored.recordsSha256, format: restored.format }
   }
 
@@ -426,6 +437,44 @@ export async function verifyRestorable(opts: {
     registry.closeAll()
   }
   return { checks, restoredPath, recordsSha256: restored.recordsSha256 }
+}
+
+/**
+ * The Excalidraw build's open path for a restored lb backup (2B): what the element room does before it
+ * serves a file. The migration service's classification first (a converted board whose tldraw side moved
+ * rolls forward when it opens: reported), then the room's own store (room/store.ts) opens the copy: its
+ * clock must be the entry's, every element row (live and tombstones) counted, and every row readable.
+ * Imported here only, so the tldraw build never loads the element room's code.
+ */
+async function openElementBoard(path: string, entry: DrillEntry): Promise<string[]> {
+  const { boardFileState } = await import('../room/migrate/service.ts')
+  const { BoardStore } = await import('../room/store.ts')
+  const state = boardFileState(path)
+  const want = entry.format === LB_CONVERTED_FORMAT ? ['converted', 'rollforward-needed'] : ['element']
+  if (!want.includes(state))
+    throw new DrillProblem(`the restored board reads as "${state}", not as the entry's ${entry.format} board`)
+  let store: InstanceType<typeof BoardStore>
+  try {
+    store = new BoardStore(path)
+  } catch (e) {
+    throw new DrillProblem(`the element room's store could not open the restored board: ${(e as Error).name}`)
+  }
+  try {
+    const { live, dead } = store.counts()
+    if (live + dead !== entry.recordCount)
+      throw new DrillProblem('the opened board holds a different number of elements than the manifest')
+    if (store.meta.clock !== entry.documentClock)
+      throw new DrillProblem('the opened board has another clock than the manifest')
+    for (const row of store.snapshotJson()) JSON.parse(row)
+    return [
+      `opened through the element room's store: ${live} live elements and ${dead} tombstones, every row readable, clock ${store.meta.clock}` +
+        (state === 'rollforward-needed'
+          ? '; its tldraw side moved since the conversion, so a roll-forward runs when its room opens'
+          : ''),
+    ]
+  } finally {
+    store.close()
+  }
 }
 
 export async function runRestoreDrill(opts: {

@@ -21,6 +21,7 @@
 import { join } from 'node:path'
 import { dataLayout, resolveDataDir } from '@draftroom/dev-assets'
 import { backupSigningSecret, parseBackupStore } from '../config.ts'
+import { parseEngine } from '../engine-switch.ts'
 import { BOARD_ID_RE } from '../rooms.ts'
 import { BACKUP_FILE_RE } from './backup.ts'
 import {
@@ -30,6 +31,7 @@ import {
   localBackupSource,
   storeBackupSource,
 } from './drill.ts'
+import { setBackupEngine } from './engine.ts'
 import { backupSigningKey } from './signing.ts'
 import { cancelStagedRestore, listStagedRestores, stageRestore } from './staged-restore.ts'
 import { openBackupStore } from './store.ts'
@@ -78,6 +80,8 @@ function parseArgs(argv: string[]) {
 
 async function main() {
   const args = parseArgs(process.argv.slice(2))
+  // the engine the service runs (its DRAFTROOM_ENGINE, in the same shell): what its board files hold
+  setBackupEngine(parseEngine(process.env.DRAFTROOM_ENGINE))
   const dataDir = dataLayout(args.dataDir ?? resolveDataDir(process.env)).root
   if (args.list) {
     const staged = listStagedRestores(dataDir)
