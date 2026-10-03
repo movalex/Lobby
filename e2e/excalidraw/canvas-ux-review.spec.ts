@@ -54,6 +54,27 @@ const ends = (el: Linear) => {
   const b = el.points[el.points.length - 1] as Pt
   return { start: [el.x + a[0], el.y + a[1]] as const, end: [el.x + b[0], el.y + b[1]] as const }
 }
+/**
+ * Waits until `read()` has returned `want` on every poll for `holdMs` (a value that is right once and wrong
+ * again a moment later does not count).
+ */
+async function holds(read: () => Promise<unknown>, want: unknown, holdMs = 600): Promise<void> {
+  let since: number | null = null
+  await expect
+    .poll(
+      async () => {
+        const now = JSON.stringify(await read())
+        if (now !== JSON.stringify(want)) {
+          since = null
+          return `not there yet: ${now}`
+        }
+        since ??= Date.now()
+        return Date.now() - since >= holdMs ? 'holds' : 'settling'
+      },
+      { timeout: 20_000, intervals: [100, 150, 200, 250] },
+    )
+    .toBe('holds')
+}
 const live = async (page: Page) =>
   (await items(page)).filter((e) => !(e as { isDeleted?: boolean }).isDeleted)
 
@@ -95,9 +116,9 @@ test('W5-11: a connector drawn from inside one shape to inside another ends on b
 
   await test.step('both ends sit on the outlines, a binding gap out, with orbit bindings to the same anchors', async () => {
     // the engine's own ends first (the start left where the press was), then the outline write: the room
-    // re-snaps the ends when the hold is released, so the whole final state is ONE poll. (Polling only the
-    // orbit modes and "past the outline" and then reading the ends once failed in the gap before the re-snap
-    // landed: the modes were set, the start still inside the 12 px gap's reach.)
+    // re-snaps the ends when the hold is released. The state is not monotonic on the way (under CPU load a
+    // read after "orbit and past the outline" found the start back at the press, x = 180, 2 runs in 20), so
+    // the wait is for the whole final state to HOLD for 600 ms, and it is read once more afterwards.
     const onOutlines = async () => {
       const el = (await item(a.page, arrowId)) as unknown as Linear | null
       if (!el) return null
@@ -112,32 +133,32 @@ test('W5-11: a connector drawn from inside one shape to inside another ends on b
         ys: [start[1], end[1]].every((y) => y > 100 && y < 220),
       }
     }
-    await expect.poll(onOutlines).toEqual({
+    const final = {
       modes: ['orbit', 'orbit'],
       bound: [r1, r2],
       startX: true,
       endX: true,
       ys: true,
-    })
+    }
+    await holds(onOutlines, final)
     await expectSaved(a.page)
+    expect(await onOutlines(), 'still on the outlines once Saved').toEqual(final)
   })
 
   await test.step('bob has the same ends (the server re-snapped them with the same rule)', async () => {
     const mine = ends((await item(a.page, arrowId)) as unknown as Linear)
-    // one poll on the ends themselves: bob first has the arrow with its binding modes, and the re-snapped
-    // ends arrive with the room's change a moment later (waiting for the modes alone and reading once raced it)
-    await expect
-      .poll(async () => {
-        const el = (await item(b.page, arrowId)) as unknown as Linear | null
-        if (!el) return null
-        const t = ends(el)
-        return [
-          el.endBinding?.mode,
-          Math.abs(t.start[0] - mine.start[0]) < 1,
-          Math.abs(t.end[0] - mine.end[0]) < 1,
-        ]
-      })
-      .toEqual(['orbit', true, true])
+    // bob first has the arrow with its binding modes and the re-snapped ends arrive with the room's change a
+    // moment later (waiting for the modes alone and reading once raced it): the ends themselves, held
+    await holds(async () => {
+      const el = (await item(b.page, arrowId)) as unknown as Linear | null
+      if (!el) return null
+      const t = ends(el)
+      return [
+        el.endBinding?.mode,
+        Math.abs(t.start[0] - mine.start[0]) < 1,
+        Math.abs(t.end[0] - mine.end[0]) < 1,
+      ]
+    }, ['orbit', true, true])
   })
 
   await test.step('one undo removes the connector whole', async () => {
