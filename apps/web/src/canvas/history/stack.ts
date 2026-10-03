@@ -420,6 +420,8 @@ export class LobbyHistory {
     carrying: { entry: Entry; change: TrackedChange; side: Side }[],
     scene?: Scene,
   ) {
+    // where each carrying entry sits in the undo stack: -1 for a redo entry (an undo's or a redo's push)
+    const at = new Map(carrying.map(({ entry }) => [entry, this.undos.indexOf(entry)]))
     for (const [key, value] of Object.entries(fix)) {
       const { lobby, name } = readFix(key)
       for (const { entry, change, side } of carrying) {
@@ -428,9 +430,14 @@ export class LobbyHistory {
         if (!fc) continue
         const old = fc[side]
         fc[side] = clone(value)
-        // later entries recorded this field against the unfixed value
-        const later = this.undos.slice(this.undos.indexOf(entry) + 1)
-        for (const e of later) {
+        // later entries recorded this field against the unfixed value. Only an undo entry has later ones:
+        // nothing is recorded while a redo entry exists (a record clears the redo stack). Before
+        // (LEAD-foldFix-indexOf), a redo entry's indexOf -1 took EVERY undo entry as later, and an older
+        // step whose `before` happened to equal the unfixed value was rewritten (a later Ctrl+Z restored
+        // the fixed value instead of its own)
+        const i = at.get(entry) ?? -1
+        if (i < 0) continue
+        for (const e of this.undos.slice(i + 1)) {
           const lc = e.changes.get(id)
           const lf = lc && (lobby ? lc.lobby : lc.fields)[name]
           if (lf && deepEqual(lf.before, old)) lf.before = clone(value)

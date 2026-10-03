@@ -167,3 +167,97 @@ describe('CanvasPort reads (CR 3b-7)', () => {
     expect(scan).not.toHaveBeenCalled()
   })
 })
+
+// ---- W5-26 (CR-3F-1): a transact outside the undo history ---------------------------------------------------
+
+const { UndoController } = await import('./history/controller.ts')
+const { createLobbyCanvas } = await import('./api/impl.ts')
+const { createFeatureRegistries } = await import('./api/registries.ts')
+
+/** A port with Lobby's undo on it; the core is a stand-in (no pushes or acks: no engine in this test). */
+function portWithUndo(initial: El[]) {
+  const f = fakeApi(initial)
+  const core = {
+    welcome: null,
+    sid: 'me',
+    on: () => () => {},
+    onAck: () => () => {},
+    leaseHolders: () => new Map(),
+    isDerivedHeld: () => false,
+    confirmed: () => undefined,
+    onSceneChange: () => {},
+  }
+  const scene = {
+    read: () => ({ elements: f.api.getSceneElementsIncludingDeleted(), gesture: {} }),
+    apply: (elements: El[]) => f.api.updateScene({ elements }),
+  }
+  const undo = new UndoController({
+    core: core as never,
+    scene: scene as never,
+    bump: (el, patch) => ({ ...el, ...patch, version: el.version + 1, versionNonce: el.versionNonce + 1 }),
+  })
+  undo.history.reset(new Map(f.elements().map((e) => [e.id, e])))
+  const port = createCanvasPort({
+    api: f.api as never,
+    core: null,
+    registries: createRegistries(),
+    undo,
+    readOnly: () => false,
+    editingLease: () => null,
+  })
+  return { ...f, port, undo }
+}
+
+const lobbyOf = (e: El) => (e?.customData as { lobby?: Record<string, unknown> } | undefined)?.lobby ?? {}
+
+describe('CanvasPort.transact with skipUndo (W5-26)', () => {
+  it('records no step: the next Ctrl+Z undoes the colour change before the +1, and the +1 stays', () => {
+    const { port, undo, elements } = portWithUndo([rect('a', 'a0'), rect('n', 'a1')])
+    port.transact('colour', (tx) => tx.update('a', { backgroundColor: '#a7b7f6' }))
+    expect(undo.history.undoSize).toBe(1)
+    port.transact('+1', (tx) => tx.update('n', { customData: { lobby: { 'plusOne:me': true } } }), {
+      skipUndo: true,
+    })
+    expect(undo.history.undoSize).toBe(1)
+    expect(undo.boundary()).toBeNull() // the board page's boundary at Excalidraw's onChange
+    const r = undo.undo()
+    expect([...(r?.result.patches.keys() ?? [])]).toEqual(['a'])
+    const byId = (id: string) => elements().find((e) => e.id === id)
+    expect(byId('a')?.backgroundColor).toBe('transparent')
+    expect(lobbyOf(byId('n'))).toEqual({ 'plusOne:me': true })
+    expect(undo.undo()).toBeNull()
+  })
+
+  it('a create and a delete (with its label) outside the history are no steps either', () => {
+    const { port, undo, elements } = portWithUndo([rect('a', 'a0')])
+    const id = port.transact('note', (tx) => tx.create('note', { x: 0, y: 0, text: 'hi' }), {
+      skipUndo: true,
+    })
+    expect(elements().filter((e) => e.id === id || e.containerId === id)).toHaveLength(2)
+    expect(undo.boundary()).toBeNull()
+    port.transact('drop', (tx) => tx.delete(id), { skipUndo: true })
+    expect(elements().filter((e) => (e.id === id || e.containerId === id) && e.isDeleted)).toHaveLength(2)
+    expect(undo.boundary()).toBeNull()
+    expect([undo.history.undoSize, undo.history.redoSize]).toEqual([0, 0])
+  })
+
+  it('the canvas API passes it through (and it wins over joinPrevious, even on a canvas with no board page)', () => {
+    const { port, undo } = portWithUndo([rect('a', 'a0'), rect('n', 'a1')])
+    const { canvas, dispose } = createLobbyCanvas({ port, registries: createFeatureRegistries() })
+    canvas.transact('colour', (tx) => tx.update('a', { strokeColor: '#e03131' }))
+    expect(undo.history.undoSize).toBe(1)
+    canvas.transact('+1', (tx) => tx.update('n', { customData: { lobby: { 'plusOne:me': true } } }), {
+      skipUndo: true,
+    })
+    expect(
+      canvas.transact('+1 again', () => 7, {
+        skipUndo: true,
+        joinPrevious: true,
+      }),
+    ).toBe(7)
+    expect(undo.boundary()).toBeNull()
+    expect(undo.history.undoSize).toBe(1)
+    expect(lobbyOf(canvas.get('n'))).toEqual({ 'plusOne:me': true })
+    dispose()
+  })
+})

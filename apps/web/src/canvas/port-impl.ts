@@ -5,7 +5,8 @@
  * Every write goes through `transact`: the writes of one call become new element versions installed with
  * one `updateScene` (captureUpdate NEVER), which the engine core scans at once (`syncScene`: Saved and
  * the offline queue know of the write before Excalidraw's onChange) and pushes as ordinary edits; the
- * call is one undo step. Nothing here calls `updateScene` with elements for any other reason.
+ * call is one undo step (none with `skipUndo`). Nothing here calls `updateScene` with elements for any
+ * other reason.
  *
  * Browser only.
  */
@@ -20,6 +21,7 @@ import {
 import type { ExcalidrawElement, NonDeletedExcalidrawElement } from '@excalidraw/excalidraw/element/types'
 import type { AppState, ExcalidrawImperativeAPI } from '@excalidraw/excalidraw/types'
 import { generateKeyBetween } from '@excalidraw/fractional-indexing'
+import type { TransactOptions } from './api/lobby-canvas.ts'
 import type { UndoController } from './history/controller.ts'
 import type {
   Bounds,
@@ -72,8 +74,15 @@ export interface LobbyCanvasTx extends CanvasTx {
   read(id: string): CanvasElement | undefined
 }
 
+/** `transact`'s options on this port: the canvas API's `skipUndo` (`joinPrevious` is the board page's). */
+export type PortTransactOptions = Pick<TransactOptions, 'skipUndo'>
+
 export interface LobbyCanvasPort extends CanvasPort {
-  transact<T>(label: string, fn: (tx: LobbyCanvasTx) => T): T
+  /**
+   * C0's transact. With `skipUndo` (W5-26, CR-3F-1) the write is no undo step: the history takes it in
+   * like someone else's edit (`UndoController.outside`) instead of recording a step at its end.
+   */
+  transact<T>(label: string, fn: (tx: LobbyCanvasTx) => T, opts?: PortTransactOptions): T
   /** feeds the port's `pointer` event (the presence pointer listener) */
   emitPointer(point: ScenePoint | null): void
   /** the canvas changed size or place (CR-3A-10): `viewportChanged` for readers of the view and its rect */
@@ -273,8 +282,13 @@ export function createCanvasPort(deps: PortDeps): LobbyCanvasPort {
       const s = viewportCoordsToSceneCoords({ clientX: p.x, clientY: p.y }, api.getAppState())
       return { x: s.x, y: s.y }
     },
-    transact<T>(label: string, fn: (tx: LobbyCanvasTx) => T): T {
+    transact<T>(label: string, fn: (tx: LobbyCanvasTx) => T, opts?: PortTransactOptions): T {
       const current = new Map(all().map((e) => [e.id, e as ExcalidrawElement]))
+      // with skipUndo: each element this step writes, as it was before the step (undefined: created here)
+      const outside = opts?.skipUndo && deps.undo ? new Map<string, ExcalidrawElement | undefined>() : null
+      const touch = (id: string) => {
+        if (outside && !outside.has(id)) outside.set(id, current.get(id))
+      }
       const order = [...current.keys()]
       let lo = topIndex()
       const index = () => {
@@ -293,6 +307,7 @@ export function createCanvasPort(deps: PortDeps): LobbyCanvasPort {
           if (deps.readOnly()) throw new Error('read-only: no writes')
           const els = create(kind, props, index)
           for (const e of els) {
+            touch(e.id)
             current.set(e.id, e)
             created.push(e.id)
           }
@@ -304,6 +319,7 @@ export function createCanvasPort(deps: PortDeps): LobbyCanvasPort {
           if (!e) throw new Error(`update: no element ${id}`)
           const next: Record<string, unknown> = { ...patch }
           if ('index' in patch && patch.index !== e.index) reindexed = true
+          touch(id)
           if (patch.customData && typeof patch.customData === 'object') {
             const given = (patch.customData as { lobby?: Record<string, unknown> }).lobby ?? {}
             const lobby = {
@@ -321,11 +337,14 @@ export function createCanvasPort(deps: PortDeps): LobbyCanvasPort {
           if (deps.readOnly()) throw new Error('read-only: no writes')
           const e = current.get(id)
           if (!e) return
+          touch(id)
           current.set(id, X.newElementWith(e, { isDeleted: true }))
           for (const b of e.boundElements ?? []) {
             const label = current.get(b.id)
-            if (b.type === 'text' && label && !label.isDeleted)
+            if (b.type === 'text' && label && !label.isDeleted) {
+              touch(b.id)
               current.set(b.id, X.newElementWith(label, { isDeleted: true }))
+            }
           }
         },
         insert(elements) {
@@ -340,6 +359,7 @@ export function createCanvasPort(deps: PortDeps): LobbyCanvasPort {
                 index: index(),
               }))) as unknown as ExcalidrawElement[]
           for (const e of copies) {
+            touch(e.id)
             current.set(e.id, e)
             created.push(e.id)
             if (e.index) lo = e.index
@@ -354,10 +374,16 @@ export function createCanvasPort(deps: PortDeps): LobbyCanvasPort {
         ...created.map((id) => current.get(id) as ExcalidrawElement),
       ]
       const next = reindexed ? [...written].sort(compareIndexThenId) : written
-      api.updateScene({ elements: next, captureUpdate: CaptureUpdateAction.NEVER })
-      // the core scans the write now, not at Excalidraw's onChange after React's commit (spike B part 3)
-      deps.core?.syncScene()
-      deps.undo?.boundary(label)
+      const install = () => {
+        api.updateScene({ elements: next, captureUpdate: CaptureUpdateAction.NEVER })
+        // the core scans the write now, not at Excalidraw's onChange after React's commit (spike B part 3)
+        deps.core?.syncScene()
+      }
+      if (outside && deps.undo) deps.undo.outside(install, outside)
+      else {
+        install()
+        deps.undo?.boundary(label)
+      }
       return result
     },
     setTool(tool) {
