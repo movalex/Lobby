@@ -117,8 +117,24 @@ const CHANGE_LOG_CAP = 20_000
  * The facade the page installs: C0's verbs plus the wave-1 verbs (facade.types.ts §9.2) landed here so far.
  * `children(frameId)` is tldraw's `getSortedChildIdsForParent(frame)` (GAP-1, wave 4b): a frame's live
  * children in paint order, the frame's own labels excluded, as `canvas/api/items.ts` reads them.
+ * `doc(key)` and `setDoc(entries)` (FACADE-setDoc, wave C) read and write the board document (workshop
+ * settings, the start view, `tagDef:*`) the way the features do, so a browser spec can race two writes of
+ * one key (e2e/excalidraw/doc-key-lost-write.spec.ts).
  */
-export type InstalledFacade = LobbyCanvasFacade & Pick<LobbyCanvasFacadeV1, 'children'>
+export type InstalledFacade = LobbyCanvasFacade & Pick<LobbyCanvasFacadeV1, 'children' | 'doc' | 'setDoc'>
+
+/** The part of the LobbyCanvas the facade writes the board document through (`canvas.doc.set`). */
+interface LobbyDocApi {
+  set(entries: Readonly<Record<string, unknown>>): void
+}
+/**
+ * The board page's LobbyCanvas doc API, from its dev-auth debug handle (`window.__lobbyBoard.canvas`, set
+ * by canvas/board/session.ts after this facade is installed, so it is looked up per call). Features write
+ * the board document through `canvas.doc.set`, which also tells the page's own UI the keys changed
+ * (`docWritten`); the engine's `setDoc` alone would not.
+ */
+const lobbyDocApi = (): LobbyDocApi | null =>
+  (globalThis as { __lobbyBoard?: { canvas?: { doc?: LobbyDocApi } } }).__lobbyBoard?.canvas?.doc ?? null
 
 /**
  * Builds the facade on a port. Exported for the unit test; `install` is what the board page runs.
@@ -185,6 +201,17 @@ export function createFacade(port: CanvasPort): {
   const facade: InstalledFacade = {
     items: () => port.items().map(copy) as CanvasElement[],
     children: (frameId) => childrenOf(frameId, port.items()),
+    // the board document as this tab holds it: the server's copy with this tab's unsent and unacked writes on
+    // top (a copy; undefined for a key nobody wrote)
+    doc: (key) => copy(port.engine?.doc().get(key)),
+    setDoc: (entries) => {
+      // one write of several keys, as `canvas.doc.set` makes it (a null value removes a key)
+      const set = copy(entries)
+      const api = lobbyDocApi()
+      if (api) return api.set(set)
+      if (!port.engine) throw new Error('setDoc: this canvas has no sync engine')
+      port.engine.setDoc(set)
+    },
     get: (id) => {
       const el = port.get(id)
       return el ? copy(el) : null

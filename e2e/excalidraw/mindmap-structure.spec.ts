@@ -489,20 +489,12 @@ test('mind map: start from a sticky note in a frame (Alt+Shift+M), drag the cent
     await expect.poll(async () => structure(await mapView(a.page))).toContain('Product > Hiring')
     await expectTidy(a.page)
     await focusCanvas(a.page)
-    // Known defect (spike B's history, 3D.md CR-3D-4): the line the engine re-routed during the drag
-    // and the drop then replaced can land on the stack as a step of its own, taking one extra press.
-    for (let i = 0; i < 2; i++) {
-      await a.page.keyboard.press(`${mod}+z`)
-      const back = await expect
-        .poll(async () => structure(await mapView(a.page)), { timeout: 4_000 })
-        .toContain('Q4 goals > Hiring')
-        .then(
-          () => true,
-          () => false,
-        )
-      if (back) break
-    }
+    // ONE press undoes the drop with the line the engine re-routed during the drag. This step used to allow
+    // a second press for CR-3D-4's extra step (the replaced line on the stack); it passed with one in wave B
+    // (follow-up 8), so a second press now fails the step instead of being forgiven.
+    await a.page.keyboard.press(`${mod}+z`)
     await expect.poll(async () => structure(await mapView(a.page))).toContain('Q4 goals > Hiring')
+    expect(structure(await mapView(a.page))).not.toContain('Product > Hiring')
     await expectTidy(a.page)
   })
 

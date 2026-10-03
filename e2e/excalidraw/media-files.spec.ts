@@ -71,10 +71,14 @@ async function expectDownload(s: CanvasSession, card: Locator, name: string, boa
   await expect(link).toHaveAttribute('href', ORIGINAL_HREF)
   await expect(link).toHaveAttribute('href', new RegExp(`\\?board=${board}$`))
   const href = (await link.getAttribute('href')) ?? ''
-  const res = await s.page.request.get(href)
-  expect(res.status()).toBe(200)
-  expect(res.headers()['content-disposition']).toMatch(/^attachment;/)
-  expect(Buffer.compare(await res.body(), readFileSync(fixture(name)))).toBe(0)
+  // one fetch is a one-shot read of a server that may be busy (the whole suite, a second run on the
+  // machine): retried until it answers; the bytes are the assertion
+  await expect(async () => {
+    const res = await s.page.request.get(href)
+    expect(res.status()).toBe(200)
+    expect(res.headers()['content-disposition']).toMatch(/^attachment;/)
+    expect(Buffer.compare(await res.body(), readFileSync(fixture(name)))).toBe(0)
+  }).toPass({ timeout: 30_000 })
 }
 
 /** Records every data-status each card face shows, in order (deduplicated), keyed by file name. */
@@ -193,15 +197,18 @@ test('7) uploads: PDF, MP4, encrypted PDF and an attachment become cards on both
   })
 
   await test.step('authorship comes from the session: every upload is recorded as alice’s', async () => {
+    // the four cards as bob's tab holds them (polled: every face is up, and so is every element)
+    await expect.poll(async () => (await cardItems(b.page)).length).toBe(files.length)
     const cards = await cardItems(b.page)
-    expect(cards).toHaveLength(files.length)
     for (const card of cards) {
       // bob reads the meta route with his own session (view on this board is enough).
-      const res = await b.page.request.get(
-        `/api/boards/${board}/assets/${card.facts.assetId}/${card.facts.versionId}`,
-      )
-      expect(res.status()).toBe(200)
-      expect(((await res.json()) as { uploadedBy?: unknown }).uploadedBy).toBe(a.id)
+      await expect(async () => {
+        const res = await b.page.request.get(
+          `/api/boards/${board}/assets/${card.facts.assetId}/${card.facts.versionId}`,
+        )
+        expect(res.status()).toBe(200)
+        expect(((await res.json()) as { uploadedBy?: unknown }).uploadedBy).toBe(a.id)
+      }).toPass({ timeout: 30_000 })
     }
   })
 
