@@ -110,6 +110,57 @@ const audit = (page: Page) =>
     }
     const announcers = document.querySelectorAll('[data-testid="canvas-announcer"]')
     if (announcers.length !== 1) out.push({ rule: 'one-announcer', what: String(announcers.length) })
+    // 7. landmark structure (W5-57): a contentinfo (the page footer) is top level, never inside main
+    // (landmark-contentinfo-is-top-level; the engine renders a <footer role="contentinfo"> in the canvas);
+    // two landmarks of one role never share a name (landmark-unique); and the canvas region and the
+    // board's application (what takes the keyboard inside it) are named apart, so a screen reader does
+    // not say the board's name twice on the way in
+    const SECTIONING = 'article, aside, main, nav, section, [role="main"], [role="region"]'
+    const LANDMARK_ROLES = ['banner', 'complementary', 'contentinfo', 'form', 'main', 'navigation', 'region']
+    // a landmark's own name (aria-labelledby, aria-label, title), never its text
+    const landmarkName = (el: Element): string => {
+      const labelled = byIds(el.getAttribute('aria-labelledby'))
+      if (labelled.length && labelled.every(Boolean))
+        return labelled
+          .map((l) => l?.textContent ?? '')
+          .join(' ')
+          .trim()
+      return (el.getAttribute('aria-label') ?? el.getAttribute('title') ?? '').trim()
+    }
+    const landmarkRole = (el: Element): string | null => {
+      const explicit = el.getAttribute('role')
+      if (explicit) return LANDMARK_ROLES.includes(explicit) ? explicit : null
+      const tag = el.tagName.toLowerCase()
+      if (tag === 'main') return 'main'
+      if (tag === 'nav') return 'navigation'
+      if (tag === 'aside') return 'complementary'
+      if (tag === 'header' && !el.parentElement?.closest(SECTIONING)) return 'banner'
+      if (tag === 'footer' && !el.parentElement?.closest(SECTIONING)) return 'contentinfo'
+      if ((tag === 'section' || tag === 'form') && landmarkName(el))
+        return tag === 'section' ? 'region' : 'form'
+      return null
+    }
+    const landmarks = new Map<string, number>()
+    // an open modal dialog (showModal) leaves only itself in the accessibility tree: the page behind it
+    // is inert, its landmarks included
+    const modal = document.querySelector('dialog:modal')
+    for (const el of document.querySelectorAll('main, nav, aside, header, footer, section, form, [role]')) {
+      if (!visible(el) || (modal && !modal.contains(el))) continue
+      const role = landmarkRole(el)
+      if (!role) continue
+      if (role === 'contentinfo' && el.parentElement?.closest('main, [role="main"]'))
+        out.push({ rule: 'landmark-contentinfo-is-top-level', what: describe(el) })
+      const key = `${role} "${landmarkName(el)}"`
+      landmarks.set(key, (landmarks.get(key) ?? 0) + 1)
+    }
+    // (one main is rule 5's)
+    for (const [key, n] of landmarks)
+      if (n > 1 && !key.startsWith('main ')) out.push({ rule: 'landmark-unique', what: key })
+    const regionName = region ? landmarkName(region) : ''
+    for (const app of region?.querySelectorAll('[role="application"]') ?? []) {
+      if (landmarkName(app) === regionName)
+        out.push({ rule: 'region-application-same-name', what: regionName })
+    }
     return out
   })
 
@@ -126,6 +177,8 @@ test('the board page passes the audit on a desktop with content and a panel open
   await zoomToFit(a.page)
   await focusCanvas(a.page)
   await a.page.keyboard.press('Alt+ArrowRight')
+  // W5-57: the board's application is there to be named apart from its region (rule 7)
+  await expect(a.page.locator('[data-lobby-board-canvas] [role="application"]')).toHaveCount(1)
   expect(await audit(a.page)).toEqual([])
   await a.page.getByTestId('dock-tab-contents').click()
   await expect(a.page.getByTestId('dock-panel-contents')).toBeVisible()

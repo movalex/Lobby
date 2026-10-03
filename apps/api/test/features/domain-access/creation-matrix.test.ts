@@ -363,6 +363,9 @@ const ALLOWED_RAISES: Record<string, number> = {
   'features/dashboard/sharing.ts board_members': 1,
   // PATCH visibility: raising gated in-route; lowering open
   'routes/boards.ts boards': 1,
+  // authz-006 PATCH workspace members: raising gated in-route (a creator caller; admin and owner only for a
+  // creator target); lowering open
+  'routes/workspaces.ts workspace_members': 1,
 }
 
 describe('source tripwire (apps/api/src)', () => {

@@ -26,8 +26,20 @@ export function SkipLink({ label, testId, onSkip }: { label: string; testId: str
   )
 }
 
-/** A11Y2-09: the accessible name of the board's canvas region ("Lobby tour board"). */
+/**
+ * A11Y2-09: the accessible name of the board itself ("Lobby tour board"): the engine's focusable canvas
+ * (role application, the a11y feature), which takes the keyboard.
+ */
 export function boardRegionName(title: string): string {
   const t = title.trim()
   return t ? `${t} board` : 'Untitled board'
+}
+
+/**
+ * W5-57: the name of the canvas region around it ("Lobby tour board area"). Never the application's own
+ * name, so a screen reader entering the board does not hear the board's name twice; it still follows
+ * the title (the a11y feature takes a change of this label as the rename cue).
+ */
+export function boardAreaName(title: string): string {
+  return `${boardRegionName(title)} area`
 }

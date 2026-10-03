@@ -13,6 +13,9 @@ export type AuditAction =
   | 'invitation.accept'
   | 'invitation.revoke'
   | 'invitation.extend'
+  // authz-006: a workspace member's role changed, or the member was removed (with their board grants)
+  | 'workspace.member.role'
+  | 'workspace.member.remove'
 
 /** Written in the same transaction as the change it describes, so the log never disagrees with it. */
 export async function audit(
