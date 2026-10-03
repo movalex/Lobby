@@ -22,10 +22,13 @@
 //      3-left,5-centred-moved,5-slow-typist; a filtered run is a repro aid, never the check's evidence)
 //
 // SPLIT BY SCENARIO (wave C, C5). This was one 1,233-line spec whose seven tests ran in one worker for about
-// an hour, and the Playwright worker ran out of heap (O2-part3.md: ~120 MB/min of growth in L6 1-2). Each
-// scenario is now its own file (b3-l6-l10-arrows-<scenario>.spec.ts) with a room of its own, and can be run
-// alone: `spike-b b3-l6-l10-arrows-l6-1-2`. The old filter `b3-l6-l10-arrows` still matches every one of
-// them. This file holds the helpers they share (everything above the first test of the old spec).
+// an hour, and the Playwright worker ran out of heap (O2-part3.md: ~120 MB/min of growth in L6 1-2). The
+// growth is the config's `trace: 'retain-on-failure'` recording every call of the three launched browsers
+// (measured: live heap 81 -> 317 MB over 80 rows with it, 78 -> 108 MB without), so every scenario spec now
+// says `test.use({ trace: 'off' })`. Each scenario is also its own file (b3-l6-l10-arrows-<scenario>.spec.ts)
+// with a room of its own, so it can be run alone: `spike-b b3-l6-l10-arrows-l6-1-2`. The old filter
+// `b3-l6-l10-arrows` still matches every one of them. This file holds the helpers they share (everything
+// above the first test of the old spec).
 import { expect, type Page } from '@playwright/test'
 import { GEOMETRY_TOLERANCE_PX as TOL } from '../../../packages/canvas-schema/src/limits.ts'
 import { harness } from '../support/harness.ts'
