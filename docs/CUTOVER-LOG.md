@@ -180,3 +180,11 @@ on the sync disk (§6).
   (`scripts/smoke/live-smoke.mjs --expect excalidraw`, from `engine/smoke`): 33 passed, 0 failed, 1 known warning (the edge hides
   the sync's refusal code). No migration, no storage or converter change, so the rollback paths are unchanged (the R0 rollback must
   still drop the enforced CSP first). The watch continues on this build.
+- **Wave B (B1-B5) deployed 2026-10-03 10:55–10:59Z** (`main` `99d902c`; api → sync → web, the order L7 needs: the new web offers
+  the ticket only as a `lobby.ticket.*` subprotocol, which only the new sync reads). Checked before the web went out: through
+  Render's edge (Cloudflare) a handshake offering `lobby.board.v1, lobby.ticket.<t>` gets `101` with `Sec-WebSocket-Protocol:
+  lobby.board.v1`, on the old sync and the new one; the new sync reads the ticket from the subprotocol and from `?ticket=` (both
+  logged `refused … bad_signature` for a bogus one, the ticket itself in no log line), so tabs opened before the deploy keep
+  connecting. api live in 42 s, sync in 52 s (`/healthz` 200 ten seconds later; maintenance off; backups 0 failures), web in 31 s.
+  Live smoke 33 passed, 0 failed, the known warning; 0 `error`/`FATAL` lines on api and sync. No migration (still 0023). Held for
+  after 20:55Z on `wave-b/held`: migration 0024 (selection votes, the access-granted bell) and the smoke script.
