@@ -10,7 +10,7 @@
     "backup:restore-board": "node --env-file-if-exists=dev.env src/backup/restore-board.ts",
     "backup:run-all": "node --env-file-if-exists=dev.env src/backup/run-all-cli.ts",
     "backup:checkpoint": "node --env-file-if-exists=dev.env src/backup/checkpoint-board.ts",
-    "typecheck": "tsc -p ."
+    "typecheck": "tsc -p . && tsc -p tsconfig.node-safe.json"
   },
   "dependencies": {
     "@draftroom/auth-tickets": "workspace:*",

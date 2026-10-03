@@ -14,7 +14,14 @@ catalog:
   '@tldraw/validate': 5.4.2
   '@tldraw/utils': 5.4.2
   # excalidraw (MIT; fractional-indexing CC0): keep all five @excalidraw/* packages at the same exact nightly.
-  # Bump only in a dedicated PR that runs the engine probe suite (docs/EXCALIDRAW-MIGRATION.md §6.5).
+  # Bump only in a dedicated PR that runs the engine probe suite (docs/EXCALIDRAW-MIGRATION.md §6.5), all of it:
+  #   - `pnpm test`: the Node probes (apps/web/test/engine-probe: node-probes, editor-open-paths, the addFiles checker)
+  #     and the arrow acceptance tests;
+  #   - `pnpm probe:browser`: in a mounted <Excalidraw> of the new build, A8's index collision, `addFiles` keeping the
+  #     first entry for an id (the derivative swap depends on it) and A3's text layout against the metrics table;
+  #   - `pnpm typecheck`: it includes apps/web/test/engine-probe/tsconfig.json and apps/sync/tsconfig.node-safe.json
+  #     (the engine core must stay free of DOM globals);
+  #   - `pnpm e2e`, `pnpm --filter @draftroom/e2e excalidraw:prod` and `excalidraw:dev`, and `pnpm audit:prod`.
   '@excalidraw/excalidraw': 0.18.0-1118751
   '@excalidraw/element': 0.18.0-1118751
   '@excalidraw/common': 0.18.0-1118751

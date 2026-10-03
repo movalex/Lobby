@@ -20,6 +20,17 @@ export const buildProbePage = async () => {
   return performance.now() - t0
 }
 
+/**
+ * The probe server's port: `--port=N`, else inside this run's E2E_PORT_BASE range (base + `offset`, so runs on one
+ * machine with different bases never collide), else the historical `fallback`.
+ */
+export const probePort = (offset: number, fallback: number): number => {
+  const flag = process.argv.find((a) => a.startsWith('--port='))?.split('=')[1]
+  if (flag) return Number(flag)
+  const base = Number(process.env.E2E_PORT_BASE)
+  return Number.isInteger(base) && base > 0 ? base + offset : fallback
+}
+
 export interface ProbeSession {
   page: import('@playwright/test').Page
   browserVersion: string

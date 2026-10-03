@@ -19,7 +19,8 @@
     "format": "biome check --write .",
     "licence:check": "node scripts/licence-check.mjs",
     "verify": "pnpm lint && pnpm typecheck && pnpm test && pnpm e2e",
-    "test:arrows": "vitest run -c vitest.arrows.config.ts"
+    "test:arrows": "vitest run -c vitest.arrows.config.ts",
+    "probe:browser": "pnpm --filter @draftroom/web probe:browser"
   },
   "devDependencies": {
     "@biomejs/biome": "catalog:",

@@ -50,7 +50,10 @@ export default defineConfig({
         },
       },
       { test: { name: 'web', environment: 'node', include: ['apps/web/src/**/*.test.ts'] } },
-      // Excalidraw engine probe suite, Node part (docs/EXCALIDRAW-MIGRATION.md §6.5); the browser part runs from its own runner
+      // Excalidraw engine probe suite, Node part (docs/EXCALIDRAW-MIGRATION.md §6.5). The browser part (the A3 layout
+      // corpus, A8's index collision, addFiles keeping the first entry, in a mounted <Excalidraw>) is
+      // `pnpm probe:browser`. Both, and the engine-probe tsconfig inside `pnpm typecheck`, run on every @excalidraw
+      // bump (the rule in pnpm-workspace.yaml) and in CI.
       {
         test: {
           name: 'engine-probe',
