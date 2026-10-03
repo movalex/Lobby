@@ -226,6 +226,20 @@ export const setViewport = (page: Page, v: Partial<Pick<Viewport, 'x' | 'y' | 'z
 export const children = (page: Page, frameId: string): Promise<string[]> =>
   canvasCall(page, 'children', frameId)
 
+/**
+ * A board-document key's value as this tab holds it (the server's copy with this tab's unsent and unacked
+ * writes on top): workshop settings (`workshop`), the start view (`startView`), a tag (`tagDef:<key>`).
+ * `undefined` for a key nobody wrote, `null` for one that was removed.
+ */
+export const getDoc = (page: Page, key: string): Promise<unknown> => canvasCall(page, 'doc', key)
+/**
+ * Writes board-document keys in one go, as the features do (`canvas.doc.set`: through the sync engine, the
+ * page's own UI told); a `null` value removes the key. Two calls within one round trip are two pushes built
+ * on the same base clock (doc-key-lost-write.spec.ts races them).
+ */
+export const setDoc = (page: Page, entries: Record<string, unknown>): Promise<void> =>
+  canvasCall(page, 'setDoc', entries)
+
 /** Lobby's undo (as Ctrl+Z on the board would). */
 export const undo = (page: Page): Promise<void> => canvasCall(page, 'undo')
 export const redo = (page: Page): Promise<void> => canvasCall(page, 'redo')
