@@ -126,37 +126,76 @@ test('mind map: two people build one map by keyboard, each sees the other live, 
     await expectTidy(b.page)
   })
 
-  await test.step("undo takes back alice's last topic, for both: its words, then the topic", async () => {
-    // Deviation (docs/research/excalidraw/wave3/3D.md): on this canvas the words typed into a new topic
-    // are their own undo step (the editor's), so the topic takes two: the words, then the topic. tldraw's
-    // took one. Folding the two needs the history to merge its top steps (LobbyHistory.mergeTop, W1-9).
-    // Known defect (CR-3D-4, reported to spike B's history owner, 3D.md): after the concurrent step, the
-    // engine's own re-route of the elbow lines can land on alice's stack as a step of its own, so an undo
-    // may first take back that (invisible) re-route. At most one such extra press per undo.
+  await test.step("one undo takes back alice's last topic with its words, for both", async () => {
+    // As on tldraw: the topic and the words typed into it are one undo step (CR-3D-4, wave B: the history
+    // folds the first words typed into a label made empty into the step that made it, on the layout write
+    // that follows the editor). Before, the words were a step of their own (two presses), and an invisible
+    // step could land on the stack after the concurrent branch (an engine re-key of a line's `index`), so
+    // these presses were allowed one extra each.
+    const want = [
+      '(root) Launch plan',
+      'Channels > Email',
+      'Channels > Press',
+      'Channels > Social',
+      'Launch plan > Audience',
+      'Launch plan > Channels',
+      'Launch plan > Timeline',
+    ]
     await focusCanvas(a.page)
-    const undoUntil = async (done: (s: string[]) => boolean) => {
-      for (let i = 0; i < 2; i++) {
-        await a.page.keyboard.press(`${mod}+z`)
-        const took = await expect
-          .poll(async () => done(structure(await mapView(b.page))), { timeout: 4_000 })
-          .toBe(true)
-          .then(
-            () => true,
-            () => false,
-          )
-        if (took) return
-      }
-    }
-    await undoUntil((s) => s.includes('Launch plan > '))
-    await expect.poll(async () => structure(await mapView(b.page))).toContain('Launch plan > ')
-    expect(structure(await mapView(b.page))).not.toContain('Launch plan > Budget')
-    await undoUntil((s) => !s.includes('Launch plan > '))
-    await expect.poll(async () => structure(await mapView(b.page))).not.toContain('Launch plan > ')
-    expect(structure(await mapView(b.page))).toContain('Launch plan > Timeline')
+    await a.page.keyboard.press(`${mod}+z`)
+    await expect.poll(async () => structure(await mapView(b.page))).toEqual(want)
+    await expect.poll(async () => structure(await mapView(a.page))).toEqual(want)
     await expectConverged(a.page, [b.page], 20_000)
     await expectTidy(a.page)
     await expectTidy(b.page)
   })
+})
+
+test('mind map (CR-3D-4): a new topic and its words are one undo step, the redo brings both back, and the undo selects the topic it was added to', async ({
+  canvasSession,
+}) => {
+  const a = await canvasSession('alice')
+  await ready(a.page)
+  await focusBoard(a.page)
+  await setTool(a.page, 'mindmap')
+  await waitForTyping(a.page)
+  await a.page.keyboard.type('Root')
+  await a.page.keyboard.press('Escape')
+  await expect.poll(() => editingId(a.page)).toBeNull()
+  await expect.poll(async () => structure(await mapView(a.page))).toEqual(['(root) Root'])
+  const root = byText(await mapView(a.page), 'Root').id
+  // a person's pace: the editor open and settled before the words
+  for (const words of ['First idea', 'Second idea']) {
+    await selectOnly(a.page, root)
+    await a.page.keyboard.press('Tab')
+    await waitForTyping(a.page)
+    await expect.poll(() => editingText(a.page)).toBe('')
+    await a.page.keyboard.type(words)
+    await a.page.waitForTimeout(300)
+    await a.page.keyboard.press('Escape')
+    await expect.poll(() => editingId(a.page)).toBeNull()
+    await expect.poll(async () => structure(await mapView(a.page))).toContain(`Root > ${words}`)
+    await expectTidy(a.page)
+  }
+  await expect(a.page.getByTestId('lease-status')).toHaveAttribute('data-phase', 'idle')
+  // the layout after the words has run (the keeper writes once the editor is closed)
+  await a.page.waitForTimeout(600)
+  await focusCanvas(a.page)
+  await a.page.keyboard.press(`${mod}+z`)
+  await expect
+    .poll(async () => structure(await mapView(a.page)))
+    .toEqual(['(root) Root', 'Root > First idea'])
+  // F11: the undo selects what the step was made with: the topic "Second idea" was added to
+  await expect.poll(() => selection(a.page)).toEqual([root])
+  await a.page.keyboard.press(`${mod}+Shift+z`)
+  await expect
+    .poll(async () => structure(await mapView(a.page)))
+    .toEqual(['(root) Root', 'Root > First idea', 'Root > Second idea'])
+  await expectTidy(a.page)
+  // and the one before: one press again
+  await a.page.keyboard.press(`${mod}+z`)
+  await a.page.keyboard.press(`${mod}+z`)
+  await expect.poll(async () => structure(await mapView(a.page))).toEqual(['(root) Root'])
 })
 
 test('mind map: fast typing never loses a key; Shift+Tab moves up a level; an empty new topic left with Esc disappears', async ({

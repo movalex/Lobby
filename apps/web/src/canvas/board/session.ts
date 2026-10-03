@@ -497,6 +497,8 @@ export class LobbyBoardSession {
         this.classifier.markHistory(elements.filter((e) => current.get(e.id) !== e.version).map((e) => e.id))
         api.updateScene({ elements: elements as never, captureUpdate: CaptureUpdateAction.NEVER })
       },
+      // F11: an undo or a redo re-selects what its step was made with (the port leaves out hidden ids)
+      select: (ids) => this.port?.select(ids),
     })
     this.undo = undo
     const presence = new PresenceHub({

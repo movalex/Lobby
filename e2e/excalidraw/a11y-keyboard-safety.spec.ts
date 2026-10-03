@@ -1,7 +1,8 @@
 // PORTED from e2e/tests/keyboard-safety.spec.ts (the tldraw spec keeps running on the default build) to the
 // Excalidraw board page (owner 3i, docs/EXCALIDRAW-MIGRATION.md §4.8 (4)): board shortcuts only act while
 // the board has the keyboard (A11Y2-02), one undo press undoes the last real change after selection clicks
-// (F11), and a keyboard-only user can comment on a note inside a frame (A11Y2-04).
+// and selects again what that change was made with (F11), and a keyboard-only user can comment on a note
+// inside a frame (A11Y2-04).
 //
 // Deviations from the tldraw spec: the places the keyboard sits outside the board are the rail, the a11y
 // feature's Contents panel and its rows, Share and the board title (History, Present and Frames are 3h's,
@@ -30,7 +31,6 @@ import {
   frame,
   intoFrame,
   MISSING_FEATURE_MS,
-  needs,
   note,
   selected,
   waitForA11y,
@@ -208,13 +208,24 @@ test('F11: after selection clicks, one Ctrl+Z undoes the last real change; one C
   expect(await boardHasFocus(page)).toBe(true)
 })
 
-test('F11: the undo restores the selection the change was made with', async ({ canvasSession }) => {
-  needs('spike B history (canvas/history)', 'undo restoring the selection of the undone step')
+test('F11: the undo restores the selection the change was made with; so does the redo', async ({
+  canvasSession,
+}) => {
+  // wave B (B1): each undo step keeps the selection it was made with, never as a change
+  // (canvas/history/stack.ts); the undo and the redo select it again (canvas/history/controller.ts)
   const { page } = await canvasSession('alice')
   const { loose, x } = await changeThenClicks(page)
   await page.keyboard.press('ControlOrMeta+z')
   await expect.poll(x).toBe(1000)
-  await expect.poll(() => selected(page), { timeout: MISSING_FEATURE_MS }).toEqual([loose])
+  await expect.poll(() => selected(page)).toEqual([loose])
+  // nothing selected, then the redo: the change and its selection come back
+  await select(page, [])
+  await expect.poll(async () => (await selected(page)).length).toBe(0)
+  await focusCanvas(page)
+  await page.keyboard.press('ControlOrMeta+Shift+z')
+  await expect.poll(x).toBe(1100)
+  await expect.poll(() => selected(page)).toEqual([loose])
+  expect(await boardHasFocus(page)).toBe(true)
 })
 
 test('A11Y2-04: with the keyboard only, a note inside a frame gets a comment (context menu, or the comment tool going inside the frame)', async ({

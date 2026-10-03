@@ -160,6 +160,11 @@ export class MindmapRuntime {
   readonly hidden = atom<ReadonlySet<string>>('mindmap.hidden', new Set())
   /** A topic just made by Tab/Enter that is still empty: leaving it empty takes it back. */
   fresh: { id: string } | null = null
+  /**
+   * The last topic this tab made by Tab/Enter, until its editor closes (unlike `fresh`, kept when the
+   * keys move on to its child or sibling): the words typed into it join the step that made it.
+   */
+  private made: string | null = null
 
   readonly canvas: LobbyCanvas
   private readonly measure: Measure
@@ -705,9 +710,11 @@ export class MindmapRuntime {
       })
       const endsMoved = this.movesHere(d, n.id) || this.movesHere(d, parent.id)
       // A line whose ends change, or whose style changes while an end moves (a topic moved to another
-      // parent or level), is replaced rather than rewritten: Lobby's history takes a bound arrow's change
-      // as derived from its moving ends and records it later as a step of its own (CR-3D-4), while a new
-      // line is part of the step that makes it.
+      // parent or level), is replaced rather than rewritten: the engine holds a bound arrow's new route as
+      // derived from its moving ends (never pushed, no part of the undo step; the server re-routes it), so
+      // a rewritten line's step would carry its new binding without its route, while a new line is wholly
+      // part of the step that makes it. (Wave 3d saw such re-routes land as undo steps of their own,
+      // CR-3D-4; the history no longer records a held route, nor the engine's re-key of an index.)
       if (rebind || (Object.keys(fix).length && endsMoved)) {
         this.deleteLine(d, keep)
         createLine()
@@ -1158,6 +1165,7 @@ export class MindmapRuntime {
     this.canvas.select([id])
     this.reveal(id)
     this.fresh = { id }
+    this.made = id
     return id
   }
 
@@ -1197,6 +1205,7 @@ export class MindmapRuntime {
     this.canvas.select([id])
     this.reveal(id)
     this.fresh = { id }
+    this.made = id
     return id
   }
 
@@ -1292,7 +1301,9 @@ export class MindmapRuntime {
   /**
    * Writes a topic's words without its editor (setup, tests, and features that fill topics): through the
    * lease (`text.replace`) when it has a label; a topic that is still empty gets its label in one write.
-   * The topic's size and the map's layout follow, in the same undo step.
+   * The topic's size and the map's layout follow, in the same undo step. The words of a topic this tab
+   * has just made by Tab/Enter (the keys typed before its editor opened, CR-3D-4) join the step that made
+   * it, as typing into its editor does.
    */
   setTopicText(id: string, text: string): boolean {
     const meta = this.index.topics.get(id)
@@ -1327,7 +1338,7 @@ export class MindmapRuntime {
       this.fit(d, id, depth, size)
     }
     this.layoutNow(d, meta.rootId, { edges: true })
-    this.commit(d, 'mindmap: topic text', false)
+    this.commit(d, 'mindmap: topic text', this.fresh?.id === id)
     return true
   }
 
@@ -1395,9 +1406,13 @@ export class MindmapRuntime {
   /**
    * Editing of topic `id` ended. A topic made by Tab/Enter that is still empty (and has no children) goes
    * back as if it never was, and its parent is selected again. Otherwise its size follows its text and the
-   * map is laid out again, inside the typing's undo step.
+   * map is laid out again, inside the typing's undo step; for a topic this tab has just made, that step is
+   * the one that made it (CR-3D-4: the history folds the first words typed into a label made empty into
+   * the step that made it, on a joined write: one undo takes back the topic and its words, as on tldraw).
    */
   private editorClosed(id: string, byEscape = false) {
+    const made = this.made === id
+    if (made) this.made = null
     const meta = this.index.topics.get(id)
     if (!meta || !this.canEdit()) return
     // W5-44: Escape leaves the topic selected, so the arrow keys go on from it. The engine clears the
@@ -1415,7 +1430,10 @@ export class MindmapRuntime {
     const d = new Draft(this.canvas)
     this.fit(d, id, this.depthFromMeta(meta))
     this.layoutNow(d, meta.rootId, { edges: true })
-    this.commit(d, 'mindmap: layout', true)
+    // the words fit the topic as it is and nothing moves: the joined write is empty, and still folds the
+    // typing into the step that made the topic
+    if (!this.commit(d, 'mindmap: layout', true) && made)
+      this.canvas.transact('mindmap: layout', () => undefined, { joinPrevious: true })
   }
 
   /** The editor of `id` never opened (the lease went to someone else, or Esc while it was pending). */
