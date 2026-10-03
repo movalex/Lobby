@@ -3,8 +3,8 @@
  * (`panels`), the top bar's feature items (`topBar`), the overlay root (`featureOverlays` in scene and
  * screen layers, C0 `overlays`, remote cursors through `cursorVisible`, "X is typing" badges), the host
  * slots, other people's selections in their colours (W5-28), a marker on the canvas's edge for each person who is
- * off screen (W5-32), the hover outline in Lobby's accent (W5-38: ./outlines.ts), and the lease banner and
- * pending affordance.
+ * off screen (W5-32), the hover and editing outlines in Lobby's accent (W5-38, W5-55: ./outlines.ts), and the
+ * lease banner and pending affordance.
  * Focus mode (`settings.focusMode`, present mode) hides the dock, the top bar, the host slots, the
  * remote selections, the edge markers and every overlay layer that does not say `show`.
  *
@@ -35,7 +35,7 @@ import type { FeatureOverlaySpec, FeatureRegistries, HostSlotName } from '../api
 import type { EditNotice, EditState } from '../lease/editorLease.ts'
 import { arrowPaths } from '../presence/drag-arrows.ts'
 import { type AvoidRect, EDGE_CHIP_RADIUS, type EdgeMarker, edgeMarkers } from './edge-markers.ts'
-import { hoverOutline, type OutlineBox } from './outlines.ts'
+import { editingOutline, hoverOutline, type OutlineBox } from './outlines.ts'
 import type { LobbyBoardSession } from './session.ts'
 
 // ---- the dock ---------------------------------------------------------------------------------------------
@@ -255,23 +255,26 @@ export function OverlayRoot({
 }
 
 /**
- * W5-38 (./outlines.ts): the element under the pointer, outlined in Lobby's accent (board.css). Under every other
- * layer; never takes a click; not in focus mode.
+ * W5-38 and W5-55 (./outlines.ts): the element under the pointer, and the one this tab is typing into, outlined in
+ * Lobby's accent (board.css). Under every other layer; never takes a click. Kept in focus mode for the editing
+ * outline only (a presenter may still type).
  */
 function CanvasOutlines({ canvas, focusMode }: { canvas: LobbyCanvas; focusMode: boolean }) {
   const hover = useValue('lobby-hover-outline', () => (focusMode ? null : hoverOutline(canvas)), [
     canvas,
     focusMode,
   ])
-  if (!hover) return null
+  const editing = useValue('lobby-editing-outline', () => editingOutline(canvas), [canvas])
+  if (!hover && !editing) return null
   return (
     <div className="lobby-outlines" aria-hidden="true">
-      <Outline box={hover} kind="hover" />
+      {hover && hover.id !== editing?.id ? <Outline box={hover} kind="hover" /> : null}
+      {editing ? <Outline box={editing} kind="editing" /> : null}
     </div>
   )
 }
 
-function Outline({ box, kind }: { box: OutlineBox; kind: 'hover' }) {
+function Outline({ box, kind }: { box: OutlineBox; kind: 'hover' | 'editing' }) {
   return (
     <div
       className={`lobby-outline lobby-outline--${kind}`}

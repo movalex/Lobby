@@ -2,6 +2,7 @@
 //  - CR-3A-7: with the note or text tool picked, the style panel sets the next note's or text's style;
 //  - W5-38: one accent (the engine's selection colour is Lobby's), a hover outline, a selected frame's box clear
 //    of its name;
+//  - W5-55: a note being typed into is outlined;
 //
 //   E2E_PORT_BASE=<base> pnpm --filter @draftroom/e2e exec playwright test excalidraw/canvas-look.spec.ts
 import type { Page } from '@playwright/test'
@@ -18,6 +19,8 @@ import {
   selectNone,
   setTool,
   setViewport,
+  startTextEditing,
+  stopTextEditing,
   TEXT_EDITOR,
   test,
   tool,
@@ -205,4 +208,29 @@ test('W5-38: the engine’s selection is drawn in Lobby’s accent, the element 
     const top = (await sceneToScreen(a.page, { x: 600, y: 160 })).y
     expect(nb.y + nb.height).toBeLessThanOrEqual(top - 5)
   })
+})
+
+test('W5-55: a note being typed into is outlined in the accent; the outline goes when the editor closes', async ({
+  canvasSession,
+}) => {
+  const a = await canvasSession('alice')
+  await waitForCanvasUx(a.page)
+  const note = await settled(a.page, createNote(a.page, { x: 100, y: 100, text: 'Edit me' }))
+  await setViewport(a.page, { x: 0, y: 0, zoom: 1 })
+  await setTool(a.page, 'select')
+  const outline = a.page.locator(`[data-testid="editing-outline"][data-id="${note}"]`)
+  await expect(outline).toHaveCount(0)
+  await startTextEditing(a.page, note)
+  await expect(outline).toBeVisible()
+  const [box, c] = [await outline.boundingBox(), await itemCenterOnScreen(a.page, note)]
+  if (!box) throw new Error('no outline box')
+  expect(c.x).toBeGreaterThan(box.x)
+  expect(c.x).toBeLessThan(box.x + box.width)
+  expect(c.y).toBeGreaterThan(box.y)
+  expect(c.y).toBeLessThan(box.y + box.height)
+  expect(await outline.evaluate((el) => getComputedStyle(el).borderTopColor)).toBe(
+    await resolved(a.page, 'var(--dr-focus)'),
+  )
+  await stopTextEditing(a.page)
+  await expect(a.page.getByTestId('editing-outline')).toHaveCount(0)
 })

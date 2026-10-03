@@ -43,8 +43,8 @@
   --color-selection: var(--dr-focus, #2563eb);
 }
 
-/* W5-38 (outlines.ts, chrome.tsx CanvasOutlines): the element under the pointer, in the same accent as the
-   engine's selection box, as far outside the element */
+/* W5-38 and W5-55 (outlines.ts, chrome.tsx CanvasOutlines): the element under the pointer, and the note, shape or
+   text this tab is typing into, in the same accent as the engine's selection box, as far outside the element */
 .lobby-outlines {
   position: absolute;
   inset: 0;
@@ -58,6 +58,10 @@
 }
 .lobby-outline--hover {
   border: 1.5px solid var(--dr-focus, #2563eb);
+}
+.lobby-outline--editing {
+  border: 2px solid var(--dr-focus, #2563eb);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--dr-focus, #2563eb) 22%, transparent);
 }
 
 /* a layer that takes clicks lets its own top-level elements take them; the layer itself never does */

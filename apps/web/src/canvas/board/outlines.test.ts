@@ -1,7 +1,7 @@
-// W5-38 (./outlines.ts): the hover outline the board page draws.
+// W5-38 and W5-55 (./outlines.ts): the hover outline and the editing outline the board page draws.
 import { describe, expect, it } from 'vitest'
 import type { CanvasGesture } from '../api/lobby-canvas.ts'
-import { hoverOutline, OUTLINE_PAD, type OutlineCanvas } from './outlines.ts'
+import { editingOutline, hoverOutline, OUTLINE_PAD, type OutlineCanvas } from './outlines.ts'
 
 type El = { id: string; type: string; x: number; y: number; width: number; height: number } & Record<
   string,
@@ -18,6 +18,7 @@ function canvasWith(
     tool: 'select',
     hovered: null as string | null,
     selection: [] as string[],
+    editing: null as string | null,
     zoom: 2,
     ...state,
   }
@@ -35,6 +36,7 @@ function canvasWith(
     gesture: () => s.gesture,
     hovered: () => s.hovered,
     tool: () => s.tool,
+    editingId: () => s.editing,
     isLocked: (id: string) => !!byId.get(id)?.locked,
     isHidden: (id: string) => !!byId.get(id)?.hidden,
   } as unknown as OutlineCanvas
@@ -99,5 +101,32 @@ describe('the hover outline (W5-38)', () => {
     expect(hoverOutline(canvas)?.angle).toBe(0.5)
     s.hovered = 'a'
     expect(hoverOutline(canvas)?.angle).toBe(0)
+  })
+})
+
+describe('the editing outline (W5-55)', () => {
+  it('outlines the note this tab is typing into, and nothing when no editor is open', () => {
+    const { canvas, s } = canvasWith([note()], {})
+    expect(editingOutline(canvas)).toBeNull()
+    s.editing = 'n'
+    s.gesture = 'editing-text'
+    expect(editingOutline(canvas)?.id).toBe('n')
+    // the hover outline steps aside while typing
+    s.hovered = 'n'
+    expect(hoverOutline(canvas)).toBeNull()
+  })
+
+  it('a free text too, but not a fixed-width one (the engine draws its own dashed box for it)', () => {
+    const { canvas, s } = canvasWith(
+      [
+        { id: 't', type: 'text', x: 0, y: 0, width: 80, height: 20, autoResize: true },
+        { id: 'w', type: 'text', x: 0, y: 0, width: 80, height: 20, autoResize: false },
+      ],
+      {},
+    )
+    s.editing = 't'
+    expect(editingOutline(canvas)?.id).toBe('t')
+    s.editing = 'w'
+    expect(editingOutline(canvas)).toBeNull()
   })
 })
