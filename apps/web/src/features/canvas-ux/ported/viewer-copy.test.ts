@@ -74,6 +74,25 @@ describe('exportAllowedOnBoard (what the input layer asks before it lets a copy 
     expect(exportAllowedOnBoard(board, 'commenter', false)).toBe(true)
   })
 
+  it('CR-3A-4: before the first policy answer a name-only guest cannot copy (the session’s word or the gate’s); an account can', () => {
+    const board = 'viewer-copy-policy-loading'
+    const g = exportGate(board)
+    expect(g.policy.get()).toBeNull()
+    expect(exportAllowedOnBoard(board, 'editor', true)).toBe(false)
+    expect(exportAllowedOnBoard(board, 'commenter', true)).toBe(false)
+    expect(exportAllowedOnBoard(board, 'editor', false)).toBe(true)
+    g.guest.set(true) // the gate learns it from the session's user kind
+    expect(exportAllowedOnBoard(board, 'editor', false)).toBe(false)
+    g.guest.set(false)
+    expect(exportAllowedOnBoard(board, 'editor', false)).toBe(true)
+    // the answer arrives: guests follow the policy like everyone
+    g.guest.set(true)
+    g.policy.set('everyone-including-guests')
+    expect(exportAllowedOnBoard(board, 'editor', true)).toBe(true)
+    g.policy.set('everyone')
+    expect(exportAllowedOnBoard(board, 'editor', true)).toBe(false)
+  })
+
   it('no role: allowed until known (the first answer decides)', () => {
     expect(exportAllowedOnBoard('viewer-copy-no-role', null, false)).toBe(true)
   })

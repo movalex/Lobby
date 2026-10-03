@@ -98,6 +98,18 @@ describe('export gate', () => {
     expect(exportAllowedWith('editor', 'everyone', true)).toBe(false)
     expect(exportAllowedWith('editor', 'everyone-including-guests', true)).toBe(true)
   })
+  it('CR-3A-4: while the policy is still loading a known name-only guest fails closed; accounts and unknown kinds are allowed', () => {
+    expect(exportAllowedWith('editor', null, true)).toBe(false)
+    expect(exportAllowedWith('commenter', null, true)).toBe(false)
+    expect(exportAllowedWith(null, null, true)).toBe(false)
+    expect(exportAllowedWith('editor', null, false)).toBe(true)
+    expect(exportAllowedWith('viewer', null, false)).toBe(true)
+    expect(exportAllowedWith('viewer', null, null)).toBe(true)
+    expect(exportAllowedWith(null, null, null)).toBe(true)
+    // the first answer decides, for the guest too
+    expect(exportAllowedWith('editor', 'everyone-including-guests', true)).toBe(true)
+    expect(exportAllowedWith('editor', 'everyone', true)).toBe(false)
+  })
   it('stops a copy of the selection only, never text in a field', () => {
     const base = { allowed: false, onBoard: true, editing: false, selected: 1, inEditable: false }
     expect(blocksNativeCopy(base)).toBe(true)

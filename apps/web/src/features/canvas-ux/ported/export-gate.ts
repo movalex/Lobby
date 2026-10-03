@@ -8,7 +8,9 @@
 // The policy is read here, engine-neutral, the same way the sharing feature's store reads it on the tldraw
 // page (features/sharing/export-policy.ts: the first answer of GET /api/boards/:bid/export-policy, every
 // `export-control.policy` event, a refetch after each event-stream reconnect), into a signal. Until the
-// first answer it counts as 'everyone', so boards that never limit anyone do not flash disabled entries.
+// first answer it counts as 'everyone' for accounts, so boards that never limit anyone do not flash
+// disabled entries; a name-only guest the gate KNOWS about fails closed instead (they are limited under
+// 'everyone' too), so they cannot copy in the moment before the policy has loaded (CR-3A-4).
 // The ported sharing feature (3e) may later own one store for both; this one is canvas-ux's until then.
 import {
   EXPORT_CONTROL_EVENTS,
@@ -49,21 +51,27 @@ export function exportGate(boardId: string): ExportGate {
   return g
 }
 
-/** The rule (pure): unknown role or policy = allowed, unknown kind = not a name-only guest. */
+/**
+ * The rule (pure): unknown role = allowed, unknown kind = not a name-only guest, and an unknown policy
+ * (still loading) = allowed for an account but not for a KNOWN name-only guest (`guest === true`): the
+ * policy may well limit them, and only 'everyone-including-guests' lets them through.
+ */
 export function exportAllowedWith(
   role: BoardRole | null,
   policy: ExportPolicy | null,
   guest: boolean | null,
 ) {
-  if (role === null || policy === null) return true
+  if (policy === null) return guest !== true
+  if (role === null) return true
   return exportAllowedFor(role, policy, { nameOnlyGuest: guest === true })
 }
 
 /**
  * For code that has no feature context (the board session's input layer lets a viewer's Ctrl/Cmd+C through
  * only where this says so: CR-3A-4): the same rule as `exportAllowed`, read from this board's gate. The
- * session's own knowledge that this is a name-only guest (its welcome says so) joins the gate's, so a
- * guest is never let through before the first policy answer names them.
+ * session's own knowledge that this is a name-only guest (its welcome says so) joins the gate's, and a
+ * known guest is not let through before the first policy answer (`exportAllowedWith`); an account is, as
+ * the menus are.
  */
 export function exportAllowedOnBoard(
   boardId: string,
