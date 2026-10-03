@@ -133,14 +133,17 @@ export function installDerivativeSwap(opts: DerivativeSwapOptions): DerivativeSw
     const cropping = (appState as { croppingElementId?: string | null }).croppingElementId ?? null
     const byId = new Map<string, SceneImage>()
     const onThumb = new Set<string>()
+    const thumbOnly: SceneImage[] = []
     for (const e of elements) {
       if (e.type !== 'image' || e.isDeleted) continue
       byId.set(e.id, e)
-      if (staysOnThumb(e, cropping)) onThumb.add(e.id)
+      if (!staysOnThumb(e, cropping)) continue
+      onThumb.add(e.id)
+      thumbOnly.push(e)
     }
     // 0. cropped images and the one in the crop editor (CR-W5-3G-2): back on their thumb, upgrade
     // forgotten. Needs no loader: the thumb is what every tab loads first
-    const switches = toThumbSwitches(elements, onThumb)
+    const switches = toThumbSwitches(thumbOnly, onThumb)
     for (const id of onThumb) {
       forget(id)
       unpend(id)
