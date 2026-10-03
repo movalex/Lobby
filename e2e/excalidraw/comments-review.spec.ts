@@ -338,7 +338,11 @@ test('PRI-09a: an access request reaches the owner’s bell live, with the role 
     .poll(async () => Number(await bell(a.page).getAttribute('data-unread')), { timeout: 5_000 })
     .toBe(1)
   await bell(a.page).click()
-  const entry = a.page.locator('[data-testid="notification-item"][data-kind="access_request"]')
+  // Unread only: the inbox keeps answered requests ("approved"), and an earlier test in the same worker may have
+  // left alice one (comments-notify.spec.ts PRI-09b approves bob's request); the inbox was marked read above.
+  const entry = a.page.locator(
+    '[data-testid="notification-item"][data-kind="access_request"][data-unread="true"]',
+  )
   await expect(entry).toHaveCount(1)
   await expect(entry.getByTestId('notification-request')).toContainText('Wants to edit')
   await expect(entry.getByTestId('notification-request')).toContainText('I need to add the storyboard notes')
