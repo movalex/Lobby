@@ -699,7 +699,7 @@ async function pinPoint(page: Page, p: { x: number; y: number }, at: { x: number
   await setViewport(page, { x: p.x - (at.x - box.x) / z, y: p.y - (at.y - box.y) / z, zoom: z })
 }
 
-test('vote results: badges shrink and group when zoomed out, stay under the workshop popover, and read well', async ({
+test('vote results: badges shrink (to a minimum size) and group when zoomed out, stay under the workshop popover, and read well', async ({
   join,
   board,
 }, testInfo) => {
@@ -800,7 +800,11 @@ test('vote results: badges shrink and group when zoomed out, stay under the work
     const boxes = await a
       .locator('.dr-wk-badge')
       .evaluateAll((els) => els.map((e) => e.getBoundingClientRect().toJSON() as DOMRect))
-    for (const r of boxes) expect(r.height).toBeLessThanOrEqual(28 * 0.6 + 1)
+    // R2-10 (wave C3): a badge shrinks with the zoom but keeps its figure at about 11 px (85 % of full size)
+    for (const r of boxes) {
+      expect(r.height).toBeLessThanOrEqual(28 + 1)
+      expect(r.height).toBeGreaterThanOrEqual(28 * 0.85 - 1)
+    }
     const overlap = (p: DOMRect, q: DOMRect) =>
       p.x < q.x + q.width && q.x < p.x + p.width && p.y < q.y + q.height && q.y < p.y + p.height
     for (let i = 0; i < boxes.length; i++)
