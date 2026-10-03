@@ -230,7 +230,8 @@ describe('CanvasPort.select (W5-39, CR 3b-11)', () => {
 
 // ---- CR-3A-7: the next note's colour and the next text's style -------------------------------------------
 
-const { nextNoteFill, nextStylePatch, nextStyles, LOBBY_NOTE_FILL } = await import('./board/handles.ts')
+const { nextStylePatch, nextStyles } = await import('./board/handles.ts')
+const { nextNoteFill, LOBBY_NOTE_FILL } = await import('./tools/notes.ts')
 
 describe('the next note and the next text (CR-3A-7)', () => {
   const noteOf = (els: El[], id: string) => els.find((e) => e.id === id)

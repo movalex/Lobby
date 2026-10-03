@@ -8,7 +8,7 @@
  *
  * Browser only.
  */
-import { DEFAULT_STICKY_NOTE_BG, randomId } from '@excalidraw/common'
+import { randomId } from '@excalidraw/common'
 import type { ExcalidrawImperativeAPI } from '@excalidraw/excalidraw/types'
 import type { BoardConcern, BoardEvent, BoardHandles } from '../api/impl.ts'
 import type {
@@ -29,6 +29,7 @@ import type { CanvasInput } from '../input/CanvasInput.ts'
 import type { LeaseClient } from '../lease/client.ts'
 import type { RenderOverrides } from '../overrides.ts'
 import type { LobbyCanvasPort } from '../port-impl.ts'
+import { nextNoteFill } from '../tools/notes.ts'
 import { joinInto, joinMark } from './history-join.ts'
 import { hitTest } from './hit.ts'
 import type { BoardInput } from './input.ts'
@@ -78,22 +79,6 @@ const ARROW_TYPE_OF: Readonly<Record<ArrowKind, 'sharp' | 'round' | 'elbow'>> = 
   straight: 'sharp',
   curved: 'round',
   elbow: 'elbow',
-}
-
-/** Lobby's default note fill (the note palette's first colour). */
-export const LOBBY_NOTE_FILL = '#f8e48f'
-
-/**
- * CR-3A-7: the fill the next note gets when its creator names none (canvas/port-impl.ts `create`): the
- * engine's next sticky-note fill (`currentItemStickynoteBackgroundColor`, which the style panel sets through
- * `styles.setNext({ noteColor })` while the note tool is picked), or Lobby's default while the engine still
- * has its own default there (a colour Lobby's note palette never offers) or nothing.
- */
-export function nextNoteFill(s: { readonly currentItemStickynoteBackgroundColor?: string | null }): string {
-  const c = s.currentItemStickynoteBackgroundColor
-  return typeof c === 'string' && c && c.toLowerCase() !== DEFAULT_STICKY_NOTE_BG.toLowerCase()
-    ? c
-    : LOBBY_NOTE_FILL
 }
 
 /** The connector kind of an engine arrow type (anything but 'round' and 'elbow' is straight). */

@@ -22,7 +22,6 @@ import type { ExcalidrawElement, NonDeletedExcalidrawElement } from '@excalidraw
 import type { AppState, ExcalidrawImperativeAPI } from '@excalidraw/excalidraw/types'
 import { generateKeyBetween } from '@excalidraw/fractional-indexing'
 import type { TransactOptions } from './api/lobby-canvas.ts'
-import { nextNoteFill } from './board/handles.ts'
 import type { UndoController } from './history/controller.ts'
 import type {
   Bounds,
@@ -39,7 +38,7 @@ import type { CanvasRegistries } from './registries.ts'
 import type { LobbyEngineCore } from './sync/core/engine.ts'
 import { compareIndexThenId } from './sync/index-keys.ts'
 import type { SaveStatus } from './sync/types.ts'
-import { buildNote } from './tools/notes.ts'
+import { buildNote, nextNoteFill } from './tools/notes.ts'
 import { activeLobbyTool, CUSTOM_TOOLS, setTool as setLobbyTool } from './tools/tools.ts'
 
 // biome-ignore lint/suspicious/noExplicitAny: the element package's constructors, typed loosely here

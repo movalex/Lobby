@@ -11,11 +11,32 @@
 //    (`Object.assign(element, { id: randomId(), created })`, :24527-24528);
 //  - `stampNoteDuplicates` (onDuplicate) sets `created: null` on duplicated notes. Excalidraw merges the
 //    returned object into the duplicate (reconcileDuplicatedElements, :18139-18163).
+//
+// The next note's fill (CR-3A-7, `nextNoteFill`) lives here too, so the port (canvas/port-impl.ts) and the
+// board's handles (canvas/board/handles.ts `nextStyles`) read it without the port importing the handles.
+
+import { DEFAULT_STICKY_NOTE_BG } from '@excalidraw/common'
 
 /** Lobby's note size (§2.11: baseHeight = the note size, 200 px). */
 export const LOBBY_NOTE_SIZE = 200
 /** Lobby yellow, the default of the 13-colour palette (plan §2.3.2 names it but not its value). */
 export const LOBBY_NOTE_YELLOW = '#ffd966'
+
+/** Lobby's default note fill (the note palette's first colour). */
+export const LOBBY_NOTE_FILL = '#f8e48f'
+
+/**
+ * CR-3A-7: the fill the next note gets when its creator names none (canvas/port-impl.ts `create`): the
+ * engine's next sticky-note fill (`currentItemStickynoteBackgroundColor`, which the style panel sets through
+ * `styles.setNext({ noteColor })` while the note tool is picked), or Lobby's default while the engine still
+ * has its own default there (a colour Lobby's note palette never offers) or nothing.
+ */
+export function nextNoteFill(s: { readonly currentItemStickynoteBackgroundColor?: string | null }): string {
+  const c = s.currentItemStickynoteBackgroundColor
+  return typeof c === 'string' && c && c.toLowerCase() !== DEFAULT_STICKY_NOTE_BG.toLowerCase()
+    ? c
+    : LOBBY_NOTE_FILL
+}
 
 export interface NoteOptions {
   id: string
