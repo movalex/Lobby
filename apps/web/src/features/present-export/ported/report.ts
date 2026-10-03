@@ -432,7 +432,8 @@ interface Row {
 /**
  * Lays blocks out on pages of `width` x `height` px: rows flow from the top margin down, items keep their
  * title with its first line of text, and a page that is full starts the next (at most `maxPages`; what did not
- * fit is counted in `notShown`, items counted by block).
+ * fit is counted in `notShown`, items counted by block: an item is shown only if its last row is, so one that
+ * runs over the cut counts as not shown).
  */
 export function layoutReport(
   blocks: readonly ReportBlock[],
@@ -510,14 +511,14 @@ export function layoutReport(
   const pages: ReportPage[] = []
   let lines: ReportLine[] = []
   let y = margin
-  let lastBlockDrawn = -1
-  let stopped = false
+  // the block of the first row that did not fit when the page limit stopped the layout (-1: none stopped it)
+  let cutAtBlock = -1
   const flush = () => {
     if (lines.length) pages.push({ width: size.width, height: size.height, lines })
     lines = []
     y = margin
   }
-  for (let i = 0; i < rows.length && !stopped; i++) {
+  for (let i = 0; i < rows.length && cutAtBlock < 0; i++) {
     const r = rows[i] as Row
     const next = rows[i + 1]
     // a row that must stay with the next one needs room for both
@@ -526,7 +527,7 @@ export function layoutReport(
     if (lines.length > 0 && y + gap + need > bottom) {
       flush()
       if (pages.length >= maxPages) {
-        stopped = true
+        cutAtBlock = r.block
         break
       }
     }
@@ -554,9 +555,8 @@ export function layoutReport(
         h: r.h,
       })
     y = top + r.h
-    lastBlockDrawn = r.block
   }
-  if (!stopped) flush()
-  const notShown = stopped ? blocks.slice(lastBlockDrawn + 1).filter((b) => b.kind === 'item').length : 0
+  if (cutAtBlock < 0) flush()
+  const notShown = cutAtBlock >= 0 ? blocks.slice(cutAtBlock).filter((b) => b.kind === 'item').length : 0
   return { pages, notShown }
 }

@@ -310,10 +310,15 @@ export function ExportDialog({
     [canvas],
   )
   const voteResults = exportResults(canvas)
+  // the page lists what is still on the board: every item that got votes may have been deleted since the reveal
+  const resultRowCount = useValue('lobby-export-result-rows', () => {
+    const results = exportResults(canvas)
+    return results ? resultRows(results, (id) => describeElement(canvas, id)).rows.length : 0
+  }, [canvas])
   const teamIncluded = withTeamComments && onTheTeam
   const commentCounts = countReportThreads(commentThreads, teamIncluded)
   const commentsAvailable = commentsStatus === 'ready' && commentCounts.open + commentCounts.resolved > 0
-  const resultsAvailable = voteResults !== null
+  const resultsAvailable = resultRowCount > 0
   const addResults = withResults && resultsAvailable
   const addComments = withComments && commentsAvailable
   const extraPages = [addResults ? 'a vote results page' : null, addComments ? 'a comments appendix' : null]
@@ -331,6 +336,10 @@ export function ExportDialog({
           'The vote results are not shown on this board any more, so there is no results page to add. Untick it, or show the results again.',
         )
       const { rows, missing } = resultRows(results, (id) => describeElement(canvas, id))
+      if (rows.length === 0)
+        throw new ExportProblem(
+          'The items that got votes are no longer on the board, so there is no results page to add. Untick it.',
+        )
       const made = reportPdfPages('Vote results', resultsBlocks(rows, missing), prefs.pdfFormat)
       specs.push(...made.specs)
       notShown += made.notShown
@@ -686,7 +695,9 @@ export function ExportDialog({
             </label>
             {!resultsAvailable && (
               <p className="dr-pe-hint" data-testid="export-pdf-results-hint">
-                Nothing to add yet: reveal a vote and show its results on the board first.
+                {voteResults
+                  ? 'The items that got votes are no longer on the board, so there is nothing to list.'
+                  : 'Nothing to add yet: reveal a vote and show its results on the board first.'}
               </p>
             )}
             <label className="dr-pe-choice">

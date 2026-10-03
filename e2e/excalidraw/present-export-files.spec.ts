@@ -17,6 +17,7 @@ import {
   canvasCall,
   clickItem,
   createItem,
+  deleteItem,
   expect,
   expectSaved,
   itemBounds,
@@ -835,6 +836,49 @@ test.describe('PDF export', () => {
       await a.page.getByTestId('export-button').click()
       await expect(withResults).not.toBeChecked()
       await expect(withComments).not.toBeChecked()
+    })
+
+    await test.step('16:9 and A4 landscape: the results and the comments pages take the same page as the frames, bookmarked', async () => {
+      await withResults.check()
+      await withComments.check()
+      const size = dialog.getByTestId('export-pdf-page-size')
+      for (const [format, want] of [
+        ['16:9', { width: 960, height: 540 }],
+        ['a4', { width: 841.89, height: 595.28 }],
+      ] as const) {
+        await size.selectOption(format)
+        const pdf = await downloadFrom(a.page, () => dialog.getByTestId('export-pdf').click())
+        const info = await readPdf(pdf.bytes)
+        expect(
+          info.outline.map((o) => o.title),
+          format,
+        ).toEqual(['Plan', 'Intro', 'Vote results', 'Comments'])
+        for (const p of info.pages) {
+          expect(p.width, format).toBeCloseTo(want.width, 1)
+          expect(p.height, format).toBeCloseTo(want.height, 1)
+        }
+        // the results page is a picture of the report with its text laid over it, as on the fit pages
+        expect(info.pages[2]?.images, format).toHaveLength(1)
+        const texts = await pdfPageTexts(pdf.bytes)
+        expect(texts[2] ?? '', format).toMatch(/#1 Kickoff agenda 3 votes/)
+        expect(texts[3] ?? '', format).toContain('Please tighten the agenda')
+      }
+      await size.selectOption('fit')
+    })
+
+    await test.step('every item that got votes is deleted since the reveal: no results page is on offer and the summary does not promise one', async () => {
+      await withResults.check()
+      await withComments.uncheck()
+      await expect(summary).toContainText('Then a vote results page')
+      for (const id of [N.intro, N.plan, 'pe-note-story']) await deleteItem(a.page, id)
+      await expect(withResults).toBeDisabled()
+      await expect(withResults).not.toBeChecked()
+      await expect(dialog.getByTestId('export-pdf-results-hint')).toContainText('no longer on the board')
+      await expect(summary).toHaveText('One page per frame, in presentation order (2 pages).')
+      // and the file has the frames only
+      const pdf = await downloadFrom(a.page, () => dialog.getByTestId('export-pdf').click())
+      const info = await readPdf(pdf.bytes)
+      expect(info.outline.map((o) => o.title)).toEqual(['Plan', 'Intro'])
     })
   })
 })

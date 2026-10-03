@@ -356,6 +356,27 @@ describe('the layout', () => {
     expect(notShown).toBeGreaterThan(0)
   })
 
+  it('counts an item that runs over the cut as not shown: its first rows are drawn, its last are not', () => {
+    // one item far taller than a page, then two more
+    const blocks: ReportBlock[] = [
+      { kind: 'item', lead: '1', title: 'Item 1', body: ['word '.repeat(2000)] },
+      ...items(3).slice(1),
+    ]
+    const { pages, notShown } = layoutReport(blocks, measure, A4, { maxPages: 1 })
+    expect(pages).toHaveLength(1)
+    // its title is on the page (the item is partly drawn)...
+    expect(pages[0]?.lines.some((l) => l.text === 'Item 1')).toBe(true)
+    // ...but it is not all there: it and the two after it are counted
+    expect(notShown).toBe(3)
+  })
+
+  it('counts nothing as not shown when the last page limit lands exactly between two items', () => {
+    const all = layoutReport(items(60), measure, A4)
+    const { pages, notShown } = layoutReport(items(60), measure, A4, { maxPages: all.pages.length })
+    expect(pages).toHaveLength(all.pages.length)
+    expect(notShown).toBe(0)
+  })
+
   it('has no page for no blocks, and gives every format its own page shape', () => {
     expect(layoutReport([], measure, A4).pages).toEqual([])
     expect(REPORT_PAGE_PX.fit.height).toBeGreaterThan(REPORT_PAGE_PX.fit.width)
