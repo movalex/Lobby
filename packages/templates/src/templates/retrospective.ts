@@ -47,6 +47,8 @@ export const retrospective: TemplateSource = {
   description: "Look back as a team: what went well, what to improve, and the actions you'll take next.",
   category: 'review',
   sections: SECTIONS,
+  // its notes are prompts and placeholders for the team, not ideas (CR-3H-2)
+  promptNotes: true,
   plan(b) {
     const totalW = COLUMNS.length * COL_W + (COLUMNS.length - 1) * COL_GAP
 

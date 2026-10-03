@@ -63,6 +63,8 @@ export const productionPlan: TemplateSource = {
   description: 'Map a production from brief to delivery, with owners, dates, deliverables and risks.',
   category: 'plan',
   sections: SECTIONS,
+  // its notes are prompts and placeholders for the team, not ideas (CR-3H-2)
+  promptNotes: true,
   plan(b) {
     const totalW = PHASES.length * COL_W + (PHASES.length - 1) * COL_GAP
 

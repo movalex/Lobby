@@ -28,6 +28,8 @@ export const storyboard: TemplateSource = {
   description: 'Plan a short film or ad beat by beat: six panels with image slots, shot notes and timings.',
   category: 'visual',
   sections: SECTIONS,
+  // its notes are prompts and placeholders for the team, not ideas (CR-3H-2)
+  promptNotes: true,
   plan(b) {
     const totalW = PANEL_COUNT * PANEL_W + (PANEL_COUNT - 1) * PANEL_GAP
 

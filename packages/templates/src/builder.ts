@@ -94,6 +94,8 @@ export interface NoteSpec {
   color: LobbyColor
   size?: LobbySize
   scale?: number
+  /** A prompt or an instruction, not an idea (default: the template's `promptNotes`; see PlanNote). */
+  prompt?: boolean
 }
 
 export interface GeoSpec {
@@ -190,6 +192,13 @@ export interface PlanNote extends NodeBase {
   readonly color: LobbyColor
   readonly size: LobbySize
   readonly scale: number
+  /**
+   * The template's own prompt or instruction ("What went well?"), not an idea: the emitters mark it
+   * (`lobby.prompt`, tldraw's `draftroomPrompt`), so Group into themes leaves it where it is (R9,
+   * CR-3H-2: on the new canvas every note placed by a person reads as typed by them, so the "nobody typed
+   * it" rule no longer tells a template's notes from the team's)
+   */
+  readonly prompt: boolean
 }
 
 export interface PlanGeo extends NodeBase {
@@ -256,7 +265,7 @@ export interface BoardBuilder {
   noteGrid(
     parent: PlanFrame,
     spec: { x: number; y: number; cols: number; gap?: number; gapY?: number; scale?: number },
-    notes: ReadonlyArray<{ text: string; color: LobbyColor }>,
+    notes: ReadonlyArray<{ text: string; color: LobbyColor; prompt?: boolean }>,
   ): PlanNote[]
   /** An arrow bound at both ends (arrow -> shape bindings). */
   arrow(from: PlanShape, to: PlanShape, spec?: ArrowSpec): PlanArrow
@@ -270,11 +279,16 @@ export const INTRO_Y = 92
 /** Where section content starts below the heading and a (max three-line) intro. */
 export const CONTENT_Y = 190
 
+export interface BoardBuilderOptions {
+  /** Every note is a prompt or an instruction unless its spec says otherwise (PlanNote `prompt`). */
+  promptNotes?: boolean
+}
+
 /**
  * A builder at page-space `origin` (the template's top-left corner). The geometry is computed here, once,
  * exactly as the tldraw builder always did (so the tldraw records are unchanged), and both emitters read it.
  */
-export function createBoardBuilder(origin: TemplatePoint): BoardBuilder {
+export function createBoardBuilder(origin: TemplatePoint, opts: BoardBuilderOptions = {}): BoardBuilder {
   const nodes: PlanNode[] = []
   let finished = false
 
@@ -385,6 +399,7 @@ export function createBoardBuilder(origin: TemplatePoint): BoardBuilder {
         color: spec.color,
         size: spec.size ?? 's',
         scale,
+        prompt: spec.prompt ?? opts.promptNotes ?? false,
       })
     },
 
@@ -458,6 +473,7 @@ export function createBoardBuilder(origin: TemplatePoint): BoardBuilder {
           text: n.text,
           color: n.color,
           scale,
+          ...(n.prompt !== undefined ? { prompt: n.prompt } : {}),
         }),
       )
     },

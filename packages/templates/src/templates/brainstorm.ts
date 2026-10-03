@@ -63,6 +63,8 @@ export const brainstorm: TemplateSource = {
   description: 'Gather ideas around one central question, cluster them into themes and shortlist the best.',
   category: 'ideate',
   sections: SECTIONS,
+  // its notes are prompts and placeholders for the team, not ideas (CR-3H-2)
+  promptNotes: true,
   plan(b) {
     const map = b.section({
       x: 0,
