@@ -2,8 +2,9 @@
  * The Excalidraw board page's chrome around the canvas (docs/EXCALIDRAW-CONTRACTS.md §3): the dock
  * (`panels`), the top bar's feature items (`topBar`), the overlay root (`featureOverlays` in scene and
  * screen layers, C0 `overlays`, remote cursors through `cursorVisible`, "X is typing" badges), the host
- * slots, and the lease banner and pending affordance. Focus mode (`settings.focusMode`, present mode)
- * hides the dock, the top bar, the host slots and every overlay layer that does not say `show`.
+ * slots, other people's selections in their colours (W5-28), and the lease banner and pending affordance.
+ * Focus mode (`settings.focusMode`, present mode) hides the dock, the top bar, the host slots, the
+ * remote selections and every overlay layer that does not say `show`.
  *
  * Every feature component is rendered inside `CanvasFeatureContextProvider` and gets the context.
  */
@@ -15,6 +16,7 @@ import { initialsFor, safeColor } from '../../lib/identity.ts'
 import { can } from '../../lib/permissions.ts'
 import { useValue } from '../../lib/signals.ts'
 import type { CanvasFeatureContext } from '../api/feature.ts'
+import { union } from '../api/geometry.ts'
 import { currentPlatform, formatChord } from '../api/keys.ts'
 import type { LobbyCanvas } from '../api/lobby-canvas.ts'
 import type { FeatureOverlaySpec, FeatureRegistries, HostSlotName } from '../api/registries.ts'
@@ -220,6 +222,7 @@ export function OverlayRoot({
           ))}
         {port && !focusMode ? c0.map((l) => <l.component key={l.id} port={port} />) : null}
         <DragArrows canvas={ctx.canvas} session={session} />
+        <RemoteSelections canvas={ctx.canvas} registries={r} session={session} focusMode={focusMode} />
         <Cursors canvas={ctx.canvas} registries={r} />
       </div>
       <div data-lobby-layer="screen" style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
@@ -277,6 +280,125 @@ function DragArrows({ canvas, session }: { canvas: LobbyCanvas; session: LobbyBo
         )
       })}
     </svg>
+  )
+}
+
+/** W5-28: at most this many people's selections are drawn (the room streams at most 40 cursors anyway). */
+export const MAX_SELECTION_PEERS = 40
+/** A person's selection of more elements than this is one outline around all of them. */
+export const MAX_OUTLINES_PER_PEER = 24
+/** The ids of one person's selection that are read at all (presence carries up to 200). */
+const MAX_SELECTION_IDS = 200
+/** Screen px between an element's bounds and its outline. */
+const OUTLINE_PAD = 4
+
+interface SelectionBox {
+  readonly key: string
+  readonly sid: string
+  readonly uid: string
+  readonly name: string
+  readonly color: string
+  readonly ids: string
+  readonly x: number
+  readonly y: number
+  readonly w: number
+  readonly h: number
+  /** the first outline of a person's selection carries their name */
+  readonly label: boolean
+}
+
+/**
+ * W5-28: what other people have selected, an outline per element in the person's colour (one outline
+ * around everything for a selection of more than MAX_OUTLINES_PER_PEER), their name on the first, so two
+ * people do not grab the same note. From the streamed presence (`presence.peers()[].selection`, ids up to
+ * 200), at most MAX_SELECTION_PEERS people. Hidden with their cursor (`cursorVisible`: present mode,
+ * "hide cursors") and in focus mode; nothing while a dot vote is open (the room sends `sel: null`). An
+ * element someone drags is outlined where their drag preview shows it. Drawn only, never written.
+ */
+function RemoteSelections({
+  canvas,
+  registries,
+  session,
+  focusMode,
+}: {
+  canvas: LobbyCanvas
+  registries: FeatureRegistries
+  session: LobbyBoardSession
+  focusMode: boolean
+}) {
+  const version = useRegistries(registries)
+  const hub = session.presenceHub
+  const subscribe = useCallback((l: () => void) => hub?.subscribe(l) ?? (() => {}), [hub])
+  // a remote drag moves the outlines with its preview
+  const dragRevision = useSyncExternalStore(subscribe, () => hub?.revision ?? 0)
+  const boxes = useValue('lobby-remote-selections', (): SelectionBox[] => {
+    if (focusMode) return []
+    const zoom = canvas.viewport.get().zoom
+    const out: SelectionBox[] = []
+    let people = 0
+    for (const p of canvas.presence.peers()) {
+      if (!p.selection?.length || !registries.cursorVisible.call(p.sid)) continue
+      const rects: { x: number; y: number; width: number; height: number; id: string }[] = []
+      for (const id of p.selection.slice(0, MAX_SELECTION_IDS)) {
+        const el = canvas.get(id)
+        if (!el || el.isDeleted || canvas.isHidden(id)) continue
+        const b = canvas.bounds(id)
+        if (!b) continue
+        const off = hub?.dragOffsetOf(id)
+        rects.push(off ? { ...b, x: b.x + off.x, y: b.y + off.y, id } : { ...b, id })
+      }
+      if (!rects.length) continue
+      if (++people > MAX_SELECTION_PEERS) break
+      const color = safeColor(p.color, p.uid)
+      const draw =
+        rects.length > MAX_OUTLINES_PER_PEER
+          ? [
+              {
+                ...(union(rects) as NonNullable<ReturnType<typeof union>>),
+                id: rects.map((r) => r.id).join(' '),
+              },
+            ]
+          : rects
+      draw.forEach((r, i) => {
+        const at = canvas.sceneToOverlay({ x: r.x, y: r.y })
+        out.push({
+          key: `${p.sid}:${i}`,
+          sid: p.sid,
+          uid: p.uid,
+          name: p.name,
+          color,
+          ids: r.id,
+          x: Math.round(at.x - OUTLINE_PAD),
+          y: Math.round(at.y - OUTLINE_PAD),
+          w: Math.round(r.width * zoom + 2 * OUTLINE_PAD),
+          h: Math.round(r.height * zoom + 2 * OUTLINE_PAD),
+          label: i === 0,
+        })
+      })
+    }
+    return out
+  }, [canvas, registries, version, hub, focusMode, dragRevision])
+  if (!boxes.length) return null
+  return (
+    <div className="lobby-remote-selections" data-testid="remote-selections" aria-hidden="true">
+      {boxes.map((b) => (
+        <div
+          key={b.key}
+          className="lobby-remote-selection"
+          data-testid="remote-selection"
+          data-sid={b.sid}
+          data-uid={b.uid}
+          data-ids={b.ids}
+          style={{ left: b.x, top: b.y, width: b.w, height: b.h, borderColor: b.color }}
+        >
+          {b.label ? (
+            <span className="lobby-remote-selection__name" style={{ background: b.color }}>
+              {b.name}
+            </span>
+          ) : null}
+        </div>
+      ))}
+    </div>
   )
 }
 

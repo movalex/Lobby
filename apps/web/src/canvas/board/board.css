@@ -48,6 +48,35 @@
   white-space: nowrap;
 }
 
+/* W5-28: other people's selections (chrome.tsx RemoteSelections), an outline in the person's colour with
+   their name on the first one; under the cursors, never taking a click */
+.lobby-remote-selections {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.lobby-remote-selection {
+  position: absolute;
+  box-sizing: border-box;
+  border: 2px solid;
+  border-radius: 4px;
+  pointer-events: none;
+}
+.lobby-remote-selection__name {
+  position: absolute;
+  left: -2px;
+  bottom: 100%;
+  max-width: 120px;
+  margin-bottom: 2px;
+  padding: 0 5px;
+  border-radius: 3px;
+  color: #fff;
+  font: 11px / 1.5 var(--dr-font, system-ui, sans-serif);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* at most 120 px, the end cut with an ellipsis (tldraw's .tl-nametag): a guest's label is shortened in front
    of its "(guest)" marker by the api (contracts guestLabelName), so the cut never reaches the marker */
 .lobby-cursor__name {

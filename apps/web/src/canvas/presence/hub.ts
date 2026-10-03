@@ -94,7 +94,12 @@ export interface PresenceViewRect {
 export class PresenceHub {
   private readonly o: PresenceHubOptions
   private readonly peersBySid = new Map<string, PeerPresence>()
-  private readonly remoteDrags = new Map<string, { d: number; ids: readonly string[] }>()
+  private readonly remoteDrags = new Map<
+    string,
+    { d: number; ids: readonly string[]; dx: number; dy: number }
+  >()
+  /** ids of a remote drag whose committed positions arrived before its end (their offset is done) */
+  private readonly settled = new Set<string>()
   /** per dragging peer: copies of the bound arrows its drag re-routes (D1; drawn, never written) */
   private readonly arrowCopies = new Map<string, SceneElement[]>()
   private readonly listeners = new Set<() => void>()
@@ -151,7 +156,11 @@ export class PresenceHub {
           const dragged = new Set<string>()
           for (const d of this.remoteDrags.values()) for (const id of d.ids) dragged.add(id)
           const done = e.ids.filter((id) => dragged.has(id))
-          if (done.length) this.o.overrides?.clearDragFor(done)
+          if (done.length) {
+            this.o.overrides?.clearDragFor(done)
+            for (const id of done) this.settled.add(id)
+            this.changed()
+          }
           // a re-routed arrow's committed (re-snapped) copy arrived: its drawn copy goes
           const applied = new Set(e.ids)
           for (const [sid, copies] of this.arrowCopies) {
@@ -217,6 +226,16 @@ export class PresenceHub {
     return this.roomRev >= PRESENCE_FOLLOW_REV
   }
 
+  /**
+   * The offset a remote drag shows `id` at right now (scene units), or null when nobody drags it: the
+   * remote selection outlines (W5-28) follow the preview, as the elements do.
+   */
+  dragOffsetOf(id: string): { x: number; y: number } | null {
+    if (this.settled.has(id)) return null
+    for (const d of this.remoteDrags.values()) if (d.ids.includes(id)) return { x: d.dx, y: d.dy }
+    return null
+  }
+
   /** Who is dragging `id` right now (O5's "Bob is moving this"), or null. */
   draggerOf(id: string): { sid: string; name: string } | null {
     for (const [sid, d] of this.remoteDrags) {
@@ -245,10 +264,15 @@ export class PresenceHub {
         this.endRemoteDrag(d.sid)
         continue
       }
-      if (d.ids) this.remoteDrags.set(d.sid, { d: d.d, ids: d.ids })
+      if (d.ids) {
+        this.remoteDrags.set(d.sid, { d: d.d, ids: d.ids, dx: d.dx, dy: d.dy })
+        for (const id of d.ids) this.settled.delete(id)
+      }
       const known = this.remoteDrags.get(d.sid)
       // a delta for a drag whose start this client missed is ignored (it sees the move at commit)
       if (!known || known.d !== d.d) continue
+      known.dx = d.dx
+      known.dy = d.dy
       const offsets = new Map(known.ids.map((id) => [id, { x: d.dx, y: d.dy }]))
       // D1: the arrows bound to what moves follow it, drawn only (./drag-arrows.ts)
       const plan = this.planArrows(offsets)
@@ -260,7 +284,9 @@ export class PresenceHub {
   }
 
   private endRemoteDrag(sid: string): void {
-    if (!this.remoteDrags.delete(sid)) return
+    const drag = this.remoteDrags.get(sid)
+    if (!drag || !this.remoteDrags.delete(sid)) return
+    for (const id of drag.ids) this.settled.delete(id)
     this.o.overrides?.setDrag(sid, null)
     this.setArrowCopies(sid, [])
   }
