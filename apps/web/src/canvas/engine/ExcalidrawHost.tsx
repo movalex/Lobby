@@ -72,12 +72,20 @@ const UI_OPTIONS: Partial<UIOptions> = Object.freeze({
 
 /**
  * No scene: it arrives from the sync server. Only defaults for new elements: Nunito (FONT_FAMILY.Nunito
- * = 6) and roughness 0 (architect), and Lobby's canvas colour. Not frozen: the engine owns the object once
- * it is passed in.
+ * = 6), roughness 0 (architect), sharp corners and straight connectors (the engine's own are round corners
+ * and curved connectors: templates and converted boards are sharp and straight, W5-52 and W5-40), and
+ * Lobby's canvas colour. Not frozen: the engine owns the object once it is passed in.
  */
 const INITIAL_DATA: ExcalidrawInitialDataState = {
   // the canvas is tldraw's off-white, so white frames and notes stand out (W5-10; exports keep white)
-  appState: { currentItemFontFamily: 6, currentItemRoughness: 0, viewBackgroundColor: CANVAS_LIGHT },
+  appState: {
+    currentItemFontFamily: 6,
+    currentItemRoughness: 0,
+    currentItemRoundness: 'sharp',
+    // a connector's kind is the arrow type, not the roundness: 'sharp' is straight (CR-W5-3A-1)
+    currentItemArrowType: 'sharp',
+    viewBackgroundColor: CANVAS_LIGHT,
+  },
 }
 
 const neverEmbed = () => false

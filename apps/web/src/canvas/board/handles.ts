@@ -12,6 +12,7 @@ import { randomId } from '@excalidraw/common'
 import type { ExcalidrawImperativeAPI } from '@excalidraw/excalidraw/types'
 import type { BoardConcern, BoardEvent, BoardHandles } from '../api/impl.ts'
 import type {
+  ArrowKind,
   Bounds,
   CameraMove,
   CanvasGesture,
@@ -68,8 +69,23 @@ export interface HandleDeps {
 
 const excalidrawContainer = (root: HTMLElement) => root.querySelector<HTMLElement>('.excalidraw')
 
+/**
+ * A connector's kind as the engine's `currentItemArrowType` (CR-W5-3A-1, W5-40): straight is 'sharp' (no
+ * roundness), curved is 'round', and an elbow is 'elbow'. The engine reads this, not `currentItemRoundness`
+ * (which is the corners of shapes and plain lines), to make the next arrow.
+ */
+const ARROW_TYPE_OF: Readonly<Record<ArrowKind, 'sharp' | 'round' | 'elbow'>> = {
+  straight: 'sharp',
+  curved: 'round',
+  elbow: 'elbow',
+}
+
+/** The connector kind of an engine arrow type (anything but 'round' and 'elbow' is straight). */
+export const arrowKindOf = (type: string | undefined): ArrowKind =>
+  type === 'elbow' ? 'elbow' : type === 'round' ? 'curved' : 'straight'
+
 /** The engine's current-item state as Lobby's style vocabulary (the engine's field names). */
-function nextStyles(api: ExcalidrawImperativeAPI): StyleValues {
+export function nextStyles(api: ExcalidrawImperativeAPI): StyleValues {
   const s = api.getAppState()
   return {
     strokeColor: s.currentItemStrokeColor,
@@ -85,6 +101,7 @@ function nextStyles(api: ExcalidrawImperativeAPI): StyleValues {
     endArrowhead: s.currentItemEndArrowhead,
     roundness: s.currentItemRoundness === 'round' ? 'round' : 'sharp',
     elbowed: s.currentItemArrowType === 'elbow',
+    arrowKind: arrowKindOf(s.currentItemArrowType),
   }
 }
 
@@ -94,7 +111,13 @@ const STROKE_KEY_BY_WIDTH: Readonly<Record<number, 'thin' | 'medium' | 'bold'>> 
   4: 'bold',
 }
 
-function nextStylePatch(p: StyleValues): Record<string, unknown> {
+/**
+ * The engine's app-state fields for a next-style patch. A connector's kind (`arrowKind`) is its arrow type;
+ * `roundness` is the corners of the next shape or line, never the connector's. The older pair a caller may
+ * still send, `elbowed` with `roundness` and no `arrowKind`, is one connector pick: elbow, curved (round)
+ * or straight, and leaves the corners alone.
+ */
+export function nextStylePatch(p: StyleValues): Record<string, unknown> {
   const a: Record<string, unknown> = {}
   if (p.strokeColor !== undefined) a.currentItemStrokeColor = p.strokeColor
   if (p.backgroundColor !== undefined) a.currentItemBackgroundColor = p.backgroundColor
@@ -109,8 +132,11 @@ function nextStylePatch(p: StyleValues): Record<string, unknown> {
   if (p.textAlign !== undefined) a.currentItemTextAlign = p.textAlign
   if (p.startArrowhead !== undefined) a.currentItemStartArrowhead = p.startArrowhead
   if (p.endArrowhead !== undefined) a.currentItemEndArrowhead = p.endArrowhead
-  if (p.roundness !== undefined) a.currentItemRoundness = p.roundness
-  if (p.elbowed !== undefined) a.currentItemArrowType = p.elbowed ? 'elbow' : 'round'
+  if (p.arrowKind !== undefined) a.currentItemArrowType = ARROW_TYPE_OF[p.arrowKind]
+  else if (p.elbowed !== undefined)
+    a.currentItemArrowType = p.elbowed ? 'elbow' : p.roundness === 'round' ? 'round' : 'sharp'
+  if (p.roundness !== undefined && (p.arrowKind !== undefined || p.elbowed === undefined))
+    a.currentItemRoundness = p.roundness
   return a
 }
 
@@ -415,13 +441,21 @@ export function createBoardHandles(d: HandleDeps): BoardHandles & {
       next() {
         const base = nextStyles(api) as Record<string, unknown>
         for (const [k, v] of Object.entries(pendingNext)) if (base[k] === v) delete pendingNext[k]
-        return { ...base, ...pendingNext } as StyleValues
+        const out = { ...base, ...pendingNext }
+        // the connector kind just set reads back as its elbow flag too
+        if (typeof pendingNext.arrowKind === 'string') out.elbowed = pendingNext.arrowKind === 'elbow'
+        return out as StyleValues
       },
       setNext(patch) {
         const appState = nextStylePatch(patch)
         if (!Object.keys(appState).length) return
-        for (const [k, v] of Object.entries(patch))
-          if (v !== undefined && k !== 'strokeWidth') pendingNext[k] = v
+        for (const [k, v] of Object.entries(patch)) {
+          if (v === undefined || k === 'strokeWidth') continue
+          // a legacy elbowed / roundness pair is a connector pick: its roundness never reaches the engine's
+          // corners, so it must not wait there to be read back
+          if (k === 'roundness' && !('currentItemRoundness' in appState)) continue
+          pendingNext[k] = v
+        }
         api.updateScene({ appState: appState as never })
         d.changed('tool')
       },

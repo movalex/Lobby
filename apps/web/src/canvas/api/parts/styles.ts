@@ -55,6 +55,8 @@ export const FIELDS: Readonly<Record<Exclude<Field, TextField>, readonly string[
   // an existing arrow is never switched to or from elbow here: Excalidraw re-routes it when it changes
   // (actionChangeArrowType), which is not a style write. `elbowed` is a next-style value only.
   elbowed: [],
+  // the next connector's kind (CR-W5-3A-1): a next-style value only, like `elbowed`
+  arrowKind: [],
 }
 
 export const TEXT_FIELDS = ['fontFamily', 'fontSize', 'textAlign', 'verticalAlign'] as const

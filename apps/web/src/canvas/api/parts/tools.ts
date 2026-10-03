@@ -163,12 +163,6 @@ export function createToolsPart(deps: PartDeps): ToolsPart {
   // the engine's tool moved on by itself (a tool letter, Escape, a stroke that ended the tool): the modes
   // end with it. New strokes of the highlighter are stamped as they start.
   onBoardEngine(registries, ({ api }) => {
-    // W5-40: new connectors are straight, as tldraw's are (Excalidraw's own default is curved). A next-style
-    // default of the engine's app state, never a document write; CR-W5-3A-1 asks 2C's next-style mapping
-    // (canvas/board/handles.ts) to carry the connector's straight / curved kind, so the style panel's Line
-    // pick for the next connector reaches it too.
-    if (api.getAppState().currentItemArrowType === 'round')
-      api.updateScene({ appState: { currentItemArrowType: 'sharp' } })
     // W5-11: connectors this tab drew, re-ended or pasted, outlined once no gesture holds them
     const pending = new Set<string>()
     let flushing = false

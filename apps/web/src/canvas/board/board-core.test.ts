@@ -169,7 +169,7 @@ describe('PeerStore', () => {
 })
 
 describe('SettingsStore', () => {
-  it('remembers grid and snapping, never focus mode, and survives a throwing storage', () => {
+  it('remembers grid, snapping and the wheel preference, never focus mode, and survives a throwing storage', () => {
     const data = new Map<string, string>()
     const storage = {
       getItem: (k: string) => data.get(k) ?? null,
@@ -181,8 +181,13 @@ describe('SettingsStore', () => {
     a.set({ grid: true, focusMode: true })
     a.set({ grid: true })
     expect(n).toBe(1)
-    expect(JSON.parse(data.get(SETTINGS_KEY) ?? '{}')).toEqual({ grid: true, snap: false })
-    expect(new SettingsStore(storage).get()).toEqual({ grid: true, snap: false, focusMode: false })
+    expect(JSON.parse(data.get(SETTINGS_KEY) ?? '{}')).toEqual({ grid: true, snap: false, wheel: 'auto' })
+    expect(new SettingsStore(storage).get()).toEqual({
+      grid: true,
+      snap: false,
+      focusMode: false,
+      wheel: 'auto',
+    })
     const broken = {
       getItem: () => {
         throw new Error('blocked')
@@ -195,6 +200,73 @@ describe('SettingsStore', () => {
     expect(b.get().grid).toBe(false)
     b.set({ snap: true })
     expect(b.get().snap).toBe(true)
+  })
+})
+
+describe('SettingsStore: the wheel preference (W5-33, CR-W5-3A-4)', () => {
+  const memory = () => {
+    const data = new Map<string, string>()
+    return {
+      data,
+      storage: {
+        getItem: (k: string) => data.get(k) ?? null,
+        setItem: (k: string, v: string) => void data.set(k, v),
+      },
+    }
+  }
+
+  it('is auto until it is set, local, remembered, and tells its listeners once', () => {
+    const { data, storage } = memory()
+    const a = new SettingsStore(storage)
+    expect(a.get().wheel).toBe('auto')
+    let n = 0
+    a.subscribe(() => n++)
+    a.set({ wheel: 'mouse' })
+    a.set({ wheel: 'mouse' })
+    expect(n).toBe(1)
+    expect(a.get().wheel).toBe('mouse')
+    expect(JSON.parse(data.get(SETTINGS_KEY) ?? '{}').wheel).toBe('mouse')
+    // another tab or a reload reads it back
+    expect(new SettingsStore(storage).get().wheel).toBe('mouse')
+    a.set({ wheel: 'trackpad' })
+    expect(new SettingsStore(storage).get().wheel).toBe('trackpad')
+    a.set({ wheel: 'auto' })
+    expect(new SettingsStore(storage).get().wheel).toBe('auto')
+  })
+
+  it('keeps the other settings when only the wheel changes, and the wheel when they change', () => {
+    const { storage } = memory()
+    const a = new SettingsStore(storage)
+    a.set({ wheel: 'mouse', grid: true })
+    a.set({ snap: true })
+    expect(a.get()).toEqual({ grid: true, snap: true, focusMode: false, wheel: 'mouse' })
+    expect(new SettingsStore(storage).get()).toEqual({
+      grid: true,
+      snap: true,
+      focusMode: false,
+      wheel: 'mouse',
+    })
+  })
+
+  it('reads anything it does not know as auto (a hand-edited value, an older save with no wheel)', () => {
+    for (const stored of [
+      '{"grid":true,"snap":false,"wheel":"touchpad"}',
+      '{"grid":true,"snap":false,"wheel":3}',
+      '{"grid":true,"snap":false}',
+    ]) {
+      const { storage, data } = memory()
+      data.set(SETTINGS_KEY, stored)
+      expect(new SettingsStore(storage).get()).toEqual({
+        grid: true,
+        snap: false,
+        focusMode: false,
+        wheel: 'auto',
+      })
+    }
+    const { storage } = memory()
+    const a = new SettingsStore(storage)
+    a.set({ wheel: 'sideways' as never })
+    expect(a.get().wheel).toBe('auto')
   })
 })
 

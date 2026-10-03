@@ -147,6 +147,7 @@ export type CanvasInputEvent =
     } & InputModifiers)
   | ({
       readonly type: 'wheel' | 'pinch'
+      /** the pointer (a wheel) or the middle of the two fingers (a touch pinch) */
       readonly screen: ScreenPoint
       /**
        * The wheel's deltas and their unit (WheelEvent.deltaX/deltaY/deltaMode: 0 pixels, 1 lines, 2 pages;
@@ -156,9 +157,24 @@ export type CanvasInputEvent =
       readonly deltaX?: number
       readonly deltaY?: number
       readonly deltaMode?: number
+      /**
+       * CR 3b-10 (W5-19): a two-finger touch pinch (a `pinch` with no deltas). `start` is the second
+       * finger going down, `move` is a finger moving (`handled()` stops the engine's own pinch for that
+       * move: Excalidraw's clamps at 0.1), `end` is a finger lifting or a third one landing.
+       */
+      readonly touch?: TouchPinch
       handled(): void
     } & InputModifiers)
   | ({ readonly type: 'key-down'; readonly key: string; readonly code: string } & InputModifiers)
+
+/** A two-finger touch pinch as the board's input layer reads it (the `touch` of a `pinch` input event). */
+export interface TouchPinch {
+  readonly phase: 'start' | 'move' | 'end'
+  /** the distance between the fingers now over their distance when the second one went down (1 at `start`) */
+  readonly scale: number
+  /** the middle of the fingers when the second one went down */
+  readonly startScreen: ScreenPoint
+}
 
 /** Where the pointer is right now (tldraw's `inputs.*`, `getInstanceState().isHoveringCanvas`). */
 export interface PointerState extends InputModifiers {
@@ -303,9 +319,18 @@ export interface StyleValues {
   readonly verticalAlign?: string
   readonly startArrowhead?: string | null
   readonly endArrowhead?: string | null
+  /** a shape's or a plain line's corners (the engine's `currentItemRoundness`); a connector's kind is `arrowKind` */
   readonly roundness?: 'sharp' | 'round'
+  /** next-style only: a connector that is an elbow (`arrowKind: 'elbow'`); reads as `arrowKind === 'elbow'` */
   readonly elbowed?: boolean
+  /**
+   * CR-W5-3A-1 (W5-40), next-style only: the connector the next arrow tool draws, straight, curved or an
+   * elbow (the engine's `currentItemArrowType` 'sharp', 'round', 'elbow'). Picking one never touches the
+   * corners of the next rectangle (`roundness`).
+   */
+  readonly arrowKind?: ArrowKind
 }
+export type ArrowKind = 'straight' | 'curved' | 'elbow'
 /** Per field: the shared value, or 'mixed' when the selection differs. */
 export type MixedStyles = { readonly [K in keyof StyleValues]?: StyleValues[K] | 'mixed' }
 
@@ -530,15 +555,31 @@ export interface LobbyFiles {
   crop?(id: string): boolean
 }
 
+/**
+ * CR-W5-3A-4 (W5-33), tldraw's Input device preference: what a plain mouse wheel does over the canvas.
+ * `auto` tells a mouse wheel's notches (zoom) from a trackpad's two-finger scroll (pan) by the events;
+ * `mouse`: the wheel always zooms; `trackpad`: it always pans (Excalidraw's own). Ctrl/Cmd + wheel and a
+ * trackpad pinch zoom whichever is chosen, and Shift + wheel pans sideways.
+ */
+export type WheelPreference = 'auto' | 'mouse' | 'trackpad'
+export const WHEEL_PREFERENCES: readonly WheelPreference[] = ['auto', 'mouse', 'trackpad']
+
+export interface LobbySettingsValues {
+  readonly grid: boolean
+  readonly snap: boolean
+  readonly focusMode: boolean
+  readonly wheel: WheelPreference
+}
+
 export interface LobbySettings {
   /**
-   * @owner 2C · grid, snapping and focus mode (tldraw user preferences and instance state). In focus
-   * mode the board page hides its chrome (dock, top bar, host slots) and every overlay layer that does
-   * not say `focusMode: 'show'` (present mode uses it).
+   * @owner 2C · grid, snapping, focus mode and the wheel preference (tldraw user preferences and instance
+   * state). In focus mode the board page hides its chrome (dock, top bar, host slots) and every overlay
+   * layer that does not say `focusMode: 'show'` (present mode uses it).
    */
-  get(): { readonly grid: boolean; readonly snap: boolean; readonly focusMode: boolean }
+  get(): LobbySettingsValues
   /** @owner 2C · updateUserPreferences, updateInstanceState (a local preference, never synced) */
-  set(patch: Partial<{ readonly grid: boolean; readonly snap: boolean; readonly focusMode: boolean }>): void
+  set(patch: Partial<LobbySettingsValues>): void
 }
 
 export type LobbyCanvasEventMap = CanvasEventMap & {
