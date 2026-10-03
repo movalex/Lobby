@@ -37,6 +37,34 @@ describe('the people on the board', () => {
     expect(users.find((u) => u.userId === 'usr_sam')?.guest).toBe(true)
   })
 
+  it('CR-3C-1: a follower the room does not stream never outranks a streaming tab of the same person', () => {
+    // Bob has two tabs: s-bob1 streams but is idle; s-bob2 is a synthetic follower entry (past the cursor cap:
+    // no view, no point, not idle, `streaming: false`), listed after a Gather
+    const synthetic = p('s-bob2', { following: 's-me', streaming: false })
+    const streamingIdle = p('s-bob1', { idle: true, view: { x: 0, y: 0, width: 10, height: 10 } })
+    for (const peers of [
+      [streamingIdle, synthetic],
+      [synthetic, streamingIdle],
+    ]) {
+      const bob = presenceUsers(ROSTER, peers, 'usr_me').find((u) => u.userId === 'usr_bob')
+      expect(bob?.followSid, 'the streaming tab is the one to follow').toBe('s-bob1')
+      const like = presenceLikes(ROSTER, peers, 1_000_000, 'page:page', 's-me').find(
+        (l) => l.userId === 'usr_bob',
+      )
+      // the row shows the streaming tab (its view), and still counts that his other tab follows this one
+      expect(like?.screenBounds).toEqual({ x: 0, y: 0, w: 10, h: 10 })
+      expect(like?.followingUserId).toBe('user:usr_me')
+    }
+    // a live streaming tab beats it too, whichever tab the roster lists first
+    for (const peers of [
+      [synthetic, p('s-bob1')],
+      [p('s-bob1'), synthetic],
+    ])
+      expect(presenceUsers(ROSTER, peers, 'usr_me').find((u) => u.userId === 'usr_bob')?.followSid).toBe(
+        's-bob1',
+      )
+  })
+
   it('roles and "(guest)" come with the roster; who may present', () => {
     const map = rosterMap(ROSTER)
     expect(map.get('usr_ann')).toEqual({ role: 'viewer', guest: false })

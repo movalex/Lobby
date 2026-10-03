@@ -396,6 +396,12 @@ export interface RemoteCursor {
   readonly following?: string | null
   /** Their zoom (presence `view.z`, CONTRACTS_REV 10, CR-3CF-1), or null when their end does not send it. */
   readonly zoom?: number | null
+  /**
+   * `false`: the room does not stream this session. It is a follower past the cursor cap, listed so "Following
+   * you" counts it: no point, view or selection, and never the session to follow or show for a person who has
+   * a streaming one (CR-3C-1). Absent or true: its presence streams.
+   */
+  readonly streaming?: boolean
 }
 
 export interface LobbyPresence {

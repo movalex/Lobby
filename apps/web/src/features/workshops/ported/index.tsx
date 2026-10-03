@@ -23,6 +23,7 @@ import type {
 } from '../../../canvas/api/index.ts'
 import { react } from '../../../lib/signals.ts'
 import { installAudioUnlock } from '../chime.ts'
+import { followSidOf } from '../follow.ts'
 import { provideVoteResultsForExport, shownResults } from '../vote-export.ts'
 import { storeFor } from '../workshop-context.ts'
 import {
@@ -71,14 +72,10 @@ export function summonApplies(event: WorkshopSummonEvent, selfUserId: string): b
   return event.targetUserId === null || event.targetUserId === selfUserId
 }
 
-/** The session to follow for a Lobby user id: one of their tabs whose cursor streams (not idle) first. */
+/** The session to follow for a Lobby user id: one of their tabs whose cursor streams (not idle) first (./follow.ts). */
 export function followSidFor(canvas: LobbyCanvas, userId: string): string | null {
-  let best: { sid: string; idle: boolean } | null = null
-  for (const p of canvas.presence.peers()) {
-    if (p.uid !== userId) continue
-    if (!best || (best.idle && !p.idle)) best = { sid: p.sid, idle: p.idle }
-  }
-  if (best) return best.sid
+  const sid = followSidOf(canvas.presence.peers(), userId)
+  if (sid) return sid
   return canvas.collaborators().find((c) => c.uid === userId)?.sid ?? null
 }
 

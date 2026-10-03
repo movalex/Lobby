@@ -1,6 +1,7 @@
 import { isVoteEligible, rankVoteResults, type VoteShapeInfo } from '@draftroom/contracts'
 import { describe, expect, it } from 'vitest'
-import { followIdFor, isCanvasPress, summonApplies } from './follow.ts'
+import type { RemoteCursor } from '../../canvas/api/index.ts'
+import { followIdFor, followSidOf, isCanvasPress, summonApplies } from './follow.ts'
 import {
   badgeScale,
   clusterBadges,
@@ -215,6 +216,36 @@ describe('gather everyone', () => {
     ]
     expect(followIdFor(collaborators, 'usr_boss000000001')).toBe('user:usr_boss000000001')
     expect(followIdFor(collaborators, 'usr_gone000000001')).toBeNull()
+  })
+
+  it('CR-3C-1: Gather follows a streaming tab of the summoner, never a synthetic follower entry over one', () => {
+    const peer = (sid: string, uid: string, over: Partial<RemoteCursor> = {}): RemoteCursor => ({
+      sid,
+      uid,
+      name: uid,
+      color: '#123456',
+      guest: false,
+      point: null,
+      view: null,
+      selection: [],
+      idle: false,
+      editing: null,
+      ...over,
+    })
+    const boss = 'usr_boss000000001'
+    const streamingIdle = peer('boss:tab-1', boss, { idle: true, view: { x: 0, y: 0, width: 9, height: 9 } })
+    const streaming = peer('boss:tab-2', boss, { view: { x: 0, y: 0, width: 9, height: 9 } })
+    // a follower past the cursor cap: no view or point, not idle, `streaming: false`
+    const synthetic = peer('boss:tab-3', boss, { following: 'me:tab-1', streaming: false })
+    expect(followSidOf([synthetic, streamingIdle], boss)).toBe('boss:tab-1')
+    expect(followSidOf([streamingIdle, synthetic], boss)).toBe('boss:tab-1')
+    // the live tab still wins over an idle one, whatever the order
+    expect(followSidOf([streamingIdle, synthetic, streaming], boss)).toBe('boss:tab-2')
+    expect(followSidOf([streaming, streamingIdle], boss)).toBe('boss:tab-2')
+    // only the synthetic one: it is the best there is; other people's tabs and nobody are ignored
+    expect(followSidOf([synthetic, peer('x:t', 'usr_other')], boss)).toBe('boss:tab-3')
+    expect(followSidOf([peer('x:t', 'usr_other')], boss)).toBeNull()
+    expect(followSidOf([], boss)).toBeNull()
   })
 
   it('a primary press on the canvas ends following; moves and other buttons do not', () => {

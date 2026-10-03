@@ -4,6 +4,7 @@
 // found among the live collaborators first.
 
 import type { WorkshopSummonEvent } from '@draftroom/contracts'
+import type { RemoteCursor } from '../../canvas/api/index.ts'
 
 const bare = (id: string) => (id.startsWith('user:') ? id.slice('user:'.length) : id)
 
@@ -11,6 +12,21 @@ const bare = (id: string) => (id.startsWith('user:') ? id.slice('user:'.length) 
 export function summonApplies(event: WorkshopSummonEvent, selfUserId: string): boolean {
   if (event.userId === selfUserId) return false
   return event.targetUserId === null || event.targetUserId === selfUserId
+}
+
+/**
+ * The session to follow for a Lobby user id among the room's peers: a tab whose presence streams and is
+ * not idle first, then an idle streaming one, and a follower the room does not stream (`streaming: false`,
+ * past the cursor cap: no view to follow) last (CR-3C-1); ties keep the first. Null when the user has none.
+ */
+export function followSidOf(peers: readonly RemoteCursor[], userId: string): string | null {
+  const rank = (p: RemoteCursor) => (p.streaming === false ? 0 : p.idle ? 1 : 2)
+  let best: RemoteCursor | null = null
+  for (const p of peers) {
+    if (p.uid !== userId) continue
+    if (!best || rank(p) > rank(best)) best = p
+  }
+  return best ? best.sid : null
 }
 
 /** The presence user id to follow for a Draftroom user id, or null when they are not connected here. */

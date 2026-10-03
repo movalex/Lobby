@@ -12,7 +12,8 @@
  * - `presence` frames replace a peer's state; `off` removes peers past the recipient's cursor cap;
  * - `followers` (CONTRACTS_REV 10) replaces the list of sessions that follow this tab: `peers()` gives
  *   each of them (`following` = this tab), one the room does not stream (past the 40-cursor cap) as an
- *   entry with no point, view or selection, so "Following you" counts everyone a Gather made follow;
+ *   entry with no point, view or selection and `streaming: false`, so "Following you" counts everyone a
+ *   Gather made follow and a person with a streaming tab and one of these is shown by the streaming one;
  * - a `welcome` starts afresh (the server sends every peer again; the followers come again from a
  *   rev-10 room);
  * - a roster `leave` removes the peer, from both.
@@ -121,6 +122,7 @@ export class PeerStore {
           idle: false,
           editing: null,
           following: me,
+          streaming: false,
         })
       }
     out.sort((a, b) => (a.sid < b.sid ? -1 : a.sid > b.sid ? 1 : 0))

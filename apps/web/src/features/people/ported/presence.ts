@@ -22,9 +22,11 @@ export interface PresenceUser {
 /** Each person's session to follow (a person with two tabs is one person). */
 function sessionsByUser(roster: readonly RosterEntry[], peers: readonly RemoteCursor[]) {
   const peer = new Map(peers.map((p) => [p.sid, p]))
+  // a follower the room does not stream (`streaming: false`, past the cursor cap) is no better than a session
+  // with no presence at all: a person's streaming tab, idle or not, is the one the list shows and follows
   const rank = (sid: string) => {
     const p = peer.get(sid)
-    return p ? (p.idle ? 1 : 2) : 0
+    return p && p.streaming !== false ? (p.idle ? 1 : 2) : 0
   }
   const out = new Map<string, RosterEntry>()
   for (const r of roster) {

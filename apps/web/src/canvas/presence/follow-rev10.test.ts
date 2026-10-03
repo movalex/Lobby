@@ -199,6 +199,9 @@ describe('the peer store with rev-10 presence', () => {
       following: ME,
     })
     expect(store.followers()).toEqual([carol])
+    // CR-3C-1: only the entry the room does not stream says so; a streamed peer carries no flag
+    expect(store.peer(carol)?.streaming).toBe(false)
+    expect(store.peer(BOB)).not.toHaveProperty('streaming')
     // Bob starts following this tab: the room's list says so
     c.deliver({ type: 'presence', peers: [], followers: [BOB, carol] })
     expect(store.peer(BOB)?.following).toBe(ME)
