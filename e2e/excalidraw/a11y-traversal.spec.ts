@@ -14,6 +14,7 @@ import {
   test,
   typeText,
   viewport,
+  waitForItem,
   waitForTextEditor,
   zoomToFit,
 } from '../tests/support/canvas.ts'
@@ -30,8 +31,42 @@ import {
   waitForA11y,
   withCanvas,
 } from './a11y-kit.ts'
+import {
+  commentOnElement,
+  commentRow,
+  followingSid,
+  noteAt,
+  openCommentsPanel,
+  panAway,
+  pressCommentTool,
+  sessionId,
+  threadPopover,
+} from './comments-kit.ts'
 
 test.use({ viewport: { width: 1440, height: 900 } })
+
+/**
+ * Every distinct camera position the board shows, frame by frame, for the next `ms` (as "x,y,zoom"): an
+ * animated move shows many, an immediate one its start and where it lands.
+ */
+const cameraFrames = (page: import('@playwright/test').Page, ms = 700) =>
+  withCanvas(
+    page,
+    (c, span) =>
+      new Promise<string[]>((done) => {
+        const seen: string[] = []
+        const t0 = performance.now()
+        const tick = () => {
+          const v = c.viewport.get()
+          const k = `${Math.round(v.x)},${Math.round(v.y)},${v.zoom.toFixed(3)}`
+          if (seen[seen.length - 1] !== k) seen.push(k)
+          if (performance.now() - t0 < span) requestAnimationFrame(tick)
+          else done(seen)
+        }
+        tick()
+      }),
+    ms,
+  )
 
 /** A text "Agenda" on top, a frame "Retro" holding one note, and a loose note to its right. */
 async function seed(page: import('@playwright/test').Page) {
@@ -309,24 +344,7 @@ test('W5-21: with reduced motion, Alt+Arrow and F6 bring an item into view in on
   await select(a.page, [near])
   await focusCanvas(a.page)
   // every camera position the board shows, frame by frame, for the next 700 ms
-  const cameras = () =>
-    withCanvas(
-      a.page,
-      (c) =>
-        new Promise<string[]>((done) => {
-          const seen: string[] = []
-          const t0 = performance.now()
-          const tick = () => {
-            const v = c.viewport.get()
-            const k = `${Math.round(v.x)},${Math.round(v.y)},${v.zoom.toFixed(3)}`
-            if (seen[seen.length - 1] !== k) seen.push(k)
-            if (performance.now() - t0 < 700) requestAnimationFrame(tick)
-            else done(seen)
-          }
-          tick()
-        }),
-      null,
-    )
+  const cameras = () => cameraFrames(a.page)
   const sampled = cameras()
   await a.page.keyboard.press('Alt+ArrowRight')
   const seen = await sampled
@@ -347,6 +365,58 @@ test('W5-21: with reduced motion, Alt+Arrow and F6 bring an item into view in on
   expect(await selected(a.page)).toEqual([near])
   expect(seen2.length, seen2.join(' → ')).toBeLessThanOrEqual(2)
   expect((await viewport(a.page)).zoom).toBe(1)
+})
+
+test('W5-21: with reduced motion, following someone and jumping to a comment move the camera in one jump, not a glide', async ({
+  canvasSession,
+}) => {
+  const a = await canvasSession('alice')
+  const b = await canvasSession('bob', { role: 'editor' })
+  await b.page.emulateMedia({ reducedMotion: 'reduce' })
+  await waitForA11y(b.page)
+  const far = await noteAt(a.page, 5000, 3000, 'Far away')
+  await waitForItem(b.page, far)
+
+  await test.step('bob follows alice: when she moves far, his camera lands without gliding', async () => {
+    const aliceSid = await sessionId(a.page)
+    await b.page.evaluate((sid) => {
+      const c = (window as unknown as { __lobbyBoard: { canvas: { follow: { start(s: string): void } } } })
+        .__lobbyBoard.canvas
+      c.follow.start(sid)
+    }, aliceSid)
+    await expect.poll(() => followingSid(b.page)).toBe(aliceSid)
+    const sampled = cameraFrames(b.page)
+    await setViewport(a.page, { x: 4800, y: 2800, zoom: 1 })
+    const seen = await sampled
+    // his start, where he lands (and at most one re-fit of the same spot): never the dozens of frames of a glide
+    expect(seen.length, seen.join(' → ')).toBeLessThanOrEqual(3)
+    await expect.poll(async () => Math.round((await viewport(b.page)).x)).toBeGreaterThan(4000)
+    await b.page.evaluate(() => {
+      const c = (window as unknown as { __lobbyBoard: { canvas: { follow: { stop(): void } } } }).__lobbyBoard
+        .canvas
+      c.follow.stop()
+    })
+    await expect.poll(() => followingSid(b.page)).toBeNull()
+  })
+
+  await test.step('bob jumps to a comment from the comments panel: one jump to the thread, no glide', async () => {
+    await setViewport(b.page, { x: 4800, y: 2800, zoom: 1 })
+    await pressCommentTool(b.page)
+    const threadId = await commentOnElement(b.page, far, 'Look here')
+    await b.page.keyboard.press('Escape') // closes the thread
+    await expect(threadPopover(b.page)).toHaveCount(0)
+    await panAway(b.page)
+    await openCommentsPanel(b.page)
+    const row = commentRow(b.page, threadId)
+    await expect(row).toBeVisible()
+    const sampled = cameraFrames(b.page)
+    await row.click()
+    const seen = await sampled
+    await expect(threadPopover(b.page, threadId)).toBeVisible()
+    expect(seen.length, seen.join(' → ')).toBeLessThanOrEqual(3)
+    const v = await viewport(b.page)
+    expect(5000 >= v.x && 5200 <= v.x + v.width, 'the note is in view').toBe(true)
+  })
 })
 
 test('W5-59: inside a frame a heading is read before the shorter line under it', async ({

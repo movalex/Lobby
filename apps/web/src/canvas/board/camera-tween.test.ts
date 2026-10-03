@@ -1,7 +1,7 @@
 // CR 3b-9 (wave 5, 2C): Lobby's camera tween lets the engine reuse its element bitmaps while the zoom
-// moves, and draws them sharp at the end.
+// moves, and draws them sharp at the end. W5-21: no move animates under `prefers-reduced-motion: reduce`.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { Viewport } from '../api/lobby-canvas.ts'
+import { CAMERA_ANIMATION_MS, type Viewport } from '../api/lobby-canvas.ts'
 
 let frames: (() => void)[] = []
 let now = 0
@@ -19,7 +19,7 @@ beforeEach(() => {
 })
 afterEach(() => vi.unstubAllGlobals())
 
-const { CameraTween } = await import('./handles.ts')
+const { CameraTween, durationOf } = await import('./handles.ts')
 
 function run(ms: number) {
   while (frames.length) {
@@ -64,5 +64,47 @@ describe('CameraTween and shouldCacheIgnoreZoom (CR 3b-9)', () => {
     t.run({ x: 0, y: 0, zoom: 2 }, 200)
     t.stop()
     expect(cache).toEqual([true, false])
+  })
+})
+
+/** A `matchMedia` that answers the reduced-motion query with `reduce` and every other query with false. */
+const stubMatchMedia = (reduce: boolean) =>
+  vi.stubGlobal(
+    'matchMedia',
+    vi.fn((query: string) => ({
+      matches: reduce && query === '(prefers-reduced-motion: reduce)',
+      media: query,
+    })),
+  )
+
+describe('durationOf and prefers-reduced-motion (W5-21)', () => {
+  it('animates as asked where there is no media query (Node) or the person did not ask for less motion', () => {
+    expect(durationOf({ animate: true })).toBe(CAMERA_ANIMATION_MS)
+    expect(durationOf({ animate: { durationMs: 200 } })).toBe(200)
+    stubMatchMedia(false)
+    expect(durationOf({ animate: true })).toBe(CAMERA_ANIMATION_MS)
+    expect(durationOf({ animate: { durationMs: 200 } })).toBe(200)
+  })
+
+  it('is immediate (null) for every move when reduced motion is on, whoever asked for the animation', () => {
+    stubMatchMedia(true)
+    expect(durationOf({ animate: true })).toBeNull()
+    expect(durationOf({ animate: { durationMs: 480 } })).toBeNull()
+    expect(durationOf({ animate: true, force: true })).toBeNull()
+  })
+
+  it('stays immediate for moves that never animated', () => {
+    expect(durationOf(undefined)).toBeNull()
+    expect(durationOf({})).toBeNull()
+    expect(durationOf({ animate: false })).toBeNull()
+    stubMatchMedia(true)
+    expect(durationOf({ animate: false })).toBeNull()
+  })
+
+  it('reads the preference at the time of the move, not once', () => {
+    stubMatchMedia(true)
+    expect(durationOf({ animate: true })).toBeNull()
+    stubMatchMedia(false)
+    expect(durationOf({ animate: true })).toBe(CAMERA_ANIMATION_MS)
   })
 })

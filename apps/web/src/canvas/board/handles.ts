@@ -21,6 +21,7 @@ import type {
   Viewport,
 } from '../api/lobby-canvas.ts'
 import { CAMERA_ANIMATION_MS } from '../api/lobby-canvas.ts'
+import { prefersReducedMotion } from '../api/parts/navigation.ts'
 import type { FeatureRegistries } from '../api/registries.ts'
 import type { UndoController } from '../history/controller.ts'
 import type { CanvasInput } from '../input/CanvasInput.ts'
@@ -188,8 +189,14 @@ export class CameraTween {
   }
 }
 
-const durationOf = (m?: CameraMove): number | null => {
+/**
+ * How long a camera move animates, or null for an immediate one. Under `prefers-reduced-motion: reduce`
+ * every move is immediate, whoever asked for it (W5-21, WCAG 2.3.3): Follow and Gather, a presenter moving
+ * everyone, a comment jump, an AI result, History, the mind map. One place, so no caller has to ask.
+ */
+export const durationOf = (m?: CameraMove): number | null => {
   if (!m?.animate) return null
+  if (prefersReducedMotion()) return null
   return typeof m.animate === 'object' ? m.animate.durationMs : CAMERA_ANIMATION_MS
 }
 
