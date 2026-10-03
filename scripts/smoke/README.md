@@ -20,6 +20,11 @@ Needs `pnpm install` (it uses the e2e package's Playwright and the Chromium `pnp
 place) and Node 24. No secret, no environment variable, no sign-in. `--api` and `--sync` name the api
 and sync origins when they are not `<name>-api` / `<name>-sync` next to a `<name>-web` host.
 
+The expected static-site headers, the Content-Security-Policy among them, are read from the checkout's
+`render.yaml` (`--render-yaml <file>` for another one) by `scripts/smoke/render-yaml.mjs`, never copied
+into the script: run it from the commit that is deployed. Its own tests need no network:
+`node --test scripts/smoke/render-yaml.test.mjs`.
+
 Every check prints one line, `PASS`, `FAIL`, `WARN` or `INFO`, then a summary; the exit code is 1 when
 anything FAILED. A FAIL after the switch is the runbook's **Stop**.
 
@@ -35,8 +40,8 @@ creates or changes data, or calls an `/internal/*` route.
 
 | Line | Passes when |
 |---|---|
-| `web index`, `header …` | `GET /` is 200 HTML with render.yaml's `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: strict-origin-when-cross-origin`; `/assets/*` carries `Cache-Control: public, max-age=31536000, immutable`. HSTS is reported (Render adds it). |
-| `content-security-policy` | `--expect excalidraw`: present (render.cutover.yaml.patch, runbook C13), `script-src` without `'unsafe-eval'` or `'unsafe-inline'`, `object-src 'none'`, `frame-ancestors 'none'`, `base-uri 'self'`, a `font-src`, `connect-src` naming the sync origin, and `script-src` naming the Clerk frontend-API host decoded from `/api/auth/config`'s publishable key (P5). `--expect r0`: **absent** (R0's web breaks under it; B5 removes it). |
+| `web index`, `header …` | `GET /` is 200 HTML with every header render.yaml sets for `/*` besides the CSP (today `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: strict-origin-when-cross-origin`); `/assets/*` carries render.yaml's `Cache-Control` (`public, max-age=31536000, immutable`). `header strict-transport-security` PASSES with a `max-age` of a year or more and WARNS otherwise: Render's edge sends it on onrender.com, render.yaml does not. |
+| `content-security-policy` | `--expect excalidraw`: the header render.yaml sets for `/*` (`Content-Security-Policy`, enforced since 2026-10-03; a `…-Report-Only` header in its place FAILS and says the Dashboard and render.yaml disagree), **the same policy** as render.yaml's (directive by directive, sources in any order; each difference is named: `connect-src: lacks blob:`), and structurally: `script-src` without `'unsafe-eval'` or `'unsafe-inline'`, `object-src 'none'`, `frame-ancestors 'none'`, `base-uri 'self'`, a `font-src`, `connect-src` naming the sync origin, and `script-src` naming the Clerk frontend-API host decoded from `/api/auth/config`'s publishable key (P5). `--expect r0`: the enforced header **absent** (R0's web breaks under it; B5 removes it; a report-only one blocks nothing). |
 | `index has no inline script` | (excalidraw) index.html has no inline `<script>`: the CSP has no hash for one (C14's grep; G3). |
 | `index chunks` | every `<script src>`, `modulepreload` and `stylesheet` in index.html answers 200 **with a JS or CSS content type**. A missing file is not a 404 on this host: the SPA fallback answers 200 `index.html`, so the type is what tells. The dynamic chunks reached from them are fetched too (`bundle closure`), for the scans below. |
 | `excalidraw-assets font`, `… missing path` | (excalidraw) a font file the bundle references under `/excalidraw-assets/fonts/…` answers 200 and not HTML; `/excalidraw-assets/fonts/Nunito/not-there.woff2` answers **404** (P6's rewrite, above the SPA fallback). |
@@ -67,12 +72,15 @@ creates or changes data, or calls an `/internal/*` route.
   @tldraw/tlschema". Those strings are an allowlist, never requested, but whether to accept them (add them
   to a dated list in the script, as `R0_BUNDLE_HOSTS` is) or to keep them out of the web bundle is the
   owner's call before the cut-over, not this script's.
-- **The CSP checks are structural.** They confirm the directives the patch promises, not that the header's
-  Clerk origins are right: that is P5 (a real sign-in with the header enforced, at the rehearsal). The
-  headless sign-in page under the header is the closest this script gets, and it covers the sign-in page
-  only, not the dashboard or a board.
+- **The CSP check compares with render.yaml, not with what the app needs.** It proves the live header is
+  the one the Blueprint describes (so a Manual Sync changes nothing), not that its Clerk origins are right:
+  that is P5 (a real sign-in with the console watched for CSP blocks). The headless sign-in page under the
+  header is the closest this script gets, and it covers the sign-in page only, not the dashboard or a
+  board.
 - **Nothing signed in.** Boards, the dashboard, History, "Saved", two-user editing and the phone guest are
-  C15 and C17's manual smoke.
+  C15 and C17's manual smoke. So is SMK-2's reason screen through the Render edge (revoke a test user's
+  access while their tab is open; the access-lost screen must show, not a generic disconnect): it needs a
+  real sign-in, so it is an owner check, not a step of this script.
 
 ## A rehearsal of `--expect excalidraw` before the day
 

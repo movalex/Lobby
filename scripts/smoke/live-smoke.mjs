@@ -8,22 +8,33 @@
 //   node scripts/smoke/live-smoke.mjs --base https://draftroom-staging-web.onrender.com --expect excalidraw
 //   node scripts/smoke/live-smoke.mjs --base https://draftroom-staging-web.onrender.com --expect r0
 //
-// --expect excalidraw: the cut-over build (the CSP of render.cutover.yaml.patch, /excalidraw-assets/, the
-//   Excalidraw engine markers, no foreign host but Clerk's).
+// --expect excalidraw: the cut-over build (the static site's headers and Content-Security-Policy exactly as
+//   render.yaml sets them, /excalidraw-assets/, the Excalidraw engine markers, no foreign host but Clerk's).
 // --expect r0: the bridge release R0 (tldraw; no CSP, runbook B5; tldraw's engine markers; the hosts the
 //   R0 bundle is known to name).
 // --api / --sync: the api and sync origins when they cannot be derived from --base (<name>-web.<domain>
 //   -> <name>-api / <name>-sync). --json <file> writes every check as JSON for the cut-over log.
+// --render-yaml <file>: the Blueprint the expected headers are read from (default: this checkout's
+//   render.yaml, scripts/smoke/render-yaml.mjs). Its CSP is the one checked: enforced since 2026-10-03.
 //
 // Every check prints one PASS / FAIL / WARN / INFO line; the exit code is 1 when any check FAILED.
 
 import { randomBytes } from 'node:crypto'
-import { writeFileSync } from 'node:fs'
+import { readFileSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { connect as netConnect } from 'node:net'
 import { connect as tlsConnect } from 'node:tls'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { parseArgs } from 'node:util'
+import {
+  CSP,
+  CSP_REPORT_ONLY,
+  cspDifferences,
+  expectedCsp,
+  headerFor,
+  parseCsp,
+  staticSiteHeaders,
+} from './render-yaml.mjs'
 
 const REPO_ROOT = fileURLToPath(new URL('../..', import.meta.url))
 const FETCH_TIMEOUT_MS = 30_000
@@ -32,14 +43,8 @@ const BROWSER_TIMEOUT_MS = 45_000
 
 // ---- expectations -----------------------------------------------------------------------------------
 
-/** render.yaml's static-site headers for /* (both builds). */
-const STATIC_HEADERS = {
-  'x-content-type-options': 'nosniff',
-  'x-frame-options': 'DENY',
-  'referrer-policy': 'strict-origin-when-cross-origin',
-}
-/** render.yaml's header for /assets/*. */
-const ASSETS_CACHE_CONTROL = 'public, max-age=31536000, immutable'
+/** Strict-Transport-Security: Render's edge sends it (not render.yaml); at least a year is expected. */
+const HSTS_MIN_MAX_AGE = 31_536_000
 
 /**
  * Engine markers, as the integration scripts grep built output for them
@@ -65,9 +70,9 @@ const MARKERS = {
 
 /**
  * Clerk's hosts: the frontend API (<instance>.clerk.accounts.dev), img.clerk.com and clerk-telemetry.com
- * (render.cutover.yaml.patch), clerk.com's docs in @clerk/shared's messages, Clerk's own domain suffixes
+ * (render.yaml's CSP), clerk.com's docs in @clerk/shared's messages, Clerk's own domain suffixes
  * (accounts.dev, accountsstage.dev, clerk.dev) and its bot protection (challenges.cloudflare.com, the
- * patch's frame-src / script-src).
+ * CSP's frame-src / script-src).
  */
 const isClerkHost = (h) =>
   ['clerk.com', 'clerk.dev', 'accounts.dev', 'accountsstage.dev', 'clerkstage.dev'].some(
@@ -125,6 +130,7 @@ const { values: args } = parseArgs({
     api: { type: 'string' },
     sync: { type: 'string' },
     json: { type: 'string' },
+    'render-yaml': { type: 'string' },
     help: { type: 'boolean', default: false },
   },
 })
@@ -157,6 +163,30 @@ function sibling(kind) {
 const API = (args.api ?? sibling('api')).replace(/\/+$/, '')
 const SYNC = (args.sync ?? sibling('sync')).replace(/\/+$/, '')
 const OWN_HOSTS = new Set([BASE.hostname, new URL(API).hostname, new URL(SYNC).hostname])
+
+// What render.yaml (the Blueprint) says the static site answers: never copied into this script, so the
+// check follows the file (the CSP was report-only until 2026-10-03, then enforced).
+const RENDER_YAML = args['render-yaml'] ?? `${REPO_ROOT}render.yaml`
+let blueprint
+try {
+  blueprint = staticSiteHeaders(readFileSync(RENDER_YAML, 'utf8'))
+} catch (e) {
+  console.error(`cannot read ${RENDER_YAML}: ${e.message}`)
+  process.exit(2)
+}
+const isCspName = (name) => [CSP, CSP_REPORT_ONLY].includes(name.toLowerCase())
+/** render.yaml's static-site headers for /* (both builds), CSP aside: lower-case name -> value. */
+const STATIC_HEADERS = Object.fromEntries(
+  blueprint.filter((h) => h.path === '/*' && !isCspName(h.name)).map((h) => [h.name.toLowerCase(), h.value]),
+)
+/** render.yaml's Cache-Control for /assets/*. */
+const ASSETS_CACHE_CONTROL = headerFor(blueprint, '/assets/*', 'cache-control')
+/** render.yaml's CSP for /* ({ name, value }; null when it sets none). */
+const EXPECTED_CSP = expectedCsp(blueprint)
+if (Object.keys(STATIC_HEADERS).length === 0 || !ASSETS_CACHE_CONTROL) {
+  console.error(`${RENDER_YAML}: no static-site headers found (is it the Blueprint?)`)
+  process.exit(2)
+}
 
 // ---- reporting --------------------------------------------------------------------------------------
 
@@ -213,11 +243,14 @@ try {
     )
   }
   const hsts = r.headers.get('strict-transport-security')
-  info(
+  const maxAge = Number(/max-age=(\d+)/i.exec(hsts ?? '')?.[1] ?? 0)
+  ;(hsts !== null && maxAge >= HSTS_MIN_MAX_AGE ? pass : warn)(
     'header strict-transport-security',
-    hsts ?? 'absent (Render adds it on onrender.com; not in render.yaml)',
+    hsts === null
+      ? "absent (Render's edge sends it on onrender.com; not in render.yaml)"
+      : `${hsts}${maxAge < HSTS_MIN_MAX_AGE ? ` (max-age under ${HSTS_MIN_MAX_AGE})` : ''}`,
   )
-  checkCsp(r.headers.get('content-security-policy'))
+  checkCsp(r.headers)
 } catch (e) {
   fail('web index', `GET ${base}/ failed: ${e.message}`)
 }
@@ -233,20 +266,14 @@ function clerkFrontendHost(publishableKey) {
   }
 }
 
-function parseCsp(value) {
-  const directives = new Map()
-  for (const part of value.split(';')) {
-    const [name, ...sources] = part.trim().split(/\s+/)
-    if (name) directives.set(name.toLowerCase(), sources)
-  }
-  return directives
-}
-
-function checkCsp(value) {
-  cspHeader = value
+function checkCsp(headers) {
+  const enforced = headers.get(CSP)
+  const reportOnly = headers.get(CSP_REPORT_ONLY)
   if (EXPECT === 'r0') {
+    const value = enforced
+    cspHeader = value
     // Runbook B5: R0's web (its inline theme script, zod's eval probe, tldraw's data: fetch) is not built
-    // for the CSP; a rollback removes the header.
+    // for the CSP; a rollback removes the enforced header (a report-only one blocks nothing).
     check(
       value === null,
       'content-security-policy (R0)',
@@ -256,11 +283,31 @@ function checkCsp(value) {
     )
     return
   }
-  if (value === null) {
-    fail('content-security-policy', 'missing (render.cutover.yaml.patch adds it for /*; runbook C13)')
+  if (!EXPECTED_CSP) {
+    fail('content-security-policy', `${RENDER_YAML} sets no CSP for /* (the cut-over build needs one)`)
     return
   }
-  pass('content-security-policy', short(value, 400))
+  const want = EXPECTED_CSP
+  const value = headers.get(want.name)
+  cspHeader = value
+  if (value === null) {
+    const other = want.name === CSP ? reportOnly : enforced
+    fail(
+      'content-security-policy',
+      `${want.name} missing (render.yaml sets it for /*)${other !== null ? `; the live header is ${want.name === CSP ? CSP_REPORT_ONLY : CSP}: the Dashboard and render.yaml disagree (a Manual Sync would change it)` : ''}`,
+    )
+    return
+  }
+  const differences = cspDifferences(value, want.value)
+  check(
+    differences.length === 0,
+    `${want.name} as in render.yaml`,
+    differences.length === 0
+      ? `the same policy (${parseCsp(value).size} directives)`
+      : `${differences.length} difference(s): ${differences.join(' | ')}`,
+  )
+  if (want.name === CSP && reportOnly !== null)
+    warn(CSP_REPORT_ONLY, `also sent next to the enforced header: ${short(reportOnly)}`)
   const d = parseCsp(value)
   const src = (name) => d.get(name) ?? null
   const has = (name, token) => (src(name) ?? []).some((s) => s.toLowerCase() === token.toLowerCase())
@@ -307,7 +354,7 @@ const inlineScripts = [...indexHtml.matchAll(/<script(?![^>]*\ssrc=)[^>]*>([\s\S
 )
 if (EXPECT === 'excalidraw') {
   // Runbook C14: `curl -s $W/ | grep -o '<script[^>]*>' | grep -vc 'src='` must print 0 (G3: the theme
-  // script moved to a file; the patch's CSP has no hash).
+  // script moved to a file; render.yaml's CSP has no hash).
   check(
     inlineScripts.length === 0,
     'index has no inline script',
