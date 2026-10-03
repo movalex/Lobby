@@ -567,6 +567,8 @@ export class LobbyEngineCore implements EngineCore {
   private unavailableSince: number | null = null
   private lastReject: SaveStatus['lastReject'] = null
   private offlineQueued = 0
+  /** what the last offline-queue write held, counted as changes (`changeItems`: a label with its container) */
+  private offlineQueuedItems = 0
   /**
    * Queued entries loaded from the offline store before a welcome (and its snapshot) was processed: adopted
    * in afterWelcome, once the server's copies are known, so an adopted copy is rebased on them and put in
@@ -2836,6 +2838,7 @@ export class LobbyEngineCore implements EngineCore {
         // no server state yet: adopted at the next welcome (afterWelcome), counted meanwhile
         this.pendingAdopt = [...(this.pendingAdopt ?? []), ...entries]
         this.offlineQueued = Math.max(this.offlineQueued, this.pendingAdopt.length)
+        this.offlineQueuedItems = Math.max(this.offlineQueuedItems, this.entryItems(this.pendingAdopt).size)
       }
       this.updateSaved()
     } catch (err) {
@@ -3061,6 +3064,7 @@ export class LobbyEngineCore implements EngineCore {
     this.syncLive()
     const entries = this.offlineEntries()
     this.offlineQueued = this.connected && this.welcome ? 0 : entries.length
+    this.offlineQueuedItems = this.connected && this.welcome ? 0 : this.entryItems(entries).size
     // the same queue as the last write (a scan that found nothing, the core's own apply): no write
     const sig = entries
       .map((e) =>
@@ -3085,6 +3089,37 @@ export class LobbyEngineCore implements EngineCore {
   // Saved (§2.5.7)
   // =====================================================================================================
 
+  /**
+   * OFFLINE-COUNT: the item a change of `id` counts under, as the person sees it: a bound label's change is
+   * its container's (a note and its text are one note), anything else its own id.
+   */
+  private itemOf(id: string, el?: SceneElement): string {
+    return containerOf(el ?? this.current.get(id) ?? this.confirmedMap.get(id)) ?? id
+  }
+
+  /** The offline queue's entries as items (a label's entry counts with its container's; the doc writes as one). */
+  private entryItems(entries: readonly OfflineEntry[]): Set<string> {
+    const out = new Set<string>()
+    for (const e of entries)
+      out.add(e.element.id === DOC_ENTRY_ID ? DOC_ENTRY_ID : this.itemOf(e.element.id, e.element))
+    return out
+  }
+
+  /**
+   * The changes on this device not on the server yet, as items (`offlineChanges` while offline): dirty and
+   * in-flight elements (a label with its container), each doc write, each editor's buffered text, and a
+   * queue loaded and not adopted yet. The Saved state's `pending` keeps counting elements.
+   */
+  private changeItems(): number {
+    const items = new Set<string>()
+    for (const [id, t] of this.tracked) if (t.dirty.size > 0 || t.isNew) items.add(this.itemOf(id))
+    for (const p of this.flying()) for (const [id, s] of p.sent) items.add(this.itemOf(id, s.el))
+    for (const id of this.entryItems(this.pendingAdopt ?? [])) items.add(id)
+    let n = items.size
+    n += (Object.keys(this.pendingDoc).length ? 1 : 0) + this.inflightDoc.size + this.lostDoc.length
+    return n + this.outside.size
+  }
+
   private updateSaved(): void {
     let dirty = 0
     for (const t of this.tracked.values()) if (t.dirty.size > 0 || t.isNew) dirty++
@@ -3105,6 +3140,8 @@ export class LobbyEngineCore implements EngineCore {
       // an adopted queue's lost push carries no ops, only its elements (OfflineEntry.lost)
       inflightOps: this.flying().reduce((n, p) => n + (p.ops.length || p.sent.size), 0),
       offlineQueued: this.connected && this.welcome ? 0 : Math.max(this.offlineQueued, dirty),
+      offlineItems:
+        this.connected && this.welcome ? 0 : Math.max(this.offlineQueuedItems, this.changeItems()),
       unknown,
       unavailableSince: this.unavailableSince,
       lastReject: this.lastReject,
