@@ -3,13 +3,13 @@
  * `api.updateScene`, without and with Lobby's pre-pass. The Node half is
  * `apps/web/src/canvas/sync/index-keys.test.ts`.
  *
- *   node apps/web/test/engine-probe/a8/run-browser.ts [--port=7751]   (default: E2E_PORT_BASE + 11 when set)
+ *   node apps/web/test/engine-probe/a8/run-browser.ts [--port=7751]   (default: E2E_PORT_BASE + 35 when set)
  */
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
-import { buildProbePage, openProbePage, probePort } from '../browser/browser.ts'
+import { buildProbePage, openProbePage, PROBE_PORT_OFFSET, probePort } from '../browser/browser.ts'
 
-const port = probePort(11, 7751)
+const port = probePort(PROBE_PORT_OFFSET.a8, 7751)
 const outDir = fileURLToPath(new URL('../../../../../test-results/engine-probe/', import.meta.url))
 mkdirSync(outDir, { recursive: true })
 await buildProbePage()

@@ -3,13 +3,13 @@
  * against a mounted <Excalidraw> of the pinned build in headless Chromium. The checks themselves are
  * `browser/add-files.ts` (`checkAddFiles`); `add-files.test.ts` shows they fail on an engine that replaces.
  *
- *   node apps/web/test/engine-probe/add-files/run-browser.ts [--port=7752]   (default: E2E_PORT_BASE + 12 when set)
+ *   node apps/web/test/engine-probe/add-files/run-browser.ts [--port=7752]   (default: E2E_PORT_BASE + 36 when set)
  */
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
-import { buildProbePage, openProbePage, probePort } from '../browser/browser.ts'
+import { buildProbePage, openProbePage, PROBE_PORT_OFFSET, probePort } from '../browser/browser.ts'
 
-const port = probePort(12, 7752)
+const port = probePort(PROBE_PORT_OFFSET.addFiles, 7752)
 const outDir = fileURLToPath(new URL('../../../../../test-results/engine-probe/', import.meta.url))
 mkdirSync(outDir, { recursive: true })
 await buildProbePage()
