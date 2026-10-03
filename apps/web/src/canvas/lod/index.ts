@@ -26,6 +26,7 @@ import type { BinaryFiles, ExcalidrawImperativeAPI } from '@excalidraw/excalidra
 import { DEV_AUTH_ENABLED } from '../../lib/identity.ts'
 import type { CanvasChange, LobbyCanvas } from '../api/lobby-canvas.ts'
 import type { LodTarget } from './cull.ts'
+import { installFrameNameGuard } from './frame-names.ts'
 import { type LodBitmap, type LodElement, LodModel, type LodRect, lodActiveAt, lodScale } from './model.ts'
 
 export { createLodTarget, type LodTarget } from './cull.ts'
@@ -61,6 +62,8 @@ export interface LodState {
   readonly renderMs: number
   readonly failures: number
   readonly layer: boolean
+  /** W5-51: frames whose name is hidden because it would run into a neighbouring frame (./frame-names.ts) */
+  readonly crowdedNames: number
 }
 
 export interface LodHandle {
@@ -222,6 +225,12 @@ export function installLod(o: LodOptions): LodHandle {
   const doc = o.root.ownerDocument
   const win = doc.defaultView ?? window
   const layer = new LodLayer(doc, win)
+  // W5-51: frame names that would run into a neighbouring frame (at any zoom; zoomed out is where they do)
+  const names = installFrameNameGuard({
+    api,
+    root: o.root,
+    subscribe: (onChange) => canvas.on('change', onChange),
+  })
   const release = (b: Bitmap) => {
     layer.forget(b.image)
     closeImage(b.image)
@@ -448,6 +457,7 @@ export function installLod(o: LodOptions): LodHandle {
         renderMs: Math.round(stats.renderMs),
         failures: stats.failures,
         layer: layer.el.isConnected,
+        crowdedNames: names.hidden().size,
       }
     },
     dispose() {
@@ -459,6 +469,7 @@ export function installLod(o: LodOptions): LodHandle {
       if (settleTimer !== null) clearTimeout(settleTimer)
       target.setCulled(null)
       layer.remove()
+      names.dispose()
       model.reset([])
       if (DEV_AUTH_ENABLED && (win as unknown as { __lobbyLod?: LodHandle }).__lobbyLod === handle)
         delete (win as unknown as { __lobbyLod?: LodHandle }).__lobbyLod

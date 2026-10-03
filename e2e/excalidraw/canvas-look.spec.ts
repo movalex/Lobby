@@ -3,6 +3,7 @@
 //  - W5-38: one accent (the engine's selection colour is Lobby's), a hover outline, a selected frame's box clear
 //    of its name;
 //  - W5-55: a note being typed into is outlined;
+//  - W5-51: zoomed out to 14 %, no frame name runs into a neighbouring frame;
 //
 //   E2E_PORT_BASE=<base> pnpm --filter @draftroom/e2e exec playwright test excalidraw/canvas-look.spec.ts
 import type { Page } from '@playwright/test'
@@ -233,4 +234,69 @@ test('W5-55: a note being typed into is outlined in the accent; the outline goes
   )
   await stopTextEditing(a.page)
   await expect(a.page.getByTestId('editing-outline')).toHaveCount(0)
+})
+
+/** The frame names drawn now (visible), each with its frame id and screen box. */
+const shownNames = (page: Page) =>
+  page.evaluate(() =>
+    [...document.querySelectorAll<HTMLElement>('.lobby-board-canvas .excalidraw .frame-name')]
+      .filter((el) => getComputedStyle(el).visibility !== 'hidden')
+      .map((el) => {
+        const r = el.getBoundingClientRect()
+        return {
+          id: /-frame-name-(.+)$/.exec(el.id)?.[1] ?? '',
+          text: el.textContent ?? '',
+          x: r.left,
+          y: r.top,
+          width: r.width,
+          height: r.height,
+        }
+      }),
+  )
+
+const intersects = (
+  a: { x: number; y: number; width: number; height: number },
+  b: { x: number; y: number; width: number; height: number },
+) => a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height
+
+test('W5-51: zoomed out to 14 %, no frame name runs into a neighbouring frame or another name; at fit zoom every name shows', async ({
+  canvasSession,
+}) => {
+  const a = await canvasSession('alice')
+  await waitForCanvasUx(a.page)
+  // a template's grid: 1000 × 600 frames, 120 px apart (16.8 screen px at 14 %, less than a name's height)
+  const names = ['One', 'Two', 'Three', 'Four']
+  const frames: { id: string; x: number; y: number }[] = []
+  for (const [i, name] of names.entries()) {
+    const x = (i % 2) * 1120
+    const y = Math.floor(i / 2) * 720
+    frames.push({
+      id: await settled(a.page, createItem(a.page, 'frame', { x, y, width: 1000, height: 600, name })),
+      x,
+      y,
+    })
+  }
+  const frameBoxes = async () =>
+    Promise.all(
+      frames.map(async (f) => {
+        const tl = await sceneToScreen(a.page, { x: f.x, y: f.y })
+        const br = await sceneToScreen(a.page, { x: f.x + 1000, y: f.y + 600 })
+        return { id: f.id, x: tl.x, y: tl.y, width: br.x - tl.x, height: br.y - tl.y }
+      }),
+    )
+
+  await setViewport(a.page, { x: -2000, y: -1500, zoom: 0.14 })
+  await expect.poll(async () => (await shownNames(a.page)).map((n) => n.text).sort()).toEqual(['One', 'Two'])
+  const boxes = await frameBoxes()
+  const shown = await shownNames(a.page)
+  for (const n of shown) {
+    for (const f of boxes) if (f.id !== n.id) expect(intersects(n, f), `${n.text} over a frame`).toBe(false)
+    for (const o of shown) if (o !== n) expect(intersects(n, o), `${n.text} over ${o.text}`).toBe(false)
+  }
+
+  // zoomed in to where the names fit between the frames, every name is back
+  await setViewport(a.page, { x: -200, y: -200, zoom: 0.45 })
+  await expect
+    .poll(async () => (await shownNames(a.page)).map((n) => n.text).sort())
+    .toEqual(names.slice().sort())
 })
