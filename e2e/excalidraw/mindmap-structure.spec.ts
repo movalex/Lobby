@@ -16,16 +16,18 @@ import {
   sceneToScreen,
   selection,
   selectNone,
+  setTool,
   TEXT_EDITOR,
   test,
   waitForItem,
 } from '../tests/support/canvas.ts'
-import { forgeSession } from '../tests/support/excalidraw.ts'
-import { emptyCanvasPoint } from './board-kit.ts'
+import { forgeSession, pressRedo, pressUndo } from '../tests/support/excalidraw.ts'
+import { emptyCanvasPoint, focusBoard } from './board-kit.ts'
 import {
   buildMap,
   byText,
   downloadBytes,
+  editingText,
   expectTidy,
   exportSvg,
   focusCanvas,
@@ -533,6 +535,63 @@ test('mind map: start from a sticky note in a frame (Alt+Shift+M), drag the cent
       ).__lobbyBoard.canvas.settings.set({ focusMode: false }),
     )
     await expect(a.page.getByTestId('mindmap-bar')).toBeVisible()
+  })
+  expect(mapProblems(await mapView(a.page))).toEqual([])
+})
+
+test('mind map: a topic made with Tab comes back selected after an undo and a redo (the redo never restores an empty selection)', async ({
+  canvasSession,
+}) => {
+  // Wave B follow-up (D3-2): the step "new topic, its words, the layout after them" ends with the editor
+  // closed and the topic selected again. Excalidraw clears the selection when an editor it did not open from
+  // a click closes, and the mind map selects the topic again (`editorClosed`, W5-44) in the same tick as the
+  // joined layout write, before the engine applies it: the history read the selection at that boundary and
+  // kept an empty one as the step's "after", so the redo selected nothing.
+  const a = await canvasSession('alice')
+  await ready(a.page)
+  await focusBoard(a.page)
+  await setTool(a.page, 'mindmap')
+  await waitForTyping(a.page)
+  await a.page.keyboard.type('Root')
+  await a.page.keyboard.press('Escape')
+  await expect.poll(() => editingId(a.page)).toBeNull()
+  await expect.poll(async () => structure(await mapView(a.page))).toEqual(['(root) Root'])
+  const root = byText(await mapView(a.page), 'Root').id
+  await selectOnly(a.page, root)
+  await a.page.keyboard.press('Tab')
+  await waitForTyping(a.page)
+  await expect.poll(() => editingText(a.page)).toBe('')
+  await a.page.keyboard.type('Idea')
+  await a.page.waitForTimeout(300)
+  await a.page.keyboard.press('Escape')
+  await expect.poll(() => editingId(a.page)).toBeNull()
+  await expect.poll(async () => structure(await mapView(a.page))).toContain('Root > Idea')
+  const idea = byText(await mapView(a.page), 'Idea').id
+  // Esc leaves the topic selected (W5-44)
+  await expect.poll(() => selection(a.page)).toEqual([idea])
+  await expect(a.page.getByTestId('lease-status')).toHaveAttribute('data-phase', 'idle')
+  await a.page.waitForTimeout(600)
+
+  await test.step('the undo takes back the topic and its words, and selects the topic it was added to', async () => {
+    await pressUndo(a.page)
+    await expect.poll(async () => structure(await mapView(a.page))).toEqual(['(root) Root'])
+    await expect.poll(() => selection(a.page)).toEqual([root])
+  })
+  await test.step('the redo brings both back and selects the new topic (not nothing)', async () => {
+    await selectNone(a.page)
+    await expect.poll(() => selection(a.page)).toEqual([])
+    await pressRedo(a.page)
+    await expect.poll(async () => structure(await mapView(a.page))).toContain('Root > Idea')
+    await expect.poll(() => selection(a.page)).toEqual([idea])
+  })
+  await test.step('and again, with the selection cleared a moment after the step: the redo still selects what the step ended with', async () => {
+    await pressUndo(a.page)
+    await expect.poll(async () => structure(await mapView(a.page))).toEqual(['(root) Root'])
+    // a person clicking away well after the step is not part of it
+    await a.page.waitForTimeout(400)
+    await selectNone(a.page)
+    await pressRedo(a.page)
+    await expect.poll(() => selection(a.page)).toEqual([idea])
   })
   expect(mapProblems(await mapView(a.page))).toEqual([])
 })

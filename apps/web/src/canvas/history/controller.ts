@@ -42,11 +42,27 @@ export interface UndoControllerOptions {
   readonly recompute?: ApplyContext['recompute']
   /**
    * Selects `ids` (F11: after an undo or a redo, the selection its step was made with, already narrowed
-   * to what is live and unlocked). The selection is read from the scene's gesture state. Without it the
-   * selection is left as it is.
+   * to what is live and unlocked). `groups`: the groups among them that were selected as a group (Excalidraw's
+   * `selectedGroupIds`: a group comes back as one selection, not as its members; every live, unlocked member
+   * of each is in `ids`). The selection is read from the scene's gesture state. Without it the selection is
+   * left as it is.
    */
-  readonly select?: (ids: readonly string[]) => void
+  readonly select?: (ids: readonly string[], groups: readonly string[]) => void
+  /** The clock of the selection's settle window (`SELECTION_SETTLE_MS`); `Date.now` by default. */
+  readonly now?: () => number
 }
+
+/**
+ * How long after a step was recorded the selection that arrives may still be the one it ended with, when the
+ * step ended with nothing selected. Excalidraw applies an `appState` update on its next render, so a select
+ * made by Lobby code in the same breath as a step (the mind map selects the topic again as its editor closes,
+ * in the same tick as the layout write that joins the step: runtime.ts `editorClosed`) is not yet in the
+ * state the boundary reads: the step is recorded with an empty selection and its redo selected nothing. The
+ * next boundary that finds a selection within this window gives it to the step. A person's own click is not
+ * that fast, and a step that really ended with nothing selected (a delete) takes at worst the next thing
+ * they click within the window.
+ */
+export const SELECTION_SETTLE_MS = 300
 
 export interface UndoOutcome {
   readonly result: StepResult
@@ -69,9 +85,13 @@ export class UndoController {
    * change's step is recorded (a delete clears the selection in the same change it deletes in).
    */
   private restSelection: readonly string[] = []
+  private readonly now: () => number
+  /** until when a boundary that records nothing may complete the selection of the last step (`SELECTION_SETTLE_MS`) */
+  private settleUntil = 0
 
   constructor(o: UndoControllerOptions) {
     this.o = o
+    this.now = o.now ?? (() => Date.now())
     const sceneMap = () => this.sceneMap('live')
     // attached after the welcome: start from the scene as it is (nothing before this is undoable)
     if (o.core.welcome) this.history.reset(this.sceneMap('reset'))
@@ -86,6 +106,7 @@ export class UndoController {
           if (epoch === null || e.welcome.epoch !== epoch) {
             this.history.reset(this.sceneMap('reset'))
             this.restSelection = this.selectionNow()
+            this.settleUntil = 0
           }
           epoch = e.welcome.epoch
         } else if (e.kind === 'applied') {
@@ -158,7 +179,9 @@ export class UndoController {
   /**
    * A step boundary: one entry for everything the user changed since the previous one (or null). The
    * entry keeps the selection the step was made with (F11): the selection at the previous quiet boundary,
-   * and the one now.
+   * and the one now. A boundary that records nothing and finds a selection within `SELECTION_SETTLE_MS` of the
+   * last step completes that step's selection when it ended with none (the engine had not applied the select
+   * made in the same breath as the step).
    */
   boundary(label?: string): Entry | null {
     // inside `outside`: the write is being installed, and is never part of a step
@@ -169,6 +192,8 @@ export class UndoController {
       after: now,
     })
     this.restSelection = now
+    if (entry) this.settleUntil = this.now() + SELECTION_SETTLE_MS
+    else if (now.length > 0 && this.now() <= this.settleUntil) this.history.settleSelection(now)
     return entry
   }
 
@@ -224,6 +249,7 @@ export class UndoController {
   private step(dir: 'undo' | 'redo'): UndoOutcome | null {
     // anything not recorded yet is its own step first (a Ctrl+Z never undoes more than one real change)
     this.boundary()
+    this.settleUntil = 0
     const scene = this.sceneMap('live')
     const holders = this.o.core.leaseHolders()
     const me = this.o.core.sid
@@ -276,9 +302,50 @@ export class UndoController {
     if (!this.o.select) return
     const now = this.selectionNow()
     if (now.length === keep.length && keep.every((id) => now.includes(id))) return
-    this.o.select(keep)
+    this.o.select(keep, selectedGroups(keep, this.o.scene.read().elements))
   }
 }
+
+/**
+ * The groups of a restored selection that were selected as a group: Excalidraw selects a group whole (every
+ * member in `selectedElementIds`, the group in `selectedGroupIds`), so a selection that holds every live
+ * member of a group is the group selected. Each selected element contributes the outermost of its groups that
+ * the selection holds whole (`groupIds` run from the innermost group to the outermost, as Excalidraw's
+ * `selectGroupsFromGivenElements` takes the last). Groups are read from the elements as they are now: an undo
+ * of Ctrl+G, which ungroups, restores its members with no group, and a redo of it, which groups them again,
+ * restores the group. A group with a member that is not in the selection (locked, say) stays its members.
+ */
+export function selectedGroups(ids: readonly string[], elements: readonly SceneElement[]): readonly string[] {
+  const selected = new Set(ids)
+  const held: SceneElement[] = []
+  const wanted = new Set<string>()
+  for (const el of elements)
+    if (selected.has(el.id)) {
+      held.push(el)
+      for (const g of groupIdsOf(el)) wanted.add(g)
+    }
+  if (wanted.size === 0) return []
+  // a group with a live member the selection does not hold is not selected whole
+  const broken = new Set<string>()
+  for (const el of elements) {
+    if (selected.has(el.id) || el.isDeleted) continue
+    for (const g of groupIdsOf(el)) if (wanted.has(g)) broken.add(g)
+  }
+  const out = new Set<string>()
+  for (const el of held) {
+    const groups = groupIdsOf(el)
+    for (let i = groups.length - 1; i >= 0; i--) {
+      const g = groups[i] as string
+      if (broken.has(g)) continue
+      out.add(g)
+      break
+    }
+  }
+  return [...out]
+}
+
+const groupIdsOf = (el: SceneElement): readonly string[] =>
+  Array.isArray(el.groupIds) ? (el.groupIds as string[]) : []
 
 function keptBy(result: ApplyResult, holders: ReadonlyMap<string, LeaseHolder>): string | null {
   for (const s of result.skips) {

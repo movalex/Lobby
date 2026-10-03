@@ -443,6 +443,20 @@ export class LobbyHistory {
     this.lastLocal.set(after.id, next as HistEl)
   }
 
+  /**
+   * The selection the latest step ended with, when it was read before the engine applied a select made in the
+   * same breath as the step (`UndoController.boundary`, `SELECTION_SETTLE_MS`): a step that recorded an empty
+   * one takes `after`. A step with a selection already, one with none recorded, and the latest step while a
+   * redo is possible (it is not the user's last change) are left alone. Returns whether it took it.
+   */
+  settleSelection(after: readonly string[]): boolean {
+    const top = this.undos[this.undos.length - 1]
+    const sel = top?.selection
+    if (!top || !sel || sel.after.length > 0 || after.length === 0 || this.redos.length > 0) return false
+    top.selection = { before: sel.before, after: [...after] }
+    return true
+  }
+
   /** The stack as it is now, for `mergeTop(since)`: taken before a write that should join the previous step. */
   mark(): HistoryMark {
     return {
