@@ -82,6 +82,7 @@ export interface ClerkProviderOptions {
 }
 
 const MAX_TOKEN_LENGTH = 8192
+const MAX_LISTED_SESSIONS = 100
 
 /** A verified token whose session is not active (Clerk marks one that still owes a session task `pending`). */
 export class SessionNotActiveError extends Error {
@@ -98,7 +99,6 @@ export class SessionNotActiveError extends Error {
 export function assertSessionActive(sts: string | undefined): void {
   if (sts !== undefined && sts !== 'active') throw new SessionNotActiveError('session is not active')
 }
-const MAX_LISTED_SESSIONS = 100
 
 /** The parts of a Clerk User (@clerk/backend 3.20.1 User.d.ts, EmailAddress.d.ts) the profile reads. */
 export interface ClerkUserEmails {

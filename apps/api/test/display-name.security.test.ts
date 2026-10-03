@@ -22,7 +22,7 @@ describe('sanitizeDisplayName', () => {
       expect(sanitizeDisplayName(`${c}a${c}b${c}.png`), cp.toString(16)).toBe('ab.png')
     }
     expect(sanitizeDisplayName(`report${ch(0x202e)}gnp.exe`)).toBe('reportgnp.exe')
-    expect(sanitizeDisplayName(ch(0x2066, 0x2067, 0x2068, 0x2069) + 'x.txt')).toBe('x.txt')
+    expect(sanitizeDisplayName(`${ch(0x2066, 0x2067, 0x2068, 0x2069)}x.txt`)).toBe('x.txt')
     // A name that was only controls falls back to "file", like an empty one.
     expect(sanitizeDisplayName(ch(...BIDI))).toBe('file')
   })

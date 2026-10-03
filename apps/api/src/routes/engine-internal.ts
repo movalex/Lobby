@@ -9,7 +9,7 @@
 // Server-to-server only (the web proxy never forwards /internal). GETs, like `touched` and
 // `/internal/access`, because the root CSRF hook refuses server-to-server POSTs. The internal secret is
 // checked before anything else by the root guard every `/internal` route shares (app.ts
-// registerInternalSecretGuard; it answers these two routes in the contract's shape: engineBadSecret).
+// registerInternalSecretGuard; it answers these two routes in the contract's shape: engineBadSecretBody).
 // Errors are the contract's
 // `{ error: { code, message } }` with its codes: 401 `bad-secret`, 400 `bad-request`, 404
 // `board-not-found`, 503 `unavailable`. Sync fails closed on anything but 200 (and after its 3 s
@@ -56,7 +56,7 @@ const MESSAGES: Record<SyncInternalErrorCode, string> = {
 const fail = (code: SyncInternalErrorCode, message = MESSAGES[code]) =>
   new ApiError(SYNC_INTERNAL_ERROR_STATUS[code], code, message)
 
-/** The two routes with a typed error contract: the root secret guard (app.ts) answers them with `engineBadSecret`. */
+/** The two routes with a typed error contract: the root secret guard (app.ts) answers them with `engineBadSecretBody`. */
 export const ENGINE_INTERNAL_ROUTES: ReadonlySet<string> = new Set([FILE_REFS_ROUTE, WORKSHOP_STATE_ROUTE])
 
 /**
