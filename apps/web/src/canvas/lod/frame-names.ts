@@ -8,10 +8,16 @@
  * board) the gap between two frames stacked one above the other gets smaller than the name, so the lower
  * frame's name covered the bottom of the frame above it: the titles ran into one another just where people
  * orient themselves. Nothing of the engine positions a name per frame, so the rule is a stylesheet of
- * Lobby's: a name whose box overlaps another frame, or a name kept before it (top first), is hidden
+ * Lobby's: a name whose box overlaps a neighbouring frame, or a name kept before it (top first), is hidden
  * (`visibility: hidden`, so the engine's own layout is untouched). The frame above keeps its name; a name
  * comes back as soon as it fits again (zoomed in, the frames moved apart). The name being edited is never
- * hidden. Nothing here writes to the document or the engine's state.
+ * hidden. A frame that the named frame lies inside or overlaps is not a neighbour: a frame inside another
+ * (a converted tldraw board lifts nested frames, so they sit inside their parent) or laid over one by hand
+ * keeps its name at every zoom, where the name necessarily sits on the frame around it. Nothing here writes
+ * to the document or the engine's state.
+ *
+ * The stylesheet is a `<style>` element written with `textContent`: it needs the CSP's style-src
+ * 'unsafe-inline' (render.yaml), as ../overrides.ts's stylesheet does.
  *
  * `crowdedFrameNames` is the rule, pure and Node-tested (./frame-names.test.ts); `installFrameNameGuard` reads
  * the names' boxes from the DOM after the engine has drawn them (one animation frame after a camera move or
@@ -40,8 +46,9 @@ const overlaps = (a: NameBox, b: NameBox) =>
   a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height
 
 /**
- * The frames whose name to hide: a name that overlaps another frame, or a name kept before it (names are
- * taken top first, then left first, so the upper of two crowded names stays). Pure.
+ * The frames whose name to hide: a name that overlaps a neighbouring frame (one whose box does not meet the
+ * named frame's own: a frame it lies inside or overlaps is not a neighbour), or a name kept before it
+ * (names are taken top first, then left first, so the upper of two crowded names stays). Pure.
  */
 export function crowdedFrameNames(frames: readonly FrameNameBoxes[]): Set<string> {
   const hidden = new Set<string>()
@@ -55,7 +62,8 @@ export function crowdedFrameNames(frames: readonly FrameNameBoxes[]): Set<string
       continue
     }
     const crowded =
-      frames.some((o) => o.id !== f.id && overlaps(f.name, o.frame)) || kept.some((k) => overlaps(f.name, k))
+      frames.some((o) => o.id !== f.id && !overlaps(f.frame, o.frame) && overlaps(f.name, o.frame)) ||
+      kept.some((k) => overlaps(f.name, k))
     if (crowded) hidden.add(f.id)
     else kept.push(f.name)
   }

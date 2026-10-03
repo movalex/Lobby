@@ -35,11 +35,34 @@ describe('crowded frame names (W5-51)', () => {
     expect(crowdedFrameNames(row).size).toBe(0)
   })
 
-  it('a frame whose top lies inside another frame loses its name; the name being edited never does', () => {
-    const big = frame('big', 0, 100, 400, 400)
-    const inside = frame('inside', 50, 200, 100, 100)
-    expect([...crowdedFrameNames([big, inside])]).toEqual(['inside'])
-    expect(crowdedFrameNames([big, { ...inside, editing: true }]).size).toBe(0)
+  it('a frame inside another frame keeps its name at 100 % (a converted board’s lifted nested frame)', () => {
+    // the review's probe: Outer 1000 × 700, Inner at (100, 200) 300 × 200, zoom 1
+    const outer = frame('outer', 0, 0, 1000, 700)
+    const inner = frame('inner', 100, 200, 300, 200)
+    expect(crowdedFrameNames([outer, inner]).size).toBe(0)
+    expect(crowdedFrameNames([inner, outer]).size).toBe(0)
+  })
+
+  it('a frame laid over part of another keeps its name, and so does the one under it', () => {
+    const under = frame('under', 0, 100, 400, 300)
+    const over = frame('over', 250, 300, 400, 300)
+    expect(crowdedFrameNames([under, over]).size).toBe(0)
+  })
+
+  it('two frames inside one frame still crowd each other zoomed out: the lower name hides', () => {
+    // a parent with two children stacked 120 px apart, at 14 %: the lower child's name lands on the upper child
+    const z = 0.14
+    const parent = frame('parent', 0, 0, 2000 * z, 2000 * z)
+    const upper = frame('upper', 100 * z, 200 * z, 1000 * z, 600 * z)
+    const lower = frame('lower', 100 * z, 920 * z, 1000 * z, 600 * z)
+    expect([...crowdedFrameNames([parent, upper, lower])]).toEqual(['lower'])
+  })
+
+  it('a name on a neighbouring frame hides, unless it is being edited', () => {
+    const above = frame('above', 0, 0, 200, 90)
+    const below = frame('below', 0, 100, 200, 90)
+    expect([...crowdedFrameNames([above, below])]).toEqual(['below'])
+    expect(crowdedFrameNames([above, { ...below, editing: true }]).size).toBe(0)
   })
 
   it('of two names that overlap each other, the upper one stays', () => {

@@ -3,7 +3,8 @@
 //  - W5-38: one accent (the engine's selection colour is Lobby's), a hover outline, a selected frame's box clear
 //    of its name;
 //  - W5-55: a note being typed into is outlined;
-//  - W5-51: zoomed out to 14 %, no frame name runs into a neighbouring frame;
+//  - W5-51: zoomed out to 14 %, no frame name runs into a neighbouring frame; at 100 % a frame inside another
+//    keeps its name (and can be renamed by a double-click on it);
 //  - R13: on a phone, other people's cursors show without their name tags;
 //  - PLAN-wave4 mermaid stub: a pasted chart definition stays plain text.
 //
@@ -302,6 +303,43 @@ test('W5-51: zoomed out to 14 %, no frame name runs into a neighbouring frame or
   await expect
     .poll(async () => (await shownNames(a.page)).map((n) => n.text).sort())
     .toEqual(names.slice().sort())
+})
+
+test('W5-51: at 100 %, a frame inside another frame (a converted board’s lifted nested frame) keeps its name, and a double-click on it renames it', async ({
+  canvasSession,
+}) => {
+  const a = await canvasSession('alice')
+  await waitForCanvasUx(a.page)
+  const outer = await settled(
+    a.page,
+    createItem(a.page, 'frame', { x: 0, y: 0, width: 1000, height: 700, name: 'Outer' }),
+  )
+  const inner = await settled(
+    a.page,
+    createItem(a.page, 'frame', { x: 100, y: 200, width: 300, height: 200, name: 'Inner' }),
+  )
+  await setViewport(a.page, { x: -100, y: -100, zoom: 1 })
+  await setTool(a.page, 'select')
+  await expect
+    .poll(async () => (await shownNames(a.page)).map((n) => n.text).sort())
+    .toEqual(['Inner', 'Outer'])
+  // still shown after the next measure (a pan, the window resized): nothing hides it a frame later
+  await setViewport(a.page, { x: -60, y: -80, zoom: 1 })
+  await a.page.setViewportSize({ width: 1400, height: 880 })
+  await a.page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))))
+  expect((await shownNames(a.page)).map((n) => n.text).sort()).toEqual(['Inner', 'Outer'])
+
+  const label = a.page.locator(`[id$="-frame-name-${inner}"]`)
+  await expect(label).toBeVisible()
+  const nb = await label.boundingBox()
+  if (!nb) throw new Error('no inner frame name')
+  await a.page.mouse.dblclick(nb.x + Math.min(20, nb.width / 2), nb.y + nb.height / 2)
+  await expect(a.page.getByTestId('frame-rename')).toBeFocused()
+  await a.page.keyboard.type('Inner renamed')
+  await a.page.keyboard.press('Enter')
+  await expect.poll(async () => (await item(a.page, inner))?.name).toBe('Inner renamed')
+  expect((await item(a.page, outer))?.name).toBe('Outer')
+  await expectSaved(a.page)
 })
 
 test('R13: on a phone, other people’s cursors show without their name tags; at desktop width the tags are back', async ({
