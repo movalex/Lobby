@@ -8,7 +8,8 @@
 // Differences from the tldraw spec, each from the new page (docs/research/excalidraw/wave3/3E.md):
 //  - the fullscreen element is the board's canvas region (`[data-lobby-board-canvas]`), not `.tl-container`;
 //  - "tools, menus, frame titles hidden" is the board page's focus mode (top bar, dock and host slots
-//    are not rendered); frame names are drawn by the engine outside the slide, under the surround;
+//    are not rendered); the engine's frame outline and names are off while presenting (W5-24), so a slide is
+//    its frame's exact rectangle;
 //  - the selection bar is 3a's (in a host slot, hidden with every slot but the live region); the Tab
 //    order has present-live's "Present to everyone" (3c);
 //  - comment pins are the ported comments' (3c); a thread's anchor is the element's api ref (`shape:<id>`).
@@ -160,43 +161,88 @@ test.describe('present mode', () => {
     expect(await a.page.evaluate(() => document.fullscreenElement === null)).toBe(true)
   })
 
-  test("W5-24: a slide shows no frame outline: the engine's grey rounded frame border stays under the surround", async ({
+  test('W5-24: a slide is its frame’s exact rectangle: no engine outline or name while presenting (the edge pixels show the slide, not a cover), and the board’s frame chrome comes back after', async ({
     canvasSession,
   }) => {
     const a = await canvasSession('alice')
     await seedDeck(a.page, DECK)
     await zoomToFit(a.page)
+    const frameRendering = () =>
+      a.page.evaluate(
+        () =>
+          (
+            window as unknown as {
+              __lobbyBoard: {
+                api: {
+                  getAppState(): { frameRendering: Record<'enabled' | 'clip' | 'name' | 'outline', boolean> }
+                }
+              }
+            }
+          ).__lobbyBoard.api.getAppState().frameRendering,
+      )
+    const board = { enabled: true, clip: true, name: true, outline: true }
+    expect(await frameRendering()).toEqual(board)
     const ui = presentUi(a.page)
     await ui.button.click()
     await expect(ui.counter).toHaveText('1 / 2')
     await expectSlideOnScreen(a.page, F.intro)
     await nextFrames(a.page)
+    // the engine draws no outline and no frame name while presenting (the slide stays clipped to its frame)
+    expect(await frameRendering()).toEqual({ enabled: true, clip: true, name: false, outline: false })
+
     // The frame's edges on screen (the slide fills the height, so its sides are inside the window).
     const f = await itemBounds(a.page, F.intro)
     if (!f) throw new Error('no frame')
     const tl = await canvasCall(a.page, 'sceneToScreen', { x: f.x, y: f.y })
     const br = await canvasCall(a.page, 'sceneToScreen', { x: f.x + f.width, y: f.y + f.height })
+    const left = Math.floor(tl.x)
+    const top = Math.floor(tl.y)
+    const right = Math.ceil(br.x) - 1 // the last pixel column / row the frame reaches into
+    const bottom = Math.ceil(br.y) - 1
+    // a column left of the control bar (its shadow darkens the bottom edge under it)
+    const sideX = left + Math.round((right - left) * 0.15)
     const midY = Math.round((tl.y + br.y) / 2)
-    const points: { x: number; y: number }[] = []
-    for (let d = -3; d <= 5; d++) {
-      points.push({ x: Math.round(tl.x) + d, y: midY }) // across the left edge
-      points.push({ x: Math.round(br.x) - 1 - d, y: midY }) // across the right edge
+    const inside: { x: number; y: number }[] = []
+    const outside: { x: number; y: number }[] = []
+    // pixels 1 to 4 in from each edge (the edge pixel itself may be anti-aliased) are the slide's own:
+    // before, the surround's 2 px cover and its rounded corners ate them
+    for (let d = 1; d <= 4; d++) {
+      inside.push(
+        { x: left + d, y: midY },
+        { x: right - d, y: midY },
+        { x: sideX, y: top + d },
+        { x: sideX, y: bottom - d },
+      )
+      // the four corners, where the engine rounded its outline (8 px) and the cover its window (6 px)
+      inside.push(
+        { x: left + d, y: top + d },
+        { x: right - d, y: top + d },
+        { x: left + d, y: bottom - d },
+        { x: right - d, y: bottom - d },
+      )
     }
-    // the corner, where the engine rounds its outline (8 px)
-    points.push(
-      { x: Math.round(tl.x) + 2, y: Math.round(tl.y) + 2 },
-      { x: Math.round(tl.x) + 1, y: Math.round(tl.y) + 3 },
-    )
+    // and just outside the frame the surround, left and right (the rows above and below the slide are the screen's edge)
+    for (const d of [2, 3, 4]) outside.push({ x: left - d, y: midY }, { x: right + d, y: midY })
     const shot = await a.page.screenshot()
-    const px = await pngPixels(a.page, shot, points)
-    // Every pixel is the surround (dark) or the slide's white: none is the outline's grey (#bbb).
-    const grey = px.filter(([r, g, b]) => {
-      const lum = 0.2126 * r + 0.7152 * g + 0.0722 * b
-      return lum > 120 && lum < 235 && Math.max(r, g, b) - Math.min(r, g, b) < 24
-    })
-    expect(grey, `outline-grey pixels at the slide's edges: ${JSON.stringify(px)}`).toEqual([])
+    const px = await pngPixels(a.page, shot, [...inside, ...outside])
+    const lum = ([r, g, b]: number[]) => 0.2126 * (r ?? 0) + 0.7152 * (g ?? 0) + 0.0722 * (b ?? 0)
+    const inPx = px.slice(0, inside.length)
+    const outPx = px.slice(inside.length)
+    const notSlide = inPx.map((p, i) => ({ at: inside[i], p })).filter(({ p }) => lum(p) < 240)
+    expect(
+      notSlide,
+      `pixels inside the slide that are not the slide's white: ${JSON.stringify(notSlide)}`,
+    ).toEqual([])
+    const notSurround = outPx.map((p, i) => ({ at: outside[i], p })).filter(({ p }) => lum(p) > 60)
+    expect(
+      notSurround,
+      `pixels outside the slide that are not the surround: ${JSON.stringify(notSurround)}`,
+    ).toEqual([])
+
     await a.page.keyboard.press('Escape')
     await expect(ui.overlay).toHaveCount(0)
+    // the board's frame outline and names are back
+    await expect.poll(frameRendering).toEqual(board)
   })
 
   test('W5-47: leaving the presentation gives the keyboard back to the Present button it was opened from, and the presentation shows a focus ring', async ({

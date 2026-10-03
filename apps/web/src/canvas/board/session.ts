@@ -20,7 +20,7 @@ import { CLOSE_TERMINAL, type RosterEntry, type ServerMessage } from '@draftroom
 import type { TicketResponse } from '@draftroom/contracts'
 import * as ExcalidrawElementNs from '@excalidraw/element'
 import { CaptureUpdateAction } from '@excalidraw/excalidraw'
-import type { ExcalidrawImperativeAPI } from '@excalidraw/excalidraw/types'
+import type { AppState as ExcalidrawAppState, ExcalidrawImperativeAPI } from '@excalidraw/excalidraw/types'
 import { api as apiClient } from '../../api/client.ts'
 import { createTicketUri } from '../../board/ticket.ts'
 import { frameAt } from '../../features/canvas-ux/ported/notes.ts'
@@ -697,6 +697,7 @@ export class LobbyBoardSession {
     this.handlesExtra = handles
     offs.push(() => handles.dispose())
     offs.push(this.settings.subscribe(() => this.concern('settings')))
+    offs.push(this.settings.subscribe(() => this.applyFocusFrames(api)))
     this.handle = createLobbyCanvas({ port, registries: this.registries, board: handles })
     // 3b: the level-of-detail pass for zoomed-out views (docs/EXCALIDRAW-MIGRATION.md §8.5)
     const lod = installLod({
@@ -762,6 +763,33 @@ export class LobbyBoardSession {
       this.api = null
       if (DEV_AUTH_ENABLED) delete (window as unknown as { __lobbyBoard?: unknown }).__lobbyBoard
       this.set({ attached: false })
+    }
+  }
+
+  /**
+   * W5-24: in focus mode (present mode) a slide is its frame's exact rectangle, with nothing of the engine's
+   * frame chrome on it. The engine draws every frame's outline (2 screen px centred on the edge, corners
+   * rounded 8 px) and name; with `outline` and `name` off it draws neither, and the presentation's
+   * surround window can be the frame's rectangle itself instead of covering a rounded 2 px edge of every
+   * slide. `clip` stays on (the slide's content stays inside it). The board's own setting comes back when
+   * focus mode ends.
+   */
+  private focusFrameRendering: ExcalidrawAppState['frameRendering'] | null = null
+
+  private applyFocusFrames(api: ExcalidrawImperativeAPI): void {
+    const focus = this.settings.get().focusMode
+    if (focus === (this.focusFrameRendering !== null)) return
+    if (focus) {
+      this.focusFrameRendering = api.getAppState().frameRendering
+      api.updateScene({
+        appState: { frameRendering: { enabled: true, clip: true, name: false, outline: false } },
+        captureUpdate: CaptureUpdateAction.NEVER,
+      })
+    } else {
+      const before = this.focusFrameRendering
+      this.focusFrameRendering = null
+      if (before)
+        api.updateScene({ appState: { frameRendering: before }, captureUpdate: CaptureUpdateAction.NEVER })
     }
   }
 
