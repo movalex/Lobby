@@ -40,7 +40,9 @@
  *  - the offline queue is written as soon as a change is known (outside a gesture), and `persistNow()`
  *    (the page's pagehide) writes it at once: no 100 ms window in which a reload loses a change;
  *  - `message` events are emitted after the core applied the message (its roster, lease table, document
- *    and confirmed copies are the new ones when a listener reads them).
+ *    and confirmed copies are the new ones when a listener reads them);
+ *  - what the scene holds when the core starts is not its write (another core's copies on the same engine
+ *    instance, DEF-GAPS-1): never classified before the first welcome, which rebuilds it from the server's.
  *
  * NODE-SAFE (CONTRACTS.md): explicit `.ts` extensions, no DOM, injectable timers and clock.
  */
@@ -675,6 +677,11 @@ export class LobbyEngineCore implements EngineCore {
   private readonly receiptBase = new Map<string, number>()
   /** unsent text outside the scene (keys buffered in an editor that waits for its lease, §2.5.7) */
   private readonly outside = new Set<string>()
+  /**
+   * DEF-GAPS-1: the ids the scene already held when this core started (another core's copies, see
+   * `adoptStartScene`), until the first welcome rebuilds them from the server's. Null: none, or welcomed.
+   */
+  private preScene: Set<string> | null = null
 
   // ---- lease
   private leaseListener: ((m: LeaseServerMessage) => void) | null = null
@@ -718,11 +725,42 @@ export class LobbyEngineCore implements EngineCore {
   start(): void {
     if (this.started) return
     this.started = true
+    this.adoptStartScene()
     this.unsubscribe.push(this.transport.onMessage((m) => this.receive(m)))
     this.unsubscribe.push(this.transport.onState((s, c) => this.onTransportState(s, c)))
     void this.loadOffline()
     if (this.transport.state === 'open') this.onTransportState('open')
     else this.updateSaved()
+  }
+
+  /**
+   * DEF-GAPS-1: what the scene holds when this core starts is not this core's write. The board page starts a
+   * new session (a new core) on the SAME engine instance when it remounts its session (a ticket with another
+   * role: an archive makes the owner a viewer; a fresh open of an archived board), and that scene still holds
+   * the previous core's copies, for which this core has no server state yet. Before, the first scan (the
+   * welcome's own `syncLive`) took every one of them for a local create; a reset snapshot older than them
+   * (the room's 5 s cache, its catch-up following as `changes`) lacked them, so the first flush pushed
+   * creates of the server's own elements at base 0: on an archived board READ_ONLY, "Change not saved" with
+   * nothing changed; on a writable one a create of an id the room has (`create_exists`), and behind a fresh
+   * snapshot a copy older than the server's (another user wrote while the page had no session) went back as
+   * a patch over that later write (start-scene.test.ts has each). Now they are taken as seen,
+   * never tracked: until the first welcome nothing of them is classified (a re-measure or any other write
+   * of them in that window included), and the welcome rebuilds them from the server's copies (the ones it
+   * does not have leave the scene; a catch-up brings the rest). What the previous core had not saved
+   * reaches this one through the offline queue (that core's `persistNow` when its page detached), as after
+   * a reload. An element created after start is a local create, as before.
+   */
+  private adoptStartScene(): void {
+    const pre = this.scene.read().elements
+    if (!pre.length) return
+    this.readScene(pre)
+    this.preScene = new Set()
+    for (const el of pre) {
+      this.preScene.add(el.id)
+      this.known.set(el.id, { v: el.version, vn: el.versionNonce })
+      this.last.set(el.id, el)
+    }
+    this.log('start_scene', { elements: pre.length })
   }
 
   stop(): void {
@@ -1110,11 +1148,15 @@ export class LobbyEngineCore implements EngineCore {
         else if (this.confirmedMap.has(id)) reset.add(id)
       }
     }
+    // another core's copies (adoptStartScene, DEF-GAPS-1) are nobody's change here until the first welcome
+    // rebuilds them from the server's
+    const pre = this.preScene
+    const local = pre ? changed.filter((el) => !pre.has(el.id)) : changed
     if (this.readonly) {
       // a read-only session never writes: every local change goes back to the server's copy
-      for (const el of changed) if (this.confirmedMap.has(el.id)) reset.add(el.id)
+      for (const el of local) if (this.confirmedMap.has(el.id)) reset.add(el.id)
     } else {
-      this.classify(changed, reset)
+      this.classify(local, reset)
     }
     for (const el of changed) {
       this.known.set(el.id, { v: el.version, vn: el.versionNonce })
@@ -1779,6 +1821,9 @@ export class LobbyEngineCore implements EngineCore {
    */
   private afterWelcome(reset: { snapshotClock: number; before: number } | null): void {
     this.resyncing = false
+    // the scene this core started on (DEF-GAPS-1) is rebuilt below from the server's copies like the rest:
+    // from here on every element is judged against them
+    this.preScene = null
     if (this.pendingAdopt) {
       for (const e of this.pendingAdopt) this.adoptOffline(e)
       this.pendingAdopt = null
