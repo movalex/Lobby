@@ -6,7 +6,7 @@ import { CURSORS_PER_RECIPIENT } from '@draftroom/canvas-schema/limits'
 import { type PeerPresence, ServerMessage } from '@draftroom/canvas-schema/protocol'
 import { describe, expect, it } from 'vitest'
 import { z } from 'zod'
-import { PresenceHub, type PresenceRecipient } from './presence.ts'
+import { PresenceHub, type PresenceRecipient, RERANK_EVERY_TICKS } from './presence.ts'
 
 function hub(n: number) {
   let now = 1_000
@@ -354,21 +354,45 @@ describe('the 40-cursor cap with a follow target (CR-3C-1, CONTRACTS_REV 10)', (
     )
   })
 
-  it('200 sessions, everyone moving and re-ranked on every tick: a tick stays cheap (a generous bound)', () => {
+  it('200 sessions, everyone moving and every view panning: all ranked each tick, a tick stays cheap', () => {
     const r = room(200)
     const at = (i: number, round: number) => ({ x: (i * 37 + round * 11) % 2_000, y: (i * 53) % 2_000 })
     for (let i = 0; i < 200; i++)
       r.say(i, { pointer: at(i, 0), view: { x: 0, y: 0, w: 1_000, h: 1_000 }, rich: true })
     r.tick()
     const t0 = performance.now()
+    const ranks0 = r.h.rankCalls
     for (let round = 1; round <= 10; round++) {
       for (let i = 0; i < 200; i++)
         r.say(i, { pointer: at(i, round), view: { x: round * 50, y: 0, w: 1_000, h: 1_000 }, rich: true })
       r.tick()
     }
     const perTick = (performance.now() - t0) / 10
-    // 200 recipients x 200 peers ranked per tick (10 Hz); bounded loosely so a slow box does not flake
+    // every view moved, so every recipient is ranked (D1 ranks only when the set can change: here it can),
+    // with one bucket per tick for the one view they share; bounded loosely so a slow box does not flake
+    expect(r.h.rankCalls - ranks0).toBe(200 * 10)
     expect(perTick).toBeLessThan(100)
     for (const m of r.held.values()) expect(m.size).toBeLessThanOrEqual(CURSORS_PER_RECIPIENT)
+  })
+
+  it('200 sessions, everyone moving inside still views: nobody ranked but the backstop (D1)', () => {
+    const r = room(200)
+    const at = (i: number, round: number) => ({
+      x: 100 + ((i * 37 + round * 11) % 800),
+      y: 100 + ((i * 53) % 800),
+    })
+    for (let i = 0; i < 200; i++)
+      r.say(i, { pointer: at(i, 0), view: { x: 0, y: 0, w: 1_000, h: 1_000 }, rich: true })
+    r.tick() // every recipient ranked once: none was yet
+    const ranks0 = r.h.rankCalls
+    for (let round = 1; round <= 50; round++) {
+      for (let i = 0; i < 200; i++)
+        r.say(i, { pointer: at(i, round), view: { x: 0, y: 0, w: 1_000, h: 1_000 }, rich: true })
+      r.tick()
+    }
+    // CR-3C-1 ranked 200 x 50 here; the backstop ranks each recipient once in RERANK_EVERY_TICKS ticks
+    expect(r.h.rankCalls - ranks0).toBe((200 * 50) / RERANK_EVERY_TICKS)
+    // and every recipient holds 40 cursors
+    for (const m of r.held.values()) expect(m.size).toBe(CURSORS_PER_RECIPIENT)
   })
 })
