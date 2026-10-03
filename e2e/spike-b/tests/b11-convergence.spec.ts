@@ -514,8 +514,34 @@ test('B11: 3 browsers + 50 headless clients, random ops, disconnects and one SIG
       hash: () => hashElements((p.client as HeadlessClient).core.elements().values()),
     })),
   ]
+  // the core's non-routine events in each browser over the whole run, passing or not: per event, and for
+  // echo_suspect (a confirmed element's version changed on the core's own apply: Excalidraw re-keyed it)
+  // whether the element was the browser's own or another writer's (SYNC-4); ids and counts only
+  const anomalies: Record<string, unknown> = {}
+  for (const b of browsers) {
+    const log = (await taps.get(b.name)?.boardLog()) ?? []
+    const own = new Set(browserOwn.get(b.name))
+    const byEvent: Record<string, number> = {}
+    const echo = { own: 0, other: 0 }
+    for (const x of log) {
+      if (!ANOMALY.test(x.event)) continue
+      byEvent[x.event] = (byEvent[x.event] ?? 0) + 1
+      if (x.event === 'echo_suspect')
+        for (const id of ((x.detail as { ids?: string[] } | null)?.ids ?? []) as string[])
+          echo[own.has(id) ? 'own' : 'other']++
+    }
+    anomalies[b.name] = {
+      byEvent,
+      echoSuspectIds: echo,
+      tail: log
+        .filter((x) => ANOMALY.test(x.event))
+        .slice(-40)
+        .map((x) => ({ ...x, at: x.at - w.startedAt })),
+    }
+  }
   const evidence = (extra: Record<string, unknown>) =>
     writeEvidence(testInfo, 'B11', {
+      anomalies,
       durationMs: DURATION_MS,
       headless: HEADLESS,
       counts,
