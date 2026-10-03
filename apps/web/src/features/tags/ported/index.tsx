@@ -14,9 +14,9 @@
 //    the CSV column (./csv.ts, for 3e's export).
 // Permissions: whoever may edit the canvas may change tags; viewers and commenters see and filter them
 // (their sessions are read-only on the sync server, which refuses their pushes). Name-only guests follow
-// their link's role for the elements' tags, but the room refuses every guest's lb_doc write, so a guest
-// can use the board's tags but not create one (a change request: docs/research/excalidraw/wave3/3D.md).
-// The filter and the search are each person's own view.
+// their link's role for the elements' tags, and an editor-role (workshop) guest may create tags too since
+// CR-3D-5 (wave A): the room takes its `tagDef:*` writes, at most 10 tag keys per guest while the room is
+// open (see ./runtime.ts). The filter and the search are each person's own view.
 
 import type {
   CanvasFeature,

@@ -7,8 +7,11 @@
 //    the list then follows the elements' own copies (a definition that went is listed again, a colour or
 //    name the undo changed is written back); a tag that only the undone step created stays listed.
 //
-// Who may write: whoever may edit the canvas. The server refuses read-only sessions' pushes (and a
-// guest's doc writes), which is the enforcement; `canvas.readOnly()` only keeps the UI from trying.
+// Who may write: whoever may edit the canvas, an editor-role name-only (workshop) guest included since
+// CR-3D-5 (wave A): the room takes such a guest's `tagDef:*` doc writes, at most GUEST_TAG_DEF_CAP (10)
+// tag keys per guest uid while the room is open (the budget resets when the room is evicted or restarted;
+// `GUEST_LIMIT` beyond it), and no other doc key. The server refuses read-only sessions' pushes, which is
+// the enforcement; `canvas.readOnly()` only keeps the UI from trying.
 
 import type { TagColor, TagDef } from '@draftroom/contracts'
 import type { CanvasChange, CanvasElement, LobbyCanvas } from '../../../canvas/api/index.ts'
