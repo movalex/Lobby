@@ -280,10 +280,29 @@ export class BoardInput {
     if (wysiwyg) scope = this.o.isGrantedEditor(wysiwyg) ? 'editor' : null
     else if (isTextEntry(t)) scope = null
     else if (this.overCanvas(t) && this.o.editor() === 'none') scope = 'canvas'
-    // passive observers (a presentation that ends on any key) see every key over the board
+    // observers (a presentation that ends on any key) see every key over the board, marked when it is
+    // Lobby's own (CR-3D-2: the lease's synthetic Enter / Escape are never trusted events); one that takes
+    // the key (`handled()`) keeps it from the key dispatch below and from the engine (the mind map's
+    // words typed between two topics' editors)
     if (!isTextEntry(t) || wysiwyg) {
-      const ev: CanvasInputEvent = { type: 'key-down', key: e.key, code: e.code, ...mods(e) }
+      let handled = false
+      const ev: CanvasInputEvent = {
+        type: 'key-down',
+        key: e.key,
+        code: e.code,
+        synthetic: !e.isTrusted,
+        composing: e.isComposing,
+        handled() {
+          handled = true
+        },
+        ...mods(e),
+      }
       for (const l of this.o.listeners()) l(ev)
+      if (handled) {
+        e.preventDefault()
+        e.stopPropagation()
+        return
+      }
     }
     if (!scope || e.isComposing) return
     const canvas = this.o.canvas()

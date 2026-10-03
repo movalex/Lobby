@@ -7,15 +7,21 @@
 //   F2                        edit the selected topic
 //   Delete / Backspace        remove the selected topics with their branches (asks above a size)
 //
+// Type-to-edit (CR-3D-3): a printable key on the one selected topic starts editing it, as on a sticky note
+// (the page's `registries.typeToEdit`, asked by the key allowlist after the keys above: tool letters and the
+// like only come after). The key is the first word typed: the same queue F2 uses keeps the ones that follow
+// it. Not right after Esc left the topic (RETRO-02: the next letters are tool keys until the selection
+// changes or the topic is clicked), and never on a locked topic.
+//
 // Keys are declared as FeatureKeySpecs (docs/EXCALIDRAW-CONTRACTS.md §1 rule 8): the board page's key
 // dispatch (canvas/board/input.ts) runs them before the key allowlist, so Excalidraw never sees them.
 //
 // Never losing a keystroke. A new topic's editor opens through the text lease: between the Tab (or Enter)
 // and the grant, the editor is "pending" and the board page keeps printable keys, Enter and Backspace in
 // the lease's buffer (replayed into the editor on the grant) and stops the rest, feature keys included. So
-// while its own new topic is pending this observes the TRUSTED key-downs on the board (a document-capture
-// listener filtered to the board's container; the input stream's `on('input')` also reports the lease's own
-// synthetic Enter, CR-3D-2), keeps them in order (between one topic's editor closing and the next one's
+// while its own new topic is pending this observes the key-downs the person typed on the board (the input
+// stream's `on('input')` marks the lease's own synthetic Enter and Escape as `synthetic`, CR-3D-2), keeps
+// them in order (between one topic's editor closing and the next one's
 // lease request it also keeps them from the board, which would take a letter for a tool key), and when the
 // editor opens it puts the words typed before the first Tab, Enter, Shift+Tab or Esc into the topic
 // (replacing what the replay typed, which turned an Enter into a new line) and runs the key itself; the keys
@@ -29,7 +35,9 @@
 
 import type {
   CanvasFeatureContext,
+  CanvasInputEvent,
   FeatureKeySpec,
+  FeatureRegistries,
   KeyEventLike,
   LobbyCanvas,
 } from '../../../canvas/api/index.ts'
@@ -118,6 +126,10 @@ export function textAfter(base: string, mode: EditorMode, words: string): string
 
 export class MindmapKeyboard {
   private pending: Pending | null = null
+  /** the topic being edited (so its close can be told from any other editor's) */
+  private editedTopic: string | null = null
+  /** the topic an edit just ended on, still selected: letters are not typed into it (RETRO-02) */
+  private left: string | null = null
   private offs: (() => void)[] = []
   private disposed = false
   readonly rt: MindmapRuntime
@@ -128,21 +140,37 @@ export class MindmapKeyboard {
     this.canvas = rt.canvas
   }
 
-  install(): () => void {
-    // An observer of the board's key-downs (it acts on none; it stops one only in the moment between two
-    // topics' editors, see onKey), trusted events only: the lease's own synthetic Enter, which opens an editor, must never be taken for a key
-    // the person typed, and the `input` stream does not say which key-downs are synthetic (CR-3D-2).
-    // On the document, so it sees a key before the board's own dispatch: the Tab that starts a new topic
-    // is handled there, and only the keys AFTER it are the new topic's.
-    const root = this.canvas.container()
-    const doc = root?.ownerDocument
-    if (root && doc) {
-      const onKey = (e: KeyboardEvent) => {
-        if (e.target instanceof Node && root.contains(e.target)) this.onKey(e)
-      }
-      doc.addEventListener('keydown', onKey, { capture: true })
-      this.offs.push(() => doc.removeEventListener('keydown', onKey, { capture: true }))
-    }
+  install(registries?: FeatureRegistries): () => void {
+    // An observer of the board's key-downs (it acts on none; it takes one only in the moment between two
+    // topics' editors, see onKey), the person's own keys only: the lease's synthetic Enter, which opens an
+    // editor, must never be taken for a key the person typed (the stream marks it `synthetic`, CR-3D-2).
+    // The stream's notification comes before the board's own key dispatch, so the Tab that starts a new
+    // topic is handled there, and only the keys AFTER it are the new topic's.
+    this.offs.push(
+      this.canvas.on('input', (e) => {
+        if (e.type === 'key-down') this.onKey(e)
+      }),
+      // RETRO-02: the topic an edit just left stays selected without being typed into again
+      this.canvas.on('editingChanged', (id) => {
+        if (id !== null) this.left = null
+        else if (this.editedTopic !== null && this.rt.isTopic(this.editedTopic)) this.left = this.editedTopic
+        this.editedTopic = id !== null && this.rt.isTopic(id) ? id : null
+      }),
+      this.canvas.on('selectionChanged', (ids) => {
+        if (this.left && !(ids.length === 1 && ids[0] === this.left)) this.left = null
+      }),
+      this.canvas.on('input', (e) => {
+        if (e.type === 'pointer-down') this.left = null
+      }),
+    )
+    if (registries)
+      this.offs.push(
+        registries.typeToEdit.register({
+          id: 'mindmap.type-to-edit',
+          applies: (id) => this.typesInto(id),
+          start: (id, key) => this.typeInto(id, key),
+        }),
+      )
     return () => {
       this.disposed = true
       for (const f of this.offs.splice(0)) f()
@@ -156,28 +184,42 @@ export class MindmapKeyboard {
     return !!this.pending && !this.pending.done
   }
 
-  private onKey(e: KeyboardEvent) {
-    if (!e.isTrusted || e.isComposing) return
+  private onKey(e: Extract<CanvasInputEvent, { type: 'key-down' }>) {
+    if (e.synthetic || e.composing) return
     const p = this.pending
     if (!p || p.done) return
-    // typed into some other field (a comment, the search box): not a key for the board
-    const t = e.target as HTMLElement | null
-    const wysiwyg = t instanceof HTMLTextAreaElement && t.classList.contains('excalidraw-wysiwyg')
-    const field =
-      !!t && (t.isContentEditable || t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement)
-    if (field && !wysiwyg) return
     // the editor is open: the editor-scope keys and the textarea take it from here
     if (p.id && this.canvas.text.editorElement() && this.canvas.editingId() === p.id) return
-    const q = queuedOf({ key: e.key, shift: e.shiftKey, ctrl: e.ctrlKey, meta: e.metaKey, alt: e.altKey })
+    const q = queuedOf({ key: e.key, shift: e.shift, ctrl: e.ctrl, meta: e.meta, alt: e.alt })
     if (!q) return
     enqueue(p.queue, q)
     // Between a topic's editor closing and the next topic's lease request (no lease is pending yet, so
     // the board would take a letter for a tool key and the closing editor would take the rest), the key
     // is the next topic's alone: nothing else sees it. Once the request is out, the lease keeps the keys.
-    if (p.id === null || p.hold) {
-      e.preventDefault()
-      e.stopImmediatePropagation()
-    }
+    if (p.id === null || p.hold) e.handled()
+  }
+
+  /**
+   * CR-3D-3: whether a printable key on `id` starts editing it here: an editable, unlocked, visible topic
+   * that no edit just left and whose editor is not already on its way.
+   */
+  typesInto(id: string): boolean {
+    return (
+      this.rt.isTopic(id) &&
+      this.left !== id &&
+      !this.waiting &&
+      !this.canvas.readOnly() &&
+      !this.canvas.isLocked(id) &&
+      !this.canvas.isHidden(id) &&
+      this.canvas.text.canEdit(id)
+    )
+  }
+
+  /** CR-3D-3: starts editing `id` with `key` as its first typed character (appended, like F2 then the key). */
+  typeInto(id: string, key: string): boolean {
+    if (!this.typesInto(id)) return false
+    this.expectEditor(id, 'append', [{ kind: 'text', text: key }])
+    return true
   }
 
   /** Opens `id`'s editor through the lease; keys typed until it is open are kept for it (see the header). */
@@ -451,7 +493,9 @@ export function mindmapKeys(
       isReadonly: ctx.canvas.readOnly(),
       menusOpen: ctx.registries.menusOpen.call(),
       targetIsTextField: false,
-      justLeftEditing: true, // no type-to-edit on topics here (see index.tsx): only F2 edits
+      // typing on a topic is not this key's: the allowlist's type-to-edit asks `registries.typeToEdit`
+      // (CR-3D-3, MindmapKeyboard.typesInto), after the keys here, as for sticky notes
+      justLeftEditing: true,
       locked: ctx.canvas.isLocked(id),
     })
     return intent ? { intent, id } : null

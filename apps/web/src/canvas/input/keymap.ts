@@ -133,8 +133,19 @@ export interface KeyContext {
   singleTextTarget: boolean
   /** Exactly one unlocked sticky note is selected (P2's target). */
   singleNote: boolean
+  /**
+   * CR-3D-3: a feature's type-to-edit rule (registries.typeToEdit) applies to the one selected element, as
+   * notes' own rule does (a mind-map topic): a printable key then starts editing it, before tool letters.
+   */
+  typeToEdit?: boolean
   /** The selection is a mind-map node (§4.7). Always false in spike A. */
   inMindMap?: boolean
+  /**
+   * CR-W5-3G-4: Excalidraw's image crop editor is open (`appState.croppingElementId`). Enter then ends the
+   * crop, as Escape does (its own key: App.onKeyDown finishes the crop on either); with no crop open Enter
+   * on a selected image stays blocked, since it would START Excalidraw's own crop there (not Lobby's).
+   */
+  cropping?: boolean
   /**
    * The export policy lets this person copy (CR-3A-4). Read-only roles' Ctrl/Cmd+C reaches the browser
    * only then; editors' copy is delegated either way (the export gate answers at the copy event).
@@ -692,11 +703,13 @@ export function classifyKey(e: KeyLike, ctx: KeyContext): KeyVerdict {
   if (mod && e.altKey && !e.shiftKey && e.key === 'Enter') return { kind: 'lobby', action: 'ctrlAltEnter' }
 
   if (e.key === 'Enter' && !mod && !e.altKey && !e.shiftKey && !e.isComposing) {
+    // CR-W5-3G-4: Enter ends an open crop (Excalidraw's finishImageCropping), through the same allowlist as Escape
+    if (ctx.cropping) return plain(['finalize'])
     if (ctx.inMindMap) return { kind: 'lobby', action: 'mindmap' }
     return ctx.singleTextTarget ? { kind: 'lobby', action: 'editText' } : block(e)
   }
 
-  if (ctx.singleNote && isTypeToEditKey(e)) return { kind: 'lobby', action: 'typeToEdit' }
+  if ((ctx.singleNote || ctx.typeToEdit) && isTypeToEditKey(e)) return { kind: 'lobby', action: 'typeToEdit' }
 
   if (!mod && !e.altKey && !e.shiftKey) {
     const name = /^Key[A-Z]$/.test(e.code ?? '') ? (e.code ?? '').slice(3).toLowerCase() : e.key.toLowerCase()

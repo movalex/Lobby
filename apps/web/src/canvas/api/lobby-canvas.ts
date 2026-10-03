@@ -132,7 +132,8 @@ export interface InputModifiers {
  * A canvas input event as features see it (tldraw's `editor.on('event')` infos). Dispatched from Lobby's
  * capture-phase listeners on the board wrapper BEFORE the engine sees it; `handled()` stops the engine
  * from acting on it (tldraw's `markEventAsHandled`). Keys go through the key registry, not this stream,
- * except `key-down` notifications for passive observers (a present session that exits on any key).
+ * except `key-down` notifications for observers (a present session that exits on any key; the mind map's
+ * keys typed while a topic's editor is on its way, which `handled()` keeps from everything else).
  */
 export type CanvasInputEvent =
   | ({
@@ -165,7 +166,21 @@ export type CanvasInputEvent =
       readonly touch?: TouchPinch
       handled(): void
     } & InputModifiers)
-  | ({ readonly type: 'key-down'; readonly key: string; readonly code: string } & InputModifiers)
+  | ({
+      readonly type: 'key-down'
+      readonly key: string
+      readonly code: string
+      /**
+       * CR-3D-2: Lobby's own event, not a key the person pressed: the synthetic Enter and Escape the text
+       * lease dispatches to open and close an editor (events a script dispatches count too). Observers of
+       * what the person types ignore these.
+       */
+      readonly synthetic: boolean
+      /** an IME is composing (the key is part of it) */
+      readonly composing: boolean
+      /** stops and prevents this key: the board's own key dispatch and the engine never see it */
+      handled(): void
+    } & InputModifiers)
 
 /** A two-finger touch pinch as the board's input layer reads it (the `touch` of a `pinch` input event). */
 export interface TouchPinch {

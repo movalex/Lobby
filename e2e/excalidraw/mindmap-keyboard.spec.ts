@@ -241,8 +241,8 @@ test('mind map: fast typing never loses a key; Shift+Tab moves up a level; an em
     await expect.poll(() => selection(a.page)).toEqual([byText(v, 'Idea').id])
     await a.page.keyboard.press('ArrowRight')
     await expect.poll(() => selection(a.page)).toEqual([byText(v, 'Detail one').id])
-    // Deviation (docs/research/excalidraw/wave3/3D.md): typing on a selected topic does not start
-    // editing on this canvas (letters are the tool keys there); F2 does, with the caret at the end.
+    // F2 edits with the caret at the end (typing a letter does too since CR-3D-3, wave C3:
+    // c3-polish.spec.ts; this test keeps to F2).
     await a.page.keyboard.press('F2')
     // Observed under load (1 of about 25 runs): the lease never granted the first open; the editor then
     // opens on a second F2 (3D.md, evidence). Retried once, with a note in the report.
