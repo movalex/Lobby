@@ -417,6 +417,21 @@ export class PushApplier {
     if (this.createdByWriter(tombstone)) return true
     return this.env.store.deletedBy(tombstone.id) === this.s.uid
   }
+  /**
+   * P-W5: an undelete by patch (`life` false) based on a version below the tombstone's was made before
+   * this writer saw the deletion (a stale tab, an offline replay): it brings the element back only for the
+   * deleter of record (its own undo, whatever its tab knew) or an owner; anyone else's is STALE, and the
+   * client resets to the (redacted) tombstone. Before, the room never read `pv`, so an account editor's
+   * stale revive of someone else's deletion landed and showed every client its content (V2 P-W5). An
+   * undelete based on the tombstone's own version (the client saw the deletion: an undo, a redo, a replay
+   * with the corrected `pv`) is unaffected.
+   */
+  private mayReviveStale(tombstone: El): boolean {
+    if (this.s.role === 'owner') return true
+    // deleted by an earlier op of this very push (its `lb_deleted` row is written in Phase F)
+    if (this.get(tombstone.id).before?.isDeleted === false) return true
+    return this.env.store.deletedBy(tombstone.id) === this.s.uid
+  }
   private countAdded(el: El, newId: boolean): void {
     if (!el.isDeleted) {
       this.addedElements++
@@ -717,6 +732,7 @@ export class PushApplier {
     const revived = cur.isDeleted && !next.isDeleted
     if (revived) {
       if (!this.mayRevive(cur)) return this.reject(i, 'GONE')
+      if (op.pv < cur.version && !this.mayReviveStale(cur)) return this.reject(i, 'STALE')
       const cap = this.capProblem(next)
       if (cap) return this.reject(i, cap)
     }
