@@ -95,21 +95,58 @@ export interface WheelShape {
   readonly deltaX?: number
   readonly deltaY?: number
   readonly deltaMode?: number
+  /**
+   * `window.devicePixelRatio` when the event came: the display's scaling times the browser's zoom (1 when
+   * the page does not say). Chrome and Edge report a mouse notch in CSS pixels, so a notch that is 100 at
+   * 100% arrives as 100 / ratio at 125% (80), 150% (66.67) or 200% (50): `looksLikeMouseWheel` reads it.
+   */
+  readonly pixelRatio?: number
+}
+
+/** A mouse notch in pixels on Chrome and Edge at a ratio of 1: 100, or 120 on some systems. */
+const NOTCH_PX = [100, 120] as const
+
+/**
+ * The ratio the page runs at right now (`window.devicePixelRatio`), 1 when there is none or it is not a
+ * sensible number (a unit test, a worker). Browser zoom is part of it: Ctrl + plus on a 125% display is 1.25 *
+ * the zoom. Read at the wheel event itself, so a zoom change applies from the next notch.
+ */
+export function currentPixelRatio(): number {
+  const r = (globalThis as { devicePixelRatio?: unknown }).devicePixelRatio
+  return typeof r === 'number' && Number.isFinite(r) && r >= 0.25 && r <= 8 ? r : 1
+}
+
+/**
+ * Whether `a` is one notch of `notch` px, or a whole number of them (a wheel turned fast), as a browser
+ * would report it: to within float noise, or within half a pixel when `a` is a whole number (a browser that
+ * rounds what it reports to pixels).
+ */
+function wholeNotches(a: number, notch: number): boolean {
+  const n = Math.round(a / notch)
+  if (n < 1) return false
+  return Math.abs(a - n * notch) <= (Number.isInteger(a) ? 0.5 : 0.01) + 1e-9
 }
 
 /**
  * Whether a wheel event looks like a notch of a mouse wheel rather than a trackpad's scroll (the Input
  * device preference's `auto`): a wheel that reports lines or pages (Firefox's mouse wheel), or whole
  * hundreds of pixels on the one axis (Chrome's and Edge's mouse wheel: 100 px a notch, 120 on some
- * systems, a multiple of it when turned fast). A trackpad scrolls in small, uneven pixel steps, usually
- * with a sideways part. A guess: the setting says it outright when this one gets a device wrong.
+ * systems, a multiple of it when turned fast). Under display scaling or browser zoom the same notch is
+ * 100 / `pixelRatio` (80, 66.67, 50 at 125%, 150%, 200%) or 120 / `pixelRatio`, so those count too once the
+ * ratio is not 1; the unscaled sizes keep counting at any ratio (a display whose scaling the browser does
+ * not fold into the delta). A trackpad scrolls in small, uneven pixel steps, usually with a sideways part.
+ * A guess (reasoned from how Chromium scales wheel deltas, not measured on a scaled display): the setting
+ * says it outright when this one gets a device wrong. The scaling and the browser zoom are one ratio here,
+ * so a mouse on a scaled display that is also zoomed may still read as a trackpad.
  */
 export function looksLikeMouseWheel(e: WheelShape): boolean {
   const dy = e.deltaY ?? 0
   if (!dy || !Number.isFinite(dy) || (e.deltaX ?? 0) !== 0) return false
   if (e.deltaMode === 1 || e.deltaMode === 2) return true
   const a = Math.abs(dy)
-  return Number.isInteger(a) && a >= 100 && (a % 100 === 0 || a % 120 === 0)
+  const ratio = e.pixelRatio !== undefined && e.pixelRatio >= 0.25 && e.pixelRatio <= 8 ? e.pixelRatio : 1
+  const scaled = Math.abs(ratio - 1) > 1e-3
+  return NOTCH_PX.some((n) => wholeNotches(a, n) || (scaled && wholeNotches(a, n / ratio)))
 }
 
 /** Whether a plain wheel event (no Ctrl/Cmd, no Shift) zooms: the preference, or `auto`'s guess. */
@@ -283,7 +320,13 @@ export function installWheelZoom(canvas: LobbyCanvas): () => void {
   const plainZoom = (e: WheelInput): boolean => {
     if (e.type !== 'wheel' || e.ctrl || e.meta || e.shift) return false
     try {
-      return plainWheelZooms(canvas.settings.get().wheel, e)
+      // the page's ratio now (display scaling and browser zoom), for `auto`'s guess: a notch is 100 / ratio
+      return plainWheelZooms(canvas.settings.get().wheel, {
+        deltaX: e.deltaX,
+        deltaY: e.deltaY,
+        deltaMode: e.deltaMode,
+        pixelRatio: currentPixelRatio(),
+      })
     } catch {
       return false // a canvas without the settings (a unit test's): the engine's pan
     }
