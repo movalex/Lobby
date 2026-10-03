@@ -401,6 +401,14 @@ export class ElementRoom {
   private deletedSinceTrim = 0
   /** when the receipts' age limit last ran (schema.ts RECEIPTS.ttlEveryMs; the first writing batch runs it) */
   private lastReceiptTtl = Number.NEGATIVE_INFINITY
+  /**
+   * The receipt gap (wave D, D2): per user, the highest clock of a committed push of theirs whose receipt
+   * this room could not record (recordReceipts). Every answer's `from` is past it, so the client never reads
+   * such a push's missing receipt as "never landed" (it counts instead, as before rev 11). The file's own
+   * marker row says the same across a restart when it could be written; this covers the open room when it
+   * could not.
+   */
+  private readonly receiptGaps = new Map<string, number>()
   /** this room open's session id, named by its `lb_deleted` rows (the per-session retention, store.ts) */
   readonly deletedSession = randomUUID()
 
@@ -1143,7 +1151,7 @@ export class ElementRoom {
         receipts.push({ uid: e.session.identity.uid, rid: e.push.rid, clock: outcome.clock })
       deliveries.push(this.ackDelivery(e.session, e.push, outcome, ackClock))
     }
-    if (receipts.length) this.recordReceipts(receipts, now)
+    const receiptGap = receipts.length ? this.recordReceipts(receipts, now) : null
     if (clock !== startClock) store.setClock(clock)
     const tc = performance.now()
     try {
@@ -1168,6 +1176,9 @@ export class ElementRoom {
     this.pacer.noteCommit(this.lastCommitAt)
     if (clock !== startClock) this.catchUps.clear()
     store.meta.clock = clock
+    // receipts this batch could not record: their pushes committed, so every answer to their users from now
+    // on (this batch's own queries included, delivered below) says their receipts are complete only past them
+    if (receiptGap) this.noteReceiptGap(receiptGap)
     // the cached reset snapshot stays valid for its 5 s: a joiner gets it plus a catch-up since its clock
     // (§2.4.5), so a join storm on a busy board compresses one snapshot, not one per write
     // after COMMIT: the batch's changes (once, for everyone), then acks and lease events in order
@@ -1196,11 +1207,20 @@ export class ElementRoom {
   }
 
   /**
-   * The batch's receipts (CONTRACTS_REV 11), in its transaction, then the ring's limits. In a SAVEPOINT of
-   * its own: a failure leaves the batch's pushes as they are (their clients then decide those lost pushes by
-   * counting, as before rev 11), logged without content.
+   * The batch's receipts (CONTRACTS_REV 11), in its transaction, then the ring's limits, in a SAVEPOINT of
+   * their own. A failure there rolls back only the receipts: the batch's pushes still COMMIT, without them.
+   * Left at that, the next query found such a push's receipt absent and, its base being past `from`, the
+   * client took it for a push that never landed and sent it again over whatever was written after it (the
+   * wave C review's receipt gap). So a failure returns the gap, per user the highest clock whose receipt is
+   * missing, and marks it in the file as the ring's trim does (a marker row, `rid` = ''; second savepoint),
+   * so every answer's `from` is past it, after a restart too; the room keeps it in memory as well
+   * (noteReceiptGap), for when the marker could not be written either. The client then decides those pushes
+   * by counting, as before rev 11. Logged and counted without content.
    */
-  private recordReceipts(rows: { uid: string; rid: string; clock: number }[], now: number): void {
+  private recordReceipts(
+    rows: { uid: string; rid: string; clock: number }[],
+    now: number,
+  ): { gap: Map<string, number>; rows: number; marked: boolean } | null {
     const store = this.store
     store.savepoint('receipts')
     try {
@@ -1213,18 +1233,45 @@ export class ElementRoom {
       )
       if (ttl) this.lastReceiptTtl = now
       store.release('receipts')
+      return null
     } catch (err) {
       store.rollbackTo('receipts')
       store.forgetReceiptsTable()
-      this.deps.log('[room] receipts not recorded', this.boardId, (err as Error)?.name ?? 'error')
+      const gap = new Map<string, number>()
+      for (const r of rows) gap.set(r.uid, Math.max(gap.get(r.uid) ?? 0, r.clock))
+      let marked = false
+      store.savepoint('receipts_gap')
+      try {
+        store.markReceiptGap(gap, now)
+        store.release('receipts_gap')
+        marked = true
+      } catch {
+        store.rollbackTo('receipts_gap')
+        store.forgetReceiptsTable()
+      }
+      this.deps.log(
+        '[room] receipts not recorded',
+        this.boardId,
+        (err as Error)?.name ?? 'error',
+        marked ? 'gap marked' : 'gap kept in memory',
+      )
+      return { gap, rows: rows.length, marked }
     }
+  }
+
+  /** After the COMMIT of a batch whose receipts were not recorded (recordReceipts): the gap is kept, counted. */
+  private noteReceiptGap(g: { gap: Map<string, number>; rows: number; marked: boolean }): void {
+    for (const [uid, clock] of g.gap)
+      this.receiptGaps.set(uid, Math.max(this.receiptGaps.get(uid) ?? 0, clock))
+    this.deps.metrics.inc('lobby_receipts_unrecorded_total', { gap: g.marked ? 'file' : 'memory' }, g.rows)
   }
 
   /**
    * The answer to a `receipts` query, read after the batch's COMMIT (so the pushes queued before the query,
    * every socket's, are decided): the named receipts of this session's user, and from which clock its
-   * receipts are complete. A failed read answers nothing conclusive (`from` past every clock): the client
-   * then counts, as before rev 11.
+   * receipts are complete, never at or below a clock whose receipt this room could not record (the receipt
+   * gap). A failed read answers nothing conclusive (`from` past every clock): the client then counts, as
+   * before rev 11.
    */
   private receiptsAnswer(s: Session, req: number, ids: string[]): () => void {
     return () => {
@@ -1236,7 +1283,9 @@ export class ElementRoom {
         this.deps.log('[room] receipts read failed', this.boardId, (err as Error)?.name ?? 'error')
         answer = { landed: {}, from: Number.MAX_SAFE_INTEGER }
       }
-      s.out.send(JSON.stringify({ type: 'receipts', req, landed: answer.landed, from: answer.from }))
+      const gap = this.receiptGaps.get(s.identity.uid)
+      const from = gap === undefined ? answer.from : Math.max(answer.from, gap + 1)
+      s.out.send(JSON.stringify({ type: 'receipts', req, landed: answer.landed, from }))
     }
   }
 

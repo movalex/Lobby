@@ -4,7 +4,13 @@ import { rect } from '../testing/elements.ts'
 import { stored } from '../testing/fakeRoom.ts'
 import { createHarness, type Harness, type TestClient } from '../testing/harness.ts'
 import type { OfflineEntry } from '../types.ts'
-import { type CoreEvent, decideLostDocByReceipt, decideLostElement, RECEIPTS_WAIT_MS } from './engine.ts'
+import {
+  CONTRACTS_WAIT_MS,
+  type CoreEvent,
+  decideLostDocByReceipt,
+  decideLostElement,
+  RECEIPTS_WAIT_MS,
+} from './engine.ts'
 import { createMemoryOfflineStore } from './offline-memory.ts'
 
 // W5-ENG-2 (wave C, C2; CONTRACTS_REV 11): push receipts. The last lost-edit paths V1's re-checks left
@@ -327,5 +333,144 @@ describe('decideLostElement with fates (pure)', () => {
     const list = [part(100, false), { ...part(111), s: { ...part(111).s, el: at(111, 5) } }]
     const d = decideLostElement(list, at(222, 4), new Set())
     expect([...d.again]).toEqual(['pos'])
+  })
+})
+
+describe('wave D2: a reconnect’s first flush waits for its socket’s contracts frame (receipt ids on the replays)', () => {
+  /** Holds `c`'s next `contracts` frames until the returned function lets them through. */
+  function holdContracts(c: TestClient): () => void {
+    const s = c.transport.session
+    const deliver = s.deliver
+    const held: Parameters<NonNullable<typeof deliver>>[0][] = []
+    s.deliver = (m) => {
+      if (m.type === 'contracts') held.push(m)
+      else deliver?.(m)
+    }
+    return () => {
+      s.deliver = deliver
+      for (const m of held.splice(0)) deliver?.(m)
+    }
+  }
+
+  it('a change made with no socket goes out after the reconnect with a receipt id (before: none)', () => {
+    const { h, a } = board()
+    h.room.cut(a.transport)
+    h.settle()
+    a.change('x', { x: 77 })
+    h.settle()
+    const before = pushesOf(a).length
+    reopen(a)
+    h.settle()
+    const after = pushesOf(a).slice(before)
+    expect(after).toHaveLength(1)
+    expect(after[0]?.rid).toMatch(/\./)
+    expect(h.room.elements.get('x')?.x).toBe(77)
+    expect(a.core.saveStatus.state).toBe('saved')
+  })
+
+  it('nothing goes out between the welcome and the contracts frame; a release made meanwhile goes behind the push, once', () => {
+    const { h, a } = board()
+    const lease = a.core.leaseConnect(() => {})
+    lease.send({ type: 'lease.acquire', req: 1, id: 'x' })
+    h.settle()
+    expect(a.core.leaseState().held).toEqual(['x'])
+    h.room.cut(a.transport)
+    h.settle()
+    // the room keeps a lease through its TTL across a reconnect; this fake drops it with the socket
+    h.room.leases.set('x', { sid: 'alice:tab1', uid: 'alice', name: 'alice' })
+    a.change('x', { x: 5 })
+    h.settle()
+    const release = holdContracts(a)
+    const before = sentBy(a).length
+    reopen(a)
+    // stepped, not settled: settling would run the wait out (CONTRACTS_WAIT_MS)
+    h.clock.advance(300)
+    const types = () =>
+      sentBy(a)
+        .slice(before)
+        .map((m) => m.type)
+    expect(a.core.welcome, 'welcomed').not.toBeNull()
+    expect(a.core.leaseState().held).toEqual(['x'])
+    expect(types()).toEqual(['hello'])
+    expect(a.core.saveStatus.state).toBe('saving')
+    lease.send({ type: 'lease.release', id: 'x' })
+    h.clock.advance(300)
+    expect(types(), 'the release waits too').toEqual(['hello'])
+    release()
+    h.settle()
+    const out = sentBy(a).slice(before)
+    expect(types()).toEqual(['hello', 'push', 'lease.release'])
+    expect((out[1] as { rid?: string }).rid).toMatch(/^[a-z0-9]+\.\d+$/)
+    expect(h.room.elements.get('x')?.x).toBe(5)
+    expect(h.room.leases.has('x')).toBe(false)
+    expect(a.core.saveStatus.state).toBe('saved')
+  })
+
+  it('the socket closes while it waits: the queued release is not sent; the next welcome releases what the room still names', () => {
+    const { h, a } = board()
+    const lease = a.core.leaseConnect(() => {})
+    lease.send({ type: 'lease.acquire', req: 1, id: 'x' })
+    h.settle()
+    h.room.cut(a.transport)
+    h.settle()
+    h.room.leases.set('x', { sid: 'alice:tab1', uid: 'alice', name: 'alice' })
+    const s = a.transport.session
+    const deliver = s.deliver
+    holdContracts(a)
+    const first = sentBy(a).length
+    reopen(a)
+    h.clock.advance(300)
+    lease.send({ type: 'lease.release', id: 'x' })
+    h.clock.advance(300)
+    h.room.cut(a.transport)
+    s.deliver = deliver // the held frame went with the socket
+    h.settle()
+    expect(
+      sentBy(a)
+        .slice(first)
+        .map((m) => m.type),
+      'nothing but the hello on that socket',
+    ).toEqual(['hello'])
+    h.room.leases.set('x', { sid: 'alice:tab1', uid: 'alice', name: 'alice' })
+    const before = sentBy(a).length
+    reopen(a)
+    h.settle()
+    expect(
+      sentBy(a)
+        .slice(before)
+        .map((m) => m.type),
+    ).toEqual(['hello', 'lease.release'])
+    expect(h.room.leases.has('x')).toBe(false)
+  })
+
+  it('a room that sends no contracts frame any more: the flush goes after CONTRACTS_WAIT_MS without receipt ids; the next reconnect does not wait', () => {
+    const { h, a } = board()
+    h.room.cut(a.transport)
+    h.settle()
+    h.room.contractsRev = null // rolled back past rev 10
+    a.change('x', { x: 6 })
+    h.settle()
+    const before = pushesOf(a).length
+    reopen(a)
+    h.clock.advance(300)
+    expect(a.core.welcome).not.toBeNull()
+    expect(pushesOf(a).length, 'waiting').toBe(before)
+    h.clock.advance(CONTRACTS_WAIT_MS)
+    h.settle()
+    expect(
+      pushesOf(a)
+        .slice(before)
+        .map((p) => p.rid),
+    ).toEqual([undefined])
+    expect(a.logs.some((l) => l.event === 'contracts_wait_timeout')).toBe(true)
+    expect(h.room.elements.get('x')?.x).toBe(6)
+    h.room.cut(a.transport)
+    h.settle()
+    a.change('x', { x: 7 })
+    h.settle()
+    const n = pushesOf(a).length
+    reopen(a)
+    h.clock.advance(300)
+    expect(pushesOf(a).length, 'sent at once').toBe(n + 1)
   })
 })
