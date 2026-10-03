@@ -113,7 +113,7 @@ describe('withoutElements', () => {
       ],
     }
     const lone = { id: 'lone', type: 'rectangle', boundElements: [{ id: 'img', type: 'arrow' }] }
-    const out = withoutElements([arrow, n1, img, box, lone], new Set(['img']))
+    const out = withoutElements<ClipboardElement>([arrow, n1, img, box, lone], new Set(['img']))
     expect(out.map((e) => e.id)).toEqual(['arrow', 'n1', 'box', 'lone'])
     expect(out[0]).toEqual({ ...arrow, startBinding: null })
     expect(out[1]).toBe(n1) // untouched elements are passed through as they are
