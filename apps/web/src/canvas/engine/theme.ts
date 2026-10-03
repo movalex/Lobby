@@ -15,6 +15,13 @@
 //    note palette's designed dark fills, Lobby's inks; any other explicit colour unchanged; and only
 //    neutral greys (the engine's default ink and white) through Excalidraw's own filter.
 //
+// W5-38 (wave C): the engine draws a selection's box 4 px outside the element (its transform-handle spacing,
+// a module constant) and a frame's name 3 px above the frame (FRAME_STYLE.nameOffsetY), so a selected frame's
+// box ran through the bottom of its name. The name sits FRAME_NAME_OFFSET above the frame instead, clear of the
+// box (the engine reads the offset for the name's label, its drag area and exports alike). The engine's
+// selection colour is Lobby's accent through CSS (canvas/board/board.css `--color-selection`), and the hover
+// outline is Lobby's overlay (canvas/board/chrome.tsx).
+//
 // One deliberate difference from tldraw: a note's label carries one ink for every note colour, so a colour
 // map cannot give "Paper" (white) notes dark ink on a light fill in dark mode as tldraw did; Paper becomes
 // a dark paper with light ink instead (readable, >= 4.5:1, pinned by theme.test.ts).
@@ -36,6 +43,11 @@ export const FRAME_NAME_DARK = '#ebe8e1'
 /** Frame outlines: >= 3:1 on the canvas in both modes. */
 export const FRAME_OUTLINE_LIGHT = '#7d8799'
 export const FRAME_OUTLINE_DARK = '#6b7280'
+/**
+ * W5-38: how far a frame's name sits above the frame (screen px; the engine's 3 put it under the 4 px
+ * selection box, which crossed it).
+ */
+export const FRAME_NAME_OFFSET = 6
 /** "Paper" notes and white strokes in dark mode (see the header). */
 export const PAPER_DARK = '#2b2f35'
 
@@ -165,7 +177,7 @@ export function lobbyDarkColor(color: string): string | null {
 let installed = false
 
 /**
- * Installs Lobby's look into the engine's module state, once: FRAME_STYLE's name colours and outline, and
+ * Installs Lobby's look into the engine's module state, once: FRAME_STYLE's name colours, name offset and outline, and
  * Lobby's answers in front of the dark-mode colour cache. Returns whether the dark-mode hook is on (it is
  * off when the engine's cache could not be found: dark mode is then Excalidraw's own).
  */
@@ -174,10 +186,12 @@ export function installLobbyEngineTheme(): boolean {
     nameColorLightTheme: string
     nameColorDarkTheme: string
     strokeColor: string
+    nameOffsetY: number
   }
   style.nameColorLightTheme = INK
   style.nameColorDarkTheme = FRAME_NAME_DARK
   style.strokeColor = FRAME_OUTLINE_LIGHT
+  style.nameOffsetY = FRAME_NAME_OFFSET
   if (installed) return true
   // the cache is the Map the filter stores a fresh colour in: catch it on one probe call
   const probe = `#${Math.floor(Math.random() * 0xffffff)

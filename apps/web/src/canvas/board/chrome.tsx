@@ -3,7 +3,8 @@
  * (`panels`), the top bar's feature items (`topBar`), the overlay root (`featureOverlays` in scene and
  * screen layers, C0 `overlays`, remote cursors through `cursorVisible`, "X is typing" badges), the host
  * slots, other people's selections in their colours (W5-28), a marker on the canvas's edge for each person who is
- * off screen (W5-32), and the lease banner and pending affordance.
+ * off screen (W5-32), the hover outline in Lobby's accent (W5-38: ./outlines.ts), and the lease banner and
+ * pending affordance.
  * Focus mode (`settings.focusMode`, present mode) hides the dock, the top bar, the host slots, the
  * remote selections, the edge markers and every overlay layer that does not say `show`.
  *
@@ -34,6 +35,7 @@ import type { FeatureOverlaySpec, FeatureRegistries, HostSlotName } from '../api
 import type { EditNotice, EditState } from '../lease/editorLease.ts'
 import { arrowPaths } from '../presence/drag-arrows.ts'
 import { type AvoidRect, EDGE_CHIP_RADIUS, type EdgeMarker, edgeMarkers } from './edge-markers.ts'
+import { hoverOutline, type OutlineBox } from './outlines.ts'
 import type { LobbyBoardSession } from './session.ts'
 
 // ---- the dock ---------------------------------------------------------------------------------------------
@@ -228,6 +230,7 @@ export function OverlayRoot({
       style={{ position: 'absolute', inset: 0, pointerEvents: 'none', overflow: 'clip', zIndex: 5 }}
     >
       <div data-lobby-layer="scene" style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
+        <CanvasOutlines canvas={ctx.canvas} focusMode={focusMode} />
         <TypingBadges canvas={ctx.canvas} />
         {shown
           .filter((o) => o.layer === 'scene')
@@ -248,6 +251,40 @@ export function OverlayRoot({
         <EdgeMarkers canvas={ctx.canvas} registries={r} focusMode={focusMode} overlay={rootRef} />
       </div>
     </div>
+  )
+}
+
+/**
+ * W5-38 (./outlines.ts): the element under the pointer, outlined in Lobby's accent (board.css). Under every other
+ * layer; never takes a click; not in focus mode.
+ */
+function CanvasOutlines({ canvas, focusMode }: { canvas: LobbyCanvas; focusMode: boolean }) {
+  const hover = useValue('lobby-hover-outline', () => (focusMode ? null : hoverOutline(canvas)), [
+    canvas,
+    focusMode,
+  ])
+  if (!hover) return null
+  return (
+    <div className="lobby-outlines" aria-hidden="true">
+      <Outline box={hover} kind="hover" />
+    </div>
+  )
+}
+
+function Outline({ box, kind }: { box: OutlineBox; kind: 'hover' }) {
+  return (
+    <div
+      className={`lobby-outline lobby-outline--${kind}`}
+      data-testid={`${kind}-outline`}
+      data-id={box.id}
+      style={{
+        left: box.x,
+        top: box.y,
+        width: box.w,
+        height: box.h,
+        transform: box.angle ? `rotate(${box.angle}rad)` : undefined,
+      }}
+    />
   )
 }
 

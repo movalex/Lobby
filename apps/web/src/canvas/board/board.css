@@ -34,6 +34,32 @@
   }
 }
 
+/* W5-38: one accent on the canvas. The engine's selection colour (its box, handles, point editor, lasso and box
+   selection; Excalidraw reads --color-selection from its container on every render) is Lobby's accent, the focus
+   token, in both themes (the engine's own was violet, beside Lobby's navy and blue). Specific enough to win over
+   .excalidraw and .excalidraw.theme--dark whatever order the stylesheets load in. */
+.lobby-board-canvas .excalidraw,
+.lobby-board-canvas .excalidraw.theme--dark {
+  --color-selection: var(--dr-focus, #2563eb);
+}
+
+/* W5-38 (outlines.ts, chrome.tsx CanvasOutlines): the element under the pointer, in the same accent as the
+   engine's selection box, as far outside the element */
+.lobby-outlines {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.lobby-outline {
+  position: absolute;
+  box-sizing: border-box;
+  border-radius: 4px;
+  pointer-events: none;
+}
+.lobby-outline--hover {
+  border: 1.5px solid var(--dr-focus, #2563eb);
+}
+
 /* a layer that takes clicks lets its own top-level elements take them; the layer itself never does */
 .lobby-overlay-layer[data-pointer="auto"] > * {
   pointer-events: auto;
