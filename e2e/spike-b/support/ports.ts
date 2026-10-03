@@ -27,6 +27,7 @@ export type SpikeBOwner =
   | 'spare'
   | '2B'
   | 'engine-int'
+  | 'wave-c5'
 
 /** §8.6.5: each owner's range. */
 export const PORT_RANGES: Readonly<Record<SpikeBOwner, readonly [number, number]>> = {
@@ -44,6 +45,8 @@ export const PORT_RANGES: Readonly<Record<SpikeBOwner, readonly [number, number]
   '2B': [6440, 6479],
   /** wave 5: the engine integrator (the spike-b suite and B8's generated rows on the merged engine/excalidraw) */
   'engine-int': [6520, 6559],
+  /** wave C, workstream C5 (e2e harness and coverage): its own range for the split arrows specs and the e2e runs */
+  'wave-c5': [7460, 7499],
 }
 
 /** §8.6.5: the named stacks (the base of each; sync = base, api = base + 1, web = base + 2). */
