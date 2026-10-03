@@ -255,7 +255,7 @@ test.describe('a lost write of a board-document key', () => {
     }
   })
 
-  test('another person writes the key after red is acked and blue is lost: theirs stands and this tab is told', async ({
+  test('another person writes the key after red is acked and blue never arrives: blue goes again as an offline change, no notice (receipts, CONTRACTS_REV 11)', async ({
     browser,
     canvasSession,
     board,
@@ -279,13 +279,15 @@ test.describe('a lost write of a board-document key', () => {
       await expect.poll(() => uplink.stats.cuts, { timeout: 15_000 }).toBe(1)
       expect(uplink.stats.dropped, 'the cut dropped blue before it left').toBe(1)
 
-      // the key's clock is past alice's own write (red): the write is bob's, so it stands, and alice is told
-      await expect(supersededToast(a.page)).toBeVisible({ timeout: 30_000 })
+      // W5-ENG-2 (CONTRACTS_REV 11): blue carried a receipt id and the room answers that it never landed, so it
+      // goes again like an offline change, over bob's later write, and nobody is told. (On a rev-10 room the
+      // counting rule saw the key's clock past alice's own write, let bob's write stand and told alice.)
       await expectSaved(a.page, 45_000)
-      await expect.poll(() => getDoc(a.page, KEY), { timeout: 15_000 }).toEqual(theirs)
-      expect(await getDoc(b.page, KEY)).toEqual(theirs)
+      await expect.poll(() => getDoc(b.page, KEY), { timeout: 15_000 }).toEqual(blue)
+      expect(await getDoc(a.page, KEY)).toEqual(blue)
+      await expect(supersededToast(a.page)).toHaveCount(0)
       const fresh = await canvasSession('carol')
-      expect(await getDoc(fresh.page, KEY), 'what is stored').toEqual(theirs)
+      expect(await getDoc(fresh.page, KEY), 'what is stored').toEqual(blue)
     } finally {
       await a.context.close()
     }
