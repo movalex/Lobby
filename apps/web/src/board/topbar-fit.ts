@@ -69,3 +69,12 @@ export const MENU_HYSTERESIS_PX = 16
 export function mayLeaveMenu(width: number, crowdedAt: number): boolean {
   return width > crowdedAt + MENU_HYSTERESIS_PX
 }
+
+/**
+ * Whether a render prop's result draws anything (W5-50): `null`, `undefined`, `false` and `''` do not. The
+ * phone "⋯" menu leaves out the caption of a row whose content is nothing (the people row, when the
+ * people feature has its own chip in the bar).
+ */
+export function hasContent(node: unknown): boolean {
+  return node !== null && node !== undefined && node !== false && node !== ''
+}

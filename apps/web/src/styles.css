@@ -2153,6 +2153,36 @@ button.dr-pill--role:disabled {
 .dr-topbar[data-width="phone"] .dr-topbar__home {
   padding: 2px;
 }
+/* W5-31 (CR-3I-2): the Excalidraw page's pinned controls (the people chip, the comment tool and the
+   bell, a live-presentation chip) do not fit the phone layout above on a 390 px screen: with 6 px gaps
+   and a title that never drops below 96 px, Share ended 7 px past the screen's right edge (37 px past on
+   a 360 px phone). At 400 px and below the gaps and the pills' padding are tighter and the title is the
+   part that gives way (it still keeps a few characters, then an ellipsis): about 117 px at 390, 47 px at
+   320. Every control stays at least 24 px square. */
+@media (max-width: 400px) {
+  .dr-topbar[data-width="phone"] {
+    gap: 4px;
+    padding: 0 6px 0 8px;
+  }
+  .dr-topbar[data-width="phone"] > .dr-topbar__board {
+    flex: 1 1 56px;
+    min-width: 0;
+  }
+  .dr-topbar[data-width="phone"] .dr-topbar__title-input {
+    min-width: 0;
+  }
+  .dr-topbar[data-width="phone"] .dr-pill,
+  .dr-topbar[data-width="phone"] .dr-save {
+    padding: 0 6px;
+  }
+  .dr-topbar[data-width="phone"] .dr-people-open {
+    min-width: 28px;
+    padding: 0 5px;
+  }
+  .dr-topbar[data-width="phone"] .dr-topbar__share {
+    width: 32px;
+  }
+}
 
 /* The "⋯" panel (ui/OverflowMenu.tsx), portaled to <body>. Closed, it stays mounted but invisible
    (never display:none), so a feature's own dialog opened from a shortcut still shows. */
