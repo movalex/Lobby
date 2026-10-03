@@ -69,6 +69,20 @@ test('CR-3A-7: the note tool’s panel sets the next note’s colour, size and f
   await waitForCanvasUx(a.page)
   await focusBoard(a.page)
   const palette = a.page.getByTestId('note-palette')
+  /** No size button is pressed: the shared next font size is on neither the active tool's scale. */
+  const noSizePressed = async () => {
+    for (const s of ['s', 'm', 'l', 'xl'])
+      await expect(a.page.getByTestId(`style.size.${s}`)).toHaveAttribute('aria-pressed', 'false')
+  }
+
+  await test.step('nothing picked yet: the engine’s next size (20) is on neither scale, so no size is pressed', async () => {
+    await setTool(a.page, 'text')
+    await expect(a.page.getByTestId('style.size.s')).toBeVisible()
+    await noSizePressed()
+    await setTool(a.page, 'note')
+    await expect(palette).toBeVisible()
+    await noSizePressed()
+  })
 
   await test.step('the note tool', async () => {
     await setTool(a.page, 'note')
@@ -93,6 +107,9 @@ test('CR-3A-7: the note tool’s panel sets the next note’s colour, size and f
 
   await test.step('the text tool', async () => {
     await setTool(a.page, 'text')
+    // the note's L (label size 26) is shared with the next text, and is no step of the text scale
+    await expect(a.page.getByTestId('style.size.xl')).toBeVisible()
+    await noSizePressed()
     await a.page.getByTestId('style.color.blue').click()
     await a.page.getByTestId('style.size.xl').click()
     await a.page.getByTestId('style.font.draw').click()
