@@ -100,11 +100,17 @@ test('R2-04: "Gather everyone" shows a phone the leader view at a readable zoom'
   const pop = a.page.getByTestId('workshop-popover')
   await pop.getByTestId('summon-button').click()
   await expect(b.page.getByTestId('follow-toast')).toBeVisible()
-  await expect.poll(async () => (await viewport(b.page)).zoom, { timeout: 10_000 }).toBeGreaterThan(0.43)
-  const [bv, av] = await Promise.all([viewport(b.page), viewport(a.page)])
-  expect(bv.zoom).toBeLessThan(0.45)
-  expect(Math.abs(centre(bv).x - centre(av).x)).toBeLessThanOrEqual(3)
-  expect(Math.abs(centre(bv).y - centre(av).y)).toBeLessThanOrEqual(3)
+  // the phone's zoom AND centre are the leader's: one poll on both (waiting for `zoom > 0.43` alone and then
+  // reading the centre once raced the camera, the failure seen in wave B's gate)
+  const followed = async () => {
+    const [bv, av] = await Promise.all([viewport(b.page), viewport(a.page)])
+    return {
+      zoom: bv.zoom > 0.43 && bv.zoom < 0.45,
+      centreX: Math.abs(centre(bv).x - centre(av).x) <= 3,
+      centreY: Math.abs(centre(bv).y - centre(av).y) <= 3,
+    }
+  }
+  await expect.poll(followed, { timeout: 10_000 }).toEqual({ zoom: true, centreX: true, centreY: true })
   await setViewport(a.page, { x: -600, y: 100, zoom: 0.44 })
   await expect
     .poll(async () => {
