@@ -986,6 +986,104 @@ test('W5-01: a note made with N inside the vote’s frame joins the frame and ta
   await expect(dot(b.page, made)).toHaveAttribute('data-count', '1')
 })
 
+// ---- RETRO-10: a vote over the selection (migration 0024) -------------------------------------------------------
+
+const RETRO = {
+  went: 'wk-went',
+  improve: 'wk-improve',
+  later: 'wk-later',
+  w1: 'wk-went-1',
+  i1: 'wk-improve-1',
+  p1: 'wk-later-1',
+  loose: 'wk-loose',
+}
+
+test('RETRO-10: a vote over two selected frames takes votes on their contents only; a tab from before 0024 reads it as a board vote and the server keeps it to the selection', async ({
+  join,
+  board,
+}) => {
+  const a = await join('alice')
+  const b = await join('bob', 'editor')
+  await seed(a.page, {
+    frames: [
+      { id: RETRO.went, x: 0, y: 0, w: 500, h: 400, name: 'Went well' },
+      { id: RETRO.improve, x: 600, y: 0, w: 500, h: 400, name: 'To improve' },
+      { id: RETRO.later, x: 1200, y: 0, w: 500, h: 400, name: 'Parking lot' },
+    ],
+    notes: [
+      { id: RETRO.w1, x: 40, y: 80, text: 'Trailer music', frameId: RETRO.went },
+      { id: RETRO.i1, x: 640, y: 80, text: 'Build times', frameId: RETRO.improve },
+      { id: RETRO.p1, x: 1240, y: 80, text: 'Merch', frameId: RETRO.later },
+      { id: RETRO.loose, x: 0, y: 600, text: 'Standup' },
+    ],
+  })
+  await expectItemsEverywhere([a, b], Object.values(RETRO))
+  const ref = (id: string) => `shape:${id}`
+
+  await test.step('alice selects the two columns: the setup starts on "Only the selection"', async () => {
+    await select(a.page, [RETRO.went, RETRO.improve])
+    const pop = await openWorkshopPopover(a.page)
+    await pop.getByTestId('vote-start').click()
+    const dialog = a.page.getByTestId('vote-setup-dialog')
+    await expect(dialog).toBeVisible()
+    await expect(dialog.getByTestId('vote-scope')).toHaveValue('selection')
+    await expect(dialog.getByTestId('vote-scope-selection')).toHaveText('Only the selection (2 frames)')
+    await dialog.getByTestId('vote-per-person').fill('3')
+    await dialog.getByTestId('vote-setup-submit').click()
+    await expect(dialog).toHaveCount(0)
+    await expect(a.page.getByTestId('vote-current')).toHaveAttribute('data-status', 'open')
+    await expect(a.page.getByTestId('vote-current')).toContainText('in frames “Went well” and “To improve”')
+  })
+
+  await test.step('the server stores the list; a build from before 0024 reads a board vote', async () => {
+    const res = await a.page.request.get(`/api/boards/${board}/workshop`, {
+      headers: { 'x-lobby-client': '1' },
+    })
+    expect(res.status()).toBe(200)
+    const now = (await res.json()) as { vote: { session: Record<string, unknown> } | null }
+    expect(now.vote?.session).toMatchObject({
+      scope: 'selection',
+      frameId: null,
+      selection: [ref(RETRO.went), ref(RETRO.improve)],
+    })
+    // workshopState sends no revision header: what a tab opened before the 0024 web deploy is answered
+    const old = (await workshopState(b.api, board)).vote as ApiVoteState
+    expect(old.session).toMatchObject({ scope: 'board', frameId: null })
+    expect(JSON.stringify(old)).not.toContain(ref(RETRO.improve))
+  })
+
+  await test.step('bob votes on notes in the two columns; the third column and a loose note take none', async () => {
+    await expect(b.page.getByTestId('vote-join-prompt')).toContainText('the selected frames and objects')
+    await joinVote(b, 3)
+    await showAll(b.page)
+    await clickElement(b.page, RETRO.w1)
+    await expect(dot(b.page, RETRO.w1)).toHaveAttribute('data-count', '1')
+    await clickElement(b.page, RETRO.i1)
+    await expect(dot(b.page, RETRO.i1)).toHaveAttribute('data-count', '1')
+    await clickElement(b.page, RETRO.p1)
+    await expect(b.page.getByTestId('vote-toast')).toContainText(
+      'Not part of this vote: only objects in the selection take votes.',
+    )
+    await clickElement(b.page, RETRO.loose)
+    await expect(remaining(b)).toHaveAttribute('data-remaining', '1')
+    const marked = await markedShapeIds(b.page)
+    expect(marked).toEqual(expect.arrayContaining([ref(RETRO.w1), ref(RETRO.i1)]))
+    expect(marked).not.toContain(ref(RETRO.p1))
+    expect(marked).not.toContain(ref(RETRO.loose))
+  })
+
+  await test.step('forged casts outside the selection are refused, also from a build that reads a board vote', async () => {
+    const sid = (await workshopState(b.api, board)).vote?.session.id ?? ''
+    for (const id of [RETRO.p1, RETRO.loose, RETRO.went]) {
+      const res = await post(b, `/api/votes/${sid}/cast`, { shapeId: ref(id), delta: 1 })
+      expect(res.status(), id).toBe(400)
+      expect(await res.text()).toContain('NOT_ELIGIBLE')
+    }
+    const v = (await workshopState(b.api, board)).vote as ApiVoteState
+    expect(v.myVotes).toEqual({ [ref(RETRO.w1)]: 1, [ref(RETRO.i1)]: 1 })
+  })
+})
+
 // ---- R2-05: no +1 while a dot vote is open (workshops-3.fix) ----------------------------------------------------
 
 test('+1 is not offered on notes while a dot vote is open (R2-05)', async ({ join, board }, testInfo) => {

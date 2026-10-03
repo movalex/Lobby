@@ -9,9 +9,14 @@ import {
   cornersOf,
   eligibleAt,
   eligibleInOrder,
+  initialScope,
   notInVoteNotice,
+  SELECTION_SCOPE,
   selectEligible,
   selectedEligible,
+  selectionCounts,
+  selectionScopeOf,
+  selectionText,
   voteClickAt,
 } from './voting-canvas.ts'
 
@@ -123,6 +128,103 @@ describe('click-to-vote targets', () => {
     expect(cornersOf(f.canvas, ['shape:a', 'shape:nope', 'bad'])).toEqual([
       { ref: 'shape:a', id: 'a', x: 600, y: 100 },
     ])
+  })
+})
+
+// ---- RETRO-10: a vote over the selection --------------------------------------------------------------------
+
+/** A retro: two columns (frames) with notes, a loose note, a connector and a third, unselected frame. */
+function retro() {
+  return fakeCanvas([
+    el('went', 'frame', { x: 0, y: 0, width: 500, height: 600, name: 'Went well' }),
+    el('improve', 'frame', { x: 600, y: 0, width: 500, height: 600, name: 'To improve' }),
+    el('later', 'frame', { x: 1200, y: 0, width: 500, height: 600, name: 'Parking lot' }),
+    ...note('w1', 'Trailer music', { x: 40, y: 40, frameId: 'went' }),
+    ...note('i1', 'Build times', { x: 640, y: 40, frameId: 'improve' }),
+    ...note('p1', 'Merch', { x: 1240, y: 40, frameId: 'later' }),
+    ...note('loose', 'Daily standup', { x: 0, y: 800 }),
+    ...note('other', 'Not selected', { x: 300, y: 800 }),
+    el('link', 'arrow', { x: 0, y: 700, width: 600, height: 0 }),
+  ])
+}
+
+describe('RETRO-10: a vote over the selection', () => {
+  it('lists the selected frames and loose objects: a label is its note, connectors and covered objects are left out', () => {
+    const f = retro()
+    f.selection = ['went', 'improve', 'w1', 'loose-label', 'link', 'gone']
+    expect(selectionScopeOf(f.canvas)).toEqual({
+      refs: ['shape:went', 'shape:improve', 'shape:loose'],
+      frames: 2,
+      objects: 1,
+      tooMany: false,
+    })
+    f.selection = ['link']
+    expect(selectionScopeOf(f.canvas)).toBeNull()
+    f.selection = []
+    expect(selectionScopeOf(f.canvas)).toBeNull()
+  })
+
+  it('more than 200 frames and objects cannot be listed', () => {
+    const f = fakeCanvas(Array.from({ length: 201 }, (_, i) => el(`n${i}`, 'stickynote', { x: i * 10 })))
+    f.selection = f.elements.map((e) => e.id)
+    expect(selectionScopeOf(f.canvas)).toMatchObject({ frames: 0, objects: 201, tooMany: true })
+    f.selection = f.selection.slice(0, 200)
+    expect(selectionScopeOf(f.canvas)).toMatchObject({ objects: 200, tooMany: false })
+  })
+
+  it('the setup starts on the selection for two frames or more, else on the frame, else the board', () => {
+    const two = { refs: ['shape:a', 'shape:b'], frames: 2, objects: 0, tooMany: false }
+    expect(initialScope(two, 'shape:a')).toBe(SELECTION_SCOPE)
+    expect(initialScope({ ...two, tooMany: true }, 'shape:a')).toBe('shape:a')
+    expect(
+      initialScope({ refs: ['shape:a', 'shape:x'], frames: 1, objects: 1, tooMany: false }, 'shape:a'),
+    ).toBe('shape:a')
+    expect(initialScope({ refs: ['shape:x', 'shape:y'], frames: 0, objects: 2, tooMany: false }, null)).toBe(
+      'board',
+    )
+    expect(initialScope(null, null)).toBe('board')
+    expect(selectionCounts({ frames: 2, objects: 1 })).toBe('2 frames, 1 object')
+    expect(selectionCounts({ frames: 0, objects: 3 })).toBe('3 objects')
+  })
+
+  it('what takes votes: listed objects and the contents of listed frames, never the frames themselves', () => {
+    const f = retro()
+    const rule = {
+      scope: 'selection' as const,
+      frameId: null,
+      shapeTypes: null,
+      selection: ['shape:went', 'shape:improve', 'shape:loose'],
+    }
+    expect(eligibleInOrder(f.canvas, rule)).toEqual(['w1', 'i1', 'loose'])
+    expect(eligibleAt(f.canvas, { x: 100, y: 100 }, rule)?.id).toBe('w1')
+    expect(eligibleAt(f.canvas, { x: 1300, y: 100 }, rule)).toBeNull() // the unselected frame's note
+    expect(voteClickAt(f.canvas, { x: 350, y: 850 }, rule)).toMatchObject({ kind: 'not-in-vote' })
+    expect(voteClickAt(f.canvas, { x: 2, y: 300 }, rule)).toMatchObject({
+      kind: 'not-in-vote',
+      target: { id: 'went' },
+    })
+    expect(notInVoteNotice(f.canvas, rule)).toBe(
+      'Not part of this vote: only objects in the selection take votes.',
+    )
+    expect(notInVoteNotice(f.canvas, { ...rule, shapeTypes: ['note'] })).toBe(
+      'Not part of this vote: only sticky notes in the selection take votes.',
+    )
+    // A rule without its list (a selection vote seen by nothing) takes nothing.
+    expect(eligibleInOrder(f.canvas, { ...rule, selection: null })).toEqual([])
+  })
+
+  it('the Voting panel names the frames, or counts them, and counts the objects', () => {
+    const f = retro()
+    expect(selectionText(['shape:went', 'shape:improve'], f.canvas)).toBe(
+      'in frames “Went well” and “To improve”',
+    )
+    expect(selectionText(['shape:went'], f.canvas)).toBe('in frame “Went well”')
+    expect(
+      selectionText(['shape:went', 'shape:improve', 'shape:later', 'shape:loose', 'shape:gone'], f.canvas),
+    ).toBe('in frames “Went well”, “To improve” and “Parking lot” and on 2 selected objects')
+    const many = ['went', 'improve', 'later', 'went'].map((id) => `shape:${id}`)
+    expect(selectionText(many, f.canvas)).toBe('in 4 frames')
+    expect(selectionText(['shape:loose'], f.canvas)).toBe('on 1 selected object')
   })
 })
 

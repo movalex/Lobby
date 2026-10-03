@@ -1,13 +1,15 @@
 // OWNER: 3f. Vote setup (facilitators) on the Excalidraw page (the tldraw board's VoteSetupDialog.tsx):
-// what can be voted on (whole board or one frame, all objects or sticky notes only), votes per person
-// (1-99), one vote per object, optional time limit. Anonymous by design: people only ever see their own
-// dots until the facilitator reveals the results. Frames are named by their api ref (`shape:<id>`).
-import { VOTES_PER_PERSON_MAX } from '@draftroom/contracts'
+// what can be voted on (whole board, one frame, or the selection: several frames and/or objects,
+// RETRO-10; all objects or sticky notes only), votes per person (1-99), one vote per object, optional
+// time limit. Anonymous by design: people only ever see their own dots until the facilitator reveals the
+// results. Frames and objects are named by their api ref (`shape:<id>`).
+import { VOTE_SELECTION_MAX, VOTES_PER_PERSON_MAX } from '@draftroom/contracts'
 import { type FormEvent, useId, useMemo, useState } from 'react'
 import type { CanvasElement, CanvasFeatureContext } from '../../../canvas/api/index.ts'
 import { Dialog } from '../../../ui/Dialog.tsx'
 import type { WorkshopStore } from '../store.ts'
 import { elementLabel, frameOf, refOf } from './elements.ts'
+import { initialScope, SELECTION_SCOPE, selectionCounts, selectionScopeOf } from './voting-canvas.ts'
 
 type Ctx = CanvasFeatureContext
 
@@ -53,7 +55,9 @@ export function VoteSetupDialog({
   const [title, setTitle] = useState('Dot vote')
   const [votes, setVotes] = useState('3')
   const [onePerObject, setOnePerObject] = useState(false)
-  const [scope, setScope] = useState<string>(() => selectedFrameRef(ctx, frames) ?? 'board')
+  // The selection when the dialog opened: the vote lists what was selected then.
+  const selection = useMemo(() => selectionScopeOf(canvas), [canvas])
+  const [scope, setScope] = useState<string>(() => initialScope(selection, selectedFrameRef(ctx, frames)))
   const [types, setTypes] = useState<'all' | 'note'>('all')
   const [duration, setDuration] = useState<string>('none')
   const [busy, setBusy] = useState(false)
@@ -69,12 +73,14 @@ export function VoteSetupDialog({
     setBusy(true)
     setError(null)
     const d = DURATIONS.find((x) => String(x.ms ?? 'none') === duration)
+    const bySelection = scope === SELECTION_SCOPE && selection && !selection.tooMany
     const r = await store.startVote({
       title: title.trim() || 'Dot vote',
       votesPerPerson: votesN,
       onePerObject,
-      scope: scope === 'board' ? 'board' : 'frame',
-      frameId: scope === 'board' ? null : scope,
+      scope: bySelection ? 'selection' : scope === 'board' ? 'board' : 'frame',
+      frameId: bySelection || scope === 'board' ? null : scope,
+      selection: bySelection ? selection.refs : null,
       durationMs: d?.ms ?? null,
       shapeTypes: types === 'note' ? ['note'] : null,
     })
@@ -157,6 +163,13 @@ export function VoteSetupDialog({
           onChange={(e) => setScope(e.target.value)}
         >
           <option value="board">Everything on the board</option>
+          {selection && (
+            <option value={SELECTION_SCOPE} disabled={selection.tooMany} data-testid="vote-scope-selection">
+              {selection.tooMany
+                ? `Only the selection (too many: at most ${VOTE_SELECTION_MAX} frames and objects)`
+                : `Only the selection (${selectionCounts(selection)})`}
+            </option>
+          )}
           {frames.map((f) => (
             <option key={f.id} value={refOf(f.id) ?? ''}>
               Only inside frame “{elementLabel(f, get)}”

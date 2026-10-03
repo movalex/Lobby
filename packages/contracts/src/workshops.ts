@@ -62,7 +62,13 @@ export type TimerResponse = z.infer<typeof TimerResponse>
 
 // ---- voting --------------------------------------------------------------------------------------
 
-export const VoteScope = z.enum(['board', 'frame'])
+/**
+ * What a vote covers: the whole board, one frame (its contents), or a 'selection' (RETRO-10, migration
+ * 0024): what the facilitator selected, several frames (their contents) and/or single objects. The api
+ * answers 'selection' only to a web build that declares LOBBY_CLIENT_REV >= 1 (client-rev.ts); older
+ * builds see such a vote as a board vote, and the api still applies the selection to their casts.
+ */
+export const VoteScope = z.enum(['board', 'frame', 'selection'])
 export type VoteScope = z.infer<typeof VoteScope>
 export const VoteStatus = z.enum(['open', 'closed', 'revealed'])
 export type VoteStatus = z.infer<typeof VoteStatus>
@@ -71,6 +77,10 @@ export const VOTES_PER_PERSON_MAX = 99
 export const VOTE_DURATION_MIN_MS = 60 * 1000
 export const VOTE_DURATION_MAX_MS = 7 * 24 * 60 * 60 * 1000
 const ShapeType = z.string().regex(/^[a-z][a-z0-9-]{0,39}$/)
+/** The most frames and objects one selection vote may name (0024's CHECK says the same). */
+export const VOTE_SELECTION_MAX = 200
+/** A selection vote's frames and objects, as api refs (`shape:<id>`). Repeats are dropped by the api. */
+export const VoteSelection = z.array(VoteShapeId).min(1).max(VOTE_SELECTION_MAX)
 
 export const CreateVoteInput = z
   .object({
@@ -79,6 +89,8 @@ export const CreateVoteInput = z
     onePerObject: z.boolean(),
     scope: VoteScope,
     frameId: VoteShapeId.nullable().optional(),
+    /** scope 'selection' only (and required there): the frames whose contents, and the objects, take votes. */
+    selection: VoteSelection.nullable().optional(),
     /** Optional end time; casting after it fails. null/omitted = until the facilitator ends it. */
     durationMs: z.number().int().min(VOTE_DURATION_MIN_MS).max(VOTE_DURATION_MAX_MS).nullable().optional(),
     /** Only these shape types can receive votes (e.g. ['note']); null/omitted = any votable object. */
@@ -87,6 +99,10 @@ export const CreateVoteInput = z
   .refine((v) => (v.scope === 'frame') === !!v.frameId, {
     message: 'frameId is required for a frame vote, and only allowed there',
     path: ['frameId'],
+  })
+  .refine((v) => (v.scope === 'selection') === !!v.selection, {
+    message: 'selection is required for a selection vote, and only allowed there',
+    path: ['selection'],
   })
 export type CreateVoteInput = z.infer<typeof CreateVoteInput>
 
@@ -98,6 +114,11 @@ export const VoteSession = z.object({
   onePerObject: z.boolean(),
   scope: VoteScope,
   frameId: VoteShapeId.nullable(),
+  /**
+   * scope 'selection': its frames and objects (VoteSelection); null for the other scopes. Absent from an
+   * api before 0024, and never sent to a web build that does not declare LOBBY_CLIENT_REV >= 1.
+   */
+  selection: z.array(VoteShapeId).nullable().optional(),
   shapeTypes: z.array(z.string()).nullable(),
   /** Effective status: an open vote past `endsAt` is reported as closed. */
   status: VoteStatus,
@@ -383,6 +404,20 @@ export interface VoteEligibilityRule {
   scope: VoteScope
   frameId: string | null
   shapeTypes: readonly string[] | null
+  /** scope 'selection': the listed frames (their contents) and objects. Missing or empty: nothing. */
+  selection?: readonly string[] | null
+}
+
+/** The eligibility rule of a vote session (the same on the api, for casts, and in the browser). */
+export function voteRuleOf(
+  s: Pick<VoteSession, 'scope' | 'frameId' | 'shapeTypes'> & { selection?: readonly string[] | null },
+): VoteEligibilityRule {
+  return {
+    scope: s.scope,
+    frameId: s.frameId ?? null,
+    shapeTypes: s.shapeTypes ?? null,
+    selection: s.selection ?? null,
+  }
 }
 
 const MAX_DEPTH = 64
@@ -390,6 +425,8 @@ const MAX_DEPTH = 64
 /**
  * Whether `shapeId` may receive a vote under `rule`. `lookup` returns shape records only (pages and
  * other records return undefined). Frame scope = the frame is an ancestor (the frame itself is not).
+ * Selection scope = the object is listed (a listed frame stands for its contents, like a frame vote, so
+ * the frame itself takes no vote), or one of its ancestors is a listed frame.
  */
 export function isVoteEligible(
   shapeId: string,
@@ -402,10 +439,25 @@ export function isVoteEligible(
   if (VOTE_INELIGIBLE_TYPES.includes(shape.type)) return false
   if (rule.shapeTypes && !rule.shapeTypes.includes(shape.type)) return false
   if (rule.scope === 'board') return true
-  if (!rule.frameId || shape.id === rule.frameId) return false
+  if (rule.scope === 'selection') {
+    const listed = new Set(rule.selection ?? [])
+    if (listed.has(shape.id)) return shape.type !== 'frame'
+    return hasAncestor(shape, lookup, (id) => listed.has(id))
+  }
+  const frameId = rule.frameId
+  if (!frameId || shape.id === frameId) return false
+  return hasAncestor(shape, lookup, (id) => id === frameId)
+}
+
+/** Whether a parent, grandparent … of `shape` passes `test` (at most MAX_DEPTH levels). */
+function hasAncestor(
+  shape: VoteShapeInfo,
+  lookup: (id: string) => VoteShapeInfo | undefined,
+  test: (id: string) => boolean,
+): boolean {
   let parentId = shape.parentId
   for (let i = 0; i < MAX_DEPTH && parentId; i++) {
-    if (parentId === rule.frameId) return true
+    if (test(parentId)) return true
     const parent = lookup(parentId)
     if (!parent) return false
     parentId = parent.parentId

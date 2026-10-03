@@ -20,7 +20,7 @@
 // tool's clicks vote too. A press with a modifier, on empty canvas or on an object the vote does not
 // accept goes to the engine as usual. The topmost object under the press decides (W5-03): a click on an
 // object the vote does not take casts nothing, even over one it takes, and says so.
-import type { VoteEligibilityRule } from '@draftroom/contracts'
+import { type VoteEligibilityRule, voteRuleOf } from '@draftroom/contracts'
 import { type KeyboardEvent as ReactKeyboardEvent, useEffect, useMemo, useRef, useState } from 'react'
 import { type CanvasFeatureContext, geometry } from '../../../canvas/api/index.ts'
 import { useValue } from '../../../lib/signals.ts'
@@ -79,13 +79,21 @@ function usePlacements(ctx: Ctx, counts: Record<string, { n: number; rank?: numb
 export function useRule(store: WorkshopStore): VoteEligibilityRule | null {
   const s = store.getSnapshot().vote?.session
   const types = s?.shapeTypes ? JSON.stringify(s.shapeTypes) : null
+  const picked = s?.selection ? JSON.stringify(s.selection) : null
   const has = !!s
   const scope = s?.scope
   const frameId = s?.frameId ?? null
   return useMemo<VoteEligibilityRule | null>(
     () =>
-      has && scope ? { scope, frameId, shapeTypes: types ? (JSON.parse(types) as string[]) : null } : null,
-    [has, scope, frameId, types],
+      has && scope
+        ? voteRuleOf({
+            scope,
+            frameId,
+            shapeTypes: types ? (JSON.parse(types) as string[]) : null,
+            selection: picked ? (JSON.parse(picked) as string[]) : null,
+          })
+        : null,
+    [has, scope, frameId, types, picked],
   )
 }
 
@@ -561,7 +569,12 @@ function JoinPrompt({ ctx, store }: { ctx: Ctx; store: WorkshopStore }) {
       <p>
         <strong>{s.title}</strong> — you have {vote.myRemaining} vote{vote.myRemaining === 1 ? '' : 's'} to
         place on
-        {s.scope === 'frame' ? ' objects in one frame' : ' objects on the board'}.
+        {s.scope === 'frame'
+          ? ' objects in one frame'
+          : s.scope === 'selection'
+            ? ' the selected frames and objects'
+            : ' objects on the board'}
+        .
       </p>
       <p className="dr-wk-hint dr-wk-hint--fine" data-testid="vote-keys-hint">
         Click objects to vote. Keyboard: Tab from the board goes to an object’s +, Enter or Space adds a vote,

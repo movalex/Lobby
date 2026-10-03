@@ -13,7 +13,7 @@
 // Registry entries (docs/EXCALIDRAW-CONTRACTS.md §3): the top-bar item `workshops`, the dock panels
 // `voting` and `private-notes`, four overlay layers (./WorkshopOverlay.tsx, ./NoteAuthors.tsx), the `vote`
 // tool, the cursor filter while cursors are hidden, and (only while this person votes) a Tab key.
-import { WORKSHOP_EVENTS, WorkshopSummonEvent } from '@draftroom/contracts'
+import { voteRuleOf, WORKSHOP_EVENTS, WorkshopSummonEvent } from '@draftroom/contracts'
 import type {
   CanvasFeature,
   CanvasFeatureContext,
@@ -94,7 +94,7 @@ function votingNow(ctx: Ctx): boolean {
 /** The rule of the open vote (the eligibility of an object). */
 function ruleNow(ctx: Ctx) {
   const s = storeFor(ctx).getSnapshot().vote?.session
-  return s ? { scope: s.scope, frameId: s.frameId ?? null, shapeTypes: s.shapeTypes ?? null } : null
+  return s ? voteRuleOf(s) : null
 }
 
 /**
