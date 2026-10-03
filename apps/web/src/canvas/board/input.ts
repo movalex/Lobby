@@ -235,6 +235,35 @@ export class BoardInput {
     return this.state
   }
 
+  /**
+   * CR-W5-3G-4: a double-tap (touch) on an element, offered to the `input` stream as the `double-click` it
+   * stands for, so a feature that takes a double-click (a file card opens its original, a GIF its player, a frame
+   * its name) takes the tap too, before the lease flow. Only for a tap ON an element: a double-tap on empty canvas
+   * keeps its own meaning (a new text). Returns whether a listener took it (`handled()`).
+   */
+  dispatchDoubleTap(scene: ScenePoint, screen: { x: number; y: number }): boolean {
+    const hit = this.o.hit(scene)
+    if (!hit) return false
+    let handled = false
+    const ev = {
+      type: 'double-click',
+      scene,
+      screen,
+      hit,
+      button: 0,
+      pointerType: 'touch',
+      handled() {
+        handled = true
+      },
+      shift: false,
+      alt: false,
+      ctrl: false,
+      meta: false,
+    } as CanvasInputEvent
+    for (const l of this.o.listeners()) l(ev)
+    return handled
+  }
+
   hasKeyboard(): boolean {
     return this.keyboard
   }

@@ -242,6 +242,8 @@ export class LobbyBoardSession {
         return out
       },
       isBlocked: (p) => this.registries.hitGuard.isBlocked(p) !== null,
+      // CR-W5-3G-4: a feature that takes a double-click on an element takes a double-tap on it too
+      onDoubleTap: (scene, screen) => this.boardInput?.dispatchDoubleTap(scene, screen) ?? false,
       // CR-3D-3: the first registered rule that applies to the selected element starts its edit
       typeToEdit: {
         applies: (id) => this.registries.typeToEdit.list().some((s) => s.applies(id)),

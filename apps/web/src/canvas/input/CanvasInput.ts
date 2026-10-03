@@ -87,6 +87,11 @@ export interface CanvasInputOptions {
   /** Lobby's upload path for dropped files (editors). */
   onDrop?: (e: DragEvent) => void
   onContextMenu?: (e: MouseEvent) => void
+  /**
+   * CR-W5-3G-4: a double-tap on an element, offered to the features first (the page's `input` stream as a
+   * `double-click`): true when one took it, and no lease request follows. Not asked for empty canvas.
+   */
+  onDoubleTap?: (scene: { x: number; y: number }, screen: { x: number; y: number }) => boolean
   /** A double-click / double-tap on empty canvas (editors): Lobby creates a text there. */
   onEmptyDoubleClick?: (scene: { x: number; y: number }) => void
   onDeny?: (leaseId: string, holderName: string) => void
@@ -506,6 +511,11 @@ export class CanvasInput {
     const scene = this.toScene(verdict.clientX, verdict.clientY)
     if (this.opts.isBlocked?.(scene)) {
       this.trace('doubletap-blocked', {})
+      return
+    }
+    // CR-W5-3G-4: a feature that takes a double-click on this element takes the double-tap too
+    if (this.opts.onDoubleTap?.(scene, { x: verdict.clientX, y: verdict.clientY })) {
+      this.trace('doubletap-handled', {})
       return
     }
     this.editAt(scene.x, scene.y, 'P4-doubletap', false)

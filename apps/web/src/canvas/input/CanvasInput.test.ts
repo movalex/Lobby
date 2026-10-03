@@ -97,6 +97,54 @@ describe('a double-click a feature took (CR-W5-3G-4)', () => {
   })
 })
 
+describe('a double-tap a feature took (CR-W5-3G-4)', () => {
+  class FakeCanvas {
+    classList = { contains: (c: string) => c === 'interactive' }
+  }
+  const tap = (t: ReturnType<typeof setup>, time: number, x = 50, y = 50) => {
+    const e = {
+      target: new FakeCanvas(),
+      timeStamp: time,
+      touches: [{ clientX: x, clientY: y }],
+      stopPropagation: vi.fn(),
+      preventDefault: vi.fn(),
+    }
+    ;(t.internals as unknown as { onTouchStart(e: unknown): void }).onTouchStart(e)
+    return e
+  }
+  const withTouch = (onDoubleTap?: (s: { x: number; y: number }) => boolean) => {
+    vi.stubGlobal('HTMLCanvasElement', FakeCanvas)
+    const t = setup()
+    ;(t.input.opts as { onDoubleTap?: unknown }).onDoubleTap = onDoubleTap
+    return t
+  }
+
+  it('is not a text edit: no lease request and no new text, and the touch is swallowed', () => {
+    const took = vi.fn(() => true)
+    const t = withTouch(took)
+    tap(t, 0)
+    const second = tap(t, 120)
+    expect(took).toHaveBeenCalledWith({ x: 50, y: 50 }, { x: 50, y: 50 })
+    expect(t.requestEdit).not.toHaveBeenCalled()
+    expect(t.onEmpty).not.toHaveBeenCalled()
+    expect(second.preventDefault).toHaveBeenCalled()
+    expect(t.traces.map((x) => x.type)).toContain('doubletap-handled')
+    vi.unstubAllGlobals()
+  })
+
+  it('a double-tap no feature took still runs the lease flow on a note, and makes a text on empty canvas', () => {
+    const t = withTouch(() => false)
+    tap(t, 0, 50, 50)
+    tap(t, 100, 50, 50)
+    expect(t.requestEdit).toHaveBeenCalledWith('n1', expect.objectContaining({ reason: 'P4-doubletap' }))
+    const empty = withTouch(() => false)
+    tap(empty, 1000, 900, 900)
+    tap(empty, 1100, 900, 900)
+    expect(empty.onEmpty).toHaveBeenCalledWith({ x: 900, y: 900 })
+    vi.unstubAllGlobals()
+  })
+})
+
 describe('the key context', () => {
   it('says when a crop is open, and what a feature’s type-to-edit rule says about the one selected element', () => {
     const open = setup({ selected: ['i1'], app: { croppingElementId: 'i1' } }).internals.keyContext(null)
