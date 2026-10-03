@@ -134,3 +134,17 @@ on the sync disk (§6).
    the route destination corrected to the api (A2) and the header name as decided in step 5; the Blueprint's sync preview must then
    show nothing to apply.
 7. D7 (about 2026-10-08, owner OK): drop-legacy (runbook §9), then remove `VITE_TLDRAW_LICENSE_KEY` from the web service.
+
+## 7. The watch (W3), checked 2026-10-03 04:15Z (about 31 h after the switch)
+
+**Go.** Read-only checks, no change made:
+
+- api and sync `/healthz` 200, the web site 200; all three still on `bbe1b48`; no deploy, restart or out-of-memory event on
+  api or sync since the cut-over deploys (Render service events).
+- Logs since 2026-10-01 20:57Z: 0 `error` and 0 `FATAL` lines on api and sync.
+- Sync `GET /internal/maintenance` `{"maintenance":false}`; `GET /internal/backups/status` store r2, `failuresTotal` 0, every
+  board `failures` 0 and `pending` 0, offsite counts 3/3/3/6, the backup loop's last pass 04:03Z.
+- Metrics: `lobby_rooms_open` 0, no sessions, 0 commits since the process started; event-loop delay p50 10 ms, p99 12 ms.
+- Caveat: nobody has edited a board since the switch (every board's last offsite copy is the clock-1 copy from 21:03Z on
+  2026-10-01), so the watch shows a healthy idle system, not one under use. The owner's real sign-in (§6 step 1) is still the
+  check that matters, and it is due before the 48 h window closes at about 2026-10-03 20:55Z.
