@@ -4,9 +4,11 @@
 //   W5-33 / CR-W5-3A-4     Preferences > Input device: what a plain mouse wheel does (auto, mouse, trackpad)
 //   W5-40 / CR-W5-3A-1     Straight after Elbow draws straight connectors (it drew curved ones)
 //   W5-52                  a freshly drawn rectangle has sharp corners, as templates and converted shapes do
+//   wave B follow-up 3     Input device Auto reads devicePixelRatio: a notch is 100 px over the ratio (125%, 150%, 200%)
 //
 //   E2E_PORT_BASE=<base> pnpm exec playwright test excalidraw/input-touch-wheel.spec.ts --workers=1
-import type { CDPSession, Page } from '@playwright/test'
+import type { Browser, CDPSession, Page } from '@playwright/test'
+import { signInContext } from '../tests/support/api.ts'
 import {
   createNote,
   expect,
@@ -19,6 +21,7 @@ import {
   test,
   viewport,
 } from '../tests/support/canvas.ts'
+import type { Users } from '../tests/support/users.ts'
 import { openPhoneSession } from './a11y-kit.ts'
 import { emptyCanvasPoint, settled } from './board-kit.ts'
 import { waitForCanvasUx, withCanvas } from './canvas-ux-kit.ts'
@@ -322,6 +325,91 @@ test('W5-33 (CR-W5-3A-4): Preferences > Input device: auto zooms on a mouse whee
     await chooseDevice('auto')
     expect(await liveCount(page)).toBe(seeded)
   })
+})
+
+// ---- Auto under display scaling and browser zoom (wave B follow-up 3, wave D6) ------------------------------------
+
+/**
+ * Alice on the board in a window that runs at `ratio` (Chromium's device scale factor: what Windows' 125% and
+ * 150% display scaling, or the browser's zoom, make `window.devicePixelRatio`).
+ */
+async function openScaled(browser: Browser, board: string, users: Users, ratio: number) {
+  const who = await users.get('alice')
+  const context = await browser.newContext({
+    viewport: { width: 1440, height: 900 },
+    deviceScaleFactor: ratio,
+  })
+  const page = await context.newPage()
+  await signInContext(context, who.handle, who.name)
+  await page.goto(`/b/${board}`)
+  await waitForCanvasUx(page)
+  return { context, page }
+}
+
+/** One wheel event over the canvas with exactly these deltas (what a browser at that ratio would report). */
+const wheelOver = (page: Page, at: Pt, deltaY: number, deltaX = 0) =>
+  page.evaluate(
+    ({ at, deltaY, deltaX }) => {
+      const target = document.elementFromPoint(at.x, at.y) ?? document.body
+      target.dispatchEvent(
+        new WheelEvent('wheel', {
+          clientX: at.x,
+          clientY: at.y,
+          deltaX,
+          deltaY,
+          deltaMode: 0,
+          bubbles: true,
+          cancelable: true,
+        }),
+      )
+    },
+    { at, deltaY, deltaX },
+  )
+
+test('wave B follow-up 3: Input device Auto reads devicePixelRatio: a mouse notch (100 px over the ratio) zooms at 125%, 150% and 200%, and a trackpad-sized step still pans', async ({
+  browser,
+  board,
+  users,
+}) => {
+  for (const ratio of [1, 1.25, 1.5, 2]) {
+    const { context, page } = await openScaled(browser, board, users, ratio)
+    try {
+      expect(await page.evaluate(() => window.devicePixelRatio)).toBe(ratio)
+      expect(await withCanvas(page, (c) => c.settings.get().wheel, null)).toBe('auto')
+      const at = await emptyCanvasPoint(page)
+      const reset = async () => {
+        await setViewport(page, { x: 0, y: 0, zoom: 1 })
+        await page.mouse.move(at.x, at.y)
+        // a wheel builds on the previous one while the engine may not have drawn it yet (120 ms): let that pass
+        await page.waitForTimeout(200)
+      }
+
+      await test.step(`ratio ${ratio}: the notch Chromium reports there (${(100 / ratio).toFixed(2)} px) zooms 10%`, async () => {
+        await reset()
+        await wheelOver(page, at, Math.fround(100 / ratio))
+        await expect.poll(() => zoomOf(page)).toBeCloseTo(0.9, 2)
+      })
+
+      await test.step(`ratio ${ratio}: a trackpad-sized step (33.3 px, a sideways part) is not a zoom`, async () => {
+        await reset()
+        await wheelOver(page, at, 33.3333, 2)
+        await page.waitForTimeout(300)
+        expect(await zoomOf(page)).toBe(1)
+      })
+
+      await test.step(`ratio ${ratio}: 80 px is a notch at 125% (100 / 1.25) and 150% (120 / 1.5), a plain scroll step at 100% and 200%`, async () => {
+        await reset()
+        await wheelOver(page, at, 80)
+        if (ratio === 1.25 || ratio === 1.5) await expect.poll(() => zoomOf(page)).toBeCloseTo(0.9, 2)
+        else {
+          await page.waitForTimeout(300)
+          expect(await zoomOf(page)).toBe(1)
+        }
+      })
+    } finally {
+      await context.close()
+    }
+  }
 })
 
 // ---- tool defaults --------------------------------------------------------------------------------------------

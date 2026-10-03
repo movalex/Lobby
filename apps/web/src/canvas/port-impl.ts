@@ -100,6 +100,16 @@ export interface LobbyCanvasPort extends CanvasPort {
    */
   setToolMode(mode: PortToolMode | null): void
   /**
+   * CR-3A-7: the next font size of a kind of text, which the engine keeps in one (`currentItemFontSize`). A
+   * note's label and a free text each have their own: 'note' is what the next note's label (and any other
+   * label the engine or the lease makes) takes, 'text' what the next free text takes. The engine's own value
+   * is the one of the tool in hand (the text's while the text tool is, the label's otherwise), so a pick the
+   * style panel makes with `styles.setNext` lands in that tool's own.
+   */
+  nextFontSize(slot: NextSizeSlot): number
+  /** CR-3A-7: sets the next font size of a kind of text (a pick on a selection of that kind); no undo step. */
+  setNextFontSize(slot: NextSizeSlot, size: number): void
+  /**
    * CR-3A-9, the gesture-element hook: `hook` sees each element the engine starts drawing (its `newElement`)
    * once, in the scene change it appears in, before the sync engine pushes anything of it (the core holds an
    * element being drawn and pushes it once, at the gesture's end). A patch it returns is written onto that
@@ -109,6 +119,12 @@ export interface LobbyCanvasPort extends CanvasPort {
   onGestureElement(hook: GestureElementHook): () => void
   dispose(): void
 }
+
+/** CR-3A-7: whose next font size: a note's label (and any other label), or a free text's. */
+export type NextSizeSlot = 'note' | 'text'
+
+/** Excalidraw's own default font size (DEFAULT_FONT_SIZE): what `currentItemFontSize` starts as. */
+const DEFAULT_FONT_SIZE = 20
 
 /** CR-3A-9: a Lobby tool that the engine runs as one of its own (see `LobbyCanvasPort.setToolMode`). */
 export interface PortToolMode {
@@ -154,6 +170,51 @@ export function createCanvasPort(deps: PortDeps): LobbyCanvasPort {
     for (const hook of [...gestureHooks]) Object.assign(patch, hook(drawn) ?? {})
     if (Object.keys(patch).length) X.mutateElement(drawn, elementMap(), patch)
   }
+
+  // ---- CR-3A-7: the next note label's and the next free text's font sizes ----------------------------------
+  // The engine has one next font size, `currentItemFontSize`: it makes a note's label (its text editor, the
+  // lease's own label) and, through `create('text')` below, a free text, so a note's L (26) became the next
+  // text's size. Two sizes are kept over that one. The engine's is the tool in hand's: the text's while the
+  // text tool is, the label's with any other tool (the note tool, and the select tool the note tool hands over
+  // to while its label is made). A pick through `styles.setNext` (the style panel's next-style) writes the
+  // engine's and is taken into the slot in hand on the next change; the tool changing swaps them
+  // (`holdSizeSlot`, at once from `setTool` and from the engine's own change in `afterSceneChange`).
+  const engineSize = (): number | null => {
+    const n = api.getAppState().currentItemFontSize
+    return typeof n === 'number' && Number.isFinite(n) && n > 0 ? n : null
+  }
+  const onTextTool = () => {
+    const t = api.getAppState().activeTool
+    return t?.type === 'custom' && t.customType === CUSTOM_TOOLS.text
+  }
+  const nextSizes: Record<NextSizeSlot, number> = {
+    note: engineSize() ?? DEFAULT_FONT_SIZE,
+    text: engineSize() ?? DEFAULT_FONT_SIZE,
+  }
+  let sizeSlot: NextSizeSlot = onTextTool() ? 'text' : 'note'
+  const putEngineSize = (n: number) => {
+    if (engineSize() !== n)
+      api.updateScene({ appState: { currentItemFontSize: n } as Partial<AppState> as never })
+  }
+  /** The engine's next size is `slot`'s from now on: the slot in hand keeps what it holds (when `read`). */
+  const holdSizeSlot = (slot: NextSizeSlot, read: boolean) => {
+    if (slot === sizeSlot) return
+    if (read) {
+      const now = engineSize()
+      if (now !== null) nextSizes[sizeSlot] = now
+    }
+    sizeSlot = slot
+    putEngineSize(nextSizes[slot])
+  }
+  /** After an engine change: the tool in hand's slot, and a pick made while it is in hand is its size. */
+  const syncNextSizes = () => {
+    const want: NextSizeSlot = onTextTool() ? 'text' : 'note'
+    if (want !== sizeSlot) return holdSizeSlot(want, true)
+    const now = engineSize()
+    if (now !== null) nextSizes[sizeSlot] = now
+  }
+  const nextSizeOf = (slot: NextSizeSlot): number =>
+    slot === sizeSlot ? (engineSize() ?? nextSizes[slot]) : nextSizes[slot]
 
   const all = () => api.getSceneElementsIncludingDeleted()
   // CR 3b-7: one lookup in the engine's own map (a scan of every element per call made every per-element
@@ -238,11 +299,12 @@ export function createCanvasPort(deps: PortDeps): LobbyCanvasPort {
       }
       case 'text':
         // CR-3A-7: a text takes the next text style (the text tool's font, size and alignment, as the style
-        // panel sets them) where its creator names none; Nunito 20 left-aligned until one is picked
+        // panel sets them) where its creator names none; Nunito 20 left-aligned until one is picked. Its size
+        // is the next text's own (`nextSizeOf`), not the next note label's.
         return withIndex([
           X.newTextElement({
             fontFamily: s.currentItemFontFamily ?? 6,
-            fontSize: s.currentItemFontSize ?? 20,
+            fontSize: nextSizeOf('text'),
             textAlign: s.currentItemTextAlign ?? 'left',
             ...base,
             text: String(props.text ?? ''),
@@ -459,9 +521,19 @@ export function createCanvasPort(deps: PortDeps): LobbyCanvasPort {
       if (spec) {
         if (deps.readOnly() && !spec.readOnlyAllowed) return false
         api.setActiveTool({ type: 'custom', customType: spec.customType, locked: true })
+        holdSizeSlot('note', false)
         return true
       }
-      return setLobbyTool(api, tool, { readOnly: deps.readOnly() })
+      const done = setLobbyTool(api, tool, { readOnly: deps.readOnly() })
+      // CR-3A-7: the engine's next size is the new tool's at once (the engine's own change follows)
+      if (done) holdSizeSlot(tool === 'text' ? 'text' : 'note', false)
+      return done
+    },
+    nextFontSize: (slot) => nextSizeOf(slot),
+    setNextFontSize(slot, size) {
+      if (!Number.isFinite(size) || size <= 0) return
+      nextSizes[slot] = size
+      if (slot === sizeSlot) putEngineSize(size)
     },
     tool() {
       const t = api.getAppState().activeTool
@@ -498,6 +570,7 @@ export function createCanvasPort(deps: PortDeps): LobbyCanvasPort {
     },
     afterSceneChange(elementsChanged = true) {
       runGestureHooks()
+      syncNextSizes()
       if (elementsChanged) {
         const changed: string[] = []
         for (const e of all()) {

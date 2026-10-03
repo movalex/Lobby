@@ -26,13 +26,7 @@ import {
 import { api, isApiError, isNoAccess } from '../../api/client.ts'
 import { AssetMetaStore } from '../../assets/meta-store.ts'
 import { useMe, useSession } from '../../auth/session.tsx'
-import {
-  accessActorName,
-  blockedEditHint,
-  freshActorName,
-  isReadonlyRole,
-  roleChangeNotice,
-} from '../../board/access.ts'
+import { AccessActorHint, blockedEditHint, isReadonlyRole, roleChangeNotice } from '../../board/access.ts'
 import type { NoticeInput } from '../../board/board-context.ts'
 import { NoticeRegion, useNotices } from '../../board/Notices.tsx'
 import { SyncErrorScreen } from '../../board/SyncErrorScreen.tsx'
@@ -474,43 +468,47 @@ function LobbyBoardScreen({
   // PRI-09b: my role changed while the board is open; a sharing event re-reads it and applies a LOWER
   // one at once (a higher one waits for the socket to reconnect with it).
   // REVIEW-6: the server tells ME (and nobody else) who changed my access; the toast names them.
+  // The name comes with the access.changed event of every owner's change of my grant; an event that changed
+  // nothing for me (a grant set to what it was) is dropped as soon as the role read below agrees with what is
+  // on screen, so it cannot name the owner on a later change of someone else's (AccessActorHint).
   const announcedRole = useRef(role)
-  const accessActor = useRef<{ name: string; at: number } | null>(null)
+  const accessActor = useMemo(() => new AccessActorHint(), [])
+  const roleNow = useRef(role)
+  roleNow.current = role
+  // Reads my role from the server: a LOWER one is applied at once (the sync server closes the session when
+  // it matters), a higher one waits for the socket to reconnect with it; only the latest read counts.
+  const roleRead = useRef(0)
+  const readRole = useCallback(() => {
+    const mine = ++roleRead.current
+    const upTo = accessActor.mark
+    api.boardTicket(boardId).then(
+      (t) => {
+        if (mine !== roleRead.current) return
+        accessActor.settle(upTo, roleNow.current, t.role)
+        if (RANK[t.role] < RANK[roleNow.current]) handlers.current.onRole(t.role)
+      },
+      () => {}, // no access any more: the sync server closes the session and says so
+    )
+  }, [boardId, accessActor])
   useEffect(() => {
     if (!events) return
     return events.on('access.changed', (data) => {
-      const name = accessActorName(data)
-      accessActor.current = name ? { name, at: Date.now() } : null
+      accessActor.record(data, Date.now())
+      readRole()
     })
-  }, [events])
+  }, [events, accessActor, readRole])
   useEffect(() => {
-    const text = roleChangeNotice(
-      announcedRole.current,
-      role,
-      freshActorName(accessActor.current, Date.now()),
-    )
+    const text = roleChangeNotice(announcedRole.current, role, accessActor.fresh(Date.now()))
     announcedRole.current = role
     if (text) {
-      accessActor.current = null
+      accessActor.clear()
       notify({ key: 'role-changed', text, testId: 'role-change-toast', timeoutMs: 8000 })
     }
-  }, [role, notify])
-  const roleNow = useRef(role)
-  roleNow.current = role
+  }, [role, notify, accessActor])
   useEffect(() => {
     if (!events) return
-    let seq = 0
-    return events.on('sharing.changed', () => {
-      const mine = ++seq
-      api.boardTicket(boardId).then(
-        (t) => {
-          if (mine !== seq || t.role === roleNow.current) return
-          if (RANK[t.role] < RANK[roleNow.current]) handlers.current.onRole(t.role)
-        },
-        () => {}, // no access any more: the sync server closes the session and says so
-      )
-    })
-  }, [events, boardId])
+    return events.on('sharing.changed', readRole)
+  }, [events, readRole])
 
   // PRI-08: on a read-only board, the first edit someone tries (dragging, double-clicking or deleting)
   // explains why nothing happened, once, with a way to ask for more.

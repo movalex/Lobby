@@ -1,5 +1,6 @@
 // Wave C, workstream C1 (the canvas look) on the Excalidraw board page:
-//  - CR-3A-7: with the note or text tool picked, the style panel sets the next note's or text's style;
+//  - CR-3A-7: with the note or text tool picked, the style panel sets the next note's or text's style, and a
+//    note's label size and a free text's are two sizes (a note's L is not the next text's size);
 //  - W5-38: one accent (the engine's selection colour is Lobby's), a hover outline, a selected frame's box clear
 //    of its name;
 //  - W5-55: a note being typed into is outlined;
@@ -69,7 +70,7 @@ test('CR-3A-7: the note tool’s panel sets the next note’s colour, size and f
   await waitForCanvasUx(a.page)
   await focusBoard(a.page)
   const palette = a.page.getByTestId('note-palette')
-  /** No size button is pressed: the shared next font size is on neither the active tool's scale. */
+  /** No size button is pressed: the tool's own next size (the engine's 20, before a pick) is on neither scale. */
   const noSizePressed = async () => {
     for (const s of ['s', 'm', 'l', 'xl'])
       await expect(a.page.getByTestId(`style.size.${s}`)).toHaveAttribute('aria-pressed', 'false')
@@ -105,9 +106,19 @@ test('CR-3A-7: the note tool’s panel sets the next note’s colour, size and f
     expect(label?.baseFontSize ?? label?.fontSize).toBe(26)
   })
 
-  await test.step('the text tool', async () => {
+  await test.step('the text tool starts from its own size: the note’s L (26) is not the next text’s', async () => {
+    await selectNone(a.page)
     await setTool(a.page, 'text')
-    // the note's L (label size 26) is shared with the next text, and is no step of the text scale
+    await expect(a.page.getByTestId('style.size.xl')).toBeVisible()
+    await noSizePressed()
+    // a text made before any pick is the engine's 20, not the note's 26 (it was 26: one next size for both)
+    const made = await makeByHand(a.page, await canvasPoint(a.page, 0.15, 0.3), 'Plain')
+    expect(made.find((e) => e.type === 'text')?.fontSize).toBe(20)
+  })
+
+  await test.step('the text tool', async () => {
+    await selectNone(a.page)
+    await setTool(a.page, 'text')
     await expect(a.page.getByTestId('style.size.xl')).toBeVisible()
     await noSizePressed()
     await a.page.getByTestId('style.color.blue').click()
@@ -123,6 +134,38 @@ test('CR-3A-7: the note tool’s panel sets the next note’s colour, size and f
       fontFamily: 5,
       textAlign: 'center',
     })
+  })
+
+  await test.step('each tool keeps its own size: back on the note tool its L is still pressed, and the next note’s label is 26, not the text’s 44', async () => {
+    await selectNone(a.page)
+    await setTool(a.page, 'note')
+    await expect(palette).toBeVisible()
+    await expect(a.page.getByTestId('style.size.l')).toHaveAttribute('aria-pressed', 'true')
+    await expect(a.page.getByTestId('style.size.xl')).toHaveAttribute('aria-pressed', 'false')
+    const made = await makeByHand(a.page, await canvasPoint(a.page, 0.75, 0.3), 'Again')
+    const label = made.find((e) => e.type === 'text')
+    expect(label?.baseFontSize ?? label?.fontSize).toBe(26)
+    // and the text tool still has its XL (44)
+    await selectNone(a.page)
+    await setTool(a.page, 'text')
+    await expect(a.page.getByTestId('style.size.xl')).toHaveAttribute('aria-pressed', 'true')
+    await expect(a.page.getByTestId('style.size.l')).toHaveAttribute('aria-pressed', 'false')
+    const again = await makeByHand(a.page, await canvasPoint(a.page, 0.3, 0.8), 'Heading')
+    expect(again.find((e) => e.type === 'text')?.fontSize).toBe(44)
+  })
+
+  await test.step('a size picked on a selected text is the next text’s only: the note tool keeps its L', async () => {
+    const heading = (await items(a.page)).find((e) => e.type === 'text' && e.fontSize === 44)
+    expect(heading).toBeTruthy()
+    await select(a.page, [heading?.id as string])
+    await a.page.getByTestId('style.size.m').click()
+    await expect.poll(async () => (await item(a.page, heading?.id as string))?.fontSize).toBe(24)
+    await selectNone(a.page)
+    await setTool(a.page, 'note')
+    await expect(a.page.getByTestId('style.size.l')).toHaveAttribute('aria-pressed', 'true')
+    await selectNone(a.page)
+    await setTool(a.page, 'text')
+    await expect(a.page.getByTestId('style.size.m')).toHaveAttribute('aria-pressed', 'true')
   })
 
   await test.step('a note named with a colour of its own keeps it (a feature’s note)', async () => {
