@@ -44,6 +44,8 @@ export const CREATOR_ROUTES: Readonly<Record<string, CreatorRoute>> = {
   // decided in the route (lowering stays open to every manager)
   'PUT /api/boards/:bid/members/:uid': { purpose: 'share', refuse: 'in-route' },
   'PATCH /api/boards/:bid': { purpose: 'share', refuse: 'in-route' },
+  // authz-006: raising a workspace member's role (lowering, and DELETE, stay open to every manager)
+  'PATCH /api/workspaces/:wid/members/:uid': { purpose: 'share', refuse: 'in-route' },
 }
 
 const routeKey = (req: FastifyRequest) =>

@@ -5,8 +5,11 @@ import {
   DevLoginInput,
   EmailInviteInput,
   EmailInviteResult,
+  ListWorkspaceMembersResponse,
   PatchBoardInput,
+  PatchWorkspaceMemberInput,
   TicketResponse,
+  WORKSPACE_MEMBER_CODES,
 } from './index.ts'
 
 describe('contracts', () => {
@@ -84,5 +87,22 @@ describe('contracts', () => {
     expect(EmailInviteResult.parse(link).mode).toBe('link')
     expect(EmailInviteResult.safeParse({ ...link, reason: 'because' }).success).toBe(false)
     expect(EmailInviteResult.safeParse({ ...link, mode: 'sent' }).success).toBe(false)
+  })
+
+  it('authz-006: a workspace member’s role is one of the workspace roles; the list answers PATCH and DELETE', () => {
+    for (const role of ['owner', 'admin', 'member', 'guest'])
+      expect(PatchWorkspaceMemberInput.parse({ role })).toEqual({ role })
+    expect(PatchWorkspaceMemberInput.safeParse({ role: 'editor' }).success).toBe(false)
+    expect(PatchWorkspaceMemberInput.safeParse({}).success).toBe(false)
+    const user = { id: 'usr_0123456789abcdefghij', name: 'Bob', handle: null, color: '#000', avatarUrl: null }
+    expect(ListWorkspaceMembersResponse.parse({ members: [{ user, role: 'admin' }] }).members).toHaveLength(1)
+    expect(ListWorkspaceMembersResponse.safeParse({ members: [{ user, role: 'viewer' }] }).success).toBe(
+      false,
+    )
+    expect(WORKSPACE_MEMBER_CODES).toEqual({
+      lastOwner: 'LAST_OWNER',
+      ownerOnly: 'OWNER_ONLY',
+      personalOwner: 'PERSONAL_WORKSPACE_OWNER',
+    })
   })
 })

@@ -81,6 +81,34 @@ export type BoardMember = z.infer<typeof BoardMember>
 export const WorkspaceMember = z.object({ user: User, role: WorkspaceRole })
 export type WorkspaceMember = z.infer<typeof WorkspaceMember>
 
+/**
+ * GET /api/workspaces/:wid/members, and the answer of PATCH and DELETE
+ * /api/workspaces/:wid/members/:uid (authz-006): the workspace's people (name-only guests left out),
+ * owners first.
+ */
+export const ListWorkspaceMembersResponse = z.object({ members: z.array(WorkspaceMember) })
+export type ListWorkspaceMembersResponse = z.infer<typeof ListWorkspaceMembersResponse>
+
+/**
+ * PATCH /api/workspaces/:wid/members/:uid (authz-006): a member's workspace role. Owners and admins manage
+ * the members; only an owner changes or removes an owner, or makes one; the last owner, and the person
+ * whose personal workspace it is, stay owners. Raising a role is creator-only, and admin and owner go to
+ * creators only (docs/DOMAIN-ACCESS-CONTRACTS.md D4, D5); lowering stays open to every manager.
+ * DELETE removes the member and every board grant they hold in the workspace, in one transaction.
+ */
+export const PatchWorkspaceMemberInput = z.object({ role: WorkspaceRole })
+export type PatchWorkspaceMemberInput = z.infer<typeof PatchWorkspaceMemberInput>
+
+/** The refusals of those routes that the web tells apart (the messages say what to do). */
+export const WORKSPACE_MEMBER_CODES = {
+  /** 409: the workspace would have no owner left. */
+  lastOwner: 'LAST_OWNER',
+  /** 403: an admin asked to change, remove or make an owner. */
+  ownerOnly: 'OWNER_ONLY',
+  /** 409: the person whose personal workspace it is stays its owner. */
+  personalOwner: 'PERSONAL_WORKSPACE_OWNER',
+} as const
+
 // ---- auth ----------------------------------------------------------------------------------------
 
 export const AuthConfig = z.object({

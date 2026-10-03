@@ -18,6 +18,7 @@ import {
   DOMAIN_ACCESS_CODES,
   type EmailInviteResult,
   type InvitationCreated,
+  ListWorkspaceMembersResponse,
   type PendingInvitation,
   type RequestableRole,
   type ShareState,
@@ -48,7 +49,13 @@ import { splitGuestMarker } from '../invite/model.ts'
 import { absoluteUrl, copyText } from '../lib/clipboard.ts'
 import { formatDateTime, formatRelativeTime } from '../lib/format.ts'
 import { initialsFor, safeColor } from '../lib/identity.ts'
-import { type BoardRole, type BoardVisibility, can, canHandOutAccess } from '../lib/permissions.ts'
+import {
+  type BoardRole,
+  type BoardVisibility,
+  can,
+  canHandOutAccess,
+  type WorkspaceRole,
+} from '../lib/permissions.ts'
 import { boardPath } from '../lib/routing.ts'
 import { useResource } from '../lib/useResource.ts'
 import { Dialog } from '../ui/Dialog.tsx'
@@ -489,6 +496,22 @@ export function ShareDialog({
           )}
           {!canManage && <p className="dr-share__note">Only board owners can change who has access.</p>}
         </section>
+
+        {/* authz-006: the workspace's owners and admins manage its members (roles, removal) from here */}
+        {canManage && wsMembers.data && (
+          <WorkspaceMembersSection
+            workspace={workspace}
+            members={wsMembers.data}
+            selfUserId={selfUserId}
+            creator={creator}
+            onChanged={(next) => {
+              wsMembers.update(() => next)
+              // a removal takes their grants on this board too; a role change can move their access here
+              members.reload()
+              changed()
+            }}
+          />
+        )}
 
         {!canManage && guest && (
           <p className="dr-share__note" data-testid="share-guest-note">
@@ -1183,6 +1206,195 @@ function VisibilitySection({
 }
 
 // ---- people --------------------------------------------------------------------------------------
+
+// ---- workspace members (authz-006) ---------------------------------------------------------------
+
+const WS_ROLES: readonly WorkspaceRole[] = ['owner', 'admin', 'member', 'guest']
+const WS_ROLE_LABEL: Record<WorkspaceRole, string> = {
+  owner: 'Owner',
+  admin: 'Admin',
+  member: 'Member',
+  guest: 'Guest',
+}
+const wsRank = (r: WorkspaceRole) => WS_ROLES.indexOf(r)
+
+/**
+ * The roles a workspace owner or admin may pick for someone (the server enforces each rule): only an
+ * owner makes an owner; the last owner keeps the role; someone who is not a creator only lowers
+ * (domain access D4: raising hands out access). Admin and owner also go to creators only (D5): the
+ * server answers that one, as it knows the person's addresses.
+ */
+function workspaceRoleChoices(opts: {
+  current: WorkspaceRole
+  self: WorkspaceRole
+  creator: boolean
+  lastOwner: boolean
+}): { role: WorkspaceRole; disabled: boolean; title?: string }[] {
+  return WS_ROLES.map((role) => {
+    if (role === opts.current) return { role, disabled: false }
+    if (opts.current === 'owner' && opts.lastOwner)
+      return { role, disabled: true, title: 'A workspace needs at least one owner' }
+    if (role === 'owner' && opts.self !== 'owner')
+      return { role, disabled: true, title: 'Only a workspace owner can make someone an owner' }
+    if (wsRank(role) < wsRank(opts.current) && !opts.creator)
+      return { role, disabled: true, title: 'You can lower roles here, not raise them' }
+    return { role, disabled: false }
+  })
+}
+
+/**
+ * "Workspace members", for the workspace's owners and admins: everyone in the workspace with their role,
+ * to change it or to remove someone (offboarding: they lose every board of the workspace, the grants
+ * they had on its boards included). Collapsed by default: most visits to the Share dialog are about
+ * this board.
+ */
+function WorkspaceMembersSection({
+  workspace,
+  members,
+  selfUserId,
+  creator,
+  onChanged,
+}: {
+  workspace: { id: string; name: string }
+  members: readonly WorkspaceMember[]
+  selfUserId: string
+  creator: boolean
+  /** The answer of a change (the workspace's updated list). */
+  onChanged(next: WorkspaceMember[]): void
+}) {
+  const headingId = useId()
+  const [pending, setPending] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [confirming, setConfirming] = useState<string | null>(null)
+  const self = members.find((m) => m.user.id === selfUserId)?.role
+  if (self !== 'owner' && self !== 'admin') return null
+  const owners = members.filter((m) => m.role === 'owner').length
+  const base = `/api/workspaces/${encodeURIComponent(workspace.id)}/members/`
+  const run = async (userId: string, method: 'PATCH' | 'DELETE', role?: WorkspaceRole) => {
+    setError(null)
+    setPending(userId)
+    try {
+      const next = await api.request(method, `${base}${encodeURIComponent(userId)}`, {
+        ...(role ? { body: { role } } : {}),
+        schema: ListWorkspaceMembersResponse,
+      })
+      onChanged(next.members)
+    } catch (e) {
+      setError(isApiError(e) ? e.message : 'That change was not saved. Try again.')
+    } finally {
+      setPending(null)
+    }
+  }
+  return (
+    <details className="dr-share__section dr-sharing__more" data-testid="workspace-members">
+      <summary className="dr-sharing__more-summary" data-testid="workspace-members-toggle">
+        <span className="dr-sharing__more-title" id={headingId}>
+          Workspace members
+        </span>
+        <span className="dr-sharing__more-sub">
+          {members.length === 1 ? '1 person' : `${members.length} people`} in {workspace.name}
+        </span>
+      </summary>
+      {error && (
+        <p className="dr-share__error" role="alert" data-testid="workspace-members-error">
+          {error}
+        </p>
+      )}
+      <ul className="dr-members" aria-labelledby={headingId} data-testid="workspace-member-list">
+        {members.map((m) => {
+          const isSelf = m.user.id === selfUserId
+          const lastOwner = m.role === 'owner' && owners <= 1
+          const editable = !isSelf && (self === 'owner' || m.role !== 'owner')
+          const busy = pending === m.user.id
+          return (
+            <li
+              key={m.user.id}
+              className="dr-member"
+              data-testid="workspace-member-row"
+              data-user-id={m.user.id}
+              data-role={m.role}
+              aria-busy={busy || undefined}
+            >
+              <Avatar user={m.user} />
+              <div className="dr-member__text">
+                <span className="dr-member__name">
+                  {m.user.name}
+                  {isSelf && <span className="dr-member__you"> (you)</span>}
+                </span>
+                <span className="dr-member__sub">{m.user.handle ? `@${m.user.handle}` : ''}</span>
+                {confirming === m.user.id && (
+                  <fieldset className="dr-sharing__confirm" data-testid="workspace-member-remove-box">
+                    <legend className="dr-sr-only">Remove {m.user.name}</legend>
+                    Remove {m.user.name} from {workspace.name}? They lose access to its boards, the ones
+                    shared with them included.{' '}
+                    <button
+                      type="button"
+                      className="dr-btn dr-btn--sm dr-sharing__danger"
+                      data-testid="workspace-member-remove-confirm"
+                      // biome-ignore lint/a11y/noAutofocus: the confirmation the remove button just asked for
+                      autoFocus
+                      onClick={() => {
+                        setConfirming(null)
+                        void run(m.user.id, 'DELETE')
+                      }}
+                    >
+                      Remove
+                    </button>{' '}
+                    <button type="button" className="dr-btn dr-btn--sm" onClick={() => setConfirming(null)}>
+                      Cancel
+                    </button>
+                  </fieldset>
+                )}
+              </div>
+              {editable ? (
+                <div className="dr-member__actions">
+                  <select
+                    className="dr-input dr-select dr-select--compact"
+                    data-testid="workspace-member-role"
+                    aria-label={`Workspace role for ${m.user.name}`}
+                    value={m.role}
+                    disabled={busy}
+                    onChange={(e) => void run(m.user.id, 'PATCH', e.target.value as WorkspaceRole)}
+                  >
+                    {workspaceRoleChoices({ current: m.role, self, creator, lastOwner }).map((c) => (
+                      <option key={c.role} value={c.role} disabled={c.disabled} title={c.title}>
+                        {WS_ROLE_LABEL[c.role]}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    className="dr-iconbtn"
+                    data-testid="workspace-member-remove"
+                    aria-label={`Remove ${m.user.name} from ${workspace.name}`}
+                    title={
+                      lastOwner ? 'A workspace needs at least one owner' : `Remove from ${workspace.name}`
+                    }
+                    disabled={busy || lastOwner || confirming === m.user.id}
+                    onClick={() => setConfirming(m.user.id)}
+                  >
+                    <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+                      <path
+                        d="M6 6l12 12M18 6L6 18"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                      />
+                    </svg>
+                  </button>
+                </div>
+              ) : (
+                <span className="dr-member__role" data-testid="workspace-member-role">
+                  {WS_ROLE_LABEL[m.role]}
+                </span>
+              )}
+            </li>
+          )
+        })}
+      </ul>
+    </details>
+  )
+}
 
 function Avatar({ user }: { user: { id: string; name: string; color: string } }) {
   return (
