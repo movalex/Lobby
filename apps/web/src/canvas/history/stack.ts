@@ -153,28 +153,70 @@ const paintCmp = (ia: unknown, a: string, ib: unknown, b: string): number => {
   return a < b ? -1 : a > b ? 1 : 0
 }
 
+/** An `index` as a sort key: a key that is not a string sorts first, as in `paintCmp`. */
+const keyOf = (v: unknown): string => (typeof v === 'string' ? v : '')
+
 /**
- * Whether `id`'s new `index` (the scene's) leaves it where it was among the live elements: every other
- * live element is painted on the same side of it with the keys of the previous boundary (`prevIndex`
- * for the elements that changed since, the scene's for the rest) as with the keys now. A deleted element
- * paints nowhere.
+ * Which of `candidates` (elements whose only change is a new `index`; the value is the key each had at the
+ * previous boundary) the new keys leave where they were among the live elements: every other live element is
+ * painted on the same side of it with the keys of the previous boundary (`prevIndex` for the elements that
+ * changed since, the scene's for the rest) as with the keys now. A deleted element paints nowhere, so a
+ * deleted candidate always qualifies, and one the scene lacks never does.
+ *
+ * One pass for all of them (it was one scan of the scene per candidate, so a mass re-key that kept the order
+ * after a paste or an engine re-key cost O(n^2): 5,000 elements 686 ms, 20,000 elements 15.5 s on the main
+ * thread). The live elements are put in their paint order of the previous boundary and in their order now
+ * (two sorts, O(n log n); the scene is nearly sorted both ways in practice). A candidate has the same place
+ * relative to every other element in both orders exactly when no pair that includes it is inverted between
+ * them, i.e. when its rank now is above the ranks now of everything before it in the old order and below
+ * those of everything after it: one prefix maximum and one suffix minimum over the old order.
  */
-function keepsPaintOrder(
-  id: string,
-  before: unknown,
+export function rekeysKeepingPaintOrder(
+  candidates: ReadonlyMap<string, unknown>,
   scene: Scene,
   prevIndex: ReadonlyMap<string, unknown>,
-): boolean {
-  const el = scene.get(id)
-  if (!el) return false
-  if (el.isDeleted) return true
-  for (const [other, o] of scene) {
-    if (other === id || o.isDeleted) continue
-    const was = prevIndex.has(other) ? prevIndex.get(other) : o.index
-    if (Math.sign(paintCmp(was, other, before, id)) !== Math.sign(paintCmp(o.index, other, el.index, id)))
-      return false
+): Set<string> {
+  const kept = new Set<string>()
+  const ids: string[] = []
+  const was: string[] = []
+  const now: string[] = []
+  let live = 0
+  for (const [id, el] of scene) {
+    if (el.isDeleted) {
+      if (candidates.has(id)) kept.add(id)
+      continue
+    }
+    if (candidates.has(id)) live++
+    ids.push(id)
+    now.push(keyOf(el.index))
+    was.push(
+      keyOf(candidates.has(id) ? candidates.get(id) : prevIndex.has(id) ? prevIndex.get(id) : el.index),
+    )
   }
-  return true
+  if (live === 0) return kept
+  const n = ids.length
+  const byWas = Array.from({ length: n }, (_, i) => i).sort((a, b) =>
+    paintCmp(was[a], ids[a] as string, was[b], ids[b] as string),
+  )
+  const byNow = Array.from({ length: n }, (_, i) => i).sort((a, b) =>
+    paintCmp(now[a], ids[a] as string, now[b], ids[b] as string),
+  )
+  const rankNow = new Int32Array(n)
+  for (let r = 0; r < n; r++) rankNow[byNow[r] as number] = r
+  // suffixMin[p]: the lowest rank now among the elements at old positions p and after
+  const suffixMin = new Int32Array(n + 1)
+  suffixMin[n] = n
+  for (let p = n - 1; p >= 0; p--)
+    suffixMin[p] = Math.min(suffixMin[p + 1] as number, rankNow[byWas[p] as number] as number)
+  let prefixMax = -1
+  for (let p = 0; p < n; p++) {
+    const i = byWas[p] as number
+    const r = rankNow[i] as number
+    if (candidates.has(ids[i] as string) && prefixMax < r && r < (suffixMin[p + 1] as number))
+      kept.add(ids[i] as string)
+    if (r > prefixMax) prefixMax = r
+  }
+  return kept
 }
 
 /** Reject codes the engine retries (protocol.ts REJECT_CODE_INFO `retryable`): the change is sent again. */
@@ -258,13 +300,19 @@ export class LobbyHistory {
     // changed nothing to see. A reorder (bring to front, send backward) moves the element among the others
     // and stays a step. The new key folds into the entries that hold the element's `index`, so their undo
     // and redo still compare equal.
-    for (const [id, c] of changes) {
-      if (!isIndexOnly(c)) continue
-      const before = c.fields.index?.before
-      const after = c.fields.index?.after
-      if (!keepsPaintOrder(id, before, scene, prevIndex)) continue
-      changes.delete(id)
-      this.foldRekey(id, before, after)
+    // All of them are judged in one sorted pass (`rekeysKeepingPaintOrder`): a mass re-key after a paste
+    // or an engine re-key is one such change per element.
+    const candidates = new Map<string, unknown>()
+    for (const [id, c] of changes) if (isIndexOnly(c)) candidates.set(id, c.fields.index?.before)
+    if (candidates.size > 0) {
+      const folds = new Map<string, { before: unknown; after: unknown }>()
+      for (const id of rekeysKeepingPaintOrder(candidates, scene, prevIndex)) {
+        const fc = changes.get(id)?.fields.index
+        if (!fc) continue
+        folds.set(id, { before: fc.before, after: fc.after })
+        changes.delete(id)
+      }
+      this.foldRekeys(folds)
     }
     if (changes.size === 0) return null
     const entry: Entry = { id: this.nextId++, label, changes }
@@ -393,6 +441,20 @@ export class LobbyHistory {
       next.versionNonce = after.versionNonce
     }
     this.lastLocal.set(after.id, next as HistEl)
+  }
+
+  /**
+   * The selection the latest step ended with, when it was read before the engine applied a select made in the
+   * same breath as the step (`UndoController.boundary`, `SELECTION_SETTLE_MS`): a step that recorded an empty
+   * one takes `after`. A step with a selection already, one with none recorded, and the latest step while a
+   * redo is possible (it is not the user's last change) are left alone. Returns whether it took it.
+   */
+  settleSelection(after: readonly string[]): boolean {
+    const top = this.undos[this.undos.length - 1]
+    const sel = top?.selection
+    if (!top || !sel || sel.after.length > 0 || after.length === 0 || this.redos.length > 0) return false
+    top.selection = { before: sel.before, after: [...after] }
+    return true
   }
 
   /** The stack as it is now, for `mergeTop(since)`: taken before a write that should join the previous step. */
@@ -552,18 +614,25 @@ export class LobbyHistory {
   }
 
   /**
-   * The engine's re-key of `id` (`index` from `before` to `after`, the paint order unchanged): an entry
-   * that holds the element's `index` at the side the scene is on now (an undo entry's `after`, a redo
-   * entry's `before`) takes the new key.
+   * The engine's re-keys (`index` from `before` to `after` per element, the paint order unchanged): an
+   * entry that holds an element's `index` at the side the scene is on now (an undo entry's `after`, a redo
+   * entry's `before`) takes the new key. One walk over the stacks for all of them (a mass re-key is one
+   * per element; a walk per element made it quadratic), each entry walked from its smaller side.
    */
-  private foldRekey(id: string, before: unknown, after: unknown) {
+  private foldRekeys(rekeys: ReadonlyMap<string, { before: unknown; after: unknown }>) {
+    if (rekeys.size === 0) return
     for (const [stack, side] of [
       [this.undos, 'after'],
       [this.redos, 'before'],
     ] as const)
       for (const entry of stack) {
-        const fc = entry.changes.get(id)?.fields.index
-        if (fc && deepEqual(fc[side], before)) fc[side] = clone(after)
+        const take = (id: string) => {
+          const rk = rekeys.get(id)
+          const fc = rk && entry.changes.get(id)?.fields.index
+          if (rk && fc && deepEqual(fc[side], rk.before)) fc[side] = clone(rk.after)
+        }
+        if (entry.changes.size <= rekeys.size) for (const id of entry.changes.keys()) take(id)
+        else for (const id of rekeys.keys()) take(id)
       }
     this.prune()
   }
