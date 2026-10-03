@@ -173,3 +173,10 @@ on the sync disk (§6).
   the Render API (`autoSync` false, status `paused`; owner pre-approval 2026-10-01). Services' auto-deploy is off (`autoDeployTrigger`
   off on api, sync and web). The owner's real sign-in check (§6 step 1) passed the same day: 0 Lobby CSP lines (the only console
   lines came from a browser extension's content script), boards open, edit and reload, two browsers see each other.
+- **Wave A deployed 2026-10-03 08:02–08:07Z** (`main` `0644365`; api → sync → web, the order the wave needs: the new web's
+  +1 on locked notes, locked-frame reorder and guest tags need the new sync's rules). api live in 52 s (domain-access policy loaded,
+  0 errors); sync live in 62 s, `/healthz` 502 for about 40 s after Render reported live (the disk service's boot), then 200,
+  maintenance off, backups running with the dedicated signing key, 0 errors; web live in 31 s. Live smoke
+  (`scripts/smoke/live-smoke.mjs --expect excalidraw`, from `engine/smoke`): 33 passed, 0 failed, 1 known warning (the edge hides
+  the sync's refusal code). No migration, no storage or converter change, so the rollback paths are unchanged (the R0 rollback must
+  still drop the enforced CSP first). The watch continues on this build.
