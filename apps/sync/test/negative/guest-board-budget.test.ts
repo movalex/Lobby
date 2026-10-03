@@ -62,10 +62,13 @@ describe('CR-W5-FIX-3: a per-board budget for every guest uid together', () => {
       let st = await createElementStack({ dataDir })
       stacks.push(st)
       const b = newBoardId()
-      // 12 fresh guest uids, each well under its own 500-item cap: 10 of 190 (1,900 items), one of them
-      // deleting 50 of its own (they still count), then one more of 150 crosses the board's 2,000
-      const per = 190
-      for (let u = 0; u < 10; u++)
+      // fresh guest uids, each a little under its own cap (GUEST_ITEM_CAP - 50 items), as many as fit in
+      // the board's budget (13 of 450 for 6,000, so well over 10 uids); one of them deletes 50 of its own
+      // (they still count); then one more asks for 50 over what is left and crosses the board's budget
+      const per = GUEST_ITEM_CAP - 50
+      const fillers = Math.floor(GUEST_BOARD_ITEM_CAP / per)
+      expect(fillers).toBeGreaterThanOrEqual(10)
+      for (let u = 0; u < fillers; u++)
         expect(new Set(await guestMakes(st, b, `guest-u${u}`, per))).toEqual(new Set(['ok']))
       const g0 = await st.client({ boardId: b, user: 'guest-u0', guest: true })
       const del = await g0.push(
@@ -74,12 +77,15 @@ describe('CR-W5-FIX-3: a per-board budget for every guest uid together', () => {
         ),
       )
       expect(new Set(codes(del))).toEqual(new Set(['ok']))
-      const left = GUEST_BOARD_ITEM_CAP - 10 * per // 100
-      const u10 = await guestMakes(st, b, 'guest-u10', 150)
-      expect(u10.filter((c) => c === 'ok').length).toBe(left)
-      expect(u10.slice(left)).toEqual(Array(150 - left).fill('GUEST_LIMIT'))
+      const left = GUEST_BOARD_ITEM_CAP - fillers * per // 150
+      expect(left).toBeGreaterThan(0)
+      expect(left).toBeLessThan(per)
+      const asks = left + 50
+      const uLast = await guestMakes(st, b, `guest-u${fillers}`, asks)
+      expect(uLast.filter((c) => c === 'ok').length).toBe(left)
+      expect(uLast.slice(left)).toEqual(Array(asks - left).fill('GUEST_LIMIT'))
       // another fresh uid gets nothing; an earlier guest far below its own cap gets nothing either
-      expect(await guestMakes(st, b, 'guest-u11', 1)).toEqual(['GUEST_LIMIT'])
+      expect(await guestMakes(st, b, `guest-u${fillers + 1}`, 1)).toEqual(['GUEST_LIMIT'])
       const again = await g0.createOne(rect('guest-u0-more'))
       expectRefused(again, 'GUEST_LIMIT', g0)
       // a note's label is no item: refused with its note, never counted alone
@@ -88,7 +94,7 @@ describe('CR-W5-FIX-3: a per-board budget for every guest uid together', () => {
       // accounts are never refused by the guests' budget
       const alice = await st.client({ boardId: b, user: 'alice' })
       expect(codes(await alice.create([rect('alice-1'), rect('alice-2')]))).toEqual(['ok', 'ok'])
-      await expectNotStored(st, b, ['guest-u11-0', 'guest-u0-more', 'guest-note'])
+      await expectNotStored(st, b, [`guest-u${fillers + 1}-0`, 'guest-u0-more', 'guest-note'])
       const before = (await st.snapshot(b)).elements.length
 
       // a process restart: the room rebuilds the guests' counts from the board's rows (live and deleted)
@@ -96,7 +102,7 @@ describe('CR-W5-FIX-3: a per-board budget for every guest uid together', () => {
       stacks.length = 0
       st = await createElementStack({ dataDir })
       stacks.push(st)
-      expect(await guestMakes(st, b, 'guest-u12', 1)).toEqual(['GUEST_LIMIT'])
+      expect(await guestMakes(st, b, `guest-u${fillers + 2}`, 1)).toEqual(['GUEST_LIMIT'])
       const owner = await st.client({ boardId: b, user: 'olga', role: 'owner' })
       expect(codes(await owner.create([rect('olga-1')]))).toEqual(['ok'])
       expect((await st.snapshot(b)).elements.length).toBe(before + 1)

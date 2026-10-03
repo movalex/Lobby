@@ -3,6 +3,7 @@
  * an invalid sample per element type, every limit of §3.5 with worst-case samples, the rounding rule,
  * links and `fileId`s, the customData classes' value schemas and budgets, doc keys and object refs.
  */
+import { GUESTS_PER_LINK } from '@draftroom/contracts'
 import { describe, expect, it } from 'vitest'
 import { checkLobbyData, LOBBY_KEY_SPECS, lobbyKeySpec, lobbyValueProblem } from './custom-data.ts'
 import { canWriteDocKey, docValueProblem } from './doc.ts'
@@ -20,6 +21,7 @@ import {
   LOBBY_FONT_FAMILIES,
   MAX_ELEMENT_BYTES,
   MAX_FREEDRAW_POINTS,
+  MAX_ITEMS,
   MAX_LINEAR_POINTS,
   MAX_ORIGINAL_TEXT_CHARS,
   MAX_TAG_DEFS,
@@ -361,7 +363,10 @@ describe('the board document (§3.4) and object refs (§3.6)', () => {
   })
 
   it('every guest uid together has a board budget above one guest’s cap (CR-W5-FIX-3)', () => {
-    expect(GUEST_BOARD_ITEM_CAP).toBe(2_000)
+    // 200 guests a link x 30 items each, and still 30% of the board's item cap
+    expect(GUEST_BOARD_ITEM_CAP).toBe(GUESTS_PER_LINK * 30)
+    expect(GUEST_BOARD_ITEM_CAP).toBe(6_000)
+    expect(GUEST_BOARD_ITEM_CAP).toBe(MAX_ITEMS * 0.3)
     expect(GUEST_BOARD_ITEM_CAP).toBeGreaterThan(GUEST_ITEM_CAP)
   })
 

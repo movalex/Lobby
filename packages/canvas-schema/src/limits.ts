@@ -285,8 +285,13 @@ export const GUEST_ITEM_CAP = 500
  * over every guest uid's count exactly as GUEST_ITEM_CAP counts (live and deleted, a detached label against
  * its creator), which the room rebuilds from the board's rows when it opens: no ticket or storage change.
  * Accounts are never refused by it.
+ *
+ * 6,000 = GUESTS_PER_LINK (200, packages/contracts guests.ts) x 30 items: a full workshop link (every seat
+ * a different guest) gets 30 items each, and the guests together still hold at most 30% of MAX_ITEMS. A
+ * smaller number (the first sketch said 2,000) stopped a reused 100-guest workshop board at 20 notes each
+ * once tombstones were counted (limits.test.ts pins the product).
  */
-export const GUEST_BOARD_ITEM_CAP = 2_000
+export const GUEST_BOARD_ITEM_CAP = 6_000
 /**
  * Board tag-list keys (`tagDef:*`, doc.ts) one name-only guest may write while the room is open (CR-3D-5): an
  * editor guest may create, rename, recolour and delete tags as an editor does, but each key it writes counts
