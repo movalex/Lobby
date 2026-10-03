@@ -361,12 +361,12 @@ export const feature: CanvasFeature = {
       label: 'Voting',
       icon: BallotIcon,
       order: 40,
-      visible: (ctx) => showVotingTab(guestHere(ctx), activityOf(ctx)),
+      visible: (ctx) => !guestHere(ctx) || showVotingTab(true, activityOf(ctx)),
       component: VotingPanel,
     },
     {
       ...privateNotesPanel,
-      visible: (ctx) => showPrivateNotesTab(guestHere(ctx), activityOf(ctx)),
+      visible: (ctx) => !guestHere(ctx) || showPrivateNotesTab(true, activityOf(ctx)),
     },
   ],
   overlays: [
