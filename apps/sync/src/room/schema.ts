@@ -51,6 +51,49 @@ export function ensureLbSchema(db: DatabaseSync): void {
   for (const stmt of LB_DDL) db.exec(stmt)
 }
 
+// ---- lb_receipts: push receipts (CONTRACTS_REV 11, W5-ENG-2) -------------------------------------------
+
+/**
+ * The room's push receipts (protocol.ts `Push.rid`, `ReceiptsQuery`): one row per committed push that
+ * carried a receipt id, keyed by the pushing user (`uid`, from the ticket) and the id, with the clock the
+ * push committed at and when (ms). A small ring per user (`RECEIPTS.perUser`) and an age limit
+ * (`RECEIPTS.ttlMs`); what a trim dropped is remembered as a MARKER row (`rid` = '', `clock` = the
+ * highest clock dropped: per user for the ring, `uid` = '' for the age limit), so an answer can say from
+ * which clock a user's receipts are complete.
+ *
+ * Not one of the frozen §2.6 tables (LB_TABLES). The room's store makes it (IF NOT EXISTS, idempotent) in
+ * the first drain batch that records a receipt, inside that batch's transaction, and writes it only in
+ * batches that advance the clock: the backups' digest (r0/lb-files.ts `lbRecordsSha256`, every lb_* table
+ * with its SQL) then never changes while `lb_meta.clock` stays, which the restore drill's live check
+ * requires ("live board has the backup clock but different records"). Made on open instead, every board
+ * opened after the deploy and not written since its last backup would fail that check. A file from before
+ * rev 11, a converted file, a restored backup and a file R0 served get it with their next receipt; a
+ * receipts query on a file without it is answered "nothing landed, complete from 0". It is an lb_* table,
+ * so the backups (the whole file), the digest and the restore drill cover it, and it survives a restart
+ * (written with the COMMIT); the conversion and the roll-forward's lb_prev copies leave it alone, and
+ * drop-legacy keeps it (a serving table).
+ */
+export const LB_RECEIPTS_TABLE = 'lb_receipts'
+export const LB_RECEIPTS_DDL: readonly string[] = [
+  `CREATE TABLE IF NOT EXISTS lb_receipts (uid TEXT NOT NULL, rid TEXT NOT NULL, clock INTEGER NOT NULL,
+  at INTEGER NOT NULL, PRIMARY KEY (uid, rid)) WITHOUT ROWID`,
+  'CREATE INDEX IF NOT EXISTS lb_receipts_clock ON lb_receipts(uid, clock)',
+]
+/** The receipt ring's limits: per user, and an age (a reconnect asks within seconds, a reload within days). */
+export const RECEIPTS = Object.freeze({
+  perUser: 64,
+  /** a user's ring is trimmed back to `perUser` once it holds this many */
+  trimAt: 96,
+  ttlMs: 7 * 86_400_000,
+  /** how often (at most) the age limit runs, in a writing batch */
+  ttlEveryMs: 3_600_000,
+})
+
+/** Creates the receipts table when it is missing (idempotent). Call inside a transaction that advances the clock. */
+export function ensureReceiptsSchema(db: DatabaseSync): void {
+  for (const stmt of LB_RECEIPTS_DDL) db.exec(stmt)
+}
+
 // ---- lb_meta ---------------------------------------------------------------------------------------
 
 export const LB_META_KEYS = ['clock', 'horizon', 'epoch', 'schemaVersion', 'converted_from'] as const

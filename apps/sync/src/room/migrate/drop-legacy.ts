@@ -19,8 +19,9 @@
 //     left alone and listed (`unknownTables`), never guessed at.
 //  3. `dryRun`: the report carries the plan and the window verdict; nothing is written.
 //  4. one `BEGIN IMMEDIATE` with every DROP TABLE, COMMIT, then VACUUM and a WAL checkpoint, so the file
-//     gives the space back. The tables the room serves (lb_meta, lb_elements, lb_doc, lb_deleted) are
-//     never touched: their digests are the same before and after (apps/sync/test/migrate/drop-legacy.test.ts).
+//     gives the space back. The tables the room serves (lb_meta, lb_elements, lb_doc, lb_deleted, and
+//     lb_receipts since CONTRACTS_REV 11) are never touched: their digests are the same before and after
+//     (apps/sync/test/migrate/drop-legacy.test.ts).
 //  5. the report goes to `<data>/migration/<board>.drop-legacy.json`: table names, bytes, times, no content.
 //
 // After it, R0 refuses the file (`converted-without-tldraw`, r0/born-after.ts): a rollback to R0 is no
@@ -30,7 +31,7 @@
 import { existsSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
-import { LB_PRAGMAS, LB_PREV_TABLE_PATTERN, LB_TABLES } from '../schema.ts'
+import { LB_PRAGMAS, LB_PREV_TABLE_PATTERN, LB_RECEIPTS_TABLE, LB_TABLES } from '../schema.ts'
 import { boardFileState } from './board-state.ts'
 import { fileBytes, writeReport } from './convert-board.ts'
 import { tableNames } from './digest.ts'
@@ -42,8 +43,8 @@ export const LEGACY_TLDRAW_TABLES = ['documents', 'metadata', 'objects', 'tombst
 /** R0's "Recently deleted" capture (deleted/store.ts); the new build has its own `lb_deleted`. */
 export const LEGACY_DELETED_TABLES = ['dr_deleted_records', 'dr_deleted_schemas'] as const
 
-/** The tables the room serves: never dropped. */
-const SERVING_TABLES = new Set<string>(LB_TABLES.filter((t) => t !== 'lb_source'))
+/** The tables the room serves: never dropped (the push receipts too, CONTRACTS_REV 11). */
+const SERVING_TABLES = new Set<string>([...LB_TABLES.filter((t) => t !== 'lb_source'), LB_RECEIPTS_TABLE])
 
 export interface DropLegacyJob {
   readonly kind: 'drop-legacy'

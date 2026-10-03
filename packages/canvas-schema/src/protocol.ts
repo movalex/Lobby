@@ -50,13 +50,31 @@ export const PROTO = 1 as const
  * room says it speaks rev 10 with a `contracts` frame after the welcome; a client sends `f` and `view.z`
  * only after that frame, and the room sends the rev-10 fields only to a session that has sent `f`, so a
  * rev-9 client and a rev-9 room are served as before (`PresenceIn`/`PeerPresence` are strict both ways).
+ * Revision 11 (wave C, C2: W5-ENG-2, push receipts): a push may carry a receipt id `rid` (client-made,
+ * unique per page) that the room records with the push's COMMIT (a small ring per user in the board file,
+ * `lb_receipts`); after a reconnect the client asks which of the receipts of its lost pushes landed
+ * (`receipts` query, answered by a `receipts` frame), so it decides every lost push exactly, instead of
+ * counting the writes since (the residual of V1's re-checks: a push that never arrived and two or more
+ * other writes in the window, the doc-key DB2). Additive and gated like rev 10: a client sends `rid` and
+ * the query only on a socket whose room sent `contracts` with `rev >= RECEIPTS_REV` (a rev-10 room refuses
+ * both: strict); a rev-10 client sends neither and is served as before; a rev-11 room's `contracts` frame
+ * says 11, which a rev-10 client reads as "rev 10 or later".
  */
-export const CONTRACTS_REV = 10
+export const CONTRACTS_REV = 11
 /**
  * The first contracts revision whose presence has `f`, `view.z` and `followers` (see `CONTRACTS_REV`).
  * A client sends them only to a room whose `contracts` frame names this revision or a later one.
  */
 export const PRESENCE_FOLLOW_REV = 10
+/**
+ * The first contracts revision with push receipts (`Push.rid`, `ReceiptsQuery`, `Receipts`; see
+ * `CONTRACTS_REV`). A client sends them only to a room whose `contracts` frame names this revision or a later one.
+ */
+export const RECEIPTS_REV = 11
+/** A push's receipt id (CONTRACTS_REV 11): made by the client, unique per page (`<page nonce>.<seq>`). */
+export const ReceiptId = z.string().regex(/^[A-Za-z0-9_.:-]{1,64}$/)
+/** The most receipt ids one `receipts` query names (a reconnect has at most a few pushes out). */
+export const MAX_RECEIPT_IDS = 64
 /**
  * The element schema version (`hello.schema`, `welcome.schema`, `lb_meta.schemaVersion`). A client one
  * version older is served; a newer one gets 4099 `SERVER_TOO_OLD`, an older one `CLIENT_TOO_OLD` (§6.2 `schema`).
@@ -335,7 +353,11 @@ export const Hello = z.strictObject({
   epoch: Epoch.nullable(),
   tab: z.string().min(1).max(128),
 })
-/** `push`: ≤ 500 ops and ≤ 512 KiB (the frame ≤ 1 MiB). Each accepted push gets its own clock. */
+/**
+ * `push`: ≤ 500 ops and ≤ 512 KiB (the frame ≤ 1 MiB). Each accepted push gets its own clock. `rid`
+ * (CONTRACTS_REV 11): its receipt id, recorded by the room with the push's COMMIT when the push wrote and
+ * no op of it was refused with a retryable code; sent only to a rev-11 room (see `CONTRACTS_REV`).
+ */
 export const Push = z
   .strictObject({
     type: z.literal('push'),
@@ -343,6 +365,7 @@ export const Push = z
     base: Clock,
     ops: z.array(Op).max(MAX_OPS_PER_PUSH),
     doc: DocSetChecked.optional(),
+    rid: ReceiptId.optional(),
   })
   .refine((p) => p.ops.length > 0 || p.doc !== undefined, 'empty push')
 /** Text lease (§2.9.2; spike A's shapes). `id`: the container for a label, the text itself for free text. */
@@ -406,6 +429,16 @@ export const PresenceIn = z.strictObject({
   f: SessionId.nullable().optional(),
 })
 export const Ping = z.strictObject({ type: z.literal('ping'), n: NonNegInt.optional() })
+/**
+ * `receipts` (CONTRACTS_REV 11, W5-ENG-2): which of these receipt ids (pushes this user sent with `rid`,
+ * lost with a socket or a page) the room committed. Ordered with this session's pushes and answered after
+ * the room's next COMMIT (so every push queued before it is decided). Sent only to a rev-11 room.
+ */
+export const ReceiptsQuery = z.strictObject({
+  type: z.literal('receipts'),
+  req: NonNegInt,
+  ids: z.array(ReceiptId).min(1).max(MAX_RECEIPT_IDS),
+})
 
 export const ClientMessage = z.discriminatedUnion('type', [
   Hello,
@@ -414,6 +447,7 @@ export const ClientMessage = z.discriminatedUnion('type', [
   LeaseRelease,
   PresenceIn,
   Ping,
+  ReceiptsQuery,
 ])
 /**
  * Rejections are per op (§3.5): the server parses a frame with `ClientEnvelope` first (a push's ops
@@ -427,6 +461,7 @@ export const PushEnvelope = z
     base: Clock,
     ops: z.array(z.unknown()).max(MAX_OPS_PER_PUSH),
     doc: z.unknown().optional(),
+    rid: ReceiptId.optional(),
   })
   .refine((p) => p.ops.length > 0 || p.doc !== undefined, 'empty push')
 export const ClientEnvelope = z.discriminatedUnion('type', [
@@ -436,6 +471,7 @@ export const ClientEnvelope = z.discriminatedUnion('type', [
   LeaseRelease,
   PresenceIn,
   Ping,
+  ReceiptsQuery,
 ])
 export type ClientEnvelope = z.infer<typeof ClientEnvelope>
 export type Hello = z.infer<typeof Hello>
@@ -445,6 +481,7 @@ export type LeaseRelease = z.infer<typeof LeaseRelease>
 export type DragIn = z.infer<typeof DragIn>
 export type PresenceIn = z.infer<typeof PresenceIn>
 export type Ping = z.infer<typeof Ping>
+export type ReceiptsQuery = z.infer<typeof ReceiptsQuery>
 export type ClientMessage = z.infer<typeof ClientMessage>
 /** The lease messages a client sends, as spike A's `LeaseClientMessage`. */
 export type LeaseClientMessage = LeaseAcquire | LeaseRelease
@@ -795,6 +832,22 @@ export const Notice = z.strictObject({
   detail: z.string().max(200).optional(),
 })
 export const Pong = z.strictObject({ type: z.literal('pong'), n: NonNegInt.optional() })
+/**
+ * `receipts` (CONTRACTS_REV 11, W5-ENG-2): the answer to a `receipts` query (same `req`). `landed`: each
+ * named receipt the room holds for this user, with the clock its push committed at. A named receipt that
+ * is not there did NOT land, provided it could still be held: the room keeps this user's receipts complete
+ * from clock `from` on (older ones may have been trimmed: a ring per user, and an age limit), and a push
+ * built on base `b` lands at a clock above `b`, so the absence is conclusive when `b + 1 >= from`; for an
+ * older push it says nothing, and the client counts the writes since, as before rev 11.
+ */
+export const Receipts = z
+  .strictObject({
+    type: z.literal('receipts'),
+    req: NonNegInt,
+    landed: z.record(ReceiptId, Clock),
+    from: Clock,
+  })
+  .refine((r) => Object.keys(r.landed).length <= MAX_RECEIPT_IDS, 'too many receipts')
 
 export const ServerMessage = z.discriminatedUnion('type', [
   Welcome,
@@ -809,6 +862,7 @@ export const ServerMessage = z.discriminatedUnion('type', [
   Notice,
   Pong,
   Contracts,
+  Receipts,
 ])
 export type Welcome = z.infer<typeof Welcome>
 export type Changes = z.infer<typeof Changes>
@@ -822,6 +876,7 @@ export type Workshop = z.infer<typeof Workshop>
 export type Notice = z.infer<typeof Notice>
 export type Pong = z.infer<typeof Pong>
 export type Contracts = z.infer<typeof Contracts>
+export type Receipts = z.infer<typeof Receipts>
 export type ServerMessage = z.infer<typeof ServerMessage>
 /** The lease messages a client receives, as spike A's `LeaseServerMessage`. */
 export type LeaseServerMessage = LeaseGrant | LeaseDeny | LeaseBroadcast

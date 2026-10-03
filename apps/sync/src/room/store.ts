@@ -12,10 +12,12 @@ import { DatabaseSync, type StatementSync } from 'node:sqlite'
 import type { WireElement } from '@draftroom/canvas-schema/elements'
 import {
   ensureLbSchema,
+  ensureReceiptsSchema,
   type Gclock,
   LB_PRAGMAS,
   LB_SCHEMA_VERSION,
   parseGclock,
+  RECEIPTS,
   serializeGclock,
 } from './schema.ts'
 
@@ -355,6 +357,80 @@ export class BoardStore {
     return (this.st.docCountAt.get(clock) as { n: number }).n
   }
 
+  // ---- push receipts (CONTRACTS_REV 11, W5-ENG-2; schema.ts lb_receipts) ---------------------------
+
+  /** Whether lb_receipts exists in the file (null: not checked since the open or a rolled-back write). */
+  private receiptsTable: boolean | null = null
+  private hasReceiptsTable(): boolean {
+    this.receiptsTable ??= !!this.db
+      .prepare("SELECT 1 AS x FROM sqlite_master WHERE type = 'table' AND name = 'lb_receipts'")
+      .get()
+    return this.receiptsTable
+  }
+  /** After a rolled-back receipts write (its CREATE TABLE may have gone with it): checked again. */
+  forgetReceiptsTable(): void {
+    this.receiptsTable = null
+  }
+
+  /**
+   * Records committed pushes' receipts, inside the batch's transaction (they commit with the push). The
+   * table is made here, in the first batch that has a receipt, not when the file is opened (schema.ts
+   * lb_receipts: it changes the file only together with its clock).
+   */
+  putReceipts(rows: readonly { uid: string; rid: string; clock: number }[], at: number): void {
+    if (!rows.length) return
+    if (!this.hasReceiptsTable()) {
+      ensureReceiptsSchema(this.db)
+      this.receiptsTable = true
+    }
+    for (const r of rows) this.st.receiptPut.run(r.uid, r.rid, r.clock, at)
+  }
+
+  /**
+   * The ring's limits, in a batch that wrote receipts: each of `uids` back to `perUser` receipts once it holds
+   * `trimAt` (its marker remembers the highest clock dropped), and, when `ttl`, every receipt older than
+   * `ttlMs` (the board marker). Returns how many rows were dropped.
+   */
+  trimReceipts(uids: Iterable<string>, now: number, ttl: boolean): number {
+    if (!this.hasReceiptsTable()) return 0
+    let dropped = 0
+    const mark = (uid: string, clock: number) => this.st.receiptMark.run(uid, clock, now)
+    for (const uid of new Set(uids)) {
+      const n = (this.st.receiptCount.get(uid) as { n: number }).n
+      if (n < RECEIPTS.trimAt) continue
+      const cut = this.st.receiptNth.get(uid, RECEIPTS.perUser) as { clock: number } | undefined
+      if (!cut) continue
+      dropped += Number(this.st.receiptDropUser.run(uid, cut.clock).changes)
+      mark(uid, cut.clock)
+    }
+    if (ttl) {
+      const old = this.st.receiptOldest.get(now - RECEIPTS.ttlMs) as { clock: number | null }
+      if (old.clock !== null) {
+        dropped += Number(this.st.receiptDropAll.run(old.clock).changes)
+        mark('', old.clock)
+      }
+    }
+    return dropped
+  }
+
+  /**
+   * The answer to a receipts query for `uid`: the named receipts it holds (id → clock), and the clock from
+   * which this user's receipts are complete (the higher of its marker and the board's, plus one; 0 when
+   * nothing was ever trimmed).
+   */
+  receipts(uid: string, rids: readonly string[]): { landed: Record<string, number>; from: number } {
+    // no table: no receipt was ever recorded in this file (rev 11 makes it with the first one)
+    if (!this.hasReceiptsTable()) return { landed: {}, from: 0 }
+    const landed: Record<string, number> = {}
+    for (const rid of new Set(rids)) {
+      if (!rid) continue
+      const r = this.st.receiptGet.get(uid, rid) as { clock: number } | undefined
+      if (r) landed[rid] = r.clock
+    }
+    const m = this.st.receiptFloor.get(uid) as { clock: number | null }
+    return { landed, from: m.clock === null ? 0 : m.clock + 1 }
+  }
+
   // ---- recently deleted ------------------------------------------------------------------------
 
   insertDeleted(w: DeletedRowWrite): void {
@@ -526,5 +602,17 @@ function prepareStatements(db: DatabaseSync) {
     tombstonesByAge:
       'SELECT id, deleted_clock FROM lb_elements WHERE deleted = 1 ORDER BY deleted_clock DESC, id LIMIT -1 OFFSET ?',
     purge: 'DELETE FROM lb_elements WHERE id = ?',
+    // push receipts (rid '' = a trim marker: per user, or the board's with uid '')
+    receiptPut: 'INSERT OR REPLACE INTO lb_receipts (uid, rid, clock, at) VALUES (?, ?, ?, ?)',
+    receiptGet: "SELECT clock FROM lb_receipts WHERE uid = ? AND rid = ? AND rid <> ''",
+    receiptCount: "SELECT count(*) AS n FROM lb_receipts WHERE uid = ? AND rid <> ''",
+    receiptNth:
+      "SELECT clock FROM lb_receipts WHERE uid = ? AND rid <> '' ORDER BY clock DESC LIMIT 1 OFFSET ?",
+    receiptDropUser: "DELETE FROM lb_receipts WHERE uid = ? AND rid <> '' AND clock <= ?",
+    receiptOldest: "SELECT max(clock) AS clock FROM lb_receipts WHERE rid <> '' AND at < ?",
+    receiptDropAll: "DELETE FROM lb_receipts WHERE rid <> '' AND clock <= ?",
+    receiptMark: `INSERT INTO lb_receipts (uid, rid, clock, at) VALUES (?, '', ?, ?)
+       ON CONFLICT(uid, rid) DO UPDATE SET clock = max(clock, excluded.clock), at = excluded.at`,
+    receiptFloor: "SELECT max(clock) AS clock FROM lb_receipts WHERE rid = '' AND uid IN (?, '')",
   })
 }

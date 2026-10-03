@@ -64,10 +64,13 @@ import {
   type LeaseClientMessage,
   type LeaseHolder,
   type LeaseServerMessage,
+  MAX_RECEIPT_IDS,
   type Op,
   PROTO,
   type PresenceIn,
+  RECEIPTS_REV,
   REJECT_CODE_INFO,
+  type Receipts,
   type RejectCode,
   type RosterEntry,
   type ServerMessage,
@@ -194,6 +197,11 @@ interface Inflight {
    * prefix of its pushes, which the lost-push decision relies on (replayLost)
    */
   readonly src: string
+  /**
+   * CONTRACTS_REV 11 (W5-ENG-2): its receipt id, when it went out on a socket whose room speaks rev 11: the
+   * room records it with the push's COMMIT, and a lost push's fate is asked for by it (`receipts`)
+   */
+  readonly rid?: string
 }
 
 interface Held {
@@ -297,6 +305,26 @@ function docEntry(set: Record<string, unknown>, base: number, at: number): Offli
 }
 /** How long changes to elements a stale reset snapshot lacked wait for its catch-up (see awaitingCatchUp). */
 export const CATCH_UP_WAIT_MS = 3000
+/**
+ * How long lost pushes wait for the room's receipts answer (CONTRACTS_REV 11) before they are decided by
+ * counting the writes since, as before rev 11 (the answer is one round trip and one COMMIT away).
+ */
+export const RECEIPTS_WAIT_MS = 5000
+
+/**
+ * A lost board-document write whose push's fate its receipt tells (CONTRACTS_REV 11, W5-ENG-2): it never
+ * landed, so the latest value goes again ('again'; the doc counterpart of an element's unlanded group); or
+ * it landed at `landedAt` and the server's value differs from it: a later write by someone else stands and
+ * the person is told ('superseded'), unless the key was not written after ours ('quiet': the server's
+ * value is what our write left). Pure.
+ */
+export function decideLostDocByReceipt(
+  fate: number | false,
+  keyClock: number | undefined,
+): 'again' | 'superseded' | 'quiet' {
+  if (fate === false) return 'again'
+  return keyClock !== undefined && keyClock === fate ? 'quiet' : 'superseded'
+}
 const nowMs = () => (typeof performance !== 'undefined' ? performance.now() : Date.now())
 /** A `lobby.*` performance measure (§8.4's client numbers; O3's facade reads and clears them). */
 function measure(name: string, start: number): void {
@@ -342,7 +370,11 @@ const LEASED_GROUPS: ReadonlySet<GroupKey> = new Set<GroupKey>(['text', 'layout'
 
 /** One lost push's part for one element, as `decideLostElement` reads it. */
 export interface LostPart {
-  readonly p: { readonly src: string }
+  /**
+   * `landed` (CONTRACTS_REV 11, W5-ENG-2): the push's fate as its receipt tells it (true: committed; false:
+   * never committed); absent when unknown (no receipt id, a room before rev 11, a trimmed receipt)
+   */
+  readonly p: { readonly src: string; readonly landed?: boolean }
   readonly s: {
     readonly groups: ReadonlySet<GroupKey>
     readonly el: SceneElement
@@ -419,6 +451,24 @@ export function decideLostElement(
   if (!open.length) return { again, recreate: false, superseded }
   const first = list[0] as LostPart
   const P = first.s.pv ?? first.s.ref?.version
+  // CONTRACTS_REV 11 (W5-ENG-2): every open group's last lost write has a known fate (its push's receipt).
+  // Never landed: it goes again (an offline change, whatever the server copy holds). Landed: the server's
+  // copy stands; the person is told unless nobody else wrote the element since (its version moved by at
+  // most our landed pushes: the difference is the server's own form of our write, a fix)
+  const lastAt = (g: GroupKey) => {
+    for (let i = list.length - 1; i >= 0; i--) if (list[i]?.s.groups.has(g)) return i
+    return -1
+  }
+  if (open.every((g) => list[lastAt(g)]?.p.landed !== undefined)) {
+    const known = list.every((x) => x.p.landed !== undefined)
+    const ours = list.filter((x) => x.p.landed === true).length
+    const quiet = known && P !== undefined && conf.version - P <= ours
+    for (const g of open) {
+      if (list[lastAt(g)]?.p.landed === false) again.add(g)
+      else if (!quiet) superseded.push(g)
+    }
+    return { again, recreate: false, superseded }
+  }
   if (new Set(list.map((x) => x.p.src)).size > 1 || P === undefined || !first.s.ref) {
     // pushes of several sockets (two tabs' queues), or no version to count from: not decidable
     return { again, recreate: false, superseded: open }
@@ -436,6 +486,8 @@ export function decideLostElement(
     const others = n - j
     if (others < 0) continue
     if (others === 0 && diffGroups(conf, after(j)).groups.size > 0) continue
+    // a known fate (CONTRACTS_REV 11) rules out the prefixes it contradicts: the first j landed, the rest not
+    if (list.some((x, i) => (i < j ? x.p.landed === false : x.p.landed === true))) continue
     possible.push(j)
   }
   if (!possible.length) return { again, recreate: false, superseded: open }
@@ -600,6 +652,27 @@ export class LobbyEngineCore implements EngineCore {
    */
   private lostHeld: Inflight[] = []
   private lostTimer: unknown = null
+  /**
+   * What the lost pushes held in `lostHeld` (and the lost doc writes) wait for before they are decided: a
+   * reset snapshot's catch-up (`catchUp`), and (CONTRACTS_REV 11, W5-ENG-2) the room's answer on which of
+   * their receipts landed (`receipts`: 'contracts' until this socket's room says its revision, then
+   * 'asked' while the queries in `asked` are out). Null: nothing is held.
+   */
+  private lostGate: {
+    catchUp: boolean
+    receipts: 'contracts' | 'asked' | null
+    readonly asked: Map<number, readonly string[]>
+  } | null = null
+  /** CONTRACTS_REV 11: the revision this socket's room announced (its `contracts` frame); null until then */
+  private roomRev: number | null = null
+  /** this page's receipt id prefix (CONTRACTS_REV 11): a push's id is `<prefix><seq>`, unique per page */
+  private readonly ridPrefix =
+    `${Math.random().toString(36).slice(2, 10) || 'p'}${Date.now().toString(36).slice(-4)}.`
+  private receiptsReq = 0
+  /** what the room's receipts answers told (CONTRACTS_REV 11): rid → the clock its push landed at, or false */
+  private readonly receiptFate = new Map<string, number | false>()
+  /** per rid asked: its push's base (an absence is conclusive when base + 1 >= the answer's `from`) */
+  private readonly receiptBase = new Map<string, number>()
   /** unsent text outside the scene (keys buffered in an editor that waits for its lease, §2.5.7) */
   private readonly outside = new Set<string>()
 
@@ -679,6 +752,12 @@ export class LobbyEngineCore implements EngineCore {
       this.welcome = null
       this.awaitingSnapshot = false
       if (close && close.code === CLOSE_TERMINAL) this.terminal = close
+      // lost pushes held for a receipts answer wait for the next welcome, which asks again (not decided by
+      // counting while no answer can come)
+      if (this.lostGate?.receipts && this.lostTimer !== null) {
+        this.clearTimer(this.lostTimer)
+        this.lostTimer = null
+      }
       // an acquire sent and never answered went with the socket (a failed COMMIT answers no lease message
       // of its batch, V1 N7): it is asked again after the next welcome, with its request number
       for (const [req, id] of this.leaseReq)
@@ -1559,6 +1638,12 @@ export class LobbyEngineCore implements EngineCore {
           else this.rosterMap.set(ev.p.sid, ev.p)
         }
         break
+      case 'contracts':
+        this.onContracts(m.rev)
+        break
+      case 'receipts':
+        this.onReceipts(m)
+        break
       case 'notice':
         if (m.code === 'RESYNC') this.resync()
         if (m.code === 'SLOW_DOWN') this.retryDelay = Math.max(this.retryDelay, 1000)
@@ -1607,6 +1692,8 @@ export class LobbyEngineCore implements EngineCore {
     this.epochReset = epochChanged
     this.welcome = w
     this.welcomes++
+    // a new socket (or a resync): what its room speaks comes with its `contracts` frame, after this one
+    this.roomRev = null
     this.epoch = w.epoch
     this.horizon = w.horizon
     this.serverDoc = { ...w.doc }
@@ -1694,10 +1781,14 @@ export class LobbyEngineCore implements EngineCore {
       this.clearTimer(this.lostTimer)
       this.lostTimer = null
     }
+    // a new socket: its room is asked again (an answer to the previous one's query will not come)
+    this.lostGate = null
+    this.receiptFate.clear()
+    this.receiptBase.clear()
     this.inflight = []
     // doc writes lost with the socket: decided with the pushes (decideLostDoc), from the clock their push
     // was built at, past this tab's own writes of their keys acked before the cut
-    for (const seq of this.inflightDoc.keys()) this.lostDoc.push(this.lostDocRecordOf(seq))
+    for (const seq of this.inflightDoc.keys()) this.lostDoc.push(this.lostDocRecordOf(seq, lost))
     this.inflightDoc.clear()
     this.inflightDocClock.clear()
     this.inflightDocBase.clear()
@@ -1707,10 +1798,14 @@ export class LobbyEngineCore implements EngineCore {
       if (this.epochReset) {
         this.replayAll(lost)
         this.replayAllDoc()
-      } else if (reset) this.holdLost(lost)
-      else {
-        this.replayLost(lost)
-        this.decideLostDoc()
+      } else {
+        // behind a reset snapshot, or with receipts to ask for (CONTRACTS_REV 11): held until decided
+        const receipts = this.receiptsPossible(lost)
+        if (reset || receipts) this.holdLost(lost, { catchUp: !!reset, receipts })
+        else {
+          this.replayLost(lost)
+          this.decideLostDoc()
+        }
       }
     }
     this.awaitingCatchUp.clear()
@@ -1790,7 +1885,10 @@ export class LobbyEngineCore implements EngineCore {
       const t = this.tracked.get(id)
       // the version each part counts from, and the copy it compares against: past this tab's own pushes
       // acked before the cut (effectivePv, effectiveRef)
-      const parts: LostPart[] = list.map(({ p, s }) => ({ p, s: this.settledSent(id, s) }))
+      const parts: LostPart[] = list.map(({ p, s }) => {
+        const landed = this.fateOf(p.rid)
+        return { p: { src: p.src, ...(landed !== undefined ? { landed } : {}) }, s: this.settledSent(id, s) }
+      })
       const { again, recreate, superseded } = decideLostElement(parts, conf, t?.dirty ?? new Set())
       if (superseded.length) {
         // the server's copy stands and the user is told (the board page's notice): never a silent drop.
@@ -1861,6 +1959,18 @@ export class LobbyEngineCore implements EngineCore {
       const now = this.serverDoc[k] ?? null
       const sent = last.set[k] ?? null
       if (deepEqual(now, sent)) continue
+      // CONTRACTS_REV 11 (W5-ENG-2): the last write's receipt tells its fate (DB2: the first of two writes
+      // landed with its ack lost, the second never arrived: it goes again, nobody is told anything)
+      const fate = last.rid !== undefined ? this.receiptFate.get(last.rid) : undefined
+      if (fate !== undefined) {
+        const verdict = decideLostDocByReceipt(fate, this.serverDocClock?.[k])
+        if (verdict === 'again') this.pendingDoc[k] = clone(sent)
+        else if (verdict === 'superseded') {
+          this.log('lost_doc_superseded', { key: k })
+          this.emit({ kind: 'superseded', id: `doc:${k}`, groups: [] })
+        }
+        continue
+      }
       const again = decideLostDocKey(chain, this.serverDocClock, now)
       if (again) this.pendingDoc[k] = clone(sent)
       else {
@@ -1882,19 +1992,121 @@ export class LobbyEngineCore implements EngineCore {
    * writes are held as in flight until that frame or CATCH_UP_WAIT_MS: a snapshot older than their commit
    * would read as "did not land" and replay a write another user has since overwritten.
    */
-  private holdLost(lost: readonly Inflight[]): void {
+  private holdLost(lost: readonly Inflight[], why: { catchUp: boolean; receipts: boolean }): void {
     this.lostHeld = [...this.lostHeld, ...lost]
-    this.log('lost_held', { pushes: lost.map((p) => p.seq), doc: this.lostDoc.length })
-    if (this.lostTimer !== null) return
+    const gate = this.lostGate ?? {
+      catchUp: false,
+      receipts: null,
+      asked: new Map<number, readonly string[]>(),
+    }
+    this.lostGate = gate
+    if (why.catchUp) gate.catchUp = true
+    if (why.receipts) {
+      // CONTRACTS_REV 11: asked now when this socket's room said rev 11, else once its contracts frame does
+      if (this.roomRev === null) gate.receipts ??= 'contracts'
+      else if (this.roomRev >= RECEIPTS_REV) this.askReceipts()
+    }
+    this.log('lost_held', {
+      pushes: lost.map((p) => p.seq),
+      doc: this.lostDoc.length,
+      receipts: gate.receipts ?? 'none',
+    })
+    this.armLostTimer()
+    this.maybeResolveLost()
+  }
+
+  /** The fallback that decides held lost pushes by counting when the frames they wait for do not come. */
+  private armLostTimer(): void {
+    const ms = this.lostGate?.receipts ? RECEIPTS_WAIT_MS : CATCH_UP_WAIT_MS
+    if (this.lostTimer !== null) {
+      if (ms === CATCH_UP_WAIT_MS) return
+      this.clearTimer(this.lostTimer)
+    }
     this.lostTimer = this.setTimer(() => {
       this.lostTimer = null
       if (!this.stopped) this.resolveLost()
-    }, CATCH_UP_WAIT_MS)
+    }, ms)
   }
 
-  /** Whether lost pushes or doc writes wait for a reset snapshot's catch-up (holdLost). */
-  private get lostWaiting(): boolean {
-    return this.lostHeld.length > 0 || (this.lostTimer !== null && this.lostDoc.length > 0)
+  /** Decides the held lost pushes once nothing they wait for is pending. */
+  private maybeResolveLost(): void {
+    const g = this.lostGate
+    if (g && !g.catchUp && g.receipts === null) this.resolveLost()
+  }
+
+  /**
+   * Whether `lost` (or a lost doc write) carries a receipt id this socket's room may answer for (CONTRACTS_REV
+   * 11): a rev-11 room, or one whose revision is not known yet (its contracts frame follows the welcome).
+   */
+  private receiptsPossible(lost: readonly Inflight[]): boolean {
+    if (this.roomRev !== null && this.roomRev < RECEIPTS_REV) return false
+    return lost.some((p) => p.rid !== undefined) || this.lostDoc.some((r) => r.rid !== undefined)
+  }
+
+  /** The fate of a lost push's receipt the room told (true: landed), or undefined when it did not. */
+  private fateOf(rid: string | undefined): boolean | undefined {
+    const f = rid === undefined ? undefined : this.receiptFate.get(rid)
+    return f === undefined ? undefined : f !== false
+  }
+
+  /**
+   * Asks this socket's room (rev 11) which receipts of the held lost pushes and lost doc writes landed: the
+   * ids not asked yet, the newest MAX_RECEIPT_IDS (older ones are decided by counting).
+   */
+  private askReceipts(): void {
+    const gate = this.lostGate
+    if (!gate) return
+    const base = new Map<string, number>()
+    for (const p of this.lostHeld) if (p.rid !== undefined) base.set(p.rid, p.base)
+    for (const r of this.lostDoc)
+      if (r.rid !== undefined && r.clock !== undefined && !base.has(r.rid)) base.set(r.rid, r.clock)
+    const ids = [...base.keys()]
+      .filter((rid) => !this.receiptBase.has(rid) && !this.receiptFate.has(rid))
+      .slice(-MAX_RECEIPT_IDS)
+    if (!ids.length) {
+      if (!gate.asked.size) gate.receipts = null
+      return
+    }
+    for (const rid of ids) this.receiptBase.set(rid, base.get(rid) as number)
+    const req = ++this.receiptsReq
+    gate.asked.set(req, ids)
+    gate.receipts = 'asked'
+    this.transport.send({ type: 'receipts', req, ids })
+    this.log('receipts_asked', { req, ids: ids.length })
+  }
+
+  /** The room's revision (its `contracts` frame, after every welcome): a rev-11 room is asked for receipts. */
+  private onContracts(rev: number): void {
+    this.roomRev = rev
+    const g = this.lostGate
+    if (g?.receipts !== 'contracts') return
+    if (rev >= RECEIPTS_REV) {
+      g.receipts = null
+      this.askReceipts()
+    } else g.receipts = null
+    this.armLostTimer()
+    this.maybeResolveLost()
+  }
+
+  /**
+   * The room's answer to a receipts query (CONTRACTS_REV 11): each asked receipt landed at its clock, or did
+   * not land when the room could still hold it (its push's base + 1 >= `from`); otherwise unknown.
+   */
+  private onReceipts(m: Receipts): void {
+    const g = this.lostGate
+    const ids = g?.asked.get(m.req)
+    if (!g || !ids) return
+    g.asked.delete(m.req)
+    for (const rid of ids) {
+      const at = m.landed[rid]
+      if (at !== undefined) this.receiptFate.set(rid, at)
+      else {
+        const base = this.receiptBase.get(rid)
+        if (base !== undefined && base + 1 >= m.from) this.receiptFate.set(rid, false)
+      }
+    }
+    if (!g.asked.size) g.receipts = null
+    this.maybeResolveLost()
   }
 
   private resolveLost(): void {
@@ -1902,12 +2114,15 @@ export class LobbyEngineCore implements EngineCore {
       this.clearTimer(this.lostTimer)
       this.lostTimer = null
     }
+    this.lostGate = null
     const lost = this.lostHeld
     if (!lost.length && !this.lostDoc.length) return
     this.syncLive()
     this.lostHeld = []
     this.replayLost(lost)
     this.decideLostDoc()
+    this.receiptFate.clear()
+    this.receiptBase.clear()
     const ids = new Set<string>()
     for (const p of lost) for (const id of p.sent.keys()) ids.add(id)
     for (const id of ids) {
@@ -2006,8 +2221,12 @@ export class LobbyEngineCore implements EngineCore {
       const t = this.tracked.get(id)
       if (t && !t.isNew && t.dirty.size) this.settleDirty(id, t)
     }
-    // the catch-up behind a reset snapshot: the lost pushes (and doc writes) held for it are decided now
-    if (this.lostWaiting) this.resolveLost()
+    // the catch-up behind a reset snapshot: the lost pushes (and doc writes) held for it are decided now,
+    // unless they still wait for the room's receipts answer (CONTRACTS_REV 11)
+    if (this.lostGate?.catchUp) {
+      this.lostGate.catchUp = false
+      this.maybeResolveLost()
+    }
     this.applyScene(affected)
     for (const e of refits) this.emit(e)
     // an edit that could not go out before this frame (a change waiting for its element) goes now
@@ -2248,7 +2467,7 @@ export class LobbyEngineCore implements EngineCore {
    * keys, what they replaced, the push's base clock and, per key, the clock of this tab's own earlier write
    * of the key acked before the cut when that is above the base (`LostDocRecord.clocks`).
    */
-  private lostDocRecordOf(seq: number): LostDocRecord {
+  private lostDocRecordOf(seq: number, pushes: readonly Inflight[] = this.flying()): LostDocRecord {
     const set = this.inflightDoc.get(seq) ?? {}
     const clock = this.inflightDocClock.get(seq)
     const clocks: Record<string, number> = {}
@@ -2257,11 +2476,13 @@ export class LobbyEngineCore implements EngineCore {
         const own = this.ownDocClockAhead(seq, k)
         if (own !== undefined && own > clock) clocks[k] = own
       }
+    const rid = pushes.find((p) => p.seq === seq)?.rid
     return {
       set,
       base: this.inflightDocBase.get(seq) ?? {},
       ...(clock !== undefined ? { clock } : {}),
       ...(Object.keys(clocks).length ? { clocks } : {}),
+      ...(rid !== undefined ? { rid } : {}),
     }
   }
 
@@ -2658,6 +2879,9 @@ export class LobbyEngineCore implements EngineCore {
   ): void {
     const seq = ++this.seq
     const record: PushRecord = { seq, base, at: this.now(), ops, ...(doc ? { doc: { set: doc } } : {}) }
+    // CONTRACTS_REV 11 (W5-ENG-2): a receipt id, only to a room that said rev 11 on this socket (a rev-10
+    // room refuses the field: strict)
+    const rid = this.roomRev !== null && this.roomRev >= RECEIPTS_REV ? `${this.ridPrefix}${seq}` : undefined
     if (doc) {
       // what each key replaces: the server copy overlaid with this tab's earlier writes not acked yet
       const was = this.doc()
@@ -2670,13 +2894,29 @@ export class LobbyEngineCore implements EngineCore {
         this.flying().map((q) => q.seq),
       )
     }
-    this.inflight.push({ seq, base, ops, record, sent, forced, src: `${this.tab}:${this.welcomes}` })
+    this.inflight.push({
+      seq,
+      base,
+      ops,
+      record,
+      sent,
+      forced,
+      src: `${this.tab}:${this.welcomes}`,
+      ...(rid !== undefined ? { rid } : {}),
+    })
     if (doc) {
       this.inflightDoc.set(seq, doc)
       this.inflightDocClock.set(seq, base)
     }
     this.pushes.push(record)
-    this.transport.send({ type: 'push', seq, base, ops, ...(doc ? { doc: { set: doc } } : {}) })
+    this.transport.send({
+      type: 'push',
+      seq,
+      base,
+      ops,
+      ...(doc ? { doc: { set: doc } } : {}),
+      ...(rid !== undefined ? { rid } : {}),
+    })
     for (const t of this.tracked.values())
       if (t.dirty.size === 0) {
         t.replay = false
@@ -2866,7 +3106,8 @@ export class LobbyEngineCore implements EngineCore {
     const adopted = this.takeAdopted()
     if (adopted.length || this.lostDoc.length) {
       const fresh = this.resetAt !== null && this.now() - this.resetAt < CATCH_UP_WAIT_MS
-      if (this.lostTimer !== null || fresh) this.holdLost(adopted)
+      const receipts = this.receiptsPossible(adopted)
+      if (this.lostGate !== null || fresh || receipts) this.holdLost(adopted, { catchUp: fresh, receipts })
       else {
         this.replayLost(adopted)
         this.decideLostDoc()
@@ -2899,6 +3140,7 @@ export class LobbyEngineCore implements EngineCore {
           base: clone(r.base),
           ...(r.clock !== undefined ? { clock: r.clock } : {}),
           ...(r.clocks ? { clocks: clone(r.clocks) } : {}),
+          ...(r.rid !== undefined ? { rid: r.rid } : {}),
         })
       return
     }
@@ -2921,6 +3163,7 @@ export class LobbyEngineCore implements EngineCore {
           sent: new Map(),
           forced: false,
           src: r.src,
+          ...(r.rid !== undefined ? { rid: r.rid } : {}),
         }
         this.adoptedLost.set(key, p)
       }
@@ -2988,6 +3231,7 @@ export class LobbyEngineCore implements EngineCore {
           ...(s.ref ? { ref: withWireFile(s.ref) } : {}),
           ...(s.pv !== undefined ? { pv: s.pv } : {}),
           ...(s.prior ? { prior: withWireFile(s.prior) } : {}),
+          ...(p.rid !== undefined ? { rid: p.rid } : {}),
         })
         a.since = Math.min(a.since, p.record.at)
       }
