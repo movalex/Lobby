@@ -163,64 +163,51 @@ describe('the export resolver with card faces (W5-14)', () => {
     expect(cards.get(V1)).toMatchObject({ width: 480, height: 600 })
   })
 
-  it("answers a card's version with its face (made once, revoked after), and everything else from the board", async () => {
+  it("hands the export a card's face (made once per version), and nothing for anything else", async () => {
     const asked: string[] = []
     const base = {
       assetOf: () => null,
       resolveUrl: async (v: string, d: string, f: FileKey) => `/board/${v}/${d}/${f.page ?? '-'}`,
     }
     const made: string[] = []
-    const created: string[] = []
-    const revoked: string[] = []
-    const g = globalThis as { URL: typeof URL }
-    const real = { create: g.URL.createObjectURL, revoke: g.URL.revokeObjectURL }
-    g.URL.createObjectURL = () => {
-      const u = `blob:face-${created.length}`
-      created.push(u)
-      return u
-    }
-    g.URL.revokeObjectURL = (u: string) => void revoked.push(u)
-    try {
-      const session = faceSession(
-        base,
-        cardsByVersion(scene),
-        {
-          boardId: 'b1',
-          meta: {
-            load: async () => ({ meta: null as AssetVersionMeta | null, missing: false, error: false }),
-          },
+    const session = faceSession(
+      base,
+      cardsByVersion(scene),
+      {
+        boardId: 'b1',
+        meta: {
+          load: async () => ({ meta: null as AssetVersionMeta | null, missing: false, error: false }),
         },
-        { pixelRatio: 2, type: 'image/png' },
-        async (src, facts, _key, size) => {
-          made.push(`${facts.versionId} ${size.width}x${size.height}`)
-          asked.push((await src.coverUrl?.(facts.versionId, _key)) ?? '')
-          return new Blob(['face'])
-        },
-      )
-      const key = (v: string, page: number | null = null): FileKey => ({
-        key: v,
-        versionId: v,
-        derivative: 'thumb',
-        page,
-      })
-      expect(await session.resolver.resolveUrl(V1, 'display', key(V1))).toBe('blob:face-0')
-      expect(await session.resolver.resolveUrl(V1, 'display', key(`${V1}@display`))).toBe('blob:face-0')
-      expect(await session.resolver.resolveUrl(V2, 'display', key(V2))).toBe('blob:face-1')
-      // a placed page and a plain image keep the board's bytes
-      expect(await session.resolver.resolveUrl(V1, 'display', key(V1, 2))).toBe(`/board/${V1}/display/2`)
-      expect(await session.resolver.resolveUrl(IMG, 'display', key(IMG))).toBe(`/board/${IMG}/display/-`)
-      expect(made).toEqual([`${V1} 480x600`, `${V2} 320x200`])
-      // the face's cover is the board resolver's display pick
-      expect(asked[0]).toBe(`/board/${V1}/display/-`)
-      session.release()
-      expect(revoked).toEqual(['blob:face-0', 'blob:face-1'])
-    } finally {
-      g.URL.createObjectURL = real.create
-      g.URL.revokeObjectURL = real.revoke
-    }
+      },
+      { pixelRatio: 2, type: 'image/png' },
+      async (src, facts, _key, size) => {
+        made.push(`${facts.versionId} ${size.width}x${size.height}`)
+        asked.push((await src.coverUrl?.(facts.versionId, _key)) ?? '')
+        return new Blob([`face of ${facts.versionId}`])
+      },
+    )
+    const key = (v: string, page: number | null = null): FileKey => ({
+      key: v,
+      versionId: v,
+      derivative: 'thumb',
+      page,
+    })
+    const text = async (b: Blob | null) => (b ? await b.text() : null)
+    expect(await text(await session.faceOf(null, key(V1)))).toBe(`face of ${V1}`)
+    expect(await text(await session.faceOf(null, { ...key(V1), key: `${V1}@display` }))).toBe(`face of ${V1}`)
+    expect(await text(await session.faceOf(null, key(V2)))).toBe(`face of ${V2}`)
+    // a placed page and a plain image have no face: the export keeps the board's bytes for them
+    expect(await session.faceOf(null, key(V1, 2))).toBeNull()
+    expect(await session.faceOf(null, key(IMG))).toBeNull()
+    expect(made).toEqual([`${V1} 480x600`, `${V2} 320x200`])
+    // the face's cover is the board resolver's display pick
+    expect(asked[0]).toBe(`/board/${V1}/display/-`)
+    // after the export nothing more is handed out
+    session.release()
+    expect(await session.faceOf(null, key(V1))).toBeNull()
   })
 
-  it('a face that cannot be drawn falls back to the cover, as before', async () => {
+  it('a face that cannot be drawn is null, so the export falls back to the cover, as before', async () => {
     const session = faceSession(
       { assetOf: () => null, resolveUrl: async (v: string) => `/cover/${v}` },
       cardsByVersion(scene),
@@ -228,13 +215,17 @@ describe('the export resolver with card faces (W5-14)', () => {
       { pixelRatio: 1, type: 'image/png' },
       async () => null,
     )
-    expect(
-      await session.resolver.resolveUrl(V1, 'display', {
-        key: V1,
-        versionId: V1,
-        derivative: 'thumb',
-        page: null,
-      }),
-    ).toBe(`/cover/${V1}`)
+    const key = { key: V1, versionId: V1, derivative: 'thumb', page: null } as FileKey
+    expect(await session.faceOf(null, key)).toBeNull()
+    const failing = faceSession(
+      null,
+      cardsByVersion(scene),
+      { boardId: 'b1', meta: { load: async () => ({ meta: null, missing: false, error: false }) } },
+      { pixelRatio: 1, type: 'image/png' },
+      async () => {
+        throw new Error('no DOM')
+      },
+    )
+    expect(await failing.faceOf(null, key)).toBeNull()
   })
 })

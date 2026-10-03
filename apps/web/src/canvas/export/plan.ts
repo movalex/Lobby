@@ -126,3 +126,18 @@ export function exportScale(
   s = Math.min(s, limits.maxSide / Math.max(w, h), Math.sqrt(limits.maxArea / (w * h)))
   return s
 }
+
+/**
+ * W5-37 / CR 3E-6: the engine's `frameRendering` an export draws with. Frame names are drawn above their
+ * frames, which adds height to a whole-board export. The board page turns them off in focus mode (present
+ * mode: canvas/board/session.ts), so an export taken from there leaves them out too, as the screen does;
+ * otherwise the engine's defaults (names on) stand. Outlines stay on (a frame's border is part of the board).
+ */
+export function exportFrameRendering(live: { readonly name?: boolean } | null | undefined): {
+  readonly enabled: true
+  readonly clip: true
+  readonly outline: true
+  readonly name: boolean
+} {
+  return { enabled: true, clip: true, outline: true, name: live?.name !== false }
+}

@@ -767,16 +767,19 @@ export function cardsByVersion(
 }
 
 export interface FaceSession {
-  /** the export's resolver: a card's version resolves to its face (a blob: URL), the rest to `base` */
-  readonly resolver: ExportResolver
-  /** revokes the faces' blob: URLs (after the export) */
+  /**
+   * CR 3E-5: `SceneExportContext.faceOf`. A card's face (made once per version, for this export only); null
+   * for anything that is not a card (a placed page, a plain image) and for a card whose face could not be
+   * drawn (the export then uses its cover, as for any other file).
+   */
+  faceOf(el: unknown, file: FileKey): Promise<Blob | null>
+  /** ends the session: no face is handed out after it */
   release(): void
 }
 
 /**
- * The faces of one export: `resolveUrl` for a card's version answers with a blob: URL of its face (made
- * once per version), everything else goes to the board's resolver. Faces are made only for the cards the
- * export asks for.
+ * The faces of one export. Faces are made only for the cards the export asks for. The cover a face is
+ * composed over comes from `base`, the board's resolver (its display pick).
  */
 export function faceSession(
   base: ExportResolver | null,
@@ -785,36 +788,24 @@ export function faceSession(
   opts: FaceOptions,
   make: typeof composeCardFace = composeCardFace,
 ): FaceSession {
-  const made = new Map<string, Promise<string | null>>()
-  const urls: string[] = []
+  const made = new Map<string, Promise<Blob | null>>()
   let released = false
   const coverUrl = (versionId: string, key: FileKey) =>
     base ? base.resolveUrl(versionId, 'display', key) : Promise.resolve(null)
   return {
-    resolver: {
-      assetOf: (versionId) => base?.assetOf(versionId) ?? cards.get(versionId)?.facts.assetId ?? null,
-      resolveUrl(versionId, derivative, file) {
-        const card = file.page === null ? cards.get(versionId) : undefined
-        if (!card) return base ? base.resolveUrl(versionId, derivative, file) : Promise.resolve(null)
-        let p = made.get(versionId)
-        if (!p) {
-          p = make({ ...src, coverUrl }, card.facts, file, card, opts)
-            .catch(() => null)
-            .then((blob) => {
-              if (!blob || released) return null
-              const url = URL.createObjectURL(blob)
-              urls.push(url)
-              return url
-            })
-          made.set(versionId, p)
-        }
-        // no face (no DOM, a failed draw): the card's cover, as before
-        return p.then((url) => url ?? (base ? base.resolveUrl(versionId, derivative, file) : null))
-      },
+    faceOf(_el, file) {
+      const card = file.page === null ? cards.get(file.versionId) : undefined
+      if (!card || released) return Promise.resolve(null)
+      let p = made.get(file.versionId)
+      if (!p) {
+        p = make({ ...src, coverUrl }, card.facts, file, card, opts).catch(() => null)
+        made.set(file.versionId, p)
+      }
+      return p.then((blob) => (released ? null : blob))
     },
     release() {
       released = true
-      for (const u of urls.splice(0)) URL.revokeObjectURL(u)
+      made.clear()
     },
   }
 }
