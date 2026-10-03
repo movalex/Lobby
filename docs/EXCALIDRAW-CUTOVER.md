@@ -1,16 +1,29 @@
 # Lobby: cut-over to the Excalidraw canvas, rollback and roll-forward (runbook)
 
-Status: **CUT OVER ON STAGING 2026-10-01 20:43–20:56Z (`docs/CUTOVER-LOG.md`: C4–C17 passed as adapted there; the
-48 h watch §6 runs to about 2026-10-03 20:55Z; C19 and D7 are open).** Before that: **prepared 2026-09-30 on `engine/w4-prep`; rehearsed 2026-10-01 on the NAS against a39a1c5 with
-staging's real data (`docs/research/excalidraw/REHEARSAL.md`): C4–C17, §7 and §8 passed; the corrections
-below come from it; the owner's parts (R8's real sign-in, R9, P3's sign-off) are open.** This is the Excalidraw side's
-runbook for plan §7.5 (`docs/EXCALIDRAW-MIGRATION.md`). It takes the tldraw side's steps from
-`docs/DEPLOY.md` "Bridge release R0" on `main` (R0 runs cut-over steps C4 to C6). R0 is live on staging
-since 2026-09-30 (`main` 38d3833, `docs/PROGRESS.md`), so **the cut-over starts no earlier than
-2026-10-03 05:16Z** (R0 live at least 3 days, plan §7.4).
+Status (2026-10-03, written at the wave C6 docs refresh): **THE CUT-OVER IS DONE; THIS RUNBOOK IS NOW THE RECORD AND
+THE ROLLBACK/ROLL-FORWARD REFERENCE.** Staging has run the Excalidraw canvas since 2026-10-01 20:43–20:56Z
+(`docs/CUTOVER-LOG.md`: C4–C17 passed as adapted there). What has happened since, each checkable in the log:
+the CSP is enforced (2026-10-03 ~05:10Z, CUTOVER-LOG §7); C19 is done (`render.yaml` matches live, 0 differences);
+the owner's real sign-in check passed; the watch check at about 31 h read "Go" (log §7); waves A (`main` 0644365), B1–B5 (99d902c)
+and C1/C3/C4/C5 (9627f29) are deployed on top of the cut-over build. **Still open:** the owner's Shell checks of the
+conversion (§6 steps 2–3 of the log), the close of the 48 h window at about **2026-10-03 20:55Z (W4)**, drop-legacy (D7,
+about 2026-10-08, under the owner's standing OK once those checks pass), the asset collector's day-30 switch (D30,
+about 2026-10-31), and the held release `release/held` (migration 0024 and `CONTRACTS_REV` 11, built and gated, **not
+deployed** when this was written; it deploys after the window closes, in the order api → sync → web). After the window
+closes a rollback to R0 is no longer offered, and the held release makes it unreachable by design (R0's api could not read
+migration 0024): §7 is history from then on.
 
-Sources: plan §2.12, §5.3-§5.10, §7.5, §10, Appendix B, and the "Contracts R0 fixed" section (on the
-`excalidraw` docs branch, 0a50234; not yet in `engine/excalidraw`'s copy of the plan); `docs/DEPLOY.md`
+Before that: **prepared 2026-09-30 on `engine/w4-prep`; rehearsed 2026-10-01 on the NAS against a39a1c5 with
+staging's real data (`docs/research/excalidraw/REHEARSAL.md`): C4–C17, §7 and §8 passed; the corrections
+below come from it; the owner's parts (R8's real sign-in, R9, P3's sign-off) were left to the owner (the real sign-in
+passed on 2026-10-03; R9 and P3's lossy-count sign-off are listed as not run in CUTOVER-LOG §5).** This is the Excalidraw side's
+runbook for plan §7.5 (`docs/EXCALIDRAW-MIGRATION.md`). It takes the tldraw side's steps from
+`docs/DEPLOY.md` "Bridge release R0" on `main` (R0 runs cut-over steps C4 to C6). R0 went live on staging
+2026-09-30 (`main` 38d3833, tag `lobby-r0`, `docs/PROGRESS.md`); the owner waived the 3-day floor on 2026-10-01 and
+approved the window (CUTOVER-LOG §1).
+
+Sources: plan §2.12, §5.3-§5.10, §7.5, §10, Appendix B, and the "Contracts R0 fixed" section (now in the plan itself,
+cherry-picked from the `excalidraw` docs branch at wave C6); `docs/DEPLOY.md`
 "Bridge release R0" and "Rollback"; `docs/research/excalidraw/SYNTHESIS.md` (the verified facts);
 `docs/research/excalidraw/render.cutover.yaml.patch` (the `render.yaml` change).
 
@@ -58,13 +71,13 @@ Sources: plan §2.12, §5.3-§5.10, §7.5, §10, Appendix B, and the "Contracts 
   deploys are manual. So `render.yaml` is changed only at C19, after the Blueprint is on Manual Sync
   (P8). Until then every setting is changed by hand, one service at a time, in the order below.
 
-## 1. What the branch still lacks (found 2026-09-30; status at the wave-4a integration, 2026-10-01)
+## 1. What the branch still lacked (found 2026-09-30; status at the wave-4a integration, 2026-10-01; G11 refreshed 2026-10-03)
 
 Found while writing this runbook (read-only checks of `engine/excalidraw` at 1a85d5c). Each is a wave 4
 or wave 5 item; the workstream column names who writes the code (plan §7.2). The **Status** column was
 filled when `engine/w4-prep`, `engine/w4a-web`, `engine/w4a-sync` and `engine/w4a-api` were merged
 into `engine/excalidraw` (PROGRESS.md's wave-4 entries; contracts §12 W4-WEB-1 and W4-API-1), and G10 when the tldraw
-removal (wave 4 part 2) merged: **open: G11**; the other ten are closed, each with the test or document
+removal (wave 4 part 2) merged: **G11 was open**; the other ten were closed (G11 is refreshed at wave C6, 2026-10-03: see its row), each with the test or document
 that pins it. The "Missing" column keeps the 2026-09-30 wording as the record of what was found.
 
 | # | Missing | Why the runbook needs it | Workstream | Closed when | Status (2026-10-01) |
@@ -77,9 +90,9 @@ that pins it. The "Missing" column keeps the 2026-09-30 wording as the record of
 | G6 | **R0's row contracts are dormant:** nothing writes `board_snapshots.body_version = 2` or `boards.new_canvas = true`, and the api still carries R0's refusals of them (`EXCALIDRAW-CONTRACTS.md` W3-15, W3-16) | the rollback (§7): R0 must recognise checkpoints and boards made on the new canvas by these columns | 2F with 2B | the Excalidraw build writes both (converted boards keep `new_canvas = false`) and drops R0's refusals in the same change | **Closed** before wave 4a, on `engine/excalidraw` (wave 5, 2A), checked by W4-API with nothing to change: `apps/api/src/canvas-engine.ts` writes `boards.new_canvas = true` for every board the api creates on the new canvas (create, duplicate, restore-as-new, import), `body_version` 2 for v2 bodies, keeps converted boards `false`, and turns R0's refusals off when `GET /internal/canvas` says excalidraw; test `apps/api/test/features/history/new-canvas-build.test.ts`. |
 | G7 | **No rollback export** (`rollback-exports/<board>/<time>.json`, plan §5.9 step 2) | B4 | 2B | a route or CLI writes every board's lb_* state to R2. **Workaround until then:** B4 takes a run-all held backup of every board file, which copies the file whole, lb_* included (DEPLOY.md "R0 at the cut-over") | **Closed by documentation** (W4-SYNC): no second format is written. The held run-all backup on the Excalidraw build in maintenance IS the lb_* export: whole files, every `lb_*` table incl. `lb_prev_*` and `lb_source`, described from `lb_*` as `lobby-elements-converted`, signed, held 90 days, drilled and restorable (`apps/sync/src/backup/run-all.ts` header; gate `apps/sync/test/r0/rollback-safety-copy.test.ts`). B4 records the report's `offsiteKeys` as the export keys; the `rollback-exports/<board>/<time>.json` layout is dropped. |
 | G8 | **No `drop-legacy`** (plan §5.9 step 5) | D7 | 2B | a reviewed command that removes the tldraw tables, `dr_deleted_*`, `lb_source` and `lb_prev_*` and runs `VACUUM`, with a test | **Closed** (W4-SYNC): `POST /internal/migrate/drop-legacy` with `{"confirm":"drop-legacy", force?, dryRun?, boards?}` (`apps/sync/src/room/migrate/drop-legacy.ts`; tests `apps/sync/test/migrate/drop-legacy.test.ts`, `drop-legacy-process.test.ts`). D7 has the command and the guards. |
-| G9 | **R0 contracts to re-check on the cut-over commit:** retention keeps `holdUntil` entries (Contracts R0 fixed item 3); the build reads `format: "lobby-elements"` entries (item 4); the roll-forward mirrors R0's restores and trims into `lb_deleted` (open item 10); a converted file's backup is described from its tldraw tables or a format of its own, never `lobby-elements` (DEPLOY.md "backup formats") | the rollback and the roll-forward | 2B | each has a gate test on the cut-over commit | **Closed** (2B's wave-5 gate tests, green again at the integration): `apps/sync/test/r0/final-backup-hold.test.ts` (item 3), `apps/sync/test/r0/manifest-format.test.ts` (item 4), `apps/sync/test/migrate/rollforward-deleted.test.ts` (open item 10), `apps/sync/test/backup/excalidraw-backups.test.ts` (a converted file is described as `lobby-elements-converted`, never `lobby-elements`), and W4-SYNC's `apps/sync/test/r0/rollback-safety-copy.test.ts` (the whole lb_* state in the copy after Excalidraw-era edits and a roll-forward). |
+| G9 | **R0 contracts to re-check on the cut-over commit:** retention keeps `holdUntil` entries (Contracts R0 fixed item 3); the build reads `format: "lobby-elements"` entries (item 4); the roll-forward mirrors R0's restores and trims into `lb_deleted` (open item 10); a converted file's backup is described from its tldraw tables or a format of its own, never `lobby-elements` (DEPLOY.md "backup formats") | the rollback and the roll-forward | 2B | each has a gate test on the cut-over commit | **Closed** (2B's wave-5 gate tests, green again at the integration): `apps/sync/test/r0/final-backup-hold.test.ts` (item 3), `apps/sync/test/r0/manifest-format.test.ts` (item 4), `apps/sync/test/migrate/rollforward-deleted.test.ts` (open item 10), `apps/sync/test/backup/excalidraw-backups.test.ts` (a converted file is described as `lobby-elements-converted`, never `lobby-elements`), and W4-SYNC's `apps/sync/test/r0/rollback-safety-copy.test.ts` (the whole lb_* state in the copy after Excalidraw-era edits and a roll-forward). *(Checked 2026-10-03 at `release/held` 99ac6c52: `final-backup-hold.test.ts` and `manifest-format.test.ts` were deleted from the tree with the tldraw build, `a75883d6`, and are on the tag `lobby-r0` only; the hold's retention is now pinned by `excalidraw-backups.test.ts` and `r0/run-all-fresh.test.ts`. The other three files exist.)* |
 | G10 | **tldraw still in the build** (lockfile PR #2 not done): `scripts/licence-check.mjs` passes only with `--before-cutover` | P2: the licence check must pass in strict mode | wave 4 | `pnpm licence:check` (strict) passes and CI drops `--before-cutover` | **Closed** (wave 4 part 2, the tldraw removal, PROGRESS.md 2026-10-01): `tldraw`, `@tldraw/sync`, `sync-core` and `assets` left the catalog, every manifest and the lockfile (lockfile PR #2); the five MIT packages are dependencies of `packages/tldraw-import` alone (`@draftroom/tldraw-import/schema`, `/tldraw`, `/archive-v1`, `/templates`); `pnpm licence:check` passes in strict mode and the script has no other mode; CI runs it without a flag. SMK-1 closed with it: the board chunk carries no `@tldraw/` string and no tldraw embed host (`e2e/excalidraw-builds/prod-build.spec.ts` "no tldraw … no host but Clerk's" fails on 32859b1, passes now). `DRAFTROOM_ENGINE=tldraw` is refused by sync (the rollback is R0's deploy, §7); `VITE_LOBBY_ENGINE` and `VITE_TLDRAW_LICENSE_KEY` are gone from the web build and `render.yaml`. |
-| G11 | **Cut-over blockers from the waves** (`WAVE-3.md` §6, `REVIEW-W5-EARLY.md`): B9's edit visibility on the heavy board (1.5 s p95 against 250 ms) and its NAS capacity half (never run); B11's one unexplained divergence; the open review blockers (for example W5-02, deleted notes' text sent to every role) | P2 | the owners named there | each is closed or accepted by the owner | **Open**: as listed, with the owners named there. The lead's wave-4b queue (pending findings, 2026-10-01) adds L1 as a must-fix before the switch (maintenance does not refuse the engine's room-internal write routes; closed by the engine fixer). SMK-2 is built (wave 4b, 2A, `CONTRACTS_REV` 9): every terminal close is announced in band by a `notice` CLOSING and the web treats the close that follows as terminal with that reason, so an edge that strips close frames no longer hides "Lobby is updating" or a refused ticket; the smoke run re-checks it through the Render edge on the cut-over build. M2 (an unknown `NODE_ENV` is refused by api, sync and worker) and L5 (the sync logs {name, message, code}) are built too. **Closed in wave 4b (2B):** M3 (a dedicated `DRAFTROOM_BACKUP_SIGNING_SECRET`; the derived key only verifies older manifests; a Render env var at C8; `apps/sync/test/backup/signing-secret.test.ts`) and L6 (run-all refuses a new run while a held set of every board from the last 30 minutes exists unless forced, 409 `RECENT_HELD_SET` / `--force`; convert-all needs maintenance on or `{"confirm": true}`, 409 `MAINTENANCE_REQUIRED`; `apps/sync/test/r0/run-all.test.ts`, `apps/sync/test/migrate/convert-all-guard.test.ts`). |
+| G11 | **Cut-over blockers from the waves** (`WAVE-3.md` §6, `REVIEW-W5-EARLY.md`): B9's edit visibility on the heavy board (1.5 s p95 against 250 ms) and its NAS capacity half (never run); B11's one unexplained divergence; the open review blockers (for example W5-02, deleted notes' text sent to every role) | P2 | the owners named there | each is closed or accepted by the owner | **Closed where measured at wave C6 (2026-10-03); the remainders are named, and nothing here is an owner acceptance.** (1) **Edit visibility on the heavy board: met.** On Lobby's board page with all 200 images loaded, three runs: p95 at 100% zoom 185 / 177 / 208 ms against the 250 ms gate, 0 of 180 edits lost (`spike-b/B9.md` "Workstation half, re-run on Lobby's board page", `spike-b/PERF.md`; app code `release/held` 99ac6c52, harness on `wave-c6/perf-heavy`; workstation, headless, machine 2.9-10 % busy, see PERF.md). The 1.5 s figure above and every earlier Excalidraw browser number on this board (spike B, 3B-2, B9's diagnostic runs) were taken with no image drawn (W5-34); they are superseded. (2) **NAS capacity half (0.5 CPU / 512 MB): run, server side holds, three L1 targets missed.** Run at 5caee00, again after the room's performance round, and on 99ac6c52 (2026-10-03: one run each of L1, L2, the conversion run and L1 with `synchronous = NORMAL`; at 5caee00 there were three runs each of L1 and L2): receive-to-ack p95 ≤ 100 ms, all 260 sessions back 5.0–5.4 s after the SIGKILL, RSS ≤ 147 MB (310 MB with the conversion worker), 0 acked-but-missing in every run, the conversion run's five conditions held. **Missed at L1 on 99ac6c52: the server event-loop p99 (115.1 ms after the restart, 56.5 ms before the kill; target ≤ 50), steady-state CPU of the quota (mean 62.4 %, max 91.8 %; target ≤ 80 % in any window) and the restart and conversion windows (97.1 %, 98.9–109.3 %).** The profile names the rev-10 presence relay's re-rank (`PresenceHub.rank`, a5e8eb6); `synchronous = NORMAL` clears the steady CPU window (max 76.6 %) but not the event loop (50.5 ms before the kill, 89.5 ms after). Staging stays on FULL. No owner acceptance of these misses is recorded, and Render's own commit latency was not measured (`spike-b/B9.md` "Re-run on the release/held head"). (3) **B11's divergence: explained, fix written, not yet merged.** The one run (017f76d) is root-caused to an index re-key racing an unacknowledged create and reproduced with a test; the fix is bf45f19a on `wave-c6/b11`. At release/held 18 runs gave 16 PASS, 0 not converged, 2 no verdict (a headless rejoin that waited past its 60 s ticket: a new open finding, not a divergence) (`spike-b/B11.md`). (4) **The review blockers** (W5-01, W5-02, W5-05, W5-08) were fixed at the engine merge and shipped in the cut-over build (`REVIEW-W5-EARLY.md` §11, §12). The lead's wave-4b queue (pending findings, 2026-10-01) adds L1 as a must-fix before the switch (maintenance does not refuse the engine's room-internal write routes; closed by the engine fixer). SMK-2 is built (wave 4b, 2A, `CONTRACTS_REV` 9): every terminal close is announced in band by a `notice` CLOSING and the web treats the close that follows as terminal with that reason, so an edge that strips close frames no longer hides "Lobby is updating" or a refused ticket; the smoke run re-checks it through the Render edge on the cut-over build. M2 (an unknown `NODE_ENV` is refused by api, sync and worker) and L5 (the sync logs {name, message, code}) are built too. **Closed in wave 4b (2B):** M3 (a dedicated `DRAFTROOM_BACKUP_SIGNING_SECRET`; the derived key only verifies older manifests; a Render env var at C8; `apps/sync/test/backup/signing-secret.test.ts`) and L6 (run-all refuses a new run while a held set of every board from the last 30 minutes exists unless forced, 409 `RECENT_HELD_SET` / `--force`; convert-all needs maintenance on or `{"confirm": true}`, 409 `MAINTENANCE_REQUIRED`; `apps/sync/test/r0/run-all.test.ts`, `apps/sync/test/migrate/convert-all-guard.test.ts`). |
 
 ## 2. Preconditions (plan §7.5 step 0)
 
@@ -94,7 +107,9 @@ All must hold on the day. Record each check in the log.
   the tldraw suite is R0's on main) and **`pnpm licence:check`** (strict: no tldraw package but the five
   MIT ones inside `packages/tldraw-import`). The engine probe suite passes
   (`apps/web/test/engine-probe`, part of `pnpm test`). The NAS load re-run (wave 4) meets plan §2.13's
-  targets, or the owner accepts the numbers **[OWNER]**.
+  targets, or the owner accepts the numbers **[OWNER]**. *(Status 2026-10-03: the cut-over went ahead on 2026-10-01 with the wave-4 NAS
+  numbers in hand, which already missed the L1 event-loop target as the report defines it (PROGRESS 2026-10-01); no
+  explicit acceptance of those numbers is recorded. The re-run on the release/held head misses three L1 targets, see G11.)*
 - **P3. The rehearsal (§3) passed, and the owner signed it off [OWNER]**, including the lossy counts
   and the side-by-side comparison of 10 boards. The rehearsal ran on 2026-10-01 (`REHEARSAL.md`: every
   step passed; lossy codes on one board: `geo-approximated` 1, `geo-polygon` 1); the sign-off and R9 are open.
@@ -117,7 +132,9 @@ All must hold on the day. Record each check in the log.
   Clerk's documentation (UNVERIFIED). At the rehearsal the sign-in page under the enforced header
   (Clerk's widget rendered) requested only the frontend-API host and `img.clerk.com`, with 0 violations;
   `challenges.cloudflare.com` and `clerk-telemetry.com` were not requested. A completed sign-in is still
-  needed before the line is final (`REHEARSAL.md` §8 D7).
+  needed before the line is final (`REHEARSAL.md` §8 D7). *(Status 2026-10-03: the owner's real sign-in under the
+  report-only header showed 0 Lobby CSP lines and the policy has been enforced since about 05:10Z, CUTOVER-LOG §7;
+  staging is still a Clerk development instance.)*
 - **P6. A missing file under `/excalidraw-assets/` gets a 404 on the static host, not `index.html`
   [OWNER: a staging setting change].** Render's answer to the rule is UNVERIFIED, so it is tried before
   the cut-over, on its own: Dashboard → `draftroom-staging-web` → Redirects/Rewrites → add, **above**
@@ -133,7 +150,10 @@ All must hold on the day. Record each check in the log.
   The first must print `404` (any content type but `text/html` with a 200). If Render answers 200 with
   `index.html`, or follows the rewrite into the SPA rule: **stop** and replace the `/*` fallback by
   rewrites of the app's own route prefixes (the routes in `apps/web/src/App.tsx`), which leaves every
-  other missing path a 404; re-test.
+  other missing path a 404; re-test. *(Measured at the cut-over, CUTOVER-LOG §1 A2: Render answered the patch's
+  rewrite to `/excalidraw-assets/__not-found__` with `200`, an empty body, not a 404; the rule's destination was
+  changed to `https://draftroom-staging-api.onrender.com/excalidraw-assets/*`, whose unknown-route answer is a real
+  404 JSON. Do not use the rewrite above as written.)*
 - **P7. The tldraw key's expiry [OWNER].** The owner records the staging key's exact expiry date
   (estimated 2027-01-05 if issued at the first staging deploy, plan §7.4). Cut-over day + 7 (drop-legacy)
   must fall at least two weeks before it, or the key is renewed first. Until drop-legacy, a rollback
@@ -537,11 +557,19 @@ staging, on the NAS, with nothing exposed. It produces the window's timings and 
   (every edited board has a recent offsite success) and any report from users. A CSP violation reported
   by a user (a blocked request in their console) is a fix of the header: edit it in the Dashboard (no
   rebuild) and in `render.yaml`.
-- **W3. Go/no-go at 24 h [OWNER].** Go: the watch continues to 48 h. No-go: §7.
+- **W3. Go/no-go at 24 h [OWNER].** Go: the watch continues to 48 h. No-go: §7. *(Done: the check at about 31 h, 2026-10-03
+  04:15Z, read "Go", CUTOVER-LOG §7. Caveat recorded there: nobody had edited a board since the switch, so it saw an idle
+  system.)*
 - **W4. The window closes at 48 h [OWNER].** After it, a rollback is no longer offered as reversible; R0
-  stays the last tldraw build, and the tldraw side of each file stays until D7.
+  stays the last tldraw build, and the tldraw side of each file stays until D7. *(Closes about 2026-10-03 20:55Z. Open at the
+  time of writing: the owner's call to close it after real use, and the watch under real editing.)*
 
 ## 7. Rollback to R0 (within 48 h; plan §5.9 step 2, DEPLOY.md "Rollback to R0")
+
+> **Status 2026-10-03: not used.** The cut-over passed and no rollback was made. The window closes about 20:55Z today; after
+> that this section is history. The held release adds migration 0024 and `CONTRACTS_REV` 11 (`docs/PROGRESS.md`, "The held
+> deploy"), which R0 cannot read, so it is deployed only after the window. Rolling the held release back is a different, smaller
+> matter (the web alone, or the sync alone to rev 10, are safe; the api below 0024 needs `DRAFTROOM_ALLOW_NEWER_SCHEMA=1`).
 
 R0 is the only rollback target, never an older build: an older build opens a board born on the new
 canvas as an empty tldraw board and writes tldraw tables into it (DEPLOY.md "Rollback").
@@ -648,6 +676,12 @@ canvas as an empty tldraw board and writes tldraw tables into it (DEPLOY.md "Rol
   (`converted_from.cycle`).
 
 ## 9. Clean-up
+
+> **Status 2026-10-03: all three still ahead.** D7 is due about 2026-10-08. It is under the owner's standing OK ("auto
+> drop-legacy after 7 days", memory of 2026-10-01) but waits on the owner's Shell checks (CUTOVER-LOG §6 steps 2 and 3: the
+> per-board conversion reports, `restore-drill --from=local`, `df -B1 /var/data`, `schema_migrations` listing 0023) and on the
+> lossy counts being signed off. `VITE_TLDRAW_LICENSE_KEY` is still set on the web service and declared `sync: false` in
+> `render.yaml`; it comes off after D7. D30 is about 2026-10-31 (review the collector's reports first).
 
 - **D7. drop-legacy [OWNER]** (day 7 after C18, plan §5.9 step 5; G8 built, W4-SYNC). Only after the
   window has closed and the owner says so. Maintenance on (C4's commands; the room's writes would wait

@@ -1,10 +1,10 @@
 # Lobby canvas migration: tldraw → Excalidraw (revised plan)
 
-Status: **plan, spike A done, spike B next. Revision 3.5**, written 2026-09-29. It applies the recheck of revision 3.4 (2 blocking items, both about the arrow's geometry: what the `path` unit holds, and how geometry is compared and rounded; and four smaller points) with the lead's decisions; the table "What changed in revision 3.5" maps them. Revision 3.4 applied the recheck of revision 3.3 (3 new blocking items, all about bound arrows, and smaller points); the table "What changed in revision 3.4" maps them. Revision 3.3 applied the critic's result on revision 3.2 (5 blocking and 16 non-blocking items) with the lead's decisions; the table "What changed in revision 3.3" maps them. Revision 3.2 folded in spike A's results (`spike/excalidraw` at 5203e41, `docs/research/excalidraw/SPIKE-A-REPORT.md`), the owners' and the integration's plan corrections and the independent verifier's result, closes open items 3–7, and adds the spike B execution plan (§8.6). Revision 3.1 was revision 3 plus the tracked open items, written 2026-09-28 against `integration/wave3` at 715b0fb (the deployed build is 5fe35f2). Revision 2 replaced the first draft and applied every "must" and "should" item from the review (`critique.json`), and most "could" items. Revision 3 applies the recheck of revision 2: its 3 unresolved musts and its 11 new problems. Appendix C maps each review and recheck item to the section that answers it; the table below maps spike A's findings.
+Status: **BUILT. Staging has run the Excalidraw canvas since 2026-10-01 (read "Status as built" below first). This file is the design record: revision 3.5, written 2026-09-29, when the plan stood at "spike A done, spike B next".** Revision 3.5 applies the recheck of revision 3.4 (2 blocking items, both about the arrow's geometry: what the `path` unit holds, and how geometry is compared and rounded; and four smaller points) with the lead's decisions; the table "What changed in revision 3.5" maps them. Revision 3.4 applied the recheck of revision 3.3 (3 new blocking items, all about bound arrows, and smaller points); the table "What changed in revision 3.4" maps them. Revision 3.3 applied the critic's result on revision 3.2 (5 blocking and 16 non-blocking items) with the lead's decisions; the table "What changed in revision 3.3" maps them. Revision 3.2 folded in spike A's results (`spike/excalidraw` at 5203e41, `docs/research/excalidraw/SPIKE-A-REPORT.md`), the owners' and the integration's plan corrections and the independent verifier's result, closes open items 3–7, and adds the spike B execution plan (§8.6). Revision 3.1 was revision 3 plus the tracked open items, written 2026-09-28 against `integration/wave3` at 715b0fb (the deployed build is 5fe35f2). Revision 2 replaced the first draft and applied every "must" and "should" item from the review (`critique.json`), and most "could" items. Revision 3 applies the recheck of revision 2: its 3 unresolved musts and its 11 new problems. Appendix C maps each review and recheck item to the section that answers it; the table below maps spike A's findings.
 
 The owner decided to move Lobby's canvas from tldraw 5.4.2, which needs a paid production licence, to Excalidraw (MIT), so that Lobby costs no licence fee to run. Hosting still costs money; this plan says where the move changes that (§2.13).
 
-Until the cut-over (§7.5), `docs/research/SYNTHESIS.md` remains the reference for the running tldraw build.
+The cut-over happened on 2026-10-01 (§7.5, `docs/CUTOVER-LOG.md`). `docs/research/excalidraw/SYNTHESIS.md` is now the reference for the running canvas; `docs/research/SYNTHESIS.md` stays as the tldraw era's history.
 
 **Inputs.** Four research reports and their scratch probes, plus the review:
 - **[API]**: the Excalidraw API report;
@@ -18,6 +18,88 @@ Tags: **[r35-check]** marks checks made for revision 3.5 (read-only, 2026-09-29:
 File shorthand for dist line numbers, all `0.18.0-1118751` `dist/dev`: **X** = `@excalidraw/excalidraw/dist/dev/index.js`, **F** = `…/excalidraw/dist/dev/chunk-FN755BR4.js`, **E** = `@excalidraw/element/dist/dev/index.js`, **C** = `@excalidraw/common/dist/dev/index.js`. Older sections write `index.js:<line>` for X and `element index.js:<line>` for E.
 
 ---
+
+## Status as built (2026-10-03, wave C6)
+
+**The plan was carried out: Lobby's canvas is Excalidraw, and staging has run it since 2026-10-01.** Everything below the
+revision tables is the design record (revision 3.5, 2026-09-29) and is kept as written, except where a note says otherwise;
+this section says what became of it. Every line cites a commit, a document or a spec. Source of truth: `docs/PROGRESS.md`
+(waves 4 to C and the held release), `docs/CUTOVER-LOG.md`, `docs/EXCALIDRAW-CUTOVER.md`, `docs/research/excalidraw/SYNTHESIS.md`
+(verified facts), `WAVE-3.md` §5-§6 and `REVIEW-W5-EARLY.md` §12 (feature status), and git.
+
+### What was built, and when
+
+| Plan | Built | Evidence |
+|---|---|---|
+| Spike A, spike B (§8) | done; spike B's B1-B11, three independent verifiers' rounds, fixes | `docs/research/excalidraw/SPIKE-A-REPORT.md`, `spike-b/`; `docs/PROGRESS.md` 2026-09-28 to 2026-09-30 |
+| R0, the tldraw bridge release (§5.10, §7.2) | live on staging 2026-09-30 05:14-05:16Z, `main` 38d3833, tag `lobby-r0` | `docs/PROGRESS.md` 2026-09-30; `docs/CUTOVER-LOG.md` §1 |
+| Waves 1-3 and 3b (engine core, features) | merged on `engine/excalidraw`; all fifteen `CANVAS_FEATURES` run on the Excalidraw board page | `docs/research/excalidraw/WAVE-3.md` |
+| Wave 4 (production build, CSP, the cut-over gaps) and the tldraw removal (§7.1 lockfile PR #2) | done 2026-10-01: `/b/:boardId` always opens the Excalidraw page; `tldraw`, `@tldraw/sync`, `sync-core` and `assets` left the catalog, every manifest and the lockfile; the five MIT packages are `packages/tldraw-import`'s alone; `pnpm licence:check` is strict-only and passes | `a75883d6`, `fe17a6b`, `docs/EXCALIDRAW-CUTOVER.md` §1 (G1-G10) |
+| Wave 5 (the early review's fixes; the engine owners' merge) | done 2026-09-30; the review's 59 findings: 56 fixed and deployed, 1 fixed on a branch not yet merged, 2 partly fixed | `REVIEW-W5-EARLY.md` §12 |
+| Rehearsal on the NAS (§7.5 step 1) | passed 2026-10-01: C4-C17, the rollback and the roll-forward | `docs/research/excalidraw/REHEARSAL.md` |
+| **The cut-over (§7.5)** | **done 2026-10-01 20:43-20:56Z** on `main` `bbe1b48` (`engine/excalidraw` a39a1c5 merged); 4 boards converted, 0 failed; window C4-C16 11 min 07 s; no rollback was made | `docs/CUTOVER-LOG.md` |
+| The 48 h window and the watch | about 2026-10-01 20:55Z to 2026-10-03 20:55Z; the check at about 31 h read "Go" but saw an idle system (nobody had edited a board); the owner's real sign-in passed; CSP enforced 2026-10-03 ~05:10Z; C19 (`render.yaml`) done | `docs/CUTOVER-LOG.md` §7 |
+| Waves A, B (B1-B5) and C (C1, C3, C4, C5): the post-cut-over backlog | deployed to staging 2026-10-03 (`main` 0644365, 99d902c, 9627f29) | `docs/PROGRESS.md` 2026-10-02 and 2026-10-03 |
+| Held release: migration 0024 (vote over a selection, the access-granted bell) and push receipts (`CONTRACTS_REV` 11) | built and gated on `release/held` 99ac6c52; **not deployed**; it waits for the rollback window and goes api → sync → web | `docs/PROGRESS.md` 2026-10-03 ("The held deploy") |
+| D7, drop-legacy (§5.9 step 5) | built and tested, **not yet run**: due about 2026-10-08, gated on the owner's Shell checks of the conversion | `docs/EXCALIDRAW-CUTOVER.md` §9 |
+
+### Where the build differs from this plan
+
+- **Migrations.** R0's is `0022_engine_migration` (not `0021`: `0021` is domain access); `0023_export_policy_guests` (name-only
+  guests never export unless an owner allows it, wave 4b, 2F) is live; `0024_vote_selection_access_granted` is held.
+- **`CONTRACTS_REV` is 10 on staging and 11 on `release/held`**; §2.4.2 describes the protocol as of revision 3.5 and is extended by
+  revisions 7-8 (tombstones redacted, font 7), 9 (per-key document clocks, the CLOSING notice) and 10 (presence follow target and
+  zoom, a re-ranked cursor cap), all deployed; 11 (push receipts) is held (`SYNTHESIS.md` SYNC-19, `docs/EXCALIDRAW-CONTRACTS.md` §12).
+- **No rollback export format.** The held run-all backup (whole files, every `lb_*` table, signed, held 90 days) is the export (G7).
+- **The ticket is not in the URL.** The board socket offers `lobby.board.v1` and `lobby.ticket.<ticket>` as subprotocols (L7, wave B,
+  B4); the old `?ticket=` is still accepted by the sync for at least one release.
+- **No live embeds** (D2: a pasted link becomes a link card), **no bold and no serif** (D3: headings in Lilita One, family 7), and a
+  Mermaid stub (wave C, C1) that keeps pasted chart definitions as text and took the board route from 1,159.7 to 978.1 KiB gzip.
+- **Push receipts exist** (the plan left the doc-key ABA to "a clock alone"): they decide every lost push exactly (`SYNTHESIS.md` SYNC-20).
+- **A board-wide guest budget** (`GUEST_BOARD_ITEM_CAP` = 6,000) on top of D5's 500 items per guest uid (§3.5).
+- **CR-2B-2 was reverted.** The converter's polygon outlines would have put a port of tldraw 5.4.2's geometry into the web bundle;
+  leaving tldraw was a licence decision, so it stays in the server-side converter and the polygon tools keep Lobby's own outlines
+  (`841d6dc9`).
+- **`AGENTS.md`** was rewritten as §10 says and applied at the cut-over merge (owner-approved; the draft file no longer exists).
+
+### Measured against the plan's gates
+
+Measured 2026-10-03 on the dev PC (Threadripper 9970X, 255 GB, RTX 5090, Windows 11) and the NAS (UGREEN DXP6800 Pro); one run of each
+on the NAS, three on the workstation; app code `release/held` 99ac6c52. Detail: `spike-b/B9.md`, `spike-b/PERF.md`, `spike-b/B11.md`.
+
+| Gate | Result |
+|---|---|
+| §8.5: edit visibility p95 ≤ 250 ms at 100% zoom, two browsers, L2 running | **met**: 185 / 177 / 208 ms, 200 images loaded, 0 of 180 edits lost (the earlier 1.5 s had no image drawn, W5-34) |
+| §8.5: heavy board ≥ 30 fps at 0.25 and at 1, sync running | **met**: 0.25 at 48.7 / 49.5 / 53.0; 1 at 60.0 / 59.3 / 59.3 |
+| §8.5: ≥ 24 fps at Lobby's whole-board fit | **met** with the level-of-detail pass: 58.7 / 58.3 / 58.0 (12.7-13.4 without it) |
+| §8.5: heavy-board open no slower than tldraw's median 3.8 s (A14's method) | **not judged**: live and Saved 2.1-2.4 s, every image loaded 5.3-5.6 s, by a different method; tldraw was not re-measured |
+| §2.13 NAS targets, L1 (260 sessions, SIGKILL at minute 8) and L2 | **mixed.** Met: server receive-to-ack (≤ 100 ms p95 at L1), RSS ≤ 147 MB (310 MB with the conversion worker), presence delay p95 89 ms, all 260 sessions back in 5.0-5.4 s, no OOM, **0 acked-but-missing** in every run, conversion under load (five conditions), L2 on the fixed room except one pre-clock stall. **Missed: the server event-loop p99 (115.1 ms after the restart, 56.5 ms before the kill; target ≤ 50), steady-state CPU of the quota (mean 62.4 %, max 91.8 %; target ≤ 80 % in any window) and the restart and conversion windows (97.1 %, 98.9-109.3 %).** Cause: the rev-10 presence re-rank (`PresenceHub.rank`). `synchronous = NORMAL` clears the steady CPU window (76.6 %) but not the event loop |
+| §8.5 Go row: "capacity targets met on the NAS" | **was not fully met at the cut-over** (`docs/PROGRESS.md` 2026-10-01: event-loop p99 and the restart CPU window missed) **and is not now.** No explicit owner acceptance of the numbers is recorded; the owner's pre-approved fallback (`synchronous = NORMAL`) was not applied; a larger Render plan was not approved |
+| §8.5: convergence (B11), echo 0 | B11: 3/3 at `eb0970b`; at `release/held` 18 runs, 16 PASS, 0 not converged, 2 no verdict; the one divergence of 2026-09-29 is root-caused (SYNC-4) and its fix is not yet merged |
+| §8.5: every staging board converts at 100% semantic diff; rollback drill on the largest staging board | done at the cut-over (4 boards, 0 failed) and in B8 / the rehearsal; the owner has not yet read the conversion reports (CUTOVER-LOG §6) |
+| Render's commit and fsync latency (§2.13 "the unknown") | **not measured**; on the NAS raw fsync is 5.5 / 6.2 / 6.5 ms (p50 / p95 / p99) |
+
+### Still open
+
+The authoritative list is in `docs/PROGRESS.md` (2026-10-03, the wave C6 entry); the engine facts are in `SYNTHESIS.md` §19.
+In short: the L1 capacity misses and Render's fsync; SYNC-4's unmerged fix and the B11 rejoin stall; DEF-GAPS-1; the held release's
+deploy; D7; real devices, Firefox and a first CI run; and the owner decisions (Clerk production, email, backups bucket, bandwidth
+cost, DBC Ops, Kanban).
+
+## Contracts R0 fixed (2026-09-30, from the bridge release as built)
+
+R0 was built and verified on `r0/bridge` (30a08f7) and has been live on staging since 2026-09-30 05:14-05:16Z (`main` 38d3833, tag `lobby-r0`, `docs/PROGRESS.md`). The Excalidraw build honours these R0 contracts. They override anything below that differs. Each carries an **As built** line (2026-10-03) with its evidence.
+
+1. **Reason name:** `engine_migration` (snake_case, like the existing reasons). Migration 0022's CHECK refuses `engine-migration`. *As built:* `packages/db/migrations/0022_engine_migration.sql`; the cut-over saved one such checkpoint per converted board (4 saved, `docs/CUTOVER-LOG.md` §2) through `POST /internal/checkpoints/engine-migration` (runbook G5, `apps/api/test/features/history/engine-migration.test.ts`).
+2. **Migration 0022 adds two markers,** and the Excalidraw build must write them:
+   - `board_snapshots.body_version`: 1 for tldraw bodies, **2** for Lobby-element bodies;
+   - `boards.new_canvas`: **true** only for boards **born** on the new canvas (created after cut-over). Converted boards stay **false**: R0 refuses the ticket of any `new_canvas` board, so a converted board marked true would not open during a rollback.
+
+   R0 recognises v2 checkpoints and boards born on the new canvas by these columns, and by the body format as a second check. *As built:* the api writes `body_version` 2 on every checkpoint it makes and `boards.new_canvas = true` for every board it creates on the new canvas (new, duplicate, restore as new, import, template), and leaves converted boards false (`apps/api/src/canvas-engine.ts`, `features/history/new-board.ts`; test `apps/api/test/features/history/new-canvas-build.test.ts`; runbook G6).
+3. **Final backup hold:** every backup that `POST /internal/backups/run-all` writes carries a signed `holdUntil` 90 days ahead. The Excalidraw build's local and offsite retention must keep any entry whose `holdUntil` is in the future, and count it outside the retention budget. *As built:* the cut-over's final set is held to 2026-12-30 in R2 (`docs/CUTOVER-LOG.md` §4); the Excalidraw build's retention is pinned by `apps/sync/test/backup/excalidraw-backups.test.ts` ("a run-all backup survives 14 newer ones for 90 days, with format and holdUntil signed offsite") and `apps/sync/test/r0/run-all-fresh.test.ts` (run-all passes the 90-day hold). R0's own gate test `apps/sync/test/r0/final-backup-hold.test.ts` is on the tag `lobby-r0`; it was deleted from the tree with the tldraw build (`a75883d6`).
+4. **Offsite entries for lb-only files** carry `format: "lobby-elements"` and an `lb_*` digest as `recordsSha256`. The Excalidraw build reads them. R0 refuses a staged restore of such an entry, and never replaces a live board born on the new canvas. *As built:* a converted file's backup is described as `lobby-elements-converted`, a board born on the new canvas's as `lobby-elements` (`apps/sync/test/backup/excalidraw-backups.test.ts`). R0's own gate test `apps/sync/test/r0/manifest-format.test.ts` (R0 refuses a staged restore of such an entry) is on the tag `lobby-r0`; it was deleted from the tree with the tldraw build (`a75883d6`).
+5. **Maintenance** is a runtime `POST`/`GET /internal/maintenance` in R0. The seed, deleted/restore and place-notes routes re-check it after reading the body. Open item 11 still applies: the new build must boot in maintenance through an env flag. *As built:* `DRAFTROOM_BOOT_MAINTENANCE=1` (`apps/sync/test/r0/boot-maintenance.test.ts`; used at the cut-over, `docs/CUTOVER-LOG.md` §1 A4). The engine's own write routes re-check maintenance after the body is read since wave C (OPEN16, C2): **held**, not deployed.
+6. **Converted boards during a rollback:** a staged restore copies the live file's `lb_*` tables into the restored file and verifies their digests; asset-refs answers `newCanvasTables: true`; the asset collector marks such a pass incomplete. *As built:* `apps/sync/test/r0/rollback-safety-copy.test.ts` and the rehearsal's rollback (`docs/research/excalidraw/REHEARSAL.md`). **No rollback was made on staging**, so this path has only been exercised in tests and on the NAS.
 
 ## What changed in revision 3.5 (the recheck of 3.4, the lead's decisions)
 
@@ -126,6 +208,8 @@ Spike A ran A1–A17 in one browser and in Node: **14 PASS, 2 PARTIAL (A12, A14)
 
 ## Open items (tracked; updated for revision 3.5)
 
+> **Status 2026-10-03.** Items 1 to 15 were closed in the waves and the cut-over (each carries its closure below). Item 16 is refreshed at its end. What is open now, outside this list, is in "Status as built" above, in `docs/research/excalidraw/SYNTHESIS.md` §19 and in `docs/PROGRESS.md` (the wave C6 entry).
+
 The recheck of revision 3 (2026-09-28) found all 3 open musts and all 11 new problems resolved, and gave a **go for spike A**. It listed smaller gaps. They are tracked here and each must be closed at the gate named. Revision 3.2 closes items 3–7 and records item 8's answers; items 1–2 are being fixed in spike A's fix round. Revision 3.3 replaces item 3's closure, which the critic showed unsound for a non-holder moving the target (the "What changed in revision 3.3" table). Revision 3.4 completes it for the three cases the recheck of 3.3 found: relative points, arrows inside a dragged frame, and arrows bound to free text (the "What changed in revision 3.4" table). Revision 3.5 makes the unit the arrow's whole geometry and states the tolerance and rounding its compares use (the "What changed in revision 3.5" table).
 
 **Folded into spike A (A6, A16): being fixed, re-verified before spike B fans out (§8.6.1):**
@@ -150,7 +234,7 @@ The recheck of revision 3 (2026-09-28) found all 3 open musts and all 11 new pro
 13. The lost-push decision counted this tab's own acked pushes as other users' writes (a push built while earlier pushes were in flight carries the version before them), so a push lost behind two acked nudges was "superseded" and dropped silently. **Closed in wave 5 (the engine fixer for 2C):** the core keeps the server versions each ack reports and decides from the version its last acked predecessor left (`Sent.ahead`, `effectivePv`); a superseded group is reported to the person (`superseded` event, the board page's notice). The heartbeat pings on a fixed cadence and drops a socket whose ping stays unanswered (a dead upstream behind other users' frames). `apps/web/src/canvas/sync/core/lost-pushes.test.ts`, `transport/socket.test.ts`.
 14. On the Excalidraw engine maintenance refused sockets but not the engine's board-writing internal POSTs. **Closed in wave 5 (2A):** every engine POST but `convert-all` (the cut-over runs it inside the window, §7.5 step 6) answers 503 MAINTENANCE. Also closed: the reset-snapshot cache is dropped when a push deletes (W5-02's residual); a create over another user's tombstone with new content is the writer's element; a name-only guest revives only tombstones it created or deleted itself (GONE otherwise); a guest's label detached into a free text counts toward D5's cap; a member created where its frame no longer is becomes a free element (W5-01 under a concurrent frame move). `apps/sync/test/element-room/w5-fixer.test.ts`.
 15. Ordinary edits on both sides of a rollback left a board that could not open (FRAME_INVALID, LABEL_ORPHANED, LABEL_ORDER, BINDING_TARGET_INVALID after the merge; a record beyond ±1,000,000 INVALID). **Closed in wave 5 (2B):** the roll-forward repairs what the room repairs (`repaired` codes `frame-cleared`, `label-orphaned`, `label-order`, `binding-cleared`, `coords-clamped`); the converter clamps a record beyond the limits (lossy `coords-clamped`) and page bounds ignore it. `apps/sync/test/migrate/rollforward-repairs.test.ts`.
-16. **Open after the fixer's round** (status at wave A, 2026-10-03): doc-key ABA is answered by `CONTRACTS_REV` 9's per-key clocks (`welcome.docClocks`, §3.4; the server side and the room are done, the client's rule is 2C's, W4B-1); the api mints a new guest uid on every cookie-less join of an editor guest link (D5's cap is per uid): **closed at wave A** by a board-wide budget for every guest uid together in the room, `GUEST_BOARD_ITEM_CAP` = 6,000 (200 guests × 30 items), on top of D5's 500 per uid (§3.5); the room's write path has no second maintenance check after a body is read (`ElementRoomDeps` carries no maintenance getter; a request to the lead); the W5-05 lock rule is one-way (a frame moved alone leaves its locked members behind: **accepted** as a design limit at wave 4b, stated in §2.4.3 step 5) and `DRAG_MAX_MS` restarts under a new drag id (a design limit, recorded); a geo kind changed between native types on R0 during a rollback (cloud → ellipse, diamond → heart) keeps its old type across the merge (D4; the parts' paint order is fixed); the room had no `pv` check on a patch, so an account's revive of a tombstone with a stale `pv` landed and showed the content to that editor (V2 P-W5): **closed at wave A** as a stale-write guard, not as content hiding (an undelete by patch whose `pv` is below the tombstone's version is `STALE` unless the writer is the deleter of record, an owner, or deleted it earlier in the same push, so a stale tab or an offline replay resets to the redacted tombstone; an editor can still resend with the current `pv` and revive it; since wave 4b a tombstone takes no patch but its undelete, §2.4.3 step 3, so a stale patch that is not a revive is `GONE`).
+16. **Open after the fixer's round** (status at wave A, 2026-10-03): doc-key ABA is answered by `CONTRACTS_REV` 9's per-key clocks (`welcome.docClocks`, §3.4; the server side and the room are done, the client's rule is 2C's, W4B-1); the api mints a new guest uid on every cookie-less join of an editor guest link (D5's cap is per uid): **closed at wave A** by a board-wide budget for every guest uid together in the room, `GUEST_BOARD_ITEM_CAP` = 6,000 (200 guests × 30 items), on top of D5's 500 per uid (§3.5); the room's write path has no second maintenance check after a body is read (`ElementRoomDeps` carries no maintenance getter; a request to the lead); the W5-05 lock rule is one-way (a frame moved alone leaves its locked members behind: **accepted** as a design limit at wave 4b, stated in §2.4.3 step 5) and `DRAG_MAX_MS` restarts under a new drag id (a design limit, recorded); a geo kind changed between native types on R0 during a rollback (cloud → ellipse, diamond → heart) keeps its old type across the merge (D4; the parts' paint order is fixed); the room had no `pv` check on a patch, so an account's revive of a tombstone with a stale `pv` landed and showed the content to that editor (V2 P-W5): **closed at wave A** as a stale-write guard, not as content hiding (an undelete by patch whose `pv` is below the tombstone's version is `STALE` unless the writer is the deleter of record, an owner, or deleted it earlier in the same push, so a stale tab or an offline replay resets to the redacted tombstone; an editor can still resend with the current `pv` and revive it; since wave 4b a tombstone takes no patch but its undelete, §2.4.3 step 3, so a stale patch that is not a revive is `GONE`). **Status 2026-10-03:** (a) the doc-key ABA's client rule is done (W4B-2C, W4C-2C-1) and its residual, a landed push whose ack was lost, is decided exactly by push receipts (`CONTRACTS_REV` 11, wave C, C2): built and gated, **held**; (b) the second maintenance check after a body is read: **built (OPEN16, C2), held**; (c) a geo kind changed between native types on R0 during a rollback: **closed in wave 4b** (2B: `rollforward.ts` `retype`, `rollforward-repairs.test.ts`); (d) the W5-05 lock rule stays one-way and `DRAG_MAX_MS` restarts under a new drag id: **accepted** design limits.
 
 **Minor (fix in the wave that owns the code):**
 - A normal-concurrency violation uses a code that does not count toward the abuse close.
@@ -261,7 +345,7 @@ The recheck of revision 3 (2026-09-28) found all 3 open musts and all 11 new pro
 | A1 | `GET /internal/boards/:bid/file-refs?ids=ver_a,ver_b,…` (≤ 100 ids), internal secret | new api route; sync client in `apps/sync/src/file-refs.ts`. A1–A3 are first written in the spike branch (§8.1); R0 and wave 2F ship the reviewed versions. | The sync server checks every `fileId` against the board's workspace (§2.10.2). A GET, like `touched` and `session-ended`, because the api's root CSRF hook refuses server-to-server POSTs (`apps/sync/src/touch.ts:23-26`) [rev-run]. |
 | A2 | `GET /internal/boards/:bid/workshop-state` (sync pulls on room open) and `POST <sync>/internal/boards/:bid/workshop-state` (api pushes on change) | new api route + new sync route | The server refuses new +1s and drops selection presence while a dot vote is open (§3.3, §2.7). Today that rule is client-side only (`PlusOnes.tsx:55-57`) [rev-run]. |
 | A3 | Optional `guest` claim in `TicketClaims` | `packages/auth-tickets` | Guest limits are enforced by sync. Additive: `TicketClaims` has no such field today (`index.ts:9-18`) [rev-run]. |
-| A4 | Checkpoint bodies v1 and v2, the new `engine-migration` reason (migration `0021`) | api history | Shipped first in the tldraw **bridge release** so a rollback lands on a build that understands them (§5.10). |
+| A4 | Checkpoint bodies v1 and v2, the new `engine_migration` reason (migration `0022`) | api history | Shipped first in the tldraw **bridge release** so a rollback lands on a build that understands them (§5.10). |
 | A5 | Snapshot readers: `ai/sources.ts`, `workshops/shapes.ts`, `search/indexer.ts`, `history/*`, `files/gc-refs.ts` | api | Read `lobby-elements` through `canvas-schema/items.ts`. |
 | C1 | `PrivateTarget.pageId` keeps its type; after cut-over clients send the constant `page:page`; sync maps a legacy page id through `lb_doc.import.legacyPages` | contracts unchanged; sync `place-notes` | Sessions still open at cut-over reveal notes in the right place (§5.8). |
 | C2 | Deep links: new `?el=<id>,<id>` and `?view=x,y,w,h`; the legacy `?d=` parser stays | web (`copy-link.ts`, `content-search.ts`) | tldraw links use `.` separators, and converted ids contain `.` (§3.6). |
@@ -1141,6 +1225,8 @@ Render's disk fsync time is **UNVERIFIED**; the NAS measures its own disk, which
 
 If the targets fail after the ladder, a larger sync plan is an **owner decision**: "free to run" removes the licence fee, not the hosting cost.
 
+**Measured (2026-10-03).** The NAS half of B9 ran, and the targets above are only partly met on the Render-sized limits: see "Measured against the plan's gates" in "Status as built" and `docs/research/excalidraw/spike-b/B9.md`. In short, at L1 on `release/held` 99ac6c52 the server's receive-to-ack, RSS (≤ 147 MB, 310 MB with the conversion worker), presence delay, the 260-session recovery after the SIGKILL (5.0-5.4 s) and the 0 acked-but-missing hold, while the event-loop p99 (115.1 ms after the restart, 56.5 ms before the kill) and the CPU of the quota (max 91.8 % steady, 97.1 % at the boot sample, 98.9-109.3 % during the conversion) miss. The CPU estimate in the table above (about 205-275 ms/s of 500) is below the measured L1 steady-state mean (62.4 % of the quota is about 312 ms/s); the profile names the rev-10 presence relay's per-recipient re-rank, which was not bisected commit by commit. The ladder's step 1 (the commit hold) is in the room; step 3 (`synchronous=NORMAL`) was measured and does not reach the event-loop target; no larger plan was approved. Render's own fsync is still unmeasured; on the NAS a raw fsync is 5.5 / 6.2 / 6.5 ms (p50 / p95 / p99) and a SQLite commit 5.6 / 6.3 / 10.8 ms.
+
 ---
 
 ## 3. Element schema, customData and formats
@@ -1196,7 +1282,7 @@ Only two top-level keys are allowed: `lobby` and `lobbyServer`. Anything else is
 | Class | Keys | Server rule | On duplicate / paste |
 |---|---|---|---|
 | **1. Server-owned** (`customData.lobbyServer`) | `createdBy`, `createdAt`, `lastEditedBy`, `lastEditedAt`, **`privateNote` `{session, author?}`** | Only the server writes them; a client value is replaced by the stored one. `privateNote` is written only by the `place-notes` endpoint. | Server builds them fresh for the copy (`createdBy` = the paster; `privateNote` never copied) |
-| **2. Create-only, identity-stamped** | `kind`; `ai` `{by, run?}`; `privateFrame` `{session, by}` | Accepted only in the op that creates the element; `by` must equal the writer's uid (stamped if absent). Later changes → `INVALID`. Removal allowed for the `by` user or an owner. | `ai` and `privateFrame` stripped; `kind` kept |
+| **2. Create-only, identity-stamped** | `kind`; `ai` `{by, run?}`; `privateFrame` `{session, by}` | Accepted only in the op that creates the element; `by` is **required** and must equal the writer's uid: a missing or foreign `by` is `INVALID`, nothing is stamped for the writer (`packages/canvas-schema/src/custom-data.ts:108-110` has no optional `by`; `apps/sync/src/room/custom-data.ts:98-99`). Later changes → `INVALID`. Removal allowed for the `by` user or an owner. | `ai` and `privateFrame` stripped; `kind` kept |
 | **3. Identity-bound, per key** | `plusOne:<uid>` | Add or remove only where `<uid>` = the writer's uid. An addition while a dot vote is open → `VOTE_OPEN`. At most 200 keys (`PLUS_ONES_MAX`) [repo]. | Stripped |
 | **4. Validated against the api** | `file` `{assetId, versionId, kind, name, mimeType, sizeBytes}`; `pdfPage` | `versionId` must equal the version in `fileId`; `assetId`, `kind`, `mimeType`, `sizeBytes` are **canonicalized** from the file-refs answer; `name` is client-writable (≤ 200 chars). `pdfPage` is derived from the `.p<n>` suffix. | Kept (same file) |
 | **5. Free, schema-validated** | `alt` (≤ 500 chars); `tag:<tagId>` (≤ 10 per element, `MAX_TAGS_PER_SHAPE`; the tag must exist in `lb_doc`); `mindmap`, `mindmapEdge`; `present` `{index?, skip?}`; `prompt`, `slot`, `swatch` | zod per key | `mindmap` ids re-linked to the copies or stripped when the copy leaves the tree; `present.index` stripped; tags kept |
@@ -1410,7 +1496,7 @@ Legend: **Keep** (no canvas change, or config only), **Rewrite** (same behaviour
 |---|---|---|
 | api | `features/ai/sources.ts`, `features/workshops/shapes.ts`, `features/search/indexer.ts`, `features/history/{snapshot-rows,files,board-ops,checkpoint-routes}.ts`, `files/gc-refs.ts`, `sync-internal.ts`; **new**: `file-refs` and `workshop-state` routes | §1 A1–A5 |
 | packages | `board-ops` (16 files use tldraw), `templates` (17), `canvas-schema` (3), `auth-tickets` (`guest` claim) | Rewritten on elements; tldraw schema moves into `tldraw-import` |
-| contracts | none structurally | `shape:` refs kept; `PrivateTarget.pageId` kept (C1); migration `0021` adds `engine-migration` |
+| contracts | none structurally | `shape:` refs kept; `PrivateTarget.pageId` kept (C1); migration `0022` adds `engine_migration` |
 | Unchanged | auth, sharing, dashboard, notifications, comments privacy, AI budgets, storage, worker, Office sidecar | none |
 
 ---
@@ -1528,7 +1614,7 @@ The owner signs off on lossy counts from the rehearsal (§7.5).
 
 - The api reads **v1 and v2**. A v1 body is converted **on read** (preview, restore, duplicate) through `tldraw-import`. Element ids are kept, so they match the live board [DATA]. Page offsets are taken from the board's frozen `lb_doc.import.legacyPages` when it has them, so a multi-page checkpoint lines up with the live board.
 - **No batch rewrite** of stored bodies in this project. v1 bodies stay as they are, so a rollback never meets a rewritten body, and signed backups stay intact. A rewrite can be a later, separate decision; `tldraw-import` stays at least 6 months anyway (§5.7).
-- One checkpoint per board with the new reason `engine-migration` is taken right after conversion, as a restore point. The reason ships first in the bridge release (§5.10).
+- One checkpoint per board with the new reason `engine_migration` is taken right after conversion, as a restore point. The reason ships first in the bridge release (§5.10).
 
 ### 5.6 Backups
 
@@ -1631,7 +1717,7 @@ The owner signs off on lossy counts from the rehearsal (§7.5).
 | `dr_deleted_records`, `dr_deleted_schemas` | Never written, trimmed or rebuilt by the new build (§5.4) | R0 finds them exactly as it left them; the new engine uses its own `lb_deleted` |
 | `lb_source`, `lb_prev_*`, the tldraw tables | Kept until `drop-legacy` | the base and the history of every cycle stay available |
 | Boards born after the cut-over | R0 refuses them without opening a room (step 4) | the file is never modified by R0 |
-| Migration `0021` | In R0, before the cut-over | additive; R0 understands it |
+| Migration `0022` | In R0, before the cut-over | additive; R0 understands it |
 | `drop-legacy` (remove the tldraw tables, `dr_deleted_*`, `lb_source` and `lb_prev_*`; then `VACUUM`) | Day 7 after cut-over, owner OK | after the window |
 | Asset GC out of report mode | Day 30 | after the window |
 
@@ -1656,7 +1742,7 @@ A normal tldraw release, deployed at least 3 days before the cut-over, so that a
 
 | Part | R0 behaviour |
 |---|---|
-| api | Lists v2 checkpoints and shows "Made on the new canvas — preview and restore after the switch"; refuses v2 restore with that message. Accepts the `engine-migration` reason (migration `0021`, additive). Refuses v2 archive import with a clear message. Shows boards born on the new canvas with a "new canvas" badge, and refuses to duplicate or export them with the same message. Has the `file-refs` and `workshop-state` routes (unused by tldraw sync; reviewed versions of the spike's code, §8.1). |
+| api | Lists v2 checkpoints and shows "Made on the new canvas — preview and restore after the switch"; refuses v2 restore with that message. Accepts the `engine_migration` reason (migration `0022`, additive). Refuses v2 archive import with a clear message. Shows boards born on the new canvas with a "new canvas" badge, and refuses to duplicate or export them with the same message. Has the `file-refs` and `workshop-state` routes (unused by tldraw sync; reviewed versions of the spike's code, §8.1). |
 | sync | Serves the tldraw tables. **Never writes or trims any `lb_*` table** (it reads only whether `lb_meta.converted_from` exists), and keeps managing its own `dr_deleted_*` as today. Refuses boards with `lb_meta` and no `converted_from` without opening a room (§5.9 step 4). Its backups copy the whole file, `lb_*` included. **Maintenance mode (new):** `POST /internal/maintenance {on}` lets pending pushes commit, closes every socket with 4099 `MAINTENANCE`, and refuses new ones; internal routes keep working. **`POST /internal/backups/run-all` (new)** writes a fresh local and offsite backup of every board and returns each object key and `recordsSha256` for the cut-over runbook (§7.5). |
 | web | Unchanged apart from R0 api messages, the maintenance notice and the "new canvas" message. |
 | Tests | R0's gate runs a board file that contains every `lb_*` table and checks that each of them is byte-identical after R0 served, backed up and trimmed the board. A born-after board is refused, with no tldraw table created. A v2 checkpoint row. Maintenance on closes and refuses sockets. `run-all` returns digests equal to the files'. |
@@ -1775,6 +1861,8 @@ The `http/*` (10 files plus helpers), `lease/*` (3), `backup/*` and `deleted/*` 
 
 **Status after spike A.** The Node half exists: `apps/web/test/engine-probe/` (A3's calibration and run, A8, `editor-open-paths.test.ts`, `node-probes.test.ts`; 23 probes, 3/3). The browser half is covered piecemeal by the spike A specs (A1, A4, A7, A9, A16, A17), and four probes do not exist yet: `NEVER` keeping remote edits off Excalidraw's own stack, `addFiles` keeping the first entry, embeddable z-order, and `restoreElements` on templates [spike-A report §5]. Wave 1 writes them and assembles one standing upgrade suite.
 
+**Status as built (2026-10-03).** The suite is `apps/web/test/engine-probe/` (Node: `editor-open-paths`, `node-probes`, `add-files`, `probe-ports`) with browser runners for A3, A8 and the addFiles probe (`pnpm probe:browser`, which passed at the wave C gate), and its tsconfig and the sync's node-safe tsconfig are in `pnpm -r typecheck` (wave C, C4). **The `addFiles` probe was built** (`add-files.test.ts`, `add-files/run-browser.ts`). The other three missing probes (`NEVER` keeping remote edits off Excalidraw's own stack, `registerAction` replacing undo, the embeddable z-order) were **not built**: the C6 backlog review judged them obsolete because Lobby owns undo, the keymap blocks the engine's own undo and link cards replace embeds (a decision, not a measurement). A `restoreElements` probe on templates was not re-checked. "Nightly in CI" is not in place: the rebuilt `.github/workflows/ci.yml` has never run on GitHub.
+
 They run on every Excalidraw bump and nightly in CI.
 
 ---
@@ -1801,7 +1889,7 @@ Person-days (pd) are human-engineer equivalents, used for sizing. **Every row, t
 | **0A Spike A** (§8) | 3 owners + lead | `spike/excalidraw` branch: engine checks (summed per check in §8.2). **Done** (5203e41), plus the A6/A16 fix round | 14 |
 | **0B Spike B** (§8) | 5 owners + lead | `spike/excalidraw`: contracts step, minimal room and engine core, lease client on the real protocol, facade and browser harness, load harness and NAS containers, conversion port on the restored staging boards, roll-forward drill with the R0 stand-in, routes A1–A3, the minimal features the checks need, three independent verifiers (§8.1 has the breakdown, §8.6 the owners) | 60 |
 | **1 Contracts + freeze** | contracts (+1) | `packages/canvas-schema/src/**` (new files, §3; spike B's contract drafts reviewed and frozen); `docs/EXCALIDRAW-CONTRACTS.md`; `canvas/port.ts`, `canvas/registries.ts`; facade types; lockfile PR #1; probes into `docs/research/excalidraw/`, including the four missing browser probes (§6.5) | 7 |
-| **R0 Bridge release** | bridge | api: v2 checkpoint listing and messages, migration `0021`, routes A1/A2 (reviewed from the spike branch), "new canvas" board badge; sync: maintenance mode, `backups/run-all`, refusal of boards born on the new canvas, byte-identity tests for every `lb_*` table; staging deploy (owner OK) | 4.5 |
+| **R0 Bridge release** | bridge | api: v2 checkpoint listing and messages, migration `0022`, routes A1/A2 (reviewed from the spike branch), "new canvas" board badge; sync: maintenance mode, `backups/run-all`, refusal of boards born on the new canvas, byte-identity tests for every `lb_*` table; staging deploy (owner OK) | 4.5 |
 | **2 Engine core** | 2A sync-room | `apps/sync/src/room/**` (not `migrate/`), `rooms.ts`, `app.ts`, `presence.ts` (drag relay with ids once), lease with the conditional container fit, the server-derived bound arrows (re-snap on every target and arrow geometry write, the arrow label's derived layout, `fix`/`derived` ack rows), attribution ledger, outbound budgets, the test-only routes; `user-records.ts` deleted | 16.5 |
 | | 2B sync-edges | `apps/sync/src/{http,backup,deleted}/**` (`lb_deleted` store), `snapshot.ts`, `room/migrate/**` (capped conversion worker and queue, `lb_source`, record-level roll-forward merge), `file-refs.ts`, `workshop-state.ts`, `/internal/metrics` | 9.5 |
 | | 2C web-engine | `apps/web/src/canvas/**` (engine, sync adapter with fit and derived-arrow classification, history with `lastLocal`, fix and `derived` folding and arrow points compared without their bound endpoints, overrides, input framework with the editor-open guard and its invariant, the editor's chord allowlist, the double-tap detector and Ctrl+A, the presence pointer listener, image loader core, facade), `board/BoardPage.tsx`, `board/presence.ts`, `board/touch-guard.ts`, `sync-quality/**` | 20.5 |
@@ -2328,6 +2416,8 @@ Every number has an owner (revision 3.3). O3 measures the client, render and bun
 | **Fallback** | A `next`-only blocker (A1, A2, A3, A10) cannot be fixed in 1 day | Switch to 0.18.1 (§2.2), re-run A16 on its editor paths, and re-estimate (+5.5 pd) |
 | **Stop and re-plan** | The sync design fails: convergence, echo, durability, the lease (including an editor-open path the guard cannot hold) or undo cannot pass; or the roll-forward drill loses an edit | Re-plan before any wave. (Spike A's A6 and A16 findings do not meet this row: both are bugs in Lobby's guard code on paths the engine lets Lobby hold, not engine paths that cannot be held [verify-A].) |
 
+**Results of the gates that could be measured on the shipped build (2026-10-03):** see "Measured against the plan's gates" in "Status as built". The visibility, fps and fit gates are met on Lobby's page with all 200 images loaded; the open-time comparison with tldraw is not judged; the capacity targets on the NAS are not all met (event loop and CPU at L1); B11 passes 16 of 18 runs with 0 not converged.
+
 ### 8.6 Spike B execution
 
 How spike B runs with parallel owners, built on the code spike A actually left on `spike/excalidraw`. There are five owners (O1–O5), a lead who also integrates, and three independent verifiers (V1–V3). One serial contracts step comes first. Every owner has an exact, disjoint set of files. The effort per owner adds up to §8.1's 60 pd and to row 0B of §7.2.
@@ -2726,6 +2816,25 @@ with:
 17. **For information, no decision needed** (new in 3.2): SVG export will embed whole font files for the characters used rather than Excalidraw's subset fonts, because subsetting needs `unsafe-eval` in the CSP (§2.10.4). Exported SVGs are larger. The default note colour stays Butter (`#f8e48f`). Coordinates are limited to ±1e6.
 18. *Withdrawn in revision 3.4:* revision 3.3 asked for a Docker engine on the workstation to build B9's images. B9 now builds no image (§8.6.6), so there is no question.
 
+**State of these decisions on 2026-10-03.**
+
+| # | Decision | State |
+|---|---|---|
+| 1 | Go/no-go after the spikes, and the look | decided: the migration went ahead; "The look is fine as it is" (`REVIEW-W5-EARLY.md` §9) |
+| 2 | The accepted losses | decided 2026-09-30: plain text only, pages flattened, video and GIFs as a poster plus a player, resizes, rotations and strokes appear at the end of the gesture (`REVIEW-W5-EARLY.md` §9) |
+| 3 | NAS use and the rehearsal's copy of staging data | rehearsal ran 2026-10-01 (`REHEARSAL.md`). A read-only listing on the NAS at the end of the 2026-10-03 runs (about 17:30Z, capacity workstream, filtered to `draftroom-` names) shows no `draftroom-rehearsal-*` container, network or volume; its images and folders were not listed |
+| 4, 5 | Deploying R0; the cut-over window and the rollback semantics | R0 live 2026-09-30; the owner waived the 3-day floor; cut-over 2026-10-01; no rollback made |
+| 6 | Keep the final backup set 90 days | done: held to 2026-12-30 (`docs/CUTOVER-LOG.md` §4) |
+| 7 | The tldraw key's expiry date | not recorded (CUTOVER-LOG §5, P7); the key stays on the web service until D7 |
+| 8 | Capacity fallbacks | `synchronous=NORMAL` is pre-approved by the owner and was measured, not applied (staging stays on FULL; it does not reach the L1 event-loop target); a larger Render plan was not approved |
+| 9 | A one-off fsync measurement on Render | **not done** |
+| 10 | Bandwidth cost | **not checked**: L1 on 99ac6c52 sends 9.47 MB/s to 260 clients, about 34 GB an hour; `permessage-deflate` is not enabled |
+| 11 | A real iPhone or iPad Safari session | **not done** (owner item P10) |
+| 12 | The AGENTS.md rewrite | applied at the cut-over merge |
+| 13 | B8's signature verification and the restored copies | answered 2026-09-28 (above) |
+| 15 | The creation-date footer on notes | hidden, as planned |
+| 16 | A laptop for A14's second half | none named; the laptop half of the render numbers is unrun |
+
 ## Appendix C: how each review item was applied
 
 Spike A's findings and corrections (revision 3.2) are mapped in the table "What changed in revision 3.2" at the top, and the open items' closure in "Open items". The critic's result on revision 3.2 and the lead's decisions (revision 3.3) are mapped in "What changed in revision 3.3", the recheck of 3.3 with the lead's decisions (revision 3.4) in "What changed in revision 3.4", and the recheck of 3.4 with the lead's decisions (revision 3.5) in "What changed in revision 3.5".
@@ -2733,7 +2842,7 @@ Spike A's findings and corrections (revision 3.2) are mapped in the table "What 
 | Priority | Review item | Where | What changed in the design |
 |---|---|---|---|
 | must | Rollback and the lazy converter | §5.3, §5.9 | `converted_from` records the source clock, hash and backup; a room refuses stale `lb_*` and runs a 3-way roll-forward merge; `lb_prev_*` kept; exports to R2 before rollback; drill in spike B8 and the rehearsal |
-| must | Irreversible jobs inside the window | §5.5, §5.8, §5.9, §5.10 | No checkpoint rewrite; anchor shifts at read time; `0021` ships in the bridge release R0 |
+| must | Irreversible jobs inside the window | §5.5, §5.8, §5.9, §5.10 | No checkpoint rewrite; anchor shifts at read time; `0022` ships in the bridge release R0 |
 | must | Echo 1: image `status` | §2.5.5 E1, §2.10.3 | `status` local-only; Lobby's loader hands `blob:` URLs only after success; test |
 | must | Echo 2: index re-keying | §2.5.5 E2–E3, §2.4.3 | Own-only pre-pass; server keeps labels after containers; dev assertion; concurrent-create test |
 | must | Undo reverts others' `customData`/`groupIds` | §2.8 | Field-level stack with 3-way compare-and-set per field, key and group id; side-effect geometry pushed separately; leased labels untouched |
