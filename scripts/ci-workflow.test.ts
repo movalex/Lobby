@@ -31,6 +31,13 @@ const jobs = new Map<string, string>()
   if (id) jobs.set(id, body.join('\n'))
 }
 
+/** a job's text without its full-line comments */
+const jobCode = (id: string) =>
+  (jobs.get(id) ?? '')
+    .split(/\r?\n/)
+    .filter((l) => !/^\s*#/.test(l))
+    .join('\n')
+
 /** package name -> script names, for every workspace package and the root */
 const scripts = new Map<string, Set<string>>()
 const rootScripts = new Set(Object.keys(JSON.parse(read('package.json')).scripts))
@@ -57,6 +64,7 @@ describe('ci.yml', () => {
     for (const u of uses) expect(u, u).toMatch(/@[0-9a-f]{40}$/)
     expect([...jobs.keys()]).toEqual([
       'checks',
+      'unit',
       'postgres',
       'probes',
       'audit',
@@ -89,7 +97,6 @@ describe('ci.yml', () => {
         'root:licence:check',
         'root:typecheck',
         'root:fixtures',
-        'root:test',
         'root:audit:prod',
         '@draftroom/e2e:csp:cutover',
         '@draftroom/web:probe:engine',
@@ -112,14 +119,59 @@ describe('ci.yml', () => {
     expect(jobs.get('probes')).toContain('probe:engine')
     expect(jobs.get('xbrowser')).toContain('install --with-deps webkit firefox')
     expect(jobs.get('xbrowser')).toContain('@draftroom/e2e xbrowser')
-    // the licence check, the type checks and every vitest project
+    // the lint, the licence check and the type checks, as the quick static gate
     const checks = jobs.get('checks') ?? ''
-    for (const cmd of ['pnpm licence:check', 'pnpm typecheck', 'pnpm test']) expect(checks).toContain(cmd)
-    // Postgres 18 for the api's *.pg.test.ts files
-    const pg = jobs.get('postgres') ?? ''
+    for (const cmd of ['pnpm lint', 'pnpm licence:check', 'pnpm typecheck']) expect(checks).toContain(cmd)
+    // Postgres 18 for the api's *.pg.test.ts files, and the whole api project (every api test runs there when the
+    // URL is set), in shards that each have a server of their own; the database is UTF8 (tests store emoji)
+    const pg = jobCode('postgres')
     expect(pg).toContain('image: postgres:18')
     expect(pg).toContain('DRAFTROOM_TEST_DATABASE_URL: postgres://')
-    expect(pg).toContain('pnpm vitest run --project api')
+    expect(pg).toContain('POSTGRES_INITDB_ARGS: --encoding=UTF8')
+    expect(pg).toMatch(/pnpm vitest run --project api --shard=\$\{\{ matrix\.shard \}\}\/3\n/)
+    expect(pg).toMatch(/shard: \[1, 2, 3\]/)
+    expect(pg).toContain('fail-fast: false')
+  })
+
+  it('splits the unit tests into shards that cover every vitest project, off the quick static gate', () => {
+    const unit = jobCode('unit')
+    const shards = /shard: \[([\d, ]+)\]/
+      .exec(unit)?.[1]
+      ?.split(',')
+      .map((s) => s.trim())
+    expect(shards).toEqual(['1', '2', '3', '4'])
+    // `--shard=<n>/<total>` with the real total, and no `--project`: every project is in some shard
+    expect(unit).toMatch(/pnpm vitest run --shard=\$\{\{ matrix\.shard \}\}\/4\n/)
+    expect(unit).not.toContain('--project')
+    expect(unit).toContain('fail-fast: false')
+    // the worker tests (ffmpeg, the generated fixtures) can land in any shard
+    expect(unit).toContain('install -y --no-install-recommends ffmpeg')
+    expect(unit).toContain('pnpm fixtures')
+    // the static gate runs no tests; the jobs that need a green gate wait for it and not for the unit shards
+    expect(jobCode('checks')).not.toContain('vitest')
+    for (const id of ['xbrowser', 'build-gates', 'e2e-smoke', 'e2e'])
+      expect(jobs.get(id), id).toContain('needs: checks\n')
+    for (const [id, body] of jobs) expect(body, id).not.toContain('needs: unit')
+  })
+
+  it('sizes the ceilings from a runner, not from the 64-core development PC', () => {
+    // Measured on that PC with the workers capped at what a runner gets: the whole unit suite took 12.1 min on 2
+    // workers and 21.6 min on 1 (vitest uses cpus - 1, so 1 on a 2-vCPU runner), the api project on a real Postgres
+    // 15.5 min on 1; a runner core is slower than a desktop core. A ceiling costs nothing unless a job hangs, so they
+    // stay generous.
+    const minutes = (id: string) => Number(/\n {4}timeout-minutes: (\d+)/.exec(jobs.get(id) ?? '')?.[1])
+    expect(minutes('unit')).toBeGreaterThanOrEqual(30)
+    expect(minutes('postgres')).toBeGreaterThanOrEqual(40)
+    expect(minutes('e2e')).toBeGreaterThanOrEqual(45)
+    expect(minutes('checks')).toBeGreaterThanOrEqual(15)
+  })
+
+  it('gives every push to main a concurrency group of its own, and one group per pull request', () => {
+    // a group keeps one running and one pending run: a shared group would drop the older pending runs of a burst
+    expect(code).toMatch(
+      /\n {2}group: ci-\$\{\{ github\.event_name == 'pull_request' && github\.ref \|\| github\.sha \}\}\n/,
+    )
+    expect(code).toMatch(/\n {2}cancel-in-progress: \$\{\{ github\.event_name == 'pull_request' \}\}\n/)
   })
 
   it('shards the full suite on pushes to main and runs a subset on pull requests', () => {
