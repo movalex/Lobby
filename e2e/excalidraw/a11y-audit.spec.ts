@@ -1,10 +1,16 @@
 // An accessibility audit of the Excalidraw board page (owner 3i, docs/EXCALIDRAW-MIGRATION.md §4.8 (4) "axe
-// on the board page"). axe-core is not a dependency of this repository (adding it is a lockfile change,
-// requested in the wave-3i report), so this spec checks the rules axe would flag first, on the live page:
-// every visible control has an accessible name, ids are unique, ARIA id references resolve, images have
-// alternative text, the page has one main landmark and a named canvas, and over the canvas only the known
-// live regions speak. Run on the desktop board with content and a panel open, and on a phone with the sheet open.
+// on the board page"), in two layers:
+//  - axe (wave C4, CR-3I-1): @axe-core/playwright runs axe's WCAG 2.0 to 2.2 A and AA rules and its best
+//    practices on the sign-in page, the dashboard and the board, on a desktop and at 390 px, in light and dark
+//    (the "axe:" tests below). The exceptions are recorded in AXE_EXCEPTIONS and AXE_INCOMPLETE_OK, with reasons.
+//  - the hand audit (the "passes the audit" tests): the rules axe would flag first, written by hand while axe was not a
+//    dependency, kept as the fallback and for what axe does not know about Lobby: every visible control has an
+//    accessible name, ids are unique, ARIA id references resolve, images have alternative text, the page has one
+//    main landmark and a named canvas, and over the canvas only the known live regions speak. Run on the desktop
+//    board with content and a panel open, and on a phone with the sheet open.
+import AxeBuilder from '@axe-core/playwright'
 import type { Page } from '@playwright/test'
+import { signInContext } from '../tests/support/api.ts'
 import { expect, test, zoomToFit } from '../tests/support/canvas.ts'
 import { focusCanvas, frame, intoFrame, note, PHONE, textItem, waitForA11y } from './a11y-kit.ts'
 
@@ -201,4 +207,161 @@ test('the board page passes the audit on a phone with the Board actions sheet op
   const v = await canvasSession('carol', { role: 'viewer' })
   await waitForA11y(v.page)
   expect(await audit(v.page)).toEqual([])
+})
+
+// ---- axe (wave C4, CR-3I-1) --------------------------------------------------------------------------------------
+
+/** The rule sets axe runs: WCAG 2.0, 2.1 and 2.2 A and AA, and axe's own best practices (landmarks, regions...). */
+const AXE_TAGS = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa', 'best-practice']
+
+interface AxeException {
+  /** the axe rule id */
+  rule: string
+  /** a part of the node's selector (axe's `target`) */
+  target: string
+  reason: string
+}
+
+/**
+ * Violations that are known and accepted, each with the rule, the node and why. None today: the first run
+ * (2026-10-03, axe-core 4.13.0) found no violation on any page, viewport or theme below. A new one is a
+ * regression to fix, or, when it is in a part Lobby does not own, a line here with the reason. Remove a line when
+ * it stops matching.
+ */
+const AXE_EXCEPTIONS: readonly AxeException[] = []
+
+/**
+ * What axe reports as "incomplete" (it could not decide) and the audit accepts, by rule, with the reason. Any
+ * other incomplete rule fails: it is a new thing a person has to look at.
+ */
+const AXE_INCOMPLETE_OK: Readonly<Record<string, string>> = {
+  'color-contrast':
+    'axe cannot read the backdrop of text that sits over the canvas or a backdrop layer (the "overlapped by" and "background image" cases); the rendered pixels are measured by a11y-contrast.spec.ts instead',
+  'aria-valid-attr-value':
+    'aria-controls on a collapsed menu button names a menu that is not mounted until it opens (the board card menu, the overflow button); ARIA allows that while aria-expanded is false',
+}
+
+/** One axe run on the page as it is now: no unexcepted violation, no unaccepted "incomplete" rule. */
+async function expectAxeClean(page: Page, label: string): Promise<void> {
+  const results = await new AxeBuilder({ page }).withTags(AXE_TAGS).analyze()
+  const violations = results.violations.flatMap((v) =>
+    v.nodes
+      .filter(
+        (n) =>
+          !AXE_EXCEPTIONS.some((e) => e.rule === v.id && n.target.some((t) => String(t).includes(e.target))),
+      )
+      .map((n) => `${v.id} [${v.impact}] ${n.target.join(' >> ')}: ${v.help}`),
+  )
+  expect(violations, `axe violations: ${label}`).toEqual([])
+  const undecided = results.incomplete.map((v) => v.id).filter((id) => !(id in AXE_INCOMPLETE_OK))
+  expect(undecided, `axe could not decide (needs a look): ${label}`).toEqual([])
+  // axe really looked: a page it could not read would pass with nothing checked
+  expect(results.passes.length, `axe rules that passed: ${label}`).toBeGreaterThan(20)
+}
+
+const DESKTOP = { width: 1280, height: 800 }
+
+for (const colorScheme of ['light', 'dark'] as const) {
+  test(`axe: the sign-in page, on a desktop and at 390 px (${colorScheme})`, async ({
+    browser,
+    stackReady: _,
+  }) => {
+    for (const viewport of [DESKTOP, PHONE]) {
+      const context = await browser.newContext({ viewport, colorScheme })
+      try {
+        const page = await context.newPage()
+        await page.goto('/signin')
+        await expect(page.getByTestId('signin-form')).toBeVisible()
+        await expectAxeClean(page, `sign-in ${viewport.width}px ${colorScheme}`)
+      } finally {
+        await context.close()
+      }
+    }
+  })
+
+  test(`axe: the dashboard with a board card, its menu and the new-board dialog, on a desktop and at 390 px (${colorScheme})`, async ({
+    browser,
+    board: _board,
+    users,
+  }) => {
+    for (const viewport of [DESKTOP, PHONE]) {
+      const context = await browser.newContext({ viewport, colorScheme })
+      try {
+        const page = await context.newPage()
+        await signInContext(context, 'alice', 'Alice Park')
+        await page.goto(`/w/${users.devStudioId}`)
+        await expect(page.getByTestId('dashboard')).toBeVisible()
+        await expect(page.getByTestId('board-card').first()).toBeVisible()
+        await expectAxeClean(page, `dashboard ${viewport.width}px ${colorScheme}`)
+        await page.getByTestId('board-card-menu').first().click()
+        await expect(page.locator('[role="menuitem"]').first()).toBeVisible()
+        await expectAxeClean(page, `dashboard card menu ${viewport.width}px ${colorScheme}`)
+        await page.keyboard.press('Escape')
+        await page.getByTestId('create-board').click()
+        await expect(page.getByTestId('create-board-dialog')).toBeVisible()
+        await expectAxeClean(page, `dashboard new-board dialog ${viewport.width}px ${colorScheme}`)
+      } finally {
+        await context.close()
+      }
+    }
+  })
+
+  test(`axe: the board page on a desktop (content, the contents panel, the share dialog) and at 390 px (the Board actions sheet), and for a viewer (${colorScheme})`, async ({
+    canvasSession,
+  }) => {
+    const a = await canvasSession('alice')
+    await a.page.emulateMedia({ colorScheme })
+    await waitForA11y(a.page)
+    const retro = await frame(a.page, 0, 0, 800, 500, 'Retro')
+    const inner = await note(a.page, 100, 100, 'Inside')
+    await intoFrame(a.page, [inner], retro)
+    await note(a.page, 1000, 100, 'Loose')
+    await textItem(a.page, 0, -200, 'Agenda')
+    await zoomToFit(a.page)
+    await expectAxeClean(a.page, `board ${colorScheme}`)
+
+    await a.page.getByTestId('dock-tab-contents').click()
+    await expect(a.page.getByTestId('dock-panel-contents')).toBeVisible()
+    await expectAxeClean(a.page, `board with the contents panel ${colorScheme}`)
+    await a.page.getByTestId('dock-tab-contents').click()
+    await expect(a.page.getByTestId('dock-panel-contents')).toHaveCount(0)
+
+    await a.page.getByTestId('share-button').click()
+    await expect(a.page.getByTestId('share-dialog')).toBeVisible()
+    await expectAxeClean(a.page, `board with the share dialog ${colorScheme}`)
+    await a.page.keyboard.press('Escape')
+    await expect(a.page.getByTestId('share-dialog')).toHaveCount(0)
+
+    await a.page.setViewportSize(PHONE)
+    await expectAxeClean(a.page, `board 390px ${colorScheme}`)
+    await a.page.getByTestId('phone-sheet-open').click()
+    await expect(a.page.getByTestId('phone-sheet')).toBeVisible()
+    await expectAxeClean(a.page, `board 390px with the Board actions sheet ${colorScheme}`)
+
+    const v = await canvasSession('carol', { role: 'viewer' })
+    await v.page.emulateMedia({ colorScheme })
+    await waitForA11y(v.page)
+    await expectAxeClean(v.page, `board as a viewer ${colorScheme}`)
+  })
+}
+
+test('axe: the audit finds violations that are planted on the board (so an audit that checks nothing cannot pass)', async ({
+  canvasSession,
+}) => {
+  const a = await canvasSession('alice')
+  await waitForA11y(a.page)
+  await a.page.evaluate(() => {
+    const button = document.createElement('button')
+    button.id = 'planted-button'
+    document.querySelector('[data-lobby-board-canvas]')?.appendChild(button)
+    const image = document.createElement('img')
+    image.id = 'planted-image'
+    image.src = 'data:image/gif;base64,R0lGODlhAQABAAAAACw='
+    document.body.appendChild(image)
+  })
+  const results = await new AxeBuilder({ page: a.page }).withTags(AXE_TAGS).analyze()
+  const found = new Map(results.violations.map((v) => [v.id, v.nodes.map((n) => n.target.join(' '))]))
+  expect(found.get('button-name')).toEqual(['#planted-button'])
+  expect(found.get('image-alt')).toEqual(['#planted-image'])
+  await expect(expectAxeClean(a.page, 'planted')).rejects.toThrow(/axe violations: planted/)
 })

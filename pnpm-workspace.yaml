@@ -32,6 +32,8 @@ catalog:
   '@vitejs/plugin-react': 6.1.1
   vitest: 5.0.2
   '@playwright/test': 1.63.0
+  # axe accessibility audit for the browser suite (e2e only; MPL-2.0 dev tooling, never in a production tree)
+  '@axe-core/playwright': 4.13.0
   ws: 8.21.3
   '@types/ws': 8.18.1
   '@biomejs/biome': 2.5.14

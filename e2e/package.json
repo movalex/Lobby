@@ -17,6 +17,7 @@
     "csp:cutover": "node spike/csp/run-cutover.ts"
   },
   "devDependencies": {
+    "@axe-core/playwright": "catalog:",
     "@playwright/test": "catalog:",
     "pdf-lib": "catalog:",
     "pdfjs-dist": "catalog:"
