@@ -10,7 +10,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { CanvasFeatureContext, MenuEntrySpec, MenuTarget } from '../../../canvas/api/index.ts'
 import { useValue } from '../../../lib/signals.ts'
-import { CMD, hasLocked, pasteFromMenu, selectedRoots } from './commands.ts'
+import { CMD, canCopySelection, hasLocked, pasteFromMenu, selectedRoots } from './commands.ts'
 import { EXPORT_OFF_MENU_LABEL, exportAllowed, notifyExportOff } from './export-gate.ts'
 import { EXPORTING_ENTRIES, groupRows, MenuList } from './Menu.tsx'
 import { uxState } from './state.ts'
@@ -40,14 +40,15 @@ export const CONTEXT_MENU_ENTRIES: readonly MenuEntrySpec[] = [
     visible: (c) => editable(c) && atLeast(1)(c),
   },
   // CR-3A-4: Copy for every role. While exporting is off for this person `gatedEntries` drops it for
-  // all of them (and Ctrl/Cmd+C says why); while it is on, a viewer or commenter copies the selection's text
+  // all of them (and Ctrl/Cmd+C says why); while it is on, a viewer or commenter copies the selection's text,
+  // so their menu shows Copy only for a selection that has some
   {
     id: 'copy',
     group: 'clipboard',
     order: 20,
     label: '',
     command: CMD.copy,
-    visible: atLeast(1),
+    visible: canCopySelection,
   },
   {
     // W5-33: Paste where the menu opened (tldraw's context menu has it)

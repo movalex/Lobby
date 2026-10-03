@@ -99,3 +99,6 @@ export { createFeatureRegistries, HOST_SLOTS, MENU_GROUPS } from './registries.t
 // editor. A checkpoint is not the live scene, so `LobbyCanvas.export.canvas` (live items) cannot draw it.
 // Loaded on first use; the History panel is its only caller.
 export const loadCheckpointPreview = () => import('../preview/index.ts').then((m) => m.mountCheckpointPreview)
+// CR-3A-4 follow-up: the words a read-only role copies from the selection (canvas/board/copy-text.ts, pure),
+// so canvas-ux's menus can offer Copy only where there is something to copy. Additive: no LobbyCanvas member.
+export { selectionText } from '../board/copy-text.ts'

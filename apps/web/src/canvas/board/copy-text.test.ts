@@ -9,6 +9,7 @@ interface Spec {
   x?: number
   y?: number
   text?: string
+  height?: number
   frameId?: string | null
   containerId?: string | null
   deleted?: boolean
@@ -23,6 +24,7 @@ function canvasOf(specs: Spec[], selection: string[], hidden: string[] = []): Co
         type: s.type ?? 'stickynote',
         x: s.x ?? 0,
         y: s.y ?? 0,
+        height: s.height ?? 100,
         frameId: s.frameId ?? null,
         containerId: s.containerId ?? null,
         isDeleted: s.deleted ?? false,
@@ -61,6 +63,63 @@ describe('selectionText (what a viewer copies)', () => {
       ['b', 'c', 'a'],
     )
     expect(selectionText(c)).toBe('first row, left\nfirst row, right\nsecond row, left')
+  })
+
+  it('CR-3A-4: notes on one visual row read left to right even when one sits a few pixels higher', () => {
+    const c = canvasOf(
+      [
+        // the right-hand notes are 12 and 4 px higher than the left-hand one: the same row
+        { id: 'left', text: 'left note', x: 0, y: 112 },
+        { id: 'right', text: 'right note', x: 300, y: 100 },
+        { id: 'far-right', text: 'far right note', x: 600, y: 108 },
+        // the next row, 200 px lower
+        { id: 'below-b', text: 'below, right', x: 300, y: 300 },
+        { id: 'below-a', text: 'below, left', x: 0, y: 296 },
+      ],
+      ['far-right', 'right', 'below-b', 'left', 'below-a'],
+    )
+    expect(selectionText(c)).toBe('left note\nright note\nfar right note\nbelow, left\nbelow, right')
+  })
+
+  it('the row tolerance is half the median height: a note half a row higher is still the row, more is the row above', () => {
+    const rows = (dy: number) =>
+      selectionText(
+        canvasOf(
+          [
+            { id: 'a', text: 'a', x: 0, y: 0, height: 120 },
+            { id: 'b', text: 'b', x: 300, y: -dy, height: 120 },
+          ],
+          ['a', 'b'],
+        ),
+      )
+    // 60 = half the median: one row, left to right (a, b); 61 above: its own, earlier row (b, a)
+    expect(rows(60)).toBe('a\nb')
+    expect(rows(61)).toBe('b\na')
+    // no heights at all: exact tops, as before
+    expect(
+      selectionText(
+        canvasOf(
+          [
+            { id: 'a', text: 'a', x: 0, y: 5, height: 0 },
+            { id: 'b', text: 'b', x: 300, y: 0, height: 0 },
+          ],
+          ['a', 'b'],
+        ),
+      ),
+    ).toBe('b\na')
+  })
+
+  it('a staggered column is not chained into one row', () => {
+    const c = canvasOf(
+      [
+        { id: 'c', text: 'third', x: 0, y: 120 },
+        { id: 'a', text: 'first', x: 90, y: 0 },
+        { id: 'b', text: 'second', x: 0, y: 60 },
+      ],
+      ['c', 'a', 'b'],
+    )
+    // tolerance 50: first (0) alone, second (60) starts the next row, third (120) a row of its own
+    expect(selectionText(c)).toBe('first\nsecond\nthird')
   })
 
   it('counts a selected label as its container, once', () => {

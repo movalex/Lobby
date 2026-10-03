@@ -27,7 +27,7 @@ import type {
   LobbyCanvas,
   ReorderTo,
 } from '../../../canvas/api/index.ts'
-import { items as itemsApi } from '../../../canvas/api/index.ts'
+import { items as itemsApi, selectionText } from '../../../canvas/api/index.ts'
 import {
   type AlignOp,
   alignDeltas,
@@ -271,6 +271,14 @@ export async function pasteFromMenu(
 const selectionAtLeast = (n: number) => (ctx: CanvasFeatureContext) => selectedRoots(ctx.canvas).length >= n
 const editable = (ctx: CanvasFeatureContext) => !ctx.canvas.readOnly()
 
+/**
+ * Whether Copy has something to copy (CR-3A-4): an editor copies the selected elements; a viewer or
+ * commenter copies the selection's words (canvas/board/copy-text.ts), so a selection with none (a
+ * rectangle, an image) offers nothing rather than a Copy that does nothing.
+ */
+export const canCopySelection = (ctx: CanvasFeatureContext): boolean =>
+  selectionAtLeast(1)(ctx) && (editable(ctx) || selectionText(ctx.canvas) !== '')
+
 export const COMMANDS: readonly CommandSpec[] = [
   {
     id: CMD.undo,
@@ -308,7 +316,7 @@ export const COMMANDS: readonly CommandSpec[] = [
     id: CMD.copy,
     label: 'Copy',
     readOnlyAllowed: true,
-    enabled: selectionAtLeast(1),
+    enabled: canCopySelection,
     run: (ctx) => clipboard(ctx, 'copy'),
   },
   {

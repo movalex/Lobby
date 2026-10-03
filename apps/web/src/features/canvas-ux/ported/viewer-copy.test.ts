@@ -12,17 +12,40 @@ import { exportAllowedOnBoard, exportGate } from './export-gate.ts'
 import { groupRows } from './Menu.tsx'
 
 let seq = 0
-/** A viewer's (or editor's) canvas with one rectangle selected, on a board with `policy`. */
-function ctxOf(opts: { readOnly: boolean; policy?: 'editors' | 'everyone' | 'everyone-including-guests' }) {
+/**
+ * A viewer's (or editor's) canvas with one element selected (a note with words, or with `text: ''` a
+ * rectangle with none), on a board with `policy`.
+ */
+function ctxOf(opts: {
+  readOnly: boolean
+  policy?: 'editors' | 'everyone' | 'everyone-including-guests'
+  text?: string
+}) {
   const registries = createFeatureRegistries()
   for (const c of COMMANDS) registries.commands.register(c)
   const board = { id: `viewer-copy-${++seq}`, status: 'active' }
   if (opts.policy) exportGate(board.id).policy.set(opts.policy)
+  const words = opts.text ?? 'Call the client'
+  const el = (id: string) => ({
+    id,
+    type: 'rectangle',
+    groupIds: [],
+    locked: false,
+    isDeleted: false,
+    frameId: null,
+    containerId: null,
+    x: 0,
+    y: 0,
+    width: 100,
+    height: 100,
+  })
   const canvas = {
     readOnly: () => opts.readOnly,
     selection: ['r1'],
-    get: (id: string) => ({ id, type: 'rectangle', groupIds: [], locked: false, isDeleted: false }),
-    items: () => [{ id: 'r1', type: 'rectangle', groupIds: [], locked: false }],
+    get: (id: string) => el(id),
+    items: () => [el('r1')],
+    isHidden: () => false,
+    text: { of: (id: string) => (id === 'r1' ? words : '') },
     history: { canUndo: () => false, canRedo: () => false },
     settings: { get: () => ({ grid: false, snap: false, focusMode: false }) },
     doc: { get: () => undefined },
@@ -108,6 +131,21 @@ describe('the context menu’s Copy for a read-only canvas', () => {
     const off = contextMenu(ctxOf({ readOnly: true, policy: 'editors' }))
     expect(off.map((r) => r.id)).not.toContain('copy')
     expect(off.map((r) => r.id)).toContain('dr-export-off')
+  })
+
+  it('CR-3A-4: a viewer’s menu shows Copy only when the selection has words to copy', () => {
+    const rows = (text: string) => contextMenu(ctxOf({ readOnly: true, policy: 'everyone', text }))
+    expect(rows('Call the client').map((r) => r.id)).toContain('copy')
+    // a rectangle, an image, a blank note: nothing to copy, so no Copy that does nothing
+    for (const none of ['', '   ', '\n']) expect(rows(none).map((r) => r.id)).not.toContain('copy')
+    // editors copy the elements themselves: Copy stays whatever the selection says
+    expect(contextMenu(ctxOf({ readOnly: false, policy: 'everyone', text: '' })).map((r) => r.id)).toContain(
+      'copy',
+    )
+    // and the command (the main menu's Copy) follows the same rule
+    const copy = COMMANDS.find((c) => c.id === 'canvas-ux.copy')
+    expect(copy?.enabled?.(ctxOf({ readOnly: true, policy: 'everyone', text: '' }))).toBe(false)
+    expect(copy?.enabled?.(ctxOf({ readOnly: true, policy: 'everyone', text: 'words' }))).toBe(true)
   })
 
   it('an editor keeps Copy under both policies the gate lets them through', () => {
