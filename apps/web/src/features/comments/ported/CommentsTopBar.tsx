@@ -2,7 +2,11 @@
 // the comment tool toggle (C) and the notifications bell with its unread count. Notifications are in-app
 // only; the inbox says so.
 
-import type { NotificationAccessRequest, NotificationItem } from '@draftroom/contracts'
+import type {
+  NotificationAccessGranted,
+  NotificationAccessRequest,
+  NotificationItem,
+} from '@draftroom/contracts'
 import { type CSSProperties, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import type { CanvasFeatureContext } from '../../../canvas/api/index.ts'
@@ -53,12 +57,20 @@ const KIND_TEXT: Record<NotificationItem['kind'], string> = {
   resolved: 'resolved a thread',
   access_request: 'asked for access',
   new_comment: 'commented', // DANA-02: a new thread on a board you own
+  access_granted: 'approved your access request', // PRI-09b
 }
 
 const REQUEST_TEXT: Record<NotificationAccessRequest['role'], string> = {
   editor: 'Wants to edit',
   commenter: 'Wants to comment',
   viewer: 'Wants to view',
+}
+
+/** PRI-09b: what the approved request gave. */
+const GRANTED_TEXT: Record<NotificationAccessGranted['role'], string> = {
+  editor: 'You can edit it now',
+  commenter: 'You can comment on it now',
+  viewer: 'You can view it now',
 }
 
 function NotificationsBell({ ctx }: { ctx: CanvasFeatureContext }) {
@@ -215,6 +227,11 @@ function NotificationsBell({ ctx }: { ctx: CanvasFeatureContext }) {
                             {n.accessRequest.message && (
                               <span className="dr-cbell__snippet">“{n.accessRequest.message}”</span>
                             )}
+                          </span>
+                        )}
+                        {n.kind === 'access_granted' && n.accessGranted && (
+                          <span className="dr-cbell__request" data-testid="notification-granted">
+                            {GRANTED_TEXT[n.accessGranted.role]}
                           </span>
                         )}
                         {n.snippet && <span className="dr-cbell__snippet">“{n.snippet}”</span>}

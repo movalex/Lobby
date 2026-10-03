@@ -1,6 +1,7 @@
 // Access requests (PRS-04): a signed-in user without access (or a viewer/commenter wanting more) asks
 // the board's owners for a role. Owners list, approve (creates the grant, pushes access-changed to
-// sync) or deny them in the Share dialog.
+// sync, and puts an 'access_granted' item in the requester's bell: PRI-09b) or deny them in the Share
+// dialog.
 //
 // Privacy: POST answers the same 202 whether or not the board exists, whether a row was written, and
 // whether a per-board limit swallowed it, so a request never reveals a board. Only the per-user
@@ -135,6 +136,28 @@ export async function notifyOwners(
     return res.rowCount
   })
   return inserted ?? 0
+}
+
+/**
+ * PRI-09b: the requester's bell item when their request is approved (actor = the approver; the role
+ * comes from the request row, comments/notifications.ts). Best effort, like notifyOwners: a failed insert
+ * never fails the approval. Listed only while the requester can view the board, and only to a web build
+ * that knows the kind (LOBBY_CLIENT_REV >= 1).
+ */
+export async function notifyGranted(
+  tx: Queryable,
+  input: { workspaceId: string; boardId: string; userId: string; actorId: string; at: Date },
+): Promise<boolean> {
+  if (input.userId === input.actorId) return false
+  const inserted = await trySavepoint(tx, async () => {
+    const res = await tx.query(
+      `INSERT INTO notifications (workspace_id, user_id, kind, board_id, actor_id, created_at)
+       VALUES ($1, $2, 'access_granted', $3, $4, $5)`,
+      [input.workspaceId, input.userId, input.boardId, input.actorId, input.at],
+    )
+    return res.rowCount > 0
+  })
+  return inserted ?? false
 }
 
 export function registerAccessRequestRoutes(app: FastifyInstance, ctx: FeatureContext): void {
@@ -296,6 +319,14 @@ export function registerAccessRequestRoutes(app: FastifyInstance, ctx: FeatureCo
             WHERE id = $1`,
           [id, role ? 'approved' : 'denied', user.id, at, role],
         )
+        if (role)
+          await notifyGranted(tx, {
+            workspaceId: r.workspace_id,
+            boardId: r.board_id,
+            userId: r.user_id,
+            actorId: user.id,
+            at,
+          })
         const row = await tx.one<ListedRow>(`${LISTED_SELECT} WHERE r.id = $1`, [id])
         return { request: serialize(row, access.board.visibility), granted: role !== null }
       })

@@ -8,6 +8,7 @@ import { api } from '../api/client.ts'
 import { formatRelativeTime } from '../lib/format.ts'
 import { navigate } from '../lib/routing.ts'
 import {
+  GRANTED_TEXT,
   KIND_TEXT,
   markLocallyRead,
   notificationHref,
@@ -201,6 +202,11 @@ export function DashboardBell({ inbox, refresh, markRead }: DashboardInbox) {
                           <span className="dr-dbell__request">
                             {REQUEST_TEXT[n.accessRequest.role]}
                             {n.accessRequest.status !== 'pending' ? ` · ${n.accessRequest.status}` : ''}
+                          </span>
+                        )}
+                        {n.kind === 'access_granted' && n.accessGranted && (
+                          <span className="dr-dbell__request" data-testid="dashboard-notification-granted">
+                            {GRANTED_TEXT[n.accessGranted.role]}
                           </span>
                         )}
                         {n.snippet && <span className="dr-dbell__snippet">“{n.snippet}”</span>}

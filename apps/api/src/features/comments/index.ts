@@ -24,9 +24,11 @@ import {
   type CommentThreadVisibility,
   CreateCommentInput,
   CreateThreadInput,
+  clientRevOf,
   EditCommentInput,
   ListNotificationsQuery,
   ListThreadsQuery,
+  LOBBY_CLIENT_HEADER,
   MarkNotificationsReadInput,
   mentionedUserIds,
   rewriteMentionTokens,
@@ -587,7 +589,9 @@ export async function registerComments(app: FastifyInstance, ctx: FeatureContext
   app.get('/api/me/notifications', async (req) => {
     const user = await ctx.requireUser(req)
     const query = parse(ListNotificationsQuery, req.query)
-    return listNotifications(db, user.id, { unreadOnly: query.unread !== undefined })
+    // What the caller's web build can parse (0024's access_granted only from LOBBY_CLIENT_REV 1).
+    const rev = clientRevOf(req.headers[LOBBY_CLIENT_HEADER])
+    return listNotifications(db, user.id, { unreadOnly: query.unread !== undefined, rev })
   })
 
   app.post('/api/me/notifications/read', async (req, reply) => {

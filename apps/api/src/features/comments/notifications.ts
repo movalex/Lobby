@@ -1,8 +1,17 @@
 // In-app notifications (mentions, replies, resolutions, new threads for a board's owners; other features
-// insert access requests into the same table). No email is sent. Listing re-checks board access for every row, so a person who lost
-// access to a board stops seeing that board's notifications (and their comment snippets) immediately.
+// insert access requests, and access granted (PRI-09b), into the same table). No email is sent. Listing
+// re-checks board access for every row, so a person who lost access to a board stops seeing that board's
+// notifications (and their comment snippets) immediately.
+// The kinds a web build from before 0024 cannot parse (NOTIFICATION_KINDS_SINCE_REV1) are left out of its
+// list and its unread count (`rev`, @draftroom/contracts client-rev.ts).
 
-import { commentPlainText, type NotificationItem, type NotificationKind } from '@draftroom/contracts'
+import {
+  commentPlainText,
+  knowsRev1,
+  NOTIFICATION_KINDS_SINCE_REV1,
+  type NotificationItem,
+  type NotificationKind,
+} from '@draftroom/contracts'
 import type { Queryable } from '@draftroom/db'
 import {
   type BoardRole,
@@ -43,7 +52,7 @@ export const MENTION_CAP_WINDOW_MS = 60 * 60_000
 /** pg_advisory_xact_lock namespace (the two-key form) of one board's capped notifications ("DRNC"). */
 export const NOTIFY_LOCK_NS = 0x44524e43
 
-type CommentNotificationKind = Exclude<NotificationKind, 'access_request'>
+type CommentNotificationKind = Exclude<NotificationKind, 'access_request' | 'access_granted'>
 
 export interface NewNotification {
   userId: string
@@ -204,6 +213,8 @@ interface NotificationRow {
   request_role: 'editor' | 'commenter' | 'viewer' | null
   request_message: string | null
   request_status: 'pending' | 'approved' | 'denied' | null
+  /** access_granted: the role of the approved request (PRI-09b). */
+  granted_role: 'editor' | 'commenter' | 'viewer' | null
   /** F10: the thread's visibility (null: no thread), and the recipient's kind of user. */
   thread_visibility: 'everyone' | 'team' | null
   recipient_kind: string | null
@@ -215,6 +226,7 @@ const SELECT = `SELECT n.id, n.kind, n.board_id, n.thread_id, n.comment_id, n.cr
        a.id AS actor_id, a.name AS actor_name, a.color AS actor_color,
        c.body AS comment_body, c.deleted_at AS comment_deleted_at,
        ar.role_requested AS request_role, ar.message AS request_message, ar.status AS request_status,
+       ag.role_granted AS granted_role,
        t.visibility AS thread_visibility, ru.kind AS recipient_kind
   FROM notifications n
   JOIN boards b ON b.id = n.board_id AND b.workspace_id = n.workspace_id
@@ -229,7 +241,13 @@ const SELECT = `SELECT n.id, n.kind, n.board_id, n.thread_id, n.comment_id, n.cr
      WHERE n.kind = 'access_request' AND r.workspace_id = n.workspace_id AND r.board_id = n.board_id
        AND r.user_id = n.actor_id AND r.created_at <= n.created_at + interval '1 second'
      ORDER BY r.created_at DESC LIMIT 1
-  ) ar ON true`
+  ) ar ON true
+  LEFT JOIN LATERAL (
+    SELECT r.role_granted FROM access_requests r
+     WHERE n.kind = 'access_granted' AND r.workspace_id = n.workspace_id AND r.board_id = n.board_id
+       AND r.user_id = n.user_id AND r.status = 'approved' AND r.decided_at <= n.created_at + interval '1 second'
+     ORDER BY r.decided_at DESC LIMIT 1
+  ) ag ON true`
 
 /** Whether the recipient may still see this notification: board access now, comment not deleted. */
 function visible(r: NotificationRow): boolean {
@@ -271,30 +289,39 @@ function toItem(r: NotificationRow): NotificationItem {
       r.kind === 'access_request' && r.request_role && r.request_status
         ? { role: r.request_role, message: r.request_message, status: r.request_status }
         : null,
+    accessGranted: r.kind === 'access_granted' && r.granted_role ? { role: r.granted_role } : null,
     createdAt: r.created_at.toISOString(),
     readAt: r.read_at ? r.read_at.toISOString() : null,
   }
 }
 
+/**
+ * The caller's notifications, newest first. `rev` is the caller's web build revision
+ * (@draftroom/contracts client-rev.ts; 0 when omitted): a build from before 0024 gets no kind it cannot
+ * parse, in the list or in the count.
+ */
 export async function listNotifications(
   q: Queryable,
   userId: string,
-  opts: { unreadOnly?: boolean } = {},
+  opts: { unreadOnly?: boolean; rev?: number } = {},
 ): Promise<{ notifications: NotificationItem[]; unreadCount: number }> {
+  const hidden = idList(knowsRev1(opts.rev ?? 0) ? [] : NOTIFICATION_KINDS_SINCE_REV1)
   const rows = await q.query<NotificationRow>(
     `${SELECT}
       WHERE n.user_id = $1 AND ($2::boolean = false OR n.read_at IS NULL)
+        AND n.kind NOT IN (SELECT jsonb_array_elements_text($3::jsonb))
       ORDER BY n.seq DESC
       LIMIT ${MAX_NOTIFICATIONS_LISTED * 3}`,
-    [userId, opts.unreadOnly === true],
+    [userId, opts.unreadOnly === true, hidden],
   )
   const notifications = rows.rows.filter(visible).slice(0, MAX_NOTIFICATIONS_LISTED).map(toItem)
   const unread = await q.query<NotificationRow>(
     `${SELECT}
       WHERE n.user_id = $1 AND n.read_at IS NULL
+        AND n.kind NOT IN (SELECT jsonb_array_elements_text($2::jsonb))
       ORDER BY n.seq DESC
       LIMIT ${MAX_UNREAD_COUNTED}`,
-    [userId],
+    [userId, hidden],
   )
   return { notifications, unreadCount: unread.rows.filter(visible).length }
 }
