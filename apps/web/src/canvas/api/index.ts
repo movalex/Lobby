@@ -21,6 +21,7 @@ export * as items from './items.ts'
 export type { KeyChord, ParsedChord, Platform } from './keys.ts'
 export { currentPlatform, formatChord, matchChord, parseChord } from './keys.ts'
 export type {
+  ArrowKind,
   Bounds,
   BuiltInTool,
   CameraMove,
@@ -51,6 +52,7 @@ export type {
   LobbyItemKind,
   LobbyPresence,
   LobbySettings,
+  LobbySettingsValues,
   LobbyStyles,
   LobbyText,
   LobbyTx,
@@ -65,12 +67,14 @@ export type {
   StyleValues,
   TextStyle,
   ToolName,
+  TouchPinch,
   TransactOptions,
   Viewport,
+  WheelPreference,
   ZoomLimits,
   ZoomToOptions,
 } from './lobby-canvas.ts'
-export { BUILT_IN_TOOLS, CAMERA_ANIMATION_MS, SINGLE_PAGE_ID } from './lobby-canvas.ts'
+export { BUILT_IN_TOOLS, CAMERA_ANIMATION_MS, SINGLE_PAGE_ID, WHEEL_PREFERENCES } from './lobby-canvas.ts'
 export type { Owner } from './owners.ts'
 export { isOwner, NotImplementedError, OWNERS } from './owners.ts'
 export type {

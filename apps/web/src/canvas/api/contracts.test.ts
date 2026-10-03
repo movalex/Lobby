@@ -92,7 +92,10 @@ function fakeBoard(): BoardHandles {
       joinPrevious: (write) => write(),
     },
     files: { status: () => null },
-    settings: { get: () => ({ grid: false, snap: false, focusMode: false }), set: noop },
+    settings: {
+      get: () => ({ grid: false, snap: false, focusMode: false, wheel: 'auto' as const }),
+      set: noop,
+    },
     docWritten: noop,
     newId: () => 'fresh',
   }
