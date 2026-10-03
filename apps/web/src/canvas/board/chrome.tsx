@@ -595,12 +595,12 @@ function coverNode(el: Element, depth: number): CoverNode {
 }
 
 /** What changes where a floating box in a layer slot is, or whether it is there at all. */
-const LAYER_MUTATIONS = {
+const LAYER_MUTATIONS: MutationObserverInit = {
   subtree: true,
   childList: true,
   attributes: true,
   attributeFilter: ['style', 'class', 'hidden', 'data-compact', 'aria-expanded'],
-} as const
+}
 
 const sameRects = (a: readonly AvoidRect[], b: readonly AvoidRect[]) =>
   a.length === b.length &&
