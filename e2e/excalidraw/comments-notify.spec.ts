@@ -4,10 +4,12 @@
 //   the bell count and "1 new comment" on the board card without reloading, and the bell item reads
 //   "Priya Shah (guest) commented on <board>". Opening it opens the thread, which clears both.
 // - On the board, a commenter's new thread raises the owner's bell live; opening the thread clears it.
+// - PRI-09b (0024): an approved access request lands in the requester's bell, on the dashboard without a
+//   reload and on the board; a web build from before 0024 (no x-lobby-client header) is not sent it.
 import type { BrowserContext } from '@playwright/test'
 import { displayName } from '../tests/support/api.ts'
 import { expect, test, waitForCanvas } from '../tests/support/canvas.ts'
-import { mainCard, openDashboard, signedInContext } from '../tests/support/dashboard-share.ts'
+import { accessRequests, mainCard, openDashboard, signedInContext } from '../tests/support/dashboard-share.ts'
 import { WEB_URL } from '../tests/support/ports.ts'
 import { bell, commentsApi, pin, threadPopover } from './comments-kit.ts'
 
@@ -126,4 +128,61 @@ test('DANA-02 on the board: a commenter’s new thread raises the owner’s bell
   await expect.poll(async () => (await aliceComments.notifications()).unreadCount).toBe(0)
   // Never the author.
   expect((await bobComments.notifications()).unreadCount).toBe(0)
+})
+
+test('PRI-09b: an approved access request lands in the requester’s bell (dashboard without a reload, then the board); a tab from before 0024 is not sent it', async ({
+  browser,
+  board,
+  users,
+}) => {
+  const alice = await users.api('alice')
+  const bobUser = await users.get('bob') // a person without access to this board
+  const bobApi = await users.api('bob')
+  const bobComments = commentsApi(bobApi)
+  await bobComments.markAllNotificationsRead()
+  const title = ((await alice.getBoard(board)) as { board: { title: string } }).board.title
+  const bob = await signedInContext(browser, 'bob')
+  try {
+    await openDashboard(bob.page, bobUser.personalWorkspaceId)
+    const dbell = bob.page.getByTestId('dashboard-bell')
+    await expect(dbell).toHaveAttribute('data-unread', '0')
+
+    const asked = await bobApi.fetch('POST', `/api/boards/${board}/access-requests`, { role: 'editor' })
+    expect(asked.status(), await asked.text()).toBe(202)
+    const request = (await accessRequests(alice, board)).find((r) => r.user.id === bobUser.id)
+    expect(request).toBeTruthy()
+    const approved = await alice.fetch('POST', `/api/access-requests/${request?.id}/approve`, {})
+    expect(approved.status(), await approved.text()).toBe(200)
+
+    // No reload: the dashboard's inbox refresh picks it up.
+    await expect(dbell).toHaveAttribute('data-unread', '1', { timeout: 30_000 })
+    await dbell.click()
+    const item = bob.page.getByTestId('dashboard-notification-item').filter({ hasText: title })
+    await expect(item).toHaveCount(1)
+    await expect(item).toHaveAttribute('data-kind', 'access_granted')
+    await expect(item).toHaveAttribute('data-unread', 'true')
+    await expect(item).toContainText(`${displayName('alice')} approved your access request on ${title}`)
+    await expect(item.getByTestId('dashboard-notification-granted')).toHaveText('You can edit it now')
+
+    // A web build from before 0024 (no revision header) could not parse the kind: it gets neither the
+    // item nor its count.
+    const old = await bobComments.notifications()
+    expect(old.notifications.filter((n) => (n.kind as string) === 'access_granted')).toEqual([])
+    expect(old.unreadCount).toBe(0)
+
+    // Opening it opens the board, which bob may edit now; its bell holds the item, read.
+    await item.click()
+    await expect(bob.page).toHaveURL(new RegExp(`/b/${board}`))
+    await waitForCanvas(bob.page)
+    await bell(bob.page).click()
+    const onBoard = bob.page.locator('[data-testid="notification-item"][data-kind="access_granted"]')
+    await expect(onBoard).toHaveCount(1)
+    await expect(onBoard).toHaveAttribute('data-unread', 'false')
+    await expect(onBoard).toContainText(`${displayName('alice')} approved your access request`)
+    await expect(onBoard).not.toContainText(` on ${title}`)
+    await expect(onBoard.getByTestId('notification-granted')).toHaveText('You can edit it now')
+    await expect(bell(bob.page)).toHaveAttribute('data-unread', '0')
+  } finally {
+    await bob.context.close()
+  }
 })

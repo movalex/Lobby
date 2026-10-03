@@ -597,14 +597,20 @@ describe.skipIf(!PG_URL)('every migration after 0008 on a real Postgres holding 
       if (after.constraints.get(k) !== v) changed.push(`constraint ${k}: ${v} -> ${after.constraints.get(k)}`)
     for (const [k, v] of before.indexes) if (after.indexes.get(k) !== v) changed.push(`index ${k}`)
     for (const k of before.triggers) if (!after.triggers.has(k)) changed.push(`trigger ${k}`)
-    // The one intended change to an existing object: 0017_comment_notifications widens the notification
-    // kinds with 'new_comment' (drop and re-add of the CHECK). Anything else is still a failure.
-    const kinds = (list: string[]) =>
-      `CHECK ((kind = ANY (ARRAY[${list.map((k) => `'${k}'::text`).join(', ')}])))`
+    // The intended changes to existing objects (each a drop and re-add of a CHECK); anything else is still a
+    // failure. 0017_comment_notifications and 0024 widen the notification kinds ('new_comment', then
+    // 'access_granted', which like 'access_request' has no thread); 0024 widens the vote scopes
+    // ('selection'). The texts are what PGlite 18.3 prints for them (checked there 2026-10-03).
+    const anyOf = (col: string, list: string[]) =>
+      `(${col} = ANY (ARRAY[${list.map((k) => `'${k}'::text`).join(', ')}]))`
     const m1Kinds = ['mention', 'reply', 'resolved', 'access_request']
-    expect(changed).toEqual([
-      `constraint notifications.notifications_kind_check: ${kinds(m1Kinds)} -> ${kinds([...m1Kinds, 'new_comment'])}`,
-    ])
+    expect([...changed].sort()).toEqual(
+      [
+        `constraint notifications.notifications_kind_check: CHECK (${anyOf('kind', m1Kinds)}) -> CHECK (${anyOf('kind', [...m1Kinds, 'new_comment', 'access_granted'])})`,
+        `constraint notifications.notifications_check: CHECK (((kind = 'access_request'::text) OR (thread_id IS NOT NULL))) -> CHECK ((${anyOf('kind', ['access_request', 'access_granted'])} OR (thread_id IS NOT NULL)))`,
+        `constraint vote_sessions.vote_sessions_scope_check: CHECK (${anyOf('scope', ['board', 'frame'])}) -> CHECK (${anyOf('scope', ['board', 'frame', 'selection'])})`,
+      ].sort(),
+    )
     // New columns on existing tables: NOT NULL ones need a default (an old build's INSERTs omit them).
     const added = [...after.columns].filter(
       ([k]) => !before.columns.has(k) && before.columns.has(`${k.split('.')[0]}.id`),

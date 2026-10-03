@@ -17,6 +17,7 @@ import { useIsFacilitator, useNow, useWorkshop } from '../workshop-context.ts'
 import { zoomToBounds } from './camera.ts'
 import { elementIdOf, labelOfRef, typeNameOfRef } from './elements.ts'
 import { useExportAllowed } from './export-gate.ts'
+import { selectionText } from './voting-canvas.ts'
 
 type Ctx = CanvasFeatureContext
 
@@ -63,6 +64,7 @@ function scopeText(v: WorkshopVoteState, canvas: LobbyCanvas): string {
     parts.push('sticky notes only')
   if (v.session.scope === 'frame' && v.session.frameId)
     parts.push(`in frame “${labelOfRef(v.session.frameId, get(canvas))}”`)
+  if (v.session.scope === 'selection') parts.push(selectionText(v.session.selection ?? [], canvas))
   return parts.join(' · ')
 }
 

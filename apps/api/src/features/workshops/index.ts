@@ -10,14 +10,17 @@
 //   commenters take part; the person is always the signed-in user. Lowering your own hand: `view`.
 // Events are published only after the transaction commits, and carry aggregates only. Reactions and
 // hands are in-memory (hands.ts, reactions.ts): nothing about them is stored.
+// A vote session in an answer is shaped for the caller's web build (votes.ts toVoteSession, `revOf`).
 
 import {
   CastVoteInput,
   CreateVoteInput,
+  clientRevOf,
   ExtendVoteInput,
   HandInput,
   type HandsResponse,
   isVoteEligible,
+  LOBBY_CLIENT_HEADER,
   REACTION_RATE_MAX,
   REACTION_RATE_WINDOW_MS,
   ReactionInput,
@@ -25,6 +28,7 @@ import {
   TimerActionInput,
   VOTE_DURATION_MAX_MS,
   VoteDoneInput,
+  voteRuleOf,
   WORKSHOP_EVENTS,
   type WorkshopReactionEvent,
   type WorkshopState,
@@ -113,6 +117,10 @@ const timerRuleToApi = (e: TimerRuleError) =>
 
 const readOnlyBoard = () => forbidden('This board is read-only.')
 
+/** The caller's web build revision (@draftroom/contracts client-rev.ts): what its answers may carry. */
+const revOf = (req: { headers: Record<string, string | string[] | undefined> }) =>
+  clientRevOf(req.headers[LOBBY_CLIENT_HEADER])
+
 export async function registerWorkshops(app: FastifyInstance, ctx: FeatureContext): Promise<void> {
   registerWorkshopRoutes(app, ctx)
   // Private brainstorming (wave 3, private-notes.ts): drafts only their author sees until revealed.
@@ -196,7 +204,7 @@ export function registerWorkshopRoutes(
     const row = await currentSession(db, access.board.id)
     const body: WorkshopState = {
       timer: timer ? timerView(timer, at) : null,
-      vote: row ? await voteState(db, row, user.id, at) : null,
+      vote: row ? await voteState(db, row, user.id, at, revOf(req)) : null,
       hands: hands.list(access.board.id),
       handsVersion: hands.version(),
       serverNow: at.toISOString(),
@@ -274,6 +282,18 @@ export function registerWorkshopRoutes(
       const map = await shapes.get(pre.board.id, { maxAgeMs: 0 })
       if (map.get(frameId)?.type !== 'frame') throw badRequest('frameId: no such frame on this board')
     }
+    // RETRO-10: every listed frame and object must be on the board now (repeats are dropped).
+    const selection = input.scope === 'selection' && input.selection ? [...new Set(input.selection)] : null
+    if (selection) {
+      const map = await shapes.get(pre.board.id, { maxAgeMs: 0 })
+      const missing = selection.filter((id) => !map.has(id)).length
+      if (missing > 0)
+        throw badRequest(
+          missing === 1
+            ? 'selection: one of the selected objects is not on this board any more'
+            : `selection: ${missing} of the selected objects are not on this board any more`,
+        )
+    }
     const at = now()
     let row: SessionRow
     try {
@@ -294,8 +314,8 @@ export function registerWorkshopRoutes(
         const durationMs = input.durationMs ?? null
         return tx.one<SessionRow>(
           `INSERT INTO vote_sessions (id, workspace_id, board_id, title, votes_per_person, one_per_object, scope,
-             frame_id, shape_types, status, created_by, created_at, ends_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, 'open', $10, $11, $12)
+             frame_id, shape_types, status, created_by, created_at, ends_at, selection)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, 'open', $10, $11, $12, $13::jsonb)
            RETURNING ${SESSION_COLUMNS}`,
           [
             newId('vot'),
@@ -310,6 +330,7 @@ export function registerWorkshopRoutes(
             user.id,
             at,
             durationMs ? new Date(at.getTime() + durationMs) : null,
+            selection ? JSON.stringify(selection) : null,
           ],
         )
       })
@@ -319,7 +340,7 @@ export function registerWorkshopRoutes(
         throw conflict('VOTE_ALREADY_OPEN', 'A vote is already running on this board. End it first.')
       throw e
     }
-    const state = await voteState(db, row, user.id, at)
+    const state = await voteState(db, row, user.id, at, revOf(req))
     events.publish(row.board_id, {
       type: WORKSHOP_EVENTS.vote,
       data: voteEvent(row, await aggregates(db, row.id), at),
@@ -332,7 +353,7 @@ export function registerWorkshopRoutes(
     const user = await ctx.requireUser(req)
     const { bid = '' } = req.params as Params
     const access = await requireBoardAction(db, bid, user.id, 'view')
-    return { sessions: await summaries(db, access.board.id, now()) }
+    return { sessions: await summaries(db, access.board.id, now(), revOf(req)) }
   })
 
   app.get('/api/votes/:vid/results', async (req) => {
@@ -343,7 +364,7 @@ export function registerWorkshopRoutes(
       throw conflict('NOT_REVEALED', "This vote's results haven't been revealed.")
     const agg = await aggregates(db, row.id)
     const session = {
-      ...toVoteSession(row, at),
+      ...toVoteSession(row, at, revOf(req)),
       totalVotesCast: agg.totalVotesCast,
       participants: agg.participants,
     }
@@ -385,7 +406,7 @@ export function registerWorkshopRoutes(
       events.publish(row.board_id, { type: WORKSHOP_EVENTS.vote, data: voteEvent(row, agg, at) })
       workshopState.changed(row.board_id)
     }
-    return voteState(db, row, user.id, at)
+    return voteState(db, row, user.id, at, revOf(req))
   })
 
   app.post('/api/votes/:vid/reveal', async (req) => {
@@ -413,7 +434,7 @@ export function registerWorkshopRoutes(
         },
       })
     }
-    return voteState(db, row, user.id, at)
+    return voteState(db, row, user.id, at, revOf(req))
   })
 
   app.post('/api/votes/:vid/extend', async (req) => {
@@ -433,7 +454,7 @@ export function registerWorkshopRoutes(
       events.publish(row.board_id, { type: WORKSHOP_EVENTS.vote, data: voteEvent(row, agg, at) })
       workshopState.changed(row.board_id) // re-arms the end timer
     }
-    return voteState(db, row, user.id, at)
+    return voteState(db, row, user.id, at, revOf(req))
   })
 
   // ---- votes: taking part ------------------------------------------------------------------------
@@ -446,7 +467,12 @@ export function registerWorkshopRoutes(
     // Eligibility needs the canvas, so it is checked before the lock (and never for removals: you can
     // always take a dot back, even from an object that was deleted meanwhile).
     if (delta === 1 && effectiveStatus(found, now()) === 'open') {
-      const rule = { scope: found.scope, frameId: found.frame_id, shapeTypes: found.shape_types }
+      const rule = voteRuleOf({
+        scope: found.scope,
+        frameId: found.frame_id,
+        shapeTypes: found.shape_types,
+        selection: found.selection,
+      })
       const ok = await shapes.check(found.board_id, (map) =>
         isVoteEligible(shapeId, (id) => map.get(id), rule),
       )
@@ -459,7 +485,7 @@ export function registerWorkshopRoutes(
       return { row: locked, agg: await aggregates(tx, found.id) }
     })
     events.publish(row.board_id, { type: WORKSHOP_EVENTS.vote, data: voteEvent(row, agg, at) })
-    return voteState(db, row, user.id, at)
+    return voteState(db, row, user.id, at, revOf(req))
   })
 
   app.post('/api/votes/:vid/done', async (req) => {
@@ -481,7 +507,7 @@ export function registerWorkshopRoutes(
       return { row: locked, changed: r.rowCount > 0, agg: await aggregates(tx, found.id) }
     })
     if (changed) events.publish(row.board_id, { type: WORKSHOP_EVENTS.vote, data: voteEvent(row, agg, at) })
-    return voteState(db, row, user.id, at)
+    return voteState(db, row, user.id, at, revOf(req))
   })
 
   // ---- gather everyone -----------------------------------------------------------------------------

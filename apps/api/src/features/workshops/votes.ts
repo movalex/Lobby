@@ -1,8 +1,14 @@
 // Dot voting: SQL and rules. Every read here is scoped to one session; the only per-user data that
 // ever leaves is the CALLER's own ballot (`myVotes`). Other people's ballots are aggregated into
 // counts only, and per-object totals exist only once a vote is revealed (PRF-07, FAC-06).
+//
+// Every answer that carries a VoteSession is shaped for the caller's web build (`rev`, from the
+// x-lobby-client header; @draftroom/contracts client-rev.ts): a build from before 0024 cannot parse the
+// scope 'selection', so it gets a selection vote as a board vote. Its casts still go through the
+// selection rule (index.ts), so a click outside the selection is refused with NOT_ELIGIBLE.
 
 import {
+  knowsRev1,
   rankVoteResults,
   type VoteResult,
   type VoteSession,
@@ -21,8 +27,10 @@ export interface SessionRow {
   title: string
   votes_per_person: number
   one_per_object: boolean
-  scope: 'board' | 'frame'
+  scope: 'board' | 'frame' | 'selection'
   frame_id: string | null
+  /** scope 'selection' only (0024): the listed frames and objects. */
+  selection: string[] | null
   shape_types: string[] | null
   status: VoteStatus
   created_by: string
@@ -33,7 +41,7 @@ export interface SessionRow {
 }
 
 export const SESSION_COLUMNS =
-  'id, workspace_id, board_id, title, votes_per_person, one_per_object, scope, frame_id, shape_types, status, created_by, created_at, ends_at, closed_at, revealed_at'
+  'id, workspace_id, board_id, title, votes_per_person, one_per_object, scope, frame_id, selection, shape_types, status, created_by, created_at, ends_at, closed_at, revealed_at'
 
 /** An open vote past its end time counts as closed (no scheduler: every read/write applies this). */
 export function effectiveStatus(row: Pick<SessionRow, 'status' | 'ends_at'>, now: Date): VoteStatus {
@@ -48,15 +56,21 @@ function effectiveClosedAt(row: SessionRow, now: Date): Date | null {
 
 const iso = (d: Date | null) => (d ? d.toISOString() : null)
 
-export function toVoteSession(row: SessionRow, now: Date): VoteSession {
+/**
+ * A session as the caller's web build can read it (`rev`: LOBBY_CLIENT_REV of the request; 0 = a build
+ * from before 0024, which gets a selection vote as a board vote, without its list).
+ */
+export function toVoteSession(row: SessionRow, now: Date, rev: number): VoteSession {
+  const selection = row.scope === 'selection' && knowsRev1(rev)
   return {
     id: row.id,
     boardId: row.board_id,
     title: row.title,
     votesPerPerson: row.votes_per_person,
     onePerObject: row.one_per_object,
-    scope: row.scope,
+    scope: row.scope === 'selection' && !selection ? 'board' : row.scope,
     frameId: row.frame_id,
+    selection: selection ? row.selection : null,
     shapeTypes: row.shape_types,
     status: effectiveStatus(row, now),
     createdBy: row.created_by,
@@ -136,8 +150,9 @@ export async function voteState(
   row: SessionRow,
   userId: string,
   now: Date,
+  rev: number,
 ): Promise<WorkshopVoteState> {
-  const session = toVoteSession(row, now)
+  const session = toVoteSession(row, now, rev)
   const [agg, mine, done] = [
     await aggregates(q, row.id),
     await myBallot(q, row.id, userId),
@@ -167,7 +182,12 @@ export function voteEvent(row: SessionRow, agg: Aggregates, now: Date): Workshop
   }
 }
 
-export async function summaries(q: Queryable, boardId: string, now: Date): Promise<VoteSessionSummary[]> {
+export async function summaries(
+  q: Queryable,
+  boardId: string,
+  now: Date,
+  rev: number,
+): Promise<VoteSessionSummary[]> {
   const rows = await q.query<SessionRow & { total: number; participants: number }>(
     `SELECT ${SESSION_COLUMNS.split(', ')
       .map((c) => `s.${c}`)
@@ -181,7 +201,7 @@ export async function summaries(q: Queryable, boardId: string, now: Date): Promi
     [boardId],
   )
   return rows.rows.map(({ total, participants, ...row }) => ({
-    ...toVoteSession(row, now),
+    ...toVoteSession(row, now, rev),
     totalVotesCast: total,
     participants,
   }))
