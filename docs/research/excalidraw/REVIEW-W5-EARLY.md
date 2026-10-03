@@ -560,6 +560,8 @@ These are for their owners to apply; this review changed nothing.
 
 ## 10. Status after the wave-5 fixes (2026-09-30)
 
+*Dated 2026-09-30. §11 updates it for the engine merge and §12 for 2026-10-03; where a row below says "waiting on 2A / 2C" or "not merged", read §12.*
+
 The feature owners 3a, 3b, 3c, 3e, 3f, 3g, 3h, 3i and 2D fixed their findings on `engine/w5f-*` branches
 from `f336ae4`; the feature integration merged all nine onto `engine/excalidraw` and fixed the three
 overlaps the merge produced and 3d's two findings, since no 3d fixer ran (`WAVE-3.md` §8). The engine
@@ -649,6 +651,8 @@ is merged; D4 is built in the tools (3a; the converter's polygons are 2B's, `eng
 
 ## 11. Status after the engine merge (2026-09-30)
 
+*Dated 2026-09-30. §12 gives the reading at the held release (2026-10-03).*
+
 The engine owners' branches (`engine/w5-2a`, `-2b`, `-2c`) are merged on `engine/excalidraw` and met the
 feature integration there (`docs/research/excalidraw/W5-ENGINE.md`). §10's rows that waited on them, now:
 
@@ -667,3 +671,46 @@ Still waiting on 2C (or 2C with 2A): W5-25's leader side (CR-3C-W5-1), W5-26 (CR
 bar (CR-3I-2), W5-32, W5-37's canvas look (CR 3E-7), W5-38, W5-39's handles (CR 3b-11), W5-50's phone row
 (CR-3I-3), W5-51's frame names, W5-52, W5-53, W5-55, W5-57, and W5-21's other camera moves (CR 3b-12).
 Counts after the merge: **43 fixed, 7 partly fixed, 8 waiting on 2A / 2C, 1 not fixed (W5-34, 2E)**.
+
+## 12. Status at the held release (2026-10-03, wave C6)
+
+Written at `release/held` 99ac6c52 (`main` 23a36bbd, which is what staging runs after wave C, plus the held release). §10 and §11
+stay as they were written (2026-09-30); this section gives the reading **now** for every finding whose §11 status was not
+"fixed", and for the two findings that are still not fully fixed. Rows not listed here were "fixed" at §10 or §11 and nothing in
+waves 4, A, B or C reopened them (the specs that pin them ran in the held gate: 553 e2e tests, 551 passed, 0 failed, 2 skipped,
+`docs/PROGRESS.md` 2026-10-03). The fix of each row below came from a wave workstream; its test failed on the commit before it and
+passes with it (the implementer proved it, the workstream reviewer re-proved it by reverting the fix on the branch; it was not
+re-proved on the merged tree).
+
+**Counts.** §11: 43 fixed, 7 partly fixed, 8 waiting on 2A / 2C, 1 not fixed. **Now: 56 fixed and deployed to staging, 1 fixed on a
+branch that is not merged (W5-34), 2 partly fixed (W5-33's polygon outlines, W5-53's arrowhead size), 0 waiting, 0 not fixed.**
+"Deployed" is checked against `docs/CUTOVER-LOG.md` §7 (waves A, B1-B5, C1/C3/C4/C5); the held release is not deployed.
+
+| ID | §11 reading | Now | Evidence |
+|---|---|---|---|
+| W5-13 | fixed; the swap did not stick, Enter did not end a crop | **fixed** (deployed) | wave A, A5: the sync core keeps a clean image's local `@display` suffix (`local-file-suffix.test.ts`, `swap.test.ts`; `media-edit.spec.ts` crop-after-upgrade no longer skips); wave C, C3: Enter ends a crop (`c3-polish.spec.ts`). Cropped images stay on the 512 px thumb: a known limit |
+| W5-19 | fixed; a touch pinch stopped at 0.1 | **fixed** (deployed) | wave B, B2 (`92792869`): `input-touch.test.ts`, `zoom-input.test.ts`, `input-touch-wheel.spec.ts`. A real iPad check is an owner item (P10) |
+| W5-21 | fixed for navigation and traversal; the rest waiting | **fixed** (deployed) | wave A, A4: `durationOf` returns null under `prefers-reduced-motion` (`camera-tween.test.ts`, `a11y-traversal.spec.ts`) |
+| W5-24 | fixed; a 6 px cover left a 2 px edge | **fixed** (deployed) | wave A, A4 (CR-3E-6): focus mode turns the engine's frame outline and names off; `present-export-present.spec.ts` pixel checks |
+| W5-25 | follower side fixed; leader side waiting | **fixed** (deployed) | wave A, A4: presence is re-sent when the canvas box changes size; `people-follow.spec.ts` W5-25 mark removed |
+| W5-26 | waiting | **fixed** (deployed) | wave A, A3: `TransactOptions.skipUndo`; `workshops-facilitation.spec.ts` "+1 is not an undo step" |
+| W5-28 | waiting | **fixed** (deployed) | wave A, A2: `chrome.tsx` `RemoteSelections`; `board-presence.spec.ts` W5-28, `remote-selection.test.ts` |
+| W5-29 | fixed; CR-3D-5 open | **fixed** (deployed) | wave A, A1: editor-role guests write `tagDef:*` only, at most 10 tag keys per guest uid while the room is open (`guest-tag-list.test.ts`, `tags-panel.spec.ts`). The budget resets when the room is evicted or restarted |
+| W5-31 | partly fixed; the top bar was 2C's | **fixed** (deployed) | wave A, A4: the phone top bar fits 320-412 px; `a11y-phone-reach.spec.ts` (both marks removed) |
+| W5-32 | waiting | **fixed** (deployed) | wave B, B3: an initials chip per off-screen collaborator; `edge-markers.test.ts` (26), `board-presence.spec.ts` (3 tests). The chips do not avoid the phone sheet or the floating selection bar |
+| W5-33 | fixed; Input device waited on CR-W5-3A-4 | **partly fixed.** Input device **fixed** (deployed): Board ▸ Preferences ▸ Input device (Auto, Mouse, Trackpad), wave B, B2 (`482009c0`). The D4 polygon tools draw Lobby's own v1 outlines, which differ from converted shapes by up to 57 px: CR-2B-2 (the converter's outlines) was built in C2 and **reverted from `release/held`** because it moved a port of tldraw 5.4.2's geometry into the web bundle | `input-touch-wheel.spec.ts`, `zoom-input.test.ts`; `841d6dc9`; `docs/CUTOVER-LOG.md` §7 (wave C entry) |
+| W5-34 | not fixed (2E) | **fixed on `wave-c6/perf-heavy`, not merged** (wave C6, G11). Every generated image carries `customData.lobby.file` the way a drop writes it (`36e243b8`); the perf harness drives Lobby's board page (`56f93231`, `f4ceabd2`, `9406f2ab`); the heavy seed's 200 images load and decode. With them loaded the heavy-board gates were measured and met (edit visibility p95 185 / 177 / 208 ms against 250; fps at fit 58 with the LOD pass). Every earlier heavy-board browser number had no image drawn | `spike-b/PERF.md`, `spike-b/B9.md` (wave C6) |
+| W5-35 | fixed (D5, per guest uid) | **fixed** (deployed), with a second layer: `GUEST_BOARD_ITEM_CAP` = 6,000 holds all guest uids together, rebuilt from the rows on room open and surviving a SIGKILL (wave A, A1) | `guest-board-budget.test.ts`, `limits.test.ts` |
+| W5-37 | SVG fixed; the rest waiting on 2C | **fixed** (deployed): wave C, C3: PNG, PDF pages and copy draw notes with a soft shadow and no outline (a context patch for the length of one export). The on-canvas look is closed by the owner's "The look is fine as it is" (§9). LOD frame bitmaps (below zoom 0.2) draw notes soft while the live canvas is hard | `note-shadow.test.ts`, `export-faces.test.ts`, `c3-polish.spec.ts`. Re-run W5-37 after any Excalidraw upgrade |
+| W5-38 | waiting | **fixed** (deployed): wave C, C1: one accent (`--color-selection` = `--dr-focus`), a 1.5 px hover outline at rest, frame names 6 px above the frame. The drag-into-frame highlight (rgb(0,118,255)) is hard-coded in the engine and stays | `canvas-look.spec.ts`, `theme.test.ts`, `outlines.test.ts` |
+| W5-39 | fixed for code selections; the engine's handles waiting | **fixed** (deployed): wave C, C1 (CR 3b-11): a code-selected arrow or line gets the engine's point editor; a read-only session gets Lobby's outline | `port-impl.test.ts`, `outlines.test.ts` |
+| W5-40 | fixed; the Straight / Curved pick waited | **fixed** (deployed): wave B, B2: a connector's kind is its own next-style value | `next-style.test.ts`, `board-core.test.ts` |
+| W5-50 | partly fixed | **fixed** (deployed): wave A, A4: the ⋯ menu has no empty "On this board" row | `a11y-phone-reach.spec.ts` |
+| W5-51 | partly fixed | **fixed** (deployed): wave C, C1: zoomed out, a frame name that would run into a neighbour or a name above it is hidden (visibility only); a frame inside or over another frame keeps its name | `frame-names.test.ts` (10) |
+| W5-52 | waiting | **fixed** (deployed): wave B, B2: `currentItemRoundness: 'sharp'` | `ui-defaults.test.ts` |
+| W5-53 | waiting | **partly fixed, held:** one binding gap (the engine's own) is in the held release (wave C, C2, `8ce47edc`); the arrowhead size by stroke width needs a patch of `@excalidraw/element` through the catalog and is **open** | `binding.test.ts`, `pnpm test:arrows`; `docs/EXCALIDRAW-CONTRACTS.md` row C2-1 |
+| W5-55 | waiting | **fixed** (deployed): wave C, C1: the element being typed into gets a 2 px accent outline (a fixed-width free text keeps the engine's own box) | `canvas-look.spec.ts` |
+| W5-57 | waiting | **fixed** (deployed): wave B, B5: the canvas region is "<title> board area", apart from the application's "<title> board", and the engine's empty footer is `role=presentation` (kept by an observer) | `a11y-audit.spec.ts` rule 7, `board-open.spec.ts` |
+
+What the review did not and cannot cover, and what is still open outside it, is in `SYNTHESIS.md` §19 and `docs/PROGRESS.md`
+(2026-10-03, wave C6 entry): L1 capacity misses, SYNC-4's unmerged fix, DEF-GAPS-1, real devices, Firefox, CI.
