@@ -1,60 +1,61 @@
 // WRK-01 / PRF-04 latency: how long an edit made in one browser tab takes to show in another, over the
-// local sync server (loopback), with the production client (useSync, tldraw's 30 fps send/apply
-// schedule, React rendering, our overlays).
+// local sync server (loopback), with the production client (Lobby's board page on Excalidraw: the engine
+// core's scan and push, the room, the observer's apply into the scene, Excalidraw's render, the overlays).
 //
-// The writer tab edits sticky notes through the editor API: a move, a text change or a colour change,
-// one every 150–250 ms, after 40 unmeasured warm-up edits. Each edit stamps
-// `meta.perfStamp = "pw-<writer>|<seq>|<epoch ms>"` (a single string, so every wire diff carries it
-// whole). One clock: both tabs run on this machine, and times are performance.timeOrigin +
-// performance.now() in each tab. Per edit, in the observer tab:
-//   store   = the change reached the observer's store (store.listen, source 'remote')
-//   visible = the first animation frame after that has run and a task after it (the change painted),
-//             the review's "visible on the next frame" (docs/REVIEW-2026-09-27.md §2)
+// The writer tab edits sticky notes through the board page's LobbyCanvas (`transact`, one undo step and one
+// sync write each, as a feature's write): a move of the note with its label, or a recolour of the note, one
+// every 150–250 ms, after 40 unmeasured warm-up edits. Text edits are not in the plan: on this engine a text
+// change goes through the edit lease and the label's layout, which a scripted write would skip (B9 and the
+// tldraw harness this replaces differ there). The edits are planned in Node and handed to both tabs: the
+// targets round-robin over up to 60 notes in the observer's view (a note is edited again only after every
+// other target, about 12 s later, so no two edits of one note are in flight together), and each edit's
+// value is unique for its note (a move's x carries the edit number in its thousandths), so the observer
+// matches the value it sees to one edit. One clock: both tabs run on this machine, and every time is
+// `Date.now()` (the clock every process here shares). Per edit, in the observer tab:
+//   store   = the board page's port reported the change and the note holds the edit's value (the `changed`
+//             event the facade's paint watch uses: Excalidraw's scene has it)
+//   visible = two animation frames after that (the change painted), the facade's `watch` and B9's measure
 // and the split, from a WebSocket wrapper installed before the app loads (initScript below):
-//   send    = writer edit → its push left the writer's socket (the writer's send schedule)
-//   wire    = writer socket → observer socket (the server path, plus any wait for the observer's main
-//             thread: the message event runs only when the tab is free)
-//   apply   = observer socket → observer store (the observer's apply schedule)
+//   send    = writer edit → the first push naming the note left the writer's socket (the core's scan,
+//             coalescing and push)
+//   wire    = writer socket → the first `changes` frame naming the note arrived on the observer's socket
+//             (the server path, plus any wait for the observer's main thread: the message event runs only
+//             when the tab is free)
+//   apply   = observer socket → observer port (the observer's apply into the scene)
 //   render  = store → visible
 // Both tabs keep a mouse cursor moving over the canvas (presence both ways, as in a real session).
-// Optional `busy` load: a third tab drags other notes continuously (unstamped updates per second).
+// Optional `busy` load: a third tab moves other notes continuously (unmeasured updates per second).
 import type { BrowserContext, CDPSession, Page } from '@playwright/test'
 import { logProfile, startProfile, stopProfile, summarizeProfile } from './fps.ts'
-import { cpuMeter, type PerfEditor, round1, type Summary, summarize } from './lib.ts'
+import { cpuMeter, type PerfView, type PerfWindow, round1, type Summary, setView, summarize } from './lib.ts'
 
-export type View = 'fit' | '100'
+export type View = Extract<PerfView, 'fit' | '100'>
 
 /**
- * Installed with context.addInitScript before the app loads: records when a stamped edit leaves this
- * tab's socket (send) and when one arrives on it (message), keyed "<writer>|<seq>".
+ * Installed with context.addInitScript before the app loads: keeps the time and text of every board-socket
+ * frame this tab sends with a `push` and receives with a `changes` (JSON text frames), for the split.
  */
 export function initScript() {
   const w = window as unknown as {
     WebSocket: typeof WebSocket
-    __perfWs?: { sent: Map<string, number>; arrived: Map<string, number> }
+    __perfWs?: { sent: { t: number; d: string }[]; arrived: { t: number; d: string }[] }
   }
   if (w.__perfWs) return
-  const sent = new Map<string, number>()
-  const arrived = new Map<string, number>()
+  const sent: { t: number; d: string }[] = []
+  const arrived: { t: number; d: string }[] = []
   w.__perfWs = { sent, arrived }
-  const STAMP = /pw-([a-z0-9]+)\|(\d+)\|/g
-  const now = () => performance.timeOrigin + performance.now()
-  const scan = (data: unknown, into: Map<string, number>) => {
-    if (typeof data !== 'string' || !data.includes('pw-')) return
-    const t = now()
-    for (const m of data.matchAll(STAMP)) {
-      const key = `${m[1]}|${m[2]}`
-      if (!into.has(key)) into.set(key, t)
-    }
-  }
+  const typeOf = (d: string) => /^\{"type":"([a-z-]+)"/.exec(d)?.[1] ?? ''
   const Native = w.WebSocket
   class Instrumented extends Native {
     constructor(url: string | URL, protocols?: string | string[]) {
       super(url, protocols)
-      this.addEventListener('message', (e) => scan(e.data, arrived))
+      this.addEventListener('message', (e) => {
+        if (typeof e.data === 'string' && typeOf(e.data) === 'changes')
+          arrived.push({ t: Date.now(), d: e.data })
+      })
     }
     override send(data: Parameters<WebSocket['send']>[0]) {
-      scan(data, sent)
+      if (typeof data === 'string' && typeOf(data) === 'push') sent.push({ t: Date.now(), d: data })
       super.send(data)
     }
   }
@@ -65,148 +66,195 @@ export async function instrument(context: BrowserContext) {
   await context.addInitScript(initScript)
 }
 
-/** Camera for both tabs: the whole board, or 100% on the first frame's notes. */
-export async function setView(page: Page, view: View) {
-  await page.evaluate((view) => {
-    const ed = (window as unknown as { editor: PerfEditor }).editor
-    ed.selectNone()
-    if (view === 'fit') {
-      ed.zoomToFit({ immediate: true })
-      return
-    }
-    const b = ed.getShapePageBounds('shape:perf-f0')
-    if (!b) throw new Error('no frame 0')
-    // the top-left of frame 0's note grid at the top-left of the viewport, at 100%
-    ed.setCamera({ x: 20 - (b.x + 20), y: 20 - (b.y + 40), z: 1 }, { immediate: true })
-  }, view)
+/** A note the writer edits: its label moves with it; its first position is restored after the run. */
+interface Target {
+  id: string
+  label: string | null
+  x: number
+  labelX: number
+  backgroundColor: string
 }
 
-/** Notes the observer can see in the current view (edits to them must be painted). */
-async function visibleNotes(page: Page, limit: number): Promise<string[]> {
+/** One planned edit: the note, the field the observer checks and the value it must reach. */
+export interface PlannedEdit {
+  seq: number
+  id: string
+  delayMs: number
+  kind: 'move' | 'recolour'
+  /** the note's patch (and the label's x for a move) */
+  patch: Record<string, unknown>
+  label: { id: string; x: number } | null
+  field: 'x' | 'backgroundColor'
+  value: number | string
+}
+
+/** Notes fully in the observer's view (edits to them must be painted), spread over it, deterministic. */
+async function visibleNotes(page: Page, limit: number): Promise<Target[]> {
   return page.evaluate((limit) => {
-    const ed = (window as unknown as { editor: PerfEditor }).editor
-    const vp = ed.getViewportPageBounds()
-    const culled = ed.getCulledShapes()
-    const inView = ed
-      .getRenderingShapes()
-      .filter((r) => r.shape.type === 'note' && !culled.has(r.id))
-      .map((r) => r.id)
-      .filter((id) => {
-        const b = ed.getShapePageBounds(id)
-        return !!b && b.x >= vp.x && b.y >= vp.y && b.x + b.w <= vp.x + vp.w && b.y + b.h <= vp.y + vp.h
-      })
-    // spread over the view, deterministic
+    const w = window as unknown as PerfWindow
+    const c = w.__lobbyBoard?.canvas
+    if (!c) throw new Error('no window.__lobbyBoard')
+    const vp = c.viewport.get()
+    const all = c.items()
+    const byId = new Map(all.map((e) => [e.id, e]))
+    const inView = all.filter(
+      (e) =>
+        e.type === 'stickynote' &&
+        !e.isDeleted &&
+        !c.isHidden(e.id) &&
+        e.x >= vp.x &&
+        e.y >= vp.y &&
+        e.x + e.width <= vp.x + vp.width &&
+        e.y + e.height <= vp.y + vp.height,
+    )
     const step = Math.max(1, Math.floor(inView.length / limit))
-    return inView.filter((_, i) => i % step === 0).slice(0, limit)
+    return inView
+      .filter((_, i) => i % step === 0)
+      .slice(0, limit)
+      .map((e) => {
+        const labelId = e.boundElements?.find((b) => b.type === 'text')?.id ?? null
+        const label = labelId ? byId.get(labelId) : undefined
+        return {
+          id: e.id,
+          label: label ? label.id : null,
+          x: e.x,
+          labelX: label?.x ?? 0,
+          backgroundColor: e.backgroundColor ?? '',
+        }
+      })
   }, limit)
 }
 
-function startObserver(page: Page, writer: string) {
-  return page.evaluate((writer) => {
-    const ed = (window as unknown as { editor: PerfEditor }).editor
-    const w = window as unknown as {
-      __perfObs?: { rows: { key: string; t0: number; store: number; visible: number }[]; stop: () => void }
+const COLOURS = ['#ffdf6b', '#9fd4ff', '#b8e994', '#d7b8ff', '#ffb870']
+
+/** The edits, deterministic for `seed`: round-robin over `targets`, half moves (out, then back), half recolours. */
+export function planEdits(targets: readonly Target[], edits: number, seed: number, from = 1): PlannedEdit[] {
+  let s = seed
+  const rand = () => {
+    s = (s * 16807) % 2147483647
+    return s / 2147483647
+  }
+  const state = new Map(targets.map((t) => [t.id, { out: false, colour: t.backgroundColor }]))
+  const out: PlannedEdit[] = []
+  const n = targets.length
+  for (let k = 0; k < edits; k++) {
+    const seq = from + k
+    const t = targets[k % n] as Target
+    const st = state.get(t.id) as { out: boolean; colour: string }
+    const delayMs = Math.round(150 + rand() * 100)
+    // the kind turns over every round, so each note gets moves and recolours
+    const kind = (k + Math.floor(k / n)) % 4 < 2 ? 'move' : 'recolour'
+    if (kind === 'move') {
+      st.out = !st.out
+      // an x of its own per edit: the edit number in the hundredths (the server keeps 2 decimals), never 0
+      const dx = (st.out ? 6 : 0) + ((seq % 99) + 1) / 100
+      const x = Math.round((t.x + dx) * 100) / 100
+      out.push({
+        seq,
+        id: t.id,
+        delayMs,
+        kind,
+        patch: { x },
+        label: t.label ? { id: t.label, x: Math.round((t.labelX + dx) * 100) / 100 } : null,
+        field: 'x',
+        value: x,
+      })
+    } else {
+      // never the note's current colour (1 to 3 places on in the palette), so the edit always changes it
+      const colour = COLOURS[
+        (Math.max(0, COLOURS.indexOf(st.colour)) + 1 + (seq % 3)) % COLOURS.length
+      ] as string
+      st.colour = colour
+      out.push({
+        seq,
+        id: t.id,
+        delayMs,
+        kind,
+        patch: { backgroundColor: colour },
+        label: null,
+        field: 'backgroundColor',
+        value: colour,
+      })
+    }
+  }
+  return out
+}
+
+/** Arms the observer: for each planned edit, the time its value reached the port and two frames later. */
+function startObserver(page: Page, plan: readonly PlannedEdit[]) {
+  return page.evaluate((plan) => {
+    const w = window as unknown as PerfWindow & {
+      __perfObs?: { rows: { seq: number; store: number; visible: number }[]; stop: () => void }
     }
     w.__perfObs?.stop()
-    const rows: { key: string; t0: number; store: number; visible: number }[] = []
-    const seen = new Set<string>()
-    let pending: { key: string; t0: number; store: number; visible: number }[] = []
-    let scheduled = false
-    const now = () => performance.timeOrigin + performance.now()
-    const stop = ed.store.listen(
-      (e) => {
-        const t = now()
-        const recs = [...Object.values(e.changes.added), ...Object.values(e.changes.updated).map((u) => u[1])]
-        for (const r of recs) {
-          const s = r.meta?.perfStamp
-          if (typeof s !== 'string' || !s.startsWith(`pw-${writer}|`)) continue
-          const [who, seq, at] = s.slice(3).split('|')
-          const key = `${who}|${seq}`
-          if (seen.has(key)) continue
-          seen.add(key)
-          const row = { key, t0: Number(at), store: t, visible: 0 }
-          rows.push(row)
-          pending.push(row)
-        }
-        if (pending.length && !scheduled) {
-          scheduled = true
-          requestAnimationFrame(() =>
-            setTimeout(() => {
-              const v = now()
-              for (const row of pending) row.visible = v
-              pending = []
-              scheduled = false
-            }, 0),
-          )
-        }
-      },
-      { source: 'remote', scope: 'document' },
-    )
-    w.__perfObs = { rows, stop }
-  }, writer)
-}
-
-function runWriter(page: Page, writer: string, targets: string[], edits: number, seed: number) {
-  return page.evaluate(
-    async ({ writer, targets, edits, seed }) => {
-      const ed = (window as unknown as { editor: PerfEditor }).editor
-      let s = seed
-      const rand = () => {
-        s = (s * 16807) % 2147483647
-        return s / 2147483647
-      }
-      const COLORS = ['yellow', 'light-blue', 'light-green', 'orange', 'light-violet']
-      const nudged = new Set<string>()
-      const WORDS = ['crop', 'warm', 'hero', 'logo', 'teal', 'grain', 'tight', 'fade']
-      const text = (t: string) => ({
-        type: 'doc',
-        content: [{ type: 'paragraph', content: [{ type: 'text', text: t }] }],
-      })
-      for (let i = 1; i <= edits; i++) {
-        await new Promise((r) => setTimeout(r, 150 + rand() * 100))
-        const id = targets[Math.floor(rand() * targets.length)]
-        const cur = id ? ed.getShape(id) : undefined
-        if (!id || !cur) continue
-        const perfStamp = `pw-${writer}|${i}|${performance.timeOrigin + performance.now()}`
-        const meta = { ...cur.meta, perfStamp }
-        const kind = i % 4
-        if (kind === 0 || kind === 1) {
-          // a small nudge, right then back for each note (the board stays put across runs)
-          const out = !nudged.has(id)
-          if (out) nudged.add(id)
-          else nudged.delete(id)
-          ed.updateShape({ id, type: 'note', x: cur.x + (out ? 6 : -6), meta })
-        } else if (kind === 2) {
-          ed.updateShape({
-            id,
-            type: 'note',
-            props: {
-              richText: text(`Edit ${i}: ${WORDS[i % WORDS.length]} ${WORDS[(i * 3) % WORDS.length]}`),
-            },
-            meta,
-          })
-        } else {
-          ed.updateShape({ id, type: 'note', props: { color: COLORS[i % COLORS.length] }, meta })
-        }
-      }
-      // notes still nudged out: moved back by restoreNudged, after the measurement
-      return [...nudged]
-    },
-    { writer, targets, edits, seed },
-  )
-}
-
-/** Moves the notes a run left nudged out back, in one batch (unstamped, outside the measurement). */
-const restoreNudged = (page: Page, ids: string[]) =>
-  page.evaluate((ids) => {
-    const ed = (window as unknown as { editor: PerfEditor }).editor
-    ed.run(() => {
+    const board = w.__lobbyBoard
+    const f = w.lobbyCanvas
+    if (!board || !f) throw new Error('no board page')
+    const queues = new Map<string, { seq: number; field: string; value: unknown }[]>()
+    for (const e of plan) {
+      const q = queues.get(e.id) ?? []
+      q.push({ seq: e.seq, field: e.field, value: e.value })
+      queues.set(e.id, q)
+    }
+    const rows: { seq: number; store: number; visible: number }[] = []
+    const off = board.port.on('changed', (ids) => {
+      const t = Date.now()
+      const hit: { seq: number; store: number; visible: number }[] = []
       for (const id of ids) {
-        const cur = ed.getShape(id)
-        if (cur) ed.updateShape({ id, type: 'note', x: cur.x - 6 })
+        const q = queues.get(id)
+        if (!q?.length) continue
+        const el = f.get(id) as Record<string, unknown> | null
+        if (!el) continue
+        const same = (a: unknown, b: unknown) =>
+          typeof a === 'number' && typeof b === 'number' ? Math.abs(a - b) < 0.004 : a === b
+        const k = q.findIndex((x) => same(el[x.field], x.value))
+        if (k < 0) continue
+        const [entry] = q.splice(0, k + 1).slice(-1)
+        if (entry) hit.push({ seq: entry.seq, store: t, visible: 0 })
+      }
+      if (!hit.length) return
+      rows.push(...hit)
+      requestAnimationFrame(() =>
+        requestAnimationFrame(() => {
+          const v = Date.now()
+          for (const r of hit) r.visible = v
+        }),
+      )
+    })
+    w.__perfObs = { rows, stop: off }
+  }, plan)
+}
+
+/** Runs the plan in the writer tab; returns each edit's send time (`Date.now()` before its transact). */
+function runWriter(page: Page, plan: readonly PlannedEdit[]) {
+  return page.evaluate(async (plan) => {
+    const c = (window as unknown as PerfWindow).__lobbyBoard?.canvas
+    if (!c) throw new Error('no window.__lobbyBoard')
+    const sentAt: [number, number][] = []
+    for (const e of plan) {
+      await new Promise((r) => setTimeout(r, e.delayMs))
+      const t = Date.now()
+      c.transact(`perf.${e.kind}`, (tx) => {
+        tx.update(e.id, e.patch)
+        if (e.label) tx.update(e.label.id, { x: e.label.x })
+      })
+      sentAt.push([e.seq, t])
+    }
+    return sentAt
+  }, plan)
+}
+
+/** Puts every target (and its label) back where it was, in one write, outside the measurement. */
+const restore = (page: Page, targets: readonly Target[]) =>
+  page.evaluate((targets) => {
+    const c = (window as unknown as PerfWindow).__lobbyBoard?.canvas
+    c?.transact('perf.restore', (tx) => {
+      for (const t of targets) {
+        tx.update(t.id, { x: t.x })
+        if (t.label) tx.update(t.label, { x: t.labelX })
       }
     })
-  }, ids)
+  }, targets)
 
 /** Moves the mouse in a slow circle over the canvas until stopped (cursor presence, ~10 Hz). */
 function wiggle(page: Page, cx: number, cy: number) {
@@ -225,11 +273,12 @@ function wiggle(page: Page, cx: number, cy: number) {
   }
 }
 
-/** `busy` unstamped note updates per second from another tab (a lively workshop), until stopped. */
-function busyLoad(page: Page, targets: string[], perSecond: number) {
+/** `perSecond` unmeasured note moves per second from another tab (a lively workshop), until stopped. */
+function busyLoad(page: Page, targets: readonly Target[], perSecond: number) {
   return page.evaluate(
     ({ targets, perSecond }) => {
-      const ed = (window as unknown as { editor: PerfEditor }).editor
+      const c = (window as unknown as PerfWindow).__lobbyBoard?.canvas
+      if (!c) throw new Error('no window.__lobbyBoard')
       const w = window as unknown as { __perfBusy?: { stop: boolean; n: number } }
       const state = { stop: false, n: 0 }
       w.__perfBusy = state
@@ -237,16 +286,27 @@ function busyLoad(page: Page, targets: string[], perSecond: number) {
       let debt = 0
       let i = 0
       const tick = (t: number) => {
-        if (state.stop) return
+        if (state.stop) {
+          c.transact('perf.busy.restore', (tx) => {
+            for (const b of targets) {
+              tx.update(b.id, { x: b.x })
+              if (b.label) tx.update(b.label, { x: b.labelX })
+            }
+          })
+          return
+        }
         debt += ((t - last) / 1000) * perSecond
         last = t
         const batch = Math.floor(debt)
         debt -= batch
         for (let k = 0; k < batch; k++, i++) {
-          const id = targets[i % targets.length]
-          const cur = id ? ed.getShape(id) : undefined
-          if (!cur) continue
-          ed.updateShape({ id, type: 'note', x: cur.x + (Math.floor(i / targets.length) % 2 ? -4 : 4) })
+          const b = targets[i % targets.length]
+          if (!b) continue
+          const dx = Math.floor(i / targets.length) % 2 ? 0 : 4
+          c.transact('perf.busy', (tx) => {
+            tx.update(b.id, { x: b.x + dx })
+            if (b.label) tx.update(b.label, { x: b.labelX + dx })
+          })
           state.n++
         }
         requestAnimationFrame(tick)
@@ -259,12 +319,15 @@ function busyLoad(page: Page, targets: string[], perSecond: number) {
 
 export interface LatencyResult {
   view: View
+  zoom: number
   edits: number
   seen: number
+  /** edits by kind */
+  kinds: Record<string, number>
   busyPerSecond: number
   /** edit → painted in the observer tab (the WRK-01 number) */
   visible: Summary
-  /** edit → observer store */
+  /** edit → observer port */
   store: Summary
   split: { send: Summary; wire: Summary; apply: Summary; render: Summary }
   /** frames per second the observer tab rendered during the run */
@@ -272,15 +335,16 @@ export interface LatencyResult {
   writerFps: number
   /** main-thread tasks over 50 ms in each tab during the run */
   longTasks: { observer: { count: number; longestMs: number }; writer: { count: number; longestMs: number } }
-  /** whole-machine CPU busy % during the edits (this PC is shared) */
+  /** whole-machine CPU busy % during the edits */
   machineBusyPct: number
 }
 
 export async function measureLatency(opts: {
   writerPage: Page
   observerPage: Page
-  writerName: string
   view: View
+  /** frame 0's id (the 100% view) */
+  frame0: string
   edits: number
   /** Unmeasured edits first (default 40). */
   warmup?: number
@@ -293,24 +357,28 @@ export async function measureLatency(opts: {
   log: (s: string) => void
 }): Promise<LatencyResult> {
   const { writerPage, observerPage, view, edits } = opts
-  // a stamp id per run: keys must not repeat across runs (the board keeps the last run's stamps)
-  const writerName = `${opts.writerName}${view}${Date.now().toString(36)}`
-  await setView(writerPage, view)
-  await setView(observerPage, view)
-  if (opts.busyPage) await setView(opts.busyPage, view)
+  await setView(writerPage, view, opts.frame0)
+  const cam = await setView(observerPage, view, opts.frame0)
+  if (opts.busyPage) await setView(opts.busyPage, view, opts.frame0)
   await observerPage.waitForTimeout(1500)
-  const targets = await visibleNotes(observerPage, 60)
+  let targets = await visibleNotes(observerPage, 60)
   if (targets.length < 10) throw new Error(`only ${targets.length} notes in the observer's view`)
   // Unmeasured warm-up edits: freshly opened tabs are still decoding images and compiling code, and the
-  // first edits after opening read slower than the rest (seen as a p95 up to ~60 ms higher at fit).
-  if (opts.warmup !== 0) {
-    await restoreNudged(
-      writerPage,
-      await runWriter(writerPage, `${writerName}w`, targets, opts.warmup ?? 40, 5),
-    )
+  // first edits after opening read slower than the rest.
+  const warmup = opts.warmup ?? 40
+  if (warmup > 0) {
+    await runWriter(writerPage, planEdits(targets, warmup, 5, 1_000_000))
+    await restore(writerPage, targets)
     await writerPage.waitForTimeout(1000)
+    // the warm-up recoloured some targets: plan from what they hold now
+    const colours = await writerPage.evaluate(
+      (ids) => ids.map((id) => (window as unknown as PerfWindow).lobbyCanvas?.get(id)?.backgroundColor ?? ''),
+      targets.map((t) => t.id),
+    )
+    targets = targets.map((t, i) => ({ ...t, backgroundColor: colours[i] || t.backgroundColor }))
   }
-  await startObserver(observerPage, writerName)
+  const plan = planEdits(targets, edits, view === 'fit' ? 11 : 23)
+  await startObserver(observerPage, plan)
   // frames rendered and long tasks (main-thread stalls over 50 ms) per tab during the run
   const fpsCounter = (page: Page) =>
     page.evaluate(() => {
@@ -355,12 +423,12 @@ export async function measureLatency(opts: {
   await fpsCounter(observerPage)
   await fpsCounter(writerPage)
   const stopWiggles = [wiggle(writerPage, 700, 420), wiggle(observerPage, 800, 460)]
-  const busyTargets = opts.busyPage ? await visibleNotes(opts.busyPage, 200) : []
   const busy = opts.busyPage && opts.busyPerSecond ? opts.busyPerSecond : 0
   if (opts.busyPage && busy) {
     // the busy tab never touches the writer's targets
-    const free = busyTargets.filter((id) => !targets.includes(id))
-    await busyLoad(opts.busyPage, free.length ? free : busyTargets, busy)
+    const mine = new Set(targets.map((t) => t.id))
+    const free = (await visibleNotes(opts.busyPage, 200)).filter((t) => !mine.has(t.id))
+    if (free.length) await busyLoad(opts.busyPage, free, busy)
   }
   const t0 = Date.now()
   const machine = cpuMeter()
@@ -371,7 +439,7 @@ export async function measureLatency(opts: {
       ] as const)
     : []
   for (const [, cdp] of profiled) await startProfile(cdp)
-  const nudged = await runWriter(writerPage, writerName, targets, edits, view === 'fit' ? 11 : 23)
+  const sentAt = new Map(await runWriter(writerPage, plan))
   await writerPage.waitForTimeout(2000)
   const machineBusyPct = machine()
   for (const [name, cdp, page] of profiled) {
@@ -381,48 +449,67 @@ export async function measureLatency(opts: {
     )
     logProfile(opts.log, `${name} profile (${view})`, summarizeProfile(profile, frameCount))
   }
-  if (opts.busyPage && busy)
+  if (opts.busyPage && busy) {
     await opts.busyPage.evaluate(() => {
       const b = (window as unknown as { __perfBusy?: { stop: boolean } }).__perfBusy
       if (b) b.stop = true
     })
+  }
   for (const stop of stopWiggles) await stop()
   const observerTab = await readFps(observerPage)
   const writerTab = await readFps(writerPage)
+  const edited = plan.map((e) => ({ seq: e.seq, id: e.id, at: sentAt.get(e.seq) ?? 0 }))
+  // the first frame naming the note after the edit, on each socket (round-robin: one edit of a note in flight)
+  const firstFrame = (page: Page, dir: 'sent' | 'arrived') =>
+    page.evaluate(
+      ({ edited, dir }) => {
+        const frames = (window as unknown as { __perfWs?: Record<string, { t: number; d: string }[]> })
+          .__perfWs?.[dir]
+        const out: [number, number][] = []
+        for (const e of edited) {
+          const needle = `"${e.id}"`
+          const f = frames?.find((x) => x.t >= e.at && x.d.includes(needle))
+          if (f) out.push([e.seq, f.t])
+        }
+        return out
+      },
+      { edited, dir },
+    )
+  const sent = new Map(await firstFrame(writerPage, 'sent'))
+  const arrived = new Map(await firstFrame(observerPage, 'arrived'))
   const rows = await observerPage.evaluate(() => {
     const w = window as unknown as {
-      __perfObs?: { rows: { key: string; t0: number; store: number; visible: number }[]; stop: () => void }
-      __perfWs?: { arrived: Map<string, number> }
+      __perfObs?: { rows: { seq: number; store: number; visible: number }[]; stop: () => void }
     }
     w.__perfObs?.stop()
-    return (w.__perfObs?.rows ?? []).map((r) => ({ ...r, arrived: w.__perfWs?.arrived.get(r.key) ?? 0 }))
+    return w.__perfObs?.rows ?? []
   })
-  const sent = new Map(
-    await writerPage.evaluate(() => [
-      ...((window as unknown as { __perfWs?: { sent: Map<string, number> } }).__perfWs?.sent ?? []),
-    ]),
-  )
-  const visible = rows.filter((r) => r.visible > 0).map((r) => r.visible - r.t0)
-  const store = rows.map((r) => r.store - r.t0)
+  const at = (seq: number) => sentAt.get(seq) ?? 0
+  const painted = rows.filter((r) => r.visible > 0)
   const split = {
     send: [] as number[],
     wire: [] as number[],
     apply: [] as number[],
-    render: rows.filter((r) => r.visible > 0).map((r) => r.visible - r.store),
+    render: painted.map((r) => r.visible - r.store),
   }
   for (const r of rows) {
-    const s = sent.get(r.key)
-    if (s !== undefined) split.send.push(s - r.t0)
-    if (s !== undefined && r.arrived) split.wire.push(r.arrived - s)
-    if (r.arrived) split.apply.push(r.store - r.arrived)
+    const s = sent.get(r.seq)
+    const a = arrived.get(r.seq)
+    if (s !== undefined) split.send.push(s - at(r.seq))
+    if (s !== undefined && a !== undefined) split.wire.push(a - s)
+    if (a !== undefined) split.apply.push(r.store - a)
   }
+  const kinds: Record<string, number> = {}
+  for (const e of plan) kinds[e.kind] = (kinds[e.kind] ?? 0) + 1
   const result: LatencyResult = {
     view,
+    zoom: Math.round(cam.zoom * 10_000) / 10_000,
     edits,
     seen: rows.length,
+    kinds,
     busyPerSecond: busy,
-    visible: summarize(visible),
-    store: summarize(store),
+    visible: summarize(painted.map((r) => r.visible - at(r.seq))),
+    store: summarize(rows.map((r) => r.store - at(r.seq))),
     split: {
       send: summarize(split.send),
       wire: summarize(split.wire),
@@ -438,12 +525,12 @@ export async function measureLatency(opts: {
     machineBusyPct,
   }
   opts.log(
-    `latency ${view}${busy ? ` busy ${busy}/s` : ''}: ${rows.length}/${edits} edits seen in ${Math.round((Date.now() - t0) / 1000)} s; ` +
+    `latency ${view} (zoom ${result.zoom})${busy ? ` busy ${busy}/s` : ''}: ${rows.length}/${edits} edits seen in ${Math.round((Date.now() - t0) / 1000)} s; ` +
       `visible p50 ${result.visible.p50} p95 ${result.visible.p95} p99 ${result.visible.p99} ms; ` +
       `store p95 ${result.store.p95}; split p95 send ${result.split.send.p95} wire ${result.split.wire.p95} ` +
       `apply ${result.split.apply.p95} render ${result.split.render.p95}; fps observer ${result.observerFps} writer ${result.writerFps}; ` +
       `long tasks observer ${observerTab.longTasks} (max ${observerTab.longestTaskMs} ms) writer ${writerTab.longTasks} (max ${writerTab.longestTaskMs} ms); machine ${machineBusyPct}% busy`,
   )
-  await restoreNudged(writerPage, nudged)
+  await restore(writerPage, targets)
   return result
 }

@@ -9,13 +9,16 @@
 // What it does, all on this machine and over loopback:
 //  1. builds the web app like the browser suites (vite build + vite preview, dev sign-in) and starts
 //     the real api + sync + preview worker (e2e/tests/support/stack.ts) on E2E_PORT_BASE ports;
-//  2. seeds the heavy board through the client: 20 frames, 4,500 sticky notes, 200 uploaded images
-//     with their previews, tags on every 8th note and 40 comment threads (seed.ts);
-//  3. edit visibility between two browser tabs, alice writing and bob watching, >= 200 edits per view,
-//     at fit and at 100% (latency.ts), optionally with a third tab keeping the board busy;
-//  4. pan frame rate in a fresh tab at fit and at 100%: rAF timing, a Chrome trace, optionally a CPU
-//     profile (fps.ts); the review's 600 px sweep, plus a gentle 60 px pan at fit;
-//  5. prints the WRK-01 / PRF-02 gates (pass/FAIL, informational), writes
+//  2. seeds the heavy board through the client and the protocol: 20 frames, 4,500 sticky notes with their
+//     labels, 200 uploaded images with their previews (each carrying its upload's customData.lobby.file,
+//     so the canvas loads it), tags on every 8th note and 40 comment threads (seed.ts);
+//  3. edit visibility between two browser tabs on Lobby's board page, alice writing and bob watching,
+//     >= 200 edits per view, at Lobby's whole-board fit and at 100% (latency.ts), optionally with a third
+//     tab keeping the board busy;
+//  4. the open of the board in a fresh tab (warm server): until the scene is live and Saved, and until
+//     the loader has all 200 images; then pan frame rate at fit, at 0.25 and at 100%: rAF timing, a Chrome
+//     trace, optionally a CPU profile (fps.ts); the review's 600 px sweep, plus a gentle 60 px pan at fit;
+//  5. prints the WRK-01 / §8.5 gates (pass/FAIL, informational), writes
 //     e2e/test-results/perf-web-<port>/perf-<time>.json (+ .cpuprofile files with --profile, which
 //     DevTools opens) and, with --budget, compares with e2e/perf/budget.json: exit 1 on a clear
 //     regression, 2 when a miss was measured on a busy machine (inconclusive), 0 otherwise.
@@ -25,18 +28,32 @@
 // A run takes about 5 minutes (a minute and a half of it seeding: the api allows 120 uploads a minute).
 //
 // Options: --port-base N (default $E2E_PORT_BASE or 10900) --only latency|fps --edits N (default 240)
-//   --reps N (default 3) --views fit,100 --busy N (updates/s from a third tab; default 0)
+//   --reps N (default 3) --views fit,100 (latency) --fps-views fit,0.25,100 --busy N (updates/s from a third
+//   tab; default 0)
 //   --pan-px 600[,..] --fit-pans 60[,..] ('' for none) --notes N --images N --frames N --comments N
 //   --reuse-build --readable --profile --no-trace --budget --browser chrome|shell --hold
 //   --attach <state.json> --rebuild
+
+import { execSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { cpus, release, totalmem } from 'node:os'
 import { join } from 'node:path'
 import { parseArgs } from 'node:util'
 import { request } from '@playwright/test'
+import { gpuInfo } from '../spike/fixtures/perf-kit.ts'
 import { type FpsResult, type FpsView, fpsKey, measureFps, STANDARD_PAN_PX } from './fps.ts'
 import { type LatencyResult, measureLatency, type View } from './latency.ts'
-import { type BrowserKind, launchBrowser, openBoard, signedInContext, sleep } from './lib.ts'
-import { HEAVY, type HeavyBoard, type HeavySpec, seedHeavyBoard } from './seed.ts'
+import {
+  type BrowserKind,
+  launchBrowser,
+  openBoard,
+  signedInContext,
+  sleep,
+  waitImagesLoaded,
+} from './lib.ts'
+import { HEAVY, type HeavyExcalidrawBoard, type HeavySpec, seedHeavyExcalidrawBoard } from './seed.ts'
+
+type HeavyBoard = HeavyExcalidrawBoard
 
 const { values: args } = parseArgs({
   options: {
@@ -45,6 +62,7 @@ const { values: args } = parseArgs({
     edits: { type: 'string', default: '240' },
     reps: { type: 'string', default: '3' },
     views: { type: 'string', default: 'fit,100' },
+    'fps-views': { type: 'string', default: 'fit,0.25,100' },
     busy: { type: 'string', default: '0' },
     notes: { type: 'string' },
     images: { type: 'string' },
@@ -89,6 +107,7 @@ const spec: HeavySpec = {
   comments: num(args.comments, HEAVY.comments),
 }
 const views = (args.views ?? 'fit,100').split(',') as View[]
+const fpsViews = (args['fps-views'] ?? 'fit,0.25,100').split(',') as FpsView[]
 const only = args.only
 const OUT_DIR = join(import.meta.dirname, '..', 'test-results', `perf-${RUN_TAG}`)
 const stamp = new Date().toISOString().replace(/[:.]/g, '-')
@@ -124,7 +143,7 @@ async function seed(web: string): Promise<HeavyBoard> {
   const seedCtx = await signedInContext(browser, web, 'alice', 'Alice Park')
   const seedPage = await seedCtx.newPage()
   await openBoard(seedPage, web, created.id)
-  const board = await seedHeavyBoard(seedPage, created.id, spec, log)
+  const board = await seedHeavyExcalidrawBoard(seedPage, created.id, spec, log)
   await seedCtx.close()
   return board
 }
@@ -154,14 +173,24 @@ try {
   } else {
     const report: {
       at: string
-      machine: Record<string, string | undefined>
+      machine: Record<string, unknown>
       board: HeavyBoard
-      open?: { ms: number }
+      open?: { ms: number; imagesMs: number; images: number; imagesLoaded: number }
       latency: LatencyResult[]
       fps: FpsResult[]
     } = {
       at: new Date().toISOString(),
-      machine: { browser: args.browser, viewport: '1536x864 @1.25', node: process.version },
+      machine: {
+        cpu: cpus()[0]?.model.trim(),
+        logicalCpus: cpus().length,
+        ramGb: Math.round(totalmem() / 2 ** 30),
+        os: `${process.platform} ${release()}`,
+        browser: args.browser === 'shell' ? 'Playwright headless shell' : 'branded Chrome, new headless mode',
+        headless: true,
+        viewport: '1536x864 @1.25',
+        node: process.version,
+        commit: execSync('git rev-parse --short HEAD', { encoding: 'utf8' }).trim(),
+      },
       board,
       latency: [],
       fps: [],
@@ -176,14 +205,14 @@ try {
       await instrument(oCtx)
       const writerPage = await wCtx.newPage()
       const observerPage = await oCtx.newPage()
-      await openBoard(writerPage, web, board.boardId)
-      await openBoard(observerPage, web, board.boardId)
+      await openBoard(writerPage, web, board.boardId, board.elements)
+      await openBoard(observerPage, web, board.boardId, board.elements)
       const busy = num(args.busy, 0)
       let busyPage: typeof writerPage | undefined
       if (busy > 0) {
         const bCtx = await signedInContext(browser, web, 'carol', 'Carol Diaz')
         busyPage = await bCtx.newPage()
-        await openBoard(busyPage, web, board.boardId)
+        await openBoard(busyPage, web, board.boardId, board.elements)
         disposers.push(() => bCtx.close())
       }
       const profile = args.profile
@@ -194,8 +223,8 @@ try {
           await measureLatency({
             writerPage,
             observerPage,
-            writerName: 'alice',
             view,
+            frame0: board.frameIds[0] as string,
             edits: num(args.edits, 240),
             busyPage,
             busyPerSecond: busy,
@@ -214,14 +243,19 @@ try {
       const ctx = await signedInContext(browser, web, 'alice', 'Alice Park')
       const page = await ctx.newPage()
       const cdp = await ctx.newCDPSession(page)
-      const openMs = await openBoard(page, web, board.boardId)
-      report.open = { ms: openMs }
-      log(`heavy board open (warm server, fresh tab): ${openMs} ms`)
+      const openMs = await openBoard(page, web, board.boardId, board.elements)
+      const imgs = await waitImagesLoaded(page, 180_000)
+      report.open = { ms: openMs, imagesMs: openMs + imgs.ms, images: imgs.total, imagesLoaded: imgs.loaded }
+      report.machine.gpu = await gpuInfo(browser, page)
+      log(
+        `heavy board open (warm server, fresh tab): ${openMs} ms to live and Saved; ${imgs.loaded}/${imgs.total} images loaded at ${openMs + imgs.ms} ms`,
+      )
       await page.waitForTimeout(3000)
       report.fps = await measureFps({
         page,
         cdp,
-        views: views as FpsView[],
+        views: fpsViews,
+        frame0: board.frameIds[0] as string,
         reps: num(args.reps, 3),
         durationMs: 3000,
         panPx: (args['pan-px'] ?? String(STANDARD_PAN_PX)).split(',').map(Number),
@@ -243,10 +277,15 @@ try {
     // ---- the gates (informational) and the budget (--budget) --------------------------------------
     for (const l of report.latency)
       log(
-        `gate WRK-01 (edit visible p95 <= 250 ms), ${l.view}: ${l.visible.p95} ms ${l.visible.p95 <= 250 ? 'pass' : 'FAIL'}`,
+        `gate WRK-01 (edit visible p95 <= 250 ms; §8.5 at 100%), ${l.view}: ${l.visible.p95} ms ${l.visible.p95 <= 250 ? 'pass' : 'FAIL'}`,
       )
-    for (const f of report.fps.filter((r) => r.view === 'fit' && r.panPx === STANDARD_PAN_PX))
-      log(`gate PRF-02 (>= 30 fps panning at fit): ${f.medianFps} fps ${f.medianFps >= 30 ? 'pass' : 'FAIL'}`)
+    for (const f of report.fps.filter((r) => r.panPx === STANDARD_PAN_PX)) {
+      // §8.5: >= 30 fps at 0.25 and at 1 with sync running; 24 fps at Lobby's whole-board fit (3b's target)
+      const min = f.view === 'fit' ? 24 : 30
+      log(
+        `gate §8.5 (>= ${min} fps panning at ${f.view}): ${f.medianFps} fps ${f.medianFps >= min ? 'pass' : 'FAIL'}`,
+      )
+    }
     if (args.budget) {
       const outcome = checkBudget(report.latency, report.fps)
       if (outcome !== 'ok') exitCode = outcome === 'regression' ? 1 : 2
