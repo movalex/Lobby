@@ -38,7 +38,8 @@ describe('the files part (3g)', () => {
     const { registries, files } = part()
     expect(await files.urlOf('c1', { original: true })).toBeNull()
     attachBoardEngine(registries, {
-      api: { onChange: () => () => {} } as never,
+      // the derivative swap installs on it and reads its (empty) scene
+      api: { onChange: () => () => {}, getSceneElements: () => [], getAppState: () => ({}) } as never,
       wrapper: {} as never,
       boardId: 'b-1',
     })

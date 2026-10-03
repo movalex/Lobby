@@ -22,11 +22,14 @@
  * (canvas/files/swap.ts, §2.10.3).
  *
  * A crop lives in the pixels of the file the engine has loaded, and every tab loads an image's thumb
- * first; so a crop is always made on, and drawn from, the thumb. The swap here never sees a cropped
- * image or the one being cropped (it would upgrade it, or keep an earlier upgrade, to the 2,048 px
- * rendering: the crop would then show the wrong part), and such an image is put back on its thumb
- * locally (like the swap's own switches: no push, no undo step). CR-W5-3G-2 asks 2C for the same rule
- * inside canvas/files/swap.ts.
+ * first; so a crop is always made on, and drawn from, the thumb. The swap itself (CR-W5-3G-2,
+ * canvas/files/swap.ts) never upgrades a cropped image or the one being cropped, and puts such an image
+ * back on its thumb locally (like its own switches: no push, no undo step); `crop` makes that switch at
+ * once (`toThumb`), before the editor opens.
+ *
+ * After a switch, the engine is asked to cache the newly used file at once (`addFiles([])`: Excalidraw
+ * caches only the files an element uses, and otherwise only on its throttled 500 ms image refresh, so a
+ * just-upgraded image showed its placeholder meanwhile).
  */
 import { derivativeUrl, isId, originalUrl } from '@draftroom/dev-assets/shared'
 // @excalidraw/element, not @excalidraw/excalidraw: ../impl.ts (and this part) stay importable in Node
@@ -34,8 +37,8 @@ import { CaptureUpdateAction, newElementWith } from '@excalidraw/element'
 import { inserterOf, provideUploadTracker } from '../../../assets/board-media.ts'
 import { trackUpload } from '../../board/uploads.ts'
 import { boardFilesOf } from '../../files/board.ts'
-import { parseFileKey, wireFileId } from '../../files/loader.ts'
-import { installDerivativeSwap } from '../../files/swap.ts'
+import { parseFileKey } from '../../files/loader.ts'
+import { type DerivativeSwap, installDerivativeSwap } from '../../files/swap.ts'
 import { boardEngineOf, onBoardEngine } from '../../overrides.ts'
 
 type BoardEngineApi = NonNullable<ReturnType<typeof boardEngineOf>>['api']
@@ -97,7 +100,7 @@ export function createFilesPart(deps: PartDeps): FilesPart {
       if (kind !== 'image' && key.page == null) return false
       const canvas = deps.self()
       if (canvas.readOnly() || canvas.isLocked(id)) return false
-      keepOnThumb(engine.api, [id])
+      swaps.get(engine.api)?.toThumb([id])
       engine.api.updateScene({
         appState: { selectedElementIds: { [id]: true }, croppingElementId: id, isCropping: false } as never,
         captureUpdate: CaptureUpdateAction.NEVER,
@@ -109,86 +112,39 @@ export function createFilesPart(deps: PartDeps): FilesPart {
 
 type SceneApi = BoardEngineApi
 
-const thumbOnlyCache = new WeakMap<object, { elements: unknown; cropping: string | null; ids: Set<string> }>()
-
-/**
- * The images that must stay on their thumb: cropped ones, and the one being cropped. Recomputed only
- * when the scene's elements or the cropped id changed (the engine keeps its element array between
- * changes), so a camera move costs nothing.
- */
-function onThumbOnly(api: SceneApi): Set<string> {
-  const cropping = (api.getAppState() as { croppingElementId?: string | null }).croppingElementId ?? null
-  const elements = api.getSceneElements()
-  const hit = thumbOnlyCache.get(api)
-  if (hit && hit.elements === elements && hit.cropping === cropping) return hit.ids
-  const ids = new Set<string>()
-  for (const el of elements) {
-    if (el.type !== 'image') continue
-    if ((el as { crop?: unknown }).crop || el.id === cropping) ids.add(el.id)
-  }
-  thumbOnlyCache.set(api, { elements, cropping, ids })
-  return ids
-}
-
-/** Puts `ids` back on their thumb where they show a larger rendering (local only). */
-function keepOnThumb(api: SceneApi, ids: Iterable<string>): void {
-  const want = new Set(ids)
+/** Switches the scene's local fileIds (the swap's `apply`): local only, no push, no undo step. */
+function switchLocal(api: SceneApi, switches: readonly { id: string; fileId: string }[]): void {
+  const byId = new Map(switches.map((s) => [s.id, s.fileId]))
   let changed = false
   const next = api.getSceneElementsIncludingDeleted().map((el) => {
-    if (el.type !== 'image' || !want.has(el.id)) return el
-    const fileId = (el as { fileId?: string | null }).fileId
-    const key = fileId ? parseFileKey(fileId) : null
-    if (!fileId || !key || key.derivative === 'thumb') return el
-    const thumb = wireFileId(fileId)
-    if (!thumb) return el
+    const to = byId.get(el.id)
+    if (!to || el.type !== 'image' || (el as { fileId?: string | null }).fileId === to) return el
     changed = true
-    return newElementWith(el, { fileId: thumb as never })
+    return newElementWith(el, { fileId: to as never })
   })
-  if (changed) api.updateScene({ elements: next, captureUpdate: CaptureUpdateAction.NEVER })
+  if (!changed) return
+  // local only: the sync core and undo compare fileIds without the suffix (E9), so this is no push and no
+  // undo step; the core keeps the suffix across its rebuilds (CR-W5-3G-3)
+  api.updateScene({ elements: next, captureUpdate: CaptureUpdateAction.NEVER })
+  // Excalidraw caches only files an element uses: now that one does, cache it at once (see the header)
+  if (typeof api.addFiles === 'function') api.addFiles([])
 }
 
 /** One derivative swap per board page engine (a re-mounted host brings a new API and a new canvas). */
-const swapped = new WeakSet<object>()
+const swaps = new WeakMap<object, DerivativeSwap>()
 
 function installSwap(deps: PartDeps): void {
   onBoardEngine(deps.registries, (engine) => {
     const api = engine.api
-    if (swapped.has(api)) return
-    swapped.add(api)
-    // the swap never sees an image that must stay on its thumb (see the header)
-    const swapView = {
-      getSceneElements: () => {
-        const keep = onThumbOnly(api)
-        const all = api.getSceneElements()
-        return keep.size ? all.filter((el) => !keep.has(el.id)) : all
-      },
-      getAppState: () => api.getAppState(),
-      onChange: (fn: Parameters<typeof api.onChange>[0]) => api.onChange(fn),
-    } as unknown as typeof api
-    let queued = false
-    api.onChange(() => {
-      if (queued) return
-      queued = true
-      queueMicrotask(() => {
-        queued = false
-        const keep = onThumbOnly(api)
-        if (keep.size) keepOnThumb(api, keep)
-      })
-    })
-    installDerivativeSwap({
-      api: swapView,
-      loader: () => boardFilesOf(deps.registries)?.loader ?? null,
-      apply(switches) {
-        const byId = new Map(switches.map((s) => [s.id, s.fileId]))
-        const next = api.getSceneElementsIncludingDeleted().map((el) => {
-          const to = byId.get(el.id)
-          return to && el.type === 'image' ? newElementWith(el, { fileId: to as never }) : el
-        })
-        // local only: the sync core and undo compare fileIds without the suffix (E9), so this is no push
-        // and no undo step
-        api.updateScene({ elements: next, captureUpdate: CaptureUpdateAction.NEVER })
-      },
-    })
+    if (swaps.has(api)) return
+    swaps.set(
+      api,
+      installDerivativeSwap({
+        api,
+        loader: () => boardFilesOf(deps.registries)?.loader ?? null,
+        apply: (switches) => switchLocal(api, switches),
+      }),
+    )
   })
 }
 

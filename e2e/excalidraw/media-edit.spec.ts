@@ -7,13 +7,16 @@
 import { join } from 'node:path'
 import type { Page } from '@playwright/test'
 import {
+  dragItem,
   expect,
   item,
+  pushedOps,
   sceneToScreen,
   select,
   selectNone,
   setViewport,
   test,
+  updateItem,
 } from '../tests/support/canvas.ts'
 import { pressUndo } from '../tests/support/excalidraw.ts'
 import { dropFiles, type FilePayload, makeImages } from '../tests/support/files.ts'
@@ -48,6 +51,26 @@ const sceneCopy = (page: Page, id: string) =>
     const el = h?.api.getSceneElements().find((e) => e.id === elId)
     return el ? { fileId: el.fileId ?? null, crop: (el.crop ?? null) as Crop | null } : null
   }, id)
+/**
+ * Records the element's LOCAL fileId on every animation frame from now on (each change once): a
+ * revert to the thumb for even one frame shows up in `seenFileIds`.
+ */
+const watchFileIds = (page: Page, id: string) =>
+  page.evaluate((elId) => {
+    const w = window as unknown as { __lobbyBoard?: Engine; __e2eFileIds?: string[] }
+    const seen: string[] = []
+    w.__e2eFileIds = seen
+    const tick = () => {
+      if (w.__e2eFileIds !== seen) return
+      const el = w.__lobbyBoard?.api.getSceneElements().find((e) => e.id === elId)
+      const f = el ? (el.fileId ?? 'null') : 'gone'
+      if (seen[seen.length - 1] !== f) seen.push(f)
+      requestAnimationFrame(tick)
+    }
+    tick()
+  }, id)
+const seenFileIds = (page: Page) =>
+  page.evaluate(() => (window as unknown as { __e2eFileIds?: string[] }).__e2eFileIds ?? [])
 const croppingId = (page: Page) =>
   page.evaluate(
     () =>
@@ -253,15 +276,10 @@ test('W5-13 Crop on an image shown at its 2,048 px rendering: it goes back to it
   const img = await placeImage(a.page, board, 'big-view.jpg', 1600, 900)
   // shown larger than 512 device px for 300 ms: the swap moves it to its `display` rendering (local)
   await setViewport(a.page, { x: img.x - 40, y: img.y - 40, zoom: 900 / img.width })
-  const upgraded = await expect
+  // unconditional since CR-W5-3G-3 (wave A): the sync core keeps the local suffix across its rebuilds
+  await expect
     .poll(async () => (await sceneCopy(a.page, img.id))?.fileId ?? '', { timeout: 15_000 })
-    .toMatch(/@display$/)
-    .then(() => true)
-    .catch(() => false)
-  // CR-W5-3G-3 (2C, the sync core): the swap does not reliably stick on the board page (a local
-  // `@display` fileId is put back to the wire id and the swap stalls), so the precondition is not always
-  // reached; the crop rule itself is unit-tested (canvas/api/parts/files.test.ts). Never a false pass.
-  test.skip(!upgraded, 'CR-W5-3G-3: the derivative swap did not stick on this run')
+    .toBe(`${img.facts.versionId}@display`)
   await select(a.page, [img.id])
   await a.page.getByTestId('media-crop').click()
   await expect.poll(() => croppingId(a.page)).toBe(img.id)
@@ -276,6 +294,55 @@ test('W5-13 Crop on an image shown at its 2,048 px rendering: it goes back to it
   // and it stays on its thumb while cropped, however large it is shown
   await a.page.waitForTimeout(1_500)
   expect((await sceneCopy(a.page, img.id))?.fileId).toBe(img.facts.versionId)
+})
+
+test('CR-W5-3G-3 an image shown at its 2,048 px rendering stays on it: another tab moves it, then its own drag; no frame goes back to the thumb', async ({
+  canvasSession,
+  board,
+}) => {
+  test.setTimeout(180_000)
+  const a = await canvasSession('alice')
+  const b = await canvasSession('bob')
+  const img = await placeImage(a.page, board, 'zoom-in.jpg', 1600, 900)
+  const display = `${img.facts.versionId}@display`
+  // shown larger than 512 device px for 300 ms: the swap moves it to its `display` rendering (local)
+  await setViewport(a.page, { x: img.x - 40, y: img.y - 40, zoom: 900 / img.width })
+  await expect
+    .poll(async () => (await sceneCopy(a.page, img.id))?.fileId ?? '', { timeout: 15_000 })
+    .toBe(display)
+  await watchFileIds(a.page, img.id)
+
+  await test.step('bob moves it: alice sees the move on the same 2,048 px rendering', async () => {
+    const near = (v: number | undefined, want: number) => v !== undefined && Math.abs(v - want) < 0.5
+    await expect
+      .poll(async () => near((await item(b.page, img.id))?.x, img.x), { timeout: 30_000 })
+      .toBe(true)
+    await updateItem(b.page, img.id, { x: img.x + 60 })
+    await expect
+      .poll(async () => near((await item(a.page, img.id))?.x, img.x + 60), { timeout: 30_000 })
+      .toBe(true)
+    await a.page.waitForTimeout(500)
+    expect((await sceneCopy(a.page, img.id))?.fileId).toBe(display)
+  })
+
+  await test.step('alice drags it herself: bob gets the move, the wire never carries the suffix', async () => {
+    // 120 screen px down (the image is shown 900 px wide)
+    await dragItem(a.page, img.id, { x: 0, y: 120 })
+    const moved = (await item(a.page, img.id))?.y ?? img.y
+    expect(moved).toBeGreaterThan(img.y + 20)
+    await expect
+      .poll(async () => Math.abs(((await item(b.page, img.id))?.y ?? 0) - moved) < 0.5, { timeout: 30_000 })
+      .toBe(true)
+    await a.page.waitForTimeout(500)
+    expect((await sceneCopy(a.page, img.id))?.fileId).toBe(display)
+    // alice's pushes carried the move with the wire file id only (E9)
+    const pushed = JSON.stringify(await pushedOps(a.page))
+    expect(pushed).toContain(img.id)
+    expect(pushed).not.toMatch(/@(display|thumb)/)
+  })
+
+  // every frame since the upgrade drew the image from its display rendering
+  expect(await seenFileIds(a.page)).toEqual([display])
 })
 
 test('W5-13 Alternative text: the dialog writes customData.lobby.alt (one undo); bob reads it; viewers get none of the three tools', async ({

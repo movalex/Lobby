@@ -103,9 +103,11 @@ import {
   diffGroups,
   FIT_FIELDS,
   type GroupKey,
+  keepLocalFileSuffix,
   opId,
   toWire,
   withoutArtifacts,
+  withWireFile,
 } from './fields.ts'
 import { computeSaveStatus, type SaveInputs } from './saved.ts'
 import { overlayPatchOp } from './server-ops.ts'
@@ -1385,8 +1387,11 @@ export class LobbyEngineCore implements EngineCore {
     }
     if (this.held.has(id))
       groups.add(id === this.editingLabel ? 'layout' : local.type === 'arrow' ? 'path' : 'layout')
-    if (groups.size === 0) return clone(conf)
-    const out = copyGroups(conf, local, groups) as Record<string, unknown>
+    // the local derivative suffix (`ver_X@display`) is not a change, and not the server's either: it
+    // stays while the wire file is the same (E9, CR-W5-3G-3: before, every rebuild put the scene back on
+    // the 512 px thumb and the derivative swap never stuck)
+    if (groups.size === 0) return keepLocalFileSuffix(clone(conf), local)
+    const out = keepLocalFileSuffix(copyGroups(conf, local, groups), local) as Record<string, unknown>
     out.version = Math.max(local.version, conf.version)
     out.versionNonce = local.versionNonce
     if (deepEqual(out, local)) return local
@@ -2607,7 +2612,8 @@ export class LobbyEngineCore implements EngineCore {
         bytes += size
         sent.set(id, {
           groups: p.create ? new Set(diffGroups(el, undefined).groups) : new Set(p.groups),
-          el: clone(el),
+          // the push's copy as the lost-push records and the offline queue keep it (no local file suffix)
+          el: withWireFile(el),
           create: p.create,
           ...(p.create
             ? { prior: this.confirmedMap.has(id) ? clone(this.confirmedMap.get(id)) : undefined }
@@ -2973,10 +2979,10 @@ export class LobbyEngineCore implements EngineCore {
           at: p.record.at,
           create: s.create,
           groups: [...s.groups],
-          el: clone(s.el),
-          ...(s.ref ? { ref: clone(s.ref) } : {}),
+          el: withWireFile(s.el),
+          ...(s.ref ? { ref: withWireFile(s.ref) } : {}),
           ...(s.pv !== undefined ? { pv: s.pv } : {}),
-          ...(s.prior ? { prior: clone(s.prior) } : {}),
+          ...(s.prior ? { prior: withWireFile(s.prior) } : {}),
         })
         a.since = Math.min(a.since, p.record.at)
       }
@@ -2984,7 +2990,8 @@ export class LobbyEngineCore implements EngineCore {
       const el = this.current.get(id)
       if (!el) continue
       out.push({
-        element: clone(el),
+        // never a local derivative suffix in the queue (E9): the page that adopts it starts on the thumb
+        element: withWireFile(el),
         groups: [...a.groups],
         base: this.clock,
         queuedAt: Number.isFinite(a.since) ? a.since : this.now(),
