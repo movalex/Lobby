@@ -329,6 +329,12 @@ export interface StyleValues {
    * corners of the next rectangle (`roundness`).
    */
   readonly arrowKind?: ArrowKind
+  /**
+   * CR-3A-7, next-style only: the fill of the next note (one of Lobby's note palette fills; the engine's
+   * `currentItemStickynoteBackgroundColor`), taken by every note created without a `backgroundColor` of its
+   * own (the note tool, Add a sticky note, a double-click). Reads as Lobby's default note fill until set.
+   */
+  readonly noteColor?: string
 }
 export type ArrowKind = 'straight' | 'curved' | 'elbow'
 /** Per field: the shared value, or 'mixed' when the selection differs. */

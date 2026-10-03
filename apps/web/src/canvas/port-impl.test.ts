@@ -216,6 +216,69 @@ describe('CanvasPort.select (W5-39, CR 3b-11)', () => {
   })
 })
 
+// ---- CR-3A-7: the next note's colour and the next text's style -------------------------------------------
+
+const { nextNoteFill, nextStylePatch, nextStyles, LOBBY_NOTE_FILL } = await import('./board/handles.ts')
+
+describe('the next note and the next text (CR-3A-7)', () => {
+  const noteOf = (els: El[], id: string) => els.find((e) => e.id === id)
+  const sky = '#a6d8f3'
+
+  it('a note made with no colour of its own takes the next note fill; one that names a colour keeps it', () => {
+    const { port, elements } = portOn([], { currentItemStickynoteBackgroundColor: sky })
+    const a = port.transact('note', (tx) => tx.create('note', { x: 0, y: 0, size: 200 }))
+    const b = port.transact('note', (tx) => tx.create('note', { x: 300, y: 0, backgroundColor: '#f4a874' }))
+    expect(noteOf(elements(), a)?.backgroundColor).toBe(sky)
+    expect(noteOf(elements(), b)?.backgroundColor).toBe('#f4a874')
+  })
+
+  it('until a note colour is picked, a new note is Lobby’s default yellow, not the engine’s own default', () => {
+    for (const state of [{}, { currentItemStickynoteBackgroundColor: '#ffdf6b' }]) {
+      const { port, elements } = portOn([], state)
+      const id = port.transact('note', (tx) => tx.create('note', { x: 0, y: 0 }))
+      expect(noteOf(elements(), id)?.backgroundColor).toBe(LOBBY_NOTE_FILL)
+    }
+    expect(LOBBY_NOTE_FILL).toBe('#f8e48f')
+  })
+
+  it('a text takes the next font, size and alignment where its creator names none', () => {
+    const { port, elements } = portOn([], {
+      currentItemFontFamily: 8,
+      currentItemFontSize: 36,
+      currentItemTextAlign: 'center',
+      currentItemStrokeColor: '#4465e9',
+    })
+    const t = port.transact('text', (tx) => tx.create('text', { x: 0, y: 0, text: 'hi' }))
+    expect(noteOf(elements(), t)).toMatchObject({
+      fontFamily: 8,
+      fontSize: 36,
+      textAlign: 'center',
+      strokeColor: '#4465e9',
+    })
+    // a feature's own text style wins (the AI's theme labels, a duplicate's label)
+    const own = port.transact('text', (tx) =>
+      tx.create('text', { x: 0, y: 0, text: 'x', fontFamily: 6, fontSize: 20, textAlign: 'left' }),
+    )
+    expect(noteOf(elements(), own)).toMatchObject({ fontFamily: 6, fontSize: 20, textAlign: 'left' })
+  })
+
+  it('a text made before any pick is Nunito 20, left-aligned (the defaults before CR-3A-7)', () => {
+    const { port, elements } = portOn([])
+    const t = port.transact('text', (tx) => tx.create('text', { x: 0, y: 0, text: 'hi' }))
+    expect(noteOf(elements(), t)).toMatchObject({ fontFamily: 6, fontSize: 20, textAlign: 'left' })
+  })
+
+  it('styles.setNext({ noteColor }) is the engine’s next sticky-note fill, and styles.next() reads it back', () => {
+    expect(nextStylePatch({ noteColor: sky })).toEqual({ currentItemStickynoteBackgroundColor: sky })
+    const api = (state: Record<string, unknown>) => ({ getAppState: () => state }) as never
+    expect(nextStyles(api({ currentItemStickynoteBackgroundColor: sky })).noteColor).toBe(sky)
+    expect(nextStyles(api({ currentItemStickynoteBackgroundColor: '#ffdf6b' })).noteColor).toBe(
+      LOBBY_NOTE_FILL,
+    )
+    expect(nextNoteFill({})).toBe(LOBBY_NOTE_FILL)
+  })
+})
+
 describe('CanvasPort reads (CR 3b-7)', () => {
   it('get and bounds read the engine map, not a scan of the scene', () => {
     const { api, port } = portOn([rect('a', 'a0', { x: 10, y: 20, width: 30, height: 40 })])

@@ -23,8 +23,8 @@ describe('style panel visibility (RETRO-20, R16)', () => {
     expect(showStylePanel([], 'rectangle')).toBe(true)
     expect(showStylePanel([], 'freedraw')).toBe(true)
     expect(showStylePanel([], 'text')).toBe(true)
-    // the note tool's notes take Lobby's note defaults on this canvas (CR-3A-7)
-    expect(showStylePanel([], 'note')).toBe(false)
+    // CR-3A-7: the note tool's next note takes the note colour, size and font picked in the panel
+    expect(showStylePanel([], 'note')).toBe(true)
     expect(showStylePanel(['note'], 'select')).toBe(true)
     expect(showStylePanel(['frame', 'frame'], 'select')).toBe(false)
     expect(showStylePanel(['frame', 'note'], 'select')).toBe(true)

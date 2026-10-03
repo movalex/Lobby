@@ -22,6 +22,7 @@ import type { ExcalidrawElement, NonDeletedExcalidrawElement } from '@excalidraw
 import type { AppState, ExcalidrawImperativeAPI } from '@excalidraw/excalidraw/types'
 import { generateKeyBetween } from '@excalidraw/fractional-indexing'
 import type { TransactOptions } from './api/lobby-canvas.ts'
+import { nextNoteFill } from './board/handles.ts'
 import type { UndoController } from './history/controller.ts'
 import type {
   Bounds,
@@ -178,7 +179,8 @@ export function createCanvasPort(deps: PortDeps): LobbyCanvasPort {
             y: Number(base.y),
             size: props.size as number | undefined,
             text: props.text as string | undefined,
-            backgroundColor: (props.backgroundColor as string | undefined) ?? '#f8e48f',
+            // CR-3A-7: a note made with no colour of its own takes the next note's (the note tool's pick)
+            backgroundColor: (props.backgroundColor as string | undefined) ?? nextNoteFill(s),
             fontFamily: 6,
             labelId: props.labelId as string | undefined,
           } as never,
@@ -192,8 +194,16 @@ export function createCanvasPort(deps: PortDeps): LobbyCanvasPort {
         return withIndex(out)
       }
       case 'text':
+        // CR-3A-7: a text takes the next text style (the text tool's font, size and alignment, as the style
+        // panel sets them) where its creator names none; Nunito 20 left-aligned until one is picked
         return withIndex([
-          X.newTextElement({ fontFamily: 6, fontSize: 20, ...base, text: String(props.text ?? '') }),
+          X.newTextElement({
+            fontFamily: s.currentItemFontFamily ?? 6,
+            fontSize: s.currentItemFontSize ?? 20,
+            textAlign: s.currentItemTextAlign ?? 'left',
+            ...base,
+            text: String(props.text ?? ''),
+          }),
         ])
       case 'rectangle':
       case 'ellipse':

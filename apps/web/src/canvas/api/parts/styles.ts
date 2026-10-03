@@ -57,6 +57,8 @@ export const FIELDS: Readonly<Record<Exclude<Field, TextField>, readonly string[
   elbowed: [],
   // the next connector's kind (CR-W5-3A-1): a next-style value only, like `elbowed`
   arrowKind: [],
+  // the next note's fill (CR-3A-7): a next-style value only (a note's own fill is `backgroundColor`)
+  noteColor: [],
 }
 
 export const TEXT_FIELDS = ['fontFamily', 'fontSize', 'textAlign', 'verticalAlign'] as const

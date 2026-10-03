@@ -8,7 +8,7 @@
  *
  * Browser only.
  */
-import { randomId } from '@excalidraw/common'
+import { DEFAULT_STICKY_NOTE_BG, randomId } from '@excalidraw/common'
 import type { ExcalidrawImperativeAPI } from '@excalidraw/excalidraw/types'
 import type { BoardConcern, BoardEvent, BoardHandles } from '../api/impl.ts'
 import type {
@@ -80,6 +80,22 @@ const ARROW_TYPE_OF: Readonly<Record<ArrowKind, 'sharp' | 'round' | 'elbow'>> = 
   elbow: 'elbow',
 }
 
+/** Lobby's default note fill (the note palette's first colour). */
+export const LOBBY_NOTE_FILL = '#f8e48f'
+
+/**
+ * CR-3A-7: the fill the next note gets when its creator names none (canvas/port-impl.ts `create`): the
+ * engine's next sticky-note fill (`currentItemStickynoteBackgroundColor`, which the style panel sets through
+ * `styles.setNext({ noteColor })` while the note tool is picked), or Lobby's default while the engine still
+ * has its own default there (a colour Lobby's note palette never offers) or nothing.
+ */
+export function nextNoteFill(s: { readonly currentItemStickynoteBackgroundColor?: string | null }): string {
+  const c = s.currentItemStickynoteBackgroundColor
+  return typeof c === 'string' && c && c.toLowerCase() !== DEFAULT_STICKY_NOTE_BG.toLowerCase()
+    ? c
+    : LOBBY_NOTE_FILL
+}
+
 /** The connector kind of an engine arrow type (anything but 'round' and 'elbow' is straight). */
 export const arrowKindOf = (type: string | undefined): ArrowKind =>
   type === 'elbow' ? 'elbow' : type === 'round' ? 'curved' : 'straight'
@@ -102,6 +118,7 @@ export function nextStyles(api: ExcalidrawImperativeAPI): StyleValues {
     roundness: s.currentItemRoundness === 'round' ? 'round' : 'sharp',
     elbowed: s.currentItemArrowType === 'elbow',
     arrowKind: arrowKindOf(s.currentItemArrowType),
+    noteColor: nextNoteFill(s),
   }
 }
 
@@ -132,6 +149,8 @@ export function nextStylePatch(p: StyleValues): Record<string, unknown> {
   if (p.textAlign !== undefined) a.currentItemTextAlign = p.textAlign
   if (p.startArrowhead !== undefined) a.currentItemStartArrowhead = p.startArrowhead
   if (p.endArrowhead !== undefined) a.currentItemEndArrowhead = p.endArrowhead
+  // CR-3A-7: the next note's fill is the engine's next sticky-note fill (Lobby's notes are its sticky notes)
+  if (p.noteColor !== undefined) a.currentItemStickynoteBackgroundColor = p.noteColor
   if (p.arrowKind !== undefined) a.currentItemArrowType = ARROW_TYPE_OF[p.arrowKind]
   else if (p.elbowed !== undefined)
     a.currentItemArrowType = p.elbowed ? 'elbow' : p.roundness === 'round' ? 'round' : 'sharp'
