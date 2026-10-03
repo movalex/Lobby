@@ -1538,8 +1538,19 @@ export class LobbyEngineCore implements EngineCore {
     }
     this.vanish.clear()
     if (touched.length === 0) return
-    const ownUnacked = (el: SceneElement) =>
-      !this.confirmedMap.has(el.id) && (!!this.tracked.get(el.id)?.isNew || this.inflightHas(el.id))
+    // this client's to re-key: its own element the server has not acknowledged, and (SYNC-4) a confirmed
+    // element whose scene key is this tab's write the server has not confirmed (a create whose `changes`
+    // came before its ack, a reorder in flight or unsent). Counted as confirmed, such a key could tie with
+    // another confirmed element, and Excalidraw's `syncInvalidIndices` would re-key that element in place
+    // (an echo of someone else's element; at 017f76d, B11's one divergence)
+    const ownUnacked = (el: SceneElement) => {
+      const conf = this.confirmedMap.get(el.id)
+      if (!conf) return !!this.tracked.get(el.id)?.isNew || this.inflightHas(el.id)
+      return (
+        el.index !== conf.index &&
+        (!!this.tracked.get(el.id)?.dirty.has('z') || this.inflightGroups(el.id).has('z'))
+      )
+    }
     // the index pre-pass (E2, E3), skipped when this client has no unacknowledged element of its own
     // (§2.5.4); the array is then only sorted by (index, id)
     const t0 = nowMs()
