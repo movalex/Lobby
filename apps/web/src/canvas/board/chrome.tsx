@@ -34,7 +34,14 @@ import type { LobbyCanvas } from '../api/lobby-canvas.ts'
 import type { FeatureOverlaySpec, FeatureRegistries, HostSlotName } from '../api/registries.ts'
 import type { EditNotice, EditState } from '../lease/editorLease.ts'
 import { arrowPaths } from '../presence/drag-arrows.ts'
-import { type AvoidRect, EDGE_CHIP_RADIUS, type EdgeMarker, edgeMarkers } from './edge-markers.ts'
+import {
+  type AvoidRect,
+  type CoverNode,
+  EDGE_CHIP_RADIUS,
+  type EdgeMarker,
+  edgeMarkers,
+  floatingCovers,
+} from './edge-markers.ts'
 import { editingOutline, hoverOutline, type OutlineBox } from './outlines.ts'
 import type { LobbyBoardSession } from './session.ts'
 
@@ -560,6 +567,41 @@ function cornerControls(): AvoidRect[] {
  */
 const EDGE_SLOTS = ['stylePanel', 'navigation'] as const satisfies readonly HostSlotName[]
 
+/**
+ * The layer slots: full-size or zero-height strips (SLOT_STYLE) with a box floating somewhere inside, so the
+ * slot's own rectangle says nothing. The selection bar (the floating toolbar under the selection, which moves
+ * with it and with the camera) and the phone sheet (its "Board actions" button above the toolbar's row, and
+ * the open sheet, up to 60% of the screen). What floats inside them is measured (`floatingCovers`): a chip
+ * is above them in z-order (board.css, 100) and used to sit on their buttons.
+ */
+const EDGE_LAYERS = ['selectionBar', 'phoneSheet'] as const satisfies readonly HostSlotName[]
+
+/** How deep inside a layer slot a floating box is looked for (the slot's child, the bar, a popover in it). */
+const COVER_DEPTH = 3
+
+/** One element and what is inside it, as `floatingCovers` reads it (client px). */
+function coverNode(el: Element, depth: number): CoverNode {
+  const cs = getComputedStyle(el)
+  const b = el.getBoundingClientRect()
+  return {
+    x: b.left,
+    y: b.top,
+    w: b.width,
+    h: b.height,
+    hidden: cs.display === 'none' || cs.visibility === 'hidden',
+    floating: cs.position === 'absolute' || cs.position === 'fixed',
+    children: depth > 0 ? [...el.children].map((c) => coverNode(c, depth - 1)) : [],
+  }
+}
+
+/** What changes where a floating box in a layer slot is, or whether it is there at all. */
+const LAYER_MUTATIONS = {
+  subtree: true,
+  childList: true,
+  attributes: true,
+  attributeFilter: ['style', 'class', 'hidden', 'data-compact', 'aria-expanded'],
+} as const
+
 const sameRects = (a: readonly AvoidRect[], b: readonly AvoidRect[]) =>
   a.length === b.length &&
   a.every((r, i) => r.x === b[i]?.x && r.y === b[i]?.y && r.w === b[i]?.w && r.h === b[i]?.h)
@@ -576,7 +618,9 @@ function useCoveredRects(overlay: RefObject<HTMLElement | null>, version: number
     const host = el?.parentElement
     if (!el || !host) return
     const watched = new Set<Element>()
+    const layers = new Set<Element>()
     let resize: ResizeObserver | null = null
+    let mutation: MutationObserver | null = null
     const measure = () => {
       const base = el.getBoundingClientRect()
       const next: AvoidRect[] = []
@@ -591,14 +635,33 @@ function useCoveredRects(overlay: RefObject<HTMLElement | null>, version: number
         if (b.width > 0 && b.height > 0)
           next.push({ x: b.left - base.left, y: b.top - base.top, w: b.width, h: b.height })
       }
+      // the floating selection bar and the phone sheet: what is inside the slot, not the slot's own box
+      for (const name of EDGE_LAYERS) {
+        const slot = host.querySelector(`:scope > [data-lobby-slot="${name}"]`)
+        if (!slot) continue
+        if (!layers.has(slot)) {
+          layers.add(slot)
+          mutation?.observe(slot, LAYER_MUTATIONS)
+        }
+        next.push(
+          ...floatingCovers(
+            [...slot.children].map((c) => coverNode(c, COVER_DEPTH)),
+            {
+              x: base.left,
+              y: base.top,
+            },
+          ),
+        )
+      }
       setRects((prev) => (sameRects(prev, next) ? prev : next))
     }
     if (typeof ResizeObserver !== 'undefined') {
       resize = new ResizeObserver(measure)
       resize.observe(el)
     }
-    // a slot's box comes (focus mode off, a feature mounting) and goes with the host's children
-    const mutation = typeof MutationObserver !== 'undefined' ? new MutationObserver(measure) : null
+    // a slot's box comes (focus mode off, a feature mounting) and goes with the host's children; a floating
+    // box in a layer slot comes, goes and moves with that slot's subtree and styles
+    mutation = typeof MutationObserver !== 'undefined' ? new MutationObserver(measure) : null
     mutation?.observe(host, { childList: true })
     measure()
     return () => {
@@ -632,7 +695,8 @@ const SIDE_WORDS = { left: 'to the left', right: 'to the right', top: 'above', b
  * follows them like the people list's Follow. The nearest ten, spread along the edge so they do not pile up
  * (./edge-markers.ts). Hidden with their cursor (`cursorVisible`: present mode, "hide cursors") and in focus
  * mode; a person the room does not stream to this tab has no place to point at. A chip never sits under the style
- * panel or the other controls on the canvas's edge (`useCoveredRects`). Drawn only, never written.
+ * panel, the navigation panel, the floating selection bar or the phone sheet (its button and the open sheet), or
+ * the other controls on the canvas's edge (`useCoveredRects`). Drawn only, never written.
  */
 function EdgeMarkers({
   canvas,

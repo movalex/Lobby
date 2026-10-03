@@ -475,6 +475,157 @@ test('W5-32: on a phone a chip is a 44 px touch target that nothing covers, and 
   }
 })
 
+/** What a phone's chip could sit on, and what could sit on it, in client px, with a hit test at each centre. */
+type CoverGeometry = {
+  chip: { x: number; y: number; w: number; h: number } | null
+  toggle: { x: number; y: number; w: number; h: number } | null
+  sheet: { x: number; y: number; w: number; h: number } | null
+  bar: { x: number; y: number; w: number; h: number } | null
+  /** the chip is what a tap at its centre would hit */
+  chipOnTop: boolean
+  /** a tap at the centre of each of the toggle's, the sheet's and the bar's buttons hits that control */
+  toggleReachable: boolean
+  barReachable: boolean
+}
+
+const coverGeometry = (page: Page): Promise<CoverGeometry> =>
+  page.evaluate(() => {
+    const rect = (el: Element | null) => {
+      if (!el) return null
+      const r = el.getBoundingClientRect()
+      return r.width > 0 && r.height > 0 ? { x: r.x, y: r.y, w: r.width, h: r.height } : null
+    }
+    const chipEl = document.querySelector('[data-testid="edge-marker"]')
+    const toggleEl = document.querySelector('[data-testid="phone-sheet-open"]')
+    const barEl = document.querySelector('[data-testid="selection-bar"]')
+    const chip = rect(chipEl)
+    const topAt = (r: { x: number; y: number; w: number; h: number }) =>
+      document.elementFromPoint(r.x + r.w / 2, r.y + r.h / 2)
+    const barButtons = barEl ? [...barEl.querySelectorAll('button')] : []
+    return {
+      chip,
+      toggle: rect(toggleEl),
+      sheet: rect(document.querySelector('[data-testid="phone-sheet"]')),
+      bar: rect(barEl),
+      chipOnTop: !!chip && topAt(chip)?.closest('[data-testid="edge-marker"]') === chipEl,
+      toggleReachable:
+        !toggleEl || topAt(rect(toggleEl) ?? { x: 0, y: 0, w: 0, h: 0 })?.closest('button') === toggleEl,
+      barReachable: barButtons.every((button) => {
+        const r = rect(button)
+        return !r || topAt(r)?.closest('button') === button
+      }),
+    }
+  })
+
+const boxesOverlap = (
+  a: { x: number; y: number; w: number; h: number } | null,
+  b: { x: number; y: number; w: number; h: number } | null,
+) => !!a && !!b && a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h
+
+test('wave B follow-up 4: on a phone a chip keeps clear of the "Board actions" button, the open sheet and the floating selection bar', async ({
+  browser,
+  board,
+  users,
+  canvasSession,
+}) => {
+  const b = await canvasSession('bob')
+  const at = await hover(b)
+  const a = await openPhoneSession(browser, board, users, 'alice')
+  try {
+    await expect(cursorOf(a, b)).toHaveCount(1)
+    const marker = markerOf(a, b)
+    const box = await canvasBox(a.page)
+    // where a chip's centre can be: 10 px in from the sides, 72 px up from the bottom (the toolbar's row), and a
+    // finger-sized chip's 31 px reach
+    const right = box.width - 10 - 31
+    const bottom = box.height - 72 - 31
+    /** alice looks so that bob is on the line from the canvas's middle through `to`, three times as far out */
+    const lookToward = async (to: { x: number; y: number }) => {
+      const c = { x: box.width / 2, y: box.height / 2 }
+      const p = { x: c.x + 3 * (to.x - c.x), y: c.y + 3 * (to.y - c.y) }
+      await setViewport(a.page, { x: at.x - p.x, y: at.y - p.y, zoom: 1 })
+    }
+    const toggle = a.page.getByTestId('phone-sheet-open')
+
+    await test.step('the button: bob far to the lower right, where a chip would sit on "Board actions", gets a chip beside it', async () => {
+      await lookToward({ x: right, y: bottom })
+      await expect(marker).toHaveCount(1)
+      await expect(toggle).toBeVisible()
+      await expect
+        .poll(async () => {
+          const g = await coverGeometry(a.page)
+          return !!g.chip && !boxesOverlap(g.chip, g.toggle) && g.chipOnTop && g.toggleReachable
+        })
+        .toBe(true)
+      const g = await coverGeometry(a.page)
+      expect(g.toggle).not.toBeNull()
+      // and still on the canvas
+      expect(g.chip && g.chip.x >= box.x && g.chip.x + g.chip.w <= box.x + box.width).toBe(true)
+      expect(g.chip && g.chip.y >= box.y && g.chip.y + g.chip.h <= box.y + box.height).toBe(true)
+    })
+
+    await test.step('the open sheet: no chip is under it, and the button is still there to close it', async () => {
+      await toggle.tap()
+      await expect(a.page.getByTestId('phone-sheet')).toBeVisible()
+      await expect
+        .poll(async () => {
+          const g = await coverGeometry(a.page)
+          return (
+            !!g.chip &&
+            !!g.sheet &&
+            !boxesOverlap(g.chip, g.sheet) &&
+            !boxesOverlap(g.chip, g.toggle) &&
+            g.chipOnTop
+          )
+        })
+        .toBe(true)
+      // bob straight below: the chip's usual place is under the sheet too
+      await lookToward({ x: box.width / 2, y: bottom })
+      await expect(marker).toHaveCount(1)
+      await expect
+        .poll(async () => {
+          const g = await coverGeometry(a.page)
+          return !!g.chip && !boxesOverlap(g.chip, g.sheet) && g.chipOnTop
+        })
+        .toBe(true)
+      await a.page.getByTestId('phone-sheet-close').tap()
+      await expect(a.page.getByTestId('phone-sheet')).toHaveCount(0)
+    })
+
+    await test.step('the floating selection bar: bob level with it on the right, the chip is not on its buttons and they are all reachable', async () => {
+      await lookToward({ x: right, y: box.height / 2 - 31 })
+      await expect(marker).toHaveCount(1)
+      const v = await viewport(a.page)
+      // a note whose bar (14 px under the note, about 40 px high) lands where the chip's place on the right edge is,
+      // and sits at the right edge so the bar reaches it
+      const chipY = box.height / 2 - 31
+      const id = await createNote(a.page, {
+        x: v.x + box.width - 160,
+        y: v.y + chipY - 29 - 200,
+        text: 'Bar',
+      })
+      await select(a.page, [id])
+      const bar = a.page.getByTestId('selection-bar')
+      await expect(bar).toBeVisible()
+      await expect
+        .poll(async () => {
+          const g = await coverGeometry(a.page)
+          return !!g.chip && !!g.bar && !boxesOverlap(g.chip, g.bar) && g.chipOnTop && g.barReachable
+        })
+        .toBe(true)
+      // the bar really did reach the chip's usual place: it runs to the canvas's right end, level with it
+      const g = await coverGeometry(a.page)
+      expect(g.bar && g.bar.x + g.bar.w > box.x + right - 31).toBe(true)
+      expect(g.bar && g.bar.y <= box.y + chipY && g.bar.y + g.bar.h >= box.y + chipY).toBe(true)
+      // and the chip still goes to bob
+      await marker.tap()
+      await expect(marker).toHaveCount(0)
+    })
+  } finally {
+    await a.context.close()
+  }
+})
+
 test('W5-32: the style panel does not hide a chip: with a tool picked, a chip for a person to the right or the upper right sits clear of it, on top and clickable', async ({
   canvasSession,
 }) => {

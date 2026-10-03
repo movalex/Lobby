@@ -9,8 +9,9 @@
  * of the canvas to that place, pushed in from the edge by `chipRadius + margin` so the whole chip is on the
  * canvas, with the arrow end of it facing the person. At most `max` markers (the nearest people win). A chip
  * never sits under one of the board's own controls (`avoid`: the board menu, the style panel, the navigation
- * panel) and chips that would land on one another are spread apart along the whole edge, corners included
- * (`place`).
+ * panel, the floating selection bar, the phone sheet's button and its open sheet: `floatingCovers` reads the
+ * last two off the page) and chips that would land on one another are spread apart along the whole edge,
+ * corners included (`place`).
  */
 import type { Bounds, ScenePoint, ScreenPoint } from '../api/lobby-canvas.ts'
 
@@ -301,4 +302,45 @@ function place(
     const p = moved.get(mk.sid)
     return p ? { ...mk, x: p.x, y: p.y } : mk
   })
+}
+
+/**
+ * One element of a host slot that floats over the canvas, as chrome.tsx measures it (client px) for
+ * `floatingCovers`. Kept a plain shape so the walk below runs in Node tests.
+ */
+export interface CoverNode {
+  readonly x: number
+  readonly y: number
+  readonly w: number
+  readonly h: number
+  /** `display: none` or `visibility: hidden`: nothing of it, or inside it, is on screen */
+  readonly hidden: boolean
+  /** `position: absolute` or `fixed`: a box put where it is wanted over the canvas, whatever it sits in */
+  readonly floating: boolean
+  readonly children: readonly CoverNode[]
+}
+
+/** The least a floating box measures, each way, to cover chips (a visually hidden live region does not). */
+export const MIN_COVER_PX = 8
+
+/**
+ * What the layer slots of the board page cover (the floating selection bar, the phone sheet's button and its
+ * open sheet, which a slot's own box does not say: they are full-size or zero-height strips with a box put
+ * somewhere inside), as rectangles for `edgeMarkers`' `avoid`, relative to `origin` (the overlay's corner in
+ * client px). Every visible floating box of at least `MIN_COVER_PX` counts, wherever it sits in the tree
+ * (a popover inside the bar counts too); a container that is not itself a box on the canvas is looked
+ * through. Pure.
+ */
+export function floatingCovers(nodes: readonly CoverNode[], origin: ScreenPoint): AvoidRect[] {
+  const out: AvoidRect[] = []
+  const walk = (list: readonly CoverNode[]) => {
+    for (const n of list) {
+      if (n.hidden) continue
+      if (n.floating && Number.isFinite(n.x + n.y + n.w + n.h) && n.w >= MIN_COVER_PX && n.h >= MIN_COVER_PX)
+        out.push({ x: n.x - origin.x, y: n.y - origin.y, w: n.w, h: n.h })
+      walk(n.children)
+    }
+  }
+  walk(nodes)
+  return out
 }
