@@ -17,7 +17,9 @@
  *  - a group is pushed only when the local value differs from `base` (so a remote change applied locally,
  *    or a value already in flight, is never pushed back: E-rules of §2.5.5);
  *  - an element with nothing dirty, in flight or held is, in the scene, EXACTLY the server's copy (version
- *    and versionNonce included), so a quiet client's map hashes equal to the server's (hash.ts);
+ *    and versionNonce included), so a quiet client's map hashes equal to the server's (hash.ts); the one
+ *    local value kept on it is an image's derivative suffix (`ver_X@display`, E9, CR-W5-3G-3), which the
+ *    hash, every push and the offline queue strip;
  *  - remote changes are applied with the gesture hold-back of §2.5.4; the text editor holds back only the
  *    edited label's `text` and `layout`;
  *  - text and layout of a text element are pushed only while this tab holds its lease, or when nobody
