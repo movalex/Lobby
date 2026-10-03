@@ -9,7 +9,7 @@ import { type Db, isUniqueViolation, migrate, openDb } from '@draftroom/db'
 import { dataLayout } from '@draftroom/dev-assets'
 import fastifyCookie from '@fastify/cookie'
 import fastifyRateLimit from '@fastify/rate-limit'
-import Fastify, { type FastifyInstance, type FastifyServerOptions } from 'fastify'
+import Fastify, { type FastifyInstance, type FastifyReply, type FastifyServerOptions } from 'fastify'
 import { createClerkAuthProvider } from './auth/clerk.ts'
 import { creatorLookup } from './auth/creator-sql.ts'
 import { createDevAuthProvider } from './auth/dev.ts'
@@ -184,6 +184,19 @@ async function buildServer(
     logController: new Fastify.LogController({ disableRequestLogging: true }),
     return503OnClosing: true,
     trustProxy: config.trustProxy, // req.ip (per-IP rate limits) behind proxies: TRUST_PROXY, docs/DEPLOY.md
+    // CSD-4: router-level errors (a malformed or over-long URL) never reach setErrorHandler below, and
+    // Fastify's own body repeats the requester's URL. They get the same generic body as every other refusal.
+    frameworkErrors: (err, req, reply) => {
+      const { status, body } = toErrorResponse(err)
+      if (status >= 500) req.log.error({ err: { name: err.name, code: err.code } }, 'request failed')
+      // The hook is generic over a route's Reply type; this answer has no route, so it is the plain reply.
+      const res = reply as unknown as FastifyReply
+      res
+        .code(status)
+        .header('cache-control', 'no-store')
+        .header('x-content-type-options', 'nosniff')
+        .send(body)
+    },
   })
   registerInternalSecretGuard(app, config.internalSecret)
   const syncNotifier =
