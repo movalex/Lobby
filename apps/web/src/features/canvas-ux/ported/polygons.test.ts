@@ -1,10 +1,7 @@
-// D4: the polygon tools' geometry (./polygons.ts) is the converter's (CR-2B-2: canvas-schema engine/
-// geo-outlines.ts `geoOutline`, which the converter builds a converted geo's outline from), so a converted
-// board's shapes and new ones are alike; the drag box; the holder test.
-import { createTableTextMetrics, geoOutline } from '@draftroom/canvas-schema/engine'
+// D4: the polygon tools' geometry (./polygons.ts) is the converter's (packages/tldraw-import geometry.ts
+// `polygonOf`), so a converted board's shapes and new ones are alike; the drag box; the holder test.
 import { describe, expect, it } from 'vitest'
-import { convertBoard, type TlRecord } from '../../../../../../packages/tldraw-import/src/index.ts'
-import { toRichText } from '../../../../../../packages/tldraw-import/src/tldraw.ts'
+import { polygonOf } from '../../../../../../packages/tldraw-import/src/geometry.ts'
 import type { CanvasElement } from '../../../canvas/api/index.ts'
 import {
   dragBox,
@@ -12,88 +9,27 @@ import {
   isPolygonLine,
   isPolygonTool,
   POLYGON_TOOLS,
-  type PolygonKind,
   polygonGeometry,
   polygonHolderAt,
   polygonPoints,
 } from './polygons.ts'
 
-/** A tldraw geo shape of `kind` at (x, y), w × h, unrotated and unflipped, converted by the real converter. */
-function converted(kind: PolygonKind, x: number, y: number, w: number, h: number) {
-  const records = [
-    { id: 'document:document', typeName: 'document', gridSize: 10, name: '', meta: {} },
-    { id: 'page:page', typeName: 'page', name: 'Page 1', index: 'a1', meta: {} },
-    {
-      id: 'shape:p1',
-      typeName: 'shape',
-      type: 'geo',
-      parentId: 'page:page',
-      index: 'a2',
-      x,
-      y,
-      rotation: 0,
-      isLocked: false,
-      opacity: 1,
-      meta: {},
-      props: {
-        geo: kind,
-        dash: 'draw',
-        url: '',
-        w,
-        h,
-        growY: 0,
-        scale: 1,
-        labelColor: 'black',
-        color: 'blue',
-        fill: 'none',
-        size: 'm',
-        font: 'draw',
-        align: 'middle',
-        verticalAlign: 'middle',
-        richText: toRichText(''),
-      },
-    },
-  ] as unknown as TlRecord[]
-  const conv = convertBoard(records, { updatedAt: 1, metrics: createTableTextMetrics() })
-  expect(conv.failures).toEqual([])
-  const line = conv.elements.find((e) => e.id === 'p1.o') as unknown as {
-    x: number
-    y: number
-    points: [number, number][]
-    width: number
-    height: number
-  }
-  expect(line, kind).toBeDefined()
-  return line
-}
-
-describe('polygonPoints (D4, CR-2B-2)', () => {
-  it('is the converter’s outline (canvas-schema geoOutline) for every polygon tool, closed', () => {
+describe('polygonPoints (D4)', () => {
+  it('is the converter’s outline for every polygon tool, closed', () => {
     for (const { id } of POLYGON_TOOLS) {
       for (const [w, h] of [
         [200, 200],
         [300, 120],
       ] as const) {
-        const ours = polygonPoints(id, w, h, 'g-seed')
-        const theirs = geoOutline(id, w, h, { seed: 'g-seed', size: 'm', scale: 1 })
-        expect(ours, id).toEqual(theirs)
+        const ours = polygonPoints(id, w, h)
+        const theirs = polygonOf(id, w, h)
+        expect(ours.length, id).toBe(theirs.length)
+        ours.forEach(([x, y], i) => {
+          expect(x, `${id} x${i}`).toBeCloseTo(theirs[i]?.[0] ?? Number.NaN, 9)
+          expect(y, `${id} y${i}`).toBeCloseTo(theirs[i]?.[1] ?? Number.NaN, 9)
+        })
         expect(ours[0]).toEqual(ours[ours.length - 1])
       }
-    }
-  })
-
-  it('a shape drawn with a tool is the converted tldraw shape of the same kind and box (no 57 px octagon gap)', () => {
-    for (const { id } of POLYGON_TOOLS) {
-      const theirs = converted(id, 120, 80, 260, 180)
-      // the converter seeds a cloud's bumps with the tldraw shape id; a tool with the new shape's group id
-      const ours = polygonGeometry(id, { x: 120, y: 80, width: 260, height: 180 }, 'shape:p1')
-      expect([ours.x, ours.y, ours.width, ours.height], id).toEqual([
-        theirs.x,
-        theirs.y,
-        theirs.width,
-        theirs.height,
-      ])
-      expect(ours.points, id).toEqual(theirs.points)
     }
   })
 

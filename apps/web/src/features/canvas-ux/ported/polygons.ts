@@ -2,18 +2,14 @@
 // rhombus, star, cloud, heart and the four block arrows) are built as polygons, as the plan says
 // (docs/EXCALIDRAW-MIGRATION.md §4.1, §5.1 "geo other kinds"): a closed `line` (`polygon: true`) draws the
 // outline and the fill, and a transparent rectangle over the same box holds the label and the connectors'
-// bindings, the two grouped. It is the converter's shape (packages/tldraw-import convert.ts `geo`), with the
-// converter's own outlines (canvas-schema engine/geo-outlines.ts `geoOutline`, CR-2B-2): a hexagon, star or
-// cloud drawn here and one on a converted board are the same shape (they were up to 57 px apart while the
-// tools drew the converter's version-1 outlines).
+// bindings, the two grouped. It is the converter's shape (packages/tldraw-import convert.ts `geo`, the same
+// points as its `polygonOf`), so a converted board's shapes and new ones are alike.
 //
 // The tools are canvas-ux's pointer tools (registered in ./index.tsx, in "More" in tldraw's order): a drag
 // draws the shape in the dragged box (Shift keeps it square), a click puts a 200 px one centred on the
 // click; the tool then goes back to Select with the new shape selected (tldraw's rule). Enter with the tool
 // picked places one in the middle of the view (A11Y-07, ./place.ts). One undo step each. The shape takes
 // the next shapes' style (colour, fill, dash, size).
-
-import { geoOutline } from '@draftroom/canvas-schema/engine'
 import type {
   CanvasElement,
   CanvasFeatureContext,
@@ -63,29 +59,93 @@ type Pt = [number, number]
 
 /**
  * The closed outline of `kind` in a `w` × `h` box (the last point equals the first): the converter's
- * (canvas-schema `geoOutline`, tldraw 5.4.2's geometry), point for point. `seed` places a cloud's bumps (the
- * converter seeds them with the tldraw shape id; the tools with the new shape's group id). Pure.
+ * `polygonOf` (packages/tldraw-import geometry.ts), point for point. Pure.
  */
-export function polygonPoints(kind: PolygonKind, w: number, h: number, seed = ''): Pt[] {
-  return geoOutline(kind, w, h, { seed, size: 'm', scale: 1 })
+export function polygonPoints(kind: PolygonKind, w: number, h: number): Pt[] {
+  const reg = (n: number, rot = -Math.PI / 2): Pt[] =>
+    Array.from({ length: n }, (_, i) => {
+      const a = rot + (i * 2 * Math.PI) / n
+      return [w / 2 + (w / 2) * Math.cos(a), h / 2 + (h / 2) * Math.sin(a)] as Pt
+    })
+  const open = (k: PolygonKind, w: number, h: number) => polygonPoints(k, w, h).slice(0, -1)
+  let pts: Pt[]
+  switch (kind) {
+    case 'triangle':
+      pts = [
+        [w / 2, 0],
+        [w, h],
+        [0, h],
+      ]
+      break
+    case 'hexagon':
+      pts = reg(6, 0)
+      break
+    case 'star':
+      pts = Array.from({ length: 10 }, (_, i) => {
+        const a = -Math.PI / 2 + (i * Math.PI) / 5
+        const r = i % 2 ? 0.4 : 1
+        return [w / 2 + (w / 2) * r * Math.cos(a), h / 2 + (h / 2) * r * Math.sin(a)] as Pt
+      })
+      break
+    case 'rhombus':
+      pts = [
+        [w * 0.25, 0],
+        [w, 0],
+        [w * 0.75, h],
+        [0, h],
+      ]
+      break
+    case 'arrow-right':
+      pts = [
+        [0, h * 0.25],
+        [w * 0.6, h * 0.25],
+        [w * 0.6, 0],
+        [w, h / 2],
+        [w * 0.6, h],
+        [w * 0.6, h * 0.75],
+        [0, h * 0.75],
+      ]
+      break
+    case 'arrow-left':
+      pts = open('arrow-right', w, h).map(([x, y]) => [w - x, y] as Pt)
+      break
+    case 'arrow-down':
+      pts = open('arrow-right', h, w).map(([x, y]) => [y, x] as Pt)
+      break
+    case 'arrow-up':
+      pts = open('arrow-down', w, h).map(([x, y]) => [x, h - y] as Pt)
+      break
+    case 'heart':
+      pts = [
+        [w / 2, h * 0.25],
+        [w * 0.8, 0],
+        [w, h * 0.3],
+        [w / 2, h],
+        [0, h * 0.3],
+        [w * 0.2, 0],
+      ]
+      break
+    case 'cloud':
+      pts = reg(12).map(
+        ([x, y], i) => (i % 2 ? [w / 2 + (x - w / 2) * 0.85, h / 2 + (y - h / 2) * 0.85] : [x, y]) as Pt,
+      )
+      break
+  }
+  const first = pts[0] ?? [0, 0]
+  return [...pts, [first[0], first[1]]]
 }
 
 const round2 = (v: number) => Math.round(v * 100) / 100
 
-/**
- * The polygon line's geometry for `kind` in the scene box: `x`, `y` = the first point, points relative,
- * closed exactly (as the converter's: rounding against the rounded origin can leave the last point 0.01 off).
- */
+/** The polygon line's geometry for `kind` in the scene box: `x`, `y` = the first point, points relative. */
 export function polygonGeometry(
   kind: PolygonKind,
   box: { x: number; y: number; width: number; height: number },
-  seed = '',
 ): { x: number; y: number; width: number; height: number; points: Pt[] } {
-  const abs = polygonPoints(kind, box.width, box.height, seed).map(([x, y]) => [box.x + x, box.y + y] as Pt)
+  const abs = polygonPoints(kind, box.width, box.height).map(([x, y]) => [box.x + x, box.y + y] as Pt)
   const [x0, y0] = abs[0] as Pt
   const points = abs.map(([x, y]) => [round2(x - round2(x0)), round2(y - round2(y0))] as Pt)
   points[0] = [0, 0]
-  points[points.length - 1] = [0, 0]
   const xs = points.map((p) => p[0])
   const ys = points.map((p) => p[1])
   return {
@@ -155,7 +215,7 @@ export function createPolygon(
   return canvas.transact(label, (tx) => {
     const line = tx.create('line', {
       ...style,
-      ...polygonGeometry(kind, box, groupIds[0]),
+      ...polygonGeometry(kind, box),
       polygon: true,
       roundness: kind === 'cloud' || kind === 'heart' ? { type: 2 } : null,
       startArrowhead: null,
