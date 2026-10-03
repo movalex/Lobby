@@ -95,7 +95,7 @@ test('viewers and commenters copy a note’s text with Ctrl+C and the menu’s C
       await expect(menu.getByTestId('context-menu.copy')).toBeVisible()
       await menu.getByTestId('context-menu.copy').click()
       await expect.poll(() => clipboard(who.page)).toBe('Send the quote')
-      // nothing was written to the board by any of it
+      // and none of it said exporting is off
       await expect(who.page.getByTestId('export-off-notice')).toHaveCount(0)
     })
   }

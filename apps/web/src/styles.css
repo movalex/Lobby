@@ -2156,10 +2156,10 @@ button.dr-pill--role:disabled {
 /* W5-31 (CR-3I-2): the Excalidraw page's pinned controls (the people chip, the comment tool and the
    bell, a live-presentation chip) do not fit the phone layout above on a 390 px screen: with 6 px gaps
    and a title that never drops below 96 px, Share ended 7 px past the screen's right edge (37 px past on
-   a 360 px phone). At 400 px and below the gaps and the pills' padding are tighter and the title is the
-   part that gives way (it still keeps a few characters, then an ellipsis): about 117 px at 390, 47 px at
-   320. Every control stays at least 24 px square. */
-@media (max-width: 400px) {
+   a 360 px phone; the layout needs 405 px to keep its 8 px edge). At 405 px and below the gaps and the
+   pills' padding are tighter and the title is the part that gives way (it still keeps a few characters,
+   then an ellipsis): about 117 px at 390, 47 px at 320. Every control stays at least 24 px square. */
+@media (max-width: 405px) {
   .dr-topbar[data-width="phone"] {
     gap: 4px;
     padding: 0 6px 0 8px;

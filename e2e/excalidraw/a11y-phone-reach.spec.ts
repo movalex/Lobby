@@ -13,7 +13,7 @@
 //    results card) or a comment sheet is docked at the bottom, Board actions steps aside: no point of the card
 //    or of the comment's text box is under it. (The comment sheet against the tool dock is 3c's part,
 //    comments-stacking.spec.ts; the cards' own place is 3f's.)
-//  - W5-31 and W5-50 (the top bar's fit rules, CR-3I-2 and CR-3I-3): at 390 px (and 360, 412 and 320) every
+//  - W5-31 and W5-50 (the top bar's fit rules, CR-3I-2 and CR-3I-3): at 390 px (and 320, 360, 402 and 412) every
 //    top-bar control is wholly on screen (Share was 7 px past the edge at 390), and the "⋯" menu shows no
 //    caption with nothing under it ("On this board" was empty while the people feature has its own chip).
 import type { Page } from '@playwright/test'
@@ -228,6 +228,7 @@ for (const [size, role] of [
   [PHONE, 'owner'],
   [PHONE, 'viewer'],
   [PIXEL_7, 'owner'],
+  [{ width: 402, height: 874 }, 'owner'], // iPhone 16 Pro
   [{ width: 360, height: 740 }, 'owner'],
   [{ width: 320, height: 640 }, 'owner'],
 ] as const) {
