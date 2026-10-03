@@ -657,6 +657,28 @@ describe('wave 5 review (W5-19, W5-33, W5-39, W5-54)', () => {
     expect(codeSelectionBoxes(f.canvas)).toEqual([{ id: 'a1', x: 92, y: 92, w: 216, h: 16 }])
     f.canvas.select(['a1'])
     expect(codeSelectionBoxes(f.canvas)).toEqual([])
+    // CR 3b-11: a lone connector selected by code has the engine's own point handles, so no outline
+    selectByCode(f.canvas, ['a1'])
+    expect(f.canvas.selection).toEqual(['a1'])
+    expect(codeSelectionBoxes(f.canvas)).toEqual([])
+  })
+
+  it('W5-39: a read-only session (no point handles there) outlines a lone connector selected by code', () => {
+    const f = fake(
+      [
+        el('a1', 'arrow', 100, 100, 200, 0, {
+          points: [
+            [0, 0],
+            [200, 0],
+          ],
+        }),
+      ],
+      { readOnly: true },
+    )
+    Object.assign(f.canvas, { sceneToOverlay: (p: { x: number; y: number }) => ({ x: p.x, y: p.y }) })
+    selectByCode(f.canvas, ['a1'])
+    expect(f.canvas.selection).toEqual(['a1'])
+    expect(codeSelectionBoxes(f.canvas)).toEqual([{ id: 'a1', x: 92, y: 92, w: 216, h: 16 }])
   })
 
   it('W5-54: "Back to content" shows only when the board has content and none of it is in view', () => {

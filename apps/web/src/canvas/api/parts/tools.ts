@@ -5,9 +5,9 @@
  *  - `highlight` (tldraw's highlighter; docs/EXCALIDRAW-MIGRATION.md §3.1: "Highlighter = `freedraw` with
  *    opacity 50 and a wide stroke, `customData.lobby.kind = 'highlight'`"). The engine's pen, with the next
  *    style switched to the highlight shade of the current colour at opacity 50 while the tool is on (and
- *    switched back after). Each stroke is stamped as it starts, in place on the engine's new element before
- *    anything of it is pushed (the sync core holds a stroke being drawn and pushes it once, at its end): the
- *    converter's highlight width (HIGHLIGHT_WIDTH, `packages/tldraw-import` convert.ts HIGHLIGHT) and
+ *    switched back after). Each stroke is stamped as it starts, through the port's gesture-element hook
+ *    (CR-3A-9: `LobbyCanvasPort.onGestureElement`, before anything of it is pushed): the converter's
+ *    highlight width (HIGHLIGHT_WIDTH, `packages/tldraw-import` convert.ts HIGHLIGHT) and
  *    `kind: 'highlight'`, a create-only key (canvas-schema custom-data.ts) that only a create may carry. The
  *    stroke is then an ordinary element: one undo step, pushed by the sync engine.
  *  - `hand` for read-only roles (viewers, commenters, limited guests). Under the `interaction` config the
@@ -21,16 +21,19 @@
  * outline once the gesture is over, with the same anchor (./connector-outline.ts), folded into the step that
  * made it.
  *
- * `tool()` reads the mode reactively (lib/signals), on top of the port's own tracked read in ../impl.ts.
+ * CR-3A-9: the board page's port reports both modes by their Lobby names (`LobbyCanvasPort.setToolMode`), so
+ * its `toolChanged` event and the e2e facade see `highlight` and `hand` too. `tool()` reads the mode
+ * reactively (lib/signals), on top of the port's own tracked read in ../impl.ts, and names the modes on a
+ * bare C0 port as well.
  * Keys the allowlist routes straight to the engine (canvas/input) bypass this part: canvas-ux's feature
  * keys route P while highlighting, and H and V for read-only roles, through `setTool`.
  */
 
-import { mutateElement } from '@excalidraw/element'
-import type { ElementsMap, ExcalidrawElement } from '@excalidraw/element/types'
+import type { ExcalidrawElement } from '@excalidraw/element/types'
 import type { AppState } from '@excalidraw/excalidraw/types'
 import { atom } from '../../../lib/signals.ts'
 import { onBoardEngine } from '../../overrides.ts'
+import type { LobbyCanvasPort } from '../../port-impl.ts'
 import type { StyleValues } from '../lobby-canvas.ts'
 import { connectorOutlinePatch, type OutlinePatch } from './connector-outline.ts'
 import type { PartDeps } from './types.ts'
@@ -120,12 +123,16 @@ function outlineConnectors(deps: PartDeps, elements: readonly ExcalidrawElement[
   }
 }
 
+/** The board page's port seams (CR-3A-9); a bare C0 port has neither. */
+type PortSeams = Partial<Pick<LobbyCanvasPort, 'setToolMode' | 'onGestureElement'>>
+
 export function createToolsPart(deps: PartDeps): ToolsPart {
   const { port, registries } = deps
+  const seams = port as PortSeams
+  const setMode = (name: string | null, over: string) => seams.setToolMode?.(name ? { name, over } : null)
   const highlighting = atom('canvas.tool.highlight', false)
   const viewerHand = atom('canvas.tool.viewer-hand', false)
   let saved: Saved | null = null
-  const stamped = new Set<string>()
 
   const readOnly = () => {
     try {
@@ -145,6 +152,7 @@ export function createToolsPart(deps: PartDeps): ToolsPart {
   const endHighlight = () => {
     if (!highlighting.get()) return
     highlighting.set(false)
+    setMode(null, 'freedraw')
     const s = saved
     saved = null
     if (!s) return
@@ -157,12 +165,23 @@ export function createToolsPart(deps: PartDeps): ToolsPart {
   const endViewerHand = () => {
     if (!viewerHand.get()) return
     viewerHand.set(false)
+    setMode(null, 'select')
     setCursor(null)
   }
 
   // the engine's tool moved on by itself (a tool letter, Escape, a stroke that ended the tool): the modes
-  // end with it. New strokes of the highlighter are stamped as they start.
+  // end with it. New strokes of the highlighter are stamped as they start (the port's gesture-element hook).
   onBoardEngine(registries, ({ api }) => {
+    seams.onGestureElement?.((el) => {
+      if (!highlighting.get() || el.type !== 'freedraw') return null
+      const custom = (el.customData ?? {}) as Record<string, unknown>
+      const lobby = (custom.lobby ?? {}) as Record<string, unknown>
+      return {
+        strokeWidth: HIGHLIGHT_WIDTH,
+        opacity: HIGHLIGHT_OPACITY,
+        customData: { ...custom, lobby: { ...lobby, kind: 'highlight' } },
+      }
+    })
     // W5-11: connectors this tab drew, re-ended or pasted, outlined once no gesture holds them
     const pending = new Set<string>()
     let flushing = false
@@ -198,7 +217,7 @@ export function createToolsPart(deps: PartDeps): ToolsPart {
         }
       })
     }
-    api.onChange((elements, appState) => {
+    api.onChange((_elements, appState) => {
       const drawn = appState.newElement as ExcalidrawElement | null
       if (drawn?.type === 'arrow') pending.add(drawn.id)
       const linear = appState.selectedLinearElement
@@ -207,17 +226,6 @@ export function createToolsPart(deps: PartDeps): ToolsPart {
       const type = appState.activeTool.type
       if (highlighting.get() && type !== 'freedraw') endHighlight()
       if (viewerHand.get() && type !== 'selection') endViewerHand()
-      const el = appState.newElement as ExcalidrawElement | null
-      if (!highlighting.get() || !el || el.type !== 'freedraw' || stamped.has(el.id)) return
-      stamped.add(el.id)
-      const map = new Map(elements.map((e) => [e.id, e])) as unknown as ElementsMap
-      const custom = (el.customData ?? {}) as Record<string, unknown>
-      const lobby = (custom.lobby ?? {}) as Record<string, unknown>
-      mutateElement(el as never, map, {
-        strokeWidth: HIGHLIGHT_WIDTH,
-        opacity: HIGHLIGHT_OPACITY,
-        customData: { ...custom, lobby: { ...lobby, kind: 'highlight' } },
-      } as never)
     })
   })
 
@@ -238,12 +246,14 @@ export function createToolsPart(deps: PartDeps): ToolsPart {
           }
           highlighting.set(true)
         }
+        setMode('highlight', 'freedraw')
         return true
       }
       if (tool === 'hand' && readOnly()) {
         endHighlight()
         if (!port.setTool('select')) return false
         viewerHand.set(true)
+        setMode('hand', 'select')
         setCursor('grab')
         return true
       }
@@ -253,8 +263,11 @@ export function createToolsPart(deps: PartDeps): ToolsPart {
     },
     tool() {
       const t = port.tool()
-      if (highlighting.get() && t === 'freedraw') return 'highlight'
-      if (viewerHand.get() && t === 'select') return 'hand'
+      // the modes are read either way (reactive); the board page's port already names them (CR-3A-9)
+      const h = highlighting.get()
+      const v = viewerHand.get()
+      if (h && t === 'freedraw') return 'highlight'
+      if (v && t === 'select') return 'hand'
       return t
     },
   }

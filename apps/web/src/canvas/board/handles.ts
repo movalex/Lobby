@@ -29,6 +29,7 @@ import type { CanvasInput } from '../input/CanvasInput.ts'
 import type { LeaseClient } from '../lease/client.ts'
 import type { RenderOverrides } from '../overrides.ts'
 import type { LobbyCanvasPort } from '../port-impl.ts'
+import { nextNoteFill } from '../tools/notes.ts'
 import { joinInto, joinMark } from './history-join.ts'
 import { hitTest } from './hit.ts'
 import type { BoardInput } from './input.ts'
@@ -102,6 +103,7 @@ export function nextStyles(api: ExcalidrawImperativeAPI): StyleValues {
     roundness: s.currentItemRoundness === 'round' ? 'round' : 'sharp',
     elbowed: s.currentItemArrowType === 'elbow',
     arrowKind: arrowKindOf(s.currentItemArrowType),
+    noteColor: nextNoteFill(s),
   }
 }
 
@@ -132,6 +134,8 @@ export function nextStylePatch(p: StyleValues): Record<string, unknown> {
   if (p.textAlign !== undefined) a.currentItemTextAlign = p.textAlign
   if (p.startArrowhead !== undefined) a.currentItemStartArrowhead = p.startArrowhead
   if (p.endArrowhead !== undefined) a.currentItemEndArrowhead = p.endArrowhead
+  // CR-3A-7: the next note's fill is the engine's next sticky-note fill (Lobby's notes are its sticky notes)
+  if (p.noteColor !== undefined) a.currentItemStickynoteBackgroundColor = p.noteColor
   if (p.arrowKind !== undefined) a.currentItemArrowType = ARROW_TYPE_OF[p.arrowKind]
   else if (p.elbowed !== undefined)
     a.currentItemArrowType = p.elbowed ? 'elbow' : p.roundness === 'round' ? 'round' : 'sharp'

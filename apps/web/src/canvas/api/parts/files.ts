@@ -16,10 +16,12 @@
  *
  * - `crop(id)` (CR-W5-3G-1, W5-13): opens Excalidraw's crop editor on an image or placed page (its
  *   corner handles; Escape or a click elsewhere finishes), selecting it.
+ * - `track(upload)` (CR 3G-2, CR-3A-9): the page's upload tracker (Saved waits for uploads,
+ *   canvas/board/uploads.ts) as a member of the canvas.
  *
- * On creation the part also provides the page's upload tracker to the media feature (Saved waits for
- * uploads, canvas/board/uploads.ts) and installs the derivative swap on the board page's engine
- * (canvas/files/swap.ts, §2.10.3).
+ * On creation the part also provides the same tracker to the media feature through
+ * ../../../assets/board-media.ts (the stand-in for `track` until its uploads call it) and installs the
+ * derivative swap on the board page's engine (canvas/files/swap.ts, §2.10.3).
  *
  * A crop lives in the pixels of the file the engine has loaded, and every tab loads an image's thumb
  * first; so a crop is always made on, and drawn from, the thumb. The swap itself (CR-W5-3G-2,
@@ -46,7 +48,7 @@ type BoardEngineApi = NonNullable<ReturnType<typeof boardEngineOf>>['api']
 import type { LobbyFiles } from '../lobby-canvas.ts'
 import type { PartDeps } from './types.ts'
 
-export type FilesPart = Pick<LobbyFiles, 'urlOf' | 'insert' | 'crop'>
+export type FilesPart = Pick<LobbyFiles, 'urlOf' | 'insert' | 'crop' | 'track'>
 
 /** The file facts of an element (canvas-schema custom-data.ts `file`), when they are well formed. */
 function fileOf(el: unknown): { assetId: string; versionId: string } | null {
@@ -58,9 +60,11 @@ function fileOf(el: unknown): { assetId: string; versionId: string } | null {
 }
 
 export function createFilesPart(deps: PartDeps): FilesPart {
-  provideUploadTracker(deps.registries, (upload) => trackUpload(deps.registries, upload))
+  const track = <T>(upload: Promise<T>): Promise<T> => trackUpload(deps.registries, upload)
+  provideUploadTracker(deps.registries, track)
   installSwap(deps)
   return {
+    track,
     async urlOf(id, opts) {
       const el = deps.port.get(id) as { fileId?: string | null } | undefined
       const file = fileOf(el)

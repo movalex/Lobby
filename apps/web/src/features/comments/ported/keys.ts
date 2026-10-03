@@ -19,8 +19,6 @@ import {
 import { COMMENT_TOOL_ID, controllerFor } from './controller.ts'
 import { anchorForKeyboard, anchorPoint, revealAnchor } from './geometry.ts'
 
-const inTool = (ctx: CanvasFeatureContext) => ctx.canvas.tool() === COMMENT_TOOL_ID
-
 /** Reading order: top to bottom, then left to right (ties by id, so the order is stable). */
 export function readingOrder(els: readonly CanvasElement[]): CanvasElement[] {
   return [...els].sort((a, b) => a.y - b.y || a.x - b.x || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
@@ -105,7 +103,9 @@ export const COMMENT_TOOL_KEYS: readonly FeatureKeySpec[] = [
     id: 'comments.tool-enter',
     scope: 'canvas',
     chords: ['enter'],
-    match: (_e, ctx) => inTool(ctx) && !ctx.canvas.pointer()?.down,
+    // CR-3A-9: the comment tool's keys say so (the key registry checks the tool)
+    tool: COMMENT_TOOL_ID,
+    match: (_e, ctx) => !ctx.canvas.pointer()?.down,
     handle: (_e, ctx) => {
       placeCommentFromKeyboard(ctx)
       return true
@@ -115,7 +115,7 @@ export const COMMENT_TOOL_KEYS: readonly FeatureKeySpec[] = [
     id: 'comments.tool-escape',
     scope: 'canvas',
     chords: ['escape'],
-    match: (_e, ctx) => inTool(ctx),
+    tool: COMMENT_TOOL_ID,
     handle: (_e, ctx) => {
       if (!controllerFor(ctx).store.closeAll()) ctx.canvas.setTool('select')
       return true
@@ -125,14 +125,14 @@ export const COMMENT_TOOL_KEYS: readonly FeatureKeySpec[] = [
     id: 'comments.tool-tab',
     scope: 'canvas',
     chords: ['tab', 'shift+tab'],
-    match: (_e, ctx) => inTool(ctx),
+    tool: COMMENT_TOOL_ID,
     handle: (e, ctx) => stepSelection(ctx.canvas, e.shiftKey ? 'prev' : 'next'),
   },
   {
     id: 'comments.tool-level',
     scope: 'canvas',
     chords: ['mod+shift+arrowdown', 'mod+shift+arrowup'],
-    match: (_e, ctx) => inTool(ctx),
+    tool: COMMENT_TOOL_ID,
     handle: (e, ctx) => stepLevel(ctx.canvas, e.key === 'ArrowDown' ? 'in' : 'out'),
   },
 ]

@@ -53,6 +53,12 @@ export interface FeatureKeySpec {
   readonly scope: 'canvas' | 'editor'
   /** the chords it claims (the keyboard-map test and the shortcuts dialog read these) */
   readonly chords: readonly KeyChord[]
+  /**
+   * CR-3A-9 (3c's request): the pointer tool this key belongs to ('comment'). It acts only while that tool is on
+   * (checked before `match`), and its claim carries the tool (`KeyClaim.tool`): it is checked against the
+   * claims under the same tool, not reported as a conflict with every other claim of its chord.
+   */
+  readonly tool?: string
   /** a finer test than the chords (the chords must still list every key it can claim) */
   match?(e: KeyEventLike, ctx: CanvasFeatureContext): boolean
   /** true when it acted (the event is then stopped and prevented) */

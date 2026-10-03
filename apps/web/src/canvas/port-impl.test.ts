@@ -36,30 +36,33 @@ type El = any
 // biome-ignore lint/suspicious/noExplicitAny: the element package's constructors
 const X = element as any
 
-/** A minimal ExcalidrawImperativeAPI: one element array, replaced by updateScene. */
-function fakeApi(initial: El[]) {
+/** A minimal ExcalidrawImperativeAPI: one element array, replaced by updateScene; app state merged. */
+function fakeApi(initial: El[], state: Record<string, unknown> = {}) {
   let elements: El[] = initial
   let installs = 0
+  let appState: Record<string, unknown> = {
+    currentItemRoughness: 0,
+    currentItemStrokeColor: '#1e1e1e',
+    selectedElementIds: {},
+    zoom: { value: 1 },
+    scrollX: 0,
+    scrollY: 0,
+    width: 1000,
+    height: 800,
+    activeTool: { type: 'selection' },
+    ...state,
+  }
   const api = {
     getSceneElementsIncludingDeleted: () => elements,
     getSceneElementsMapIncludingDeleted: () => new Map(elements.map((e) => [e.id, e])),
     getSceneElements: () => elements.filter((e) => !e.isDeleted),
-    getAppState: () => ({
-      currentItemRoughness: 0,
-      currentItemStrokeColor: '#1e1e1e',
-      selectedElementIds: {},
-      zoom: { value: 1 },
-      scrollX: 0,
-      scrollY: 0,
-      width: 1000,
-      height: 800,
-      activeTool: { type: 'selection' },
-    }),
-    updateScene(u: { elements?: El[] }) {
+    getAppState: () => appState,
+    updateScene(u: { elements?: El[]; appState?: Record<string, unknown> }) {
       if (u.elements) {
         elements = u.elements
         installs++
       }
+      if (u.appState) appState = { ...appState, ...u.appState }
     },
     onScrollChange: () => () => {},
     setActiveTool: () => {},
@@ -71,14 +74,14 @@ function fakeApi(initial: El[]) {
   }
 }
 
-function portOn(initial: El[]) {
-  const f = fakeApi(initial)
+function portOn(initial: El[], state?: Record<string, unknown>, opts: { readOnly?: () => boolean } = {}) {
+  const f = fakeApi(initial, state)
   const port = createCanvasPort({
     api: f.api as never,
     core: null,
     registries: createRegistries(),
     undo: null,
-    readOnly: () => false,
+    readOnly: opts.readOnly ?? (() => false),
     editingLease: () => null,
   })
   return { ...f, port }
@@ -153,6 +156,203 @@ describe('CanvasPort.transact', () => {
     const { port, elements } = portOn([rect('a', 'a0'), rect('b', 'a1')])
     port.transact('recolour', (tx) => tx.update('a', { strokeColor: '#e03131' }))
     expect(elements().map((e) => e.id)).toEqual(['a', 'b'])
+  })
+})
+
+const arrow = (id: string, index: string, over: El = {}) =>
+  X.newArrowElement({
+    type: 'arrow',
+    id,
+    x: 0,
+    y: 0,
+    points: [
+      [0, 0],
+      [200, 0],
+    ],
+    index,
+    ...over,
+  })
+
+describe('CanvasPort.select (W5-39, CR 3b-11)', () => {
+  it('a lone arrow or line selected by code gets the engine’s point editor, as a click gives it', () => {
+    const line = X.newLinearElement({
+      type: 'line',
+      id: 'l',
+      x: 0,
+      y: 300,
+      points: [
+        [0, 0],
+        [100, 0],
+      ],
+      index: 'a2',
+    })
+    const { api, port } = portOn([arrow('a', 'a0'), rect('r', 'a1'), line])
+    port.select(['a'])
+    const s = () =>
+      api.getAppState() as { selectedLinearElement?: { elementId: string; isEditing: boolean } | null }
+    expect(api.getAppState().selectedElementIds).toEqual({ a: true })
+    expect(s().selectedLinearElement?.elementId).toBe('a')
+    // selected, not opened for point editing (Excalidraw's double-click)
+    expect(s().selectedLinearElement?.isEditing).toBe(false)
+    port.select(['l'])
+    expect(s().selectedLinearElement?.elementId).toBe('l')
+  })
+
+  it('no point editor for anything else: a shape, several elements, a locked connector, nothing', () => {
+    const { api, port } = portOn([arrow('a', 'a0'), rect('r', 'a1'), arrow('k', 'a2', { locked: true })])
+    const editor = () => (api.getAppState() as { selectedLinearElement?: unknown }).selectedLinearElement
+    port.select(['a'])
+    expect(editor()).not.toBeNull()
+    port.select(['r'])
+    expect(editor()).toBeNull()
+    port.select(['a'])
+    port.select(['a', 'r'])
+    expect(editor()).toBeNull()
+    port.select(['k'])
+    expect(editor()).toBeNull()
+    port.select(['a'])
+    port.select([])
+    expect(editor()).toBeNull()
+  })
+
+  it('no point editor in a read-only session (its points cannot be dragged there); one once it can edit', () => {
+    let readOnly = true
+    const { api, port } = portOn([arrow('a', 'a0')], {}, { readOnly: () => readOnly })
+    const editor = () => (api.getAppState() as { selectedLinearElement?: unknown }).selectedLinearElement
+    port.select(['a'])
+    expect(api.getAppState().selectedElementIds).toEqual({ a: true })
+    expect(editor()).toBeNull()
+    readOnly = false
+    port.select(['a'])
+    expect(editor()).not.toBeNull()
+  })
+})
+
+// ---- CR-3A-7: the next note's colour and the next text's style -------------------------------------------
+
+const { nextStylePatch, nextStyles } = await import('./board/handles.ts')
+const { nextNoteFill, LOBBY_NOTE_FILL } = await import('./tools/notes.ts')
+
+describe('the next note and the next text (CR-3A-7)', () => {
+  const noteOf = (els: El[], id: string) => els.find((e) => e.id === id)
+  const sky = '#a6d8f3'
+
+  it('a note made with no colour of its own takes the next note fill; one that names a colour keeps it', () => {
+    const { port, elements } = portOn([], { currentItemStickynoteBackgroundColor: sky })
+    const a = port.transact('note', (tx) => tx.create('note', { x: 0, y: 0, size: 200 }))
+    const b = port.transact('note', (tx) => tx.create('note', { x: 300, y: 0, backgroundColor: '#f4a874' }))
+    expect(noteOf(elements(), a)?.backgroundColor).toBe(sky)
+    expect(noteOf(elements(), b)?.backgroundColor).toBe('#f4a874')
+  })
+
+  it('until a note colour is picked, a new note is Lobby’s default yellow, not the engine’s own default', () => {
+    for (const state of [{}, { currentItemStickynoteBackgroundColor: '#ffdf6b' }]) {
+      const { port, elements } = portOn([], state)
+      const id = port.transact('note', (tx) => tx.create('note', { x: 0, y: 0 }))
+      expect(noteOf(elements(), id)?.backgroundColor).toBe(LOBBY_NOTE_FILL)
+    }
+    expect(LOBBY_NOTE_FILL).toBe('#f8e48f')
+  })
+
+  it('a text takes the next font, size and alignment where its creator names none', () => {
+    const { port, elements } = portOn([], {
+      currentItemFontFamily: 8,
+      currentItemFontSize: 36,
+      currentItemTextAlign: 'center',
+      currentItemStrokeColor: '#4465e9',
+    })
+    const t = port.transact('text', (tx) => tx.create('text', { x: 0, y: 0, text: 'hi' }))
+    expect(noteOf(elements(), t)).toMatchObject({
+      fontFamily: 8,
+      fontSize: 36,
+      textAlign: 'center',
+      strokeColor: '#4465e9',
+    })
+    // a feature's own text style wins (the AI's theme labels, a duplicate's label)
+    const own = port.transact('text', (tx) =>
+      tx.create('text', { x: 0, y: 0, text: 'x', fontFamily: 6, fontSize: 20, textAlign: 'left' }),
+    )
+    expect(noteOf(elements(), own)).toMatchObject({ fontFamily: 6, fontSize: 20, textAlign: 'left' })
+  })
+
+  it('a text made before any pick is Nunito 20, left-aligned (the defaults before CR-3A-7)', () => {
+    const { port, elements } = portOn([])
+    const t = port.transact('text', (tx) => tx.create('text', { x: 0, y: 0, text: 'hi' }))
+    expect(noteOf(elements(), t)).toMatchObject({ fontFamily: 6, fontSize: 20, textAlign: 'left' })
+  })
+
+  it('styles.setNext({ noteColor }) is the engine’s next sticky-note fill, and styles.next() reads it back', () => {
+    expect(nextStylePatch({ noteColor: sky })).toEqual({ currentItemStickynoteBackgroundColor: sky })
+    const api = (state: Record<string, unknown>) => ({ getAppState: () => state }) as never
+    expect(nextStyles(api({ currentItemStickynoteBackgroundColor: sky })).noteColor).toBe(sky)
+    expect(nextStyles(api({ currentItemStickynoteBackgroundColor: '#ffdf6b' })).noteColor).toBe(
+      LOBBY_NOTE_FILL,
+    )
+    expect(nextNoteFill({})).toBe(LOBBY_NOTE_FILL)
+  })
+})
+
+// ---- CR-3A-9: the port's tool names and its gesture-element hook ----------------------------------------------
+
+describe('the port names Lobby’s tool modes (CR-3A-9)', () => {
+  it('while a mode is on and the engine is on its tool, tool() is the Lobby name; any other tool ends the name', () => {
+    const { api, port } = portOn([], { activeTool: { type: 'freedraw', customType: null } })
+    expect(port.tool()).toBe('freedraw')
+    port.setToolMode({ name: 'highlight', over: 'freedraw' })
+    expect(port.tool()).toBe('highlight')
+    api.updateScene({ appState: { activeTool: { type: 'rectangle', customType: null } } })
+    expect(port.tool()).toBe('rectangle')
+    api.updateScene({ appState: { activeTool: { type: 'freedraw', customType: null } } })
+    port.setToolMode(null)
+    expect(port.tool()).toBe('freedraw')
+    // a read-only Hand: the neutral select state
+    api.updateScene({ appState: { activeTool: { type: 'selection', customType: null } } })
+    port.setToolMode({ name: 'hand', over: 'select' })
+    expect(port.tool()).toBe('hand')
+  })
+})
+
+describe('the gesture-element hook (CR-3A-9)', () => {
+  const stroke = (id: string) =>
+    X.newFreeDrawElement({ type: 'freedraw', id, x: 0, y: 0, points: [[0, 0]], strokeWidth: 2, index: 'a0' })
+
+  it('stamps each element the engine starts drawing once, in place, on the scene change it appears in', () => {
+    const a = stroke('s1')
+    const { api, port } = portOn([a], { newElement: a })
+    const seen: string[] = []
+    const off = port.onGestureElement((el) => {
+      seen.push(el.id)
+      return el.type === 'freedraw' ? { strokeWidth: 9, opacity: 50 } : null
+    })
+    const before = a.version
+    port.afterSceneChange()
+    // the engine's own object (a copy would end the stroke), newer
+    expect(api.getSceneElementsIncludingDeleted()[0]).toBe(a)
+    expect([a.strokeWidth, a.opacity]).toEqual([9, 50])
+    expect(a.version).toBeGreaterThan(before)
+    port.afterSceneChange(false)
+    port.afterSceneChange()
+    expect(seen).toEqual(['s1'])
+    // the next stroke, then none after the removal
+    const b = stroke('s2')
+    api.updateScene({ elements: [a, b], appState: { newElement: b } })
+    port.afterSceneChange()
+    expect(b.strokeWidth).toBe(9)
+    off()
+    const c = stroke('s3')
+    api.updateScene({ elements: [a, b, c], appState: { newElement: c } })
+    port.afterSceneChange()
+    expect(c.strokeWidth).toBe(2)
+    expect(seen).toEqual(['s1', 's2'])
+  })
+
+  it('a hook that returns nothing writes nothing', () => {
+    const a = stroke('s1')
+    const { port } = portOn([a], { newElement: a })
+    port.onGestureElement(() => null)
+    const v = a.version
+    port.afterSceneChange()
+    expect(a.version).toBe(v)
   })
 })
 

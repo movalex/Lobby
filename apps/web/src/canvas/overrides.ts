@@ -487,6 +487,10 @@ const HIT_BLOCKED_STYLE_ID = 'lobby-hit-blocked-style'
  */
 const HIT_BLOCKED_CSS = `.${HIT_BLOCKED_CLASS} canvas.interactive { cursor: default !important; }`
 
+/**
+ * A `<style>` element written with `textContent`: it needs the CSP's style-src 'unsafe-inline' (render.yaml),
+ * as ./lod/frame-names.ts's frame-name stylesheet does. Drop 'unsafe-inline' and both stop applying silently.
+ */
 function ensureBlockedStyle(): void {
   const doc = (globalThis as { document?: Document }).document
   if (!doc || doc.getElementById(HIT_BLOCKED_STYLE_ID)) return

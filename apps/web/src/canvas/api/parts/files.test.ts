@@ -71,6 +71,19 @@ describe('the files part (3g)', () => {
     expect(uploadsInFlight(registries)).toBe(0)
     expect(changes).toBe(2)
   })
+
+  it('CR 3G-2 (CR-3A-9): files.track counts an upload for the save indicator until it settles, failed or not', async () => {
+    const { registries, files } = part()
+    let done!: (v: string) => void
+    const ok = files.track(new Promise<string>((r) => (done = r)))
+    const bad = files.track(Promise.reject(new Error('quota')))
+    expect(uploadsInFlight(registries)).toBe(2)
+    done('ver_x')
+    await expect(ok).resolves.toBe('ver_x')
+    await expect(bad).rejects.toThrow('quota')
+    await Promise.resolve()
+    expect(uploadsInFlight(registries)).toBe(0)
+  })
 })
 
 // W5-13 / CR-W5-3G-1: a crop is written in the pixels of the thumb every tab loads, so a cropped image

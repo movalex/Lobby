@@ -102,11 +102,13 @@ export type StyleKind =
   | 'other'
 
 /**
- * Creation tools whose next shape the panel sets (Lobby tool names). The note tool is not one on this
- * canvas: its notes take Lobby's note defaults, not the next style (CR-3A-7); the text tool's texts take
- * only the next colour (CR-3A-7), so it gets only the colour.
+ * Creation tools whose next shape the panel sets (Lobby tool names). CR-3A-7: the note tool's next note
+ * takes the note colour, the label size and the font picked here (`styles.setNext`: the note palette's
+ * fill as `noteColor`, the label size from LABEL_SIZE), and the text tool's next text its colour, size,
+ * font and alignment (sizes from TEXT_SIZE), as on tldraw.
  */
 export const STYLED_TOOLS: Readonly<Record<string, StyleKind>> = {
+  note: 'note',
   text: 'text',
   rectangle: 'shape',
   ellipse: 'shape',
@@ -244,6 +246,11 @@ function pickColor(canvas: LobbyCanvas, t: Target, name: ColorName) {
 }
 
 function pickNoteColor(canvas: LobbyCanvas, t: Target, name: NoteColorName) {
+  // the note tool's next note (CR-3A-7)
+  if (t.next) {
+    canvas.styles.setNext({ noteColor: noteFillOf(name) })
+    return
+  }
   const w: Writes = new Map()
   for (const el of t.els) if (kindOf(el) === 'note') put(w, el.id, { backgroundColor: noteFillOf(name) })
   write(canvas, 'note color', w)
@@ -305,7 +312,11 @@ function pickSize(canvas: LobbyCanvas, t: Target, size: SizeName) {
     else if (['shape', 'arrow', 'line'].includes(k)) put(w, el.id, { strokeWidth: STROKE_WIDTH[size] })
   }
   write(canvas, 'size', w, stepped)
-  if (t.next) canvas.styles.setNext({ strokeWidth: NEXT_STROKE_WIDTH[size] })
+  if (!t.next) return
+  // CR-3A-7: the note tool's next note takes a label size, the text tool's next text a font size
+  if (has(t, 'note')) canvas.styles.setNext({ fontSize: LABEL_SIZE[size] })
+  else if (has(t, 'text')) canvas.styles.setNext({ fontSize: TEXT_SIZE[size] })
+  else canvas.styles.setNext({ strokeWidth: NEXT_STROKE_WIDTH[size] })
 }
 
 /** `styles.apply` folded into the previous step (a second kind of the same pick). */
@@ -402,8 +413,12 @@ function NoteColorPicker({ canvas, t }: { canvas: LobbyCanvas; t: Target }) {
   const theme = useValue('cux-theme', () => canvas.theme(), [canvas])
   const current = useValue(
     'cux-note-color',
-    () => sharedOf(t.els.map((e) => noteColorOf((e as { backgroundColor?: string }).backgroundColor))),
-    [t],
+    () =>
+      t.next
+        ? // the note tool's next note (CR-3A-7)
+          noteColorOf(canvas.styles.next().noteColor)
+        : sharedOf(t.els.map((e) => noteColorOf((e as { backgroundColor?: string }).backgroundColor))),
+    [canvas, t],
   )
   const names = NOTE_PALETTE.map((s) => s.name)
   return (
@@ -618,7 +633,10 @@ export const hasStyleTarget = (canvas: LobbyCanvas) => !canvas.readOnly() && tar
 export function styleSwatchOf(canvas: LobbyCanvas): string | null {
   const t = targetOf(canvas)
   if (!t) return null
-  if (t.next) return canvas.styles.next().strokeColor ?? null
+  if (t.next) {
+    const next = canvas.styles.next()
+    return (has(t, 'note') ? next.noteColor : next.strokeColor) ?? null
+  }
   const colors = new Set<string>()
   for (const el of t.els) {
     const k = kindOf(el)
@@ -657,8 +675,10 @@ export function StylePanelBody({ ctx }: { ctx: CanvasFeatureContext }) {
         </div>
       </section>
     )
-  const allNotes = !t.next ? t.els.every((e) => kindOf(e) === 'note') : false
-  // the text tool's next text takes only a colour (CR-3A-7)
+  // the note tool's next note (CR-3A-7): the note palette, the label size and the font
+  const noteTool = t.next && has(t, 'note')
+  const allNotes = noteTool || (!t.next && t.els.every((e) => kindOf(e) === 'note'))
+  // the text tool's next text (CR-3A-7): colour, size, font and alignment (no opacity: a text takes none)
   const textTool = t.next && has(t, 'text')
   const strokeKinds = has(t, 'shape', 'text', 'arrow', 'line', 'draw')
   const color = (() => {
@@ -696,8 +716,9 @@ export function StylePanelBody({ ctx }: { ctx: CanvasFeatureContext }) {
   const size = (() => {
     const names: (SizeName | null)[] = []
     if (t.next) {
-      if (textTool) return undefined
-      names.push(sizeNameOf((styles as { strokeWidth?: number }).strokeWidth, NEXT_STROKE_WIDTH))
+      if (noteTool) names.push(sizeNameOf(styles.fontSize, LABEL_SIZE))
+      else if (textTool) names.push(sizeNameOf(styles.fontSize, TEXT_SIZE))
+      else names.push(sizeNameOf((styles as { strokeWidth?: number }).strokeWidth, NEXT_STROKE_WIDTH))
     } else
       for (const el of t.els) {
         const k = kindOf(el)
@@ -710,9 +731,10 @@ export function StylePanelBody({ ctx }: { ctx: CanvasFeatureContext }) {
       }
     return sharedOf(names)
   })()
-  const textual = !textTool && has(t, 'text', 'note', 'shape', 'arrow')
+  const textual = has(t, 'text', 'note', 'shape', 'arrow')
   const font = textual ? (styles.fontFamily === 'mixed' ? 'mixed' : fontNameOf(styles.fontFamily)) : undefined
-  const align = textual ? (styles.textAlign as AlignName | 'mixed' | undefined) : undefined
+  // a new note's label is always centred: the note tool offers no alignment
+  const align = textual && !noteTool ? (styles.textAlign as AlignName | 'mixed' | undefined) : undefined
   const valign =
     has(t, 'note', 'shape') && !has(t, 'text')
       ? (styles.verticalAlign as VAlignName | 'mixed' | undefined)
@@ -748,7 +770,7 @@ export function StylePanelBody({ ctx }: { ctx: CanvasFeatureContext }) {
         ) : strokeKinds || has(t, 'note') ? (
           <ColorPicker canvas={canvas} t={t} value={color} />
         ) : null}
-        {!textTool && <OpacityPicker canvas={canvas} t={t} value={opacity} />}
+        {!textTool && !noteTool && <OpacityPicker canvas={canvas} t={t} value={opacity} />}
       </div>
       {(fill !== undefined || dash !== undefined || size !== undefined) && (
         <div className="cux-style__section">
@@ -799,19 +821,21 @@ export function StylePanelBody({ ctx }: { ctx: CanvasFeatureContext }) {
               else canvas.styles.setNext({ fontFamily: FONT_FAMILY[f] })
             }}
           />
-          <Segmented
-            legend="Align"
-            testPrefix="style.align"
-            options={ALIGNS}
-            labels={ALIGN_LABELS}
-            value={align}
-            onPick={(a) => {
-              const ids = textTargets(t)
-              if (ids.length) canvas.styles.apply({ textAlign: a }, ids)
-              else canvas.styles.setNext({ textAlign: a })
-            }}
-          />
-          {valign !== undefined || (t.next && has(t, 'note', 'shape')) ? (
+          {!noteTool && (
+            <Segmented
+              legend="Align"
+              testPrefix="style.align"
+              options={ALIGNS}
+              labels={ALIGN_LABELS}
+              value={align}
+              onPick={(a) => {
+                const ids = textTargets(t)
+                if (ids.length) canvas.styles.apply({ textAlign: a }, ids)
+                else canvas.styles.setNext({ textAlign: a })
+              }}
+            />
+          )}
+          {valign !== undefined || (t.next && has(t, 'shape')) ? (
             <Segmented
               legend="Label align"
               testPrefix="style.vertical-align"

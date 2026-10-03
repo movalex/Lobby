@@ -10,8 +10,10 @@ import { EXCALIDRAW_ASSET_BASE } from './excalidraw-assets.ts'
 // collaboration and AI backends, help and social links, the embed allowlist and embed URL builders) and
 // one it cannot turn off: every font gets https://esm.sh/... as its last @font-face source, so any local
 // font miss goes third-party (ExcalidrawFontFace.createUrls, @excalidraw/excalidraw
-// dist/dev/chunk-FN755BR4.js:1225-1277). Its dependencies (mermaid, katex, codemirror, radix, lodash…)
-// carry more, mostly documentation links in error messages.
+// dist/dev/chunk-FN755BR4.js:1225-1277). Its dependencies (katex, codemirror, radix, lodash…) carry more,
+// mostly documentation links in error messages. Mermaid and its parser are not bundled any more (the
+// PLAN-wave4 stub: ../vite.config.ts aliases @excalidraw/mermaid-to-excalidraw to ./mermaid-to-excalidraw-stub.ts),
+// so the hosts only they named left the build with them.
 //
 // Scope: every module of the engine's dependency tree, i.e. @excalidraw/excalidraw and every package it
 // depends on, transitively (engineDependencyTree; React is a peer and stays out). Lobby's own code and
@@ -52,6 +54,7 @@ export const REWRITTEN_HOSTS: readonly string[] = [
   'app.excalidraw.com',
   'player.vimeo.com',
   'www.youtube.com',
+  // still named by the engine's own (unused) text-to-diagram dialog after the mermaid stub
   'mermaid.js.org',
   'discord.gg',
   'github.com',

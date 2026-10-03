@@ -122,6 +122,8 @@ export interface KeyClaim {
   readonly scope: 'canvas' | 'editor' | 'anywhere'
   readonly by: string
   readonly featureId: string
+  /** CR-3A-9: the pointer tool the key acts under (`FeatureKeySpec.tool`); absent: under any tool */
+  readonly tool?: string
 }
 
 /** Every chord the features claim (commands with `kbd`, keys, tools with `kbd`), in feature order. */
@@ -133,7 +135,8 @@ export function collectKeyClaims(features: readonly CanvasFeature[]): KeyClaim[]
         out.push({ chord: k, scope: c.scope ?? 'canvas', by: c.id, featureId: f.id })
     }
     for (const k of f.keys ?? []) {
-      for (const chord of k.chords) out.push({ chord, scope: k.scope, by: k.id, featureId: f.id })
+      for (const chord of k.chords)
+        out.push({ chord, scope: k.scope, by: k.id, featureId: f.id, ...(k.tool ? { tool: k.tool } : {}) })
     }
     for (const t of f.tools ?? []) {
       for (const k of t.kbd ?? [])
@@ -145,7 +148,9 @@ export function collectKeyClaims(features: readonly CanvasFeature[]): KeyClaim[]
 
 /**
  * Chords claimed twice in the same scope (a registry conflict the keyboard-map test fails on). Chords
- * are compared parsed, so 'Mod+F' and 'mod+f' collide.
+ * are compared parsed, so 'Mod+F' and 'mod+f' collide. A tool's claims (CR-3A-9, `KeyClaim.tool`) collide only
+ * with claims under the same tool: one under a tool and one under any tool both act only when the tool's key
+ * steps aside, which the keyboard-map test checks by feature order.
  */
 export function keyConflicts(claims: readonly KeyClaim[]): { chord: string; scope: string; by: string[] }[] {
   const seen = new Map<string, KeyClaim[]>()
@@ -153,7 +158,7 @@ export function keyConflicts(claims: readonly KeyClaim[]): { chord: string; scop
     const p = parseChord(c.chord)
     const scopes = c.scope === 'anywhere' ? ['canvas', 'editor'] : [c.scope]
     for (const s of scopes) {
-      const key = `${s}|${p.key}|${+p.mod}${+p.ctrl}${+p.meta}${+p.alt}${+p.shift}`
+      const key = `${s}|${c.tool ?? ''}|${p.key}|${+p.mod}${+p.ctrl}${+p.meta}${+p.alt}${+p.shift}`
       seen.set(key, [...(seen.get(key) ?? []), c])
     }
   }
@@ -185,7 +190,11 @@ function featureKey(spec: FeatureKeySpec, ctx: CanvasFeatureContext): KeyHandler
   return {
     id: `key:${spec.id}`,
     scope: spec.scope,
-    match: (e) => chords.some((c) => matchChord(c, e, platform)) && (spec.match ? spec.match(e, ctx) : true),
+    match: (e) =>
+      // CR-3A-9: a tool's key acts only while its tool is on
+      (spec.tool === undefined || ctx.canvas.tool() === spec.tool) &&
+      chords.some((c) => matchChord(c, e, platform)) &&
+      (spec.match ? spec.match(e, ctx) : true),
     handle: (e) => spec.handle(e, ctx),
   }
 }

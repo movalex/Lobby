@@ -329,6 +329,12 @@ export interface StyleValues {
    * corners of the next rectangle (`roundness`).
    */
   readonly arrowKind?: ArrowKind
+  /**
+   * CR-3A-7, next-style only: the fill of the next note (one of Lobby's note palette fills; the engine's
+   * `currentItemStickynoteBackgroundColor`), taken by every note created without a `backgroundColor` of its
+   * own (the note tool, Add a sticky note, a double-click). Reads as Lobby's default note fill until set.
+   */
+  readonly noteColor?: string
 }
 export type ArrowKind = 'straight' | 'curved' | 'elbow'
 /** Per field: the shared value, or 'mixed' when the selection differs. */
@@ -553,6 +559,13 @@ export interface LobbyFiles {
    * loads; false when it cannot (no such image, a file card, read-only, locked). Optional: CR-W5-3G-1.
    */
   crop?(id: string): boolean
+  /**
+   * @owner 3g · CR 3G-2 (CR-3A-9): counts `upload` as in flight until it settles, so the board's Saved waits
+   * for it (canvas/board/uploads.ts `trackUpload`, docs/EXCALIDRAW-MIGRATION.md §2.5.7); resolves or rejects
+   * as `upload` does. Ported code cannot import canvas/board/uploads.ts: the media feature's uploads go
+   * through this (the assets/board-media.ts tracker seam is its stand-in).
+   */
+  track<T>(upload: Promise<T>): Promise<T>
 }
 
 /**

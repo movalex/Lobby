@@ -188,7 +188,18 @@ test('content search: a dashboard hit opens the new board page on the object (?e
   })
 })
 
-test('W5-39: a ?el= link to a connector selects it and Lobby outlines it (the engine draws no box for a code selection); another selection drops the outline', async ({
+/** The connector the engine's point editor is on (Excalidraw's `selectedLinearElement`), or null. */
+const pointEditorOf = (page: Page) =>
+  page.evaluate(
+    () =>
+      (
+        window as unknown as {
+          __lobbyBoard?: { api: { getAppState(): { selectedLinearElement?: { elementId: string } | null } } }
+        }
+      ).__lobbyBoard?.api.getAppState().selectedLinearElement?.elementId ?? null,
+  )
+
+test('W5-39 (CR 3b-11): a ?el= link to a connector selects it with the engine’s point handles (a viewer gets the outline instead); a link to it and a note outlines it (the engine draws no handles there); another selection drops the outline', async ({
   canvasSession,
   browser,
   board,
@@ -209,10 +220,37 @@ test('W5-39: a ?el= link to a connector selects it and Lobby outlines it (the en
     () => createNote(a.page, { x: 900, y: 0, text: 'Elsewhere' }),
   ])) as [string, string]
   await users.grant(board, 'bob', 'editor')
-  const b = await openPath(browser, await users.get('bob'), `/b/${board}?el=${ARROW}`)
+  const bob = await users.get('bob')
+  const lone = await openPath(browser, bob, `/b/${board}?el=${ARROW}`)
+  try {
+    expect(await startView(lone.page)).toBe('deep-link')
+    expect(await sortedSelection(lone.page)).toEqual([ARROW])
+    // the engine's own point handles, as a click on it gives (before: none, and no box either)
+    await expect.poll(() => pointEditorOf(lone.page)).toBe(ARROW)
+    await lone.page.waitForTimeout(200)
+    await expect(lone.page.getByTestId('navigation.code-selection')).toHaveCount(0)
+  } finally {
+    await lone.context.close()
+  }
+  // a viewer: no point handles (its points cannot be dragged there, so they would only look draggable);
+  // Lobby's outline shows the linked connector instead
+  const carol = await users.grant(board, 'carol', 'viewer')
+  const v = await openPath(browser, carol, `/b/${board}?el=${ARROW}`)
+  try {
+    expect(await startView(v.page)).toBe('deep-link')
+    expect(await sortedSelection(v.page)).toEqual([ARROW])
+    await expect(
+      v.page.locator(`[data-testid="navigation.code-selection"] rect[data-shape-id="${ARROW}"]`),
+    ).toBeVisible()
+    expect(await pointEditorOf(v.page)).toBeNull()
+  } finally {
+    await v.context.close()
+  }
+  const b = await openPath(browser, bob, `/b/${board}?el=${ARROW},${NOTE}`)
   try {
     expect(await startView(b.page)).toBe('deep-link')
-    expect(await sortedSelection(b.page)).toEqual([ARROW])
+    expect(await sortedSelection(b.page)).toEqual([ARROW, NOTE].sort())
+    expect(await pointEditorOf(b.page)).toBeNull()
     const outline = b.page.locator(`[data-testid="navigation.code-selection"] rect[data-shape-id="${ARROW}"]`)
     await expect(outline).toBeVisible()
     // around the connector on screen

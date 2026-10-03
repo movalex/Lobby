@@ -25,6 +25,12 @@ describe('W5-10: frames read on the canvas', () => {
     expect(contrastRatio(fs.nameColorLightTheme, theme.CANVAS_LIGHT)).toBeGreaterThanOrEqual(4.5)
     expect(contrastRatio(fs.nameColorDarkTheme, theme.CANVAS_DARK)).toBeGreaterThanOrEqual(4.5)
   })
+  it('W5-38: a frame’s name sits above its selection box (the box is drawn 2 × the handle spacing out, 1 px wide)', () => {
+    const fs = common.FRAME_STYLE as { nameOffsetY: number }
+    const box = common.DEFAULT_TRANSFORM_HANDLE_SPACING * 2 + 1
+    expect(fs.nameOffsetY).toBe(theme.FRAME_NAME_OFFSET)
+    expect(fs.nameOffsetY).toBeGreaterThan(box)
+  })
   it('frame outlines are >= 3:1 on the canvas in both modes, and the dark canvas is tldraw’s', () => {
     const fs = common.FRAME_STYLE as { strokeColor: string }
     expect(contrastRatio(fs.strokeColor, theme.CANVAS_LIGHT)).toBeGreaterThanOrEqual(3)

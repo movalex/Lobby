@@ -609,6 +609,43 @@ describe('feature registries and installation', () => {
     expect(r.pointerTools.list()).toEqual([])
   })
 
+  it('CR-3A-9: a key with a tool acts only while that tool is on, and its claim carries the tool', () => {
+    const r = createFeatureRegistries()
+    const base = ctxFor(r)
+    let tool: string | null = 'select'
+    const ctx = { ...base, canvas: { ...base.canvas, tool: () => tool } as typeof base.canvas }
+    const cleanup = installCanvasFeatures(
+      [
+        {
+          id: 'a',
+          keys: [{ id: 'a.enter', scope: 'canvas', chords: ['enter'], tool: 'comment', handle: () => true }],
+        },
+      ],
+      ctx,
+    )
+    const key = r.keys.list().find((k) => k.id === 'key:a.enter')
+    const e = { key: 'Enter', code: 'Enter', ctrlKey: false, metaKey: false, altKey: false, shiftKey: false }
+    expect(key?.match(e)).toBe(false)
+    tool = 'comment'
+    expect(key?.match(e)).toBe(true)
+    cleanup()
+    const enter = (id: string, t?: string) => ({
+      id,
+      keys: [{ id: `${id}.enter`, scope: 'canvas' as const, chords: ['enter'], tool: t, handle: () => true }],
+    })
+    const claims = feature.collectKeyClaims([
+      enter('a', 'comment'),
+      enter('b'),
+      enter('c', 'vote'),
+      enter('d', 'comment'),
+    ])
+    expect(claims.map((c) => c.tool ?? null)).toEqual(['comment', null, 'vote', 'comment'])
+    // only the two claims under the same tool collide
+    expect(feature.keyConflicts(claims)).toEqual([
+      { chord: 'enter', scope: 'canvas', by: ['a.enter', 'd.enter'] },
+    ])
+  })
+
   it('reports chords claimed twice in one scope', () => {
     const claims = feature.collectKeyClaims([
       { id: 'a', commands: [{ id: 'a.x', label: 'x', kbd: ['Mod+F'], run: () => {} }] },
