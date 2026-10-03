@@ -26,8 +26,10 @@ export interface PerfStackOptions {
 
 const webEnv = () => ({
   ...process.env,
-  // exposes window.editor in the build (behind the local-dev guard), as for the browser suites
+  // the dev-auth guard: the test facade (window.lobbyCanvas) and the board page's debug handle, as for the
+  // browser suites (Lobby's board page; no VITE_LOBBY_BOARD_PAGE, so never spike B's)
   VITE_DRAFTROOM_DEV_AUTH: '1',
+  VITE_LOBBY_BOARD_PAGE: '',
   DRAFTROOM_API_ORIGIN: API_URL,
   DRAFTROOM_SYNC_ORIGIN: SYNC_URL,
 })

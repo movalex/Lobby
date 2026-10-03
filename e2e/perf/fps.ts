@@ -1,7 +1,9 @@
-// PRF-02 / PRF-03 frame rate: panning the heavy board at fit (every shape on screen) and at 100%.
-// Like the 2026-09-27 review's harness: the pointer rests over the canvas, nothing is selected, and a
-// scripted pan moves the camera every animation frame (editor.setCamera, a back-and-forth of 600 CSS
-// px at up to 1,200 px/s, a quarter of it vertical) for 3 s, three times per view.
+// PRF-02 / PRF-03 frame rate: panning the heavy board at Lobby's whole-board fit (every item on screen), at
+// 0.25 and at 100%, on Lobby's board page. Like the 2026-09-27 review's harness: the pointer rests over the
+// canvas, nothing is selected, and a scripted pan moves the camera every animation frame (the board page's
+// LobbyCanvas.viewport.set, as a person's pan would; a back-and-forth of 600 CSS px at up to 1,200 px/s,
+// half of it vertically) for 3 s, three times per view. Before a view is measured, the images in it are
+// loaded (the loader's state) and the level-of-detail pass's bitmaps are ready when it is on.
 //   rAF fps   = frames / s from requestAnimationFrame timestamps in the page (+ frame p50/p95/max)
 //   trace     = a Chrome performance trace (CDP Tracing) of one more pan: frames the compositor drew
 //               (DrawFrame), main-thread busy share, and self time per trace event (script, style,
@@ -10,9 +12,19 @@
 //               build, --readable, for names), to find hot spots
 import { writeFileSync } from 'node:fs'
 import type { CDPSession, Page } from '@playwright/test'
-import { cpuMeter, median, type PerfEditor, round1 } from './lib.ts'
+import {
+  cpuMeter,
+  imagesInView,
+  median,
+  type PerfView,
+  type PerfWindow,
+  round1,
+  setView,
+  sleep,
+  waitImagesLoaded,
+} from './lib.ts'
 
-export type FpsView = 'fit' | '100'
+export type FpsView = PerfView
 
 export interface PanRep {
   fps: number
@@ -46,8 +58,14 @@ export interface FpsResult {
   /** pan amplitude, CSS px */
   panPx: number
   zoom: number
-  renderedShapes: number
-  visibleShapes: number
+  /** items on the board, and those at least partly in view */
+  items: number
+  visibleItems: number
+  /** image elements in view, and how many of them the loader had loaded before the pans */
+  imagesInView: number
+  imagesLoaded: number
+  /** the level-of-detail pass's state after the pans (null: not on this page) */
+  lod: unknown
   reps: PanRep[]
   medianFps: number
   minFps: number
@@ -57,26 +75,32 @@ export interface FpsResult {
   profile?: ProfileSummary
 }
 
-async function setFpsView(page: Page, view: FpsView) {
-  await page.evaluate((view) => {
-    const ed = (window as unknown as { editor: PerfEditor }).editor
-    ed.selectNone()
-    if (view === 'fit') ed.zoomToFit({ immediate: true })
-    else {
-      const b = ed.getShapePageBounds('shape:perf-f0')
-      if (!b) throw new Error('no frame 0')
-      ed.setCamera({ x: 20 - (b.x + 20), y: 20 - (b.y + 40), z: 1 }, { immediate: true })
+/** The pan hooks on the board page's camera: start (remember it), move by dx, dy CSS px, end (restore). */
+export async function installPanHooks(page: Page) {
+  await page.evaluate(() => {
+    const c = (window as unknown as PerfWindow).__lobbyBoard?.canvas
+    if (!c) throw new Error('no window.__lobbyBoard')
+    const w = window as unknown as Record<string, unknown>
+    let o = c.viewport.get()
+    w.__panStart = () => {
+      o = c.viewport.get()
     }
-  }, view)
+    w.__panBy = (dx: number, dy: number) => c.viewport.set({ x: o.x - dx / o.zoom, y: o.y - dy / o.zoom })
+    w.__panEnd = () => c.viewport.set({ x: o.x, y: o.y })
+  })
 }
 
 /** One scripted pan (`amplitude` CSS px sideways, half that vertically); resolves with the rAF timestamps. */
-const pan = (page: Page, durationMs: number, amplitude = 600) =>
+export const pan = (page: Page, durationMs: number, amplitude = 600) =>
   page.evaluate(
     ({ durationMs, amplitude }) =>
       new Promise<number[]>((resolve) => {
-        const ed = (window as unknown as { editor: PerfEditor }).editor
-        const start = ed.getCamera()
+        const w = window as unknown as {
+          __panStart(): void
+          __panBy(dx: number, dy: number): void
+          __panEnd(): void
+        }
+        w.__panStart()
         const out: number[] = []
         let t0: number | null = null
         performance.mark('perf-pan-start')
@@ -85,23 +109,32 @@ const pan = (page: Page, durationMs: number, amplitude = 600) =>
           const e = t - t0
           out.push(t)
           if (e > durationMs) {
-            ed.setCamera(start, { immediate: true })
+            w.__panEnd()
             performance.mark('perf-pan-end')
             resolve(out)
             return
           }
-          const dx = amplitude * Math.sin((e / 1000) * 2)
-          const dy = (amplitude / 2) * Math.sin((e / 1000) * 3)
-          ed.setCamera(
-            { x: start.x - dx / start.z, y: start.y - dy / start.z, z: start.z },
-            { immediate: true },
-          )
+          w.__panBy(amplitude * Math.sin((e / 1000) * 2), (amplitude / 2) * Math.sin((e / 1000) * 3))
           requestAnimationFrame(step)
         }
         requestAnimationFrame(step)
       }),
     { durationMs, amplitude },
   )
+
+/** Waits until the level-of-detail pass has no stale or rendering bitmap (immediately when it is off or absent). */
+export async function lodReady(page: Page, timeoutMs = 120_000): Promise<number> {
+  const t0 = Date.now()
+  await page.waitForFunction(
+    () => {
+      const s = (window as unknown as PerfWindow).__lobbyLod?.state()
+      return !s?.active || (s.stale === 0 && s.rendering === 0)
+    },
+    undefined,
+    { timeout: timeoutMs, polling: 100 },
+  )
+  return Date.now() - t0
+}
 
 function repStats(times: number[]): PanRep {
   const d: number[] = []
@@ -311,6 +344,8 @@ export async function measureFps(opts: {
   page: Page
   cdp: CDPSession
   views: FpsView[]
+  /** frame 0's id (the 0.25 and 100% views) */
+  frame0: string
   reps: number
   durationMs: number
   /**
@@ -329,19 +364,23 @@ export async function measureFps(opts: {
   const results: FpsResult[] = []
   const vp = page.viewportSize() ?? { width: 1536, height: 864 }
   await page.mouse.move(vp.width / 2, vp.height / 2)
+  await installPanHooks(page)
   for (const view of opts.views) {
-    await setFpsView(page, view)
-    // settle: previews for what is on screen, then tldraw's idle re-render after the camera move
-    await page.waitForTimeout(2500)
-    await page
-      .waitForFunction(() => [...document.images].every((i) => i.complete), null, { timeout: 15_000 })
-      .catch(() => {})
-    const dom = await page.evaluate(() => {
-      const ed = (window as unknown as { editor: PerfEditor }).editor
-      const culled = ed.getCulledShapes()
-      const r = ed.getRenderingShapes()
-      return { zoom: ed.getZoomLevel(), rendered: r.length, visible: r.length - culled.size }
-    })
+    const cam = await setView(page, view, opts.frame0)
+    // settle: the images in view loaded, the level-of-detail bitmaps ready, then the engine's idle repaint
+    await sleep(2500)
+    const inView = await imagesInView(page)
+    const imgs = await waitImagesLoaded(page, 60_000, inView)
+    const lodMs = await lodReady(page)
+    await sleep(500)
+    if (imgs.loaded < imgs.total)
+      opts.log(
+        `fps ${view}: only ${imgs.loaded}/${imgs.total} images in view loaded after ${imgs.ms} ms (measuring anyway)`,
+      )
+    else if (imgs.total)
+      opts.log(
+        `fps ${view}: ${imgs.total} images in view loaded (${imgs.ms} ms after the settle); lod ready ${lodMs} ms`,
+      )
     const amplitudes = [...(opts.panPx ?? [STANDARD_PAN_PX]), ...(view === 'fit' ? (opts.fitPans ?? []) : [])]
     for (const panPx of amplitudes) {
       const reps: PanRep[] = []
@@ -354,9 +393,12 @@ export async function measureFps(opts: {
       const result: FpsResult = {
         view,
         panPx,
-        zoom: round1(dom.zoom * 1000) / 1000,
-        renderedShapes: dom.rendered,
-        visibleShapes: dom.visible,
+        zoom: Math.round(cam.zoom * 10_000) / 10_000,
+        items: cam.total,
+        visibleItems: cam.visible,
+        imagesInView: imgs.total,
+        imagesLoaded: imgs.loaded,
+        lod: await page.evaluate(() => (window as unknown as PerfWindow).__lobbyLod?.state() ?? null),
         reps,
         medianFps: median(fpsList),
         minFps: Math.min(...fpsList),
@@ -378,7 +420,7 @@ export async function measureFps(opts: {
       results.push(result)
       const t = result.trace
       opts.log(
-        `fps ${key} (zoom ${result.zoom}, ${dom.visible}/${dom.rendered} shapes visible, ${panPx} px pan): pan ${fpsList.join(' / ')} fps ` +
+        `fps ${key} (zoom ${result.zoom}, ${cam.visible}/${cam.total} items in view, ${imgs.loaded}/${imgs.total} images loaded, ${panPx} px pan): pan ${fpsList.join(' / ')} fps ` +
           `(median ${result.medianFps}; frame p95 ${reps.map((r) => r.p95).join('/')} ms; machine ${result.machineBusyPct}% busy)` +
           (t
             ? `; trace ${t.traceFps} fps drawn, main thread ${t.mainBusyPct}% busy, per frame ${Object.entries(

@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
+import { FileValue } from '../../packages/canvas-schema/src/custom-data.ts'
 import { hashElements } from '../../packages/canvas-schema/src/hash.ts'
 import { FILE_ID_PATTERN } from '../../packages/canvas-schema/src/limits.ts'
-import { generateBoard, genFileId, heavyBoard, l1Board, smallBoard } from './boards.ts'
+import { generateBoard, genFileFacts, genFileId, heavyBoard, l1Board, smallBoard } from './boards.ts'
+import { fakeFileRef } from './fake-api.ts'
 
 describe('generated boards', () => {
   it('the heavy board matches spike A14 (20 frames, 4,500 notes with labels, 200 images)', () => {
@@ -15,6 +17,51 @@ describe('generated boards', () => {
     expect(b.files).toHaveLength(200)
     expect(b.frame0Notes).toHaveLength(225)
     for (const f of b.files) expect(f).toMatch(FILE_ID_PATTERN)
+  })
+
+  it('every image carries customData.lobby.file as a drop writes it (W5-34): the fake api facts, or the uploads', () => {
+    const b = heavyBoard('heavy-1')
+    const images = b.elements.filter((e) => e.type === 'image')
+    for (const img of images) {
+      const fileId = (img as { fileId: string }).fileId
+      const file = (img.customData as { lobby: { file: unknown } }).lobby.file
+      const { pageCount: _, ...ref } = fakeFileRef(fileId)
+      expect(file).toEqual(ref)
+      expect(file).toEqual(genFileFacts(fileId))
+      expect(FileValue.safeParse(file).success).toBe(true)
+    }
+    const uploads = [0, 1].map((i) => ({
+      assetId: `ast_upload${String(i).padStart(10, '0')}`,
+      versionId: `ver_upload${String(i).padStart(10, '0')}`,
+      kind: 'image' as const,
+      name: `ref-${i + 1}.jpg`,
+      mimeType: 'image/jpeg',
+      sizeBytes: 123_456 + i,
+    }))
+    const real = generateBoard({
+      id: 'up-1',
+      kind: 'custom',
+      frames: 1,
+      notes: 2,
+      images: 2,
+      arrows: 0,
+      fileFacts: uploads,
+    })
+    const placed = real.elements.filter((e) => e.type === 'image')
+    expect(placed.map((e) => (e as { fileId: string }).fileId)).toEqual(uploads.map((u) => u.versionId))
+    expect(placed.map((e) => (e.customData as { lobby: { file: unknown } }).lobby.file)).toEqual(uploads)
+    expect(() =>
+      generateBoard({
+        id: 'up-2',
+        kind: 'custom',
+        frames: 1,
+        notes: 1,
+        images: 1,
+        arrows: 0,
+        fileFacts: uploads.slice(0, 1),
+        fileIds: ['ver_other00000000'],
+      }),
+    ).toThrow(/different versions/)
   })
 
   it('L1 has about 2k objects with one bound arrow per ten notes, a fifth of them elbow', () => {
