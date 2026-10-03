@@ -6,7 +6,9 @@ import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import type { Bounds, LobbyCanvas } from '../../../canvas/api/index.ts'
 import { useValue } from '../../../lib/signals.ts'
 import { Dialog } from '../../../ui/Dialog.tsx'
+import { controllerOf as commentsControllerOf } from '../../comments/ported/controller.ts'
 import { exportPolicyOn, exportPolicySentence } from '../../sharing/ported/export-policy.ts'
+import { workshopSettingsOf } from '../../workshops/ported/session-settings.ts'
 import { downloadBlob } from '../download.ts'
 import { frameInView, openingScale } from '../export-defaults.ts'
 import { exportFilename } from '../filename.ts'
@@ -33,9 +35,19 @@ import {
   renderPdf,
   renderPng,
   renderSvg,
+  reportPdfPages,
   targetElements,
 } from './exporter.ts'
 import { type ElementFrameEntry, frameOutline, skipCarrier } from './frames.ts'
+import {
+  commentsBlocks,
+  countReportThreads,
+  describeAnchor,
+  describeElement,
+  reportThreads,
+  resultRows,
+  resultsBlocks,
+} from './report.ts'
 
 type Area = 'selection' | 'frame' | 'board'
 type BusyKind = 'png' | 'svg' | 'copy' | 'pdf' | 'csv'
@@ -83,6 +95,9 @@ const formatBytes = (n: number) =>
     : `${fmt.format(Math.max(1, Math.round(n / 1024)))} KB`
 
 const rectOf = (b: Bounds | null) => (b ? { w: b.width, h: b.height } : null)
+
+/** A refusal with its own words (the status line shows them; any other failure gets the general text). */
+class ExportProblem extends Error {}
 
 function frameName(canvas: LobbyCanvas, id: string): string {
   if (!id) return ''
@@ -163,6 +178,11 @@ export function ExportDialog({
   // (the stored preference stays what the person chose).
   const [scale, setScale] = useState<ImageScale>(() => openingScale(prefs.scale, IMAGE_SCALES, opening.size))
   const [includeSkipped, setIncludeSkipped] = useState(false)
+  // RETRO-05b: the PDF's optional last pages. Never remembered: what goes into a file made for someone else
+  // is chosen each time (the team-only threads above all).
+  const [withResults, setWithResults] = useState(false)
+  const [withComments, setWithComments] = useState(false)
+  const [withTeamComments, setWithTeamComments] = useState(false)
   // F15: SVG embeds the board previews unless asked; not remembered, so a huge file is never the default.
   const [svgOriginals, setSvgOriginals] = useState(false)
   const [busy, setBusy] = useState<{ kind: BusyKind; done?: number; total?: number } | null>(null)
@@ -268,6 +288,72 @@ export function ExportDialog({
         ? [{ kind: 'board', title: boardTitle || 'Board' }]
         : []
 
+  // RETRO-05b: what the optional pages would hold. The results are what this person sees on the board (a
+  // revealed vote whose results are shown); the comments are the threads this person's own list holds.
+  const commentsStore = commentsControllerOf(canvas)?.store ?? null
+  const commentThreads = useValue(
+    'lobby-export-comment-threads',
+    () => (commentsStore ? Object.values(commentsStore.threads.get()) : []),
+    [commentsStore],
+  )
+  const commentsStatus = useValue(
+    'lobby-export-comments-status',
+    () => (commentsStore ? commentsStore.status.get() : 'missing'),
+    [commentsStore],
+  )
+  const onTheTeam = useValue('lobby-export-team', () => commentsStore?.privacy.get().teamOnly ?? false, [
+    commentsStore,
+  ])
+  const authorsHidden = useValue(
+    'lobby-export-authors-hidden',
+    () => workshopSettingsOf(canvas).hideNoteAuthors,
+    [canvas],
+  )
+  const voteResults = exportResults(canvas)
+  const teamIncluded = withTeamComments && onTheTeam
+  const commentCounts = countReportThreads(commentThreads, teamIncluded)
+  const commentsAvailable = commentsStatus === 'ready' && commentCounts.open + commentCounts.resolved > 0
+  const resultsAvailable = voteResults !== null
+  const addResults = withResults && resultsAvailable
+  const addComments = withComments && commentsAvailable
+  const extraPages = [addResults ? 'a vote results page' : null, addComments ? 'a comments appendix' : null]
+    .filter((x): x is string => x !== null)
+    .join(' and ')
+
+  /** The report pages the options ask for, laid out for the chosen page format (read fresh: it is a click). */
+  const reportSpecs = (): { specs: PdfPageSpec[]; notShown: number } => {
+    const specs: PdfPageSpec[] = []
+    let notShown = 0
+    if (addResults) {
+      const results = exportResults(canvas)
+      if (!results)
+        throw new ExportProblem(
+          'The vote results are not shown on this board any more, so there is no results page to add. Untick it, or show the results again.',
+        )
+      const { rows, missing } = resultRows(results, (id) => describeElement(canvas, id))
+      const made = reportPdfPages('Vote results', resultsBlocks(rows, missing), prefs.pdfFormat)
+      specs.push(...made.specs)
+      notShown += made.notShown
+    }
+    if (addComments) {
+      if (commentsStore?.status.get() !== 'ready')
+        throw new ExportProblem('The comments have not finished loading. Try again in a moment.')
+      const opts = {
+        authorsHidden: workshopSettingsOf(canvas).hideNoteAuthors,
+        teamOnlyIncluded: withTeamComments && commentsStore.privacy.get().teamOnly,
+      }
+      const threads = reportThreads(
+        Object.values(commentsStore.threads.get()),
+        (anchor) => describeAnchor(canvas, anchor),
+        opts,
+      )
+      const made = reportPdfPages('Comments', commentsBlocks(threads, opts), prefs.pdfFormat)
+      specs.push(...made.specs)
+      notShown += made.notShown
+    }
+    return { specs, notShown }
+  }
+
   const run = async (kind: BusyKind, task: () => Promise<string>) => {
     setBusy({ kind })
     setStatus(null)
@@ -276,6 +362,7 @@ export function ExportDialog({
       setStatus({ tone: 'ok', text: done })
     } catch (e) {
       if (e instanceof ExportCancelled) setStatus({ tone: 'ok', text: 'Export cancelled.' })
+      else if (e instanceof ExportProblem) setStatus({ tone: 'error', text: e.message })
       else {
         console.error('export failed', e)
         setStatus({
@@ -321,7 +408,10 @@ export function ExportDialog({
     const controllerAbort = new AbortController()
     abortRef.current = controllerAbort
     return run('pdf', async () => {
-      const blob = await renderPdf(canvas, pdfPages, {
+      // the frames' pages, then the optional report pages
+      const extra = reportSpecs()
+      const all = [...pdfPages, ...extra.specs]
+      const blob = await renderPdf(canvas, all, {
         title: boardTitle,
         lossless: prefs.lossless,
         pageFormat: prefs.pdfFormat,
@@ -334,7 +424,11 @@ export function ExportDialog({
         pdfPick.source === 'selection' ? 'selected frames' : undefined,
       )
       downloadBlob(blob, name)
-      return `Downloaded “${name}” (${plural(pdfPages.length, 'page')}).`
+      const cut =
+        extra.notShown > 0
+          ? ` ${plural(extra.notShown, 'item')} did not fit the page limit of the results and comments pages and ${extra.notShown === 1 ? 'was' : 'were'} left out.`
+          : ''
+      return `Downloaded “${name}” (${plural(all.length, 'page')}).${cut}`
     })
   }
 
@@ -536,6 +630,7 @@ export function ExportDialog({
               : pdfPick.source === 'selection'
                 ? `The selected frames, one page each (${plural(pdfPages.length, 'page')}).`
                 : `One page per frame, in presentation order (${plural(pdfPages.length, 'page')}).`}
+            {extraPages ? ` Then ${extraPages} at the end.` : ''}
           </p>
           {pdfPick.source === 'all' && pdfPick.skippedCount > 0 && (
             <label className="dr-pe-inline">
@@ -577,6 +672,61 @@ export function ExportDialog({
             />
             Lossless images (larger file, slower)
           </label>
+          <fieldset className="dr-pe-choices" data-testid="export-pdf-extras" disabled={disabled}>
+            <legend className="dr-pe-legend">Add to the end of the PDF</legend>
+            <label className="dr-pe-choice">
+              <input
+                type="checkbox"
+                data-testid="export-pdf-results"
+                checked={addResults}
+                disabled={!resultsAvailable}
+                onChange={(e) => setWithResults(e.target.checked)}
+              />
+              Vote results page
+            </label>
+            {!resultsAvailable && (
+              <p className="dr-pe-hint" data-testid="export-pdf-results-hint">
+                Nothing to add yet: reveal a vote and show its results on the board first.
+              </p>
+            )}
+            <label className="dr-pe-choice">
+              <input
+                type="checkbox"
+                data-testid="export-pdf-comments"
+                checked={addComments}
+                disabled={!commentsAvailable}
+                onChange={(e) => setWithComments(e.target.checked)}
+              />
+              Comments appendix
+              {commentsAvailable ? ` (${commentCounts.open} open, ${commentCounts.resolved} resolved)` : ''}
+            </label>
+            {!commentsAvailable && (
+              <p className="dr-pe-hint" data-testid="export-pdf-comments-hint">
+                {commentsStatus === 'ready'
+                  ? 'There are no comments to add.'
+                  : commentsStatus === 'loading'
+                    ? 'The comments are still loading.'
+                    : 'The comments could not be loaded.'}
+              </p>
+            )}
+            {onTheTeam && commentCounts.teamOnly > 0 && (
+              <label className="dr-pe-choice">
+                <input
+                  type="checkbox"
+                  data-testid="export-pdf-team-comments"
+                  checked={teamIncluded}
+                  onChange={(e) => setWithTeamComments(e.target.checked)}
+                />
+                Include {plural(commentCounts.teamOnly, 'team-only thread')} (internal: leave off for a file
+                you send to a client)
+              </label>
+            )}
+            {addComments && authorsHidden && (
+              <p className="dr-pe-hint" data-testid="export-pdf-authors-hint">
+                This board hides note authors, so the appendix lists the comments without who wrote them.
+              </p>
+            )}
+          </fieldset>
           <p className="dr-pe-hint">
             Every page has a header with its frame’s name (also a PDF bookmark). “Fit each frame” sizes each
             page to its frame; 16:9 and A4 give every page the same landscape size with the frame fitted in.
