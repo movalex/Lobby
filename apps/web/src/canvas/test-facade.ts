@@ -127,6 +127,8 @@ export type InstalledFacade = LobbyCanvasFacade & Pick<LobbyCanvasFacadeV1, 'chi
 interface LobbyDocApi {
   set(entries: Readonly<Record<string, unknown>>): void
 }
+/** The two `import.meta.env` values lib/identity.ts's DEV_AUTH_ENABLED reads (through a cast: see guardAllows). */
+type DevAuthEnv = { env: { DEV: boolean; VITE_DRAFTROOM_DEV_AUTH?: string } }
 /**
  * The board page's LobbyCanvas doc API, from its dev-auth debug handle (`window.__lobbyBoard.canvas`, set
  * by canvas/board/session.ts after this facade is installed, so it is looked up per call). Features write
@@ -134,7 +136,14 @@ interface LobbyDocApi {
  * (`docWritten`); the engine's `setDoc` alone would not.
  */
 const lobbyDocApi = (): LobbyDocApi | null =>
-  (globalThis as { __lobbyBoard?: { canvas?: { doc?: LobbyDocApi } } }).__lobbyBoard?.canvas?.doc ?? null
+  // DEV_AUTH_ENABLED, spelled out so the build replaces both values and folds the lookup away: no production
+  // file may name the debug handle (e2e/excalidraw-builds/prod-build.spec.ts), and this facade's code is in
+  // the bundle. (Importing lib/identity.ts would bring Vite's ImportMeta into the e2e harness's types.)
+  (import.meta as unknown as DevAuthEnv).env.DEV ||
+  (import.meta as unknown as DevAuthEnv).env.VITE_DRAFTROOM_DEV_AUTH === '1'
+    ? ((globalThis as { __lobbyBoard?: { canvas?: { doc?: LobbyDocApi } } }).__lobbyBoard?.canvas?.doc ??
+      null)
+    : null
 
 /**
  * Builds the facade on a port. Exported for the unit test; `install` is what the board page runs.
