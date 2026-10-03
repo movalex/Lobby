@@ -315,11 +315,27 @@ function dropParams(names: readonly string[]): void {
 const SETTLE_MS = 2500
 
 /**
+ * Whether a presentation owns the camera now: present mode, a live presentation followed or presented from
+ * this tab, runs in focus mode and sets the camera from its slides. Once it does, the board's first view
+ * stands down for good, whichever of the two ran first (PRESENT-LIVE: a follower's reload, a late joiner
+ * pressing Join, a presenter's reload: the live presentation starts within milliseconds of the first
+ * view, and the first view's hold used to put the board's first frame back over the presenter's slide).
+ */
+export function presentationOwnsCamera(canvas: LobbyCanvas): boolean {
+  try {
+    return canvas.settings.get().focusMode
+  } catch {
+    // a canvas without the board page's settings (unit tests): nothing presents
+    return false
+  }
+}
+
+/**
  * The board's layout settles after the canvas mounts (the dock rail appears and narrows the canvas), and
  * the camera keeps its top-left when the canvas resizes, so the first view would end up shifted. For a
  * moment after opening, re-apply it on every canvas resize, until the person moves the camera themselves.
  */
-function holdThroughLayout(canvas: LobbyCanvas, apply: () => void): () => void {
+export function holdThroughLayout(canvas: LobbyCanvas, apply: () => void): () => void {
   // the camera just set is read back once the engine has rendered it (the next frame)
   let expected: { x: number; y: number; zoom: number } | null = null
   let frame = requestAnimationFrame(() => {
@@ -331,7 +347,9 @@ function holdThroughLayout(canvas: LobbyCanvas, apply: () => void): () => void {
     return !e || (Math.abs(v.x - e.x) < 1e-6 && Math.abs(v.y - e.y) < 1e-6 && v.zoom === e.zoom)
   }
   const off = canvas.on('resize', () => {
-    if (!unchanged()) {
+    // moved by the person, a feature or a presentation (it places the camera from its own numbers, and its
+    // focus mode resizes the canvas): the hold is over, and never puts the first view back over it
+    if (!unchanged() || presentationOwnsCamera(canvas)) {
       stop()
       return
     }
@@ -423,6 +441,17 @@ export async function applyStartView(ctx: CanvasFeatureContext, opts: StartViewO
 
   if (movedMeanwhile && (plan.kind === 'restore' || plan.kind === 'start-view' || plan.kind === 'fit'))
     return 'kept'
+  // a presentation took the camera in that time (the live controller decides at the same moment: a follower's
+  // reload starts within milliseconds of this first view, and an engine renders a camera a frame after it
+  // is set, so the check above can read the camera from before it)
+  if (
+    presentationOwnsCamera(canvas) &&
+    (plan.kind === 'restore' ||
+      plan.kind === 'start-view' ||
+      plan.kind === 'fit' ||
+      plan.kind === 'deep-link')
+  )
+    return 'kept'
   switch (plan.kind) {
     case 'template': {
       const insert = async (): Promise<boolean> => {
@@ -440,7 +469,8 @@ export async function applyStartView(ctx: CanvasFeatureContext, opts: StartViewO
         if (canvas.selection.length) canvas.select([])
         // DANA-06: the new board opens like a first visit, on its first frame when the whole template
         // would not be readable, and keeps that view while the layout settles
-        if (fitContent(canvas) !== 'none') opts.hold?.(holdThroughLayout(canvas, () => fitContent(canvas)))
+        if (!presentationOwnsCamera(canvas) && fitContent(canvas) !== 'none')
+          opts.hold?.(holdThroughLayout(canvas, () => fitContent(canvas)))
         return true
       }
       await insert()

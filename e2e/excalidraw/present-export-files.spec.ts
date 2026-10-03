@@ -17,6 +17,7 @@ import {
   canvasCall,
   clickItem,
   createItem,
+  deleteItem,
   expect,
   expectSaved,
   itemBounds,
@@ -49,6 +50,7 @@ import {
 } from '../tests/support/present-export.ts'
 import { FIXTURES_DIR } from '../tests/support/stack.ts'
 import type { Users } from '../tests/support/users.ts'
+import { workshopState } from '../tests/support/workshops.ts'
 import { emptyCanvasPoint } from './board-kit.ts'
 import { cardItems, fileCard, insertFiles } from './media-kit.ts'
 import {
@@ -653,6 +655,231 @@ test.describe('PDF export', () => {
     expect(pdf.name).toBe(`${title}.pdf`)
     const info = await readPdf(pdf.bytes)
     expect(info.outline.map((o) => o.title)).toEqual(['Intro', 'Plan'])
+  })
+
+  // RETRO-05b: the results and the comments in the same file as the frames (docs/REVIEW-2026-09-27.md).
+  test('RETRO-05b: the PDF can end with a vote results page and a comments appendix; team-only threads only when asked; no authors on a board that hides them', async ({
+    canvasSession,
+    users,
+    board,
+  }) => {
+    test.setTimeout(180_000)
+    const a = await canvasSession('alice')
+    const b = await canvasSession('bob', { role: 'editor' })
+    const title = await boardTitle(users, board)
+    await seedDeck(a.page, PDF_DECK)
+    await expectItems(b.page, [F.intro, F.plan, N.intro, N.plan, 'pe-note-story'])
+    const alice = await users.api('alice')
+    const bob = await users.api('bob')
+    const dialog = a.page.getByTestId('export-dialog')
+    const withResults = dialog.getByTestId('export-pdf-results')
+    const withComments = dialog.getByTestId('export-pdf-comments')
+    const withTeam = dialog.getByTestId('export-pdf-team-comments')
+    const summary = dialog.getByTestId('export-pdf-summary')
+    const call = async (api: typeof alice, path: string, data?: unknown) => {
+      const res = await api.fetch('POST', path, data)
+      expect(res.status(), `${path}: ${await res.text()}`).toBeLessThan(300)
+      return (await res.json()) as Record<string, unknown>
+    }
+
+    await test.step('with no vote and no comments both are off, and the dialog says why', async () => {
+      await a.page.getByTestId('export-button').click()
+      await expect(withResults).toBeDisabled()
+      await expect(withResults).not.toBeChecked()
+      await expect(dialog.getByTestId('export-pdf-results-hint')).toContainText('reveal a vote')
+      await expect(withComments).toBeDisabled()
+      await expect(dialog.getByTestId('export-pdf-comments-hint')).toHaveText('There are no comments to add.')
+      await expect(withTeam).toHaveCount(0)
+      await expect(summary).toHaveText('One page per frame, in presentation order (2 pages).')
+      await a.page.keyboard.press('Escape')
+      await expect(dialog).toHaveCount(0)
+    })
+
+    await test.step('a vote (not revealed yet: no results page) and three threads', async () => {
+      await call(alice, `/api/boards/${board}/votes`, {
+        votesPerPerson: 3,
+        onePerObject: false,
+        scope: 'board',
+      })
+      const sid = (await workshopState(alice, board)).vote?.session.id ?? ''
+      expect(sid).not.toBe('')
+      const cast = (api: typeof alice, id: string) =>
+        call(api, `/api/votes/${sid}/cast`, { shapeId: `shape:${id}`, delta: 1 })
+      for (const id of [N.intro, N.intro, N.plan]) await cast(alice, id)
+      for (const id of [N.intro, 'pe-note-story', 'pe-note-story']) await cast(bob, id)
+      // not revealed: nothing is on offer yet
+      await a.page.getByTestId('export-button').click()
+      await expect(withResults).toBeDisabled()
+      await a.page.keyboard.press('Escape')
+      await call(alice, `/api/votes/${sid}/reveal`)
+
+      const onIntro = { kind: 'shape', shapeId: `shape:${N.intro}`, u: 0.5, v: 0.5 }
+      const first = (await call(alice, `/api/boards/${board}/threads`, {
+        anchor: onIntro,
+        body: 'Please tighten the agenda',
+      })) as { thread: { id: string } }
+      await call(bob, `/api/threads/${first.thread.id}/comments`, { body: 'Agreed, cut item three' })
+      // a pin on the board inside the Plan frame (2000..2640 x 0..480), later resolved
+      const second = (await call(bob, `/api/boards/${board}/threads`, {
+        anchor: { kind: 'point', x: 2300, y: 400 },
+        body: 'Add the launch date here',
+      })) as { thread: { id: string } }
+      await call(alice, `/api/threads/${second.thread.id}/resolve`)
+      await call(alice, `/api/boards/${board}/threads`, {
+        anchor: { kind: 'shape', shapeId: `shape:${N.plan}`, u: 0.2, v: 0.2 },
+        body: 'Internal: the budget is tight',
+        visibility: 'team',
+      })
+    })
+
+    await test.step('the dialog offers both, with what each holds; team-only threads stay out until asked', async () => {
+      await a.page.getByTestId('export-button').click()
+      await expect(withResults).toBeEnabled()
+      await expect(withResults).not.toBeChecked()
+      await expect(withComments).toBeEnabled()
+      // 1 open thread everyone sees and 1 resolved; the team-only one is not counted yet
+      await expect(dialog.getByText('Comments appendix (1 open, 1 resolved)')).toBeVisible()
+      await expect(withTeam).not.toBeChecked()
+      await expect(dialog.getByTestId('export-pdf-extras')).toContainText('Include 1 team-only thread')
+      // nothing is added unless chosen
+      await expect(summary).toHaveText('One page per frame, in presentation order (2 pages).')
+    })
+
+    const BAND = 28
+    await test.step('both pages: after the frames, bookmarked, a text layer; the team-only thread is not in the file', async () => {
+      await withResults.check()
+      await withComments.check()
+      await expect(summary).toHaveText(
+        'One page per frame, in presentation order (2 pages). Then a vote results page and a comments appendix at the end.',
+      )
+      const pdf = await downloadFrom(a.page, () => dialog.getByTestId('export-pdf').click())
+      expect(pdf.name).toBe(`${title}.pdf`)
+      await expect(dialog.getByTestId('export-status')).toHaveText(`Downloaded “${title}.pdf” (4 pages).`)
+      const info = await readPdf(pdf.bytes)
+      expect(info.outline).toEqual([
+        { title: 'Plan', page: 0 },
+        { title: 'Intro', page: 1 },
+        { title: 'Vote results', page: 2 },
+        { title: 'Comments', page: 3 },
+      ])
+      // the report pages are A4 portrait (794 × 1123 px at 0.75 pt/px) under the title band
+      for (const p of info.pages.slice(2)) {
+        expect(p.width).toBeCloseTo(595.5, 1)
+        expect(p.height).toBeCloseTo(842.25 + BAND, 1)
+        expect(p.images).toHaveLength(1)
+      }
+      const texts = await pdfPageTexts(pdf.bytes)
+      expect(texts).toHaveLength(4)
+      // the frames' pages are as before
+      expect(texts[0]).toContain('Launch checklist')
+      expect(texts[1]).toContain('Kickoff agenda')
+      // results: ranked, with the votes and the frame (3 on the intro note, 2 on the story, 1 on the plan note)
+      const results = texts[2] ?? ''
+      expect(results.startsWith('Vote results')).toBe(true)
+      expect(results).toContain('3 items received votes (6 votes in total)')
+      expect(results).toMatch(/#1 Kickoff agenda 3 votes · in “Intro”/)
+      expect(results).toMatch(/#2 Story 2 votes · in “Intro”/)
+      expect(results).toMatch(/#3 Launch checklist 1 vote · in “Plan”/)
+      // comments: open first, then resolved; who and what, where; no team-only thread
+      const comments = texts[3] ?? ''
+      expect(comments.startsWith('Comments')).toBe(true)
+      expect(comments).toContain('1 open thread and 1 resolved thread')
+      expect(comments).toMatch(/Open \(1\).*1 On “Kickoff agenda”, in “Intro”/)
+      expect(comments).toContain('Alice Park,')
+      expect(comments).toContain('Please tighten the agenda')
+      expect(comments).toContain('Bob Chen,')
+      expect(comments).toContain('Agreed, cut item three')
+      expect(comments).toMatch(/Resolved \(1\).*2 In “Plan”/)
+      expect(comments).toContain('Add the launch date here')
+      expect(comments).not.toContain('budget')
+      expect(comments).not.toContain('Team only')
+    })
+
+    await test.step('"Include the team-only thread": it is in the file and marked', async () => {
+      await withTeam.check()
+      await expect(dialog.getByText('Comments appendix (2 open, 1 resolved)')).toBeVisible()
+      const pdf = await downloadFrom(a.page, () => dialog.getByTestId('export-pdf').click())
+      const texts = await pdfPageTexts(pdf.bytes)
+      const comments = texts[3] ?? ''
+      expect(comments).toContain('Team-only comments are included and marked')
+      expect(comments).toContain('Internal: the budget is tight')
+      expect(comments).toContain('Team only')
+      await withTeam.uncheck()
+    })
+
+    await test.step('a board that hides note authors: the appendix names nobody', async () => {
+      await a.page.evaluate(() =>
+        (
+          window as unknown as {
+            __lobbyBoard: { canvas: { doc: { set(p: Record<string, unknown>): void } } }
+          }
+        ).__lobbyBoard.canvas.doc.set({ workshop: { hideNoteAuthors: true, hideCursors: false } }),
+      )
+      await expect(dialog.getByTestId('export-pdf-authors-hint')).toHaveText(
+        'This board hides note authors, so the appendix lists the comments without who wrote them.',
+      )
+      const pdf = await downloadFrom(a.page, () => dialog.getByTestId('export-pdf').click())
+      const comments = (await pdfPageTexts(pdf.bytes))[3] ?? ''
+      expect(comments).toContain('This board hides note authors')
+      expect(comments).toContain('Please tighten the agenda')
+      expect(comments).toContain('Agreed, cut item three')
+      expect(comments).not.toContain('Alice Park')
+      expect(comments).not.toContain('Bob Chen')
+    })
+
+    await test.step('only the results page: one extra page; the choice is not remembered next time', async () => {
+      await withComments.uncheck()
+      const pdf = await downloadFrom(a.page, () => dialog.getByTestId('export-pdf').click())
+      const info = await readPdf(pdf.bytes)
+      expect(info.outline.map((o) => o.title)).toEqual(['Plan', 'Intro', 'Vote results'])
+      await a.page.keyboard.press('Escape')
+      await a.page.getByTestId('export-button').click()
+      await expect(withResults).not.toBeChecked()
+      await expect(withComments).not.toBeChecked()
+    })
+
+    await test.step('16:9 and A4 landscape: the results and the comments pages take the same page as the frames, bookmarked', async () => {
+      await withResults.check()
+      await withComments.check()
+      const size = dialog.getByTestId('export-pdf-page-size')
+      for (const [format, want] of [
+        ['16:9', { width: 960, height: 540 }],
+        ['a4', { width: 841.89, height: 595.28 }],
+      ] as const) {
+        await size.selectOption(format)
+        const pdf = await downloadFrom(a.page, () => dialog.getByTestId('export-pdf').click())
+        const info = await readPdf(pdf.bytes)
+        expect(
+          info.outline.map((o) => o.title),
+          format,
+        ).toEqual(['Plan', 'Intro', 'Vote results', 'Comments'])
+        for (const p of info.pages) {
+          expect(p.width, format).toBeCloseTo(want.width, 1)
+          expect(p.height, format).toBeCloseTo(want.height, 1)
+        }
+        // the results page is a picture of the report with its text laid over it, as on the fit pages
+        expect(info.pages[2]?.images, format).toHaveLength(1)
+        const texts = await pdfPageTexts(pdf.bytes)
+        expect(texts[2] ?? '', format).toMatch(/#1 Kickoff agenda 3 votes/)
+        expect(texts[3] ?? '', format).toContain('Please tighten the agenda')
+      }
+      await size.selectOption('fit')
+    })
+
+    await test.step('every item that got votes is deleted since the reveal: no results page is on offer and the summary does not promise one', async () => {
+      await withResults.check()
+      await withComments.uncheck()
+      await expect(summary).toContainText('Then a vote results page')
+      for (const id of [N.intro, N.plan, 'pe-note-story']) await deleteItem(a.page, id)
+      await expect(withResults).toBeDisabled()
+      await expect(withResults).not.toBeChecked()
+      await expect(dialog.getByTestId('export-pdf-results-hint')).toContainText('no longer on the board')
+      await expect(summary).toHaveText('One page per frame, in presentation order (2 pages).')
+      // and the file has the frames only
+      const pdf = await downloadFrom(a.page, () => dialog.getByTestId('export-pdf').click())
+      const info = await readPdf(pdf.bytes)
+      expect(info.outline.map((o) => o.title)).toEqual(['Plan', 'Intro'])
+    })
   })
 })
 

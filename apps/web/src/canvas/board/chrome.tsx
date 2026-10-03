@@ -2,14 +2,25 @@
  * The Excalidraw board page's chrome around the canvas (docs/EXCALIDRAW-CONTRACTS.md §3): the dock
  * (`panels`), the top bar's feature items (`topBar`), the overlay root (`featureOverlays` in scene and
  * screen layers, C0 `overlays`, remote cursors through `cursorVisible`, "X is typing" badges), the host
- * slots, other people's selections in their colours (W5-28), and the lease banner and pending affordance.
+ * slots, other people's selections in their colours (W5-28), a marker on the canvas's edge for each person who is
+ * off screen (W5-32), and the lease banner and pending affordance.
  * Focus mode (`settings.focusMode`, present mode) hides the dock, the top bar, the host slots, the
- * remote selections and every overlay layer that does not say `show`.
+ * remote selections, the edge markers and every overlay layer that does not say `show`.
  *
  * Every feature component is rendered inside `CanvasFeatureContextProvider` and gets the context.
  */
 import type { RosterEntry } from '@draftroom/canvas-schema/protocol'
-import { type CSSProperties, type ReactNode, useCallback, useMemo, useSyncExternalStore } from 'react'
+import {
+  type CSSProperties,
+  type ReactNode,
+  type RefObject,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from 'react'
 import { frameAt } from '../../features/canvas-ux/ported/notes.ts'
 import { FeatureDockView, TopBarOverflowRow } from '../../features/FeatureHostCore.tsx'
 import { initialsFor, safeColor } from '../../lib/identity.ts'
@@ -22,6 +33,7 @@ import type { LobbyCanvas } from '../api/lobby-canvas.ts'
 import type { FeatureOverlaySpec, FeatureRegistries, HostSlotName } from '../api/registries.ts'
 import type { EditNotice, EditState } from '../lease/editorLease.ts'
 import { arrowPaths } from '../presence/drag-arrows.ts'
+import { type AvoidRect, EDGE_CHIP_RADIUS, type EdgeMarker, edgeMarkers } from './edge-markers.ts'
 import type { LobbyBoardSession } from './session.ts'
 
 // ---- the dock ---------------------------------------------------------------------------------------------
@@ -204,9 +216,11 @@ export function OverlayRoot({
   const r = ctx.registries
   const shown = r.sorted(r.featureOverlays).filter((o) => !focusMode || o.focusMode === 'show')
   const port = session.port
+  const rootRef = useRef<HTMLDivElement>(null)
   const c0 = port ? [...r.overlays.list()].sort((a, b) => a.order - b.order) : []
   return (
     <div
+      ref={rootRef}
       data-testid="lobby-overlay"
       data-focus-mode={focusMode || undefined}
       // clip, not hidden: a hidden box can still be scrolled, and focusing or clicking something past its edge
@@ -231,6 +245,7 @@ export function OverlayRoot({
           .map((o) => (
             <FeatureLayer key={o.id} spec={o} ctx={ctx} />
           ))}
+        <EdgeMarkers canvas={ctx.canvas} registries={r} focusMode={focusMode} overlay={rootRef} />
       </div>
     </div>
   )
@@ -476,6 +491,185 @@ function Cursors({ canvas, registries }: { canvas: LobbyCanvas; registries: Feat
         </div>
       ))}
     </>
+  )
+}
+
+/** What a marker says about the person it points at. */
+interface EdgeMarkerView extends EdgeMarker {
+  readonly uid: string
+  readonly name: string
+  readonly color: string
+  readonly idle: boolean
+}
+
+/**
+ * What the board's own controls cover in the canvas's top left corner, in overlay px: the board menu (board.css
+ * `.lobby-slot--mainMenu`: 12 px in, 38 px wide; on a phone it sits right of the dock's fold button). A chip is
+ * never placed under it.
+ */
+function cornerControls(): AvoidRect[] {
+  return [{ x: 0, y: 0, w: mediaMatches('(max-width: 600px)') ? 100 : 56, h: 56 }]
+}
+
+/**
+ * The host slots that sit over the canvas's edge and cover chips (chrome.tsx SLOT_STYLE, board.css), measured: the
+ * style panel (top right, 216 px wide, as high as its tools: it is open whenever a drawing tool is active or
+ * anything is selected, and opaque, above the overlay) and the navigation panel (bottom left; above the
+ * toolbar's row on a narrow screen). The board menu and the toolbar are a fixed place (`cornerControls`,
+ * `EDGE_MARGINS`).
+ */
+const EDGE_SLOTS = ['stylePanel', 'navigation'] as const satisfies readonly HostSlotName[]
+
+const sameRects = (a: readonly AvoidRect[], b: readonly AvoidRect[]) =>
+  a.length === b.length &&
+  a.every((r, i) => r.x === b[i]?.x && r.y === b[i]?.y && r.w === b[i]?.w && r.h === b[i]?.h)
+
+/**
+ * Where those slots are now, in the overlay's pixels (empty while a slot shows nothing). Measured from the DOM
+ * and kept up to date as the slot's content comes and goes and as the canvas is resized, so a chip never sits
+ * under a panel that opened after it was placed. `version`: a feature registering a slot re-reads them.
+ */
+function useCoveredRects(overlay: RefObject<HTMLElement | null>, version: number): AvoidRect[] {
+  const [rects, setRects] = useState<AvoidRect[]>([])
+  useEffect(() => {
+    const el = overlay.current
+    const host = el?.parentElement
+    if (!el || !host) return
+    const watched = new Set<Element>()
+    let resize: ResizeObserver | null = null
+    const measure = () => {
+      const base = el.getBoundingClientRect()
+      const next: AvoidRect[] = []
+      for (const name of EDGE_SLOTS) {
+        const slot = host.querySelector(`:scope > [data-lobby-slot="${name}"]`)
+        if (!slot) continue
+        if (!watched.has(slot)) {
+          watched.add(slot)
+          resize?.observe(slot)
+        }
+        const b = slot.getBoundingClientRect()
+        if (b.width > 0 && b.height > 0)
+          next.push({ x: b.left - base.left, y: b.top - base.top, w: b.width, h: b.height })
+      }
+      setRects((prev) => (sameRects(prev, next) ? prev : next))
+    }
+    if (typeof ResizeObserver !== 'undefined') {
+      resize = new ResizeObserver(measure)
+      resize.observe(el)
+    }
+    // a slot's box comes (focus mode off, a feature mounting) and goes with the host's children
+    const mutation = typeof MutationObserver !== 'undefined' ? new MutationObserver(measure) : null
+    mutation?.observe(host, { childList: true })
+    measure()
+    return () => {
+      resize?.disconnect()
+      mutation?.disconnect()
+    }
+  }, [overlay, version])
+  return rects
+}
+
+/** A media query that matches now (false without media queries: a test, an old browser). */
+function mediaMatches(query: string): boolean {
+  try {
+    return typeof window !== 'undefined' && window.matchMedia?.(query).matches === true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Half a chip's width on the edge, arrow included (board.css `.lobby-edge-marker`): a 44 px touch target
+ * (its 22 px radius and the 9 px arrow) for a finger, 24 px for a mouse.
+ */
+const chipRadius = () => (mediaMatches('(pointer: coarse)') ? 31 : EDGE_CHIP_RADIUS)
+
+const SIDE_WORDS = { left: 'to the left', right: 'to the right', top: 'above', bottom: 'below' } as const
+
+/**
+ * W5-32: a coloured chip on the canvas's edge for each person who is off screen (their pointer is outside
+ * this view, else their view is), pointing the way. A click goes to them (the camera, one move); Shift-click
+ * follows them like the people list's Follow. The nearest ten, spread along the edge so they do not pile up
+ * (./edge-markers.ts). Hidden with their cursor (`cursorVisible`: present mode, "hide cursors") and in focus
+ * mode; a person the room does not stream to this tab has no place to point at. A chip never sits under the style
+ * panel or the other controls on the canvas's edge (`useCoveredRects`). Drawn only, never written.
+ */
+function EdgeMarkers({
+  canvas,
+  registries,
+  focusMode,
+  overlay,
+}: {
+  canvas: LobbyCanvas
+  registries: FeatureRegistries
+  focusMode: boolean
+  /** the overlay root: the slots are its siblings, and what they cover is measured against it */
+  overlay: RefObject<HTMLElement | null>
+}) {
+  const version = useRegistries(registries)
+  const covered = useCoveredRects(overlay, version)
+  const markers = useValue('lobby-edge-markers', (): EdgeMarkerView[] => {
+    if (focusMode) return []
+    const v = canvas.viewport.get()
+    const peers = canvas.presence
+      .peers()
+      .filter((p) => p.streaming !== false && (p.point || p.view) && registries.cursorVisible.call(p.sid))
+    if (!peers.length) return []
+    const found = edgeMarkers(
+      peers,
+      v,
+      // the canvas's size on screen, from the camera (which changes with the canvas's size)
+      { w: v.width * v.zoom, h: v.height * v.zoom },
+      (p) => canvas.sceneToOverlay(p),
+      { avoid: [...cornerControls(), ...covered], chipRadius: chipRadius() },
+    )
+    const bySid = new Map(peers.map((p) => [p.sid, p]))
+    return found.flatMap((m) => {
+      const p = bySid.get(m.sid)
+      return p ? [{ ...m, uid: p.uid, name: p.name, color: safeColor(p.color, p.uid), idle: p.idle }] : []
+    })
+  }, [canvas, registries, version, focusMode, covered])
+  if (!markers.length) return null
+  const go = (m: EdgeMarkerView, follow: boolean) => {
+    if (follow) {
+      canvas.follow.start(m.sid)
+      return
+    }
+    // a camera that follows someone stays put under a move that does not force it: stop first
+    if (canvas.follow.current()) canvas.follow.stop()
+    canvas.viewport.centerOn(m.target, { animate: true })
+  }
+  return (
+    <div className="lobby-edge-markers" data-testid="edge-markers">
+      {markers.map((m) => (
+        <button
+          key={m.sid}
+          type="button"
+          className="lobby-edge-marker"
+          data-testid="edge-marker"
+          data-sid={m.sid}
+          data-uid={m.uid}
+          data-side={m.side}
+          data-idle={m.idle || undefined}
+          aria-label={`Go to ${m.name}, off screen ${SIDE_WORDS[m.side]}`}
+          title={`${m.name} is off screen ${SIDE_WORDS[m.side]}. Click to go there, Shift-click to follow.`}
+          style={
+            {
+              left: Math.round(m.x),
+              top: Math.round(m.y),
+              '--edge-angle': `${Math.round((m.angle * 180) / Math.PI)}deg`,
+              '--edge-color': m.color,
+            } as CSSProperties
+          }
+          onClick={(e) => go(m, e.shiftKey)}
+        >
+          <span className="lobby-edge-marker__arrow" aria-hidden="true" />
+          <span className="lobby-edge-marker__face" aria-hidden="true">
+            {initialsFor(m.name)}
+          </span>
+        </button>
+      ))}
+    </div>
   )
 }
 

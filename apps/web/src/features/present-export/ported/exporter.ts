@@ -6,7 +6,9 @@
 //  - a PNG exported at N× says so (one pHYs chunk: N × 72 dpi, ../png-density.ts);
 //  - a board or a selection gets a 32 px margin (F15); a single frame or a single image is its own export
 //    bounds, unpadded;
-//  - revealed vote results are drawn as on the board (./badges.ts).
+//  - revealed vote results are drawn as on the board (./badges.ts);
+//  - a PDF can end with a vote results page and a comments appendix (RETRO-05b, ./report.ts): text pages the
+//    browser draws (any script, as a page title is) with the same searchable text layer as a frame's page.
 // Hide note authors (RETRO-03a; 3f's `workshopSettingsOf(canvas).hideNoteAuthors`) needs nothing here:
 // notes on the new canvas draw no author name (CR-3F-4), exports never include overlays, and the engine's
 // exports embed no scene data (canvas/export/scene.ts `exportEmbedScene: false`), so the server's
@@ -25,6 +27,14 @@ import {
   svgWithBadges,
 } from './badges.ts'
 import type { ElementFrameEntry } from './frames.ts'
+import {
+  type FontWeight,
+  layoutReport,
+  type Measure,
+  REPORT_PAGE_PX,
+  type ReportBlock,
+  type ReportPage,
+} from './report.ts'
 
 export type ImageScale = 1 | 2 | 4
 export const IMAGE_SCALES: readonly ImageScale[] = [1, 2, 4]
@@ -219,6 +229,8 @@ export function copyPng(
 export type PdfPageSpec =
   | { kind: 'frame'; frame: ElementFrameEntry; title: string }
   | { kind: 'board'; title: string }
+  /** a text page laid out by ./report.ts (the vote results, the comments appendix) */
+  | { kind: 'report'; title: string; page: ReportPage }
 
 export interface PdfProgress {
   done: number
@@ -355,6 +367,76 @@ async function titleImage(
   }
 }
 
+/** Pixels per report px a text page is drawn at (the frames' own preferred PDF raster). */
+const REPORT_RASTER = PDF_RASTER.preferred
+
+const reportFont = (weight: FontWeight, px: number) => `${weight} ${px}px ${TITLE_FONT}`
+
+/** Measures text in the font the report pages are drawn in. */
+function canvasMeasure(): Measure {
+  const ctx = document.createElement('canvas').getContext('2d')
+  return (text, fontPx, weight) => {
+    if (!ctx) return text.length * fontPx * 0.55
+    ctx.font = reportFont(weight, fontPx)
+    return ctx.measureText(text).width
+  }
+}
+
+/**
+ * The PDF pages of a report (RETRO-05b): `blocks` laid out on pages shaped for the page format (A4 portrait
+ * for pages that fit their content, the landscape shape of 16:9 and A4 otherwise). `notShown` counts the items
+ * past the page limit. Pages are titled `title`, with "(n of m)" when there are several.
+ */
+export function reportPdfPages(
+  title: string,
+  blocks: readonly ReportBlock[],
+  format: PdfPageFormat,
+): { specs: PdfPageSpec[]; notShown: number } {
+  const { pages, notShown } = layoutReport(blocks, canvasMeasure(), REPORT_PAGE_PX[format])
+  const specs: PdfPageSpec[] = pages.map((page, i) => ({
+    kind: 'report',
+    title: pages.length > 1 ? `${title} (${i + 1} of ${pages.length})` : title,
+    page,
+  }))
+  return { specs, notShown }
+}
+
+/** The hidden text layer of a report page: its lines as laid out (never wrapped again). */
+export function reportTexts(page: ReportPage): PdfTextItem[] {
+  return page.lines.map((l) => ({
+    text: l.text,
+    x: l.x,
+    y: l.y,
+    w: Math.max(1, l.w),
+    h: l.h,
+    fontSizePx: l.fontPx,
+    align: 'start',
+    verticalAlign: 'start',
+    inset: 0,
+    lines: true,
+    lineHeight: l.h / l.fontPx,
+  }))
+}
+
+/** One report page drawn as a PNG: white paper, each line in its own font, size and colour. */
+async function reportPng(page: ReportPage): Promise<Uint8Array> {
+  const canvas = document.createElement('canvas')
+  canvas.width = Math.round(page.width * REPORT_RASTER)
+  canvas.height = Math.round(page.height * REPORT_RASTER)
+  const ctx = canvas.getContext('2d')
+  if (!ctx) throw new Error('the browser cannot draw a page here')
+  ctx.scale(REPORT_RASTER, REPORT_RASTER)
+  ctx.fillStyle = '#ffffff'
+  ctx.fillRect(0, 0, page.width, page.height)
+  ctx.textBaseline = 'middle'
+  for (const l of page.lines) {
+    ctx.font = reportFont(l.weight, l.fontPx)
+    ctx.fillStyle = l.color
+    ctx.fillText(l.text, l.x, l.y + l.h / 2)
+  }
+  return new Uint8Array(await (await blobOf(canvas, 'image/png')).arrayBuffer())
+}
+
 /**
  * One PDF page per spec (as ../export-render.ts `renderPdf`): a header band with the frame's title and
  * the frame's content (the engine's frame export: no title or outline) rendered at `pdfRasterScale` for
@@ -386,6 +468,23 @@ export async function renderPdf(
       await nextTask()
       if (opts.signal?.aborted) throw new ExportCancelled()
       const spec = pages[i] as PdfPageSpec
+      if (spec.kind === 'report') {
+        const plan = planPdfPage(spec.page.width, spec.page.height, pageFormat)
+        const title = bookmarkTitle(spec.title, builder.pageCount)
+        const headerImage = isWinAnsi(title) ? null : await titleImage(title, plan)
+        const bytes = await reportPng(spec.page)
+        if (opts.signal?.aborted) throw new ExportCancelled()
+        await builder.addPage({
+          title,
+          format: pageFormat,
+          widthPx: spec.page.width,
+          heightPx: spec.page.height,
+          image: { bytes, type: 'png' },
+          ...(headerImage ? { headerImage } : {}),
+          texts: reportTexts(spec.page),
+        })
+        continue
+      }
       let target: ImageTarget
       let bounds: Bounds | null
       let o: ExportOptions
