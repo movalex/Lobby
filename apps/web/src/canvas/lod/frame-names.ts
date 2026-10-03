@@ -97,8 +97,9 @@ export interface FrameNameGuard {
  * Hides the crowded frame names of the engine inside `root` (see the header). `subscribe` adds the scene's
  * change listener (LobbyCanvas `change`: a frame moved, resized, renamed, created or deleted, here or by
  * someone else); the frames are re-read on the next measure after it fires. A camera move and a resize of
- * the window measure again too. Nothing else is listened to: the engine's `onChange` fires on every
- * pointer move, and a frame dragged here is mutated in place (its cached copy is the live element).
+ * the window measure again too (a pan that draws the same names reads no box: overlaps move with it). Nothing
+ * else is listened to: the engine's `onChange` fires on every pointer move, and a frame dragged here is
+ * mutated in place (its cached copy is the live element).
  */
 export function installFrameNameGuard(o: {
   readonly api: ExcalidrawImperativeAPI
@@ -115,6 +116,10 @@ export function installFrameNameGuard(o: {
   let frames: FrameLike[] | null = null
   let frame: number | null = null
   let disposed = false
+  /** a frame changed or the window was resized since the last measure */
+  let dirty = true
+  /** the zoom and the names drawn at the last measure: a pan with the same names keeps every overlap */
+  let lastKey = ''
 
   const framesNow = (): FrameLike[] => {
     frames ??= (api.getSceneElements() as unknown as readonly FrameLike[]).filter(
@@ -128,6 +133,13 @@ export function installFrameNameGuard(o: {
     if (disposed) return
     const s = api.getAppState()
     const z = s.zoom.value
+    const labels = [...root.querySelectorAll<HTMLElement>('.excalidraw .frame-name')]
+    // a pan moves every frame and name alike: no box is read again (no layout) unless the zoom, the names
+    // drawn (one scrolled in or out) or a frame changed
+    const key = `${z}|${labels.map((el) => el.id + (el.querySelector('input') ? '*' : '')).join(',')}`
+    if (!dirty && key === lastKey) return
+    dirty = false
+    lastKey = key
     const list = framesNow()
     const byId = new Map<string, FrameNameBoxes>()
     for (const f of list)
@@ -141,7 +153,7 @@ export function installFrameNameGuard(o: {
         },
         name: null,
       })
-    for (const el of root.querySelectorAll<HTMLElement>('.excalidraw .frame-name')) {
+    for (const el of labels) {
       const id = NAME_ID.exec(el.id)?.[1]
       const entry = id ? byId.get(id) : undefined
       if (!id || !entry) continue
@@ -164,13 +176,17 @@ export function installFrameNameGuard(o: {
   }
   const offs: (() => void)[] = []
   offs.push(api.onScrollChange(() => schedule()))
-  const onResize = () => schedule()
+  const onResize = () => {
+    dirty = true
+    schedule()
+  }
   win.addEventListener('resize', onResize)
   offs.push(() => win.removeEventListener('resize', onResize))
   if (o.subscribe)
     offs.push(
       o.subscribe(() => {
         frames = null
+        dirty = true
         schedule()
       }),
     )
@@ -180,6 +196,7 @@ export function installFrameNameGuard(o: {
     hidden: () => hidden,
     refresh() {
       frames = null
+      dirty = true
       schedule()
     },
     dispose() {
