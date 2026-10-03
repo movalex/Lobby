@@ -527,6 +527,43 @@ describe('classifyKey: read-only roles', () => {
   })
 })
 
+describe('classifyKey: read-only roles copy where the export policy lets them (CR-3A-4)', () => {
+  const MAY_COPY: KeyContext = { ...READONLY, canCopy: true }
+
+  it('Ctrl/Cmd+C reaches the browser (stopped before Excalidraw, never prevented) only with canCopy', () => {
+    expect(classifyKey(k('mod+c'), MAY_COPY)).toEqual({ kind: 'browser' })
+    expect(classifyKey(k('meta+c'), { ...MAY_COPY, mac: true })).toEqual({ kind: 'browser' })
+    // the policy says no (or has not answered): blocked and prevented, as before
+    expect(classifyKey(k('mod+c'), READONLY)).toEqual({ kind: 'block', preventDefault: true })
+    expect(classifyKey(k('mod+c'), { ...READONLY, canCopy: false })).toEqual({
+      kind: 'block',
+      preventDefault: true,
+    })
+  })
+
+  it('nothing else opens up: not cut, paste, Shift+C, Alt chords or the editing keys', () => {
+    for (const spec of [
+      'mod+x',
+      'mod+v',
+      'mod+shift+v',
+      'mod+shift+c',
+      'mod+alt+c',
+      'Delete',
+      'mod+d',
+      'mod+z',
+    ])
+      expect(classifyKey(k(spec), MAY_COPY).kind, spec).toBe('block')
+    // the other platform's command key is not the copy chord
+    expect(classifyKey(k('meta+c'), MAY_COPY).kind).toBe('block')
+    expect(classifyKey(k('mod+c', { altGraph: true }), MAY_COPY).kind).toBe('block')
+  })
+
+  it('an editor’s Ctrl/Cmd+C is the browser’s either way (the export gate answers at the copy event)', () => {
+    expect(classifyKey(k('mod+c'), { ...EDITOR, canCopy: false })).toEqual({ kind: 'browser' })
+    expect(classifyKey(k('mod+c'), EDITOR)).toEqual({ kind: 'browser' })
+  })
+})
+
 describe('chordOf', () => {
   it('names chords by code for letters and digits, with mod for Ctrl or Cmd', () => {
     expect(chordOf(k('mod+shift+s'))).toBe('mod+shift+s')

@@ -23,6 +23,7 @@ import { CaptureUpdateAction } from '@excalidraw/excalidraw'
 import type { AppState as ExcalidrawAppState, ExcalidrawImperativeAPI } from '@excalidraw/excalidraw/types'
 import { api as apiClient } from '../../api/client.ts'
 import { createTicketUri } from '../../board/ticket.ts'
+import { exportAllowedOnBoard } from '../../features/canvas-ux/ported/export-gate.ts'
 import { frameAt } from '../../features/canvas-ux/ported/notes.ts'
 import { DEV_AUTH_ENABLED } from '../../lib/identity.ts'
 import { engineRejectNotice } from '../../sync-quality/copy.ts'
@@ -60,6 +61,7 @@ import { attachCustomTools, type CustomToolClick } from '../tools/customTools.ts
 import { setTool } from '../tools/tools.ts'
 import { ChangeClassifier } from './changes.ts'
 import { contentOf } from './content.ts'
+import { selectionText } from './copy-text.ts'
 import { createBoardHandles } from './handles.ts'
 import { BoardInput } from './input.ts'
 import { PeerStore } from './peers.ts'
@@ -240,6 +242,15 @@ export class LobbyBoardSession {
       },
       isBlocked: (p) => this.registries.hitGuard.isBlocked(p) !== null,
       isConfirmed: (id) => this.core.confirmed(id) !== undefined,
+      // CR-3A-4: the export policy decides who copies (editors, viewers and commenters alike; a name-only
+      // guest only under 'everyone-including-guests'), and a read-only role copies the selection's text
+      canCopy: () => exportAllowedOnBoard(o.boardId, this.ticketRole, this.guest),
+      copyReadOnly: (data) => {
+        const text = this.canvas ? selectionText(this.canvas) : ''
+        if (!text) return false
+        data.setData('text/plain', text)
+        return true
+      },
       onEmptyDoubleClick: (p) => this.createFreeText(p.x, p.y),
       // a drop on the board (editors): the features' content handlers (./content.ts), through the page
       onDrop: (e) => {

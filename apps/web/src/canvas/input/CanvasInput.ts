@@ -14,7 +14,8 @@
 //    turn into a double-tap, calls preventDefault on it (Excalidraw's iOS preventDefault no longer runs)
 //    and runs the lease flow (P4).
 //  - contextmenu: Lobby's menu, never Excalidraw's.
-//  - copy / cut: the export policy. paste: read-only roles get nothing. dragover / drop: Lobby's upload
+//  - copy / cut: the export policy (a read-only role copies the selection's text where it allows: CR-3A-4;
+//    cut is the editors'). paste: read-only roles get nothing. dragover / drop: Lobby's upload
 //    path for editors, nothing for read-only roles; never Excalidraw's, never the browser's.
 //  - api.onChange: the editor-open rule (../lease/editorLease.ts).
 //  - beforeinput / input / composition / paste / drop aimed at a text editor that is not the granted
@@ -61,8 +62,19 @@ export interface CanvasInputOptions {
   actions?: Partial<Record<LobbyKeyAction, (e: KeyboardEvent) => void>>
   /** Elements hidden by a mind-map collapse (Ctrl+A leaves them out). */
   hiddenIds?: () => ReadonlySet<string>
-  /** The export policy: may this viewer copy or cut? (Default: editors only.) */
+  /**
+   * The export policy: may this person copy? (Default: editors only.) Read-only roles copy too when it
+   * says so (CR-3A-4): the keymap lets their Ctrl/Cmd+C reach the browser and `copyReadOnly` writes the
+   * clipboard. Cut stays the editors'.
+   */
   canCopy?: () => boolean
+  /**
+   * What a read-only role takes with Ctrl/Cmd+C and the menus' Copy while `canCopy` allows it (CR-3A-4):
+   * puts it on `data` and says whether it wrote anything. Excalidraw's own copy listener returns at once
+   * on a non-interactive canvas (`onCopy` checks `isInteractionEnabled`), so for these roles Lobby writes
+   * the clipboard itself (the selection's text).
+   */
+  copyReadOnly?: (data: DataTransfer) => boolean
   /** Lobby's upload path for dropped files (editors). */
   onDrop?: (e: DragEvent) => void
   onContextMenu?: (e: MouseEvent) => void
@@ -144,6 +156,7 @@ export class CanvasInput {
   private readonly tapMirror = new DoubleTapMirror()
   private editor: EditorLease | null = null
   private api: ExcalidrawImperativeAPI | null = null
+  private wrapper: HTMLElement | null = null
   /** macOS, decided as Excalidraw decides CTRL_OR_CMD (common dist/dev/index.js:2242). */
   private mac = false
 
@@ -160,6 +173,7 @@ export class CanvasInput {
   /** ExcalidrawHost wiring: attach once the engine is initialised. */
   readonly attach = (wrapper: HTMLElement, api: ExcalidrawImperativeAPI): (() => void) => {
     this.api = api
+    this.wrapper = wrapper
     this.mac = /Mac|iPod|iPhone|iPad/.test(wrapper.ownerDocument.defaultView?.navigator.platform ?? '')
     const editor = new EditorLease({
       api,
@@ -195,12 +209,14 @@ export class CanvasInput {
     })
     const doc = wrapper.ownerDocument
     const win = doc.defaultView
+    doc.addEventListener('copy', this.onDocumentCopy, capture)
     const leaveKeyupGate = registerKeyupClient(doc, this)
     // a keyup that never comes (the window lost focus) must not let a later one through
     const forgetDelegated = () => this.delegatedKeys.clear()
     win?.addEventListener('blur', forgetDelegated)
     return () => {
       leaveKeyupGate()
+      doc.removeEventListener('copy', this.onDocumentCopy, capture)
       win?.removeEventListener('blur', forgetDelegated)
       this.delegatedKeys.clear()
       unsubscribe()
@@ -221,6 +237,7 @@ export class CanvasInput {
       wrapper.removeEventListener('blur', this.onBlur, capture)
       this.editor = null
       this.api = null
+      this.wrapper = null
     }
   }
 
@@ -289,6 +306,7 @@ export class CanvasInput {
     const editor = this.editor
     return {
       role: this.opts.role(),
+      canCopy: this.canCopy(),
       editor: !editor ? 'none' : textEditor ? editor.keyStateFor(textEditor) : editor.keyState(),
       inTextEditor: textEditor !== null,
       mac: this.mac,
@@ -496,10 +514,36 @@ export class CanvasInput {
 
   private readonly onCopy = (e: ClipboardEvent): void => {
     if (this.isTextEditor(e.target)) return
-    if (this.canCopy()) return
+    if (!this.canCopy()) {
+      e.preventDefault()
+      e.stopPropagation()
+      this.trace('copy-blocked', {})
+      return
+    }
+    // an editor: Excalidraw's own copy runs (the export gate has already answered where the policy says no)
+    if (this.opts.role() === 'editor') return
+    // a read-only role the export policy lets copy (CR-3A-4): Excalidraw's copy is off for them
+    const data = e.clipboardData
+    if (!data || !this.opts.copyReadOnly?.(data)) return
     e.preventDefault()
     e.stopPropagation()
-    this.trace('copy-blocked', {})
+    this.trace('copy-read-only', {})
+  }
+
+  /**
+   * The browser's copy command run from a menu (`execCommand('copy')`, with no selection in the page) fires
+   * its event at <body>, outside the wrapper: Excalidraw's own listener on the document finds the board by
+   * the focus (`onCopy`: the container holds the active element). A read-only role's copy (CR-3A-4) must
+   * answer the same event, or the menus' Copy would do nothing for them. Editors' copy from a menu is the
+   * engine's (the command checked the export policy first).
+   */
+  private readonly onDocumentCopy = (e: ClipboardEvent): void => {
+    const wrapper = this.wrapper
+    if (!wrapper || e.defaultPrevented || this.opts.role() === 'editor') return
+    const doc = wrapper.ownerDocument
+    if (e.target !== doc.body && e.target !== doc.documentElement) return
+    if (!wrapper.contains(doc.activeElement)) return // the board has no keyboard: not a copy of the board
+    this.onCopy(e)
   }
 
   private readonly onCut = (e: ClipboardEvent): void => {

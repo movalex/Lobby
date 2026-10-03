@@ -193,8 +193,9 @@ const refocus = (ctx: CanvasFeatureContext, source: CommandSource) => {
 }
 
 /**
- * Copy or cut the selection through the engine's own clipboard (the browser's copy command on the focused
- * canvas: the engine's copy listener writes its clipboard format), after the export gate.
+ * Copy or cut the selection through the browser's copy command on the focused canvas, after the export
+ * gate: the engine's copy listener writes its clipboard format for editors; for viewers and commenters the
+ * input layer's copy listener writes the selection's text (CR-3A-4).
  */
 function clipboard(ctx: CanvasFeatureContext, kind: 'copy' | 'cut') {
   if (!guardExport(ctx)) return
@@ -300,10 +301,13 @@ export const COMMANDS: readonly CommandSpec[] = [
     run: (ctx) => clipboard(ctx, 'cut'),
   },
   {
-    // editors only on this canvas: the input layer lets only editors copy (CR-3A-4 asks it to follow the
-    // export policy, as the tldraw page does for viewers and commenters)
+    // every role, while the export policy lets this person copy (CR-3A-4): editors through the engine's
+    // own clipboard, viewers and commenters through the input layer's copy of the selection's text
+    // (canvas/input/CanvasInput.ts copyReadOnly); the menus drop the entry, and Ctrl/Cmd+C says why, while
+    // exporting is off for them (./export-gate.ts)
     id: CMD.copy,
     label: 'Copy',
+    readOnlyAllowed: true,
     enabled: selectionAtLeast(1),
     run: (ctx) => clipboard(ctx, 'copy'),
   },

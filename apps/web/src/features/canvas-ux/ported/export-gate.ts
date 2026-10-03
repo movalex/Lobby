@@ -59,6 +59,21 @@ export function exportAllowedWith(
   return exportAllowedFor(role, policy, { nameOnlyGuest: guest === true })
 }
 
+/**
+ * For code that has no feature context (the board session's input layer lets a viewer's Ctrl/Cmd+C through
+ * only where this says so: CR-3A-4): the same rule as `exportAllowed`, read from this board's gate. The
+ * session's own knowledge that this is a name-only guest (its welcome says so) joins the gate's, so a
+ * guest is never let through before the first policy answer names them.
+ */
+export function exportAllowedOnBoard(
+  boardId: string,
+  role: BoardRole | null,
+  nameOnlyGuest: boolean,
+): boolean {
+  const g = exportGate(boardId)
+  return exportAllowedWith(role, g.policy.get(), nameOnlyGuest ? true : g.guest.get())
+}
+
 /** Reactive (inside useValue / react): may this person copy and export here? */
 export function exportAllowed(ctx: Pick<CanvasFeatureContext, 'board' | 'role'>): boolean {
   const g = exportGate(ctx.board.id)
