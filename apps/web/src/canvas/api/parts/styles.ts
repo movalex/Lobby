@@ -20,6 +20,10 @@
  * elements, so the style and the new layout are ONE `transact` (one undo step, pushed by the sync engine).
  * A label another session holds the lease on is skipped (its layout is theirs while they type, §2.9.4).
  * Browser only for text fields (Excalidraw's measurement needs a canvas); the other fields are plain writes.
+ *
+ * The next style (`setNext`) follows every pick, with one exception (CR-3A-7): a font size is the next size of
+ * the KIND it was picked on, a note's label size or a free text's (the board page's port keeps the two apart,
+ * canvas/port-impl.ts `setNextFontSize`), not both: a text picked at 44 does not make the next note's label 44.
  */
 import {
   getBaseFontSizeUpdate,
@@ -34,6 +38,9 @@ import { NotImplementedError } from '../owners.ts'
 import type { PartDeps } from './types.ts'
 
 export type StylesPart = Pick<LobbyStyles, 'of' | 'apply'>
+
+/** CR-3A-7: the board page's port member for the next font sizes (a bare port, in a unit test, has none). */
+type SizePort = { setNextFontSize?(slot: 'note' | 'text', size: number): void }
 
 type Field = keyof StyleValues
 
@@ -258,6 +265,24 @@ export function createStylesPart(deps: PartDeps): StylesPart {
     }
   }
   const setNext = (patch: StyleValues) => orElse(() => canvas().styles.setNext(patch), undefined)
+  /**
+   * A pick sets the next style too (tldraw's setStyleForSelectedShapes). CR-3A-7: its font size goes to the
+   * next size of the kinds of text it was picked on (a free text's, a note's or other container's label),
+   * which the port keeps apart; with no text on the targets, or a port with one size, the engine's own.
+   */
+  const setNextStyle = (patch: StyleValues, targets: readonly CanvasElement[]) => {
+    const port = deps.port as SizePort
+    if (patch.fontSize === undefined || typeof port.setNextFontSize !== 'function') return setNext(patch)
+    const slots = new Set<'note' | 'text'>()
+    for (const e of targets) {
+      if (e.type === 'text') slots.add('text')
+      else if (TEXT_CONTAINERS.has(e.type)) slots.add('note')
+    }
+    if (!slots.size) return setNext(patch)
+    const { fontSize, ...rest } = patch
+    if (Object.keys(rest).length) setNext(rest)
+    for (const slot of slots) port.setNextFontSize(slot, fontSize)
+  }
   const of = (ids?: readonly string[]): MixedStyles => {
     const c = canvas()
     const list = (ids ?? c.selection).map((id) => c.get(id)).filter((e): e is CanvasElement => !!e)
@@ -265,12 +290,12 @@ export function createStylesPart(deps: PartDeps): StylesPart {
   }
   const apply = (patch: StyleValues, ids?: readonly string[]): void => {
     const c = canvas()
-    setNext(patch)
-    if (orElse(() => c.readOnly(), false)) return
     const targets = (ids ?? c.selection)
       .map((id) => c.get(id))
       .filter((e): e is CanvasElement => !!e && !(e as { isDeleted?: boolean }).isDeleted)
       .map((e) => (isLabel(e) ? (c.get(e.containerId as string) ?? e) : e))
+    setNextStyle(patch, targets)
+    if (orElse(() => c.readOnly(), false)) return
     if (!targets.length) return
     const writes = new Map<string, Record<string, unknown>>()
     const add = (id: string, fields: Record<string, unknown>) =>

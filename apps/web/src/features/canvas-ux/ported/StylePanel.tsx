@@ -289,7 +289,13 @@ function pickPlain(
   canvas.styles.setNext(fields)
 }
 
-/** Text fields go through `styles.apply` (it lays the words out again); other fields join its step. */
+/**
+ * Text fields go through `styles.apply` (it lays the words out again); other fields join its step.
+ * CR-3A-7: a note's label size and a free text's are two next sizes. With a selection, each kind's pick goes to
+ * its own (`styles.apply` sends a font size to the kinds of text it is picked on); with the note or the text tool
+ * picked, `setNext` writes the one the tool in hand makes (the port keeps the other: canvas/port-impl.ts), so a note's
+ * L is never the next text's size.
+ */
 function pickSize(canvas: LobbyCanvas, t: Target, size: SizeName) {
   const texts = t.els.filter((e) => kindOf(e) === 'text').map((e) => e.id)
   const notes = t.els.filter((e) => kindOf(e) === 'note').map((e) => e.id)
