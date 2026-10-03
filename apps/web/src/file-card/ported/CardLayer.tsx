@@ -388,6 +388,27 @@ function CardFace({
   )
 }
 
+/** How long after a tap opened the viewer its click is still taken for that tap's own. */
+const TAP_CLICK_MS = 800
+
+/**
+ * F5: the click a browser makes from a touch or pen tap arrives after the pointerup that already opened the
+ * PDF viewer, at the same point, so it would land on whatever the viewer now puts under the finger (a page
+ * thumbnail, which turned the viewer to that page, or Prev/Next or Close). Swallow that one click: the next
+ * click within TAP_CLICK_MS, and only near the tap point.
+ */
+function swallowTapClick(x: number, y: number): void {
+  const until = Date.now() + TAP_CLICK_MS
+  const stop = (e: MouseEvent) => {
+    window.removeEventListener('click', stop, true)
+    if (Date.now() > until || Math.abs(e.clientX - x) > 16 || Math.abs(e.clientY - y) > 16) return
+    e.preventDefault()
+    e.stopPropagation()
+  }
+  window.addEventListener('click', stop, true)
+  window.setTimeout(() => window.removeEventListener('click', stop, true), TAP_CLICK_MS)
+}
+
 function Preview({
   view,
   coverSrc,
@@ -405,7 +426,7 @@ function Preview({
 }) {
   const [playing, setPlaying] = useState(false)
   // F5: a touch or pen tap opens the viewer on pointerup; the click that some browsers still send after
-  // it is then ignored.
+  // it is then ignored, on this button and on the viewer that is now under the finger.
   const tappedAt = useRef(0)
   const pressed = useRef<number | null>(null)
   const onViewPagesDown = (e: PointerEvent) => {
@@ -416,10 +437,11 @@ function Preview({
     pressed.current = null
     if (!onViewPages || !tap || e.pointerType === 'mouse' || e.button !== 0) return
     tappedAt.current = Date.now()
+    swallowTapClick(e.clientX, e.clientY)
     onViewPages()
   }
   const onViewPagesClick = () => {
-    if (Date.now() - tappedAt.current < 800) return
+    if (Date.now() - tappedAt.current < TAP_CLICK_MS) return
     onViewPages?.()
   }
 

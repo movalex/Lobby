@@ -317,9 +317,30 @@ test('F5 on a touch phone, a tap on "View pages" opens the PDF viewer', async ({
     await expect(button).toBeVisible()
     const box = await button.boundingBox()
     if (!box) throw new Error('no View pages box')
+    // The tap opens the viewer on pointerup. The click the browser makes from the same tap comes after, at
+    // the same point, and must not reach the viewer now under the finger (a page thumbnail there turned the
+    // viewer to page 4 once the read-only page list got wider).
+    await g.page.evaluate(() => {
+      const w = window as unknown as { viewerClicks: string[] }
+      w.viewerClicks = []
+      document.addEventListener(
+        'click',
+        (e) => {
+          const t = e.target instanceof Element ? e.target : null
+          if (t?.closest('[data-testid="pdf-viewer"]')) w.viewerClicks.push(t.tagName)
+        },
+        true,
+      )
+    })
     await g.page.touchscreen.tap(box.x + box.width / 2, box.y + box.height / 2)
     await expect(g.page.getByTestId('pdf-viewer')).toBeVisible({ timeout: 10_000 })
-    await expect(g.page.getByTestId('pdf-viewer-counter')).toContainText('1')
+    await expect(g.page.getByTestId('pdf-viewer-counter')).toContainText('Page 1 of')
+    // An absence: give a late click its moment, then nothing may have reached the viewer.
+    await g.page.waitForTimeout(500)
+    expect(
+      await g.page.evaluate(() => (window as unknown as { viewerClicks: string[] }).viewerClicks),
+    ).toEqual([])
+    await expect(g.page.getByTestId('pdf-viewer-counter')).toContainText('Page 1 of')
   } finally {
     await context.close()
   }
