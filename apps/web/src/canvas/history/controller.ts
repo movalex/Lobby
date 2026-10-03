@@ -20,6 +20,7 @@
  */
 import type { LeaseHolder } from '@draftroom/canvas-schema/protocol'
 import type { LobbyEngineCore } from '../sync/core/engine.ts'
+import { compareIndexThenId } from '../sync/index-keys.ts'
 import type { SceneAdapter, SceneElement } from '../sync/types.ts'
 import type { ApplyContext, ApplyResult } from './apply.ts'
 import type { HistEl, Scene } from './diff.ts'
@@ -178,11 +179,20 @@ export class UndoController {
     const result = dir === 'undo' ? this.history.undo(scene, ctx) : this.history.redo(scene, ctx)
     if (!result) return null
     if (result.patches.size) {
-      const next: SceneElement[] = []
+      let next: SceneElement[] = []
+      let reindexed = false
       for (const el of this.o.scene.read().elements) {
         const patch = result.patches.get(el.id)
+        if (patch && 'index' in patch && patch.index !== el.index) reindexed = true
         next.push(patch ? this.o.bump(el, patch) : el)
       }
+      // An undo or a redo of a paint-order change (Excalidraw's Ctrl+G moves the grouped elements next to
+      // each other, a reorder writes `index`) moves the element in the array too, as `transact` does
+      // (port-impl.ts, CR-3A-3). `updateScene` re-keys every element whose `index` is out of place in the
+      // array, with a version bump: before (UNDO-group-redo), the old key went in at the element's new
+      // slot, was re-keyed straight back, and the board page's boundary after the press recorded that
+      // re-key as a new step, which cleared the redo stack (the redo of an own Ctrl+G did nothing)
+      if (reindexed) next = next.sort(compareIndexThenId)
       if (this.o.install) this.o.install(next)
       else {
         this.o.scene.apply(next)

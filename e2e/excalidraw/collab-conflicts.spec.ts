@@ -374,10 +374,13 @@ for (const withGroup of [false, true])
     stack,
     board,
   }) => {
-    // KNOWN DEFECT with the group step (spike-owned canvas/history, reported by 2E at wave 2): after the
-    // whole sequence is undone, the redo of the Ctrl+G step changes nothing (a group made and redone on its
-    // own works: the next test). Acceptance test of the fix: expected to fail until then.
-    test.fail(withGroup, 'known defect: in a long undo/redo sequence the redo of an own Ctrl+G does nothing')
+    // The group step (UNDO-group-redo, a known defect since wave 2, mark removed at wave A): Excalidraw's
+    // Ctrl+G also moves box 2 up next to the note (a new `index`). The undo of the group installed the old
+    // key at the element's new array slot, Excalidraw re-keyed it straight back, and the board page recorded
+    // that re-key as a new step, which cleared the redo stack: after the whole sequence was undone, the redo
+    // of the group changed nothing (a group of two adjacent boxes moves nothing: the last test passed).
+    // Fixed in canvas/history/controller.ts (an undo or redo that writes `index` installs in paint order);
+    // the Node twin is canvas/history/long-sequence.test.ts.
     const ID = { g1: 'own-g1', g2: 'own-g2', g3: 'own-g3' }
     const a = await canvasSession('alice')
     const b = await canvasSession('bob')
