@@ -1,4 +1,8 @@
-> **Old canvas (tldraw).** This is the demo script as it was before the move to the new canvas, kept for reference. The current script is `docs/DEMO.md`.
+> **HISTORY ONLY: the old canvas (tldraw).** This is the demo script as it was before the move to the new canvas. It cannot be run against
+> anything now. Staging has run the Excalidraw canvas since 2026-10-01 (cut-over `bbe1b48`, `docs/CUTOVER-LOG.md`); tldraw was removed from the
+> build (`a75883d6`) and its last build is R0 (tag `lobby-r0`), which is no longer deployed. Do not use it for a demo: its steps rely on tldraw
+> behaviour the new canvas does not have (for example the "Get a license for production" notice it expects on localhost, last line). The
+> narrated video made from it is retired too (`docs/DEMO.md`). The current script is `docs/DEMO.md`.
 
 # Lobby demo
 
