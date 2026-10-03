@@ -3,6 +3,7 @@
 // createApiServer() builds a ready-to-inject app; tests use app.inject() and never bind a port.
 
 import type { AddressInfo } from 'node:net'
+import { checkInternalSecret, INTERNAL_SECRET_HEADER } from '@draftroom/auth-tickets'
 import type { Me } from '@draftroom/contracts'
 import { type Db, isUniqueViolation, migrate, openDb } from '@draftroom/db'
 import { dataLayout } from '@draftroom/dev-assets'
@@ -33,7 +34,11 @@ import { boardsShowingAsset, createFileAuthorizer } from './files-auth.ts'
 import { createHttpSyncNotifier, fanOutAccessChanges, type SyncNotifier } from './notifier.ts'
 import { registerAuthRoutes } from './routes/auth.ts'
 import { registerBoardRoutes } from './routes/boards.ts'
-import { registerEngineInternalRoutes } from './routes/engine-internal.ts'
+import {
+  ENGINE_INTERNAL_ROUTES,
+  engineBadSecretBody,
+  registerEngineInternalRoutes,
+} from './routes/engine-internal.ts'
 import { registerInvitationRoutes } from './routes/invitations.ts'
 import { registerMemberRoutes } from './routes/members.ts'
 import { registerTicketRoutes } from './routes/tickets.ts'
@@ -94,6 +99,34 @@ export interface ApiServer {
 const MUTATING = new Set(['POST', 'PUT', 'PATCH', 'DELETE'])
 const JSON_BODY_LIMIT = 256 * 1024
 
+/** Whether a MATCHED route pattern is a server-to-server one (the web proxy never forwards `/internal`). */
+const isInternalRoute = (pattern: string | undefined): pattern is string =>
+  pattern !== undefined && (pattern === '/internal' || pattern.startsWith('/internal/'))
+
+/**
+ * AUDIT-INTERNAL-SCOPE: the ONE place the shared internal secret is checked. Every route whose pattern
+ * is under `/internal` (the sync server's reports and pulls, the cut-over's checkpoint runs) is refused
+ * with 401 before its handler, its parsing or its other hooks run, unless the request carries the
+ * secret; no handler checks it by hand, so a future internal route cannot ship without it. Decided by
+ * the matched route pattern (like the CSRF hook below), never by the raw URL. Add it before every
+ * other hook: hooks run in registration order, and nothing may read a cookie or a body first.
+ * The two routes with a typed contract (docs/EXCALIDRAW-MIGRATION.md §1, engine-internal.ts) answer in it.
+ */
+export function registerInternalSecretGuard(app: FastifyInstance, secret: string): void {
+  app.addHook('onRequest', async (req, reply) => {
+    const route = req.routeOptions.url
+    if (!isInternalRoute(route)) return
+    if (checkInternalSecret(req.headers[INTERNAL_SECRET_HEADER], secret)) return
+    return reply
+      .code(401)
+      .send(
+        ENGINE_INTERNAL_ROUTES.has(route)
+          ? engineBadSecretBody()
+          : { error: { code: 'NOT_AUTHENTICATED', message: 'Internal credentials required.' } },
+      )
+  })
+}
+
 function defaultProvider(config: ApiConfig): AuthProvider {
   if (config.authProvider === 'dev') return createDevAuthProvider()
   if (!config.clerk) throw new Error('AUTH_PROVIDER=clerk requires Clerk keys')
@@ -152,6 +185,7 @@ async function buildServer(
     return503OnClosing: true,
     trustProxy: config.trustProxy, // req.ip (per-IP rate limits) behind proxies: TRUST_PROXY, docs/DEPLOY.md
   })
+  registerInternalSecretGuard(app, config.internalSecret)
   const syncNotifier =
     deps.notifier ??
     createHttpSyncNotifier({ baseUrl: config.syncInternalUrl, secret: config.internalSecret, log: app.log })

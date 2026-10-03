@@ -7,8 +7,10 @@
 //   A2  GET /internal/boards/:bid/workshop-state               → 200 WorkshopStateBody
 //
 // Server-to-server only (the web proxy never forwards /internal). GETs, like `touched` and
-// `/internal/access`, because the root CSRF hook refuses server-to-server POSTs. Every route checks the
-// internal secret first, before it looks at any other input. Errors are the contract's
+// `/internal/access`, because the root CSRF hook refuses server-to-server POSTs. The internal secret is
+// checked before anything else by the root guard every `/internal` route shares (app.ts
+// registerInternalSecretGuard; it answers these two routes in the contract's shape: engineBadSecret).
+// Errors are the contract's
 // `{ error: { code, message } }` with its codes: 401 `bad-secret`, 400 `bad-request`, 404
 // `board-not-found`, 503 `unavailable`. Sync fails closed on anything but 200 (and after its 3 s
 // timeout): ops that need an unresolved file get `UNAVAILABLE`.
@@ -25,7 +27,6 @@
 // Like `/files`, A1 answers only for a board that can be opened: a trashed board is 404
 // `board-not-found` (sync fails closed: the op gets `UNAVAILABLE`), an archived one still answers.
 
-import { checkInternalSecret, INTERNAL_SECRET_HEADER } from '@draftroom/auth-tickets'
 import {
   type FileRef,
   type FileRefsResponse,
@@ -55,9 +56,16 @@ const MESSAGES: Record<SyncInternalErrorCode, string> = {
 const fail = (code: SyncInternalErrorCode, message = MESSAGES[code]) =>
   new ApiError(SYNC_INTERNAL_ERROR_STATUS[code], code, message)
 
-function requireSecret(req: FastifyRequest, secret: string) {
-  if (!checkInternalSecret(req.headers[INTERNAL_SECRET_HEADER], secret)) throw fail('bad-secret')
-}
+/** The two routes with a typed error contract: the root secret guard (app.ts) answers them with `engineBadSecret`. */
+export const ENGINE_INTERNAL_ROUTES: ReadonlySet<string> = new Set([FILE_REFS_ROUTE, WORKSHOP_STATE_ROUTE])
+
+/**
+ * The body of 401 `bad-secret` in the contract's error shape (SyncInternalErrorBody; the status is
+ * SYNC_INTERNAL_ERROR_STATUS['bad-secret'], 401, pinned by the contracts package's own test).
+ */
+export const engineBadSecretBody = () => ({
+  error: { code: 'bad-secret' as const, message: MESSAGES['bad-secret'] },
+})
 
 /** Every value of query parameter `name` from the raw URL (independent of the querystring parser). */
 function rawParams(req: FastifyRequest, name: string): string[] {
@@ -162,10 +170,9 @@ export async function fileRefsFor(
 }
 
 export function registerEngineInternalRoutes(app: FastifyInstance, ctx: AppContext): void {
-  const { db, config, now } = ctx
+  const { db, now } = ctx
 
   app.get(FILE_REFS_ROUTE, async (req): Promise<FileRefsResponse> => {
-    requireSecret(req, config.internalSecret)
     const raw = rawParams(req, 'ids')
     const ids = raw.length === 1 ? parseFileRefsIds(raw[0]) : null
     if (!ids) throw fail('bad-request', 'ids: 1-100 comma-separated version ids (ver_…).')
@@ -175,7 +182,6 @@ export function registerEngineInternalRoutes(app: FastifyInstance, ctx: AppConte
   })
 
   app.get(WORKSHOP_STATE_ROUTE, async (req): Promise<WorkshopStateBody> => {
-    requireSecret(req, config.internalSecret)
     const { bid = '' } = req.params as Params
     const board = await loadBoard(db, bid)
     return guarded(() => workshopStateOf(db, board.id, now()))

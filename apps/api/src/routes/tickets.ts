@@ -1,7 +1,7 @@
 // Board connection tickets (docs/M1-CONTRACTS.md §6) and the sync server's access re-check (§7).
 // Both answer with connectionRole(), so a ticket and a later re-check can never disagree.
 
-import { checkInternalSecret, INTERNAL_SECRET_HEADER, signTicket } from '@draftroom/auth-tickets'
+import { signTicket } from '@draftroom/auth-tickets'
 import {
   BoardId,
   NEW_CANVAS_BOARD_MESSAGE,
@@ -51,10 +51,9 @@ export function registerTicketRoutes(app: FastifyInstance, ctx: AppContext): voi
     return { ticket, expiresAt: claims.exp, role, user: { id: user.id, name, color: user.color } }
   })
 
-  // Server-to-server only (the web proxy never forwards /internal). Authenticated by the shared secret.
+  // Server-to-server only (the web proxy never forwards /internal). Authenticated by the shared secret,
+  // checked for every /internal route by the root guard (app.ts registerInternalSecretGuard).
   app.get('/internal/access', async (req) => {
-    if (!checkInternalSecret(req.headers[INTERNAL_SECRET_HEADER], config.internalSecret))
-      throw new ApiError(401, 'NOT_AUTHENTICATED', 'Internal credentials required.')
     const { boardId, userId } = parse(AccessQuery, req.query)
     // Unknown board or user: null, the same as "no access" (the caller only needs to know whether to close).
     return { role: connectionRole(await loadBoardAccess(db, boardId, userId)) }

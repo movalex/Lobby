@@ -16,7 +16,6 @@
 //   delete           the board's owners (manage_access; archived boards included), never a guest.
 //   restore          unchanged (index.ts: view + workspace member + export policy).
 
-import { checkInternalSecret, INTERNAL_SECRET_HEADER } from '@draftroom/auth-tickets'
 import { type CheckpointContent, SNAPSHOT_ID_PATTERN } from '@draftroom/contracts'
 import { can, canCreateInWorkspace } from '@draftroom/permissions'
 import type { FastifyInstance, FastifyRequest } from 'fastify'
@@ -25,7 +24,7 @@ import { type BoardAccess, isBoardId, requireBoardAction } from '../../access.ts
 import { userKind } from '../../auth/users.ts'
 import { onNewCanvas } from '../../canvas-engine.ts'
 import type { Params } from '../../context.ts'
-import { ApiError, forbidden, gone, notFound, parse } from '../../errors.ts'
+import { forbidden, gone, notFound, parse } from '../../errors.ts'
 import type { FeatureContext } from '../context.ts'
 import type { CheckpointService } from './checkpoints.ts'
 import {
@@ -109,8 +108,7 @@ export function registerCheckpointRoutes(
   // A GET, like touched: the root CSRF hook refuses POSTs without the web Origin. Idempotent: a repeat
   // only moves the session end later, and the checkpoint compares content before it saves anything.
   app.get(SESSION_ENDED_ROUTE, async (req, reply) => {
-    if (!checkInternalSecret(req.headers[INTERNAL_SECRET_HEADER], ctx.config.internalSecret))
-      throw new ApiError(401, 'NOT_AUTHENTICATED', 'Internal credentials required.')
+    // The internal secret is checked by the root guard (app.ts registerInternalSecretGuard).
     const { bid = '' } = req.params as Params
     parse(AtQuery, req.query)
     if (!isBoardId(bid)) throw notFound()
