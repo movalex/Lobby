@@ -204,3 +204,16 @@ on the sync disk (§6).
   still echoes `lobby.board.v1` through the edge). web live in 31 s. Live smoke (the merged `scripts/smoke/live-smoke.mjs`, its
   CSP read from `render.yaml`): 34 passed, 0 failed, the known warning; 0 `error`/`FATAL` lines. **The R0 rollback path is retired**
   from here: 0024 is newer than R0 can read, and D7 drop-legacy follows around 2026-10-08.
+- **Wave D deployed 2026-10-03 23:49–23:51Z** (`main` `54ea729`; api → sync → web; no migration, no protocol change, `CONTRACTS_REV`
+  stays 11). It carries:
+  - the presence relay re-ranking only when a shown set can change (NAS L1 at 200 sessions: steady CPU 62 → 50 % of the quota, pre-kill
+    event-loop p99 56.5 → 35.1 ms);
+  - the B11 divergence fix (SYNC-4), the receipt-gap marker, and the archive READ_ONLY fix (DEF-GAPS-1);
+  - history re-key in one sorted pass;
+  - the api's offboarding sweep, v1-preview cap + LRU, and request timeouts (408 `REQUEST_TIMEOUT`; streamed uploads cut only on a 60 s
+    stall, 60 min ceiling);
+  - the web polish follow-ups and C6's measured harness and docs.
+
+  Results: api live in 41 s, sync in 52 s (`/healthz` 200 twelve seconds later), web in 31 s. Live smoke 34 passed, 0 failed, the known
+  warning; 0 `error`/`FATAL` lines; backups 0 failures; the board handshake echoes `lobby.board.v1`. Known and queued for wave E: a
+  removal racing the same person's multi-use link redemption can deadlock (one side answers 500) or leave an orphan grant.
