@@ -27,7 +27,7 @@ import { bump } from '../headless/scene.ts'
 import { rect } from '../testing/elements.ts'
 import { FakeRoom, stored } from '../testing/fakeRoom.ts'
 import { createManualClock } from '../testing/manualClock.ts'
-import type { SceneAdapter, SceneElement, ServerInbound, Transport } from '../types.ts'
+import type { GestureState, SceneAdapter, SceneElement, ServerInbound, Transport } from '../types.ts'
 import { IDLE_GESTURE } from '../types.ts'
 import { LobbyEngineCore } from './engine.ts'
 
@@ -70,8 +70,9 @@ function client(seed: SceneElement[]) {
     close: (c, r) => raw.close(c, r),
   }
   const map = new Map<string, SceneElement>()
+  let gesture: GestureState = IDLE_GESTURE
   const scene: SceneAdapter = {
-    read: () => ({ elements: [...map.values()], gesture: IDLE_GESTURE }),
+    read: () => ({ elements: [...map.values()], gesture }),
     apply(elements) {
       syncInvalidIndices(elements as never)
       map.clear()
@@ -96,8 +97,9 @@ function client(seed: SceneElement[]) {
     map,
     pushes,
     logs,
-    /** a local edit, scanned as Excalidraw's onChange would report it, then every timer run */
-    edit(fn: (m: Map<string, SceneElement>) => void) {
+    /** a local edit, scanned as Excalidraw's onChange would report it (with `g`, the gesture it is part of), then every timer run */
+    edit(fn: (m: Map<string, SceneElement>) => void, g: Partial<GestureState> = {}) {
+      gesture = { ...IDLE_GESTURE, ...g }
       fn(map)
       core.onSceneChange(scene.read())
       clock.runAll()
@@ -172,5 +174,26 @@ describe('SYNC-4: an unconfirmed local key never makes Excalidraw re-key a confi
     expect(key > 'a2').toBe(true)
     expect(a.map.get('E1')?.index).toBe(key)
     expect(a.pushedFor('w1')).toEqual([])
+  })
+
+  it('a drag holds an element another user moves to the back, then their create lands on its old key: the create stays, the drop pushes only the move', () => {
+    const a = client([stored(rect('S', 'a0')), stored(rect('Y', 'a1'))])
+    const drag = { dragging: true, selectedElementIds: ['Y'] }
+    // A drags Y: the gesture holds its copy (§2.5.4)
+    a.edit((m) => m.set('Y', bump(m.get('Y') as SceneElement, { x: 50 })), drag)
+    expect(a.pushes).toHaveLength(0)
+    // another user sends Y to the back, then creates at the top: on the key Y had (keys are deterministic)
+    a.deliver({ type: 'changes', clock: 1, ops: [{ k: 'p', id: 'Y', pv: 1, g: { z: { index: 'Zz' } } }] })
+    a.deliver({ type: 'changes', clock: 2, ops: [{ k: 'c', el: a.server('z1', 'a1', 22) }] })
+    // the create is the server's copy, untouched (Y's held copy moved off its key, locally)
+    expect(a.logs.filter((l) => l.event === 'echo_suspect')).toEqual([])
+    expect(a.map.get('z1')).toMatchObject({ index: 'a1', version: 1, versionNonce: 22 })
+    // the drop: only the move goes out, and Y ends at the back, on the server's key
+    a.edit((m) => m.set('Y', bump(m.get('Y') as SceneElement, { x: 60 })))
+    expect(a.pushedFor('z1')).toEqual([])
+    const y = a.pushedFor('Y')
+    expect(y).toHaveLength(1)
+    expect(Object.keys((y[0] as { g?: Record<string, unknown> }).g ?? {})).toEqual(['pos'])
+    expect(a.map.get('Y')?.index).toBe('Zz')
   })
 })

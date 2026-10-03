@@ -1585,13 +1585,16 @@ export class LobbyEngineCore implements EngineCore {
     // came before its ack, a reorder in flight or unsent). Counted as confirmed, such a key could tie with
     // another confirmed element, and Excalidraw's `syncInvalidIndices` would re-key that element in place
     // (an echo of someone else's element; at 017f76d, B11's one divergence)
+    // The same for a key a gesture holds (§2.5.4): an element it holds back keeps its old key while the
+    // server moved it (`heldRemote` z), and that key may be another element's by now (B sends the dragged
+    // element to the back, then creates at the top: the new key is the one it had). Its re-key is display
+    // only: the gesture's end takes the server's key, so it is neither dirty nor the user's change
+    const ownZ = (id: string) => !!this.tracked.get(id)?.dirty.has('z') || this.inflightGroups(id).has('z')
+    const heldZ = (id: string) => hold.has(id) && !!this.heldRemote.get(id)?.groups.has('z')
     const ownUnacked = (el: SceneElement) => {
       const conf = this.confirmedMap.get(el.id)
       if (!conf) return !!this.tracked.get(el.id)?.isNew || this.inflightHas(el.id)
-      return (
-        el.index !== conf.index &&
-        (!!this.tracked.get(el.id)?.dirty.has('z') || this.inflightGroups(el.id).has('z'))
-      )
+      return el.index !== conf.index && (ownZ(el.id) || heldZ(el.id))
     }
     // the index pre-pass (E2, E3), skipped when this client has no unacknowledged element of its own
     // (§2.5.4); the array is then only sorted by (index, id)
@@ -1606,7 +1609,13 @@ export class LobbyEngineCore implements EngineCore {
       if (pre.confirmedConflicts.length)
         this.log('index_conflict', { ids: pre.confirmedConflicts.slice(0, 20) })
       for (const r of pre.rekeys) {
-        if (!r.inFlight) {
+        const held =
+          this.confirmedMap.has(r.id) && heldZ(r.id) && !ownZ(r.id) ? this.heldRemote.get(r.id) : undefined
+        if (held) {
+          // the copy the user's changes are told apart by (heldRemote) is the re-keyed one: the key the
+          // pre-pass gave it is not the user's reorder
+          held.before = { ...held.before, index: r.to } as SceneElement
+        } else if (!r.inFlight) {
           const t = this.tracked.get(r.id)
           if (t && !t.isNew) t.dirty.add('z')
         }
