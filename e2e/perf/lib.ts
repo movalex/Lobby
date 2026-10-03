@@ -132,8 +132,12 @@ export interface PerfWindow {
 
 // ---- the camera ------------------------------------------------------------------------------------------
 
-/** The measured views: Lobby's whole-board fit, frame 0 at 0.25, frame 0's note grid at 100%. */
-export type PerfView = 'fit' | '0.25' | '100'
+/**
+ * The measured views: Lobby's whole-board fit, frame 0 at 0.25, frame 0's note grid at 100% (no image in
+ * view: the image column is at the frame's right), and `100-images`: frame 0's image column at 100% (three
+ * images on screen, drawn from their 2,048 px display renderings).
+ */
+export type PerfView = 'fit' | '0.25' | '100' | '100-images'
 
 export interface ViewState {
   zoom: number
@@ -146,7 +150,8 @@ export interface ViewState {
  * Sets the camera of `page` through the board page's LobbyCanvas (as a person's zoom would) and clears the
  * selection: `fit` is Lobby's whole-board fit (zoomTo every live item, below Excalidraw's 0.1, as
  * e2e/excalidraw/navigation-lod-fps.spec.ts does), `0.25` centres frame `frame0` at 0.25, `100` puts
- * frame 0's top-left 20 px from the viewport's at 100%. Resolves two animation frames later.
+ * frame 0's top-left 20 px from the viewport's at 100%, `100-images` frame 0's image column (its right
+ * 520 px) at 100%. Resolves two animation frames later.
  */
 export function setView(page: Page, view: PerfView, frame0: string): Promise<ViewState> {
   return page.evaluate(
@@ -178,7 +183,9 @@ export function setView(page: Page, view: PerfView, frame0: string): Promise<Vie
             x: f.x + f.width / 2 - (vp.width * vp.zoom) / z / 2,
             y: f.y + f.height / 2 - (vp.height * vp.zoom) / z / 2,
           })
-        } else c.viewport.set({ zoom: 1, x: f.x - 20, y: f.y - 20 })
+        } else if (view === '100-images')
+          c.viewport.set({ zoom: 1, x: f.x + f.width - 520 - 300, y: f.y + 40 })
+        else c.viewport.set({ zoom: 1, x: f.x - 20, y: f.y - 20 })
       }
       await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))
       const v = c.viewport.get()

@@ -36,8 +36,11 @@ test.setTimeout(60 * 60_000)
 // no Playwright trace or screenshots while measuring (a trace's screencast adds main-thread work)
 test.use({ trace: 'off', screenshot: 'off' })
 
-type View = 'fit' | '0.25' | '1'
-/** LOBBY_FPS_VIEWS=fit,1 picks the views (default all three). */
+type View = 'fit' | '0.25' | '1' | '1-images'
+/**
+ * LOBBY_FPS_VIEWS=fit,1 picks the views (default the three gate views). `1-images`: zoom 1 on frame 0's
+ * image column (the `1` view has no image in it), e2e/perf/lib.ts `100-images`.
+ */
 const VIEWS: readonly View[] = (process.env.LOBBY_FPS_VIEWS?.split(',') as View[] | undefined) ?? [
   'fit',
   '0.25',
@@ -162,7 +165,11 @@ test('heavy board: pan fps at Lobby’s fit, 0.25 and 1, per mode (the §8.5 lev
           log(`${mode}: not on this page, skipped`)
           continue
         }
-        const cam = await setView(page, view === '1' ? '100' : view, frame0)
+        const cam = await setView(
+          page,
+          view === '1' ? '100' : view === '1-images' ? '100-images' : view,
+          frame0,
+        )
         await page.waitForTimeout(2_500)
         const inView = await imagesInView(page)
         const shown = await waitImagesLoaded(page, 60_000, inView)
