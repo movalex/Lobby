@@ -24,6 +24,7 @@ import {
 } from '@draftroom/canvas-schema/groups'
 import {
   GEOMETRY_TOLERANCE_PX,
+  GUEST_BOARD_ITEM_CAP,
   GUEST_ITEM_CAP,
   isAllowedLink,
   MAX_ITEMS,
@@ -188,6 +189,10 @@ export class PushApplier {
    * past the cap).
    */
   private readonly addedGuestItems = new Map<string, number>()
+  /** the same items, summed over every guest uid (GUEST_BOARD_ITEM_CAP, CR-W5-FIX-3) */
+  private addedGuestTotal = 0
+  /** every guest uid's items before this push, summed on first use (env.guestCreated is fixed until Phase F) */
+  private guestBoardBefore: number | null = null
   /** frames this push moves (a `pos` patch on a live, unlocked frame): id → the move (W5-05) */
   private readonly frameMoves = new Map<string, { dx: number; dy: number }>()
   /** locked elements whose position this push moved with their frame (W5-05): id → the frame */
@@ -360,15 +365,26 @@ export class PushApplier {
    * every item the board holds that the guest created, live AND deleted. A tombstone create counts like a
    * live one, and a revival (a create over a tombstone, a `life` patch) creates nothing new, so minting
    * tombstones and reviving them no longer gets past the cap (V2's re-check: 650 live items against 500).
+   *
+   * Every guest uid together is held to GUEST_BOARD_ITEM_CAP the same way (CR-W5-FIX-3): the api mints a
+   * new guest uid for each cookie-less join of an editor link, so the per-uid cap alone multiplied by the
+   * number of incognito windows. Rebuilt from the rows when the room opens (element-room.ts rebuildCaches).
    */
   private guestCapProblem(el: El, uid = this.s.uid): RejectCode | null {
-    if (isLabel(el)) return null
-    return (this.env.guestCreated.get(uid) ?? 0) + (this.addedGuestItems.get(uid) ?? 0) + 1 > GUEST_ITEM_CAP
-      ? 'GUEST_LIMIT'
-      : null
+    // an account is never held to the guests' caps (applyCreate asks for every writer)
+    if (!this.s.guest || isLabel(el)) return null
+    if ((this.env.guestCreated.get(uid) ?? 0) + (this.addedGuestItems.get(uid) ?? 0) + 1 > GUEST_ITEM_CAP)
+      return 'GUEST_LIMIT'
+    if (this.guestBoardBefore === null) {
+      let n = 0
+      for (const v of this.env.guestCreated.values()) n += v
+      this.guestBoardBefore = n
+    }
+    return this.guestBoardBefore + this.addedGuestTotal + 1 > GUEST_BOARD_ITEM_CAP ? 'GUEST_LIMIT' : null
   }
   private addGuestItem(uid: string): void {
     this.addedGuestItems.set(uid, (this.addedGuestItems.get(uid) ?? 0) + 1)
+    this.addedGuestTotal++
   }
   /** The element's stored author is this session's user. */
   private createdByWriter(el: El): boolean {

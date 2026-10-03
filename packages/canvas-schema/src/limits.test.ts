@@ -11,6 +11,8 @@ import {
   COORD_LIMIT,
   FILE_ID_PATTERN,
   GEOMETRY_TOLERANCE_PX,
+  GUEST_BOARD_ITEM_CAP,
+  GUEST_ITEM_CAP,
   isAllowedLink,
   isLobbyFontFamily,
   jsonByteLength,
@@ -327,6 +329,11 @@ describe('the board document (§3.4) and object refs (§3.6)', () => {
     expect(canWriteDocKey('startView', 'editor')).toBe(false)
     expect(canWriteDocKey('workshop', 'editor')).toBe(true)
     expect(canWriteDocKey('tagDef:x', 'commenter')).toBe(false)
+  })
+
+  it('every guest uid together has a board budget above one guest’s cap (CR-W5-FIX-3)', () => {
+    expect(GUEST_BOARD_ITEM_CAP).toBe(2_000)
+    expect(GUEST_BOARD_ITEM_CAP).toBeGreaterThan(GUEST_ITEM_CAP)
   })
 
   it('shape: refs map to element ids and back', () => {
