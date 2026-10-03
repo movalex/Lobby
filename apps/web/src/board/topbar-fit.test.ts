@@ -3,6 +3,7 @@ import {
   COMPACT_STEPS,
   compactValue,
   firstFittingLevel,
+  hasContent,
   MIN_TITLE_CHARS,
   mayLeaveMenu,
   titleFits,
@@ -82,5 +83,18 @@ describe('mayLeaveMenu', () => {
     expect(mayLeaveMenu(1000, 1000)).toBe(false)
     expect(mayLeaveMenu(1010, 1000)).toBe(false)
     expect(mayLeaveMenu(1017, 1000)).toBe(true)
+  })
+})
+
+describe('hasContent (W5-50: the phone "⋯" menu draws no caption over nothing)', () => {
+  it('nothing, undefined, false and an empty string draw nothing', () => {
+    for (const none of [null, undefined, false, ''] as const) expect(hasContent(none)).toBe(false)
+  })
+
+  it('an element, text and a list of them draw something', () => {
+    expect(hasContent({ type: 'ul', props: {} })).toBe(true)
+    expect(hasContent('3 people')).toBe(true)
+    expect(hasContent([{ type: 'li' }])).toBe(true)
+    expect(hasContent(0)).toBe(true) // a rendered zero is text
   })
 })

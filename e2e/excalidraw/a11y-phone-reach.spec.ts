@@ -13,9 +13,9 @@
 //    results card) or a comment sheet is docked at the bottom, Board actions steps aside: no point of the card
 //    or of the comment's text box is under it. (The comment sheet against the tool dock is 3c's part,
 //    comments-stacking.spec.ts; the cards' own place is 3f's.)
-//  - W5-31 and W5-50 (expected failures until 2C's top bar changes, CR-3I-2 and CR-3I-3): at 390 px every
-//    top-bar control is wholly on screen (Share was 7 px past the edge), and the "⋯" menu shows no caption
-//    with nothing under it ("On this board" is empty while the people feature has its own chip).
+//  - W5-31 and W5-50 (the top bar's fit rules, CR-3I-2 and CR-3I-3): at 390 px (and 320, 360, 402 and 412) every
+//    top-bar control is wholly on screen (Share was 7 px past the edge at 390), and the "⋯" menu shows no
+//    caption with nothing under it ("On this board" was empty while the people feature has its own chip).
 import type { Page } from '@playwright/test'
 import { expect, test } from '../tests/support/canvas.ts'
 import {
@@ -23,7 +23,6 @@ import {
   coveredControls,
   frame,
   lobbyTool,
-  needs,
   note,
   openPhoneSession,
   PHONE,
@@ -222,38 +221,59 @@ test('W5-07: Board actions is never on the docked comment sheet (new comment and
   }
 })
 
-// ---- the top bar on a phone (W5-31, W5-50): the top bar is 2C's (board/TopBarFrame.tsx, shared by both
-// pages, and the Excalidraw page's pinned items); these wait for 2C's fit rules (CR-3I-2, CR-3I-3) ----------
+// ---- the top bar on a phone (W5-31, W5-50): board/TopBarFrame.tsx (shared by both pages, once), the phone fit
+// rules in styles.css and the Excalidraw page's pinned items (CR-3I-2, CR-3I-3) ------------------------------
 
-test('W5-31: at 390 px the top bar fits the screen: Share and every other control are wholly on it', async ({
-  browser,
-  board,
-  users,
-}) => {
-  needs('2C', 'W5-31: the top bar fit rules for the Excalidraw page’s pinned items (CR-3I-2)')
-  const a = await openPhoneSession(browser, board, users, 'alice', 'owner')
-  try {
-    const page = a.page
-    await expect(page.getByTestId('share-button')).toBeVisible()
-    const off = await page.locator('header.dr-topbar').evaluate((bar) =>
-      [...bar.querySelectorAll('button, a[href]')].flatMap((el) => {
-        const r = el.getBoundingClientRect()
-        if (r.width === 0 || r.height === 0) return []
-        if (r.left >= -0.5 && r.right <= innerWidth + 0.5) return []
-        return [
-          `${el.getAttribute('data-testid') ?? el.textContent?.trim()} ${Math.round(r.left)}..${Math.round(r.right)}`,
-        ]
-      }),
-    )
-    expect(off, 'top-bar controls past the screen edge').toEqual([])
-    expect(await coveredControls(page, ['header.dr-topbar'])).toEqual([])
-  } finally {
-    await a.context.close()
-  }
-})
+for (const [size, role] of [
+  [PHONE, 'owner'],
+  [PHONE, 'viewer'],
+  [PIXEL_7, 'owner'],
+  [{ width: 402, height: 874 }, 'owner'], // iPhone 16 Pro
+  [{ width: 360, height: 740 }, 'owner'],
+  [{ width: 320, height: 640 }, 'owner'],
+] as const) {
+  test(`W5-31: at ${size.width} px the top bar fits the screen for ${role === 'owner' ? 'an owner' : 'a viewer'}: Share and every other control are wholly on it`, async ({
+    browser,
+    board,
+    users,
+  }) => {
+    const a = await openPhoneSession(browser, board, users, role === 'owner' ? 'alice' : 'bob', role, size)
+    try {
+      const page = a.page
+      await expect(page.getByTestId('share-button')).toBeVisible()
+      const off = async () =>
+        page.locator('header.dr-topbar').evaluate((bar) =>
+          [...bar.querySelectorAll('button, a[href]')].flatMap((el) => {
+            const r = el.getBoundingClientRect()
+            if (r.width === 0 || r.height === 0) return []
+            if (r.left >= -0.5 && r.right <= innerWidth + 0.5) return []
+            return [
+              `${el.getAttribute('data-testid') ?? el.textContent?.trim()} ${Math.round(r.left)}..${Math.round(r.right)}`,
+            ]
+          }),
+        )
+      // the people chip and the bell arrive a moment after the first paint
+      await expect(page.getByTestId('topbar').locator('.dr-people')).toBeVisible()
+      await expect.poll(off, { message: 'top-bar controls past the screen edge' }).toEqual([])
+      expect(await coveredControls(page, ['header.dr-topbar'])).toEqual([])
+      // every control is still a tappable target (WCAG 2.5.8: 24 px)
+      const small = await page.locator('header.dr-topbar').evaluate((bar) =>
+        [...bar.querySelectorAll('button, a[href]')].flatMap((el) => {
+          const r = el.getBoundingClientRect()
+          if (r.width === 0 || r.height === 0 || (r.width >= 24 && r.height >= 24)) return []
+          return [
+            `${el.getAttribute('data-testid') ?? el.textContent?.trim()} ${Math.round(r.width)}x${Math.round(r.height)}`,
+          ]
+        }),
+      )
+      expect(small, 'top-bar controls under 24 px').toEqual([])
+    } finally {
+      await a.context.close()
+    }
+  })
+}
 
 test('W5-50: on a phone the "⋯" menu has no empty "On this board" row', async ({ browser, board, users }) => {
-  needs('2C', 'W5-50: the "On this board" row of the ⋯ menu is empty when the people feature is on (CR-3I-3)')
   const a = await openPhoneSession(browser, board, users, 'alice', 'owner')
   try {
     const page = a.page
@@ -270,6 +290,10 @@ test('W5-50: on a phone the "⋯" menu has no empty "On this board" row', async 
     )
     const empty = rows.filter((r) => r.caption && !r.shown).map((r) => r.caption)
     expect(empty, 'captions with nothing under them').toEqual([])
+    // the people feature draws its own chip in the bar, so the menu has no people row at all (and it is
+    // not vacuous: the account row is there, with its caption)
+    await expect(panel.locator('[data-feature="people"]')).toHaveCount(0)
+    expect(rows.filter((r) => r.caption === 'Your account' && r.shown)).toHaveLength(1)
   } finally {
     await a.context.close()
   }

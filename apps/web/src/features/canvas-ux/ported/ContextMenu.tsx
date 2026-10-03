@@ -39,14 +39,15 @@ export const CONTEXT_MENU_ENTRIES: readonly MenuEntrySpec[] = [
     command: CMD.cut,
     visible: (c) => editable(c) && atLeast(1)(c),
   },
-  // read-only roles cannot copy on this canvas yet (the input layer's copy rule is editors only: CR-3A-4)
+  // CR-3A-4: Copy for every role. While exporting is off for this person `gatedEntries` drops it for
+  // all of them (and Ctrl/Cmd+C says why); while it is on, a viewer or commenter copies the selection's text
   {
     id: 'copy',
     group: 'clipboard',
     order: 20,
     label: '',
     command: CMD.copy,
-    visible: (c) => editable(c) && atLeast(1)(c),
+    visible: atLeast(1),
   },
   {
     // W5-33: Paste where the menu opened (tldraw's context menu has it)

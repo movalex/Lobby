@@ -135,6 +135,11 @@ export interface KeyContext {
   singleNote: boolean
   /** The selection is a mind-map node (§4.7). Always false in spike A. */
   inMindMap?: boolean
+  /**
+   * The export policy lets this person copy (CR-3A-4). Read-only roles' Ctrl/Cmd+C reaches the browser
+   * only then; editors' copy is delegated either way (the export gate answers at the copy event).
+   */
+  canCopy?: boolean
 }
 
 const MODIFIER_KEYS = new Set(['Shift', 'Control', 'Alt', 'Meta', 'AltGraph', 'CapsLock', 'OS', 'Hyper'])
@@ -527,6 +532,11 @@ function clipboardChord(e: KeyLike, mac: boolean): boolean {
   return (letter === 'c' && !e.shiftKey) || letter === 'v'
 }
 
+/** Ctrl/Cmd+C alone (copy): the platform's command key, no Shift, Alt or AltGr. */
+function copyChord(e: KeyLike, mac: boolean): boolean {
+  return clipboardChord(e, mac) && chordLetter(e) === 'c' && !e.shiftKey
+}
+
 /** One character (or a dead key) the browser types by default: AltGr and macOS Option characters. */
 function typesCharacter(e: KeyLike): boolean {
   return e.key === 'Dead' || ([...e.key].length === 1 && !/\p{C}/u.test(e.key))
@@ -639,9 +649,13 @@ export function classifyKey(e: KeyLike, ctx: KeyContext): KeyVerdict {
 
   const delegated = delegatedChord(e, mac)
 
-  // 3. Read-only roles: canvas zoom keys only (Excalidraw's `interaction.navigation` handles them).
+  // 3. Read-only roles: canvas zoom keys only (Excalidraw's `interaction.navigation` handles them), and
+  //    Ctrl/Cmd+C where the export policy lets them copy (CR-3A-4): the browser's copy command, never
+  //    prevented, whose copy event Lobby's input layer answers (CanvasInput.onCopy: the selection's text;
+  //    Excalidraw's own copy is off on a non-interactive canvas).
   if (ctx.role === 'readonly') {
     if (delegated === 'zoomIn' || delegated === 'zoomOut') return { kind: 'delegate' }
+    if (ctx.canCopy && copyChord(e, mac)) return { kind: 'browser' }
     if (!mod && !e.altKey && !e.shiftKey) {
       if (letterIs(e, 'v')) return { kind: 'lobby', action: 'tool:select' }
       if (letterIs(e, 'h')) return { kind: 'lobby', action: 'tool:hand' }

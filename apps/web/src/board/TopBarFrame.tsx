@@ -17,6 +17,7 @@ import { readonlyPill } from './access.ts'
 import {
   compactValue,
   firstFittingLevel,
+  hasContent,
   mayLeaveMenu,
   type TitleMeasure,
   titleFits,
@@ -91,6 +92,9 @@ export function TopBarFrame({
   const menu = narrow || crowded
   // The role pill already says what a viewer/commenter can do: a second "View only" is noise (RETRO-17).
   const saveHidden = !!pill && save.state === 'readonly'
+  // W5-50: on a phone the people list sits in the "⋯" menu, unless the people feature draws its own chip
+  // in the bar (`people()` is then nothing): a caption with nothing under it is not drawn.
+  const menuPeople = phone ? people(MAX_AVATARS) : null
   // Tab order = DOM order (RETRO-22a): breadcrumb, title, role, people, status, feature controls,
   // Share. The account (DEV identity) badge is drawn at the bar's right end and comes right after
   // Share (A11Y-09: BoardAccount below, rendered by BoardPage just after this bar); on phones it is in
@@ -172,12 +176,12 @@ export function TopBarFrame({
       {menu && (
         <OverflowMenu label="More board controls" testId="topbar-overflow">
           {items('overflow')}
-          {phone && (
+          {hasContent(menuPeople) && (
             <div className="dr-overflow__item" data-feature="people">
               <span className="dr-overflow__caption" aria-hidden="true">
                 On this board
               </span>
-              {people(MAX_AVATARS)}
+              {menuPeople}
             </div>
           )}
           {phone && (

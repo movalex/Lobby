@@ -7,9 +7,9 @@
 //  - W5-25: a gathered desktop follower is centred on the leader's view centre also when the leader's dock
 //    panel opened after their last camera move (the panel narrows the leader's canvas). The follower fits
 //    the leader's presence `view` (canvas/api/parts/follow.ts, right); the leader's tab sends it on a
-//    pointer move or a camera move only, never when its canvas changes size, so followers keep the wider
-//    view until the leader moves: 320 scene units off at zoom 0.5 with a 320 px panel. CR-3C-W5-1 asks 2C
-//    to re-send presence on a canvas resize (canvas/board/session.ts); expected to fail until it lands.
+//    pointer move, a camera move and (CR-3C-W5-1, canvas/board/session.ts) whenever its canvas changes
+//    size, so followers never keep the wider view until the leader moves (320 scene units off at zoom 0.5
+//    with a 320 px panel).
 import type { Locator, Page } from '@playwright/test'
 import {
   type CanvasSession,
@@ -129,7 +129,6 @@ test('W5-51: following from the people list shows "Following Alice Park" and one
 test('W5-25: a gathered desktop follower sits on the leader’s view centre when the leader’s dock panel is open', async ({
   canvasSession,
 }) => {
-  test.fail(true, 'CR-3C-W5-1 (2C): the board session does not re-send presence when its canvas is resized')
   const a = await canvasSession('alice')
   const b = await canvasSession('bob', { role: 'editor' })
   await a.page.setViewportSize({ width: 1440, height: 900 })

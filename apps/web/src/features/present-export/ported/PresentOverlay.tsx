@@ -16,14 +16,6 @@ import { canvasSize, PRESENT_ZOOM_RANGE, type Presenter } from './presenter.ts'
 const IDLE_MS = 2000
 const SLIDE_ANIMATION_MS = 480
 const SWIPE_PX = 50
-/**
- * W5-24: the engine draws every frame's outline on the canvas (2 screen px centred on the frame's edge,
- * corners rounded 8 screen px; nothing in the canvas API turns it off while presenting). The surround's
- * window is inset by 2 px with 6 px corners, so the whole outline sits under the surround: the slide
- * shows as a clean window with slightly rounded corners, and 2 px of its edge go under the surround.
- */
-const OUTLINE_COVER_PX = 2
-const OUTLINE_COVER_RADIUS_PX = 6
 
 export function prefersReducedMotion(): boolean {
   try {
@@ -186,6 +178,9 @@ function PresentChrome({ ctx, presenter }: { ctx: CanvasFeatureContext; presente
       aria-label="Presentation"
       tabIndex={-1}
     >
+      {/* W5-24: the window is the slide's exact rectangle: in focus mode the board session turns the
+          engine's frame outline and names off (canvas/board/session.ts applyFocusFrames), so there is
+          no edge to cover and nothing of the slide goes under the surround. */}
       <div
         className="dr-present__mask"
         aria-hidden="true"
@@ -193,10 +188,9 @@ function PresentChrome({ ctx, presenter }: { ctx: CanvasFeatureContext; presente
         style={
           hole
             ? {
-                transform: `translate(${hole.x + OUTLINE_COVER_PX}px, ${hole.y + OUTLINE_COVER_PX}px)`,
-                width: Math.max(0, hole.w - OUTLINE_COVER_PX * 2),
-                height: Math.max(0, hole.h - OUTLINE_COVER_PX * 2),
-                borderRadius: OUTLINE_COVER_RADIUS_PX,
+                transform: `translate(${hole.x}px, ${hole.y}px)`,
+                width: Math.max(0, hole.w),
+                height: Math.max(0, hole.h),
               }
             : { width: 0, height: 0 }
         }

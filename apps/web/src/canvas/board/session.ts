@@ -20,9 +20,10 @@ import { CLOSE_TERMINAL, type RosterEntry, type ServerMessage } from '@draftroom
 import type { TicketResponse } from '@draftroom/contracts'
 import * as ExcalidrawElementNs from '@excalidraw/element'
 import { CaptureUpdateAction } from '@excalidraw/excalidraw'
-import type { ExcalidrawImperativeAPI } from '@excalidraw/excalidraw/types'
+import type { AppState as ExcalidrawAppState, ExcalidrawImperativeAPI } from '@excalidraw/excalidraw/types'
 import { api as apiClient } from '../../api/client.ts'
 import { createTicketUri } from '../../board/ticket.ts'
+import { exportAllowedOnBoard } from '../../features/canvas-ux/ported/export-gate.ts'
 import { frameAt } from '../../features/canvas-ux/ported/notes.ts'
 import { DEV_AUTH_ENABLED } from '../../lib/identity.ts'
 import { engineRejectNotice } from '../../sync-quality/copy.ts'
@@ -60,6 +61,7 @@ import { attachCustomTools, type CustomToolClick } from '../tools/customTools.ts
 import { setTool } from '../tools/tools.ts'
 import { ChangeClassifier } from './changes.ts'
 import { contentOf } from './content.ts'
+import { selectionText } from './copy-text.ts'
 import { createBoardHandles } from './handles.ts'
 import { BoardInput } from './input.ts'
 import { PeerStore } from './peers.ts'
@@ -240,6 +242,15 @@ export class LobbyBoardSession {
       },
       isBlocked: (p) => this.registries.hitGuard.isBlocked(p) !== null,
       isConfirmed: (id) => this.core.confirmed(id) !== undefined,
+      // CR-3A-4: the export policy decides who copies (editors, viewers and commenters alike; a name-only
+      // guest only under 'everyone-including-guests'), and a read-only role copies the selection's text
+      canCopy: () => exportAllowedOnBoard(o.boardId, this.ticketRole, this.guest),
+      copyReadOnly: (data) => {
+        const text = this.canvas ? selectionText(this.canvas) : ''
+        if (!text) return false
+        data.setData('text/plain', text)
+        return true
+      },
       onEmptyDoubleClick: (p) => this.createFreeText(p.x, p.y),
       // a drop on the board (editors): the features' content handlers (./content.ts), through the page
       onDrop: (e) => {
@@ -531,6 +542,14 @@ export class LobbyBoardSession {
     offs.push(attachBoardFiles(this.registries, files), () => files.dispose())
     this.classifier.seed(api.getSceneElementsIncludingDeleted() as never)
 
+    // the last pointer sample of this tab (3. below); presence re-sends it with a fresh `view`
+    let lastSample: PresenceSample | null = null
+    // Re-sends presence with the current `view` and the last pointer, so the people who follow this tab
+    // (Follow, Gather) read where it looks now without a pointer move (the core keeps 20 Hz). A camera
+    // move (pan, zoom, a follow) and a change of the canvas's size both change the view.
+    const resendView = () =>
+      presence.onPointer(lastSample ?? { pointer: null, button: 'up', source: 'view', pointerType: 'mouse' })
+
     // the canvas's size and place as the engine last measured them (CR-3A-10: a window resize changes
     // `viewport.screenRect()` and the scene rectangle without a scroll, so readers were never told)
     let lastBox = ''
@@ -553,7 +572,14 @@ export class LobbyBoardSession {
         if (box !== lastBox) {
           const first = lastBox === ''
           lastBox = box
-          if (!first) port.notifyViewport()
+          if (!first) {
+            port.notifyViewport()
+            // W5-25 (CR-3C-W5-1): the scene rectangle this tab shows changed with no camera move (a dock
+            // panel opened or closed, a window resize), so the `view` the followers fit is stale until
+            // re-sent. Here the engine's state already has the new size (the box above is read from it);
+            // the ResizeObserver below only reports the container.
+            resendView()
+          }
         }
         presence.onGesture(g)
         const el = this.input.editorLease
@@ -580,7 +606,6 @@ export class LobbyBoardSession {
     // 2. spike B's input layer (allowlist, guard, double-click and double-tap, clipboard and drop)
     offs.push(this.input.attach(wrapper, api))
     // 3. presence pointer for every role
-    let lastSample: PresenceSample | null = null
     offs.push(
       attachPresencePointer(wrapper, {
         toScene: (x, y) => this.input.toScene(x, y),
@@ -641,9 +666,7 @@ export class LobbyBoardSession {
         this.handlesExtra?.userMoved()
         // 3c (CR): a pan or zoom alone (a wheel, a key, a follow) re-sends presence, so the `view`
         // the people who follow this tab read is current without a pointer move (the core keeps 20 Hz)
-        presence.onPointer(
-          lastSample ?? { pointer: null, button: 'up', source: 'view', pointerType: 'mouse' },
-        )
+        resendView()
       }),
     )
     // resize: the canvas container changed size
@@ -687,6 +710,7 @@ export class LobbyBoardSession {
     this.handlesExtra = handles
     offs.push(() => handles.dispose())
     offs.push(this.settings.subscribe(() => this.concern('settings')))
+    offs.push(this.settings.subscribe(() => this.applyFocusFrames(api)))
     this.handle = createLobbyCanvas({ port, registries: this.registries, board: handles })
     // 3b: the level-of-detail pass for zoomed-out views (docs/EXCALIDRAW-MIGRATION.md §8.5)
     const lod = installLod({
@@ -752,6 +776,33 @@ export class LobbyBoardSession {
       this.api = null
       if (DEV_AUTH_ENABLED) delete (window as unknown as { __lobbyBoard?: unknown }).__lobbyBoard
       this.set({ attached: false })
+    }
+  }
+
+  /**
+   * W5-24: in focus mode (present mode) a slide is its frame's exact rectangle, with nothing of the engine's
+   * frame chrome on it. The engine draws every frame's outline (2 screen px centred on the edge, corners
+   * rounded 8 px) and name; with `outline` and `name` off it draws neither, and the presentation's
+   * surround window can be the frame's rectangle itself instead of covering a rounded 2 px edge of every
+   * slide. `clip` stays on (the slide's content stays inside it). The board's own setting comes back when
+   * focus mode ends.
+   */
+  private focusFrameRendering: ExcalidrawAppState['frameRendering'] | null = null
+
+  private applyFocusFrames(api: ExcalidrawImperativeAPI): void {
+    const focus = this.settings.get().focusMode
+    if (focus === (this.focusFrameRendering !== null)) return
+    if (focus) {
+      this.focusFrameRendering = api.getAppState().frameRendering
+      api.updateScene({
+        appState: { frameRendering: { enabled: true, clip: true, name: false, outline: false } },
+        captureUpdate: CaptureUpdateAction.NEVER,
+      })
+    } else {
+      const before = this.focusFrameRendering
+      this.focusFrameRendering = null
+      if (before)
+        api.updateScene({ appState: { frameRendering: before }, captureUpdate: CaptureUpdateAction.NEVER })
     }
   }
 

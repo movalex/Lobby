@@ -546,8 +546,10 @@ function LobbyBoardScreen({
           onRename={(t) => void rename(t)}
           onShare={() => setSharing('default')}
           onRequestAccess={() => setSharing('request')}
+          // nothing when the people feature has its own chip, and when nobody else is here (the phone
+          // menu then has no "On this board" row: W5-50)
           people={(max) =>
-            featureHasPeople(session.registries) ? null : (
+            featureHasPeople(session.registries) || !snap.roster.some((r) => r.uid !== me.user.id) ? null : (
               <BoardPeople roster={snap.roster} selfUserId={me.user.id} max={max} />
             )
           }
