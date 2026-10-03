@@ -1,6 +1,7 @@
-// CRIT-18: the offline edit queue (IndexedDB) is purged when the session ends. Before, purge() ran only on
-// a guest welcome and on a FORBIDDEN or NOT_FOUND close; a signed-out user's unsent edits stayed readable
-// in the browser (a shared machine).
+// CRIT-18: the offline edit queue (IndexedDB) is purged when the person signs out themselves. Before,
+// purge() ran only on a guest welcome and on a FORBIDDEN or NOT_FOUND close; a signed-out user's unsent
+// edits stayed readable in the browser (a shared machine). An expired or revoked session (a 401) keeps the
+// queue: unsent work, held per user for that user's next session (wave A follow-up before deploy).
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { OfflineEntry } from '../types.ts'
 import { createIdbOfflineStore, createSignOutPurge, purgeOfflineQueuesOf } from './offline-idb.ts'
@@ -181,42 +182,121 @@ describe('createSignOutPurge: the session watch App.tsx feeds (CRIT-18)', () => 
     return { calls, seen }
   }
 
-  it('purges the user signed in here once their session ends, once', () => {
+  it('purges the user signed in here when their own Sign out finishes, once', () => {
     const r = rig()
     r.seen({ status: 'loading', uid: null })
     r.seen({ status: 'signed-in', uid: 'usr_a' })
     expect(r.calls).toEqual([])
-    r.seen({ status: 'signed-out', uid: null })
+    r.seen({ status: 'signed-out', uid: null, explicit: true })
     expect(r.calls).toEqual(['usr_a'])
+    r.seen({ status: 'signed-out', uid: null, explicit: true })
+    expect(r.calls).toEqual(['usr_a'])
+  })
+
+  it('an expired, revoked or other-tab-signed-out session (a 401, no explicit flag) purges nothing', () => {
+    const r = rig()
+    r.seen({ status: 'signed-in', uid: 'usr_a' })
     r.seen({ status: 'signed-out', uid: null })
+    r.seen({ status: 'signed-out', uid: null, explicit: false })
+    expect(r.calls).toEqual([])
+    // the same user signs in again: still nothing purged, and now their own Sign out purges
+    r.seen({ status: 'signed-in', uid: 'usr_a' })
+    expect(r.calls).toEqual([])
+    r.seen({ status: 'signed-out', uid: null, explicit: true })
+    expect(r.calls).toEqual(['usr_a'])
+  })
+
+  it('a 401 that lands first in the same tick as the Sign out does not hide it: the user is still remembered', () => {
+    const r = rig()
+    r.seen({ status: 'signed-in', uid: 'usr_a' })
+    r.seen({ status: 'signed-out', uid: null }) // the 401 handler
+    r.seen({ status: 'signed-out', uid: null, explicit: true }) // the Sign out finishing
     expect(r.calls).toEqual(['usr_a'])
   })
 
   it('an api that cannot be reached, or a session that was never signed in, purges nothing', () => {
     const r = rig()
-    r.seen({ status: 'signed-out', uid: null })
+    r.seen({ status: 'signed-out', uid: null, explicit: true })
     r.seen({ status: 'signed-in', uid: 'usr_a' })
     r.seen({ status: 'unreachable', uid: null })
     r.seen({ status: 'loading', uid: null })
     expect(r.calls).toEqual([])
-    // back, still signed in: then signed out
+    // back, still signed in: then the person signs out
     r.seen({ status: 'signed-in', uid: 'usr_a' })
-    r.seen({ status: 'signed-out', uid: null })
+    r.seen({ status: 'signed-out', uid: null, explicit: true })
     expect(r.calls).toEqual(['usr_a'])
   })
 
-  it('another account signed in here ends the first one’s session: its queues go', () => {
+  it('another account signing in here purges nothing; each one’s own Sign out purges only their own', () => {
     const r = rig()
     r.seen({ status: 'signed-in', uid: 'usr_a' })
     r.seen({ status: 'signed-in', uid: 'usr_a' })
     r.seen({ status: 'signed-in', uid: 'usr_b' })
-    expect(r.calls).toEqual(['usr_a'])
+    expect(r.calls).toEqual([])
+    r.seen({ status: 'signed-out', uid: null, explicit: true })
+    expect(r.calls).toEqual(['usr_b'])
   })
 
   it('a purge that fails (no IndexedDB) is swallowed', async () => {
     const seen = createSignOutPurge(() => Promise.reject(new Error('no idb')))
     seen({ status: 'signed-in', uid: 'usr_a' })
-    expect(() => seen({ status: 'signed-out', uid: null })).not.toThrow()
+    expect(() => seen({ status: 'signed-out', uid: null, explicit: true })).not.toThrow()
     await new Promise((r) => setTimeout(r, 0))
+  })
+})
+
+describe('the offline queue across sessions (CRIT-18: an expiry keeps unsent edits, a Sign out deletes them)', () => {
+  let idb: ReturnType<typeof memoryIndexedDb>
+  beforeEach(() => {
+    idb = memoryIndexedDb()
+    vi.stubGlobal('indexedDB', idb.factory)
+    vi.stubGlobal('navigator', {})
+  })
+  afterEach(() => vi.unstubAllGlobals())
+
+  const queueOf = async (uid: string) => {
+    const store = createIdbOfflineStore({ boardId: 'b-1', uid, tab: 't1' })
+    const entries = await store.load()
+    store.release()
+    return entries.map((e) => e.element.id)
+  }
+
+  it('an expired session keeps the user’s queue for their next session; their own Sign out deletes it', async () => {
+    const seen = createSignOutPurge() // the real purge, against the stubbed IndexedDB
+    const store = createIdbOfflineStore({ boardId: 'b-1', uid: 'usr_a', tab: 't1' })
+    await store.load()
+    await store.save([entry('r1'), entry('r2')])
+    store.release()
+    seen({ status: 'signed-in', uid: 'usr_a' })
+
+    // the session expires (a 401): nothing is deleted, and usr_a's next session replays it
+    seen({ status: 'signed-out', uid: null })
+    await new Promise((r) => setTimeout(r, 20))
+    expect(idb.records.size).toBe(1)
+    expect(await queueOf('usr_a')).toEqual(['r1', 'r2'])
+
+    // they sign in again, then sign out themselves: the queue is deleted
+    seen({ status: 'signed-in', uid: 'usr_a' })
+    seen({ status: 'signed-out', uid: null, explicit: true })
+    await vi.waitFor(() => expect(idb.records.size).toBe(0))
+    expect(await queueOf('usr_a')).toEqual([])
+  })
+
+  it('another account on the same browser never loads or adopts a kept queue (it is keyed by user)', async () => {
+    const saved = (boardId: string, uid: string, tab: string, id: string) => ({
+      key: `${boardId}|${uid}|${tab}`,
+      boardId,
+      uid,
+      tab,
+      entries: [entry(id)],
+      savedAt: 1,
+    })
+    idb.seed(saved('b-1', 'usr_a', 't0', 'a-closed-tab')) // usr_a's queue from a closed tab
+    idb.seed(saved('b-1', 'usr_a', 't1', 'a-same-tab'))
+    // usr_b opens the same board in the same tab id (a tab survives the session change): nothing of usr_a's
+    expect(await queueOf('usr_b')).toEqual([])
+    expect(idb.records.size).toBe(2)
+    // usr_a's next session on this browser gets both back
+    expect((await queueOf('usr_a')).sort()).toEqual(['a-closed-tab', 'a-same-tab'])
   })
 })

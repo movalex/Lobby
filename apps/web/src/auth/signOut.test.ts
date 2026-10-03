@@ -4,7 +4,7 @@
 // session without a click ("Continue as <name>").
 import { describe, expect, it, vi } from 'vitest'
 import { ApiError, createApiClient } from '../api/client.ts'
-import { clerkAccountLabel, clerkSignInView, runSignOut, type SignOutSteps } from './signOut.ts'
+import { clerkAccountLabel, clerkSignInView, runSignOut, type SignOutSteps, sessionEnded } from './signOut.ts'
 import {
   createSignedOutMarks,
   type MarkStorage,
@@ -220,6 +220,21 @@ describe('runSignOut (SCA-4): sign out everywhere', () => {
     expect(calls.map((c) => `${c.init.method} ${c.url}`)).toEqual(['POST /api/auth/sessions/revoke-all'])
     expect(calls[0]?.init.body).toBeUndefined()
     expect(calls[0]?.init.credentials).toBe('same-origin')
+  })
+})
+
+describe('sessionEnded (CRIT-18): a 401 never hides the person’s own Sign out from the offline-queue purge', () => {
+  it('a signed-in, loading or unreachable session becomes a plain signed-out (not explicit)', () => {
+    expect(sessionEnded({ status: 'signed-in', me: 1 })).toEqual({ status: 'signed-out' })
+    expect(sessionEnded({ status: 'loading' })).toEqual({ status: 'signed-out' })
+    expect(sessionEnded({ status: 'unreachable', message: 'x' })).toEqual({ status: 'signed-out' })
+  })
+
+  it('the explicit signed-out the Sign out set is kept, the same object', () => {
+    const explicit = { status: 'signed-out' as const, explicit: true as const }
+    expect(sessionEnded(explicit)).toBe(explicit)
+    const plain = { status: 'signed-out' as const }
+    expect(sessionEnded(plain)).toBe(plain)
   })
 })
 

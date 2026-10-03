@@ -1,7 +1,8 @@
 // CRIT-18 (wave A, A5): the offline edit queue (IndexedDB `lobby-offline`, canvas/sync/adapter/offline-idb.ts)
 // is deleted when the session ends. Before, it was purged only on a guest welcome and on a FORBIDDEN or
 // NOT_FOUND close: after Sign out, a board's unsent edits stayed readable in the browser (a shared
-// machine). App.tsx now purges every queue of the user who was signed in once the session ends.
+// machine). App.tsx now purges every queue of the user who was signed in once they sign out themselves;
+// an expired session (a 401) keeps them for that user's next session (wave A follow-up before deploy).
 //
 //   E2E_PORT_BASE=<base> pnpm exec playwright test excalidraw/sign-out-purge.spec.ts   (from e2e/)
 import type { Page } from '@playwright/test'
@@ -56,6 +57,33 @@ test('Sign out deletes the board edits this user had queued on the device (CRIT-
     expect((await a.page.request.get('/api/me')).status()).toBe(401)
     // nothing of alice's is left in the browser
     await expect.poll(() => queuedFor(a.page, a.id), { timeout: 10_000 }).toEqual([])
+  } finally {
+    await stack.sync.start()
+  }
+})
+
+test('An expired session (a 401) keeps the edits this user had queued on the device (CRIT-18 follow-up)', async ({
+  canvasSession,
+  stack,
+}) => {
+  const a = await canvasSession('alice')
+  await expectSaved(a.page)
+  await stack.sync.kill()
+  try {
+    await expectSaveState(a.page, 'offline')
+    const ids = ['kept-1', 'kept-2']
+    for (const [i, id] of ids.entries())
+      await createItem(a.page, 'rectangle', { id, x: 80 + i * 160, y: 100, width: 120, height: 100 })
+    await expect.poll(async () => (await saveState(a.page)).offlineChanges).toBe(2)
+    await expect.poll(async () => (await queuedFor(a.page, a.id)).sort()).toEqual(ids)
+
+    // the session expires: the cookie goes, and the next request is a 401 (not the person's Sign out)
+    await a.page.context().clearCookies()
+    await a.page.evaluate(() => fetch('/api/me').then((r) => r.status))
+    await expect(a.page).toHaveURL(/\/signin/, { timeout: 15_000 })
+    // the unsent edits are still on the device, waiting for alice's next session
+    await new Promise((r) => setTimeout(r, 1_000))
+    expect((await queuedFor(a.page, a.id)).sort()).toEqual(ids)
   } finally {
     await stack.sync.start()
   }

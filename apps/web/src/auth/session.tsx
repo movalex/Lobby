@@ -12,12 +12,13 @@ import {
 import { api, isApiError, setUnauthorizedHandler } from '../api/client.ts'
 import { navigate, signInPath } from '../lib/routing.ts'
 import './auth.css'
-import { runSignOut, type SignOutOutcome, type SignOutProblem } from './signOut.ts'
+import { runSignOut, type SignOutOutcome, type SignOutProblem, sessionEnded } from './signOut.ts'
 import { signedOutMarks } from './signOutMark.ts'
 
 export type SessionState =
   | { status: 'loading' }
-  | { status: 'signed-out' }
+  /** `explicit`: the person's own Sign out finished (not a 401): the offline queues are purged (CRIT-18). */
+  | { status: 'signed-out'; explicit?: true }
   | { status: 'signed-in'; me: Me }
   /** The API could not be reached (or answered with a 5xx) while checking the session. */
   | { status: 'unreachable'; message: string }
@@ -104,14 +105,14 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     try {
       const me = await probeSession()
       if (!me) {
-        if (gen === generation.current) setState({ status: 'signed-out' })
+        if (gen === generation.current) setState(sessionEnded)
         return null
       }
       if (gen === generation.current) setState({ status: 'signed-in', me })
       return me
     } catch (e) {
       if (gen !== generation.current) return null
-      if (isApiError(e) && e.kind === 'unauthorized') setState({ status: 'signed-out' })
+      if (isApiError(e) && e.kind === 'unauthorized') setState(sessionEnded)
       else
         setState({
           status: 'unreachable',
@@ -125,7 +126,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     // Any 401 anywhere means the session ended (expired, revoked, signed out in another tab).
     setUnauthorizedHandler(() => {
       generation.current++
-      setState({ status: 'signed-out' })
+      setState(sessionEnded)
     })
     void refresh()
     return () => setUnauthorizedHandler(null)
@@ -171,7 +172,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
           setProblem(null)
           // Navigate before the state change so the signed-out guard never sees the old page.
           navigate(signInPath(opts.returnTo), { replace: true })
-          setState({ status: 'signed-out' })
+          setState({ status: 'signed-out', explicit: true })
         } else {
           setProblem({ outcome, opts })
         }

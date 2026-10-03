@@ -8,10 +8,13 @@
  *    not lost, and two tabs never replay the same queue;
  *  - guests get no persistence (the board page gives them the memory store), and `purge()` removes every
  *    queue of the board for this user (a FORBIDDEN close, a revocation);
- *  - when a session ends (sign-out in this tab or another, an expired or revoked session) every queue
- *    that user left in this browser is deleted, every board and tab (`purgeOfflineQueuesOf`, from
- *    App.tsx through `createSignOutPurge`; CRIT-18): unsent edits are not left readable on a shared
- *    machine;
+ *  - when the person signs out themselves (the Sign out, Switch user or Sign out everywhere button, and
+ *    only that) every queue that user left in this browser is deleted, every board and tab
+ *    (`purgeOfflineQueuesOf`, from App.tsx through `createSignOutPurge`; CRIT-18): unsent edits are not
+ *    left readable on a shared machine. An expired or revoked session (a 401, NOT_AUTHENTICATED, a
+ *    sign-out in another tab) purges nothing: the queue is keyed by user, so only the same user's next
+ *    session on this browser loads (and replays) it, never another account's (`load` and
+ *    `adoptOthers` match `uid`);
  *  - a `save` or `clear` starts its transaction in the call itself once the database is open (and asks
  *    it to commit at once), so a write the core starts right before a reload or in `pagehide` is not
  *    left waiting for a later task (spike B part 3: the offline window); it resolves once committed.
@@ -226,15 +229,21 @@ export async function purgeOfflineQueuesOf(uid: string, idb: IDBFactory = indexe
 export interface SessionSeen {
   readonly status: 'loading' | 'signed-out' | 'signed-in' | 'unreachable'
   readonly uid: string | null
+  /**
+   * With `signed-out`: this is the person's own sign-out (the button finished), not a session that ended
+   * under them. Only this purges.
+   */
+  readonly explicit?: boolean
 }
 
 /**
- * The session watch App.tsx feeds on every session change (CRIT-18): once a user who was signed in here
- * is signed out (this tab's sign-out, or any 401: expired, revoked, signed out in another tab), their
- * offline queues are purged, once. A board socket's NOT_AUTHENTICATED reaches it the same way (the
- * board page re-reads the session; a session that is really gone becomes signed-out). Loading and an
- * unreachable api purge nothing (the session may well be alive). Another account signed in here ends
- * the first one's session too.
+ * The session watch App.tsx feeds on every session change (CRIT-18): it remembers who is signed in here,
+ * and when that person's own Sign out finishes (`explicit`), their offline queues are purged, once.
+ * Nothing else purges: not an expired or revoked session (a 401 anywhere, a board socket's
+ * NOT_AUTHENTICATED, a sign-out in another tab), whose unsent edits wait for the same user's next sign-in
+ * on this browser; not loading or an unreachable api (the session may well be alive); not another account
+ * signing in here, which never reads this user's queue (the records are keyed by user, `load` and
+ * `adoptOthers` match the uid) and whose own sign-out purges only its own.
  */
 export function createSignOutPurge(
   purge: (uid: string) => Promise<unknown> = (uid) => purgeOfflineQueuesOf(uid),
@@ -242,12 +251,12 @@ export function createSignOutPurge(
   let last: string | null = null
   return (seen) => {
     if (seen.status === 'signed-in') {
-      // another account signed in here without a signed-out in between: the first one's session ended
-      if (last && seen.uid !== last) void purge(last).catch(() => {})
       last = seen.uid
       return
     }
-    if (seen.status !== 'signed-out' || !last) return
+    // an expired session is signed-out too: the user stays remembered, so an explicit sign-out that
+    // arrives after a 401 raced it still purges
+    if (seen.status !== 'signed-out' || !seen.explicit || !last) return
     const uid = last
     last = null
     void purge(uid).catch(() => {

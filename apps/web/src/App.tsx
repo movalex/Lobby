@@ -85,15 +85,18 @@ function Routes() {
 }
 
 /**
- * CRIT-18: when the session of the user signed in here ends (Sign out, or any 401: expired, revoked,
- * signed out in another tab), the board edits they had queued offline in this browser (IndexedDB,
- * canvas/sync/adapter/offline-idb.ts) are deleted, so a shared machine does not keep them readable.
+ * CRIT-18: when the person signed in here signs out themselves (Sign out, Switch user, Sign out
+ * everywhere), the board edits they had queued offline in this browser (IndexedDB,
+ * canvas/sync/adapter/offline-idb.ts) are deleted, so a shared machine does not keep them readable. A
+ * session that merely ended (a 401: expired, revoked, signed out in another tab) deletes nothing: those
+ * edits are unsent work, kept for the same user's next session (the queue is per user).
  */
 function PurgeOfflineOnSignOut() {
   const { state } = useSession()
   const [observe] = useState(() => createSignOutPurge())
   const uid = state.status === 'signed-in' ? state.me.user.id : null
-  useEffect(() => observe({ status: state.status, uid }), [observe, state.status, uid])
+  const explicit = state.status === 'signed-out' && state.explicit === true
+  useEffect(() => observe({ status: state.status, uid, explicit }), [observe, state.status, uid, explicit])
   return null
 }
 

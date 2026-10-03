@@ -45,6 +45,16 @@ export type SignOutOutcome =
 
 export type SignOutProblem = Exclude<SignOutOutcome, { status: 'signed-out' }>
 
+/**
+ * The session state once a 401 or a signed-out answer says the session ended (CRIT-18). The person's own
+ * Sign out that already finished stays `explicit` (the state it set is kept, so a late 401 in the same
+ * tick cannot hide it from the offline-queue purge); any other state becomes a plain signed-out, which
+ * purges nothing.
+ */
+export function sessionEnded<S extends { readonly status: string }>(prev: S): S | { status: 'signed-out' } {
+  return prev.status === 'signed-out' ? prev : { status: 'signed-out' }
+}
+
 const reason = (e: unknown) => (isApiError(e) ? e.message : 'Something went wrong.')
 
 export async function runSignOut(steps: SignOutSteps): Promise<SignOutOutcome> {
