@@ -99,16 +99,19 @@ export async function workerPlugin(app: FastifyInstance, deps: WorkerDeps): Prom
   const signer: BlobUrlSigner = createBlobUrlSigner(deps.token, deps.now)
   const limit = deps.rateLimit ?? { max: 6_000, anonMax: 600, timeWindow: 60_000 }
   // ONE budget for all worker routes together (route-level configs would each count separately):
-  // per token when a valid one is presented, per address otherwise. Needs @fastify/rate-limit on the host.
+  // per token when a valid one is presented, per address otherwise. Needs @fastify/rate-limit on the host,
+  // and refuses to start without it: these routes take a shared bearer token from the internet, so they
+  // must never run unlimited because a plugin was registered later than this one (A6, SEC-M3-storage-review).
+  if (typeof app.createRateLimit !== 'function')
+    throw new Error(
+      'workerPlugin needs @fastify/rate-limit registered before it: the worker routes are never served without their rate limit',
+    )
   const valid = (req: FastifyRequest) => tokenOk(bearerToken(req.headers.authorization))
-  const limiter =
-    typeof app.createRateLimit === 'function'
-      ? app.createRateLimit({
-          timeWindow: limit.timeWindow,
-          keyGenerator: (req) => (valid(req) ? TOKEN_KEY : `worker-anon:${req.ip}`),
-          max: (req) => (valid(req) ? limit.max : (limit.anonMax ?? 600)),
-        })
-      : null
+  const limiter = app.createRateLimit({
+    timeWindow: limit.timeWindow,
+    keyGenerator: (req) => (valid(req) ? TOKEN_KEY : `worker-anon:${req.ip}`),
+    max: (req) => (valid(req) ? limit.max : (limit.anonMax ?? 600)),
+  })
   const log = (req: FastifyRequest, msg: string, err?: unknown) =>
     req.log.error({ ...(err ? { err: errInfo(err) } : {}), route: req.routeOptions.url }, msg)
 
@@ -155,8 +158,8 @@ export async function workerPlugin(app: FastifyInstance, deps: WorkerDeps): Prom
    * refusal, then (protocol routes) the Bearer token.
    */
   const guard = (required: boolean) => async (req: FastifyRequest, reply: FastifyReply) => {
-    const r = limiter ? await limiter(req) : null
-    if (r && !r.isAllowed && r.isExceeded) {
+    const r = await limiter(req)
+    if (!r.isAllowed && r.isExceeded) {
       reply.header('retry-after', String(r.ttlInSeconds))
       throw new ApiError(429, 'RATE_LIMITED', 'Too many requests. Wait a moment and try again.')
     }

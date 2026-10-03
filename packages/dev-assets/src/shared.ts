@@ -227,11 +227,26 @@ export function maxUploadBytes(kind: AssetKind, mimeType: string, name: string):
   return isOfficeUpload(kind, mimeType, name) ? LIMITS.maxOfficeBytes : LIMITS.maxBytes[kind]
 }
 
-/** Display name: strip path parts and control characters, cap the length. Never used as a filesystem path. */
+/**
+ * Characters that make a name read differently on screen than it is stored (FC-3,
+ * docs/SECURITY-REVIEW-2026-09-27.md): the bidirectional controls U+061C, U+200E/F, U+202A-U+202E (the
+ * embeddings and overrides: a U+202E in `invoice<U+202E>fdp.exe` shows the tail reversed, as `exe.pdf`)
+ * and U+2066-U+2069 (the isolates), plus the line and paragraph separators U+2028/9. The same set the
+ * guest names refuse (packages/contracts guests.ts).
+ */
+const BIDI_AND_SEPARATORS = /[\u061c\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]/g
+
+/**
+ * Display name: strip path parts, control characters (C0 and DEL) and bidi controls, cap the length.
+ * Never used as a filesystem path.
+ */
 export function sanitizeDisplayName(raw: string): string {
   const base = raw.split(/[\\/]/).pop() ?? ''
-  // biome-ignore lint/suspicious/noControlCharactersInRegex: stripping control characters is the point
-  const cleaned = base.replace(/[\u0000-\u001f\u007f]/g, '').trim()
+  const cleaned = base
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: stripping control characters is the point
+    .replace(/[\u0000-\u001f\u007f]/g, '')
+    .replace(BIDI_AND_SEPARATORS, '')
+    .trim()
   return (cleaned || 'file').slice(0, LIMITS.maxNameLength)
 }
 

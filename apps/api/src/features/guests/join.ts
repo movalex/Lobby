@@ -7,6 +7,9 @@
 // `dr_session` that ends at the link's expiry or after 7 days, whichever comes first (and follows the
 // link when a manager extends it: sessions.ts).
 //
+// A link whose board is in the trash is not joined: 409 BOARD_IN_TRASH, nothing created or redeemed (as
+// accepting does); it works again once the board is restored.
+//
 // Abuse limits:
 // - new guests per client address (GUEST_JOINS_PER_ADDRESS: 60 per 10 minutes; an IPv6 client counts
 //   by its /64). The address is the office NAT for a room of people, so it is sized for a workshop;
@@ -27,7 +30,13 @@ import { colorFor, userKind } from '../../auth/users.ts'
 import type { Params } from '../../context.ts'
 import { ApiError, badRequest, conflict, notFound, parse } from '../../errors.ts'
 import { keyedLimit, type RouteRateLimit } from '../../rate-limit.ts'
-import { lockInvitation, redeemInvitation, sendGone, stateFor } from '../../routes/invitations.ts'
+import {
+  boardInTrash,
+  lockInvitation,
+  redeemInvitation,
+  sendGone,
+  stateFor,
+} from '../../routes/invitations.ts'
 import type { FeatureContext } from '../context.ts'
 import { publishSharingChanged } from '../dashboard/shared.ts'
 import { assertGuestRoomOnLink, clientAddressKey } from './limits.ts'
@@ -85,6 +94,14 @@ export function registerGuestJoin(
       const boardId = inv.board_id
       const at = now()
       if (stateFor(inv, guestId, at) === 'gone') return { gone: true as const, inv }
+      // A6 (GUEST-JOIN-TRASH): never a guest or a role on a board in the trash (nobody can open it), as
+      // accepting answers (routes/invitations.ts). Checked before anything is created, so nothing is
+      // redeemed and the link works again once the board is restored (lockInvitation took the board row
+      // first, so a restore or trash waits for this answer).
+      const board = await tx.maybeOne<{ status: string }>('SELECT status FROM boards WHERE id = $1', [
+        boardId,
+      ])
+      if (board?.status === 'trashed') throw boardInTrash()
 
       // The guest sweep (sweep.ts) takes the same user lock before it ends a guest's sessions or
       // grants, so it can never act on the state from before this join.

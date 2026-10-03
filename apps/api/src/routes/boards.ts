@@ -1,6 +1,5 @@
 // Boards: list/create/get/patch and archive/trash/restore (docs/M1-CONTRACTS.md §5).
 
-import { checkInternalSecret, INTERNAL_SECRET_HEADER } from '@draftroom/auth-tickets'
 import { CreateBoardInput, ListBoardsQuery, PatchBoardInput } from '@draftroom/contracts'
 import { newBoardId } from '@draftroom/db'
 import {
@@ -28,7 +27,7 @@ import {
 import { audit } from '../audit.ts'
 import { onNewCanvas } from '../canvas-engine.ts'
 import type { AppContext, Params } from '../context.ts'
-import { ApiError, conflict, forbidden, notFound, parse } from '../errors.ts'
+import { conflict, forbidden, notFound, parse } from '../errors.ts'
 import { assertBoardRoom } from '../files/usage.ts'
 import { type BoardMarks, toBoard, toBoardWithRole } from '../serialize.ts'
 
@@ -209,8 +208,7 @@ export function registerBoardRoutes(app: FastifyInstance, ctx: AppContext): void
   // root CSRF hook refuses POSTs without the web Origin, and the update is idempotent (updated_at only
   // moves forward, and never past this server's clock).
   app.get('/internal/boards/:bid/touched', async (req, reply) => {
-    if (!checkInternalSecret(req.headers[INTERNAL_SECRET_HEADER], ctx.config.internalSecret))
-      throw new ApiError(401, 'NOT_AUTHENTICATED', 'Internal credentials required.')
+    // The internal secret is checked by the root guard (app.ts registerInternalSecretGuard).
     const { bid = '' } = req.params as Params
     const { at } = parse(TouchedQuery, req.query)
     if (!isBoardId(bid)) throw notFound()

@@ -42,8 +42,7 @@
 //   route (app.ts). It carries no cookie authority: the internal secret is checked before anything else.
 
 import { randomBytes } from 'node:crypto'
-import { checkInternalSecret, INTERNAL_SECRET_HEADER } from '@draftroom/auth-tickets'
-import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
+import type { FastifyInstance, FastifyReply } from 'fastify'
 import { onNewCanvas } from '../../canvas-engine.ts'
 import type { Params } from '../../context.ts'
 import { ApiError } from '../../errors.ts'
@@ -379,15 +378,12 @@ export function registerCheckpointAllRoutes(
     await Promise.all([runAll.stop(), migration.stop()])
   })
 
-  const requireSecret = (req: FastifyRequest) => {
-    if (!checkInternalSecret(req.headers[INTERNAL_SECRET_HEADER], ctx.config.internalSecret))
-      throw new ApiError(401, 'NOT_AUTHENTICATED', 'Internal credentials required.')
-  }
-
-  mount(app, runAll, CHECKPOINT_ALL_ROUTE, CHECKPOINT_ALL_RUN_ROUTE, requireSecret)
+  // The internal secret is checked before anything else, for every one of these routes, by the root
+  // guard (app.ts registerInternalSecretGuard).
+  mount(app, runAll, CHECKPOINT_ALL_ROUTE, CHECKPOINT_ALL_RUN_ROUTE)
   // The restore point is a state on the new canvas: refused (nothing started) while this api's sync is
   // a tldraw one (canvas-engine.ts), so a run before step C9 cannot save tldraw bodies as restore points.
-  mount(app, migration, ENGINE_MIGRATION_ROUTE, ENGINE_MIGRATION_RUN_ROUTE, requireSecret, async () => {
+  mount(app, migration, ENGINE_MIGRATION_ROUTE, ENGINE_MIGRATION_RUN_ROUTE, async () => {
     if (!(await onNewCanvas(ctx))) throw new ApiError(409, WRONG_CANVAS_ERROR, WRONG_CANVAS_MESSAGE)
   })
 }
@@ -398,23 +394,19 @@ function mount(
   runs: CheckpointAllRuns,
   route: string,
   runRoute: string,
-  requireSecret: (req: FastifyRequest) => void,
   beforeStart?: () => Promise<void>,
 ): void {
-  app.post(route, async (req, reply: FastifyReply) => {
-    requireSecret(req)
+  app.post(route, async (_req, reply: FastifyReply) => {
     await beforeStart?.()
     const run = runs.request()
     return reply.code(202).header('location', `${route}/${run.runId}`).send(run)
   })
 
-  app.get(route, async (req) => {
-    requireSecret(req)
+  app.get(route, async () => {
     return { runs: runs.list() }
   })
 
   app.get(runRoute, async (req) => {
-    requireSecret(req)
     const { runId = '' } = req.params as Params
     const run = CHECKPOINT_ALL_ID_RE.test(runId) ? runs.get(runId) : null
     if (!run)

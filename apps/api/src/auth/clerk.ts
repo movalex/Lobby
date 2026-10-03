@@ -59,8 +59,11 @@ export interface ClerkProfile {
 }
 
 export interface ClerkDeps {
-  /** Verifies a Clerk session token; resolves with its subject (Clerk user id) and session id, or rejects. */
-  verify(token: string): Promise<{ sub: string; sid?: string }>
+  /**
+   * Verifies a Clerk session token; resolves with its subject (Clerk user id), session id and session
+   * status claim (`sts`: absent on tokens that carry none), or rejects.
+   */
+  verify(token: string): Promise<{ sub: string; sid?: string; sts?: string }>
   /** The Clerk user's profile; rejects with Clerk's error (a ClerkAPIResponseError when Clerk answered). */
   profile(sub: string): Promise<ClerkProfile>
   /**
@@ -80,6 +83,22 @@ export interface ClerkProviderOptions {
 
 const MAX_TOKEN_LENGTH = 8192
 const MAX_LISTED_SESSIONS = 100
+
+/** A verified token whose session is not active (Clerk marks one that still owes a session task `pending`). */
+export class SessionNotActiveError extends Error {
+  override name = 'SessionNotActiveError'
+}
+
+/**
+ * SCA-3 (docs/SECURITY-REVIEW-2026-09-27.md): only an ACTIVE Clerk session signs in. A token whose `sts`
+ * claim is `pending` (or any other value Clerk adds) is refused, so a user who has not finished a
+ * Clerk session task never gets a session here. A token with no `sts` claim at all is accepted, as
+ * @clerk/backend itself does: it treats only a pending status as signed out. The reason class is all
+ * that is logged (never the token or its claims).
+ */
+export function assertSessionActive(sts: string | undefined): void {
+  if (sts !== undefined && sts !== 'active') throw new SessionNotActiveError('session is not active')
+}
 
 /** The parts of a Clerk User (@clerk/backend 3.20.1 User.d.ts, EmailAddress.d.ts) the profile reads. */
 export interface ClerkUserEmails {
@@ -127,7 +146,11 @@ function defaultDeps(opts: ClerkProviderOptions): ClerkDeps {
         authorizedParties: [opts.publicOrigin],
       })
       if (typeof payload.sub !== 'string' || !payload.sub) throw new Error('token has no subject')
-      return { sub: payload.sub, ...(typeof payload.sid === 'string' ? { sid: payload.sid } : {}) }
+      return {
+        sub: payload.sub,
+        ...(typeof payload.sid === 'string' ? { sid: payload.sid } : {}),
+        ...(typeof payload.sts === 'string' ? { sts: payload.sts } : {}),
+      }
     },
     async profile(sub) {
       const clerk = await client()
@@ -206,10 +229,11 @@ export function createClerkAuthProvider(opts: ClerkProviderOptions): AuthProvide
         failures.check(ip)
         const header = req.headers.authorization
         const token = typeof header === 'string' && header.startsWith('Bearer ') ? header.slice(7).trim() : ''
-        let verified: { sub: string; sid?: string }
+        let verified: { sub: string; sid?: string; sts?: string }
         try {
           if (!token || token.length > MAX_TOKEN_LENGTH) throw new Error('missing or oversized token')
           verified = await deps.verify(token)
+          assertSessionActive(verified.sts)
         } catch (e) {
           failures.record(ip)
           // The reason class only: never the token or its claims.
