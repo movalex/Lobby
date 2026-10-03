@@ -7,13 +7,16 @@
 //  - one box per tagged element at its scene rectangle, rotated with it; the chips sit in it as they sat
 //    in the shape (inside a note, a card or media; above a shape or free text: ../tags.css);
 //  - level of detail (full chips, colour dots, nothing) from the zoom, as one attribute on the container;
+//  - R2-10: a minimum screen size. Chips keep their tldraw size in scene units from 100 % up, but below it
+//    they grow (--dr-tag-scale) so their text stays about 11 px on screen, and from 75 % down a note shows
+//    its first tag and "+N" instead of several names; the colour dots keep at least 10 px on screen too;
 //  - hidden elements (a collapsed mind-map branch) show no chips.
 // Deviation from tldraw (written down in docs/research/excalidraw/wave3/3D.md): the layer is above every
 // element, so a note lying on another note no longer covers the chips of the one below; and a remote
 // drag's preview moves the note before its chips (they follow on the drop, like the hit test, §2.7).
 
 import type { TagDef } from '@draftroom/contracts'
-import { memo, useMemo } from 'react'
+import { type CSSProperties, memo, useMemo } from 'react'
 import type { CanvasElement, CanvasFeatureContext, LobbyCanvas } from '../../../canvas/api/index.ts'
 import { computed, type Signal, useValue } from '../../../lib/signals.ts'
 import { chipLayout, isShortTagName } from '../tag-core.ts'
@@ -21,7 +24,15 @@ import '../tags.css'
 import './tags.css'
 import { tagsOf } from './bridge.ts'
 import { TAG_COLOR_CSS } from './colors.ts'
-import { type ChipPlacement, chipPlacement, displayTags, isTaggable, tagsLodFor, tagTokens } from './model.ts'
+import {
+  type ChipPlacement,
+  chipPlacement,
+  displayTags,
+  isTaggable,
+  LOD_FULL_ZOOM,
+  tagsLodFor,
+  tagTokens,
+} from './model.ts'
 import type { TagsRuntime } from './runtime.ts'
 
 /** One tagged element's chips, as drawn (compared field by field, so a move re-renders one box). */
@@ -37,6 +48,29 @@ export interface ChipBox {
   readonly tokens: string
   readonly tags: readonly TagDef[]
 }
+
+/** R2-10: a chip's text never reads smaller than this on screen (px; it is 11 px at 100 % and up). */
+export const MIN_CHIP_TEXT_PX = 11
+/** R2-10: a colour dot (22 scene px at 100 %) never shows smaller than this on screen (px). */
+export const MIN_DOT_PX = 10
+/** R2-10: below this zoom a note shows its first tag and "+N", not several names. */
+export const CHIP_COMPACT_BELOW = 0.75
+const CHIP_TEXT_PX = 11
+const DOT_SCENE_PX = 22
+
+/**
+ * R2-10: the factor chips and dots are drawn at in scene units (`--dr-tag-scale`): 1 from 100 % up, then
+ * large enough that their text (full chips) or the dot itself keeps its minimum size on screen.
+ */
+export function chipScaleFor(zoom: number): number {
+  if (!(zoom > 0)) return 1
+  const full = tagsLodFor(zoom) === 'full'
+  const needed = full ? MIN_CHIP_TEXT_PX / (CHIP_TEXT_PX * zoom) : MIN_DOT_PX / (DOT_SCENE_PX * zoom)
+  return Math.max(1, Math.round(needed * 100) / 100)
+}
+
+/** R2-10: whether notes show their first tag and "+N" at this zoom (full chips only; dots show every tag). */
+export const chipsCompactAt = (zoom: number): boolean => zoom >= LOD_FULL_ZOOM && zoom < CHIP_COMPACT_BELOW
 
 const num = (v: unknown, d = 0) => (typeof v === 'number' && Number.isFinite(v) ? v : d)
 
@@ -140,7 +174,13 @@ export function SceneContainer({
       className={className}
       data-testid={testId}
       data-dr-tags-lod={tagsLodFor(v.zoom)}
-      style={{ transform: `scale(${v.zoom}) translate(${-v.x}px, ${-v.y}px)` }}
+      data-dr-tags-compact={chipsCompactAt(v.zoom) || undefined}
+      style={
+        {
+          transform: `scale(${v.zoom}) translate(${-v.x}px, ${-v.y}px)`,
+          '--dr-tag-scale': chipScaleFor(v.zoom),
+        } as CSSProperties
+      }
     >
       {children}
     </div>
@@ -181,6 +221,17 @@ const ChipBoxView = memo(
               data-dr-tag-color="grey"
             >
               +{more}
+            </li>
+          )}
+          {/* R2-10: what a note shows in place of its other names when zoomed out (tags.css) */}
+          {box.tags.length > 1 && (
+            <li
+              className="dr-tag-chip dr-tag-chip--compact"
+              data-testid="tag-chip-compact-more"
+              data-dr-tag-color="grey"
+              aria-hidden="true"
+            >
+              +{box.tags.length - 1}
             </li>
           )}
         </ul>

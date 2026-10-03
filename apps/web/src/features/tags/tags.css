@@ -57,6 +57,23 @@
 .dr-tag-chip--more {
   min-width: 0;
 }
+/* R2-10: "+N" for the names a note does not show when zoomed out (Chips.tsx chipsCompactAt): the chip layer
+   sets data-dr-tags-compact between 60 % and 75 %, where chips are drawn larger to keep their text readable
+   (--dr-tag-scale), so only the first name fits beside the counter. (Selected by the attribute alone: a class
+   of the ported stylesheet here would make it a shared name: css-scope.test.ts.) */
+.dr-tag-chip--compact {
+  display: none;
+  flex-shrink: 0;
+  min-width: 0;
+}
+[data-dr-tags-compact] .dr-tag-chip:not(:first-child),
+[data-dr-tags-compact] .dr-tag-chip--more {
+  display: none;
+}
+/* after the rule above (same weight): the counter itself shows */
+[data-dr-tags-compact] .dr-tag-chip.dr-tag-chip--compact {
+  display: block;
+}
 /* Behind "+N" at full size (ShapeWrapper.tsx chipLayout); a dot like the others when zoomed out. */
 .dr-tag-chip[data-overflow] {
   display: none;
@@ -458,6 +475,7 @@
 .dr-tags-filterbar__count {
   color: var(--dr-ink-2);
 }
+.dr-tags-filterbar__zoom,
 .dr-tags-filterbar__clear {
   flex: none;
   white-space: nowrap;
@@ -481,5 +499,13 @@ html[data-dr-presenting] .dr-tags-filterbar {
   }
   .dr-tags-filterbar__text .dr-tag-pill {
     max-width: 170px;
+  }
+  /* F2-08: two buttons share a phone's bar with the funnel and the pill */
+  .dr-tags-filterbar {
+    gap: 6px;
+  }
+  .dr-tags-filterbar__zoom,
+  .dr-tags-filterbar__clear {
+    padding: 0 10px;
   }
 }

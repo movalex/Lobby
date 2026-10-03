@@ -454,9 +454,24 @@ function SelectedStepper({ ctx, store }: { ctx: Ctx; store: WorkshopStore }) {
 
 const votesText = (n: number) => `${n} vote${n === 1 ? '' : 's'}`
 
+/** A result badge's figure is drawn at this size (workshops.css .dr-wk-badge). */
+const BADGE_TEXT_PX = 13
+/** R2-10: at overview zoom the figure never reads smaller than this on screen (px). */
+export const MIN_BADGE_TEXT_PX = 11
+
+/**
+ * R2-10: the scale of result badges at `zoom`. The overlay draws in screen pixels, so this is a screen
+ * size: full from 100% zoom, smaller as the board zooms out, but never below what keeps the figure at
+ * MIN_BADGE_TEXT_PX (the badge's rank, which is smaller, then reads about 9 px). Overlapping badges group
+ * (voting.ts clusterBadges) instead of shrinking further.
+ */
+export function resultBadgeScale(zoom: number): number {
+  return Math.max(badgeScale(zoom), MIN_BADGE_TEXT_PX / BADGE_TEXT_PX)
+}
+
 /**
  * Revealed counts on the voted objects (round-2 F3): full size from 100% zoom, smaller as the board
- * zooms out (down to 60%), and badges that would overlap become one group badge ("#1 +2", the best
+ * zooms out (down to 85%, so the figure keeps about 11 px: R2-10), and badges that would overlap become one group badge ("#1 +2", the best
  * rank and how many more) that zooms in to them when clicked. They sit in the marks layer, under the
  * top bar's popovers.
  */
@@ -469,7 +484,7 @@ function ResultBadges({ ctx }: { ctx: Ctx }) {
     [snap.vote?.results],
   )
   const placed = usePlacements(ctx, counts, 'results')
-  const scale = useValue('dr-wk-badge-scale', () => badgeScale(canvas.viewport.get().zoom), [canvas])
+  const scale = useValue('dr-wk-badge-scale', () => resultBadgeScale(canvas.viewport.get().zoom), [canvas])
   const groups = useMemo(
     () =>
       clusterBadges(
