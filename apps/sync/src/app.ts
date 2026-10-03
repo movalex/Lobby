@@ -39,6 +39,40 @@ import { createApiTouchClient, createTouchReporter, type TouchClient, type Touch
 /** The terminal close reason of every socket while maintenance is on (the web: "Lobby is updating"). */
 export const MAINTENANCE_REASON = 'MAINTENANCE'
 
+// ---- where a board socket's ticket is (security audit L7) ---------------------------------------------
+//
+// The web sends the ticket in the handshake's `Sec-WebSocket-Protocol` header, as a second offered
+// subprotocol `lobby.ticket.<ticket>` next to `lobby.board.v1` (apps/web/src/board/ticket.ts defines the
+// same two names), so platform logs that keep request URLs never hold one. The answer names exactly
+// `lobby.board.v1`: a browser fails a handshake whose answer names a protocol it did not offer, and the
+// ticket never comes back in a response header. The old transport, `?ticket=` in the URL, is still
+// accepted for at least one release (tabs opened before the deploy, cached bundles, the headless and load
+// clients). Either way the ticket is verified before the upgrade and never logged.
+
+/** The subprotocol a board socket speaks: the one the server answers with. */
+export const BOARD_SOCKET_PROTOCOL = 'lobby.board.v1'
+/** The offered subprotocol that carries the ticket: this prefix, then the ticket. */
+export const TICKET_PROTOCOL_PREFIX = 'lobby.ticket.'
+
+/**
+ * The ticket an upgrade presents: the offered `lobby.ticket.<ticket>` subprotocol, else the URL's
+ * `?ticket=` (the old transport), else null (refused NOT_AUTHENTICATED like a bad ticket).
+ */
+export function upgradeTicket(req: IncomingMessage, url: URL): string | null {
+  const offered = req.headers['sec-websocket-protocol']
+  if (typeof offered === 'string')
+    for (const raw of offered.split(',')) {
+      const p = raw.trim()
+      if (p.startsWith(TICKET_PROTOCOL_PREFIX) && p.length > TICKET_PROTOCOL_PREFIX.length)
+        return p.slice(TICKET_PROTOCOL_PREFIX.length)
+    }
+  return url.searchParams.get('ticket')
+}
+
+/** The subprotocol the server answers with: `lobby.board.v1` when offered, else none (the old transport). */
+const selectProtocol = (offered: Set<string>): string | false =>
+  offered.has(BOARD_SOCKET_PROTOCOL) ? BOARD_SOCKET_PROTOCOL : false
+
 export interface SyncServerOptions {
   /** Request log lines and room warnings. Default: console.log. */
   log?: (...a: unknown[]) => void
@@ -187,7 +221,11 @@ export function createSyncServer(config: SyncConfig, opts: SyncServerOptions = {
     void p.finally(() => inflight.delete(p))
   })
 
-  const wss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 })
+  const wss = new WebSocketServer({
+    noServer: true,
+    maxPayload: 1024 * 1024,
+    handleProtocols: selectProtocol,
+  })
   const liveSockets = new Map<string, WebSocket>() // `${boardId}/${sid}` -> current ws
   // One expensive connect per macrotask (PERF-05, join-queue.ts): a crowd joining at once no longer
   // blocks everyone else's edits. Keyed per socket, not per session id (a replaced socket).
@@ -217,7 +255,8 @@ export function createSyncServer(config: SyncConfig, opts: SyncServerOptions = {
       return void socket.destroy()
     }
     // Verified BEFORE the upgrade and before any room is touched, so a refused ticket opens nothing.
-    const verdict = verifyTicket(config.ticketSecret, url.searchParams.get('ticket'), { boardId })
+    // From the handshake's subprotocol (L7), or the URL (the old transport, still accepted).
+    const verdict = verifyTicket(config.ticketSecret, upgradeTicket(req, url), { boardId })
     // close() may have started: never reopen a room after closeAll().
     if (closing) return void socket.destroy()
     wss.handleUpgrade(req, socket, head, (ws) => {

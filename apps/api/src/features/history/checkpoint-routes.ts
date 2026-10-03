@@ -15,9 +15,18 @@
 //                    (the same reasoning as "Recently deleted", authz-001).
 //   delete           the board's owners (manage_access; archived boards included), never a guest.
 //   restore          unchanged (index.ts: view + workspace member + export policy).
+//
+// A v1 (tldraw) body is previewed on the new canvas as the elements the converter makes of it
+// (PARITY-5.5, docs/EXCALIDRAW-MIGRATION.md §5.5 "v1 is converted on read"): the converter a restore as a
+// new board uses at the seed (packages/tldraw-import, apps/sync/src/room-internal/seed.ts), on read, the
+// stored body never rewritten. The answer is a lobby-elements payload marked `converted`. A body the
+// converter cannot read keeps the v1 answer (the records), and so does an api on the tldraw sync.
 
+import { installedServerTextMetrics, installServerTextMetrics } from '@draftroom/canvas-schema/engine'
+import { ELEMENT_SCHEMA_VERSION } from '@draftroom/canvas-schema/protocol'
 import { type CheckpointContent, SNAPSHOT_ID_PATTERN } from '@draftroom/contracts'
 import { can, canCreateInWorkspace } from '@draftroom/permissions'
+import { convertBoard, migrateRecords, type TlRecord } from '@draftroom/tldraw-import'
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { z } from 'zod'
 import { type BoardAccess, isBoardId, requireBoardAction } from '../../access.ts'
@@ -43,6 +52,27 @@ export const TOUCHED_ROUTE = '/internal/boards/:bid/touched'
 export const SESSION_ENDED_ROUTE = '/internal/boards/:bid/session-ended'
 
 const AtQuery = z.object({ at: z.coerce.number().int().min(0).max(8.64e15).optional() })
+
+/**
+ * A v1 body's records as the new canvas's elements and board document, for the preview (PARITY-5.5), or
+ * null when the converter cannot read them (a schema newer than it, a record it refuses): the preview then
+ * answers the records as before. Codes only, never board content, reach the log.
+ */
+export function convertV1ForPreview(
+  body: { readonly schema: unknown; readonly records: readonly Record<string, unknown>[] },
+  now: number,
+): { elements: Record<string, unknown>[]; doc: Record<string, unknown> } | null {
+  const migrated = migrateRecords(body.records, body.schema)
+  if (!migrated.ok) return null
+  const metrics = installedServerTextMetrics() ?? installServerTextMetrics()
+  const conv = convertBoard(migrated.records as TlRecord[], { updatedAt: now, metrics })
+  if (conv.failures.length) return null
+  const doc: Record<string, unknown> = {}
+  if (conv.doc.startView) doc.startView = conv.doc.startView
+  if (conv.doc.workshop) doc.workshop = conv.doc.workshop
+  for (const [key, def] of Object.entries(conv.doc.tagDefs)) doc[`tagDef:${key}`] = def
+  return { elements: conv.elements as unknown as Record<string, unknown>[], doc }
+}
 
 /** Previews carry a whole board: per client, per minute (like the other heavy history routes). */
 const PREVIEW_LIMIT = { config: { rateLimit: { max: 60, timeWindow: 60_000 } } }
@@ -129,21 +159,39 @@ export function registerCheckpointRoutes(
     if (raw === null) throw gone("This checkpoint's saved content is no longer available.")
     const body = readCheckpointBody(raw)
     reply.header('cache-control', 'private, no-store')
-    // v2 (Excalidraw engine): elements and the board document; v1: the tldraw records, as before
+    const newCanvas = await onNewCanvas(ctx)
+    const snapshot = toCheckpoint(row, { newCanvas: !newCanvas })
+    // v2 (Excalidraw engine): elements and the board document
     if (body.version === 2)
       return {
-        snapshot: toCheckpoint(row, { newCanvas: !(await onNewCanvas(ctx)) }),
+        snapshot,
         schema: body.schema,
         records: [],
         format: 'lobby-elements',
         elements: body.elements as NonNullable<CheckpointContent['elements']>,
         doc: body.doc,
       }
-    return {
-      snapshot: toCheckpoint(row, { newCanvas: !(await onNewCanvas(ctx)) }),
-      schema: body.schema,
-      records: body.records as CheckpointContent['records'],
+    // v1 on the new canvas: converted on read (PARITY-5.5)
+    if (newCanvas) {
+      let converted: ReturnType<typeof convertV1ForPreview> = null
+      try {
+        converted = convertV1ForPreview(body, ctx.now().getTime())
+      } catch (e) {
+        req.log.warn({ err: { name: (e as Error)?.name } }, 'v1 checkpoint preview not converted')
+      }
+      if (converted)
+        return {
+          snapshot,
+          schema: ELEMENT_SCHEMA_VERSION,
+          records: [],
+          format: 'lobby-elements',
+          elements: converted.elements as NonNullable<CheckpointContent['elements']>,
+          doc: converted.doc,
+          converted: true,
+        }
     }
+    // v1: the tldraw records, as before
+    return { snapshot, schema: body.schema, records: body.records as CheckpointContent['records'] }
   })
 
   // ---- deletion ------------------------------------------------------------------------------------

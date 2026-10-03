@@ -31,6 +31,19 @@ export function restoredElementIds(restored: readonly string[], has: (id: string
   return restored.map(elementIdOf).filter((id) => has(id))
 }
 
+/**
+ * What a restore selects: what came back, less what came back inside a frame that came back too (a
+ * restored frame is selected alone, its notes with it, as on the tldraw board; selecting the children as
+ * well would make them a second, separate selection inside the frame's).
+ */
+export function restoredSelection(ids: readonly string[], frameIdOf: (id: string) => unknown): string[] {
+  const back = new Set(ids)
+  return ids.filter((id) => {
+    const frame = frameIdOf(id)
+    return !(typeof frame === 'string' && back.has(frame))
+  })
+}
+
 interface PreviewElement {
   readonly id?: unknown
   readonly type?: unknown
@@ -103,4 +116,20 @@ export function firstFrameBounds(
   const entry = order.find((f) => !f.skip) ?? order[0]
   if (!entry || !(entry.bounds.w > 0) || !(entry.bounds.h > 0)) return null
   return { x: entry.bounds.x, y: entry.bounds.y, width: entry.bounds.w, height: entry.bounds.h }
+}
+
+/**
+ * What the preview says about where a checkpoint's picture comes from (PARITY-5.5):
+ *  - `converted`: a checkpoint saved before the canvas update (v1), converted by the api for this preview
+ *    (`CheckpointContent.converted`): drawn, with a line saying it is shown converted;
+ *  - `v1`: v1 records the api did not convert (its sync is the tldraw one, or the converter cannot read
+ *    the body): nothing to draw, and the dialog says restoring it as a new board still works;
+ *  - null: the new canvas's own elements.
+ */
+export function checkpointPreviewSource(content: {
+  readonly format?: string
+  readonly converted?: boolean
+}): 'converted' | 'v1' | null {
+  if (content.format !== 'lobby-elements') return 'v1'
+  return content.converted === true ? 'converted' : null
 }

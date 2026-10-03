@@ -6,9 +6,9 @@
 //
 //   E2E_PORT_BASE=<base> pnpm --filter @draftroom/e2e excalidraw history-deleted
 //
-// A restore is the api's server write on an OPEN board, which answers 503 until the room implements
-// serverWrite (CR 2F-2, O1): the restore tests are marked test.fail with that CR and turn green (then
-// fail as "expected to fail") the day it lands, when the mark must go.
+// A restore is the api's server write on an OPEN board, through the room's serverWrite (CR 2F-2, since
+// spike B's part 3); it attaches again the live connectors that lost an end to what it brings back
+// (DEF-W3-1, wave B: the marks of the two restores below are gone).
 import type { Page } from '@playwright/test'
 import {
   canvasCall,
@@ -35,12 +35,6 @@ import {
   serverElements,
   undoWithKeyboard,
 } from './history-kit.ts'
-
-// CR 2F-2 landed with spike B's part 3 (the room's serverWrite): a restore on an open board goes through the
-// room. Two tests still fail: the restore does not re-bind a live connector to what it brings back
-// (DEF-W3-1, 2F's restore through serverWrite / O1).
-const DEF_W3_1 =
-  'DEF-W3-1: a restore through the open room does not re-bind a live connector to the restored element'
 
 const selectedIds = async (page: Page) => ((await canvasCall(page, 'selection')) as string[]).sort()
 
@@ -214,7 +208,6 @@ test('restoring a deleted frame puts its 2 notes back in place inside it, re-bin
   users,
   stack,
 }) => {
-  test.fail(true, DEF_W3_1)
   const a = await canvasSession('alice')
   const b = await canvasSession('bob')
   const bobApi = await users.api('bob')
@@ -275,7 +268,6 @@ test('restoring a note and a connector together (bob, multi-select) puts them ba
 test('restoring a note whose frame is gone puts it on the board where it was and reconnects its connector; the frame comes back without it (CR 2F-2)', async ({
   canvasSession,
 }) => {
-  test.fail(true, DEF_W3_1)
   const a = await canvasSession('alice')
   const b = await canvasSession('bob')
   const ids = await drawFrameBoard(a.page, 'rg')

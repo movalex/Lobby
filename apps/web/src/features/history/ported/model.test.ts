@@ -1,12 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import { exportAllowedHere } from './export-allowed.ts'
 import {
+  checkpointPreviewSource,
   elementIdOf,
   firstFrameBounds,
   previewElementCounts,
   previewTexts,
   refOfElement,
   restoredElementIds,
+  restoredSelection,
   touchesDeletedElements,
 } from './model.ts'
 
@@ -121,5 +123,26 @@ describe('history on elements', () => {
     expect(exportAllowedHere('viewer', 'everyone', true)).toBe(false)
     expect(exportAllowedHere('viewer', 'everyone', false)).toBe(true)
     expect(exportAllowedHere('viewer', 'everyone-including-guests', true)).toBe(true)
+  })
+})
+
+describe('what a restore selects', () => {
+  it('a restored frame alone, never its restored children; other restored objects stay selected', () => {
+    const frameOf: Record<string, string | null> = { F: null, N1: 'F', N2: 'F', A: null, N3: 'G' }
+    const at = (id: string) => frameOf[id] ?? null
+    expect(restoredSelection(['F', 'N1', 'N2'], at)).toEqual(['F'])
+    // a note restored into a frame that stayed on the board (G) is selected with its connector
+    expect(restoredSelection(['A', 'N3'], at)).toEqual(['A', 'N3'])
+    expect(restoredSelection([], at)).toEqual([])
+  })
+})
+
+describe('where a checkpoint preview comes from (PARITY-5.5)', () => {
+  it('draws elements; says so when they were converted from a checkpoint saved before the canvas update', () => {
+    expect(checkpointPreviewSource({ format: 'lobby-elements' })).toBeNull()
+    expect(checkpointPreviewSource({ format: 'lobby-elements', converted: true })).toBe('converted')
+    // v1 records nobody converted (an api on the tldraw sync, or an unreadable body): nothing to draw
+    expect(checkpointPreviewSource({})).toBe('v1')
+    expect(checkpointPreviewSource({ converted: true })).toBe('v1')
   })
 })

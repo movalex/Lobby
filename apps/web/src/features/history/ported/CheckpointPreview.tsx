@@ -8,9 +8,11 @@
 //
 // Beside the bitmap, a visually hidden list of the checkpoint's words in reading order: a bitmap cannot
 // be read aloud or searched (the tldraw preview's DOM text could). Images resolve through this board's
-// own file access, as on the canvas. A v1 (tldraw) body cannot be drawn here until the api converts v1
-// bodies on read (the `apps/api` → `tldraw-import` edge, W1-9); the dialog says so, and "Restore as new
-// board" still works. There is one page: the tldraw preview's page picker is gone.
+// own file access, as on the canvas. A v1 (tldraw) body, saved before the canvas update, is converted by
+// the api on read (PARITY-5.5, `CheckpointContent.converted`): it is drawn like any other, and a line says
+// it is shown converted. Records the api did not convert (an api on the tldraw sync, or a body the
+// converter cannot read) cannot be drawn here: the dialog says so, and "Restore as new board" still
+// works. There is one page: the tldraw preview's page picker is gone.
 
 import type { BoardCheckpoint, CheckpointContent } from '@draftroom/contracts'
 import { useEffect, useId, useMemo, useRef, useState } from 'react'
@@ -23,7 +25,7 @@ import {
 import { prefersFirstFrame } from '../../canvas-ux/start-view.ts'
 import type { HistoryApi } from '../api.ts'
 import { checkpointMeta, checkpointTitle } from '../checkpoints-model.ts'
-import { firstFrameBounds, previewElementCounts, previewTexts } from './model.ts'
+import { checkpointPreviewSource, firstFrameBounds, previewElementCounts, previewTexts } from './model.ts'
 
 /** Excalidraw's smallest zoom: below it a whole-board fit is unreadable anyway. */
 const MIN_ZOOM = 0.1
@@ -95,7 +97,8 @@ export function CheckpointPreview({
   }, [api, checkpoint.id])
 
   const elements = loaded.status === 'ready' ? (loaded.content.elements ?? null) : null
-  const isV1 = loaded.status === 'ready' && loaded.content.format !== 'lobby-elements'
+  const source = loaded.status === 'ready' ? checkpointPreviewSource(loaded.content) : null
+  const isV1 = source === 'v1'
   const counts = useMemo(() => (elements ? previewElementCounts(elements) : null), [elements])
   const texts = useMemo(() => (elements ? previewTexts(elements) : []), [elements])
 
@@ -223,6 +226,14 @@ export function CheckpointPreview({
             <p className="dr-cp-preview__note" role="status" data-testid="checkpoint-preview-v1">
               This checkpoint was saved before the canvas update and can’t be previewed here yet. Restoring it
               as a new board still works.
+            </p>
+          )}
+          {source === 'converted' && (
+            <p
+              className="dr-cp-preview__note dr-cp-preview__note--converted"
+              data-testid="checkpoint-preview-converted"
+            >
+              Saved before the canvas update: shown converted to the new canvas.
             </p>
           )}
           {elements && (

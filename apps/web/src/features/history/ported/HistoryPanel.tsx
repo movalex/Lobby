@@ -41,7 +41,7 @@ import {
 } from '../model.ts'
 import { CheckpointPreview } from './CheckpointPreview.tsx'
 import { useExportAllowed } from './export-allowed.ts'
-import { restoredElementIds, touchesDeletedElements } from './model.ts'
+import { restoredElementIds, restoredSelection, touchesDeletedElements } from './model.ts'
 
 const DELETED_REFRESH_MS = 700
 const APPEAR_TIMEOUT_MS = 4_000
@@ -267,7 +267,7 @@ export function HistoryPanel({ ctx }: { ctx: CanvasFeatureContext; close(): void
       await new Promise((r) => setTimeout(r, 50))
     const here = restoredElementIds(refs, has)
     if (!here.length) return
-    canvas.select(here)
+    canvas.select(restoredSelection(here, (id) => (canvas.get(id) as { frameId?: unknown } | null)?.frameId))
     // Bring it into view without zooming in on a single note: keep the current zoom (at most 100%)
     // unless what came back is bigger than the screen.
     const bounds = canvas.boundsOf(here)

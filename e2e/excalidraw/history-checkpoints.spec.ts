@@ -15,6 +15,18 @@
 // Delete, Ctrl+Z and N still work); the private-notes reveal (R10) is a server write on an open board and
 // waits for CR 2F-2.
 import type { Browser, Page } from '@playwright/test'
+import { createTableTextMetrics } from '../../packages/canvas-schema/src/engine/index.ts'
+import { convertBoard, migrateRecords, type TlRecord } from '../../packages/tldraw-import/src/index.ts'
+import { draftroomSchema } from '../../packages/tldraw-import/src/schema.ts'
+import {
+  documentRecord,
+  PAGE as TL_PAGE,
+  frame as tlFrame,
+  geo as tlGeo,
+  note as tlNote,
+  page as tlPage,
+  sid as tlSid,
+} from '../../packages/tldraw-import/src/test-fixtures.ts'
 import type { Api } from '../tests/support/api.ts'
 import {
   canvasCall,
@@ -729,4 +741,78 @@ test('a board nobody has opened yet: the api saves an empty checkpoint (201) and
   const rows = await listSnapshots(api, board)
   expect(rows.map((s) => s.name).sort()).toEqual(['Empty start', 'With a note'])
   expect(rows.find((s) => s.name === 'With a note')?.recordCount).toBeGreaterThan(0)
+})
+
+// PARITY-5.5: a checkpoint saved before the canvas update (a v1 body: tldraw records) is previewed from the
+// elements the api converts it to on read, marked `converted` (apps/api checkpoint-routes.ts; its own test,
+// apps/api/test/features/history/checkpoint-v1-preview.test.ts, pins that the route answers this). This
+// build stores v2 bodies only, so the e2e stack cannot hold a v1 checkpoint: the preview's content request
+// for a real checkpoint row is answered with what the same converter (packages/tldraw-import) makes of real
+// tldraw records, and the page is driven end to end from there. Before, the dialog said "can't be
+// previewed here yet" and drew nothing.
+test('a checkpoint saved before the canvas update previews converted: drawn, its words listed, and a line says it is shown converted (PARITY-5.5)', async ({
+  canvasSession,
+  board,
+  users,
+}) => {
+  const aliceApi = await users.api('alice')
+  const a = await canvasSession('alice')
+  await putNote(a.page, 'live-note', 'On the board today')
+  const saved = await aliceApi.fetch('POST', `/api/boards/${board}/snapshots`, { name: 'Before the move' })
+  expect(saved.status(), await saved.text()).toBe(201)
+  const sid = ((await saved.json()) as { id: string }).id
+
+  // the tldraw board as it was: a frame with a note inside, and a labelled box beside it
+  const records = [
+    documentRecord(),
+    tlPage(TL_PAGE, 'Page 1'),
+    tlFrame('sprint', 'Sprint ideas', { x: 0, y: 0, w: 600, h: 400 }),
+    tlNote('plan', 'Launch plan from tldraw', { x: 40, y: 60, parentId: tlSid('sprint'), index: 'a1' }),
+    tlGeo('budget', 'Budget', { x: 700, y: 100, w: 160, h: 100, index: 'a2' }),
+  ]
+  const migrated = migrateRecords(records, draftroomSchema.serialize())
+  if (!migrated.ok) throw new Error(migrated.reason)
+  const conv = convertBoard(migrated.records as TlRecord[], {
+    updatedAt: Date.now(),
+    metrics: createTableTextMetrics(),
+  })
+  expect(conv.failures).toEqual([])
+  await a.page.route(`**/api/snapshots/${sid}/content`, async (route) => {
+    const real = (await (await route.fetch()).json()) as { snapshot: unknown }
+    await route.fulfill({
+      json: {
+        snapshot: real.snapshot,
+        schema: 1,
+        records: [],
+        format: 'lobby-elements',
+        elements: conv.elements,
+        doc: {},
+        converted: true,
+      },
+    })
+  })
+
+  await openHistory(a.page)
+  await manualRow(a.page, 'Before the move').getByTestId('checkpoint-preview').click()
+  const dialog = preview(a.page)
+  await expect(dialog).toBeVisible()
+  await expect(dialog.getByTestId('checkpoint-preview-converted')).toHaveText(
+    'Saved before the canvas update: shown converted to the new canvas.',
+  )
+  await expect(dialog.getByTestId('checkpoint-preview-v1')).toHaveCount(0)
+  await expect(dialog.getByTestId('checkpoint-preview-error')).toHaveCount(0)
+  await expect(dialog).toHaveAttribute('data-shape-count', '3')
+  await expect(previewText(a.page)).toContainText('Sprint ideas')
+  await expect(previewText(a.page)).toContainText('Launch plan from tldraw')
+  await expect(previewText(a.page)).toContainText('Budget')
+  await expect(previewText(a.page)).not.toContainText('On the board today')
+  await expectBitmapDrawn(a.page)
+  // the converted line sits over the bitmap and never takes its clicks
+  expect(
+    await dialog
+      .getByTestId('checkpoint-preview-converted')
+      .evaluate((el) => getComputedStyle(el).pointerEvents),
+  ).toBe('none')
+  await a.page.keyboard.press('Escape')
+  await expect(dialog).toHaveCount(0)
 })
