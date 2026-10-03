@@ -502,6 +502,8 @@ export class LobbyBoardSession {
           y: Math.round(-s.scrollY),
           w: Math.round(s.width / z),
           h: Math.round(s.height / z),
+          // CR-3CF-1 (CONTRACTS_REV 10): the hub sends it as `view.z` only to a rev-10 room
+          z,
         }
       },
       readOnly: () => this.snap.readonly,

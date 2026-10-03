@@ -5,6 +5,14 @@
  * Out (through the engine core's `sendPresence`, ≤ 20 Hz, the core keeps a drag's ids and its end):
  *  - the pointer from Lobby's own listener (./pointer.ts, every role), `sel`, `view`, `idle`, and
  *    `editing` (the lease id of this tab's open editor, re-sent at least every 2 s: it renews the lease);
+ *  - CONTRACTS_REV 10 (CR-3C-1, CR-3CF-1): `f`, the session this tab follows (3c's follow part sets it
+ *    through ./follow-target.ts `setPresenceFollow(core, sid)`, so the board session needs no new
+ *    wiring), and `view.z`, this tab's zoom (the board session's `view` gives it). Both go out ONLY on
+ *    a socket whose room sent a `contracts` frame naming rev 10 or later
+ *    after its welcome: a rev-9 room refuses them (its parse is strict: the socket would close
+ *    INVALID_MESSAGE). From that frame on, every message carries `f` (null included), which tells the
+ *    room this socket reads the rev-10 fields; this tab sends one at once so the room knows without a
+ *    pointer move. A new welcome (a reconnect, maybe to an older room) goes back to rev-9 messages;
  *  - a drag preview: `{d, ids, dx, dy}` in the drag's FIRST message only (≤ 500 ids: the selection, its
  *    frames' children and its containers' labels), then `{d, dx, dy}` (scene units, rounded to 0.1), and
  *    `drag: null` at the end. Read-only sessions never send one (the server drops it anyway).
@@ -19,10 +27,17 @@
  */
 
 import { MAX_DRAG_IDS } from '@draftroom/canvas-schema/limits'
-import type { DragOut, PeerPresence, RosterEntry } from '@draftroom/canvas-schema/protocol'
+import {
+  type DragOut,
+  MAX_PRESENCE_ZOOM,
+  type PeerPresence,
+  PRESENCE_FOLLOW_REV,
+  type RosterEntry,
+} from '@draftroom/canvas-schema/protocol'
 import type { LobbyEngineCore } from '../sync/core/engine.ts'
 import type { GestureState, SceneElement } from '../sync/types.ts'
 import { planDragArrows } from './drag-arrows.ts'
+import { onPresenceFollow, presenceFollowOf } from './follow-target.ts'
 import type { PresenceSample } from './pointer.ts'
 
 /** What O5's overrides.ts `RenderOverrides` offers for drag previews (its existing API). */
@@ -53,8 +68,8 @@ export interface PresenceHubOptions {
   readonly elements: () => readonly SceneElement[]
   /** the scene by id (the bound arrows of a peer's drag, D1); built from `elements` when absent */
   readonly elementMap?: () => ReadonlyMap<string, SceneElement>
-  /** the visible scene rectangle */
-  readonly view: () => { x: number; y: number; w: number; h: number } | null
+  /** the visible scene rectangle (with this tab's zoom `z` when the page knows it) */
+  readonly view: () => PresenceViewRect | null
   readonly readOnly: () => boolean
   readonly now?: () => number
   readonly setTimer?: (fn: () => void, ms: number) => unknown
@@ -63,6 +78,18 @@ export interface PresenceHubOptions {
 
 const RENEW_MS = 2_000
 const round1 = (v: number) => Math.round(v * 10) / 10
+/** A zoom on the wire: 3 decimals (0.1 to 30 in Excalidraw). */
+const roundZoom = (z: number) => Math.round(z * 1000) / 1000
+
+/** The visible scene rectangle a hub sends, and this tab's zoom when its page knows it. */
+export interface PresenceViewRect {
+  x: number
+  y: number
+  w: number
+  h: number
+  /** screen px per scene unit (rev 10's `view.z`; never sent to a rev-9 room) */
+  z?: number
+}
 
 export class PresenceHub {
   private readonly o: PresenceHubOptions
@@ -88,18 +115,29 @@ export class PresenceHub {
   private renewTimer: unknown = null
   private readonly off: (() => void)[] = []
   private version = 0
+  /** the contracts revision the current socket's room announced (0 until its `contracts` frame) */
+  private roomRev = 0
 
   constructor(o: PresenceHubOptions) {
     this.o = o
     this.off.push(
+      // 3c's follow part set whom this tab follows (./follow-target.ts): a rev-10 room hears it now
+      onPresenceFollow(o.core, () => this.followChanged()),
       o.core.on((e) => {
         if (e.kind === 'message') {
           const m = e.message
           if (m.type === 'presence') this.onPresence(m.peers, m.off ?? [], m.drags ?? [])
           else if (m.type === 'welcome') {
+            // a new socket: rev-9 messages until its room says otherwise
+            this.roomRev = 0
             this.peersBySid.clear()
             for (const sid of [...this.remoteDrags.keys()]) this.endRemoteDrag(sid)
             this.onPresence([], [], m.drags)
+          } else if (m.type === 'contracts') {
+            const before = this.rev10
+            this.roomRev = m.rev
+            // tell the room now that this socket reads the rev-10 fields (and whom it follows)
+            if (!before && this.rev10) this.send()
           } else if (m.type === 'roster') {
             for (const ev of m.events)
               if (ev.k === 'leave') {
@@ -174,6 +212,11 @@ export class PresenceHub {
     return out
   }
 
+  /** Whether this socket's room reads presence `f` and `view.z` (CONTRACTS_REV 10). */
+  get rev10(): boolean {
+    return this.roomRev >= PRESENCE_FOLLOW_REV
+  }
+
   /** Who is dragging `id` right now (O5's "Bob is moving this"), or null. */
   draggerOf(id: string): { sid: string; name: string } | null {
     for (const [sid, d] of this.remoteDrags) {
@@ -235,6 +278,10 @@ export class PresenceHub {
   }
 
   // ---- out ---------------------------------------------------------------------------------------
+
+  private followChanged(): void {
+    if (this.rev10) this.send()
+  }
 
   /** Lobby's pointer listener (./pointer.ts). */
   onPointer(s: PresenceSample): void {
@@ -318,14 +365,27 @@ export class PresenceHub {
 
   private send(drag?: { d: number; ids?: string[]; dx: number; dy: number } | null): void {
     const sel = this.sel.length > 200 ? { count: this.sel.length } : this.sel
+    const v = this.o.view()
+    const rich = this.rev10
+    // a rev-9 room refuses `view.z` and `f` (strict): both only after this socket's `contracts` frame
+    const z = rich && v?.z !== undefined && Number.isFinite(v.z) ? roundZoom(v.z) : 0
+    const zoomOk = z > 0 && z <= MAX_PRESENCE_ZOOM
+    const view = v ? { x: v.x, y: v.y, w: v.w, h: v.h, ...(zoomOk ? { z } : {}) } : null
     this.o.core.sendPresence({
       pointer: this.pointer,
       button: this.button,
       sel,
-      view: this.o.view(),
+      view,
       idle: this.idle,
       editing: this.editing,
       ...(drag !== undefined ? { drag } : {}),
+      ...(rich ? { f: this.followTarget() } : {}),
     })
+  }
+
+  /** Whom this tab follows (never itself), for `f`. */
+  private followTarget(): string | null {
+    const sid = presenceFollowOf(this.o.core)
+    return sid && sid !== this.o.core.sid ? sid : null
   }
 }

@@ -3,8 +3,9 @@
 // view, idle) in the shapes the people model (../model.ts) and the avatars read. Pure: unit-tested in Node.
 //
 // On the tldraw page the list read tldraw's presence records, which also said whom each person follows.
-// Lobby's presence protocol carries no follow target (canvas-schema PresenceIn), so "following you" and
-// "following Ann" come only from a live presentation's followers here (CR-3C-1).
+// Since CONTRACTS_REV 10 (CR-3C-1) Lobby's presence does too: each streamed peer's `following` (a session
+// id), and every session that follows this tab (the room's uncapped `followers` list, so "N following
+// you" counts everyone a Gather made follow). A live presentation's followers still count as well.
 
 import type { RemoteCursor, RosterEntry } from '../../../canvas/api/index.ts'
 import type { FrameBox, PresenceLike, RosterMap } from '../model.ts'
@@ -70,14 +71,37 @@ export const mayPresentAs = (e: RosterRow | undefined) =>
   !!e && !e.guest && (e.role === 'owner' || e.role === 'editor')
 
 /**
- * The people model's presence records (../model.ts `PresenceLike`): one per session, the view as a
- * camera over one page, never a follow target (the protocol has none), idle as the presence says.
+ * Whom user `uid` follows, as the people model names it (`user:<id>`), or null: this tab's user when any
+ * of their sessions follows this tab (`selfSid`), else whom the session the list shows follows.
+ */
+function followingOf(
+  uid: string,
+  shown: RemoteCursor | undefined,
+  roster: readonly RosterEntry[],
+  peer: ReadonlyMap<string, RemoteCursor>,
+  selfSid: string | null,
+): string | null {
+  const uidOfSid = (sid: string) => roster.find((r) => r.sid === sid)?.uid ?? null
+  if (selfSid) {
+    const self = uidOfSid(selfSid)
+    for (const r of roster)
+      if (r.uid === uid && self && peer.get(r.sid)?.following === selfSid) return `user:${self}`
+  }
+  const target = shown?.following ? uidOfSid(shown.following) : null
+  return target ? `user:${target}` : null
+}
+
+/**
+ * The people model's presence records (../model.ts `PresenceLike`): one per person, the view as a camera
+ * over one page, whom they follow (presence `following`, CONTRACTS_REV 10; null from an older room or
+ * client), idle as the presence says. `selfSid` is this tab's session: followers of it are "following you".
  */
 export function presenceLikes(
   roster: readonly RosterEntry[],
   peers: readonly RemoteCursor[],
   now: number,
   pageId: string,
+  selfSid: string | null = null,
 ): PresenceLike[] {
   const peer = new Map(peers.map((p) => [p.sid, p]))
   const chosen = sessionsByUser(roster, peers)
@@ -90,7 +114,7 @@ export function presenceLikes(
         userId: r.uid,
         userName: r.name,
         color: r.color,
-        followingUserId: null,
+        followingUserId: followingOf(r.uid, p, roster, peer, selfSid),
         // idle as the presence says it (the model counts a person idle a minute after this)
         lastActivityTimestamp: p?.idle ? 1 : now,
         currentPageId: pageId,

@@ -67,7 +67,7 @@ import { type El, type MergeEnv, PushApplier } from './merge.ts'
 import type { RoomMetrics } from './metrics.ts'
 import { Outbound } from './outbound.ts'
 import { CommitPacer } from './pacing.ts'
-import { PresenceHub, rosterEntry } from './presence.ts'
+import { CONTRACTS_FRAME, PresenceHub, rosterEntry } from './presence.ts'
 import { type SessionBudgets, sessionBudgets } from './rates.ts'
 import { RosterBatch } from './roster-batch.ts'
 import { runServerWrite, type ServerWriteEntry } from './server-write.ts'
@@ -505,6 +505,7 @@ export class ElementRoom {
         s.identity.readonly,
         msg,
         this.workshop?.voteOpen === true,
+        s.key,
       )
       if (ok) {
         this.deps.metrics.inc('lobby_presence_in_total')
@@ -795,9 +796,12 @@ export class ElementRoom {
         s.out.send(catchUpChangesJson(meta.clock, opsSince(snap.clock), Object.keys(doc).length ? doc : null))
       }
     }
-    // everyone's current cursors, so a late joiner does not wait for the next move
-    const peers = this.presence.current().filter((p) => p.sid !== s.identity.sid)
-    if (peers.length) s.out.send(JSON.stringify({ type: 'presence', peers }))
+    // CONTRACTS_REV 10: the revision this room speaks, so a rev-10 client may send `f` and `view.z` on this
+    // socket (a rev-9 client drops the frame as unknown); then everyone's current cursors (above 41
+    // sessions the 40 this joiner starts with), so a late joiner does not wait for the next move
+    s.out.send(CONTRACTS_FRAME)
+    const peers = this.presence.welcomeFrame(s.key, s.identity.sid)
+    if (peers) s.out.send(peers)
   }
 
   /**

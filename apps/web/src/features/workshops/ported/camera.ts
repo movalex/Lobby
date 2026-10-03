@@ -122,25 +122,36 @@ export function summonScreen(canvas: LobbyCanvas): SummonScreen | undefined {
 }
 
 /**
+ * The leader's zoom for R2-04: their own, from presence (`view.z`, CONTRACTS_REV 10, CR-3CF-1), when their
+ * end sends it; else their canvas height (`leaderScreen`, sent with the summon) over their visible
+ * rectangle's height (the width when it has none), which a resize of their window since the summon makes
+ * wrong; 0 when neither is known.
+ */
+export function leaderZoomOf(
+  leader: Bounds,
+  leaderZoom: number | null | undefined,
+  leaderScreen: SummonScreen | null | undefined,
+): number {
+  if (typeof leaderZoom === 'number' && Number.isFinite(leaderZoom) && leaderZoom > 0) return leaderZoom
+  if (!leaderScreen) return 0
+  const z =
+    leader.height > 0 ? leaderScreen.h / leader.height : leader.width > 0 ? leaderScreen.w / leader.width : 0
+  return Number.isFinite(z) && z > 0 ? z : 0
+}
+
+/**
  * R2-04 on this page (the tldraw board's `installReadableFollow`): the camera rule for a gathered
- * follower (CR-3F-3, `follow.start(sid, {camera})`). Presence carries the leader's visible scene rectangle
- * only, so their zoom is their canvas height (`leaderScreen`, sent with the summon) over the rectangle's
- * height (the width when it has none); a dock panel they open later changes their canvas's width, not its
- * height. `readableFollowViewport` (../follow.ts, the tldraw board's rule) then decides: a much narrower
- * screen (a phone following a desktop) sees the leader's view centre at the leader's zoom, at most
- * READABLE_FOLLOW_ZOOM; everyone else keeps the fit (null). Without `leaderScreen` the fit stays.
+ * follower (CR-3F-3, `follow.start(sid, {camera})`). The leader's zoom is their presence zoom
+ * (`leaderZoom`, CR-3CF-1) or, from an older end, the one their summon's canvas size implies
+ * (`leaderZoomOf`). `readableFollowViewport` (../follow.ts, the tldraw board's rule) then decides: a much
+ * narrower screen (a phone following a desktop) sees the leader's view centre at the leader's zoom, at
+ * most READABLE_FOLLOW_ZOOM; everyone else keeps the fit (null). With neither zoom the fit stays.
  */
 export function readableFollowCamera(
   leaderScreen: SummonScreen | null | undefined,
 ): (input: FollowCameraInput) => FollowCamera | null {
-  return ({ leader, screen, fit }) => {
-    if (!leaderScreen) return null
-    const zoom =
-      leader.height > 0
-        ? leaderScreen.h / leader.height
-        : leader.width > 0
-          ? leaderScreen.w / leader.width
-          : 0
+  return ({ leader, screen, fit, leaderZoom }) => {
+    const zoom = leaderZoomOf(leader, leaderZoom, leaderScreen)
     if (!(zoom > 0) || !Number.isFinite(zoom)) return null
     const v = readableFollowViewport(
       { x: fit.x, y: fit.y, w: screen.width / fit.zoom, h: screen.height / fit.zoom },
