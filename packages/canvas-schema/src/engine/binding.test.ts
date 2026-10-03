@@ -12,6 +12,7 @@ import { GEOMETRY_TOLERANCE_PX as TOL } from '../limits.ts'
 import {
   type ArrowElementLike,
   arrowLabelLayout,
+  bindingGap,
   resnapArrow,
   resnapLinearArrow,
   routeElbowArrow,
@@ -353,5 +354,15 @@ describe('arrowLabelLayout', () => {
     expect(lay.width).toBeGreaterThan(0)
     expect(lay.height).toBeGreaterThan(0)
     expect(T.fontSize).toBe(20)
+  })
+})
+
+describe('W5-53: one binding gap', () => {
+  it("is the pinned engine's own getBindingGap (BASE_BINDING_GAP + strokeWidth / 2) for every stroke", () => {
+    for (const strokeWidth of [0, 1, 2, 3.5, 4, 8.25])
+      expect(bindingGap({ strokeWidth })).toBe(X.getBindingGap({ strokeWidth }))
+    expect(bindingGap({ strokeWidth: 2 })).toBe(X.BASE_BINDING_GAP + 1)
+    // a stored element with a missing or bad stroke width reads as 0 (as the room's copies did)
+    expect(bindingGap({ strokeWidth: Number.NaN })).toBe(X.BASE_BINDING_GAP)
   })
 })

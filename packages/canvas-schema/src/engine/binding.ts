@@ -120,6 +120,21 @@ const fonts = common as unknown as { getFontString(opts: { fontSize: number; fon
 /** At most this many re-snaps of one self-loop per call (it settles within 2 on 3.5's rounding, §2.9.4). */
 export const SELF_LOOP_ITERATIONS = 4
 
+/**
+ * W5-53 (wave C, C2): the one binding gap, how far a bound end in orbit mode sits off its target's outline:
+ * the pinned engine's own (`getBindingGap`: BASE_BINDING_GAP 5 + strokeWidth / 2). The room's re-snaps
+ * and the client's connector outline get it inside `updateBoundPoint`; the converter's orbit
+ * approximation (tldraw-import geometry.ts) and the "Recently deleted" re-attach (sync room-internal
+ * deleted.ts) read it here, so the hand-written copies they had cannot drift from the engine when the gap
+ * changes (an engine bump, or the patched engine a smaller gap needs: the gap and the arrowhead size live
+ * inside `@excalidraw/element`, and only a dependency patch changes the live follow's).
+ */
+export function bindingGap(target: { readonly strokeWidth: number }): number {
+  return (element as unknown as { getBindingGap(t: { strokeWidth: number }): number }).getBindingGap({
+    strokeWidth: Number(target.strokeWidth) || 0,
+  })
+}
+
 const copy = <T>(v: T): T => JSON.parse(JSON.stringify(v)) as T
 
 /** A stand-in for Excalidraw's `Scene`, over a plain map (what the engine's helpers call on it). */
