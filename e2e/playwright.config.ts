@@ -38,7 +38,10 @@ export default defineConfig<Record<never, never>, { engine: StackEngine }>({
   fullyParallel: false,
   workers: 1,
   forbidOnly: !!process.env.CI,
-  reporter: 'list',
+  // CI (.github/workflows/ci.yml): one retry, because a 2-core runner is slower than the machine the timings were
+  // set on (a test that passes on the retry is reported "flaky", not hidden), and GitHub annotations on failures.
+  retries: process.env.CI ? 1 : 0,
+  reporter: process.env.CI ? [['list'], ['github']] : 'list',
   timeout: 120_000,
   expect: { timeout: 15_000 },
   use: {

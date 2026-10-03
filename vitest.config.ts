@@ -85,6 +85,15 @@ export default defineConfig({
       },
       // spike B: O3's load generator's own unit tests (e2e/load/**; the runs themselves are Node scripts)
       { test: { name: 'e2e-load', environment: 'node', include: ['e2e/load/**/*.test.ts'] } },
+      // wave C4: the repo's own CI scripts (scripts/audit-check.mjs, the dependency audit and its allowlist)
+      {
+        test: {
+          name: 'scripts',
+          environment: 'node',
+          include: ['scripts/**/*.test.ts'],
+          testTimeout: 30_000,
+        },
+      },
       {
         test: {
           name: 'api',
