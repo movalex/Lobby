@@ -104,7 +104,7 @@ Select an image and the selection bar offers **Replace media** (swap key art v1 
 
 ### On a phone
 
-Fewer tools are shown at once so that each is big enough to tap; the rest are under More. Guests on a phone get Select, Hand and Comment.
+Fewer tools are shown at once so that each is big enough to tap; the rest are under More. A guest who can only comment (a client link) sees only Select, Hand, Laser and Comment; a workshop guest who can edit gets the editing tools too.
 
 ## How to do common things now
 

@@ -57,7 +57,7 @@ one frame.
 | 1:50 | **Mood board** (optional, if you brought an image). Drag the image from the desktop onto **Drop a reference here**. | It fits the slot, next to the palette and the type samples, and shows on B's screen within a second. If you have time: select it and point at **Replace media**, **Crop** and **Alternative text** in the selection bar ("key art v2 keeps its comments and its slot"). |
 | 2:00 | **Vote** (Retro frame). Open **Voting** in the left rail → **Start a vote…** → *What can be voted on*: **Only inside frame “5 · Retro”** → *Objects*: **Sticky notes only** → **Start vote**. In both browsers, click **Join vote** on the card that appears, then click a few notes (a click before **Join vote** only selects the note). B clicks **I'm done**. In A's Voting panel: **End and show results**. | Each person sees only their own dots until the reveal, then the ranked results show on both screens. A click on something the vote does not take (a heading, say) casts nothing and says so. |
 | 2:45 | **Present to everyone.** Click empty canvas (so it starts at slide 1), then **Present** → **Invite everyone** in the presentation bar. In B, click **Join** on the banner. Walk the slides with → and ←, then **End**. | Each frame fills the screen with no frame outline; B's screen follows every slide in step and A sees "1 following". B can step out with **Stop following** and rejoin. |
-| 3:30 | **Export.** The download icon next to Present (**Export: PNG, SVG, PDF, CSV**) → in the PDF section, **Download PDF**. If a size warning shows in the image section, it is about the PNG of the whole board, not the PDF. | A PDF with one page per frame, in presentation order, named after the board, in about a second. The pages are images of the frames with a searchable text layer, as the dialog says; file cards are drawn in full. |
+| 3:30 | **Export.** The download icon next to Present (**Export: PNG, SVG, PDF, CSV**) → in the PDF section, **Download PDF**. If a size warning shows in the image section, it is about the PNG of the whole board, not the PDF. | A PDF with one page per frame, in presentation order, named after the board; the 2026-09-30 review timed the export at 1.0 s on a local stack (not timed on staging). The pages are images of the frames with a searchable text layer, as the dialog says; file cards are drawn in full. |
 | 4:00 | **History.** Open **History** in the left rail, type "Before clean-up" as the *Checkpoint name* and click **Save checkpoint**. Delete a note on the Retro frame, then restore it from **Recently deleted** in the same panel. | The note comes back where it was, on both screens. The checkpoint can also be opened with **Restore as new board**. |
 | 4:45 | **Wrap.** Back to the dashboard. | The board is in the list with the rest of the lobby's boards. |
 
@@ -144,7 +144,7 @@ Board data lives in `./.data` — delete the folder to start fresh. Generate sam
 `pnpm fixtures` (written to `tests/fixtures/generated/`).
 
 > Excalidraw is the only canvas: there is no engine flag to set (`DRAFTROOM_ENGINE` may be unset or `excalidraw`, and
-> `tldraw` is refused at start; `VITE_LOBBY_ENGINE` and `VITE_TLDRAW_LICENSE_KEY` no longer exist).
+> `tldraw` is refused at start; the web app no longer reads `VITE_LOBBY_ENGINE` or `VITE_TLDRAW_LICENSE_KEY`, although the licence key is still set on the staging web service until drop-legacy, `docs/EXCALIDRAW-CUTOVER.md` §9).
 
 > The **first** person to sign in on a fresh `.data` becomes the owner of the shared **Dev Studio** workspace. Sign in as **alice** first.
 
