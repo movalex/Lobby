@@ -8,6 +8,9 @@
 
 import { z } from 'zod'
 
+// The web build's revision (migration 0024), which decides what the api may answer it (client-rev.ts).
+export * from './client-rev.ts'
+
 // ---- ids ---------------------------------------------------------------------------------------
 
 const prefixedId = (p: string) => z.string().regex(new RegExp(`^${p}_[0-9A-Za-z]{10,40}$`))
