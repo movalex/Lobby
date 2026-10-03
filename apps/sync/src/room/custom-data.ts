@@ -11,6 +11,7 @@
 //  4. api-validated `file` (canonicalized from the file-refs answer; `versionId` must be the version in
 //     `fileId`; `name` is the client's) and `pdfPage` (derived from `fileId`'s `.p<n>`);
 //  5. free keys (`tag:*` needs its `tagDef:*` in lb_doc; the others are schema-checked only).
+// A locked element takes only the registry's lock-exempt keys (lockExemptKey; merge.ts step 5).
 
 import {
   type Attribution,
@@ -126,6 +127,23 @@ function checkKey(
       if (tag !== null && !ctx.tagExists(tag)) return bad('INVALID')
       return { ok: true, value }
     }
+  }
+}
+
+/**
+ * Whether a patch of a LOCKED element may still write `key` (§2.4.3 step 5; CR-3F-2, CR-3b-4), by the
+ * registry's `lockExempt` (canvas-schema custom-data.ts): the writer's own `plusOne:<uid>` (a +1 on a locked
+ * template note, guests included), and `present` on a frame from an account (a locked slide's order and
+ * skip mark). The key's class rules still apply after this (checkPatchLobby: VOTE_OPEN, another uid).
+ */
+export function lockExemptKey(key: string, elementType: string, w: Writer): boolean {
+  switch (lobbyKeySpec(key)?.lockExempt) {
+    case 'own':
+      return plusOneUid(key) === w.uid
+    case 'frame-account':
+      return elementType === 'frame' && !w.guest
+    default:
+      return false
   }
 }
 

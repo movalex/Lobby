@@ -52,6 +52,7 @@ import {
   checkCreateLobby,
   checkPatchLobby,
   freshLobbyServer,
+  lockExemptKey,
   tagDefKey,
   type Writer,
 } from './custom-data.ts'
@@ -575,8 +576,16 @@ export class PushApplier {
       }
       for (const g of Object.keys(groups)) delete groups[g]
       Object.assign(groups, kept)
-      if (c) names.push(...Object.keys(c).map((k) => `c:${k}`))
-      c = undefined
+      // CR-3F-2, CR-3b-4: the writer's own +1 and an account's `present` on a frame pass the lock (the
+      // registry's lockExempt); every other key stays LOCKED, another uid's +1 included
+      if (c) {
+        const exempt: Record<string, unknown> = {}
+        for (const [k, v] of Object.entries(c)) {
+          if (lockExemptKey(k, cur.type, this.writer)) exempt[k] = v
+          else names.push(`c:${k}`)
+        }
+        c = Object.keys(exempt).length ? exempt : undefined
+      }
       deny(names, 'LOCKED')
       if (fit) {
         fit = undefined

@@ -274,6 +274,17 @@ describe('customData classes (§3.3)', () => {
     expect(lobbyKeySpec('whatever')).toBeNull()
   })
 
+  it('a lock lets through only the writer’s own +1 and a frame’s present (CR-3F-2, CR-3b-4)', () => {
+    const exempt = LOBBY_KEY_SPECS.filter((s) => s.lockExempt).map((s) => [s.name, s.lockExempt])
+    expect(exempt.sort()).toEqual([
+      ['plusOne:', 'own'],
+      ['present', 'frame-account'],
+    ])
+    expect(lobbyKeySpec('plusOne:usr_0123456789')?.lockExempt).toBe('own')
+    for (const k of ['tag:x', 'alt', 'file', 'kind', 'mindmap', 'prompt'])
+      expect(lobbyKeySpec(k)?.lockExempt, k).toBeUndefined()
+  })
+
   it('value schemas: tags as today, +1 as an epoch ms, file facts canonical, create-only stamps', () => {
     expect(lobbyValueProblem('tag:research', { name: 'research', color: 'blue' })).toBeNull()
     expect(lobbyValueProblem('tag:research', { name: 'Research', color: 'blue' })).toBeNull()

@@ -6,9 +6,9 @@
 // presenting (the slides stay clean) and on notes too small on screen to carry it. While a dot vote is
 // open, votes are the one way to back a note (R2-05): the counts stay, the control goes.
 //
-// Deviation (docs/research/excalidraw/wave3/3F.md): a LOCKED note shows its count but no control. The
-// sync server refuses every customData change of a locked element (`LOCKED`, room merge.ts), +1 keys
-// included, where the tldraw board wrote +1s past the lock.
+// A LOCKED note (a facilitator's template prompt) takes +1s like any other (CR-3F-2): the sync server lets
+// the writer's own `plusOne:<uid>` key past the lock (the registry's `lockExempt`, canvas-schema
+// custom-data.ts), as the tldraw board did; every other change of the note stays locked.
 import { useMemo, useState } from 'react'
 import type { CanvasFeatureContext } from '../../../canvas/api/index.ts'
 import { useValue } from '../../../lib/signals.ts'
@@ -161,8 +161,6 @@ export function PlusOnes({ ctx, voting = false }: { ctx: Ctx; voting?: boolean }
             </button>
           )
         }
-        // A locked note keeps its count; the server refuses +1s on it (see the header).
-        if (p.locked) return p.count > 0 ? badge({ 'data-locked': 'true' }) : null
         const action = p.mine ? `Remove your +1 from ${label}` : `+1 ${label}`
         return (
           <button
@@ -174,6 +172,7 @@ export function PlusOnes({ ctx, voting = false }: { ctx: Ctx; voting?: boolean }
             title={p.mine ? 'Remove your +1' : '+1 this note'}
             onPointerDown={(e) => e.stopPropagation()}
             onClick={(e) => toggle(p.id, e.detail === 0)}
+            {...(p.locked ? { 'data-locked': 'true' } : {})}
             {...common}
           >
             <span className="dr-wk-plusone__label">+1</span>
