@@ -7,7 +7,8 @@
 //
 // The capture is `lb_deleted`: the room writes one row per element whose `isDeleted` went false→true,
 // with the push's clock as its `batch` (a container, its label and a frame's children go in one batch);
-// a converted board's tldraw capture was copied in with `origin = 'converted'` (§5.4). An entry is an
+// a converted board's tldraw capture was copied in with `origin = 'converted'` (§5.4) and its tldraw batch
+// numbers, so a batch is one origin's rows of one number (M3P3). An entry is an
 // object of a batch that is not inside another object of the same batch (a label is its container's, a
 // frame's children count as its `childCount`), whose element is not on the board now (restored, undone
 // or re-created), from its newest row.
@@ -49,6 +50,8 @@ const SHAPE_ID_RE = /^shape:[\x21-\x7e]{1,200}$/
 interface DeletedRow {
   seq: number
   batch: number
+  /** `live` (the room wrote it) or `converted` (copied from the tldraw capture, §5.4) */
+  origin: string
   elementId: string
   deletedBy: string
   deletedByName: string
@@ -60,12 +63,13 @@ interface DeletedRow {
 function newestRows(db: DatabaseSync): DeletedRow[] {
   const rows = db
     .prepare(
-      `SELECT seq, batch, element_id, deleted_by, deleted_by_name, deleted_at, data FROM lb_deleted
+      `SELECT seq, batch, origin, element_id, deleted_by, deleted_by_name, deleted_at, data FROM lb_deleted
         ORDER BY seq DESC`,
     )
     .all() as {
     seq: number
     batch: number
+    origin: string
     element_id: string
     deleted_by: string
     deleted_by_name: string
@@ -82,6 +86,7 @@ function newestRows(db: DatabaseSync): DeletedRow[] {
     out.push({
       seq: Number(r.seq),
       batch: Number(r.batch),
+      origin: r.origin,
       elementId: r.element_id,
       deletedBy: r.deleted_by,
       deletedByName: r.deleted_by_name,
@@ -112,14 +117,21 @@ function insideBatch(row: DeletedRow, batch: Batch): boolean {
   return frame?.el.type === 'frame'
 }
 
-/** The rows of each batch. */
-function byBatch(rows: readonly DeletedRow[]): Map<number, Batch> {
-  const out = new Map<number, Batch>()
+/**
+ * A batch is one origin's: a converted row keeps its tldraw batch number, which says nothing about the
+ * room's clocks (M3P3: the two overlap on converted boards), so a converted batch and a live push of the
+ * same number are two batches.
+ */
+const batchKey = (r: Pick<DeletedRow, 'origin' | 'batch'>): string => `${r.origin}:${r.batch}`
+
+/** The rows of each batch, by batchKey. */
+function byBatch(rows: readonly DeletedRow[]): Map<string, Batch> {
+  const out = new Map<string, Batch>()
   for (const r of rows) {
-    let b = out.get(r.batch)
+    let b = out.get(batchKey(r))
     if (!b) {
       b = { rows: new Map(), labels: new Map(), children: new Map() }
-      out.set(r.batch, b)
+      out.set(batchKey(r), b)
     }
     b.rows.set(r.elementId, r)
     if (isLabel(r.el) && !b.labels.has(r.el.containerId)) b.labels.set(r.el.containerId, r)
@@ -148,7 +160,7 @@ export function listDeleted(db: DatabaseSync, limit: number): { entries: Deleted
   const entries: DeletedEntry[] = []
   for (const r of rows) {
     if (live.has(r.elementId)) continue
-    const batch = batches.get(r.batch) as Batch
+    const batch = batches.get(batchKey(r)) as Batch
     if (insideBatch(r, batch)) continue
     const type = objectTypeOf(r.el)
     const shapeId = refOf(r.elementId)
@@ -250,7 +262,7 @@ export function applyRestore(tx: ServerWriteTx, refs: readonly string[]) {
       result.skipped.push({ id: ref, reason: 'not-found' })
       continue
     }
-    const batch = batches.get(row.batch) as Batch
+    const batch = batches.get(batchKey(row)) as Batch
     const group: DeletedRow[] = [row]
     const label = batch.labels.get(id)
     if (label) group.push(label)
