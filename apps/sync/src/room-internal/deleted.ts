@@ -252,10 +252,9 @@ type Pt = readonly [number, number]
  */
 const bindingGap = (t: El): number => 5 + (Number(t.strokeWidth) || 0) / 2
 /**
- * How far off a restored target's bounds a free end may be to be attached to it again: the gap plus
- * Excalidraw's base binding distance (15 px at zoom 1, `maxBindingDistance_simple`) less the gap, so an
- * end the engine left at the gap, or a few pixels off it, qualifies, and an end someone dragged away does
- * not.
+ * How far off a restored target's bounds a free end may be to be attached to it again: the gap plus this,
+ * about Excalidraw's base binding distance at zoom 1 (15 px, `maxBindingDistance_simple`), so an end the
+ * engine left at the gap, or a few pixels off it, qualifies, and an end someone dragged away does not.
  */
 const REATTACH_SLACK_PX = 10
 /** A second end of the same arrow goes to the same target only when it, too, sits at the gap (a self-loop). */
