@@ -418,6 +418,42 @@ describe('A15: recording, fix folding, rejects, repairs', () => {
     expect(h.undoEntries[1]?.changes.get('N')?.fields.index).toEqual({ before: 'a4V', after: 'a7' })
   })
 
+  it('a fix folded into a REDO entry leaves the undo entries alone (LEAD-foldFix-indexOf)', () => {
+    // three steps on x: 10 -> 0, 0 -> 10, 10 -> 20; the third is undone (x written back to 10), and the
+    // server fixes that push's x to 10.5. Before, the "later entries" repair looked the redo entry up in the
+    // undo stack (indexOf: -1), took every undo entry as later, and rewrote the first step's `before`
+    // (10, the same value) to 10.5: undoing all the way restored 10.5 instead of 10
+    const { scene, h } = start(rect('N', { x: 10 }))
+    let seq = 0
+    const stepAcked = (patch: Record<string, unknown>) => {
+      local(scene, 'N', patch)
+      h.record(scene)
+      h.markPushed(++seq, ['N'])
+      h.onAck({ seq, r: [{ id: 'N', ok: true }] }, scene)
+    }
+    stepAcked({ x: 0 })
+    stepAcked({ x: 10 })
+    stepAcked({ x: 20 })
+    install(scene, h.undo(scene))
+    expect(scene.get('N')?.x).toBe(10)
+    h.markPushed(++seq, ['N'])
+    scene.set('N', { ...(scene.get('N') as HistEl), x: 10.5 }) // the engine installs the fix
+    h.onAck({ seq, r: [{ id: 'N', ok: true, fix: { x: 10.5 } }] }, scene)
+    // folded into the redo entry that carried it
+    expect(h.redoEntries[0]?.changes.get('N')?.fields.x).toEqual({ before: 10.5, after: 20 })
+    // the undo entries are untouched
+    expect(h.undoEntries.map((e) => e.changes.get('N')?.fields.x)).toEqual([
+      { before: 10, after: 0 },
+      { before: 0, after: 10 },
+    ])
+    // and the redo still applies from the fixed value
+    const r = h.redo(scene)
+    expect(r?.kept).toBe(0)
+    install(scene, r)
+    expect(scene.get('N')?.x).toBe(20)
+    expect(h.undoEntries[0]?.changes.get('N')?.fields.x).toEqual({ before: 10, after: 0 })
+  })
+
   it('the client’s own index re-key of an unacknowledged element (E2) folds in and is no step', () => {
     const { scene, h } = start(rect('C', { index: 'a1' }))
     localCreate(scene, rect('X', { index: 'a1' }))
