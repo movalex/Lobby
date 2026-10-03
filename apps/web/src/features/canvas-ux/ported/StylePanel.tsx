@@ -16,6 +16,7 @@
 // (W5-46, ./toolbar-layout.ts stylesFold).
 import { type ComponentType, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, useId } from 'react'
 import type {
+  ArrowKind,
   CanvasElement,
   CanvasFeatureContext,
   LobbyCanvas,
@@ -630,6 +631,12 @@ export function styleSwatchOf(canvas: LobbyCanvas): string | null {
   return colors.size === 1 ? ([...colors][0] ?? null) : null
 }
 
+/** The next connector's kind from the next style (the style panel's Line row while an arrow tool is picked). */
+const nextArrowKind = (styles: { readonly arrowKind?: unknown }): ArrowKind | undefined =>
+  styles.arrowKind === 'straight' || styles.arrowKind === 'curved' || styles.arrowKind === 'elbow'
+    ? styles.arrowKind
+    : undefined
+
 export function StylePanelBody({ ctx }: { ctx: CanvasFeatureContext }) {
   const { canvas } = ctx
   const readOnly = useValue('cux-readonly', () => canvas.readOnly(), [canvas])
@@ -723,11 +730,8 @@ export function StylePanelBody({ ctx }: { ctx: CanvasFeatureContext }) {
     : undefined
   const lineKind: 'straight' | 'curved' | 'elbow' | 'mixed' | undefined = arrows
     ? t.next
-      ? styles.elbowed === true
-        ? 'elbow'
-        : styles.roundness === 'round'
-          ? 'curved'
-          : 'straight'
+      ? // the next connector's kind is its own value (CR-W5-3A-1); `roundness` is the next shape's corners
+        (nextArrowKind(styles) ?? 'straight')
       : styles.roundness === 'mixed'
         ? 'mixed'
         : styles.roundness === 'round'
@@ -852,16 +856,17 @@ export function StylePanelBody({ ctx }: { ctx: CanvasFeatureContext }) {
             value={lineKind as 'straight' | 'curved' | 'elbow' | 'mixed' | undefined}
             onPick={(k) => {
               if (t.next) {
-                canvas.styles.setNext({
-                  elbowed: k === 'elbow',
-                  roundness: k === 'curved' ? 'round' : 'sharp',
-                })
+                canvas.styles.setNext({ arrowKind: k })
                 return
               }
+              // the arrows' own curve; it is also the next connector's kind, and never the next shape's
+              // corners (apply passes its patch on to the next style)
+              const corners = canvas.styles.next().roundness
               canvas.styles.apply(
                 { roundness: k === 'curved' ? 'round' : 'sharp' },
                 t.els.filter((e) => kindOf(e) === 'arrow').map((e) => e.id),
               )
+              canvas.styles.setNext({ arrowKind: k, ...(corners ? { roundness: corners } : {}) })
             }}
           />
         </div>
