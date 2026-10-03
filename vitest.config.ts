@@ -81,7 +81,14 @@ export default defineConfig({
         },
       },
       // spike B: O3's load generator's own unit tests (e2e/load/**; the runs themselves are Node scripts)
-      { test: { name: 'e2e-load', environment: 'node', include: ['e2e/load/**/*.test.ts'] } },
+      // C5: and the e2e harness helpers (e2e/tests/support: the port guard)
+      {
+        test: {
+          name: 'e2e-load',
+          environment: 'node',
+          include: ['e2e/load/**/*.test.ts', 'e2e/tests/support/**/*.test.ts'],
+        },
+      },
       {
         test: {
           name: 'api',

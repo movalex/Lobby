@@ -4,8 +4,12 @@
 // docs/research/excalidraw/render.cutover.yaml.patch, against the REAL api + sync + preview worker (sync on
 // the Excalidraw engine), in headless Chromium.
 //
-//   node e2e/spike/csp/run-cutover.ts [--run N] [--port-base 6430] [--reuse-build]
+//   node e2e/spike/csp/run-cutover.ts [--run N] [--port-base 6430] [--reuse-build] [--dry-run]
 //   (or: E2E_PORT_BASE=6430 pnpm --filter @draftroom/e2e csp:cutover)
+//
+// The port base is --port-base, else E2E_PORT_BASE, else 6430. A literal `--` leading the arguments is
+// dropped (pnpm forwards the one in `pnpm csp:cutover -- --port-base N`). --dry-run prints the ports the
+// run would use and exits, after the same unsafe-port check as every e2e run (tests/support/ports.ts).
 //
 // Ports: sync = base, api = base + 1, the CSP static server on base + 2 (the stack's WEB_PORT, so the api's
 // Origin check matches). The header is the patch's, verbatim: the staging sync origin and Clerk's origins
@@ -29,15 +33,24 @@ import { parseArgs } from 'node:util'
 import { type BrowserContext, chromium, type Page } from '@playwright/test'
 import { startCspServer } from './server.ts'
 
+const argv = process.argv.slice(2)
+if (argv[0] === '--') argv.shift()
 const { values: args } = parseArgs({
+  args: argv,
   options: {
     run: { type: 'string', default: '1' },
-    'port-base': { type: 'string', default: '6430' },
+    'port-base': { type: 'string' },
     'reuse-build': { type: 'boolean', default: false },
+    'dry-run': { type: 'boolean', default: false },
   },
 })
-process.env.E2E_PORT_BASE = args['port-base']
+// the explicit option wins, then the variable every other e2e runner reads, then this runner's own range
+process.env.E2E_PORT_BASE = args['port-base'] ?? (process.env.E2E_PORT_BASE || '6430')
 const { API_PORT, HOST, SYNC_PORT, WEB_PORT, WEB_URL } = await import('../../tests/support/ports.ts')
+if (args['dry-run']) {
+  console.log(`csp-cutover ports: sync ${SYNC_PORT} api ${API_PORT} web ${WEB_PORT} (run ${args.run})`)
+  process.exit(0)
+}
 const { REPO_ROOT, startStack } = await import('../../tests/support/stack.ts')
 
 const started = Date.now()
