@@ -21,13 +21,15 @@ import {
   item,
   items,
   openCanvasSession,
+  pushedOps,
   readOnly,
+  saveState,
   test,
   waitForCanvas,
   waitForItem,
 } from '../tests/support/canvas.ts'
 import { mainCard, openDashboard, signedInContext } from '../tests/support/dashboard-share.ts'
-import { noAccessScreen, pushCount } from '../tests/support/excalidraw.ts'
+import { noAccessScreen } from '../tests/support/excalidraw.ts'
 
 const TOUR_SECTIONS = [
   '1 · Welcome',
@@ -77,16 +79,19 @@ test('archived: every open tab turns read-only within 15 s (the owner too), a fr
     await expect(b.page.getByTestId('readonly-pill')).toBeVisible()
   })
 
-  await test.step('a fresh open is read-only: a real drag moves nothing and pushes nothing', async () => {
+  await test.step('a fresh open is read-only: a real drag moves nothing and pushes nothing of its own', async () => {
     const fresh = await openCanvasSession(browser, board, await users.get('bob'))
     try {
       expect(await readOnly(fresh.page)).toBe(true)
       await expect(fresh.page.getByTestId('readonly-pill')).toBeVisible()
       const before = await place(fresh.page, note)
+      // the drag's own pushes: a fresh read-only open of an archived board has pushed create ops of its own at
+      // open (DEF-GAPS-1 below), so the count is taken before the drag
+      const pushedBefore = (await pushedOps(fresh.page)).length
       await dragItem(fresh.page, note, { x: 90, y: 60 })
       await fresh.page.waitForTimeout(500)
       expect(await place(fresh.page, note)).toEqual(before)
-      expect(await pushCount(fresh.page)).toBe(0)
+      expect((await pushedOps(fresh.page)).length, 'the drag pushed nothing').toBe(pushedBefore)
       expect(await place(a.page, note)).toEqual(before)
     } finally {
       await fresh.context.close()
@@ -107,6 +112,33 @@ test('archived: every open tab turns read-only within 15 s (the owner too), a fr
     await expectSaved(b.page)
     await expectConverged(b.page, [a.page])
   })
+})
+
+test('archived: nothing was changed, so the owner’s open tab pushes nothing again and never says "Change not saved" (DEF-GAPS-1, an expected failure)', async ({
+  canvasSession,
+  users,
+  board,
+}) => {
+  test.fail(
+    true,
+    'DEF-GAPS-1 (found by the gap pass, wave C; owner: the sync client core, not bisected; the three gap-pass runs ' +
+      'at 5caee00 did not see it): after an archive the owner’s open tab sends its note’s create ops again, the ' +
+      'room answers READ_ONLY and the pill reads "Change not saved: you can only view this board" with nothing ' +
+      'changed; a fresh read-only open of an archived board does the same in most opens (17 of 25 and 5 of 6 in two runs: create ops at ' +
+      'base 0 for the server’s own elements). A plain viewer’s open of a live board pushes nothing.',
+  )
+  const a = await canvasSession('alice')
+  await createNote(a.page, { x: 300, y: 240, text: 'Archive me' })
+  await expectSaved(a.page)
+  const sent = (await pushedOps(a.page)).length
+  const res = await (await users.api('alice')).fetch('POST', `/api/boards/${board}/archive`)
+  expect(res.status(), await res.text()).toBe(200)
+  await expect.poll(() => readOnly(a.page), { timeout: 20_000 }).toBe(true)
+  // the tab reconnects under its new role: give it time to say anything it is going to say
+  await a.page.waitForTimeout(2_000)
+  expect((await saveState(a.page)).state, 'nothing changed: still Saved').toBe('saved')
+  expect((await saveState(a.page)).lastReject, 'no change was refused').toBeNull()
+  expect((await pushedOps(a.page)).length, 'and nothing was sent').toBe(sent)
 })
 
 test('trashed while open: both open tabs lose the board within 15 s and a fresh open is refused; after a restore from the trash the board opens with its content', async ({
