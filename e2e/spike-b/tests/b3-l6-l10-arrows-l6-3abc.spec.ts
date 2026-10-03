@@ -42,6 +42,10 @@ import {
 
 test.describe.configure({ mode: 'serial' })
 test.setTimeout(180 * 60_000)
+// no trace: the config's retain-on-failure records every call of the three launched browsers in the worker, and
+// its live heap grew about 3 MB a repetition (L6 1-2, 80 rows: 81 -> 317 MB with it, 78 -> 108 MB without) until
+// the worker ran out in a whole-file run. The rows print the evidence (heapMB at the end of each).
+test.use({ trace: 'off' })
 
 test.beforeAll(async () => {
   await openRoom()
