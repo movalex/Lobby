@@ -35,6 +35,7 @@ import {
   items,
   openCanvasSession,
   pushedOps,
+  selection,
   selectNone,
   test,
   tool,
@@ -329,6 +330,10 @@ test('after a preview closes, the board takes the keyboard again: Delete, Ctrl+Z
       await focusBoard(page)
       expect(await hasKeyboard(page)).toBe(true)
       await canvasCall(page, 'select', [NOTE])
+      // The facade's select is an updateScene from outside any event: React commits it in a later task, not
+      // before the call returns. A Delete that Excalidraw handles first deletes nothing and writes back its
+      // stale empty selection (the note stays, unselected). Press only once the board holds the selection.
+      await expect.poll(() => selection(page)).toEqual([NOTE])
       await page.keyboard.press('Delete')
       await expect.poll(() => onBoard(page, NOTE)).toBe(false)
       await page.keyboard.press('ControlOrMeta+z')
