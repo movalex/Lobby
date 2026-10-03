@@ -54,6 +54,9 @@ export interface PlusOneWriteResult {
 /**
  * Sets (or toggles) the person's +1 on a note through the canvas (one `transact`). Locked notes take
  * +1s too (template notes may be locked); the server checks the key against the ticket.
+ *
+ * A +1 is no undo step (`skipUndo`, W5-26 / CR-3F-1, as the tldraw board wrote it with
+ * `history: 'ignore'`): the giver's Ctrl+Z undoes their previous edit, never the +1 on everyone's screen.
  */
 export function writePlusOne(
   canvas: LobbyCanvas,
@@ -68,7 +71,7 @@ export function writePlusOne(
   const added = patch ? Object.values(patch)[0] === true : plusOnesOf(el).includes(uid)
   if (!patch) return { ok: true, added }
   try {
-    canvas.transact('+1', (tx) => tx.update(id, { customData: { lobby: patch } }))
+    canvas.transact('+1', (tx) => tx.update(id, { customData: { lobby: patch } }), { skipUndo: true })
   } catch {
     return { ok: false, message: 'That did not work.' }
   }

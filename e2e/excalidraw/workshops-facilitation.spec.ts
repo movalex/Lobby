@@ -8,8 +8,8 @@
 //  - A +1 is the note's identity-bound `customData.lobby['plusOne:<uid>']` key: the server's copy is read
 //    from the test snapshot, a viewer's forged +1 goes through a raw socket (tldraw: flipping the editor's
 //    read-only flag) and is refused `READ_ONLY`.
-//  - "A +1 is not an undo step" is its own test, expected to fail until transact can skip the undo stack
-//    (change request CR-3F-1); on this page a +1 is a `transact`, one undo step.
+//  - "A +1 is not an undo step" is its own test: a +1 is a `transact` with `skipUndo` (CR-3F-1 = W5-26,
+//    wave A), so the giver's Ctrl+Z undoes the edit before it.
 //  - The note-author label is the workshops feature's overlay (CR-3F-4, wave 3b), not the tldraw note face
 //    (`.tl-note__attribution`): the test id `note-author`. Overlays are never exported, so RETRO-03a's
 //    Present and export steps (3e) check that no slide, PNG or SVG names alice although the canvas holds
@@ -295,10 +295,6 @@ test('+1 on notes: editors add and remove theirs in one click and everyone sees 
 test('+1 on notes: a +1 is not an undo step (Ctrl+Z undoes the colour change before it) (CR-3F-1)', async ({
   join,
 }) => {
-  test.fail(
-    true,
-    'CR-3F-1: on this page a +1 is a transact, so one undo step, until transact can skip the undo stack',
-  )
   const b = await join('bob', 'editor')
   await twoNotesInAFrame(b.page)
   await showAll(b.page)

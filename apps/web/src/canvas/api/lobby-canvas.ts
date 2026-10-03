@@ -5,9 +5,9 @@
  * request to the contracts owner (docs/EXCALIDRAW-CONTRACTS.md §0).
  *
  * Rules (§1):
- * - Every document write goes through `transact` (one undo step) and then the sync engine. Nothing a
- *   feature does calls the engine's scene API directly; only `apps/web/src/canvas/**` imports
- *   `@excalidraw/*`.
+ * - Every document write goes through `transact` (one undo step, or none with `skipUndo`) and then the
+ *   sync engine. Nothing a feature does calls the engine's scene API directly; only
+ *   `apps/web/src/canvas/**` imports `@excalidraw/*`.
  * - A `transact` whose callback throws applies nothing (tldraw's `bailToMark`).
  * - Every read below is reactive: called inside `useValue`, `computed` or `react` (../../lib/signals.ts)
  *   it re-runs when the value may have changed (the implementation tracks a `source` per concern).
@@ -359,6 +359,16 @@ export interface TransactOptions {
    * text change uses this). @owner 2C (the history controller)
    */
   readonly joinPrevious?: boolean
+  /**
+   * Keep this write out of this tab's undo history (tldraw's `run(fn, {history: 'ignore'})`; a +1, W5-26 /
+   * CR-3F-1): it records no step, joins none and leaves the redo stack as it is, so this tab's Ctrl+Z undoes
+   * the step before it and never the write. What it changed is taken in like someone else's edit: an undo of
+   * an earlier step that changed the same field leaves the write's value ("1 change kept"). The engine
+   * pushes it as any edit, and the server's `fix` rows for it fold without a step. Wins over `joinPrevious`.
+   * A bare port (no history) ignores it. 2C's (the history controller, `UndoController.outside`, through
+   * the board page's port): real on every port, so it has no row of its own in `LOBBY_CANVAS_MEMBERS`.
+   */
+  readonly skipUndo?: boolean
 }
 
 // ---- the rest ------------------------------------------------------------------------------------------------

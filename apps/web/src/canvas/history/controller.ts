@@ -54,6 +54,8 @@ export class UndoController {
   readonly history = new LobbyHistory()
   private readonly o: UndoControllerOptions
   private readonly off: (() => void)[] = []
+  /** > 0 while `outside` installs a write (a boundary then records nothing) */
+  private installingOutside = 0
 
   constructor(o: UndoControllerOptions) {
     this.o = o
@@ -138,7 +140,30 @@ export class UndoController {
 
   /** A step boundary: one entry for everything the user changed since the previous one (or null). */
   boundary(label?: string): Entry | null {
+    // inside `outside`: the write is being installed, and is never part of a step
+    if (this.installingOutside > 0) return null
     return this.history.record(this.sceneMap('record'), label)
+  }
+
+  /**
+   * A write outside this tab's history (`transact(…, {skipUndo: true})`: a +1, W5-26). `install` puts it
+   * in the scene (and the core scans it); `changed` lists the elements it wrote, each as it was before
+   * (undefined: the write created it). It records no step and joins none, and the redo stack stays: what
+   * the write changed moves into the stack's copy of the scene as a remote change does (`absorb`), so the
+   * next boundary does not record it either, while a local change not recorded yet stays a change (an
+   * open text editor's typing still becomes its own step). An undo of an earlier step that changed the
+   * same field compares against the write's value and keeps it ("1 change kept"). The push carries it
+   * like any edit; a `fix` the server answers for it folds into the stack's copy (`onAck`), never a step.
+   */
+  outside(install: () => void, changed: Iterable<readonly [string, SceneElement | undefined]>): void {
+    this.installingOutside++
+    try {
+      install()
+    } finally {
+      this.installingOutside--
+    }
+    const now = this.sceneMap('live')
+    for (const [id, before] of changed) this.history.absorb(before as HistEl | undefined, now.get(id))
   }
 
   /**

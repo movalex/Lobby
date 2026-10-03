@@ -48,6 +48,7 @@ import type {
   LobbyTx,
   PointerState,
   ScenePoint,
+  TransactOptions,
   Viewport,
 } from './lobby-canvas.ts'
 import { NotImplementedError, notImplemented, type Owner } from './owners.ts'
@@ -59,6 +60,14 @@ import { createStylesPart } from './parts/styles.ts'
 import { createToolsPart } from './parts/tools.ts'
 import type { PartDeps } from './parts/types.ts'
 import type { FeatureRegistries } from './registries.ts'
+
+/**
+ * The board page's port (canvas/port-impl.ts `LobbyCanvasPort`): its `transact` takes `skipUndo` (W5-26).
+ * A bare C0 port has no undo history and ignores the extra argument.
+ */
+type HistoryPort = CanvasPort & {
+  transact<T>(label: string, fn: (tx: CanvasTx) => T, opts?: Pick<TransactOptions, 'skipUndo'>): T
+}
 
 export interface LobbyCanvasDeps {
   readonly port: CanvasPort
@@ -584,6 +593,10 @@ export function createLobbyCanvas(deps: LobbyCanvasDeps): LobbyCanvasHandle {
       return port.screenToScene(p)
     },
     transact(label, fn, opts) {
+      // skipUndo (W5-26, CR-3F-1): the port keeps the write out of this tab's history; it wins over
+      // joinPrevious (a write that is no step joins none)
+      if (opts?.skipUndo)
+        return (port as HistoryPort).transact(label, (tx) => fn(lobbyTx(tx)), { skipUndo: true })
       const run = () => port.transact(label, (tx) => fn(lobbyTx(tx)))
       if (!opts?.joinPrevious) return run()
       if (!board) throw new NotImplementedError(ownerOf('transact.joinPrevious'), 'transact.joinPrevious')
