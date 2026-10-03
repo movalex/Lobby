@@ -15,6 +15,7 @@
  */
 import { hashElements } from '@draftroom/canvas-schema/hash'
 import type { LeaseHolder } from '@draftroom/canvas-schema/protocol'
+import { flushSync } from 'react-dom'
 import type { LobbyCanvasFacadeV1 } from './api/facade.types.ts'
 import { childrenOf } from './api/items.ts'
 import type { CanvasElement, CanvasPort, ItemKind, ScenePoint, Viewport } from './port.ts'
@@ -232,7 +233,11 @@ export function createFacade(port: CanvasPort): {
     delete: (id) => {
       port.transact('facade.delete', (tx) => tx.delete(id))
     },
-    select: (ids) => port.select([...ids]),
+    // `port.select` is an `updateScene` from outside any event (the spec's `page.evaluate`): React would commit
+    // it as a default-lane update in a later task, so a key pressed right after this call could reach
+    // Excalidraw before the selection is in its state (DANA-01: Delete then deleted nothing). `flushSync`
+    // commits it before the call returns, as editorLease's `openViaEnter` does for the same reason.
+    select: (ids) => flushSync(() => port.select([...ids])),
     selection: () => [...port.selection],
     tool: () => port.tool(),
     setTool: (tool) => port.setTool(tool),

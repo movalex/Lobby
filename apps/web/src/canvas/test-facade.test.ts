@@ -1,15 +1,57 @@
 // O3's test facade (test-facade.ts) on a fake CanvasPort and a fake engine core: every write goes through
 // `transact`, reads are copies, `hash()` is hash.ts over the core's whole map (tombstones included),
 // `pushedOps()` is the core's push log, `leaseState()` splits held and pending, and install/uninstall own
-// exactly `window.lobbyCanvas` and `window.__lobbyHarness`.
+// exactly `window.lobbyCanvas` and `window.__lobbyHarness`. `select` commits before it returns (DANA-01): a
+// model of React's default lane stands in for react-dom here; e2e/excalidraw/facade-select-commit.spec.ts
+// proves it on the real page.
 import { hashElements } from '@draftroom/canvas-schema/hash'
 import type { LeaseHolder, RosterEntry, Welcome } from '@draftroom/canvas-schema/protocol'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { CanvasElement, CanvasEventMap, CanvasPort, CanvasTx, Viewport } from './port.ts'
 import { createRegistries } from './registries.ts'
 import type { EngineCore, PushRecord, SaveStatus, SceneElement } from './sync/types.ts'
 import { createFacade, install, type LobbyHarnessHooks } from './test-facade.ts'
 import type { LobbyCanvasFacade } from './test-facade.types.ts'
+
+/**
+ * A model of React's lanes, standing in for react-dom: a state update made outside any event (a
+ * `page.evaluate`) is a default-lane update, committed in a later task; one made inside `flushSync` is
+ * committed before `flushSync` returns.
+ */
+const lane = vi.hoisted(() => {
+  const queue: (() => void)[] = []
+  const state = {
+    /** how deep inside `flushSync` the caller is (0: outside any event) */
+    depth: 0,
+    /** how many times `flushSync` ran */
+    flushes: 0,
+    /** a state update: committed when `flushSync` returns, or else in a later task (`runLater`) */
+    update(commit: () => void) {
+      queue.push(commit)
+    },
+    /** the later task: what React's scheduler does with the default lane */
+    runLater(): Promise<void> {
+      return new Promise((resolve) =>
+        setTimeout(() => {
+          for (const commit of queue.splice(0)) commit()
+          resolve()
+        }, 0),
+      )
+    },
+    flush<R>(fn: () => R): R {
+      state.depth++
+      try {
+        return fn()
+      } finally {
+        state.depth--
+        state.flushes++
+        for (const commit of queue.splice(0)) commit()
+      }
+    },
+  }
+  return state
+})
+vi.mock('react-dom', () => ({ flushSync: lane.flush }))
 
 const el = (id: string, extra: Record<string, unknown> = {}): CanvasElement =>
   ({
@@ -238,6 +280,39 @@ describe('test facade', () => {
     expect(facade.saveState().state).toBe('saved')
     expect(hooks.session()).toMatchObject({ welcomed: true, sid: 'usr_a:tab1', uid: 'usr_a', clock: 12 })
     expect(hooks.allElements().map((e) => e.id)).toEqual(['r1', 'gone'])
+  })
+
+  it('select commits before it returns: a key pressed right after sees the selection (DANA-01)', async () => {
+    // a port whose selection lives in "React state": select() is a state update, the reads see what is committed
+    const f = fakePort()
+    const committed: string[] = []
+    const calls: { ids: readonly string[]; depth: number }[] = []
+    const port: CanvasPort = Object.create(f.port, {
+      select: {
+        value: (ids: readonly string[]) => {
+          calls.push({ ids: [...ids], depth: lane.depth })
+          lane.update(() => void committed.splice(0, committed.length, ...ids))
+        },
+      },
+      selection: { get: () => committed },
+    })
+    const { facade } = createFacade(port)
+
+    // the control, the old facade's shape: the port's select alone leaves the selection uncommitted until a later task
+    port.select(['r1'])
+    expect(facade.selection()).toEqual([])
+    await lane.runLater()
+    expect(facade.selection()).toEqual(['r1'])
+
+    // the facade: select runs inside flushSync and the selection is there when it returns, in the same task
+    const flushes = lane.flushes
+    facade.select(['gone'])
+    expect(facade.selection()).toEqual(['gone'])
+    expect(lane.flushes).toBe(flushes + 1)
+    expect(calls.at(-1)).toEqual({ ids: ['gone'], depth: 1 })
+    facade.select([])
+    expect(facade.selection()).toEqual([])
+    expect(calls.at(-1)?.depth).toBe(1)
   })
 
   it("children(frameId) lists a frame's live children in paint order (GAP-1: the wave-1 verb on the page)", () => {
