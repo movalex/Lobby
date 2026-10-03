@@ -14,6 +14,11 @@
 // (buildStickyNote, the server's text metrics), frames, images and arrows as plain elements of the strict
 // schema; every element passes `checkElement`. Image `fileId`s are generated `ver_…` ids, which the load
 // runs' fake api resolves (file-refs `ok`); a real stack needs uploaded versions instead (`fileIds`).
+// Every image carries `customData.lobby.file` as a drop writes it (apps/web/src/canvas/files/place.ts): the
+// client resolves an image's bytes through that asset id, so an image without it never loads (W5-34). With
+// `fileFacts` (a real stack's uploads) the upload's own facts; otherwise `genFileFacts(fileId)`, which is
+// what the load runs' fake api answers for the version (fake-api.ts `fakeFileRef`). Either way the server
+// canonicalizes the facts from its file-refs answer (§3.3 class 4), so a real stack stores the real ones.
 import { checkElement, type WireElement } from '../../packages/canvas-schema/src/elements.ts'
 import {
   buildStickyNote,
@@ -37,8 +42,30 @@ export interface BoardSpec {
   readonly deleted?: number
   /** image version ids to use instead of generated ones (a real stack's uploads) */
   readonly fileIds?: readonly string[]
+  /** the uploads' stable facts, by image (their `versionId` is the image's `fileId`); see the header */
+  readonly fileFacts?: readonly ImageFileFacts[]
   readonly seed?: number
 }
+
+/** An image's `customData.lobby.file` (canvas-schema custom-data.ts `FileValue`), as a drop writes it. */
+export interface ImageFileFacts {
+  readonly assetId: string
+  readonly versionId: string
+  readonly kind: 'image'
+  readonly name: string
+  readonly mimeType: string
+  readonly sizeBytes: number
+}
+
+/** The facts of a version with no upload behind it: exactly what fake-api.ts's `fakeFileRef` answers. */
+export const genFileFacts = (versionId: string): ImageFileFacts => ({
+  assetId: `ast_${versionId.slice(4).padEnd(10, '0').slice(0, 40)}`,
+  versionId,
+  kind: 'image',
+  name: `${versionId}.png`,
+  mimeType: 'image/png',
+  sizeBytes: 1024,
+})
 
 export interface GeneratedBoard {
   readonly spec: BoardSpec
@@ -181,7 +208,10 @@ export function generateBoard(spec: BoardSpec): GeneratedBoard {
       if (f === 0) frame0Notes.push(id)
     }
     for (let k = 0; k < imgsPerFrame && img < spec.images; k++, img++) {
-      const fileId = spec.fileIds?.[img] ?? genFileId(p, img)
+      const facts = spec.fileFacts?.[img]
+      const fileId = facts?.versionId ?? spec.fileIds?.[img] ?? genFileId(p, img)
+      if (spec.fileIds?.[img] !== undefined && spec.fileIds[img] !== fileId)
+        throw new Error(`image ${img}: fileIds and fileFacts name different versions`)
       files.push(fileId)
       push({
         ...BASE_FIELDS,
@@ -199,6 +229,7 @@ export function generateBoard(spec: BoardSpec): GeneratedBoard {
         status: 'saved',
         scale: [1, 1],
         crop: null,
+        customData: { lobby: { file: { ...(facts ?? genFileFacts(fileId)) } } },
       })
     }
     push({
