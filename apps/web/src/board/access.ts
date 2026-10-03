@@ -30,6 +30,25 @@ export function readonlyPill(role: BoardRole, status: BoardStatus): AccessPill |
   return { label: 'View only', title: 'You can look around but not change this board', request: true }
 }
 
+/** The top bar's button that opens the Share dialog, as this person should see it. */
+export interface ShareButtonView {
+  label: 'Share' | 'People'
+  /** Primary (filled) for people who can hand out access; plain for everyone else. */
+  primary: boolean
+  title: string
+}
+
+/**
+ * DANA-11 / F14 / PRI-18: a viewer, a commenter or a name-only guest cannot invite anyone, so for
+ * them the button is a plain "People" (who is on this board, and how to ask for more); everyone else
+ * keeps the primary "Share". UI only: the dialog and the api decide what each role may do.
+ */
+export function shareButtonView(role: BoardRole, guest: boolean): ShareButtonView {
+  if (guest || role === 'viewer' || role === 'commenter')
+    return { label: 'People', primary: false, title: 'See who has access to this board' }
+  return { label: 'Share', primary: true, title: 'Share this board' }
+}
+
 /** Whether the editor must be read-only for this role (tldraw instance state; the server enforces). */
 export const isReadonlyRole = (role: BoardRole, status: BoardStatus) => !can(role, 'edit', status)
 
@@ -51,12 +70,35 @@ const ROLE_NAME: Record<BoardRole, string> = {
 
 /**
  * The toast when my role on an open board changes (PRI-09b), or null when nothing to say. Raising
- * someone to edit is the change they asked for, so it reads as a grant.
+ * someone to edit is the change they asked for, so it reads as a grant. `by` (REVIEW-6) is the name of
+ * the person who changed it, when the server said: after an unexpected downgrade this is whom to ask.
  */
-export function roleChangeNotice(before: BoardRole, after: BoardRole): string | null {
+export function roleChangeNotice(
+  before: BoardRole,
+  after: BoardRole,
+  by: string | null = null,
+): string | null {
   if (before === after) return null
-  if (after === 'editor' && (before === 'viewer' || before === 'commenter'))
-    return 'You can edit this board now'
-  if (after === 'owner') return 'You are now an owner of this board'
-  return `Your access changed to ${ROLE_NAME[after]}`
+  const text =
+    after === 'editor' && (before === 'viewer' || before === 'commenter')
+      ? 'You can edit this board now'
+      : after === 'owner'
+        ? 'You are now an owner of this board'
+        : `Your access changed to ${ROLE_NAME[after]}`
+  return by ? `${text} (changed by ${by})` : text
+}
+
+/** REVIEW-6: how long the name from an `access.changed` event is kept for the toast that follows it. */
+export const ACCESS_ACTOR_FRESH_MS = 60_000
+
+/** The actor's name in an `access.changed` event's data (`{ actor: { name } }`), or null for anything else. */
+export function accessActorName(data: unknown): string | null {
+  const actor = (data as { actor?: unknown } | null)?.actor
+  const name = (actor as { name?: unknown } | null)?.name
+  return typeof name === 'string' && name.trim() ? name.trim() : null
+}
+
+/** The name held from an `access.changed` event, while it is still about the change being announced. */
+export function freshActorName(hint: { name: string; at: number } | null, now: number): string | null {
+  return hint && now - hint.at <= ACCESS_ACTOR_FRESH_MS ? hint.name : null
 }

@@ -21,9 +21,11 @@ import type {
   FeatureToolSpec,
   LobbyCanvas,
 } from '../../../canvas/api/index.ts'
+import { knownUserKind } from '../../../invite/guest.tsx'
 import { react } from '../../../lib/signals.ts'
 import { installAudioUnlock } from '../chime.ts'
 import { followSidOf } from '../follow.ts'
+import { privateStoreFor } from '../private-notes/hooks.ts'
 import { provideVoteResultsForExport, shownResults } from '../vote-export.ts'
 import { storeFor } from '../workshop-context.ts'
 import {
@@ -33,6 +35,7 @@ import {
   startFollowing,
   stopFollowing,
 } from './camera.ts'
+import { showPrivateNotesTab, showVotingTab, workshopActivity } from './guest-chrome.ts'
 import { NoteAuthorsLayer } from './NoteAuthors.tsx'
 import { isPresentingHere } from './presenting.ts'
 import { mountPrivateNotes, privateNotesPanel } from './private-notes/index.tsx'
@@ -55,6 +58,49 @@ type Ctx = CanvasFeatureContext
 const FOLLOW_RETRIES = 10
 const FOLLOW_RETRY_MS = 300
 const CLICK_SLOP_PX = 5
+
+/**
+ * DANA-11 / F14 / PRI-18: what is going on in the workshop, for the dock tabs a guest only sees while a
+ * session runs (./guest-chrome.ts). Reads the stores; the board page re-reads the dock when
+ * PANELS_CHANGED_EVENT fires (see `announcePanelChanges`).
+ */
+function activityOf(ctx: Ctx) {
+  const snap = storeFor(ctx).getSnapshot()
+  return workshopActivity({
+    timer: snap.timer,
+    vote: snap.vote !== null,
+    brainstorm: privateStoreFor(ctx).getSnapshot().session !== null,
+    hands: snap.hands.length,
+    settings: workshopSettingsOf(ctx.canvas),
+    now: Date.now(),
+    offsetMs: storeFor(ctx).serverOffsetMs(),
+  })
+}
+const guestHere = (ctx: Ctx) => knownUserKind(ctx.me.user.id) === 'guest'
+
+/**
+ * The dock is drawn by the board page, which asks each panel `visible` when it renders and cannot see
+ * these stores. This tells it (a window event, as the sharing badge does for the Share dialog) whenever a
+ * guest's Voting or Private notes tab should appear or go.
+ */
+export const PANELS_CHANGED_EVENT = 'lobby:panels-changed'
+function announcePanelChanges(ctx: Ctx): () => void {
+  const key = () => {
+    const a = activityOf(ctx)
+    return `${a.vote}|${a.brainstorm}`
+  }
+  let last = key()
+  const check = () => {
+    const now = key()
+    if (now === last) return
+    last = now
+    window.dispatchEvent(new Event(PANELS_CHANGED_EVENT))
+  }
+  const offs = [storeFor(ctx).subscribe(check), privateStoreFor(ctx).subscribe(check)]
+  return () => {
+    for (const off of offs) off()
+  }
+}
 
 function BallotIcon() {
   return (
@@ -288,6 +334,9 @@ function mountWorkshops(ctx: Ctx) {
   // Private brainstorming: a notice when a session ends; the revealing tab shows the placed notes.
   offs.push(mountPrivateNotes(ctx))
 
+  // A guest's Voting and Private notes tabs follow the session (see `panels` below).
+  offs.push(announcePanelChanges(ctx))
+
   // Exports draw a revealed vote's result badges, as this person sees them (../vote-export.ts, R14):
   // present-export reads them with `voteResultsForExport(canvas)` on this page.
   offs.push(provideVoteResultsForExport(canvas, () => shownResults(store.getSnapshot())))
@@ -304,9 +353,21 @@ export const feature: CanvasFeature = {
   // export (30) and Sharing (50); the Voting and Private notes panels after Comments and the navigation
   // panels, before History (70)
   topBar: [{ id: 'workshops', order: 25, overflowCaption: 'Timer and voting', component: WorkshopBar }],
+  // A guest sees the Voting and Private notes tabs only while a vote or a brainstorm exists (DANA-11 / F14 /
+  // PRI-18; ./guest-chrome.ts); everyone with an account always does.
   panels: [
-    { id: 'voting', label: 'Voting', icon: BallotIcon, order: 40, component: VotingPanel },
-    privateNotesPanel,
+    {
+      id: 'voting',
+      label: 'Voting',
+      icon: BallotIcon,
+      order: 40,
+      visible: (ctx) => showVotingTab(guestHere(ctx), activityOf(ctx)),
+      component: VotingPanel,
+    },
+    {
+      ...privateNotesPanel,
+      visible: (ctx) => showPrivateNotesTab(guestHere(ctx), activityOf(ctx)),
+    },
   ],
   overlays: [
     // who last edited each note: part of the note's face, so under every other layer (tags' Show only
