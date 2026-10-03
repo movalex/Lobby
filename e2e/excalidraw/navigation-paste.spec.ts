@@ -3,12 +3,24 @@
 // The paste reaches the features' content handlers through the board page (2C); a single line is left to
 // the engine's own paste (a text element). On the new canvas each note is `tx.create('note')` (the
 // pasted-note face of the tldraw board, a hand-drawn label, waits for CR-2D-2's `LobbyTx.insert`).
+// CRIT-38: a paste of Excalidraw's own clipboard leaves out the files this board cannot show (copied on
+// another board), with a notice; a read-only drop says why nothing was added.
 //
 //   E2E_PORT_BASE=<base> pnpm --filter @draftroom/e2e excalidraw -- navigation-paste
 import type { Page } from '@playwright/test'
-import { createItem, createNote, expect, expectSaved, itemText, test } from '../tests/support/canvas.ts'
+import {
+  createItem,
+  createNote,
+  expect,
+  expectSaved,
+  itemText,
+  select,
+  test,
+} from '../tests/support/canvas.ts'
 import { forgeSession } from '../tests/support/excalidraw.ts'
+import { dropFiles, makeImages } from '../tests/support/files.ts'
 import { focusBoard } from './board-kit.ts'
+import { imageItems, newItems } from './media-kit.ts'
 import {
   boundsOf,
   clickCanvasAt,
@@ -20,6 +32,7 @@ import {
   notes,
   openPath,
   overlaps,
+  readClipboardText,
   seed,
   setFrame,
   setView,
@@ -314,4 +327,82 @@ test('heavy board: 500 pasted notes land on a board that already holds 4,500 ite
   } finally {
     await b.context.close()
   }
+})
+
+// ---- CRIT-38: files in Excalidraw's own clipboard, and a read-only drop ------------------------------------
+
+/** The middle of the board canvas on screen. */
+async function canvasMiddle(page: Page): Promise<{ x: number; y: number }> {
+  const box = await page.locator('[data-lobby-board-canvas]').boundingBox()
+  if (!box) throw new Error('no board canvas')
+  return { x: box.x + box.width / 2, y: box.y + box.height / 2 }
+}
+
+test('CRIT-38: a note and an image copied on a board of another workspace paste as the note alone, with a notice, and nothing is refused; on its own board the copy pastes whole', async ({
+  canvasSession,
+  board,
+  users,
+}) => {
+  test.setTimeout(180_000)
+  const a = await canvasSession('alice') // on `board`, in Dev Studio
+  await grantClipboard(a.context)
+  const alice = await users.get('alice')
+  const api = await users.api('alice')
+  const client = (await api.createBoard(alice.personalWorkspaceId, 'Client board')).id
+
+  await test.step('on a board of alice’s own workspace: a note and an uploaded image, copied', async () => {
+    await a.page.goto(`/b/${client}`)
+    await waitForNavigation(a.page)
+    const noteId = await createNote(a.page, { x: -400, y: 0, text: 'Keep me' })
+    const [photo] = await makeImages(a.page, [{ name: 'client-photo.png', w: 600, h: 400 }])
+    if (!photo) throw new Error('no photo')
+    await dropFiles(a.page, [photo], await canvasMiddle(a.page))
+    const [img] = await newItems(a.page, imageItems, new Set(), 1)
+    if (!img) throw new Error('no image')
+    await expectSaved(a.page, 60_000)
+    await focusBoard(a.page)
+    await select(a.page, [noteId, img.id])
+    await a.page.keyboard.press('ControlOrMeta+c')
+    await expect.poll(() => readClipboardText(a.page)).toContain(img.fileId.split('@')[0] as string)
+  })
+
+  await test.step('pasted on that same board: the image and the note both come, and are saved', async () => {
+    await pasteAt(a.page, await canvasMiddle(a.page))
+    await expect.poll(async () => (await imageItems(a.page)).length).toBe(2)
+    await expect.poll(() => countOf(a.page, 'stickynote')).toBe(2)
+    await expectSaved(a.page, 60_000)
+    await expect(a.page.getByTestId('paste-files-left-out')).toHaveCount(0)
+    await expect(a.page.getByTestId('save-rejected-toast')).toHaveCount(0)
+  })
+
+  await test.step('pasted on the Dev Studio board: the note only, a notice says why, nothing refused', async () => {
+    await a.page.goto(`/b/${board}`)
+    await waitForNavigation(a.page)
+    await focusBoard(a.page)
+    await pasteAt(a.page, await canvasMiddle(a.page))
+    await expect(a.page.getByTestId('paste-files-left-out')).toContainText(
+      'One image or file was left out of the paste',
+    )
+    await expect.poll(async () => (await notes(a.page)).map((n) => n.text)).toEqual(['Keep me'])
+    expect(await countOf(a.page, 'image')).toBe(0)
+    await expectSaved(a.page)
+    // the room refused nothing (before CRIT-38 the image went out and came back "Change not saved")
+    await a.page.waitForTimeout(1_000)
+    await expect(a.page.getByTestId('save-rejected-toast')).toHaveCount(0)
+    expect(await countOf(a.page, 'image')).toBe(0)
+  })
+})
+
+test('CRIT-38: a viewer’s drop on the canvas says why nothing was added, and adds nothing', async ({
+  canvasSession,
+}) => {
+  const v = await canvasSession('carol', { role: 'viewer' })
+  await waitForNavigation(v.page)
+  const [photo] = await makeImages(v.page, [{ name: 'viewer-photo.png', w: 300, h: 200 }])
+  if (!photo) throw new Error('no photo')
+  await dropFiles(v.page, [photo], await canvasMiddle(v.page))
+  await expect(v.page.getByTestId('readonly-drop-notice')).toHaveText(
+    'You can view this board but not add files to it.',
+  )
+  expect(await countOf(v.page)).toBe(0)
 })

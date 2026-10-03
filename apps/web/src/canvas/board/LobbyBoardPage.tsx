@@ -24,6 +24,7 @@ import {
   useSyncExternalStore,
 } from 'react'
 import { api, isApiError, isNoAccess } from '../../api/client.ts'
+import { AssetMetaStore } from '../../assets/meta-store.ts'
 import { useMe, useSession } from '../../auth/session.tsx'
 import { blockedEditHint, isReadonlyRole, roleChangeNotice } from '../../board/access.ts'
 import type { NoticeInput } from '../../board/board-context.ts'
@@ -38,7 +39,7 @@ import { boardPath, navigate, setLeaveGuard } from '../../lib/routing.ts'
 import { useResource } from '../../lib/useResource.ts'
 import { useEngineSaveStatus } from '../../sync-quality/useEngineSaveStatus.ts'
 import { useTheme } from '../../theme/useTheme.ts'
-import { isFocusLost } from '../../ui/focus.ts'
+import { isFocusLost, isTextEntry } from '../../ui/focus.ts'
 import { boardAreaName, SkipLink } from '../../ui/SkipLink.tsx'
 import { LoadingScreen, MessageScreen, NoAccessScreen } from '../../ui/screens.tsx'
 import {
@@ -48,6 +49,7 @@ import {
 } from '../api/feature.ts'
 import type { LobbyCanvas } from '../api/lobby-canvas.ts'
 import { ExcalidrawHost, type ExcalidrawHostProps, type HostWiring } from '../engine/ExcalidrawHost.tsx'
+import { parseFileKey } from '../files/loader.ts'
 import {
   BoardPeople,
   CanvasDock,
@@ -59,7 +61,15 @@ import {
   topBarItems,
   useRegistries,
 } from './chrome.tsx'
-import { contentOf, dispatchContent } from './content.ts'
+import {
+  type ClipboardElement,
+  contentOf,
+  dispatchContent,
+  filesBoardCannotShow,
+  filesLeftOutNotice,
+  readOnlyDropNotice,
+  withoutElements,
+} from './content.ts'
 import { PROBE_FEATURE } from './probe.tsx'
 import { LobbyBoardSession, type LobbyBoardSnapshot } from './session.ts'
 import { duplicateLobbyData } from './tx.ts'
@@ -417,6 +427,27 @@ function LobbyBoardScreen({
     // W5-57: the region is named apart from the board's application inside it (features/a11y)
     rootRef.current?.setAttribute('aria-label', boardAreaName(board.title))
   }, [board.title])
+  // CRIT-38: the input layer takes a drop on the canvas from someone who cannot add to the board (a viewer,
+  // a commenter, an archived board) and did nothing with it, silently: say why. Capture phase on the
+  // region, so it runs before the input layer's own listener inside it; a field (a comment) keeps its drop.
+  const dropBlocked = useRef({ readonly, archived: board.status === 'archived' })
+  dropBlocked.current = { readonly, archived: board.status === 'archived' }
+  useEffect(() => {
+    const root = rootRef.current
+    if (!root) return
+    const onDrop = (e: DragEvent) => {
+      if (!dropBlocked.current.readonly || isTextEntry(e.target instanceof Element ? e.target : null)) return
+      const content = contentOf(e.dataTransfer)
+      if (!content) return
+      notify({
+        key: content.kind === 'files' ? 'readonly-upload' : 'readonly-drop',
+        text: readOnlyDropNotice(content.kind, dropBlocked.current.archived),
+        testId: 'readonly-drop-notice',
+      })
+    }
+    root.addEventListener('drop', onDrop, true)
+    return () => root.removeEventListener('drop', onDrop, true)
+  }, [notify])
   useEffect(() => {
     if (!canvas || !welcomed) return
     const frame = requestAnimationFrame(() => {
@@ -488,8 +519,12 @@ function LobbyBoardScreen({
   const ctxRef = useRef(ctx)
   ctxRef.current = ctx
   const onPaste = useCallback<NonNullable<ExcalidrawHostProps['onPaste']>>(async (data, event) => {
-    // Excalidraw's own clipboard (elements copied on a board) is Excalidraw's to paste
-    if (data.elements?.length) return true
+    // Excalidraw's own clipboard (elements copied on a board) is Excalidraw's to paste, without the files
+    // this board cannot show (CRIT-38)
+    if (data.elements?.length) {
+      const c = ctxRef.current
+      return c ? pasteOnlyFilesThisBoardShows(data, c) : true
+    }
     const c = ctxRef.current
     const content = contentOf(event?.clipboardData)
     if (c && content) {
@@ -615,6 +650,65 @@ function LobbyBoardScreen({
   )
   // always the same tree (a provider that appears later would remount the canvas)
   return <CanvasFeatureContextProvider value={ctx}>{board_}</CanvasFeatureContextProvider>
+}
+
+type PasteData = Parameters<NonNullable<ExcalidrawHostProps['onPaste']>>[0]
+
+/** The meta route's answers for pasted files (versions are immutable: a terminal answer is kept). */
+const pasteMeta = new AssetMetaStore()
+/** Longest a paste waits to learn whether this board shows a pasted file (then the room decides). */
+const PASTE_CHECK_MS = 3_000
+
+/**
+ * CRIT-38 (docs/EXCALIDRAW-MIGRATION.md §2.10.4): a paste of Excalidraw's own clipboard loses the file
+ * elements this board cannot show (copied on another board, in this workspace or another, or from
+ * another app), and says so, before anything is created: pasted as they were, the room refused them
+ * and the paste ended in "Change not saved". Everything else is pasted as usual. Resolves false when
+ * nothing is left to paste.
+ */
+async function pasteOnlyFilesThisBoardShows(data: PasteData, ctx: CanvasFeatureContext): Promise<boolean> {
+  const elements = (data.elements ?? []) as unknown as readonly ClipboardElement[]
+  if (!elements.some((el) => el.type === 'image')) return true
+  const boardId = ctx.board.id
+  const known = new Set<string>()
+  for (const el of ctx.canvas.items()) {
+    const fileId = (el as { fileId?: unknown }).fileId
+    const key = el.type === 'image' && typeof fileId === 'string' ? parseFileKey(fileId) : null
+    if (key) known.add(key.versionId)
+  }
+  const drop = await filesBoardCannotShow(elements, {
+    known: (versionId) => known.has(versionId),
+    servable: async ({ assetId, versionId }) => {
+      let timer: ReturnType<typeof setTimeout> | undefined
+      const snap = await Promise.race([
+        pasteMeta.load(boardId, assetId, versionId),
+        new Promise<null>((resolve) => {
+          timer = setTimeout(() => resolve(null), PASTE_CHECK_MS)
+        }),
+      ]).finally(() => clearTimeout(timer))
+      if (!snap) return null
+      return snap.missing ? false : snap.meta ? true : null
+    },
+  })
+  if (!drop.size) return true
+  ctx.notify({
+    key: 'paste-files-left-out',
+    text: filesLeftOutNotice(drop.size),
+    testId: 'paste-files-left-out',
+    timeoutMs: 12_000,
+  })
+  const kept = withoutElements(elements, drop)
+  if (!kept.length) return false
+  // what Excalidraw pastes after this resolves (App.insertClipboardContent reads `data` then)
+  data.elements = kept as unknown as PasteData['elements']
+  if (data.files) {
+    const used = new Set(kept.map((el) => el.fileId).filter(Boolean))
+    const files = { ...data.files }
+    for (const el of elements)
+      if (drop.has(el.id) && el.fileId && !used.has(el.fileId)) delete files[el.fileId]
+    data.files = files
+  }
+  return true
 }
 
 /**
