@@ -17,6 +17,7 @@ import { existsSync } from 'node:fs'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { DatabaseSync } from 'node:sqlite'
 import type { RoomExtensionContext, ServerWriteApply } from '../engine-switch.ts'
+import { inMaintenance } from '../http/internal.ts'
 import { HttpError } from '../http/respond.ts'
 import { boardFileState } from '../room/migrate/index.ts'
 import type { ConvertedFrom } from '../room/schema.ts'
@@ -163,12 +164,20 @@ export async function writeBoard<T>(
   opts: { create?: boolean } = {},
 ): Promise<T> {
   const path = boardPath(ctx, boardId)
+  // OPEN16: the callers come here once the body is read and parsed; maintenance may have gone on meanwhile
+  // (the router checked on entry only). Asked again after every wait below
+  const refuseInMaintenance = () => {
+    if (ctx.deps.maintenance?.()) throw inMaintenance()
+  }
+  refuseInMaintenance()
   if (!opts.create) {
     const r = await readableBoard(ctx, boardId)
     if (r.state === 'missing') throw boardNotFound()
+    refuseInMaintenance()
     if (ctx.service.serverWrite) return ctx.service.serverWrite(boardId, apply)
   }
   // From here on everything is synchronous: nothing can open this board between the check and the write.
+  refuseInMaintenance()
   if (ctx.service.roomIfOpen(boardId))
     throw unavailable('This board is open on the new canvas; its server writes need the room (CR 2F-2).')
   if (!opts.create && !existsSync(path)) throw boardNotFound()

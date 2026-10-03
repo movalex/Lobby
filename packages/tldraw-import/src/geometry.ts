@@ -3,6 +3,7 @@
  * Excalidraw stores it (the geo outlines are in geo-shapes.ts), the bound endpoint of an
  * arrow in orbit mode, and stroke simplification. No engine code; deterministic.
  */
+import { bindingGap } from '@draftroom/canvas-schema/engine'
 import { round2 } from '@draftroom/canvas-schema/limits'
 
 export interface Pt {
@@ -115,8 +116,8 @@ export interface TargetShape extends Box {
 export const fixedPointOnTarget = (t: TargetShape, fp: readonly [number, number]): Pt =>
   rotateAbout({ x: t.x + t.w * fp[0], y: t.y + t.h * fp[1] }, { x: t.cx, y: t.cy }, t.angle)
 
-/** Excalidraw's binding gap (`getBindingGap`: BASE_BINDING_GAP 5 + strokeWidth / 2, element index.js:8271). */
-export const bindingGap = (t: { readonly strokeWidth: number }): number => 5 + t.strokeWidth / 2
+/** Excalidraw's binding gap: canvas-schema's `bindingGap` (the engine's own `getBindingGap`; W5-53, one gap). */
+export { bindingGap }
 
 /**
  * Orbit mode's bound point (Excalidraw `updateBoundPoint`, E 9471-9560, approximated): where the segment
@@ -186,123 +187,4 @@ export function simplifyRdp(pts: readonly Pt[], epsilon: number): Pt[] {
     }
   }
   return pts.filter((_, i) => keep[i] === 1)
-}
-
-/**
- * The polygon outlines of `CONVERTER_VERSION` 1, kept for one reader only: 3a's polygon tools
- * (`apps/web/src/features/canvas-ux/ported/polygons.ts`) copy these points and their test compares with this
- * function. **The converter no longer uses it**: since wave 5 (D4, 2B) converted geos take tldraw 5.4.2's own
- * geometry from `geo-shapes.ts` `geoOutline`, so a polygon drawn with the tools and a converted one differ
- * (hexagon, rhombus, star, cloud, heart, the arrows). The tools move to the converter's outlines with
- * CR-2B-2 (the outlines exposed through canvas-schema or `canvas/api`); then this goes. Restored by the wave-5
- * engine integration (`docs/research/excalidraw/W5-ENGINE.md` §3) because 2B removed it while 3a's test,
- * merged from the feature workflow, still imported it.
- */
-export function polygonOf(kind: string, w: number, h: number): [number, number][] {
-  const reg = (n: number, rot = -Math.PI / 2) =>
-    Array.from({ length: n }, (_, i) => {
-      const a = rot + (i * 2 * Math.PI) / n
-      return [w / 2 + (w / 2) * Math.cos(a), h / 2 + (h / 2) * Math.sin(a)] as [number, number]
-    })
-  let pts: [number, number][]
-  switch (kind) {
-    case 'triangle':
-      pts = [
-        [w / 2, 0],
-        [w, h],
-        [0, h],
-      ]
-      break
-    case 'pentagon':
-      pts = reg(5)
-      break
-    case 'hexagon':
-      pts = reg(6, 0)
-      break
-    case 'octagon':
-      pts = reg(8, Math.PI / 8)
-      break
-    case 'star':
-      pts = Array.from({ length: 10 }, (_, i) => {
-        const a = -Math.PI / 2 + (i * Math.PI) / 5
-        const r = i % 2 ? 0.4 : 1
-        return [w / 2 + (w / 2) * r * Math.cos(a), h / 2 + (h / 2) * r * Math.sin(a)] as [number, number]
-      })
-      break
-    case 'rhombus':
-      pts = [
-        [w * 0.25, 0],
-        [w, 0],
-        [w * 0.75, h],
-        [0, h],
-      ]
-      break
-    case 'rhombus-2':
-      pts = [
-        [0, 0],
-        [w * 0.75, 0],
-        [w, h],
-        [w * 0.25, h],
-      ]
-      break
-    case 'trapezoid':
-      pts = [
-        [w * 0.25, 0],
-        [w * 0.75, 0],
-        [w, h],
-        [0, h],
-      ]
-      break
-    case 'arrow-right':
-      pts = [
-        [0, h * 0.25],
-        [w * 0.6, h * 0.25],
-        [w * 0.6, 0],
-        [w, h / 2],
-        [w * 0.6, h],
-        [w * 0.6, h * 0.75],
-        [0, h * 0.75],
-      ]
-      break
-    case 'arrow-left':
-      pts = polygonOf('arrow-right', w, h)
-        .slice(0, -1)
-        .map(([x, y]) => [w - x, y])
-      break
-    case 'arrow-down':
-      pts = polygonOf('arrow-right', h, w)
-        .slice(0, -1)
-        .map(([x, y]) => [y, x])
-      break
-    case 'arrow-up':
-      pts = polygonOf('arrow-down', w, h)
-        .slice(0, -1)
-        .map(([x, y]) => [x, h - y])
-      break
-    case 'heart':
-      pts = [
-        [w / 2, h * 0.25],
-        [w * 0.8, 0],
-        [w, h * 0.3],
-        [w / 2, h],
-        [0, h * 0.3],
-        [w * 0.2, 0],
-      ]
-      break
-    case 'cloud':
-      pts = reg(12).map(
-        ([x, y], i) =>
-          (i % 2 ? [w / 2 + (x - w / 2) * 0.85, h / 2 + (y - h / 2) * 0.85] : [x, y]) as [number, number],
-      )
-      break
-    default:
-      pts = [
-        [0, 0],
-        [w, 0],
-        [w, h],
-        [0, h],
-      ]
-  }
-  const first = pts[0] ?? [0, 0]
-  return [...pts, [first[0], first[1]]]
 }

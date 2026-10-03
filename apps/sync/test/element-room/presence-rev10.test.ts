@@ -5,6 +5,7 @@
 // which its transport drops as unknown; a reconnect starts each socket over as rev 9 until it sends `f`.
 
 import { CURSORS_PER_RECIPIENT } from '@draftroom/canvas-schema/limits'
+import { CONTRACTS_REV, PRESENCE_FOLLOW_REV } from '@draftroom/canvas-schema/protocol'
 import { describe, expect, it } from 'vitest'
 import { z } from 'zod'
 import type { RawClient } from './support/client.ts'
@@ -76,7 +77,9 @@ describe('presence CONTRACTS_REV 10 through the room', () => {
     const c = types.indexOf('contracts')
     expect(w).toBeGreaterThanOrEqual(0)
     expect(c).toBeGreaterThan(w)
-    expect(JSON.parse(old.rawFrames[c] as string)).toEqual({ type: 'contracts', rev: 10 })
+    // the room's revision (11 since wave C's push receipts); a rev-10 tab reads it as rev 10 or later
+    expect(JSON.parse(old.rawFrames[c] as string)).toEqual({ type: 'contracts', rev: CONTRACTS_REV })
+    expect(CONTRACTS_REV).toBeGreaterThanOrEqual(PRESENCE_FOLLOW_REV)
     const firstPresence = types.indexOf('presence')
     expect(firstPresence).toBeGreaterThan(c)
     // the rev-10 leader follows the stale tab and zooms: the stale tab still gets every frame as rev 9

@@ -7,6 +7,7 @@
 export * from './bindability.ts'
 export * from './binding.ts'
 export * from './fractional.ts'
+export * from './geo-outlines.ts'
 export * from './layout.ts'
 export * from './linear.ts'
 export * from './text-metrics.ts'

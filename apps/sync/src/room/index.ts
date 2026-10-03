@@ -49,6 +49,7 @@ import {
   registerElementRoom,
 } from '../engine-switch.ts'
 import { createFileRefsClient } from '../file-refs.ts'
+import { inMaintenance } from '../http/internal.ts'
 import { HttpError } from '../http/respond.ts'
 import { BOARD_ID_RE, boardDbPath } from '../rooms.ts'
 import { registerTestHooks } from '../test-hooks.ts'
@@ -634,6 +635,9 @@ export function createElementRoomServiceWith(
       if (closed) throw new HttpError(503, 'unavailable', 'Closing.')
       const room = await existing(boardId)
       if (!room) throw new HttpError(404, 'board-not-found', 'No such board.')
+      // OPEN16: the router refused it on entry if maintenance was on; a write whose body (or whose board's
+      // preparation) was still under way when maintenance went on is refused here, before it is queued
+      if (deps.maintenance?.()) throw inMaintenance()
       return room.serverWrite(apply)
     },
   }

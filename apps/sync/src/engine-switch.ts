@@ -122,6 +122,13 @@ export interface ElementRoomDeps {
   readonly onSessionRemoved: (boardId: string, sessionId: string, meta: LiveElementSession['meta']) => void
   /** after a committed document write (never presence); cheap and must not throw (touch.ts, session-end.ts) */
   readonly onDocumentChange: (boardId: string) => void
+  /**
+   * OPEN16 (CR-W5-FIX-1): whether maintenance is on (app.ts's switch; absent: never). The router refuses a
+   * board-writing internal POST on entry; the room's write paths (`serverWrite`, the room-internal seed,
+   * place-notes and restore) ask again once the request body is read and parsed, synchronously before the
+   * write, so a POST already in flight when maintenance went on cannot commit inside the window.
+   */
+  readonly maintenance?: () => boolean
 }
 
 /**

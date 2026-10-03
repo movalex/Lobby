@@ -28,6 +28,7 @@ import {
   LeaseRelease,
   MAX_FOLLOWERS,
   MAX_PRESENCE_ZOOM,
+  MAX_RECEIPT_IDS,
   Notice,
   Op,
   PatchOp,
@@ -38,8 +39,12 @@ import {
   PresenceIn,
   PresenceOut,
   Push,
+  PushEnvelope,
+  RECEIPTS_REV,
   REJECT_CODE_INFO,
   REJECT_CODES,
+  Receipts,
+  ReceiptsQuery,
   Roster,
   ServerMessage,
   SnapshotFrame,
@@ -68,6 +73,14 @@ const CLIENT: Record<string, unknown[]> = {
   ],
   push: [
     { type: 'push', seq: 1, base: 0, ops: Object.values(E).map((el) => ({ k: 'c', el })) },
+    // CONTRACTS_REV 11: a receipt id (sent only to a room that announced rev 11)
+    {
+      type: 'push',
+      seq: 3,
+      base: 12,
+      ops: [{ k: 'p', id: 'rect-1', pv: 4, g: { pos: { x: 11, y: 20 } } }],
+      rid: 'k3f9a2b7.3',
+    },
     {
       type: 'push',
       seq: 2,
@@ -161,6 +174,8 @@ const CLIENT: Record<string, unknown[]> = {
     },
   ],
   ping: [{ type: 'ping' }, { type: 'ping', n: 7 }],
+  // CONTRACTS_REV 11 (W5-ENG-2): which of these lost pushes landed
+  receipts: [{ type: 'receipts', req: 1, ids: ['k3f9a2b7.3', 'k3f9a2b7.4', 'p0.12'] }],
 }
 
 const holder = { sid: 'usr_0123456789:tab-1', uid: 'usr_0123456789', name: 'Alice' }
@@ -355,7 +370,14 @@ const SERVER: Record<string, unknown[]> = {
     },
     { type: 'presence', peers: [], followers: [] },
   ],
-  contracts: [{ type: 'contracts', rev: 10 }],
+  contracts: [
+    { type: 'contracts', rev: 10 },
+    { type: 'contracts', rev: 11 },
+  ],
+  receipts: [
+    { type: 'receipts', req: 1, landed: { 'k3f9a2b7.3': 41 }, from: 0 },
+    { type: 'receipts', req: 2, landed: {}, from: 1207 },
+  ],
   workshop: [{ type: 'workshop', voteOpen: true, anonymous: false }],
   notice: [
     { type: 'notice', code: 'SLOW_DOWN' },
@@ -394,6 +416,7 @@ describe('every message round-trips through its zod schema (§2.4.2)', () => {
       'lease.acquire': LeaseAcquire,
       'lease.release': LeaseRelease,
       ping: Ping,
+      receipts: ReceiptsQuery,
     }
     for (const [t, schema] of Object.entries(own)) for (const s of CLIENT[t] ?? []) roundTrip(schema, s)
     roundTrip(PresenceIn, CLIENT.presence?.[0])
@@ -410,6 +433,7 @@ describe('every message round-trips through its zod schema (§2.4.2)', () => {
       notice: Notice,
       pong: Pong,
       contracts: Contracts,
+      receipts: Receipts,
     }
     for (const [t, schema] of Object.entries(serverOwn)) for (const s of SERVER[t] ?? []) roundTrip(schema, s)
   })
@@ -576,8 +600,8 @@ describe('CONTRACTS_REV 10: follow target, zoom, followers, the contracts frame'
   const ok = (s: ZodType, v: unknown) => expect(s.safeParse(v).success).toBe(true)
   const bad = (s: ZodType, v: unknown) => expect(s.safeParse(v).success).toBe(false)
 
-  it('is revision 10, and presence follow starts at it', () => {
-    expect(CONTRACTS_REV).toBe(10)
+  it('presence follow starts at revision 10 (the room speaks rev 11 since wave C)', () => {
+    expect(CONTRACTS_REV).toBe(11)
     expect(PRESENCE_FOLLOW_REV).toBe(10)
   })
 
@@ -618,5 +642,81 @@ describe('CONTRACTS_REV 10: follow target, zoom, followers, the contracts frame'
     bad(Contracts, { type: 'contracts', rev: 0 })
     bad(Contracts, { type: 'contracts', rev: 10, extra: true })
     bad(Contracts, { type: 'contracts' })
+  })
+})
+
+// ---- CONTRACTS_REV 11 (W5-ENG-2, push receipts) and the ends one revision older ---------------------------------
+
+/** Rev 10's push and client envelope, as a rev-10 room parses them (strict: no `rid`, no `receipts`). */
+const PushEnvelope10 = z.strictObject({
+  type: z.literal('push'),
+  seq: z.number().int().positive(),
+  base: z.number().int().nonnegative(),
+  ops: z.array(z.unknown()),
+  doc: z.unknown().optional(),
+})
+const ClientTypes10 = ['hello', 'push', 'lease.acquire', 'lease.release', 'presence', 'ping']
+/** Rev 10's server message types, as a rev-10 client parses them (a frame of another type is dropped). */
+const ServerTypes10 = [
+  'welcome',
+  'changes',
+  'ack',
+  'lease.grant',
+  'lease.deny',
+  'lease',
+  'roster',
+  'presence',
+  'workshop',
+  'notice',
+  'pong',
+  'contracts',
+]
+
+describe('CONTRACTS_REV 11: push receipts', () => {
+  const ok = (s: ZodType, v: unknown) => expect(s.safeParse(v).success).toBe(true)
+  const bad = (s: ZodType, v: unknown) => expect(s.safeParse(v).success).toBe(false)
+
+  it('is revision 11, receipts start at it', () => {
+    expect(CONTRACTS_REV).toBe(11)
+    expect(RECEIPTS_REV).toBe(11)
+    expect(MAX_RECEIPT_IDS).toBe(64)
+  })
+
+  it('a push without a receipt id is exactly a rev-10 push (a rev-11 room serves a rev-10 tab as before)', () => {
+    for (const p of CLIENT.push ?? []) {
+      const { rid: _rid, ...rest } = p as Record<string, unknown>
+      ok(PushEnvelope10, rest)
+      ok(Push, rest)
+      ok(PushEnvelope, rest)
+    }
+  })
+
+  it('a rev-10 room refuses a receipt id and the query (why a rev-11 tab sends them only to a rev-11 room)', () => {
+    const withRid = (CLIENT.push ?? []).find((p) => (p as { rid?: string }).rid)
+    ok(Push, withRid)
+    ok(PushEnvelope, withRid)
+    bad(PushEnvelope10, withRid) // a rev-10 room: INVALID_MESSAGE, the socket closes
+    expect(ClientTypes10).not.toContain('receipts')
+    // ... and a rev-10 tab never gets a receipts frame (it never asks); if it did, it would drop it
+    expect(ServerTypes10).not.toContain('receipts')
+    expect(discriminators(ServerMessage).filter((t) => !ServerTypes10.includes(t))).toEqual(['receipts'])
+  })
+
+  it('receipt ids are short and plain; a query names 1 to 64; an answer at most 64 with clocks', () => {
+    const q = (ids: unknown) => ({ type: 'receipts', req: 1, ids })
+    bad(ReceiptsQuery, q([]))
+    ok(ReceiptsQuery, q(Array.from({ length: MAX_RECEIPT_IDS }, (_, i) => `p.${i}`)))
+    bad(ReceiptsQuery, q(Array.from({ length: MAX_RECEIPT_IDS + 1 }, (_, i) => `p.${i}`)))
+    bad(ReceiptsQuery, q(['has space']))
+    bad(ReceiptsQuery, q(['x'.repeat(65)]))
+    bad(ReceiptsQuery, { ...q(['a.1']), extra: 1 })
+    const withRid = (CLIENT.push ?? []).find((p) => (p as { rid?: string }).rid) as Record<string, unknown>
+    bad(Push, { ...withRid, rid: '' })
+    bad(Push, { ...withRid, rid: 'a/b' })
+    const many = Object.fromEntries(Array.from({ length: MAX_RECEIPT_IDS + 1 }, (_, i) => [`p.${i}`, i]))
+    bad(Receipts, { type: 'receipts', req: 1, landed: many, from: 0 })
+    bad(Receipts, { type: 'receipts', req: 1, landed: { 'a.1': -1 }, from: 0 })
+    bad(Receipts, { type: 'receipts', req: 1, landed: {}, from: 0, extra: true })
+    bad(Receipts, { type: 'receipts', req: 1, landed: {} })
   })
 })

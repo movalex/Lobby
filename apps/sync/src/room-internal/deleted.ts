@@ -28,6 +28,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { DatabaseSync } from 'node:sqlite'
 import { checkElement, type WireElement } from '@draftroom/canvas-schema/elements'
 import {
+  bindingGap as engineBindingGap,
   indexKeyBetween,
   isBindable,
   isValidIndexKey,
@@ -247,10 +248,10 @@ type End = 'startBinding' | 'endBinding'
 type Pt = readonly [number, number]
 
 /**
- * Excalidraw's binding gap (element binding.ts `getBindingGap`: BASE_BINDING_GAP 5 + strokeWidth / 2): a
- * bound end in orbit mode sits this far off its target's outline.
+ * Excalidraw's binding gap: a bound end in orbit mode sits this far off its target's outline (canvas-schema
+ * `bindingGap`, the engine's own `getBindingGap`; W5-53: one gap for the room, the client and the converter).
  */
-const bindingGap = (t: El): number => 5 + (Number(t.strokeWidth) || 0) / 2
+const bindingGap = (t: El): number => engineBindingGap({ strokeWidth: Number(t.strokeWidth) || 0 })
 /**
  * How far off a restored target's bounds a free end may be to be attached to it again: the gap plus this,
  * about Excalidraw's base binding distance at zoom 1 (15 px, `maxBindingDistance_simple`), so an end the

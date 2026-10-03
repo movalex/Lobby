@@ -18,6 +18,12 @@
 // Server writes (CR 2F-2, server-write.ts: place-notes, the "Recently deleted" restore) are queue entries
 // too: run in the drain at the batch's next clock, broadcast in the batch's `changes`, acked to nobody;
 // their callers' promises settle after the COMMIT (a failed COMMIT rejects them 503).
+//
+// Push receipts (CONTRACTS_REV 11, W5-ENG-2): a push with a receipt id (`rid`) that wrote, with no op
+// refused for a retryable reason, gets a row in lb_receipts (schema.ts) in the batch's transaction, so it
+// commits with the push; a `receipts` query is a queue entry too (ordered after everything queued before
+// it, every socket's), answered after the batch's COMMIT from the file: which of the named receipts this
+// user's pushes left, and from which clock its receipts are complete.
 
 import { randomUUID } from 'node:crypto'
 import { statfsSync } from 'node:fs'
@@ -70,6 +76,7 @@ import { CommitPacer } from './pacing.ts'
 import { CONTRACTS_FRAME, PresenceHub, rosterEntry } from './presence.ts'
 import { type SessionBudgets, sessionBudgets } from './rates.ts'
 import { RosterBatch } from './roster-batch.ts'
+import { RECEIPTS } from './schema.ts'
 import { runServerWrite, type ServerWriteEntry } from './server-write.ts'
 import { BoardStore, LB_DELETED_LIMITS } from './store.ts'
 import type { PreOp, PreparedPush, PushOutcome, SessionIdentity } from './types.ts'
@@ -128,14 +135,17 @@ type FifoItem =
       files: Map<string, FileRefAnswer>
       lookup: Promise<void> | null
       receivedAt: number
+      rid?: string
     }
   | { kind: 'acquire'; req: number; id: string }
   | { kind: 'release'; id: string }
+  | { kind: 'receipts'; req: number; ids: string[] }
 
 type QueueEntry =
   | { kind: 'push'; session: Session; push: PreparedPush; rejectAll?: RejectCode }
   | { kind: 'acquire'; session: Session; req: number; id: string }
   | { kind: 'release'; session: Session; id: string }
+  | { kind: 'receipts'; session: Session; req: number; ids: string[] }
   | { kind: 'relayout'; id: string }
   | ServerWriteEntry
 
@@ -148,6 +158,11 @@ let handleSeq = 0
  * one per resync.
  */
 export const HELLO_LIMIT = { burst: 5, windowMs: 10_000 } as const
+/**
+ * `receipts` queries a session may send (CONTRACTS_REV 11): at most `burst` within `windowMs`, more close it
+ * 4099 RATE_LIMITED. A client asks once per welcome (after a reconnect, a reload) and once per adopted queue.
+ */
+export const RECEIPTS_QUERY_LIMIT = { burst: 10, windowMs: 10_000 } as const
 /**
  * The welcome work one USER (uid) may cause across all its sockets and boards of the process, in rows (a
  * catch-up's rows, a reset's elements; at least `minCost` a welcome): a token bucket of `burst` rows that
@@ -257,6 +272,7 @@ export class Session {
   pumpTimer: ReturnType<typeof setTimeout> | null = null
   private readonly abuse: number[] = []
   private readonly hellos: number[] = []
+  private readonly receiptQueries: number[] = []
 
   readonly info: ElementSessionInfo
   readonly socket: ElementSocket
@@ -295,6 +311,14 @@ export class Session {
     this.hellos.push(now)
     while (this.hellos.length && (this.hellos[0] as number) <= now - HELLO_LIMIT.windowMs) this.hellos.shift()
     return this.hellos.length <= HELLO_LIMIT.burst
+  }
+
+  /** Counts a `receipts` query; false when it is over RECEIPTS_QUERY_LIMIT. */
+  receiptsAllowed(now: number): boolean {
+    const q = this.receiptQueries
+    q.push(now)
+    while (q.length && (q[0] as number) <= now - RECEIPTS_QUERY_LIMIT.windowMs) q.shift()
+    return q.length <= RECEIPTS_QUERY_LIMIT.burst
   }
 
   /** 4099: the CLOSING notice goes first (SMK-2, closing.ts); 4000 RECONNECT closes as is. */
@@ -375,6 +399,8 @@ export class ElementRoom {
   } | null = null
   private lastDiskCheck = 0
   private deletedSinceTrim = 0
+  /** when the receipts' age limit last ran (schema.ts RECEIPTS.ttlEveryMs; the first writing batch runs it) */
+  private lastReceiptTtl = Number.NEGATIVE_INFINITY
   /** this room open's session id, named by its `lb_deleted` rows (the per-session retention, store.ts) */
   readonly deletedSession = randomUUID()
 
@@ -521,6 +547,12 @@ export class ElementRoom {
       s.fifo.push({ kind: 'release', id: msg.id })
       return this.pump(s)
     }
+    if (msg.type === 'receipts') {
+      // CONTRACTS_REV 11: ordered with this session's pushes, answered after the next COMMIT
+      if (!s.receiptsAllowed(this.deps.now())) return this.terminal(s, 'RATE_LIMITED')
+      s.fifo.push({ kind: 'receipts', req: msg.req, ids: [...msg.ids] })
+      return this.pump(s)
+    }
     // push: stage 0
     this.deps.metrics.inc('lobby_pushes_received_total')
     const ops: PreOp[] = msg.ops.map((rawOp) => {
@@ -541,6 +573,7 @@ export class ElementRoom {
       files: new Map(),
       lookup: null,
       receivedAt: this.deps.now(),
+      ...(msg.rid !== undefined ? { rid: msg.rid } : {}),
     }
     // over budget with a backlog of more than one burst waiting: refused (RATE, SLOW_DOWN), in order
     const now = this.deps.now()
@@ -625,6 +658,7 @@ export class ElementRoom {
           ...(item.doc ? { doc: item.doc } : {}),
           files: item.files,
           receivedAt: item.receivedAt,
+          ...(item.rid !== undefined ? { rid: item.rid } : {}),
         }
         this.enqueue({
           kind: 'push',
@@ -638,7 +672,9 @@ export class ElementRoom {
       this.enqueue(
         item.kind === 'acquire'
           ? { kind: 'acquire', session: s, req: item.req, id: item.id }
-          : { kind: 'release', session: s, id: item.id },
+          : item.kind === 'receipts'
+            ? { kind: 'receipts', session: s, req: item.req, ids: item.ids }
+            : { kind: 'release', session: s, id: item.id },
       )
     }
   }
@@ -974,6 +1010,8 @@ export class ElementRoom {
     const before = new Map<string, WireElement | null>()
     const after = new Map<string, WireElement>()
     const doc: Record<string, unknown> = {}
+    /** the receipts of this batch's pushes that carried one and wrote (CONTRACTS_REV 11) */
+    const receipts: { uid: string; rid: string; clock: number }[] = []
     let pushes = 0
     store.begin()
     if (this.workshop === null) this.pullWorkshop()
@@ -985,6 +1023,10 @@ export class ElementRoom {
       }
       if (e.kind === 'release') {
         deliveries.push(this.release(e.session, e.id, now))
+        continue
+      }
+      if (e.kind === 'receipts') {
+        deliveries.push(this.receiptsAnswer(e.session, e.req, e.ids))
         continue
       }
       if (e.kind === 'server') {
@@ -1095,8 +1137,13 @@ export class ElementRoom {
         Object.assign(doc, outcome.doc)
       }
       const ackClock = outcome.clock ?? clock
+      // its receipt: only when the push wrote and none of its ops waits for a retry (a receipt says "do
+      // not send it again"; a push that wrote nothing has none, so a client sends it again)
+      if (e.push.rid !== undefined && outcome.clock !== null && !retriesSome(outcome))
+        receipts.push({ uid: e.session.identity.uid, rid: e.push.rid, clock: outcome.clock })
       deliveries.push(this.ackDelivery(e.session, e.push, outcome, ackClock))
     }
+    if (receipts.length) this.recordReceipts(receipts, now)
     if (clock !== startClock) store.setClock(clock)
     const tc = performance.now()
     try {
@@ -1145,6 +1192,51 @@ export class ElementRoom {
       } catch {
         this.deps.log('[room] lb_deleted trim failed', this.boardId)
       }
+    }
+  }
+
+  /**
+   * The batch's receipts (CONTRACTS_REV 11), in its transaction, then the ring's limits. In a SAVEPOINT of
+   * its own: a failure leaves the batch's pushes as they are (their clients then decide those lost pushes by
+   * counting, as before rev 11), logged without content.
+   */
+  private recordReceipts(rows: { uid: string; rid: string; clock: number }[], now: number): void {
+    const store = this.store
+    store.savepoint('receipts')
+    try {
+      store.putReceipts(rows, now)
+      const ttl = now - this.lastReceiptTtl >= RECEIPTS.ttlEveryMs
+      store.trimReceipts(
+        rows.map((r) => r.uid),
+        now,
+        ttl,
+      )
+      if (ttl) this.lastReceiptTtl = now
+      store.release('receipts')
+    } catch (err) {
+      store.rollbackTo('receipts')
+      store.forgetReceiptsTable()
+      this.deps.log('[room] receipts not recorded', this.boardId, (err as Error)?.name ?? 'error')
+    }
+  }
+
+  /**
+   * The answer to a `receipts` query, read after the batch's COMMIT (so the pushes queued before the query,
+   * every socket's, are decided): the named receipts of this session's user, and from which clock its
+   * receipts are complete. A failed read answers nothing conclusive (`from` past every clock): the client
+   * then counts, as before rev 11.
+   */
+  private receiptsAnswer(s: Session, req: number, ids: string[]): () => void {
+    return () => {
+      if (s.closed) return
+      let answer: { landed: Record<string, number>; from: number }
+      try {
+        answer = this.store.receipts(s.identity.uid, ids)
+      } catch (err) {
+        this.deps.log('[room] receipts read failed', this.boardId, (err as Error)?.name ?? 'error')
+        answer = { landed: {}, from: Number.MAX_SAFE_INTEGER }
+      }
+      s.out.send(JSON.stringify({ type: 'receipts', req, landed: answer.landed, from: answer.from }))
     }
   }
 
@@ -1466,6 +1558,11 @@ export function serverOp(before: WireElement | null, after: WireElement): Server
 }
 
 const storedRows = (c: { live: number; dead: number }) => c.live + c.dead
+
+/** Whether a push's outcome refused an op (or doc keys) for a reason the client retries (RATE, UNAVAILABLE). */
+const retriesSome = (o: PushOutcome): boolean =>
+  o.results.some((r) => !r.ok && REJECT_CODE_INFO[r.code].retryable) ||
+  (!!o.docDenied && REJECT_CODE_INFO[o.docDenied.code].retryable)
 
 /** The ack result of an op the room could not even parse (stage 0). */
 export const invalidResult = (id: string): AckResult => ({ id, ok: false, code: 'INVALID', el: null })

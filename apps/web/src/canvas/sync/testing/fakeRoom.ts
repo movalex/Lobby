@@ -113,6 +113,20 @@ export class FakeRoom {
    * batch, with a `derived` row in the push's ack (its version bumps with no op of the client's).
    */
   readonly derive = new Map<string, string[]>()
+  /**
+   * CONTRACTS_REV 10/11: when set, the room's `contracts` frame follows every welcome (and its snapshot and
+   * catch-up) with this revision, as the room does; null (the default): a room before rev 10, no frame.
+   */
+  contractsRev: number | null = null
+  /**
+   * Push receipts (CONTRACTS_REV 11, W5-ENG-2; the room's lb_receipts): `<uid> <rid>` → the clock the push
+   * committed at, for each push with a receipt id that wrote and had no op refused for a retryable reason
+   */
+  readonly receipts = new Map<string, number>()
+  /** the answers' `from` (a test raises it to model receipts the room trimmed) */
+  receiptsFrom = 0
+  /** a receipts query is left unanswered (a room that never answers: the client's fallback) */
+  dropReceiptQueries = false
   private snapCache: { at: number; clock: number; elements: El[]; doc: Record<string, unknown> } | null = null
   private readonly c: ManualClock
   private readonly strict: boolean
@@ -262,7 +276,7 @@ export class FakeRoom {
     if (!env.success) {
       const push = PushEnvelope.safeParse(raw)
       if (push.success) {
-        this.onPush(s, push.data as unknown as { seq: number; base: number; ops: unknown[] })
+        this.onPush(s, push.data as unknown as { seq: number; base: number; ops: unknown[]; rid?: string })
         return
       }
       throw new Error(`fake room: malformed client message: ${env.error.message}`)
@@ -274,7 +288,7 @@ export class FakeRoom {
         this.onHello(s, m)
         return
       case 'push':
-        this.onPush(s, m as unknown as { seq: number; base: number; ops: unknown[] })
+        this.onPush(s, m as unknown as { seq: number; base: number; ops: unknown[]; rid?: string })
         return
       case 'lease.acquire': {
         const h = this.leases.get(m.id)
@@ -299,12 +313,28 @@ export class FakeRoom {
       case 'ping':
         this.send(s, { type: 'pong', ...(m.n !== undefined ? { n: m.n } : {}) })
         return
+      case 'receipts': {
+        if (this.dropReceiptQueries) return
+        const landed: Record<string, number> = {}
+        for (const rid of m.ids) {
+          const at = this.receipts.get(`${s.uid} ${rid}`)
+          if (at !== undefined) landed[rid] = at
+        }
+        this.send(s, { type: 'receipts', req: m.req, landed, from: this.receiptsFrom })
+        return
+      }
       default:
         return
     }
   }
 
   private onHello(s: Session, m: Extract<ClientMessage, { type: 'hello' }>): void {
+    this.welcomeFor(s, m)
+    // the room's revision right after the welcome and its snapshot and catch-up frames (element-room.ts)
+    if (this.contractsRev !== null) this.send(s, { type: 'contracts', rev: this.contractsRev })
+  }
+
+  private welcomeFor(s: Session, m: Extract<ClientMessage, { type: 'hello' }>): void {
     const reset = m.epoch !== this.epoch || m.since < this.horizon || m.since === 0
     const base = {
       type: 'welcome' as const,
@@ -393,7 +423,10 @@ export class FakeRoom {
     })
   }
 
-  private onPush(s: Session, push: { seq: number; base: number; ops: unknown[]; doc?: unknown }): void {
+  private onPush(
+    s: Session,
+    push: { seq: number; base: number; ops: unknown[]; doc?: unknown; rid?: string },
+  ): void {
     const clock = this.clock + 1
     const results: AckResult[] = []
     const out: ServerOp[] = []
@@ -546,6 +579,13 @@ export class FakeRoom {
         this.docClocks.set(k, clock)
       }
     const wrote = out.length > 0 || (!!docSet && !s.readonly)
+    // its receipt (CONTRACTS_REV 11): it wrote, and nothing of it waits for a retry
+    if (
+      wrote &&
+      push.rid !== undefined &&
+      !results.some((r) => !r.ok && (r.code === 'RATE' || r.code === 'UNAVAILABLE'))
+    )
+      this.receipts.set(`${s.uid} ${push.rid}`, clock)
     if (wrote) {
       this.clock = clock
       this.broadcast({

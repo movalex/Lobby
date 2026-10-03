@@ -32,6 +32,8 @@ export interface PreparedPush {
   readonly receivedAt: number
   /** a server write instead of client ops: the lease-expiry re-fit of one container (§2.9.4 rule 6) */
   readonly relayout?: string
+  /** CONTRACTS_REV 11 (W5-ENG-2): the push's receipt id, recorded with its COMMIT (schema.ts lb_receipts) */
+  readonly rid?: string
 }
 
 /** What the drain produces for one push. */
