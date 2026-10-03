@@ -6,7 +6,7 @@
 //    plain arrows, canvas/input/keymap.ts);
 //  - a resize by a corner handle (collab-conflicts resizes through the facade's `update`, not a handle);
 //  - a rotation by the rotation handle (no spec rotates anything);
-//  - Space+drag panning over a selected shape and the plain wheel (the tldraw suite's canvas-ux.fix F3
+//  - Space+drag panning over a selected shape and a trackpad-sized scroll (the tldraw suite's canvas-ux.fix F3
 //    "Space+drag over a selected image pans and never moves the image" was never ported).
 //
 // Handle geometry is Excalidraw's (@excalidraw/element getTransformHandlesFromCoords, mouse size 8, margin 4,
@@ -239,7 +239,7 @@ test('rotate by the rotation handle with the real pointer: a quarter turn sets a
   await expectConverged(a.page, [b.page])
 })
 
-test('Space+drag over the selected shape pans the view and never moves the shape; the plain wheel pans too; the zoom and the document are untouched (no push)', async ({
+test('Space+drag over the selected shape pans the view and never moves the shape; a trackpad-sized scroll pans too; the zoom and the document are untouched (no push)', async ({
   canvasSession,
 }) => {
   const a = await canvasSession('alice')
@@ -268,11 +268,13 @@ test('Space+drag over the selected shape pans the view and never moves the shape
     expect(await sorted(a.page)).toEqual([box])
   })
 
-  await test.step('the wheel pans (no modifier): the view moves down, the zoom stays, nothing moves', async () => {
+  // W5-33 (Preferences > Input device, default auto): a notch of a mouse wheel (whole hundreds of pixels on
+  // one axis) zooms, a trackpad's small uneven scroll pans; input-touch-wheel.spec.ts covers the preference
+  await test.step('a trackpad-sized scroll pans (no modifier): the view moves down, the zoom stays, nothing moves', async () => {
     const mid = await viewport(a.page)
     const p = await emptyCanvasPoint(a.page)
     await a.page.mouse.move(p.x, p.y)
-    await a.page.mouse.wheel(0, 240)
+    await a.page.mouse.wheel(3, 90)
     await expect.poll(async () => (await viewport(a.page)).y - mid.y).toBeGreaterThan(50 / mid.zoom)
     expect((await viewport(a.page)).zoom).toBe(mid.zoom)
     expect(await place(a.page, box)).toEqual({ x: 300, y: 220 })

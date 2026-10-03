@@ -151,8 +151,12 @@ export async function openCanvasSession(
   await signInContext(context, user.handle, user.name)
   await page.goto(`/b/${board}`)
   await waitForCanvas(page)
-  const me = await canvasCall(page, 'me')
-  expect(me?.uid, 'the welcome names this user').toBe(user.id)
+  // polled, not read once: `me` is null for a tab that is between two welcomes (a reconnect just after the
+  // first); gaps-board-status's fresh open of an archived board read null once under load (cause not found:
+  // 2/2 alone, and the single failure is the only one seen)
+  await expect
+    .poll(async () => (await canvasCall(page, 'me'))?.uid, { message: 'the welcome names this user' })
+    .toBe(user.id)
   return { user: user.handle, name: user.name, id: user.id, context, page }
 }
 
