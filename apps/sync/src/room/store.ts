@@ -387,6 +387,21 @@ export class BoardStore {
   }
 
   /**
+   * A receipt gap (element-room.ts recordReceipts, wave D2): per user, the highest clock of a committed push
+   * whose receipt could not be recorded, kept as that user's marker row (as the ring's trim keeps what it
+   * dropped), so `receipts()` answers complete only past it, after a restart too. Inside the batch's
+   * transaction (it advances the clock); makes the table when the failed write's CREATE was rolled back.
+   */
+  markReceiptGap(gap: ReadonlyMap<string, number>, now: number): void {
+    if (!gap.size) return
+    if (!this.hasReceiptsTable()) {
+      ensureReceiptsSchema(this.db)
+      this.receiptsTable = true
+    }
+    for (const [uid, clock] of gap) this.st.receiptMark.run(uid, clock, now)
+  }
+
+  /**
    * The ring's limits, in a batch that wrote receipts: each of `uids` back to `perUser` receipts once it holds
    * `trimAt` (its marker remembers the highest clock dropped), and, when `ttl`, every receipt older than
    * `ttlMs` (the board marker). Returns how many rows were dropped.
