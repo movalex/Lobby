@@ -5,7 +5,8 @@
 // transaction; and every change that moves someone's access is pushed to sync (`accessChanged`) and
 // reaches their open board event streams at once.
 
-import { ListMembersResponse, ListWorkspaceMembersResponse, type WorkspaceRole } from '@draftroom/contracts'
+import { ListMembersResponse, ListWorkspaceMembersResponse } from '@draftroom/contracts'
+import type { WorkspaceRole } from '@draftroom/permissions'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { EventHub } from '../src/events/hub.ts'
 import { MAX_ACCESS_NOTIFICATIONS } from '../src/routes/workspaces.ts'
