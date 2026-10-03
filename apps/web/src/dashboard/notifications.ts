@@ -4,6 +4,7 @@
 
 import {
   ListNotificationsResponse,
+  type NotificationAccessGranted,
   type NotificationAccessRequest,
   type NotificationItem,
 } from '@draftroom/contracts'
@@ -26,6 +27,15 @@ export const KIND_TEXT: Record<NotificationItem['kind'], string> = {
   access_request: 'asked for access',
   // DANA-02: someone started a thread on a board you own ("Priya Shah (guest) commented on …").
   new_comment: 'commented',
+  // PRI-09b: a board owner approved the request you sent ("Ada approved your access request on …").
+  access_granted: 'approved your access request',
+}
+
+/** PRI-09b: what the approved request gave. */
+export const GRANTED_TEXT: Record<NotificationAccessGranted['role'], string> = {
+  editor: 'You can edit it now',
+  commenter: 'You can comment on it now',
+  viewer: 'You can view it now',
 }
 
 /** Kinds that stand for one new comment (what the board card counts as "new comments"). */

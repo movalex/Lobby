@@ -9,6 +9,8 @@ import {
   InvitationPreview,
   ListBoardsResponse,
   ListMembersResponse,
+  LOBBY_CLIENT_HEADER,
+  LOBBY_CLIENT_REV,
   Me,
   Project,
   TicketResponse,
@@ -123,7 +125,12 @@ export function createApiClient(opts: ApiClientOptions = {}) {
     path: string,
     { body, schema, signal, headers: extra }: RequestOptions<S>,
   ): Promise<Result<S>> {
-    const headers: Record<string, string> = { ...extra, accept: 'application/json' }
+    // The build's revision (contracts client-rev.ts): the api answers only values this build can parse.
+    const headers: Record<string, string> = {
+      ...extra,
+      accept: 'application/json',
+      [LOBBY_CLIENT_HEADER]: String(LOBBY_CLIENT_REV),
+    }
     // A content-type without a body is rejected by the API's JSON parser, so only set it with a body.
     if (body !== undefined) headers['content-type'] = 'application/json'
     let res: Response

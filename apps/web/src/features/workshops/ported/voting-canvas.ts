@@ -1,10 +1,11 @@
 // OWNER: 3f. Dot voting on the canvas (Excalidraw page): which element a press votes on, the keyboard
-// order of the objects a vote accepts, and where the markers go. Reads the canvas through the API only.
-import type { VoteEligibilityRule } from '@draftroom/contracts'
-import type { CanvasElement, LobbyCanvas, ScenePoint } from '../../../canvas/api/index.ts'
+// order of the objects a vote accepts, where the markers go, and what a selection vote (RETRO-10) would
+// list. Reads the canvas through the API only.
+import { VOTE_INELIGIBLE_TYPES, VOTE_SELECTION_MAX, type VoteEligibilityRule } from '@draftroom/contracts'
+import { type CanvasElement, items, type LobbyCanvas, type ScenePoint } from '../../../canvas/api/index.ts'
 import { notInVoteText, readingOrder, type VoteClick, voteClick } from '../voting.ts'
 import { ensureVisible } from './camera.ts'
-import { elementIdOf, isEligibleElement, labelOfRef, refOf } from './elements.ts'
+import { elementIdOf, isEligibleElement, labelOfRef, refOf, voteTypeOf } from './elements.ts'
 
 /** A plain press: no modifier (Shift+drag still moves a note while voting). */
 export const plainPress = (e: { shift: boolean; ctrl: boolean; meta: boolean; alt: boolean }) =>
@@ -102,3 +103,94 @@ export function cornersOf(
 }
 
 export { refOf }
+
+// ---- a vote over the selection (RETRO-10) ----------------------------------------------------------------
+
+/** What "Only the selection" would list: frames (their contents take votes) and single objects. */
+export interface SelectionScope {
+  /** The api refs, frames first, in selection order; at most VOTE_SELECTION_MAX when `tooMany` is false. */
+  refs: string[]
+  frames: number
+  objects: number
+  /** More than VOTE_SELECTION_MAX frames and objects: the vote cannot list them all. */
+  tooMany: boolean
+}
+
+const isLive = (el: CanvasElement | undefined): el is CanvasElement =>
+  !!el && !(el as { isDeleted?: boolean }).isDeleted
+
+/**
+ * The selection as a selection vote's list, or null when it holds nothing a vote can cover. A bound
+ * label stands for its container; connectors, lines and ink are left out (they never take votes); an
+ * object inside a selected frame is left out (the frame already covers it).
+ */
+export function selectionScopeOf(canvas: LobbyCanvas): SelectionScope | null {
+  const get = (id: string) => canvas.get(id)
+  const frames: CanvasElement[] = []
+  const objects: CanvasElement[] = []
+  const seen = new Set<string>()
+  for (const id of canvas.selection) {
+    const el = get(id)
+    if (!isLive(el)) continue
+    const target = items.containerOf(el, get)
+    if (!isLive(target) || seen.has(target.id) || refOf(target.id) === null) continue
+    seen.add(target.id)
+    if (target.type === 'frame') frames.push(target)
+    else {
+      const type = voteTypeOf(target)
+      if (type && !VOTE_INELIGIBLE_TYPES.includes(type)) objects.push(target)
+    }
+  }
+  const frameIds = new Set(frames.map((f) => f.id))
+  const loose = objects.filter((o) => !(o.frameId && frameIds.has(o.frameId)))
+  const refs = [...frames, ...loose].map((el) => refOf(el.id) as string)
+  if (refs.length === 0) return null
+  return { refs, frames: frames.length, objects: loose.length, tooMany: refs.length > VOTE_SELECTION_MAX }
+}
+
+/** The setup dialog's scope value for "Only the selection". */
+export const SELECTION_SCOPE = 'selection'
+
+/**
+ * What the setup dialog's scope starts on: the selection when it holds two frames or more (a retro's
+ * columns), else the frame the selection is in (or is), else the whole board.
+ */
+export function initialScope(selection: SelectionScope | null, frameRef: string | null): string {
+  if (selection && !selection.tooMany && selection.frames >= 2) return SELECTION_SCOPE
+  return frameRef ?? 'board'
+}
+
+const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? '' : 's'}`
+
+/** "2 frames, 3 objects" (the setup dialog's option). */
+export function selectionCounts(scope: Pick<SelectionScope, 'frames' | 'objects'>): string {
+  const parts: string[] = []
+  if (scope.frames) parts.push(plural(scope.frames, 'frame'))
+  if (scope.objects) parts.push(plural(scope.objects, 'object'))
+  return parts.join(', ')
+}
+
+/**
+ * What a selection vote covers, for the Voting panel: "in frames “Went well” and “To improve”", "on 3
+ * selected objects", "in 5 frames and on 2 selected objects". A listed object that is gone counts as an
+ * object.
+ */
+export function selectionText(refs: readonly string[], canvas: LobbyCanvas): string {
+  const get = (id: string) => canvas.get(id)
+  const frames: string[] = []
+  let objects = 0
+  for (const ref of refs) {
+    const id = elementIdOf(ref)
+    const el = id ? get(id) : undefined
+    if (isLive(el) && el.type === 'frame') frames.push(`“${labelOfRef(ref, get)}”`)
+    else objects++
+  }
+  const parts: string[] = []
+  if (frames.length > 0 && frames.length <= 3)
+    parts.push(
+      `in frame${frames.length === 1 ? '' : 's'} ${frames.length === 1 ? frames[0] : `${frames.slice(0, -1).join(', ')} and ${frames.at(-1)}`}`,
+    )
+  else if (frames.length > 3) parts.push(`in ${frames.length} frames`)
+  if (objects > 0) parts.push(`on ${plural(objects, 'selected object')}`)
+  return parts.join(' and ') || 'on the selected objects'
+}

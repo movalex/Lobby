@@ -20,6 +20,12 @@ export interface SaveInputs {
   /** changes queued on this device while offline */
   readonly offlineQueued: number
   /**
+   * OFFLINE-COUNT: the changes on this device as the person counts them, for `offlineChanges`: a container
+   * and its bound label are ONE change (three notes typed offline are "3 changes", not 6 once their labels
+   * are queued too). Absent: `max(offlineQueued, dirty + inflightOps)`, element by element, as before.
+   */
+  readonly offlineItems?: number
+  /**
    * Changes that may exist but are not known yet (the previous page's offline queue, not read yet): they
    * keep Saved away (V1 N20) but are not offline changes, so a page opening with an empty queue reads as
    * connecting, not as "Offline — 1 change" (A11Y-14, CR-3I-6).
@@ -36,7 +42,7 @@ export function computeSaveStatus(i: SaveInputs): SaveStatus {
   const pending = i.dirty + i.inflightOps + (i.unknown ?? 0) + (i.connected ? 0 : i.offlineQueued)
   const base = {
     pending,
-    offlineChanges: i.connected ? 0 : Math.max(i.offlineQueued, i.dirty + i.inflightOps),
+    offlineChanges: i.connected ? 0 : (i.offlineItems ?? Math.max(i.offlineQueued, i.dirty + i.inflightOps)),
   }
   if (!i.connected) return { ...base, state: 'offline', lastReject: i.lastReject }
   if (i.unavailableSince !== null && i.now - i.unavailableSince >= RETRYING_AFTER_MS)

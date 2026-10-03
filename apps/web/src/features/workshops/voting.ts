@@ -212,14 +212,20 @@ export function voteClick<T>(top: T | null | undefined, inVote: (target: T) => b
 
 /**
  * The notice for a click on an object the open vote does not take (W5-03): "Not part of this vote: only
- * sticky notes in “Ideas” take votes." `frameName` names the vote's frame (frame scope).
+ * sticky notes in “Ideas” take votes." `frameName` names the vote's frame (frame scope). A selection
+ * vote (RETRO-10) says "… in the selection …".
  */
 export function notInVoteText(
-  rule: { scope: 'board' | 'frame'; shapeTypes: readonly string[] | null },
+  rule: { scope: 'board' | 'frame' | 'selection'; shapeTypes: readonly string[] | null },
   frameName: string | null,
 ): string {
   const notesOnly = rule.shapeTypes?.length === 1 && rule.shapeTypes[0] === 'note'
-  const where = rule.scope === 'frame' ? ` in “${frameName?.trim() || 'the frame'}”` : ''
+  const where =
+    rule.scope === 'frame'
+      ? ` in “${frameName?.trim() || 'the frame'}”`
+      : rule.scope === 'selection'
+        ? ' in the selection'
+        : ''
   if (!notesOnly && !where) return 'Not part of this vote.'
   return `Not part of this vote: only ${notesOnly ? 'sticky notes' : 'objects'}${where} take votes.`
 }

@@ -3,6 +3,7 @@
  * Excalidraw stores it (the geo outlines are in geo-shapes.ts), the bound endpoint of an
  * arrow in orbit mode, and stroke simplification. No engine code; deterministic.
  */
+import { bindingGap } from '@draftroom/canvas-schema/engine'
 import { round2 } from '@draftroom/canvas-schema/limits'
 
 export interface Pt {
@@ -115,8 +116,8 @@ export interface TargetShape extends Box {
 export const fixedPointOnTarget = (t: TargetShape, fp: readonly [number, number]): Pt =>
   rotateAbout({ x: t.x + t.w * fp[0], y: t.y + t.h * fp[1] }, { x: t.cx, y: t.cy }, t.angle)
 
-/** Excalidraw's binding gap (`getBindingGap`: BASE_BINDING_GAP 5 + strokeWidth / 2, element index.js:8271). */
-export const bindingGap = (t: { readonly strokeWidth: number }): number => 5 + t.strokeWidth / 2
+/** Excalidraw's binding gap: canvas-schema's `bindingGap` (the engine's own `getBindingGap`; W5-53, one gap). */
+export { bindingGap }
 
 /**
  * Orbit mode's bound point (Excalidraw `updateBoundPoint`, E 9471-9560, approximated): where the segment

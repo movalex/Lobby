@@ -124,8 +124,11 @@ export function createSyncServer(config: SyncConfig, opts: SyncServerOptions = {
     hasEditors: (boardId) => elementRooms.sessionsOf(boardId).some((s) => canEditCanvas(s.meta.role)),
     log,
   })
+  // Maintenance mode (below, where the switch is built): declared here because the rooms read it too
+  // (ElementRoomDeps.maintenance, OPEN16: the second check after a write's body is read)
+  let maintenance = config.bootMaintenance === true
   // The ElementRoom (engine-switch.ts): sockets and the board routes go to it.
-  const elementRooms: ElementRoomService = createElementRooms(config, log, {
+  const elementRooms: ElementRoomService = createElementRooms(config, log, () => maintenance, {
     removed: (boardId, sessionId, meta) => {
       monitor?.removed(boardId, sessionId)
       sessionEnds.removed(boardId, meta)
@@ -175,7 +178,6 @@ export function createSyncServer(config: SyncConfig, opts: SyncServerOptions = {
   // restart or a redeploy starts with it off, unless the server was started with
   // DRAFTROOM_BOOT_MAINTENANCE=1 (open item 11: the build deployed into the cut-over's maintenance
   // window starts in it; the same POST turns it off).
-  let maintenance = config.bootMaintenance === true
   if (maintenance) log('[maintenance] on at start (DRAFTROOM_BOOT_MAINTENANCE=1)')
   const setMaintenance = (on: boolean) => {
     const was = maintenance
@@ -422,6 +424,7 @@ const BACKUPS_OFF = {
 function createElementRooms(
   config: SyncConfig,
   log: (...a: unknown[]) => void,
+  maintenance: () => boolean,
   report: {
     removed: (
       boardId: string,
@@ -440,6 +443,7 @@ function createElementRooms(
     log,
     onSessionRemoved: (boardId, sessionId, meta) => report.removed(boardId, sessionId, meta),
     onDocumentChange: (boardId) => report.changed(boardId),
+    maintenance,
   }
   // CR 2F-1: the registered room extensions' routes (apps/sync/src/room-internal/) join the room's own
   return extendElementRoom(factory(deps), deps)

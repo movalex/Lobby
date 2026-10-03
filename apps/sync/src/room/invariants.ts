@@ -4,12 +4,15 @@
 // violation costs:
 //
 //  REJECTIONS (the op that caused it is refused; its element goes back to its state before the push):
-//   - a text naming a container that is missing, deleted or not a text container → INVALID
+//   - a text naming a container that is missing or deleted → GONE (a normal race: another session deleted
+//     it, or its create in the same push was refused; GONE does not count toward the abuse close, MINOR
+//     abuse-code); naming a live element that is not a text container → INVALID (a forged shape)
 //   - a second label for a container → INVALID
 //   - a label created for (or pointed at) a container leased by another session → LEASED; locked → LOCKED
 //     (a container locked before the push; a label made in the same push as its new locked container,
 //     or one revived with it, is kept: CR-2D-1)
-//   - `frameId` naming something that is not a frame, or a frame inside a frame → INVALID
+//   - `frameId` naming an element that is not a frame, or a frame inside a frame → INVALID; naming no
+//     element at all (a frame whose create the same push had refused, or one purged) → GONE
 //   - a group id that would get a second parent group → INVALID
 //  REPAIRS (server writes in the same clock):
 //   - deleting a container deletes its label; deleting a target nulls the arrows' bindings to it (the end
@@ -56,7 +59,13 @@ function rejectPass(p: PushApplier): boolean {
       const newlyPointed = !wasLive(w) || w.before?.containerId !== el.containerId
       if (newlyPointed) {
         const x = p.live(el.containerId)
-        if (!x || !isTextContainer(x as never)) {
+        // missing or deleted: another session's delete, or a container whose create this push had refused
+        // (a guest's paste at the cap): an honest race, never an abuse reject (MINOR abuse-code)
+        if (!x) {
+          revert(w.id, 'GONE')
+          continue
+        }
+        if (!isTextContainer(x as never)) {
           revert(w.id, 'INVALID')
           continue
         }
@@ -99,9 +108,9 @@ function rejectPass(p: PushApplier): boolean {
     }
     if (el.frameId && (!wasLive(w) || w.before?.frameId !== el.frameId)) {
       const f = p.get(el.frameId).el
-      if (f?.type !== 'frame') {
-        revert(w.id, 'INVALID')
-      }
+      // no such element (a frame whose create this push had refused, or one purged): a race, GONE
+      if (!f) revert(w.id, 'GONE')
+      else if (f.type !== 'frame') revert(w.id, 'INVALID')
     }
   }
   // group nesting: each group id has one parent group across the live elements

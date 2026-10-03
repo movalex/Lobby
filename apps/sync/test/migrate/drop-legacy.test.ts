@@ -126,6 +126,24 @@ describe('dropLegacyBoardFile', () => {
     expect(dropLegacyBoardFile(job(b))).toMatchObject({ ok: true, reason: 'nothing-to-drop', dropped: [] })
   })
 
+  it('keeps the push receipts (CONTRACTS_REV 11, lb_receipts) as a serving table: byte-identical, not "unknown"', () => {
+    const b = converted()
+    // a room batch with a receipt (the table is made with the first one)
+    const store = new BoardStore(b.path)
+    store.begin()
+    store.putReceipts([{ uid: 'alice', rid: 'pg.1', clock: store.meta.clock + 1 }], AT)
+    store.setClock(store.meta.clock + 1)
+    store.commit()
+    store.close()
+    const receipts = () => readDb(b.path, (db) => lbDigests(db).lb_receipts)
+    const before = receipts()
+    expect(before?.rows).toBe(1)
+    const rep = dropLegacyBoardFile(job(b))
+    expect(rep).toMatchObject({ ok: true, dropped: LEGACY, unknownTables: [] })
+    expect(readDb(b.path, tableNames)).toEqual([...SERVING, 'lb_receipts', 'sqlite_sequence'].sort())
+    expect(receipts()).toEqual(before)
+  })
+
   it('inside the window: refused and the file is as it was; `force` overrides it and says so', () => {
     const b = converted()
     const tables = readDb(b.path, tableNames)

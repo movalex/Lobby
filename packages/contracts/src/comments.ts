@@ -8,6 +8,9 @@
 
 import { z } from 'zod'
 
+// The web build's revision (migration 0024), which decides what the api may answer it (client-rev.ts).
+export * from './client-rev.ts'
+
 // ---- ids ---------------------------------------------------------------------------------------
 
 const prefixedId = (p: string) => z.string().regex(new RegExp(`^${p}_[0-9A-Za-z]{10,40}$`))
@@ -215,10 +218,21 @@ export const CommentsDeletedEvent = z.object({ threadId: CommentThreadId, commen
 /**
  * mention: you were @mentioned; reply: someone replied in a thread you follow; resolved: a thread you
  * follow was resolved; access_request: someone asked for access (other features insert these);
- * new_comment (DANA-02): someone started a thread on a board you own (at most a few unread per author).
+ * new_comment (DANA-02): someone started a thread on a board you own (at most a few unread per author);
+ * access_granted (PRI-09b, 0024): a board owner (the actor) approved your access request. The api lists
+ * access_granted only to a web build that declares LOBBY_CLIENT_REV >= 1 (client-rev.ts).
  */
-export const NotificationKind = z.enum(['mention', 'reply', 'resolved', 'access_request', 'new_comment'])
+export const NotificationKind = z.enum([
+  'mention',
+  'reply',
+  'resolved',
+  'access_request',
+  'new_comment',
+  'access_granted',
+])
 export type NotificationKind = z.infer<typeof NotificationKind>
+/** Kinds a web build from before 0024 cannot parse: left out of its list and unread count. */
+export const NOTIFICATION_KINDS_SINCE_REV1: readonly NotificationKind[] = ['access_granted']
 
 /** What an access-request notification asks for (the request itself, as it stands now). */
 export const NotificationAccessRequest = z.object({
@@ -227,6 +241,10 @@ export const NotificationAccessRequest = z.object({
   status: z.enum(['pending', 'approved', 'denied']),
 })
 export type NotificationAccessRequest = z.infer<typeof NotificationAccessRequest>
+
+/** What an access_granted notification gave: the role of the approved request (PRI-09b). */
+export const NotificationAccessGranted = z.object({ role: z.enum(['editor', 'commenter', 'viewer']) })
+export type NotificationAccessGranted = z.infer<typeof NotificationAccessGranted>
 
 export const NotificationItem = z.object({
   id: NotificationId,
@@ -240,6 +258,8 @@ export const NotificationItem = z.object({
   snippet: z.string().nullable(),
   /** access_request only: the requested role and message of that person's latest request. */
   accessRequest: NotificationAccessRequest.nullable().optional(),
+  /** access_granted only: the role the approved request gave (absent from an api before 0024). */
+  accessGranted: NotificationAccessGranted.nullable().optional(),
   createdAt: isoDate,
   readAt: isoDate.nullable(),
 })

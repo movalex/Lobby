@@ -203,6 +203,11 @@ export interface LostPushRecord {
   readonly pv?: number
   /** a create's: the server copy it was made over (a tombstone it undeletes), if any */
   readonly prior?: SceneElement
+  /**
+   * CONTRACTS_REV 11 (W5-ENG-2): the push's receipt id, when it went out to a rev-11 room: the page that
+   * adopts the queue asks the room whether it landed. Absent in queues written before, or for a rev-10 room.
+   */
+  readonly rid?: string
 }
 
 /** A lost board-document write: the keys it set and the server's values it replaced (null: none). */
@@ -223,6 +228,8 @@ export interface LostDocRecord {
    * 6, DB1). Keys with no such write, and queues written before it existed, have none.
    */
   readonly clocks?: Readonly<Record<string, number>>
+  /** CONTRACTS_REV 11 (W5-ENG-2): the receipt id of the push that carried it, when it had one */
+  readonly rid?: string
 }
 
 /**
