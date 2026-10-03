@@ -177,10 +177,12 @@ export function createCanvasPort(deps: PortDeps): LobbyCanvasPort {
    * W5-39 (CR 3b-11): the engine's point editor for a selection of one arrow or line, as Excalidraw sets it
    * when it selects one itself (a click, Ctrl+A: `selectedLinearElement`); null for anything else. Without
    * it a code selection of a lone two-point connector (a `?el=` link, a search result, Alt+Arrow) drew no
-   * box and no point handles, so it looked unselected and its points could not be dragged.
+   * box and no point handles, so it looked unselected and its points could not be dragged. None for a
+   * read-only session either: its points cannot be dragged there, so handles would only look draggable;
+   * the code selection's outline shows it instead (canvas-ux navigation/view-helpers.ts codeSelectionBoxes).
    */
   const linearEditorFor = (ids: readonly string[]): AppState['selectedLinearElement'] => {
-    if (ids.length !== 1) return null
+    if (ids.length !== 1 || deps.readOnly()) return null
     const map = elementMap()
     const e = map.get(ids[0] as string)
     if (!e || e.isDeleted || e.locked || !X.isLinearElement(e)) return null

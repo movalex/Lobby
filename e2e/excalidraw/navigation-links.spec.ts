@@ -199,7 +199,7 @@ const pointEditorOf = (page: Page) =>
       ).__lobbyBoard?.api.getAppState().selectedLinearElement?.elementId ?? null,
   )
 
-test('W5-39 (CR 3b-11): a ?el= link to a connector selects it with the engine’s point handles; a link to it and a note outlines it (the engine draws no handles there); another selection drops the outline', async ({
+test('W5-39 (CR 3b-11): a ?el= link to a connector selects it with the engine’s point handles (a viewer gets the outline instead); a link to it and a note outlines it (the engine draws no handles there); another selection drops the outline', async ({
   canvasSession,
   browser,
   board,
@@ -231,6 +231,20 @@ test('W5-39 (CR 3b-11): a ?el= link to a connector selects it with the engine’
     await expect(lone.page.getByTestId('navigation.code-selection')).toHaveCount(0)
   } finally {
     await lone.context.close()
+  }
+  // a viewer: no point handles (its points cannot be dragged there, so they would only look draggable);
+  // Lobby's outline shows the linked connector instead
+  const carol = await users.grant(board, 'carol', 'viewer')
+  const v = await openPath(browser, carol, `/b/${board}?el=${ARROW}`)
+  try {
+    expect(await startView(v.page)).toBe('deep-link')
+    expect(await sortedSelection(v.page)).toEqual([ARROW])
+    await expect(
+      v.page.locator(`[data-testid="navigation.code-selection"] rect[data-shape-id="${ARROW}"]`),
+    ).toBeVisible()
+    expect(await pointEditorOf(v.page)).toBeNull()
+  } finally {
+    await v.context.close()
   }
   const b = await openPath(browser, bob, `/b/${board}?el=${ARROW},${NOTE}`)
   try {

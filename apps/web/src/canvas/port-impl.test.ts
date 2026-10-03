@@ -74,14 +74,14 @@ function fakeApi(initial: El[], state: Record<string, unknown> = {}) {
   }
 }
 
-function portOn(initial: El[], state?: Record<string, unknown>) {
+function portOn(initial: El[], state?: Record<string, unknown>, opts: { readOnly?: () => boolean } = {}) {
   const f = fakeApi(initial, state)
   const port = createCanvasPort({
     api: f.api as never,
     core: null,
     registries: createRegistries(),
     undo: null,
-    readOnly: () => false,
+    readOnly: opts.readOnly ?? (() => false),
     editingLease: () => null,
   })
   return { ...f, port }
@@ -213,6 +213,18 @@ describe('CanvasPort.select (W5-39, CR 3b-11)', () => {
     port.select(['a'])
     port.select([])
     expect(editor()).toBeNull()
+  })
+
+  it('no point editor in a read-only session (its points cannot be dragged there); one once it can edit', () => {
+    let readOnly = true
+    const { api, port } = portOn([arrow('a', 'a0')], {}, { readOnly: () => readOnly })
+    const editor = () => (api.getAppState() as { selectedLinearElement?: unknown }).selectedLinearElement
+    port.select(['a'])
+    expect(api.getAppState().selectedElementIds).toEqual({ a: true })
+    expect(editor()).toBeNull()
+    readOnly = false
+    port.select(['a'])
+    expect(editor()).not.toBeNull()
   })
 })
 
