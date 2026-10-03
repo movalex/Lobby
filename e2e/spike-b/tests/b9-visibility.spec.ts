@@ -1,6 +1,7 @@
 // B9, the workstation half (docs/EXCALIDRAW-MIGRATION.md §8.3 B9, §8.5 "edit visibility p95 ≤ 250 ms at
-// 100% zoom in two browsers with L2 running"): a local stack at 7895, the heavy board seeded through the
-// real protocol (200 real uploads, 9,220 elements), e2e/load's L2 profile against it from the
+// 100% zoom in two browsers with L2 running"): a local stack on SPIKE_B_PORT_BASE, the heavy board seeded
+// through the real protocol (200 real uploads, 9,220 elements; every image carries customData.lobby.file,
+// so the browsers load and draw it: W5-34), e2e/load's L2 profile against it from the
 // workstation in its own Node process (30 headless sessions on O2's engine core with real api tickets,
 // 10 editors at 20 remote edits/s in total), and two separate Chromium processes measuring A→B edit
 // visibility: A moves a note through the facade, B's paint watch (the second animation frame after the
@@ -8,19 +9,25 @@
 // sync is not CPU-limited, so this is the client-side number; the NAS's headless visibility under L2 is
 // reported next to it (B9.md).
 //
-// Opt-in and timing-gated: SPIKE_B9_WS=1, SPIKE_B_PORT_BASE=7895, only in the lead's quiet window; 3 runs
-// (SPIKE_B_RUN=1..3). Browsers: spike A14's headless shell with its GPU flags, 1536x864 at DPR 1.25, no
-// socket relay (it would add a hop). Needs M2 (O2's headless client, O1's room, O5's A1 file-refs).
-import { type ChildProcess, spawn } from 'node:child_process'
+// Opt-in and timing-gated: SPIKE_B9_WS=1, SPIKE_B_PORT_BASE in the runner's range (O3's 7895, wave C6's
+// 7800-7839), only in a quiet window; 3 runs (SPIKE_B_RUN=1..3). Browsers: spike A14's headless shell with
+// its GPU flags, 1536x864 at DPR 1.25, no socket relay (it would add a hop).
+// The board page is the config's: e2e/spike-b/playwright.config.ts builds spike B's page; since the
+// cut-over the evidence is LOBBY'S page (the shipped one: the level-of-detail pass, Lobby's overlays and
+// image loader), built by e2e/perf/b9-lobby.config.ts. The evidence names the page; on Lobby's page both
+// browsers wait until the loader has every image loaded before the first edit, and the run fails if they
+// do not (an earlier run's images were never drawn: before W5-34 no seeded image carried its asset id).
+import { type ChildProcess, execSync, spawn } from 'node:child_process'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { availableParallelism } from 'node:os'
+import { availableParallelism, cpus, release, totalmem } from 'node:os'
 import { join } from 'node:path'
 import { expect, test } from '@playwright/test'
 import { buildPlans, probeSids } from '../../load/plan.ts'
 import { L2 } from '../../load/profiles.ts'
 import { summarize } from '../../load/stats.ts'
 import type { LoadUser } from '../../load/tickets.ts'
-import { DPR, GPU_ARGS, VIEWPORT } from '../../spike/fixtures/perf-kit.ts'
+import { waitImagesLoaded } from '../../perf/lib.ts'
+import { DPR, GPU_ARGS, gpuInfo, VIEWPORT } from '../../spike/fixtures/perf-kit.ts'
 import type { O3BrowserProcess } from '../support/browsers.ts'
 import { RUN, writeEvidence } from '../support/checks.ts'
 import { canvasOf, closeAllBrowsers, harness } from '../support/harness.ts'
@@ -351,6 +358,28 @@ test('B9 workstation: A→B edit visibility at 100% and at fit while a local L2 
   // the two browsers; the note A moves is in frame 0, which no load editor owns (plan.ts)
   await A.openBoard(boardId)
   await B.openBoard(boardId)
+  // which board page this build serves, and (Lobby's page) every image loaded in both browsers
+  const page = await A.page.evaluate(() =>
+    document.querySelector('[data-lobby-board-canvas]') ? 'lobby' : 'spike',
+  )
+  const imagesLoaded =
+    page === 'lobby'
+      ? {
+          A: await waitImagesLoaded(A.page, 180_000),
+          B: await waitImagesLoaded(B.page, 180_000),
+        }
+      : null
+  console.log(`[B9 ws] board page: ${page}; images loaded ${JSON.stringify(imagesLoaded)}`)
+  const machine = {
+    cpu: cpus()[0]?.model.trim(),
+    logicalCpus: cpus().length,
+    ramGb: Math.round(totalmem() / 2 ** 30),
+    os: `${process.platform} ${release()}`,
+    gpu: await gpuInfo(A.browser, A.page),
+    browsers: "two Playwright headless shells (separate processes) with spike A14's GPU flags",
+    headless: true,
+    commit: execSync('git rev-parse --short HEAD', { cwd: REPO, encoding: 'utf8' }).trim(),
+  }
   const target = heavy.board.frame0Notes[0] as string
   await stampChanges(B.page, target)
   await sleep(20_000) // the load's join ramp and first edits
@@ -358,8 +387,11 @@ test('B9 workstation: A→B edit visibility at 100% and at fit while a local L2 
   const evidence = (extra: Record<string, unknown>) =>
     writeEvidence(testInfo, WITH_LOAD ? 'B9-workstation' : 'B9-workstation-noload', {
       boardId,
+      page,
+      machine,
       elements: heavy.board.elements.length,
       images: IMAGES,
+      imagesLoaded,
       withLoad: WITH_LOAD,
       seed: heavy.seed,
       uploadMs: heavy.uploadMs,
@@ -464,6 +496,10 @@ test('B9 workstation: A→B edit visibility at 100% and at fit while a local L2 
   })
   console.log(`[B9 ws] visibility ${JSON.stringify(summary)}`)
   expect(code, `the L2 load process: ${childLog.slice(-800)}`).toBe(0)
+  if (imagesLoaded) {
+    expect(imagesLoaded.A.loaded, 'every image loaded in A before the edits').toBe(IMAGES)
+    expect(imagesLoaded.B.loaded, 'every image loaded in B before the edits').toBe(IMAGES)
+  }
   expect(lost, "A's local edits lost before any push (O2's engine core; b9-probe-lost-edit)").toBe(0)
   const p95 = (summary['100%'] as { p95: number }).p95
   expect(p95, 'A→B visibility p95 at 100% zoom with L2 running (§8.5 gate)').toBeLessThanOrEqual(250)

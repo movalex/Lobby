@@ -7,6 +7,10 @@
 // headless shell with GPU flags, 1536×864 at DPR 1.25, the pointer at rest over the canvas, nothing
 // selected, 3 scripted pans of 3 s per view (a 600 px sine, half of it vertically) plus one traced pan; the
 // camera moves through LobbyCanvas.viewport.set (the board page's camera, as a person's pan would).
+// The images are real: each carries its upload's customData.lobby.file (W5-34; before that fix no image of
+// this board ever loaded, so every earlier number of this spec is of a board whose 200 images were never
+// drawn). The open is timed to live and Saved, then to every image loaded; each view is measured once the
+// images in it are loaded (the loader's state), and the run fails if any image fails to load.
 //
 // Each view is measured once per MODE, in the same page and the same machine state:
 //   default   the page as it is
@@ -19,7 +23,8 @@
 //   LOBBY_MEASURE_FPS=1 E2E_PORT_BASE=<base> pnpm --filter @draftroom/e2e excalidraw -- navigation-lod-fps
 import { writeFileSync } from 'node:fs'
 import { type Browser, type CDPSession, chromium, type Page } from '@playwright/test'
-import { logProfile, startProfile, stopProfile, summarizeProfile } from '../perf/fps.ts'
+import { installPanHooks, logProfile, startProfile, stopProfile, summarizeProfile } from '../perf/fps.ts'
+import { imagesInView, setView, waitImagesLoaded } from '../perf/lib.ts'
 import { HEAVY, type HeavySpec, seedHeavyExcalidrawBoard } from '../perf/seed.ts'
 import { DPR, GPU_ARGS, gpuInfo, measureView, pan, VIEWPORT } from '../spike/fixtures/perf-kit.ts'
 import { signInContext } from '../tests/support/api.ts'
@@ -45,89 +50,6 @@ function spec(): HeavySpec {
   if (!raw) return HEAVY
   const [frames, notes, images] = raw.split(',').map(Number)
   return { frames: frames ?? 2, notes: notes ?? 100, images: images ?? 0, comments: 0 }
-}
-
-/** perf-kit's pan hooks on LobbyCanvas.viewport (window.__lobbyBoard, dev-auth builds). */
-async function installCamera(page: Page) {
-  await page.evaluate(() => {
-    type V = { x: number; y: number; zoom: number }
-    const c = (
-      window as unknown as {
-        __lobbyBoard: { canvas: { viewport: { get(): V; set(v: Partial<V>): void } } }
-      }
-    ).__lobbyBoard.canvas
-    const w = window as unknown as Record<string, unknown>
-    let o = c.viewport.get()
-    w.__panStart = () => {
-      o = c.viewport.get()
-    }
-    w.__panBy = (dx: number, dy: number) => c.viewport.set({ x: o.x - dx / o.zoom, y: o.y - dy / o.zoom })
-    w.__panEnd = () => c.viewport.set({ x: o.x, y: o.y })
-  })
-}
-
-/** Lobby's whole-board fit (the navigation part's zoomTo, below Excalidraw's 0.1), or 0.25 / 1 on frame 0. */
-async function setView(page: Page, view: View, frame0: string) {
-  return page.evaluate(
-    async ({ view, frame0 }) => {
-      type B = { x: number; y: number; width: number; height: number }
-      type V = B & { zoom: number }
-      type El = B & { id: string; type: string; containerId?: string | null; isDeleted?: boolean }
-      const c = (
-        window as unknown as {
-          __lobbyBoard: {
-            canvas: {
-              items(): El[]
-              bounds(id: string): B | null
-              selection: string[]
-              select(ids: string[]): void
-              viewport: {
-                get(): V
-                set(v: Partial<V>): void
-                zoomTo(b: B, o?: { maxZoom?: number; zoom?: number }): void
-              }
-            }
-          }
-        }
-      ).__lobbyBoard.canvas
-      c.select([])
-      const all = c.items().filter((e) => !e.isDeleted && !(e.type === 'text' && e.containerId))
-      if (view === 'fit') {
-        let x1 = Number.POSITIVE_INFINITY
-        let y1 = Number.POSITIVE_INFINITY
-        let x2 = Number.NEGATIVE_INFINITY
-        let y2 = Number.NEGATIVE_INFINITY
-        for (const e of all) {
-          x1 = Math.min(x1, e.x)
-          y1 = Math.min(y1, e.y)
-          x2 = Math.max(x2, e.x + e.width)
-          y2 = Math.max(y2, e.y + e.height)
-        }
-        c.viewport.zoomTo({ x: x1, y: y1, width: x2 - x1, height: y2 - y1 }, { maxZoom: 1 })
-      } else {
-        const f = c.bounds(frame0)
-        if (!f) throw new Error('no frame 0')
-        const vp = c.viewport.get()
-        const sw = vp.width * vp.zoom
-        const sh = vp.height * vp.zoom
-        if (view === '0.25') {
-          const z = 0.25
-          c.viewport.set({
-            zoom: z,
-            x: f.x + f.width / 2 - sw / z / 2,
-            y: f.y + f.height / 2 - sh / z / 2,
-          })
-        } else c.viewport.set({ zoom: 1, x: f.x - 20, y: f.y - 20 })
-      }
-      await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))
-      const v = c.viewport.get()
-      const visible = all.filter(
-        (e) => e.x + e.width >= v.x && e.x <= v.x + v.width && e.y + e.height >= v.y && e.y <= v.y + v.height,
-      ).length
-      return { zoom: v.zoom, visible, total: all.length }
-    },
-    { view, frame0 },
-  )
 }
 
 /** Switches the page into a mode; returns false when the page cannot (the pass is not on it). */
@@ -213,11 +135,18 @@ test('heavy board: pan fps at Lobby’s fit, 0.25 and 1, per mode (the §8.5 lev
       seeded.elements,
       { timeout: 180_000, polling: 250 },
     )
-    log(`opened ${seeded.elements} elements in ${Date.now() - t0} ms`)
+    const openMs = Date.now() - t0
+    const imgs = await waitImagesLoaded(page, 180_000)
+    const open = { ms: openMs, imagesMs: openMs + imgs.ms, images: imgs.total, imagesLoaded: imgs.loaded }
+    log(
+      `opened ${seeded.elements} elements in ${openMs} ms (live and Saved); ${imgs.loaded}/${imgs.total} images loaded at ${open.imagesMs} ms (${imgs.failed} failed)`,
+    )
+    expect(imgs.failed, 'images that failed to load').toBe(0)
+    expect(imgs.loaded, 'images loaded within 3 min of the open').toBe(seeded.images.length)
     const gpu = await gpuInfo(browser, page)
     log(`gpu: ${JSON.stringify(gpu)}`)
     const cdp: CDPSession = await context.newCDPSession(page)
-    await installCamera(page)
+    await installPanHooks(page)
     await page.mouse.move(VIEWPORT.width / 2, VIEWPORT.height / 2)
     await page.waitForTimeout(3_000)
 
@@ -233,8 +162,10 @@ test('heavy board: pan fps at Lobby’s fit, 0.25 and 1, per mode (the §8.5 lev
           log(`${mode}: not on this page, skipped`)
           continue
         }
-        const cam = await setView(page, view, frame0)
+        const cam = await setView(page, view === '1' ? '100' : view, frame0)
         await page.waitForTimeout(2_500)
+        const inView = await imagesInView(page)
+        const shown = await waitImagesLoaded(page, 60_000, inView)
         // the pass renders its bitmaps once it is on: measure the steady state (the time it took is logged)
         if (mode === 'lod-on') {
           const t = Date.now()
@@ -252,9 +183,17 @@ test('heavy board: pan fps at Lobby’s fit, 0.25 and 1, per mode (the §8.5 lev
         }
         const r = await measureView(page, cdp, view, cam.zoom)
         const state = await lodState(page)
-        rows.push({ mode, ...r, visible: cam.visible, total: cam.total, lod: state })
+        rows.push({
+          mode,
+          ...r,
+          visible: cam.visible,
+          total: cam.total,
+          imagesInView: shown.total,
+          imagesLoaded: shown.loaded,
+          lod: state,
+        })
         log(
-          `${mode} ${view} (zoom ${cam.zoom.toFixed(4)}, ${cam.visible}/${cam.total} in view): ${r.reps
+          `${mode} ${view} (zoom ${cam.zoom.toFixed(4)}, ${cam.visible}/${cam.total} in view, ${shown.loaded}/${shown.total} images in view loaded): ${r.reps
             .map((x) => x.fps)
             .join(
               ' / ',
@@ -273,6 +212,8 @@ test('heavy board: pan fps at Lobby’s fit, 0.25 and 1, per mode (the §8.5 lev
     const result = {
       gpu,
       viewport: `${VIEWPORT.width}x${VIEWPORT.height} @${DPR}`,
+      headless: true,
+      open,
       board: { spec: seeded.spec, elements: seeded.elements, items: seeded.items },
       rows,
     }
