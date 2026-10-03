@@ -1,6 +1,7 @@
-import { lazy, type ReactNode, Suspense, useEffect } from 'react'
+import { lazy, type ReactNode, Suspense, useEffect, useState } from 'react'
 import { SignInPage } from './auth/SignInPage.tsx'
 import { SessionProvider, useSession } from './auth/session.tsx'
+import { createSignOutPurge } from './canvas/sync/adapter/offline-idb.ts'
 import { DashboardPage } from './dashboard/DashboardPage.tsx'
 import { landingWorkspace, noWorkspaceCopy } from './dashboard/model.ts'
 import { GuestEndedScreen } from './invite/GuestEndedScreen.tsx'
@@ -34,6 +35,7 @@ export function App() {
   }
   return (
     <SessionProvider>
+      <PurgeOfflineOnSignOut />
       {/* Wave 3: who is signed in, an account or a name-only guest (GET /api/me `kind`). */}
       <GuestKindProvider>
         <Routes />
@@ -80,6 +82,19 @@ function Routes() {
     default:
       return <MessageScreen title="Page not found" body="There is nothing at this address." />
   }
+}
+
+/**
+ * CRIT-18: when the session of the user signed in here ends (Sign out, or any 401: expired, revoked,
+ * signed out in another tab), the board edits they had queued offline in this browser (IndexedDB,
+ * canvas/sync/adapter/offline-idb.ts) are deleted, so a shared machine does not keep them readable.
+ */
+function PurgeOfflineOnSignOut() {
+  const { state } = useSession()
+  const [observe] = useState(() => createSignOutPurge())
+  const uid = state.status === 'signed-in' ? state.me.user.id : null
+  useEffect(() => observe({ status: state.status, uid }), [observe, state.status, uid])
+  return null
 }
 
 /** Renders children only with a session; otherwise sends the user to sign in and back here after. */
