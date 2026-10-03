@@ -4,6 +4,7 @@
 //    of its name;
 //  - W5-55: a note being typed into is outlined;
 //  - W5-51: zoomed out to 14 %, no frame name runs into a neighbouring frame;
+//  - R13: on a phone, other people's cursors show without their name tags;
 //
 //   E2E_PORT_BASE=<base> pnpm --filter @draftroom/e2e exec playwright test excalidraw/canvas-look.spec.ts
 import type { Page } from '@playwright/test'
@@ -299,4 +300,30 @@ test('W5-51: zoomed out to 14 %, no frame name runs into a neighbouring frame or
   await expect
     .poll(async () => (await shownNames(a.page)).map((n) => n.text).sort())
     .toEqual(names.slice().sort())
+})
+
+test('R13: on a phone, other people’s cursors show without their name tags; at desktop width the tags are back', async ({
+  canvasSession,
+}) => {
+  const a = await canvasSession('alice')
+  const b = await canvasSession('bob')
+  await waitForCanvasUx(a.page)
+  await a.page.setViewportSize({ width: 390, height: 844 })
+  const cursor = a.page.locator(`[data-testid="cursor"][data-uid="${b.id}"]`)
+  await expect
+    .poll(
+      async () => {
+        const p = await canvasPoint(b.page, 0.5, 0.5)
+        await b.page.mouse.move(p.x - 30, p.y - 30)
+        await b.page.mouse.move(p.x, p.y, { steps: 4 })
+        return cursor.count()
+      },
+      { timeout: 20_000 },
+    )
+    .toBe(1)
+  await expect(cursor.locator('svg')).toBeVisible()
+  await expect(cursor.locator('.lobby-cursor__name')).toBeHidden()
+  await a.page.setViewportSize({ width: 1280, height: 800 })
+  await expect(cursor.locator('.lobby-cursor__name')).toBeVisible()
+  await expect(cursor.locator('.lobby-cursor__name')).toHaveText(b.name)
 })

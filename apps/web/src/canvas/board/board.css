@@ -122,6 +122,13 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* R13: on a phone (a touch screen, or a window 600 px wide or less) other people’s name tags covered the canvas
+   during a workshop: only their arrows show there (the people list still names everyone) */
+@media (pointer: coarse), (max-width: 600px) {
+  .lobby-cursor__name {
+    display: none;
+  }
+}
 
 .lobby-lease-status {
   position: absolute;
