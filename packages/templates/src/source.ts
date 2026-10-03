@@ -26,6 +26,12 @@ export interface TemplateInfo {
 
 /** A template's metadata and its content. */
 export interface TemplateSource extends TemplateInfo {
+  /**
+   * The template's notes are its prompts and instructions (questions, placeholders), not ideas: each is
+   * marked so Group into themes leaves it where it is (PlanNote `prompt`, CR-3H-2). The Lobby tour's are
+   * example ideas the demo groups, so it leaves this off.
+   */
+  promptNotes?: boolean
   /** Adds the template's frames, texts, notes, boxes and arrows to `b` (origin = the template's top-left). */
   plan(b: BoardBuilder): void
 }
@@ -48,7 +54,7 @@ export function getTemplateSource(id: unknown): TemplateSource | undefined {
 
 /** The plan of `source` at page-space `origin` (fresh objects on every call). */
 export function planOf(source: TemplateSource, origin: TemplatePoint): BoardPlan {
-  const b = createBoardBuilder(origin)
+  const b = createBoardBuilder(origin, { promptNotes: source.promptNotes ?? false })
   source.plan(b)
   return b.finish()
 }

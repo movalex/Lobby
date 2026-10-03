@@ -7,7 +7,11 @@
  *    queues of the same user and board whose lock is free (a closed tab, D6), so their edits are replayed,
  *    not lost, and two tabs never replay the same queue;
  *  - guests get no persistence (the board page gives them the memory store), and `purge()` removes every
- *    queue of the board for this user (sign-out, a FORBIDDEN close, a revocation);
+ *    queue of the board for this user (a FORBIDDEN close, a revocation);
+ *  - when a session ends (sign-out in this tab or another, an expired or revoked session) every queue
+ *    that user left in this browser is deleted, every board and tab (`purgeOfflineQueuesOf`, from
+ *    App.tsx through `createSignOutPurge`; CRIT-18): unsent edits are not left readable on a shared
+ *    machine;
  *  - a `save` or `clear` starts its transaction in the call itself once the database is open (and asks
  *    it to commit at once), so a write the core starts right before a reload or in `pagehide` is not
  *    left waiting for a later task (spike B part 3: the offline window); it resolves once committed.
@@ -177,5 +181,77 @@ export function createIdbOfflineStore(o: { boardId: string; uid: string; tab: st
       released = true
       releaseLock()
     },
+  }
+}
+
+/**
+ * CRIT-18: deletes every offline queue `uid` left in this browser (every board, every tab), in one
+ * transaction; resolves with how many were deleted once it has committed. A queue write a closing board
+ * page started before this call is ordered before it (IndexedDB runs overlapping transactions in the
+ * order they were made), so it is deleted too. Never logs or returns the queues' content.
+ */
+export async function purgeOfflineQueuesOf(uid: string, idb: IDBFactory = indexedDB): Promise<number> {
+  const db = await new Promise<IDBDatabase>((resolve, reject) => {
+    const req = idb.open(DB, 1)
+    req.onupgradeneeded = () => {
+      const created = req.result
+      if (!created.objectStoreNames.contains(STORE)) created.createObjectStore(STORE, { keyPath: 'key' })
+    }
+    req.onsuccess = () => resolve(req.result)
+    req.onerror = () => reject(req.error)
+  })
+  try {
+    return await new Promise<number>((resolve, reject) => {
+      const t = db.transaction(STORE, 'readwrite')
+      const s = t.objectStore(STORE)
+      let deleted = 0
+      const all = s.getAll()
+      all.onsuccess = () => {
+        for (const r of all.result as QueueRecord[])
+          if (r.uid === uid) {
+            s.delete(r.key)
+            deleted++
+          }
+      }
+      t.oncomplete = () => resolve(deleted)
+      t.onabort = () => reject(t.error ?? new Error('offline queue purge aborted'))
+      t.onerror = () => reject(t.error ?? new Error('offline queue purge failed'))
+    })
+  } finally {
+    db.close()
+  }
+}
+
+/** What App.tsx tells the purge about the session: its status and, signed in, who. */
+export interface SessionSeen {
+  readonly status: 'loading' | 'signed-out' | 'signed-in' | 'unreachable'
+  readonly uid: string | null
+}
+
+/**
+ * The session watch App.tsx feeds on every session change (CRIT-18): once a user who was signed in here
+ * is signed out (this tab's sign-out, or any 401: expired, revoked, signed out in another tab), their
+ * offline queues are purged, once. A board socket's NOT_AUTHENTICATED reaches it the same way (the
+ * board page re-reads the session; a session that is really gone becomes signed-out). Loading and an
+ * unreachable api purge nothing (the session may well be alive). Another account signed in here ends
+ * the first one's session too.
+ */
+export function createSignOutPurge(
+  purge: (uid: string) => Promise<unknown> = (uid) => purgeOfflineQueuesOf(uid),
+): (seen: SessionSeen) => void {
+  let last: string | null = null
+  return (seen) => {
+    if (seen.status === 'signed-in') {
+      // another account signed in here without a signed-out in between: the first one's session ended
+      if (last && seen.uid !== last) void purge(last).catch(() => {})
+      last = seen.uid
+      return
+    }
+    if (seen.status !== 'signed-out' || !last) return
+    const uid = last
+    last = null
+    void purge(uid).catch(() => {
+      // no IndexedDB here (a private window that refuses it): there is nothing stored to purge
+    })
   }
 }

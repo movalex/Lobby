@@ -96,7 +96,8 @@ export function planToRecords(plan: BoardPlan, ctx: TemplateContext): TLRecord[]
       }
       case 'note': {
         const shape: TLNoteShape = {
-          ...common(node),
+          // a template's prompt note (CR-3H-2): the marker the converter maps to `lobby.prompt`
+          ...common(node, node.prompt ? { meta: { draftroomPrompt: 'true' } } : {}),
           type: 'note',
           props: {
             color: node.color,

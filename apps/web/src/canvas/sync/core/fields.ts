@@ -64,6 +64,37 @@ export const lobbyOf = (el: Rec | undefined): Record<string, unknown> =>
 export const normalized = (field: string, value: unknown): unknown =>
   field === 'fileId' && typeof value === 'string' ? stripLocalFileSuffix(value) : value
 
+/**
+ * `next` (a copy the core rebuilt from the server's, a fresh object) with `local`'s `fileId` when the two
+ * differ only by the local derivative suffix (E9, CR-W5-3G-3): the derivative swap's `ver_X@display`
+ * stays on screen through every rebuild (its own no-op version bump, a remote move, an ack, a reconnect)
+ * while the wire, the hash and the offline queue only ever see `ver_X`. A different wire file (a replace)
+ * takes the server's, so the swap decides again. A cropped copy keeps no suffix: a crop is in the pixels
+ * of the thumb every tab loads (CR-W5-3G-2), so a remote crop of an upgraded image is drawn from its
+ * thumb in the same apply. Returns `next`.
+ */
+export function keepLocalFileSuffix(next: SceneElement, local: SceneElement | undefined): SceneElement {
+  const mine = local?.fileId
+  const theirs = next.fileId
+  if (typeof mine !== 'string' || typeof theirs !== 'string' || mine === theirs || next.crop) return next
+  if (stripLocalFileSuffix(mine) !== stripLocalFileSuffix(theirs)) return next
+  ;(next as Record<string, unknown>).fileId = mine
+  return next
+}
+
+/**
+ * A deep copy of `el` as a push record or the offline queue keeps it: its `fileId` without the local
+ * derivative suffix (E9), so no `@display` id is ever stored (an adopted queue starts on the thumb).
+ */
+export function withWireFile<T extends SceneElement | undefined>(el: T): T {
+  const out = clone(el)
+  if (out && typeof out.fileId === 'string') {
+    const wire = stripLocalFileSuffix(out.fileId)
+    if (wire !== out.fileId) (out as Record<string, unknown>).fileId = wire
+  }
+  return out
+}
+
 export const kindOrNull = (el: Rec & { readonly type: string }): ElementKind | null =>
   kindOf(el as { type: string; containerId?: string | null })
 

@@ -771,10 +771,9 @@ test('Group into themes leaves a template’s prompt notes where they are (R9; C
   openai,
 }) => {
   // CR-3H-2: the room stamps lobbyServer.lastEditedBy on a label when it is CREATED (merge.ts), so a
-  // template's prompt notes placed by a person read as typed by them, for the api (sources.ts, 2F) and
-  // for this client alike (they share the rule), and are grouped. Expected to fail until "typed" means
-  // a text change after creation.
-  test.fail(true, 'CR-3H-2: template notes placed by a person count as typed on the new canvas')
+  // template's notes placed by a person read as typed by them, for the api (sources.ts, 2F) and for this
+  // client alike (they share the rule). Fixed in the template emitter (wave A): a template's prompt notes
+  // carry `customData.lobby.prompt`, the marker both read as a prompt whoever placed them.
   const a = await canvasSession('alice')
   const IMPROVE = '3 · What to improve'
   await placeTemplate(a.page, board, 'retrospective')

@@ -7,6 +7,8 @@
  * - a text → free `text` (plain words, wrapped to the text's width by the engine's `wrapText`, top-aligned,
  *   `autoResize: false` like tldraw's fixed-width text);
  * - a note → `stickynote` + bound label (`buildStickyNote`: the engine's own note layout, `created: null`);
+ *   a template's prompt note carries `customData.lobby.prompt` (what the converter makes of tldraw's
+ *   `draftroomPrompt`), so Group into themes leaves it where it is (CR-3H-2);
  * - a box → `rectangle` / `ellipse` / `diamond` + bound label (`layoutBoundText`: the engine's label layout);
  *   image slots and swatches carry `customData.lobby.slot` / `swatch` (the converter's mapping of the
  *   tldraw meta markers);
@@ -184,6 +186,9 @@ function backgroundOf(fill: LobbyFill, color: ReturnType<typeof lobbyColor>): st
   return 'transparent'
 }
 
+/** A prompt note's `lobby.prompt`: the value tldraw's `draftroomPrompt` marker has (and converts to). */
+export const PROMPT_MARKER = 'true'
+
 /** The converter's customData for the tldraw meta markers (`draftroomSlot` → `slot`, …). */
 function markersOf(geo: PlanGeo): El | undefined {
   const lobby: El = {}
@@ -308,7 +313,9 @@ export function planToScene(plan: BoardPlan, opts: SceneEmitOptions = {}): Scene
         })
         const frameId = node.parent ? (idOf.get(node.parent) ?? null) : null
         const stamp = (e: object): El => ({ ...e, frameId, versionNonce: randomInt31(), updated: now })
-        put(node, built.label ? [stamp(built.note), stamp(built.label)] : [stamp(built.note)])
+        const note = stamp(built.note)
+        if (node.prompt) note.customData = { lobby: { prompt: PROMPT_MARKER } }
+        put(node, built.label ? [note, stamp(built.label)] : [note])
         break
       }
       case 'geo': {

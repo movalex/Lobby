@@ -35,6 +35,8 @@ export const moodBoard: TemplateSource = {
   description: 'Set a visual direction with keywords, a color palette, image slots and a this-not-that list.',
   category: 'visual',
   sections: SECTIONS,
+  // its notes are prompts and placeholders for the team, not ideas (CR-3H-2)
+  promptNotes: true,
   plan(b) {
     const direction = b.section({
       x: 0,

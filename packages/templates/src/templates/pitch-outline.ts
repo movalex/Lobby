@@ -80,6 +80,8 @@ export const pitchOutline: TemplateSource = {
   description: 'Shape a pitch step by step, from the problem and insight to the idea, proof and a clear ask.',
   category: 'plan',
   sections: SECTIONS,
+  // its notes are prompts and placeholders for the team, not ideas (CR-3H-2)
+  promptNotes: true,
   plan(b) {
     const totalW = STEPS.length * COL_W + (STEPS.length - 1) * COL_GAP
 
