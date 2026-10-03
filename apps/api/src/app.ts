@@ -2,14 +2,20 @@
 // (PGlite or pg), files in the blob store (local directory or R2), preview workers over /api/worker/*.
 // createApiServer() builds a ready-to-inject app; tests use app.inject() and never bind a port.
 
-import type { AddressInfo } from 'node:net'
+import type { IncomingHttpHeaders } from 'node:http'
+import { type AddressInfo, Socket } from 'node:net'
 import { checkInternalSecret, INTERNAL_SECRET_HEADER } from '@draftroom/auth-tickets'
 import type { Me } from '@draftroom/contracts'
 import { type Db, isUniqueViolation, migrate, openDb } from '@draftroom/db'
 import { dataLayout } from '@draftroom/dev-assets'
 import fastifyCookie from '@fastify/cookie'
 import fastifyRateLimit from '@fastify/rate-limit'
-import Fastify, { type FastifyInstance, type FastifyReply, type FastifyServerOptions } from 'fastify'
+import Fastify, {
+  type FastifyInstance,
+  type FastifyReply,
+  type FastifyRequest,
+  type FastifyServerOptions,
+} from 'fastify'
 import { createClerkAuthProvider } from './auth/clerk.ts'
 import { creatorLookup } from './auth/creator-sql.ts'
 import { createDevAuthProvider } from './auth/dev.ts'
@@ -48,6 +54,35 @@ import { checkedSnapshots, createHttpSyncInternalClient, type SyncInternalClient
 import type { VersionChange } from './worker/jobs.ts'
 import { WORKER_PREFIX, type WorkerDeps, workerPlugin } from './worker/routes.ts'
 
+/**
+ * How long a request may take to ARRIVE (docs/SECURITY-REVIEW-2026-10-02.md M3-3). Fastify's own
+ * `requestTimeout` was 0: a client could hold a socket for as long as it liked by sending a JSON body, or
+ * an upload, a byte at a time. Node's timeout cannot tell an upload from a JSON call (one number for every
+ * route, counted over the whole request), and an upload is long on purpose (a 500 MB video), so there are
+ * three limits instead, none of them on how long a handler takes to answer:
+ *  - `smallMs`: a request that declares no body, a small one (`largeBodyBytes` or less) or a chunked one
+ *    must have arrived whole this long after its headers did, however steadily it trickles in;
+ *  - `stallMs`: a request that declares a large body (an upload, a board import) has no total limit,
+ *    but is cut when no byte of it arrives for this long;
+ *  - `ceilingMs`: Node's own `requestTimeout`, the most any request may take to arrive, uploads
+ *    included (60 minutes: what the review suggested; a slower upload is refused, never half-kept).
+ * The first two answer 408 and close the connection (an upload's partial blob is deleted by its handler).
+ */
+export interface RequestTimeouts {
+  smallMs: number
+  stallMs: number
+  ceilingMs: number
+  /** A declared Content-Length above this makes a request a large one (the JSON routes stop at 256 KiB). */
+  largeBodyBytes: number
+}
+
+export const DEFAULT_REQUEST_TIMEOUTS: RequestTimeouts = {
+  smallMs: 60_000,
+  stallMs: 60_000,
+  ceilingMs: 60 * 60_000,
+  largeBodyBytes: 1024 * 1024,
+}
+
 export interface ApiDeps {
   /** A migrated-or-empty database the caller owns (it is migrated here, never closed here). */
   db?: Db
@@ -75,6 +110,8 @@ export interface ApiDeps {
   syncInternal?: SyncInternalClient
   /** Replaces the blob store chosen by config (tests inject fakes or a temp directory). */
   blobs?: BlobStore
+  /** Request arrival limits (defaults: DEFAULT_REQUEST_TIMEOUTS; tests lower them). */
+  timeouts?: Partial<RequestTimeouts>
   /** Worker route limits (tests lower them). */
   workerRateLimit?: WorkerDeps['rateLimit']
   /**
@@ -124,6 +161,101 @@ export function registerInternalSecretGuard(app: FastifyInstance, secret: string
           ? engineBadSecretBody()
           : { error: { code: 'NOT_AUTHENTICATED', message: 'Internal credentials required.' } },
       )
+  })
+}
+
+const REQUEST_TIMEOUT_BODY = JSON.stringify({
+  error: { code: 'REQUEST_TIMEOUT', message: 'The request took too long to arrive.' },
+})
+const REQUEST_TIMEOUT_RESPONSE = [
+  'HTTP/1.1 408 Request Timeout',
+  'Connection: close',
+  'Content-Type: application/json; charset=utf-8',
+  'Cache-Control: no-store',
+  `Content-Length: ${Buffer.byteLength(REQUEST_TIMEOUT_BODY)}`,
+  '',
+  REQUEST_TIMEOUT_BODY,
+].join('\r\n')
+
+/** The body a request declares: 0 for none, null when it is not known up front (chunked). */
+function declaredBodyLength(headers: IncomingHttpHeaders): number | null {
+  if (headers['transfer-encoding'] !== undefined) return null
+  const length = headers['content-length']
+  if (length === undefined) return 0
+  const n = Number(length)
+  return Number.isSafeInteger(n) && n >= 0 ? n : null
+}
+
+/**
+ * The arrival limits of RequestTimeouts, as one onRequest hook (so it covers every route, the scopes of
+ * the file routes and the worker included). A request that has no body to wait for costs nothing; one that
+ * has gets a timer that is dropped as soon as the request has arrived (or its connection has gone), and
+ * is `unref`ed so it never keeps the process alive. Real sockets only: app.inject() has nothing to time.
+ * Decided by the declared Content-Length, not by a list of routes, so a new route that takes a large body
+ * is not cut on a deadline it cannot meet, and one that takes a small body cannot be fed slowly. Time the
+ * handler spends not reading what has already arrived is never held against the client.
+ * The log line names the route pattern only (never the URL, which can hold a token).
+ */
+export function registerRequestTimeouts(app: FastifyInstance, t: RequestTimeouts): void {
+  app.addHook('onRequest', async (req: FastifyRequest, reply: FastifyReply) => {
+    const raw = req.raw
+    const socket = raw.socket
+    if (raw.complete || !(socket instanceof Socket)) return
+    const declared = declaredBodyLength(raw.headers)
+    if (declared === 0) return
+    const large = declared !== null && declared > t.largeBodyBytes
+    const limit = large ? t.stallMs : t.smallMs
+    const startedAt = Date.now()
+    let lastRead = socket.bytesRead
+    let lastAt = startedAt
+
+    const stop = () => {
+      clearInterval(timer)
+      raw.off('close', stop)
+      socket.off('close', stop)
+    }
+    const cut = (reason: 'slow' | 'stalled') => {
+      stop()
+      if (socket.destroyed) return
+      req.log.info(
+        {
+          evt: 'request.timeout',
+          reason,
+          route: req.routeOptions.url ?? '(no route)',
+          ms: Date.now() - startedAt,
+        },
+        'request cut',
+      )
+      // what Node's own request timeout does: a 408 if no response has started, then the connection goes
+      if (socket.writable && !reply.raw.headersSent) socket.write(REQUEST_TIMEOUT_RESPONSE)
+      socket.destroySoon()
+      setTimeout(() => socket.destroy(), 1_000).unref() // a client that never reads its answer
+    }
+    const timer = setInterval(
+      () => {
+        if (raw.complete || socket.destroyed) return stop()
+        const now = Date.now()
+        // Bytes the server has received and its handler has not read yet: the server is the slow side
+        // (a store write, a database call), and Node has stopped reading the socket for it. Not a client's
+        // fault, so not counted against it.
+        if (raw.readableLength > 0) {
+          lastAt = now
+          return
+        }
+        if (!large) {
+          if (now - startedAt >= limit) cut('slow')
+          return
+        }
+        if (socket.bytesRead !== lastRead) {
+          lastRead = socket.bytesRead
+          lastAt = now
+        } else if (now - lastAt >= limit) cut('stalled')
+      },
+      Math.max(10, Math.min(1_000, Math.floor(limit / 4))),
+    )
+    timer.unref()
+    raw.once('close', stop)
+    socket.once('close', stop)
   })
 }
 
@@ -177,12 +309,15 @@ async function buildServer(
   blobs: BlobStore,
 ): Promise<ApiServer> {
   const now = deps.now ?? (() => new Date())
+  const timeouts: RequestTimeouts = { ...DEFAULT_REQUEST_TIMEOUTS, ...deps.timeouts }
   // Request logging is ours (onResponse below): route patterns only, never URLs, so invitation tokens
   // in paths and query strings never reach the logs.
   const app = Fastify({
     logger: deps.logger ?? false,
     logController: new Fastify.LogController({ disableRequestLogging: true }),
     return503OnClosing: true,
+    // Node's own limit, as the ceiling for every request (RequestTimeouts above): never 0.
+    requestTimeout: timeouts.ceilingMs,
     trustProxy: config.trustProxy, // req.ip (per-IP rate limits) behind proxies: TRUST_PROXY, docs/DEPLOY.md
     // CSD-4: router-level errors (a malformed or over-long URL) never reach setErrorHandler below, and
     // Fastify's own body repeats the requester's URL. They get the same generic body as every other refusal.
@@ -199,6 +334,7 @@ async function buildServer(
     },
   })
   registerInternalSecretGuard(app, config.internalSecret)
+  registerRequestTimeouts(app, timeouts) // reads no cookie and no body: after the guard, before the rest
   const syncNotifier =
     deps.notifier ??
     createHttpSyncNotifier({ baseUrl: config.syncInternalUrl, secret: config.internalSecret, log: app.log })
