@@ -278,6 +278,21 @@ export const ARCHIVE_MAX_ELEMENTS = MAX_LIVE_ELEMENTS
  * deleted (a tombstone created or revived does not reset the count; V2's re-check).
  */
 export const GUEST_ITEM_CAP = 500
+/**
+ * Items all name-only guests together may create on one board (CR-W5-FIX-3, EXCALIDRAW-MIGRATION open item
+ * 16): the api mints a new guest uid for every cookie-less join of an editor guest link (up to
+ * `GUESTS_PER_LINK` of them), so the per-uid cap above alone let one link make about 200 x 500 items. Summed
+ * over every guest uid's count exactly as GUEST_ITEM_CAP counts (live and deleted, a detached label against
+ * its creator), which the room rebuilds from the board's rows when it opens: no ticket or storage change.
+ * Accounts are never refused by it.
+ */
+export const GUEST_BOARD_ITEM_CAP = 2_000
+/**
+ * Board tag-list keys (`tagDef:*`, doc.ts) one name-only guest may write while the room is open (CR-3D-5): an
+ * editor guest may create, rename, recolour and delete tags as an editor does, but each key it writes counts
+ * once (a key it already wrote is free). MAX_TAG_DEFS bounds the list for everyone.
+ */
+export const GUEST_TAG_DEF_CAP = 10
 /** Tombstones kept per board, and for how long (§2.6); a client below `horizon` gets a reset. */
 export const TOMBSTONE_MAX = 10_000
 export const TOMBSTONE_TTL_MS = 14 * 24 * 60 * 60_000

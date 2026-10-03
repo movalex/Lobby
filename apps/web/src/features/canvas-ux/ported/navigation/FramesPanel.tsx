@@ -7,11 +7,15 @@
 // order (rows, then left to right), also one undo step. "Skip" writes `present.skip`. A frame whose name
 // starts with a number shows no row number of its own (F20).
 //
-// The server refuses `customData` writes on a locked element (LOCKED), so a locked frame keeps its own
-// place and skip mark: its row cannot be reordered or skipped, and a reorder of the others leaves it out.
+// A locked frame (a template's slide) still takes `present` from an account (CR-3b-4: the registry's
+// `lockExempt`, canvas-schema custom-data.ts): the facilitator reorders and skips locked slides. A name-only
+// guest can neither lock nor unlock, and the room refuses its `present` on a locked frame (LOCKED), so for a
+// guest a locked frame keeps its place and skip mark: its row cannot be reordered or skipped, and a reorder of
+// the others leaves it out.
 import { type DragEvent, type KeyboardEvent, type MouseEvent, useMemo, useState } from 'react'
 import { isReadonlyRole } from '../../../../board/access.ts'
 import { type CanvasFeatureContext, geometry, type LobbyCanvas } from '../../../../canvas/api/index.ts'
+import { knownUserKind, useUserKind } from '../../../../invite/guest.tsx'
 import { useValue } from '../../../../lib/signals.ts'
 import { moveItem, rowNumberLabel, toggleInSelection } from '../../frame-order.ts'
 import { ArrowDownIcon, ArrowUpIcon, DragHandleIcon, EyeOffIcon, LinkIcon } from '../../icons.tsx'
@@ -33,25 +37,37 @@ function presentWith(
   return Object.keys(out).length ? out : null
 }
 
-/** The present-value writes that make `orderedIds` the explicit order (unchanged and locked frames get none). */
+/**
+ * Whether this person's `present` writes reach a locked frame: an account's do, a name-only guest's never
+ * (the room's rule, CR-3b-4).
+ */
+export interface FrameWriteOptions {
+  readonly includeLocked?: boolean
+}
+
+/**
+ * The present-value writes that make `orderedIds` the explicit order (unchanged frames get none, nor do
+ * locked ones unless `includeLocked`).
+ */
 export function presentOrderWrites(
   rows: readonly FrameRow[],
   orderedIds: readonly string[],
+  opts: FrameWriteOptions = {},
 ): { id: string; present: { index?: number; skip?: boolean } | null }[] {
   const byId = new Map(rows.map((r) => [r.id, r]))
   const out: { id: string; present: { index?: number; skip?: boolean } | null }[] = []
   orderedIds.forEach((id, index) => {
     const row = byId.get(id)
-    if (!row || row.locked || row.presentIndex === index) return
+    if (!row || (row.locked && !opts.includeLocked) || row.presentIndex === index) return
     out.push({ id, present: presentWith(row, { index }) })
   })
   return out
 }
 
 /** "Auto-order": every explicit index cleared (the order follows the layout again). */
-export function autoOrderWrites(rows: readonly FrameRow[]) {
+export function autoOrderWrites(rows: readonly FrameRow[], opts: FrameWriteOptions = {}) {
   return rows
-    .filter((r) => r.presentIndex !== null && !r.locked)
+    .filter((r) => r.presentIndex !== null && (!r.locked || opts.includeLocked))
     .map((r) => ({ id: r.id, present: presentWith(r, { index: null }) }))
 }
 
@@ -95,6 +111,9 @@ function onFrameClick(canvas: LobbyCanvas, id: string, e: MouseEvent) {
 export function FramesPanel({ ctx }: { ctx: CanvasFeatureContext; close(): void }) {
   const { canvas } = ctx
   const canEdit = !isReadonlyRole(ctx.role, ctx.board.status)
+  // CR-3b-4: an account orders and skips locked frames too; a name-only guest does not (the room refuses it)
+  const guest = (useUserKind() ?? knownUserKind(ctx.me.user.id)) === 'guest'
+  const writeOpts: FrameWriteOptions = { includeLocked: !guest }
   const key = useValue('nav-frame-outline', () => JSON.stringify(frameRows(canvas.items())), [canvas])
   const rows = useMemo(() => JSON.parse(key) as FrameRow[], [key])
   const selected = useValue('nav-selected-ids', () => canvas.selection.join(','), [canvas])
@@ -109,7 +128,7 @@ export function FramesPanel({ ctx }: { ctx: CanvasFeatureContext; close(): void 
       from,
       to,
     )
-    applyWrites(canvas, presentOrderWrites(rows, ids), 'reorder frames')
+    applyWrites(canvas, presentOrderWrites(rows, ids, writeOpts), 'reorder frames')
   }
 
   const onRowKeyDown = (e: KeyboardEvent, index: number) => {
@@ -158,7 +177,7 @@ export function FramesPanel({ ctx }: { ctx: CanvasFeatureContext; close(): void 
             data-testid="frames-auto-order"
             disabled={!manual}
             title="Sort frames left to right, then top to bottom (undo restores your order)"
-            onClick={() => applyWrites(canvas, autoOrderWrites(rows), 'auto-order frames')}
+            onClick={() => applyWrites(canvas, autoOrderWrites(rows, writeOpts), 'auto-order frames')}
           >
             Auto-order
           </button>
@@ -170,7 +189,7 @@ export function FramesPanel({ ctx }: { ctx: CanvasFeatureContext; close(): void 
         onDragLeave={() => setDropAt(null)}
       >
         {rows.map((row, index) => {
-          const editable = canEdit && !row.locked
+          const editable = canEdit && (!row.locked || !guest)
           const num = rowNumberLabel(row.name, index)
           return (
             <li

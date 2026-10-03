@@ -24,7 +24,9 @@ import {
 } from '@draftroom/canvas-schema/groups'
 import {
   GEOMETRY_TOLERANCE_PX,
+  GUEST_BOARD_ITEM_CAP,
   GUEST_ITEM_CAP,
+  GUEST_TAG_DEF_CAP,
   isAllowedLink,
   MAX_ITEMS,
   MAX_LIVE_ELEMENTS,
@@ -51,6 +53,7 @@ import {
   checkCreateLobby,
   checkPatchLobby,
   freshLobbyServer,
+  lockExemptKey,
   tagDefKey,
   type Writer,
 } from './custom-data.ts'
@@ -174,6 +177,13 @@ export class PushApplier {
   private readonly ctx: CustomDataContext
   private readonly docWrites: Record<string, unknown> = {}
   private docDenied: { keys: string[]; code: RejectCode } | undefined
+  /** why each refused doc key of this push was refused (a `tag:<key>` on it answers the same, CR-3D-5) */
+  private readonly docDeniedCodes = new Map<string, RejectCode>()
+  /**
+   * The `tagDef:*` keys this guest wrote while the room is open (their lb_doc clock is one of its pushes,
+   * by the writer ledger), plus this push's: GUEST_TAG_DEF_CAP counts them (CR-3D-5). Loaded on first use.
+   */
+  private guestTagKeys: Set<string> | null = null
   /** arrows whose own geometry or bindings this push wrote (rule 7 trigger 2) */
   readonly resnapArrows = new Set<string>()
   /** bindable elements whose x, y, width, height or angle changed (rule 7 trigger 1) */
@@ -188,6 +198,10 @@ export class PushApplier {
    * past the cap).
    */
   private readonly addedGuestItems = new Map<string, number>()
+  /** the same items, summed over every guest uid (GUEST_BOARD_ITEM_CAP, CR-W5-FIX-3) */
+  private addedGuestTotal = 0
+  /** every guest uid's items before this push, summed on first use (env.guestCreated is fixed until Phase F) */
+  private guestBoardBefore: number | null = null
   /** frames this push moves (a `pos` patch on a live, unlocked frame): id → the move (W5-05) */
   private readonly frameMoves = new Map<string, { dx: number; dy: number }>()
   /** locked elements whose position this push moved with their frame (W5-05): id → the frame */
@@ -209,6 +223,7 @@ export class PushApplier {
       writer: this.writer,
       voteOpen: env.voteOpen,
       tagExists: (key) => this.tagExists(key),
+      tagDenied: (key) => this.docDeniedCodes.get(tagDefKey(key)) ?? null,
       fileRef: (v) => this.fileRef(v),
     }
   }
@@ -360,15 +375,26 @@ export class PushApplier {
    * every item the board holds that the guest created, live AND deleted. A tombstone create counts like a
    * live one, and a revival (a create over a tombstone, a `life` patch) creates nothing new, so minting
    * tombstones and reviving them no longer gets past the cap (V2's re-check: 650 live items against 500).
+   *
+   * Every guest uid together is held to GUEST_BOARD_ITEM_CAP the same way (CR-W5-FIX-3): the api mints a
+   * new guest uid for each cookie-less join of an editor link, so the per-uid cap alone multiplied by the
+   * number of incognito windows. Rebuilt from the rows when the room opens (element-room.ts rebuildCaches).
    */
   private guestCapProblem(el: El, uid = this.s.uid): RejectCode | null {
-    if (isLabel(el)) return null
-    return (this.env.guestCreated.get(uid) ?? 0) + (this.addedGuestItems.get(uid) ?? 0) + 1 > GUEST_ITEM_CAP
-      ? 'GUEST_LIMIT'
-      : null
+    // an account is never held to the guests' caps (applyCreate asks for every writer)
+    if (!this.s.guest || isLabel(el)) return null
+    if ((this.env.guestCreated.get(uid) ?? 0) + (this.addedGuestItems.get(uid) ?? 0) + 1 > GUEST_ITEM_CAP)
+      return 'GUEST_LIMIT'
+    if (this.guestBoardBefore === null) {
+      let n = 0
+      for (const v of this.env.guestCreated.values()) n += v
+      this.guestBoardBefore = n
+    }
+    return this.guestBoardBefore + this.addedGuestTotal + 1 > GUEST_BOARD_ITEM_CAP ? 'GUEST_LIMIT' : null
   }
   private addGuestItem(uid: string): void {
     this.addedGuestItems.set(uid, (this.addedGuestItems.get(uid) ?? 0) + 1)
+    this.addedGuestTotal++
   }
   /** The element's stored author is this session's user. */
   private createdByWriter(el: El): boolean {
@@ -389,6 +415,21 @@ export class PushApplier {
   private mayRevive(tombstone: El): boolean {
     if (!this.s.guest) return true
     if (this.createdByWriter(tombstone)) return true
+    return this.env.store.deletedBy(tombstone.id) === this.s.uid
+  }
+  /**
+   * P-W5: an undelete by patch (`life` false) based on a version below the tombstone's was made before
+   * this writer saw the deletion (a stale tab, an offline replay): it brings the element back only for the
+   * deleter of record (its own undo, whatever its tab knew) or an owner; anyone else's is STALE, and the
+   * client resets to the (redacted) tombstone. Before, the room never read `pv`, so an account editor's
+   * stale revive of someone else's deletion landed and showed every client its content (V2 P-W5). An
+   * undelete based on the tombstone's own version (the client saw the deletion: an undo, a redo, a replay
+   * with the corrected `pv`) is unaffected.
+   */
+  private mayReviveStale(tombstone: El): boolean {
+    if (this.s.role === 'owner') return true
+    // deleted by an earlier op of this very push (its `lb_deleted` row is written in Phase F)
+    if (this.get(tombstone.id).before?.isDeleted === false) return true
     return this.env.store.deletedBy(tombstone.id) === this.s.uid
   }
   private countAdded(el: El, newId: boolean): void {
@@ -559,8 +600,16 @@ export class PushApplier {
       }
       for (const g of Object.keys(groups)) delete groups[g]
       Object.assign(groups, kept)
-      if (c) names.push(...Object.keys(c).map((k) => `c:${k}`))
-      c = undefined
+      // CR-3F-2, CR-3b-4: the writer's own +1 and an account's `present` on a frame pass the lock (the
+      // registry's lockExempt); every other key stays LOCKED, another uid's +1 included
+      if (c) {
+        const exempt: Record<string, unknown> = {}
+        for (const [k, v] of Object.entries(c)) {
+          if (lockExemptKey(k, cur.type, this.writer)) exempt[k] = v
+          else names.push(`c:${k}`)
+        }
+        c = Object.keys(exempt).length ? exempt : undefined
+      }
       deny(names, 'LOCKED')
       if (fit) {
         fit = undefined
@@ -683,6 +732,7 @@ export class PushApplier {
     const revived = cur.isDeleted && !next.isDeleted
     if (revived) {
       if (!this.mayRevive(cur)) return this.reject(i, 'GONE')
+      if (op.pv < cur.version && !this.mayReviveStale(cur)) return this.reject(i, 'STALE')
       const cap = this.capProblem(next)
       if (cap) return this.reject(i, cap)
     }
@@ -853,14 +903,21 @@ export class PushApplier {
       this.docDenied = { keys: ['*'], code: 'INVALID' }
       return
     }
+    let guestLimited = false
+    const refuse = (key: string, why: RejectCode) => {
+      denied.push(key)
+      this.docDeniedCodes.set(key, why)
+    }
     for (const [key, value] of Object.entries(parsed.data.set)) {
       const problem = docValueProblem(key, value)
       if (problem) {
-        denied.push(key)
+        refuse(key, 'INVALID')
         continue
       }
-      if (this.s.readonly || this.s.guest || !canWriteDocKey(key, this.s.role)) {
-        denied.push(key)
+      // CR-3D-5: a name-only guest of a writing role writes the tag list only (doc.ts `guests`); the
+      // facilitator's `workshop`, the owner's `startView` and the server's `import` stay refused
+      if (this.s.readonly || !canWriteDocKey(key, this.s.role, { guest: this.s.guest })) {
+        refuse(key, 'READ_ONLY')
         code = 'READ_ONLY'
         continue
       }
@@ -870,13 +927,38 @@ export class PushApplier {
           Object.entries(this.docWrites).filter(([k, v]) => k.startsWith(TAG_DEF_KEY_PREFIX) && v !== null)
             .length
         if (n + 1 > MAX_TAG_DEFS) {
-          denied.push(key)
+          refuse(key, 'INVALID')
           continue
         }
       }
+      if (this.s.guest && !this.guestMayWriteTagKey(key)) {
+        refuse(key, 'GUEST_LIMIT')
+        guestLimited = true
+        continue
+      }
       this.docWrites[key] = value
     }
-    if (denied.length) this.docDenied = { keys: denied, code }
+    if (denied.length)
+      this.docDenied = { keys: denied, code: code === 'INVALID' && guestLimited ? 'GUEST_LIMIT' : code }
+  }
+
+  /**
+   * GUEST_TAG_DEF_CAP (CR-3D-5): a guest may write `key` when it already wrote it, or while it has written
+   * fewer than the cap's keys of the tag list. "Wrote" is read from the writer ledger (the uid of each push's
+   * clock, this room open) against every `tagDef:*` row's clock, removed keys included, so a deletion or a
+   * rename spends the budget as a creation does. A key someone else rewrote since is no longer the guest's.
+   */
+  private guestMayWriteTagKey(key: string): boolean {
+    if (!this.guestTagKeys) {
+      const mine = new Set<string>()
+      for (const [k, clock] of Object.entries(this.env.store.docClocks()))
+        if (k.startsWith(TAG_DEF_KEY_PREFIX) && this.env.ledger.get(clock) === this.s.uid) mine.add(k)
+      this.guestTagKeys = mine
+    }
+    if (this.guestTagKeys.has(key)) return true
+    if (this.guestTagKeys.size + 1 > GUEST_TAG_DEF_CAP) return false
+    this.guestTagKeys.add(key)
+    return true
   }
 
   // ---- D: index ----------------------------------------------------------------------------------

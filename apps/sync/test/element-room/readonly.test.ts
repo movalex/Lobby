@@ -50,7 +50,7 @@ describe('read-only roles (B5 R1)', () => {
       expect(await hashElements((await st.snapshot(b)).elements)).toBe(before)
     })
 
-  it('a limited guest editor is not read-only, but cannot lock', async () => {
+  it('a limited guest editor is not read-only, but cannot lock; it writes the tag list and no other doc key (CR-3D-5)', async () => {
     const st = await h.stack()
     const b = newBoardId()
     const g = await st.client({ boardId: b, user: 'guest1', guest: true })
@@ -63,11 +63,16 @@ describe('read-only roles (B5 R1)', () => {
     const d = await g.push(
       [{ k: 'p', id: 'r1', pv: g.confirmed.get('r1')?.version, g: { style: { strokeColor: '#ff0000' } } }],
       {
-        doc: { set: { 'tagDef:y': { name: 'y', color: 'blue' } } },
+        doc: {
+          set: {
+            'tagDef:y': { name: 'y', color: 'blue' },
+            workshop: { hideNoteAuthors: true, hideCursors: true },
+          },
+        },
       },
     )
     expect(d.r[0]).toMatchObject({ ok: true })
-    expect(d.docDenied).toEqual({ keys: ['tagDef:y'], code: 'READ_ONLY' })
+    expect(d.docDenied).toEqual({ keys: ['workshop'], code: 'READ_ONLY' })
   })
 })
 

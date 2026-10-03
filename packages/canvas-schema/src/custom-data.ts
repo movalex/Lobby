@@ -59,7 +59,21 @@ export interface LobbyKeySpec {
   /** UTF-8 JSON bytes of the value. */
   readonly maxBytes: number
   readonly duplicate: DuplicateRule
+  /** Whether a LOCKED element still takes this key (see LockExemption); absent: never. */
+  readonly lockExempt?: LockExemption
 }
+
+/**
+ * A `customData.lobby` key a LOCKED element still takes (CR-3F-2, CR-3b-4; §2.4.3 step 5). A lock keeps an
+ * element's content and place; these keys are neither:
+ * - `own`: the writer's own identity-bound key only (`plusOne:<uid>` where `<uid>` is the writer): a
+ *   participant's +1 on a facilitator's locked template note. Another uid's key stays LOCKED;
+ * - `frame-account`: on a frame, from an account only (`present`): the facilitator orders and skips locked
+ *   slides. A name-only guest can neither lock nor unlock (§3.5), so a locked frame's place is not theirs.
+ * Every other key, and every group but `z` and a lone `meta.locked`, stays LOCKED. The server decides
+ * (apps/sync/src/room/custom-data.ts lockExemptKey); the client only offers what the server takes.
+ */
+export type LockExemption = 'own' | 'frame-account'
 
 const Uid = z.string().min(1).max(MAX_UID_CHARS)
 const ElementRef = z.string().regex(ELEMENT_ID_PATTERN)
@@ -140,6 +154,7 @@ export const LOBBY_KEY_SPECS: readonly LobbyKeySpec[] = [
     suffix: (uid) => Uid.safeParse(uid).success,
     maxBytes: 32,
     duplicate: 'strip',
+    lockExempt: 'own',
   },
   {
     match: 'exact',
@@ -191,6 +206,7 @@ export const LOBBY_KEY_SPECS: readonly LobbyKeySpec[] = [
     value: PresentValue,
     maxBytes: 64,
     duplicate: 'strip-index',
+    lockExempt: 'frame-account',
   },
   // §3.3 class 5 lists `prompt`, `slot`, `swatch` (today's `draftroomPrompt`, `draftroomSlot`,
   // `draftroomSwatch` template markers); the converter carries them (spike B8, change request by O4)

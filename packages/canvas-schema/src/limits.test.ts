@@ -11,6 +11,9 @@ import {
   COORD_LIMIT,
   FILE_ID_PATTERN,
   GEOMETRY_TOLERANCE_PX,
+  GUEST_BOARD_ITEM_CAP,
+  GUEST_ITEM_CAP,
+  GUEST_TAG_DEF_CAP,
   isAllowedLink,
   isLobbyFontFamily,
   jsonByteLength,
@@ -19,6 +22,7 @@ import {
   MAX_FREEDRAW_POINTS,
   MAX_LINEAR_POINTS,
   MAX_ORIGINAL_TEXT_CHARS,
+  MAX_TAG_DEFS,
   PLUS_ONES_MAX,
   pdfPageOf,
   roundGeometry,
@@ -272,6 +276,17 @@ describe('customData classes (§3.3)', () => {
     expect(lobbyKeySpec('whatever')).toBeNull()
   })
 
+  it('a lock lets through only the writer’s own +1 and a frame’s present (CR-3F-2, CR-3b-4)', () => {
+    const exempt = LOBBY_KEY_SPECS.filter((s) => s.lockExempt).map((s) => [s.name, s.lockExempt])
+    expect(exempt.sort()).toEqual([
+      ['plusOne:', 'own'],
+      ['present', 'frame-account'],
+    ])
+    expect(lobbyKeySpec('plusOne:usr_0123456789')?.lockExempt).toBe('own')
+    for (const k of ['tag:x', 'alt', 'file', 'kind', 'mindmap', 'prompt'])
+      expect(lobbyKeySpec(k)?.lockExempt, k).toBeUndefined()
+  })
+
   it('value schemas: tags as today, +1 as an epoch ms, file facts canonical, create-only stamps', () => {
     expect(lobbyValueProblem('tag:research', { name: 'research', color: 'blue' })).toBeNull()
     expect(lobbyValueProblem('tag:research', { name: 'Research', color: 'blue' })).toBeNull()
@@ -327,6 +342,27 @@ describe('the board document (§3.4) and object refs (§3.6)', () => {
     expect(canWriteDocKey('startView', 'editor')).toBe(false)
     expect(canWriteDocKey('workshop', 'editor')).toBe(true)
     expect(canWriteDocKey('tagDef:x', 'commenter')).toBe(false)
+  })
+
+  it('a name-only guest writes the tag list only, as its role allows (CR-3D-5)', () => {
+    const guest = { guest: true }
+    expect(canWriteDocKey('tagDef:x', 'editor', guest)).toBe(true)
+    expect(canWriteDocKey('tagDef:x', 'commenter', guest)).toBe(false)
+    expect(canWriteDocKey('tagDef:x', 'viewer', guest)).toBe(false)
+    for (const role of ['owner', 'editor'] as const) {
+      expect(canWriteDocKey('workshop', role, guest), role).toBe(false)
+      expect(canWriteDocKey('startView', role, guest), role).toBe(false)
+      expect(canWriteDocKey('import', role, guest), role).toBe(false)
+    }
+    expect(canWriteDocKey('workshop', 'editor', { guest: false })).toBe(true)
+    // the room's per-guest budget of tag-list keys, well inside the board's list
+    expect(GUEST_TAG_DEF_CAP).toBe(10)
+    expect(GUEST_TAG_DEF_CAP).toBeLessThan(MAX_TAG_DEFS)
+  })
+
+  it('every guest uid together has a board budget above one guest’s cap (CR-W5-FIX-3)', () => {
+    expect(GUEST_BOARD_ITEM_CAP).toBe(2_000)
+    expect(GUEST_BOARD_ITEM_CAP).toBeGreaterThan(GUEST_ITEM_CAP)
   })
 
   it('shape: refs map to element ids and back', () => {

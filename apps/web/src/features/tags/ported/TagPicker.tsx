@@ -19,7 +19,6 @@ import {
   type CanvasFeatureContext,
   items as itemsApi,
 } from '../../../canvas/api/index.ts'
-import { knownUserKind, useUserKind } from '../../../invite/guest.tsx'
 import { useValue } from '../../../lib/signals.ts'
 import { onFocusLeave, trapTab, tryFocus } from '../../../ui/focus.ts'
 import { fullNotice, READONLY_HINT, thingName } from '../copy.ts'
@@ -39,16 +38,12 @@ import type { TagsRuntime } from './runtime.ts'
 export const TAGS_PANEL_ID = 'tags'
 
 /**
- * W5-29: a name-only guest cannot create a tag on this canvas (the room refuses every guest's board-document
- * write, CR-3D-5), so the picker offers them the board's tags only and says why, instead of "Created" and
- * then "Change not saved". It goes once the room takes an editor guest's `tagDef:` writes.
+ * Whether this person may create a tag here: whoever may edit the canvas. A workshop (editor) guest too since
+ * CR-3D-5: the room takes an editor guest's `tagDef:` writes (up to its GUEST_TAG_DEF_CAP keys), so W5-29's
+ * guest guard is gone. Pure.
  */
-export const GUEST_CREATE_HINT =
-  'Guests can add the board’s existing tags. A board member can create new ones.'
-
-/** Whether this person may create a tag here (W5-29: never a name-only guest). Pure. */
-export function mayCreateTag(readonly: boolean, guest: boolean): boolean {
-  return !readonly && !guest
+export function mayCreateTag(readonly: boolean): boolean {
+  return !readonly
 }
 const TOGGLE = '[data-testid="selection-tags"]'
 
@@ -248,7 +243,6 @@ function TagPicker({
   const { rt, ctx } = t
   const canvas = rt.canvas
   const model = usePickerModel(rt, readonly)
-  const guest = (useUserKind() ?? knownUserKind(ctx.me.user.id)) === 'guest'
   const [query, setQuery] = useState('')
   const [status, setStatus] = useState<string | null>(null)
   const rootRef = useIsolated<HTMLDivElement>((e) => onKey(e))
@@ -281,8 +275,7 @@ function TagPicker({
   const folded = foldForSearch(name)
   const visible = folded ? model.rows.filter((r) => foldForSearch(r.name).includes(folded)) : model.rows
   const exact = key ? model.rows.find((r) => r.key === key) : undefined
-  const canCreate = mayCreateTag(readonly, guest) && name !== '' && !exact
-  const guestBlocked = !readonly && guest && name !== '' && !exact
+  const canCreate = mayCreateTag(readonly) && name !== '' && !exact
 
   const stateOf = (k: string): SelectionTagState => selectionTagState(model.selection, k)
 
@@ -293,10 +286,6 @@ function TagPicker({
   }
   const submit = () => {
     if (!name) return
-    if (!exact && !mayCreateTag(readonly, guest)) {
-      setStatus(GUEST_CREATE_HINT)
-      return
-    }
     if (exact && stateOf(exact.key) === 'all') {
       setStatus(`Every selected ${model.thing.one} already has “${exact.name}”.`)
       return
@@ -476,7 +465,7 @@ function TagPicker({
       ) : (
         <>
           <label className="dr-sr-only" htmlFor={inputId}>
-            {guest ? 'Find a tag' : 'Find or create a tag'}
+            Find or create a tag
           </label>
           {/* F15: tags read as #name. A typed leading "#" becomes this prefix instead of vanishing. */}
           <div className="dr-tag-picker__field">
@@ -488,7 +477,7 @@ function TagPicker({
               ref={inputRef}
               type="text"
               className="dr-input dr-input--block dr-tag-picker__input"
-              placeholder={guest ? 'Find a tag' : 'Find or create a tag'}
+              placeholder="Find or create a tag"
               autoComplete="off"
               spellCheck={false}
               maxLength={64}
@@ -547,17 +536,10 @@ function TagPicker({
               <span aria-hidden="true">+</span> Create “#{name}”
             </button>
           )}
-          {guestBlocked && (
-            <p className="dr-tag-picker__hint" data-testid="tag-guest-hint">
-              {GUEST_CREATE_HINT}
-            </p>
-          )}
-          {!canCreate && !guestBlocked && visible.length === 0 && (
+          {!canCreate && visible.length === 0 && (
             <p className="dr-tag-picker__hint">
               {model.rows.length === 0
-                ? guest
-                  ? 'No tags on this board yet.'
-                  : 'No tags on this board yet. Type a name to create one.'
+                ? 'No tags on this board yet. Type a name to create one.'
                 : 'No tags match.'}
             </p>
           )}

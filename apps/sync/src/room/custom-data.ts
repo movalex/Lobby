@@ -11,6 +11,7 @@
 //  4. api-validated `file` (canonicalized from the file-refs answer; `versionId` must be the version in
 //     `fileId`; `name` is the client's) and `pdfPage` (derived from `fileId`'s `.p<n>`);
 //  5. free keys (`tag:*` needs its `tagDef:*` in lb_doc; the others are schema-checked only).
+// A locked element takes only the registry's lock-exempt keys (lockExemptKey; merge.ts step 5).
 
 import {
   type Attribution,
@@ -39,6 +40,12 @@ export interface CustomDataContext {
   readonly voteOpen: boolean | null
   /** a `tagDef:<key>` exists in lb_doc (or in this push's doc writes) */
   readonly tagExists: (tagKey: string) => boolean
+  /**
+   * Why this push's own write of `tagDef:<key>` was refused (its `docDenied` code), or null. A `tag:<key>`
+   * whose definition the same push tried to make answers with that code (a guest over its tag cap gets
+   * GUEST_LIMIT on its notes, not INVALID: one Create on 60 selected notes counted 60 toward the abuse close).
+   */
+  readonly tagDenied?: (tagKey: string) => RejectCode | null
   /** the cached file-refs answer for a bare version id (undefined: the lookup failed or never ran) */
   readonly fileRef: (versionId: string) => FileRefAnswer | undefined
 }
@@ -123,9 +130,26 @@ function checkKey(
     default: {
       if (value === null) return { ok: true, value: null }
       const tag = tagKeyOf(key)
-      if (tag !== null && !ctx.tagExists(tag)) return bad('INVALID')
+      if (tag !== null && !ctx.tagExists(tag)) return bad(ctx.tagDenied?.(tag) ?? 'INVALID')
       return { ok: true, value }
     }
+  }
+}
+
+/**
+ * Whether a patch of a LOCKED element may still write `key` (§2.4.3 step 5; CR-3F-2, CR-3b-4), by the
+ * registry's `lockExempt` (canvas-schema custom-data.ts): the writer's own `plusOne:<uid>` (a +1 on a locked
+ * template note, guests included), and `present` on a frame from an account (a locked slide's order and
+ * skip mark). The key's class rules still apply after this (checkPatchLobby: VOTE_OPEN, another uid).
+ */
+export function lockExemptKey(key: string, elementType: string, w: Writer): boolean {
+  switch (lobbyKeySpec(key)?.lockExempt) {
+    case 'own':
+      return plusOneUid(key) === w.uid
+    case 'frame-account':
+      return elementType === 'frame' && !w.guest
+    default:
+      return false
   }
 }
 
