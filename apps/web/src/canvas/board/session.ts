@@ -22,7 +22,7 @@ import * as ExcalidrawElementNs from '@excalidraw/element'
 import { CaptureUpdateAction } from '@excalidraw/excalidraw'
 import type { AppState as ExcalidrawAppState, ExcalidrawImperativeAPI } from '@excalidraw/excalidraw/types'
 import { api as apiClient } from '../../api/client.ts'
-import { createTicketUri } from '../../board/ticket.ts'
+import { createTicketUri, ticketInProtocol } from '../../board/ticket.ts'
 import { exportAllowedOnBoard } from '../../features/canvas-ux/ported/export-gate.ts'
 import { frameAt } from '../../features/canvas-ux/ported/notes.ts'
 import { DEV_AUTH_ENABLED } from '../../lib/identity.ts'
@@ -195,7 +195,8 @@ export class LobbyBoardSession {
     this.detach.push(() => this.tickets.cancel())
     this.transport = createSocketTransport({
       url: async () => `${await this.tickets.uri()}&${new URLSearchParams({ sessionId: this.tab })}`,
-      WebSocketImpl: WebSocket as never,
+      // L7: the ticket goes in the handshake's Sec-WebSocket-Protocol, never in the socket URL
+      WebSocketImpl: ticketInProtocol(WebSocket) as never,
     })
     this.store = createIdbOfflineStore({ boardId: o.boardId, uid: o.first.user.id, tab: this.tab })
     // guests keep no offline copy on the device (§2.5.6 privacy): memory only, once the welcome says so

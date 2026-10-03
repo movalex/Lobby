@@ -90,6 +90,15 @@ export function syncSocketOrigin(
   return { ok: true, base: `${scheme}//${url.host}` }
 }
 
+// L7: the ticket travels in the WebSocket handshake, not the socket URL (./ticket-protocol.ts, NODE-SAFE so
+// the sync server's tests run the very constructor the board session uses).
+export {
+  BOARD_SOCKET_PROTOCOL,
+  TICKET_PROTOCOL_PREFIX,
+  ticketInProtocol,
+  ticketProtocols,
+} from './ticket-protocol.ts'
+
 /** Settles never: used once the board is being torn down, so useSync makes no further attempt. */
 const never = () => new Promise<string>(() => {})
 
@@ -125,7 +134,8 @@ export function createTicketUri(opts: TicketUriOptions) {
         const t = await opts.fetchTicket(opts.boardId)
         if (stale()) return never()
         opts.onTicket(t)
-        // useSync appends sessionId/storeId. The ticket is a secret: it only ever appears here.
+        // The caller appends sessionId. The ticket is a secret: it only ever appears here, and the board
+        // socket (ticketInProtocol) moves it into the handshake before the URL goes anywhere.
         return `${wsBase()}?${new URLSearchParams({ ticket: t.ticket })}`
       } catch (e) {
         if (stale()) return never()

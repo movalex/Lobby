@@ -2,7 +2,16 @@ import type { TicketResponse } from '@draftroom/contracts'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '../api/client.ts'
 import { BOARD_ID, makeUser } from '../api/test-fixtures.ts'
-import { buildTimeSyncOrigin, createTicketUri, syncSocketOrigin, type TicketUriOptions } from './ticket.ts'
+import {
+  BOARD_SOCKET_PROTOCOL,
+  buildTimeSyncOrigin,
+  createTicketUri,
+  syncSocketOrigin,
+  TICKET_PROTOCOL_PREFIX,
+  type TicketUriOptions,
+  ticketInProtocol,
+  ticketProtocols,
+} from './ticket.ts'
 
 // Every test starts from a build without a sync origin, whatever the shell running vitest has set.
 beforeEach(() => vi.stubEnv('VITE_DRAFTROOM_SYNC_ORIGIN', ''))
@@ -258,5 +267,63 @@ describe('sync origin: VITE_DRAFTROOM_SYNC_ORIGIN (Render static sites cannot pr
         base: 'wss://app.example',
         error: 'VITE_DRAFTROOM_SYNC_ORIGIN must be https/wss when the page is served over https',
       })
+  })
+})
+
+describe('the board socket carries the ticket in the handshake, not the URL (L7)', () => {
+  /** A WebSocket stand-in that records what it was opened with. */
+  const opened: { url: string; protocols: string | string[] | undefined }[] = []
+  class FakeSocket {
+    readonly url: string
+    readonly protocols: string | string[] | undefined
+    constructor(url: string, protocols?: string | string[]) {
+      this.url = url
+      this.protocols = protocols
+      opened.push({ url, protocols })
+    }
+  }
+  beforeEach(() => {
+    opened.length = 0
+  })
+  // what the api signs: v1.<base64url>.<base64url>
+  const signed = 'v1.eyJiaWQiOiJiLTEifQ.q2Z_-Lw0'
+
+  it('moves the ticket out of the URL into a second offered subprotocol, after lobby.board.v1', async () => {
+    const t = createTicketUri({
+      boardId: BOARD_ID,
+      fetchTicket: async () => ({ ...ticket(1), ticket: signed }),
+      onTicket: () => {},
+      onAccessLost: () => {},
+      onSignedOut: () => {},
+      origin: { protocol: 'https:', host: 'lobby.example' },
+    })
+    // as the board session builds the socket URL
+    const url = `${await t.uri()}&${new URLSearchParams({ sessionId: 'tab-1' })}`
+    const Socket = ticketInProtocol(FakeSocket)
+    const ws = new Socket(url)
+    expect(ws).toBeInstanceOf(FakeSocket)
+    expect(opened).toHaveLength(1)
+    const u = new URL(opened[0]?.url ?? '')
+    expect(`${u.protocol}//${u.host}${u.pathname}`).toBe(`wss://lobby.example/connect/${BOARD_ID}`)
+    expect(u.searchParams.has('ticket')).toBe(false)
+    expect(u.searchParams.get('sessionId')).toBe('tab-1')
+    expect(opened[0]?.url).not.toContain(signed)
+    expect(opened[0]?.protocols).toEqual([BOARD_SOCKET_PROTOCOL, `${TICKET_PROTOCOL_PREFIX}${signed}`])
+    expect(BOARD_SOCKET_PROTOCOL).toBe('lobby.board.v1')
+  })
+
+  it('leaves a URL without a ticket, or a ticket that is not an HTTP token, as it is (the server reads ?ticket= too)', () => {
+    const Socket = ticketInProtocol(FakeSocket)
+    new Socket('ws://127.0.0.1:5173/connect/b?sessionId=t')
+    const odd = 'v1.payload1.sig+/=1'
+    const withOdd = `ws://127.0.0.1:5173/connect/b?${new URLSearchParams({ ticket: odd, sessionId: 't' })}`
+    new Socket(withOdd)
+    expect(opened).toEqual([
+      { url: 'ws://127.0.0.1:5173/connect/b?sessionId=t', protocols: undefined },
+      { url: withOdd, protocols: undefined },
+    ])
+    expect(ticketProtocols(odd)).toBeNull()
+    expect(ticketProtocols('')).toBeNull()
+    expect(ticketProtocols(signed)).toEqual([BOARD_SOCKET_PROTOCOL, `lobby.ticket.${signed}`])
   })
 })
