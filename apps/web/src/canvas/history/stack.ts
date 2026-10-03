@@ -10,6 +10,11 @@
  * What never creates a step: selection and viewport (they are not elements), server `fix` values
  * (folded into the entry that carried the op, and into `lastLocal`), the client's own index re-key of
  * unacknowledged elements, and server repairs or remote changes (`absorb`).
+ *
+ * The selection is never a change, but an entry remembers the one its step was made with (F11, 3i: tldraw
+ * restored it, and a keyboard or screen-reader user keeps their place after Ctrl+Z): `selection.before`,
+ * what was selected when the step began, comes back with an undo, `selection.after` with a redo
+ * (`StepResult.selection`; the caller re-selects what is still there).
  */
 import { type ApplyContext, type ApplyResult, applyChanges, type Direction } from './apply.ts'
 import {
@@ -30,10 +35,24 @@ export interface TrackedChange extends ElementChange {
   unsent: Side | null
 }
 
+/** The selection a step was made with (F11): never a change, never compared, only re-selected. */
+export interface StepSelection {
+  /** selected when the step began: an undo selects it again */
+  readonly before: readonly string[]
+  /** selected when the step ended: a redo selects it again */
+  readonly after: readonly string[]
+}
+
 export interface Entry {
   id: number
   label?: string
   changes: Map<string, TrackedChange>
+  selection?: StepSelection
+}
+
+/** `undo()` / `redo()`: the apply, and the selection to restore (null when the entry recorded none). */
+export interface StepResult extends ApplyResult {
+  readonly selection: readonly string[] | null
 }
 
 /** `LobbyHistory.mark()`: the stack before a write that should join the previous step (`mergeTop`). */
@@ -163,8 +182,9 @@ export class LobbyHistory {
   /**
    * A step boundary (end of a gesture, a text-editor close, one keyboard action, one `transact`).
    * Returns the new entry, or null when nothing but server-owned or local-only fields changed.
+   * `selection`: the one the step was made with (kept on the entry, never a change).
    */
-  record(scene: Scene, label?: string): Entry | null {
+  record(scene: Scene, label?: string, selection?: StepSelection): Entry | null {
     const changes = new Map<string, TrackedChange>()
     for (const [id, el] of scene) {
       const prev = this.lastLocal.get(id)
@@ -183,6 +203,7 @@ export class LobbyHistory {
     for (const id of [...this.lastLocal.keys()]) if (!scene.has(id)) this.lastLocal.delete(id)
     if (changes.size === 0) return null
     const entry: Entry = { id: this.nextId++, label, changes }
+    if (selection) entry.selection = { before: [...selection.before], after: [...selection.after] }
     this.undos.push(entry)
     if (this.undos.length > this.maxEntries) this.undos.shift()
     this.redos = []
@@ -334,6 +355,7 @@ export class LobbyHistory {
    *  - Pushes pending for either stay pending (acks keep folding their `fix` rows into the merged change),
    *    and a side still to be sent stays to be sent. Remote changes absorbed between the two writes never
    *    touched either entry.
+   *  - The selection (F11) is the earlier step's `before` and the later one's `after`.
    */
   mergeTop(since?: HistoryMark): boolean {
     const n = this.undos.length
@@ -348,23 +370,28 @@ export class LobbyHistory {
       if (p) mergeChange(p, c)
       else into.changes.set(c.id, c)
     }
+    if (into.selection || top.selection)
+      into.selection = {
+        before: into.selection?.before ?? top.selection?.before ?? [],
+        after: top.selection?.after ?? into.selection?.after ?? [],
+      }
     this.undos.pop()
     for (const [id, c] of into.changes) if (isEmptyChange(c)) into.changes.delete(id)
     if (into.changes.size === 0) this.undos.pop()
     return true
   }
 
-  /** Ctrl+Z: the top entry, compare-and-set against `scene`. */
-  undo(scene: Scene, ctx?: ApplyContext): ApplyResult | null {
+  /** Ctrl+Z: the top entry, compare-and-set against `scene`; `selection` is its step's `before`. */
+  undo(scene: Scene, ctx?: ApplyContext): StepResult | null {
     return this.step('undo', scene, ctx)
   }
 
-  /** Ctrl+Y / Ctrl+Shift+Z: the mirror image. */
-  redo(scene: Scene, ctx?: ApplyContext): ApplyResult | null {
+  /** Ctrl+Y / Ctrl+Shift+Z: the mirror image; `selection` is the step's `after`. */
+  redo(scene: Scene, ctx?: ApplyContext): StepResult | null {
     return this.step('redo', scene, ctx)
   }
 
-  private step(dir: Direction, scene: Scene, ctx?: ApplyContext): ApplyResult | null {
+  private step(dir: Direction, scene: Scene, ctx?: ApplyContext): StepResult | null {
     const from = dir === 'undo' ? this.undos : this.redos
     const to = dir === 'undo' ? this.redos : this.undos
     const entry = from.pop()
@@ -375,7 +402,7 @@ export class LobbyHistory {
     for (const [id, el] of res.elements) this.lastLocal.set(id, clone(el))
     if (res.applied.length) {
       const side: Side = dir === 'undo' ? 'before' : 'after'
-      to.push({
+      const mirror: Entry = {
         id: entry.id,
         label: entry.label,
         changes: new Map(
@@ -386,9 +413,13 @@ export class LobbyHistory {
             return [c.id, t]
           }),
         ),
-      })
+      }
+      // the same step, the other way: its selection keeps its orientation (an undo of it selects `before`)
+      if (entry.selection) mirror.selection = entry.selection
+      to.push(mirror)
     }
-    return res
+    const sel = entry.selection
+    return Object.assign(res, { selection: sel ? (dir === 'undo' ? sel.before : sel.after) : null })
   }
 
   private carrying(seq: number, id: string) {

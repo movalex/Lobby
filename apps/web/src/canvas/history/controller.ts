@@ -25,7 +25,7 @@ import type { SceneAdapter, SceneElement } from '../sync/types.ts'
 import type { ApplyContext, ApplyResult } from './apply.ts'
 import type { HistEl, Scene } from './diff.ts'
 import { fieldGroup, type GroupName } from './fields.ts'
-import { type Entry, LobbyHistory } from './stack.ts'
+import { type Entry, LobbyHistory, type StepResult } from './stack.ts'
 
 export interface UndoControllerOptions {
   readonly core: LobbyEngineCore
@@ -40,10 +40,16 @@ export interface UndoControllerOptions {
   readonly install?: (elements: readonly SceneElement[]) => void
   /** label layout that depends on what an undo changed (§2.8 side effects); never a leased label */
   readonly recompute?: ApplyContext['recompute']
+  /**
+   * Selects `ids` (F11: after an undo or a redo, the selection its step was made with, already narrowed
+   * to what is live and unlocked). The selection is read from the scene's gesture state. Without it the
+   * selection is left as it is.
+   */
+  readonly select?: (ids: readonly string[]) => void
 }
 
 export interface UndoOutcome {
-  readonly result: ApplyResult
+  readonly result: StepResult
   /** elements with a non-silent skip ("N changes kept") */
   readonly kept: number
   /** who edited what was kept, when the roster knows (for the toast) */
@@ -56,12 +62,20 @@ export class UndoController {
   private readonly off: (() => void)[] = []
   /** > 0 while `outside` installs a write (a boundary then records nothing) */
   private installingOutside = 0
+  /**
+   * The selection at the last boundary that recorded nothing (or at the last step, undo or redo): what
+   * the next step begins with (F11). The board page calls `boundary()` on every scene change that changes
+   * the gesture state, which includes the selection, so a selection made before a change is here when the
+   * change's step is recorded (a delete clears the selection in the same change it deletes in).
+   */
+  private restSelection: readonly string[] = []
 
   constructor(o: UndoControllerOptions) {
     this.o = o
     const sceneMap = () => this.sceneMap('live')
     // attached after the welcome: start from the scene as it is (nothing before this is undoable)
     if (o.core.welcome) this.history.reset(this.sceneMap('reset'))
+    this.restSelection = this.selectionNow()
     let epoch = o.core.welcome?.epoch ?? null
     this.off.push(
       o.core.on((e) => {
@@ -69,7 +83,10 @@ export class UndoController {
           // the first welcome, or a board restored to another epoch: nothing before is undoable. A
           // reconnect to the same epoch keeps the stacks (B3 L6 3f: an edit made offline is undone after
           // its replay); what changed meanwhile arrived as the core's 'applied' event and was absorbed like any remote edit
-          if (epoch === null || e.welcome.epoch !== epoch) this.history.reset(this.sceneMap('reset'))
+          if (epoch === null || e.welcome.epoch !== epoch) {
+            this.history.reset(this.sceneMap('reset'))
+            this.restSelection = this.selectionNow()
+          }
           epoch = e.welcome.epoch
         } else if (e.kind === 'applied') {
           const now = sceneMap()
@@ -138,11 +155,26 @@ export class UndoController {
     return m
   }
 
-  /** A step boundary: one entry for everything the user changed since the previous one (or null). */
+  /**
+   * A step boundary: one entry for everything the user changed since the previous one (or null). The
+   * entry keeps the selection the step was made with (F11): the selection at the previous quiet boundary,
+   * and the one now.
+   */
   boundary(label?: string): Entry | null {
     // inside `outside`: the write is being installed, and is never part of a step
     if (this.installingOutside > 0) return null
-    return this.history.record(this.sceneMap('record'), label)
+    const now = this.selectionNow()
+    const entry = this.history.record(this.sceneMap('record'), label, {
+      before: this.restSelection,
+      after: now,
+    })
+    this.restSelection = now
+    return entry
+  }
+
+  /** The scene's selection (the gesture state's); none when the scene reports no selection. */
+  private selectionNow(): readonly string[] {
+    return [...(this.o.scene.read().gesture?.selectedElementIds ?? [])]
   }
 
   /**
@@ -224,7 +256,26 @@ export class UndoController {
         this.o.core.onSceneChange(this.o.scene.read())
       }
     }
+    this.restoreSelection(result.selection)
     return { result, kept: result.kept, keptBy: keptBy(result, holders) }
+  }
+
+  /**
+   * F11: after an undo or a redo, the selection its step was made with, narrowed to what is still there to
+   * select (live, unlocked). Left alone when the entry recorded none or it is already the selection.
+   */
+  private restoreSelection(ids: readonly string[] | null): void {
+    if (!ids) return
+    const els = new Map(this.o.scene.read().elements.map((e) => [e.id, e]))
+    const keep = ids.filter((id) => {
+      const el = els.get(id) as (SceneElement & { locked?: boolean }) | undefined
+      return !!el && !el.isDeleted && !el.locked
+    })
+    this.restSelection = keep
+    if (!this.o.select) return
+    const now = this.selectionNow()
+    if (now.length === keep.length && keep.every((id) => now.includes(id))) return
+    this.o.select(keep)
   }
 }
 
