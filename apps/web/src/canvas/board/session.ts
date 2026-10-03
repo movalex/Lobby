@@ -529,6 +529,14 @@ export class LobbyBoardSession {
     offs.push(attachBoardFiles(this.registries, files), () => files.dispose())
     this.classifier.seed(api.getSceneElementsIncludingDeleted() as never)
 
+    // the last pointer sample of this tab (3. below); presence re-sends it with a fresh `view`
+    let lastSample: PresenceSample | null = null
+    // Re-sends presence with the current `view` and the last pointer, so the people who follow this tab
+    // (Follow, Gather) read where it looks now without a pointer move (the core keeps 20 Hz). A camera
+    // move (pan, zoom, a follow) and a change of the canvas's size both change the view.
+    const resendView = () =>
+      presence.onPointer(lastSample ?? { pointer: null, button: 'up', source: 'view', pointerType: 'mouse' })
+
     // the canvas's size and place as the engine last measured them (CR-3A-10: a window resize changes
     // `viewport.screenRect()` and the scene rectangle without a scroll, so readers were never told)
     let lastBox = ''
@@ -551,7 +559,14 @@ export class LobbyBoardSession {
         if (box !== lastBox) {
           const first = lastBox === ''
           lastBox = box
-          if (!first) port.notifyViewport()
+          if (!first) {
+            port.notifyViewport()
+            // W5-25 (CR-3C-W5-1): the scene rectangle this tab shows changed with no camera move (a dock
+            // panel opened or closed, a window resize), so the `view` the followers fit is stale until
+            // re-sent. Here the engine's state already has the new size (the box above is read from it);
+            // the ResizeObserver below only reports the container.
+            resendView()
+          }
         }
         presence.onGesture(g)
         const el = this.input.editorLease
@@ -578,7 +593,6 @@ export class LobbyBoardSession {
     // 2. spike B's input layer (allowlist, guard, double-click and double-tap, clipboard and drop)
     offs.push(this.input.attach(wrapper, api))
     // 3. presence pointer for every role
-    let lastSample: PresenceSample | null = null
     offs.push(
       attachPresencePointer(wrapper, {
         toScene: (x, y) => this.input.toScene(x, y),
@@ -639,9 +653,7 @@ export class LobbyBoardSession {
         this.handlesExtra?.userMoved()
         // 3c (CR): a pan or zoom alone (a wheel, a key, a follow) re-sends presence, so the `view`
         // the people who follow this tab read is current without a pointer move (the core keeps 20 Hz)
-        presence.onPointer(
-          lastSample ?? { pointer: null, button: 'up', source: 'view', pointerType: 'mouse' },
-        )
+        resendView()
       }),
     )
     // resize: the canvas container changed size
