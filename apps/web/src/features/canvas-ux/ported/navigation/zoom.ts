@@ -2,8 +2,14 @@
 // zoom-to-100, zoom-to-fit, zoom-to-selection) on Lobby's own camera (canvas/api/parts/navigation.ts): the
 // zoom menu, the navigation panel's buttons and the keys run these. Fit goes below Excalidraw's 0.1 when
 // the board needs it (docs/EXCALIDRAW-MIGRATION.md §4.2, spike A's A14), and so does the zoom wheel
-// (`installWheelZoom`, CR 3b-2).
-import type { CanvasInputEvent, LobbyCanvas, Viewport, ZoomLimits } from '../../../../canvas/api/index.ts'
+// (`installWheelZoom`, CR 3b-2) and a plain mouse wheel that zooms (Preferences ▸ Input device, W5-33).
+import type {
+  CanvasInputEvent,
+  LobbyCanvas,
+  Viewport,
+  WheelPreference,
+  ZoomLimits,
+} from '../../../../canvas/api/index.ts'
 import { contentBounds } from './camera.ts'
 
 const ANIMATE = { animate: true } as const
@@ -72,27 +78,97 @@ export const zoomAroundPoint = (
 })
 
 /** A zoom-wheel event (Ctrl/Cmd, no Shift: Shift pans), as Excalidraw's handler tells zoom from pan. */
-const isZoomWheel = (e: CanvasInputEvent): e is Extract<CanvasInputEvent, { type: 'wheel' | 'pinch' }> =>
+type WheelInput = Extract<CanvasInputEvent, { type: 'wheel' | 'pinch' }>
+const isZoomWheel = (e: CanvasInputEvent): e is WheelInput =>
   (e.type === 'wheel' || e.type === 'pinch') && (e.ctrl || e.meta) && !e.shift
 
+// ---- a plain mouse wheel that zooms (Preferences ▸ Input device, W5-33) --------------------------------------
+
+/** Excalidraw's own top zoom (getNormalizedZoom): its wheel and pinch stop here, so Lobby's do too. */
+export const ENGINE_MAX_ZOOM = 30
+
+/** One wheel event as the input device guess reads it. */
+export interface WheelShape {
+  readonly deltaX?: number
+  readonly deltaY?: number
+  readonly deltaMode?: number
+}
+
 /**
- * Takes the zoom wheel and the trackpad pinch where Excalidraw's own would snap to 0.1 (`wheelZoom`),
- * zooming around the pointer; everything else stays the engine's. Events arriving before the engine has
- * applied the previous move build on that move (the camera is read back only after a render). Returns
- * the unsubscribe.
+ * Whether a wheel event looks like a notch of a mouse wheel rather than a trackpad's scroll (the Input
+ * device preference's `auto`): a wheel that reports lines or pages (Firefox's mouse wheel), or whole
+ * hundreds of pixels on the one axis (Chrome's and Edge's mouse wheel: 100 px a notch, 120 on some
+ * systems, a multiple of it when turned fast). A trackpad scrolls in small, uneven pixel steps, usually
+ * with a sideways part. A guess: the setting says it outright when this one gets a device wrong.
+ */
+export function looksLikeMouseWheel(e: WheelShape): boolean {
+  const dy = e.deltaY ?? 0
+  if (!dy || !Number.isFinite(dy) || (e.deltaX ?? 0) !== 0) return false
+  if (e.deltaMode === 1 || e.deltaMode === 2) return true
+  const a = Math.abs(dy)
+  return Number.isInteger(a) && a >= 100 && (a % 100 === 0 || a % 120 === 0)
+}
+
+/** Whether a plain wheel event (no Ctrl/Cmd, no Shift) zooms: the preference, or `auto`'s guess. */
+export function plainWheelZooms(pref: WheelPreference, e: WheelShape): boolean {
+  if (pref === 'mouse') return true
+  if (pref === 'trackpad') return false
+  return looksLikeMouseWheel(e)
+}
+
+/**
+ * The zoom after one plain-wheel notch that zooms (the mouse preference), over the whole range: Excalidraw
+ * never sees such an event as a zoom (it reads Ctrl on the event), so Lobby steps it, by the same
+ * proportional rule as `wheelZoom`: 10% of the zoom a notch, at any zoom, with the engine's most per event.
+ * Out stops at `limits.min` (the whole-board fit) and never zooms in; in stops at the engine's top. Null
+ * for no delta.
+ */
+export function wheelZoomStep(
+  zoom: number,
+  e: WheelZoomInput,
+  limits: Pick<ZoomLimits, 'min'>,
+): number | null {
+  const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 100 : 1
+  const raw = e.deltaY * unit
+  if (!raw || !Number.isFinite(raw) || !(zoom > 0)) return null
+  const delta = Math.min(WHEEL_MAX_DELTA, Math.max(-WHEEL_MAX_DELTA, raw))
+  const next = zoom * (1 - delta / 100)
+  if (raw > 0) return Math.max(Math.min(limits.min, zoom), next)
+  return Math.max(zoom, Math.min(ENGINE_MAX_ZOOM, next))
+}
+
+/**
+ * Takes what Excalidraw's own wheel would get wrong; everything else stays the engine's. Returns the
+ * unsubscribe.
+ *
+ *  - the zoom wheel and the trackpad pinch (Ctrl/Cmd + wheel) where the engine would snap to 0.1 (`wheelZoom`,
+ *    CR 3b-2, W5-19). Events arriving before the engine has applied the previous move build on that move
+ *    (the camera is read back only after a render);
+ *  - a plain mouse wheel where the Input device preference says it zooms (`plainWheelZooms`, W5-33), at any
+ *    zoom: the engine reads Ctrl on the event, so a plain wheel is only ever a pan to it.
  */
 export function installWheelZoom(canvas: LobbyCanvas): () => void {
   let pending: { x: number; y: number; zoom: number; at: number } | null = null
+  /** A plain wheel event (no Ctrl/Cmd, no Shift) the Input device preference says zooms. */
+  const plainZoom = (e: WheelInput): boolean => {
+    if (e.type !== 'wheel' || e.ctrl || e.meta || e.shift) return false
+    try {
+      return plainWheelZooms(canvas.settings.get().wheel, e)
+    } catch {
+      return false // a canvas without the settings (a unit test's): the engine's pan
+    }
+  }
+
   return canvas.on('input', (e) => {
-    if (!isZoomWheel(e) || e.deltaY === undefined) return
+    if ((e.type !== 'wheel' && e.type !== 'pinch') || e.deltaY === undefined) return
+    const plain = plainZoom(e)
+    if (!plain && !isZoomWheel(e)) return
     const now = performance.now()
     const read = canvas.viewport.get()
     const v = pending && now - pending.at < 120 ? pending : read
-    const next = wheelZoom(
-      v.zoom,
-      { deltaY: e.deltaY, deltaMode: e.deltaMode ?? 0 },
-      canvas.viewport.limits(),
-    )
+    const wheel = { deltaY: e.deltaY, deltaMode: e.deltaMode ?? 0 }
+    const limits = canvas.viewport.limits()
+    const next = plain ? wheelZoomStep(v.zoom, wheel, limits) : wheelZoom(v.zoom, wheel, limits)
     if (next === null) {
       pending = null
       return

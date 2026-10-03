@@ -7,14 +7,21 @@
 //   View ▸    the `view` entries: navigation's zoom in and out, 100%, fit, selection and the minimap
 //             (W5-33; canvas-ux registers none of its own)
 //   Export ▸  the `export` entries (or, while exporting is off for this person, the line saying so)
-//   the other groups' entries, then Preferences ▸ (Always snap, Show grid, Theme ▸ System / Light /
-//   Dark: W5-33, the app's theme as the top bar's picker sets it) and Keyboard shortcuts. Edit ▸ has
-//   Paste (W5-33).
+//   the other groups' entries, then Preferences ▸ (Always snap, Show grid, Input device ▸ Auto / Mouse /
+//   Trackpad: what a plain mouse wheel does, CR-W5-3A-4, Theme ▸ System / Light / Dark: W5-33, the app's
+//   theme as the top bar's picker sets it) and Keyboard shortcuts. Edit ▸ has Paste (W5-33).
 // tldraw's Language submenu stays out (DANA-13), and so does its debug mode. "Hide note authors" (FAC-07
 // partial / RETRO-03a) is the same synced setting as the workshop popover's checkbox; read-only people see
 // its state, disabled.
 import { useEffect, useRef } from 'react'
-import type { CanvasFeatureContext, MenuEntrySpec, MenuGroup, MenuTarget } from '../../../canvas/api/index.ts'
+import {
+  type CanvasFeatureContext,
+  type MenuEntrySpec,
+  type MenuGroup,
+  type MenuTarget,
+  WHEEL_PREFERENCES,
+  type WheelPreference,
+} from '../../../canvas/api/index.ts'
 import { useValue } from '../../../lib/signals.ts'
 import { getTheme, THEME_PREFERENCES, type ThemePreference } from '../../../theme/theme.ts'
 import { EXPORT_OFF_ENTRY, gatedEntries } from './ContextMenu.tsx'
@@ -61,6 +68,13 @@ const THEME_LABELS: Readonly<Record<ThemePreference, string>> = {
   dark: 'Dark',
 }
 
+/** Preferences ▸ Input device (tldraw's): what a plain mouse wheel does over the canvas. */
+const INPUT_DEVICE_LABELS: Readonly<Record<WheelPreference, string>> = {
+  auto: 'Auto',
+  mouse: 'Mouse (the wheel zooms)',
+  trackpad: 'Trackpad (the wheel pans)',
+}
+
 const EDIT_GROUPS: readonly MenuGroup[] = ['clipboard', 'edit', 'arrange', 'select']
 const TOP_GROUPS: readonly MenuGroup[] = ['frame', 'collaborate', 'workshop', 'organize', 'danger']
 
@@ -101,6 +115,24 @@ export function mainMenuRows(ctx: CanvasFeatureContext): MenuRow[][] {
           disabled: false,
           checked: settings.grid,
           run: () => ctx.canvas.settings.set({ grid: !ctx.canvas.settings.get().grid }),
+        },
+      ],
+      [
+        {
+          id: 'input-device',
+          label: 'Input device',
+          disabled: false,
+          submenu: [
+            WHEEL_PREFERENCES.map(
+              (pref): MenuRow => ({
+                id: `input-device-${pref}`,
+                label: INPUT_DEVICE_LABELS[pref],
+                disabled: false,
+                checked: settings.wheel === pref,
+                run: () => ctx.canvas.settings.set({ wheel: pref }),
+              }),
+            ),
+          ],
         },
       ],
       ...(theme

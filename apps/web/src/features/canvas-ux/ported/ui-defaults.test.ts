@@ -265,7 +265,18 @@ describe('menus', () => {
       .find((r) => r.id === 'preferences')
       ?.submenu?.flat()
       .map((r) => r.label)
-    expect(prefs).toEqual(['Always snap', 'Show grid'])
+    // W5-33: Input device (the wheel preference, CR-W5-3A-4) sits with the other canvas preferences
+    expect(prefs).toEqual(['Always snap', 'Show grid', 'Input device'])
+    const input = rows
+      .flat()
+      .find((r) => r.id === 'preferences')
+      ?.submenu?.flat()
+      .find((r) => r.id === 'input-device')
+    expect(input?.submenu?.flat().map((r) => [r.id, r.label, r.checked])).toEqual([
+      ['input-device-auto', 'Auto', false],
+      ['input-device-mouse', 'Mouse (the wheel zooms)', false],
+      ['input-device-trackpad', 'Trackpad (the wheel pans)', false],
+    ])
     expect(JSON.stringify(rows)).not.toMatch(/language|debug/i)
   })
 })
