@@ -253,7 +253,8 @@ function PdfViewer({ ctx, facts, initialPage, onClose }: ViewerProps) {
       </header>
 
       <div className="dr-pv__body">
-        <nav ref={rail} className="dr-pv__rail" aria-label="Pages">
+        {/* F5: a viewer who cannot add to the board has no page checkboxes, selection summary or footer */}
+        <nav ref={rail} className="dr-pv__rail" aria-label="Pages" data-readonly={readonly || undefined}>
           <ol>
             {pages.map((p) => (
               <li key={p.page} className="dr-pv__item" data-selected={selected.includes(p.page) || undefined}>
@@ -274,23 +275,29 @@ function PdfViewer({ ctx, facts, initialPage, onClose }: ViewerProps) {
                     draggable={false}
                   />
                 </button>
-                <label className="dr-pv__check">
-                  <input
-                    type="checkbox"
-                    data-testid="pdf-viewer-select"
-                    data-page={p.page}
-                    checked={selected.includes(p.page)}
-                    aria-label={`Select page ${p.page}`}
-                    onChange={() => {}}
-                    onClick={(e) => {
-                      // Read now: the updater runs after the anchor below has moved on.
-                      const opts = { range: e.shiftKey, anchor: anchor.current }
-                      setSelected((s) => toggleSelection(s, p.page, available, opts))
-                      anchor.current = p.page
-                    }}
-                  />
-                  <span className="dr-pv__num">{p.page}</span>
-                </label>
+                {readonly ? (
+                  <span className="dr-pv__check dr-pv__check--static" aria-hidden="true">
+                    <span className="dr-pv__num">{p.page}</span>
+                  </span>
+                ) : (
+                  <label className="dr-pv__check">
+                    <input
+                      type="checkbox"
+                      data-testid="pdf-viewer-select"
+                      data-page={p.page}
+                      checked={selected.includes(p.page)}
+                      aria-label={`Select page ${p.page}`}
+                      onChange={() => {}}
+                      onClick={(e) => {
+                        // Read now: the updater runs after the anchor below has moved on.
+                        const opts = { range: e.shiftKey, anchor: anchor.current }
+                        setSelected((s) => toggleSelection(s, p.page, available, opts))
+                        anchor.current = p.page
+                      }}
+                    />
+                    <span className="dr-pv__num">{p.page}</span>
+                  </label>
+                )}
               </li>
             ))}
             {partial && (
@@ -395,35 +402,32 @@ function PdfViewer({ ctx, facts, initialPage, onClose }: ViewerProps) {
         </section>
       </div>
 
-      <footer className="dr-pv__foot">
-        <span className="dr-pv__selection" data-testid="pdf-viewer-selection" aria-live="polite">
-          {selectedText}
-        </span>
-        <button
-          type="button"
-          className="dr-btn dr-btn--sm dr-btn--ghost"
-          data-testid="pdf-viewer-select-all"
-          onClick={() => setSelected(selected.length === available.length ? [] : [...available])}
-          disabled={!available.length}
-        >
-          {selected.length === available.length && available.length ? 'Clear selection' : 'Select all'}
-        </button>
-        <span className="dr-pv__spacer" />
-        {readonly && (
-          <span className="dr-pv__hint" data-testid="pdf-viewer-readonly">
-            You can view this board but not add to it.
+      {!readonly && (
+        <footer className="dr-pv__foot">
+          <span className="dr-pv__selection" data-testid="pdf-viewer-selection" aria-live="polite">
+            {selectedText}
           </span>
-        )}
-        <button
-          type="button"
-          className="dr-btn dr-btn--primary dr-btn--sm"
-          data-testid="pdf-viewer-place"
-          disabled={readonly || !selected.length}
-          onClick={place}
-        >
-          Place on board
-        </button>
-      </footer>
+          <button
+            type="button"
+            className="dr-btn dr-btn--sm dr-btn--ghost"
+            data-testid="pdf-viewer-select-all"
+            onClick={() => setSelected(selected.length === available.length ? [] : [...available])}
+            disabled={!available.length}
+          >
+            {selected.length === available.length && available.length ? 'Clear selection' : 'Select all'}
+          </button>
+          <span className="dr-pv__spacer" />
+          <button
+            type="button"
+            className="dr-btn dr-btn--primary dr-btn--sm"
+            data-testid="pdf-viewer-place"
+            disabled={!selected.length}
+            onClick={place}
+          >
+            Place on board
+          </button>
+        </footer>
+      )}
     </ModalDialog>
   )
 }

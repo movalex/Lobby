@@ -134,6 +134,17 @@
 .dr-pv__check:hover {
   background: var(--dr-surface, #fff);
 }
+/* F5: a viewer who cannot add to the board gets no checkbox: the page number is a caption, and the page list is
+   wider (its thumbnails are bigger) since the footer is gone too. */
+.dr-pv__check--static {
+  cursor: default;
+}
+.dr-pv__check--static:hover {
+  background: transparent;
+}
+.dr-pv__rail[data-readonly] {
+  width: 168px;
+}
 .dr-pv__num {
   color: var(--dr-ink-2, #4a5566);
   font-size: 12px;
@@ -275,6 +286,9 @@
   }
   .dr-pv__rail {
     width: 88px;
+  }
+  .dr-pv__rail[data-readonly] {
+    width: 104px;
   }
   .dr-pv__desc {
     display: none;
