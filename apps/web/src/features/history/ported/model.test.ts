@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { exportAllowedHere } from './export-allowed.ts'
 import {
+  checkpointPreviewSource,
   elementIdOf,
   firstFrameBounds,
   previewElementCounts,
@@ -133,5 +134,15 @@ describe('what a restore selects', () => {
     // a note restored into a frame that stayed on the board (G) is selected with its connector
     expect(restoredSelection(['A', 'N3'], at)).toEqual(['A', 'N3'])
     expect(restoredSelection([], at)).toEqual([])
+  })
+})
+
+describe('where a checkpoint preview comes from (PARITY-5.5)', () => {
+  it('draws elements; says so when they were converted from a checkpoint saved before the canvas update', () => {
+    expect(checkpointPreviewSource({ format: 'lobby-elements' })).toBeNull()
+    expect(checkpointPreviewSource({ format: 'lobby-elements', converted: true })).toBe('converted')
+    // v1 records nobody converted (an api on the tldraw sync, or an unreadable body): nothing to draw
+    expect(checkpointPreviewSource({})).toBe('v1')
+    expect(checkpointPreviewSource({ converted: true })).toBe('v1')
   })
 })

@@ -354,6 +354,22 @@
   color: var(--dr-danger);
 }
 
+/* PARITY-5.5: a v1 checkpoint converted for the preview: a line over the bitmap, never in its way */
+.dr-cp-preview__note--converted {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 1;
+  max-width: calc(100% - 16px);
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--dr-accent-bg);
+  color: var(--dr-accent-ink);
+  font-size: 12px;
+  line-height: 1.4;
+  pointer-events: none;
+}
+
 .dr-cp-preview__foot {
   display: flex;
   flex-wrap: wrap;

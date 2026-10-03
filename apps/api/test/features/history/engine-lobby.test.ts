@@ -224,9 +224,10 @@ describe('checkpoints of a board on the Excalidraw engine (v2 bodies)', () => {
     const body = lastSeed().body as RoomSnapshotJson
     expect(body.documents.map((d) => d.state.id)).toContain('shape:n1')
     expect(body.schema).toEqual(SCHEMA)
+    // previewed converted on read (PARITY-5.5): elements, the stored body still the v1 records above
     const preview = await bob.req('GET', `/api/snapshots/${saved.json().id}/content`)
-    expect(preview.json()).not.toHaveProperty('format')
-    expect((preview.json() as CheckpointContent).records.map((r) => r.id)).toContain('shape:n1')
+    expect(preview.json()).toMatchObject({ format: 'lobby-elements', converted: true, records: [] })
+    expect((preview.json() as CheckpointContent).elements?.map((e) => e.id)).toContain('n1')
   })
 })
 

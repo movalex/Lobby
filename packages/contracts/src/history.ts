@@ -251,6 +251,13 @@ export const CheckpointContent = z.object({
   format: z.literal('lobby-elements').optional(),
   elements: z.array(z.looseObject({ id: z.string(), type: z.string() })).optional(),
   doc: z.record(z.string(), z.unknown()).optional(),
+  /**
+   * PARITY-5.5 (§5.5 "v1 is converted on read"): true when `elements` / `doc` are a v1 (tldraw)
+   * checkpoint converted for this answer, by the converter a restore as a new board uses. The stored body
+   * stays v1. Absent for a v2 body and for v1 records (an api on the tldraw sync, or a body the converter
+   * cannot read). Older clients ignore it and draw the elements like a v2 body's.
+   */
+  converted: z.literal(true).optional(),
 })
 export type CheckpointContent = z.infer<typeof CheckpointContent>
 
