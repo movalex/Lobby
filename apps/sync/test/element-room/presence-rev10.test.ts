@@ -51,8 +51,16 @@ function say(
   })
 }
 
+/** A presence frame as it came off the wire (unparsed: what a rev-9 client would read). */
+interface WireFrame {
+  type: string
+  peers: { sid: string; view?: { z?: number } | null }[]
+  off?: string[]
+  followers?: string[]
+}
+
 const presenceFrames = (c: RawClient) =>
-  c.rawFrames.map((f) => JSON.parse(f) as { type: string }).filter((m) => m.type === 'presence')
+  c.rawFrames.map((f) => JSON.parse(f) as WireFrame).filter((m) => m.type === 'presence')
 
 describe('presence CONTRACTS_REV 10 through the room', () => {
   it('the contracts frame follows the welcome (before the late joiner presence); a rev-9 client is served rev 9', async () => {
@@ -117,22 +125,17 @@ describe('presence CONTRACTS_REV 10 through the room', () => {
     await follower.until(
       () =>
         presenceFrames(follower).some((m) =>
-          (m as { peers: { sid: string; view?: { z?: number } | null }[] }).peers.some(
-            (p) => p.sid === sidOf(leader) && p.view?.z === 2.5,
-          ),
+          m.peers.some((p) => p.sid === sidOf(leader) && p.view?.z === 2.5),
         ),
       'the leader view with its zoom',
     )
     // the leader holds at most 40 cursors and the whole list of who follows it
     await leader.until(
-      () =>
-        presenceFrames(leader).some(
-          (m) => ((m as { followers?: string[] }).followers ?? []).length === crowd.length + 1,
-        ),
+      () => presenceFrames(leader).some((m) => (m.followers ?? []).length === crowd.length + 1),
       'every follower listed',
     )
     const held = new Map<string, unknown>()
-    for (const m of presenceFrames(leader) as { peers: { sid: string }[]; off?: string[] }[]) {
+    for (const m of presenceFrames(leader)) {
       for (const p of m.peers) held.set(p.sid, p)
       for (const o of m.off ?? []) held.delete(o)
     }
@@ -166,10 +169,7 @@ describe('presence CONTRACTS_REV 10 through the room', () => {
     say(again, { f: null })
     await again.until(
       () =>
-        presenceFrames(again).some(
-          (m) =>
-            JSON.stringify(m).includes('"z":4') && (m as { followers?: string[] }).followers?.length === 1,
-        ),
+        presenceFrames(again).some((m) => JSON.stringify(m).includes('"z":4') && m.followers?.length === 1),
       'rich again',
     )
     expect(again.schemaErrors).toEqual([])
