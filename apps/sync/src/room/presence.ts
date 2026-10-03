@@ -6,14 +6,28 @@
 //    `sel` is dropped.
 //  - `presence` out at 10 Hz, changed peers only. With 41 sessions or fewer, nobody is capped and one
 //    frame (serialized once) serves everyone whose own presence did not change; a recipient whose own
-//    entry is in the batch gets a copy without it. Above that, each recipient gets at most 40 cursors,
-//    re-ranked on every tick (CR-3C-1): peers whose pointer is inside its `view` first (the ones it
-//    already gets before newcomers), then the others it already gets, then out-of-view newcomers; a peer
-//    that falls out of that set is named in `off`, so a view change or a newcomer in view replaces an
-//    out-of-view cursor (before, the first 40 stayed for good and nobody else ever appeared). The peer a
-//    recipient follows (its `f`) is always delivered, outside the cap: a follower's camera needs its
-//    `view`. The room tracks what each recipient holds (`delivered`), so `off` names only peers it
-//    has, and a room that drops back to 41 sends each recipient the peers it was not getting.
+//    entry is in the batch gets a copy without it. Above that, each recipient gets at most 40 cursors
+//    (CR-3C-1): peers whose pointer is inside its `view` first (the ones it already gets before
+//    newcomers), then the others it already gets, then out-of-view newcomers; a peer that falls out of
+//    that set is named in `off`, so a view change or a newcomer in view replaces an out-of-view cursor
+//    (before, the first 40 stayed for good and nobody else ever appeared). The peer a recipient follows
+//    (its `f`) is always delivered, outside the cap: a follower's camera needs its `view`. The room
+//    tracks what each recipient holds (`held`), so `off` names only peers it has, and a room that drops
+//    back to 41 sends each recipient the peers it was not getting.
+//  - The rank (D1, wave D): CR-3C-1 re-ranked every recipient on every tick (200 recipients x 200 peers
+//    at 10 Hz on L1's board: about 15 points of the 0.5 CPU quota, C6's NAS re-run). The set it picks is
+//    a fixed point: ranked again with nothing moved, it comes out the same. So a recipient is ranked again
+//    only when its view or its `f` changed, a peer it held left, the room crossed 41, a congested tick
+//    left it behind, or a pointer moved so that the set can change (a held cursor left the view or went
+//    away while a cursor it does not hold could take its slot; a cursor it does not hold came into its
+//    view while it holds one outside; a cursor appeared while it holds fewer than 40 or one without a
+//    pointer); and, as a backstop, every RERANK_EVERY_TICKS ticks. The room keeps, per recipient, where
+//    each held peer is relative to its view and how many are in, out and without a pointer, so the test
+//    is the pass over what it holds that the frame needs anyway (no lookups: a changed peer carries the
+//    tick's number, `sentIn`). A rank keeps what stays in place and uses the tick's lists of the peers
+//    in, out of and without a pointer for that view, built once per tick per distinct view and shared by
+//    every recipient with that view (`Bucket`). The set is the same as CR-3C-1's on every tick (the
+//    differential test against wave A's relay, `apps/sync/test/presence/presence-rank.test.ts`).
 //  - CONTRACTS_REV 10 (CR-3C-1, CR-3CF-1): `f` (whom the sender follows) and `view.z` (its zoom), and
 //    per recipient `followers` (the sessions following it, uncapped, when the list changes). A socket
 //    reads them once it has sent `f` (a rev-10 client sends `f` in every message after the room's
@@ -79,18 +93,87 @@ interface Peer {
   /** the drag the relay ended because it expired: that drag (`d`) cannot start again */
   expiredD: number | null
   readonly: boolean
+  /** the tick (`epoch`) whose frames carry its latest change */
+  sentIn: number
+  /** a rank's scratch: that rank's stamp while the recipient being ranked holds it */
+  mark: number
+}
+
+/** One peer a recipient holds: the peer, and above 41 sessions its place for that recipient. */
+interface Slot {
+  readonly peer: Peer
+  place: number
+  /** the last rank (its stamp) that kept it */
+  stamp: number
+  /** the rank that added it */
+  readonly since: number
+}
+
+/** Where a peer is for one recipient (the rank's tiers): its pointer inside the recipient's view, ... */
+const IN = 0
+/** ... its pointer elsewhere (or the recipient has no view), ... */
+const OUT = 1
+/** ... no pointer (nothing to draw: kept only while there is room, never added) */
+const NONE = 2
+/** The followed peer in what a recipient holds: outside the cap, never counted. */
+const FOLLOWED = 3
+/** A peer held below the cap (41 sessions or fewer): not ranked, its place unknown. */
+const UNRANKED = -1
+
+interface Rect {
+  readonly x: number
+  readonly y: number
+  readonly w: number
+  readonly h: number
+}
+
+/** IN, OUT or NONE: the same test as CR-3C-1's rank (the edges are inside). */
+const place = (pt: { x: number; y: number } | null, v: Rect | null): number =>
+  !pt ? NONE : v && pt.x >= v.x && pt.x <= v.x + v.w && pt.y >= v.y && pt.y <= v.y + v.h ? IN : OUT
+
+/**
+ * A recipient is ranked again at least every this many ticks (5 s at 10 Hz), staggered by its handle key,
+ * whatever moved: a backstop under the change test, which alone gives the same set (the differential test).
+ */
+export const RERANK_EVERY_TICKS = 50
+
+/** One view's peers by place, in the room's order, for one tick: shared by every recipient with that view. */
+interface Bucket {
+  readonly inside: Peer[]
+  readonly outside: Peer[]
+  readonly none: Peer[]
 }
 
 /** What the room knows of one recipient socket (by its handle key). */
 interface RecipientState {
-  /** the peers it holds: what it was sent, less what `off` and the roster's leaves took away */
-  readonly delivered: Set<string>
+  /**
+   * the peers it holds: what it was sent, less what `off` and the roster's leaves took away; above 41
+   * sessions each with its place (IN, OUT, NONE; FOLLOWED for the peer it follows) as of its last tick
+   */
+  readonly held: Map<string, Slot>
   /** it has sent `f`: it reads the rev-10 fields (`f`, `view.z`, `followers`) */
   rich: boolean
   /** every peer it holds goes again on the next tick (it just became rich: it holds them without f, z) */
   resend: boolean
   /** the followers list it holds, joined ('' for none: it starts with none) */
   followers: string
+  /**
+   * `held` is what the rank gives for it, with the places and the counts below current, as of the tick
+   * numbered `epoch`, for the view (`vx`.. when `hasView`) and the `f` stored here. False below the cap,
+   * after a welcome, and when a peer it held left: its next tick ranks it.
+   */
+  ranked: boolean
+  epoch: number
+  /** of the held peers but the followed one: how many are IN, OUT and NONE */
+  nIn: number
+  nOut: number
+  nNone: number
+  hasView: boolean
+  vx: number
+  vy: number
+  vw: number
+  vh: number
+  f: string | null
 }
 
 export interface PresenceRecipient {
@@ -112,9 +195,17 @@ export class PresenceHub {
   private readonly pendingDragEnds: DragOut[] = []
   /** the next tick runs even with nothing changed (a peer left, a socket became rich) */
   private wake = false
+  /** the number of the last tick that sent anything (a tick with nothing changed returns early) */
+  private epoch = 0
+  /** the last rank's number (`Slot.stamp`, `Peer.mark`) */
+  private stamp = 0
   inCount = 0
   outCount = 0
   droppedDrags = 0
+  /** recipients ranked (CR-3C-1's rank, above 41 sessions; welcomes included) */
+  rankCalls = 0
+  /** a view's peers sorted by place for a tick (`Bucket`): at most once per distinct view per tick */
+  bucketBuilds = 0
 
   private readonly now: () => number
   constructor(now: () => number) {
@@ -142,6 +233,8 @@ export class PresenceHub {
         drag: null,
         expiredD: null,
         readonly,
+        sentIn: 0,
+        mark: 0,
       }
       this.peers.set(sid, p)
     }
@@ -152,7 +245,23 @@ export class PresenceHub {
   private recipient(key: number): RecipientState {
     let r = this.recipients.get(key)
     if (!r) {
-      r = { delivered: new Set(), rich: false, resend: false, followers: '' }
+      r = {
+        held: new Map(),
+        rich: false,
+        resend: false,
+        followers: '',
+        ranked: false,
+        epoch: 0,
+        nIn: 0,
+        nOut: 0,
+        nNone: 0,
+        hasView: false,
+        vx: 0,
+        vy: 0,
+        vw: 0,
+        vh: 0,
+        f: null,
+      }
       this.recipients.set(key, r)
     }
     return r
@@ -273,14 +382,18 @@ export class PresenceHub {
   welcomeFrame(key: number, sid: string): string | null {
     this.recipients.delete(key)
     const r = this.recipient(key)
-    const capped = this.peers.size > CURSORS_PER_RECIPIENT + 1
-    const sids = capped ? [...this.rank(sid, r)] : [...this.peers.keys()].filter((s) => s !== sid)
-    for (const s of sids) r.delivered.add(s)
-    if (!sids.length) return null
-    return JSON.stringify({
-      type: 'presence',
-      peers: sids.map((s) => this.plainOf(this.peers.get(s) as Peer)),
-    })
+    if (this.peers.size > CURSORS_PER_RECIPIENT + 1) {
+      // ranked again on its first tick (`ranked` is false), as CR-3C-1 did on every tick
+      const me = this.peers.get(sid)
+      const view = me?.presence.view ?? null
+      this.rank(r, this.bucket(view), sid, view, me?.f ? this.peers.get(me.f) : undefined)
+    } else
+      for (const p of this.peers.values())
+        if (p.sid !== sid) r.held.set(p.sid, { peer: p, place: UNRANKED, stamp: 0, since: 0 })
+    if (!r.held.size) return null
+    const peers: PeerPresence[] = []
+    for (const slot of r.held.values()) peers.push(this.plainOf(slot.peer))
+    return JSON.stringify({ type: 'presence', peers })
   }
 
   /** A session left for good: its drag ends; nobody holds it any more (the roster's leave removes it). */
@@ -289,7 +402,8 @@ export class PresenceHub {
     if (!p) return
     if (p.drag && !p.drag.ended) this.pendingDragEnds.push({ sid, d: p.drag.d, end: true })
     this.peers.delete(sid)
-    for (const r of this.recipients.values()) r.delivered.delete(sid)
+    // a recipient that held it has a free slot: its next tick ranks it
+    for (const r of this.recipients.values()) if (r.held.delete(sid)) r.ranked = false
     this.wake = true
   }
 
@@ -313,47 +427,142 @@ export class PresenceHub {
     }
   }
 
-  /**
-   * The peers recipient `sid` should hold above 41 sessions: the one it follows (outside the cap), then
-   * up to 40 cursors: pointers in its view it already holds, pointers in its view it does not, pointers
-   * elsewhere it holds, pointers elsewhere it does not, and last the peers it holds with no pointer. A
-   * peer with no pointer is never added (nothing to draw), only kept while there is room.
-   */
-  private rank(sid: string, r: RecipientState): Set<string> {
-    const me = this.peers.get(sid)
-    const view = me?.presence.view ?? null
-    const followed = me?.f ? this.peers.get(me.f) : undefined
-    const tiers: string[][] = [[], [], [], [], []]
+  /** Every peer by its place in `view`, in the room's order (a tick shares one per distinct view). */
+  private bucket(view: Rect | null): Bucket {
+    this.bucketBuilds++
+    const b: Bucket = { inside: [], outside: [], none: [] }
     for (const p of this.peers.values()) {
-      if (p.sid === sid || p === followed) continue
-      const has = r.delivered.has(p.sid)
-      const pt = p.presence.pointer
-      if (!pt) {
-        if (has) tiers[4]?.push(p.sid)
-        continue
-      }
-      const inView =
-        !!view && pt.x >= view.x && pt.x <= view.x + view.w && pt.y >= view.y && pt.y <= view.y + view.h
-      tiers[inView ? (has ? 0 : 1) : has ? 2 : 3]?.push(p.sid)
+      const c = place(p.presence.pointer, view)
+      ;(c === IN ? b.inside : c === OUT ? b.outside : b.none).push(p)
     }
-    const out = new Set<string>()
-    if (followed) out.add(followed.sid)
+    return b
+  }
+
+  /**
+   * Ranks recipient `st` (`sid`, its `view`, the peer it follows) in place, CR-3C-1's rank, and returns the
+   * sids it no longer gets (`off`). It holds the one it follows (outside the cap), then up to 40 cursors:
+   * pointers in its view it already holds, pointers in its view it does not, pointers elsewhere it holds,
+   * pointers elsewhere it does not, and last the peers it holds with no pointer. A peer with no pointer is
+   * never added (nothing to draw), only kept while there is room. Within a tier the room's order decides
+   * who fits; a held tier that fits whole is taken as it is, without the bucket's list. A kept peer keeps
+   * its slot (its place brought up to date, `stamp` this rank's); a newcomer's slot has `since` this rank's.
+   * `b` is `view`'s bucket. It counts the places; the view and `f` are stored by `settle`.
+   */
+  private rank(
+    st: RecipientState,
+    b: Bucket,
+    sid: string,
+    view: Rect | null,
+    followed: Peer | undefined,
+  ): string[] {
+    this.rankCalls++
+    const stamp = ++this.stamp
+    const held = st.held
+    const hIn: Slot[] = []
+    const hOut: Slot[] = []
+    const hNone: Slot[] = []
+    for (const slot of held.values()) {
+      const p = slot.peer
+      p.mark = stamp
+      if (p === followed) {
+        slot.place = FOLLOWED
+        slot.stamp = stamp
+      } else if (p.sid !== sid) {
+        const c = place(p.presence.pointer, view)
+        ;(c === IN ? hIn : c === OUT ? hOut : hNone).push(slot)
+      }
+    }
+    const added: Slot[] = []
+    if (followed && followed.mark !== stamp)
+      added.push({ peer: followed, place: FOLLOWED, stamp, since: stamp })
+    st.nIn = 0
+    st.nOut = 0
+    st.nNone = 0
+    const count = (c: number) => {
+      if (c === IN) st.nIn++
+      else if (c === OUT) st.nOut++
+      else st.nNone++
+    }
     let room = CURSORS_PER_RECIPIENT
-    for (const tier of tiers)
-      for (const s of tier) {
-        if (room <= 0) return out
-        out.add(s)
+    const keep = (slot: Slot, c: number) => {
+      slot.place = c
+      slot.stamp = stamp
+      count(c)
+      room--
+    }
+    // a held tier: whole when it fits, else the first of it in the room's order
+    const takeHeld = (list: Slot[], ordered: readonly Peer[], c: number) => {
+      if (list.length <= room) {
+        for (const slot of list) keep(slot, c)
+        return
+      }
+      for (const p of ordered) {
+        if (room <= 0) return
+        if (p.mark === stamp && p !== followed && p.sid !== sid) keep(held.get(p.sid) as Slot, c)
+      }
+    }
+    // newcomers of a tier, in the room's order (`mark`: held)
+    const takeNew = (ordered: readonly Peer[], c: number) => {
+      for (const p of ordered) {
+        if (room <= 0) return
+        if (p.mark === stamp || p === followed || p.sid === sid) continue
+        added.push({ peer: p, place: c, stamp, since: stamp })
+        count(c)
         room--
       }
-    return out
+    }
+    takeHeld(hIn, b.inside, IN)
+    takeNew(b.inside, IN)
+    if (room > 0) takeHeld(hOut, b.outside, OUT)
+    if (room > 0) takeNew(b.outside, OUT)
+    if (room > 0) takeHeld(hNone, b.none, NONE)
+    const off: string[] = []
+    for (const slot of held.values())
+      if (slot.stamp !== stamp) {
+        off.push(slot.peer.sid)
+        held.delete(slot.peer.sid)
+      }
+    for (const slot of added) held.set(slot.peer.sid, slot)
+    return off
+  }
+
+  /** A held peer moved: its place is now `now` (IN, OUT or NONE), and the counts follow. */
+  private replace(st: RecipientState, slot: Slot, now: number): void {
+    const was = slot.place
+    if (was === now) return
+    if (was === IN) st.nIn--
+    else if (was === OUT) st.nOut--
+    else st.nNone--
+    if (now === IN) st.nIn++
+    else if (now === OUT) st.nOut++
+    else st.nNone++
+    slot.place = now
+  }
+
+  /** Did a peer recipient `sid` does not hold move into its view this tick? */
+  private newcomerIn(changed: readonly Peer[], sid: string, st: RecipientState, view: Rect | null): boolean {
+    for (const p of changed)
+      if (place(p.presence.pointer, view) === IN && p.sid !== sid && !st.held.has(p.sid)) return true
+    return false
+  }
+
+  /** After a rank in a tick: what it holds is the rank's for this view and `f`, as of tick `epoch`. */
+  private settle(st: RecipientState, view: Rect | null, f: string | null): void {
+    st.hasView = view !== null
+    st.vx = view?.x ?? 0
+    st.vy = view?.y ?? 0
+    st.vw = view?.w ?? 0
+    st.vh = view?.h ?? 0
+    st.f = f
+    st.ranked = true
   }
 
   /** The 10 Hz tick: sends the changed peers and the drag deltas to every recipient. */
   tick(recipients: readonly PresenceRecipient[]): void {
-    const changed: PeerPresence[] = []
+    const changed: Peer[] = []
     for (const p of this.peers.values())
       if (p.dirty) {
-        changed.push(p.presence)
+        changed.push(p)
         p.dirty = false
       }
     const drags: DragOut[] = [...this.pendingDragEnds]
@@ -379,9 +588,25 @@ export class PresenceHub {
     const wake = this.wake
     this.wake = false
     if (!changed.length && !drags.length && !wake) return
+    const epoch = ++this.epoch
+    // a changed peer is one with `sentIn === epoch` (no set lookup per recipient and held peer)
+    for (const p of changed) p.sentIn = epoch
     const capped = this.peers.size > CURSORS_PER_RECIPIENT + 1
-    const changedSids = new Set(changed.map((c) => c.sid))
     const shared = new Map<string, string>()
+    // above the cap: the peers with a pointer (what a recipient does not hold of them could take a slot),
+    // and each distinct view's bucket, built when a recipient with that view is ranked
+    let pointers = 0
+    if (capped) for (const p of this.peers.values()) if (p.presence.pointer) pointers++
+    const buckets = new Map<string, Bucket>()
+    const bucketOf = (view: Rect | null): Bucket => {
+      const k = view ? `${view.x},${view.y},${view.w},${view.h}` : ''
+      let b = buckets.get(k)
+      if (!b) {
+        b = this.bucket(view)
+        buckets.set(k, b)
+      }
+      return b
+    }
     // each changed peer is serialized once per tick and form (rev 10, rev 9); a recipient's frame joins the
     // entries it gets (the same JSON as stringifying the object: `{type, peers, off?, drags?, followers?}`
     // in that key order). On a 200-session board the per-view frames (40 cursors each, 200 recipients,
@@ -430,7 +655,9 @@ export class PresenceHub {
     }
     for (const r of recipients) {
       const st = this.recipient(r.key)
-      const ds = drags.filter((d) => d.sid !== r.sid)
+      // the tick's own list unless a drag in it is the recipient's
+      const ds =
+        drags.length && drags.some((d) => d.sid === r.sid) ? drags.filter((d) => d.sid !== r.sid) : drags
       if (r.congested) {
         // a congested socket gets the drags only; what it holds and its followers list wait
         if (ds.length) {
@@ -446,24 +673,28 @@ export class PresenceHub {
         flKey = list.join('\n')
         if (flKey !== st.followers) fl = list
       }
-      const own = changedSids.has(r.sid)
+      const me = this.peers.get(r.sid)
+      const own = me?.sentIn === epoch
       let peers: Peer[]
       let off: string[] | undefined
       if (!capped) {
         // everyone gets everyone: the changed peers but itself, and any peer it does not hold yet (the room
         // just dropped to 41, or a congested tick skipped a newcomer), or all of them again (it just became
         // rich: it holds rev-9 entries)
-        let have = st.delivered.size
-        for (const c of changed) if (c.sid !== r.sid && !st.delivered.has(c.sid)) have++
-        const missing = st.resend || have < this.peers.size - (this.peers.has(r.sid) ? 1 : 0)
+        st.ranked = false
+        let have = st.held.size
+        for (const p of changed) if (p.sid !== r.sid && !st.held.has(p.sid)) have++
+        const missing = st.resend || have < this.peers.size - (me ? 1 : 0)
         if (!missing && !fl) {
-          for (const c of changed) if (c.sid !== r.sid) st.delivered.add(c.sid)
+          for (const p of changed)
+            if (p.sid !== r.sid && !st.held.has(p.sid))
+              st.held.set(p.sid, { peer: p, place: UNRANKED, stamp: 0, since: 0 })
           if (changed.length - (own ? 1 : 0) === 0 && !ds.length) continue
           const cacheKey = own || ds.length !== drags.length ? null : st.rich ? 'rich' : 'plain'
           let frame = cacheKey ? shared.get(cacheKey) : undefined
           if (!frame) {
             const list: Peer[] = []
-            for (const c of changed) if (c.sid !== r.sid) list.push(this.peers.get(c.sid) as Peer)
+            for (const p of changed) if (p.sid !== r.sid) list.push(p)
             frame = frameFor(list, st.rich, ds)
             if (cacheKey) shared.set(cacheKey, frame)
           }
@@ -474,20 +705,68 @@ export class PresenceHub {
         peers = []
         for (const p of this.peers.values()) {
           if (p.sid === r.sid) continue
-          if (st.resend || changedSids.has(p.sid) || !st.delivered.has(p.sid)) peers.push(p)
-          st.delivered.add(p.sid)
+          const has = st.held.has(p.sid)
+          if (st.resend || p.sentIn === epoch || !has) peers.push(p)
+          if (!has) st.held.set(p.sid, { peer: p, place: UNRANKED, stamp: 0, since: 0 })
         }
       } else {
-        // capped: re-ranked on every tick; `off` names what it holds and no longer gets
-        const want = this.rank(r.sid, st)
-        off = []
-        for (const sid of st.delivered) if (!want.has(sid)) off.push(sid)
+        // capped: what it holds is the rank's fixed point, so it is ranked again only when that can change
+        const view = me?.presence.view ?? null
+        const f = me?.f ?? null
+        const followed = f ? this.peers.get(f) : undefined
+        let rerank =
+          !st.ranked ||
+          st.epoch !== epoch - 1 ||
+          (epoch + r.key) % RERANK_EVERY_TICKS === 0 ||
+          st.f !== f ||
+          (view
+            ? !st.hasView || st.vx !== view.x || st.vy !== view.y || st.vw !== view.w || st.vh !== view.h
+            : st.hasView) ||
+          (followed !== undefined && !st.held.has(followed.sid))
         peers = []
-        for (const sid of want)
-          if (st.resend || changedSids.has(sid) || !st.delivered.has(sid))
-            peers.push(this.peers.get(sid) as Peer)
-        st.delivered.clear()
-        for (const sid of want) st.delivered.add(sid)
+        if (!rerank) {
+          // the changed peers it holds go out; each one's place is brought up to date
+          const full = st.nIn + st.nOut + st.nNone === CURSORS_PER_RECIPIENT
+          const allIn = full && st.nOut === 0 && st.nNone === 0
+          if (st.resend || changed.length >= st.held.size) {
+            for (const slot of st.held.values()) {
+              const p = slot.peer
+              const moved = p.sentIn === epoch
+              if (!moved && !st.resend) continue
+              peers.push(p)
+              if (moved && slot.place !== FOLLOWED) this.replace(st, slot, place(p.presence.pointer, view))
+            }
+          } else
+            for (const p of changed) {
+              const slot = st.held.get(p.sid)
+              if (!slot) continue
+              peers.push(p)
+              if (slot.place !== FOLLOWED) this.replace(st, slot, place(p.presence.pointer, view))
+            }
+          // can a peer it does not hold now take a slot? (`held` was the rank's fixed point last tick)
+          const others =
+            pointers -
+            st.nIn -
+            st.nOut -
+            (me?.presence.pointer ? 1 : 0) -
+            (followed?.presence.pointer ? 1 : 0)
+          if (st.nNone > 0 || !full)
+            rerank = others > 0 // any cursor outranks a held peer with no pointer, and fills a free slot
+          else if (st.nOut > 0)
+            // a cursor in its view outranks a held one outside it. Last tick none it does not hold was in
+            // its view, unless all it held were (then the ones that did not fit may be): ranked again
+            rerank = allIn || this.newcomerIn(changed, r.sid, st, view)
+        }
+        if (rerank) {
+          // `off` names what it holds and no longer gets; a newcomer goes out whole
+          off = this.rank(st, bucketOf(view), r.sid, view, followed)
+          const stamp = this.stamp
+          peers = []
+          for (const slot of st.held.values())
+            if (st.resend || slot.since === stamp || slot.peer.sentIn === epoch) peers.push(slot.peer)
+          this.settle(st, view, f)
+        }
+        st.epoch = epoch
       }
       st.resend = false
       if (fl) st.followers = flKey
