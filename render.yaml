@@ -73,11 +73,46 @@ services:
       - type: rewrite
         source: /files/*
         destination: https://draftroom-staging-api.onrender.com/files/*
+      # Excalidraw's self-hosted fonts (docs/EXCALIDRAW-MIGRATION.md §2.12). A missing file under this
+      # prefix must answer 404, never the SPA's index.html: a 200 HTML answer makes the browser take the
+      # font as broken and try its next source. Render skips a rule when a file exists at the path, so the
+      # real font files are served as-is, and a miss goes to the api, which answers 404. A rewrite to a
+      # path that does not exist on this site answers 200 with an empty body instead (measured at the
+      # cut-over, docs/CUTOVER-LOG.md A2). Must stay BEFORE the SPA fallback (first matching rule wins).
+      - type: rewrite
+        source: /excalidraw-assets/*
+        destination: https://draftroom-staging-api.onrender.com/excalidraw-assets/*
       # SPA fallback. Render skips rules for paths where a file exists, so hashed assets are served as-is.
       - type: rewrite
         source: /*
         destination: /index.html
     headers:
+      # The enforced CSP (docs/EXCALIDRAW-MIGRATION.md §2.12; enforced on staging 2026-10-03 after a real Clerk
+      # sign-in under the report-only header showed 0 reports and the feature audit in docs/CUTOVER-LOG.md §7):
+      # no 'unsafe-eval' (index.html loads /zod-jitless.js first; Lobby exports SVG with skipInliningFonts, so
+      # Excalidraw's eval-based font subsetter never runs), no inline script, fonts same-origin, the sync socket's
+      # origin, Clerk's frontend API (a development instance) and its documented hosts (img.clerk.com,
+      # clerk-telemetry.com, challenges.cloudflare.com, *.protect.clerk.com for Clerk Protect if it is ever
+      # turned on). connect-src blob: is for exports of boards with file cards (the card faces are fetched
+      # back from same-origin blob: URLs). A production Clerk instance has another frontend-API host: change
+      # it here and on the service together. Changing it needs no rebuild; a static-site Rollback does NOT
+      # roll it back (docs/DEPLOY.md). Render applies these headers to the site's own files only, not to
+      # responses rewritten to the api (the api's /files answers keep their own sandbox CSP).
+      - path: /*
+        name: Content-Security-Policy
+        value: >-
+          default-src 'self';
+          script-src 'self' https://splendid-flamingo-3744.clerk.accounts.dev https://challenges.cloudflare.com https://*.protect.clerk.com;
+          connect-src 'self' blob: https://draftroom-staging-sync.onrender.com wss://draftroom-staging-sync.onrender.com https://splendid-flamingo-3744.clerk.accounts.dev https://clerk-telemetry.com https://*.protect.clerk.com:*;
+          img-src 'self' blob: data: https://img.clerk.com;
+          font-src 'self';
+          style-src 'self' 'unsafe-inline';
+          worker-src 'self' blob:;
+          frame-src https://challenges.cloudflare.com https://*.protect.clerk.com;
+          object-src 'none';
+          base-uri 'self';
+          form-action 'self';
+          frame-ancestors 'none'
       - path: /*
         name: X-Content-Type-Options
         value: nosniff
@@ -91,8 +126,10 @@ services:
         name: Cache-Control
         value: public, max-age=31536000, immutable
     envVars:
-      # Without a key whose hosts include this site's hostname, the editor goes BLANK 5 s after load on
-      # any HTTPS host (docs/research/license.md). Keys are public by design; kept out of git anyway.
+      # Unused since the Excalidraw cut-over (2026-10-01): the current build ignores it. Its Dashboard value
+      # is kept only so that a rollback can still rebuild the bridge release R0 (tag lobby-r0). Remove this
+      # entry and the Dashboard value together at drop-legacy (docs/EXCALIDRAW-CUTOVER.md D7). Never add
+      # VITE_LOBBY_ENGINE back: the switch is gone from the web build.
       - key: VITE_TLDRAW_LICENSE_KEY
         sync: false
       # Static-site rewrites do not proxy WebSockets, so the board socket goes straight to the sync
@@ -188,9 +225,9 @@ services:
       - fromGroup: draftroom-staging-worker-token
 
   # ---------------------------------------------------------------------------------------------
-  # sync: tldraw rooms. EXACTLY ONE instance (one authoritative room per board) with its own disk
-  # for the per-board SQLite files. No autoscaling, ever: a second instance would open a second
-  # room on a different disk and split the board. Unchanged by milestone 3.
+  # sync: Lobby's element rooms (the Excalidraw canvas). EXACTLY ONE instance (one authoritative room
+  # per board) with its own disk for the per-board SQLite files. No autoscaling, ever: a second
+  # instance would open a second room on a different disk and split the board.
   - type: web
     runtime: docker
     name: draftroom-staging-sync
@@ -223,12 +260,27 @@ services:
         value: https://draftroom-staging-web.onrender.com
       - key: ACCESS_RECHECK_MS
         value: "10000"
+      # The canvas engine: Lobby's element sync (apps/sync/src/engine-switch.ts). Never roll back by
+      # changing this value: a rollback deploys the bridge release R0, which ignores it
+      # (docs/EXCALIDRAW-CUTOVER.md "Rollback to R0").
+      - key: DRAFTROOM_ENGINE
+        value: excalidraw
+      # "1" = the server starts with maintenance ON (every board socket refused with MAINTENANCE, internal
+      # routes working), for a cut-over's first boot and for a roll-forward. Set it in the Dashboard right
+      # before that deploy and delete it once maintenance is off (docs/EXCALIDRAW-CUTOVER.md C8, C16, F6).
+      # `sync: false` ON PURPOSE: a Blueprint sync must never set it, or every later deploy and restart
+      # would start with every board closed. Unset on staging since 2026-10-01 (C16).
+      - key: DRAFTROOM_BOOT_MAINTENANCE
+        sync: false
       # Offsite board backups (docs/DEPLOY.md "Backups"): each local backup is also copied to R2 under
-      # backups/sync/<board>/, with a manifest, signed with a key derived from DRAFTROOM_INTERNAL_SECRET
-      # (the env group below). All five are `sync: false` ON PURPOSE, the store too:
+      # backups/sync/<board>/, with a manifest, signed with a key derived from
+      # DRAFTROOM_BACKUP_SIGNING_SECRET, this service's own (never in the env group: the api must not hold
+      # it; the key derived from DRAFTROOM_INTERNAL_SECRET only verifies older backups). In production sync
+      # refuses to start with the store on and that secret unset. All six are `sync: false` ON PURPOSE,
+      # the store too:
       # a Blueprint sync that set DRAFTROOM_BACKUP_STORE=r2 on the existing service without the R2_*
       # values (sync: false values are only prompted at Blueprint creation) would make sync refuse to
-      # start, and a sync deploy stops the old instance first. Set all five together in the Dashboard
+      # start, and a sync deploy stops the old instance first. Set all six together in the Dashboard
       # or through the Render API BEFORE deploying the sync build that reads them. Unset = off (boards
       # work; the log says "offsite backups: off").
       #
@@ -249,6 +301,8 @@ services:
         sync: false
       - key: R2_BUCKET
         sync: false # draftroom-staging
+      - key: DRAFTROOM_BACKUP_SIGNING_SECRET
+        sync: false # openssl rand -base64 32; different from both secrets in the env group
       - fromGroup: draftroom-staging-secrets
 
   # ---------------------------------------------------------------------------------------------

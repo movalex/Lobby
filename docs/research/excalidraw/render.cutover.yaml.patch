@@ -1,5 +1,9 @@
-render.yaml at the Excalidraw cut-over: the prepared change, NOT applied
+render.yaml at the Excalidraw cut-over: the prepared change (HISTORICAL)
 =========================================================================
+
+APPLIED AT C19 on 2026-10-03 as a hand edit of render.yaml, not with git apply: the route destination is the api (difference 1
+below), the header is the ENFORCED Content-Security-Policy with blob: in connect-src and Clerk's Protect hosts added
+(docs/CUTOVER-LOG.md §7), VITE_LOBBY_ENGINE is not added, and VITE_TLDRAW_LICENSE_KEY stays declared until D7. Kept for the record.
 
 APPLIED BY HAND ON 2026-10-01 (the cut-over on staging, docs/CUTOVER-LOG.md, docs/DEPLOY.md "The Excalidraw
 cut-over on staging"): every value below is live on the services through the Render API, with TWO

@@ -689,16 +689,30 @@ Two findings for `render.yaml` and the runbook:
   build needs for a missing font (plan §2.12). Proxying the prefix to the api does: the static host still serves every real file
   itself (a rule is skipped when the file exists), and a miss gets the api's `404 application/json`. Correct the patch's first
   hunk to the api destination before C19.
-- **The CSP is report-only for now** (the lead's decision: a completed real Clerk sign-in under the enforced header is not verified
-  yet). Browsers log a report-only violation as `[Report Only]` in the console and fire `securitypolicyviolation` events, so a
-  sign-in and a board with 0 such lines is the evidence to switch the header's name to `Content-Security-Policy` (an edit in the
-  Dashboard or a `PUT …/headers`, no rebuild). The smoke script (`scripts/smoke/live-smoke.mjs` on `engine/smoke`) looks for the
-  enforced name and prints one `FAIL content-security-policy: missing` until then; everything else in it passed (24 checks).
+- **The CSP is enforced since 2026-10-03 ~05:10Z** (`PUT /v1/services/<web>/headers`, no rebuild; the header id changes on every
+  PUT). Evidence first: the owner's real Clerk sign-in under the report-only header showed 0 Lobby CSP lines (sign-in, dashboard,
+  four boards opened, edited and reloaded, two browsers, History, a new board), and a feature audit (docs/CUTOVER-LOG.md §7) ran
+  the whole Excalidraw e2e suite (467 tests) under the policy as report-only with a local report collector, plus a static review
+  per directive group with an independent verifier each. Its one real finding: exports of a board with file cards fetch the cards'
+  faces back from same-origin `blob:` URLs (`apps/web/src/canvas/export/scene.ts`), so `connect-src` gained `blob:` (only this
+  origin's own script can mint one). Clerk's documented Protect hosts (`https://*.protect.clerk.com` in script-src and frame-src,
+  `https://*.protect.clerk.com:*` in connect-src) were added so that turning Clerk Protect on later cannot break sign-in; it is
+  off on this instance today. After the switch, a headless load of `/`, `/signin`, `/b/<id>` and `/invite/<id>` showed Clerk
+  loaded, the sign-in form drawn, and 0 violations, CSP console lines, page errors or failed requests. Value (also in
+  `render.yaml` since C19):
+  `default-src 'self'; script-src 'self' https://splendid-flamingo-3744.clerk.accounts.dev https://challenges.cloudflare.com https://*.protect.clerk.com; connect-src 'self' blob: https://draftroom-staging-sync.onrender.com wss://draftroom-staging-sync.onrender.com https://splendid-flamingo-3744.clerk.accounts.dev https://clerk-telemetry.com https://*.protect.clerk.com:*; img-src 'self' blob: data: https://img.clerk.com; font-src 'self'; style-src 'self' 'unsafe-inline'; worker-src 'self' blob:; frame-src https://challenges.cloudflare.com https://*.protect.clerk.com; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'`.
+  Measured: Render adds the static site's custom headers to the site's own files only, not to answers rewritten to the api
+  (`/api/*` and `/files/*` answers carry none of them), so the api's own `sandbox; default-src 'none'` CSP on file answers is
+  untouched. Keep in mind: turning on Excalidraw's own export dialog or `ui` would need `'unsafe-eval'` (its font subsetter),
+  so keep `skipInliningFonts: true`; a production Clerk instance has another frontend-API host (change it here and in
+  `render.yaml` together).
 
 Rollback within 48 h: the runbook's §7 with tag `lobby-r0` (= 38d3833; the api needs `DRAFTROOM_ALLOW_NEWER_SCHEMA=1` and
 *Deploy a specific commit*, never *Rollback*, because of migration 0023) and R0's deploys api `dep-dau9lag93c1s73db0310`, sync
-`dep-dau9ll7avr4c7389qe8g`, web `dep-dau9m4hsrm7s73bc9oug`. Static-site rules are not rolled back by a Rollback: remove the
-report-only header by hand if R0's web is to run without it (it blocks nothing either way).
+`dep-dau9ll7avr4c7389qe8g`, web `dep-dau9m4hsrm7s73bc9oug`. Static-site rules are not rolled back by a Rollback, and the CSP is
+**enforced** since 2026-10-03: R0's tldraw web was never checked under it, so remove the `Content-Security-Policy` header (or put
+it back as `Content-Security-Policy-Report-Only`) BEFORE R0's web is deployed (the lead's `web.mjs remove-csp` did this at the
+cut-over rehearsal; the Dashboard works too).
 
 ## Rollback
 

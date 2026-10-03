@@ -148,6 +148,27 @@ on the sync disk (§6).
 - Caveat: nobody has edited a board since the switch (every board's last offsite copy is the clock-1 copy from 21:03Z on
   2026-10-01), so the watch shows a healthy idle system, not one under use. The owner's real sign-in (§6 step 1) is still the
   check that matters, and it is due before the 48 h window closes at about 2026-10-03 20:55Z.
+- **CSP enforced 2026-10-03 ~05:10Z** (owner pre-approval 2026-10-01, §6 step 5). The feature audit before it (workflow
+  `lobby-csp-audit`): four static reviewers by directive group (script/worker/wasm, connect, img/media/font/style,
+  frame/form/object/navigation), each checked by an independent verifier, and the whole Excalidraw e2e suite (96 specs, 467 tests,
+  0 failed) run under the policy as report-only with a local report collector and a positive control (data:, eval, wasm-eval and
+  blob: media reports all arrived). One real finding: an export of a board holding file cards fetches the card faces from
+  same-origin `blob:` URLs (`connect-src` lacked `blob:`; the export would lose the faces). Ruled out with evidence: Excalidraw's
+  WASM/eval font subsetter (Lobby passes `skipInliningFonts: true`), pica WASM (the engine's image tool is off), zod's JIT (the
+  jitless shim loads first; one zod copy in the bundle), mermaid paste (no eval), embeddables (`validateEmbeddable` refuses all),
+  video (same-origin `/files`), the timer chime (WebAudio oscillator), link previews (served by the api), the PDF export worker
+  (same-origin). Added: `blob:` to connect-src, and Clerk's documented Protect hosts (off on this instance; added so turning it on
+  cannot break sign-in). The api's sandbox CSP on `/files` answers is untouched (Render's static headers do not reach rewritten
+  answers; measured). After the switch: headless loads of `/`, `/signin`, `/b/<id>`, `/invite/<id>`: Clerk loaded, sign-in form
+  drawn, 0 violations, 0 CSP console lines, 0 page errors, 0 failed requests. **A rollback to R0 must remove the enforced header
+  first** (docs/DEPLOY.md).
+- **C19 done 2026-10-03** (Blueprint on Manual Sync first): `render.yaml` declares the `/excalidraw-assets/*` → api rule before the
+  SPA fallback, the enforced CSP (byte-equal to the live value), sync's `DRAFTROOM_ENGINE=excalidraw` and the `sync: false`
+  entries `DRAFTROOM_BOOT_MAINTENANCE` and `DRAFTROOM_BACKUP_SIGNING_SECRET`; `VITE_TLDRAW_LICENSE_KEY` stays declared
+  `sync: false` until D7 (so no sync can drop it while a rollback could still need it), and `VITE_LOBBY_ENGINE` is NOT added back
+  (the patch's hunk 3 was out of date). A drift check of every declared field against the live services, env groups and the web's
+  routes and headers shows **0 differences**, so a manual Blueprint sync has nothing to apply; the file validates against Render's
+  published schema (ajv, draft 2020-12).
 - P8 done 2026-10-03 ~04:40Z: the Blueprint `draftroom-staging` was still on auto-sync; it was switched to Manual Sync through
   the Render API (`autoSync` false, status `paused`; owner pre-approval 2026-10-01). Services' auto-deploy is off (`autoDeployTrigger`
   off on api, sync and web). The owner's real sign-in check (§6 step 1) passed the same day: 0 Lobby CSP lines (the only console
