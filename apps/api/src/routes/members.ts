@@ -62,18 +62,26 @@ export async function listBoardMembers(
   return members.sort((a, b) => RANK[b.role] - RANK[a.role] || a.user.name.localeCompare(b.user.name))
 }
 
-interface TargetRow {
+export interface TargetRow {
   workspace_role: WorkspaceRole
   board_grant: BoardRole | null
 }
 
-/** The target must already belong to the board's workspace: outsiders are added through invitations. */
-async function loadTarget(tx: Queryable, access: BoardAccess, userId: string): Promise<TargetRow> {
+/**
+ * The target must already belong to the board's workspace: outsiders are added through invitations.
+ * The membership row is read FOR SHARE and held to the end of the transaction: removing the member
+ * (routes/workspaces.ts) deletes that row before it sweeps their grants, so it waits for a grant that
+ * was given just now and then sweeps it, or goes first and this finds nobody (404). Without the lock the
+ * grant could land after the removal's sweep and outlive the membership (authz-006 follow-up 6). Lock
+ * order: the board row (the caller's FOR UPDATE), then this row, then board_members.
+ */
+export async function loadTarget(tx: Queryable, access: BoardAccess, userId: string): Promise<TargetRow> {
   const row = await tx.maybeOne<TargetRow>(
     `SELECT wm.role AS workspace_role, bm.role AS board_grant
        FROM workspace_members wm
        LEFT JOIN board_members bm ON bm.board_id = $1 AND bm.user_id = wm.user_id
-      WHERE wm.workspace_id = $2 AND wm.user_id = $3`,
+      WHERE wm.workspace_id = $2 AND wm.user_id = $3
+        FOR SHARE OF wm`,
     [access.board.id, access.board.workspace_id, userId],
   )
   if (!row) throw notFound()
