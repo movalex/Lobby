@@ -10,7 +10,17 @@
  * Every feature component is rendered inside `CanvasFeatureContextProvider` and gets the context.
  */
 import type { RosterEntry } from '@draftroom/canvas-schema/protocol'
-import { type CSSProperties, type ReactNode, useCallback, useMemo, useSyncExternalStore } from 'react'
+import {
+  type CSSProperties,
+  type ReactNode,
+  type RefObject,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from 'react'
 import { frameAt } from '../../features/canvas-ux/ported/notes.ts'
 import { FeatureDockView, TopBarOverflowRow } from '../../features/FeatureHostCore.tsx'
 import { initialsFor, safeColor } from '../../lib/identity.ts'
@@ -206,9 +216,11 @@ export function OverlayRoot({
   const r = ctx.registries
   const shown = r.sorted(r.featureOverlays).filter((o) => !focusMode || o.focusMode === 'show')
   const port = session.port
+  const rootRef = useRef<HTMLDivElement>(null)
   const c0 = port ? [...r.overlays.list()].sort((a, b) => a.order - b.order) : []
   return (
     <div
+      ref={rootRef}
       data-testid="lobby-overlay"
       data-focus-mode={focusMode || undefined}
       // clip, not hidden: a hidden box can still be scrolled, and focusing or clicking something past its edge
@@ -233,7 +245,7 @@ export function OverlayRoot({
           .map((o) => (
             <FeatureLayer key={o.id} spec={o} ctx={ctx} />
           ))}
-        <EdgeMarkers canvas={ctx.canvas} registries={r} focusMode={focusMode} />
+        <EdgeMarkers canvas={ctx.canvas} registries={r} focusMode={focusMode} overlay={rootRef} />
       </div>
     </div>
   )
@@ -499,6 +511,64 @@ function cornerControls(): AvoidRect[] {
   return [{ x: 0, y: 0, w: mediaMatches('(max-width: 600px)') ? 100 : 56, h: 56 }]
 }
 
+/**
+ * The host slots that sit over the canvas's edge and cover chips (chrome.tsx SLOT_STYLE, board.css), measured: the
+ * style panel (top right, 216 px wide, as high as its tools: it is open whenever a drawing tool is active or
+ * anything is selected, and opaque, above the overlay) and the navigation panel (bottom left; above the
+ * toolbar's row on a narrow screen). The board menu and the toolbar are a fixed place (`cornerControls`,
+ * `EDGE_MARGINS`).
+ */
+const EDGE_SLOTS = ['stylePanel', 'navigation'] as const satisfies readonly HostSlotName[]
+
+const sameRects = (a: readonly AvoidRect[], b: readonly AvoidRect[]) =>
+  a.length === b.length &&
+  a.every((r, i) => r.x === b[i]?.x && r.y === b[i]?.y && r.w === b[i]?.w && r.h === b[i]?.h)
+
+/**
+ * Where those slots are now, in the overlay's pixels (empty while a slot shows nothing). Measured from the DOM
+ * and kept up to date as the slot's content comes and goes and as the canvas is resized, so a chip never sits
+ * under a panel that opened after it was placed. `version`: a feature registering a slot re-reads them.
+ */
+function useCoveredRects(overlay: RefObject<HTMLElement | null>, version: number): AvoidRect[] {
+  const [rects, setRects] = useState<AvoidRect[]>([])
+  useEffect(() => {
+    const el = overlay.current
+    const host = el?.parentElement
+    if (!el || !host) return
+    const watched = new Set<Element>()
+    let resize: ResizeObserver | null = null
+    const measure = () => {
+      const base = el.getBoundingClientRect()
+      const next: AvoidRect[] = []
+      for (const name of EDGE_SLOTS) {
+        const slot = host.querySelector(`:scope > [data-lobby-slot="${name}"]`)
+        if (!slot) continue
+        if (!watched.has(slot)) {
+          watched.add(slot)
+          resize?.observe(slot)
+        }
+        const b = slot.getBoundingClientRect()
+        if (b.width > 0 && b.height > 0)
+          next.push({ x: b.left - base.left, y: b.top - base.top, w: b.width, h: b.height })
+      }
+      setRects((prev) => (sameRects(prev, next) ? prev : next))
+    }
+    if (typeof ResizeObserver !== 'undefined') {
+      resize = new ResizeObserver(measure)
+      resize.observe(el)
+    }
+    // a slot's box comes (focus mode off, a feature mounting) and goes with the host's children
+    const mutation = typeof MutationObserver !== 'undefined' ? new MutationObserver(measure) : null
+    mutation?.observe(host, { childList: true })
+    measure()
+    return () => {
+      resize?.disconnect()
+      mutation?.disconnect()
+    }
+  }, [overlay, version])
+  return rects
+}
+
 /** A media query that matches now (false without media queries: a test, an old browser). */
 function mediaMatches(query: string): boolean {
   try {
@@ -521,18 +591,23 @@ const SIDE_WORDS = { left: 'to the left', right: 'to the right', top: 'above', b
  * this view, else their view is), pointing the way. A click goes to them (the camera, one move); Shift-click
  * follows them like the people list's Follow. The nearest ten, spread along the edge so they do not pile up
  * (./edge-markers.ts). Hidden with their cursor (`cursorVisible`: present mode, "hide cursors") and in focus
- * mode; a person the room does not stream to this tab has no place to point at. Drawn only, never written.
+ * mode; a person the room does not stream to this tab has no place to point at. A chip never sits under the style
+ * panel or the other controls on the canvas's edge (`useCoveredRects`). Drawn only, never written.
  */
 function EdgeMarkers({
   canvas,
   registries,
   focusMode,
+  overlay,
 }: {
   canvas: LobbyCanvas
   registries: FeatureRegistries
   focusMode: boolean
+  /** the overlay root: the slots are its siblings, and what they cover is measured against it */
+  overlay: RefObject<HTMLElement | null>
 }) {
   const version = useRegistries(registries)
+  const covered = useCoveredRects(overlay, version)
   const markers = useValue('lobby-edge-markers', (): EdgeMarkerView[] => {
     if (focusMode) return []
     const v = canvas.viewport.get()
@@ -546,14 +621,14 @@ function EdgeMarkers({
       // the canvas's size on screen, from the camera (which changes with the canvas's size)
       { w: v.width * v.zoom, h: v.height * v.zoom },
       (p) => canvas.sceneToOverlay(p),
-      { avoid: cornerControls(), chipRadius: chipRadius() },
+      { avoid: [...cornerControls(), ...covered], chipRadius: chipRadius() },
     )
     const bySid = new Map(peers.map((p) => [p.sid, p]))
     return found.flatMap((m) => {
       const p = bySid.get(m.sid)
       return p ? [{ ...m, uid: p.uid, name: p.name, color: safeColor(p.color, p.uid), idle: p.idle }] : []
     })
-  }, [canvas, registries, version, focusMode])
+  }, [canvas, registries, version, focusMode, covered])
   if (!markers.length) return null
   const go = (m: EdgeMarkerView, follow: boolean) => {
     if (follow) {

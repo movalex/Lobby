@@ -10,10 +10,12 @@ import {
   expect,
   itemBounds,
   itemCenterOnScreen,
+  items,
   sceneToScreen,
   screenToScene,
   select,
   selectNone,
+  setTool,
   setViewport,
   startTextEditing,
   stopTextEditing,
@@ -278,13 +280,22 @@ type FollowWindow = {
   __lobbyBoard?: {
     canvas: {
       follow: { current(): string | null; stop(): void }
-      presence: { peers(): { sid: string; uid: string }[] }
+      presence: { peers(): { sid: string; uid: string; point: { x: number; y: number } | null }[] }
       settings: { set(p: { focusMode: boolean }): void }
     }
     registries: { cursorVisible: { provide(fn: (sid: string) => boolean): () => void } }
   }
   __unhideMarker?: () => void
 }
+
+/** Where `of`'s pointer is on `s`'s side: the point the room has streamed to her (scene px), or null. */
+const peerPoint = (s: CanvasSession, of: CanvasSession) =>
+  s.page.evaluate(
+    (uid) =>
+      (window as unknown as FollowWindow).__lobbyBoard?.canvas.presence.peers().find((p) => p.uid === uid)
+        ?.point ?? null,
+    of.id,
+  )
 
 /** The camera once it has stopped moving (an animated camera move is on its way until two reads agree). */
 async function restingViewport(page: Page) {
@@ -351,12 +362,22 @@ test('W5-32: a person who is off screen has a chip on the canvas edge pointing t
   })
 
   await test.step('a click goes to bob: his pointer is on her screen and the chip is gone', async () => {
+    // the chip goes to where bob's pointer is on her side. His mouse moved in steps and the stream is throttled,
+    // so wait until she has the point it ended on: a click before that goes to a step on the way (this step
+    // used to rest a few px off, about one run in fifty)
+    await expect
+      .poll(async () => {
+        const p = await peerPoint(a, b)
+        return p ? Math.max(Math.abs(p.x - at.x), Math.abs(p.y - at.y)) : Number.POSITIVE_INFINITY
+      })
+      .toBeLessThan(1)
     await marker.click()
     // the camera moves (animated) until bob's pointer is in the middle of her view
     await expect
       .poll(async () => {
-        const v = await viewport(a.page)
-        return Math.max(Math.abs(v.x + v.width / 2 - at.x), Math.abs(v.y + v.height / 2 - at.y))
+        const [v, p] = await Promise.all([viewport(a.page), peerPoint(a, b)])
+        if (!p) return Number.POSITIVE_INFINITY
+        return Math.max(Math.abs(v.x + v.width / 2 - p.x), Math.abs(v.y + v.height / 2 - p.y))
       })
       .toBeLessThan(2)
     await expect(marker).toHaveCount(0)
@@ -452,4 +473,93 @@ test('W5-32: on a phone a chip is a 44 px touch target that nothing covers, and 
   } finally {
     await a.context.close()
   }
+})
+
+test('W5-32: the style panel does not hide a chip: with a tool picked, a chip for a person to the right or the upper right sits clear of it, on top and clickable', async ({
+  canvasSession,
+}) => {
+  const a = await canvasSession('alice')
+  const b = await canvasSession('bob')
+  const at = await hover(b)
+  await expect(cursorOf(a, b)).toBeVisible()
+  const marker = markerOf(a, b)
+  const panel = a.page.getByTestId('style.panel')
+
+  /** Whether the chip is what a click at its centre would hit, and whether it is clear of the style panel. */
+  const reachable = () =>
+    a.page.evaluate(() => {
+      const chip = document.querySelector('[data-testid="edge-marker"]')
+      const panel = document.querySelector('[data-testid="style.panel"]')
+      if (!chip) return { found: false, topmost: false, clear: false, panel: false }
+      const c = chip.getBoundingClientRect()
+      const hit = document.elementFromPoint(c.x + c.width / 2, c.y + c.height / 2)
+      const p = panel?.getBoundingClientRect()
+      const overlaps = p
+        ? c.left < p.right && c.right > p.left && c.top < p.bottom && c.bottom > p.top
+        : false
+      return {
+        found: true,
+        topmost: hit?.closest('[data-testid="edge-marker"]') === chip,
+        clear: !overlaps,
+        panel: !!p,
+      }
+    })
+
+  await test.step('bob is far to her right and a tool is picked: the style panel is open and the chip is not under it', async () => {
+    const v = await viewport(a.page)
+    await setViewport(a.page, { x: at.x - 6000 - v.width, y: at.y - v.height / 2 })
+    await expect(marker).toHaveCount(1)
+    await expect(marker).toHaveAttribute('data-side', 'right')
+    expect(await setTool(a.page, 'rectangle')).toBe(true)
+    await expect(panel).toBeVisible()
+    await expect.poll(reachable).toEqual({ found: true, topmost: true, clear: true, panel: true })
+    // the label still says where he is
+    await expect(marker).toHaveAttribute('aria-label', `Go to ${b.name}, off screen to the right`)
+  })
+
+  await test.step('bob is to her upper right: the chip stays clear of the panel, on top', async () => {
+    const v = await viewport(a.page)
+    await setViewport(a.page, { x: at.x - 6000 - v.width, y: at.y + 6000 })
+    await expect(marker).toHaveCount(1)
+    await expect.poll(reachable).toEqual({ found: true, topmost: true, clear: true, panel: true })
+  })
+
+  await test.step('the panel closes with the tool: the chip goes back to the middle of the edge', async () => {
+    const v = await viewport(a.page)
+    await setViewport(a.page, { x: at.x - 6000 - v.width, y: at.y - v.height / 2 })
+    await expect(panel).toBeVisible()
+    const withPanel = await marker.boundingBox()
+    expect(await setTool(a.page, 'select')).toBe(true)
+    await expect(panel).toHaveCount(0)
+    await expect
+      .poll(async () => {
+        const [m, c] = await Promise.all([marker.boundingBox(), canvasBox(a.page)])
+        return m ? Math.abs(m.y + m.height / 2 - (c.y + c.height / 2)) : Number.POSITIVE_INFINITY
+      })
+      .toBeLessThan(120)
+    const [m] = await Promise.all([marker.boundingBox()])
+    expect(m && withPanel && m.y < withPanel.y).toBe(true)
+  })
+
+  await test.step('with the panel open again, a click on the chip goes to bob (and draws nothing)', async () => {
+    expect(await setTool(a.page, 'rectangle')).toBe(true)
+    await expect(panel).toBeVisible()
+    await expect.poll(reachable).toEqual({ found: true, topmost: true, clear: true, panel: true })
+    const before = (await items(a.page)).length
+    await expect
+      .poll(async () => {
+        const p = await peerPoint(a, b)
+        return p ? Math.max(Math.abs(p.x - at.x), Math.abs(p.y - at.y)) : Number.POSITIVE_INFINITY
+      })
+      .toBeLessThan(1)
+    await marker.click()
+    await expect(marker).toHaveCount(0)
+    await expect
+      .poll(async () => {
+        const now = await viewport(a.page)
+        return at.x >= now.x && at.x <= now.x + now.width && at.y >= now.y && at.y <= now.y + now.height
+      })
+      .toBe(true)
+    expect((await items(a.page)).length).toBe(before)
+  })
 })

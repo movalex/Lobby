@@ -176,3 +176,167 @@ describe('the cap and the spread', () => {
     expect(far).toEqual(farPlain)
   })
 })
+
+// A 1280 x 720 canvas with the board's own controls on it, as the board page lays them out: the board menu
+// (top left), the style panel (a host slot 12 px in from the top right, 216 px wide, up to 540 px high, opaque,
+// open whenever a tool is active or something is selected) and the navigation panel (bottom left).
+interface Box {
+  x: number
+  y: number
+  w: number
+  h: number
+}
+const BIG = { w: 1280, h: 720 }
+const BIG_VIEW = { x: 0, y: 0, width: 1280, height: 720 }
+const PANEL: Box = { x: 1280 - 12 - 216, y: 12, w: 216, h: 540 }
+const MENU: Box = { x: 0, y: 0, w: 56, h: 56 }
+const NAV: Box = { x: 12, y: 640, w: 200, h: 40 }
+
+/** the distance from a chip's centre to the nearest point of a rectangle */
+const clearance = (m: { x: number; y: number }, a: Box) =>
+  Math.hypot(Math.max(a.x - m.x, 0, m.x - (a.x + a.w)), Math.max(a.y - m.y, 0, m.y - (a.y + a.h)))
+const apart = (a?: { x: number; y: number }, b?: { x: number; y: number }) =>
+  Math.hypot((a?.x ?? 0) - (b?.x ?? 0), (a?.y ?? 0) - (b?.y ?? 0))
+
+describe('what the board covers: the style panel, the board menu and the navigation panel', () => {
+  const place = (peers: EdgeMarkerPeer[], avoid: Box[] = [MENU, PANEL, NAV]) =>
+    edgeMarkers(peers, BIG_VIEW, BIG, toOverlay, { avoid })
+
+  it('a person to the right gets a chip below the style panel, not under it', () => {
+    const [plain] = edgeMarkers([peer('r', 5000, 360)], BIG_VIEW, BIG, toOverlay)
+    // without the panel the chip is at the right edge, level with the middle: under where the panel is
+    expect(plain && clearance(plain, PANEL) < R).toBe(true)
+    const [m] = place([peer('r', 5000, 360)])
+    expect(m?.side).toBe('right')
+    expect(m && clearance(m, PANEL)).toBeGreaterThanOrEqual(R - 1e-6)
+    // still on the right edge, past the panel's foot
+    expect(m?.x).toBeCloseTo(BIG.w - M.right - R)
+    expect(m?.y).toBeCloseTo(PANEL.y + PANEL.h + R)
+  })
+
+  it('a person to the upper right gets a chip clear of it too, still on the canvas edge', () => {
+    const [m] = place([peer('ur', 4000, -2500)])
+    expect(m && clearance(m, PANEL)).toBeGreaterThanOrEqual(R - 1e-6)
+    const onEdge =
+      Math.abs((m?.x ?? 0) - (BIG.w - M.right - R)) < 1e-6 ||
+      Math.abs((m?.y ?? 0) - (M.top + R)) < 1e-6 ||
+      Math.abs((m?.y ?? 0) - (BIG.h - M.bottom - R)) < 1e-6 ||
+      Math.abs((m?.x ?? 0) - (M.left + R)) < 1e-6
+    expect(onEdge).toBe(true)
+    // the label still says where the person is
+    expect(m?.side === 'top' || m?.side === 'right').toBe(true)
+  })
+
+  it('a person straight above, over the panel, gets a chip left of it on the top edge', () => {
+    const [m] = place([peer('t', 5000, -2500)])
+    expect(m?.side).toBe('top')
+    expect(m?.y).toBeCloseTo(M.top + R)
+    expect(m && clearance(m, PANEL)).toBeGreaterThanOrEqual(R - 1e-6)
+    expect(m?.x).toBeCloseTo(PANEL.x - R)
+    // above them but not over the panel: where it always was
+    const [free] = place([peer('t2', 700, -3000)])
+    const [plain] = edgeMarkers([peer('t2', 700, -3000)], BIG_VIEW, BIG, toOverlay)
+    expect(free).toEqual(plain)
+  })
+
+  it('with only the board menu on the canvas (no panel open) chips elsewhere are where they were', () => {
+    const peers = [peer('r', 5000, 360), peer('l', -5000, 300), peer('b', 600, 4000)]
+    expect(place(peers, [MENU])).toEqual(edgeMarkers(peers, BIG_VIEW, BIG, toOverlay))
+  })
+
+  it('several people to the right line up below the panel, then carry on along the bottom edge, none of them under it', () => {
+    const peers = Array.from({ length: 8 }, (_, i) => peer(`p${i}`, 5000, 300 + i * 20))
+    const out = place(peers)
+    expect(out).toHaveLength(8)
+    for (const m of out) expect(clearance(m, PANEL)).toBeGreaterThanOrEqual(R - 1e-6)
+    for (let i = 0; i < out.length; i++)
+      for (let j = i + 1; j < out.length; j++) expect(apart(out[i], out[j])).toBeGreaterThanOrEqual(30)
+  })
+
+  it('the navigation panel is avoided too: a chip on the bottom edge goes past it', () => {
+    // on a narrow screen the navigation panel sits just above the toolbar's row, where the bottom edge's chips are
+    const nav: Box = { x: 12, y: 600, w: 200, h: 40 }
+    const [plain] = edgeMarkers([peer('b', -5000, 4000)], BIG_VIEW, BIG, toOverlay)
+    expect(plain && clearance(plain, nav) < R).toBe(true)
+    const [m] = edgeMarkers([peer('b', -5000, 4000)], BIG_VIEW, BIG, toOverlay, { avoid: [nav] })
+    expect(m?.side).toBe('bottom')
+    expect(m && clearance(m, nav)).toBeGreaterThanOrEqual(R - 1e-6)
+  })
+
+  it('controls that cover the whole edge leave the chips where they would be', () => {
+    const everything: Box = { x: -100, y: -100, w: 1500, h: 900 }
+    const [m] = edgeMarkers([peer('r', 5000, 360)], BIG_VIEW, BIG, toOverlay, { avoid: [everything] })
+    const [plain] = edgeMarkers([peer('r', 5000, 360)], BIG_VIEW, BIG, toOverlay)
+    expect(m).toEqual(plain)
+  })
+})
+
+describe('chips around a corner', () => {
+  it('two people in nearly the same diagonal direction do not land on one another (one on each edge)', () => {
+    // a corner with no control on it: the bottom right. One ray each side of the diagonal.
+    const out = edgeMarkers([peer('a', 5000, 2480), peer('b', 5000, 2640)], VIEWPORT, SIZE, toOverlay)
+    expect(out).toHaveLength(2)
+    // (the rays leave the chips' box on different sides, which is what overlapped before)
+    expect(new Set(out.map((m) => m.side)).size).toBe(2)
+    expect(apart(out[0], out[1])).toBeGreaterThanOrEqual(30)
+  })
+
+  it('a whole crowd in one corner is spread around it: nobody on another, all on the canvas', () => {
+    const crowd = Array.from({ length: 10 }, (_, i) => peer(`c${i}`, 4000 + i * 40, -3000 - i * 55))
+    const out = edgeMarkers(crowd, VIEWPORT, SIZE, toOverlay)
+    expect(out).toHaveLength(10)
+    for (let i = 0; i < out.length; i++) {
+      const a = out[i]
+      expect(a?.x).toBeGreaterThanOrEqual(M.left + R - 1e-6)
+      expect(a?.x).toBeLessThanOrEqual(SIZE.w - M.right - R + 1e-6)
+      expect(a?.y).toBeGreaterThanOrEqual(M.top + R - 1e-6)
+      expect(a?.y).toBeLessThanOrEqual(SIZE.h - M.bottom - R + 1e-6)
+      for (let j = i + 1; j < out.length; j++) expect(apart(a, out[j])).toBeGreaterThanOrEqual(30)
+    }
+  })
+})
+
+describe('any crowd, any controls', () => {
+  // a small seeded generator: the same crowds every run
+  const rng = (seed: number) => () => {
+    seed += 0x6d2b79f5
+    let t = seed
+    t = Math.imul(t ^ (t >>> 15), t | 1)
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61)
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+  }
+  const AVOID = [MENU, PANEL, NAV]
+
+  it('chips stay on the canvas edge, clear of every control and of one another', () => {
+    for (let seed = 1; seed <= 200; seed++) {
+      const next = rng(seed)
+      const n = 1 + Math.floor(next() * 14)
+      const peers = Array.from({ length: n }, (_, i) =>
+        peer(`s${i}`, (next() - 0.5) * 12000 + 640, (next() - 0.5) * 8000 + 360),
+      )
+      const out = edgeMarkers(peers, BIG_VIEW, BIG, toOverlay, { avoid: AVOID })
+      for (const m of out) {
+        const onEdge =
+          Math.abs(m.x - (M.left + R)) < 1e-6 ||
+          Math.abs(m.x - (BIG.w - M.right - R)) < 1e-6 ||
+          Math.abs(m.y - (M.top + R)) < 1e-6 ||
+          Math.abs(m.y - (BIG.h - M.bottom - R)) < 1e-6
+        expect(onEdge, `seed ${seed}: ${m.sid} at ${m.x},${m.y}`).toBe(true)
+        expect(m.x).toBeGreaterThanOrEqual(M.left + R - 1e-6)
+        expect(m.x).toBeLessThanOrEqual(BIG.w - M.right - R + 1e-6)
+        expect(m.y).toBeGreaterThanOrEqual(M.top + R - 1e-6)
+        expect(m.y).toBeLessThanOrEqual(BIG.h - M.bottom - R + 1e-6)
+        for (const a of AVOID)
+          expect(clearance(m, a), `seed ${seed}: ${m.sid} under ${JSON.stringify(a)}`).toBeGreaterThanOrEqual(
+            R - 1e-6,
+          )
+      }
+      for (let i = 0; i < out.length; i++)
+        for (let j = i + 1; j < out.length; j++)
+          expect(
+            apart(out[i], out[j]),
+            `seed ${seed}: ${out[i]?.sid} and ${out[j]?.sid}`,
+          ).toBeGreaterThanOrEqual(30)
+    }
+  })
+})
