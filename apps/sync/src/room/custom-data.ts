@@ -40,6 +40,12 @@ export interface CustomDataContext {
   readonly voteOpen: boolean | null
   /** a `tagDef:<key>` exists in lb_doc (or in this push's doc writes) */
   readonly tagExists: (tagKey: string) => boolean
+  /**
+   * Why this push's own write of `tagDef:<key>` was refused (its `docDenied` code), or null. A `tag:<key>`
+   * whose definition the same push tried to make answers with that code (a guest over its tag cap gets
+   * GUEST_LIMIT on its notes, not INVALID: one Create on 60 selected notes counted 60 toward the abuse close).
+   */
+  readonly tagDenied?: (tagKey: string) => RejectCode | null
   /** the cached file-refs answer for a bare version id (undefined: the lookup failed or never ran) */
   readonly fileRef: (versionId: string) => FileRefAnswer | undefined
 }
@@ -124,7 +130,7 @@ function checkKey(
     default: {
       if (value === null) return { ok: true, value: null }
       const tag = tagKeyOf(key)
-      if (tag !== null && !ctx.tagExists(tag)) return bad('INVALID')
+      if (tag !== null && !ctx.tagExists(tag)) return bad(ctx.tagDenied?.(tag) ?? 'INVALID')
       return { ok: true, value }
     }
   }

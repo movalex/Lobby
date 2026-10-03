@@ -287,6 +287,12 @@ export const GUEST_ITEM_CAP = 500
  * Accounts are never refused by it.
  */
 export const GUEST_BOARD_ITEM_CAP = 2_000
+/**
+ * Board tag-list keys (`tagDef:*`, doc.ts) one name-only guest may write while the room is open (CR-3D-5): an
+ * editor guest may create, rename, recolour and delete tags as an editor does, but each key it writes counts
+ * once (a key it already wrote is free). MAX_TAG_DEFS bounds the list for everyone.
+ */
+export const GUEST_TAG_DEF_CAP = 10
 /** Tombstones kept per board, and for how long (§2.6); a client below `horizon` gets a reset. */
 export const TOMBSTONE_MAX = 10_000
 export const TOMBSTONE_TTL_MS = 14 * 24 * 60 * 60_000

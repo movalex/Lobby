@@ -58,12 +58,18 @@ export interface DocKeySpec {
   readonly name: string
   readonly value: z.ZodType
   readonly writer: DocWriter
+  /**
+   * A name-only guest of a writing role may write it too (CR-3D-5). Only the tag list: a workshop guest
+   * makes tags as tldraw let it, while `workshop` (the facilitator's) and `startView` stay the members'.
+   * The room also caps a guest's tag-list writes (limits.ts GUEST_TAG_DEF_CAP).
+   */
+  readonly guests?: boolean
 }
 
 export const DOC_KEY_SPECS: readonly DocKeySpec[] = [
   { match: 'exact', name: 'startView', value: StartViewValue, writer: 'owner' },
   { match: 'exact', name: 'workshop', value: WorkshopDocValue, writer: 'facilitator' },
-  { match: 'prefix', name: TAG_DEF_KEY_PREFIX, value: TagDefValue, writer: 'editor' },
+  { match: 'prefix', name: TAG_DEF_KEY_PREFIX, value: TagDefValue, writer: 'editor', guests: true },
   { match: 'exact', name: 'import', value: ImportDocValue, writer: 'server' },
 ]
 
@@ -86,10 +92,18 @@ export function docValueProblem(key: string, value: unknown): string | null {
   return null
 }
 
-/** Whether a client role may write `key` (owners write everything but `import`). */
-export function canWriteDocKey(key: string, role: 'owner' | 'editor' | 'commenter' | 'viewer'): boolean {
+/**
+ * Whether a client role may write `key` (owners write everything but `import`). A name-only guest
+ * (`guest`) writes only the keys whose spec allows guests, and only as its role allows.
+ */
+export function canWriteDocKey(
+  key: string,
+  role: 'owner' | 'editor' | 'commenter' | 'viewer',
+  opts: { readonly guest?: boolean } = {},
+): boolean {
   const spec = docKeySpec(key)
   if (!spec || spec.writer === 'server') return false
+  if (opts.guest && !spec.guests) return false
   if (role === 'owner') return true
   if (role === 'editor') return spec.writer === 'editor' || spec.writer === 'facilitator'
   return false

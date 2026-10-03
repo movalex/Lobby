@@ -26,6 +26,7 @@ import {
   GEOMETRY_TOLERANCE_PX,
   GUEST_BOARD_ITEM_CAP,
   GUEST_ITEM_CAP,
+  GUEST_TAG_DEF_CAP,
   isAllowedLink,
   MAX_ITEMS,
   MAX_LIVE_ELEMENTS,
@@ -176,6 +177,13 @@ export class PushApplier {
   private readonly ctx: CustomDataContext
   private readonly docWrites: Record<string, unknown> = {}
   private docDenied: { keys: string[]; code: RejectCode } | undefined
+  /** why each refused doc key of this push was refused (a `tag:<key>` on it answers the same, CR-3D-5) */
+  private readonly docDeniedCodes = new Map<string, RejectCode>()
+  /**
+   * The `tagDef:*` keys this guest wrote while the room is open (their lb_doc clock is one of its pushes,
+   * by the writer ledger), plus this push's: GUEST_TAG_DEF_CAP counts them (CR-3D-5). Loaded on first use.
+   */
+  private guestTagKeys: Set<string> | null = null
   /** arrows whose own geometry or bindings this push wrote (rule 7 trigger 2) */
   readonly resnapArrows = new Set<string>()
   /** bindable elements whose x, y, width, height or angle changed (rule 7 trigger 1) */
@@ -215,6 +223,7 @@ export class PushApplier {
       writer: this.writer,
       voteOpen: env.voteOpen,
       tagExists: (key) => this.tagExists(key),
+      tagDenied: (key) => this.docDeniedCodes.get(tagDefKey(key)) ?? null,
       fileRef: (v) => this.fileRef(v),
     }
   }
@@ -878,14 +887,21 @@ export class PushApplier {
       this.docDenied = { keys: ['*'], code: 'INVALID' }
       return
     }
+    let guestLimited = false
+    const refuse = (key: string, why: RejectCode) => {
+      denied.push(key)
+      this.docDeniedCodes.set(key, why)
+    }
     for (const [key, value] of Object.entries(parsed.data.set)) {
       const problem = docValueProblem(key, value)
       if (problem) {
-        denied.push(key)
+        refuse(key, 'INVALID')
         continue
       }
-      if (this.s.readonly || this.s.guest || !canWriteDocKey(key, this.s.role)) {
-        denied.push(key)
+      // CR-3D-5: a name-only guest of a writing role writes the tag list only (doc.ts `guests`); the
+      // facilitator's `workshop`, the owner's `startView` and the server's `import` stay refused
+      if (this.s.readonly || !canWriteDocKey(key, this.s.role, { guest: this.s.guest })) {
+        refuse(key, 'READ_ONLY')
         code = 'READ_ONLY'
         continue
       }
@@ -895,13 +911,38 @@ export class PushApplier {
           Object.entries(this.docWrites).filter(([k, v]) => k.startsWith(TAG_DEF_KEY_PREFIX) && v !== null)
             .length
         if (n + 1 > MAX_TAG_DEFS) {
-          denied.push(key)
+          refuse(key, 'INVALID')
           continue
         }
       }
+      if (this.s.guest && !this.guestMayWriteTagKey(key)) {
+        refuse(key, 'GUEST_LIMIT')
+        guestLimited = true
+        continue
+      }
       this.docWrites[key] = value
     }
-    if (denied.length) this.docDenied = { keys: denied, code }
+    if (denied.length)
+      this.docDenied = { keys: denied, code: code === 'INVALID' && guestLimited ? 'GUEST_LIMIT' : code }
+  }
+
+  /**
+   * GUEST_TAG_DEF_CAP (CR-3D-5): a guest may write `key` when it already wrote it, or while it has written
+   * fewer than the cap's keys of the tag list. "Wrote" is read from the writer ledger (the uid of each push's
+   * clock, this room open) against every `tagDef:*` row's clock, removed keys included, so a deletion or a
+   * rename spends the budget as a creation does. A key someone else rewrote since is no longer the guest's.
+   */
+  private guestMayWriteTagKey(key: string): boolean {
+    if (!this.guestTagKeys) {
+      const mine = new Set<string>()
+      for (const [k, clock] of Object.entries(this.env.store.docClocks()))
+        if (k.startsWith(TAG_DEF_KEY_PREFIX) && this.env.ledger.get(clock) === this.s.uid) mine.add(k)
+      this.guestTagKeys = mine
+    }
+    if (this.guestTagKeys.has(key)) return true
+    if (this.guestTagKeys.size + 1 > GUEST_TAG_DEF_CAP) return false
+    this.guestTagKeys.add(key)
+    return true
   }
 
   // ---- D: index ----------------------------------------------------------------------------------

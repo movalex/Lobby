@@ -3,13 +3,13 @@
 // elements are painted on a canvas, so there is no per-shape opacity to read): the checks read the veil's
 // holes and the colour on screen. Read-only people (viewers, commenters, a commenter guest) get a forged
 // push on a raw socket with their own ticket, which the sync server must refuse; a name-only guest on a
-// workshop (editor) link can tag with the board's tags.
+// workshop (editor) link tags with the board's tags and creates new ones (CR-3D-5: the room takes an editor
+// guest's `tagDef:` writes, up to GUEST_TAG_DEF_CAP keys; never `workshop` or `startView`).
 //
 // Deviations from the tldraw spec (docs/research/excalidraw/wave3/3D.md):
 //  - presenting is the board's focus mode here (3e's present sets it; its button is used when present);
 //  - search by tag needs 3b's search panel to render ./SearchTagFilter.tsx and the tags column needs 3e's
-//    export dialog: those steps run only when those parts are on the page;
-//  - a guest cannot create a tag: the room refuses every guest's lb_doc write (CR-3D-5, a test.fail below).
+//    export dialog: those steps run only when those parts are on the page.
 import type { Page } from '@playwright/test'
 import { canvasCall, createItem, expect, expectSaved, item, items, test } from '../tests/support/canvas.ts'
 import { forgeSession, pressUndo } from '../tests/support/excalidraw.ts'
@@ -442,11 +442,9 @@ test('a workshop (editor) guest creates a new tag from the picker: alice sees it
   browser,
   canvasSession,
 }) => {
-  // CR-3D-5: the room refuses every guest's lb_doc write (apps/sync/src/room/merge.ts applyDoc: `this.s.guest`),
-  // so the new tag's definition never lands and the server refuses the note's `tag:<key>` with it. The
-  // tldraw page let an editor guest create tags. Expected to fail until the room lets editor guests write
-  // `tagDef:` keys; then the picker's guest guard (W5-29, TagPicker.tsx mayCreateTag) comes off with this mark.
-  test.fail()
+  // CR-3D-5: the room takes an editor guest's `tagDef:` writes (apps/sync/src/room/merge.ts applyDoc, doc.ts
+  // `guests`), so the new tag's definition lands with the note's `tag:<key>`, as the tldraw page let an editor
+  // guest create tags. The picker's W5-29 guest guard is gone with the test.fail mark.
   const a = await canvasSession('alice')
   await taggedNotes([a.page], { [N1]: [RESEARCH] }, [RESEARCH])
   const workshop = await createGuestLink(a.page, 'workshop')
@@ -465,7 +463,7 @@ test('a workshop (editor) guest creates a new tag from the picker: alice sees it
   }
 })
 
-test('W5-29: a name-only guest is offered the board’s tags, never a Create that the room then refuses', async ({
+test('W5-29, CR-3D-5: a name-only workshop guest’s Create is real: no “Change not saved”, alice’s list has it, and the board’s own tag still goes on', async ({
   browser,
   canvasSession,
 }) => {
@@ -479,19 +477,23 @@ test('W5-29: a name-only guest is offered the board’s tags, never a Create tha
     await cameraAt(g, { x: 360, y: 100 }, 1)
     await selectIds(g, [N3])
     const picker = await openPicker(g)
-    await expect(picker.getByTestId('tag-picker-input')).toHaveAttribute('placeholder', 'Find a tag')
+    await expect(picker.getByTestId('tag-picker-input')).toHaveAttribute(
+      'placeholder',
+      'Find or create a tag',
+    )
     await picker.getByTestId('tag-picker-input').fill('fans')
-    // no Create; the picker says why instead
-    await expect(picker.getByTestId('tag-create')).toHaveCount(0)
-    await expect(picker.getByTestId('tag-guest-hint')).toHaveText(/existing tags/)
+    // a Create the room takes (W5-29 hid it while the room refused every guest doc write)
+    await expect(picker.getByTestId('tag-create')).toHaveCount(1)
     await g.keyboard.press('Enter')
-    await expect(picker.getByTestId('tag-picker-status')).toHaveText(/existing tags/)
-    await expect(picker.getByTestId('tag-picker-status')).not.toHaveText(/Created/)
+    await expect(picker.getByTestId('tag-picker-status')).toHaveText(/Created/)
+    await expect(chips(a.page, N3)).toHaveText(['fans'], { timeout: 10_000 })
+    await expect.poll(async () => Object.keys(await boardList(a.page)).sort()).toEqual(['fans', 'research'])
     await expect(g.getByText('Change not saved')).toHaveCount(0)
     // the board's own tag still goes on
     await picker.getByTestId('tag-picker-input').fill('Research')
     await g.keyboard.press('Enter')
-    await expect(chips(a.page, N3)).toHaveText(['Research'], { timeout: 10_000 })
+    await expect(chips(a.page, N3)).toHaveText(['fans', 'Research'], { timeout: 10_000 })
+    await expect(g.getByText('Change not saved')).toHaveCount(0)
   } finally {
     await guest.context.close()
   }

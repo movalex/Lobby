@@ -13,6 +13,7 @@ import {
   GEOMETRY_TOLERANCE_PX,
   GUEST_BOARD_ITEM_CAP,
   GUEST_ITEM_CAP,
+  GUEST_TAG_DEF_CAP,
   isAllowedLink,
   isLobbyFontFamily,
   jsonByteLength,
@@ -21,6 +22,7 @@ import {
   MAX_FREEDRAW_POINTS,
   MAX_LINEAR_POINTS,
   MAX_ORIGINAL_TEXT_CHARS,
+  MAX_TAG_DEFS,
   PLUS_ONES_MAX,
   pdfPageOf,
   roundGeometry,
@@ -340,6 +342,22 @@ describe('the board document (§3.4) and object refs (§3.6)', () => {
     expect(canWriteDocKey('startView', 'editor')).toBe(false)
     expect(canWriteDocKey('workshop', 'editor')).toBe(true)
     expect(canWriteDocKey('tagDef:x', 'commenter')).toBe(false)
+  })
+
+  it('a name-only guest writes the tag list only, as its role allows (CR-3D-5)', () => {
+    const guest = { guest: true }
+    expect(canWriteDocKey('tagDef:x', 'editor', guest)).toBe(true)
+    expect(canWriteDocKey('tagDef:x', 'commenter', guest)).toBe(false)
+    expect(canWriteDocKey('tagDef:x', 'viewer', guest)).toBe(false)
+    for (const role of ['owner', 'editor'] as const) {
+      expect(canWriteDocKey('workshop', role, guest), role).toBe(false)
+      expect(canWriteDocKey('startView', role, guest), role).toBe(false)
+      expect(canWriteDocKey('import', role, guest), role).toBe(false)
+    }
+    expect(canWriteDocKey('workshop', 'editor', { guest: false })).toBe(true)
+    // the room's per-guest budget of tag-list keys, well inside the board's list
+    expect(GUEST_TAG_DEF_CAP).toBe(10)
+    expect(GUEST_TAG_DEF_CAP).toBeLessThan(MAX_TAG_DEFS)
   })
 
   it('every guest uid together has a board budget above one guest’s cap (CR-W5-FIX-3)', () => {
