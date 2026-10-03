@@ -7,6 +7,7 @@ import {
   previewTexts,
   refOfElement,
   restoredElementIds,
+  restoredSelection,
   touchesDeletedElements,
 } from './model.ts'
 
@@ -121,5 +122,16 @@ describe('history on elements', () => {
     expect(exportAllowedHere('viewer', 'everyone', true)).toBe(false)
     expect(exportAllowedHere('viewer', 'everyone', false)).toBe(true)
     expect(exportAllowedHere('viewer', 'everyone-including-guests', true)).toBe(true)
+  })
+})
+
+describe('what a restore selects', () => {
+  it('a restored frame alone, never its restored children; other restored objects stay selected', () => {
+    const frameOf: Record<string, string | null> = { F: null, N1: 'F', N2: 'F', A: null, N3: 'G' }
+    const at = (id: string) => frameOf[id] ?? null
+    expect(restoredSelection(['F', 'N1', 'N2'], at)).toEqual(['F'])
+    // a note restored into a frame that stayed on the board (G) is selected with its connector
+    expect(restoredSelection(['A', 'N3'], at)).toEqual(['A', 'N3'])
+    expect(restoredSelection([], at)).toEqual([])
   })
 })

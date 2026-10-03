@@ -31,6 +31,19 @@ export function restoredElementIds(restored: readonly string[], has: (id: string
   return restored.map(elementIdOf).filter((id) => has(id))
 }
 
+/**
+ * What a restore selects: what came back, less what came back inside a frame that came back too (a
+ * restored frame is selected alone, its notes with it, as on the tldraw board; selecting the children as
+ * well would make them a second, separate selection inside the frame's).
+ */
+export function restoredSelection(ids: readonly string[], frameIdOf: (id: string) => unknown): string[] {
+  const back = new Set(ids)
+  return ids.filter((id) => {
+    const frame = frameIdOf(id)
+    return !(typeof frame === 'string' && back.has(frame))
+  })
+}
+
 interface PreviewElement {
   readonly id?: unknown
   readonly type?: unknown

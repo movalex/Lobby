@@ -91,15 +91,21 @@ describe('recently deleted (Excalidraw engine)', () => {
       { id: 'shape:T', reason: 'exists' },
       { id: 'shape:nope', reason: 'not-found' },
     ])
-    expect(res.body).toMatchObject({ bindings: 0, reparented: 0 })
+    // A stayed on the board when R went (its start was unbound): it gets that end back (DEF-W3-1)
+    expect(res.body).toMatchObject({ bindings: 1, reparented: 0 })
     const snap = await st.snapshot(b)
     const live = snap.elements.filter((e) => !e.isDeleted)
     expect(live.map((e) => e.id).sort()).toEqual(['A', 'F', 'N1', 'N1.t', 'N2', 'N2.t', 'R', 'R.t', 'T'])
     expect(checkInvariants(snap.elements)).toEqual([])
     const byId = new Map(live.map((e) => [e.id, e as El]))
     expect(byId.get('N1')?.frameId).toBe('F')
-    // R's arrow was unbound when R went: it is not listed on R again
-    expect(byId.get('R')?.boundElements).toEqual([{ id: 'R.t', type: 'text' }])
+    // R's arrow was unbound when R went, and its start is still at R: attached again, and listed on R
+    expect(byId.get('R')?.boundElements).toEqual([
+      { id: 'R.t', type: 'text' },
+      { id: 'A', type: 'arrow' },
+    ])
+    expect(byId.get('A')?.startBinding?.elementId).toBe('R')
+    expect(byId.get('A')?.endBinding?.elementId).toBe('T')
     // the list no longer offers what is back
     const list = await call<List>(st, 'GET', `/internal/boards/${b}/deleted`)
     expect(list.body.entries).toEqual([])
