@@ -188,3 +188,10 @@ on the sync disk (§6).
   connecting. api live in 42 s, sync in 52 s (`/healthz` 200 ten seconds later; maintenance off; backups 0 failures), web in 31 s.
   Live smoke 33 passed, 0 failed, the known warning; 0 `error`/`FATAL` lines on api and sync. No migration (still 0023). Held for
   after 20:55Z on `wave-b/held`: migration 0024 (selection votes, the access-granted bell) and the smoke script.
+- **Wave C (C1, C3, C4, C5) deployed 2026-10-03 15:18–15:19Z** (`main` `9627f29`; api → web; the sync stays on `99d902c`, as no
+  sync, protocol or migration file changed). api live in 42 s, web in 31 s. Live smoke 33 passed, 0 failed, the known warning; 0
+  `error`/`FATAL` lines. The web bundle closure fell from 189 files (11.1 MB) to 96 (7.8 MB), since Mermaid is stubbed out (C1).
+  Held for after 20:55Z on `release/held`: migration 0024 (wave B's B6) and push receipts (`CONTRACTS_REV` 11, C2). The lead
+  reverted C2's CR-2B-2 there: it moved a port of tldraw 5.4.2's geo geometry into `packages/canvas-schema`, i.e. into the
+  web bundle. Leaving tldraw was a licence decision, so tldraw-derived code stays in the server-side converter only. The polygon
+  tools keep Lobby's own outlines (W5-33 D4 stays open).
