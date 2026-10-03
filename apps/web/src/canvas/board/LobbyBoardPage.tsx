@@ -39,7 +39,7 @@ import { useResource } from '../../lib/useResource.ts'
 import { useEngineSaveStatus } from '../../sync-quality/useEngineSaveStatus.ts'
 import { useTheme } from '../../theme/useTheme.ts'
 import { isFocusLost } from '../../ui/focus.ts'
-import { boardRegionName, SkipLink } from '../../ui/SkipLink.tsx'
+import { boardAreaName, SkipLink } from '../../ui/SkipLink.tsx'
 import { LoadingScreen, MessageScreen, NoAccessScreen } from '../../ui/screens.tsx'
 import {
   type CanvasFeatureContext,
@@ -414,7 +414,8 @@ function LobbyBoardScreen({
     [session],
   )
   useEffect(() => {
-    rootRef.current?.setAttribute('aria-label', boardRegionName(board.title))
+    // W5-57: the region is named apart from the board's application inside it (features/a11y)
+    rootRef.current?.setAttribute('aria-label', boardAreaName(board.title))
   }, [board.title])
   useEffect(() => {
     if (!canvas || !welcomed) return

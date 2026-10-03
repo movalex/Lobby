@@ -36,8 +36,12 @@ test('opening a board: the top bar names it, Saved and Live, and the canvas is n
   await expect(p.getByTestId('conn-status')).toHaveAttribute('data-state', 'online')
   await expect(p.getByTestId('conn-status')).toHaveText('Live')
   await expect(p.getByTestId('share-button')).toBeVisible()
-  // A11Y2-09: the canvas region is named after the board, and it has the keyboard once the board opens
-  await expect(p.locator('[data-lobby-board-canvas]')).toHaveAttribute('aria-label', 'Opening a board board')
+  // A11Y2-09: the canvas region is named after the board (W5-57: apart from the application inside it,
+  // '<title> board'), and it has the keyboard once the board opens
+  await expect(p.locator('[data-lobby-board-canvas]')).toHaveAttribute(
+    'aria-label',
+    'Opening a board board area',
+  )
   await expect.poll(() => canvasHasKeyboard(p)).toBe(true)
   expect(await canvasReadOnly(p)).toBe(false)
   // A11Y-09: the board's first Tab is "Skip to canvas", and it gives the canvas the keyboard

@@ -122,7 +122,7 @@ export const feature: CanvasFeature = {
   onMount(ctx) {
     const canvas = ctx.canvas
     announcerFor(canvas)
-    const offs = [nameTheCanvas(ctx), enterFromAnywhere(ctx), announceTools(ctx)]
+    const offs = [nameTheCanvas(ctx), quietEngineFooter(ctx), enterFromAnywhere(ctx), announceTools(ctx)]
     const onSkip = () => enter(ctx)
     document.addEventListener(SKIP_TO_CANVAS_EVENT, onSkip)
     return () => {
@@ -204,6 +204,29 @@ function nameTheCanvas(ctx: CanvasFeatureContext): () => void {
     watch.disconnect()
     keyboardFocus.set(false)
   }
+}
+
+/**
+ * W5-57: the engine renders its bottom menu bar as `<footer role="contentinfo">` (Excalidraw's
+ * Footer.tsx), inside the board page's main landmark and empty on Lobby's board (its zoom, undo and help
+ * controls are switched off). A contentinfo is the PAGE's footer: one inside main is an axe failure
+ * (landmark-contentinfo-is-top-level), and a screen reader lists an empty "content information" landmark
+ * on every board. It loses the role (presentation: whatever it holds stays reachable as before), also
+ * when the engine renders it again.
+ */
+function quietEngineFooter(ctx: CanvasFeatureContext): () => void {
+  const root = ctx.canvas.container()
+  if (!root) return () => {}
+  const SELECTOR = '[role="contentinfo"]'
+  const apply = () => {
+    for (const el of root.querySelectorAll(SELECTOR)) el.setAttribute('role', 'presentation')
+  }
+  apply()
+  const watch = new MutationObserver(() => {
+    if (root.querySelector(SELECTOR)) apply()
+  })
+  watch.observe(root, { childList: true, subtree: true, attributes: true, attributeFilter: ['role'] })
+  return () => watch.disconnect()
 }
 
 /** How long a new tool must stay before it is said (ms): placing a note returns to Select as its editor opens. */
