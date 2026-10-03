@@ -2,7 +2,7 @@
 // the streamed presence, one person per user, and the people model's rows built from them.
 import { describe, expect, it } from 'vitest'
 import type { RemoteCursor, RosterEntry } from '../../../canvas/api/index.ts'
-import { buildPeople, statusText } from '../model.ts'
+import { buildPeople, followerSummary, statusText } from '../model.ts'
 import { frameBoxesOf, mayPresentAs, presenceLikes, presenceUsers, rosterMap } from './presence.ts'
 
 const r = (sid: string, uid: string, name: string, role: RosterEntry['role'] = 'editor', guest = false) =>
@@ -45,7 +45,7 @@ describe('the people on the board', () => {
     expect(mayPresentAs(map.get('usr_ann'))).toBe(false)
   })
 
-  it('the rows: the frame in their view, idle, and never "following" (the protocol has no target)', () => {
+  it('the rows: the frame in their view, idle, and no "following" from a room or client without one (rev 9)', () => {
     const now = 1_000_000
     const frames = frameBoxesOf([{ x: 0, y: 0, width: 1000, height: 1000, name: 'Brainstorm' }], 'page:page')
     const rows = buildPeople({
@@ -74,5 +74,41 @@ describe('the people on the board', () => {
     expect(byId.get('usr_me')?.status).toBe('following-other')
     expect(byId.get('usr_bob')?.followsMe).toBe(false)
     expect(byId.get('usr_sam')?.guest).toBe(true)
+  })
+
+  it('CR-3C-1 (rev 10): "Following you" from presence, through any tab of theirs; "Following Ann"; the top-bar count', () => {
+    const now = 1_000_000
+    const peers = [
+      // Bob's second tab follows this tab (s-me); his first tab, the one the list shows, does not
+      p('s-bob1', { view: { x: 0, y: 0, width: 10, height: 10 } }),
+      p('s-bob2', { idle: true, following: 's-me' }),
+      // Sam follows Ann; Ann is past the cursor cap and follows this tab (the room's followers list)
+      p('s-sam', { following: 's-ann' }),
+      p('s-ann', { following: 's-me' }),
+    ]
+    const likes = presenceLikes(ROSTER, peers, now, 'page:page', 's-me')
+    const rows = buildPeople({
+      selfUserId: 'usr_me',
+      selfName: 'Me Myself',
+      selfColor: '#000000',
+      selfFollowing: null,
+      collaborators: likes,
+      roster: rosterMap(ROSTER),
+      presentation: null,
+      frames: [],
+      currentPageId: 'page:page',
+      pageName: () => null,
+      now,
+    })
+    const byId = new Map(rows.map((row) => [row.userId, row]))
+    expect(byId.get('usr_bob')?.status).toBe('following-you')
+    expect(byId.get('usr_bob')?.followsMe).toBe(true)
+    expect(statusText(byId.get('usr_ann') as never)).toBe('Following you')
+    expect(statusText(byId.get('usr_sam') as never)).toBe('Following Ann Lee')
+    expect(followerSummary(likes, null, 'usr_me')).toEqual({ names: ['Bob Chen', 'Ann Lee'], count: 2 })
+    // without this tab's session (before the welcome) only the session the list shows counts: Bob's
+    // following tab is not that one
+    const blind = presenceLikes(ROSTER, peers, now, 'page:page')
+    expect(followerSummary(blind, null, 'usr_me')).toEqual({ names: ['Ann Lee'], count: 1 })
   })
 })

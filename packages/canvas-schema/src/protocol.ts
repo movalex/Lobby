@@ -44,8 +44,19 @@ export const PROTO = 1 as const
  * cached reset snapshot carries the doc keys written since the cache (DEF-3F-1); the `CLOSING` notice
  * names a terminal close's reason in band, before the close frame (SMK-2: an edge may strip close
  * codes and reasons); `isAllowedLink` normalises relative links and requires `http(s)://` (XSS-F3).
+ * Revision 10 (wave A, A2: CR-3C-1, CR-3CF-1): presence carries a follow target (`f`) and the sender's
+ * zoom (`view.z`); a recipient always gets the peer it follows (outside the 40-cursor cap) and the list
+ * of sessions that follow it (`followers`); the shown set re-ranks (`off` evicts out-of-view peers). The
+ * room says it speaks rev 10 with a `contracts` frame after the welcome; a client sends `f` and `view.z`
+ * only after that frame, and the room sends the rev-10 fields only to a session that has sent `f`, so a
+ * rev-9 client and a rev-9 room are served as before (`PresenceIn`/`PeerPresence` are strict both ways).
  */
-export const CONTRACTS_REV = 9
+export const CONTRACTS_REV = 10
+/**
+ * The first contracts revision whose presence has `f`, `view.z` and `followers` (see `CONTRACTS_REV`).
+ * A client sends them only to a room whose `contracts` frame names this revision or a later one.
+ */
+export const PRESENCE_FOLLOW_REV = 10
 /**
  * The element schema version (`hello.schema`, `welcome.schema`, `lb_meta.schemaVersion`). A client one
  * version older is served; a newer one gets 4099 `SERVER_TOO_OLD`, an older one `CLIENT_TOO_OLD` (§6.2 `schema`).
@@ -343,11 +354,19 @@ export const LeaseAcquire = z.strictObject({
 export const LeaseRelease = z.strictObject({ type: z.literal('lease.release'), id: ElementId })
 
 export const ScenePoint = z.strictObject({ x: Finite, y: Finite })
+/** The largest zoom presence may carry in `view.z` (Excalidraw's own range is 0.1 to 30). */
+export const MAX_PRESENCE_ZOOM = 1_000
+/**
+ * A visible scene rectangle. `z` (CONTRACTS_REV 10, CR-3CF-1): the sender's zoom (screen px per scene
+ * unit), so a follower can match it (a gathered phone's readable zoom, R2-04); optional, and sent only
+ * to and by rev-10 ends (see `CONTRACTS_REV`): a rev-9 end refuses it (strict).
+ */
 export const SceneRect = z.strictObject({
   x: Finite,
   y: Finite,
   w: Finite.nonnegative(),
   h: Finite.nonnegative(),
+  z: Finite.positive().max(MAX_PRESENCE_ZOOM).optional(),
 })
 /** Selection in presence: ids (the client sends ids up to 200, a count above), or a count. */
 export const PresenceSel = z.union([
@@ -366,7 +385,14 @@ export const DragIn = z.strictObject({
   dx: Finite,
   dy: Finite,
 })
-/** `presence` (≤ 20 Hz, bypasses the FIFO): no identity fields; the server adds them from the ticket. */
+/**
+ * `presence` (≤ 20 Hz, bypasses the FIFO): no identity fields; the server adds them from the ticket.
+ *
+ * `f` (CONTRACTS_REV 10, CR-3C-1): the session this tab follows (its camera follows their `view`), or
+ * null. A client sends it, and `view.z`, only to a room that announced rev 10 (the `contracts` frame);
+ * once it has, it sends `f` (null included) in every presence message, and that is how the room knows
+ * this socket reads the rev-10 presence fields. A rev-9 room refuses both (strict: INVALID_MESSAGE).
+ */
 export const PresenceIn = z.strictObject({
   type: z.literal('presence'),
   pointer: ScenePoint.nullable(),
@@ -377,6 +403,7 @@ export const PresenceIn = z.strictObject({
   /** the lease id of this tab's open editor; renews that lease (never grants one) */
   editing: ElementId.nullable(),
   drag: DragIn.nullable().optional(),
+  f: SessionId.nullable().optional(),
 })
 export const Ping = z.strictObject({ type: z.literal('ping'), n: NonNegInt.optional() })
 
@@ -710,7 +737,11 @@ export const RosterEvent = z.discriminatedUnion('k', [
   z.strictObject({ k: z.literal('update'), p: RosterEntry }),
 ])
 export const Roster = z.strictObject({ type: z.literal('roster'), events: z.array(RosterEvent).min(1) })
-/** One peer in a presence frame (identity is in the roster, by `sid`). `sel` is null while a dot vote is open. */
+/**
+ * One peer in a presence frame (identity is in the roster, by `sid`). `sel` is null while a dot vote is
+ * open. To a rev-10 recipient (one that sent `f`) only: `f`, the session this peer follows (left out when
+ * it follows nobody), and `view.z`, its zoom; a rev-9 recipient gets neither (its parse is strict).
+ */
 export const PeerPresence = z.strictObject({
   sid: SessionId,
   pointer: ScenePoint.nullable(),
@@ -719,14 +750,39 @@ export const PeerPresence = z.strictObject({
   view: SceneRect.nullable(),
   idle: z.boolean(),
   editing: ElementId.nullable(),
+  f: SessionId.nullable().optional(),
 })
 export type PeerPresence = z.infer<typeof PeerPresence>
-/** `presence` out, 10 Hz, changed peers only; `off`: peers this recipient no longer gets (the 40-cursor cap). */
+/** The most session ids one `followers` list carries (a room has fewer sessions than this in practice). */
+export const MAX_FOLLOWERS = 2_000
+/**
+ * `presence` out, 10 Hz, changed peers only. Above 41 sessions a recipient gets at most 40 cursors (peers
+ * in its `view` first, then the ones it already gets), plus, always and outside the cap, the peer it
+ * follows (CONTRACTS_REV 10); `off`: peers this recipient no longer gets (evicted by that ranking: a
+ * re-rank on every tick, so a view change or a newcomer in view replaces an out-of-view cursor).
+ *
+ * `followers` (CONTRACTS_REV 10, rev-10 recipients only, CR-3C-1): the sessions whose `f` is this
+ * recipient, the whole list (sorted, at most MAX_FOLLOWERS), in a frame whenever it changed (`[]`: nobody
+ * follows it any more); a recipient that has not received one holds none. Uncapped, unlike the cursors,
+ * so a facilitator sees everyone a "Gather everyone" made follow them without 200 cursors.
+ */
 export const PresenceOut = z.strictObject({
   type: z.literal('presence'),
   peers: z.array(PeerPresence),
   off: z.array(SessionId).optional(),
   drags: z.array(DragOut).optional(),
+  followers: z.array(SessionId).max(MAX_FOLLOWERS).optional(),
+})
+/**
+ * `contracts` (CONTRACTS_REV 10): the room's contracts revision, sent once per socket right after the
+ * welcome (and its snapshot and catch-up frames), before the late joiner's presence. A client that gets
+ * `rev >= PRESENCE_FOLLOW_REV` may send the rev-10 presence fields on this socket; one that gets no such
+ * frame (a rev-9 room) must not. A rev-9 client drops it as an unknown frame (its transport drops a frame
+ * its schema refuses, with no other effect).
+ */
+export const Contracts = z.strictObject({
+  type: z.literal('contracts'),
+  rev: z.number().int().positive(),
 })
 export const Workshop = z.strictObject({
   type: z.literal('workshop'),
@@ -752,6 +808,7 @@ export const ServerMessage = z.discriminatedUnion('type', [
   Workshop,
   Notice,
   Pong,
+  Contracts,
 ])
 export type Welcome = z.infer<typeof Welcome>
 export type Changes = z.infer<typeof Changes>
@@ -764,6 +821,7 @@ export type PresenceOut = z.infer<typeof PresenceOut>
 export type Workshop = z.infer<typeof Workshop>
 export type Notice = z.infer<typeof Notice>
 export type Pong = z.infer<typeof Pong>
+export type Contracts = z.infer<typeof Contracts>
 export type ServerMessage = z.infer<typeof ServerMessage>
 /** The lease messages a client receives, as spike A's `LeaseServerMessage`. */
 export type LeaseServerMessage = LeaseGrant | LeaseDeny | LeaseBroadcast

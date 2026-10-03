@@ -379,10 +379,21 @@ export interface RemoteCursor {
   readonly idle: boolean
   /** the lease id of their open editor */
   readonly editing: string | null
+  /**
+   * The session they follow (their camera follows its `view`), or null (CONTRACTS_REV 10, CR-3C-1).
+   * Absent or null from a room or a client one revision older, which do not carry it.
+   */
+  readonly following?: string | null
+  /** Their zoom (presence `view.z`, CONTRACTS_REV 10, CR-3CF-1), or null when their end does not send it. */
+  readonly zoom?: number | null
 }
 
 export interface LobbyPresence {
-  /** @owner 2C · getCollaborators, getCollaboratorsOnCurrentPage (cursor-capped: at most 40 peers stream) */
+  /**
+   * @owner 2C · getCollaborators, getCollaboratorsOnCurrentPage (cursor-capped: at most 40 peers stream,
+   * plus the one this tab follows). CONTRACTS_REV 10: also every session that follows this tab, those
+   * past the cap as an entry without a point, view or selection (`following` = this tab's sid).
+   */
   peers(): readonly RemoteCursor[]
   /** @owner 2C · one peer by session id */
   peer(sid: string): RemoteCursor | null
@@ -403,6 +414,11 @@ export interface FollowCameraInput {
   readonly screen: { readonly width: number; readonly height: number }
   /** the default camera: `leader` fitted whole into `screen`, centred (tldraw's follow) */
   readonly fit: FollowCamera
+  /**
+   * The followed session's own zoom (presence `view.z`, CONTRACTS_REV 10, CR-3CF-1); absent when their end
+   * does not send it (a rev-9 room or client): a rule then works it out from what else it knows.
+   */
+  readonly leaderZoom?: number | null
 }
 
 /** CR-3F-3 (W3-10): how `follow.start` places this tab's camera. */

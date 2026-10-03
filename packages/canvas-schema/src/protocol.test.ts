@@ -4,7 +4,7 @@
  * (unknown keys, identity in presence, a `path` patch that is not whole, the size caps).
  */
 import { describe, expect, it } from 'vitest'
-import type { ZodType } from 'zod'
+import { type ZodType, z } from 'zod'
 import { pathUnitOf } from './groups.ts'
 import { LEASE_TTL_MS, MAX_OPS_PER_PUSH, WIRE_LIMITS } from './limits.ts'
 import {
@@ -12,6 +12,8 @@ import {
   Changes,
   ClientEnvelope,
   ClientMessage,
+  CONTRACTS_REV,
+  Contracts,
   decodeSnapshotFrame,
   encodeSnapshotFrame,
   FailCommitRequest,
@@ -24,11 +26,14 @@ import {
   LeaseGrant,
   LeaseHookRequest,
   LeaseRelease,
+  MAX_FOLLOWERS,
+  MAX_PRESENCE_ZOOM,
   Notice,
   Op,
   PatchOp,
   Ping,
   Pong,
+  PRESENCE_FOLLOW_REV,
   PROTO,
   PresenceIn,
   PresenceOut,
@@ -132,6 +137,27 @@ const CLIENT: Record<string, unknown[]> = {
       idle: false,
       editing: null,
       drag: { d: 1, dx: 12.5, dy: -4 },
+    },
+    // CONTRACTS_REV 10: a follow target and the sender's zoom (sent only to a room that announced rev 10)
+    {
+      type: 'presence',
+      pointer: { x: 5, y: 6 },
+      button: 'up',
+      sel: [],
+      view: { x: -20, y: 40, w: 1280, h: 720, z: 1.25 },
+      idle: false,
+      editing: null,
+      f: 'usr_9876543210:tab-2',
+    },
+    {
+      type: 'presence',
+      pointer: null,
+      button: 'up',
+      sel: [],
+      view: null,
+      idle: false,
+      editing: null,
+      f: null,
     },
   ],
   ping: [{ type: 'ping' }, { type: 'ping', n: 7 }],
@@ -310,7 +336,26 @@ const SERVER: Record<string, unknown[]> = {
         { sid: holder.sid, d: 1, end: true },
       ],
     },
+    // CONTRACTS_REV 10, to a rev-10 recipient: the follow target, the zoom, and who follows the recipient
+    {
+      type: 'presence',
+      peers: [
+        {
+          sid: holder.sid,
+          pointer: { x: 1, y: 2 },
+          button: 'up',
+          sel: [],
+          view: { x: 0, y: 0, w: 800, h: 600, z: 0.5 },
+          idle: false,
+          editing: null,
+          f: 'usr_9876543210:tab-2',
+        },
+      ],
+      followers: ['usr_9876543210:tab-2', 'usr_x123456789:tab-3'],
+    },
+    { type: 'presence', peers: [], followers: [] },
   ],
+  contracts: [{ type: 'contracts', rev: 10 }],
   workshop: [{ type: 'workshop', voteOpen: true, anonymous: false }],
   notice: [
     { type: 'notice', code: 'SLOW_DOWN' },
@@ -364,6 +409,7 @@ describe('every message round-trips through its zod schema (§2.4.2)', () => {
       workshop: Workshop,
       notice: Notice,
       pong: Pong,
+      contracts: Contracts,
     }
     for (const [t, schema] of Object.entries(serverOwn)) for (const s of SERVER[t] ?? []) roundTrip(schema, s)
   })
@@ -504,5 +550,73 @@ describe('what the wire refuses', () => {
       'TYPE_CHANGE',
     ])
     expect(REJECT_CODES.filter((c) => REJECT_CODE_INFO[c].retryable).sort()).toEqual(['RATE', 'UNAVAILABLE'])
+  })
+})
+
+// ---- CONTRACTS_REV 10 and the ends one revision older (deploy order, stale tabs) ----------------------------
+
+/** Rev 9's presence schemas, as a rev-9 client or room parses them (strict, no `f`, no `view.z`). */
+const Rect9 = z.strictObject({ x: z.number(), y: z.number(), w: z.number(), h: z.number() })
+const PresenceIn9 = z.strictObject({
+  type: z.literal('presence'),
+  pointer: z.strictObject({ x: z.number(), y: z.number() }).nullable(),
+  button: z.enum(['up', 'down']),
+  sel: z.union([z.array(z.string()), z.strictObject({ count: z.number() })]),
+  view: Rect9.nullable(),
+  idle: z.boolean(),
+  editing: z.string().nullable(),
+  drag: z.unknown().optional(),
+})
+const PeerPresence9 = PresenceIn9.omit({ type: true, drag: true }).extend({
+  sid: z.string(),
+  sel: z.union([z.array(z.string()), z.strictObject({ count: z.number() })]).nullable(),
+})
+
+describe('CONTRACTS_REV 10: follow target, zoom, followers, the contracts frame', () => {
+  const ok = (s: ZodType, v: unknown) => expect(s.safeParse(v).success).toBe(true)
+  const bad = (s: ZodType, v: unknown) => expect(s.safeParse(v).success).toBe(false)
+
+  it('is revision 10, and presence follow starts at it', () => {
+    expect(CONTRACTS_REV).toBe(10)
+    expect(PRESENCE_FOLLOW_REV).toBe(10)
+  })
+
+  it('every rev-9 presence message still parses (the new fields are optional)', () => {
+    for (const s of (CLIENT.presence ?? []).slice(0, 3)) {
+      ok(PresenceIn9, s)
+      ok(PresenceIn, s)
+    }
+    const peer9 = (SERVER.presence as { peers: unknown[] }[])[0]?.peers[0]
+    ok(PeerPresence9, peer9)
+  })
+
+  it('a rev-9 end refuses the rev-10 fields (why each end sends them only to a rev-10 one)', () => {
+    const rich = CLIENT.presence?.[3] as Record<string, unknown>
+    ok(PresenceIn, rich)
+    bad(PresenceIn9, rich) // a rev-9 room: INVALID_MESSAGE, the socket closes
+    bad(PresenceIn9, { ...rich, f: undefined }) // the zoom alone is refused too
+    const richPeer = (SERVER.presence as { peers: unknown[] }[])[1]?.peers[0]
+    bad(PeerPresence9, richPeer) // a rev-9 client drops the whole frame
+  })
+
+  it('the zoom is positive and bounded; the follow target is a session id; followers are bounded', () => {
+    const rich = CLIENT.presence?.[3] as Record<string, unknown>
+    const view = rich.view as Record<string, unknown>
+    bad(PresenceIn, { ...rich, view: { ...view, z: 0 } })
+    bad(PresenceIn, { ...rich, view: { ...view, z: -1 } })
+    bad(PresenceIn, { ...rich, view: { ...view, z: MAX_PRESENCE_ZOOM + 1 } })
+    bad(PresenceIn, { ...rich, view: { ...view, z: Number.NaN } })
+    ok(PresenceIn, { ...rich, view: { ...view, z: MAX_PRESENCE_ZOOM } })
+    bad(PresenceIn, { ...rich, f: 'x' })
+    bad(PresenceIn, { ...rich, f: 3 })
+    ok(PresenceOut, { type: 'presence', peers: [], followers: Array(MAX_FOLLOWERS).fill(holder.sid) })
+    bad(PresenceOut, { type: 'presence', peers: [], followers: Array(MAX_FOLLOWERS + 1).fill(holder.sid) })
+  })
+
+  it('the contracts frame is strict and names a positive revision', () => {
+    ok(Contracts, { type: 'contracts', rev: CONTRACTS_REV })
+    bad(Contracts, { type: 'contracts', rev: 0 })
+    bad(Contracts, { type: 'contracts', rev: 10, extra: true })
+    bad(Contracts, { type: 'contracts' })
   })
 })

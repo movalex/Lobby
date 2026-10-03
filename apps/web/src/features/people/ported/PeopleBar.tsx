@@ -2,8 +2,9 @@
 // ../PeopleBar.tsx; WRK-02, FAC-01, FAC-07..10's per-person "Bring to me"):
 // - the avatars (up to 5, 2 on narrow bars, none on phones; a click follows or stops following that
 //   person), "+N";
-// - "N following you" while you present to everyone (the presentation's followers; camera follows are
-//   not in Lobby's presence, CR-3C-1);
+// - "N following you": the people whose camera follows yours (presence `following` and the room's
+//   followers list, CONTRACTS_REV 10, CR-3C-1) and, while you present to everyone, the presentation's
+//   followers;
 // - a people button that opens a searchable list: name, "(guest)", role, what they are doing (the frame
 //   in their view, presenting, following the presentation, idle), with Follow / Following and, for
 //   people who can edit, "Bring here" (the workshops summon with a target) and "Bring everyone to me".
@@ -76,13 +77,25 @@ function workshopsOf(ctx: CanvasFeatureContext): WorkshopStore {
   )
 }
 
+/** This tab's session id (whom "following you" means), or null before the welcome. */
+const selfSidOf = (ctx: CanvasFeatureContext): string | null => ctx.canvas.engine?.welcome?.sid ?? null
+
 /** Who follows you right now (names and count), serialized: re-renders only when that changes. */
 function useFollowersOfMe(ctx: CanvasFeatureContext) {
   const selfUserId = ctx.me.user.id
+  const { canvas } = ctx
   const key = useValue('dr-people-followers', () => {
     const presentation = getLive(ctx.registries)?.store.presentation.get() ?? null
-    return JSON.stringify(followerSummary([], presentation, selfUserId))
-  }, [ctx, selfUserId])
+    // camera followers (CR-3C-1): one record per person, "following you" when a session of theirs follows
+    const followers = presenceLikes(
+      canvas.collaborators(),
+      canvas.presence.peers(),
+      0,
+      SINGLE_PAGE_ID,
+      selfSidOf(ctx),
+    )
+    return JSON.stringify(followerSummary(followers, presentation, selfUserId))
+  }, [ctx, canvas, selfUserId])
   return useMemo(() => JSON.parse(key) as { names: string[]; count: number }, [key])
 }
 
@@ -324,7 +337,7 @@ function PeoplePanel({
       selfName: me.name,
       selfColor: me.color,
       selfFollowing: followedSid ? (roster.find((r) => r.sid === followedSid)?.uid ?? null) : null,
-      collaborators: presenceLikes(roster, canvas.presence.peers(), now, SINGLE_PAGE_ID),
+      collaborators: presenceLikes(roster, canvas.presence.peers(), now, SINGLE_PAGE_ID, selfSidOf(ctx)),
       roster: rosterMap(roster),
       presentation: getLive(ctx.registries)?.store.presentation.get() ?? null,
       frames,

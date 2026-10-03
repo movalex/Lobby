@@ -3,9 +3,9 @@
 // list shows everyone with their role and "(guest)", searches, follows (the canvas's `follow`, on the
 // followed person's presence view), and "Bring here" for people who can edit.
 //
-// Split from the tldraw test by what each part needs: "who follows me" needs a follow target in Lobby's
-// presence (CR-3C-1: canvas-schema PresenceIn has none), and "Bring here" needs the workshops feature's
-// summon handler on this page (3f's port). Both are expected failures until those land.
+// Split from the tldraw test by what each part needs: "who follows me" reads the follow target in Lobby's
+// presence (CR-3C-1, CONTRACTS_REV 10: presence `f` and the room's `followers` list), and "Bring here"
+// the workshops feature's summon handler on this page (3f's port).
 import type { Browser } from '@playwright/test'
 import {
   type CanvasSession,
@@ -146,9 +146,8 @@ test('the people list: search, roles and "(guest)"; follow from the list ("Follo
 test('who follows me: bob sees that alice follows him, and "Following you" in his list (CR-3C-1)', async ({
   canvasSession,
 }) => {
-  // CR-3C-1: Lobby's presence carries no follow target (canvas-schema PresenceIn/PeerPresence), so
-  // nobody can tell who follows them by camera. Remove the mark when the protocol and the room relay it.
-  test.fail(true, 'CR-3C-1: presence has no follow target')
+  // CR-3C-1 (CONTRACTS_REV 10): alice's presence says whom she follows (`f`); the room lists bob's
+  // followers to him (`followers`), so his top bar and his list say so
   const a = await canvasSession('alice')
   const b = await canvasSession('bob', { role: 'editor' })
   await a.page.getByTestId('people-open').click()
@@ -159,6 +158,10 @@ test('who follows me: bob sees that alice follows him, and "Following you" in hi
   await expect(followers).toHaveAttribute('title', 'Alice Park is following you')
   await followers.click()
   await expect(rowOf(b, a.id).getByTestId('people-status')).toHaveText('Following you')
+  await b.page.keyboard.press('Escape')
+  // alice stops following: bob's indicator goes
+  await a.page.getByTestId('following-stop').click()
+  await expect(followers).toHaveCount(0, { timeout: 5_000 })
 })
 
 test('"Bring here" on carol: only carol follows alice now (3f: the summon handler)', async ({

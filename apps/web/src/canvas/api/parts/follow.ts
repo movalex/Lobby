@@ -12,6 +12,11 @@
  *   feature added a plain click (FAC-02); a press on an overlay (a comment pin, the people list) is not a
  *   canvas press.
  * - The camera writes go through `viewport.set(…, {force: true})`: view state, never a document write.
+ * - CONTRACTS_REV 10 (CR-3C-1): whom this tab follows travels in its presence (`f`, through
+ *   canvas/presence/follow-target.ts on the canvas's engine core), so the room always delivers the
+ *   followed session's view (outside the 40-cursor cap) and the followed person sees "Following you".
+ *   The camera rule also gets the followed session's own zoom (`leaderZoom`, presence `view.z`, CR-3CF-1)
+ *   when its end sends one.
  * - `start(sid, {camera})` (CR-3F-3, W3-10) lets the caller shape that camera: the rule gets the followed
  *   view, this canvas's size and the default fit, and returns another camera or null (the fit). Workshops'
  *   "Gather everyone" uses it for R2-04 (a phone sees the leader's centre at a readable zoom). A rule that
@@ -22,6 +27,7 @@
  * the board page's); on a bare port `start` fails there with 2C's NotImplementedError.
  */
 import { atom, react, untracked } from '../../../lib/signals.ts'
+import { setPresenceFollow } from '../../presence/follow-target.ts'
 import type {
   Bounds,
   FollowCamera,
@@ -66,6 +72,7 @@ export function followerCamera(
   view: Bounds,
   screen: { readonly width: number; readonly height: number },
   options?: FollowOptions,
+  leaderZoom?: number | null,
 ): FollowCamera | null {
   const fit = followCamera(view, screen)
   if (!fit || !options?.camera) return fit
@@ -74,6 +81,8 @@ export function followerCamera(
       leader: view,
       screen: { width: screen.width, height: screen.height },
       fit,
+      // left out when their end does not send one (a rev-9 room or client)
+      ...(typeof leaderZoom === 'number' && leaderZoom > 0 ? { leaderZoom } : {}),
     })
     return usable(shaped) ? { x: shaped.x, y: shaped.y, zoom: shaped.zoom } : fit
   } catch (e) {
@@ -110,6 +119,7 @@ export function createFollowPart(deps: PartDeps): FollowPart {
     if (followed.get() === null) return
     clear()
     followed.set(null)
+    setPresenceFollow(deps.self().engine, null)
     emit(null)
   }
 
@@ -126,9 +136,10 @@ export function createFollowPart(deps: PartDeps): FollowPart {
     options = opts
     followed.set(sid)
     let last: Bounds | null = null
+    let lastZoom: number | null = null
     const apply = () => {
       if (!last) return
-      const to = followerCamera(last, canvas.viewport.screenRect(), options)
+      const to = followerCamera(last, canvas.viewport.screenRect(), options, lastZoom)
       if (to) canvas.viewport.set(to, { force: true })
     }
     reapply = () => untracked(apply)
@@ -159,17 +170,21 @@ export function createFollowPart(deps: PartDeps): FollowPart {
           })
           return
         }
-        const view = canvas.presence.peer(sid)?.view ?? null
+        const peer = canvas.presence.peer(sid)
+        const view = peer?.view ?? null
         if (!view) return
+        const zoom = peer?.zoom ?? null
         if (
           last &&
           last.x === view.x &&
           last.y === view.y &&
           last.width === view.width &&
-          last.height === view.height
+          last.height === view.height &&
+          lastZoom === zoom
         )
           return
         last = view
+        lastZoom = zoom
         // the camera write is not a dependency (the viewport it bumps must not re-run this)
         untracked(apply)
       }),
@@ -190,6 +205,8 @@ export function createFollowPart(deps: PartDeps): FollowPart {
         if (e.type === 'wheel' || e.type === 'pinch' || e.type === 'pointer-down') stop()
       }),
     )
+    // the room hears whom this tab follows (presence `f`): it then always delivers their view
+    setPresenceFollow(canvas.engine, sid)
     emit(sid)
   }
 
