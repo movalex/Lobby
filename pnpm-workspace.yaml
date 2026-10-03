@@ -79,3 +79,10 @@ overrides:
   '@types/node': 'catalog:'
   # keep a single ws copy whatever a dependency asks for
   ws: 'catalog:'
+  # A6 SEC-dependency-scan (docs/SECURITY-REVIEW-2026-10-02.md): exact-pinned patch fixes for two of the
+  # production tree's `pnpm audit --prod` advisories, both inside @excalidraw/excalidraw's own pinned
+  # dependencies (exact pins there, so the override is keyed by the version they ask for). Both
+  # replacements are versions already resolved elsewhere in this lockfile. Drop each line once
+  # Excalidraw's own pin has moved past it.
+  'nanoid@3.3.3': 3.3.19
+  'lodash-es@4.17.21': 4.18.1
