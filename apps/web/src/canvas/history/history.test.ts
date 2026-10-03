@@ -393,7 +393,8 @@ describe('A15: recording, fix folding, rejects, repairs', () => {
   })
 
   it('an index fix is folded into `after`, so the undo applies with no false skip', () => {
-    const { scene, h } = start(rect('N', { index: 'a1' }))
+    // M is there to be passed: a new key that passes no element is the engine's re-key, no step (CR-3D-4)
+    const { scene, h } = start(rect('N', { index: 'a1' }), rect('M', { index: 'a3' }))
     local(scene, 'N', { index: 'a5' }) // bring to front
     h.record(scene)
     h.markPushed(1, ['N'])
@@ -407,7 +408,12 @@ describe('A15: recording, fix folding, rejects, repairs', () => {
   })
 
   it('a fix also corrects a later entry that was recorded against the unfixed value', () => {
-    const { scene, h } = start(rect('N', { index: 'a1' }))
+    // N passes M, then P: two reorders (a new key that passes no element is a re-key, no step: CR-3D-4)
+    const { scene, h } = start(
+      rect('N', { index: 'a1' }),
+      rect('M', { index: 'a3' }),
+      rect('P', { index: 'a6' }),
+    )
     local(scene, 'N', { index: 'a5' })
     h.record(scene)
     h.markPushed(1, ['N'])

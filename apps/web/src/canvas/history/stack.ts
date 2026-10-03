@@ -60,6 +60,11 @@ export interface HistoryMark {
   readonly size: number
   readonly top: Entry | null
   readonly redo: number
+  /**
+   * The entry below `top` when `top` only typed into labels that entry made empty
+   * (`creationFilledByTop`): `joinAction` folds the two into one step. Null otherwise.
+   */
+  readonly creation?: Entry | null
 }
 
 function mergeFields(into: Record<string, FieldChange>, from: Record<string, FieldChange>): void {
@@ -131,6 +136,47 @@ export interface HistoryOptions {
 
 const track = (c: ElementChange, unsent: Side): TrackedChange => ({ ...c, pending: [], unsent })
 
+/** A change of an existing element's `index` and nothing else. */
+const isIndexOnly = (c: ElementChange): boolean =>
+  !c.created &&
+  !!c.fields.index &&
+  Object.keys(c.fields).length === 1 &&
+  Object.keys(c.lobby).length === 0 &&
+  !c.groupIds &&
+  !c.bound
+
+/** Paint order: by `index`, then by id (the engine's `compareIndexThenId`). */
+const paintCmp = (ia: unknown, a: string, ib: unknown, b: string): number => {
+  const x = typeof ia === 'string' ? ia : ''
+  const y = typeof ib === 'string' ? ib : ''
+  if (x !== y) return x < y ? -1 : 1
+  return a < b ? -1 : a > b ? 1 : 0
+}
+
+/**
+ * Whether `id`'s new `index` (the scene's) leaves it where it was among the live elements: every other
+ * live element is painted on the same side of it with the keys of the previous boundary (`prevIndex`
+ * for the elements that changed since, the scene's for the rest) as with the keys now. A deleted element
+ * paints nowhere.
+ */
+function keepsPaintOrder(
+  id: string,
+  before: unknown,
+  scene: Scene,
+  prevIndex: ReadonlyMap<string, unknown>,
+): boolean {
+  const el = scene.get(id)
+  if (!el) return false
+  if (el.isDeleted) return true
+  for (const [other, o] of scene) {
+    if (other === id || o.isDeleted) continue
+    const was = prevIndex.has(other) ? prevIndex.get(other) : o.index
+    if (Math.sign(paintCmp(was, other, before, id)) !== Math.sign(paintCmp(o.index, other, el.index, id)))
+      return false
+  }
+  return true
+}
+
 /** Reject codes the engine retries (protocol.ts REJECT_CODE_INFO `retryable`): the change is sent again. */
 const RETRYABLE: ReadonlySet<string> = new Set(['RATE', 'UNAVAILABLE'])
 
@@ -186,6 +232,8 @@ export class LobbyHistory {
    */
   record(scene: Scene, label?: string, selection?: StepSelection): Entry | null {
     const changes = new Map<string, TrackedChange>()
+    // the `index` each changed element had at the previous boundary (the paint order then)
+    const prevIndex = new Map<string, unknown>()
     for (const [id, el] of scene) {
       const prev = this.lastLocal.get(id)
       if (
@@ -196,11 +244,28 @@ export class LobbyHistory {
       )
         continue
       const c = diffElement(prev, el)
+      if (prev) prevIndex.set(id, prev.index)
       if (!isEmptyChange(c)) changes.set(id, track(c, 'after'))
       this.lastLocal.set(id, clone(el))
     }
     // ids that vanished from the scene without `isDeleted` (§2.5.2) are not steps
     for (const id of [...this.lastLocal.keys()]) if (!scene.has(id)) this.lastLocal.delete(id)
+    // A new `index` that leaves the paint order as it was is the engine's re-key, never a step (CR-3D-4):
+    // Excalidraw's `updateScene` re-keys every element whose key is out of place in the array (a key two
+    // concurrent creates share, an order the server's keys changed), with a version bump, after a remote
+    // apply as much as after a local write. Recorded, it was an invisible step of its own (an arrow's
+    // `index` on bob's stack after both added a branch at once, mindmap-keyboard.spec.ts): its Ctrl+Z
+    // changed nothing to see. A reorder (bring to front, send backward) moves the element among the others
+    // and stays a step. The new key folds into the entries that hold the element's `index`, so their undo
+    // and redo still compare equal.
+    for (const [id, c] of changes) {
+      if (!isIndexOnly(c)) continue
+      const before = c.fields.index?.before
+      const after = c.fields.index?.after
+      if (!keepsPaintOrder(id, before, scene, prevIndex)) continue
+      changes.delete(id)
+      this.foldRekey(id, before, after)
+    }
     if (changes.size === 0) return null
     const entry: Entry = { id: this.nextId++, label, changes }
     if (selection) entry.selection = { before: [...selection.before], after: [...selection.after] }
@@ -336,7 +401,71 @@ export class LobbyHistory {
       size: this.undos.length,
       top: this.undos[this.undos.length - 1] ?? null,
       redo: this.redos.length,
+      creation: this.creationFilledByTop(),
     }
+  }
+
+  /**
+   * The entry below the top one when the top one is typing into what that entry made: every change of the
+   * top entry is to a label (a text element) the entry below created, which held no words before (its
+   * `text` or `originalText` goes from '' to words; the editor's other changes of it come along), or a
+   * position or size of such a label's container (the editor's fit), with nothing deleted or brought back.
+   * A mind-map topic made by Tab or Enter carries an empty label for its editor (CR-3D-4): tldraw kept the
+   * topic and the words typed into it one step. A note's label made by the editor is created by the typing
+   * step itself, so a note and the words typed into it stay two steps. Null otherwise, and while
+   * something can be redone.
+   */
+  private creationFilledByTop(): Entry | null {
+    const n = this.undos.length
+    if (n < 2 || this.redos.length > 0) return null
+    const top = this.undos[n - 1] as Entry
+    const below = this.undos[n - 2] as Entry
+    const labels = new Set<string>()
+    let filled = false
+    for (const c of top.changes.values()) {
+      const el = this.lastLocal.get(c.id)
+      if (el?.type !== 'text' || !below.changes.get(c.id)?.created) continue
+      if (c.fields.isDeleted || Object.keys(c.lobby).length || c.groupIds || c.bound) return null
+      const words = c.fields.originalText ?? c.fields.text
+      if (words && words.before === '' && typeof words.after === 'string' && words.after !== '') filled = true
+      labels.add(c.id)
+    }
+    if (!filled) return null
+    const containers = new Set<string>()
+    for (const id of labels) {
+      const cid = this.lastLocal.get(id)?.containerId
+      if (cid) containers.add(cid)
+    }
+    for (const c of top.changes.values()) {
+      if (labels.has(c.id)) continue
+      const el = this.lastLocal.get(c.id)
+      if (!el || !containers.has(c.id)) return null
+      if (Object.keys(c.lobby).length || c.groupIds || c.bound) return null
+      for (const f of Object.keys(c.fields)) {
+        const g = fieldGroup(el, f)
+        if (g !== 'pos' && g !== 'shape') return null
+      }
+    }
+    return below
+  }
+
+  /**
+   * `transact(…, {joinPrevious})`'s merge: `mergeTop(since)`, then, when the mark's top step was typing
+   * into labels the step below it made (`since.creation`) and both are still the top two, that step too:
+   * the topic, the words typed into it and the layout after them are one undo step. Returns whether the
+   * write joined.
+   */
+  joinAction(since: HistoryMark): boolean {
+    const joined = this.mergeTop(since)
+    const n = this.undos.length
+    if (
+      since.creation &&
+      this.redos.length === 0 &&
+      this.undos[n - 1] === since.top &&
+      this.undos[n - 2] === since.creation
+    )
+      this.mergeTop()
+    return joined
   }
 
   /**
@@ -420,6 +549,23 @@ export class LobbyHistory {
     }
     const sel = entry.selection
     return Object.assign(res, { selection: sel ? (dir === 'undo' ? sel.before : sel.after) : null })
+  }
+
+  /**
+   * The engine's re-key of `id` (`index` from `before` to `after`, the paint order unchanged): an entry
+   * that holds the element's `index` at the side the scene is on now (an undo entry's `after`, a redo
+   * entry's `before`) takes the new key.
+   */
+  private foldRekey(id: string, before: unknown, after: unknown) {
+    for (const [stack, side] of [
+      [this.undos, 'after'],
+      [this.redos, 'before'],
+    ] as const)
+      for (const entry of stack) {
+        const fc = entry.changes.get(id)?.fields.index
+        if (fc && deepEqual(fc[side], before)) fc[side] = clone(after)
+      }
+    this.prune()
   }
 
   private carrying(seq: number, id: string) {
