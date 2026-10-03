@@ -24,6 +24,7 @@
 // the element). Text fields are never copied. SPIKE_B11_SELFTEST_DIVERGE=1 makes a short run diverge on
 // purpose after the quiesce (one browser's socket held, one client's closed, then an edit) to exercise the
 // report; such a run fails by design and is never counted.
+import { monitorEventLoopDelay } from 'node:perf_hooks'
 import { expect, test } from '@playwright/test'
 import type { HeadlessClient, SceneElement } from '../../../apps/web/src/canvas/sync/types.ts'
 import {
@@ -163,15 +164,43 @@ class Participant {
     this.name = name
     this.dev = dev
   }
-  async connect(): Promise<void> {
-    this.create ??= await loadHeadlessFactory()
+  /**
+   * Each connect: how long until the welcome, and what the socket and the core did meanwhile (event names
+   * counted, closes with their code and reason). SYNC-4's batch at 99ac6c5 lost 2 of 18 runs to a connect
+   * whose first welcome took longer than its 60 s ticket: the transport's retry carried the expired ticket,
+   * was refused NOT_AUTHENTICATED, and the run stopped with no convergence verdict.
+   */
+  readonly connectLog: {
+    ms: number
+    ok: boolean
+    closes: string[]
+    events: Record<string, number>
+    error?: string
+  }[] = []
+  /** connects refused NOT_AUTHENTICATED and tried once more on a fresh ticket (reported, never hidden) */
+  reticketed = 0
+  private async connectOnce(): Promise<HeadlessClient> {
+    const create = this.create as NonNullable<typeof this.create>
+    const t0 = Date.now()
     const { ticket } = await apiTicket(stack, this.dev, boardId)
-    const c = this.create({
+    const events: Record<string, number> = {}
+    const closes: string[] = []
+    const c = create({
       syncUrl: stack.ports.syncUrl.replace(/^http/, 'ws'),
       boardId,
       tab: `b11-${this.name}`,
       ticket,
       meter: new Meter(),
+      // event names only (the details carry ids and counts, and are not kept)
+      log: (event: string) => {
+        events[event] = (events[event] ?? 0) + 1
+      },
+    })
+    // the core's own events (O2's core; the frozen EngineCore type does not name `on`)
+    type CoreEvent = { kind: string; state?: string; close?: { code?: number; reason?: string } }
+    const off = (c.core as unknown as { on(l: (e: CoreEvent) => void): () => void }).on((e) => {
+      if (e.kind === 'transport' && e.state === 'closed')
+        closes.push(`${Date.now() - t0}ms ${e.close?.code ?? '?'} ${e.close?.reason ?? ''}`.slice(0, 80))
     })
     c.core.onAck((ack) => {
       for (const r of ack.r) {
@@ -180,7 +209,28 @@ class Participant {
         if (el) this.ledger.set(r.id, { at: Date.now(), fields: pick(el) })
       }
     })
-    await c.connect()
+    try {
+      await c.connect()
+      this.connectLog.push({ ms: Date.now() - t0, ok: true, closes, events })
+      return c
+    } catch (e) {
+      this.connectLog.push({ ms: Date.now() - t0, ok: false, closes, events, error: String(e).slice(0, 120) })
+      await c.close().catch(() => undefined)
+      throw e
+    } finally {
+      off()
+    }
+  }
+  async connect(): Promise<void> {
+    this.create ??= await loadHeadlessFactory()
+    let c: HeadlessClient
+    try {
+      c = await this.connectOnce()
+    } catch (e) {
+      if (!/NOT_AUTHENTICATED/.test(String(e))) throw e
+      this.reticketed++
+      c = await this.connectOnce()
+    }
     this.client = c
     this.connects++
   }
@@ -327,6 +377,47 @@ test('B11: 3 browsers + 50 headless clients, random ops, disconnects and one SIG
     done: { at: number; restartedAt: number; check: { checked: number; missing: string[] } } | null
   } = { done: null }
   const counts = { browserOps: 0, browserFailures: 0, headlessOps: 0, cuts: 0, drops: 0 }
+  // this test process runs the 50 headless cores: how late its event loop ran (a stalled loop delays their
+  // welcomes, pongs and acks). Node's histogram holds the time between ticks of a 20 ms timer, so 20 ms is
+  // no delay at all
+  const loopDelay = monitorEventLoopDelay({ resolution: 20 })
+  loopDelay.enable()
+  /** set after the quiesce: the browsers' anomaly summary */
+  let anomalies: Record<string, unknown> | null = null
+  const evidence = (extra: Record<string, unknown>) => {
+    const connects = people.flatMap((p) => p.connectLog.map((c) => ({ name: p.name, ...c })))
+    return writeEvidence(testInfo, 'B11', {
+      anomalies,
+      durationMs: DURATION_MS,
+      headless: HEADLESS,
+      counts,
+      killed: kill.done,
+      connectsPerHeadless: people.map((p) => p.connects),
+      headlessConnects: {
+        count: connects.length,
+        maxMs: Math.max(0, ...connects.map((c) => c.ms)),
+        failed: connects.filter((c) => !c.ok).length,
+        reticketed: people.reduce((n, p) => n + p.reticketed, 0),
+        // every connect over 10 s, or that failed, with what the socket did meanwhile
+        slow: connects.filter((c) => !c.ok || c.ms > 10_000).slice(0, 40),
+      },
+      eventLoopDelayMs: {
+        mean: Math.round(loopDelay.mean / 1e4) / 100,
+        p99: Math.round(loopDelay.percentile(99) / 1e4) / 100,
+        max: Math.round(loopDelay.max / 1e4) / 100,
+      },
+      headlessEdits: people.reduce((n, p) => n + p.edits, 0),
+      headlessErrorCount: people.reduce((n, p) => n + p.errorCount, 0),
+      headlessErrors: people.flatMap((p) => p.errors).slice(0, 20),
+      headlessCreated: people.reduce((n, p) => n + p.own.length, 0),
+      // relative to the window's start (ms; frames and log entries carry epoch ms: subtract startedAt), so
+      // a divergence can be placed against the disruptions
+      startedAt: w.startedAt,
+      timeline: timeline.map((t) => ({ ...t, at: t.at - w.startedAt })),
+      wireFrames: Object.fromEntries([...taps].map(([n, t]) => [n, frameCounts(t.frames())])),
+      ...extra,
+    })
+  }
 
   const headlessLoop = (async () => {
     while (Date.now() < end) {
@@ -482,7 +573,13 @@ test('B11: 3 browsers + 50 headless clients, random ops, disconnects and one SIG
       }
     }
   })()
-  await Promise.all([headlessLoop, ...browsers.map(browserLoop), ledgerLoop, chaosLoop])
+  try {
+    await Promise.all([headlessLoop, ...browsers.map(browserLoop), ledgerLoop, chaosLoop])
+  } catch (e) {
+    // the run stopped before its convergence check (no verdict): what it did until then
+    const file = evidence({ loopError: String(e).slice(0, 2_000) })
+    throw new Error(`${String(e).slice(0, 1_500)} (no convergence verdict; evidence in ${file})`)
+  }
   mark('end')
 
   // quiesce: every client saved, then the convergence check over all 53 maps
@@ -517,7 +614,7 @@ test('B11: 3 browsers + 50 headless clients, random ops, disconnects and one SIG
   // the core's non-routine events in each browser over the whole run, passing or not: per event, and for
   // echo_suspect (a confirmed element's version changed on the core's own apply: Excalidraw re-keyed it)
   // whether the element was the browser's own or another writer's (SYNC-4); ids and counts only
-  const anomalies: Record<string, unknown> = {}
+  const summary: Record<string, unknown> = {}
   for (const b of browsers) {
     const log = (await taps.get(b.name)?.boardLog()) ?? []
     const own = new Set(browserOwn.get(b.name))
@@ -530,7 +627,7 @@ test('B11: 3 browsers + 50 headless clients, random ops, disconnects and one SIG
         for (const id of ((x.detail as { ids?: string[] } | null)?.ids ?? []) as string[])
           echo[own.has(id) ? 'own' : 'other']++
     }
-    anomalies[b.name] = {
+    summary[b.name] = {
       byEvent,
       echoSuspectIds: echo,
       tail: log
@@ -539,25 +636,7 @@ test('B11: 3 browsers + 50 headless clients, random ops, disconnects and one SIG
         .map((x) => ({ ...x, at: x.at - w.startedAt })),
     }
   }
-  const evidence = (extra: Record<string, unknown>) =>
-    writeEvidence(testInfo, 'B11', {
-      anomalies,
-      durationMs: DURATION_MS,
-      headless: HEADLESS,
-      counts,
-      killed: kill.done,
-      connectsPerHeadless: people.map((p) => p.connects),
-      headlessEdits: people.reduce((n, p) => n + p.edits, 0),
-      headlessErrorCount: people.reduce((n, p) => n + p.errorCount, 0),
-      headlessErrors: people.flatMap((p) => p.errors).slice(0, 20),
-      headlessCreated: people.reduce((n, p) => n + p.own.length, 0),
-      // relative to the window's start (ms; frames and log entries carry epoch ms: subtract startedAt), so
-      // a divergence can be placed against the disruptions
-      startedAt: w.startedAt,
-      timeline: timeline.map((t) => ({ ...t, at: t.at - w.startedAt })),
-      wireFrames: Object.fromEntries([...taps].map(([n, t]) => [n, frameCounts(t.frames())])),
-      ...extra,
-    })
+  anomalies = summary
   let report: Awaited<ReturnType<typeof closeWindow>>
   try {
     report = await closeWindow(stack, boardId, targets, w, { timeoutMs: 60_000 })
