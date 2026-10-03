@@ -10,12 +10,22 @@ import type { StackEngine } from './tests/support/stack.ts'
 //
 //   E2E_PORT_BASE=<base> pnpm --filter @draftroom/e2e test [-- <spec>]
 //
+// Browsers: chromium runs the whole suite. WebKit (the Safari engine, Macs and iPads) and Firefox run only the
+// short smoke in excalidraw/xbrowser-smoke.spec.ts (XBROWSER; docs/PROGRESS.md "Unmeasured: ... iPad/Safari,
+// Firefox"): sign in, the dashboard, open a board, a note typed through the lease, reload. The same spec also
+// runs on chromium, the control that tells a browser difference from a broken spec. The package scripts pick
+// the projects (`test` and `excalidraw`: chromium; `xbrowser`: webkit and firefox); the engines come from
+// `pnpm --filter @draftroom/e2e install-browsers:xbrowser` (`playwright install webkit firefox`).
+//
 // The other configs: excalidraw-builds/prod.config.ts (the production build without the guard),
 // excalidraw-builds/dev.config.ts (the Vite dev server), spike/ and spike-b/ (the spike suites).
 //
 // Per-run build folder (inside apps/web/dist/, relative to the web package): parallel runs with
 // different E2E_PORT_BASE values must not build into, or serve, each other's files.
 const WEB_OUT_DIR = `dist/${RUN_TAG}`
+
+/** The one spec the non-chromium projects run. */
+const XBROWSER_SMOKE = /xbrowser-smoke\.spec\.ts$/
 
 export default defineConfig<Record<never, never>, { engine: StackEngine }>({
   testDir: './excalidraw',
@@ -28,7 +38,10 @@ export default defineConfig<Record<never, never>, { engine: StackEngine }>({
   fullyParallel: false,
   workers: 1,
   forbidOnly: !!process.env.CI,
-  reporter: 'list',
+  // CI (.github/workflows/ci.yml): one retry, because a 2-core runner is slower than the machine the timings were
+  // set on (a test that passes on the retry is reported "flaky", not hidden), and GitHub annotations on failures.
+  retries: process.env.CI ? 1 : 0,
+  reporter: process.env.CI ? [['list'], ['github']] : 'list',
   timeout: 120_000,
   expect: { timeout: 15_000 },
   use: {
@@ -37,7 +50,11 @@ export default defineConfig<Record<never, never>, { engine: StackEngine }>({
     screenshot: 'only-on-failure',
     engine: 'excalidraw',
   },
-  projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
+  projects: [
+    { name: 'chromium', use: { ...devices['Desktop Chrome'] } },
+    { name: 'webkit', testMatch: XBROWSER_SMOKE, use: { ...devices['Desktop Safari'] } },
+    { name: 'firefox', testMatch: XBROWSER_SMOKE, use: { ...devices['Desktop Firefox'] } },
+  ],
   // The api, sync server and preview worker are started (and killed) by the tests' own fixture
   // (tests/support/stack.ts); only the static web build is served here.
   webServer: [

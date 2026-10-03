@@ -21,6 +21,11 @@
 //   (MIT), and only as dependencies of packages/tldraw-import. (The cut-over grace, --before-cutover, left
 //   with the tldraw board page at wave 4 part 2: docs/EXCALIDRAW-CUTOVER.md G10.)
 //
+// Scope: production trees only (`--prod`), of the packages under apps/ and the workspace packages they use. Dev
+// tooling is outside it on purpose, the e2e package's @axe-core/playwright and axe-core (MPL-2.0, wave C4) among it:
+// they run in the test suite and ship in no image or bundle. Were either ever to enter an app's production tree, the
+// MPL rule above would fail the check and this file would need a reviewed entry, not a quiet one.
+//
 // The listing covers the packages pnpm installed on this machine: platform-specific optional packages
 // (sharp's libvips binaries) are checked for the platform that ran the install. CI (Linux x64) checks the
 // binaries the Docker images use.

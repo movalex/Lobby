@@ -1,6 +1,63 @@
-# Draftroom CI: the same gate as `pnpm verify` (lint, typecheck, unit/protocol tests, browser e2e), plus the licence check.
-# It cannot run until the repository is published to GitHub; it has never run (docs/DEPLOY.md, "CI").
-# Actions are pinned to full commit SHAs (tag in the comment) so a moved tag cannot change the build.
+# Lobby (Draftroom) CI. What a run does, and what it costs:
+#
+#   every push to main and every pull request
+#     checks      the quick static gate: lint, licences, typecheck (the node-safety and engine-probe tsconfigs included).
+#                 The jobs below that need a green static gate wait for this one and for nothing else.
+#     unit        `vitest run` over every project (the Excalidraw arrow acceptance tests, the Node engine probes, the
+#                 scripts), split into 4 shards by file
+#     postgres    the WHOLE api project against a real Postgres 18, not only the *.pg.test.ts files (they skip without
+#                 one), in 3 shards. Wave B's workspace-members tests ran on a real Postgres for the first time on
+#                 2026-10-03 (Postgres 18.4 on the development PC: the three shards passed, 1,158 tests); this job has still
+#                 never run on a runner, and it blocks, so a red mark here is a finding, not necessarily a CI mistake.
+#     probes      the browser half of the engine probe suite (docs/EXCALIDRAW-MIGRATION.md section 6.5): `pnpm probe:browser`, as probe:engine and probe:layout
+#     audit       `pnpm audit --prod` against the 5 advisories the owner has been told about (scripts/audit-check.mjs)
+#     xbrowser    the cross-browser smoke on WebKit and Firefox (e2e/excalidraw/xbrowser-smoke.spec.ts)
+#     build-gates the production-build gates: `excalidraw:prod`, `excalidraw:dev` (StrictMode) and `csp:cutover`
+#   pull requests only
+#     e2e-smoke   a short browser subset (ten spec files, about 3 minutes on the development PC)
+#   pushes to main only (the stand-in for a nightly run: this file's triggers are the owner's decision)
+#     e2e         the whole browser suite, in 6 shards
+#
+# Time budget. The development PC has 64 cores and a runner has 2 (a private repository), so its numbers say nothing
+# about a runner until the worker count is the same. `pnpm test` took 94 s there with vitest's default of cpus - 1
+# workers; on a 2-vCPU runner vitest starts 1. Measured on the PC with the workers capped: the whole unit suite
+# (about 490 files and 4,800 tests) took 12.1 minutes on 2 workers and 21.6 minutes on 1, and as four `--shard=i/4`
+# slices of one worker each 355, 282, 405 and 286 seconds (22 minutes of work in all). A runner core is slower than a
+# desktop core, so allow 2 to 2.5 times the longest slice plus about 4 minutes of setup (15 to 20 minutes): each of the
+# 4 `unit` jobs has 30. The api project on a real Postgres 18.4 took 15.5 minutes on one worker (the PC in use for other
+# work), and 9.6 to 11.2 minutes per shard when three shards shared one server, so `postgres` runs it as 3 shards, each
+# with a Postgres service of its own, and 40 minutes each. A ceiling costs nothing unless a job hangs, so these are
+# generous. The first design ran lint, types and every unit test in one 30 minute job that the other jobs waited for:
+# one timeout would have skipped the whole pipeline. `checks` is now only lint, licences and types (about a minute of
+# work after the install), and the browser jobs wait for it alone, so a slow or red unit shard blocks nothing but itself.
+#
+# The default browser suite is 509 tests and took 30.6 minutes on one worker on the development PC; the suite shares
+# fixed ports and kills servers on purpose, so it cannot run in parallel inside one machine. It is split across
+# machines instead: `--shard=i/6` gives each of 6 jobs 71 to 100 tests (shard 3, 71 tests, took 4.5 minutes on that PC
+# with CI=true; a 2-core runner is expected to need two to three times that, plus about 3 minutes of setup). Each shard
+# has 45 minutes. A full run is roughly 6 x 15 to 20 runner-minutes, a pull request about a tenth of that, so pull
+# requests take the smoke subset and the full suite waits for main.
+#
+# Linux against Windows (where the suite was developed):
+#   - No screenshot baselines exist (nothing calls toHaveScreenshot or toMatchSnapshot); screenshots are report
+#     attachments, so there is nothing to re-baseline per platform.
+#   - Measurements are not gates here: the fps and heavy-board runs (navigation-lod-fps, e2e/perf, e2e/spike*) are not
+#     part of `pnpm e2e` (the first skips itself without LOBBY_MEASURE_FPS=1).
+#   - The A3 text-layout probe compares Node's metrics table with a browser's layout. The table was measured on Windows
+#     Chromium; on Linux it is unproven, so that one step is allowed to fail until it has been seen green (below).
+#   - media-video.spec.ts plays H.264, which the Playwright chromium build cannot decode: it runs on the `chrome`
+#     channel (the e2e job installs Google Chrome for it; the runner image normally has one already).
+#   - Office previews run a Node stand-in for soffice (apps/worker/test/children/fake-soffice.ts): no LibreOffice.
+#   - sharp's libvips (LGPL, worker only) is the Linux binary here, the one the worker images use; the licence check
+#     allowlists it by name and version.
+#
+# Allowed to fail (continue-on-error), because they have never run on a runner and a red mark must not block a merge
+# before anyone has looked at them: `audit` (advisories appear on the registry's schedule, not with a change),
+# `xbrowser` (nobody has run WebKit or Firefox against Lobby yet) and the A3 step. They still show red when they fail.
+# Remove the flag from each once it has been green.
+#
+# It has never run (docs/DEPLOY.md, "CI"): it starts when the repository is on GitHub and the owner agrees to the
+# Actions minutes. Actions are pinned to full commit SHAs (tag in the comment) so a moved tag cannot change a build.
 name: CI
 
 on:
@@ -12,13 +69,17 @@ permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  # A newer push to a pull request replaces the older run (one group per pull request). Every push to main gets a group
+  # of its own, because a group holds one running and one pending run and drops older pending ones: a burst of pushes
+  # to main would otherwise lose results.
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  verify:
+  checks:
+    name: Lint, licences, types
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -33,49 +94,302 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Lint
+        run: pnpm lint
+
+      # Production dependency licences of every app (scripts/licence-check.mjs; docs/EXCALIDRAW-MIGRATION.md
+      # section 1 goal 1, section 2.12, D13): no paid or copyleft licence, tldraw only as the five MIT packages inside
+      # packages/tldraw-import (strict since wave 4 part 2, docs/EXCALIDRAW-CUTOVER.md G10). It reads the production
+      # trees of apps/*; @axe-core/playwright and axe-core (MPL-2.0) are e2e dev dependencies and in none of them.
+      - name: Licence check
+        run: pnpm licence:check
+
+      # `pnpm typecheck` runs, besides each package's own tsconfig, apps/sync's tsconfig.node-safe.json (no DOM lib:
+      # a DOM global in the engine core fails) and apps/web/test/engine-probe/tsconfig.json.
+      - name: Typecheck
+        run: pnpm typecheck
+
+  unit:
+    name: Unit and protocol tests (shard ${{ matrix.shard }} of 4)
+    runs-on: ubuntu-24.04
+    # Four shards of 5 to 7 minutes of work on one worker (what a 2-vCPU runner gets) on the development PC; a runner
+    # core is slower, so the ceiling is 30 (see the time budget above)
+    timeout-minutes: 30
+    strategy:
+      # one shard's failure must not hide the others'
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version # 24.19.0
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
       # The worker shells out to ffmpeg/ffprobe, and the fixture generator needs libx264 + libx265
-      # (Ubuntu's ffmpeg has both).
+      # (Ubuntu's ffmpeg has both). Any shard may hold a worker test, so every shard installs it.
       - name: Install ffmpeg
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends ffmpeg
           ffmpeg -hide_banner -version | head -n 1
 
-      - name: Lint
-        run: pnpm lint
-
-      # Production dependency licences of every app (scripts/licence-check.mjs; docs/EXCALIDRAW-MIGRATION.md
-      # §1 goal 1, §2.12, D13): no paid or copyleft licence, tldraw only as the five MIT packages inside
-      # packages/tldraw-import (strict since wave 4 part 2, docs/EXCALIDRAW-CUTOVER.md G10). Linux, so
-      # sharp's libvips binaries are the ones the worker images use.
-      - name: Licence check
-        run: pnpm licence:check
-
-      - name: Typecheck
-        run: pnpm typecheck
-
       - name: Generate test fixtures
         run: pnpm fixtures
 
-      - name: Unit and protocol tests
-        run: pnpm test
+      # Every vitest project, the arrow acceptance tests (formerly `pnpm test:arrows`) and the Node engine probes
+      # included, so no `--project` here: `--shard=i/4` takes every i-th slice of the files of all projects together.
+      # The *.pg.test.ts files skip here: the `postgres` job runs them.
+      - name: Unit and protocol tests (shard ${{ matrix.shard }} of 4)
+        run: pnpm vitest run --shard=${{ matrix.shard }}/4
 
-      # Two browsers: the Playwright chromium headless shell runs everything except @chrome tests;
-      # branded Google Chrome runs the @chrome tests (MP4/H.264 playback, which the shell cannot decode).
-      # `install chrome` installs Google Chrome stable via apt (Playwright elevates with sudo).
-      - name: Install Playwright browsers
+  postgres:
+    name: Database tests on Postgres 18 (shard ${{ matrix.shard }} of 3)
+    runs-on: ubuntu-24.04
+    # 5 to 11 minutes of work per shard on one worker on the development PC; see the time budget above
+    timeout-minutes: 40
+    strategy:
+      # one shard's failure must not hide the others'; each shard has a Postgres service of its own
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
+    services:
+      postgres:
+        # the version the Render database runs (render.yaml postgresMajorVersion)
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: postgres
+          # api tests store emoji (guest names, private notes, cursor labels): the database must be UTF8, as Render's is.
+          # The image's own default is UTF8; saying it here keeps it so. (On a WIN1252 Postgres, three tests fail with 500s.)
+          POSTGRES_INITDB_ARGS: --encoding=UTF8
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      # a database the tests may create and drop schemas in (apps/api/test/*.pg.test.ts); each test uses its own schema
+      DRAFTROOM_TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version # 24.19.0
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      # The whole api project, not only the *.pg.test.ts files: with DRAFTROOM_TEST_DATABASE_URL set, every api test gets
+      # a fresh schema and the migrations on the real server (packages/db/src/testing.ts), so the migrations, the
+      # lock-order and concurrency races, the skip-locked job queue and every route run on a real pg.Pool.
+      - name: Api tests against Postgres (shard ${{ matrix.shard }} of 3)
+        run: pnpm vitest run --project api --shard=${{ matrix.shard }}/3
+
+  probes:
+    name: Engine probes in a browser
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version # 24.19.0
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Install Playwright chromium
+        run: pnpm --filter @draftroom/e2e exec playwright install --with-deps --only-shell chromium
+      # A8's index collision and addFiles keeping the first entry, in a mounted <Excalidraw> of the pinned build
+      - name: Engine probes (A8, addFiles)
+        run: pnpm --filter @draftroom/web probe:engine
+      # A3: Node's text metrics against the browser's layout of 208 labels. Measured on Windows Chromium; unproven on
+      # Linux, so a difference is reported without failing the job until this has been seen green.
+      - name: Text layout probe (A3)
+        continue-on-error: true
+        run: pnpm --filter @draftroom/web probe:layout
+
+  audit:
+    name: Dependency audit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    # advisories appear on the registry's schedule, not with a change: red here is a signal, not a blocked merge
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version # 24.19.0
+      # `pnpm audit --prod` exits 1 on the 5 advisories docs/SECURITY-REVIEW-2026-10-02.md lists (inside
+      # @excalidraw/excalidraw's own pinned dependencies); the script fails only on a high or critical advisory that is
+      # not on its allowlist, or on a known one that moved to another version or route.
+      - name: Audit production dependencies
+        run: pnpm audit:prod
+
+  xbrowser:
+    name: Cross-browser smoke (WebKit, Firefox)
+    needs: checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    # nobody has run Lobby on WebKit or Firefox yet (the dev PC's Windows policy blocks both): a failure here is a
+    # finding to look at, not yet a reason to block a merge
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version # 24.19.0
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Install ffmpeg
         run: |
-          pnpm --filter @draftroom/e2e exec playwright install --with-deps --only-shell chromium
-          pnpm --filter @draftroom/e2e exec playwright install --with-deps chrome
-
-      - name: Browser e2e
-        run: pnpm e2e
-
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg
+      - name: Install Playwright WebKit and Firefox
+        run: pnpm --filter @draftroom/e2e exec playwright install --with-deps webkit firefox
+      - name: Cross-browser smoke
+        run: pnpm --filter @draftroom/e2e xbrowser
       - name: Upload Playwright results
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: playwright-results
+          name: playwright-results-xbrowser
+          path: e2e/test-results
+          retention-days: 7
+          if-no-files-found: ignore
+
+  build-gates:
+    name: Production build, StrictMode and CSP gates
+    needs: checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version # 24.19.0
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Install ffmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg
+      - name: Install Playwright chromium
+        run: pnpm --filter @draftroom/e2e exec playwright install --with-deps --only-shell chromium
+      # the production web build without the dev-auth guard (no facade, no debug handle, no tldraw, no foreign host)
+      - name: Production build gate
+        run: pnpm --filter @draftroom/e2e excalidraw:prod
+      # `vite dev` under React StrictMode: the board must connect once and save
+      - name: StrictMode dev gate
+        run: pnpm --filter @draftroom/e2e excalidraw:dev
+      # the cut-over's Content-Security-Policy on the production build: 0 violations, 0 foreign requests
+      - name: CSP gate
+        run: pnpm --filter @draftroom/e2e csp:cutover
+      - name: Upload Playwright results
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: playwright-results-build-gates
+          path: e2e/test-results
+          retention-days: 7
+          if-no-files-found: ignore
+
+  e2e-smoke:
+    name: Browser e2e smoke (pull requests)
+    if: github.event_name == 'pull_request'
+    needs: checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version # 24.19.0
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Install ffmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg
+      - name: Install Playwright chromium
+        run: pnpm --filter @draftroom/e2e exec playwright install --with-deps --only-shell chromium
+      # sign-in and the dashboard, opening a board, Saved and reloads, the sync durability cases, permissions and the
+      # forged-write refusals, two sessions converging, the axe audit, and the cross-browser smoke on chromium
+      - name: Browser e2e smoke
+        run: >-
+          pnpm --filter @draftroom/e2e exec playwright test --project=chromium
+          excalidraw/dashboard.spec.ts
+          excalidraw/board-open.spec.ts
+          excalidraw/board-reload.spec.ts
+          excalidraw/board-saved.spec.ts
+          excalidraw/permissions-canvas.spec.ts
+          excalidraw/security-negative.spec.ts
+          excalidraw/collab-lifecycle.spec.ts
+          excalidraw/sync-durability.spec.ts
+          excalidraw/a11y-audit.spec.ts
+          excalidraw/xbrowser-smoke.spec.ts
+      - name: Upload Playwright results
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: playwright-results-smoke
+          path: e2e/test-results
+          retention-days: 7
+          if-no-files-found: ignore
+
+  e2e:
+    name: Browser e2e (shard ${{ matrix.shard }} of 6)
+    if: github.event_name == 'push'
+    needs: checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      # one shard's failure must not hide the others'
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version # 24.19.0
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Install ffmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg
+      - name: Generate test fixtures
+        run: pnpm fixtures
+      # Two browsers: the Playwright chromium headless shell runs everything except media-video.spec.ts, which plays
+      # H.264 and so runs on Google Chrome (`install chrome` installs Google Chrome stable via apt; Playwright elevates
+      # with sudo, and the runner image normally has one already).
+      - name: Install Playwright browsers
+        run: |
+          pnpm --filter @draftroom/e2e exec playwright install --with-deps --only-shell chromium
+          pnpm --filter @draftroom/e2e exec playwright install --with-deps chrome
+      - name: Browser e2e (shard ${{ matrix.shard }} of 6)
+        run: pnpm --filter @draftroom/e2e exec playwright test --project=chromium --shard=${{ matrix.shard }}/6
+      - name: Upload Playwright results
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: playwright-results-shard-${{ matrix.shard }}
           path: e2e/test-results
           retention-days: 7
           if-no-files-found: ignore

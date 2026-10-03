@@ -20,6 +20,24 @@ export const buildProbePage = async () => {
   return performance.now() - t0
 }
 
+/**
+ * The probes' offsets inside a run's E2E_PORT_BASE range (a run owns base..base+39). No e2e kit uses these: the stack
+ * takes +1 to +3, the fake OpenAI servers +3, +10 and +23, the link-preview site +30. probe-ports.test.ts scans e2e/ for
+ * a collision, so a new kit that takes one of these fails there.
+ */
+export const PROBE_PORT_OFFSET = { a3: 34, a8: 35, addFiles: 36 } as const
+
+/**
+ * The probe server's port: `--port=N`, else inside this run's E2E_PORT_BASE range (base + `offset`, so runs on one
+ * machine with different bases never collide), else the historical `fallback`.
+ */
+export const probePort = (offset: number, fallback: number): number => {
+  const flag = process.argv.find((a) => a.startsWith('--port='))?.split('=')[1]
+  if (flag) return Number(flag)
+  const base = Number(process.env.E2E_PORT_BASE)
+  return Number.isInteger(base) && base > 0 ? base + offset : fallback
+}
+
 export interface ProbeSession {
   page: import('@playwright/test').Page
   browserVersion: string

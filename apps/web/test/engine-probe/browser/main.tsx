@@ -10,6 +10,7 @@ import '@excalidraw/excalidraw/index.css'
 import { createRoot } from 'react-dom/client'
 import type { CorpusLabel } from '../a3/corpus.ts'
 import { runA8InBrowser } from './a8.ts'
+import { type AddFilesApi, checkAddFiles } from './add-files.ts'
 import { calibrate } from './calibrate.ts'
 import { layoutCorpusInBrowser } from './layout-corpus.ts'
 
@@ -24,6 +25,7 @@ declare global {
       calibrate?: (heldOut: string[], only?: number[]) => ReturnType<typeof calibrate>
       layout?: (labels: CorpusLabel[]) => ReturnType<typeof layoutCorpusInBrowser>
       a8?: () => ReturnType<typeof runA8InBrowser>
+      addFiles?: () => ReturnType<typeof checkAddFiles>
     }
   }
 }
@@ -44,6 +46,7 @@ const onApi = (api: Api) => {
       window.__probe.calibrate = (heldOut, only) => calibrate(new Set(heldOut), only)
       window.__probe.layout = (labels) => layoutCorpusInBrowser(labels)
       window.__probe.a8 = () => runA8InBrowser(api)
+      window.__probe.addFiles = () => checkAddFiles(api as unknown as AddFilesApi)
       window.__probe.ready = true
     } else if (performance.now() - started > 30_000) {
       window.__probe.error = 'Excalidraw did not register its font faces within 30 s'

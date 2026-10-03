@@ -7,7 +7,10 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "typecheck": "tsc -p ."
+    "typecheck": "tsc -p . && tsc -p test/engine-probe/tsconfig.json",
+    "probe:browser": "pnpm run probe:engine && pnpm run probe:layout",
+    "probe:engine": "node test/engine-probe/a8/run-browser.ts && node test/engine-probe/add-files/run-browser.ts",
+    "probe:layout": "node test/engine-probe/a3/run.ts"
   },
   "dependencies": {
     "@clerk/react": "catalog:",

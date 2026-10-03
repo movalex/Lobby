@@ -2,7 +2,7 @@
  * Spike check A3 (plan §8.2): a server-made note matches the browser's layout.
  * Pass: line breaks differ in at most 3 of 208 labels.
  *
- *   node apps/web/test/engine-probe/a3/run.ts [--runs=3] [--port=7750]
+ *   node apps/web/test/engine-probe/a3/run.ts [--runs=3] [--port=7750]   (default: E2E_PORT_BASE + 34 when set)
  *
  * Each run: (1) the Node layout in a fresh plain-node child process, with and without kerning;
  * (2) a fresh headless Chromium lays the same corpus out with Excalidraw's canvas metrics and the
@@ -11,14 +11,14 @@
 import { execFileSync } from 'node:child_process'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
-import { buildProbePage, openProbePage } from '../browser/browser.ts'
+import { buildProbePage, openProbePage, PROBE_PORT_OFFSET, probePort } from '../browser/browser.ts'
 import { buildCorpus, type CorpusLabel } from './corpus.ts'
 import type { LabelLayout } from './layout-labels.ts'
 
 const arg = (name: string, dflt: string) =>
   process.argv.find((a) => a.startsWith(`--${name}=`))?.split('=')[1] ?? dflt
 const runs = Number(arg('runs', '3'))
-const port = Number(arg('port', '7750'))
+const port = probePort(PROBE_PORT_OFFSET.a3, 7750)
 const outDir = fileURLToPath(new URL('../../../../../test-results/engine-probe/', import.meta.url))
 const nodeScript = fileURLToPath(new URL('./node-layout.ts', import.meta.url))
 const MAX_DIFFERING = 3

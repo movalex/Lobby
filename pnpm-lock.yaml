@@ -6,6 +6,9 @@ settings:
 
 catalogs:
   default:
+    '@axe-core/playwright':
+      specifier: 4.13.0
+      version: 4.13.0
     '@biomejs/biome':
       specifier: 2.5.14
       version: 2.5.14
@@ -314,6 +317,9 @@ importers:
 
   e2e:
     devDependencies:
+      '@axe-core/playwright':
+        specifier: 'catalog:'
+        version: 4.13.0(playwright-core@1.63.0)
       '@playwright/test':
         specifier: 'catalog:'
         version: 1.63.0
@@ -425,6 +431,11 @@ packages:
 
   '@antfu/install-pkg@2.1.0':
     resolution: {integrity: sha512-sdg9NxU3zR4Mnawfbc/x6GB5Wf17WYud5qOuEuxXjaKpYpMkISSJEjItGebXJ2bQ4DIcly4NYH23mtkGJjvKUw==}
+
+  '@axe-core/playwright@4.13.0':
+    resolution: {integrity: sha512-6YLx+kxXu5GJceG4ozFg+33a2EMTdjYwWGloJ3sb9Kta5pp+ZNS53uxGVog5JetIY8s++P5UrtX+cri+u0VAVg==}
+    peerDependencies:
+      playwright-core: '>= 1.0.0'
 
   '@biomejs/biome@2.5.14':
     resolution: {integrity: sha512-0FabLIjd4M/dm8VFI86RMaLLdgepzbdfiAL2R8cr7V81OYYrP1w7Z73KfAwPK5h9SrEBXTzNG2y+mBwPo9xRnw==}
@@ -2060,6 +2071,10 @@ packages:
   aws4fetch@1.0.20:
     resolution: {integrity: sha512-/djoAN709iY65ETD6LKCtyyEI04XIBP5xVvfmNxsEP0uJB5tyaGBztSryRr4HqMStr9R06PisQE7m9zDTXKu6g==}
 
+  axe-core@4.13.0:
+    resolution: {integrity: sha512-UzGt8zg7Ny8djbYMhxl2zuEevVa7r2gJjYY5Lwr1xM7+XU2nd6CkIWFTVcCIbAP63vSz71NaVyyuSk9lHKcy0A==}
+    engines: {node: '>=4'}
+
   binary-extensions@2.3.0:
     resolution: {integrity: sha512-Ceh+7ox5qe7LJuLHoY0feh3pHuUDHAcRUeyL2VYghZwfpkNIy/+8Ocg0a3UuSoYzavmylwuLWQOf3hl0jjMMIw==}
     engines: {node: '>=8'}
@@ -3231,6 +3246,11 @@ snapshots:
     dependencies:
       package-manager-detector: 1.8.0
       tinyexec: 1.3.1
+
+  '@axe-core/playwright@4.13.0(playwright-core@1.63.0)':
+    dependencies:
+      axe-core: 4.13.0
+      playwright-core: 1.63.0
 
   '@biomejs/biome@2.5.14':
     optionalDependencies:
@@ -4797,6 +4817,8 @@ snapshots:
       fastq: 1.20.3
 
   aws4fetch@1.0.20: {}
+
+  axe-core@4.13.0: {}
 
   binary-extensions@2.3.0: {}
 
