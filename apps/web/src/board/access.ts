@@ -102,3 +102,52 @@ export function accessActorName(data: unknown): string | null {
 export function freshActorName(hint: { name: string; at: number } | null, now: number): string | null {
   return hint && now - hint.at <= ACCESS_ACTOR_FRESH_MS ? hint.name : null
 }
+
+/**
+ * REVIEW-6: the name of whoever changed my access, held from the `access.changed` event that carried it until
+ * the role-change toast uses it. The server sends the event after every owner's PUT or DELETE of my grant,
+ * also when the grant came out the same (a no-op), and the toast may follow much later (a raise waits for the
+ * socket to reconnect, a change of the workspace role or the board's visibility sends no event at all). So a name
+ * is kept only while it can still be about the change the toast announces: it is dropped as soon as a read of my
+ * role from the server agrees with the role on screen (`settle`: the event changed nothing for me), and
+ * otherwise after `ACCESS_ACTOR_FRESH_MS`.
+ */
+export class AccessActorHint {
+  private held: { name: string; at: number; n: number } | null = null
+  private count = 0
+
+  /**
+   * An `access.changed` event's data arrived: its actor's name replaces any held one (an event with no name
+   * clears it: whoever acted before is not who acted now).
+   */
+  record(data: unknown, now: number): void {
+    const name = accessActorName(data)
+    this.held = name ? { name, at: now, n: ++this.count } : null
+  }
+
+  /** The newest hint's number: a read of my role that starts now can settle every hint up to it (`settle`). */
+  get mark(): number {
+    return this.count
+  }
+
+  /**
+   * A read of my role from the server finished. When it agrees with the role the page shows (`serverRole`
+   * equals `shownRole`) the change the held name was told of changed nothing for me (a grant set to what it
+   * was, one the board's visibility already gave), so the name is dropped now instead of being put on an
+   * unrelated change a minute later. `upTo` is `mark` from before the read started: a hint that came after
+   * it may be about a change the read did not see, and stays.
+   */
+  settle(upTo: number, shownRole: BoardRole, serverRole: BoardRole): void {
+    if (this.held && this.held.n <= upTo && shownRole === serverRole) this.held = null
+  }
+
+  /** The name to put on the toast for a role change now, or null (none held, or it is too old). Keeps it. */
+  fresh(now: number): string | null {
+    return freshActorName(this.held, now)
+  }
+
+  /** The toast used it (or the change it was about is over). */
+  clear(): void {
+    this.held = null
+  }
+}
