@@ -379,7 +379,7 @@ Steps:
 
    The internal URLs, database URL and secrets are wired by the Blueprint.
 5. Click **Deploy Blueprint**.
-6. In the Blueprint's settings, switch to **Manual Sync** (exact location UNVERIFIED).
+6. Switch the Blueprint to **Manual Sync**: Dashboard → the Blueprint → Settings, or through the API, `PATCH /v1/blueprints/<id>` `{"autoSync": false}`. The Blueprint's status then reads `paused`. Staging's `draftroom-staging` (`exs-dasq1060tbcc738hc2m0`) was switched through the API on 2026-10-03; it had been on auto-sync (`autoSync: true`) since 2026-09-28.
 7. Compare the public `onrender.com` hostnames with the places that name them. If Render added a suffix, fix `render.yaml`, re-sync, and **rebuild** the static site. A startup refusal in the api or sync logs names the variable at fault.
    - `PUBLIC_ORIGIN` (api) and `ALLOWED_ORIGINS` (sync): the web hostname;
    - the web `routes` destinations: the api hostname;

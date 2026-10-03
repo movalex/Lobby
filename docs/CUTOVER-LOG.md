@@ -148,3 +148,7 @@ on the sync disk (§6).
 - Caveat: nobody has edited a board since the switch (every board's last offsite copy is the clock-1 copy from 21:03Z on
   2026-10-01), so the watch shows a healthy idle system, not one under use. The owner's real sign-in (§6 step 1) is still the
   check that matters, and it is due before the 48 h window closes at about 2026-10-03 20:55Z.
+- P8 done 2026-10-03 ~04:40Z: the Blueprint `draftroom-staging` was still on auto-sync; it was switched to Manual Sync through
+  the Render API (`autoSync` false, status `paused`; owner pre-approval 2026-10-01). Services' auto-deploy is off (`autoDeployTrigger`
+  off on api, sync and web). The owner's real sign-in check (§6 step 1) passed the same day: 0 Lobby CSP lines (the only console
+  lines came from a browser extension's content script), boards open, edit and reload, two browsers see each other.
