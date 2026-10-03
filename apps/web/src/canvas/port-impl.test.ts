@@ -36,30 +36,33 @@ type El = any
 // biome-ignore lint/suspicious/noExplicitAny: the element package's constructors
 const X = element as any
 
-/** A minimal ExcalidrawImperativeAPI: one element array, replaced by updateScene. */
-function fakeApi(initial: El[]) {
+/** A minimal ExcalidrawImperativeAPI: one element array, replaced by updateScene; app state merged. */
+function fakeApi(initial: El[], state: Record<string, unknown> = {}) {
   let elements: El[] = initial
   let installs = 0
+  let appState: Record<string, unknown> = {
+    currentItemRoughness: 0,
+    currentItemStrokeColor: '#1e1e1e',
+    selectedElementIds: {},
+    zoom: { value: 1 },
+    scrollX: 0,
+    scrollY: 0,
+    width: 1000,
+    height: 800,
+    activeTool: { type: 'selection' },
+    ...state,
+  }
   const api = {
     getSceneElementsIncludingDeleted: () => elements,
     getSceneElementsMapIncludingDeleted: () => new Map(elements.map((e) => [e.id, e])),
     getSceneElements: () => elements.filter((e) => !e.isDeleted),
-    getAppState: () => ({
-      currentItemRoughness: 0,
-      currentItemStrokeColor: '#1e1e1e',
-      selectedElementIds: {},
-      zoom: { value: 1 },
-      scrollX: 0,
-      scrollY: 0,
-      width: 1000,
-      height: 800,
-      activeTool: { type: 'selection' },
-    }),
-    updateScene(u: { elements?: El[] }) {
+    getAppState: () => appState,
+    updateScene(u: { elements?: El[]; appState?: Record<string, unknown> }) {
       if (u.elements) {
         elements = u.elements
         installs++
       }
+      if (u.appState) appState = { ...appState, ...u.appState }
     },
     onScrollChange: () => () => {},
     setActiveTool: () => {},
@@ -71,8 +74,8 @@ function fakeApi(initial: El[]) {
   }
 }
 
-function portOn(initial: El[]) {
-  const f = fakeApi(initial)
+function portOn(initial: El[], state?: Record<string, unknown>) {
+  const f = fakeApi(initial, state)
   const port = createCanvasPort({
     api: f.api as never,
     core: null,
@@ -153,6 +156,63 @@ describe('CanvasPort.transact', () => {
     const { port, elements } = portOn([rect('a', 'a0'), rect('b', 'a1')])
     port.transact('recolour', (tx) => tx.update('a', { strokeColor: '#e03131' }))
     expect(elements().map((e) => e.id)).toEqual(['a', 'b'])
+  })
+})
+
+const arrow = (id: string, index: string, over: El = {}) =>
+  X.newArrowElement({
+    type: 'arrow',
+    id,
+    x: 0,
+    y: 0,
+    points: [
+      [0, 0],
+      [200, 0],
+    ],
+    index,
+    ...over,
+  })
+
+describe('CanvasPort.select (W5-39, CR 3b-11)', () => {
+  it('a lone arrow or line selected by code gets the engine’s point editor, as a click gives it', () => {
+    const line = X.newLinearElement({
+      type: 'line',
+      id: 'l',
+      x: 0,
+      y: 300,
+      points: [
+        [0, 0],
+        [100, 0],
+      ],
+      index: 'a2',
+    })
+    const { api, port } = portOn([arrow('a', 'a0'), rect('r', 'a1'), line])
+    port.select(['a'])
+    const s = () =>
+      api.getAppState() as { selectedLinearElement?: { elementId: string; isEditing: boolean } | null }
+    expect(api.getAppState().selectedElementIds).toEqual({ a: true })
+    expect(s().selectedLinearElement?.elementId).toBe('a')
+    // selected, not opened for point editing (Excalidraw's double-click)
+    expect(s().selectedLinearElement?.isEditing).toBe(false)
+    port.select(['l'])
+    expect(s().selectedLinearElement?.elementId).toBe('l')
+  })
+
+  it('no point editor for anything else: a shape, several elements, a locked connector, nothing', () => {
+    const { api, port } = portOn([arrow('a', 'a0'), rect('r', 'a1'), arrow('k', 'a2', { locked: true })])
+    const editor = () => (api.getAppState() as { selectedLinearElement?: unknown }).selectedLinearElement
+    port.select(['a'])
+    expect(editor()).not.toBeNull()
+    port.select(['r'])
+    expect(editor()).toBeNull()
+    port.select(['a'])
+    port.select(['a', 'r'])
+    expect(editor()).toBeNull()
+    port.select(['k'])
+    expect(editor()).toBeNull()
+    port.select(['a'])
+    port.select([])
+    expect(editor()).toBeNull()
   })
 })
 

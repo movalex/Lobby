@@ -4,12 +4,11 @@
 //    of it is in view, a button appears after a second of rest; it brings the selection, else all content,
 //    into view at no more than the zoom now (tldraw's back-to-content: zoomToBounds with targetZoom
 //    min(1, zoom), 220 ms; immediate under reduced motion, the 3b part's rule).
-//  - The outline of a connector or line this feature selected by code (W5-39): a `?el=` link or a search
-//    result selects the element through `canvas.select`, and Excalidraw draws no box and no point handles
-//    for a lone two-point arrow or line it did not select itself, so the linked connector looked unselected.
-//    While that selection stands, Lobby draws the selection outline (a click on the element makes the
-//    engine's own handles take over: any change of the selection drops it). The port-level fix (`select`
-//    of a lone linear element sets the engine's `selectedLinearElement`) is CR 3b-11 to 2C.
+//  - The outline of the connectors and lines this feature selected by code (W5-39): a `?el=` link or a
+//    search result selects them through `canvas.select`. A lone one gets the engine's own point handles
+//    (CR 3b-11: the port's `select` sets Excalidraw's `selectedLinearElement`, as a click does), so it is
+//    not outlined; in a code selection of several, Excalidraw draws no handles for a two-point arrow or line,
+//    so while that selection stands Lobby draws their outline (any change of the selection drops it).
 import { useEffect, useState } from 'react'
 import type { CanvasFeatureContext } from '../../../../canvas/api/index.ts'
 import { react, untracked, useValue } from '../../../../lib/signals.ts'

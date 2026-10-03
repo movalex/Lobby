@@ -657,6 +657,10 @@ describe('wave 5 review (W5-19, W5-33, W5-39, W5-54)', () => {
     expect(codeSelectionBoxes(f.canvas)).toEqual([{ id: 'a1', x: 92, y: 92, w: 216, h: 16 }])
     f.canvas.select(['a1'])
     expect(codeSelectionBoxes(f.canvas)).toEqual([])
+    // CR 3b-11: a lone connector selected by code has the engine's own point handles, so no outline
+    selectByCode(f.canvas, ['a1'])
+    expect(f.canvas.selection).toEqual(['a1'])
+    expect(codeSelectionBoxes(f.canvas)).toEqual([])
   })
 
   it('W5-54: "Back to content" shows only when the board has content and none of it is in view', () => {

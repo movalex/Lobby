@@ -40,7 +40,11 @@ export function installCodeSelectionReset(canvas: LobbyCanvas): () => void {
   })
 }
 
-/** The outline boxes (overlay pixels) of the linear elements of the code selection, while it stands. */
+/**
+ * The outline boxes (overlay pixels) of the linear elements of the code selection, while it stands. A lone
+ * unlocked connector or line gets none: `select` gives it the engine's own point handles (CR 3b-11), so only
+ * the connectors of a selection of several (which the engine draws no handles for) are outlined.
+ */
 export function codeSelectionBoxes(
   canvas: LobbyCanvas,
 ): { id: string; x: number; y: number; w: number; h: number }[] {
@@ -51,6 +55,7 @@ export function codeSelectionBoxes(
   for (const id of own) {
     const el = canvas.get(id)
     if (!el || el.isDeleted || !LINEAR.has(el.type)) continue
+    if (own.length === 1 && !el.locked) continue
     const b = canvas.bounds(id)
     if (!b) continue
     const tl = canvas.sceneToOverlay({ x: b.x, y: b.y })
