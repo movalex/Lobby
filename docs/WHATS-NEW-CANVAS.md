@@ -11,8 +11,9 @@
 >    (`docs/CUTOVER-LOG.md` §1). If the staff are new to Lobby, cut "What's different" and "Your old boards" and send only "How to do common
 >    things now" and "If something looks wrong".
 > 3. **Fill in:** [WHO TO WRITE TO]; and the sentence about the maintenance window if you would rather not give times.
-> 4. **Checked how.** Every shortcut, menu name and behaviour below was read from the code at `release/held` 99ac6c52, and the steps were
->    run by the specs listed in `docs/DEMO.md` ("Last checked") on 2026-10-03. Nobody has walked this page on staging with a real phone.
+> 4. **Checked how.** Shortcuts and menu names were checked against the code at `release/held` 99ac6c52 (`docs/SHORTCUTS.md`); behaviour against the
+>    e2e specs named in `docs/DEMO.md` ("Last checked", run 2026-10-03) and the wave entries in `docs/PROGRESS.md`. Not every sentence has a test of
+>    its own, and nobody has walked this page on staging with a real phone.
 > 5. **Not promised here, on purpose:** that exports match the old look exactly, that a mouse wheel always zooms, that a phone is as roomy as a laptop.
 
 # What's new on the Lobby canvas
