@@ -312,6 +312,12 @@ export const CATCH_UP_WAIT_MS = 3000
  * counting the writes since, as before rev 11 (the answer is one round trip and one COMMIT away).
  */
 export const RECEIPTS_WAIT_MS = 5000
+/**
+ * Wave D2: how long a reconnect's first flush waits for its socket's `contracts` frame (the room sends it right
+ * behind the welcome and its snapshot and catch-up, so the wait is the time to read those frames). Past it
+ * the flush goes without receipt ids, as before.
+ */
+export const CONTRACTS_WAIT_MS = 2000
 
 /**
  * A lost board-document write whose push's fate its receipt tells (CONTRACTS_REV 11, W5-ENG-2): it never
@@ -667,6 +673,17 @@ export class LobbyEngineCore implements EngineCore {
   } | null = null
   /** CONTRACTS_REV 11: the revision this socket's room announced (its `contracts` frame); null until then */
   private roomRev: number | null = null
+  /**
+   * Wave D2: the revision the last socket's room announced (null: none so far, or the last room sent no
+   * contracts frame), kept across sockets: a reconnect whose room is expected to send one waits for it
+   * before the welcome's flush (`contractsWait`)
+   */
+  private lastRoomRev: number | null = null
+  /**
+   * Wave D2: the timer of a welcome's tail (its flush, the lease messages queued behind it) waiting for this
+   * socket's `contracts` frame, so those pushes carry receipt ids too; null when nothing waits
+   */
+  private contractsWait: unknown = null
   /** this page's receipt id prefix (CONTRACTS_REV 11): a push's id is `<prefix><seq>`, unique per page */
   private readonly ridPrefix =
     `${Math.random().toString(36).slice(2, 10) || 'p'}${Date.now().toString(36).slice(-4)}.`
@@ -773,10 +790,11 @@ export class LobbyEngineCore implements EngineCore {
       this.persistTimer,
       this.catchUpTimer,
       this.lostTimer,
+      this.contractsWait,
     ])
       if (t !== null) this.clearTimer(t)
     this.flushTimer = this.retryTimer = this.presenceTimer = this.persistTimer = this.catchUpTimer = null
-    this.lostTimer = null
+    this.lostTimer = this.contractsWait = null
   }
 
   private onTransportState(state: TransportState, close?: TransportClose): void {
@@ -795,6 +813,15 @@ export class LobbyEngineCore implements EngineCore {
       if (this.lostGate?.receipts && this.lostTimer !== null) {
         this.clearTimer(this.lostTimer)
         this.lostTimer = null
+      }
+      // a welcome's tail waiting for this socket's contracts frame goes with it (the next welcome has its
+      // own), and so do the releases queued behind it: a release while offline is not sent (§2.9.3), and the
+      // next welcome releases what the server still names this tab for
+      if (this.contractsWait !== null) {
+        this.clearTimer(this.contractsWait)
+        this.contractsWait = null
+        for (let i = this.queuedLease.length - 1; i >= 0; i--)
+          if (this.queuedLease[i]?.type === 'lease.release') this.queuedLease.splice(i, 1)
       }
       // an acquire sent and never answered went with the socket (a failed COMMIT answers no lease message
       // of its batch, V1 N7): it is asked again after the next welcome, with its request number
@@ -1896,18 +1923,51 @@ export class LobbyEngineCore implements EngineCore {
     for (const id of this.current.keys())
       if (!this.confirmedMap.has(id) && !this.tracked.has(id) && !this.inflightHas(id)) this.vanish.add(id)
     this.applyScene(all)
-    // lease messages asked for while disconnected go out now, behind any push
-    this.flushNow(true)
-    for (const m of this.queuedLease.splice(0)) this.transport.send(m)
-    // a lease the server still names this tab for, though this tab released it (offline, or in a batch
-    // whose COMMIT failed, V1 N7) or never asked for it (a reload): released now, behind the pushes above,
-    // so the editor's final text lands before anyone else can take the lease
-    const sid = this.welcome?.sid
-    for (const [id, h] of this.holders)
-      if (sid && h.sid === sid && !this.leaseHeld.has(id) && !this.leasePending.has(id))
-        this.transport.send({ type: 'lease.release', id })
+    // CONTRACTS_REV 11 (wave D2): on a reconnect whose room is expected to say its revision, what goes out
+    // now waits for that `contracts` frame (right behind this welcome and its snapshot and catch-up), so its
+    // pushes carry receipt ids. Before, a reconnect's replays went out with none, and when that socket dropped
+    // too before their acks, their fate was counted again. A page's first socket sends at once (no revision
+    // known yet: its first flush carries no receipt ids, as before)
+    if (this.roomRev === null && this.lastRoomRev !== null) this.awaitContracts()
+    else this.sendAfterWelcome()
     this.retryDelay = 0
     this.updateSaved()
+  }
+
+  /** A welcome's tail: everything pushable, the lease messages queued behind it, then the stale releases. */
+  private sendAfterWelcome(): void {
+    // lease messages asked for while disconnected go out now, behind any push
+    this.flushNow(true)
+    const released = new Set<string>()
+    for (const m of this.queuedLease.splice(0)) {
+      this.transport.send(m)
+      if (m.type === 'lease.release') released.add(m.id)
+    }
+    // a lease the server still names this tab for, though this tab released it (offline, or in a batch
+    // whose COMMIT failed, V1 N7) or never asked for it (a reload): released now, behind the pushes above,
+    // so the editor's final text lands before anyone else can take the lease (once: a release queued
+    // behind the contracts wait just went)
+    const sid = this.welcome?.sid
+    for (const [id, h] of this.holders)
+      if (sid && h.sid === sid && !this.leaseHeld.has(id) && !this.leasePending.has(id) && !released.has(id))
+        this.transport.send({ type: 'lease.release', id })
+  }
+
+  /**
+   * Holds the welcome's tail (sendAfterWelcome) until this socket's `contracts` frame (onContracts), or
+   * CONTRACTS_WAIT_MS: pushes and lease messages meanwhile wait behind it, in their order.
+   */
+  private awaitContracts(): void {
+    if (this.contractsWait !== null) this.clearTimer(this.contractsWait)
+    this.contractsWait = this.setTimer(() => {
+      this.contractsWait = null
+      // no contracts frame on this socket: its room says no revision (older than rev 10), so the next
+      // reconnect does not wait for one
+      this.lastRoomRev = null
+      this.log('contracts_wait_timeout', { ms: CONTRACTS_WAIT_MS })
+      if (!this.stopped && this.connected && this.welcome && !this.awaitingSnapshot) this.sendAfterWelcome()
+      this.updateSaved()
+    }, CONTRACTS_WAIT_MS)
   }
 
   /**
@@ -2143,14 +2203,24 @@ export class LobbyEngineCore implements EngineCore {
   /** The room's revision (its `contracts` frame, after every welcome): a rev-11 room is asked for receipts. */
   private onContracts(rev: number): void {
     this.roomRev = rev
+    this.lastRoomRev = rev
     const g = this.lostGate
-    if (g?.receipts !== 'contracts') return
-    if (rev >= RECEIPTS_REV) {
-      g.receipts = null
-      this.askReceipts()
-    } else g.receipts = null
-    this.armLostTimer()
-    this.maybeResolveLost()
+    if (g?.receipts === 'contracts') {
+      if (rev >= RECEIPTS_REV) {
+        g.receipts = null
+        this.askReceipts()
+      } else g.receipts = null
+      this.armLostTimer()
+      this.maybeResolveLost()
+    }
+    // the welcome's tail waited for this frame (awaitContracts): its pushes go now, with receipt ids on a
+    // rev-11 room (none on an older one)
+    if (this.contractsWait !== null) {
+      this.clearTimer(this.contractsWait)
+      this.contractsWait = null
+      if (!this.stopped && this.connected && this.welcome && !this.awaitingSnapshot) this.sendAfterWelcome()
+      this.updateSaved()
+    }
   }
 
   /**
@@ -2813,7 +2883,14 @@ export class LobbyEngineCore implements EngineCore {
       this.flushDue = Number.POSITIVE_INFINITY
     }
     this.dropDeadCreates()
-    if (!this.connected || !this.welcome || this.awaitingSnapshot || this.resyncing) {
+    // (contractsWait: the welcome's tail sends it all once this socket's contracts frame came, wave D2)
+    if (
+      !this.connected ||
+      !this.welcome ||
+      this.awaitingSnapshot ||
+      this.resyncing ||
+      this.contractsWait !== null
+    ) {
       this.schedulePersist()
       this.updateSaved()
       return
@@ -3002,10 +3079,11 @@ export class LobbyEngineCore implements EngineCore {
   }
 
   private sendLease(message: LeaseClientMessage): void {
-    const online = this.connected && !!this.welcome && !this.awaitingSnapshot
+    const online = this.connected && !!this.welcome && !this.awaitingSnapshot && this.contractsWait === null
     // the per-session FIFO (§2.4.3): the create before its acquire, the editor's final push (made while
     // the lease is still held, so its text is not gated) before its release
     if (online) this.flushNow(true)
+    let unasked = false
     if (message.type === 'lease.acquire') {
       this.leaseReq.set(message.req, message.id)
       this.leasePending.add(message.id)
@@ -3015,11 +3093,17 @@ export class LobbyEngineCore implements EngineCore {
       // an acquire of it still waiting for a socket is not asked any more
       for (let i = this.queuedLease.length - 1; i >= 0; i--) {
         const q = this.queuedLease[i] as LeaseClientMessage
-        if (q.type === 'lease.acquire' && q.id === message.id) this.queuedLease.splice(i, 1)
+        if (q.type === 'lease.acquire' && q.id === message.id) {
+          this.queuedLease.splice(i, 1)
+          unasked = true
+        }
       }
     }
     if (online) this.transport.send(message)
     else if (message.type === 'lease.acquire') this.queuedLease.push(message)
+    // connected, the welcome's tail waiting for the contracts frame (wave D2): the release goes behind it, in
+    // order, unless its acquire never went out either
+    else if (this.connected && this.contractsWait !== null && !unasked) this.queuedLease.push(message)
     // a release while offline is not sent: the server lets the lease expire (§2.9.3)
     this.updateSaved()
   }
