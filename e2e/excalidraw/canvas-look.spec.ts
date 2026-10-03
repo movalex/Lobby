@@ -5,6 +5,7 @@
 //  - W5-55: a note being typed into is outlined;
 //  - W5-51: zoomed out to 14 %, no frame name runs into a neighbouring frame;
 //  - R13: on a phone, other people's cursors show without their name tags;
+//  - PLAN-wave4 mermaid stub: a pasted chart definition stays plain text.
 //
 //   E2E_PORT_BASE=<base> pnpm --filter @draftroom/e2e exec playwright test excalidraw/canvas-look.spec.ts
 import type { Page } from '@playwright/test'
@@ -29,6 +30,7 @@ import {
 } from '../tests/support/canvas.ts'
 import { focusBoard, settled } from './board-kit.ts'
 import { waitForCanvasUx } from './canvas-ux-kit.ts'
+import { grantClipboard, writeClipboard } from './navigation-kit.ts'
 
 test.use({ viewport: { width: 1440, height: 900 } })
 
@@ -326,4 +328,26 @@ test('R13: on a phone, other people’s cursors show without their name tags; at
   await a.page.setViewportSize({ width: 1280, height: 800 })
   await expect(cursor.locator('.lobby-cursor__name')).toBeVisible()
   await expect(cursor.locator('.lobby-cursor__name')).toHaveText(b.name)
+})
+
+test('PLAN-wave4 mermaid stub: a pasted chart definition stays plain text (no diagram is made)', async ({
+  canvasSession,
+}) => {
+  const a = await canvasSession('alice')
+  await grantClipboard(a.context)
+  await waitForCanvasUx(a.page)
+  await focusBoard(a.page)
+  const definition = 'graph LR; A-->B'
+  const before = new Set((await items(a.page)).map((e) => e.id))
+  await writeClipboard(a.page, { 'text/plain': definition })
+  const at = await canvasPoint(a.page, 0.4, 0.4)
+  await a.page.mouse.move(at.x, at.y)
+  await a.page.keyboard.press('ControlOrMeta+v')
+  await expect
+    .poll(async () => ((await items(a.page)) as unknown as El[]).filter((e) => !before.has(e.id)).length)
+    .toBeGreaterThan(0)
+  await expectSaved(a.page)
+  const made = ((await items(a.page)) as unknown as El[]).filter((e) => !before.has(e.id))
+  expect(made.map((e) => e.type)).toEqual(['text'])
+  expect(made[0]?.originalText).toBe(definition)
 })

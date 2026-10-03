@@ -180,6 +180,27 @@ test('the build carries no tldraw (packages, classes, the embed allowlist) and n
   expect(hosts.has('clerk.com')).toBe(true) // positive control: the scan read the chunks
 })
 
+/**
+ * Marks of Mermaid and the libraries it brings (PLAN-wave4, the mermaid stub: apps/web/vite.config.ts aliases
+ * @excalidraw/mermaid-to-excalidraw to apps/web/build/mermaid-to-excalidraw-stub.ts). Before the stub the build
+ * carried them in about 90 chunks, three of them in the board route's eager closure.
+ */
+const MERMAID_MARKERS = [
+  'securityLevel',
+  'flowchart-v2',
+  'mermaidAPI',
+  'dagre',
+  'cytoscape',
+  'chevrotain',
+  'langium',
+]
+
+test('the build carries no Mermaid: the engine’s converter is Lobby’s stub (a pasted chart definition stays text)', () => {
+  for (const marker of MERMAID_MARKERS) expect(builtFilesWith(marker), marker).toEqual([])
+  // positive control: the stub is what the engine's import resolves to
+  expect(builtFilesWith('Mermaid diagrams are not available on Lobby boards').length).toBeGreaterThan(0)
+})
+
 test('the static files: self-hosted fonts under /excalidraw-assets/ (200 woff2; 404 for a miss and for Liberation), index.html with no inline script, /theme-boot.js', async ({
   request,
 }) => {

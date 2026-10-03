@@ -1,3 +1,4 @@
+import { fileURLToPath } from 'node:url'
 import react from '@vitejs/plugin-react'
 import { defineConfig, type ProxyOptions } from 'vite'
 import { excalidrawAssets } from './build/excalidraw-assets.ts'
@@ -23,8 +24,18 @@ const proxy: Record<string, ProxyOptions> = {
   '/connect': { target: syncOrigin, ws: true },
 }
 
+/**
+ * PLAN-wave4 (docs/EXCALIDRAW-MIGRATION.md §2.2): the engine's Mermaid converter is never used on a Lobby board
+ * (its dialog is off; a pasted chart definition stays plain text), so it is a stub module and Mermaid, its
+ * parser, d3 and the rest stay out of the build (./build/mermaid-to-excalidraw-stub.ts).
+ */
+export const MERMAID_STUB = fileURLToPath(new URL('./build/mermaid-to-excalidraw-stub.ts', import.meta.url))
+
 export default defineConfig({
   plugins: [react(), excalidrawAssets(), excalidrawHostRewrite()],
+  resolve: {
+    alias: [{ find: /^@excalidraw\/mermaid-to-excalidraw$/, replacement: MERMAID_STUB }],
+  },
   // The board chunk (the Excalidraw engine and Lobby's board page) is about 2 MB minified, lazily loaded.
   build: { chunkSizeWarningLimit: 2200 },
   server: { host: '127.0.0.1', port: Number(process.env.WEB_PORT ?? 5173), strictPort: true, proxy },
