@@ -13,8 +13,9 @@
  * whole face (./export-faces.ts) instead of its bare cover: the export's resolver answers a card's
  * version with a bitmap of the face, made for this export only and released after it.
  *
- * Notes in an SVG (W5-37) get tldraw's soft export shadow instead of the engine's hard offset one
- * (./export-svg-notes.ts).
+ * Notes get tldraw's soft export shadow instead of the engine's hard offset one (W5-37): in an SVG by
+ * ./export-svg-notes.ts, in a bitmap (PNG, PDF pages, copy) by canvas/export/note-shadow.ts, around the
+ * engine's own drawing (CR 3E-7).
  *
  * `copy` does not read the board's export policy: the canvas has no policy store, so every caller checks
  * it first (present-export's commands and dialog, through features/sharing/ported/export-policy.ts), and
@@ -92,7 +93,7 @@ export function createExportPart(deps: PartDeps): LobbyExport {
         : { pixelRatio: Math.max(1, Math.min(4, opts.scale ?? 1)), type: 'image/png' },
     )
     try {
-      return await run({ ...base, resolver: session.resolver })
+      return await run({ ...base, faceOf: session.faceOf })
     } finally {
       session.release()
     }

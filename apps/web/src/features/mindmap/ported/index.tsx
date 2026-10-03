@@ -144,7 +144,7 @@ function mount(ctx: CanvasFeatureContext): () => void {
   const rt = new MindmapRuntime(canvas)
   const uninstall = rt.install()
   const keys = new MindmapKeyboard(rt)
-  const unkeys = keys.install()
+  const unkeys = keys.install(ctx.registries)
   const gate = watchExportPolicy(ctx)
   const m: Mindmap = {
     rt,

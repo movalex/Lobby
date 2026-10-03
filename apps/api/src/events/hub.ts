@@ -21,6 +21,17 @@
 // stream route installs; `endSessions` ends the streams of revoked sessions (logout, sign out
 // everywhere) at once.
 
+/**
+ * REVIEW-6: what ONE person's stream hears, and nobody else's, when someone else changed their access
+ * (a role set or removed). It names who did it so the role-change toast can say whom to ask. The name
+ * is of a person who manages this board's access, sent only to the affected person; `sharing.changed`
+ * stays an identity-free hint for everyone.
+ */
+export const ACCESS_CHANGED_EVENT = 'access.changed'
+
+/** Longest actor name put on the wire (display names are free text). */
+const ACTOR_NAME_MAX = 80
+
 export interface BoardEvent {
   /** Namespaced type, e.g. 'comments.thread', 'workshop.timer'. */
   type: string
@@ -225,6 +236,21 @@ export class EventHub {
       (e) => change.userId === undefined || e.userId === change.userId,
     )
     void this.recheck(affected)
+  }
+
+  /**
+   * REVIEW-6: tells the affected person's streams (only theirs) who changed their access. Call after
+   * the change commits, with the actor from the authenticated session. Nothing is sent when the person
+   * changed their own access: the toast names someone to ask, and that is them.
+   */
+  accessChangedBy(change: { boardId: string; userId: string }, actor: { id: string; name: string }): void {
+    const name = actor.name.trim().slice(0, ACTOR_NAME_MAX)
+    if (!name || actor.id === change.userId) return
+    this.publish(
+      change.boardId,
+      { type: ACCESS_CHANGED_EVENT, data: { actor: { name } } },
+      { to: (userId) => userId === change.userId },
+    )
   }
 
   /**

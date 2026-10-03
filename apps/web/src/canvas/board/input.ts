@@ -235,6 +235,35 @@ export class BoardInput {
     return this.state
   }
 
+  /**
+   * CR-W5-3G-4: a double-tap (touch) on an element, offered to the `input` stream as the `double-click` it
+   * stands for, so a feature that takes a double-click (a file card opens its original, a GIF its player, a frame
+   * its name) takes the tap too, before the lease flow. Only for a tap ON an element: a double-tap on empty canvas
+   * keeps its own meaning (a new text). Returns whether a listener took it (`handled()`).
+   */
+  dispatchDoubleTap(scene: ScenePoint, screen: { x: number; y: number }): boolean {
+    const hit = this.o.hit(scene)
+    if (!hit) return false
+    let handled = false
+    const ev = {
+      type: 'double-click',
+      scene,
+      screen,
+      hit,
+      button: 0,
+      pointerType: 'touch',
+      handled() {
+        handled = true
+      },
+      shift: false,
+      alt: false,
+      ctrl: false,
+      meta: false,
+    } as CanvasInputEvent
+    for (const l of this.o.listeners()) l(ev)
+    return handled
+  }
+
   hasKeyboard(): boolean {
     return this.keyboard
   }
@@ -280,10 +309,29 @@ export class BoardInput {
     if (wysiwyg) scope = this.o.isGrantedEditor(wysiwyg) ? 'editor' : null
     else if (isTextEntry(t)) scope = null
     else if (this.overCanvas(t) && this.o.editor() === 'none') scope = 'canvas'
-    // passive observers (a presentation that ends on any key) see every key over the board
+    // observers (a presentation that ends on any key) see every key over the board, marked when it is
+    // Lobby's own (CR-3D-2: the lease's synthetic Enter / Escape are never trusted events); one that takes
+    // the key (`handled()`) keeps it from the key dispatch below and from the engine (the mind map's
+    // words typed between two topics' editors)
     if (!isTextEntry(t) || wysiwyg) {
-      const ev: CanvasInputEvent = { type: 'key-down', key: e.key, code: e.code, ...mods(e) }
+      let handled = false
+      const ev: CanvasInputEvent = {
+        type: 'key-down',
+        key: e.key,
+        code: e.code,
+        synthetic: !e.isTrusted,
+        composing: e.isComposing,
+        handled() {
+          handled = true
+        },
+        ...mods(e),
+      }
       for (const l of this.o.listeners()) l(ev)
+      if (handled) {
+        e.preventDefault()
+        e.stopPropagation()
+        return
+      }
     }
     if (!scope || e.isComposing) return
     const canvas = this.o.canvas()

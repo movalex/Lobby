@@ -24,6 +24,7 @@ import {
   startCrop,
   startReplace,
 } from './edit-media.tsx'
+import { GifPlayChips, GifPlayerHost, isGifElement, openGifPlayer } from './gif-player.tsx'
 import { insertFiles } from './insert.ts'
 import { linkContentHandler } from './link-cards.tsx'
 import { disposeLocalPreviews } from './local-previews.ts'
@@ -152,7 +153,9 @@ export const feature: CanvasFeature = {
   ],
   overlays: [
     { id: 'media.faces', layer: 'scene', order: 10, pointer: 'none', component: MediaSceneLayer },
+    { id: 'media.gif-chips', layer: 'scene', order: 11, pointer: 'none', component: GifPlayChips },
     { id: 'media.viewer', layer: 'screen', order: 95, pointer: 'none', component: PdfViewerHost },
+    { id: 'media.gif-player', layer: 'screen', order: 95, pointer: 'none', component: GifPlayerHost },
     { id: 'media.alt-text', layer: 'screen', order: 96, pointer: 'none', component: AltTextHost },
   ],
   onMount(ctx) {
@@ -165,6 +168,13 @@ export const feature: CanvasFeature = {
         if (e.type !== 'double-click' || !e.hit || fileItemKind(e.hit) !== 'card') return
         e.handled()
         openOriginal(ctx, e.hit.id, guestOf(ctx))
+      }),
+      // F9: a double-click on a GIF plays it in the player (never Excalidraw's image cropping: Crop is in
+      // the selection bar), for every role
+      ctx.canvas.on('input', (e) => {
+        if (e.type !== 'double-click' || e.button !== 0 || !isGifElement(e.hit)) return
+        e.handled()
+        openGifPlayer(ctx, e.hit.id)
       }),
     ]
     return () => {

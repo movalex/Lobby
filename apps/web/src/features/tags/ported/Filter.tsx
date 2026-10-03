@@ -6,14 +6,15 @@
 // the dimmed shapes did.
 //  - FilterVeil: a `scene` layer (hidden in focus mode: presenting suspends "Show only", as
 //    html[data-dr-presenting] did), drawn above the chips so the others' chips fade too;
-//  - FilterBar: in the tags `screen` layer: "Showing only #Research · 2 items · Show all"; it ends by
-//    itself when the tag leaves the board (someone deleted it everywhere).
+//  - FilterBar: in the tags `screen` layer: "Showing only #Research · 2 items · Zoom to matches · Show
+//    all"; it ends by itself when the tag leaves the board (someone deleted it everywhere). F2-08: "Zoom
+//    to matches" fits the camera to the elements carrying the tag (some may be off screen).
 // Deviation (docs/research/excalidraw/wave3/3D.md): the veil fades by area, so what overlaps a carrier's
 // rectangle shows through its hole, and the other elements fade towards the canvas colour rather than
 // becoming translucent over what lies under them.
 
 import { useEffect, useMemo, useRef } from 'react'
-import type { CanvasFeatureContext } from '../../../canvas/api/index.ts'
+import type { CanvasElement, CanvasFeatureContext } from '../../../canvas/api/index.ts'
 import { computed, useValue } from '../../../lib/signals.ts'
 import { plural } from '../copy.ts'
 import { FilterIcon } from '../icons.tsx'
@@ -21,7 +22,7 @@ import { useIsolated } from '../isolate.ts'
 import { tagsOf } from './bridge.ts'
 import { type ChipBox, chipBoxes, sameBoxes } from './Chips.tsx'
 import { useTagRows } from './hooks.ts'
-import type { BoardTagRow } from './model.ts'
+import { type BoardTagRow, elementTags, isTaggable } from './model.ts'
 import type { TagsRuntime } from './runtime.ts'
 
 /** What the veil lets through around a carrier (scene px), and above a shape for its chips. */
@@ -58,6 +59,28 @@ export function veilHoles(boxes: readonly ChipBox[], key: string): VeilHole[] {
     })
   }
   return out
+}
+
+/** F2-08: the elements "Zoom to matches" brings into view: the visible ones carrying `key`. */
+export function matchingIds(
+  elements: Iterable<CanvasElement>,
+  key: string,
+  isHidden: (id: string) => boolean,
+): string[] {
+  const out: string[] = []
+  for (const el of elements) {
+    if (!isTaggable(el) || isHidden(el.id)) continue
+    if (elementTags(el).some((t) => t.key === key)) out.push(el.id)
+  }
+  return out
+}
+
+/** F2-08: moves the camera to fit the matches of `key`; false when there is nothing visible to go to. */
+export function zoomToMatches(rt: TagsRuntime, key: string): boolean {
+  const ids = matchingIds(rt.canvas.items(), key, (id) => rt.canvas.isHidden(id))
+  if (ids.length === 0) return false
+  rt.canvas.viewport.fit(ids, { animate: true })
+  return true
 }
 
 let veils = 0
@@ -165,6 +188,18 @@ function FilterBarView({ rt, row }: { rt: TagsRuntime; row: BoardTagRow }) {
         </span>
         <span className="dr-tags-filterbar__count"> · {plural(row.count, 'item')}</span>
       </span>
+      <button
+        type="button"
+        className="dr-btn dr-btn--sm dr-tags-filterbar__zoom"
+        data-testid="tag-filter-zoom"
+        title="Move the view to the items with this tag"
+        onClick={() => {
+          zoomToMatches(rt, row.key)
+          rt.canvas.focus({ preventScroll: true })
+        }}
+      >
+        Zoom to matches
+      </button>
       <button
         type="button"
         className="dr-btn dr-btn--sm dr-tags-filterbar__clear"

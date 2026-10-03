@@ -96,6 +96,7 @@ export type {
   SelectionBarItemSpec,
   ToolPointerEvent,
   TopBarItemSpec,
+  TypeToEditSpec,
 } from './registries.ts'
 export { createFeatureRegistries, HOST_SLOTS, MENU_GROUPS } from './registries.ts'
 // CR-3H-1 (3h, wave 3): the checkpoint preview (canvas/preview/**, 3h's; plan §4.6): a read-only bitmap of

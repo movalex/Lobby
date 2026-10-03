@@ -65,6 +65,19 @@ export interface FeatureKeySpec {
   handle(e: KeyEventLike, ctx: CanvasFeatureContext): boolean
 }
 
+/**
+ * CR-3D-3: "a printable key on this selection starts editing it", for elements the allowlist's own
+ * type-to-edit (sticky notes) does not cover (a mind-map topic). Asked by the input layer
+ * (canvas/input/CanvasInput.ts) when exactly one unlocked element is selected and a printable key goes
+ * down: `applies` says whether this feature takes it, `start` starts the edit with that first key and
+ * returns false to leave it to the generic lease flow. Tool letters and other keys come after, as for notes.
+ */
+export interface TypeToEditSpec {
+  readonly id: string
+  applies(elementId: string): boolean
+  start(elementId: string, key: string): boolean
+}
+
 // ---- pointer tools (tldraw's StateNode tools, `root.addChild`) --------------------------------------------------
 
 export interface ToolPointerEvent {
@@ -260,6 +273,8 @@ export interface Provider<F extends (...args: never[]) => unknown> {
 export interface FeatureRegistries extends CanvasRegistries {
   readonly commands: Registry<CommandSpec>
   readonly featureKeys: Registry<FeatureKeySpec>
+  /** CR-3D-3: elements a printable key starts editing besides sticky notes (see TypeToEditSpec) */
+  readonly typeToEdit: Registry<TypeToEditSpec>
   readonly tools: Registry<FeatureToolSpec>
   readonly contextMenu: Registry<MenuEntrySpec>
   readonly mainMenu: Registry<MenuEntrySpec>
@@ -360,6 +375,7 @@ export function createFeatureRegistries(): FeatureRegistries {
     ...core,
     commands: createRegistry<CommandSpec>(changed),
     featureKeys: createRegistry<FeatureKeySpec>(changed),
+    typeToEdit: createRegistry<TypeToEditSpec>(changed),
     tools: createRegistry<FeatureToolSpec>(changed),
     contextMenu: createRegistry<MenuEntrySpec>(changed),
     mainMenu: createRegistry<MenuEntrySpec>(changed),

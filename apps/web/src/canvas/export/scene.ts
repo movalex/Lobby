@@ -32,9 +32,11 @@ import { setPngDensity } from '../../features/present-export/png-density.ts'
 import type { ExportOptions } from '../api/lobby-canvas.ts'
 import { type Derivative, type FileKey, parseFileKey } from '../files/loader.ts'
 import { selfContainedProblems } from './fonts.ts'
+import { softNoteShadows } from './note-shadow.ts'
 import {
   EXPORT_BOUNDS_FRAME_ID,
   type ExportPlan,
+  exportFrameRendering,
   exportScale,
   type PlanRect,
   planExport,
@@ -59,6 +61,12 @@ export interface SceneExportContext {
   /** collapsed mind-map branches: never exported (render overrides do not change exports) */
   readonly isHidden: (id: string) => boolean
   readonly fetchImpl?: (url: string) => Promise<Response>
+  /**
+   * CR 3E-5: the face of a file card, asked before any URL is resolved (a PDF, video or Office card has no
+   * drawable original; the export draws its whole face, ../api/parts/export-faces.ts). `null`: no face
+   * (no DOM, a failed draw): the card's cover is used, as for any other file.
+   */
+  readonly faceOf?: (el: ExcalidrawElement & { fileId: string }, key: FileKey) => Promise<Blob | null>
 }
 
 export interface SceneExportOptions extends ExportOptions {
@@ -137,7 +145,16 @@ export async function exportFiles(
     const have = runtime[fileId]
     let blob: Blob | null = null
     let mime: string | null = null
-    const src = await sourceUrl(ctx, el, source)
+    // CR 3E-5: a card's face first, whatever the source (a face is made for this export only)
+    const key = ctx.faceOf ? parseFileKey(fileId) : null
+    if (ctx.faceOf && key) {
+      const face = await ctx.faceOf(el, key).catch(() => null)
+      if (face) {
+        blob = face
+        mime = face.type || 'image/png'
+      }
+    }
+    const src = blob ? null : await sourceUrl(ctx, el, source)
     if (src) {
       try {
         const res = await doFetch(src.url)
@@ -228,6 +245,7 @@ function prepare(ctx: SceneExportContext, opts: SceneExportOptions): PreparedExp
     viewBackgroundColor: LIGHT_BACKGROUND,
     exportWithDarkMode: opts.theme === 'dark',
     exportEmbedScene: false,
+    frameRendering: exportFrameRendering(ctx.api.getAppState()?.frameRendering),
   }
   // no `link` reaches the exporter (select.ts withoutLinks, XSS-F1): the export's own copies
   if (plan.kind === 'frame')
@@ -282,6 +300,9 @@ export async function exportSceneCanvas(
   if (p.plan.kind === 'elements' && p.elements.length === 0) throw new Error('export: nothing to export')
   const files = await exportFiles(ctx, p.elements, opts.files ?? 'original', 'blob')
   let drawn = 1
+  // W5-37 (CR 3E-7): notes get the SVG export's soft shadow, on this export's canvas only (./note-shadow.ts)
+  const shadows = softNoteShadows()
+  shadows.begin()
   try {
     const canvas = await exportToCanvas({
       elements: p.elements,
@@ -290,6 +311,7 @@ export async function exportSceneCanvas(
       exportPadding: p.padding,
       exportingFrame: p.exportingFrame as never,
       getDimensions: (width: number, height: number) => {
+        shadows.markExportCanvas()
         drawn = exportScale(width, height, {
           ...(opts.scale !== undefined ? { scale: opts.scale } : {}),
           ...(opts.maxSide !== undefined ? { maxSide: opts.maxSide } : {}),
@@ -303,6 +325,7 @@ export async function exportSceneCanvas(
     })
     return { canvas, scale: drawn }
   } finally {
+    shadows.end()
     files.release()
   }
 }

@@ -7,13 +7,14 @@ import { type ReactNode, type RefObject, useLayoutEffect, useRef, useState } fro
 import { flushSync } from 'react-dom'
 import { UserMenu } from '../auth/UserMenu.tsx'
 import { Mark } from '../brand/Wordmark.tsx'
+import { useIsGuest } from '../invite/guest.tsx'
 import { type BoardRole, can } from '../lib/permissions.ts'
 import { linkClick, workspacePath } from '../lib/routing.ts'
 import { SaveStatus, type SaveStatusView } from '../sync-quality/SaveStatus.tsx'
 import { OverflowMenu } from '../ui/OverflowMenu.tsx'
 import { RenameInput } from '../ui/RenameInput.tsx'
 import { useTopBarWidth } from '../ui/useMedia.ts'
-import { readonlyPill } from './access.ts'
+import { readonlyPill, shareButtonView } from './access.ts'
 import {
   compactValue,
   firstFittingLevel,
@@ -78,6 +79,8 @@ export function TopBarFrame({
 }: TopBarFrameProps) {
   const home = workspacePath(workspace.id)
   const pill = readonlyPill(role, board.status)
+  // DANA-11 / F14 / PRI-18: viewers, commenters and guests cannot hand out access: "People", not primary.
+  const share = shareButtonView(role, useIsGuest())
   const pillIcon = board.status !== 'archived' && can(role, 'comment', board.status) ? 'comment' : 'eye'
   // PRI-02: at 768 px and below the feature controls (present, export, timer, sharing badge) move
   // into a "⋯" menu; at 480 px and below the people list and the account button do too. The title,
@@ -196,9 +199,11 @@ export function TopBarFrame({
       )}
       <button
         type="button"
-        className="dr-btn dr-btn--primary dr-btn--sm dr-topbar__share"
+        className={`dr-btn ${share.primary ? 'dr-btn--primary ' : ''}dr-btn--sm dr-topbar__share`}
         data-testid="share-button"
-        aria-label="Share"
+        data-variant={share.primary ? 'share' : 'people'}
+        aria-label={share.label}
+        title={share.primary ? undefined : share.title}
         onClick={onShare}
       >
         <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true">
@@ -210,7 +215,7 @@ export function TopBarFrame({
             strokeLinecap="round"
           />
         </svg>
-        <span className="dr-topbar__share-label">Share</span>
+        <span className="dr-topbar__share-label">{share.label}</span>
       </button>
     </header>
   )

@@ -804,9 +804,14 @@ test('private notes: a guest cannot start a brainstorm, but writes in one (SEAM-
     await page.getByTestId('invite-guest-join').click()
     await expect(page).toHaveURL(/\/b\/[a-z0-9-]+$/, { timeout: 30_000 })
     await waitForWorkshopBoard(page)
+    // DANA-11 (wave C3): a guest has the workshop tools only while a session runs, so a timer runs for this check
+    expect(
+      (await post(alice, `/api/boards/${board}/timer`, { action: 'start', durationMs: 5 * 60_000 })).status(),
+    ).toBe(200)
     const guestTools = await openWorkshopPopover(page)
     await expect(guestTools.getByTestId('pn-start')).toHaveCount(0)
     await closeWorkshopPopover(page)
+    expect((await post(alice, `/api/boards/${board}/timer`, { action: 'stop' })).status()).toBe(200)
     await startBrainstorm(bob.page, {
       prompt: 'What would make the trailer unmissable?',
       anonymous: true,

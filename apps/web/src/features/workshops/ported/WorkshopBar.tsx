@@ -5,6 +5,7 @@
 // Controls are hidden for people who cannot facilitate; the API refuses them anyway.
 import { useEffect, useId, useRef, useState } from 'react'
 import type { CanvasFeatureContext } from '../../../canvas/api/index.ts'
+import { useIsGuest } from '../../../invite/guest.tsx'
 import { useValue } from '../../../lib/signals.ts'
 import { installAudioUnlock, playChime, readMuted, writeMuted } from '../chime.ts'
 import {
@@ -18,9 +19,11 @@ import {
   timerRemainingMs,
 } from '../countdown.ts'
 import { HandsChip, HandsSection } from '../Hands.tsx'
+import { usePrivateNotes } from '../private-notes/hooks.ts'
 import type { WorkshopStore } from '../store.ts'
 import { canEditBoard, useIsFacilitator, useNow, useWorkshop } from '../workshop-context.ts'
 import { summonScreen } from './camera.ts'
+import { showTimerButton, workshopActivity } from './guest-chrome.ts'
 import { PrivateNotesChip, PrivateNotesSection } from './private-notes/PrivateNotesBar.tsx'
 import { ReactionControl } from './Reactions.tsx'
 import { workshopSettingsOf, writeWorkshopSettings } from './session-settings.ts'
@@ -48,6 +51,9 @@ export function StopwatchIcon({ size = 14 }: { size?: number }) {
 export function WorkshopBar({ ctx }: { ctx: Ctx }) {
   const { store, snap } = useWorkshop(ctx)
   const facilitator = useIsFacilitator(ctx)
+  const guest = useIsGuest()
+  const brainstorming = usePrivateNotes(ctx).snap.session !== null
+  const sessionSettings = useValue('dr-wk-bar-settings', () => workshopSettingsOf(ctx.canvas), [ctx.canvas])
   const [open, setOpen] = useState(false)
   /** Which section the popover should bring into view and focus when it opens (null = the first). */
   const [focusSection, setFocusSection] = useState<'hands' | null>(null)
@@ -120,6 +126,22 @@ export function WorkshopBar({ ctx }: { ctx: Ctx }) {
   const vote = snap.vote
   const voteOpen = vote?.session.status === 'open'
   const shown = display === 'running' || display === 'paused' || display === 'finished'
+  // DANA-11 / F14 / PRI-18: a guest sees the Timer button only while a session is running (./guest-chrome.ts);
+  // an open popover stays until it is closed.
+  const timerButton =
+    open ||
+    showTimerButton(
+      guest,
+      workshopActivity({
+        timer: snap.timer,
+        vote: snap.vote !== null,
+        brainstorm: brainstorming,
+        hands: snap.hands.length,
+        settings: sessionSettings,
+        now,
+        offsetMs: offset,
+      }),
+    )
   const label = shown
     ? `Timer: ${display === 'finished' ? "time's up" : `${describeClock(remaining)} left${display === 'paused' ? ', paused' : ''}`}. Workshop tools`
     : display === 'ended'
@@ -128,31 +150,33 @@ export function WorkshopBar({ ctx }: { ctx: Ctx }) {
 
   return (
     <div className="dr-wk-bar" ref={wrap}>
-      <button
-        ref={pill}
-        type="button"
-        className="dr-wk-pill"
-        data-testid="timer-pill"
-        data-state={display}
-        aria-haspopup="dialog"
-        aria-expanded={open}
-        aria-controls={open ? popId : undefined}
-        aria-label={label}
-        title={label}
-        onClick={() => {
-          setFocusSection(null)
-          setOpen((o) => !o)
-        }}
-      >
-        <StopwatchIcon />
-        {shown ? (
-          <span className="dr-wk-pill__time" data-testid="timer-remaining">
-            {formatClock(remaining)}
-          </span>
-        ) : (
-          <span className="dr-wk-pill__label">Timer</span>
-        )}
-      </button>
+      {timerButton && (
+        <button
+          ref={pill}
+          type="button"
+          className="dr-wk-pill"
+          data-testid="timer-pill"
+          data-state={display}
+          aria-haspopup="dialog"
+          aria-expanded={open}
+          aria-controls={open ? popId : undefined}
+          aria-label={label}
+          title={label}
+          onClick={() => {
+            setFocusSection(null)
+            setOpen((o) => !o)
+          }}
+        >
+          <StopwatchIcon />
+          {shown ? (
+            <span className="dr-wk-pill__time" data-testid="timer-remaining">
+              {formatClock(remaining)}
+            </span>
+          ) : (
+            <span className="dr-wk-pill__label">Timer</span>
+          )}
+        </button>
+      )}
       {voteOpen && snap.ballot && (
         <button
           type="button"

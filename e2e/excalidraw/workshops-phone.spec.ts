@@ -144,6 +144,9 @@ test('R2 R3 R4 R5 R6 W5-07: guests take part but never facilitate; a brainstorm 
     const { page: guest } = await guestOn(browser, await guestLinkUrl(alice, board), 'Kai', opened)
 
     await test.step('R3: the guest’s workshop tools have no facilitator controls; the API refuses them too', async () => {
+      // DANA-11 (wave C3): a guest has the Timer button only while a session runs, so a timer runs for this check
+      await ok(post(alice, `/api/boards/${board}/timer`, { action: 'start', durationMs: 5 * 60_000 }))
+      await expect(guest.getByTestId('timer-floating')).toBeVisible()
       await guest.getByTestId('topbar-overflow').click()
       await guest.getByTestId('timer-pill').click()
       const pop = guest.getByTestId('workshop-popover')
@@ -170,6 +173,8 @@ test('R2 R3 R4 R5 R6 W5-07: guests take part but never facilitate; a brainstorm 
       const bobPop = await openWorkshopPopover(bob.page)
       await expect(bobPop.getByTestId('pn-start')).toBeVisible()
       await bob.page.keyboard.press('Escape')
+      await ok(post(alice, `/api/boards/${board}/timer`, { action: 'stop' }))
+      await expect(guest.getByTestId('timer-floating')).toHaveCount(0)
     })
 
     await test.step('R2/R4: alice starts a timer and a brainstorm; bob and the phone guest are asked to write', async () => {

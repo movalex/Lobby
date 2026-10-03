@@ -26,7 +26,13 @@ import {
 import { api, isApiError, isNoAccess } from '../../api/client.ts'
 import { AssetMetaStore } from '../../assets/meta-store.ts'
 import { useMe, useSession } from '../../auth/session.tsx'
-import { blockedEditHint, isReadonlyRole, roleChangeNotice } from '../../board/access.ts'
+import {
+  accessActorName,
+  blockedEditHint,
+  freshActorName,
+  isReadonlyRole,
+  roleChangeNotice,
+} from '../../board/access.ts'
 import type { NoticeInput } from '../../board/board-context.ts'
 import { NoticeRegion, useNotices } from '../../board/Notices.tsx'
 import { SyncErrorScreen } from '../../board/SyncErrorScreen.tsx'
@@ -286,6 +292,14 @@ function LobbyBoardScreen({
     () => session.snapshot,
   )
   useRegistries(session.registries)
+  // A feature whose dock tabs depend on state the page cannot see (workshops: a guest sees Voting and
+  // Private notes only while a session runs) says so with this window event: the dock is drawn again.
+  const [, setPanelsTick] = useState(0)
+  useEffect(() => {
+    const bump = () => setPanelsTick((n) => n + 1)
+    window.addEventListener('lobby:panels-changed', bump)
+    return () => window.removeEventListener('lobby:panels-changed', bump)
+  }, [])
   const settings = useSyncExternalStore(
     (l) => session.settings.subscribe(l),
     () => session.settings.get(),
@@ -459,11 +473,27 @@ function LobbyBoardScreen({
 
   // PRI-09b: my role changed while the board is open; a sharing event re-reads it and applies a LOWER
   // one at once (a higher one waits for the socket to reconnect with it).
+  // REVIEW-6: the server tells ME (and nobody else) who changed my access; the toast names them.
   const announcedRole = useRef(role)
+  const accessActor = useRef<{ name: string; at: number } | null>(null)
   useEffect(() => {
-    const text = roleChangeNotice(announcedRole.current, role)
+    if (!events) return
+    return events.on('access.changed', (data) => {
+      const name = accessActorName(data)
+      accessActor.current = name ? { name, at: Date.now() } : null
+    })
+  }, [events])
+  useEffect(() => {
+    const text = roleChangeNotice(
+      announcedRole.current,
+      role,
+      freshActorName(accessActor.current, Date.now()),
+    )
     announcedRole.current = role
-    if (text) notify({ key: 'role-changed', text, testId: 'role-change-toast', timeoutMs: 8000 })
+    if (text) {
+      accessActor.current = null
+      notify({ key: 'role-changed', text, testId: 'role-change-toast', timeoutMs: 8000 })
+    }
   }, [role, notify])
   const roleNow = useRef(role)
   roleNow.current = role

@@ -75,9 +75,23 @@ export interface CanvasInputOptions {
    * the clipboard itself (the selection's text).
    */
   copyReadOnly?: (data: DataTransfer) => boolean
+  /**
+   * CR-3D-3: a feature's type-to-edit rule (the page's `registries.typeToEdit`): which selected element a
+   * printable key starts editing besides sticky notes (a mind-map topic), and how it starts. `start` returns
+   * false to leave the key to the generic lease flow.
+   */
+  typeToEdit?: {
+    applies(id: string): boolean
+    start(id: string, key: string): boolean
+  }
   /** Lobby's upload path for dropped files (editors). */
   onDrop?: (e: DragEvent) => void
   onContextMenu?: (e: MouseEvent) => void
+  /**
+   * CR-W5-3G-4: a double-tap on an element, offered to the features first (the page's `input` stream as a
+   * `double-click`): true when one took it, and no lease request follows. Not asked for empty canvas.
+   */
+  onDoubleTap?: (scene: { x: number; y: number }, screen: { x: number; y: number }) => boolean
   /** A double-click / double-tap on empty canvas (editors): Lobby creates a text there. */
   onEmptyDoubleClick?: (scene: { x: number; y: number }) => void
   onDeny?: (leaseId: string, holderName: string) => void
@@ -313,6 +327,8 @@ export class CanvasInput {
       singleTextTarget:
         !!only && (only.type === 'text' || only.type === 'arrow' || TEXT_CONTAINERS.has(only.type)),
       singleNote: !!only && only.type === 'stickynote' && !only.locked,
+      typeToEdit: !!only && !only.locked && !!this.opts.typeToEdit?.applies(only.id),
+      cropping: !!this.api?.getAppState().croppingElementId,
     }
   }
 
@@ -391,6 +407,14 @@ export class CanvasInput {
     if (action === 'editText' || action === 'typeToEdit') {
       const only = this.selected()[0]
       if (!only || !editor) return
+      // CR-3D-3: a feature that owns type-to-edit for this element starts the edit itself (a mind-map topic
+      // keeps the keys typed while its editor opens)
+      if (
+        action === 'typeToEdit' &&
+        this.opts.typeToEdit?.applies(only.id) &&
+        this.opts.typeToEdit.start(only.id, e.key)
+      )
+        return
       editor.requestEdit(only.id, {
         reason: action === 'editText' ? 'P1-enter' : 'P2-type',
         caretEnd: true,
@@ -428,6 +452,12 @@ export class CanvasInput {
 
   private readonly onDblClick = (e: MouseEvent): void => {
     if (this.opts.interceptDoubleClicks === false || !this.api) return
+    // CR-W5-3G-4: a double-click a feature already took (`handled()` on the input stream stops and prevents
+    // it) never starts the lease flow, however it got here
+    if (e.defaultPrevented) {
+      this.trace('dblclick', { verdict: 'handled' })
+      return
+    }
     const s = this.api.getAppState()
     const scene = this.toScene(e.clientX, e.clientY)
     const view = {
@@ -481,6 +511,11 @@ export class CanvasInput {
     const scene = this.toScene(verdict.clientX, verdict.clientY)
     if (this.opts.isBlocked?.(scene)) {
       this.trace('doubletap-blocked', {})
+      return
+    }
+    // CR-W5-3G-4: a feature that takes a double-click on this element takes the double-tap too
+    if (this.opts.onDoubleTap?.(scene, { x: verdict.clientX, y: verdict.clientY })) {
+      this.trace('doubletap-handled', {})
       return
     }
     this.editAt(scene.x, scene.y, 'P4-doubletap', false)

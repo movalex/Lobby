@@ -284,14 +284,16 @@ test('FIL-04 a 12-page PDF: the viewer says plainly that only the first 8 pages 
   await expect(viewerPage(v.page)).toHaveAttribute('data-page', '8')
   await expect.poll(() => naturalSize(viewerPage(v.page)).then((s) => s.w)).toBe(1024)
 
-  // Read-only: selecting works, placing does not (and the sync server would refuse the write).
-  await selectBox(v.page, 1).click({ modifiers: [] })
-  await selectBox(v.page, 4).click({ modifiers: ['Shift'] })
-  await expect(v.page.getByTestId('pdf-viewer-selection')).toHaveText('4 pages selected')
-  await expect(v.page.getByTestId('pdf-viewer-place')).toBeDisabled()
-  await expect(v.page.getByTestId('pdf-viewer-readonly')).toHaveText(
-    'You can view this board but not add to it.',
-  )
+  // Read-only (F5, wave C3): no page checkboxes, selection summary or footer, so nothing here can place a page
+  // (and the sync server would refuse the write anyway); the page list and the pager still work.
+  for (const id of [
+    'pdf-viewer-select',
+    'pdf-viewer-selection',
+    'pdf-viewer-select-all',
+    'pdf-viewer-place',
+    'pdf-viewer-readonly',
+  ])
+    await expect(v.page.getByTestId(id), id).toHaveCount(0)
 
   await v.page.keyboard.press('Escape')
   await expect(viewer(v.page)).toHaveCount(0)

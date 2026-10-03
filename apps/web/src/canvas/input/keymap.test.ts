@@ -225,6 +225,50 @@ describe('classifyKey: editors, no text editor open (§2.3.3)', () => {
   })
 })
 
+describe('classifyKey: ending a crop with Enter (CR-W5-3G-4)', () => {
+  it('Enter reaches Excalidraw while its crop editor is open: it ends the crop, as Escape does', () => {
+    expect(classifyKey(k('Enter'), { ...EDITOR, cropping: true })).toEqual({ kind: 'delegate' })
+    expect(classifyKey(k('Escape'), { ...EDITOR, cropping: true })).toEqual({ kind: 'delegate' })
+    // even with a text target selected: a crop is on an image, but the key is the crop's while it is open
+    expect(classifyKey(k('Enter'), { ...EDITOR, cropping: true, singleTextTarget: true })).toEqual({
+      kind: 'delegate',
+    })
+  })
+
+  it('with no crop open Enter on a selected image stays blocked: Excalidraw would start its own crop', () => {
+    expect(classifyKey(k('Enter'), EDITOR).kind).toBe('block')
+    expect(classifyKey(k('Enter'), { ...EDITOR, cropping: false }).kind).toBe('block')
+  })
+
+  it('only a plain Enter: modified Enter, a read-only role and a composing Enter never end a crop', () => {
+    const open = { ...EDITOR, cropping: true }
+    expect(classifyKey(k('shift+Enter'), open).kind).toBe('block')
+    expect(classifyKey(k('mod+Enter'), open).kind).toBe('block')
+    expect(classifyKey(k('Enter', { isComposing: true }), open).kind).toBe('block')
+    expect(classifyKey(k('Enter'), { ...READONLY, cropping: true }).kind).toBe('block')
+  })
+})
+
+describe('classifyKey: type-to-edit for a feature’s element (CR-3D-3)', () => {
+  const topic = { ...EDITOR, typeToEdit: true }
+  it('a printable key on the one selected element a feature takes is type-to-edit, before tool letters', () => {
+    for (const spec of ['a', 'shift+a', 'r', 'n', '1', '?', 'é'])
+      expect(kind(classifyKey(k(spec), topic)), spec).toBe('lobby:typeToEdit')
+  })
+
+  it('leaves Space, brackets, chords and every other key as they were', () => {
+    expect(kind(classifyKey(k(' '), topic))).toBe('delegate')
+    expect(kind(classifyKey(k('mod+d'), topic))).toBe('delegate')
+    expect(kind(classifyKey(k('ArrowRight'), topic))).toBe('delegate')
+    expect(classifyKey(k('Enter'), topic).kind).toBe('block')
+  })
+
+  it('without the feature’s rule a tool letter picks its tool; a read-only role never types into anything', () => {
+    expect(kind(classifyKey(k('r'), EDITOR))).toBe('lobby:tool:rectangle')
+    expect(classifyKey(k('a'), { ...READONLY, typeToEdit: true }).kind).toBe('block')
+  })
+})
+
 describe('classifyKey: the text editor', () => {
   const granted: KeyContext = { ...EDITOR, editor: 'granted', inTextEditor: true }
   it('delegates every key to the textarea once the lease is granted, Ctrl+Z / Ctrl+Y / Ctrl+A included', () => {

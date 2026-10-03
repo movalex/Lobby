@@ -8,8 +8,8 @@
 //     server re-checks the version against the board's workspace). An image stays an image (a cropped
 //     one, a template slot's photo, is cropped again to the same box); a card takes any other file. The
 //     uploading tab shows the new picture at once (local-previews.ts).
-//   - Crop: Excalidraw's own crop editor (its corner handles; Escape or a click elsewhere ends it; Enter
-//     is the board's, CR-W5-3G-4),
+//   - Crop: Excalidraw's own crop editor (its corner handles; Escape, Enter or a click elsewhere ends it:
+//     the key allowlist lets Enter through while a crop is open, CR-W5-3G-4),
 //     opened through `files.crop` (CR-W5-3G-1), which first puts the image back on its thumb: a crop is
 //     written in the pixels of the thumb every tab loads, and a cropped image never switches to the
 //     2,048 px rendering (canvas/api/parts/files.ts).
@@ -255,7 +255,7 @@ export function startCrop(ctx: CanvasFeatureContext, ids: readonly string[] = ct
     ctx.canvas.focus()
     ctx.notify({
       key: 'media-crop',
-      text: 'Drag the corners to crop. Press Escape or click outside the image when done.',
+      text: 'Drag the corners to crop. Press Enter or Escape, or click outside the image, when done.',
       testId: 'media-crop-hint',
     })
   }

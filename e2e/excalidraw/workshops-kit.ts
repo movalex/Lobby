@@ -127,7 +127,9 @@ export interface JoinOptions {
 export async function waitForWorkshopBoard(page: Page) {
   await expect(page.getByTestId('lobby-board')).toHaveAttribute('data-engine', 'excalidraw')
   await waitForCanvas(page)
-  await expect(page.getByTestId('timer-pill')).toHaveAttribute('data-state', /.+/)
+  // DANA-11 (wave C3): a guest has no Timer button while no session runs, so the bar's reactions button (there for
+  // everyone, on phones inside the closed "⋯" menu) is what says the workshop bar is up
+  await expect(page.getByTestId('reactions-button')).toBeAttached()
 }
 
 async function openInstrumented(
