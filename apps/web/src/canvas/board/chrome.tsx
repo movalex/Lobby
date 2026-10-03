@@ -23,7 +23,7 @@ import type { LobbyCanvas } from '../api/lobby-canvas.ts'
 import type { FeatureOverlaySpec, FeatureRegistries, HostSlotName } from '../api/registries.ts'
 import type { EditNotice, EditState } from '../lease/editorLease.ts'
 import { arrowPaths } from '../presence/drag-arrows.ts'
-import { type AvoidRect, type EdgeMarker, edgeMarkers } from './edge-markers.ts'
+import { type AvoidRect, EDGE_CHIP_RADIUS, type EdgeMarker, edgeMarkers } from './edge-markers.ts'
 import type { LobbyBoardSession } from './session.ts'
 
 // ---- the dock ---------------------------------------------------------------------------------------------
@@ -496,14 +496,23 @@ interface EdgeMarkerView extends EdgeMarker {
  * never placed under it.
  */
 function cornerControls(): AvoidRect[] {
-  let phone = false
-  try {
-    phone = typeof window !== 'undefined' && window.matchMedia?.('(max-width: 600px)').matches === true
-  } catch {
-    // no media queries (a test): the desktop layout
-  }
-  return [{ x: 0, y: 0, w: phone ? 100 : 56, h: 56 }]
+  return [{ x: 0, y: 0, w: mediaMatches('(max-width: 600px)') ? 100 : 56, h: 56 }]
 }
+
+/** A media query that matches now (false without media queries: a test, an old browser). */
+function mediaMatches(query: string): boolean {
+  try {
+    return typeof window !== 'undefined' && window.matchMedia?.(query).matches === true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Half a chip's width on the edge, arrow included (board.css `.lobby-edge-marker`): a 44 px touch target
+ * (its 22 px radius and the 9 px arrow) for a finger, 24 px for a mouse.
+ */
+const chipRadius = () => (mediaMatches('(pointer: coarse)') ? 31 : EDGE_CHIP_RADIUS)
 
 const SIDE_WORDS = { left: 'to the left', right: 'to the right', top: 'above', bottom: 'below' } as const
 
@@ -537,7 +546,7 @@ function EdgeMarkers({
       // the canvas's size on screen, from the camera (which changes with the canvas's size)
       { w: v.width * v.zoom, h: v.height * v.zoom },
       (p) => canvas.sceneToOverlay(p),
-      { avoid: cornerControls() },
+      { avoid: cornerControls(), chipRadius: chipRadius() },
     )
     const bySid = new Map(peers.map((p) => [p.sid, p]))
     return found.flatMap((m) => {

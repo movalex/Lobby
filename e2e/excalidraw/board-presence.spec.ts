@@ -22,6 +22,7 @@ import {
   viewport,
   waitForItem,
 } from '../tests/support/canvas.ts'
+import { openPhoneSession } from './a11y-kit.ts'
 import { emptyCanvasPoint } from './board-kit.ts'
 
 const avatar = (s: CanvasSession, of: CanvasSession) =>
@@ -333,8 +334,10 @@ test('W5-32: a person who is off screen has a chip on the canvas edge pointing t
     expect(m.y + m.height).toBeLessThanOrEqual(c.y + c.height)
     expect(await marker.evaluate((el) => getComputedStyle(el).backgroundColor)).not.toBe('rgba(0, 0, 0, 0)')
     await expect(marker).toContainText(/\S/)
-    // alice is on bob's screen: he has no chip for her
-    await expect(markerOf(b, a)).toHaveCount(0)
+    // alice has no pointer on the board, but her view is now far to the right of his: he gets a chip for her,
+    // pointing at the middle of her view (a person whose pointer is off the canvas is "here" only while their
+    // view overlaps his)
+    await expect(markerOf(b, a)).toHaveAttribute('data-side', 'right')
   })
 
   await test.step('the chip is on the side bob is on: above her view, it moves to the top edge', async () => {
@@ -349,13 +352,14 @@ test('W5-32: a person who is off screen has a chip on the canvas edge pointing t
 
   await test.step('a click goes to bob: his pointer is on her screen and the chip is gone', async () => {
     await marker.click()
-    await expect(marker).toHaveCount(0)
+    // the camera moves (animated) until bob's pointer is in the middle of her view
     await expect
       .poll(async () => {
         const v = await viewport(a.page)
-        return at.x >= v.x && at.x <= v.x + v.width && at.y >= v.y && at.y <= v.y + v.height
+        return Math.max(Math.abs(v.x + v.width / 2 - at.x), Math.abs(v.y + v.height / 2 - at.y))
       })
-      .toBe(true)
+      .toBeLessThan(2)
+    await expect(marker).toHaveCount(0)
     await expect(cursorOf(a, b)).toBeVisible()
   })
 
@@ -404,4 +408,48 @@ test('W5-32: a person who is off screen has a chip on the canvas edge pointing t
     await b.context.close()
     await expect(marker).toHaveCount(0, { timeout: 20_000 })
   })
+})
+
+test('W5-32: on a phone a chip is a 44 px touch target that nothing covers, and a tap goes to the person', async ({
+  browser,
+  board,
+  users,
+  canvasSession,
+}) => {
+  const b = await canvasSession('bob')
+  const at = await hover(b)
+  const a = await openPhoneSession(browser, board, users, 'alice')
+  try {
+    await expect(cursorOf(a, b)).toHaveCount(1)
+    const marker = markerOf(a, b)
+    // bob works far to the left of the phone's view
+    const v = await viewport(a.page)
+    await setViewport(a.page, { x: at.x + 4000, y: at.y - v.height / 2 })
+    await expect(marker).toHaveCount(1)
+    const box = await marker.boundingBox()
+    if (!box) throw new Error('no marker box')
+    expect(box.width).toBeGreaterThanOrEqual(44)
+    expect(box.height).toBeGreaterThanOrEqual(44)
+    const canvas = await canvasBox(a.page)
+    expect(box.x).toBeGreaterThanOrEqual(canvas.x)
+    expect(box.x + box.width).toBeLessThanOrEqual(canvas.x + canvas.width)
+    expect(box.y + box.height).toBeLessThanOrEqual(canvas.y + canvas.height)
+    // nothing covers it: the topmost thing at its centre is the chip
+    const topmost = await a.page.evaluate(
+      ([x, y]) =>
+        document.elementFromPoint(x as number, y as number)?.closest('[data-testid="edge-marker"]') !== null,
+      [box.x + box.width / 2, box.y + box.height / 2],
+    )
+    expect(topmost).toBe(true)
+    await marker.tap()
+    await expect(marker).toHaveCount(0)
+    await expect
+      .poll(async () => {
+        const now = await viewport(a.page)
+        return at.x >= now.x && at.x <= now.x + now.width && at.y >= now.y && at.y <= now.y + now.height
+      })
+      .toBe(true)
+  } finally {
+    await a.context.close()
+  }
 })

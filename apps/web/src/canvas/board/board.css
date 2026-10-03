@@ -179,3 +179,12 @@
   border-width: 6px 0 6px 9px;
   border-color: transparent transparent transparent var(--edge-color, #6b7280);
 }
+/* a finger needs 44 px (the chip's reach on the edge is chrome.tsx chipRadius: 22 + the 9 px arrow) */
+@media (pointer: coarse) {
+  .lobby-edge-marker {
+    width: 44px;
+    height: 44px;
+    margin: -22px 0 0 -22px;
+    font-size: 14px;
+  }
+}
