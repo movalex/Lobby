@@ -119,3 +119,63 @@
   inset: 0;
   z-index: 50;
 }
+
+/* W5-32: edge markers (chrome.tsx EdgeMarkers): a chip in the person's colour on the canvas's edge for each
+   person who is off screen, an arrow on its outer side pointing the way (--edge-angle: 0 = right). The layer
+   never takes a click; the chips do. Their size is edge-markers.ts EDGE_CHIP_RADIUS (24 px face + 8 px arrow). */
+.lobby-edge-markers {
+  position: absolute;
+  inset: 0;
+  z-index: 100;
+  pointer-events: none;
+}
+.lobby-edge-marker {
+  position: absolute;
+  width: 24px;
+  height: 24px;
+  margin: -12px 0 0 -12px;
+  padding: 0;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  background: var(--edge-color, #6b7280);
+  color: #fff;
+  font: 600 10px / 1 var(--dr-font, system-ui, sans-serif);
+  box-shadow: 0 1px 4px rgb(0 0 0 / 0.35);
+  cursor: pointer;
+  pointer-events: auto;
+  touch-action: manipulation;
+}
+.lobby-edge-marker[data-idle] {
+  opacity: 0.6;
+}
+.lobby-edge-marker:hover,
+.lobby-edge-marker:focus-visible {
+  opacity: 1;
+}
+.lobby-edge-marker:focus-visible {
+  outline: 2px solid var(--dr-ink, #1f2937);
+  outline-offset: 2px;
+}
+.lobby-edge-marker__face {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+}
+/* a box the size of the chip, turned toward the person, with the arrow at its right edge */
+.lobby-edge-marker__arrow {
+  position: absolute;
+  inset: -2px;
+  transform: rotate(var(--edge-angle, 0deg));
+  pointer-events: none;
+}
+.lobby-edge-marker__arrow::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  right: -9px;
+  margin-top: -6px;
+  border-style: solid;
+  border-width: 6px 0 6px 9px;
+  border-color: transparent transparent transparent var(--edge-color, #6b7280);
+}

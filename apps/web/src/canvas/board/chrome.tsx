@@ -2,9 +2,10 @@
  * The Excalidraw board page's chrome around the canvas (docs/EXCALIDRAW-CONTRACTS.md §3): the dock
  * (`panels`), the top bar's feature items (`topBar`), the overlay root (`featureOverlays` in scene and
  * screen layers, C0 `overlays`, remote cursors through `cursorVisible`, "X is typing" badges), the host
- * slots, other people's selections in their colours (W5-28), and the lease banner and pending affordance.
+ * slots, other people's selections in their colours (W5-28), a marker on the canvas's edge for each person who is
+ * off screen (W5-32), and the lease banner and pending affordance.
  * Focus mode (`settings.focusMode`, present mode) hides the dock, the top bar, the host slots, the
- * remote selections and every overlay layer that does not say `show`.
+ * remote selections, the edge markers and every overlay layer that does not say `show`.
  *
  * Every feature component is rendered inside `CanvasFeatureContextProvider` and gets the context.
  */
@@ -22,6 +23,7 @@ import type { LobbyCanvas } from '../api/lobby-canvas.ts'
 import type { FeatureOverlaySpec, FeatureRegistries, HostSlotName } from '../api/registries.ts'
 import type { EditNotice, EditState } from '../lease/editorLease.ts'
 import { arrowPaths } from '../presence/drag-arrows.ts'
+import { type AvoidRect, type EdgeMarker, edgeMarkers } from './edge-markers.ts'
 import type { LobbyBoardSession } from './session.ts'
 
 // ---- the dock ---------------------------------------------------------------------------------------------
@@ -231,6 +233,7 @@ export function OverlayRoot({
           .map((o) => (
             <FeatureLayer key={o.id} spec={o} ctx={ctx} />
           ))}
+        <EdgeMarkers canvas={ctx.canvas} registries={r} focusMode={focusMode} />
       </div>
     </div>
   )
@@ -476,6 +479,113 @@ function Cursors({ canvas, registries }: { canvas: LobbyCanvas; registries: Feat
         </div>
       ))}
     </>
+  )
+}
+
+/** What a marker says about the person it points at. */
+interface EdgeMarkerView extends EdgeMarker {
+  readonly uid: string
+  readonly name: string
+  readonly color: string
+  readonly idle: boolean
+}
+
+/**
+ * What the board's own controls cover in the canvas's top left corner, in overlay px: the board menu (board.css
+ * `.lobby-slot--mainMenu`: 12 px in, 38 px wide; on a phone it sits right of the dock's fold button). A chip is
+ * never placed under it.
+ */
+function cornerControls(): AvoidRect[] {
+  let phone = false
+  try {
+    phone = typeof window !== 'undefined' && window.matchMedia?.('(max-width: 600px)').matches === true
+  } catch {
+    // no media queries (a test): the desktop layout
+  }
+  return [{ x: 0, y: 0, w: phone ? 100 : 56, h: 56 }]
+}
+
+const SIDE_WORDS = { left: 'to the left', right: 'to the right', top: 'above', bottom: 'below' } as const
+
+/**
+ * W5-32: a coloured chip on the canvas's edge for each person who is off screen (their pointer is outside
+ * this view, else their view is), pointing the way. A click goes to them (the camera, one move); Shift-click
+ * follows them like the people list's Follow. The nearest ten, spread along the edge so they do not pile up
+ * (./edge-markers.ts). Hidden with their cursor (`cursorVisible`: present mode, "hide cursors") and in focus
+ * mode; a person the room does not stream to this tab has no place to point at. Drawn only, never written.
+ */
+function EdgeMarkers({
+  canvas,
+  registries,
+  focusMode,
+}: {
+  canvas: LobbyCanvas
+  registries: FeatureRegistries
+  focusMode: boolean
+}) {
+  const version = useRegistries(registries)
+  const markers = useValue('lobby-edge-markers', (): EdgeMarkerView[] => {
+    if (focusMode) return []
+    const v = canvas.viewport.get()
+    const peers = canvas.presence
+      .peers()
+      .filter((p) => p.streaming !== false && (p.point || p.view) && registries.cursorVisible.call(p.sid))
+    if (!peers.length) return []
+    const found = edgeMarkers(
+      peers,
+      v,
+      // the canvas's size on screen, from the camera (which changes with the canvas's size)
+      { w: v.width * v.zoom, h: v.height * v.zoom },
+      (p) => canvas.sceneToOverlay(p),
+      { avoid: cornerControls() },
+    )
+    const bySid = new Map(peers.map((p) => [p.sid, p]))
+    return found.flatMap((m) => {
+      const p = bySid.get(m.sid)
+      return p ? [{ ...m, uid: p.uid, name: p.name, color: safeColor(p.color, p.uid), idle: p.idle }] : []
+    })
+  }, [canvas, registries, version, focusMode])
+  if (!markers.length) return null
+  const go = (m: EdgeMarkerView, follow: boolean) => {
+    if (follow) {
+      canvas.follow.start(m.sid)
+      return
+    }
+    // a camera that follows someone stays put under a move that does not force it: stop first
+    if (canvas.follow.current()) canvas.follow.stop()
+    canvas.viewport.centerOn(m.target, { animate: true })
+  }
+  return (
+    <div className="lobby-edge-markers" data-testid="edge-markers">
+      {markers.map((m) => (
+        <button
+          key={m.sid}
+          type="button"
+          className="lobby-edge-marker"
+          data-testid="edge-marker"
+          data-sid={m.sid}
+          data-uid={m.uid}
+          data-side={m.side}
+          data-idle={m.idle || undefined}
+          aria-label={`Go to ${m.name}, off screen ${SIDE_WORDS[m.side]}`}
+          title={`${m.name} is off screen ${SIDE_WORDS[m.side]}. Click to go there, Shift-click to follow.`}
+          style={
+            {
+              left: Math.round(m.x),
+              top: Math.round(m.y),
+              '--edge-angle': `${Math.round((m.angle * 180) / Math.PI)}deg`,
+              '--edge-color': m.color,
+            } as CSSProperties
+          }
+          onClick={(e) => go(m, e.shiftKey)}
+        >
+          <span className="lobby-edge-marker__arrow" aria-hidden="true" />
+          <span className="lobby-edge-marker__face" aria-hidden="true">
+            {initialsFor(m.name)}
+          </span>
+        </button>
+      ))}
+    </div>
   )
 }
 

@@ -1,7 +1,8 @@
 // Presence on the Excalidraw board page (ported from the tldraw suite's collab-lifecycle step 1 and the
 // plan's presence-roles check, docs/EXCALIDRAW-MIGRATION.md §2.7, §6.3): the people list, named cursors
 // where the other person's pointer is (every role, no tool selected), "X is typing" while someone holds
-// a note's lease, what the other person has selected (W5-28), and leaving.
+// a note's lease, what the other person has selected (W5-28), a marker on the canvas's edge for a person
+// who is off screen (W5-32), and leaving.
 import type { Page } from '@playwright/test'
 import {
   type CanvasSession,
@@ -13,6 +14,7 @@ import {
   screenToScene,
   select,
   selectNone,
+  setViewport,
   startTextEditing,
   stopTextEditing,
   test,
@@ -265,5 +267,141 @@ test("W5-28: what alice has selected is outlined in her colour on bob's canvas, 
   await test.step('alice clears her selection: the outline goes', async () => {
     await selectNone(a.page)
     await expect(outline).toHaveCount(0)
+  })
+})
+
+const markerOf = (s: CanvasSession, of: CanvasSession) =>
+  s.page.locator(`[data-testid="edge-marker"][data-uid="${of.id}"]`)
+
+type FollowWindow = {
+  __lobbyBoard?: {
+    canvas: {
+      follow: { current(): string | null; stop(): void }
+      presence: { peers(): { sid: string; uid: string }[] }
+      settings: { set(p: { focusMode: boolean }): void }
+    }
+    registries: { cursorVisible: { provide(fn: (sid: string) => boolean): () => void } }
+  }
+  __unhideMarker?: () => void
+}
+
+/** The camera once it has stopped moving (an animated camera move is on its way until two reads agree). */
+async function restingViewport(page: Page) {
+  let last = await viewport(page)
+  await expect
+    .poll(async () => {
+      const now = await viewport(page)
+      const same = now.x === last.x && now.y === last.y && now.zoom === last.zoom
+      last = now
+      return same
+    })
+    .toBe(true)
+  return last
+}
+
+/** The canvas region's client rectangle. */
+async function canvasBox(page: Page) {
+  const box = await page.locator('[data-lobby-board-canvas]').boundingBox()
+  if (!box) throw new Error('no board canvas')
+  return box
+}
+
+test('W5-32: a person who is off screen has a chip on the canvas edge pointing to them; a click goes to them, Shift-click follows; it hides with their cursor and in focus mode', async ({
+  canvasSession,
+}) => {
+  const a = await canvasSession('alice')
+  const b = await canvasSession('bob')
+  const at = await hover(b)
+  await expect(cursorOf(a, b)).toBeVisible()
+  const marker = markerOf(a, b)
+
+  await test.step("bob is on alice's screen: his cursor, no marker", async () => {
+    await expect(marker).toHaveCount(0)
+  })
+
+  await test.step('alice pans so bob is far to the left: a chip on her left edge, in his colour, inside the canvas', async () => {
+    const v = await viewport(a.page)
+    await setViewport(a.page, { x: at.x + 6000, y: at.y - v.height / 2 })
+    await expect(marker).toHaveCount(1)
+    await expect(marker).toHaveAttribute('data-side', 'left')
+    await expect(marker).toHaveAttribute('aria-label', `Go to ${b.name}, off screen to the left`)
+    const [m, c] = await Promise.all([marker.boundingBox(), canvasBox(a.page)])
+    if (!m) throw new Error('no marker box')
+    expect(m.x).toBeGreaterThanOrEqual(c.x)
+    expect(m.x).toBeLessThan(c.x + 40)
+    expect(m.y).toBeGreaterThanOrEqual(c.y)
+    expect(m.y + m.height).toBeLessThanOrEqual(c.y + c.height)
+    expect(await marker.evaluate((el) => getComputedStyle(el).backgroundColor)).not.toBe('rgba(0, 0, 0, 0)')
+    await expect(marker).toContainText(/\S/)
+    // alice is on bob's screen: he has no chip for her
+    await expect(markerOf(b, a)).toHaveCount(0)
+  })
+
+  await test.step('the chip is on the side bob is on: above her view, it moves to the top edge', async () => {
+    const v = await viewport(a.page)
+    await setViewport(a.page, { x: at.x - v.width / 2, y: at.y + 6000 })
+    await expect(marker).toHaveAttribute('data-side', 'top')
+    await setViewport(a.page, { x: at.x - v.width / 2, y: at.y - 6000 - v.height })
+    await expect(marker).toHaveAttribute('data-side', 'bottom')
+    await setViewport(a.page, { x: at.x + 6000, y: at.y - v.height / 2 })
+    await expect(marker).toHaveAttribute('data-side', 'left')
+  })
+
+  await test.step('a click goes to bob: his pointer is on her screen and the chip is gone', async () => {
+    await marker.click()
+    await expect(marker).toHaveCount(0)
+    await expect
+      .poll(async () => {
+        const v = await viewport(a.page)
+        return at.x >= v.x && at.x <= v.x + v.width && at.y >= v.y && at.y <= v.y + v.height
+      })
+      .toBe(true)
+    await expect(cursorOf(a, b)).toBeVisible()
+  })
+
+  await test.step("Shift-click follows him: alice's camera follows bob's", async () => {
+    const v = await restingViewport(a.page)
+    await setViewport(a.page, { x: v.x + 7000, y: v.y })
+    await expect(marker).toHaveCount(1)
+    await marker.click({ modifiers: ['Shift'] })
+    await expect
+      .poll(() =>
+        a.page.evaluate(() => {
+          const c = (window as unknown as FollowWindow).__lobbyBoard?.canvas
+          const sid = c?.follow.current() ?? null
+          return sid ? (c?.presence.peers().find((p) => p.sid === sid)?.uid ?? null) : null
+        }),
+      )
+      .toBe(b.id)
+    // following puts him on her screen
+    await expect(marker).toHaveCount(0)
+    await a.page.evaluate(() => (window as unknown as FollowWindow).__lobbyBoard?.canvas.follow.stop())
+  })
+
+  await test.step('"hide cursors" (a cursor filter) and focus mode hide it; it comes back with them', async () => {
+    const v = await restingViewport(a.page)
+    await setViewport(a.page, { x: v.x - 8000, y: v.y })
+    await expect(marker).toHaveCount(1)
+    const sid = await marker.getAttribute('data-sid')
+    await a.page.evaluate((hidden) => {
+      const w = window as unknown as FollowWindow
+      w.__unhideMarker = w.__lobbyBoard?.registries.cursorVisible.provide((s) => s !== hidden)
+    }, sid)
+    await expect(marker).toHaveCount(0)
+    await a.page.evaluate(() => (window as unknown as FollowWindow).__unhideMarker?.())
+    await expect(marker).toHaveCount(1)
+    const focus = (on: boolean) =>
+      a.page.evaluate((flag) => {
+        ;(window as unknown as FollowWindow).__lobbyBoard?.canvas.settings.set({ focusMode: flag })
+      }, on)
+    await focus(true)
+    await expect(marker).toHaveCount(0)
+    await focus(false)
+    await expect(marker).toHaveCount(1)
+  })
+
+  await test.step('bob leaves: the chip goes', async () => {
+    await b.context.close()
+    await expect(marker).toHaveCount(0, { timeout: 20_000 })
   })
 })
