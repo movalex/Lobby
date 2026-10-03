@@ -23,21 +23,45 @@ import { expectAccepted, expectNotStored, expectRefused, storedEl } from './supp
 const shared = sharedElementStack()
 
 describe('§2.4.4 a text with containerId X needs X live and a text container', () => {
-  it('X missing, X deleted, or X not a text container (frame, line, freedraw): INVALID', async () => {
+  it('X missing or X deleted: GONE (a race, MINOR abuse-code); X not a text container (frame, line, freedraw): INVALID', async () => {
     const st = shared.get()
     const b = newBoardId()
     const a = await st.client({ boardId: b, user: 'alice' })
     await a.create([note('gone'), frame('f1'), line('l1'), freedraw('p1')])
     expectAccepted(await a.patch('gone', { g: { life: { isDeleted: true } } }))
-    for (const [id, containerId] of [
-      ['t-missing', 'nope'],
-      ['t-deleted', 'gone'],
-      ['t-frame', 'f1'],
-      ['t-line', 'l1'],
-      ['t-draw', 'p1'],
+    for (const [id, containerId, code] of [
+      ['t-missing', 'nope', 'GONE'],
+      ['t-deleted', 'gone', 'GONE'],
+      ['t-frame', 'f1', 'INVALID'],
+      ['t-line', 'l1', 'INVALID'],
+      ['t-draw', 'p1', 'INVALID'],
     ] as const)
-      expectRefused(await a.createOne(label(id, containerId)), 'INVALID', a)
+      expectRefused(await a.createOne(label(id, containerId)), code, a)
     await expectNotStored(st, b, ['t-missing', 't-deleted', 't-frame', 't-line', 't-draw'])
+  })
+
+  it('MINOR abuse-code: labels racing a concurrent delete of their containers never close the socket (more than 50 in a minute)', async () => {
+    const st = shared.get()
+    const b = newBoardId()
+    const a = await st.client({ boardId: b, user: 'alice' })
+    const m = await st.client({ boardId: b, user: 'bob' })
+    const ids = Array.from({ length: 60 }, (_, i) => `n${i}`)
+    await a.create(ids.map((id, i) => note(id, { x: i * 10 })))
+    await m.untilClock(a.clock)
+    // alice deletes every note; bob, on his older view, labels each one: 60 refusals in one push (more
+    // than the 50 abuse rejects a minute that close a session)
+    const del = await a.push(ids.map((id) => a.patchOp(id, { g: { life: { isDeleted: true } } })))
+    expect(del.r.every((r) => r.ok)).toBe(true)
+    const ack = await m.push(ids.map((id) => ({ k: 'c', el: label(`${id}.t`, id) })))
+    expect(ack.r.map((r) => (r.ok ? 'ok' : r.code))).toEqual(ids.map(() => 'GONE'))
+    // ... and labels whose containers do not exist at all (their creates refused in the same push): GONE
+    const again = await m.push(ids.slice(0, 10).map((id) => ({ k: 'c', el: label(`${id}.u`, `${id}-x`) })))
+    expect(again.r.map((r) => (r.ok ? 'ok' : r.code))).toEqual(ids.slice(0, 10).map(() => 'GONE'))
+    // the room did not close bob's socket for abuse: his next push is answered
+    await new Promise((r) => setTimeout(r, 300))
+    expect(m.isOpen, 'not closed 4099 INVALID_MESSAGE').toBe(true)
+    expect((await m.createOne(note('after'))).ok).toBe(true)
+    await expectNotStored(st, b, [...ids.map((id) => `${id}.t`), ...ids.slice(0, 10).map((id) => `${id}.u`)])
   })
 
   it('every text container of §3.1 takes a label (stickynote, rectangle, ellipse, arrow)', async () => {
@@ -192,13 +216,13 @@ describe('§2.4.4 bindings: the target exists, is live and bindable; bindings ar
 })
 
 describe('§2.4.4 frameId names a live frame', () => {
-  it('frameId naming a rectangle, a missing id, or a frame inside a frame: INVALID', async () => {
+  it('frameId naming a rectangle or a frame inside a frame: INVALID; naming no element: GONE', async () => {
     const st = shared.get()
     const b = newBoardId()
     const a = await st.client({ boardId: b, user: 'alice' })
     await a.create([rect('r1'), frame('f1')])
     expectRefused(await a.createOne(rect('in-rect', { frameId: 'r1' })), 'INVALID', a)
-    expectRefused(await a.createOne(rect('in-nothing', { frameId: 'nope' })), 'INVALID', a)
+    expectRefused(await a.createOne(rect('in-nothing', { frameId: 'nope' })), 'GONE', a)
     expectRefused(await a.createOne(frame('f-in-f', { frameId: 'f1' })), 'INVALID', a)
     expectRefused(await a.patch('r1', { g: { membership: { groupIds: [], frameId: 'r1' } } }), 'INVALID', a)
     expectAccepted(await a.createOne(rect('in-frame', { frameId: 'f1' })))
