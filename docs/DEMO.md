@@ -1,9 +1,27 @@
 # Lobby demo
 
-Two parts: the **5-minute demo on staging** for DBC leadership, then the longer **local checklist** for
-the Lobby team. Staging: https://draftroom-staging-web.onrender.com (the hostname keeps the old code
-name; everything on screen says Lobby). This is the script for the **new canvas**; the old one is kept in
-`docs/DEMO-tldraw.md`.
+Two parts: the **5-minute demo on staging** for DBC leadership, then the longer **local checklist** for the
+Lobby team. Staging: https://draftroom-staging-web.onrender.com (the hostname keeps the old code
+name; everything on screen says Lobby).
+
+**This is the script for the Excalidraw canvas, which is the only canvas.** Staging has run it since 2026-10-01
+(cut-over `main` `bbe1b48`, `docs/CUTOVER-LOG.md`), with the later waves A, B and C deployed on top of it
+(`main` 0644365, 99d902c, 9627f29). The tldraw script is kept in `docs/DEMO-tldraw.md` as history only.
+
+**The demo video is retired.** The narrated 2:18 video and its pipeline (`pnpm --filter @draftroom/e2e demo:video`,
+`e2e/demo`) drove the tldraw canvas. The pipeline was deleted in `fe17a6b` when the Excalidraw suite became the default
+suite (the tldraw build keeps it, on the tag `lobby-r0`). Any copy of that video shows the old canvas and must not be
+shown as the product. No replacement exists: run the demo live from this script.
+
+**What was checked, and what was not (2026-10-03).** Each step of the script has a Playwright spec that drives it
+on a local stack; those specs were run again on 2026-10-03 against `release/held` 99ac6c52 plus docs-only commits, and
+passed, with one known expected failure that is not a step of this script (table "Last checked" after the script). **Not checked, so do not promise it:** a run of this whole script on staging
+with two real Clerk sign-ins (the log lists "DEMO.md" among the checks that did not run, `docs/CUTOVER-LOG.md` §5; the
+owner's sign-in check of 2026-10-03 covered sign-in, boards, editing, reload and two browsers seeing each other, §7); a real
+phone for the client step; Firefox and Safari (WebKit passes a smoke test, Firefox has never run). **Not live yet:** a dot vote
+over a selection of frames or objects and the "access approved" bell item are built and gated but held for the release that
+deploys after 2026-10-03 20:55Z (`docs/PROGRESS.md`, "The held deploy"); until then the Voting dialog offers only the board and
+one frame.
 
 ## 5-minute demo on staging
 
@@ -48,7 +66,7 @@ name; everything on screen says Lobby). This is the script for the **new canvas*
 - **A client on their phone.** **Share** → **Share with a client** → **Create and copy link** (guests can
   join with just a name). Open the link on a phone, type a name, **Join**. They show as "Sam (guest)" on
   cursors, see only this board, and can comment; the owner's bell shows their comment. Revoke the link and
-  their view ends within seconds.
+  their view ends within seconds. A guest sees a **People** button where you see **Share**.
 - **Private brainstorm.** **Private notes** in the left rail → **Start a private brainstorm…** → a prompt
   and **A new frame, "Private ideas", in view**. Everyone gets an "Add your notes" prompt and sees only the
   counts until **Reveal**, when the notes land as real sticky notes (anonymous if chosen). An automatic
@@ -62,9 +80,11 @@ name; everything on screen says Lobby). This is the script for the **new canvas*
 - **Dark mode.** Board menu (top left) → **Preferences** → **Theme**. The DBC note colours keep their
   contrast.
 - **Safety answers.** **Share** → the export setting stops viewers and commenters exporting or downloading
-  (not screenshots, like Miro); owners can switch **AI** off per board or workspace; **History** keeps
-  automatic checkpoints; every board is backed up offsite with a tested restore drill; pasted links never
-  run outside scripts on the board.
+  (not screenshots, like Miro); name-only guests never export unless an owner turns that on; owners can
+  switch **AI** off per board or workspace; **History** keeps automatic checkpoints; every board is backed up
+  offsite (at the 31 h check every board had offsite copies, 0 failures and 0 pending, `docs/CUTOVER-LOG.md` §7);
+  pasted links never run outside scripts on the board. Do not say the restore drill was run on the converted
+  boards: that is the owner's check (log §6 step 2).
 
 ### If something goes wrong
 
@@ -73,12 +93,40 @@ name; everything on screen says Lobby). This is the script for the **new canvas*
   (a name-only guest keeps their edits in the tab only, so do not reload B if B joined as a guest).
 - **The status pill says Change not saved**: the board refused the last change and undid it, usually because
   someone else was typing in that note or the object is locked. Hover the pill for the reason, then try
-  again.
+  again. (One known exception: on an archived board the owner's open tab can say it although nothing changed,
+  DEF-GAPS-1; do not demo archiving.)
 - **Letters go into a note instead of picking a tool**: one note is selected, so typing edits it. Press
   **Esc** or click empty canvas, then press the tool key.
 - **Present starts on the wrong slide**: it starts at the selected frame. Press **Home** for slide 1.
-- **Browser B cannot open the link**: it must be signed in (or, with guests merged, use *Join as a
-  guest*). Links expire; create a new one from **Share**.
+- **Browser B cannot open the link**: it must be signed in, or open the link as a name-only guest. Links
+  expire; create a new one from **Share**.
+
+## Last checked
+
+On 2026-10-03 (about 20:30-20:55Z) the specs below were run against `release/held` 99ac6c52 plus docs-only commits: headless Chromium, one worker, `E2E_PORT_BASE=7920`, a local stack with development sign-in and the fake OpenAI (not staging, no real Clerk, no phone). **165 distinct tests passed and 0 failed; 1 was an expected failure** (DEF-GAPS-1, `gaps-board-status.spec.ts:117`, an open product defect marked `test.fail`, which Playwright counts as passed) across the files named here and the others in the same runs.
+The table names, per step, the spec files whose tests drive it; "passed" means the named tests passed in those runs. A passing spec is not a rehearsal: it proves the steps work, not that the wording on screen still matches this page word for word, so do the dry run in "Before the meeting".
+
+| Step | What | Spec files | Result |
+|---|---|---|---|
+| 0:00 | Dashboard, New board, Lobby tour | `gaps-board-status.spec.ts` | passed |
+| 0:30 | Workshop link and a guest joining | `guests-sharing.spec.ts`, `guests-join.spec.ts` | passed |
+| 1:00 | Edit together, the connector follows a drag | `board-drag-arrows.spec.ts` | passed |
+| 1:20 | AI: Group into themes | `ai-actions.spec.ts` | passed |
+| 1:40 | Comment | `comments-core.spec.ts` | passed |
+| 1:50 | Mood board; Replace media, Crop, Alternative text | `media-drops.spec.ts`, `media-edit.spec.ts` | passed |
+| 2:00 | Vote | `workshops-voting.spec.ts` | passed |
+| 2:45 | Present to everyone | `present-live.spec.ts`, `present-export-present.spec.ts` | passed |
+| 3:30 | Export a PDF | `present-export-files.spec.ts` | passed |
+| 4:00 | History: checkpoint, Recently deleted | `history-checkpoints.spec.ts`, `history-deleted.spec.ts` | passed |
+| 4:45 | Back to the dashboard | `gaps-board-status.spec.ts` | passed |
+| More | A client on a phone | `guests-join.spec.ts` | passed |
+| More | Private brainstorm | `workshops-private-notes.spec.ts` | passed |
+| More | Mind map | `mindmap-keyboard.spec.ts`, `mindmap-structure.spec.ts` | passed |
+| More | Link cards | `media-links.spec.ts` | passed |
+| More | Tags and search | `tags-panel.spec.ts` | passed |
+| More | Safety: the export setting | `sharing-export-control.spec.ts` | passed |
+
+The run's files: `ai-actions.spec.ts`, `board-drag-arrows.spec.ts`, `comments-core.spec.ts`, `gaps-board-status.spec.ts`, `guests-join.spec.ts`, `guests-sharing.spec.ts`, `history-checkpoints.spec.ts`, `history-deleted.spec.ts`, `media-drops.spec.ts`, `media-edit.spec.ts`, `media-links.spec.ts`, `mindmap-keyboard.spec.ts`, `mindmap-structure.spec.ts`, `present-export-files.spec.ts`, `present-export-present.spec.ts`, `present-live.spec.ts`, `sharing-export-control.spec.ts`, `sharing-share-dialog.spec.ts`, `tags-panel.spec.ts`, `tags-picker.spec.ts`, `workshops-facilitation.spec.ts`, `workshops-private-notes.spec.ts`, `workshops-voting.spec.ts`.
 
 ## Local checklist (for the Lobby team)
 
@@ -95,9 +143,8 @@ Sign-in uses **development identities** (the `dev.env` files; never allowed with
 Board data lives in `./.data` — delete the folder to start fresh. Generate sample files once with
 `pnpm fixtures` (written to `tests/fixtures/generated/`).
 
-> **Until the new canvas is the default build**, it is behind two flags: start the sync server with
-> `DRAFTROOM_ENGINE=excalidraw` (add it to `apps/sync/dev.env`) and the web app with
-> `VITE_LOBBY_ENGINE=excalidraw`. Without them `pnpm dev` runs the old canvas.
+> Excalidraw is the only canvas: there is no engine flag to set (`DRAFTROOM_ENGINE` may be unset or `excalidraw`, and
+> `tldraw` is refused at start; `VITE_LOBBY_ENGINE` and `VITE_TLDRAW_LICENSE_KEY` no longer exist).
 
 > The **first** person to sign in on a fresh `.data` becomes the owner of the shared **Dev Studio** workspace. Sign in as **alice** first.
 
