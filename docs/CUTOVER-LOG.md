@@ -195,3 +195,12 @@ on the sync disk (§6).
   reverted C2's CR-2B-2 there: it moved a port of tldraw 5.4.2's geo geometry into `packages/canvas-schema`, i.e. into the
   web bundle. Leaving tldraw was a licence decision, so tldraw-derived code stays in the server-side converter only. The polygon
   tools keep Lobby's own outlines (W5-33 D4 stays open).
+- **The held release deployed 2026-10-03 21:09–21:12Z**, after the 48 h rollback window closed at 20:55Z (`main` `e2cb709` = merge of
+  `release/held`; api → sync → web). It brings migration 0024 (selection votes, the access-granted bell), push receipts (`CONTRACTS_REV`
+  11, the last known lost-edit path) and the merged live smoke script. CR-2B-2 is reverted (no tldraw-derived geometry in the web
+  bundle). Pre-check: health 200, maintenance off, backups 0 failures, 0 error lines, 0 rooms open. api live in 42 s. 0024 is applied
+  by the start-up runner (the api starts only with every migration applied; as with 0023 it logs nothing, so `schema_migrations`
+  stays an owner check). sync live in 62 s (`/healthz` 200 ten seconds later, maintenance off, backups running, the board handshake
+  still echoes `lobby.board.v1` through the edge). web live in 31 s. Live smoke (the merged `scripts/smoke/live-smoke.mjs`, its
+  CSP read from `render.yaml`): 34 passed, 0 failed, the known warning; 0 `error`/`FATAL` lines. **The R0 rollback path is retired**
+  from here: 0024 is newer than R0 can read, and D7 drop-legacy follows around 2026-10-08.
