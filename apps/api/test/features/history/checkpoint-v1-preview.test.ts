@@ -6,10 +6,11 @@
 // the tldraw one (bridge release R0: its tldraw preview reads records). Before the fix every v1 body came
 // back as records, which the Excalidraw page cannot draw ("can't be previewed here yet").
 import { CheckpointContent } from '@draftroom/contracts'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { PreviewCache, previewSettings } from '../../../src/features/history/checkpoint-routes.ts'
 import { checkpointSettings } from '../../../src/features/history/checkpoints.ts'
 import { type Client, createBoard, createTestApi, DEV_STUDIO, type TestApi } from '../../helpers.ts'
-import { baseRecords, createFakeSync, type FakeSync, noteRec, SCHEMA } from './helpers.ts'
+import { baseRecords, createFakeSync, type FakeSync, noteRec, type Rec, SCHEMA } from './helpers.ts'
 
 let api: TestApi | null = null
 const saved = { ...checkpointSettings }
@@ -92,5 +93,175 @@ describe('previewing a v1 checkpoint (PARITY-5.5)', () => {
     expect(body).not.toHaveProperty('format')
     expect(body).not.toHaveProperty('converted')
     expect((body.records as { id: string }[]).map((r) => r.id)).toContain('shape:n1')
+  })
+})
+
+// PARITY-5.5 follow-up (wave B follow-up 5): the conversion runs on the api's event loop (about 55 to 85
+// microseconds a record), so a v1 preview is bounded and cached.
+describe('a v1 preview is bounded and cached', () => {
+  const settings = { ...previewSettings }
+  afterEach(() => Object.assign(previewSettings, settings))
+
+  const notes = (n: number) => Array.from({ length: n }, (_, i) => noteRec(`n${i}`, `Note ${i}`, `a${i + 1}`))
+  /** Saves the board's current records as a v1 checkpoint. */
+  async function saveBoard(w: Awaited<ReturnType<typeof world>>, records: Rec[], name: string) {
+    w.sync.setBoard(w.board, records)
+    return saveV1(w, name)
+  }
+  const preview = (w: Awaited<ReturnType<typeof world>>, sid: string, c: Client = w.bob) =>
+    c.req('GET', `/api/snapshots/${sid}/content`)
+
+  it('past the cap it is not converted: "too large to preview", the shape the web already shows, decided before the body is read', async () => {
+    previewSettings.maxRecords = 5
+    const w = await world('excalidraw')
+    const small = await saveBoard(w, [...baseRecords(), ...notes(3)], 'Fits') // 5 records: at the cap
+    const big = await saveBoard(w, [...baseRecords(), ...notes(4)], 'Too big') // 6 records
+    const read = vi.spyOn(w.api.blobs, 'get')
+
+    const fits = await preview(w, small)
+    expect(fits.statusCode, fits.body).toBe(200)
+    expect(fits.json()).toMatchObject({ format: 'lobby-elements', converted: true })
+    expect(read).toHaveBeenCalledTimes(1)
+
+    read.mockClear()
+    const res = await preview(w, big)
+    expect(res.statusCode, res.body).toBe(200)
+    const body = CheckpointContent.parse(res.json())
+    // the v1 shape with nothing in it: no format and no `converted` (the web's "can't be previewed here
+    // yet; restoring it as a new board still works"), no records to ship, and the snapshot's own facts
+    expect(body).toMatchObject({
+      records: [],
+      schema: null,
+      snapshot: { id: big, name: 'Too big', recordCount: 6 },
+    })
+    expect(body).not.toHaveProperty('format')
+    expect(body).not.toHaveProperty('converted')
+    expect(body).not.toHaveProperty('elements')
+    expect(read).not.toHaveBeenCalled() // the row's record count decided: the body was not even read
+    // the answer is remembered (nothing is read the second time either), and restoring still works
+    expect((await preview(w, big)).statusCode).toBe(200)
+    expect(read).not.toHaveBeenCalled()
+    const restored = await w.bob.req('POST', `/api/snapshots/${big}/restore-as-new`, {})
+    expect(restored.statusCode, restored.body).toBe(201)
+    const seeded = w.sync.seeds.at(-1)?.snapshot as { documents?: unknown[] } | undefined
+    expect(seeded?.documents).toHaveLength(6)
+  })
+
+  it('a row that understates its size is caught by the body’s own count (read once, then remembered)', async () => {
+    previewSettings.maxRecords = 5
+    const w = await world('excalidraw')
+    const sid = await saveBoard(w, [...baseRecords(), ...notes(5)], 'Understated')
+    await w.api.db.query('UPDATE board_snapshots SET record_count = 1 WHERE id = $1', [sid])
+    const read = vi.spyOn(w.api.blobs, 'get')
+    for (let i = 0; i < 3; i++) {
+      const res = await preview(w, sid)
+      expect(res.statusCode, res.body).toBe(200)
+      expect(res.json()).not.toHaveProperty('format')
+      expect((res.json() as { records: unknown[] }).records).toEqual([])
+    }
+    expect(read).toHaveBeenCalledTimes(1)
+  })
+
+  it('a converted preview is made once per checkpoint, for whoever may open it, and the answer is the same', async () => {
+    const w = await world('excalidraw')
+    const sid = await saveV1(w)
+    const read = vi.spyOn(w.api.blobs, 'get')
+    const first = await preview(w, sid)
+    expect(first.json()).toMatchObject({ format: 'lobby-elements', converted: true })
+    expect(read).toHaveBeenCalledTimes(1)
+    const alice = await w.api.login('alice') // the workspace's owner
+    const second = await preview(w, sid, alice)
+    const third = await preview(w, sid)
+    expect(read).toHaveBeenCalledTimes(1) // converted (and read) once
+    for (const res of [second, third]) {
+      expect(res.statusCode, res.body).toBe(200)
+      expect(res.json()).toEqual(first.json())
+      expect(res.headers['cache-control']).toBe('private, no-store')
+    }
+  })
+
+  it('the cache never serves someone who may not open the checkpoint', async () => {
+    const w = await world('excalidraw')
+    const sid = await saveV1(w)
+    expect((await preview(w, sid)).statusCode).toBe(200) // cached now
+    // a workspace guest with a grant on the board: 403, as before (a checkpoint can hold removed content)
+    const carol = await w.api.login('carol')
+    expect(
+      (await w.bob.req('PUT', `/api/boards/${w.board}/members/${carol.userId}`, { role: 'viewer' }))
+        .statusCode,
+    ).toBe(200)
+    await w.api.db.query(
+      "UPDATE workspace_members SET role = 'guest' WHERE workspace_id = $1 AND user_id = $2",
+      [DEV_STUDIO, carol.userId],
+    )
+    expect((await preview(w, sid, carol)).statusCode).toBe(403)
+    // someone outside the workspace: 404 (the checkpoint stays invisible), and signed out: 401
+    const erin = await w.api.login('erin')
+    await w.api.db.query('DELETE FROM workspace_members WHERE workspace_id = $1 AND user_id = $2', [
+      DEV_STUDIO,
+      erin.userId,
+    ])
+    expect((await preview(w, sid, erin)).statusCode).toBe(404)
+    expect((await w.api.anon('GET', `/api/snapshots/${sid}/content`)).statusCode).toBe(401)
+    // and a deleted checkpoint is gone, cache or not
+    expect((await w.bob.req('DELETE', `/api/snapshots/${sid}`)).statusCode).toBe(204)
+    expect((await preview(w, sid)).statusCode).toBe(404)
+  })
+
+  it('on the tldraw sync nothing changes: the records, whatever their number', async () => {
+    previewSettings.maxRecords = 1
+    const w = await world('tldraw')
+    const sid = await saveBoard(w, [...baseRecords(), ...notes(3)], 'Records')
+    const res = await preview(w, sid)
+    expect(res.statusCode, res.body).toBe(200)
+    expect((res.json() as { records: unknown[] }).records).toHaveLength(5)
+  })
+})
+
+describe('PreviewCache', () => {
+  const settings = { ...previewSettings }
+  afterEach(() => Object.assign(previewSettings, settings))
+  const converted = (tag: string) => ({
+    kind: 'converted' as const,
+    elements: [{ id: tag, type: 'text' }],
+    doc: {},
+  })
+  const held = (cache: PreviewCache, ...ids: string[]) => ids.map((id) => cache.get(id, 'k') !== null)
+
+  it('evicts the least recently used entry past the entry limit, and a read counts as a use', () => {
+    previewSettings.cacheEntries = 2
+    const cache = new PreviewCache()
+    cache.set('a', 'k', 10, converted('a'))
+    cache.set('b', 'k', 10, converted('b'))
+    expect(cache.get('a', 'k')).not.toBeNull() // a is now the most recent
+    cache.set('c', 'k', 10, converted('c')) // b goes
+    expect(held(cache, 'a', 'b', 'c')).toEqual([true, false, true])
+    expect(cache.size).toBe(2)
+  })
+
+  it('is bounded by the summed cost, never evicts what it just stored, and skips what alone is too big', () => {
+    previewSettings.cacheEntries = 10
+    previewSettings.cacheBytes = 100
+    const cache = new PreviewCache()
+    cache.set('a', 'k', 40, converted('a'))
+    cache.set('b', 'k', 40, converted('b'))
+    cache.set('c', 'k', 40, converted('c')) // 120 > 100: a goes
+    expect(held(cache, 'a', 'b', 'c')).toEqual([false, true, true])
+    cache.set('huge', 'k', 51, converted('huge')) // more than half the budget: not kept
+    expect(held(cache, 'huge')).toEqual([false])
+    expect(cache.size).toBe(2)
+    cache.set('b', 'k', 10, converted('b2')) // replaced, its old cost released
+    cache.set('d', 'k', 50, converted('d')) // 40 + 10 + 50 = 100: all fit
+    expect(held(cache, 'b', 'c', 'd')).toEqual([true, true, true])
+  })
+
+  it('drops an entry whose row now points at another body, and keeps nothing when the cache is off', () => {
+    const cache = new PreviewCache()
+    cache.set('a', 'old.json', 1, converted('a'))
+    expect(cache.get('a', 'new.json')).toBeNull()
+    expect(cache.size).toBe(0)
+    previewSettings.cacheEntries = 0
+    cache.set('b', 'k', 1, converted('b'))
+    expect(cache.get('b', 'k')).toBeNull()
   })
 })

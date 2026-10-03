@@ -299,7 +299,14 @@ describe('board access follows', () => {
     const [entry] = await audits()
     expect(entry).toEqual({
       action: 'workspace.member.remove',
-      detail: { userId: bob.userId, previousRole: 'member', boardGrantsRemoved: 2 },
+      detail: {
+        userId: bob.userId,
+        previousRole: 'member',
+        boardGrantsRemoved: 2,
+        invitationsRevoked: 0, // offboarding: workspace-offboarding.test.ts
+        accessRequestsDenied: 0,
+        linksKept: 0,
+      },
     })
     // gone: a second removal is a 404, and the workspace list no longer has them
     expect((await remove(alice, bob.userId)).statusCode).toBe(404)

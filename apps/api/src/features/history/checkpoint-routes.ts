@@ -21,6 +21,14 @@
 // new board uses at the seed (packages/tldraw-import, apps/sync/src/room-internal/seed.ts), on read, the
 // stored body never rewritten. The answer is a lobby-elements payload marked `converted`. A body the
 // converter cannot read keeps the v1 answer (the records), and so does an api on the tldraw sync.
+//
+// The conversion runs on the api's event loop (about 55 to 85 microseconds per record, measured), so it is
+// bounded: a v1 body of more than `previewSettings.maxRecords` records is not converted at all and
+// answers "too large to preview" (the v1 shape with no records and no format, which the web already shows
+// as "can't be previewed here yet; restoring it as a new board still works"), decided from the row's own
+// record count before the body is even read. What was converted is kept in a small LRU by checkpoint id
+// (a preview opened again, by anyone who may open it, is not converted again), and so is the too-large
+// answer. Both are decided after the access checks, so nothing is served to someone who may not see it.
 
 import { installedServerTextMetrics, installServerTextMetrics } from '@draftroom/canvas-schema/engine'
 import { ELEMENT_SCHEMA_VERSION } from '@draftroom/canvas-schema/protocol'
@@ -74,6 +82,72 @@ export function convertV1ForPreview(
   return { elements: conv.elements as unknown as Record<string, unknown>[], doc }
 }
 
+/**
+ * What bounds a v1 preview (PARITY-5.5). `maxRecords`: past it a checkpoint is not converted. Measured
+ * on a 64-core desktop with the template boards repeated: 55 to 75 microseconds a record, so 2,000 records
+ * take 90 to 120 ms; at the 85 microseconds the wave-B review measured, 170 ms. The loop is not held much
+ * past the 200 ms it was asked to stay under.
+ * `cacheEntries` / `cacheBytes`: the LRU of converted answers. The cost of one is twice the stored body's
+ * size (the converted JSON measured 1.9 times it), so 16 MiB is about eight boards at the cap; one that
+ * alone would take half the budget is not kept. A mutable object, like `checkpointSettings`, so tests can
+ * lower it.
+ */
+export const previewSettings = {
+  maxRecords: 2_000,
+  cacheEntries: 8,
+  cacheBytes: 16 * 1024 * 1024,
+  /** A conversion slower than this is logged (counts only), so staging shows whether the cap is right. */
+  slowMs: 200,
+}
+
+type PreviewOutcome =
+  | { kind: 'converted'; elements: Record<string, unknown>[]; doc: Record<string, unknown> }
+  | { kind: 'too-large' }
+
+/**
+ * A least-recently-used cache of v1 preview outcomes by checkpoint id, bounded by entries and by the
+ * summed cost (bytes). An entry remembers the storage key it was made from and is dropped when the row
+ * now points elsewhere (a body is never rewritten, so this is only a guard).
+ */
+export class PreviewCache {
+  private readonly map = new Map<string, { storageKey: string; cost: number; outcome: PreviewOutcome }>()
+  private total = 0
+
+  get(id: string, storageKey: string): PreviewOutcome | null {
+    const hit = this.map.get(id)
+    if (!hit) return null
+    this.map.delete(id)
+    if (hit.storageKey !== storageKey) {
+      this.total -= hit.cost
+      return null
+    }
+    this.map.set(id, hit) // most recently used goes last
+    return hit.outcome
+  }
+
+  set(id: string, storageKey: string, cost: number, outcome: PreviewOutcome): void {
+    const { cacheEntries, cacheBytes } = previewSettings
+    const old = this.map.get(id)
+    if (old) {
+      this.total -= old.cost
+      this.map.delete(id)
+    }
+    if (cacheEntries < 1 || cost > cacheBytes / 2) return
+    this.map.set(id, { storageKey, cost, outcome })
+    this.total += cost
+    for (const [key, entry] of this.map) {
+      if (this.map.size <= cacheEntries && this.total <= cacheBytes) break
+      if (key === id) continue // never evict what was just stored
+      this.map.delete(key)
+      this.total -= entry.cost
+    }
+  }
+
+  get size(): number {
+    return this.map.size
+  }
+}
+
 /** Previews carry a whole board: per client, per minute (like the other heavy history routes). */
 const PREVIEW_LIMIT = { config: { rateLimit: { max: 60, timeWindow: 60_000 } } }
 const DELETE_LIMIT = { config: { rateLimit: { max: 120, timeWindow: 60_000 } } }
@@ -88,6 +162,7 @@ export function registerCheckpointRoutes(
   bodies: SnapshotBodies,
 ): void {
   const { db } = ctx
+  const previews = new PreviewCache()
 
   /** The time a sync report names, never later than this server's clock (like the touched route). */
   const reportedAt = (req: FastifyRequest): Date => {
@@ -148,6 +223,44 @@ export function registerCheckpointRoutes(
 
   // ---- preview ----------------------------------------------------------------------------------------
 
+  /** A v1 checkpoint's preview as the web draws it: the converted elements, marked `converted`. */
+  function v1Answer(snapshot: CheckpointContent['snapshot'], outcome: PreviewOutcome): CheckpointContent {
+    if (outcome.kind === 'too-large') return noPreview(snapshot)
+    return {
+      snapshot,
+      schema: ELEMENT_SCHEMA_VERSION,
+      records: [],
+      format: 'lobby-elements',
+      elements: outcome.elements as NonNullable<CheckpointContent['elements']>,
+      doc: outcome.doc,
+      converted: true,
+    }
+  }
+
+  /**
+   * "Too large to preview": the v1 shape with nothing in it (no format, no records, no schema), which the
+   * web shows as "can't be previewed here yet; restoring it as a new board still works". Remembered, so
+   * the next request does not even read the body. Counts only reach the log.
+   */
+  function tooLargeToPreview(
+    req: FastifyRequest,
+    snapshot: CheckpointContent['snapshot'],
+    row: SnapshotRow,
+    records: number,
+  ): CheckpointContent {
+    previews.set(row.id, row.storage_key, 1, { kind: 'too-large' })
+    req.log.info(
+      { evt: 'checkpoint.preview.too_large', records, max: previewSettings.maxRecords },
+      'v1 checkpoint too large to preview',
+    )
+    return noPreview(snapshot)
+  }
+  const noPreview = (snapshot: CheckpointContent['snapshot']): CheckpointContent => ({
+    snapshot,
+    schema: null,
+    records: [],
+  })
+
   app.get('/api/snapshots/:sid/content', PREVIEW_LIMIT, async (req, reply): Promise<CheckpointContent> => {
     const user = await ctx.requireUser(req)
     const { row, access } = await visibleCheckpoint(req, user)
@@ -155,12 +268,21 @@ export function registerCheckpointRoutes(
     // Bridge release R0: a row marked as made on the new canvas (body_version 2; never written on this
     // branch yet, snapshot-rows.ts); previewed after the switch.
     if (isNewCanvasRow(row) && !(await onNewCanvas(ctx))) throw newCanvasCheckpoint()
-    const raw = await bodies.read(row.storage_key)
-    if (raw === null) throw gone("This checkpoint's saved content is no longer available.")
-    const body = readCheckpointBody(raw)
     reply.header('cache-control', 'private, no-store')
     const newCanvas = await onNewCanvas(ctx)
     const snapshot = toCheckpoint(row, { newCanvas: !newCanvas })
+    // A v1 row on the new canvas: what is already known (converted before, or too large), and the row's
+    // own record count, decide before the body is read or parsed.
+    const v1Row = newCanvas && !isNewCanvasRow(row)
+    if (v1Row) {
+      const known = previews.get(row.id, row.storage_key)
+      if (known) return v1Answer(snapshot, known)
+      if (Number(row.record_count) > previewSettings.maxRecords)
+        return tooLargeToPreview(req, snapshot, row, Number(row.record_count))
+    }
+    const raw = await bodies.read(row.storage_key)
+    if (raw === null) throw gone("This checkpoint's saved content is no longer available.")
+    const body = readCheckpointBody(raw)
     // v2 (Excalidraw engine): elements and the board document
     if (body.version === 2)
       return {
@@ -171,24 +293,37 @@ export function registerCheckpointRoutes(
         elements: body.elements as NonNullable<CheckpointContent['elements']>,
         doc: body.doc,
       }
-    // v1 on the new canvas: converted on read (PARITY-5.5)
+    // v1 on the new canvas: converted on read (PARITY-5.5), within the cap, once per checkpoint
     if (newCanvas) {
+      // the body's own count, in case the row's was wrong
+      if (body.records.length > previewSettings.maxRecords)
+        return tooLargeToPreview(req, snapshot, row, body.records.length)
+      // a concurrent request may have converted it while this one read the body
+      const known = previews.get(row.id, row.storage_key)
+      if (known) return v1Answer(snapshot, known)
       let converted: ReturnType<typeof convertV1ForPreview> = null
+      const started = performance.now()
       try {
         converted = convertV1ForPreview(body, ctx.now().getTime())
       } catch (e) {
         req.log.warn({ err: { name: (e as Error)?.name } }, 'v1 checkpoint preview not converted')
       }
-      if (converted)
-        return {
-          snapshot,
-          schema: ELEMENT_SCHEMA_VERSION,
-          records: [],
-          format: 'lobby-elements',
-          elements: converted.elements as NonNullable<CheckpointContent['elements']>,
-          doc: converted.doc,
-          converted: true,
-        }
+      const ms = Math.round(performance.now() - started)
+      if (ms > previewSettings.slowMs)
+        req.log.warn(
+          {
+            evt: 'checkpoint.preview.slow',
+            ms,
+            records: body.records.length,
+            max: previewSettings.maxRecords,
+          },
+          'v1 checkpoint preview conversion was slow',
+        )
+      if (converted) {
+        const outcome: PreviewOutcome = { kind: 'converted', ...converted }
+        previews.set(row.id, row.storage_key, 2 * (Number(row.size_bytes) || raw.length), outcome)
+        return v1Answer(snapshot, outcome)
+      }
     }
     // v1: the tldraw records, as before
     return { snapshot, schema: body.schema, records: body.records as CheckpointContent['records'] }
