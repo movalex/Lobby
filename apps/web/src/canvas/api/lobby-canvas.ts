@@ -365,8 +365,8 @@ export interface TransactOptions {
    * the step before it and never the write. What it changed is taken in like someone else's edit: an undo of
    * an earlier step that changed the same field leaves the write's value ("1 change kept"). The engine
    * pushes it as any edit, and the server's `fix` rows for it fold without a step. Wins over `joinPrevious`.
-   * A bare port (no history) ignores it. 2C's (the history controller, `UndoController.outside`, through
-   * the board page's port): real on every port, so it has no row of its own in `LOBBY_CANVAS_MEMBERS`.
+   * A bare port (no history) ignores it. @owner 2C (the history controller, `UndoController.outside`, through
+   * the board page's port): composed in `transact`, real on every port (row `transact.skipUndo`).
    */
   readonly skipUndo?: boolean
 }

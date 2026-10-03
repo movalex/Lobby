@@ -98,6 +98,9 @@ function fakeBoard(): BoardHandles {
   }
 }
 
+/** `transact`'s options are rows of the table but not properties of the canvas object. */
+const TRANSACT_OPTIONS: ReadonlySet<string> = new Set(['transact.joinPrevious', 'transact.skipUndo'])
+
 /** Every function (and getter) of the canvas object, by dotted path. */
 function walk(obj: object, prefix = ''): Map<string, unknown> {
   const out = new Map<string, unknown>()
@@ -214,7 +217,7 @@ describe('the LobbyCanvas member table', () => {
       else expect(s, `${path} should not be a stub`).toBeNull()
     }
     for (const m of LOBBY_CANVAS_MEMBERS) {
-      if (m.path.startsWith('on:') || m.path.startsWith('tx.') || m.path === 'transact.joinPrevious') continue
+      if (m.path.startsWith('on:') || m.path.startsWith('tx.') || TRANSACT_OPTIONS.has(m.path)) continue
       expect(built.has(m.path), `LOBBY_CANVAS_MEMBERS lists ${m.path} but the canvas has none`).toBe(true)
     }
     dispose()
@@ -241,6 +244,40 @@ describe('the LobbyCanvas member table', () => {
     expect(typeof off).toBe('function')
   })
 
+  it('W5-26 (CR-3F-1): transact.skipUndo is a row of the table, composed (real on a bare port too), owned by 2C', () => {
+    const row = LOBBY_CANVAS_MEMBERS.find((m) => m.path === 'transact.skipUndo')
+    expect(row).toEqual({ path: 'transact.skipUndo', owner: '2C', status: 'composed' })
+  })
+
+  it('W5-26 (CR-3F-1): skipUndo goes to the port as { skipUndo: true } and wins over joinPrevious; a plain write passes none', () => {
+    const seen: (unknown | undefined)[] = []
+    const port = fakePort()
+    const history = {
+      ...port,
+      transact: <T>(
+        label: string,
+        fn: Parameters<CanvasPort['transact']>[1],
+        opts?: { skipUndo?: boolean },
+      ) => {
+        seen.push(opts)
+        return port.transact(label, fn as never) as T
+      },
+    } as unknown as CanvasPort
+    for (const board of [undefined, fakeBoard()]) {
+      seen.length = 0
+      const { canvas, dispose } = createLobbyCanvas({
+        port: history,
+        registries: createFeatureRegistries(),
+        board,
+      })
+      canvas.transact('+1', () => 1, { skipUndo: true })
+      canvas.transact('+1', () => 1, { skipUndo: true, joinPrevious: true })
+      canvas.transact('edit', () => 1)
+      expect(seen).toEqual([{ skipUndo: true }, { skipUndo: true }, undefined])
+      dispose()
+    }
+  })
+
   it('with the board handles, the board page members are real and board events subscribe', () => {
     const { canvas, dispose } = createLobbyCanvas({
       port: fakePort(),
@@ -250,7 +287,7 @@ describe('the LobbyCanvas member table', () => {
     const built = walk(canvas)
     for (const m of LOBBY_CANVAS_MEMBERS.filter((x) => x.status === 'board')) {
       // events, joinPrevious and tx.insert (the port transaction's, below) are not canvas properties
-      if (m.path.startsWith('on:') || m.path.startsWith('tx.') || m.path === 'transact.joinPrevious') continue
+      if (m.path.startsWith('on:') || m.path.startsWith('tx.') || TRANSACT_OPTIONS.has(m.path)) continue
       expect(built.has(m.path), m.path).toBe(true)
       expect(stubOwner(built.get(m.path)), `${m.path} should be real on the board page`).toBeNull()
     }

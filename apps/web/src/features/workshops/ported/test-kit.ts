@@ -6,6 +6,7 @@ import {
   type LobbyCanvas,
   type LobbyTx,
   NotImplementedError,
+  type TransactOptions,
   type Viewport,
 } from '../../../canvas/api/index.ts'
 
@@ -17,6 +18,8 @@ export interface FakeCanvas {
   readOnly: boolean
   /** every transact label, in order */
   readonly steps: string[]
+  /** the options each transact was given (`undefined` for none), in step order (W5-26: `skipUndo`) */
+  readonly options: (TransactOptions | undefined)[]
   /** every viewport.set call */
   readonly moves: { x?: number; y?: number; zoom?: number }[]
   /** doc values set through doc.set */
@@ -89,6 +92,7 @@ export function fakeCanvas(elements: CanvasElement[] = []): FakeCanvas {
     viewport: { x: 0, y: 0, width: 1000, height: 800, zoom: 1 },
     readOnly: false,
     steps: [],
+    options: [],
     moves: [],
     doc: {},
   }
@@ -149,9 +153,10 @@ export function fakeCanvas(elements: CanvasElement[] = []): FakeCanvas {
     isHidden: () => false,
     isLocked: (id: string) => !!get(id)?.locked,
     readOnly: () => state.readOnly,
-    transact<T>(label: string, fn: (t: LobbyTx) => T): T {
+    transact<T>(label: string, fn: (t: LobbyTx) => T, opts?: TransactOptions): T {
       if (state.readOnly) throw new Error('read-only')
       state.steps.push(label)
+      state.options.push(opts)
       return fn(tx)
     },
     sceneToOverlay: (p: { x: number; y: number }) => ({

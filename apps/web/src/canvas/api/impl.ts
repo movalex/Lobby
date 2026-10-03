@@ -184,6 +184,7 @@ const LANDED_BOARD_PARTS: ReadonlySet<string> = new Set([
 
 /** 2C's members composed from port members alone (the rest of 2C's are the board page's). */
 const COMPOSED_BY_2C: ReadonlySet<string> = new Set([
+  'transact.skipUndo',
   'text.of',
   'visibleBounds',
   'sceneToOverlay',
@@ -249,6 +250,7 @@ export const LOBBY_CANVAS_MEMBERS: readonly MemberInfo[] = [
   ...(
     [
       ['transact.joinPrevious', '2C'],
+      ['transact.skipUndo', '2C'],
       ['viewport.zoomTo', '3b'],
       ['viewport.centerOn', '3b'],
       ['viewport.ensureVisible', '3b'],

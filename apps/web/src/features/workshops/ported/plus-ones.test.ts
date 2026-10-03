@@ -31,6 +31,19 @@ describe('+1 keys', () => {
     expect(plusOnePatch(full, 'usr_0')).toEqual({ 'plusOne:usr_0': null })
   })
 
+  it('W5-26 (CR-3F-1): a +1 is no undo step: every write passes { skipUndo: true }', () => {
+    const f = fakeCanvas([...withPlus('usr_a')])
+    expect(writePlusOne(f.canvas, 'n', 'usr_b')).toEqual({ ok: true, added: true }) // add
+    expect(writePlusOne(f.canvas, 'n', 'usr_b')).toEqual({ ok: true, added: false }) // toggle off
+    expect(f.steps).toEqual(['+1', '+1'])
+    // the transact's options are exactly { skipUndo: true } (not joinPrevious, not left out)
+    expect(f.options).toEqual([{ skipUndo: true }, { skipUndo: true }])
+    // a refused write makes no step at all
+    f.readOnly = true
+    expect(writePlusOne(f.canvas, 'n', 'usr_c').ok).toBe(false)
+    expect(f.options).toHaveLength(2)
+  })
+
   it('writes through one transact, and refuses what is not a note', () => {
     const f = fakeCanvas([...withPlus('usr_a')])
     expect(writePlusOne(f.canvas, 'n', 'usr_b')).toEqual({ ok: true, added: true })
