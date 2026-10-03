@@ -93,8 +93,36 @@ export interface LobbyCanvasPort extends CanvasPort {
    * post-filter. `elementsChanged: false` (a camera move, CR 3b-8) skips the element scan
    */
   afterSceneChange(elementsChanged?: boolean): void
+  /**
+   * CR-3A-9, port tool names: while a mode is set and the engine is on its `over` tool, `tool()` reports the
+   * mode's Lobby name instead (the highlighter is the engine's `freedraw`, a read-only Hand its neutral
+   * `select` state), so every reader of the port (the board page's `toolChanged`, the cursor, the e2e facade)
+   * sees `highlight` and `hand`. null ends it. The canvas API's tools part (api/parts/tools.ts) runs the modes.
+   */
+  setToolMode(mode: PortToolMode | null): void
+  /**
+   * CR-3A-9, the gesture-element hook: `hook` sees each element the engine starts drawing (its `newElement`)
+   * once, in the scene change it appears in, before the sync engine pushes anything of it (the core holds an
+   * element being drawn and pushes it once, at the gesture's end). A patch it returns is written onto that
+   * element in place: the port's one in-place write (the element is the engine's own, mid-gesture: a new copy
+   * would end the stroke). The highlighter's stamp uses it. Returns the removal.
+   */
+  onGestureElement(hook: GestureElementHook): () => void
   dispose(): void
 }
+
+/** CR-3A-9: a Lobby tool that the engine runs as one of its own (see `LobbyCanvasPort.setToolMode`). */
+export interface PortToolMode {
+  /** the Lobby name `tool()` reports ('highlight', 'hand') */
+  readonly name: string
+  /** the port tool the engine is on meanwhile ('freedraw', 'select') */
+  readonly over: string
+}
+
+/** CR-3A-9: what to write onto an element the engine starts drawing (null: nothing). */
+export type GestureElementHook = (
+  element: Readonly<ExcalidrawElement>,
+) => Readonly<Record<string, unknown>> | null
 
 const OFFLINE_STATUS: SaveStatus = { state: 'saved', pending: 0, offlineChanges: 0, lastReject: null }
 
@@ -113,6 +141,20 @@ export function createCanvasPort(deps: PortDeps): LobbyCanvasPort {
   }
   const versions = new Map<string, number>()
   let lastSelection = ''
+  let toolMode: PortToolMode | null = null
+  const gestureHooks = new Set<GestureElementHook>()
+  /** the engine's element being drawn the hooks last saw */
+  let lastDrawn: string | null = null
+  /** CR-3A-9: the gesture-element hooks, once per element the engine starts drawing (see the interface) */
+  const runGestureHooks = () => {
+    const drawn = api.getAppState().newElement as ExcalidrawElement | null
+    if (!drawn || drawn.id === lastDrawn) return
+    lastDrawn = drawn.id
+    if (!gestureHooks.size) return
+    const patch: Record<string, unknown> = {}
+    for (const hook of [...gestureHooks]) Object.assign(patch, hook(drawn) ?? {})
+    if (Object.keys(patch).length) X.mutateElement(drawn, elementMap(), patch)
+  }
 
   const all = () => api.getSceneElementsIncludingDeleted()
   // CR 3b-7: one lookup in the engine's own map (a scan of every element per call made every per-element
@@ -422,13 +464,21 @@ export function createCanvasPort(deps: PortDeps): LobbyCanvasPort {
     },
     tool() {
       const t = api.getAppState().activeTool
+      let name: string | null
       if (t.type === 'custom') {
         const spec = registries.pointerTools.list().find((p) => p.customType === t.customType)
-        if (spec) return spec.id
         const own = Object.entries(CUSTOM_TOOLS).find(([, v]) => v === t.customType)
-        return own ? own[0] : null
-      }
-      return activeLobbyTool(api)
+        name = spec ? spec.id : own ? own[0] : null
+      } else name = activeLobbyTool(api)
+      // CR-3A-9: the highlighter and a read-only Hand by their Lobby names
+      return toolMode && name === toolMode.over ? toolMode.name : name
+    },
+    setToolMode(mode) {
+      toolMode = mode
+    },
+    onGestureElement(hook) {
+      gestureHooks.add(hook)
+      return () => gestureHooks.delete(hook)
     },
     on(event, listener) {
       ;(listeners[event] as Set<unknown>).add(listener)
@@ -446,6 +496,7 @@ export function createCanvasPort(deps: PortDeps): LobbyCanvasPort {
       emit('viewportChanged', viewport())
     },
     afterSceneChange(elementsChanged = true) {
+      runGestureHooks()
       if (elementsChanged) {
         const changed: string[] = []
         for (const e of all()) {
@@ -474,6 +525,7 @@ export function createCanvasPort(deps: PortDeps): LobbyCanvasPort {
     },
     dispose() {
       offViewport()
+      gestureHooks.clear()
     },
   }
   return port

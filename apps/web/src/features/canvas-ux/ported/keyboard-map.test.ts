@@ -94,19 +94,13 @@ const TAKES_BROWSER_CHORD: Readonly<Record<string, string>> = {
 }
 
 /**
- * Keys that act only while one pointer tool is on (their `match` checks `canvas.tool()`), so they cannot
- * collide at run time with a claim that acts under another tool. They are checked for that instead of for
- * conflicts: each belongs to a feature that comes before every other claimant of its chord (so it wins while
- * its tool is on), and it steps aside under the select tool. (3c asked for a tool qualifier on key claims;
- * this table is the integration's stand-in.)
+ * Keys that act only while one pointer tool is on (CR-3A-9: their claim says which, `KeyClaim.tool`, and the key
+ * registry checks it), so they cannot collide at run time with a claim that acts under another tool. They are
+ * checked for that instead of for conflicts: each belongs to a feature that comes before every other claimant of
+ * its chord (so it wins while its tool is on). The comment tool's are the only ones today.
  */
-const TOOL_SCOPED_KEYS: Readonly<Record<string, string>> = {
-  'comments.tool-enter': 'comment',
-  'comments.tool-escape': 'comment',
-  'comments.tool-tab': 'comment',
-  'comments.tool-level': 'comment',
-}
-const contextual = (by: string) => DEFERRING_KEYS.has(by) || by in TOOL_SCOPED_KEYS
+const toolScoped = claims.filter((c) => c.tool !== undefined)
+const contextual = (c: { by: string; tool?: string }) => DEFERRING_KEYS.has(c.by) || c.tool !== undefined
 
 describe('the keyboard map of CANVAS_FEATURES', () => {
   it('every claimed chord parses', () => {
@@ -114,7 +108,7 @@ describe('the keyboard map of CANVAS_FEATURES', () => {
   })
 
   it('binds no chord twice in one scope (deferring keys aside)', () => {
-    const firm = claims.filter((c) => !contextual(c.by))
+    const firm = claims.filter((c) => !contextual(c))
     expect(keyConflicts(firm)).toEqual([])
   })
 
@@ -126,45 +120,33 @@ describe('the keyboard map of CANVAS_FEATURES', () => {
   })
 
   it('takes an engine key only where the table says why', () => {
-    const taken = claims.filter((c) => ENGINE_KEYS.includes(canonical(c.chord)) && !contextual(c.by))
+    const taken = claims.filter((c) => ENGINE_KEYS.includes(canonical(c.chord)) && !contextual(c))
     expect(
       taken.filter((c) => !TAKES_ENGINE_KEY[canonical(c.chord)]).map((c) => `${c.by}: ${c.chord}`),
     ).toEqual([])
   })
 
-  it('a tool-scoped key wins while its tool is on and steps aside under the select tool', () => {
+  it('a tool-scoped key wins while its tool is on: its feature comes before every other claimant of the chord', () => {
     const order = CANVAS_FEATURES.map((f) => f.id)
-    const specs = CANVAS_FEATURES.flatMap((f) => (f.keys ?? []).map((k) => ({ f: f.id, k })))
-    for (const [id, tool] of Object.entries(TOOL_SCOPED_KEYS)) {
-      const own = specs.find((s) => s.k.id === id)
-      expect(own, id).toBeDefined()
-      if (!own) continue
-      for (const chord of own.k.chords) {
-        const same = claims.filter(
-          (c) =>
-            c.by !== id &&
-            // canvas-ux's deferring keys step aside for any other feature's key at run time
-            !DEFERRING_KEYS.has(c.by) &&
-            (c.scope === own.k.scope || c.scope === 'anywhere') &&
-            canonical(c.chord) === canonical(chord),
+    // the comment tool's four keys (Enter, Escape, Tab, Mod+Shift+Arrow): the claims carry the tool now
+    expect(new Set(toolScoped.map((c) => c.by))).toEqual(
+      new Set(['comments.tool-enter', 'comments.tool-escape', 'comments.tool-tab', 'comments.tool-level']),
+    )
+    for (const own of toolScoped) {
+      expect(own.tool, own.by).toBe('comment')
+      const same = claims.filter(
+        (c) =>
+          c.by !== own.by &&
+          c.tool !== own.tool &&
+          // canvas-ux's deferring keys step aside for any other feature's key at run time
+          !DEFERRING_KEYS.has(c.by) &&
+          (c.scope === own.scope || c.scope === 'anywhere' || own.scope === 'anywhere') &&
+          canonical(c.chord) === canonical(own.chord),
+      )
+      for (const c of same)
+        expect(order.indexOf(own.featureId), `${own.by} before ${c.by} (${own.chord})`).toBeLessThan(
+          order.indexOf(c.featureId),
         )
-        for (const c of same)
-          expect(order.indexOf(own.f), `${id} before ${c.by} (${chord})`).toBeLessThan(
-            order.indexOf(c.featureId),
-          )
-      }
-      const ctxWith = (t: string) =>
-        ({ canvas: { tool: () => t, pointer: () => null } }) as unknown as CanvasFeatureContext
-      const e = {
-        key: 'Enter',
-        code: 'Enter',
-        ctrlKey: false,
-        metaKey: false,
-        altKey: false,
-        shiftKey: false,
-      }
-      expect(own.k.match?.(e, ctxWith('select')) ?? true, `${id} under select`).toBe(false)
-      expect(own.k.match?.(e, ctxWith(tool)) ?? true, `${id} under ${tool}`).toBe(true)
     }
   })
 })

@@ -279,6 +279,70 @@ describe('the next note and the next text (CR-3A-7)', () => {
   })
 })
 
+// ---- CR-3A-9: the port's tool names and its gesture-element hook ----------------------------------------------
+
+describe('the port names Lobby’s tool modes (CR-3A-9)', () => {
+  it('while a mode is on and the engine is on its tool, tool() is the Lobby name; any other tool ends the name', () => {
+    const { api, port } = portOn([], { activeTool: { type: 'freedraw', customType: null } })
+    expect(port.tool()).toBe('freedraw')
+    port.setToolMode({ name: 'highlight', over: 'freedraw' })
+    expect(port.tool()).toBe('highlight')
+    api.updateScene({ appState: { activeTool: { type: 'rectangle', customType: null } } })
+    expect(port.tool()).toBe('rectangle')
+    api.updateScene({ appState: { activeTool: { type: 'freedraw', customType: null } } })
+    port.setToolMode(null)
+    expect(port.tool()).toBe('freedraw')
+    // a read-only Hand: the neutral select state
+    api.updateScene({ appState: { activeTool: { type: 'selection', customType: null } } })
+    port.setToolMode({ name: 'hand', over: 'select' })
+    expect(port.tool()).toBe('hand')
+  })
+})
+
+describe('the gesture-element hook (CR-3A-9)', () => {
+  const stroke = (id: string) =>
+    X.newFreeDrawElement({ type: 'freedraw', id, x: 0, y: 0, points: [[0, 0]], strokeWidth: 2, index: 'a0' })
+
+  it('stamps each element the engine starts drawing once, in place, on the scene change it appears in', () => {
+    const a = stroke('s1')
+    const { api, port } = portOn([a], { newElement: a })
+    const seen: string[] = []
+    const off = port.onGestureElement((el) => {
+      seen.push(el.id)
+      return el.type === 'freedraw' ? { strokeWidth: 9, opacity: 50 } : null
+    })
+    const before = a.version
+    port.afterSceneChange()
+    // the engine's own object (a copy would end the stroke), newer
+    expect(api.getSceneElementsIncludingDeleted()[0]).toBe(a)
+    expect([a.strokeWidth, a.opacity]).toEqual([9, 50])
+    expect(a.version).toBeGreaterThan(before)
+    port.afterSceneChange(false)
+    port.afterSceneChange()
+    expect(seen).toEqual(['s1'])
+    // the next stroke, then none after the removal
+    const b = stroke('s2')
+    api.updateScene({ elements: [a, b], appState: { newElement: b } })
+    port.afterSceneChange()
+    expect(b.strokeWidth).toBe(9)
+    off()
+    const c = stroke('s3')
+    api.updateScene({ elements: [a, b, c], appState: { newElement: c } })
+    port.afterSceneChange()
+    expect(c.strokeWidth).toBe(2)
+    expect(seen).toEqual(['s1', 's2'])
+  })
+
+  it('a hook that returns nothing writes nothing', () => {
+    const a = stroke('s1')
+    const { port } = portOn([a], { newElement: a })
+    port.onGestureElement(() => null)
+    const v = a.version
+    port.afterSceneChange()
+    expect(a.version).toBe(v)
+  })
+})
+
 describe('CanvasPort reads (CR 3b-7)', () => {
   it('get and bounds read the engine map, not a scan of the scene', () => {
     const { api, port } = portOn([rect('a', 'a0', { x: 10, y: 20, width: 30, height: 40 })])

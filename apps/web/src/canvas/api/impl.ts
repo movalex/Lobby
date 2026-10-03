@@ -161,6 +161,7 @@ const LANDED_PARTS: ReadonlySet<string> = new Set([
   'files.urlOf',
   'files.insert',
   'files.crop',
+  'files.track',
   // 3b: parts/navigation.ts (composed from the canvas's own members; CR 3b-1)
   'viewport.zoomTo',
   'viewport.centerOn',
@@ -302,6 +303,7 @@ export const LOBBY_CANVAS_MEMBERS: readonly MemberInfo[] = [
       ['files.status', '2C'],
       ['files.insert', '3g'],
       ['files.crop', '3g'],
+      ['files.track', '3g'],
       ['settings.get', '2C'],
       ['settings.set', '2C'],
       ['tx.reorder', '2C'],

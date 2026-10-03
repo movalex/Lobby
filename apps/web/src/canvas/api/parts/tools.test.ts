@@ -1,14 +1,24 @@
-// OWNER: 3a. The highlighter and the read-only Hand around the port's setTool / tool (./tools.ts, CR-3A-6).
+// OWNER: 3a. The highlighter and the read-only Hand around the port's setTool / tool (./tools.ts, CR-3A-6), and
+// the port seams they use (CR-3A-9: the port's mode names, its gesture-element hook).
 import { describe, expect, it } from 'vitest'
+import { attachBoardEngine } from '../../overrides.ts'
 import type { CanvasPort } from '../../port.ts'
 import type { LobbyCanvas, StyleValues } from '../lobby-canvas.ts'
 import { createFeatureRegistries } from '../registries.ts'
-import { createToolsPart, HIGHLIGHT_OPACITY, highlightOf } from './tools.ts'
+import { createToolsPart, HIGHLIGHT_OPACITY, HIGHLIGHT_WIDTH, highlightOf } from './tools.ts'
 
 function setup(opts: { readOnly?: boolean; next?: StyleValues } = {}) {
   let engineTool = 'select'
   const calls: string[] = []
+  // CR-3A-9: the board page's port is told the mode, and names it itself
+  const modes: ({ name: string; over: string } | null)[] = []
+  const hooks: ((el: Record<string, unknown>) => Record<string, unknown> | null)[] = []
   const port = {
+    setToolMode: (m: { name: string; over: string } | null) => modes.push(m),
+    onGestureElement: (h: (el: Record<string, unknown>) => Record<string, unknown> | null) => {
+      hooks.push(h)
+      return () => {}
+    },
     setTool(t: string) {
       calls.push(t)
       // the port refuses the names the engine has no tool for
@@ -31,8 +41,9 @@ function setup(opts: { readOnly?: boolean; next?: StyleValues } = {}) {
       },
     },
   } as unknown as LobbyCanvas
-  const part = createToolsPart({ port, registries: createFeatureRegistries(), self: () => self })
-  return { part, calls, next: () => next, cursors }
+  const registries = createFeatureRegistries()
+  const part = createToolsPart({ port, registries, self: () => self })
+  return { part, calls, next: () => next, cursors, modes, hooks, registries }
 }
 
 describe('the highlighter (CR-3A-6)', () => {
@@ -68,6 +79,43 @@ describe('the highlighter (CR-3A-6)', () => {
     expect(highlightOf('#ff636e')).toBe('#ff636e')
     expect(highlightOf('#123456')).toBe('#fddd00')
     expect(highlightOf(undefined)).toBe('#fddd00')
+  })
+})
+
+describe('the port seams (CR-3A-9)', () => {
+  it('the port is told each mode (so it names them) and when it ends', () => {
+    const a = setup()
+    a.part.setTool('highlight')
+    a.part.setTool('rectangle')
+    expect(a.modes).toEqual([{ name: 'highlight', over: 'freedraw' }, null])
+    const v = setup({ readOnly: true })
+    v.part.setTool('hand')
+    v.part.setTool('select')
+    expect(v.modes).toEqual([{ name: 'hand', over: 'select' }, null])
+  })
+
+  it('a stroke the highlighter starts is stamped through the gesture-element hook, nothing else is', () => {
+    const t = setup()
+    let changes: ((els: unknown[], s: Record<string, unknown>) => void) | null = null
+    const api = {
+      onChange: (cb: typeof changes) => {
+        changes = cb
+        return () => {}
+      },
+    }
+    attachBoardEngine(t.registries, { api: api as never, wrapper: {} as HTMLElement, boardId: null })
+    expect(t.hooks).toHaveLength(1)
+    expect(changes).not.toBeNull()
+    const hook = t.hooks[0] as (el: Record<string, unknown>) => Record<string, unknown> | null
+    const pen = { id: 'p', type: 'freedraw', customData: { lobby: { by: 'me' } } }
+    expect(hook(pen)).toBeNull()
+    t.part.setTool('highlight')
+    expect(hook(pen)).toEqual({
+      strokeWidth: HIGHLIGHT_WIDTH,
+      opacity: HIGHLIGHT_OPACITY,
+      customData: { lobby: { by: 'me', kind: 'highlight' } },
+    })
+    expect(hook({ id: 'r', type: 'rectangle' })).toBeNull()
   })
 })
 
