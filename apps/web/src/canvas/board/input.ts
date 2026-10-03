@@ -13,7 +13,10 @@
  *  - pointer, wheel, double-click and context-menu events over the canvas (not over an overlay): the
  *    `input` stream, before the engine; `handled()` stops the engine from acting on the event;
  *  - the pointer state (`pointer()`), what is under it (`hovered()`, computed lazily at the last pointer
- *    position) and whether the board has the keyboard.
+ *    position) and whether the board has the keyboard;
+ *  - the two-finger touch pinch (CR 3b-10): a `pinch` input event when the second finger lands, on each
+ *    move of either and when one lifts, with the fingers' spread and middle (`TouchPinchTracker`). The
+ *    engine pinches itself; a listener that `handled()` a move keeps the engine from acting on it.
  *
  * Browser only.
  */
@@ -24,6 +27,7 @@ import type {
   LobbyCanvas,
   PointerState,
   ScenePoint,
+  TouchPinch,
 } from '../api/lobby-canvas.ts'
 import type { KeyHandlerSpec } from '../registries.ts'
 
@@ -73,6 +77,97 @@ const pointerTypeOf = (e: Event): 'mouse' | 'pen' | 'touch' => {
   return t === 'pen' || t === 'touch' ? t : 'mouse'
 }
 
+// ---- the two-finger touch pinch ---------------------------------------------------------------------------
+
+/** One step of a pinch: its phase, the spread of the fingers since the start, and where they are. */
+export interface PinchStep {
+  readonly phase: TouchPinch['phase']
+  /** the distance between the fingers now over the distance when the second one went down */
+  readonly scale: number
+  /** the middle of the fingers now */
+  readonly centre: { readonly x: number; readonly y: number }
+  /** the middle of the fingers when the second one went down */
+  readonly start: { readonly x: number; readonly y: number }
+}
+
+/**
+ * Follows the touch fingers on the canvas and says when two of them make a pinch, the way Excalidraw's own
+ * gesture state reads them (its `gesture.pointers`: a pinch begins when the second finger goes down, and
+ * ends when there are not exactly two; a third finger ends it for good, as it does there). Pure (Node-tested).
+ */
+export class TouchPinchTracker {
+  private readonly fingers = new Map<number, { x: number; y: number }>()
+  private on = false
+  private distance0 = 1
+  private start = { x: 0, y: 0 }
+
+  /** whether two fingers are pinching now */
+  get active(): boolean {
+    return this.on
+  }
+
+  private centre(): { x: number; y: number } {
+    let x = 0
+    let y = 0
+    for (const p of this.fingers.values()) {
+      x += p.x
+      y += p.y
+    }
+    const n = this.fingers.size || 1
+    return { x: x / n, y: y / n }
+  }
+
+  private distance(): number {
+    const [a, b] = [...this.fingers.values()]
+    return a && b ? Math.hypot(a.x - b.x, a.y - b.y) : 0
+  }
+
+  private step(phase: PinchStep['phase']): PinchStep {
+    // fingers on the same spot (a zero start distance) never divide by nothing
+    const scale = phase === 'start' ? 1 : this.distance() / this.distance0
+    return { phase, scale: Number.isFinite(scale) ? scale : 1, centre: this.centre(), start: this.start }
+  }
+
+  /** A finger went down: `start` when that makes two, `end` when it makes three (or more). */
+  down(id: number, x: number, y: number): PinchStep | null {
+    this.fingers.set(id, { x, y })
+    if (this.fingers.size === 2) {
+      this.on = true
+      this.start = this.centre()
+      this.distance0 = Math.max(1, this.distance())
+      return this.step('start')
+    }
+    return this.end()
+  }
+
+  /** A finger moved: a `move` while two are down and this is one of them. */
+  move(id: number, x: number, y: number): PinchStep | null {
+    const p = this.fingers.get(id)
+    if (!p) return null
+    p.x = x
+    p.y = y
+    return this.on ? this.step('move') : null
+  }
+
+  /** A finger lifted (or the browser took it): `end` when it ended the pinch. */
+  up(id: number): PinchStep | null {
+    if (!this.fingers.delete(id)) return null
+    return this.end()
+  }
+
+  /** Every finger forgotten (the page lost focus): `end` when two were pinching. */
+  reset(): PinchStep | null {
+    this.fingers.clear()
+    return this.end()
+  }
+
+  private end(): PinchStep | null {
+    if (!this.on) return null
+    this.on = false
+    return this.step('end')
+  }
+}
+
 export class BoardInput {
   private readonly o: BoardInputOptions
   private state: PointerState | null = null
@@ -81,6 +176,7 @@ export class BoardInput {
   private hoverAt: { x: number; y: number } | null = null
   private hoverCache: { x: number; y: number; id: string | null } | null = null
   private readonly offs: (() => void)[] = []
+  private readonly pinch = new TouchPinchTracker()
 
   constructor(o: BoardInputOptions) {
     this.o = o
@@ -97,14 +193,35 @@ export class BoardInput {
     }
     on(root, 'keydown', (e) => this.onKey(e))
     on(root, 'keyup', (e) => this.onModifier(e))
-    on(root, 'pointerdown', (e) => this.onPointer(e, 'pointer-down'))
-    on(root, 'pointermove', (e) => this.onPointer(e, 'pointer-move'))
+    on(root, 'pointerdown', (e) => {
+      const handled = this.onPointer(e, 'pointer-down')
+      // a finger a listener took is not part of a pinch
+      if (!handled && e.pointerType === 'touch' && this.overCanvas(e.target))
+        this.onPinch(this.pinch.down(e.pointerId, e.clientX, e.clientY), e)
+    })
+    on(root, 'pointermove', (e) => {
+      this.onPointer(e, 'pointer-move')
+      if (e.pointerType !== 'touch') return
+      // a finger that moves with nothing pressed lost its pointerup (the engine's own state has the same hole)
+      const step =
+        e.buttons === 0 ? this.pinch.up(e.pointerId) : this.pinch.move(e.pointerId, e.clientX, e.clientY)
+      this.onPinch(step, e)
+    })
     on(root, 'pointerup', (e) => this.onPointer(e, 'pointer-up'))
     on(root, 'dblclick', (e) => this.onPointer(e, 'double-click'))
     on(root, 'contextmenu', (e) => this.onPointer(e, 'context-menu'))
     on(root, 'wheel', (e) => this.onWheel(e), { capture: true, passive: false })
     on(root, 'pointerleave', () => this.onLeave())
     const doc = root.ownerDocument
+    // a finger's end is read on the document, in case its target went away under it
+    for (const type of ['pointerup', 'pointercancel'] as const)
+      on(doc, type, (e) => {
+        if (e.pointerType === 'touch') this.onPinch(this.pinch.up(e.pointerId), e)
+      })
+    const win = doc.defaultView
+    const forgetFingers = () => this.onPinch(this.pinch.reset(), null)
+    win?.addEventListener('blur', forgetFingers)
+    this.offs.push(() => win?.removeEventListener('blur', forgetFingers))
     on(doc, 'focusin', () => this.syncKeyboard())
     on(doc, 'focusout', () => queueMicrotask(() => this.syncKeyboard()))
   }
@@ -200,7 +317,7 @@ export class BoardInput {
   private onPointer(
     e: MouseEvent,
     type: 'pointer-down' | 'pointer-move' | 'pointer-up' | 'double-click' | 'context-menu',
-  ): void {
+  ): boolean {
     const over = this.overCanvas(e.target)
     const scene = this.o.toScene(e.clientX, e.clientY)
     const down = type === 'pointer-up' ? (e.buttons & ~1) !== 0 : e.buttons !== 0 || type === 'pointer-down'
@@ -213,9 +330,9 @@ export class BoardInput {
     }
     this.o.onPointerChange()
     if (type === 'pointer-move') this.scheduleHover()
-    if (!over) return
+    if (!over) return false
     const listeners = this.o.listeners()
-    if (!listeners.length) return
+    if (!listeners.length) return false
     let handled = false
     let hit: CanvasElement | null | undefined
     const self = this
@@ -236,6 +353,36 @@ export class BoardInput {
     } as CanvasInputEvent
     for (const l of listeners) l(ev)
     if (handled) {
+      e.stopPropagation()
+      e.preventDefault()
+    }
+    return handled
+  }
+
+  /**
+   * A pinch step as a `pinch` input event (CR 3b-10). A listener that `handled()` a move keeps the engine
+   * from seeing the finger's pointermove (`e`: the event of the move; none when the page lost focus).
+   */
+  private onPinch(step: PinchStep | null, e: PointerEvent | null): void {
+    if (!step) return
+    const listeners = this.o.listeners()
+    if (!listeners.length) return
+    let handled = false
+    const ev: CanvasInputEvent = {
+      type: 'pinch',
+      screen: { x: step.centre.x, y: step.centre.y },
+      touch: {
+        phase: step.phase,
+        scale: step.scale,
+        startScreen: { x: step.start.x, y: step.start.y },
+      },
+      handled() {
+        handled = true
+      },
+      ...(e ? mods(e) : { shift: false, alt: false, ctrl: false, meta: false }),
+    }
+    for (const l of listeners) l(ev)
+    if (handled && e && step.phase === 'move') {
       e.stopPropagation()
       e.preventDefault()
     }

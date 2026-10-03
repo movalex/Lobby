@@ -1,10 +1,12 @@
 // OWNER: B2 (wave B). Touch, wheel and tool defaults on the Excalidraw board page:
+//   CR 3b-10 (W5-19)       a two-finger touch pinch goes below Excalidraw's 0.1 down to the whole-board fit,
+//                          and a pinch that starts below 0.1 does not snap up to it
 //   W5-33 / CR-W5-3A-4     Preferences > Input device: what a plain mouse wheel does (auto, mouse, trackpad)
 //   W5-40 / CR-W5-3A-1     Straight after Elbow draws straight connectors (it drew curved ones)
 //   W5-52                  a freshly drawn rectangle has sharp corners, as templates and converted shapes do
 //
 //   E2E_PORT_BASE=<base> pnpm exec playwright test excalidraw/input-touch-wheel.spec.ts --workers=1
-import type { Page } from '@playwright/test'
+import type { CDPSession, Page } from '@playwright/test'
 import {
   createNote,
   expect,
@@ -17,10 +19,62 @@ import {
   test,
   viewport,
 } from '../tests/support/canvas.ts'
+import { openPhoneSession } from './a11y-kit.ts'
 import { emptyCanvasPoint, settled } from './board-kit.ts'
 import { waitForCanvasUx, withCanvas } from './canvas-ux-kit.ts'
 
 test.use({ viewport: { width: 1440, height: 900 } })
+
+// ---- two-finger touch, through the browser's own touch input (CDP) ---------------------------------------
+
+type Pt = { x: number; y: number }
+
+class Fingers {
+  private readonly cdp: CDPSession
+
+  private constructor(cdp: CDPSession) {
+    this.cdp = cdp
+  }
+
+  static async on(page: Page): Promise<Fingers> {
+    return new Fingers(await page.context().newCDPSession(page))
+  }
+
+  private send(type: 'touchStart' | 'touchMove' | 'touchEnd', points: readonly (Pt & { id: number })[]) {
+    return this.cdp.send('Input.dispatchTouchEvent', {
+      type,
+      touchPoints: points.map((p) => ({ x: p.x, y: p.y, id: p.id })),
+    })
+  }
+
+  /** The two fingers go down `gap` px apart around `at` (one at a time, as hands do). */
+  async down(at: Pt, gap: number): Promise<void> {
+    const a = { id: 1, x: at.x - gap / 2, y: at.y }
+    const b = { id: 2, x: at.x + gap / 2, y: at.y }
+    await this.send('touchStart', [a])
+    await this.send('touchStart', [a, b])
+  }
+
+  /** Both fingers move so that they are `gap` px apart around `at`. */
+  async to(at: Pt, gap: number): Promise<void> {
+    await this.send('touchMove', [
+      { id: 1, x: at.x - gap / 2, y: at.y },
+      { id: 2, x: at.x + gap / 2, y: at.y },
+    ])
+  }
+
+  /** From `from` px apart to `to` px apart in `steps` moves, with a frame between them. */
+  async spread(page: Page, at: Pt, from: number, to: number, steps: number): Promise<void> {
+    for (let i = 1; i <= steps; i++) {
+      await this.to(at, from + ((to - from) * i) / steps)
+      await page.waitForTimeout(24)
+    }
+  }
+
+  async up(): Promise<void> {
+    await this.send('touchEnd', [])
+  }
+}
 
 const zoomOf = async (page: Page) => (await viewport(page)).zoom
 
@@ -28,7 +82,141 @@ const zoomOf = async (page: Page) => (await viewport(page)).zoom
 const liveCount = async (page: Page) =>
   (await items(page)).filter((e) => !(e as { isDeleted?: boolean }).isDeleted).length
 
-type Pt = { x: number; y: number }
+const canvasCentre = async (page: Page): Promise<Pt> => {
+  const box = await page.locator('canvas.excalidraw__canvas.interactive').boundingBox()
+  if (!box) throw new Error('no canvas')
+  return { x: box.x + box.width / 2, y: box.y + box.height / 2 }
+}
+
+test('CR 3b-10 (W5-19): a two-finger touch pinch goes below 0.1 down to the whole-board fit; one that starts below 0.1 does not snap up to it; one above 0.1 is still the engine’s', async ({
+  browser,
+  board,
+  users,
+}) => {
+  const phone = await openPhoneSession(browser, board, users, 'alice')
+  try {
+    const page = phone.page
+    // a board 6,000 px wide: its whole-board fit is below 0.1 on a phone (about 0.04)
+    for (const x of [-3000, 3000]) {
+      await createNote(page, { x, y: 0, text: `n${x}` })
+      await expectSaved(page)
+    }
+    const seeded = await liveCount(page)
+    const fit = await withCanvas(page, (c) => c.viewport.limits().min, null)
+    expect(fit).toBeLessThan(0.08)
+    expect(fit).toBeGreaterThan(0.01)
+    const at = await canvasCentre(page)
+    const touch = await Fingers.on(page)
+    const sceneUnder = (p: Pt) => screenToScene(page, p)
+
+    await test.step('a pinch above 0.1 is the engine’s: 1 pinched to a half is about 0.5', async () => {
+      await setViewport(page, { x: -200, y: -300, zoom: 1 })
+      await touch.down(at, 240)
+      await touch.spread(page, at, 240, 120, 6)
+      await touch.up()
+      await expect.poll(() => zoomOf(page)).toBeGreaterThan(0.45)
+      expect(await zoomOf(page)).toBeLessThan(0.55)
+    })
+
+    await test.step('pinching from 0.5 to a tenth of the spread goes to 0.05, below the engine’s 0.1, around the fingers', async () => {
+      await setViewport(page, { x: -1500, y: -800, zoom: 0.5 })
+      await touch.down(at, 300)
+      // the engine pinches down to its floor; the next spread takes it below 0.1 (to about 0.097)
+      await touch.spread(page, at, 300, 58, 14)
+      await expect.poll(() => zoomOf(page)).toBeLessThan(0.1)
+      await page.waitForTimeout(120)
+      // from here the camera is Lobby's, and the scene point between the fingers stays between them
+      const held = await sceneUnder(at)
+      await touch.spread(page, at, 58, 30, 8)
+      // still held: the camera is where the fingers have it
+      await expect.poll(() => zoomOf(page)).toBeLessThan(0.07)
+      expect(await zoomOf(page)).toBeGreaterThanOrEqual(fit - 1e-6)
+      await touch.up()
+      const z = await zoomOf(page)
+      expect(z).toBeLessThan(0.07)
+      expect(z).toBeGreaterThan(0.04)
+      const after = await sceneUnder(at)
+      expect(Math.hypot(after.x - held.x, after.y - held.y) * z).toBeLessThan(3)
+      // and it is not snapped back to 0.1 once the fingers are up
+      await page.waitForTimeout(400)
+      expect(await zoomOf(page)).toBeCloseTo(z, 6)
+    })
+
+    await test.step('a pinch out from 0.05 grows from 0.05 (the engine snapped it to 0.1 at the first move)', async () => {
+      await setViewport(page, { x: -3000, y: -1500, zoom: 0.05 })
+      await touch.down(at, 100)
+      await touch.to(at, 110)
+      await page.waitForTimeout(60)
+      await touch.to(at, 120)
+      await expect.poll(() => zoomOf(page)).toBeGreaterThan(0.054)
+      // one step of 20%: 0.06, nowhere near 0.1
+      expect(await zoomOf(page)).toBeLessThan(0.07)
+      // on up through 0.1 in the same gesture, no jump at it
+      let last = await zoomOf(page)
+      for (let gap = 130; gap <= 300; gap += 10) {
+        await touch.to(at, gap)
+        await page.waitForTimeout(24)
+        const z = await zoomOf(page)
+        expect(z).toBeGreaterThanOrEqual(last - 1e-9)
+        expect(z).toBeLessThan(last * 1.25)
+        last = z
+      }
+      expect(last).toBeGreaterThan(0.12)
+      await touch.up()
+    })
+
+    await test.step('the pinch stops at the whole-board fit, however far the fingers close', async () => {
+      await setViewport(page, { x: -1500, y: -800, zoom: 0.5 })
+      await touch.down(at, 300)
+      await touch.spread(page, at, 300, 4, 14)
+      await touch.up()
+      await expect.poll(async () => Math.abs((await zoomOf(page)) - fit)).toBeLessThan(1e-6)
+    })
+
+    await test.step('a pinch moves nothing in the document', async () => {
+      await expectSaved(page)
+      expect(await liveCount(page)).toBe(seeded)
+    })
+  } finally {
+    await phone.context.close()
+  }
+})
+
+test('CR 3b-10 (W5-19): a viewer on a phone, who only ever moves the camera, pinches out below 0.1 to the whole board too', async ({
+  browser,
+  board,
+  users,
+}) => {
+  const owner = await openPhoneSession(browser, board, users, 'alice')
+  const viewer = await openPhoneSession(browser, board, users, 'bob', 'viewer')
+  try {
+    for (const x of [-3000, 3000]) {
+      await createNote(owner.page, { x, y: 0, text: `n${x}` })
+      await expectSaved(owner.page)
+    }
+    const page = viewer.page
+    await expect.poll(() => liveCount(page)).toBe(await liveCount(owner.page))
+    expect(await withCanvas(page, (c) => c.readOnly(), null)).toBe(true)
+    const fit = await withCanvas(page, (c) => c.viewport.limits().min, null)
+    expect(fit).toBeLessThan(0.08)
+    const at = await canvasCentre(page)
+    const touch = await Fingers.on(page)
+    await setViewport(page, { x: -1500, y: -800, zoom: 0.5 })
+    await touch.down(at, 300)
+    await touch.spread(page, at, 300, 30, 18)
+    await touch.up()
+    await expect.poll(() => zoomOf(page)).toBeLessThan(0.07)
+    expect(await zoomOf(page)).toBeGreaterThanOrEqual(fit - 1e-6)
+    // and on to the fit, from below 0.1 (the engine would snap it back up)
+    await touch.down(at, 300)
+    await touch.spread(page, at, 300, 4, 14)
+    await touch.up()
+    await expect.poll(async () => Math.abs((await zoomOf(page)) - fit)).toBeLessThan(1e-6)
+  } finally {
+    await viewer.context.close()
+    await owner.context.close()
+  }
+})
 
 // ---- Preferences > Input device -----------------------------------------------------------------------------
 
