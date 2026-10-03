@@ -4,6 +4,7 @@ import { stackFromEnv } from '../ports.ts'
 // O3's harness self-test (e2e/spike-b/support/**): the harness's own checks, runnable on O3's branch
 // before M1 (no ElementRoom, no engine core needed):
 //  - units.spec.ts: pure Node checks of the barrier, recorder, hooks, env guards, convergence logic;
+//  - join-diag.spec.ts: pure Node checks of B11's join diagnostics (O3_SELFTEST_NO_WEB=1 skips the web build);
 //  - stack.spec.ts: the launcher (on the Excalidraw engine since wave 4 part 2; it was written against the
 //    tldraw sync), dev users and board sharing, two separate browser processes, forge sockets with the page's own
 //    ticket, the socket relay (latency, cut with held reconnects, restore), the test routes' 404 path;

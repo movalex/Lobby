@@ -14,8 +14,38 @@
 // elements checked is reported with the result.
 //
 // Opt-in (SPIKE_B11=1; 10 minutes, SPIKE_B11_MS to shorten a dry run), 3 runs (SPIKE_B_RUN=1..3). Needs M2.
+//
+// The join stall (wave D5; found by C6: late in a run a headless rejoin got no frame for 30 s or more, and a
+// retry after 65 s was refused as an expired ticket, three runs without a verdict). It is this process, not the
+// server. The 50 headless clients share this one Node process, and every frame any of them sends is applied
+// by all 50 (the engine core scans the scene for each one), so from about 4 minutes in the process is saturated and
+// one turn of its event loop takes 0.8 to 1 s (20 setImmediate turns in a row: 16.5 to 19.5 s). A client that
+// joins then has to decode its snapshot (about 140 KB gzip, 2.3 MB of JSON): a Blob stream through a
+// DecompressionStream, read by a Response, which hands the data on one 16 KiB chunk per turn. That is 145 turns:
+// the same bytes, taken apart here with the loop in that state, took 119 s through the thread-pool gunzip, the
+// DecompressionStream and the full decoder alike (the Blob read without decompression: 0.8 s). The frame had
+// reached the socket within about a second of the open, and the server's own loop was fine (p99 25 ms, max
+// 101 ms). Meanwhile the transport's heartbeat (socket.ts, 15 s ping, dead after 30 s) kills the socket,
+// because its pong waits in the ordered frame chain behind the snapshot, and the reconnect it schedules waits
+// there too: the client reconnects with its FIRST ticket, which is 60 s old by then (the headless client keeps
+// the first ticket unless it is given `refreshTicket`), and the server refuses it 4099 NOT_AUTHENTICATED.
+//   - Participant.connect passes `refreshTicket`, so a reconnect of the client's own gets a fresh ticket (the
+//     run that has only this change passes, with three joins of 18, 69 and 108 s);
+//   - the headless ops are held while any join is in flight, and a join waits for the loop to be calm before
+//     it opens its socket (`untilCalm`): the join takes 0.1 to 10 s, p99 5 to 7 s, and the load stays what it
+//     was (10,600 and 11,100 headless ops in the 10 minutes, as in the earlier passes; `counts.headlessPausedMs`
+//     is the time they waited);
+//   - support/join-diag.ts records every join, this process's loop lag, heap and collections, and for a join
+//     that waits more than 8 s prints what reached its socket, takes its snapshot frame apart and profiles the
+//     process (the lines start with [b11-diag]).
 import { expect, test } from '@playwright/test'
-import type { HeadlessClient, SceneElement } from '../../../apps/web/src/canvas/sync/types.ts'
+import type { HeadlessExtras } from '../../../apps/web/src/canvas/sync/headless/index.ts'
+import type { SocketTransport } from '../../../apps/web/src/canvas/sync/transport/socket.ts'
+import type {
+  HeadlessClient,
+  HeadlessClientOptions,
+  SceneElement,
+} from '../../../apps/web/src/canvas/sync/types.ts'
 import {
   buildStickyNote,
   indexKeyBetween,
@@ -24,12 +54,21 @@ import {
 } from '../../../packages/canvas-schema/src/engine/index.ts'
 import { hashElements } from '../../../packages/canvas-schema/src/hash.ts'
 import { loadHeadlessFactory } from '../../load/headless.ts'
-import { Meter } from '../../load/meter.ts'
+import { scrapeMetrics } from '../../load/metrics.ts'
 import { mutated } from '../../load/session.ts'
 import type { O3BrowserProcess } from '../support/browsers.ts'
 import { closeWindow, openWindow, writeEvidence } from '../support/checks.ts'
 import { divergenceDetail, enableBoardLog } from '../support/diverge.ts'
 import { canvasOf, closeAllBrowsers, harness } from '../support/harness.ts'
+import {
+  analyseSnapshot,
+  attachMeter,
+  CapturingMeter,
+  JoinTrace,
+  LoopLag,
+  meterOf,
+  profileTop,
+} from '../support/join-diag.ts'
 import { apiTicket } from '../support/seed.ts'
 import type { O3Stack } from '../support/stack.ts'
 import type { DevUser } from '../support/types.ts'
@@ -37,11 +76,23 @@ import type { DevUser } from '../support/types.ts'
 test.skip(!process.env.SPIKE_B11, 'set SPIKE_B11=1 to run B11 (10 minutes)')
 test.setTimeout(40 * 60_000)
 
+/**
+ * SPIKE_B11_OPEN_LOOP=1: the headless ops never wait for a join, as B11 ran before wave D5. It reproduces the
+ * join stall described above (a join of 70 to 120 s late in the run).
+ */
+const OPEN_LOOP = process.env.SPIKE_B11_OPEN_LOOP === '1'
+/** "Calm": no tick of this process's event loop ran this late (ms) in the last second. */
+const CALM_LAG_MS = 200
 const DURATION_MS = Number(process.env.SPIKE_B11_MS ?? 10 * 60_000)
 const HEADLESS = Number(process.env.SPIKE_B11_HEADLESS ?? 50)
 const TRACKED = ['x', 'y', 'backgroundColor', 'isDeleted', 'groupIds'] as const
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 const rnd = (n: number) => Math.floor(Math.random() * n)
+/** Resolves once this process's loop is calm (at most 10 s): what the headless ops queued has been applied. */
+async function untilCalm(): Promise<void> {
+  const until = Date.now() + 10_000
+  while (Date.now() < until && loopLag.worstSince(1_000) >= CALM_LAG_MS) await sleep(200)
+}
 
 type Ledger = Map<string, { at: number; fields: Record<string, unknown> }>
 const pick = (el: Record<string, unknown>) => Object.fromEntries(TRACKED.map((f) => [f, el[f]]))
@@ -49,6 +100,11 @@ const pick = (el: Record<string, unknown>) => Object.fromEntries(TRACKED.map((f)
 let stack: O3Stack
 const browsers: O3BrowserProcess[] = []
 let boardId: string
+/** this process's event-loop lag and every headless join, as seen from the inside (support/join-diag.ts) */
+const loopLag = new LoopLag()
+let joins: JoinTrace
+const analysed = new WeakSet<object>()
+let profiled = false
 
 test.beforeAll(async () => {
   // the headless clients build their notes in Node, where the label's measure needs the server's text
@@ -56,6 +112,44 @@ test.beforeAll(async () => {
   // "document is not defined" and the 50 clients wrote nothing (the first 3-run pass, 75fe4d5)
   if (!installedServerTextMetrics()) installServerTextMetrics()
   stack = await harness.startStack()
+  loopLag.begin()
+  joins = new JoinTrace(loopLag, (rec, waitedMs) => {
+    // a join with no welcome yet: the picture while it is still waiting (the run may never finish)
+    console.log(
+      '[b11-diag] join waiting',
+      JSON.stringify({
+        name: rec.name,
+        n: rec.n,
+        why: rec.why,
+        waitedMs,
+        ticketMs: rec.ticketMs,
+        states: rec.states,
+        frames: rec.frames,
+        events: rec.events,
+        loopWorstLast10sMs: loopLag.worstSince(10_000),
+        process: loopLag.now(),
+        socket: meterOf(rec)?.rawSummary(),
+      }),
+    )
+    const meter = meterOf(rec)
+    if (meter && waitedMs > 15_000 && meter.lastBinary && !analysed.has(rec)) {
+      // once per stalled join: the snapshot taken apart, and (once per run) what this process spends its CPU on
+      analysed.add(rec)
+      void analyseSnapshot(meter, (what, detail) =>
+        console.log(`[b11-diag] snapshot: ${what}`, JSON.stringify(detail)),
+      )
+      if (!profiled) {
+        profiled = true
+        void profileTop().then((top) =>
+          console.log('[b11-diag] this process, 10 s CPU profile, top self time', JSON.stringify(top)),
+        )
+      }
+    }
+    void scrapeMetrics(stack.ports.syncUrl, stack.internalSecret).then((m) => {
+      const loop = m.samples.filter((x) => x.name === 'lobby_event_loop_delay_ms')
+      console.log('[b11-diag] sync at that moment', JSON.stringify({ ok: m.ok, status: m.status, loop }))
+    })
+  })
   for (const name of ['A', 'B', 'C'])
     browsers.push(await harness.launchBrowser(stack, harness.devUser(name), { name }))
   ;({ boardId } = await stack.createBoard({
@@ -68,6 +162,7 @@ test.beforeAll(async () => {
   for (const b of browsers) await b.openBoard(boardId)
 })
 test.afterAll(async () => {
+  loopLag.end()
   await closeAllBrowsers()
   await stack?.stop()
 })
@@ -91,26 +186,60 @@ class Participant {
     this.name = name
     this.dev = dev
   }
-  async connect(): Promise<void> {
+  async connect(why = this.connects === 0 ? 'first' : 'rejoin'): Promise<void> {
     this.create ??= await loadHeadlessFactory()
-    const { ticket } = await apiTicket(stack, this.dev, boardId)
-    const c = this.create({
-      syncUrl: stack.ports.syncUrl.replace(/^http/, 'ws'),
-      boardId,
-      tab: `b11-${this.name}`,
-      ticket,
-      meter: new Meter(),
-    })
-    c.core.onAck((ack) => {
-      for (const r of ack.r) {
-        if (!r.ok || !this.own.includes(r.id)) continue
-        const el = c.core.confirmed(r.id) as Record<string, unknown> | undefined
-        if (el) this.ledger.set(r.id, { at: Date.now(), fields: pick(el) })
+    const rec = joins.begin(this.name, this.connects + 1, why)
+    const stopWatch = joins.watch(rec)
+    const at = () => Date.now() - rec.startedAt
+    try {
+      const t0 = Date.now()
+      const { ticket } = await apiTicket(stack, this.dev, boardId)
+      rec.ticketMs = Date.now() - t0
+      // the headless ops are held while this join runs (the loop below); let what they queued be applied
+      if (!OPEN_LOOP) await untilCalm()
+      const mintedAt = Date.now()
+      const meter = new CapturingMeter()
+      attachMeter(rec, meter)
+      const options: HeadlessClientOptions & HeadlessExtras & { meter: CapturingMeter } = {
+        syncUrl: stack.ports.syncUrl.replace(/^http/, 'ws'),
+        boardId,
+        tab: `b11-${this.name}`,
+        ticket,
+        meter,
+        log: (event, detail) => rec.events.push([at(), event, detail]),
+        // a ticket lives 60 s: the client's own reconnects (a heartbeat death, a 4000 RECONNECT) need a fresh
+        // one, or they are refused 4099 NOT_AUTHENTICATED and the client stays dead (the default is the
+        // first ticket again; B11 found that after a join that took over a minute)
+        refreshTicket: async () => (await apiTicket(stack, this.dev, boardId)).ticket,
       }
-    })
-    await c.connect()
-    this.client = c
-    this.connects++
+      const c = this.create(options)
+      const transport = (c as unknown as { transport?: SocketTransport }).transport
+      transport?.onState((state, close) => rec.states.push([at(), state, close?.code]))
+      transport?.onMessage((m) => {
+        if (rec.frames.length < 12) rec.frames.push([at(), m.type])
+      })
+      c.core.onAck((ack) => {
+        for (const r of ack.r) {
+          if (!r.ok || !this.own.includes(r.id)) continue
+          const el = c.core.confirmed(r.id) as Record<string, unknown> | undefined
+          if (el) this.ledger.set(r.id, { at: Date.now(), fields: pick(el) })
+        }
+      })
+      try {
+        await c.connect()
+      } finally {
+        rec.attempts = transport?.attempts ?? 0
+      }
+      rec.welcomeMs = at()
+      rec.ticketAgeAtWelcomeMs = Date.now() - mintedAt
+      this.client = c
+      this.connects++
+    } catch (e) {
+      rec.failed = String(e).slice(0, 200)
+      throw e
+    } finally {
+      stopWatch()
+    }
   }
   async drop(): Promise<void> {
     const c = this.client
@@ -195,10 +324,36 @@ test('B11: 3 browsers + 50 headless clients, random ops, disconnects and one SIG
   const kill: {
     done: { at: number; restartedAt: number; check: { checked: number; missing: string[] } } | null
   } = { done: null }
-  const counts = { browserOps: 0, browserFailures: 0, headlessOps: 0, cuts: 0, drops: 0 }
+  const counts = {
+    browserOps: 0,
+    browserFailures: 0,
+    headlessOps: 0,
+    /** ms the headless clients' ops waited for a join to finish or the loop to catch up */
+    headlessPausedMs: 0,
+    cuts: 0,
+    drops: 0,
+  }
+  // the server's own view of its event loop, every 10 s (cumulative max since it started; a jump is a stall)
+  const syncLoop: { at: number; p99: number | null; max: number | null }[] = []
+  const syncScrape = setInterval(() => {
+    void scrapeMetrics(stack.ports.syncUrl, stack.internalSecret).then((m) => {
+      if (!m.ok) return
+      const q = (quantile: string) =>
+        m.samples.find((x) => x.name === 'lobby_event_loop_delay_ms' && x.labels.quantile === quantile)
+          ?.value ?? null
+      syncLoop.push({ at: m.at, p99: q('0.99'), max: q('1') })
+    })
+  }, 10_000)
 
+  // No headless op while a join is in flight (see the join stall at the top): the backlog the 50 clients
+  // have queued is applied, the loop turns fast, and the join's snapshot decode takes seconds, not minutes.
   const headlessLoop = (async () => {
     while (Date.now() < end) {
+      if (!OPEN_LOOP && joins.active > 0) {
+        counts.headlessPausedMs += 250
+        await sleep(250)
+        continue
+      }
       for (const p of people) {
         if (Math.random() >= 0.25) continue
         p.op()
@@ -207,6 +362,17 @@ test('B11: 3 browsers + 50 headless clients, random ops, disconnects and one SIG
       await sleep(500)
     }
   })()
+  // this process over the run, every 10 s: its heap and its size
+  const processTimeline: { t: number; heapMB: number; rssMB: number }[] = []
+  const timelineStart = Date.now()
+  const timelineTimer = setInterval(() => {
+    const now = loopLag.now()
+    processTimeline.push({
+      t: Math.round((Date.now() - timelineStart) / 1000),
+      heapMB: now.heapUsedMB,
+      rssMB: now.rssMB,
+    })
+  }, 10_000)
   const browserLoop = async (b: O3BrowserProcess) => {
     const c = canvasOf(b.page)
     const own = browserOwn.get(b.name) as string[]
@@ -298,9 +464,14 @@ test('B11: 3 browsers + 50 headless clients, random ops, disconnects and one SIG
         await stack.restartSync()
         const restartedAt = Date.now()
         // every client back: browsers welcomed again, headless reconnected (a fresh ticket each)
-        for (const p of people) {
-          await p.drop()
-          await p.connect()
+        const release = joins.hold() // no headless op between two of the 50 joins
+        try {
+          for (const p of people) {
+            await p.drop()
+            await p.connect('after-kill')
+          }
+        } finally {
+          release()
         }
         for (const b of browsers)
           await b.page.waitForFunction(
@@ -340,12 +511,17 @@ test('B11: 3 browsers + 50 headless clients, random ops, disconnects and one SIG
         const p = people[rnd(people.length)] as Participant
         await p.drop()
         await sleep(3_000 + rnd(5_000))
-        await p.connect()
+        await p.connect('chaos')
         counts.drops++
       }
     }
   })()
-  await Promise.all([headlessLoop, ...browsers.map(browserLoop), ledgerLoop, chaosLoop])
+  try {
+    await Promise.all([headlessLoop, ...browsers.map(browserLoop), ledgerLoop, chaosLoop])
+  } finally {
+    clearInterval(syncScrape)
+    clearInterval(timelineTimer)
+  }
 
   // quiesce: every client saved, then the convergence check over all 53 maps
   for (const p of people) await p.client?.saved(60_000).catch(() => undefined)
@@ -371,6 +547,12 @@ test('B11: 3 browsers + 50 headless clients, random ops, disconnects and one SIG
       headlessErrorCount: people.reduce((n, p) => n + p.errorCount, 0),
       headlessErrors: people.flatMap((p) => p.errors).slice(0, 20),
       headlessCreated: people.reduce((n, p) => n + p.own.length, 0),
+      // how the joins went, and how busy this process and the server were meanwhile (support/join-diag.ts)
+      joins: joins.summary(),
+      testProcessLoop: loopLag.summary(),
+      processTimeline,
+      openLoop: OPEN_LOOP,
+      syncLoopDelay: syncLoop,
       ...extra,
     })
   let report: Awaited<ReturnType<typeof closeWindow>>
@@ -380,7 +562,7 @@ test('B11: 3 browsers + 50 headless clients, random ops, disconnects and one SIG
     // not converged: what each diverging browser holds (scene, core, snapshot; flags; its board log)
     const detail = await divergenceDetail(stack, boardId, browsers).catch((x) => String(x))
     const file = evidence({ notConverged: detail, error: String(e).slice(0, 4_000) })
-    throw new Error(`${String(e).slice(0, 1_500)} (detail in ${file})`)
+    throw new Error(`${String(e).slice(0, 1500)} (detail in ${file})`)
   }
   const headlessIds = new Set(people.flatMap((p) => p.own))
   const headlessStored = report.snapshot.elements.filter((e) => headlessIds.has(e.id)).length
