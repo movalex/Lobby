@@ -414,6 +414,8 @@ export class LobbyBoardSession {
         const reason = e.close.reason
         if (reason === 'FORBIDDEN' || reason === 'NOT_FOUND') {
           void this.store?.purge()
+          // and a guest's page queue: it outlives this session now (E2), the device queues are purged here
+          void this.guestQueue.clear()
           this.o.onAccessLost?.()
         } else if (reason === 'NOT_AUTHENTICATED') this.o.onSignedOut?.()
         this.set({ phase: 'closed', closeReason: reason })

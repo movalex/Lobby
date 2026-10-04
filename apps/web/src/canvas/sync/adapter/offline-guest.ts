@@ -51,9 +51,10 @@ export function guestOfflineQueue(o: { readonly boardId: string; readonly uid: s
     markGuest() {
       page().guest = true
     },
-    load: () => page().store.load(),
+    // only a save makes the page's queue (a member's session reads and clears nothing here)
+    load: () => pages.get(key)?.store.load() ?? Promise.resolve([]),
     save: (entries) => page().store.save(entries),
-    clear: () => page().store.clear(),
+    clear: () => pages.get(key)?.store.clear() ?? Promise.resolve(),
   }
 }
 

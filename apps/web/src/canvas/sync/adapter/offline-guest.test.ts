@@ -49,6 +49,21 @@ describe('guestOfflineQueue: one queue per board and user for the page', () => {
     expect(guestOfflineQueue({ boardId: freshBoard(), uid: 'gwen' }).known).toBe(false)
   })
 
+  it('reading or clearing a queue nobody saved makes none (a member’s session, an access loss)', async () => {
+    const board = freshBoard()
+    const q = guestOfflineQueue({ boardId: board, uid: 'member' })
+    expect(await q.load()).toEqual([])
+    await q.clear()
+    expect(purgeGuestQueuesOf('member')).toBe(0)
+    // an access loss clears a guest's queue; the page still knows they were a guest here
+    const g = guestOfflineQueue({ boardId: board, uid: 'gwen' })
+    g.markGuest()
+    await g.save([entry('r1', 1)])
+    await g.clear()
+    expect(await guestOfflineQueue({ boardId: board, uid: 'gwen' }).load()).toEqual([])
+    expect(g.known).toBe(true)
+  })
+
   it("the person's own sign-out drops their queues on this page, nobody else's", async () => {
     const b1 = freshBoard()
     const b2 = freshBoard()
