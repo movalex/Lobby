@@ -65,6 +65,7 @@ import { selectionText } from './copy-text.ts'
 import { createBoardHandles } from './handles.ts'
 import { BoardInput } from './input.ts'
 import { PeerStore } from './peers.ts'
+import { groupsWithoutHiddenMembers } from './select-groups.ts'
 import { SettingsStore } from './settings.ts'
 
 export type BoardPhase = 'connecting' | 'preparing' | 'ready' | 'offline' | 'closed'
@@ -530,10 +531,14 @@ export class LobbyBoardSession {
       // F11: an undo or a redo re-selects what its step was made with (the port leaves out hidden ids)
       select: (ids, groups) => {
         this.port?.select(ids)
-        // a group comes back as a group, not as its members (the port's `select` clears `selectedGroupIds`)
-        if (groups.length > 0)
+        // a group comes back as a group, not as its members (the port's `select` clears `selectedGroupIds`);
+        // a group with a hidden member does not (the port left that id out, the group would select it again)
+        const whole = groupsWithoutHiddenMembers(groups, api.getSceneElements(), (id) =>
+          this.registries.hidden.isHidden(id),
+        )
+        if (whole.length > 0)
           api.updateScene({
-            appState: { selectedGroupIds: Object.fromEntries(groups.map((g) => [g, true])) } as never,
+            appState: { selectedGroupIds: Object.fromEntries(whole.map((g) => [g, true])) } as never,
           })
       },
     })
