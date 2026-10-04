@@ -2,7 +2,6 @@
 // the Share dialog (PRS-02), and transfer of ownership.
 
 import { type ShareMember, TransferOwnershipInput } from '@draftroom/contracts'
-import type { Queryable } from '@draftroom/db'
 import {
   BOARD_ROLES,
   type BoardRole,
@@ -17,7 +16,7 @@ import { roleRequiresCreator } from '../../auth/identity.ts'
 import type { Params } from '../../context.ts'
 import { badRequest, notFound, parse } from '../../errors.ts'
 import { actorOf } from '../../notifier.ts'
-import { listBoardMembers } from '../../routes/members.ts'
+import { listBoardMembers, loadTarget } from '../../routes/members.ts'
 import { toUser, type UserRow } from '../../serialize.ts'
 import type { FeatureContext } from '../context.ts'
 import { publishSharingChanged } from './shared.ts'
@@ -164,18 +163,15 @@ export function registerSharingRoutes(app: FastifyInstance, ctx: FeatureContext)
     const { bid = '' } = req.params as Params
     const { userId } = parse(TransferOwnershipInput, req.body)
     const route = req.routeOptions.url ?? ''
-    const findTarget = (q: Queryable, workspaceId: string) =>
-      q.maybeOne<{ board_grant: BoardRole | null }>(
-        `SELECT bm.role AS board_grant FROM workspace_members wm
-           LEFT JOIN board_members bm ON bm.board_id = $1 AND bm.user_id = wm.user_id
-          WHERE wm.workspace_id = $2 AND wm.user_id = $3`,
-        [bid, workspaceId, userId],
-      )
     // 1) Unlocked pre-check: today's answers (404/403/400), then the caller's creator status.
     const seen = await requireBoardAction(db, bid, user.id, 'manage_access')
     if (userId === user.id) throw badRequest('Pick someone else to transfer ownership to.')
     if (!isUserId(userId)) throw notFound()
-    if (!(await findTarget(db, seen.board.workspace_id))) throw notFound()
+    const member = await db.maybeOne(
+      'SELECT 1 AS ok FROM workspace_members WHERE workspace_id = $1 AND user_id = $2',
+      [seen.board.workspace_id, userId],
+    )
+    if (!member) throw notFound()
     await ctx.identity.requireCreator(db, user.id, 'share', { route, by: 'route' })
     // 2) The target's identity, when unknown or stale (no lock held).
     await ctx.identity.refreshTarget(userId)
@@ -183,8 +179,13 @@ export function registerSharingRoutes(app: FastifyInstance, ctx: FeatureContext)
     const result = await db.transaction(async (tx) => {
       const access = await requireBoardAction(tx, bid, user.id, 'manage_access', { forUpdate: true })
       await ctx.identity.requireCreator(tx, user.id, 'share', { route, by: 'route' })
-      const target = await findTarget(tx, access.board.workspace_id)
-      if (!target) throw notFound() // outsiders are added through invitations first
+      // Outsiders are added through invitations first (404). The target's membership row is read FOR
+      // SHARE and held to the end of the transaction (members.ts `loadTarget`; lock order in access.ts: the
+      // board row above, then the membership, then the grant): removing the member deletes that row before
+      // it sweeps their grants, so it waits for this transfer and sweeps the new owner grant too, or goes
+      // first and this finds nobody. Read without the lock, the grant could land after the sweep and
+      // outlive the membership.
+      const target = await loadTarget(tx, access, userId)
       if (!(await ctx.identity.isCreatorUser(tx, userId))) throw roleRequiresCreator()
       const at = now()
       await tx.query(
