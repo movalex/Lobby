@@ -217,3 +217,9 @@ on the sync disk (§6).
   Results: api live in 41 s, sync in 52 s (`/healthz` 200 twelve seconds later), web in 31 s. Live smoke 34 passed, 0 failed, the known
   warning; 0 `error`/`FATAL` lines; backups 0 failures; the board handshake echoes `lobby.board.v1`. Known and queued for wave E: a
   removal racing the same person's multi-use link redemption can deadlock (one side answers 500) or leave an orphan grant.
+- **Wave E deployed 2026-10-04 01:43–01:44Z** (`main` `48510b1`; api → web; sync stays on `54ea729`; no migration, no protocol change).
+  It closes the removal-vs-redeem deadlock and orphan grant (membership row first, then the grant, on every grant path; forced
+  interleavings on real PostgreSQL 18.4 on the workstream's branch). It bounds the v1 preview by stored size (2.5 MiB) as well as
+  records (1,000). The shell no longer restarts the board session on re-render, the heartbeat clears on the raw pong, and undo
+  restores group selections. The board's access hint names the person who changed it, and only for real changes. Gate: 563 of 565 e2e
+  passed, 0 failed; stale-client checks 64/64 and 67/67. Live smoke 34 passed, 0 failed; 0 `error`/`FATAL` lines.
