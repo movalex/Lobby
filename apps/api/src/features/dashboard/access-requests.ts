@@ -290,10 +290,12 @@ export function registerAccessRequestRoutes(app: FastifyInstance, ctx: FeatureCo
         const at = now()
         const role: RequestRole | null = decision === 'approve' ? (asked ?? r.role_requested) : null
         if (role) {
-          // An outsider becomes a workspace guest (guests see only boards granted to them).
+          // An outsider becomes a workspace guest (guests see only boards granted to them). The DO UPDATE
+          // changes nothing but locks an existing membership row (membership, then grant: access.ts), as
+          // in redeemInvitation.
           await tx.query(
-            `INSERT INTO workspace_members (workspace_id, user_id, role, created_at) VALUES ($1, $2, 'guest', $3)
-             ON CONFLICT (workspace_id, user_id) DO NOTHING`,
+            `INSERT INTO workspace_members AS m (workspace_id, user_id, role, created_at) VALUES ($1, $2, 'guest', $3)
+             ON CONFLICT (workspace_id, user_id) DO UPDATE SET role = m.role`,
             [r.workspace_id, r.user_id, at],
           )
           await tx.query(

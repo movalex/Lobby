@@ -6,8 +6,14 @@
 // the tldraw one (bridge release R0: its tldraw preview reads records). Before the fix every v1 body came
 // back as records, which the Excalidraw page cannot draw ("can't be previewed here yet").
 import { CheckpointContent } from '@draftroom/contracts'
+import { b64Vecs } from '@draftroom/tldraw-import/tldraw'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { PreviewCache, previewSettings } from '../../../src/features/history/checkpoint-routes.ts'
+import {
+  labelTextCost,
+  labelTextTotal,
+  PreviewCache,
+  previewSettings,
+} from '../../../src/features/history/checkpoint-routes.ts'
 import { checkpointSettings } from '../../../src/features/history/checkpoints.ts'
 import { type Client, createBoard, createTestApi, DEV_STUDIO, type TestApi } from '../../helpers.ts'
 import { baseRecords, createFakeSync, type FakeSync, noteRec, type Rec, SCHEMA } from './helpers.ts'
@@ -96,13 +102,53 @@ describe('previewing a v1 checkpoint (PARITY-5.5)', () => {
   })
 })
 
-// PARITY-5.5 follow-up (wave B follow-up 5): the conversion runs on the api's event loop (about 55 to 85
-// microseconds a record), so a v1 preview is bounded and cached.
+// PARITY-5.5 follow-up (wave B follow-up 5; wave E adds the size and text bounds): the conversion runs on
+// the api's event loop (about 90 microseconds a note, about 65 ms per MiB of strokes, about 5 ms per
+// thousand characters of a note's label), so a v1 preview is bounded (by records, by stored size and by
+// label text) and cached.
 describe('a v1 preview is bounded and cached', () => {
   const settings = { ...previewSettings }
   afterEach(() => Object.assign(previewSettings, settings))
 
   const notes = (n: number) => Array.from({ length: n }, (_, i) => noteRec(`n${i}`, `Note ${i}`, `a${i + 1}`))
+  /** A freehand stroke of `points` points (tldraw's draw shape, its points base64-packed as stored). */
+  const stroke = (i: number, points: number): Rec => ({
+    id: `shape:d${i}`,
+    typeName: 'shape',
+    type: 'draw',
+    x: i,
+    y: i,
+    rotation: 0,
+    index: `a${i + 1}`,
+    parentId: 'page:page',
+    isLocked: false,
+    opacity: 1,
+    meta: {},
+    props: {
+      color: 'black',
+      fill: 'none',
+      dash: 'draw',
+      size: 'm',
+      isComplete: true,
+      isClosed: false,
+      isPen: false,
+      scale: 1,
+      scaleX: 1,
+      scaleY: 1,
+      segments: [
+        {
+          type: 'free',
+          path: b64Vecs.encodePoints(
+            Array.from({ length: points }, (_, k) => ({
+              x: k * 1.37,
+              y: Math.sin(k / 5) * 20 + k * 0.11 + i,
+              z: 0.5,
+            })),
+          ),
+        },
+      ],
+    },
+  })
   /** Saves the board's current records as a v1 checkpoint. */
   async function saveBoard(w: Awaited<ReturnType<typeof world>>, records: Rec[], name: string) {
     w.sync.setBoard(w.board, records)
@@ -162,6 +208,169 @@ describe('a v1 preview is bounded and cached', () => {
     expect(read).toHaveBeenCalledTimes(1)
   })
 
+  // wave E (the wave-D review's measurements): conversion cost grows with the points and text inside the
+  // records, so a body with few records can still hold the loop. The stored size bounds it as well.
+  it('the bounds as shipped: 1,000 records, 2.5 MiB of stored body and 35,000 characters of label text', () => {
+    expect(settings.maxRecords).toBe(1_000)
+    expect(settings.maxBodyBytes).toBe(2.5 * 1024 * 1024)
+    expect(settings.maxTextChars).toBe(35_000)
+  })
+
+  it('past the size bound it is not converted either, though the record count fits: decided from the row’s size_bytes before the body is read', async () => {
+    const w = await world('excalidraw')
+    const small = await saveBoard(w, [...baseRecords(), ...notes(2)], 'Small')
+    const big = await saveBoard(
+      w,
+      [...baseRecords(), ...notes(2), noteRec('long', 'words '.repeat(4_000), 'a9')],
+      'Heavy',
+    )
+    const size = async (id: string) =>
+      Number(
+        (
+          await w.api.db.one<{ size_bytes: number }>('SELECT size_bytes FROM board_snapshots WHERE id = $1', [
+            id,
+          ])
+        ).size_bytes,
+      )
+    expect(await size(big)).toBeGreaterThan((await size(small)) + 20_000)
+    previewSettings.maxBodyBytes = await size(small) // the small one is exactly at the bound: it fits
+    const read = vi.spyOn(w.api.blobs, 'get')
+
+    const fits = await preview(w, small)
+    expect(fits.json()).toMatchObject({ format: 'lobby-elements', converted: true })
+    expect(read).toHaveBeenCalledTimes(1)
+
+    read.mockClear()
+    const res = await preview(w, big)
+    expect(res.statusCode, res.body).toBe(200)
+    const body = CheckpointContent.parse(res.json())
+    expect(body).toMatchObject({
+      records: [],
+      schema: null,
+      snapshot: { id: big, name: 'Heavy', recordCount: 5 },
+    })
+    expect(body).not.toHaveProperty('format')
+    expect(body).not.toHaveProperty('converted')
+    expect(read).not.toHaveBeenCalled() // the row's size decided: the body was not even read
+    expect((await preview(w, big)).statusCode).toBe(200) // remembered
+    expect(read).not.toHaveBeenCalled()
+    // restoring it as a new board still works
+    const restored = await w.bob.req('POST', `/api/snapshots/${big}/restore-as-new`, {})
+    expect(restored.statusCode, restored.body).toBe(201)
+  })
+
+  it('a row that understates its size is caught by the body’s own size, before it is parsed (read once, then remembered)', async () => {
+    const w = await world('excalidraw')
+    const sid = await saveBoard(w, [...baseRecords(), noteRec('long', 'words '.repeat(4_000))], 'Understated')
+    previewSettings.maxBodyBytes = 10_000 // the body is about 24 kB
+    await w.api.db.query('UPDATE board_snapshots SET size_bytes = 100 WHERE id = $1', [sid])
+    const read = vi.spyOn(w.api.blobs, 'get')
+    for (let i = 0; i < 3; i++) {
+      const res = await preview(w, sid)
+      expect(res.statusCode, res.body).toBe(200)
+      expect(res.json()).not.toHaveProperty('format')
+      expect((res.json() as { records: unknown[] }).records).toEqual([])
+    }
+    expect(read).toHaveBeenCalledTimes(1)
+  })
+
+  it('at the shipped bounds a stroke-heavy board with few records is too large by its size; a lighter one converts', async () => {
+    const w = await world('excalidraw')
+    // 1,000 points a stroke (about 8 kB of stored body each): 300 strokes fit, 400 do not, at 2.5 MiB
+    const strokes = (n: number) => [
+      ...baseRecords(),
+      ...Array.from({ length: n }, (_, i) => stroke(i, 1_000)),
+    ]
+    const light = await saveBoard(w, strokes(150), 'Light strokes')
+    const heavy = await saveBoard(w, strokes(400), 'Heavy strokes')
+    const sizes = await w.api.db.query<{ id: string; size_bytes: number; record_count: number }>(
+      'SELECT id, size_bytes, record_count FROM board_snapshots WHERE id = ANY($1)',
+      [[light, heavy]],
+    )
+    const of = (id: string) => sizes.rows.find((r) => r.id === id)
+    expect(Number(of(light)?.size_bytes)).toBeLessThan(previewSettings.maxBodyBytes)
+    expect(Number(of(heavy)?.size_bytes)).toBeGreaterThan(previewSettings.maxBodyBytes)
+    expect(Number(of(heavy)?.record_count)).toBeLessThan(previewSettings.maxRecords) // the count alone would convert it
+    expect((await preview(w, light)).json()).toMatchObject({ format: 'lobby-elements', converted: true })
+    const res = await preview(w, heavy)
+    expect(res.statusCode, res.body).toBe(200)
+    expect(res.json()).not.toHaveProperty('format')
+    expect((res.json() as { records: unknown[] }).records).toEqual([])
+  })
+
+  // wave E (the wave-E review): label text costs about 5 ms per thousand characters of a sticky note, so
+  // a board small by records and by bytes (100 notes of 4 kB: 0.4 MB, 102 records) can still hold the loop
+  // for a second. The text is summed from the parsed body, which no row column holds.
+  const wordyNotes = (n: number, words: number) =>
+    Array.from({ length: n }, (_, i) => noteRec(`w${i}`, 'word '.repeat(words), `a${i + 1}`))
+
+  it('past the text bound it is not converted, though records and bytes fit: summed from the parsed body (read once, then remembered)', async () => {
+    const w = await world('excalidraw')
+    const wordy = await saveBoard(w, [...baseRecords(), ...wordyNotes(100, 800)], 'Wordy') // 100 notes of 4 kB
+    const row = await w.api.db.one<{ size_bytes: number; record_count: number }>(
+      'SELECT size_bytes, record_count FROM board_snapshots WHERE id = $1',
+      [wordy],
+    )
+    // small by the two bounds that were there before: only the text is past the third
+    expect(Number(row.record_count)).toBe(102)
+    expect(Number(row.record_count)).toBeLessThan(previewSettings.maxRecords)
+    expect(Number(row.size_bytes)).toBeLessThan(previewSettings.maxBodyBytes / 4)
+    expect(100 * 'word '.repeat(800).length).toBeGreaterThan(previewSettings.maxTextChars)
+
+    const read = vi.spyOn(w.api.blobs, 'get')
+    const res = await preview(w, wordy)
+    expect(res.statusCode, res.body).toBe(200)
+    const body = CheckpointContent.parse(res.json())
+    expect(body).toMatchObject({
+      records: [],
+      schema: null,
+      snapshot: { id: wordy, name: 'Wordy', recordCount: 102 },
+    })
+    expect(body).not.toHaveProperty('format')
+    expect(body).not.toHaveProperty('converted')
+    expect(body).not.toHaveProperty('elements')
+    expect(read).toHaveBeenCalledTimes(1) // the body had to be read to count its text
+    for (let i = 0; i < 2; i++) expect((await preview(w, wordy)).json()).toMatchObject({ records: [] })
+    expect(read).toHaveBeenCalledTimes(1) // remembered: not read again
+    // restoring it as a new board still works
+    const restored = await w.bob.req('POST', `/api/snapshots/${wordy}/restore-as-new`, {})
+    expect(restored.statusCode, restored.body).toBe(201)
+  })
+
+  it('at the text bound it converts, one character past it does not (the characters of every label, however many notes)', async () => {
+    const w = await world('excalidraw')
+    const label = (n: number, chars: number) =>
+      noteRec(`b${n}`, 'abcdefghijk'.repeat(4).slice(0, chars), `a${n + 1}`)
+    const fits = await saveBoard(
+      w,
+      [...baseRecords(), ...Array.from({ length: 4 }, (_, i) => label(i, 10))],
+      'Forty',
+    )
+    const over = await saveBoard(
+      w,
+      [...baseRecords(), label(0, 11), ...Array.from({ length: 3 }, (_, i) => label(i + 1, 10))],
+      'Forty-one',
+    )
+    previewSettings.maxTextChars = 40
+    expect((await preview(w, fits)).json()).toMatchObject({ format: 'lobby-elements', converted: true })
+    const res = await preview(w, over)
+    expect(res.statusCode, res.body).toBe(200)
+    expect(res.json()).not.toHaveProperty('format')
+    expect((res.json() as { records: unknown[] }).records).toEqual([])
+  })
+
+  it('a board of short stickies well inside the text bound still converts (the shipped bound)', async () => {
+    const w = await world('excalidraw')
+    // 300 notes of 60 characters: 18,000 characters, about half the shipped bound
+    const sid = await saveBoard(w, [...baseRecords(), ...wordyNotes(300, 12)], 'Retro')
+    expect(300 * 'word '.repeat(12).length).toBeLessThan(previewSettings.maxTextChars)
+    const res = await preview(w, sid)
+    expect(res.statusCode, res.body).toBe(200)
+    expect(res.json()).toMatchObject({ format: 'lobby-elements', converted: true })
+    const els = CheckpointContent.parse(res.json()).elements ?? []
+    expect(els.filter((e) => e.type === 'stickynote')).toHaveLength(300)
+  })
+
   it('a converted preview is made once per checkpoint, for whoever may open it, and the answer is the same', async () => {
     const w = await world('excalidraw')
     const sid = await saveV1(w)
@@ -215,6 +424,70 @@ describe('a v1 preview is bounded and cached', () => {
     const res = await preview(w, sid)
     expect(res.statusCode, res.body).toBe(200)
     expect((res.json() as { records: unknown[] }).records).toHaveLength(5)
+  })
+})
+
+describe('the label text a v1 preview weighs', () => {
+  const rich = (...paragraphs: string[][]) => ({
+    type: 'doc',
+    content: paragraphs.map((leaves) => ({
+      type: 'paragraph',
+      content: leaves.map((text) => ({ type: 'text', text, marks: [{ type: 'bold' }] })),
+    })),
+  })
+  const shape = (type: string, props: Record<string, unknown>) => ({
+    id: `shape:${type}`,
+    typeName: 'shape',
+    type,
+    props,
+  })
+
+  it('counts the characters of every text leaf of the rich text, nested and marked, and of the older plain text', () => {
+    expect(labelTextCost(shape('note', { richText: rich(['ab', 'cde'], ['f']) }))).toBe(6)
+    const item = {
+      type: 'paragraph',
+      content: [{ type: 'text', text: 'item' }, { type: 'hardBreak' }, { type: 'text', text: 'two' }],
+    }
+    const list = {
+      type: 'doc',
+      content: [{ type: 'bulletList', content: [{ type: 'listItem', content: [item] }] }],
+    }
+    expect(labelTextCost(shape('geo', { richText: list }))).toBe(7)
+    expect(labelTextCost(shape('arrow', { text: 'plain' }))).toBe(5) // before tldraw's rich text
+    expect(labelTextCost(shape('note', { text: 'ab', richText: rich(['cd']) }))).toBe(4)
+  })
+
+  it('counts free text at an eighth, and a frame’s name, other records and anything unreadable as nothing', () => {
+    expect(labelTextCost(shape('text', { richText: rich(['x'.repeat(80)]) }))).toBe(10)
+    expect(labelTextCost(shape('frame', { name: 'x'.repeat(80), w: 1, h: 1 }))).toBe(0)
+    expect(labelTextCost({ id: 'page:p', typeName: 'page', name: 'x'.repeat(80) })).toBe(0)
+    expect(labelTextCost({ id: 'asset:a', typeName: 'asset', props: { text: 'x'.repeat(80) } })).toBe(0)
+    expect(labelTextCost({ id: 'shape:n', typeName: 'shape', type: 'note' })).toBe(0)
+    for (const richText of [null, undefined, 7, 'abc', [], { content: 'abc' }, { content: [null, 4, 'x'] }])
+      expect(labelTextCost(shape('note', { richText })), JSON.stringify(richText)).toBe(0)
+    expect(labelTextCost(shape('note', { text: 12, richText: { type: 'text', text: 9 } }))).toBe(0)
+  })
+
+  it('stops descending a hostile document at a fixed depth instead of overflowing the stack', () => {
+    let deep: Record<string, unknown> = { type: 'text', text: 'deep' }
+    for (let i = 0; i < 20_000; i++) deep = { type: 'paragraph', content: [deep] }
+    expect(labelTextCost(shape('note', { richText: deep }))).toBe(0) // its text is below the depth limit
+    let near: Record<string, unknown> = { type: 'text', text: 'near' }
+    for (let i = 0; i < 20; i++) near = { type: 'paragraph', content: [near] }
+    expect(labelTextCost(shape('note', { richText: near }))).toBe(4)
+  })
+
+  it('sums a body’s records, and stops reading once it is past the bound', () => {
+    const records = [
+      shape('note', { text: 'x'.repeat(100) }),
+      shape('geo', { text: 'x'.repeat(100) }),
+      shape('note', { text: 'x'.repeat(100) }),
+      shape('text', { text: 'x'.repeat(80) }),
+    ]
+    expect(labelTextTotal(records, Number.POSITIVE_INFINITY)).toBe(310)
+    expect(labelTextTotal(records, 310)).toBe(310)
+    expect(labelTextTotal(records, 150)).toBe(200) // stopped after the second record
+    expect(labelTextTotal([], 0)).toBe(0)
   })
 })
 

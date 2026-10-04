@@ -103,10 +103,13 @@ export function registerEmailInviteRoutes(app: FastifyInstance, ctx: FeatureCont
       if (!roleAtLeast(target.role, role)) {
         const at = now()
         // An outsider becomes a workspace guest (guests see only boards granted to them), exactly
-        // as accepting a board invitation makes them.
+        // as accepting a board invitation makes them. The DO UPDATE changes nothing but locks an existing
+        // membership row: the lock order (access.ts) is membership, then grant, so a member removal
+        // (routes/workspaces.ts: membership, then sweep) waits for this grant and sweeps it, instead of
+        // running between this step and the grant below and leaving the grant behind.
         await tx.query(
-          `INSERT INTO workspace_members (workspace_id, user_id, role, created_at) VALUES ($1, $2, 'guest', $3)
-           ON CONFLICT (workspace_id, user_id) DO NOTHING`,
+          `INSERT INTO workspace_members AS m (workspace_id, user_id, role, created_at) VALUES ($1, $2, 'guest', $3)
+           ON CONFLICT (workspace_id, user_id) DO UPDATE SET role = m.role`,
           [access.board.workspace_id, userId, at],
         )
         // Their current role is below `role`, so any grant they have is too: set it.
