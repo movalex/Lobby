@@ -131,12 +131,24 @@ export class RawClient {
     this.ws.send(typeof msg === 'string' ? msg : JSON.stringify(msg))
   }
 
+  /**
+   * Says hello and resolves once the room has sent everything it answers a hello with, which ends with its
+   * `contracts` frame (element-room.ts `hello`). The welcome alone is not enough: a joiner served a REUSED
+   * snapshot (SNAPSHOT_REUSE, up to 60 s and 500 rows old) gets the welcome at the snapshot's clock, the
+   * snapshot, and then a `changes` frame with the rows written since it. Resolving on the snapshot let a test
+   * read the joiner's elements before that catch-up landed whenever the frame came in after the snapshot's
+   * gunzip finished (bound-arrows.test.ts read `confirmed.get('A')` as undefined on Linux, 2 vCPUs).
+   */
   async hello(since = 0, epoch: string | null = null): Promise<Welcome> {
     const count = this.received.filter((m) => m.type === 'welcome').length
+    const contracts = this.of('contracts').length
     this.welcomeDone = false
     this.send({ type: 'hello', proto: PROTO, schema: ELEMENT_SCHEMA_VERSION, since, epoch, tab: this.tab })
     await this.until(
-      () => this.received.filter((m) => m.type === 'welcome').length > count && this.welcomeDone,
+      () =>
+        this.received.filter((m) => m.type === 'welcome').length > count &&
+        this.welcomeDone &&
+        this.of('contracts').length > contracts,
       'welcome',
     )
     return this.welcome as Welcome

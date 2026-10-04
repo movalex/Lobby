@@ -145,11 +145,22 @@ export class ProtocolClient {
     this.ws.send(typeof msg === 'string' ? msg : JSON.stringify(msg))
   }
 
+  /**
+   * Says hello and resolves once the room has sent everything it answers a hello with, which ends with its
+   * `contracts` frame (element-room.ts `hello`): a joiner served a REUSED snapshot (SNAPSHOT_REUSE) gets the
+   * welcome at the snapshot's clock, the snapshot, then a `changes` frame with the rows written since it, and
+   * resolving on the snapshot alone could hand a test the joiner's copy before that catch-up landed (the same
+   * fix as element-room/support/client.ts).
+   */
   async hello(since = 0, epoch: string | null = null): Promise<Welcome> {
     const count = this.of('welcome').length
+    const contracts = this.of('contracts').length
     this.welcomeDone = false
     this.send({ type: 'hello', proto: PROTO, schema: ELEMENT_SCHEMA_VERSION, since, epoch, tab: this.tab })
-    await this.until(() => this.of('welcome').length > count && this.welcomeDone, 'welcome')
+    await this.until(
+      () => this.of('welcome').length > count && this.welcomeDone && this.of('contracts').length > contracts,
+      'welcome',
+    )
     return this.welcome as Welcome
   }
 
