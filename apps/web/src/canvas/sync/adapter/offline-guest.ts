@@ -12,6 +12,14 @@
  * from the start (the first session of a page cannot know yet: it reads the device queue, which a guest
  * never has; the welcome then purges it, as before).
  *
+ * Eviction (F2, wave F; the wave E follow-up): a queue is kept while it holds an unsent edit, so a guest who
+ * goes back to that board finds it, and is dropped once the page has left its board with nothing unsent.
+ * A queue with nothing in it holds no content, only the `known` mark, which a later session of the SAME
+ * board still needs (a Retry); so it stays until the page moves on. Another board's session starting here
+ * sweeps the others (`guestOfflineQueue`); `releaseGuestQueue` is the call for the board page's own unmount
+ * (the page does not make it yet: LobbyBoardPage.tsx). Until then a board left for a page that is not a board
+ * keeps only that empty mark, until the next board session here, a sign-out, or a reload.
+ *
  * NODE-SAFE (CONTRACTS.md): plain memory, no DOM.
  */
 import { createMemoryOfflineStore } from '../core/offline-memory.ts'
@@ -19,12 +27,17 @@ import type { OfflineQueueStore } from '../types.ts'
 
 interface PageQueue {
   readonly uid: string
-  readonly store: OfflineQueueStore
+  readonly store: ReturnType<typeof createMemoryOfflineStore>
   guest: boolean
 }
 
 /** This page's guest queues, by `<board>|<uid>`. */
 const pages = new Map<string, PageQueue>()
+
+const keyOf = (o: { readonly boardId: string; readonly uid: string }): string => `${o.boardId}|${o.uid}`
+
+/** Nothing unsent in it: every edit a guest made reached the room (or they made none). */
+const idle = (p: PageQueue): boolean => p.store.entries().length === 0
 
 export interface GuestQueue extends OfflineQueueStore {
   /** a session of this page learned (from a welcome) that this user is a guest on this board */
@@ -33,9 +46,14 @@ export interface GuestQueue extends OfflineQueueStore {
   markGuest(): void
 }
 
-/** This page's queue for a guest on `boardId` (the same one for every session of the page). */
+/**
+ * This page's queue for a guest on `boardId` (the same one for every session of the page). Opening it is a
+ * board session starting here, so every OTHER board's queue with nothing unsent is dropped: the page has
+ * left those boards. One with unsent edits stays.
+ */
 export function guestOfflineQueue(o: { readonly boardId: string; readonly uid: string }): GuestQueue {
-  const key = `${o.boardId}|${o.uid}`
+  const key = keyOf(o)
+  for (const [other, p] of pages) if (other !== key && idle(p)) pages.delete(other)
   const page = (): PageQueue => {
     let p = pages.get(key)
     if (!p) {
@@ -51,11 +69,27 @@ export function guestOfflineQueue(o: { readonly boardId: string; readonly uid: s
     markGuest() {
       page().guest = true
     },
-    // only a save makes the page's queue (a member's session reads and clears nothing here)
+    // only a save of something makes the page's queue (a member's session reads and clears nothing here, and
+    // the empty save a session's dispose makes after its queue was released must not bring it back)
     load: () => pages.get(key)?.store.load() ?? Promise.resolve([]),
-    save: (entries) => page().store.save(entries),
+    save: (entries) =>
+      entries.length === 0 && !pages.has(key) ? Promise.resolve() : page().store.save(entries),
     clear: () => pages.get(key)?.store.clear() ?? Promise.resolve(),
   }
+}
+
+/**
+ * The page left this guest's board (the board page unmounted: the person went to another page of the app):
+ * drops their queue unless it holds an unsent edit, which stays for their return. A restart of the board's
+ * session on the same page (Retry, a role change) is not this: its queue is still wanted, so a session's
+ * `dispose` must not call it. Returns whether a queue was dropped.
+ */
+export function releaseGuestQueue(o: { readonly boardId: string; readonly uid: string }): boolean {
+  const key = keyOf(o)
+  const p = pages.get(key)
+  if (!p || !idle(p)) return false
+  pages.delete(key)
+  return true
 }
 
 /**

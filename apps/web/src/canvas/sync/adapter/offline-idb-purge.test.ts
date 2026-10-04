@@ -4,6 +4,7 @@
 // queue: unsent work, held per user for that user's next session (wave A follow-up before deploy).
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { OfflineEntry } from '../types.ts'
+import { guestOfflineQueue } from './offline-guest.ts'
 import { createIdbOfflineStore, createSignOutPurge, purgeOfflineQueuesOf } from './offline-idb.ts'
 
 interface Rec {
@@ -280,6 +281,48 @@ describe('the offline queue across sessions (CRIT-18: an expiry keeps unsent edi
     seen({ status: 'signed-out', uid: null, explicit: true })
     await vi.waitFor(() => expect(idb.records.size).toBe(0))
     expect(await queueOf('usr_a')).toEqual([])
+  })
+
+  // F2 (wave F, the E2 follow-up): nothing asserted that the default purge reaches the guest queues a page holds
+  // in memory (./offline-guest.ts), which outlive a board session: a guest's unsent edits stayed readable by the
+  // next person on a shared machine's open tab after the guest's own Sign out
+  it('their own Sign out also drops the guest queues this page holds in memory (not another account’s); a 401 keeps them', async () => {
+    const seen = createSignOutPurge() // the real purge: the device queues and the page's guest queues
+    const mine = guestOfflineQueue({ boardId: 'b-signout-guest', uid: 'usr_g' })
+    mine.markGuest()
+    await mine.save([entry('r1'), entry('r2')])
+    const theirs = guestOfflineQueue({ boardId: 'b-signout-guest', uid: 'usr_h' })
+    theirs.markGuest()
+    await theirs.save([entry('r3')])
+    // a device record of the same account (what a member of other boards has), so the purge's device half is seen too
+    idb.seed({
+      key: 'b-other|usr_g|t1',
+      boardId: 'b-other',
+      uid: 'usr_g',
+      tab: 't1',
+      entries: [entry('d1')],
+      savedAt: 1,
+    })
+    seen({ status: 'signed-in', uid: 'usr_g' })
+
+    // the session expires (a 401): the guest's unsent edits wait for their return, as a member's do
+    seen({ status: 'signed-out', uid: null })
+    expect((await mine.load()).map((e) => e.element.id)).toEqual(['r1', 'r2'])
+    expect(mine.known).toBe(true)
+    expect(idb.records.size).toBe(1)
+
+    // their own Sign out: gone from this page's memory, with the mark that routed a later session to it
+    seen({ status: 'signed-in', uid: 'usr_g' })
+    seen({ status: 'signed-out', uid: null, explicit: true })
+    expect(await mine.load()).toEqual([])
+    expect(mine.known).toBe(false)
+    // the other account's queue on the same board is not theirs to lose
+    expect((await theirs.load()).map((e) => e.element.id)).toEqual(['r3'])
+    expect(theirs.known).toBe(true)
+    await vi.waitFor(() => expect(idb.records.size).toBe(0)) // the device half of the same purge
+    seen({ status: 'signed-in', uid: 'usr_h' })
+    seen({ status: 'signed-out', uid: null, explicit: true })
+    expect(await theirs.load()).toEqual([])
   })
 
   it('another account on the same browser never loads or adopts a kept queue (it is keyed by user)', async () => {

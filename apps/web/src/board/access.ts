@@ -105,12 +105,14 @@ export function freshActorName(hint: { name: string; at: number } | null, now: n
 
 /**
  * REVIEW-6: the name of whoever changed my access, held from the `access.changed` event that carried it until
- * the role-change toast uses it. The server sends the event after every owner's PUT or DELETE of my grant,
- * also when the grant came out the same (a no-op), and the toast may follow much later (a raise waits for the
- * socket to reconnect, a change of the workspace role or the board's visibility sends no event at all). So a name
- * is kept only while it can still be about the change the toast announces: it is dropped as soon as a read of my
- * role from the server agrees with the role on screen (`settle`: the event changed nothing for me), and
- * otherwise after `ACCESS_ACTOR_FRESH_MS`.
+ * the role-change toast uses it. The server sends the event for every change that really changed access (a
+ * member's grant set or removed, an approved request, a revoked review link, a change of the workspace role, an
+ * email invite, an ownership transfer, a change of the board's visibility, which everyone on the board but whoever
+ * made it hears) and for none that changed nothing (a PUT or DELETE of a grant that stays as it was). A change can
+ * still leave MY role here as it was (most of a visibility change's events), and the toast may follow much later
+ * (a raise waits for the socket to reconnect). So a name is kept only while it can still be about the change the
+ * toast announces: it is dropped as soon as a read of my role from the server agrees with the role on screen
+ * (`settle`: the change did not touch my role), and otherwise after `ACCESS_ACTOR_FRESH_MS`.
  */
 export class AccessActorHint {
   private held: { name: string; at: number; n: number } | null = null
@@ -132,10 +134,10 @@ export class AccessActorHint {
 
   /**
    * A read of my role from the server finished. When it agrees with the role the page shows (`serverRole`
-   * equals `shownRole`) the change the held name was told of changed nothing for me (a grant set to what it
-   * was, one the board's visibility already gave), so the name is dropped now instead of being put on an
-   * unrelated change a minute later. `upTo` is `mark` from before the read started: a hint that came after
-   * it may be about a change the read did not see, and stays.
+   * equals `shownRole`) the change the held name was told of left my role as it was (most of a visibility
+   * change's events, a grant that gives me no more than I had), so the name is dropped now instead of being put
+   * on an unrelated change a minute later. `upTo` is `mark` from before the read started: a hint that came
+   * after it may be about a change the read did not see, and stays.
    */
   settle(upTo: number, shownRole: BoardRole, serverRole: BoardRole): void {
     if (this.held && this.held.n <= upTo && shownRole === serverRole) this.held = null
