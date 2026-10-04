@@ -54,8 +54,11 @@ for (const dir of [
 }
 
 describe('ci.yml', () => {
-  it('keeps the triggers the owner has: pushes to main and pull requests', () => {
-    expect(ci).toContain('\non:\n  push:\n    branches: [main]\n  pull_request:\n\npermissions:\n')
+  it('keeps the trigger the owner has: by hand only (workflow_dispatch), since 2026-10-04', () => {
+    // Pushes to main used 1,800 of the account's 2,000 free Actions minutes in a day, so the owner made the workflow
+    // manual. Putting push or pull_request back is the owner's call (docs/DEPLOY.md, "CI"), not a test's.
+    expect(ci).toContain('\non:\n  workflow_dispatch:\n\npermissions:\n')
+    expect(code).not.toMatch(/^ {2}(push|pull_request|pull_request_target|schedule):/m)
   })
 
   it('pins every action to a full commit SHA and gives every job a timeout and a runner', () => {
