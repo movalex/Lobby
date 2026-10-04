@@ -22,16 +22,18 @@
 // stored body never rewritten. The answer is a lobby-elements payload marked `converted`. A body the
 // converter cannot read keeps the v1 answer (the records), and so does an api on the tldraw sync.
 //
-// The conversion runs on the api's event loop (about 90 microseconds per record for notes, about 65 ms per
-// MiB of body for strokes, measured), so it is bounded twice: a v1 body of more than
-// `previewSettings.maxRecords` records, or whose stored body is larger than `previewSettings.maxBodyBytes`,
-// is not converted at all and answers "too large to preview" (the v1 shape with no records and no format,
-// which the web already shows as "can't be previewed here yet; restoring it as a new board still works").
-// Both are decided from the row's own record count and size_bytes before the body is even read (the body's
-// own size and count are checked again once it is, in case a row was wrong). What was converted is kept in
-// a small LRU by checkpoint id (a preview opened again, by anyone who may open it, is not converted
-// again), and so is the too-large answer. Both are decided after the access checks, so nothing is served
-// to someone who may not see it.
+// The conversion runs on the api's event loop, and what it costs grows with what is in the records (about
+// 90 microseconds per record, 65 ms per MiB of strokes, 5 ms per thousand characters of a sticky note's
+// label: the measurements are at `previewSettings`), so it is bounded three ways: a v1 body of more
+// than `previewSettings.maxRecords` records, or whose stored body is larger than
+// `previewSettings.maxBodyBytes`, or whose labels hold more than `previewSettings.maxTextChars`
+// characters of text, is not converted at all and answers "too large to preview" (the v1 shape with no
+// records and no format, which the web already shows as "can't be previewed here yet; restoring it as a new
+// board still works"). The first two are decided from the row's own record_count and size_bytes before the
+// body is even read (the body's own size and count are checked again once it is, in case a row was wrong);
+// the text is summed once the body is parsed. What was converted is kept in a small LRU by checkpoint id (a
+// preview opened again, by anyone who may open it, is not converted again), and so is the too-large answer.
+// Both are decided after the access checks, so nothing is served to someone who may not see it.
 
 import { installedServerTextMetrics, installServerTextMetrics } from '@draftroom/canvas-schema/engine'
 import { ELEMENT_SCHEMA_VERSION } from '@draftroom/canvas-schema/protocol'
@@ -86,21 +88,65 @@ export function convertV1ForPreview(
 }
 
 /**
+ * The label text of one v1 record, weighed by what laying it out costs, in characters of sticky-note
+ * label (the dearest): tldraw's rich text (`props.richText`, ProseMirror JSON: the `text` of its leaves) or
+ * the older plain `props.text`. Notes, geo shapes and arrows wrap their label to a container; free text
+ * (`type: 'text'`) is only measured, about a tenth of the cost, so it counts one eighth. Anything else
+ * (a frame's name, a bookmark) costs nothing measurable and counts nothing.
+ */
+const FREE_TEXT_WEIGHT = 1 / 8
+const MAX_RICH_TEXT_DEPTH = 64
+export function labelTextCost(record: Record<string, unknown>): number {
+  const props = record.props
+  if (record.typeName !== 'shape' || typeof props !== 'object' || props === null) return 0
+  const { text, richText } = props as { text?: unknown; richText?: unknown }
+  let chars = typeof text === 'string' ? text.length : 0
+  const walk = (node: unknown, depth: number): void => {
+    if (depth > MAX_RICH_TEXT_DEPTH || typeof node !== 'object' || node === null) return
+    const { text: leaf, content } = node as { text?: unknown; content?: unknown }
+    if (typeof leaf === 'string') chars += leaf.length
+    if (Array.isArray(content)) for (const child of content) walk(child, depth + 1)
+  }
+  walk(richText, 0)
+  return record.type === 'text' ? chars * FREE_TEXT_WEIGHT : chars
+}
+
+/** The summed label-text cost of a v1 body's records, one cheap pass that stops once it is past `stopAbove`. */
+export function labelTextTotal(records: readonly Record<string, unknown>[], stopAbove: number): number {
+  let total = 0
+  for (const record of records) {
+    total += labelTextCost(record)
+    if (total > stopAbove) break
+  }
+  return total
+}
+
+/**
  * What bounds a v1 preview (PARITY-5.5). A conversion costs by what is in the records, not only by how
- * many there are, so a checkpoint is converted only within BOTH bounds: `maxRecords` and `maxBodyBytes`.
- * Measured warm on a 64-core desktop (wave E; convertV1ForPreview, the median of five runs; the wave-D
- * review's own timings agree):
- *   - notes with a short label: 87 to 93 microseconds a record (1,000 records 93 ms, 2,000 records 174 ms;
- *     a body of 0.46 MiB per 1,000 records);
+ * many there are, so a checkpoint is converted only within ALL THREE bounds: `maxRecords`, `maxBodyBytes`
+ * and `maxTextChars`. Measured warm on a 64-core desktop (wave E; convertV1ForPreview, the median of three
+ * runs after a warm-up; the wave-D and wave-E reviews' own timings agree):
+ *   - a fixed cost per record, notes with a short label: 87 to 93 microseconds (1,000 records 93 ms, 2,000
+ *     records 174 ms; a body of 0.46 MiB per 1,000 records);
  *   - freehand strokes: 60 to 70 ms per MiB of stored body, whatever the record count (1,000 strokes of 400
- *     points, 3.4 MiB: 233 ms; 2,000 strokes of 400 points, 6.8 MiB: 409 ms; 300 strokes of 1,000 points,
- *     2.4 MiB: 156 ms). The 55 to 85 microseconds a record that the wave-B comments quoted hold for notes
- *     only, and not even for those.
- * So at the two bounds one conversion takes about 100 ms (1,000 notes) to 175 ms (2.5 MiB of strokes) on that
- * machine, near the `slowMs` it is asked to stay under. A smaller, slower core (a hosted api) takes longer
- * by a factor nobody has measured here: `checkpoint.preview.slow` on staging shows whether the bounds are
- * right. `maxBodyBytes` is compared with the row's size_bytes (the stored JSON, in bytes) before the body
- * is read.
+ *     points, 3.4 MiB: 233 ms; 300 strokes of 1,000 points, 2.4 MiB: 156 ms). Stored bytes bound strokes;
+ *   - label text, which stored bytes do NOT bound (the layout wraps every line): about 5 ms per thousand
+ *     characters of a sticky note's label (4.9 prose, 5.2 many short lines, 3.7 CJK, 1.5 one unbroken
+ *     word), 2 to 2.5 for a geo shape's, 1 to 1.8 for an arrow's, 0.1 to 0.8 for free text, none for a
+ *     frame's name. 300 notes of 500 characters (0.27 MiB, 302 records) took 836 ms, and 100 notes of 24 KB
+ *     (2.3 MiB, 102 records, inside the other two bounds) 10.7 s. A label is laid out at 20,000 characters
+ *     at most.
+ * `maxTextChars` is 35,000 characters, counted by `labelTextCost` (note, geo and arrow text in full, free
+ * text at an eighth, so the dearest rate, the note's, is taken for all). Notes totalling 40,000 characters
+ * took 160 to 230 ms whatever their number (1,000 of 40 characters to 2 of 20,000), so 35,000 is about 140
+ * to 200 ms, the `slowMs` it is asked to stay under. The three costs add up, so the worst board the three
+ * bounds allow (2 MiB of strokes and 35,000 characters of notes together) takes about 285 ms; strokes alone
+ * at the size bound about 120 to 175 ms, and a board of 1,000 notes about 90 to 190 ms. A smaller, slower
+ * core (a hosted api) takes longer by a factor nobody has measured here: `checkpoint.preview.slow` on
+ * staging shows whether the bounds need to be lower.
+ * `maxBodyBytes` is compared with the row's size_bytes (the stored JSON, in bytes) before the body is read;
+ * the text is summed from the parsed body, one pass (under 0.1 ms for 1,000 records), and a body past it
+ * is remembered like the others.
  * `cacheEntries` / `cacheBytes`: the LRU of converted answers. The cost of one is twice the stored body's
  * size (the converted JSON measured 1.9 times it), so 16 MiB is about three boards at the size bound (more
  * at typical sizes); one that alone would take half the budget is not kept (none within the bound is).
@@ -109,6 +155,7 @@ export function convertV1ForPreview(
 export const previewSettings = {
   maxRecords: 1_000,
   maxBodyBytes: 2.5 * 1024 * 1024,
+  maxTextChars: 35_000,
   cacheEntries: 8,
   cacheBytes: 16 * 1024 * 1024,
   /** A conversion slower than this is logged (counts only), so staging shows whether the cap is right. */
@@ -261,7 +308,7 @@ export function registerCheckpointRoutes(
     req: FastifyRequest,
     snapshot: CheckpointContent['snapshot'],
     row: SnapshotRow,
-    size: { records: number; bytes: number },
+    size: { records: number; bytes: number; textChars?: number },
   ): CheckpointContent {
     previews.set(row.id, row.storage_key, 1, { kind: 'too-large' })
     req.log.info(
@@ -269,8 +316,11 @@ export function registerCheckpointRoutes(
         evt: 'checkpoint.preview.too_large',
         records: size.records,
         bytes: size.bytes,
+        // the label text, known only once the body is parsed (undefined when the row's own size decided)
+        ...(size.textChars === undefined ? {} : { textChars: Math.round(size.textChars) }),
         max: previewSettings.maxRecords,
         maxBytes: previewSettings.maxBodyBytes,
+        maxTextChars: previewSettings.maxTextChars,
       },
       'v1 checkpoint too large to preview',
     )
@@ -324,9 +374,13 @@ export function registerCheckpointRoutes(
       }
     // v1 on the new canvas: converted on read (PARITY-5.5), within the cap, once per checkpoint
     if (newCanvas) {
-      // the body's own count, in case the row's was wrong
-      if (pastPreviewBounds(body.records.length, rawBytes))
-        return tooLargeToPreview(req, snapshot, row, { records: body.records.length, bytes: rawBytes })
+      // the body's own count, in case the row's was wrong, and its label text, which no row column holds
+      // and the stored size does not bound (the layout of a label costs by its text)
+      const size = { records: body.records.length, bytes: rawBytes }
+      if (pastPreviewBounds(size.records, size.bytes)) return tooLargeToPreview(req, snapshot, row, size)
+      const textChars = labelTextTotal(body.records, previewSettings.maxTextChars)
+      if (textChars > previewSettings.maxTextChars)
+        return tooLargeToPreview(req, snapshot, row, { ...size, textChars })
       // a concurrent request may have converted it while this one read the body
       const known = previews.get(row.id, row.storage_key)
       if (known) return v1Answer(snapshot, known)
@@ -345,8 +399,10 @@ export function registerCheckpointRoutes(
             ms,
             records: body.records.length,
             bytes: rawBytes,
+            textChars: Math.round(textChars),
             max: previewSettings.maxRecords,
             maxBytes: previewSettings.maxBodyBytes,
+            maxTextChars: previewSettings.maxTextChars,
           },
           'v1 checkpoint preview conversion was slow',
         )
