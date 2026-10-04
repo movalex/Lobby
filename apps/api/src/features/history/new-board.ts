@@ -2,10 +2,10 @@
 //
 // Always a NEW, PRIVATE board owned by the caller (PRF-08): no grants, no invitation/review links, no
 // workspace visibility are inherited, except the explicit "keep sharing settings" duplicate, which
-// copies people grants and visibility (never links, never name-only guests) and needs manage_access on
-// the source. Domain access (D5): a copied grant of someone who is not a creator is at most `editor`
-// (nobody makes an outsider a board owner), and the caller must still be a creator when the row is
-// written (the seed can take a while).
+// copies people grants and visibility (never links, never name-only guests, never someone who no longer
+// belongs to the workspace) and needs manage_access on the source. Domain access (D5): a copied grant of
+// someone who is not a creator is at most `editor` (nobody makes an outsider a board owner), and the caller
+// must still be a creator when the row is written (the seed can take a while).
 //
 // Order: seed the canvas first, then commit the board row. Until the row exists nobody can get a
 // ticket for the id, so nothing can race the seed; a seed conflict (the id already has canvas data:
@@ -179,25 +179,37 @@ export async function createBoardFrom(
         // Name-only guests (wave 3) never carry over either: they reach a board only through a guest
         // link (docs/WAVE3-CONTRACTS.md §2 guests), and a copied grant would be tied to no link, so
         // revoking the link with removal would leave them editing the copy (SEAM-03).
+        //
+        // Only people who still belong to the workspace get a grant, and their membership rows are read
+        // FOR SHARE and held to the end of this transaction (the lock order in access.ts: the membership,
+        // then the grant, as members.ts `loadTarget` does). A grant of someone who is no member gives
+        // nothing, but it comes back to life if they ever join again, so a source grant that already
+        // outlived its membership is not copied. A member removal (routes/workspaces.ts: the workspace row,
+        // then the membership, then a sweep of their grants) cannot run between this read and the insert:
+        // assertBoardRoom above holds the workspace row, and these row locks keep it so for any path that
+        // deletes a membership without that row (it waits for this transaction and sweeps the copy's grant
+        // too). Sorted by user, so two copies lock the rows in one order.
         const grants = await tx.query<{ user_id: string }>(
-          'SELECT bm.user_id FROM board_members bm WHERE bm.board_id = $1 AND bm.user_id <> $2',
-          [plan.shareLike.boardId, plan.userId],
+          `SELECT bm.user_id FROM board_members bm
+             JOIN boards src ON src.id = bm.board_id AND src.workspace_id = $3
+             JOIN workspace_members wm ON wm.workspace_id = $3 AND wm.user_id = bm.user_id
+             JOIN users u ON u.id = bm.user_id AND u.kind <> 'guest'
+            WHERE bm.board_id = $1 AND bm.user_id <> $2
+            ORDER BY bm.user_id
+              FOR SHARE OF wm`,
+          [plan.shareLike.boardId, plan.userId, plan.workspaceId],
         )
-        const creators = await ctx.identity.creatorsAmong(
-          tx,
-          grants.rows.map((g) => g.user_id),
-        )
+        const people = grants.rows.map((g) => g.user_id)
+        const creators = await ctx.identity.creatorsAmong(tx, people)
         await tx.query(
           `INSERT INTO board_members (board_id, user_id, role, added_by, created_at)
            SELECT $1, bm.user_id,
                   CASE WHEN bm.role = 'owner' AND NOT (bm.user_id = ANY($6::text[])) THEN 'editor' ELSE bm.role END,
                   $3, $4
              FROM board_members bm
-             JOIN boards src ON src.id = bm.board_id AND src.workspace_id = $5
-             JOIN users u ON u.id = bm.user_id AND u.kind <> 'guest'
-            WHERE bm.board_id = $2 AND bm.user_id <> $3
+            WHERE bm.board_id = $2 AND bm.user_id = ANY($5::text[]) AND bm.user_id <> $3
            ON CONFLICT DO NOTHING`,
-          [newId, plan.shareLike.boardId, plan.userId, at, plan.workspaceId, [...creators]],
+          [newId, plan.shareLike.boardId, plan.userId, at, people, [...creators]],
         )
       }
       await insertLinks(tx, plan.workspaceId, newId, plan.files, at)
