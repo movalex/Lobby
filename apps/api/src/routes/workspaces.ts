@@ -37,14 +37,11 @@
 // an approval holding the request has the board, and its guest-membership insert waits for a membership row
 // a removal has already deleted, which the removal's wait for that request would turn into a deadlock.
 //
-// Not closed from here: the two grant paths that insert the guest membership with ON CONFLICT DO NOTHING
-// (invitations.ts redeemInvitation, dashboard/email-invites.ts grant) take no lock on an existing
-// membership row, so one that has read the membership just before a removal began can still insert its
-// grant after the sweep. The fix is theirs (DO UPDATE SET role = workspace_members.role locks the row;
-// redeemInvitation must also read its `prior` grant after that insert so both paths lock membership, then
-// grant). Until then, a person removed in exactly that window is left with an orphan grant: it gives
-// nothing while they are no member (resolveBoardRole needs a workspace role, and the board's member list
-// joins workspace members), but it comes back to life if they join the workspace again.
+// Every path that gives another person a board grant takes their membership row before the grant (a board
+// member change and the transfer of ownership read it FOR SHARE, as does the grant copy of a keep-sharing
+// duplicate; accepting an invitation, an email invite and approving an access request insert it with a
+// no-op DO UPDATE that locks an existing row), so a removal either waits for the grant and sweeps it, or
+// goes first and the grant finds nobody (the lock order is in access.ts).
 
 import {
   CreateProjectInput,
