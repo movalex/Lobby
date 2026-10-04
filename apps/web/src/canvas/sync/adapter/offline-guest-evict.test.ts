@@ -115,6 +115,17 @@ describe('releaseGuestQueue: the board page unmounting', () => {
     expect(releaseGuestQueue({ boardId: board, uid: gwen })).toBe(true)
   })
 
+  it('the empty save a session’s dispose makes afterwards does not bring the queue back', async () => {
+    const gwen = freshUser('gwen')
+    const board = freshBoard()
+    const q = await guestOn(board, gwen)
+    expect(releaseGuestQueue({ boardId: board, uid: gwen })).toBe(true)
+    await q.save([]) // core.persistNow() of the session that is going
+    expect(purgeGuestQueuesOf(gwen), 'no queue was made again').toBe(0)
+    await q.save([entry('r1', 1)]) // a real unsent edit still makes one
+    expect(purgeGuestQueuesOf(gwen)).toBe(1)
+  })
+
   it('has nothing to drop for a member (their session made no page queue), another board or another user', async () => {
     const member = freshUser('member')
     const gwen = freshUser('gwen')
