@@ -60,10 +60,11 @@
 # Actions minutes. Actions are pinned to full commit SHAs (tag in the comment) so a moved tag cannot change a build.
 name: CI
 
+# MANUAL ONLY since 2026-10-04: every push to main ran the whole set (about 20 jobs, roughly 100 runner-minutes),
+# and the 2026-10-03 deploy day used 1,800 of the account's 2,000 free minutes a month. Run it from the Actions tab
+# (Run workflow) when wanted; putting push/pull_request triggers back is the owner's call (docs/DEPLOY.md, "CI").
 on:
-  push:
-    branches: [main]
-  pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
