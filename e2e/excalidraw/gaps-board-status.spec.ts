@@ -118,13 +118,16 @@ test('archived: nothing was changed, so the owner’s open tab pushes nothing ag
   board,
 }) => {
   // DEF-GAPS-1 (the gap pass, wave C; fixed in wave D, D2): the archive gives the owner a viewer ticket, and the
-  // page then starts a new session (a new engine core) on the same canvas; that core took the previous one's
+  // page then started a new session (a new engine core) on the same canvas; that core took the previous one's
   // copies for local creates and pushed them behind the room's cached reset snapshot (READ_ONLY: 'Change not
-  // saved'). The core now never classifies the scene it starts on (apps/web/src/canvas/sync/core/start-scene.test.ts)
+  // saved'). The core now never classifies the scene it starts on (apps/web/src/canvas/sync/core/start-scene.test.ts).
+  // Since wave E (E2) a role change starts no new session at all: the room closes the tab's socket, the same
+  // session reconnects with the viewer ticket, and its welcome carries the new role. Either way nothing is pushed.
   const a = await canvasSession('alice')
   await createNote(a.page, { x: 300, y: 240, text: 'Archive me' })
   await expectSaved(a.page)
-  // pushes from here on, by time: the page starts a new session on the role change, whose push log starts empty
+  // pushes from here on, by time: it is the same session after the archive (a role change starts no new one), so
+  // its push log still holds the note's creation
   const archivedAt = await a.page.evaluate(() => Date.now())
   const res = await (await users.api('alice')).fetch('POST', `/api/boards/${board}/archive`)
   expect(res.status(), await res.text()).toBe(200)

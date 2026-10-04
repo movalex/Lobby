@@ -474,10 +474,13 @@ function LobbyBoardScreen({
 
   // PRI-09b: my role changed while the board is open; a sharing event re-reads it and applies a LOWER
   // one at once (a higher one waits for the socket to reconnect with it).
-  // REVIEW-6: the server tells ME (and nobody else) who changed my access; the toast names them.
-  // The name comes with the access.changed event of every owner's change of my grant; an event that changed
-  // nothing for me (a grant set to what it was) is dropped as soon as the role read below agrees with what is
-  // on screen, so it cannot name the owner on a later change of someone else's (AccessActorHint).
+  // REVIEW-6: the server tells the person whose access changed who changed it; the toast names them.
+  // The name comes with the access.changed event of every change that really changed access (a grant set or
+  // removed, an approved request, a workspace role, an invite, a transfer; a change of the board's visibility
+  // reaches everyone on the board but whoever made it); a request that changed nothing sends none. An event
+  // that left my role here as it was (most of a visibility change's) is dropped as soon as the role read below
+  // agrees with what is on screen, so it cannot name someone on a later change of someone else's
+  // (AccessActorHint).
   const announcedRole = useRef(role)
   const accessActor = useMemo(() => new AccessActorHint(), [])
   const roleNow = useRef(role)
