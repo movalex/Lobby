@@ -13,8 +13,9 @@
 //      no member, which comes back to life if they ever join the workspace again.
 // Both go away when every path takes the membership row first (a no-op DO UPDATE locks it) and the grant
 // after it. Each test below stops the REAL access-giving route midway (the paused Db in race-support.ts),
-// runs the REAL removal route against it, lets the first go on and checks the outcome. The last one
-// races them at random.
+// runs the REAL removal route against it, lets the first go on and checks the outcome; one stops the
+// removal instead (after it has deleted the membership), which with the old order was an actual deadlock
+// and not only its precursor. The last one races them at random.
 
 import { openTestDb } from '@draftroom/db/testing'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -99,6 +100,39 @@ describe.skipIf(!PG)('removing a member while they are given access (real Postgr
     expect(await orphans(w.api, w.bob.userId)).toEqual([])
     expect(await membership(w.api, w.bob.userId)).toEqual({ role: 'guest' })
     expect(await grantOf(w.api, w.board, w.bob.userId)).toEqual({ role: 'viewer' })
+  })
+
+  it('the removal held first: it has deleted the membership but not swept the grants, and the same person accepts: the accept waits, then both finish and nothing is orphaned', async () => {
+    const w = await world()
+    const link = await guestLink(w.alice, w.board, { role: 'viewer' })
+    const token = tokenOf(link.url)
+    expect((await accept(w.bob, token)).statusCode).toBe(200) // bob holds a grant on the board
+
+    // The removal stops right after its DELETE of the membership row: the row is gone but uncommitted, and
+    // the grant rows are still there to be swept.
+    const pause = w.paused.arm(/DELETE FROM workspace_members/, 'after')
+    const removing = remove(w.alice, w.bob.userId)
+    const pid = await pause.reached
+    const accepting = accept(w.bob, token)
+    try {
+      // The accept goes for the membership row first, which the removal holds. Before the fix it read its
+      // `prior` grant FOR UPDATE first, and then the removal's sweep waited for that grant row while the
+      // accept waited for the membership: a deadlock (one of the two answered 500).
+      expect(await waitedOrFinished(w.api.db, pid, accepting)).toBe('waited')
+    } finally {
+      pause.release()
+    }
+    const [removed, accepted] = await Promise.all([removing, accepting])
+    expect(removed.statusCode, removed.body).toBe(200)
+    expect(accepted.statusCode, accepted.body).toBe(200)
+    // the accept came after the removal and joined bob again as a guest, with the link's grant
+    expect(await orphans(w.api, w.bob.userId)).toEqual([])
+    expect(await membership(w.api, w.bob.userId)).toEqual({ role: 'guest' })
+    expect(await grantOf(w.api, w.board, w.bob.userId)).toEqual({ role: 'viewer' })
+    const entry = await w.api.db.one<{ detail: { boardGrantsRemoved: number } }>(
+      "SELECT detail FROM audit_events WHERE action = 'workspace.member.remove' ORDER BY id DESC LIMIT 1",
+    )
+    expect(entry.detail.boardGrantsRemoved).toBe(1) // the grant bob held when the removal began
   })
 
   it('a removal against a member accepting a multi-use link (guest membership step done): it waits, then sweeps the grant (D4 item 1)', async () => {
