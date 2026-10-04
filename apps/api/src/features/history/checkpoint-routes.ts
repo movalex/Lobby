@@ -308,7 +308,7 @@ export function registerCheckpointRoutes(
     const raw = await bodies.read(row.storage_key)
     if (raw === null) throw gone("This checkpoint's saved content is no longer available.")
     // The body's own size, before it is parsed, in case the row's was wrong (a v2 body is not bounded here).
-    const rawBytes = v1Row ? Buffer.byteLength(raw, 'utf8') : 0
+    const rawBytes = Buffer.byteLength(raw, 'utf8')
     if (v1Row && pastPreviewBounds(0, rawBytes))
       return tooLargeToPreview(req, snapshot, row, { records: Number(row.record_count), bytes: rawBytes })
     const body = readCheckpointBody(raw)
