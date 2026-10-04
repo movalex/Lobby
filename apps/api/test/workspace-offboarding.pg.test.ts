@@ -118,10 +118,11 @@ describe.skipIf(!PG)('removing a member while something is in flight for them (r
       const started = remove(w.alice, w.bob.userId)
       await blockedBy(w.api.db, pid, 'the removal') // waiting for the request row
       // ... the guest-membership insert (a row that exists: no wait, as long as the removal has not
-      // deleted it), the grant, and the decision
+      // deleted it; the DO UPDATE locks it, as in access-requests.ts approve), the grant, and the decision
+      // (offboarding-races.pg.test.ts runs the real approval against the real removal)
       await tx.query(
-        `INSERT INTO workspace_members (workspace_id, user_id, role, created_at) VALUES ($1, $2, 'guest', now())
-         ON CONFLICT (workspace_id, user_id) DO NOTHING`,
+        `INSERT INTO workspace_members AS m (workspace_id, user_id, role, created_at) VALUES ($1, $2, 'guest', now())
+         ON CONFLICT (workspace_id, user_id) DO UPDATE SET role = m.role`,
         [DEV_STUDIO, w.bob.userId],
       )
       await tx.query(

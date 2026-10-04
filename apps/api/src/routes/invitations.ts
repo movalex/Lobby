@@ -268,18 +268,13 @@ export async function redeemInvitation(
   at: Date,
   opts: { via?: 'guest' } = {},
 ): Promise<void> {
-  // What a multi-use link replaces (0006): its sweep puts a raised grant back, and removes one
-  // it created (again: someone removed earlier who rejoins must not keep access past its end).
-  const prior =
-    inv.board_id !== null && inv.multi_use
-      ? ((
-          await tx.maybeOne<{ role: BoardRole }>(
-            'SELECT role FROM board_members WHERE board_id = $1 AND user_id = $2 FOR UPDATE',
-            [inv.board_id, userId],
-          )
-        )?.role ?? null)
-      : null
-
+  // Lock order (access.ts): the board and this link are locked; then the workspace_members row, THEN the
+  // board_members row. A member removal (routes/workspaces.ts) deletes the membership and then sweeps the
+  // grants, so a redeem that took the grant row first and the membership after (or never locked the
+  // membership at all) deadlocked with it, or left a grant behind that outlived the membership. The
+  // membership insert is a DO UPDATE with no change for that: it locks an existing row (a removal waits for
+  // this redeem and then sweeps what it granted), and it waits for a removal that deleted the row first.
+  let prior: BoardRole | null = null
   if (inv.board_id === null) {
     await tx.query(
       `INSERT INTO workspace_members AS m (workspace_id, user_id, role, created_at) VALUES ($1, $2, $3, $4)
@@ -291,10 +286,21 @@ export async function redeemInvitation(
   } else {
     // A board link makes an outsider a workspace guest: guests see only boards granted to them.
     await tx.query(
-      `INSERT INTO workspace_members (workspace_id, user_id, role, created_at) VALUES ($1, $2, 'guest', $3)
-       ON CONFLICT (workspace_id, user_id) DO NOTHING`,
+      `INSERT INTO workspace_members AS m (workspace_id, user_id, role, created_at) VALUES ($1, $2, 'guest', $3)
+       ON CONFLICT (workspace_id, user_id) DO UPDATE SET role = m.role`,
       [inv.workspace_id, userId, at],
     )
+    // What a multi-use link replaces (0006): its sweep puts a raised grant back, and removes one
+    // it created (again: someone removed earlier who rejoins must not keep access past its end).
+    // Read after the membership above, so the grant row is locked after it.
+    if (inv.multi_use)
+      prior =
+        (
+          await tx.maybeOne<{ role: BoardRole }>(
+            'SELECT role FROM board_members WHERE board_id = $1 AND user_id = $2 FOR UPDATE',
+            [inv.board_id, userId],
+          )
+        )?.role ?? null
     await tx.query(
       `INSERT INTO board_members AS bm (board_id, user_id, role, added_by, created_at) VALUES ($1, $2, $3, $4, $5)
        ON CONFLICT (board_id, user_id) DO UPDATE SET role = CASE

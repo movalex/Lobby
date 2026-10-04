@@ -99,7 +99,15 @@ function toAccess(row: AccessRow): BoardAccess {
 //   2. a row that belongs to the board: an invitation or review link, an access request, the board's
 //      timer, thumbnail or export policy, a vote or private-brainstorm session;
 //   3. a name-only guest's user row (joining or accepting a guest link, the guest sweep);
-//   4. board_members and sessions rows.
+//   4. a workspace_members row: whoever gives someone a grant through a membership they may not have yet
+//      (redeemInvitation, email-invites grant, an access-request approval) inserts the guest membership
+//      ON CONFLICT (workspace_id, user_id) DO UPDATE SET role = m.role, which locks an existing row, and
+//      only then touches their grants; members.ts `loadTarget` reads the row FOR SHARE for the same
+//      reason. A member removal (routes/workspaces.ts, after the workspace row FOR NO KEY UPDATE and the
+//      leaver's own request and invitation rows) deletes the membership and only then sweeps their grants.
+//      Taking board_members first and the membership after (or taking the membership with DO NOTHING,
+//      which locks nothing) deadlocks with a removal, or leaves a grant that outlives the membership;
+//   5. board_members and sessions rows.
 // A transaction that only knows a step-2 row (joining through a link, accepting an invitation, the
 // expired-link sweeper) reads it WITHOUT a lock first, locks the board, then locks and re-reads it.
 // Safe exception: a reply locks its comment thread, then inserts the comment (whose key-share lock on
