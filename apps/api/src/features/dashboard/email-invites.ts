@@ -34,6 +34,7 @@ import { loadBoardAccess, requireBoardAction } from '../../access.ts'
 import { audit } from '../../audit.ts'
 import type { Params } from '../../context.ts'
 import { ApiError, notFound, parse } from '../../errors.ts'
+import { actorOf } from '../../notifier.ts'
 import { createInvitation, INVITATION_TTL_MS } from '../../routes/invitations.ts'
 import { toUser, type UserRow } from '../../serialize.ts'
 import type { FeatureContext } from '../context.ts'
@@ -185,7 +186,8 @@ export function registerEmailInviteRoutes(app: FastifyInstance, ctx: FeatureCont
         const g = await grant(bid, me.id, linked.user_id, role, route)
         req.log.info({ ...log, mode: 'granted', changed: g.changed }, 'board email invitation')
         if (g.changed) {
-          notifier.accessChanged({ boardId: bid, userId: g.user.id })
+          // REVIEW-6: the inviter is named to the person given access (the session's user)
+          notifier.accessChanged({ boardId: bid, userId: g.user.id, actor: actorOf(me) })
           publishSharingChanged(ctx, bid, 'grant')
         }
         return { mode: 'granted', user: g.user, role: g.role, alreadyHadAccess: !g.changed }

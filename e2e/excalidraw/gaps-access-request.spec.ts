@@ -89,9 +89,11 @@ test('a commenter’s drag on the new canvas shows one hint naming the owner, wi
   })
 
   await test.step('carol is told, the pill goes, the canvas is writable, her drag lands for alice', async () => {
-    await expect(c.page.getByTestId('role-change-toast')).toHaveText('You can edit this board now', {
-      timeout: 20_000,
-    })
+    // REVIEW-6 (wave E3): the api names the approver to the person approved
+    await expect(c.page.getByTestId('role-change-toast')).toHaveText(
+      `You can edit this board now (changed by ${a.name})`,
+      { timeout: 20_000 },
+    )
     await expect(c.page.getByTestId('readonly-pill')).toHaveCount(0)
     await expect.poll(() => readOnly(c.page), { timeout: 20_000 }).toBe(false)
     await dragItem(c.page, note, { x: 90, y: 60 })

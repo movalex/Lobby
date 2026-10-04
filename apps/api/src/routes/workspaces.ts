@@ -70,6 +70,7 @@ import { audit } from '../audit.ts'
 import { roleRequiresCreator } from '../auth/identity.ts'
 import type { AppContext, Params } from '../context.ts'
 import { ApiError, badRequest, conflict, forbidden, notFound, parse } from '../errors.ts'
+import { type AccessActor, actorOf } from '../notifier.ts'
 import { type ProjectRow, toProject, toUser, type UserRow } from '../serialize.ts'
 
 const PROJECT_COLUMNS = 'id, workspace_id, name, created_at, archived_at'
@@ -220,9 +221,9 @@ export function registerWorkspaceRoutes(app: FastifyInstance, ctx: AppContext): 
   }
 
   /** After the change committed: sync and this process's event streams hear about the target. */
-  const tell = (change: MemberChange, userId: string) => {
+  const tell = (change: MemberChange, userId: string, actor: AccessActor) => {
     for (const boardId of change.boards.slice(0, MAX_ACCESS_NOTIFICATIONS))
-      notifier.accessChanged({ boardId, userId })
+      notifier.accessChanged({ boardId, userId, actor })
   }
 
   /** Unlocked pre-check: today's answers (404 outside the workspace, 403 for a member or guest). */
@@ -327,7 +328,7 @@ export function registerWorkspaceRoutes(app: FastifyInstance, ctx: AppContext): 
       })
       return { members: await listWorkspaceMembers(tx, wid), boards: changedBoards(boards, targetRole, role) }
     })
-    tell(result, uid)
+    tell(result, uid, actorOf(user))
     return { members: result.members }
   })
 
@@ -375,7 +376,7 @@ export function registerWorkspaceRoutes(app: FastifyInstance, ctx: AppContext): 
       })
       return { members: await listWorkspaceMembers(tx, wid), boards: changedBoards(boards, targetRole, null) }
     })
-    tell(result, uid)
+    tell(result, uid, actorOf(user))
     return { members: result.members }
   })
 

@@ -5,10 +5,35 @@
 
 import { INTERNAL_SECRET_HEADER } from '@draftroom/auth-tickets'
 
+/** Whoever made a change of access: the authenticated session's user (never taken from a request body). */
+export interface AccessActor {
+  id: string
+  name: string
+}
+
+/** The actor of a change, from the session user (REVIEW-6): only the id and the display name. */
+export const actorOf = (user: AccessActor): AccessActor => ({ id: user.id, name: user.name })
+
 export interface AccessChange {
   boardId: string
   /** Omitted: every user on the board may be affected (visibility or status change). */
   userId?: string
+  /**
+   * REVIEW-6: who changed it, for the "your access changed" toast to name (a change by someone else, never
+   * by the person themselves). Only this process's board event streams hear it, and only the display name
+   * goes on the wire to the affected person: `fanOutAccessChanges` takes it off before the sync server is told.
+   */
+  actor?: AccessActor
+}
+
+/** What the sync server is told (docs/M1-CONTRACTS.md §7): which board, and whose access when it is one person's. */
+export type SyncAccessChange = Pick<AccessChange, 'boardId' | 'userId'>
+
+/** The part of a change the sync server may see: never the actor. */
+function forSync(change: AccessChange): SyncAccessChange {
+  return change.userId === undefined
+    ? { boardId: change.boardId }
+    : { boardId: change.boardId, userId: change.userId }
 }
 
 export interface SyncNotifier {
@@ -32,7 +57,7 @@ export function createHttpSyncNotifier(opts: {
   const inflight = new Set<Promise<void>>()
   const url = `${opts.baseUrl}/internal/access-changed`
 
-  async function send(change: AccessChange): Promise<void> {
+  async function send(change: SyncAccessChange): Promise<void> {
     try {
       const res = await doFetch(url, {
         method: 'POST',
@@ -52,7 +77,7 @@ export function createHttpSyncNotifier(opts: {
 
   return {
     accessChanged(change) {
-      const p = send(change)
+      const p = send(forSync(change))
       inflight.add(p)
       void p.finally(() => inflight.delete(p))
     },
@@ -79,19 +104,20 @@ export function fanOutAccessChanges(
       } catch {
         // the periodic stream re-check is the backstop
       }
-      sync.accessChanged(change)
+      sync.accessChanged(forSync(change))
     },
     drain: () => sync.drain(),
   }
 }
 
 /** Records calls instead of sending them (tests, and tools that run the API without a sync server). */
-export function createRecordingNotifier(): SyncNotifier & { calls: AccessChange[] } {
-  const calls: AccessChange[] = []
+export function createRecordingNotifier(): SyncNotifier & { calls: SyncAccessChange[] } {
+  const calls: SyncAccessChange[] = []
   return {
     calls,
+    // what the sync server would be told: the actor stays in this process (the tests read it off the streams)
     accessChanged: (change) => {
-      calls.push({ ...change })
+      calls.push(forSync(change))
     },
     drain: async () => {},
   }

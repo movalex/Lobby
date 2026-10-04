@@ -17,7 +17,7 @@
 // person) and 503 TOO_MANY_SUBSCRIBERS (the board or process is full), both with Retry-After.
 
 import type { FastifyInstance } from 'fastify'
-import { connectionRole, isUserId, loadBoardAccessMany, pairKey, requireBoardAction } from '../access.ts'
+import { connectionRole, loadBoardAccessMany, pairKey, requireBoardAction } from '../access.ts'
 import type { Params } from '../context.ts'
 import { ApiError, unauthenticated } from '../errors.ts'
 import type { FeatureContext } from '../features/context.ts'
@@ -70,23 +70,9 @@ export function registerEventRoutes(app: FastifyInstance, ctx: FeatureContext) {
   }
   hub.setRevalidator(revalidate)
 
-  // REVIEW-6: after an owner sets or removes someone's direct grant, that person (only) hears who did
-  // it, so the "your access changed" toast can say whom to ask. A root hook like sharing.ts's: the M1
-  // member routes publish nothing themselves, and onResponse runs after their transaction committed.
-  // The actor comes from the session of the request, never from the body. Best effort: a failure here
-  // only costs the name in a toast.
-  app.addHook('onResponse', async (req, reply) => {
-    if (req.routeOptions.url !== '/api/boards/:bid/members/:uid') return
-    if ((req.method !== 'PUT' && req.method !== 'DELETE') || reply.statusCode >= 300) return
-    const { bid, uid } = req.params as Params
-    if (!bid || !isUserId(uid)) return
-    try {
-      const actor = await ctx.requireUser(req)
-      hub.accessChangedBy({ boardId: bid, userId: uid }, actor)
-    } catch {
-      // the session ended meanwhile: nothing to attribute
-    }
-  })
+  // REVIEW-6: who changed a person's access (access.changed, named) is told by the notifier of each change
+  // that really changed something (notifier.ts, hub.accessChanged), with the actor from the session of its
+  // request. There is no hook here: a no-op request (a grant set to what it was) sends nothing.
 
   // One sweep for every stream of this process, instead of a timer (and two queries) per stream.
   // Tests may check more often; nothing may check less often than ACCESS_RECHECK_MS.

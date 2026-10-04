@@ -2,11 +2,22 @@
 // report a mouse notch in CSS pixels, so a notch that is 100 at a ratio of 1 arrives as 100 / ratio at 125%
 // (80), 150% (66.67) and 200% (50). `looksLikeMouseWheel` reads `pixelRatio` (window.devicePixelRatio, which
 // folds the browser zoom in); `installWheelZoom` reads it at each wheel event.
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { CanvasInputEvent, LobbyCanvas, Viewport } from '../../../../canvas/api/index.ts'
-import { currentPixelRatio, installWheelZoom, looksLikeMouseWheel, plainWheelZooms } from './zoom.ts'
+import {
+  currentPixelRatio,
+  installWheelZoom,
+  isMacPlatform,
+  looksLikeMouseWheel,
+  plainWheelZooms,
+} from './zoom.ts'
 
 const RATIOS = [1, 1.25, 1.5, 2] as const
+
+// The scaled-notch rule is for Windows and Linux (wave E3): these tests run as on Windows whatever machine
+// they run on (Node's own navigator.platform follows the host). The macOS cases are at the end.
+beforeEach(() => void vi.stubGlobal('navigator', { platform: 'Win32' }))
+afterEach(() => void vi.unstubAllGlobals())
 
 /** What Chromium reports for `n` notches of `base` px at `ratio`, as a float32 would hold it. */
 const reported = (n: number, base: number, ratio: number) => Math.fround((n * base) / ratio)
@@ -203,5 +214,82 @@ describe('installWheelZoom with the Input device on auto, per display ratio', ()
     installWheelZoom(f.canvas)
     expect(f.wheel(80)).toBe(false)
     expect(f.wheel(100)).toBe(true)
+  })
+})
+
+// ---- macOS: only the unscaled notches count (wave E3, D6-1) ---------------------------------------------
+
+describe('on macOS the scaled notch is not a mouse', () => {
+  const MAC = { mac: true } as const
+
+  it.each(RATIOS)('ratio %s: 100 / ratio and 120 / ratio are a trackpad’s steps, not a mouse', (ratio) => {
+    if (ratio === 1) return // unscaled: there is no scaled notch (it is 100 or 120 itself)
+    // one notch of 100 or 120 as Chromium reports it at this ratio (2 or 3 of them can add up to an unscaled
+    // notch, which still counts: below)
+    for (const base of [100, 120])
+      expect(
+        looksLikeMouseWheel({ deltaY: reported(1, base, ratio), pixelRatio: ratio, ...MAC }),
+        `${base} at ${ratio}`,
+      ).toBe(false)
+    // the small whole steps a Retina trackpad can make, which a scaled notch would swallow
+    for (const dy of [50, 60, 80, 66.67])
+      expect(looksLikeMouseWheel({ deltaY: dy, pixelRatio: ratio, ...MAC }), `${dy} at ${ratio}`).toBe(false)
+  })
+
+  it.each(RATIOS)(
+    'ratio %s: the unscaled notches still count (the rule before the ratio was read)',
+    (ratio) => {
+      for (const dy of [100, -100, 120, 200, 300, 240])
+        expect(looksLikeMouseWheel({ deltaY: dy, pixelRatio: ratio, ...MAC }), `${dy} at ${ratio}`).toBe(true)
+      // and lines or pages, as on Firefox
+      expect(looksLikeMouseWheel({ deltaY: 3, deltaMode: 1, pixelRatio: ratio, ...MAC })).toBe(true)
+      expect(looksLikeMouseWheel({ deltaY: -1, deltaMode: 2, pixelRatio: ratio, ...MAC })).toBe(true)
+    },
+  )
+
+  it('the same 50 px step is a mouse notch at 200% off macOS and a trackpad step on a Mac', () => {
+    expect(looksLikeMouseWheel({ deltaY: 50, pixelRatio: 2, mac: false })).toBe(true)
+    expect(looksLikeMouseWheel({ deltaY: 50, pixelRatio: 2, mac: true })).toBe(false)
+    expect(looksLikeMouseWheel({ deltaY: 80, pixelRatio: 1.25, mac: false })).toBe(true)
+    expect(looksLikeMouseWheel({ deltaY: 80, pixelRatio: 1.25, mac: true })).toBe(false)
+  })
+
+  it('reads the platform from the browser when the event does not say', () => {
+    const notch = { deltaY: 50, pixelRatio: 2 }
+    vi.stubGlobal('navigator', { platform: 'Win32' })
+    expect(isMacPlatform()).toBe(false)
+    expect(looksLikeMouseWheel(notch)).toBe(true)
+    for (const platform of ['MacIntel', 'MacARM', 'iPad', 'iPhone']) {
+      vi.stubGlobal('navigator', { platform })
+      expect(isMacPlatform(), platform).toBe(true)
+      expect(looksLikeMouseWheel(notch), platform).toBe(false)
+    }
+    // Chromium's client hints say it too (and win a platform string that was reduced to something else)
+    vi.stubGlobal('navigator', { platform: '', userAgentData: { platform: 'macOS' } })
+    expect(isMacPlatform()).toBe(true)
+    expect(looksLikeMouseWheel(notch)).toBe(false)
+    for (const nav of [
+      { platform: 'Linux x86_64' },
+      { platform: 'Win32', userAgentData: { platform: 'Windows' } },
+      {},
+    ]) {
+      vi.stubGlobal('navigator', nav)
+      expect(isMacPlatform()).toBe(false)
+      expect(looksLikeMouseWheel(notch)).toBe(true)
+    }
+    vi.stubGlobal('navigator', undefined)
+    expect(isMacPlatform()).toBe(false)
+  })
+
+  it('installWheelZoom on a Mac at 200% pans a 50 px step and still zooms a 100 px notch', () => {
+    vi.stubGlobal('navigator', { platform: 'MacIntel' })
+    vi.stubGlobal('devicePixelRatio', 2)
+    const f = fakeCanvas()
+    installWheelZoom(f.canvas)
+    expect(f.wheel(50)).toBe(false) // a trackpad's step: the engine pans
+    expect(f.wheel(60)).toBe(false)
+    expect(f.cam.zoom).toBe(1)
+    expect(f.wheel(100)).toBe(true) // an unscaled notch: a mouse
+    expect(f.cam.zoom).toBeCloseTo(0.9)
   })
 })
