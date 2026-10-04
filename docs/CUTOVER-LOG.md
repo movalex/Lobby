@@ -228,3 +228,8 @@ on the sync disk (§6).
   non-member), the hidden-member filter on undo's group restore, guest-queue purge coverage and stale comments. `docs/BACKLOG.md` is
   rewritten as the current open list. Gate: 563 of 566 e2e passed, 1 known LOD pixel flake (3/3 alone), 2 skipped; stale-client
   checks 48/48 and 49/49. Live smoke 34 passed, 0 failed; 0 `error`/`FATAL` lines.
+- **Day 3 clean (2026-10-04 02:54Z, about 54 h after the switch):**
+  - api, sync and web return 200; maintenance off.
+  - Backups: store r2, last pass 02:50Z, `failuresTotal` 0, 4 boards with 0 failures and 0 pending.
+  - 0 `error`/`FATAL` lines on api and sync in 24 h.
+  - Render service events show only the day's deploys (api/web `e5cb6df`, sync `54ea729`): no restart or out-of-memory event.
