@@ -70,13 +70,21 @@ async function lockedBy(api: TestApi, c: Client): Promise<string> {
   return r.x
 }
 
+/**
+ * A board's grants in code-unit order of user id, the order the expectations below sort into. Sorted here and not
+ * by the database: `ORDER BY user_id` follows the database's collation, which is bytewise on PGlite (C) but
+ * linguistic on a Postgres in en_US.utf8 (CI's postgres:18 image), where 'usr_b…' comes before 'usr_Y…'. User ids
+ * are random mixed-case base62, so with an ORDER BY here the two- and three-grant checks below failed on a real
+ * Postgres whenever the ids' case order disagreed (7 of 10 runs of this file on postgres:18; CI's red "Database tests
+ * on Postgres 18 (shard 3 of 3)").
+ */
 const grantsOf = async (api: TestApi, board: string) =>
   (
     await api.db.query<{ user_id: string; role: string }>(
-      'SELECT user_id, role FROM board_members WHERE board_id = $1 ORDER BY user_id',
+      'SELECT user_id, role FROM board_members WHERE board_id = $1',
       [board],
     )
-  ).rows
+  ).rows.sort((a, b) => (a.user_id < b.user_id ? -1 : a.user_id > b.user_id ? 1 : 0))
 
 const transfer = (c: Client, board: string, to: Client) =>
   c.req('POST', `/api/boards/${board}/transfer-ownership`, { userId: to.userId })
