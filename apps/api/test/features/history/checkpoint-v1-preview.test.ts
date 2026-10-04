@@ -6,6 +6,7 @@
 // the tldraw one (bridge release R0: its tldraw preview reads records). Before the fix every v1 body came
 // back as records, which the Excalidraw page cannot draw ("can't be previewed here yet").
 import { CheckpointContent } from '@draftroom/contracts'
+import { b64Vecs } from '@draftroom/tldraw-import/tldraw'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { PreviewCache, previewSettings } from '../../../src/features/history/checkpoint-routes.ts'
 import { checkpointSettings } from '../../../src/features/history/checkpoints.ts'
@@ -96,13 +97,52 @@ describe('previewing a v1 checkpoint (PARITY-5.5)', () => {
   })
 })
 
-// PARITY-5.5 follow-up (wave B follow-up 5): the conversion runs on the api's event loop (about 55 to 85
-// microseconds a record), so a v1 preview is bounded and cached.
+// PARITY-5.5 follow-up (wave B follow-up 5; wave E adds the size bound): the conversion runs on the api's
+// event loop (about 90 microseconds a note, about 65 ms per MiB of strokes), so a v1 preview is bounded (by
+// records and by stored size) and cached.
 describe('a v1 preview is bounded and cached', () => {
   const settings = { ...previewSettings }
   afterEach(() => Object.assign(previewSettings, settings))
 
   const notes = (n: number) => Array.from({ length: n }, (_, i) => noteRec(`n${i}`, `Note ${i}`, `a${i + 1}`))
+  /** A freehand stroke of `points` points (tldraw's draw shape, its points base64-packed as stored). */
+  const stroke = (i: number, points: number): Rec => ({
+    id: `shape:d${i}`,
+    typeName: 'shape',
+    type: 'draw',
+    x: i,
+    y: i,
+    rotation: 0,
+    index: `a${i + 1}`,
+    parentId: 'page:page',
+    isLocked: false,
+    opacity: 1,
+    meta: {},
+    props: {
+      color: 'black',
+      fill: 'none',
+      dash: 'draw',
+      size: 'm',
+      isComplete: true,
+      isClosed: false,
+      isPen: false,
+      scale: 1,
+      scaleX: 1,
+      scaleY: 1,
+      segments: [
+        {
+          type: 'free',
+          path: b64Vecs.encodePoints(
+            Array.from({ length: points }, (_, k) => ({
+              x: k * 1.37,
+              y: Math.sin(k / 5) * 20 + k * 0.11 + i,
+              z: 0.5,
+            })),
+          ),
+        },
+      ],
+    },
+  })
   /** Saves the board's current records as a v1 checkpoint. */
   async function saveBoard(w: Awaited<ReturnType<typeof world>>, records: Rec[], name: string) {
     w.sync.setBoard(w.board, records)
@@ -160,6 +200,95 @@ describe('a v1 preview is bounded and cached', () => {
       expect((res.json() as { records: unknown[] }).records).toEqual([])
     }
     expect(read).toHaveBeenCalledTimes(1)
+  })
+
+  // wave E (the wave-D review's measurements): conversion cost grows with the points and text inside the
+  // records, so a body with few records can still hold the loop. The stored size bounds it as well.
+  it('the bounds as shipped: 1,000 records and 2.5 MiB of stored body', () => {
+    expect(settings.maxRecords).toBe(1_000)
+    expect(settings.maxBodyBytes).toBe(2.5 * 1024 * 1024)
+  })
+
+  it('past the size bound it is not converted either, though the record count fits: decided from the row’s size_bytes before the body is read', async () => {
+    const w = await world('excalidraw')
+    const small = await saveBoard(w, [...baseRecords(), ...notes(2)], 'Small')
+    const big = await saveBoard(
+      w,
+      [...baseRecords(), ...notes(2), noteRec('long', 'words '.repeat(4_000), 'a9')],
+      'Heavy',
+    )
+    const size = async (id: string) =>
+      Number(
+        (
+          await w.api.db.one<{ size_bytes: number }>('SELECT size_bytes FROM board_snapshots WHERE id = $1', [
+            id,
+          ])
+        ).size_bytes,
+      )
+    expect(await size(big)).toBeGreaterThan((await size(small)) + 20_000)
+    previewSettings.maxBodyBytes = await size(small) // the small one is exactly at the bound: it fits
+    const read = vi.spyOn(w.api.blobs, 'get')
+
+    const fits = await preview(w, small)
+    expect(fits.json()).toMatchObject({ format: 'lobby-elements', converted: true })
+    expect(read).toHaveBeenCalledTimes(1)
+
+    read.mockClear()
+    const res = await preview(w, big)
+    expect(res.statusCode, res.body).toBe(200)
+    const body = CheckpointContent.parse(res.json())
+    expect(body).toMatchObject({
+      records: [],
+      schema: null,
+      snapshot: { id: big, name: 'Heavy', recordCount: 5 },
+    })
+    expect(body).not.toHaveProperty('format')
+    expect(body).not.toHaveProperty('converted')
+    expect(read).not.toHaveBeenCalled() // the row's size decided: the body was not even read
+    expect((await preview(w, big)).statusCode).toBe(200) // remembered
+    expect(read).not.toHaveBeenCalled()
+    // restoring it as a new board still works
+    const restored = await w.bob.req('POST', `/api/snapshots/${big}/restore-as-new`, {})
+    expect(restored.statusCode, restored.body).toBe(201)
+  })
+
+  it('a row that understates its size is caught by the body’s own size, before it is parsed (read once, then remembered)', async () => {
+    const w = await world('excalidraw')
+    const sid = await saveBoard(w, [...baseRecords(), noteRec('long', 'words '.repeat(4_000))], 'Understated')
+    previewSettings.maxBodyBytes = 10_000 // the body is about 24 kB
+    await w.api.db.query('UPDATE board_snapshots SET size_bytes = 100 WHERE id = $1', [sid])
+    const read = vi.spyOn(w.api.blobs, 'get')
+    for (let i = 0; i < 3; i++) {
+      const res = await preview(w, sid)
+      expect(res.statusCode, res.body).toBe(200)
+      expect(res.json()).not.toHaveProperty('format')
+      expect((res.json() as { records: unknown[] }).records).toEqual([])
+    }
+    expect(read).toHaveBeenCalledTimes(1)
+  })
+
+  it('at the shipped bounds a stroke-heavy board with few records is too large by its size; a lighter one converts', async () => {
+    const w = await world('excalidraw')
+    // 1,000 points a stroke (about 8 kB of stored body each): 300 strokes fit, 400 do not, at 2.5 MiB
+    const strokes = (n: number) => [
+      ...baseRecords(),
+      ...Array.from({ length: n }, (_, i) => stroke(i, 1_000)),
+    ]
+    const light = await saveBoard(w, strokes(150), 'Light strokes')
+    const heavy = await saveBoard(w, strokes(400), 'Heavy strokes')
+    const sizes = await w.api.db.query<{ id: string; size_bytes: number; record_count: number }>(
+      'SELECT id, size_bytes, record_count FROM board_snapshots WHERE id = ANY($1)',
+      [[light, heavy]],
+    )
+    const of = (id: string) => sizes.rows.find((r) => r.id === id)
+    expect(Number(of(light)?.size_bytes)).toBeLessThan(previewSettings.maxBodyBytes)
+    expect(Number(of(heavy)?.size_bytes)).toBeGreaterThan(previewSettings.maxBodyBytes)
+    expect(Number(of(heavy)?.record_count)).toBeLessThan(previewSettings.maxRecords) // the count alone would convert it
+    expect((await preview(w, light)).json()).toMatchObject({ format: 'lobby-elements', converted: true })
+    const res = await preview(w, heavy)
+    expect(res.statusCode, res.body).toBe(200)
+    expect(res.json()).not.toHaveProperty('format')
+    expect((res.json() as { records: unknown[] }).records).toEqual([])
   })
 
   it('a converted preview is made once per checkpoint, for whoever may open it, and the answer is the same', async () => {

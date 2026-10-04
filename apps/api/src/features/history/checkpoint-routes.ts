@@ -22,13 +22,16 @@
 // stored body never rewritten. The answer is a lobby-elements payload marked `converted`. A body the
 // converter cannot read keeps the v1 answer (the records), and so does an api on the tldraw sync.
 //
-// The conversion runs on the api's event loop (about 55 to 85 microseconds per record, measured), so it is
-// bounded: a v1 body of more than `previewSettings.maxRecords` records is not converted at all and
-// answers "too large to preview" (the v1 shape with no records and no format, which the web already shows
-// as "can't be previewed here yet; restoring it as a new board still works"), decided from the row's own
-// record count before the body is even read. What was converted is kept in a small LRU by checkpoint id
-// (a preview opened again, by anyone who may open it, is not converted again), and so is the too-large
-// answer. Both are decided after the access checks, so nothing is served to someone who may not see it.
+// The conversion runs on the api's event loop (about 90 microseconds per record for notes, about 65 ms per
+// MiB of body for strokes, measured), so it is bounded twice: a v1 body of more than
+// `previewSettings.maxRecords` records, or whose stored body is larger than `previewSettings.maxBodyBytes`,
+// is not converted at all and answers "too large to preview" (the v1 shape with no records and no format,
+// which the web already shows as "can't be previewed here yet; restoring it as a new board still works").
+// Both are decided from the row's own record count and size_bytes before the body is even read (the body's
+// own size and count are checked again once it is, in case a row was wrong). What was converted is kept in
+// a small LRU by checkpoint id (a preview opened again, by anyone who may open it, is not converted
+// again), and so is the too-large answer. Both are decided after the access checks, so nothing is served
+// to someone who may not see it.
 
 import { installedServerTextMetrics, installServerTextMetrics } from '@draftroom/canvas-schema/engine'
 import { ELEMENT_SCHEMA_VERSION } from '@draftroom/canvas-schema/protocol'
@@ -83,17 +86,29 @@ export function convertV1ForPreview(
 }
 
 /**
- * What bounds a v1 preview (PARITY-5.5). `maxRecords`: past it a checkpoint is not converted. Measured
- * on a 64-core desktop with the template boards repeated: 55 to 75 microseconds a record, so 2,000 records
- * take 90 to 120 ms; at the 85 microseconds the wave-B review measured, 170 ms. The loop is not held much
- * past the 200 ms it was asked to stay under.
+ * What bounds a v1 preview (PARITY-5.5). A conversion costs by what is in the records, not only by how
+ * many there are, so a checkpoint is converted only within BOTH bounds: `maxRecords` and `maxBodyBytes`.
+ * Measured warm on a 64-core desktop (wave E; convertV1ForPreview, the median of five runs; the wave-D
+ * review's own timings agree):
+ *   - notes with a short label: 87 to 93 microseconds a record (1,000 records 93 ms, 2,000 records 174 ms;
+ *     a body of 0.46 MiB per 1,000 records);
+ *   - freehand strokes: 60 to 70 ms per MiB of stored body, whatever the record count (1,000 strokes of 400
+ *     points, 3.4 MiB: 233 ms; 2,000 strokes of 400 points, 6.8 MiB: 409 ms; 300 strokes of 1,000 points,
+ *     2.4 MiB: 156 ms). The 55 to 85 microseconds a record that the wave-B comments quoted hold for notes
+ *     only, and not even for those.
+ * So at the two bounds one conversion takes about 100 ms (1,000 notes) to 175 ms (2.5 MiB of strokes) on that
+ * machine, near the `slowMs` it is asked to stay under. A smaller, slower core (a hosted api) takes longer
+ * by a factor nobody has measured here: `checkpoint.preview.slow` on staging shows whether the bounds are
+ * right. `maxBodyBytes` is compared with the row's size_bytes (the stored JSON, in bytes) before the body
+ * is read.
  * `cacheEntries` / `cacheBytes`: the LRU of converted answers. The cost of one is twice the stored body's
- * size (the converted JSON measured 1.9 times it), so 16 MiB is about eight boards at the cap; one that
- * alone would take half the budget is not kept. A mutable object, like `checkpointSettings`, so tests can
- * lower it.
+ * size (the converted JSON measured 1.9 times it), so 16 MiB is about three boards at the size bound (more
+ * at typical sizes); one that alone would take half the budget is not kept (none within the bound is).
+ * A mutable object, like `checkpointSettings`, so tests can lower it.
  */
 export const previewSettings = {
-  maxRecords: 2_000,
+  maxRecords: 1_000,
+  maxBodyBytes: 2.5 * 1024 * 1024,
   cacheEntries: 8,
   cacheBytes: 16 * 1024 * 1024,
   /** A conversion slower than this is logged (counts only), so staging shows whether the cap is right. */
@@ -246,15 +261,24 @@ export function registerCheckpointRoutes(
     req: FastifyRequest,
     snapshot: CheckpointContent['snapshot'],
     row: SnapshotRow,
-    records: number,
+    size: { records: number; bytes: number },
   ): CheckpointContent {
     previews.set(row.id, row.storage_key, 1, { kind: 'too-large' })
     req.log.info(
-      { evt: 'checkpoint.preview.too_large', records, max: previewSettings.maxRecords },
+      {
+        evt: 'checkpoint.preview.too_large',
+        records: size.records,
+        bytes: size.bytes,
+        max: previewSettings.maxRecords,
+        maxBytes: previewSettings.maxBodyBytes,
+      },
       'v1 checkpoint too large to preview',
     )
     return noPreview(snapshot)
   }
+  /** Whether a v1 body of this many records and stored bytes is past either bound of the preview. */
+  const pastPreviewBounds = (records: number, bytes: number) =>
+    records > previewSettings.maxRecords || bytes > previewSettings.maxBodyBytes
   const noPreview = (snapshot: CheckpointContent['snapshot']): CheckpointContent => ({
     snapshot,
     schema: null,
@@ -272,16 +296,21 @@ export function registerCheckpointRoutes(
     const newCanvas = await onNewCanvas(ctx)
     const snapshot = toCheckpoint(row, { newCanvas: !newCanvas })
     // A v1 row on the new canvas: what is already known (converted before, or too large), and the row's
-    // own record count, decide before the body is read or parsed.
+    // own record count and stored size, decide before the body is read or parsed.
     const v1Row = newCanvas && !isNewCanvasRow(row)
     if (v1Row) {
       const known = previews.get(row.id, row.storage_key)
       if (known) return v1Answer(snapshot, known)
-      if (Number(row.record_count) > previewSettings.maxRecords)
-        return tooLargeToPreview(req, snapshot, row, Number(row.record_count))
+      const records = Number(row.record_count)
+      const bytes = Number(row.size_bytes)
+      if (pastPreviewBounds(records, bytes)) return tooLargeToPreview(req, snapshot, row, { records, bytes })
     }
     const raw = await bodies.read(row.storage_key)
     if (raw === null) throw gone("This checkpoint's saved content is no longer available.")
+    // The body's own size, before it is parsed, in case the row's was wrong (a v2 body is not bounded here).
+    const rawBytes = v1Row ? Buffer.byteLength(raw, 'utf8') : 0
+    if (v1Row && pastPreviewBounds(0, rawBytes))
+      return tooLargeToPreview(req, snapshot, row, { records: Number(row.record_count), bytes: rawBytes })
     const body = readCheckpointBody(raw)
     // v2 (Excalidraw engine): elements and the board document
     if (body.version === 2)
@@ -296,8 +325,8 @@ export function registerCheckpointRoutes(
     // v1 on the new canvas: converted on read (PARITY-5.5), within the cap, once per checkpoint
     if (newCanvas) {
       // the body's own count, in case the row's was wrong
-      if (body.records.length > previewSettings.maxRecords)
-        return tooLargeToPreview(req, snapshot, row, body.records.length)
+      if (pastPreviewBounds(body.records.length, rawBytes))
+        return tooLargeToPreview(req, snapshot, row, { records: body.records.length, bytes: rawBytes })
       // a concurrent request may have converted it while this one read the body
       const known = previews.get(row.id, row.storage_key)
       if (known) return v1Answer(snapshot, known)
@@ -315,7 +344,9 @@ export function registerCheckpointRoutes(
             evt: 'checkpoint.preview.slow',
             ms,
             records: body.records.length,
+            bytes: rawBytes,
             max: previewSettings.maxRecords,
+            maxBytes: previewSettings.maxBodyBytes,
           },
           'v1 checkpoint preview conversion was slow',
         )
