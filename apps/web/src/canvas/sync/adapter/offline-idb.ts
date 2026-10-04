@@ -6,8 +6,8 @@
  *  - the tab holds a Web Locks lock `lobby-offline:<board>:<tab>` for its lifetime; on load it ADOPTS the
  *    queues of the same user and board whose lock is free (a closed tab, D6), so their edits are replayed,
  *    not lost, and two tabs never replay the same queue;
- *  - guests get no persistence (the board page gives them the memory store), and `purge()` removes every
- *    queue of the board for this user (a FORBIDDEN close, a revocation);
+ *  - guests get no persistence (the board page gives them the page's memory queue, ./offline-guest.ts),
+ *    and `purge()` removes every queue of the board for this user (a FORBIDDEN close, a revocation);
  *  - when the person signs out themselves (the Sign out, Switch user or Sign out everywhere button, and
  *    only that) every queue that user left in this browser is deleted, every board and tab
  *    (`purgeOfflineQueuesOf`, from App.tsx through `createSignOutPurge`; CRIT-18): unsent edits are not
@@ -23,6 +23,7 @@
  */
 import { mergeOfflineQueues } from '../core/offline-merge.ts'
 import type { OfflineEntry, OfflineQueueStore } from '../types.ts'
+import { purgeGuestQueuesOf } from './offline-guest.ts'
 
 const DB = 'lobby-offline'
 const STORE = 'queues'
@@ -246,7 +247,11 @@ export interface SessionSeen {
  * `adoptOthers` match the uid) and whose own sign-out purges only its own.
  */
 export function createSignOutPurge(
-  purge: (uid: string) => Promise<unknown> = (uid) => purgeOfflineQueuesOf(uid),
+  purge: (uid: string) => Promise<unknown> = (uid) => {
+    // and the queues a guest has in this page's memory (./offline-guest.ts), which outlive a board session
+    purgeGuestQueuesOf(uid)
+    return purgeOfflineQueuesOf(uid)
+  },
 ): (seen: SessionSeen) => void {
   let last: string | null = null
   return (seen) => {
