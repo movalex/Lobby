@@ -3,12 +3,9 @@
 // restored the members and the port's `select` cleared `selectedGroupIds`, so a group came back as separate
 // members (no group box, a click-and-drag of one member moved the group's members apart in the eyes of the
 // handles). The history side (canvas/history/controller.ts `selectedGroups`, handed to the `select` option)
-// is covered by canvas/history/selection-settle.test.ts and runs here as soon as the board page passes the
-// groups on to the port: board/session.ts's `select` callback takes `(ids, groups)` and sets
-// `selectedGroupIds` (outside D3's ownership: see the wave-D notes). Until then the test is marked as
-// expected to be skipped, not passing.
-import { readFileSync } from 'node:fs'
-import { fileURLToPath } from 'node:url'
+// is covered by canvas/history/selection-settle.test.ts and selected-groups.test.ts; board/session.ts's
+// `select` callback hands the groups to the engine (`selectedGroupIds`, D3-2a, wave E). Since then this is a
+// plain test: before, it skipped itself by reading session.ts's source until that callback took the groups.
 import type { Page } from '@playwright/test'
 import {
   createItem,
@@ -22,11 +19,6 @@ import {
   test,
 } from '../tests/support/canvas.ts'
 import { focusCanvas, pressRedo, pressUndo } from '../tests/support/excalidraw.ts'
-
-/** Whether the board page hands the history's groups to the engine (its `select` callback takes them). */
-const GROUPS_WIRED = /select:\s*\(\s*ids\s*,\s*\w+\s*\)/.test(
-  readFileSync(fileURLToPath(new URL('../../apps/web/src/canvas/board/session.ts', import.meta.url)), 'utf8'),
-)
 
 /** Excalidraw's `selectedGroupIds` as the engine holds it now. */
 const groupsSelected = (page: Page): Promise<string[]> =>
@@ -43,10 +35,6 @@ const groupsSelected = (page: Page): Promise<string[]> =>
 const sorted = (ids: string[]) => [...ids].sort()
 
 test('undo and redo select a group as a group, not as its members', async ({ canvasSession }) => {
-  test.skip(
-    !GROUPS_WIRED,
-    'board/session.ts does not pass the history’s groups to the engine yet (the history side is covered by selection-settle.test.ts)',
-  )
   const { page } = await canvasSession('alice')
   const A = 'sel-g-a'
   const B = 'sel-g-b'

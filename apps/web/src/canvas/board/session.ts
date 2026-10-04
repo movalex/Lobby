@@ -510,7 +510,14 @@ export class LobbyBoardSession {
         api.updateScene({ elements: elements as never, captureUpdate: CaptureUpdateAction.NEVER })
       },
       // F11: an undo or a redo re-selects what its step was made with (the port leaves out hidden ids)
-      select: (ids) => this.port?.select(ids),
+      select: (ids, groups) => {
+        this.port?.select(ids)
+        // a group comes back as a group, not as its members (the port's `select` clears `selectedGroupIds`)
+        if (groups.length > 0)
+          api.updateScene({
+            appState: { selectedGroupIds: Object.fromEntries(groups.map((g) => [g, true])) } as never,
+          })
+      },
     })
     this.undo = undo
     const presence = new PresenceHub({
