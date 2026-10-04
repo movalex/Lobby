@@ -313,7 +313,9 @@ export class UndoController {
  * the selection holds whole (`groupIds` run from the innermost group to the outermost, as Excalidraw's
  * `selectGroupsFromGivenElements` takes the last). Groups are read from the elements as they are now: an undo
  * of Ctrl+G, which ungroups, restores its members with no group, and a redo of it, which groups them again,
- * restores the group. A group with a member that is not in the selection (locked, say) stays its members.
+ * restores the group. A group with a member that is not in the selection (locked, say) stays its members,
+ * and so does a group with fewer than 2 live members (the others deleted): Excalidraw never selects such a
+ * group (`selectGroup` in @excalidraw/element groups.ts refuses one), so a lone member comes back as itself.
  */
 export function selectedGroups(ids: readonly string[], elements: readonly SceneElement[]): readonly string[] {
   const selected = new Set(ids)
@@ -325,12 +327,19 @@ export function selectedGroups(ids: readonly string[], elements: readonly SceneE
       for (const g of groupIdsOf(el)) wanted.add(g)
     }
   if (wanted.size === 0) return []
-  // a group with a live member the selection does not hold is not selected whole
+  // a group with a live member the selection does not hold is not selected whole; one with fewer than 2
+  // live members (selected or not) is not a group Excalidraw selects
   const broken = new Set<string>()
+  const live = new Map<string, number>()
   for (const el of elements) {
-    if (selected.has(el.id) || el.isDeleted) continue
-    for (const g of groupIdsOf(el)) if (wanted.has(g)) broken.add(g)
+    if (el.isDeleted) continue
+    for (const g of groupIdsOf(el)) {
+      if (!wanted.has(g)) continue
+      live.set(g, (live.get(g) ?? 0) + 1)
+      if (!selected.has(el.id)) broken.add(g)
+    }
   }
+  for (const g of wanted) if ((live.get(g) ?? 0) < 2) broken.add(g)
   const out = new Set<string>()
   for (const el of held) {
     const groups = groupIdsOf(el)

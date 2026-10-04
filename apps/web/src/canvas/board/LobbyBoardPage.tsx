@@ -117,6 +117,10 @@ function LobbyBoardShell({ initial }: { initial: BoardDetail }) {
   const [accessLost, setAccessLost] = useState(false)
   const [attempt, setAttempt] = useState(0)
   const retry = useCallback(() => setAttempt((n) => n + 1), [])
+  // E2 (the D2 review): stable, as FirstTicket's ticket effect once depended on it. An inline arrow was a new
+  // function on every render of this shell (a rename, a role change), so each one fetched a new ticket and
+  // started a new board session and socket on the same canvas.
+  const onLost = useCallback(() => setAccessLost(true), [])
 
   useEffect(() => {
     document.title = `${board.title} · Lobby`
@@ -136,7 +140,7 @@ function LobbyBoardShell({ initial }: { initial: BoardDetail }) {
       workspace={initial.workspace}
       onBoardChange={setBoard}
       onRole={setRole}
-      onAccessLost={() => setAccessLost(true)}
+      onAccessLost={onLost}
       onRetry={retry}
     />
   )
@@ -158,7 +162,10 @@ function FirstTicket(props: SessionProps) {
   const { refresh } = useSession()
   const [first, setFirst] = useState<TicketResponse | null>(null)
   const [failed, setFailed] = useState<string | null>(null)
-  const { onAccessLost } = props
+  // read when the ticket is refused, not a dependency of the effect: a new callback is no reason to fetch
+  // a new ticket (that started a new session; the shell's own is stable too)
+  const onAccessLost = useRef(props.onAccessLost)
+  onAccessLost.current = props.onAccessLost
   const boardId = props.board.id
   useEffect(() => {
     const ac = new AbortController()
@@ -167,13 +174,13 @@ function FirstTicket(props: SessionProps) {
       (e: unknown) => {
         if (ac.signal.aborted) return
         const kind = (e as { kind?: string }).kind
-        if (kind === 'forbidden' || kind === 'not-found') onAccessLost()
+        if (kind === 'forbidden' || kind === 'not-found') onAccessLost.current()
         else if (kind === 'unauthorized') void refresh()
         else setFailed(isApiError(e) ? e.message : 'The board could not be opened.')
       },
     )
     return () => ac.abort()
-  }, [boardId, onAccessLost, refresh])
+  }, [boardId, refresh])
   if (failed)
     return (
       <MessageScreen

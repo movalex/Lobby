@@ -49,9 +49,9 @@ import { createCanvasPort, type LobbyCanvasPort } from '../port-impl.ts'
 import { PresenceHub } from '../presence/hub.ts'
 import { attachPresencePointer, type PresenceSample } from '../presence/pointer.ts'
 import { attachEngine, createExcalidrawScene } from '../sync/adapter/excalidraw.ts'
+import { type GuestQueue, guestOfflineQueue } from '../sync/adapter/offline-guest.ts'
 import { createIdbOfflineStore, type IdbOfflineStore, tabId } from '../sync/adapter/offline-idb.ts'
 import { LobbyEngineCore } from '../sync/core/engine.ts'
-import { createMemoryOfflineStore } from '../sync/core/offline-memory.ts'
 import { bump } from '../sync/headless/scene.ts'
 import { createSocketTransport, type SocketTransport } from '../sync/transport/socket.ts'
 import type { OfflineQueueStore, SaveStatus, SceneAdapter, SceneElement } from '../sync/types.ts'
@@ -137,6 +137,10 @@ export class LobbyBoardSession {
   readonly peers: PeerStore
   private readonly tickets: ReturnType<typeof createTicketUri>
   private readonly store: IdbOfflineStore | null
+  /** this page's queue for a guest on this board (it outlives this session: ../sync/adapter/offline-guest.ts) */
+  private readonly guestQueue: GuestQueue
+  /** the device queues of this board were purged in this session (a welcome said guest) */
+  private guestPurged = false
   private readonly o: LobbyBoardSessionOptions
   private api: ExcalidrawImperativeAPI | null = null
   private undo: UndoController | null = null
@@ -199,9 +203,15 @@ export class LobbyBoardSession {
       WebSocketImpl: ticketInProtocol(WebSocket) as never,
     })
     this.store = createIdbOfflineStore({ boardId: o.boardId, uid: o.first.user.id, tab: this.tab })
-    // guests keep no offline copy on the device (§2.5.6 privacy): memory only, once the welcome says so
+    // guests keep no offline copy on the device (§2.5.6 privacy): memory only, once a welcome says so. The
+    // memory queue is the PAGE's, not this session's (E2): a new session on the same page (Retry after a
+    // terminal close, a remount) finds a guest's unsent changes there, as a member's are found in the
+    // tab's IndexedDB record; and a page that already knows this user is a guest here routes to it from
+    // the start (the core reads its queue before the first welcome)
     const idb = this.store
-    const memory = createMemoryOfflineStore()
+    const memory = guestOfflineQueue({ boardId: o.boardId, uid: o.first.user.id })
+    this.guestQueue = memory
+    this.guest = memory.known
     const offline: OfflineQueueStore = {
       load: () => (this.guest ? memory.load() : idb.load()),
       save: (e) => (this.guest ? memory.save(e) : idb.save(e)),
@@ -224,7 +234,8 @@ export class LobbyBoardSession {
       attached: false,
       role: lobbyRoleOf(o.first.role, o.archived),
       readonly: readonlyRole,
-      guest: false,
+      // where this tab keeps its unsent changes (the offline banner, the leave warning): a guest's in memory
+      guest: this.guest,
       save: this.core.saveStatus,
       notice: null,
       edit: null,
@@ -376,9 +387,13 @@ export class LobbyBoardSession {
 
   private onCoreEvent(e: Parameters<Parameters<LobbyEngineCore['on']>[0]>[0]): void {
     if (e.kind === 'welcome') {
-      if (e.welcome.you.guest && !this.guest) {
+      if (e.welcome.you.guest) {
         this.guest = true
-        void this.store?.purge()
+        this.guestQueue.markGuest()
+        if (!this.guestPurged) {
+          this.guestPurged = true
+          void this.store?.purge()
+        }
       }
       const readonly = e.welcome.readonly || this.o.archived
       this.set({
@@ -386,7 +401,8 @@ export class LobbyBoardSession {
         welcomed: true,
         closeReason: null,
         readonly,
-        guest: e.welcome.you.guest,
+        // once a guest, this session keeps its queue in memory (a welcome that says otherwise changes no store)
+        guest: this.guest,
         role: lobbyRoleOf(this.ticketRole, readonly),
         roster: [...this.core.roster().values()],
       })
@@ -398,6 +414,8 @@ export class LobbyBoardSession {
         const reason = e.close.reason
         if (reason === 'FORBIDDEN' || reason === 'NOT_FOUND') {
           void this.store?.purge()
+          // and a guest's page queue: it outlives this session now (E2), the device queues are purged here
+          void this.guestQueue.clear()
           this.o.onAccessLost?.()
         } else if (reason === 'NOT_AUTHENTICATED') this.o.onSignedOut?.()
         this.set({ phase: 'closed', closeReason: reason })
@@ -510,7 +528,14 @@ export class LobbyBoardSession {
         api.updateScene({ elements: elements as never, captureUpdate: CaptureUpdateAction.NEVER })
       },
       // F11: an undo or a redo re-selects what its step was made with (the port leaves out hidden ids)
-      select: (ids) => this.port?.select(ids),
+      select: (ids, groups) => {
+        this.port?.select(ids)
+        // a group comes back as a group, not as its members (the port's `select` clears `selectedGroupIds`)
+        if (groups.length > 0)
+          api.updateScene({
+            appState: { selectedGroupIds: Object.fromEntries(groups.map((g) => [g, true])) } as never,
+          })
+      },
     })
     this.undo = undo
     const presence = new PresenceHub({

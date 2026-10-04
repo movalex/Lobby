@@ -191,6 +191,9 @@ describe('a mass re-key that keeps the paint order (CR-3D-4) is linear', () => {
     expect(kept.size).toBe(0)
   })
 
+  // About 0.8 s alone (200 records and 200 undos on a 20,000-element scene); on a loaded machine or the 2-core
+  // CI runner it once ran past vitest's default 5 s, hence the explicit timeout at the end. The bound that
+  // matters is the re-key's 1500 ms below.
   it('20,000 elements re-keyed with 200 steps on the stack: the steps take the new keys in one walk', () => {
     const { before } = bigScene(20_000)
     const h = new LobbyHistory()
@@ -242,7 +245,7 @@ describe('a mass re-key that keeps the paint order (CR-3D-4) is linear', () => {
     }
     expect(rekeyed.get('e000000')?.index).toBe('a000000')
     expect(rekeyed.get(`e${pad(7 * 150)}`)?.x).toBe(0)
-  })
+  }, 30_000)
 
   it('a reorder among the re-keys is still a step, and the others fold', () => {
     // A, L, B: L is brought to the top (passes B) while A is re-keyed where it is

@@ -30,6 +30,7 @@ import {
   CLOSE_TERMINAL,
   type ClientMessage,
   decodeSnapshotFrame,
+  Pong,
   ServerMessage,
 } from '@draftroom/canvas-schema/protocol'
 import type { ServerInbound, Transport, TransportClose, TransportState } from '../types.ts'
@@ -92,6 +93,18 @@ export function jitteredDelay(delay: number, random: () => number = Math.random)
 export const HEARTBEAT_CLOSE = { code: 4000, reason: 'heartbeat' } as const
 export const HEARTBEAT_MS = 15_000
 const OPEN = 1
+/** The longest text frame looked at for a pong at receipt (`{"type":"pong","n":…}` is far shorter). */
+const PONG_MAX = 64
+
+/** A text frame that is the room's `pong` (the schema's: `type` pong, an optional count, nothing else). */
+function isPong(data: string): boolean {
+  if (!data.includes('"pong"')) return false
+  try {
+    return Pong.safeParse(JSON.parse(data)).success
+  } catch {
+    return false
+  }
+}
 
 async function bytesOf(data: unknown): Promise<Uint8Array | null> {
   if (data instanceof ArrayBuffer) return new Uint8Array(data)
@@ -134,6 +147,12 @@ export function createSocketTransport(opts: SocketTransportOptions): SocketTrans
 
   const onFrame = (data: unknown, gen: number) => {
     lastFrameAt = now()
+    // E2 (wave E, the D5 note): the room's pong is taken as it ARRIVES, not when the in-order chain reaches it.
+    // Behind a slow frame (a large snapshot's decode, a busy page) the pong waited in the chain, the next
+    // beat found the ping "unanswered" and tore down a healthy socket. Only a short frame is looked at (a
+    // pong is ~15 bytes); it is still validated and delivered in order below.
+    if (gen === generation && typeof data === 'string' && data.length <= PONG_MAX && isPong(data))
+      awaitingPong = false
     chain = chain.then(async () => {
       if (gen !== generation) return
       if (typeof data === 'string') {
@@ -152,8 +171,8 @@ export function createSocketTransport(opts: SocketTransportOptions): SocketTrans
           })
           return
         }
-        // only the room's answer to this socket's ping proves the upstream path (other frames do not)
-        if (r.data.type === 'pong' && gen === generation) awaitingPong = false
+        // only the room's answer to this socket's ping proves the upstream path (other frames do not): taken
+        // at receipt (onFrame above), not here
         // the close that follows is terminal with this reason, whatever its frame says (SMK-2)
         if (r.data.type === 'notice' && r.data.code === 'CLOSING' && gen === generation)
           announced = r.data.detail || 'UNKNOWN_ERROR'
@@ -205,13 +224,14 @@ export function createSocketTransport(opts: SocketTransportOptions): SocketTrans
         } catch {
           // closing a dead socket may throw: it is gone either way
         }
-        chain = chain.then(() => {
-          if (stopped) return
-          // a socket the room said it was closing and that never closed: terminal all the same
-          const close = closeOf(HEARTBEAT_CLOSE.code, HEARTBEAT_CLOSE.reason)
-          setState('closed', close)
-          if (close.code !== CLOSE_TERMINAL) scheduleReconnect()
-        })
+        // Reported and reconnected now, not behind the frame chain (E2, the D5 note): a frame still being
+        // processed there (a snapshot's decode) belongs to the dead socket and is dropped when it finishes
+        // (its generation is gone), so nothing of this socket can be delivered after this close; waiting for
+        // it only held the reconnect, behind a decode that may be what made the page miss the pong.
+        // A socket the room said it was closing and that never closed: terminal all the same.
+        const close = closeOf(HEARTBEAT_CLOSE.code, HEARTBEAT_CLOSE.reason)
+        setState('closed', close)
+        if (close.code !== CLOSE_TERMINAL) scheduleReconnect()
         return
       }
       awaitingPong = true
@@ -235,6 +255,10 @@ export function createSocketTransport(opts: SocketTransportOptions): SocketTrans
     }
     if (stopped || gen !== generation) return
     attempts++
+    // a new socket's frames start a chain of their own: whatever the previous socket's chain still holds (a
+    // decode a heartbeat drop left running) is dropped when it finishes, and the new welcome never waits for
+    // it. A previous socket's close was reported before this reconnect was scheduled.
+    chain = Promise.resolve()
     const sock = new opts.WebSocketImpl(url)
     ws = sock
     announced = null
