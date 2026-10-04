@@ -57,12 +57,12 @@ test('authz-006: an owner changes a member’s workspace role and removes them; 
 })
 
 // (carol, not bob: authz-006 above removes bob from the workspace)
-// REVIEW-6 (wave D6): the role toast names who changed my access only when the api said so, and only for the
-// change the name was about. The api tells carol's own stream the owner's name after every PUT of her grant, a
-// PUT that changes nothing included, and says nothing for a change of her workspace role; the page held that
-// name for 60 s, so a later change nobody named got the owner's name on it. Now a name is dropped as soon as the
-// page's re-read of its role agrees with what it shows.
-test('REVIEW-6: a grant set to what it was changes nothing and names nobody later; a real lowering still names the owner', async ({
+// REVIEW-6 (wave D6, api half wave E3): the role toast names who changed my access, for every change that moved it.
+// The api tells carol's own stream the name of the person whose session made the change, for a change that
+// changed something (her grant, her workspace role, a request, a link, the board's visibility) and for nothing
+// else: a PUT that sets her grant to what it was says nothing. A name is still dropped as soon as the page's
+// re-read of its role agrees with what it shows, for an event that changed nothing for her (visibility).
+test('REVIEW-6: a grant set to what it was names nobody; every real change, a workspace role too, names the person who made it', async ({
   canvasSession,
   users,
   board,
@@ -79,30 +79,61 @@ test('REVIEW-6: a grant set to what it was changes nothing and names nobody late
     expect(res.status(), await res.text()).toBe(200)
   }
 
-  await test.step('alice sets carol’s grant to what it already is: the api still tells carol’s stream it was alice, and carol’s page reads the role again and finds nothing changed', async () => {
+  await test.step('alice sets carol’s grant to what it already is: the api names nobody, and carol’s page finds nothing changed', async () => {
+    // the sharing hint still makes the page read its role again; the role it reads is the one it shows
     const reread = b.page.waitForResponse(
       (r) => r.request().method() === 'POST' && new URL(r.url()).pathname === `/api/boards/${board}/ticket`,
     )
     await alice.putMember(board, carol.id, 'editor')
     await reread
-    // the page settles the name when that read comes back
     await b.page.waitForTimeout(500)
     await expect(toast).toHaveCount(0)
   })
 
-  await test.step('her workspace role changes (no event, no name): the toast says what happened and names nobody', async () => {
+  await test.step('her workspace role changes: the api names whoever changed it, and so does the toast', async () => {
     await setWorkspaceRole('admin')
     await expect(toast).toBeVisible({ timeout: 20_000 })
     await expect(toast).toContainText('You are now an owner of this board')
-    await expect(toast).not.toContainText('changed by')
+    await expect(toast).toContainText(`changed by ${aliceName}`)
   })
 
-  await test.step('back to a member, then alice lowers carol’s grant: that one alice did, and the toast says so', async () => {
+  await test.step('back to a member, then alice lowers carol’s grant: both name alice', async () => {
     await setWorkspaceRole('member')
     await expect(toast).toContainText('Your access changed to Can edit', { timeout: 20_000 })
-    await expect(toast).not.toContainText('changed by')
+    await expect(toast).toContainText(`changed by ${aliceName}`)
     await alice.putMember(board, carol.id, 'commenter')
     await expect(toast).toContainText('Your access changed to Can comment', { timeout: 20_000 })
+    await expect(toast).toContainText(`changed by ${aliceName}`)
+  })
+})
+
+// REVIEW-6 (wave E3): the board's visibility is a change of access too. The api names the person whose session
+// changed it to everyone on the board but that person; a page whose role did not move drops the name again.
+test('REVIEW-6: a change of the board’s visibility that moves my access names whoever made it', async ({
+  canvasSession,
+  users,
+  board,
+}) => {
+  const alice = await users.api('alice')
+  const aliceName = (await users.get('alice')).name
+  const setVisibility = async (visibility: 'workspace_edit' | 'workspace_view') => {
+    const res = await alice.fetch('PATCH', `/api/boards/${board}`, { visibility })
+    expect(res.status(), await res.text()).toBe(200)
+  }
+  await setVisibility('workspace_edit')
+  // dave: a Dev Studio member without a grant, so an editor through the board's visibility alone
+  const d = await canvasSession('dave', { role: null })
+  const toast = d.page.getByTestId('role-change-toast')
+
+  await test.step('workspace edit -> workspace view lowers dave to a viewer: the toast names alice', async () => {
+    await setVisibility('workspace_view')
+    await expect(toast).toContainText('Your access changed to Can view', { timeout: 20_000 })
+    await expect(toast).toContainText(`changed by ${aliceName}`)
+  })
+
+  await test.step('and back: dave can edit again, and the toast names alice again', async () => {
+    await setVisibility('workspace_edit')
+    await expect(toast).toContainText('You can edit this board now', { timeout: 20_000 })
     await expect(toast).toContainText(`changed by ${aliceName}`)
   })
 })
