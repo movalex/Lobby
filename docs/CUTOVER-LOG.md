@@ -233,3 +233,8 @@ on the sync disk (§6).
   - Backups: store r2, last pass 02:50Z, `failuresTotal` 0, 4 boards with 0 failures and 0 pending.
   - 0 `error`/`FATAL` lines on api and sync in 24 h.
   - Render service events show only the day's deploys (api/web `e5cb6df`, sync `54ea729`): no restart or out-of-memory event.
+- **2026-10-04 check clean (16:47Z, about 68 h after the switch):**
+  - api, sync and web return 200; maintenance off.
+  - Backups: last pass 16:35Z, `failuresTotal` 0, 4 boards with 0 failures and 0 pending.
+  - 0 `error`/`FATAL` lines on api and sync in 24 h.
+  - No Render service event since the 02:52Z deploys (api/web `e5cb6df`, sync `54ea729` unchanged): no restart or out-of-memory event.
