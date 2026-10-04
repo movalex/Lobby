@@ -223,3 +223,8 @@ on the sync disk (§6).
   records (1,000). The shell no longer restarts the board session on re-render, the heartbeat clears on the raw pong, and undo
   restores group selections. The board's access hint names the person who changed it, and only for real changes. Gate: 563 of 565 e2e
   passed, 0 failed; stale-client checks 64/64 and 67/67. Live smoke 34 passed, 0 failed; 0 `error`/`FATAL` lines.
+- **Wave F deployed 2026-10-04 02:51–02:52Z** (`main` `e5cb6df`; api → web; sync stays on `54ea729`; no migration, no protocol change).
+  It covers ownership transfer and the keep-sharing duplicate, which now lock the membership before the grant (no copied grant for a
+  non-member), the hidden-member filter on undo's group restore, guest-queue purge coverage and stale comments. `docs/BACKLOG.md` is
+  rewritten as the current open list. Gate: 563 of 566 e2e passed, 1 known LOD pixel flake (3/3 alone), 2 skipped; stale-client
+  checks 48/48 and 49/49. Live smoke 34 passed, 0 failed; 0 `error`/`FATAL` lines.
