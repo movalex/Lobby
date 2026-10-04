@@ -98,13 +98,31 @@ export interface WheelShape {
   /**
    * `window.devicePixelRatio` when the event came: the display's scaling times the browser's zoom (1 when
    * the page does not say). Chrome and Edge report a mouse notch in CSS pixels, so a notch that is 100 at
-   * 100% arrives as 100 / ratio at 125% (80), 150% (66.67) or 200% (50): `looksLikeMouseWheel` reads it.
+   * 100% arrives as 100 / ratio at 125% (80), 150% (66.67) or 200% (50): `looksLikeMouseWheel` reads it
+   * (not on macOS: `mac`).
    */
   readonly pixelRatio?: number
+  /**
+   * Whether the page runs on an Apple system (macOS, iPadOS): the scaled notches (100 / ratio) are then not
+   * counted. Left out: read from the browser (`isMacPlatform`).
+   */
+  readonly mac?: boolean
 }
 
 /** A mouse notch in pixels on Chrome and Edge at a ratio of 1: 100, or 120 on some systems. */
 const NOTCH_PX = [100, 120] as const
+
+/**
+ * Whether the page runs on an Apple system (macOS, iPadOS), from the browser's platform (the way the keymap
+ * decides Cmd or Ctrl). False when the browser says nothing (a unit test's Node, a worker).
+ */
+export function isMacPlatform(): boolean {
+  const nav = (globalThis as { navigator?: { platform?: unknown; userAgentData?: { platform?: unknown } } })
+    .navigator
+  return [nav?.userAgentData?.platform, nav?.platform].some(
+    (p) => typeof p === 'string' && /mac|ipod|iphone|ipad/i.test(p), // 'MacIntel', Chromium's client hint 'macOS'
+  )
+}
 
 /**
  * The ratio the page runs at right now (`window.devicePixelRatio`), 1 when there is none or it is not a
@@ -133,11 +151,15 @@ function wholeNotches(a: number, notch: number): boolean {
  * hundreds of pixels on the one axis (Chrome's and Edge's mouse wheel: 100 px a notch, 120 on some
  * systems, a multiple of it when turned fast). Under display scaling or browser zoom the same notch is
  * 100 / `pixelRatio` (80, 66.67, 50 at 125%, 150%, 200%) or 120 / `pixelRatio`, so those count too once the
- * ratio is not 1; the unscaled sizes keep counting at any ratio (a display whose scaling the browser does
- * not fold into the delta). A trackpad scrolls in small, uneven pixel steps, usually with a sideways part.
- * A guess (reasoned from how Chromium scales wheel deltas, not measured on a scaled display): the setting
- * says it outright when this one gets a device wrong. The scaling and the browser zoom are one ratio here,
- * so a mouse on a scaled display that is also zoomed may still read as a trackpad.
+ * ratio is not 1 (Chrome and Edge on Windows and Linux); the unscaled sizes keep counting at any ratio (a
+ * display whose scaling the browser does not fold into the delta). Not on macOS: a Retina screen is a ratio
+ * of 2 always, a Mac's mouse reports its own accelerated steps, and its trackpad's small pixel steps (50 or
+ * 60 over a ratio of 2) would read as a mouse and turn a scroll into a zoom, so there only the unscaled
+ * sizes count, as before the ratio was read. A trackpad scrolls in small, uneven pixel steps, usually with
+ * a sideways part. A guess (reasoned from how Chromium scales wheel deltas, not measured on a scaled
+ * display): the setting says it outright when this one gets a device wrong. The scaling and the browser
+ * zoom are one ratio here, so a mouse on a scaled display that is also zoomed may still read as a
+ * trackpad.
  */
 export function looksLikeMouseWheel(e: WheelShape): boolean {
   const dy = e.deltaY ?? 0
@@ -145,7 +167,8 @@ export function looksLikeMouseWheel(e: WheelShape): boolean {
   if (e.deltaMode === 1 || e.deltaMode === 2) return true
   const a = Math.abs(dy)
   const ratio = e.pixelRatio !== undefined && e.pixelRatio >= 0.25 && e.pixelRatio <= 8 ? e.pixelRatio : 1
-  const scaled = Math.abs(ratio - 1) > 1e-3
+  // the scaled notch is Chromium's on Windows and Linux; a Mac's reports differ (see above)
+  const scaled = Math.abs(ratio - 1) > 1e-3 && !(e.mac ?? isMacPlatform())
   return NOTCH_PX.some((n) => wholeNotches(a, n) || (scaled && wholeNotches(a, n / ratio)))
 }
 

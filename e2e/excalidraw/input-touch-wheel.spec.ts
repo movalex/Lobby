@@ -333,12 +333,23 @@ test('W5-33 (CR-W5-3A-4): Preferences > Input device: auto zooms on a mouse whee
  * Alice on the board in a window that runs at `ratio` (Chromium's device scale factor: what Windows' 125% and
  * 150% display scaling, or the browser's zoom, make `window.devicePixelRatio`).
  */
-async function openScaled(browser: Browser, board: string, users: Users, ratio: number) {
+async function openScaled(
+  browser: Browser,
+  board: string,
+  users: Users,
+  ratio: number,
+  // the page's navigator.platform: the scaled-notch rule is Windows and Linux's (wave E3), so whatever host runs this
+  platform: 'Win32' | 'MacIntel' = 'Win32',
+) {
   const who = await users.get('alice')
   const context = await browser.newContext({
     viewport: { width: 1440, height: 900 },
     deviceScaleFactor: ratio,
   })
+  // injected by the browser's own protocol before the page's scripts: the page's CSP does not apply
+  await context.addInitScript((p) => {
+    Object.defineProperty(navigator, 'platform', { get: () => p, configurable: true })
+  }, platform)
   const page = await context.newPage()
   await signInContext(context, who.handle, who.name)
   await page.goto(`/b/${board}`)
@@ -409,6 +420,35 @@ test('wave B follow-up 3: Input device Auto reads devicePixelRatio: a mouse notc
     } finally {
       await context.close()
     }
+  }
+})
+
+test('wave E3 (D6-1): on macOS the scaled notch is not a mouse: 50 px at 200% pans, an unscaled 100 px notch still zooms', async ({
+  browser,
+  board,
+  users,
+}) => {
+  const { context, page } = await openScaled(browser, board, users, 2, 'MacIntel')
+  try {
+    expect(await page.evaluate(() => navigator.platform)).toBe('MacIntel')
+    expect(await page.evaluate(() => window.devicePixelRatio)).toBe(2)
+    const at = await emptyCanvasPoint(page)
+    const reset = async () => {
+      await setViewport(page, { x: 0, y: 0, zoom: 1 })
+      await page.mouse.move(at.x, at.y)
+      await page.waitForTimeout(200)
+    }
+    await reset()
+    // 100 / 2: what Chromium on Windows reports for a notch at 200%, and what a Retina trackpad can make
+    await wheelOver(page, at, 50)
+    await wheelOver(page, at, 60)
+    await page.waitForTimeout(300)
+    expect(await zoomOf(page)).toBe(1)
+    await reset()
+    await wheelOver(page, at, 100)
+    await expect.poll(() => zoomOf(page)).toBeCloseTo(0.9, 2)
+  } finally {
+    await context.close()
   }
 })
 
