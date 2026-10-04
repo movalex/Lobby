@@ -27,6 +27,7 @@ import { isBoardId, loadBoardAccess, requireBoardAction } from '../../access.ts'
 import { audit } from '../../audit.ts'
 import type { Params } from '../../context.ts'
 import { ApiError, conflict, notFound, parse } from '../../errors.ts'
+import { actorOf } from '../../notifier.ts'
 import { toUser } from '../../serialize.ts'
 import type { FeatureContext } from '../context.ts'
 import { DAY_MS, newAccessRequestId, publishSharingChanged, trySavepoint, UserRateLimiter } from './shared.ts'
@@ -330,8 +331,13 @@ export function registerAccessRequestRoutes(app: FastifyInstance, ctx: FeatureCo
         const row = await tx.one<ListedRow>(`${LISTED_SELECT} WHERE r.id = $1`, [id])
         return { request: serialize(row, access.board.visibility), granted: role !== null }
       })
+      // REVIEW-6: the approver is named to the person approved (the session's user)
       if (result.granted)
-        notifier.accessChanged({ boardId: result.request.boardId, userId: result.request.user.id })
+        notifier.accessChanged({
+          boardId: result.request.boardId,
+          userId: result.request.user.id,
+          actor: actorOf(user),
+        })
       publishSharingChanged(ctx, result.request.boardId, `access-request-${decision}`)
       return { request: result.request }
     })

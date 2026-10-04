@@ -30,6 +30,7 @@ import { sha256hex } from '../../auth/session.ts'
 import { userKind } from '../../auth/users.ts'
 import type { Params } from '../../context.ts'
 import { conflict, notFound, parse } from '../../errors.ts'
+import { actorOf } from '../../notifier.ts'
 import { guestAccountRequired } from '../../routes/invitations.ts'
 import type { FeatureContext } from '../context.ts'
 import { publishExportPolicy } from '../export-control/index.ts'
@@ -385,7 +386,8 @@ export function registerReviewLinkRoutes(app: FastifyInstance, ctx: FeatureConte
       }
       return { users }
     })
-    for (const userId of result.users) notifier.accessChanged({ boardId: bid, userId })
+    // REVIEW-6: whoever revoked the link is named to the guests who lost their access (the session's user)
+    for (const userId of result.users) notifier.accessChanged({ boardId: bid, userId, actor: actorOf(user) })
     publishSharingChanged(ctx, bid, 'review-link-revoked')
     return { removed: result.users.length }
   })

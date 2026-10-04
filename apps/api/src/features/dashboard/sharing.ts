@@ -16,6 +16,7 @@ import { audit } from '../../audit.ts'
 import { roleRequiresCreator } from '../../auth/identity.ts'
 import type { Params } from '../../context.ts'
 import { badRequest, notFound, parse } from '../../errors.ts'
+import { actorOf } from '../../notifier.ts'
 import { listBoardMembers } from '../../routes/members.ts'
 import { toUser, type UserRow } from '../../serialize.ts'
 import type { FeatureContext } from '../context.ts'
@@ -216,7 +217,8 @@ export function registerSharingRoutes(app: FastifyInstance, ctx: FeatureContext)
       }
       return { members: await listBoardMembers(tx, access.board), stepDown }
     })
-    notifier.accessChanged({ boardId: bid, userId })
+    // REVIEW-6: the new owner hears who made them one; the step-down is the actor's own (no name)
+    notifier.accessChanged({ boardId: bid, userId, actor: actorOf(user) })
     if (result.stepDown) notifier.accessChanged({ boardId: bid, userId: user.id })
     publishSharingChanged(ctx, bid, 'ownership-transferred')
     return { members: result.members }

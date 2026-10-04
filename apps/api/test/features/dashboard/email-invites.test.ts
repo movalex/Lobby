@@ -222,7 +222,11 @@ describe('invite by email with Clerk sign-in (UNVERIFIED against a live Clerk; f
       expect.objectContaining({ id: alice.personalWorkspaceId, role: 'guest' }),
     )
     expect(w.api.notifications.slice(before)).toEqual([{ boardId: board, userId: bob.userId }])
-    expect(published).toEqual([{ type: 'sharing.changed', data: { reason: 'grant' } }])
+    // REVIEW-6: the person given access hears who invited them (the session's user), then the sharing hint
+    expect(published).toEqual([
+      { type: 'access.changed', data: { actor: { name: 'Alice' } } },
+      { type: 'sharing.changed', data: { reason: 'grant' } },
+    ])
     const audits = await w.api.db.query<{
       action: string
       actor_id: string
@@ -240,6 +244,8 @@ describe('invite by email with Clerk sign-in (UNVERIFIED against a live Clerk; f
     const again = await sendInvite(alice, board, 'bob@example.com', 'viewer')
     expect(again.body).toMatchObject({ mode: 'granted', role: 'commenter', alreadyHadAccess: true })
     expect(w.api.notifications.slice(before)).toHaveLength(1)
+    // a no-op names nobody: nothing new was published
+    expect(published).toHaveLength(2)
     expect(await boardRole(bob, board)).toBe('commenter')
     const raised = await sendInvite(alice, board, 'bob@example.com', 'editor')
     expect(raised.body).toMatchObject({ mode: 'granted', role: 'editor', alreadyHadAccess: false })

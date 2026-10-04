@@ -23,9 +23,11 @@
 
 /**
  * REVIEW-6: what ONE person's stream hears, and nobody else's, when someone else changed their access
- * (a role set or removed). It names who did it so the role-change toast can say whom to ask. The name
- * is of a person who manages this board's access, sent only to the affected person; `sharing.changed`
- * stays an identity-free hint for everyone.
+ * (a role set or removed, a request approved, a link revoked, the workspace role, an email invite). It
+ * names who did it so the role-change toast can say whom to ask. The name is of a person who manages
+ * this board's access, sent only to the affected person (for a change of the board's visibility, to
+ * everyone on the board but that person: a page whose role stayed the same drops it); `sharing.changed`
+ * stays an identity-free hint for everyone. Published only for a change that changed something.
  */
 export const ACCESS_CHANGED_EVENT = 'access.changed'
 
@@ -228,28 +230,35 @@ export class EventHub {
   /**
    * Access to `boardId` changed (for `userId`, or for everyone on it: visibility or status). Called
    * after the change commits, wherever the sync server is told. The affected streams are re-checked
-   * now by the stream route's revalidator.
+   * now by the stream route's revalidator. With the `actor` of the change (the authenticated session's
+   * user, REVIEW-6) the affected people's streams are told who made it, once they have been re-checked
+   * (see `accessChangedBy`): a person who just lost the board hears nothing.
    */
-  accessChanged(change: { boardId: string; userId?: string }): void {
+  accessChanged(change: { boardId: string; userId?: string; actor?: { id: string; name: string } }): void {
     this.generation++
     const affected = [...(this.byBoard.get(change.boardId) ?? [])].filter(
       (e) => change.userId === undefined || e.userId === change.userId,
     )
     void this.recheck(affected)
+    // after the re-check has taken hold of the streams: the name waits behind it, in order
+    if (change.actor) this.accessChangedBy(change, change.actor)
   }
 
   /**
-   * REVIEW-6: tells the affected person's streams (only theirs) who changed their access. Call after
-   * the change commits, with the actor from the authenticated session. Nothing is sent when the person
-   * changed their own access: the toast names someone to ask, and that is them.
+   * REVIEW-6: tells the affected person's streams (only theirs) who changed their access: for one
+   * person's change (`userId`), that person's; for a change of the whole board (its visibility: no
+   * `userId`), everyone's but the actor's own. Call after the change commits, with the actor from the
+   * authenticated session. Nothing is sent when the person changed their own access: the toast names
+   * someone to ask, and that is them. A page whose role did not change by it drops the name (the web's
+   * AccessActorHint), so a broadcast naming someone for a visibility change costs a role read, no toast.
    */
-  accessChangedBy(change: { boardId: string; userId: string }, actor: { id: string; name: string }): void {
+  accessChangedBy(change: { boardId: string; userId?: string }, actor: { id: string; name: string }): void {
     const name = actor.name.trim().slice(0, ACTOR_NAME_MAX)
     if (!name || actor.id === change.userId) return
     this.publish(
       change.boardId,
       { type: ACCESS_CHANGED_EVENT, data: { actor: { name } } },
-      { to: (userId) => userId === change.userId },
+      { to: (userId) => (change.userId === undefined ? userId !== actor.id : userId === change.userId) },
     )
   }
 

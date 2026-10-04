@@ -12,10 +12,12 @@ let bob: Client
 let carol: Client
 let alice: Client
 let boardId: string
+let hub: EventHub
 const streams: SseStream[] = []
 
 beforeEach(async () => {
-  api = await createTestApi({ deps: { events: new EventHub() } })
+  hub = new EventHub()
+  api = await createTestApi({ deps: { events: hub } })
   base = await listen(api)
   alice = await api.login('alice', 'Alice Admin')
   bob = await api.login('bob', 'Bob Owner')
@@ -89,6 +91,49 @@ describe('access.changed carries the actor (REVIEW-6)', () => {
   })
 })
 
+describe('access.changed only for a change that changed something (REVIEW-6)', () => {
+  let fences = 0
+  /** An event published now reaches the stream after everything published before it. */
+  async function fence(...ss: SseStream[]): Promise<void> {
+    const type = `fence.${++fences}`
+    hub.publish(boardId, { type, data: {} })
+    await Promise.all(ss.map((s) => s.waitFor(type)))
+  }
+
+  it('a grant set to the role it already is, or removed when there is none, names nobody', async () => {
+    const mine = await open(carol)
+    // carol has no direct grant (the board is open to the workspace): removing it changes nothing
+    const none = await bob.req('DELETE', `/api/boards/${boardId}/members/${carol.userId}`)
+    expect(none.statusCode, none.body).toBe(200)
+    await fence(mine)
+    expect(actorEvents(mine)).toEqual([])
+
+    // a real change is named, once; the same PUT again changes nothing and names nobody again
+    const put = () => bob.req('PUT', `/api/boards/${boardId}/members/${carol.userId}`, { role: 'viewer' })
+    expect((await put()).statusCode).toBe(200)
+    await mine.waitFor('access.changed')
+    expect((await put()).statusCode).toBe(200)
+    await fence(mine)
+    expect(actorEvents(mine).map((e) => e.data)).toEqual([{ actor: { name: 'Bob Owner' } }])
+
+    // removing the grant is a real change (named); removing it a second time is not
+    const del = () => bob.req('DELETE', `/api/boards/${boardId}/members/${carol.userId}`)
+    expect((await del()).statusCode).toBe(200)
+    await until(() => actorEvents(mine).length === 2, 3_000, 'the removal named')
+    expect((await del()).statusCode).toBe(200)
+    await fence(mine)
+    expect(actorEvents(mine)).toHaveLength(2)
+  })
+
+  it('tells the sync server of the same change without the name (docs/M1-CONTRACTS.md §7)', async () => {
+    const mine = await open(carol)
+    api.notifications.length = 0
+    await bob.req('PUT', `/api/boards/${boardId}/members/${carol.userId}`, { role: 'commenter' })
+    await mine.waitFor('access.changed')
+    expect(api.notifications).toEqual([{ boardId, userId: carol.userId }])
+  })
+})
+
 describe('EventHub.accessChangedBy', () => {
   it('delivers to the affected person only, and never to oneself or with an empty name', () => {
     const hub = new EventHub()
@@ -104,6 +149,39 @@ describe('EventHub.accessChangedBy', () => {
     expect(got).toEqual({ a: ['access.changed'], b: [] })
     hub.accessChangedBy({ boardId: 'b-board00001', userId: 'a' }, { id: 'a', name: 'Self' })
     hub.accessChangedBy({ boardId: 'b-board00001', userId: 'a' }, { id: 'b', name: '   ' })
+    expect(got.a).toEqual(['access.changed'])
+  })
+
+  it('a change of the whole board (no person) goes to every stream but the actor’s own', () => {
+    const hub = new EventHub()
+    const got: Record<string, string[]> = { a: [], b: [], c: [] }
+    for (const id of ['a', 'b', 'c'])
+      hub.openStream('b-board00001', {
+        userId: id,
+        sessionId: `s-${id}`,
+        deliver: (e) => got[id]?.push(e.type),
+        end: () => {},
+      })
+    hub.accessChangedBy({ boardId: 'b-board00001' }, { id: 'b', name: 'Bea' })
+    expect(got).toEqual({ a: ['access.changed'], b: [], c: ['access.changed'] })
+  })
+
+  it('accessChanged with an actor names it to the affected person; without one it says nothing', () => {
+    const hub = new EventHub()
+    const got: Record<string, string[]> = { a: [], b: [] }
+    for (const id of ['a', 'b'])
+      hub.openStream('b-board00001', {
+        userId: id,
+        sessionId: `s-${id}`,
+        deliver: (e) => got[id]?.push(e.type),
+        end: () => {},
+      })
+    hub.accessChanged({ boardId: 'b-board00001', userId: 'a' })
+    expect(got).toEqual({ a: [], b: [] })
+    hub.accessChanged({ boardId: 'b-board00001', userId: 'a', actor: { id: 'b', name: 'Bea' } })
+    expect(got).toEqual({ a: ['access.changed'], b: [] })
+    // the person's own change names nobody
+    hub.accessChanged({ boardId: 'b-board00001', userId: 'a', actor: { id: 'a', name: 'Self' } })
     expect(got.a).toEqual(['access.changed'])
   })
 

@@ -20,6 +20,7 @@ import { audit } from '../audit.ts'
 import { roleRequiresCreator } from '../auth/identity.ts'
 import type { AppContext, Params } from '../context.ts'
 import { conflict, notFound, parse } from '../errors.ts'
+import { actorOf } from '../notifier.ts'
 import { toUser, type UserRow } from '../serialize.ts'
 
 const RANK = Object.fromEntries(BOARD_ROLES.map((r, i) => [r, BOARD_ROLES.length - i])) as Record<
@@ -170,7 +171,8 @@ export function registerMemberRoutes(app: FastifyInstance, ctx: AppContext): voi
       }
       return { changed, members: await listBoardMembers(tx, access.board) }
     })
-    if (result.changed) notifier.accessChanged({ boardId: bid, userId: uid })
+    // REVIEW-6: only a change that changed something is told, and with who made it (the session's user)
+    if (result.changed) notifier.accessChanged({ boardId: bid, userId: uid, actor: actorOf(user) })
     return { members: result.members }
   })
 
@@ -198,7 +200,7 @@ export function registerMemberRoutes(app: FastifyInstance, ctx: AppContext): voi
       }
       return { changed, members: await listBoardMembers(tx, access.board) }
     })
-    if (result.changed) notifier.accessChanged({ boardId: bid, userId: uid })
+    if (result.changed) notifier.accessChanged({ boardId: bid, userId: uid, actor: actorOf(user) })
     return { members: result.members }
   })
 }

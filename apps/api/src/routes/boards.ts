@@ -29,6 +29,7 @@ import { onNewCanvas } from '../canvas-engine.ts'
 import type { AppContext, Params } from '../context.ts'
 import { conflict, forbidden, notFound, parse } from '../errors.ts'
 import { assertBoardRoom } from '../files/usage.ts'
+import { actorOf } from '../notifier.ts'
 import { type BoardMarks, toBoard, toBoardWithRole } from '../serialize.ts'
 
 const MAX_LISTED = 500
@@ -198,7 +199,8 @@ export function registerBoardRoutes(app: FastifyInstance, ctx: AppContext): void
         })
       return { row, role: roleOf(access), visibilityChanged }
     })
-    if (result.visibilityChanged) notifier.accessChanged({ boardId: bid })
+    // REVIEW-6: everyone on the board re-reads their role; whose visibility change it was goes with it
+    if (result.visibilityChanged) notifier.accessChanged({ boardId: bid, actor: actorOf(user) })
     return toBoardWithRole(result.row, result.role, await boardMarks())
   })
 
