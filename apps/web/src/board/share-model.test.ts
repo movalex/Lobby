@@ -12,7 +12,10 @@ import {
   clientLinkHint,
   emailInviteHint,
   emailInviteOutcome,
+  GUESTS_TOGGLE_LABEL,
   grantEditable,
+  guestsOptionLabel,
+  guestsToggleSaying,
   invitePlan,
   inviteRoleOptions,
   isOwnAddress,
@@ -58,6 +61,34 @@ describe('share with a client, workshop link, more ways to share (DANA-03, F3, R
     expect(clientLinkHint('commenter', true)).not.toMatch(/sign/i)
     expect(clientLinkHint('commenter', true)).toContain('to comment, never edit. No account needed')
     expect(clientLinkHint('viewer', false)).toContain('to view, never edit. They sign in to open it')
+  })
+
+  it('G2: with a link already open, the box above Create and the line under the heading are about the NEXT link', () => {
+    // nothing open: the texts every earlier test and spec read
+    expect(guestsOptionLabel(0)).toBe('Anyone with the link can join with just a name (no account)')
+    expect(workshopLinkHint(true, false)).toBe(workshopLinkHint(true))
+    expect(clientLinkHint('commenter', true, false)).toBe(clientLinkHint('commenter', true))
+    // a link open: they say "next", and still never "sign in" while guests are on
+    expect(guestsOptionLabel(1)).toBe(
+      'For the next link: anyone with it can join with just a name (no account)',
+    )
+    expect(guestsOptionLabel(3)).toBe(guestsOptionLabel(1))
+    expect(workshopLinkHint(true, true)).toContain('The next workshop link')
+    expect(workshopLinkHint(true, true)).toContain('with just a name or an account')
+    expect(workshopLinkHint(true, true)).not.toMatch(/sign/i)
+    expect(workshopLinkHint(false, true)).toContain('after signing in')
+    expect(clientLinkHint('commenter', true, true)).toContain(
+      'The next link is for clients and reviewers to comment',
+    )
+    expect(clientLinkHint('commenter', true, true)).not.toMatch(/sign/i)
+    expect(clientLinkHint('viewer', false, true)).toContain('They sign in to open it')
+  })
+
+  it('G2: a link’s own guest box says it is for that link, and what turning it off does to people already in', () => {
+    expect(GUESTS_TOGGLE_LABEL).toBe('Anyone with this link can join with just a name (no account)')
+    expect(guestsToggleSaying(true)).toBe('Anyone with this link can now join with just a name.')
+    expect(guestsToggleSaying(false)).toContain('No new guests can join this link')
+    expect(guestsToggleSaying(false)).toContain('keep their access until the link ends or is revoked')
   })
 
   it('the collapsed summary names what is inside, or what is open in there', () => {

@@ -9,7 +9,8 @@
 // comment, 14 days, join with just a name, created and copied by one button), then "Invite people",
 // pending requests, "More ways to share" (collapsed: workshop link, invite by email, one-time invite
 // links), then the settings (workspace access, export) and who has access. Every guest option sits
-// above its Create button and applies to the link that button makes.
+// above its Create button and applies to the link that button makes (once a link is open, the box says
+// "for the next link"); a link that exists has its own box in its row (G2: PATCH review-links/:id).
 
 import {
   type AccessRequest,
@@ -72,7 +73,10 @@ import {
   type EmailInviteOutcome,
   emailInviteHint,
   emailInviteOutcome,
+  GUESTS_TOGGLE_LABEL,
   grantEditable,
+  guestsOptionLabel,
+  guestsToggleSaying,
   invitePlan,
   inviteRoleOptions,
   isOwnAddress,
@@ -1917,10 +1921,16 @@ function WorkshopLinksSection({
       {canCreate && (
         <>
           <p className="dr-share__hint" data-testid="workshop-link-hint">
-            {workshopLinkHint(allowGuests)}
+            {workshopLinkHint(allowGuests, links.length > 0)}
           </p>
-          {/* R15: the guest choice comes before Create, and applies to the link it makes. */}
-          <GuestsOption testId="workshop-link-guests" checked={allowGuests} onChange={setAllowGuests} />
+          {/* R15: the guest choice comes before Create, and applies to the link it makes (G2: the next one
+              once a link is open; a link that exists has its own box in its row). */}
+          <GuestsOption
+            testId="workshop-link-guests"
+            checked={allowGuests}
+            onChange={setAllowGuests}
+            openLinks={links.length}
+          />
         </>
       )}
       {canCreate && (
@@ -2047,9 +2057,14 @@ function ClientLinkSection({
       {canCreate && (
         <>
           <p className="dr-share__hint" data-testid="review-link-hint">
-            {clientLinkHint(role, allowGuests)}
+            {clientLinkHint(role, allowGuests, links.length > 0)}
           </p>
-          <GuestsOption testId="review-link-guests" checked={allowGuests} onChange={setAllowGuests} />
+          <GuestsOption
+            testId="review-link-guests"
+            checked={allowGuests}
+            onChange={setAllowGuests}
+            openLinks={links.length}
+          />
           <ClientExportLine boardId={boardId} />
         </>
       )}
@@ -2198,14 +2213,21 @@ function GuestsOption({
   testId,
   checked,
   onChange,
+  openLinks = 0,
 }: {
   testId: string
   checked: boolean
   onChange(next: boolean): void
+  /**
+   * G2: links of this kind that are already open. The box is for the link Create makes, so with one open
+   * it says "next link" (a link that exists has its own box in its row) instead of reading as if ticking
+   * it changed the link that is already shared.
+   */
+  openLinks?: number
 }) {
   const hintId = useId()
   return (
-    <div className="dr-sharing__guests">
+    <div className="dr-sharing__guests" data-next-link={openLinks > 0 || undefined}>
       <label className="dr-sharing__check">
         <input
           type="checkbox"
@@ -2214,7 +2236,7 @@ function GuestsOption({
           aria-describedby={hintId}
           onChange={(e) => onChange(e.target.checked)}
         />
-        Anyone with the link can join with just a name (no account)
+        {guestsOptionLabel(openLinks)}
       </label>
       <p id={hintId} className="dr-share__hint">
         Guests show as “Name (guest)”, reach only this board, and lose access when the link ends or is
@@ -2254,6 +2276,16 @@ function ReviewLinkRow({
   const [removeAccess, setRemoveAccess] = useState(true)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // G2: this link's own "join with just a name" box. `guestsAsked` is what was just chosen, held until the
+  // list reloads with the server's answer (the box must not jump back while that request is in flight).
+  const [guestsAsked, setGuestsAsked] = useState<boolean | null>(null)
+  const [guestsBusy, setGuestsBusy] = useState(false)
+  const [guestsSaid, setGuestsSaid] = useState('')
+  const guestsOn = guestsAsked ?? link.allowGuests
+  const guestsHintId = useId()
+  useEffect(() => {
+    setGuestsAsked(null)
+  }, [link.allowGuests])
   // The copy Create tried finishes after this row appeared (the link shows without waiting for it).
   useEffect(() => {
     if (copiedOnCreate === null) return
@@ -2265,6 +2297,23 @@ function ReviewLinkRow({
     const ok = await copyBounded(link.url ?? '')
     setCopied(ok)
     setCopyFailed(!ok)
+  }
+  const setGuests = async (next: boolean) => {
+    if (guestsBusy) return
+    setGuestsBusy(true)
+    setGuestsAsked(next)
+    setGuestsSaid('')
+    setError(null)
+    try {
+      await sharing.setReviewLinkGuests(boardId, link.id, next)
+      setGuestsSaid(guestsToggleSaying(next))
+      onChange()
+    } catch (e) {
+      setGuestsAsked(null)
+      setError(isApiError(e) ? e.message : 'The link could not be changed.')
+    } finally {
+      setGuestsBusy(false)
+    }
   }
   const revoke = async () => {
     setBusy(true)
@@ -2296,7 +2345,7 @@ function ReviewLinkRow({
       data-testid={workshop ? 'workshop-link-row' : 'review-link-row'}
       data-invitation-id={link.id}
       data-expires-at={link.expiresAt}
-      data-allow-guests={link.allowGuests}
+      data-allow-guests={guestsOn}
     >
       <div className="dr-sharing__link-main">
         {/* F13: what the link is, then its actions on the same line ("+1 h" and "Revoke…" at their own
@@ -2306,7 +2355,7 @@ function ReviewLinkRow({
             <strong>{ROLE_OPTION_LABEL[link.role]}</strong> · until{' '}
             {workshop ? shortTime(link.expiresAt) : shortDate(link.expiresAt)} · {joined}
             {link.maxUses ? ` (max ${link.maxUses})` : ''}
-            {link.allowGuests && (
+            {guestsOn && (
               <>
                 {' · '}
                 <span data-testid="link-guests-allowed">guests can join with a name</span>
@@ -2368,6 +2417,31 @@ function ReviewLinkRow({
           <span className="dr-share__hint" data-testid="review-link-copy-failed">
             Couldn’t copy — use Copy.
           </span>
+        )}
+        {/* G2: this link's own guest box. Turning it on lets anyone with the link in with just a name, so
+            only people who may share can; any manager can turn it off. The server checks both. */}
+        {(canShare || guestsOn) && (
+          <div className="dr-sharing__guests dr-sharing__guests--link">
+            <label className="dr-sharing__check">
+              <input
+                type="checkbox"
+                data-testid="review-link-guests-toggle"
+                checked={guestsOn}
+                disabled={guestsBusy || (!canShare && !guestsOn)}
+                aria-describedby={guestsHintId}
+                onChange={(e) => void setGuests(e.target.checked)}
+              />
+              {GUESTS_TOGGLE_LABEL}
+            </label>
+            <span
+              id={guestsHintId}
+              className="dr-share__hint"
+              role="status"
+              data-testid="review-link-guests-note"
+            >
+              {guestsSaid}
+            </span>
+          </div>
         )}
         {confirming && (
           <fieldset className="dr-sharing__confirm">

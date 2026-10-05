@@ -169,6 +169,17 @@ export type ExtendReviewLinkInput = z.input<typeof ExtendReviewLinkInput>
 export const ReviewLinkExtended = z.object({ expiresAt: IsoDate, maxExpiresAt: IsoDate })
 export type ReviewLinkExtended = z.infer<typeof ReviewLinkExtended>
 
+/**
+ * PATCH /api/boards/:bid/review-links/:id: changes a link that already exists. Only whether people can
+ * join it with just a name (wave 3 guests), so the Share dialog's "join with just a name" box can
+ * apply to the link a facilitator already shared. Strict: the link's role, expiry and use cap never
+ * change here (guests keep the link's role; "+1 h" and revoke have their own routes).
+ */
+export const UpdateReviewLinkInput = z.object({ allowGuests: z.boolean() }).strict()
+export type UpdateReviewLinkInput = z.input<typeof UpdateReviewLinkInput>
+export const ReviewLinkUpdated = z.object({ allowGuests: z.boolean() })
+export type ReviewLinkUpdated = z.infer<typeof ReviewLinkUpdated>
+
 export const ReviewLinkCreated = z.object({
   get id() {
     return InvitationId

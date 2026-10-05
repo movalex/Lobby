@@ -13,6 +13,8 @@ export type AuditAction =
   | 'invitation.accept'
   | 'invitation.revoke'
   | 'invitation.extend'
+  // G2: a link that already exists changed whether people can join it with just a name
+  | 'invitation.update'
   // authz-006: a workspace member's role changed, or the member was removed (with their board grants)
   | 'workspace.member.role'
   | 'workspace.member.remove'

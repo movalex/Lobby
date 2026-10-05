@@ -12,9 +12,11 @@
 //
 // Differences from the tldraw spec: the board waits on the facade (guests-kit.ts `waitForLobbyBoard`); the
 // revoked guest must also lose the canvas itself (no board page left under the guest screen).
+import type { Page } from '@playwright/test'
 import { expect, test } from '../tests/support/canvas.ts'
 import {
   memberRow,
+  openMoreWaysToShare,
   openShareFromButton,
   shareDialog,
   signedInContext,
@@ -298,3 +300,147 @@ for (const colorScheme of ['light', 'dark'] as const) {
     }
   })
 }
+
+// G2: "Anyone with the link can join with just a name" for a link that already exists. Ticking the box above
+// Create after a workshop link was shared used to change the section's text ("with just a name or an account")
+// but not that link: its invite page still said "Sign in to accept". The box above Create is now plainly for
+// the NEXT link, and each link has its own box (PATCH review-links/:id) that applies to that link and that link only.
+test('G2: a link that already exists gets its own "join with just a name" box; the box above Create is for the next link', async ({
+  browser,
+  board,
+  users,
+}) => {
+  const alice = await users.api('alice')
+  const a = await signedInContext(browser, 'alice', { viewport: { width: 1440, height: 900 } })
+  const visitor = await browser.newContext({ viewport: { width: 390, height: 844 } })
+  try {
+    const page = a.page
+    await page.goto(`/b/${board}`)
+    await waitForLobbyBoard(page)
+    await openShareFromButton(page)
+    await openMoreWaysToShare(page)
+    const dialog = shareDialog(page)
+    const workshop = dialog.getByTestId('workshop-links')
+    const row = workshop.getByTestId('workshop-link-row')
+    const topBox = workshop.getByTestId('workshop-link-guests')
+    const rowBox = row.getByTestId('review-link-guests-toggle')
+    const rowNote = row.getByTestId('review-link-guests-note')
+
+    await test.step('no link yet: the box says what it always said and creates an account-only link', async () => {
+      await expect(topBox).toHaveAccessibleName('Anyone with the link can join with just a name (no account)')
+      await expect(topBox).not.toBeChecked()
+      await expect(workshop.locator('.dr-sharing__guests').first()).not.toHaveAttribute(
+        'data-next-link',
+        /.*/,
+      )
+      await workshop.getByTestId('workshop-link-create').click()
+      await expect(row).toHaveCount(1)
+      await expect(row).toHaveAttribute('data-allow-guests', 'false')
+      await expect(row.getByTestId('link-guests-allowed')).toHaveCount(0)
+      await expect(rowBox).not.toBeChecked()
+      await expect(rowBox).toBeEnabled()
+      await expect(rowBox).toHaveAccessibleName(
+        'Anyone with this link can join with just a name (no account)',
+      )
+    })
+    const url = await row.getByTestId('review-link-url').inputValue()
+
+    await test.step('with a link open, the box above Create says it is for the NEXT link, and ticking it changes nothing on the open one', async () => {
+      await expect(topBox).toHaveAccessibleName(
+        'For the next link: anyone with it can join with just a name (no account)',
+      )
+      await expect(topBox.locator('xpath=ancestor::div[1]')).toHaveAttribute('data-next-link', 'true')
+      await topBox.check()
+      await expect(workshop.getByTestId('workshop-link-hint')).toContainText(
+        'The next workshop link: anyone with it can edit for a few hours, with just a name or an account',
+      )
+      await expect(row).toHaveAttribute('data-allow-guests', 'false')
+      await expect(row.getByTestId('link-guests-allowed')).toHaveCount(0)
+      await expect(rowBox).not.toBeChecked()
+      // the link's invite page still wants a sign-in
+      const p = await visitor.newPage()
+      await p.goto(url)
+      await expect(p.getByTestId('invite-page')).toHaveAttribute('data-allow-guests', 'false')
+      await expect(p.getByTestId('invite-signin')).toHaveText('Sign in to accept')
+      await expect(p.getByTestId('invite-guest-name')).toHaveCount(0)
+      await p.close()
+      await topBox.uncheck()
+    })
+
+    await test.step('the link’s own box turns guests ON for that link: the row, the server and its invite page follow', async () => {
+      await rowBox.check()
+      await expect(row).toHaveAttribute('data-allow-guests', 'true')
+      await expect(row.getByTestId('link-guests-allowed')).toBeVisible()
+      await expect(rowNote).toHaveText('Anyone with this link can now join with just a name.')
+      await expect(rowBox).toBeChecked()
+      await expect(rowBox).toBeEnabled()
+      const listed = (await (await alice.fetch('GET', `/api/boards/${board}/invitations`)).json()) as {
+        invitations: { kind: string; role: string; allowGuests: boolean }[]
+      }
+      expect(listed.invitations).toEqual([
+        expect.objectContaining({ kind: 'review', role: 'editor', allowGuests: true }),
+      ])
+      const p = await visitor.newPage()
+      await p.goto(url)
+      await expect(p.getByTestId('invite-page')).toHaveAttribute('data-allow-guests', 'true')
+      await expect(p.getByTestId('invite-guest-name')).toBeVisible()
+      await expect(p.getByTestId('invite-signin')).toHaveText('Sign in instead')
+      await p.close()
+    })
+
+    let wes: { page: Page; id: string } | undefined
+    await test.step('a guest joins with just a name and is an editor (the link’s role, nothing more)', async () => {
+      wes = await guestOn(visitor, tokenOf(url), 'Wes')
+      await expect(wes.page.getByTestId('readonly-pill')).toHaveCount(0)
+      expect(
+        ((await (await wes.page.request.get(`/api/boards/${board}`)).json()) as { role: string }).role,
+      ).toBe('editor')
+    })
+
+    await test.step('turning it OFF again: new visitors need an account; the guest who is in stays', async () => {
+      await rowBox.uncheck()
+      await expect(row).toHaveAttribute('data-allow-guests', 'false')
+      await expect(row.getByTestId('link-guests-allowed')).toHaveCount(0)
+      await expect(rowNote).toContainText('No new guests can join this link with just a name')
+      await expect(rowNote).toContainText('People who already joined keep their access')
+      const fresh = await browser.newContext({ viewport: { width: 390, height: 844 } })
+      try {
+        const p = await fresh.newPage()
+        await p.goto(url)
+        await expect(p.getByTestId('invite-page')).toHaveAttribute('data-allow-guests', 'false')
+        await expect(p.getByTestId('invite-signin')).toHaveText('Sign in to accept')
+      } finally {
+        await fresh.close()
+      }
+      // Wes, who joined while it was on, still has the board
+      if (!wes) throw new Error('no guest')
+      await wes.page.reload()
+      await waitForLobbyBoard(wes.page)
+    })
+
+    await test.step('a change the api refuses leaves the box where it was and says why', async () => {
+      // The link ended meanwhile: the api answers 409 LINK_CLOSED (the real answer, played for this one request).
+      await page.route('**/api/boards/*/review-links/*', async (route) => {
+        if (route.request().method() !== 'PATCH') return route.fallback()
+        await route.fulfill({
+          status: 409,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            error: {
+              code: 'LINK_CLOSED',
+              message: 'This link has expired or was revoked. Create a new one.',
+            },
+          }),
+        })
+      })
+      await rowBox.check()
+      await expect(row.getByRole('alert')).toContainText('expired or was revoked')
+      await expect(rowBox).not.toBeChecked()
+      await expect(rowBox).toBeEnabled()
+      await expect(row).toHaveAttribute('data-allow-guests', 'false')
+    })
+  } finally {
+    await visitor.close()
+    await a.context.close()
+  }
+})

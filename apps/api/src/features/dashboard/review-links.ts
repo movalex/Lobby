@@ -6,6 +6,7 @@
 // People accept either through M1's POST /api/invitations/:token/accept (sign-in required); the 0005
 // trigger records each use instead of consuming the link. A link created with `allowGuests` (wave 3,
 // 0009) also lets people join with just a name: POST /api/invitations/:token/guest (features/guests).
+// A manager can turn that on or off for a link that exists (PATCH /api/boards/:bid/review-links/:id).
 //
 // The token is derived from the invitation id with a server-side key (HMAC), so managers can copy the
 // link again later while the database still stores only its sha256. Access that a review link created
@@ -21,6 +22,7 @@ import {
   RevokeReviewLinkInput,
   reviewLinkLifetimeMs,
   reviewLinkMaxLifetimeMs,
+  UpdateReviewLinkInput,
 } from '@draftroom/contracts'
 import { newId, type Queryable } from '@draftroom/db'
 import type { FastifyInstance } from 'fastify'
@@ -426,8 +428,10 @@ export function registerReviewLinkRoutes(app: FastifyInstance, ctx: FeatureConte
         )
       const expiresAt = new Date(next)
       await tx.query('UPDATE invitations SET expires_at = $2 WHERE id = $1', [id, expiresAt])
-      // Wave 3: guests who joined through the link stay signed in for its new end, too.
-      if (link.allow_guests) await extendGuestSessions(tx, id, expiresAt, at)
+      // Wave 3: guests who joined through the link stay signed in for its new end, too. Whether or not the
+      // link still lets NEW guests in (G2: a manager can turn that off after people joined): the guests
+      // who are in keep their access until the link's end, so their sessions follow it.
+      await extendGuestSessions(tx, id, expiresAt, at)
       await audit(tx, {
         workspaceId: link.workspace_id,
         actorId: user.id,
@@ -440,6 +444,58 @@ export function registerReviewLinkRoutes(app: FastifyInstance, ctx: FeatureConte
     })
     publishSharingChanged(ctx, bid, 'review-link-extended')
     return result
+  })
+
+  // Wave G2: "Anyone with the link can join with just a name" for a link that already exists (the Share
+  // dialog used to apply that box only to the NEXT link, and said "with just a name" over a link whose
+  // invite page still wanted a sign-in). Only this flag: the link's role, expiry and use cap are not
+  // touched, so guests keep exactly the access the link always gave (the same role, this board only).
+  // - Turning it ON lets anyone with the URL in, so it is creator-only like creating a guest link
+  //   (domain access, D4) and never for a name-only guest. Turning it OFF only narrows who can join and
+  //   stays open to every manager (lowering access stays open: PUT members, PATCH visibility).
+  // - Turning it off stops NEW name-only joins (join.ts and a signed-in guest accepting both read the
+  //   flag under the invitation lock). People who already joined keep their access until the link ends
+  //   or is revoked ("Revoke…" can remove them): a checkbox must not log people out mid-session.
+  // - An expired, revoked or swept link stays closed (409 LINK_CLOSED), like "+1 h".
+  app.patch('/api/boards/:bid/review-links/:id', async (req) => {
+    const user = await ctx.requireUser(req)
+    const { bid = '', id = '' } = req.params as Params
+    const { allowGuests } = parse(UpdateReviewLinkInput, req.body ?? {})
+    const result = await db.transaction(async (tx) => {
+      // The board row, then the link (the lock order in access.ts; joining and accepting follow it).
+      const access = await requireBoardAction(tx, bid, user.id, 'manage_access', { forUpdate: true })
+      if ((await userKind(tx, user.id)) === 'guest')
+        throw guestAccountRequired('Sign in with an account to change links.')
+      if (allowGuests)
+        await ctx.identity.requireCreator(tx, user.id, 'share', {
+          route: req.routeOptions.url ?? '',
+          by: 'route',
+        })
+      if (!InvitationId.safeParse(id).success) throw notFound()
+      const link = await tx.maybeOne<LinkRow>(
+        `SELECT ${LINK_COLUMNS} FROM invitations WHERE id = $1 AND board_id = $2 AND multi_use FOR UPDATE`,
+        [id, access.board.id],
+      )
+      if (!link) throw notFound()
+      const at = now()
+      if (link.revoked_at !== null || link.swept_at !== null || link.expires_at.getTime() <= at.getTime())
+        throw conflict('LINK_CLOSED', 'This link has expired or was revoked. Create a new one.')
+      const changed = link.allow_guests !== allowGuests
+      if (changed) {
+        await tx.query('UPDATE invitations SET allow_guests = $2 WHERE id = $1', [id, allowGuests])
+        await audit(tx, {
+          workspaceId: link.workspace_id,
+          actorId: user.id,
+          action: 'invitation.update',
+          target: id,
+          detail: { boardId: bid, multiUse: true, allowGuests },
+          at,
+        })
+      }
+      return { allowGuests, changed }
+    })
+    if (result.changed) publishSharingChanged(ctx, bid, 'review-link-updated')
+    return { allowGuests: result.allowGuests }
   })
 
   // Expiry sweeper: one API instance (docs/DEPLOY.md); with several, the row locks keep sweeps single.

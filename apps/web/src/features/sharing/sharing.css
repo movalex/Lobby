@@ -79,6 +79,12 @@
 .dr-sharing__create {
   margin-top: 10px;
 }
+/* G2: a link's own "join with just a name" box, in its row. Its status line (said after a change) takes no
+   room while empty, so the box costs one line in the dialog. */
+.dr-sharing__guests--link {
+  margin-top: 0;
+  gap: 0;
+}
 
 /* DANA-03: "Share with a client", the one obvious path, as a card at the top of the dialog. */
 .dr-share .dr-share__section.dr-sharing__client {
