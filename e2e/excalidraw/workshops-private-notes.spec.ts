@@ -919,3 +919,43 @@ test('R1: 16 notes revealed into a retro column keep its width and never reach t
     expect(b && b.x >= 880 && b.x + b.width <= 1680).toBe(true)
   }
 })
+
+// Wave I1: the private-notes store used to mark itself stale when a refetch failed and never ask again (the
+// bug class G1 fixed in the workshop store). The stream's event comes once, so a brainstorm someone started
+// while this person's request failed never reached them until a reload.
+test('I1: a brainstorm started while the participant’s refetch keeps failing still reaches them, without a reload', async ({
+  join,
+}) => {
+  test.setTimeout(90_000)
+  const alice = await join('alice', 'owner')
+  const bob = await join('bob', 'editor')
+  await expect(bob.page.getByTestId('pn-chip')).toHaveCount(0)
+  await bob.page.evaluate(() => {
+    ;(window as unknown as { __i1Mark: boolean }).__i1Mark = true
+  })
+
+  // Bob's reads of the private brainstorm fail (a deploy, a dropped connection); the stream still delivers the event.
+  const PATH = '**/api/boards/*/private-brainstorm'
+  let failing = true
+  let refused = 0
+  await bob.page.route(PATH, async (route) => {
+    if (failing && route.request().method() === 'GET') {
+      refused++
+      return route.abort('connectionreset')
+    }
+    return route.continue()
+  })
+  await startBrainstorm(alice.page, { prompt: 'What should we change?', anonymous: false, target: 'new' })
+
+  // The event's refetch failed, and the store keeps trying (1 s, 2 s, ...): three refused reads, not one.
+  await expect.poll(() => refused, { timeout: 15_000 }).toBeGreaterThanOrEqual(3)
+  await expect(bob.page.getByTestId('pn-chip')).toHaveCount(0)
+
+  // The api answers again: the next retry (at most a few seconds on) brings the session, nobody reloads.
+  failing = false
+  await expect(bob.page.getByTestId('pn-chip')).toBeVisible({ timeout: 20_000 })
+  const panel = await openPanel(bob.page)
+  await expect(panel.getByTestId('pn-prompt')).toHaveText('What should we change?')
+  expect(await bob.page.evaluate(() => (window as unknown as { __i1Mark?: boolean }).__i1Mark)).toBe(true)
+  await bob.page.unroute(PATH)
+})
