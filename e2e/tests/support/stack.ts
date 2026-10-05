@@ -8,6 +8,12 @@
 // its test hooks and backups off (EXCALIDRAW_SYNC_ENV), under any per-spec `syncEnv`, so a spec that sets
 // TEXT_LEASE_MS never drops the engine (and sync refuses DRAFTROOM_ENGINE=tldraw outright).
 //
+// Board event stream (wave H1): the page opens it on its own origin (the preview proxy) unless the api has
+// DRAFTROOM_EVENTS_ORIGIN, as on Render, where it goes straight to the api origin with a ticket. A spec sets
+// it with test.use({ apiEnv }) (excalidraw/events-direct.spec.ts); E2E_DIRECT_EVENTS=1 sets it for every stack
+// of the run (the api's own URL, another origin than the page's: CORS applies), to run any spec over the
+// direct stream.
+//
 // Blob store: fs by default. E2E_BLOB_STORE=r2 (opt-in, never in CI) points the api at a real R2 bucket
 // using R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET (and optional R2_ENDPOINT)
 // from the test runner's environment; only the api receives them, and only a bucket whose name says
@@ -205,6 +211,14 @@ function baseEnv(): NodeJS.ProcessEnv {
   return env
 }
 
+/** E2E_DIRECT_EVENTS=1: every stack's api serves the board event stream on its own origin (see the top). */
+export function directEventsEnv(env: NodeJS.ProcessEnv = process.env): Record<string, string> {
+  const v = env.E2E_DIRECT_EVENTS?.trim()
+  if (!v || v === '0') return {}
+  if (v !== '1') throw new Error('E2E_DIRECT_EVENTS must be 1 or unset')
+  return { DRAFTROOM_EVENTS_ORIGIN: API_URL }
+}
+
 const R2_KEYS = ['R2_ACCOUNT_ID', 'R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY', 'R2_BUCKET'] as const
 
 /** The api's blob-store settings: fs (default), or the opt-in real bucket (E2E_BLOB_STORE=r2). */
@@ -312,6 +326,7 @@ export async function startStack(opts: StackOptions = {}): Promise<Stack> {
       DRAFTROOM_SYNC_INTERNAL_URL: SYNC_URL,
       DRAFTROOM_WORKER_TOKEN: workerToken,
       ...blobs,
+      ...directEventsEnv(),
       ...opts.apiEnv,
     }),
     ready: (out) => out.includes(`api listening on ${HOST}:${API_PORT} `),

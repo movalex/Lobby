@@ -27,6 +27,28 @@ export interface RecordedEvent {
 }
 
 /**
+ * Bytes of an event stream in, the data of each message out (the api ends lines with LF; comments and other
+ * fields skipped; a blank line dispatches). Independent of the web client's own parser on purpose.
+ */
+function sseFeed(message: (data: string) => void): (bytes: Buffer) => void {
+  const decoder = new TextDecoder()
+  let buf = ''
+  let data: string[] = []
+  return (bytes) => {
+    buf += decoder.decode(bytes, { stream: true })
+    const lines = buf.split('\n')
+    // The last piece is a line still being received.
+    buf = lines.pop() ?? ''
+    for (const line of lines) {
+      if (line === '') {
+        if (data.length) message(data.join('\n'))
+        data = []
+      } else if (line.startsWith('data:')) data.push(line.slice(5).replace(/^ /, ''))
+    }
+  }
+}
+
+/**
  * Everything the server sent one page: every /api response body (the SSE stream itself excluded:
  * its body never ends) and every server-sent event, captured through the DevTools protocol's
  * Network domain (what the browser received, not what the app chose to handle).
@@ -60,18 +82,50 @@ export class NetworkLog {
     })
     const cdp = await context.newCDPSession(page)
     this.cdp = cdp
-    cdp.on('Network.eventSourceMessageReceived', (e: { data: string }) => {
+    const record = (raw: string) => {
       let type = '?'
       let data: unknown = null
       try {
-        const msg = JSON.parse(e.data) as { type?: string; data?: unknown }
+        const msg = JSON.parse(raw) as { type?: string; data?: unknown }
         type = msg.type ?? '?'
         data = msg.data ?? null
       } catch {
         // not JSON: kept raw
       }
-      this.events.push({ type, data, raw: e.data })
+      this.events.push({ type, data, raw })
+    }
+    // The same-origin stream (an EventSource): the Network domain reports each message.
+    cdp.on('Network.eventSourceMessageReceived', (e: { data: string }) => record(e.data))
+    // Wave H1: the direct stream on the api origin is a fetch (an EventSource cannot send its ticket
+    // header), which the Network domain reports as body chunks: stream its body and split it into messages
+    // as an EventSource would. Chunks that arrive before the buffered part is in are queued, in order.
+    const fetchStreams = new Map<string, { ready: boolean; queued: Buffer[]; feed(bytes: Buffer): void }>()
+    cdp.on(
+      'Network.responseReceived',
+      (e: { requestId: string; type?: string; response: { url: string; mimeType?: string } }) => {
+        if (e.type !== 'Fetch' || !(e.response.mimeType ?? '').startsWith('text/event-stream')) return
+        if (!/\/api\/boards\/[^/]+\/events$/.test(new URL(e.response.url).pathname)) return
+        const s = { ready: false, queued: [] as Buffer[], feed: sseFeed(record) }
+        fetchStreams.set(e.requestId, s)
+        cdp.send('Network.streamResourceContent', { requestId: e.requestId }).then(
+          (r: { bufferedData: string }) => {
+            s.feed(Buffer.from(r.bufferedData, 'base64'))
+            s.ready = true
+            for (const q of s.queued.splice(0)) s.feed(q)
+          },
+          () => fetchStreams.delete(e.requestId),
+        )
+      },
+    )
+    cdp.on('Network.dataReceived', (e: { requestId: string; data?: string }) => {
+      const s = fetchStreams.get(e.requestId)
+      if (!s || !e.data) return
+      const bytes = Buffer.from(e.data, 'base64')
+      if (s.ready) s.feed(bytes)
+      else s.queued.push(bytes)
     })
+    for (const done of ['Network.loadingFinished', 'Network.loadingFailed'] as const)
+      cdp.on(done, (e: { requestId: string }) => void fetchStreams.delete(e.requestId))
     await cdp.send('Network.enable')
   }
 

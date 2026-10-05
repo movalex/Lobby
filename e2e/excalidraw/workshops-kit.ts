@@ -64,19 +64,28 @@ function instrumentPage() {
 
 /** A slow device: the main thread is busy for `busyMs` right after the board event stream opens. */
 function busyAfterEventStreamOpens(busyMs: number) {
+  const busy = () =>
+    setTimeout(() => {
+      const until = Date.now() + busyMs
+      while (Date.now() < until) {
+        // busy
+      }
+    }, 0)
   const Original = window.EventSource
   window.EventSource = class extends Original {
     constructor(url: string | URL, init?: EventSourceInit) {
       super(url, init)
-      if (String(url).includes('/events'))
-        setTimeout(() => {
-          const until = Date.now() + busyMs
-          while (Date.now() < until) {
-            // busy
-          }
-        }, 0)
+      if (String(url).includes('/events')) busy()
     }
   }
+  // Wave H1: on the direct transport the stream is a fetch on the api origin.
+  const originalFetch = window.fetch
+  window.fetch = function (this: unknown, input: RequestInfo | URL, init?: RequestInit) {
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+    const p = originalFetch.call(this, input, init)
+    if (/\/api\/boards\/[^/?]+\/events$/.test(new URL(url, location.href).pathname)) busy()
+    return p
+  } as typeof window.fetch
 }
 
 /** The network log, plus what the Excalidraw canvas socket says about other people's selections. */

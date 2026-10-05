@@ -334,6 +334,12 @@ function checkCsp(headers) {
     'csp connect-src names the sync origin',
     `${connect.join(' ')} (sync: ${syncWss})`,
   )
+  // Wave H1: the page fetches the board event stream from the api's own origin (section 5b).
+  check(
+    connect.includes(API),
+    'csp connect-src names the api origin',
+    `${connect.join(' ')} (api: ${API}; without it the board event stream falls back to the rewrite and nothing arrives live)`,
+  )
 }
 
 // ---- 2. the index loads its chunks --------------------------------------------------------------------
@@ -588,6 +594,119 @@ try {
 } catch (e) {
   fail('/api/auth/config', e.message)
 }
+
+// ---- 5b. the board event stream reaches the browser live (wave H1) -------------------------------------
+
+/**
+ * GET a stream and time it: when the headers came, when the first body byte came, when it ended. The api's
+ * /api/diag/stream writes a 2 KB comment at once, then three ticks a second apart, then ends: a proxy that
+ * passes a stream through as it is written shows the first byte at once; one that holds the response until
+ * it ends (Render's static-site rewrite, measured 2026-10-05) shows it at the end, about 3 s in.
+ */
+async function timeStream(url) {
+  const t0 = performance.now()
+  const res = await fetch(url, {
+    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    headers: { 'user-agent': 'lobby-live-smoke', accept: 'text/event-stream' },
+  })
+  const headersMs = performance.now() - t0
+  let firstByteMs = null
+  let bytes = 0
+  const reader = res.body?.getReader()
+  if (reader)
+    for (;;) {
+      const { value, done } = await reader.read()
+      if (done) break
+      if (firstByteMs === null && value.length) firstByteMs = performance.now() - t0
+      bytes += value.length
+    }
+  return {
+    status: res.status,
+    type: res.headers.get('content-type') ?? '',
+    headersMs,
+    firstByteMs,
+    totalMs: performance.now() - t0,
+    bytes,
+  }
+}
+const ms = (v) => (v === null ? 'never' : `${(v / 1000).toFixed(2)} s`)
+/** The direct stream must start well inside this; through a buffering proxy it starts at the end (~3 s). */
+const DIRECT_FIRST_BYTE_MS = 1_000
+
+if (EXPECT === 'excalidraw') {
+  try {
+    const r = await timeStream(`${API}/api/diag/stream`)
+    check(
+      r.status === 200 && r.firstByteMs !== null && r.firstByteMs < DIRECT_FIRST_BYTE_MS,
+      'event stream live from the api origin',
+      `GET ${API}/api/diag/stream -> ${r.status} ${r.type || '(no content-type)'}: first byte ${ms(r.firstByteMs)}, total ${ms(r.totalMs)}, ${r.bytes} bytes (first byte must be < ${DIRECT_FIRST_BYTE_MS / 1000} s)`,
+    )
+  } catch (e) {
+    fail('event stream live from the api origin', `${API}/api/diag/stream: ${e.message}`)
+  }
+  try {
+    // Informational: what a page that still used the rewrite would get (the reason for the direct origin).
+    const r = await timeStream(`${base}/api/diag/stream`)
+    info(
+      'event stream through the web origin',
+      `GET ${base}/api/diag/stream -> ${r.status}: first byte ${ms(r.firstByteMs)}, total ${ms(r.totalMs)}${r.firstByteMs !== null && r.totalMs - r.firstByteMs < 500 ? ' (held until the end: the rewrite buffers; pages use the api origin)' : ''}`,
+    )
+  } catch (e) {
+    info('event stream through the web origin', `${base}/api/diag/stream: ${e.message}`)
+  }
+  // The page mints its ticket through the web origin with the session cookie; without one: 401.
+  await expectJson401(
+    'POST /api/boards/:bid/events/ticket signed out',
+    `${base}/api/boards/b-live-smoke/events/ticket`,
+    { method: 'POST', headers: { origin: base } },
+  )
+  // The api answers the page's CORS preflight for the ticketed stream (only when DRAFTROOM_EVENTS_ORIGIN
+  // is set), and refuses a made-up ticket with a 401 the page can read.
+  try {
+    const res = await fetch(`${API}/api/boards/b-live-smoke/events`, {
+      method: 'OPTIONS',
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+      headers: {
+        'user-agent': 'lobby-live-smoke',
+        origin: base,
+        'access-control-request-method': 'GET',
+        'access-control-request-headers': 'authorization',
+      },
+    })
+    const allow = res.headers.get('access-control-allow-origin')
+    const headers = (res.headers.get('access-control-allow-headers') ?? '').toLowerCase()
+    check(
+      res.status === 204 &&
+        allow === base &&
+        headers.split(/\s*,\s*/).includes('authorization') &&
+        !res.headers.get('access-control-allow-credentials'),
+      'event stream CORS preflight (api origin)',
+      `OPTIONS ${API}/api/boards/<board>/events from ${base} -> ${res.status}, allow-origin ${allow ?? '(none: DRAFTROOM_EVENTS_ORIGIN is not set on the api)'}, allow-headers ${headers || '(none)'}`,
+    )
+  } catch (e) {
+    fail('event stream CORS preflight (api origin)', e.message)
+  }
+  try {
+    const bogus = `evt_${randomBytes(32).toString('base64url')}`
+    const res = await fetch(`${API}/api/boards/b-live-smoke/events`, {
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+      headers: { 'user-agent': 'lobby-live-smoke', origin: base, authorization: `Bearer ${bogus}` },
+    })
+    const text = await res.text()
+    let code = null
+    try {
+      code = JSON.parse(text)?.error?.code ?? null
+    } catch {}
+    check(
+      res.status === 401 && res.headers.get('access-control-allow-origin') === base,
+      'event stream refuses a made-up ticket (api origin)',
+      `GET ${API}/api/boards/<board>/events with a made-up ticket -> ${res.status} ${code ?? short(text, 60)}, allow-origin ${res.headers.get('access-control-allow-origin') ?? '(none)'}`,
+    )
+  } catch (e) {
+    fail('event stream refuses a made-up ticket (api origin)', e.message)
+  }
+} else
+  info('event stream (direct)', 'not checked on R0 (its pages use the cookie stream through the rewrite)')
 
 // ---- 6. the invite page ------------------------------------------------------------------------------
 

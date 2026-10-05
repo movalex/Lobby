@@ -83,12 +83,34 @@ function trackEventStreams() {
       if (String(url).includes('/events')) streams.push(this)
     }
   }
+  // Wave H1: on the direct transport (the api has DRAFTROOM_EVENTS_ORIGIN; E2E_DIRECT_EVENTS=1) the stream
+  // is a fetch on the api origin: a cut aborts it, so the page's read fails as on a dropped connection. The
+  // page aborts every stream it is done with itself, so the open one is the one whose signal is not aborted.
+  const fetches: { page: AbortSignal | null; cut: AbortController }[] = []
+  const originalFetch = window.fetch
+  window.fetch = function (this: unknown, input: RequestInfo | URL, init?: RequestInit) {
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+    if (!/\/api\/boards\/[^/?]+\/events$/.test(new URL(url, location.href).pathname))
+      return originalFetch.call(this, input, init)
+    const cut = new AbortController()
+    const own = init?.signal ?? null
+    fetches.push({ page: own, cut })
+    return originalFetch.call(this, input, {
+      ...init,
+      signal: own ? AbortSignal.any([own, cut.signal]) : cut.signal,
+    })
+  } as typeof window.fetch
   ;(window as unknown as { __cutEventStreams: () => number }).__cutEventStreams = () => {
     let cut = 0
     for (const es of streams.splice(0)) {
       if (es.readyState === Original.CLOSED) continue
       es.close()
       es.dispatchEvent(new Event('error'))
+      cut++
+    }
+    for (const f of fetches.splice(0)) {
+      if (f.page?.aborted || f.cut.signal.aborted) continue
+      f.cut.abort()
       cut++
     }
     return cut
