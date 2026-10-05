@@ -11,6 +11,10 @@
 //  2. the same, the participants' event streams cut (and kept from reconnecting) across the change: the
 //     guest joins the leftover join card, the editor clicks outside the old selection; both end up voting in
 //     the board vote, without a reload (failed before G1: the old selection vote's rule refused the clicks).
+//  3. catch-up: the participant's stream is cut while a vote starts and while it ends, or the page goes
+//     offline (the stream's events still arrive, every refetch fails); once restored the page shows the
+//     open vote, then the ended one, without a reload (offline failed before G1: a refetch that failed was
+//     never tried again).
 //
 // alice = board owner and facilitator, bob = editor with an account, the guest ("QA Bot") = a name-only
 // workshop guest who joins through a workshop link (editor role, never a facilitator).
@@ -44,6 +48,8 @@ const ref = (id: string) => `shape:${id}`
 const NOT_IN_SELECTION = 'Not part of this vote: only objects in the selection take votes.'
 /** apps/web WorkshopOverlay.tsx REFUSE_CONFIRMED_MS: a refused click this long after the last check asks again. */
 const REFUSE_CONFIRMED_MS = 2_000
+/** How long a page may take to catch up once its connection is back (the backoffs start at 1 s). */
+const CATCH_UP_MS = 20_000
 
 async function seedRetro(a: WorkshopCanvasSession) {
   await seed(a.page, {
@@ -438,3 +444,80 @@ test('streams cut while a selection vote is replaced by a board vote: the guestâ
     await guest.context.close()
   }
 })
+
+// ---- 3. catch-up after a stream drop ------------------------------------------------------------------------
+
+for (const how of ['stream cut', 'offline'] as const) {
+  test(`catch-up (${how}): a vote that starts, and one that ends, while the guest is cut off reaches the guest once restored, without a reload`, async ({
+    join,
+    board: boardId,
+    browser,
+  }) => {
+    const a = await join('alice')
+    await seedRetro(a)
+    const guest = await joinAsGuest(browser, await workshopLink(a, boardId), 'QA Bot')
+    const g = guest.page
+    const cut = () => (how === 'offline' ? guest.context.setOffline(true) : cutStream(g))
+    const restore = () => (how === 'offline' ? guest.context.setOffline(false) : restoreStream(g))
+    try {
+      await expectItemsEverywhere([{ page: g, user: 'guest' }], Object.values(ID))
+      await markPage(g)
+
+      let sid = ''
+      await test.step('cut off while alice starts a board vote: nothing shows yet', async () => {
+        await cut()
+        sid = await startVote(a, boardId, 'board', 'bar')
+        // what the guest's page asked for meanwhile could not come in
+        await g.waitForTimeout(1_500)
+        await expect(joinPrompt(g)).toHaveCount(0)
+        await expect(g.getByTestId('vote-chip')).toHaveCount(0)
+      })
+
+      await test.step('restored: the open vote comes up on its own', async () => {
+        await restore()
+        await expect(joinPrompt(g)).toContainText(describes('board'), { timeout: CATCH_UP_MS })
+        await expect(g.getByTestId('vote-chip')).toContainText('Voting Â· 3 left')
+        await joinVote(g, 'board')
+        await showAll(g)
+        await votesOn(g, ID.loose, 2)
+      })
+
+      await test.step('cut off while alice ends the vote with its results; restored: the page shows it ended', async () => {
+        await cut()
+        const panel = await openVotingPanel(a.page)
+        await panel.getByTestId('vote-reveal').click()
+        await expect(panel.getByTestId('vote-current')).toHaveAttribute('data-status', 'revealed')
+        await restore()
+        await expect(g.getByTestId('vote-bar')).toHaveCount(0, { timeout: CATCH_UP_MS })
+        await expect(g.getByTestId('vote-chip')).toHaveCount(0)
+        const gp = await openVotingPanel(g)
+        await expect(gp.getByTestId('vote-current')).toHaveAttribute('data-status', 'revealed', {
+          timeout: CATCH_UP_MS,
+        })
+        await expect(gp.getByTestId('vote-result-row')).toHaveCount(1)
+        await expect(gp.getByTestId('vote-result-row').first()).toHaveAttribute(
+          'data-shape-id',
+          ref(ID.loose),
+        )
+      })
+
+      await test.step('cut off while alice starts the next vote over the selection; restored: it comes up, its rule with it', async () => {
+        await cut()
+        await select(a.page, [ID.went, ID.improve])
+        const next = await startVote(a, boardId, 'selection', 'panel')
+        expect(next).not.toBe(sid)
+        await restore()
+        await expect(joinPrompt(g)).toContainText(describes('selection'), { timeout: CATCH_UP_MS })
+        await joinVote(g, 'selection')
+        await clickElement(g, ID.loose)
+        await expect(toast(g)).toContainText(NOT_IN_SELECTION)
+        await votesOn(g, ID.w1, 2)
+        expect(await storedBallot(guest, boardId)).toEqual({ sid: next, myVotes: { [ref(ID.w1)]: 1 } })
+      })
+
+      expect(await notReloaded(g)).toBe(true)
+    } finally {
+      await guest.context.close()
+    }
+  })
+}
