@@ -5,6 +5,11 @@
 // Authority: the API. Events are hints: timer events carry the (safe) timer itself; vote events carry
 // aggregates only, so a new/ended vote triggers a refetch of the caller's OWN view; every (re)connect
 // refetches. Casts are sent one at a time, shown optimistically, and reconciled with each response.
+//
+// G1 (found live, 2026-10-05): a person acting on the vote (joining it, or clicking an object it does
+// not take) has this tab's copy confirmed by the server first when nothing confirmed it lately
+// (`confirm`): an event stream that dropped or went silent misses the end of one vote and the start of
+// the next.
 
 import {
   type CreateVoteInput,
@@ -158,6 +163,8 @@ export class WorkshopStore {
   private readonly listeners = new Set<() => void>()
   private snap: WorkshopSnapshot
   private readonly unsubscribers: (() => void)[] = []
+  /** When the server last answered with this person's vote state (a refetch or a vote request). */
+  private confirmedAt = Number.NEGATIVE_INFINITY
 
   constructor(deps: {
     boardId: string
@@ -299,10 +306,21 @@ export class WorkshopStore {
       this.applyHands(s.hands, s.handsVersion)
       this.loaded = true
       this.stale = false
+      this.confirmedAt = this.nowMs()
     } catch {
       this.stale = true
     }
     this.emit()
+  }
+
+  /**
+   * Makes sure this tab acts on the vote the server has open now (G1): refetches unless the server
+   * answered with this person's vote state within `maxAgeMs` (and the last refetch did not fail).
+   * Resolves once the answer is in, or the refetch failed (the state then stays as it was, stale).
+   */
+  async confirm(maxAgeMs = 0): Promise<void> {
+    if (!this.stale && this.nowMs() - this.confirmedAt < maxAgeMs) return
+    await this.refresh()
   }
 
   /** Server `updatedAt` only moves forward: an older timer (a slow response) never replaces a newer one. */
@@ -423,6 +441,7 @@ export class WorkshopStore {
     this.setVote(vote)
     this.state = { ...base, vote }
     this.loaded = true
+    this.confirmedAt = this.nowMs()
   }
 
   // ---- timer ---------------------------------------------------------------------------------------
@@ -664,6 +683,16 @@ export class WorkshopStore {
     } catch {
       return null
     }
+  }
+
+  /**
+   * "Join vote": in, and the vote confirmed with the server (G1). A join card can outlive its vote when
+   * this tab missed the vote's end (a dropped event stream, a failed refetch): the answer then shows the
+   * vote that is open now, with its own join card, instead of a vote that takes no more votes.
+   */
+  joinVote(sid: string): Promise<void> {
+    this.setParticipation(sid, 'joined')
+    return this.confirm(0)
   }
 
   setParticipation(sid: string, v: Participation) {

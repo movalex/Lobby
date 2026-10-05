@@ -232,7 +232,7 @@ function CurrentVote({
             type="button"
             className="dr-btn dr-btn--primary dr-btn--sm"
             data-testid="vote-join-panel"
-            onClick={() => store.setParticipation(s.id, 'joined')}
+            onClick={() => void store.joinVote(s.id)}
           >
             Join the vote
           </button>
