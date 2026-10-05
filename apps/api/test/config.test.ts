@@ -202,6 +202,33 @@ describe('production requires explicit deployment addresses (docs/DEPLOY.md bloc
   })
 })
 
+describe('DRAFTROOM_EVENTS_ORIGIN (wave H1: the event stream straight from the api origin)', () => {
+  it('is optional (unset or blank = null: the same-origin cookie stream), and normalized to an origin', () => {
+    expect(loadConfig(base).eventsOrigin).toBeNull()
+    expect(loadConfig({ ...base, DRAFTROOM_EVENTS_ORIGIN: ' ' }).eventsOrigin).toBeNull()
+    expect(loadConfig({ ...base, DRAFTROOM_EVENTS_ORIGIN: 'http://127.0.0.1:5859/' }).eventsOrigin).toBe(
+      'http://127.0.0.1:5859',
+    )
+    expect(
+      loadConfig({ ...prod, DRAFTROOM_EVENTS_ORIGIN: 'https://draftroom-staging-api.onrender.com' })
+        .eventsOrigin,
+    ).toBe('https://draftroom-staging-api.onrender.com')
+  })
+
+  it('must be an origin only, and https in production', () => {
+    for (const v of [
+      'https://api.example/events',
+      'https://api.example?x=1',
+      'https://u:p@api.example',
+      'api.example',
+    ])
+      expect(() => loadConfig({ ...base, DRAFTROOM_EVENTS_ORIGIN: v }), v).toThrow(/DRAFTROOM_EVENTS_ORIGIN/)
+    expect(() => loadConfig({ ...prod, DRAFTROOM_EVENTS_ORIGIN: 'http://api.example' })).toThrow(
+      /DRAFTROOM_EVENTS_ORIGIN must be https in production/,
+    )
+  })
+})
+
 describe('TRUST_PROXY', () => {
   it('parses false / true / a hop count / an address list, and refuses anything else', () => {
     for (const v of [undefined, '', ' ', 'false', 'FALSE', '0'])

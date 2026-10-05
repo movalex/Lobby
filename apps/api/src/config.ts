@@ -60,6 +60,13 @@ export interface ApiConfig {
   clerk: { secretKey: string; publishableKey: string } | null
   /** Exact browser origin (scheme://host[:port]) for Origin checks, cookie `Secure` and invite links. */
   publicOrigin: string
+  /**
+   * DRAFTROOM_EVENTS_ORIGIN: this api's own public origin (scheme://host[:port]), where browsers open the
+   * board event stream directly with a ticket (events/tickets.ts) instead of through PUBLIC_ORIGIN's /api
+   * rewrite, which holds a streamed response until it ends (Render static sites, measured 2026-10-05).
+   * null (unset): pages keep the same-origin cookie stream (dev, e2e by default, a single-origin edge).
+   */
+  eventsOrigin: string | null
   ticketSecret: string
   internalSecret: string
   /** Base URL of the sync server's internal endpoints (no trailing slash). */
@@ -339,6 +346,22 @@ export function parseLinkPreviewTestOrigins(env: Env, devAuth: boolean): string[
   return out
 }
 
+/**
+ * DRAFTROOM_EVENTS_ORIGIN (optional): an origin only, https in production. Browsers fetch the event stream
+ * from it cross-origin, so the web's CSP connect-src must name it (render.yaml), and the api answers CORS
+ * for exactly PUBLIC_ORIGIN on that one route (events/routes.ts).
+ */
+export function parseEventsOrigin(env: Env, production: boolean): string | null {
+  const raw = read(env, 'DRAFTROOM_EVENTS_ORIGIN')
+  if (raw === undefined) return null
+  const url = httpUrl('DRAFTROOM_EVENTS_ORIGIN', raw)
+  if (url.pathname !== '/' || url.search || url.hash || url.username || url.password)
+    throw new Error('DRAFTROOM_EVENTS_ORIGIN must be an origin only (scheme://host[:port])')
+  if (production && url.protocol !== 'https:')
+    throw new Error('DRAFTROOM_EVENTS_ORIGIN must be https in production')
+  return url.origin
+}
+
 /** Parses and validates the API environment. Throws an operator-facing message on bad input. */
 export function loadConfig(env: Env = process.env): ApiConfig {
   const nodeEnv = parseNodeEnv(env)
@@ -379,6 +402,8 @@ export function loadConfig(env: Env = process.env): ApiConfig {
   if (origin.pathname !== '/' || origin.search || origin.hash || origin.username || origin.password)
     throw new Error('PUBLIC_ORIGIN must be an origin only (scheme://host[:port])')
   if (production && origin.protocol !== 'https:') throw new Error('PUBLIC_ORIGIN must be https in production')
+
+  const eventsOrigin = parseEventsOrigin(env, production)
 
   const syncInternalUrl = internalBaseUrl(
     env,
@@ -421,6 +446,7 @@ export function loadConfig(env: Env = process.env): ApiConfig {
     authProvider,
     clerk,
     publicOrigin: origin.origin,
+    eventsOrigin,
     ticketSecret,
     internalSecret,
     syncInternalUrl,

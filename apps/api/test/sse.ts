@@ -32,12 +32,17 @@ export async function listen(api: TestApi): Promise<string> {
 
 const tick = (ms = 10) => new Promise((r) => setTimeout(r, ms))
 
-export async function openSse(base: string, boardId: string, cookie: string): Promise<SseStream> {
+export function openSse(base: string, boardId: string, cookie: string): Promise<SseStream> {
+  return openSseAt(`${base}/api/boards/${boardId}/events`, { cookie, origin: ORIGIN })
+}
+
+/**
+ * A stream at any URL with exactly these request headers (wave H1: a ticket in Authorization and no
+ * cookie, another Origin, a query string).
+ */
+export async function openSseAt(url: string, headers: Record<string, string>): Promise<SseStream> {
   const controller = new AbortController()
-  const res = await fetch(`${base}/api/boards/${boardId}/events`, {
-    headers: { cookie, origin: ORIGIN },
-    signal: controller.signal,
-  })
+  const res = await fetch(url, { headers, signal: controller.signal })
   const events: SseEvent[] = []
   const retries: number[] = []
   let body: unknown = null

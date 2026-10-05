@@ -25,14 +25,24 @@
 //   the person's next tab in turn.
 // Refusals happen before the stream starts, as JSON errors: 429 RATE_LIMITED (too many opens by one
 // person) and 503 TOO_MANY_SUBSCRIBERS (the board or process is full), both with Retry-After.
+//
+// Two ways in (wave H1, ./tickets.ts): the session cookie, same-origin (through the static site's rewrite:
+// it never streams on Render, but every page built before H1 uses it and keeps working), or a ticket in
+// `Authorization: Bearer`, cross-origin straight to DRAFTROOM_EVENTS_ORIGIN (the page mints it with
+// POST /api/boards/:bid/events/ticket). A ticketed request is run as the session that minted the ticket,
+// through this same route and every hook bound to it. CORS (only with DRAFTROOM_EVENTS_ORIGIN set, and
+// only on this route): Access-Control-Allow-Origin is exactly PUBLIC_ORIGIN, never credentials; the
+// preflight allows GET with the Authorization header.
 
-import type { FastifyInstance } from 'fastify'
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { connectionRole, loadBoardAccessMany, pairKey, requireBoardAction } from '../access.ts'
+import { isSecretToken, SESSION_COOKIE } from '../auth/session.ts'
 import type { Params } from '../context.ts'
 import { ApiError, unauthenticated } from '../errors.ts'
 import type { FeatureContext } from '../features/context.ts'
 import { keyedLimit } from '../rate-limit.ts'
 import type { DeliveredEvent, StreamEndReason, StreamInfo } from './hub.ts'
+import { createEventTicketStore, type EventTicketClaims, type EventTicketStore } from './tickets.ts'
 
 export const HEARTBEAT_MS = 15_000
 /** Every open stream's session and board access are re-checked at least this often (≤ 10 s). */
@@ -48,14 +58,52 @@ const BUSY_RETRY_AFTER_S = 30
  */
 export const STREAM_PADDING = `:${' '.repeat(2048)}\n\n`
 
-export function registerEventRoutes(app: FastifyInstance, ctx: FeatureContext) {
+export const EVENTS_ROUTE = '/api/boards/:bid/events'
+export const EVENTS_TICKET_ROUTE = '/api/boards/:bid/events/ticket'
+/** How long a browser may reuse the stream route's preflight answer (Chromium caps it at 2 hours). */
+const PREFLIGHT_MAX_AGE_S = 600
+
+/** The answer of POST /api/boards/:bid/events/ticket. */
+export type EventsTicketResponse =
+  | { url: string; ticket: string; expiresAt: string }
+  /** DRAFTROOM_EVENTS_ORIGIN is not set: open the same-origin stream with the cookie. */
+  | { url: null }
+
+const BEARER_RE = /^Bearer ([A-Za-z0-9_-]{1,200})$/
+
+export function registerEventRoutes(
+  app: FastifyInstance,
+  ctx: FeatureContext,
+): { tickets: EventTicketStore } {
   const hub = ctx.events
+  const { publicOrigin, eventsOrigin } = ctx.config
   // Per signed-in person (reconnects included), never per IP: an office behind one NAT is many people.
   const opens = keyedLimit(
     ctx.limits.streamOpens,
     ctx.now,
     'Too many connections opened. Wait a moment and try again.',
   )
+  // Ticket mints, per person, with the same budget as opens (a direct connection is one of each).
+  const mints = keyedLimit(
+    ctx.limits.streamOpens,
+    ctx.now,
+    'Too many connections opened. Wait a moment and try again.',
+  )
+  const tickets = createEventTicketStore({ now: ctx.now })
+  /** The claims of the ticket a stream request was let in with (the handler checks the user against them). */
+  const ticketed = new WeakMap<FastifyRequest, EventTicketClaims>()
+
+  /**
+   * CORS for the stream route, only when pages open it on another origin (DRAFTROOM_EVENTS_ORIGIN):
+   * exactly PUBLIC_ORIGIN, never credentials (the ticket authenticates; no cookie crosses origins).
+   * Every answer varies by Origin; an answer for any other origin carries no allow header.
+   */
+  const corsHeaders = (req: FastifyRequest): Record<string, string> => {
+    if (!eventsOrigin) return {}
+    return req.headers.origin === publicOrigin
+      ? { 'access-control-allow-origin': publicOrigin, vary: 'Origin' }
+      : { vary: 'Origin' }
+  }
 
   /**
    * Re-checks streams in two queries whatever their number: which sessions are still valid, then
@@ -103,14 +151,20 @@ export function registerEventRoutes(app: FastifyInstance, ctx: FeatureContext) {
   }, recheckMs)
   sweep.unref()
 
-  // Logout, sign-in rotation and sign out everywhere end that session's streams now.
-  const stopListening = ctx.sessions.onRevoked((ids) => void hub.endSessions(ids))
+  // Logout, sign-in rotation and sign out everywhere end that session's streams now, and drop its tickets.
+  const stopListening = ctx.sessions.onRevoked((ids) => {
+    tickets.revokeSessions(ids)
+    void hub.endSessions(ids)
+  })
+  const ticketSweep = setInterval(() => tickets.sweep(), 15_000)
+  ticketSweep.unref()
 
   // Open streams never finish on their own, so app.close() (SIGTERM on deploy) would wait for its
   // force-exit timeout while any client is connected. End them first; clients reconnect on their own.
   const open = new Set<() => void>()
   app.addHook('preClose', async () => {
     clearInterval(sweep)
+    clearInterval(ticketSweep)
     stopListening()
     hub.setRevalidator(null)
     for (const end of [...open]) end()
@@ -119,11 +173,77 @@ export function registerEventRoutes(app: FastifyInstance, ctx: FeatureContext) {
     await sweeping
   })
 
-  app.get('/api/boards/:bid/events', async (req, reply) => {
+  // POST /api/boards/:bid/events/ticket: same-origin, with the session cookie and the api's Origin check
+  // (app.ts, every POST); view permission, as for the stream itself. Name-only guests mint the same way.
+  app.post(EVENTS_TICKET_ROUTE, async (req): Promise<EventsTicketResponse> => {
+    const { bid } = req.params as Params
+    const user = await ctx.requireUser(req)
+    const sessionId = ctx.sessions.idOf(req)
+    const sessionToken = req.cookies[SESSION_COOKIE]
+    if (!sessionId || !isSecretToken(sessionToken)) throw unauthenticated()
+    mints.take(user.id)
+    const access = await requireBoardAction(ctx.db, bid ?? '', user.id, 'view')
+    if (!eventsOrigin) return { url: null }
+    const minted = tickets.mint({ boardId: access.board.id, userId: user.id, sessionId, sessionToken })
+    if (!minted)
+      throw new ApiError(
+        503,
+        'TOO_MANY_SUBSCRIBERS',
+        'Too many connections are being opened right now. Try again in a minute.',
+        { 'retry-after': String(BUSY_RETRY_AFTER_S) },
+      )
+    return {
+      url: `${eventsOrigin}/api/boards/${encodeURIComponent(access.board.id)}/events`,
+      ticket: minted.ticket,
+      expiresAt: new Date(minted.expiresAt).toISOString(),
+    }
+  })
+
+  // The preflight of a ticketed stream request (its Authorization header makes it one).
+  app.options(EVENTS_ROUTE, async (req, reply) => {
+    const cors = corsHeaders(req)
+    reply.headers(cors)
+    if (cors['access-control-allow-origin'])
+      reply.headers({
+        'access-control-allow-methods': 'GET',
+        'access-control-allow-headers': 'authorization',
+        'access-control-max-age': String(PREFLIGHT_MAX_AGE_S),
+      })
+    return reply.code(204).send()
+  })
+
+  /**
+   * A ROOT onRequest hook, so that it runs before every hook that reads the stream request's session:
+   * root hooks run in registration order, and this one is added after the cookie parser (app.ts) and
+   * before every feature's (registerFeatures comes later), among them the workshops' raised-hand tracking
+   * (onRequest) and the guests' per-link stream cap (preHandler). A route-level hook would run after all
+   * root ones, too late. Sets the CORS headers first, so the page can read refusals too. Then a ticket,
+   * if one came, is consumed and the request becomes the minting session's request. A request with an
+   * Authorization header is ticketed or refused, never let in by a cookie. A ticket anywhere else (a
+   * query string) is never read. Decided by the MATCHED route pattern, like every root guard in app.ts.
+   */
+  const admitTicket = async (req: FastifyRequest, reply: FastifyReply) => {
+    if (req.routeOptions.url !== EVENTS_ROUTE || (req.method !== 'GET' && req.method !== 'HEAD')) return
+    reply.headers(corsHeaders(req))
+    const auth = req.headers.authorization
+    if (auth === undefined) return
+    const { bid } = req.params as Params
+    const m = BEARER_RE.exec(auth)
+    const claims = m?.[1] ? tickets.consume(m[1]) : null
+    if (!claims || claims.boardId !== bid) throw unauthenticated()
+    req.cookies[SESSION_COOKIE] = claims.sessionToken
+    ticketed.set(req, claims)
+  }
+  app.addHook('onRequest', admitTicket)
+
+  app.get(EVENTS_ROUTE, async (req, reply) => {
     const { bid } = req.params as Params
     const user = await ctx.requireUser(req)
     const sessionId = ctx.sessions.idOf(req)
     if (!sessionId) throw unauthenticated()
+    const claims = ticketed.get(req)
+    // A ticket's session is the one that minted it (its cookie value is what admitTicket set): a guard.
+    if (claims && (claims.userId !== user.id || claims.sessionId !== sessionId)) throw unauthenticated()
     opens.take(user.id)
     const generation = hub.accessGeneration
     const access = await requireBoardAction(ctx.db, bid ?? '', user.id, 'view')
@@ -160,6 +280,7 @@ export function registerEventRoutes(app: FastifyInstance, ctx: FeatureContext) {
 
     reply.hijack()
     res.writeHead(200, {
+      ...corsHeaders(req),
       'content-type': 'text/event-stream; charset=utf-8',
       // no-transform: no intermediary may compress or rewrite the body (a compressing proxy holds an
       // event stream back to fill its blocks); no-store, which this was, says nothing about that.
@@ -196,4 +317,6 @@ export function registerEventRoutes(app: FastifyInstance, ctx: FeatureContext) {
     // re-check: do it for this stream now.
     if (hub.accessGeneration !== generation) void hub.revalidate([opened.stream]).catch(() => {})
   })
+
+  return { tickets }
 }
