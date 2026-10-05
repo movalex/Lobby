@@ -693,9 +693,10 @@ export const Welcome = z
   )
 /**
  * `changes`: one commit batch, serialized once and sent to every session, the writer included. Also the
- * frame after a cached reset snapshot (the room keeps one for 5 s): the rows changed since the cache's
- * clock and, since CONTRACTS_REV 9 (DEF-3F-1), `doc` with the document keys written since it (null: a
- * key removed), so snapshot + changes equal the board at `clock` for the document too.
+ * frame after a cached reset snapshot (the room keeps one for up to 60 s, and only while the board is at most
+ * 500 rows ahead of it: `SNAPSHOT_REUSE` in `apps/sync/src/room/element-room.ts`, since ac72d87f): the rows
+ * changed since the cache's clock and, since CONTRACTS_REV 9 (DEF-3F-1), `doc` with the document keys written
+ * since it (null: a key removed), so snapshot + changes equal the board at `clock` for the document too.
  */
 export const Changes = z.strictObject({
   type: z.literal('changes'),

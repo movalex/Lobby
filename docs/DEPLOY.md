@@ -962,17 +962,23 @@ docker run --rm -e DRAFTROOM_DATA_DIR=/var/data --tmpfs /var/data:mode=0755 -e P
 
 ## CI
 
-`.github/workflows/ci.yml` runs the same gate as `pnpm verify` on `ubuntu-24.04`:
+`.github/workflows/ci.yml` is one workflow of 9 jobs on `ubuntu-24.04`, all behind Node from `.node-version` (24.19.0), pnpm from `packageManager` (10.34.5) and `pnpm install --frozen-lockfile`. Actions are pinned to commit SHAs. The workflow's own header comment has the time budget and the per-job reasoning. The jobs:
 
-1. Node from `.node-version` (24.19.0), pnpm from `packageManager` (10.34.5).
-2. `pnpm install --frozen-lockfile`.
-3. apt `ffmpeg`.
-4. `pnpm lint`, `pnpm typecheck`, `pnpm fixtures`, `pnpm test`.
-5. The Playwright chromium headless shell plus branded Google Chrome for the `@chrome` tests (H.264 playback).
-6. `pnpm e2e`.
-7. Test results uploaded on failure.
+| Job | What it runs |
+| --- | --- |
+| `checks` | `pnpm lint`, `pnpm licence:check`, `pnpm typecheck` (which includes `apps/sync/tsconfig.node-safe.json` and the engine-probe tsconfig). The browser jobs wait for this one and for nothing else. |
+| `unit` (4 shards) | `pnpm vitest run --shard=i/4` over every vitest project, after apt `ffmpeg` and `pnpm fixtures`. The `*.pg.test.ts` files skip here. |
+| `postgres` (3 shards) | The whole api project against a real Postgres 18 service (UTF8, a server per shard): `pnpm vitest run --project api --shard=i/3` with `DRAFTROOM_TEST_DATABASE_URL` set, so the migrations, lock-order, concurrency and skip-locked tests and every route run on a real `pg.Pool`. |
+| `probes` | The engine probes in a browser: `probe:engine` and, allowed to fail, the A3 text-layout probe. |
+| `audit` | `pnpm audit:prod` against the allowlisted advisories (`scripts/audit-check.mjs`). Allowed to fail. |
+| `xbrowser` | The WebKit and Firefox smoke (`e2e/excalidraw/xbrowser-smoke.spec.ts`). Allowed to fail. |
+| `build-gates` | The production-build, StrictMode and CSP gates (`excalidraw:prod`, `excalidraw:dev`, `csp:cutover`). |
+| `e2e-smoke` | Ten browser spec files on chromium. Only for `pull_request` events. |
+| `e2e` (6 shards) | The whole browser suite on chromium, plus Google Chrome for the `@chrome` H.264 playback test (`media-video.spec.ts`). Only for `push` events. |
 
-Actions are pinned to commit SHAs. **It has never run**: it starts working once the repository is published to GitHub. Expect to fix environment differences on the first run. The opt-in live R2 test never runs in CI (no `.env.deploy.local` there).
+**State (2026-10-05).** The only trigger is `workflow_dispatch` (Actions tab, "Run workflow"), since 878f8d93 on 2026-10-04. Pushes to `main` used 1,800 of the account's 2,000 free Actions minutes on 2026-10-03 (about 15 pushes on the deploy day, each running about 20 jobs); putting the `push` or `pull_request` triggers back is the owner's decision. A manual run starts 12 job instances (everything except `e2e-smoke` and `e2e`, whose `if:` names the pull-request and push events), so the whole browser e2e suite does not run in CI until the triggers change; it runs in each wave's integration gate on the development PC (chromium, two shards, one worker each; `docs/PROGRESS.md`).
+
+**It has run on GitHub; two jobs were red.** The workflow ran on GitHub on every push to `main` of 2026-10-03 and 04. The run logs were not available afterwards, so no job's result was recorded except that two were red: the unit shard 4 of 4 and the Postgres shard 3 of 3. Both were reproduced elsewhere and fixed in the tests (b44a8b43: `grant-paths.test.ts` compared grants in the database's collation order, and the `postgres:18` image's `en_US.utf8` differs from PGlite's bytewise order; 42a51def: a race in the sync tests' raw protocol clients; 59a30ac7: `scripts/ci-workflow.test.ts` still required the removed triggers; `docs/PROGRESS.md`, "CI red on GitHub"). **No run has been seen green since.** The `audit`, `xbrowser` and A3 jobs are `continue-on-error` and stay so until one is green (`docs/BACKLOG.md`, CI-1). The opt-in live R2 test never runs in CI (no `.env.deploy.local` there).
 
 ## Sources (read 2026-09-26/27)
 
