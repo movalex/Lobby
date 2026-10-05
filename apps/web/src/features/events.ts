@@ -34,9 +34,12 @@
 // dev/preview, a static-site rewrite) can keep the browser's side open after the api died, and an
 // SSE comment never reaches JS, so a stream that delivers nothing for `staleMs` is treated as dead
 // and replaced by a fresh one (whose 'hello' makes every feature refetch). A page that was offline or
-// hidden does not sit out the reconnect backoff (up to 30 s) either: on 'online' and on the tab becoming
-// visible a connection that is waiting to retry is opened at once (not one the server told to wait, as
-// 'replaced' does: that would let a person's tabs push each other out).
+// hidden does not sit out the reconnect backoff (up to 30 s) or the stale timer either: on 'online' and on
+// the tab becoming visible a connection that is waiting to retry is opened at once, 'online' also replaces a
+// stream that looks fine (a network that changed leaves it silent, and nothing tells the page), and a tab
+// that becomes visible replaces one that has been silent for the stale timeout (the timer was throttled).
+// Never a connection the server told to wait, as 'replaced' does: that would let a person's tabs push each
+// other out.
 
 export interface BoardEventMessage {
   type: string
@@ -229,6 +232,8 @@ export function createBoardEvents(boardId: string, opts: BoardEventsOptions = {}
   /** The wait in retryTimer is the server's ('replaced'), not a backoff: leave it alone. */
   let serverHold = false
   let lastOpenAt = 0
+  /** When the current connection last delivered a message (or was opened): the stale timer's reference. */
+  let lastActivityAt = 0
   let source: EventSource | null = null
   let controller: AbortController | null = null
   /** Bumped by every new connection and by close(): callbacks of an earlier one do nothing. */
@@ -351,8 +356,10 @@ export function createBoardEvents(boardId: string, opts: BoardEventsOptions = {}
    * Tries the direct stream again. A ticket is minted while the cookie stream keeps running: if the api has
    * no direct origin (or the mint fails) nothing changes and the next retry is scheduled. Only with a ticket
    * in hand is the cookie stream swapped for one direct attempt, which gives up at once if it fails.
+   * `replaceIfKept`: the page woke up and wants a fresh stream anyway: if there is no swap, the cookie
+   * stream is replaced by a new one instead.
    */
-  async function retryDirect() {
+  async function retryDirect(replaceIfKept = false) {
     if (directRetryTimer) clearTimeout(directRetryTimer)
     directRetryTimer = null
     if (closed || mode !== 'cookie' || !canDirect || retryMint) return
@@ -369,7 +376,11 @@ export function createBoardEvents(boardId: string, opts: BoardEventsOptions = {}
     clearTimeout(hang)
     if (retryMint === ac) retryMint = null
     if (closed || mode !== 'cookie') return
-    if (!ticket || ticket.url === null) return scheduleDirectRetry()
+    if (!ticket || ticket.url === null) {
+      scheduleDirectRetry()
+      if (replaceIfKept) reconnectNow()
+      return
+    }
     if (retryTimer) clearTimeout(retryTimer)
     retryTimer = null
     mode = 'direct'
@@ -380,15 +391,30 @@ export function createBoardEvents(boardId: string, opts: BoardEventsOptions = {}
   }
 
   /**
-   * The page woke up: the network is back ('online') or the tab is visible again. A connection waiting out
-   * its backoff opens now, and a direct retry that is due (or any, after 'online': the network changed)
-   * runs now.
+   * The page woke up: the network is back ('online') or the tab is visible again.
+   * - A connection waiting out its backoff opens now (not one the server told to wait).
+   * - A connection that looks fine may be dead: a network that changed leaves a stream silent, and the page
+   *   only learns it when the stale timer fires. After 'online' it is replaced at once (a hello and a
+   *   refetch cost little); when the tab becomes visible only one that has been silent for the stale
+   *   timeout is (the timer was throttled or the page slept), never a stream that is delivering pings.
+   * - A direct retry that is due (or any, after 'online': the network changed) runs now.
    */
   const wake = (reason: 'online' | 'visible') => {
     if (closed) return
-    if (retryTimer && !serverHold && Date.now() - lastOpenAt >= WAKE_MIN_GAP_MS) reconnectNow()
-    if (mode === 'cookie' && directRetryTimer && (reason === 'online' || Date.now() >= directRetryAt))
-      void retryDirect()
+    const now = Date.now()
+    const retrying =
+      mode === 'cookie' && directRetryTimer !== null && (reason === 'online' || now >= directRetryAt)
+    let replace = false
+    if (now - lastOpenAt >= WAKE_MIN_GAP_MS) {
+      if (retryTimer) {
+        if (!serverHold) reconnectNow()
+      } else {
+        replace = Boolean(source || controller) && (reason === 'online' || now - lastActivityAt >= staleMs)
+      }
+    }
+    // A direct retry that swaps the stream makes replacing it first pointless: replace only if it does not.
+    if (retrying) void retryDirect(replace)
+    else if (replace) reconnectNow()
   }
   const onOnline = () => wake('online')
   const onVisibility = () => {
@@ -411,6 +437,7 @@ export function createBoardEvents(boardId: string, opts: BoardEventsOptions = {}
     // Armed on open and re-armed by every message.
     const armStale = () => {
       clearStale()
+      lastActivityAt = Date.now()
       staleTimer = setTimeout(() => {
         staleTimer = null
         if (closed || attempt !== mine) return
@@ -467,6 +494,7 @@ export function createBoardEvents(boardId: string, opts: BoardEventsOptions = {}
     // given PROBE_HELLO_MS to start, not the whole stale timeout.
     const armStale = () => {
       clearStale()
+      lastActivityAt = Date.now()
       const ms = probing && !hello ? Math.min(staleMs, PROBE_HELLO_MS) : staleMs
       staleTimer = setTimeout(() => {
         staleTimer = null

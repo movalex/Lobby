@@ -959,6 +959,38 @@ describe('createBoardEvents: the cookie fallback is temporary (wave I1)', () => 
   })
 })
 
+describe("createBoardEvents: 'online' on a page that fell back (wave I1)", () => {
+  beforeEach(() => {
+    vi.useRealTimers()
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] })
+  })
+
+  it('a retry that swaps the stream replaces the cookie stream once; one that finds no direct origin replaces it with a fresh cookie stream', async () => {
+    const page = stubPage()
+    const a = await fallenBack({ mintWhen: (n) => (n === 4 ? { url: null } : undefined) })
+    await advance(10_000)
+    page.online()
+    await settle()
+    expect(a.mint).toHaveBeenCalledTimes(4)
+    expect(a.cookie.readyState).toBe(FakeEventSource.CLOSED)
+    expect(FakeEventSource.all).toHaveLength(2)
+    expect(openStreams()).toHaveLength(1)
+    expect(a.events.transport()).toBe('cookie')
+    a.events.close()
+
+    FakeEventSource.all = []
+    const b = await fallenBack()
+    await advance(10_000)
+    page.online()
+    await settle()
+    expect(b.mint).toHaveBeenCalledTimes(4)
+    expect(b.cookie.readyState).toBe(FakeEventSource.CLOSED)
+    expect(b.events.transport()).toBe('direct')
+    expect(FakeEventSource.all).toHaveLength(1) // no cookie stream was made on the way
+    b.events.close()
+  })
+})
+
 describe('createBoardEvents: a page that wakes up does not sit out the backoff (wave I1)', () => {
   beforeEach(() => {
     vi.useRealTimers()
@@ -998,16 +1030,70 @@ describe('createBoardEvents: a page that wakes up does not sit out the backoff (
     d.events.close()
   })
 
-  it('a stream that is connected, or one the server told to wait ("replaced", 60 s), is left alone', async () => {
+  it('a connected stream is replaced when the network returns (it may be dead: nothing told the page), by a fresh ticket and a fresh hello', async () => {
+    const page = stubPage()
+    const d = direct()
+    const resync = vi.fn()
+    d.events.onResync(resync)
+    await settle()
+    d.last()?.push(frame('hello', hello))
+    await settle()
+    await advance(10_000)
+    page.online()
+    await settle()
+    expect(d.wires[0]?.aborted).toBe(true)
+    expect(d.mint).toHaveBeenCalledTimes(2)
+    expect(d.calls).toHaveLength(2)
+    d.last()?.push(frame('hello', hello))
+    await settle()
+    expect(resync).toHaveBeenCalledTimes(2)
+    expect(d.events.transport()).toBe('direct')
+    d.events.close()
+  })
+
+  it('the cookie stream too: an open one is replaced when the network returns', () => {
+    vi.useRealTimers()
+    vi.useFakeTimers()
+    const page = stubPage()
+    const events = createBoardEvents('b-1', { ...COOKIE_ONLY, staleMs: 60_000 })
+    const first = FakeEventSource.all[0]
+    first?.send('hello', hello)
+    vi.advanceTimersByTime(10_000)
+    page.online()
+    expect(first?.readyState).toBe(FakeEventSource.CLOSED)
+    expect(FakeEventSource.all).toHaveLength(2)
+    expect(openStreams()).toHaveLength(1)
+    events.close()
+  })
+
+  it('the tab becoming visible leaves a stream that delivers pings alone, and replaces one that went silent while the page slept', async () => {
     const page = stubPage()
     const d = direct()
     await settle()
     d.last()?.push(frame('hello', hello))
     await settle()
-    page.online()
+    await advance(10_000)
+    d.last()?.push(frame('ping'))
+    await settle()
+    await advance(10_000)
     page.visibility('visible')
     await settle()
     expect(d.mint).toHaveBeenCalledTimes(1)
+    // the laptop slept: the clock moved on, no timer fired and nothing arrived
+    vi.setSystemTime(Date.now() + STALE_STREAM_MS)
+    page.visibility('visible')
+    await settle()
+    expect(d.wires[0]?.aborted).toBe(true)
+    expect(d.mint).toHaveBeenCalledTimes(2)
+    d.events.close()
+  })
+
+  it('a stream the server told to wait ("replaced", 60 s) is left alone', async () => {
+    const page = stubPage()
+    const d = direct()
+    await settle()
+    d.last()?.push(frame('hello', hello))
+    await settle()
     // 'replaced': the person has another tab; coming back must not push that one out in turn
     d.last()?.push(`retry: 60000\n${frame('replaced')}`)
     d.last()?.end()
