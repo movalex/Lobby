@@ -238,3 +238,21 @@ on the sync disk (§6).
   - Backups: last pass 16:35Z, `failuresTotal` 0, 4 boards with 0 failures and 0 pending.
   - 0 `error`/`FATAL` lines on api and sync in 24 h.
   - No Render service event since the 02:52Z deploys (api/web `e5cb6df`, sync `54ea729` unchanged): no restart or out-of-memory event.
+- **Live two-user test on staging, 2026-10-05.** The owner (Chase's Brave, through Claude in Chrome) and a name-only workshop
+  guest (a separate browser) on throwaway boards b-4avbft2xkr and b-x3cqq2jh0l, both now in Trash.
+  - Passed: create from a template, edit and reload (stored); two-way live sync in about 3 s; cursors, remote selections and
+    guest labels; the selection vote names its frames; a late joiner sees the open vote; a revoked link shows the guest
+    "Your guest access has ended" in about 16 s.
+  - Found and fixed:
+    - **Wave G** (`8c31139`, deployed 05:59–06:01Z): a participant kept the previous vote's scope after a new vote, and a
+      failed workshop refetch was never retried; Create workshop link stuck on "Creating…" while the clipboard hung; the
+      name-only option did not apply to an existing link (new PATCH).
+    - **The board event stream was never live on staging.** Render's static-site `/api/*` rewrite holds a response until it
+      ends. Measured with the new public `GET /api/diag/stream` (`2dc1ad15`): first byte 3.25 s = total through the rewrite,
+      0.23 s direct to the api. `no-transform` and padding (`79e5e13`) did not help.
+    - **Wave H** (`0e970a2`, 09:15–09:17Z): the page mints a single-use 30 s ticket through the rewrite
+      (`POST /api/boards/:bid/events/ticket`) and opens the stream directly on the api origin with `Authorization: Bearer`.
+      There is CORS for the web origin only, and a fallback to the cookie stream. The web CSP `connect-src` gained the api
+      origin, and the api has `DRAFTROOM_EVENTS_ORIGIN`; both were applied through the Render API, and `render.yaml` drift is 0.
+  - After wave H, live smoke: 39 passed, 0 failed. The owner's stream stayed open more than 74 s with no reconnect (before:
+    one every 40 s). **A vote started by the owner reached the guest's page in 283 ms** (before: up to 40 s).
