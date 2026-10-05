@@ -543,6 +543,8 @@ function stubPage() {
   vi.stubGlobal('window', win)
   vi.stubGlobal('document', doc)
   return {
+    win,
+    doc,
     online: () => win.dispatchEvent(new Event('online')),
     visibility(state: 'visible' | 'hidden') {
       doc.visibilityState = state
@@ -658,6 +660,22 @@ describe('createBoardEvents: a mint that keeps failing (wave I1)', () => {
     d.last()?.push(frame('hello', hello))
     await settle()
     expect(resync).toHaveBeenCalledTimes(2)
+    d.events.close()
+  })
+
+  it('a good mint restarts the window even when its stream then fails before a hello', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    let failing = true
+    const d = direct({ mintWhen: () => (failing ? new MintError(503) : undefined), outcomes: ['reject'] })
+    await settle()
+    await advance(MINT_TROUBLE_MS - 20_000)
+    failing = false
+    await advance(30_000) // a good mint; its direct fetch is refused (counted once, no hello)
+    expect(d.calls).toHaveLength(1)
+    failing = true
+    await advance(MINT_TROUBLE_MS - 20_000)
+    expect(d.events.transport()).toBe('direct')
+    expect(FakeEventSource.all).toHaveLength(0)
     d.events.close()
   })
 
@@ -860,6 +878,26 @@ describe('createBoardEvents: the cookie fallback is temporary (wave I1)', () => 
     }
   })
 
+  it('a ticket route that failed for minutes and recovered starts a fresh window: the next restart is waited out, not an instant fallback', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    let failing = true
+    const d = direct({ mintWhen: () => (failing ? new MintError(503) : undefined), staleMs: 3_600_000 })
+    await settle()
+    await advance(MINT_TROUBLE_MS + 30_000) // the fallback came at 121 s (an attempt every 30 s by then)
+    expect(d.events.transport()).toBe('cookie') // the route stayed broken: the cookie stream
+    failing = false
+    await advance(DIRECT_RETRY_MS - 25_000) // 4 s past the retry (at 421 s): its mint works, swapped to direct
+    expect(d.events.transport()).toBe('direct')
+    d.last()?.push(frame('hello', hello))
+    await settle()
+    failing = true
+    d.last()?.end()
+    await advance(30_000) // the first failures of a new run, long after the old one began
+    expect(d.events.transport()).toBe('direct')
+    expect(warn).toHaveBeenCalledTimes(1)
+    d.events.close()
+  })
+
   it('a successful direct stream starts the count over: the next fallback is retried after the first wait again', async () => {
     const f = await fallenBack({ outcomes: ['stream', 'reject', 'reject', 'reject'] })
     await advance(DIRECT_RETRY_MS)
@@ -1025,11 +1063,19 @@ describe('createBoardEvents: a page that wakes up does not sit out the backoff (
     events.close()
   })
 
-  it('close() stops listening: a closed stream never reopens', async () => {
+  it('close() stops listening: the listeners are removed, and a closed stream never reopens', async () => {
     const page = stubPage()
+    const added = vi.spyOn(page.win, 'addEventListener')
+    const addedDoc = vi.spyOn(page.doc, 'addEventListener')
+    const removed = vi.spyOn(page.win, 'removeEventListener')
+    const removedDoc = vi.spyOn(page.doc, 'removeEventListener')
     const d = direct({ mintWhen: () => new MintError(0) })
     await settle()
+    expect(added).toHaveBeenCalledWith('online', expect.any(Function))
+    expect(addedDoc).toHaveBeenCalledWith('visibilitychange', expect.any(Function))
     d.events.close()
+    expect(removed).toHaveBeenCalledWith('online', added.mock.calls[0]?.[1])
+    expect(removedDoc).toHaveBeenCalledWith('visibilitychange', addedDoc.mock.calls[0]?.[1])
     await advance(5_000)
     page.online()
     page.visibility('visible')

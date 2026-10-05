@@ -321,6 +321,7 @@ export function createBoardEvents(boardId: string, opts: BoardEventsOptions = {}
     if (mode === 'cookie') return
     const again = probing
     probing = false
+    mintTroubleSince = null // the next run of failed mints (after a retry) starts its own window
     mode = 'cookie'
     // Said once per fallback, not by every failed retry.
     if (why && !again)
@@ -549,7 +550,6 @@ export function createBoardEvents(boardId: string, opts: BoardEventsOptions = {}
           directFailures = 0
           probing = false
           fallbacks = 0
-          mintTroubleSince = null
         }
       },
       retry: (ms) => {
