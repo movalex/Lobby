@@ -21,6 +21,7 @@ import {
   ListWorkspaceMembersResponse,
   type PendingInvitation,
   type RequestableRole,
+  type ReviewLinkCreated,
   type ShareState,
   type WorkspaceMember,
 } from '@draftroom/contracts'
@@ -46,7 +47,7 @@ import { RequestAccess } from '../features/sharing/RequestAccess.tsx'
 import '../features/sharing/sharing.css'
 import { fetchBoardGuests, useIsGuest } from '../invite/guest.tsx'
 import { splitGuestMarker } from '../invite/model.ts'
-import { absoluteUrl, copyText } from '../lib/clipboard.ts'
+import { absoluteUrl } from '../lib/clipboard.ts'
 import { formatDateTime, formatRelativeTime } from '../lib/format.ts'
 import { initialsFor, safeColor } from '../lib/identity.ts'
 import {
@@ -59,6 +60,7 @@ import {
 import { boardPath } from '../lib/routing.ts'
 import { useResource } from '../lib/useResource.ts'
 import { Dialog } from '../ui/Dialog.tsx'
+import { copyBounded } from './share-copy.ts'
 import {
   type AccessDetail,
   ADD_MEMBER_ROLES,
@@ -631,7 +633,7 @@ function InvitePeople({
         const inv: InvitationCreated = await api.createBoardInvitation(boardId, { role, email: plan.email })
         const url = inv.url.startsWith('/') ? absoluteUrl(inv.url) : inv.url
         setLink({ url, email: plan.email, role, expiresAt: inv.expiresAt })
-        setCopied(await copyText(url))
+        setCopied(await copyBounded(url))
         onLinkCreated()
       }
       setText('')
@@ -744,7 +746,7 @@ function InvitePeople({
             <button
               type="button"
               className="dr-btn"
-              onClick={async () => setCopied(await copyText(link.url))}
+              onClick={async () => setCopied(await copyBounded(link.url))}
             >
               {copied ? 'Copied' : 'Copy'}
             </button>
@@ -1010,7 +1012,7 @@ function EmailInvite({
             type="button"
             className="dr-btn"
             data-testid="share-email-copy"
-            onClick={async () => setCopied(await copyText(link))}
+            onClick={async () => setCopied(await copyBounded(link))}
           >
             {copied ? 'Copied' : 'Copy link'}
           </button>
@@ -1666,7 +1668,7 @@ function InviteLinkSection({
       const inv = await api.createBoardInvitation(boardId, { role, email: checked.email })
       setCreated({ ...inv, email: checked.email, role })
       setEmail('')
-      setCopied(await copyText(inv.url.startsWith('/') ? absoluteUrl(inv.url) : inv.url))
+      setCopied(await copyBounded(inv.url.startsWith('/') ? absoluteUrl(inv.url) : inv.url))
       onChange()
     } catch (e) {
       // A 400 (or 409 INVITATION_TO_SELF, another address of the caller's) is about the address (the
@@ -1785,7 +1787,7 @@ function InviteLinkSection({
               type="button"
               className="dr-btn"
               data-testid="invite-copy"
-              onClick={async () => setCopied(await copyText(url))}
+              onClick={async () => setCopied(await copyBounded(url))}
             >
               {copied ? 'Copied' : 'Copy'}
             </button>
@@ -1856,7 +1858,8 @@ function WorkshopLinksSection({
   const [allowGuests, setAllowGuests] = useState<boolean>(WORKSHOP_LINK_GUESTS_DEFAULT)
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [justCreated, setJustCreated] = useState<{ id: string; copied: boolean } | null>(null)
+  // copied: null while the copy is being tried (it never blocks the link from showing: share-copy.ts).
+  const [justCreated, setJustCreated] = useState<{ id: string; copied: boolean | null } | null>(null)
   // A11Y-01: what a screen reader hears after Create (the button keeps the keyboard).
   const [said, setSaid] = useState('')
   const sectionRef = useRef<HTMLElement>(null)
@@ -1879,21 +1882,26 @@ function WorkshopLinksSection({
     setPending(true)
     setError(null)
     setSaid('')
+    let link: ReviewLinkCreated
     try {
-      const link = await sharing.createReviewLink(boardId, {
+      link = await sharing.createReviewLink(boardId, {
         role: 'editor',
         expiresInHours: hours,
         allowGuests,
       })
-      const copied = await copyText(link.url)
-      setJustCreated({ id: link.id, copied })
-      setSaid(createdSaying('Workshop link', copied))
-      onChange()
     } catch (e) {
       setError(isApiError(e) ? e.message : 'The workshop link could not be created.')
+      return
     } finally {
       setPending(false)
     }
+    // G2: the link exists. Show it now; the clipboard (which can refuse or never answer when this window
+    // is not focused) only decides which sentence goes with it, never whether Create has finished.
+    setJustCreated({ id: link.id, copied: null })
+    onChange()
+    const copied = await copyBounded(link.url)
+    setJustCreated({ id: link.id, copied })
+    setSaid(createdSaying('Workshop link', copied))
   }
 
   return (
@@ -1963,7 +1971,7 @@ function WorkshopLinksSection({
               link={l}
               workshop
               canShare={canCreate}
-              copiedOnCreate={justCreated?.id === l.id && justCreated.copied}
+              copiedOnCreate={justCreated?.id === l.id ? justCreated.copied : null}
               onChange={onChange}
             />
           ))}
@@ -1997,7 +2005,8 @@ function ClientLinkSection({
   const [allowGuests, setAllowGuests] = useState<boolean>(CLIENT_LINK_DEFAULTS.allowGuests)
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [justCreated, setJustCreated] = useState<{ id: string; copied: boolean } | null>(null)
+  // copied: null while the copy is being tried (it never blocks the link from showing: share-copy.ts).
+  const [justCreated, setJustCreated] = useState<{ id: string; copied: boolean | null } | null>(null)
   // A11Y-01: what a screen reader hears after Create (the button keeps the keyboard).
   const [said, setSaid] = useState('')
 
@@ -2006,20 +2015,24 @@ function ClientLinkSection({
     setPending(true)
     setError(null)
     setSaid('')
+    let link: ReviewLinkCreated
     try {
-      const link = await sharing.createReviewLink(boardId, { role, expiresInDays: days, allowGuests })
-      const copied = await copyText(link.url)
-      setJustCreated({ id: link.id, copied })
-      setSaid(createdSaying('Client link', copied))
-      onChange()
-      // DANA2-01: the first client link may have turned exporting off. The board event says so too,
-      // but this dialog also opens from the dashboard, where no board events arrive.
-      refreshExportPolicy(api, boardId).catch(() => {})
+      link = await sharing.createReviewLink(boardId, { role, expiresInDays: days, allowGuests })
     } catch (e) {
       setError(isApiError(e) ? e.message : 'The review link could not be created.')
+      return
     } finally {
       setPending(false)
     }
+    // G2: the link exists. Show it now; the clipboard only decides which sentence goes with it.
+    setJustCreated({ id: link.id, copied: null })
+    onChange()
+    // DANA2-01: the first client link may have turned exporting off. The board event says so too,
+    // but this dialog also opens from the dashboard, where no board events arrive.
+    refreshExportPolicy(api, boardId).catch(() => {})
+    const copied = await copyBounded(link.url)
+    setJustCreated({ id: link.id, copied })
+    setSaid(createdSaying('Client link', copied))
   }
 
   return (
@@ -2099,7 +2112,7 @@ function ClientLinkSection({
               boardId={boardId}
               link={l}
               canShare={canCreate}
-              copiedOnCreate={justCreated?.id === l.id && justCreated.copied}
+              copiedOnCreate={justCreated?.id === l.id ? justCreated.copied : null}
               onChange={onChange}
             />
           ))}
@@ -2221,7 +2234,11 @@ function ReviewLinkRow({
 }: {
   boardId: string
   link: PendingInvitation
-  copiedOnCreate: boolean
+  /**
+   * What happened to the copy Create tried for this link: true copied, false did not (G2: it said so and
+   * the Copy button is right here), null not tried (or still trying: the link shows without waiting).
+   */
+  copiedOnCreate: boolean | null
   /** A workshop (edit) link: ends at a time of day, and offers "+1 h". */
   workshop?: boolean
   /**
@@ -2231,12 +2248,24 @@ function ReviewLinkRow({
   canShare: boolean
   onChange(): void
 }) {
-  const [copied, setCopied] = useState(copiedOnCreate)
+  const [copied, setCopied] = useState(copiedOnCreate === true)
+  const [copyFailed, setCopyFailed] = useState(copiedOnCreate === false)
   const [confirming, setConfirming] = useState(false)
   const [removeAccess, setRemoveAccess] = useState(true)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // The copy Create tried finishes after this row appeared (the link shows without waiting for it).
+  useEffect(() => {
+    if (copiedOnCreate === null) return
+    setCopied(copiedOnCreate)
+    setCopyFailed(!copiedOnCreate)
+  }, [copiedOnCreate])
   const kindName = workshop ? 'workshop link' : 'review link'
+  const copy = async () => {
+    const ok = await copyBounded(link.url ?? '')
+    setCopied(ok)
+    setCopyFailed(!ok)
+  }
   const revoke = async () => {
     setBusy(true)
     setError(null)
@@ -2327,13 +2356,18 @@ function ReviewLinkRow({
               type="button"
               className="dr-btn dr-btn--sm"
               data-testid="review-link-copy"
-              onClick={async () => setCopied(await copyText(link.url ?? ''))}
+              onClick={() => void copy()}
             >
               {copied ? 'Copied' : 'Copy'}
             </button>
           </div>
         ) : (
           <span className="dr-share__hint">This link can’t be shown again. Create a new one to share.</span>
+        )}
+        {canShare && link.url && copyFailed && (
+          <span className="dr-share__hint" data-testid="review-link-copy-failed">
+            Couldn’t copy — use Copy.
+          </span>
         )}
         {confirming && (
           <fieldset className="dr-sharing__confirm">
@@ -2382,7 +2416,7 @@ function CopyBoardLink({ boardId }: { boardId: string }) {
         type="button"
         className="dr-btn"
         data-testid="share-copy-link"
-        onClick={async () => setCopied(await copyText(url))}
+        onClick={async () => setCopied(await copyBounded(url))}
       >
         <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true">
           <path
