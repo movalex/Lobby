@@ -174,6 +174,14 @@ describe('GET /api/boards/:bid/events with a ticket (the direct origin)', () => 
     expect(again.headers.get('access-control-allow-origin')).toBe(ORIGIN)
   })
 
+  it('one ticket presented by many requests at once opens exactly one stream', async () => {
+    const w = await world()
+    const m = await w.minted(w.owner)
+    const all = await Promise.all(Array.from({ length: 6 }, () => w.direct(m.ticket)))
+    expect(all.map((s) => s.status).sort()).toEqual([200, 401, 401, 401, 401, 401])
+    expect(w.hub.userStreamCount(w.owner.userId, w.boardId)).toBe(1)
+  })
+
   it('a ticket expires after 30 s', async () => {
     const w = await world()
     const m = await w.minted(w.owner)
