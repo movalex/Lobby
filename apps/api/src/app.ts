@@ -572,6 +572,36 @@ async function buildServer(
   // Liveness only (no database, no auth): for Render health checks and local tooling.
   app.get('/healthz', async (_req, reply) => reply.type('text/plain').send('ok'))
 
+  // Stream diagnostic (no auth, no data): a 2 KB SSE comment, then three ticks one second apart, then
+  // the end. It tells whether a proxy in front of the api (the static site's /api rewrite on Render)
+  // passes an event stream through as it is written or holds it until the response ends: the board
+  // event stream (events/routes.ts) depends on the former. Used by scripts/smoke/live-smoke.mjs.
+  app.get('/api/diag/stream', async (_req, reply) => {
+    reply.hijack()
+    const res = reply.raw
+    res.writeHead(200, {
+      'content-type': 'text/event-stream; charset=utf-8',
+      'cache-control': 'no-cache, no-transform',
+      'x-accel-buffering': 'no',
+    })
+    res.flushHeaders()
+    res.write(`:${' '.repeat(2048)}
+
+`)
+    let n = 0
+    const timer = setInterval(() => {
+      n += 1
+      res.write(`data: {"tick":${n}}
+
+`)
+      if (n >= 3) {
+        clearInterval(timer)
+        res.end()
+      }
+    }, 1_000)
+    res.on('close', () => clearInterval(timer))
+  })
+
   const layout = dataLayout(config.dataDir)
   const features: FeatureContext = {
     ...ctx,
