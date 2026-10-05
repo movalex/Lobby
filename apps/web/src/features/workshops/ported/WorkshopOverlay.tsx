@@ -31,7 +31,7 @@ import type { WorkshopStore } from '../store.ts'
 import { badgeScale, clusterBadges, topResults } from '../voting.ts'
 import { useNow, useWorkshop } from '../workshop-context.ts'
 import { followingNow, stopFollowing, zoomToBounds } from './camera.ts'
-import { labelOfRef, refOf } from './elements.ts'
+import { isEligibleElement, labelOfRef, refOf } from './elements.ts'
 import { PlusOnes } from './PlusOnes.tsx'
 import { usePresentingHere } from './presenting.ts'
 import { PrivateNotesReminder, PrivateNotesStartPrompt } from './private-notes/PrivateNotesBar.tsx'
@@ -123,6 +123,30 @@ export function notInVote(ctx: Ctx, rule: VoteEligibilityRule) {
     testId: 'vote-toast',
     timeoutMs: 3500,
   })
+}
+
+/** How recently the server must have confirmed this tab's vote for a click to be refused without asking (G1). */
+export const REFUSE_CONFIRMED_MS = 2_000
+
+/**
+ * A plain click on element `elementId`, which the vote `sessionId` (as this tab knows it) does not take.
+ * That copy can be out of date (G1: a participant whose event stream missed the end of a selection vote
+ * and the start of a board vote was refused on the board vote's notes), so unless the server confirmed it
+ * in the last few seconds it is checked first, and the click is decided again on the vote open now: a vote
+ * when that vote takes the object and this person is in it, the "Not part of this vote" notice when it
+ * does not, and nothing when voting is over or the open vote is one this person has not joined yet (its
+ * join card is showing).
+ */
+export async function refusedClick(ctx: Ctx, store: WorkshopStore, sessionId: string, elementId: string) {
+  await store.confirm(REFUSE_CONFIRMED_MS)
+  const snap = store.getSnapshot()
+  const vote = snap.vote
+  if (vote?.session.status !== 'open' || snap.participation !== 'joined' || vote.done) return
+  const rule = voteRuleOf(vote.session)
+  const ref = refOf(elementId)
+  if (vote.session.id !== sessionId && ref && isEligibleElement(elementId, (id) => ctx.canvas.get(id), rule))
+    return castVote(ctx, store, ref, 1)
+  notInVote(ctx, rule)
 }
 
 /** The board's keyboard back (after Escape in the stepper, or a click on a +1). */
@@ -284,7 +308,10 @@ function ClickToVote({ ctx, store }: { ctx: Ctx; store: WorkshopStore }) {
       void castRef.current(ref, 1)
     }
     let pressed: { x: number; y: number; id: string } | null = null
-    let other: { x: number; y: number } | null = null
+    let other: { x: number; y: number; id: string } | null = null
+    // A refused click is decided again on the vote open now (G1): from this vote's id.
+    const refuse = (elementId: string) =>
+      void refusedClick(ctx, store, store.getSnapshot().vote?.session.id ?? '', elementId)
     let handDown: { x: number; y: number } | null = null
     return canvas.on('input', (e) => {
       if (e.type === 'key-down' || e.type === 'wheel' || e.type === 'pinch') return
@@ -303,7 +330,7 @@ function ClickToVote({ ctx, store }: { ctx: Ctx; store: WorkshopStore }) {
         if (click.kind === 'none') return
         if (click.kind === 'not-in-vote') {
           // The engine selects or moves it as usual; a click without a drag says why nothing was cast.
-          other = { x: e.screen.x, y: e.screen.y }
+          other = { x: e.screen.x, y: e.screen.y, id: click.target.id }
           return
         }
         e.handled()
@@ -320,7 +347,7 @@ function ClickToVote({ ctx, store }: { ctx: Ctx; store: WorkshopStore }) {
         other = null
         handDown = null
         if (o) {
-          if (Math.hypot(e.screen.x - o.x, e.screen.y - o.y) <= CLICK_SLOP_PX) notInVote(ctx, rule)
+          if (Math.hypot(e.screen.x - o.x, e.screen.y - o.y) <= CLICK_SLOP_PX) refuse(o.id)
           return
         }
         if (p) {
@@ -333,7 +360,7 @@ function ClickToVote({ ctx, store }: { ctx: Ctx; store: WorkshopStore }) {
         if (Math.hypot(e.screen.x - h.x, e.screen.y - h.y) > CLICK_SLOP_PX) return
         const click = voteClickAt(canvas, e.scene, rule)
         if (click.kind === 'vote') vote(click.target.id)
-        else if (click.kind === 'not-in-vote') notInVote(ctx, rule)
+        else if (click.kind === 'not-in-vote') refuse(click.target.id)
         return
       }
       // A double-click on an object the vote takes (the second click of it already voted, or was one
@@ -342,7 +369,7 @@ function ClickToVote({ ctx, store }: { ctx: Ctx; store: WorkshopStore }) {
         if (eligibleAt(canvas, e.scene, rule)) e.handled()
       }
     })
-  }, [ctx, rule])
+  }, [ctx, rule, store])
   return null
 }
 
@@ -604,7 +631,7 @@ function JoinPrompt({ ctx, store }: { ctx: Ctx; store: WorkshopStore }) {
           type="button"
           className="dr-btn dr-btn--primary dr-btn--sm"
           data-testid="vote-join"
-          onClick={() => store.setParticipation(s.id, 'joined')}
+          onClick={() => void store.joinVote(s.id)}
         >
           Join vote
         </button>

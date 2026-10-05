@@ -5,6 +5,12 @@
 // Authority: the API. Events are hints: timer events carry the (safe) timer itself; vote events carry
 // aggregates only, so a new/ended vote triggers a refetch of the caller's OWN view; every (re)connect
 // refetches. Casts are sent one at a time, shown optimistically, and reconciled with each response.
+//
+// G1 (found live, 2026-10-05): a refetch that fails is tried again until one succeeds (a vote event
+// whose refetch failed left a guest on the previous vote for good: it never saw the next one until a
+// reload), and a person acting on the vote (joining it, or clicking an object it does not take) has
+// this tab's copy confirmed by the server first when nothing confirmed it lately (`confirm`): an event
+// stream that dropped or went silent misses the end of one vote and the start of the next.
 
 import {
   type CreateVoteInput,
@@ -107,6 +113,28 @@ export interface KeyValueStorage {
 /** A clock sample older than this is replaced by the next one, even with a longer round trip. */
 const CLOCK_SAMPLE_MAX_AGE_MS = 60_000
 
+/** A failed refetch is tried again after this long, then twice as long each time, up to the max (G1). */
+export const REFRESH_RETRY_MIN_MS = 1_000
+export const REFRESH_RETRY_MAX_MS = 15_000
+
+/**
+ * Whether a failed request may succeed if sent again: no answer at all, a server error, a rate limit or
+ * an answer that was not the api's (a proxy's page). Not a 401/403/404 (signed out, access lost, gone)
+ * or another refusal. Errors without a status (not the api client's) count as retryable.
+ */
+export function retryableError(e: unknown): boolean {
+  const err = e as { kind?: unknown; status?: unknown } | null
+  if (typeof err?.kind === 'string')
+    return (
+      err.kind === 'network' ||
+      err.kind === 'server' ||
+      err.kind === 'rate-limited' ||
+      err.kind === 'bad-response'
+    )
+  const status = err?.status
+  return typeof status !== 'number' || status === 0 || status === 429 || status >= 500
+}
+
 function safeStorage(): KeyValueStorage | null {
   try {
     return typeof localStorage === 'undefined' ? null : localStorage
@@ -158,6 +186,13 @@ export class WorkshopStore {
   private readonly listeners = new Set<() => void>()
   private snap: WorkshopSnapshot
   private readonly unsubscribers: (() => void)[] = []
+  /** When the server last answered with this person's vote state (a refetch or a vote request). */
+  private confirmedAt = Number.NEGATIVE_INFINITY
+  private retryTimer: ReturnType<typeof setTimeout> | null = null
+  private retryMs = REFRESH_RETRY_MIN_MS
+  /** The request seq of the last refetch that succeeded. */
+  private refreshedSeq = 0
+  private disposed = false
 
   constructor(deps: {
     boardId: string
@@ -185,6 +220,8 @@ export class WorkshopStore {
   }
 
   dispose() {
+    this.disposed = true
+    this.clearRetry()
     for (const u of this.unsubscribers.splice(0)) u()
     this.listeners.clear()
     this.reactionListeners.clear()
@@ -195,6 +232,8 @@ export class WorkshopStore {
 
   subscribe = (fn: () => void) => {
     this.listeners.add(fn)
+    // A retry that found nobody showing this store was dropped: whoever shows it now needs the truth.
+    if (this.stale && !this.retryTimer) this.scheduleRetry()
     return () => void this.listeners.delete(fn)
   }
   getSnapshot = () => this.snap
@@ -283,6 +322,11 @@ export class WorkshopStore {
 
   // ---- loading and events --------------------------------------------------------------------------
 
+  /**
+   * Fetches the workshop state (the caller's own view of the vote). A failure keeps the state shown
+   * (marked stale) and is tried again, sooner or later, until a refetch succeeds (G1): the event that
+   * asked for it does not come twice.
+   */
   async refresh(): Promise<void> {
     const seq = ++this.seq
     try {
@@ -299,10 +343,45 @@ export class WorkshopStore {
       this.applyHands(s.hands, s.handsVersion)
       this.loaded = true
       this.stale = false
-    } catch {
+      this.refreshedSeq = seq
+      this.confirmedAt = this.nowMs()
+      this.clearRetry()
+      this.retryMs = REFRESH_RETRY_MIN_MS
+    } catch (e) {
+      // A later refetch already succeeded: nothing is missing.
+      if (seq < this.refreshedSeq) return
       this.stale = true
+      if (retryableError(e)) this.scheduleRetry()
     }
     this.emit()
+  }
+
+  /**
+   * Makes sure this tab acts on the vote the server has open now (G1): refetches unless the server
+   * answered with this person's vote state within `maxAgeMs` (and the last refetch did not fail).
+   * Resolves once the answer is in, or the refetch failed (the state then stays as it was, stale, and
+   * the retry takes over).
+   */
+  async confirm(maxAgeMs = 0): Promise<void> {
+    if (!this.stale && this.nowMs() - this.confirmedAt < maxAgeMs) return
+    await this.refresh()
+  }
+
+  /** One retry at a time, each failure doubling the wait; nobody showing the store means no retry. */
+  private scheduleRetry() {
+    if (this.disposed || this.retryTimer) return
+    const ms = this.retryMs
+    this.retryMs = Math.min(this.retryMs * 2, REFRESH_RETRY_MAX_MS)
+    this.retryTimer = setTimeout(() => {
+      this.retryTimer = null
+      if (this.disposed || this.listeners.size === 0) return
+      void this.refresh()
+    }, ms)
+  }
+
+  private clearRetry() {
+    if (this.retryTimer) clearTimeout(this.retryTimer)
+    this.retryTimer = null
   }
 
   /** Server `updatedAt` only moves forward: an older timer (a slow response) never replaces a newer one. */
@@ -423,6 +502,7 @@ export class WorkshopStore {
     this.setVote(vote)
     this.state = { ...base, vote }
     this.loaded = true
+    this.confirmedAt = this.nowMs()
   }
 
   // ---- timer ---------------------------------------------------------------------------------------
@@ -664,6 +744,16 @@ export class WorkshopStore {
     } catch {
       return null
     }
+  }
+
+  /**
+   * "Join vote": in, and the vote confirmed with the server (G1). A join card can outlive its vote when
+   * this tab missed the vote's end (a dropped event stream, a failed refetch): the answer then shows the
+   * vote that is open now, with its own join card, instead of a vote that takes no more votes.
+   */
+  joinVote(sid: string): Promise<void> {
+    this.setParticipation(sid, 'joined')
+    return this.confirm(0)
   }
 
   setParticipation(sid: string, v: Participation) {

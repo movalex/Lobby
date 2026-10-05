@@ -45,7 +45,7 @@ import { selectEligible, selectedEligible, voteClickAt } from './voting-canvas.t
 import { WorkshopBar } from './WorkshopBar.tsx'
 import {
   castVote,
-  notInVote,
+  refusedClick,
   stepperTarget,
   WorkshopLayer,
   WorkshopMarksLayer,
@@ -200,7 +200,10 @@ export const VOTE_TOOL: FeatureToolSpec = {
     // The topmost object decides (W5-03): one the vote does not take casts nothing, whatever is under it.
     const click = voteClickAt(ctx.canvas, p.point, rule)
     if (click.kind === 'vote') void castVote(ctx, storeFor(ctx), `shape:${click.target.id}`, 1)
-    else if (click.kind === 'not-in-vote') notInVote(ctx, rule)
+    else if (click.kind === 'not-in-vote') {
+      const store = storeFor(ctx)
+      void refusedClick(ctx, store, store.getSnapshot().vote?.session.id ?? '', click.target.id)
+    }
   },
   onExit() {
     toolPress = null
