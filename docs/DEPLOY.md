@@ -76,6 +76,15 @@ How it behaves:
 - A non-browser client can forge `Origin`. That is why the ticket, not this check, is the authentication.
 - The ticket is in the socket URL's query string on the sync hostname, as it was on the web origin before. It lives 60 s and is bound to one board. Render's edge logs are not ours to control.
 
+### Why the board event stream goes straight to the api (wave H1)
+
+Render's static-site rewrite holds every response until it **ends** (measured 2026-10-05 with `GET /api/diag/stream`: first byte 0.23 s on the api's own URL, 3.25 s = the whole response through the web origin). The board event stream never ends, so through the rewrite votes, timers, comments and access changes only arrived with the client's 40 s stale-stream reconnect. Headers (`no-transform`, padding, `x-accel-buffering`) do not help. So the page opens it on the api's origin:
+
+- The page mints a ticket same-origin (`POST /api/boards/:bid/events/ticket`: the cookie, the Origin check, view permission) and fetches the URL it gets back with `Authorization: Bearer <ticket>`, no cookie. The ticket is never in a URL (Render's edge logs URLs), single use, 30 s, held in the api's memory (one instance); every reconnect mints a new one. CORS on that one route: exactly `PUBLIC_ORIGIN`, no credentials (`apps/api/src/events/tickets.ts`, `routes.ts`).
+- **`DRAFTROOM_EVENTS_ORIGIN`** on the api turns it on (runtime: an api restart, no web rebuild). Unset, the ticket route answers `{ url: null }` and pages keep the same-origin stream (dev, e2e). The web's CSP **`connect-src` must name the same origin** (render.yaml). A page that cannot reach it (CSP, CORS, DNS) falls back to the same-origin stream after 3 attempts: never worse than before. Pages built before H1 keep the same-origin stream; the api serves both.
+- **Deploy order**: the CSP header first (a static-site header, no rebuild), then the api with `DRAFTROOM_EVENTS_ORIGIN`, then the web build. **Roll back** by deleting the variable and restarting the api: open pages reconnect, get `{ url: null }` and use the rewrite again.
+- Check it with `scripts/smoke/live-smoke.mjs` (section 5b: the api origin streams `/api/diag/stream` with a first byte under 1 s, the signed-out mint is 401, the preflight answers the web origin).
+
 ### Sync: one instance, one disk, no autoscaling (unchanged)
 
 Exactly one `TLSocketRoom` may own a board. The sync service therefore has `numInstances: 1`, no `scaling` block, and the per-board SQLite files on its own persistent disk. A second instance would open a second room on a different disk and split the board. Render cannot scale a service that has a disk anyway, and a disk also disables zero-downtime deploys (see [interruptions](#what-users-see-during-a-deploy)). Scaling past one process is a separate architecture decision (build plan §6).
@@ -239,6 +248,7 @@ Every variable is documented with a safe placeholder in `.env.example`. Where ea
 | `DRAFTROOM_API_INTERNAL_URL` | sync | `fromService: {type: web, name: draftroom-staging-api, property: hostport}`. Same rules. |
 | `DRAFTROOM_API_URL` | Render worker | the same `fromService … hostport` as above ([public or private](#public-url-or-private-hostport)); NAS: the api's public URL |
 | `PUBLIC_ORIGIN` | api | `https://draftroom-staging-web.onrender.com`. Required and https in production. Confirm the hostname Render assigns. |
+| `DRAFTROOM_EVENTS_ORIGIN` | api | `https://draftroom-staging-api.onrender.com` (the api's own URL; [why](#why-the-board-event-stream-goes-straight-to-the-api-wave-h1)). Optional, https in production; the web CSP's `connect-src` must name it. |
 | `ALLOWED_ORIGINS` | sync | `https://draftroom-staging-web.onrender.com` (the same web origin). Required and https in production. |
 | `TRUST_PROXY` | api | `"3"` ([client IPs](#client-ips-and-trust_proxy)) |
 | `VITE_DRAFTROOM_SYNC_ORIGIN` | web (build time) | `https://draftroom-staging-sync.onrender.com`. Confirm the hostname; a change needs a rebuild. |
